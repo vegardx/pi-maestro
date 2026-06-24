@@ -1,4 +1,14 @@
-// @vegardx/pi-contracts — shared types, capability ids, event names, and
-// the run-bus message union. Zero runtime. Scaffold placeholder; the real
-// surface lands in the library-contracts deliverable.
-export type Placeholder = never;
+// @vegardx/pi-contracts — the shared vocabulary every other package imports.
+// Types are erased on emit; the only runtime is a handful of `const` string
+// maps (capability ids, event names, status/mode enums) needed for lookup
+// and iteration. No logic, no host dependencies.
+
+export * from "./ask.js";
+export * from "./capabilities.js";
+export * from "./events.js";
+export * from "./flags.js";
+export * from "./ids.js";
+export * from "./modes.js";
+export * from "./plan.js";
+export * from "./runs.js";
+export * from "./ship.js";

@@ -10,7 +10,7 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@vegardx/pi-contracts": "workspace:*"
+		"@vegardx/pi-contracts": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

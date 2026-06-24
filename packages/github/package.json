@@ -1,0 +1,15 @@
+{
+	"name": "@vegardx/pi-github",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Typed gh seam: PR/issue ops, multi-host routing.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

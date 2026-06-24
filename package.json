@@ -2,9 +2,44 @@
 	"name": "@vegardx/pi",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"description": "pi-maestro — structured pi coding-agent extension stack",
 	"license": "MIT",
-	"type": "module",
+	"keywords": ["pi-package"],
+	"workspaces": ["packages/*"],
+	"pi": {
+		"extensions": [
+			"packages/ask/src/index.ts",
+			"packages/prompt-assist/src/index.ts",
+			"packages/subagents/src/index.ts",
+			"packages/commit/src/index.ts",
+			"packages/modes/src/index.ts"
+		],
+		"skills": []
+	},
+	"scripts": {
+		"check": "biome check . && tsc --noEmit && node scripts/check-boundaries.mjs && node scripts/check-feature-flags.mjs && vitest run && node scripts/smoke.mjs",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"format": "biome format --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest watch",
+		"boundaries": "node scripts/check-boundaries.mjs",
+		"smoke": "node scripts/smoke.mjs"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.1",
+		"@earendil-works/pi-agent-core": "^0.80.2",
+		"@earendil-works/pi-ai": "^0.80.2",
+		"@earendil-works/pi-coding-agent": "^0.80.2",
+		"@earendil-works/pi-tui": "^0.80.2",
+		"@sinclair/typebox": "^0.34.49",
+		"@types/node": "^24",
+		"jiti": "^2.7.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	},
 	"engines": {
 		"node": ">=22"
 	}

@@ -1,0 +1,30 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended",
+			"suspicious": {
+				"noExplicitAny": "off"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/__tests__/**", "test/**", "scripts/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noNonNullAssertion": "off"
+					}
+				}
+			}
+		}
+	],
+	"formatter": {
+		"enabled": true
+	},
+	"files": {
+		"includes": ["**/*.ts", "**/*.mjs", "!**/node_modules", "!**/dist"]
+	}
+}

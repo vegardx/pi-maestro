@@ -1,0 +1,17 @@
+{
+	"name": "@vegardx/pi-ask",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Questionnaire engine: blocking multi-question tool + queued plan-mode driver.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	}
+}

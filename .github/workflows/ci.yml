@@ -23,6 +23,6 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      # Placeholder — the scaffold deliverable fills this in
-      # (biome -> tsc -> boundary-linter -> feature-flag contract -> vitest -> examples smoke).
-      - run: echo "scaffold pending — no checks wired yet"
+      - run: npm ci
+      # biome -> tsc -> boundary linter -> feature-flag contract -> vitest -> smoke
+      - run: npm run check

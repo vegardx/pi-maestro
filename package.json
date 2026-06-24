@@ -35,7 +35,7 @@
 		"@earendil-works/pi-coding-agent": "^0.80.2",
 		"@earendil-works/pi-tui": "^0.80.2",
 		"@sinclair/typebox": "^0.34.49",
-		"@types/node": "^24",
+		"@types/node": "^26",
 		"jiti": "^2.7.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"

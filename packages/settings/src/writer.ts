@@ -123,6 +123,26 @@ export interface WriteResult {
 	previous: unknown;
 }
 
+/**
+ * Read a settings file, let `mutate` modify the parsed object in place, and
+ * write it back atomically (temp file + rename). The single atomic-write
+ * primitive — `writeExtensionConfigKey` and @vegardx/pi-models'
+ * background-model writer both route through it, so there is exactly one
+ * crash-safe write path. Returns the resolved file path.
+ */
+export function updateSettingsFile(
+	scope: SettingsScope,
+	cwd: string,
+	agentDir: string | undefined,
+	mutate: (raw: Record<string, unknown>) => void,
+): { path: string } {
+	const path = settingsPath(scope, cwd, agentDir);
+	const raw = readRawObject(path);
+	mutate(raw);
+	writeAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
+	return { path };
+}
+
 export function readExtensionConfigKey(
 	scope: SettingsScope,
 	cwd: string,
@@ -159,31 +179,29 @@ export function writeExtensionConfigKey(
 	value: boolean | string | number | readonly string[] | null,
 	agentDir?: string,
 ): WriteResult {
-	const path = settingsPath(scope, cwd, agentDir);
-	const raw = readRawObject(path);
-	const extensionConfig = isPlainObject(raw.extensionConfig)
-		? raw.extensionConfig
-		: {};
-	const entry = isPlainObject(extensionConfig[name])
-		? (extensionConfig[name] as Record<string, unknown>)
-		: {};
-
 	const parts = key.split(".");
 	assertSafeSegments([name, ...parts]);
 
 	let previous: unknown;
-	if (value === null) {
-		previous = deletePath(entry, parts);
-		if (Object.keys(entry).length === 0) delete extensionConfig[name];
-		else extensionConfig[name] = entry;
-	} else {
-		previous = setPath(entry, parts, value as unknown);
-		extensionConfig[name] = entry;
-	}
+	const { path } = updateSettingsFile(scope, cwd, agentDir, (raw) => {
+		const extensionConfig = isPlainObject(raw.extensionConfig)
+			? raw.extensionConfig
+			: {};
+		const entry = isPlainObject(extensionConfig[name])
+			? (extensionConfig[name] as Record<string, unknown>)
+			: {};
 
-	if (Object.keys(extensionConfig).length === 0) delete raw.extensionConfig;
-	else raw.extensionConfig = extensionConfig;
+		if (value === null) {
+			previous = deletePath(entry, parts);
+			if (Object.keys(entry).length === 0) delete extensionConfig[name];
+			else extensionConfig[name] = entry;
+		} else {
+			previous = setPath(entry, parts, value as unknown);
+			extensionConfig[name] = entry;
+		}
 
-	writeAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
+		if (Object.keys(extensionConfig).length === 0) delete raw.extensionConfig;
+		else raw.extensionConfig = extensionConfig;
+	});
 	return { path, previous };
 }

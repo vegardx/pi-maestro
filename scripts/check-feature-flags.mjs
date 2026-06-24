@@ -12,9 +12,9 @@
  *
  * Today this verifies the structural half of the contract — every manifest
  * entry resolves to a real file and every extension package is wired into
- * the manifest — so the pipeline is in place from the first commit. The
- * behavioural half (env-disable produces zero registrations) lands with
- * core.
+ * the manifest. The behavioural half (a disabled extension registers
+ * nothing) is enforced at runtime by `defineExtension` and asserted in
+ * `test/core.test.ts`.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -61,6 +61,6 @@ if (errors.length > 0) {
 console.log(
 	`feature-flag contract: ${entries.length} extension entr${
 		entries.length === 1 ? "y" : "ies"
-	} wired; behavioural gating check pending core.`,
+	} wired; behavioural gating asserted in test/core.test.ts.`,
 );
 process.exit(0);

@@ -1,0 +1,11 @@
+{
+	"name": "@vegardx/pi",
+	"version": "0.0.0",
+	"private": true,
+	"description": "pi-maestro — structured pi coding-agent extension stack",
+	"license": "MIT",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	}
+}

@@ -9,6 +9,9 @@
 	"exports": {
 		".": "./src/index.ts"
 	},
+	"dependencies": {
+		"@vegardx/pi-core": "*"
+	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
 	}

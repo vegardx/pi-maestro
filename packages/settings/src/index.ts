@@ -21,6 +21,7 @@ export {
 	readExtensionConfigKey,
 	type SettingsScope,
 	settingsPath,
+	updateSettingsFile,
 	type WriteResult,
 	writeExtensionConfigKey,
 } from "./writer.js";

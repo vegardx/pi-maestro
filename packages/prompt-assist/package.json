@@ -1,0 +1,17 @@
+{
+	"name": "@vegardx/pi-prompt-assist",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Ghost-text suggestions, system-addendum nudges, gated input transforms.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"@sinclair/typebox": "*"
+	}
+}

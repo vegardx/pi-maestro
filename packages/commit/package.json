@@ -1,0 +1,16 @@
+{
+	"name": "@vegardx/pi-commit",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Conventional-commit workflow: shipDeliverable (commit + push + PR).",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@sinclair/typebox": "*"
+	}
+}

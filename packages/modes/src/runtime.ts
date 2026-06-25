@@ -14,6 +14,11 @@ import {
 import type { MaestroContext } from "@vegardx/pi-core";
 import { addWorktree, removeWorktree } from "@vegardx/pi-git";
 import { ModesAskQueue } from "./ask-queue.js";
+import {
+	buildCompactionInstructions,
+	createCrashSnapshot,
+	shouldOwnCompaction,
+} from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
 import { renderPlanMarkdown } from "./markdown.js";
@@ -22,7 +27,7 @@ import {
 	computeActiveTools,
 	toolBlockedInPlanMode,
 } from "./policy.js";
-import { repoNameFromPath, slugify } from "./schema.js";
+import { deliverables, repoNameFromPath, slugify } from "./schema.js";
 import { appendModesState, hydrateModesState } from "./session.js";
 import {
 	nextShippableDeliverable,
@@ -39,6 +44,7 @@ import {
 } from "./state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "./storage.js";
 import { createPlanTools } from "./tools.js";
+import { renderModeFooter, renderPlanPanel } from "./ui.js";
 import {
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,
@@ -88,7 +94,16 @@ export function createModesRuntime(
 	}
 
 	function notifyMode(ctx: ExtensionContext): void {
-		ctx.ui.setStatus("maestro.mode", `mode: ${state.mode}`);
+		ctx.ui.setStatus(
+			"maestro.mode",
+			renderModeFooter({
+				mode: state.mode,
+				planSlug: state.activePlanSlug,
+				contextPercent: ctx.getContextUsage?.()?.percent,
+			}),
+		);
+		if (engine)
+			ctx.ui.setWidget?.("maestro.plan", renderPlanPanel(engine.get(), 18));
 	}
 
 	function applyTools(): void {
@@ -427,6 +442,56 @@ export function createModesRuntime(
 		askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 	});
 
+	pi.on("session_before_compact", (event) => {
+		if (
+			!engine ||
+			!shouldOwnCompaction({ mode: state.mode, executing: true })
+		) {
+			return;
+		}
+		const activeDeliverableId = activeDeliverable(engine.get())?.id;
+		return {
+			compaction: {
+				summary: buildCompactionInstructions(engine.get(), activeDeliverableId),
+				firstKeptEntryId: event.preparation.firstKeptEntryId,
+				tokensBefore: event.preparation.tokensBefore,
+				details: {
+					planSlug: engine.get().slug,
+					activeDeliverableId,
+				},
+			},
+		};
+	});
+
+	pi.on("session_compact", (event, ctx) => {
+		if (event.fromExtension) {
+			ctx.ui.notify("Maestro compacted execution context.", "info");
+		}
+	});
+
+	pi.on("tool_execution_end", (event, ctx) => {
+		if (!event.isError || !engine) return;
+		const snapshot = createCrashSnapshot(
+			{
+				error: event.result,
+				mode: state.mode,
+				plan: engine.get(),
+				activeDeliverableId: activeDeliverable(engine.get())?.id,
+				cwd: ctx.cwd,
+			},
+			now,
+		);
+		pi.sendMessage(
+			{
+				customType: "maestro.crash.snapshot",
+				content: `Maestro captured a tool failure: ${snapshot.error}`,
+				display: true,
+				details: snapshot,
+			},
+			{ triggerTurn: false },
+		);
+	});
+
 	maestro.capabilities.register(CAPABILITIES.modes, {
 		current: currentMode,
 		onChange(listener) {
@@ -436,6 +501,12 @@ export function createModesRuntime(
 	});
 
 	return { askQueue, currentMode, currentEngine, setMode, openPlan, cycle };
+}
+
+function activeDeliverable(plan: {
+	nodes: Parameters<typeof deliverables>[0]["nodes"];
+}) {
+	return deliverables(plan).find((d) => d.status === "active");
 }
 
 async function prStateViaGh(

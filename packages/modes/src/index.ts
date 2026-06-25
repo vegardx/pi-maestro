@@ -7,6 +7,12 @@ import { defineExtension } from "@vegardx/pi-core";
 import { createModesRuntime } from "./runtime.js";
 
 export { ModesAskQueue } from "./ask-queue.js";
+export {
+	buildCompactionInstructions,
+	buildCompactionSeed,
+	createCrashSnapshot,
+	shouldOwnCompaction,
+} from "./compaction.js";
 export { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 export {
 	classifyExecutionSteering,
@@ -54,6 +60,7 @@ export {
 	createPlanTools,
 	createTaskTool,
 } from "./tools.js";
+export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,

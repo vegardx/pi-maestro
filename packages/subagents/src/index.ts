@@ -7,27 +7,25 @@
 //     child invocation (pi-native config → args, enablement/kills → env,
 //     computed explicitly per spawn);
 //   * SubagentService — the subagents.v1 capability (spawn/get/list/steer/stop)
-//     over an injected AgentRunner.
+//     over an injected AgentRunner;
+//   * runners + concurrency — an RpcClient-backed AgentRunner that maps a
+//     child's event stream onto the run-bus, gated by a shared FIFO semaphore.
 //
-// The real child runners (RpcClient subprocess + foreground) and concurrency
-// land in the next child deliverable; until then the registered service uses a
-// placeholder runner that fails launches with a clear message, so the
-// capability shape is present and tests inject a fake runner directly.
+// The supervisor protocol, the delegate tool surface, and agent definitions
+// land in the final child deliverable.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
-import { createRunBus, type RunBus } from "./bus.js";
+import { createRunBus } from "./bus.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
 import { DEFAULT_RETENTION, pruneRuns } from "./retention.js";
-import {
-	type AgentRunner,
-	type LaunchRequest,
-	type RunnerController,
-	SubagentService,
-} from "./service.js";
+import { createAgentRunner } from "./runners.js";
+import { createSemaphore } from "./semaphore.js";
+import { type AgentRunner, SubagentService } from "./service.js";
 import { createRunStore } from "./store.js";
 
 export {
@@ -58,6 +56,13 @@ export {
 	type RetentionPolicy,
 } from "./retention.js";
 export {
+	type ClientFactory,
+	createAgentRunner,
+	type RpcLike,
+	type RunnerOptions,
+} from "./runners.js";
+export { createSemaphore, type Semaphore } from "./semaphore.js";
+export {
 	type AgentRunner,
 	type LaunchRequest,
 	type RunnerController,
@@ -72,28 +77,16 @@ export {
 } from "./state-machine.js";
 export { createRunStore, type RunStore } from "./store.js";
 
-// Placeholder until the runners child deliverable lands: fails the launch on
-// the bus so a premature spawn surfaces clearly instead of hanging.
-const notReadyRunner: AgentRunner = {
-	launch(request: LaunchRequest, bus: RunBus): RunnerController {
-		const result = {
-			status: "failed" as const,
-			error: "subagent runner not yet available",
-		};
-		bus.publish({
-			type: "status",
-			runId: request.runId,
-			status: "failed",
-			at: Date.now(),
-		});
-		bus.publish({ type: "result", runId: request.runId, result });
-		return {
-			steer: () => {},
-			stop: () => {},
-			result: () => Promise.resolve(result),
-		};
-	},
-};
+// CLI entry point for spawned children, mirroring pi's subagent example: the
+// path pi itself was launched from. undefined in a bundled binary — the runner
+// then relies on RpcClient's own default discovery.
+function resolveCliPath(): string | undefined {
+	const entry = process.argv[1];
+	if (!entry || entry.startsWith("/$bunfs/")) return undefined;
+	return entry;
+}
+
+const DEFAULT_CONCURRENCY = 3;
 
 export default defineExtension(
 	{
@@ -102,9 +95,16 @@ export default defineExtension(
 		doc: "Run transport, run store, retention, profiles, runners, supervisor.",
 	},
 	(pi, maestro) => {
-		// One bus per process; the store is rebound to the active repo on each
-		// session_start. The capability delegates to the current service.
+		// One bus + one concurrency semaphore per process; the store is rebound
+		// to the active repo on each session_start. The capability delegates to
+		// the current service.
 		const bus = createRunBus();
+		const semaphore = createSemaphore(DEFAULT_CONCURRENCY);
+		const runner: AgentRunner = createAgentRunner({
+			factory: (options) => new RpcClient(options),
+			semaphore,
+			cliPath: resolveCliPath(),
+		});
 		let service: SubagentService | undefined;
 
 		const rebuild = (ctx: ExtensionContext) => {
@@ -113,7 +113,7 @@ export default defineExtension(
 			service = new SubagentService({
 				bus,
 				store,
-				runner: notReadyRunner,
+				runner,
 				repoRoot: ctx.cwd,
 				spawnerCwd: ctx.cwd,
 				ownDepth: currentDepth(),

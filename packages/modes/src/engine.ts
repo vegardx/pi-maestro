@@ -175,19 +175,22 @@ export class PlanEngine {
 
 	removeDeliverable(id: string): void {
 		this.mutate((plan) => {
-			if (!removeNode(plan.nodes, id)) {
+			if (!findDeliverable(plan, id)) {
 				throw new Error(`unknown deliverable: ${id}`);
 			}
+			removeNode(plan.nodes, id);
 		});
 	}
 
 	reorderDeliverable(id: string, position: number): void {
 		this.mutate((plan) => {
+			const node = findDeliverable(plan, id);
+			if (!node) throw new Error(`unknown deliverable: ${id}`);
 			const parent = parentOf(plan, id);
 			const siblings = parent ? parent.children : plan.nodes;
 			const idx = siblings.findIndex((n) => n.id === id);
 			if (idx < 0) throw new Error(`unknown deliverable: ${id}`);
-			const [node] = siblings.splice(idx, 1);
+			siblings.splice(idx, 1);
 			insertAt(siblings, node, position);
 		});
 	}
@@ -254,8 +257,10 @@ export class PlanEngine {
 
 	removeWorkItem(id: string): void {
 		this.mutate((plan) => {
-			if (!removeNode(plan.nodes, id))
+			const node = findNode(plan, id);
+			if (!node || !isWorkItem(node))
 				throw new Error(`unknown work item: ${id}`);
+			removeNode(plan.nodes, id);
 		});
 	}
 

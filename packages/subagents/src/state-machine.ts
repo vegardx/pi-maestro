@@ -13,7 +13,7 @@ const TERMINAL: ReadonlySet<RunStatus> = new Set<TerminalRunStatus>([
 // Allowed forward transitions. A run starts queued, runs, may block and
 // resume, and settles in exactly one terminal state.
 const TRANSITIONS: Record<RunStatus, readonly RunStatus[]> = {
-	queued: ["running", "stopped", "canceled"],
+	queued: ["running", "failed", "stopped", "canceled"],
 	running: ["blocked", "succeeded", "failed", "stopped", "canceled"],
 	blocked: ["running", "failed", "stopped", "canceled"],
 	succeeded: [],

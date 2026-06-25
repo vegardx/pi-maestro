@@ -11,14 +11,17 @@ import type {
 	RunBusMessage,
 	RunId,
 	RunRecord,
+	RunResult,
 	SpawnProfile,
 } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type AgentRunner,
 	canTransition,
+	createAgentRunner,
 	createRunBus,
 	createRunStore,
+	createSemaphore,
 	currentDepth,
 	DEPTH_ENV,
 	isActive,
@@ -434,5 +437,219 @@ describe("SubagentService", () => {
 		expect(stopped).toEqual(["done"]);
 		expect(seen).toContain("steer");
 		expect(seen).toContain("stop");
+	});
+});
+
+describe("concurrency semaphore", () => {
+	it("caps active acquisitions and serves waiters FIFO", async () => {
+		const sem = createSemaphore(2);
+		const r1 = await sem.acquire();
+		const r2 = await sem.acquire();
+		expect(sem.active).toBe(2);
+
+		const order: number[] = [];
+		const p3 = sem.acquire().then((r) => {
+			order.push(3);
+			return r;
+		});
+		const p4 = sem.acquire().then((r) => {
+			order.push(4);
+			return r;
+		});
+		expect(sem.waiting).toBe(2);
+
+		r1(); // wakes the first waiter (3)
+		const r3 = await p3;
+		expect(order).toEqual([3]);
+		r2(); // wakes the second waiter (4)
+		const r4 = await p4;
+		expect(order).toEqual([3, 4]);
+
+		r3();
+		r4();
+		expect(sem.active).toBe(0);
+	});
+
+	it("a release is idempotent", async () => {
+		const sem = createSemaphore(1);
+		const r = await sem.acquire();
+		r();
+		r();
+		expect(sem.active).toBe(0);
+		await sem.acquire(); // a slot is genuinely free, not double-freed
+		expect(sem.active).toBe(1);
+	});
+
+	it("rejects a waiter whose signal aborts, leaving the slot intact", async () => {
+		const sem = createSemaphore(1);
+		const held = await sem.acquire();
+		const ac = new AbortController();
+		const pending = sem.acquire(ac.signal);
+		expect(sem.waiting).toBe(1);
+		ac.abort();
+		await expect(pending).rejects.toThrow(/aborted/);
+		expect(sem.waiting).toBe(0);
+		held();
+		// The slot was never consumed by the aborted waiter.
+		const next = await sem.acquire();
+		expect(sem.active).toBe(1);
+		next();
+	});
+
+	it("rejects immediately if already aborted", async () => {
+		const sem = createSemaphore(1);
+		const ac = new AbortController();
+		ac.abort();
+		await expect(sem.acquire(ac.signal)).rejects.toThrow(/aborted/);
+	});
+});
+
+describe("RpcClient-backed runner", () => {
+	let root: string;
+	let store: RunStore;
+	let bus: RunBus;
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "maestro-runner-"));
+		store = createRunStore(root);
+		bus = createRunBus();
+		persistRunBus(bus, store);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	// A scriptable RpcClient stand-in.
+	function fakeClient(opts: {
+		text?: string;
+		emit?: { type: string; toolName?: string }[];
+		startError?: string;
+		hang?: boolean;
+		captureEnv?: (env: Record<string, string> | undefined) => void;
+		captureArgs?: (args: string[] | undefined) => void;
+	}) {
+		let listener: ((e: any) => void) | undefined;
+		let aborted = false;
+		const client = {
+			listener: () => listener,
+			abort: async () => {
+				aborted = true;
+			},
+			get aborted() {
+				return aborted;
+			},
+			start: async () => {
+				if (opts.startError) throw new Error(opts.startError);
+			},
+			prompt: async () => {},
+			steer: async () => {},
+			stop: async () => {},
+			onEvent: (l: (e: any) => void) => {
+				listener = l;
+				return () => {
+					listener = undefined;
+				};
+			},
+			waitForIdle: async () => {
+				for (const e of opts.emit ?? []) listener?.(e);
+				if (opts.hang) await new Promise(() => {});
+			},
+			getLastAssistantText: async () => opts.text ?? null,
+		};
+		const factory = (options: { env?: any; args?: any }) => {
+			opts.captureEnv?.(options.env);
+			opts.captureArgs?.(options.args);
+			return client as any;
+		};
+		return { client, factory };
+	}
+
+	function launch(factory: any, extra: Record<string, unknown> = {}) {
+		const runner = createAgentRunner({
+			factory,
+			semaphore: createSemaphore(2),
+			baseEnv: { PATH: "/usr/bin" },
+			...extra,
+		});
+		const req = {
+			runId: "run-1" as RunId,
+			prompt: "go",
+			profile: { profile: "deliverable-worker" as const },
+			invocation: {
+				cwd: "/wt",
+				args: ["--mode", "auto"],
+				env: { PI_MAESTRO_DEPTH: "1", PI_DISABLE: "", PI_ENABLE: "" },
+				depth: 1,
+			},
+		};
+		// The service announces the run (creating the store record) before the
+		// runner launches; mirror that here so persistence has a record to update.
+		bus.publish({
+			type: "spawn",
+			run: { id: req.runId, prompt: req.prompt, profile: req.profile },
+		});
+		return runner.launch(req as any, bus);
+	}
+
+	it("runs to success, captures text, and maps tool progress", async () => {
+		const seen: string[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "progress") seen.push(m.delta.text ?? "");
+		});
+		const { factory } = fakeClient({
+			text: "all done",
+			emit: [{ type: "tool_execution_start", toolName: "read" }],
+		});
+		const ctrl = launch(factory);
+		const result = await ctrl.result();
+		expect(result.status).toBe("succeeded");
+		expect(result.summary).toBe("all done");
+		expect(seen).toContain("read");
+		expect(store.readRecord("run-1" as RunId)?.status).toBe("succeeded");
+	});
+
+	it("merges baseEnv under the invocation's explicit maestro env", async () => {
+		let captured: Record<string, string> | undefined;
+		const { factory } = fakeClient({
+			text: "x",
+			captureEnv: (env) => {
+				captured = env;
+			},
+		});
+		await launch(factory).result();
+		expect(captured?.PATH).toBe("/usr/bin");
+		expect(captured?.PI_MAESTRO_DEPTH).toBe("1");
+	});
+
+	it("caps an oversized result", async () => {
+		const { factory } = fakeClient({ text: "x".repeat(5000) });
+		const result = await launch(factory, { resultCapBytes: 100 }).result();
+		expect(result.summary?.length).toBeLessThan(200);
+		expect(result.summary).toContain("truncated");
+	});
+
+	it("reports a launch failure as failed", async () => {
+		const { factory } = fakeClient({ startError: "spawn EACCES" });
+		const result = await launch(factory).result();
+		expect(result.status).toBe("failed");
+		expect(result.error).toContain("EACCES");
+	});
+
+	it("stop aborts the client and settles stopped", async () => {
+		const { client, factory } = fakeClient({ hang: true });
+		const ctrl = launch(factory);
+		await new Promise((r) => setTimeout(r, 5));
+		ctrl.stop();
+		const result = await ctrl.result();
+		expect(result.status).toBe("stopped");
+		expect(client.aborted).toBe(true);
+	});
+
+	it("fires onSettled for background completion notification", async () => {
+		const settled: RunResult[] = [];
+		const { factory } = fakeClient({ text: "ok" });
+		await launch(factory, {
+			onSettled: (_id: RunId, r: RunResult) => settled.push(r),
+		}).result();
+		expect(settled).toHaveLength(1);
+		expect(settled[0].status).toBe("succeeded");
 	});
 });

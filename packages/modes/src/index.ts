@@ -8,6 +8,15 @@ import { createModesRuntime } from "./runtime.js";
 
 export { ModesAskQueue } from "./ask-queue.js";
 export { PLAN_CONTAINER, PlanEngine } from "./engine.js";
+export {
+	classifyExecutionSteering,
+	completeActiveDeliverable,
+	completionGateSatisfied,
+	FanoutOrchestrator,
+	parseShippedPr,
+	startSequentialExecution,
+	transitionThrough,
+} from "./execution.js";
 export { renderPlanMarkdown, renderPlanSeed } from "./markdown.js";
 export {
 	classifyBash,

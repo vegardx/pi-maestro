@@ -150,7 +150,19 @@ export class PlanEngine {
 	updateDeliverable(
 		id: string,
 		patch: Partial<
-			Pick<Deliverable, "title" | "body" | "branch" | "dependsOn" | "lifecycle">
+			Pick<
+				Deliverable,
+				| "title"
+				| "body"
+				| "branch"
+				| "dependsOn"
+				| "lifecycle"
+				| "worktreePath"
+				| "sessionPath"
+				| "issueNumber"
+				| "prNumber"
+				| "summary"
+			>
 		>,
 	): void {
 		this.mutate((plan) => {

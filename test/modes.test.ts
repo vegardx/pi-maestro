@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ModesAskQueue } from "../packages/modes/src/ask-queue.js";
 import { PLAN_CONTAINER, PlanEngine } from "../packages/modes/src/engine.js";
 import {
+	classifyExecutionSteering,
+	completeActiveDeliverable,
+	completionGateSatisfied,
+	FanoutOrchestrator,
+	parseShippedPr,
+	startSequentialExecution,
+	transitionThrough,
+} from "../packages/modes/src/execution.js";
+import {
 	renderPlanMarkdown,
 	renderPlanSeed,
 } from "../packages/modes/src/markdown.js";
@@ -681,6 +690,7 @@ describe("modes runtime", () => {
 			events: {
 				emit: (name: string, payload: unknown) =>
 					emitted.push({ name, payload }),
+				on: () => () => {},
 			},
 			capabilities: {
 				register: (id: string, cap: unknown) => caps.set(id, cap),
@@ -793,5 +803,133 @@ describe("modes runtime", () => {
 		runtime.askQueue.enqueue([{ id: "q", question: "Q?" }]);
 		host.handlers.get("turn_end")?.[0]({}, host.ctx);
 		expect(askBatches).toEqual([[{ id: "q", question: "Q?" }]]);
+	});
+});
+
+describe("execution driver", () => {
+	let store: PlanStore;
+	let root: string;
+	let engine: PlanEngine;
+	beforeEach(() => {
+		counter = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-execution-"));
+		store = createPlanStore(root);
+		engine = PlanEngine.create(
+			store,
+			{ slug: "p", title: "P", repoPath: "/repo" },
+			now,
+		);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	it("starts the next ready deliverable sequentially and emits a seed", () => {
+		const a = engine.addDeliverable({ title: "A" });
+		engine.addWorkItem(a.id, { title: "gate" });
+		let seed = "";
+		const result = startSequentialExecution(engine, {
+			sendSeed: (text) => {
+				seed = text;
+			},
+		});
+		expect(result.kind).toBe("started");
+		expect(deliverables(engine.get())[0].status).toBe("active");
+		expect(seed).toContain("Active deliverable: a");
+		expect(startSequentialExecution(engine).kind).toBe("already-active");
+	});
+
+	it("blocks sequential execution on incomplete preflight", () => {
+		const pre = engine.addDeliverable({ title: "Pre", lifecycle: "pre" });
+		engine.addWorkItem(pre.id, { title: "check", kind: "manual" });
+		engine.addDeliverable({ title: "A" });
+		expect(startSequentialExecution(engine)).toMatchObject({ kind: "blocked" });
+	});
+
+	it("completes an active deliverable only when gating tasks are done", () => {
+		const a = engine.addDeliverable({ title: "A" });
+		const gate = engine.addWorkItem(a.id, { title: "gate" });
+		engine.setStatus(a.id, "active");
+		expect(completionGateSatisfied(deliverables(engine.get())[0])).toBe(false);
+		expect(completeActiveDeliverable(engine, a.id)).toBe(false);
+		engine.toggleWorkItem(gate.id);
+		expect(completionGateSatisfied(deliverables(engine.get())[0])).toBe(true);
+		expect(completeActiveDeliverable(engine, a.id)).toBe(true);
+		expect(deliverables(engine.get())[0].status).toBe("in-review");
+	});
+
+	it("classifies steering and parses shipped PR references", () => {
+		expect(classifyExecutionSteering("status please")).toBe("status");
+		expect(classifyExecutionSteering("stop this run")).toBe("stop");
+		expect(classifyExecutionSteering("keep going")).toBe("continue");
+		expect(parseShippedPr("shipped PR #42")).toBe(42);
+		expect(parseShippedPr("https://github.com/o/r/pull/7")).toBe(7);
+	});
+
+	it("transitions through intermediate states", () => {
+		const a = engine.addDeliverable({ title: "A" });
+		transitionThrough(engine, a.id, "shipped");
+		expect(deliverables(engine.get())[0].status).toBe("shipped");
+	});
+
+	it("fanout spawns ready chains and advances successors after shipped result", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.addWorkItem(a.id, { title: "gate" });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		engine.addWorkItem(b.id, { title: "gate" });
+		const spawned: string[] = [];
+		const pending: Array<{ id: string; resolve: (value: any) => void }> = [];
+		const subagents = {
+			spawn: (_prompt: string, profile: any) => {
+				const id = `run-${pending.length + 1}`;
+				spawned.push(`${id}:${profile.cwd}`);
+				let resolve!: (value: any) => void;
+				const promise = new Promise((r) => {
+					resolve = r;
+				});
+				pending.push({ id, resolve });
+				return { id, result: () => promise };
+			},
+			get: () => undefined,
+			list: () => [],
+			steer: () => {},
+			stop: () => {},
+		};
+		const orch = new FanoutOrchestrator({
+			engine,
+			subagents: subagents as any,
+			cwd: "/repo/worktree",
+		});
+		expect(orch.tick()).toBe(1);
+		expect(spawned).toEqual(["run-1:/repo/worktree"]);
+		expect(deliverables(engine.get())[0].status).toBe("active");
+		pending[0].resolve({ status: "succeeded", summary: "shipped PR #9" });
+		await Promise.resolve();
+		expect(deliverables(engine.get())[0]).toMatchObject({
+			status: "shipped",
+			prNumber: 9,
+		});
+		expect(spawned).toEqual(["run-1:/repo/worktree", "run-2:/repo/worktree"]);
+		expect(deliverables(engine.get())[1].status).toBe("active");
+	});
+
+	it("fanout routes progress to the owning deliverable", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.addWorkItem(a.id, { title: "gate" });
+		const seen: string[] = [];
+		const subagents = {
+			spawn: () => ({ id: "run-1", result: () => new Promise(() => {}) }),
+			get: () => undefined,
+			list: () => [],
+			steer: () => {},
+			stop: () => {},
+		};
+		const orch = new FanoutOrchestrator({
+			engine,
+			subagents: subagents as any,
+			onProgress: (deliverable, progress) =>
+				seen.push(`${deliverable.id}:${progress.text}`),
+		});
+		orch.tick();
+		orch.progress("run-1" as any, { text: "reading" });
+		expect(seen).toEqual(["a:reading"]);
 	});
 });

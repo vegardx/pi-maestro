@@ -33,6 +33,14 @@ export {
 	toPersistedState,
 } from "./session.js";
 export {
+	deliverableIssueBody,
+	nextShippableDeliverable,
+	parkPlan,
+	shipDeliverableFromPlan,
+	sweepMergedPrs,
+	syncPrState,
+} from "./shipping.js";
+export {
 	initialModesState,
 	MODE_CYCLE,
 	nextMode,

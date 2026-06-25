@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
 	CAPABILITIES,
+	type DeliverableId,
 	EVENTS,
 	type ModeName,
 	type PlanId,
@@ -23,6 +24,12 @@ import {
 } from "./policy.js";
 import { repoNameFromPath, slugify } from "./schema.js";
 import { appendModesState, hydrateModesState } from "./session.js";
+import {
+	nextShippableDeliverable,
+	parkPlan,
+	shipDeliverableFromPlan,
+	syncPrState,
+} from "./shipping.js";
 import {
 	initialModesState,
 	type ModesState,
@@ -289,6 +296,84 @@ export function createModesRuntime(
 		},
 	});
 
+	pi.registerCommand("ship", {
+		description: "Ship the next shippable deliverable via commit.v1.",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (!engine) {
+				ctx.ui.notify("No active plan.", "warning");
+				return;
+			}
+			const commit = maestro.capabilities.get(CAPABILITIES.commit);
+			if (!commit) {
+				ctx.ui.notify("commit.v1 unavailable.", "warning");
+				return;
+			}
+			const id = args.trim() || nextShippableDeliverable(engine.get())?.id;
+			if (!id) {
+				ctx.ui.notify("No shippable deliverable.", "warning");
+				return;
+			}
+			const shipped = await shipDeliverableFromPlan(engine, id, {
+				commit,
+				confirm: ({ message }) => ctx.ui.confirm("Ship deliverable", message),
+			});
+			if (shipped.kind !== "shipped") {
+				ctx.ui.notify(
+					shipped.kind === "canceled" ? "Ship canceled." : shipped.reason,
+					"warning",
+				);
+				return;
+			}
+			emitPlanChanged();
+			maestro.events.emit(EVENTS.shipCompleted, {
+				deliverableId: shipped.deliverable.id as DeliverableId,
+				pr: shipped.result.pr,
+			});
+			ctx.ui.notify(
+				shipped.result.pr
+					? `Shipped ${id} → PR #${shipped.result.pr}.`
+					: `Shipped ${id}.`,
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("sync", {
+		description: "Reconcile merged/closed deliverable PRs back into the plan.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (!engine) {
+				ctx.ui.notify("No active plan.", "warning");
+				return;
+			}
+			const result = await syncPrState(engine, {
+				state: async (prNumber) => prStateViaGh(pi, ctx.cwd, prNumber),
+			});
+			emitPlanChanged();
+			ctx.ui.notify(
+				`Sync complete: shipped=${result.shipped.length} closed=${result.closed.length}.`,
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("park", {
+		description: "Create GitHub tracking issues for the active plan.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (!engine) {
+				ctx.ui.notify("No active plan.", "warning");
+				return;
+			}
+			const result = await parkPlan(engine, {
+				createIssue: (input) => createIssueViaGh(pi, ctx.cwd, input),
+			});
+			emitPlanChanged();
+			ctx.ui.notify(
+				`Parked plan as issue #${result.parent} (${result.children.length} deliverable issues).`,
+				"info",
+			);
+		},
+	});
+
 	pi.registerCommand("modes-status", {
 		description: "Show Maestro mode and active plan status.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
@@ -351,6 +436,50 @@ export function createModesRuntime(
 	});
 
 	return { askQueue, currentMode, currentEngine, setMode, openPlan, cycle };
+}
+
+async function prStateViaGh(
+	pi: ExtensionAPI,
+	cwd: string,
+	prNumber: number,
+): Promise<"open" | "merged" | "closed" | null> {
+	const result = await pi.exec(
+		"gh",
+		["pr", "view", String(prNumber), "--json", "state,mergedAt"],
+		{ cwd },
+	);
+	if (result.code !== 0) return null;
+	const parsed = JSON.parse(result.stdout) as {
+		state?: string;
+		mergedAt?: string;
+	};
+	if (parsed.mergedAt) return "merged";
+	if (parsed.state === "OPEN") return "open";
+	if (parsed.state === "CLOSED") return "closed";
+	return null;
+}
+
+async function createIssueViaGh(
+	pi: ExtensionAPI,
+	cwd: string,
+	input: { title: string; body: string; parent?: number },
+): Promise<number> {
+	const body = input.parent
+		? `${input.body}\n\nParent: #${input.parent}`
+		: input.body;
+	const result = await pi.exec(
+		"gh",
+		["issue", "create", "--title", input.title, "--body", body],
+		{ cwd },
+	);
+	if (result.code !== 0) {
+		throw new Error(result.stderr.trim() || "gh issue create failed");
+	}
+	const match =
+		result.stdout.match(/\/(?:issues|issue)\/(\d+)\b/) ??
+		result.stdout.match(/#(\d+)\b/);
+	if (!match) throw new Error(`could not parse issue number: ${result.stdout}`);
+	return Number(match[1]);
 }
 
 export { PLAN_CONTAINER };

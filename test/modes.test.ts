@@ -51,6 +51,13 @@ import {
 	toPersistedState,
 } from "../packages/modes/src/session.js";
 import {
+	nextShippableDeliverable,
+	parkPlan,
+	shipDeliverableFromPlan,
+	sweepMergedPrs,
+	syncPrState,
+} from "../packages/modes/src/shipping.js";
+import {
 	initialModesState,
 	nextMode,
 	setActivePlan,
@@ -1033,5 +1040,116 @@ describe("worktree and session lifecycle", () => {
 		expect(deliverableSessionSeed(engine.get(), a.id)).toContain(
 			"Active deliverable: a",
 		);
+	});
+});
+
+describe("shipping policy", () => {
+	let store: PlanStore;
+	let root: string;
+	let engine: PlanEngine;
+	beforeEach(() => {
+		counter = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-shipping-"));
+		store = createPlanStore(root);
+		engine = PlanEngine.create(
+			store,
+			{ slug: "p", title: "P", repoPath: "/repo" },
+			now,
+		);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	it("ships through commit.v1 behind a single gate", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.addWorkItem(a.id, { title: "gate" });
+		transitionThrough(engine, a.id, "ready-to-ship");
+		const calls: unknown[] = [];
+		const result = await shipDeliverableFromPlan(engine, a.id, {
+			confirm: ({ message }) => message.includes("Ship a"),
+			commit: {
+				shipDeliverable: async (input) => {
+					calls.push(input);
+					return {
+						branch: "feat/a",
+						committed: true,
+						pushed: true,
+						pr: 12,
+					};
+				},
+			},
+		});
+		expect(result.kind).toBe("shipped");
+		expect(calls).toEqual([
+			{ deliverableId: "a", paths: undefined, openPr: true },
+		]);
+		expect(deliverables(engine.get())[0]).toMatchObject({
+			prNumber: 12,
+			summary: "branch feat/a — PR #12",
+			status: "ready-to-ship",
+		});
+	});
+
+	it("cancels shipping before commit", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		let called = false;
+		const result = await shipDeliverableFromPlan(engine, a.id, {
+			confirm: () => false,
+			commit: {
+				shipDeliverable: async () => {
+					called = true;
+					return { branch: "", committed: false, pushed: false };
+				},
+			},
+		});
+		expect(result.kind).toBe("canceled");
+		expect(called).toBe(false);
+	});
+
+	it("syncs merged and closed PR state", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		transitionThrough(engine, a.id, "in-review");
+		transitionThrough(engine, b.id, "in-review");
+		engine.updateDeliverable(a.id, { prNumber: 1 });
+		engine.updateDeliverable(b.id, { prNumber: 2 });
+		const result = await syncPrState(engine, {
+			state: (pr) => (pr === 1 ? "merged" : "closed"),
+		});
+		expect(result).toEqual({ shipped: ["a"], closed: ["b"] });
+		expect(deliverables(engine.get())[0].status).toBe("shipped");
+		expect(deliverables(engine.get())[1].status).toBe("needs-attention");
+	});
+
+	it("parks the plan as a parent issue plus deliverable issues", async () => {
+		engine.addDeliverable({ title: "A", body: "Body", dependsOn: [] });
+		engine.addDeliverable({ title: "B" });
+		let n = 40;
+		const seen: any[] = [];
+		const result = await parkPlan(engine, {
+			createIssue: async (input) => {
+				seen.push(input);
+				return ++n;
+			},
+		});
+		expect(result).toEqual({ parent: 41, children: [42, 43] });
+		expect(engine.get().parentIssueNumber).toBe(41);
+		expect(deliverables(engine.get()).map((d) => d.issueNumber)).toEqual([
+			42, 43,
+		]);
+		expect(seen[0].body).toContain("# P (`p`)");
+		expect(seen[1]).toMatchObject({ title: "A", parent: 41 });
+	});
+
+	it("selects and sweeps shippable deliverables", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		transitionThrough(engine, a.id, "ready-to-ship");
+		transitionThrough(engine, b.id, "in-review");
+		engine.updateDeliverable(a.id, { prNumber: 1 });
+		expect(nextShippableDeliverable(engine.get())?.id).toBe("a");
+		expect(await sweepMergedPrs(engine, { state: () => "merged" })).toEqual([
+			"a",
+		]);
+		expect(deliverables(engine.get())[0].status).toBe("shipped");
 	});
 });

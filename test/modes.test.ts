@@ -65,6 +65,15 @@ import {
 	createPlanTool,
 	createTaskTool,
 } from "../packages/modes/src/tools.js";
+import {
+	activateDeliverableWorktree,
+	cleanupInactiveWorktrees,
+	deliverableSessionSeed,
+	deliverableWorktreePath,
+	reconcileWorktrees,
+	recordDeliverableSession,
+	recordPlanSession,
+} from "../packages/modes/src/worktree.js";
 
 let counter = 0;
 const now = () => `2026-01-01T00:00:${String(counter++).padStart(2, "0")}.000Z`;
@@ -681,7 +690,10 @@ describe("modes runtime", () => {
 					statuses.set(key, value),
 				select: async () => "Implement (auto)",
 			},
-			sessionManager: { getEntries: () => entries },
+			sessionManager: {
+				getEntries: () => entries,
+				getSessionFile: () => "/sessions/current.jsonl",
+			},
 		};
 		const emitted: Array<{ name: string; payload: unknown }> = [];
 		const caps = new Map<string, unknown>();
@@ -931,5 +943,95 @@ describe("execution driver", () => {
 		orch.tick();
 		orch.progress("run-1" as any, { text: "reading" });
 		expect(seen).toEqual(["a:reading"]);
+	});
+});
+
+describe("worktree and session lifecycle", () => {
+	let store: PlanStore;
+	let root: string;
+	let engine: PlanEngine;
+	beforeEach(() => {
+		counter = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-worktree-"));
+		store = createPlanStore(root);
+		engine = PlanEngine.create(
+			store,
+			{ slug: "p", title: "P", repoPath: "/repo/app" },
+			now,
+		);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	it("activates a deliverable worktree using the stacked base branch", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		engine.setStatus(a.id, "active");
+		const calls: string[][] = [];
+		const result = activateDeliverableWorktree(engine, b.id, "main", {
+			addWorktree: (repo, target, branch, base) => {
+				calls.push([repo, target, branch, base]);
+				return { ok: true, path: target, created: true };
+			},
+			removeWorktree: () => ({ ok: true }),
+		});
+		expect(result).toMatchObject({
+			kind: "ready",
+			branch: "feat/b",
+			baseBranch: "feat/a",
+		});
+		expect(calls[0][0]).toBe("/repo/app");
+		expect(calls[0][2]).toBe("feat/b");
+		expect(calls[0][3]).toBe("feat/a");
+		expect(deliverables(engine.get())[1].worktreePath).toContain(
+			"/worktrees/app/b",
+		);
+	});
+
+	it("cleans inactive worktrees but keeps dirty failures", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		engine.updateDeliverable(a.id, { worktreePath: "/wt/a" });
+		engine.updateDeliverable(b.id, { worktreePath: "/wt/b" });
+		engine.setStatus(b.id, "active");
+		const removed: string[] = [];
+		const result = cleanupInactiveWorktrees(engine, {
+			addWorktree: () => ({ ok: true, path: "", created: false }),
+			removeWorktree: (_repo, path) => {
+				removed.push(path);
+				return path === "/wt/a"
+					? { ok: false, error: "dirty", reason: "dirty" }
+					: { ok: true };
+			},
+		});
+		expect(removed).toEqual(["/wt/a"]);
+		expect(result.kept).toEqual([{ id: "a", path: "/wt/a", reason: "dirty" }]);
+		expect(deliverables(engine.get())[1].worktreePath).toBe("/wt/b");
+	});
+
+	it("reconciles filesystem worktrees into the plan and clears missing paths", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		engine.updateDeliverable(b.id, { worktreePath: "/missing" });
+		const result = reconcileWorktrees(engine, [
+			{ path: "/repo/app", branch: "main" },
+			{ path: "/wt/a", branch: "feat/a" },
+		]);
+		expect(result).toEqual({ attached: ["a"], cleared: ["b"] });
+		expect(deliverables(engine.get())[0].worktreePath).toBe("/wt/a");
+		expect(deliverables(engine.get())[1].worktreePath).toBeUndefined();
+	});
+
+	it("records plan and deliverable sessions and builds seeds", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		recordPlanSession(engine, "/sessions/plan.jsonl");
+		recordDeliverableSession(engine, a.id, "/sessions/a.jsonl");
+		expect(engine.get().planSessionPath).toBe("/sessions/plan.jsonl");
+		expect(deliverables(engine.get())[0].sessionPath).toBe("/sessions/a.jsonl");
+		expect(deliverableWorktreePath(engine.get(), { id: a.id })).toContain(
+			"/worktrees/app/a",
+		);
+		expect(deliverableSessionSeed(engine.get(), a.id)).toContain(
+			"Active deliverable: a",
+		);
 	});
 });

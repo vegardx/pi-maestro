@@ -78,6 +78,19 @@ export class PlanEngine {
 		return this.plan;
 	}
 
+	updatePlan(
+		patch: Partial<
+			Pick<
+				Plan,
+				"title" | "parentIssueNumber" | "planSessionPath" | "lastSyncedAt"
+			>
+		>,
+	): void {
+		this.mutate((plan) => {
+			Object.assign(plan, patch);
+		});
+	}
+
 	// Clone → mutate → validate → persist. Throws (without saving) on an
 	// invalid shape, so disk only ever holds valid plans.
 	private mutate(fn: (plan: Plan) => void): void {

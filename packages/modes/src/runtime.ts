@@ -11,6 +11,7 @@ import {
 	type PlanId,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
+import { addWorktree, removeWorktree } from "@vegardx/pi-git";
 import { ModesAskQueue } from "./ask-queue.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
@@ -31,6 +32,12 @@ import {
 } from "./state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "./storage.js";
 import { createPlanTools } from "./tools.js";
+import {
+	activateDeliverableWorktree,
+	cleanupInactiveWorktrees,
+	recordDeliverableSession,
+	recordPlanSession,
+} from "./worktree.js";
 
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
@@ -54,6 +61,7 @@ export function createModesRuntime(
 	const store = opts.store ?? createPlanStore(plansRoot());
 	const now = opts.now ?? (() => new Date().toISOString());
 	const askQueue = new ModesAskQueue();
+	const worktreeDeps = { addWorktree, removeWorktree };
 	let state: ModesState = initialModesState(now);
 	let engine: PlanEngine | undefined;
 	let fanout: FanoutOrchestrator | undefined;
@@ -126,6 +134,8 @@ export function createModesRuntime(
 			: PlanEngine.create(store, { slug, title, repoPath: ctx.cwd }, now);
 		if (!engine) throw new Error(`plan ${slug} not found on disk`);
 		state = setActivePlan(state, slug, now);
+		const sessionPath = ctx.sessionManager.getSessionFile();
+		if (sessionPath) recordPlanSession(engine, sessionPath);
 		persist();
 		maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
 		ctx.ui.setStatus("maestro.plan", `plan: ${slug}`);
@@ -156,9 +166,31 @@ export function createModesRuntime(
 
 	function emitPlanChanged(): void {
 		if (!engine) return;
+		cleanupInactiveWorktrees(engine, worktreeDeps);
 		maestro.events.emit(EVENTS.planUpdated, {
 			planId: engine.get().slug as PlanId,
 		});
+	}
+
+	function prepareWorktree(
+		deliverableId: string,
+		ctx: ExtensionContext,
+	): string | undefined {
+		if (!engine) return undefined;
+		const prepared = activateDeliverableWorktree(
+			engine,
+			deliverableId,
+			"main",
+			worktreeDeps,
+		);
+		if (prepared.kind === "error") {
+			ctx.ui.notify(prepared.error, "warning");
+			return undefined;
+		}
+		const sessionPath = ctx.sessionManager.getSessionFile();
+		if (sessionPath)
+			recordDeliverableSession(engine, deliverableId, sessionPath);
+		return prepared.path;
 	}
 
 	for (const tool of createPlanTools({
@@ -207,6 +239,9 @@ export function createModesRuntime(
 						engine,
 						subagents,
 						cwd: ctx.cwd,
+						prepareDeliverable: (deliverable) => ({
+							cwd: prepareWorktree(deliverable.id, ctx),
+						}),
 						onPlanChanged: emitPlanChanged,
 						onSpawn: (deliverable, handle) =>
 							ctx.ui.notify(
@@ -248,6 +283,8 @@ export function createModesRuntime(
 					: result.kind === "already-active"
 						? `${result.deliverable.id} is already active.`
 						: result.reason;
+			if (result.kind === "started")
+				prepareWorktree(result.deliverable.id, ctx);
 			ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
 		},
 	});

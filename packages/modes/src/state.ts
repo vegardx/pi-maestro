@@ -1,0 +1,45 @@
+import { MODE_NAMES, type ModeName } from "@vegardx/pi-contracts";
+
+export interface ModesState {
+	mode: ModeName;
+	activePlanSlug?: string;
+	updatedAt: string;
+}
+
+export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;
+
+export function initialModesState(now: () => string = isoNow): ModesState {
+	return { mode: "hack", updatedAt: now() };
+}
+
+export function nextMode(mode: ModeName): ModeName {
+	const idx = MODE_CYCLE.indexOf(mode);
+	return MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];
+}
+
+export function transitionMode(
+	state: ModesState,
+	mode: ModeName,
+	now: () => string = isoNow,
+): { state: ModesState; previous: ModeName } {
+	return {
+		previous: state.mode,
+		state: { ...state, mode, updatedAt: now() },
+	};
+}
+
+export function setActivePlan(
+	state: ModesState,
+	activePlanSlug: string | undefined,
+	now: () => string = isoNow,
+): ModesState {
+	return { ...state, activePlanSlug, updatedAt: now() };
+}
+
+export function isModeName(value: string): value is ModeName {
+	return (MODE_NAMES as readonly string[]).includes(value);
+}
+
+function isoNow(): string {
+	return new Date().toISOString();
+}

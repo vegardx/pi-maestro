@@ -439,6 +439,14 @@ export function validatePlanShape(plan: Pick<Plan, "nodes">): string[] {
 	const flat = deliverables(plan);
 	const ids = new Set(flat.map((d) => d.id));
 
+	for (const item of topLevelLeaves(plan)) {
+		if (effectiveWorkItemKind(item) === "task") {
+			problems.push(
+				`plan-level work item \`${item.id}\` cannot be a gating task`,
+			);
+		}
+	}
+
 	for (const d of flat) {
 		if (gatingTasks(d).length > 0 && childDeliverables(d).length > 0) {
 			problems.push(

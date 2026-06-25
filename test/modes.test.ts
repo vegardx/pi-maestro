@@ -4,11 +4,16 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PLAN_CONTAINER, PlanEngine } from "../packages/modes/src/engine.js";
 import {
+	renderPlanMarkdown,
+	renderPlanSeed,
+} from "../packages/modes/src/markdown.js";
+import {
 	blockedReason,
 	canTransition,
 	chainHead,
 	type Deliverable,
 	deliverables,
+	findNode,
 	gatingTasks,
 	isDeliverableReady,
 	isGrouping,
@@ -27,6 +32,11 @@ import {
 	createPlanStore,
 	type PlanStore,
 } from "../packages/modes/src/storage.js";
+import {
+	createDeliverableTool,
+	createPlanTool,
+	createTaskTool,
+} from "../packages/modes/src/tools.js";
 
 let counter = 0;
 const now = () => `2026-01-01T00:00:${String(counter++).padStart(2, "0")}.000Z`;
@@ -290,5 +300,178 @@ describe("PlanEngine", () => {
 		engine.moveWorkItem(note.id, PLAN_CONTAINER);
 		expect(engine.get().nodes.some((n) => n.id === note.id)).toBe(true);
 		expect((engine.get().nodes[0] as Deliverable).children).toHaveLength(0);
+	});
+});
+
+// Host tools execute as (id, params, signal?, _, ctx). Tests only need params.
+function exec(
+	tool: { execute: (...args: any[]) => Promise<any> },
+	params: unknown,
+) {
+	return tool.execute("tool-call", params, undefined, undefined, {} as any);
+}
+
+describe("plan markdown", () => {
+	it("renders deliverables, loose items, and answers", () => {
+		const p = plan([
+			deliverable({
+				id: "pre",
+				title: "Preflight",
+				lifecycle: "pre",
+				children: [{ ...task("manual", true), kind: "manual" }],
+			}),
+			deliverable({
+				id: "ship",
+				title: "Ship it",
+				body: "What ships.",
+				branch: "feat/ship",
+				children: [
+					task("gate"),
+					{
+						type: "work-item",
+						id: "q",
+						title: "Pick one",
+						body: "",
+						done: true,
+						kind: "question",
+						answer: "A",
+						createdAt: "t",
+						updatedAt: "t",
+					},
+				],
+			}),
+			{ ...task("loose"), kind: "followup" },
+		]);
+		const text = renderPlanMarkdown(p);
+		expect(text).toContain("# P (`p`)");
+		expect(text).toContain("## Preflight");
+		expect(text).toContain("### Ship it `ship` [planned]");
+		expect(text).toContain("> What ships.");
+		expect(text).toContain("- [ ] **gate** `gate`");
+		expect(text).toContain("→ answer: A");
+		expect(text).toContain("## Loose items");
+	});
+
+	it("renders a deterministic plan seed", () => {
+		const p = plan([
+			deliverable({ id: "a", title: "A", status: "shipped", summary: "done" }),
+			deliverable({ id: "b", title: "B", dependsOn: ["a"] }),
+		]);
+		const seed = renderPlanSeed(p, "b");
+		expect(seed).toContain("# Maestro plan context");
+		expect(seed).toContain("- a: shipped — A");
+		expect(seed).toContain("summary: done");
+		expect(seed).toContain("→ b: planned depends on a — B");
+	});
+});
+
+describe("plan tools", () => {
+	let store: PlanStore;
+	let root: string;
+	let engine: PlanEngine;
+	let changed = 0;
+	beforeEach(() => {
+		counter = 0;
+		changed = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-tools-"));
+		store = createPlanStore(root);
+		engine = PlanEngine.create(
+			store,
+			{ slug: "p", title: "P", repoPath: "/repo" },
+			now,
+		);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	function deps() {
+		return {
+			engine: () => engine,
+			onPlanChanged: () => {
+				changed += 1;
+			},
+		};
+	}
+
+	it("performs deliverable CRUD and list actions", async () => {
+		const tool = createDeliverableTool(deps());
+		const added = await exec(tool, {
+			action: "add",
+			title: "First",
+			body: "body",
+			dependsOn: [],
+		});
+		expect(added.details.deliverable.id).toBe("first");
+		expect(changed).toBe(1);
+
+		await exec(tool, { action: "add", title: "Second" });
+		await exec(tool, { action: "reorder", id: "second", position: 0 });
+		expect((engine.get().nodes[0] as Deliverable).id).toBe("second");
+
+		await exec(tool, { action: "update", id: "first", title: "Renamed" });
+		expect(
+			deliverables(engine.get()).find((d) => d.id === "first")?.title,
+		).toBe("Renamed");
+
+		const listed = await exec(tool, { action: "list" });
+		expect(listed.content[0].text).toContain("first: planned — Renamed");
+
+		await exec(tool, { action: "remove", id: "second" });
+		expect(deliverables(engine.get()).map((d) => d.id)).toEqual(["first"]);
+	});
+
+	it("surfaces validation errors without mutating the plan", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A" });
+		await exec(tTool, { action: "add", deliverableId: "a", title: "gate" });
+		const failed = await exec(dTool, {
+			action: "add",
+			title: "Child",
+			parentId: "a",
+		});
+		expect(failed.details.error).toContain("invalid plan");
+		expect((engine.get().nodes[0] as Deliverable).children).toHaveLength(1);
+	});
+
+	it("performs work-item CRUD including move and answer stamping", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A" });
+		await exec(dTool, { action: "add", title: "B" });
+		const added = await exec(tTool, {
+			action: "add",
+			deliverableId: "a",
+			title: "Question",
+			kind: "question",
+		});
+		const id = added.details.workItem.id;
+		await exec(tTool, { action: "update", id, answer: "yes" });
+		expect(added.details.workItem.done).toBe(false);
+		expect((findNode(engine.get(), id) as WorkItem).answer).toBe("yes");
+		const toggled = await exec(tTool, { action: "toggle", id });
+		expect(toggled.details.done).toBe(false);
+		await exec(tTool, { action: "move", id, targetDeliverableId: "b" });
+		expect((engine.get().nodes[1] as Deliverable).children[0]).toMatchObject({
+			id,
+		});
+		await exec(tTool, { action: "remove", id });
+		expect((engine.get().nodes[1] as Deliverable).children).toHaveLength(0);
+	});
+
+	it("returns markdown, seed, and json views", async () => {
+		engine.addDeliverable({ title: "A" });
+		const tool = createPlanTool(deps());
+		const md = await exec(tool, {});
+		expect(md.content[0].text).toContain("### A `a` [planned]");
+		const seed = await exec(tool, { view: "seed", activeDeliverableId: "a" });
+		expect(seed.content[0].text).toContain("Active deliverable: a");
+		const json = await exec(tool, { view: "json" });
+		expect(json.content[0].text).toContain('"slug": "p"');
+	});
+
+	it("reports missing active plan", async () => {
+		const tool = createPlanTool({ engine: () => undefined });
+		const result = await exec(tool, {});
+		expect(result.details.error).toContain("no plan active");
 	});
 });

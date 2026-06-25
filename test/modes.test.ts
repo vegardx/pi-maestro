@@ -1,12 +1,20 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CAPABILITIES, EVENTS, type ModeName } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ModesAskQueue } from "../packages/modes/src/ask-queue.js";
 import { PLAN_CONTAINER, PlanEngine } from "../packages/modes/src/engine.js";
 import {
 	renderPlanMarkdown,
 	renderPlanSeed,
 } from "../packages/modes/src/markdown.js";
+import {
+	classifyBash,
+	computeActiveTools,
+	toolBlockedInPlanMode,
+} from "../packages/modes/src/policy.js";
+import { createModesRuntime } from "../packages/modes/src/runtime.js";
 import {
 	blockedReason,
 	canTransition,
@@ -28,6 +36,17 @@ import {
 	validatePlanShape,
 	type WorkItem,
 } from "../packages/modes/src/schema.js";
+import {
+	hydrateModesState,
+	MODES_STATE_ENTRY,
+	toPersistedState,
+} from "../packages/modes/src/session.js";
+import {
+	initialModesState,
+	nextMode,
+	setActivePlan,
+	transitionMode,
+} from "../packages/modes/src/state.js";
 import {
 	createPlanStore,
 	type PlanStore,
@@ -473,5 +492,306 @@ describe("plan tools", () => {
 		const tool = createPlanTool({ engine: () => undefined });
 		const result = await exec(tool, {});
 		expect(result.details.error).toContain("no plan active");
+	});
+});
+
+describe("mode state and policy", () => {
+	it("cycles modes and persists active plan", () => {
+		const state = initialModesState(now);
+		expect(state.mode).toBe("hack");
+		expect(nextMode("hack")).toBe("plan");
+		expect(nextMode("auto")).toBe("hack");
+		const changed = transitionMode(state, "plan", now);
+		expect(changed.previous).toBe("hack");
+		const withPlan = setActivePlan(changed.state, "p", now);
+		expect(toPersistedState(withPlan)).toMatchObject({
+			version: 1,
+			mode: "plan",
+			activePlanSlug: "p",
+		});
+	});
+
+	it("hydrates the latest mode state from session entries", () => {
+		const entries = [
+			{
+				type: "custom",
+				id: "1",
+				parentId: null,
+				timestamp: "t",
+				customType: MODES_STATE_ENTRY,
+				data: {
+					version: 1,
+					mode: "plan",
+					activePlanSlug: "old",
+					updatedAt: "1",
+				},
+			},
+			{
+				type: "custom",
+				id: "2",
+				parentId: "1",
+				timestamp: "t",
+				customType: MODES_STATE_ENTRY,
+				data: {
+					version: 1,
+					mode: "ask",
+					activePlanSlug: "new",
+					updatedAt: "2",
+				},
+			},
+		] as any[];
+		expect(hydrateModesState(entries)).toEqual({
+			mode: "ask",
+			activePlanSlug: "new",
+			updatedAt: "2",
+		});
+	});
+
+	it("narrows active tools in plan mode", () => {
+		const tools = [
+			"read",
+			"bash",
+			"edit",
+			"deliverable",
+			"task",
+			"plan",
+			"ask",
+		];
+		expect(
+			computeActiveTools({
+				mode: "plan",
+				availableTools: tools,
+				baselineTools: tools,
+			}),
+		).toEqual(["read", "deliverable", "task", "plan", "ask"]);
+		expect(
+			computeActiveTools({
+				mode: "auto",
+				availableTools: tools,
+				baselineTools: ["edit"],
+			}),
+		).toEqual(["edit"]);
+	});
+
+	it("classifies bash commands for plan mode", () => {
+		expect(classifyBash("git status --short").readOnly).toBe(true);
+		expect(classifyBash("git branch -vv").readOnly).toBe(true);
+		expect(classifyBash("git branch feat/x").readOnly).toBe(false);
+		expect(classifyBash("echo hi > file").readOnly).toBe(false);
+		expect(classifyBash("rm file").readOnly).toBe(false);
+		expect(toolBlockedInPlanMode("edit")).toContain("disabled");
+		expect(toolBlockedInPlanMode("deliverable")).toBeNull();
+	});
+});
+
+describe("modes ask queue", () => {
+	it("batches queued questions into ask.v1", () => {
+		const queue = new ModesAskQueue();
+		const batches: unknown[] = [];
+		queue.enqueue([{ id: "a", question: "A?" }]);
+		queue.enqueue([{ id: "b", question: "B?" }]);
+		expect(queue.size).toBe(2);
+		const flushed = queue.flushTo({
+			ask: async () => [],
+			queue: (questions) => batches.push(questions),
+		});
+		expect(flushed).toBe(2);
+		expect(queue.size).toBe(0);
+		expect(batches).toEqual([
+			[
+				{ id: "a", question: "A?" },
+				{ id: "b", question: "B?" },
+			],
+		]);
+	});
+});
+
+describe("modes runtime", () => {
+	let root: string;
+	let store: PlanStore;
+	beforeEach(() => {
+		counter = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-runtime-"));
+		store = createPlanStore(root);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	function fakeHost() {
+		const commands = new Map<string, any>();
+		const handlers = new Map<string, any[]>();
+		const tools: any[] = [];
+		const shortcuts = new Map<string, any>();
+		const entries: any[] = [];
+		const notifications: string[] = [];
+		const statuses = new Map<string, string | undefined>();
+		const messages: any[] = [];
+		let activeTools = ["read", "edit", "bash"];
+		const allToolNames = [
+			"read",
+			"edit",
+			"bash",
+			"deliverable",
+			"task",
+			"plan",
+			"ask",
+		];
+		const pi = {
+			on: (name: string, handler: any) => {
+				handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+			},
+			registerTool: (tool: any) => tools.push(tool),
+			registerCommand: (name: string, options: any) =>
+				commands.set(name, options),
+			registerShortcut: (key: string, options: any) =>
+				shortcuts.set(key, options),
+			appendEntry: (customType: string, data?: unknown) => {
+				entries.push({
+					type: "custom",
+					id: String(entries.length + 1),
+					parentId: null,
+					timestamp: "t",
+					customType,
+					data,
+				});
+			},
+			getActiveTools: () => activeTools,
+			getAllTools: () => allToolNames.map((name) => ({ name })),
+			setActiveTools: (next: string[]) => {
+				activeTools = next;
+			},
+			sendMessage: (message: unknown, options: unknown) =>
+				messages.push({ message, options }),
+			events: { emit: () => {}, on: () => () => {} },
+		};
+		const ctx = {
+			cwd: "/repo/project",
+			hasUI: true,
+			ui: {
+				notify: (message: string) => notifications.push(message),
+				setStatus: (key: string, value: string | undefined) =>
+					statuses.set(key, value),
+				select: async () => "Implement (auto)",
+			},
+			sessionManager: { getEntries: () => entries },
+		};
+		const emitted: Array<{ name: string; payload: unknown }> = [];
+		const caps = new Map<string, unknown>();
+		const maestro = {
+			name: "modes",
+			events: {
+				emit: (name: string, payload: unknown) =>
+					emitted.push({ name, payload }),
+			},
+			capabilities: {
+				register: (id: string, cap: unknown) => caps.set(id, cap),
+				get: (id: string) => caps.get(id),
+			},
+			flags: { enabled: () => true },
+		};
+		return {
+			pi,
+			ctx,
+			commands,
+			handlers,
+			tools,
+			shortcuts,
+			entries,
+			notifications,
+			statuses,
+			messages,
+			emitted,
+			caps,
+			activeTools: () => activeTools,
+			maestro,
+		};
+	}
+
+	it("registers tools, commands, shortcut, and capability", () => {
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		expect(host.tools.map((t) => t.name)).toEqual([
+			"deliverable",
+			"task",
+			"plan",
+		]);
+		expect([...host.commands.keys()]).toEqual(
+			expect.arrayContaining([
+				"plan",
+				"implement",
+				"hack",
+				"ask",
+				"auto",
+				"modes-status",
+			]),
+		);
+		expect(host.shortcuts.has("shift+tab")).toBe(true);
+		expect(host.caps.has(CAPABILITIES.modes)).toBe(true);
+	});
+
+	it("opens a plan through /plan and hydrates session state", async () => {
+		const host = fakeHost();
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		expect(runtime.currentMode()).toBe("plan");
+		expect(runtime.currentEngine()?.get().slug).toBe("my-plan");
+		expect(store.exists("my-plan")).toBe(true);
+		expect(host.messages[0].message.content).toContain("# My Plan");
+		expect(host.emitted.map((e) => e.name)).toContain(EVENTS.planUpdated);
+
+		const host2 = fakeHost();
+		host2.entries.push(...host.entries);
+		const runtime2 = createModesRuntime(host2.pi as any, host2.maestro as any, {
+			store,
+			now,
+		});
+		host2.handlers.get("session_start")?.[0]({}, host2.ctx);
+		expect(runtime2.currentMode()).toBe("plan");
+		expect(runtime2.currentEngine()?.get().slug).toBe("my-plan");
+	});
+
+	it("applies plan-mode tool and bash policy", async () => {
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		expect(host.activeTools()).toEqual([
+			"read",
+			"deliverable",
+			"task",
+			"plan",
+			"ask",
+		]);
+		const blocked = host.handlers.get("tool_call")?.[0]({
+			toolName: "bash",
+			input: { command: "git push" },
+		});
+		expect(blocked).toMatchObject({ block: true });
+		const allowed = host.handlers.get("tool_call")?.[0]({
+			toolName: "bash",
+			input: { command: "git status" },
+		});
+		expect(allowed).toBeUndefined();
+	});
+
+	it("cycles plan mode through the picker and flushes queued ask", async () => {
+		const host = fakeHost();
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		const askBatches: unknown[] = [];
+		host.caps.set(CAPABILITIES.ask, {
+			ask: async () => [],
+			queue: (questions: unknown) => askBatches.push(questions),
+		});
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		await host.shortcuts.get("shift+tab").handler(host.ctx);
+		expect(runtime.currentMode()).toBe("auto");
+		runtime.setMode("plan" as ModeName, host.ctx as any);
+		runtime.askQueue.enqueue([{ id: "q", question: "Q?" }]);
+		host.handlers.get("turn_end")?.[0]({}, host.ctx);
+		expect(askBatches).toEqual([[{ id: "q", question: "Q?" }]]);
 	});
 });

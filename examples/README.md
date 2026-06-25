@@ -1,7 +1,20 @@
 # examples
 
-Headless, runnable demos used by the bundle-load smoke and as living docs.
-Each extension grows a small example here as it lands (e.g. a scripted
-questionnaire for `ask`, a fanout fixture for `subagents`). For now the smoke
-loads the extension entry points directly from the root pi manifest; see
-`scripts/smoke.mjs`.
+Headless examples and fixtures live here as the bundle grows. CI currently uses
+`scripts/smoke.mjs` to load every extension entry from the root pi manifest
+through jiti, matching the runtime `.ts` loading path without a full pi TUI.
+
+For local smoke testing:
+
+```bash
+npm run smoke
+pi -e .
+```
+
+The root manifest loads:
+
+- `packages/ask/src/index.ts`
+- `packages/prompt-assist/src/index.ts`
+- `packages/subagents/src/index.ts`
+- `packages/commit/src/index.ts`
+- `packages/modes/src/index.ts`

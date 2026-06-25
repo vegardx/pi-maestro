@@ -1,12 +1,11 @@
 # pi-maestro
 
 A structured [pi](https://github.com/badlogic/pi-mono) coding-agent extension
-stack: permission modes, a plan/deliverable engine, subagent orchestration,
-questionnaires, prompt assistance, and a commit/ship workflow — built on a
-clean library foundation.
+stack: permission modes, plan/deliverable execution, subagents,
+questionnaires, prompt assistance, and commit/ship workflow.
 
-Lockstep monorepo (npm workspaces). No build step — pi loads `.ts` at runtime
-via jiti. The repo root is both the workspace root and the pi manifest.
+The repo root is the pi bundle manifest. Pi loads TypeScript extension entries
+through jiti; there is no build step.
 
 ## Install
 
@@ -14,6 +13,22 @@ via jiti. The repo root is both the workspace root and the pi manifest.
 pi install git:github.com/vegardx/pi-maestro
 ```
 
-## Status
+## What is included
 
-Early scaffolding. See the build plan for the deliverable sequence.
+- `/plan`, `/implement`, `/ship`, `/sync`, `/park`, and mode switching.
+- `ask.v1`, `subagents.v1`, `commit.v1`, `modes.v1`, and
+  `prompt-assist.v1` capabilities.
+- Library packages for contracts, core runtime, settings, models, UI, git, and
+  GitHub seams.
+
+## Docs
+
+- [Usage](docs/usage.md)
+- [Architecture](docs/architecture.md)
+
+## Development
+
+```bash
+npm install
+npm run check
+```

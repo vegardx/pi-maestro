@@ -13,6 +13,7 @@ import {
 import type { MaestroContext } from "@vegardx/pi-core";
 import { ModesAskQueue } from "./ask-queue.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
+import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
 import { renderPlanMarkdown } from "./markdown.js";
 import {
 	classifyBash,
@@ -55,6 +56,7 @@ export function createModesRuntime(
 	const askQueue = new ModesAskQueue();
 	let state: ModesState = initialModesState(now);
 	let engine: PlanEngine | undefined;
+	let fanout: FanoutOrchestrator | undefined;
 	let baselineTools: string[] | undefined;
 	const listeners = new Set<(mode: ModeName, previous: ModeName) => void>();
 
@@ -193,14 +195,60 @@ export function createModesRuntime(
 	}
 
 	pi.registerCommand("implement", {
-		description:
-			"Leave planning and start implementation mode (execution lands in the next child).",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			setMode("auto", ctx);
-			ctx.ui.notify(
-				"Implementation mode selected; execution driver lands next.",
-				"info",
-			);
+		description: "Start executing the active plan. Pass --fanout for workers.",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (!engine) openPlan(undefined, ctx);
+			if (!engine) return;
+			setMode(args.includes("--ask") ? "ask" : "auto", ctx);
+			if (args.includes("--fanout")) {
+				const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+				if (subagents) {
+					fanout = new FanoutOrchestrator({
+						engine,
+						subagents,
+						cwd: ctx.cwd,
+						onPlanChanged: emitPlanChanged,
+						onSpawn: (deliverable, handle) =>
+							ctx.ui.notify(
+								`Spawned ${deliverable.id} as ${handle.id}.`,
+								"info",
+							),
+						onProgress: (deliverable, progress) =>
+							ctx.ui.setStatus(
+								"maestro.execution",
+								`${deliverable.id}: ${progress.text ?? "running"}`,
+							),
+					});
+					const spawned = fanout.tick();
+					ctx.ui.notify(`Fanout spawned ${spawned} worker(s).`, "info");
+					return;
+				}
+				ctx.ui.notify(
+					"subagents.v1 unavailable; falling back to sequential.",
+					"warning",
+				);
+			}
+			const result = startSequentialExecution(engine, {
+				onPlanChanged: emitPlanChanged,
+				sendSeed: (seed, deliverable) => {
+					pi.sendMessage(
+						{
+							customType: "maestro.execution.seed",
+							content: seed,
+							display: true,
+							details: { deliverableId: deliverable.id },
+						},
+						{ triggerTurn: false },
+					);
+				},
+			});
+			const message =
+				result.kind === "started"
+					? `Started ${result.deliverable.id}.`
+					: result.kind === "already-active"
+						? `${result.deliverable.id} is already active.`
+						: result.reason;
+			ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
 		},
 	});
 
@@ -246,6 +294,10 @@ export function createModesRuntime(
 		}
 		const reason = toolBlockedInPlanMode(event.toolName);
 		if (reason) return { block: true, reason };
+	});
+
+	maestro.events.on(EVENTS.runProgress, ({ runId, progress }) => {
+		fanout?.progress(runId, progress);
 	});
 
 	pi.on("turn_end", () => {

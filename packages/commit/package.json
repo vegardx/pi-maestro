@@ -9,6 +9,12 @@
 	"exports": {
 		".": "./src/index.ts"
 	},
+	"dependencies": {
+		"@vegardx/pi-contracts": "*",
+		"@vegardx/pi-core": "*",
+		"@vegardx/pi-git": "*",
+		"@vegardx/pi-github": "*"
+	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
 		"@sinclair/typebox": "*"

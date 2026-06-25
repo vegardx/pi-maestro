@@ -4,6 +4,12 @@ import { join } from "node:path";
 import { CAPABILITIES, EVENTS, type ModeName } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ModesAskQueue } from "../packages/modes/src/ask-queue.js";
+import {
+	buildCompactionInstructions,
+	buildCompactionSeed,
+	createCrashSnapshot,
+	shouldOwnCompaction,
+} from "../packages/modes/src/compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "../packages/modes/src/engine.js";
 import {
 	classifyExecutionSteering,
@@ -72,6 +78,11 @@ import {
 	createPlanTool,
 	createTaskTool,
 } from "../packages/modes/src/tools.js";
+import {
+	renderModeFooter,
+	renderPlanPanel,
+	renderPlanSidebar,
+} from "../packages/modes/src/ui.js";
 import {
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,
@@ -1151,5 +1162,80 @@ describe("shipping policy", () => {
 			"a",
 		]);
 		expect(deliverables(engine.get())[0].status).toBe("shipped");
+	});
+});
+
+describe("compaction and modes UI", () => {
+	it("owns compaction only while executing", () => {
+		expect(shouldOwnCompaction({ mode: "auto", executing: true })).toBe(true);
+		expect(shouldOwnCompaction({ mode: "ask", executing: true })).toBe(true);
+		expect(shouldOwnCompaction({ mode: "plan", executing: true })).toBe(false);
+		expect(shouldOwnCompaction({ mode: "auto", executing: false })).toBe(false);
+	});
+
+	it("builds deterministic compaction instructions from the plan seed", () => {
+		const p = plan([
+			deliverable({
+				id: "a",
+				title: "A",
+				status: "active",
+				children: [task("gate", true)],
+			}),
+		]);
+		const seed = buildCompactionSeed(p, { activeDeliverableId: "a" });
+		expect(seed).toContain("Active deliverable: a");
+		expect(seed).toContain("- [x] **gate** `gate`");
+		const instructions = buildCompactionInstructions(p, "a");
+		expect(instructions).toContain("Preserve Maestro plan state exactly.");
+		expect(instructions).toContain(seed);
+	});
+
+	it("truncates compaction seeds deterministically", () => {
+		const p = plan([deliverable({ body: "x".repeat(200) })]);
+		expect(buildCompactionSeed(p, { maxChars: 80 })).toMatch(/…\[truncated\]$/);
+	});
+
+	it("redacts crash snapshots", () => {
+		const snapshot = createCrashSnapshot(
+			{
+				error: new Error(
+					"failed token=abcdefghijklmnopqrstuvwxyz0123456789 secret=plain",
+				),
+				mode: "auto",
+				plan: plan([]),
+				activeDeliverableId: "a",
+				cwd: "/repo/api_key=abcdefghijklmnopqrstuvwxyz0123456789",
+			},
+			() => "2026-01-01T00:00:00.000Z",
+		);
+		expect(snapshot).toMatchObject({
+			at: "2026-01-01T00:00:00.000Z",
+			mode: "auto",
+			planSlug: "p",
+			activeDeliverableId: "a",
+		});
+		expect(snapshot.error).not.toContain(
+			"abcdefghijklmnopqrstuvwxyz0123456789",
+		);
+		expect(snapshot.cwd).toBe("/repo/[redacted]");
+	});
+
+	it("renders compact footer and plan panels", () => {
+		const p = plan([
+			deliverable({ id: "a", status: "active" }),
+			deliverable({ id: "b", status: "in-review" }),
+		]);
+		expect(
+			renderModeFooter({
+				mode: "auto",
+				planSlug: "p",
+				branch: "feat/a",
+				contextPercent: 42.4,
+			}),
+		).toBe("maestro:auto  plan:p  branch:feat/a  ctx:42%");
+		expect(renderPlanPanel(p, 4)).toEqual(expect.arrayContaining(["…"]));
+		expect(renderPlanSidebar(p)).toEqual(
+			expect.arrayContaining(["Deliverables: 2", "active: 1", "in-review: 1"]),
+		);
 	});
 });

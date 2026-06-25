@@ -46,6 +46,15 @@ export {
 	createPlanTools,
 	createTaskTool,
 } from "./tools.js";
+export {
+	activateDeliverableWorktree,
+	cleanupInactiveWorktrees,
+	deliverableSessionSeed,
+	deliverableWorktreePath,
+	reconcileWorktrees,
+	recordDeliverableSession,
+	recordPlanSession,
+} from "./worktree.js";
 
 export default defineExtension(
 	{

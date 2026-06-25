@@ -85,6 +85,9 @@ export interface FanoutDeps {
 	readonly engine: PlanEngine;
 	readonly subagents: SubagentsCapabilityV1;
 	readonly cwd?: string;
+	readonly prepareDeliverable?: (
+		deliverable: Deliverable,
+	) => { cwd?: string } | undefined;
 	readonly onPlanChanged?: () => void;
 	readonly onSpawn?: (deliverable: Deliverable, handle: RunHandle) => void;
 	readonly onProgress?: (
@@ -120,11 +123,12 @@ export class FanoutOrchestrator {
 			this.deps.engine.setStatus(d.id, "active");
 			const current =
 				deliverables(this.deps.engine.get()).find((x) => x.id === d.id) ?? d;
+			const prepared = this.deps.prepareDeliverable?.(current);
 			const handle = this.deps.subagents.spawn(
 				renderPlanSeed(this.deps.engine.get(), d.id),
 				{
 					profile: "deliverable-worker",
-					cwd: this.deps.cwd ?? plan.repoPath,
+					cwd: prepared?.cwd ?? this.deps.cwd ?? plan.repoPath,
 				},
 			);
 			this.spawnedDeliverables.add(d.id);

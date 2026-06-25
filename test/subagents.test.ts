@@ -15,15 +15,24 @@ import type {
 } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	type AgentRunner,
 	canTransition,
 	createRunBus,
 	createRunStore,
+	currentDepth,
+	DEPTH_ENV,
 	isActive,
 	isTerminal,
+	type LaunchRequest,
+	mapProfileToInvocation,
 	msgRunId,
 	persistRunBus,
 	pruneRuns,
+	type RunBus,
+	type RunnerController,
 	type RunStore,
+	resolveProfile,
+	SubagentService,
 } from "../packages/subagents/src/index.js";
 
 const PROFILE: SpawnProfile = { profile: "restricted" };
@@ -238,5 +247,192 @@ describe("retention", () => {
 		expect(readFileSync(join(root, "big", "events.jsonl"), "utf8")).toContain(
 			"_truncated",
 		);
+	});
+});
+
+describe("profiles + invocation mapping", () => {
+	it("resolves a built-in and applies overrides", () => {
+		const r = resolveProfile({ profile: "restricted" });
+		expect(r.mode).toBe("plan");
+		expect(r.session).toBe(false);
+		expect(r.disableExtensions).toContain("modes");
+		expect(r.disableExtensions).toContain("subagents");
+
+		const o = resolveProfile({
+			profile: "deliverable-worker",
+			model: "anthropic/claude",
+			mode: "ask",
+		});
+		expect(o.model).toBe("anthropic/claude");
+		expect(o.mode).toBe("ask"); // override beats the default "auto"
+		expect(o.disableExtensions).toEqual([]);
+	});
+
+	it("throws on an unknown profile", () => {
+		expect(() => resolveProfile({ profile: "nope" })).toThrow(/unknown/);
+	});
+
+	it("maps pi-native config to args and enablement to env", () => {
+		const inv = mapProfileToInvocation(
+			{ profile: "restricted", appendSystemPrompt: "be terse" },
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		expect(inv.args).toContain("--no-session");
+		expect(inv.args).toContain("--mode");
+		expect(inv.args).toContain("plan");
+		expect(inv.args).toContain("--tools");
+		expect(inv.args).toContain("--append-system-prompt");
+		// read-only extensions disabled via env, not args.
+		expect(inv.env.PI_EXT_MODES).toBe("off");
+		expect(inv.env.PI_EXT_SUBAGENTS).toBe("off");
+	});
+
+	it("resolves cwd as profile → spawner → repoRoot and bumps depth", () => {
+		expect(
+			mapProfileToInvocation(
+				{ profile: "deliverable-worker", cwd: "/wt" },
+				{ spawnerCwd: "/spawn", repoRoot: "/repo", parentDepth: 1 },
+			).cwd,
+		).toBe("/wt");
+		expect(
+			mapProfileToInvocation(
+				{ profile: "deliverable-worker" },
+				{ spawnerCwd: "/spawn", repoRoot: "/repo", parentDepth: 1 },
+			).cwd,
+		).toBe("/spawn");
+		const inv = mapProfileToInvocation(
+			{ profile: "deliverable-worker" },
+			{ repoRoot: "/repo", parentDepth: 1 },
+		);
+		expect(inv.cwd).toBe("/repo");
+		expect(inv.depth).toBe(2);
+		expect(inv.env[DEPTH_ENV]).toBe("2");
+	});
+
+	it("computes kill-switch env explicitly, never leaking the parent's", () => {
+		const inv = mapProfileToInvocation(
+			{
+				profile: "deliverable-worker",
+				featureFlags: { disable: ["modes.fanout"], enable: ["modes.x"] },
+			},
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		// Always set, so a parent's PI_DISABLE cannot bleed through.
+		expect(inv.env.PI_DISABLE).toBe("modes.fanout");
+		expect(inv.env.PI_ENABLE).toBe("modes.x");
+
+		const plain = mapProfileToInvocation(
+			{ profile: "deliverable-worker" },
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		expect(plain.env.PI_DISABLE).toBe("");
+		expect(plain.env.PI_ENABLE).toBe("");
+	});
+
+	it("reads its own depth from the environment", () => {
+		expect(currentDepth({ [DEPTH_ENV]: "2" })).toBe(2);
+		expect(currentDepth({})).toBe(0);
+		expect(currentDepth({ [DEPTH_ENV]: "bad" })).toBe(0);
+	});
+});
+
+describe("SubagentService", () => {
+	let root: string;
+	let store: RunStore;
+	let bus: RunBus;
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "maestro-svc-"));
+		store = createRunStore(root);
+		bus = createRunBus();
+		persistRunBus(bus, store);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	// A runner that records launches and drives the run to success.
+	function fakeRunner(captured: LaunchRequest[]): AgentRunner {
+		return {
+			launch(request, b): RunnerController {
+				captured.push(request);
+				b.publish({
+					type: "status",
+					runId: request.runId,
+					status: "running",
+					at: 1,
+				});
+				const result = { status: "succeeded" as const, summary: "ok" };
+				b.publish({ type: "result", runId: request.runId, result });
+				return {
+					steer: () => {},
+					stop: () => {},
+					result: () => Promise.resolve(result),
+				};
+			},
+		};
+	}
+
+	it("spawns: records the run, maps the invocation, returns a handle", async () => {
+		const captured: LaunchRequest[] = [];
+		const svc = new SubagentService({
+			bus,
+			store,
+			runner: fakeRunner(captured),
+			repoRoot: "/repo",
+			mintId: () => "run-1" as RunId,
+			ownDepth: 0,
+		});
+
+		const handle = svc.spawn("do it", { profile: "restricted" });
+		expect(handle.id).toBe("run-1");
+		expect(captured).toHaveLength(1);
+		expect(captured[0].invocation.env.PI_EXT_MODES).toBe("off");
+		expect((await handle.result()).status).toBe("succeeded");
+		expect(svc.get("run-1" as RunId)?.status).toBe("succeeded");
+		expect(svc.list().map((r) => r.id)).toEqual(["run-1"]);
+	});
+
+	it("enforces the depth cap", () => {
+		const svc = new SubagentService({
+			bus,
+			store,
+			runner: fakeRunner([]),
+			repoRoot: "/repo",
+			ownDepth: 3,
+			maxDepth: 3,
+		});
+		expect(() => svc.spawn("x", { profile: "restricted" })).toThrow(
+			/depth cap/,
+		);
+	});
+
+	it("steer and stop reach the controller and the bus", () => {
+		const steered: string[] = [];
+		const stopped: string[] = [];
+		const runner: AgentRunner = {
+			launch(_request): RunnerController {
+				return {
+					steer: (g) => steered.push(g),
+					stop: (r) => stopped.push(r ?? ""),
+					result: () => Promise.resolve({ status: "stopped" as const }),
+				};
+			},
+		};
+		const seen: string[] = [];
+		bus.subscribe((m) => seen.push(m.type));
+		const svc = new SubagentService({
+			bus,
+			store,
+			runner,
+			repoRoot: "/repo",
+			mintId: () => "run-2" as RunId,
+			ownDepth: 0,
+		});
+		svc.spawn("go", { profile: "deliverable-worker" });
+		svc.steer("run-2" as RunId, "refocus");
+		svc.stop("run-2" as RunId, "done");
+		expect(steered).toEqual(["refocus"]);
+		expect(stopped).toEqual(["done"]);
+		expect(seen).toContain("steer");
+		expect(seen).toContain("stop");
 	});
 });

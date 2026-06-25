@@ -1,7 +1,7 @@
 // @vegardx/pi-subagents — the single run transport and service that powers
 // both delegate-style focused agents and modes' deliverable workers.
 //
-// Shipped so far:
+// The full stack:
 //   * persistence substrate — RunStore, RunBus, persistRunBus, retention;
 //   * profiles + invocation mapping — the structured spawn API, mapped to a
 //     child invocation (pi-native config → args, enablement/kills → env,
@@ -9,15 +9,25 @@
 //   * SubagentService — the subagents.v1 capability (spawn/get/list/steer/stop)
 //     over an injected AgentRunner;
 //   * runners + concurrency — an RpcClient-backed AgentRunner that maps a
-//     child's event stream onto the run-bus, gated by a shared FIFO semaphore.
-//
-// The supervisor protocol, the delegate tool surface, and agent definitions
-// land in the final child deliverable.
+//     child's event stream onto the run-bus, gated by a shared FIFO semaphore;
+//   * supervisor protocol — contact_supervisor (child) emits needDecision; the
+//     parent projects it to the human/ship gate and steers the answer back;
+//   * delegate surface — the `subagent` tool (spawn/status/steer/stop) plus
+//     agent definitions discovered from .pi/agents over the built-ins;
+//   * the run-bus is bridged onto the typed maestro event bus so modes and the
+//     UI observe status/progress/needDecision without importing this package.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { CAPABILITIES } from "@vegardx/pi-contracts";
-import { defineExtension } from "@vegardx/pi-core";
+import {
+	CAPABILITIES,
+	EVENTS,
+	type RunId,
+	type SupervisorDecision,
+	type SupervisorDecisionRequest,
+} from "@vegardx/pi-contracts";
+import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
+import { type AgentDefinition, discoverAgents } from "./agents.js";
 import { createRunBus } from "./bus.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
@@ -27,7 +37,20 @@ import { createAgentRunner } from "./runners.js";
 import { createSemaphore } from "./semaphore.js";
 import { type AgentRunner, SubagentService } from "./service.js";
 import { createRunStore } from "./store.js";
+import {
+	attachSupervisor,
+	createSupervisorTool,
+	RUN_ID_ENV,
+} from "./supervisor.js";
+import { createSubagentTool } from "./tool.js";
 
+export {
+	type AgentDefinition,
+	BUILTIN_AGENTS,
+	discoverAgents,
+	parseAgentDefinition,
+	parseFrontmatter,
+} from "./agents.js";
 export {
 	createRunBus,
 	msgRunId,
@@ -76,6 +99,53 @@ export {
 	isTerminal,
 } from "./state-machine.js";
 export { createRunStore, type RunStore } from "./store.js";
+export {
+	attachSupervisor,
+	createSupervisorTool,
+	needDecisionMessage,
+	RUN_ID_ENV,
+	type SupervisorProjectorDeps,
+	type SupervisorToolOptions,
+} from "./supervisor.js";
+export { createSubagentTool, type SubagentToolDeps } from "./tool.js";
+
+// Relay a supervisor request to the human: ask.v1 when present, else the bare
+// UI confirm/select. Returns the chosen answer string.
+function makeDecider(
+	maestro: MaestroContext,
+	getCtx: () => ExtensionContext | undefined,
+) {
+	return async (
+		_runId: RunId,
+		request: SupervisorDecisionRequest,
+	): Promise<SupervisorDecision> => {
+		const ask = maestro.capabilities.get(CAPABILITIES.ask);
+		if (ask) {
+			const answers = await ask.ask([
+				{
+					id: "supervisor",
+					question: request.question,
+					context: request.context,
+					options: request.options?.map((o) => ({ label: o })),
+					allowFreeText: true,
+				},
+			]);
+			return { answer: answers[0]?.value ?? "" };
+		}
+		const ctx = getCtx();
+		if (ctx?.hasUI && request.options?.length) {
+			const choice = await ctx.ui.select(request.question, [
+				...request.options,
+			]);
+			return { answer: choice ?? "" };
+		}
+		if (ctx?.hasUI) {
+			const typed = await ctx.ui.input(request.question);
+			return { answer: typed ?? "" };
+		}
+		return { answer: "" };
+	};
+}
 
 // CLI entry point for spawned children, mirroring pi's subagent example: the
 // path pi itself was launched from. undefined in a bundled binary — the runner
@@ -106,16 +176,20 @@ export default defineExtension(
 			cliPath: resolveCliPath(),
 		});
 		let service: SubagentService | undefined;
+		let ctx: ExtensionContext | undefined;
+		let agents: Record<string, AgentDefinition> = {};
 
-		const rebuild = (ctx: ExtensionContext) => {
-			const store = createRunStore(runsRoot(ctx.cwd));
+		const rebuild = (next: ExtensionContext) => {
+			ctx = next;
+			agents = discoverAgents(`${next.cwd}/.pi/agents`);
+			const store = createRunStore(runsRoot(next.cwd));
 			persistRunBus(bus, store);
 			service = new SubagentService({
 				bus,
 				store,
 				runner,
-				repoRoot: ctx.cwd,
-				spawnerCwd: ctx.cwd,
+				repoRoot: next.cwd,
+				spawnerCwd: next.cwd,
 				ownDepth: currentDepth(),
 			});
 			if (maestro.flags.enabled("retention")) {
@@ -127,7 +201,7 @@ export default defineExtension(
 			}
 		};
 
-		pi.on("session_start", (_e, ctx: ExtensionContext) => rebuild(ctx));
+		pi.on("session_start", (_e, next: ExtensionContext) => rebuild(next));
 
 		const requireService = (): SubagentService => {
 			if (!service) throw new Error("subagents: no active session");
@@ -141,5 +215,52 @@ export default defineExtension(
 			steer: (runId, guidance) => requireService().steer(runId, guidance),
 			stop: (runId, reason) => requireService().stop(runId, reason),
 		});
+
+		// Bridge the in-process run-bus onto the typed maestro event bus so modes
+		// and the UI observe runs without importing this package.
+		bus.subscribe((message) => {
+			if (message.type === "status") {
+				maestro.events.emit(EVENTS.runStatus, {
+					runId: message.runId,
+					status: message.status,
+				});
+			} else if (message.type === "progress") {
+				maestro.events.emit(EVENTS.runProgress, {
+					runId: message.runId,
+					progress: message.delta,
+				});
+			} else if (message.type === "needDecision") {
+				maestro.events.emit(EVENTS.supervisorNeedDecision, {
+					runId: message.runId,
+					request: message.request,
+				});
+			}
+		});
+
+		// Parent-side supervisor projector: relay needDecision to the human and
+		// steer the answer back to the child.
+		attachSupervisor({
+			bus,
+			decide: makeDecider(maestro, () => ctx),
+			steer: (runId, guidance) => requireService().steer(runId, guidance),
+		});
+
+		// The main agent's delegate surface.
+		pi.registerTool(
+			createSubagentTool({
+				capability: () => maestro.capabilities.get(CAPABILITIES.subagents),
+				agents: () => agents,
+			}),
+		);
+
+		// The child-side supervisor tool. Harmless in a top-level session (it
+		// no-ops when PI_MAESTRO_RUN_ID is unset).
+		pi.registerTool(
+			createSupervisorTool({
+				runId: () =>
+					(process.env[RUN_ID_ENV] as RunId | undefined) || undefined,
+				publish: (msg) => bus.publish(msg),
+			}),
+		);
 	},
 );

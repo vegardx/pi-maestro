@@ -19,6 +19,7 @@ import type {
 	LaunchRequest,
 	RunnerController,
 } from "./service.js";
+import { RUN_ID_ENV } from "./supervisor.js";
 
 /** The slice of RpcClient the runner uses. */
 export interface RpcLike {
@@ -105,7 +106,9 @@ async function execute(
 			cwd: invocation.cwd,
 			model: invocation.model,
 			args: invocation.args,
-			env: { ...opts.baseEnv, ...invocation.env },
+			// baseEnv first, then the invocation's explicit maestro flags, then the
+			// run id so the child's contact_supervisor tool can tag its messages.
+			env: { ...opts.baseEnv, ...invocation.env, [RUN_ID_ENV]: runId },
 		};
 		client = opts.factory(options);
 		bindClient(client);

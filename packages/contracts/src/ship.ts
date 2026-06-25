@@ -4,7 +4,8 @@
 import type { DeliverableId } from "./ids.js";
 
 export interface ShipDeliverableInput {
-	readonly deliverableId: DeliverableId;
+	/** The deliverable being shipped; omitted for a standalone commit. */
+	readonly deliverableId?: DeliverableId;
 	/** Explicit paths to stage. Omit to use the deliverable's tracked set. */
 	readonly paths?: readonly string[];
 	/** Override the generated conventional-commit message. */

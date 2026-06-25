@@ -17,18 +17,25 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type AgentRunner,
+	attachSupervisor,
 	canTransition,
 	createAgentRunner,
 	createRunBus,
 	createRunStore,
 	createSemaphore,
+	createSubagentTool,
+	createSupervisorTool,
 	currentDepth,
 	DEPTH_ENV,
+	discoverAgents,
 	isActive,
 	isTerminal,
 	type LaunchRequest,
 	mapProfileToInvocation,
 	msgRunId,
+	needDecisionMessage,
+	parseAgentDefinition,
+	parseFrontmatter,
 	persistRunBus,
 	pruneRuns,
 	type RunBus,
@@ -651,5 +658,208 @@ describe("RpcClient-backed runner", () => {
 		}).result();
 		expect(settled).toHaveLength(1);
 		expect(settled[0].status).toBe("succeeded");
+	});
+});
+
+// The host tool execute signature takes (id, params, signal?, _, ctx).
+function exec(
+	tool: { execute: (...a: any[]) => Promise<any> },
+	params: unknown,
+) {
+	return tool.execute("t", params, undefined, undefined, {} as any);
+}
+
+describe("agent definitions", () => {
+	it("parses frontmatter and body", () => {
+		const def = parseAgentDefinition(
+			'---\nname: scout\ndescription: "look around"\nprofile: restricted\nmodel: fast\n---\nYou are a scout.\nBe terse.',
+			"file-name",
+		);
+		expect(def).toEqual({
+			name: "scout",
+			description: "look around",
+			profile: "restricted",
+			model: "fast",
+			appendSystemPrompt: "You are a scout.\nBe terse.",
+		});
+	});
+
+	it("falls back to the file name and a default profile", () => {
+		const def = parseAgentDefinition("just a body, no frontmatter", "helper");
+		expect(def.name).toBe("helper");
+		expect(def.profile).toBe("restricted");
+		expect(def.appendSystemPrompt).toBe("just a body, no frontmatter");
+	});
+
+	it("parseFrontmatter handles a missing block", () => {
+		const fm = parseFrontmatter("no frontmatter here");
+		expect(fm.fields).toEqual({});
+		expect(fm.body).toBe("no frontmatter here");
+	});
+
+	it("discovers project agents over the built-ins", () => {
+		const dir = mkdtempSync(join(tmpdir(), "maestro-agents-"));
+		writeFileSync(
+			join(dir, "scout.md"),
+			"---\nname: scout\nprofile: restricted\n---\nScout.",
+		);
+		// Override a built-in name.
+		writeFileSync(
+			join(dir, "worker.md"),
+			"---\nname: worker\nprofile: deliverable-worker\n---\nCustom worker.",
+		);
+		const agents = discoverAgents(dir);
+		expect(agents.scout?.profile).toBe("restricted");
+		expect(agents.worker?.appendSystemPrompt).toBe("Custom worker.");
+		// Built-ins still present.
+		expect(agents.explore?.profile).toBe("restricted");
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("returns just the built-ins for a missing directory", () => {
+		const agents = discoverAgents("/no/such/dir/.pi/agents");
+		expect(Object.keys(agents).sort()).toEqual([
+			"explore",
+			"plan",
+			"review",
+			"worker",
+		]);
+	});
+});
+
+describe("supervisor protocol", () => {
+	it("needDecisionMessage builds a tagged message", () => {
+		const msg = needDecisionMessage(id("r1"), { question: "ship?" });
+		expect(msg).toEqual({
+			type: "needDecision",
+			runId: "r1",
+			request: { question: "ship?" },
+		});
+	});
+
+	it("the child tool publishes a needDecision and reports delivery", async () => {
+		const bus = createRunBus();
+		const seen: RunBusMessage[] = [];
+		bus.subscribe((m) => seen.push(m));
+		const tool = createSupervisorTool({
+			runId: () => id("r1"),
+			publish: (m) => bus.publish(m),
+		});
+		const res: any = await exec(tool, {
+			question: "merge now?",
+			options: ["yes", "no"],
+		});
+		expect(res.details.delivered).toBe(true);
+		expect(seen.find((m) => m.type === "needDecision")).toBeTruthy();
+	});
+
+	it("the child tool no-ops without a run id", async () => {
+		const tool = createSupervisorTool({
+			runId: () => undefined,
+			publish: () => {
+				throw new Error("must not publish");
+			},
+		});
+		const res: any = await exec(tool, { question: "?" });
+		expect(res.details.delivered).toBe(false);
+	});
+
+	it("the projector decides and steers the answer back to the child", async () => {
+		const bus = createRunBus();
+		const steered: { runId: RunId; guidance: string }[] = [];
+		const dispose = attachSupervisor({
+			bus,
+			decide: async (_runId, req) => ({ answer: `picked:${req.question}` }),
+			steer: (runId, guidance) => steered.push({ runId, guidance }),
+		});
+		bus.publish(needDecisionMessage(id("r1"), { question: "ship?" }));
+		await new Promise((r) => setTimeout(r, 5));
+		expect(steered).toEqual([{ runId: "r1", guidance: "picked:ship?" }]);
+		dispose();
+	});
+});
+
+describe("subagent delegate tool", () => {
+	function fakeCapability() {
+		const calls: string[] = [];
+		const result: RunResult = { status: "succeeded", summary: "done" };
+		const handle = {
+			id: id("run-x"),
+			status: () => "succeeded" as const,
+			steer: () => {},
+			stop: () => {},
+			result: async () => result,
+		};
+		const cap = {
+			spawn: (_p: string, profile: SpawnProfile) => {
+				calls.push(`spawn:${profile.profile}`);
+				return handle;
+			},
+			get: (runId: RunId) =>
+				runId === "run-x" ? record({ id: id("run-x") }) : undefined,
+			list: () => [record({ id: id("run-x") })],
+			steer: (runId: RunId, g: string) => calls.push(`steer:${runId}:${g}`),
+			stop: (runId: RunId) => calls.push(`stop:${runId}`),
+		};
+		return { cap, calls };
+	}
+
+	function tool(cap: any) {
+		return createSubagentTool({
+			capability: () => cap,
+			agents: () => discoverAgents("/no/such/dir"),
+		});
+	}
+
+	it("spawns a named agent foreground and returns its result", async () => {
+		const { cap, calls } = fakeCapability();
+		const res: any = await exec(tool(cap), {
+			action: "spawn",
+			agent: "worker",
+			prompt: "do it",
+		});
+		expect(calls).toContain("spawn:deliverable-worker");
+		expect(res.details.result.status).toBe("succeeded");
+		expect(res.content[0].text).toContain("done");
+	});
+
+	it("spawns in background and returns the run id immediately", async () => {
+		const { cap } = fakeCapability();
+		const res: any = await exec(tool(cap), {
+			action: "spawn",
+			agent: "explore",
+			prompt: "scan",
+			background: true,
+		});
+		expect(res.details).toEqual({ runId: "run-x", background: true });
+	});
+
+	it("rejects an unknown agent", async () => {
+		const { cap } = fakeCapability();
+		const res: any = await exec(tool(cap), {
+			action: "spawn",
+			agent: "nope",
+			prompt: "x",
+		});
+		expect(res.content[0].text).toContain("Unknown agent");
+	});
+
+	it("lists, steers, and stops", async () => {
+		const { cap, calls } = fakeCapability();
+		const list: any = await exec(tool(cap), { action: "status" });
+		expect(list.details.runs).toHaveLength(1);
+		await exec(tool(cap), {
+			action: "steer",
+			runId: "run-x",
+			guidance: "go left",
+		});
+		await exec(tool(cap), { action: "stop", runId: "run-x" });
+		expect(calls).toContain("steer:run-x:go left");
+		expect(calls).toContain("stop:run-x");
+	});
+
+	it("reports when the capability is unavailable", async () => {
+		const res: any = await exec(tool(undefined), { action: "status" });
+		expect(res.content[0].text).toContain("not available");
 	});
 });

@@ -19,7 +19,7 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
+import { CAPABILITIES, isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
 import { defineExtension, redactSecrets } from "@vegardx/pi-core";
 import { resolveModelWithin } from "@vegardx/pi-models";
 import { assembleSummary, buildFileSections, buildPrompt } from "./prompt.js";
@@ -62,7 +62,7 @@ export default defineExtension(
 		path: "packages/smart-compact/src/index.ts",
 		doc: "Replaces default compaction with a work-focused summary optimised for continuing the active task.",
 	},
-	(pi) => {
+	(pi, maestro) => {
 		// In-flight guard for the proactive compactAt trigger (see turn_end).
 		let compacting = false;
 		// Notify at most once per session per failure class so a missing model
@@ -204,6 +204,18 @@ export default defineExtension(
 		// fires again before the previous compaction settles.
 		pi.on("turn_end", (_event, ctx) => {
 			if (compacting) return;
+			// Cooperation: foreground modes execution owns proactive compaction in
+			// its own session. When modes reports ask/auto execution for an active
+			// deliverable here, defer to its working-budget trigger and the
+			// deliverable-slice summariser. No-op gracefully when modes is absent.
+			const exec = maestro.capabilities.get(CAPABILITIES.modes)?.execution();
+			if (
+				exec?.executing &&
+				exec.activeDeliverableId &&
+				(exec.mode === "ask" || exec.mode === "auto")
+			) {
+				return;
+			}
 			const { compactAt } = readSmartCompactSettings(ctx.cwd);
 			if (compactAt === undefined) return;
 			const usage = ctx.getContextUsage();

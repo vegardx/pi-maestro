@@ -27,3 +27,4 @@ export {
 	type SettingsLayer,
 	setSettingsLayer,
 } from "./feature-flags.js";
+export { redactSecrets } from "./redact.js";

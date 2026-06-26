@@ -19,7 +19,7 @@ entries directly through jiti; there is no build step.
 - `/park`: create GitHub tracking issues for the active plan.
 - `/hack`, `/ask`, `/auto`: switch permission mode.
 - `/modes-status`: show current mode and active plan.
-- `Shift+Tab`: cycle `hack → plan → ask → auto`.
+- `Alt+M`: cycle `hack → plan → ask → auto`.
 
 ## Plan tools
 
@@ -52,6 +52,31 @@ plan and emits `maestro.ship.completed`.
 
 `/sync` uses GitHub PR state to move merged PRs to `shipped` and closed PRs to
 `needs-attention`.
+
+## Compaction
+
+`smart-compact` replaces pi's default auto-compaction summary with a single
+work-continuity-focused LLM call: it identifies the active task and writes a
+summary optimised for continuing it. Compaction is append-only — the previous
+summary is reused byte-for-byte as the prefix and only a new section is added,
+so the cached prompt prefix stays stable across compactions. Any failure (no
+model/auth, empty summary, timeout, error) falls back to pi's default
+compaction, so a session is never blocked.
+
+Settings live under `extensionConfig.smart-compact`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `model` | background `normal` tier → session model | `provider/id` override for the summariser. |
+| `compactAt` | unset | Context-token count at which to proactively compact at turn end. Unset relies on pi's native `compaction.reserveTokens` threshold. |
+| `maxSummaryTokens` | `8192` | Max tokens the summary may emit. |
+| `maxFileListEntries` | `50` | Cap on entries per read/modified file list. |
+| `timeoutMs` | `60000` | Deadline for model resolution + the summary call. |
+
+These are independent of pi's native `compaction.*` settings
+(`reserveTokens`, `keepRecentTokens`), which still govern when pi triggers
+compaction; `smart-compact` only changes how the summary is produced (and,
+with `compactAt`, can trigger earlier).
 
 ## Feature flags
 

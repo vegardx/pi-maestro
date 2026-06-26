@@ -5,6 +5,7 @@
 
 export * from "./ask.js";
 export * from "./capabilities.js";
+export * from "./compaction.js";
 export * from "./events.js";
 export * from "./flags.js";
 export * from "./ids.js";

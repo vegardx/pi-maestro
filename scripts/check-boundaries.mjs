@@ -31,6 +31,7 @@ const EXTENSION_PACKAGES = new Set([
 	"prompt-assist",
 	"subagents",
 	"commit",
+	"smart-compact",
 	"modes",
 ]);
 

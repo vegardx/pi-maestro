@@ -1,0 +1,22 @@
+{
+	"name": "@vegardx/pi-smart-compact",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Work-continuity compaction: replaces pi's default summary with a single work-focused LLM call, with safe fallback to default compaction.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@vegardx/pi-contracts": "*",
+		"@vegardx/pi-core": "*",
+		"@vegardx/pi-models": "*",
+		"@vegardx/pi-settings": "*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

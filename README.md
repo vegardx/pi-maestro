@@ -18,6 +18,8 @@ pi install git:github.com/vegardx/pi-maestro
 - `/plan`, `/implement`, `/ship`, `/sync`, `/park`, and mode switching.
 - `ask.v1`, `subagents.v1`, `commit.v1`, `modes.v1`, and
   `prompt-assist.v1` capabilities.
+- Work-continuity compaction (`smart-compact`): replaces pi's default
+  compaction summary with a work-focused one, with safe fallback.
 - Library packages for contracts, core runtime, settings, models, UI, git, and
   GitHub seams.
 

@@ -12,9 +12,11 @@
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-core": "*",
-		"@vegardx/pi-git": "*"
+		"@vegardx/pi-git": "*",
+		"@vegardx/pi-models": "*"
 	},
 	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
 		"@earendil-works/pi-coding-agent": "*",
 		"@earendil-works/pi-tui": "*",
 		"@sinclair/typebox": "*"

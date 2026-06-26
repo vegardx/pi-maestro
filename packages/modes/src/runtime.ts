@@ -23,9 +23,11 @@ import {
 	formatBudget,
 } from "./budget.js";
 import {
-	buildCompactionInstructions,
+	buildDeliverableSliceCompactionResult,
 	createCrashSnapshot,
-	shouldOwnCompaction,
+	decideCompactionOwnership,
+	type PendingModesCompaction,
+	readModesCompactionDetails,
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
@@ -60,6 +62,7 @@ import {
 	transitionMode,
 } from "./state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "./storage.js";
+import { createModesSummariser } from "./summarise.js";
 import { createPlanTools } from "./tools.js";
 import { renderModeFooter, renderPlanPanel } from "./ui.js";
 import {
@@ -98,6 +101,12 @@ export function createModesRuntime(
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
+	// Transient (not persisted): what modes is about to compact. Set just
+	// before `ctx.compact({ customInstructions: marker })`; the
+	// `session_before_compact` handler matches the incoming marker against this
+	// nonce to claim ownership. The trigger that populates it lands in a later
+	// deliverable; for now it stays undefined and every compaction is generic.
+	let pendingCompaction: PendingModesCompaction | undefined;
 	// Cached system-prompt+tools token estimate, invalidated when the
 	// calibration key (mode/toolset/system-prompt length) changes.
 	let calibration: { sig: string; sys: number } | undefined;
@@ -492,6 +501,7 @@ export function createModesRuntime(
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
 		compactionInFlight = false;
+		pendingCompaction = undefined;
 		calibration = undefined;
 		if (state.activePlanSlug) engine = loadEngine(state.activePlanSlug);
 		applyTools();
@@ -525,29 +535,70 @@ export function createModesRuntime(
 		askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 	});
 
-	pi.on("session_before_compact", (event) => {
-		if (
-			!engine ||
-			!shouldOwnCompaction({ mode: state.mode, executing: true })
-		) {
-			return;
+	pi.on("session_before_compact", async (event, ctx) => {
+		const decision = decideCompactionOwnership(
+			event.customInstructions,
+			pendingCompaction,
+		);
+		// No modes marker → generic smart-compact or pi default owns it. Returning
+		// undefined leaves the result slot untouched so an earlier handler wins.
+		if (decision.kind === "decline") return undefined;
+
+		// Marker present but no matching pending claim → never let the marker text
+		// fall through into pi's default "Additional focus" prompt.
+		if (decision.kind === "leak-guard" || !engine) {
+			pendingCompaction = undefined;
+			ctx.ui.notify(
+				"Maestro could not own this compaction; cancelled to avoid a stale marker.",
+				"warning",
+			);
+			return { cancel: true };
 		}
-		const activeDeliverableId = activeDeliverable(engine.get())?.id;
-		return {
-			compaction: {
-				summary: buildCompactionInstructions(engine.get(), activeDeliverableId),
-				firstKeptEntryId: event.preparation.firstKeptEntryId,
-				tokensBefore: event.preparation.tokensBefore,
-				details: {
-					planSlug: engine.get().slug,
-					activeDeliverableId,
-				},
-			},
-		};
+
+		const pending = decision.pending;
+		const settings = readModesCompactionSettings(ctx.cwd);
+		const summarise = createModesSummariser(ctx, settings.timeoutMs);
+		const { preparation } = event;
+		const rawMessages = [
+			...preparation.messagesToSummarize,
+			...preparation.turnPrefixMessages,
+		];
+		try {
+			const result = await buildDeliverableSliceCompactionResult({
+				entries: ctx.sessionManager.getEntries(),
+				plan: engine.get(),
+				deliverableId: pending.deliverableId,
+				summarise,
+				rawMessages,
+				previousSummary: preparation.previousSummary,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				maxTokens: settings.phaseTokens,
+				nonce: pending.nonce,
+				reason: pending.reason,
+				buckets: pending.buckets,
+				signal: event.signal,
+			});
+			// Summariser soft-failed: cancel only the modes-triggered compaction
+			// (never leak the marker) and let native/smart handle future overflow.
+			if (!result) {
+				ctx.ui.notify(
+					"Maestro compaction summariser unavailable; skipping this compaction.",
+					"warning",
+				);
+				return { cancel: true };
+			}
+			return { compaction: result };
+		} finally {
+			pendingCompaction = undefined;
+		}
 	});
 
 	pi.on("session_compact", (event, ctx) => {
-		if (event.fromExtension) {
+		// Only announce compactions modes itself owned. Generic smart-compact and
+		// pi-native compactions are also `fromExtension`/threshold; staying quiet
+		// avoids mislabelling them as Maestro-owned.
+		if (readModesCompactionDetails(event.compactionEntry)) {
 			ctx.ui.notify("Maestro compacted execution context.", "info");
 		}
 	});

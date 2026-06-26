@@ -24,8 +24,10 @@ import {
 	formatBudget,
 } from "./budget.js";
 import {
+	buildCarryForwardSummary,
 	buildCompactionMarker,
 	buildDeliverableSliceCompactionResult,
+	collectDependencySummaries,
 	createCrashSnapshot,
 	decideCompactionOwnership,
 	type PendingModesCompaction,
@@ -40,6 +42,7 @@ import {
 	toolBlockedInPlanMode,
 } from "./policy.js";
 import {
+	type Deliverable,
 	deliverables,
 	gatingTasks,
 	repoNameFromPath,
@@ -51,6 +54,7 @@ import {
 	EXECUTION_SEED_ENTRY,
 	hasExecutionSeed,
 	hydrateModesState,
+	resolveShipSummaryInput,
 } from "./session.js";
 import { readModesCompactionSettings } from "./settings.js";
 import {
@@ -124,6 +128,8 @@ export function createModesRuntime(
 	let compactionCooldownUntil = 0;
 	// Transient: soft summary-budget warning fires at most once per session.
 	let summaryBudgetWarnFired = false;
+	// Transient: per-session guard for the seed dependency-summary budget warning.
+	let seedSummaryBudgetWarnFired = false;
 	// Cached system-prompt+tools token estimate, invalidated when the
 	// calibration key (mode/toolset/system-prompt length) changes.
 	let calibration: { sig: string; sys: number } | undefined;
@@ -361,6 +367,7 @@ export function createModesRuntime(
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			if (!engine) openPlan(undefined, ctx);
 			if (!engine) return;
+			const activeEngine = engine;
 			setMode(args.includes("--ask") ? "ask" : "auto", ctx);
 			if (args.includes("--fanout")) {
 				const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
@@ -400,6 +407,25 @@ export function createModesRuntime(
 					// resume/switch so the cache prefix stays intact.
 					if (hasExecutionSeed(ctx.sessionManager.getEntries(), deliverable.id))
 						return;
+					// Surface (once) when the dependency summaries carried into this
+					// seed outgrow the summary budget; never silently drop them.
+					if (!seedSummaryBudgetWarnFired) {
+						const depText = collectDependencySummaries(
+							activeEngine.get(),
+							deliverable.id,
+						)
+							.map((d) => d.summary)
+							.join("\n");
+						const depTokens = estimateTokens(depText);
+						const { summaryTokens } = readModesCompactionSettings(ctx.cwd);
+						if (depTokens > summaryTokens) {
+							seedSummaryBudgetWarnFired = true;
+							ctx.ui.notify(
+								`Maestro dependency carry-forward summaries for ${deliverable.id} (${depTokens} tokens) exceed compaction.summaryTokens (${summaryTokens}).`,
+								"warning",
+							);
+						}
+					}
 					pi.sendMessage(
 						{
 							customType: EXECUTION_SEED_ENTRY,
@@ -435,6 +461,7 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			const activeEngine = engine;
 			const commit = maestro.capabilities.get(CAPABILITIES.commit);
 			if (!commit) {
 				ctx.ui.notify("commit.v1 unavailable.", "warning");
@@ -448,6 +475,13 @@ export function createModesRuntime(
 			const shipped = await shipDeliverableFromPlan(engine, id, {
 				commit,
 				confirm: ({ message }) => ctx.ui.confirm("Ship deliverable", message),
+				summarise: (deliverable) =>
+					buildShipSummary(
+						deliverable,
+						activeEngine,
+						ctx,
+						readModesCompactionSettings,
+					),
 			});
 			if (shipped.kind !== "shipped") {
 				ctx.ui.notify(
@@ -533,6 +567,7 @@ export function createModesRuntime(
 		pendingCompaction = undefined;
 		compactionCooldownUntil = 0;
 		summaryBudgetWarnFired = false;
+		seedSummaryBudgetWarnFired = false;
 		calibration = undefined;
 		if (state.activePlanSlug) engine = loadEngine(state.activePlanSlug);
 		applyTools();
@@ -808,6 +843,38 @@ function activeDeliverable(plan: {
 	nodes: Parameters<typeof deliverables>[0]["nodes"];
 }) {
 	return deliverables(plan).find((d) => d.status === "active");
+}
+
+/**
+ * Build a deliverable's forward-looking carry-forward summary at ship time.
+ * Reads the deliverable's OWN session (soft-fails if /ship runs elsewhere),
+ * distils rolling summary + raw tail once, and returns undefined on any
+ * soft-failure so shipping always proceeds.
+ */
+async function buildShipSummary(
+	deliverable: Deliverable,
+	engine: PlanEngine,
+	ctx: ExtensionContext,
+	readSettings: typeof readModesCompactionSettings,
+): Promise<string | undefined> {
+	const settings = readSettings(ctx.cwd);
+	const entries = ctx.sessionManager.getEntries();
+	const resolved = resolveShipSummaryInput(
+		entries,
+		deliverable,
+		ctx.sessionManager.getSessionFile?.(),
+	);
+	if (!resolved.ok) return undefined;
+	const summarise = createModesSummariser(ctx, settings.timeoutMs);
+	const text = await buildCarryForwardSummary({
+		plan: engine.get(),
+		deliverable,
+		rollingSummary: resolved.input.rollingSummary,
+		rawTail: resolved.input.rawTail,
+		summarise,
+		maxTokens: settings.phaseTokens,
+	});
+	return text ?? undefined;
 }
 
 async function prStateViaGh(

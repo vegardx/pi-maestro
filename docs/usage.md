@@ -134,6 +134,45 @@ The parent/orchestrator session stays idle and never triggers compaction on,
 or sends resume follow-ups into, a worker session (and workers never drive the
 parent). The parent still records each deliverable's `RunResult.summary`.
 
+### Carry-forward summaries across deliverables
+
+The append-only rolling summary above is the live prompt prefix for a
+deliverable's OWN session — byte-stable and never re-summarised. It is never
+injected into other deliverables. Separately, when a deliverable ships,
+`modes` distils a **one-time, forward-looking** `Deliverable.summary` and
+carries it into the execution seed of deliverables that depend on it.
+
+- **Written once at `/ship`.** The summary is built from the deliverable's own
+  session (its rolling summary plus the raw tail since the last compaction) in
+  a single distillation call. It is idempotent — re-shipping never regenerates
+  or overwrites an existing summary — and soft-fails (ships without a summary)
+  on no model/auth, an empty or wrong session, or a summariser error. This is
+  the only place a rolling summary is re-read; the result never feeds back into
+  any live rolling prefix, so per-session cache stability is preserved.
+- **Forward-looking, not a work log.** The prompt asks for what downstream
+  deliverables need but the plan does not make obvious: discoveries, changed
+  assumptions, hidden constraints, exact files/APIs/schemas/identifiers to
+  reuse, decisions and their rationale, and pitfalls. With no dependents it
+  asks for a short archival note.
+- **Dependency-scoped seeding.** A deliverable's seed carries the distilled
+  summaries of its direct and transitive dependencies, verbatim, under a
+  `## Carry-forward from dependencies` heading. Independent parallel branches
+  never inherit each other's summaries, and the plan-document section in seeds
+  omits per-deliverable summaries so nothing leaks in through it. Secrets are
+  redacted before the summary is persisted.
+- **Correct session only.** Ship-time summarisation reads the deliverable's own
+  execution session (matched against `Deliverable.sessionPath`); if `/ship`
+  runs from a different session it soft-fails rather than summarising the wrong
+  transcript.
+- **Budget warning.** When the dependency summaries carried into an active
+  deliverable's seed exceed `compaction.summaryTokens`, `modes` warns once per
+  session — it never silently drops older dependency summaries.
+- **In-flight limitation (first pass).** Carry-forward affects future sessions
+  only. A dependent deliverable whose session is already active/seeded before
+  an upstream summary is written is not mutated and receives no follow-up; this
+  keeps the cache stable and avoids cross-session writes. In stacked PR flows,
+  start a dependent after its dependencies ship to pick up their summaries.
+
 
 ## Feature flags
 

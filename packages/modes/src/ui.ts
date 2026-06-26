@@ -8,6 +8,8 @@ export interface ModeFooterInput {
 	readonly branch?: string;
 	readonly contextPercent?: number | null;
 	readonly stage?: string;
+	/** Pre-formatted context budget breakdown, e.g. `12000/250000 (.../.../...)`. */
+	readonly budget?: string;
 }
 
 export function renderModeFooter(input: ModeFooterInput): string {
@@ -15,6 +17,7 @@ export function renderModeFooter(input: ModeFooterInput): string {
 	if (input.planSlug) parts.push(`plan:${input.planSlug}`);
 	if (input.branch) parts.push(`branch:${input.branch}`);
 	if (input.stage) parts.push(input.stage);
+	if (input.budget) parts.push(input.budget);
 	if (input.contextPercent !== undefined && input.contextPercent !== null) {
 		parts.push(`ctx:${Math.round(input.contextPercent)}%`);
 	}

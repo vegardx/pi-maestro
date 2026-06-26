@@ -9,11 +9,19 @@ import {
 	type DeliverableId,
 	EVENTS,
 	type ModeName,
+	type ModesExecutionStatus,
 	type PlanId,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import { addWorktree, removeWorktree } from "@vegardx/pi-git";
 import { ModesAskQueue } from "./ask-queue.js";
+import {
+	calibrateSys,
+	calibrationKey,
+	computeBuckets,
+	estimateTokens,
+	formatBudget,
+} from "./budget.js";
 import {
 	buildCompactionInstructions,
 	createCrashSnapshot,
@@ -28,7 +36,14 @@ import {
 	toolBlockedInPlanMode,
 } from "./policy.js";
 import { deliverables, repoNameFromPath, slugify } from "./schema.js";
-import { appendModesState, hydrateModesState } from "./session.js";
+import {
+	appendModesState,
+	collectBudgetText,
+	EXECUTION_SEED_ENTRY,
+	hasExecutionSeed,
+	hydrateModesState,
+} from "./session.js";
+import { readModesCompactionSettings } from "./settings.js";
 import {
 	nextShippableDeliverable,
 	parkPlan,
@@ -36,10 +51,12 @@ import {
 	syncPrState,
 } from "./shipping.js";
 import {
+	type ExecutionState,
 	initialModesState,
 	type ModesState,
 	nextMode,
 	setActivePlan,
+	setExecution,
 	transitionMode,
 } from "./state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "./storage.js";
@@ -79,6 +96,11 @@ export function createModesRuntime(
 	let engine: PlanEngine | undefined;
 	let fanout: FanoutOrchestrator | undefined;
 	let baselineTools: string[] | undefined;
+	// Transient (not persisted): a modes-owned compaction is in flight.
+	let compactionInFlight = false;
+	// Cached system-prompt+tools token estimate, invalidated when the
+	// calibration key (mode/toolset/system-prompt length) changes.
+	let calibration: { sig: string; sys: number } | undefined;
 	const listeners = new Set<(mode: ModeName, previous: ModeName) => void>();
 
 	function currentMode(): ModeName {
@@ -99,11 +121,50 @@ export function createModesRuntime(
 			renderModeFooter({
 				mode: state.mode,
 				planSlug: state.activePlanSlug,
+				budget: budgetFooter(ctx),
 				contextPercent: ctx.getContextUsage?.()?.percent,
 			}),
 		);
 		if (engine)
 			ctx.ui.setWidget?.("maestro.plan", renderPlanPanel(engine.get(), 18));
+	}
+
+	// Best-effort context-budget breakdown for the footer. Deterministic given
+	// its inputs and defensive: when total usage is unknown (e.g. right after
+	// compaction) `hotTail` is reported as 0 and a prior calibrated `sys` is
+	// reused. Only shown during ask/auto execution.
+	function budgetFooter(ctx: ExtensionContext): string | undefined {
+		if (state.mode !== "ask" && state.mode !== "auto") return undefined;
+		const entries = ctx.sessionManager?.getEntries?.() ?? [];
+		const text = collectBudgetText(entries);
+		const seed = estimateTokens(text.seed);
+		const rollingSummary = estimateTokens(text.rollingSummary);
+		const total = ctx.getContextUsage?.()?.tokens ?? null;
+		const systemPrompt = ctx.getSystemPrompt?.() ?? "";
+		const sig = calibrationKey({
+			mode: state.mode,
+			toolSignature: pi.getActiveTools().join(","),
+			systemPromptLength: systemPrompt.length,
+		});
+		if (calibration && calibration.sig !== sig) calibration = undefined;
+		let sys: number;
+		if (total !== null) {
+			sys = calibrateSys({
+				total,
+				seed,
+				rollingSummary,
+				hotTailEstimate: estimateTokens(text.hotTail),
+			});
+			calibration = { sig, sys };
+		} else {
+			sys = calibration?.sys ?? estimateTokens(systemPrompt);
+		}
+		const buckets = computeBuckets({ total, sys, seed, rollingSummary });
+		const settings = readModesCompactionSettings(ctx.cwd);
+		return formatBudget(
+			buckets,
+			settings.workingTokens + settings.summaryTokens,
+		);
 	}
 
 	function applyTools(): void {
@@ -137,6 +198,15 @@ export function createModesRuntime(
 			ctx.ui.notify(`Maestro ${mode} mode`, "info");
 		}
 		emitMode(changed.previous);
+	}
+
+	function setExecutionStage(
+		execution: ExecutionState,
+		ctx?: ExtensionContext,
+	): void {
+		state = setExecution(state, execution, now);
+		persist();
+		if (ctx) notifyMode(ctx);
 	}
 
 	function loadEngine(slug: string): PlanEngine | undefined {
@@ -288,9 +358,13 @@ export function createModesRuntime(
 			const result = startSequentialExecution(engine, {
 				onPlanChanged: emitPlanChanged,
 				sendSeed: (seed, deliverable) => {
+					// Byte-stable single entry per deliverable: never re-emit on
+					// resume/switch so the cache prefix stays intact.
+					if (hasExecutionSeed(ctx.sessionManager.getEntries(), deliverable.id))
+						return;
 					pi.sendMessage(
 						{
-							customType: "maestro.execution.seed",
+							customType: EXECUTION_SEED_ENTRY,
 							content: seed,
 							display: true,
 							details: { deliverableId: deliverable.id },
@@ -305,8 +379,13 @@ export function createModesRuntime(
 					: result.kind === "already-active"
 						? `${result.deliverable.id} is already active.`
 						: result.reason;
-			if (result.kind === "started")
+			if (result.kind === "started") {
 				prepareWorktree(result.deliverable.id, ctx);
+				setExecutionStage(
+					{ stage: "executing", deliverableId: result.deliverable.id },
+					ctx,
+				);
+			}
 			ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
 		},
 	});
@@ -340,6 +419,8 @@ export function createModesRuntime(
 				return;
 			}
 			emitPlanChanged();
+			if (state.execution.deliverableId === shipped.deliverable.id)
+				setExecutionStage({ stage: "idle" }, ctx);
 			maestro.events.emit(EVENTS.shipCompleted, {
 				deliverableId: shipped.deliverable.id as DeliverableId,
 				pr: shipped.result.pr,
@@ -410,6 +491,8 @@ export function createModesRuntime(
 	pi.on("session_start", (_event, ctx) => {
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
+		compactionInFlight = false;
+		calibration = undefined;
 		if (state.activePlanSlug) engine = loadEngine(state.activePlanSlug);
 		applyTools();
 		notifyMode(ctx);
@@ -498,6 +581,15 @@ export function createModesRuntime(
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		},
+		execution: (): ModesExecutionStatus => ({
+			mode: state.mode,
+			activePlanSlug: state.activePlanSlug,
+			activeDeliverableId:
+				state.execution.deliverableId ??
+				(engine ? activeDeliverable(engine.get())?.id : undefined),
+			executing: state.execution.stage === "executing",
+			compactionInFlight,
+		}),
 	});
 
 	return { askQueue, currentMode, currentEngine, setMode, openPlan, cycle };

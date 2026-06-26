@@ -151,6 +151,11 @@ describe("capability registry", () => {
 	const impl: ModesCapabilityV1 = {
 		current: () => "auto",
 		onChange: () => () => {},
+		execution: () => ({
+			mode: "auto",
+			executing: false,
+			compactionInFlight: false,
+		}),
 	};
 
 	it("register + get + require resolve the same instance", () => {
@@ -195,6 +200,11 @@ describe("defineExtension", () => {
 			maestro.capabilities.register(CAPABILITIES.modes, {
 				current: () => "plan",
 				onChange: () => () => {},
+				execution: () => ({
+					mode: "plan",
+					executing: false,
+					compactionInFlight: false,
+				}),
 			});
 		});
 		entry(pi.api);
@@ -221,6 +231,11 @@ describe("defineExtension", () => {
 			maestro.capabilities.register(CAPABILITIES.modes, {
 				current: () => "ask",
 				onChange: () => () => {},
+				execution: () => ({
+					mode: "ask",
+					executing: false,
+					compactionInFlight: false,
+				}),
 			});
 		});
 		entry(pi.api);

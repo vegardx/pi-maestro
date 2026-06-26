@@ -92,6 +92,18 @@ export {
 	createPlanTools,
 	createTaskTool,
 } from "./tools.js";
+export type {
+	CompactionResumeDecision,
+	CompactionResumeGate,
+	MidDeliverableTriggerInput,
+	ResumeAfterCompactionInput,
+} from "./trigger.js";
+export {
+	awaitCompaction,
+	diagnoseResumeAfterCompaction,
+	shouldCompactMidDeliverable,
+	shouldResumeAfterCompaction,
+} from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {
 	activateDeliverableWorktree,

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -23,6 +24,7 @@ import {
 	formatBudget,
 } from "./budget.js";
 import {
+	buildCompactionMarker,
 	buildDeliverableSliceCompactionResult,
 	createCrashSnapshot,
 	decideCompactionOwnership,
@@ -37,7 +39,12 @@ import {
 	computeActiveTools,
 	toolBlockedInPlanMode,
 } from "./policy.js";
-import { deliverables, repoNameFromPath, slugify } from "./schema.js";
+import {
+	deliverables,
+	gatingTasks,
+	repoNameFromPath,
+	slugify,
+} from "./schema.js";
 import {
 	appendModesState,
 	collectBudgetText,
@@ -64,6 +71,11 @@ import {
 import { createPlanStore, type PlanStore, plansRoot } from "./storage.js";
 import { createModesSummariser } from "./summarise.js";
 import { createPlanTools } from "./tools.js";
+import {
+	awaitCompaction,
+	diagnoseResumeAfterCompaction,
+	shouldCompactMidDeliverable,
+} from "./trigger.js";
 import { renderModeFooter, renderPlanPanel } from "./ui.js";
 import {
 	activateDeliverableWorktree,
@@ -107,6 +119,11 @@ export function createModesRuntime(
 	// nonce to claim ownership. The trigger that populates it lands in a later
 	// deliverable; for now it stays undefined and every compaction is generic.
 	let pendingCompaction: PendingModesCompaction | undefined;
+	// Transient: after a timed-out/aborted compaction pi may still be summarising
+	// in the background; hold off re-triggering until this deadline passes.
+	let compactionCooldownUntil = 0;
+	// Transient: soft summary-budget warning fires at most once per session.
+	let summaryBudgetWarnFired = false;
 	// Cached system-prompt+tools token estimate, invalidated when the
 	// calibration key (mode/toolset/system-prompt length) changes.
 	let calibration: { sig: string; sys: number } | undefined;
@@ -138,11 +155,17 @@ export function createModesRuntime(
 			ctx.ui.setWidget?.("maestro.plan", renderPlanPanel(engine.get(), 18));
 	}
 
-	// Best-effort context-budget breakdown for the footer. Deterministic given
-	// its inputs and defensive: when total usage is unknown (e.g. right after
-	// compaction) `hotTail` is reported as 0 and a prior calibrated `sys` is
-	// reused. Only shown during ask/auto execution.
-	function budgetFooter(ctx: ExtensionContext): string | undefined {
+	// Best-effort context-budget breakdown. Deterministic given its inputs and
+	// defensive: when total usage is unknown (e.g. right after compaction)
+	// `hotTail` is 0 and a prior calibrated `sys` is reused. Returns undefined
+	// outside ask/auto execution. Shared by the footer and the trigger so both
+	// read the SAME bucket math.
+	function budgetSnapshot(ctx: ExtensionContext):
+		| {
+				buckets: ReturnType<typeof computeBuckets>;
+				settings: ReturnType<typeof readModesCompactionSettings>;
+		  }
+		| undefined {
 		if (state.mode !== "ask" && state.mode !== "auto") return undefined;
 		const entries = ctx.sessionManager?.getEntries?.() ?? [];
 		const text = collectBudgetText(entries);
@@ -170,9 +193,15 @@ export function createModesRuntime(
 		}
 		const buckets = computeBuckets({ total, sys, seed, rollingSummary });
 		const settings = readModesCompactionSettings(ctx.cwd);
+		return { buckets, settings };
+	}
+
+	function budgetFooter(ctx: ExtensionContext): string | undefined {
+		const snapshot = budgetSnapshot(ctx);
+		if (!snapshot) return undefined;
 		return formatBudget(
-			buckets,
-			settings.workingTokens + settings.summaryTokens,
+			snapshot.buckets,
+			snapshot.settings.workingTokens + snapshot.settings.summaryTokens,
 		);
 	}
 
@@ -502,6 +531,8 @@ export function createModesRuntime(
 		if (hydrated) state = hydrated;
 		compactionInFlight = false;
 		pendingCompaction = undefined;
+		compactionCooldownUntil = 0;
+		summaryBudgetWarnFired = false;
 		calibration = undefined;
 		if (state.activePlanSlug) engine = loadEngine(state.activePlanSlug);
 		applyTools();
@@ -530,9 +561,136 @@ export function createModesRuntime(
 		fanout?.progress(runId, progress);
 	});
 
-	pi.on("turn_end", () => {
-		if (state.mode !== "plan") return;
-		askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
+	pi.on("turn_end", async (_event, ctx) => {
+		if (state.mode === "plan") {
+			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
+			return;
+		}
+		if (state.mode !== "ask" && state.mode !== "auto") return;
+
+		const snapshot = budgetSnapshot(ctx);
+		if (!snapshot || !engine) return;
+		const { buckets, settings } = snapshot;
+
+		// Soft warn (once per session) when the stable summary burden
+		// (seed + rollingSummary) outgrows its budget. Not enforced — dropping
+		// older summaries would lose the carry-forward signal that motivates them.
+		if (
+			!summaryBudgetWarnFired &&
+			buckets.summaryUsed > settings.summaryTokens
+		) {
+			summaryBudgetWarnFired = true;
+			ctx.ui.notify(
+				`Maestro carry-forward summaries (${buckets.summaryUsed} tokens) exceed compaction.summaryTokens (${settings.summaryTokens}); consider lowering compaction.phaseTokens`,
+				"warning",
+			);
+		}
+
+		const active = activeDeliverable(engine.get());
+		const fire = shouldCompactMidDeliverable({
+			mode: state.mode,
+			compactionInFlight,
+			hasActiveDeliverable: !!active,
+			// Never trigger on stale data: when total is unknown `workingUsed`
+			// collapses to `sys`, so gate it out explicitly.
+			workingUsed: buckets.total === null ? null : buckets.workingUsed,
+			workingTokens: settings.workingTokens,
+		});
+		if (!fire || !active) return;
+		// A timed-out/aborted compaction may still be running in pi; don't stack a
+		// second until the orphan should have settled.
+		if (Date.now() < compactionCooldownUntil) return;
+
+		const nonce = randomUUID();
+		const stageAtEntry = state.execution.stage;
+		const modeAtEntry = state.mode;
+		const deliverableAtEntry = active.id;
+		pendingCompaction = {
+			nonce,
+			deliverableId: active.id,
+			reason: "modes-trigger",
+			buckets: {
+				sys: buckets.sys,
+				seed: buckets.seed,
+				rollingSummary: buckets.rollingSummary,
+				hotTail: buckets.hotTail,
+				workingUsed: buckets.workingUsed,
+				summaryUsed: buckets.summaryUsed,
+			},
+		};
+		compactionInFlight = true;
+
+		let compacted = false;
+		try {
+			await awaitCompaction({
+				start: ({ onComplete, onError }) =>
+					ctx.compact({
+						customInstructions: buildCompactionMarker(nonce),
+						onComplete,
+						onError,
+					}),
+				timeoutMs: settings.timeoutMs,
+			});
+			compacted = true;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(
+				`Maestro mid-deliverable compaction skipped (${msg}).`,
+				"warning",
+			);
+			if (msg === "aborted" || msg.includes("timed out")) {
+				compactionCooldownUntil = Date.now() + settings.timeoutMs;
+			}
+		} finally {
+			compactionInFlight = false;
+			pendingCompaction = undefined;
+		}
+
+		// Resume the auto loop exactly once when the gates still hold. The nonce
+		// already guarantees exact-once ownership of THIS compaction; the gates
+		// guard against mid-flight drift (Shift+Tab, deliverable switch, finish).
+		const current = activeDeliverable(engine.get());
+		const remaining = current
+			? gatingTasks(current).filter((t) => !t.done).length
+			: 0;
+		const decision = diagnoseResumeAfterCompaction({
+			compacted,
+			stageAtEntry,
+			modeAtEntry,
+			deliverableAtEntry,
+			currentStage: state.execution.stage,
+			currentMode: state.mode,
+			currentDeliverable: current?.id,
+			remainingTaskCount: remaining,
+		});
+		if (decision.resume) {
+			pi.sendMessage(
+				{
+					customType: "maestro.compaction.resume",
+					content:
+						"[Maestro: context was compacted mid-deliverable. The rolling " +
+						"summary above captures the work so far. Continue the active " +
+						"deliverable's remaining tasks — do NOT restart from the beginning.]",
+					display: false,
+					details: {
+						postCompactionResume: true,
+						deliverableId: deliverableAtEntry,
+					},
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} else if (
+			compacted &&
+			decision.gate !== "stage-at-entry-not-executing" &&
+			decision.gate !== "mode-drifted"
+		) {
+			// Surface unexpected gate trips so a stalled auto run has an observable
+			// reason. Skip the routine "user left auto" cases to avoid notify spam.
+			ctx.ui.notify(
+				`Maestro post-compaction resume skipped (gate: ${decision.gate}).`,
+				"info",
+			);
+		}
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {

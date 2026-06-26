@@ -67,6 +67,7 @@ import {
 	initialModesState,
 	nextMode,
 	setActivePlan,
+	setExecution,
 	transitionMode,
 } from "../packages/modes/src/state.js";
 import {
@@ -541,7 +542,7 @@ describe("mode state and policy", () => {
 		expect(changed.previous).toBe("hack");
 		const withPlan = setActivePlan(changed.state, "p", now);
 		expect(toPersistedState(withPlan)).toMatchObject({
-			version: 1,
+			version: 2,
 			mode: "plan",
 			activePlanSlug: "p",
 		});
@@ -579,6 +580,7 @@ describe("mode state and policy", () => {
 		expect(hydrateModesState(entries)).toEqual({
 			mode: "ask",
 			activePlanSlug: "new",
+			execution: { stage: "idle" },
 			updatedAt: "2",
 		});
 	});
@@ -766,6 +768,60 @@ describe("modes runtime", () => {
 		);
 		expect(host.shortcuts.has("shift+tab")).toBe(true);
 		expect(host.caps.has(CAPABILITIES.modes)).toBe(true);
+	});
+
+	it("exposes a read-only execution status capability (idle by default)", () => {
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		const cap = host.caps.get(CAPABILITIES.modes) as any;
+		expect(cap.execution()).toMatchObject({
+			mode: "hack",
+			executing: false,
+			compactionInFlight: false,
+		});
+	});
+
+	it("hydrates an executing deliverable into the execution capability", () => {
+		const host = fakeHost();
+		const persisted = toPersistedState(
+			setExecution(
+				{ ...initialModesState(now), mode: "auto" },
+				{ stage: "executing", deliverableId: "d1" },
+				now,
+			),
+		);
+		host.entries.push({
+			type: "custom",
+			id: "1",
+			parentId: null,
+			timestamp: "t",
+			customType: MODES_STATE_ENTRY,
+			data: persisted,
+		});
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		host.handlers.get("session_start")?.[0]({}, host.ctx);
+		const cap = host.caps.get(CAPABILITIES.modes) as any;
+		expect(cap.execution()).toMatchObject({
+			mode: "auto",
+			activeDeliverableId: "d1",
+			executing: true,
+			compactionInFlight: false,
+		});
+	});
+
+	it("never mutates the system prompt during execution", () => {
+		// The cacheable prefix must stay byte-stable while executing: modes must
+		// not register a per-turn before_agent_start system-prompt rewrite.
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		expect(host.handlers.has("before_agent_start")).toBe(false);
+	});
+
+	it("renders the context budget breakdown in the footer during ask/auto", () => {
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		host.commands.get("auto").handler("", host.ctx);
+		expect(host.statuses.get("maestro.mode")).toContain("/250000");
 	});
 
 	it("opens a plan through /plan and hydrates session state", async () => {

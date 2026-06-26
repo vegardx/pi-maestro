@@ -5,10 +5,9 @@ import { CAPABILITIES, EVENTS, type ModeName } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ModesAskQueue } from "../packages/modes/src/ask-queue.js";
 import {
-	buildCompactionInstructions,
-	buildCompactionSeed,
+	buildCompactionMarker,
 	createCrashSnapshot,
-	shouldOwnCompaction,
+	decideCompactionOwnership,
 } from "../packages/modes/src/compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "../packages/modes/src/engine.js";
 import {
@@ -1222,33 +1221,40 @@ describe("shipping policy", () => {
 });
 
 describe("compaction and modes UI", () => {
-	it("owns compaction only while executing", () => {
-		expect(shouldOwnCompaction({ mode: "auto", executing: true })).toBe(true);
-		expect(shouldOwnCompaction({ mode: "ask", executing: true })).toBe(true);
-		expect(shouldOwnCompaction({ mode: "plan", executing: true })).toBe(false);
-		expect(shouldOwnCompaction({ mode: "auto", executing: false })).toBe(false);
+	it("declines compactions without the modes marker", () => {
+		expect(decideCompactionOwnership(undefined, undefined)).toEqual({
+			kind: "decline",
+		});
+		expect(decideCompactionOwnership("please summarise", undefined)).toEqual({
+			kind: "decline",
+		});
 	});
 
-	it("builds deterministic compaction instructions from the plan seed", () => {
-		const p = plan([
-			deliverable({
-				id: "a",
-				title: "A",
-				status: "active",
-				children: [task("gate", true)],
-			}),
-		]);
-		const seed = buildCompactionSeed(p, { activeDeliverableId: "a" });
-		expect(seed).toContain("Active deliverable: a");
-		expect(seed).toContain("- [x] **gate** `gate`");
-		const instructions = buildCompactionInstructions(p, "a");
-		expect(instructions).toContain("Preserve Maestro plan state exactly.");
-		expect(instructions).toContain(seed);
+	it("owns a compaction whose marker matches the pending nonce", () => {
+		const pending = {
+			nonce: "n1",
+			deliverableId: "a",
+			reason: "modes-trigger",
+		};
+		const decision = decideCompactionOwnership(
+			buildCompactionMarker("n1"),
+			pending,
+		);
+		expect(decision).toEqual({ kind: "own", pending });
 	});
 
-	it("truncates compaction seeds deterministically", () => {
-		const p = plan([deliverable({ body: "x".repeat(200) })]);
-		expect(buildCompactionSeed(p, { maxChars: 80 })).toMatch(/…\[truncated\]$/);
+	it("leak-guards a marker that does not match the pending nonce", () => {
+		const pending = {
+			nonce: "n1",
+			deliverableId: "a",
+			reason: "modes-trigger",
+		};
+		expect(
+			decideCompactionOwnership(buildCompactionMarker("n2"), pending),
+		).toEqual({ kind: "leak-guard" });
+		expect(
+			decideCompactionOwnership(buildCompactionMarker("n1"), undefined),
+		).toEqual({ kind: "leak-guard" });
 	});
 
 	it("redacts crash snapshots", () => {

@@ -14,11 +14,30 @@ export {
 	estimateTokens,
 	formatBudget,
 } from "./budget.js";
+export type {
+	CompactionBucketSnapshot,
+	CompactionDecision,
+	DeliverableSliceResult,
+	ModesCompactionDetails,
+	PendingModesCompaction,
+	SummariseFn,
+	SummariseOutput,
+} from "./compaction.js";
 export {
-	buildCompactionInstructions,
-	buildCompactionSeed,
+	buildCompactionMarker,
+	buildDeliverableSliceCompactionResult,
+	buildSummariserPreamble,
+	buildSummary,
+	COMPACTION_SCHEMA_VERSION,
+	countDeliverableSlicesOnBranch,
 	createCrashSnapshot,
-	shouldOwnCompaction,
+	decideCompactionOwnership,
+	downstreamDependents,
+	findLatestCompactionSummary,
+	readModesCompactionDetails,
+	renderDeliverableSection,
+	summaryHash,
+	transitiveDependencies,
 } from "./compaction.js";
 export { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 export {
@@ -66,6 +85,7 @@ export {
 	transitionMode,
 } from "./state.js";
 export { createPlanStore, plansRoot } from "./storage.js";
+export { createModesSummariser } from "./summarise.js";
 export {
 	createDeliverableTool,
 	createPlanTool,

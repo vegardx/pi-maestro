@@ -27,6 +27,15 @@ export interface ShipDeps {
 	readonly commit: CommitCapabilityV1;
 	readonly confirm: (summary: ShipGateSummary) => Promise<boolean> | boolean;
 	readonly paths?: readonly string[];
+	/**
+	 * Produce the deliverable's forward-looking carry-forward summary. Called
+	 * once per ship, only when `Deliverable.summary` is not already set. Returns
+	 * undefined to ship without a summary (soft-fail: no model, empty session,
+	 * wrong session, summariser failure). Never throws into the ship path.
+	 */
+	readonly summarise?: (
+		deliverable: Deliverable,
+	) => Promise<string | undefined> | string | undefined;
 }
 
 export type ShipDeliverableResult =
@@ -52,9 +61,20 @@ export async function shipDeliverableFromPlan(
 		paths: deps.paths,
 		openPr: true,
 	});
+	// `Deliverable.summary` is the one-time distilled, forward-looking hand-off
+	// (see compaction.ts) — NOT a record of the PR. Write it once; never
+	// regenerate or overwrite an existing summary (idempotent re-ship).
+	let summary = d.summary;
+	if (!summary && deps.summarise) {
+		try {
+			summary = (await deps.summarise(d)) ?? undefined;
+		} catch {
+			summary = undefined;
+		}
+	}
 	engine.updateDeliverable(d.id, {
 		prNumber: result.pr,
-		summary: summarizeShipResult(result),
+		...(summary ? { summary } : {}),
 	});
 	if (result.pr) transitionThrough(engine, d.id, "in-review");
 	const updated = findDeliverable(engine.get(), d.id) ?? d;
@@ -70,14 +90,6 @@ export interface PrStateDeps {
 		| "merged"
 		| "closed"
 		| null;
-}
-
-function summarizeShipResult(result: ShipResult): string | undefined {
-	if (!result.committed) return undefined;
-	const parts = [`branch ${result.branch}`];
-	if (result.sha) parts.push(result.sha);
-	if (result.pr) parts.push(`PR #${result.pr}`);
-	return parts.join(" — ");
 }
 
 export async function syncPrState(

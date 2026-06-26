@@ -432,6 +432,156 @@ export async function buildDeliverableSliceCompactionResult(
 }
 
 // ---------------------------------------------------------------------------
+// Carry-forward summaries — one-time distilled, dependency-scoped handoff.
+// ---------------------------------------------------------------------------
+//
+// `Deliverable.summary` is a SEPARATE artifact from the live rolling summary.
+// The rolling chain is the byte-stable prompt prefix for a deliverable's OWN
+// session and is never injected elsewhere. At /ship we distil ONCE — reading
+// the rolling summary plus the raw tail since the last compaction — into a
+// short, forward-looking summary that only downstream dependents need. That
+// distilled text is the only thing carried into later deliverables' seeds.
+// Reading the rolling summary here is the one sanctioned cross-deliverable
+// handoff; its output never feeds back into any live rolling prefix.
+
+/** A dependency's distilled summary, ready to render verbatim into a seed. */
+export interface DependencySummary {
+	readonly id: string;
+	readonly title: string;
+	readonly summary: string;
+}
+
+/**
+ * Distilled summaries of the transitive dependencies of `deliverableId` that
+ * actually have one. Direct dependencies come first (then their ancestors),
+ * matching {@link transitiveDependencies} order. Independent parallel branches
+ * are never included — only this deliverable's dependency closure.
+ */
+export function collectDependencySummaries(
+	plan: Pick<Plan, "nodes">,
+	deliverableId: string,
+): DependencySummary[] {
+	const out: DependencySummary[] = [];
+	for (const dep of transitiveDependencies(plan, deliverableId)) {
+		const summary = dep.summary?.trim();
+		if (summary) out.push({ id: dep.id, title: dep.title, summary });
+	}
+	return out;
+}
+
+/**
+ * Forward-looking preamble for the one-time ship-time distillation. Unlike the
+ * mid-deliverable preamble, this asks for what FUTURE dependent deliverables
+ * need but the plan does not make obvious — not a chronological work log.
+ */
+export function buildEndSummaryPreamble(args: {
+	plan: Plan;
+	deliverable: Deliverable;
+	maxTokens: number;
+}): string {
+	const { plan, deliverable, maxTokens } = args;
+	const dependents = downstreamDependents(plan, deliverable.id);
+
+	const lines: string[] = [
+		"You are writing a one-time hand-off summary for a COMPLETED deliverable",
+		"in a software project. This summary is carried forward into the execution",
+		"context of deliverables that depend on this one.",
+		"",
+		`Completed deliverable \`${deliverable.id}\` — ${deliverable.title}`,
+		`Goal: ${deliverable.body}`,
+	];
+	if (dependents.length > 0) {
+		lines.push(
+			"",
+			"These downstream deliverables depend on this one. Optimise the summary",
+			"for what THEY will need to continue without re-reading this work:",
+		);
+		for (const d of dependents)
+			lines.push(`  - \`${d.id}\` — ${d.title}: ${d.body}`);
+		lines.push(
+			"",
+			"Capture forward-looking value the original plan does NOT make obvious:",
+			"  - discoveries made during implementation",
+			"  - assumptions that changed, and hidden constraints uncovered",
+			"  - exact files, APIs, schemas, identifiers, and config keys to reuse",
+			"  - decisions whose rationale matters downstream",
+			"  - pitfalls, dead ends, and integration details",
+			"",
+			"De-emphasise routine completed work and chronological history. A",
+			"dependent should be able to build on this without surprises.",
+			"",
+			"Structure the output as:",
+			"  ## Discoveries & changed assumptions",
+			"  ## Reusable details (files, APIs, schemas, identifiers)",
+			"  ## Decisions & rationale",
+			"  ## Pitfalls",
+		);
+	} else {
+		lines.push(
+			"",
+			"No other deliverable depends on this one, so keep the summary SHORT —",
+			"a few archival bullets noting what was built and any non-obvious",
+			"decision or constraint worth remembering. Do not pad.",
+		);
+	}
+	lines.push(
+		"",
+		`Stay within ~${maxTokens} output tokens — a MAXIMUM, not a quota.`,
+	);
+	return lines.join("\n");
+}
+
+export interface BuildCarryForwardOptions {
+	readonly plan: Plan;
+	readonly deliverable: Deliverable;
+	/** Latest rolling compaction summary in the deliverable's own session. */
+	readonly rollingSummary?: string;
+	/** Raw messages after the last compaction (or the whole session if none). */
+	readonly rawTail: AgentMessage[];
+	readonly summarise: SummariseFn;
+	readonly maxTokens: number;
+	readonly signal?: AbortSignal;
+}
+
+/**
+ * Distil a deliverable's work into its forward-looking `Deliverable.summary`.
+ * Returns the redacted summary text, or null when there is nothing to
+ * summarise or the summariser soft-fails (the caller then ships without a
+ * summary). The rolling summary, when present, is fed in as the first input
+ * message so a fully-compacted session still produces a hand-off.
+ */
+export async function buildCarryForwardSummary(
+	opts: BuildCarryForwardOptions,
+): Promise<string | null> {
+	const messages: AgentMessage[] = [];
+	const rolling = opts.rollingSummary?.trim();
+	if (rolling) {
+		messages.push({
+			role: "user",
+			content: [{ type: "text", text: `<rolling-summary>\n${rolling}` }],
+			timestamp: 0,
+		} as AgentMessage);
+	}
+	messages.push(...opts.rawTail);
+	if (messages.length === 0) return null;
+
+	const preamble = buildEndSummaryPreamble({
+		plan: opts.plan,
+		deliverable: opts.deliverable,
+		maxTokens: opts.maxTokens,
+	});
+	const out = await opts.summarise({
+		messages,
+		preamble,
+		maxTokens: opts.maxTokens,
+		signal: opts.signal,
+	});
+	if (out === null) return null;
+	const text = redactSecrets(out.text.trim());
+	return text || null;
+}
+
+// ---------------------------------------------------------------------------
 // Crash snapshot — unchanged from the lifecycle phase.
 // ---------------------------------------------------------------------------
 

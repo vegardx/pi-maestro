@@ -1,6 +1,7 @@
 // Markdown projection for plans. This is intentionally pure: commands/tools,
 // compaction seeds, PR bodies, and tests all render from the same Plan value.
 
+import { collectDependencySummaries } from "./compaction.js";
 import {
 	childDeliverables,
 	type Deliverable,
@@ -15,6 +16,12 @@ import {
 export interface PlanMarkdownOptions {
 	/** Include operational metadata useful for compacted context seeds. */
 	readonly includeSeedMetadata?: boolean;
+	/**
+	 * Omit per-deliverable `Summary:` lines. Seeds set this so unrelated
+	 * parallel-branch summaries never leak in via the plan document — only the
+	 * dependency-scoped carry-forward section carries summaries.
+	 */
+	readonly omitSummaries?: boolean;
 }
 
 export function renderPlanMarkdown(
@@ -92,11 +99,31 @@ export function renderPlanSeed(
 			? ` depends on ${d.dependsOn.join(", ")}`
 			: "";
 		lines.push(`${marker} ${d.id}: ${d.status}${deps} — ${d.title}`);
-		if (d.summary) lines.push(`  summary: ${d.summary}`);
+	}
+	// Carry-forward: inject ONLY the distilled summaries of this deliverable's
+	// dependency closure, verbatim for cache stability. Independent parallel
+	// branches are never pulled in. Omitted entirely when there is no active
+	// deliverable (e.g. plain plan context) or no dependency has a summary.
+	if (activeDeliverableId) {
+		const depSummaries = collectDependencySummaries(plan, activeDeliverableId);
+		if (depSummaries.length > 0) {
+			lines.push("");
+			lines.push("## Carry-forward from dependencies");
+			for (const dep of depSummaries) {
+				lines.push("");
+				lines.push(`### \`${dep.id}\` — ${dep.title}`);
+				lines.push(dep.summary);
+			}
+		}
 	}
 	lines.push("");
 	lines.push("## Plan document");
-	lines.push(renderPlanMarkdown(plan, { includeSeedMetadata: true }));
+	lines.push(
+		renderPlanMarkdown(plan, {
+			includeSeedMetadata: true,
+			omitSummaries: true,
+		}),
+	);
 	return lines.join("\n").trimEnd();
 }
 
@@ -139,7 +166,7 @@ function renderDeliverable(
 		lines.push("");
 		for (const line of d.body.split("\n")) lines.push(`> ${line}`);
 	}
-	if (d.summary) {
+	if (d.summary && !options.omitSummaries) {
 		lines.push("");
 		lines.push(`Summary: ${d.summary}`);
 	}

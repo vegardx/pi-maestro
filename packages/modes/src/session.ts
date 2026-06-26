@@ -2,6 +2,7 @@ import type {
 	CompactionEntry,
 	CustomEntry,
 	SessionEntry,
+	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { ModeName } from "@vegardx/pi-contracts";
 import { type ExecutionState, isModeName, type ModesState } from "./state.js";
@@ -155,6 +156,67 @@ export function collectBudgetText(
 		}
 	}
 	return { seed, rollingSummary, hotTail: tail.join("\n") };
+}
+
+/** Latest rolling summary + the raw message tail after it, for ship-time
+ * carry-forward distillation. Mirrors {@link collectBudgetText}'s cut point. */
+export interface CarryForwardInput {
+	readonly rollingSummary: string;
+	readonly rawTail: SessionMessageEntry["message"][];
+}
+
+export function collectCarryForwardInput(
+	entries: readonly SessionEntry[],
+): CarryForwardInput {
+	let compactionIdx = -1;
+	for (let i = entries.length - 1; i >= 0; i--) {
+		if (entries[i].type === "compaction") {
+			compactionIdx = i;
+			break;
+		}
+	}
+	const rollingSummary =
+		compactionIdx >= 0
+			? ((entries[compactionIdx] as CompactionEntry).summary ?? "")
+			: "";
+	const rawTail: SessionMessageEntry["message"][] = [];
+	for (let i = compactionIdx + 1; i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			rawTail.push((entry as SessionMessageEntry).message);
+		}
+	}
+	return { rollingSummary, rawTail };
+}
+
+/**
+ * Decide whether ship-time summarisation may read the current session for
+ * `deliverable`. Ship summaries must distil the deliverable's OWN execution
+ * session: if it recorded a different `sessionPath`, refuse (soft-fail). When
+ * no path is recorded, the current session is taken as the execution session.
+ */
+export function resolveShipSummaryInput(
+	entries: readonly SessionEntry[],
+	deliverable: { readonly sessionPath?: string },
+	currentSessionFile: string | undefined,
+):
+	| { readonly ok: true; readonly input: CarryForwardInput }
+	| { readonly ok: false; readonly reason: string } {
+	if (
+		deliverable.sessionPath &&
+		currentSessionFile &&
+		deliverable.sessionPath !== currentSessionFile
+	) {
+		return {
+			ok: false,
+			reason: "ship runs from a different session than the deliverable's",
+		};
+	}
+	const input = collectCarryForwardInput(entries);
+	if (!input.rollingSummary && input.rawTail.length === 0) {
+		return { ok: false, reason: "no session content to summarise" };
+	}
+	return { ok: true, input };
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

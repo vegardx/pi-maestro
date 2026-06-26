@@ -18,17 +18,21 @@ export type {
 	CompactionBucketSnapshot,
 	CompactionDecision,
 	DeliverableSliceResult,
+	DependencySummary,
 	ModesCompactionDetails,
 	PendingModesCompaction,
 	SummariseFn,
 	SummariseOutput,
 } from "./compaction.js";
 export {
+	buildCarryForwardSummary,
 	buildCompactionMarker,
 	buildDeliverableSliceCompactionResult,
+	buildEndSummaryPreamble,
 	buildSummariserPreamble,
 	buildSummary,
 	COMPACTION_SCHEMA_VERSION,
+	collectDependencySummaries,
 	countDeliverableSlicesOnBranch,
 	createCrashSnapshot,
 	decideCompactionOwnership,
@@ -61,10 +65,12 @@ export * from "./schema.js";
 export {
 	appendModesState,
 	collectBudgetText,
+	collectCarryForwardInput,
 	EXECUTION_SEED_ENTRY,
 	hasExecutionSeed,
 	hydrateModesState,
 	MODES_STATE_ENTRY,
+	resolveShipSummaryInput,
 	toPersistedState,
 } from "./session.js";
 export { readModesCompactionSettings } from "./settings.js";

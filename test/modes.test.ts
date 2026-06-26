@@ -415,7 +415,10 @@ describe("plan markdown", () => {
 		const seed = renderPlanSeed(p, "b");
 		expect(seed).toContain("# Maestro plan context");
 		expect(seed).toContain("- a: shipped — A");
-		expect(seed).toContain("summary: done");
+		// Dependency summaries are carried into the dependent's seed verbatim.
+		expect(seed).toContain("## Carry-forward from dependencies");
+		expect(seed).toContain("### `a` — A");
+		expect(seed).toContain("done");
 		expect(seed).toContain("→ b: planned depends on a — B");
 	});
 });
@@ -1150,7 +1153,6 @@ describe("shipping policy", () => {
 		]);
 		expect(deliverables(engine.get())[0]).toMatchObject({
 			prNumber: 12,
-			summary: "branch feat/a — PR #12",
 			status: "ready-to-ship",
 		});
 	});

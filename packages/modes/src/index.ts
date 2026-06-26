@@ -8,6 +8,13 @@ import { createModesRuntime } from "./runtime.js";
 
 export { ModesAskQueue } from "./ask-queue.js";
 export {
+	calibrateSys,
+	calibrationKey,
+	computeBuckets,
+	estimateTokens,
+	formatBudget,
+} from "./budget.js";
+export {
 	buildCompactionInstructions,
 	buildCompactionSeed,
 	createCrashSnapshot,
@@ -34,10 +41,14 @@ export { createModesRuntime } from "./runtime.js";
 export * from "./schema.js";
 export {
 	appendModesState,
+	collectBudgetText,
+	EXECUTION_SEED_ENTRY,
+	hasExecutionSeed,
 	hydrateModesState,
 	MODES_STATE_ENTRY,
 	toPersistedState,
 } from "./session.js";
+export { readModesCompactionSettings } from "./settings.js";
 export {
 	deliverableIssueBody,
 	nextShippableDeliverable,
@@ -51,6 +62,7 @@ export {
 	MODE_CYCLE,
 	nextMode,
 	setActivePlan,
+	setExecution,
 	transitionMode,
 } from "./state.js";
 export { createPlanStore, plansRoot } from "./storage.js";

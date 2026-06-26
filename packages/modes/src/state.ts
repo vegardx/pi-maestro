@@ -1,15 +1,25 @@
-import { MODE_NAMES, type ModeName } from "@vegardx/pi-contracts";
+import {
+	type ExecutionStage,
+	MODE_NAMES,
+	type ModeName,
+} from "@vegardx/pi-contracts";
+
+export interface ExecutionState {
+	readonly stage: ExecutionStage;
+	readonly deliverableId?: string;
+}
 
 export interface ModesState {
 	mode: ModeName;
 	activePlanSlug?: string;
+	execution: ExecutionState;
 	updatedAt: string;
 }
 
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;
 
 export function initialModesState(now: () => string = isoNow): ModesState {
-	return { mode: "hack", updatedAt: now() };
+	return { mode: "hack", execution: { stage: "idle" }, updatedAt: now() };
 }
 
 export function nextMode(mode: ModeName): ModeName {
@@ -34,6 +44,14 @@ export function setActivePlan(
 	now: () => string = isoNow,
 ): ModesState {
 	return { ...state, activePlanSlug, updatedAt: now() };
+}
+
+export function setExecution(
+	state: ModesState,
+	execution: ExecutionState,
+	now: () => string = isoNow,
+): ModesState {
+	return { ...state, execution, updatedAt: now() };
 }
 
 export function isModeName(value: string): value is ModeName {

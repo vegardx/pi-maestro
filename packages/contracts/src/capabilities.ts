@@ -6,7 +6,7 @@
 
 import type { Answers, Questionnaire } from "./ask.js";
 import type { RunId } from "./ids.js";
-import type { ModeName } from "./modes.js";
+import type { ModeName, ModesExecutionStatus } from "./modes.js";
 import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
 import type { ShipDeliverableInput, ShipResult } from "./ship.js";
 
@@ -42,6 +42,8 @@ export interface CommitCapabilityV1 {
 export interface ModesCapabilityV1 {
 	current(): ModeName;
 	onChange(listener: (mode: ModeName, previous: ModeName) => void): () => void;
+	/** Read-only execution lifecycle snapshot for cross-extension coordination. */
+	execution(): ModesExecutionStatus;
 }
 
 export interface PromptAssistCapabilityV1 {

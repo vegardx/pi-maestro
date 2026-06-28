@@ -1,8 +1,10 @@
 # Multi-repo plans (design)
 
-Status: **design spike** — no production code. Captures the model and decisions
-for letting a single pi-maestro plan span more than one repository, validated
-against the `maestro-sandbox-{lib,service,docs}` repos.
+Status: **implemented** — the model below ships in the modes extension
+(`Plan.repos`, `Deliverable.repo`, `repoFor`, per-deliverable routing/guard,
+cross-repo ordering-only deps). This document is retained as the design record;
+see [Usage → Multi-repo plans](usage.md#multi-repo-plans) for how to use it.
+Validated against the `maestro-sandbox-{lib,service,docs}` repos.
 
 ## Problem
 

@@ -32,6 +32,29 @@ The modes extension registers three LLM tools when enabled:
 Plan-level loose items can be `followup`, `question`, or `manual`; gating
 `task` items must belong to a deliverable.
 
+## Multi-repo plans
+
+A plan targets one repo by default (`plan.repoPath`, key `default`). To span
+more repos, register them and assign deliverables to a repo by key:
+
+- `deliverable register-repo` with `repo` (key), `repoPath`, and optional
+  `repoDefaultBranch`.
+- `deliverable add`/`update` with `repo: <key>` targets that repo; `repo:
+  "default"` clears the assignment back to the plan default.
+- `deliverable unregister-repo` removes a repo (rejected while a deliverable
+  still targets it).
+
+Each deliverable's worktree, branch, ship cwd, sync PR-state lookup, and park
+issue are routed to its own repo. The repo guard is per-deliverable: a
+sequential `/implement` or `/ship` aborts if the session cwd isn't the targeted
+repo. Fanout is unguarded (each worker uses its own per-repo worktree), and
+`/sync` is gh-only so it runs from any cwd.
+
+`dependsOn` across repos is **ordering-only**: there is no shared git base, so
+the child bases off its own repo's default branch (no branch stacking, no
+cross-repo PR base), while sync still keeps the child blocked until the parent
+ships. See [Multi-repo plans (design)](multi-repo-plans.md).
+
 ## Modes
 
 - `hack`: unrestricted pi default behaviour.

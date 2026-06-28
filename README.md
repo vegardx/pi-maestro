@@ -27,6 +27,7 @@ pi install git:github.com/vegardx/pi-maestro
 
 - [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
+- [Multi-repo plans (design)](docs/multi-repo-plans.md)
 
 ## Development
 

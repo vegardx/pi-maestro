@@ -86,6 +86,7 @@ export async function shipDeliverableFromPlan(
 export interface PrStateDeps {
 	readonly state: (
 		prNumber: number,
+		repoPath: string,
 	) =>
 		| Promise<"open" | "merged" | "closed" | null>
 		| "open"
@@ -104,7 +105,7 @@ export async function syncPrState(
 		if (!d.prNumber || d.status === "shipped" || d.status === "abandoned") {
 			continue;
 		}
-		const state = await deps.state(d.prNumber);
+		const state = await deps.state(d.prNumber, repoFor(engine.get(), d).path);
 		if (state === "merged") {
 			transitionThrough(engine, d.id, "shipped");
 			shipped.push(d.id);
@@ -117,11 +118,14 @@ export async function syncPrState(
 }
 
 export interface ParkDeps {
-	readonly createIssue: (input: {
-		title: string;
-		body: string;
-		parent?: number;
-	}) => Promise<number> | number;
+	readonly createIssue: (
+		input: {
+			title: string;
+			body: string;
+			parent?: number;
+		},
+		repoPath: string,
+	) => Promise<number> | number;
 }
 
 export async function parkPlan(
@@ -129,21 +133,30 @@ export async function parkPlan(
 	deps: ParkDeps,
 ): Promise<{ parent: number; children: number[] }> {
 	const plan = engine.get();
-	const parent = await deps.createIssue({
-		title: plan.title,
-		body: renderPlanMarkdown(plan),
-	});
+	const parent = await deps.createIssue(
+		{
+			title: plan.title,
+			body: renderPlanMarkdown(plan),
+		},
+		plan.repoPath,
+	);
 	engine.updatePlan({ parentIssueNumber: parent });
 	const children: number[] = [];
 	for (const d of deliverables(engine.get()).filter(
 		(item) => !item.lifecycle,
 	)) {
 		if (d.issueNumber) continue;
-		const issue = await deps.createIssue({
-			title: d.title,
-			body: deliverableIssueBody(engine.get(), d),
-			parent,
-		});
+		const repo = repoFor(engine.get(), d);
+		const issue = await deps.createIssue(
+			{
+				title: d.title,
+				body: deliverableIssueBody(engine.get(), d),
+				// Parent reference only links within the default repo; cross-repo
+				// deliverable issues live in their own repo without the back-link.
+				parent: repo.path === plan.repoPath ? parent : undefined,
+			},
+			repo.path,
+		);
 		engine.updateDeliverable(d.id, { issueNumber: issue });
 		children.push(issue);
 	}

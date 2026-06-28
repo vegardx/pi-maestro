@@ -53,6 +53,7 @@ import {
 	findDeliverable,
 	gatingTasks,
 	planRepoMismatch,
+	readyDeliverables,
 	repoFor,
 	repoNameFromPath,
 	slugify,
@@ -384,12 +385,16 @@ export function createModesRuntime(
 			recordDeliverableSession(engine, deliverableId, sessionPath);
 	}
 
-	// Refuse to act when the session cwd doesn't resolve to the plan's repo —
-	// otherwise commit/sync/park would silently hit the wrong tree. Returns true
-	// when it's safe to proceed (and when there's no plan to guard).
-	function assertPlanRepo(ctx: ExtensionContext): boolean {
+	// Refuse to act when the session cwd doesn't resolve to the repo a specific
+	// deliverable targets — otherwise sequential implement/ship would silently hit
+	// the wrong tree. Returns true when it's safe to proceed (and when there's no
+	// plan to guard). Fanout uses per-deliverable worktrees and is not guarded.
+	function assertDeliverableRepo(
+		ctx: ExtensionContext,
+		d: Deliverable,
+	): boolean {
 		if (!engine) return true;
-		const repoPath = engine.get().repoPath;
+		const repoPath = repoFor(engine.get(), d).path;
 		const problem = planRepoMismatch(
 			gitToplevel(repoPath),
 			gitToplevel(ctx.cwd),
@@ -401,6 +406,17 @@ export function createModesRuntime(
 			return false;
 		}
 		return true;
+	}
+
+	// The deliverable a sequential /implement would execute next: the active one,
+	// else the first ready deliverable.
+	function nextSequentialDeliverable(): Deliverable | undefined {
+		if (!engine) return undefined;
+		const plan = engine.get();
+		return (
+			deliverables(plan).find((d) => d.status === "active") ??
+			readyDeliverables(plan)[0]
+		);
 	}
 
 	for (const tool of createPlanTools({
@@ -441,7 +457,6 @@ export function createModesRuntime(
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			if (!engine) openPlan(undefined, ctx);
 			if (!engine) return;
-			if (!assertPlanRepo(ctx)) return;
 			const activeEngine = engine;
 			setMode(args.includes("--ask") ? "ask" : "auto", ctx);
 			if (args.includes("--fanout")) {
@@ -475,6 +490,9 @@ export function createModesRuntime(
 					"warning",
 				);
 			}
+			const sequentialTarget = nextSequentialDeliverable();
+			if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
+				return;
 			const result = startSequentialExecution(engine, {
 				onPlanChanged: emitPlanChanged,
 				sendSeed: (seed, deliverable) => {
@@ -536,7 +554,6 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			if (!assertPlanRepo(ctx)) return;
 			const activeEngine = engine;
 			const commit = maestro.capabilities.get(CAPABILITIES.commit);
 			if (!commit) {
@@ -548,6 +565,8 @@ export function createModesRuntime(
 				ctx.ui.notify("No shippable deliverable.", "warning");
 				return;
 			}
+			const target = findDeliverable(engine.get(), id);
+			if (target && !assertDeliverableRepo(ctx, target)) return;
 			const shipped = await shipDeliverableFromPlan(engine, id, {
 				commit,
 				confirm: ({ message }) => ctx.ui.confirm("Ship deliverable", message),
@@ -589,10 +608,11 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			if (!assertPlanRepo(ctx)) return;
-			const repoPath = engine.get().repoPath;
+			// No session-repo guard: sync is gh-only and reconciles each
+			// deliverable against its own repo, regardless of the session cwd.
 			const result = await syncPrState(engine, {
-				state: async (prNumber) => prStateViaGh(pi, repoPath, prNumber),
+				state: async (prNumber, repoPath) =>
+					prStateViaGh(pi, repoPath, prNumber),
 			});
 			emitPlanChanged();
 			ctx.ui.notify(
@@ -609,9 +629,8 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			const repoPath = engine.get().repoPath;
 			const result = await parkPlan(engine, {
-				createIssue: (input) => createIssueViaGh(pi, repoPath, input),
+				createIssue: (input, repoPath) => createIssueViaGh(pi, repoPath, input),
 			});
 			emitPlanChanged();
 			ctx.ui.notify(

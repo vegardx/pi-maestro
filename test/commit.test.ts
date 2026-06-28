@@ -162,4 +162,44 @@ describe("runShip", () => {
 		expect(r).toMatchObject({ committed: true, pushed: false });
 		expect(r.pr).toBeUndefined();
 	});
+
+	it("operates entirely in deps.cwd (the explicit target tree)", async () => {
+		const seen: string[] = [];
+		await runShip(
+			deps({
+				cwd: "/wt/a",
+				currentBranch: (cwd) => {
+					seen.push(cwd);
+					return "feat/x";
+				},
+				defaultBranch: async (cwd) => {
+					seen.push(cwd);
+					return "main";
+				},
+				changedPaths: (cwd) => {
+					seen.push(cwd);
+					return ["a.ts"];
+				},
+				stageAndCommit: (cwd) => {
+					seen.push(cwd);
+					return { ok: true, sha: "abc" };
+				},
+				pushBranch: async (cwd) => {
+					seen.push(cwd);
+					return true;
+				},
+				findOpenPr: async (cwd) => {
+					seen.push(cwd);
+					return null;
+				},
+				createPr: async (cwd) => {
+					seen.push(cwd);
+					return 1;
+				},
+			}),
+			input,
+		);
+		expect(seen.every((c) => c === "/wt/a")).toBe(true);
+		expect(seen.length).toBeGreaterThan(0);
+	});
 });

@@ -60,6 +60,7 @@ export async function shipDeliverableFromPlan(
 		deliverableId: d.id as DeliverableId,
 		paths: deps.paths,
 		openPr: true,
+		cwd: d.worktreePath ?? engine.get().repoPath,
 	});
 	// `Deliverable.summary` is the one-time distilled, forward-looking hand-off
 	// (see compaction.ts) — NOT a record of the PR. Write it once; never

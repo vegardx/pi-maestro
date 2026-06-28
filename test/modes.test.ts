@@ -1149,12 +1149,30 @@ describe("shipping policy", () => {
 		});
 		expect(result.kind).toBe("shipped");
 		expect(calls).toEqual([
-			{ deliverableId: "a", paths: undefined, openPr: true },
+			{ deliverableId: "a", paths: undefined, openPr: true, cwd: "/repo" },
 		]);
 		expect(deliverables(engine.get())[0]).toMatchObject({
 			prNumber: 12,
 			status: "ready-to-ship",
 		});
+	});
+
+	it("ships from the deliverable worktree when set, else the repo path", async () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.addWorkItem(a.id, { title: "gate" });
+		transitionThrough(engine, a.id, "ready-to-ship");
+		engine.updateDeliverable(a.id, { worktreePath: "/wt/a" });
+		let seen: { cwd?: string } | undefined;
+		await shipDeliverableFromPlan(engine, a.id, {
+			confirm: () => true,
+			commit: {
+				shipDeliverable: async (input) => {
+					seen = input;
+					return { branch: "feat/a", committed: true, pushed: true, pr: 1 };
+				},
+			},
+		});
+		expect(seen?.cwd).toBe("/wt/a");
 	});
 
 	it("cancels shipping before commit", async () => {

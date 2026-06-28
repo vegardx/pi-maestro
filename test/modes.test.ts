@@ -1394,6 +1394,51 @@ describe("shipping policy", () => {
 		expect(seen[1]).toMatchObject({ title: "A", parent: 41 });
 	});
 
+	it("looks up each deliverable's PR state in its own repo", async () => {
+		engine.registerRepo({ key: "service", path: "/repo/svc" });
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({
+			title: "B",
+			dependsOn: [a.id],
+			repo: "service",
+		});
+		transitionThrough(engine, a.id, "in-review");
+		transitionThrough(engine, b.id, "in-review");
+		engine.updateDeliverable(a.id, { prNumber: 1 });
+		engine.updateDeliverable(b.id, { prNumber: 2 });
+		const seen: Array<[number, string]> = [];
+		await syncPrState(engine, {
+			state: (pr, repoPath) => {
+				seen.push([pr, repoPath]);
+				return "open";
+			},
+		});
+		expect(seen).toContainEqual([1, "/repo"]);
+		expect(seen).toContainEqual([2, "/repo/svc"]);
+	});
+
+	it("parks each deliverable's issue in its own repo without cross-repo parent", async () => {
+		engine.registerRepo({ key: "service", path: "/repo/svc" });
+		engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.addDeliverable({ title: "B", dependsOn: [], repo: "service" });
+		let n = 40;
+		const seen: Array<{ repoPath: string; title?: string; parent?: number }> =
+			[];
+		await parkPlan(engine, {
+			createIssue: (input, repoPath) => {
+				seen.push({ repoPath, title: input.title, parent: input.parent });
+				return ++n;
+			},
+		});
+		expect(seen[0].repoPath).toBe("/repo");
+		const svc = seen.find((s) => s.title === "B");
+		expect(svc?.repoPath).toBe("/repo/svc");
+		expect(svc?.parent).toBeUndefined();
+		const sameRepo = seen.find((s) => s.title === "A");
+		expect(sameRepo?.repoPath).toBe("/repo");
+		expect(sameRepo?.parent).toBe(41);
+	});
+
 	it("selects and sweeps shippable deliverables", async () => {
 		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
 		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });

@@ -56,6 +56,8 @@ const DeliverableParams = Type.Object({
 		Type.Literal("remove"),
 		Type.Literal("reorder"),
 		Type.Literal("list"),
+		Type.Literal("register-repo"),
+		Type.Literal("unregister-repo"),
 	]),
 	id: Type.Optional(Type.String({ description: "Deliverable id." })),
 	title: Type.Optional(Type.String({ description: "Deliverable title." })),
@@ -81,6 +83,18 @@ const DeliverableParams = Type.Object({
 	),
 	position: Type.Optional(
 		Type.Number({ description: "0-based sibling position." }),
+	),
+	repo: Type.Optional(
+		Type.String({
+			description:
+				'On add/update: registry key of the repo this deliverable targets ("default" clears it). On register-repo/unregister-repo: the repo key.',
+		}),
+	),
+	repoPath: Type.Optional(
+		Type.String({ description: "register-repo: absolute path to the repo." }),
+	),
+	repoDefaultBranch: Type.Optional(
+		Type.String({ description: "register-repo: cached default branch." }),
 	),
 });
 
@@ -138,9 +152,9 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 		name: "deliverable",
 		label: "Deliverable",
 		description:
-			"Manage the active Maestro plan's deliverables: add, update, remove, reorder, list.",
+			"Manage the active Maestro plan's deliverables and repo registry: add, update, remove, reorder, list, register-repo, unregister-repo.",
 		promptSnippet:
-			"deliverable — manage plan deliverables (add/update/remove/reorder/list).",
+			"deliverable — manage plan deliverables + repo registry (add/update/remove/reorder/list/register-repo/unregister-repo).",
 		parameters: DeliverableParams,
 		async execute(_id, params): Promise<Result> {
 			return withEngine(deps, (engine) => {
@@ -154,6 +168,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							dependsOn: params.dependsOn,
 							lifecycle: params.lifecycle,
 							position: params.position,
+							repo: params.repo === "default" ? undefined : params.repo,
 						};
 						const deliverable = engine.addDeliverable(input);
 						notify(deps, engine);
@@ -170,6 +185,9 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							branch: params.branch,
 							dependsOn: params.dependsOn,
 							lifecycle: params.lifecycle,
+							...(params.repo !== undefined && {
+								repo: params.repo === "default" ? undefined : params.repo,
+							}),
 						});
 						if (params.status) engine.setStatus(params.id, params.status);
 						notify(deps, engine);
@@ -205,6 +223,29 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 									.join("\n")
 							: "No deliverables.";
 						return ok(text, { deliverables: rows, plan: engine.get() });
+					}
+					case "register-repo": {
+						if (!params.repo) return error("register-repo requires repo (key)");
+						if (!params.repoPath)
+							return error("register-repo requires repoPath");
+						engine.registerRepo({
+							key: params.repo,
+							path: params.repoPath,
+							defaultBranch: params.repoDefaultBranch,
+						});
+						notify(deps, engine);
+						return ok(`Registered repo ${params.repo}.`, {
+							plan: engine.get(),
+						});
+					}
+					case "unregister-repo": {
+						if (!params.repo)
+							return error("unregister-repo requires repo (key)");
+						engine.unregisterRepo(params.repo);
+						notify(deps, engine);
+						return ok(`Unregistered repo ${params.repo}.`, {
+							plan: engine.get(),
+						});
 					}
 				}
 			});

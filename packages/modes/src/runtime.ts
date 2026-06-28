@@ -50,6 +50,7 @@ import {
 import {
 	type Deliverable,
 	deliverables,
+	derivePlanName,
 	findDeliverable,
 	gatingTasks,
 	planRepoMismatch,
@@ -139,6 +140,10 @@ export function createModesRuntime(
 	};
 	let state: ModesState = initialModesState(now);
 	let engine: PlanEngine | undefined;
+	// While a draft plan is open: the entry count at /plan time (to locate the
+	// first planning message) and an explicit name from `/plan <name>`.
+	let draftStartEntries = 0;
+	let draftExplicitName: string | undefined;
 	let fanout: FanoutOrchestrator | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
@@ -289,19 +294,64 @@ export function createModesRuntime(
 		titleOrSlug: string | undefined,
 		ctx: ExtensionContext,
 	): PlanEngine {
-		const title = titleOrSlug?.trim() || repoNameFromPath(ctx.cwd);
-		const slug = slugify(title) || "plan";
-		engine = store.exists(slug)
-			? loadEngine(slug)
-			: PlanEngine.create(store, { slug, title, repoPath: ctx.cwd }, now);
-		if (!engine) throw new Error(`plan ${slug} not found on disk`);
-		state = setActivePlan(state, slug, now);
+		const explicit = titleOrSlug?.trim() || undefined;
+		const slug = explicit ? slugify(explicit) || "plan" : undefined;
+		// No explicit name and there's already an active plan -> keep it.
+		if (!slug && engine) return engine;
+		// Reopen an existing named plan.
+		if (slug && store.exists(slug)) {
+			engine = loadEngine(slug);
+			if (!engine) throw new Error(`plan ${slug} not found on disk`);
+			state = setActivePlan(state, slug, now);
+			const sessionPath = ctx.sessionManager.getSessionFile();
+			if (sessionPath) recordPlanSession(engine, sessionPath);
+			persist();
+			maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
+			ctx.ui.setStatus("maestro.plan", `plan: ${slug}`);
+			return engine;
+		}
+		// A new plan starts as an in-memory draft. It's named and persisted lazily
+		// on the first turn that adds content (see finalizeDraftPlan), so an
+		// exploratory /plan that adds nothing never hits disk.
+		engine = PlanEngine.createDraft(
+			store,
+			{
+				slug: "draft",
+				title: explicit ?? "Untitled plan",
+				repoPath: ctx.cwd,
+			},
+			now,
+		);
+		draftExplicitName = explicit;
+		draftStartEntries = ctx.sessionManager.getEntries().length;
 		const sessionPath = ctx.sessionManager.getSessionFile();
 		if (sessionPath) recordPlanSession(engine, sessionPath);
+		ctx.ui.setStatus("maestro.plan", "plan: (draft)");
+		return engine;
+	}
+
+	// Name and persist a draft plan once it has content. Called at turn_end while
+	// planning and before implement/ship so the plan survives. No-op otherwise.
+	function finalizeDraftPlan(ctx: ExtensionContext): void {
+		if (!engine?.isDraft()) return;
+		if (engine.get().nodes.length === 0) return;
+		const firstMessage = firstUserMessageText(
+			ctx.sessionManager.getEntries() as readonly Entryish[],
+			draftStartEntries,
+		);
+		const { slug: base, title } = derivePlanName(
+			draftExplicitName ?? firstMessage,
+			repoNameFromPath(ctx.cwd),
+		);
+		let slug = base;
+		for (let n = 2; store.exists(slug); n++) slug = `${base}-${n}`;
+		engine.materialize(slug, title);
+		state = setActivePlan(state, slug, now);
 		persist();
 		maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
 		ctx.ui.setStatus("maestro.plan", `plan: ${slug}`);
-		return engine;
+		ctx.ui.notify(`Plan saved as \`${slug}\`.`, "info");
+		draftExplicitName = undefined;
 	}
 
 	async function planToAsk(ctx: ExtensionContext): Promise<void> {
@@ -431,7 +481,12 @@ export function createModesRuntime(
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const opened = openPlan(args, ctx);
 			setMode("plan", ctx);
-			ctx.ui.notify(`Plan ${opened.get().slug} active.`, "info");
+			ctx.ui.notify(
+				opened.isDraft()
+					? "Planning mode — this plan is named from your first message."
+					: `Plan ${opened.get().slug} active.`,
+				"info",
+			);
 			pi.sendMessage(
 				{
 					customType: "maestro.plan.document",
@@ -458,6 +513,7 @@ export function createModesRuntime(
 	): Promise<void> {
 		if (!engine) openPlan(undefined, ctx);
 		if (!engine) return;
+		finalizeDraftPlan(ctx);
 		const activeEngine = engine;
 		setMode(args.includes("--ask") ? "ask" : "auto", ctx);
 		if (args.includes("--fanout")) {
@@ -556,6 +612,7 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			finalizeDraftPlan(ctx);
 			const activeEngine = engine;
 			const commit = maestro.capabilities.get(CAPABILITIES.commit);
 			if (!commit) {
@@ -698,6 +755,7 @@ export function createModesRuntime(
 
 	pi.on("turn_end", async (_event, ctx) => {
 		if (state.mode === "plan") {
+			finalizeDraftPlan(ctx);
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;
 		}
@@ -943,6 +1001,41 @@ function activeDeliverable(plan: {
 	nodes: Parameters<typeof deliverables>[0]["nodes"];
 }) {
 	return deliverables(plan).find((d) => d.status === "active");
+}
+
+type Entryish = {
+	type: string;
+	message?: { role?: string; content?: unknown };
+};
+
+function isTextPart(p: unknown): p is { type: "text"; text: string } {
+	return (
+		typeof p === "object" &&
+		p !== null &&
+		(p as { type?: unknown }).type === "text" &&
+		typeof (p as { text?: unknown }).text === "string"
+	);
+}
+
+/** First user message text at/after `fromIndex`, or undefined. */
+function firstUserMessageText(
+	entries: readonly Entryish[],
+	fromIndex: number,
+): string | undefined {
+	for (let i = Math.max(0, fromIndex); i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry?.type !== "message" || entry.message?.role !== "user") continue;
+		const content = entry.message.content;
+		if (typeof content === "string") return content.trim() || undefined;
+		if (Array.isArray(content)) {
+			const text = content
+				.map((p) => (isTextPart(p) ? p.text : ""))
+				.join(" ")
+				.trim();
+			return text || undefined;
+		}
+	}
+	return undefined;
 }
 
 /**

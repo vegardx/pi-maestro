@@ -279,6 +279,25 @@ export function slugify(input: string): string {
 		.replace(/-+$/, "");
 }
 
+/**
+ * Derive a plan slug + title from seed text (typically the first planning
+ * message), falling back to `fallback` (typically the repo name) when the seed
+ * is empty or slugifies to nothing. Keeps the slug short (first ~6 words) so a
+ * whole sentence doesn't become the identifier.
+ */
+export function derivePlanName(
+	seed: string | undefined,
+	fallback: string,
+): { slug: string; title: string } {
+	const source = ((seed ?? "").trim() || fallback).trim();
+	const firstLine = source.split(/\r?\n/)[0]?.trim() ?? "";
+	const words = firstLine.split(/\s+/).filter(Boolean);
+	const title = words.slice(0, 8).join(" ") || fallback;
+	const slug =
+		slugify(words.slice(0, 6).join(" ")) || slugify(fallback) || "plan";
+	return { slug, title };
+}
+
 export function defaultBranchForDeliverable(
 	d: Pick<Deliverable, "id">,
 ): string {

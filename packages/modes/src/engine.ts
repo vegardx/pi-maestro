@@ -50,6 +50,10 @@ export const PLAN_CONTAINER = "@plan";
 
 export class PlanEngine {
 	private plan: Plan;
+	// A draft engine lives only in memory: mutations don't touch disk until
+	// `materialize` assigns the final identity and persists once. This keeps
+	// exploratory `/plan` sessions from leaving empty plan files behind.
+	private draft = false;
 
 	constructor(
 		plan: Plan,
@@ -76,6 +80,44 @@ export class PlanEngine {
 		const engine = new PlanEngine(plan, store, now);
 		store.save(plan);
 		return engine;
+	}
+
+	/**
+	 * Create an in-memory draft plan. Nothing is written to disk until
+	 * `materialize` is called, so an abandoned `/plan` leaves no file behind.
+	 */
+	static createDraft(
+		store: PlanStore,
+		input: { slug: string; title: string; repoPath: string },
+		now: () => string = () => new Date().toISOString(),
+	): PlanEngine {
+		const ts = now();
+		const plan: Plan = {
+			slug: input.slug,
+			title: input.title,
+			repoPath: input.repoPath,
+			nodes: [],
+			createdAt: ts,
+			updatedAt: ts,
+		};
+		const engine = new PlanEngine(plan, store, now);
+		engine.draft = true;
+		return engine;
+	}
+
+	isDraft(): boolean {
+		return this.draft;
+	}
+
+	/**
+	 * Finalize a draft: assign its identity and persist for the first time.
+	 * No-op once the plan is already persisted.
+	 */
+	materialize(slug: string, title: string): void {
+		if (!this.draft) return;
+		this.plan = { ...this.plan, slug, title, updatedAt: this.now() };
+		this.draft = false;
+		this.store.save(this.plan);
 	}
 
 	get(): Plan {
@@ -127,7 +169,7 @@ export class PlanEngine {
 			throw new Error(`invalid plan:\n- ${problems.join("\n- ")}`);
 		}
 		next.updatedAt = this.now();
-		this.store.save(next);
+		if (!this.draft) this.store.save(next);
 		this.plan = next;
 	}
 

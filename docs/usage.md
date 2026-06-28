@@ -11,7 +11,12 @@ entries directly through jiti; there is no build step.
 
 ## Commands
 
-- `/plan [title-or-slug]`: create or open a plan and enter plan mode.
+- `/plan [title-or-slug]`: enter plan mode. With an existing slug it reopens
+  that plan; otherwise it starts a **draft** that is named and persisted lazily
+  — on the first turn that adds a deliverable. If you pass a title it's used as
+  the name; otherwise the slug is derived from your first planning message
+  (falling back to the repo name). A `/plan` that adds nothing never hits disk,
+  so exploratory planning leaves no stale plans behind.
 - `/implement [--ask] [--fanout]`: start execution of the active plan.
 - `/ship [deliverableId]`: ship the next shippable deliverable, or the supplied
   deliverable, through `commit.v1`.

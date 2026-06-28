@@ -12,6 +12,13 @@ export interface ShipDeliverableInput {
 	readonly message?: string;
 	/** Open or update a PR after pushing. Defaults to true. */
 	readonly openPr?: boolean;
+	/**
+	 * Working tree to operate in (commit + push + PR). Defaults to the live
+	 * session cwd. modes passes the deliverable's worktree (fanout) or the
+	 * plan's repo path (sequential) so shipping is decoupled from the one cwd
+	 * a session can't move mid-run.
+	 */
+	readonly cwd?: string;
 }
 
 export interface ShipResult {

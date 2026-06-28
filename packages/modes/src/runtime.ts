@@ -513,8 +513,9 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			const repoPath = engine.get().repoPath;
 			const result = await syncPrState(engine, {
-				state: async (prNumber) => prStateViaGh(pi, ctx.cwd, prNumber),
+				state: async (prNumber) => prStateViaGh(pi, repoPath, prNumber),
 			});
 			emitPlanChanged();
 			ctx.ui.notify(
@@ -531,8 +532,9 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			const repoPath = engine.get().repoPath;
 			const result = await parkPlan(engine, {
-				createIssue: (input) => createIssueViaGh(pi, ctx.cwd, input),
+				createIssue: (input) => createIssueViaGh(pi, repoPath, input),
 			});
 			emitPlanChanged();
 			ctx.ui.notify(

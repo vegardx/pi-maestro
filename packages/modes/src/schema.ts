@@ -69,6 +69,8 @@ export interface Deliverable {
 	lifecycle?: DeliverableLifecycle;
 	/** The stacking edge: at most one parent; cross-subtree allowed. */
 	dependsOn?: string[];
+	/** Registry key of the repo this deliverable targets; absent ⇒ plan default. */
+	repo?: string;
 	/** Own gating work-items XOR child deliverables. */
 	children: PlanNode[];
 	/** Worktree path while active/needs-attention; cleared when it leaves. */
@@ -85,6 +87,21 @@ export interface Deliverable {
 
 export type PlanNode = Deliverable | WorkItem;
 
+/**
+ * Resolve the repo a deliverable targets. Returns the registered entry for
+ * `d.repo`, falling back to the synthetic default repo (`plan.repoPath`) when
+ * `d.repo` is absent (or, defensively, unregistered — `validatePlanShape`
+ * rejects unknown keys before they reach here).
+ */
+export function repoFor(
+	plan: Pick<Plan, "repoPath" | "repos">,
+	d: Pick<Deliverable, "repo">,
+): PlanRepo {
+	const fallback: PlanRepo = { key: DEFAULT_REPO_KEY, path: plan.repoPath };
+	if (!d.repo || d.repo === DEFAULT_REPO_KEY) return fallback;
+	return plan.repos?.find((r) => r.key === d.repo) ?? fallback;
+}
+
 export function isDeliverable(node: PlanNode): node is Deliverable {
 	return node.type === "deliverable";
 }
@@ -93,10 +110,24 @@ export function isWorkItem(node: PlanNode): node is WorkItem {
 	return node.type === "work-item";
 }
 
+/** A repo a plan can target. The default repo is `plan.repoPath` (key "default"). */
+export interface PlanRepo {
+	/** Stable key deliverables reference via `Deliverable.repo`. */
+	key: string;
+	/** Absolute path to the repo. */
+	path: string;
+	/** Cached default branch; detected at use when absent. */
+	defaultBranch?: string;
+}
+
+export const DEFAULT_REPO_KEY = "default";
+
 export interface Plan {
 	slug: string;
 	title: string;
 	repoPath: string;
+	/** Extra repos beyond the default; absent ⇒ single-repo plan. */
+	repos?: PlanRepo[];
 	nodes: PlanNode[];
 	/** GitHub plan-tracking issue (parent of deliverable issues) after park. */
 	parentIssueNumber?: number;
@@ -462,10 +493,23 @@ export function planRepoMismatch(
 // ---- Write-time validation ----------------------------------------------
 
 /** Structural invariants enforced before saving. Empty array = valid. */
-export function validatePlanShape(plan: Pick<Plan, "nodes">): string[] {
+export function validatePlanShape(
+	plan: Pick<Plan, "nodes" | "repos">,
+): string[] {
 	const problems: string[] = [];
 	const flat = deliverables(plan);
 	const ids = new Set(flat.map((d) => d.id));
+
+	const repoKeys = new Set<string>([DEFAULT_REPO_KEY]);
+	for (const r of plan.repos ?? []) {
+		if (repoKeys.has(r.key)) {
+			problems.push(`duplicate repo key \`${r.key}\``);
+		}
+		if (!r.path) {
+			problems.push(`repo \`${r.key}\` has an empty path`);
+		}
+		repoKeys.add(r.key);
+	}
 
 	for (const item of topLevelLeaves(plan)) {
 		if (effectiveWorkItemKind(item) === "task") {
@@ -497,6 +541,11 @@ export function validatePlanShape(plan: Pick<Plan, "nodes">): string[] {
 		if (d.lifecycle && childDeliverables(d).length > 0) {
 			problems.push(
 				`lifecycle deliverable \`${d.id}\` cannot contain child deliverables`,
+			);
+		}
+		if (d.repo && !repoKeys.has(d.repo)) {
+			problems.push(
+				`deliverable \`${d.id}\` targets unknown repo \`${d.repo}\``,
 			);
 		}
 	}

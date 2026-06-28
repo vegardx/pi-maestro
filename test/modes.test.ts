@@ -45,6 +45,7 @@ import {
 	planImplementBranch,
 	planRepoMismatch,
 	readyDeliverables,
+	repoFor,
 	shipsPR,
 	slugify,
 	subtreeComplete,
@@ -1367,5 +1368,75 @@ describe("compaction and modes UI", () => {
 		expect(renderPlanSidebar(p)).toEqual(
 			expect.arrayContaining(["Deliverables: 2", "active: 1", "in-review: 1"]),
 		);
+	});
+});
+
+describe("repoFor", () => {
+	it("falls back to the plan default repo when no repo is set", () => {
+		const p = plan([deliverable({ id: "d1" })]);
+		expect(repoFor(p, p.nodes[0] as Deliverable)).toEqual({
+			key: "default",
+			path: "/repo",
+		});
+	});
+
+	it("treats the explicit default key as the default repo", () => {
+		const p = plan([deliverable({ id: "d1", repo: "default" })]);
+		expect(repoFor(p, { repo: "default" })).toEqual({
+			key: "default",
+			path: "/repo",
+		});
+	});
+
+	it("resolves a registered repo by key", () => {
+		const p: Plan = {
+			...plan([deliverable({ id: "d1", repo: "service" })]),
+			repos: [{ key: "service", path: "/svc", defaultBranch: "dev" }],
+		};
+		expect(repoFor(p, { repo: "service" })).toEqual({
+			key: "service",
+			path: "/svc",
+			defaultBranch: "dev",
+		});
+	});
+
+	it("defensively falls back when the key is unregistered", () => {
+		const p = plan([deliverable({ id: "d1", repo: "ghost" })]);
+		expect(repoFor(p, { repo: "ghost" })).toEqual({
+			key: "default",
+			path: "/repo",
+		});
+	});
+});
+
+describe("validatePlanShape — repo registry", () => {
+	it("accepts a deliverable targeting a registered repo", () => {
+		const p: Plan = {
+			...plan([deliverable({ id: "d1", repo: "service" })]),
+			repos: [{ key: "service", path: "/svc" }],
+		};
+		expect(validatePlanShape(p)).toEqual([]);
+	});
+
+	it("rejects a deliverable targeting an unknown repo", () => {
+		const p = plan([deliverable({ id: "d1", repo: "service" })]);
+		expect(validatePlanShape(p)).toContainEqual(
+			expect.stringContaining("unknown repo `service`"),
+		);
+	});
+
+	it("rejects duplicate repo keys and empty paths", () => {
+		const p: Plan = {
+			...plan([deliverable({ id: "d1" })]),
+			repos: [
+				{ key: "service", path: "/svc" },
+				{ key: "service", path: "" },
+			],
+		};
+		const problems = validatePlanShape(p);
+		expect(problems).toContainEqual(
+			expect.stringContaining("duplicate repo key `service`"),
+		);
+		expect(problems).toContainEqual(expect.stringContaining("empty path"));
 	});
 });

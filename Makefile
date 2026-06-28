@@ -13,13 +13,19 @@ DOGFOOD_FLAGS := \
 	--no-context-files \
 	--no-approve
 
-.PHONY: help dogfood dogfood-fresh dogfood-sandbox check
+.PHONY: help dogfood dogfood-fresh dogfood-sandbox reset reset-yes reset-remote reset-plans check
+
+RESET := $(ROOT)/scripts/reset-dogfood.sh
 
 help:
 	@printf "Targets:\n"
 	@printf "  make dogfood       Run pi-maestro isolated from normal pi config\n"
 	@printf "  make dogfood-fresh Run pi-maestro with a throwaway temp profile\n"
 	@printf "  make dogfood-sandbox  Run pi-maestro against a maestro-sandbox-* repo\n"
+	@printf "  make reset         Dry-run: wipe dogfood plans + reset sandbox repos\n"
+	@printf "  make reset-yes     Apply: wipe plans/sessions + local sandbox reset\n"
+	@printf "  make reset-remote  reset-yes + close PRs + delete remote feat/*\n"
+	@printf "  make reset-plans   Wipe only the dogfood plans/sessions\n"
 	@printf "  make check         Run repo validation\n"
 	@printf "\nVariables:\n"
 	@printf "  PI=%s\n" "$(PI)"
@@ -62,3 +68,18 @@ dogfood-sandbox:
 
 check:
 	npm run check
+
+# Reset the dogfood environment: wipe the isolated profile's plans/sessions and
+# reset the sandbox repos to baseline. Plans live in the dogfood profile, so the
+# sandbox repo's own reset can't clear them — this target owns that.
+reset:
+	@DOGFOOD_ROOT="$(DOGFOOD_ROOT)" "$(RESET)"
+
+reset-yes:
+	@DOGFOOD_ROOT="$(DOGFOOD_ROOT)" "$(RESET)" --yes
+
+reset-remote:
+	@DOGFOOD_ROOT="$(DOGFOOD_ROOT)" "$(RESET)" --yes --remote
+
+reset-plans:
+	@DOGFOOD_ROOT="$(DOGFOOD_ROOT)" "$(RESET)" --yes --plans-only

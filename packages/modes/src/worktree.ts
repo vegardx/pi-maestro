@@ -43,6 +43,26 @@ export type WorktreeActivationResult =
 	  }
 	| { kind: "error"; error: string };
 
+// Sequential (single-session) execution can't move the session cwd into a
+// worktree, so it checks out the deliverable branch in plan.repoPath instead
+// and leaves worktreePath unset — shipping then falls back to plan.repoPath.
+export interface BranchLifecycleDeps {
+	readonly checkoutOrCreateBranch: (
+		repoPath: string,
+		branch: string,
+		baseBranch: string,
+	) => { ok: true } | { ok: false; error: string };
+}
+
+export type BranchActivationResult =
+	| {
+			kind: "ready";
+			deliverable: Deliverable;
+			branch: string;
+			baseBranch: string;
+	  }
+	| { kind: "error"; error: string };
+
 export function deliverableWorktreePath(
 	plan: Plan,
 	d: Pick<Deliverable, "id">,
@@ -78,6 +98,27 @@ export function activateDeliverableWorktree(
 		baseBranch,
 		created: added.created,
 	};
+}
+
+export function activateDeliverableBranch(
+	engine: PlanEngine,
+	deliverableId: string,
+	defaultBranch: string,
+	deps: BranchLifecycleDeps,
+): BranchActivationResult {
+	const plan = engine.get();
+	const d = findDeliverable(plan, deliverableId);
+	if (!d)
+		return { kind: "error", error: `unknown deliverable: ${deliverableId}` };
+	const branch = d.branch ?? defaultBranchForDeliverable(d);
+	const baseBranch = pickBaseBranch(plan, d.id, defaultBranch);
+	const res = deps.checkoutOrCreateBranch(plan.repoPath, branch, baseBranch);
+	if (!res.ok) return { kind: "error", error: res.error };
+	// Persist the branch only. worktreePath stays unset so shipDeliverableFromPlan
+	// falls back to plan.repoPath — the tree this session actually edits in.
+	engine.updateDeliverable(d.id, { branch });
+	const updated = findDeliverable(engine.get(), d.id) ?? d;
+	return { kind: "ready", deliverable: updated, branch, baseBranch };
 }
 
 export interface CleanupResult {

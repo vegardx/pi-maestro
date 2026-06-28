@@ -25,6 +25,17 @@ export function createBranch(
 	return runCommand("git", args, { cwd });
 }
 
+/** Checkout `branch`, creating it from `base` when it doesn't exist locally. */
+export function checkoutOrCreateBranch(
+	cwd: string,
+	branch: string,
+	base: string,
+): ShellResult {
+	return branchExists(cwd, branch)
+		? checkoutBranch(cwd, branch)
+		: createBranch(cwd, branch, base);
+}
+
 /** `git rebase --onto <newbase> <oldbase> HEAD`. */
 export function rebaseOnto(
 	cwd: string,

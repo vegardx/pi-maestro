@@ -5,6 +5,7 @@
 export {
 	branchExists,
 	checkoutBranch,
+	checkoutOrCreateBranch,
 	createBranch,
 	pullFastForward,
 	pushBranch,

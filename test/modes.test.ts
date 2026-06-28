@@ -84,6 +84,7 @@ import {
 	renderPlanSidebar,
 } from "../packages/modes/src/ui.js";
 import {
+	activateDeliverableBranch,
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,
 	deliverableSessionSeed,
@@ -1061,6 +1062,37 @@ describe("worktree and session lifecycle", () => {
 		expect(deliverables(engine.get())[1].worktreePath).toContain(
 			"/worktrees/app/b",
 		);
+	});
+
+	it("checks out the deliverable branch in the repo path, no worktree", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
+		engine.setStatus(a.id, "active");
+		const calls: string[][] = [];
+		const result = activateDeliverableBranch(engine, b.id, "main", {
+			checkoutOrCreateBranch: (repo, branch, base) => {
+				calls.push([repo, branch, base]);
+				return { ok: true };
+			},
+		});
+		expect(result).toMatchObject({
+			kind: "ready",
+			branch: "feat/b",
+			baseBranch: "feat/a",
+		});
+		expect(calls).toEqual([["/repo/app", "feat/b", "feat/a"]]);
+		expect(deliverables(engine.get())[1].branch).toBe("feat/b");
+		expect(deliverables(engine.get())[1].worktreePath).toBeUndefined();
+	});
+
+	it("surfaces a checkout failure as an error result", () => {
+		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
+		engine.setStatus(a.id, "active");
+		const result = activateDeliverableBranch(engine, a.id, "main", {
+			checkoutOrCreateBranch: () => ({ ok: false, error: "boom" }),
+		});
+		expect(result).toEqual({ kind: "error", error: "boom" });
+		expect(deliverables(engine.get())[0].worktreePath).toBeUndefined();
 	});
 
 	it("cleans inactive worktrees but keeps dirty failures", () => {

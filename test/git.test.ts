@@ -11,6 +11,7 @@ import type { RunId } from "@vegardx/pi-contracts";
 import {
 	addWorktree,
 	agentWorktreePath,
+	checkoutOrCreateBranch,
 	commit,
 	createBranch,
 	currentBranch,
@@ -123,6 +124,19 @@ describe("repo + branch ops", () => {
 	it("creates and switches branches", () => {
 		expect(createBranch(repo, "feature").ok).toBe(true);
 		expect(currentBranch(repo)).toBe("feature");
+	});
+
+	it("checkoutOrCreateBranch creates a missing branch off the base", () => {
+		expect(checkoutOrCreateBranch(repo, "feat/new", "main").ok).toBe(true);
+		expect(currentBranch(repo)).toBe("feat/new");
+	});
+
+	it("checkoutOrCreateBranch switches to an existing branch", () => {
+		createBranch(repo, "feat/exists");
+		git(["checkout", "main"]);
+		expect(currentBranch(repo)).toBe("main");
+		expect(checkoutOrCreateBranch(repo, "feat/exists", "main").ok).toBe(true);
+		expect(currentBranch(repo)).toBe("feat/exists");
 	});
 });
 

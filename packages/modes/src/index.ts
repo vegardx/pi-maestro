@@ -112,6 +112,7 @@ export {
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {
+	activateDeliverableBranch,
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,
 	deliverableSessionSeed,

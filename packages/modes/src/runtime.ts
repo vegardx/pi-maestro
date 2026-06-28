@@ -14,7 +14,11 @@ import {
 	type PlanId,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
-import { addWorktree, removeWorktree } from "@vegardx/pi-git";
+import {
+	addWorktree,
+	checkoutOrCreateBranch,
+	removeWorktree,
+} from "@vegardx/pi-git";
 import { ModesAskQueue } from "./ask-queue.js";
 import {
 	calibrateSys,
@@ -82,6 +86,7 @@ import {
 } from "./trigger.js";
 import { renderModeFooter, renderPlanPanel } from "./ui.js";
 import {
+	activateDeliverableBranch,
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,
 	recordDeliverableSession,
@@ -111,6 +116,21 @@ export function createModesRuntime(
 	const now = opts.now ?? (() => new Date().toISOString());
 	const askQueue = new ModesAskQueue();
 	const worktreeDeps = { addWorktree, removeWorktree };
+	const branchDeps = {
+		checkoutOrCreateBranch: (
+			repoPath: string,
+			branch: string,
+			baseBranch: string,
+		): { ok: true } | { ok: false; error: string } => {
+			const r = checkoutOrCreateBranch(repoPath, branch, baseBranch);
+			return r.ok
+				? { ok: true }
+				: {
+						ok: false,
+						error: r.stderr.trim() || `failed to checkout ${branch}`,
+					};
+		},
+	};
 	let state: ModesState = initialModesState(now);
 	let engine: PlanEngine | undefined;
 	let fanout: FanoutOrchestrator | undefined;
@@ -329,6 +349,28 @@ export function createModesRuntime(
 		return prepared.path;
 	}
 
+	// Sequential execution stays in the session's cwd; check out the deliverable
+	// branch in plan.repoPath instead of spinning up an unused worktree.
+	function prepareSequentialBranch(
+		deliverableId: string,
+		ctx: ExtensionContext,
+	): void {
+		if (!engine) return;
+		const prepared = activateDeliverableBranch(
+			engine,
+			deliverableId,
+			"main",
+			branchDeps,
+		);
+		if (prepared.kind === "error") {
+			ctx.ui.notify(prepared.error, "warning");
+			return;
+		}
+		const sessionPath = ctx.sessionManager.getSessionFile();
+		if (sessionPath)
+			recordDeliverableSession(engine, deliverableId, sessionPath);
+	}
+
 	for (const tool of createPlanTools({
 		engine: () => engine,
 		onPlanChanged: emitPlanChanged,
@@ -444,7 +486,7 @@ export function createModesRuntime(
 						? `${result.deliverable.id} is already active.`
 						: result.reason;
 			if (result.kind === "started") {
-				prepareWorktree(result.deliverable.id, ctx);
+				prepareSequentialBranch(result.deliverable.id, ctx);
 				setExecutionStage(
 					{ stage: "executing", deliverableId: result.deliverable.id },
 					ctx,

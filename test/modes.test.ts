@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CAPABILITIES, EVENTS, type ModeName } from "@vegardx/pi-contracts";
@@ -989,6 +990,33 @@ describe("modes runtime", () => {
 		runtime.askQueue.enqueue([{ id: "q", question: "Q?" }]);
 		host.handlers.get("turn_end")?.[0]({}, host.ctx);
 		expect(askBatches).toEqual([[{ id: "q", question: "Q?" }]]);
+	});
+
+	it("picker 'Implement (auto)' starts execution, not just a mode switch", async () => {
+		const gitDir = mkdtempSync(join(tmpdir(), "maestro-picker-"));
+		execSync("git init -b main -q", { cwd: gitDir });
+		execSync("git config user.email t@t.t && git config user.name t", {
+			cwd: gitDir,
+		});
+		writeFileSync(join(gitDir, "f.txt"), "x");
+		execSync("git add -A && git commit -q -m init", { cwd: gitDir });
+		try {
+			const host = fakeHost();
+			host.ctx.cwd = gitDir;
+			const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+				store,
+				now,
+			});
+			await host.commands.get("plan").handler("My Plan", host.ctx);
+			runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
+			runtime.setMode("plan" as ModeName, host.ctx as any);
+			// select() is stubbed to return "Implement (auto)".
+			await runtime.cycle(host.ctx as any);
+			expect(runtime.currentMode()).toBe("auto");
+			expect(host.notifications).toContain("Started a.");
+		} finally {
+			rmSync(gitDir, { recursive: true, force: true });
+		}
 	});
 });
 

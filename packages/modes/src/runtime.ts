@@ -314,8 +314,8 @@ export function createModesRuntime(
 			"Implement (auto)",
 			"Continue planning",
 		]);
-		if (choice === "Implement (auto)") setMode("auto", ctx);
-		else if (choice === "Implement (ask)") setMode("ask", ctx);
+		if (choice === "Implement (auto)") await runImplement("", ctx);
+		else if (choice === "Implement (ask)") await runImplement("--ask", ctx);
 	}
 
 	async function cycle(ctx: ExtensionContext): Promise<void> {
@@ -452,99 +452,101 @@ export function createModesRuntime(
 		});
 	}
 
+	async function runImplement(
+		args: string,
+		ctx: ExtensionContext,
+	): Promise<void> {
+		if (!engine) openPlan(undefined, ctx);
+		if (!engine) return;
+		const activeEngine = engine;
+		setMode(args.includes("--ask") ? "ask" : "auto", ctx);
+		if (args.includes("--fanout")) {
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			if (subagents) {
+				fanout = new FanoutOrchestrator({
+					engine,
+					subagents,
+					cwd: ctx.cwd,
+					prepareDeliverable: (deliverable) => ({
+						cwd: prepareWorktree(deliverable.id, ctx),
+					}),
+					onPlanChanged: emitPlanChanged,
+					onSpawn: (deliverable, handle) =>
+						ctx.ui.notify(`Spawned ${deliverable.id} as ${handle.id}.`, "info"),
+					onProgress: (deliverable, progress) =>
+						ctx.ui.setStatus(
+							"maestro.execution",
+							`${deliverable.id}: ${progress.text ?? "running"}`,
+						),
+				});
+				const spawned = fanout.tick();
+				ctx.ui.notify(`Fanout spawned ${spawned} worker(s).`, "info");
+				return;
+			}
+			ctx.ui.notify(
+				"subagents.v1 unavailable; falling back to sequential.",
+				"warning",
+			);
+		}
+		const sequentialTarget = nextSequentialDeliverable();
+		if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
+			return;
+		const result = startSequentialExecution(engine, {
+			onPlanChanged: emitPlanChanged,
+			sendSeed: (seed, deliverable) => {
+				// Byte-stable single entry per deliverable: never re-emit on
+				// resume/switch so the cache prefix stays intact.
+				if (hasExecutionSeed(ctx.sessionManager.getEntries(), deliverable.id))
+					return;
+				// Surface (once) when the dependency summaries carried into this
+				// seed outgrow the summary budget; never silently drop them.
+				if (!seedSummaryBudgetWarnFired) {
+					const depText = collectDependencySummaries(
+						activeEngine.get(),
+						deliverable.id,
+					)
+						.map((d) => d.summary)
+						.join("\n");
+					const depTokens = estimateTokens(depText);
+					const { summaryTokens } = readModesCompactionSettings(ctx.cwd);
+					if (depTokens > summaryTokens) {
+						seedSummaryBudgetWarnFired = true;
+						ctx.ui.notify(
+							`Maestro dependency carry-forward summaries for ${deliverable.id} (${depTokens} tokens) exceed compaction.summaryTokens (${summaryTokens}).`,
+							"warning",
+						);
+					}
+				}
+				pi.sendMessage(
+					{
+						customType: EXECUTION_SEED_ENTRY,
+						content: seed,
+						display: true,
+						details: { deliverableId: deliverable.id },
+					},
+					{ triggerTurn: false },
+				);
+			},
+		});
+		const message =
+			result.kind === "started"
+				? `Started ${result.deliverable.id}.`
+				: result.kind === "already-active"
+					? `${result.deliverable.id} is already active.`
+					: result.reason;
+		if (result.kind === "started") {
+			prepareSequentialBranch(result.deliverable.id, ctx);
+			setExecutionStage(
+				{ stage: "executing", deliverableId: result.deliverable.id },
+				ctx,
+			);
+		}
+		ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
+	}
+
 	pi.registerCommand("implement", {
 		description: "Start executing the active plan. Pass --fanout for workers.",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			if (!engine) openPlan(undefined, ctx);
-			if (!engine) return;
-			const activeEngine = engine;
-			setMode(args.includes("--ask") ? "ask" : "auto", ctx);
-			if (args.includes("--fanout")) {
-				const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-				if (subagents) {
-					fanout = new FanoutOrchestrator({
-						engine,
-						subagents,
-						cwd: ctx.cwd,
-						prepareDeliverable: (deliverable) => ({
-							cwd: prepareWorktree(deliverable.id, ctx),
-						}),
-						onPlanChanged: emitPlanChanged,
-						onSpawn: (deliverable, handle) =>
-							ctx.ui.notify(
-								`Spawned ${deliverable.id} as ${handle.id}.`,
-								"info",
-							),
-						onProgress: (deliverable, progress) =>
-							ctx.ui.setStatus(
-								"maestro.execution",
-								`${deliverable.id}: ${progress.text ?? "running"}`,
-							),
-					});
-					const spawned = fanout.tick();
-					ctx.ui.notify(`Fanout spawned ${spawned} worker(s).`, "info");
-					return;
-				}
-				ctx.ui.notify(
-					"subagents.v1 unavailable; falling back to sequential.",
-					"warning",
-				);
-			}
-			const sequentialTarget = nextSequentialDeliverable();
-			if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
-				return;
-			const result = startSequentialExecution(engine, {
-				onPlanChanged: emitPlanChanged,
-				sendSeed: (seed, deliverable) => {
-					// Byte-stable single entry per deliverable: never re-emit on
-					// resume/switch so the cache prefix stays intact.
-					if (hasExecutionSeed(ctx.sessionManager.getEntries(), deliverable.id))
-						return;
-					// Surface (once) when the dependency summaries carried into this
-					// seed outgrow the summary budget; never silently drop them.
-					if (!seedSummaryBudgetWarnFired) {
-						const depText = collectDependencySummaries(
-							activeEngine.get(),
-							deliverable.id,
-						)
-							.map((d) => d.summary)
-							.join("\n");
-						const depTokens = estimateTokens(depText);
-						const { summaryTokens } = readModesCompactionSettings(ctx.cwd);
-						if (depTokens > summaryTokens) {
-							seedSummaryBudgetWarnFired = true;
-							ctx.ui.notify(
-								`Maestro dependency carry-forward summaries for ${deliverable.id} (${depTokens} tokens) exceed compaction.summaryTokens (${summaryTokens}).`,
-								"warning",
-							);
-						}
-					}
-					pi.sendMessage(
-						{
-							customType: EXECUTION_SEED_ENTRY,
-							content: seed,
-							display: true,
-							details: { deliverableId: deliverable.id },
-						},
-						{ triggerTurn: false },
-					);
-				},
-			});
-			const message =
-				result.kind === "started"
-					? `Started ${result.deliverable.id}.`
-					: result.kind === "already-active"
-						? `${result.deliverable.id} is already active.`
-						: result.reason;
-			if (result.kind === "started") {
-				prepareSequentialBranch(result.deliverable.id, ctx);
-				setExecutionStage(
-					{ stage: "executing", deliverableId: result.deliverable.id },
-					ctx,
-				);
-			}
-			ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
-		},
+		handler: runImplement,
 	});
 
 	pi.registerCommand("ship", {

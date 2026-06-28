@@ -495,6 +495,64 @@ describe("plan tools", () => {
 		expect(deliverables(engine.get()).map((d) => d.id)).toEqual(["first"]);
 	});
 
+	it("registers repos and assigns deliverable repos", async () => {
+		const tool = createDeliverableTool(deps());
+		await exec(tool, {
+			action: "register-repo",
+			repo: "service",
+			repoPath: "/svc",
+			repoDefaultBranch: "dev",
+		});
+		expect(engine.get().repos).toEqual([
+			{ key: "service", path: "/svc", defaultBranch: "dev" },
+		]);
+
+		await exec(tool, {
+			action: "add",
+			title: "Svc work",
+			dependsOn: [],
+			repo: "service",
+		});
+		const find = () =>
+			deliverables(engine.get()).find((d) => d.id === "svc-work");
+		expect(find()?.repo).toBe("service");
+
+		const bad = await exec(tool, {
+			action: "update",
+			id: "svc-work",
+			repo: "ghost",
+		});
+		expect(bad.details.error).toContain("unknown repo `ghost`");
+		expect(find()?.repo).toBe("service");
+
+		await exec(tool, { action: "update", id: "svc-work", repo: "default" });
+		expect(find()?.repo).toBeUndefined();
+
+		await exec(tool, { action: "unregister-repo", repo: "service" });
+		expect(engine.get().repos).toEqual([]);
+	});
+
+	it("rejects unregistering a repo still in use", async () => {
+		const tool = createDeliverableTool(deps());
+		await exec(tool, {
+			action: "register-repo",
+			repo: "service",
+			repoPath: "/svc",
+		});
+		await exec(tool, {
+			action: "add",
+			title: "Svc",
+			dependsOn: [],
+			repo: "service",
+		});
+		const failed = await exec(tool, {
+			action: "unregister-repo",
+			repo: "service",
+		});
+		expect(failed.details.error).toContain("unknown repo `service`");
+		expect(engine.get().repos).toHaveLength(1);
+	});
+
 	it("surfaces validation errors without mutating the plan", async () => {
 		const dTool = createDeliverableTool(deps());
 		const tTool = createTaskTool(deps());

@@ -6,6 +6,7 @@
 
 import {
 	canTransition,
+	DEFAULT_REPO_KEY,
 	type Deliverable,
 	type DeliverableLifecycle,
 	type DeliverableStatus,
@@ -17,6 +18,7 @@ import {
 	isWorkItem,
 	type Plan,
 	type PlanNode,
+	type PlanRepo,
 	parentOf,
 	slugify,
 	validatePlanShape,
@@ -32,6 +34,8 @@ export interface AddDeliverableInput {
 	dependsOn?: string[];
 	lifecycle?: DeliverableLifecycle;
 	position?: number;
+	/** Registry key of the repo this deliverable targets. */
+	repo?: string;
 }
 
 export interface AddWorkItemInput {
@@ -91,6 +95,28 @@ export class PlanEngine {
 		});
 	}
 
+	// ---- Repo registry ----------------------------------------------------
+
+	/** Register an extra repo the plan can target. Duplicate keys are rejected. */
+	registerRepo(repo: PlanRepo): void {
+		if (repo.key === DEFAULT_REPO_KEY) {
+			throw new Error(`repo key \`${DEFAULT_REPO_KEY}\` is reserved`);
+		}
+		this.mutate((plan) => {
+			plan.repos = [...(plan.repos ?? []), repo];
+		});
+	}
+
+	/** Remove a registered repo. Rejected while a deliverable still targets it. */
+	unregisterRepo(key: string): void {
+		this.mutate((plan) => {
+			if (!(plan.repos ?? []).some((r) => r.key === key)) {
+				throw new Error(`unknown repo: ${key}`);
+			}
+			plan.repos = (plan.repos ?? []).filter((r) => r.key !== key);
+		});
+	}
+
 	// Clone → mutate → validate → persist. Throws (without saving) on an
 	// invalid shape, so disk only ever holds valid plans.
 	private mutate(fn: (plan: Plan) => void): void {
@@ -138,6 +164,7 @@ export class PlanEngine {
 			status: "planned",
 			children: [],
 			lifecycle: input.lifecycle,
+			repo: input.repo,
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -170,6 +197,7 @@ export class PlanEngine {
 				| "branch"
 				| "dependsOn"
 				| "lifecycle"
+				| "repo"
 				| "worktreePath"
 				| "sessionPath"
 				| "issueNumber"

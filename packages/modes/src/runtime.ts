@@ -50,8 +50,10 @@ import {
 import {
 	type Deliverable,
 	deliverables,
+	findDeliverable,
 	gatingTasks,
 	planRepoMismatch,
+	repoFor,
 	repoNameFromPath,
 	slugify,
 } from "./schema.js";
@@ -336,7 +338,10 @@ export function createModesRuntime(
 		ctx: ExtensionContext,
 	): string | undefined {
 		if (!engine) return undefined;
-		const defaultBranch = detectDefaultBranch(engine.get().repoPath) ?? "main";
+		const plan = engine.get();
+		const d = findDeliverable(plan, deliverableId);
+		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
+		const defaultBranch = detectDefaultBranch(repoPath) ?? "main";
 		const prepared = activateDeliverableWorktree(
 			engine,
 			deliverableId,
@@ -360,7 +365,10 @@ export function createModesRuntime(
 		ctx: ExtensionContext,
 	): void {
 		if (!engine) return;
-		const defaultBranch = detectDefaultBranch(engine.get().repoPath) ?? "main";
+		const plan = engine.get();
+		const d = findDeliverable(plan, deliverableId);
+		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
+		const defaultBranch = detectDefaultBranch(repoPath) ?? "main";
 		const prepared = activateDeliverableBranch(
 			engine,
 			deliverableId,

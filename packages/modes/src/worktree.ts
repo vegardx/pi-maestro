@@ -13,6 +13,7 @@ import {
 	findDeliverable,
 	type Plan,
 	pickBaseBranch,
+	repoFor,
 	WORKTREE_STATUSES,
 } from "./schema.js";
 
@@ -65,9 +66,9 @@ export type BranchActivationResult =
 
 export function deliverableWorktreePath(
 	plan: Plan,
-	d: Pick<Deliverable, "id">,
+	d: Pick<Deliverable, "id" | "repo">,
 ): string {
-	return worktreePathFor(plan.repoPath, d.id);
+	return worktreePathFor(repoFor(plan, d).path, d.id);
 }
 
 export function activateDeliverableWorktree(
@@ -82,8 +83,9 @@ export function activateDeliverableWorktree(
 		return { kind: "error", error: `unknown deliverable: ${deliverableId}` };
 	const branch = d.branch ?? defaultBranchForDeliverable(d);
 	const baseBranch = pickBaseBranch(plan, d.id, defaultBranch);
+	const repoPath = repoFor(plan, d).path;
 	const target = deliverableWorktreePath(plan, d);
-	const added = deps.addWorktree(plan.repoPath, target, branch, baseBranch);
+	const added = deps.addWorktree(repoPath, target, branch, baseBranch);
 	if (!added.ok) return { kind: "error", error: added.error };
 	engine.updateDeliverable(d.id, {
 		branch,
@@ -112,7 +114,11 @@ export function activateDeliverableBranch(
 		return { kind: "error", error: `unknown deliverable: ${deliverableId}` };
 	const branch = d.branch ?? defaultBranchForDeliverable(d);
 	const baseBranch = pickBaseBranch(plan, d.id, defaultBranch);
-	const res = deps.checkoutOrCreateBranch(plan.repoPath, branch, baseBranch);
+	const res = deps.checkoutOrCreateBranch(
+		repoFor(plan, d).path,
+		branch,
+		baseBranch,
+	);
 	if (!res.ok) return { kind: "error", error: res.error };
 	// Persist the branch only. worktreePath stays unset so shipDeliverableFromPlan
 	// falls back to plan.repoPath — the tree this session actually edits in.
@@ -135,7 +141,8 @@ export function cleanupInactiveWorktrees(
 	for (const d of deliverables(engine.get())) {
 		if (!d.worktreePath) continue;
 		if (WORKTREE_STATUSES.includes(d.status)) continue;
-		const result = deps.removeWorktree(engine.get().repoPath, d.worktreePath);
+		const repoPath = repoFor(engine.get(), d).path;
+		const result = deps.removeWorktree(repoPath, d.worktreePath);
 		if (result.ok) {
 			removed.push(d.worktreePath);
 			engine.updateDeliverable(d.id, { worktreePath: undefined });

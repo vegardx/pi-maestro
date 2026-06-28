@@ -16,6 +16,7 @@ import {
 	findDeliverable,
 	type Plan,
 	readyDeliverables,
+	repoFor,
 } from "./schema.js";
 
 export interface ShipGateSummary {
@@ -60,7 +61,7 @@ export async function shipDeliverableFromPlan(
 		deliverableId: d.id as DeliverableId,
 		paths: deps.paths,
 		openPr: true,
-		cwd: d.worktreePath ?? engine.get().repoPath,
+		cwd: d.worktreePath ?? repoFor(engine.get(), d).path,
 	});
 	// `Deliverable.summary` is the one-time distilled, forward-looking hand-off
 	// (see compaction.ts) — NOT a record of the PR. Write it once; never

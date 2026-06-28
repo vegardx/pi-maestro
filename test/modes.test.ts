@@ -1139,6 +1139,45 @@ describe("worktree and session lifecycle", () => {
 		);
 	});
 
+	it("routes worktree creation to the deliverable's registered repo", () => {
+		engine.registerRepo({ key: "service", path: "/repo/svc" });
+		const d = engine.addDeliverable({
+			title: "Svc work",
+			dependsOn: [],
+			repo: "service",
+		});
+		engine.setStatus(d.id, "active");
+		const calls: string[][] = [];
+		const result = activateDeliverableWorktree(engine, d.id, "main", {
+			addWorktree: (repo, target, branch, base) => {
+				calls.push([repo, target, branch, base]);
+				return { ok: true, path: target, created: true };
+			},
+			removeWorktree: () => ({ ok: true }),
+		});
+		expect(result.kind).toBe("ready");
+		expect(calls[0][0]).toBe("/repo/svc");
+		expect(calls[0][1]).toContain("/worktrees/svc/svc-work");
+	});
+
+	it("checks out the sequential branch in the deliverable's registered repo", () => {
+		engine.registerRepo({ key: "service", path: "/repo/svc" });
+		const d = engine.addDeliverable({
+			title: "Svc work",
+			dependsOn: [],
+			repo: "service",
+		});
+		engine.setStatus(d.id, "active");
+		const calls: string[][] = [];
+		activateDeliverableBranch(engine, d.id, "main", {
+			checkoutOrCreateBranch: (repo, branch, base) => {
+				calls.push([repo, branch, base]);
+				return { ok: true };
+			},
+		});
+		expect(calls[0][0]).toBe("/repo/svc");
+	});
+
 	it("checks out the deliverable branch in the repo path, no worktree", () => {
 		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
 		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
@@ -1280,6 +1319,28 @@ describe("shipping policy", () => {
 			},
 		});
 		expect(seen?.cwd).toBe("/wt/a");
+	});
+
+	it("ships to the deliverable's registered repo when no worktree is set", async () => {
+		engine.registerRepo({ key: "service", path: "/repo/svc" });
+		const a = engine.addDeliverable({
+			title: "A",
+			dependsOn: [],
+			repo: "service",
+		});
+		engine.addWorkItem(a.id, { title: "gate" });
+		transitionThrough(engine, a.id, "ready-to-ship");
+		let seen: { cwd?: string } | undefined;
+		await shipDeliverableFromPlan(engine, a.id, {
+			confirm: () => true,
+			commit: {
+				shipDeliverable: async (input) => {
+					seen = input;
+					return { branch: "feat/a", committed: true, pushed: true, pr: 1 };
+				},
+			},
+		});
+		expect(seen?.cwd).toBe("/repo/svc");
 	});
 
 	it("cancels shipping before commit", async () => {

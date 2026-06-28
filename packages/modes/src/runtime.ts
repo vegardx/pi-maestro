@@ -17,6 +17,8 @@ import type { MaestroContext } from "@vegardx/pi-core";
 import {
 	addWorktree,
 	checkoutOrCreateBranch,
+	detectDefaultBranch,
+	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
 import { ModesAskQueue } from "./ask-queue.js";
@@ -49,6 +51,7 @@ import {
 	type Deliverable,
 	deliverables,
 	gatingTasks,
+	planRepoMismatch,
 	repoNameFromPath,
 	slugify,
 } from "./schema.js";
@@ -333,10 +336,11 @@ export function createModesRuntime(
 		ctx: ExtensionContext,
 	): string | undefined {
 		if (!engine) return undefined;
+		const defaultBranch = detectDefaultBranch(engine.get().repoPath) ?? "main";
 		const prepared = activateDeliverableWorktree(
 			engine,
 			deliverableId,
-			"main",
+			defaultBranch,
 			worktreeDeps,
 		);
 		if (prepared.kind === "error") {
@@ -356,10 +360,11 @@ export function createModesRuntime(
 		ctx: ExtensionContext,
 	): void {
 		if (!engine) return;
+		const defaultBranch = detectDefaultBranch(engine.get().repoPath) ?? "main";
 		const prepared = activateDeliverableBranch(
 			engine,
 			deliverableId,
-			"main",
+			defaultBranch,
 			branchDeps,
 		);
 		if (prepared.kind === "error") {
@@ -369,6 +374,25 @@ export function createModesRuntime(
 		const sessionPath = ctx.sessionManager.getSessionFile();
 		if (sessionPath)
 			recordDeliverableSession(engine, deliverableId, sessionPath);
+	}
+
+	// Refuse to act when the session cwd doesn't resolve to the plan's repo —
+	// otherwise commit/sync/park would silently hit the wrong tree. Returns true
+	// when it's safe to proceed (and when there's no plan to guard).
+	function assertPlanRepo(ctx: ExtensionContext): boolean {
+		if (!engine) return true;
+		const repoPath = engine.get().repoPath;
+		const problem = planRepoMismatch(
+			gitToplevel(repoPath),
+			gitToplevel(ctx.cwd),
+			repoPath,
+			ctx.cwd,
+		);
+		if (problem) {
+			ctx.ui.notify(problem, "warning");
+			return false;
+		}
+		return true;
 	}
 
 	for (const tool of createPlanTools({
@@ -409,6 +433,7 @@ export function createModesRuntime(
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			if (!engine) openPlan(undefined, ctx);
 			if (!engine) return;
+			if (!assertPlanRepo(ctx)) return;
 			const activeEngine = engine;
 			setMode(args.includes("--ask") ? "ask" : "auto", ctx);
 			if (args.includes("--fanout")) {
@@ -503,6 +528,7 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			if (!assertPlanRepo(ctx)) return;
 			const activeEngine = engine;
 			const commit = maestro.capabilities.get(CAPABILITIES.commit);
 			if (!commit) {
@@ -555,6 +581,7 @@ export function createModesRuntime(
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
+			if (!assertPlanRepo(ctx)) return;
 			const repoPath = engine.get().repoPath;
 			const result = await syncPrState(engine, {
 				state: async (prNumber) => prStateViaGh(pi, repoPath, prNumber),

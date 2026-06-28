@@ -13,6 +13,12 @@ export function isGitRepo(cwd: string): boolean {
 	return runCommand("git", ["rev-parse", "--is-inside-work-tree"], { cwd }).ok;
 }
 
+/** Absolute root of the working tree containing cwd, or null when not a repo. */
+export function gitToplevel(cwd: string): string | null {
+	const r = runCommand("git", ["rev-parse", "--show-toplevel"], { cwd });
+	return r.ok ? r.stdout.trim() || null : null;
+}
+
 /** Current branch, or null on detached HEAD / bare repo. */
 export function currentBranch(cwd: string): string | null {
 	const r = runCommand("git", ["branch", "--show-current"], { cwd });

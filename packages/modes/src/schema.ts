@@ -407,7 +407,7 @@ export function chainHead(
 
 /** Pick the base branch a freshly-activated deliverable should fork from. */
 export function pickBaseBranch(
-	plan: Pick<Plan, "nodes">,
+	plan: Pick<Plan, "nodes" | "repoPath" | "repos">,
 	activatingId: string,
 	defaultBranch: string,
 ): string {
@@ -419,6 +419,11 @@ export function pickBaseBranch(
 	const parent = flat.find((d) => d.id === parentId);
 	if (!parent) return defaultBranch;
 	if (isGrouping(parent)) return defaultBranch;
+	// Branch stacking needs a shared git base. Cross-repo deps have none, so the
+	// edge is ordering-only: base off the child repo's default branch instead.
+	if (repoFor(plan, parent).path !== repoFor(plan, activating).path) {
+		return defaultBranch;
+	}
 	if (IN_FLIGHT_PARENT_STATUSES.includes(parent.status) && parent.branch) {
 		return parent.branch;
 	}
@@ -432,7 +437,7 @@ export type ImplementBranchPlan =
 
 /** Decide what `/implement` should do to set up the deliverable's branch. */
 export function planImplementBranch(
-	plan: Pick<Plan, "nodes">,
+	plan: Pick<Plan, "nodes" | "repoPath" | "repos">,
 	d: Pick<Deliverable, "id" | "branch" | "status">,
 	defaultBranch: string,
 	branchExists: boolean,

@@ -200,6 +200,28 @@ describe("dependency / activation logic", () => {
 		expect(pickBaseBranch(p, "b", "main")).toBe("main");
 	});
 
+	it("does not stack across repos — cross-repo deps are ordering-only", () => {
+		const p: Plan = {
+			...plan([
+				deliverable({
+					id: "a",
+					status: "in-review",
+					branch: "feat/a",
+					children: [task("t")],
+				}),
+				deliverable({
+					id: "b",
+					dependsOn: ["a"],
+					repo: "service",
+					children: [task("t2")],
+				}),
+			]),
+			repos: [{ key: "service", path: "/svc" }],
+		};
+		// b targets a different repo than a, so it bases off its own default.
+		expect(pickBaseBranch(p, "b", "dev")).toBe("dev");
+	});
+
 	it("chainHead walks to the next unshipped successor", () => {
 		const p = plan([
 			deliverable({ id: "a", status: "shipped", children: [task("t")] }),

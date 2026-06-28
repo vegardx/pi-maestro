@@ -36,6 +36,7 @@ import {
 	chainHead,
 	type Deliverable,
 	deliverables,
+	derivePlanName,
 	findNode,
 	gatingTasks,
 	isDeliverableReady,
@@ -309,6 +310,45 @@ describe("PlanStore", () => {
 			/invalid plan slug/,
 		);
 		expect(store.load("../../etc/passwd")).toBeNull();
+	});
+
+	it("derivePlanName builds a short slug + title from a seed, falls back", () => {
+		expect(
+			derivePlanName("Add multi-repo support to the planner", "repo"),
+		).toEqual({
+			slug: "add-multi-repo-support-to-the-planner",
+			title: "Add multi-repo support to the planner",
+		});
+		// First line only; long sentences don't become the identifier.
+		expect(derivePlanName("line one\nline two", "repo").slug).toBe("line-one");
+		expect(derivePlanName("", "my-repo")).toEqual({
+			slug: "my-repo",
+			title: "my-repo",
+		});
+		expect(derivePlanName("!!! ???", "fallback").slug).toBe("fallback");
+	});
+
+	it("keeps draft plans off disk until materialized", () => {
+		const draft = PlanEngine.createDraft(store, {
+			slug: "draft",
+			title: "Untitled",
+			repoPath: "/repo",
+		});
+		expect(draft.isDraft()).toBe(true);
+		// A mutation while draft updates memory but writes nothing.
+		draft.addDeliverable({ title: "A", dependsOn: [] });
+		expect(store.exists("draft")).toBe(false);
+		expect(store.list()).toHaveLength(0);
+		expect(deliverables(draft.get())).toHaveLength(1);
+		// Materialize assigns identity and persists once, with prior content.
+		draft.materialize("named-plan", "Named plan");
+		expect(draft.isDraft()).toBe(false);
+		expect(store.exists("named-plan")).toBe(true);
+		expect(store.load("named-plan")?.title).toBe("Named plan");
+		expect(store.load("named-plan")?.nodes).toHaveLength(1);
+		// Post-materialize mutations persist normally.
+		draft.addDeliverable({ title: "B", dependsOn: [] });
+		expect(store.load("named-plan")?.nodes).toHaveLength(2);
 	});
 });
 
@@ -927,15 +967,25 @@ describe("modes runtime", () => {
 
 	it("opens a plan through /plan and hydrates session state", async () => {
 		const host = fakeHost();
+		host.caps.set(CAPABILITIES.ask, {
+			ask: async () => [],
+			queue: () => {},
+		});
 		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
 			store,
 			now,
 		});
 		await host.commands.get("plan").handler("My Plan", host.ctx);
 		expect(runtime.currentMode()).toBe("plan");
+		// A named /plan still starts as a draft and isn't persisted until content.
+		expect(runtime.currentEngine()?.isDraft()).toBe(true);
+		expect(store.exists("my-plan")).toBe(false);
+		expect(host.messages[0].message.content).toContain("# My Plan");
+		// Add content and end the turn -> persists under the explicit name.
+		runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
+		await host.handlers.get("turn_end")?.[0]({}, host.ctx);
 		expect(runtime.currentEngine()?.get().slug).toBe("my-plan");
 		expect(store.exists("my-plan")).toBe(true);
-		expect(host.messages[0].message.content).toContain("# My Plan");
 		expect(host.emitted.map((e) => e.name)).toContain(EVENTS.planUpdated);
 
 		const host2 = fakeHost();
@@ -1017,6 +1067,74 @@ describe("modes runtime", () => {
 		} finally {
 			rmSync(gitDir, { recursive: true, force: true });
 		}
+	});
+
+	it("/plan opens a draft and names+persists it from the first message", async () => {
+		const host = fakeHost();
+		host.caps.set(CAPABILITIES.ask, {
+			ask: async () => [],
+			queue: () => {},
+		});
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		await host.commands.get("plan").handler("", host.ctx);
+		expect(runtime.currentEngine()?.isDraft()).toBe(true);
+		expect(store.list()).toHaveLength(0);
+		// User describes the plan, then a deliverable is added (still draft).
+		host.entries.push({
+			type: "message",
+			message: { role: "user", content: "Build a CSV exporter" },
+		});
+		runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
+		expect(store.list()).toHaveLength(0);
+		// Turn ends while planning -> materialize under the derived slug.
+		await host.handlers.get("turn_end")?.[0]({}, host.ctx);
+		expect(runtime.currentEngine()?.isDraft()).toBe(false);
+		expect(runtime.currentEngine()?.get().slug).toBe("build-a-csv-exporter");
+		expect(store.exists("build-a-csv-exporter")).toBe(true);
+	});
+
+	it("/plan leaves no file behind when nothing is added", async () => {
+		const host = fakeHost();
+		host.caps.set(CAPABILITIES.ask, {
+			ask: async () => [],
+			queue: () => {},
+		});
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		await host.commands.get("plan").handler("", host.ctx);
+		host.entries.push({
+			type: "message",
+			message: { role: "user", content: "just exploring" },
+		});
+		await host.handlers.get("turn_end")?.[0]({}, host.ctx);
+		expect(runtime.currentEngine()?.isDraft()).toBe(true);
+		expect(store.list()).toHaveLength(0);
+	});
+
+	it("/plan with no args keeps the already-active plan", async () => {
+		const host = fakeHost();
+		host.caps.set(CAPABILITIES.ask, {
+			ask: async () => [],
+			queue: () => {},
+		});
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		// Open and materialize a plan.
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
+		await host.handlers.get("turn_end")?.[0]({}, host.ctx);
+		expect(runtime.currentEngine()?.get().slug).toBe("my-plan");
+		// Re-run /plan with no args -> same engine, not a new draft.
+		await host.commands.get("plan").handler("", host.ctx);
+		expect(runtime.currentEngine()?.get().slug).toBe("my-plan");
+		expect(runtime.currentEngine()?.isDraft()).toBe(false);
 	});
 });
 

@@ -14,6 +14,7 @@ export {
 export {
 	currentBranch,
 	detectDefaultBranch,
+	gitToplevel,
 	hasChanges,
 	headSha,
 	isAncestor,

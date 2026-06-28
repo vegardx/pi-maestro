@@ -43,6 +43,7 @@ import {
 	type PlanNode,
 	pickBaseBranch,
 	planImplementBranch,
+	planRepoMismatch,
 	readyDeliverables,
 	shipsPR,
 	slugify,
@@ -216,6 +217,21 @@ describe("dependency / activation logic", () => {
 		expect(
 			planImplementBranch(p, p.nodes[0] as Deliverable, "main", true).kind,
 		).toBe("resume");
+	});
+
+	it("planRepoMismatch passes when toplevels match, flags otherwise", () => {
+		expect(planRepoMismatch("/repo", "/repo", "/repo/sub", "/repo/sub")).toBe(
+			null,
+		);
+		expect(planRepoMismatch("/repo", "/other", "/repo", "/other")).toMatch(
+			/not the plan's repo/,
+		);
+		expect(planRepoMismatch("/repo", null, "/repo", "/elsewhere")).toMatch(
+			/not inside a git repo/,
+		);
+		expect(planRepoMismatch(null, "/repo", "/gone", "/repo")).toMatch(
+			/not a git repo/,
+		);
 	});
 });
 

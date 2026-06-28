@@ -431,6 +431,34 @@ export function repoNameFromPath(path: string): string {
 	return name === "" ? "repo" : name;
 }
 
+/**
+ * Guard against acting on the wrong repo. A pi session has one cwd modes can't
+ * move; if it doesn't resolve to the plan's repo, commit/sync/park would
+ * silently hit the wrong tree. Compares git toplevels (not raw paths) so a
+ * subdir or symlinked checkout still matches. Returns a warning message on
+ * mismatch, or null when the session is in the plan's repo.
+ */
+export function planRepoMismatch(
+	planTop: string | null,
+	sessionTop: string | null,
+	planRepoPath: string,
+	sessionCwd: string,
+): string | null {
+	if (sessionTop === null) {
+		return `session cwd is not inside a git repo: ${sessionCwd}`;
+	}
+	if (planTop === null) {
+		return `plan repo is not a git repo: ${planRepoPath}`;
+	}
+	if (resolve(sessionTop) !== resolve(planTop)) {
+		return (
+			`session repo (${sessionTop}) is not the plan's repo (${planTop}); ` +
+			"refusing to act on the wrong repo — re-run from the plan's checkout"
+		);
+	}
+	return null;
+}
+
 // ---- Write-time validation ----------------------------------------------
 
 /** Structural invariants enforced before saving. Empty array = valid. */

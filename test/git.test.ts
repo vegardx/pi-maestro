@@ -16,6 +16,7 @@ import {
 	createBranch,
 	currentBranch,
 	findCheckoutOf,
+	gitToplevel,
 	hasChanges,
 	headSha,
 	isGitRepo,
@@ -137,6 +138,13 @@ describe("repo + branch ops", () => {
 		expect(currentBranch(repo)).toBe("main");
 		expect(checkoutOrCreateBranch(repo, "feat/exists", "main").ok).toBe(true);
 		expect(currentBranch(repo)).toBe("feat/exists");
+	});
+
+	it("gitToplevel returns the repo root from a subdirectory", () => {
+		const sub = join(repo, "packages", "x");
+		mkdirSync(sub, { recursive: true });
+		expect(gitToplevel(sub)).toBe(realpathSync(repo));
+		expect(gitToplevel(dir)).toBeNull();
 	});
 });
 

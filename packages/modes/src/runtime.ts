@@ -263,6 +263,11 @@ export function createModesRuntime(
 	}
 
 	function setMode(mode: ModeName, ctx?: ExtensionContext): void {
+		// Entering plan mode without an active plan auto-opens a draft so the
+		// planning tools work immediately — no need for an explicit /plan first.
+		if (mode === "plan" && !engine && ctx) {
+			openPlan(undefined, ctx);
+		}
 		const changed = transitionMode(state, mode, now);
 		state = changed.state;
 		persist();

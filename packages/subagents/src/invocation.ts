@@ -66,6 +66,9 @@ export function mapProfileToInvocation(
 
 	const env: Record<string, string> = { [DEPTH_ENV]: String(depth) };
 	for (const ext of resolved.disableExtensions) env[envVarFor(ext)] = "off";
+	if (resolved.sessionDir) {
+		env.PI_CODING_AGENT_SESSION_DIR = resolved.sessionDir;
+	}
 	// Always set both kill-switch vars explicitly so a parent's PI_DISABLE /
 	// PI_ENABLE cannot leak through — an empty value means "no opinion".
 	env.PI_DISABLE = (resolved.featureFlags?.disable ?? []).join(",");

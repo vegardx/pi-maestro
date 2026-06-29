@@ -145,6 +145,9 @@ async function execute(
 }
 
 function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
+	// Forward all events for live-view subscribers.
+	bus.publish({ type: "agentEvent", runId, event });
+	// Keep the progress shortcut for the widget.
 	if (event.type === "tool_execution_start") {
 		bus.publish({
 			type: "progress",

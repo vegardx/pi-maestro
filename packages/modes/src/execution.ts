@@ -87,7 +87,7 @@ export interface FanoutDeps {
 	readonly cwd?: string;
 	readonly prepareDeliverable?: (
 		deliverable: Deliverable,
-	) => { cwd?: string } | undefined;
+	) => { cwd?: string; sessionDir?: string } | undefined;
 	readonly onPlanChanged?: () => void;
 	readonly onSpawn?: (deliverable: Deliverable, handle: RunHandle) => void;
 	readonly onProgress?: (
@@ -104,6 +104,7 @@ export interface FanoutSnapshot {
 export class FanoutOrchestrator {
 	private active = new Map<RunId, string>();
 	private spawnedDeliverables = new Set<string>();
+	private sessionDirs = new Map<string, string>(); // deliverableId → sessionDir
 
 	constructor(private readonly deps: FanoutDeps) {}
 
@@ -122,6 +123,11 @@ export class FanoutOrchestrator {
 		return undefined;
 	}
 
+	/** Get the session directory for a spawned worker. */
+	sessionDirForDeliverable(deliverableId: string): string | undefined {
+		return this.sessionDirs.get(deliverableId);
+	}
+
 	tick(): number {
 		const plan = this.deps.engine.get();
 		if (pendingLifecycle(plan, "pre")) return 0;
@@ -132,14 +138,17 @@ export class FanoutOrchestrator {
 			const current =
 				deliverables(this.deps.engine.get()).find((x) => x.id === d.id) ?? d;
 			const prepared = this.deps.prepareDeliverable?.(current);
+			const sessionDir = prepared?.sessionDir;
 			const handle = this.deps.subagents.spawn(
 				renderPlanSeed(this.deps.engine.get(), d.id),
 				{
 					profile: "deliverable-worker",
 					cwd: prepared?.cwd ?? this.deps.cwd ?? plan.repoPath,
+					sessionDir,
 				},
 			);
 			this.spawnedDeliverables.add(d.id);
+			if (sessionDir) this.sessionDirs.set(d.id, sessionDir);
 			this.active.set(handle.id, d.id);
 			this.deps.onSpawn?.(current, handle);
 			handle.result().then((result) => this.settle(handle.id, result));

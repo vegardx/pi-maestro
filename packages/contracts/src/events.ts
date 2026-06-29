@@ -14,6 +14,7 @@ export const EVENTS = {
 	modeChanged: "maestro.mode.changed",
 	runStatus: "maestro.run.status",
 	runProgress: "maestro.run.progress",
+	runAgentEvent: "maestro.run.agentEvent",
 	supervisorNeedDecision: "maestro.supervisor.needDecision",
 	planUpdated: "maestro.plan.updated",
 	shipCompleted: "maestro.ship.completed",
@@ -30,6 +31,10 @@ export interface EventPayloads {
 	[EVENTS.runProgress]: {
 		readonly runId: RunId;
 		readonly progress: RunProgress;
+	};
+	[EVENTS.runAgentEvent]: {
+		readonly runId: RunId;
+		readonly event: unknown;
 	};
 	[EVENTS.supervisorNeedDecision]: {
 		readonly runId: RunId;

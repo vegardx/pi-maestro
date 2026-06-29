@@ -63,6 +63,7 @@ export interface ResolvedProfile {
 	readonly thinking?: ThinkingLevel;
 	readonly appendSystemPrompt?: string;
 	readonly session: boolean;
+	readonly sessionDir?: string;
 	readonly disableExtensions: readonly string[];
 	readonly featureFlags?: FeatureFlagOverrides;
 }
@@ -81,6 +82,7 @@ export function resolveProfile(profile: SpawnProfile): ResolvedProfile {
 		thinking: profile.thinking ?? defaults.thinking,
 		appendSystemPrompt: profile.appendSystemPrompt,
 		session: profile.session ?? defaults.session,
+		sessionDir: profile.sessionDir,
 		disableExtensions: defaults.disableExtensions,
 		featureFlags: mergeFlags(defaults.featureFlags, profile.featureFlags),
 	};

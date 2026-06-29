@@ -49,6 +49,8 @@ export interface SpawnProfile {
 	readonly appendSystemPrompt?: string;
 	/** `false` => spawn with --no-session. */
 	readonly session?: boolean;
+	/** Override the child's session storage directory. */
+	readonly sessionDir?: string;
 	/** Deliberate feature-flag overrides propagated to the child. */
 	readonly featureFlags?: FeatureFlagOverrides;
 	/** Opaque metadata for the orchestrator. */
@@ -119,6 +121,11 @@ export type RunBusMessage =
 			readonly type: "needDecision";
 			readonly runId: RunId;
 			readonly request: SupervisorDecisionRequest;
+	  }
+	| {
+			readonly type: "agentEvent";
+			readonly runId: RunId;
+			readonly event: unknown;
 	  };
 
 export type RunBusMessageType = RunBusMessage["type"];

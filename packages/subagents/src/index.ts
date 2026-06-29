@@ -234,6 +234,11 @@ export default defineExtension(
 					runId: message.runId,
 					request: message.request,
 				});
+			} else if (message.type === "agentEvent") {
+				maestro.events.emit(EVENTS.runAgentEvent, {
+					runId: message.runId,
+					event: message.event,
+				});
 			}
 		});
 

@@ -39,7 +39,7 @@ export function detectDefaultBranch(cwd: string): string | null {
 		const match = head.stdout.trim().match(/refs\/remotes\/origin\/(.+)$/);
 		if (match?.[1]) return match[1];
 	}
-	for (const candidate of ["main", "master"]) {
+	for (const candidate of ["main", "master", "dev", "develop"]) {
 		const exists = runCommand(
 			"git",
 			["show-ref", "--verify", "--quiet", `refs/remotes/origin/${candidate}`],

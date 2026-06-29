@@ -9,6 +9,7 @@ import {
 	effectiveWorkItemKind,
 	isDeliverable,
 	type Plan,
+	repoFor,
 	topLevelLeaves,
 	type WorkItem,
 } from "./schema.js";
@@ -22,6 +23,65 @@ export interface PlanMarkdownOptions {
 	 * dependency-scoped carry-forward section carries summaries.
 	 */
 	readonly omitSummaries?: boolean;
+}
+
+/**
+ * Concise plan overview for display after creation or on `/plan`. Shows
+ * repos, numbered deliverables with status + deps, and task checklists.
+ */
+export function renderPlanSummary(plan: Plan): string {
+	const lines: string[] = [];
+	lines.push(`Plan: ${plan.slug}`);
+
+	// Repos line
+	const repoEntries: string[] = [`${repoBasename(plan.repoPath)} (default)`];
+	for (const r of plan.repos ?? []) {
+		const branch = r.defaultBranch ? `, ${r.defaultBranch}` : "";
+		repoEntries.push(`${r.key} (${repoBasename(r.path)}${branch})`);
+	}
+	if (repoEntries.length > 1) {
+		lines.push(`Repos: ${repoEntries.join(", ")}`);
+	}
+	lines.push("");
+
+	const flat = deliverables(plan).filter((d) => !d.lifecycle);
+	const idToNum = new Map<string, number>();
+	for (let i = 0; i < flat.length; i++) idToNum.set(flat[i].id, i + 1);
+
+	for (let i = 0; i < flat.length; i++) {
+		const d = flat[i];
+		const num = i + 1;
+		let suffix = "";
+		const deps = (d.dependsOn ?? [])
+			.map((dep) => idToNum.get(dep))
+			.filter(Boolean);
+		if (deps.length > 0) {
+			suffix = ` \u2192 depends on #${deps.join(", #")}`;
+		}
+		const repo = repoFor(plan, d);
+		const repoTag = repo.key !== "default" ? ` [${repo.key}]` : "";
+		lines.push(`${num}. ${d.title ?? d.id} [${d.status}]${repoTag}${suffix}`);
+
+		const items = (d.children ?? []).filter(
+			(c): c is WorkItem => c.type === "work-item",
+		);
+		for (const item of items) {
+			const check = item.done ? "\u2611" : "\u2610";
+			const kind = effectiveWorkItemKind(item) === "manual" ? " (manual)" : "";
+			lines.push(`   ${check} ${item.title}${kind}`);
+		}
+		if (i < flat.length - 1) lines.push("");
+	}
+
+	if (flat.length === 0) {
+		lines.push("No deliverables yet.");
+	}
+
+	return lines.join("\n");
+}
+
+function repoBasename(path: string): string {
+	return path.split("/").filter(Boolean).pop() ?? path;
 }
 
 export function renderPlanMarkdown(

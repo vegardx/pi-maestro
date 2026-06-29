@@ -20,7 +20,11 @@ import {
 	PLAN_CONTAINER,
 	type PlanEngine,
 } from "./engine.js";
-import { renderPlanMarkdown, renderPlanSeed } from "./markdown.js";
+import {
+	renderPlanMarkdown,
+	renderPlanSeed,
+	renderPlanSummary,
+} from "./markdown.js";
 import {
 	type Deliverable,
 	deliverables,
@@ -348,7 +352,10 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 				if (params.view === "seed") {
 					return ok(renderPlanSeed(plan, params.activeDeliverableId), { plan });
 				}
-				return ok(renderPlanMarkdown(plan), { plan });
+				if (params.view === "markdown") {
+					return ok(renderPlanMarkdown(plan), { plan });
+				}
+				return ok(renderPlanSummary(plan), { plan });
 			});
 		},
 	}) as ToolDefinition;

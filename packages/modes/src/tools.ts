@@ -40,6 +40,8 @@ export interface PlanToolDeps {
 	readonly engine: () => PlanEngine | undefined;
 	/** Notification hook used later by widgets/events. */
 	readonly onPlanChanged?: (plan: Plan) => void;
+	/** Current mode; used to restrict plan views in plan mode. */
+	readonly mode?: () => string;
 }
 
 interface ToolDetails {
@@ -176,7 +178,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 						};
 						const deliverable = engine.addDeliverable(input);
 						notify(deps, engine);
-						return ok(`Added deliverable ${deliverable.id}.`, {
+						return ok(`✓ ${deliverable.id}`, {
 							deliverable,
 							plan: engine.get(),
 						});
@@ -280,7 +282,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						};
 						const workItem = engine.addWorkItem(container, input);
 						notify(deps, engine);
-						return ok(`Added work item ${workItem.id}.`, {
+						return ok(`✓ ${workItem.id}`, {
 							workItem,
 							plan: engine.get(),
 						});
@@ -345,6 +347,9 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 			return withEngine(deps, (engine) => {
 				const plan = engine.get();
 				if (params.view === "json") {
+					if (deps.mode?.() === "plan") {
+						return ok(renderPlanSummary(plan), { plan });
+					}
 					return ok(`\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``, {
 						plan,
 					});
@@ -353,6 +358,9 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 					return ok(renderPlanSeed(plan, params.activeDeliverableId), { plan });
 				}
 				if (params.view === "markdown") {
+					if (deps.mode?.() === "plan") {
+						return ok(renderPlanSummary(plan), { plan });
+					}
 					return ok(renderPlanMarkdown(plan), { plan });
 				}
 				return ok(renderPlanSummary(plan), { plan });

@@ -114,6 +114,14 @@ export class FanoutOrchestrator {
 		};
 	}
 
+	/** Get the run ID for a deliverable that has an active worker, if any. */
+	runForDeliverable(deliverableId: string): RunId | undefined {
+		for (const [runId, dId] of this.active) {
+			if (dId === deliverableId) return runId;
+		}
+		return undefined;
+	}
+
 	tick(): number {
 		const plan = this.deps.engine.get();
 		if (pendingLifecycle(plan, "pre")) return 0;

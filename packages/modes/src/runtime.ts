@@ -399,6 +399,8 @@ export function createModesRuntime(
 		maestro.events.emit(EVENTS.planUpdated, {
 			planId: engine.get().slug as PlanId,
 		});
+		// Re-tick: if a new deliverable was added (or deps changed), spawn it.
+		fanout?.tick();
 	}
 
 	function prepareWorktree(
@@ -505,6 +507,13 @@ export function createModesRuntime(
 		engine: () => engine,
 		onPlanChanged: emitPlanChanged,
 		mode: () => state.mode,
+		steerWorker: (deliverableId, guidance) => {
+			if (!fanout) return;
+			const runId = fanout.runForDeliverable(deliverableId);
+			if (!runId) return;
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			subagents?.steer(runId, guidance);
+		},
 	})) {
 		pi.registerTool(tool);
 	}
@@ -771,6 +780,38 @@ export function createModesRuntime(
 		},
 	});
 
+	pi.registerCommand("workers", {
+		description: "List active and completed workers.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (!fanout) {
+				ctx.ui.notify("No workers active.", "info");
+				return;
+			}
+			const snap = fanout.snapshot();
+			if (snap.active.size === 0 && snap.spawnedDeliverables.size === 0) {
+				ctx.ui.notify("No workers active.", "info");
+				return;
+			}
+			const lines: string[] = [];
+			if (snap.active.size > 0) {
+				lines.push("Active:");
+				for (const [runId, dId] of snap.active) {
+					lines.push(`  \u2022 worker:${dId} (${runId})`);
+				}
+			}
+			const completed = [...snap.spawnedDeliverables].filter(
+				(id) => ![...snap.active.values()].includes(id),
+			);
+			if (completed.length > 0) {
+				lines.push("Completed:");
+				for (const id of completed) {
+					lines.push(`  \u2713 worker:${id}`);
+				}
+			}
+			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
 	pi.registerCommand("modes-status", {
 		description: "Show Maestro mode and active plan status.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
@@ -790,9 +831,14 @@ export function createModesRuntime(
 	});
 
 	pi.on("before_agent_start", (event) => {
-		if (state.mode !== "plan") return;
-		const preamble = buildPlanModePreamble(engine);
-		return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+		if (state.mode === "plan") {
+			const preamble = buildPlanModePreamble(engine);
+			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+		}
+		if (fanout) {
+			const preamble = buildOrchestratorPreamble(engine);
+			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+		}
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -1297,4 +1343,25 @@ function computeMaxParallelism(
 		}
 	}
 	return maxWave;
+}
+
+function buildOrchestratorPreamble(engine: PlanEngine | undefined): string {
+	if (!engine) return "";
+	const plan = engine.get();
+	const active = deliverables(plan).filter((d) => d.status === "active");
+	const workerList = active.map((d) => `  - worker:${d.id}`).join("\n");
+
+	return `You are in ORCHESTRATOR MODE. Workers are implementing deliverables.
+
+Active workers:
+${workerList || "  (none currently running)"}
+
+You are free to:
+- Answer questions from the user.
+- Add new deliverables or tasks (they will be picked up automatically).
+- If you add/update a task on an active deliverable, it will be relayed to the worker.
+- Answer decisions surfaced by workers (these appear as prompts).
+
+Do NOT implement code yourself. Workers handle implementation.
+Do NOT call read/edit/bash to implement — only to answer user questions about the project.`;
 }

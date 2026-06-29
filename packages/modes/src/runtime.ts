@@ -41,7 +41,11 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
-import { renderPlanMarkdown, renderPlanSeed } from "./markdown.js";
+import {
+	renderPlanMarkdown,
+	renderPlanSeed,
+	renderPlanSummary,
+} from "./markdown.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -507,7 +511,7 @@ export function createModesRuntime(
 			pi.sendMessage(
 				{
 					customType: "maestro.plan.document",
-					content: renderPlanMarkdown(opened.get()),
+					content: renderPlanSummary(opened.get()),
 					display: true,
 				},
 				{ triggerTurn: false },

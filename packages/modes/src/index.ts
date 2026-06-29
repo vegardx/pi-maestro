@@ -53,7 +53,11 @@ export {
 	startSequentialExecution,
 	transitionThrough,
 } from "./execution.js";
-export { renderPlanMarkdown, renderPlanSeed } from "./markdown.js";
+export {
+	renderPlanMarkdown,
+	renderPlanSeed,
+	renderPlanSummary,
+} from "./markdown.js";
 export {
 	classifyBash,
 	computeActiveTools,

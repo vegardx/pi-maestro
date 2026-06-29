@@ -48,11 +48,15 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
+import { HerdrFanout } from "./execution-herdr.js";
+import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
+	handleAgentsCommand as handleAgentsCommandHerdr,
+	handleSteerCommand as handleSteerCommandHerdr,
+	handleViewCommand as handleViewCommandHerdr,
+	isHerdrAvailable,
+	updateHerdrAgentPanel,
+} from "./orchestrator-herdr.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -158,7 +162,9 @@ export function createModesRuntime(
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
 	let fanout: FanoutOrchestrator | undefined;
+	let herdrFanout: HerdrFanout | undefined;
 	let orchestratorCtx: ExtensionContext | undefined;
+	let orchestratorWorkspaceId: string | undefined;
 	const agentNames = new Map<string, string>(); // deliverableId → name
 	const agentStartTimes = new Map<string, number>(); // deliverableId → Date.now()
 	const agentFinishTimes = new Map<string, number>(); // deliverableId → Date.now()
@@ -417,12 +423,22 @@ export function createModesRuntime(
 			planId: engine.get().slug as PlanId,
 		});
 		// Re-tick: if a new deliverable was added (or deps changed), spawn it.
+		herdrFanout?.tick();
 		fanout?.tick();
 		// Refresh the widget (covers worker completion via settle→onPlanChanged).
 		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	}
 
 	function updateAgentPanel(ctx: ExtensionContext): void {
+		if (herdrFanout && engine) {
+			updateHerdrAgentPanel(ctx, {
+				herdrFanout,
+				engine,
+				agentStartTimes,
+				panelCollapsed,
+			});
+			return;
+		}
 		if (!engine || !fanout) {
 			ctx.ui.setWidget?.("maestro.agents", undefined);
 			return;
@@ -628,7 +644,52 @@ export function createModesRuntime(
 				: "auto";
 		setMode(mode as ModeName, ctx);
 
-		// Orchestrator path: always delegate to workers when subagents available.
+		// Orchestrator path: prefer herdr, fall back to subagents, then sequential.
+		if (isHerdrAvailable()) {
+			if (!herdrFanout) {
+				orchestratorCtx = ctx;
+				orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
+				herdrFanout = new HerdrFanout({
+					engine,
+					defaultBranch: detectDefaultBranch(engine.get().repoPath) ?? "main",
+					onPlanChanged: emitPlanChanged,
+					onAgentStateChanged: (deliverableId, state) => {
+						if (
+							state.status === "working" &&
+							!agentStartTimes.has(deliverableId)
+						) {
+							agentStartTimes.set(deliverableId, Date.now());
+						}
+						if (orchestratorCtx && herdrFanout && engine) {
+							updateHerdrAgentPanel(orchestratorCtx, {
+								herdrFanout,
+								engine,
+								agentStartTimes,
+								panelCollapsed,
+							});
+						}
+					},
+				});
+			}
+			const spawned = await herdrFanout.tick();
+			if (spawned > 0) {
+				const plan = activeEngine.get();
+				const summary = executionSummary(plan);
+				ctx.ui.notify(
+					`Spawned ${spawned} agent(s) via herdr. ${summary ?? ""}`,
+					"info",
+				);
+				setExecutionStage(
+					{ stage: "executing", deliverableId: "orchestrator" },
+					ctx,
+				);
+			} else {
+				ctx.ui.notify("No deliverables ready to start.", "warning");
+			}
+			return;
+		}
+
+		// Legacy: subagents-based fanout.
 		const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
 		if (subagents) {
 			if (!fanout) {
@@ -853,6 +914,10 @@ export function createModesRuntime(
 	pi.registerCommand("agents", {
 		description: "List active and completed agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (herdrFanout && engine) {
+				handleAgentsCommandHerdr(ctx, herdrFanout, engine);
+				return;
+			}
 			if (!fanout || !engine) {
 				ctx.ui.notify("No agents active.", "info");
 				return;
@@ -880,6 +945,13 @@ export function createModesRuntime(
 		description:
 			"View an agent's session. /view <name> to switch, /view to return.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (herdrFanout) {
+				await handleViewCommandHerdr(args, ctx, {
+					herdrFanout,
+					orchestratorWorkspaceId,
+				});
+				return;
+			}
 			const target = args.trim();
 			if (!target) {
 				if (orchestratorSessionPath) {
@@ -929,6 +1001,10 @@ export function createModesRuntime(
 	pi.registerCommand("steer", {
 		description: "Steer an agent. /steer <name> <guidance>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (herdrFanout) {
+				await handleSteerCommandHerdr(args, ctx, herdrFanout);
+				return;
+			}
 			const [name, ...rest] = args.trim().split(/\s+/);
 			const guidance = rest.join(" ");
 			if (!name || !guidance) {

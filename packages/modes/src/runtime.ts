@@ -601,7 +601,7 @@ export function createModesRuntime(
 					{
 						customType: EXECUTION_SEED_ENTRY,
 						content: seed,
-						display: true,
+						display: false,
 						details: { deliverableId: deliverable.id },
 					},
 					{ triggerTurn: true },
@@ -634,7 +634,7 @@ export function createModesRuntime(
 					{
 						customType: EXECUTION_SEED_ENTRY,
 						content: seed,
-						display: true,
+						display: false,
 						details: { deliverableId: result.deliverable.id },
 					},
 					{ triggerTurn: true },

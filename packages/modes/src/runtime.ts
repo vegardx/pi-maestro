@@ -48,7 +48,6 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
-import { LiveViewComponent } from "./live-view.js";
 import {
 	renderPlanMarkdown,
 	renderPlanSeed,
@@ -164,6 +163,7 @@ export function createModesRuntime(
 	const agentStartTimes = new Map<string, number>(); // deliverableId → Date.now()
 	const agentFinishTimes = new Map<string, number>(); // deliverableId → Date.now()
 	let panelCollapsed = false;
+	let orchestratorSessionPath: string | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -438,6 +438,7 @@ export function createModesRuntime(
 			states.push(
 				agentStateFromDeliverable(
 					name,
+					"worker",
 					d,
 					status,
 					agentStartTimes.get(dId) ?? Date.now(),
@@ -621,6 +622,7 @@ export function createModesRuntime(
 		if (subagents) {
 			if (!fanout) {
 				orchestratorCtx = ctx;
+				orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
 				fanout = new FanoutOrchestrator({
 					engine,
 					subagents,
@@ -864,11 +866,16 @@ export function createModesRuntime(
 	});
 
 	pi.registerCommand("view", {
-		description: "Live view an agent. /view <name> to watch, Escape to close.",
+		description:
+			"View an agent's session. /view <name> to switch, /view to return.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const target = args.trim();
 			if (!target) {
-				ctx.ui.notify("Usage: /view <agent-name>", "info");
+				if (orchestratorSessionPath) {
+					await ctx.switchSession(orchestratorSessionPath);
+				} else {
+					ctx.ui.notify("Already in orchestrator.", "info");
+				}
 				return;
 			}
 			const entry = [...agentNames.entries()].find(
@@ -880,42 +887,31 @@ export function createModesRuntime(
 			}
 			const [deliverableId] = entry;
 			if (!fanout) {
-				ctx.ui.notify("No active agents.", "warning");
+				ctx.ui.notify("No agents have been spawned.", "warning");
 				return;
 			}
-			const runId = fanout.runForDeliverable(deliverableId);
-			if (!runId) {
-				ctx.ui.notify(`${target} is not currently running.`, "warning");
+			const sessionDir = fanout.sessionDirForDeliverable(deliverableId);
+			if (!sessionDir) {
+				ctx.ui.notify(`No session for ${target}.`, "warning");
 				return;
 			}
-			const d = engine
-				? deliverables(engine.get()).find((x) => x.id === deliverableId)
-				: undefined;
-			const title = d
-				? shortDeliverableName(d.title ?? deliverableId)
-				: deliverableId;
-			await new Promise<void>((resolve) => {
-				let unsubscribe: () => void;
-				const handle = ctx.ui.custom((_tui, _theme, _kb, done) => {
-					const liveView = new LiveViewComponent({
-						agentName: target,
-						deliverableTitle: title,
-						onClose: () => {
-							unsubscribe();
-							done(undefined);
-						},
-					});
-					unsubscribe = maestro.events.on(
-						EVENTS.runAgentEvent,
-						({ runId: evtRunId, event }) => {
-							if (evtRunId !== runId) return;
-							liveView.pushEvent(event as { type: string });
-						},
-					);
-					return liveView;
-				});
-				void handle.then(() => resolve());
-			});
+			try {
+				const { readdirSync } = await import("node:fs");
+				const files = readdirSync(sessionDir).filter((f: string) =>
+					f.endsWith(".jsonl"),
+				);
+				if (files.length === 0) {
+					ctx.ui.notify(`No session file for ${target}.`, "warning");
+					return;
+				}
+				if (!orchestratorSessionPath) {
+					orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
+				}
+				files.sort();
+				await ctx.switchSession(`${sessionDir}/${files[files.length - 1]}`);
+			} catch {
+				ctx.ui.notify(`Could not read session for ${target}.`, "warning");
+			}
 		},
 	});
 

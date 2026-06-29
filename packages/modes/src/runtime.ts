@@ -758,6 +758,12 @@ export function createModesRuntime(
 		handler: cycle,
 	});
 
+	pi.on("before_agent_start", (event) => {
+		if (state.mode !== "plan") return;
+		const preamble = buildPlanModePreamble(engine);
+		return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
@@ -1156,3 +1162,29 @@ async function createIssueViaGh(
 }
 
 export { PLAN_CONTAINER };
+
+// --- Plan-mode system prompt preamble -----------------------------------
+
+function buildPlanModePreamble(engine: PlanEngine | undefined): string {
+	const isNew = !engine || engine.isDraft();
+	const header = isNew
+		? `You are in PLAN MODE creating a new plan. Structure the user's request into deliverables and tasks using the tools below. Do NOT implement anything — only plan.`
+		: `You are in PLAN MODE updating an existing plan (\`${engine.get().slug}\`). You may add, update, reorder, or remove deliverables and tasks. Do NOT implement anything — only plan.`;
+
+	return `${header}
+
+Available tools in plan mode:
+- \`deliverable\` — add/update/remove/reorder deliverables; register-repo/unregister-repo for multi-repo plans.
+- \`task\` — add/update/toggle/remove/move work items within a deliverable.
+- \`plan\` — read the current plan state (does not mutate).
+- \`read\` — inspect files to inform planning decisions.
+- \`bash\` — read-only commands only (git status, ls, find, grep, etc.).
+
+Planning guidelines:
+- Each deliverable is one shippable unit (maps to one PR). Keep them focused.
+- Add concrete gating tasks (kind: task) that define "done" for each deliverable.
+- Use dependsOn to sequence deliverables that must ship in order.
+- For multi-repo plans: register repos with \`deliverable register-repo\`, then assign deliverables with \`repo: <key>\`.
+- Do NOT output implementation code or diffs — that happens in implement mode.
+- After structuring the plan, output a brief summary of what was created (the plan tool's default view shows the concise summary).`;
+}

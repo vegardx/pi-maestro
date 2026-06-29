@@ -54,6 +54,13 @@ export {
 	transitionThrough,
 } from "./execution.js";
 export {
+	type HerdrAgentState,
+	type HerdrAgentStatus,
+	HerdrFanout,
+	type HerdrFanoutDeps,
+	type HerdrFanoutSnapshot,
+} from "./execution-herdr.js";
+export {
 	renderPlanMarkdown,
 	renderPlanSeed,
 	renderPlanSummary,

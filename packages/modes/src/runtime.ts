@@ -41,7 +41,7 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
-import { renderPlanMarkdown } from "./markdown.js";
+import { renderPlanMarkdown, renderPlanSeed } from "./markdown.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -91,7 +91,7 @@ import {
 	diagnoseResumeAfterCompaction,
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
-import { renderModeFooter, renderPlanPanel } from "./ui.js";
+import { renderModeFooter } from "./ui.js";
 import {
 	activateDeliverableBranch,
 	activateDeliverableWorktree,
@@ -390,7 +390,6 @@ export function createModesRuntime(
 		if (!engine) return undefined;
 		const plan = engine.get();
 		const d = findDeliverable(plan, deliverableId);
-		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
 		const defaultBranch = defaultBranchFor(d);
 		const prepared = activateDeliverableWorktree(
 			engine,
@@ -417,7 +416,6 @@ export function createModesRuntime(
 		if (!engine) return;
 		const plan = engine.get();
 		const d = findDeliverable(plan, deliverableId);
-		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
 		const defaultBranch = defaultBranchFor(d);
 		const prepared = activateDeliverableBranch(
 			engine,
@@ -602,14 +600,34 @@ export function createModesRuntime(
 			result.kind === "started"
 				? `Started ${result.deliverable.id}.`
 				: result.kind === "already-active"
-					? `${result.deliverable.id} is already active.`
+					? `Resuming ${result.deliverable.id}.`
 					: result.reason;
-		if (result.kind === "started") {
+		if (result.kind === "started" || result.kind === "already-active") {
 			prepareSequentialBranch(result.deliverable.id, ctx);
 			setExecutionStage(
 				{ stage: "executing", deliverableId: result.deliverable.id },
 				ctx,
 			);
+			// For already-active, emit the seed if it hasn't been emitted yet
+			// (e.g. session resumed, or prior attempt failed before seed).
+			if (
+				result.kind === "already-active" &&
+				!hasExecutionSeed(
+					ctx.sessionManager.getEntries(),
+					result.deliverable.id,
+				)
+			) {
+				const seed = renderPlanSeed(activeEngine.get(), result.deliverable.id);
+				pi.sendMessage(
+					{
+						customType: EXECUTION_SEED_ENTRY,
+						content: seed,
+						display: true,
+						details: { deliverableId: result.deliverable.id },
+					},
+					{ triggerTurn: false },
+				);
+			}
 		}
 		ctx.ui.notify(message, result.kind === "blocked" ? "warning" : "info");
 	}

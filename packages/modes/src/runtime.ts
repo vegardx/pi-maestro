@@ -21,6 +21,7 @@ import {
 	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
+import { type AgentBridge, initAgentBridge } from "./agent-bridge.js";
 import { agentName, shortDeliverableName } from "./agent-names.js";
 import {
 	type AgentState,
@@ -48,11 +49,7 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
-import {
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
+import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -168,6 +165,7 @@ export function createModesRuntime(
 	>();
 	let panelCollapsed = false;
 	let orchestratorSessionPath: string | undefined;
+	let agentBridge: AgentBridge | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -1008,6 +1006,16 @@ export function createModesRuntime(
 		if (state.activePlanSlug) {
 			ctx.ui.setStatus("maestro.plan", `plan: ${state.activePlanSlug}`);
 		}
+		// Agent-side RPC bridge: connect to orchestrator if running as agent
+		agentBridge = initAgentBridge(pi);
+		if (agentBridge) agentBridge.start(ctx);
+	});
+
+	pi.on("session_shutdown", () => {
+		if (agentBridge) {
+			agentBridge.destroy();
+			agentBridge = undefined;
+		}
 	});
 
 	pi.on("tool_call", (event: ToolCallEvent) => {
@@ -1055,7 +1063,12 @@ export function createModesRuntime(
 		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	});
 
+	pi.on("turn_start", () => {
+		agentBridge?.onTurnStart();
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
+		agentBridge?.onTurnEnd();
 		if (state.mode === "plan") {
 			finalizeDraftPlan(ctx);
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));

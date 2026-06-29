@@ -275,7 +275,7 @@ describe("profiles + invocation mapping", () => {
 		});
 		expect(o.model).toBe("anthropic/claude");
 		expect(o.mode).toBe("ask"); // override beats the default "auto"
-		expect(o.disableExtensions).toEqual([]);
+		expect(o.disableExtensions).toEqual(["commit"]);
 	});
 
 	it("throws on an unknown profile", () => {

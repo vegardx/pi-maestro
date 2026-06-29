@@ -98,6 +98,13 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
+import { shortDeliverableName, workerName } from "./worker-names.js";
+import {
+	renderWorkerWidget,
+	renderWorkerWidgetCollapsed,
+	type WorkerState,
+	workerStateFromDeliverable,
+} from "./worker-widget.js";
 import {
 	activateDeliverableBranch,
 	activateDeliverableWorktree,
@@ -151,6 +158,9 @@ export function createModesRuntime(
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
 	let fanout: FanoutOrchestrator | undefined;
+	const workerNames = new Map<string, string>(); // deliverableId → name
+	const workerStartTimes = new Map<string, number>(); // deliverableId → Date.now()
+	let widgetCollapsed = false;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -403,6 +413,39 @@ export function createModesRuntime(
 		fanout?.tick();
 	}
 
+	function updateWorkerWidget(ctx: ExtensionContext): void {
+		if (!engine || !fanout) {
+			ctx.ui.setWidget?.("maestro.workers", undefined);
+			return;
+		}
+		const snap = fanout.snapshot();
+		const plan = engine.get();
+		const states: WorkerState[] = [];
+		for (const dId of snap.spawnedDeliverables) {
+			const d = deliverables(plan).find((x) => x.id === dId);
+			if (!d) continue;
+			const name = workerNames.get(dId) ?? dId;
+			const isActive = [...snap.active.values()].includes(dId);
+			const status = isActive ? "active" : "done";
+			states.push(
+				workerStateFromDeliverable(
+					name,
+					d,
+					status,
+					workerStartTimes.get(dId) ?? Date.now(),
+				),
+			);
+		}
+		if (states.length === 0) {
+			ctx.ui.setWidget?.("maestro.workers", undefined);
+			return;
+		}
+		const content = widgetCollapsed
+			? renderWorkerWidgetCollapsed(states)
+			: renderWorkerWidget(states);
+		ctx.ui.setWidget?.("maestro.workers", content);
+	}
+
 	function prepareWorktree(
 		deliverableId: string,
 		ctx: ExtensionContext,
@@ -576,16 +619,20 @@ export function createModesRuntime(
 						cwd: prepareWorktree(deliverable.id, ctx),
 					}),
 					onPlanChanged: emitPlanChanged,
-					onSpawn: (deliverable, handle) =>
+					onSpawn: (deliverable, _handle) => {
+						const taken = new Set(workerNames.values());
+						const name = workerName(deliverable.id, taken);
+						workerNames.set(deliverable.id, name);
+						workerStartTimes.set(deliverable.id, Date.now());
 						ctx.ui.notify(
-							`Spawned worker:${deliverable.id} (${handle.id}).`,
+							`Spawned ${name} on ${shortDeliverableName(deliverable.title ?? deliverable.id)}.`,
 							"info",
-						),
-					onProgress: (deliverable, progress) =>
-						ctx.ui.notify(
-							`worker:${deliverable.id} \u2014 ${progress.text ?? "running"}`,
-							"info",
-						),
+						);
+						updateWorkerWidget(ctx);
+					},
+					onProgress: (_deliverable, _progress) => {
+						updateWorkerWidget(ctx);
+					},
 				});
 			}
 			const spawned = fanout.tick();
@@ -783,32 +830,87 @@ export function createModesRuntime(
 	pi.registerCommand("workers", {
 		description: "List active and completed workers.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (!fanout) {
+			if (!fanout || !engine) {
 				ctx.ui.notify("No workers active.", "info");
 				return;
 			}
 			const snap = fanout.snapshot();
-			if (snap.active.size === 0 && snap.spawnedDeliverables.size === 0) {
+			if (snap.spawnedDeliverables.size === 0) {
 				ctx.ui.notify("No workers active.", "info");
 				return;
 			}
+			const plan = engine.get();
 			const lines: string[] = [];
-			if (snap.active.size > 0) {
-				lines.push("Active:");
-				for (const [runId, dId] of snap.active) {
-					lines.push(`  \u2022 worker:${dId} (${runId})`);
-				}
-			}
-			const completed = [...snap.spawnedDeliverables].filter(
-				(id) => ![...snap.active.values()].includes(id),
-			);
-			if (completed.length > 0) {
-				lines.push("Completed:");
-				for (const id of completed) {
-					lines.push(`  \u2713 worker:${id}`);
-				}
+			for (const dId of snap.spawnedDeliverables) {
+				const name = workerNames.get(dId) ?? dId;
+				const d = deliverables(plan).find((x) => x.id === dId);
+				const title = d ? shortDeliverableName(d.title ?? dId) : dId;
+				const isActive = [...snap.active.values()].includes(dId);
+				const icon = isActive ? "\u25CF" : "\u2713";
+				lines.push(`${icon} ${name}   ${title}`);
 			}
 			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	pi.registerCommand("view", {
+		description:
+			"View a worker's session. /view <name> to observe, /view to return.",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const target = args.trim();
+			if (!target) {
+				// Return to the orchestrator session — currently a no-op since
+				// we don't track the original session path yet.
+				ctx.ui.notify("Returned to orchestrator.", "info");
+				return;
+			}
+			// Find the deliverable by worker name.
+			const entry = [...workerNames.entries()].find(
+				([, name]) => name === target,
+			);
+			if (!entry) {
+				ctx.ui.notify(`Unknown worker: ${target}`, "warning");
+				return;
+			}
+			const [deliverableId] = entry;
+			const d = engine
+				? deliverables(engine.get()).find((x) => x.id === deliverableId)
+				: undefined;
+			if (!d?.sessionPath) {
+				ctx.ui.notify(`No session recorded for ${target}.`, "warning");
+				return;
+			}
+			await ctx.switchSession(d.sessionPath);
+		},
+	});
+
+	pi.registerCommand("steer", {
+		description: "Steer a worker. /steer <name> <guidance>",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const [name, ...rest] = args.trim().split(/\s+/);
+			const guidance = rest.join(" ");
+			if (!name || !guidance) {
+				ctx.ui.notify("Usage: /steer <worker-name> <guidance>", "warning");
+				return;
+			}
+			const entry = [...workerNames.entries()].find(([, n]) => n === name);
+			if (!entry) {
+				ctx.ui.notify(`Unknown worker: ${name}`, "warning");
+				return;
+			}
+			const [deliverableId] = entry;
+			if (!fanout) {
+				ctx.ui.notify("No active workers.", "warning");
+				return;
+			}
+			const runId = fanout.runForDeliverable(deliverableId);
+			if (!runId) {
+				ctx.ui.notify(`${name} is not currently running.`, "warning");
+				return;
+			}
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			subagents?.steer(runId, guidance);
+			ctx.ui.notify(`Steered ${name}: "${guidance}"`, "info");
 		},
 	});
 
@@ -828,6 +930,14 @@ export function createModesRuntime(
 	pi.registerShortcut("shift+tab", {
 		description: "Cycle Maestro mode: hack → plan → ask → auto.",
 		handler: cycle,
+	});
+
+	pi.registerShortcut("ctrl+w", {
+		description: "Toggle worker widget expanded/collapsed.",
+		handler: (ctx) => {
+			widgetCollapsed = !widgetCollapsed;
+			updateWorkerWidget(ctx);
+		},
 	});
 
 	pi.on("before_agent_start", (event) => {

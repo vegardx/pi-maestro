@@ -5,13 +5,10 @@
 // typed require<K>(id): CapabilityMap[K] signature (defined in core).
 
 import type { Answers, Questionnaire } from "./ask.js";
-import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
-import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
 import type { ShipDeliverableInput, ShipResult } from "./ship.js";
 
 export const CAPABILITIES = {
-	subagents: "subagents.v1",
 	ask: "ask.v1",
 	commit: "commit.v1",
 	modes: "modes.v1",
@@ -19,14 +16,6 @@ export const CAPABILITIES = {
 } as const;
 
 export type CapabilityId = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
-
-export interface SubagentsCapabilityV1 {
-	spawn(prompt: string, profile: SpawnProfile): RunHandle;
-	get(runId: RunId): RunRecord | undefined;
-	list(): readonly RunRecord[];
-	steer(runId: RunId, guidance: string): void;
-	stop(runId: RunId, reason?: string): void;
-}
 
 export interface AskCapabilityV1 {
 	/** Blocking: present the questionnaire and resolve with answers. */
@@ -52,7 +41,6 @@ export interface PromptAssistCapabilityV1 {
 
 /** Maps each capability id to its interface for the typed registry. */
 export interface CapabilityMap {
-	[CAPABILITIES.subagents]: SubagentsCapabilityV1;
 	[CAPABILITIES.ask]: AskCapabilityV1;
 	[CAPABILITIES.commit]: CommitCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;

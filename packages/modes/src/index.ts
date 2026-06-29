@@ -48,7 +48,6 @@ export {
 	classifyExecutionSteering,
 	completeActiveDeliverable,
 	completionGateSatisfied,
-	FanoutOrchestrator,
 	parseShippedPr,
 	startSequentialExecution,
 	transitionThrough,

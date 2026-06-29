@@ -20,7 +20,6 @@ import {
 
 describe("contracts", () => {
 	it("exposes stable, versioned capability ids", () => {
-		expect(CAPABILITIES.subagents).toBe("subagents.v1");
 		expect(CAPABILITIES.ask).toBe("ask.v1");
 		expect(CAPABILITIES.commit).toBe("commit.v1");
 		expect(CAPABILITIES.modes).toBe("modes.v1");

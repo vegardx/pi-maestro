@@ -35,6 +35,7 @@ export function renderWorkerWidget(workers: readonly WorkerState[]): string[] {
 			`${icon(w.status)} ${w.name}   ${w.deliverableTitle}   ${progress}  ${task}   [${time}]`,
 		);
 	}
+	lines[lines.length - 1] += "  (/w)";
 	return lines;
 }
 
@@ -50,7 +51,7 @@ export function renderWorkerWidgetCollapsed(
 	if (done > 0) parts.push(`${done} done`);
 	const suffix =
 		active === 0 && waiting === 0 && done > 0 ? " · ready to ship" : "";
-	return [`Workers: ${parts.join(" · ")}${suffix}`];
+	return [`Workers: ${parts.join(" · ")}${suffix}  (/w)`];
 }
 
 /** Build WorkerState from a deliverable (for task progress tracking). */

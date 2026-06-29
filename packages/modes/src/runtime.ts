@@ -158,6 +158,7 @@ export function createModesRuntime(
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
 	let fanout: FanoutOrchestrator | undefined;
+	let orchestratorCtx: ExtensionContext | undefined;
 	const workerNames = new Map<string, string>(); // deliverableId → name
 	const workerStartTimes = new Map<string, number>(); // deliverableId → Date.now()
 	let widgetCollapsed = false;
@@ -411,6 +412,8 @@ export function createModesRuntime(
 		});
 		// Re-tick: if a new deliverable was added (or deps changed), spawn it.
 		fanout?.tick();
+		// Refresh the widget (covers worker completion via settle→onPlanChanged).
+		if (orchestratorCtx) updateWorkerWidget(orchestratorCtx);
 	}
 
 	function updateWorkerWidget(ctx: ExtensionContext): void {
@@ -611,6 +614,7 @@ export function createModesRuntime(
 		const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
 		if (subagents) {
 			if (!fanout) {
+				orchestratorCtx = ctx;
 				fanout = new FanoutOrchestrator({
 					engine,
 					subagents,
@@ -932,9 +936,9 @@ export function createModesRuntime(
 		handler: cycle,
 	});
 
-	pi.registerShortcut("ctrl+w", {
+	pi.registerCommand("w", {
 		description: "Toggle worker widget expanded/collapsed.",
-		handler: (ctx) => {
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			widgetCollapsed = !widgetCollapsed;
 			updateWorkerWidget(ctx);
 		},
@@ -1385,7 +1389,7 @@ Your job: structure the user's request into deliverables and tasks. Do NOT imple
 
 Workflow:
 1. If multi-repo: register repos with \`deliverable register-repo\`.
-2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering.
+2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
 3. Add gating tasks to each deliverable (\`task add\`).
 4. After all tool calls, write your response in this exact format:
    - A 1-3 sentence summary of what the plan accomplishes (plain English, no IDs).

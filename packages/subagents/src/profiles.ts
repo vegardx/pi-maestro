@@ -39,14 +39,13 @@ const RESTRICTED: ProfileDefaults = {
 	disableExtensions: ["modes", "subagents"],
 };
 
-// deliverable-worker: modes loaded in worker mode, full tools, worktree-bound
-// (cwd supplied by the orchestrator), nested subagents allowed up to the
-// service depth cap. Nothing disabled by default — the orchestrator narrows
-// via featureFlags when it wants a specific flag killed.
+// deliverable-worker: implements a single deliverable in a worktree. Can read,
+// edit, and run tests, but cannot commit/push/create PRs — that's the
+// orchestrator's job at ship time. Commit extension disabled.
 const DELIVERABLE_WORKER: ProfileDefaults = {
 	mode: "auto",
 	session: true,
-	disableExtensions: [],
+	disableExtensions: ["commit"],
 };
 
 export const BUILTIN_PROFILES: Readonly<Record<string, ProfileDefaults>> = {

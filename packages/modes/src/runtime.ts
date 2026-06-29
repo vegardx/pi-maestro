@@ -455,10 +455,16 @@ export function createModesRuntime(
 			ctx.ui.setWidget?.("maestro.agents", undefined);
 			return;
 		}
-		const content = panelCollapsed
-			? renderAgentWidgetCollapsed(states)
-			: renderAgentWidget(states);
-		ctx.ui.setWidget?.("maestro.agents", content);
+		// Use component factory so render(width) gets the actual terminal width.
+		const collapsed = panelCollapsed;
+		ctx.ui.setWidget?.("maestro.agents", () => ({
+			render(width: number): string[] {
+				return collapsed
+					? renderAgentWidgetCollapsed(states)
+					: renderAgentWidget(states, width);
+			},
+			invalidate() {},
+		}));
 	}
 
 	function prepareWorktree(

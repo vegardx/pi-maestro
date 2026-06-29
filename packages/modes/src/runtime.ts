@@ -1180,12 +1180,23 @@ Workflow:
 1. If multi-repo: register repos with \`deliverable register-repo\`.
 2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering.
 3. Add gating tasks to each deliverable (\`task add\`).
-4. When done, call \`plan\` (no arguments) as your final tool call. Its output IS your summary — do not rewrite it.
+4. After all tool calls, write your response in this exact format:
+   - A 1-3 sentence summary of what the plan accomplishes (plain English, no IDs).
+   - Then the plan checklist using this format:
+     Plan: <slug>
+     Repos: <repo list>
+     \n
+     1. <title> [status] [repo-tag] \u2192 depends on #N
+        \u2610 <task title>
+        \u2610 <task title>
+     \n
+     2. ...
+   - End with: "Ready to implement. Switch to auto or run /implement."
 
 Rules:
 - Be concise. No narration, no thinking out loud, no explanations between tool calls.
-- Do NOT call \`plan\` to inspect state mid-creation — you already know what you're adding.
-- Do NOT use \`plan\` with view: "json" or view: "markdown" — the default summary view is the only appropriate output.
+- Do NOT call the \`plan\` tool to read or summarize — you already know what you created; write the summary yourself.
+- Do NOT use json or markdown views.
 - Each deliverable = one PR. Keep them small and focused.
 - For multi-repo: assign deliverables to repos with \`repo: <key>\`.
 - Do NOT read files unless the user's request is ambiguous and you need to clarify scope.`;

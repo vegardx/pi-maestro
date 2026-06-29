@@ -1,8 +1,8 @@
-// Renders the live worker status widget (string[] for setWidget).
+// Renders the live agent status widget (string[] for setWidget).
 
 import type { Deliverable, WorkItem } from "./schema.js";
 
-export interface WorkerState {
+export interface AgentState {
 	readonly name: string;
 	readonly deliverableTitle: string;
 	readonly status: "active" | "done" | "waiting";
@@ -18,16 +18,16 @@ function elapsed(ms: number): string {
 	return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
-function icon(status: WorkerState["status"]): string {
+function icon(status: AgentState["status"]): string {
 	if (status === "done") return "✓";
 	if (status === "waiting") return "⚠";
 	return "●";
 }
 
-export function renderWorkerWidget(workers: readonly WorkerState[]): string[] {
-	if (workers.length === 0) return [];
+export function renderAgentWidget(agents: readonly AgentState[]): string[] {
+	if (agents.length === 0) return [];
 	const lines: string[] = [];
-	for (const w of workers) {
+	for (const w of agents) {
 		const progress = `${w.tasksDone}/${w.tasksTotal}`;
 		const task = w.status === "done" ? "done" : (w.currentTask ?? "working");
 		const time = elapsed(w.elapsedMs);
@@ -35,32 +35,33 @@ export function renderWorkerWidget(workers: readonly WorkerState[]): string[] {
 			`${icon(w.status)} ${w.name}   ${w.deliverableTitle}   ${progress}  ${task}   [${time}]`,
 		);
 	}
-	lines[lines.length - 1] += "  (/w)";
+	lines[lines.length - 1] += "  (/a)";
 	return lines;
 }
 
-export function renderWorkerWidgetCollapsed(
-	workers: readonly WorkerState[],
+export function renderAgentWidgetCollapsed(
+	agents: readonly AgentState[],
 ): string[] {
-	const active = workers.filter((w) => w.status === "active").length;
-	const waiting = workers.filter((w) => w.status === "waiting").length;
-	const done = workers.filter((w) => w.status === "done").length;
+	const active = agents.filter((w) => w.status === "active").length;
+	const waiting = agents.filter((w) => w.status === "waiting").length;
+	const done = agents.filter((w) => w.status === "done").length;
 	const parts: string[] = [];
 	if (active > 0) parts.push(`${active} active`);
 	if (waiting > 0) parts.push(`${waiting} waiting`);
 	if (done > 0) parts.push(`${done} done`);
 	const suffix =
 		active === 0 && waiting === 0 && done > 0 ? " · ready to ship" : "";
-	return [`Workers: ${parts.join(" · ")}${suffix}  (/w)`];
+	return [`Agents: ${parts.join(" · ")}${suffix}  (/a)`];
 }
 
-/** Build WorkerState from a deliverable (for task progress tracking). */
-export function workerStateFromDeliverable(
+/** Build AgentState from a deliverable (for task progress tracking). */
+export function agentStateFromDeliverable(
 	name: string,
 	d: Deliverable,
-	status: WorkerState["status"],
+	status: AgentState["status"],
 	startedAt: number,
-): WorkerState {
+	endedAt?: number,
+): AgentState {
 	const items = (d.children ?? []).filter(
 		(c): c is WorkItem =>
 			c.type === "work-item" && (c.kind === "task" || !c.kind),
@@ -74,7 +75,7 @@ export function workerStateFromDeliverable(
 		tasksDone: done,
 		tasksTotal: items.length,
 		currentTask: firstUndone?.title,
-		elapsedMs: Date.now() - startedAt,
+		elapsedMs: (endedAt ?? Date.now()) - startedAt,
 	};
 }
 

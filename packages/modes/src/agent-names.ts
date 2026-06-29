@@ -1,4 +1,4 @@
-// Memorable adjective-noun worker names, deterministically derived from the
+// Memorable adjective-noun agent names, deterministically derived from the
 // deliverable ID so the same deliverable always gets the same name (unless it
 // collides with an already-taken name in the session).
 
@@ -64,7 +64,7 @@ function hashCode(s: string): number {
 	return h >>> 0;
 }
 
-export function workerName(
+export function agentName(
 	deliverableId: string,
 	taken: ReadonlySet<string>,
 ): string {
@@ -75,7 +75,7 @@ export function workerName(
 		const name = `${adj}-${noun}`;
 		if (!taken.has(name)) return name;
 	}
-	return `worker-${deliverableId.slice(0, 8)}`;
+	return `agent-${deliverableId.slice(0, 8)}`;
 }
 
 /** Strip common verb prefixes for a short deliverable display name. */

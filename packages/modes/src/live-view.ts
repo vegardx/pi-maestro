@@ -1,4 +1,4 @@
-// Live view overlay component — renders a scrolling log of a worker's events.
+// Live view overlay component — renders a scrolling log of a agent's events.
 // Shows tool calls as compact lines, assistant text abbreviated. Used by /view.
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -6,7 +6,7 @@ import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface LiveViewOptions {
-	readonly workerName: string;
+	readonly agentName: string;
 	readonly deliverableTitle: string;
 	readonly onClose: () => void;
 }
@@ -59,7 +59,7 @@ export class LiveViewComponent implements Component {
 		}
 
 		const fg = this.theme?.fg.bind(this.theme);
-		const header = `─── ${this.opts.workerName} (${this.opts.deliverableTitle}) `;
+		const header = `─── ${this.opts.agentName} (${this.opts.deliverableTitle}) `;
 		const closeHint = " Escape to close ──";
 		const pad = Math.max(0, width - header.length - closeHint.length);
 		const headerLine = fg

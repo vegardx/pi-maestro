@@ -21,6 +21,13 @@ import {
 	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
+import { agentName, shortDeliverableName } from "./agent-names.js";
+import {
+	type AgentState,
+	agentStateFromDeliverable,
+	renderAgentWidget,
+	renderAgentWidgetCollapsed,
+} from "./agent-widget.js";
 import { ModesAskQueue } from "./ask-queue.js";
 import {
 	calibrateSys,
@@ -41,6 +48,7 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
+import { LiveViewComponent } from "./live-view.js";
 import {
 	renderPlanMarkdown,
 	renderPlanSeed,
@@ -98,13 +106,6 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
-import { shortDeliverableName, workerName } from "./worker-names.js";
-import {
-	renderWorkerWidget,
-	renderWorkerWidgetCollapsed,
-	type WorkerState,
-	workerStateFromDeliverable,
-} from "./worker-widget.js";
 import {
 	activateDeliverableBranch,
 	activateDeliverableWorktree,
@@ -159,9 +160,10 @@ export function createModesRuntime(
 	let draftExplicitName: string | undefined;
 	let fanout: FanoutOrchestrator | undefined;
 	let orchestratorCtx: ExtensionContext | undefined;
-	const workerNames = new Map<string, string>(); // deliverableId → name
-	const workerStartTimes = new Map<string, number>(); // deliverableId → Date.now()
-	let widgetCollapsed = false;
+	const agentNames = new Map<string, string>(); // deliverableId → name
+	const agentStartTimes = new Map<string, number>(); // deliverableId → Date.now()
+	const agentFinishTimes = new Map<string, number>(); // deliverableId → Date.now()
+	let panelCollapsed = false;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -413,40 +415,44 @@ export function createModesRuntime(
 		// Re-tick: if a new deliverable was added (or deps changed), spawn it.
 		fanout?.tick();
 		// Refresh the widget (covers worker completion via settle→onPlanChanged).
-		if (orchestratorCtx) updateWorkerWidget(orchestratorCtx);
+		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	}
 
-	function updateWorkerWidget(ctx: ExtensionContext): void {
+	function updateAgentPanel(ctx: ExtensionContext): void {
 		if (!engine || !fanout) {
-			ctx.ui.setWidget?.("maestro.workers", undefined);
+			ctx.ui.setWidget?.("maestro.agents", undefined);
 			return;
 		}
 		const snap = fanout.snapshot();
 		const plan = engine.get();
-		const states: WorkerState[] = [];
+		const states: AgentState[] = [];
 		for (const dId of snap.spawnedDeliverables) {
 			const d = deliverables(plan).find((x) => x.id === dId);
 			if (!d) continue;
-			const name = workerNames.get(dId) ?? dId;
+			const name = agentNames.get(dId) ?? dId;
 			const isActive = [...snap.active.values()].includes(dId);
 			const status = isActive ? "active" : "done";
+			if (!isActive && !agentFinishTimes.has(dId)) {
+				agentFinishTimes.set(dId, Date.now());
+			}
 			states.push(
-				workerStateFromDeliverable(
+				agentStateFromDeliverable(
 					name,
 					d,
 					status,
-					workerStartTimes.get(dId) ?? Date.now(),
+					agentStartTimes.get(dId) ?? Date.now(),
+					agentFinishTimes.get(dId),
 				),
 			);
 		}
 		if (states.length === 0) {
-			ctx.ui.setWidget?.("maestro.workers", undefined);
+			ctx.ui.setWidget?.("maestro.agents", undefined);
 			return;
 		}
-		const content = widgetCollapsed
-			? renderWorkerWidgetCollapsed(states)
-			: renderWorkerWidget(states);
-		ctx.ui.setWidget?.("maestro.workers", content);
+		const content = panelCollapsed
+			? renderAgentWidgetCollapsed(states)
+			: renderAgentWidget(states);
+		ctx.ui.setWidget?.("maestro.agents", content);
 	}
 
 	function prepareWorktree(
@@ -553,7 +559,7 @@ export function createModesRuntime(
 		engine: () => engine,
 		onPlanChanged: emitPlanChanged,
 		mode: () => state.mode,
-		steerWorker: (deliverableId, guidance) => {
+		steerAgent: (deliverableId, guidance) => {
 			if (!fanout) return;
 			const runId = fanout.runForDeliverable(deliverableId);
 			if (!runId) return;
@@ -624,18 +630,18 @@ export function createModesRuntime(
 					}),
 					onPlanChanged: emitPlanChanged,
 					onSpawn: (deliverable, _handle) => {
-						const taken = new Set(workerNames.values());
-						const name = workerName(deliverable.id, taken);
-						workerNames.set(deliverable.id, name);
-						workerStartTimes.set(deliverable.id, Date.now());
+						const taken = new Set(agentNames.values());
+						const name = agentName(deliverable.id, taken);
+						agentNames.set(deliverable.id, name);
+						agentStartTimes.set(deliverable.id, Date.now());
 						ctx.ui.notify(
 							`Spawned ${name} on ${shortDeliverableName(deliverable.title ?? deliverable.id)}.`,
 							"info",
 						);
-						updateWorkerWidget(ctx);
+						updateAgentPanel(ctx);
 					},
 					onProgress: (_deliverable, _progress) => {
-						updateWorkerWidget(ctx);
+						updateAgentPanel(ctx);
 					},
 				});
 			}
@@ -643,7 +649,7 @@ export function createModesRuntime(
 			if (spawned > 0) {
 				const plan = activeEngine.get();
 				const summary = executionSummary(plan);
-				ctx.ui.notify(`Spawned ${spawned} worker(s). ${summary ?? ""}`, "info");
+				ctx.ui.notify(`Spawned ${spawned} agent(s). ${summary ?? ""}`, "info");
 				setExecutionStage(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
@@ -733,7 +739,7 @@ export function createModesRuntime(
 
 	pi.registerCommand("implement", {
 		description:
-			"Start executing the active plan. Workers auto-spawn when subagents are available.",
+			"Start executing the active plan. Agents auto-spawn when subagents are available.",
 		handler: runImplement,
 	});
 
@@ -831,22 +837,22 @@ export function createModesRuntime(
 		},
 	});
 
-	pi.registerCommand("workers", {
-		description: "List active and completed workers.",
+	pi.registerCommand("agents", {
+		description: "List active and completed agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (!fanout || !engine) {
-				ctx.ui.notify("No workers active.", "info");
+				ctx.ui.notify("No agents active.", "info");
 				return;
 			}
 			const snap = fanout.snapshot();
 			if (snap.spawnedDeliverables.size === 0) {
-				ctx.ui.notify("No workers active.", "info");
+				ctx.ui.notify("No agents active.", "info");
 				return;
 			}
 			const plan = engine.get();
 			const lines: string[] = [];
 			for (const dId of snap.spawnedDeliverables) {
-				const name = workerNames.get(dId) ?? dId;
+				const name = agentNames.get(dId) ?? dId;
 				const d = deliverables(plan).find((x) => x.id === dId);
 				const title = d ? shortDeliverableName(d.title ?? dId) : dId;
 				const isActive = [...snap.active.values()].includes(dId);
@@ -858,53 +864,78 @@ export function createModesRuntime(
 	});
 
 	pi.registerCommand("view", {
-		description:
-			"View a worker's session. /view <name> to observe, /view to return.",
+		description: "Live view an agent. /view <name> to watch, Escape to close.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const target = args.trim();
 			if (!target) {
-				// Return to the orchestrator session — currently a no-op since
-				// we don't track the original session path yet.
-				ctx.ui.notify("Returned to orchestrator.", "info");
+				ctx.ui.notify("Usage: /view <agent-name>", "info");
 				return;
 			}
-			// Find the deliverable by worker name.
-			const entry = [...workerNames.entries()].find(
+			const entry = [...agentNames.entries()].find(
 				([, name]) => name === target,
 			);
 			if (!entry) {
-				ctx.ui.notify(`Unknown worker: ${target}`, "warning");
-				return;
-			}
-			const [deliverableId] = entry;
-			const d = engine
-				? deliverables(engine.get()).find((x) => x.id === deliverableId)
-				: undefined;
-			if (!d?.sessionPath) {
-				ctx.ui.notify(`No session recorded for ${target}.`, "warning");
-				return;
-			}
-			await ctx.switchSession(d.sessionPath);
-		},
-	});
-
-	pi.registerCommand("steer", {
-		description: "Steer a worker. /steer <name> <guidance>",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const [name, ...rest] = args.trim().split(/\s+/);
-			const guidance = rest.join(" ");
-			if (!name || !guidance) {
-				ctx.ui.notify("Usage: /steer <worker-name> <guidance>", "warning");
-				return;
-			}
-			const entry = [...workerNames.entries()].find(([, n]) => n === name);
-			if (!entry) {
-				ctx.ui.notify(`Unknown worker: ${name}`, "warning");
+				ctx.ui.notify(`Unknown agent: ${target}`, "warning");
 				return;
 			}
 			const [deliverableId] = entry;
 			if (!fanout) {
-				ctx.ui.notify("No active workers.", "warning");
+				ctx.ui.notify("No active agents.", "warning");
+				return;
+			}
+			const runId = fanout.runForDeliverable(deliverableId);
+			if (!runId) {
+				ctx.ui.notify(`${target} is not currently running.`, "warning");
+				return;
+			}
+			const d = engine
+				? deliverables(engine.get()).find((x) => x.id === deliverableId)
+				: undefined;
+			const title = d
+				? shortDeliverableName(d.title ?? deliverableId)
+				: deliverableId;
+			await new Promise<void>((resolve) => {
+				let unsubscribe: () => void;
+				const handle = ctx.ui.custom((_tui, _theme, _kb, done) => {
+					const liveView = new LiveViewComponent({
+						agentName: target,
+						deliverableTitle: title,
+						onClose: () => {
+							unsubscribe();
+							done(undefined);
+						},
+					});
+					unsubscribe = maestro.events.on(
+						EVENTS.runAgentEvent,
+						({ runId: evtRunId, event }) => {
+							if (evtRunId !== runId) return;
+							liveView.pushEvent(event as { type: string });
+						},
+					);
+					return liveView;
+				});
+				void handle.then(() => resolve());
+			});
+		},
+	});
+
+	pi.registerCommand("steer", {
+		description: "Steer an agent. /steer <name> <guidance>",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const [name, ...rest] = args.trim().split(/\s+/);
+			const guidance = rest.join(" ");
+			if (!name || !guidance) {
+				ctx.ui.notify("Usage: /steer <agent-name> <guidance>", "warning");
+				return;
+			}
+			const entry = [...agentNames.entries()].find(([, n]) => n === name);
+			if (!entry) {
+				ctx.ui.notify(`Unknown agent: ${name}`, "warning");
+				return;
+			}
+			const [deliverableId] = entry;
+			if (!fanout) {
+				ctx.ui.notify("No active agents.", "warning");
 				return;
 			}
 			const runId = fanout.runForDeliverable(deliverableId);
@@ -936,11 +967,11 @@ export function createModesRuntime(
 		handler: cycle,
 	});
 
-	pi.registerCommand("w", {
-		description: "Toggle worker widget expanded/collapsed.",
+	pi.registerCommand("a", {
+		description: "Toggle agents panel expanded/collapsed.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			widgetCollapsed = !widgetCollapsed;
-			updateWorkerWidget(ctx);
+			panelCollapsed = !panelCollapsed;
+			updateAgentPanel(ctx);
 		},
 	});
 
@@ -1463,19 +1494,19 @@ function buildOrchestratorPreamble(engine: PlanEngine | undefined): string {
 	if (!engine) return "";
 	const plan = engine.get();
 	const active = deliverables(plan).filter((d) => d.status === "active");
-	const workerList = active.map((d) => `  - worker:${d.id}`).join("\n");
+	const workerList = active.map((d) => `  - agent:${d.id}`).join("\n");
 
-	return `You are in ORCHESTRATOR MODE. Workers are implementing deliverables.
+	return `You are in ORCHESTRATOR MODE. Agents are implementing deliverables.
 
-Active workers:
+Active agents:
 ${workerList || "  (none currently running)"}
 
 You are free to:
 - Answer questions from the user.
 - Add new deliverables or tasks (they will be picked up automatically).
-- If you add/update a task on an active deliverable, it will be relayed to the worker.
-- Answer decisions surfaced by workers (these appear as prompts).
+- If you add/update a task on an active deliverable, it will be relayed to the agent.
+- Answer decisions surfaced by agents (these appear as prompts).
 
-Do NOT implement code yourself. Workers handle implementation.
+Do NOT implement code yourself. Agents handle implementation.
 Do NOT call read/edit/bash to implement — only to answer user questions about the project.`;
 }

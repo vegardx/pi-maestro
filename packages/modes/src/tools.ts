@@ -43,7 +43,7 @@ export interface PlanToolDeps {
 	/** Current mode; used to restrict plan views in plan mode. */
 	readonly mode?: () => string;
 	/** Steer a running worker when its deliverable is mutated. */
-	readonly steerWorker?: (deliverableId: string, guidance: string) => void;
+	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
 }
 
 interface ToolDetails {
@@ -285,7 +285,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						const workItem = engine.addWorkItem(container, input);
 						notify(deps, engine);
 						if (container !== PLAN_CONTAINER) {
-							deps.steerWorker?.(
+							deps.steerAgent?.(
 								container,
 								`New task: "${workItem.title}". ${workItem.body ?? ""}`.trim(),
 							);

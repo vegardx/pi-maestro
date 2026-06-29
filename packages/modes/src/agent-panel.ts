@@ -1,4 +1,4 @@
-// TUI component for the worker status widget. Uses pi-tui's Box + Text for
+// TUI component for the agent status widget. Uses pi-tui's Box + Text for
 // proper framing and column-aware truncation.
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -10,7 +10,7 @@ import {
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
 
-export interface WorkerDisplayState {
+export interface AgentDisplayState {
 	readonly name: string;
 	readonly deliverable: string;
 	readonly tasksDone: number;
@@ -20,8 +20,8 @@ export interface WorkerDisplayState {
 	readonly status: "active" | "done" | "waiting";
 }
 
-export class WorkerWidgetComponent implements Component {
-	private workers: WorkerDisplayState[] = [];
+export class AgentWidgetComponent implements Component {
+	private agents: AgentDisplayState[] = [];
 	private collapsed = false;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
@@ -32,8 +32,8 @@ export class WorkerWidgetComponent implements Component {
 		this.invalidate();
 	}
 
-	setWorkers(workers: WorkerDisplayState[]): void {
-		this.workers = workers;
+	setAgents(agents: AgentDisplayState[]): void {
+		this.agents = agents;
 		this.invalidate();
 	}
 
@@ -46,7 +46,7 @@ export class WorkerWidgetComponent implements Component {
 		if (this.cachedLines && this.cachedWidth === width) {
 			return this.cachedLines;
 		}
-		if (this.workers.length === 0) {
+		if (this.agents.length === 0) {
 			this.cachedLines = [];
 			this.cachedWidth = width;
 			return this.cachedLines;
@@ -68,7 +68,7 @@ export class WorkerWidgetComponent implements Component {
 	private renderExpanded(width: number): string[] {
 		const lines: string[] = [];
 		const fg = this.theme?.fg.bind(this.theme);
-		for (const w of this.workers) {
+		for (const w of this.agents) {
 			const icon =
 				w.status === "done"
 					? fg
@@ -103,9 +103,9 @@ export class WorkerWidgetComponent implements Component {
 	}
 
 	private renderCollapsed(width: number): string[] {
-		const active = this.workers.filter((w) => w.status === "active").length;
-		const waiting = this.workers.filter((w) => w.status === "waiting").length;
-		const done = this.workers.filter((w) => w.status === "done").length;
+		const active = this.agents.filter((w) => w.status === "active").length;
+		const waiting = this.agents.filter((w) => w.status === "waiting").length;
+		const done = this.agents.filter((w) => w.status === "done").length;
 		const parts: string[] = [];
 		if (active > 0) parts.push(`${active} active`);
 		if (waiting > 0) parts.push(`${waiting} waiting`);
@@ -114,7 +114,7 @@ export class WorkerWidgetComponent implements Component {
 		const suffix = allDone ? " · ready to ship" : "";
 		const fg = this.theme?.fg.bind(this.theme);
 		const hint = fg ? fg("dim", "(/w)") : "(/w)";
-		const line = `Workers: ${parts.join(" · ")}${suffix}  ${hint}`;
+		const line = `Agents: ${parts.join(" · ")}${suffix}  ${hint}`;
 		return [truncateToWidth(line, width)];
 	}
 }

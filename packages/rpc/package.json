@@ -1,0 +1,12 @@
+{
+	"name": "@vegardx/pi-rpc",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "JSON-lines RPC over Unix socket: orchestrator↔agent protocol for pi-maestro.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

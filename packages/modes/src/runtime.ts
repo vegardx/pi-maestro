@@ -21,7 +21,12 @@ import {
 	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
-import { type AgentBridge, initAgentBridge } from "./agent-bridge.js";
+import { isTmuxAvailable } from "@vegardx/pi-tmux";
+import {
+	type AgentBridge,
+	initAgentBridge,
+	isAgentMode,
+} from "./agent-bridge.js";
 import { agentName, shortDeliverableName } from "./agent-names.js";
 import {
 	type AgentState,
@@ -49,7 +54,15 @@ import {
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
+import { TmuxFanout } from "./execution-tmux.js";
 import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
+import {
+	handleAgentsCommand,
+	handleSteerCommand,
+	handleViewCommand,
+	updateAgentWidget,
+	type ViewState,
+} from "./orchestrator-tmux.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -166,6 +179,8 @@ export function createModesRuntime(
 	let panelCollapsed = false;
 	let orchestratorSessionPath: string | undefined;
 	let agentBridge: AgentBridge | undefined;
+	let tmuxFanout: TmuxFanout | undefined;
+	const viewState: ViewState = { viewPaneId: undefined };
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -671,6 +686,39 @@ export function createModesRuntime(
 			return;
 		}
 
+		// Tmux fanout path: spawn agents in tmux sessions with RPC.
+		if (isTmuxAvailable() && !isAgentMode()) {
+			if (!tmuxFanout) {
+				orchestratorCtx = ctx;
+				orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
+				const planDir = plansRoot();
+				tmuxFanout = new TmuxFanout({
+					engine: activeEngine,
+					extensionPath: "",
+					planDir,
+					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
+					onPlanChanged: emitPlanChanged,
+					onAgentStateChanged: (_id, _state) => {
+						if (tmuxFanout)
+							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+					},
+				});
+				await tmuxFanout.start();
+			}
+			const spawned = await tmuxFanout.tick();
+			if (spawned > 0) {
+				ctx.ui.notify(`Spawned ${spawned} tmux agent(s).`, "info");
+				setExecutionStage(
+					{ stage: "executing", deliverableId: "orchestrator" },
+					ctx,
+				);
+				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+			} else {
+				ctx.ui.notify("No deliverables ready to start.", "warning");
+			}
+			return;
+		}
+
 		// Fallback: no subagents available — main agent implements directly.
 		const sequentialTarget = nextSequentialDeliverable();
 		if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
@@ -851,6 +899,10 @@ export function createModesRuntime(
 	pi.registerCommand("agents", {
 		description: "List active and completed agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (tmuxFanout) {
+				handleAgentsCommand(ctx, tmuxFanout);
+				return;
+			}
 			if (!fanout || !engine) {
 				ctx.ui.notify("No agents active.", "info");
 				return;
@@ -867,7 +919,7 @@ export function createModesRuntime(
 				const d = deliverables(plan).find((x) => x.id === dId);
 				const title = d ? shortDeliverableName(d.title ?? dId) : dId;
 				const isActive = [...snap.active.values()].includes(dId);
-				const icon = isActive ? "\u25CF" : "\u2713";
+				const icon = isActive ? "●" : "✓";
 				lines.push(`${icon} ${name}   ${title}`);
 			}
 			ctx.ui.notify(lines.join("\n"), "info");
@@ -876,8 +928,13 @@ export function createModesRuntime(
 
 	pi.registerCommand("view", {
 		description:
-			"View an agent's session. /view <name> to switch, /view to return.",
+			"View an agent's tmux session in a split pane. /view <name> or /view for dialog.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (tmuxFanout) {
+				await handleViewCommand(args, ctx, tmuxFanout, viewState);
+				return;
+			}
+			// Legacy: subagents session-switching fallback
 			const target = args.trim();
 			if (!target) {
 				if (orchestratorSessionPath) {
@@ -927,6 +984,11 @@ export function createModesRuntime(
 	pi.registerCommand("steer", {
 		description: "Steer an agent. /steer <name> <guidance>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (tmuxFanout) {
+				handleSteerCommand(args, ctx, tmuxFanout);
+				return;
+			}
+			// Legacy: subagents steer
 			const [name, ...rest] = args.trim().split(/\s+/);
 			const guidance = rest.join(" ");
 			if (!name || !guidance) {

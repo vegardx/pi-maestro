@@ -13,7 +13,9 @@
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-core": "*",
 		"@vegardx/pi-git": "*",
-		"@vegardx/pi-models": "*"
+		"@vegardx/pi-models": "*",
+		"@vegardx/pi-rpc": "*",
+		"@vegardx/pi-tmux": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",

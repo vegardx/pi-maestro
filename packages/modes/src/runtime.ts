@@ -473,10 +473,12 @@ export function createModesRuntime(
 		const plan = engine.get();
 		const repo = d ? repoFor(plan, d) : undefined;
 		const fromRegistry = repo?.defaultBranch;
-		return (
+		const result =
 			(fromRegistry || detectDefaultBranch(repo?.path ?? plan.repoPath)) ??
-			"main"
-		);
+			"main";
+		// Guard: DEFAULT_REPO_KEY ("default") is a registry key, never a branch.
+		if (result === "default") return "main";
+		return result;
 	}
 
 	// The deliverable a sequential /implement would execute next: the active one,

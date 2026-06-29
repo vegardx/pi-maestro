@@ -950,12 +950,26 @@ describe("modes runtime", () => {
 		});
 	});
 
-	it("never mutates the system prompt during execution", () => {
-		// The cacheable prefix must stay byte-stable while executing: modes must
-		// not register a per-turn before_agent_start system-prompt rewrite.
+	it("injects plan-mode preamble only when in plan mode", () => {
 		const host = fakeHost();
-		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
-		expect(host.handlers.has("before_agent_start")).toBe(false);
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		const hook = host.handlers.get("before_agent_start")?.[0];
+		expect(hook).toBeDefined();
+		// In auto/ask/hack mode: no system prompt override.
+		runtime.setMode("auto" as ModeName, host.ctx as any);
+		const autoResult = hook({ systemPrompt: "base", prompt: "hi" }, host.ctx);
+		expect(autoResult).toBeUndefined();
+		// In plan mode: preamble is appended.
+		runtime.setMode("plan" as ModeName, host.ctx as any);
+		const planResult = hook(
+			{ systemPrompt: "base", prompt: "hi" },
+			host.ctx,
+		) as { systemPrompt: string };
+		expect(planResult.systemPrompt).toContain("PLAN MODE");
+		expect(planResult.systemPrompt).toContain("base");
 	});
 
 	it("renders the context budget breakdown in the footer during ask/auto", () => {

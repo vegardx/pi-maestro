@@ -849,7 +849,7 @@ describe("modes runtime", () => {
 				notify: (message: string) => notifications.push(message),
 				setStatus: (key: string, value: string | undefined) =>
 					statuses.set(key, value),
-				select: async () => "Implement (auto)",
+				select: async () => "Auto \u2014 implement autonomously",
 			},
 			sessionManager: {
 				getEntries: () => entries,
@@ -1074,7 +1074,7 @@ describe("modes runtime", () => {
 			await host.commands.get("plan").handler("My Plan", host.ctx);
 			runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
 			runtime.setMode("plan" as ModeName, host.ctx as any);
-			// select() is stubbed to return "Implement (auto)".
+			// select() is stubbed to return "Auto \u2014 implement autonomously".
 			await runtime.cycle(host.ctx as any);
 			expect(runtime.currentMode()).toBe("auto");
 			expect(host.notifications).toContain("Started a.");

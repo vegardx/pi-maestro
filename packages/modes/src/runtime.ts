@@ -188,8 +188,7 @@ export function createModesRuntime(
 				contextPercent: ctx.getContextUsage?.()?.percent,
 			}),
 		);
-		if (engine)
-			ctx.ui.setWidget?.("maestro.plan", renderPlanPanel(engine.get(), 18));
+		if (engine) ctx.ui.setWidget?.("maestro.plan", undefined);
 	}
 
 	// Best-effort context-budget breakdown. Deterministic given its inputs and
@@ -392,7 +391,7 @@ export function createModesRuntime(
 		const plan = engine.get();
 		const d = findDeliverable(plan, deliverableId);
 		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
-		const defaultBranch = detectDefaultBranch(repoPath) ?? "main";
+		const defaultBranch = defaultBranchFor(d);
 		const prepared = activateDeliverableWorktree(
 			engine,
 			deliverableId,
@@ -419,7 +418,7 @@ export function createModesRuntime(
 		const plan = engine.get();
 		const d = findDeliverable(plan, deliverableId);
 		const repoPath = d ? repoFor(plan, d).path : plan.repoPath;
-		const defaultBranch = detectDefaultBranch(repoPath) ?? "main";
+		const defaultBranch = defaultBranchFor(d);
 		const prepared = activateDeliverableBranch(
 			engine,
 			deliverableId,
@@ -456,6 +455,21 @@ export function createModesRuntime(
 			return false;
 		}
 		return true;
+	}
+
+	// Resolve the default branch for a deliverable's repo: prefer the registry's
+	// cached value (set at register-repo time), fall back to git detection, then
+	// "main". This avoids the failure when origin/HEAD isn't configured and the
+	// repo's default branch isn't main/master (e.g. sandbox repos use `dev`).
+	function defaultBranchFor(d: Deliverable | null | undefined): string {
+		if (!engine) return "main";
+		const plan = engine.get();
+		const repo = d ? repoFor(plan, d) : undefined;
+		const fromRegistry = repo?.defaultBranch;
+		return (
+			(fromRegistry || detectDefaultBranch(repo?.path ?? plan.repoPath)) ??
+			"main"
+		);
 	}
 
 	// The deliverable a sequential /implement would execute next: the active one,

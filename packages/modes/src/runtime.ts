@@ -21,13 +21,6 @@ import {
 	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
-import { agentName, shortDeliverableName } from "./agent-names.js";
-import {
-	type AgentState,
-	agentStateFromDeliverable,
-	renderAgentWidget,
-	renderAgentWidgetCollapsed,
-} from "./agent-widget.js";
 import { ModesAskQueue } from "./ask-queue.js";
 import {
 	calibrateSys,
@@ -47,12 +40,16 @@ import {
 	readModesCompactionDetails,
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
-import { FanoutOrchestrator, startSequentialExecution } from "./execution.js";
+import { startSequentialExecution } from "./execution.js";
+import { HerdrFanout } from "./execution-herdr.js";
+import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
+	handleAgentsCommand as handleAgentsCommandHerdr,
+	handleSteerCommand as handleSteerCommandHerdr,
+	handleViewCommand as handleViewCommandHerdr,
+	isHerdrAvailable,
+	updateHerdrAgentPanel,
+} from "./orchestrator-herdr.js";
 import {
 	classifyBash,
 	computeActiveTools,
@@ -157,17 +154,12 @@ export function createModesRuntime(
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
-	let fanout: FanoutOrchestrator | undefined;
+	let herdrFanout: HerdrFanout | undefined;
 	let orchestratorCtx: ExtensionContext | undefined;
-	const agentNames = new Map<string, string>(); // deliverableId → name
+	let orchestratorWorkspaceId: string | undefined;
 	const agentStartTimes = new Map<string, number>(); // deliverableId → Date.now()
-	const agentFinishTimes = new Map<string, number>(); // deliverableId → Date.now()
-	const agentTokens = new Map<
-		string,
-		{ in: number; out: number; cost: number }
-	>();
 	let panelCollapsed = false;
-	let orchestratorSessionPath: string | undefined;
+	let _orchestratorSessionPath: string | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -417,57 +409,25 @@ export function createModesRuntime(
 			planId: engine.get().slug as PlanId,
 		});
 		// Re-tick: if a new deliverable was added (or deps changed), spawn it.
-		fanout?.tick();
+		herdrFanout?.tick();
 		// Refresh the widget (covers worker completion via settle→onPlanChanged).
 		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	}
 
 	function updateAgentPanel(ctx: ExtensionContext): void {
-		if (!engine || !fanout) {
-			ctx.ui.setWidget?.("maestro.agents", undefined);
+		if (herdrFanout && engine) {
+			updateHerdrAgentPanel(ctx, {
+				herdrFanout,
+				engine,
+				agentStartTimes,
+				panelCollapsed,
+			});
 			return;
 		}
-		const snap = fanout.snapshot();
-		const plan = engine.get();
-		const states: AgentState[] = [];
-		for (const dId of snap.spawnedDeliverables) {
-			const d = deliverables(plan).find((x) => x.id === dId);
-			if (!d) continue;
-			const name = agentNames.get(dId) ?? dId;
-			const isActive = [...snap.active.values()].includes(dId);
-			const status = isActive ? "active" : "done";
-			if (!isActive && !agentFinishTimes.has(dId)) {
-				agentFinishTimes.set(dId, Date.now());
-			}
-			states.push(
-				agentStateFromDeliverable(
-					name,
-					"worker",
-					d,
-					status,
-					agentStartTimes.get(dId) ?? Date.now(),
-					agentFinishTimes.get(dId),
-					agentTokens.get(dId),
-				),
-			);
-		}
-		if (states.length === 0) {
-			ctx.ui.setWidget?.("maestro.agents", undefined);
-			return;
-		}
-		// Use component factory so render(width) gets the actual terminal width.
-		const collapsed = panelCollapsed;
-		ctx.ui.setWidget?.("maestro.agents", () => ({
-			render(width: number): string[] {
-				return collapsed
-					? renderAgentWidgetCollapsed(states)
-					: renderAgentWidget(states, width);
-			},
-			invalidate() {},
-		}));
+		ctx.ui.setWidget?.("maestro.agents", undefined);
 	}
 
-	function prepareWorktree(
+	function _prepareWorktree(
 		deliverableId: string,
 		ctx: ExtensionContext,
 	): string | undefined {
@@ -572,11 +532,7 @@ export function createModesRuntime(
 		onPlanChanged: emitPlanChanged,
 		mode: () => state.mode,
 		steerAgent: (deliverableId, guidance) => {
-			if (!fanout) return;
-			const runId = fanout.runForDeliverable(deliverableId);
-			if (!runId) return;
-			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-			subagents?.steer(runId, guidance);
+			herdrFanout?.steer(deliverableId, guidance);
 		},
 	})) {
 		pi.registerTool(tool);
@@ -628,41 +584,41 @@ export function createModesRuntime(
 				: "auto";
 		setMode(mode as ModeName, ctx);
 
-		// Orchestrator path: always delegate to workers when subagents available.
-		const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-		if (subagents) {
-			if (!fanout) {
+		// Orchestrator path: prefer herdr, fall back to subagents, then sequential.
+		if (isHerdrAvailable()) {
+			if (!herdrFanout) {
 				orchestratorCtx = ctx;
-				orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
-				fanout = new FanoutOrchestrator({
+				_orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
+				herdrFanout = new HerdrFanout({
 					engine,
-					subagents,
-					cwd: ctx.cwd,
-					prepareDeliverable: (deliverable) => ({
-						cwd: prepareWorktree(deliverable.id, ctx),
-					}),
+					defaultBranch: detectDefaultBranch(engine.get().repoPath) ?? "main",
 					onPlanChanged: emitPlanChanged,
-					onSpawn: (deliverable, _handle) => {
-						const taken = new Set(agentNames.values());
-						const name = agentName(deliverable.id, taken);
-						agentNames.set(deliverable.id, name);
-						agentStartTimes.set(deliverable.id, Date.now());
-						ctx.ui.notify(
-							`Spawned ${name} on ${shortDeliverableName(deliverable.title ?? deliverable.id)}.`,
-							"info",
-						);
-						updateAgentPanel(ctx);
-					},
-					onProgress: (_deliverable, _progress) => {
-						updateAgentPanel(ctx);
+					onAgentStateChanged: (deliverableId, state) => {
+						if (
+							state.status === "working" &&
+							!agentStartTimes.has(deliverableId)
+						) {
+							agentStartTimes.set(deliverableId, Date.now());
+						}
+						if (orchestratorCtx && herdrFanout && engine) {
+							updateHerdrAgentPanel(orchestratorCtx, {
+								herdrFanout,
+								engine,
+								agentStartTimes,
+								panelCollapsed,
+							});
+						}
 					},
 				});
 			}
-			const spawned = fanout.tick();
+			const spawned = await herdrFanout.tick();
 			if (spawned > 0) {
 				const plan = activeEngine.get();
 				const summary = executionSummary(plan);
-				ctx.ui.notify(`Spawned ${spawned} agent(s). ${summary ?? ""}`, "info");
+				ctx.ui.notify(
+					`Spawned ${spawned} agent(s) via herdr. ${summary ?? ""}`,
+					"info",
+				);
 				setExecutionStage(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
@@ -673,7 +629,7 @@ export function createModesRuntime(
 			return;
 		}
 
-		// Fallback: no subagents available — main agent implements directly.
+		// Fallback: no herdr — main agent implements directly (sequential).
 		const sequentialTarget = nextSequentialDeliverable();
 		if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
 			return;
@@ -853,26 +809,11 @@ export function createModesRuntime(
 	pi.registerCommand("agents", {
 		description: "List active and completed agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (!fanout || !engine) {
-				ctx.ui.notify("No agents active.", "info");
+			if (herdrFanout && engine) {
+				handleAgentsCommandHerdr(ctx, herdrFanout, engine);
 				return;
 			}
-			const snap = fanout.snapshot();
-			if (snap.spawnedDeliverables.size === 0) {
-				ctx.ui.notify("No agents active.", "info");
-				return;
-			}
-			const plan = engine.get();
-			const lines: string[] = [];
-			for (const dId of snap.spawnedDeliverables) {
-				const name = agentNames.get(dId) ?? dId;
-				const d = deliverables(plan).find((x) => x.id === dId);
-				const title = d ? shortDeliverableName(d.title ?? dId) : dId;
-				const isActive = [...snap.active.values()].includes(dId);
-				const icon = isActive ? "\u25CF" : "\u2713";
-				lines.push(`${icon} ${name}   ${title}`);
-			}
-			ctx.ui.notify(lines.join("\n"), "info");
+			ctx.ui.notify("No agents active.", "info");
 		},
 	});
 
@@ -880,79 +821,31 @@ export function createModesRuntime(
 		description:
 			"View an agent's session. /view <name> to switch, /view to return.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const target = args.trim();
-			if (!target) {
-				if (orchestratorSessionPath) {
-					await ctx.switchSession(orchestratorSessionPath);
-				} else {
-					ctx.ui.notify("Already in orchestrator.", "info");
-				}
+			if (herdrFanout) {
+				await handleViewCommandHerdr(args, ctx, {
+					herdrFanout,
+					orchestratorWorkspaceId,
+				});
 				return;
 			}
-			const entry = [...agentNames.entries()].find(
-				([, name]) => name === target,
-			);
-			if (!entry) {
-				ctx.ui.notify(`Unknown agent: ${target}`, "warning");
-				return;
-			}
-			const [deliverableId] = entry;
-			if (!fanout) {
-				ctx.ui.notify("No agents have been spawned.", "warning");
-				return;
-			}
-			const sessionDir = fanout.sessionDirForDeliverable(deliverableId);
-			if (!sessionDir) {
-				ctx.ui.notify(`No session for ${target}.`, "warning");
-				return;
-			}
-			try {
-				const { readdirSync } = await import("node:fs");
-				const files = readdirSync(sessionDir).filter((f: string) =>
-					f.endsWith(".jsonl"),
-				);
-				if (files.length === 0) {
-					ctx.ui.notify(`No session file for ${target}.`, "warning");
-					return;
-				}
-				if (!orchestratorSessionPath) {
-					orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
-				}
-				files.sort();
-				await ctx.switchSession(`${sessionDir}/${files[files.length - 1]}`);
-			} catch {
-				ctx.ui.notify(`Could not read session for ${target}.`, "warning");
-			}
+			ctx.ui.notify("No agents active (herdr not available).", "info");
 		},
 	});
 
 	pi.registerCommand("steer", {
 		description: "Steer an agent. /steer <name> <guidance>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (herdrFanout) {
+				await handleSteerCommandHerdr(args, ctx, herdrFanout);
+				return;
+			}
 			const [name, ...rest] = args.trim().split(/\s+/);
 			const guidance = rest.join(" ");
 			if (!name || !guidance) {
 				ctx.ui.notify("Usage: /steer <agent-name> <guidance>", "warning");
 				return;
 			}
-			const entry = [...agentNames.entries()].find(([, n]) => n === name);
-			if (!entry) {
-				ctx.ui.notify(`Unknown agent: ${name}`, "warning");
-				return;
-			}
-			const [deliverableId] = entry;
-			if (!fanout) {
-				ctx.ui.notify("No active agents.", "warning");
-				return;
-			}
-			const runId = fanout.runForDeliverable(deliverableId);
-			if (!runId) {
-				ctx.ui.notify(`${name} is not currently running.`, "warning");
-				return;
-			}
-			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-			subagents?.steer(runId, guidance);
-			ctx.ui.notify(`Steered ${name}: "${guidance}"`, "info");
+			ctx.ui.notify("No agents active (herdr not available).", "info");
 		},
 	});
 
@@ -987,7 +880,7 @@ export function createModesRuntime(
 			const preamble = buildPlanModePreamble(engine);
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
-		if (fanout) {
+		if (herdrFanout) {
 			const preamble = buildOrchestratorPreamble(engine);
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
@@ -1023,36 +916,6 @@ export function createModesRuntime(
 		}
 		const reason = toolBlockedInPlanMode(event.toolName);
 		if (reason) return { block: true, reason };
-	});
-
-	maestro.events.on(EVENTS.runProgress, ({ runId, progress }) => {
-		fanout?.progress(runId, progress);
-	});
-
-	// Accumulate token usage from agent events for the panel display.
-	maestro.events.on(EVENTS.runAgentEvent, ({ runId, event }) => {
-		if (!fanout) return;
-		const evt = event as {
-			type?: string;
-			message?: {
-				role?: string;
-				usage?: { input?: number; output?: number; cost?: { total?: number } };
-			};
-		};
-		if (evt.type !== "message_end" || evt.message?.role !== "assistant") return;
-		const usage = evt.message.usage;
-		if (!usage) return;
-		// Map runId → deliverableId.
-		const snap = fanout.snapshot();
-		const deliverableId = snap.active.get(runId);
-		if (!deliverableId) return;
-		const prev = agentTokens.get(deliverableId) ?? { in: 0, out: 0, cost: 0 };
-		agentTokens.set(deliverableId, {
-			in: prev.in + (usage.input ?? 0),
-			out: prev.out + (usage.output ?? 0),
-			cost: prev.cost + (usage.cost?.total ?? 0),
-		});
-		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {

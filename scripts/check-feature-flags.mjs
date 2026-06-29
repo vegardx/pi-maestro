@@ -25,7 +25,6 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_PACKAGES = [
 	"ask",
 	"prompt-assist",
-	"subagents",
 	"commit",
 	"smart-compact",
 	"modes",

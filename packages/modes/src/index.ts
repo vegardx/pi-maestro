@@ -48,11 +48,17 @@ export {
 	classifyExecutionSteering,
 	completeActiveDeliverable,
 	completionGateSatisfied,
-	FanoutOrchestrator,
 	parseShippedPr,
 	startSequentialExecution,
 	transitionThrough,
 } from "./execution.js";
+export {
+	type HerdrAgentState,
+	type HerdrAgentStatus,
+	HerdrFanout,
+	type HerdrFanoutDeps,
+	type HerdrFanoutSnapshot,
+} from "./execution-herdr.js";
 export {
 	renderPlanMarkdown,
 	renderPlanSeed,
@@ -77,6 +83,11 @@ export {
 	resolveShipSummaryInput,
 	toPersistedState,
 } from "./session.js";
+export {
+	SessionTailer,
+	type TokenChangeCallback,
+	type TokenSnapshot,
+} from "./session-tailer.js";
 export { readModesCompactionSettings } from "./settings.js";
 export {
 	deliverableIssueBody,

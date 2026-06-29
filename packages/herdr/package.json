@@ -1,0 +1,12 @@
+{
+	"name": "@vegardx/pi-herdr",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Typed TypeScript client for herdr's CLI and Unix socket API.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

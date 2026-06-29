@@ -13,14 +13,7 @@ const LIBRARIES = [
 	"git",
 	"github",
 ];
-const EXTENSIONS = [
-	"ask",
-	"prompt-assist",
-	"subagents",
-	"commit",
-	"smart-compact",
-	"modes",
-];
+const EXTENSIONS = ["ask", "prompt-assist", "commit", "smart-compact", "modes"];
 
 describe("scaffold", () => {
 	it("ships every v1 package", () => {

@@ -15,7 +15,6 @@ import {
 	classifyExecutionSteering,
 	completeActiveDeliverable,
 	completionGateSatisfied,
-	FanoutOrchestrator,
 	parseShippedPr,
 	startSequentialExecution,
 	transitionThrough,
@@ -1214,69 +1213,6 @@ describe("execution driver", () => {
 		const a = engine.addDeliverable({ title: "A" });
 		transitionThrough(engine, a.id, "shipped");
 		expect(deliverables(engine.get())[0].status).toBe("shipped");
-	});
-
-	it("fanout spawns ready chains and advances successors after shipped result", async () => {
-		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
-		engine.addWorkItem(a.id, { title: "gate" });
-		const b = engine.addDeliverable({ title: "B", dependsOn: [a.id] });
-		engine.addWorkItem(b.id, { title: "gate" });
-		const spawned: string[] = [];
-		const pending: Array<{ id: string; resolve: (value: any) => void }> = [];
-		const subagents = {
-			spawn: (_prompt: string, profile: any) => {
-				const id = `run-${pending.length + 1}`;
-				spawned.push(`${id}:${profile.cwd}`);
-				let resolve!: (value: any) => void;
-				const promise = new Promise((r) => {
-					resolve = r;
-				});
-				pending.push({ id, resolve });
-				return { id, result: () => promise };
-			},
-			get: () => undefined,
-			list: () => [],
-			steer: () => {},
-			stop: () => {},
-		};
-		const orch = new FanoutOrchestrator({
-			engine,
-			subagents: subagents as any,
-			cwd: "/repo/worktree",
-		});
-		expect(orch.tick()).toBe(1);
-		expect(spawned).toEqual(["run-1:/repo/worktree"]);
-		expect(deliverables(engine.get())[0].status).toBe("active");
-		pending[0].resolve({ status: "succeeded", summary: "shipped PR #9" });
-		await Promise.resolve();
-		expect(deliverables(engine.get())[0]).toMatchObject({
-			status: "shipped",
-			prNumber: 9,
-		});
-		expect(spawned).toEqual(["run-1:/repo/worktree", "run-2:/repo/worktree"]);
-		expect(deliverables(engine.get())[1].status).toBe("active");
-	});
-
-	it("fanout routes progress to the owning deliverable", () => {
-		const a = engine.addDeliverable({ title: "A", dependsOn: [] });
-		engine.addWorkItem(a.id, { title: "gate" });
-		const seen: string[] = [];
-		const subagents = {
-			spawn: () => ({ id: "run-1", result: () => new Promise(() => {}) }),
-			get: () => undefined,
-			list: () => [],
-			steer: () => {},
-			stop: () => {},
-		};
-		const orch = new FanoutOrchestrator({
-			engine,
-			subagents: subagents as any,
-			onProgress: (deliverable, progress) =>
-				seen.push(`${deliverable.id}:${progress.text}`),
-		});
-		orch.tick();
-		orch.progress("run-1" as any, { text: "reading" });
-		expect(seen).toEqual(["a:reading"]);
 	});
 });
 

@@ -6,6 +6,7 @@
 import { defineExtension } from "@vegardx/pi-core";
 import { createModesRuntime } from "./runtime.js";
 
+export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
 export {
 	calibrateSys,
@@ -54,10 +55,24 @@ export {
 	transitionThrough,
 } from "./execution.js";
 export {
+	type TmuxAgentState,
+	type TmuxAgentStatus,
+	TmuxFanout,
+	type TmuxFanoutDeps,
+} from "./execution-tmux.js";
+export {
 	renderPlanMarkdown,
 	renderPlanSeed,
 	renderPlanSummary,
 } from "./markdown.js";
+export {
+	formatAgentStatusLine,
+	handleAgentsCommand,
+	handleSteerCommand,
+	handleViewCommand,
+	updateAgentWidget,
+	type ViewState,
+} from "./orchestrator-tmux.js";
 export {
 	classifyBash,
 	computeActiveTools,

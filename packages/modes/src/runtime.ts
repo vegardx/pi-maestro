@@ -554,9 +554,11 @@ export function createModesRuntime(
 				? "ask"
 				: "auto";
 		setMode(mode as ModeName, ctx);
-		if (args.includes("--fanout")) {
-			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-			if (subagents) {
+
+		// Orchestrator path: always delegate to workers when subagents available.
+		const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+		if (subagents) {
+			if (!fanout) {
 				fanout = new FanoutOrchestrator({
 					engine,
 					subagents,
@@ -566,22 +568,33 @@ export function createModesRuntime(
 					}),
 					onPlanChanged: emitPlanChanged,
 					onSpawn: (deliverable, handle) =>
-						ctx.ui.notify(`Spawned ${deliverable.id} as ${handle.id}.`, "info"),
+						ctx.ui.notify(
+							`Spawned worker:${deliverable.id} (${handle.id}).`,
+							"info",
+						),
 					onProgress: (deliverable, progress) =>
-						ctx.ui.setStatus(
-							"maestro.execution",
-							`${deliverable.id}: ${progress.text ?? "running"}`,
+						ctx.ui.notify(
+							`worker:${deliverable.id} \u2014 ${progress.text ?? "running"}`,
+							"info",
 						),
 				});
-				const spawned = fanout.tick();
-				ctx.ui.notify(`Fanout spawned ${spawned} worker(s).`, "info");
-				return;
 			}
-			ctx.ui.notify(
-				"subagents.v1 unavailable; falling back to sequential.",
-				"warning",
-			);
+			const spawned = fanout.tick();
+			if (spawned > 0) {
+				const plan = activeEngine.get();
+				const summary = executionSummary(plan);
+				ctx.ui.notify(`Spawned ${spawned} worker(s). ${summary ?? ""}`, "info");
+				setExecutionStage(
+					{ stage: "executing", deliverableId: "orchestrator" },
+					ctx,
+				);
+			} else {
+				ctx.ui.notify("No deliverables ready to start.", "warning");
+			}
+			return;
 		}
+
+		// Fallback: no subagents available — main agent implements directly.
 		const sequentialTarget = nextSequentialDeliverable();
 		if (sequentialTarget && !assertDeliverableRepo(ctx, sequentialTarget))
 			return;
@@ -659,7 +672,8 @@ export function createModesRuntime(
 	}
 
 	pi.registerCommand("implement", {
-		description: "Start executing the active plan. Pass --fanout for workers.",
+		description:
+			"Start executing the active plan. Workers auto-spawn when subagents are available.",
 		handler: runImplement,
 	});
 
@@ -1115,12 +1129,33 @@ async function buildShipSummary(
 	readSettings: typeof readModesCompactionSettings,
 ): Promise<string | undefined> {
 	const settings = readSettings(ctx.cwd);
-	const entries = ctx.sessionManager.getEntries();
-	const resolved = resolveShipSummaryInput(
-		entries,
-		deliverable,
-		ctx.sessionManager.getSessionFile?.(),
-	);
+	const currentSessionFile = ctx.sessionManager.getSessionFile?.();
+
+	// If the deliverable was worked in a different session (e.g. by a worker
+	// subagent), load that session's entries from disk so the carry-forward
+	// summary reflects the actual implementation work.
+	let entries = ctx.sessionManager.getEntries();
+	let sessionFile = currentSessionFile;
+	if (
+		deliverable.sessionPath &&
+		currentSessionFile &&
+		deliverable.sessionPath !== currentSessionFile
+	) {
+		try {
+			const { readFileSync } = await import("node:fs");
+			const raw = readFileSync(deliverable.sessionPath, "utf8");
+			entries = raw
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line));
+			sessionFile = deliverable.sessionPath;
+		} catch {
+			// Worker session file missing or unreadable; fall through to
+			// resolveShipSummaryInput which will soft-fail gracefully.
+		}
+	}
+
+	const resolved = resolveShipSummaryInput(entries, deliverable, sessionFile);
 	if (!resolved.ok) return undefined;
 	const summarise = createModesSummariser(ctx, settings.timeoutMs);
 	const text = await buildCarryForwardSummary({

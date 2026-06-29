@@ -604,7 +604,7 @@ export function createModesRuntime(
 						display: true,
 						details: { deliverableId: deliverable.id },
 					},
-					{ triggerTurn: false },
+					{ triggerTurn: true },
 				);
 			},
 		});
@@ -637,7 +637,7 @@ export function createModesRuntime(
 						display: true,
 						details: { deliverableId: result.deliverable.id },
 					},
-					{ triggerTurn: false },
+					{ triggerTurn: true },
 				);
 			}
 		}

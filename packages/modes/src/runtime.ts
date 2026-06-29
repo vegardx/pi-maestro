@@ -162,6 +162,10 @@ export function createModesRuntime(
 	const agentNames = new Map<string, string>(); // deliverableId → name
 	const agentStartTimes = new Map<string, number>(); // deliverableId → Date.now()
 	const agentFinishTimes = new Map<string, number>(); // deliverableId → Date.now()
+	const agentTokens = new Map<
+		string,
+		{ in: number; out: number; cost: number }
+	>();
 	let panelCollapsed = false;
 	let orchestratorSessionPath: string | undefined;
 	let baselineTools: string[] | undefined;
@@ -443,6 +447,7 @@ export function createModesRuntime(
 					status,
 					agentStartTimes.get(dId) ?? Date.now(),
 					agentFinishTimes.get(dId),
+					agentTokens.get(dId),
 				),
 			);
 		}
@@ -1016,6 +1021,32 @@ export function createModesRuntime(
 
 	maestro.events.on(EVENTS.runProgress, ({ runId, progress }) => {
 		fanout?.progress(runId, progress);
+	});
+
+	// Accumulate token usage from agent events for the panel display.
+	maestro.events.on(EVENTS.runAgentEvent, ({ runId, event }) => {
+		if (!fanout) return;
+		const evt = event as {
+			type?: string;
+			message?: {
+				role?: string;
+				usage?: { input?: number; output?: number; cost?: { total?: number } };
+			};
+		};
+		if (evt.type !== "message_end" || evt.message?.role !== "assistant") return;
+		const usage = evt.message.usage;
+		if (!usage) return;
+		// Map runId → deliverableId.
+		const snap = fanout.snapshot();
+		const deliverableId = snap.active.get(runId);
+		if (!deliverableId) return;
+		const prev = agentTokens.get(deliverableId) ?? { in: 0, out: 0, cost: 0 };
+		agentTokens.set(deliverableId, {
+			in: prev.in + (usage.input ?? 0),
+			out: prev.out + (usage.output ?? 0),
+			cost: prev.cost + (usage.cost?.total ?? 0),
+		});
+		if (orchestratorCtx) updateAgentPanel(orchestratorCtx);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {

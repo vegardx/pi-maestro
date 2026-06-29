@@ -1,6 +1,7 @@
-// Renders the live agent status panel (string[] for setWidget).
-// Box-drawn with top + sides, no bottom border (editor provides the boundary).
+// Renders the agent status panel with proper column alignment.
+// Uses truncateToWidth for fixed-width cells that respect terminal width.
 
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Deliverable, WorkItem } from "./schema.js";
 
 export interface AgentState {
@@ -12,12 +13,70 @@ export interface AgentState {
 	readonly tasksTotal: number;
 	readonly currentTask?: string;
 	readonly elapsedMs: number;
+	readonly tokensIn?: number;
+	readonly tokensOut?: number;
+	readonly cost?: number;
 }
 
 function elapsed(ms: number): string {
 	const s = Math.floor(ms / 1000);
 	if (s < 60) return `${s}s`;
-	return `${Math.floor(s / 60)}m${s % 60}s`;
+	if (s < 3600) return `${Math.floor(s / 60)}m${s % 60}s`;
+	return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
+function fmtTokens(n: number | undefined): string {
+	if (n === undefined || n === 0) return "-";
+	if (n < 1000) return `${n}`;
+	if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+	return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+function fmtCost(n: number | undefined): string {
+	if (n === undefined || n === 0) return "";
+	return `$${n.toFixed(3)}`;
+}
+
+/**
+ * Column layout definition. Each column has a min width and whether it's
+ * right-aligned. Flexible columns expand to fill remaining space.
+ */
+interface Column {
+	readonly min: number;
+	readonly flex?: boolean;
+	readonly right?: boolean;
+}
+
+const COLUMNS: Column[] = [
+	{ min: 14 }, // name (flying-falcon)
+	{ min: 7 }, // role (worker)
+	{ min: 10, flex: true }, // deliverable
+	{ min: 3 }, // progress (2/4)
+	{ min: 12, flex: true }, // activity
+	{ min: 6 }, // tokens ↑
+	{ min: 6 }, // tokens ↓
+	{ min: 4, right: true }, // time
+];
+
+function buildRow(cells: string[], width: number): string {
+	const innerWidth = width - 4; // "│ " + content + " │"
+	const totalMin = COLUMNS.reduce((s, c) => s + c.min, 0);
+	const gaps = COLUMNS.length - 1; // 2-space gaps between columns
+	const gapSpace = gaps * 2;
+	const flexCols = COLUMNS.filter((c) => c.flex);
+	const extra = Math.max(0, innerWidth - totalMin - gapSpace);
+	const flexBonus =
+		flexCols.length > 0 ? Math.floor(extra / flexCols.length) : 0;
+
+	const parts: string[] = [];
+	for (let i = 0; i < COLUMNS.length; i++) {
+		const col = COLUMNS[i];
+		const w = col.min + (col.flex ? flexBonus : 0);
+		const cell = cells[i] ?? "";
+		parts.push(truncateToWidth(cell, w, "\u2026", true));
+	}
+	const row = parts.join("  ");
+	return `\u2502 ${truncateToWidth(row, innerWidth, "\u2026", true)} \u2502`;
 }
 
 export function renderAgentWidget(
@@ -26,11 +85,11 @@ export function renderAgentWidget(
 ): string[] {
 	if (agents.length === 0) return [];
 
-	// Build the top border: ┌ Agents ─────── /a ┐
+	// Top border: ┌ Agents ─── /a ┐
 	const title = " Agents ";
 	const hint = " /a ";
 	const borderFill = Math.max(0, width - 2 - title.length - hint.length);
-	const topBorder = `\u250C${title}${"─".repeat(borderFill)}${hint}\u2510`;
+	const topBorder = `\u250C${title}${"\u2500".repeat(borderFill)}${hint}\u2510`;
 
 	const lines: string[] = [topBorder];
 
@@ -40,21 +99,25 @@ export function renderAgentWidget(
 			a.status === "done"
 				? "done"
 				: a.status === "waiting"
-					? "\u26A0 waiting for input"
+					? "\u26A0 waiting"
 					: (a.currentTask ?? "working");
+		const tokens =
+			a.tokensIn || a.tokensOut ? `\u2191${fmtTokens(a.tokensIn)}` : "";
+		const tokensOut =
+			a.tokensIn || a.tokensOut ? `\u2193${fmtTokens(a.tokensOut)}` : "";
 		const time = elapsed(a.elapsedMs);
 
-		// Build content: name  role  deliverable  progress  activity  time
-		const content = `${a.name}  ${a.role}  ${a.deliverableTitle}  ${progress}  ${activity}  ${time}`;
-
-		// Pad to fill the box width (minus the 2 border chars │ │)
-		const inner = width - 4; // "│ " + content + " │"
-		const padded =
-			content.length >= inner
-				? content.slice(0, inner)
-				: content + " ".repeat(inner - content.length);
-
-		lines.push(`\u2502 ${padded} \u2502`);
+		const cells = [
+			a.name,
+			a.role,
+			a.deliverableTitle,
+			progress,
+			activity,
+			tokens,
+			tokensOut,
+			time,
+		];
+		lines.push(buildRow(cells, width));
 	}
 
 	return lines;
@@ -83,6 +146,7 @@ export function agentStateFromDeliverable(
 	status: AgentState["status"],
 	startedAt: number,
 	endedAt?: number,
+	tokens?: { in: number; out: number; cost: number },
 ): AgentState {
 	const items = (d.children ?? []).filter(
 		(c): c is WorkItem =>
@@ -99,6 +163,9 @@ export function agentStateFromDeliverable(
 		tasksTotal: items.length,
 		currentTask: firstUndone?.title,
 		elapsedMs: (endedAt ?? Date.now()) - startedAt,
+		tokensIn: tokens?.in,
+		tokensOut: tokens?.out,
+		cost: tokens?.cost,
 	};
 }
 

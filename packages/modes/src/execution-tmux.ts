@@ -1,0 +1,381 @@
+import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { addWorktree, removeWorktree, worktreePathFor } from "@vegardx/pi-git";
+import {
+	type AgentMessage,
+	createSocketPath,
+	MaestroRpcServer as RpcServer,
+	type TokenSnapshot,
+} from "@vegardx/pi-rpc";
+import {
+	hasSession,
+	kill as killSession,
+	spawn as tmuxSpawn,
+} from "@vegardx/pi-tmux";
+import { agentName } from "./agent-names.js";
+import type { PlanEngine } from "./engine.js";
+import { transitionThrough } from "./execution.js";
+import { renderPlanSeed } from "./markdown.js";
+import {
+	type Deliverable,
+	defaultBranchForDeliverable,
+	pendingLifecycle,
+	pickBaseBranch,
+	readyDeliverables,
+	repoFor,
+} from "./schema.js";
+
+// ─── Types ──────────────────────────────────────────────────────────────────
+
+export type TmuxAgentStatus =
+	| "spawning"
+	| "working"
+	| "idle"
+	| "done"
+	| "failed";
+
+export interface TmuxAgentState {
+	readonly deliverableId: string;
+	readonly agentName: string;
+	readonly worktreePath: string;
+	readonly sessionFile: string;
+	status: TmuxAgentStatus;
+	tokens: TokenSnapshot;
+}
+
+export interface TmuxFanoutDeps {
+	readonly engine: PlanEngine;
+	readonly extensionPath: string;
+	readonly planDir: string;
+	readonly defaultBranch: string;
+	readonly onPlanChanged?: () => void;
+	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
+}
+
+// ─── Implementation ─────────────────────────────────────────────────────────
+
+const POLL_INTERVAL_MS = 3000;
+const ZERO_TOKENS: TokenSnapshot = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: 0,
+	turns: 0,
+};
+
+export class TmuxFanout {
+	private agents = new Map<string, TmuxAgentState>();
+	private takenNames = new Set<string>();
+	private server: RpcServer;
+	private socketPath: string;
+	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	private settlePromise: Promise<void> | undefined;
+	private settleResolve: (() => void) | undefined;
+
+	constructor(private readonly deps: TmuxFanoutDeps) {
+		this.server = new RpcServer();
+		this.socketPath = createSocketPath(deps.planDir);
+	}
+
+	/**
+	 * Start the RPC server and poll loop. Must be called before tick().
+	 */
+	async start(): Promise<void> {
+		await this.server.listen(this.socketPath);
+		this.server.on("connected", (agentId) => this.handleConnected(agentId));
+		this.server.on("disconnected", (agentId) =>
+			this.handleDisconnected(agentId),
+		);
+		this.server.on("message", (agentId, msg) =>
+			this.handleMessage(agentId, msg),
+		);
+		this.pollTimer = setInterval(() => this.pollSessions(), POLL_INTERVAL_MS);
+	}
+
+	/**
+	 * Spawn agents for all ready deliverables. Returns the count spawned.
+	 */
+	async tick(): Promise<number> {
+		const plan = this.deps.engine.get();
+		if (pendingLifecycle(plan, "pre")) return 0;
+
+		let spawned = 0;
+		for (const d of readyDeliverables(plan)) {
+			if (this.agents.has(d.id)) continue;
+			await this.spawnAgent(d);
+			spawned++;
+		}
+		if (spawned > 0) this.deps.onPlanChanged?.();
+		return spawned;
+	}
+
+	/**
+	 * Send a steer message to an agent by deliverable ID.
+	 */
+	steer(deliverableId: string, message: string): boolean {
+		const state = this.agents.get(deliverableId);
+		if (!state) return false;
+		return this.server.send(deliverableId, {
+			type: "steer",
+			content: message,
+		});
+	}
+
+	/**
+	 * Returns a promise that resolves when all spawned agents are done/failed.
+	 */
+	settle(): Promise<void> {
+		if (this.allSettled()) return Promise.resolve();
+		if (!this.settlePromise) {
+			this.settlePromise = new Promise((resolve) => {
+				this.settleResolve = resolve;
+			});
+		}
+		return this.settlePromise;
+	}
+
+	/**
+	 * Snapshot the current agent states.
+	 */
+	snapshot(): { agents: ReadonlyMap<string, TmuxAgentState> } {
+		return { agents: this.agents };
+	}
+
+	/**
+	 * Find an agent state by its human-readable name.
+	 */
+	agentByName(name: string): TmuxAgentState | undefined {
+		for (const state of this.agents.values()) {
+			if (state.agentName === name) return state;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Kill a specific agent's session and remove its worktree.
+	 */
+	async cleanup(deliverableId: string): Promise<void> {
+		const state = this.agents.get(deliverableId);
+		if (!state) return;
+		try {
+			await killSession(state.agentName);
+		} catch {
+			// Session may already be gone
+		}
+		removeWorktree(this.deps.engine.get().repoPath, state.worktreePath, {
+			force: true,
+		});
+		this.agents.delete(deliverableId);
+		this.takenNames.delete(state.agentName);
+	}
+
+	/**
+	 * Kill all agents, stop the server and poll loop.
+	 */
+	async destroy(): Promise<void> {
+		if (this.pollTimer) {
+			clearInterval(this.pollTimer);
+			this.pollTimer = undefined;
+		}
+		for (const [id] of this.agents) {
+			const state = this.agents.get(id);
+			if (state) {
+				try {
+					await killSession(state.agentName);
+				} catch {
+					// Ignore
+				}
+			}
+		}
+		await this.server.close();
+		this.agents.clear();
+		this.takenNames.clear();
+	}
+
+	// ─── Private ──────────────────────────────────────────────────────────────
+
+	private async spawnAgent(d: Deliverable): Promise<void> {
+		const plan = this.deps.engine.get();
+		const repo = repoFor(plan, d);
+		const branch = d.branch ?? defaultBranchForDeliverable(d);
+		const baseBranch = pickBaseBranch(plan, d.id, this.deps.defaultBranch);
+		const wtPath = worktreePathFor(repo.path, d.id);
+
+		const result = addWorktree(repo.path, wtPath, branch, baseBranch);
+		if (!result.ok) {
+			this.markFailed(d.id, result.error);
+			return;
+		}
+
+		// Assign agent name
+		const name = agentName(d.id, this.takenNames);
+		this.takenNames.add(name);
+
+		// Set status to active in the plan
+		this.deps.engine.setStatus(d.id, "active");
+
+		// Write session file
+		const sessionDir = join(result.path, ".pi", "sessions");
+		mkdirSync(sessionDir, { recursive: true });
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
+		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
+		const sessionLines = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: randomUUID(),
+				timestamp: new Date().toISOString(),
+				cwd: result.path,
+			}),
+			JSON.stringify({
+				type: "custom_message",
+				customType: "maestro-execution-seed",
+				content: seed,
+				display: false,
+			}),
+			JSON.stringify({
+				type: "message",
+				role: "user",
+				content:
+					`Implement this deliverable: "${d.title}". ` +
+					"Follow the plan context above. Complete all gating tasks, " +
+					"commit your work, push, and open a PR.",
+			}),
+		];
+		writeFileSync(sessionFile, `${sessionLines.join("\n")}\n`);
+
+		// Register agent state
+		const state: TmuxAgentState = {
+			deliverableId: d.id,
+			agentName: name,
+			worktreePath: result.path,
+			sessionFile,
+			status: "spawning",
+			tokens: { ...ZERO_TOKENS },
+		};
+		this.agents.set(d.id, state);
+
+		// Spawn tmux session with env vars for RPC discovery
+		const command = [
+			`PI_MAESTRO_SOCK=${this.socketPath}`,
+			`PI_MAESTRO_AGENT_ID=${d.id}`,
+			`pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`,
+		].join(" ");
+		await tmuxSpawn(name, result.path, command);
+
+		this.deps.onAgentStateChanged?.(d.id, state);
+	}
+
+	private handleConnected(agentId: string): void {
+		const state = this.agents.get(agentId);
+		if (!state) return;
+		state.status = "working";
+		this.deps.onAgentStateChanged?.(agentId, state);
+	}
+
+	private handleDisconnected(agentId: string): void {
+		const state = this.agents.get(agentId);
+		if (!state || state.status === "done" || state.status === "failed") return;
+		// Unexpected disconnect — check if tmux session is still alive
+		this.checkSessionAlive(agentId);
+	}
+
+	private handleMessage(agentId: string, msg: AgentMessage): void {
+		const state = this.agents.get(agentId);
+		if (!state) return;
+
+		switch (msg.type) {
+			case "status":
+				if (msg.status === "working") {
+					state.status = "working";
+				} else if (msg.status === "idle") {
+					state.status = "idle";
+					this.handleAgentIdle(agentId);
+				} else if (msg.status === "error") {
+					this.markFailed(agentId, msg.detail);
+				}
+				this.deps.onAgentStateChanged?.(agentId, state);
+				break;
+			case "tokens":
+				state.tokens = msg.snapshot;
+				this.deps.onAgentStateChanged?.(agentId, state);
+				break;
+			case "done":
+				this.markDone(agentId, msg.summary);
+				break;
+		}
+	}
+
+	private handleAgentIdle(agentId: string): void {
+		// Agent finished a turn — decide whether it's truly done.
+		// For now: send shutdown and transition. The agent bridge signals
+		// idle after each turn; we trust the agent completed its work
+		// when it goes idle (single-shot execution model).
+		this.server.send(agentId, { type: "shutdown", reason: "turn complete" });
+		this.markDone(agentId);
+	}
+
+	private markDone(agentId: string, summary?: string): void {
+		const state = this.agents.get(agentId);
+		if (!state || state.status === "done") return;
+		state.status = "done";
+		if (summary) {
+			this.deps.engine.updateDeliverable(agentId, { summary });
+		}
+		transitionThrough(this.deps.engine, agentId, "in-review");
+		this.deps.onAgentStateChanged?.(agentId, state);
+		this.deps.onPlanChanged?.();
+		// Spawn newly unblocked dependents
+		this.tick();
+		this.checkSettle();
+	}
+
+	private markFailed(agentId: string, detail?: string): void {
+		const state = this.agents.get(agentId);
+		if (!state) return;
+		state.status = "failed";
+		if (detail) {
+			this.deps.engine.updateDeliverable(agentId, { summary: detail });
+		}
+		transitionThrough(this.deps.engine, agentId, "needs-attention");
+		this.deps.onAgentStateChanged?.(agentId, state);
+		this.deps.onPlanChanged?.();
+		this.checkSettle();
+	}
+
+	private async checkSessionAlive(agentId: string): Promise<void> {
+		const state = this.agents.get(agentId);
+		if (!state) return;
+		const alive = await hasSession(state.agentName);
+		if (!alive) {
+			this.markFailed(agentId, "agent session terminated unexpectedly");
+		}
+	}
+
+	private pollSessions(): void {
+		for (const [id, state] of this.agents) {
+			if (state.status === "spawning" || state.status === "working") {
+				this.checkSessionAlive(id);
+			}
+		}
+	}
+
+	private allSettled(): boolean {
+		for (const state of this.agents.values()) {
+			if (state.status !== "done" && state.status !== "failed") return false;
+		}
+		return this.agents.size > 0;
+	}
+
+	private checkSettle(): void {
+		if (this.allSettled() && this.settleResolve) {
+			this.settleResolve();
+			this.settleResolve = undefined;
+			this.settlePromise = undefined;
+		}
+	}
+}

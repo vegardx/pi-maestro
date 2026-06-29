@@ -55,8 +55,10 @@ import {
 	type Deliverable,
 	deliverables,
 	derivePlanName,
+	effectiveDependsOn,
 	findDeliverable,
 	gatingTasks,
+	type Plan,
 	planRepoMismatch,
 	readyDeliverables,
 	repoFor,
@@ -364,16 +366,23 @@ export function createModesRuntime(
 
 	async function planToAsk(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI || !engine) {
-			setMode("ask", ctx);
+			await runImplement("", ctx);
 			return;
 		}
-		const choice = await ctx.ui.select("Leave plan mode", [
-			"Implement (ask)",
-			"Implement (auto)",
-			"Continue planning",
+		const plan = engine.get();
+		const summary = executionSummary(plan);
+		const title = summary
+			? `Ready to implement \u2014 ${summary}`
+			: "Ready to implement";
+		const choice = await ctx.ui.select(title, [
+			"Auto \u2014 implement autonomously",
+			"Hack \u2014 implement with full context",
+			"Ask \u2014 implement with confirmations",
+			"Keep planning",
 		]);
-		if (choice === "Implement (auto)") await runImplement("", ctx);
-		else if (choice === "Implement (ask)") await runImplement("--ask", ctx);
+		if (choice?.startsWith("Auto")) await runImplement("", ctx);
+		else if (choice?.startsWith("Hack")) await runImplement("--hack", ctx);
+		else if (choice?.startsWith("Ask")) await runImplement("--ask", ctx);
 	}
 
 	async function cycle(ctx: ExtensionContext): Promise<void> {
@@ -539,7 +548,12 @@ export function createModesRuntime(
 		if (!engine) return;
 		finalizeDraftPlan(ctx);
 		const activeEngine = engine;
-		setMode(args.includes("--ask") ? "ask" : "auto", ctx);
+		const mode = args.includes("--hack")
+			? "hack"
+			: args.includes("--ask")
+				? "ask"
+				: "auto";
+		setMode(mode as ModeName, ctx);
 		if (args.includes("--fanout")) {
 			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
 			if (subagents) {
@@ -1202,4 +1216,50 @@ Rules:
 - Each deliverable = one PR. Keep them small and focused.
 - For multi-repo: assign deliverables to repos with \`repo: <key>\`.
 - Do NOT read files unless the user's request is ambiguous and you need to clarify scope.`;
+}
+
+/**
+ * Compute a one-line execution summary for the picker title:
+ * "N deliverables, sequential" or "N deliverables, up to M parallel"
+ */
+function executionSummary(plan: Pick<Plan, "nodes">): string | undefined {
+	const flat = deliverables(plan).filter(
+		(d) => !d.lifecycle && d.status !== "shipped" && d.status !== "abandoned",
+	);
+	if (flat.length === 0) return undefined;
+	const maxParallel = computeMaxParallelism(plan, flat);
+	if (maxParallel <= 1) {
+		return `${flat.length} deliverable${flat.length > 1 ? "s" : ""}, sequential`;
+	}
+	return `${flat.length} deliverables, up to ${maxParallel} parallel`;
+}
+
+/** Topological-level simulation: max wave width = max parallelism. */
+function computeMaxParallelism(
+	plan: Pick<Plan, "nodes">,
+	flat: Deliverable[],
+): number {
+	const ids = new Set(flat.map((d) => d.id));
+	const depCounts = new Map<string, number>();
+	for (const d of flat) {
+		const deps = effectiveDependsOn(plan, d).filter((dep) => ids.has(dep));
+		depCounts.set(d.id, deps.length);
+	}
+	let maxWave = 0;
+	const remaining = new Set(ids);
+	while (remaining.size > 0) {
+		const wave = [...remaining].filter((id) => (depCounts.get(id) ?? 0) === 0);
+		if (wave.length === 0) break;
+		maxWave = Math.max(maxWave, wave.length);
+		for (const id of wave) {
+			remaining.delete(id);
+			for (const other of remaining) {
+				const d = flat.find((x) => x.id === other);
+				if (d && effectiveDependsOn(plan, d).includes(id)) {
+					depCounts.set(other, (depCounts.get(other) ?? 1) - 1);
+				}
+			}
+		}
+	}
+	return maxWave;
 }

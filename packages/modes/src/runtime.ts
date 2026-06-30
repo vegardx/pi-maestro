@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -557,9 +558,13 @@ export function createModesRuntime(
 			if (!tmuxFanout) {
 				_orchestratorCtx = ctx;
 				const planDir = join(plansRoot(), activeEngine.get().slug);
+				const extRoot = resolve(
+					dirname(fileURLToPath(import.meta.url)),
+					"../../..",
+				);
 				tmuxFanout = new TmuxFanout({
 					engine: activeEngine,
-					extensionPath: "",
+					extensionPath: extRoot,
 					planDir,
 					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					onPlanChanged: emitPlanChanged,
@@ -844,7 +849,11 @@ export function createModesRuntime(
 		if (agentBridge) agentBridge.start(ctx);
 	});
 
-	pi.on("session_shutdown", () => {
+	pi.on("session_shutdown", async () => {
+		if (tmuxFanout) {
+			await tmuxFanout.destroy();
+			tmuxFanout = undefined;
+		}
 		if (agentBridge) {
 			agentBridge.destroy();
 			agentBridge = undefined;

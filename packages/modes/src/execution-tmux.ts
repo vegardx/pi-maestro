@@ -21,6 +21,9 @@ import { renderPlanSeed } from "./markdown.js";
 import {
 	type Deliverable,
 	defaultBranchForDeliverable,
+	deliverables,
+	effectiveDependsOn,
+	type Plan,
 	pendingLifecycle,
 	pickBaseBranch,
 	readyDeliverables,
@@ -111,6 +114,9 @@ export class TmuxFanout {
 		let spawned = 0;
 		for (const d of readyDeliverables(plan)) {
 			if (this.agents.has(d.id)) continue;
+			// Skip if any dep is only active (not yet done) — unlike PR stacking,
+			// tmux agents need deps to actually complete before starting.
+			if (!this.depsComplete(plan, d)) continue;
 			await this.spawnAgent(d);
 			spawned++;
 		}
@@ -258,6 +264,19 @@ export class TmuxFanout {
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
+
+	private depsComplete(
+		plan: Pick<Plan, "nodes">,
+		d: Pick<Deliverable, "id" | "dependsOn">,
+	): boolean {
+		const deps = effectiveDependsOn(plan, d);
+		if (deps.length === 0) return true;
+		const DONE_STATUSES = ["in-review", "ready-to-ship", "shipped"];
+		return deps.every((depId) => {
+			const parent = deliverables(plan).find((p) => p.id === depId);
+			return parent ? DONE_STATUSES.includes(parent.status) : false;
+		});
+	}
 
 	private buildEnvVars(agentId: string): string[] {
 		const vars = [

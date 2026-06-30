@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -691,7 +692,7 @@ export function createModesRuntime(
 			if (!tmuxFanout) {
 				orchestratorCtx = ctx;
 				orchestratorSessionPath = ctx.sessionManager.getSessionFile?.();
-				const planDir = plansRoot();
+				const planDir = join(plansRoot(), activeEngine.get().slug);
 				tmuxFanout = new TmuxFanout({
 					engine: activeEngine,
 					extensionPath: "",

@@ -47,6 +47,7 @@ export interface TmuxAgentState {
 	readonly sessionFile: string;
 	status: TmuxAgentStatus;
 	shutdownSent: boolean;
+	assessmentSent: boolean;
 	idleCount: number;
 	tokens: TokenSnapshot;
 }
@@ -375,6 +376,7 @@ export class TmuxFanout {
 			sessionFile,
 			status: "spawning",
 			shutdownSent: false,
+			assessmentSent: false,
 			idleCount: 0,
 			tokens: { ...ZERO_TOKENS },
 		};
@@ -477,8 +479,8 @@ export class TmuxFanout {
 		// Check if all tasks are done — if so, agent is complete
 		if (this.checkCompletionGate(agentId)) return;
 
-		// After first idle with incomplete tasks, steer the agent to report
-		if (state.idleCount === 1) {
+		// After first idle with incomplete tasks, steer the agent to assess (once)
+		if (!state.assessmentSent) {
 			const d = findDeliverable(this.deps.engine.get(), agentId);
 			const taskIds = d
 				? d.children
@@ -501,6 +503,7 @@ export class TmuxFanout {
 							.join("\n") +
 						"\n\nIf any task is NOT done, continue working on it.",
 				});
+				state.assessmentSent = true;
 				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
 			}
 		}

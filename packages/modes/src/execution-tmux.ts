@@ -234,7 +234,6 @@ export class TmuxFanout {
 		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
 		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
 		const seedId = randomUUID().slice(0, 8);
-		const msgId = randomUUID().slice(0, 8);
 		const sessionLines = [
 			JSON.stringify({
 				type: "session",
@@ -250,24 +249,6 @@ export class TmuxFanout {
 				id: seedId,
 				parentId: null,
 				timestamp: new Date().toISOString(),
-			}),
-			JSON.stringify({
-				type: "message",
-				id: msgId,
-				parentId: seedId,
-				timestamp: new Date().toISOString(),
-				message: {
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text:
-								`Implement this deliverable: "${d.title}". ` +
-								"Follow the plan context above. Complete all gating tasks, " +
-								"commit your work, push, and open a PR.",
-						},
-					],
-				},
 			}),
 		];
 		writeFileSync(sessionFile, `${sessionLines.join("\n")}\n`);
@@ -307,9 +288,14 @@ export class TmuxFanout {
 		if (process.env.PATH) {
 			envVars.push(`PATH=${process.env.PATH}`);
 		}
+		const userMsg =
+			`Implement this deliverable: "${d.title}". ` +
+			"Follow the plan context above. Complete all gating tasks, " +
+			"commit your work, push, and open a PR.";
+		const escapedMsg = userMsg.replace(/"/g, '\\"');
 		const piCmd = this.deps.extensionPath
-			? `pi -c --session "${sessionFile}" -e "${this.deps.extensionPath}"`
-			: `pi -c --session "${sessionFile}"`;
+			? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}" "${escapedMsg}"`
+			: `pi --session "${sessionFile}" "${escapedMsg}"`;
 		const command = [...envVars, piCmd].join(" ");
 		log(`spawn ${name}: cwd=${result.path} cmd=${command.slice(0, 200)}`);
 		try {

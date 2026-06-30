@@ -311,7 +311,7 @@ describe("TmuxFanout", () => {
 			await f.start();
 			await f.tick();
 			await f.destroy();
-			expect(tmux.kill).toHaveBeenCalledTimes(1);
+			expect(tmux.kill).toHaveBeenCalledTimes(2); // stale cleanup + destroy
 		});
 	});
 });

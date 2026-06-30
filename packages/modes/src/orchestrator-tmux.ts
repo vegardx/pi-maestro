@@ -97,7 +97,7 @@ export async function handleViewCommand(
 	}
 
 	// Open split pane attached to agent's tmux session
-	const command = `env -u TMUX -u TMUX_PANE tmux attach-session -t ${agent.agentName}`;
+	const command = `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agent.agentName}`;
 	try {
 		const paneId = await splitWindow({
 			horizontal: true,

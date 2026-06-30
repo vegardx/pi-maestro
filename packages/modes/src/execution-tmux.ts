@@ -283,6 +283,13 @@ export class TmuxFanout {
 		};
 		this.agents.set(d.id, state);
 
+		// Kill stale session with same name from a previous run
+		try {
+			await killSession(name);
+		} catch {
+			// No existing session — expected
+		}
+
 		// Spawn tmux session with env vars for RPC discovery.
 		// Propagate PATH and dogfood env so `pi` is discoverable in the tmux session.
 		const envVars = [

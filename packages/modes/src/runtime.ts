@@ -827,6 +827,10 @@ export function createModesRuntime(
 			const preamble = buildOrchestratorPreamble(engine);
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
+		if (agentBridge) {
+			const preamble = buildAgentWorkerPreamble();
+			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+		}
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -1367,4 +1371,31 @@ You are free to:
 
 Do NOT implement code yourself. Agents handle implementation.
 Do NOT call read/edit/bash to implement — only to answer user questions about the project.`;
+}
+
+function buildAgentWorkerPreamble(): string {
+	return `You are an AGENT WORKER managed by a maestro orchestrator.
+
+Your job: implement the deliverable described in your first message.
+Work autonomously — read, edit, test, commit, push, open PR.
+
+## Reporting progress
+
+Use the \`task\` tool to mark tasks done as you complete them:
+  task({action: "toggle", id: "<task-id>"})
+This reports progress back to the orchestrator in real-time.
+
+Task IDs are listed in the plan context above (the maestro-execution-seed).
+
+## If you get stuck
+
+If you encounter a blocking issue (missing credentials, unclear requirements,
+failed CI you can't fix), describe the problem clearly in your final message.
+The orchestrator will see it and can steer you with additional guidance.
+
+## When done
+
+After all tasks are complete, tests pass, code is committed and pushed,
+and a PR is opened — you're done. Just stop. The orchestrator detects
+completion automatically.`;
 }

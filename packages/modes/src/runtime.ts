@@ -1,13 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import {
-	defineTool,
-	type ExtensionAPI,
-	type ExtensionCommandContext,
-	type ExtensionContext,
-	type ToolCallEvent,
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import {
 	CAPABILITIES,
 	type DeliverableId,
@@ -501,6 +499,9 @@ export function createModesRuntime(
 		steerAgent: (deliverableId, guidance) => {
 			tmuxFanout?.steer(deliverableId, guidance);
 		},
+		onTaskToggle: (taskId) => {
+			agentBridge?.onTaskComplete(taskId);
+		},
 	})) {
 		pi.registerTool(tool);
 	}
@@ -840,37 +841,7 @@ export function createModesRuntime(
 		}
 		// Agent-side RPC bridge: connect to orchestrator if running as agent
 		agentBridge = initAgentBridge(pi);
-		if (agentBridge) {
-			agentBridge.start(ctx);
-			const bridge = agentBridge;
-			pi.registerTool(
-				defineTool({
-					name: "maestro_task_done",
-					label: "Mark task done",
-					description:
-						"Mark a plan task as complete. Call after finishing each task in the plan seed.",
-					promptSnippet:
-						"maestro_task_done — report a task as complete to the orchestrator.",
-					parameters: Type.Object({
-						taskId: Type.String({
-							description: "The task ID from the plan",
-						}),
-					}),
-					async execute(_id, params) {
-						bridge.onTaskComplete(params.taskId);
-						return {
-							content: [
-								{
-									type: "text" as const,
-									text: `Task ${params.taskId} marked complete.`,
-								},
-							],
-							details: undefined,
-						};
-					},
-				}),
-			);
-		}
+		if (agentBridge) agentBridge.start(ctx);
 	});
 
 	pi.on("session_shutdown", () => {

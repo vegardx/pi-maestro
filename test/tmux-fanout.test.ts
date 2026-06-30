@@ -180,7 +180,7 @@ describe("TmuxFanout", () => {
 			expect(stateChanges).toContain(`${d.id}:working`);
 		});
 
-		it("sends shutdown and transitions on idle", async () => {
+		it("does not shutdown on idle — lets agent keep working", async () => {
 			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
 			const f = createFanout();
 			await f.start();
@@ -195,9 +195,31 @@ describe("TmuxFanout", () => {
 			client.send({ type: "status", status: "idle" });
 			await wait(80);
 
-			// Should have received shutdown
-			expect(messages.some((m: any) => m.type === "shutdown")).toBe(true);
-			// Deliverable should be in-review
+			// Should NOT have received shutdown
+			expect(messages.some((m: any) => m.type === "shutdown")).toBe(false);
+			// Deliverable still active
+			const plan = engine.get();
+			const updated = plan.nodes.find(
+				(n) => n.type === "deliverable" && n.id === d.id,
+			);
+			expect(updated && "status" in updated ? updated.status : null).toBe(
+				"active",
+			);
+		});
+
+		it("marks done when agent disconnects", async () => {
+			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
+			const f = createFanout();
+			await f.start();
+			await f.tick();
+
+			const { client, connected } = makeClient(d.id);
+			await connected;
+			await wait(30);
+
+			client.close();
+			await wait(80);
+
 			const plan = engine.get();
 			const updated = plan.nodes.find(
 				(n) => n.type === "deliverable" && n.id === d.id,

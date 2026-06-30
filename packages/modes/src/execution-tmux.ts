@@ -326,7 +326,8 @@ export class TmuxFanout {
 		log(`disconnected: ${agentId}`);
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done" || state.status === "failed") return;
-		this.checkSessionAlive(agentId);
+		// RPC disconnect = agent exited = work complete
+		this.markDone(agentId);
 	}
 
 	private handleMessage(agentId: string, msg: AgentMessage): void {
@@ -364,12 +365,10 @@ export class TmuxFanout {
 	}
 
 	private handleAgentIdle(agentId: string): void {
-		// Agent finished a turn — decide whether it's truly done.
-		// For now: send shutdown and transition. The agent bridge signals
-		// idle after each turn; we trust the agent completed its work
-		// when it goes idle (single-shot execution model).
-		this.server.send(agentId, { type: "shutdown", reason: "turn complete" });
-		this.markDone(agentId);
+		// Agent finished a turn. Don't shutdown — agents typically need
+		// multiple turns (edit, test, commit, push). Let them run to
+		// natural completion. The session dying = work complete.
+		log(`idle: ${agentId}`);
 	}
 
 	private markDone(agentId: string, summary?: string): void {
@@ -406,7 +405,8 @@ export class TmuxFanout {
 		const alive = await hasSession(state.agentName);
 		log(`checkAlive ${state.agentName}: ${alive}`);
 		if (!alive) {
-			this.markFailed(agentId, "agent session terminated unexpectedly");
+			// Session exited — treat as done (pi finished its work and exited)
+			this.markDone(agentId);
 		}
 	}
 

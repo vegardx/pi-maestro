@@ -309,6 +309,14 @@ export class TmuxFanout {
 			case "done":
 				this.markDone(agentId, msg.summary);
 				break;
+			case "taskComplete":
+				try {
+					this.deps.engine.toggleWorkItem(msg.taskId);
+					this.deps.onPlanChanged?.();
+				} catch {
+					// Task may not exist or already toggled
+				}
+				break;
 		}
 	}
 

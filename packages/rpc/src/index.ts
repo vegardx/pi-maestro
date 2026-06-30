@@ -16,6 +16,7 @@ export type {
 	ShutdownMessage,
 	StatusMessage,
 	SteerMessage,
+	TaskCompleteMessage,
 	TokenSnapshot,
 	TokensMessage,
 } from "./protocol.js";

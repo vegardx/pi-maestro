@@ -44,6 +44,8 @@ export interface PlanToolDeps {
 	readonly mode?: () => string;
 	/** Steer a running worker when its deliverable is mutated. */
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
+	/** Remote task toggle for agent mode (no local engine). */
+	readonly onTaskToggle?: (taskId: string) => void;
 }
 
 interface ToolDetails {
@@ -271,6 +273,12 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			"task — manage plan work-items (task/followup/question/manual).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
+			// Agent mode: forward toggle over RPC when no local engine
+			if (params.action === "toggle" && !deps.engine() && deps.onTaskToggle) {
+				if (!params.id) return error("toggle requires id");
+				deps.onTaskToggle(params.id);
+				return ok(`${params.id} marked done.`, { done: true });
+			}
 			return withEngine(deps, (engine) => {
 				switch (params.action) {
 					case "add": {

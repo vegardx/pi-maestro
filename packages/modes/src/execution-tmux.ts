@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWorktree, removeWorktree, worktreePathFor } from "@vegardx/pi-git";
 import {
@@ -54,6 +55,11 @@ export interface TmuxFanoutDeps {
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
+
+const LOG_FILE = join(tmpdir(), "maestro-fanout.log");
+function log(msg: string): void {
+	appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`);
+}
 
 const POLL_INTERVAL_MS = 3000;
 const ZERO_TOKENS: TokenSnapshot = {
@@ -205,7 +211,11 @@ export class TmuxFanout {
 		const wtPath = worktreePathFor(repo.path, d.id);
 
 		const result = addWorktree(repo.path, wtPath, branch, baseBranch);
+		log(
+			`worktree ${d.id}: repo=${repo.path} wt=${wtPath} branch=${branch} base=${baseBranch} ok=${result.ok} path=${result.ok ? result.path : "n/a"}`,
+		);
 		if (!result.ok) {
+			log(`worktree ${d.id}: FAILED — ${result.error}`);
 			this.markFailed(d.id, result.error);
 			return;
 		}
@@ -223,6 +233,8 @@ export class TmuxFanout {
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
 		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
+		const seedId = randomUUID().slice(0, 8);
+		const msgId = randomUUID().slice(0, 8);
 		const sessionLines = [
 			JSON.stringify({
 				type: "session",
@@ -232,18 +244,30 @@ export class TmuxFanout {
 				cwd: result.path,
 			}),
 			JSON.stringify({
-				type: "custom_message",
+				type: "custom",
 				customType: "maestro-execution-seed",
-				content: seed,
-				display: false,
+				data: { content: seed, deliverableId: d.id },
+				id: seedId,
+				parentId: null,
+				timestamp: new Date().toISOString(),
 			}),
 			JSON.stringify({
 				type: "message",
-				role: "user",
-				content:
-					`Implement this deliverable: "${d.title}". ` +
-					"Follow the plan context above. Complete all gating tasks, " +
-					"commit your work, push, and open a PR.",
+				id: msgId,
+				parentId: seedId,
+				timestamp: new Date().toISOString(),
+				message: {
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text:
+								`Implement this deliverable: "${d.title}". ` +
+								"Follow the plan context above. Complete all gating tasks, " +
+								"commit your work, push, and open a PR.",
+						},
+					],
+				},
 			}),
 		];
 		writeFileSync(sessionFile, `${sessionLines.join("\n")}\n`);
@@ -280,13 +304,14 @@ export class TmuxFanout {
 			? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`
 			: `pi --session "${sessionFile}"`;
 		const command = [...envVars, piCmd].join(" ");
+		log(`spawn ${name}: cwd=${result.path} cmd=${command.slice(0, 200)}`);
 		try {
 			await tmuxSpawn(name, result.path, command);
+			log(`spawn ${name}: ok`);
 		} catch (e) {
-			this.markFailed(
-				d.id,
-				`tmux spawn failed: ${e instanceof Error ? e.message : String(e)}`,
-			);
+			const msg = `tmux spawn failed: ${e instanceof Error ? e.message : String(e)}`;
+			log(`spawn ${name}: FAILED — ${msg}`);
+			this.markFailed(d.id, msg);
 			return;
 		}
 
@@ -294,6 +319,7 @@ export class TmuxFanout {
 	}
 
 	private handleConnected(agentId: string): void {
+		log(`connected: ${agentId}`);
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		state.status = "working";
@@ -301,9 +327,9 @@ export class TmuxFanout {
 	}
 
 	private handleDisconnected(agentId: string): void {
+		log(`disconnected: ${agentId}`);
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done" || state.status === "failed") return;
-		// Unexpected disconnect — check if tmux session is still alive
 		this.checkSessionAlive(agentId);
 	}
 
@@ -382,6 +408,7 @@ export class TmuxFanout {
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		const alive = await hasSession(state.agentName);
+		log(`checkAlive ${state.agentName}: ${alive}`);
 		if (!alive) {
 			this.markFailed(agentId, "agent session terminated unexpectedly");
 		}

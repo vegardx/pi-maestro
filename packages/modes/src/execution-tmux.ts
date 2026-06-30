@@ -301,8 +301,8 @@ export class TmuxFanout {
 			envVars.push(`PATH=${process.env.PATH}`);
 		}
 		const piCmd = this.deps.extensionPath
-			? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`
-			: `pi --session "${sessionFile}"`;
+			? `pi -c --session "${sessionFile}" -e "${this.deps.extensionPath}"`
+			: `pi -c --session "${sessionFile}"`;
 		const command = [...envVars, piCmd].join(" ");
 		log(`spawn ${name}: cwd=${result.path} cmd=${command.slice(0, 200)}`);
 		try {

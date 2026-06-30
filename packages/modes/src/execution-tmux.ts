@@ -477,18 +477,32 @@ export class TmuxFanout {
 		// Check if all tasks are done — if so, agent is complete
 		if (this.checkCompletionGate(agentId)) return;
 
-		// Fallback: if agent has been idle 3+ times without task progress,
-		// assume it finished but didn't toggle tasks. Send shutdown.
-		if (state.idleCount >= 3) {
-			log(
-				`idle timeout: ${agentId} — sending shutdown after ${state.idleCount} idles`,
-			);
-			state.shutdownSent = true;
-			this.server.send(agentId, {
-				type: "shutdown",
-				reason: "idle timeout — assuming work complete",
-			});
-			this.markDone(agentId);
+		// After first idle with incomplete tasks, steer the agent to report
+		if (state.idleCount === 1) {
+			const d = findDeliverable(this.deps.engine.get(), agentId);
+			const taskIds = d
+				? d.children
+						.filter(
+							(c) =>
+								c.type === "work-item" &&
+								(c.kind === "task" || !c.kind) &&
+								!c.done,
+						)
+						.map((c) => c.id)
+				: [];
+			if (taskIds.length > 0) {
+				this.server.send(agentId, {
+					type: "steer",
+					content:
+						"Assess whether you have completed your work. For each task, verify it is actually done " +
+						"(code implemented, tests passing, committed). Then mark completed tasks:\n" +
+						taskIds
+							.map((id) => `  task({action: "toggle", id: "${id}"})`)
+							.join("\n") +
+						"\n\nIf any task is NOT done, continue working on it.",
+				});
+				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
+			}
 		}
 	}
 

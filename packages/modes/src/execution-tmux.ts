@@ -47,6 +47,7 @@ export interface TmuxAgentState {
 	readonly sessionFile: string;
 	status: TmuxAgentStatus;
 	shutdownSent: boolean;
+	idleCount: number;
 	tokens: TokenSnapshot;
 }
 
@@ -374,6 +375,7 @@ export class TmuxFanout {
 			sessionFile,
 			status: "spawning",
 			shutdownSent: false,
+			idleCount: 0,
 			tokens: { ...ZERO_TOKENS },
 		};
 		this.agents.set(d.id, state);
@@ -438,6 +440,7 @@ export class TmuxFanout {
 			case "status":
 				if (msg.status === "working") {
 					state.status = "working";
+					state.idleCount = 0;
 				} else if (msg.status === "idle") {
 					state.status = "idle";
 					this.handleAgentIdle(agentId);
@@ -466,16 +469,34 @@ export class TmuxFanout {
 	}
 
 	private handleAgentIdle(agentId: string): void {
-		log(`idle: ${agentId}`);
+		const state = this.agents.get(agentId);
+		if (!state || state.shutdownSent) return;
+		state.idleCount++;
+		log(`idle: ${agentId} (count=${state.idleCount})`);
+
 		// Check if all tasks are done — if so, agent is complete
-		this.checkCompletionGate(agentId);
+		if (this.checkCompletionGate(agentId)) return;
+
+		// Fallback: if agent has been idle 3+ times without task progress,
+		// assume it finished but didn't toggle tasks. Send shutdown.
+		if (state.idleCount >= 3) {
+			log(
+				`idle timeout: ${agentId} — sending shutdown after ${state.idleCount} idles`,
+			);
+			state.shutdownSent = true;
+			this.server.send(agentId, {
+				type: "shutdown",
+				reason: "idle timeout — assuming work complete",
+			});
+			this.markDone(agentId);
+		}
 	}
 
-	private checkCompletionGate(agentId: string): void {
+	private checkCompletionGate(agentId: string): boolean {
 		const state = this.agents.get(agentId);
-		if (!state || state.status === "done" || state.shutdownSent) return;
+		if (!state || state.status === "done" || state.shutdownSent) return false;
 		const d = findDeliverable(this.deps.engine.get(), agentId);
-		if (!d || !completionGateSatisfied(d)) return;
+		if (!d || !completionGateSatisfied(d)) return false;
 		// All gating tasks done — send shutdown
 		log(`completionGate satisfied: ${agentId}, sending shutdown`);
 		state.shutdownSent = true;
@@ -484,6 +505,7 @@ export class TmuxFanout {
 			reason: "all tasks complete",
 		});
 		this.markDone(agentId);
+		return true;
 	}
 
 	private markDone(agentId: string, summary?: string): void {

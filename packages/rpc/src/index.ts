@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type {
@@ -28,7 +30,9 @@ export { MaestroRpcServer } from "./server.js";
 
 /**
  * Resolve the orchestrator socket path for a given plan directory.
+ * Uses a short hash under /tmp to avoid the 104-byte Unix socket path limit.
  */
 export function createSocketPath(planDir: string): string {
-	return join(planDir, "orchestrator.sock");
+	const hash = createHash("sha256").update(planDir).digest("hex").slice(0, 12);
+	return join(tmpdir(), `maestro-${hash}.sock`);
 }

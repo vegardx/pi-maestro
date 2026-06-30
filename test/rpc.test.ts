@@ -64,10 +64,25 @@ describe("@vegardx/pi-rpc", () => {
 	}
 
 	describe("createSocketPath", () => {
-		it("joins plan dir with orchestrator.sock", () => {
-			expect(
-				createSocketPath("/home/user/.config/pi/agent/plans/my-plan"),
-			).toBe("/home/user/.config/pi/agent/plans/my-plan/orchestrator.sock");
+		it("returns a short path under tmpdir with a hash", () => {
+			const result = createSocketPath(
+				"/home/user/.config/pi/agent/plans/my-plan",
+			);
+			expect(result).toMatch(/maestro-[a-f0-9]{12}\.sock$/);
+			// Must stay under 104 bytes (macOS limit)
+			expect(result.length).toBeLessThan(104);
+		});
+
+		it("is deterministic for the same planDir", () => {
+			const a = createSocketPath("/some/plan/dir");
+			const b = createSocketPath("/some/plan/dir");
+			expect(a).toBe(b);
+		});
+
+		it("differs for different planDirs", () => {
+			const a = createSocketPath("/plan/a");
+			const b = createSocketPath("/plan/b");
+			expect(a).not.toBe(b);
 		});
 	});
 

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MaestroRpcClient } from "@vegardx/pi-rpc";
+import { createSocketPath, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import { TmuxFanout } from "../packages/modes/src/execution-tmux.js";
@@ -104,7 +104,7 @@ describe("TmuxFanout", () => {
 		client: MaestroRpcClient;
 		connected: Promise<void>;
 	} {
-		const socketPath = join(planDir, "orchestrator.sock");
+		const socketPath = createSocketPath(planDir);
 		const { client, connected } = connectClient(socketPath, agentId);
 		clients.push(client);
 		return { client, connected };

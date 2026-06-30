@@ -263,7 +263,9 @@ export class TmuxFanout {
 		const command = [
 			`PI_MAESTRO_SOCK=${this.socketPath}`,
 			`PI_MAESTRO_AGENT_ID=${d.id}`,
-			`pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`,
+			this.deps.extensionPath
+				? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`
+				: `pi --session "${sessionFile}"`,
 		].join(" ");
 		await tmuxSpawn(name, result.path, command);
 

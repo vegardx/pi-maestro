@@ -259,15 +259,36 @@ export class TmuxFanout {
 		};
 		this.agents.set(d.id, state);
 
-		// Spawn tmux session with env vars for RPC discovery
-		const command = [
+		// Spawn tmux session with env vars for RPC discovery.
+		// Propagate PATH and dogfood env so `pi` is discoverable in the tmux session.
+		const envVars = [
 			`PI_MAESTRO_SOCK=${this.socketPath}`,
 			`PI_MAESTRO_AGENT_ID=${d.id}`,
-			this.deps.extensionPath
-				? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`
-				: `pi --session "${sessionFile}"`,
-		].join(" ");
-		await tmuxSpawn(name, result.path, command);
+		];
+		if (process.env.PI_CODING_AGENT_DIR) {
+			envVars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
+		}
+		if (process.env.PI_CODING_AGENT_SESSION_DIR) {
+			envVars.push(
+				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
+			);
+		}
+		if (process.env.PATH) {
+			envVars.push(`PATH=${process.env.PATH}`);
+		}
+		const piCmd = this.deps.extensionPath
+			? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}"`
+			: `pi --session "${sessionFile}"`;
+		const command = [...envVars, piCmd].join(" ");
+		try {
+			await tmuxSpawn(name, result.path, command);
+		} catch (e) {
+			this.markFailed(
+				d.id,
+				`tmux spawn failed: ${e instanceof Error ? e.message : String(e)}`,
+			);
+			return;
+		}
 
 		this.deps.onAgentStateChanged?.(d.id, state);
 	}

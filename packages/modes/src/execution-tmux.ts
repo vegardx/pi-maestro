@@ -16,13 +16,14 @@ import {
 } from "@vegardx/pi-tmux";
 import { agentName } from "./agent-names.js";
 import type { PlanEngine } from "./engine.js";
-import { transitionThrough } from "./execution.js";
+import { completionGateSatisfied, transitionThrough } from "./execution.js";
 import { renderPlanSeed } from "./markdown.js";
 import {
 	type Deliverable,
 	defaultBranchForDeliverable,
 	deliverables,
 	effectiveDependsOn,
+	findDeliverable,
 	type Plan,
 	pendingLifecycle,
 	pickBaseBranch,
@@ -45,6 +46,7 @@ export interface TmuxAgentState {
 	readonly worktreePath: string;
 	readonly sessionFile: string;
 	status: TmuxAgentStatus;
+	shutdownSent: boolean;
 	tokens: TokenSnapshot;
 }
 
@@ -371,6 +373,7 @@ export class TmuxFanout {
 			worktreePath: result.path,
 			sessionFile,
 			status: "spawning",
+			shutdownSent: false,
 			tokens: { ...ZERO_TOKENS },
 		};
 		this.agents.set(d.id, state);
@@ -454,6 +457,7 @@ export class TmuxFanout {
 				try {
 					this.deps.engine.toggleWorkItem(msg.taskId);
 					this.deps.onPlanChanged?.();
+					this.checkCompletionGate(agentId);
 				} catch {
 					// Task may not exist or already toggled
 				}
@@ -462,10 +466,24 @@ export class TmuxFanout {
 	}
 
 	private handleAgentIdle(agentId: string): void {
-		// Agent finished a turn. Don't shutdown — agents typically need
-		// multiple turns (edit, test, commit, push). Let them run to
-		// natural completion. The session dying = work complete.
 		log(`idle: ${agentId}`);
+		// Check if all tasks are done — if so, agent is complete
+		this.checkCompletionGate(agentId);
+	}
+
+	private checkCompletionGate(agentId: string): void {
+		const state = this.agents.get(agentId);
+		if (!state || state.status === "done" || state.shutdownSent) return;
+		const d = findDeliverable(this.deps.engine.get(), agentId);
+		if (!d || !completionGateSatisfied(d)) return;
+		// All gating tasks done — send shutdown
+		log(`completionGate satisfied: ${agentId}, sending shutdown`);
+		state.shutdownSent = true;
+		this.server.send(agentId, {
+			type: "shutdown",
+			reason: "all tasks complete",
+		});
+		this.markDone(agentId);
 	}
 
 	private markDone(agentId: string, summary?: string): void {
@@ -500,10 +518,17 @@ export class TmuxFanout {
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		const alive = await hasSession(state.agentName);
-		log(`checkAlive ${state.agentName}: ${alive}`);
+		log(
+			`checkAlive ${state.agentName}: ${alive} shutdownSent=${state.shutdownSent}`,
+		);
 		if (!alive) {
-			// Session exited — treat as done (pi finished its work and exited)
-			this.markDone(agentId);
+			if (state.shutdownSent) {
+				// Expected exit after orchestrator sent shutdown
+				this.markDone(agentId);
+			} else {
+				// Unexpected death — crash or user killed it
+				this.markFailed(agentId, "agent session terminated unexpectedly");
+			}
 		}
 	}
 

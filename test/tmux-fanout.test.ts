@@ -180,8 +180,9 @@ describe("TmuxFanout", () => {
 			expect(stateChanges).toContain(`${d.id}:working`);
 		});
 
-		it("does not shutdown on idle — lets agent keep working", async () => {
+		it("does not shutdown on idle if tasks remain", async () => {
 			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
+			engine.addWorkItem(d.id, { title: "Do something" });
 			const f = createFanout();
 			await f.start();
 			await f.tick();
@@ -207,8 +208,9 @@ describe("TmuxFanout", () => {
 			);
 		});
 
-		it("marks done when agent disconnects and session is dead", async () => {
+		it("marks failed when agent disconnects and session is dead without shutdown", async () => {
 			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
+			engine.addWorkItem(d.id, { title: "Incomplete task" });
 			const f = createFanout();
 			await f.start();
 			await f.tick();
@@ -217,7 +219,7 @@ describe("TmuxFanout", () => {
 			await connected;
 			await wait(30);
 
-			// Session is dead when disconnect happens
+			// Session is dead when disconnect happens (no shutdown was sent)
 			vi.mocked(tmux.hasSession).mockResolvedValue(false);
 			client.close();
 			await wait(80);
@@ -227,7 +229,7 @@ describe("TmuxFanout", () => {
 				(n) => n.type === "deliverable" && n.id === d.id,
 			);
 			expect(updated && "status" in updated ? updated.status : null).toBe(
-				"in-review",
+				"needs-attention",
 			);
 		});
 

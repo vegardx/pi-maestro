@@ -207,7 +207,7 @@ describe("TmuxFanout", () => {
 			);
 		});
 
-		it("marks done when agent disconnects", async () => {
+		it("marks done when agent disconnects and session is dead", async () => {
 			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
 			const f = createFanout();
 			await f.start();
@@ -217,6 +217,8 @@ describe("TmuxFanout", () => {
 			await connected;
 			await wait(30);
 
+			// Session is dead when disconnect happens
+			vi.mocked(tmux.hasSession).mockResolvedValue(false);
 			client.close();
 			await wait(80);
 
@@ -226,6 +228,30 @@ describe("TmuxFanout", () => {
 			);
 			expect(updated && "status" in updated ? updated.status : null).toBe(
 				"in-review",
+			);
+		});
+
+		it("does not mark done on disconnect if session is still alive", async () => {
+			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
+			const f = createFanout();
+			await f.start();
+			await f.tick();
+
+			const { client, connected } = makeClient(d.id);
+			await connected;
+			await wait(30);
+
+			// Session still alive (transient RPC disconnect)
+			vi.mocked(tmux.hasSession).mockResolvedValue(true);
+			client.close();
+			await wait(80);
+
+			const plan = engine.get();
+			const updated = plan.nodes.find(
+				(n) => n.type === "deliverable" && n.id === d.id,
+			);
+			expect(updated && "status" in updated ? updated.status : null).toBe(
+				"active",
 			);
 		});
 

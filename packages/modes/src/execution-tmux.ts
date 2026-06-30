@@ -422,8 +422,9 @@ export class TmuxFanout {
 		log(`disconnected: ${agentId}`);
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done" || state.status === "failed") return;
-		// RPC disconnect = agent exited = work complete
-		this.markDone(agentId);
+		// Check if tmux session is actually dead before marking done.
+		// RPC can disconnect transiently (orchestrator compact/restart).
+		this.checkSessionAlive(agentId);
 	}
 
 	private handleMessage(agentId: string, msg: AgentMessage): void {

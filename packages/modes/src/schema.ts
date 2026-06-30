@@ -372,10 +372,13 @@ export function isDeliverableReady(
 	if (!isImplementableLeaf(d)) return false;
 	const deps = effectiveDependsOn(plan, d);
 	if (deps.length === 0) return true;
-	const parent = deliverables(plan).find((p) => p.id === deps[0]);
-	if (!parent) return false;
-	if (isGrouping(parent)) return parent.status === "shipped";
-	return ACTIVATABLE_PARENT_STATUSES.includes(parent.status);
+	// ALL dependencies must be satisfied
+	return deps.every((depId) => {
+		const parent = deliverables(plan).find((p) => p.id === depId);
+		if (!parent) return false;
+		if (isGrouping(parent)) return parent.status === "shipped";
+		return ACTIVATABLE_PARENT_STATUSES.includes(parent.status);
+	});
 }
 
 export function readyDeliverables(plan: Pick<Plan, "nodes">): Deliverable[] {
@@ -391,18 +394,22 @@ export function blockedReason(
 	}
 	const deps = effectiveDependsOn(plan, d);
 	if (deps.length === 0) return null;
-	const parent = deliverables(plan).find((p) => p.id === deps[0]);
-	if (!parent) return `unknown parent \`${deps[0]}\``;
-	if (isGrouping(parent)) {
-		return parent.status === "shipped"
-			? null
-			: `waiting on grouping \`${parent.id}\` (completes when its children ship)`;
+	for (const depId of deps) {
+		const parent = deliverables(plan).find((p) => p.id === depId);
+		if (!parent) return `unknown parent \`${depId}\``;
+		if (isGrouping(parent)) {
+			if (parent.status !== "shipped") {
+				return `waiting on grouping \`${parent.id}\` (completes when its children ship)`;
+			}
+			continue;
+		}
+		if (ACTIVATABLE_PARENT_STATUSES.includes(parent.status)) continue;
+		if (parent.status === "abandoned") {
+			return `waiting on abandoned deliverable \`${parent.id}\` — edit dependsOn to unblock`;
+		}
+		return `waiting on \`${parent.id}\` (${parent.status})`;
 	}
-	if (ACTIVATABLE_PARENT_STATUSES.includes(parent.status)) return null;
-	if (parent.status === "abandoned") {
-		return `waiting on abandoned deliverable \`${parent.id}\` — edit dependsOn to unblock`;
-	}
-	return `waiting on \`${parent.id}\` (${parent.status})`;
+	return null;
 }
 
 /** Next non-shipped PR-shipping successor down the chain rooted at `d`. */

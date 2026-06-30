@@ -47,6 +47,17 @@ export async function handleViewCommand(
 	fanout: TmuxFanout,
 	viewState: ViewState,
 ): Promise<void> {
+	// /view with no args and a pane open: close it
+	if (!args.trim() && viewState.viewPaneId) {
+		try {
+			await killPane(viewState.viewPaneId);
+		} catch {
+			// Already closed
+		}
+		viewState.viewPaneId = undefined;
+		return;
+	}
+
 	const snap = fanout.snapshot();
 	if (snap.agents.size === 0) {
 		ctx.ui.notify("No agents active.", "info");
@@ -56,7 +67,6 @@ export async function handleViewCommand(
 	let targetName: string | undefined = args.trim() || undefined;
 
 	if (!targetName) {
-		// Show selection dialog
 		const options: string[] = [];
 		for (const state of snap.agents.values()) {
 			const icon =
@@ -71,7 +81,6 @@ export async function handleViewCommand(
 		}
 		const choice = await ctx.ui.select("View agent", options);
 		if (!choice) return;
-		// Extract name from choice (after the icon prefix)
 		targetName = choice.replace(/^\[.\]\s*/, "");
 	}
 
@@ -81,27 +90,23 @@ export async function handleViewCommand(
 		return;
 	}
 
-	// Kill existing view pane if any
+	// Close existing view pane before opening a new one
 	if (viewState.viewPaneId) {
 		try {
 			await killPane(viewState.viewPaneId);
 		} catch {
-			// Pane may already be closed
+			// Already closed
 		}
-		// If same agent, just close
-		if (viewState.viewPaneId) {
-			viewState.viewPaneId = undefined;
-			// Check if we're toggling the same agent off — we don't track which
-			// agent is viewed, so always reopen for simplicity
-		}
+		viewState.viewPaneId = undefined;
 	}
 
-	// Open split pane attached to agent's tmux session
+	// Open split pane attached to agent's tmux session (read-only)
 	const command = `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agent.agentName}`;
 	try {
 		const paneId = await splitWindow({
 			horizontal: true,
 			percent: 40,
+			detach: true,
 			command,
 		});
 		viewState.viewPaneId = paneId;

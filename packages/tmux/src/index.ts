@@ -22,6 +22,8 @@ export interface SplitWindowOptions {
 	target?: string;
 	horizontal?: boolean;
 	percent?: number;
+	/** Don't focus the new pane (keep focus on current). */
+	detach?: boolean;
 	command: string;
 }
 
@@ -132,6 +134,7 @@ export async function splitWindow(
 ): Promise<string> {
 	const args = ["split-window"];
 	if (options.horizontal !== false) args.push("-h");
+	if (options.detach) args.push("-d");
 	if (options.percent != null) args.push("-p", String(options.percent));
 	if (options.target) args.push("-t", options.target);
 	args.push("-P", "-F", "#{pane_id}");

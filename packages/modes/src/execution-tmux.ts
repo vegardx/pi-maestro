@@ -299,7 +299,10 @@ export class TmuxFanout {
 		const command = [...envVars, piCmd].join(" ");
 		log(`spawn ${name}: cwd=${result.path} cmd=${command.slice(0, 200)}`);
 		try {
-			await tmuxSpawn(name, result.path, command);
+			await tmuxSpawn(name, result.path, command, {
+				width: process.stdout.columns || 200,
+				height: process.stdout.rows || 50,
+			});
 			log(`spawn ${name}: ok`);
 		} catch (e) {
 			const msg = `tmux spawn failed: ${e instanceof Error ? e.message : String(e)}`;

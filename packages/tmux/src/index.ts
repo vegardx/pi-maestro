@@ -57,8 +57,13 @@ export async function spawn(
 	name: string,
 	cwd: string,
 	command: string,
+	opts?: { width?: number; height?: number },
 ): Promise<void> {
-	await tmuxExec(["new-session", "-d", "-s", name, "-c", cwd, command]);
+	const args = ["new-session", "-d", "-s", name, "-c", cwd];
+	if (opts?.width) args.push("-x", String(opts.width));
+	if (opts?.height) args.push("-y", String(opts.height));
+	args.push(command);
+	await tmuxExec(args);
 }
 
 /**

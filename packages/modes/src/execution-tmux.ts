@@ -309,6 +309,7 @@ export class TmuxFanout {
 		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
 		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
 		const seedId = randomUUID().slice(0, 8);
+		const modesStateId = randomUUID().slice(0, 8);
 		const sessionLines = [
 			JSON.stringify({
 				type: "session",
@@ -319,10 +320,26 @@ export class TmuxFanout {
 			}),
 			JSON.stringify({
 				type: "custom",
+				customType: "maestro.modes.state",
+				data: {
+					version: 2,
+					mode: "auto",
+					execution: {
+						stage: "executing",
+						deliverableId: d.id,
+					},
+					updatedAt: new Date().toISOString(),
+				},
+				id: modesStateId,
+				parentId: null,
+				timestamp: new Date().toISOString(),
+			}),
+			JSON.stringify({
+				type: "custom",
 				customType: "maestro-execution-seed",
 				data: { content: seed, deliverableId: d.id },
 				id: seedId,
-				parentId: null,
+				parentId: modesStateId,
 				timestamp: new Date().toISOString(),
 			}),
 		];

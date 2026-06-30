@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { killPane, splitWindow } from "@vegardx/pi-tmux";
+import { hasSession, killPane, splitWindow } from "@vegardx/pi-tmux";
 import type { TmuxAgentState, TmuxFanout } from "./execution-tmux.js";
 
 // ─── Status Widget ──────────────────────────────────────────────────────────
@@ -60,13 +60,14 @@ export async function handleViewCommand(
 
 	const snap = fanout.snapshot();
 	if (snap.agents.size === 0) {
-		ctx.ui.notify("No agents active.", "info");
+		ctx.ui.notify("No agents.", "info");
 		return;
 	}
 
 	let targetName: string | undefined = args.trim() || undefined;
 
 	if (!targetName) {
+		// Step 1: pick an agent
 		const options: string[] = [];
 		for (const state of snap.agents.values()) {
 			const icon =
@@ -90,7 +91,16 @@ export async function handleViewCommand(
 		return;
 	}
 
-	// Close existing view pane before opening a new one
+	// Step 2: pick mode
+	const alive = await hasSession(agent.agentName);
+	const modeChoice = await ctx.ui.select("Mode", [
+		"Watch (read-only)",
+		"Attach (interactive)",
+	]);
+	if (!modeChoice) return;
+	const interactive = modeChoice.startsWith("Attach");
+
+	// Close existing view pane
 	if (viewState.viewPaneId) {
 		try {
 			await killPane(viewState.viewPaneId);
@@ -100,8 +110,20 @@ export async function handleViewCommand(
 		viewState.viewPaneId = undefined;
 	}
 
-	// Open split pane attached to agent's tmux session (read-only)
-	const command = `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agent.agentName}`;
+	let command: string;
+	if (alive) {
+		// Live agent: attach to tmux session
+		const rFlag = interactive ? "" : " -r";
+		command = `env -u TMUX -u TMUX_PANE tmux attach-session${rFlag} -t ${agent.agentName}`;
+	} else {
+		// Dead agent: open pi with the session file
+		const extFlag = fanout.getExtensionPath()
+			? ` -e "${fanout.getExtensionPath()}"`
+			: "";
+		const cFlag = interactive ? " -c" : "";
+		command = `pi${cFlag} --session "${agent.sessionFile}"${extFlag}`;
+	}
+
 	try {
 		const paneId = await splitWindow({
 			horizontal: true,
@@ -120,11 +142,11 @@ export async function handleViewCommand(
 
 // ─── Steer Command ──────────────────────────────────────────────────────────
 
-export function handleSteerCommand(
+export async function handleSteerCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
 	fanout: TmuxFanout,
-): void {
+): Promise<void> {
 	const spaceIdx = args.indexOf(" ");
 	if (spaceIdx === -1 || !args.trim()) {
 		ctx.ui.notify("Usage: /steer <agent-name> <guidance>", "warning");
@@ -143,11 +165,19 @@ export function handleSteerCommand(
 		return;
 	}
 
+	// If agent is alive, send via RPC
 	const sent = fanout.steer(agent.deliverableId, message);
 	if (sent) {
 		ctx.ui.notify(`Steered ${name}: "${message}"`, "info");
+		return;
+	}
+
+	// Agent is dead — respawn with the message
+	const ok = await fanout.respawn(agent.deliverableId, message);
+	if (ok) {
+		ctx.ui.notify(`Respawned ${name} with: "${message}"`, "info");
 	} else {
-		ctx.ui.notify(`${name} is not connected.`, "warning");
+		ctx.ui.notify(`Failed to respawn ${name}.`, "warning");
 	}
 }
 
@@ -159,7 +189,7 @@ export function handleAgentsCommand(
 ): void {
 	const snap = fanout.snapshot();
 	if (snap.agents.size === 0) {
-		ctx.ui.notify("No agents active.", "info");
+		ctx.ui.notify("No agents.", "info");
 		return;
 	}
 

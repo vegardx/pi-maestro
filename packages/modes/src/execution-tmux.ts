@@ -161,6 +161,62 @@ export class TmuxFanout {
 	}
 
 	/**
+	 * Check if an agent's tmux session is still alive.
+	 */
+	async isAlive(agentName: string): Promise<boolean> {
+		return hasSession(agentName);
+	}
+
+	/**
+	 * Respawn a dead agent with an optional new message.
+	 * Re-uses the existing session file so pi picks up full context.
+	 */
+	async respawn(deliverableId: string, message?: string): Promise<boolean> {
+		const state = this.agents.get(deliverableId);
+		if (!state) return false;
+
+		// Kill stale session if somehow still around
+		try {
+			await killSession(state.agentName);
+		} catch {
+			// Expected
+		}
+
+		// Build command
+		const envVars = this.buildEnvVars(deliverableId);
+		const escapedMsg = message?.replace(/"/g, '\\"');
+		const piCmd = this.deps.extensionPath
+			? `pi -c --session "${state.sessionFile}" -e "${this.deps.extensionPath}"${escapedMsg ? ` "${escapedMsg}"` : ""}`
+			: `pi -c --session "${state.sessionFile}"${escapedMsg ? ` "${escapedMsg}"` : ""}`;
+		const command = [...envVars, piCmd].join(" ");
+
+		try {
+			await tmuxSpawn(state.agentName, state.worktreePath, command, {
+				width: process.stdout.columns || 200,
+				height: process.stdout.rows || 50,
+			});
+		} catch (e) {
+			log(
+				`respawn ${state.agentName}: FAILED — ${e instanceof Error ? e.message : String(e)}`,
+			);
+			return false;
+		}
+
+		state.status = "working";
+		this.deps.onAgentStateChanged?.(deliverableId, state);
+		this.deps.onPlanChanged?.();
+		log(`respawn ${state.agentName}: ok`);
+		return true;
+	}
+
+	/**
+	 * Get the extension path for building pi commands externally.
+	 */
+	getExtensionPath(): string {
+		return this.deps.extensionPath;
+	}
+
+	/**
 	 * Kill a specific agent's session and remove its worktree.
 	 */
 	async cleanup(deliverableId: string): Promise<void> {
@@ -202,6 +258,25 @@ export class TmuxFanout {
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
+
+	private buildEnvVars(agentId: string): string[] {
+		const vars = [
+			`PI_MAESTRO_SOCK=${this.socketPath}`,
+			`PI_MAESTRO_AGENT_ID=${agentId}`,
+		];
+		if (process.env.PI_CODING_AGENT_DIR) {
+			vars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
+		}
+		if (process.env.PI_CODING_AGENT_SESSION_DIR) {
+			vars.push(
+				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
+			);
+		}
+		if (process.env.PATH) {
+			vars.push(`PATH=${process.env.PATH}`);
+		}
+		return vars;
+	}
 
 	private async spawnAgent(d: Deliverable): Promise<void> {
 		const plan = this.deps.engine.get();
@@ -272,22 +347,7 @@ export class TmuxFanout {
 		}
 
 		// Spawn tmux session with env vars for RPC discovery.
-		// Propagate PATH and dogfood env so `pi` is discoverable in the tmux session.
-		const envVars = [
-			`PI_MAESTRO_SOCK=${this.socketPath}`,
-			`PI_MAESTRO_AGENT_ID=${d.id}`,
-		];
-		if (process.env.PI_CODING_AGENT_DIR) {
-			envVars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
-		}
-		if (process.env.PI_CODING_AGENT_SESSION_DIR) {
-			envVars.push(
-				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
-			);
-		}
-		if (process.env.PATH) {
-			envVars.push(`PATH=${process.env.PATH}`);
-		}
+		const envVars = this.buildEnvVars(d.id);
 		const userMsg =
 			`Implement this deliverable: "${d.title}". ` +
 			"Follow the plan context above. Complete all gating tasks, " +

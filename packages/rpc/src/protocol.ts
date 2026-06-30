@@ -33,6 +33,11 @@ export interface DoneMessage {
 	readonly summary?: string;
 }
 
+export interface TaskCompleteMessage {
+	readonly type: "taskComplete";
+	readonly taskId: string;
+}
+
 export interface PongMessage {
 	readonly type: "pong";
 }
@@ -42,6 +47,7 @@ export type AgentMessage =
 	| StatusMessage
 	| TokensMessage
 	| DoneMessage
+	| TaskCompleteMessage
 	| PongMessage;
 
 // ─── Orchestrator → Agent ───────────────────────────────────────────────────

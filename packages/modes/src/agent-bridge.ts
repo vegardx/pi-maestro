@@ -77,6 +77,13 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Report a task as completed to the orchestrator.
+	 */
+	onTaskComplete(taskId: string): void {
+		this.client.send({ type: "taskComplete", taskId });
+	}
+
+	/**
 	 * Clean up — disconnect from orchestrator.
 	 */
 	destroy(): void {

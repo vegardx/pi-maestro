@@ -850,7 +850,14 @@ export function createModesRuntime(
 		}
 		// Agent-side RPC bridge: connect to orchestrator if running as agent
 		agentBridge = initAgentBridge(pi);
-		if (agentBridge) agentBridge.start(ctx);
+		if (agentBridge) {
+			agentBridge.start(ctx);
+			// Ensure agents have the task tool for toggling completion
+			const tools = pi.getActiveTools();
+			if (!tools.includes("task")) {
+				pi.setActiveTools([...tools, "task"]);
+			}
+		}
 	});
 
 	pi.on("session_shutdown", async () => {

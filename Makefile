@@ -78,7 +78,7 @@ dogfood-plan:
 	cd "$(SANDBOX)" && \
 	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
-	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" "@$(ROOT)/dogfood-prompt.md"
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-prompt.md
 
 check:
 	npm run check

@@ -22,6 +22,7 @@ help:
 	@printf "  make dogfood       Run pi-maestro isolated from normal pi config\n"
 	@printf "  make dogfood-fresh Run pi-maestro with a throwaway temp profile\n"
 	@printf "  make dogfood-sandbox  Run pi-maestro against a maestro-sandbox-* repo\n"
+	@printf "  make dogfood-plan    Reset + start with plan prompt (just /auto after)\n"
 	@printf "  make reset         Dry-run: wipe dogfood plans + reset sandbox repos\n"
 	@printf "  make reset-yes     Apply: wipe plans/sessions + local sandbox reset\n"
 	@printf "  make reset-remote  reset-yes + close PRs + delete remote feat/*\n"
@@ -65,6 +66,19 @@ dogfood-sandbox:
 	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
 	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)"
+
+dogfood-plan:
+	@$(MAKE) reset-yes
+	@if [ ! -d "$(SANDBOX)" ]; then \
+		printf "sandbox repo not found: %s\n" "$(SANDBOX)" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p "$(DOGFOOD_ROOT)/agent" "$(DOGFOOD_ROOT)/sessions"
+	@printf "Reset done. Starting pi with plan prompt...\n"
+	cd "$(SANDBOX)" && \
+	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
+	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" "@$(ROOT)/dogfood-prompt.md"
 
 check:
 	npm run check

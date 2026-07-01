@@ -19,7 +19,7 @@ export interface ModesState {
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;
 
 export function initialModesState(now: () => string = isoNow): ModesState {
-	return { mode: "hack", execution: { stage: "idle" }, updatedAt: now() };
+	return { mode: "plan", execution: { stage: "idle" }, updatedAt: now() };
 }
 
 export function nextMode(mode: ModeName): ModeName {

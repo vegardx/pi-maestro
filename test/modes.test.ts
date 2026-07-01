@@ -676,15 +676,15 @@ describe("plan tools", () => {
 describe("mode state and policy", () => {
 	it("cycles modes and persists active plan", () => {
 		const state = initialModesState(now);
-		expect(state.mode).toBe("hack");
+		expect(state.mode).toBe("plan");
 		expect(nextMode("hack")).toBe("plan");
 		expect(nextMode("auto")).toBe("hack");
-		const changed = transitionMode(state, "plan", now);
-		expect(changed.previous).toBe("hack");
+		const changed = transitionMode(state, "auto", now);
+		expect(changed.previous).toBe("plan");
 		const withPlan = setActivePlan(changed.state, "p", now);
 		expect(toPersistedState(withPlan)).toMatchObject({
 			version: 2,
-			mode: "plan",
+			mode: "auto",
 			activePlanSlug: "p",
 		});
 	});
@@ -916,7 +916,7 @@ describe("modes runtime", () => {
 		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
 		const cap = host.caps.get(CAPABILITIES.modes) as any;
 		expect(cap.execution()).toMatchObject({
-			mode: "hack",
+			mode: "plan",
 			executing: false,
 			compactionInFlight: false,
 		});

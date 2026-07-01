@@ -68,7 +68,7 @@ dogfood-sandbox:
 	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)"
 
 dogfood-plan:
-	@$(MAKE) reset-yes
+	@$(MAKE) reset-remote
 	@if [ ! -d "$(SANDBOX)" ]; then \
 		printf "sandbox repo not found: %s\n" "$(SANDBOX)" >&2; \
 		exit 1; \

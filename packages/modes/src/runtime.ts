@@ -843,6 +843,10 @@ export function createModesRuntime(
 		seedSummaryBudgetWarnFired = false;
 		calibration = undefined;
 		if (state.activePlanSlug) engine = loadEngine(state.activePlanSlug);
+		// Auto-open a draft plan when starting in plan mode with no active plan
+		if (state.mode === "plan" && !engine) {
+			openPlan(undefined, ctx);
+		}
 		applyTools();
 		notifyMode(ctx);
 		if (state.activePlanSlug) {

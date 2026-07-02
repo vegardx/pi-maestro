@@ -993,15 +993,14 @@ export function createModesRuntime(
 			name: "ship",
 			label: "Ship deliverable",
 			description:
-				"Commit, push, and open/update a PR for your changes. Conventional " +
-				"commit message, base branch, and PR body are handled for you — do not " +
-				"run git/gh by hand. Auto-approves (no confirmation).",
+				"Commit, push, and open/update a PR for your changes. Base branch " +
+				"and PR body are handled for you — do NOT run git/gh by hand. " +
+				"You MUST provide the commit message (conventional format).",
 			parameters: Type.Object({
-				message: Type.Optional(
-					Type.String({
-						description: "Override the generated conventional-commit message.",
-					}),
-				),
+				message: Type.String({
+					description:
+						"Conventional commit message (type(scope): subject). Required — write it yourself.",
+				}),
 			}),
 			async execute(_id, params, _signal, _onUpdate, active) {
 				const commit = maestro.capabilities.get(CAPABILITIES.commit);
@@ -1676,7 +1675,7 @@ ambiguous, call ask again to clarify — don't guess.
 
 ## Phase 4: SHIP
 When findings are resolved and tests pass, ship with the ship tool:
-  ship({})
+  ship({message: "feat(scope): what you did"})
 It commits (conventional message), pushes, and opens/updates a PR and
 auto-approves. Do NOT run git/gh yourself.
 

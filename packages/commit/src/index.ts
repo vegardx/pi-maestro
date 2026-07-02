@@ -106,7 +106,15 @@ export default defineExtension(
 			input: ShipDeliverableInput,
 		): Promise<ShipResult> => {
 			if (!ctx) return { branch: "", committed: false, pushed: false };
-			return runShip({ ...makeDeps(ctx), cwd: input.cwd ?? ctx.cwd }, input);
+			const deps = makeDeps(ctx);
+			return runShip(
+				{
+					...deps,
+					cwd: input.cwd ?? ctx.cwd,
+					...(input.autoApprove ? { confirm: async () => true } : {}),
+				},
+				input,
+			);
 		};
 
 		maestro.capabilities.register(CAPABILITIES.commit, { shipDeliverable });

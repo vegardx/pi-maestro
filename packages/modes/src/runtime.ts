@@ -164,6 +164,9 @@ export function createModesRuntime(
 	let _orchestratorCtx: ExtensionContext | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
+	// Set by the usage-ledger wiring; records the orchestrator's own assistant
+	// usage into usage.v1. Undefined in agent processes.
+	let recordOrchestratorUsage: ((usage: unknown) => void) | undefined;
 	const viewState: ViewState = { viewPaneId: undefined };
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
@@ -855,12 +858,20 @@ export function createModesRuntime(
 		// Agent-side RPC bridge: connect to orchestrator if running as agent
 		agentBridge = initAgentBridge(pi);
 		if (agentBridge) {
-			agentBridge.start(ctx);
-			// Ensure agents have the task tool for toggling completion
-			const tools = pi.getActiveTools();
-			if (!tools.includes("task")) {
-				pi.setActiveTools([...tools, "task"]);
-			}
+			const bridge = agentBridge;
+			bridge.start(ctx);
+			// Ensure agents have the tools they need (baseline strips `task`;
+			// `ask`/`review`/`ship` must be present for the decision loop).
+			const available = new Set(pi.getAllTools().map((t) => t.name));
+			const active = pi.getActiveTools();
+			const missing = ["task", "ask", "review", "ship"].filter(
+				(t) => available.has(t) && !active.includes(t),
+			);
+			if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
+			// Route the ask tool to the orchestrator over RPC (G1 transport).
+			maestro.capabilities.register(CAPABILITIES.askTransport, {
+				present: (questions) => bridge.ask(questions),
+			});
 		}
 	});
 
@@ -892,6 +903,17 @@ export function createModesRuntime(
 
 	pi.on("turn_start", () => {
 		agentBridge?.onTurnStart();
+	});
+
+	// Accumulate real usage from assistant messages (tokens + cost). In agent
+	// mode the bridge reports it over RPC; the orchestrator records its own
+	// usage into the ledger (wired by the usage deliverable).
+	pi.on("message_end", (event) => {
+		const message = (event as { message?: { role?: string; usage?: unknown } })
+			.message;
+		if (!message || message.role !== "assistant" || !message.usage) return;
+		agentBridge?.recordUsage(message.usage as never);
+		recordOrchestratorUsage?.(message.usage as never);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {

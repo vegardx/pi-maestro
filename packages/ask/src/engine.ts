@@ -7,6 +7,8 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { getCapability } from "@vegardx/pi-core";
 import { runQuestionnaire } from "@vegardx/pi-ui";
 
 export class AskEngine {
@@ -25,6 +27,11 @@ export class AskEngine {
 	 */
 	async present(questions: Questionnaire): Promise<Answers> {
 		if (questions.length === 0) return [];
+		// Agent mode: an ask-transport capability routes questions to the
+		// orchestrator over RPC. Checked before the local-UI fallback so a
+		// headless agent (no ctx.hasUI) still reaches the user.
+		const transport = getCapability(CAPABILITIES.askTransport);
+		if (transport) return transport.present(questions);
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return [];
 		const answers = await runQuestionnaire(ctx, questions);

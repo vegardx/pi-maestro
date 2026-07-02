@@ -92,7 +92,8 @@ describe("AgentBridge", () => {
 		const messages: any[] = [];
 		server.on("message", (_id, msg) => messages.push(msg));
 
-		b.onTurnEnd({ input: 100, output: 50 });
+		b.recordUsage({ input: 100, output: 50 });
+		b.onTurnEnd();
 		await wait(30);
 
 		expect(

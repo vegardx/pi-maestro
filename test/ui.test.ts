@@ -159,10 +159,11 @@ describe("questionnaire reducers", () => {
 			{ ...initQuestionnaireState(), index: 1 },
 			60,
 		);
-		expect(lines[0]).toContain("Q1✓");
-		expect(lines[0]).toContain("[Q2]");
-		expect(lines.some((l) => l.includes("[ ] a"))).toBe(true);
-		expect(lines.at(-1)).toContain("press 't'");
+		const text = lines.join("\n");
+		expect(text).toContain("Q1✓");
+		expect(text).toContain("[Q2]");
+		expect(text).toContain("[ ] a");
+		expect(text).toContain("press 't'");
 	});
 
 	it("uses header labels in tabs and marks the recommendation", () => {
@@ -181,10 +182,12 @@ describe("questionnaire reducers", () => {
 				options: [{ label: "Yes" }],
 			},
 		];
-		const lines = renderQuestionnaire(rq, initQuestionnaireState(), 60);
-		expect(lines[0]).toContain("[ErrType]");
-		expect(lines[0]).toContain("Overflow");
-		expect(lines.some((l) => l.includes("[rec]"))).toBe(true);
+		const text = renderQuestionnaire(rq, initQuestionnaireState(), 60).join(
+			"\n",
+		);
+		expect(text).toContain("[ErrType]");
+		expect(text).toContain("Overflow");
+		expect(text).toContain("[rec]");
 	});
 
 	it("evaluates showIf against prior answers", () => {

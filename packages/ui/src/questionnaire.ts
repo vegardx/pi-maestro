@@ -199,13 +199,20 @@ export function renderQuestionnaire(
 	const question = questionnaire[state.index];
 	if (!question) return [];
 	const lines: string[] = [];
+	const border = palette.dim("─".repeat(Math.min(width, 60)));
+
+	lines.push(border);
 
 	if (questionnaire.length > 1) {
 		lines.push(...renderTabs(questionnaire, state, width, palette));
+		lines.push("");
 	}
 
 	lines.push(palette.heading(truncate(question.question, width)));
-	if (question.context) lines.push(...wrap(question.context, width, palette));
+	if (question.context) {
+		lines.push(...wrap(question.context, width, palette));
+	}
+	lines.push("");
 
 	const recIdx = recommendedIndex(question);
 	for (let i = 0; i < (question.options?.length ?? 0); i++) {
@@ -231,24 +238,36 @@ export function renderQuestionnaire(
 	}
 
 	if (state.noteEdit !== undefined) {
+		lines.push("");
 		lines.push(palette.accent(truncate(`    note: ${state.noteEdit}▌`, width)));
 	} else {
 		const existing = state.notes.get(question.id);
-		if (existing)
+		if (existing) {
+			lines.push("");
 			lines.push(palette.dim(truncate(`    note: ${existing}`, width)));
+		}
 	}
 
 	const highlighted = question.options?.[state.cursor];
 	if (highlighted?.preview) {
+		lines.push("");
 		lines.push(palette.dim("─".repeat(Math.min(width, 20))));
 		lines.push(...wrap(highlighted.preview, width, palette));
 	}
 
 	if (state.freeText !== undefined) {
+		lines.push("");
 		lines.push(palette.accent(truncate(`› ${state.freeText}▌`, width)));
 	} else if (question.allowFreeText) {
+		lines.push("");
 		lines.push(palette.muted("(press 't' to type a custom answer)"));
 	}
+
+	lines.push("");
+	lines.push(border);
+	lines.push(
+		palette.muted("enter select · ↑/↓ navigate · n note · t other · esc close"),
+	);
 
 	return lines;
 }

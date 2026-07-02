@@ -9,10 +9,13 @@ import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
 import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
 import type { ShipDeliverableInput, ShipResult } from "./ship.js";
+import type { TokenSnapshot, UsageSource } from "./usage.js";
 
 export const CAPABILITIES = {
 	subagents: "subagents.v1",
 	ask: "ask.v1",
+	askTransport: "ask-transport.v1",
+	usage: "usage.v1",
 	commit: "commit.v1",
 	modes: "modes.v1",
 	promptAssist: "prompt-assist.v1",
@@ -35,6 +38,31 @@ export interface AskCapabilityV1 {
 	queue(questions: Questionnaire): void;
 }
 
+/**
+ * A remote sink for questions. When present, the ask engine routes blocking
+ * `ask()` calls here instead of rendering a local dialog — this is how an
+ * agent worker's `ask` tool reaches the orchestrator over RPC. Registered by
+ * modes only in agent mode; absent otherwise (engine falls back to local UI).
+ */
+export interface AskTransportV1 {
+	present(questions: Questionnaire): Promise<Answers>;
+}
+
+/**
+ * Central usage ledger. Every source (orchestrator, each agent, each lens)
+ * records its cumulative snapshot; the ledger aggregates by source so cost
+ * and tokens are real and attributable. Registered by modes.
+ */
+export interface UsageLedgerV1 {
+	/** Upsert the cumulative snapshot for a source. */
+	record(source: UsageSource, snapshot: TokenSnapshot): void;
+	/** Per-source snapshots plus an aggregate total. */
+	snapshot(): {
+		bySource: ReadonlyMap<string, TokenSnapshot>;
+		totals: TokenSnapshot;
+	};
+}
+
 export interface CommitCapabilityV1 {
 	shipDeliverable(input: ShipDeliverableInput): Promise<ShipResult>;
 }
@@ -54,6 +82,8 @@ export interface PromptAssistCapabilityV1 {
 export interface CapabilityMap {
 	[CAPABILITIES.subagents]: SubagentsCapabilityV1;
 	[CAPABILITIES.ask]: AskCapabilityV1;
+	[CAPABILITIES.askTransport]: AskTransportV1;
+	[CAPABILITIES.usage]: UsageLedgerV1;
 	[CAPABILITIES.commit]: CommitCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;

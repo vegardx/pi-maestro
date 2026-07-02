@@ -1,14 +1,12 @@
-// ─── Token snapshot (compatible with SessionTailer) ─────────────────────────
+// ─── Token snapshot (re-exported from contracts; single source of truth) ────
 
-export interface TokenSnapshot {
-	readonly input: number;
-	readonly output: number;
-	readonly cacheRead: number;
-	readonly cacheWrite: number;
-	readonly totalTokens: number;
-	readonly cost: number;
-	readonly turns: number;
-}
+import type {
+	Answers,
+	Questionnaire,
+	TokenSnapshot,
+} from "@vegardx/pi-contracts";
+
+export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
 // ─── Agent → Orchestrator ───────────────────────────────────────────────────
 
@@ -42,12 +40,19 @@ export interface PongMessage {
 	readonly type: "pong";
 }
 
+/** Agent asks the orchestrator one or more questions; blocks for answers. */
+export interface QuestionsMessage {
+	readonly type: "questions";
+	readonly questions: Questionnaire;
+}
+
 export type AgentMessage =
 	| HelloMessage
 	| StatusMessage
 	| TokensMessage
 	| DoneMessage
 	| TaskCompleteMessage
+	| QuestionsMessage
 	| PongMessage;
 
 // ─── Orchestrator → Agent ───────────────────────────────────────────────────
@@ -66,7 +71,17 @@ export interface PingMessage {
 	readonly type: "ping";
 }
 
-export type OrchestratorMessage = SteerMessage | ShutdownMessage | PingMessage;
+/** Orchestrator returns answers to a prior QuestionsMessage. */
+export interface AnswersMessage {
+	readonly type: "answers";
+	readonly answers: Answers;
+}
+
+export type OrchestratorMessage =
+	| SteerMessage
+	| ShutdownMessage
+	| AnswersMessage
+	| PingMessage;
 
 // ─── Union of all messages ──────────────────────────────────────────────────
 

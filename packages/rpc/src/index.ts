@@ -9,11 +9,13 @@ export type {
 export { MaestroRpcClient } from "./client.js";
 export type {
 	AgentMessage,
+	AnswersMessage,
 	DoneMessage,
 	HelloMessage,
 	OrchestratorMessage,
 	PingMessage,
 	PongMessage,
+	QuestionsMessage,
 	RpcMessage,
 	ShutdownMessage,
 	StatusMessage,

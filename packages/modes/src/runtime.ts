@@ -14,6 +14,7 @@ import {
 	type ModeName,
 	type ModesExecutionStatus,
 	type PlanId,
+	type TokenSnapshot,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import {
@@ -111,6 +112,7 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
+import { accumulate, type UsageDelta, UsageLedger } from "./usage-ledger.js";
 import {
 	activateDeliverableBranch,
 	cleanupInactiveWorktrees,
@@ -165,9 +167,13 @@ export function createModesRuntime(
 	let _orchestratorCtx: ExtensionContext | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
-	// Set by the usage-ledger wiring; records the orchestrator's own assistant
-	// usage into usage.v1. Undefined in agent processes.
-	let recordOrchestratorUsage: ((usage: unknown) => void) | undefined;
+	// Central usage ledger (usage.v1). Records orchestrator + agent + lens usage.
+	const usageLedger = new UsageLedger();
+	let orchestratorUsage: TokenSnapshot | undefined;
+	const recordOrchestratorUsage = (usage: unknown): void => {
+		orchestratorUsage = accumulate(orchestratorUsage, usage as UsageDelta);
+		usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
@@ -572,7 +578,8 @@ export function createModesRuntime(
 					planDir,
 					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					onPlanChanged: emitPlanChanged,
-					onAgentStateChanged: (_id, _state) => {
+					onAgentStateChanged: (id, state) => {
+						usageLedger.record({ kind: "agent", id }, state.tokens);
 						if (tmuxFanout)
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 					},
@@ -933,8 +940,8 @@ export function createModesRuntime(
 		const message = (event as { message?: { role?: string; usage?: unknown } })
 			.message;
 		if (!message || message.role !== "assistant" || !message.usage) return;
-		agentBridge?.recordUsage(message.usage as never);
-		recordOrchestratorUsage?.(message.usage as never);
+		if (agentBridge) agentBridge.recordUsage(message.usage as never);
+		else recordOrchestratorUsage(message.usage);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -1162,6 +1169,7 @@ export function createModesRuntime(
 		);
 	});
 
+	maestro.capabilities.register(CAPABILITIES.usage, usageLedger);
 	maestro.capabilities.register(CAPABILITIES.modes, {
 		current: currentMode,
 		onChange(listener) {

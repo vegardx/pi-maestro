@@ -50,7 +50,7 @@ describe("agents dashboard render", () => {
 		expect(text).toContain("✓ Implement");
 		expect(text).toContain("? What error type");
 		expect(text).toContain("CH:83%"); // 60000/(12000+60000)
-		expect(text).toContain("Total:");
+		expect(text).toContain("Agents:");
 		// selected row (index 1) is marked
 		expect(lines.some((l) => l.includes("▸") && l.includes("divide"))).toBe(
 			true,

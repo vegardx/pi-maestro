@@ -12,6 +12,8 @@ export interface ShipDeliverableInput {
 	readonly message?: string;
 	/** Open or update a PR after pushing. Defaults to true. */
 	readonly openPr?: boolean;
+	/** Skip the confirmation gate (autonomous agents ship without prompting). */
+	readonly autoApprove?: boolean;
 	/**
 	 * Working tree to operate in (commit + push + PR). Defaults to the live
 	 * session cwd. modes passes the deliverable's worktree (fanout) or the

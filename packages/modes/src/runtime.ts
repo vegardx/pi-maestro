@@ -977,6 +977,53 @@ export function createModesRuntime(
 		}),
 	);
 
+	pi.registerTool(
+		defineTool({
+			name: "ship",
+			label: "Ship deliverable",
+			description:
+				"Commit, push, and open/update a PR for your changes. Conventional " +
+				"commit message, base branch, and PR body are handled for you — do not " +
+				"run git/gh by hand. Auto-approves (no confirmation).",
+			parameters: Type.Object({
+				message: Type.Optional(
+					Type.String({
+						description: "Override the generated conventional-commit message.",
+					}),
+				),
+			}),
+			async execute(_id, params, _signal, _onUpdate, active) {
+				const commit = maestro.capabilities.get(CAPABILITIES.commit);
+				if (!commit) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Ship unavailable (commit capability absent).",
+							},
+						],
+						details: {},
+					};
+				}
+				const deliverableId = process.env.PI_MAESTRO_AGENT_ID as
+					| DeliverableId
+					| undefined;
+				const result = await commit.shipDeliverable({
+					autoApprove: true,
+					deliverableId,
+					message: params.message,
+					cwd: active.cwd,
+				});
+				const text = !result.committed
+					? "Nothing to ship."
+					: result.pr
+						? `Shipped ${result.branch} → PR #${result.pr}.`
+						: `Committed ${result.branch}${result.pushed ? " (pushed)" : ""}.`;
+				return { content: [{ type: "text", text }], details: { result } };
+			},
+		}),
+	);
+
 	pi.registerCommand("modes-status", {
 		description: "Show Maestro mode and active plan status.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
@@ -1491,7 +1538,7 @@ Your job: structure the user's request into deliverables and tasks. Do NOT imple
 Workflow:
 1. If multi-repo: register repos with \`deliverable register-repo\`.
 2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
-3. Add gating tasks to each deliverable (\`task add\`).
+3. Add gating tasks to each deliverable (\`task add\`). Prefer tasks that reflect the worker lifecycle: an implementation task (or a few), then "Run review lenses", "Address findings", and "Commit, push, PR". The worker toggles these as it implements → reviews → evaluates → ships.
 4. After all tool calls, write your response in this exact format:
    - A 1-3 sentence summary of what the plan accomplishes (plain English, no IDs).
    - Then the plan checklist using this format:
@@ -1584,26 +1631,46 @@ Do NOT call read/edit/bash to implement — only to answer user questions about 
 function buildAgentWorkerPreamble(): string {
 	return `You are an AGENT WORKER managed by a maestro orchestrator.
 
-Your job: implement the deliverable described in your first message.
-Work autonomously — read, edit, test, commit, push, open PR.
+Implement the deliverable described in your first message, then review, ship,
+and verify. Work through these five phases. Reference tools BY NAME — never
+hand-run \`pi\`, \`git\`, or \`gh\` for these steps.
 
-## Reporting progress
-
-Use the \`task\` tool to mark tasks done as you complete them:
+## Phase 1: IMPLEMENT
+Edit code, write/fix tests, verify they pass. Mark tasks done as you finish:
   task({action: "toggle", id: "<task-id>"})
-This reports progress back to the orchestrator in real-time.
+Task IDs are in the plan context above (the maestro-execution-seed).
 
-Task IDs are listed in the plan context above (the maestro-execution-seed).
+## Phase 2: REVIEW
+Review your own changes with the review tool (skip lenses that don't apply):
+  review({lens: "review"})    // correctness bugs
+  review({lens: "refine"})    // unnecessary complexity
+  review({lens: "validate"})  // requirements coverage
+Collect the findings. (Do NOT invoke pi yourself — the tool does it.)
 
-## If you get stuck
+## Phase 3: EVALUATE
+For each finding: agree → apply the fix; disagree → note why you're ignoring
+it; uncertain → ask the orchestrator. Batch all uncertain findings into ONE
+ask call (max 4 questions), each with 2-4 options, trade-offs, and your
+recommendation:
+  ask({questions: [{
+    id: "q-...", header: "<1-3 words>",
+    question: "How to handle <finding title>?",
+    context: "<why this matters; reference the finding>",
+    options: [{label: "Apply <suggestedAction>", description: "..."}, ...],
+    recommendation: "<your preferred option>"
+  }]})
+Then STOP and wait. Use showIf for conditional follow-ups. If an answer is
+ambiguous, call ask again to clarify — don't guess.
 
-If you encounter a blocking issue (missing credentials, unclear requirements,
-failed CI you can't fix), describe the problem clearly in your final message.
-The orchestrator will see it and can steer you with additional guidance.
+## Phase 4: SHIP
+When findings are resolved and tests pass, ship with the ship tool:
+  ship({})
+It commits (conventional message), pushes, and opens/updates a PR and
+auto-approves. Do NOT run git/gh yourself.
 
-## When done
-
-After all tasks are complete, tests pass, code is committed and pushed,
-and a PR is opened — you're done. Just stop. The orchestrator detects
-completion automatically.`;
+## Phase 5: VERIFY
+Re-read your original requirements (the seed). Does the PR address everything?
+Any gaps → fix and re-verify. Otherwise you're done — just stop; the
+orchestrator detects completion. If blocked (missing creds, unfixable CI),
+describe the problem in your final message so the orchestrator can steer you.`;
 }

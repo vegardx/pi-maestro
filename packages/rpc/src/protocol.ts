@@ -46,6 +46,13 @@ export interface QuestionsMessage {
 	readonly questions: Questionnaire;
 }
 
+/** Agent reports usage from a lens sub-invocation (a child pi process). */
+export interface LensUsageMessage {
+	readonly type: "lensUsage";
+	readonly lens: string;
+	readonly snapshot: TokenSnapshot;
+}
+
 export type AgentMessage =
 	| HelloMessage
 	| StatusMessage
@@ -53,6 +60,7 @@ export type AgentMessage =
 	| DoneMessage
 	| TaskCompleteMessage
 	| QuestionsMessage
+	| LensUsageMessage
 	| PongMessage;
 
 // ─── Orchestrator → Agent ───────────────────────────────────────────────────

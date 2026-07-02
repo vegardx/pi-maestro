@@ -95,6 +95,14 @@ export class AgentBridge {
 		this.client.send({ type: "taskComplete", taskId });
 	}
 
+	/** Report usage from a lens sub-invocation (a child pi process). */
+	reportLensUsage(
+		lens: string,
+		snapshot: import("@vegardx/pi-rpc").TokenSnapshot,
+	): void {
+		this.client.send({ type: "lensUsage", lens, snapshot });
+	}
+
 	/**
 	 * Send questions to the orchestrator and block until answers arrive.
 	 * Resolves empty on shutdown/destroy so a blocked worker exits cleanly.

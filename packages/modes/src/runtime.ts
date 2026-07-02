@@ -995,11 +995,13 @@ export function createModesRuntime(
 			description:
 				"Commit, push, and open/update a PR for your changes. Base branch " +
 				"and PR body are handled for you — do NOT run git/gh by hand. " +
-				"You MUST provide the commit message (conventional format).",
+				"You MUST provide the full commit message (conventional format with body).",
 			parameters: Type.Object({
 				message: Type.String({
 					description:
-						"Conventional commit message (type(scope): subject). Required — write it yourself.",
+						"Full conventional commit: subject (type(scope): what, max 72 chars), " +
+						"blank line, then body explaining what changed and why. " +
+						"Example: feat(math): implement multiply\\n\\nAdd multiply(a,b) with overflow guard.",
 				}),
 			}),
 			async execute(_id, params, _signal, _onUpdate, active) {
@@ -1675,7 +1677,7 @@ ambiguous, call ask again to clarify — don't guess.
 
 ## Phase 4: SHIP
 When findings are resolved and tests pass, ship with the ship tool:
-  ship({message: "feat(scope): what you did"})
+  ship({message: "feat(scope): subject\n\nBody: what changed and why."})
 It commits (conventional message), pushes, and opens/updates a PR and
 auto-approves. Do NOT run git/gh yourself.
 

@@ -1,6 +1,9 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { Answers } from "@vegardx/pi-contracts";
 import { hasSession, killPane, splitWindow } from "@vegardx/pi-tmux";
+import { runQuestionnaire } from "@vegardx/pi-ui";
 import type { TmuxAgentState, TmuxFanout } from "./execution-tmux.js";
+import type { PendingQuestion } from "./question-queue.js";
 
 // ─── Status Widget ──────────────────────────────────────────────────────────
 
@@ -11,20 +14,24 @@ export function formatAgentStatusLine(
 	let working = 0;
 	let done = 0;
 	let failed = 0;
+	let awaiting = 0;
 	let blocked = 0;
 	for (const s of agents.values()) {
 		if (s.status === "working" || s.status === "spawning") working++;
 		else if (s.status === "done") done++;
 		else if (s.status === "failed") failed++;
+		else if (s.status === "awaiting-decision") awaiting++;
 		else blocked++;
 	}
 	const parts: string[] = [];
 	if (working > 0) parts.push(`${working} working`);
+	if (awaiting > 0) parts.push(`${awaiting} awaiting decisions`);
 	if (done > 0) parts.push(`${done} done`);
 	if (failed > 0) parts.push(`${failed} failed`);
 	if (blocked > 0) parts.push(`${blocked} blocked`);
 	if (parts.length === 0) return `Agents: ${agents.size} total`;
-	return `Agents: ${parts.join(", ")}`;
+	const hint = awaiting > 0 ? " \u2014 /answer" : "";
+	return `Agents: ${parts.join(", ")}${hint}`;
 }
 
 export function updateAgentWidget(
@@ -33,6 +40,43 @@ export function updateAgentWidget(
 ): void {
 	const line = formatAgentStatusLine(agents);
 	ctx.ui.setWidget("maestro.agents", line ? [line] : undefined);
+}
+
+// ─── Answer decisions ────────────────────────────────────────────────
+
+/**
+ * Open the decision dialog on a pending question entry. Shared by /answer
+ * (FIFO) and the dashboard `d` action (targeted). On send, resolves the entry
+ * by agentId (so out-of-FIFO answering works); on close, saves the draft.
+ */
+export async function openAnswerDialog(
+	ctx: ExtensionCommandContext,
+	fanout: TmuxFanout,
+	entry: PendingQuestion,
+): Promise<void> {
+	const answers = await runQuestionnaire(ctx as never, entry.questions, {
+		initialAnswers: entry.draft,
+		onCancel: (draft: Answers) =>
+			fanout.questionQueue.saveDraft(entry.agentId, draft),
+	});
+	if (answers) fanout.questionQueue.answer(entry.agentId, answers);
+}
+
+export async function handleAnswerCommand(
+	ctx: ExtensionCommandContext,
+	fanout: TmuxFanout,
+): Promise<void> {
+	const queue = fanout.questionQueue;
+	const entry = queue.peek();
+	if (!entry) {
+		ctx.ui.notify("No pending questions.", "info");
+		return;
+	}
+	await openAnswerDialog(ctx, fanout, entry);
+	const remaining = queue.count();
+	if (remaining > 0) {
+		ctx.ui.notify(`${remaining} more question(s) pending.`, "info");
+	}
 }
 
 // ─── View Command ───────────────────────────────────────────────────────────

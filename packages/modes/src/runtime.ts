@@ -53,6 +53,7 @@ import { TmuxFanout } from "./execution-tmux.js";
 import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
 	handleAgentsCommand,
+	handleAnswerCommand,
 	handleSteerCommand,
 	handleViewCommand,
 	updateAgentWidget,
@@ -575,6 +576,14 @@ export function createModesRuntime(
 						if (tmuxFanout)
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 					},
+					onQuestionsReceived: (_id, count) => {
+						ctx.ui.notify(
+							`Agent has ${count} question(s) — /answer to respond.`,
+							"info",
+						);
+						if (tmuxFanout)
+							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+					},
 				});
 				await tmuxFanout.start();
 			}
@@ -799,6 +808,18 @@ export function createModesRuntime(
 				handleSteerCommand(args, ctx, tmuxFanout);
 			} else {
 				ctx.ui.notify("No agents active (tmux required).", "info");
+			}
+		},
+	});
+
+	pi.registerCommand("answer", {
+		description: "Answer pending agent questions.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (tmuxFanout) {
+				await handleAnswerCommand(ctx, tmuxFanout);
+				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+			} else {
+				ctx.ui.notify("No agents active.", "info");
 			}
 		},
 	});

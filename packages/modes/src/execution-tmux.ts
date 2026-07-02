@@ -18,6 +18,7 @@ import { agentName } from "./agent-names.js";
 import type { PlanEngine } from "./engine.js";
 import { completionGateSatisfied, transitionThrough } from "./execution.js";
 import { renderPlanSeed } from "./markdown.js";
+import { QuestionQueue } from "./question-queue.js";
 import {
 	type Deliverable,
 	defaultBranchForDeliverable,
@@ -37,6 +38,7 @@ export type TmuxAgentStatus =
 	| "spawning"
 	| "working"
 	| "idle"
+	| "awaiting-decision"
 	| "done"
 	| "failed";
 
@@ -59,6 +61,7 @@ export interface TmuxFanoutDeps {
 	readonly defaultBranch: string;
 	readonly onPlanChanged?: () => void;
 	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
+	readonly onQuestionsReceived?: (id: string, count: number) => void;
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
@@ -81,6 +84,7 @@ const ZERO_TOKENS: TokenSnapshot = {
 
 export class TmuxFanout {
 	private agents = new Map<string, TmuxAgentState>();
+	readonly questionQueue = new QuestionQueue();
 	private takenNames = new Set<string>();
 	private server: RpcServer;
 	private socketPath: string;
@@ -458,6 +462,21 @@ export class TmuxFanout {
 			case "done":
 				this.markDone(agentId, msg.summary);
 				break;
+			case "questions": {
+				const d = findDeliverable(this.deps.engine.get(), agentId);
+				this.questionQueue.enqueue({
+					agentId,
+					agentName: state.agentName,
+					deliverableTitle: d?.title ?? state.agentName,
+					questions: msg.questions,
+					resolve: (answers) =>
+						this.server.send(agentId, { type: "answers", answers }),
+				});
+				state.status = "awaiting-decision";
+				this.deps.onQuestionsReceived?.(agentId, msg.questions.length);
+				this.deps.onAgentStateChanged?.(agentId, state);
+				break;
+			}
 			case "taskComplete":
 				try {
 					this.deps.engine.toggleWorkItem(msg.taskId);
@@ -544,6 +563,9 @@ export class TmuxFanout {
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		state.status = "failed";
+		// Drop any pending decision request — the agent is gone, so resolving it
+		// would send to a dead socket and it must not be offered in /answer.
+		this.questionQueue.drop(agentId);
 		if (detail) {
 			this.deps.engine.updateDeliverable(agentId, { summary: detail });
 		}

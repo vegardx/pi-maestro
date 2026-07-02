@@ -1,7 +1,12 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { Answers } from "@vegardx/pi-contracts";
+import type { Answers, UsageLedgerV1 } from "@vegardx/pi-contracts";
 import { hasSession, killPane, splitWindow } from "@vegardx/pi-tmux";
 import { runQuestionnaire } from "@vegardx/pi-ui";
+import {
+	type DashboardAction,
+	runAgentsDashboard,
+} from "./agents-dashboard.js";
+import type { PlanEngine } from "./engine.js";
 import type { TmuxAgentState, TmuxFanout } from "./execution-tmux.js";
 import type { PendingQuestion } from "./question-queue.js";
 
@@ -225,33 +230,94 @@ export async function handleSteerCommand(
 	}
 }
 
-// ─── Agents List Command ────────────────────────────────────────────────────
+// ─── Agents Dashboard ───────────────────────────────────────────────────────
 
-export function handleAgentsCommand(
+/** Open a split pane onto an agent's session (watch = read-only, else interactive). */
+async function openAgentPane(
 	ctx: ExtensionCommandContext,
 	fanout: TmuxFanout,
-): void {
-	const snap = fanout.snapshot();
-	if (snap.agents.size === 0) {
+	agent: TmuxAgentState,
+	interactive: boolean,
+	viewState: ViewState,
+): Promise<void> {
+	const alive = await hasSession(agent.agentName);
+	if (viewState.viewPaneId) {
+		try {
+			await killPane(viewState.viewPaneId);
+		} catch {
+			// already closed
+		}
+		viewState.viewPaneId = undefined;
+	}
+	let command: string;
+	if (alive) {
+		const rFlag = interactive ? "" : " -r";
+		command = `env -u TMUX -u TMUX_PANE tmux attach-session${rFlag} -t ${agent.agentName}`;
+	} else {
+		const extFlag = fanout.getExtensionPath()
+			? ` -e "${fanout.getExtensionPath()}"`
+			: "";
+		const cFlag = interactive ? " -c" : "";
+		command = `pi${cFlag} --session "${agent.sessionFile}"${extFlag}`;
+	}
+	try {
+		viewState.viewPaneId = await splitWindow({
+			horizontal: true,
+			percent: 40,
+			detach: true,
+			command,
+		});
+	} catch (e) {
+		ctx.ui.notify(
+			`Failed to open view: ${e instanceof Error ? e.message : "unknown error"}`,
+			"warning",
+		);
+	}
+}
+
+/** Interactive dashboard: render agents, then execute the chosen action. */
+export async function handleAgentsDashboard(
+	ctx: ExtensionCommandContext,
+	fanout: TmuxFanout,
+	engine: PlanEngine,
+	ledger: UsageLedgerV1 | undefined,
+	viewState: ViewState,
+): Promise<void> {
+	if (fanout.snapshot().agents.size === 0) {
 		ctx.ui.notify("No agents.", "info");
 		return;
 	}
+	const action: DashboardAction | undefined = await runAgentsDashboard(
+		ctx as never,
+		fanout,
+		engine,
+		ledger,
+		fanout.questionQueue,
+	);
+	if (!action) return;
+	const state = fanout.snapshot().agents.get(action.agentId);
+	if (!state) return;
 
-	const lines: string[] = [];
-	for (const state of snap.agents.values()) {
-		const icon =
-			state.status === "working"
-				? "*"
-				: state.status === "done"
-					? "v"
-					: state.status === "failed"
-						? "!"
-						: "-";
-		const tokens =
-			state.tokens.turns > 0
-				? ` (${state.tokens.turns} turns, ${state.tokens.totalTokens} tok)`
-				: "";
-		lines.push(`[${icon}] ${state.agentName}  ${state.deliverableId}${tokens}`);
+	switch (action.kind) {
+		case "watch":
+			await openAgentPane(ctx, fanout, state, false, viewState);
+			break;
+		case "attach":
+			await openAgentPane(ctx, fanout, state, true, viewState);
+			break;
+		case "steer": {
+			const msg = await ctx.ui.input(`Steer ${state.agentName}`, "guidance");
+			if (!msg?.trim()) return;
+			if (!fanout.steer(action.agentId, msg.trim()))
+				await fanout.respawn(action.agentId, msg.trim());
+			ctx.ui.notify(`Steered ${state.agentName}.`, "info");
+			break;
+		}
+		case "answer": {
+			const entry = fanout.questionQueue.pendingForAgent(action.agentId);
+			if (entry) await openAnswerDialog(ctx, fanout, entry);
+			else ctx.ui.notify("No pending questions for that agent.", "info");
+			break;
+		}
 	}
-	ctx.ui.notify(lines.join("\n"), "info");
 }

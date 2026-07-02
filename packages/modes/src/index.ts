@@ -67,7 +67,8 @@ export {
 } from "./markdown.js";
 export {
 	formatAgentStatusLine,
-	handleAgentsCommand,
+	handleAgentsDashboard,
+	handleAnswerCommand,
 	handleSteerCommand,
 	handleViewCommand,
 	updateAgentWidget,

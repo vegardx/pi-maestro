@@ -106,10 +106,23 @@ export function renderDashboard(
 		);
 		lines.push("");
 	});
-	const totals = ledger?.snapshot().totals;
-	if (totals) {
-		lines.push(palette.dim("─".repeat(Math.min(width, 60))));
-		lines.push(palette.muted(`  Total: ${tokenLine(totals)}`));
+
+	// Compute agent-only totals (exclude orchestrator/lens from the footer).
+	const agentTotals = rows.reduce(
+		(acc, r) => ({
+			input: acc.input + r.state.tokens.input,
+			output: acc.output + r.state.tokens.output,
+			cacheRead: acc.cacheRead + r.state.tokens.cacheRead,
+			cacheWrite: acc.cacheWrite + r.state.tokens.cacheWrite,
+			totalTokens: acc.totalTokens + r.state.tokens.totalTokens,
+			cost: acc.cost + r.state.tokens.cost,
+			turns: acc.turns + r.state.tokens.turns,
+		}),
+		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, turns: 0 },
+	);
+	if (rows.length > 0) {
+		lines.push(palette.dim("─".repeat(width)));
+		lines.push(palette.muted(`  Agents: ${tokenLine(agentTotals)}`));
 	}
 	lines.push(
 		palette.muted(

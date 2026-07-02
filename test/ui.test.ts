@@ -1,5 +1,6 @@
 import type {
 	DeliverableId,
+	Question,
 	Questionnaire,
 	RunId,
 	RunRecord,
@@ -11,8 +12,10 @@ import {
 	formatCount,
 	formatElapsed,
 	initQuestionnaireState,
+	isShown,
 	moveCursor,
 	type PlanTreeNode,
+	recommendedIndex,
 	renderPlanTree,
 	renderProgressBar,
 	renderQuestionnaire,
@@ -160,5 +163,54 @@ describe("questionnaire reducers", () => {
 		expect(lines[0]).toContain("[Q2]");
 		expect(lines.some((l) => l.includes("[ ] a"))).toBe(true);
 		expect(lines.at(-1)).toContain("press 't'");
+	});
+
+	it("uses header labels in tabs and marks the recommendation", () => {
+		const rq: Questionnaire = [
+			{
+				id: "e",
+				header: "ErrType",
+				question: "Which error?",
+				options: [{ label: "RangeError" }, { label: "Custom" }],
+				recommendation: "RangeError",
+			},
+			{
+				id: "x",
+				header: "Overflow",
+				question: "Guard?",
+				options: [{ label: "Yes" }],
+			},
+		];
+		const lines = renderQuestionnaire(rq, initQuestionnaireState(), 60);
+		expect(lines[0]).toContain("[ErrType]");
+		expect(lines[0]).toContain("Overflow");
+		expect(lines.some((l) => l.includes("[rec]"))).toBe(true);
+	});
+
+	it("evaluates showIf against prior answers", () => {
+		const dep: Question = {
+			id: "d",
+			question: "dep",
+			showIf: { questionId: "e", anyOf: ["Custom"] },
+		};
+		expect(isShown(dep, [{ questionId: "e", value: "RangeError" }])).toBe(
+			false,
+		);
+		expect(isShown(dep, [{ questionId: "e", value: "Custom" }])).toBe(true);
+		expect(isShown(dep, [{ questionId: "e", value: "", skipped: true }])).toBe(
+			false,
+		);
+	});
+
+	it("recommendedIndex matches by option value or label", () => {
+		const rq: Question = {
+			id: "e",
+			question: "q",
+			options: [{ label: "A", value: "a" }, { label: "B" }],
+			recommendation: "B",
+		};
+		expect(recommendedIndex(rq)).toBe(1);
+		expect(recommendedIndex({ ...rq, recommendation: "a" })).toBe(0);
+		expect(recommendedIndex({ ...rq, recommendation: undefined })).toBe(-1);
 	});
 });

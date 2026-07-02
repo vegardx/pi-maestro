@@ -224,7 +224,9 @@ export function renderQuestionnaire(
 			truncate(`${cursor} ${box ? `${box} ` : ""}${label}${rec}`, width),
 		);
 		if (option.description) {
-			lines.push(palette.dim(truncate(`    ${option.description}`, width)));
+			lines.push(
+				...wrap(option.description, width - 4, palette).map((l) => `    ${l}`),
+			);
 		}
 	}
 
@@ -520,7 +522,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 	}
 }
 
-/** Show a questionnaire as a focused overlay and resolve with the answers. */
+/** Show a questionnaire as a focused component and resolve with the answers. */
 export function runQuestionnaire(
 	ctx: ExtensionContext,
 	questionnaire: Questionnaire,
@@ -528,8 +530,29 @@ export function runQuestionnaire(
 ): Promise<Answers | undefined> {
 	return ctx.ui.custom<Answers | undefined>(
 		(_tui: TUI, theme, _keybindings, done) => {
-			void theme;
-			return new QuestionnaireComponent(questionnaire, done, opts);
+			const palette = paletteFromTheme(theme);
+			return new QuestionnaireComponent(questionnaire, done, {
+				...opts,
+				palette,
+			});
 		},
 	);
+}
+
+function paletteFromTheme(theme: unknown): Palette {
+	const t = theme as {
+		fg?: (color: string, text: string) => string;
+		bold?: (text: string) => string;
+	} | null;
+	if (!t?.fg) return defaultPalette();
+	return {
+		dim: (s) => t.fg!("dim", s),
+		muted: (s) => t.fg!("muted", s),
+		accent: (s) => t.fg!("accent", s),
+		heading: (s) => t.bold!(t.fg!("text", s)),
+		success: (s) => t.fg!("success", s),
+		warning: (s) => t.fg!("warning", s),
+		error: (s) => t.fg!("error", s),
+		info: (s) => t.fg!("accent", s),
+	};
 }

@@ -199,7 +199,7 @@ export function renderQuestionnaire(
 	const question = questionnaire[state.index];
 	if (!question) return [];
 	const lines: string[] = [];
-	const border = palette.dim("─".repeat(Math.min(width, 60)));
+	const border = palette.dim("─".repeat(width));
 
 	lines.push(border);
 
@@ -251,7 +251,7 @@ export function renderQuestionnaire(
 	const highlighted = question.options?.[state.cursor];
 	if (highlighted?.preview) {
 		lines.push("");
-		lines.push(palette.dim("─".repeat(Math.min(width, 20))));
+		lines.push(palette.dim("─".repeat(Math.min(width, 40))));
 		lines.push(...wrap(highlighted.preview, width, palette));
 	}
 

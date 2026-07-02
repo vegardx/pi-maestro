@@ -13,7 +13,7 @@ DOGFOOD_FLAGS := \
 	--no-context-files \
 	--no-approve
 
-.PHONY: help dogfood dogfood-fresh dogfood-sandbox reset reset-yes reset-remote reset-plans check
+.PHONY: help dogfood dogfood-fresh dogfood-sandbox reset reset-yes reset-remote reset-plans check test-ask
 
 RESET := $(ROOT)/scripts/reset-dogfood.sh
 
@@ -82,6 +82,10 @@ dogfood-plan:
 
 check:
 	npm run check
+
+# Present a synthetic questionnaire exercising all dialog features (no LLM).
+test-ask:
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" -e "$(ROOT)/scripts/test-ask-harness.ts" --no-session
 
 # Reset the dogfood environment: wipe the isolated profile's plans/sessions and
 # reset the sandbox repos to baseline. Plans live in the dogfood profile, so the

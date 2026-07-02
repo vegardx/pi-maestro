@@ -53,7 +53,7 @@ import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
 import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
-	handleAgentsCommand,
+	handleAgentsDashboard,
 	handleAnswerCommand,
 	handleSteerCommand,
 	handleViewCommand,
@@ -786,10 +786,17 @@ export function createModesRuntime(
 	});
 
 	pi.registerCommand("agents", {
-		description: "List active and completed agents.",
+		description: "Interactive dashboard of active agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (tmuxFanout) {
-				handleAgentsCommand(ctx, tmuxFanout);
+			if (tmuxFanout && engine) {
+				await handleAgentsDashboard(
+					ctx,
+					tmuxFanout,
+					engine,
+					usageLedger,
+					viewState,
+				);
+				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 			} else {
 				ctx.ui.notify("No agents active.", "info");
 			}

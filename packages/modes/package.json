@@ -15,7 +15,8 @@
 		"@vegardx/pi-git": "*",
 		"@vegardx/pi-models": "*",
 		"@vegardx/pi-rpc": "*",
-		"@vegardx/pi-tmux": "*"
+		"@vegardx/pi-tmux": "*",
+		"@vegardx/pi-ui": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",

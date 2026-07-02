@@ -75,8 +75,8 @@ describe("ask tool", () => {
 		const text = res.content[0];
 		expect(text.type).toBe("text");
 		if (text.type === "text") {
-			expect(text.text).toContain("tier: heavy");
-			expect(text.text).toContain("(free text)");
+			expect(text.text).toContain("tier): heavy");
+			expect(text.text).toContain("[free text]");
 			expect(text.text).toContain('"questionId":"tier"');
 		}
 	});

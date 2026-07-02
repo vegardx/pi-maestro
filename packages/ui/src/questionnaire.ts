@@ -531,6 +531,5 @@ export function runQuestionnaire(
 			void theme;
 			return new QuestionnaireComponent(questionnaire, done, opts);
 		},
-		{ overlay: true },
 	);
 }

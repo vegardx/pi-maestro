@@ -24,7 +24,8 @@ const ZERO: TokenSnapshot = {
 	turns: 0,
 };
 
-/** Add a per-response Usage to a cumulative snapshot (one more turn). */
+/** Add a per-response Usage to a cumulative snapshot. Does NOT increment turns
+ * (caller controls that — a turn can contain many assistant messages). */
 export function accumulate(
 	prev: TokenSnapshot | undefined,
 	usage: UsageDelta,
@@ -39,8 +40,13 @@ export function accumulate(
 		cacheWrite: base.cacheWrite + (usage.cacheWrite ?? 0),
 		totalTokens: input + output,
 		cost: base.cost + (usage.cost?.total ?? 0),
-		turns: base.turns + 1,
+		turns: base.turns,
 	};
+}
+
+/** Increment the turn counter on a snapshot. Call once per actual turn_end. */
+export function incrementTurns(prev: TokenSnapshot): TokenSnapshot {
+	return { ...prev, turns: prev.turns + 1 };
 }
 
 /**

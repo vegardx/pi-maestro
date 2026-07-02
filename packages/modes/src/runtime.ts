@@ -122,7 +122,12 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
-import { accumulate, type UsageDelta, UsageLedger } from "./usage-ledger.js";
+import {
+	accumulate,
+	incrementTurns,
+	type UsageDelta,
+	UsageLedger,
+} from "./usage-ledger.js";
 import {
 	activateDeliverableBranch,
 	cleanupInactiveWorktrees,
@@ -183,6 +188,12 @@ export function createModesRuntime(
 	const recordOrchestratorUsage = (usage: unknown): void => {
 		orchestratorUsage = accumulate(orchestratorUsage, usage as UsageDelta);
 		usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+	};
+	const incrementOrchestratorTurn = (): void => {
+		if (orchestratorUsage) {
+			orchestratorUsage = incrementTurns(orchestratorUsage);
+			usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+		}
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	let baselineTools: string[] | undefined;
@@ -1139,6 +1150,7 @@ export function createModesRuntime(
 
 	pi.on("turn_end", async (_event, ctx) => {
 		agentBridge?.onTurnEnd();
+		if (!agentBridge) incrementOrchestratorTurn();
 		if (state.mode === "plan") {
 			finalizeDraftPlan(ctx);
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));

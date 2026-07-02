@@ -118,11 +118,19 @@ export function renderDashboard(
 			cost: acc.cost + r.state.tokens.cost,
 			turns: acc.turns + r.state.tokens.turns,
 		}),
-		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0, turns: 0 },
+		{
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: 0,
+			turns: 0,
+		},
 	);
 	if (rows.length > 0) {
 		lines.push(palette.dim("─".repeat(width)));
-		lines.push(palette.muted(`  Agents: ${tokenLine(agentTotals)}`));
+		lines.push(palette.muted(`  Total: ${tokenLine(agentTotals)}`));
 	}
 	lines.push(
 		palette.muted(

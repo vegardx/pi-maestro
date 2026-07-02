@@ -12,7 +12,7 @@ describe("usage ledger", () => {
 			input: 100,
 			output: 20,
 			cost: 0.01,
-			turns: 1,
+			turns: 0,
 		});
 		snap = accumulate(snap, {
 			input: 50,
@@ -22,7 +22,7 @@ describe("usage ledger", () => {
 		expect(snap.input).toBe(150);
 		expect(snap.cacheRead).toBe(30);
 		expect(snap.cost).toBeCloseTo(0.015);
-		expect(snap.turns).toBe(2);
+		expect(snap.turns).toBe(0);
 		expect(snap.totalTokens).toBe(170);
 	});
 
@@ -44,7 +44,7 @@ describe("usage ledger", () => {
 		expect(bySource.size).toBe(3);
 		expect(totals.input).toBe(35);
 		expect(totals.cost).toBeCloseTo(3.5);
-		expect(totals.turns).toBe(3);
+		expect(totals.turns).toBe(0);
 	});
 
 	it("upserts the snapshot for a source key", () => {

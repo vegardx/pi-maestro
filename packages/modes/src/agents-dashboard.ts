@@ -167,7 +167,7 @@ class DashboardComponent implements Component, Focusable {
 	}
 }
 
-/** Show the dashboard overlay; resolves with the chosen action (or undefined). */
+/** Show the dashboard; resolves with the chosen action (or undefined). */
 export function runAgentsDashboard(
 	ctx: {
 		ui: {
@@ -190,6 +190,5 @@ export function runAgentsDashboard(
 	const rows = buildRows(fanout, engine, queue);
 	return ctx.ui.custom<DashboardAction | undefined>(
 		(_tui, _theme, _kb, done) => new DashboardComponent(rows, ledger, done),
-		{ overlay: true },
 	);
 }

@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-	ToolCallEvent,
+import {
+	defineTool,
+	type ExtensionAPI,
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	type ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import {
 	CAPABILITIES,
 	type DeliverableId,
@@ -20,6 +22,7 @@ import type { MaestroContext } from "@vegardx/pi-core";
 import {
 	addWorktree,
 	checkoutOrCreateBranch,
+	currentBranch,
 	detectDefaultBranch,
 	gitToplevel,
 	removeWorktree,
@@ -51,6 +54,13 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
+import {
+	formatFindings,
+	LENSES,
+	runLensesForArgs,
+	totalFindings,
+} from "./lens-run.js";
+import type { LensName } from "./lenses/index.js";
 import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
 	handleAgentsDashboard,
@@ -591,6 +601,12 @@ export function createModesRuntime(
 						if (tmuxFanout)
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 					},
+					onLensUsage: (id, lens, snapshot) => {
+						usageLedger.record(
+							{ kind: "lens", parentAgentId: id, lens },
+							snapshot,
+						);
+					},
 				});
 				await tmuxFanout.start();
 			}
@@ -837,6 +853,129 @@ export function createModesRuntime(
 			}
 		},
 	});
+
+	const lensModel = process.env.MAESTRO_LENS_MODEL || undefined;
+	const lensEnabled = process.env.MAESTRO_LENS_DISABLED !== "1";
+
+	function resolveRequirements(cwd: string): string | undefined {
+		if (!engine) return undefined;
+		const plan = engine.get();
+		const branch = currentBranch(cwd);
+		const d =
+			(branch
+				? deliverables(plan).find((x) => x.branch === branch)
+				: undefined) ?? activeDeliverable(plan);
+		if (!d) return undefined;
+		const tasks = d.children
+			.filter((c) => c.type === "work-item")
+			.map((c) => `- ${(c as { title: string }).title}`)
+			.join("\n");
+		return `${d.title}\n${d.body ?? ""}\n\nTasks:\n${tasks}`;
+	}
+
+	async function runLensCommand(
+		lens: LensName,
+		args: string,
+		ctx: ExtensionCommandContext,
+	): Promise<void> {
+		if (!lensEnabled) {
+			ctx.ui.notify("Lenses are disabled (MAESTRO_LENS_DISABLED=1).", "info");
+			return;
+		}
+		ctx.ui.notify(`Running ${lens}…`, "info");
+		const agg = await runLensesForArgs([lens], args, {
+			cwd: ctx.cwd,
+			mode: state.mode,
+			engine,
+			model: lensModel,
+			requirements:
+				lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
+		});
+		if (agg.guidance) {
+			ctx.ui.notify(agg.guidance, "info");
+			return;
+		}
+		for (const r of agg.results)
+			usageLedger.record(
+				{ kind: "lens", parentAgentId: "local", lens: r.lens },
+				r.usage,
+			);
+		if (totalFindings(agg.results) === 0) {
+			ctx.ui.notify(`${lens}: no issues found.`, "info");
+			return;
+		}
+		pi.sendMessage(
+			{
+				customType: "maestro.lens.findings",
+				content: formatFindings(agg.results),
+				display: true,
+			},
+			{ triggerTurn: false },
+		);
+	}
+
+	for (const lens of LENSES) {
+		pi.registerCommand(lens, {
+			description: `Run the ${lens} lens on changes (or the plan in plan mode).`,
+			handler: (args: string, ctx: ExtensionCommandContext) =>
+				runLensCommand(lens, args, ctx),
+		});
+	}
+
+	pi.registerTool(
+		defineTool({
+			name: "review",
+			label: "Review (lens)",
+			description:
+				"Run a focused review lens on your changes and get structured findings. " +
+				"lens: review (correctness bugs), refine (simplification), validate (requirements). " +
+				"Runs an ephemeral analysis; returns findings to evaluate.",
+			parameters: Type.Object({
+				lens: Type.Union(
+					[
+						Type.Literal("review"),
+						Type.Literal("refine"),
+						Type.Literal("validate"),
+					],
+					{ description: "Which lens to run." },
+				),
+				paths: Type.Optional(
+					Type.String({
+						description: "Optional space-separated paths to scope to.",
+					}),
+				),
+			}),
+			async execute(_id, params, _signal, _onUpdate, ctx) {
+				const lens = params.lens as LensName;
+				const agg = await runLensesForArgs([lens], params.paths ?? "", {
+					cwd: ctx.cwd,
+					mode: state.mode,
+					engine,
+					model: lensModel,
+					requirements:
+						lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
+				});
+				if (agg.guidance) {
+					return {
+						content: [{ type: "text", text: agg.guidance }],
+						details: { findings: [] },
+					};
+				}
+				for (const r of agg.results) {
+					if (agentBridge) agentBridge.reportLensUsage(r.lens, r.usage);
+					else
+						usageLedger.record(
+							{ kind: "lens", parentAgentId: "local", lens: r.lens },
+							r.usage,
+						);
+				}
+				return {
+					content: [{ type: "text", text: formatFindings(agg.results) }],
+					details: { findings: agg.results.flatMap((r) => r.findings) },
+				};
+			},
+		}),
+	);
 
 	pi.registerCommand("modes-status", {
 		description: "Show Maestro mode and active plan status.",

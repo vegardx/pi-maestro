@@ -12,6 +12,7 @@ export type {
 	AnswersMessage,
 	DoneMessage,
 	HelloMessage,
+	LensUsageMessage,
 	OrchestratorMessage,
 	PingMessage,
 	PongMessage,

@@ -62,6 +62,11 @@ export interface TmuxFanoutDeps {
 	readonly onPlanChanged?: () => void;
 	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
 	readonly onQuestionsReceived?: (id: string, count: number) => void;
+	readonly onLensUsage?: (
+		id: string,
+		lens: string,
+		snapshot: TokenSnapshot,
+	) => void;
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
@@ -458,6 +463,9 @@ export class TmuxFanout {
 			case "tokens":
 				state.tokens = msg.snapshot;
 				this.deps.onAgentStateChanged?.(agentId, state);
+				break;
+			case "lensUsage":
+				this.deps.onLensUsage?.(agentId, msg.lens, msg.snapshot);
 				break;
 			case "done":
 				this.markDone(agentId, msg.summary);

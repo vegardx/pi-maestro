@@ -53,6 +53,9 @@ export interface TmuxAgentState {
 	assessmentSent: boolean;
 	idleCount: number;
 	tokens: TokenSnapshot;
+	lensRuns: number;
+	reviewCycles: number;
+	lastLensAt?: number;
 }
 
 export interface TmuxFanoutDeps {
@@ -78,6 +81,7 @@ function log(msg: string): void {
 }
 
 const POLL_INTERVAL_MS = 3000;
+const MAX_REVIEW_CYCLES = Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
 const ZERO_TOKENS: TokenSnapshot = {
 	input: 0,
 	output: 0,
@@ -390,6 +394,8 @@ export class TmuxFanout {
 			assessmentSent: false,
 			idleCount: 0,
 			tokens: { ...ZERO_TOKENS },
+			lensRuns: 0,
+			reviewCycles: 0,
 		};
 		this.agents.set(d.id, state);
 
@@ -467,6 +473,12 @@ export class TmuxFanout {
 				this.deps.onAgentStateChanged?.(agentId, state);
 				break;
 			case "lensUsage":
+				state.lensRuns++;
+				state.lastLensAt = Date.now();
+				if (msg.lens === "review") {
+					state.reviewCycles++;
+					this.handleReviewCycleCheck(agentId, state);
+				}
 				this.deps.onLensUsage?.(agentId, msg.lens, msg.snapshot);
 				break;
 			case "done":
@@ -535,6 +547,31 @@ export class TmuxFanout {
 				state.assessmentSent = true;
 				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
 			}
+		}
+	}
+
+	private handleReviewCycleCheck(agentId: string, state: TmuxAgentState): void {
+		if (state.reviewCycles === MAX_REVIEW_CYCLES) {
+			this.server.send(agentId, {
+				type: "steer",
+				content:
+					"You have completed multiple review cycles. From this point, only fix IMPORTANT " +
+					"or CRITICAL findings. Accept all MINOR findings as-is and proceed to SHIP. " +
+					"Do not run the review tool again unless you made substantial architectural changes.",
+			});
+			log(
+				`review-loop-breaker: steered ${agentId} after ${state.reviewCycles} cycles`,
+			);
+		} else if (state.reviewCycles > MAX_REVIEW_CYCLES) {
+			this.server.send(agentId, {
+				type: "steer",
+				content:
+					"STOP. You have exceeded the maximum review cycles. Ship your current " +
+					"implementation NOW using the ship tool. Do not run review again.",
+			});
+			log(
+				`review-loop-breaker: FORCE steered ${agentId} after ${state.reviewCycles} cycles`,
+			);
 		}
 	}
 

@@ -1060,7 +1060,7 @@ export function createModesRuntime(
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
 		if (tmuxFanout) {
-			const preamble = buildOrchestratorPreamble(engine);
+			const preamble = buildOrchestratorPreamble(engine, tmuxFanout);
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
 		if (agentBridge) {
@@ -1620,16 +1620,45 @@ function computeMaxParallelism(
 	return maxWave;
 }
 
-function buildOrchestratorPreamble(engine: PlanEngine | undefined): string {
+function buildOrchestratorPreamble(
+	engine: PlanEngine | undefined,
+	fanout: TmuxFanout,
+): string {
 	if (!engine) return "";
 	const plan = engine.get();
 	const active = deliverables(plan).filter((d) => d.status === "active");
-	const workerList = active.map((d) => `  - agent:${d.id}`).join("\n");
+	const agents = fanout.snapshot().agents;
+	const now = Date.now();
+
+	const warnings: string[] = [];
+	const workerLines = active.map((d) => {
+		const s = agents.get(d.id);
+		if (!s) return `  agent:${d.id} — spawning`;
+		const elapsed = formatElapsedShort(now - s.startedAt);
+		const tIn = shortTokens(s.tokens.input);
+		const tOut = shortTokens(s.tokens.output);
+		const review = s.reviewCycles > 0 ? ` · reviews:${s.reviewCycles}` : "";
+		const looping = s.reviewCycles > 2 ? " ⚠ LOOPING" : "";
+		if (s.reviewCycles > 2) {
+			warnings.push(
+				`⚠ agent:${d.id} has run ${s.reviewCycles} review cycles. Consider steering it to ship.`,
+			);
+		}
+		return `  agent:${d.id} — ${s.status} · ${s.tokens.turns} turns · ↑${tIn} ↓${tOut} · ${elapsed}${review}${looping}`;
+	});
+
+	const warningBlock = warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
 
 	return `You are in ORCHESTRATOR MODE. Agents are implementing deliverables.
 
 Active agents:
-${workerList || "  (none currently running)"}
+${workerLines.join("\n") || "  (none currently running)"}${warningBlock}
+
+You can observe agent status and intervene when needed:
+- If an agent is looping (high review count), steer it to ship.
+- If an agent is stuck idle, check if tasks are truly done or if it needs guidance.
+- You can see agent subprocesses (lenses) via their review cycle count.
+- When the user asks about agents/workers, summarize their state from the table above.
 
 You are free to:
 - Answer questions from the user.
@@ -1639,6 +1668,21 @@ You are free to:
 
 Do NOT implement code yourself. Agents handle implementation.
 Do NOT call read/edit/bash to implement — only to answer user questions about the project.`;
+}
+
+function shortTokens(n: number): string {
+	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+	return String(n);
+}
+
+function formatElapsedShort(ms: number): string {
+	if (ms < 0 || !Number.isFinite(ms)) return "—";
+	const sec = Math.floor(ms / 1000);
+	if (sec < 60) return `${sec}s`;
+	const min = Math.floor(sec / 60);
+	if (min < 60) return `${min}m`;
+	const hr = Math.floor(min / 60);
+	return `${hr}h${min % 60}m`;
 }
 
 function buildAgentWorkerPreamble(): string {
@@ -1659,6 +1703,11 @@ Review your own changes with the review tool (skip lenses that don't apply):
   review({lens: "refine"})    // unnecessary complexity
   review({lens: "validate"})  // requirements coverage
 Collect the findings. (Do NOT invoke pi yourself — the tool does it.)
+
+**Review budget:** You get a maximum of 2 full review cycles (REVIEW → EVALUATE
+→ fix → REVIEW). After cycle 2, proceed directly to SHIP regardless of
+remaining MINOR findings. Only fix IMPORTANT or CRITICAL findings after the
+first cycle. Do not run review again after shipping.
 
 ## Phase 3: EVALUATE
 For each finding: agree → apply the fix; disagree → note why you're ignoring

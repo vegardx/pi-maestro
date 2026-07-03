@@ -1,6 +1,7 @@
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import {
+	CollapsibleDashboardComponent,
 	type DashboardRenderState,
 	type Row,
 	renderDashboard,
@@ -106,9 +107,9 @@ function render(
 describe("agents dashboard render", () => {
 	it("renders box borders", () => {
 		const lines = render(rows);
-		expect(lines[0]).toMatch(/^┌─ Agents ─+┐$/);
-		expect(lines[lines.length - 1]).toMatch(/^└─+┘$/);
-		expect(lines.some((l) => l.startsWith("├"))).toBe(true);
+		expect(lines[0]).toMatch(/^╭─ Agents ─+╮$/);
+		expect(lines[lines.length - 1]).toMatch(/^╰─+╯$/);
+		expect(lines.some((l) => l.startsWith("│") && l.includes("─"))).toBe(true);
 	});
 
 	it("renders tab bar with counts", () => {
@@ -192,7 +193,7 @@ describe("agents dashboard render", () => {
 
 	it("renders keybinding hints", () => {
 		const text = render(rows).join("\n");
-		expect(text).toContain("[tab] filter");
+		expect(text).toContain("[←/→] filter");
 		expect(text).toContain("[↑↓] select");
 		expect(text).toContain("[w]atch");
 		expect(text).toContain("[esc] close");
@@ -208,8 +209,8 @@ describe("agents dashboard render", () => {
 	it("renders an empty state within bordered frame", () => {
 		const lines = render([]);
 		const text = lines.join("\n");
-		expect(lines[0]).toMatch(/^┌─ Agents ─+┐$/);
-		expect(lines[lines.length - 1]).toMatch(/^└─+┘$/);
+		expect(lines[0]).toMatch(/^╭─ Agents ─+╮$/);
+		expect(lines[lines.length - 1]).toMatch(/^╰─+╯$/);
 		expect(text).toContain("(no agents)");
 	});
 
@@ -217,5 +218,132 @@ describe("agents dashboard render", () => {
 		const text = render(rows).join("\n");
 		expect(text).not.toContain("$0.42");
 		expect(text).not.toContain("cost");
+	});
+});
+
+describe("CollapsibleDashboardComponent", () => {
+	const tokens: TokenSnapshot = {
+		input: 1000,
+		output: 500,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 1500,
+		cost: 0,
+		turns: 3,
+	};
+
+	const rows: Row[] = [
+		{
+			agentId: "a1",
+			state: {
+				agentName: "keen-otter",
+				status: "working",
+				tokens,
+				startedAt: Date.now() - 5000,
+				deliverableId: "a1",
+				worktreePath: "/tmp/a1",
+				sessionFile: "/tmp/a1.json",
+				shutdownSent: false,
+				assessmentSent: false,
+				idleCount: 0,
+				lensRuns: 0,
+				reviewCycles: 0,
+			},
+			title: "Fix bug",
+			done: 1,
+			total: 3,
+			tasks: [],
+			elapsedMs: 5000,
+		},
+		{
+			agentId: "a2",
+			state: {
+				agentName: "lively-heron",
+				status: "awaiting-decision",
+				tokens,
+				startedAt: Date.now() - 2000,
+				deliverableId: "a2",
+				worktreePath: "/tmp/a2",
+				sessionFile: "/tmp/a2.json",
+				shutdownSent: false,
+				assessmentSent: false,
+				idleCount: 0,
+				lensRuns: 0,
+				reviewCycles: 0,
+			},
+			title: "Write docs",
+			done: 0,
+			total: 2,
+			tasks: [],
+			pending: "How?",
+			elapsedMs: 2000,
+		},
+	];
+
+	function makeComp() {
+		const results: Array<unknown> = [];
+		const comp = new CollapsibleDashboardComponent(rows, undefined, (action) =>
+			results.push(action),
+		);
+		const handle = {
+			focused: false,
+			focus() {
+				this.focused = true;
+			},
+			unfocus() {
+				this.focused = false;
+			},
+		};
+		comp.setHandle(handle);
+		return { comp, handle, results };
+	}
+
+	it("renders collapsed state with agent counts", () => {
+		const { comp } = makeComp();
+		const lines = comp.render(70);
+		expect(lines.length).toBe(2);
+		const text = lines.join("\n");
+		expect(text).toContain("2 agents");
+		expect(text).toContain("1 working");
+		expect(text).toContain("1 waiting");
+		expect(text).toContain("Tab to expand");
+	});
+
+	it("expands on Tab and collapses on Tab again", () => {
+		const { comp, handle } = makeComp();
+		comp.focused = true;
+		expect(comp.render(70).length).toBe(2);
+
+		comp.handleInput("\t");
+		const expanded = comp.render(70);
+		expect(expanded.length).toBeGreaterThan(2);
+		expect(expanded.join("\n")).toContain("Agents");
+		expect(handle.focused).toBe(true);
+
+		comp.handleInput("\t");
+		expect(comp.render(70).length).toBe(2);
+		expect(handle.focused).toBe(false);
+	});
+
+	it("navigates filter tabs with arrows when expanded", () => {
+		const { comp } = makeComp();
+		comp.focused = true;
+		comp.handleInput("\t"); // expand
+
+		// Right arrow cycles filter
+		comp.handleInput("\u001b[C");
+		const lines = comp.render(70).join("\n");
+		expect(lines).toContain("[Working");
+	});
+
+	it("collapses on Esc", () => {
+		const { comp, handle } = makeComp();
+		comp.focused = true;
+		comp.handleInput("\t");
+		expect(comp.render(70).length).toBeGreaterThan(2);
+
+		comp.handleInput("\u001b");
+		expect(comp.render(70).length).toBe(2);
+		expect(handle.focused).toBe(false);
 	});
 });

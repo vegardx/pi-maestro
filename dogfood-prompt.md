@@ -1,28 +1,19 @@
-Create a plan called "sandbox-integration" that implements features across all three sandbox repos. Here's the structure:
+Create a plan called "sandbox" for the maestro-sandbox-lib repo (cwd).
 
-**Repos:**
-- `default` (cwd) — maestro-sandbox-lib
-- `service` at `../maestro-sandbox-service`
-- `docs` at `../maestro-sandbox-docs`
+**Deliverables (5 total):**
 
-**Deliverables (8 total — mix of parallel and sequential):**
+1. [parallel] — Implement `multiply(a, b)` in src/multiply.ts, un-skip tests.
+   Question: should it handle only numbers, or also BigInt? What about `Infinity * 0`?
 
-1. [lib, parallel root] — Implement `multiply(a, b)` in src/multiply.ts, un-skip tests. Should this handle BigInt inputs or only regular numbers? What about Infinity × 0 — NaN or throw?
-2. [lib, parallel root] — Implement `divide(a, b)` with error on zero. Should the error be a RangeError, a TypeError, or a custom DivisionByZeroError class? What precision strategy for results like 1/3? **TRAP for review lens: intentionally implement divide with an off-by-one in the zero check (`if (b <= 0)` instead of `if (b === 0)`) — the review() tool should catch this as a correctness bug.**
-3. [lib, parallel root] — Implement `clamp(value, min, max)`, un-skip tests. Open question: if min > max, should we throw, swap them silently, or return NaN?
-4. [lib, parallel root] — Implement `sum(numbers)` returning sum of array, un-skip tests. Decide: should sum([]) return 0 or throw? Should it accept iterables or only arrays? **TRAP for refine lens: implement sum using a verbose `for` loop with a manual accumulator, explicit index, and a redundant `if (numbers.length === 0) return 0` guard before the loop — the refine() tool should flag this as unnecessary complexity (reduce is cleaner).**
-5. [service, parallel root] — Implement `average(items)` using lib's add, un-skip tests. Unclear: is "items" an array of numbers, or objects with a `.value` property? What should average([]) return?
-6. [service, depends on #3] — Vendor clamp into src/lib.ts, implement `clampedTotal(items, max)`, un-skip tests. Should it clamp the running total at each step, or only the final result? Is there also a `min` bound? **TRAP for validate lens: deliberately skip implementing the `max` parameter (just sum without clamping) — the validate() tool should catch the missing requirement.**
-7. [docs, depends on #1 #2 #3 #4] — Write docs/lib-api.md with sections for add, subtract, multiply, divide, clamp, sum. Should docs include edge-case tables? What format — brief signatures + one-liners, or full examples with expected output?
-8. [docs, depends on #5 #6] — Write docs/service.md with sections for Overview, total, average, clampedTotal. Should it reference the lib docs or be self-contained?
+2. [parallel] — Implement `divide(a, b)` in src/divide.ts with error on zero, un-skip tests.
+   Question: RangeError, TypeError, or custom `DivisionByZeroError`?
 
-This gives us:
-- 5 deliverables that can start immediately in parallel (1-5)
-- 1 that blocks on a specific lib deliverable (6 → 3)
-- 2 that block on groups completing (7 → all lib, 8 → all service)
+3. [parallel] — Implement `clamp(value, min, max)` in src/clamp.ts, un-skip tests.
+   Question: if min > max, throw or silently swap?
 
-Each deliverable's tasks should describe what to implement — the file to edit, the function signature, and the edge-case behavior. Don't include boilerplate steps (review, commit, push) — those are handled by the worker lifecycle automatically.
+4. [depends on #1, #2, #3] — Implement `sum(numbers)` in src/sum.ts using the above functions, un-skip tests.
+   Question: should `sum([])` return 0 or throw?
 
-**Important:** Many design decisions above are intentionally left open. During planning, the planner should use `ask` to get my input on the ambiguous design choices (error types, edge cases, API shapes) before finalizing task descriptions. During implementation, agents should use `ask` when they encounter a trade-off the lenses surface or when the tests suggest multiple valid behaviors — don't guess, ask.
+5. [depends on #4] — Write docs/api.md covering all functions with signatures and edge cases.
 
-**Testing the lenses:** Three deliverables above have deliberate TRAP instructions. The agent MUST follow the trap instructions exactly (implement the bad code as specified) so we can verify the review/refine/validate tools catch the issues during the REVIEW phase. The agent should then fix them during EVALUATE after the lenses surface the findings.
+Use `ask` during planning to get my input on the open design questions before finalizing tasks.

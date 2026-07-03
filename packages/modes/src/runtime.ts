@@ -933,60 +933,81 @@ export function createModesRuntime(
 		});
 	}
 
-	pi.registerTool(
-		defineTool({
+	const lensTools: {
+		name: LensName;
+		label: string;
+		description: string;
+	}[] = [
+		{
 			name: "review",
-			label: "Review (lens)",
+			label: "Review (correctness)",
 			description:
-				"Run a focused review lens on your changes and get structured findings. " +
-				"lens: review (correctness bugs), refine (simplification), validate (requirements). " +
-				"Runs an ephemeral analysis; returns findings to evaluate.",
-			parameters: Type.Object({
-				lens: Type.Union(
-					[
-						Type.Literal("review"),
-						Type.Literal("refine"),
-						Type.Literal("validate"),
-					],
-					{ description: "Which lens to run." },
-				),
-				paths: Type.Optional(
-					Type.String({
-						description: "Optional space-separated paths to scope to.",
-					}),
-				),
-			}),
-			async execute(_id, params, _signal, _onUpdate, ctx) {
-				const lens = params.lens as LensName;
-				const agg = await runLensesForArgs([lens], params.paths ?? "", {
-					cwd: ctx.cwd,
-					mode: state.mode,
-					engine,
-					model: lensModel,
-					requirements:
-						lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
-				});
-				if (agg.guidance) {
+				"Find correctness bugs in your changes: off-by-one errors, " +
+				"null dereferences, race conditions, wrong operators, missing edge cases.",
+		},
+		{
+			name: "refine",
+			label: "Refine (simplification)",
+			description:
+				"Find unnecessary complexity that can be removed without changing behavior: " +
+				"redundant abstractions, dead code, verbose constructs with plainer alternatives.",
+		},
+		{
+			name: "validate",
+			label: "Validate (requirements)",
+			description:
+				"Check whether the implementation covers all requirements: " +
+				"gaps, partial implementations, unmet acceptance criteria.",
+		},
+	];
+
+	for (const lensTool of lensTools) {
+		pi.registerTool(
+			defineTool({
+				name: lensTool.name,
+				label: lensTool.label,
+				description: lensTool.description,
+				parameters: Type.Object({
+					paths: Type.Optional(
+						Type.String({
+							description: "Optional space-separated paths to scope to.",
+						}),
+					),
+				}),
+				async execute(_id, params, _signal, _onUpdate, ctx) {
+					const lens = lensTool.name;
+					const agg = await runLensesForArgs([lens], params.paths ?? "", {
+						cwd: ctx.cwd,
+						mode: state.mode,
+						engine,
+						model: lensModel,
+						requirements:
+							lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
+					});
+					if (agg.guidance) {
+						return {
+							content: [{ type: "text", text: agg.guidance }],
+							details: { findings: [] },
+						};
+					}
+					for (const r of agg.results) {
+						if (agentBridge) agentBridge.reportLensUsage(r.lens, r.usage);
+						else
+							usageLedger.record(
+								{ kind: "lens", parentAgentId: "local", lens: r.lens },
+								r.usage,
+							);
+					}
 					return {
-						content: [{ type: "text", text: agg.guidance }],
-						details: { findings: [] },
+						content: [{ type: "text", text: formatFindings(agg.results) }],
+						details: {
+							findings: agg.results.flatMap((r) => r.findings),
+						},
 					};
-				}
-				for (const r of agg.results) {
-					if (agentBridge) agentBridge.reportLensUsage(r.lens, r.usage);
-					else
-						usageLedger.record(
-							{ kind: "lens", parentAgentId: "local", lens: r.lens },
-							r.usage,
-						);
-				}
-				return {
-					content: [{ type: "text", text: formatFindings(agg.results) }],
-					details: { findings: agg.results.flatMap((r) => r.findings) },
-				};
-			},
-		}),
-	);
+				},
+			}),
+		);
+	}
 
 	pi.registerTool(
 		defineTool({
@@ -1698,11 +1719,11 @@ Edit code, write/fix tests, verify they pass. Mark tasks done as you finish:
 Task IDs are in the plan context above (the maestro-execution-seed).
 
 ## Phase 2: REVIEW
-Review your own changes with the review tool (skip lenses that don't apply):
-  review({lens: "review"})    // correctness bugs
-  review({lens: "refine"})    // unnecessary complexity
-  review({lens: "validate"})  // requirements coverage
-Collect the findings. (Do NOT invoke pi yourself — the tool does it.)
+Run each analysis lens on your changes (skip any that don't apply):
+  review()       // find correctness bugs
+  refine()       // find unnecessary complexity
+  validate()     // check requirements coverage
+Collect the findings. (Do NOT invoke pi yourself — the tools do it.)
 
 **Review budget:** You get a maximum of 2 full review cycles (REVIEW → EVALUATE
 → fix → REVIEW). After cycle 2, proceed directly to SHIP regardless of

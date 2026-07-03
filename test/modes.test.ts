@@ -897,6 +897,8 @@ describe("modes runtime", () => {
 			"task",
 			"plan",
 			"review",
+			"refine",
+			"validate",
 			"ship",
 		]);
 		expect([...host.commands.keys()]).toEqual(

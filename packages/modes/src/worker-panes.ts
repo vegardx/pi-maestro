@@ -293,22 +293,9 @@ export class WorkerPanes {
 		if (large && !this._isOpen && this.lastAgents) {
 			// Terminal grew — re-open panes
 			this.open(this.lastAgents).catch(() => {});
-		} else if (!large && this._isOpen) {
-			// Terminal shrank — close panes but stay enabled
-			this.closePanes();
 		}
-	}
-
-	/** Close panes without disabling (for resize shrink). */
-	private async closePanes(): Promise<void> {
-		for (const paneId of this.panes.values()) {
-			try {
-				await killPane(paneId);
-			} catch {}
-		}
-		this.panes.clear();
-		this.columnPaneId = undefined;
-		this._isOpen = false;
+		// Don't auto-close on shrink — our own split causes a resize event
+		// that would create an open/close loop.
 	}
 
 	private async rebalance(): Promise<void> {

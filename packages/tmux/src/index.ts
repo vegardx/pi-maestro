@@ -154,3 +154,40 @@ export async function splitWindow(
 export async function killPane(target: string): Promise<void> {
 	await tmuxExec(["kill-pane", "-t", target]);
 }
+
+/**
+ * Resize a pane to absolute dimensions.
+ */
+export async function resizePane(
+	target: string,
+	opts: { width?: number; height?: number },
+): Promise<void> {
+	const args = ["resize-pane", "-t", target];
+	if (opts.width != null) args.push("-x", String(opts.width));
+	if (opts.height != null) args.push("-y", String(opts.height));
+	await tmuxExec(args);
+}
+
+/**
+ * Apply a layout to the window containing the target pane.
+ * Layouts: even-horizontal, even-vertical, main-horizontal, main-vertical, tiled.
+ */
+export async function selectLayout(
+	target: string,
+	layout:
+		| "even-horizontal"
+		| "even-vertical"
+		| "main-horizontal"
+		| "main-vertical"
+		| "tiled",
+): Promise<void> {
+	await tmuxExec(["select-layout", "-t", target, layout]);
+}
+
+/**
+ * Get the current pane ID (the pane we're running in).
+ */
+export async function currentPaneId(): Promise<string> {
+	const stdout = await tmuxExec(["display-message", "-p", "#{pane_id}"]);
+	return stdout.trim();
+}

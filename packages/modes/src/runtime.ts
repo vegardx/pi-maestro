@@ -55,6 +55,7 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
+import { WorkerPanes } from "./worker-panes.js";
 import {
 	formatFindings,
 	LENSES,
@@ -193,6 +194,7 @@ export function createModesRuntime(
 		}
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
+	const workerPanes = new WorkerPanes();
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -569,8 +571,12 @@ export function createModesRuntime(
 					onPlanChanged: emitPlanChanged,
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
-						if (tmuxFanout)
+						if (tmuxFanout) {
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+							if (workerPanes.isOpen()) {
+								workerPanes.sync(tmuxFanout.snapshot().agents);
+							}
+						}
 					},
 					onQuestionsReceived: (_id, count) => {
 						ctx.ui.notify(
@@ -800,6 +806,24 @@ export function createModesRuntime(
 				await handleViewCommand(args, ctx, tmuxFanout, viewState);
 			} else {
 				ctx.ui.notify("No agents active (tmux required).", "info");
+			}
+		},
+	});
+
+	pi.registerCommand("workers", {
+		description:
+			"Toggle stacked tmux panes showing all active workers on the right side.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (!tmuxFanout) {
+				ctx.ui.notify("No agents active (tmux required).", "info");
+				return;
+			}
+			if (workerPanes.isOpen()) {
+				await workerPanes.close();
+				ctx.ui.notify("Worker panes closed.", "info");
+			} else {
+				await workerPanes.open(tmuxFanout.snapshot().agents);
+				ctx.ui.notify("Worker panes opened.", "info");
 			}
 		},
 	});
@@ -1095,6 +1119,9 @@ export function createModesRuntime(
 	});
 
 	pi.on("session_shutdown", async () => {
+		if (workerPanes.isOpen()) {
+			await workerPanes.close();
+		}
 		if (tmuxFanout) {
 			await tmuxFanout.destroy();
 			tmuxFanout = undefined;

@@ -3,6 +3,7 @@ import type { TokenSnapshot, UsageLedgerV1 } from "@vegardx/pi-contracts";
 import {
 	defaultPalette,
 	formatElapsed,
+	type OverlayHandle,
 	type Palette,
 	padRight,
 	truncate,
@@ -138,18 +139,18 @@ function tokenSummaryWithTurns(t: TokenSnapshot): string {
 // ─── Box drawing ────────────────────────────────────────────────────────────
 
 function boxTop(title: string, width: number): string {
-	const inner = width - 2; // account for ┌ and ┐
+	const inner = width - 2;
 	const titlePart = `─ ${title} `;
 	const fill = "─".repeat(Math.max(0, inner - titlePart.length));
-	return `┌${titlePart}${fill}┐`;
+	return `╭${titlePart}${fill}╮`;
 }
 
 function boxMid(width: number): string {
-	return `├${"─".repeat(width - 2)}┤`;
+	return `│${"─".repeat(width - 2)}│`;
 }
 
 function boxBot(width: number): string {
-	return `└${"─".repeat(width - 2)}┘`;
+	return `╰${"─".repeat(width - 2)}╯`;
 }
 
 function boxLine(content: string, width: number): string {
@@ -274,19 +275,33 @@ export function renderDashboard(
 	}
 
 	const selected = Math.min(renderState.selected, filtered.length - 1);
+
+	// Compute column widths for aligned table layout
+	// Columns: [prefix 4] [title] [progress] [status] [tokens] [elapsed]
+	const COL_PROGRESS = 6; // "xx/xx" max
+	const COL_STATUS = 9; // "awaiting" is longest (8) + pad
+	const COL_TOKENS = 22; // "↑12.0k ↓3.2k  CH:83%"
+	const COL_ELAPSED = 5; // "59m" / "1.2h"
+	const PREFIX_W = 4; // "▸ ◐ " or "  ◐ "
+	const innerWidth = width - 4; // inside box lines
+	const FIXED_COLS =
+		PREFIX_W + COL_PROGRESS + COL_STATUS + COL_TOKENS + COL_ELAPSED;
+	const COL_TITLE = Math.max(innerWidth - FIXED_COLS - 4, 10); // 4 = separating spaces
+
 	for (let i = 0; i < filtered.length; i++) {
 		const row = filtered[i];
 		const sel = i === selected;
 		const glyph = STATUS_GLYPH[row.state.status] ?? "·";
 		const styledGlyph = glyphStyle(palette, row.state.status)(glyph);
-		const progress = `${row.done}/${row.total}`;
-		const status = STATUS_LABEL[row.state.status];
+		const progress = padRight(`${row.done}/${row.total}`, COL_PROGRESS);
+		const status = padRight(STATUS_LABEL[row.state.status], COL_STATUS);
 		const styledStatus = statusLabelStyle(palette, row.state.status)(status);
-		const tokens = palette.dim(tokenSummary(row.state.tokens));
-		const elapsed = palette.dim(formatElapsed(row.elapsedMs));
+		const tok = padRight(tokenSummary(row.state.tokens), COL_TOKENS);
+		const elapsed = padRight(formatElapsed(row.elapsedMs), COL_ELAPSED);
+		const title = padRight(truncate(row.title, COL_TITLE), COL_TITLE);
 
 		if (sel) {
-			const line = `▸ ${glyph} ${row.title}  ${progress}  ${status}  ${tokenSummary(row.state.tokens)}  ${formatElapsed(row.elapsedMs)}`;
+			const line = `▸ ${glyph} ${title} ${progress} ${status} ${tok} ${elapsed}`;
 			lines.push(boxLine(palette.accent(line), width));
 
 			// Expanded task list
@@ -308,7 +323,7 @@ export function renderDashboard(
 				);
 			}
 		} else {
-			const line = `  ${styledGlyph} ${row.title}  ${progress}  ${styledStatus}  ${tokens}  ${elapsed}`;
+			const line = `  ${styledGlyph} ${title} ${progress} ${styledStatus} ${palette.dim(tok)} ${palette.dim(elapsed)}`;
 			lines.push(boxLine(line, width));
 		}
 	}
@@ -343,7 +358,7 @@ export function renderDashboard(
 	lines.push(
 		boxLine(
 			palette.muted(
-				"[tab] filter  [↑↓] select  [w]atch  [a]ttach  [d] answer  [esc] close",
+				"[←/→] filter  [↑↓] select  [w]atch  [a]ttach  [d] answer  [esc] close",
 			),
 			width,
 		),
@@ -390,8 +405,8 @@ class DashboardComponent implements Component, Focusable {
 
 		if (
 			filtered.length === 0 &&
-			data !== "\t" &&
-			data !== "\u001b[Z" &&
+			data !== "\u001b[C" &&
+			data !== "\u001b[D" &&
 			data !== "\u001b"
 		) {
 			if (data === "\u001b") this.done(undefined);
@@ -405,15 +420,15 @@ class DashboardComponent implements Component, Focusable {
 			case "\u001b[B": // Down
 				this.selected = Math.min(filtered.length - 1, this.selected + 1);
 				break;
-			case "\t": {
-				// Tab — next filter
+			case "\u001b[C": {
+				// Right — next filter tab
 				const idx = TABS.indexOf(this.activeTab);
 				this.activeTab = TABS[(idx + 1) % TABS.length];
 				this.selected = 0;
 				break;
 			}
-			case "\u001b[Z": {
-				// Shift+Tab — previous filter
+			case "\u001b[D": {
+				// Left — previous filter tab
 				const idx = TABS.indexOf(this.activeTab);
 				this.activeTab = TABS[(idx - 1 + TABS.length) % TABS.length];
 				this.selected = 0;
@@ -446,6 +461,95 @@ class DashboardComponent implements Component, Focusable {
 	}
 }
 
+// ─── Collapsible overlay wrapper ────────────────────────────────────────────
+
+const KEY_TAB = "\t";
+
+/**
+ * Collapsible overlay wrapper around DashboardComponent.
+ * Starts collapsed (2-line badge). Tab expands/collapses.
+ */
+export class CollapsibleDashboardComponent implements Component, Focusable {
+	focused = false;
+	private expanded = false;
+	private readonly inner: DashboardComponent;
+	private readonly palette: Palette;
+	private readonly rows: readonly Row[];
+	private handle: OverlayHandle | undefined;
+
+	constructor(
+		rows: readonly Row[],
+		ledger: UsageLedgerV1 | undefined,
+		private readonly done: (action: DashboardAction | undefined) => void,
+		palette: Palette = defaultPalette(),
+	) {
+		this.palette = palette;
+		this.rows = rows;
+		this.inner = new DashboardComponent(rows, ledger, done, palette);
+	}
+
+	setHandle(handle: OverlayHandle): void {
+		this.handle = handle;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		if (!this.expanded) return this.renderCollapsed(width);
+		const lines = this.inner.render(width);
+		if (!this.focused) return lines.map((l) => this.palette.dim(l));
+		return lines;
+	}
+
+	handleInput(data: string): void {
+		if (data === KEY_TAB) {
+			if (this.expanded) {
+				this.expanded = false;
+				this.handle?.unfocus();
+			} else {
+				this.expanded = true;
+				this.handle?.focus();
+			}
+			return;
+		}
+		if (data === "\u001b" && this.expanded) {
+			this.expanded = false;
+			this.handle?.unfocus();
+			return;
+		}
+		if (this.expanded) {
+			this.inner.handleInput(data);
+		}
+	}
+
+	private renderCollapsed(width: number): string[] {
+		const p = this.focused
+			? this.palette
+			: {
+					...this.palette,
+					accent: this.palette.dim,
+					heading: this.palette.dim,
+					muted: this.palette.dim,
+				};
+		const working = this.rows.filter(
+			(r) => statusToTab(r.state.status) === "working",
+		).length;
+		const waiting = this.rows.filter(
+			(r) => statusToTab(r.state.status) === "waiting",
+		).length;
+		const parts = [`${this.rows.length} agents`];
+		if (working > 0) parts.push(`${working} working`);
+		if (waiting > 0) parts.push(`${waiting} waiting`);
+		const label = parts.join(" · ");
+		const hint = "Tab to expand";
+		const fillWidth = Math.max(width - 8 - label.length - hint.length, 0);
+		const fill = "─".repeat(fillWidth);
+		const top = p.dim(`╭─ ${label} ${fill} ${hint} ─╮`);
+		const bot = p.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+		return [top, bot];
+	}
+}
+
 // ─── Entrypoint ─────────────────────────────────────────────────────────────
 
 /** Show the dashboard; resolves with the chosen action (or undefined). */
@@ -459,7 +563,11 @@ export function runAgentsDashboard(
 					keybindings: unknown,
 					done: (v: T) => void,
 				) => Component,
-				opts?: { overlay?: boolean },
+				opts?: {
+					overlay?: boolean;
+					overlayOptions?: unknown;
+					onHandle?: (h: OverlayHandle) => void;
+				},
 			): Promise<T>;
 		};
 	},
@@ -469,10 +577,23 @@ export function runAgentsDashboard(
 	queue: QuestionQueue,
 ): Promise<DashboardAction | undefined> {
 	const rows = buildRows(fanout, engine, queue);
+	let comp: CollapsibleDashboardComponent | undefined;
 	return ctx.ui.custom<DashboardAction | undefined>(
 		(_tui, theme, _kb, done) => {
 			const palette = paletteFromTheme(theme);
-			return new DashboardComponent(rows, ledger, done, palette);
+			comp = new CollapsibleDashboardComponent(rows, ledger, done, palette);
+			return comp;
+		},
+		{
+			overlay: true,
+			overlayOptions: {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "70%",
+			},
+			onHandle: (handle: OverlayHandle) => {
+				comp?.setHandle(handle);
+			},
 		},
 	);
 }

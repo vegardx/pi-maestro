@@ -70,17 +70,14 @@ export function isShown(
 	return false;
 }
 
-function optionCount(question: Question): number {
-	return question.options?.length ?? 0;
-}
-
-/** Move the option cursor, clamped to the option range. */
+/** Move the option cursor, clamped to options + free-text input slot. */
 export function moveCursor(
 	state: QuestionnaireState,
 	question: Question,
 	delta: number,
 ): QuestionnaireState {
-	const count = optionCount(question);
+	// options + 1 free-text slot at the end
+	const count = (question.options?.length ?? 0) + 1;
 	if (count === 0) return state;
 	const next = Math.min(count - 1, Math.max(0, state.cursor + delta));
 	return { ...state, cursor: next };
@@ -211,9 +208,10 @@ export function renderQuestionnaire(
 	lines.push(topBorder);
 
 	if (questionnaire.length > 1) {
-		for (const tab of renderTabs(questionnaire, state, innerWidth, palette)) {
-			lines.push(boxLine(tab));
-		}
+		const answered = state.answers.filter((a) => !a.skipped).length;
+		const progress = `Question ${state.index + 1} of ${questionnaire.length}`;
+		const suffix = answered > 0 ? `  (${answered} answered)` : "";
+		lines.push(boxLine(palette.muted(progress + suffix)));
 		lines.push(emptyLine);
 	}
 
@@ -226,10 +224,12 @@ export function renderQuestionnaire(
 	lines.push(emptyLine);
 
 	const recIdx = recommendedIndex(question);
-	for (let i = 0; i < (question.options?.length ?? 0); i++) {
+	const optCount = question.options?.length ?? 0;
+	for (let i = 0; i < optCount; i++) {
 		const option = (question.options as QuestionOption[])[i];
 		const value = optionValue(option);
 		const cursor = i === state.cursor ? palette.accent("›") : " ";
+		const num = `${i + 1}.`;
 		const box = question.multiple
 			? state.selected.has(value)
 				? "[x]"
@@ -240,14 +240,43 @@ export function renderQuestionnaire(
 			i === state.cursor ? palette.accent(option.label) : option.label;
 		lines.push(
 			boxLine(
-				truncate(`${cursor} ${box ? `${box} ` : ""}${label}${rec}`, innerWidth),
+				truncate(
+					`${cursor} ${num} ${box ? `${box} ` : ""}${label}${rec}`,
+					innerWidth,
+				),
 			),
 		);
 		if (option.description) {
-			for (const l of wrap(option.description, innerWidth - 4, palette)) {
-				lines.push(boxLine(`    ${l}`));
+			for (const l of wrap(option.description, innerWidth - 6, palette)) {
+				lines.push(boxLine(`      ${l}`));
 			}
 		}
+	}
+
+	// Free-text input field (always visible as last numbered item)
+	const freeIdx = optCount;
+	const freeCursor = state.cursor === freeIdx ? palette.accent("›") : " ";
+	const freeNum = `${freeIdx + 1}.`;
+	if (state.freeText !== undefined && state.cursor === freeIdx) {
+		lines.push(
+			boxLine(
+				palette.accent(
+					truncate(`${freeCursor} ${freeNum} ${state.freeText}▌`, innerWidth),
+				),
+			),
+		);
+	} else if (state.freeText !== undefined && state.freeText.trim() !== "") {
+		lines.push(
+			boxLine(
+				truncate(`${freeCursor} ${freeNum} ${state.freeText}`, innerWidth),
+			),
+		);
+	} else {
+		const placeholder =
+			state.cursor === freeIdx
+				? palette.accent(`${freeCursor} ${freeNum} `)
+				: palette.muted(`${freeCursor} ${freeNum} ___`);
+		lines.push(boxLine(truncate(placeholder, innerWidth)));
 	}
 
 	if (state.noteEdit !== undefined) {
@@ -276,59 +305,21 @@ export function renderQuestionnaire(
 		}
 	}
 
-	if (state.freeText !== undefined) {
-		lines.push(emptyLine);
-		lines.push(
-			boxLine(palette.accent(truncate(`› ${state.freeText}▌`, innerWidth))),
-		);
-	} else if (question.allowFreeText) {
-		lines.push(emptyLine);
-		lines.push(boxLine(palette.muted("(press 't' to type a custom answer)")));
-	}
-
 	lines.push(emptyLine);
+	const hint =
+		questionnaire.length > 1
+			? "enter select · ←/→ question · ↑/↓ navigate · n note · esc close"
+			: "enter select · ↑/↓ navigate · n note · esc close";
+	lines.push(boxLine(palette.muted(truncate(hint, innerWidth))));
 	lines.push(botBorder);
-	lines.push(
-		palette.muted("enter select · ↑/↓ navigate · n note · t other · esc close"),
-	);
 
 	return lines;
 }
 
-/** Tab bar: header labels with ✓/·skip/active state; collapses on overflow. */
-function renderTabs(
-	questionnaire: Questionnaire,
-	state: QuestionnaireState,
-	width: number,
-	palette: Palette,
-): string[] {
-	const labelOf = (q: Question, i: number) => q.header ?? `Q${i + 1}`;
-	const raw = questionnaire
-		.map((q, i) => {
-			const label = labelOf(q, i);
-			if (i === state.index) return `[${label}]`;
-			if (!isShown(q, state.answers)) return `${label}·skip`;
-			return i < state.index ? `${label}✓` : label;
-		})
-		.join(" ");
-	if (raw.length <= width) {
-		const coloured = questionnaire
-			.map((q, i) => {
-				const label = labelOf(q, i);
-				if (i === state.index) return palette.accent(`[${label}]`);
-				if (!isShown(q, state.answers)) return palette.dim(`${label}·skip`);
-				return palette.muted(i < state.index ? `${label}✓` : label);
-			})
-			.join(" ");
-		return [coloured];
-	}
-	const header = labelOf(questionnaire[state.index], state.index);
-	const counter = `‹ ${state.index + 1}/${questionnaire.length} · ${header} ›`;
-	return [palette.accent(truncate(counter, width))];
-}
-
 const KEY_UP = "\u001b[A";
 const KEY_DOWN = "\u001b[B";
+const KEY_RIGHT = "\u001b[C";
+const KEY_LEFT = "\u001b[D";
 
 export interface QuestionnaireRunOptions extends QuestionnaireRenderOptions {
 	/** Prior answers to pre-fill (draft rehydration). */
@@ -383,6 +374,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 			this.handleNote(data);
 			return;
 		}
+		// Free-text editing when cursor is on the input field and text is active
 		if (this.state.freeText !== undefined) {
 			this.handleFreeText(data);
 			return;
@@ -398,6 +390,9 @@ export class QuestionnaireComponent implements Component, Focusable {
 
 		const question = this.questionnaire[this.state.index];
 		if (!question) return;
+		const optCount = question.options?.length ?? 0;
+		const isFreeSlot = this.state.cursor === optCount;
+
 		switch (data) {
 			case KEY_UP:
 				this.state = moveCursor(this.state, question, -1);
@@ -405,21 +400,68 @@ export class QuestionnaireComponent implements Component, Focusable {
 			case KEY_DOWN:
 				this.state = moveCursor(this.state, question, 1);
 				break;
-			case " ":
-				this.state = toggleSelection(this.state, question);
+			case KEY_LEFT:
+				if (this.questionnaire.length > 1 && this.state.index > 0) {
+					this.enter(this.state.index - 1);
+				}
 				break;
-			case "t":
-				if (question.allowFreeText) this.state = startFreeText(this.state);
+			case KEY_RIGHT:
+				if (
+					this.questionnaire.length > 1 &&
+					this.state.index < this.questionnaire.length - 1
+				) {
+					this.enter(this.state.index + 1);
+				}
+				break;
+			case " ":
+				if (isFreeSlot) {
+					this.state = {
+						...this.state,
+						freeText: `${this.state.freeText ?? ""} `,
+					};
+				} else {
+					this.state = toggleSelection(this.state, question);
+				}
 				break;
 			case "n":
-				this.state = {
-					...this.state,
-					noteEdit: this.state.notes.get(question.id) ?? "",
-				};
+				if (isFreeSlot) {
+					this.state = {
+						...this.state,
+						freeText: `${this.state.freeText ?? ""}n`,
+					};
+				} else {
+					this.state = {
+						...this.state,
+						noteEdit: this.state.notes.get(question.id) ?? "",
+					};
+				}
 				break;
 			case "\r":
 			case "\n":
 				this.commit();
+				break;
+			default:
+				// Number keys: jump to option (1-indexed)
+				if (data >= "1" && data <= "9") {
+					const target = Number.parseInt(data, 10) - 1;
+					const totalSlots = optCount + 1;
+					if (target < totalSlots) {
+						this.state = { ...this.state, cursor: target };
+						// If jumping to free-text slot, activate it
+						if (target === optCount) {
+							this.state = {
+								...this.state,
+								freeText: this.state.freeText ?? "",
+							};
+						}
+					}
+				} else if (isFreeSlot && data >= " ") {
+					// Any printable char on the free-text slot activates typing
+					this.state = {
+						...this.state,
+						freeText: (this.state.freeText ?? "") + data,
+					};
+				}
 				break;
 		}
 	}
@@ -427,9 +469,27 @@ export class QuestionnaireComponent implements Component, Focusable {
 	private handleFreeText(data: string): void {
 		const buf = this.state.freeText ?? "";
 		if (data === "\r" || data === "\n") this.commit();
-		else if (data === "\u001b")
-			this.state = { ...this.state, freeText: undefined };
-		else if (data === "\u007f" || data === "\b")
+		else if (data === "\u001b") {
+			// Escape while in free-text: if empty, exit free-text mode; if has content, keep it but exit edit
+			if (buf.trim() === "") {
+				this.state = { ...this.state, freeText: undefined };
+			} else {
+				// Keep text but stop editing (cursor stays, re-entering resumes)
+				this.state = { ...this.state, freeText: buf };
+			}
+		} else if (data === KEY_UP || data === KEY_DOWN) {
+			// Navigate away from free-text field
+			const question = this.questionnaire[this.state.index];
+			if (question) {
+				const delta = data === KEY_UP ? -1 : 1;
+				this.state = moveCursor(this.state, question, delta);
+				// If cursor moved away from free slot, deactivate text editing
+				const optCount = question.options?.length ?? 0;
+				if (this.state.cursor !== optCount) {
+					// Keep the text but exit active editing
+				}
+			}
+		} else if (data === "\u007f" || data === "\b")
 			this.state = setFreeText(this.state, buf.slice(0, -1));
 		else if (data >= " ") this.state = setFreeText(this.state, buf + data);
 	}

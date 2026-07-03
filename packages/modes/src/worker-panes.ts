@@ -180,7 +180,12 @@ export class WorkerPanes {
 	): TmuxAgentState[] {
 		const active: TmuxAgentState[] = [];
 		for (const state of agents.values()) {
-			if (state.status === "spawning" || state.status === "working") {
+			if (
+				state.status === "spawning" ||
+				state.status === "working" ||
+				state.status === "idle" ||
+				state.status === "awaiting-decision"
+			) {
 				active.push(state);
 			}
 		}
@@ -188,7 +193,8 @@ export class WorkerPanes {
 	}
 
 	private attachCommand(agentName: string): string {
-		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agentName}`;
+		// The pane exits when the attached session dies (no lingering shell)
+		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agentName} || exit`;
 	}
 
 	private async rebalance(): Promise<void> {

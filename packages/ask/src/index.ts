@@ -14,7 +14,7 @@ import { defineExtension } from "@vegardx/pi-core";
 import { AskEngine } from "./engine.js";
 import { createAskTool } from "./tool.js";
 
-export { AskEngine } from "./engine.js";
+export { AskEngine, type AskSource } from "./engine.js";
 export { createAskTool } from "./tool.js";
 
 export default defineExtension(

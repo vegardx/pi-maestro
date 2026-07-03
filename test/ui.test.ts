@@ -154,20 +154,21 @@ describe("questionnaire reducers", () => {
 		]);
 	});
 
-	it("renders tabs, cursor, and free-text hint", () => {
+	it("renders question progress header and numbered options", () => {
 		const lines = renderQuestionnaire(
 			q,
 			{ ...initQuestionnaireState(), index: 1 },
 			60,
 		);
 		const text = lines.join("\n");
-		expect(text).toContain("Q1✓");
-		expect(text).toContain("[Q2]");
-		expect(text).toContain("[ ] a");
-		expect(text).toContain("press 't'");
+		// "Question 2 of 2" header (multi-question)
+		expect(text).toContain("Question 2 of 2");
+		// Numbered options
+		expect(text).toContain("1.");
+		expect(text).toContain("[ ]");
 	});
 
-	it("uses header labels in tabs and marks the recommendation", () => {
+	it("renders Question N of M header and marks the recommendation", () => {
 		const rq: Questionnaire = [
 			{
 				id: "e",
@@ -186,8 +187,7 @@ describe("questionnaire reducers", () => {
 		const text = renderQuestionnaire(rq, initQuestionnaireState(), 60).join(
 			"\n",
 		);
-		expect(text).toContain("[ErrType]");
-		expect(text).toContain("Overflow");
+		expect(text).toContain("Question 1 of 2");
 		expect(text).toContain("[rec]");
 	});
 
@@ -218,7 +218,7 @@ describe("questionnaire reducers", () => {
 		expect(recommendedIndex({ ...rq, recommendation: undefined })).toBe(-1);
 	});
 
-	it("renders rounded box border characters", () => {
+	it("renders rounded box border characters with hint inside", () => {
 		const simple: Questionnaire = [
 			{
 				id: "q1",
@@ -229,15 +229,15 @@ describe("questionnaire reducers", () => {
 		const lines = renderQuestionnaire(simple, initQuestionnaireState(), 40);
 		// Top border with rounded corners
 		expect(lines[0]).toMatch(/^╭─+╮$/);
-		// Bottom border with rounded corners
-		const botIdx = lines.findIndex((l) => l.startsWith("╰"));
-		expect(botIdx).toBeGreaterThan(0);
-		expect(lines[botIdx]).toMatch(/^╰─+╯$/);
+		// Bottom border with rounded corners (last line)
+		const lastLine = lines[lines.length - 1];
+		expect(lastLine).toMatch(/^╰─+╯$/);
 		// Content lines have side borders
 		expect(lines[1]).toMatch(/^│ .* │$/);
-		// Hint bar is outside the box
-		expect(lines[lines.length - 1]).toContain("enter select");
-		expect(lines[lines.length - 1]).not.toContain("│");
+		// Hint is inside the box (second-to-last line before bottom border)
+		const hintLine = lines[lines.length - 2];
+		expect(hintLine).toContain("enter select");
+		expect(hintLine).toContain("│");
 	});
 
 	it("handles degenerate width without crashing", () => {

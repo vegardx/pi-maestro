@@ -809,8 +809,13 @@ export function createModesRuntime(
 		description: "Interactive dashboard of active agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (tmuxFanout && engine) {
-				// If overlay is already mounted, just expand it
-				overlayManager.focusOverlay("agents");
+				await handleAgentsDashboard(
+					ctx,
+					tmuxFanout,
+					engine,
+					usageLedger,
+					viewState,
+				);
 			} else {
 				ctx.ui.notify("No agents active.", "info");
 			}

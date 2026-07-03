@@ -673,6 +673,196 @@ describe("plan tools", () => {
 	});
 });
 
+describe("plan lifecycle guards", () => {
+	let store: PlanStore;
+	let root: string;
+	let engine: PlanEngine;
+	beforeEach(() => {
+		counter = 0;
+		root = mkdtempSync(join(tmpdir(), "maestro-guards-"));
+		store = createPlanStore(root);
+		engine = PlanEngine.create(
+			store,
+			{ slug: "p", title: "P", repoPath: "/repo" },
+			now,
+		);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	function deps() {
+		return { engine: () => engine, onPlanChanged: () => {} };
+	}
+
+	it("allows all actions before execution starts", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(dTool, { action: "add", title: "B" });
+		await exec(tTool, { action: "add", deliverableId: "a", title: "t1" });
+		// All are planned — no guards fire
+		const upd = await exec(dTool, { action: "update", id: "a", title: "A2" });
+		expect(upd.details.error).toBeUndefined();
+		const reord = await exec(dTool, {
+			action: "reorder",
+			id: "b",
+			position: 0,
+		});
+		expect(reord.details.error).toBeUndefined();
+		const rem = await exec(dTool, { action: "remove", id: "b" });
+		expect(rem.details.error).toBeUndefined();
+	});
+
+	it("blocks reorder after execution starts", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(dTool, { action: "add", title: "B" });
+		engine.setStatus("a", "active");
+		const result = await exec(dTool, {
+			action: "reorder",
+			id: "b",
+			position: 0,
+		});
+		expect(result.details.error).toContain("Cannot reorder");
+	});
+
+	it("blocks remove on active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		engine.setStatus("a", "active");
+		const result = await exec(dTool, { action: "remove", id: "a" });
+		expect(result.details.error).toContain("Cannot remove an active");
+		expect(result.details.error).toContain("abandoned");
+	});
+
+	it("allows remove on planned deliverable after execution starts", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(dTool, { action: "add", title: "B" });
+		engine.setStatus("a", "active");
+		// B is still planned — can be removed
+		const result = await exec(dTool, { action: "remove", id: "b" });
+		expect(result.details.error).toBeUndefined();
+	});
+
+	it("blocks title/body update on active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		engine.setStatus("a", "active");
+		const r1 = await exec(dTool, { action: "update", id: "a", title: "New" });
+		expect(r1.details.error).toContain("Cannot update title/body");
+		const r2 = await exec(dTool, { action: "update", id: "a", body: "New" });
+		expect(r2.details.error).toContain("Cannot update title/body");
+	});
+
+	it("blocks dependsOn change on active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(dTool, { action: "add", title: "B" });
+		engine.setStatus("a", "active");
+		const result = await exec(dTool, {
+			action: "update",
+			id: "a",
+			dependsOn: ["b"],
+		});
+		expect(result.details.error).toContain("Cannot change dependencies");
+	});
+
+	it("allows status update to abandoned (escape hatch)", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		engine.setStatus("a", "active");
+		const result = await exec(dTool, {
+			action: "update",
+			id: "a",
+			status: "abandoned",
+		});
+		expect(result.details.error).toBeUndefined();
+	});
+
+	it("always allows deliverable add after execution starts", async () => {
+		const dTool = createDeliverableTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		engine.setStatus("a", "active");
+		const result = await exec(dTool, {
+			action: "add",
+			title: "C",
+			dependsOn: [],
+		});
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.deliverable?.id).toBe("c");
+	});
+
+	it("allows task add to active deliverable (relayed)", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		engine.setStatus("a", "active");
+		const result = await exec(tTool, {
+			action: "add",
+			deliverableId: "a",
+			title: "new task",
+		});
+		expect(result.details.error).toBeUndefined();
+	});
+
+	it("blocks task remove from active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(tTool, { action: "add", deliverableId: "a", title: "t1" });
+		engine.setStatus("a", "active");
+		const result = await exec(tTool, {
+			action: "remove",
+			id: "t1",
+			deliverableId: "a",
+		});
+		expect(result.details.error).toContain("Cannot remove tasks");
+	});
+
+	it("blocks task update on active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(tTool, { action: "add", deliverableId: "a", title: "t1" });
+		engine.setStatus("a", "active");
+		const result = await exec(tTool, {
+			action: "update",
+			id: "t1",
+			deliverableId: "a",
+			title: "renamed",
+		});
+		expect(result.details.error).toContain("Cannot update tasks");
+	});
+
+	it("allows task toggle on active deliverable", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(tTool, { action: "add", deliverableId: "a", title: "t1" });
+		engine.setStatus("a", "active");
+		const result = await exec(tTool, { action: "toggle", id: "t1" });
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.done).toBe(true);
+	});
+
+	it("allows task update on planned deliverable after execution starts", async () => {
+		const dTool = createDeliverableTool(deps());
+		const tTool = createTaskTool(deps());
+		await exec(dTool, { action: "add", title: "A", dependsOn: [] });
+		await exec(dTool, { action: "add", title: "B" });
+		await exec(tTool, { action: "add", deliverableId: "b", title: "t2" });
+		engine.setStatus("a", "active");
+		// B is still planned — task update allowed
+		const result = await exec(tTool, {
+			action: "update",
+			id: "t2",
+			deliverableId: "b",
+			title: "renamed",
+		});
+		expect(result.details.error).toBeUndefined();
+	});
+});
+
 describe("mode state and policy", () => {
 	it("cycles modes and persists active plan", () => {
 		const state = initialModesState(now);

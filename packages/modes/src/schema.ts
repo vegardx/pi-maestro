@@ -614,3 +614,25 @@ export function validatePlanShape(
 
 	return problems;
 }
+
+/**
+ * True once any deliverable in the plan has moved beyond "planned" status.
+ * Used by lifecycle guards to switch from free-form editing to additive-only.
+ */
+export function hasExecutionStarted(plan: Pick<Plan, "nodes">): boolean {
+	return deliverables(plan).some((d) => d.status !== "planned");
+}
+
+/**
+ * True for deliverables that are in-flight or completed — mutations to these
+ * are restricted once execution has started.
+ */
+export function isActiveOrShipped(d: Deliverable): boolean {
+	return (
+		d.status === "active" ||
+		d.status === "in-review" ||
+		d.status === "needs-attention" ||
+		d.status === "ready-to-ship" ||
+		d.status === "shipped"
+	);
+}

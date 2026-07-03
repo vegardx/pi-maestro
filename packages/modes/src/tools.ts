@@ -30,8 +30,11 @@ import {
 	deliverables,
 	findDeliverable,
 	findNode,
+	hasExecutionStarted,
+	isActiveOrShipped,
 	isWorkItem,
 	type Plan,
+	parentOf,
 	type WorkItem,
 } from "./schema.js";
 
@@ -168,6 +171,37 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 		parameters: DeliverableParams,
 		async execute(_id, params): Promise<Result> {
 			return withEngine(deps, (engine) => {
+				// Lifecycle guards: after execution starts, restrict destructive actions
+				const plan = engine.get();
+				if (hasExecutionStarted(plan)) {
+					if (params.action === "reorder") {
+						return error(
+							"Cannot reorder deliverables after execution has started.",
+						);
+					}
+					if (params.id) {
+						const target = findDeliverable(plan, params.id);
+						if (target && isActiveOrShipped(target)) {
+							if (params.action === "remove") {
+								return error(
+									"Cannot remove an active deliverable. Use `status: abandoned` to stop it, or add new work as a separate deliverable.",
+								);
+							}
+							if (params.action === "update") {
+								// Allow status changes (including abandoned as escape hatch)
+								if (params.title || params.body) {
+									return error(
+										"Cannot update title/body of an active deliverable. Add new work as a separate deliverable.",
+									);
+								}
+								if (params.dependsOn !== undefined) {
+									return error("Cannot change dependencies of active work.");
+								}
+							}
+						}
+					}
+				}
+
 				switch (params.action) {
 					case "add": {
 						if (!params.title) return error("add requires title");
@@ -280,6 +314,35 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 				return ok(`${params.id} marked done.`, { done: true });
 			}
 			return withEngine(deps, (engine) => {
+				// Lifecycle guards: restrict destructive task actions on active deliverables
+				const plan = engine.get();
+				if (
+					hasExecutionStarted(plan) &&
+					(params.action === "remove" || params.action === "update")
+				) {
+					// Resolve the containing deliverable: explicit param or walk the tree
+					const containerId = params.deliverableId;
+					const container = containerId
+						? containerId !== PLAN_CONTAINER
+							? findDeliverable(plan, containerId)
+							: null
+						: params.id
+							? parentOf(plan, params.id)
+							: null;
+					if (container && isActiveOrShipped(container)) {
+						if (params.action === "remove") {
+							return error(
+								"Cannot remove tasks from an active deliverable. Add corrections as new tasks instead.",
+							);
+						}
+						if (params.action === "update") {
+							return error(
+								"Cannot update tasks on an active deliverable. Add new tasks or steer the agent.",
+							);
+						}
+					}
+				}
+
 				switch (params.action) {
 					case "add": {
 						const container = params.deliverableId ?? PLAN_CONTAINER;

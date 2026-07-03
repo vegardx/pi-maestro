@@ -7,6 +7,7 @@ import type {
 	WorkItemId,
 } from "@vegardx/pi-contracts";
 import {
+	CollapsibleQuestionnaireComponent,
 	commitQuestion,
 	deliverableStatusGlyph,
 	formatCount,
@@ -249,5 +250,91 @@ describe("questionnaire reducers", () => {
 		// Zero width
 		const lines0 = renderQuestionnaire(simple, initQuestionnaireState(), 0);
 		expect(lines0.length).toBeGreaterThan(0);
+	});
+});
+
+describe("CollapsibleQuestionnaireComponent", () => {
+	const q: Questionnaire = [
+		{
+			id: "q1",
+			question: "Pick one",
+			options: [{ label: "A" }, { label: "B" }],
+		},
+	];
+
+	function makeComp() {
+		const results: Array<unknown> = [];
+		const comp = new CollapsibleQuestionnaireComponent(q, (ans) =>
+			results.push(ans),
+		);
+		const handle = {
+			focused: false,
+			focus() {
+				this.focused = true;
+			},
+			unfocus() {
+				this.focused = false;
+			},
+		};
+		comp.setHandle(handle);
+		return { comp, handle, results };
+	}
+
+	it("renders collapsed state by default", () => {
+		const { comp } = makeComp();
+		const lines = comp.render(50);
+		expect(lines.length).toBe(2);
+		const text = lines.join("\n");
+		expect(text).toContain("1 question");
+		expect(text).toContain("Tab to expand");
+		expect(text).toContain("╭");
+		expect(text).toContain("╯");
+	});
+
+	it("expands on Tab and collapses on Tab again", () => {
+		const { comp, handle } = makeComp();
+		comp.focused = true;
+		// Initially collapsed
+		expect(comp.render(50).length).toBe(2);
+
+		// Tab → expanded
+		comp.handleInput("\t");
+		const expanded = comp.render(50);
+		expect(expanded.length).toBeGreaterThan(2);
+		expect(expanded.join("\n")).toContain("Pick one");
+		expect(handle.focused).toBe(true);
+
+		// Tab → collapsed
+		comp.handleInput("\t");
+		expect(comp.render(50).length).toBe(2);
+		expect(handle.focused).toBe(false);
+	});
+
+	it("collapses on Esc when expanded", () => {
+		const { comp, handle } = makeComp();
+		comp.focused = true;
+		comp.handleInput("\t"); // expand
+		expect(comp.render(50).length).toBeGreaterThan(2);
+
+		comp.handleInput("\u001b"); // Esc
+		expect(comp.render(50).length).toBe(2);
+		expect(handle.focused).toBe(false);
+	});
+
+	it("ignores input when collapsed (except Tab)", () => {
+		const { comp, results } = makeComp();
+		comp.handleInput("\r"); // Enter — should do nothing collapsed
+		expect(results).toHaveLength(0);
+		expect(comp.render(50).length).toBe(2); // still collapsed
+	});
+
+	it("shows plural 'questions' for multi-question questionnaire", () => {
+		const multi: Questionnaire = [
+			{ id: "a", question: "Q1", options: [{ label: "X" }] },
+			{ id: "b", question: "Q2", options: [{ label: "Y" }] },
+		];
+		const comp = new CollapsibleQuestionnaireComponent(multi, () => {});
+		const text = comp.render(60).join("\n");
+		expect(text).toContain("2 questions pending");
 	});
 });

@@ -5,8 +5,12 @@
 	"type": "module",
 	"description": "pi-maestro — structured pi coding-agent extension stack",
 	"license": "MIT",
-	"keywords": ["pi-package"],
-	"workspaces": ["packages/*"],
+	"keywords": [
+		"pi-package"
+	],
+	"workspaces": [
+		"packages/*"
+	],
 	"pi": {
 		"extensions": [
 			"packages/ask/src/index.ts",
@@ -27,7 +31,8 @@
 		"test": "vitest run",
 		"test:watch": "vitest watch",
 		"boundaries": "node scripts/check-boundaries.mjs",
-		"smoke": "node scripts/smoke.mjs"
+		"smoke": "node scripts/smoke.mjs",
+		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.1",
@@ -37,6 +42,7 @@
 		"@earendil-works/pi-tui": "^0.80.2",
 		"@sinclair/typebox": "^0.34.49",
 		"@types/node": "^24",
+		"husky": "^9.1.7",
 		"jiti": "^2.7.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"

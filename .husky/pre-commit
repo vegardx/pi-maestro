@@ -1,0 +1,2 @@
+npx biome check .
+npx tsc --noEmit

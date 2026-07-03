@@ -15,6 +15,15 @@ import {
 	spawn as tmuxSpawn,
 } from "@vegardx/pi-tmux";
 import { agentName } from "./agent-names.js";
+import {
+	type AnalyzeOpts,
+	type AnalyzePhase,
+	type AnalyzeResult,
+	checkpointForDeliverable,
+	planAnalyzePhases,
+	runAnalyzePhase,
+	shouldRefreshAnalyze,
+} from "./analyze.js";
 import type { PlanEngine } from "./engine.js";
 import { completionGateSatisfied, transitionThrough } from "./execution.js";
 import { renderPlanSeed } from "./markdown.js";
@@ -31,6 +40,12 @@ import {
 	readyDeliverables,
 	repoFor,
 } from "./schema.js";
+import {
+	appendToSession,
+	buildCustomEntry,
+	forkSessionAt,
+	parseSessionFile,
+} from "./session-fork.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -71,6 +86,8 @@ export interface TmuxFanoutDeps {
 		lens: string,
 		snapshot: TokenSnapshot,
 	) => void;
+	/** Options for the analyze phase. When provided, enables checkpoint forking. */
+	readonly analyzeOpts?: AnalyzeOpts;
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
@@ -102,6 +119,11 @@ export class TmuxFanout {
 	private settlePromise: Promise<void> | undefined;
 	private settleResolve: (() => void) | undefined;
 
+	/** Analyze result from the most recent analyze phase. */
+	private analyzeResult: AnalyzeResult | undefined;
+	/** Planned analyze phases (cached from last analyze run). */
+	private analyzePhases: AnalyzePhase[] = [];
+
 	constructor(private readonly deps: TmuxFanoutDeps) {
 		this.server = new RpcServer();
 		this.socketPath = createSocketPath(deps.planDir);
@@ -109,6 +131,7 @@ export class TmuxFanout {
 
 	/**
 	 * Start the RPC server and poll loop. Must be called before tick().
+	 * If analyzeOpts is provided, runs the analyze phase before polling begins.
 	 */
 	async start(): Promise<void> {
 		await this.server.listen(this.socketPath);
@@ -119,6 +142,19 @@ export class TmuxFanout {
 		this.server.on("message", (agentId, msg) =>
 			this.handleMessage(agentId, msg),
 		);
+
+		// Run analyze phase if configured
+		if (this.deps.analyzeOpts) {
+			const startTime = Date.now();
+			const plan = this.deps.engine.get();
+			this.analyzeResult = await runAnalyzePhase(plan, this.deps.analyzeOpts);
+			this.analyzePhases = planAnalyzePhases(plan);
+			const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+			log(
+				`analyze: completed in ${elapsed}s (${this.analyzeResult.checkpoints.size} checkpoints, ${this.analyzeResult.compactedFiles.size} compacted)`,
+			);
+		}
+
 		this.pollTimer = setInterval(() => this.pollSessions(), POLL_INTERVAL_MS);
 	}
 
@@ -129,11 +165,26 @@ export class TmuxFanout {
 		const plan = this.deps.engine.get();
 		if (pendingLifecycle(plan, "pre")) return 0;
 
+		// Refresh analyze if configured, cache stale, and new work exists
+		if (
+			this.deps.analyzeOpts &&
+			shouldRefreshAnalyze(plan, this.analyzeResult)
+		) {
+			try {
+				this.analyzeResult = await runAnalyzePhase(plan, this.deps.analyzeOpts);
+				this.analyzePhases = planAnalyzePhases(plan);
+				log("analyze: refreshed");
+			} catch (e) {
+				log(
+					`analyze: refresh failed — ${e instanceof Error ? e.message : String(e)}`,
+				);
+				// Non-fatal on refresh: use stale result
+			}
+		}
+
 		let spawned = 0;
 		for (const d of readyDeliverables(plan)) {
 			if (this.agents.has(d.id)) continue;
-			// Skip if any dep is only active (not yet done) — unlike PR stacking,
-			// tmux agents need deps to actually complete before starting.
 			if (!this.depsComplete(plan, d)) continue;
 			await this.spawnAgent(d);
 			spawned++;
@@ -309,10 +360,107 @@ export class TmuxFanout {
 				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
 			);
 		}
+		if (process.env.MAESTRO_WORKER_MODEL) {
+			vars.push(`PI_MODEL=${process.env.MAESTRO_WORKER_MODEL}`);
+		}
 		if (process.env.PATH) {
 			vars.push(`PATH=${process.env.PATH}`);
 		}
 		return vars;
+	}
+
+	/**
+	 * Build the session file for a worker agent. Tries to fork from a compacted
+	 * analyze checkpoint; falls back to cold start (header + modes state + seed).
+	 */
+	private buildSessionFile(
+		d: Deliverable,
+		sessionDir: string,
+		timestamp: string,
+		seed: string,
+		cwd: string,
+	): string {
+		// Try checkpoint-based fork
+		if (this.analyzeResult) {
+			const label = checkpointForDeliverable(this.analyzePhases, d.id);
+			const compactedFile = label
+				? this.analyzeResult.compactedFiles.get(label)
+				: undefined;
+			if (compactedFile) {
+				try {
+					const { entries } = parseSessionFile(compactedFile);
+					const lastEntry = entries[entries.length - 1];
+					if (lastEntry) {
+						const forked = forkSessionAt(
+							compactedFile,
+							lastEntry.id,
+							sessionDir,
+							{ cwd },
+						);
+						// Append modes state + execution seed
+						const modesState = buildCustomEntry(
+							"maestro.modes.state",
+							{
+								version: 2,
+								mode: "auto",
+								execution: { stage: "executing", deliverableId: d.id },
+								updatedAt: new Date().toISOString(),
+							},
+							lastEntry.id,
+						);
+						const seedEntry = buildCustomEntry(
+							"maestro-execution-seed",
+							{ content: seed, deliverableId: d.id },
+							modesState.id,
+						);
+						appendToSession(forked, [modesState, seedEntry]);
+						log(`spawn ${d.id}: forked from checkpoint "${label}"`);
+						return forked;
+					}
+				} catch (e) {
+					log(
+						`spawn ${d.id}: fork failed, falling back to cold start — ${e instanceof Error ? e.message : String(e)}`,
+					);
+				}
+			}
+		}
+
+		// Cold start fallback
+		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
+		const modesStateId = randomUUID().slice(0, 8);
+		const seedId = randomUUID().slice(0, 8);
+		const sessionLines = [
+			JSON.stringify({
+				type: "session",
+				version: 3,
+				id: randomUUID(),
+				timestamp: new Date().toISOString(),
+				cwd,
+			}),
+			JSON.stringify({
+				type: "custom",
+				customType: "maestro.modes.state",
+				data: {
+					version: 2,
+					mode: "auto",
+					execution: { stage: "executing", deliverableId: d.id },
+					updatedAt: new Date().toISOString(),
+				},
+				id: modesStateId,
+				parentId: null,
+				timestamp: new Date().toISOString(),
+			}),
+			JSON.stringify({
+				type: "custom",
+				customType: "maestro-execution-seed",
+				data: { content: seed, deliverableId: d.id },
+				id: seedId,
+				parentId: modesStateId,
+				timestamp: new Date().toISOString(),
+			}),
+		];
+		writeFileSync(sessionFile, `${sessionLines.join("\n")}\n`);
+		return sessionFile;
 	}
 
 	private async spawnAgent(d: Deliverable): Promise<void> {
@@ -339,48 +487,18 @@ export class TmuxFanout {
 		// Set status to active in the plan
 		this.deps.engine.setStatus(d.id, "active");
 
-		// Write session file
+		// Write session file — fork from checkpoint or cold start
 		const sessionDir = join(result.path, ".pi", "sessions");
 		mkdirSync(sessionDir, { recursive: true });
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-		const sessionFile = join(sessionDir, `${timestamp}_agent-${d.id}.jsonl`);
 		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
-		const seedId = randomUUID().slice(0, 8);
-		const modesStateId = randomUUID().slice(0, 8);
-		const sessionLines = [
-			JSON.stringify({
-				type: "session",
-				version: 3,
-				id: randomUUID(),
-				timestamp: new Date().toISOString(),
-				cwd: result.path,
-			}),
-			JSON.stringify({
-				type: "custom",
-				customType: "maestro.modes.state",
-				data: {
-					version: 2,
-					mode: "auto",
-					execution: {
-						stage: "executing",
-						deliverableId: d.id,
-					},
-					updatedAt: new Date().toISOString(),
-				},
-				id: modesStateId,
-				parentId: null,
-				timestamp: new Date().toISOString(),
-			}),
-			JSON.stringify({
-				type: "custom",
-				customType: "maestro-execution-seed",
-				data: { content: seed, deliverableId: d.id },
-				id: seedId,
-				parentId: modesStateId,
-				timestamp: new Date().toISOString(),
-			}),
-		];
-		writeFileSync(sessionFile, `${sessionLines.join("\n")}\n`);
+		const sessionFile = this.buildSessionFile(
+			d,
+			sessionDir,
+			timestamp,
+			seed,
+			result.path,
+		);
 
 		// Register agent state
 		const state: TmuxAgentState = {

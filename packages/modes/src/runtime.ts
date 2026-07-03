@@ -55,7 +55,6 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
-import { WorkerPanes } from "./worker-panes.js";
 import {
 	formatFindings,
 	LENSES,
@@ -72,8 +71,8 @@ import {
 	updateAgentWidget,
 	type ViewState,
 } from "./orchestrator-tmux.js";
-import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import { OverlayManager } from "./overlay-manager.js";
+import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import {
 	type Deliverable,
 	deliverables,
@@ -125,6 +124,7 @@ import {
 	type UsageDelta,
 	UsageLedger,
 } from "./usage-ledger.js";
+import { WorkerPanes } from "./worker-panes.js";
 import {
 	activateDeliverableBranch,
 	cleanupInactiveWorktrees,
@@ -591,9 +591,7 @@ export function createModesRuntime(
 								workerPanes.isOpen() &&
 								workerPanes.shouldSync(id, state.status)
 							) {
-								workerPanes
-									.sync(tmuxFanout.snapshot().agents)
-									.catch(() => {});
+								workerPanes.sync(tmuxFanout.snapshot().agents).catch(() => {});
 							}
 						}
 					},
@@ -1640,13 +1638,11 @@ When you have enough information (all design questions answered, scope clear, de
 1. If multi-repo: register repos with \`deliverable register-repo\`.
 2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
 3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files, functions, behavior. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the worker lifecycle.
-4. After all tool calls, call \`plan()\` to display the result.
+4. After all tool calls, write out the plan summary as text (do NOT call the plan tool — it renders as a collapsed tool result).
 5. End with: "Ready to implement."
 
 Rules:
 - Be concise. No narration, no thinking out loud, no explanations between tool calls.
-- Do NOT manually format the plan — call \`plan()\` to render it.
-- Do NOT use json or markdown views.
 - Each deliverable = one PR. Keep them small and focused.
 - For multi-repo: assign deliverables to repos with \`repo: <key>\`.
 - Do NOT read files unless the user's request is ambiguous and you need to clarify scope.

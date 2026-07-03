@@ -248,8 +248,12 @@ export class WorkerPanes {
 	}
 
 	private attachCommand(agentName: string): string {
-		// The pane exits when the attached session dies (no lingering shell)
-		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agentName} || exit`;
+		// Exit copy-mode (if scrolled up) then attach read-only.
+		// The pane exits when the attached session dies (no lingering shell).
+		return (
+			`tmux send-keys -t ${agentName} q 2>/dev/null; ` +
+			`env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agentName} || exit`
+		);
 	}
 
 	/** Check if terminal is large enough for side panes. */

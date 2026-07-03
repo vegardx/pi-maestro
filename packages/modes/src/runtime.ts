@@ -409,6 +409,14 @@ export function createModesRuntime(
 	}
 
 	async function cycle(ctx: ExtensionContext): Promise<void> {
+		if (state.mode === "plan") {
+			// Prompt which mode to enter from plan
+			const choice = await ctx.ui.select("Switch to", ["auto", "hack"]);
+			if (choice === "auto" || choice === "hack") {
+				setMode(choice, ctx);
+			}
+			return;
+		}
 		setMode(nextMode(state.mode), ctx);
 	}
 

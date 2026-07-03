@@ -85,7 +85,8 @@ const DeliverableParams = Type.Object({
 	),
 	dependsOn: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "At most one stacking parent id. Use [] for a root.",
+			description:
+				"Deliverable ids this one waits on before starting. Supports multiple.",
 		}),
 	),
 	branch: Type.Optional(

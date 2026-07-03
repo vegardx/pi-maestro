@@ -67,7 +67,7 @@ export interface Deliverable {
 	/** Git branch (typically feat/<id>). Lifecycle/groupings don't claim one. */
 	branch?: string;
 	lifecycle?: DeliverableLifecycle;
-	/** The stacking edge: at most one parent; cross-subtree allowed. */
+	/** Stacking edges: deliverables this one waits on before starting. */
 	dependsOn?: string[];
 	/** Registry key of the repo this deliverable targets; absent ⇒ plan default. */
 	repo?: string;
@@ -557,11 +557,6 @@ export function validatePlanShape(
 			);
 		}
 		const deps = d.dependsOn ?? [];
-		if (deps.length > 1) {
-			problems.push(
-				`deliverable \`${d.id}\` has ${deps.length} dependsOn entries — at most one parent`,
-			);
-		}
 		for (const dep of deps) {
 			if (!ids.has(dep)) {
 				problems.push(

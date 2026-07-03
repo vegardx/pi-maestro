@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { currentBranch, detectDefaultBranch } from "@vegardx/pi-git";
+import type { AnalyzeResult } from "./analyze.js";
 import type { PlanEngine } from "./engine.js";
+import { resolveCompactedFile, runLensFromFork } from "./lens-fork.js";
 import {
 	detectScope,
 	type Finding,
@@ -74,6 +76,10 @@ export interface LensRunContext {
 	engine: PlanEngine | undefined;
 	requirements?: string;
 	model?: string;
+	/** Analyze result for checkpoint-based forking. */
+	analyzeResult?: AnalyzeResult;
+	/** Checkpoint label for the target deliverable. */
+	checkpointLabel?: string;
 }
 
 export interface AggregateResult {
@@ -102,15 +108,34 @@ export async function runLensesForArgs(
 		return { scope, guidance: "No changes to review.", results: [] };
 	}
 	const results: LensResult[] = [];
+	const compactedFile = resolveCompactedFile(
+		rc.analyzeResult,
+		rc.checkpointLabel,
+	);
 	for (const lens of lenses) {
-		results.push(
-			await runLens(lens, rendered.situation, {
-				cwd: rc.cwd,
-				input: rendered.text,
-				requirements: rc.requirements,
-				model: rc.model,
-			}),
-		);
+		if (compactedFile) {
+			// Fork from compacted analyze checkpoint
+			results.push(
+				await runLensFromFork({
+					lens,
+					situation: rendered.situation,
+					analyzeSessionFile: compactedFile,
+					input: rendered.text,
+					cwd: rc.cwd,
+					model: rc.model,
+				}),
+			);
+		} else {
+			// Cold start fallback
+			results.push(
+				await runLens(lens, rendered.situation, {
+					cwd: rc.cwd,
+					input: rendered.text,
+					requirements: rc.requirements,
+					model: rc.model,
+				}),
+			);
+		}
 	}
 	return { scope, results };
 }

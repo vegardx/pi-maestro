@@ -14,12 +14,18 @@ import type { TmuxAgentState } from "./execution-tmux.js";
 /** Minimum rows per worker pane for useful output. */
 const MIN_ROWS_PER_PANE = 6;
 
+/** Minimum terminal dimensions to show worker panes (approx full-screen). */
+const MIN_COLS = 160;
+const MIN_ROWS = 40;
+
 export class WorkerPanes {
 	/** Map from agent name → tmux pane ID. */
 	private panes = new Map<string, string>();
 	/** The first pane created on the right side (used as layout target). */
 	private columnPaneId: string | undefined;
 	private _isOpen = false;
+	/** User has toggled panes on (may not be visible due to size). */
+	private _enabled = false;
 	/** Re-entry guard — prevents concurrent sync() calls from racing. */
 	private syncing = false;
 	/** When true, another sync is needed after the current one finishes. */
@@ -28,6 +34,10 @@ export class WorkerPanes {
 	private pendingAgents: ReadonlyMap<string, TmuxAgentState> | undefined;
 	/** Track last-seen status per agent to skip token-only updates. */
 	private lastStatuses = new Map<string, string>();
+	/** Cached agents for resize re-open. */
+	private lastAgents: ReadonlyMap<string, TmuxAgentState> | undefined;
+	/** Resize listener cleanup. */
+	private resizeHandler: (() => void) | undefined;
 
 	isOpen(): boolean {
 		return this._isOpen;
@@ -49,6 +59,10 @@ export class WorkerPanes {
 	 */
 	async open(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
 		if (this._isOpen) return;
+		this._enabled = true;
+		this.lastAgents = activeAgents;
+		this.listenResize();
+		if (!this.terminalLargeEnough()) return;
 
 		// Collect agents that need panes (spawning/working)
 		const toShow = this.activeAgentList(activeAgents);
@@ -103,6 +117,8 @@ export class WorkerPanes {
 	 * Close all worker panes and tear down the column.
 	 */
 	async close(): Promise<void> {
+		this._enabled = false;
+		this.stopListenResize();
 		for (const paneId of this.panes.values()) {
 			try {
 				await killPane(paneId);
@@ -122,6 +138,7 @@ export class WorkerPanes {
 	 */
 	async sync(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
 		if (!this._isOpen) return;
+		this.lastAgents = activeAgents;
 
 		// Re-entry guard: if already syncing, queue a re-sync
 		if (this.syncing) {
@@ -239,6 +256,59 @@ export class WorkerPanes {
 	private attachCommand(agentName: string): string {
 		// The pane exits when the attached session dies (no lingering shell)
 		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${agentName} || exit`;
+	}
+
+	/** Check if terminal is large enough for side panes. */
+	private terminalLargeEnough(): boolean {
+		const cols = process.stdout.columns || 0;
+		const rows = process.stdout.rows || 0;
+		return cols >= MIN_COLS && rows >= MIN_ROWS;
+	}
+
+	/** Exposed for the command handler to explain why panes won't open. */
+	terminalTooSmall(): boolean {
+		return !this.terminalLargeEnough();
+	}
+
+	/** Whether the user has enabled panes (even if not visible due to size). */
+	isEnabled(): boolean {
+		return this._enabled;
+	}
+
+	private listenResize(): void {
+		if (this.resizeHandler) return;
+		const handler = () => this.handleResize();
+		process.stdout.on("resize", handler);
+		this.resizeHandler = () => process.stdout.off("resize", handler);
+	}
+
+	private stopListenResize(): void {
+		this.resizeHandler?.();
+		this.resizeHandler = undefined;
+	}
+
+	private handleResize(): void {
+		if (!this._enabled) return;
+		const large = this.terminalLargeEnough();
+		if (large && !this._isOpen && this.lastAgents) {
+			// Terminal grew — re-open panes
+			this.open(this.lastAgents).catch(() => {});
+		} else if (!large && this._isOpen) {
+			// Terminal shrank — close panes but stay enabled
+			this.closePanes();
+		}
+	}
+
+	/** Close panes without disabling (for resize shrink). */
+	private async closePanes(): Promise<void> {
+		for (const paneId of this.panes.values()) {
+			try {
+				await killPane(paneId);
+			} catch {}
+		}
+		this.panes.clear();
+		this.columnPaneId = undefined;
+		this._isOpen = false;
 	}
 
 	private async rebalance(): Promise<void> {

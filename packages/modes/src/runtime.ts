@@ -824,12 +824,19 @@ export function createModesRuntime(
 				ctx.ui.notify("No agents active (tmux required).", "info");
 				return;
 			}
-			if (workerPanes.isOpen()) {
+			if (workerPanes.isOpen() || workerPanes.isEnabled()) {
 				await workerPanes.close();
 				ctx.ui.notify("Worker panes closed.", "info");
 			} else {
 				await workerPanes.open(tmuxFanout.snapshot().agents);
-				ctx.ui.notify("Worker panes opened.", "info");
+				if (workerPanes.terminalTooSmall()) {
+					ctx.ui.notify(
+						"Worker panes enabled — will appear when terminal is larger (≥160×40).",
+						"info",
+					);
+				} else {
+					ctx.ui.notify("Worker panes opened.", "info");
+				}
 			}
 		},
 	});

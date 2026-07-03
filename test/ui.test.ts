@@ -216,4 +216,38 @@ describe("questionnaire reducers", () => {
 		expect(recommendedIndex({ ...rq, recommendation: "a" })).toBe(0);
 		expect(recommendedIndex({ ...rq, recommendation: undefined })).toBe(-1);
 	});
+
+	it("renders rounded box border characters", () => {
+		const simple: Questionnaire = [
+			{
+				id: "q1",
+				question: "Pick one",
+				options: [{ label: "A" }, { label: "B" }],
+			},
+		];
+		const lines = renderQuestionnaire(simple, initQuestionnaireState(), 40);
+		// Top border with rounded corners
+		expect(lines[0]).toMatch(/^╭─+╮$/);
+		// Bottom border with rounded corners
+		const botIdx = lines.findIndex((l) => l.startsWith("╰"));
+		expect(botIdx).toBeGreaterThan(0);
+		expect(lines[botIdx]).toMatch(/^╰─+╯$/);
+		// Content lines have side borders
+		expect(lines[1]).toMatch(/^│ .* │$/);
+		// Hint bar is outside the box
+		expect(lines[lines.length - 1]).toContain("enter select");
+		expect(lines[lines.length - 1]).not.toContain("│");
+	});
+
+	it("handles degenerate width without crashing", () => {
+		const simple: Questionnaire = [
+			{ id: "q1", question: "Pick one", options: [{ label: "A" }] },
+		];
+		// Very narrow
+		const lines5 = renderQuestionnaire(simple, initQuestionnaireState(), 5);
+		expect(lines5.length).toBeGreaterThan(0);
+		// Zero width
+		const lines0 = renderQuestionnaire(simple, initQuestionnaireState(), 0);
+		expect(lines0.length).toBeGreaterThan(0);
+	});
 });

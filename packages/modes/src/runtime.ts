@@ -411,9 +411,14 @@ export function createModesRuntime(
 	async function cycle(ctx: ExtensionContext): Promise<void> {
 		if (state.mode === "plan") {
 			// Prompt which mode to enter from plan
-			const choice = await ctx.ui.select("Switch to", ["auto", "hack"]);
-			if (choice === "auto" || choice === "hack") {
-				setMode(choice, ctx);
+			const choice = await ctx.ui.select("Switch to", [
+				"auto — fully autonomous",
+				"hack — fully autonomous, all tools",
+			]);
+			if (choice?.startsWith("auto")) {
+				setMode("auto", ctx);
+			} else if (choice?.startsWith("hack")) {
+				setMode("hack", ctx);
 			}
 			return;
 		}

@@ -33,6 +33,10 @@ export const MAESTRO_ENV = {
 	get maxReviewCycles(): number {
 		return Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
 	},
+	get maxWorkers(): number | undefined {
+		const v = Number(process.env.MAESTRO_MAX_WORKERS);
+		return Number.isFinite(v) && v > 0 ? v : undefined;
+	},
 	get lensDisabled(): boolean {
 		return process.env.MAESTRO_LENS_DISABLED === "1";
 	},
@@ -55,6 +59,25 @@ export interface ModesCompactionSettings {
 
 function positive(value: number, fallback: number): number {
 	return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const DEFAULT_MAX_WORKERS = 4;
+
+/**
+ * Read the max parallel workers setting.
+ * Priority: MAESTRO_MAX_WORKERS env → extensionConfig.modes.maxWorkers → 4.
+ */
+export function readMaxWorkers(cwd: string, agentDir?: string): number {
+	const envVal = MAESTRO_ENV.maxWorkers;
+	if (envVal !== undefined) return envVal;
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const configured = getConfigNumber(
+		merged,
+		NAME,
+		"maxWorkers",
+		DEFAULT_MAX_WORKERS,
+	);
+	return positive(configured, DEFAULT_MAX_WORKERS);
 }
 
 export function readModesCompactionSettings(

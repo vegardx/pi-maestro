@@ -46,7 +46,7 @@ import {
 	forkSessionAt,
 	parseSessionFile,
 } from "./session-fork.js";
-import { MAESTRO_ENV } from "./settings.js";
+import { MAESTRO_ENV, readMaxWorkers } from "./settings.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -125,9 +125,13 @@ export class TmuxFanout {
 	/** Planned analyze phases (cached from last analyze run). */
 	private analyzePhases: AnalyzePhase[] = [];
 
+	/** Resolved max concurrent workers. */
+	private readonly maxWorkers: number;
+
 	constructor(private readonly deps: TmuxFanoutDeps) {
 		this.server = new RpcServer();
 		this.socketPath = createSocketPath(deps.planDir);
+		this.maxWorkers = readMaxWorkers(process.cwd());
 	}
 
 	/**
@@ -185,6 +189,7 @@ export class TmuxFanout {
 
 		let spawned = 0;
 		for (const d of readyDeliverables(plan)) {
+			if (this.activeCount() >= this.maxWorkers) break;
 			if (this.agents.has(d.id)) continue;
 			if (!this.depsComplete(plan, d)) continue;
 			await this.spawnAgent(d);
@@ -334,6 +339,17 @@ export class TmuxFanout {
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
+
+	/**
+	 * Number of agents currently occupying a worker slot (spawning or working).
+	 */
+	private activeCount(): number {
+		let count = 0;
+		for (const state of this.agents.values()) {
+			if (state.status === "spawning" || state.status === "working") count++;
+		}
+		return count;
+	}
 
 	private depsComplete(
 		plan: Pick<Plan, "nodes">,

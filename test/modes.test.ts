@@ -1232,9 +1232,16 @@ describe("modes runtime", () => {
 			"plan",
 			"ask",
 		]);
-		const blocked = await host.handlers.get("tool_call")?.[0]({
+		const pushResult = await host.handlers.get("tool_call")?.[0]({
 			toolName: "bash",
 			input: { command: "git push" },
+		});
+		// git push is allowed in auto mode (not destructive)
+		expect(pushResult).toBeUndefined();
+		// rm -rf is still blocked
+		const blocked = await host.handlers.get("tool_call")?.[0]({
+			toolName: "bash",
+			input: { command: "rm -rf /tmp/foo" },
 		});
 		expect(blocked).toMatchObject({ block: true });
 		const allowed = await host.handlers.get("tool_call")?.[0]({

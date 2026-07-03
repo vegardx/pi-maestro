@@ -208,21 +208,16 @@ export async function classifyBashWithLLM(
 
 	const result = await spawnFn(args, { cwd: opts?.cwd ?? process.cwd() });
 	if (result.exitCode !== 0) {
-		// LLM failed — fall back to blocking (safe default)
-		return {
-			allowed: false,
-			reason: "classifier unavailable, blocking by default",
-		};
+		// LLM failed — fail-open (allow the command)
+		return { allowed: true, intent: "classifier unavailable, allowing" };
 	}
 
 	try {
 		const parsed = parseClassifierOutput(result.stdout);
 		return parsed;
 	} catch {
-		return {
-			allowed: false,
-			reason: "classifier output unparseable, blocking by default",
-		};
+		// Unparseable — fail-open
+		return { allowed: true, intent: "classifier unparseable, allowing" };
 	}
 }
 

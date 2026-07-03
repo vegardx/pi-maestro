@@ -608,7 +608,13 @@ export function createCrashSnapshot(
 	now: () => string = () => new Date().toISOString(),
 ): CrashSnapshot {
 	const error =
-		input.error instanceof Error ? input.error : new Error(String(input.error));
+		input.error instanceof Error
+			? input.error
+			: new Error(
+					typeof input.error === "object"
+						? JSON.stringify(input.error)
+						: String(input.error),
+				);
 	return {
 		at: now(),
 		mode: input.mode,

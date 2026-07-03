@@ -502,4 +502,154 @@ describe("TmuxFanout", () => {
 			expect(tmux.kill).toHaveBeenCalledTimes(2); // stale cleanup + destroy
 		});
 	});
+
+	describe("checkpoint forking", () => {
+		it("uses cold start when no analyzeOpts provided", async () => {
+			engine.addDeliverable({ title: "Cold", dependsOn: [] });
+			const f = createFanout(); // no analyzeOpts
+			await f.start();
+			await f.tick();
+
+			// Session file is created in worktree (cold start path)
+			const call = vi.mocked(tmux.spawn).mock.calls[0];
+			expect(call[2]).toContain("--session");
+			expect(call[2]).toContain("_agent-cold.jsonl");
+		});
+
+		it("forks from checkpoint when analyzeResult is available", async () => {
+			const { writeFileSync, mkdirSync } = await import("node:fs");
+			const { readFileSync } = await import("node:fs");
+
+			// Create a compacted session file
+			const compactDir = mkdtempSync(join(tmpdir(), "compact-"));
+			const compactFile = join(compactDir, "compact_core.jsonl");
+			const lines = [
+				JSON.stringify({
+					type: "session",
+					version: 3,
+					id: "compact-sess",
+					timestamp: "2026-01-01T00:00:00.000Z",
+					cwd: "/original",
+				}),
+				JSON.stringify({
+					type: "custom_message",
+					customType: "maestro.analyze.context",
+					content: "Explored: project uses vitest, TypeScript strict mode",
+					display: false,
+					id: "ctx-1",
+					parentId: null,
+					timestamp: "2026-01-01T00:00:01.000Z",
+				}),
+			];
+			writeFileSync(compactFile, `${lines.join("\n")}\n`);
+
+			engine.addDeliverable({ title: "Forked", dependsOn: [] });
+
+			// Provide analyzeOpts with a spawn that writes a dummy session
+			// (analyze won't actually run since we pre-set the result)
+			const analyzeOpts = {
+				sessionDir: join(root, "analyze-sessions"),
+				compactDir,
+				spawn: async (opts: { sessionFile: string }) => {
+					// Write session with a checkpoint
+					const header = JSON.stringify({
+						type: "session",
+						version: 3,
+						id: "analyze-sess",
+						timestamp: "t",
+						cwd: "/repo",
+					});
+					const cp = JSON.stringify({
+						type: "custom",
+						customType: "maestro.analyze.checkpoint",
+						data: { label: "core" },
+						id: "cp-1",
+						parentId: null,
+						timestamp: "t",
+					});
+					mkdirSync(join(root, "analyze-sessions"), { recursive: true });
+					writeFileSync(opts.sessionFile, `${header}\n${cp}\n`);
+				},
+				compact: async () => compactFile,
+			};
+
+			const f = createFanout({ analyzeOpts });
+			await f.start();
+			await f.tick();
+
+			// The spawned session should reference a forked file
+			const call = vi.mocked(tmux.spawn).mock.calls[0];
+			expect(call[2]).toContain("fork_");
+
+			// The forked file should contain the compacted context + appended entries
+			const sessionMatch = call[2].match(/--session "([^"]+)"/);
+			expect(sessionMatch).not.toBeNull();
+			const sessionContent = readFileSync(sessionMatch![1], "utf8");
+			expect(sessionContent).toContain("maestro.analyze.context");
+			expect(sessionContent).toContain("maestro.modes.state");
+			expect(sessionContent).toContain("maestro-execution-seed");
+			expect(sessionContent).toContain("forked"); // deliverableId
+
+			rmSync(compactDir, { recursive: true, force: true });
+		});
+
+		it("falls back to cold start when fork fails", async () => {
+			engine.addDeliverable({ title: "Fallback", dependsOn: [] });
+
+			const analyzeOpts = {
+				sessionDir: join(root, "analyze-sessions"),
+				compactDir: join(root, "compact"),
+				spawn: async (opts: { sessionFile: string }) => {
+					const { writeFileSync: wf, mkdirSync: md } = await import("node:fs");
+					md(join(root, "analyze-sessions"), { recursive: true });
+					const header = JSON.stringify({
+						type: "session",
+						version: 3,
+						id: "s",
+						timestamp: "t",
+						cwd: "/repo",
+					});
+					const cp = JSON.stringify({
+						type: "custom",
+						customType: "maestro.analyze.checkpoint",
+						data: { label: "core" },
+						id: "cp-1",
+						parentId: null,
+						timestamp: "t",
+					});
+					wf(opts.sessionFile, `${header}\n${cp}\n`);
+				},
+				// compact returns a nonexistent file → fork will fail
+				compact: async () => "/nonexistent/file.jsonl",
+			};
+
+			const f = createFanout({ analyzeOpts });
+			await f.start();
+			await f.tick();
+
+			// Should still spawn (cold start fallback)
+			expect(tmux.spawn).toHaveBeenCalledTimes(1);
+			const call = vi.mocked(tmux.spawn).mock.calls[0];
+			// Cold start path: _agent-fallback.jsonl
+			expect(call[2]).toContain("_agent-fallback.jsonl");
+		});
+
+		it("passes MAESTRO_WORKER_MODEL as PI_MODEL env var", async () => {
+			const original = process.env.MAESTRO_WORKER_MODEL;
+			process.env.MAESTRO_WORKER_MODEL = "test-model";
+
+			try {
+				engine.addDeliverable({ title: "Model", dependsOn: [] });
+				const f = createFanout();
+				await f.start();
+				await f.tick();
+
+				const call = vi.mocked(tmux.spawn).mock.calls[0];
+				expect(call[2]).toContain("PI_MODEL=test-model");
+			} finally {
+				if (original === undefined) delete process.env.MAESTRO_WORKER_MODEL;
+				else process.env.MAESTRO_WORKER_MODEL = original;
+			}
+		});
+	});
 });

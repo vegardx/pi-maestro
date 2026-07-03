@@ -46,6 +46,7 @@ import {
 	forkSessionAt,
 	parseSessionFile,
 } from "./session-fork.js";
+import { MAESTRO_ENV } from "./settings.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ function log(msg: string): void {
 }
 
 const POLL_INTERVAL_MS = 3000;
-const MAX_REVIEW_CYCLES = Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
+const MAX_REVIEW_CYCLES = MAESTRO_ENV.maxReviewCycles;
 const ZERO_TOKENS: TokenSnapshot = {
 	input: 0,
 	output: 0,
@@ -360,8 +361,8 @@ export class TmuxFanout {
 				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
 			);
 		}
-		if (process.env.MAESTRO_WORKER_MODEL) {
-			vars.push(`PI_MODEL=${process.env.MAESTRO_WORKER_MODEL}`);
+		if (MAESTRO_ENV.workerModel) {
+			vars.push(`PI_MODEL=${MAESTRO_ENV.workerModel}`);
 		}
 		if (process.env.PATH) {
 			vars.push(`PATH=${process.env.PATH}`);

@@ -71,6 +71,10 @@ import {
 	updateAgentWidget,
 	type ViewState,
 } from "./orchestrator-tmux.js";
+import {
+	buildRows,
+	CollapsibleDashboardComponent,
+} from "./agents-dashboard.js";
 import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import {
@@ -195,6 +199,7 @@ export function createModesRuntime(
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	const workerPanes = new WorkerPanes();
+	let agentsDashboard: CollapsibleDashboardComponent | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -586,6 +591,15 @@ export function createModesRuntime(
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						if (tmuxFanout) {
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+							// Update dashboard overlay rows
+							if (agentsDashboard && engine) {
+								const rows = buildRows(
+									tmuxFanout,
+									engine,
+									tmuxFanout.questionQueue,
+								);
+								agentsDashboard.updateRows(rows);
+							}
 							// Only sync worker panes on status transitions
 							if (
 								workerPanes.isOpen() &&
@@ -620,6 +634,16 @@ export function createModesRuntime(
 					ctx,
 				);
 				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+				// Mount the agents dashboard overlay
+				if (!agentsDashboard && engine) {
+					const rows = buildRows(tmuxFanout, engine, tmuxFanout.questionQueue);
+					agentsDashboard = new CollapsibleDashboardComponent(
+						rows,
+						usageLedger,
+						() => {},
+					);
+					overlayManager.mount("agents", agentsDashboard);
+				}
 			} else {
 				ctx.ui.notify("No deliverables ready to start.", "warning");
 			}

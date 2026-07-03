@@ -160,7 +160,7 @@ function boxLine(content: string, width: number): string {
 
 // ─── Build rows ─────────────────────────────────────────────────────────────
 
-function buildRows(
+export function buildRows(
 	fanout: TmuxFanout,
 	engine: PlanEngine,
 	queue: QuestionQueue,
@@ -373,13 +373,25 @@ class DashboardComponent implements Component, Focusable {
 	focused = false;
 	private activeTab: TabId = "all";
 	private selected = 0;
+	private rows: readonly Row[];
 
 	constructor(
-		private readonly rows: readonly Row[],
+		rows: readonly Row[],
 		private readonly ledger: UsageLedgerV1 | undefined,
 		private readonly done: (action: DashboardAction | undefined) => void,
 		private readonly palette: Palette = defaultPalette(),
-	) {}
+	) {
+		this.rows = rows;
+	}
+
+	updateRows(rows: readonly Row[]): void {
+		this.rows = rows;
+		// Clamp selection
+		const filtered = this.filteredRows();
+		if (this.selected >= filtered.length) {
+			this.selected = Math.max(0, filtered.length - 1);
+		}
+	}
 
 	invalidate(): void {}
 
@@ -474,7 +486,7 @@ export class CollapsibleDashboardComponent implements Component, Focusable {
 	expanded = false;
 	private readonly inner: DashboardComponent;
 	private readonly palette: Palette;
-	private readonly rows: readonly Row[];
+	private rows: readonly Row[];
 	private handle: OverlayHandle | undefined;
 
 	constructor(
@@ -490,6 +502,11 @@ export class CollapsibleDashboardComponent implements Component, Focusable {
 
 	setHandle(handle: OverlayHandle): void {
 		this.handle = handle;
+	}
+
+	updateRows(rows: readonly Row[]): void {
+		this.rows = rows;
+		this.inner.updateRows(rows);
 	}
 
 	invalidate(): void {}

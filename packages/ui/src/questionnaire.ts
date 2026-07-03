@@ -564,20 +564,132 @@ export class QuestionnaireComponent implements Component, Focusable {
 	}
 }
 
+const KEY_TAB = "\t";
+
+/**
+ * Collapsible overlay wrapper around QuestionnaireComponent.
+ * Starts collapsed (single-line badge). Tab expands/collapses.
+ * When expanded, delegates input to the inner QuestionnaireComponent.
+ * Calls `done()` when the questionnaire is fully answered.
+ */
+export class CollapsibleQuestionnaireComponent implements Component, Focusable {
+	focused = false;
+	private expanded = false;
+	private readonly inner: QuestionnaireComponent;
+	private readonly palette: Palette;
+	private readonly questionCount: number;
+	private handle: OverlayHandle | undefined;
+
+	constructor(
+		questionnaire: Questionnaire,
+		readonly done: (answers: Answers | undefined) => void,
+		opts: QuestionnaireRunOptions = {},
+	) {
+		this.palette = opts.palette ?? defaultPalette();
+		this.questionCount = questionnaire.length;
+		this.inner = new QuestionnaireComponent(questionnaire, done, opts);
+	}
+
+	/** Attach the overlay handle for focus control. */
+	setHandle(handle: OverlayHandle): void {
+		this.handle = handle;
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		if (!this.expanded) return this.renderCollapsed(width);
+		return this.renderExpanded(width);
+	}
+
+	handleInput(data: string): void {
+		if (data === KEY_TAB) {
+			if (this.expanded) {
+				this.expanded = false;
+				this.handle?.unfocus();
+			} else {
+				this.expanded = true;
+				this.handle?.focus();
+			}
+			return;
+		}
+		if (data === "\u001b" && this.expanded) {
+			this.expanded = false;
+			this.handle?.unfocus();
+			return;
+		}
+		if (this.expanded) {
+			this.inner.handleInput(data);
+		}
+	}
+
+	private renderCollapsed(width: number): string[] {
+		const p = this.focused ? this.palette : dimmedPalette(this.palette);
+		// Top line: ╭─ label ─── hint ─╮  (total = width)
+		// Overhead: ╭─␣ (3) + ␣ (1) + ␣ (1) + ␣─╮ (3) = 8
+		const label = `${this.questionCount} question${this.questionCount === 1 ? "" : "s"} pending`;
+		const hint = "Tab to expand";
+		const fillWidth = Math.max(width - 8 - label.length - hint.length, 0);
+		const fill = "─".repeat(fillWidth);
+		const top = p.dim(`╭─ ${label} ${fill} ${hint} ─╮`);
+		const bot = p.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+		return [top, bot];
+	}
+
+	private renderExpanded(width: number): string[] {
+		const p = this.focused ? this.palette : dimmedPalette(this.palette);
+		this.inner.focused = this.focused;
+		// Temporarily swap palette on inner for dim when unfocused
+		const lines = this.inner.render(width);
+		if (!this.focused) {
+			return lines.map((l) => p.dim(l));
+		}
+		return lines;
+	}
+}
+
+/** Minimal handle interface for overlay focus control. */
+export interface OverlayHandle {
+	focus(): void;
+	unfocus(opts?: { target?: unknown }): void;
+}
+
+function dimmedPalette(base: Palette): Palette {
+	return {
+		...base,
+		accent: base.dim,
+		heading: base.dim,
+		muted: base.dim,
+	};
+}
+
 /** Show a questionnaire as a focused component and resolve with the answers. */
 export function runQuestionnaire(
 	ctx: ExtensionContext,
 	questionnaire: Questionnaire,
 	opts: QuestionnaireRunOptions = {},
 ): Promise<Answers | undefined> {
+	let comp: CollapsibleQuestionnaireComponent | undefined;
 	return ctx.ui.custom<Answers | undefined>(
 		(_tui: TUI, theme, _keybindings, done) => {
 			const palette = paletteFromTheme(theme);
-			return new QuestionnaireComponent(questionnaire, done, {
+			comp = new CollapsibleQuestionnaireComponent(questionnaire, done, {
 				...opts,
 				palette,
 			});
+			return comp;
 		},
+		{
+			overlay: true,
+			overlayOptions: {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "60%",
+			},
+			onHandle: (handle: OverlayHandle) => {
+				comp?.setHandle(handle);
+			},
+		} as any,
 	);
 }
 
@@ -587,6 +699,7 @@ function paletteFromTheme(theme: unknown): Palette {
 		bold?: (text: string) => string;
 	} | null;
 	if (!t?.fg) return defaultPalette();
+	// biome-ignore lint/style/noNonNullAssertion: guarded above
 	return {
 		dim: (s) => t.fg!("dim", s),
 		muted: (s) => t.fg!("muted", s),

@@ -37,11 +37,13 @@ export {
 	spinnerFrame,
 } from "./progress.js";
 export {
+	CollapsibleQuestionnaireComponent,
 	type CommitResult,
 	commitQuestion,
 	initQuestionnaireState,
 	isShown,
 	moveCursor,
+	type OverlayHandle,
 	optionValue,
 	QuestionnaireComponent,
 	type QuestionnaireRenderOptions,

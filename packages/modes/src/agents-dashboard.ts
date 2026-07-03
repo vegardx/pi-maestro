@@ -483,6 +483,7 @@ function paletteFromTheme(theme: unknown): Palette {
 		bold?: (text: string) => string;
 	} | null;
 	if (!t?.fg || !t?.bold) return defaultPalette();
+	// biome-ignore lint/style/noNonNullAssertion: guarded above
 	return {
 		dim: (s) => t.fg!("dim", s),
 		muted: (s) => t.fg!("muted", s),

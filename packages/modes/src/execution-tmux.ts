@@ -47,6 +47,7 @@ export interface TmuxAgentState {
 	readonly agentName: string;
 	readonly worktreePath: string;
 	readonly sessionFile: string;
+	readonly startedAt: number;
 	status: TmuxAgentStatus;
 	shutdownSent: boolean;
 	assessmentSent: boolean;
@@ -383,6 +384,7 @@ export class TmuxFanout {
 			agentName: name,
 			worktreePath: result.path,
 			sessionFile,
+			startedAt: Date.now(),
 			status: "spawning",
 			shutdownSent: false,
 			assessmentSent: false,

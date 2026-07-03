@@ -45,9 +45,11 @@ export class OverlayManager {
 	attach(ctx: ExtensionContext): void {
 		this.ctx = ctx;
 		this.removeInputListener?.();
-		this.removeInputListener = ctx.ui.onTerminalInput((data) =>
-			this.handleTerminalInput(data),
-		);
+		if (ctx.ui.onTerminalInput) {
+			this.removeInputListener = ctx.ui.onTerminalInput((data) =>
+				this.handleTerminalInput(data),
+			);
+		}
 	}
 
 	/** Detach from context, remove listener. */

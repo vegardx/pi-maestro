@@ -556,7 +556,6 @@ export function createModesRuntime(
 		if (isTmuxAvailable() && !isAgentMode()) {
 			if (!tmuxFanout) {
 				_orchestratorCtx = ctx;
-				overlayManager.attach(ctx);
 				const planDir = join(plansRoot(), activeEngine.get().slug);
 				const extRoot = resolve(
 					dirname(fileURLToPath(import.meta.url)),
@@ -1054,6 +1053,9 @@ export function createModesRuntime(
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		if (!isAgentMode()) {
+			overlayManager.attach(ctx);
+		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
 		compactionInFlight = false;
@@ -1382,6 +1384,7 @@ export function createModesRuntime(
 	});
 
 	maestro.capabilities.register(CAPABILITIES.usage, usageLedger);
+	maestro.capabilities.register(CAPABILITIES.overlays, overlayManager);
 	maestro.capabilities.register(CAPABILITIES.modes, {
 		current: currentMode,
 		onChange(listener) {

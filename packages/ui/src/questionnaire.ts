@@ -13,7 +13,7 @@ import type {
 	Questionnaire,
 	QuestionOption,
 } from "@vegardx/pi-contracts";
-import { defaultPalette, type Palette, truncate } from "./format.js";
+import { defaultPalette, type Palette, padRight, truncate } from "./format.js";
 
 export function optionValue(option: QuestionOption): string {
 	return option.value ?? option.label;
@@ -198,21 +198,32 @@ export function renderQuestionnaire(
 	const palette = opts.palette ?? defaultPalette();
 	const question = questionnaire[state.index];
 	if (!question) return [];
-	const lines: string[] = [];
-	const border = palette.dim("─".repeat(width));
 
-	lines.push(border);
+	// Box geometry: │ content │ — 4 chars of overhead
+	const innerWidth = Math.max(width - 4, 0);
+	const topBorder = palette.dim(`╭${"─".repeat(Math.max(width - 2, 0))}╮`);
+	const botBorder = palette.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+	const boxLine = (content: string) =>
+		`${palette.dim("│")} ${padRight(content, innerWidth)} ${palette.dim("│")}`;
+	const emptyLine = boxLine("");
+
+	const lines: string[] = [];
+	lines.push(topBorder);
 
 	if (questionnaire.length > 1) {
-		lines.push(...renderTabs(questionnaire, state, width, palette));
-		lines.push("");
+		for (const tab of renderTabs(questionnaire, state, innerWidth, palette)) {
+			lines.push(boxLine(tab));
+		}
+		lines.push(emptyLine);
 	}
 
-	lines.push(palette.heading(truncate(question.question, width)));
+	lines.push(boxLine(palette.heading(truncate(question.question, innerWidth))));
 	if (question.context) {
-		lines.push(...wrap(question.context, width, palette));
+		for (const l of wrap(question.context, innerWidth, palette)) {
+			lines.push(boxLine(l));
+		}
 	}
-	lines.push("");
+	lines.push(emptyLine);
 
 	const recIdx = recommendedIndex(question);
 	for (let i = 0; i < (question.options?.length ?? 0); i++) {
@@ -228,43 +239,55 @@ export function renderQuestionnaire(
 		const label =
 			i === state.cursor ? palette.accent(option.label) : option.label;
 		lines.push(
-			truncate(`${cursor} ${box ? `${box} ` : ""}${label}${rec}`, width),
+			boxLine(
+				truncate(`${cursor} ${box ? `${box} ` : ""}${label}${rec}`, innerWidth),
+			),
 		);
 		if (option.description) {
-			lines.push(
-				...wrap(option.description, width - 4, palette).map((l) => `    ${l}`),
-			);
+			for (const l of wrap(option.description, innerWidth - 4, palette)) {
+				lines.push(boxLine(`    ${l}`));
+			}
 		}
 	}
 
 	if (state.noteEdit !== undefined) {
-		lines.push("");
-		lines.push(palette.accent(truncate(`    note: ${state.noteEdit}▌`, width)));
+		lines.push(emptyLine);
+		lines.push(
+			boxLine(
+				palette.accent(truncate(`    note: ${state.noteEdit}▌`, innerWidth)),
+			),
+		);
 	} else {
 		const existing = state.notes.get(question.id);
 		if (existing) {
-			lines.push("");
-			lines.push(palette.dim(truncate(`    note: ${existing}`, width)));
+			lines.push(emptyLine);
+			lines.push(
+				boxLine(palette.dim(truncate(`    note: ${existing}`, innerWidth))),
+			);
 		}
 	}
 
 	const highlighted = question.options?.[state.cursor];
 	if (highlighted?.preview) {
-		lines.push("");
-		lines.push(palette.dim("─".repeat(Math.min(width, 40))));
-		lines.push(...wrap(highlighted.preview, width, palette));
+		lines.push(emptyLine);
+		lines.push(boxLine(palette.dim("─".repeat(Math.min(innerWidth, 36)))));
+		for (const l of wrap(highlighted.preview, innerWidth, palette)) {
+			lines.push(boxLine(l));
+		}
 	}
 
 	if (state.freeText !== undefined) {
-		lines.push("");
-		lines.push(palette.accent(truncate(`› ${state.freeText}▌`, width)));
+		lines.push(emptyLine);
+		lines.push(
+			boxLine(palette.accent(truncate(`› ${state.freeText}▌`, innerWidth))),
+		);
 	} else if (question.allowFreeText) {
-		lines.push("");
-		lines.push(palette.muted("(press 't' to type a custom answer)"));
+		lines.push(emptyLine);
+		lines.push(boxLine(palette.muted("(press 't' to type a custom answer)")));
 	}
 
-	lines.push("");
-	lines.push(border);
+	lines.push(emptyLine);
+	lines.push(botBorder);
 	lines.push(
 		palette.muted("enter select · ↑/↓ navigate · n note · t other · esc close"),
 	);

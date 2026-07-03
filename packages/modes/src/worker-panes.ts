@@ -20,9 +20,28 @@ export class WorkerPanes {
 	/** The first pane created on the right side (used as layout target). */
 	private columnPaneId: string | undefined;
 	private _isOpen = false;
+	/** Re-entry guard — prevents concurrent sync() calls from racing. */
+	private syncing = false;
+	/** When true, another sync is needed after the current one finishes. */
+	private syncPending = false;
+	/** Last known agents snapshot for deferred sync. */
+	private pendingAgents: ReadonlyMap<string, TmuxAgentState> | undefined;
+	/** Track last-seen status per agent to skip token-only updates. */
+	private lastStatuses = new Map<string, string>();
 
 	isOpen(): boolean {
 		return this._isOpen;
+	}
+
+	/**
+	 * Returns true only when an agent's status has changed since last check.
+	 * Prevents sync on token-only updates.
+	 */
+	shouldSync(agentId: string, status: string): boolean {
+		const prev = this.lastStatuses.get(agentId);
+		if (prev === status) return false;
+		this.lastStatuses.set(agentId, status);
+		return true;
 	}
 
 	/**
@@ -99,10 +118,35 @@ export class WorkerPanes {
 	/**
 	 * Reconcile panes with the current set of active agents.
 	 * Adds panes for new agents, removes panes for finished ones.
+	 * Re-entry safe: concurrent calls are coalesced.
 	 */
 	async sync(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
 		if (!this._isOpen) return;
 
+		// Re-entry guard: if already syncing, queue a re-sync
+		if (this.syncing) {
+			this.syncPending = true;
+			this.pendingAgents = activeAgents;
+			return;
+		}
+		this.syncing = true;
+		try {
+			await this.doSync(activeAgents);
+		} finally {
+			this.syncing = false;
+			// If a sync was requested while we were busy, run it now
+			if (this.syncPending && this.pendingAgents) {
+				this.syncPending = false;
+				const agents = this.pendingAgents;
+				this.pendingAgents = undefined;
+				await this.sync(agents);
+			}
+		}
+	}
+
+	private async doSync(
+		activeAgents: ReadonlyMap<string, TmuxAgentState>,
+	): Promise<void> {
 		const toShow = this.activeAgentList(activeAgents);
 		const activeNames = new Set(toShow.map((a) => a.agentName));
 

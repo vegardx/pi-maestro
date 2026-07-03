@@ -573,7 +573,11 @@ export function createModesRuntime(
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						if (tmuxFanout) {
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
-							if (workerPanes.isOpen()) {
+							// Only sync worker panes on status transitions
+							if (
+								workerPanes.isOpen() &&
+								workerPanes.shouldSync(id, state.status)
+							) {
 								workerPanes
 									.sync(tmuxFanout.snapshot().agents)
 									.catch(() => {});

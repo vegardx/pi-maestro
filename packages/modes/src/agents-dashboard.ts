@@ -483,16 +483,14 @@ function paletteFromTheme(theme: unknown): Palette {
 		bold?: (text: string) => string;
 	} | null;
 	if (!t?.fg || !t?.bold) return defaultPalette();
-	const fg = t.fg;
-	const bold = t.bold;
 	return {
-		dim: (s) => fg("dim", s),
-		muted: (s) => fg("muted", s),
-		accent: (s) => fg("accent", s),
-		heading: (s) => bold(fg("text", s)),
-		success: (s) => fg("success", s),
-		warning: (s) => fg("warning", s),
-		error: (s) => fg("error", s),
-		info: (s) => fg("accent", s),
+		dim: (s) => t.fg!("dim", s),
+		muted: (s) => t.fg!("muted", s),
+		accent: (s) => t.fg!("accent", s),
+		heading: (s) => t.bold!(t.fg!("text", s)),
+		success: (s) => t.fg!("success", s),
+		warning: (s) => t.fg!("warning", s),
+		error: (s) => t.fg!("error", s),
+		info: (s) => t.fg!("accent", s),
 	};
 }

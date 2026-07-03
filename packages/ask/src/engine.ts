@@ -15,6 +15,7 @@ import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { getCapability } from "@vegardx/pi-core";
 import {
 	CollapsibleQuestionnaireComponent,
+	paletteFromTheme,
 	runQuestionnaire,
 } from "@vegardx/pi-ui";
 
@@ -73,6 +74,9 @@ export class AskEngine {
 		source: AskSource,
 	): Promise<Answers> {
 		return new Promise<Answers>((resolve) => {
+			const palette = this.#ctx?.ui
+				? paletteFromTheme(this.#ctx.ui.theme)
+				: undefined;
 			const comp = new CollapsibleQuestionnaireComponent(
 				questions,
 				(answers) => {
@@ -82,6 +86,7 @@ export class AskEngine {
 					}
 					resolve(answers ?? []);
 				},
+				{ palette },
 			);
 			overlays.mount("ask", comp);
 			if (source === "main") {

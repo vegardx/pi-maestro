@@ -108,15 +108,6 @@ export function classifyBashFast(command: string): BashIntent | null {
 		};
 	}
 
-	// ls → ls tool
-	if (/^ls(\s|$)/.test(trimmed)) {
-		return {
-			allowed: false,
-			reason: "Use the ls tool instead.",
-			suggestedTool: "ls",
-			intent: "listing directory",
-		};
-	}
 
 	// curl/wget → webfetch tool
 	if (/^(curl|wget)\s/.test(trimmed)) {

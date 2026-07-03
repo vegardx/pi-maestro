@@ -1159,7 +1159,12 @@ export function createModesRuntime(
 	});
 
 	pi.on("tool_call", async (event: ToolCallEvent) => {
-		if (state.mode !== "plan" && state.mode !== "auto") return;
+		if (
+			state.mode !== "plan" &&
+			state.mode !== "auto" &&
+			state.mode !== "worker"
+		)
+			return;
 		if (event.toolName === "ask") return;
 		if (event.toolName === "bash") {
 			const command =
@@ -1167,15 +1172,21 @@ export function createModesRuntime(
 			// Fast path: regex classification
 			const fast = classifyBashFast(command);
 			if (fast !== null) {
-				if (!fast.allowed) return { block: true, reason: fast.reason };
-				if (fast.suggestedTool)
+				// Workers: only block on tool suggestions, not on destructive patterns
+				if (fast.suggestedTool) {
 					return {
 						block: true,
 						reason: `Use the ${fast.suggestedTool} tool instead.`,
 					};
+				}
+				if (!fast.allowed && state.mode !== "worker") {
+					return { block: true, reason: fast.reason };
+				}
 				return;
 			}
-			// Ambiguous: LLM classification
+			// Workers: ambiguous commands are allowed (no LLM classifier)
+			if (state.mode === "worker") return;
+			// Ambiguous: LLM classification (orchestrator only)
 			const intent = await classifyBashIntent(command, {
 				model: MAESTRO_ENV.classifierModel,
 			});

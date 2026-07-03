@@ -29,25 +29,36 @@ export class WorkerPanes {
 
 		// Create first pane as a vertical split (30% right)
 		const first = toShow[0];
-		const firstPaneId = await splitWindow({
-			horizontal: true,
-			percent: 30,
-			detach: true,
-			command: this.attachCommand(first.agentName),
-		});
+		let firstPaneId: string;
+		try {
+			firstPaneId = await splitWindow({
+				horizontal: true,
+				percent: 30,
+				detach: true,
+				command: this.attachCommand(first.agentName),
+			});
+		} catch {
+			// Terminal too small to split
+			return;
+		}
 		this.columnPaneId = firstPaneId;
 		this.panes.set(first.agentName, firstPaneId);
 
 		// Stack remaining agents below the first
 		for (let i = 1; i < toShow.length; i++) {
 			const agent = toShow[i];
-			const paneId = await splitWindow({
-				target: this.columnPaneId,
-				horizontal: false,
-				detach: true,
-				command: this.attachCommand(agent.agentName),
-			});
-			this.panes.set(agent.agentName, paneId);
+			try {
+				const paneId = await splitWindow({
+					target: this.columnPaneId,
+					horizontal: false,
+					detach: true,
+					command: this.attachCommand(agent.agentName),
+				});
+				this.panes.set(agent.agentName, paneId);
+			} catch {
+				// No space for more panes — stop stacking
+				break;
+			}
 		}
 
 		// Rebalance the right column evenly
@@ -102,24 +113,34 @@ export class WorkerPanes {
 
 			if (this.panes.size === 0) {
 				// Column was fully emptied — recreate it
-				const paneId = await splitWindow({
-					horizontal: true,
-					percent: 30,
-					detach: true,
-					command: this.attachCommand(agent.agentName),
-				});
-				this.columnPaneId = paneId;
-				this.panes.set(agent.agentName, paneId);
+				try {
+					const paneId = await splitWindow({
+						horizontal: true,
+						percent: 30,
+						detach: true,
+						command: this.attachCommand(agent.agentName),
+					});
+					this.columnPaneId = paneId;
+					this.panes.set(agent.agentName, paneId);
+				} catch {
+					// Terminal too small
+					break;
+				}
 			} else {
 				// Stack below existing panes
 				const target = this.columnPaneId ?? [...this.panes.values()][0];
-				const paneId = await splitWindow({
-					target,
-					horizontal: false,
-					detach: true,
-					command: this.attachCommand(agent.agentName),
-				});
-				this.panes.set(agent.agentName, paneId);
+				try {
+					const paneId = await splitWindow({
+						target,
+						horizontal: false,
+						detach: true,
+						command: this.attachCommand(agent.agentName),
+					});
+					this.panes.set(agent.agentName, paneId);
+				} catch {
+					// No space for more panes
+					break;
+				}
 			}
 		}
 

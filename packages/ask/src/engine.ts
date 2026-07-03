@@ -6,31 +6,37 @@
 // their own handler, where a live context is always available.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	OverlaysCapabilityV1,
+	Questionnaire,
+} from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { getCapability } from "@vegardx/pi-core";
 import {
 	CollapsibleQuestionnaireComponent,
 	runQuestionnaire,
 } from "@vegardx/pi-ui";
-import type { OverlayManager } from "@vegardx/pi-modes";
 
 export type AskSource = "main" | string;
 
 export class AskEngine {
 	#ctx: ExtensionContext | undefined;
 	#queued: Questionnaire = [];
-	#overlayManager: OverlayManager | undefined;
+
+	private get overlays(): OverlaysCapabilityV1 | undefined {
+		return getCapability(CAPABILITIES.overlays) as
+			| OverlaysCapabilityV1
+			| undefined;
+	}
 
 	/** Update the context the engine renders through. Called on events. */
 	setContext(ctx: ExtensionContext): void {
 		this.#ctx = ctx;
 	}
 
-	/** Set the overlay manager for widget-based rendering. */
-	setOverlayManager(manager: OverlayManager): void {
-		this.#overlayManager = manager;
-	}
+	/** @deprecated Use overlays capability instead. */
+	setOverlayManager(_manager: unknown): void {}
 
 	/**
 	 * Present a questionnaire immediately and resolve with answers.
@@ -50,9 +56,10 @@ export class AskEngine {
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return [];
 
-		// Use overlay manager if available
-		if (this.#overlayManager) {
-			return this.presentViaOverlay(questions, source);
+		// Use overlay manager if available (widget-based, correct position)
+		const overlays = this.overlays;
+		if (overlays) {
+			return this.presentViaOverlay(overlays, questions, source);
 		}
 
 		// Fallback: legacy blocking dialog
@@ -61,24 +68,24 @@ export class AskEngine {
 	}
 
 	private presentViaOverlay(
+		overlays: OverlaysCapabilityV1,
 		questions: Questionnaire,
 		source: AskSource,
 	): Promise<Answers> {
-		const mgr = this.#overlayManager!;
 		return new Promise<Answers>((resolve) => {
 			const comp = new CollapsibleQuestionnaireComponent(
 				questions,
 				(answers) => {
-					mgr.unmount("ask");
+					overlays.unmount("ask");
 					if (source === "main") {
-						mgr.unblockInput();
+						overlays.unblockInput();
 					}
 					resolve(answers ?? []);
 				},
 			);
-			mgr.mount("ask", comp);
+			overlays.mount("ask", comp);
 			if (source === "main") {
-				mgr.blockInput();
+				overlays.blockInput();
 			} else {
 				// Worker questions: non-blocking, collapsed badge
 				comp.focused = false;

@@ -19,6 +19,7 @@ export const CAPABILITIES = {
 	commit: "commit.v1",
 	modes: "modes.v1",
 	promptAssist: "prompt-assist.v1",
+	overlays: "overlays.v1",
 } as const;
 
 export type CapabilityId = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -79,6 +80,23 @@ export interface PromptAssistCapabilityV1 {
 }
 
 /** Maps each capability id to its interface for the typed registry. */
+export interface OverlaysCapabilityV1 {
+	/** Mount an overlay widget above the editor. */
+	mount(id: string, component: unknown): void;
+	/** Unmount an overlay widget. */
+	unmount(id: string): void;
+	/** Expand + focus a specific overlay. */
+	focusOverlay(id: string): void;
+	/** Return focus to input, collapse all. */
+	focusInput(): void;
+	/** Block input (main-agent questions). Auto-expands ask overlay. */
+	blockInput(): void;
+	/** Unblock input. */
+	unblockInput(): void;
+	/** Whether input is currently blocked. */
+	readonly isInputBlocked: boolean;
+}
+
 export interface CapabilityMap {
 	[CAPABILITIES.subagents]: SubagentsCapabilityV1;
 	[CAPABILITIES.ask]: AskCapabilityV1;
@@ -87,4 +105,5 @@ export interface CapabilityMap {
 	[CAPABILITIES.commit]: CommitCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;
+	[CAPABILITIES.overlays]: OverlaysCapabilityV1;
 }

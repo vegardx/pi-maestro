@@ -3,8 +3,16 @@
  * terminal output from an active worker agent (read-only attach).
  */
 
-import { killPane, selectLayout, splitWindow } from "@vegardx/pi-tmux";
+import {
+	killPane,
+	selectLayout,
+	splitWindow,
+	tmuxExec,
+} from "@vegardx/pi-tmux";
 import type { TmuxAgentState } from "./execution-tmux.js";
+
+/** Minimum rows per worker pane for useful output. */
+const MIN_ROWS_PER_PANE = 6;
 
 export class WorkerPanes {
 	/** Map from agent name → tmux pane ID. */
@@ -44,9 +52,12 @@ export class WorkerPanes {
 		this.columnPaneId = firstPaneId;
 		this.panes.set(first.agentName, firstPaneId);
 
+		// Determine how many additional panes fit
+		const maxPanes = await this.maxPanesForColumn(firstPaneId);
+		const remaining = toShow.slice(1, maxPanes);
+
 		// Stack remaining agents below the first
-		for (let i = 1; i < toShow.length; i++) {
-			const agent = toShow[i];
+		for (const agent of remaining) {
 			try {
 				const paneId = await splitWindow({
 					target: this.columnPaneId,
@@ -107,9 +118,14 @@ export class WorkerPanes {
 			}
 		}
 
-		// Add panes for new agents
+		// Add panes for new agents (respect height limit)
+		const maxPanes = this.columnPaneId
+			? await this.maxPanesForColumn(this.columnPaneId)
+			: 1;
+
 		for (const agent of toShow) {
 			if (this.panes.has(agent.agentName)) continue;
+			if (this.panes.size >= maxPanes) break;
 
 			if (this.panes.size === 0) {
 				// Column was fully emptied — recreate it
@@ -185,5 +201,29 @@ export class WorkerPanes {
 		} catch {
 			// Layout may fail if panes were killed concurrently
 		}
+	}
+
+	/**
+	 * Query the height of a pane and calculate max panes that fit
+	 * with at least MIN_ROWS_PER_PANE rows each.
+	 */
+	private async maxPanesForColumn(paneId: string): Promise<number> {
+		try {
+			const stdout = await tmuxExec([
+				"display-message",
+				"-t",
+				paneId,
+				"-p",
+				"#{pane_height}",
+			]);
+			const height = Number.parseInt(stdout.trim(), 10);
+			if (Number.isFinite(height) && height > 0) {
+				// Each pane needs MIN_ROWS_PER_PANE + 1 for the separator
+				return Math.max(1, Math.floor(height / (MIN_ROWS_PER_PANE + 1)));
+			}
+		} catch {
+			// Fallback if query fails
+		}
+		return 4;
 	}
 }

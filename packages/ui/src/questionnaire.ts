@@ -574,7 +574,7 @@ const KEY_TAB = "\t";
  */
 export class CollapsibleQuestionnaireComponent implements Component, Focusable {
 	focused = false;
-	private expanded = false;
+	expanded = false;
 	private readonly inner: QuestionnaireComponent;
 	private readonly palette: Palette;
 	private readonly questionCount: number;

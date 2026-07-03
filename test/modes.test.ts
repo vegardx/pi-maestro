@@ -1244,6 +1244,42 @@ describe("modes runtime", () => {
 		expect(allowed).toBeUndefined();
 	});
 
+	it("does not block ship/review/write/edit in auto mode", async () => {
+		const host = fakeHost();
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
+		});
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		// Transition to auto mode
+		await host.shortcuts.get("shift+tab").handler(host.ctx);
+		expect(runtime.currentMode()).toBe("auto");
+
+		// These tools should NOT be blocked in auto mode
+		for (const toolName of ["ship", "review", "edit", "write"]) {
+			const result = await host.handlers.get("tool_call")?.[0]({
+				toolName,
+				input: {},
+			});
+			expect(result).toBeUndefined();
+		}
+	});
+
+	it("blocks ship/review/write/edit in plan mode", async () => {
+		const host = fakeHost();
+		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+
+		for (const toolName of ["ship", "review", "edit", "write"]) {
+			const result = await host.handlers.get("tool_call")?.[0]({
+				toolName,
+				input: {},
+			});
+			expect(result).toMatchObject({ block: true });
+			expect(result.reason).toContain("disabled in plan mode");
+		}
+	});
+
 	it("cycles plan mode to auto and flushes queued ask on turn_end", async () => {
 		const host = fakeHost();
 		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {

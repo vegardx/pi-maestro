@@ -1139,8 +1139,12 @@ export function createModesRuntime(
 				};
 			return;
 		}
-		const reason = toolBlockedInPlanMode(event.toolName);
-		if (reason) return { block: true, reason };
+		// In auto mode, non-bash tools are gated by the active-tools filter
+		// (+ bridge force-add for workers). Only block in plan mode.
+		if (state.mode === "plan") {
+			const reason = toolBlockedInPlanMode(event.toolName);
+			if (reason) return { block: true, reason };
+		}
 	});
 
 	pi.on("turn_start", () => {

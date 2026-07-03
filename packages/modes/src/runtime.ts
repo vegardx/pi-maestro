@@ -1172,14 +1172,21 @@ export function createModesRuntime(
 			// Fast path: regex classification
 			const fast = classifyBashFast(command);
 			if (fast !== null) {
-				// Workers: only block on tool suggestions, not on destructive patterns
+				// Workers: only block on tool suggestions + rm outside worktree
 				if (fast.suggestedTool) {
 					return {
 						block: true,
 						reason: `Use the ${fast.suggestedTool} tool instead.`,
 					};
 				}
-				if (!fast.allowed && state.mode !== "worker") {
+				if (!fast.allowed && state.mode === "worker") {
+					// Workers can mutate, but block rm with absolute paths
+					if (/\b(rm|rmdir)\s+.*\//.test(command)) {
+						return { block: true, reason: fast.reason };
+					}
+					return;
+				}
+				if (!fast.allowed) {
 					return { block: true, reason: fast.reason };
 				}
 				return;

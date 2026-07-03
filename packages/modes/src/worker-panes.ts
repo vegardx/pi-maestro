@@ -3,12 +3,7 @@
  * terminal output from an active worker agent (read-only attach).
  */
 
-import {
-	killPane,
-	selectLayout,
-	splitWindow,
-	tmuxExec,
-} from "@vegardx/pi-tmux";
+import { killPane, splitWindow, tmuxExec } from "@vegardx/pi-tmux";
 import type { TmuxAgentState } from "./execution-tmux.js";
 
 /** Minimum rows per worker pane for useful output. */
@@ -113,10 +108,6 @@ export class WorkerPanes {
 		}
 
 		// Rebalance the right column evenly
-		if (this.panes.size > 1 && this.columnPaneId) {
-			await this.rebalance();
-		}
-
 		this._isOpen = true;
 		this.opening = false;
 	}
@@ -235,11 +226,6 @@ export class WorkerPanes {
 			this.columnPaneId = undefined;
 			return;
 		}
-
-		// Rebalance
-		if (this.panes.size > 1) {
-			await this.rebalance();
-		}
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
@@ -304,18 +290,6 @@ export class WorkerPanes {
 		}
 		// Don't auto-close on shrink — our own split causes a resize event
 		// that would create an open/close loop.
-	}
-
-	private async rebalance(): Promise<void> {
-		// Apply even-vertical layout to the right-side column.
-		// We target any pane in the column — tmux applies the layout to its window.
-		const target = this.columnPaneId ?? [...this.panes.values()][0];
-		if (!target) return;
-		try {
-			await selectLayout(target, "even-vertical");
-		} catch {
-			// Layout may fail if panes were killed concurrently
-		}
 	}
 
 	/**

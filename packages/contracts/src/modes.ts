@@ -1,6 +1,6 @@
 // Permission modes. Ordered as the Shift+Tab cycle presents them.
 
-export const MODE_NAMES = ["hack", "plan", "ask", "auto"] as const;
+export const MODE_NAMES = ["hack", "plan", "auto"] as const;
 
 export type ModeName = (typeof MODE_NAMES)[number];
 
@@ -22,7 +22,7 @@ export interface ModesExecutionStatus {
 	readonly mode: ModeName;
 	readonly activePlanSlug?: string;
 	readonly activeDeliverableId?: string;
-	/** True while the session is actively executing a deliverable (ask/auto). */
+	/** True while the session is actively executing a deliverable. */
 	readonly executing: boolean;
 	/** True while a modes-owned compaction is in flight. */
 	readonly compactionInFlight: boolean;

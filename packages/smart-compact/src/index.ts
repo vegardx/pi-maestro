@@ -209,11 +209,7 @@ export default defineExtension(
 			// deliverable here, defer to its working-budget trigger and the
 			// deliverable-slice summariser. No-op gracefully when modes is absent.
 			const exec = maestro.capabilities.get(CAPABILITIES.modes)?.execution();
-			if (
-				exec?.executing &&
-				exec.activeDeliverableId &&
-				(exec.mode === "ask" || exec.mode === "auto")
-			) {
+			if (exec?.executing && exec.activeDeliverableId && exec.mode === "auto") {
 				return;
 			}
 			const { compactAt } = readSmartCompactSettings(ctx.cwd);

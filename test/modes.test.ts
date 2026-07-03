@@ -712,21 +712,21 @@ describe("mode state and policy", () => {
 				customType: MODES_STATE_ENTRY,
 				data: {
 					version: 1,
-					mode: "ask",
+					mode: "auto",
 					activePlanSlug: "new",
 					updatedAt: "2",
 				},
 			},
 		] as any[];
 		expect(hydrateModesState(entries)).toEqual({
-			mode: "ask",
+			mode: "auto",
 			activePlanSlug: "new",
 			execution: { stage: "idle" },
 			updatedAt: "2",
 		});
 	});
 
-	it("narrows active tools in plan mode", () => {
+	it("narrows active tools in plan and auto mode", () => {
 		const tools = [
 			"read",
 			"bash",
@@ -736,20 +736,30 @@ describe("mode state and policy", () => {
 			"plan",
 			"ask",
 		];
+		// Plan mode: read-only + plan tools + bash (via classifier) + always-allowed
 		expect(
 			computeActiveTools({
 				mode: "plan",
 				availableTools: tools,
 				baselineTools: tools,
 			}),
-		).toEqual(["read", "deliverable", "task", "plan", "ask"]);
+		).toEqual(["read", "bash", "deliverable", "task", "plan", "ask"]);
+		// Auto mode: same restricted set as plan (bash gated by classifier)
 		expect(
 			computeActiveTools({
 				mode: "auto",
 				availableTools: tools,
 				baselineTools: ["edit"],
 			}),
-		).toEqual(["edit"]);
+		).toEqual(["read", "bash", "deliverable", "task", "plan", "ask"]);
+		// Hack mode: full baseline
+		expect(
+			computeActiveTools({
+				mode: "hack",
+				availableTools: tools,
+				baselineTools: tools,
+			}),
+		).toEqual(tools);
 	});
 
 	it("classifies bash commands for plan mode", () => {
@@ -906,7 +916,6 @@ describe("modes runtime", () => {
 				"plan",
 				"implement",
 				"hack",
-				"ask",
 				"auto",
 				"answer",
 				"review",
@@ -1027,6 +1036,7 @@ describe("modes runtime", () => {
 		await host.commands.get("plan").handler("My Plan", host.ctx);
 		expect(host.activeTools()).toEqual([
 			"read",
+			"bash",
 			"deliverable",
 			"task",
 			"plan",
@@ -1044,7 +1054,7 @@ describe("modes runtime", () => {
 		expect(allowed).toBeUndefined();
 	});
 
-	it("cycles plan mode through the picker and flushes queued ask", async () => {
+	it("cycles plan mode to auto and flushes queued ask on turn_end", async () => {
 		const host = fakeHost();
 		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
 			store,
@@ -1064,31 +1074,17 @@ describe("modes runtime", () => {
 		expect(askBatches).toEqual([[{ id: "q", question: "Q?" }]]);
 	});
 
-	it("picker 'Implement (auto)' starts execution, not just a mode switch", async () => {
-		const gitDir = mkdtempSync(join(tmpdir(), "maestro-picker-"));
-		execSync("git init -b main -q", { cwd: gitDir });
-		execSync("git config user.email t@t.t && git config user.name t", {
-			cwd: gitDir,
+	it("cycle from plan mode transitions to auto without starting execution", async () => {
+		const host = fakeHost();
+		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
+			store,
+			now,
 		});
-		writeFileSync(join(gitDir, "f.txt"), "x");
-		execSync("git add -A && git commit -q -m init", { cwd: gitDir });
-		try {
-			const host = fakeHost();
-			host.ctx.cwd = gitDir;
-			const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
-				store,
-				now,
-			});
-			await host.commands.get("plan").handler("My Plan", host.ctx);
-			runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
-			runtime.setMode("plan" as ModeName, host.ctx as any);
-			// select() is stubbed to return "Auto \u2014 implement autonomously".
-			await runtime.cycle(host.ctx as any);
-			expect(runtime.currentMode()).toBe("auto");
-			expect(host.notifications).toContain("Started a.");
-		} finally {
-			rmSync(gitDir, { recursive: true, force: true });
-		}
+		await host.commands.get("plan").handler("My Plan", host.ctx);
+		runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
+		runtime.setMode("plan" as ModeName, host.ctx as any);
+		await runtime.cycle(host.ctx as any);
+		expect(runtime.currentMode()).toBe("auto");
 	});
 
 	it("/plan opens a draft and names+persists it from the first message", async () => {

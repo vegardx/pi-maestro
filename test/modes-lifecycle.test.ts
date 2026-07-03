@@ -181,13 +181,13 @@ describe("execution lifecycle persistence", () => {
 		const hydrated = hydrateModesState([
 			stateEntry({
 				version: 1,
-				mode: "ask",
+				mode: "auto",
 				activePlanSlug: "p1",
 				updatedAt: now(),
 			}),
 		]);
 		expect(hydrated?.execution).toEqual({ stage: "idle" });
-		expect(hydrated?.mode).toBe("ask");
+		expect(hydrated?.mode).toBe("auto");
 	});
 });
 

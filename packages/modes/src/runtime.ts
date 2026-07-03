@@ -76,10 +76,8 @@ import {
 	type Deliverable,
 	deliverables,
 	derivePlanName,
-	effectiveDependsOn,
 	findDeliverable,
 	gatingTasks,
-	type Plan,
 	planRepoMismatch,
 	readyDeliverables,
 	repoFor,
@@ -250,7 +248,7 @@ export function createModesRuntime(
 				settings: ReturnType<typeof readModesCompactionSettings>;
 		  }
 		| undefined {
-		if (state.mode !== "ask" && state.mode !== "auto") return undefined;
+		if (state.mode !== "auto") return undefined;
 		const entries = ctx.sessionManager?.getEntries?.() ?? [];
 		const text = collectBudgetText(entries);
 		const seed = estimateTokens(text.seed);
@@ -406,32 +404,7 @@ export function createModesRuntime(
 		draftExplicitName = undefined;
 	}
 
-	async function planToAsk(ctx: ExtensionContext): Promise<void> {
-		if (!ctx.hasUI || !engine) {
-			await runImplement("", ctx);
-			return;
-		}
-		const plan = engine.get();
-		const summary = executionSummary(plan);
-		const title = summary
-			? `Ready to implement \u2014 ${summary}`
-			: "Ready to implement";
-		const choice = await ctx.ui.select(title, [
-			"Auto \u2014 implement autonomously",
-			"Hack \u2014 implement with full context",
-			"Ask \u2014 implement with confirmations",
-			"Keep planning",
-		]);
-		if (choice?.startsWith("Auto")) await runImplement("", ctx);
-		else if (choice?.startsWith("Hack")) await runImplement("--hack", ctx);
-		else if (choice?.startsWith("Ask")) await runImplement("--ask", ctx);
-	}
-
 	async function cycle(ctx: ExtensionContext): Promise<void> {
-		if (state.mode === "plan") {
-			await planToAsk(ctx);
-			return;
-		}
 		setMode(nextMode(state.mode), ctx);
 	}
 
@@ -557,7 +530,7 @@ export function createModesRuntime(
 		},
 	});
 
-	for (const mode of ["hack", "ask", "auto"] as const) {
+	for (const mode of ["hack", "auto"] as const) {
 		pi.registerCommand(mode, {
 			description: `Switch to Maestro ${mode} mode.`,
 			handler: async (_args: string, ctx: ExtensionCommandContext) => {
@@ -574,11 +547,7 @@ export function createModesRuntime(
 		if (!engine) return;
 		finalizeDraftPlan(ctx);
 		const activeEngine = engine;
-		const mode = args.includes("--hack")
-			? "hack"
-			: args.includes("--ask")
-				? "ask"
-				: "auto";
+		const mode = args.includes("--hack") ? "hack" : "auto";
 		setMode(mode as ModeName, ctx);
 
 		// Tmux fanout: spawn agents in isolated tmux sessions with RPC.
@@ -1068,13 +1037,17 @@ export function createModesRuntime(
 	});
 
 	pi.registerShortcut("shift+tab", {
-		description: "Cycle Maestro mode: hack → plan → ask → auto.",
+		description: "Cycle Maestro mode: hack → plan → auto.",
 		handler: cycle,
 	});
 
 	pi.on("before_agent_start", (event) => {
 		if (state.mode === "plan") {
 			const preamble = buildPlanModePreamble(engine);
+			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+		}
+		if (state.mode === "hack" && tmuxFanout) {
+			const preamble = buildHackModePreamble();
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
 		if (tmuxFanout) {
@@ -1193,7 +1166,7 @@ export function createModesRuntime(
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;
 		}
-		if (state.mode !== "ask" && state.mode !== "auto") return;
+		if (state.mode !== "auto") return;
 
 		const snapshot = budgetSnapshot(ctx);
 		if (!snapshot || !engine) return;
@@ -1577,21 +1550,22 @@ export { PLAN_CONTAINER };
 function buildPlanModePreamble(engine: PlanEngine | undefined): string {
 	const isNew = !engine || engine.isDraft();
 	const header = isNew
-		? "You are in PLAN MODE creating a new plan."
+		? "You are in PLAN MODE. Structure the user's request into deliverables and tasks."
 		: `You are in PLAN MODE updating plan \`${engine.get().slug}\`.`;
 
 	return `${header}
 
-Your job: structure the user's request into deliverables and tasks. Do NOT implement, write code, or output diffs.
+Before creating deliverables:
+- Identify ambiguous decisions (error types, edge cases, API shapes)
+- Ask the user to resolve them (batch questions, offer options with the ask tool when high confidence, or ask in plain text for open-ended questions)
+- Do NOT create deliverables until decisions are resolved
 
-Workflow:
+When you have enough information (all design questions answered, scope clear, dependencies mappable):
 1. If multi-repo: register repos with \`deliverable register-repo\`.
 2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
-3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files to edit, functions to create, behavior to ensure. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the worker lifecycle.
-4. After all tool calls, write your response in this exact format:
-   - A 1-3 sentence summary of what the plan accomplishes (plain English, no IDs).
-   - Then call \`plan()\` to display the plan summary.
-   - End with: "Ready to implement. Switch to auto or run /implement."
+3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files, functions, behavior. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the worker lifecycle.
+4. After all tool calls, call \`plan()\` to display the result.
+5. End with: "Ready to implement."
 
 Rules:
 - Be concise. No narration, no thinking out loud, no explanations between tool calls.
@@ -1599,53 +1573,8 @@ Rules:
 - Do NOT use json or markdown views.
 - Each deliverable = one PR. Keep them small and focused.
 - For multi-repo: assign deliverables to repos with \`repo: <key>\`.
-- Do NOT read files unless the user's request is ambiguous and you need to clarify scope.`;
-}
-
-/**
- * Compute a one-line execution summary for the picker title:
- * "N deliverables, sequential" or "N deliverables, up to M parallel"
- */
-function executionSummary(plan: Pick<Plan, "nodes">): string | undefined {
-	const flat = deliverables(plan).filter(
-		(d) => !d.lifecycle && d.status !== "shipped" && d.status !== "abandoned",
-	);
-	if (flat.length === 0) return undefined;
-	const maxParallel = computeMaxParallelism(plan, flat);
-	if (maxParallel <= 1) {
-		return `${flat.length} deliverable${flat.length > 1 ? "s" : ""}, sequential`;
-	}
-	return `${flat.length} deliverables, up to ${maxParallel} parallel`;
-}
-
-/** Topological-level simulation: max wave width = max parallelism. */
-function computeMaxParallelism(
-	plan: Pick<Plan, "nodes">,
-	flat: Deliverable[],
-): number {
-	const ids = new Set(flat.map((d) => d.id));
-	const depCounts = new Map<string, number>();
-	for (const d of flat) {
-		const deps = effectiveDependsOn(plan, d).filter((dep) => ids.has(dep));
-		depCounts.set(d.id, deps.length);
-	}
-	let maxWave = 0;
-	const remaining = new Set(ids);
-	while (remaining.size > 0) {
-		const wave = [...remaining].filter((id) => (depCounts.get(id) ?? 0) === 0);
-		if (wave.length === 0) break;
-		maxWave = Math.max(maxWave, wave.length);
-		for (const id of wave) {
-			remaining.delete(id);
-			for (const other of remaining) {
-				const d = flat.find((x) => x.id === other);
-				if (d && effectiveDependsOn(plan, d).includes(id)) {
-					depCounts.set(other, (depCounts.get(other) ?? 1) - 1);
-				}
-			}
-		}
-	}
-	return maxWave;
+- Do NOT read files unless the user's request is ambiguous and you need to clarify scope.
+- Do NOT implement code yourself.`;
 }
 
 function buildOrchestratorPreamble(
@@ -1685,17 +1614,15 @@ ${workerLines.join("\n") || "  (none currently running)"}${warningBlock}
 You can observe agent status and intervene when needed:
 - If an agent is looping (high review count), steer it to ship.
 - If an agent is stuck idle, check if tasks are truly done or if it needs guidance.
-- You can see agent subprocesses (lenses) via their review cycle count.
-- When the user asks about agents/workers, summarize their state from the table above.
 
-You are free to:
-- Answer questions from the user.
-- Add new deliverables or tasks (they will be picked up automatically).
-- If you add/update a task on an active deliverable, it will be relayed to the agent.
-- Answer decisions surfaced by agents (these appear as prompts).
+When the user discusses new ideas or changes:
+- Propose as a concrete deliverable with tasks and dependencies. Ask before adding.
+- If it touches active work: explain impact, offer alternatives (steer now vs follow-up deliverable).
+- If confirmed: add it. It spawns automatically when dependencies are met.
 
-Do NOT implement code yourself. Agents handle implementation.
-Do NOT call read/edit/bash to implement — only to answer user questions about the project.`;
+You can add deliverables and tasks (spawned/relayed automatically).
+You CANNOT implement code yourself \u2014 that's what workers do.
+Do NOT call edit, write, or mutating bash. Use plan tools to delegate work.`;
 }
 
 function shortTokens(n: number): string {
@@ -1711,6 +1638,13 @@ function formatElapsedShort(ms: number): string {
 	if (min < 60) return `${min}m`;
 	const hr = Math.floor(min / 60);
 	return `${hr}h${min % 60}m`;
+}
+
+function buildHackModePreamble(): string {
+	return `You are in HACK MODE. Full tool access. Implement directly when asked.
+Workers continue running in the background independently.
+You can still add deliverables/tasks if needed.
+Switch back to /auto when done with direct work.`;
 }
 
 function buildAgentWorkerPreamble(): string {

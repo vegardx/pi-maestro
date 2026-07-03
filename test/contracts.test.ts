@@ -28,7 +28,7 @@ describe("contracts", () => {
 	});
 
 	it("enumerates modes, run statuses, deliverable statuses, and kinds", () => {
-		expect(MODE_NAMES).toEqual(["hack", "plan", "ask", "auto"]);
+		expect(MODE_NAMES).toEqual(["hack", "plan", "auto"]);
 		expect(RUN_STATUSES).toContain("running");
 		expect(RUN_STATUSES).toContain("blocked");
 		expect(DELIVERABLE_STATUSES).toContain("shipped");

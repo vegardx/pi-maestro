@@ -27,13 +27,14 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		? input.baselineTools.filter((t) => available.has(t))
 		: input.availableTools;
 
-	if (input.mode === "hack" || input.mode === "auto") return [...baseline];
-	if (input.mode === "ask") return [...baseline];
+	if (input.mode === "hack") return [...baseline];
 
+	// plan + auto: read-only + plan tools + bash (gated by classifier) + always-allowed
 	const allowed = new Set([
 		...READ_ONLY_TOOLS,
 		...PLAN_TOOL_NAMES,
 		...ALWAYS_ALLOWED_TOOLS,
+		"bash",
 	]);
 	return input.availableTools.filter((name) => allowed.has(name));
 }

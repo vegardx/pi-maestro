@@ -3,7 +3,7 @@
  * terminal output from an active worker agent (read-only attach).
  */
 
-import { killPane, splitWindow, tmuxExec } from "@vegardx/pi-tmux";
+import { killPane, resizePane, splitWindow, tmuxExec } from "@vegardx/pi-tmux";
 import type { TmuxAgentState } from "./execution-tmux.js";
 
 /** Minimum rows per worker pane for useful output. */
@@ -65,8 +65,82 @@ export class WorkerPanes {
 			return;
 		}
 
-		// Collect agents that need panes (spawning/working)
+		await this.createPanes(this.activeAgentList(activeAgents));
+		this._isOpen = true;
+		this.opening = false;
+	}
+
+	/**
+	 * Close all worker panes and tear down the column.
+	 */
+	async close(): Promise<void> {
+		this._enabled = false;
+		this.stopListenResize();
+		await this.killAllPanes();
+		this._isOpen = false;
+	}
+
+	/**
+	 * Reconcile panes with the current set of active agents.
+	 * Full redraw on change — ensures even spacing and fresh scroll position.
+	 * Re-entry safe: concurrent calls are coalesced.
+	 */
+	async sync(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
+		if (!this._isOpen) return;
+		this.lastAgents = activeAgents;
+
+		// Re-entry guard: if already syncing, queue a re-sync
+		if (this.syncing) {
+			this.syncPending = true;
+			this.pendingAgents = activeAgents;
+			return;
+		}
+		this.syncing = true;
+		try {
+			await this.doSync(activeAgents);
+		} finally {
+			this.syncing = false;
+			if (this.syncPending && this.pendingAgents) {
+				this.syncPending = false;
+				const agents = this.pendingAgents;
+				this.pendingAgents = undefined;
+				await this.sync(agents);
+			}
+		}
+	}
+
+	private async doSync(
+		activeAgents: ReadonlyMap<string, TmuxAgentState>,
+	): Promise<void> {
 		const toShow = this.activeAgentList(activeAgents);
+
+		// If nothing to show, tear down
+		if (toShow.length === 0) {
+			await this.killAllPanes();
+			this._isOpen = false;
+			this.columnPaneId = undefined;
+			return;
+		}
+
+		// Check if the set of agents changed — skip redraw if same
+		const currentNames = [...this.panes.keys()].sort().join(",");
+		const newNames = toShow
+			.map((a) => a.agentName)
+			.sort()
+			.join(",");
+		if (currentNames === newNames) return;
+
+		// Full redraw: kill all panes, recreate from scratch
+		await this.killAllPanes();
+		await this.createPanes(toShow);
+	}
+
+	// ─── Private ──────────────────────────────────────────────────────────────
+
+	/**
+	 * Create the column split and stack panes for the given agents.
+	 */
+	private async createPanes(toShow: TmuxAgentState[]): Promise<void> {
 		if (toShow.length === 0) return;
 
 		// Create first pane as a vertical split (30% right)
@@ -80,8 +154,6 @@ export class WorkerPanes {
 				command: this.attachCommand(first.agentName),
 			});
 		} catch {
-			// Terminal too small to split
-			this.opening = false;
 			return;
 		}
 		this.columnPaneId = firstPaneId;
@@ -102,133 +174,49 @@ export class WorkerPanes {
 				});
 				this.panes.set(agent.agentName, paneId);
 			} catch {
-				// No space for more panes — stop stacking
 				break;
 			}
 		}
 
-		// Rebalance the right column evenly
-		this._isOpen = true;
-		this.opening = false;
+		// Evenly distribute heights
+		await this.evenlyResize();
 	}
 
-	/**
-	 * Close all worker panes and tear down the column.
-	 */
-	async close(): Promise<void> {
-		this._enabled = false;
-		this.stopListenResize();
+	private async killAllPanes(): Promise<void> {
 		for (const paneId of this.panes.values()) {
 			try {
 				await killPane(paneId);
-			} catch {
-				// Pane may already be gone
-			}
+			} catch {}
 		}
 		this.panes.clear();
 		this.columnPaneId = undefined;
-		this._isOpen = false;
 	}
 
-	/**
-	 * Reconcile panes with the current set of active agents.
-	 * Adds panes for new agents, removes panes for finished ones.
-	 * Re-entry safe: concurrent calls are coalesced.
-	 */
-	async sync(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
-		if (!this._isOpen) return;
-		this.lastAgents = activeAgents;
-
-		// Re-entry guard: if already syncing, queue a re-sync
-		if (this.syncing) {
-			this.syncPending = true;
-			this.pendingAgents = activeAgents;
-			return;
-		}
-		this.syncing = true;
+	private async evenlyResize(): Promise<void> {
+		if (this.panes.size <= 1) return;
 		try {
-			await this.doSync(activeAgents);
-		} finally {
-			this.syncing = false;
-			// If a sync was requested while we were busy, run it now
-			if (this.syncPending && this.pendingAgents) {
-				this.syncPending = false;
-				const agents = this.pendingAgents;
-				this.pendingAgents = undefined;
-				await this.sync(agents);
+			let totalHeight = 0;
+			for (const paneId of this.panes.values()) {
+				const stdout = await tmuxExec([
+					"display-message",
+					"-t",
+					paneId,
+					"-p",
+					"#{pane_height}",
+				]);
+				totalHeight += Number.parseInt(stdout.trim(), 10) || 0;
 			}
+			const separators = this.panes.size - 1;
+			const usable = totalHeight + separators;
+			const perPane = Math.floor((usable - separators) / this.panes.size);
+			if (perPane < 2) return;
+			for (const paneId of this.panes.values()) {
+				await resizePane(paneId, { height: perPane });
+			}
+		} catch {
+			// Best-effort
 		}
 	}
-
-	private async doSync(
-		activeAgents: ReadonlyMap<string, TmuxAgentState>,
-	): Promise<void> {
-		const toShow = this.activeAgentList(activeAgents);
-		const activeNames = new Set(toShow.map((a) => a.agentName));
-
-		// Remove panes for agents that are no longer active
-		for (const [name, paneId] of this.panes) {
-			if (!activeNames.has(name)) {
-				try {
-					await killPane(paneId);
-				} catch {
-					// Already gone
-				}
-				this.panes.delete(name);
-			}
-		}
-
-		// Add panes for new agents (respect height limit)
-		const maxPanes = this.columnPaneId
-			? await this.maxPanesForColumn(this.columnPaneId)
-			: 1;
-
-		for (const agent of toShow) {
-			if (this.panes.has(agent.agentName)) continue;
-			if (this.panes.size >= maxPanes) break;
-
-			if (this.panes.size === 0) {
-				// Column was fully emptied — recreate it
-				try {
-					const paneId = await splitWindow({
-						horizontal: true,
-						percent: 30,
-						detach: true,
-						command: this.attachCommand(agent.agentName),
-					});
-					this.columnPaneId = paneId;
-					this.panes.set(agent.agentName, paneId);
-				} catch {
-					// Terminal too small
-					break;
-				}
-			} else {
-				// Stack below existing panes
-				const target = this.columnPaneId ?? [...this.panes.values()][0];
-				try {
-					const paneId = await splitWindow({
-						target,
-						horizontal: false,
-						detach: true,
-						command: this.attachCommand(agent.agentName),
-					});
-					this.panes.set(agent.agentName, paneId);
-				} catch {
-					// No space for more panes
-					break;
-				}
-			}
-		}
-
-		// If all agents are gone, close entirely
-		if (this.panes.size === 0) {
-			this._isOpen = false;
-			this.columnPaneId = undefined;
-			return;
-		}
-	}
-
-	// ─── Private ──────────────────────────────────────────────────────────────
 
 	private activeAgentList(
 		agents: ReadonlyMap<string, TmuxAgentState>,
@@ -289,17 +277,10 @@ export class WorkerPanes {
 		if (!this._enabled) return;
 		const large = this.terminalLargeEnough();
 		if (large && !this._isOpen && this.lastAgents) {
-			// Terminal grew — re-open panes
 			this.open(this.lastAgents).catch(() => {});
 		}
-		// Don't auto-close on shrink — our own split causes a resize event
-		// that would create an open/close loop.
 	}
 
-	/**
-	 * Query the height of a pane and calculate max panes that fit
-	 * with at least MIN_ROWS_PER_PANE rows each.
-	 */
 	private async maxPanesForColumn(paneId: string): Promise<number> {
 		try {
 			const stdout = await tmuxExec([
@@ -311,11 +292,10 @@ export class WorkerPanes {
 			]);
 			const height = Number.parseInt(stdout.trim(), 10);
 			if (Number.isFinite(height) && height > 0) {
-				// Each pane needs MIN_ROWS_PER_PANE + 1 for the separator
 				return Math.max(1, Math.floor(height / (MIN_ROWS_PER_PANE + 1)));
 			}
 		} catch {
-			// Fallback if query fails
+			// Fallback
 		}
 		return 4;
 	}

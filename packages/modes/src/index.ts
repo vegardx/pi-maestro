@@ -132,6 +132,11 @@ export {
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {
+	OverlayManager,
+	type OverlayComponent,
+	type OverlayId,
+} from "./overlay-manager.js";
+export {
 	activateDeliverableBranch,
 	activateDeliverableWorktree,
 	cleanupInactiveWorktrees,

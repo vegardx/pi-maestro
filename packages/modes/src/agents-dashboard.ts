@@ -471,7 +471,7 @@ const KEY_TAB = "\t";
  */
 export class CollapsibleDashboardComponent implements Component, Focusable {
 	focused = false;
-	private expanded = false;
+	expanded = false;
 	private readonly inner: DashboardComponent;
 	private readonly palette: Palette;
 	private readonly rows: readonly Row[];

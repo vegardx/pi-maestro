@@ -271,10 +271,10 @@ describe("profiles + invocation mapping", () => {
 		const o = resolveProfile({
 			profile: "deliverable-worker",
 			model: "anthropic/claude",
-			mode: "ask",
+			mode: "hack",
 		});
 		expect(o.model).toBe("anthropic/claude");
-		expect(o.mode).toBe("ask"); // override beats the default "auto"
+		expect(o.mode).toBe("hack"); // override beats the default "auto"
 		expect(o.disableExtensions).toEqual(["commit"]);
 	});
 

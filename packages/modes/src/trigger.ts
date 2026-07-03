@@ -30,7 +30,7 @@ export interface MidDeliverableTriggerInput {
 export function shouldCompactMidDeliverable(
 	input: MidDeliverableTriggerInput,
 ): boolean {
-	if (input.mode !== "auto" && input.mode !== "ask") return false;
+	if (input.mode !== "auto") return false;
 	if (input.compactionInFlight) return false;
 	if (!input.hasActiveDeliverable) return false;
 	if (typeof input.workingUsed !== "number") return false;

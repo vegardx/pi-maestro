@@ -15,9 +15,8 @@ describe("shouldCompactMidDeliverable", () => {
 		workingTokens: 150_000,
 	};
 
-	it("fires when working budget crosses the threshold in ask/auto", () => {
+	it("fires when working budget crosses the threshold in auto mode", () => {
 		expect(shouldCompactMidDeliverable(base)).toBe(true);
-		expect(shouldCompactMidDeliverable({ ...base, mode: "ask" })).toBe(true);
 	});
 
 	it("does not fire in plan or hack mode", () => {

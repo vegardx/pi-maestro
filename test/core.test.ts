@@ -229,10 +229,10 @@ describe("defineExtension", () => {
 		const pi = fakePi();
 		const entry = defineExtension({ name: "demo" }, (_pi, maestro) => {
 			maestro.capabilities.register(CAPABILITIES.modes, {
-				current: () => "ask",
+				current: () => "auto",
 				onChange: () => () => {},
 				execution: () => ({
-					mode: "ask",
+					mode: "auto",
 					executing: false,
 					compactionInFlight: false,
 				}),

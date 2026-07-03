@@ -1049,7 +1049,7 @@ describe("modes runtime", () => {
 				notify: (message: string) => notifications.push(message),
 				setStatus: (key: string, value: string | undefined) =>
 					statuses.set(key, value),
-				select: async () => "Auto \u2014 implement autonomously",
+				select: async () => "auto \u2014 fully autonomous",
 			},
 			sessionManager: {
 				getEntries: () => entries,
@@ -1300,7 +1300,7 @@ describe("modes runtime", () => {
 		expect(askBatches).toEqual([[{ id: "q", question: "Q?" }]]);
 	});
 
-	it("cycle from plan mode transitions to auto without starting execution", async () => {
+	it("cycle from plan mode transitions to auto and starts execution", async () => {
 		const host = fakeHost();
 		const runtime = createModesRuntime(host.pi as any, host.maestro as any, {
 			store,

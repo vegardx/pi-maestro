@@ -419,7 +419,7 @@ export class TmuxFanout {
 							"maestro.modes.state",
 							{
 								version: 2,
-								mode: "auto",
+								mode: "worker",
 								execution: { stage: "executing", deliverableId: d.id },
 								updatedAt: new Date().toISOString(),
 							},
@@ -459,7 +459,7 @@ export class TmuxFanout {
 				customType: "maestro.modes.state",
 				data: {
 					version: 2,
-					mode: "auto",
+					mode: "worker",
 					execution: { stage: "executing", deliverableId: d.id },
 					updatedAt: new Date().toISOString(),
 				},

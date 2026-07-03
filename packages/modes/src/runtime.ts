@@ -416,7 +416,7 @@ export function createModesRuntime(
 				"hack — fully autonomous, all tools",
 			]);
 			if (choice?.startsWith("auto")) {
-				setMode("auto", ctx);
+				await runImplement("", ctx);
 			} else if (choice?.startsWith("hack")) {
 				setMode("hack", ctx);
 			}

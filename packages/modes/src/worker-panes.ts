@@ -24,6 +24,8 @@ export class WorkerPanes {
 	/** The first pane created on the right side (used as layout target). */
 	private columnPaneId: string | undefined;
 	private _isOpen = false;
+	/** Re-entry guard for open() while awaiting splitWindow. */
+	private opening = false;
 	/** User has toggled panes on (may not be visible due to size). */
 	private _enabled = false;
 	/** Re-entry guard — prevents concurrent sync() calls from racing. */
@@ -58,11 +60,15 @@ export class WorkerPanes {
 	 * Open the worker panes column and populate with current active agents.
 	 */
 	async open(activeAgents: ReadonlyMap<string, TmuxAgentState>): Promise<void> {
-		if (this._isOpen) return;
+		if (this._isOpen || this.opening) return;
+		this.opening = true;
 		this._enabled = true;
 		this.lastAgents = activeAgents;
 		this.listenResize();
-		if (!this.terminalLargeEnough()) return;
+		if (!this.terminalLargeEnough()) {
+			this.opening = false;
+			return;
+		}
 
 		// Collect agents that need panes (spawning/working)
 		const toShow = this.activeAgentList(activeAgents);
@@ -80,6 +86,7 @@ export class WorkerPanes {
 			});
 		} catch {
 			// Terminal too small to split
+			this.opening = false;
 			return;
 		}
 		this.columnPaneId = firstPaneId;
@@ -111,6 +118,7 @@ export class WorkerPanes {
 		}
 
 		this._isOpen = true;
+		this.opening = false;
 	}
 
 	/**
@@ -293,22 +301,9 @@ export class WorkerPanes {
 		if (large && !this._isOpen && this.lastAgents) {
 			// Terminal grew — re-open panes
 			this.open(this.lastAgents).catch(() => {});
-		} else if (!large && this._isOpen) {
-			// Terminal shrank — close panes but stay enabled
-			this.closePanes();
 		}
-	}
-
-	/** Close panes without disabling (for resize shrink). */
-	private async closePanes(): Promise<void> {
-		for (const paneId of this.panes.values()) {
-			try {
-				await killPane(paneId);
-			} catch {}
-		}
-		this.panes.clear();
-		this.columnPaneId = undefined;
-		this._isOpen = false;
+		// Don't auto-close on shrink — our own split causes a resize event
+		// that would create an open/close loop.
 	}
 
 	private async rebalance(): Promise<void> {

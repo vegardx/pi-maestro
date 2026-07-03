@@ -257,6 +257,7 @@ export function renderQuestionnaire(
 	const freeIdx = optCount;
 	const freeCursor = state.cursor === freeIdx ? palette.accent("›") : " ";
 	const freeNum = `${freeIdx + 1}.`;
+	const placeholderWidth = Math.min(Math.floor(innerWidth * 0.5), 40);
 	if (state.freeText !== undefined && state.cursor === freeIdx) {
 		lines.push(
 			boxLine(
@@ -272,10 +273,11 @@ export function renderQuestionnaire(
 			),
 		);
 	} else {
+		const underscores = "_".repeat(placeholderWidth);
 		const placeholder =
 			state.cursor === freeIdx
-				? palette.accent(`${freeCursor} ${freeNum} `)
-				: palette.muted(`${freeCursor} ${freeNum} ___`);
+				? palette.accent(`${freeCursor} ${freeNum} ${underscores}`)
+				: palette.muted(`${freeCursor} ${freeNum} ${underscores}`);
 		lines.push(boxLine(truncate(placeholder, innerWidth)));
 	}
 
@@ -296,10 +298,11 @@ export function renderQuestionnaire(
 		}
 	}
 
-	const highlighted = question.options?.[state.cursor];
+	// Preview pane: shows contextual info for the highlighted option
+	const highlighted =
+		state.cursor < optCount ? question.options?.[state.cursor] : undefined;
 	if (highlighted?.preview) {
 		lines.push(emptyLine);
-		lines.push(boxLine(palette.dim("─".repeat(Math.min(innerWidth, 36)))));
 		for (const l of wrap(highlighted.preview, innerWidth, palette)) {
 			lines.push(boxLine(l));
 		}

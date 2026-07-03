@@ -31,45 +31,53 @@ export interface PlanMarkdownOptions {
  */
 export function renderPlanSummary(plan: Plan): string {
 	const lines: string[] = [];
-	lines.push(`Plan: ${plan.slug}`);
 
-	// Repos line
-	const repoEntries: string[] = [`${repoBasename(plan.repoPath)} (default)`];
-	for (const r of plan.repos ?? []) {
-		const branch = r.defaultBranch ? `, ${r.defaultBranch}` : "";
-		repoEntries.push(`${r.key} (${repoBasename(r.path)}${branch})`);
-	}
-	if (repoEntries.length > 1) {
-		lines.push(`Repos: ${repoEntries.join(", ")}`);
-	}
+	// Header
+	const repoCount = 1 + (plan.repos?.length ?? 0);
+	const flat = deliverables(plan).filter((d) => !d.lifecycle);
+	const repoPart = repoCount > 1 ? ` \u00b7 ${repoCount} repos` : "";
+	lines.push(
+		`${plan.title} \u00b7 ${flat.length} deliverable${flat.length !== 1 ? "s" : ""}${repoPart}`,
+	);
 	lines.push("");
 
-	const flat = deliverables(plan).filter((d) => !d.lifecycle);
+	// Build number map for blocked-by references
 	const idToNum = new Map<string, number>();
 	for (let i = 0; i < flat.length; i++) idToNum.set(flat[i].id, i + 1);
 
 	for (let i = 0; i < flat.length; i++) {
 		const d = flat[i];
 		const num = i + 1;
-		let suffix = "";
+		const repo = repoFor(plan, d);
+		const repoName = repoBasename(repo.path);
+		lines.push(`${num}. ${d.title} [${repoName}] (${d.id})`);
+
+		// Body (deliverable description) — first line only if short
+		if (d.body.trim()) {
+			const bodyLine = d.body.trim().split("\n")[0];
+			lines.push(`   ${bodyLine}`);
+		}
+
+		// Blocked-by
 		const deps = (d.dependsOn ?? [])
 			.map((dep) => idToNum.get(dep))
 			.filter(Boolean);
 		if (deps.length > 0) {
-			suffix = ` \u2192 depends on #${deps.join(", #")}`;
+			lines.push(`   (blocked by: ${deps.join(", ")})`);
 		}
-		const repo = repoFor(plan, d);
-		const repoTag = repo.key !== "default" ? ` [${repo.key}]` : "";
-		lines.push(`${num}. ${d.title ?? d.id} [${d.status}]${repoTag}${suffix}`);
 
+		// Gating tasks only
 		const items = (d.children ?? []).filter(
-			(c): c is WorkItem => c.type === "work-item",
+			(c): c is WorkItem =>
+				c.type === "work-item" &&
+				(effectiveWorkItemKind(c) === "task" ||
+					effectiveWorkItemKind(c) === "manual"),
 		);
 		for (const item of items) {
-			const check = item.done ? "\u2611" : "\u2610";
-			const kind = effectiveWorkItemKind(item) === "manual" ? " (manual)" : "";
-			lines.push(`   ${check} ${item.title}${kind}`);
+			const mark = item.done ? "\u2713" : "\u00b7";
+			lines.push(`   ${mark} ${item.title}`);
 		}
+
 		if (i < flat.length - 1) lines.push("");
 	}
 

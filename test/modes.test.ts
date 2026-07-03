@@ -659,7 +659,7 @@ describe("plan tools", () => {
 		engine.addDeliverable({ title: "A" });
 		const tool = createPlanTool(deps());
 		const md = await exec(tool, {});
-		expect(md.content[0].text).toContain("1. A [planned]");
+		expect(md.content[0].text).toContain("1. A [");
 		const seed = await exec(tool, { view: "seed", activeDeliverableId: "a" });
 		expect(seed.content[0].text).toContain("Active deliverable: a");
 		const json = await exec(tool, { view: "json" });
@@ -1002,7 +1002,7 @@ describe("modes runtime", () => {
 		// A named /plan still starts as a draft and isn't persisted until content.
 		expect(runtime.currentEngine()?.isDraft()).toBe(true);
 		expect(store.exists("my-plan")).toBe(false);
-		expect(host.messages[0].message.content).toContain("Plan: ");
+		expect(host.messages[0].message.content).toContain("My Plan");
 		// Add content and end the turn -> persists under the explicit name.
 		runtime.currentEngine()?.addDeliverable({ title: "A", dependsOn: [] });
 		await host.handlers.get("turn_end")?.[0]({}, host.ctx);

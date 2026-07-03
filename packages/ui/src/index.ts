@@ -45,6 +45,7 @@ export {
 	moveCursor,
 	type OverlayHandle,
 	optionValue,
+	paletteFromTheme,
 	QuestionnaireComponent,
 	type QuestionnaireRenderOptions,
 	type QuestionnaireRunOptions,

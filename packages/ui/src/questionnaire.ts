@@ -756,7 +756,7 @@ export function runQuestionnaire(
 	);
 }
 
-function paletteFromTheme(theme: unknown): Palette {
+export function paletteFromTheme(theme: unknown): Palette {
 	const t = theme as {
 		fg?: (color: string, text: string) => string;
 		bold?: (text: string) => string;

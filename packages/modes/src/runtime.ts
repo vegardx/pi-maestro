@@ -72,6 +72,7 @@ import {
 	type ViewState,
 } from "./orchestrator-tmux.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
+import { OverlayManager } from "./overlay-manager.js";
 import {
 	type Deliverable,
 	deliverables,
@@ -170,6 +171,7 @@ export function createModesRuntime(
 	};
 	let state: ModesState = initialModesState(now);
 	let engine: PlanEngine | undefined;
+	const overlayManager = new OverlayManager();
 	// While a draft plan is open: the entry count at /plan time (to locate the
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
@@ -554,6 +556,7 @@ export function createModesRuntime(
 		if (isTmuxAvailable() && !isAgentMode()) {
 			if (!tmuxFanout) {
 				_orchestratorCtx = ctx;
+				overlayManager.attach(ctx);
 				const planDir = join(plansRoot(), activeEngine.get().slug);
 				const extRoot = resolve(
 					dirname(fileURLToPath(import.meta.url)),
@@ -782,14 +785,8 @@ export function createModesRuntime(
 		description: "Interactive dashboard of active agents.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (tmuxFanout && engine) {
-				await handleAgentsDashboard(
-					ctx,
-					tmuxFanout,
-					engine,
-					usageLedger,
-					viewState,
-				);
-				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+				// If overlay is already mounted, just expand it
+				overlayManager.focusOverlay("agents");
 			} else {
 				ctx.ui.notify("No agents active.", "info");
 			}
@@ -821,13 +818,9 @@ export function createModesRuntime(
 
 	pi.registerCommand("answer", {
 		description: "Answer pending agent questions.",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (tmuxFanout) {
-				await handleAnswerCommand(ctx, tmuxFanout);
-				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
-			} else {
-				ctx.ui.notify("No agents active.", "info");
-			}
+		handler: async (_args: string, _ctx: ExtensionCommandContext) => {
+			// Expand the ask overlay if questions are pending
+			overlayManager.focusOverlay("ask");
 		},
 	});
 

@@ -1032,12 +1032,12 @@ describe("modes runtime", () => {
 			"plan",
 			"ask",
 		]);
-		const blocked = host.handlers.get("tool_call")?.[0]({
+		const blocked = await host.handlers.get("tool_call")?.[0]({
 			toolName: "bash",
 			input: { command: "git push" },
 		});
 		expect(blocked).toMatchObject({ block: true });
-		const allowed = host.handlers.get("tool_call")?.[0]({
+		const allowed = await host.handlers.get("tool_call")?.[0]({
 			toolName: "bash",
 			input: { command: "git status" },
 		});

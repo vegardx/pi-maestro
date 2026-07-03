@@ -34,6 +34,7 @@ import {
 	isAgentMode,
 } from "./agent-bridge.js";
 import { ModesAskQueue } from "./ask-queue.js";
+import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
 import {
 	calibrateSys,
 	calibrationKey,
@@ -70,11 +71,7 @@ import {
 	updateAgentWidget,
 	type ViewState,
 } from "./orchestrator-tmux.js";
-import {
-	classifyBash,
-	computeActiveTools,
-	toolBlockedInPlanMode,
-} from "./policy.js";
+import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import {
 	type Deliverable,
 	deliverables,
@@ -1140,15 +1137,33 @@ export function createModesRuntime(
 		}
 	});
 
-	pi.on("tool_call", (event: ToolCallEvent) => {
-		if (state.mode !== "plan") return;
+	pi.on("tool_call", async (event: ToolCallEvent) => {
+		if (state.mode !== "plan" && state.mode !== "auto") return;
 		if (event.toolName === "ask") return;
 		if (event.toolName === "bash") {
 			const command =
 				typeof event.input.command === "string" ? event.input.command : "";
-			const classified = classifyBash(command);
-			if (!classified.readOnly)
-				return { block: true, reason: classified.reason };
+			// Fast path: regex classification
+			const fast = classifyBashFast(command);
+			if (fast !== null) {
+				if (!fast.allowed) return { block: true, reason: fast.reason };
+				if (fast.suggestedTool)
+					return {
+						block: true,
+						reason: `Use the ${fast.suggestedTool} tool instead.`,
+					};
+				return;
+			}
+			// Ambiguous: LLM classification
+			const intent = await classifyBashIntent(command, {
+				model: process.env.MAESTRO_CLASSIFIER_MODEL,
+			});
+			if (!intent.allowed) return { block: true, reason: intent.reason };
+			if (intent.suggestedTool)
+				return {
+					block: true,
+					reason: `Use the ${intent.suggestedTool} tool instead: ${intent.intent}`,
+				};
 			return;
 		}
 		const reason = toolBlockedInPlanMode(event.toolName);

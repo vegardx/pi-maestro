@@ -11,6 +11,35 @@ import {
 const NAME = "modes";
 const SECTION = "compaction";
 
+// ---- Centralized env var config -------------------------------------------
+
+/**
+ * All MAESTRO_* environment variables read from a single location.
+ * Modules import this instead of scattered process.env reads.
+ */
+export const MAESTRO_ENV = {
+	get analyzeModel(): string | undefined {
+		return process.env.MAESTRO_ANALYZE_MODEL || undefined;
+	},
+	get workerModel(): string | undefined {
+		return process.env.MAESTRO_WORKER_MODEL || undefined;
+	},
+	get lensModel(): string | undefined {
+		return process.env.MAESTRO_LENS_MODEL || undefined;
+	},
+	get classifierModel(): string | undefined {
+		return process.env.MAESTRO_CLASSIFIER_MODEL || undefined;
+	},
+	get maxReviewCycles(): number {
+		return Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
+	},
+	get lensDisabled(): boolean {
+		return process.env.MAESTRO_LENS_DISABLED === "1";
+	},
+} as const;
+
+// ---- Compaction settings --------------------------------------------------
+
 export interface ModesCompactionSettings {
 	/** Max output tokens per new raw-slice summary section. */
 	phaseTokens: number;

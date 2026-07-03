@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { Plan, PlanRepo } from "./schema.js";
 import { deliverables, effectiveDependsOn, repoFor } from "./schema.js";
 import { parseSessionFile } from "./session-fork.js";
+import { MAESTRO_ENV } from "./settings.js";
 
 // ---- Types ----------------------------------------------------------------
 
@@ -191,8 +192,8 @@ export async function runAnalyzePhase(
 		prompt,
 		env: {
 			PI_MAESTRO_PHASE: "analyze",
-			...(process.env.MAESTRO_ANALYZE_MODEL && {
-				PI_MODEL: process.env.MAESTRO_ANALYZE_MODEL,
+			...(MAESTRO_ENV.analyzeModel && {
+				PI_MODEL: MAESTRO_ENV.analyzeModel,
 			}),
 		},
 	});

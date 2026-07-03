@@ -92,7 +92,7 @@ import {
 	hydrateModesState,
 	resolveShipSummaryInput,
 } from "./session.js";
-import { readModesCompactionSettings } from "./settings.js";
+import { MAESTRO_ENV, readModesCompactionSettings } from "./settings.js";
 import {
 	nextShippableDeliverable,
 	parkPlan,
@@ -831,8 +831,8 @@ export function createModesRuntime(
 		},
 	});
 
-	const lensModel = process.env.MAESTRO_LENS_MODEL || undefined;
-	const lensEnabled = process.env.MAESTRO_LENS_DISABLED !== "1";
+	const lensModel = MAESTRO_ENV.lensModel;
+	const lensEnabled = !MAESTRO_ENV.lensDisabled;
 
 	function resolveRequirements(cwd: string): string | undefined {
 		if (!engine) return undefined;
@@ -1129,7 +1129,7 @@ export function createModesRuntime(
 			}
 			// Ambiguous: LLM classification
 			const intent = await classifyBashIntent(command, {
-				model: process.env.MAESTRO_CLASSIFIER_MODEL,
+				model: MAESTRO_ENV.classifierModel,
 			});
 			if (!intent.allowed) return { block: true, reason: intent.reason };
 			if (intent.suggestedTool)

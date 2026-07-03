@@ -1,4 +1,5 @@
 import {
+	ALL_MODES,
 	type ExecutionStage,
 	MODE_NAMES,
 	type ModeName,
@@ -55,7 +56,7 @@ export function setExecution(
 }
 
 export function isModeName(value: string): value is ModeName {
-	return (MODE_NAMES as readonly string[]).includes(value);
+	return (ALL_MODES as readonly string[]).includes(value);
 }
 
 function isoNow(): string {

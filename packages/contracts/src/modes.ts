@@ -2,7 +2,13 @@
 
 export const MODE_NAMES = ["hack", "plan", "auto"] as const;
 
-export type ModeName = (typeof MODE_NAMES)[number];
+/** All modes including hidden ones not in the user cycle. */
+export const ALL_MODES = ["hack", "plan", "auto", "worker"] as const;
+
+export type ModeName = (typeof ALL_MODES)[number];
+
+/** Modes the user can cycle through. */
+export type CycleModeName = (typeof MODE_NAMES)[number];
 
 export interface ModeChange {
 	readonly mode: ModeName;

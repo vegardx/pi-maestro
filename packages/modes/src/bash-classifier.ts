@@ -59,8 +59,7 @@ const READONLY_PACKAGE_PATTERN =
 const CLEARLY_MUTATING_PATTERNS: readonly RegExp[] = [
 	/\b(rm|rmdir)\s+(-[rf]+\s+)?\//, // rm with absolute paths
 	/\b(rm|rmdir)\s+-rf\b/, // rm -rf
-	/(>|>>)\s*\S+/, // shell redirection writes
-	/\bgit\s+(push|commit|reset\s+--hard|clean\s+-fd)\b/, // destructive git
+	/\bgit\s+(reset\s+--hard|clean\s+-fd)\b/, // destructive git (not push/commit)
 	/\b(docker|podman)\s+(rm|rmi|system\s+prune)\b/, // container destruction
 	/\b(drop|truncate|delete\s+from)\b/i, // SQL mutations
 ];
@@ -163,7 +162,7 @@ export function classifyBashFast(command: string): BashIntent | null {
 		if (pattern.test(trimmed)) {
 			return {
 				allowed: false,
-				reason: "command is clearly destructive",
+				reason: `Blocked: ${trimmed.slice(0, 60)} — matches destructive pattern (rm -rf, hard reset, etc.)`,
 			};
 		}
 	}

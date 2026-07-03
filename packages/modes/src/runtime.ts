@@ -574,7 +574,9 @@ export function createModesRuntime(
 						if (tmuxFanout) {
 							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 							if (workerPanes.isOpen()) {
-								workerPanes.sync(tmuxFanout.snapshot().agents);
+								workerPanes
+									.sync(tmuxFanout.snapshot().agents)
+									.catch(() => {});
 							}
 						}
 					},

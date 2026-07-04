@@ -1169,6 +1169,19 @@ export function createModesRuntime(
 				present: (questions) => bridge.ask(questions),
 			});
 		}
+
+		// Worker mode: strip TUI chrome so panes show only output
+		if (state.mode === "worker") {
+			ctx.ui.setFooter(undefined);
+			ctx.ui.setHeader(undefined);
+			ctx.ui.setEditorComponent(() => ({
+				render: () => [],
+				invalidate: () => {},
+				getText: () => "",
+				setText: () => {},
+				handleInput: () => {},
+			}));
+		}
 	});
 
 	pi.on("session_shutdown", async () => {

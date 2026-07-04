@@ -13,6 +13,8 @@ DOGFOOD_FLAGS := \
 	--no-context-files \
 	--no-approve
 
+RADICALAI_EXT ?= $(HOME)/src/dnb.ghe.com/github/pi-extension-custom-provider-radicalai
+
 .PHONY: help dogfood dogfood-fresh dogfood-sandbox reset reset-yes reset-remote reset-plans check test-ask
 
 RESET := $(ROOT)/scripts/reset-dogfood.sh
@@ -65,7 +67,7 @@ dogfood-sandbox:
 	cd "$(SANDBOX)" && \
 	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
-	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)"
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" -e "$(RADICALAI_EXT)"
 
 dogfood-plan:
 	@$(MAKE) reset-remote

@@ -9,6 +9,7 @@ export * from "./compaction.js";
 export * from "./events.js";
 export * from "./flags.js";
 export * from "./ids.js";
+export * from "./models.js";
 export * from "./modes.js";
 export * from "./plan.js";
 export * from "./runs.js";

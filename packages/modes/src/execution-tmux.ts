@@ -48,6 +48,16 @@ import {
 } from "./session-fork.js";
 import { MAESTRO_ENV, readMaxWorkers } from "./settings.js";
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+/** Resolve the orchestrator's session directory (centralized location for all sessions). */
+function resolveOrchestratorSessionDir(): string {
+	return (
+		process.env.PI_CODING_AGENT_SESSION_DIR ||
+		join(process.cwd(), ".pi", "sessions")
+	);
+}
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export type TmuxAgentStatus =
@@ -365,17 +375,18 @@ export class TmuxFanout {
 	}
 
 	private buildEnvVars(agentId: string): string[] {
+		const workerSessionDir = join(
+			resolveOrchestratorSessionDir(),
+			"workers",
+			agentId,
+		);
 		const vars = [
 			`PI_MAESTRO_SOCK=${this.socketPath}`,
 			`PI_MAESTRO_AGENT_ID=${agentId}`,
+			`PI_CODING_AGENT_SESSION_DIR=${workerSessionDir}`,
 		];
 		if (process.env.PI_CODING_AGENT_DIR) {
 			vars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
-		}
-		if (process.env.PI_CODING_AGENT_SESSION_DIR) {
-			vars.push(
-				`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}`,
-			);
 		}
 		if (MAESTRO_ENV.workerModel) {
 			vars.push(`PI_MODEL=${MAESTRO_ENV.workerModel}`);
@@ -504,8 +515,8 @@ export class TmuxFanout {
 		// Set status to active in the plan
 		this.deps.engine.setStatus(d.id, "active");
 
-		// Write session file — fork from checkpoint or cold start
-		const sessionDir = join(result.path, ".pi", "sessions");
+		// Write session file in orchestrator's session dir (not in the worktree)
+		const sessionDir = join(resolveOrchestratorSessionDir(), "workers", d.id);
 		mkdirSync(sessionDir, { recursive: true });
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const seed = renderPlanSeed(this.deps.engine.get(), d.id);

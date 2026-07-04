@@ -135,3 +135,17 @@ export function getConfigStringArray(
 	if (raw.some((v) => typeof v !== "string")) return defaultValue;
 	return raw as string[];
 }
+
+/**
+ * Read a nested object from extensionConfig. Returns `undefined` when the
+ * key is missing or the value is not a plain object (null, array, primitive).
+ */
+export function getConfigObject(
+	config: ExtensionConfigMap,
+	name: string,
+	key: string,
+): Record<string, unknown> | undefined {
+	const raw = readPath(config[name], key);
+	if (!isPlainObject(raw)) return undefined;
+	return raw;
+}

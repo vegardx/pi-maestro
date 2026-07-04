@@ -7,6 +7,7 @@ export {
 	readBackgroundModels,
 	writeBackgroundModel,
 } from "./background.js";
+export { readModelsConfig } from "./presets.js";
 export {
 	parseModelSpec,
 	type ResolvedBackgroundModel,
@@ -14,6 +15,13 @@ export {
 	resolveModel,
 	resolveModelWithin,
 } from "./resolver.js";
+export {
+	type ResolvedRoleModelFull,
+	resolveRoleModel,
+	resolveRoleModelWithin,
+	type RoleResolveOptions,
+	validateRoleModelConfig,
+} from "./role-resolver.js";
 export {
 	BACKGROUND_SETS,
 	type BackgroundModels,

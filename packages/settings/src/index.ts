@@ -12,6 +12,7 @@ export {
 	type ExtensionConfigMap,
 	getConfigBoolean,
 	getConfigNumber,
+	getConfigObject,
 	getConfigString,
 	getConfigStringArray,
 	type LayeredExtensionConfig,

@@ -56,6 +56,7 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
+import { installFooter } from "./install-footer.js";
 import {
 	formatFindings,
 	LENSES,
@@ -91,7 +92,13 @@ import {
 	hydrateModesState,
 	resolveShipSummaryInput,
 } from "./session.js";
-import { MAESTRO_ENV, readModesCompactionSettings } from "./settings.js";
+import {
+	getModeRoleModel,
+	type ImplementOverrides,
+	MAESTRO_ENV,
+	readModesCompactionSettings,
+	setImplementOverrides,
+} from "./settings.js";
 import {
 	nextShippableDeliverable,
 	parkPlan,
@@ -177,6 +184,7 @@ export function createModesRuntime(
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
 	let _orchestratorCtx: ExtensionContext | undefined;
+	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
 	// Central usage ledger (usage.v1). Records orchestrator + agent + lens usage.
@@ -185,6 +193,7 @@ export function createModesRuntime(
 	const recordOrchestratorUsage = (usage: unknown): void => {
 		orchestratorUsage = accumulate(orchestratorUsage, usage as UsageDelta);
 		usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+		invalidateFooter?.();
 	};
 	const incrementOrchestratorTurn = (): void => {
 		if (orchestratorUsage) {
@@ -229,15 +238,20 @@ export function createModesRuntime(
 	}
 
 	function notifyMode(ctx: ExtensionContext): void {
-		ctx.ui.setStatus(
-			"maestro.mode",
-			renderModeFooter({
-				mode: state.mode,
-				planSlug: state.activePlanSlug,
-				budget: budgetFooter(ctx),
-				contextPercent: ctx.getContextUsage?.()?.percent,
-			}),
-		);
+		if (invalidateFooter) {
+			invalidateFooter();
+		} else {
+			// Fallback before footer is installed (e.g. early session_start)
+			ctx.ui.setStatus(
+				"maestro.mode",
+				renderModeFooter({
+					mode: state.mode,
+					planSlug: state.activePlanSlug,
+					budget: budgetFooter(ctx),
+					contextPercent: ctx.getContextUsage?.()?.percent,
+				}),
+			);
+		}
 		if (engine) ctx.ui.setWidget?.("maestro.plan", undefined);
 	}
 
@@ -556,10 +570,61 @@ export function createModesRuntime(
 		});
 	}
 
+	function parseImplementFlags(args: string): ImplementOverrides | undefined {
+		const parts = args.split(/\s+/);
+		let workerModel: string | undefined;
+		let workerThinking: string | undefined;
+		let analyzeModel: string | undefined;
+		let analyzeThinking: string | undefined;
+
+		for (let i = 0; i < parts.length; i++) {
+			const p = parts[i];
+			if (p.startsWith("--model=")) {
+				workerModel = p.slice("--model=".length);
+			} else if (p === "--model" && parts[i + 1]) {
+				workerModel = parts[++i];
+			} else if (p.startsWith("--thinking=")) {
+				workerThinking = p.slice("--thinking=".length);
+			} else if (p === "--thinking" && parts[i + 1]) {
+				workerThinking = parts[++i];
+			} else if (p.startsWith("--analyze-model=")) {
+				analyzeModel = p.slice("--analyze-model=".length);
+			} else if (p === "--analyze-model" && parts[i + 1]) {
+				analyzeModel = parts[++i];
+			} else if (p.startsWith("--analyze-thinking=")) {
+				analyzeThinking = p.slice("--analyze-thinking=".length);
+			} else if (p === "--analyze-thinking" && parts[i + 1]) {
+				analyzeThinking = parts[++i];
+			}
+		}
+
+		const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high"]);
+		const wt =
+			workerThinking && VALID_THINKING.has(workerThinking)
+				? (workerThinking as ImplementOverrides["workerThinking"])
+				: undefined;
+		const at =
+			analyzeThinking && VALID_THINKING.has(analyzeThinking)
+				? (analyzeThinking as ImplementOverrides["analyzeThinking"])
+				: undefined;
+
+		if (!workerModel && !wt && !analyzeModel && !at) return undefined;
+		return {
+			workerModel,
+			workerThinking: wt,
+			analyzeModel,
+			analyzeThinking: at,
+		};
+	}
+
 	async function runImplement(
 		args: string,
 		ctx: ExtensionContext,
 	): Promise<void> {
+		// Parse flags
+		const overrides = parseImplementFlags(args);
+		setImplementOverrides(overrides);
+
 		if (!engine) openPlan(undefined, ctx);
 		if (!engine) return;
 		finalizeDraftPlan(ctx);
@@ -581,9 +646,11 @@ export function createModesRuntime(
 					extensionPath: extRoot,
 					planDir,
 					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
+					ctx,
 					onPlanChanged: emitPlanChanged,
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
+						invalidateFooter?.();
 						if (tmuxFanout) {
 							// Update unified overlay
 							if (unifiedOverlay && engine) {
@@ -898,8 +965,14 @@ export function createModesRuntime(
 		},
 	});
 
-	const lensModel = MAESTRO_ENV.lensModel;
 	const lensEnabled = !MAESTRO_ENV.lensDisabled;
+
+	async function resolveLensModel(
+		ctx: ExtensionContext,
+	): Promise<string | undefined> {
+		const resolved = await getModeRoleModel(ctx, "lens");
+		return resolved?.modelId;
+	}
 
 	function resolveRequirements(cwd: string): string | undefined {
 		if (!engine) return undefined;
@@ -931,7 +1004,7 @@ export function createModesRuntime(
 			cwd: ctx.cwd,
 			mode: state.mode,
 			engine,
-			model: lensModel,
+			model: await resolveLensModel(ctx),
 			requirements:
 				lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
 		});
@@ -1013,7 +1086,7 @@ export function createModesRuntime(
 						cwd: ctx.cwd,
 						mode: state.mode,
 						engine,
-						model: lensModel,
+						model: await resolveLensModel(ctx),
 						requirements:
 							lens === "validate" ? resolveRequirements(ctx.cwd) : undefined,
 					});
@@ -1145,6 +1218,16 @@ export function createModesRuntime(
 			openPlan(undefined, ctx);
 		}
 		applyTools();
+		// Install custom footer (before notifyMode so invalidate handle exists)
+		if (!agentBridge && state.mode !== "worker") {
+			invalidateFooter = installFooter({
+				pi,
+				ctx,
+				getMode: () => state.mode,
+				getLedger: () => usageLedger,
+				getPlanSlug: () => state.activePlanSlug,
+			});
+		}
 		notifyMode(ctx);
 		if (state.activePlanSlug) {
 			ctx.ui.setStatus("maestro.plan", `plan: ${state.activePlanSlug}`);
@@ -1188,6 +1271,7 @@ export function createModesRuntime(
 	});
 
 	pi.on("session_shutdown", async () => {
+		invalidateFooter = undefined;
 		if (workerPanes.isOpen()) {
 			await workerPanes.close();
 		}
@@ -1201,7 +1285,7 @@ export function createModesRuntime(
 		}
 	});
 
-	pi.on("tool_call", async (event: ToolCallEvent) => {
+	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
 		if (
 			state.mode !== "plan" &&
 			state.mode !== "auto" &&
@@ -1237,8 +1321,11 @@ export function createModesRuntime(
 			// Workers: ambiguous commands are allowed (no LLM classifier)
 			if (state.mode === "worker") return;
 			// Ambiguous: LLM classification (orchestrator only)
+			const classifierModel = ctx
+				? (await getModeRoleModel(ctx, "classifier"))?.modelId
+				: MAESTRO_ENV.classifierModel;
 			const intent = await classifyBashIntent(command, {
-				model: MAESTRO_ENV.classifierModel,
+				model: classifierModel,
 			});
 			if (!intent.allowed) return { block: true, reason: intent.reason };
 			if (intent.suggestedTool)

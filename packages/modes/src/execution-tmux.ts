@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { addWorktree, removeWorktree, worktreePathFor } from "@vegardx/pi-git";
 import {
 	type AgentMessage,
@@ -46,7 +47,7 @@ import {
 	forkSessionAt,
 	parseSessionFile,
 } from "./session-fork.js";
-import { MAESTRO_ENV, readMaxWorkers } from "./settings.js";
+import { getModeRoleModel, MAESTRO_ENV, readMaxWorkers } from "./settings.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,7 @@ export interface TmuxFanoutDeps {
 	readonly extensionPath: string;
 	readonly planDir: string;
 	readonly defaultBranch: string;
+	readonly ctx: ExtensionContext;
 	readonly onPlanChanged?: () => void;
 	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
 	readonly onQuestionsReceived?: (id: string, count: number) => void;
@@ -142,6 +144,10 @@ export class TmuxFanout {
 		this.server = new RpcServer();
 		this.socketPath = createSocketPath(deps.planDir);
 		this.maxWorkers = readMaxWorkers(process.cwd());
+	}
+
+	private get extensionCtx(): ExtensionContext {
+		return this.deps.ctx;
 	}
 
 	/**
@@ -274,7 +280,7 @@ export class TmuxFanout {
 		}
 
 		// Build command
-		const envVars = this.buildEnvVars(deliverableId);
+		const envVars = await this.buildEnvVars(deliverableId);
 		const escapedMsg = message?.replace(/"/g, '\\"');
 		const piCmd = this.deps.extensionPath
 			? `pi -c --session "${state.sessionFile}" -e "${this.deps.extensionPath}"${escapedMsg ? ` "${escapedMsg}"` : ""}`
@@ -374,7 +380,7 @@ export class TmuxFanout {
 		});
 	}
 
-	private buildEnvVars(agentId: string): string[] {
+	private async buildEnvVars(agentId: string): Promise<string[]> {
 		const workerSessionDir = join(
 			resolveOrchestratorSessionDir(),
 			"workers",
@@ -388,8 +394,12 @@ export class TmuxFanout {
 		if (process.env.PI_CODING_AGENT_DIR) {
 			vars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
 		}
-		if (MAESTRO_ENV.workerModel) {
-			vars.push(`PI_MODEL=${MAESTRO_ENV.workerModel}`);
+		const resolved = await getModeRoleModel(this.extensionCtx, "worker");
+		if (resolved) {
+			vars.push(`PI_MODEL=${resolved.modelId}`);
+			if (resolved.thinking && resolved.thinking !== "off") {
+				vars.push(`PI_THINKING=${resolved.thinking}`);
+			}
 		}
 		if (process.env.PATH) {
 			vars.push(`PATH=${process.env.PATH}`);
@@ -553,7 +563,7 @@ export class TmuxFanout {
 		}
 
 		// Spawn tmux session with env vars for RPC discovery.
-		const envVars = this.buildEnvVars(d.id);
+		const envVars = await this.buildEnvVars(d.id);
 		const userMsg =
 			`Implement this deliverable: "${d.title}". ` +
 			"Follow the plan context above. Complete all gating tasks, " +

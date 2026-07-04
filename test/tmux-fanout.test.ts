@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createSocketPath, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
@@ -90,11 +91,28 @@ describe("TmuxFanout", () => {
 	function createFanout(
 		overrides?: Partial<ConstructorParameters<typeof TmuxFanout>[0]>,
 	): TmuxFanout {
+		const mockCtx = {
+			cwd: root,
+			model: undefined,
+			modelRegistry: {
+				find: (provider: string, id: string) => ({
+					provider,
+					id,
+					name: `${provider}/${id}`,
+				}),
+				getApiKeyAndHeaders: async () => ({
+					ok: true,
+					apiKey: "test-key",
+					headers: {},
+				}),
+			},
+		} as unknown as ExtensionContext;
 		fanout = new TmuxFanout({
 			engine,
 			extensionPath: "/ext/path",
 			planDir,
 			defaultBranch: "main",
+			ctx: mockCtx,
 			...overrides,
 		});
 		return fanout;
@@ -693,7 +711,7 @@ describe("TmuxFanout", () => {
 
 		it("passes MAESTRO_WORKER_MODEL as PI_MODEL env var", async () => {
 			const original = process.env.MAESTRO_WORKER_MODEL;
-			process.env.MAESTRO_WORKER_MODEL = "test-model";
+			process.env.MAESTRO_WORKER_MODEL = "anthropic/test-model";
 
 			try {
 				engine.addDeliverable({ title: "Model", dependsOn: [] });
@@ -702,7 +720,7 @@ describe("TmuxFanout", () => {
 				await f.tick();
 
 				const call = vi.mocked(tmux.spawn).mock.calls[0];
-				expect(call[2]).toContain("PI_MODEL=test-model");
+				expect(call[2]).toContain("PI_MODEL=anthropic/test-model");
 			} finally {
 				if (original === undefined) delete process.env.MAESTRO_WORKER_MODEL;
 				else process.env.MAESTRO_WORKER_MODEL = original;

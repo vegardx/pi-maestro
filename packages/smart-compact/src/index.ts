@@ -63,6 +63,16 @@ export default defineExtension(
 		doc: "Replaces default compaction with a work-focused summary optimised for continuing the active task.",
 	},
 	(pi, maestro) => {
+		// Declare configurable settings for /maestro menu
+		maestro.capabilities.get(CAPABILITIES.settings)?.declare("smart-compact", [
+			{ key: "models.summarizer.tier", label: "Summarizer tier", type: "tier" },
+			{
+				key: "models.summarizer.thinking",
+				label: "Summarizer thinking",
+				type: "thinking",
+			},
+		]);
+
 		// In-flight guard for the proactive compactAt trigger (see turn_end).
 		let compacting = false;
 		// Notify at most once per session per failure class so a missing model

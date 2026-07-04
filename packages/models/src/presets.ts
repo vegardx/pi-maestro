@@ -24,12 +24,17 @@ const TIER_SET: ReadonlySet<string> = new Set(TIERS);
 
 function extractPresetTierMap(raw: unknown): PresetTierMap | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	const out: Partial<Record<Tier, readonly string[]>> = {};
+	const out: Partial<Record<Tier, string>> = {};
 	let found = false;
 	for (const [key, value] of Object.entries(raw)) {
 		if (!TIER_SET.has(key)) continue;
-		if (isStringArray(value) && value.length > 0) {
+		if (typeof value === "string" && value.length > 0) {
 			out[key as Tier] = value;
+			found = true;
+		}
+		// Backward compat: accept single-element arrays
+		if (isStringArray(value) && value.length > 0) {
+			out[key as Tier] = value[0];
 			found = true;
 		}
 	}
@@ -76,10 +81,10 @@ function migrateOldFormat(raw: unknown): ModelsConfig | undefined {
 
 	const primary = bg.primary;
 	if (isPlainObject(primary)) {
-		const tierMap: Partial<Record<Tier, readonly string[]>> = {};
+		const tierMap: Partial<Record<Tier, string>> = {};
 		for (const [tier, value] of Object.entries(primary)) {
 			if (TIER_SET.has(tier) && typeof value === "string") {
-				tierMap[tier as Tier] = [value];
+				tierMap[tier as Tier] = value;
 			}
 		}
 		if (Object.keys(tierMap).length > 0) {
@@ -89,10 +94,10 @@ function migrateOldFormat(raw: unknown): ModelsConfig | undefined {
 
 	const secondary = bg.secondary;
 	if (isPlainObject(secondary)) {
-		const tierMap: Partial<Record<Tier, readonly string[]>> = {};
+		const tierMap: Partial<Record<Tier, string>> = {};
 		for (const [tier, value] of Object.entries(secondary)) {
 			if (TIER_SET.has(tier) && typeof value === "string") {
-				tierMap[tier as Tier] = [value];
+				tierMap[tier as Tier] = value;
 			}
 		}
 		if (Object.keys(tierMap).length > 0) {
@@ -143,11 +148,11 @@ export function readModelsConfig(
 			mergedPresets[name] = g;
 			continue;
 		}
-		// Per-tier: project replaces entire array
-		const merged: Partial<Record<Tier, readonly string[]>> = {};
+		// Per-tier: project wins
+		const merged: Partial<Record<Tier, string>> = {};
 		for (const tier of TIERS) {
-			const arr = p[tier] ?? g[tier];
-			if (arr) merged[tier] = arr;
+			const val = p[tier] ?? g[tier];
+			if (val) merged[tier] = val;
 		}
 		mergedPresets[name] = merged;
 	}

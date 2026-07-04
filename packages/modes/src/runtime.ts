@@ -1586,6 +1586,46 @@ export function createModesRuntime(
 
 	maestro.capabilities.register(CAPABILITIES.usage, usageLedger);
 	maestro.capabilities.register(CAPABILITIES.overlays, overlayManager);
+
+	// Declare configurable settings for /maestro menu
+	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
+		{ key: "maxWorkers", label: "Max workers", type: "number", default: 4 },
+		{
+			key: "maxReviewCycles",
+			label: "Max review cycles",
+			type: "number",
+			default: 2,
+		},
+		{ key: "models.worker.tier", label: "Worker tier", type: "tier" },
+		{
+			key: "models.worker.thinking",
+			label: "Worker thinking",
+			type: "thinking",
+		},
+		{ key: "models.worker.model", label: "Worker model", type: "model" },
+		{ key: "models.analyze.tier", label: "Analyze tier", type: "tier" },
+		{
+			key: "models.analyze.thinking",
+			label: "Analyze thinking",
+			type: "thinking",
+		},
+		{ key: "models.analyze.model", label: "Analyze model", type: "model" },
+		{ key: "models.lens.tier", label: "Lens tier", type: "tier" },
+		{ key: "models.lens.thinking", label: "Lens thinking", type: "thinking" },
+		{ key: "models.classifier.tier", label: "Classifier tier", type: "tier" },
+		{
+			key: "models.classifier.thinking",
+			label: "Classifier thinking",
+			type: "thinking",
+		},
+		{
+			key: "lensDisabled",
+			label: "Lenses disabled",
+			type: "boolean",
+			default: false,
+		},
+	]);
+
 	maestro.capabilities.register(CAPABILITIES.modes, {
 		current: currentMode,
 		onChange(listener) {

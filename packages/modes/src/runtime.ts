@@ -68,7 +68,6 @@ import {
 	handleAnswerCommand,
 	handleSteerCommand,
 	handleViewCommand,
-	updateAgentWidget,
 	type ViewState,
 } from "./orchestrator-tmux.js";
 import {
@@ -590,7 +589,6 @@ export function createModesRuntime(
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						if (tmuxFanout) {
-							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 							// Update dashboard overlay rows
 							if (agentsDashboard && engine) {
 								const rows = buildRows(
@@ -614,8 +612,14 @@ export function createModesRuntime(
 							`Agent has ${count} question(s) — /answer to respond.`,
 							"info",
 						);
-						if (tmuxFanout)
-							updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
+						if (tmuxFanout && agentsDashboard && engine) {
+							const rows = buildRows(
+								tmuxFanout,
+								engine,
+								tmuxFanout.questionQueue,
+							);
+							agentsDashboard.updateRows(rows);
+						}
 					},
 					onLensUsage: (id, lens, snapshot) => {
 						usageLedger.record(
@@ -633,7 +637,6 @@ export function createModesRuntime(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
 				);
-				updateAgentWidget(ctx, tmuxFanout.snapshot().agents);
 				// Mount the agents dashboard overlay
 				if (!agentsDashboard && engine) {
 					const rows = buildRows(tmuxFanout, engine, tmuxFanout.questionQueue);

@@ -98,7 +98,13 @@ export {
 	resolveShipSummaryInput,
 	toPersistedState,
 } from "./session.js";
-export { readModesCompactionSettings } from "./settings.js";
+export {
+	getModeRoleModel,
+	getImplementOverrides,
+	type ImplementOverrides,
+	readModesCompactionSettings,
+	setImplementOverrides,
+} from "./settings.js";
 export {
 	deliverableIssueBody,
 	nextShippableDeliverable,
@@ -136,6 +142,14 @@ export {
 	shouldResumeAfterCompaction,
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
+export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
+export {
+	formatCacheHitRate,
+	formatModelLabel,
+	formatSessionUsage,
+	installFooter,
+	type FooterDeps,
+} from "./install-footer.js";
 export {
 	type UnifiedOverlayCallbacks,
 	UnifiedOverlayComponent,

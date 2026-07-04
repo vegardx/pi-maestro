@@ -3,6 +3,12 @@
 // knobs live under `extensionConfig.modes.compaction`. These are independent
 // of pi's native `compaction.*` and of `extensionConfig.smart-compact.*`.
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ModesRole, ThinkingLevel } from "@vegardx/pi-contracts";
+import {
+	type ResolvedRoleModelFull,
+	resolveRoleModel,
+} from "@vegardx/pi-models";
 import {
 	getConfigNumber,
 	readLayeredExtensionConfig,
@@ -21,14 +27,26 @@ export const MAESTRO_ENV = {
 	get analyzeModel(): string | undefined {
 		return process.env.MAESTRO_ANALYZE_MODEL || undefined;
 	},
+	get analyzeThinking(): string | undefined {
+		return process.env.MAESTRO_ANALYZE_THINKING || undefined;
+	},
 	get workerModel(): string | undefined {
 		return process.env.MAESTRO_WORKER_MODEL || undefined;
+	},
+	get workerThinking(): string | undefined {
+		return process.env.MAESTRO_WORKER_THINKING || undefined;
 	},
 	get lensModel(): string | undefined {
 		return process.env.MAESTRO_LENS_MODEL || undefined;
 	},
+	get lensThinking(): string | undefined {
+		return process.env.MAESTRO_LENS_THINKING || undefined;
+	},
 	get classifierModel(): string | undefined {
 		return process.env.MAESTRO_CLASSIFIER_MODEL || undefined;
+	},
+	get classifierThinking(): string | undefined {
+		return process.env.MAESTRO_CLASSIFIER_THINKING || undefined;
 	},
 	get maxReviewCycles(): number {
 		return Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
@@ -103,4 +121,103 @@ export function readModesCompactionSettings(
 		timeoutMs: read("timeoutMs", 90000),
 		planMaxContextTokens: planMax > 0 ? planMax : undefined,
 	};
+}
+
+// ---- Role-model resolver facade -------------------------------------------
+
+const THINKING_LEVELS: ReadonlySet<string> = new Set([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+]);
+
+function asThinking(v: string | undefined): ThinkingLevel | undefined {
+	if (v && THINKING_LEVELS.has(v)) return v as ThinkingLevel;
+	return undefined;
+}
+
+function envForRole(role: ModesRole): {
+	model?: string;
+	thinking?: ThinkingLevel;
+} {
+	switch (role) {
+		case "worker":
+			return {
+				model: MAESTRO_ENV.workerModel,
+				thinking: asThinking(MAESTRO_ENV.workerThinking),
+			};
+		case "analyze":
+			return {
+				model: MAESTRO_ENV.analyzeModel,
+				thinking: asThinking(MAESTRO_ENV.analyzeThinking),
+			};
+		case "lens":
+			return {
+				model: MAESTRO_ENV.lensModel,
+				thinking: asThinking(MAESTRO_ENV.lensThinking),
+			};
+		case "classifier":
+			return {
+				model: MAESTRO_ENV.classifierModel,
+				thinking: asThinking(MAESTRO_ENV.classifierThinking),
+			};
+	}
+}
+
+/** Per-invocation overrides set by /implement --model/--thinking flags. */
+export interface ImplementOverrides {
+	workerModel?: string;
+	workerThinking?: ThinkingLevel;
+	analyzeModel?: string;
+	analyzeThinking?: ThinkingLevel;
+}
+
+let _implementOverrides: ImplementOverrides | undefined;
+
+/** Set per-invocation overrides (called from /implement handler). */
+export function setImplementOverrides(
+	overrides: ImplementOverrides | undefined,
+): void {
+	_implementOverrides = overrides;
+}
+
+/** Get current per-invocation overrides. */
+export function getImplementOverrides(): ImplementOverrides | undefined {
+	return _implementOverrides;
+}
+
+function explicitForRole(role: ModesRole): {
+	model?: string;
+	thinking?: ThinkingLevel;
+} {
+	const o = _implementOverrides;
+	if (!o) return {};
+	switch (role) {
+		case "worker":
+			return { model: o.workerModel, thinking: o.workerThinking };
+		case "analyze":
+			return { model: o.analyzeModel, thinking: o.analyzeThinking };
+		default:
+			return {};
+	}
+}
+
+/**
+ * Resolve a model + thinking level for a modes role.
+ * Priority: CLI arg → env var → settings (preset/tier) → session model → null.
+ */
+export async function getModeRoleModel(
+	ctx: ExtensionContext,
+	role: ModesRole,
+): Promise<ResolvedRoleModelFull | null> {
+	const explicit = explicitForRole(role);
+	const env = envForRole(role);
+	return resolveRoleModel(ctx, {
+		extension: NAME,
+		role,
+		explicit: explicit.model || explicit.thinking ? explicit : undefined,
+		env: env.model || env.thinking ? env : undefined,
+	});
 }

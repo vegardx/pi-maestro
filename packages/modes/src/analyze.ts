@@ -5,10 +5,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Plan, PlanRepo } from "./schema.js";
 import { deliverables, effectiveDependsOn, repoFor } from "./schema.js";
 import { parseSessionFile } from "./session-fork.js";
-import { MAESTRO_ENV } from "./settings.js";
+import { getModeRoleModel, MAESTRO_ENV } from "./settings.js";
 
 // ---- Types ----------------------------------------------------------------
 
@@ -54,6 +55,8 @@ export interface AnalyzeOpts {
 	readonly spawn: SpawnFn;
 	/** Function to compact a checkpoint. */
 	readonly compact: CompactFn;
+	/** Extension context for model resolution. */
+	readonly ctx?: ExtensionContext;
 }
 
 /**
@@ -186,17 +189,26 @@ export async function runAnalyzePhase(
 	// Build the exploration prompt
 	const prompt = buildAnalyzePrompt(phases);
 
+	// Resolve model for analyze phase
+	const analyzeEnv: Record<string, string> = { PI_MAESTRO_PHASE: "analyze" };
+	if (opts.ctx) {
+		const resolved = await getModeRoleModel(opts.ctx, "analyze");
+		if (resolved) {
+			analyzeEnv.PI_MODEL = resolved.modelId;
+			if (resolved.thinking && resolved.thinking !== "off") {
+				analyzeEnv.PI_THINKING = resolved.thinking;
+			}
+		}
+	} else if (MAESTRO_ENV.analyzeModel) {
+		analyzeEnv.PI_MODEL = MAESTRO_ENV.analyzeModel;
+	}
+
 	// Spawn and run — throws on failure
 	await opts.spawn({
 		sessionFile,
 		cwd: phases[0].repoPath,
 		prompt,
-		env: {
-			PI_MAESTRO_PHASE: "analyze",
-			...(MAESTRO_ENV.analyzeModel && {
-				PI_MODEL: MAESTRO_ENV.analyzeModel,
-			}),
-		},
+		env: analyzeEnv,
 	});
 
 	// Parse checkpoints from the session

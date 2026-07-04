@@ -108,7 +108,6 @@ export function classifyBashFast(command: string): BashIntent | null {
 		};
 	}
 
-
 	// curl/wget → webfetch tool
 	if (/^(curl|wget)\s/.test(trimmed)) {
 		return {

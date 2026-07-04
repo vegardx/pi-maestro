@@ -478,6 +478,9 @@ class DashboardComponent implements Component, Focusable {
 const KEY_TAB = "\t";
 
 /**
+ * @deprecated Use `UnifiedOverlayComponent` instead — this component is
+ * retained for backwards compatibility but no longer mounted by the runtime.
+ *
  * Collapsible overlay wrapper around DashboardComponent.
  * Starts collapsed (2-line badge). Tab expands/collapses.
  */
@@ -621,7 +624,6 @@ function paletteFromTheme(theme: unknown): Palette {
 		bold?: (text: string) => string;
 	} | null;
 	if (!t?.fg || !t?.bold) return defaultPalette();
-	// biome-ignore lint/style/noNonNullAssertion: guarded above
 	return {
 		dim: (s) => t.fg!("dim", s),
 		muted: (s) => t.fg!("muted", s),

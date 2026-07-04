@@ -33,6 +33,7 @@ import {
 	initAgentBridge,
 	isAgentMode,
 } from "./agent-bridge.js";
+import { buildRows } from "./agents-dashboard.js";
 import { ModesAskQueue } from "./ask-queue.js";
 import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
 import {
@@ -64,16 +65,10 @@ import {
 import type { LensName } from "./lenses/index.js";
 import { renderPlanSeed, renderPlanSummary } from "./markdown.js";
 import {
-	handleAgentsDashboard,
-	handleAnswerCommand,
 	handleSteerCommand,
 	handleViewCommand,
 	type ViewState,
 } from "./orchestrator-tmux.js";
-import {
-	buildRows,
-	CollapsibleDashboardComponent,
-} from "./agents-dashboard.js";
 import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import {
@@ -121,6 +116,7 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
+import { UnifiedOverlayComponent } from "./unified-overlay.js";
 import {
 	accumulate,
 	incrementTurns,
@@ -198,7 +194,7 @@ export function createModesRuntime(
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	const workerPanes = new WorkerPanes();
-	let agentsDashboard: CollapsibleDashboardComponent | undefined;
+	let unifiedOverlay: UnifiedOverlayComponent | undefined;
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -589,14 +585,14 @@ export function createModesRuntime(
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						if (tmuxFanout) {
-							// Update dashboard overlay rows
-							if (agentsDashboard && engine) {
+							// Update unified overlay
+							if (unifiedOverlay && engine) {
 								const rows = buildRows(
 									tmuxFanout,
 									engine,
 									tmuxFanout.questionQueue,
 								);
-								agentsDashboard.updateRows(rows);
+								unifiedOverlay.updateAgents(rows);
 							}
 							// Only sync worker panes on status transitions
 							if (
@@ -612,13 +608,8 @@ export function createModesRuntime(
 							`Agent has ${count} question(s) — /answer to respond.`,
 							"info",
 						);
-						if (tmuxFanout && agentsDashboard && engine) {
-							const rows = buildRows(
-								tmuxFanout,
-								engine,
-								tmuxFanout.questionQueue,
-							);
-							agentsDashboard.updateRows(rows);
+						if (tmuxFanout && unifiedOverlay) {
+							unifiedOverlay.updateQuestions(tmuxFanout.questionQueue.all());
 						}
 					},
 					onLensUsage: (id, lens, snapshot) => {
@@ -637,15 +628,22 @@ export function createModesRuntime(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
 				);
-				// Mount the agents dashboard overlay
-				if (!agentsDashboard && engine) {
+				// Mount the unified overlay
+				if (!unifiedOverlay && engine) {
 					const rows = buildRows(tmuxFanout, engine, tmuxFanout.questionQueue);
-					agentsDashboard = new CollapsibleDashboardComponent(
-						rows,
-						usageLedger,
-						() => {},
-					);
-					overlayManager.mount("agents", agentsDashboard);
+					unifiedOverlay = new UnifiedOverlayComponent({
+						onAnswer: (agentId, answers) => {
+							tmuxFanout?.questionQueue.answer(agentId, answers);
+							unifiedOverlay?.updateQuestions(
+								tmuxFanout?.questionQueue.all() ?? [],
+							);
+						},
+						onAction: (_action, _agentId) => {
+							// TODO: wire watch/attach/steer actions
+						},
+					});
+					unifiedOverlay.updateAgents(rows);
+					overlayManager.mount("agents", unifiedOverlay);
 				}
 			} else {
 				ctx.ui.notify("No deliverables ready to start.", "warning");
@@ -832,17 +830,11 @@ export function createModesRuntime(
 
 	pi.registerCommand("agents", {
 		description: "Interactive dashboard of active agents.",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (tmuxFanout && engine) {
-				await handleAgentsDashboard(
-					ctx,
-					tmuxFanout,
-					engine,
-					usageLedger,
-					viewState,
-				);
+		handler: async (_args: string, _ctx: ExtensionCommandContext) => {
+			if (unifiedOverlay) {
+				unifiedOverlay.showAgents();
 			} else {
-				ctx.ui.notify("No agents active.", "info");
+				_ctx.ui.notify("No agents active.", "info");
 			}
 		},
 	});
@@ -898,8 +890,11 @@ export function createModesRuntime(
 	pi.registerCommand("answer", {
 		description: "Answer pending agent questions.",
 		handler: async (_args: string, _ctx: ExtensionCommandContext) => {
-			// Expand the ask overlay if questions are pending
-			overlayManager.focusOverlay("ask");
+			if (unifiedOverlay) {
+				unifiedOverlay.showQuestions();
+			} else {
+				_ctx.ui.notify("No questions pending.", "info");
+			}
 		},
 	});
 

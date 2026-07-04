@@ -75,6 +75,11 @@ export {
 	type ViewState,
 } from "./orchestrator-tmux.js";
 export {
+	type OverlayComponent,
+	type OverlayId,
+	OverlayManager,
+} from "./overlay-manager.js";
+export {
 	classifyBash,
 	computeActiveTools,
 	PLAN_TOOL_NAMES,
@@ -132,10 +137,9 @@ export {
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {
-	OverlayManager,
-	type OverlayComponent,
-	type OverlayId,
-} from "./overlay-manager.js";
+	type UnifiedOverlayCallbacks,
+	UnifiedOverlayComponent,
+} from "./unified-overlay.js";
 export {
 	activateDeliverableBranch,
 	activateDeliverableWorktree,

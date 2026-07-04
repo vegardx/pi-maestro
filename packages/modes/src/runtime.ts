@@ -1172,8 +1172,13 @@ export function createModesRuntime(
 
 		// Worker mode: strip TUI chrome so panes show only output
 		if (state.mode === "worker") {
-			ctx.ui.setFooter(undefined);
-			ctx.ui.setHeader(undefined);
+			const empty = () => ({
+				render: () => [],
+				invalidate: () => {},
+				dispose: () => {},
+			});
+			ctx.ui.setFooter(empty as any);
+			ctx.ui.setHeader(empty);
 			ctx.ui.setEditorComponent(() => ({
 				render: () => [],
 				invalidate: () => {},

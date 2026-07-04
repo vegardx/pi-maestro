@@ -125,26 +125,6 @@ async function tryAuth(
 	return { model, apiKey: auth.apiKey, headers: auth.headers };
 }
 
-/**
- * Walk a fallback array, returning the first model with valid auth.
- */
-async function resolveFromArray(
-	ctx: ExtensionContext,
-	models: readonly string[],
-	requireApiKey?: boolean,
-): Promise<{
-	model: Model<Api>;
-	modelId: string;
-	apiKey?: string;
-	headers?: Record<string, string>;
-} | null> {
-	for (const spec of models) {
-		const result = await tryAuth(ctx, spec, requireApiKey);
-		if (result) return { ...result, modelId: spec };
-	}
-	return null;
-}
-
 function readRoleConfig(
 	merged: ExtensionConfigMap,
 	extension: string,
@@ -217,13 +197,14 @@ export async function resolveRoleModel(
 			if (modelsConfig) {
 				const presetName = roleConfig.preset ?? modelsConfig.active;
 				const preset = modelsConfig.presets[presetName];
-				const tierArray = preset?.[roleConfig.tier];
+				const tierModel = preset?.[roleConfig.tier];
 
-				if (tierArray && tierArray.length > 0) {
-					const result = await resolveFromArray(ctx, tierArray, requireApiKey);
+				if (tierModel) {
+					const result = await tryAuth(ctx, tierModel, requireApiKey);
 					if (result) {
 						return {
 							...result,
+							modelId: tierModel,
 							thinking: roleConfig.thinking ?? opts.env?.thinking,
 							source: "preset",
 							preset: presetName,

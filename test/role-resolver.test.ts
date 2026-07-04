@@ -133,28 +133,25 @@ describe("readModelsConfig", () => {
 				active: "anthropic",
 				presets: {
 					anthropic: {
-						fast: ["anthropic/haiku", "openai/mini"],
-						normal: ["anthropic/sonnet"],
+						fast: "anthropic/haiku",
+						normal: "anthropic/sonnet",
 					},
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("anthropic");
-		expect(config?.presets.anthropic.fast).toEqual([
-			"anthropic/haiku",
-			"openai/mini",
-		]);
+		expect(config?.presets.anthropic.fast).toBe("anthropic/haiku");
 	});
 
-	it("merges global and project — project replaces tier arrays", () => {
+	it("merges global and project — project wins per tier", () => {
 		globalSettings({
 			models: {
 				active: "anthropic",
 				presets: {
 					anthropic: {
-						fast: ["anthropic/haiku"],
-						normal: ["anthropic/sonnet"],
+						fast: "anthropic/haiku",
+						normal: "anthropic/sonnet",
 					},
 				},
 			},
@@ -164,20 +161,17 @@ describe("readModelsConfig", () => {
 				active: "openai",
 				presets: {
 					anthropic: {
-						fast: ["anthropic/haiku-new", "openai/mini"],
+						fast: "anthropic/haiku-new",
 					},
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("openai");
-		// Project replaced the fast array entirely
-		expect(config?.presets.anthropic.fast).toEqual([
-			"anthropic/haiku-new",
-			"openai/mini",
-		]);
+		// Project replaced fast
+		expect(config?.presets.anthropic.fast).toBe("anthropic/haiku-new");
 		// Normal comes from global (project didn't override)
-		expect(config?.presets.anthropic.normal).toEqual(["anthropic/sonnet"]);
+		expect(config?.presets.anthropic.normal).toBe("anthropic/sonnet");
 	});
 
 	it("migrates old backgroundModels format", () => {
@@ -188,8 +182,8 @@ describe("readModelsConfig", () => {
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("default");
-		expect(config?.presets.default.fast).toEqual(["openai/mini"]);
-		expect(config?.presets.default.normal).toEqual(["anthropic/sonnet"]);
+		expect(config?.presets.default.fast).toBe("openai/mini");
+		expect(config?.presets.default.normal).toBe("anthropic/sonnet");
 	});
 
 	it("new format takes priority over old format", () => {
@@ -197,12 +191,12 @@ describe("readModelsConfig", () => {
 			backgroundModels: { primary: { fast: "old/model" } },
 			models: {
 				active: "new",
-				presets: { new: { fast: ["new/model"] } },
+				presets: { new: { fast: "new/model" } },
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("new");
-		expect(config?.presets.new.fast).toEqual(["new/model"]);
+		expect(config?.presets.new.fast).toBe("new/model");
 	});
 
 	it("returns undefined when nothing is configured", () => {
@@ -282,22 +276,19 @@ describe("resolveRoleModel", () => {
 		expect(r?.tier).toBe("fast");
 	});
 
-	it("fallback array: skips models without auth, uses first valid", async () => {
+	it("tier resolves single model from preset", async () => {
 		projectSettings({
 			models: {
-				active: "mixed",
+				active: "test",
 				presets: {
-					mixed: { normal: ["noauth/model", "good/model", "also-good/model"] },
+					test: { normal: "good/model" },
 				},
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "normal" } } },
 			},
 		});
-		const ctx = fakeCtx({
-			noAuth: new Set(["noauth"]),
-			withApiKey: new Set(["good"]),
-		});
+		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
@@ -306,11 +297,35 @@ describe("resolveRoleModel", () => {
 		expect(r?.source).toBe("preset");
 	});
 
-	it("empty tier array falls through to session model", async () => {
+	it("tier with no auth fails through to session model", async () => {
+		projectSettings({
+			models: {
+				active: "bad",
+				presets: {
+					bad: { normal: "noauth/model" },
+				},
+			},
+			extensionConfig: {
+				modes: { models: { worker: { tier: "normal" } } },
+			},
+		});
+		const ctx = fakeCtx({
+			noAuth: new Set(["noauth"]),
+			sessionModel: "sess/model",
+		});
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "worker",
+		});
+		expect(r?.modelId).toBe("sess/model");
+		expect(r?.source).toBe("session");
+	});
+
+	it("unset tier falls through to session model", async () => {
 		projectSettings({
 			models: {
 				active: "empty",
-				presets: { empty: { normal: [] } },
+				presets: { empty: {} },
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "normal" } } },
@@ -423,41 +438,41 @@ describe("resolveRoleModel", () => {
 		expect(r?.source).toBe("session");
 	});
 
-	it("requireApiKey skips ok-but-keyless candidates in fallback array", async () => {
+	it("requireApiKey: model without key fails through to session", async () => {
 		projectSettings({
 			models: {
 				active: "test",
-				presets: { test: { fast: ["keyless/model", "keyed/model"] } },
+				presets: { test: { fast: "keyless/model" } },
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "fast" } } },
 			},
 		});
-		// keyless provider has ok auth but no apiKey; keyed has apiKey
-		const ctx = fakeCtx({ withApiKey: new Set(["keyed"]) });
+		const ctx = fakeCtx({ withApiKey: new Set(["keyed", "sess"]), sessionModel: "sess/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
 			requireApiKey: true,
 		});
-		expect(r?.modelId).toBe("keyed/model");
+		// keyless/model doesn't have apiKey, falls to session
+		expect(r?.modelId).toBe("sess/model");
 	});
 
-	it("project settings override global per-tier (replaces array)", async () => {
+	it("project settings override global per-tier", async () => {
 		globalSettings({
 			models: {
 				active: "p",
-				presets: { p: { fast: ["global/fast1", "global/fast2"] } },
+				presets: { p: { fast: "global/fast" } },
 			},
 		});
 		projectSettings({
 			models: {
-				presets: { p: { fast: ["project/fast"] } },
+				presets: { p: { fast: "project/fast" } },
 			},
 		});
 		projectSettings({
 			models: {
-				presets: { p: { fast: ["project/fast"] } },
+				presets: { p: { fast: "project/fast" } },
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "fast" } } },

@@ -45,7 +45,10 @@ describe("scaffold", () => {
 
 	it("wires exactly the extension packages into the pi manifest", () => {
 		const entries = [...pkg.pi.extensions].sort();
-		const want = EXTENSIONS.map((n) => `packages/${n}/src/index.ts`).sort();
+		const want = [
+			...EXTENSIONS.map((n) => `packages/${n}/src/index.ts`),
+			"packages/settings/src/extension.ts",
+		].sort();
 		expect(entries).toEqual(want);
 	});
 

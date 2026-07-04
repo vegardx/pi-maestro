@@ -8,6 +8,7 @@ import type { Answers, Questionnaire } from "./ask.js";
 import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
 import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
+import type { SettingsCapabilityV1 } from "./settings.js";
 import type { ShipDeliverableInput, ShipResult } from "./ship.js";
 import type { TokenSnapshot, UsageSource } from "./usage.js";
 
@@ -20,6 +21,7 @@ export const CAPABILITIES = {
 	modes: "modes.v1",
 	promptAssist: "prompt-assist.v1",
 	overlays: "overlays.v1",
+	settings: "settings.v1",
 } as const;
 
 export type CapabilityId = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
@@ -106,4 +108,5 @@ export interface CapabilityMap {
 	[CAPABILITIES.modes]: ModesCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;
 	[CAPABILITIES.overlays]: OverlaysCapabilityV1;
+	[CAPABILITIES.settings]: SettingsCapabilityV1;
 }

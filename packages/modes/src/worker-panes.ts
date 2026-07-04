@@ -180,6 +180,10 @@ export class WorkerPanes {
 
 		// Evenly distribute heights
 		await this.evenlyResize();
+
+		// Resize each worker session's window to match the pane dimensions
+		// so the TUI renders at the pane size (bottom/input visible)
+		await this.resizeSessionsToMatchPanes();
 	}
 
 	private async killAllPanes(): Promise<void> {
@@ -219,6 +223,41 @@ export class WorkerPanes {
 			}
 		} catch {
 			// Best-effort
+		}
+	}
+
+	/**
+	 * Resize each worker session's window to match the viewer pane dimensions.
+	 * This ensures the worker's TUI renders at the pane size so the bottom
+	 * (input field) is visible instead of being off-screen.
+	 */
+	private async resizeSessionsToMatchPanes(): Promise<void> {
+		for (const [agentName, paneId] of this.panes.entries()) {
+			try {
+				const stdout = await tmuxExec([
+					"display-message",
+					"-t",
+					paneId,
+					"-p",
+					"#{pane_width} #{pane_height}",
+				]);
+				const [w, h] = stdout.trim().split(" ");
+				const width = Number.parseInt(w, 10);
+				const height = Number.parseInt(h, 10);
+				if (width > 0 && height > 0) {
+					await tmuxExec([
+						"resize-window",
+						"-t",
+						`${agentName}:0`,
+						"-x",
+						String(width),
+						"-y",
+						String(height),
+					]);
+				}
+			} catch {
+				// Best-effort — session may not exist yet
+			}
 		}
 	}
 

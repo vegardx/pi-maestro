@@ -190,6 +190,10 @@ export class WorkerPanes {
 		}
 		this.panes.clear();
 		this.columnPaneId = undefined;
+		// Re-focus the main pane so input isn't lost
+		try {
+			await tmuxExec(["select-pane", "-t", ":.0"]);
+		} catch {}
 	}
 
 	private async evenlyResize(): Promise<void> {

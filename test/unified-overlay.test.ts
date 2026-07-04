@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Row } from "../packages/modes/src/agents-dashboard.js";
 import type { TmuxAgentState } from "../packages/modes/src/execution-tmux.js";
 import type { PendingQuestion } from "../packages/modes/src/question-queue.js";
@@ -238,5 +239,56 @@ describe("UnifiedOverlayComponent", () => {
 		overlay.updateQuestions([]); // no questions
 		const lines = overlay.render(60);
 		expect(lines[0]).not.toContain("question");
+	});
+
+	it("no rendered line exceeds the given width", () => {
+		const overlay = new UnifiedOverlayComponent({
+			onAnswer: () => {},
+			onAction: () => {},
+		});
+		overlay.focused = true;
+		overlay.updateAgents([
+			makeRow({ title: "A very long deliverable title that exceeds any reasonable column width and should be truncated properly" }),
+			makeRow({ agentId: "agent-2", title: "Another agent with a super long title for testing width constraints" }),
+		]);
+		overlay.updateQuestions([
+			makePendingQuestion({
+				questions: [
+					{
+						id: "q1",
+						question: "This is an extremely long question that should definitely be truncated when rendered in a narrow terminal",
+						options: [
+							{ label: "Option with a very long description that might overflow the box boundaries" },
+							{ label: "Short" },
+						],
+					},
+				],
+			}),
+		]);
+		overlay.setHandle({ focus: () => {}, unfocus: () => {} } as any);
+
+		// Test at a narrow width (like the crash scenario)
+		const width = 80;
+		overlay.handleInput("\t"); // expand
+
+		// Check agents section
+		const agentLines = overlay.render(width);
+		for (const line of agentLines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+
+		// Check questions section
+		overlay.handleInput("\u001b[C"); // → to questions
+		const questionLines = overlay.render(width);
+		for (const line of questionLines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+
+		// Also test collapsed
+		overlay.handleInput("\u001b"); // collapse
+		const collapsedLines = overlay.render(width);
+		for (const line of collapsedLines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
 	});
 });

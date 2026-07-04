@@ -75,7 +75,7 @@ function statusToTab(status: string): TabId {
 
 function boxLine(content: string, width: number, palette: Palette): string {
 	const inner = width - 4;
-	return `${palette.dim("│")} ${padRight(content, inner)} ${palette.dim("│")}`;
+	return `${palette.dim("│")} ${padRight(truncate(content, inner), inner)} ${palette.dim("│")}`;
 }
 
 function boxTop(
@@ -86,7 +86,7 @@ function boxTop(
 ): string {
 	const left = ` ${leftLabel} `;
 	const right = rightLabel ? ` ${rightLabel} ` : "";
-	const fillLen = Math.max(width - 2 - left.length - right.length, 0);
+	const fillLen = Math.max(width - 4 - left.length - right.length, 0);
 	const fill = "─".repeat(fillLen);
 	return palette.dim(`╭─${left}${fill}${right}─╮`);
 }

@@ -94,7 +94,7 @@ export interface FooterDeps {
 	readonly ctx: ExtensionContext;
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
-	readonly getAgentStatus: () => { done: number; total: number } | undefined;
+	readonly getAgentStatus: () => { done: number; total: number; failed: number } | undefined;
 	readonly getPendingQuestions: () => number;
 }
 
@@ -138,9 +138,12 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					leftParts.push(theme.fg("muted", location));
 
 					if (agents && agents.total > 0) {
-						leftParts.push(
-							theme.fg("muted", `Agents: ${agents.done}/${agents.total}`),
-						);
+						let agentLabel = `Agents: ${agents.done}/${agents.total}`;
+						if (agents.failed > 0) {
+							agentLabel += ` (${agents.failed} failed)`;
+						}
+						const color = agents.failed > 0 ? "error" : "muted";
+						leftParts.push(theme.fg(color, agentLabel));
 					}
 					if (questions > 0) {
 						leftParts.push(

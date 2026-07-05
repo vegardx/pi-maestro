@@ -1214,10 +1214,12 @@ export function createModesRuntime(
 					const total = agents.size;
 					if (total === 0) return undefined;
 					let done = 0;
+					let failed = 0;
 					for (const a of agents.values()) {
-						if (a.status === "done" || a.status === "failed") done++;
+						if (a.status === "done") done++;
+						else if (a.status === "failed") failed++;
 					}
-					return { done, total };
+					return { done: done + failed, total, failed };
 				},
 				getPendingQuestions: () => {
 					if (!tmuxFanout) return 0;

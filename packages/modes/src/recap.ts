@@ -34,19 +34,49 @@ export function formatRecap(
 
 	const lines: string[] = [];
 	const divider = "\u2500".repeat(60);
+	const finished = done + failed;
 	const failedSuffix = failed > 0 ? `, ${failed} failed` : "";
-	lines.push(`\u2500\u2500\u2500 Execution complete (${done + failed}/${total} done${failedSuffix}) ${divider}`);
+	const headerStatus = finished === total ? "complete" : "in progress";
+	lines.push(`\u2500\u2500\u2500 Execution ${headerStatus} (${finished}/${total} done${failedSuffix}) ${divider}`);
 	lines.push("");
 
 	for (const [, agent] of agents) {
 		const elapsed = formatDuration(now - agent.startedAt);
-		const icon = agent.status === "done" ? "\u2713" : "\u2717";
-		const statusColor = agent.status === "done" ? icon : icon;
+		let icon: string;
+		let status: string;
+		switch (agent.status) {
+			case "done":
+				icon = "\u2713";
+				status = "";
+				break;
+			case "failed":
+				icon = "\u2717";
+				status = "(failed)";
+				break;
+			case "working":
+				icon = "\u25b6";
+				status = "running";
+				break;
+			case "spawning":
+				icon = "\u25cb";
+				status = "starting";
+				break;
+			case "awaiting-decision":
+				icon = "\u2753";
+				status = "waiting for answer";
+				break;
+			default:
+				icon = "\u25cb";
+				status = agent.status;
+				break;
+		}
 
-		let line = `  ${statusColor}  ${agent.agentName.padEnd(20)}`;
+		let line = `  ${icon}  ${agent.agentName.padEnd(20)}`;
 
 		if (agent.summary) {
 			line += `  ${agent.summary}`;
+		} else if (status) {
+			line += `  ${status}`;
 		}
 
 		lines.push(line);

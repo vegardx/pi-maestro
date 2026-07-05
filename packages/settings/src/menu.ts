@@ -30,6 +30,10 @@ interface SettingRow {
 	project: string | undefined;
 	/** Value at session scope, or undefined */
 	session: string | undefined;
+	/** If true, only the global column is editable (project/session show ·) */
+	globalOnly?: boolean;
+	/** Default value (shown dimmed in global column when no explicit value set) */
+	defaultValue?: string;
 }
 
 interface Section {
@@ -166,6 +170,7 @@ function buildSections(ctx: ExtensionContext): Section[] {
 					global: tiers[tier],
 					project: undefined,
 					session: undefined,
+					globalOnly: true,
 				});
 			}
 		}
@@ -187,9 +192,10 @@ function buildSections(ctx: ExtensionContext): Section[] {
 			label: decl.label,
 			extension: decl.extension,
 			key: decl.key,
-			global: globalVal ?? (defaultStr ? `${defaultStr} (default)` : undefined),
+			global: globalVal,
 			project: projectVal,
 			session: sessVal,
+			defaultValue: defaultStr,
 		};
 
 		const list = byExt.get(decl.extension) ?? [];
@@ -214,7 +220,7 @@ const KEY_ENTER = "\r";
 const KEY_ESC = "\u001b";
 const KEY_BACKSPACE = "\u007f";
 
-type Mode = "browse" | "edit" | "select";
+type Mode = "browse" | "edit" | "select" | "naming";
 
 const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
@@ -223,7 +229,11 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TIER_OPTIONS = ["fast", "normal", "heavy"];
 const BOOL_OPTIONS = ["true", "false"];
 
-function getOptionsForKey(key: string, ctx: ExtensionContext): string[] | null {
+function getOptionsForKey(
+	key: string,
+	extension: string,
+	ctx: ExtensionContext,
+): string[] | null {
 	if (key.endsWith(".thinking")) return THINKING_LEVELS;
 	if (key.endsWith(".tier")) return TIER_OPTIONS;
 	if (key === "lensDisabled") return BOOL_OPTIONS;
@@ -234,6 +244,11 @@ function getOptionsForKey(key: string, ctx: ExtensionContext): string[] | null {
 	if (key === "active") {
 		const config = readModelsConfig(ctx.cwd);
 		if (config) return Object.keys(config.presets);
+	}
+	// Preset tier keys (e.g. "anthropic.fast") → model picker
+	if (extension === "@presets" && key !== "active") {
+		const models = ctx.modelRegistry.getAvailable();
+		return models.map((m) => `${m.provider}/${m.id}`);
 	}
 	return null;
 }
@@ -280,7 +295,9 @@ class ConfigMenuComponent implements Component, Focusable {
 	}
 
 	private effective(row: SettingRow): string {
-		return row.session ?? row.project ?? row.global ?? "\u2014";
+		return (
+			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014"
+		);
 	}
 
 	invalidate(): void {}
@@ -328,22 +345,34 @@ class ConfigMenuComponent implements Component, Focusable {
 				const label = visPad(r.label, labelW - 2);
 
 				const cells = [r.global, r.project, r.session].map((val, i) => {
+					// Global-only rows show · for project/session
+					if (r.globalOnly && i > 0) {
+						return p.dim(visPad("\u00b7", colW));
+					}
+
 					const isActive = selected && i === this.col;
+
+					// Resolve display value: actual value, or default (for global col)
+					const actualVal = val;
+					const showDefault = !actualVal && i === 0 && r.defaultValue;
 					let display: string;
 
 					if (this.mode === "edit" && isActive) {
 						display = `${this.editBuffer}\u2588`;
 					} else if (isActive) {
-						const v = val ?? "\u2014";
+						const v = actualVal ?? r.defaultValue ?? "\u2014";
 						const inner = truncateToWidth(v, colW - 4);
 						display = `[${inner}]`;
+					} else if (showDefault) {
+						display = `${r.defaultValue} (def)`;
 					} else {
-						display = val ?? "\u2014";
+						display = actualVal ?? "\u2014";
 					}
 
 					const cell = visPad(truncateToWidth(display, colW - 1), colW);
 					if (isActive) return p.accent(cell);
-					if (val) return cell;
+					if (showDefault) return p.dim(cell);
+					if (actualVal) return cell;
 					return p.dim(cell);
 				});
 
@@ -369,6 +398,15 @@ class ConfigMenuComponent implements Component, Focusable {
 			lines.push(line(""));
 		}
 
+		// Naming mode (create new preset)
+		if (this.mode === "naming") {
+			lines.push(line(""));
+			lines.push(
+				line(`  New preset name: ${p.accent(`${this.editBuffer}\u2588`)}`),
+			);
+			lines.push(line(""));
+		}
+
 		// Status
 		if (this.statusMessage) {
 			lines.push(line(`  ${p.success(this.statusMessage)}`));
@@ -380,7 +418,9 @@ class ConfigMenuComponent implements Component, Focusable {
 				? "\u2191\u2193 choose  Enter confirm  Esc cancel"
 				: this.mode === "edit"
 					? "Enter: save  Esc: cancel"
-					: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
+					: this.mode === "naming"
+						? "Enter: create  Esc: cancel"
+						: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
 		lines.push(line(p.muted(help)));
 
 		// Bottom border
@@ -400,32 +440,45 @@ class ConfigMenuComponent implements Component, Focusable {
 			this.handleSelectInput(data);
 			return;
 		}
+		if (this.mode === "naming") {
+			this.handleNamingInput(data);
+			return;
+		}
 
 		switch (data) {
 			case KEY_UP:
 				this.cursor = Math.max(0, this.cursor - 1);
+				if (this.flatRows[this.cursor]?.globalOnly) this.col = 0 as ColIdx;
 				break;
 			case KEY_DOWN:
 				this.cursor = Math.min(this.flatRows.length - 1, this.cursor + 1);
+				if (this.flatRows[this.cursor]?.globalOnly) this.col = 0 as ColIdx;
 				break;
-			case KEY_LEFT:
+			case KEY_LEFT: {
+				const r = this.flatRows[this.cursor];
+				if (r?.globalOnly) break; // can't leave global col
 				this.col = Math.max(0, this.col - 1) as ColIdx;
 				break;
-			case KEY_RIGHT:
+			}
+			case KEY_RIGHT: {
+				const r = this.flatRows[this.cursor];
+				if (r?.globalOnly) break; // can't leave global col
 				this.col = Math.min(2, this.col + 1) as ColIdx;
 				break;
+			}
 			case KEY_ENTER: {
 				const row = this.flatRows[this.cursor];
 				if (row) {
-					const opts = getOptionsForKey(row.key, this.ctx);
+					const opts = getOptionsForKey(row.key, row.extension, this.ctx);
 					if (opts && opts.length > 0) {
 						this.options = opts;
 						const current = [row.global, row.project, row.session][this.col];
-						this.optionCursor = Math.max(0, opts.indexOf(current ?? ""));
+						const matchVal = current ?? row.defaultValue ?? "";
+						this.optionCursor = Math.max(0, opts.indexOf(matchVal));
 						this.mode = "select";
 					} else {
 						const current = [row.global, row.project, row.session][this.col];
-						this.editBuffer = current ?? "";
+						this.editBuffer = current ?? row.defaultValue ?? "";
 						this.mode = "edit";
 					}
 				}
@@ -436,6 +489,10 @@ class ConfigMenuComponent implements Component, Focusable {
 				if (row) this.deleteCell(row);
 				break;
 			}
+			case "n":
+				this.editBuffer = "";
+				this.mode = "naming";
+				break;
 			case KEY_ESC:
 			case "q":
 				this.handle?.hide();
@@ -494,6 +551,44 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 	}
 
+	private handleNamingInput(data: string): void {
+		if (data === KEY_ESC) {
+			this.mode = "browse";
+			this.editBuffer = "";
+			return;
+		}
+		if (data === KEY_ENTER) {
+			const name = this.editBuffer.trim();
+			if (name) {
+				this.createPreset(name);
+			}
+			this.mode = "browse";
+			this.editBuffer = "";
+			return;
+		}
+		if (data === KEY_BACKSPACE) {
+			this.editBuffer = this.editBuffer.slice(0, -1);
+			return;
+		}
+		if (data.length === 1 && data >= " ") {
+			this.editBuffer += data;
+		}
+	}
+
+	private createPreset(name: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
+			if (!isPlainObject(raw.models)) raw.models = {};
+			const models = raw.models as Record<string, unknown>;
+			if (!isPlainObject(models.presets)) models.presets = {};
+			const presets = models.presets as Record<string, unknown>;
+			presets[name] = {};
+			if (!models.active) models.active = name;
+		});
+		this.statusMessage = `\u2713 Created preset "${name}"`;
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
+	}
+
 	private writeCell(row: SettingRow, raw: string): void {
 		const scope = COL_NAMES[this.col];
 		const value = this.parseValue(raw);
@@ -507,7 +602,21 @@ class ConfigMenuComponent implements Component, Focusable {
 				(obj.models as Record<string, unknown>).active = raw;
 			});
 			this.statusMessage = `\u2713 preset \u2192 ${raw} [${scope}]`;
-		} else if (row.extension !== "@presets") {
+		} else if (row.extension === "@presets") {
+			// Preset tier: key is "presetName.tier" e.g. "anthropic.fast"
+			const dotIdx = row.key.indexOf(".");
+			const presetName = row.key.slice(0, dotIdx);
+			const tier = row.key.slice(dotIdx + 1);
+			updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+				if (!isPlainObject(obj.models)) obj.models = {};
+				const models = obj.models as Record<string, unknown>;
+				if (!isPlainObject(models.presets)) models.presets = {};
+				const presets = models.presets as Record<string, unknown>;
+				if (!isPlainObject(presets[presetName])) presets[presetName] = {};
+				(presets[presetName] as Record<string, unknown>)[tier] = raw;
+			});
+			this.statusMessage = `\u2713 ${presetName}.${tier} = ${raw} [global]`;
+		} else {
 			writeExtensionConfigKey(
 				scope,
 				this.ctx.cwd,

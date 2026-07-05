@@ -30,6 +30,8 @@ export interface DoneMessage {
 	readonly type: "done";
 	readonly summary?: string;
 	readonly prUrl?: string;
+	readonly commits?: string[];
+	readonly model?: string;
 }
 
 export interface TaskCompleteMessage {

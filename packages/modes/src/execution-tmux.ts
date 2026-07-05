@@ -85,6 +85,9 @@ export interface TmuxAgentState {
 	lastLensAt?: number;
 	prUrl?: string;
 	summary?: string;
+	errorDetail?: string;
+	commits?: string[];
+	model?: string;
 }
 
 export interface TmuxFanoutDeps {
@@ -134,6 +137,7 @@ export class TmuxFanout {
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
 	private settlePromise: Promise<void> | undefined;
 	private settleResolve: (() => void) | undefined;
+	private settledFired = false;
 
 	/** Analyze result from the most recent analyze phase. */
 	private analyzeResult: AnalyzeResult | undefined;
@@ -641,7 +645,7 @@ export class TmuxFanout {
 				this.deps.onLensUsage?.(agentId, msg.lens, msg.snapshot);
 				break;
 			case "done":
-				this.markDone(agentId, msg.summary, msg.prUrl);
+				this.markDone(agentId, msg.summary, msg.prUrl, msg.commits, msg.model);
 				break;
 			case "questions": {
 				const d = findDeliverable(this.deps.engine.get(), agentId);
@@ -750,7 +754,13 @@ export class TmuxFanout {
 		return true;
 	}
 
-	private markDone(agentId: string, summary?: string, prUrl?: string): void {
+	private markDone(
+		agentId: string,
+		summary?: string,
+		prUrl?: string,
+		commits?: string[],
+		model?: string,
+	): void {
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done") return;
 		state.status = "done";
@@ -759,6 +769,8 @@ export class TmuxFanout {
 			this.deps.engine.updateDeliverable(agentId, { summary });
 		}
 		if (prUrl) state.prUrl = prUrl;
+		if (commits) state.commits = commits;
+		if (model) state.model = model;
 		transitionThrough(this.deps.engine, agentId, "in-review");
 		this.deps.onAgentStateChanged?.(agentId, state);
 		this.deps.onPlanChanged?.();
@@ -771,6 +783,7 @@ export class TmuxFanout {
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		state.status = "failed";
+		if (detail) state.errorDetail = detail;
 		// Drop any pending decision request — the agent is gone, so resolving it
 		// would send to a dead socket and it must not be offered in /answer.
 		this.questionQueue.drop(agentId);
@@ -822,7 +835,8 @@ export class TmuxFanout {
 			this.settleResolve = undefined;
 			this.settlePromise = undefined;
 		}
-		if (this.allSettled()) {
+		if (this.allSettled() && !this.settledFired) {
+			this.settledFired = true;
 			this.deps.onAllSettled?.();
 		}
 	}

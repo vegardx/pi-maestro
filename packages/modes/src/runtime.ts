@@ -673,7 +673,7 @@ export function createModesRuntime(
 					},
 					onAllSettled: () => {
 						if (!tmuxFanout) return;
-						const recap = formatRecap(tmuxFanout.snapshot().agents);
+						const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger);
 						pi.sendMessage(
 							{
 								customType: "maestro.execution.recap",
@@ -969,7 +969,7 @@ export function createModesRuntime(
 				cmdCtx.ui.notify("No agent work to recap.", "info");
 				return;
 			}
-			const recap = formatRecap(tmuxFanout.snapshot().agents);
+			const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger);
 			pi.sendMessage(
 				{
 					customType: "maestro.execution.recap",

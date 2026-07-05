@@ -94,7 +94,8 @@ export interface FooterDeps {
 	readonly ctx: ExtensionContext;
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
-	readonly getPlanSlug: () => string | undefined;
+	readonly getAgentStatus: () => { done: number; total: number } | undefined;
+	readonly getPendingQuestions: () => number;
 }
 
 /**
@@ -102,7 +103,8 @@ export interface FooterDeps {
  * handle the caller can invoke when mode/usage/plan state changes.
  */
 export function installFooter(deps: FooterDeps): (() => void) | undefined {
-	const { pi, ctx, getMode, getLedger, getPlanSlug } = deps;
+	const { pi, ctx, getMode, getLedger, getAgentStatus, getPendingQuestions } =
+		deps;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 
 	const home = homedir();
@@ -122,25 +124,35 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const mode = getMode();
 					const branch = footerData.getGitBranch();
 					const statuses = footerData.getExtensionStatuses();
+					const agents = getAgentStatus();
+					const questions = getPendingQuestions();
 
 					// ── Left side ──────────────────────────────────────────
 					const leftParts: string[] = [];
 					const shortPath = cwd.startsWith(home)
 						? `~${cwd.slice(home.length)}`
 						: cwd;
-					const location = branch ? `${shortPath} (${branch})` : shortPath;
+					const location = branch
+						? `${shortPath} (${branch})`
+						: shortPath;
 					leftParts.push(theme.fg("muted", location));
 
-					const planSlug = getPlanSlug();
-					if (planSlug) {
-						leftParts.push(theme.fg("muted", `plan:${planSlug}`));
+					if (agents && agents.total > 0) {
+						leftParts.push(
+							theme.fg("muted", `Agents: ${agents.done}/${agents.total}`),
+						);
+					}
+					if (questions > 0) {
+						leftParts.push(
+							theme.fg("accent", `Questions: ${questions}`),
+						);
 					}
 
 					for (const [, val] of statuses) leftParts.push(val);
 
 					const leftText = leftParts.join("  ");
 
-					// ── Right side ─────────────────────────────────────────
+					// ── Right side (priority chain: first to drop → last) ─
 					const ledger = getLedger();
 					const usageLabel = formatSessionUsage(ledger);
 					const cacheLabel = formatCacheHitRate(ledger);
@@ -153,59 +165,40 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const sep = theme.fg("muted", " | ");
 					const sepVisible = " | ";
 
-					// Build candidates from richest to sparsest
 					const candidates: FooterRightCandidate[] = [];
 
-					// Full: "↑124k ↓45k | CH 78% | Sonnet 4.5 | auto"
-					const fullParts: string[] = [];
-					const fullVisible: string[] = [];
+					// Full: "↑124k ↓45k | CH 78% | Sonnet 4 (high) | auto"
+					{
+						const parts: string[] = [];
+						const vis: string[] = [];
+						if (usageLabel) { parts.push(theme.fg("muted", usageLabel)); vis.push(usageLabel); }
+						if (cacheLabel) { parts.push(theme.fg("muted", cacheLabel)); vis.push(cacheLabel); }
+						if (modelLabel) { parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel); }
+						parts.push(modeLabel); vis.push(modeLabelVisible);
+						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
+					}
+
+					// Drop token usage
 					if (usageLabel) {
-						fullParts.push(theme.fg("muted", usageLabel));
-						fullVisible.push(usageLabel);
-					}
-					if (cacheLabel) {
-						fullParts.push(theme.fg("muted", cacheLabel));
-						fullVisible.push(cacheLabel);
-					}
-					if (modelLabel) {
-						fullParts.push(theme.fg("muted", modelLabel));
-						fullVisible.push(modelLabel);
-					}
-					fullParts.push(modeLabel);
-					fullVisible.push(modeLabelVisible);
-
-					if (fullParts.length > 0) {
-						candidates.push({
-							styled: fullParts.join(sep),
-							visible: fullVisible.join(sepVisible),
-						});
+						const parts: string[] = [];
+						const vis: string[] = [];
+						if (cacheLabel) { parts.push(theme.fg("muted", cacheLabel)); vis.push(cacheLabel); }
+						if (modelLabel) { parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel); }
+						parts.push(modeLabel); vis.push(modeLabelVisible);
+						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
 					}
 
-					// Medium: "↑124k ↓45k | CH 78% | auto" (drop model)
+					// Drop cache hit
 					if (modelLabel) {
-						const medParts: string[] = [];
-						const medVisible: string[] = [];
-						if (usageLabel) {
-							medParts.push(theme.fg("muted", usageLabel));
-							medVisible.push(usageLabel);
-						}
-						if (cacheLabel) {
-							medParts.push(theme.fg("muted", cacheLabel));
-							medVisible.push(cacheLabel);
-						}
-						medParts.push(modeLabel);
-						medVisible.push(modeLabelVisible);
-						candidates.push({
-							styled: medParts.join(sep),
-							visible: medVisible.join(sepVisible),
-						});
+						const parts: string[] = [];
+						const vis: string[] = [];
+						parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel);
+						parts.push(modeLabel); vis.push(modeLabelVisible);
+						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
 					}
 
 					// Slim: just mode
-					candidates.push({
-						styled: modeLabel,
-						visible: modeLabelVisible,
-					});
+					candidates.push({ styled: modeLabel, visible: modeLabelVisible });
 
 					return [composeFooterLine(leftText, candidates, width)];
 				},

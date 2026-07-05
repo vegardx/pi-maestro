@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OverlayManager } from "./overlay-manager.js";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -33,7 +34,7 @@ import {
 	initAgentBridge,
 	isAgentMode,
 } from "./agent-bridge.js";
-import { buildRows } from "./agents-dashboard.js";
+import { buildRows, runAgentsDashboard } from "./agents-dashboard.js";
 import { ModesAskQueue } from "./ask-queue.js";
 import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
 import {
@@ -70,7 +71,6 @@ import {
 	handleViewCommand,
 	type ViewState,
 } from "./orchestrator-tmux.js";
-import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import {
 	type Deliverable,
@@ -123,7 +123,6 @@ import {
 	shouldCompactMidDeliverable,
 } from "./trigger.js";
 import { renderModeFooter } from "./ui.js";
-import { UnifiedOverlayComponent } from "./unified-overlay.js";
 import {
 	accumulate,
 	incrementTurns,
@@ -177,8 +176,9 @@ export function createModesRuntime(
 		},
 	};
 	let state: ModesState = initialModesState(now);
-	let engine: PlanEngine | undefined;
 	const overlayManager = new OverlayManager();
+	let engine: PlanEngine | undefined;
+
 	// While a draft plan is open: the entry count at /plan time (to locate the
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
@@ -203,7 +203,7 @@ export function createModesRuntime(
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	const workerPanes = new WorkerPanes();
-	let unifiedOverlay: UnifiedOverlayComponent | undefined;
+	
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -375,7 +375,6 @@ export function createModesRuntime(
 			if (sessionPath) recordPlanSession(engine, sessionPath);
 			persist();
 			maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
-			ctx.ui.setStatus("maestro.plan", `plan: ${slug}`);
 			return engine;
 		}
 		// A new plan starts as an in-memory draft. It's named and persisted lazily
@@ -394,7 +393,6 @@ export function createModesRuntime(
 		draftStartEntries = ctx.sessionManager.getEntries().length;
 		const sessionPath = ctx.sessionManager.getSessionFile();
 		if (sessionPath) recordPlanSession(engine, sessionPath);
-		ctx.ui.setStatus("maestro.plan", "plan: (draft)");
 		return engine;
 	}
 
@@ -417,7 +415,6 @@ export function createModesRuntime(
 		state = setActivePlan(state, slug, now);
 		persist();
 		maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
-		ctx.ui.setStatus("maestro.plan", `plan: ${slug}`);
 		ctx.ui.notify(`Plan saved as \`${slug}\`.`, "info");
 		draftExplicitName = undefined;
 	}
@@ -652,15 +649,6 @@ export function createModesRuntime(
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						invalidateFooter?.();
 						if (tmuxFanout) {
-							// Update unified overlay
-							if (unifiedOverlay && engine) {
-								const rows = buildRows(
-									tmuxFanout,
-									engine,
-									tmuxFanout.questionQueue,
-								);
-								unifiedOverlay.updateAgents(rows);
-							}
 							// Only sync worker panes on status transitions
 							if (
 								workerPanes.isOpen() &&
@@ -675,9 +663,6 @@ export function createModesRuntime(
 							`Agent has ${count} question(s) — /answer to respond.`,
 							"info",
 						);
-						if (tmuxFanout && unifiedOverlay) {
-							unifiedOverlay.updateQuestions(tmuxFanout.questionQueue.all());
-						}
 					},
 					onLensUsage: (id, lens, snapshot) => {
 						usageLedger.record(
@@ -695,24 +680,6 @@ export function createModesRuntime(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
 				);
-				// Mount the unified overlay
-				if (!unifiedOverlay && engine) {
-					const rows = buildRows(tmuxFanout, engine, tmuxFanout.questionQueue);
-					unifiedOverlay = new UnifiedOverlayComponent({
-						onAnswer: (agentId, answers) => {
-							tmuxFanout?.questionQueue.answer(agentId, answers);
-							unifiedOverlay?.updateQuestions(
-								tmuxFanout?.questionQueue.all() ?? [],
-							);
-						},
-						onAction: (_action, _agentId) => {
-							// TODO: wire watch/attach/steer actions
-						},
-					});
-					unifiedOverlay.updateAgents(rows);
-					overlayManager.mount("agents", unifiedOverlay);
-				}
-			} else {
 				ctx.ui.notify("No deliverables ready to start.", "warning");
 			}
 			return;
@@ -897,12 +864,13 @@ export function createModesRuntime(
 
 	pi.registerCommand("agents", {
 		description: "Interactive dashboard of active agents.",
-		handler: async (_args: string, _ctx: ExtensionCommandContext) => {
-			if (unifiedOverlay) {
-				unifiedOverlay.showAgents();
-			} else {
-				_ctx.ui.notify("No agents active.", "info");
+		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
+			if (!tmuxFanout || !engine) {
+				cmdCtx.ui.notify("No agents active.", "info");
+				return;
 			}
+			const queue = tmuxFanout.questionQueue;
+			await runAgentsDashboard(cmdCtx as any, tmuxFanout, engine, usageLedger, queue);
 		},
 	});
 
@@ -956,11 +924,25 @@ export function createModesRuntime(
 
 	pi.registerCommand("answer", {
 		description: "Answer pending agent questions.",
-		handler: async (_args: string, _ctx: ExtensionCommandContext) => {
-			if (unifiedOverlay) {
-				unifiedOverlay.showQuestions();
-			} else {
-				_ctx.ui.notify("No questions pending.", "info");
+		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
+			if (!tmuxFanout) {
+				cmdCtx.ui.notify("No questions pending.", "info");
+				return;
+			}
+			const pending = tmuxFanout.questionQueue.all();
+			if (pending.length === 0) {
+				cmdCtx.ui.notify("No questions pending.", "info");
+				return;
+			}
+			// Answer the first pending question
+			const entry = pending[0];
+			const answer = await cmdCtx.ui.input(
+				`${entry.agentName}: ${entry.questions[0]?.question ?? "Question"}`,
+				"Type your answer...",
+			);
+			if (answer) {
+				entry.resolve([{ questionId: entry.questions[0]?.id ?? "0", value: answer }]);
+				cmdCtx.ui.notify(`\u2713 Answered ${entry.agentName}`, "info");
 			}
 		},
 	});
@@ -1202,7 +1184,6 @@ export function createModesRuntime(
 
 	pi.on("session_start", (_event, ctx) => {
 		if (!isAgentMode()) {
-			overlayManager.attach(ctx);
 		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
@@ -1218,6 +1199,7 @@ export function createModesRuntime(
 			openPlan(undefined, ctx);
 		}
 		applyTools();
+			overlayManager.attach(ctx);
 		// Install custom footer (before notifyMode so invalidate handle exists)
 		if (!agentBridge && state.mode !== "worker") {
 			invalidateFooter = installFooter({
@@ -1225,12 +1207,25 @@ export function createModesRuntime(
 				ctx,
 				getMode: () => state.mode,
 				getLedger: () => usageLedger,
-				getPlanSlug: () => state.activePlanSlug,
+				getAgentStatus: () => {
+					if (!tmuxFanout) return undefined;
+					const agents = tmuxFanout.snapshot().agents;
+					const total = agents.size;
+					if (total === 0) return undefined;
+					let done = 0;
+					for (const a of agents.values()) {
+						if (a.status === "done" || a.status === "failed") done++;
+					}
+					return { done, total };
+				},
+				getPendingQuestions: () => {
+					if (!tmuxFanout) return 0;
+					return tmuxFanout.questionQueue.all().length;
+				},
 			});
 		}
 		notifyMode(ctx);
 		if (state.activePlanSlug) {
-			ctx.ui.setStatus("maestro.plan", `plan: ${state.activePlanSlug}`);
 		}
 		// Agent-side RPC bridge: connect to orchestrator if running as agent
 		agentBridge = initAgentBridge(pi);

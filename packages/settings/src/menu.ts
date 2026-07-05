@@ -949,11 +949,14 @@ class ConfigMenuComponent implements Component, Focusable {
 
 	private openSlotModelPicker(): void {
 		const models = this.ctx.modelRegistry.getAvailable();
-		this.slotPickerModels = models.map((m) => ({
-			modelId: `${m.provider}/${m.id}`,
-			name: (m as { name?: string }).name || `${m.provider}/${m.id}`,
-			adaptive: isAdaptiveThinking(m),
-		}));
+		this.slotPickerModels = models.map((m) => {
+			const modelName = (m as { name?: string }).name || m.id;
+			return {
+				modelId: `${m.provider}/${m.id}`,
+				name: `${modelName} (${m.provider})`,
+				adaptive: isAdaptiveThinking(m),
+			};
+		});
 		this.slotPickerCursor = 0;
 		this.mode = "slot-pick-model";
 	}

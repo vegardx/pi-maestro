@@ -467,6 +467,7 @@ export class TmuxFanout {
 		timestamp: string,
 		seed: string,
 		cwd: string,
+		planSlug?: string,
 	): string {
 		// Try checkpoint-based fork
 		if (this.analyzeResult) {
@@ -492,6 +493,7 @@ export class TmuxFanout {
 								version: 2,
 								mode: "worker",
 								execution: { stage: "executing", deliverableId: d.id },
+								activePlanSlug: planSlug,
 								updatedAt: new Date().toISOString(),
 							},
 							lastEntry.id,
@@ -532,6 +534,7 @@ export class TmuxFanout {
 					version: 2,
 					mode: "worker",
 					execution: { stage: "executing", deliverableId: d.id },
+					activePlanSlug: planSlug,
 					updatedAt: new Date().toISOString(),
 				},
 				id: modesStateId,
@@ -586,6 +589,7 @@ export class TmuxFanout {
 			timestamp,
 			seed,
 			result.path,
+			this.deps.engine.get().slug,
 		);
 
 		// Register agent state

@@ -247,6 +247,7 @@ type Mode =
 
 const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
+type PresetColIdx = 0 | 1;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const BOOL_OPTIONS = ["true", "false"];
@@ -304,7 +305,8 @@ class ConfigMenuComponent implements Component, Focusable {
 	private sections: Section[];
 	private flatRows: SettingRow[] = [];
 	private cursor = 0;
-	private col: ColIdx = 1; // start on project
+	private col: ColIdx = 0;
+	private presetCol: PresetColIdx = 0;
 	private mode: Mode = "browse";
 	private editBuffer = "";
 	private options: Array<{ label: string; value: string }> = [];
@@ -350,11 +352,23 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 	}
 
+	/** Is the row in the preset definitions area (top section)? */
+	private isPresetDefRow(row?: SettingRow): boolean {
+		if (!row) return false;
+		if (row.extension !== "@presets") return false;
+		// "active" goes in the scoped section
+		if (row.key === "active") return false;
+		return true;
+	}
+
 	private effective(row: SettingRow): string {
 		const val =
 			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014";
 		// For slot fields, resolve to the actual model from the active preset
-		if (row.key.endsWith(".slot") && (val === "default" || val === "alternate")) {
+		if (
+			row.key.endsWith(".slot") &&
+			(val === "default" || val === "alternate")
+		) {
 			return this.resolveSlotToModel(val) ?? val;
 		}
 		return this.displayModel(row, val);
@@ -366,8 +380,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (!config) return undefined;
 		const preset = config.presets[config.active];
 		if (!preset) return undefined;
-		const slotConfig =
-			slot === "alternate" ? preset.alternate : preset.default;
+		const slotConfig = slot === "alternate" ? preset.alternate : preset.default;
 		const modelId = slotConfig?.model;
 		if (!modelId) return undefined;
 		if (!modelId.includes("/")) return modelId;
@@ -382,7 +395,9 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (val === "\u2014") return val;
 		const isModelField =
 			row.key.endsWith(".model") ||
-			(row.extension === "@presets" && row.key !== "active" && !row.key.startsWith("@name."));
+			(row.extension === "@presets" &&
+				row.key !== "active" &&
+				!row.key.startsWith("@name."));
 		if (!isModelField) return val;
 		// Handle combined "model · effort" format from slot rows
 		const sep = " \u00b7 ";
@@ -408,8 +423,8 @@ class ConfigMenuComponent implements Component, Focusable {
 		const p = this.palette;
 		const lines: string[] = [];
 
-		// Layout: percentages of available width, spacers fill rest
-		const innerW = _width - 4; // borders + padding
+		// Layout
+		const innerW = _width - 4;
 		const labelW = Math.max(20, Math.floor(innerW * 0.25));
 		const colW = Math.min(30, Math.max(8, Math.floor(innerW * 0.14)));
 		const spacerTotal = Math.max(0, innerW - labelW - colW * 4);
@@ -417,10 +432,8 @@ class ConfigMenuComponent implements Component, Focusable {
 		const spacer2 = spacerTotal - spacer1;
 		const boxW = _width;
 
-		// Helper: build a full-width row inside the box
 		const line = (content: string): string => {
 			const raw = `${p.dim("\u2502")} ${visPad(content, innerW)} ${p.dim("\u2502")}`;
-			// Hard guard: never exceed terminal width
 			if (visibleWidth(raw) > _width) return truncateToWidth(raw, _width);
 			return raw;
 		};
@@ -430,117 +443,223 @@ class ConfigMenuComponent implements Component, Focusable {
 		const topFill = "\u2500".repeat(Math.max(boxW - 3 - title.length, 0));
 		lines.push(p.dim(`\u256d\u2500${title}${topFill}\u256e`));
 
-		// Header
-		const sp1 = " ".repeat(spacer1);
-		const sp2 = " ".repeat(spacer2);
-		const hdr =
-			visPad("", labelW) +
-			sp1 +
-			COL_NAMES.map((name, i) => {
-				const cell = visPad(name, colW);
-				return i === this.col && this.mode === "browse"
-					? p.accent(cell)
-					: p.muted(cell);
-			}).join("") +
-			sp2 +
-			p.muted(visPad("effective", colW));
-		lines.push(line(hdr));
-		lines.push(line(""));
-
 		// Slot picker modes take over the body
 		if (this.mode === "slot-pick-model") {
 			const row = this.flatRows[this.cursor];
-			lines.push(line(`  ${p.accent(`Select model for ${row?.key ?? "slot"}`)}`));
+			lines.push(line(""));
+			lines.push(
+				line(`  ${p.accent(`Select model for ${row?.key ?? "slot"}`)}`),
+			);
 			lines.push(line(""));
 			for (let i = 0; i < this.slotPickerModels.length; i++) {
 				const m = this.slotPickerModels[i];
-				const pointer = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
+				const ptr = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
 				const badge = m.adaptive ? p.muted(" [adaptive]") : "";
-				lines.push(line(`  ${pointer}${m.name}${badge}`));
+				lines.push(line(`  ${ptr}${m.name}${badge}`));
 			}
 			lines.push(line(""));
 		} else if (this.mode === "slot-pick-effort") {
 			const badge = this.slotPickerAdaptive ? p.muted(" [adaptive]") : "";
-			lines.push(line(`  ${p.accent(`Select effort for ${this.slotPickerModelName}`)}${badge}`));
+			lines.push(line(""));
+			lines.push(
+				line(
+					`  ${p.accent(`Select effort for ${this.slotPickerModelName}`)}${badge}`,
+				),
+			);
 			lines.push(line(""));
 			if (this.slotPickerAdaptive) {
-				lines.push(line(p.muted("  Thinking is adaptive \u2014 the model decides how deeply to reason.")));
-				lines.push(line(p.muted("  Effort controls the ceiling, not a fixed budget.")));
+				lines.push(
+					line(
+						p.muted(
+							"  Thinking is adaptive \u2014 the model decides how deeply to reason.",
+						),
+					),
+				);
+				lines.push(
+					line(p.muted("  Effort controls the ceiling, not a fixed budget.")),
+				);
 				lines.push(line(""));
 			}
 			for (let i = 0; i < this.slotPickerEfforts.length; i++) {
 				const e = this.slotPickerEfforts[i];
-				const pointer = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
+				const ptr = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
 				const desc = e.desc ? p.muted(`  ${e.desc}`) : "";
-				lines.push(line(`  ${pointer}${e.level}${desc}`));
+				lines.push(line(`  ${ptr}${e.level}${desc}`));
 			}
 			lines.push(line(""));
 		} else {
-		let flatIdx = 0;
-		for (const section of this.sections) {
-			lines.push(line(p.heading(section.title)));
+			// ─── Top section: Preset definitions ───────────────────────────────
+			const presetModelW = Math.min(30, Math.floor(innerW * 0.3));
+			const presetEffortW = Math.min(15, Math.floor(innerW * 0.12));
+			const presetSpacer = Math.max(
+				0,
+				innerW - labelW - presetModelW - presetEffortW,
+			);
 
-			for (const r of section.rows) {
-				const selected = flatIdx === this.cursor;
-				const pointer = selected ? p.accent("\u25b6 ") : "  ";
-				const label = visPad(r.label, labelW - 2);
+			const presetHdr =
+				visPad("presets", labelW) +
+				" ".repeat(presetSpacer) +
+				[
+					["model", presetModelW],
+					["effort", presetEffortW],
+				]
+					.map(([name, w], i) => {
+						const cell = visPad(name as string, w as number);
+						const active =
+							i === this.presetCol &&
+							this.mode === "browse" &&
+							this.isPresetDefRow(this.flatRows[this.cursor]);
+						return active ? p.accent(cell) : p.muted(cell);
+					})
+					.join("");
+			lines.push(line(""));
+			lines.push(line(presetHdr));
+			lines.push(line(""));
 
-				const cells = [r.global, r.project, r.session].map((val, i) => {
-					// Global-only rows show · for project/session
-					if (r.globalOnly && i > 0) {
-						return p.dim(visPad("\u00b7", colW));
+			let flatIdx = 0;
+			for (const section of this.sections) {
+				if (section.title !== "presets") continue;
+				for (const r of section.rows) {
+					if (r.key === "active") {
+						flatIdx++;
+						continue;
 					}
+					const selected = flatIdx === this.cursor;
+					const ptr = selected ? p.accent("\u25b6 ") : "  ";
 
-					const isActive = selected && i === this.col;
-
-					// Resolve display value: actual value, or default (for global col)
-					const actualVal = val;
-					const showDefault = !actualVal && i === 0 && r.defaultValue;
-					let display: string;
-
-					if (this.mode === "edit" && isActive) {
-						display = `${this.editBuffer}\u2588`;
-					} else if (isActive) {
-						const v = actualVal ?? r.defaultValue ?? "\u2014";
-						const inner = truncateToWidth(this.displayModel(r, v), colW - 4);
-						display = `[${inner}]`;
-					} else if (showDefault) {
-						display = `${r.defaultValue} (def)`;
+					if (r.key.startsWith("@name.")) {
+						const nm = r.key.slice(6);
+						const star = r.global ? " \u2605" : "";
+						lines.push(line(`${ptr}${p.heading(nm)}${p.muted(star)}`));
 					} else {
-						display = this.displayModel(r, actualVal ?? "\u2014");
+						const label = visPad(r.label, labelW - 2);
+						const raw = r.global ?? "";
+						const sep = " \u00b7 ";
+						let modelVal = raw;
+						let effortVal = "";
+						if (raw.includes(sep)) {
+							[modelVal, effortVal] = raw.split(sep);
+						}
+						const modelDisp = this.resolveModelName(modelVal) || "\u2014";
+						const effortDisp = effortVal || "\u2014";
+
+						let mCell = visPad(
+							truncateToWidth(modelDisp, presetModelW - 1),
+							presetModelW,
+						);
+						let eCell = visPad(
+							truncateToWidth(effortDisp, presetEffortW - 1),
+							presetEffortW,
+						);
+						if (selected && this.presetCol === 0) {
+							const inner = truncateToWidth(modelDisp, presetModelW - 4);
+							mCell = p.accent(visPad(`[${inner}]`, presetModelW));
+						} else if (!modelVal) {
+							mCell = p.dim(mCell);
+						}
+						if (selected && this.presetCol === 1) {
+							const inner = truncateToWidth(effortDisp, presetEffortW - 4);
+							eCell = p.accent(visPad(`[${inner}]`, presetEffortW));
+						} else if (!effortVal) {
+							eCell = p.dim(eCell);
+						}
+						lines.push(
+							line(`${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`),
+						);
 					}
-
-					const cell = visPad(truncateToWidth(display, colW - 1), colW);
-					if (isActive) return p.accent(cell);
-					if (showDefault) return p.dim(cell);
-					if (actualVal) return cell;
-					return p.dim(cell);
-				});
-
-				const eff = this.effective(r);
-				const effCell = p.success(visPad(truncateToWidth(eff, colW - 1), colW));
-
-				lines.push(
-					line(`${pointer}${label}${sp1}${cells.join("")}${sp2}${effCell}`),
-				);
-				flatIdx++;
+					flatIdx++;
+				}
+				break;
 			}
-			lines.push(line(""));
-		}
 
-		// Option list (select mode)
-		if (this.mode === "select" && this.options.length > 0) {
-			lines.push(line(p.heading("Select value:")));
-			for (let i = 0; i < this.options.length; i++) {
-				const opt = this.options[i];
-				const sel = i === this.optionCursor;
-				const marker = sel ? p.accent("\u25b6 ") : "  ";
-				const text = sel ? p.accent(opt.label) : opt.label;
-				lines.push(line(`    ${marker}${text}`));
-			}
+			// Divider
 			lines.push(line(""));
-		}
-		} // end else (normal section rendering)
+			lines.push(line(p.dim("\u2500".repeat(innerW))));
+			lines.push(line(""));
+
+			// ─── Bottom section: Scoped settings ──────────────────────────────
+			const sp1 = " ".repeat(spacer1);
+			const sp2 = " ".repeat(spacer2);
+			const hdr =
+				visPad("", labelW) +
+				sp1 +
+				COL_NAMES.map((name, i) => {
+					const cell = visPad(name, colW);
+					const active =
+						i === this.col &&
+						this.mode === "browse" &&
+						!this.isPresetDefRow(this.flatRows[this.cursor]);
+					return active ? p.accent(cell) : p.muted(cell);
+				}).join("") +
+				sp2 +
+				p.muted(visPad("effective", colW));
+			lines.push(line(hdr));
+			lines.push(line(""));
+
+			for (const section of this.sections) {
+				let sectionHdrShown = false;
+				for (const r of section.rows) {
+					if (this.isPresetDefRow(r)) {
+						flatIdx++;
+						continue;
+					}
+					if (!sectionHdrShown) {
+						lines.push(line(p.heading(section.title)));
+						sectionHdrShown = true;
+					}
+					const selected = flatIdx === this.cursor;
+					const ptr = selected ? p.accent("\u25b6 ") : "  ";
+					const label = visPad(r.label, labelW - 2);
+
+					const cells = [r.global, r.project, r.session].map((val, i) => {
+						if (r.globalOnly && i > 0) return p.dim(visPad("\u00b7", colW));
+						const isActive = selected && i === this.col;
+						const actualVal = val;
+						const showDefault = !actualVal && i === 0 && r.defaultValue;
+						let display: string;
+						if (this.mode === "edit" && isActive) {
+							display = `${this.editBuffer}\u2588`;
+						} else if (isActive) {
+							const v = actualVal ?? r.defaultValue ?? "\u2014";
+							const inner = truncateToWidth(this.displayModel(r, v), colW - 4);
+							display = `[${inner}]`;
+						} else if (showDefault) {
+							display = `${r.defaultValue} (def)`;
+						} else {
+							display = this.displayModel(r, actualVal ?? "\u2014");
+						}
+						const cell = visPad(truncateToWidth(display, colW - 1), colW);
+						if (isActive) return p.accent(cell);
+						if (showDefault) return p.dim(cell);
+						if (actualVal) return cell;
+						return p.dim(cell);
+					});
+
+					const eff = this.effective(r);
+					const effCell = p.success(
+						visPad(truncateToWidth(eff, colW - 1), colW),
+					);
+					lines.push(
+						line(`${ptr}${label}${sp1}${cells.join("")}${sp2}${effCell}`),
+					);
+					flatIdx++;
+				}
+				if (sectionHdrShown) lines.push(line(""));
+			}
+
+			// Option list (select mode)
+			if (this.mode === "select" && this.options.length > 0) {
+				lines.push(line(p.heading("Select value:")));
+				for (let i = 0; i < this.options.length; i++) {
+					const opt = this.options[i];
+					const sel = i === this.optionCursor;
+					const marker = sel ? p.accent("\u25b6 ") : "  ";
+					const text = sel ? p.accent(opt.label) : opt.label;
+					lines.push(line(`    ${marker}${text}`));
+				}
+				lines.push(line(""));
+			}
+		} // end else (normal rendering)
 
 		// Naming mode (create new preset)
 		if (this.mode === "naming") {
@@ -563,7 +682,9 @@ class ConfigMenuComponent implements Component, Focusable {
 		// Status
 		if (this.mode === "confirm-delete") {
 			lines.push(line(""));
-			lines.push(line(`  ${p.accent(`Delete preset "${this.pendingDeletePreset}"?`)}`));
+			lines.push(
+				line(`  ${p.accent(`Delete preset "${this.pendingDeletePreset}"?`)}`),
+			);
 			if (this.deleteReferences.length > 0) {
 				lines.push(line(""));
 				lines.push(line(`  ${p.muted("Referenced by:")}`));
@@ -579,7 +700,8 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 
 		// Help bar
-		const isPresetNameRow = this.flatRows[this.cursor]?.key.startsWith("@name.");
+		const isPresetNameRow =
+			this.flatRows[this.cursor]?.key.startsWith("@name.");
 		const help =
 			this.mode === "slot-pick-model"
 				? "\u2191\u2193 navigate  Enter select  Esc cancel"
@@ -639,22 +761,30 @@ class ConfigMenuComponent implements Component, Focusable {
 		switch (data) {
 			case KEY_UP:
 				this.cursor = Math.max(0, this.cursor - 1);
-				if (this.flatRows[this.cursor]?.globalOnly) this.col = 0 as ColIdx;
 				break;
 			case KEY_DOWN:
 				this.cursor = Math.min(this.flatRows.length - 1, this.cursor + 1);
-				if (this.flatRows[this.cursor]?.globalOnly) this.col = 0 as ColIdx;
 				break;
 			case KEY_LEFT: {
 				const r = this.flatRows[this.cursor];
-				if (r?.globalOnly) break; // can't leave global col
-				this.col = Math.max(0, this.col - 1) as ColIdx;
+				if (this.isPresetDefRow(r)) {
+					if (!r?.key.startsWith("@name."))
+						this.presetCol = Math.max(0, this.presetCol - 1) as PresetColIdx;
+				} else {
+					if (r?.globalOnly) break;
+					this.col = Math.max(0, this.col - 1) as ColIdx;
+				}
 				break;
 			}
 			case KEY_RIGHT: {
 				const r = this.flatRows[this.cursor];
-				if (r?.globalOnly) break; // can't leave global col
-				this.col = Math.min(2, this.col + 1) as ColIdx;
+				if (this.isPresetDefRow(r)) {
+					if (!r?.key.startsWith("@name."))
+						this.presetCol = Math.min(1, this.presetCol + 1) as PresetColIdx;
+				} else {
+					if (r?.globalOnly) break;
+					this.col = Math.min(2, this.col + 1) as ColIdx;
+				}
 				break;
 			}
 			case KEY_ENTER: {
@@ -663,13 +793,19 @@ class ConfigMenuComponent implements Component, Focusable {
 					this.activatePreset(row.key.slice(6));
 					break;
 				}
-				// Preset slot rows → two-step picker
+				// Preset slot rows → column-aware picker
 				if (
 					row?.extension === "@presets" &&
 					row.key !== "active" &&
 					!row.key.startsWith("@name.")
 				) {
-					this.openSlotModelPicker();
+					if (this.presetCol === 1) {
+						// Effort column → open effort picker directly
+						this.openSlotEffortPicker();
+					} else {
+						// Model column → open model picker
+						this.openSlotModelPicker();
+					}
 					break;
 				}
 				if (row) {
@@ -961,6 +1097,41 @@ class ConfigMenuComponent implements Component, Focusable {
 		this.mode = "slot-pick-model";
 	}
 
+	private openSlotEffortPicker(): void {
+		// Read current model from the slot
+		const row = this.flatRows[this.cursor];
+		if (!row) return;
+		const dotIdx = row.key.indexOf(".");
+		const presetName = row.key.slice(0, dotIdx);
+		const slot = row.key.slice(dotIdx + 1);
+		const config = readModelsConfig(this.ctx.cwd);
+		const preset = config?.presets[presetName];
+		const slotConfig = preset?.[slot as "default" | "alternate"];
+		if (!slotConfig?.model) {
+			// No model set yet — redirect to model picker
+			this.openSlotModelPicker();
+			return;
+		}
+		const modelId = slotConfig.model;
+		const parsed = modelId.split("/");
+		const model = this.ctx.modelRegistry.find(
+			parsed[0],
+			parsed.slice(1).join("/"),
+		);
+		const modelName = (model as { name?: string } | undefined)?.name || modelId;
+		const adaptive = model ? isAdaptiveThinking(model) : false;
+
+		this.slotPickerSelectedModel = modelId;
+		this.slotPickerModelName = modelName;
+		this.slotPickerAdaptive = adaptive;
+		this.slotPickerEfforts = this.getValidEfforts(modelId, adaptive);
+		this.slotPickerCursor = this.slotPickerEfforts.findIndex(
+			(e) => e.level === (slotConfig.effort ?? "high"),
+		);
+		if (this.slotPickerCursor < 0) this.slotPickerCursor = 0;
+		this.mode = "slot-pick-effort";
+	}
+
 	private handleSlotModelInput(data: string): void {
 		switch (data) {
 			case KEY_UP:
@@ -978,7 +1149,10 @@ class ConfigMenuComponent implements Component, Focusable {
 					this.slotPickerSelectedModel = selected.modelId;
 					this.slotPickerModelName = selected.name;
 					this.slotPickerAdaptive = selected.adaptive;
-					this.slotPickerEfforts = this.getValidEfforts(selected.modelId, selected.adaptive);
+					this.slotPickerEfforts = this.getValidEfforts(
+						selected.modelId,
+						selected.adaptive,
+					);
 					// If only one option, auto-select
 					if (this.slotPickerEfforts.length === 1) {
 						this.commitSlotPick(this.slotPickerEfforts[0].level);
@@ -1051,12 +1225,17 @@ class ConfigMenuComponent implements Component, Focusable {
 	): Array<{ level: string; desc?: string }> {
 		const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 		const parsed = modelId.split("/");
-		const model = this.ctx.modelRegistry.find(parsed[0], parsed.slice(1).join("/"));
-		const reasoning = (model as { reasoning?: boolean } | undefined)?.reasoning ?? true;
+		const model = this.ctx.modelRegistry.find(
+			parsed[0],
+			parsed.slice(1).join("/"),
+		);
+		const reasoning =
+			(model as { reasoning?: boolean } | undefined)?.reasoning ?? true;
 		if (!reasoning) return [{ level: "off", desc: "thinking not supported" }];
 
-		const map = (model as { thinkingLevelMap?: Record<string, string | null> } | undefined)
-			?.thinkingLevelMap;
+		const map = (
+			model as { thinkingLevelMap?: Record<string, string | null> } | undefined
+		)?.thinkingLevelMap;
 
 		const levels = ALL_LEVELS.filter((l) => map?.[l] !== null);
 

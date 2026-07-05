@@ -345,7 +345,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		// Layout: percentages of available width, spacers fill rest
 		const innerW = _width - 4; // borders + padding
 		const labelW = Math.max(20, Math.floor(innerW * 0.25));
-		const colW = Math.min(20, Math.max(8, Math.floor(innerW * 0.14)));
+		const colW = Math.min(30, Math.max(8, Math.floor(innerW * 0.14)));
 		const spacerTotal = Math.max(0, innerW - labelW - colW * 4);
 		const spacer1 = Math.floor(spacerTotal * 0.6);
 		const spacer2 = spacerTotal - spacer1;

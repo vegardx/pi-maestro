@@ -172,11 +172,21 @@ function buildSections(ctx: ExtensionContext): Section[] {
 				globalOnly: true,
 			});
 			for (const slot of SLOTS) {
+				const slotConfig = preset[slot];
 				presetRows.push({
-					label: `  ${slot}`,
+					label: `  ${slot} / model`,
 					extension: "@presets",
-					key: `${name}.${slot}`,
-					global: preset[slot],
+					key: `${name}.${slot}.model`,
+					global: slotConfig?.model,
+					project: undefined,
+					session: undefined,
+					globalOnly: true,
+				});
+				presetRows.push({
+					label: `  ${slot} / effort`,
+					extension: "@presets",
+					key: `${name}.${slot}.effort`,
+					global: slotConfig?.effort,
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
@@ -325,7 +335,9 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (!config) return undefined;
 		const preset = config.presets[config.active];
 		if (!preset) return undefined;
-		const modelId = slot === "alternate" ? preset.alternate : preset.default;
+		const slotConfig =
+			slot === "alternate" ? preset.alternate : preset.default;
+		const modelId = slotConfig?.model;
 		if (!modelId) return undefined;
 		if (!modelId.includes("/")) return modelId;
 		const [provider, ...rest] = modelId.split("/");
@@ -847,7 +859,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			const models = raw.models as Record<string, unknown>;
 			if (!isPlainObject(models.presets)) models.presets = {};
 			const presets = models.presets as Record<string, unknown>;
-			presets[name] = { default: "", alternate: "" };
+			presets[name] = { default: { model: "" }, alternate: { model: "" } };
 			if (!models.active) models.active = name;
 		});
 		this.statusMessage = `\u2713 Created preset "${name}"`;
@@ -869,19 +881,22 @@ class ConfigMenuComponent implements Component, Focusable {
 			});
 			this.statusMessage = `\u2713 preset \u2192 ${raw} [${scope}]`;
 		} else if (row.extension === "@presets") {
-			// Preset slot: key is "name.slot" e.g. "anthropic.default"
-			const dotIdx = row.key.indexOf(".");
-			const presetName = row.key.slice(0, dotIdx);
-			const slot = row.key.slice(dotIdx + 1);
+			// Preset slot field: key is "name.slot.field" e.g. "anthropic.default.model"
+			const parts = row.key.split(".");
+			const presetName = parts[0];
+			const slot = parts[1];
+			const field = parts[2]; // "model" or "effort"
 			updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
 				if (!isPlainObject(obj.models)) obj.models = {};
 				const models = obj.models as Record<string, unknown>;
 				if (!isPlainObject(models.presets)) models.presets = {};
 				const presets = models.presets as Record<string, unknown>;
 				if (!isPlainObject(presets[presetName])) presets[presetName] = {};
-				(presets[presetName] as Record<string, unknown>)[slot] = raw;
+				const preset = presets[presetName] as Record<string, unknown>;
+				if (!isPlainObject(preset[slot])) preset[slot] = {};
+				(preset[slot] as Record<string, unknown>)[field] = raw;
 			});
-			this.statusMessage = `\u2713 ${presetName}.${slot} = ${raw} [global]`;
+			this.statusMessage = `\u2713 ${presetName}.${slot}.${field} = ${raw} [global]`;
 		} else {
 			writeExtensionConfigKey(
 				scope,

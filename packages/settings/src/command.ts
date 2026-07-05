@@ -115,9 +115,10 @@ function handleShow(ctx: ExtensionContext): void {
 			const marker = name === modelsConfig.active ? " (active)" : "";
 			content.push(`  ${name}${marker}`);
 			for (const slot of SLOTS) {
-				const model = preset[slot];
-				if (model) {
-					content.push(`    ${slot.padEnd(10)} ${model}`);
+				const slotConfig = preset[slot];
+				if (slotConfig?.model) {
+					const effortStr = slotConfig.effort ? ` (${slotConfig.effort})` : "";
+					content.push(`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`);
 				}
 			}
 		}
@@ -331,9 +332,10 @@ function handlePreset(args: string, ctx: ExtensionContext): void {
 			const marker = name === modelsConfig.active ? " (active)" : "";
 			lines.push(`  ${name}${marker}`);
 			for (const slot of SLOTS) {
-				const model = preset[slot];
-				if (model) {
-					lines.push(`    ${slot.padEnd(10)} ${model}`);
+				const slotConfig = preset[slot];
+				if (slotConfig?.model) {
+					const effortStr = slotConfig.effort ? ` (${slotConfig.effort})` : "";
+					lines.push(`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`);
 				}
 			}
 		}

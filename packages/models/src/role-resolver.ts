@@ -191,15 +191,16 @@ export async function resolveRoleModel(
 			const presetName = roleConfig.preset ?? modelsConfig.active;
 			const preset = modelsConfig.presets[presetName];
 			const slot: Slot = roleConfig.slot ?? "default";
-			const modelId = preset?.[slot];
+			const slotConfig = preset?.[slot];
 
-			if (modelId) {
-				const result = await tryAuth(ctx, modelId, requireApiKey);
+			if (slotConfig?.model) {
+				const result = await tryAuth(ctx, slotConfig.model, requireApiKey);
 				if (result) {
 					return {
 						...result,
-						modelId,
-						effort: roleConfig.effort ?? opts.env?.effort,
+						modelId: slotConfig.model,
+						effort:
+							roleConfig.effort ?? slotConfig.effort ?? opts.env?.effort,
 						source: "preset",
 						preset: presetName,
 						slot,

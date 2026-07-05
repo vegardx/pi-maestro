@@ -14,13 +14,21 @@ export type Slot = (typeof SLOTS)[number];
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
 /**
- * A preset maps two model slots to concrete `"provider/model-id"` strings.
+ * Configuration for a single model slot within a preset.
+ */
+export interface SlotConfig {
+	readonly model: string;
+	readonly effort?: ThinkingLevel;
+}
+
+/**
+ * A preset maps two model slots to concrete model configurations.
  * `default` is the workhorse (cache-friendly), `alternate` is a different
  * model family for intentional diversity ("second pair of eyes").
  */
 export interface PresetConfig {
-	readonly default: string;
-	readonly alternate?: string;
+	readonly default: SlotConfig;
+	readonly alternate?: SlotConfig;
 }
 
 /**
@@ -30,8 +38,10 @@ export interface PresetConfig {
  *   "models": {
  *     "active": "anthropic",
  *     "presets": {
- *       "anthropic": { "default": "anthropic/claude-sonnet-4", "alternate": "openai/o3" },
- *       "openai":    { "default": "openai/o3", "alternate": "anthropic/claude-sonnet-4" }
+ *       "anthropic": {
+ *         "default": { "model": "anthropic/claude-sonnet-4", "effort": "high" },
+ *         "alternate": { "model": "openai/o3", "effort": "medium" }
+ *       }
  *     }
  *   }
  * }

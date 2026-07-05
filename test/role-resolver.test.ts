@@ -159,8 +159,8 @@ describe("readModelsConfig", () => {
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("anthropic");
-		expect(config?.presets.anthropic.default).toBe("anthropic/sonnet");
-		expect(config?.presets.anthropic.alternate).toBe("openai/o3");
+		expect(config?.presets.anthropic.default.model).toBe("anthropic/sonnet");
+		expect(config?.presets.anthropic.alternate?.model).toBe("openai/o3");
 	});
 
 	it("merges global and project — project wins per slot", () => {
@@ -181,8 +181,8 @@ describe("readModelsConfig", () => {
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.presets.anthropic.default).toBe("anthropic/sonnet");
-		expect(config?.presets.anthropic.alternate).toBe("openai/mini");
+		expect(config?.presets.anthropic.default.model).toBe("anthropic/sonnet");
+		expect(config?.presets.anthropic.alternate?.model).toBe("openai/mini");
 	});
 
 	it("returns undefined when nothing is configured", () => {

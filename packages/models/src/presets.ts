@@ -6,20 +6,42 @@
 //   - `presets`: deep merge — project can add presets or override slots
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { ModelsConfig, PresetConfig } from "@vegardx/pi-contracts";
+import type {
+	ModelsConfig,
+	PresetConfig,
+	SlotConfig,
+	ThinkingLevel,
+} from "@vegardx/pi-contracts";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+function extractSlotConfig(raw: unknown): SlotConfig | undefined {
+	if (isPlainObject(raw) && typeof raw.model === "string") {
+		return {
+			model: raw.model,
+			effort:
+				typeof raw.effort === "string"
+					? (raw.effort as ThinkingLevel)
+					: undefined,
+		};
+	}
+	// Simple string format (just model, no effort)
+	if (typeof raw === "string") {
+		return { model: raw };
+	}
+	return undefined;
+}
+
 function extractPresetConfig(raw: unknown): PresetConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	const def = typeof raw.default === "string" ? raw.default : undefined;
-	const alt = typeof raw.alternate === "string" ? raw.alternate : undefined;
+	const def = extractSlotConfig(raw.default);
+	const alt = extractSlotConfig(raw.alternate);
 	// Allow newly created presets with empty slots
 	if (def === undefined && alt === undefined) return undefined;
 	return {
-		default: def ?? "",
+		default: def ?? { model: "" },
 		alternate: alt,
 	};
 }

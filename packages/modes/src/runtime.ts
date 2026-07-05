@@ -674,7 +674,14 @@ export function createModesRuntime(
 					onAllSettled: () => {
 						if (!tmuxFanout) return;
 						const recap = formatRecap(tmuxFanout.snapshot().agents);
-						ctx.ui.notify(recap, "info");
+						pi.sendMessage(
+							{
+								customType: "maestro.execution.recap",
+								content: recap,
+								display: true,
+							},
+							{ triggerTurn: false },
+						);
 						invalidateFooter?.();
 					},
 				});
@@ -963,7 +970,14 @@ export function createModesRuntime(
 				return;
 			}
 			const recap = formatRecap(tmuxFanout.snapshot().agents);
-			cmdCtx.ui.notify(recap, "info");
+			pi.sendMessage(
+				{
+					customType: "maestro.execution.recap",
+					content: recap,
+					display: true,
+				},
+				{ triggerTurn: false },
+			);
 		},
 	});
 

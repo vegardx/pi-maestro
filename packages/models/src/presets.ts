@@ -16,8 +16,8 @@ function extractPresetConfig(raw: unknown): PresetConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	const def = typeof raw.default === "string" ? raw.default : undefined;
 	const alt = typeof raw.alternate === "string" ? raw.alternate : undefined;
-	// Allow newly created presets with no slots yet
-	if (!def && !alt) return undefined;
+	// Allow newly created presets with empty slots
+	if (def === undefined && alt === undefined) return undefined;
 	return {
 		default: def ?? "",
 		alternate: alt,

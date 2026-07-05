@@ -149,16 +149,7 @@ function buildSections(ctx: ExtensionContext): Section[] {
 	const sections: Section[] = [];
 
 	// Model presets section (always first)
-	const presetRows: SettingRow[] = [
-		{
-			label: "Active preset",
-			extension: "@presets",
-			key: "active",
-			global: modelsConfig?.active,
-			project: undefined,
-			session: sessionStore.get("@presets.active"),
-		},
-	];
+	const presetRows: SettingRow[] = [];
 	if (modelsConfig) {
 		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
 			// Preset name row (navigable for delete/rename/activate)
@@ -281,20 +272,12 @@ function getOptionsForKey(
 	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
 	if (key === "lensDisabled")
 		return BOOL_OPTIONS.map((v) => ({ label: v, value: v }));
-	if (
-		key.endsWith(".model") ||
-		(extension === "@presets" && key !== "active")
-	) {
+	if (key.endsWith(".model") || extension === "@presets") {
 		const models = ctx.modelRegistry.getAvailable();
 		return models.map((m) => ({
 			label: m.name || `${m.provider}/${m.id}`,
 			value: `${m.provider}/${m.id}`,
 		}));
-	}
-	if (key === "active") {
-		const config = readModelsConfig(ctx.cwd);
-		if (config)
-			return Object.keys(config.presets).map((v) => ({ label: v, value: v }));
 	}
 	return null;
 }
@@ -355,10 +338,7 @@ class ConfigMenuComponent implements Component, Focusable {
 	/** Is the row in the preset definitions area (top section)? */
 	private isPresetDefRow(row?: SettingRow): boolean {
 		if (!row) return false;
-		if (row.extension !== "@presets") return false;
-		// "active" goes in the scoped section
-		if (row.key === "active") return false;
-		return true;
+		return row.extension === "@presets";
 	}
 
 	private effective(row: SettingRow): string {
@@ -396,7 +376,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		const isModelField =
 			row.key.endsWith(".model") ||
 			(row.extension === "@presets" &&
-				row.key !== "active" &&
+				
 				!row.key.startsWith("@name."));
 		if (!isModelField) return val;
 		// Handle combined "model · effort" format from slot rows
@@ -788,7 +768,7 @@ class ConfigMenuComponent implements Component, Focusable {
 				// Preset slot rows → column-aware picker
 				if (
 					row?.extension === "@presets" &&
-					row.key !== "active" &&
+					
 					!row.key.startsWith("@name.")
 				) {
 					if (this.presetCol === 1) {
@@ -1263,12 +1243,6 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (scope === "session") {
 			sessionStore.set(sessionKey(row.extension, row.key), raw);
 			this.statusMessage = `\u2713 ${row.extension}.${row.key} = ${raw} [session]`;
-		} else if (row.extension === "@presets" && row.key === "active") {
-			updateSettingsFile(scope, this.ctx.cwd, undefined, (obj) => {
-				if (!isPlainObject(obj.models)) obj.models = {};
-				(obj.models as Record<string, unknown>).active = raw;
-			});
-			this.statusMessage = `\u2713 preset \u2192 ${raw} [${scope}]`;
 		} else if (row.extension === "@presets") {
 			// Preset slot field: key is "name.slot.field" e.g. "anthropic.default.model"
 			const parts = row.key.split(".");

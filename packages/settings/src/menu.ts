@@ -4,7 +4,6 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	type Focusable,
-	type OverlayHandle,
 	type TUI,
 	truncateToWidth,
 	visibleWidth,
@@ -277,7 +276,6 @@ class ConfigMenuComponent implements Component, Focusable {
 	private readonly palette: Palette;
 	private readonly ctx: ExtensionContext;
 	private readonly done: (result: undefined) => void;
-	private handle: OverlayHandle | undefined;
 
 	constructor(
 		ctx: ExtensionContext,
@@ -289,10 +287,6 @@ class ConfigMenuComponent implements Component, Focusable {
 		this.done = done;
 		this.sections = buildSections(ctx);
 		this.rebuildFlat();
-	}
-
-	setHandle(handle: OverlayHandle): void {
-		this.handle = handle;
 	}
 
 	private rebuildFlat(): void {
@@ -522,7 +516,6 @@ class ConfigMenuComponent implements Component, Focusable {
 				break;
 			case KEY_ESC:
 			case "q":
-				this.handle?.hide();
 				this.done(undefined);
 				break;
 		}
@@ -703,26 +696,43 @@ class ConfigMenuComponent implements Component, Focusable {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
-export async function showConfigMenu(ctx: ExtensionContext): Promise<void> {
-	let comp: ConfigMenuComponent | undefined;
-	await ctx.ui.custom<undefined>(
-		(_tui: TUI, theme: Theme, _keybindings, done) => {
-			const palette = paletteFromTheme(theme);
-			comp = new ConfigMenuComponent(ctx, palette, done);
-			return comp;
-		},
-		{
-			overlay: true,
-			overlayOptions: {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "70%",
-			},
-			onHandle: (handle: OverlayHandle) => {
-				comp?.setHandle(handle);
-			},
-		} as any,
-	);
+const WIDGET_KEY = "maestro.config";
+
+let activeMenu: {
+	comp: ConfigMenuComponent;
+	removeInput: (() => void) | undefined;
+	ctx: ExtensionContext;
+} | null = null;
+
+function closeMenu(): void {
+	if (!activeMenu) return;
+	activeMenu.removeInput?.();
+	activeMenu.ctx.ui.setWidget(WIDGET_KEY, undefined);
+	activeMenu = null;
+}
+
+export function showConfigMenu(ctx: ExtensionContext): void {
+	// If already open, close it (toggle)
+	if (activeMenu) {
+		closeMenu();
+		return;
+	}
+
+	const palette = paletteFromTheme(ctx.ui.theme);
+	const comp = new ConfigMenuComponent(ctx, palette, () => closeMenu());
+
+	// Mount as widget above editor
+	ctx.ui.setWidget(WIDGET_KEY, (_tui: TUI, _theme: Theme) => comp, {
+		placement: "aboveEditor",
+	});
+
+	// Capture input
+	const removeInput = ctx.ui.onTerminalInput?.((data) => {
+		comp.handleInput(data);
+		return { consume: true };
+	});
+
+	activeMenu = { comp, removeInput, ctx };
 }
 
 /** Read session-scoped value (for resolver integration). */

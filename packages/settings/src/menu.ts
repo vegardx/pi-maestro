@@ -157,7 +157,7 @@ function buildSections(ctx: ExtensionContext): Section[] {
 				label: name,
 				extension: "@presets",
 				key: `@name.${name}`,
-				global: name === modelsConfig.active ? "★ active" : undefined,
+				global: name === modelsConfig.active ? "active" : undefined,
 				project: undefined,
 				session: undefined,
 				globalOnly: true,
@@ -504,9 +504,16 @@ class ConfigMenuComponent implements Component, Focusable {
 
 				if (r.key.startsWith("@name.")) {
 					const nm = r.key.slice(6);
-					const star = r.global ? " \u2605" : "";
-					lines.push(line(`${ptr}${p.heading(nm)}${p.muted(star)}`));
+					const isActive = r.global === "active";
+					const suffix = isActive ? p.muted(" (active)") : "";
+					const nameText = isActive ? p.heading(nm) : p.dim(nm);
+					lines.push(line(`${ptr}${nameText}${suffix}`));
 				} else {
+					// Determine if this slot belongs to the active preset
+					const presetName = r.key.split(".")[0];
+					const isActivePreset = this.sections[0]?.rows.some(
+						(row) => row.key === `@name.${presetName}` && row.global === "active",
+					);
 					const label = visPad(r.label, labelW - 2);
 					const raw = r.global ?? "";
 					const sep = " \u00b7 ";
@@ -538,8 +545,9 @@ class ConfigMenuComponent implements Component, Focusable {
 					} else if (!effortVal) {
 						eCell = p.dim(eCell);
 					}
+					const rowContent = `${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`;
 					lines.push(
-						line(`${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`),
+						line(!isActivePreset && !selected ? p.dim(rowContent) : rowContent),
 					);
 				}
 			}

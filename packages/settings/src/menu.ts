@@ -1,11 +1,13 @@
 // Interactive /maestro menu — TUI overlay with scope columns.
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type {
-	Component,
-	Focusable,
-	OverlayHandle,
-	TUI,
+import {
+	type Component,
+	type Focusable,
+	type OverlayHandle,
+	type TUI,
+	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { TIERS } from "@vegardx/pi-contracts";
 import { readModelsConfig } from "@vegardx/pi-models";
@@ -77,6 +79,13 @@ function paletteFromTheme(theme: Theme): Palette {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Pad a string to target visible width (ANSI-safe). */
+function visPad(s: string, targetWidth: number): string {
+	const vw = visibleWidth(s);
+	if (vw >= targetWidth) return truncateToWidth(s, targetWidth);
+	return s + " ".repeat(targetWidth - vw);
 }
 
 function readPath(obj: unknown, key: string): unknown {
@@ -276,96 +285,93 @@ class ConfigMenuComponent implements Component, Focusable {
 
 	invalidate(): void {}
 
-	render(width: number): string[] {
+	render(_width: number): string[] {
 		const p = this.palette;
 		const lines: string[] = [];
-		const w = Math.min(width - 2, 90);
 
-		// Column widths
-		const labelW = 28;
-		const colW = 13;
+		// Layout constants
+		const labelW = 24;
+		const colW = 16;
+		const innerW = labelW + colW * 4;
+		const boxW = innerW + 4; // borders + padding
 
-		// Title
-		const title = " /maestro ";
-		const topPad = w - title.length;
-		lines.push(
-			p.dim(
-				`\u256d\u2500${title}${"\u2500".repeat(Math.max(topPad, 0))}\u256e`,
-			),
-		);
+		// Helper: build a full-width row inside the box
+		const line = (content: string): string =>
+			`${p.dim("\u2502")} ${visPad(content, innerW)} ${p.dim("\u2502")}`;
 
-		// Header row
-		const hdrLabel = "".padEnd(labelW);
-		const hdrCols = COL_NAMES.map((name, i) => {
-			const cell = name.padEnd(colW);
-			return i === this.col && this.mode === "browse"
-				? p.accent(cell)
-				: p.muted(cell);
-		}).join("");
-		const hdrEff = p.muted("effective".padEnd(colW));
-		lines.push(
-			`${p.dim("\u2502")}  ${hdrLabel}${hdrCols}${hdrEff}${p.dim("\u2502")}`,
-		);
+		// Title bar
+		const title = " maestro config ";
+		const topFill = "\u2500".repeat(Math.max(boxW - 2 - title.length, 0));
+		lines.push(p.dim(`\u256d\u2500${title}${topFill}\u256e`));
 
-		// Rows
+		// Header
+		const hdr =
+			visPad("", labelW) +
+			COL_NAMES.map((name, i) => {
+				const cell = visPad(name, colW);
+				return i === this.col && this.mode === "browse"
+					? p.accent(cell)
+					: p.muted(cell);
+			}).join("") +
+			p.muted(visPad("effective", colW));
+		lines.push(line(hdr));
+		lines.push(line(""));
+
+		// Sections
 		let flatIdx = 0;
 		for (const section of this.sections) {
-			// Section header
-			const secLine = `\u2500\u2500\u2500 ${section.title} `;
-			const secPad = "\u2500".repeat(Math.max(w - secLine.length - 3, 0));
-			lines.push(
-				`${p.dim("\u2502")}  ${p.heading(secLine)}${p.dim(secPad)}${p.dim("\u2502")}`,
-			);
+			lines.push(line(p.heading(section.title)));
 
-			for (const row of section.rows) {
+			for (const r of section.rows) {
 				const selected = flatIdx === this.cursor;
 				const pointer = selected ? p.accent("\u25b6 ") : "  ";
-				const label = row.label.padEnd(labelW - 2);
+				const label = visPad(r.label, labelW - 2);
 
-				const cells = [row.global, row.project, row.session].map((val, i) => {
-					const display =
-						this.mode === "edit" && selected && i === this.col
-							? `${this.editBuffer}\u2588`
-							: (val ?? "\u2014");
-					const cell = display.slice(0, colW - 1).padEnd(colW);
-					if (selected && i === this.col) return p.accent(cell);
+				const cells = [r.global, r.project, r.session].map((val, i) => {
+					const isActive = selected && i === this.col;
+					let display: string;
+
+					if (this.mode === "edit" && isActive) {
+						display = `${this.editBuffer}\u2588`;
+					} else if (isActive) {
+						const v = val ?? "\u2014";
+						const inner = truncateToWidth(v, colW - 4);
+						display = `[${inner}]`;
+					} else {
+						display = val ?? "\u2014";
+					}
+
+					const cell = visPad(truncateToWidth(display, colW - 1), colW);
+					if (isActive) return p.accent(cell);
 					if (val) return cell;
 					return p.dim(cell);
 				});
 
-				const eff = this.effective(row);
-				const effCell = p.success(eff.slice(0, colW - 1).padEnd(colW));
+				const eff = this.effective(r);
+				const effCell = p.success(visPad(truncateToWidth(eff, colW - 1), colW));
 
-				const line = `${pointer}${label}${cells.join("")}${effCell}`;
-				lines.push(`${p.dim("\u2502")}${line}${p.dim("\u2502")}`);
+				lines.push(line(`${pointer}${label}${cells.join("")}${effCell}`));
 				flatIdx++;
 			}
-			// Blank line between sections
-			lines.push(`${p.dim("\u2502")}${"".padEnd(w)}${p.dim("\u2502")}`);
+			lines.push(line(""));
 		}
 
 		// Option list (select mode)
 		if (this.mode === "select" && this.options.length > 0) {
-			lines.push(
-				`${p.dim("\u2502")}  ${p.heading("Select value:").padEnd(w + 10)}${p.dim("\u2502")}`,
-			);
+			lines.push(line(p.heading("Select value:")));
 			for (let i = 0; i < this.options.length; i++) {
 				const opt = this.options[i];
 				const sel = i === this.optionCursor;
 				const marker = sel ? p.accent("\u25b6 ") : "  ";
 				const text = sel ? p.accent(opt) : opt;
-				lines.push(
-					`${p.dim("\u2502")}    ${marker}${text.padEnd(w - 6)}${p.dim("\u2502")}`,
-				);
+				lines.push(line(`    ${marker}${text}`));
 			}
-			lines.push(`${p.dim("\u2502")}${"\u0020".repeat(w)}${p.dim("\u2502")}`);
+			lines.push(line(""));
 		}
 
 		// Status
 		if (this.statusMessage) {
-			lines.push(
-				`${p.dim("\u2502")}  ${p.success(this.statusMessage).padEnd(w - 2)}${p.dim("\u2502")}`,
-			);
+			lines.push(line(`  ${p.success(this.statusMessage)}`));
 		}
 
 		// Help bar
@@ -374,11 +380,11 @@ class ConfigMenuComponent implements Component, Focusable {
 				? "\u2191\u2193 choose  Enter confirm  Esc cancel"
 				: this.mode === "edit"
 					? "Enter: save  Esc: cancel"
-					: "\u2191\u2193 navigate  \u2190\u2192 select scope  Enter edit  d delete  Esc close";
-		lines.push(
-			`${p.dim("\u2502")}  ${p.muted(help).padEnd(w + 10)}${p.dim("\u2502")}`,
-		);
-		lines.push(p.dim(`\u2570${"\u2500".repeat(w + 1)}\u256f`));
+					: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
+		lines.push(line(p.muted(help)));
+
+		// Bottom border
+		lines.push(p.dim(`\u2570${"\u2500".repeat(boxW - 2)}\u256f`));
 
 		return lines;
 	}

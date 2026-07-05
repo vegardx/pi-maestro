@@ -300,7 +300,26 @@ class ConfigMenuComponent implements Component, Focusable {
 	private effective(row: SettingRow): string {
 		const val =
 			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014";
+		// For slot fields, resolve to the actual model from the active preset
+		if (row.key.endsWith(".slot") && (val === "default" || val === "alternate")) {
+			return this.resolveSlotToModel(val) ?? val;
+		}
 		return this.displayModel(row, val);
+	}
+
+	/** Resolve a slot value to the human-readable model name from active preset. */
+	private resolveSlotToModel(slot: string): string | undefined {
+		const config = readModelsConfig(this.ctx.cwd);
+		if (!config) return undefined;
+		const preset = config.presets[config.active];
+		if (!preset) return undefined;
+		const modelId = slot === "alternate" ? preset.alternate : preset.default;
+		if (!modelId) return undefined;
+		if (!modelId.includes("/")) return modelId;
+		const [provider, ...rest] = modelId.split("/");
+		const id = rest.join("/");
+		const model = this.ctx.modelRegistry.find(provider, id);
+		return (model as { name?: string } | undefined)?.name ?? modelId;
 	}
 
 	/** Resolve provider/id to human-readable model name for display. */

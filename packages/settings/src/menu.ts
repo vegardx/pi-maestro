@@ -229,26 +229,36 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TIER_OPTIONS = ["fast", "normal", "heavy"];
 const BOOL_OPTIONS = ["true", "false"];
 
+interface OptionItem {
+	label: string;
+	value: string;
+}
+
 function getOptionsForKey(
 	key: string,
 	extension: string,
 	ctx: ExtensionContext,
-): string[] | null {
-	if (key.endsWith(".thinking")) return THINKING_LEVELS;
-	if (key.endsWith(".tier")) return TIER_OPTIONS;
-	if (key === "lensDisabled") return BOOL_OPTIONS;
-	if (key.endsWith(".model")) {
+): OptionItem[] | null {
+	if (key.endsWith(".thinking"))
+		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
+	if (key.endsWith(".tier"))
+		return TIER_OPTIONS.map((v) => ({ label: v, value: v }));
+	if (key === "lensDisabled")
+		return BOOL_OPTIONS.map((v) => ({ label: v, value: v }));
+	if (
+		key.endsWith(".model") ||
+		(extension === "@presets" && key !== "active")
+	) {
 		const models = ctx.modelRegistry.getAvailable();
-		return models.map((m) => `${m.provider}/${m.id}`);
+		return models.map((m) => ({
+			label: m.name || `${m.provider}/${m.id}`,
+			value: `${m.provider}/${m.id}`,
+		}));
 	}
 	if (key === "active") {
 		const config = readModelsConfig(ctx.cwd);
-		if (config) return Object.keys(config.presets);
-	}
-	// Preset tier keys (e.g. "anthropic.fast") → model picker
-	if (extension === "@presets" && key !== "active") {
-		const models = ctx.modelRegistry.getAvailable();
-		return models.map((m) => `${m.provider}/${m.id}`);
+		if (config)
+			return Object.keys(config.presets).map((v) => ({ label: v, value: v }));
 	}
 	return null;
 }
@@ -261,7 +271,7 @@ class ConfigMenuComponent implements Component, Focusable {
 	private col: ColIdx = 1; // start on project
 	private mode: Mode = "browse";
 	private editBuffer = "";
-	private options: string[] = [];
+	private options: Array<{ label: string; value: string }> = [];
 	private optionCursor = 0;
 	private statusMessage = "";
 	private readonly palette: Palette;
@@ -295,9 +305,23 @@ class ConfigMenuComponent implements Component, Focusable {
 	}
 
 	private effective(row: SettingRow): string {
-		return (
-			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014"
-		);
+		const val =
+			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014";
+		return this.displayModel(row, val);
+	}
+
+	/** Resolve provider/id to human-readable model name for display. */
+	private displayModel(row: SettingRow, val: string): string {
+		if (val === "\u2014") return val;
+		const isModelField =
+			row.key.endsWith(".model") ||
+			(row.extension === "@presets" && row.key !== "active");
+		if (!isModelField) return val;
+		if (!val.includes("/")) return val;
+		const [provider, ...rest] = val.split("/");
+		const id = rest.join("/");
+		const model = this.ctx.modelRegistry.find(provider, id);
+		return (model as { name?: string } | undefined)?.name ?? val;
 	}
 
 	invalidate(): void {}
@@ -361,12 +385,12 @@ class ConfigMenuComponent implements Component, Focusable {
 						display = `${this.editBuffer}\u2588`;
 					} else if (isActive) {
 						const v = actualVal ?? r.defaultValue ?? "\u2014";
-						const inner = truncateToWidth(v, colW - 4);
+						const inner = truncateToWidth(this.displayModel(r, v), colW - 4);
 						display = `[${inner}]`;
 					} else if (showDefault) {
 						display = `${r.defaultValue} (def)`;
 					} else {
-						display = actualVal ?? "\u2014";
+						display = this.displayModel(r, actualVal ?? "\u2014");
 					}
 
 					const cell = visPad(truncateToWidth(display, colW - 1), colW);
@@ -392,7 +416,7 @@ class ConfigMenuComponent implements Component, Focusable {
 				const opt = this.options[i];
 				const sel = i === this.optionCursor;
 				const marker = sel ? p.accent("\u25b6 ") : "  ";
-				const text = sel ? p.accent(opt) : opt;
+				const text = sel ? p.accent(opt.label) : opt.label;
 				lines.push(line(`    ${marker}${text}`));
 			}
 			lines.push(line(""));
@@ -474,7 +498,10 @@ class ConfigMenuComponent implements Component, Focusable {
 						this.options = opts;
 						const current = [row.global, row.project, row.session][this.col];
 						const matchVal = current ?? row.defaultValue ?? "";
-						this.optionCursor = Math.max(0, opts.indexOf(matchVal));
+						this.optionCursor = Math.max(
+							0,
+							opts.findIndex((o) => o.value === matchVal),
+						);
 						this.mode = "select";
 					} else {
 						const current = [row.global, row.project, row.session][this.col];
@@ -538,7 +565,7 @@ class ConfigMenuComponent implements Component, Focusable {
 				const selected = this.options[this.optionCursor];
 				if (selected) {
 					const row = this.flatRows[this.cursor];
-					if (row) this.writeCell(row, selected);
+					if (row) this.writeCell(row, selected.value);
 				}
 				this.mode = "browse";
 				this.options = [];

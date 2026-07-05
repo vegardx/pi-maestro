@@ -53,11 +53,10 @@ function extractModelsConfig(raw: unknown): ModelsConfig | undefined {
 	const presets: Record<string, PresetTierMap> = {};
 	let hasPresets = false;
 	for (const [name, value] of Object.entries(rawPresets)) {
+		if (!isPlainObject(value)) continue;
 		const tierMap = extractPresetTierMap(value);
-		if (tierMap) {
-			presets[name] = tierMap;
-			hasPresets = true;
-		}
+		presets[name] = tierMap ?? {};
+		hasPresets = true;
 	}
 
 	if (!hasPresets) return undefined;

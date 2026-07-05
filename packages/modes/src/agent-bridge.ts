@@ -86,8 +86,19 @@ export class AgentBridge {
 	}
 
 	/** Signal the agent completed its work. */
-	onDone(summary?: string): void {
-		this.client.send({ type: "done", summary });
+	onDone(opts?: {
+		summary?: string;
+		prUrl?: string;
+		commits?: string[];
+		model?: string;
+	}): void {
+		this.client.send({
+			type: "done",
+			summary: opts?.summary,
+			prUrl: opts?.prUrl,
+			commits: opts?.commits,
+			model: opts?.model,
+		});
 	}
 
 	/** Report a task as completed to the orchestrator. */

@@ -672,8 +672,12 @@ export function createModesRuntime(
 						);
 					},
 					onAllSettled: () => {
-						if (!tmuxFanout) return;
-						const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger);
+						if (!tmuxFanout || !engine) return;
+						const titles = new Map<string, string>();
+						for (const n of engine.get().nodes) {
+							if (n.type === "deliverable") titles.set(n.id, n.title);
+						}
+						const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger, titles);
 						pi.sendMessage(
 							{
 								customType: "maestro.execution.recap",
@@ -969,7 +973,13 @@ export function createModesRuntime(
 				cmdCtx.ui.notify("No agent work to recap.", "info");
 				return;
 			}
-			const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger);
+			const titles = new Map<string, string>();
+			if (engine) {
+				for (const n of engine.get().nodes) {
+					if (n.type === "deliverable") titles.set(n.id, n.title);
+				}
+			}
+			const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger, titles);
 			pi.sendMessage(
 				{
 					customType: "maestro.execution.recap",

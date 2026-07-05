@@ -6,6 +6,8 @@ import type { UsageLedger } from "./usage-ledger.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+const W = 80; // max width
+
 function hyperlink(url: string, text: string): string {
 	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
@@ -23,26 +25,26 @@ const k = (n: number): string => {
 	return `${Math.round(n / 1000)}k`;
 };
 
-function formatTokens(t: TokenSnapshot): string {
+function fmtTokens(t: TokenSnapshot): string {
 	return `↑${k(t.input)} ↓${k(t.output)}`;
 }
 
-function formatCacheHit(t: TokenSnapshot): string {
+function fmtCache(t: TokenSnapshot): string {
 	const denom = t.input + t.cacheRead;
 	if (denom === 0) return "—";
 	return `${Math.round((t.cacheRead / denom) * 100)}%`;
 }
 
-function formatCost(t: TokenSnapshot): string {
+function fmtCost(t: TokenSnapshot): string {
 	if (t.cost < 0.01) return `$${t.cost.toFixed(3)}`;
 	return `$${t.cost.toFixed(2)}`;
 }
 
-function padRight(s: string, w: number): string {
-	return s.length >= w ? s : s + " ".repeat(w - s.length);
+function padR(s: string, w: number): string {
+	return s.length >= w ? s.slice(0, w) : s + " ".repeat(w - s.length);
 }
 
-function padLeft(s: string, w: number): string {
+function padL(s: string, w: number): string {
 	return s.length >= w ? s : " ".repeat(w - s.length) + s;
 }
 
@@ -62,7 +64,6 @@ function getAgentTokens(
 	let cost = 0;
 	let turns = 0;
 	for (const [key, snap] of bySource) {
-		// Match "agent:<id>" and "lens:<id>:*"
 		if (key === `agent:${agentId}` || key.startsWith(`lens:${agentId}:`)) {
 			input += snap.input;
 			output += snap.output;
@@ -72,9 +73,16 @@ function getAgentTokens(
 			turns += snap.turns;
 		}
 	}
-	// Fall back to agent state if ledger has nothing
 	if (input === 0 && output === 0) return agentState.tokens;
-	return { input, output, cacheRead, cacheWrite, totalTokens: input + output, cost, turns };
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output,
+		cost,
+		turns,
+	};
 }
 
 // ─── Main format ────────────────────────────────────────────────────────────
@@ -82,34 +90,46 @@ function getAgentTokens(
 export function formatRecap(
 	agents: ReadonlyMap<string, TmuxAgentState>,
 	ledger?: UsageLedger,
+	deliverableTitles?: ReadonlyMap<string, string>,
 ): string {
 	const now = Date.now();
 	const total = agents.size;
 	let doneCount = 0;
 	let failedCount = 0;
+	let earliest = now;
 	for (const a of agents.values()) {
 		if (a.status === "done") doneCount++;
 		else if (a.status === "failed") failedCount++;
+		if (a.startedAt < earliest) earliest = a.startedAt;
 	}
 
 	const lines: string[] = [];
 	const finished = doneCount + failedCount;
 	const headerStatus = finished === total ? "complete" : "in progress";
 	const failedSuffix = failedCount > 0 ? `, ${failedCount} failed` : "";
-	const divider = "─".repeat(80);
+	const divider = "─".repeat(W);
 
-	lines.push(`─── Execution ${headerStatus} (${finished}/${total} done${failedSuffix}) ${divider.slice(0, 40)}`);
+	const hdrText = `─── Execution ${headerStatus} (${finished}/${total} done${failedSuffix}) `;
+	lines.push(hdrText + "─".repeat(Math.max(0, W - hdrText.length)));
 	lines.push("");
 
 	// ─── Section 1: Details per agent ─────────────────────────────────────
 	for (const [id, agent] of agents) {
 		const icon =
-			agent.status === "done" ? "✓" :
-			agent.status === "failed" ? "✗" :
-			agent.status === "working" ? "▶" :
-			agent.status === "awaiting-decision" ? "❓" : "○";
+			agent.status === "done"
+				? "✓"
+				: agent.status === "failed"
+					? "✗"
+					: agent.status === "working"
+						? "▶"
+						: agent.status === "awaiting-decision"
+							? "❓"
+							: "○";
 
-		const title = agent.summary ?? agent.agentName;
+		const delivTitle = deliverableTitles?.get(id);
+		const title = delivTitle
+			? `${agent.agentName} — ${delivTitle}`
+			: agent.agentName;
 		lines.push(`  ${icon}  ${title}`);
 
 		if (agent.prUrl) {
@@ -131,65 +151,66 @@ export function formatRecap(
 	}
 
 	// ─── Section 2: Stats table ───────────────────────────────────────────
-	lines.push(divider.slice(0, 80));
+	lines.push(divider);
 
-	// Column widths
-	const nameW = 40;
-	const tokW = 12;
-	const cacheW = 6;
-	const costW = 7;
-	const timeW = 7;
+	// Column layout: name(38) + tokens(14) + cache(8) + cost(8) + time(8) = 76 (+4 pad)
+	const nameW = 38;
+	const tokW = 14;
+	const cacheW = 8;
+	const costW = 8;
+	const timeW = 8;
 
-	// Header
 	lines.push(
-		padRight("", nameW) +
-		padLeft("tokens", tokW) +
-		padLeft("cache", cacheW) +
-		padLeft("cost", costW) +
-		padLeft("time", timeW),
+		padR("", nameW) +
+			padL("tokens", tokW) +
+			padL("cache", cacheW) +
+			padL("cost", costW) +
+			padL("time", timeW),
 	);
 
-	// Per-agent rows
-	let totalTokens: TokenSnapshot = {
-		input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-		totalTokens: 0, cost: 0, turns: 0,
+	let totalTok: TokenSnapshot = {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: 0,
+		turns: 0,
 	};
-	let totalDuration = 0;
 
 	for (const [id, agent] of agents) {
 		const tokens = getAgentTokens(id, agent, ledger);
-		const elapsed = now - agent.startedAt;
-		totalDuration += elapsed;
-		totalTokens = {
-			input: totalTokens.input + tokens.input,
-			output: totalTokens.output + tokens.output,
-			cacheRead: totalTokens.cacheRead + tokens.cacheRead,
-			cacheWrite: totalTokens.cacheWrite + tokens.cacheWrite,
-			totalTokens: totalTokens.totalTokens + tokens.totalTokens,
-			cost: totalTokens.cost + tokens.cost,
-			turns: totalTokens.turns + tokens.turns,
+		totalTok = {
+			input: totalTok.input + tokens.input,
+			output: totalTok.output + tokens.output,
+			cacheRead: totalTok.cacheRead + tokens.cacheRead,
+			cacheWrite: totalTok.cacheWrite + tokens.cacheWrite,
+			totalTokens: totalTok.totalTokens + tokens.totalTokens,
+			cost: totalTok.cost + tokens.cost,
+			turns: totalTok.turns + tokens.turns,
 		};
 
-		const name = `  ${agent.agentName}`;
+		const elapsed = now - agent.startedAt;
 		lines.push(
-			padRight(name.slice(0, nameW), nameW) +
-			padLeft(formatTokens(tokens), tokW) +
-			padLeft(formatCacheHit(tokens), cacheW) +
-			padLeft(formatCost(tokens), costW) +
-			padLeft(formatDuration(elapsed), timeW),
+			padR(`  ${agent.agentName}`, nameW) +
+				padL(fmtTokens(tokens), tokW) +
+				padL(fmtCache(tokens), cacheW) +
+				padL(fmtCost(tokens), costW) +
+				padL(formatDuration(elapsed), timeW),
 		);
 	}
 
-	// Totals
-	lines.push(divider.slice(0, 80));
+	// Totals — wall-clock time from first start to now
+	const wallClock = now - earliest;
+	lines.push(divider);
 	lines.push(
-		padRight("  Totals", nameW) +
-		padLeft(formatTokens(totalTokens), tokW) +
-		padLeft(formatCacheHit(totalTokens), cacheW) +
-		padLeft(formatCost(totalTokens), costW) +
-		padLeft(formatDuration(totalDuration), timeW),
+		padR("  Totals", nameW) +
+			padL(fmtTokens(totalTok), tokW) +
+			padL(fmtCache(totalTok), cacheW) +
+			padL(fmtCost(totalTok), costW) +
+			padL(formatDuration(wallClock), timeW),
 	);
-	lines.push(divider.slice(0, 80));
+	lines.push(divider);
 
 	return lines.join("\n");
 }

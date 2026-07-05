@@ -714,9 +714,9 @@ export async function showConfigMenu(ctx: ExtensionContext): Promise<void> {
 		{
 			overlay: true,
 			overlayOptions: {
-				anchor: "center",
-				width: "95%",
-				maxHeight: "80%",
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "70%",
 			},
 			onHandle: (handle: OverlayHandle) => {
 				comp?.setHandle(handle);

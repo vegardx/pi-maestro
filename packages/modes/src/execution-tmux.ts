@@ -83,6 +83,8 @@ export interface TmuxAgentState {
 	lensRuns: number;
 	reviewCycles: number;
 	lastLensAt?: number;
+	prUrl?: string;
+	summary?: string;
 }
 
 export interface TmuxFanoutDeps {
@@ -93,6 +95,7 @@ export interface TmuxFanoutDeps {
 	readonly ctx: ExtensionContext;
 	readonly onPlanChanged?: () => void;
 	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
+	readonly onAllSettled?: () => void;
 	readonly onQuestionsReceived?: (id: string, count: number) => void;
 	readonly onLensUsage?: (
 		id: string,
@@ -638,7 +641,7 @@ export class TmuxFanout {
 				this.deps.onLensUsage?.(agentId, msg.lens, msg.snapshot);
 				break;
 			case "done":
-				this.markDone(agentId, msg.summary);
+				this.markDone(agentId, msg.summary, msg.prUrl);
 				break;
 			case "questions": {
 				const d = findDeliverable(this.deps.engine.get(), agentId);
@@ -747,13 +750,15 @@ export class TmuxFanout {
 		return true;
 	}
 
-	private markDone(agentId: string, summary?: string): void {
+	private markDone(agentId: string, summary?: string, prUrl?: string): void {
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done") return;
 		state.status = "done";
 		if (summary) {
+			state.summary = summary;
 			this.deps.engine.updateDeliverable(agentId, { summary });
 		}
+		if (prUrl) state.prUrl = prUrl;
 		transitionThrough(this.deps.engine, agentId, "in-review");
 		this.deps.onAgentStateChanged?.(agentId, state);
 		this.deps.onPlanChanged?.();
@@ -816,6 +821,9 @@ export class TmuxFanout {
 			this.settleResolve();
 			this.settleResolve = undefined;
 			this.settlePromise = undefined;
+		}
+		if (this.allSettled()) {
+			this.deps.onAllSettled?.();
 		}
 	}
 }

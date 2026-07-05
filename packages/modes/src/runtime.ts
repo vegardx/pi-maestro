@@ -57,6 +57,7 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
+import { formatRecap } from "./recap.js";
 import { installFooter } from "./install-footer.js";
 import {
 	formatFindings,
@@ -670,6 +671,12 @@ export function createModesRuntime(
 							snapshot,
 						);
 					},
+					onAllSettled: () => {
+						if (!tmuxFanout) return;
+						const recap = formatRecap(tmuxFanout.snapshot().agents);
+						ctx.ui.notify(recap, "info");
+						invalidateFooter?.();
+					},
 				});
 				await tmuxFanout.start();
 			}
@@ -945,6 +952,18 @@ export function createModesRuntime(
 				entry.resolve([{ questionId: entry.questions[0]?.id ?? "0", value: answer }]);
 				cmdCtx.ui.notify(`\u2713 Answered ${entry.agentName}`, "info");
 			}
+		},
+	});
+
+	pi.registerCommand("recap", {
+		description: "Show summary of completed agent work.",
+		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
+			if (!tmuxFanout || tmuxFanout.snapshot().agents.size === 0) {
+				cmdCtx.ui.notify("No agent work to recap.", "info");
+				return;
+			}
+			const recap = formatRecap(tmuxFanout.snapshot().agents);
+			cmdCtx.ui.notify(recap, "info");
 		},
 	});
 

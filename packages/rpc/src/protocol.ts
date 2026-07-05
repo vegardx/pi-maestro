@@ -29,6 +29,7 @@ export interface TokensMessage {
 export interface DoneMessage {
 	readonly type: "done";
 	readonly summary?: string;
+	readonly prUrl?: string;
 }
 
 export interface TaskCompleteMessage {

@@ -735,6 +735,33 @@ export class TmuxFanout {
 
 		// Check if all tasks are done — if so, agent is complete
 		if (this.checkCompletionGate(agentId)) return;
+
+		// After first idle with incomplete tasks, nudge the agent to toggle them
+		if (!state.assessmentSent) {
+			const d = findDeliverable(this.deps.engine.get(), agentId);
+			const taskIds = d
+				? d.children
+						.filter(
+							(c) =>
+								c.type === "work-item" &&
+								(c.kind === "task" || !c.kind) &&
+								!c.done,
+						)
+						.map((c) => c.id)
+				: [];
+			if (taskIds.length > 0) {
+				this.server.send(agentId, {
+					type: "steer",
+					content:
+						"Mark your completed tasks done. Do not re-verify or re-run tests — just toggle them:\n" +
+						taskIds
+							.map((id) => `  task({action: "toggle", id: "${id}"})`)
+							.join("\n"),
+				});
+				state.assessmentSent = true;
+				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
+			}
+		}
 	}
 
 	private handleReviewCycleCheck(agentId: string, state: TmuxAgentState): void {

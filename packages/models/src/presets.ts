@@ -6,35 +6,37 @@
 //   - `presets`: deep merge — project can add presets or override tiers
 //   - Per-tier arrays: project replaces the entire array (not concat)
 //
-// Also handles backward compatibility with the old `backgroundModels` format.
+//
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { ModelsConfig, PresetTierMap, Tier } from "@vegardx/pi-contracts";
+import type {
+	ModelsConfig,
+	PresetTierEntry,
+	PresetTierMap,
+	Tier,
+} from "@vegardx/pi-contracts";
 import { TIERS } from "@vegardx/pi-contracts";
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function isStringArray(v: unknown): v is string[] {
-	return Array.isArray(v) && v.every((x) => typeof x === "string");
-}
-
 const TIER_SET: ReadonlySet<string> = new Set(TIERS);
 
 function extractPresetTierMap(raw: unknown): PresetTierMap | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	const out: Partial<Record<Tier, string>> = {};
+	const out: Partial<Record<Tier, PresetTierEntry>> = {};
 	let found = false;
 	for (const [key, value] of Object.entries(raw)) {
 		if (!TIER_SET.has(key)) continue;
-		if (typeof value === "string" && value.length > 0) {
-			out[key as Tier] = value;
-			found = true;
-		}
-		// Backward compat: accept single-element arrays
-		if (isStringArray(value) && value.length > 0) {
-			out[key as Tier] = value[0];
+		if (isPlainObject(value) && typeof value.model === "string") {
+			out[key as Tier] = {
+				model: value.model,
+				effort:
+					typeof value.effort === "string"
+						? (value.effort as PresetTierEntry["effort"])
+						: undefined,
+			};
 			found = true;
 		}
 	}
@@ -66,51 +68,8 @@ function extractModelsConfig(raw: unknown): ModelsConfig | undefined {
 }
 
 /**
- * Migrate old `backgroundModels.primary/secondary` → new presets format.
- * Returns undefined if no old format found.
- */
-function migrateOldFormat(raw: unknown): ModelsConfig | undefined {
-	if (!isPlainObject(raw)) return undefined;
-	const bg = raw.backgroundModels;
-	if (!isPlainObject(bg)) return undefined;
-	// Only migrate if there's no `models` key (new format takes priority)
-	if (isPlainObject(raw.models)) return undefined;
-
-	const presets: Record<string, PresetTierMap> = {};
-
-	const primary = bg.primary;
-	if (isPlainObject(primary)) {
-		const tierMap: Partial<Record<Tier, string>> = {};
-		for (const [tier, value] of Object.entries(primary)) {
-			if (TIER_SET.has(tier) && typeof value === "string") {
-				tierMap[tier as Tier] = value;
-			}
-		}
-		if (Object.keys(tierMap).length > 0) {
-			presets.default = tierMap;
-		}
-	}
-
-	const secondary = bg.secondary;
-	if (isPlainObject(secondary)) {
-		const tierMap: Partial<Record<Tier, string>> = {};
-		for (const [tier, value] of Object.entries(secondary)) {
-			if (TIER_SET.has(tier) && typeof value === "string") {
-				tierMap[tier as Tier] = value;
-			}
-		}
-		if (Object.keys(tierMap).length > 0) {
-			presets.secondary = tierMap;
-		}
-	}
-
-	if (Object.keys(presets).length === 0) return undefined;
-	return { active: "default", presets };
-}
-
-/**
  * Read and merge the `models` config from global and project settings.
- * Falls back to migrating old `backgroundModels` format if new format absent.
+ *
  */
 export function readModelsConfig(
 	cwd: string,
@@ -120,10 +79,8 @@ export function readModelsConfig(
 	const globalRaw = manager.getGlobalSettings() as unknown;
 	const projectRaw = manager.getProjectSettings() as unknown;
 
-	const globalConfig =
-		extractModelsConfig(globalRaw) ?? migrateOldFormat(globalRaw);
-	const projectConfig =
-		extractModelsConfig(projectRaw) ?? migrateOldFormat(projectRaw);
+	const globalConfig = extractModelsConfig(globalRaw);
+	const projectConfig = extractModelsConfig(projectRaw);
 
 	if (!globalConfig && !projectConfig) return undefined;
 	if (!globalConfig) return projectConfig;
@@ -148,7 +105,7 @@ export function readModelsConfig(
 			continue;
 		}
 		// Per-tier: project wins
-		const merged: Partial<Record<Tier, string>> = {};
+		const merged: Partial<Record<Tier, PresetTierEntry>> = {};
 		for (const tier of TIERS) {
 			const val = p[tier] ?? g[tier];
 			if (val) merged[tier] = val;

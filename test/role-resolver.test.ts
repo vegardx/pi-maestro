@@ -133,15 +133,15 @@ describe("readModelsConfig", () => {
 				active: "anthropic",
 				presets: {
 					anthropic: {
-						fast: "anthropic/haiku",
-						normal: "anthropic/sonnet",
+						fast: { model: "anthropic/haiku" },
+						normal: { model: "anthropic/sonnet" },
 					},
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("anthropic");
-		expect(config?.presets.anthropic.fast).toBe("anthropic/haiku");
+		expect(config?.presets.anthropic.fast?.model).toBe("anthropic/haiku");
 	});
 
 	it("merges global and project — project wins per tier", () => {
@@ -150,8 +150,8 @@ describe("readModelsConfig", () => {
 				active: "anthropic",
 				presets: {
 					anthropic: {
-						fast: "anthropic/haiku",
-						normal: "anthropic/sonnet",
+						fast: { model: "anthropic/haiku" },
+						normal: { model: "anthropic/sonnet" },
 					},
 				},
 			},
@@ -161,7 +161,7 @@ describe("readModelsConfig", () => {
 				active: "openai",
 				presets: {
 					anthropic: {
-						fast: "anthropic/haiku-new",
+						fast: { model: "anthropic/haiku-new" },
 					},
 				},
 			},
@@ -169,34 +169,27 @@ describe("readModelsConfig", () => {
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("openai");
 		// Project replaced fast
-		expect(config?.presets.anthropic.fast).toBe("anthropic/haiku-new");
+		expect(config?.presets.anthropic.fast?.model).toBe("anthropic/haiku-new");
 		// Normal comes from global (project didn't override)
-		expect(config?.presets.anthropic.normal).toBe("anthropic/sonnet");
+		expect(config?.presets.anthropic.normal?.model).toBe("anthropic/sonnet");
 	});
 
-	it("migrates old backgroundModels format", () => {
+	it("reads preset with effort field", () => {
 		projectSettings({
-			backgroundModels: {
-				primary: { fast: "openai/mini", normal: "anthropic/sonnet" },
-			},
-		});
-		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.active).toBe("default");
-		expect(config?.presets.default.fast).toBe("openai/mini");
-		expect(config?.presets.default.normal).toBe("anthropic/sonnet");
-	});
-
-	it("new format takes priority over old format", () => {
-		projectSettings({
-			backgroundModels: { primary: { fast: "old/model" } },
 			models: {
-				active: "new",
-				presets: { new: { fast: "new/model" } },
+				active: "test",
+				presets: {
+					test: {
+						fast: { model: "anthropic/haiku", effort: "low" },
+						heavy: { model: "anthropic/opus", effort: "xhigh" },
+					},
+				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.active).toBe("new");
-		expect(config?.presets.new.fast).toBe("new/model");
+		expect(config?.presets.test.fast?.model).toBe("anthropic/haiku");
+		expect(config?.presets.test.fast?.effort).toBe("low");
+		expect(config?.presets.test.heavy?.effort).toBe("xhigh");
 	});
 
 	it("returns undefined when nothing is configured", () => {
@@ -252,8 +245,8 @@ describe("resolveRoleModel", () => {
 			models: {
 				active: "anthropic",
 				presets: {
-					anthropic: { fast: ["anthropic/haiku"] },
-					openai: { fast: ["openai/mini"] },
+					anthropic: { fast: { model: "anthropic/haiku" } },
+					openai: { fast: { model: "openai/mini" } },
 				},
 			},
 			extensionConfig: {
@@ -281,7 +274,7 @@ describe("resolveRoleModel", () => {
 			models: {
 				active: "test",
 				presets: {
-					test: { normal: "good/model" },
+					test: { normal: { model: "good/model" } },
 				},
 			},
 			extensionConfig: {
@@ -302,7 +295,7 @@ describe("resolveRoleModel", () => {
 			models: {
 				active: "bad",
 				presets: {
-					bad: { normal: "noauth/model" },
+					bad: { normal: { model: "noauth/model" } },
 				},
 			},
 			extensionConfig: {
@@ -368,7 +361,7 @@ describe("resolveRoleModel", () => {
 		projectSettings({
 			models: {
 				active: "a",
-				presets: { a: { heavy: ["a/opus"] } },
+				presets: { a: { heavy: { model: "a/opus" } } },
 			},
 			extensionConfig: {
 				modes: {
@@ -376,7 +369,7 @@ describe("resolveRoleModel", () => {
 				},
 			},
 		});
-		const ctx = fakeCtx({ withApiKey: new Set(["a"]) });
+		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "analyze",
@@ -442,7 +435,7 @@ describe("resolveRoleModel", () => {
 		projectSettings({
 			models: {
 				active: "test",
-				presets: { test: { fast: "keyless/model" } },
+				presets: { test: { fast: { model: "keyless/model" } } },
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "fast" } } },
@@ -462,17 +455,17 @@ describe("resolveRoleModel", () => {
 		globalSettings({
 			models: {
 				active: "p",
-				presets: { p: { fast: "global/fast" } },
+				presets: { p: { fast: { model: "global/fast" } } },
 			},
 		});
 		projectSettings({
 			models: {
-				presets: { p: { fast: "project/fast" } },
+				presets: { p: { fast: { model: "project/fast" } } },
 			},
 		});
 		projectSettings({
 			models: {
-				presets: { p: { fast: "project/fast" } },
+				presets: { p: { fast: { model: "project/fast" } } },
 			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "fast" } } },
@@ -486,20 +479,25 @@ describe("resolveRoleModel", () => {
 		expect(r?.modelId).toBe("project/fast");
 	});
 
-	it("old backgroundModels format is handled via migration", async () => {
+	it("effort from preset tier flows as thinking", async () => {
 		projectSettings({
-			backgroundModels: { primary: { normal: "old/model" } },
+			models: {
+				active: "test",
+				presets: {
+					test: { normal: { model: "good/model", effort: "high" } },
+				},
+			},
 			extensionConfig: {
 				modes: { models: { worker: { tier: "normal" } } },
 			},
 		});
-		const ctx = fakeCtx({ withApiKey: new Set(["old"]) });
+		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
 		});
-		expect(r?.modelId).toBe("old/model");
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.thinking).toBe("high");
 		expect(r?.source).toBe("preset");
-		expect(r?.preset).toBe("default");
 	});
 });

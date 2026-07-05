@@ -162,11 +162,21 @@ function buildSections(ctx: ExtensionContext): Section[] {
 	if (modelsConfig) {
 		for (const [name, tiers] of Object.entries(modelsConfig.presets)) {
 			for (const tier of TIERS) {
+				const entry = tiers[tier];
 				presetRows.push({
-					label: `${name} / ${tier}`,
+					label: `${name} / ${tier} / model`,
 					extension: "@presets",
-					key: `${name}.${tier}`,
-					global: tiers[tier],
+					key: `${name}.${tier}.model`,
+					global: entry?.model,
+					project: undefined,
+					session: undefined,
+					globalOnly: true,
+				});
+				presetRows.push({
+					label: `${name} / ${tier} / effort`,
+					extension: "@presets",
+					key: `${name}.${tier}.effort`,
+					global: entry?.effort,
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
@@ -238,7 +248,7 @@ function getOptionsForKey(
 	extension: string,
 	ctx: ExtensionContext,
 ): OptionItem[] | null {
-	if (key.endsWith(".thinking"))
+	if (key.endsWith(".thinking") || key.endsWith(".effort"))
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".tier"))
 		return TIER_OPTIONS.map((v) => ({ label: v, value: v }));
@@ -325,11 +335,19 @@ class ConfigMenuComponent implements Component, Focusable {
 		const p = this.palette;
 		const lines: string[] = [];
 
-		// Layout constants
-		const labelW = 24;
-		const colW = 16;
-		const innerW = labelW + colW * 4;
-		const boxW = innerW + 4; // borders + padding
+		// Layout: responsive spacers, columns max 20 chars
+		const labelW = 26;
+		const colW = Math.min(
+			20,
+			Math.max(12, Math.floor((_width - labelW - 10) / 5)),
+		);
+		const dataW = colW * 4;
+		const usedW = labelW + dataW;
+		const available = Math.max(_width - usedW - 4, 0); // 4 = borders + padding
+		const spacer1 = Math.floor(available / 2);
+		const spacer2 = available - spacer1;
+		const innerW = labelW + spacer1 + colW * 3 + spacer2 + colW;
+		const boxW = innerW + 4;
 
 		// Helper: build a full-width row inside the box
 		const line = (content: string): string =>
@@ -341,14 +359,18 @@ class ConfigMenuComponent implements Component, Focusable {
 		lines.push(p.dim(`\u256d\u2500${title}${topFill}\u256e`));
 
 		// Header
+		const sp1 = " ".repeat(spacer1);
+		const sp2 = " ".repeat(spacer2);
 		const hdr =
 			visPad("", labelW) +
+			sp1 +
 			COL_NAMES.map((name, i) => {
 				const cell = visPad(name, colW);
 				return i === this.col && this.mode === "browse"
 					? p.accent(cell)
 					: p.muted(cell);
 			}).join("") +
+			sp2 +
 			p.muted(visPad("effective", colW));
 		lines.push(line(hdr));
 		lines.push(line(""));
@@ -398,7 +420,9 @@ class ConfigMenuComponent implements Component, Focusable {
 				const eff = this.effective(r);
 				const effCell = p.success(visPad(truncateToWidth(eff, colW - 1), colW));
 
-				lines.push(line(`${pointer}${label}${cells.join("")}${effCell}`));
+				lines.push(
+					line(`${pointer}${label}${sp1}${cells.join("")}${sp2}${effCell}`),
+				);
 				flatIdx++;
 			}
 			lines.push(line(""));
@@ -624,19 +648,22 @@ class ConfigMenuComponent implements Component, Focusable {
 			});
 			this.statusMessage = `\u2713 preset \u2192 ${raw} [${scope}]`;
 		} else if (row.extension === "@presets") {
-			// Preset tier: key is "presetName.tier" e.g. "anthropic.fast"
-			const dotIdx = row.key.indexOf(".");
-			const presetName = row.key.slice(0, dotIdx);
-			const tier = row.key.slice(dotIdx + 1);
+			// Preset tier: key is "name.tier.model" or "name.tier.effort"
+			const parts = row.key.split(".");
+			const presetName = parts[0];
+			const tier = parts[1];
+			const field = parts[2]; // "model" or "effort"
 			updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
 				if (!isPlainObject(obj.models)) obj.models = {};
 				const models = obj.models as Record<string, unknown>;
 				if (!isPlainObject(models.presets)) models.presets = {};
 				const presets = models.presets as Record<string, unknown>;
 				if (!isPlainObject(presets[presetName])) presets[presetName] = {};
-				(presets[presetName] as Record<string, unknown>)[tier] = raw;
+				const preset = presets[presetName] as Record<string, unknown>;
+				if (!isPlainObject(preset[tier])) preset[tier] = {};
+				(preset[tier] as Record<string, unknown>)[field] = raw;
 			});
-			this.statusMessage = `\u2713 ${presetName}.${tier} = ${raw} [global]`;
+			this.statusMessage = `\u2713 ${presetName}.${tier}.${field} = ${raw} [global]`;
 		} else {
 			writeExtensionConfigKey(
 				scope,

@@ -197,15 +197,16 @@ export async function resolveRoleModel(
 			if (modelsConfig) {
 				const presetName = roleConfig.preset ?? modelsConfig.active;
 				const preset = modelsConfig.presets[presetName];
-				const tierModel = preset?.[roleConfig.tier];
+				const tierEntry = preset?.[roleConfig.tier];
 
-				if (tierModel) {
-					const result = await tryAuth(ctx, tierModel, requireApiKey);
+				if (tierEntry) {
+					const result = await tryAuth(ctx, tierEntry.model, requireApiKey);
 					if (result) {
 						return {
 							...result,
-							modelId: tierModel,
-							thinking: roleConfig.thinking ?? opts.env?.thinking,
+							modelId: tierEntry.model,
+							thinking:
+								roleConfig.thinking ?? tierEntry.effort ?? opts.env?.thinking,
 							source: "preset",
 							preset: presetName,
 							tier: roleConfig.tier,

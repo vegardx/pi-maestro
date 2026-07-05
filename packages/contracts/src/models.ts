@@ -14,7 +14,12 @@ export type Tier = (typeof TIERS)[number];
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
 /** Ordered fallback list per tier. Resolver walks until one has valid auth. */
-export type PresetTierMap = Partial<Record<Tier, string>>;
+export interface PresetTierEntry {
+	model: string;
+	effort?: ThinkingLevel;
+}
+
+export type PresetTierMap = Partial<Record<Tier, PresetTierEntry>>;
 
 /**
  * Top-level `models` key in settings.json:

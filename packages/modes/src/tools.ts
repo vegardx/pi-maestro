@@ -49,6 +49,8 @@ export interface PlanToolDeps {
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
 	/** Remote task toggle for agent mode (no local engine). */
 	readonly onTaskToggle?: (taskId: string) => void;
+	/** Read-only seed content for workers without a local plan engine. */
+	readonly seedContent?: () => string | undefined;
 }
 
 interface ToolDetails {
@@ -424,27 +426,32 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 		promptSnippet: "plan — read the active plan; does not mutate state.",
 		parameters: PlanParams,
 		async execute(_id, params): Promise<Result> {
-			return withEngine(deps, (engine) => {
-				const plan = engine.get();
-				if (params.view === "json") {
-					if (deps.mode?.() === "plan") {
-						return ok(renderPlanSummary(plan), { plan });
-					}
-					return ok(`\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``, {
-						plan,
-					});
+			const engine = deps.engine();
+			if (!engine) {
+				// Worker mode: show seed content (read-only plan context)
+				const seed = deps.seedContent?.();
+				if (seed) return ok(seed, {});
+				return error("no plan active \u2014 run /plan first to start one");
+			}
+			const plan = engine.get();
+			if (params.view === "json") {
+				if (deps.mode?.() === "plan") {
+					return ok(renderPlanSummary(plan), { plan });
 				}
-				if (params.view === "seed") {
-					return ok(renderPlanSeed(plan, params.activeDeliverableId), { plan });
+				return ok(`\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``, {
+					plan,
+				});
+			}
+			if (params.view === "seed") {
+				return ok(renderPlanSeed(plan, params.activeDeliverableId), { plan });
+			}
+			if (params.view === "markdown") {
+				if (deps.mode?.() === "plan") {
+					return ok(renderPlanSummary(plan), { plan });
 				}
-				if (params.view === "markdown") {
-					if (deps.mode?.() === "plan") {
-						return ok(renderPlanSummary(plan), { plan });
-					}
-					return ok(renderPlanMarkdown(plan), { plan });
-				}
-				return ok(renderPlanSummary(plan), { plan });
-			});
+				return ok(renderPlanMarkdown(plan), { plan });
+			}
+			return ok(renderPlanSummary(plan), { plan });
 		},
 	}) as ToolDefinition;
 }

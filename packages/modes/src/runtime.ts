@@ -188,6 +188,7 @@ export function createModesRuntime(
 	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
+	let workerSeedContent: string | undefined;
 	// Central usage ledger (usage.v1). Records orchestrator + agent + lens usage.
 	const usageLedger = new UsageLedger();
 	let orchestratorUsage: TokenSnapshot | undefined;
@@ -533,6 +534,7 @@ export function createModesRuntime(
 		onTaskToggle: (taskId) => {
 			agentBridge?.onTaskComplete(taskId);
 		},
+		seedContent: () => workerSeedContent,
 	})) {
 		pi.registerTool(tool);
 	}
@@ -1239,6 +1241,20 @@ export function createModesRuntime(
 		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
+		// Extract seed content for workers (read-only plan context)
+		if (state.mode === "worker") {
+			for (const entry of ctx.sessionManager.getEntries()) {
+				const e = entry as unknown as Record<string, unknown>;
+				if (
+					(e.type === "custom" && e.customType === "maestro-execution-seed") ||
+					(e.type === "custom_message" && e.customType === "maestro.execution.seed")
+				) {
+					const data = e.data as Record<string, unknown> | undefined;
+					const content = data?.content ?? e.content;
+					if (typeof content === "string") workerSeedContent = content;
+				}
+			}
+		}
 		compactionInFlight = false;
 		pendingCompaction = undefined;
 		compactionCooldownUntil = 0;

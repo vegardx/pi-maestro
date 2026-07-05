@@ -871,7 +871,7 @@ export class TmuxFanout {
 
 	private pollSessions(): void {
 		for (const [id, state] of this.agents) {
-			if (state.status === "spawning" || state.status === "working") {
+			if (state.status === "working") {
 				this.checkSessionAlive(id);
 			}
 		}

@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -114,6 +115,36 @@ export interface TmuxFanoutDeps {
 const LOG_FILE = join(tmpdir(), "maestro-fanout.log");
 function log(msg: string): void {
 	appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${msg}\n`);
+}
+
+/** Collect git info from a worktree after agent completes. */
+function collectGitInfo(
+	worktreePath: string,
+	defaultBranch: string,
+): { commits: string[]; prUrl?: string } {
+	const commits: string[] = [];
+	let prUrl: string | undefined;
+	try {
+		// Get commits on this branch not on default
+		const log = execSync(
+			`git log --oneline ${defaultBranch}..HEAD --format="%s"`,
+			{ cwd: worktreePath, encoding: "utf-8", timeout: 5000 },
+		).trim();
+		if (log) {
+			for (const line of log.split("\n")) {
+				if (line.trim()) commits.push(line.trim());
+			}
+		}
+	} catch { /* ignore git errors */ }
+	try {
+		// Check for open PR on current branch
+		const pr = execSync(
+			"gh pr view --json url -q .url",
+			{ cwd: worktreePath, encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] },
+		).trim();
+		if (pr.startsWith("http")) prUrl = pr;
+	} catch { /* no PR or gh not available */ }
+	return { commits, prUrl };
 }
 
 const POLL_INTERVAL_MS = 3000;
@@ -750,7 +781,9 @@ export class TmuxFanout {
 			type: "shutdown",
 			reason: "all tasks complete",
 		});
-		this.markDone(agentId);
+		// Collect git info from the worktree before marking done
+		const gitInfo = collectGitInfo(state.worktreePath, this.deps.defaultBranch);
+		this.markDone(agentId, undefined, gitInfo.prUrl, gitInfo.commits);
 		return true;
 	}
 

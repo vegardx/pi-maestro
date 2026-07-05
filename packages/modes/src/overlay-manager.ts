@@ -9,7 +9,7 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
-export type OverlayId = "ask" | "agents";
+export type OverlayId = "ask" | "agents" | "config";
 
 export interface ManagedOverlay {
 	readonly id: OverlayId;
@@ -30,7 +30,7 @@ const KEY_ESC = "\u001b";
 
 export class OverlayManager {
 	private overlays = new Map<OverlayId, ManagedOverlay>();
-	private focusOrder: OverlayId[] = ["ask", "agents"];
+	private focusOrder: OverlayId[] = ["config", "ask", "agents"];
 	private focusedId: OverlayId | null = null;
 	private inputBlocked = false;
 	private removeInputListener: (() => void) | undefined;

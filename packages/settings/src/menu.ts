@@ -264,6 +264,7 @@ function getOptionsForKey(
 
 class ConfigMenuComponent implements Component, Focusable {
 	focused = true;
+	expanded = true;
 	private sections: Section[];
 	private flatRows: SettingRow[] = [];
 	private cursor = 0;
@@ -695,44 +696,51 @@ class ConfigMenuComponent implements Component, Focusable {
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
-
 const WIDGET_KEY = "maestro.config";
+const CONFIG_OVERLAY_ID = "config";
 
-let activeMenu: {
-	comp: ConfigMenuComponent;
-	removeInput: (() => void) | undefined;
-	ctx: ExtensionContext;
-} | null = null;
-
-function closeMenu(): void {
-	if (!activeMenu) return;
-	activeMenu.removeInput?.();
-	activeMenu.ctx.ui.setWidget(WIDGET_KEY, undefined);
-	activeMenu = null;
+interface OverlaysApi {
+	mount(id: string, comp: unknown): void;
+	focusOverlay(id: string): void;
+	unmount(id: string): void;
 }
 
-export function showConfigMenu(ctx: ExtensionContext): void {
-	// If already open, close it (toggle)
-	if (activeMenu) {
-		closeMenu();
+let activeComp: ConfigMenuComponent | null = null;
+
+export function showConfigMenu(
+	ctx: ExtensionContext,
+	overlays?: OverlaysApi,
+): void {
+	// Toggle off if already open
+	if (activeComp) {
+		if (overlays) {
+			overlays.unmount(CONFIG_OVERLAY_ID);
+		} else {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+		}
+		activeComp = null;
 		return;
 	}
 
 	const palette = paletteFromTheme(ctx.ui.theme);
-	const comp = new ConfigMenuComponent(ctx, palette, () => closeMenu());
-
-	// Mount as widget above editor
-	ctx.ui.setWidget(WIDGET_KEY, (_tui: TUI, _theme: Theme) => comp, {
-		placement: "aboveEditor",
+	const comp = new ConfigMenuComponent(ctx, palette, () => {
+		if (overlays) {
+			overlays.unmount(CONFIG_OVERLAY_ID);
+		} else {
+			ctx.ui.setWidget(WIDGET_KEY, undefined);
+		}
+		activeComp = null;
 	});
+	activeComp = comp;
 
-	// Capture input
-	const removeInput = ctx.ui.onTerminalInput?.((data) => {
-		comp.handleInput(data);
-		return { consume: true };
-	});
-
-	activeMenu = { comp, removeInput, ctx };
+	if (overlays) {
+		overlays.mount(CONFIG_OVERLAY_ID, comp);
+		overlays.focusOverlay(CONFIG_OVERLAY_ID);
+	} else {
+		ctx.ui.setWidget(WIDGET_KEY, (_tui: TUI, _theme: Theme) => comp, {
+			placement: "aboveEditor",
+		});
+	}
 }
 
 /** Read session-scoped value (for resolver integration). */

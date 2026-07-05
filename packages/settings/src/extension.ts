@@ -40,8 +40,8 @@ export default defineExtension(
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					// Interactive menu (TUI overlay)
-					await showConfigMenu(ctx);
+					const overlays = maestro.capabilities.get(CAPABILITIES.overlays);
+					showConfigMenu(ctx, overlays);
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx);

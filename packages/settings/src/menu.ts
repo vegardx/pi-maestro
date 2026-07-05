@@ -335,19 +335,14 @@ class ConfigMenuComponent implements Component, Focusable {
 		const p = this.palette;
 		const lines: string[] = [];
 
-		// Layout: responsive spacers, columns max 20 chars
-		const labelW = 26;
-		const colW = Math.min(
-			20,
-			Math.max(12, Math.floor((_width - labelW - 10) / 5)),
-		);
-		const dataW = colW * 4;
-		const usedW = labelW + dataW;
-		const available = Math.max(_width - usedW - 4, 0); // 4 = borders + padding
-		const spacer1 = Math.floor(available / 2);
-		const spacer2 = available - spacer1;
-		const innerW = labelW + spacer1 + colW * 3 + spacer2 + colW;
-		const boxW = innerW + 4;
+		// Layout: percentages of available width, spacers fill rest
+		const innerW = _width - 4; // borders + padding
+		const labelW = Math.max(20, Math.floor(innerW * 0.25));
+		const colW = Math.min(20, Math.max(8, Math.floor(innerW * 0.14)));
+		const spacerTotal = Math.max(0, innerW - labelW - colW * 4);
+		const spacer1 = Math.floor(spacerTotal * 0.6);
+		const spacer2 = spacerTotal - spacer1;
+		const boxW = _width;
 
 		// Helper: build a full-width row inside the box
 		const line = (content: string): string =>

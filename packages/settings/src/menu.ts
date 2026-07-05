@@ -161,9 +161,19 @@ function buildSections(ctx: ExtensionContext): Section[] {
 	];
 	if (modelsConfig) {
 		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
+			// Preset name row (navigable for delete/rename/activate)
+			presetRows.push({
+				label: name,
+				extension: "@presets",
+				key: `@name.${name}`,
+				global: name === modelsConfig.active ? "★ active" : undefined,
+				project: undefined,
+				session: undefined,
+				globalOnly: true,
+			});
 			for (const slot of SLOTS) {
 				presetRows.push({
-					label: `${name} / ${slot}`,
+					label: `  ${slot}`,
 					extension: "@presets",
 					key: `${name}.${slot}`,
 					global: preset[slot],
@@ -219,7 +229,7 @@ const KEY_ENTER = "\r";
 const KEY_ESC = "\u001b";
 const KEY_BACKSPACE = "\u007f";
 
-type Mode = "browse" | "edit" | "select" | "naming";
+type Mode = "browse" | "edit" | "select" | "naming" | "renaming" | "confirm-delete";
 
 const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
@@ -272,6 +282,8 @@ class ConfigMenuComponent implements Component, Focusable {
 	private options: Array<{ label: string; value: string }> = [];
 	private optionCursor = 0;
 	private statusMessage = "";
+	private pendingDeletePreset = "";
+	private deleteReferences: string[] = [];
 	private readonly palette: Palette;
 	private readonly ctx: ExtensionContext;
 	private readonly done: (result: undefined) => void;
@@ -456,20 +468,47 @@ class ConfigMenuComponent implements Component, Focusable {
 			lines.push(line(""));
 		}
 
+		// Renaming mode
+		if (this.mode === "renaming") {
+			lines.push(line(""));
+			lines.push(
+				line(`  Rename preset: ${p.accent(`${this.editBuffer}\u2588`)}`),
+			);
+			lines.push(line(""));
+		}
+
 		// Status
-		if (this.statusMessage) {
+		if (this.mode === "confirm-delete") {
+			lines.push(line(""));
+			lines.push(line(`  ${p.accent(`Delete preset "${this.pendingDeletePreset}"?`)}`));
+			if (this.deleteReferences.length > 0) {
+				lines.push(line(""));
+				lines.push(line(`  ${p.muted("Referenced by:")}`));
+				for (const ref of this.deleteReferences) {
+					lines.push(line(`    ${p.muted("\u2022")} ${ref}`));
+				}
+				lines.push(line(""));
+				lines.push(line(`  ${p.muted("These references will be cleared.")}`));
+			}
+			lines.push(line(""));
+		} else if (this.statusMessage) {
 			lines.push(line(`  ${p.success(this.statusMessage)}`));
 		}
 
 		// Help bar
+		const isPresetNameRow = this.flatRows[this.cursor]?.key.startsWith("@name.");
 		const help =
-			this.mode === "select"
-				? "\u2191\u2193 choose  Enter confirm  Esc cancel"
-				: this.mode === "edit"
-					? "Enter: save  Esc: cancel"
-					: this.mode === "naming"
-						? "Enter: create  Esc: cancel"
-						: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
+			this.mode === "confirm-delete"
+				? "y confirm  Esc cancel"
+				: this.mode === "select"
+					? "\u2191\u2193 choose  Enter confirm  Esc cancel"
+					: this.mode === "edit"
+						? "Enter: save  Esc: cancel"
+						: this.mode === "naming" || this.mode === "renaming"
+							? "Enter: confirm  Esc: cancel"
+							: isPresetNameRow
+								? "\u2191\u2193 navigate  a activate  r rename  d delete  n new  Esc close"
+								: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
 		lines.push(line(p.muted(help)));
 
 		// Bottom border
@@ -491,6 +530,14 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 		if (this.mode === "naming") {
 			this.handleNamingInput(data);
+			return;
+		}
+		if (this.mode === "renaming") {
+			this.handleRenamingInput(data);
+			return;
+		}
+		if (this.mode === "confirm-delete") {
+			this.handleConfirmDeleteInput(data);
 			return;
 		}
 
@@ -517,6 +564,10 @@ class ConfigMenuComponent implements Component, Focusable {
 			}
 			case KEY_ENTER: {
 				const row = this.flatRows[this.cursor];
+				if (row?.key.startsWith("@name.")) {
+					this.activatePreset(row.key.slice(6));
+					break;
+				}
 				if (row) {
 					const opts = getOptionsForKey(row.key, row.extension, this.ctx);
 					if (opts && opts.length > 0) {
@@ -538,7 +589,26 @@ class ConfigMenuComponent implements Component, Focusable {
 			}
 			case "d": {
 				const row = this.flatRows[this.cursor];
-				if (row) this.deleteCell(row);
+				if (row?.key.startsWith("@name.")) {
+					this.startDeletePreset(row.key.slice(6));
+				} else if (row) {
+					this.deleteCell(row);
+				}
+				break;
+			}
+			case "r": {
+				const row = this.flatRows[this.cursor];
+				if (row?.key.startsWith("@name.")) {
+					this.editBuffer = row.key.slice(6);
+					this.mode = "renaming";
+				}
+				break;
+			}
+			case "a": {
+				const row = this.flatRows[this.cursor];
+				if (row?.key.startsWith("@name.")) {
+					this.activatePreset(row.key.slice(6));
+				}
 				break;
 			}
 			case "n":
@@ -624,6 +694,151 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (data.length === 1 && data >= " ") {
 			this.editBuffer += data;
 		}
+	}
+	private handleRenamingInput(data: string): void {
+		if (data === KEY_ESC) {
+			this.mode = "browse";
+			this.editBuffer = "";
+			return;
+		}
+		if (data === KEY_ENTER) {
+			const row = this.flatRows[this.cursor];
+			const oldName = row?.key.slice(6); // @name.xxx
+			const newName = this.editBuffer.trim();
+			if (oldName && newName && newName !== oldName) {
+				this.renamePreset(oldName, newName);
+			}
+			this.mode = "browse";
+			this.editBuffer = "";
+			return;
+		}
+		if (data === KEY_BACKSPACE) {
+			this.editBuffer = this.editBuffer.slice(0, -1);
+			return;
+		}
+		if (data.length === 1 && data >= " ") {
+			this.editBuffer += data;
+		}
+	}
+
+	private handleConfirmDeleteInput(data: string): void {
+		if (data === "y" || data === "Y") {
+			this.executeDeletePreset(this.pendingDeletePreset);
+			this.mode = "browse";
+			this.pendingDeletePreset = "";
+			this.deleteReferences = [];
+			return;
+		}
+		// Any other key cancels
+		this.mode = "browse";
+		this.pendingDeletePreset = "";
+		this.deleteReferences = [];
+		this.statusMessage = "Delete cancelled";
+	}
+
+	private startDeletePreset(name: string): void {
+		// Find references to this preset
+		const refs: string[] = [];
+		const config = readModelsConfig(this.ctx.cwd);
+		if (config?.active === name) refs.push("models.active");
+		const { global } = readLayeredExtensionConfig(this.ctx.cwd);
+		for (const [ext, extConfig] of Object.entries(global)) {
+			if (!isPlainObject(extConfig)) continue;
+			const models = (extConfig as Record<string, unknown>).models;
+			if (!isPlainObject(models)) continue;
+			for (const [role, roleConfig] of Object.entries(
+				models as Record<string, unknown>,
+			)) {
+				if (isPlainObject(roleConfig) && roleConfig.preset === name) {
+					refs.push(`${ext}.models.${role}.preset`);
+				}
+			}
+		}
+		this.pendingDeletePreset = name;
+		this.deleteReferences = refs;
+		this.mode = "confirm-delete";
+	}
+
+	private executeDeletePreset(name: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
+			if (!isPlainObject(raw.models)) return;
+			const models = raw.models as Record<string, unknown>;
+			if (isPlainObject(models.presets)) {
+				delete (models.presets as Record<string, unknown>)[name];
+			}
+			// Update active if it pointed to deleted preset
+			if (models.active === name) {
+				const remaining = isPlainObject(models.presets)
+					? Object.keys(models.presets as Record<string, unknown>)
+					: [];
+				models.active = remaining[0] ?? "";
+			}
+			// Cascade: remove preset references from extensionConfig
+			if (isPlainObject(raw.extensionConfig)) {
+				for (const extConfig of Object.values(
+					raw.extensionConfig as Record<string, unknown>,
+				)) {
+					if (!isPlainObject(extConfig)) continue;
+					const m = (extConfig as Record<string, unknown>).models;
+					if (!isPlainObject(m)) continue;
+					for (const roleConfig of Object.values(
+						m as Record<string, unknown>,
+					)) {
+						if (isPlainObject(roleConfig) && roleConfig.preset === name) {
+							delete roleConfig.preset;
+						}
+					}
+				}
+			}
+		});
+		this.statusMessage = `\u2713 Deleted preset "${name}"`;
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
+		this.cursor = Math.min(this.cursor, this.flatRows.length - 1);
+	}
+
+	private renamePreset(oldName: string, newName: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
+			if (!isPlainObject(raw.models)) return;
+			const models = raw.models as Record<string, unknown>;
+			if (isPlainObject(models.presets)) {
+				const presets = models.presets as Record<string, unknown>;
+				presets[newName] = presets[oldName];
+				delete presets[oldName];
+			}
+			// Update active
+			if (models.active === oldName) models.active = newName;
+			// Cascade: update preset references in extensionConfig
+			if (isPlainObject(raw.extensionConfig)) {
+				for (const extConfig of Object.values(
+					raw.extensionConfig as Record<string, unknown>,
+				)) {
+					if (!isPlainObject(extConfig)) continue;
+					const m = (extConfig as Record<string, unknown>).models;
+					if (!isPlainObject(m)) continue;
+					for (const roleConfig of Object.values(
+						m as Record<string, unknown>,
+					)) {
+						if (isPlainObject(roleConfig) && roleConfig.preset === oldName) {
+							(roleConfig as Record<string, unknown>).preset = newName;
+						}
+					}
+				}
+			}
+		});
+		this.statusMessage = `\u2713 Renamed "${oldName}" \u2192 "${newName}"`;
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
+	}
+
+	private activatePreset(name: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
+			if (!isPlainObject(raw.models)) raw.models = {};
+			(raw.models as Record<string, unknown>).active = name;
+		});
+		this.statusMessage = `\u2713 Active preset \u2192 "${name}"`;
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
 	}
 
 	private createPreset(name: string): void {

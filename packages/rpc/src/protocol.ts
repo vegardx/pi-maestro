@@ -55,6 +55,10 @@ export interface LensUsageMessage {
 	readonly type: "lensUsage";
 	readonly lens: string;
 	readonly snapshot: TokenSnapshot;
+	readonly findings?: number;
+	readonly fixed?: number;
+	readonly model?: string;
+	readonly effort?: string;
 }
 
 export type AgentMessage =

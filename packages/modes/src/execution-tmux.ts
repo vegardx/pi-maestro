@@ -70,6 +70,15 @@ export type TmuxAgentStatus =
 	| "done"
 	| "failed";
 
+export interface LensRunRecord {
+	readonly lens: string;
+	readonly findings: number;
+	readonly fixed: number;
+	readonly model?: string;
+	readonly effort?: string;
+	readonly tokens: TokenSnapshot;
+}
+
 export interface TmuxAgentState {
 	readonly deliverableId: string;
 	readonly agentName: string;
@@ -89,6 +98,7 @@ export interface TmuxAgentState {
 	errorDetail?: string;
 	commits?: string[];
 	model?: string;
+	lensResults: LensRunRecord[];
 }
 
 export interface TmuxFanoutDeps {
@@ -592,6 +602,7 @@ export class TmuxFanout {
 			tokens: { ...ZERO_TOKENS },
 			lensRuns: 0,
 			reviewCycles: 0,
+			lensResults: [],
 		};
 		this.agents.set(d.id, state);
 
@@ -672,6 +683,14 @@ export class TmuxFanout {
 			case "lensUsage":
 				state.lensRuns++;
 				state.lastLensAt = Date.now();
+				state.lensResults.push({
+					lens: msg.lens,
+					findings: msg.findings ?? 0,
+					fixed: msg.fixed ?? 0,
+					model: msg.model,
+					effort: msg.effort,
+					tokens: msg.snapshot,
+				});
 				if (msg.lens === "review") {
 					state.reviewCycles++;
 					this.handleReviewCycleCheck(agentId, state);

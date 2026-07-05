@@ -1123,12 +1123,20 @@ export function createModesRuntime(
 						};
 					}
 					for (const r of agg.results) {
-						if (agentBridge) agentBridge.reportLensUsage(r.lens, r.usage);
-						else
+						if (agentBridge) {
+							const lensResolved = await getModeRoleModel(ctx, "lens");
+							agentBridge.reportLensUsage(r.lens, r.usage, {
+								findings: r.findings.length,
+								fixed: 0, // fixed count updated after worker acts on findings
+								model: lensResolved?.model?.name ?? lensResolved?.modelId,
+								effort: lensResolved?.effort,
+							});
+						} else {
 							usageLedger.record(
 								{ kind: "lens", parentAgentId: "local", lens: r.lens },
 								r.usage,
 							);
+						}
 					}
 					return {
 						content: [{ type: "text", text: formatFindings(agg.results) }],

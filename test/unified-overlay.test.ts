@@ -21,7 +21,7 @@ function makeRow(overrides: Partial<Row> = {}): Row {
 			compactedAt: undefined,
 			manualNotes: [],
 			idleCount: 0,
-			lensRuns: 0,
+			lensRuns: 0, lensResults: [],
 			reviewCycles: 0,
 			startedAt: Date.now() - 60000,
 			tokens: {

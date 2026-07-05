@@ -111,8 +111,17 @@ export class AgentBridge {
 	reportLensUsage(
 		lens: string,
 		snapshot: import("@vegardx/pi-rpc").TokenSnapshot,
+		opts?: { findings?: number; fixed?: number; model?: string; effort?: string },
 	): void {
-		this.client.send({ type: "lensUsage", lens, snapshot });
+		this.client.send({
+			type: "lensUsage",
+			lens,
+			snapshot,
+			findings: opts?.findings,
+			fixed: opts?.fixed,
+			model: opts?.model,
+			effort: opts?.effort,
+		});
 	}
 
 	/**

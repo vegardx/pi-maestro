@@ -1,18 +1,18 @@
 // Execution recap — formats a summary of all agent work.
 
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
-import type { TmuxAgentState } from "./execution-tmux.js";
+import type { LensRunRecord, TmuxAgentState } from "./execution-tmux.js";
 import type { UsageLedger } from "./usage-ledger.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-const W = 80; // max width
+const W = 80;
 
 function hyperlink(url: string, text: string): string {
 	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 
-function formatDuration(ms: number): string {
+function fmtDur(ms: number): string {
 	const s = Math.floor(ms / 1000);
 	const m = Math.floor(s / 60);
 	const sec = s % 60;
@@ -20,24 +20,19 @@ function formatDuration(ms: number): string {
 	return `${sec}s`;
 }
 
-const k = (n: number): string => {
-	if (n < 1000) return `${n}`;
-	return `${Math.round(n / 1000)}k`;
-};
+const k = (n: number): string => (n < 1000 ? `${n}` : `${Math.round(n / 1000)}k`);
 
-function fmtTokens(t: TokenSnapshot): string {
+function fmtTok(t: TokenSnapshot): string {
 	return `↑${k(t.input)} ↓${k(t.output)}`;
 }
 
 function fmtCache(t: TokenSnapshot): string {
-	const denom = t.input + t.cacheRead;
-	if (denom === 0) return "—";
-	return `${Math.round((t.cacheRead / denom) * 100)}%`;
+	const d = t.input + t.cacheRead;
+	return d === 0 ? "—" : `${Math.round((t.cacheRead / d) * 100)}%`;
 }
 
 function fmtCost(t: TokenSnapshot): string {
-	if (t.cost < 0.01) return `$${t.cost.toFixed(3)}`;
-	return `$${t.cost.toFixed(2)}`;
+	return t.cost < 0.01 ? `$${t.cost.toFixed(3)}` : `$${t.cost.toFixed(2)}`;
 }
 
 function padR(s: string, w: number): string {
@@ -48,41 +43,65 @@ function padL(s: string, w: number): string {
 	return s.length >= w ? s : " ".repeat(w - s.length) + s;
 }
 
-// ─── Aggregate tokens for an agent (includes lens subagents) ────────────────
+function addTokens(a: TokenSnapshot, b: TokenSnapshot): TokenSnapshot {
+	return {
+		input: a.input + b.input,
+		output: a.output + b.output,
+		cacheRead: a.cacheRead + b.cacheRead,
+		cacheWrite: a.cacheWrite + b.cacheWrite,
+		totalTokens: a.totalTokens + b.totalTokens,
+		cost: a.cost + b.cost,
+		turns: a.turns + b.turns,
+	};
+}
 
-function getAgentTokens(
+const ZERO: TokenSnapshot = {
+	input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+	totalTokens: 0, cost: 0, turns: 0,
+};
+
+// ─── Get per-agent token splits ─────────────────────────────────────────────
+
+function getWorkerTokens(
 	agentId: string,
-	agentState: TmuxAgentState,
+	state: TmuxAgentState,
 	ledger?: UsageLedger,
 ): TokenSnapshot {
-	if (!ledger) return agentState.tokens;
+	if (!ledger) return state.tokens;
 	const { bySource } = ledger.snapshot();
-	let input = 0;
-	let output = 0;
-	let cacheRead = 0;
-	let cacheWrite = 0;
-	let cost = 0;
-	let turns = 0;
+	return bySource.get(`agent:${agentId}`) ?? state.tokens;
+}
+
+function getLensTokens(
+	agentId: string,
+	ledger?: UsageLedger,
+): TokenSnapshot {
+	if (!ledger) return ZERO;
+	const { bySource } = ledger.snapshot();
+	let result = { ...ZERO };
 	for (const [key, snap] of bySource) {
-		if (key === `agent:${agentId}` || key.startsWith(`lens:${agentId}:`)) {
-			input += snap.input;
-			output += snap.output;
-			cacheRead += snap.cacheRead;
-			cacheWrite += snap.cacheWrite;
-			cost += snap.cost;
-			turns += snap.turns;
+		if (key.startsWith(`lens:${agentId}:`)) {
+			result = addTokens(result, snap);
 		}
 	}
-	if (input === 0 && output === 0) return agentState.tokens;
-	return {
-		input,
-		output,
-		cacheRead,
-		cacheWrite,
-		totalTokens: input + output,
-		cost,
-		turns,
-	};
+	return result;
+}
+
+// ─── Format findings line ───────────────────────────────────────────────────
+
+function fmtLensLine(r: LensRunRecord): string {
+	const lens = padR(r.lens, 10);
+	let findingsText: string;
+	if (r.findings === 0) {
+		findingsText = "0 findings";
+	} else {
+		const fixedPart = r.fixed > 0 ? ` → ${r.fixed} fixed` : "";
+		findingsText = `${r.findings} finding${r.findings > 1 ? "s" : ""}${fixedPart}`;
+	}
+	const modelPart = r.model
+		? `  ${r.model}${r.effort ? ` (${r.effort})` : ""}`
+		: "";
+	return `       ${lens}${padR(findingsText, 22)}${modelPart}`;
 }
 
 // ─── Main format ────────────────────────────────────────────────────────────
@@ -107,24 +126,19 @@ export function formatRecap(
 	const finished = doneCount + failedCount;
 	const headerStatus = finished === total ? "complete" : "in progress";
 	const failedSuffix = failedCount > 0 ? `, ${failedCount} failed` : "";
-	const divider = "─".repeat(W);
+	const div = "─".repeat(W);
 
-	const hdrText = `─── Execution ${headerStatus} (${finished}/${total} done${failedSuffix}) `;
-	lines.push(hdrText + "─".repeat(Math.max(0, W - hdrText.length)));
+	const hdr = `─── Execution ${headerStatus} (${finished}/${total} done${failedSuffix}) `;
+	lines.push(hdr + "─".repeat(Math.max(0, W - hdr.length)));
 	lines.push("");
 
 	// ─── Section 1: Details per agent ─────────────────────────────────────
 	for (const [id, agent] of agents) {
 		const icon =
-			agent.status === "done"
-				? "✓"
-				: agent.status === "failed"
-					? "✗"
-					: agent.status === "working"
-						? "▶"
-						: agent.status === "awaiting-decision"
-							? "❓"
-							: "○";
+			agent.status === "done" ? "✓" :
+			agent.status === "failed" ? "✗" :
+			agent.status === "working" ? "▶" :
+			agent.status === "awaiting-decision" ? "❓" : "○";
 
 		const delivTitle = deliverableTitles?.get(id);
 		const title = delivTitle
@@ -147,70 +161,88 @@ export function formatRecap(
 		if (agent.status === "failed" && agent.errorDetail) {
 			lines.push(`     Error:    ${agent.errorDetail}`);
 		}
+		if (agent.lensResults.length > 0) {
+			lines.push("     Lenses:");
+			for (const r of agent.lensResults) {
+				lines.push(fmtLensLine(r));
+			}
+		}
 		lines.push("");
 	}
 
 	// ─── Section 2: Stats table ───────────────────────────────────────────
-	lines.push(divider);
+	lines.push(div);
 
-	// Column layout: name(38) + tokens(14) + cache(8) + cost(8) + time(8) = 76 (+4 pad)
-	const nameW = 38;
+	const nameW = 36;
 	const tokW = 14;
 	const cacheW = 8;
 	const costW = 8;
 	const timeW = 8;
+	const subDiv = "─".repeat(nameW + tokW + cacheW + costW + timeW);
 
 	lines.push(
 		padR("", nameW) +
-			padL("tokens", tokW) +
-			padL("cache", cacheW) +
-			padL("cost", costW) +
-			padL("time", timeW),
+		padL("tokens", tokW) +
+		padL("cache", cacheW) +
+		padL("cost", costW) +
+		padL("time", timeW),
 	);
 
-	let totalTok: TokenSnapshot = {
-		input: 0,
-		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: 0,
-		cost: 0,
-		turns: 0,
-	};
+	let grandTotal = { ...ZERO };
+	const wallClock = now - earliest;
 
 	for (const [id, agent] of agents) {
-		const tokens = getAgentTokens(id, agent, ledger);
-		totalTok = {
-			input: totalTok.input + tokens.input,
-			output: totalTok.output + tokens.output,
-			cacheRead: totalTok.cacheRead + tokens.cacheRead,
-			cacheWrite: totalTok.cacheWrite + tokens.cacheWrite,
-			totalTokens: totalTok.totalTokens + tokens.totalTokens,
-			cost: totalTok.cost + tokens.cost,
-			turns: totalTok.turns + tokens.turns,
-		};
-
+		const workerTok = getWorkerTokens(id, agent, ledger);
+		const lensTok = getLensTokens(id, ledger);
+		const subtotal = addTokens(workerTok, lensTok);
+		grandTotal = addTokens(grandTotal, subtotal);
 		const elapsed = now - agent.startedAt;
+
+		// Agent name header
+		lines.push(`  ${agent.agentName}`);
+
+		// Worker row
 		lines.push(
-			padR(`  ${agent.agentName}`, nameW) +
-				padL(fmtTokens(tokens), tokW) +
-				padL(fmtCache(tokens), cacheW) +
-				padL(fmtCost(tokens), costW) +
-				padL(formatDuration(elapsed), timeW),
+			padR("    worker", nameW) +
+			padL(fmtTok(workerTok), tokW) +
+			padL(fmtCache(workerTok), cacheW) +
+			padL(fmtCost(workerTok), costW) +
+			padL("", timeW),
 		);
+
+		// Lenses row
+		if (agent.lensResults.length > 0) {
+			lines.push(
+				padR(`    lenses (${agent.lensResults.length} runs)`, nameW) +
+				padL(fmtTok(lensTok), tokW) +
+				padL(fmtCache(lensTok), cacheW) +
+				padL(fmtCost(lensTok), costW) +
+				padL("", timeW),
+			);
+		}
+
+		// Subtotal
+		lines.push(`    ${subDiv.slice(0, nameW + tokW + cacheW + costW + timeW - 4)}`);
+		lines.push(
+			padR("    subtotal", nameW) +
+			padL(fmtTok(subtotal), tokW) +
+			padL(fmtCache(subtotal), cacheW) +
+			padL(fmtCost(subtotal), costW) +
+			padL(fmtDur(elapsed), timeW),
+		);
+		lines.push("");
 	}
 
-	// Totals — wall-clock time from first start to now
-	const wallClock = now - earliest;
-	lines.push(divider);
+	// Grand total
+	lines.push(div);
 	lines.push(
-		padR("  Totals", nameW) +
-			padL(fmtTokens(totalTok), tokW) +
-			padL(fmtCache(totalTok), cacheW) +
-			padL(fmtCost(totalTok), costW) +
-			padL(formatDuration(wallClock), timeW),
+		padR("  Total", nameW) +
+		padL(fmtTok(grandTotal), tokW) +
+		padL(fmtCache(grandTotal), cacheW) +
+		padL(fmtCost(grandTotal), costW) +
+		padL(fmtDur(wallClock), timeW),
 	);
-	lines.push(divider);
+	lines.push(div);
 
 	return lines.join("\n");
 }

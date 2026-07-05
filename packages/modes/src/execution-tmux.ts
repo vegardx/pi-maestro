@@ -735,35 +735,6 @@ export class TmuxFanout {
 
 		// Check if all tasks are done — if so, agent is complete
 		if (this.checkCompletionGate(agentId)) return;
-
-		// After first idle with incomplete tasks, steer the agent to assess (once)
-		if (!state.assessmentSent) {
-			const d = findDeliverable(this.deps.engine.get(), agentId);
-			const taskIds = d
-				? d.children
-						.filter(
-							(c) =>
-								c.type === "work-item" &&
-								(c.kind === "task" || !c.kind) &&
-								!c.done,
-						)
-						.map((c) => c.id)
-				: [];
-			if (taskIds.length > 0) {
-				this.server.send(agentId, {
-					type: "steer",
-					content:
-						"Assess whether you have completed your work. For each task, verify it is actually done " +
-						"(code implemented, tests passing, committed). Then mark completed tasks:\n" +
-						taskIds
-							.map((id) => `  task({action: "toggle", id: "${id}"})`)
-							.join("\n") +
-						"\n\nIf any task is NOT done, continue working on it.",
-				});
-				state.assessmentSent = true;
-				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
-			}
-		}
 	}
 
 	private handleReviewCycleCheck(agentId: string, state: TmuxAgentState): void {

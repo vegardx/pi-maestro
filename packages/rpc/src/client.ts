@@ -22,6 +22,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	private socket: Socket | undefined;
 	private socketPath: string | undefined;
 	private agentId: string | undefined;
+	private model: string | undefined;
 	private buffer = "";
 	private closed = false;
 	private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -41,9 +42,10 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	/**
 	 * Connect to the orchestrator socket and send hello.
 	 */
-	connect(socketPath: string, agentId: string): void {
+	connect(socketPath: string, agentId: string, model?: string): void {
 		this.socketPath = socketPath;
 		this.agentId = agentId;
+		this.model = model;
 		this.closed = false;
 		this.attemptConnect();
 	}
@@ -89,9 +91,9 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 			this.retryDelay = this.initialRetryDelay;
 			this.buffer = "";
 			// Send hello immediately
-			socket.write(
-				`${JSON.stringify({ type: "hello", agentId: this.agentId })}\n`,
-			);
+			const hello: Record<string, unknown> = { type: "hello", agentId: this.agentId };
+			if (this.model) hello.model = this.model;
+			socket.write(`${JSON.stringify(hello)}\n`);
 			this.emit("connected");
 		});
 

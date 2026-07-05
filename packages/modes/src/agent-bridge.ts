@@ -52,7 +52,8 @@ export class AgentBridge {
 	start(ctx: ExtensionContext): void {
 		this.ctx = ctx;
 		this.client.on("message", (msg) => this.handleMessage(msg));
-		this.client.connect(this.deps.socketPath, this.deps.agentId);
+		const modelName = ctx.model?.name ?? ctx.model?.id;
+		this.client.connect(this.deps.socketPath, this.deps.agentId, modelName);
 	}
 
 	/** Signal turn started — agent is working. */

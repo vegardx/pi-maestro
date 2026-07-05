@@ -194,7 +194,9 @@ export class TmuxFanout {
 	 */
 	async start(): Promise<void> {
 		await this.server.listen(this.socketPath);
-		this.server.on("connected", (agentId) => this.handleConnected(agentId));
+		this.server.on("connected", (agentId, model) =>
+			this.handleConnected(agentId, model),
+		);
 		this.server.on("disconnected", (agentId) =>
 			this.handleDisconnected(agentId),
 		);
@@ -628,11 +630,12 @@ export class TmuxFanout {
 		this.deps.onAgentStateChanged?.(d.id, state);
 	}
 
-	private handleConnected(agentId: string): void {
+	private handleConnected(agentId: string, model?: string): void {
 		log(`connected: ${agentId}`);
 		const state = this.agents.get(agentId);
 		if (!state) return;
 		state.status = "working";
+		if (model) state.model = model;
 		this.deps.onAgentStateChanged?.(agentId, state);
 	}
 

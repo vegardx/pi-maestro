@@ -13,6 +13,7 @@ export type { TokenSnapshot } from "@vegardx/pi-contracts";
 export interface HelloMessage {
 	readonly type: "hello";
 	readonly agentId: string;
+	readonly model?: string;
 }
 
 export interface StatusMessage {

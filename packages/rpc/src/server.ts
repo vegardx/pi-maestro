@@ -9,7 +9,7 @@ export interface AgentConnection {
 }
 
 export interface MaestroRpcServerEvents {
-	connected: [agentId: string];
+	connected: [agentId: string, model?: string];
 	disconnected: [agentId: string];
 	message: [agentId: string, msg: AgentMessage];
 	error: [err: Error];
@@ -153,7 +153,7 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 				existing.socket.destroy();
 			}
 			this.agents.set(msg.agentId, { agentId: msg.agentId, socket });
-			this.emit("connected", msg.agentId);
+			this.emit("connected", msg.agentId, msg.model);
 			return;
 		}
 

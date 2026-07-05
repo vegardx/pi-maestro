@@ -516,60 +516,52 @@ class ConfigMenuComponent implements Component, Focusable {
 			lines.push(line(presetHdr));
 			lines.push(line(""));
 
-			let flatIdx = 0;
-			for (const section of this.sections) {
-				if (section.title !== "presets") continue;
-				for (const r of section.rows) {
-					if (r.key === "active") {
-						flatIdx++;
-						continue;
-					}
-					const selected = flatIdx === this.cursor;
-					const ptr = selected ? p.accent("\u25b6 ") : "  ";
+			for (let fi = 0; fi < this.flatRows.length; fi++) {
+				const r = this.flatRows[fi];
+				if (!this.isPresetDefRow(r)) continue;
+				const selected = fi === this.cursor;
+				const ptr = selected ? p.accent("\u25b6 ") : "  ";
 
-					if (r.key.startsWith("@name.")) {
-						const nm = r.key.slice(6);
-						const star = r.global ? " \u2605" : "";
-						lines.push(line(`${ptr}${p.heading(nm)}${p.muted(star)}`));
-					} else {
-						const label = visPad(r.label, labelW - 2);
-						const raw = r.global ?? "";
-						const sep = " \u00b7 ";
-						let modelVal = raw;
-						let effortVal = "";
-						if (raw.includes(sep)) {
-							[modelVal, effortVal] = raw.split(sep);
-						}
-						const modelDisp = this.resolveModelName(modelVal) || "\u2014";
-						const effortDisp = effortVal || "\u2014";
-
-						let mCell = visPad(
-							truncateToWidth(modelDisp, presetModelW - 1),
-							presetModelW,
-						);
-						let eCell = visPad(
-							truncateToWidth(effortDisp, presetEffortW - 1),
-							presetEffortW,
-						);
-						if (selected && this.presetCol === 0) {
-							const inner = truncateToWidth(modelDisp, presetModelW - 4);
-							mCell = p.accent(visPad(`[${inner}]`, presetModelW));
-						} else if (!modelVal) {
-							mCell = p.dim(mCell);
-						}
-						if (selected && this.presetCol === 1) {
-							const inner = truncateToWidth(effortDisp, presetEffortW - 4);
-							eCell = p.accent(visPad(`[${inner}]`, presetEffortW));
-						} else if (!effortVal) {
-							eCell = p.dim(eCell);
-						}
-						lines.push(
-							line(`${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`),
-						);
+				if (r.key.startsWith("@name.")) {
+					const nm = r.key.slice(6);
+					const star = r.global ? " \u2605" : "";
+					lines.push(line(`${ptr}${p.heading(nm)}${p.muted(star)}`));
+				} else {
+					const label = visPad(r.label, labelW - 2);
+					const raw = r.global ?? "";
+					const sep = " \u00b7 ";
+					let modelVal = raw;
+					let effortVal = "";
+					if (raw.includes(sep)) {
+						[modelVal, effortVal] = raw.split(sep);
 					}
-					flatIdx++;
+					const modelDisp = this.resolveModelName(modelVal) || "\u2014";
+					const effortDisp = effortVal || "\u2014";
+
+					let mCell = visPad(
+						truncateToWidth(modelDisp, presetModelW - 1),
+						presetModelW,
+					);
+					let eCell = visPad(
+						truncateToWidth(effortDisp, presetEffortW - 1),
+						presetEffortW,
+					);
+					if (selected && this.presetCol === 0) {
+						const inner = truncateToWidth(modelDisp, presetModelW - 4);
+						mCell = p.accent(visPad(`[${inner}]`, presetModelW));
+					} else if (!modelVal) {
+						mCell = p.dim(mCell);
+					}
+					if (selected && this.presetCol === 1) {
+						const inner = truncateToWidth(effortDisp, presetEffortW - 4);
+						eCell = p.accent(visPad(`[${inner}]`, presetEffortW));
+					} else if (!effortVal) {
+						eCell = p.dim(eCell);
+					}
+					lines.push(
+						line(`${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`),
+					);
 				}
-				break;
 			}
 
 			// Divider
@@ -596,18 +588,20 @@ class ConfigMenuComponent implements Component, Focusable {
 			lines.push(line(hdr));
 			lines.push(line(""));
 
-			for (const section of this.sections) {
-				let sectionHdrShown = false;
-				for (const r of section.rows) {
-					if (this.isPresetDefRow(r)) {
-						flatIdx++;
-						continue;
+			{
+				let lastSection = "";
+				for (let fi = 0; fi < this.flatRows.length; fi++) {
+					const r = this.flatRows[fi];
+					if (this.isPresetDefRow(r)) continue;
+					// Section header
+					const sectionTitle = this.sections.find((s) =>
+						s.rows.includes(r),
+					)?.title;
+					if (sectionTitle && sectionTitle !== lastSection) {
+						lines.push(line(p.heading(sectionTitle)));
+						lastSection = sectionTitle;
 					}
-					if (!sectionHdrShown) {
-						lines.push(line(p.heading(section.title)));
-						sectionHdrShown = true;
-					}
-					const selected = flatIdx === this.cursor;
+					const selected = fi === this.cursor;
 					const ptr = selected ? p.accent("\u25b6 ") : "  ";
 					const label = visPad(r.label, labelW - 2);
 
@@ -642,9 +636,7 @@ class ConfigMenuComponent implements Component, Focusable {
 					lines.push(
 						line(`${ptr}${label}${sp1}${cells.join("")}${sp2}${effCell}`),
 					);
-					flatIdx++;
 				}
-				if (sectionHdrShown) lines.push(line(""));
 			}
 
 			// Option list (select mode)

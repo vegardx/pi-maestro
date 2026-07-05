@@ -345,12 +345,16 @@ class ConfigMenuComponent implements Component, Focusable {
 		const boxW = _width;
 
 		// Helper: build a full-width row inside the box
-		const line = (content: string): string =>
-			`${p.dim("\u2502")} ${visPad(content, innerW)} ${p.dim("\u2502")}`;
+		const line = (content: string): string => {
+			const raw = `${p.dim("\u2502")} ${visPad(content, innerW)} ${p.dim("\u2502")}`;
+			// Hard guard: never exceed terminal width
+			if (visibleWidth(raw) > _width) return truncateToWidth(raw, _width);
+			return raw;
+		};
 
 		// Title bar
 		const title = " maestro config ";
-		const topFill = "\u2500".repeat(Math.max(boxW - 2 - title.length, 0));
+		const topFill = "\u2500".repeat(Math.max(boxW - 3 - title.length, 0));
 		lines.push(p.dim(`\u256d\u2500${title}${topFill}\u256e`));
 
 		// Header

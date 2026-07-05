@@ -1228,9 +1228,14 @@ export function createModesRuntime(
 				getMode: () => state.mode,
 				getLedger: () => usageLedger,
 				getAgentStatus: () => {
-					if (!tmuxFanout) return undefined;
+					if (!tmuxFanout || !engine) return undefined;
 					const agents = tmuxFanout.snapshot().agents;
-					const total = agents.size;
+					// Total = all non-terminal deliverables in the plan
+					const plan = engine.get();
+					const allDeliverables = plan.nodes.filter(
+						(n) => n.type === "deliverable" && n.status !== "shipped" && n.status !== "abandoned",
+					);
+					const total = allDeliverables.length;
 					if (total === 0) return undefined;
 					let done = 0;
 					let failed = 0;

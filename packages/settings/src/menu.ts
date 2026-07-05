@@ -613,7 +613,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			const models = raw.models as Record<string, unknown>;
 			if (!isPlainObject(models.presets)) models.presets = {};
 			const presets = models.presets as Record<string, unknown>;
-			presets[name] = {};
+			presets[name] = { default: "", alternate: "" };
 			if (!models.active) models.active = name;
 		});
 		this.statusMessage = `\u2713 Created preset "${name}"`;

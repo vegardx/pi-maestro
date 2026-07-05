@@ -14,10 +14,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function extractPresetConfig(raw: unknown): PresetConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	if (typeof raw.default !== "string") return undefined;
+	const def = typeof raw.default === "string" ? raw.default : undefined;
+	const alt = typeof raw.alternate === "string" ? raw.alternate : undefined;
+	// Allow newly created presets with no slots yet
+	if (!def && !alt) return undefined;
 	return {
-		default: raw.default,
-		alternate: typeof raw.alternate === "string" ? raw.alternate : undefined,
+		default: def ?? "",
+		alternate: alt,
 	};
 }
 

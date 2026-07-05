@@ -680,6 +680,7 @@ export function createModesRuntime(
 					{ stage: "executing", deliverableId: "orchestrator" },
 					ctx,
 				);
+			} else {
 				ctx.ui.notify("No deliverables ready to start.", "warning");
 			}
 			return;

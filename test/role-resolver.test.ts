@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -7,118 +7,137 @@ import {
 	resolveRoleModel,
 	validateRoleModelConfig,
 } from "@vegardx/pi-models";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-let dir: string;
+// ─── Test setup ──────────────────────────────────────────────────────────────
+
 let cwd: string;
 let agentDir: string;
-let savedAgentDirEnv: string | undefined;
 
-function writeSettings(path: string, obj: unknown): void {
+function writeSettings(path: string, obj: Record<string, unknown>) {
 	mkdirSync(join(path, ".."), { recursive: true });
-	writeFileSync(path, JSON.stringify(obj, null, 2));
+	writeFileSync(path, JSON.stringify(obj));
 }
-
-function projectSettings(obj: unknown): void {
+function projectSettings(obj: Record<string, unknown>) {
 	writeSettings(join(cwd, ".pi", "settings.json"), obj);
 }
-
-function globalSettings(obj: unknown): void {
+function globalSettings(obj: Record<string, unknown>) {
 	writeSettings(join(agentDir, "settings.json"), obj);
 }
 
 function fakeCtx(opts: {
 	withApiKey?: Set<string>;
-	noAuth?: Set<string>;
 	sessionModel?: string;
 }): ExtensionContext {
+	const models = new Map<string, { provider: string; id: string }>();
+	models.set("anthropic/sonnet", { provider: "anthropic", id: "sonnet" });
+	models.set("anthropic/haiku", { provider: "anthropic", id: "haiku" });
+	models.set("openai/o3", { provider: "openai", id: "o3" });
+	models.set("openai/mini", { provider: "openai", id: "mini" });
+	models.set("good/model", { provider: "good", id: "model" });
+	models.set("noauth/model", { provider: "noauth", id: "model" });
+	models.set("keyless/model", { provider: "keyless", id: "model" });
+	models.set("global/fast", { provider: "global", id: "fast" });
+	models.set("project/fast", { provider: "project", id: "fast" });
+
+	const withApiKey =
+		opts.withApiKey ??
+		new Set(["anthropic", "openai", "good", "global", "project"]);
+
+	const sessionModel = opts.sessionModel
+		? {
+				provider: opts.sessionModel.split("/")[0],
+				id: opts.sessionModel.split("/").slice(1).join("/"),
+			}
+		: undefined;
+
 	return {
 		cwd,
-		model: opts.sessionModel
-			? ({
-					provider: opts.sessionModel.split("/")[0],
-					id: opts.sessionModel.split("/").slice(1).join("/"),
-				} as never)
-			: undefined,
+		model: sessionModel as any,
 		modelRegistry: {
-			find: (provider: string, modelId: string) => ({
-				provider,
-				id: modelId,
-			}),
-			getApiKeyAndHeaders: async (model: { provider: string }) => {
-				if (opts.noAuth?.has(model.provider)) {
-					return { ok: false, error: "no auth" };
-				}
-				if (opts.withApiKey?.has(model.provider)) {
-					return { ok: true, apiKey: "sk-test" };
-				}
-				return { ok: true };
+			find: (provider: string, id: string) => {
+				const key = `${provider}/${id}`;
+				const m = models.get(key);
+				return m ? { ...m, api: "anthropic-messages" } : undefined;
 			},
+			getApiKeyAndHeaders: (model: any) => {
+				const hasKey = withApiKey.has(model.provider);
+				if (model.provider === "noauth") return Promise.resolve({ ok: false });
+				if (model.provider === "keyless")
+					return Promise.resolve({ ok: true, apiKey: undefined, headers: {} });
+				return Promise.resolve({
+					ok: true,
+					apiKey: hasKey ? "sk-test" : undefined,
+					headers: {},
+				});
+			},
+			getAvailable: () => [],
 		},
 	} as unknown as ExtensionContext;
 }
 
 beforeEach(() => {
-	dir = mkdtempSync(join(tmpdir(), "maestro-role-resolver-"));
-	cwd = join(dir, "project");
-	agentDir = join(dir, "agent");
-	mkdirSync(cwd, { recursive: true });
+	cwd = join(
+		tmpdir(),
+		`pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+	);
+	agentDir = join(cwd, ".pi-agent");
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
-	savedAgentDirEnv = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = agentDir;
+});
+afterEach(() => {
+	if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
 });
 
-afterEach(() => {
-	if (savedAgentDirEnv === undefined) delete process.env.PI_CODING_AGENT_DIR;
-	else process.env.PI_CODING_AGENT_DIR = savedAgentDirEnv;
-	rmSync(dir, { recursive: true, force: true });
-});
+// ─── validateRoleModelConfig ─────────────────────────────────────────────────
 
 describe("validateRoleModelConfig", () => {
-	it("accepts valid tier config", () => {
-		expect(
-			validateRoleModelConfig({ tier: "normal", thinking: "medium" }),
-		).toEqual({ tier: "normal", thinking: "medium" });
+	it("accepts valid slot config", () => {
+		const cfg = validateRoleModelConfig({ slot: "alternate", effort: "high" });
+		expect(cfg).toEqual({ slot: "alternate", effort: "high" });
 	});
 
 	it("accepts valid explicit model config", () => {
-		expect(
-			validateRoleModelConfig({
-				model: "anthropic/claude-sonnet-4-5",
-				thinking: "high",
-			}),
-		).toEqual({ model: "anthropic/claude-sonnet-4-5", thinking: "high" });
-	});
-
-	it("accepts tier with preset affinity", () => {
-		expect(
-			validateRoleModelConfig({
-				tier: "fast",
-				preset: "openai",
-				thinking: "off",
-			}),
-		).toEqual({ tier: "fast", preset: "openai", thinking: "off" });
-	});
-
-	it("rejects when both model and tier are set", () => {
-		expect(
-			validateRoleModelConfig({ model: "x/y", tier: "fast" }),
-		).toBeUndefined();
-	});
-
-	it("rejects unknown tier values", () => {
-		expect(validateRoleModelConfig({ tier: "ultra" })).toBeUndefined();
-	});
-
-	it("rejects unknown thinking levels", () => {
-		expect(
-			validateRoleModelConfig({ tier: "fast", thinking: "turbo" }),
-		).toEqual({ tier: "fast" });
-	});
-
-	it("accepts thinking-only config", () => {
-		expect(validateRoleModelConfig({ thinking: "high" })).toEqual({
-			thinking: "high",
+		const cfg = validateRoleModelConfig({
+			model: "anthropic/sonnet",
+			effort: "medium",
 		});
+		expect(cfg).toEqual({ model: "anthropic/sonnet", effort: "medium" });
+	});
+
+	it("accepts slot with preset affinity", () => {
+		const cfg = validateRoleModelConfig({
+			slot: "alternate",
+			preset: "openai",
+			effort: "low",
+		});
+		expect(cfg).toEqual({ slot: "alternate", preset: "openai", effort: "low" });
+	});
+
+	it("rejects when both model and slot are set", () => {
+		const cfg = validateRoleModelConfig({
+			model: "x/y",
+			slot: "alternate",
+		});
+		expect(cfg).toBeUndefined();
+	});
+
+	it("rejects unknown slot values", () => {
+		const cfg = validateRoleModelConfig({ slot: "tertiary" });
+		expect(cfg).toBeUndefined();
+	});
+
+	it("rejects unknown effort levels", () => {
+		const cfg = validateRoleModelConfig({
+			slot: "default",
+			effort: "ultra",
+		});
+		expect(cfg).toEqual({ slot: "default" });
+	});
+
+	it("accepts effort-only config", () => {
+		const cfg = validateRoleModelConfig({ effort: "xhigh" });
+		expect(cfg).toEqual({ effort: "xhigh" });
 	});
 
 	it("rejects empty config", () => {
@@ -126,70 +145,44 @@ describe("validateRoleModelConfig", () => {
 	});
 });
 
+// ─── readModelsConfig ────────────────────────────────────────────────────────
+
 describe("readModelsConfig", () => {
 	it("reads new preset format from project settings", () => {
 		projectSettings({
 			models: {
 				active: "anthropic",
 				presets: {
-					anthropic: {
-						fast: { model: "anthropic/haiku" },
-						normal: { model: "anthropic/sonnet" },
-					},
+					anthropic: { default: "anthropic/sonnet", alternate: "openai/o3" },
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
 		expect(config?.active).toBe("anthropic");
-		expect(config?.presets.anthropic.fast?.model).toBe("anthropic/haiku");
+		expect(config?.presets.anthropic.default).toBe("anthropic/sonnet");
+		expect(config?.presets.anthropic.alternate).toBe("openai/o3");
 	});
 
-	it("merges global and project — project wins per tier", () => {
+	it("merges global and project — project wins per slot", () => {
 		globalSettings({
 			models: {
 				active: "anthropic",
 				presets: {
-					anthropic: {
-						fast: { model: "anthropic/haiku" },
-						normal: { model: "anthropic/sonnet" },
-					},
+					anthropic: { default: "anthropic/haiku", alternate: "openai/mini" },
 				},
 			},
 		});
 		projectSettings({
 			models: {
-				active: "openai",
+				active: "anthropic",
 				presets: {
-					anthropic: {
-						fast: { model: "anthropic/haiku-new" },
-					},
+					anthropic: { default: "anthropic/sonnet" },
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.active).toBe("openai");
-		// Project replaced fast
-		expect(config?.presets.anthropic.fast?.model).toBe("anthropic/haiku-new");
-		// Normal comes from global (project didn't override)
-		expect(config?.presets.anthropic.normal?.model).toBe("anthropic/sonnet");
-	});
-
-	it("reads preset with effort field", () => {
-		projectSettings({
-			models: {
-				active: "test",
-				presets: {
-					test: {
-						fast: { model: "anthropic/haiku", effort: "low" },
-						heavy: { model: "anthropic/opus", effort: "xhigh" },
-					},
-				},
-			},
-		});
-		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.presets.test.fast?.model).toBe("anthropic/haiku");
-		expect(config?.presets.test.fast?.effort).toBe("low");
-		expect(config?.presets.test.heavy?.effort).toBe("xhigh");
+		expect(config?.presets.anthropic.default).toBe("anthropic/sonnet");
+		expect(config?.presets.anthropic.alternate).toBe("openai/mini");
 	});
 
 	it("returns undefined when nothing is configured", () => {
@@ -197,25 +190,27 @@ describe("readModelsConfig", () => {
 	});
 });
 
+// ─── resolveRoleModel ────────────────────────────────────────────────────────
+
 describe("resolveRoleModel", () => {
 	it("explicit override wins over everything", async () => {
 		projectSettings({
 			models: {
 				active: "anthropic",
-				presets: { anthropic: { normal: ["anthropic/sonnet"] } },
+				presets: { anthropic: { default: "anthropic/sonnet" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { tier: "normal", thinking: "low" } } },
+				modes: { models: { worker: { effort: "medium" } } },
 			},
 		});
-		const ctx = fakeCtx({ withApiKey: new Set(["explicit"]) });
+		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
-			explicit: { model: "explicit/model", thinking: "high" },
+			explicit: { model: "openai/o3", effort: "xhigh" },
 		});
-		expect(r?.modelId).toBe("explicit/model");
-		expect(r?.thinking).toBe("high");
+		expect(r?.modelId).toBe("openai/o3");
+		expect(r?.effort).toBe("xhigh");
 		expect(r?.source).toBe("explicit");
 	});
 
@@ -223,20 +218,20 @@ describe("resolveRoleModel", () => {
 		projectSettings({
 			models: {
 				active: "anthropic",
-				presets: { anthropic: { normal: ["anthropic/sonnet"] } },
+				presets: { anthropic: { default: "anthropic/sonnet" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { tier: "normal", thinking: "low" } } },
+				modes: { models: { worker: { effort: "low" } } },
 			},
 		});
-		const ctx = fakeCtx({ withApiKey: new Set(["env"]) });
+		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
-			env: { model: "env/model", thinking: "medium" },
+			env: { model: "openai/o3", effort: "high" },
 		});
-		expect(r?.modelId).toBe("env/model");
-		expect(r?.thinking).toBe("medium");
+		expect(r?.modelId).toBe("openai/o3");
+		expect(r?.effort).toBe("high");
 		expect(r?.source).toBe("env");
 	});
 
@@ -245,128 +240,37 @@ describe("resolveRoleModel", () => {
 			models: {
 				active: "anthropic",
 				presets: {
-					anthropic: { fast: { model: "anthropic/haiku" } },
-					openai: { fast: { model: "openai/mini" } },
+					anthropic: { default: "anthropic/haiku" },
+					openai: { default: "openai/mini" },
 				},
 			},
 			extensionConfig: {
 				modes: {
 					models: {
-						classifier: { tier: "fast", preset: "openai", thinking: "off" },
+						classifier: { preset: "openai", effort: "off" },
 					},
 				},
-			},
-		});
-		const ctx = fakeCtx({ withApiKey: new Set(["openai"]) });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "classifier",
-		});
-		expect(r?.modelId).toBe("openai/mini");
-		expect(r?.thinking).toBe("off");
-		expect(r?.source).toBe("preset");
-		expect(r?.preset).toBe("openai");
-		expect(r?.tier).toBe("fast");
-	});
-
-	it("tier resolves single model from preset", async () => {
-		projectSettings({
-			models: {
-				active: "test",
-				presets: {
-					test: { normal: { model: "good/model" } },
-				},
-			},
-			extensionConfig: {
-				modes: { models: { worker: { tier: "normal" } } },
 			},
 		});
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "classifier",
 		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.source).toBe("preset");
+		expect(r?.modelId).toBe("openai/mini");
+		expect(r?.effort).toBe("off");
+		expect(r?.preset).toBe("openai");
+		expect(r?.slot).toBe("default");
 	});
 
-	it("tier with no auth fails through to session model", async () => {
+	it("slot resolves model from preset", async () => {
 		projectSettings({
 			models: {
-				active: "bad",
-				presets: {
-					bad: { normal: { model: "noauth/model" } },
-				},
+				active: "test",
+				presets: { test: { default: "good/model", alternate: "openai/o3" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { tier: "normal" } } },
-			},
-		});
-		const ctx = fakeCtx({
-			noAuth: new Set(["noauth"]),
-			sessionModel: "sess/model",
-		});
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "worker",
-		});
-		expect(r?.modelId).toBe("sess/model");
-		expect(r?.source).toBe("session");
-	});
-
-	it("unset tier falls through to session model", async () => {
-		projectSettings({
-			models: {
-				active: "empty",
-				presets: { empty: {} },
-			},
-			extensionConfig: {
-				modes: { models: { worker: { tier: "normal" } } },
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "sess/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "worker",
-		});
-		expect(r?.modelId).toBe("sess/model");
-		expect(r?.source).toBe("session");
-	});
-
-	it("missing preset name falls back to active preset", async () => {
-		projectSettings({
-			models: {
-				active: "anthropic",
-				presets: { anthropic: { normal: ["anthropic/sonnet"] } },
-			},
-			extensionConfig: {
-				modes: {
-					models: {
-						worker: { tier: "normal", preset: "nonexistent" },
-					},
-				},
-			},
-		});
-		// nonexistent preset → no tier array → falls through to session
-		const ctx = fakeCtx({ sessionModel: "sess/fallback" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "worker",
-		});
-		expect(r?.modelId).toBe("sess/fallback");
-		expect(r?.source).toBe("session");
-	});
-
-	it("thinking level preserved from role config when resolving via tier", async () => {
-		projectSettings({
-			models: {
-				active: "a",
-				presets: { a: { heavy: { model: "a/opus" } } },
-			},
-			extensionConfig: {
-				modes: {
-					models: { analyze: { tier: "heavy", thinking: "high" } },
-				},
+				modes: { models: { analyze: { slot: "alternate", effort: "xhigh" } } },
 			},
 		});
 		const ctx = fakeCtx({});
@@ -374,8 +278,57 @@ describe("resolveRoleModel", () => {
 			extension: "modes",
 			role: "analyze",
 		});
-		expect(r?.thinking).toBe("high");
-		expect(r?.modelId).toBe("a/opus");
+		expect(r?.modelId).toBe("openai/o3");
+		expect(r?.effort).toBe("xhigh");
+		expect(r?.slot).toBe("alternate");
+	});
+
+	it("slot with no auth fails through to session model", async () => {
+		projectSettings({
+			models: {
+				active: "bad",
+				presets: { bad: { default: "noauth/model" } },
+			},
+			extensionConfig: {
+				modes: { models: { worker: { effort: "high" } } },
+			},
+		});
+		const ctx = fakeCtx({ sessionModel: "good/model" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "worker",
+		});
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.source).toBe("session");
+	});
+
+	it("falls back to session model when no settings configured", async () => {
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "worker",
+		});
+		expect(r?.modelId).toBe("anthropic/sonnet");
+		expect(r?.source).toBe("session");
+	});
+
+	it("effort from role config preserved when resolving via preset", async () => {
+		projectSettings({
+			models: {
+				active: "a",
+				presets: { a: { default: "good/model" } },
+			},
+			extensionConfig: {
+				modes: { models: { analyze: { effort: "xhigh" } } },
+			},
+		});
+		const ctx = fakeCtx({});
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "analyze",
+		});
+		expect(r?.effort).toBe("xhigh");
+		expect(r?.modelId).toBe("good/model");
 	});
 
 	it("returns null when nothing resolves and no session model", async () => {
@@ -387,47 +340,19 @@ describe("resolveRoleModel", () => {
 		expect(r).toBeNull();
 	});
 
-	it("falls back to session model when no settings configured", async () => {
-		const ctx = fakeCtx({ sessionModel: "sess/model" });
+	it("effort-only role config uses session model with that effort", async () => {
+		projectSettings({
+			extensionConfig: {
+				modes: { models: { worker: { effort: "low" } } },
+			},
+		});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
 		});
-		expect(r?.modelId).toBe("sess/model");
-		expect(r?.source).toBe("session");
-	});
-
-	it("thinking-only role config uses session model with that thinking", async () => {
-		projectSettings({
-			extensionConfig: {
-				modes: { models: { lens: { thinking: "off" } } },
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "sess/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "lens",
-		});
-		expect(r?.modelId).toBe("sess/model");
-		expect(r?.thinking).toBe("off");
-		expect(r?.source).toBe("session");
-	});
-
-	it("invalid role config is skipped gracefully", async () => {
-		projectSettings({
-			extensionConfig: {
-				modes: {
-					models: { worker: { model: "a/b", tier: "fast" } }, // invalid: both set
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "sess/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "worker",
-		});
-		// Falls through to session since role config is invalid
-		expect(r?.modelId).toBe("sess/model");
+		expect(r?.modelId).toBe("anthropic/sonnet");
+		expect(r?.effort).toBe("low");
 		expect(r?.source).toBe("session");
 	});
 
@@ -435,60 +360,36 @@ describe("resolveRoleModel", () => {
 		projectSettings({
 			models: {
 				active: "test",
-				presets: { test: { fast: { model: "keyless/model" } } },
+				presets: { test: { default: "keyless/model" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { tier: "fast" } } },
+				modes: { models: { worker: {} } },
 			},
 		});
-		const ctx = fakeCtx({ withApiKey: new Set(["keyed", "sess"]), sessionModel: "sess/model" });
+		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "worker",
 			requireApiKey: true,
 		});
-		// keyless/model doesn't have apiKey, falls to session
-		expect(r?.modelId).toBe("sess/model");
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.source).toBe("session");
 	});
 
-	it("project settings override global per-tier", async () => {
+	it("project settings override global per-slot", async () => {
 		globalSettings({
 			models: {
 				active: "p",
-				presets: { p: { fast: { model: "global/fast" } } },
+				presets: { p: { default: "global/fast" } },
 			},
 		});
 		projectSettings({
 			models: {
-				presets: { p: { fast: { model: "project/fast" } } },
-			},
-		});
-		projectSettings({
-			models: {
-				presets: { p: { fast: { model: "project/fast" } } },
+				active: "p",
+				presets: { p: { default: "project/fast" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { tier: "fast" } } },
-			},
-		});
-		const ctx = fakeCtx({ withApiKey: new Set(["project"]) });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "worker",
-		});
-		expect(r?.modelId).toBe("project/fast");
-	});
-
-	it("effort from preset tier flows as thinking", async () => {
-		projectSettings({
-			models: {
-				active: "test",
-				presets: {
-					test: { normal: { model: "good/model", effort: "high" } },
-				},
-			},
-			extensionConfig: {
-				modes: { models: { worker: { tier: "normal" } } },
+				modes: { models: { worker: { effort: "high" } } },
 			},
 		});
 		const ctx = fakeCtx({});
@@ -496,8 +397,27 @@ describe("resolveRoleModel", () => {
 			extension: "modes",
 			role: "worker",
 		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.thinking).toBe("high");
+		expect(r?.modelId).toBe("project/fast");
 		expect(r?.source).toBe("preset");
+	});
+
+	it("env effort used when role config has no effort", async () => {
+		projectSettings({
+			models: {
+				active: "test",
+				presets: { test: { default: "good/model" } },
+			},
+			extensionConfig: {
+				modes: { models: { worker: { slot: "default" } } },
+			},
+		});
+		const ctx = fakeCtx({});
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "worker",
+			env: { effort: "high" },
+		});
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.effort).toBe("high");
 	});
 });

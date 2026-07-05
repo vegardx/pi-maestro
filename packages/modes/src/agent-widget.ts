@@ -1,7 +1,7 @@
 // Renders the agent status panel with proper column alignment.
 // Uses truncateToWidth for fixed-width cells that respect terminal width.
 
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import type { Deliverable, WorkItem } from "./schema.js";
 
 export interface AgentState {
@@ -32,7 +32,7 @@ function fmtTokens(n: number | undefined): string {
 	return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-function fmtCost(n: number | undefined): string {
+function _fmtCost(n: number | undefined): string {
 	if (n === undefined || n === 0) return "";
 	return `$${n.toFixed(3)}`;
 }

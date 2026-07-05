@@ -2,13 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	getTierModel,
-	parseModelSpec,
-	readBackgroundModels,
-	resolveModel,
-	writeBackgroundModel,
-} from "@vegardx/pi-models";
+import { parseModelSpec, resolveModel } from "@vegardx/pi-models";
 
 let dir: string;
 let cwd: string;
@@ -83,34 +77,6 @@ describe("parseModelSpec", () => {
 		expect(parseModelSpec("noslash")).toBeNull();
 		expect(parseModelSpec("/leading")).toBeNull();
 		expect(parseModelSpec("trailing/")).toBeNull();
-	});
-});
-
-describe("tier resolution + fallback", () => {
-	it("reads merged tiers and falls back secondary→primary", () => {
-		writeSettings(join(agentDir, "settings.json"), {
-			backgroundModels: { primary: { fast: "p/fast", heavy: "p/heavy" } },
-		});
-		projectSettings({
-			backgroundModels: { secondary: { fast: "s/fast" } },
-		});
-		const models = readBackgroundModels(cwd, agentDir);
-		expect(getTierModel(models, "fast", "secondary")).toBe("s/fast");
-		// heavy not under secondary → primary fallback
-		expect(getTierModel(models, "heavy", "secondary")).toBe("p/heavy");
-		expect(getTierModel(models, "fast", "primary")).toBe("p/fast");
-		expect(getTierModel(models, "normal", "primary")).toBeUndefined();
-	});
-});
-
-describe("atomic background-model writes", () => {
-	it("writes then prunes a tier, removing emptied containers", () => {
-		writeBackgroundModel("project", cwd, "primary", "fast", "x/y", agentDir);
-		expect(getTierModel(readBackgroundModels(cwd, agentDir), "fast")).toBe(
-			"x/y",
-		);
-		writeBackgroundModel("project", cwd, "primary", "fast", null, agentDir);
-		expect(readBackgroundModels(cwd, agentDir).primary).toEqual({});
 	});
 });
 

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { describe, expect, it } from "vitest";
 import type { Row } from "../packages/modes/src/agents-dashboard.js";
 import type { TmuxAgentState } from "../packages/modes/src/execution-tmux.js";
 import type { PendingQuestion } from "../packages/modes/src/question-queue.js";
@@ -248,17 +248,28 @@ describe("UnifiedOverlayComponent", () => {
 		});
 		overlay.focused = true;
 		overlay.updateAgents([
-			makeRow({ title: "A very long deliverable title that exceeds any reasonable column width and should be truncated properly" }),
-			makeRow({ agentId: "agent-2", title: "Another agent with a super long title for testing width constraints" }),
+			makeRow({
+				title:
+					"A very long deliverable title that exceeds any reasonable column width and should be truncated properly",
+			}),
+			makeRow({
+				agentId: "agent-2",
+				title:
+					"Another agent with a super long title for testing width constraints",
+			}),
 		]);
 		overlay.updateQuestions([
 			makePendingQuestion({
 				questions: [
 					{
 						id: "q1",
-						question: "This is an extremely long question that should definitely be truncated when rendered in a narrow terminal",
+						question:
+							"This is an extremely long question that should definitely be truncated when rendered in a narrow terminal",
 						options: [
-							{ label: "Option with a very long description that might overflow the box boundaries" },
+							{
+								label:
+									"Option with a very long description that might overflow the box boundaries",
+							},
 							{ label: "Short" },
 						],
 					},

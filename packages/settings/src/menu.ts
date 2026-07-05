@@ -8,7 +8,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { TIERS } from "@vegardx/pi-contracts";
+import { SLOTS } from "@vegardx/pi-contracts";
 import { readModelsConfig } from "@vegardx/pi-models";
 import { settingsRegistry } from "./extension.js";
 import { readLayeredExtensionConfig } from "./reader.js";
@@ -160,23 +160,13 @@ function buildSections(ctx: ExtensionContext): Section[] {
 		},
 	];
 	if (modelsConfig) {
-		for (const [name, tiers] of Object.entries(modelsConfig.presets)) {
-			for (const tier of TIERS) {
-				const entry = tiers[tier];
+		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
+			for (const slot of SLOTS) {
 				presetRows.push({
-					label: `${name} / ${tier} / model`,
+					label: `${name} / ${slot}`,
 					extension: "@presets",
-					key: `${name}.${tier}.model`,
-					global: entry?.model,
-					project: undefined,
-					session: undefined,
-					globalOnly: true,
-				});
-				presetRows.push({
-					label: `${name} / ${tier} / effort`,
-					extension: "@presets",
-					key: `${name}.${tier}.effort`,
-					global: entry?.effort,
+					key: `${name}.${slot}`,
+					global: preset[slot],
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
@@ -235,7 +225,6 @@ const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
-const TIER_OPTIONS = ["fast", "normal", "heavy"];
 const BOOL_OPTIONS = ["true", "false"];
 
 interface OptionItem {
@@ -250,8 +239,7 @@ function getOptionsForKey(
 ): OptionItem[] | null {
 	if (key.endsWith(".thinking") || key.endsWith(".effort"))
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
-	if (key.endsWith(".tier"))
-		return TIER_OPTIONS.map((v) => ({ label: v, value: v }));
+	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
 	if (key === "lensDisabled")
 		return BOOL_OPTIONS.map((v) => ({ label: v, value: v }));
 	if (
@@ -647,22 +635,19 @@ class ConfigMenuComponent implements Component, Focusable {
 			});
 			this.statusMessage = `\u2713 preset \u2192 ${raw} [${scope}]`;
 		} else if (row.extension === "@presets") {
-			// Preset tier: key is "name.tier.model" or "name.tier.effort"
-			const parts = row.key.split(".");
-			const presetName = parts[0];
-			const tier = parts[1];
-			const field = parts[2]; // "model" or "effort"
+			// Preset slot: key is "name.slot" e.g. "anthropic.default"
+			const dotIdx = row.key.indexOf(".");
+			const presetName = row.key.slice(0, dotIdx);
+			const slot = row.key.slice(dotIdx + 1);
 			updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
 				if (!isPlainObject(obj.models)) obj.models = {};
 				const models = obj.models as Record<string, unknown>;
 				if (!isPlainObject(models.presets)) models.presets = {};
 				const presets = models.presets as Record<string, unknown>;
 				if (!isPlainObject(presets[presetName])) presets[presetName] = {};
-				const preset = presets[presetName] as Record<string, unknown>;
-				if (!isPlainObject(preset[tier])) preset[tier] = {};
-				(preset[tier] as Record<string, unknown>)[field] = raw;
+				(presets[presetName] as Record<string, unknown>)[slot] = raw;
 			});
-			this.statusMessage = `\u2713 ${presetName}.${tier}.${field} = ${raw} [global]`;
+			this.statusMessage = `\u2713 ${presetName}.${slot} = ${raw} [global]`;
 		} else {
 			writeExtensionConfigKey(
 				scope,

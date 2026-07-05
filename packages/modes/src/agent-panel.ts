@@ -2,13 +2,7 @@
 // proper framing and column-aware truncation.
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import {
-	Box,
-	type Component,
-	Container,
-	Text,
-	truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 
 export interface AgentDisplayState {
 	readonly name: string;

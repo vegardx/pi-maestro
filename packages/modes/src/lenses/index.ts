@@ -249,7 +249,7 @@ export function parseEventStream(stdout: string): {
 			continue;
 		}
 		const msg = extractMessage(obj);
-		if (!msg || msg.role !== "assistant") continue;
+		if (msg?.role !== "assistant") continue;
 		if (typeof msg.text === "string") text = msg.text;
 		if (msg.usage) {
 			usage = accumulate(usage, msg.usage);

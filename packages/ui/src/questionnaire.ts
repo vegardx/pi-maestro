@@ -767,7 +767,7 @@ export function paletteFromTheme(theme: unknown): Palette {
 		dim: (s) => t.fg!("dim", s),
 		muted: (s) => t.fg!("muted", s),
 		accent: (s) => t.fg!("accent", s),
-		heading: (s) => t.bold!(t.fg!("text", s)),
+		heading: (s) => t.bold?.(t.fg!("text", s)) ?? t.fg!("text", s),
 		success: (s) => t.fg!("success", s),
 		warning: (s) => t.fg!("warning", s),
 		error: (s) => t.fg!("error", s),

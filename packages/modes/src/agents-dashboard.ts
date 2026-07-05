@@ -495,7 +495,7 @@ export class CollapsibleDashboardComponent implements Component, Focusable {
 	constructor(
 		rows: readonly Row[],
 		ledger: UsageLedgerV1 | undefined,
-		private readonly done: (action: DashboardAction | undefined) => void,
+		readonly done: (action: DashboardAction | undefined) => void,
 		palette: Palette = defaultPalette(),
 	) {
 		this.palette = palette;

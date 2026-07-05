@@ -36,7 +36,7 @@ function deliverable(over: Partial<Deliverable> = {}): Deliverable {
 	};
 }
 
-function task(id: string, done = false): WorkItem {
+function _task(id: string, done = false): WorkItem {
 	return {
 		type: "work-item",
 		id,

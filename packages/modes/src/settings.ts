@@ -140,33 +140,33 @@ function asThinking(v: string | undefined): ThinkingLevel | undefined {
 
 function envForRole(role: ModesRole): {
 	model?: string;
-	thinking?: ThinkingLevel;
+	effort?: ThinkingLevel;
 } {
 	switch (role) {
 		case "worker":
 			return {
 				model: MAESTRO_ENV.workerModel,
-				thinking: asThinking(MAESTRO_ENV.workerThinking),
+				effort: asThinking(MAESTRO_ENV.workerThinking),
 			};
 		case "analyze":
 			return {
 				model: MAESTRO_ENV.analyzeModel,
-				thinking: asThinking(MAESTRO_ENV.analyzeThinking),
+				effort: asThinking(MAESTRO_ENV.analyzeThinking),
 			};
 		case "lens":
 			return {
 				model: MAESTRO_ENV.lensModel,
-				thinking: asThinking(MAESTRO_ENV.lensThinking),
+				effort: asThinking(MAESTRO_ENV.lensThinking),
 			};
 		case "classifier":
 			return {
 				model: MAESTRO_ENV.classifierModel,
-				thinking: asThinking(MAESTRO_ENV.classifierThinking),
+				effort: asThinking(MAESTRO_ENV.classifierThinking),
 			};
 	}
 }
 
-/** Per-invocation overrides set by /implement --model/--thinking flags. */
+/** Per-invocation overrides set by /implement --model/--effort flags. */
 export interface ImplementOverrides {
 	workerModel?: string;
 	workerThinking?: ThinkingLevel;
@@ -190,22 +190,22 @@ export function getImplementOverrides(): ImplementOverrides | undefined {
 
 function explicitForRole(role: ModesRole): {
 	model?: string;
-	thinking?: ThinkingLevel;
+	effort?: ThinkingLevel;
 } {
 	const o = _implementOverrides;
 	if (!o) return {};
 	switch (role) {
 		case "worker":
-			return { model: o.workerModel, thinking: o.workerThinking };
+			return { model: o.workerModel, effort: o.workerThinking };
 		case "analyze":
-			return { model: o.analyzeModel, thinking: o.analyzeThinking };
+			return { model: o.analyzeModel, effort: o.analyzeThinking };
 		default:
 			return {};
 	}
 }
 
 /**
- * Resolve a model + thinking level for a modes role.
+ * Resolve a model + effort level for a modes role.
  * Priority: CLI arg → env var → settings (preset/tier) → session model → null.
  */
 export async function getModeRoleModel(
@@ -217,7 +217,7 @@ export async function getModeRoleModel(
 	return resolveRoleModel(ctx, {
 		extension: NAME,
 		role,
-		explicit: explicit.model || explicit.thinking ? explicit : undefined,
-		env: env.model || env.thinking ? env : undefined,
+		explicit: explicit.model || explicit.effort ? explicit : undefined,
+		env: env.model || env.effort ? env : undefined,
 	});
 }

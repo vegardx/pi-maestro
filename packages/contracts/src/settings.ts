@@ -7,13 +7,13 @@ export type SettingType =
 	| "string"
 	| "number"
 	| "boolean"
-	| "tier"
+	| "slot"
 	| "thinking"
 	| "model";
 
 /** A single configurable setting declared by an extension. */
 export interface SettingDeclaration {
-	/** Dot-path key within the extension (e.g. "models.worker.tier") */
+	/** Dot-path key within the extension (e.g. "models.worker.effort") */
 	key: string;
 	/** Human-readable label (e.g. "Worker tier") */
 	label: string;

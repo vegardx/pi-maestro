@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES, isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
 import { defineExtension, redactSecrets } from "@vegardx/pi-core";
-import { resolveModelWithin } from "@vegardx/pi-models";
+import { resolveRoleModelWithin as resolveModelWithin } from "@vegardx/pi-models";
 import { assembleSummary, buildFileSections, buildPrompt } from "./prompt.js";
 import { readSmartCompactSettings } from "./settings.js";
 
@@ -65,11 +65,15 @@ export default defineExtension(
 	(pi, maestro) => {
 		// Declare configurable settings for /maestro menu
 		maestro.capabilities.get(CAPABILITIES.settings)?.declare("smart-compact", [
-			{ key: "models.summarizer.tier", label: "Summarizer tier", type: "tier" },
 			{
-				key: "models.summarizer.thinking",
-				label: "Summarizer thinking",
+				key: "models.summarizer.effort",
+				label: "Summarizer effort",
 				type: "thinking",
+			},
+			{
+				key: "models.summarizer.slot",
+				label: "Summarizer slot",
+				type: "slot",
 			},
 		]);
 
@@ -114,7 +118,7 @@ export default defineExtension(
 
 			const resolved = await resolveModelWithin(
 				ctx,
-				{ name: "smart-compact", tier: "normal", requireApiKey: true },
+				{ extension: "smart-compact", role: "summarizer", requireApiKey: true },
 				settings.timeoutMs,
 			);
 			if (!resolved?.apiKey) {

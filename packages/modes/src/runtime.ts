@@ -1353,7 +1353,7 @@ export function createModesRuntime(
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; usage?: unknown } })
 			.message;
-		if (!message || message.role !== "assistant" || !message.usage) return;
+		if (message?.role !== "assistant" || !message.usage) return;
 		if (agentBridge) agentBridge.recordUsage(message.usage as never);
 		else recordOrchestratorUsage(message.usage);
 	});
@@ -1596,28 +1596,20 @@ export function createModesRuntime(
 			type: "number",
 			default: 2,
 		},
-		{ key: "models.worker.tier", label: "Worker tier", type: "tier" },
-		{
-			key: "models.worker.thinking",
-			label: "Worker thinking",
-			type: "thinking",
-		},
+		{ key: "models.worker.effort", label: "Worker effort", type: "thinking" },
+		{ key: "models.worker.slot", label: "Worker slot", type: "slot" },
 		{ key: "models.worker.model", label: "Worker model", type: "model" },
-		{ key: "models.analyze.tier", label: "Analyze tier", type: "tier" },
-		{
-			key: "models.analyze.thinking",
-			label: "Analyze thinking",
-			type: "thinking",
-		},
+		{ key: "models.analyze.effort", label: "Analyze effort", type: "thinking" },
+		{ key: "models.analyze.slot", label: "Analyze slot", type: "slot" },
 		{ key: "models.analyze.model", label: "Analyze model", type: "model" },
-		{ key: "models.lens.tier", label: "Lens tier", type: "tier" },
-		{ key: "models.lens.thinking", label: "Lens thinking", type: "thinking" },
-		{ key: "models.classifier.tier", label: "Classifier tier", type: "tier" },
+		{ key: "models.lens.effort", label: "Lens effort", type: "thinking" },
+		{ key: "models.lens.slot", label: "Lens slot", type: "slot" },
 		{
-			key: "models.classifier.thinking",
-			label: "Classifier thinking",
+			key: "models.classifier.effort",
+			label: "Classifier effort",
 			type: "thinking",
 		},
+		{ key: "models.classifier.slot", label: "Classifier slot", type: "slot" },
 		{
 			key: "lensDisabled",
 			label: "Lenses disabled",

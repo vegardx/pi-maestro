@@ -62,14 +62,14 @@ describe("getModeRoleModel", () => {
 		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
 		process.env.MAESTRO_WORKER_THINKING = "high";
 		const result = await getModeRoleModel(mockCtx(root), "worker");
-		expect(result!.thinking).toBe("high");
+		expect(result!.effort).toBe("high");
 	});
 
 	it("ignores invalid thinking level from env", async () => {
 		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
 		process.env.MAESTRO_WORKER_THINKING = "extreme";
 		const result = await getModeRoleModel(mockCtx(root), "worker");
-		expect(result!.thinking).toBeUndefined();
+		expect(result!.effort).toBeUndefined();
 	});
 
 	it("CLI overrides take priority over env", async () => {
@@ -80,7 +80,7 @@ describe("getModeRoleModel", () => {
 		});
 		const result = await getModeRoleModel(mockCtx(root), "worker");
 		expect(result!.modelId).toBe("openai/gpt-4o");
-		expect(result!.thinking).toBe("medium");
+		expect(result!.effort).toBe("medium");
 		expect(result!.source).toBe("explicit");
 	});
 
@@ -89,7 +89,7 @@ describe("getModeRoleModel", () => {
 		process.env.MAESTRO_ANALYZE_THINKING = "low";
 		const result = await getModeRoleModel(mockCtx(root), "analyze");
 		expect(result!.modelId).toBe("anthropic/claude-sonnet-4-20250514");
-		expect(result!.thinking).toBe("low");
+		expect(result!.effort).toBe("low");
 	});
 
 	it("resolves from settings when no env", async () => {
@@ -103,7 +103,7 @@ describe("getModeRoleModel", () => {
 						models: {
 							worker: {
 								model: "openai/gpt-4o",
-								thinking: "minimal",
+								effort: "minimal",
 							},
 						},
 					},
@@ -113,7 +113,7 @@ describe("getModeRoleModel", () => {
 		const result = await getModeRoleModel(mockCtx(root), "worker");
 		expect(result).not.toBeNull();
 		expect(result!.modelId).toBe("openai/gpt-4o");
-		expect(result!.thinking).toBe("minimal");
+		expect(result!.effort).toBe("minimal");
 		expect(result!.source).toBe("preset");
 	});
 });

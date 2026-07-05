@@ -16,7 +16,6 @@ import {
 	shouldRefreshAnalyze,
 } from "../packages/modes/src/analyze.js";
 import {
-	buildLensPersonaMessage,
 	resolveCompactedFile,
 	runLensFromFork,
 } from "../packages/modes/src/lens-fork.js";

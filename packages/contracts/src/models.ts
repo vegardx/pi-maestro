@@ -1,4 +1,4 @@
-// Model configuration vocabulary: presets, tiers, and per-role config.
+// Model configuration vocabulary: presets, slots, and per-role config.
 //
 // Shared by the model resolver and every extension that declares background
 // model roles. The settings layer reads/writes this shape; the resolver
@@ -6,20 +6,22 @@
 
 import type { ThinkingLevel } from "./runs.js";
 
-// ─── Tiers ───────────────────────────────────────────────────────────────────
+// ─── Slots ───────────────────────────────────────────────────────────────────
 
-export const TIERS = ["fast", "normal", "heavy"] as const;
-export type Tier = (typeof TIERS)[number];
+export const SLOTS = ["default", "alternate"] as const;
+export type Slot = (typeof SLOTS)[number];
 
 // ─── Presets ─────────────────────────────────────────────────────────────────
 
-/** Ordered fallback list per tier. Resolver walks until one has valid auth. */
-export interface PresetTierEntry {
-	model: string;
-	effort?: ThinkingLevel;
+/**
+ * A preset maps two model slots to concrete `"provider/model-id"` strings.
+ * `default` is the workhorse (cache-friendly), `alternate` is a different
+ * model family for intentional diversity ("second pair of eyes").
+ */
+export interface PresetConfig {
+	readonly default: string;
+	readonly alternate?: string;
 }
-
-export type PresetTierMap = Partial<Record<Tier, PresetTierEntry>>;
 
 /**
  * Top-level `models` key in settings.json:
@@ -28,8 +30,8 @@ export type PresetTierMap = Partial<Record<Tier, PresetTierEntry>>;
  *   "models": {
  *     "active": "anthropic",
  *     "presets": {
- *       "anthropic": { "fast": [...], "normal": [...], "heavy": [...] },
- *       "openai":    { "fast": [...], "normal": [...], "heavy": [...] }
+ *       "anthropic": { "default": "anthropic/claude-sonnet-4", "alternate": "openai/o3" },
+ *       "openai":    { "default": "openai/o3", "alternate": "anthropic/claude-sonnet-4" }
  *     }
  *   }
  * }
@@ -38,8 +40,8 @@ export type PresetTierMap = Partial<Record<Tier, PresetTierEntry>>;
 export interface ModelsConfig {
 	/** Name of the currently active preset. */
 	readonly active: string;
-	/** Named presets mapping tiers to ordered model fallback arrays. */
-	readonly presets: Readonly<Record<string, PresetTierMap>>;
+	/** Named presets mapping slots to model identifiers. */
+	readonly presets: Readonly<Record<string, PresetConfig>>;
 }
 
 // ─── Per-role config ─────────────────────────────────────────────────────────
@@ -48,18 +50,18 @@ export interface ModelsConfig {
  * Configuration for a single extension role (e.g. modes.worker, modes.lens).
  * Lives in `extensionConfig.<ext>.models.<role>`.
  *
- * Specify EITHER `model` (explicit, bypasses presets) or `tier` (resolved from
- * the active or pinned preset). Both may carry a thinking level.
+ * Specify EITHER `model` (explicit, bypasses presets) or rely on slot
+ * resolution from the active/pinned preset.
  */
 export interface RoleModelConfig {
 	/** Explicit `"provider/id"` — bypasses preset resolution entirely. */
 	readonly model?: string;
-	/** Tier to resolve from the preset fallback array. */
-	readonly tier?: Tier;
+	/** Which slot to use from the preset ("default" | "alternate"). */
+	readonly slot?: Slot;
 	/** Pin this role to a specific preset, overriding `models.active`. */
 	readonly preset?: string;
 	/** Reasoning effort level for this role. */
-	readonly thinking?: ThinkingLevel;
+	readonly effort?: ThinkingLevel;
 }
 
 /** Map of role name → config. Stored at `extensionConfig.<ext>.models`. */
@@ -80,17 +82,17 @@ export type ResolutionSource = "explicit" | "env" | "preset" | "session";
 
 /**
  * Return type of `resolveRoleModel()`. Tells the caller what model to use,
- * at what thinking level, and where the decision came from.
+ * at what effort level, and where the decision came from.
  */
 export interface ResolvedRoleModel {
 	/** The winning `"provider/id"` string. */
 	readonly modelId: string;
-	/** Thinking level from the winning config layer. */
-	readonly thinking?: ThinkingLevel;
+	/** Effort/thinking level from the winning config layer. */
+	readonly effort?: ThinkingLevel;
 	/** Which priority layer provided this resolution. */
 	readonly source: ResolutionSource;
 	/** Which preset the model was resolved from (if source is "preset"). */
 	readonly preset?: string;
-	/** Which tier was used (if resolved via preset). */
-	readonly tier?: Tier;
+	/** Which slot was used (if resolved via preset). */
+	readonly slot?: Slot;
 }

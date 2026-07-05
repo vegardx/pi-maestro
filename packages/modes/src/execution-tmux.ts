@@ -397,8 +397,8 @@ export class TmuxFanout {
 		const resolved = await getModeRoleModel(this.extensionCtx, "worker");
 		if (resolved) {
 			vars.push(`PI_MODEL=${resolved.modelId}`);
-			if (resolved.thinking && resolved.thinking !== "off") {
-				vars.push(`PI_THINKING=${resolved.thinking}`);
+			if (resolved.effort && resolved.effort !== "off") {
+				vars.push(`PI_THINKING=${resolved.effort}`);
 			}
 		}
 		if (process.env.PATH) {

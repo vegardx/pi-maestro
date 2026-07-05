@@ -1,28 +1,25 @@
 // Preset-based role-model resolver.
 //
-// Resolves a model + thinking level for a named extension role using the
+// Resolves a model + effort level for a named extension role using the
 // preset system. Resolution priority (high → low):
 //
 //   1. opts.explicit       — per-invocation override (CLI arg)
 //   2. opts.env            — per-session override (env var)
 //   3. extensionConfig.<ext>.models.<role> from settings:
 //      a. role.model (explicit provider/id) → try auth
-//      b. role.tier  → resolve preset → walk fallback array
+//      b. role.slot  → resolve preset → look up slot
 //   4. ctx.model           — active session model
 //   5. null                — feature disabled
-//
-// The fallback array per tier is walked in order; the first model with valid
-// auth wins. This handles provider diversity and key availability gracefully.
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	ResolvedRoleModel,
 	RoleModelConfig,
+	Slot,
 	ThinkingLevel,
-	Tier,
 } from "@vegardx/pi-contracts";
-import { TIERS } from "@vegardx/pi-contracts";
+import { SLOTS } from "@vegardx/pi-contracts";
 import {
 	type ExtensionConfigMap,
 	getConfigObject,
@@ -39,9 +36,9 @@ export interface RoleResolveOptions {
 	/** Role within the extension (e.g. "worker", "analyze"). */
 	role: string;
 	/** Highest-priority override — typically from a CLI arg. */
-	explicit?: { model?: string; thinking?: ThinkingLevel };
+	explicit?: { model?: string; effort?: ThinkingLevel };
 	/** Second-priority override — typically from an env var. */
-	env?: { model?: string; thinking?: ThinkingLevel };
+	env?: { model?: string; effort?: ThinkingLevel };
 	/** Skip candidates whose auth is ok but yields no apiKey. */
 	requireApiKey?: boolean;
 }
@@ -55,14 +52,15 @@ export interface ResolvedRoleModelFull extends ResolvedRoleModel {
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
-const THINKING_LEVELS: ReadonlySet<string> = new Set([
+const EFFORT_LEVELS: ReadonlySet<string> = new Set([
 	"off",
 	"minimal",
 	"low",
 	"medium",
 	"high",
+	"xhigh",
 ]);
-const TIER_SET: ReadonlySet<string> = new Set(TIERS);
+const SLOT_SET: ReadonlySet<string> = new Set(SLOTS);
 
 /**
  * Validate a raw object as a RoleModelConfig. Returns undefined if the shape
@@ -75,29 +73,25 @@ export function validateRoleModelConfig(
 		typeof raw.model === "string" && raw.model.length > 0
 			? raw.model
 			: undefined;
-	const tier =
-		typeof raw.tier === "string" && TIER_SET.has(raw.tier)
-			? (raw.tier as Tier)
+	const slot =
+		typeof raw.slot === "string" && SLOT_SET.has(raw.slot)
+			? (raw.slot as Slot)
 			: undefined;
 	const preset =
 		typeof raw.preset === "string" && raw.preset.length > 0
 			? raw.preset
 			: undefined;
-	const thinking =
-		typeof raw.thinking === "string" && THINKING_LEVELS.has(raw.thinking)
-			? (raw.thinking as ThinkingLevel)
+	const effort =
+		typeof raw.effort === "string" && EFFORT_LEVELS.has(raw.effort)
+			? (raw.effort as ThinkingLevel)
 			: undefined;
 
-	// Mutual exclusion: model and tier can't both be set
-	if (model && tier) return undefined;
-	// At least one of model or tier must be present for the config to be useful
-	if (!model && !tier) {
-		// But thinking-only config is valid (inherits model from elsewhere)
-		if (thinking) return { thinking };
-		return undefined;
-	}
+	// At least one field must be present for the config to be useful
+	if (!model && !slot && !preset && !effort) return undefined;
+	// model bypasses preset — slot/preset are irrelevant with model
+	if (model && slot) return undefined;
 
-	return { model, tier, preset, thinking };
+	return { model, slot, preset, effort };
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -138,7 +132,7 @@ function readRoleConfig(
 // ─── Main resolver ───────────────────────────────────────────────────────────
 
 /**
- * Resolve a model + thinking level for a named extension role.
+ * Resolve a model + effort level for a named extension role.
  * Returns null when no model can be resolved (feature should be disabled).
  */
 export async function resolveRoleModel(
@@ -154,7 +148,7 @@ export async function resolveRoleModel(
 			return {
 				...result,
 				modelId: opts.explicit.model,
-				thinking: opts.explicit.thinking,
+				effort: opts.explicit.effort,
 				source: "explicit",
 			};
 		}
@@ -167,7 +161,7 @@ export async function resolveRoleModel(
 			return {
 				...result,
 				modelId: opts.env.model,
-				thinking: opts.env.thinking,
+				effort: opts.env.effort,
 				source: "env",
 			};
 		}
@@ -185,47 +179,44 @@ export async function resolveRoleModel(
 				return {
 					...result,
 					modelId: roleConfig.model,
-					thinking: roleConfig.thinking ?? opts.env?.thinking,
+					effort: roleConfig.effort ?? opts.env?.effort,
 					source: "preset",
 				};
 			}
 		}
 
-		// 3b: tier-based resolution via presets
-		if (roleConfig.tier) {
-			const modelsConfig = readModelsConfig(ctx.cwd);
-			if (modelsConfig) {
-				const presetName = roleConfig.preset ?? modelsConfig.active;
-				const preset = modelsConfig.presets[presetName];
-				const tierEntry = preset?.[roleConfig.tier];
+		// 3b: slot-based resolution via presets
+		const modelsConfig = readModelsConfig(ctx.cwd);
+		if (modelsConfig) {
+			const presetName = roleConfig.preset ?? modelsConfig.active;
+			const preset = modelsConfig.presets[presetName];
+			const slot: Slot = roleConfig.slot ?? "default";
+			const modelId = preset?.[slot];
 
-				if (tierEntry) {
-					const result = await tryAuth(ctx, tierEntry.model, requireApiKey);
-					if (result) {
-						return {
-							...result,
-							modelId: tierEntry.model,
-							thinking:
-								roleConfig.thinking ?? tierEntry.effort ?? opts.env?.thinking,
-							source: "preset",
-							preset: presetName,
-							tier: roleConfig.tier,
-						};
-					}
+			if (modelId) {
+				const result = await tryAuth(ctx, modelId, requireApiKey);
+				if (result) {
+					return {
+						...result,
+						modelId,
+						effort: roleConfig.effort ?? opts.env?.effort,
+						source: "preset",
+						preset: presetName,
+						slot,
+					};
 				}
 			}
 		}
 
-		// Role config has only thinking (no model/tier) — continue to session
-		// but carry the thinking level forward
-		if (roleConfig.thinking && !roleConfig.model && !roleConfig.tier) {
+		// Role config has only effort — continue to session but carry effort
+		if (roleConfig.effort && !roleConfig.model) {
 			if (ctx.model) {
 				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
 				if (auth.ok && (!requireApiKey || auth.apiKey)) {
 					return {
 						model: ctx.model,
 						modelId: `${ctx.model.provider}/${ctx.model.id}`,
-						thinking: roleConfig.thinking,
+						effort: roleConfig.effort,
 						source: "session",
 						apiKey: auth.apiKey,
 						headers: auth.headers,
@@ -242,7 +233,7 @@ export async function resolveRoleModel(
 			return {
 				model: ctx.model,
 				modelId: `${ctx.model.provider}/${ctx.model.id}`,
-				thinking: opts.env?.thinking ?? opts.explicit?.thinking,
+				effort: opts.env?.effort ?? opts.explicit?.effort,
 				source: "session",
 				apiKey: auth.apiKey,
 				headers: auth.headers,
@@ -250,7 +241,6 @@ export async function resolveRoleModel(
 		}
 	}
 
-	// Nothing resolved
 	return null;
 }
 

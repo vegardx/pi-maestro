@@ -4,7 +4,7 @@
 // modification of project/global settings.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { TIERS } from "@vegardx/pi-contracts";
+import { SLOTS } from "@vegardx/pi-contracts";
 import { readModelsConfig } from "@vegardx/pi-models";
 import {
 	type ExtensionConfigMap,
@@ -111,13 +111,13 @@ function handleShow(ctx: ExtensionContext): void {
 		content.push("Models");
 		content.push(`  active preset: ${modelsConfig.active}`);
 		content.push("");
-		for (const [name, tiers] of Object.entries(modelsConfig.presets)) {
+		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
 			const marker = name === modelsConfig.active ? " (active)" : "";
 			content.push(`  ${name}${marker}`);
-			for (const tier of TIERS) {
-				const model = tiers[tier];
+			for (const slot of SLOTS) {
+				const model = preset[slot];
 				if (model) {
-					content.push(`    ${tier.padEnd(8)} ${model}`);
+					content.push(`    ${slot.padEnd(10)} ${model}`);
 				}
 			}
 		}
@@ -143,7 +143,7 @@ function handleShow(ctx: ExtensionContext): void {
 		content.push("No presets or extension settings configured.");
 		content.push("");
 		content.push("Quick start:");
-		content.push("  /maestro set modes.models.worker.tier normal");
+		content.push("  /maestro set modes.models.worker.effort high");
 		content.push("  /maestro set modes.models.worker.thinking medium");
 		content.push("  /maestro set modes.maxWorkers 4");
 		content.push("");
@@ -327,13 +327,13 @@ function handlePreset(args: string, ctx: ExtensionContext): void {
 			return;
 		}
 		const lines: string[] = [`Active preset: ${modelsConfig.active}`, ""];
-		for (const [name, tiers] of Object.entries(modelsConfig.presets)) {
+		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
 			const marker = name === modelsConfig.active ? " (active)" : "";
 			lines.push(`  ${name}${marker}`);
-			for (const tier of TIERS) {
-				const model = tiers[tier];
+			for (const slot of SLOTS) {
+				const model = preset[slot];
 				if (model) {
-					lines.push(`    ${tier.padEnd(8)} ${model}`);
+					lines.push(`    ${slot.padEnd(10)} ${model}`);
 				}
 			}
 		}
@@ -427,8 +427,8 @@ export function getSettingsCompletions(
 			if (key.endsWith("thinking")) {
 				return [...THINKING_LEVELS];
 			}
-			if (key.endsWith("tier")) {
-				return [...TIERS];
+			if (key.endsWith("slot")) {
+				return [...SLOTS];
 			}
 			return [];
 		}

@@ -195,8 +195,8 @@ export async function runAnalyzePhase(
 		const resolved = await getModeRoleModel(opts.ctx, "analyze");
 		if (resolved) {
 			analyzeEnv.PI_MODEL = resolved.modelId;
-			if (resolved.thinking && resolved.thinking !== "off") {
-				analyzeEnv.PI_THINKING = resolved.thinking;
+			if (resolved.effort && resolved.effort !== "off") {
+				analyzeEnv.PI_THINKING = resolved.effort;
 			}
 		}
 	} else if (MAESTRO_ENV.analyzeModel) {

@@ -25,7 +25,13 @@ export type TerminalRunStatus = Extract<
 	"succeeded" | "failed" | "stopped" | "canceled"
 >;
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high";
+export type ThinkingLevel =
+	| "off"
+	| "minimal"
+	| "low"
+	| "medium"
+	| "high"
+	| "xhigh";
 
 export interface ToolPolicy {
 	readonly allow?: readonly string[];

@@ -60,7 +60,7 @@ describe("/settings command", () => {
 				extensionConfig: {
 					modes: {
 						maxWorkers: 4,
-						models: { worker: { tier: "normal", thinking: "medium" } },
+						models: { worker: { effort: "medium" } },
 					},
 				},
 			});
@@ -79,8 +79,7 @@ describe("/settings command", () => {
 					active: "anthropic",
 					presets: {
 						anthropic: {
-							fast: ["anthropic/claude-haiku-3-5"],
-							normal: ["anthropic/claude-sonnet-4-5"],
+							default: "anthropic/claude-sonnet-4-5",
 						},
 					},
 				},
@@ -192,8 +191,8 @@ describe("/settings command", () => {
 				models: {
 					active: "anthropic",
 					presets: {
-						anthropic: { normal: ["anthropic/claude-sonnet-4-5"] },
-						openai: { normal: ["openai/gpt-4o"] },
+						anthropic: { default: "anthropic/claude-sonnet-4-5" },
+						openai: { default: "openai/gpt-4o" },
 					},
 				},
 			});
@@ -209,8 +208,8 @@ describe("/settings command", () => {
 				models: {
 					active: "anthropic",
 					presets: {
-						anthropic: { normal: ["anthropic/claude-sonnet-4-5"] },
-						openai: { normal: ["openai/gpt-4o"] },
+						anthropic: { default: "anthropic/claude-sonnet-4-5" },
+						openai: { default: "openai/gpt-4o" },
 					},
 				},
 			});
@@ -229,7 +228,7 @@ describe("/settings command", () => {
 			writeJson(join(root, ".pi", "settings.json"), {
 				models: {
 					active: "anthropic",
-					presets: { anthropic: { normal: ["anthropic/claude-sonnet-4-5"] } },
+					presets: { anthropic: { default: "anthropic/claude-sonnet-4-5" } },
 				},
 			});
 
@@ -277,8 +276,8 @@ describe("/settings command", () => {
 				models: {
 					active: "anthropic",
 					presets: {
-						anthropic: { normal: ["anthropic/claude-sonnet-4-5"] },
-						openai: { normal: ["openai/gpt-4o"] },
+						anthropic: { default: "anthropic/claude-sonnet-4-5" },
+						openai: { default: "openai/gpt-4o" },
 					},
 				},
 			});

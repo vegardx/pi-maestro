@@ -60,6 +60,14 @@ export {
 	TmuxFanout,
 	type TmuxFanoutDeps,
 } from "./execution-tmux.js";
+export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
+export {
+	type FooterDeps,
+	formatCacheHitRate,
+	formatModelLabel,
+	formatSessionUsage,
+	installFooter,
+} from "./install-footer.js";
 export {
 	renderPlanMarkdown,
 	renderPlanSeed,
@@ -99,8 +107,8 @@ export {
 	toPersistedState,
 } from "./session.js";
 export {
-	getModeRoleModel,
 	getImplementOverrides,
+	getModeRoleModel,
 	type ImplementOverrides,
 	readModesCompactionSettings,
 	setImplementOverrides,
@@ -142,14 +150,6 @@ export {
 	shouldResumeAfterCompaction,
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
-export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
-export {
-	formatCacheHitRate,
-	formatModelLabel,
-	formatSessionUsage,
-	installFooter,
-	type FooterDeps,
-} from "./install-footer.js";
 export {
 	type UnifiedOverlayCallbacks,
 	UnifiedOverlayComponent,

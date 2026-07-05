@@ -4,7 +4,6 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	type Focusable,
-	type TUI,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -1327,51 +1326,12 @@ class ConfigMenuComponent implements Component, Focusable {
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
-const WIDGET_KEY = "maestro.config";
-const CONFIG_OVERLAY_ID = "config";
-
-interface OverlaysApi {
-	mount(id: string, comp: unknown): void;
-	focusOverlay(id: string): void;
-	unmount(id: string): void;
-}
-
-let activeComp: ConfigMenuComponent | null = null;
-
-export function showConfigMenu(
-	ctx: ExtensionContext,
-	overlays?: OverlaysApi,
-): void {
-	// Toggle off if already open
-	if (activeComp) {
-		if (overlays) {
-			overlays.unmount(CONFIG_OVERLAY_ID);
-		} else {
-			ctx.ui.setWidget(WIDGET_KEY, undefined);
-		}
-		activeComp = null;
-		return;
-	}
-
+export function showConfigMenu(ctx: ExtensionContext): void {
 	const palette = paletteFromTheme(ctx.ui.theme);
-	const comp = new ConfigMenuComponent(ctx, palette, () => {
-		if (overlays) {
-			overlays.unmount(CONFIG_OVERLAY_ID);
-		} else {
-			ctx.ui.setWidget(WIDGET_KEY, undefined);
-		}
-		activeComp = null;
+	ctx.ui.custom((tui, theme, keybindings, done) => {
+		const comp = new ConfigMenuComponent(ctx, palette, () => done(undefined));
+		return comp;
 	});
-	activeComp = comp;
-
-	if (overlays) {
-		overlays.mount(CONFIG_OVERLAY_ID, comp);
-		overlays.focusOverlay(CONFIG_OVERLAY_ID);
-	} else {
-		ctx.ui.setWidget(WIDGET_KEY, (_tui: TUI, _theme: Theme) => comp, {
-			placement: "aboveEditor",
-		});
-	}
 }
 
 /** Read session-scoped value (for resolver integration). */

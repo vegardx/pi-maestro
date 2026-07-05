@@ -40,8 +40,7 @@ export default defineExtension(
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					const overlays = maestro.capabilities.get(CAPABILITIES.overlays);
-					showConfigMenu(ctx, overlays);
+					showConfigMenu(ctx);
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx);

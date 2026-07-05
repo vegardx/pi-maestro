@@ -173,20 +173,16 @@ function buildSections(ctx: ExtensionContext): Section[] {
 			});
 			for (const slot of SLOTS) {
 				const slotConfig = preset[slot];
+				const display = slotConfig?.model
+					? slotConfig.effort
+						? `${slotConfig.model} \u00b7 ${slotConfig.effort}`
+						: slotConfig.model
+					: undefined;
 				presetRows.push({
-					label: `  ${slot} / model`,
+					label: `  ${slot}`,
 					extension: "@presets",
-					key: `${name}.${slot}.model`,
-					global: slotConfig?.model,
-					project: undefined,
-					session: undefined,
-					globalOnly: true,
-				});
-				presetRows.push({
-					label: `  ${slot} / effort`,
-					extension: "@presets",
-					key: `${name}.${slot}.effort`,
-					global: slotConfig?.effort,
+					key: `${name}.${slot}`,
+					global: display,
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
@@ -239,13 +235,35 @@ const KEY_ENTER = "\r";
 const KEY_ESC = "\u001b";
 const KEY_BACKSPACE = "\u007f";
 
-type Mode = "browse" | "edit" | "select" | "naming" | "renaming" | "confirm-delete";
+type Mode =
+	| "browse"
+	| "edit"
+	| "select"
+	| "naming"
+	| "renaming"
+	| "confirm-delete"
+	| "slot-pick-model"
+	| "slot-pick-effort";
 
 const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const BOOL_OPTIONS = ["true", "false"];
+
+const ADAPTIVE_DESCRIPTIONS: Record<string, string> = {
+	low: "may skip thinking on simple problems",
+	medium: "thinks when the problem warrants it",
+	high: "almost always thinks (default)",
+	xhigh: "maximum reasoning depth",
+};
+
+function isAdaptiveThinking(model: unknown): boolean {
+	return (
+		(model as { compat?: { forceAdaptiveThinking?: boolean } })?.compat
+			?.forceAdaptiveThinking === true
+	);
+}
 
 interface OptionItem {
 	label: string;
@@ -294,6 +312,19 @@ class ConfigMenuComponent implements Component, Focusable {
 	private statusMessage = "";
 	private pendingDeletePreset = "";
 	private deleteReferences: string[] = [];
+	private slotPickerModels: Array<{
+		modelId: string;
+		name: string;
+		adaptive: boolean;
+	}> = [];
+	private slotPickerEfforts: Array<{
+		level: string;
+		desc?: string;
+	}> = [];
+	private slotPickerCursor = 0;
+	private slotPickerSelectedModel = "";
+	private slotPickerModelName = "";
+	private slotPickerAdaptive = false;
 	private readonly palette: Palette;
 	private readonly ctx: ExtensionContext;
 	private readonly done: (result: undefined) => void;
@@ -351,8 +382,19 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (val === "\u2014") return val;
 		const isModelField =
 			row.key.endsWith(".model") ||
-			(row.extension === "@presets" && row.key !== "active");
+			(row.extension === "@presets" && row.key !== "active" && !row.key.startsWith("@name."));
 		if (!isModelField) return val;
+		// Handle combined "model · effort" format from slot rows
+		const sep = " \u00b7 ";
+		if (val.includes(sep)) {
+			const [modelPart, effortPart] = val.split(sep);
+			const name = this.resolveModelName(modelPart);
+			return `${name} \u00b7 ${effortPart}`;
+		}
+		return this.resolveModelName(val);
+	}
+
+	private resolveModelName(val: string): string {
 		if (!val.includes("/")) return val;
 		const [provider, ...rest] = val.split("/");
 		const id = rest.join("/");
@@ -405,7 +447,35 @@ class ConfigMenuComponent implements Component, Focusable {
 		lines.push(line(hdr));
 		lines.push(line(""));
 
-		// Sections
+		// Slot picker modes take over the body
+		if (this.mode === "slot-pick-model") {
+			const row = this.flatRows[this.cursor];
+			lines.push(line(`  ${p.accent(`Select model for ${row?.key ?? "slot"}`)}`));
+			lines.push(line(""));
+			for (let i = 0; i < this.slotPickerModels.length; i++) {
+				const m = this.slotPickerModels[i];
+				const pointer = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
+				const badge = m.adaptive ? p.muted(" [adaptive]") : "";
+				lines.push(line(`  ${pointer}${m.name}${badge}`));
+			}
+			lines.push(line(""));
+		} else if (this.mode === "slot-pick-effort") {
+			const badge = this.slotPickerAdaptive ? p.muted(" [adaptive]") : "";
+			lines.push(line(`  ${p.accent(`Select effort for ${this.slotPickerModelName}`)}${badge}`));
+			lines.push(line(""));
+			if (this.slotPickerAdaptive) {
+				lines.push(line(p.muted("  Thinking is adaptive \u2014 the model decides how deeply to reason.")));
+				lines.push(line(p.muted("  Effort controls the ceiling, not a fixed budget.")));
+				lines.push(line(""));
+			}
+			for (let i = 0; i < this.slotPickerEfforts.length; i++) {
+				const e = this.slotPickerEfforts[i];
+				const pointer = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
+				const desc = e.desc ? p.muted(`  ${e.desc}`) : "";
+				lines.push(line(`  ${pointer}${e.level}${desc}`));
+			}
+			lines.push(line(""));
+		} else {
 		let flatIdx = 0;
 		for (const section of this.sections) {
 			lines.push(line(p.heading(section.title)));
@@ -470,6 +540,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			}
 			lines.push(line(""));
 		}
+		} // end else (normal section rendering)
 
 		// Naming mode (create new preset)
 		if (this.mode === "naming") {
@@ -510,17 +581,21 @@ class ConfigMenuComponent implements Component, Focusable {
 		// Help bar
 		const isPresetNameRow = this.flatRows[this.cursor]?.key.startsWith("@name.");
 		const help =
-			this.mode === "confirm-delete"
-				? "y confirm  Esc cancel"
-				: this.mode === "select"
-					? "\u2191\u2193 choose  Enter confirm  Esc cancel"
-					: this.mode === "edit"
-						? "Enter: save  Esc: cancel"
-						: this.mode === "naming" || this.mode === "renaming"
-							? "Enter: confirm  Esc: cancel"
-							: isPresetNameRow
-								? "\u2191\u2193 navigate  a activate  r rename  d delete  n new  Esc close"
-								: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
+			this.mode === "slot-pick-model"
+				? "\u2191\u2193 navigate  Enter select  Esc cancel"
+				: this.mode === "slot-pick-effort"
+					? "\u2191\u2193 navigate  Enter confirm  Esc back"
+					: this.mode === "confirm-delete"
+						? "y confirm  Esc cancel"
+						: this.mode === "select"
+							? "\u2191\u2193 choose  Enter confirm  Esc cancel"
+							: this.mode === "edit"
+								? "Enter: save  Esc: cancel"
+								: this.mode === "naming" || this.mode === "renaming"
+									? "Enter: confirm  Esc: cancel"
+									: isPresetNameRow
+										? "\u2191\u2193 navigate  a activate  r rename  d delete  n new  Esc close"
+										: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
 		lines.push(line(p.muted(help)));
 
 		// Bottom border
@@ -552,6 +627,14 @@ class ConfigMenuComponent implements Component, Focusable {
 			this.handleConfirmDeleteInput(data);
 			return;
 		}
+		if (this.mode === "slot-pick-model") {
+			this.handleSlotModelInput(data);
+			return;
+		}
+		if (this.mode === "slot-pick-effort") {
+			this.handleSlotEffortInput(data);
+			return;
+		}
 
 		switch (data) {
 			case KEY_UP:
@@ -578,6 +661,15 @@ class ConfigMenuComponent implements Component, Focusable {
 				const row = this.flatRows[this.cursor];
 				if (row?.key.startsWith("@name.")) {
 					this.activatePreset(row.key.slice(6));
+					break;
+				}
+				// Preset slot rows → two-step picker
+				if (
+					row?.extension === "@presets" &&
+					row.key !== "active" &&
+					!row.key.startsWith("@name.")
+				) {
+					this.openSlotModelPicker();
 					break;
 				}
 				if (row) {
@@ -851,6 +943,129 @@ class ConfigMenuComponent implements Component, Focusable {
 		this.statusMessage = `\u2713 Active preset \u2192 "${name}"`;
 		this.sections = buildSections(this.ctx);
 		this.rebuildFlat();
+	}
+
+	// ─── Slot picker (two-step: model then effort) ──────────────────────────
+
+	private openSlotModelPicker(): void {
+		const models = this.ctx.modelRegistry.getAvailable();
+		this.slotPickerModels = models.map((m) => ({
+			modelId: `${m.provider}/${m.id}`,
+			name: (m as { name?: string }).name || `${m.provider}/${m.id}`,
+			adaptive: isAdaptiveThinking(m),
+		}));
+		this.slotPickerCursor = 0;
+		this.mode = "slot-pick-model";
+	}
+
+	private handleSlotModelInput(data: string): void {
+		switch (data) {
+			case KEY_UP:
+				this.slotPickerCursor = Math.max(0, this.slotPickerCursor - 1);
+				break;
+			case KEY_DOWN:
+				this.slotPickerCursor = Math.min(
+					this.slotPickerModels.length - 1,
+					this.slotPickerCursor + 1,
+				);
+				break;
+			case KEY_ENTER: {
+				const selected = this.slotPickerModels[this.slotPickerCursor];
+				if (selected) {
+					this.slotPickerSelectedModel = selected.modelId;
+					this.slotPickerModelName = selected.name;
+					this.slotPickerAdaptive = selected.adaptive;
+					this.slotPickerEfforts = this.getValidEfforts(selected.modelId, selected.adaptive);
+					// If only one option, auto-select
+					if (this.slotPickerEfforts.length === 1) {
+						this.commitSlotPick(this.slotPickerEfforts[0].level);
+					} else {
+						this.slotPickerCursor = this.slotPickerEfforts.findIndex(
+							(e) => e.level === "high",
+						);
+						if (this.slotPickerCursor < 0) this.slotPickerCursor = 0;
+						this.mode = "slot-pick-effort";
+					}
+				}
+				break;
+			}
+			case KEY_ESC:
+				this.mode = "browse";
+				break;
+		}
+	}
+
+	private handleSlotEffortInput(data: string): void {
+		switch (data) {
+			case KEY_UP:
+				this.slotPickerCursor = Math.max(0, this.slotPickerCursor - 1);
+				break;
+			case KEY_DOWN:
+				this.slotPickerCursor = Math.min(
+					this.slotPickerEfforts.length - 1,
+					this.slotPickerCursor + 1,
+				);
+				break;
+			case KEY_ENTER: {
+				const selected = this.slotPickerEfforts[this.slotPickerCursor];
+				if (selected) this.commitSlotPick(selected.level);
+				break;
+			}
+			case KEY_ESC:
+				// Back to model picker
+				this.slotPickerCursor = 0;
+				this.mode = "slot-pick-model";
+				break;
+		}
+	}
+
+	private commitSlotPick(effort: string): void {
+		const row = this.flatRows[this.cursor];
+		if (!row) return;
+		const dotIdx = row.key.indexOf(".");
+		const presetName = row.key.slice(0, dotIdx);
+		const slot = row.key.slice(dotIdx + 1);
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			if (!isPlainObject(obj.models)) obj.models = {};
+			const models = obj.models as Record<string, unknown>;
+			if (!isPlainObject(models.presets)) models.presets = {};
+			const presets = models.presets as Record<string, unknown>;
+			if (!isPlainObject(presets[presetName])) presets[presetName] = {};
+			(presets[presetName] as Record<string, unknown>)[slot] = {
+				model: this.slotPickerSelectedModel,
+				effort,
+			};
+		});
+		this.statusMessage = `\u2713 ${presetName}.${slot} = ${this.slotPickerModelName} \u00b7 ${effort}`;
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
+		this.mode = "browse";
+	}
+
+	private getValidEfforts(
+		modelId: string,
+		adaptive: boolean,
+	): Array<{ level: string; desc?: string }> {
+		const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+		const parsed = modelId.split("/");
+		const model = this.ctx.modelRegistry.find(parsed[0], parsed.slice(1).join("/"));
+		const reasoning = (model as { reasoning?: boolean } | undefined)?.reasoning ?? true;
+		if (!reasoning) return [{ level: "off", desc: "thinking not supported" }];
+
+		const map = (model as { thinkingLevelMap?: Record<string, string | null> } | undefined)
+			?.thinkingLevelMap;
+
+		const levels = ALL_LEVELS.filter((l) => map?.[l] !== null);
+
+		if (adaptive) {
+			return levels
+				.filter((l) => l !== "off" && l !== "minimal")
+				.map((l) => ({
+					level: l,
+					desc: ADAPTIVE_DESCRIPTIONS[l],
+				}));
+		}
+		return levels.map((l) => ({ level: l }));
 	}
 
 	private createPreset(name: string): void {

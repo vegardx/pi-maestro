@@ -1,17 +1,10 @@
-// @vegardx/pi-commit — the conventional-commit ship workflow. It owns the one
-// combined gate (commit + push + PR) behind a single capability:
+// @vegardx/pi-commit — conventional-commit workflow.
+// Agents get: commitLocal (stage + commit).
+// Maestro/interactive gets: commitLocal + /ship (push + PR).
 //
-//   commit.v1 → shipDeliverable(input): stage explicit paths, commit (explicit
-//   or generated message), push the current branch, open/update its PR.
-//
-// It consumes the git/github seams directly and resolves ask.v1 softly for the
-// gate, falling back to ctx.ui.confirm. shipDeliverable operates on the active
-// worktree's current branch — modes checks out the right branch first; commit
-// stays decoupled from plan internals. A /commit command ships the current
-// working-tree changes standalone.
+// The executor calls shipping programmatically for automatic group shipping.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ShipDeliverableInput, ShipResult } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension, runAgentTurn } from "@vegardx/pi-core";
 import {
@@ -24,17 +17,47 @@ import {
 import { createPr, defaultBranch, findOpenPr } from "@vegardx/pi-github";
 import { buildCommitMessagePrompt, extractCommitMessage } from "./message.js";
 import { parseChangedPaths } from "./paths.js";
-import { runShip, type ShipDeps, type ShipSummary } from "./ship.js";
 
 export { buildCommitMessagePrompt, extractCommitMessage } from "./message.js";
 export { parseChangedPaths } from "./paths.js";
-export { runShip, type ShipDeps, type ShipSummary } from "./ship.js";
+
+export interface CommitInput {
+	readonly paths?: readonly string[];
+	readonly message?: string;
+	readonly cwd?: string;
+}
+
+export interface CommitResult {
+	readonly committed: boolean;
+	readonly sha?: string;
+	readonly message?: string;
+	readonly error?: string;
+}
+
+export interface ShipInput {
+	/** Working tree to ship from. Defaults to session cwd. */
+	readonly cwd?: string;
+	/** Skip confirmation. */
+	readonly autoApprove?: boolean;
+	/** PR title override. */
+	readonly title?: string;
+	/** PR body override. */
+	readonly body?: string;
+}
+
+export interface ShipResult {
+	readonly branch: string;
+	readonly pushed: boolean;
+	readonly pr?: number;
+	readonly prUrl?: string;
+	readonly error?: string;
+}
 
 export default defineExtension(
 	{
 		name: "commit",
 		path: "packages/commit/src/index.ts",
-		doc: "Conventional-commit workflow: shipDeliverable (commit + push + PR).",
+		doc: "Conventional-commit workflow: stage, commit locally. Maestro ships.",
 	},
 	(pi, maestro) => {
 		let ctx: ExtensionContext | undefined;
@@ -45,91 +68,105 @@ export default defineExtension(
 		pi.on("turn_start", capture);
 		pi.on("input", capture);
 
-		// Build the injectable deps bound to the live context. Returns undefined
-		// when no context has been captured yet (nothing to ship through).
-		function makeDeps(active: ExtensionContext): ShipDeps {
+		async function commitLocal(input: CommitInput): Promise<CommitResult> {
+			const active = ctx;
+			if (!active) return { committed: false, error: "no active context" };
+
+			const cwd = input.cwd ?? active.cwd;
+			const changedPaths = parseChangedPaths(statusPorcelain(cwd));
+			const paths = input.paths?.length
+				? (input.paths as string[])
+				: changedPaths;
+
+			if (paths.length === 0) {
+				return { committed: false, error: "nothing to commit" };
+			}
+
+			// Generate or use provided message
+			let message = input.message;
+			if (!message) {
+				const prompt = buildCommitMessagePrompt(undefined, paths);
+				const reply = await runAgentTurn(pi, active, prompt);
+				message = extractCommitMessage(reply) ?? undefined;
+				if (!message) {
+					return { committed: false, error: "failed to generate commit message" };
+				}
+			}
+
+			const result = stageAndCommit(cwd, paths, message);
+			if (!result.ok) {
+				return { committed: false, error: result.stderr.trim() };
+			}
+
+			const sha = headSha(cwd) ?? undefined;
+			return { committed: true, sha, message };
+		}
+
+		maestro.capabilities.register(CAPABILITIES.commit, { commitLocal });
+
+		// ── Ship: push + PR (maestro/interactive only, not for agents) ──────
+
+		async function ship(input: ShipInput): Promise<ShipResult> {
+			const active = ctx;
+			if (!active) return { branch: "", pushed: false, error: "no active context" };
+
+			const cwd = input.cwd ?? active.cwd;
+			const branch = currentBranch(cwd);
+			if (!branch) return { branch: "", pushed: false, error: "not on a branch" };
+
+			const defBranch = await defaultBranch(cwd);
+			if (branch === defBranch) {
+				return { branch, pushed: false, error: "refusing to ship default branch" };
+			}
+
+			// Push
+			const pushResult = await pushBranch(cwd, branch);
+			if (!pushResult.ok) {
+				return { branch, pushed: false, error: "push failed" };
+			}
+
+			// Find or create PR
+			const { pr: existingPr } = await findOpenPr(cwd, branch);
+			if (existingPr) {
+				return { branch, pushed: true, pr: existingPr.number };
+			}
+
+			const title = input.title ?? branch.replace(/^feat\//, "").replace(/-/g, " ");
+			const body = input.body ?? "";
+			const { url } = await createPr(cwd, { title, body, base: defBranch ?? undefined });
+			const prNum = url?.match(/\/pull\/(\d+)/)?.[1];
+
 			return {
-				cwd: active.cwd,
-				currentBranch,
-				defaultBranch: (cwd) => defaultBranch(cwd),
-				changedPaths: (cwd) => parseChangedPaths(statusPorcelain(cwd)),
-				stageAndCommit: (cwd, paths, message) => {
-					const r = stageAndCommit(cwd, paths, message);
-					if (!r.ok) return { ok: false, error: r.stderr.trim() };
-					return { ok: true, sha: headSha(cwd) ?? undefined };
-				},
-				pushBranch: async (cwd, branch) => (await pushBranch(cwd, branch)).ok,
-				findOpenPr: async (cwd, branch) => {
-					const { pr } = await findOpenPr(cwd, branch);
-					return pr?.number ?? null;
-				},
-				createPr: async (cwd, args) => {
-					const { url } = await createPr(cwd, args);
-					// gh prints the PR URL ending in /pull/<n>.
-					const n = url?.match(/\/pull\/(\d+)/)?.[1];
-					return n ? Number(n) : null;
-				},
-				generateMessage: async (deliverableId, paths) => {
-					const prompt = buildCommitMessagePrompt(deliverableId, paths);
-					const reply = await runAgentTurn(pi, active, prompt);
-					return extractCommitMessage(reply);
-				},
-				confirm: (summary) => gate(active, summary),
+				branch,
+				pushed: true,
+				pr: prNum ? Number(prNum) : undefined,
+				prUrl: url ?? undefined,
 			};
 		}
 
-		// The combined gate: prefer ask.v1, fall back to the host confirm dialog.
-		async function gate(
-			active: ExtensionContext,
-			summary: ShipSummary,
-		): Promise<boolean> {
-			const detail =
-				`Commit ${summary.paths.length} path(s) on ${summary.branch}, ` +
-				`push, ${summary.willOpenPr ? "and open/update a PR" : "no PR"}.\n\n` +
-				summary.message;
-			const ask = maestro.capabilities.get(CAPABILITIES.ask);
-			if (ask) {
-				const answers = await ask.ask([
-					{
-						id: "ship",
-						question: "Ship this deliverable?",
-						context: detail,
-						options: [{ label: "Ship" }, { label: "Cancel" }],
-					},
-				]);
-				return answers[0]?.value === "Ship";
-			}
-			return active.ui.confirm("Ship deliverable", detail);
-		}
-
-		const shipDeliverable = async (
-			input: ShipDeliverableInput,
-		): Promise<ShipResult> => {
-			if (!ctx) return { branch: "", committed: false, pushed: false };
-			const deps = makeDeps(ctx);
-			return runShip(
-				{
-					...deps,
-					cwd: input.cwd ?? ctx.cwd,
-					...(input.autoApprove ? { confirm: async () => true } : {}),
-				},
-				input,
-			);
-		};
-
-		maestro.capabilities.register(CAPABILITIES.commit, { shipDeliverable });
+		maestro.capabilities.register(CAPABILITIES.ship, { ship });
 
 		pi.registerCommand("commit", {
-			description:
-				"Stage, commit, push, and open/update a PR for current changes.",
+			description: "Stage and commit current changes with a conventional-commit message.",
 			handler: async (_args: string, active: ExtensionContext) => {
-				const result = await shipDeliverable({});
-				const msg = !result.committed
-					? "Nothing shipped."
-					: result.pr
-						? `Shipped ${result.branch} → PR #${result.pr}.`
-						: `Committed ${result.branch}${result.pushed ? " (pushed)" : ""}.`;
+				const result = await commitLocal({ cwd: active.cwd });
+				const msg = result.committed
+					? `Committed: ${result.message} (${result.sha?.slice(0, 7)})`
+					: `Nothing committed: ${result.error}`;
 				active.ui.notify(msg, result.committed ? "info" : "warning");
+			},
+		});
+
+		pi.registerCommand("ship", {
+			description: "Push current branch and open/update a PR.",
+			handler: async (_args: string, active: ExtensionContext) => {
+				const result = await ship({ cwd: active.cwd });
+				const msg = result.pushed
+					? result.pr
+						? `Shipped ${result.branch} → PR #${result.pr}.`
+						: `Pushed ${result.branch}.`
+					: `Ship failed: ${result.error}`;
+				active.ui.notify(msg, result.pushed ? "info" : "warning");
 			},
 		});
 	},

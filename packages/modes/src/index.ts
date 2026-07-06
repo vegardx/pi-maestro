@@ -44,23 +44,13 @@ export {
 	summaryHash,
 	transitiveDependencies,
 } from "./compaction.js";
-export { PLAN_CONTAINER, PlanEngine } from "./engine.js";
+export { PlanEngine } from "./engine.js";
 export {
-	classifyExecutionSteering,
-	completeActiveDeliverable,
-	completionGateSatisfied,
-	FanoutMaestro,
-	parseShippedPr,
-	startSequentialExecution,
-	transitionThrough,
-} from "./execution.js";
-export {
-	type ForwardSummaryInput,
-	type TmuxAgentState,
-	type TmuxAgentStatus,
-	TmuxFanout,
-	type TmuxFanoutDeps,
-} from "./execution-tmux.js";
+	GroupExecutor,
+	type ExecutorDeps,
+	type GroupRunState,
+	type AgentState,
+} from "./group-executor.js";
 export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
 export {
 	buildForwardSummaryPrompt,
@@ -121,12 +111,8 @@ export {
 	setImplementOverrides,
 } from "./settings.js";
 export {
-	deliverableIssueBody,
-	nextShippableDeliverable,
-	parkPlan,
-	shipDeliverableFromPlan,
-	sweepMergedPrs,
-	syncPrState,
+	buildPrBody,
+	shouldShip,
 } from "./shipping.js";
 export {
 	initialModesState,
@@ -139,10 +125,10 @@ export {
 export { createPlanStore, plansRoot } from "./storage.js";
 export { createModesSummariser } from "./summarise.js";
 export {
-	createDeliverableTool,
 	createPlanTool,
-	createPlanTools,
+	createGroupTool,
 	createTaskTool,
+	createAgentTool,
 } from "./tools.js";
 export type {
 	CompactionResumeDecision,

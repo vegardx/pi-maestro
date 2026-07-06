@@ -9,7 +9,7 @@ import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
 import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
 import type { SettingsCapabilityV1 } from "./settings.js";
-import type { ShipDeliverableInput, ShipResult } from "./ship.js";
+import type { ShipResult } from "./ship.js";
 import type { TokenSnapshot, UsageSource } from "./usage.js";
 
 export const CAPABILITIES = {
@@ -18,6 +18,7 @@ export const CAPABILITIES = {
 	askTransport: "ask-transport.v1",
 	usage: "usage.v1",
 	commit: "commit.v1",
+	ship: "ship.v1",
 	modes: "modes.v1",
 	promptAssist: "prompt-assist.v1",
 	overlays: "overlays.v1",
@@ -67,7 +68,25 @@ export interface UsageLedgerV1 {
 }
 
 export interface CommitCapabilityV1 {
-	shipDeliverable(input: ShipDeliverableInput): Promise<ShipResult>;
+	commitLocal(input: {
+		readonly paths?: readonly string[];
+		readonly message?: string;
+		readonly cwd?: string;
+	}): Promise<{
+		readonly committed: boolean;
+		readonly sha?: string;
+		readonly message?: string;
+		readonly error?: string;
+	}>;
+}
+
+export interface ShipCapabilityV1 {
+	ship(input: {
+		readonly cwd?: string;
+		readonly autoApprove?: boolean;
+		readonly title?: string;
+		readonly body?: string;
+	}): Promise<ShipResult>;
 }
 
 export interface ModesCapabilityV1 {
@@ -105,6 +124,7 @@ export interface CapabilityMap {
 	[CAPABILITIES.askTransport]: AskTransportV1;
 	[CAPABILITIES.usage]: UsageLedgerV1;
 	[CAPABILITIES.commit]: CommitCapabilityV1;
+	[CAPABILITIES.ship]: ShipCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;
 	[CAPABILITIES.overlays]: OverlaysCapabilityV1;

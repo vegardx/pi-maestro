@@ -3,16 +3,14 @@
 // tools) and replies with a single conventional-commit message. Extraction is
 // pure and tested.
 
-import type { DeliverableId } from "@vegardx/pi-contracts";
-
 const CONVENTIONAL =
 	/^(feat|fix|refactor|docs|chore|test|style|perf|ci|build)(\([^)]+\))?!?: .+/;
 
 export function buildCommitMessagePrompt(
-	deliverableId: DeliverableId | undefined,
+	groupId: string | undefined,
 	paths: readonly string[],
 ): string {
-	const scope = deliverableId ? ` for deliverable "${deliverableId}"` : "";
+	const scope = groupId ? ` for group "${groupId}"` : "";
 	const fileList =
 		paths.length > 0
 			? `\n\nStaged paths:\n${paths.map((p) => `- ${p}`).join("\n")}`

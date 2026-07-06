@@ -1,32 +1,26 @@
-// Commit/ship vocabulary. One capability — shipDeliverable — wraps
-// commit + push + PR behind a single combined gate.
+// Ship vocabulary for the group model. Maestro owns shipping — agents only
+// commit. This defines the types for the maestro's push+PR workflow.
 
-import type { DeliverableId } from "./ids.js";
+import type { GroupId } from "./ids.js";
 
-export interface ShipDeliverableInput {
-	/** The deliverable being shipped; omitted for a standalone commit. */
-	readonly deliverableId?: DeliverableId;
-	/** Explicit paths to stage. Omit to use the deliverable's tracked set. */
-	readonly paths?: readonly string[];
-	/** Override the generated conventional-commit message. */
-	readonly message?: string;
-	/** Open or update a PR after pushing. Defaults to true. */
-	readonly openPr?: boolean;
-	/** Skip the confirmation gate (autonomous agents ship without prompting). */
-	readonly autoApprove?: boolean;
-	/**
-	 * Working tree to operate in (commit + push + PR). Defaults to the live
-	 * session cwd. modes passes the deliverable's worktree (fanout) or the
-	 * plan's repo path (sequential) so shipping is decoupled from the one cwd
-	 * a session can't move mid-run.
-	 */
-	readonly cwd?: string;
+export interface ShipGroupInput {
+	/** The group being shipped. */
+	readonly groupId: GroupId;
+	/** Working tree to operate in (commit + push + PR). */
+	readonly cwd: string;
+	/** Branch to push. */
+	readonly branch: string;
+	/** PR title. */
+	readonly title: string;
+	/** PR body (assembled from group body + tasks + agent reports). */
+	readonly body: string;
+	/** Base branch for the PR (default branch or stacked parent). */
+	readonly baseBranch?: string;
 }
 
 export interface ShipResult {
 	readonly branch: string;
-	readonly committed: boolean;
-	readonly sha?: string;
 	readonly pushed: boolean;
 	readonly pr?: number;
+	readonly prUrl?: string;
 }

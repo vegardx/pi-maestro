@@ -2,7 +2,7 @@
 // package; contracts exposes only the cross-cutting enums and lightweight
 // summaries that other modules (commit, subagents) reference.
 
-import type { DeliverableId, GroupId, WorkItemId } from "./ids.js";
+import type { GroupId, WorkItemId } from "./ids.js";
 
 // ─── Group statuses ──────────────────────────────────────────────────────────
 
@@ -51,31 +51,4 @@ export interface WorkItemSummary {
 	readonly title: string;
 	readonly kind: WorkItemKind;
 	readonly done: boolean;
-}
-
-// ─── Backwards-compat (removed in cleanup task) ──────────────────────────────
-
-/** @deprecated Use GROUP_STATUSES */
-export const DELIVERABLE_STATUSES = [
-	"planned",
-	"active",
-	"in-review",
-	"needs-attention",
-	"ready-to-ship",
-	"shipped",
-	"abandoned",
-] as const;
-
-/** @deprecated Use GroupStatus */
-export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number];
-
-/** @deprecated Removed in group model */
-export type DeliverableLifecycle = "pre" | "post";
-
-/** @deprecated Use GroupSummary */
-export interface DeliverableSummary {
-	readonly id: DeliverableId;
-	readonly title: string;
-	readonly status: DeliverableStatus;
-	readonly lifecycle?: DeliverableLifecycle;
 }

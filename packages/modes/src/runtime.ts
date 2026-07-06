@@ -65,10 +65,15 @@ type ForwardSummaryInput = {
 	consumers: { title: string; body: string; tasks: string[] }[];
 };
 class TmuxFanout {
-	tick() {}
+	questionQueue = { all: () => [] as unknown[] };
+	constructor(..._args: unknown[]) {}
+	async start() {}
+	async tick() {}
+	steer(..._args: unknown[]) {}
 	snapshot() {
 		return { agents: new Map() };
 	}
+	destroy() {}
 	stop() {}
 }
 

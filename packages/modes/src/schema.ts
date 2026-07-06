@@ -476,8 +476,12 @@ export function validatePlanShape(
 			}
 		}
 
-		// Worker must have tasks (for full-mode workers)
-		if (g.worker.mode === "full" && gatingTasks(g).length === 0) {
+		// Worker must have tasks (for full-mode workers that are active)
+		if (
+			g.worker.mode === "full" &&
+			g.status !== "planned" &&
+			gatingTasks(g).length === 0
+		) {
 			problems.push(
 				`group \`${g.id}\` has a full-mode worker but no gating tasks`,
 			);

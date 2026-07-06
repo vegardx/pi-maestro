@@ -420,8 +420,8 @@ describe("validatePlanShape", () => {
 		);
 	});
 
-	it("detects full-mode worker with no tasks", () => {
-		const g = makeGroup({ tasks: [] });
+	it("detects full-mode worker with no tasks when active", () => {
+		const g = makeGroup({ tasks: [], status: "active" });
 		const plan = makePlan([g]);
 		const problems = validatePlanShape(plan);
 		expect(problems).toContain(

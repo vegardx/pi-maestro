@@ -1,41 +1,47 @@
 // PlanEngine — the mutation surface over a Plan. Every mutation clones the
 // plan, applies the change, runs validatePlanShape, and (only if valid) bumps
 // timestamps and persists atomically. Invalid mutations throw before touching
-// disk, so the in-memory plan and the file never diverge. The tool/command
-// layer (next child) is a thin wrapper over these methods.
+// disk, so the in-memory plan and the file never diverge.
 
 import {
+	type AgentMode,
+	type AgentSpec,
 	canTransition,
 	DEFAULT_REPO_KEY,
-	type Deliverable,
-	type DeliverableLifecycle,
-	type DeliverableStatus,
-	defaultBranchForDeliverable,
-	deliverables,
-	findDeliverable,
-	findNode,
-	isDeliverable,
-	isWorkItem,
+	defaultBranchForGroup,
+	findGroup,
+	findTask,
+	type GroupStatus,
+	type ModelSlot,
 	type Plan,
-	type PlanNode,
 	type PlanRepo,
-	parentOf,
 	slugify,
+	type ThinkingLevel,
 	validatePlanShape,
+	type WorkGroup,
 	type WorkItem,
 	type WorkItemKind,
 } from "./schema.js";
 import type { PlanStore } from "./storage.js";
 
-export interface AddDeliverableInput {
+export interface AddGroupInput {
 	title: string;
 	body?: string;
-	parentId?: string;
 	dependsOn?: string[];
-	lifecycle?: DeliverableLifecycle;
-	position?: number;
-	/** Registry key of the repo this deliverable targets. */
-	repo?: string;
+	stacked?: boolean;
+	workerMode: AgentMode;
+	workerSlot?: ModelSlot;
+	workerEffort?: ThinkingLevel;
+	workerAfter?: string[];
+}
+
+export interface AddAgentInput {
+	name: string;
+	mode: AgentMode;
+	slot: ModelSlot;
+	effort: ThinkingLevel;
+	focus: string;
+	after: string[];
 }
 
 export interface AddWorkItemInput {
@@ -45,14 +51,8 @@ export interface AddWorkItemInput {
 	position?: number;
 }
 
-/** Sentinel container id for top-level loose work-items. */
-export const PLAN_CONTAINER = "@plan";
-
 export class PlanEngine {
 	private plan: Plan;
-	// A draft engine lives only in memory: mutations don't touch disk until
-	// `materialize` assigns the final identity and persists once. This keeps
-	// exploratory `/plan` sessions from leaving empty plan files behind.
 	private draft = false;
 
 	constructor(
@@ -73,7 +73,7 @@ export class PlanEngine {
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
-			nodes: [],
+			groups: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -82,10 +82,6 @@ export class PlanEngine {
 		return engine;
 	}
 
-	/**
-	 * Create an in-memory draft plan. Nothing is written to disk until
-	 * `materialize` is called, so an abandoned `/plan` leaves no file behind.
-	 */
 	static createDraft(
 		store: PlanStore,
 		input: { slug: string; title: string; repoPath: string },
@@ -96,7 +92,7 @@ export class PlanEngine {
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
-			nodes: [],
+			groups: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -109,10 +105,6 @@ export class PlanEngine {
 		return this.draft;
 	}
 
-	/**
-	 * Finalize a draft: assign its identity and persist for the first time.
-	 * No-op once the plan is already persisted.
-	 */
 	materialize(slug: string, title: string): void {
 		if (!this.draft) return;
 		this.plan = { ...this.plan, slug, title, updatedAt: this.now() };
@@ -137,9 +129,8 @@ export class PlanEngine {
 		});
 	}
 
-	// ---- Repo registry ----------------------------------------------------
+	// ── Repo registry ──────────────────────────────────────────────────────
 
-	/** Register an extra repo the plan can target. Duplicate keys are rejected. */
 	registerRepo(repo: PlanRepo): void {
 		if (repo.key === DEFAULT_REPO_KEY) {
 			throw new Error(`repo key \`${DEFAULT_REPO_KEY}\` is reserved`);
@@ -149,7 +140,6 @@ export class PlanEngine {
 		});
 	}
 
-	/** Remove a registered repo. Rejected while a deliverable still targets it. */
 	unregisterRepo(key: string): void {
 		this.mutate((plan) => {
 			if (!(plan.repos ?? []).some((r) => r.key === key)) {
@@ -159,8 +149,229 @@ export class PlanEngine {
 		});
 	}
 
-	// Clone → mutate → validate → persist. Throws (without saving) on an
-	// invalid shape, so disk only ever holds valid plans.
+	// ── Groups ─────────────────────────────────────────────────────────────
+
+	addGroup(input: AddGroupInput): WorkGroup {
+		const ts = this.now();
+		const id = this.uniqueGroupId(input.title);
+		const group: WorkGroup = {
+			type: "group",
+			id,
+			title: input.title,
+			body: input.body ?? "",
+			status: "planned",
+			dependsOn: input.dependsOn,
+			stacked: input.stacked,
+			worker: {
+				mode: input.workerMode,
+				slot: input.workerSlot,
+				effort: input.workerEffort,
+				after: input.workerAfter,
+			},
+			agents: [],
+			tasks: [],
+			branch: defaultBranchForGroup({ id }),
+			createdAt: ts,
+			updatedAt: ts,
+		};
+		this.mutate((plan) => {
+			plan.groups.push(group);
+		});
+		return findGroup(this.plan, id) as WorkGroup;
+	}
+
+	updateGroup(
+		id: string,
+		patch: Partial<
+			Pick<
+				WorkGroup,
+				| "title"
+				| "body"
+				| "dependsOn"
+				| "stacked"
+				| "branch"
+				| "worktreePath"
+				| "sessionPath"
+				| "summary"
+				| "prUrl"
+				| "prNumber"
+			>
+		> & {
+			workerMode?: AgentMode;
+			workerSlot?: ModelSlot;
+			workerEffort?: ThinkingLevel;
+			workerAfter?: string[];
+		},
+	): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, id);
+			if (!g) throw new Error(`unknown group: ${id}`);
+			const {
+				workerMode,
+				workerSlot,
+				workerEffort,
+				workerAfter,
+				...groupPatch
+			} = patch;
+			Object.assign(g, groupPatch);
+			if (workerMode !== undefined) g.worker.mode = workerMode;
+			if (workerSlot !== undefined) g.worker.slot = workerSlot;
+			if (workerEffort !== undefined) g.worker.effort = workerEffort;
+			if (workerAfter !== undefined) g.worker.after = workerAfter;
+			g.updatedAt = this.now();
+		});
+	}
+
+	setGroupStatus(id: string, status: GroupStatus): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, id);
+			if (!g) throw new Error(`unknown group: ${id}`);
+			if (g.status !== status && !canTransition(g.status, status)) {
+				throw new Error(`illegal status transition: ${g.status} → ${status}`);
+			}
+			g.status = status;
+			g.updatedAt = this.now();
+		});
+	}
+
+	removeGroup(id: string): void {
+		this.mutate((plan) => {
+			const idx = plan.groups.findIndex((g) => g.id === id);
+			if (idx < 0) throw new Error(`unknown group: ${id}`);
+			plan.groups.splice(idx, 1);
+		});
+	}
+
+	// ── Agents ─────────────────────────────────────────────────────────────
+
+	addAgent(groupId: string, input: AddAgentInput): AgentSpec {
+		const agent: AgentSpec = {
+			name: input.name,
+			mode: input.mode,
+			slot: input.slot,
+			effort: input.effort,
+			focus: input.focus,
+			after: input.after,
+		};
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			g.agents.push(agent);
+			g.updatedAt = this.now();
+		});
+		const g = findGroup(this.plan, groupId) as WorkGroup;
+		return g.agents.find((a) => a.name === input.name) as AgentSpec;
+	}
+
+	updateAgent(
+		groupId: string,
+		name: string,
+		patch: Partial<
+			Pick<AgentSpec, "mode" | "slot" | "effort" | "focus" | "after">
+		>,
+	): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const agent = g.agents.find((a) => a.name === name);
+			if (!agent) throw new Error(`unknown agent: ${name}`);
+			Object.assign(agent, patch);
+			g.updatedAt = this.now();
+		});
+	}
+
+	removeAgent(groupId: string, name: string): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const idx = g.agents.findIndex((a) => a.name === name);
+			if (idx < 0) throw new Error(`unknown agent: ${name}`);
+			g.agents.splice(idx, 1);
+			g.updatedAt = this.now();
+		});
+	}
+
+	// ── Work items ─────────────────────────────────────────────────────────
+
+	addWorkItem(groupId: string, input: AddWorkItemInput): WorkItem {
+		const ts = this.now();
+		const id = this.uniqueTaskId(groupId, input.title);
+		const item: WorkItem = {
+			type: "work-item",
+			id,
+			title: input.title,
+			body: input.body ?? "",
+			done: false,
+			kind: input.kind ?? "task",
+			createdAt: ts,
+			updatedAt: ts,
+		};
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			if (input.position !== undefined && input.position < g.tasks.length) {
+				g.tasks.splice(input.position, 0, item);
+			} else {
+				g.tasks.push(item);
+			}
+			g.updatedAt = this.now();
+		});
+		const g = findGroup(this.plan, groupId) as WorkGroup;
+		return findTask(g, id) as WorkItem;
+	}
+
+	updateWorkItem(
+		groupId: string,
+		taskId: string,
+		patch: Partial<Pick<WorkItem, "title" | "body" | "kind">> & {
+			answer?: string;
+		},
+	): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const item = findTask(g, taskId);
+			if (!item) throw new Error(`unknown task: ${taskId}`);
+			const { answer, ...rest } = patch;
+			Object.assign(item, rest);
+			if (answer !== undefined) {
+				item.answer = answer;
+				item.decidedAt = this.now();
+				item.done = true;
+			}
+			item.updatedAt = this.now();
+			g.updatedAt = this.now();
+		});
+	}
+
+	toggleWorkItem(groupId: string, taskId: string): boolean {
+		let done = false;
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const item = findTask(g, taskId);
+			if (!item) throw new Error(`unknown task: ${taskId}`);
+			item.done = !item.done;
+			item.updatedAt = this.now();
+			g.updatedAt = this.now();
+			done = item.done;
+		});
+		return done;
+	}
+
+	removeWorkItem(groupId: string, taskId: string): void {
+		this.mutate((plan) => {
+			const g = findGroup(plan, groupId);
+			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const idx = g.tasks.findIndex((t) => t.id === taskId);
+			if (idx < 0) throw new Error(`unknown task: ${taskId}`);
+			g.tasks.splice(idx, 1);
+			g.updatedAt = this.now();
+		});
+	}
+
+	// ── Internal ───────────────────────────────────────────────────────────
+
 	private mutate(fn: (plan: Plan) => void): void {
 		const next = structuredClone(this.plan) as Plan;
 		fn(next);
@@ -173,19 +384,9 @@ export class PlanEngine {
 		this.plan = next;
 	}
 
-	private uniqueId(base: string): string {
-		const root = slugify(base) || "node";
-		const taken = new Set<string>();
-		for (const d of deliverables(this.plan)) taken.add(d.id);
-		const items: WorkItem[] = [];
-		const collect = (nodes: PlanNode[]) => {
-			for (const n of nodes) {
-				if (isWorkItem(n)) items.push(n);
-				else collect(n.children);
-			}
-		};
-		collect(this.plan.nodes);
-		for (const i of items) taken.add(i.id);
+	private uniqueGroupId(base: string): string {
+		const root = slugify(base) || "group";
+		const taken = new Set(this.plan.groups.map((g) => g.id));
 		if (!taken.has(root)) return root;
 		for (let n = 2; ; n++) {
 			const candidate = `${root}-${n}`;
@@ -193,213 +394,14 @@ export class PlanEngine {
 		}
 	}
 
-	// ---- Deliverables -----------------------------------------------------
-
-	addDeliverable(input: AddDeliverableInput): Deliverable {
-		const ts = this.now();
-		const id = this.uniqueId(input.title);
-		const deliverable: Deliverable = {
-			type: "deliverable",
-			id,
-			title: input.title,
-			body: input.body ?? "",
-			status: "planned",
-			children: [],
-			lifecycle: input.lifecycle,
-			repo: input.repo,
-			createdAt: ts,
-			updatedAt: ts,
-		};
-
-		this.mutate((plan) => {
-			const siblings = this.containerChildren(plan, input.parentId);
-			// dependsOn default: chain off the last sibling deliverable (linear
-			// plans). [] declares a root; an explicit list is honoured verbatim.
-			if (input.dependsOn !== undefined) {
-				deliverable.dependsOn = input.dependsOn;
-			} else if (!input.lifecycle) {
-				const prev = [...siblings].reverse().find(isDeliverable);
-				deliverable.dependsOn = prev ? [prev.id] : [];
-			}
-			if (!input.lifecycle) {
-				deliverable.branch = defaultBranchForDeliverable(deliverable);
-			}
-			insertAt(siblings, deliverable, input.position);
-		});
-		return findDeliverable(this.plan, id) as Deliverable;
+	private uniqueTaskId(groupId: string, base: string): string {
+		const root = slugify(base) || "task";
+		const g = findGroup(this.plan, groupId);
+		const taken = new Set(g?.tasks.map((t) => t.id) ?? []);
+		if (!taken.has(root)) return root;
+		for (let n = 2; ; n++) {
+			const candidate = `${root}-${n}`;
+			if (!taken.has(candidate)) return candidate;
+		}
 	}
-
-	updateDeliverable(
-		id: string,
-		patch: Partial<
-			Pick<
-				Deliverable,
-				| "title"
-				| "body"
-				| "branch"
-				| "dependsOn"
-				| "lifecycle"
-				| "repo"
-				| "worktreePath"
-				| "sessionPath"
-				| "issueNumber"
-				| "prNumber"
-				| "summary"
-			>
-		>,
-	): void {
-		this.mutate((plan) => {
-			const d = findDeliverable(plan, id);
-			if (!d) throw new Error(`unknown deliverable: ${id}`);
-			Object.assign(d, patch);
-			d.updatedAt = this.now();
-		});
-	}
-
-	setStatus(id: string, status: DeliverableStatus): void {
-		this.mutate((plan) => {
-			const d = findDeliverable(plan, id);
-			if (!d) throw new Error(`unknown deliverable: ${id}`);
-			if (d.status !== status && !canTransition(d.status, status)) {
-				throw new Error(`illegal status transition: ${d.status} → ${status}`);
-			}
-			d.status = status;
-			d.updatedAt = this.now();
-		});
-	}
-
-	removeDeliverable(id: string): void {
-		this.mutate((plan) => {
-			if (!findDeliverable(plan, id)) {
-				throw new Error(`unknown deliverable: ${id}`);
-			}
-			removeNode(plan.nodes, id);
-		});
-	}
-
-	reorderDeliverable(id: string, position: number): void {
-		this.mutate((plan) => {
-			const node = findDeliverable(plan, id);
-			if (!node) throw new Error(`unknown deliverable: ${id}`);
-			const parent = parentOf(plan, id);
-			const siblings = parent ? parent.children : plan.nodes;
-			const idx = siblings.findIndex((n) => n.id === id);
-			if (idx < 0) throw new Error(`unknown deliverable: ${id}`);
-			siblings.splice(idx, 1);
-			insertAt(siblings, node, position);
-		});
-	}
-
-	// ---- Work items -------------------------------------------------------
-
-	addWorkItem(container: string, input: AddWorkItemInput): WorkItem {
-		const ts = this.now();
-		const id = this.uniqueId(input.title);
-		const item: WorkItem = {
-			type: "work-item",
-			id,
-			title: input.title,
-			body: input.body ?? "",
-			done: false,
-			kind: input.kind ?? "task",
-			createdAt: ts,
-			updatedAt: ts,
-		};
-		this.mutate((plan) => {
-			// Plan-level loose items must not gate.
-			if (container === PLAN_CONTAINER && (input.kind ?? "task") === "task") {
-				throw new Error("plan-level items cannot be gating tasks");
-			}
-			const children = this.containerChildren(plan, container);
-			insertAt(children, item, input.position);
-		});
-		return findNode(this.plan, id) as WorkItem;
-	}
-
-	updateWorkItem(
-		id: string,
-		patch: Partial<Pick<WorkItem, "title" | "body" | "kind">> & {
-			answer?: string;
-		},
-	): void {
-		this.mutate((plan) => {
-			const node = findNode(plan, id);
-			if (!node || !isWorkItem(node))
-				throw new Error(`unknown work item: ${id}`);
-			const { answer, ...rest } = patch;
-			Object.assign(node, rest);
-			if (answer !== undefined) {
-				node.answer = answer;
-				node.decidedAt = this.now();
-				node.done = true;
-			}
-			node.updatedAt = this.now();
-		});
-	}
-
-	toggleWorkItem(id: string): boolean {
-		let done = false;
-		this.mutate((plan) => {
-			const node = findNode(plan, id);
-			if (!node || !isWorkItem(node))
-				throw new Error(`unknown work item: ${id}`);
-			node.done = !node.done;
-			node.updatedAt = this.now();
-			done = node.done;
-		});
-		return done;
-	}
-
-	removeWorkItem(id: string): void {
-		this.mutate((plan) => {
-			const node = findNode(plan, id);
-			if (!node || !isWorkItem(node))
-				throw new Error(`unknown work item: ${id}`);
-			removeNode(plan.nodes, id);
-		});
-	}
-
-	moveWorkItem(id: string, targetContainer: string): void {
-		this.mutate((plan) => {
-			const node = findNode(plan, id);
-			if (!node || !isWorkItem(node))
-				throw new Error(`unknown work item: ${id}`);
-			if (
-				targetContainer === PLAN_CONTAINER &&
-				(node.kind ?? "task") === "task"
-			) {
-				throw new Error("plan-level items cannot be gating tasks");
-			}
-			removeNode(plan.nodes, id);
-			const children = this.containerChildren(plan, targetContainer);
-			children.push(node);
-			node.updatedAt = this.now();
-		});
-	}
-
-	// Resolve a container id to its children array (plan root or a deliverable).
-	private containerChildren(plan: Plan, container?: string): PlanNode[] {
-		if (!container || container === PLAN_CONTAINER) return plan.nodes;
-		const d = findDeliverable(plan, container);
-		if (!d) throw new Error(`unknown deliverable: ${container}`);
-		return d.children;
-	}
-}
-
-function insertAt(arr: PlanNode[], node: PlanNode, position?: number): void {
-	if (position === undefined || position >= arr.length) arr.push(node);
-	else arr.splice(Math.max(0, position), 0, node);
-}
-
-// Remove a node by id anywhere in the forest; returns true if removed.
-function removeNode(nodes: PlanNode[], id: string): boolean {
-	const idx = nodes.findIndex((n) => n.id === id);
-	if (idx >= 0) {
-		nodes.splice(idx, 1);
-		return true;
-	}
-	for (const n of nodes) {
-		if (isDeliverable(n) && removeNode(n.children, id)) return true;
-	}
-	return false;
 }

@@ -1,7 +1,6 @@
-// Plan tools: a thin host-tool facade over PlanEngine. The session/mode layer
-// owns which plan is active; these tools only ask for the current engine,
-// perform a mutation/read, and return readable markdown plus structured
-// details for tests and downstream automation.
+// Plan tools: group, task, agent — flat-parameter tools for the group-based
+// execution model. The session/mode layer owns which plan is active; these
+// tools perform mutations/reads and return readable markdown.
 
 import {
 	type AgentToolResult,
@@ -10,112 +9,88 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
-	DELIVERABLE_STATUSES,
+	GROUP_STATUSES,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
-import {
-	type AddDeliverableInput,
-	type AddWorkItemInput,
-	PLAN_CONTAINER,
-	type PlanEngine,
+import type {
+	AddAgentInput,
+	AddGroupInput,
+	AddWorkItemInput,
+	PlanEngine,
 } from "./engine.js";
-import {
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
-import {
-	type Deliverable,
-	deliverables,
-	findDeliverable,
-	findNode,
-	hasExecutionStarted,
-	isActiveOrShipped,
-	isWorkItem,
-	type Plan,
-	parentOf,
-	type WorkItem,
+import type {
+	AgentMode,
+	AgentSpec,
+	ModelSlot,
+	Plan,
+	ThinkingLevel,
+	WorkGroup,
+	WorkItem,
 } from "./schema.js";
+import { findGroup, groups, hasExecutionStarted } from "./schema.js";
 
 export interface PlanToolDeps {
-	/** Current active plan engine; child 3 wires this to mode/session state. */
 	readonly engine: () => PlanEngine | undefined;
-	/** Notification hook used later by widgets/events. */
 	readonly onPlanChanged?: (plan: Plan) => void;
-	/** Current mode; used to restrict plan views in plan mode. */
 	readonly mode?: () => string;
-	/** Steer a running agent when its deliverable is mutated. */
-	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
-	/** Remote task toggle for agent mode (no local engine). */
-	readonly onTaskToggle?: (taskId: string) => void;
-	/** Read-only seed content for agents without a local plan engine. */
+	readonly steerAgent?: (groupId: string, guidance: string) => void;
+	readonly onTaskToggle?: (groupId: string, taskId: string) => void;
 	readonly seedContent?: () => string | undefined;
-	/** Agent bridge for RPC plan operations (agent mode only). */
 	readonly agentBridge?: AgentBridge;
-	/** The agent's own deliverable ID (agent mode only). */
-	readonly agentDeliverableId?: () => string | undefined;
+	readonly agentGroupId?: () => string | undefined;
 }
 
 interface ToolDetails {
 	readonly error?: string;
 	readonly plan?: Plan;
-	readonly deliverable?: Deliverable;
-	readonly deliverables?: readonly Deliverable[];
+	readonly group?: WorkGroup;
+	readonly groups?: readonly WorkGroup[];
 	readonly workItem?: WorkItem;
+	readonly agent?: AgentSpec;
 	readonly done?: boolean;
 }
 
 type Result = AgentToolResult<ToolDetails>;
 
-const DeliverableParams = Type.Object({
+// ─── Parameter schemas ───────────────────────────────────────────────────────
+
+const GroupParams = Type.Object({
 	action: Type.Union([
 		Type.Literal("add"),
 		Type.Literal("update"),
 		Type.Literal("remove"),
-		Type.Literal("reorder"),
 		Type.Literal("list"),
-		Type.Literal("register-repo"),
-		Type.Literal("unregister-repo"),
 	]),
-	id: Type.Optional(Type.String({ description: "Deliverable id." })),
-	title: Type.Optional(Type.String({ description: "Deliverable title." })),
+	id: Type.Optional(Type.String({ description: "Group id." })),
+	title: Type.Optional(Type.String({ description: "Group title." })),
 	body: Type.Optional(
 		Type.String({ description: "What ships when this merges." }),
 	),
-	status: Type.Optional(
-		Type.Union(DELIVERABLE_STATUSES.map((s) => Type.Literal(s))),
-	),
-	parentId: Type.Optional(
-		Type.String({ description: "Parent grouping deliverable id." }),
-	),
+	status: Type.Optional(Type.Union(GROUP_STATUSES.map((s) => Type.Literal(s)))),
 	dependsOn: Type.Optional(
-		Type.Array(Type.String(), {
-			description:
-				"Deliverable ids this one waits on before starting. Supports multiple.",
+		Type.Array(Type.String(), { description: "Group ids this one waits on." }),
+	),
+	stacked: Type.Optional(
+		Type.Boolean({
+			description: "Branch from predecessor tip (default true).",
 		}),
 	),
-	branch: Type.Optional(
-		Type.String({ description: "Branch claimed by this deliverable." }),
+	workerMode: Type.Optional(
+		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
 	),
-	lifecycle: Type.Optional(
-		Type.Union([Type.Literal("pre"), Type.Literal("post")]),
+	workerSlot: Type.Optional(
+		Type.Union([Type.Literal("default"), Type.Literal("alternate")]),
 	),
-	position: Type.Optional(
-		Type.Number({ description: "0-based sibling position." }),
-	),
-	repo: Type.Optional(
-		Type.String({
-			description:
-				'On add/update: registry key of the repo this deliverable targets ("default" clears it). On register-repo/unregister-repo: the repo key.',
-		}),
-	),
-	repoPath: Type.Optional(
-		Type.String({ description: "register-repo: absolute path to the repo." }),
-	),
-	repoDefaultBranch: Type.Optional(
-		Type.String({ description: "register-repo: cached default branch." }),
+	workerEffort: Type.Optional(
+		Type.Union([
+			Type.Literal("off"),
+			Type.Literal("minimal"),
+			Type.Literal("low"),
+			Type.Literal("medium"),
+			Type.Literal("high"),
+		]),
 	),
 });
 
@@ -125,25 +100,56 @@ const TaskParams = Type.Object({
 		Type.Literal("update"),
 		Type.Literal("toggle"),
 		Type.Literal("remove"),
-		Type.Literal("move"),
 	]),
-	id: Type.Optional(Type.String({ description: "Work-item id." })),
-	deliverableId: Type.Optional(
+	groupId: Type.Optional(Type.String({ description: "Parent group id." })),
+	taskId: Type.Optional(Type.String({ description: "Work-item id." })),
+	title: Type.Optional(Type.String({ description: "Work-item title." })),
+	body: Type.Optional(
 		Type.String({
-			description: "Container deliverable id, or @plan for loose items.",
+			description: "Work-item details — file paths, signatures, edge cases.",
 		}),
 	),
-	title: Type.Optional(Type.String({ description: "Work-item title." })),
-	body: Type.Optional(Type.String({ description: "Work-item details." })),
 	kind: Type.Optional(Type.Union(WORK_ITEM_KINDS.map((k) => Type.Literal(k)))),
 	answer: Type.Optional(
 		Type.String({ description: "Decision answer for question items." }),
 	),
-	targetDeliverableId: Type.Optional(
-		Type.String({ description: "Move target deliverable id, or @plan." }),
-	),
 	position: Type.Optional(
 		Type.Number({ description: "0-based insertion position." }),
+	),
+});
+
+const AgentParams = Type.Object({
+	action: Type.Union([
+		Type.Literal("add"),
+		Type.Literal("update"),
+		Type.Literal("remove"),
+	]),
+	groupId: Type.Optional(Type.String({ description: "Parent group id." })),
+	name: Type.Optional(
+		Type.String({ description: "Agent name (unique within group)." }),
+	),
+	mode: Type.Optional(
+		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
+	),
+	slot: Type.Optional(
+		Type.Union([Type.Literal("default"), Type.Literal("alternate")]),
+	),
+	effort: Type.Optional(
+		Type.Union([
+			Type.Literal("off"),
+			Type.Literal("minimal"),
+			Type.Literal("low"),
+			Type.Literal("medium"),
+			Type.Literal("high"),
+		]),
+	),
+	focus: Type.Optional(
+		Type.String({ description: "What this agent should focus on." }),
+	),
+	after: Type.Optional(
+		Type.Array(Type.String(), {
+			description: '"worker" or other agent names.',
+		}),
 	),
 });
 
@@ -155,67 +161,51 @@ const PlanParams = Type.Object({
 			Type.Literal("json"),
 		]),
 	),
-	activeDeliverableId: Type.Optional(
-		Type.String({ description: "Seed focus deliverable id." }),
+	activeGroupId: Type.Optional(
+		Type.String({ description: "Seed focus group id." }),
 	),
 });
 
+// ─── Tool constructors ───────────────────────────────────────────────────────
+
 export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
-		createDeliverableTool(deps),
+		createGroupTool(deps),
 		createTaskTool(deps),
+		createAgentTool(deps),
 		createPlanTool(deps),
 	];
 }
 
-export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
+export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
-		name: "deliverable",
-		label: "Deliverable",
+		name: "group",
+		label: "Group",
 		description:
-			"Manage the active Maestro plan's deliverables and repo registry: add, update, remove, reorder, list, register-repo, unregister-repo.",
+			"Manage work groups in the active plan: add, update, remove, list. One group = one branch = one PR.",
 		promptSnippet:
-			"deliverable — manage plan deliverables + repo registry (add/update/remove/reorder/list/register-repo/unregister-repo).",
-		parameters: DeliverableParams,
+			"group — manage work groups (add/update/remove/list). One group = one branch = one PR.",
+		parameters: GroupParams,
 		async execute(_id, params): Promise<Result> {
-			// Agent mode: agents cannot modify plan structure
 			if (!deps.engine() && deps.agentBridge) {
 				if (params.action === "list") {
-					// Allow reading — redirect to plan tool
 					const content = await deps.agentBridge.planRead();
 					if (content) return ok(content, {});
 				}
-				return error(
-					"agents cannot modify plan structure — use task tool for work items",
-				);
+				return error("agents cannot modify plan structure");
 			}
 			return withEngine(deps, (engine) => {
-				// Lifecycle guards: after execution starts, restrict destructive actions
 				const plan = engine.get();
+
 				if (hasExecutionStarted(plan)) {
-					if (params.action === "reorder") {
-						return error(
-							"Cannot reorder deliverables after execution has started.",
-						);
-					}
 					if (params.id) {
-						const target = findDeliverable(plan, params.id);
-						if (target && isActiveOrShipped(target)) {
+						const target = findGroup(plan, params.id);
+						if (target && target.status !== "planned") {
 							if (params.action === "remove") {
-								return error(
-									"Cannot remove an active deliverable. Use `status: abandoned` to stop it, or add new work as a separate deliverable.",
-								);
+								return error("cannot remove an active group");
 							}
-							if (params.action === "update") {
-								// Allow status changes (including abandoned as escape hatch)
-								if (params.title || params.body) {
-									return error(
-										"Cannot update title/body of an active deliverable. Add new work as a separate deliverable.",
-									);
-								}
-								if (params.dependsOn !== undefined) {
-									return error("Cannot change dependencies of active work.");
-								}
+							if (params.action === "update" && (params.title || params.body)) {
+								return error("cannot update title/body of an active group");
 							}
 						}
 					}
@@ -224,91 +214,54 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 				switch (params.action) {
 					case "add": {
 						if (!params.title) return error("add requires title");
-						const input: AddDeliverableInput = {
+						if (!params.workerMode) return error("add requires workerMode");
+						const input: AddGroupInput = {
 							title: params.title,
 							body: params.body,
-							parentId: params.parentId,
 							dependsOn: params.dependsOn,
-							lifecycle: params.lifecycle,
-							position: params.position,
-							repo: params.repo === "default" ? undefined : params.repo,
+							stacked: params.stacked,
+							workerMode: params.workerMode,
+							workerSlot: params.workerSlot as ModelSlot | undefined,
+							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						};
-						const deliverable = engine.addDeliverable(input);
+						const group = engine.addGroup(input);
 						notify(deps, engine);
-						return ok(`✓ ${deliverable.id}`, {
-							deliverable,
-							plan: engine.get(),
-						});
+						return ok(`✓ ${group.id}`, { group, plan: engine.get() });
 					}
 					case "update": {
 						if (!params.id) return error("update requires id");
-						engine.updateDeliverable(params.id, {
+						engine.updateGroup(params.id, {
 							title: params.title,
 							body: params.body,
-							branch: params.branch,
 							dependsOn: params.dependsOn,
-							lifecycle: params.lifecycle,
-							...(params.repo !== undefined && {
-								repo: params.repo === "default" ? undefined : params.repo,
-							}),
+							stacked: params.stacked,
+							workerMode: params.workerMode as AgentMode | undefined,
+							workerSlot: params.workerSlot as ModelSlot | undefined,
+							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
-						if (params.status) engine.setStatus(params.id, params.status);
+						if (params.status) {
+							engine.setGroupStatus(params.id, params.status);
+						}
 						notify(deps, engine);
-						return ok(`Updated deliverable ${params.id}.`, {
-							deliverable:
-								findDeliverable(engine.get(), params.id) ?? undefined,
+						return ok(`Updated group ${params.id}.`, {
+							group: findGroup(engine.get(), params.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "remove": {
 						if (!params.id) return error("remove requires id");
-						engine.removeDeliverable(params.id);
+						engine.removeGroup(params.id);
 						notify(deps, engine);
-						return ok(`Removed deliverable ${params.id}.`, {
-							plan: engine.get(),
-						});
-					}
-					case "reorder": {
-						if (!params.id) return error("reorder requires id");
-						if (params.position === undefined)
-							return error("reorder requires position");
-						engine.reorderDeliverable(params.id, params.position);
-						notify(deps, engine);
-						return ok(`Reordered deliverable ${params.id}.`, {
-							plan: engine.get(),
-						});
+						return ok(`Removed group ${params.id}.`, { plan: engine.get() });
 					}
 					case "list": {
-						const rows = deliverables(engine.get());
+						const rows = groups(engine.get());
 						const text = rows.length
 							? rows
-									.map((d) => `- ${d.id}: ${d.status} — ${d.title}`)
+									.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
 									.join("\n")
-							: "No deliverables.";
-						return ok(text, { deliverables: rows, plan: engine.get() });
-					}
-					case "register-repo": {
-						if (!params.repo) return error("register-repo requires repo (key)");
-						if (!params.repoPath)
-							return error("register-repo requires repoPath");
-						engine.registerRepo({
-							key: params.repo,
-							path: params.repoPath,
-							defaultBranch: params.repoDefaultBranch,
-						});
-						notify(deps, engine);
-						return ok(`Registered repo ${params.repo}.`, {
-							plan: engine.get(),
-						});
-					}
-					case "unregister-repo": {
-						if (!params.repo)
-							return error("unregister-repo requires repo (key)");
-						engine.unregisterRepo(params.repo);
-						notify(deps, engine);
-						return ok(`Unregistered repo ${params.repo}.`, {
-							plan: engine.get(),
-						});
+							: "No groups.";
+						return ok(text, { groups: rows, plan: engine.get() });
 					}
 				}
 			});
@@ -320,104 +273,70 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "task",
 		label: "Task",
-		description:
-			"Manage work items in the active Maestro plan: add, update, toggle, remove, move.",
+		description: "Manage work items in a group: add, update, toggle, remove.",
 		promptSnippet:
-			"task — manage plan work-items (task/followup/question/manual).",
+			"task — manage work items within a group (add/update/toggle/remove).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
-			// Agent mode: forward operations over RPC when no local engine
+			// Agent mode: forward toggle over RPC
 			if (!deps.engine()) {
 				if (params.action === "toggle" && deps.onTaskToggle) {
-					if (!params.id) return error("toggle requires id");
-					deps.onTaskToggle(params.id);
-					return ok(`${params.id} marked done.`, { done: true });
+					if (!params.taskId) return error("toggle requires taskId");
+					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";
+					deps.onTaskToggle(gId, params.taskId);
+					return ok(`${params.taskId} marked done.`, { done: true });
 				}
 				if (deps.agentBridge) {
-					const delivId =
-						params.deliverableId ?? deps.agentDeliverableId?.() ?? "";
+					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";
 					switch (params.action) {
 						case "add": {
 							if (!params.title) return error("add requires title");
-							const res = await deps.agentBridge.planMutate(
-								"addTask",
-								delivId,
-								{
-									title: params.title,
-									body: params.body,
-									kind: params.kind as WorkItemKind | undefined,
-								},
-							);
+							const res = await deps.agentBridge.planMutate("addTask", gId, {
+								title: params.title,
+								body: params.body,
+								kind: params.kind as WorkItemKind | undefined,
+							});
 							if (!res.success) return error(res.error ?? "mutation failed");
-							return ok(`\u2713 ${res.taskId}`, {});
+							return ok(`✓ ${res.taskId}`, {});
 						}
 						case "update": {
-							if (!params.id) return error("update requires id");
-							const res = await deps.agentBridge.planMutate(
-								"updateTask",
-								delivId,
-								{
-									taskId: params.id,
-									title: params.title,
-									body: params.body,
-								},
-							);
+							if (!params.taskId) return error("update requires taskId");
+							const res = await deps.agentBridge.planMutate("updateTask", gId, {
+								taskId: params.taskId,
+								title: params.title,
+								body: params.body,
+							});
 							if (!res.success) return error(res.error ?? "mutation failed");
-							return ok(`Updated work item ${params.id}.`, {});
+							return ok(`Updated task ${params.taskId}.`, {});
 						}
 						case "toggle": {
-							if (!params.id) return error("toggle requires id");
-							const res = await deps.agentBridge.planMutate(
-								"toggleTask",
-								delivId,
-								{
-									taskId: params.id,
-								},
-							);
+							if (!params.taskId) return error("toggle requires taskId");
+							const res = await deps.agentBridge.planMutate("toggleTask", gId, {
+								taskId: params.taskId,
+							});
 							if (!res.success) return error(res.error ?? "mutation failed");
-							return ok(`${params.id} marked done.`, { done: true });
+							return ok(`${params.taskId} marked done.`, { done: true });
 						}
 						case "remove":
 							return error("agents cannot remove tasks");
-						case "move":
-							return error("agents cannot move tasks");
 					}
 				}
-				return error("no plan active \u2014 run /plan first to start one");
+				return error("no plan active — run /plan first to start one");
 			}
 			return withEngine(deps, (engine) => {
-				// Lifecycle guards: restrict destructive task actions on active deliverables
+				const groupId = params.groupId;
+				if (!groupId) return error("groupId is required");
+
 				const plan = engine.get();
-				if (
-					hasExecutionStarted(plan) &&
-					(params.action === "remove" || params.action === "update")
-				) {
-					// Resolve the containing deliverable: explicit param or walk the tree
-					const containerId = params.deliverableId;
-					const container = containerId
-						? containerId !== PLAN_CONTAINER
-							? findDeliverable(plan, containerId)
-							: null
-						: params.id
-							? parentOf(plan, params.id)
-							: null;
-					if (container && isActiveOrShipped(container)) {
-						if (params.action === "remove") {
-							return error(
-								"Cannot remove tasks from an active deliverable. Add corrections as new tasks instead.",
-							);
-						}
-						if (params.action === "update") {
-							return error(
-								"Cannot update tasks on an active deliverable. Add new tasks or steer the agent.",
-							);
-						}
+				if (hasExecutionStarted(plan)) {
+					const g = findGroup(plan, groupId);
+					if (g && g.status !== "planned" && params.action === "remove") {
+						return error("cannot remove tasks from an active group");
 					}
 				}
 
 				switch (params.action) {
 					case "add": {
-						const container = params.deliverableId ?? PLAN_CONTAINER;
 						if (!params.title) return error("add requires title");
 						const input: AddWorkItemInput = {
 							title: params.title,
@@ -425,60 +344,124 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 							kind: params.kind as WorkItemKind | undefined,
 							position: params.position,
 						};
-						const workItem = engine.addWorkItem(container, input);
+						const item = engine.addWorkItem(groupId, input);
 						notify(deps, engine);
-						if (container !== PLAN_CONTAINER) {
-							deps.steerAgent?.(
-								container,
-								`New task: "${workItem.title}". ${workItem.body ?? ""}`.trim(),
-							);
-						}
-						return ok(`✓ ${workItem.id}`, {
-							workItem,
-							plan: engine.get(),
-						});
+						deps.steerAgent?.(
+							groupId,
+							`New task: "${item.title}". ${item.body ?? ""}`.trim(),
+						);
+						return ok(`✓ ${item.id}`, { workItem: item, plan: engine.get() });
 					}
 					case "update": {
-						if (!params.id) return error("update requires id");
-						engine.updateWorkItem(params.id, {
+						if (!params.taskId) return error("update requires taskId");
+						engine.updateWorkItem(groupId, params.taskId, {
 							title: params.title,
 							body: params.body,
 							kind: params.kind as WorkItemKind | undefined,
 							answer: params.answer,
 						});
 						notify(deps, engine);
-						return ok(`Updated work item ${params.id}.`, {
-							workItem: workItem(engine.get(), params.id),
+						const g = findGroup(engine.get(), groupId);
+						return ok(`Updated task ${params.taskId}.`, {
+							workItem: g
+								? (findGroup(engine.get(), groupId)?.tasks.find(
+										(t) => t.id === params.taskId,
+									) ?? undefined)
+								: undefined,
 							plan: engine.get(),
 						});
 					}
 					case "toggle": {
-						if (!params.id) return error("toggle requires id");
-						const done = engine.toggleWorkItem(params.id);
+						if (!params.taskId) return error("toggle requires taskId");
+						const done = engine.toggleWorkItem(groupId, params.taskId);
 						notify(deps, engine);
-						return ok(`${params.id} is now ${done ? "done" : "not done"}.`, {
-							done,
-							workItem: workItem(engine.get(), params.id),
+						return ok(
+							`${params.taskId} is now ${done ? "done" : "not done"}.`,
+							{
+								done,
+								plan: engine.get(),
+							},
+						);
+					}
+					case "remove": {
+						if (!params.taskId) return error("remove requires taskId");
+						engine.removeWorkItem(groupId, params.taskId);
+						notify(deps, engine);
+						return ok(`Removed task ${params.taskId}.`, { plan: engine.get() });
+					}
+				}
+			});
+		},
+	}) as ToolDefinition;
+}
+
+export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
+	return defineTool({
+		name: "agent",
+		label: "Agent",
+		description: "Manage support agents within a group: add, update, remove.",
+		promptSnippet:
+			"agent — manage support agents in a group (add/update/remove).",
+		parameters: AgentParams,
+		async execute(_id, params): Promise<Result> {
+			if (!deps.engine() && deps.agentBridge) {
+				return error("agents cannot modify plan structure");
+			}
+			return withEngine(deps, (engine) => {
+				const plan = engine.get();
+				const groupId = params.groupId;
+				if (!groupId) return error("groupId is required");
+
+				if (hasExecutionStarted(plan)) {
+					const g = findGroup(plan, groupId);
+					if (g && g.status !== "planned") {
+						return error("cannot modify agents in an active group");
+					}
+				}
+
+				switch (params.action) {
+					case "add": {
+						if (!params.name) return error("add requires name");
+						if (!params.mode) return error("add requires mode");
+						if (!params.slot) return error("add requires slot");
+						if (!params.effort) return error("add requires effort");
+						if (!params.focus) return error("add requires focus");
+						const input: AddAgentInput = {
+							name: params.name,
+							mode: params.mode,
+							slot: params.slot as ModelSlot,
+							effort: params.effort as ThinkingLevel,
+							focus: params.focus,
+							after: params.after ?? [],
+						};
+						const agent = engine.addAgent(groupId, input);
+						notify(deps, engine);
+						return ok(`✓ ${groupId}/${agent.name}`, {
+							agent,
+							plan: engine.get(),
+						});
+					}
+					case "update": {
+						if (!params.name) return error("update requires name");
+						engine.updateAgent(groupId, params.name, {
+							mode: params.mode as AgentMode | undefined,
+							slot: params.slot as ModelSlot | undefined,
+							effort: params.effort as ThinkingLevel | undefined,
+							focus: params.focus,
+							after: params.after,
+						});
+						notify(deps, engine);
+						const g = findGroup(engine.get(), groupId);
+						return ok(`Updated agent ${params.name}.`, {
+							agent: g?.agents.find((a) => a.name === params.name) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "remove": {
-						if (!params.id) return error("remove requires id");
-						engine.removeWorkItem(params.id);
+						if (!params.name) return error("remove requires name");
+						engine.removeAgent(groupId, params.name);
 						notify(deps, engine);
-						return ok(`Removed work item ${params.id}.`, {
-							plan: engine.get(),
-						});
-					}
-					case "move": {
-						if (!params.id) return error("move requires id");
-						const target = params.targetDeliverableId ?? params.deliverableId;
-						if (!target) return error("move requires targetDeliverableId");
-						engine.moveWorkItem(params.id, target);
-						notify(deps, engine);
-						return ok(`Moved work item ${params.id} to ${target}.`, {
-							plan: engine.get(),
-						});
+						return ok(`Removed agent ${params.name}.`, { plan: engine.get() });
 					}
 				}
 			});
@@ -490,14 +473,12 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "plan",
 		label: "Plan",
-		description:
-			"Read the active Maestro plan as markdown, deterministic seed text, or JSON.",
+		description: "Read the active plan as markdown, seed text, or JSON.",
 		promptSnippet: "plan — read the active plan; does not mutate state.",
 		parameters: PlanParams,
 		async execute(_id, params): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) {
-				// Agent mode: use RPC for live plan state
 				if (deps.agentBridge) {
 					try {
 						const content = await deps.agentBridge.planRead();
@@ -506,33 +487,28 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 						// Fall through to seed
 					}
 				}
-				// Fallback: show seed content (static cache-prefix view)
 				const seed = deps.seedContent?.();
 				if (seed) return ok(seed, {});
-				return error("no plan active \u2014 run /plan first to start one");
+				return error("no plan active — run /plan first to start one");
 			}
 			const plan = engine.get();
 			if (params.view === "json") {
-				if (deps.mode?.() === "plan") {
-					return ok(renderPlanSummary(plan), { plan });
-				}
 				return ok(`\`\`\`json\n${JSON.stringify(plan, null, 2)}\n\`\`\``, {
 					plan,
 				});
 			}
-			if (params.view === "seed") {
-				return ok(renderPlanSeed(plan, params.activeDeliverableId), { plan });
-			}
-			if (params.view === "markdown") {
-				if (deps.mode?.() === "plan") {
-					return ok(renderPlanSummary(plan), { plan });
-				}
-				return ok(renderPlanMarkdown(plan), { plan });
-			}
-			return ok(renderPlanSummary(plan), { plan });
+			// TODO: implement renderPlanMarkdown / renderPlanSeed for group model
+			const text = groups(plan).length
+				? groups(plan)
+						.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
+						.join("\n")
+				: "No groups.";
+			return ok(text, { plan });
 		},
 	}) as ToolDefinition;
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function withEngine(
 	deps: PlanToolDeps,
@@ -561,9 +537,4 @@ function error(message: string): Result {
 
 function notify(deps: PlanToolDeps, engine: PlanEngine): void {
 	deps.onPlanChanged?.(engine.get());
-}
-
-function workItem(plan: Plan, id: string): WorkItem | undefined {
-	const node = findNode(plan, id);
-	return node && isWorkItem(node) ? node : undefined;
 }

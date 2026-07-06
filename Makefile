@@ -83,6 +83,7 @@ dogfood-plan:
 	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-prompt.md
 
 # Same as dogfood-plan but uses the auto-answer prompt (tests question flow).
+# Seeds the plan first so you just need to /auto to start.
 dogfood-autoanswer:
 	@$(MAKE) reset-remote
 	@if [ ! -d "$(SANDBOX)" ]; then \
@@ -90,11 +91,12 @@ dogfood-autoanswer:
 		exit 1; \
 	fi
 	@mkdir -p "$(DOGFOOD_ROOT)/agent" "$(DOGFOOD_ROOT)/sessions"
-	@printf "Reset done. Starting pi with auto-answer prompt...\n"
+	@node "$(ROOT)/scripts/seed-autoanswer-plan.mjs" "$(DOGFOOD_ROOT)/agent" "$(SANDBOX)"
+	@printf "Plan seeded. Starting pi...\n"
 	cd "$(SANDBOX)" && \
 	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
-	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-autoanswer.md
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-autoanswer-start.md
 
 check:
 	npm run check

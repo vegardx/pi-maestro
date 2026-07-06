@@ -6,10 +6,10 @@
 
 export {
 	defaultPalette,
-	groupStatusGlyph,
-	groupStatusStyle,
 	formatCount,
 	formatElapsed,
+	groupStatusGlyph,
+	groupStatusStyle,
 	type Palette,
 	padRight,
 	runStatusGlyph,

@@ -82,8 +82,12 @@ export function buildExecutionPreamble(engine: PlanEngine): string {
 	const complete = plan.groups.filter((g) => g.status === "complete");
 	const planned = plan.groups.filter((g) => g.status === "planned");
 
-	const groupLines = active.map((g) => `  group:${g.id} — active (worker running)`);
-	const completeLines = complete.map((g) => `  group:${g.id} — complete (awaiting ship)`);
+	const groupLines = active.map(
+		(g) => `  group:${g.id} — active (worker running)`,
+	);
+	const completeLines = complete.map(
+		(g) => `  group:${g.id} — complete (awaiting ship)`,
+	);
 	const plannedLines = planned.map((g) => `  group:${g.id} — planned`);
 
 	const allLines = [...groupLines, ...completeLines, ...plannedLines];

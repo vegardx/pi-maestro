@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveSpawnModel, type SpawnModelRequest } from "../packages/modes/src/spawn-model.js";
+import { resolveSpawnModel } from "../packages/modes/src/spawn-model.js";
 
 // Mock the role resolver
 vi.mock("@vegardx/pi-models", () => ({
@@ -19,7 +19,9 @@ function mockCtx() {
 		model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
 		modelRegistry: {
 			find: vi.fn(),
-			getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+			getApiKeyAndHeaders: vi
+				.fn()
+				.mockResolvedValue({ ok: true, apiKey: "sk-test" }),
 		},
 	} as unknown as Parameters<typeof resolveSpawnModel>[0];
 }
@@ -34,7 +36,10 @@ describe("resolveSpawnModel", () => {
 
 	it("passes effort override", async () => {
 		const ctx = mockCtx();
-		const result = await resolveSpawnModel(ctx, { slot: "default", effort: "high" });
+		const result = await resolveSpawnModel(ctx, {
+			slot: "default",
+			effort: "high",
+		});
 		expect(result).not.toBeNull();
 		expect(result!.effort).toBe("high");
 	});

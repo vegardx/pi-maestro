@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-	buildPrBody,
-	shouldShip,
-} from "../packages/modes/src/shipping.js";
 import type { WorkGroup } from "../packages/modes/src/schema.js";
+import { buildPrBody, shouldShip } from "../packages/modes/src/shipping.js";
 
 function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
 	return {
@@ -54,7 +51,10 @@ describe("buildPrBody", () => {
 	});
 
 	it("includes agent reports", () => {
-		const body = buildPrBody(makeGroup(), ["### Worker\nDid stuff.", "### Review\nLooks good."]);
+		const body = buildPrBody(makeGroup(), [
+			"### Worker\nDid stuff.",
+			"### Review\nLooks good.",
+		]);
 		expect(body).toContain("### Worker");
 		expect(body).toContain("Did stuff.");
 		expect(body).toContain("### Review");

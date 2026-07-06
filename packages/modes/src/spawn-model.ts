@@ -4,10 +4,9 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ModelSlot, ThinkingLevel } from "@vegardx/pi-contracts";
-import type { Slot } from "@vegardx/pi-contracts";
 import {
-	resolveRoleModel,
 	type ResolvedRoleModelFull,
+	resolveRoleModel,
 } from "@vegardx/pi-models";
 
 export interface SpawnModelRequest {

@@ -48,6 +48,9 @@ export function buildPrBody(group: WorkGroup, agentReports: string[]): string {
  * Determine if a group needs shipping (complete + terminal).
  * Used by the executor — external callers use shippableGroups() from schema.
  */
-export function shouldShip(group: WorkGroup, hasDownstreamDeps: boolean): boolean {
+export function shouldShip(
+	group: WorkGroup,
+	hasDownstreamDeps: boolean,
+): boolean {
 	return group.status === "complete" && !hasDownstreamDeps;
 }

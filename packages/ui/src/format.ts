@@ -78,10 +78,7 @@ export function runStatusStyle(palette: Palette, status: RunStatus): Style {
 	}
 }
 
-export function groupStatusStyle(
-	palette: Palette,
-	status: GroupStatus,
-): Style {
+export function groupStatusStyle(palette: Palette, status: GroupStatus): Style {
 	switch (status) {
 		case "shipped":
 			return palette.success;

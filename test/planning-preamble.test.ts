@@ -1,18 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { buildPlanModePreamble, buildExecutionPreamble } from "../packages/modes/src/planning-preamble.js";
 import { PlanEngine } from "../packages/modes/src/engine.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import {
+	buildExecutionPreamble,
+	buildPlanModePreamble,
+} from "../packages/modes/src/planning-preamble.js";
 import type { Plan } from "../packages/modes/src/schema.js";
+import type { PlanStore } from "../packages/modes/src/storage.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
-		save(plan: Plan) { saved = plan; },
-		load(_slug: string): Plan | null { return saved; },
-		exists(_slug: string): boolean { return saved !== null; },
-		remove(_slug: string) { saved = null; },
-		list() { return []; },
+		save(plan: Plan) {
+			saved = plan;
+		},
+		load(_slug: string): Plan | null {
+			return saved;
+		},
+		exists(_slug: string): boolean {
+			return saved !== null;
+		},
+		remove(_slug: string) {
+			saved = null;
+		},
+		list() {
+			return [];
+		},
 	};
 }
 

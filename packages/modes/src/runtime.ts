@@ -1169,12 +1169,11 @@ export function createModesRuntime(
 
 	pi.registerTool(
 		defineTool({
-			name: "ship",
-			label: "Ship deliverable",
+			name: "commit",
+			label: "Commit changes",
 			description:
-				"Commit, push, and open/update a PR for your changes. Base branch " +
-				"and PR body are handled for you — do NOT run git/gh by hand. " +
-				"You MUST provide the full commit message (conventional format with body).",
+				"Stage files and commit locally. Use for incremental checkpoints as you work. " +
+				"You MUST provide a conventional commit message and explicit file paths.",
 			parameters: Type.Object({
 				message: Type.String({
 					description:
@@ -1182,8 +1181,53 @@ export function createModesRuntime(
 						"blank line, then body explaining what changed and why. " +
 						"Example: feat(math): implement multiply\\n\\nAdd multiply(a,b) with overflow guard.",
 				}),
+				paths: Type.Array(Type.String(), {
+					description:
+						"Files to stage (explicit paths only, never use . or -A).",
+				}),
 			}),
 			async execute(_id, params, _signal, _onUpdate, active) {
+				const commit = maestro.capabilities.get(CAPABILITIES.commit);
+				if (!commit) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: "Commit unavailable (commit capability absent).",
+							},
+						],
+						details: {},
+					};
+				}
+				const deliverableId = process.env.PI_MAESTRO_AGENT_ID as
+					| DeliverableId
+					| undefined;
+				const result = await commit.shipDeliverable({
+					autoApprove: true,
+					deliverableId,
+					message: params.message,
+					paths: params.paths,
+					openPr: false,
+					cwd: active.cwd,
+				});
+				const text = !result.committed
+					? "Nothing to commit."
+					: `Committed ${result.sha ?? result.branch}.`;
+				return { content: [{ type: "text", text }], details: { result } };
+			},
+		}),
+	);
+
+	pi.registerTool(
+		defineTool({
+			name: "ship",
+			label: "Ship deliverable",
+			description:
+				"Push your branch and open/update a PR. This is the FINAL step — " +
+				"commit your work first with the commit tool, then ship when done. " +
+				"Auto-toggles remaining tasks on success.",
+			parameters: Type.Object({}),
+			async execute(_id, _params, _signal, _onUpdate, active) {
 				const commit = maestro.capabilities.get(CAPABILITIES.commit);
 				if (!commit) {
 					return {
@@ -1202,14 +1246,37 @@ export function createModesRuntime(
 				const result = await commit.shipDeliverable({
 					autoApprove: true,
 					deliverableId,
-					message: params.message,
+					openPr: true,
 					cwd: active.cwd,
 				});
-				const text = !result.committed
-					? "Nothing to ship."
-					: result.pr
-						? `Shipped ${result.branch} → PR #${result.pr}.`
-						: `Committed ${result.branch}${result.pushed ? " (pushed)" : ""}.`;
+				if (!result.pushed && !result.pr) {
+					return {
+						content: [
+							{ type: "text", text: "Nothing to ship (no commits to push)." },
+						],
+						details: {},
+					};
+				}
+
+				// Auto-toggle remaining gating tasks on successful ship
+				if (deliverableId && agentBridge) {
+					const planContent = await agentBridge.planRead();
+					// Parse task IDs from plan markdown: lines matching "- [ ] ... `taskId`"
+					const untoggled: string[] = [];
+					for (const line of planContent.split("\n")) {
+						const m = line.match(/^- \[ \] .+`([^`]+)`/);
+						if (m) untoggled.push(m[1]);
+					}
+					for (const taskId of untoggled) {
+						await agentBridge.planMutate("toggleTask", deliverableId, {
+							taskId,
+						});
+					}
+				}
+
+				const text = result.pr
+					? `Shipped ${result.branch} → PR #${result.pr}.`
+					: `Pushed ${result.branch}.`;
 				return { content: [{ type: "text", text }], details: { result } };
 			},
 		}),

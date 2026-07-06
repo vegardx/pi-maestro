@@ -16,7 +16,7 @@ function makeRow(overrides: Partial<Row> = {}): Row {
 			deliverableId: "d1",
 			worktreePath: "/tmp/worktree",
 			shutdownSent: false,
-			assessmentSent: false,
+			stuckSteerSent: false,
 			resumable: false,
 			compactedAt: undefined,
 			manualNotes: [],

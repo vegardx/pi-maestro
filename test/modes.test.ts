@@ -1098,6 +1098,7 @@ describe("modes runtime", () => {
 			"review",
 			"refine",
 			"validate",
+			"commit",
 			"ship",
 		]);
 		expect([...host.commands.keys()]).toEqual(
@@ -1262,7 +1263,7 @@ describe("modes runtime", () => {
 		expect(runtime.currentMode()).toBe("auto");
 
 		// These tools should NOT be blocked in auto mode
-		for (const toolName of ["ship", "review", "edit", "write"]) {
+		for (const toolName of ["ship", "commit", "review", "edit", "write"]) {
 			const result = await host.handlers.get("tool_call")?.[0]({
 				toolName,
 				input: {},
@@ -1276,7 +1277,7 @@ describe("modes runtime", () => {
 		createModesRuntime(host.pi as any, host.maestro as any, { store, now });
 		await host.commands.get("plan").handler("My Plan", host.ctx);
 
-		for (const toolName of ["ship", "review", "edit", "write"]) {
+		for (const toolName of ["ship", "commit", "review", "edit", "write"]) {
 			const result = await host.handlers.get("tool_call")?.[0]({
 				toolName,
 				input: {},

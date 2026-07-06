@@ -233,20 +233,28 @@ export function formatRecap(
 		lines.push("");
 	}
 
+	// Workers subtotal
+	lines.push(div);
+	lines.push(
+		padR("  Workers", nameW) +
+		padL(fmtTok(grandTotal), tokW) +
+		padL(fmtCache(grandTotal), cacheW) +
+		padL(fmtCost(grandTotal), costW) +
+		padL(fmtDur(wallClock), timeW),
+	);
+
 	// Orchestrator row (planning/coordination tokens)
 	if (ledger) {
 		const { bySource } = ledger.snapshot();
 		const orchTok = bySource.get("orchestrator") ?? ZERO;
 		if (orchTok.totalTokens > 0) {
-			lines.push("  orchestrator");
 			lines.push(
-				padR("    planning", nameW) +
+				padR("  Orchestrator", nameW) +
 				padL(fmtTok(orchTok), tokW) +
 				padL(fmtCache(orchTok), cacheW) +
 				padL(fmtCost(orchTok), costW) +
 				padL("", timeW),
 			);
-			lines.push("");
 			grandTotal = addTokens(grandTotal, orchTok);
 		}
 	}

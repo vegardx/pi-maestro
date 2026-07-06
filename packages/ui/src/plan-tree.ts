@@ -1,24 +1,21 @@
-// Plan tree widget. Renders a depth-annotated list of deliverables (the modes
-// package owns tree-building / ordering rules and flattens its tree into nodes;
-// this widget only owns rendering, so pi-ui never depends on modes).
+// Plan tree widget. Renders a depth-annotated list of groups and their work
+// items. This widget only owns rendering — modes provides the data.
 
 import type { Component } from "@earendil-works/pi-tui";
-import type {
-	DeliverableSummary,
-	WorkItemSummary,
-} from "@vegardx/pi-contracts";
+import type { GroupStatus, GroupSummary } from "@vegardx/pi-contracts";
+import type { WorkItemSummary } from "@vegardx/pi-contracts";
 import {
 	defaultPalette,
-	deliverableStatusGlyph,
-	deliverableStatusStyle,
 	formatCount,
+	groupStatusGlyph,
+	groupStatusStyle,
 	type Palette,
 	truncate,
 } from "./format.js";
 
 export interface PlanTreeNode {
-	readonly deliverable: DeliverableSummary;
-	/** Work items to render beneath the deliverable (when showItems). */
+	readonly group: GroupSummary;
+	/** Work items to render beneath the group (when showItems). */
 	readonly items?: readonly WorkItemSummary[];
 	/** Indentation depth; 0 for roots. */
 	readonly depth?: number;
@@ -26,7 +23,7 @@ export interface PlanTreeNode {
 
 export interface PlanTreeOptions {
 	palette?: Palette;
-	/** Expand work items beneath each deliverable. Default false. */
+	/** Expand work items beneath each group. Default false. */
 	showItems?: boolean;
 	/** Spaces per depth level. Default 2. */
 	indent?: number;
@@ -66,16 +63,13 @@ export function renderPlanTree(
 	for (const node of nodes) {
 		const depth = node.depth ?? 0;
 		const pad = " ".repeat(depth * indentSize);
-		const glyph = deliverableStatusGlyph(node.deliverable.status);
-		const style = deliverableStatusStyle(palette, node.deliverable.status);
+		const glyph = groupStatusGlyph(node.group.status);
+		const style = groupStatusStyle(palette, node.group.status);
 		const items = node.items ?? [];
 		const { done, total } = countTasks(items);
 		const badge =
 			total > 0 ? ` ${palette.muted(formatCount(done, total))}` : "";
-		const lifecycle = node.deliverable.lifecycle
-			? `${palette.dim(`[${node.deliverable.lifecycle}] `)}`
-			: "";
-		const head = `${pad}${style(glyph)} ${lifecycle}${node.deliverable.title}`;
+		const head = `${pad}${style(glyph)} ${node.group.title}`;
 		lines.push(truncate(head, width) + badge);
 
 		if (showItems) {

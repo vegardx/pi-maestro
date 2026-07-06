@@ -64,21 +64,10 @@ export {
 	installFooter,
 } from "./install-footer.js";
 export {
-	formatAgentStatusLine,
-	handleAgentsDashboard,
-	handleAnswerCommand,
-	handleSteerCommand,
-	handleViewCommand,
-	updateAgentWidget,
-	type ViewState,
-} from "./maestro-tmux.js";
-export {
-	renderAgentSeed,
-	renderPlanForAgent,
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
+	renderDashboard,
+	renderDashboardText,
+} from "./group-dashboard.js";
+export { buildRecap } from "./group-recap.js";
 export {
 	type OverlayComponent,
 	type OverlayId,
@@ -143,20 +132,7 @@ export {
 	shouldResumeAfterCompaction,
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
-export {
-	type UnifiedOverlayCallbacks,
-	UnifiedOverlayComponent,
-} from "./unified-overlay.js";
-export {
-	activateDeliverableBranch,
-	activateDeliverableWorktree,
-	cleanupInactiveWorktrees,
-	deliverableSessionSeed,
-	deliverableWorktreePath,
-	reconcileWorktrees,
-	recordDeliverableSession,
-	recordPlanSession,
-} from "./worktree.js";
+export { type ForwardSummaryInput } from "./forward-summary.js";
 
 export default defineExtension(
 	{

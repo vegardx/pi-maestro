@@ -6,8 +6,8 @@
 
 export {
 	defaultPalette,
-	deliverableStatusGlyph,
-	deliverableStatusStyle,
+	groupStatusGlyph,
+	groupStatusStyle,
 	formatCount,
 	formatElapsed,
 	type Palette,

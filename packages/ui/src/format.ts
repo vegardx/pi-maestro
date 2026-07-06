@@ -3,7 +3,7 @@
 // see deterministic strings. Live callers pass theme-derived ANSI styles.
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { DeliverableStatus, RunStatus } from "@vegardx/pi-contracts";
+import type { GroupStatus, RunStatus } from "@vegardx/pi-contracts";
 
 export type Style = (s: string) => string;
 
@@ -45,13 +45,12 @@ const RUN_GLYPHS: Record<RunStatus, string> = {
 	canceled: "⊘",
 };
 
-const DELIVERABLE_GLYPHS: Record<DeliverableStatus, string> = {
+const GROUP_GLYPHS: Record<GroupStatus, string> = {
 	planned: "○",
 	active: "◐",
-	"in-review": "◎",
-	"needs-attention": "!",
-	"ready-to-ship": "▲",
+	complete: "◎",
 	shipped: "✓",
+	superseded: "⤳",
 	abandoned: "⊘",
 };
 
@@ -59,8 +58,8 @@ export function runStatusGlyph(status: RunStatus): string {
 	return RUN_GLYPHS[status] ?? "?";
 }
 
-export function deliverableStatusGlyph(status: DeliverableStatus): string {
-	return DELIVERABLE_GLYPHS[status] ?? "?";
+export function groupStatusGlyph(status: GroupStatus): string {
+	return GROUP_GLYPHS[status] ?? "?";
 }
 
 /** Style slot appropriate to a run status (for colored live rendering). */
@@ -79,21 +78,19 @@ export function runStatusStyle(palette: Palette, status: RunStatus): Style {
 	}
 }
 
-export function deliverableStatusStyle(
+export function groupStatusStyle(
 	palette: Palette,
-	status: DeliverableStatus,
+	status: GroupStatus,
 ): Style {
 	switch (status) {
 		case "shipped":
 			return palette.success;
 		case "abandoned":
+		case "superseded":
 			return palette.muted;
-		case "needs-attention":
-			return palette.error;
-		case "ready-to-ship":
+		case "complete":
 			return palette.warning;
 		case "active":
-		case "in-review":
 			return palette.accent;
 		default:
 			return palette.muted;

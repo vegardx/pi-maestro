@@ -19,8 +19,26 @@ import {
 	padRight,
 	truncate,
 } from "@vegardx/pi-ui";
-import type { Row, TabId } from "./agents-dashboard.js";
 import type { PendingQuestion } from "./question-queue.js";
+
+// Types formerly in agents-dashboard.ts — inlined for the group model
+export type TabId = "working" | "waiting" | "done" | "failed" | "all";
+export interface Row {
+	id: string;
+	agentId: string;
+	name: string;
+	title: string;
+	status: string;
+	state: string;
+	group?: string;
+	role?: string;
+	elapsed?: string;
+	elapsedMs?: number;
+	done?: number;
+	total?: number;
+	tasks?: string[];
+	pending?: number;
+}
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 

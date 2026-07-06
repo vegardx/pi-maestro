@@ -1,6 +1,7 @@
+// Simple UI rendering utilities for the group-based plan model.
+
 import type { ModeName } from "@vegardx/pi-contracts";
-import { renderPlanMarkdown } from "./markdown.js";
-import { deliverables, type Plan } from "./schema.js";
+import type { Plan } from "./schema.js";
 
 export interface ModeFooterInput {
 	readonly mode: ModeName;
@@ -8,7 +9,6 @@ export interface ModeFooterInput {
 	readonly branch?: string;
 	readonly contextPercent?: number | null;
 	readonly stage?: string;
-	/** Pre-formatted context budget breakdown, e.g. `12000/250000 (.../.../...)`. */
 	readonly budget?: string;
 }
 
@@ -25,7 +25,7 @@ export function renderModeFooter(input: ModeFooterInput): string {
 }
 
 export function renderPlanPanel(plan: Plan, maxLines = 30): string[] {
-	const lines = renderPlanMarkdown(plan).split("\n");
+	const lines = renderPlanText(plan).split("\n");
 	if (lines.length <= maxLines) return lines;
 	const head = lines.slice(0, Math.max(0, maxLines - 2));
 	return [...head, "…", `${lines.length - head.length} more line(s)`];
@@ -33,12 +33,30 @@ export function renderPlanPanel(plan: Plan, maxLines = 30): string[] {
 
 export function renderPlanSidebar(plan: Plan): string[] {
 	const counts = new Map<string, number>();
-	for (const d of deliverables(plan))
-		counts.set(d.status, (counts.get(d.status) ?? 0) + 1);
+	for (const g of plan.groups)
+		counts.set(g.status, (counts.get(g.status) ?? 0) + 1);
 	return [
 		`Plan: ${plan.title}`,
 		`Slug: ${plan.slug}`,
-		`Deliverables: ${deliverables(plan).length}`,
+		`Groups: ${plan.groups.length}`,
 		...[...counts].map(([status, count]) => `${status}: ${count}`),
 	];
+}
+
+function renderPlanText(plan: Plan): string {
+	const lines: string[] = [`# ${plan.title}`, ""];
+	for (const g of plan.groups) {
+		const icon =
+			g.status === "shipped" ? "🚀" : g.status === "active" ? "●" : "○";
+		const deps = g.dependsOn?.length
+			? ` (after ${g.dependsOn.join(", ")})`
+			: "";
+		lines.push(`${icon} ${g.title} [${g.status}]${deps}`);
+		for (const item of g.tasks ?? []) {
+			if (item.kind === "task") {
+				lines.push(`  ${item.done ? "[x]" : "[ ]"} ${item.title}`);
+			}
+		}
+	}
+	return lines.join("\n");
 }

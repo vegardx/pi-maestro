@@ -105,21 +105,24 @@ export class ExecutionAdapter {
 
 				// Build pi command with env vars
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
-				const env = [
+				const envVars = [
 					`PI_MAESTRO_SOCK=${this.socketPath}`,
 					`PI_MAESTRO_AGENT_ID=${agentKey}`,
 					`PI_MAESTRO_AGENT_MODE=${agentMode}`,
-				].join(" ");
+					`PI_CODING_AGENT_DIR=${this.opts.planDir}/agents/${sessionName}`,
+				];
 
-				const piCmd = [
-					env,
-					"pi",
-					`-e "${this.opts.extensionPath}"`,
-					"--no-skills --no-prompt-templates --no-themes",
-					`--resume "${seedFile}"`,
-				].join(" ");
+				const piArgs = [
+					"-e", this.opts.extensionPath,
+					"--no-skills", "--no-prompt-templates", "--no-themes",
+					"--no-context-files",
+					"-p", seedFile,
+				];
 
-				await tmux.spawn(sessionName, cwd, piCmd, { width: 200, height: 50 });
+				// tmux needs a shell command string
+				const shellCmd = `${envVars.join(" ")} pi ${piArgs.map((a) => `"${a}"`).join(" ")}`;
+
+				await tmux.spawn(sessionName, cwd, shellCmd, { width: 200, height: 50 });
 
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",

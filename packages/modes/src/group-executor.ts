@@ -127,7 +127,38 @@ export class GroupExecutor {
 	constructor(
 		private readonly engine: PlanEngine,
 		private readonly deps: ExecutorDeps,
-	) {}
+	) {
+		// Hydrate state for already-active groups (e.g. resumed session)
+		for (const g of engine.get().groups) {
+			if (g.status === "active" && !this.groupStates.has(g.id)) {
+				this.hydrateActiveGroup(g);
+			}
+		}
+	}
+
+	/** Hydrate runtime state for a group that's already active (resume). */
+	private hydrateActiveGroup(g: WorkGroup): void {
+		const groupState: GroupRunState = {
+			groupId: g.id,
+			agents: new Map(),
+			completed: new Set(),
+			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
+			branch: `feat/${g.id}`,
+		};
+		groupState.agents.set("worker", {
+			name: "worker",
+			groupId: g.id,
+			status: "pending",
+		});
+		for (const agent of g.agents) {
+			groupState.agents.set(agent.name, {
+				name: agent.name,
+				groupId: g.id,
+				status: "pending",
+			});
+		}
+		this.groupStates.set(g.id, groupState);
+	}
 
 	/** Get all group runtime states. */
 	getStates(): ReadonlyMap<string, GroupRunState> {
@@ -286,7 +317,16 @@ export class GroupExecutor {
 		g: WorkGroup,
 		state: GroupRunState,
 	): Promise<void> {
-		// Check for newly-unblocked agents
+		// Spawn immediate agents that are still pending (e.g. after hydration)
+		const immediate = immediateAgents(g);
+		for (const name of immediate) {
+			const agent = state.agents.get(name);
+			if (agent && agent.status === "pending") {
+				await this.spawnAgentInGroup(g, state, name);
+			}
+		}
+
+		// Check for newly-unblocked agents (those with `after` deps)
 		const unblocked = unblockedAgents(g, state.completed);
 		for (const name of unblocked) {
 			const agent = state.agents.get(name);

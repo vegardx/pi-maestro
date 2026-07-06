@@ -94,6 +94,21 @@ export interface TmuxAgentState {
 	model?: string;
 }
 
+export interface ForwardSummaryInput {
+	readonly completed: {
+		readonly id: string;
+		readonly title: string;
+		readonly body: string;
+	};
+	readonly agentOutput: string;
+	readonly consumers: ReadonlyArray<{
+		readonly id: string;
+		readonly title: string;
+		readonly body: string;
+		readonly tasks: string[];
+	}>;
+}
+
 export interface TmuxFanoutDeps {
 	readonly engine: PlanEngine;
 	readonly extensionPath: string;
@@ -106,6 +121,8 @@ export interface TmuxFanoutDeps {
 	readonly onQuestionsReceived?: (id: string, count: number) => void;
 	/** Options for the analyze phase. When provided, enables checkpoint forking. */
 	readonly analyzeOpts?: AnalyzeOpts;
+	/** Generate a forward-looking summary for a completed deliverable. */
+	readonly generateSummary?: (input: ForwardSummaryInput) => Promise<string>;
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
@@ -915,9 +932,71 @@ export class TmuxFanout {
 		// Check if this was a review agent completing — toggle reviews-gate on author
 		this.checkReviewsGate(agentId);
 
+		// Generate forward-looking summary (fire-and-forget, don't block tick)
+		this.generateForwardSummary(agentId);
+
 		// Spawn newly unblocked dependents
 		this.tick();
 		this.checkSettle();
+	}
+
+	/**
+	 * Generate a forward-looking summary shaped by downstream consumers' needs.
+	 * Runs asynchronously after agent completion — does not block spawning.
+	 */
+	private async generateForwardSummary(agentId: string): Promise<void> {
+		if (!this.deps.generateSummary) return;
+
+		const plan = this.deps.engine.get();
+		const completed = findDeliverable(plan, agentId);
+		if (!completed) return;
+
+		// Find downstream consumers (deliverables that depend on this one)
+		const allDeliverables = deliverables(plan);
+		const downstream = allDeliverables.filter((d) =>
+			d.dependsOn?.includes(agentId),
+		);
+		if (downstream.length === 0) return;
+
+		// Collect agent output (PR description, commits, summary)
+		const state = this.agents.get(agentId);
+		const agentOutput = [
+			state?.summary ? `Summary: ${state.summary}` : "",
+			state?.commits?.length ? `Commits:\n${state.commits.join("\n")}` : "",
+			state?.prUrl ? `PR: ${state.prUrl}` : "",
+		]
+			.filter(Boolean)
+			.join("\n\n");
+
+		const consumers = downstream.map((d) => ({
+			id: d.id,
+			title: d.title,
+			body: d.body,
+			tasks: d.children
+				.filter((c) => c.type === "work-item" && (c.kind === "task" || !c.kind))
+				.map((c) => (c as { title: string }).title),
+		}));
+
+		try {
+			const forwardSummary = await this.deps.generateSummary({
+				completed: {
+					id: completed.id,
+					title: completed.title,
+					body: completed.body,
+				},
+				agentOutput,
+				consumers,
+			});
+			this.deps.engine.updateDeliverable(agentId, {
+				summary: forwardSummary,
+			});
+			this.deps.onPlanChanged?.();
+			log(`forward-summary: generated for ${agentId}`);
+		} catch (e) {
+			log(
+				`forward-summary: failed for ${agentId} — ${e instanceof Error ? e.message : String(e)}`,
+			);
+		}
 	}
 
 	/**

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -26,6 +27,7 @@ import {
 	gitToplevel,
 	removeWorktree,
 } from "@vegardx/pi-git";
+import { resolveModelWithin } from "@vegardx/pi-models";
 import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import {
 	type AgentBridge,
@@ -52,7 +54,11 @@ import {
 	readModesCompactionDetails,
 } from "./compaction.js";
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
-import { TmuxFanout } from "./execution-tmux.js";
+import { type ForwardSummaryInput, TmuxFanout } from "./execution-tmux.js";
+import {
+	buildForwardSummaryPrompt,
+	buildPlanAwareCompactionMarker,
+} from "./forward-summary.js";
 import { installFooter } from "./install-footer.js";
 import { renderPlanSummary } from "./markdown.js";
 import {
@@ -638,6 +644,7 @@ export function createModesRuntime(
 						);
 						invalidateFooter?.();
 					},
+					generateSummary: createForwardSummaryGenerator(ctx),
 				});
 				await tmuxFanout.start();
 			}
@@ -1400,6 +1407,15 @@ export function createModesRuntime(
 	});
 
 	pi.on("session_before_compact", async (event, ctx) => {
+		// Agent mode: inject plan-aware compaction guidance
+		if (state.mode === "agent" && agentBridge) {
+			const guidance = await buildAgentCompactionGuidance(agentBridge);
+			if (guidance) {
+				return { additionalInstructions: guidance };
+			}
+			return undefined;
+		}
+
 		const decision = decideCompactionOwnership(
 			event.customInstructions,
 			pendingCompaction,
@@ -1826,4 +1842,93 @@ Re-read your requirements (the seed). Does the PR address everything?
 Any gaps → fix, commit, and ship again. Otherwise you’re done — just stop;
 the orchestrator detects completion. If blocked, describe the problem in
 your final message so the orchestrator can steer you.`;
+}
+
+/**
+ * Build plan-aware compaction guidance for an agent session.
+ * Returns undefined if plan state is not available.
+ */
+async function buildAgentCompactionGuidance(
+	bridge: AgentBridge,
+): Promise<string | undefined> {
+	const deliverableId = process.env.PI_MAESTRO_AGENT_ID;
+	if (!deliverableId) return undefined;
+
+	try {
+		const planContent = await bridge.planRead();
+		// Parse remaining/completed tasks from plan markdown
+		const lines = planContent.split("\n");
+		const remaining: Array<{ title: string; body?: string }> = [];
+		const completed: Array<{ title: string }> = [];
+		let deliverableTitle = deliverableId;
+
+		for (const line of lines) {
+			const taskMatch = line.match(/^- \[( |x)\] (.+?) `[^`]+`$/);
+			if (taskMatch) {
+				const done = taskMatch[1] === "x";
+				const title = taskMatch[2];
+				if (done) completed.push({ title });
+				else remaining.push({ title });
+			}
+			const titleMatch = line.match(/^## Your deliverable: .+ — (.+)/);
+			if (titleMatch) deliverableTitle = titleMatch[1];
+		}
+
+		return buildPlanAwareCompactionMarker({
+			deliverableId,
+			deliverableTitle,
+			remainingTasks: remaining,
+			completedTasks: completed,
+			depSummaryIds: [],
+		});
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Create a forward-looking summary generator bound to the extension context.
+ * Uses the modes normal-tier model for the LLM call.
+ */
+function createForwardSummaryGenerator(
+	ctx: ExtensionContext,
+): (input: ForwardSummaryInput) => Promise<string> {
+	return async (input) => {
+		const resolved = await resolveModelWithin(
+			ctx,
+			{ name: "modes", tier: "normal", requireApiKey: true },
+			30_000,
+		);
+		if (!resolved?.apiKey) {
+			throw new Error("No model available for summary generation");
+		}
+
+		const promptText = buildForwardSummaryPrompt(input);
+		const response = await complete(
+			resolved.model,
+			{
+				messages: [
+					{
+						role: "user",
+						content: [{ type: "text", text: promptText }],
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: resolved.apiKey,
+				headers: resolved.headers,
+				maxTokens: 512,
+			},
+		);
+
+		const text = response.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("\n")
+			.trim();
+
+		if (!text) throw new Error("Empty summary response");
+		return text;
+	};
 }

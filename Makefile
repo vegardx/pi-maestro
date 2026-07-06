@@ -82,6 +82,20 @@ dogfood-plan:
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
 	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-prompt.md
 
+# Same as dogfood-plan but uses the auto-answer prompt (tests question flow).
+dogfood-autoanswer:
+	@$(MAKE) reset-remote
+	@if [ ! -d "$(SANDBOX)" ]; then \
+		printf "sandbox repo not found: %s\n" "$(SANDBOX)" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p "$(DOGFOOD_ROOT)/agent" "$(DOGFOOD_ROOT)/sessions"
+	@printf "Reset done. Starting pi with auto-answer prompt...\n"
+	cd "$(SANDBOX)" && \
+	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
+	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-autoanswer.md
+
 check:
 	npm run check
 

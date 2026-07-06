@@ -67,6 +67,8 @@ function makePendingQuestion(
 		draft: [],
 		resolve: () => {},
 		receivedAt: Date.now(),
+		deliveredToLlm: false,
+		settled: false,
 		...overrides,
 	};
 }

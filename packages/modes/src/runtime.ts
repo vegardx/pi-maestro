@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OverlayManager } from "./overlay-manager.js";
+import { AutoAnswerController } from "./auto-answer.js";
+import { QuestionPickerComponent, type PickerPalette } from "./question-picker.js";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -188,6 +190,7 @@ export function createModesRuntime(
 	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
+	let autoAnswerCtrl: AutoAnswerController | undefined;
 	let workerSeedContent: string | undefined;
 	// Central usage ledger (usage.v1). Records orchestrator + agent + lens usage.
 	const usageLedger = new UsageLedger();
@@ -661,11 +664,15 @@ export function createModesRuntime(
 							}
 						}
 					},
-					onQuestionsReceived: (_id, count) => {
-						ctx.ui.notify(
-							`Agent has ${count} question(s) — /answer to respond.`,
-							"info",
-						);
+					onQuestionsReceived: (id, count) => {
+						if (autoAnswerCtrl) {
+							autoAnswerCtrl.onQuestionReceived(id);
+						} else {
+							ctx.ui.notify(
+								`Agent has ${count} question(s) — /answer to respond.`,
+								"info",
+							);
+						}
 					},
 					onLensUsage: (id, lens, snapshot) => {
 						usageLedger.record(
@@ -690,6 +697,14 @@ export function createModesRuntime(
 						);
 						invalidateFooter?.();
 					},
+				});
+				// Create the auto-answer controller alongside the fanout
+				autoAnswerCtrl = new AutoAnswerController({
+					sendMessage: (opts, meta) => pi.sendMessage(opts, meta),
+					showPicker: (entry) => showQuestionPicker(entry, ctx),
+					notify: (msg, level) => ctx.ui.notify(msg, level),
+					queue: tmuxFanout.questionQueue,
+					isAutoMode: () => state.mode === "auto" || state.mode === "hack",
 				});
 				await tmuxFanout.start();
 			}
@@ -950,21 +965,13 @@ export function createModesRuntime(
 				cmdCtx.ui.notify("No questions pending.", "info");
 				return;
 			}
-			const pending = tmuxFanout.questionQueue.all();
+			const pending = tmuxFanout.questionQueue.all().filter((p) => !p.settled);
 			if (pending.length === 0) {
 				cmdCtx.ui.notify("No questions pending.", "info");
 				return;
 			}
-			// Answer the first pending question
 			const entry = pending[0];
-			const answer = await cmdCtx.ui.input(
-				`${entry.agentName}: ${entry.questions[0]?.question ?? "Question"}`,
-				"Type your answer...",
-			);
-			if (answer) {
-				entry.resolve([{ questionId: entry.questions[0]?.id ?? "0", value: answer }]);
-				cmdCtx.ui.notify(`\u2713 Answered ${entry.agentName}`, "info");
-			}
+			showQuestionPicker(entry, cmdCtx as unknown as ExtensionContext);
 		},
 	});
 
@@ -992,6 +999,31 @@ export function createModesRuntime(
 			);
 		},
 	});
+
+	/** Show the structured question picker overlay for an escalated/timed-out question. */
+	function showQuestionPicker(entry: import("./question-queue.js").PendingQuestion, ctx: ExtensionContext): void {
+		void ctx.ui.custom<import("@vegardx/pi-contracts").Answers | undefined>(
+			(_tui, theme, _kb, done) => {
+				const t = theme as {
+					fg?: (color: string, text: string) => string;
+					bold?: (text: string) => string;
+				} | null;
+				const palette: PickerPalette = t?.fg && t?.bold
+					? {
+							dim: (s) => t.fg!("dim", s),
+							accent: (s) => t.fg!("accent", s),
+							heading: (s) => t.bold!(t.fg!("text", s)),
+						}
+					: { dim: (s) => s, accent: (s) => s, heading: (s) => s };
+				return new QuestionPickerComponent(entry, done, palette);
+			},
+			{ overlay: true, overlayOptions: { anchor: "bottom-center", width: "80%", maxHeight: "60%" } },
+		).then((answers) => {
+			if (answers && autoAnswerCtrl) {
+				autoAnswerCtrl.resolveFromUser(entry.agentId, answers);
+			}
+		});
+	}
 
 	const lensEnabled = !MAESTRO_ENV.lensDisabled;
 
@@ -1195,6 +1227,84 @@ export function createModesRuntime(
 						? `Shipped ${result.branch} → PR #${result.pr}.`
 						: `Committed ${result.branch}${result.pushed ? " (pushed)" : ""}.`;
 				return { content: [{ type: "text", text }], details: { result } };
+			},
+		}),
+	);
+
+	// ─── Auto-answer tools (orchestrator only) ──────────────────────────────
+
+	pi.registerTool(
+		defineTool({
+			name: "answer",
+			label: "Answer agent question",
+			description:
+				"Answer a pending question from a worker agent. Only available when " +
+				"agents are active and have pending questions.",
+			parameters: Type.Object({
+				agentId: Type.String({
+					description: "The deliverable/agent ID that asked the question.",
+				}),
+				answers: Type.Array(
+					Type.Object({
+						questionId: Type.String({ description: "The question ID to answer." }),
+						value: Type.String({ description: "The chosen answer value (option label/value or free text)." }),
+					}),
+					{ description: "Answers for each question in the batch." },
+				),
+				reasoning: Type.Optional(
+					Type.String({ description: "Brief reasoning for the decision." }),
+				),
+			}),
+			async execute(_id, params) {
+				if (!tmuxFanout || !autoAnswerCtrl) {
+					return {
+						content: [{ type: "text", text: "No agents active." }],
+						details: { resolved: false },
+					};
+				}
+				const resolved = autoAnswerCtrl.resolveFromLlm(
+					params.agentId,
+					params.answers,
+					params.reasoning,
+				);
+				const text = resolved
+					? `\u2713 Answered agent ${params.agentId}.`
+					: `No pending question for agent ${params.agentId} (already resolved or unknown).`;
+				return { content: [{ type: "text", text }], details: { resolved } };
+			},
+		}),
+	);
+
+	pi.registerTool(
+		defineTool({
+			name: "escalate",
+			label: "Escalate question to user",
+			description:
+				"Escalate an agent question to the user when you cannot confidently " +
+				"answer from the plan context and prior decisions.",
+			parameters: Type.Object({
+				agentId: Type.String({
+					description: "The deliverable/agent ID whose question to escalate.",
+				}),
+				reason: Type.String({
+					description: "Why this needs human judgment.",
+				}),
+			}),
+			async execute(_id, params, _signal, _onUpdate, ctx) {
+				if (!tmuxFanout || !autoAnswerCtrl) {
+					return {
+						content: [{ type: "text", text: "No agents active." }],
+						details: { escalated: false },
+					};
+				}
+				const escalated = autoAnswerCtrl.escalateFromLlm(
+					params.agentId,
+					params.reason,
+				);
+				const text = escalated
+					? `Escalated to user: ${params.reason}`
+					: `No pending question for agent ${params.agentId}.`;
+			return { content: [{ type: "text", text }], details: { escalated } };
 			},
 		}),
 	);
@@ -1415,6 +1525,7 @@ export function createModesRuntime(
 
 	pi.on("turn_start", () => {
 		agentBridge?.onTurnStart();
+		autoAnswerCtrl?.onTurnStart();
 	});
 
 	// Accumulate real usage from assistant messages (tokens + cost). In agent
@@ -1431,6 +1542,7 @@ export function createModesRuntime(
 	pi.on("turn_end", async (_event, ctx) => {
 		agentBridge?.onTurnEnd();
 		if (!agentBridge) incrementOrchestratorTurn();
+		autoAnswerCtrl?.onTurnEnd();
 		if (state.mode === "plan") {
 			finalizeDraftPlan(ctx);
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));

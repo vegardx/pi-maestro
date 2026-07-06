@@ -15,11 +15,17 @@ export interface PendingQuestion {
 	draft: Answers;
 	readonly resolve: (answers: Answers) => void;
 	readonly receivedAt: number;
+	/** Whether the orchestrator LLM has been presented this question. */
+	deliveredToLlm: boolean;
+	/** Escalation timeout handle — fires if LLM doesn't answer in time. */
+	timeoutHandle?: ReturnType<typeof setTimeout>;
+	/** True when already resolved or escalated (guards double-fire). */
+	settled: boolean;
 }
 
 export type PendingQuestionInput = Omit<
 	PendingQuestion,
-	"receivedAt" | "draft"
+	"receivedAt" | "draft" | "deliveredToLlm" | "timeoutHandle" | "settled"
 >;
 
 /**
@@ -34,8 +40,18 @@ export class QuestionQueue {
 	enqueue(entry: PendingQuestionInput): void {
 		// Replace any stale entry for the same agent (shouldn't happen, but keep
 		// the invariant of one-per-agent).
-		this.pending = this.pending.filter((p) => p.agentId !== entry.agentId);
-		this.pending.push({ ...entry, draft: [], receivedAt: Date.now() });
+		const existing = this.pending.find((p) => p.agentId === entry.agentId);
+		if (existing) {
+			if (existing.timeoutHandle) clearTimeout(existing.timeoutHandle);
+			this.pending = this.pending.filter((p) => p.agentId !== entry.agentId);
+		}
+		this.pending.push({
+			...entry,
+			draft: [],
+			receivedAt: Date.now(),
+			deliveredToLlm: false,
+			settled: false,
+		});
 	}
 
 	count(): number {
@@ -62,15 +78,47 @@ export class QuestionQueue {
 	}
 
 	/** Resolve an agent's entry with answers and remove it from the queue. */
-	answer(agentId: string, answers: Answers): void {
+	answer(agentId: string, answers: Answers): boolean {
 		const idx = this.pending.findIndex((p) => p.agentId === agentId);
-		if (idx === -1) return;
+		if (idx === -1) return false;
 		const [entry] = this.pending.splice(idx, 1);
+		if (entry.settled) return false;
+		entry.settled = true;
+		if (entry.timeoutHandle) clearTimeout(entry.timeoutHandle);
 		entry.resolve(answers);
+		return true;
+	}
+
+	/** Mark an entry as delivered to the orchestrator LLM. */
+	markDelivered(agentId: string): void {
+		const entry = this.pending.find((p) => p.agentId === agentId);
+		if (entry) entry.deliveredToLlm = true;
+	}
+
+	/** Get entries not yet delivered to the LLM. */
+	undelivered(): readonly PendingQuestion[] {
+		return this.pending.filter((p) => !p.deliveredToLlm && !p.settled);
+	}
+
+	/** Set the escalation timeout handle for an agent's entry. */
+	setTimeout(agentId: string, handle: ReturnType<typeof setTimeout>): void {
+		const entry = this.pending.find((p) => p.agentId === agentId);
+		if (entry) entry.timeoutHandle = handle;
+	}
+
+	/** Cancel timeout and mark settled (for escalation path). */
+	settle(agentId: string): void {
+		const entry = this.pending.find((p) => p.agentId === agentId);
+		if (entry) {
+			entry.settled = true;
+			if (entry.timeoutHandle) clearTimeout(entry.timeoutHandle);
+		}
 	}
 
 	/** Drop an agent's entry (e.g. it died) without resolving to the user. */
 	drop(agentId: string): void {
+		const existing = this.pending.find((p) => p.agentId === agentId);
+		if (existing?.timeoutHandle) clearTimeout(existing.timeoutHandle);
 		this.pending = this.pending.filter((p) => p.agentId !== agentId);
 	}
 }

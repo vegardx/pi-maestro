@@ -35,6 +35,8 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		...PLAN_TOOL_NAMES,
 		...ALWAYS_ALLOWED_TOOLS,
 		"bash",
+		"answer",
+		"escalate",
 	]);
 	return input.availableTools.filter((name) => allowed.has(name));
 }

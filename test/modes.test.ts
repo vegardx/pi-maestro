@@ -1099,6 +1099,8 @@ describe("modes runtime", () => {
 			"refine",
 			"validate",
 			"ship",
+			"answer",
+			"escalate",
 		]);
 		expect([...host.commands.keys()]).toEqual(
 			expect.arrayContaining([

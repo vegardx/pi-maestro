@@ -641,6 +641,7 @@ export function createModesRuntime(
 						dirname(fileURLToPath(import.meta.url)),
 						"../../..",
 					),
+					extensionPaths: discoverExtensionPaths(),
 					planDir: join(plansRoot(), activeEngine.get().slug),
 					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					onPlanChanged: emitPlanChanged,
@@ -1904,4 +1905,23 @@ function _createForwardSummaryGenerator(
 		if (!text) throw new Error("Empty summary response");
 		return text;
 	};
+}
+
+/**
+ * Discover all -e/--extension paths from process.argv.
+ * These are the extensions the maestro was launched with.
+ */
+function discoverExtensionPaths(): string[] {
+	const paths: string[] = [];
+	const args = process.argv;
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "-e" || args[i] === "--extension") {
+			if (args[i + 1]) paths.push(args[i + 1]);
+		} else if (args[i]?.startsWith("-e=")) {
+			paths.push(args[i].slice(3));
+		} else if (args[i]?.startsWith("--extension=")) {
+			paths.push(args[i].slice(12));
+		}
+	}
+	return paths;
 }

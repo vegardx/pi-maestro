@@ -20,6 +20,8 @@ export interface ExecutionAdapterOpts {
 	engine: PlanEngine;
 	ctx: ExtensionContext;
 	extensionPath: string;
+	/** All extension paths to pass to agents (includes custom providers etc). */
+	extensionPaths?: string[];
 	defaultBranch: string;
 	planDir: string;
 	onPlanChanged: () => void;
@@ -105,22 +107,31 @@ export class ExecutionAdapter {
 
 				// Build pi command with env vars
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
+				const agentDir = join(this.opts.planDir, "agents", sessionName);
 				const envVars = [
 					`PI_MAESTRO_SOCK=${this.socketPath}`,
 					`PI_MAESTRO_AGENT_ID=${agentKey}`,
 					`PI_MAESTRO_AGENT_MODE=${agentMode}`,
-					`PI_CODING_AGENT_DIR=${this.opts.planDir}/agents/${sessionName}`,
+					`PI_CODING_AGENT_DIR=${agentDir}`,
 				];
+				// Propagate session dir if set
+				if (process.env.PI_CODING_AGENT_SESSION_DIR) {
+					envVars.push(`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}/agents/${sessionName}`);
+				}
+
+				// Build extension args — include all extensions the maestro loaded
+				const extPaths = this.opts.extensionPaths ?? [this.opts.extensionPath];
+				const extArgs = extPaths.map((p) => `-e "${p}"`).join(" ");
 
 				const piArgs = [
-					"-e", this.opts.extensionPath,
+					extArgs,
 					"--no-skills", "--no-prompt-templates", "--no-themes",
 					"--no-context-files",
-					"-p", seedFile,
-				];
+					"-p", `"${seedFile}"`,
+				].join(" ");
 
 				// tmux needs a shell command string
-				const shellCmd = `${envVars.join(" ")} pi ${piArgs.map((a) => `"${a}"`).join(" ")}`;
+				const shellCmd = `${envVars.join(" ")} pi ${piArgs}`;
 
 				await tmux.spawn(sessionName, cwd, shellCmd, { width: 200, height: 50 });
 

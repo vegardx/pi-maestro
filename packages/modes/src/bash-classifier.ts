@@ -5,7 +5,7 @@
 // 1. Fast path (regex): obvious read-only or obviously mutating
 // 2. LLM path: ambiguous commands get classified by a model
 
-import { type SpawnFn, spawnCleanPi } from "./lenses/index.js";
+import { type SpawnFn, spawnCleanPi } from "./spawn-pi.js";
 
 export interface BashIntent {
 	readonly allowed: boolean;

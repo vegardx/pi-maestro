@@ -1095,9 +1095,6 @@ describe("modes runtime", () => {
 			"deliverable",
 			"task",
 			"plan",
-			"review",
-			"refine",
-			"validate",
 			"commit",
 			"ship",
 		]);
@@ -1108,11 +1105,11 @@ describe("modes runtime", () => {
 				"hack",
 				"auto",
 				"answer",
-				"review",
-				"refine",
-				"validate",
 				"modes-status",
 			]),
+		);
+		expect([...host.commands.keys()]).not.toEqual(
+			expect.arrayContaining(["review", "refine", "validate"]),
 		);
 		expect(host.shortcuts.has("shift+tab")).toBe(true);
 		expect(host.caps.has(CAPABILITIES.modes)).toBe(true);

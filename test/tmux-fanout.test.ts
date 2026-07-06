@@ -372,8 +372,8 @@ describe("TmuxFanout", () => {
 		});
 	});
 
-	describe("review loop circuit breaker", () => {
-		it("increments reviewCycles on review lensUsage", async () => {
+	describe("lensUsage (legacy, ignored)", () => {
+		it("ignores lensUsage messages without crashing", async () => {
 			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
 			engine.addWorkItem(d.id, { title: "Implement" });
 			const f = createFanout();
@@ -400,113 +400,7 @@ describe("TmuxFanout", () => {
 			await wait(50);
 
 			const state = f.snapshot().agents.get(d.id);
-			expect(state?.reviewCycles).toBe(1);
-			expect(state?.lensRuns).toBe(1);
-		});
-
-		it("increments lensRuns for non-review lenses without incrementing reviewCycles", async () => {
-			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
-			engine.addWorkItem(d.id, { title: "Implement" });
-			const f = createFanout();
-			await f.start();
-			await f.tick();
-
-			const { client, connected } = makeClient(d.id);
-			await connected;
-			await wait(30);
-
-			client.send({
-				type: "lensUsage",
-				lens: "refine",
-				snapshot: {
-					input: 1000,
-					output: 500,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 1500,
-					cost: 0,
-					turns: 1,
-				},
-			});
-			await wait(50);
-
-			const state = f.snapshot().agents.get(d.id);
-			expect(state?.reviewCycles).toBe(0);
-			expect(state?.lensRuns).toBe(1);
-		});
-
-		it("steers agent at MAX_REVIEW_CYCLES (2)", async () => {
-			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
-			engine.addWorkItem(d.id, { title: "Implement" });
-			const f = createFanout();
-			await f.start();
-			await f.tick();
-
-			const { client, connected } = makeClient(d.id);
-			const messages: unknown[] = [];
-			client.on("message", (msg) => messages.push(msg));
-			await connected;
-			await wait(30);
-
-			const snapshot = {
-				input: 1000,
-				output: 500,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1500,
-				cost: 0,
-				turns: 1,
-			};
-
-			// First review — no steer
-			client.send({ type: "lensUsage", lens: "review", snapshot });
-			await wait(50);
-			expect(messages.filter((m: any) => m.type === "steer").length).toBe(0);
-
-			// Second review — triggers soft steer
-			client.send({ type: "lensUsage", lens: "review", snapshot });
-			await wait(50);
-			const steers = messages.filter((m: any) => m.type === "steer") as any[];
-			expect(steers.length).toBe(1);
-			expect(steers[0].content).toContain("only fix IMPORTANT");
-		});
-
-		it("force-steers agent beyond MAX_REVIEW_CYCLES", async () => {
-			const d = engine.addDeliverable({ title: "Work", dependsOn: [] });
-			engine.addWorkItem(d.id, { title: "Implement" });
-			const f = createFanout();
-			await f.start();
-			await f.tick();
-
-			const { client, connected } = makeClient(d.id);
-			const messages: unknown[] = [];
-			client.on("message", (msg) => messages.push(msg));
-			await connected;
-			await wait(30);
-
-			const snapshot = {
-				input: 1000,
-				output: 500,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 1500,
-				cost: 0,
-				turns: 1,
-			};
-
-			// Three reviews — third triggers force steer
-			client.send({ type: "lensUsage", lens: "review", snapshot });
-			await wait(50);
-			client.send({ type: "lensUsage", lens: "review", snapshot });
-			await wait(50);
-			client.send({ type: "lensUsage", lens: "review", snapshot });
-			await wait(50);
-
-			const steers = messages.filter((m: any) => m.type === "steer") as any[];
-			// Soft steer at cycle 2, force steer at cycle 3
-			expect(steers.length).toBe(2);
-			expect(steers[1].content).toContain("STOP");
-			expect(steers[1].content).toContain("ship tool");
+			expect(state?.status).toBe("working");
 		});
 	});
 

@@ -423,7 +423,7 @@ export function createModesRuntime(
 	// planning and before implement/ship so the plan survives. No-op otherwise.
 	function finalizeDraftPlan(ctx: ExtensionContext): void {
 		if (!engine?.isDraft()) return;
-		if (engine.get().nodes.length === 0) return;
+		if (engine.get().groups.length === 0) return;
 		const firstMessage = firstUserMessageText(
 			ctx.sessionManager.getEntries() as readonly Entryish[],
 			draftStartEntries,
@@ -659,8 +659,8 @@ export function createModesRuntime(
 					onAllSettled: () => {
 						if (!tmuxFanout || !engine) return;
 						const titles = new Map<string, string>();
-						for (const n of engine.get().nodes) {
-							if (n.type === "deliverable") titles.set(n.id, n.title);
+						for (const g of engine.get().groups) {
+							titles.set(g.id, g.title);
 						}
 						const recap = formatRecap(
 							tmuxFanout.snapshot().agents,
@@ -903,8 +903,8 @@ export function createModesRuntime(
 			}
 			const titles = new Map<string, string>();
 			if (engine) {
-				for (const n of engine.get().nodes) {
-					if (n.type === "deliverable") titles.set(n.id, n.title);
+				for (const g of engine.get().groups) {
+					titles.set(g.id, g.title);
 				}
 			}
 			const recap = formatRecap(
@@ -1043,8 +1043,8 @@ export function createModesRuntime(
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			const plan = engine?.get();
 			ctx.ui.notify(
-				`mode=${state.mode} plan=${plan?.slug ?? "none"} loose=${
-					plan?.nodes.filter((n) => n.type === "work-item").length ?? 0
+				`mode=${state.mode} plan=${plan?.slug ?? "none"} groups=${
+					plan?.groups.length ?? 0
 				}`,
 				"info",
 			);
@@ -1120,13 +1120,12 @@ export function createModesRuntime(
 					const agents = tmuxFanout.snapshot().agents;
 					// Total = all non-terminal deliverables in the plan
 					const plan = engine.get();
-					const allDeliverables = plan.nodes.filter(
-						(n) =>
-							n.type === "deliverable" &&
-							n.status !== "shipped" &&
-							n.status !== "abandoned",
+					const activeGroups = plan.groups.filter(
+						(g) =>
+							g.status !== "shipped" &&
+							g.status !== "abandoned",
 					);
-					const total = allDeliverables.length;
+					const total = activeGroups.length;
 					if (total === 0) return undefined;
 					let done = 0;
 					let failed = 0;

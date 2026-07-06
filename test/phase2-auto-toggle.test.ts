@@ -9,7 +9,7 @@ function gatingTasks(engine: PlanEngine, deliverableId: string): WorkItem[] {
 	const d = plan.nodes.find(
 		(n) => n.type === "deliverable" && n.id === deliverableId,
 	);
-	if (!d || d.type !== "deliverable") return [];
+	if (d?.type !== "deliverable") return [];
 	return d.children.filter(
 		(c): c is WorkItem =>
 			c.type === "work-item" && (c.kind === "task" || !c.kind),
@@ -21,7 +21,7 @@ function followupTasks(engine: PlanEngine, deliverableId: string): WorkItem[] {
 	const d = plan.nodes.find(
 		(n) => n.type === "deliverable" && n.id === deliverableId,
 	);
-	if (!d || d.type !== "deliverable") return [];
+	if (d?.type !== "deliverable") return [];
 	return d.children.filter(
 		(c): c is WorkItem => c.type === "work-item" && c.kind === "followup",
 	);

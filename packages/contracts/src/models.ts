@@ -79,7 +79,7 @@ export type RoleModelMap = Readonly<Record<string, RoleModelConfig>>;
 
 // ─── Role name constants ─────────────────────────────────────────────────────
 
-export const MODES_ROLES = ["agent", "analyze", "lens", "classifier"] as const;
+export const MODES_ROLES = ["agent", "analyze", "classifier"] as const;
 export type ModesRole = (typeof MODES_ROLES)[number];
 
 export const COMPACT_ROLES = ["summarizer"] as const;

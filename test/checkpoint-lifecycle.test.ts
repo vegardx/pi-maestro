@@ -1,10 +1,4 @@
-import {
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,11 +9,6 @@ import {
 	runAnalyzePhase,
 	shouldRefreshAnalyze,
 } from "../packages/modes/src/analyze.js";
-import {
-	resolveCompactedFile,
-	runLensFromFork,
-} from "../packages/modes/src/lens-fork.js";
-import type { SpawnResult } from "../packages/modes/src/lenses/index.js";
 import type { Deliverable, Plan } from "../packages/modes/src/schema.js";
 import {
 	appendToSession,
@@ -228,49 +217,7 @@ describe("full checkpoint lifecycle (integration)", () => {
 		expect(workerParsed.entries[1].type).toBe("custom");
 		expect(workerParsed.entries[2].type).toBe("custom");
 
-		// ---- Phase 4: Fork lens session (from analyze, NOT worker) ----
-		const frontendCompact = resolveCompactedFile(analyzeResult, "frontend");
-		expect(frontendCompact).toBeDefined();
-
-		const lensResult = await runLensFromFork({
-			lens: "review",
-			situation: "diff",
-			analyzeSessionFile: frontendCompact!,
-			input: "--- a/Component.tsx\n+++ b/Component.tsx\n+// new code",
-			cwd: root,
-			spawnFn: async (args): Promise<SpawnResult> => {
-				// Verify the session file contains context but NO worker state
-				const sessIdx = args.indexOf("--session");
-				const sessFile = args[sessIdx + 1];
-				const content = readFileSync(sessFile, "utf8");
-
-				// Has analyze context
-				expect(content).toContain("maestro.analyze.context");
-				// Has lens persona
-				expect(content).toContain("maestro.lens.persona");
-				expect(content).toContain("ROLE OVERRIDE");
-				expect(content).toContain("Component.tsx");
-				// Does NOT have worker execution state
-				expect(content).not.toContain("maestro.modes.state");
-				expect(content).not.toContain("maestro-execution-seed");
-
-				return {
-					stdout: JSON.stringify({
-						message: {
-							role: "assistant",
-							content: "[]",
-							usage: { input: 800, output: 50 },
-						},
-					}),
-					exitCode: 0,
-				};
-			},
-		});
-
-		expect(lensResult.findings).toEqual([]);
-		expect(lensResult.error).toBeUndefined();
-
-		// ---- Phase 5: Verify refresh logic ----
+		// ---- Phase 4: Verify refresh logic ----
 		expect(shouldRefreshAnalyze(plan, analyzeResult)).toBe(false);
 
 		// Add new deliverable → should trigger refresh
@@ -294,36 +241,23 @@ describe("full checkpoint lifecycle (integration)", () => {
 			createdAt: Date.now() - 6 * 60 * 1000,
 		};
 		expect(shouldRefreshAnalyze(updatedPlan, staleResult)).toBe(true);
-
-		// ---- Phase 6: Fallback path ----
-		const fallbackResult = resolveCompactedFile(undefined, "nonexistent");
-		expect(fallbackResult).toBeUndefined();
 	});
 
 	it("MAESTRO_ENV reads all env vars from centralized config", () => {
 		const original = {
 			MAESTRO_ANALYZE_MODEL: process.env.MAESTRO_ANALYZE_MODEL,
 			MAESTRO_AGENT_MODEL: process.env.MAESTRO_AGENT_MODEL,
-			MAESTRO_LENS_MODEL: process.env.MAESTRO_LENS_MODEL,
 			MAESTRO_CLASSIFIER_MODEL: process.env.MAESTRO_CLASSIFIER_MODEL,
-			MAESTRO_MAX_REVIEW_CYCLES: process.env.MAESTRO_MAX_REVIEW_CYCLES,
-			MAESTRO_LENS_DISABLED: process.env.MAESTRO_LENS_DISABLED,
 		};
 
 		try {
 			process.env.MAESTRO_ANALYZE_MODEL = "analyze-model";
 			process.env.MAESTRO_AGENT_MODEL = "agent-model";
-			process.env.MAESTRO_LENS_MODEL = "lens-model";
 			process.env.MAESTRO_CLASSIFIER_MODEL = "classifier-model";
-			process.env.MAESTRO_MAX_REVIEW_CYCLES = "5";
-			process.env.MAESTRO_LENS_DISABLED = "1";
 
 			expect(MAESTRO_ENV.analyzeModel).toBe("analyze-model");
 			expect(MAESTRO_ENV.agentModel).toBe("agent-model");
-			expect(MAESTRO_ENV.lensModel).toBe("lens-model");
 			expect(MAESTRO_ENV.classifierModel).toBe("classifier-model");
-			expect(MAESTRO_ENV.maxReviewCycles).toBe(5);
-			expect(MAESTRO_ENV.lensDisabled).toBe(true);
 		} finally {
 			for (const [key, val] of Object.entries(original)) {
 				if (val === undefined) delete process.env[key];
@@ -335,18 +269,12 @@ describe("full checkpoint lifecycle (integration)", () => {
 	it("MAESTRO_ENV returns defaults when env vars unset", () => {
 		const original = {
 			MAESTRO_ANALYZE_MODEL: process.env.MAESTRO_ANALYZE_MODEL,
-			MAESTRO_MAX_REVIEW_CYCLES: process.env.MAESTRO_MAX_REVIEW_CYCLES,
-			MAESTRO_LENS_DISABLED: process.env.MAESTRO_LENS_DISABLED,
 		};
 
 		try {
 			delete process.env.MAESTRO_ANALYZE_MODEL;
-			delete process.env.MAESTRO_MAX_REVIEW_CYCLES;
-			delete process.env.MAESTRO_LENS_DISABLED;
 
 			expect(MAESTRO_ENV.analyzeModel).toBeUndefined();
-			expect(MAESTRO_ENV.maxReviewCycles).toBe(2);
-			expect(MAESTRO_ENV.lensDisabled).toBe(false);
 		} finally {
 			for (const [key, val] of Object.entries(original)) {
 				if (val === undefined) delete process.env[key];

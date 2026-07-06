@@ -13,6 +13,7 @@ import {
 	DELIVERABLE_STATUSES,
 	type DeliverableLifecycle,
 	type DeliverableStatus,
+	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
@@ -21,8 +22,22 @@ export {
 	DELIVERABLE_STATUSES,
 	type DeliverableLifecycle,
 	type DeliverableStatus,
+	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
+};
+
+// ─── Agent metadata ──────────────────────────────────────────────────────────
+
+export type AgentRole = "author" | "review" | "refine" | "verify";
+export type AgentMode = "full" | "read-only";
+
+/** Default AgentMode for each role. */
+export const ROLE_MODE_DEFAULTS: Record<AgentRole, AgentMode> = {
+	author: "full",
+	review: "read-only",
+	refine: "full",
+	verify: "read-only",
 };
 
 /** Statuses that require a worktree (active editing). */
@@ -81,6 +96,14 @@ export interface Deliverable {
 	prNumber?: number;
 	/** Distilled outcome, written at ship time; carried into later seeds. */
 	summary?: string;
+	/** Agent role when this deliverable represents a sub-process. */
+	agentRole?: AgentRole;
+	/** Agent execution mode. Defaults via ROLE_MODE_DEFAULTS if agentRole set. */
+	agentMode?: AgentMode;
+	/** Which model slot to use ("default" or "alternate"). */
+	modelSlot?: "default" | "alternate";
+	/** Thinking effort override for this agent. */
+	effort?: ThinkingLevel;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -630,4 +653,46 @@ export function isActiveOrShipped(d: Deliverable): boolean {
 		d.status === "ready-to-ship" ||
 		d.status === "shipped"
 	);
+}
+
+// ─── Deterministic child ID convention ───────────────────────────────────────
+
+const CHILD_SEPARATOR = "--";
+
+/**
+ * Generate a deterministic child ID: `parentId--role` or `parentId--role-slot`.
+ */
+export function generateChildId(
+	parentId: string,
+	role: AgentRole,
+	slot?: "default" | "alternate",
+): string {
+	const suffix = slot ? `${role}-${slot}` : role;
+	return `${parentId}${CHILD_SEPARATOR}${suffix}`;
+}
+
+/**
+ * Extract parent deliverable ID from a child ID.
+ * Returns undefined if id has no child separator.
+ */
+export function getParentId(childId: string): string | undefined {
+	const idx = childId.indexOf(CHILD_SEPARATOR);
+	return idx > 0 ? childId.slice(0, idx) : undefined;
+}
+
+/**
+ * Check if a deliverable ID is a nested child (contains `--`).
+ */
+export function isChildId(id: string): boolean {
+	return id.includes(CHILD_SEPARATOR);
+}
+
+/**
+ * Resolve the effective AgentMode for a deliverable.
+ * Priority: explicit agentMode > role default > "full".
+ */
+export function resolveAgentMode(d: Deliverable): AgentMode {
+	if (d.agentMode) return d.agentMode;
+	if (d.agentRole) return ROLE_MODE_DEFAULTS[d.agentRole];
+	return "full";
 }

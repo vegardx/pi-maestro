@@ -44,23 +44,11 @@ export const MAESTRO_ENV = {
 			undefined
 		);
 	},
-	get lensModel(): string | undefined {
-		return process.env.MAESTRO_LENS_MODEL || undefined;
-	},
-	get lensThinking(): string | undefined {
-		return process.env.MAESTRO_LENS_THINKING || undefined;
-	},
 	get classifierModel(): string | undefined {
 		return process.env.MAESTRO_CLASSIFIER_MODEL || undefined;
 	},
 	get classifierThinking(): string | undefined {
 		return process.env.MAESTRO_CLASSIFIER_THINKING || undefined;
-	},
-	get maxReviewCycles(): number {
-		return Number(process.env.MAESTRO_MAX_REVIEW_CYCLES) || 2;
-	},
-	get lensDisabled(): boolean {
-		return process.env.MAESTRO_LENS_DISABLED === "1";
 	},
 } as const;
 
@@ -138,11 +126,6 @@ function envForRole(role: ModesRole): {
 				model: MAESTRO_ENV.analyzeModel,
 				effort: asThinking(MAESTRO_ENV.analyzeThinking),
 			};
-		case "lens":
-			return {
-				model: MAESTRO_ENV.lensModel,
-				effort: asThinking(MAESTRO_ENV.lensThinking),
-			};
 		case "classifier":
 			return {
 				model: MAESTRO_ENV.classifierModel,
@@ -205,4 +188,35 @@ export async function getModeRoleModel(
 		explicit: explicit.model || explicit.effort ? explicit : undefined,
 		env: env.model || env.effort ? env : undefined,
 	});
+}
+
+// ---- Review policy --------------------------------------------------------
+
+export interface ReviewPolicyRule {
+	/** Slot(s) to use for review agents. */
+	reviews: ("default" | "alternate")[];
+	/** Whether to spawn a refine agent after reviews. */
+	refine?: boolean;
+	/** Whether to spawn a verify agent. */
+	verify?: boolean;
+	/** Effort level for review agents in this category. */
+	effort?: ThinkingLevel;
+}
+
+export interface ReviewPolicy {
+	[category: string]: ReviewPolicyRule;
+}
+
+/**
+ * Read the review policy from extensionConfig.modes.reviewPolicy.
+ * Returns empty object if not configured (meaning: let the LLM decide).
+ */
+export function readReviewPolicy(cwd: string, agentDir?: string): ReviewPolicy {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const modes = merged?.extensionConfig?.[NAME] as
+		| Record<string, unknown>
+		| undefined;
+	if (!modes || typeof modes.reviewPolicy !== "object" || !modes.reviewPolicy)
+		return {};
+	return modes.reviewPolicy as ReviewPolicy;
 }

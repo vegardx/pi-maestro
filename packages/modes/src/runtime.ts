@@ -798,7 +798,7 @@ export function createModesRuntime(
 		},
 	});
 
-	pi.registerCommand("agents", {
+	pi.registerCommand("watch", {
 		description:
 			"Toggle stacked tmux panes showing all active agents on the right side.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {

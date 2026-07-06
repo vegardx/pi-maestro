@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	CollapsibleDashboardComponent,
 	type DashboardRenderState,
+	layoutTree,
 	type Row,
 	renderDashboard,
 } from "../packages/modes/src/agents-dashboard.js";
@@ -335,5 +336,94 @@ describe("CollapsibleDashboardComponent", () => {
 		comp.handleInput("\u001b");
 		expect(comp.render(70).length).toBe(2);
 		expect(handle.focused).toBe(false);
+	});
+});
+
+describe("layoutTree", () => {
+	const baseState = {
+		status: "working" as const,
+		agentName: "test",
+		tokens,
+		deliverableId: "x",
+		worktreePath: "/tmp",
+		sessionFile: "/tmp/x.json",
+		startedAt: Date.now(),
+		shutdownSent: false,
+		stuckSteerSent: false,
+		idleCount: 0,
+	};
+
+	it("groups children under their parent", () => {
+		const rows: Row[] = [
+			{
+				agentId: "auth--author",
+				state: { ...baseState, agentName: "keen-fox" },
+				title: "keen-fox",
+				role: "author",
+				parentGroupId: "auth",
+				done: 3,
+				total: 5,
+				tasks: [],
+				elapsedMs: 120_000,
+			},
+			{
+				agentId: "auth--review-default",
+				state: { ...baseState, agentName: "bold-elm" },
+				title: "bold-elm",
+				role: "review",
+				parentGroupId: "auth",
+				done: 1,
+				total: 1,
+				tasks: [],
+				elapsedMs: 45_000,
+			},
+		];
+		const tree = layoutTree(rows);
+		expect(tree).toHaveLength(2);
+		expect(tree[0].groupTitle).toBe("auth");
+		expect(tree[0].prefix).toBe(" ├─ ");
+		expect(tree[1].groupTitle).toBeUndefined();
+		expect(tree[1].prefix).toBe(" └─ ");
+	});
+
+	it("renders top-level agents without tree prefix", () => {
+		const rows: Row[] = [
+			{
+				agentId: "write-docs",
+				state: { ...baseState, agentName: "cool-fern" },
+				title: "cool-fern",
+				role: "author",
+				done: 2,
+				total: 3,
+				tasks: [],
+				elapsedMs: 90_000,
+			},
+		];
+		const tree = layoutTree(rows);
+		expect(tree).toHaveLength(1);
+		expect(tree[0].prefix).toBe(" ");
+		expect(tree[0].groupTitle).toBeUndefined();
+	});
+
+	it("role column appears in rendered output", () => {
+		const rows: Row[] = [
+			{
+				agentId: "auth--author",
+				state: { ...baseState, agentName: "keen-fox" },
+				title: "keen-fox",
+				role: "author",
+				parentGroupId: "auth",
+				done: 3,
+				total: 5,
+				tasks: [],
+				elapsedMs: 120_000,
+			},
+		];
+		const state: DashboardRenderState = { activeTab: "all", selected: 0 };
+		const output = renderDashboard(rows, state, undefined, 100);
+		const joined = output.join("\n");
+		expect(joined).toContain("author");
+		expect(joined).toContain("keen-fox");
+		expect(joined).toContain("auth");
 	});
 });

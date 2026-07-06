@@ -1,6 +1,6 @@
-// Memorable adjective-noun agent names, deterministically derived from the
-// deliverable ID so the same deliverable always gets the same name (unless it
-// collides with an already-taken name in the session).
+// Random agent names: adjective-noun pairs, unique per session, non-deterministic.
+
+import { randomInt } from "node:crypto";
 
 const adjectives = [
 	"swift",
@@ -8,9 +8,7 @@ const adjectives = [
 	"calm",
 	"bright",
 	"eager",
-	"flying",
 	"gentle",
-	"happy",
 	"keen",
 	"lively",
 	"neat",
@@ -27,6 +25,32 @@ const adjectives = [
 	"agile",
 	"prime",
 	"lucid",
+	"fierce",
+	"subtle",
+	"sparse",
+	"terse",
+	"brisk",
+	"quiet",
+	"slick",
+	"snug",
+	"stark",
+	"dry",
+	"raw",
+	"deep",
+	"lean",
+	"dense",
+	"flat",
+	"cool",
+	"fresh",
+	"glad",
+	"pale",
+	"soft",
+	"thin",
+	"wide",
+	"dark",
+	"lite",
+	"pure",
+	"rare",
 ];
 
 const nouns = [
@@ -54,28 +78,66 @@ const nouns = [
 	"ridge",
 	"brook",
 	"ember",
+	"aspen",
+	"birch",
+	"cliff",
+	"delta",
+	"fern",
+	"grove",
+	"inlet",
+	"jade",
+	"moss",
+	"oak",
+	"peak",
+	"quail",
+	"reef",
+	"sage",
+	"thorn",
+	"vale",
+	"wren",
+	"yew",
+	"alder",
+	"pike",
+	"lark",
+	"mars",
+	"nova",
+	"orbit",
 ];
 
-function hashCode(s: string): number {
-	let h = 0;
-	for (let i = 0; i < s.length; i++) {
-		h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
-	}
-	return h >>> 0;
-}
+// 48 adjectives × 48 nouns = 2304 unique combinations
 
+/**
+ * Generate a random agent name that is unique within the session.
+ * Uses cryptographic randomness — not deterministic from deliverable ID.
+ */
 export function agentName(
-	deliverableId: string,
+	_deliverableId: string,
 	taken: ReadonlySet<string>,
 ): string {
-	const h = hashCode(deliverableId);
-	for (let i = 0; i < 200; i++) {
-		const adj = adjectives[(h + i) % adjectives.length];
-		const noun = nouns[((h + i * 7) >>> 0) % nouns.length];
+	// Try random picks first (fast path for small sessions)
+	for (let i = 0; i < 100; i++) {
+		const adj = adjectives[randomInt(adjectives.length)];
+		const noun = nouns[randomInt(nouns.length)];
 		const name = `${adj}-${noun}`;
 		if (!taken.has(name)) return name;
 	}
-	return `agent-${deliverableId.slice(0, 8)}`;
+
+	// Exhaustive shuffle fallback (very large sessions)
+	const all = shuffle(adjectives.flatMap((a) => nouns.map((n) => `${a}-${n}`)));
+	for (const name of all) {
+		if (!taken.has(name)) return name;
+	}
+
+	// Absolute fallback (>2304 agents — never in practice)
+	return `agent-${randomInt(100000)}`;
+}
+
+function shuffle<T>(arr: T[]): T[] {
+	for (let i = arr.length - 1; i > 0; i--) {
+		const j = randomInt(i + 1);
+		[arr[i], arr[j]] = [arr[j], arr[i]];
+	}
+	return arr;
 }
 
 /** Strip common verb prefixes for a short deliverable display name. */

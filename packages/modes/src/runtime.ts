@@ -779,20 +779,35 @@ export function createModesRuntime(
 	});
 
 	pi.registerCommand("agents", {
-		description: "Interactive dashboard of active agents.",
+		description: "Show active groups and agent status.",
 		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
-			if (!tmuxFanout || !engine) {
-				cmdCtx.ui.notify("No agents active.", "info");
+			if (!engine) {
+				cmdCtx.ui.notify("No active plan.", "info");
 				return;
 			}
-			const queue = tmuxFanout.questionQueue;
-			await runAgentsDashboard(
-				cmdCtx as any,
-				tmuxFanout,
-				engine,
-				usageLedger,
-				queue,
-			);
+			const plan = engine.get();
+			if (plan.groups.length === 0) {
+				cmdCtx.ui.notify("No groups in plan.", "info");
+				return;
+			}
+			const lines: string[] = [`Plan: ${plan.title} (${plan.slug})`, ""];
+			for (const g of plan.groups) {
+				const icon = g.status === "shipped" ? "\uD83D\uDE80"
+					: g.status === "active" ? "\u25CF"
+					: g.status === "complete" ? "\u2713"
+					: "\u25CB";
+				const deps = g.dependsOn?.length ? ` [after: ${g.dependsOn.join(", ")}]` : "";
+				lines.push(`${icon} ${g.title} (${g.status})${deps}`);
+				const tasks = g.tasks.filter((t) => t.kind === "task");
+				const done = tasks.filter((t) => t.done).length;
+				if (tasks.length > 0) {
+					lines.push(`  Tasks: ${done}/${tasks.length}`);
+				}
+				for (const a of g.agents) {
+					lines.push(`  \u2514\u2500 ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})`);
+				}
+			}
+			cmdCtx.ui.notify(lines.join("\n"), "info");
 		},
 	});
 

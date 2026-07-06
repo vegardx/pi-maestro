@@ -15,7 +15,12 @@ import type {
 	TmuxFanout,
 } from "./execution-tmux.js";
 import type { QuestionQueue } from "./question-queue.js";
-import { findDeliverable } from "./schema.js";
+import {
+	type AgentRole,
+	findDeliverable,
+	getParentId,
+	isChildId,
+} from "./schema.js";
 
 export type DashboardAction =
 	| { kind: "watch"; agentId: string }
@@ -27,6 +32,8 @@ export interface Row {
 	readonly agentId: string;
 	readonly state: TmuxAgentState;
 	readonly title: string;
+	readonly role?: AgentRole;
+	readonly parentGroupId?: string;
 	readonly done: number;
 	readonly total: number;
 	readonly tasks: readonly { title: string; done: boolean }[];
@@ -178,10 +185,13 @@ export function buildRows(
 			}));
 		const pendingEntry = queue.pendingForAgent(agentId);
 		const pending = pendingEntry?.questions[0]?.question;
+		const parentGroupId = isChildId(agentId) ? getParentId(agentId) : undefined;
 		rows.push({
 			agentId,
 			state,
-			title: d?.title ?? state.agentName,
+			title: state.agentName,
+			role: d?.agentRole,
+			parentGroupId,
 			done: tasks.filter((t) => t.done).length,
 			total: tasks.length,
 			tasks,
@@ -190,6 +200,61 @@ export function buildRows(
 		});
 	}
 	return rows;
+}
+
+// ─── Tree layout ────────────────────────────────────────────────────────────
+
+export interface TreeRow {
+	readonly row: Row;
+	readonly prefix: string; // tree drawing chars (e.g. " ├─ ", " └─ ")
+	readonly groupTitle?: string; // set on the FIRST child of a group
+}
+
+/**
+ * Organize flat rows into a tree based on parentGroupId.
+ * Groups get a header row (groupTitle), children get tree prefixes.
+ * Rows without a parent are top-level (leaf deliverables).
+ */
+export function layoutTree(rows: readonly Row[]): TreeRow[] {
+	// Group children by parent
+	const groups = new Map<string, Row[]>();
+	const topLevel: Row[] = [];
+
+	for (const row of rows) {
+		if (row.parentGroupId) {
+			const list = groups.get(row.parentGroupId) ?? [];
+			list.push(row);
+			groups.set(row.parentGroupId, list);
+		} else {
+			topLevel.push(row);
+		}
+	}
+
+	const result: TreeRow[] = [];
+
+	// Collect all unique group IDs (parents that have children)
+	const groupIds = [...groups.keys()];
+
+	// Render groups first (they have children)
+	for (const groupId of groupIds) {
+		const children = groups.get(groupId)!;
+		for (let i = 0; i < children.length; i++) {
+			const isLast = i === children.length - 1;
+			const prefix = isLast ? " └─ " : " ├─ ";
+			result.push({
+				row: children[i],
+				prefix,
+				groupTitle: i === 0 ? groupId : undefined,
+			});
+		}
+	}
+
+	// Then top-level leaf agents (no parent group)
+	for (const row of topLevel) {
+		result.push({ row, prefix: " " });
+	}
+
+	return result;
 }
 
 // ─── Tab bar rendering ──────────────────────────────────────────────────────
@@ -282,15 +347,27 @@ export function renderDashboard(
 	const COL_STATUS = 9; // "awaiting" is longest (8) + pad
 	const COL_TOKENS = 22; // "↑12.0k ↓3.2k  CH:83%"
 	const COL_ELAPSED = 5; // "59m" / "1.2h"
-	const PREFIX_W = 4; // "▸ ◐ " or "  ◐ "
+	const COL_ROLE = 8; // "author" is longest (6) + pad
 	const innerWidth = width - 4; // inside box lines
 	const FIXED_COLS =
-		PREFIX_W + COL_PROGRESS + COL_STATUS + COL_TOKENS + COL_ELAPSED;
-	const COL_TITLE = Math.max(innerWidth - FIXED_COLS - 4, 10); // 4 = separating spaces
+		COL_ROLE + COL_PROGRESS + COL_STATUS + COL_TOKENS + COL_ELAPSED;
+	const COL_TITLE = Math.max(innerWidth - FIXED_COLS - 8, 10); // 8 = prefix + separating spaces
 
-	for (let i = 0; i < filtered.length; i++) {
-		const row = filtered[i];
+	const tree = layoutTree(filtered);
+
+	for (let i = 0; i < tree.length; i++) {
+		const { row, prefix, groupTitle } = tree[i];
 		const sel = i === selected;
+
+		// Group header line
+		if (groupTitle) {
+			if (i > 0) lines.push(boxLine("", width));
+			const rule = "─".repeat(Math.max(0, innerWidth - groupTitle.length - 2));
+			lines.push(
+				boxLine(` ${palette.dim(groupTitle)} ${palette.dim(rule)}`, width),
+			);
+		}
+
 		const glyph = STATUS_GLYPH[row.state.status] ?? "·";
 		const styledGlyph = glyphStyle(palette, row.state.status)(glyph);
 		const progress = padRight(`${row.done}/${row.total}`, COL_PROGRESS);
@@ -298,10 +375,12 @@ export function renderDashboard(
 		const styledStatus = statusLabelStyle(palette, row.state.status)(status);
 		const tok = padRight(tokenSummary(row.state.tokens), COL_TOKENS);
 		const elapsed = padRight(formatElapsed(row.elapsedMs), COL_ELAPSED);
-		const title = padRight(truncate(row.title, COL_TITLE), COL_TITLE);
+		const role = padRight(row.role ?? "—", COL_ROLE);
+		const nameW = Math.max(COL_TITLE - prefix.length, 4);
+		const nameStr = padRight(truncate(row.title, nameW), nameW);
 
 		if (sel) {
-			const line = `▸ ${glyph} ${title} ${progress} ${status} ${tok} ${elapsed}`;
+			const line = `${prefix}▸${glyph} ${nameStr} ${role} ${progress} ${status} ${tok} ${elapsed}`;
 			lines.push(boxLine(palette.accent(line), width));
 
 			// Expanded task list
@@ -309,7 +388,7 @@ export function renderDashboard(
 				const mark = t.done ? palette.success("✓") : "·";
 				lines.push(
 					boxLine(
-						`  ${palette.accent("┊")}  ${mark} ${palette.dim(t.title)}`,
+						`    ${palette.accent("┊")}  ${mark} ${palette.dim(t.title)}`,
 						width,
 					),
 				);
@@ -317,13 +396,13 @@ export function renderDashboard(
 			if (row.pending) {
 				lines.push(
 					boxLine(
-						`  ${palette.accent("┊")}  ${palette.warning("?")} ${palette.dim(row.pending)}`,
+						`    ${palette.accent("┊")}  ${palette.warning("?")} ${palette.dim(row.pending)}`,
 						width,
 					),
 				);
 			}
 		} else {
-			const line = `  ${styledGlyph} ${title} ${progress} ${styledStatus} ${palette.dim(tok)} ${palette.dim(elapsed)}`;
+			const line = `${prefix} ${styledGlyph} ${nameStr} ${palette.dim(role)} ${progress} ${styledStatus} ${palette.dim(tok)} ${palette.dim(elapsed)}`;
 			lines.push(boxLine(line, width));
 		}
 	}
@@ -387,9 +466,9 @@ class DashboardComponent implements Component, Focusable {
 	updateRows(rows: readonly Row[]): void {
 		this.rows = rows;
 		// Clamp selection
-		const filtered = this.filteredRows();
-		if (this.selected >= filtered.length) {
-			this.selected = Math.max(0, filtered.length - 1);
+		const tree = this.treeRows();
+		if (this.selected >= tree.length) {
+			this.selected = Math.max(0, tree.length - 1);
 		}
 	}
 
@@ -400,6 +479,15 @@ class DashboardComponent implements Component, Focusable {
 		return this.rows.filter(
 			(r) => statusToTab(r.state.status) === this.activeTab,
 		);
+	}
+
+	private treeRows(): readonly TreeRow[] {
+		return layoutTree(this.filteredRows());
+	}
+
+	private selectedRow(): Row | undefined {
+		const tree = this.treeRows();
+		return tree[this.selected]?.row;
 	}
 
 	render(width: number): string[] {
@@ -413,10 +501,10 @@ class DashboardComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		const filtered = this.filteredRows();
+		const tree = this.treeRows();
 
 		if (
-			filtered.length === 0 &&
+			tree.length === 0 &&
 			data !== "\u001b[C" &&
 			data !== "\u001b[D" &&
 			data !== "\u001b"
@@ -430,7 +518,7 @@ class DashboardComponent implements Component, Focusable {
 				this.selected = Math.max(0, this.selected - 1);
 				break;
 			case "\u001b[B": // Down
-				this.selected = Math.min(filtered.length - 1, this.selected + 1);
+				this.selected = Math.min(tree.length - 1, this.selected + 1);
 				break;
 			case "\u001b[C": {
 				// Right — next filter tab
@@ -447,22 +535,22 @@ class DashboardComponent implements Component, Focusable {
 				break;
 			}
 			case "w": {
-				const cur = filtered[this.selected];
+				const cur = this.selectedRow();
 				if (cur) this.done({ kind: "watch", agentId: cur.agentId });
 				break;
 			}
 			case "a": {
-				const cur = filtered[this.selected];
+				const cur = this.selectedRow();
 				if (cur) this.done({ kind: "attach", agentId: cur.agentId });
 				break;
 			}
 			case "s": {
-				const cur = filtered[this.selected];
+				const cur = this.selectedRow();
 				if (cur) this.done({ kind: "steer", agentId: cur.agentId });
 				break;
 			}
 			case "d": {
-				const cur = filtered[this.selected];
+				const cur = this.selectedRow();
 				if (cur) this.done({ kind: "answer", agentId: cur.agentId });
 				break;
 			}

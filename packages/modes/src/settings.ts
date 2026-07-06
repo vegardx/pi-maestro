@@ -31,18 +31,10 @@ export const MAESTRO_ENV = {
 		return process.env.MAESTRO_ANALYZE_THINKING || undefined;
 	},
 	get agentModel(): string | undefined {
-		return (
-			process.env.MAESTRO_AGENT_MODEL ||
-			process.env.MAESTRO_WORKER_MODEL ||
-			undefined
-		);
+		return process.env.MAESTRO_AGENT_MODEL || undefined;
 	},
 	get agentThinking(): string | undefined {
-		return (
-			process.env.MAESTRO_AGENT_THINKING ||
-			process.env.MAESTRO_WORKER_THINKING ||
-			undefined
-		);
+		return process.env.MAESTRO_AGENT_THINKING || undefined;
 	},
 	get classifierModel(): string | undefined {
 		return process.env.MAESTRO_CLASSIFIER_MODEL || undefined;

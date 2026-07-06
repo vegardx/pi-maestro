@@ -13,7 +13,7 @@ export type SettingType =
 
 /** A single configurable setting declared by an extension. */
 export interface SettingDeclaration {
-	/** Dot-path key within the extension (e.g. "models.worker.effort") */
+	/** Dot-path key within the extension (e.g. "models.agent.effort") */
 	key: string;
 	/** Human-readable label (e.g. "Worker tier") */
 	label: string;

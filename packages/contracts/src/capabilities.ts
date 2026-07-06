@@ -44,7 +44,7 @@ export interface AskCapabilityV1 {
 /**
  * A remote sink for questions. When present, the ask engine routes blocking
  * `ask()` calls here instead of rendering a local dialog — this is how an
- * agent worker's `ask` tool reaches the orchestrator over RPC. Registered by
+ * agent's `ask` tool reaches the maestro over RPC. Registered by
  * modes only in agent mode; absent otherwise (engine falls back to local UI).
  */
 export interface AskTransportV1 {
@@ -52,7 +52,7 @@ export interface AskTransportV1 {
 }
 
 /**
- * Central usage ledger. Every source (orchestrator, each agent, each lens)
+ * Central usage ledger. Every source (maestro, each agent)
  * records its cumulative snapshot; the ledger aggregates by source so cost
  * and tokens are real and attributable. Registered by modes.
  */

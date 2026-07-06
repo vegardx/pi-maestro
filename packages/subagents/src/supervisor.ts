@@ -1,6 +1,6 @@
 // Supervisor protocol. A child that hits a decision it can't make alone calls
 // the contact_supervisor tool, which publishes a needDecision message on the
-// run-bus and returns immediately. The parent (orchestrator) projects
+// run-bus and returns immediately. The parent (maestro) projects
 // needDecision: it asks the human (or relays the modes ship gate), then steers
 // the child with the answer — which arrives in the child as guidance. The flow
 // is asynchronous and cross-process-safe: no blocking RPC round-trip.
@@ -122,7 +122,7 @@ export function attachSupervisor(deps: SupervisorProjectorDeps): () => void {
 			.decide(runId, request)
 			.then((decision) => deps.steer(runId, decision.answer))
 			.catch(() => {
-				// A failed decision leaves the child waiting; the orchestrator's
+				// A failed decision leaves the child waiting; the maestro's
 				// stop/timeout path handles a stuck run.
 			});
 	});

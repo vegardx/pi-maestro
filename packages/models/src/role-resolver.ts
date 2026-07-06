@@ -33,7 +33,7 @@ import { parseModelSpec } from "./resolver.js";
 export interface RoleResolveOptions {
 	/** Extension short name (e.g. "modes", "smart-compact"). */
 	extension: string;
-	/** Role within the extension (e.g. "worker", "analyze"). */
+	/** Role within the extension (e.g. "agent", "analyze"). */
 	role: string;
 	/** Highest-priority override — typically from a CLI arg. */
 	explicit?: { model?: string; effort?: ThinkingLevel };

@@ -1,6 +1,6 @@
 // Session forking primitives: parse JSONL session files, extract linear paths,
 // create forked sessions, and append entries. Used by the analyze phase and
-// lens/worker checkpoint forking.
+// Agent checkpoint forking.
 
 import { randomUUID } from "node:crypto";
 import {

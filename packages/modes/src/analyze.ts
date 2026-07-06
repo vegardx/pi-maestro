@@ -1,5 +1,5 @@
-// Analyze phase: explore the codebase before workers spawn, creating
-// compacted checkpoints that workers and lenses fork from. Fails hard
+// Analyze phase: explore the codebase before agents spawn, creating
+// compacted checkpoints that agents fork from. Fails hard
 // if exploration fails — no silent fallback.
 
 import { randomUUID } from "node:crypto";

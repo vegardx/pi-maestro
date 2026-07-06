@@ -4,23 +4,23 @@
 
 This plan adds three interconnected features to pi-maestro's tmux-based agent orchestration:
 
-1. **`ask` tool** — lets agents ask the orchestrator (user) structured questions with options, recommendations, conditional follow-ups, and free-text fallbacks. Questions queue on the orchestrator and the worker blocks until answered.
+1. **`ask` tool** — lets agents ask the maestro (user) structured questions with options, recommendations, conditional follow-ups, and free-text fallbacks. Questions queue on the maestro and the agent blocks until answered.
 
 2. **Review lenses** (`/review`, `/refine`, `/validate`) — reusable focused analysis that agents run on their own work before committing. Each lens is a `pi -p` sub-invocation with a specific system prompt. Available as commands for interactive use too.
 
 3. **`/agents` dashboard** — a `ctx.ui.custom()` overlay replacing the current notify-based list. Shows all agents with status, tasks, tokens, and pending questions. Supports Watch/Attach/Steer/Answer actions inline.
 
-Together these create a **multi-phase worker lifecycle**: implement → review (lenses) → evaluate (ask for decisions) → apply → ship. The orchestrator controls the lifecycle, workers ask when uncertain, and the user answers at their own pace.
+Together these create a **multi-phase agent lifecycle**: implement → review (lenses) → evaluate (ask for decisions) → apply → ship. The maestro controls the lifecycle, agents ask when uncertain, and the user answers at their own pace.
 
 ---
 
 ## Context: Current State
 
-The tmux fanout orchestrator spawns agents in tmux sessions. Agents connect via Unix socket RPC. The orchestrator tracks status (spawning/working/idle/done/failed) and manages the lifecycle:
+The tmux fanout maestro spawns agents in tmux sessions. Agents connect via Unix socket RPC. The maestro tracks status (spawning/working/idle/done/failed) and manages the lifecycle:
 
-- Agents toggle tasks via `task(toggle)` → forwarded over RPC → orchestrator updates plan
-- When all gating tasks are done, orchestrator sends `{type: "shutdown"}` → agent exits
-- If agent goes idle without toggling tasks, orchestrator steers it to self-assess
+- Agents toggle tasks via `task(toggle)` → forwarded over RPC → maestro updates plan
+- When all gating tasks are done, maestro sends `{type: "shutdown"}` → agent exits
+- If agent goes idle without toggling tasks, maestro steers it to self-assess
 - `/view` opens a split pane (read-only or interactive)
 - `/steer` sends guidance via RPC (or respawns dead agents)
 
@@ -39,7 +39,7 @@ The tmux fanout orchestrator spawns agents in tmux sessions. Agents connect via 
 Add to `packages/rpc/src/protocol.ts`:
 
 ```typescript
-// Agent → Orchestrator
+// Agent → Maestro
 interface QuestionsMessage {
   type: "questions";
   questions: Array<{
@@ -61,7 +61,7 @@ interface QuestionsMessage {
   }>;
 }
 
-// Orchestrator → Agent
+// Maestro → Agent
 interface AnswersMessage {
   type: "answers";
   answers: Array<{
@@ -99,7 +99,7 @@ ask({
 ```typescript
 async execute(_id, params, _signal, _onUpdate, ctx) {
   if (agentBridge) {
-    // RPC path: send to orchestrator, await answer
+    // RPC path: send to maestro, await answer
     const answers = await agentBridge.ask(params.questions);
     return formatResult(answers);
   }
@@ -137,7 +137,7 @@ case "answers":
   break;
 ```
 
-### 1.4 Orchestrator: Question Queue
+### 1.4 Maestro: Question Queue
 
 Add `packages/modes/src/question-queue.ts`:
 
@@ -247,7 +247,7 @@ Submit tab shows all answers for review before sending.
 
 ### 1.8 Follow-up Clarification Loop
 
-No protocol change needed. The worker preamble instructs:
+No protocol change needed. The agent preamble instructs:
 
 > If a user's custom answer or note is ambiguous or raises new questions, call `ask` again with a follow-up referencing their response. Don't guess — clarify until you have a concrete decision.
 
@@ -374,14 +374,14 @@ When running on a plan (not code), the lens adapts:
 
 ---
 
-## Part 3: Worker Lifecycle Update
+## Part 3: Agent Lifecycle Update
 
-### 3.1 Five-Phase Worker Preamble
+### 3.1 Five-Phase Agent Preamble
 
-Update `buildAgentWorkerPreamble()`:
+Update `buildAgentAgentPreamble()`:
 
 ```
-You are an AGENT WORKER managed by a maestro orchestrator.
+You are an AGENT WORKER managed by a maestro maestro.
 
 ## Phase 1: IMPLEMENT
 Implement the deliverable. Edit code, write/fix tests, verify they pass.
@@ -399,7 +399,7 @@ Collect all findings.
 Assess each finding. For each:
 - Agree → apply the change
 - Disagree → document why you're ignoring it
-- Uncertain → ask the orchestrator for a decision
+- Uncertain → ask the maestro for a decision
 
 When uncertain, use the ask tool:
   ask({questions: [{
@@ -426,12 +426,12 @@ After all findings are resolved:
 ## Phase 5: VERIFY
 Self-assess: re-read your original requirements (the plan seed).
 Does the PR address everything asked? Any gaps?
-- Yes → you're done. The orchestrator detects completion.
+- Yes → you're done. The maestro detects completion.
 - No → go back and fix, then re-verify.
 
 ## Asking for decisions
 Always provide 2-4 options with trade-offs and your recommendation.
-The orchestrator will present these to the user as a dialog.
+The maestro will present these to the user as a dialog.
 Batch related questions into one ask call (max 4 questions).
 Use showIf for conditional follow-ups.
 ```
@@ -447,7 +447,7 @@ Each deliverable should have tasks that reflect the full lifecycle:
 - Commit, push, PR            # toggled after shipping
 ```
 
-The completion gate fires when ALL are toggled → orchestrator sends shutdown.
+The completion gate fires when ALL are toggled → maestro sends shutdown.
 
 ---
 
@@ -587,8 +587,8 @@ export function detectScope(args: string, cwd: string, mode: string, engine?: Pl
 - `/review`, `/refine`, `/validate` commands
 - Plan-mode variants of each lens prompt
 
-### Deliverable 5: Worker Lifecycle Update
-- Update `buildAgentWorkerPreamble()` with 5-phase instructions
+### Deliverable 5: Agent Lifecycle Update
+- Update `buildAgentAgentPreamble()` with 5-phase instructions
 - Update task structure recommendations in plan seed
 - Ensure agents have `ask` tool available
 - Test: agent uses lenses, asks questions, completes lifecycle
@@ -608,7 +608,7 @@ export function detectScope(args: string, cwd: string, mode: string, engine?: Pl
 ```
 1 (protocol) ──→ 2 (queue + /answer) ──→ 3 (dialog)
                                               ↑
-4 (lenses) ──→ 5 (worker lifecycle) ──────────┘
+4 (lenses) ──→ 5 (agent lifecycle) ──────────┘
                                               
 6 (dashboard) depends on 2 (shows pending questions)
 ```
@@ -620,13 +620,13 @@ Deliverables 1 and 4 can start in parallel. Deliverable 6 can start after 2.
 ## Technical Notes
 
 ### The `ask` tool blocks without burning tokens
-When a worker calls `ask`, the tool execute function awaits the RPC answer. The worker's pi instance is idle (no LLM turns). No tokens are consumed while waiting. The worker resumes only when the user answers.
+When a agent calls `ask`, the tool execute function awaits the RPC answer. The agent's pi instance is idle (no LLM turns). No tokens are consumed while waiting. The agent resumes only when the user answers.
 
-### Multiple workers can ask simultaneously
-Each `ask` call is independent. The queue stores them all. Workers block independently. User answers in FIFO order (or picks from `/agents` dashboard).
+### Multiple agents can ask simultaneously
+Each `ask` call is independent. The queue stores them all. Agents block independently. User answers in FIFO order (or picks from `/agents` dashboard).
 
 ### `pi -p` for lenses (no nesting)
-Review lenses run as `pi -p` (print mode) — one-shot, no session, no RPC. They're just CLI invocations from the worker's bash tool. No tmux sessions, no orchestrator involvement. Clean and ephemeral.
+Review lenses run as `pi -p` (print mode) — one-shot, no session, no RPC. They're just CLI invocations from the agent's bash tool. No tmux sessions, no maestro involvement. Clean and ephemeral.
 
 ### Lens prompts adapt to context
 In plan mode: review/refine/validate the plan quality.

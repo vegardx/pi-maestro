@@ -42,7 +42,7 @@ export class AskEngine {
 	/**
 	 * Present a questionnaire immediately and resolve with answers.
 	 * @param questions - The questions to present
-	 * @param source - "main" blocks input; worker IDs don't
+	 * @param source - "main" blocks input; agent IDs don't
 	 */
 	async present(
 		questions: Questionnaire,
@@ -50,7 +50,7 @@ export class AskEngine {
 	): Promise<Answers> {
 		if (questions.length === 0) return [];
 		// Agent mode: an ask-transport capability routes questions to the
-		// orchestrator over RPC. Checked before the local-UI fallback so a
+		// maestro over RPC. Checked before the local-UI fallback so a
 		// headless agent (no ctx.hasUI) still reaches the user.
 		const transport = getCapability(CAPABILITIES.askTransport);
 		if (transport) return transport.present(questions);

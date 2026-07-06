@@ -39,9 +39,9 @@ const RESTRICTED: ProfileDefaults = {
 	disableExtensions: ["modes", "subagents"],
 };
 
-// deliverable-worker: implements a single deliverable in a worktree. Can read,
+// deliverable-agent: implements a single deliverable in a worktree. Can read,
 // edit, and run tests, but cannot commit/push/create PRs — that's the
-// orchestrator's job at ship time. Commit extension disabled.
+// maestro's job at ship time. Commit extension disabled.
 const DELIVERABLE_WORKER: ProfileDefaults = {
 	mode: "auto",
 	session: true,
@@ -50,7 +50,7 @@ const DELIVERABLE_WORKER: ProfileDefaults = {
 
 export const BUILTIN_PROFILES: Readonly<Record<string, ProfileDefaults>> = {
 	restricted: RESTRICTED,
-	"deliverable-worker": DELIVERABLE_WORKER,
+	"deliverable-agent": DELIVERABLE_WORKER,
 };
 
 /** A SpawnProfile resolved against its named built-in. */

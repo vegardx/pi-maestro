@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "JSON-lines RPC over Unix socket: orchestrator↔agent protocol for pi-maestro.",
+	"description": "JSON-lines RPC over Unix socket: maestro↔agent protocol for pi-maestro.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {

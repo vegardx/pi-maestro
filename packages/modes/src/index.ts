@@ -49,7 +49,7 @@ export {
 	classifyExecutionSteering,
 	completeActiveDeliverable,
 	completionGateSatisfied,
-	FanoutOrchestrator,
+	FanoutMaestro,
 	parseShippedPr,
 	startSequentialExecution,
 	transitionThrough,
@@ -74,13 +74,6 @@ export {
 	installFooter,
 } from "./install-footer.js";
 export {
-	renderAgentSeed,
-	renderPlanForAgent,
-	renderPlanMarkdown,
-	renderPlanSeed,
-	renderPlanSummary,
-} from "./markdown.js";
-export {
 	formatAgentStatusLine,
 	handleAgentsDashboard,
 	handleAnswerCommand,
@@ -88,7 +81,14 @@ export {
 	handleViewCommand,
 	updateAgentWidget,
 	type ViewState,
-} from "./orchestrator-tmux.js";
+} from "./maestro-tmux.js";
+export {
+	renderAgentSeed,
+	renderPlanForAgent,
+	renderPlanMarkdown,
+	renderPlanSeed,
+	renderPlanSummary,
+} from "./markdown.js";
 export {
 	type OverlayComponent,
 	type OverlayId,

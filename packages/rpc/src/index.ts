@@ -13,7 +13,7 @@ export type {
 	DoneMessage,
 	HelloMessage,
 	LensUsageMessage,
-	OrchestratorMessage,
+	MaestroMessage,
 	PingMessage,
 	PlanMutateMessage,
 	PlanMutateResultMessage,
@@ -36,7 +36,7 @@ export type {
 export { MaestroRpcServer } from "./server.js";
 
 /**
- * Resolve the orchestrator socket path for a given plan directory.
+ * Resolve the maestro socket path for a given plan directory.
  * Uses a short hash under /tmp to avoid the 104-byte Unix socket path limit.
  */
 export function createSocketPath(planDir: string): string {

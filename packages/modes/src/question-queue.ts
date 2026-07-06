@@ -1,7 +1,7 @@
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 
 /**
- * A pending decision request from an agent. The orchestrator holds it until
+ * A pending decision request from an agent. The maestro holds it until
  * the user answers (via /answer or the dashboard). `draft` accumulates partial
  * selections when the dialog is closed without sending, so reopening restores
  * progress. `resolve` sends the answers back over RPC.
@@ -24,7 +24,7 @@ export type PendingQuestionInput = Omit<
 
 /**
  * FIFO queue of agent decision requests. At most one entry per agent
- * (guaranteed by the blocking ask model: a worker cannot issue a second ask
+ * (guaranteed by the blocking ask model: an agent cannot issue a second ask
  * until the first resolves). Answering targets an entry by agentId, so the
  * dashboard can answer out of FIFO order.
  */

@@ -65,7 +65,7 @@ describe("formatSessionUsage", () => {
 	it("formats input/output with arrows", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 50000,
 				output: 12000,
@@ -82,7 +82,7 @@ describe("formatSessionUsage", () => {
 	it("sums across multiple sources", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 10000,
 				output: 5000,
@@ -111,7 +111,7 @@ describe("formatSessionUsage", () => {
 	it("shows raw numbers below 1000", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 500,
 				output: 200,
@@ -135,7 +135,7 @@ describe("formatCacheHitRate", () => {
 	it("returns null when no source has input", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 0,
 				output: 100,
@@ -152,7 +152,7 @@ describe("formatCacheHitRate", () => {
 	it("computes rate for single source", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 20000,
 				output: 5000,
@@ -171,7 +171,7 @@ describe("formatCacheHitRate", () => {
 		const ledger = new UsageLedger();
 		// Source 1: 50% cache hit
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 10000,
 				output: 5000,
@@ -203,7 +203,7 @@ describe("formatCacheHitRate", () => {
 		const ledger = new UsageLedger();
 		// Source 1: has input, 75% cache hit
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			{
 				input: 5000,
 				output: 1000,

@@ -49,7 +49,7 @@ interface Column {
 
 const COLUMNS: Column[] = [
 	{ min: 14 }, // name (flying-falcon)
-	{ min: 7 }, // role (worker)
+	{ min: 7 }, // role (agent)
 	{ min: 10, flex: true }, // deliverable
 	{ min: 3 }, // progress (2/4)
 	{ min: 12, flex: true }, // activity

@@ -190,19 +190,19 @@ export function formatRecap(
 			padL(fmtDur(wallClock), timeW),
 	);
 
-	// Orchestrator row (planning/coordination tokens)
+	// Maestro row (planning/coordination tokens)
 	if (ledger) {
 		const { bySource } = ledger.snapshot();
-		const orchTok = bySource.get("orchestrator") ?? ZERO;
-		if (orchTok.totalTokens > 0) {
+		const maestroTok = bySource.get("maestro") ?? ZERO;
+		if (maestroTok.totalTokens > 0) {
 			lines.push(
-				padR("  Orchestrator", nameW) +
-					padL(fmtTok(orchTok), tokW) +
-					padL(fmtCache(orchTok), cacheW) +
-					padL(fmtCost(orchTok), costW) +
+				padR("  Maestro", nameW) +
+					padL(fmtTok(maestroTok), tokW) +
+					padL(fmtCache(maestroTok), cacheW) +
+					padL(fmtCost(maestroTok), costW) +
 					padL("", timeW),
 			);
-			grandTotal = addTokens(grandTotal, orchTok);
+			grandTotal = addTokens(grandTotal, maestroTok);
 		}
 	}
 

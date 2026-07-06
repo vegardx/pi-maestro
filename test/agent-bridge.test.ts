@@ -40,7 +40,7 @@ describe("AgentBridge", () => {
 
 	beforeEach(async () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "maestro-bridge-"));
-		socketPath = join(tmpDir, "orchestrator.sock");
+		socketPath = join(tmpDir, "maestro.sock");
 		server = new MaestroRpcServer();
 		await server.listen(socketPath);
 		mockPi.sendUserMessage.mockClear();

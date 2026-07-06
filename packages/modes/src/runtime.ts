@@ -60,12 +60,12 @@ import {
 	buildPlanAwareCompactionMarker,
 } from "./forward-summary.js";
 import { installFooter } from "./install-footer.js";
-import { renderPlanSummary } from "./markdown.js";
 import {
 	handleSteerCommand,
 	handleViewCommand,
 	type ViewState,
-} from "./orchestrator-tmux.js";
+} from "./maestro-tmux.js";
+import { renderPlanSummary } from "./markdown.js";
 import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
 import { formatRecap } from "./recap.js";
@@ -172,23 +172,23 @@ export function createModesRuntime(
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
-	let _orchestratorCtx: ExtensionContext | undefined;
+	let _maestroCtx: ExtensionContext | undefined;
 	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
 	let agentSeedContent: string | undefined;
 	// Central usage ledger (usage.v1). Records maestro + agent usage.
 	const usageLedger = new UsageLedger();
-	let orchestratorUsage: TokenSnapshot | undefined;
-	const recordOrchestratorUsage = (usage: unknown): void => {
-		orchestratorUsage = accumulate(orchestratorUsage, usage as UsageDelta);
-		usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+	let maestroUsage: TokenSnapshot | undefined;
+	const recordMaestroUsage = (usage: unknown): void => {
+		maestroUsage = accumulate(maestroUsage, usage as UsageDelta);
+		usageLedger.record({ kind: "maestro" }, maestroUsage);
 		invalidateFooter?.();
 	};
-	const incrementOrchestratorTurn = (): void => {
-		if (orchestratorUsage) {
-			orchestratorUsage = incrementTurns(orchestratorUsage);
-			usageLedger.record({ kind: "orchestrator" }, orchestratorUsage);
+	const incrementMaestroTurn = (): void => {
+		if (maestroUsage) {
+			maestroUsage = incrementTurns(maestroUsage);
+			usageLedger.record({ kind: "maestro" }, maestroUsage);
 		}
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
@@ -591,7 +591,7 @@ export function createModesRuntime(
 		// Tmux fanout: spawn agents in isolated tmux sessions with RPC.
 		if (isTmuxAvailable() && !isAgentMode()) {
 			if (!tmuxFanout) {
-				_orchestratorCtx = ctx;
+				_maestroCtx = ctx;
 				const planDir = join(plansRoot(), activeEngine.get().slug);
 				const extRoot = resolve(
 					dirname(fileURLToPath(import.meta.url)),
@@ -608,7 +608,7 @@ export function createModesRuntime(
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						invalidateFooter?.();
 						if (tmuxFanout) {
-							// Only sync worker panes on status transitions
+							// Only sync agent panes on status transitions
 							if (
 								workerPanes.isOpen() &&
 								workerPanes.shouldSync(id, state.status)
@@ -652,7 +652,7 @@ export function createModesRuntime(
 			if (spawned > 0) {
 				ctx.ui.notify(`Spawned ${spawned} tmux agent(s).`, "info");
 				setExecutionStage(
-					{ stage: "executing", deliverableId: "orchestrator" },
+					{ stage: "executing", deliverableId: "maestro" },
 					ctx,
 				);
 			} else {
@@ -798,9 +798,9 @@ export function createModesRuntime(
 		},
 	});
 
-	pi.registerCommand("workers", {
+	pi.registerCommand("agents", {
 		description:
-			"Toggle stacked tmux panes showing all active workers on the right side.",
+			"Toggle stacked tmux panes showing all active agents on the right side.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (!tmuxFanout) {
 				ctx.ui.notify("No agents active (tmux required).", "info");
@@ -1033,7 +1033,7 @@ export function createModesRuntime(
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
 		if (tmuxFanout) {
-			const preamble = buildOrchestratorPreamble(engine, tmuxFanout);
+			const preamble = buildMaestroPreamble(engine, tmuxFanout);
 			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
 		}
 		if (agentBridge) {
@@ -1047,7 +1047,7 @@ export function createModesRuntime(
 		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
-		// Extract seed content for workers (read-only plan context)
+		// Extract seed content for agents (read-only plan context)
 		if (state.mode === "agent") {
 			for (const entry of ctx.sessionManager.getEntries()) {
 				const e = entry as unknown as Record<string, unknown>;
@@ -1112,7 +1112,7 @@ export function createModesRuntime(
 		notifyMode(ctx);
 		if (state.activePlanSlug) {
 		}
-		// Agent-side RPC bridge: connect to orchestrator if running as agent
+		// Agent-side RPC bridge: connect to maestro if running as agent
 		agentBridge = initAgentBridge(pi);
 		if (agentBridge) {
 			const bridge = agentBridge;
@@ -1140,7 +1140,7 @@ export function createModesRuntime(
 				if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
 			}
 
-			// Route the ask tool to the orchestrator over RPC (G1 transport).
+			// Route the ask tool to the maestro over RPC (G1 transport).
 			maestro.capabilities.register(CAPABILITIES.askTransport, {
 				present: (questions) => bridge.ask(questions),
 			});
@@ -1233,7 +1233,7 @@ export function createModesRuntime(
 				}
 				return;
 			}
-			// Ambiguous: LLM classification (orchestrator only)
+			// Ambiguous: LLM classification (maestro only)
 			const classifierModel = ctx
 				? (await getModeRoleModel(ctx, "classifier"))?.modelId
 				: MAESTRO_ENV.classifierModel;
@@ -1249,7 +1249,7 @@ export function createModesRuntime(
 			return;
 		}
 		// In auto mode, non-bash tools are gated by the active-tools filter
-		// (+ bridge force-add for workers). Only block in plan mode.
+		// (+ bridge force-add for agents). Only block in plan mode.
 		if (state.mode === "plan") {
 			const reason = toolBlockedInPlanMode(event.toolName);
 			if (reason) return { block: true, reason };
@@ -1261,19 +1261,19 @@ export function createModesRuntime(
 	});
 
 	// Accumulate real usage from assistant messages (tokens + cost). In agent
-	// mode the bridge reports it over RPC; the orchestrator records its own
+	// mode the bridge reports it over RPC; the maestro records its own
 	// usage into the ledger (wired by the usage deliverable).
 	pi.on("message_end", (event) => {
 		const message = (event as { message?: { role?: string; usage?: unknown } })
 			.message;
 		if (message?.role !== "assistant" || !message.usage) return;
 		if (agentBridge) agentBridge.recordUsage(message.usage as never);
-		else recordOrchestratorUsage(message.usage);
+		else recordMaestroUsage(message.usage);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
 		agentBridge?.onTurnEnd();
-		if (!agentBridge) incrementOrchestratorTurn();
+		if (!agentBridge) incrementMaestroTurn();
 		if (state.mode === "plan") {
 			finalizeDraftPlan(ctx);
 			askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
@@ -1608,7 +1608,7 @@ async function buildShipSummary(
 	const settings = readSettings(ctx.cwd);
 	const currentSessionFile = ctx.sessionManager.getSessionFile?.();
 
-	// If the deliverable was worked in a different session (e.g. by a worker
+	// If the deliverable was worked in a different session (e.g. by an agent
 	// subagent), load that session's entries from disk so the carry-forward
 	// summary reflects the actual implementation work.
 	let entries = ctx.sessionManager.getEntries();
@@ -1710,7 +1710,7 @@ Before creating deliverables:
 When you have enough information (all design questions answered, scope clear, dependencies mappable):
 1. If multi-repo: register repos with \`deliverable register-repo\`.
 2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
-3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files, functions, behavior. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the worker lifecycle.
+3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files, functions, behavior. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the agent lifecycle.
 4. After all tool calls, write out the plan summary as text (do NOT call the plan tool — it renders as a collapsed tool result).
 5. End with: "Ready to implement."
 
@@ -1722,7 +1722,7 @@ Rules:
 - Do NOT implement code yourself.`;
 }
 
-function buildOrchestratorPreamble(
+function buildMaestroPreamble(
 	engine: PlanEngine | undefined,
 	fanout: TmuxFanout,
 ): string {
@@ -1733,7 +1733,7 @@ function buildOrchestratorPreamble(
 	const now = Date.now();
 
 	const warnings: string[] = [];
-	const workerLines = active.map((d) => {
+	const agentLines = active.map((d) => {
 		const s = agents.get(d.id);
 		if (!s) return `  agent:${d.id} — spawning`;
 		const elapsed = formatElapsedShort(now - s.startedAt);
@@ -1747,7 +1747,7 @@ function buildOrchestratorPreamble(
 	return `You are in ORCHESTRATOR MODE. Agents are implementing deliverables.
 
 Active agents:
-${workerLines.join("\n") || "  (none currently running)"}${warningBlock}
+${agentLines.join("\n") || "  (none currently running)"}${warningBlock}
 
 You can observe agent status and intervene when needed:
 - If an agent is looping (high review count), steer it to ship.
@@ -1759,7 +1759,7 @@ When the user discusses new ideas or changes:
 - If confirmed: add it. It spawns automatically when dependencies are met.
 
 You can add deliverables and tasks (spawned/relayed automatically).
-You CANNOT implement code yourself \u2014 that's what workers do.
+You CANNOT implement code yourself \u2014 that's what agents do.
 Do NOT call edit, write, or mutating bash. Use plan tools to delegate work.`;
 }
 
@@ -1788,7 +1788,7 @@ Switch back to /auto when done with direct work.`;
 function buildAgentWorkerPreamble(): string {
 	const agentMode = process.env.PI_MAESTRO_AGENT_MODE;
 	if (agentMode === "read-only") {
-		return `You are a READ-ONLY REVIEW AGENT managed by a maestro orchestrator.
+		return `You are a READ-ONLY REVIEW AGENT managed by a maestro session.
 
 Review the code for your deliverable described in the first message.
 You CANNOT modify files, commit, or push. You CAN read, run tests/lint, and
@@ -1811,7 +1811,7 @@ report findings.
 - Skip STYLE unless egregious`;
 	}
 
-	return `You are an AGENT WORKER managed by a maestro orchestrator.
+	return `You are an AGENT WORKER managed by a maestro session.
 
 Implement the deliverable described in your first message, then ship.
 Work through these phases. Reference tools BY NAME — never hand-run
@@ -1829,7 +1829,7 @@ If your plan shows review summaries or a reviews-gate task was toggled,
 read the review findings. For each finding:
 - Agree → fix it and commit
 - Disagree → note why in your task body
-- Uncertain → ask the orchestrator
+- Uncertain → ask the maestro
 
 ## Phase 3: SHIP
 When all tasks are done and tests pass, ship:
@@ -1840,8 +1840,8 @@ Do NOT run git/gh yourself.
 ## Phase 4: VERIFY
 Re-read your requirements (the seed). Does the PR address everything?
 Any gaps → fix, commit, and ship again. Otherwise you’re done — just stop;
-the orchestrator detects completion. If blocked, describe the problem in
-your final message so the orchestrator can steer you.`;
+the maestro detects completion. If blocked, describe the problem in
+your final message so the maestro can steer you.`;
 }
 
 /**

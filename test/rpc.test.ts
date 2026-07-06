@@ -4,9 +4,9 @@ import { join } from "node:path";
 import {
 	type AgentMessage,
 	createSocketPath,
+	type MaestroMessage,
 	MaestroRpcClient,
 	MaestroRpcServer,
-	type OrchestratorMessage,
 } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -40,7 +40,7 @@ describe("@vegardx/pi-rpc", () => {
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "pi-rpc-test-"));
-		socketPath = join(tmpDir, "orchestrator.sock");
+		socketPath = join(tmpDir, "maestro.sock");
 		server = new MaestroRpcServer();
 	});
 
@@ -135,7 +135,7 @@ describe("@vegardx/pi-rpc", () => {
 
 			const msgPromise = waitForEvent(client, "message");
 			server.send("agent-1", { type: "steer", content: "focus on tests" });
-			const [msg] = (await msgPromise) as [OrchestratorMessage];
+			const [msg] = (await msgPromise) as [MaestroMessage];
 			expect(msg).toEqual({
 				type: "steer",
 				content: "focus on tests",
@@ -188,8 +188,8 @@ describe("@vegardx/pi-rpc", () => {
 			const msg2 = waitForEvent(client2, "message");
 			server.broadcast({ type: "ping" });
 
-			const [received1] = (await msg1) as [OrchestratorMessage];
-			const [received2] = (await msg2) as [OrchestratorMessage];
+			const [received1] = (await msg1) as [MaestroMessage];
+			const [received2] = (await msg2) as [MaestroMessage];
 			expect(received1).toEqual({ type: "ping" });
 			expect(received2).toEqual({ type: "ping" });
 		});
@@ -259,9 +259,9 @@ describe("@vegardx/pi-rpc", () => {
 			client.connect(socketPath, "agent-1");
 			await connected;
 
-			const received: OrchestratorMessage[] = [];
+			const received: MaestroMessage[] = [];
 			client.on("message", (msg) => {
-				received.push(msg as OrchestratorMessage);
+				received.push(msg as MaestroMessage);
 			});
 
 			server.send("agent-1", { type: "steer", content: "msg1" });
@@ -290,7 +290,7 @@ describe("@vegardx/pi-rpc", () => {
 				type: "shutdown",
 				reason: "deliverable complete",
 			});
-			const [msg] = (await msgPromise) as [OrchestratorMessage];
+			const [msg] = (await msgPromise) as [MaestroMessage];
 			expect(msg).toEqual({
 				type: "shutdown",
 				reason: "deliverable complete",

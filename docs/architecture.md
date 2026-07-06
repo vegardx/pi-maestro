@@ -117,7 +117,7 @@ sequenceDiagram
 	alt sequential
 		Modes->>Modes: seed active deliverable
 	else fanout
-		Modes->>Subs: spawn deliverable worker
+		Modes->>Subs: spawn deliverable agent
 		Subs-->>Modes: progress/result events
 	end
 	User->>Modes: /ship

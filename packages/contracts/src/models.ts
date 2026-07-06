@@ -57,7 +57,7 @@ export interface ModelsConfig {
 // ─── Per-role config ─────────────────────────────────────────────────────────
 
 /**
- * Configuration for a single extension role (e.g. modes.worker, modes.lens).
+ * Configuration for a single extension role (e.g. modes.agent, modes.analyze).
  * Lives in `extensionConfig.<ext>.models.<role>`.
  *
  * Specify EITHER `model` (explicit, bypasses presets) or rely on slot

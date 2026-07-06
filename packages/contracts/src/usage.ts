@@ -1,6 +1,6 @@
 // Token/cost accounting vocabulary. A TokenSnapshot is a cumulative usage
 // reading for one source; the usage.v1 ledger (see capabilities.ts) aggregates
-// snapshots by source (orchestrator, agent, lens) so accounting is real and
+// snapshots by source (maestro, agent) so accounting is real and
 // attributable. Cost is pre-computed upstream (pi-ai Usage.cost.total).
 
 export interface TokenSnapshot {
@@ -15,22 +15,15 @@ export interface TokenSnapshot {
 
 /** Who produced a usage reading. Keyed for the ledger's per-source map. */
 export type UsageSource =
-	| { readonly kind: "orchestrator" }
-	| { readonly kind: "agent"; readonly id: string }
-	| {
-			readonly kind: "lens";
-			readonly parentAgentId: string;
-			readonly lens: string;
-	  };
+	| { readonly kind: "maestro" }
+	| { readonly kind: "agent"; readonly id: string };
 
 /** Stable string key for a UsageSource (ledger map key). */
 export function usageSourceKey(source: UsageSource): string {
 	switch (source.kind) {
-		case "orchestrator":
-			return "orchestrator";
+		case "maestro":
+			return "maestro";
 		case "agent":
 			return `agent:${source.id}`;
-		case "lens":
-			return `lens:${source.parentAgentId}:${source.lens}`;
 	}
 }

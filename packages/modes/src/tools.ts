@@ -46,11 +46,11 @@ export interface PlanToolDeps {
 	readonly onPlanChanged?: (plan: Plan) => void;
 	/** Current mode; used to restrict plan views in plan mode. */
 	readonly mode?: () => string;
-	/** Steer a running worker when its deliverable is mutated. */
+	/** Steer a running agent when its deliverable is mutated. */
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
 	/** Remote task toggle for agent mode (no local engine). */
 	readonly onTaskToggle?: (taskId: string) => void;
-	/** Read-only seed content for workers without a local plan engine. */
+	/** Read-only seed content for agents without a local plan engine. */
 	readonly seedContent?: () => string | undefined;
 	/** Agent bridge for RPC plan operations (agent mode only). */
 	readonly agentBridge?: AgentBridge;

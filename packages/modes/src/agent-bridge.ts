@@ -8,22 +8,22 @@ import type {
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
 import {
+	type MaestroMessage,
 	MaestroRpcClient,
-	type OrchestratorMessage,
 	type PlanMutateResultMessage,
 } from "@vegardx/pi-rpc";
 
 /**
  * Agent-side RPC bridge. Activated when the agent detects it's running
- * under the orchestrator (PI_MAESTRO_SOCK env var is set).
+ * under the maestro (PI_MAESTRO_SOCK env var is set).
  *
  * Responsibilities:
- * - Connect to orchestrator via Unix socket RPC
+ * - Connect to maestro via Unix socket RPC
  * - Report status transitions (working/idle) on turn boundaries
  * - Forward steer messages as user messages
- * - Route `ask` tool calls to the orchestrator and block for answers
+ * - Route `ask` tool calls to the maestro and block for answers
  * - Report real token/cost usage (accumulated from assistant messages)
- * - Shut down gracefully on orchestrator request
+ * - Shut down gracefully on maestro request
  */
 
 export interface AgentBridgeDeps {
@@ -73,7 +73,7 @@ export class AgentBridge {
 		this.client.send({ type: "status", status: "working" });
 	}
 
-	/** Signal turn ended — agent is idle, waiting for orchestrator decision. */
+	/** Signal turn ended — agent is idle, waiting for maestro decision. */
 	onTurnEnd(): void {
 		this.turnCount++;
 		this.client.send({ type: "status", status: "idle" });
@@ -114,7 +114,7 @@ export class AgentBridge {
 		});
 	}
 
-	/** Report a task as completed to the orchestrator. */
+	/** Report a task as completed to the maestro. */
 	onTaskComplete(taskId: string): void {
 		this.client.send({ type: "taskComplete", taskId });
 	}
@@ -142,8 +142,8 @@ export class AgentBridge {
 	}
 
 	/**
-	 * Send questions to the orchestrator and block until answers arrive.
-	 * Resolves empty on shutdown/destroy so a blocked worker exits cleanly.
+	 * Send questions to the maestro and block until answers arrive.
+	 * Resolves empty on shutdown/destroy so a blocked agent exits cleanly.
 	 * Only one ask may be pending at a time (guaranteed by the blocking tool
 	 * model); a second while one is pending resolves the newcomer empty.
 	 */
@@ -213,7 +213,7 @@ export class AgentBridge {
 		}
 	}
 
-	private handleMessage(msg: OrchestratorMessage): void {
+	private handleMessage(msg: MaestroMessage): void {
 		switch (msg.type) {
 			case "steer":
 				this.deps.pi.sendUserMessage(msg.content, {

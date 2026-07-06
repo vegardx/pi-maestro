@@ -9,7 +9,7 @@ import type {
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
-// ─── Agent → Orchestrator ───────────────────────────────────────────────────
+// ─── Agent → Maestro ───────────────────────────────────────────────────
 
 export interface HelloMessage {
 	readonly type: "hello";
@@ -45,7 +45,7 @@ export interface PongMessage {
 	readonly type: "pong";
 }
 
-/** Agent asks the orchestrator one or more questions; blocks for answers. */
+/** Agent asks the maestro one or more questions; blocks for answers. */
 export interface QuestionsMessage {
 	readonly type: "questions";
 	readonly questions: Questionnaire;
@@ -92,7 +92,7 @@ export type AgentMessage =
 	| PlanMutateMessage
 	| PongMessage;
 
-// ─── Orchestrator → Agent ───────────────────────────────────────────────────
+// ─── Maestro → Agent ───────────────────────────────────────────────────
 
 export interface SteerMessage {
 	readonly type: "steer";
@@ -108,7 +108,7 @@ export interface PingMessage {
 	readonly type: "ping";
 }
 
-/** Orchestrator returns answers to a prior QuestionsMessage. */
+/** Maestro returns answers to a prior QuestionsMessage. */
 export interface AnswersMessage {
 	readonly type: "answers";
 	readonly answers: Answers;
@@ -128,7 +128,7 @@ export interface PlanMutateResultMessage {
 	readonly error?: string;
 }
 
-export type OrchestratorMessage =
+export type MaestroMessage =
 	| SteerMessage
 	| ShutdownMessage
 	| AnswersMessage
@@ -138,4 +138,4 @@ export type OrchestratorMessage =
 
 // ─── Union of all messages ──────────────────────────────────────────────────
 
-export type RpcMessage = AgentMessage | OrchestratorMessage;
+export type RpcMessage = AgentMessage | MaestroMessage;

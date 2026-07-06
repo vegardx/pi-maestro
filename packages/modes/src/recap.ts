@@ -8,8 +8,8 @@ import type { UsageLedger } from "./usage-ledger.js";
 
 const W = 80;
 
-function hyperlink(url: string, text: string): string {
-	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
+function hyperlink(url: string, _text: string): string {
+	return url;
 }
 
 function fmtDur(ms: number): string {

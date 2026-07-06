@@ -55,12 +55,17 @@ export {
 	transitionThrough,
 } from "./execution.js";
 export {
+	type ForwardSummaryInput,
 	type TmuxAgentState,
 	type TmuxAgentStatus,
 	TmuxFanout,
 	type TmuxFanoutDeps,
 } from "./execution-tmux.js";
 export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
+export {
+	buildForwardSummaryPrompt,
+	buildPlanAwareCompactionMarker,
+} from "./forward-summary.js";
 export {
 	type FooterDeps,
 	formatCacheHitRate,

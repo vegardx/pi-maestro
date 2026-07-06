@@ -2,19 +2,22 @@
 // package; contracts exposes only the cross-cutting enums and lightweight
 // summaries that other modules (commit, subagents) reference.
 
-import type { DeliverableId, WorkItemId } from "./ids.js";
+import type { DeliverableId, GroupId, WorkItemId } from "./ids.js";
 
-export const DELIVERABLE_STATUSES = [
+// ─── Group statuses ──────────────────────────────────────────────────────────
+
+export const GROUP_STATUSES = [
 	"planned",
 	"active",
-	"in-review",
-	"needs-attention",
-	"ready-to-ship",
+	"complete",
 	"shipped",
+	"superseded",
 	"abandoned",
 ] as const;
 
-export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number];
+export type GroupStatus = (typeof GROUP_STATUSES)[number];
+
+// ─── Work item kinds ─────────────────────────────────────────────────────────
 
 export const WORK_ITEM_KINDS = [
 	"task",
@@ -25,15 +28,21 @@ export const WORK_ITEM_KINDS = [
 
 export type WorkItemKind = (typeof WORK_ITEM_KINDS)[number];
 
-/** A plan-boundary checklist that gates (`pre`) or trails (`post`) the plan. */
-export type DeliverableLifecycle = "pre" | "post";
+// ─── Agent mode ──────────────────────────────────────────────────────────────
 
-/** Minimal deliverable view passed across capability boundaries. */
-export interface DeliverableSummary {
-	readonly id: DeliverableId;
+export type AgentMode = "full" | "read-only";
+
+// ─── Model slot ──────────────────────────────────────────────────────────────
+
+export type ModelSlot = "default" | "alternate";
+
+// ─── Minimal cross-boundary summaries ────────────────────────────────────────
+
+/** Minimal group view passed across capability boundaries. */
+export interface GroupSummary {
+	readonly id: GroupId;
 	readonly title: string;
-	readonly status: DeliverableStatus;
-	readonly lifecycle?: DeliverableLifecycle;
+	readonly status: GroupStatus;
 }
 
 /** Minimal work-item view passed across capability boundaries. */
@@ -42,4 +51,31 @@ export interface WorkItemSummary {
 	readonly title: string;
 	readonly kind: WorkItemKind;
 	readonly done: boolean;
+}
+
+// ─── Backwards-compat (removed in cleanup task) ──────────────────────────────
+
+/** @deprecated Use GROUP_STATUSES */
+export const DELIVERABLE_STATUSES = [
+	"planned",
+	"active",
+	"in-review",
+	"needs-attention",
+	"ready-to-ship",
+	"shipped",
+	"abandoned",
+] as const;
+
+/** @deprecated Use GroupStatus */
+export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number];
+
+/** @deprecated Removed in group model */
+export type DeliverableLifecycle = "pre" | "post";
+
+/** @deprecated Use GroupSummary */
+export interface DeliverableSummary {
+	readonly id: DeliverableId;
+	readonly title: string;
+	readonly status: DeliverableStatus;
+	readonly lifecycle?: DeliverableLifecycle;
 }

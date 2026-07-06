@@ -1,6 +1,6 @@
 import type { Answers } from "@vegardx/pi-contracts";
 import type { PendingQuestion, QuestionQueue } from "./question-queue.js";
-import { formatAnswerRecap, formatQuestionsForLlm } from "./question-formatter.js";
+import { formatAnswerNotice, formatQuestionsForLlm } from "./question-formatter.js";
 
 const AUTO_ANSWER_TIMEOUT_MS = 30_000;
 
@@ -86,10 +86,10 @@ export class AutoAnswerController {
 		const resolved = this.deps.queue.answer(agentId, answers);
 		if (!resolved) return false;
 
-		// Show recap to user
-		const recap = formatAnswerRecap(entry, answers, reasoning, true);
+		// Show answer notice to user
+		const notice = formatAnswerNotice(entry, answers, reasoning, true);
 		this.deps.sendMessage(
-			{ customType: "maestro.question.answered", content: recap, display: true },
+			{ customType: "maestro.question.answered", content: notice, display: true },
 			{ triggerTurn: false },
 		);
 
@@ -117,10 +117,10 @@ export class AutoAnswerController {
 
 		this.deps.queue.answer(agentId, answers);
 
-		// Show recap
-		const recap = formatAnswerRecap(entry, answers, undefined, false);
+		// Show answer notice
+		const notice = formatAnswerNotice(entry, answers, undefined, false);
 		this.deps.sendMessage(
-			{ customType: "maestro.question.answered", content: recap, display: true },
+			{ customType: "maestro.question.answered", content: notice, display: true },
 			{ triggerTurn: false },
 		);
 	}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatQuestionsForLlm, formatAnswerRecap } from "../packages/modes/src/question-formatter.js";
+import { formatQuestionsForLlm, formatAnswerNotice } from "../packages/modes/src/question-formatter.js";
 import type { PendingQuestion } from "../packages/modes/src/question-queue.js";
 import type { Questionnaire } from "../packages/contracts/src/index.js";
 
@@ -72,10 +72,10 @@ describe("formatQuestionsForLlm", () => {
 	});
 });
 
-describe("formatAnswerRecap", () => {
+describe("formatAnswerNotice", () => {
 	it("shows auto-answered with reasoning and steer hint", () => {
 		const entry = makePending();
-		const result = formatAnswerRecap(
+		const result = formatAnswerNotice(
 			entry,
 			[{ questionId: "q-docs", value: "A" }],
 			"Plan has parallel workers",
@@ -91,7 +91,7 @@ describe("formatAnswerRecap", () => {
 
 	it("shows user-answered without Auto prefix or steer hint", () => {
 		const entry = makePending();
-		const result = formatAnswerRecap(
+		const result = formatAnswerNotice(
 			entry,
 			[{ questionId: "q-docs", value: "B" }],
 			undefined,

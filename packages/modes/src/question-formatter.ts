@@ -47,7 +47,7 @@ export function formatQuestionsForLlm(entries: readonly PendingQuestion[]): stri
  * Formats the Q&A result as a conversation message shown to the user.
  * Shows the question, chosen answer, reasoning, and a /steer override hint.
  */
-export function formatAnswerRecap(
+export function formatAnswerNotice(
 	entry: PendingQuestion,
 	answers: readonly { questionId: string; value: string }[],
 	reasoning?: string,

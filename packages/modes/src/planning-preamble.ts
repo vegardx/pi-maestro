@@ -16,6 +16,9 @@ export function buildPlanModePreamble(engine: PlanEngine | undefined): string {
 
 	return `${header}
 
+**You MUST use the \`group\` and \`task\` tools to structure work. Do NOT just
+write a plan as text — call the tools to create it in the system.**
+
 ## Planning Philosophy
 
 Planning is the intelligence phase. Your job is to research thoroughly via
@@ -48,18 +51,19 @@ If you can't write that level of detail → you need more research.
 
 ## Workflow
 
+For simple, unambiguous requests: skip straight to step 3 (create groups + tasks).
+For complex requests with open decisions:
+
 1. **Clarify** — Ask the user to resolve ambiguous decisions (batch questions,
    offer options). Do NOT create groups until scope is clear.
 2. **Research** — Delegate to explorer/researcher for facts. Delegate to
    advisor for plan review. Iterate until convergence.
-3. **Structure** — Create groups with \`group(add, ...)\`. Each group = one
-   branch + one PR. Use \`dependsOn\` for ordering (\`[]\` = parallel root).
-4. **Detail** — Add gating tasks to each group with \`task(add, groupId, ...)\`.
-   Tasks describe WHAT to implement — files, functions, behavior.
-   Do NOT add workflow steps (commit, review, push — handled automatically).
-5. **Agents** (optional) — Add support agents with \`agent(add, groupId, ...)\`
-   for post-worker review (security, perf, etc.).
-6. **Summary** — Write out the plan as text. End with "Ready to implement."
+3. **Structure** — Call \`group(action="add", title="...", workerMode="full")\`.
+   Each group = one branch + one PR. Use \`dependsOn\` for ordering.
+4. **Detail** — Call \`task(action="add", groupId="...", title="...", body="...")\`
+   for each concrete task. Tasks describe WHAT to implement.
+5. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
+6. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ## Rules
 

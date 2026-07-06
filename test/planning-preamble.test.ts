@@ -61,9 +61,9 @@ describe("buildPlanModePreamble", () => {
 
 	it("mentions group/task/agent tools", () => {
 		const preamble = buildPlanModePreamble(undefined);
-		expect(preamble).toContain("group(add");
-		expect(preamble).toContain("task(add");
-		expect(preamble).toContain("agent(add");
+		expect(preamble).toContain("group(action");
+		expect(preamble).toContain("task(action");
+		expect(preamble).toContain("agent(action");
 	});
 });
 

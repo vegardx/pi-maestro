@@ -12,7 +12,6 @@ import {
 import { Type } from "@sinclair/typebox";
 import {
 	CAPABILITIES,
-	type DeliverableId,
 	EVENTS,
 	type ModeName,
 	type ModesExecutionStatus,
@@ -34,7 +33,10 @@ import {
 	initAgentBridge,
 	isAgentMode,
 } from "./agent-bridge.js";
-import { runAgentsDashboard } from "./agents-dashboard.js";
+
+// STUB: agents-dashboard deleted (group model)
+const runAgentsDashboard = (..._args: unknown[]) => {};
+
 import { ModesAskQueue } from "./ask-queue.js";
 import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
 import {
@@ -53,33 +55,57 @@ import {
 	type PendingModesCompaction,
 	readModesCompactionDetails,
 } from "./compaction.js";
-import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
-import { type ForwardSummaryInput, TmuxFanout } from "./execution-tmux.js";
+import { PlanEngine } from "./engine.js";
+
+// STUB: execution-tmux deleted (group model)
+const PLAN_CONTAINER = "plan" as const;
+type ForwardSummaryInput = {
+	completed: { title: string; body: string };
+	agentOutput: string;
+	consumers: { title: string; body: string; tasks: string[] }[];
+};
+class TmuxFanout {
+	tick() {}
+	snapshot() {
+		return { agents: new Map() };
+	}
+	stop() {}
+}
+
 import {
 	buildForwardSummaryPrompt,
 	buildPlanAwareCompactionMarker,
 } from "./forward-summary.js";
 import { installFooter } from "./install-footer.js";
-import {
-	handleSteerCommand,
-	handleViewCommand,
-	type ViewState,
-} from "./maestro-tmux.js";
-import { renderPlanSummary } from "./markdown.js";
+
+// STUB: maestro-tmux + markdown deleted (group model)
+const handleSteerCommand = (..._args: unknown[]) => {};
+const handleViewCommand = (..._args: unknown[]) => {};
+type ViewState = unknown;
+const renderPlanSummary = (_plan: unknown) => "";
+
 import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
-import { formatRecap } from "./recap.js";
+
+// STUB: recap deleted (group model)
+const formatRecap = (..._args: unknown[]) => "";
+
 import {
-	type Deliverable,
-	deliverables,
 	derivePlanName,
-	findDeliverable,
 	gatingTasks,
-	planRepoMismatch,
-	repoFor,
-	repoNameFromPath,
 	slugify,
+	type WorkGroup,
 } from "./schema.js";
+
+// STUB: old schema exports (group model)
+type Deliverable = WorkGroup;
+const deliverables = (plan: { groups: WorkGroup[] }) => plan.groups;
+const findDeliverable = (_plan: unknown, _id: string) =>
+	undefined as WorkGroup | undefined;
+const planRepoMismatch = () => null;
+const repoFor = (_plan: unknown, _d: unknown) => ({ key: "default", path: "" });
+const repoNameFromPath = (p: string) => p.split("/").pop() ?? "";
+
 import {
 	appendModesState,
 	collectBudgetText,
@@ -93,12 +119,13 @@ import {
 	readModesCompactionSettings,
 	setImplementOverrides,
 } from "./settings.js";
-import {
-	nextShippableDeliverable,
-	parkPlan,
-	shipDeliverableFromPlan,
-	syncPrState,
-} from "./shipping.js";
+
+// STUB: old shipping exports (group model)
+const nextShippableDeliverable = (..._args: unknown[]) => null;
+const parkPlan = async (..._args: unknown[]) => {};
+const shipDeliverableFromPlan = async (..._args: unknown[]) => ({ ok: false });
+const syncPrState = async (..._args: unknown[]) => ({});
+
 import {
 	type ExecutionState,
 	initialModesState,
@@ -123,8 +150,14 @@ import {
 	type UsageDelta,
 	UsageLedger,
 } from "./usage-ledger.js";
-import { WorkerPanes } from "./worker-panes.js";
-import { cleanupInactiveWorktrees, recordPlanSession } from "./worktree.js";
+
+// STUB: worker-panes + worktree deleted (group model)
+class WorkerPanes {
+	mount() {}
+	unmount() {}
+}
+const cleanupInactiveWorktrees = (..._args: unknown[]) => {};
+const recordPlanSession = (..._args: unknown[]) => {};
 
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;

@@ -1,6 +1,6 @@
 Create a plan called "sandbox" for the maestro-sandbox-lib repo (cwd).
 
-**Deliverables (5 total):**
+**Groups (5 total):**
 
 1. [parallel] — Implement `multiply(a, b)` in src/multiply.ts, un-skip tests.
    Question: should it handle only numbers, or also BigInt? What about `Infinity * 0`?

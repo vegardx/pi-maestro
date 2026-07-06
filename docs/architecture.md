@@ -16,7 +16,6 @@ graph TD
 	github[pi-github]
 	ask[pi-ask]
 	prompt[prompt-assist]
-	subagents[pi-subagents]
 	commit[pi-commit]
 	modes[pi-modes]
 
@@ -30,8 +29,6 @@ graph TD
 	core --> ask
 	ui --> ask
 	core --> prompt
-	core --> subagents
-	contracts --> subagents
 	core --> commit
 	git --> commit
 	github --> commit
@@ -42,12 +39,10 @@ graph TD
 
 Libraries are importable by any package:
 
-- `@vegardx/pi-contracts`: shared ids, events, capability interfaces, run and
-  plan vocabulary.
-- `@vegardx/pi-core`: extension wrapper, capability registry, typed events,
-  feature flags, and agent-turn helper.
+- `@vegardx/pi-contracts`: shared ids, events, capability interfaces, plan vocabulary.
+- `@vegardx/pi-core`: extension wrapper, capability registry, typed events, feature flags.
 - `@vegardx/pi-settings`: layered global/project settings reader and writer.
-- `@vegardx/pi-models`: background-model resolution.
+- `@vegardx/pi-models`: preset-based model resolution, slot/effort mapping.
 - `@vegardx/pi-ui`: pure renderers and thin TUI component wrappers.
 - `@vegardx/pi-git`: typed git/worktree seam.
 - `@vegardx/pi-github`: typed `gh`/GitHub seam.
@@ -57,27 +52,24 @@ import one another:
 
 - `@vegardx/pi-ask`: questionnaire capability and `ask` tool.
 - `@vegardx/pi-prompt-assist`: ghost prompt suggestion tool and input assists.
-- `@vegardx/pi-subagents`: run store, bus, profiles, runners, supervisor, and
-  delegate tool.
-- `@vegardx/pi-commit`: conventional commit generation plus commit/push/PR ship
-  capability.
-- `@vegardx/pi-modes`: permission modes, plan engine/tools, execution,
-  worktrees, shipping, compaction, and UI state.
+- `@vegardx/pi-commit`: conventional commit generation + ship capability.
+- `@vegardx/pi-modes`: permission modes, plan engine/tools, group execution,
+  shipping, compaction, delegates, and UI state.
 
 `scripts/check-boundaries.mjs` enforces the extension boundary.
 
 ## Runtime integration
 
-Extensions communicate through versioned capabilities and typed events rather
-than static imports.
+Extensions communicate through versioned capabilities and typed events.
 
 Capabilities:
 
-- `ask.v1`
-- `prompt-assist.v1`
-- `subagents.v1`
-- `commit.v1`
-- `modes.v1`
+- `ask.v1` — questionnaire presentation
+- `prompt-assist.v1` — ghost text suggestions
+- `commit.v1` — local conventional commits
+- `ship.v1` — push + PR creation
+- `modes.v1` — mode state + execution status
+- `usage.v1` — unified token/cost ledger
 
 Events:
 
@@ -85,53 +77,54 @@ Events:
 - `maestro.plan.updated`
 - `maestro.run.status`
 - `maestro.run.progress`
-- `maestro.supervisor.needDecision`
 - `maestro.ship.completed`
-
-Feature flags are resolved by `@vegardx/pi-core`:
-
-1. Environment override (`PI_EXT_<NAME>`, `PI_DISABLE`, `PI_ENABLE`).
-2. Project settings.
-3. Global settings.
-4. Default-on.
-
-The kill switch wins. `scripts/check-feature-flags.mjs` verifies every extension
-in the manifest is covered.
 
 ## Plan and execution flow
 
 ```mermaid
 sequenceDiagram
 	participant User
-	participant Modes as pi-modes
-	participant Ask as ask.v1
-	participant Subs as subagents.v1
+	participant Maestro as pi-modes (maestro)
+	participant Delegates as Delegates (tmux+RPC)
+	participant Executor as GroupExecutor
+	participant Agents as Agents (tmux+RPC)
 	participant Commit as commit.v1
 
-	User->>Modes: /plan
-	Modes->>Modes: create/load plan.json
-	User->>Modes: deliverable/task/plan tools
-	Modes->>Ask: queued questions in plan mode
-	User->>Modes: /implement
-	Modes->>Modes: activate worktree/session
-	alt sequential
-		Modes->>Modes: seed active deliverable
-	else fanout
-		Modes->>Subs: spawn deliverable agent
-		Subs-->>Modes: progress/result events
-	end
-	User->>Modes: /ship
-	Modes->>Commit: shipDeliverable(deliverableId)
-	Commit-->>Modes: PR metadata
-	Modes->>Modes: update plan state
+	User->>Maestro: /plan
+	Maestro->>Maestro: create plan (draft)
+	Maestro->>Delegates: research (explorer, researcher, advisor)
+	Delegates-->>Maestro: facts, docs, review
+	User->>Maestro: group/task/agent tools
+	Maestro->>Maestro: finalize plan
+	User->>Maestro: /implement
+	Maestro->>Executor: start execution
+	Executor->>Executor: activate groups (deps met)
+	Executor->>Agents: spawn worker (tmux+RPC)
+	Agents->>Commit: commit locally
+	Agents->>Agents: toggle tasks
+	Agents-->>Executor: all tasks done
+	Executor->>Agents: summarize RPC
+	Agents-->>Executor: summary
+	Executor->>Executor: spawn next agents (after graph)
+	Executor->>Executor: group complete → ship
+	Executor->>Maestro: push + PR
 ```
 
 Persistent state lives under the pi agent directory:
 
-- `maestro/plans/<slug>/plan.json`
-- `maestro/runs/<repo>/<runId>/status.json`
-- `maestro/runs/<repo>/<runId>/events.jsonl`
-- `maestro/runs/<repo>/<runId>/result.md`
+- `maestro/plans/<slug>/plan.json` — group-based plan
+- Agent sessions managed via tmux (ephemeral)
+- Usage recorded in unified ledger
 
-Plans are never garbage-collected automatically. Runs are pruned on
-`session_start` by age/count/size policy, never while active.
+Plans are never garbage-collected automatically.
+
+## Key design decisions
+
+- **Groups replace deliverables** — clean break, no migration.
+- **Maestro owns shipping** — agents only commit, never push/PR.
+- **Three flat tools** — `group`, `task`, `agent` (no nested JSON).
+- **Stacked PRs by default** — group B branches from group A tip.
+- **Delegates for planning** — explorer/researcher/advisor via tmux+RPC.
+- **No AgentRole enum** — mode + focus + graph position.
+- **Unbounded parallelism** — dependencies are the only throttle.
+- **Summaries are self-describing and immutable** — cache-stable by construction.

@@ -54,7 +54,7 @@ export class ExecutionAdapter {
 	constructor(opts: ExecutionAdapterOpts) {
 		this.opts = opts;
 		this.engine = opts.engine;
-		this.socketPath = join(opts.planDir, "maestro.sock");
+		this.socketPath = join("/tmp", `maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`);
 		this.rpcServer = new MaestroRpcServer();
 
 		const deps: ExecutorDeps = {

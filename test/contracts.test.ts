@@ -50,7 +50,7 @@ describe("contracts", () => {
 			runId: "run-1" as RunId,
 			reason: "test",
 		};
-		const profile: SpawnProfile = { profile: "deliverable-worker" };
+		const profile: SpawnProfile = { profile: "deliverable-agent" };
 		const mode: ModeName = "auto";
 		const answers: Answers = [];
 		const capId: keyof CapabilityMap = CAPABILITIES.modes;
@@ -65,7 +65,7 @@ describe("contracts", () => {
 		};
 
 		expect(msg.type).toBe("stop");
-		expect(profile.profile).toBe("deliverable-worker");
+		expect(profile.profile).toBe("deliverable-agent");
 		expect(mode).toBe("auto");
 		expect(answers).toEqual([]);
 		expect(capId).toBe("modes.v1");

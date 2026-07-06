@@ -1,6 +1,6 @@
 // Execution driver skeleton. Modes owns orchestration and plan writes; work is
 // performed either by the foreground session (sequential) or by subagents.v1
-// deliverable workers (fanout). Workers never write the plan file.
+// deliverable agents (fanout). Agents never write the plan file.
 
 import type {
 	RunHandle,
@@ -101,7 +101,7 @@ export interface FanoutSnapshot {
 	readonly spawnedDeliverables: ReadonlySet<string>;
 }
 
-export class FanoutOrchestrator {
+export class FanoutMaestro {
 	private active = new Map<RunId, string>();
 	private spawnedDeliverables = new Set<string>();
 	private sessionDirs = new Map<string, string>(); // deliverableId → sessionDir
@@ -115,7 +115,7 @@ export class FanoutOrchestrator {
 		};
 	}
 
-	/** Get the run ID for a deliverable that has an active worker, if any. */
+	/** Get the run ID for a deliverable that has an active agent, if any. */
 	runForDeliverable(deliverableId: string): RunId | undefined {
 		for (const [runId, dId] of this.active) {
 			if (dId === deliverableId) return runId;
@@ -123,7 +123,7 @@ export class FanoutOrchestrator {
 		return undefined;
 	}
 
-	/** Get the session directory for a spawned worker. */
+	/** Get the session directory for a spawned agent. */
 	sessionDirForDeliverable(deliverableId: string): string | undefined {
 		return this.sessionDirs.get(deliverableId);
 	}
@@ -142,7 +142,7 @@ export class FanoutOrchestrator {
 			const handle = this.deps.subagents.spawn(
 				renderPlanSeed(this.deps.engine.get(), d.id),
 				{
-					profile: "deliverable-worker",
+					profile: "deliverable-agent",
 					cwd: prepared?.cwd ?? this.deps.cwd ?? plan.repoPath,
 					sessionDir,
 				},

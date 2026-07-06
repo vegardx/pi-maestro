@@ -12,7 +12,7 @@ export type SpawnFn = (
 
 /**
  * Spawn `pi` with the maestro env stripped and extensions/session disabled,
- * so a child pi can never load the orchestrator extension or become a rogue
+ * so a child pi can never load the maestro extension or become a rogue
  * agent. The single choke point for child-pi hygiene.
  */
 export const spawnCleanPi: SpawnFn = (args, opts) => {

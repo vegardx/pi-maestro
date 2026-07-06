@@ -45,7 +45,7 @@ const SubagentParams = Type.Object({
 	),
 	agent: Type.Optional(
 		Type.String({
-			description: "Agent name for spawn (e.g. explore, worker).",
+			description: "Agent name for spawn (e.g. explore, agent).",
 		}),
 	),
 	prompt: Type.Optional(
@@ -85,7 +85,7 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 			"Delegate work to a focused subagent. Actions: spawn (run a named " +
 			"agent, foreground or background), status, steer, stop.",
 		promptSnippet:
-			"subagent — delegate a focused task to explore/plan/review/worker.",
+			"subagent — delegate a focused task to explore/plan/review/agent.",
 		parameters: SubagentParams,
 		async execute(_id, params): Promise<AgentToolResult<SubagentDetails>> {
 			const cap = deps.capability();

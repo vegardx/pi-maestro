@@ -58,8 +58,8 @@ import { getModeRoleModel } from "./settings.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Resolve the orchestrator's session directory (centralized location for all sessions). */
-function resolveOrchestratorSessionDir(): string {
+/** Resolve the maestro session directory (centralized location for all sessions). */
+function resolveMaestroSessionDir(): string {
 	return (
 		process.env.PI_CODING_AGENT_SESSION_DIR ||
 		join(process.cwd(), ".pi", "sessions")
@@ -444,15 +444,11 @@ export class TmuxFanout {
 		agentId: string,
 		agentMode?: AgentMode,
 	): Promise<string[]> {
-		const workerSessionDir = join(
-			resolveOrchestratorSessionDir(),
-			"workers",
-			agentId,
-		);
+		const agentSessionDir = join(resolveMaestroSessionDir(), "agents", agentId);
 		const vars = [
 			`PI_MAESTRO_SOCK=${this.socketPath}`,
 			`PI_MAESTRO_AGENT_ID=${agentId}`,
-			`PI_CODING_AGENT_SESSION_DIR=${workerSessionDir}`,
+			`PI_CODING_AGENT_SESSION_DIR=${agentSessionDir}`,
 		];
 		if (agentMode) {
 			vars.push(`PI_MAESTRO_AGENT_MODE=${agentMode}`);
@@ -477,7 +473,7 @@ export class TmuxFanout {
 	}
 
 	/**
-	 * Build the session file for a worker agent. Tries to fork from a compacted
+	 * Build the session file for an agent. Tries to fork from a compacted
 	 * analyze checkpoint; falls back to cold start (header + modes state + seed).
 	 */
 	private buildSessionFile(
@@ -612,8 +608,8 @@ export class TmuxFanout {
 		// Set status to active in the plan
 		this.deps.engine.setStatus(d.id, "active");
 
-		// Write session file in orchestrator's session dir (not in the worktree)
-		const sessionDir = join(resolveOrchestratorSessionDir(), "workers", d.id);
+		// Write session file in maestro's session dir (not in the worktree)
+		const sessionDir = join(resolveMaestroSessionDir(), "agents", d.id);
 		mkdirSync(sessionDir, { recursive: true });
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const seed = renderAgentSeed(this.deps.engine.get(), d.id);
@@ -693,7 +689,7 @@ export class TmuxFanout {
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done" || state.status === "failed") return;
 		// Check if tmux session is actually dead before marking done.
-		// RPC can disconnect transiently (orchestrator compact/restart).
+		// RPC can disconnect transiently (maestro compact/restart).
 		this.checkSessionAlive(agentId);
 	}
 
@@ -1078,7 +1074,7 @@ export class TmuxFanout {
 		);
 		if (!alive) {
 			if (state.shutdownSent) {
-				// Expected exit after orchestrator sent shutdown
+				// Expected exit after maestro sent shutdown
 				this.markDone(agentId);
 			} else {
 				// Unexpected death — crash or user killed it

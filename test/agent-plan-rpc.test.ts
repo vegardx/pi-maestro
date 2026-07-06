@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { OrchestratorMessage } from "@vegardx/pi-rpc";
+import type { MaestroMessage } from "@vegardx/pi-rpc";
 import { createSocketPath, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentBridge } from "../packages/modes/src/agent-bridge.js";
@@ -128,7 +128,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({ type: "planRead" });
@@ -163,7 +163,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({
@@ -190,7 +190,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({
@@ -219,7 +219,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({
@@ -248,7 +248,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({
@@ -282,7 +282,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({
@@ -323,7 +323,7 @@ describe("Agent plan RPC operations", () => {
 
 			const client = await spawnAndConnect("write-api");
 
-			const messages: OrchestratorMessage[] = [];
+			const messages: MaestroMessage[] = [];
 			client.on("message", (msg) => messages.push(msg));
 
 			client.send({

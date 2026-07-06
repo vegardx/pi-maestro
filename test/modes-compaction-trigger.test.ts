@@ -54,8 +54,8 @@ describe("shouldCompactMidDeliverable", () => {
 	});
 
 	it("a fanout parent (idle, no active deliverable) never triggers", () => {
-		// Cross-session isolation: the parent orchestrator session stays idle, so
-		// even over-budget it must not own compaction or poke a worker session.
+		// Cross-session isolation: the parent maestro session stays idle, so
+		// even over-budget it must not own compaction or poke an agent session.
 		expect(
 			shouldCompactMidDeliverable({
 				...base,

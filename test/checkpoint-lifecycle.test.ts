@@ -51,7 +51,7 @@ describe("full checkpoint lifecycle (integration)", () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	it("analyze → fork worker → fork lens: end-to-end", async () => {
+	it("analyze → fork agent session: end-to-end", async () => {
 		const plan = makePlan(
 			[
 				{ id: "api", title: "API layer", repo: "backend" },
@@ -174,22 +174,17 @@ describe("full checkpoint lifecycle (integration)", () => {
 		expect(analyzeResult.compactedFiles.size).toBe(2);
 		expect(analyzeResult.coveredDeliverableIds).toEqual(new Set(["api", "ui"]));
 
-		// ---- Phase 3: Fork worker session ----
+		// ---- Phase 3: Fork agent session ----
 		const backendCompact = analyzeResult.compactedFiles.get("backend")!;
-		const workerDir = join(root, "worker-sessions");
-		mkdirSync(workerDir, { recursive: true });
+		const agentDir = join(root, "agent-sessions");
+		mkdirSync(agentDir, { recursive: true });
 
 		const { entries: compactEntries } = parseSessionFile(backendCompact);
 		const lastEntry = compactEntries[compactEntries.length - 1];
 
-		const forkedWorker = forkSessionAt(
-			backendCompact,
-			lastEntry.id,
-			workerDir,
-			{
-				cwd: "/backend/worktree",
-			},
-		);
+		const forkedAgent = forkSessionAt(backendCompact, lastEntry.id, agentDir, {
+			cwd: "/backend/worktree",
+		});
 
 		// Append modes state + seed (simulating what buildSessionFile does)
 		const modesState = buildCustomEntry(
@@ -206,16 +201,16 @@ describe("full checkpoint lifecycle (integration)", () => {
 			{ content: "Plan seed text", deliverableId: "api" },
 			modesState.id,
 		);
-		appendToSession(forkedWorker, [modesState, seed]);
+		appendToSession(forkedAgent, [modesState, seed]);
 
-		// Verify forked worker session content
-		const workerParsed = parseSessionFile(forkedWorker);
-		expect(workerParsed.header.cwd).toBe("/backend/worktree");
-		expect(workerParsed.header.parentSession).toBeDefined();
-		expect(workerParsed.entries).toHaveLength(3); // context + modes state + seed
-		expect(workerParsed.entries[0].type).toBe("custom_message");
-		expect(workerParsed.entries[1].type).toBe("custom");
-		expect(workerParsed.entries[2].type).toBe("custom");
+		// Verify forked agent session content
+		const agentParsed = parseSessionFile(forkedAgent);
+		expect(agentParsed.header.cwd).toBe("/backend/worktree");
+		expect(agentParsed.header.parentSession).toBeDefined();
+		expect(agentParsed.entries).toHaveLength(3); // context + modes state + seed
+		expect(agentParsed.entries[0].type).toBe("custom_message");
+		expect(agentParsed.entries[1].type).toBe("custom");
+		expect(agentParsed.entries[2].type).toBe("custom");
 
 		// ---- Phase 4: Verify refresh logic ----
 		expect(shouldRefreshAnalyze(plan, analyzeResult)).toBe(false);

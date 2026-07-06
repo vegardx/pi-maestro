@@ -16,11 +16,11 @@ import { updateSettingsFile, writeExtensionConfigKey } from "./writer.js";
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface SettingRow {
-	/** Display label (e.g. "models.worker.tier") */
+	/** Display label (e.g. "models.agent.tier") */
 	label: string;
 	/** Extension name (e.g. "modes") */
 	extension: string;
-	/** Dot-path key within the extension (e.g. "models.worker.tier") */
+	/** Dot-path key within the extension (e.g. "models.agent.tier") */
 	key: string;
 	/** Value at global scope, or undefined */
 	global: string | undefined;

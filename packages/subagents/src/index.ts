@@ -1,5 +1,5 @@
 // @vegardx/pi-subagents — the single run transport and service that powers
-// both delegate-style focused agents and modes' deliverable workers.
+// both delegate-style focused agents and modes' deliverable agents.
 //
 // The full stack:
 //   * persistence substrate — RunStore, RunBus, persistRunBus, retention;

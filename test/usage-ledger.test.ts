@@ -29,21 +29,17 @@ describe("usage ledger", () => {
 	it("records per-source and aggregates totals", () => {
 		const ledger = new UsageLedger();
 		ledger.record(
-			{ kind: "orchestrator" },
+			{ kind: "maestro" },
 			accumulate(undefined, { input: 10, cost: { total: 1 } }),
 		);
 		ledger.record(
 			{ kind: "agent", id: "a1" },
 			accumulate(undefined, { input: 20, cost: { total: 2 } }),
 		);
-		ledger.record(
-			{ kind: "lens", parentAgentId: "a1", lens: "review" },
-			accumulate(undefined, { input: 5, cost: { total: 0.5 } }),
-		);
 		const { bySource, totals } = ledger.snapshot();
-		expect(bySource.size).toBe(3);
-		expect(totals.input).toBe(35);
-		expect(totals.cost).toBeCloseTo(3.5);
+		expect(bySource.size).toBe(2);
+		expect(totals.input).toBe(30);
+		expect(totals.cost).toBeCloseTo(3);
 		expect(totals.turns).toBe(0);
 	});
 

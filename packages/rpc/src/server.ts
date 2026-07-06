@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import type { AgentMessage, OrchestratorMessage } from "./protocol.js";
+import type { AgentMessage, MaestroMessage } from "./protocol.js";
 
 export interface AgentConnection {
 	readonly agentId: string;
@@ -49,7 +49,7 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 	 * Send a message to a specific agent by ID.
 	 * Returns false if the agent is not connected.
 	 */
-	send(agentId: string, msg: OrchestratorMessage): boolean {
+	send(agentId: string, msg: MaestroMessage): boolean {
 		const conn = this.agents.get(agentId);
 		if (!conn) return false;
 		conn.socket.write(`${JSON.stringify(msg)}\n`);
@@ -59,7 +59,7 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 	/**
 	 * Broadcast a message to all connected agents.
 	 */
-	broadcast(msg: OrchestratorMessage): void {
+	broadcast(msg: MaestroMessage): void {
 		const line = `${JSON.stringify(msg)}\n`;
 		for (const conn of this.agents.values()) {
 			conn.socket.write(line);

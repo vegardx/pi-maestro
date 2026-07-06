@@ -17,7 +17,7 @@ export interface AgentDefinition {
 }
 
 // Built-in roles. explore/plan/review are read-only (restricted); agent is a
-// full deliverable-worker. These are always available without any .pi/agents.
+// full deliverable-agent. These are always available without any .pi/agents.
 export const BUILTIN_AGENTS: Readonly<Record<string, AgentDefinition>> = {
 	explore: {
 		name: "explore",
@@ -37,7 +37,7 @@ export const BUILTIN_AGENTS: Readonly<Record<string, AgentDefinition>> = {
 	agent: {
 		name: "agent",
 		description: "Full deliverable agent, worktree-bound.",
-		profile: "deliverable-worker",
+		profile: "deliverable-agent",
 	},
 };
 

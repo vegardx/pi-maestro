@@ -1,11 +1,11 @@
 import { EventEmitter } from "node:events";
 import { connect, type Socket } from "node:net";
-import type { AgentMessage, OrchestratorMessage } from "./protocol.js";
+import type { AgentMessage, MaestroMessage } from "./protocol.js";
 
 export interface MaestroRpcClientEvents {
 	connected: [];
 	disconnected: [];
-	message: [msg: OrchestratorMessage];
+	message: [msg: MaestroMessage];
 	error: [err: Error];
 }
 
@@ -40,7 +40,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	}
 
 	/**
-	 * Connect to the orchestrator socket and send hello.
+	 * Connect to the maestro socket and send hello.
 	 */
 	connect(socketPath: string, agentId: string, model?: string): void {
 		this.socketPath = socketPath;
@@ -51,7 +51,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	}
 
 	/**
-	 * Send a message to the orchestrator.
+	 * Send a message to the maestro.
 	 */
 	send(msg: AgentMessage): boolean {
 		if (!this.socket || this.socket.destroyed) return false;
@@ -138,7 +138,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 
 	private handleLine(line: string): void {
 		try {
-			const msg = JSON.parse(line) as OrchestratorMessage;
+			const msg = JSON.parse(line) as MaestroMessage;
 			this.emit("message", msg);
 		} catch {
 			// Ignore malformed lines

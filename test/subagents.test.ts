@@ -269,7 +269,7 @@ describe("profiles + invocation mapping", () => {
 		expect(r.disableExtensions).toContain("subagents");
 
 		const o = resolveProfile({
-			profile: "deliverable-worker",
+			profile: "deliverable-agent",
 			model: "anthropic/claude",
 			mode: "hack",
 		});
@@ -300,18 +300,18 @@ describe("profiles + invocation mapping", () => {
 	it("resolves cwd as profile → spawner → repoRoot and bumps depth", () => {
 		expect(
 			mapProfileToInvocation(
-				{ profile: "deliverable-worker", cwd: "/wt" },
+				{ profile: "deliverable-agent", cwd: "/wt" },
 				{ spawnerCwd: "/spawn", repoRoot: "/repo", parentDepth: 1 },
 			).cwd,
 		).toBe("/wt");
 		expect(
 			mapProfileToInvocation(
-				{ profile: "deliverable-worker" },
+				{ profile: "deliverable-agent" },
 				{ spawnerCwd: "/spawn", repoRoot: "/repo", parentDepth: 1 },
 			).cwd,
 		).toBe("/spawn");
 		const inv = mapProfileToInvocation(
-			{ profile: "deliverable-worker" },
+			{ profile: "deliverable-agent" },
 			{ repoRoot: "/repo", parentDepth: 1 },
 		);
 		expect(inv.cwd).toBe("/repo");
@@ -322,7 +322,7 @@ describe("profiles + invocation mapping", () => {
 	it("computes kill-switch env explicitly, never leaking the parent's", () => {
 		const inv = mapProfileToInvocation(
 			{
-				profile: "deliverable-worker",
+				profile: "deliverable-agent",
 				featureFlags: { disable: ["modes.fanout"], enable: ["modes.x"] },
 			},
 			{ repoRoot: "/repo", parentDepth: 0 },
@@ -332,7 +332,7 @@ describe("profiles + invocation mapping", () => {
 		expect(inv.env.PI_ENABLE).toBe("modes.x");
 
 		const plain = mapProfileToInvocation(
-			{ profile: "deliverable-worker" },
+			{ profile: "deliverable-agent" },
 			{ repoRoot: "/repo", parentDepth: 0 },
 		);
 		expect(plain.env.PI_DISABLE).toBe("");
@@ -437,7 +437,7 @@ describe("SubagentService", () => {
 			mintId: () => "run-2" as RunId,
 			ownDepth: 0,
 		});
-		svc.spawn("go", { profile: "deliverable-worker" });
+		svc.spawn("go", { profile: "deliverable-agent" });
 		svc.steer("run-2" as RunId, "refocus");
 		svc.stop("run-2" as RunId, "done");
 		expect(steered).toEqual(["refocus"]);
@@ -579,7 +579,7 @@ describe("RpcClient-backed runner", () => {
 		const req = {
 			runId: "run-1" as RunId,
 			prompt: "go",
-			profile: { profile: "deliverable-worker" as const },
+			profile: { profile: "deliverable-agent" as const },
 			invocation: {
 				cwd: "/wt",
 				args: ["--mode", "auto"],
@@ -705,12 +705,12 @@ describe("agent definitions", () => {
 		);
 		// Override a built-in name.
 		writeFileSync(
-			join(dir, "worker.md"),
-			"---\nname: worker\nprofile: deliverable-worker\n---\nCustom worker.",
+			join(dir, "builder.md"),
+			"---\nname: builder\nprofile: deliverable-agent\n---\nCustom builder.",
 		);
 		const agents = discoverAgents(dir);
 		expect(agents.scout?.profile).toBe("restricted");
-		expect(agents.worker?.appendSystemPrompt).toBe("Custom worker.");
+		expect(agents.builder?.appendSystemPrompt).toBe("Custom builder.");
 		// Built-ins still present.
 		expect(agents.explore?.profile).toBe("restricted");
 		rmSync(dir, { recursive: true, force: true });
@@ -818,7 +818,7 @@ describe("subagent delegate tool", () => {
 			agent: "agent",
 			prompt: "do it",
 		});
-		expect(calls).toContain("spawn:deliverable-worker");
+		expect(calls).toContain("spawn:deliverable-agent");
 		expect(res.details.result.status).toBe("succeeded");
 		expect(res.content[0].text).toContain("done");
 	});

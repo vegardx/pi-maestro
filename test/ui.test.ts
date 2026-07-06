@@ -93,7 +93,7 @@ describe("run dashboard", () => {
 			},
 			{
 				id: rid("r2"),
-				profile: { profile: "deliverable-worker" },
+				profile: { profile: "deliverable-agent" },
 				status: "succeeded",
 				createdAt: 0,
 				updatedAt: 5000,

@@ -1,5 +1,5 @@
 // Subagent run-bus: the message union and run shapes shared between the
-// subagents service (owner) and orchestrators like modes. The structured
+// subagents service (owner) and maestros like modes. The structured
 // SpawnProfile is the spawn API — callers never set child env/args directly;
 // the service maps a profile to a child invocation.
 
@@ -45,7 +45,7 @@ export interface ToolPolicy {
  * become child env, computed explicitly per spawn (never inherited).
  */
 export interface SpawnProfile {
-	/** Named profile, e.g. "deliverable-worker" or "reviewer". */
+	/** Named profile, e.g. "deliverable-agent" or "reviewer". */
 	readonly profile: string;
 	readonly cwd?: string;
 	readonly model?: string;
@@ -59,7 +59,7 @@ export interface SpawnProfile {
 	readonly sessionDir?: string;
 	/** Deliberate feature-flag overrides propagated to the child. */
 	readonly featureFlags?: FeatureFlagOverrides;
-	/** Opaque metadata for the orchestrator. */
+	/** Opaque metadata for the maestro. */
 	readonly meta?: Readonly<Record<string, unknown>>;
 }
 
@@ -83,7 +83,7 @@ export interface RunResult {
 	readonly error?: string;
 }
 
-/** A run asking the orchestrator to decide (the contact_supervisor path). */
+/** A run asking the maestro to decide (the contact_supervisor path). */
 export interface SupervisorDecisionRequest {
 	readonly question: string;
 	readonly options?: readonly string[];

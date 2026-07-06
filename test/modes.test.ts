@@ -14,7 +14,7 @@ import {
 	classifyExecutionSteering,
 	completeActiveDeliverable,
 	completionGateSatisfied,
-	FanoutOrchestrator,
+	FanoutMaestro,
 	parseShippedPr,
 	startSequentialExecution,
 	transitionThrough,
@@ -1473,7 +1473,7 @@ describe("execution driver", () => {
 			steer: () => {},
 			stop: () => {},
 		};
-		const orch = new FanoutOrchestrator({
+		const orch = new FanoutMaestro({
 			engine,
 			subagents: subagents as any,
 			cwd: "/repo/worktree",
@@ -1502,7 +1502,7 @@ describe("execution driver", () => {
 			steer: () => {},
 			stop: () => {},
 		};
-		const orch = new FanoutOrchestrator({
+		const orch = new FanoutMaestro({
 			engine,
 			subagents: subagents as any,
 			onProgress: (deliverable, progress) =>

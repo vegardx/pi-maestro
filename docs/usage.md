@@ -52,7 +52,7 @@ more repos, register them and assign deliverables to a repo by key:
 Each deliverable's worktree, branch, ship cwd, sync PR-state lookup, and park
 issue are routed to its own repo. The repo guard is per-deliverable: a
 sequential `/implement` or `/ship` aborts if the session cwd isn't the targeted
-repo. Fanout is unguarded (each worker uses its own per-repo worktree), and
+repo. Fanout is unguarded (each agent uses its own per-repo worktree), and
 `/sync` is gh-only so it runs from any cwd.
 
 `dependsOn` across repos is **ordering-only**: there is no shared git base, so
@@ -156,10 +156,10 @@ work and stay generic.
 ### Fanout and cross-session isolation
 
 Each session's `modes` instance acts only on its own `ctx`. A fanout
-deliverable worker runs `modes` in auto with its own active deliverable, so it
+deliverable agent runs `modes` in auto with its own active deliverable, so it
 owns plan-aware compaction and resume **inside its own session** — desirable.
-The parent/orchestrator session stays idle and never triggers compaction on,
-or sends resume follow-ups into, a worker session (and workers never drive the
+The parent/maestro session stays idle and never triggers compaction on,
+or sends resume follow-ups into, a agent session (and agents never drive the
 parent). The parent still records each deliverable's `RunResult.summary`.
 
 ### Carry-forward summaries across deliverables

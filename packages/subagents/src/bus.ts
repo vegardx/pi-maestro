@@ -1,7 +1,7 @@
 // RunBus — the in-process transport for run-bus messages. Producers publish;
 // subscribers receive every message after they subscribe. A bounded ring of
 // recent messages supports late subscribers replaying what they missed.
-// Cross-process coordination (background workers) replays from the store's
+// Cross-process coordination (background agents) replays from the store's
 // events.jsonl, not this in-memory buffer.
 
 import type { RunBusMessage, RunId } from "@vegardx/pi-contracts";

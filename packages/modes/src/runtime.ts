@@ -99,6 +99,7 @@ import {
 
 // STUB: old schema exports (group model)
 type Deliverable = WorkGroup;
+type DeliverableId = string;
 const deliverables = (plan: { groups: WorkGroup[] }) => plan.groups;
 const findDeliverable = (_plan: unknown, _id: string) =>
 	undefined as WorkGroup | undefined;
@@ -1584,10 +1585,8 @@ export function createModesRuntime(
 	return { askQueue, currentMode, currentEngine, setMode, openPlan, cycle };
 }
 
-function activeDeliverable(plan: {
-	nodes: Parameters<typeof deliverables>[0]["nodes"];
-}) {
-	return deliverables(plan).find((d) => d.status === "active");
+function activeDeliverable(plan: { groups: Deliverable[] }) {
+	return plan.groups.find((g) => g.status === "active");
 }
 
 type Entryish = {
@@ -1726,94 +1725,24 @@ export { PLAN_CONTAINER };
 
 // --- Plan-mode system prompt preamble -----------------------------------
 
-function buildPlanModePreamble(engine: PlanEngine | undefined): string {
-	const isNew = !engine || engine.isDraft();
-	const header = isNew
-		? "You are in PLAN MODE. Structure the user's request into deliverables and tasks."
-		: `You are in PLAN MODE updating plan \`${engine.get().slug}\`.`;
-
-	return `${header}
-
-Before creating deliverables:
-- Identify ambiguous decisions (error types, edge cases, API shapes)
-- Ask the user to resolve them (batch questions, offer options with the ask tool when high confidence, or ask in plain text for open-ended questions)
-- Do NOT create deliverables until decisions are resolved
-
-When you have enough information (all design questions answered, scope clear, dependencies mappable):
-1. If multi-repo: register repos with \`deliverable register-repo\`.
-2. Add deliverables (\`deliverable add\`) with titles + bodies. Use \`dependsOn\` for ordering. Pass \`dependsOn: []\` explicitly for independent/parallel deliverables (default auto-chains to previous).
-3. Add gating tasks to each deliverable (\`task add\`). Tasks describe WHAT to implement — files, functions, behavior. Do NOT add workflow steps like "run review", "address findings", or "commit/push" — those are handled automatically by the agent lifecycle.
-4. After all tool calls, write out the plan summary as text (do NOT call the plan tool — it renders as a collapsed tool result).
-5. End with: "Ready to implement."
-
-Rules:
-- Be concise. No narration, no thinking out loud, no explanations between tool calls.
-- Each deliverable = one PR. Keep them small and focused.
-- For multi-repo: assign deliverables to repos with \`repo: <key>\`.
-- Do NOT read files unless the user's request is ambiguous and you need to clarify scope.
-- Do NOT implement code yourself.`;
-}
+// --- Plan/execution preambles ---
+import {
+	buildPlanModePreamble,
+	buildExecutionPreamble,
+} from "./planning-preamble.js";
 
 function buildMaestroPreamble(
-	engine: PlanEngine | undefined,
-	fanout: TmuxFanout,
+	_engine: PlanEngine | undefined,
+	_fanout: TmuxFanout,
 ): string {
-	if (!engine) return "";
-	const plan = engine.get();
-	const active = deliverables(plan).filter((d) => d.status === "active");
-	const agents = fanout.snapshot().agents;
-	const now = Date.now();
-
-	const warnings: string[] = [];
-	const agentLines = active.map((d) => {
-		const s = agents.get(d.id);
-		if (!s) return `  agent:${d.id} — spawning`;
-		const elapsed = formatElapsedShort(now - s.startedAt);
-		const tIn = shortTokens(s.tokens.input);
-		const tOut = shortTokens(s.tokens.output);
-		return `  agent:${d.id} — ${s.status} · ${s.tokens.turns} turns · ↑${tIn} ↓${tOut} · ${elapsed}`;
-	});
-
-	const warningBlock = warnings.length > 0 ? `\n\n${warnings.join("\n")}` : "";
-
-	return `You are in ORCHESTRATOR MODE. Agents are implementing deliverables.
-
-Active agents:
-${agentLines.join("\n") || "  (none currently running)"}${warningBlock}
-
-You can observe agent status and intervene when needed:
-- If an agent is looping (high review count), steer it to ship.
-- If an agent is stuck idle, check if tasks are truly done or if it needs guidance.
-
-When the user discusses new ideas or changes:
-- Propose as a concrete deliverable with tasks and dependencies. Ask before adding.
-- If it touches active work: explain impact, offer alternatives (steer now vs follow-up deliverable).
-- If confirmed: add it. It spawns automatically when dependencies are met.
-
-You can add deliverables and tasks (spawned/relayed automatically).
-You CANNOT implement code yourself \u2014 that's what agents do.
-Do NOT call edit, write, or mutating bash. Use plan tools to delegate work.`;
-}
-
-function shortTokens(n: number): string {
-	if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-	return String(n);
-}
-
-function formatElapsedShort(ms: number): string {
-	if (ms < 0 || !Number.isFinite(ms)) return "—";
-	const sec = Math.floor(ms / 1000);
-	if (sec < 60) return `${sec}s`;
-	const min = Math.floor(sec / 60);
-	if (min < 60) return `${min}m`;
-	const hr = Math.floor(min / 60);
-	return `${hr}h${min % 60}m`;
+	if (!_engine) return "";
+	return buildExecutionPreamble(_engine);
 }
 
 function buildHackModePreamble(): string {
 	return `You are in HACK MODE. Full tool access. Implement directly when asked.
-Workers continue running in the background independently.
-You can still add deliverables/tasks if needed.
+Agents continue running in the background independently.
+You can still add groups/tasks if needed.
 Switch back to /auto when done with direct work.`;
 }
 

@@ -92,11 +92,11 @@ dogfood-autoanswer:
 	fi
 	@mkdir -p "$(DOGFOOD_ROOT)/agent" "$(DOGFOOD_ROOT)/sessions"
 	@node "$(ROOT)/scripts/seed-autoanswer-plan.mjs" "$(DOGFOOD_ROOT)/agent" "$(SANDBOX)"
-	@printf "Plan seeded. Starting pi...\n"
+	@printf "\n  Plan seeded. Start with:\n    /plan sandbox\n    /auto\n\n"
 	cd "$(SANDBOX)" && \
 	PI_CODING_AGENT_DIR="$(DOGFOOD_ROOT)/agent" \
 	PI_CODING_AGENT_SESSION_DIR="$(DOGFOOD_ROOT)/sessions" \
-	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)" @$(ROOT)/dogfood-autoanswer-start.md
+	"$(PI)" $(DOGFOOD_FLAGS) -e "$(ROOT)"
 
 check:
 	npm run check

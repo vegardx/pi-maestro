@@ -1,6 +1,10 @@
-The plan "sandbox" is already seeded and ready. Open it with /plan open sandbox, then switch to /auto to begin execution.
+Plan "sandbox" has been seeded to the plan store.
 
-The plan has 5 deliverables implementing math functions in this repo.
+Run these two commands to start:
+  /plan sandbox
+  /auto
+
+The plan has 5 deliverables implementing math functions.
 Two workers will ask questions during execution:
-- The divide worker will ask about error types (you should know the answer from the test file)
-- The docs worker will ask about heading style (this is a style preference you'll need to escalate)
+- divide worker: asks about error type (orchestrator CAN answer from test context)
+- docs worker: asks about heading style (orchestrator SHOULD escalate)

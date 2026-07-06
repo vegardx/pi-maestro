@@ -685,22 +685,22 @@ export function runAgentsDashboard(
 	queue: QuestionQueue,
 ): Promise<DashboardAction | undefined> {
 	const rows = buildRows(fanout, engine, queue);
-	let comp: CollapsibleDashboardComponent | undefined;
+	let comp: DashboardComponent | undefined;
 	return ctx.ui.custom<DashboardAction | undefined>(
 		(_tui, theme, _kb, done) => {
 			const palette = paletteFromTheme(theme);
-			comp = new CollapsibleDashboardComponent(rows, ledger, done, palette);
+			comp = new DashboardComponent(rows, ledger, done, palette);
 			return comp;
 		},
 		{
 			overlay: true,
 			overlayOptions: {
-				anchor: "bottom-center",
+				anchor: "center",
 				width: "100%",
-				maxHeight: "70%",
+				maxHeight: "80%",
 			},
 			onHandle: (handle: OverlayHandle) => {
-				comp?.setHandle(handle);
+				handle.focus();
 			},
 		},
 	);

@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
@@ -27,7 +25,6 @@ import {
 	removeWorktree,
 } from "@vegardx/pi-git";
 import { resolveModelWithin } from "@vegardx/pi-models";
-import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import {
 	type AgentBridge,
 	initAgentBridge,
@@ -57,25 +54,15 @@ import {
 } from "./compaction.js";
 import { PlanEngine } from "./engine.js";
 
-// STUB: execution-tmux deleted (group model)
+// Group execution adapter (replaces old TmuxFanout)
+import { ExecutionAdapter } from "./execution-adapter.js";
+
 const PLAN_CONTAINER = "plan" as const;
 type ForwardSummaryInput = {
 	completed: { title: string; body: string };
 	agentOutput: string;
 	consumers: { title: string; body: string; tasks: string[] }[];
 };
-class TmuxFanout {
-	questionQueue = { all: () => [] as unknown[] };
-	constructor(..._args: unknown[]) {}
-	async start() {}
-	async tick() {}
-	steer(..._args: unknown[]) {}
-	snapshot() {
-		return { agents: new Map() };
-	}
-	destroy() {}
-	stop() {}
-}
 
 import {
 	buildForwardSummaryPrompt,
@@ -105,7 +92,7 @@ import {
 // STUB: old schema exports (group model)
 type Deliverable = WorkGroup;
 type DeliverableId = string;
-const deliverables = (plan: { groups: WorkGroup[] }) => plan.groups;
+const _deliverables = (plan: { groups: WorkGroup[] }) => plan.groups;
 const findDeliverable = (_plan: unknown, _id: string) =>
 	undefined as WorkGroup | undefined;
 const planRepoMismatch = () => null;
@@ -214,7 +201,7 @@ export function createModesRuntime(
 	let _maestroCtx: ExtensionContext | undefined;
 	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
-	let tmuxFanout: TmuxFanout | undefined;
+	let tmuxFanout: ExecutionAdapter | undefined;
 	let agentSeedContent: string | undefined;
 	// Central usage ledger (usage.v1). Records maestro + agent usage.
 	const usageLedger = new UsageLedger();
@@ -627,75 +614,52 @@ export function createModesRuntime(
 		const mode = args.includes("--hack") ? "hack" : "auto";
 		setMode(mode as ModeName, ctx);
 
-		// Tmux fanout: spawn agents in isolated tmux sessions with RPC.
-		if (isTmuxAvailable() && !isAgentMode()) {
+		// Group execution via ExecutionAdapter
+		if (!isAgentMode()) {
 			if (!tmuxFanout) {
-				_maestroCtx = ctx;
-				const planDir = join(plansRoot(), activeEngine.get().slug);
-				const extRoot = resolve(
-					dirname(fileURLToPath(import.meta.url)),
-					"../../..",
-				);
-				tmuxFanout = new TmuxFanout({
+				tmuxFanout = new ExecutionAdapter({
 					engine: activeEngine,
-					extensionPath: extRoot,
-					planDir,
-					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					ctx,
+					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					onPlanChanged: emitPlanChanged,
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						invalidateFooter?.();
-						if (tmuxFanout) {
-							// Only sync agent panes on status transitions
-							if (
-								workerPanes.isOpen() &&
-								workerPanes.shouldSync(id, state.status)
-							) {
-								workerPanes.sync(tmuxFanout.snapshot().agents).catch(() => {});
-							}
-						}
-					},
-					onQuestionsReceived: (_id, count) => {
-						ctx.ui.notify(
-							`Agent has ${count} question(s) — /answer to respond.`,
-							"info",
-						);
 					},
 					onAllSettled: () => {
-						if (!tmuxFanout || !engine) return;
-						const titles = new Map<string, string>();
-						for (const g of engine.get().groups) {
-							titles.set(g.id, g.title);
-						}
-						const recap = formatRecap(
-							tmuxFanout.snapshot().agents,
-							usageLedger,
-							titles,
-						);
+						if (!engine) return;
+						const plan = engine.get();
+						const summary = plan.groups
+							.map((g) => `${g.title}: ${g.status}`)
+							.join("\n");
 						pi.sendMessage(
 							{
 								customType: "maestro.execution.recap",
-								content: recap,
+								content: `All groups complete.\n\n${summary}`,
 								display: true,
 							},
 							{ triggerTurn: false },
 						);
 						invalidateFooter?.();
 					},
-					generateSummary: createForwardSummaryGenerator(ctx),
 				});
 				await tmuxFanout.start();
 			}
-			const spawned = await tmuxFanout.tick();
-			if (spawned > 0) {
-				ctx.ui.notify(`Spawned ${spawned} tmux agent(s).`, "info");
+			const activated = await tmuxFanout.tick();
+			if (activated > 0) {
+				ctx.ui.notify(`Activated ${activated} group(s).`, "info");
 				setExecutionStage(
 					{ stage: "executing", deliverableId: "maestro" },
 					ctx,
 				);
 			} else {
-				ctx.ui.notify("No deliverables ready to start.", "warning");
+				const plan = activeEngine.get();
+				const active = plan.groups.filter((g) => g.status === "active");
+				if (active.length > 0) {
+					ctx.ui.notify(`${active.length} group(s) already executing.`, "info");
+				} else {
+					ctx.ui.notify("No groups ready to start.", "warning");
+				}
 			}
 			return;
 		}
@@ -1127,9 +1091,7 @@ export function createModesRuntime(
 					// Total = all non-terminal deliverables in the plan
 					const plan = engine.get();
 					const activeGroups = plan.groups.filter(
-						(g) =>
-							g.status !== "shipped" &&
-							g.status !== "abandoned",
+						(g) => g.status !== "shipped" && g.status !== "abandoned",
 					);
 					const total = activeGroups.length;
 					if (total === 0) return undefined;
@@ -1732,13 +1694,13 @@ export { PLAN_CONTAINER };
 
 // --- Plan/execution preambles ---
 import {
-	buildPlanModePreamble,
 	buildExecutionPreamble,
+	buildPlanModePreamble,
 } from "./planning-preamble.js";
 
 function buildMaestroPreamble(
 	_engine: PlanEngine | undefined,
-	_fanout: TmuxFanout,
+	_fanout: ExecutionAdapter,
 ): string {
 	if (!_engine) return "";
 	return buildExecutionPreamble(_engine);
@@ -1856,7 +1818,7 @@ async function buildAgentCompactionGuidance(
  * Create a forward-looking summary generator bound to the extension context.
  * Uses the modes normal-tier model for the LLM call.
  */
-function createForwardSummaryGenerator(
+function _createForwardSummaryGenerator(
 	ctx: ExtensionContext,
 ): (input: ForwardSummaryInput) => Promise<string> {
 	return async (input) => {

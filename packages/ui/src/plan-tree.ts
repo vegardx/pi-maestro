@@ -2,8 +2,7 @@
 // items. This widget only owns rendering — modes provides the data.
 
 import type { Component } from "@earendil-works/pi-tui";
-import type { GroupStatus, GroupSummary } from "@vegardx/pi-contracts";
-import type { WorkItemSummary } from "@vegardx/pi-contracts";
+import type { GroupSummary, WorkItemSummary } from "@vegardx/pi-contracts";
 import {
 	defaultPalette,
 	formatCount,

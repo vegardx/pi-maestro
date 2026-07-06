@@ -45,7 +45,10 @@ describe("delegate targets", () => {
 
 describe("buildDelegateSeed", () => {
 	it("includes system prefix and message", () => {
-		const seed = buildDelegateSeed(DELEGATE_TARGETS.explorer, "Find auth files");
+		const seed = buildDelegateSeed(
+			DELEGATE_TARGETS.explorer,
+			"Find auth files",
+		);
 		expect(seed).toContain("codebase explorer");
 		expect(seed).toContain("Find auth files");
 	});

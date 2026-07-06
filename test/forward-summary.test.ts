@@ -10,7 +10,9 @@ describe("buildForwardSummaryPrompt", () => {
 		const input: ForwardSummaryInput = {
 			completed: { title: "Auth System", body: "Implement OAuth2 login" },
 			agentOutput: "Implemented refresh tokens",
-			consumers: [{ title: "API Layer", body: "Needs auth", tasks: ["Add middleware"] }],
+			consumers: [
+				{ title: "API Layer", body: "Needs auth", tasks: ["Add middleware"] },
+			],
 		};
 		const prompt = buildForwardSummaryPrompt(input);
 		expect(prompt).toContain("Auth System");
@@ -23,8 +25,16 @@ describe("buildForwardSummaryPrompt", () => {
 			completed: { title: "Core", body: "Core lib" },
 			agentOutput: "Done",
 			consumers: [
-				{ title: "Frontend", body: "Needs core API", tasks: ["Use UserService"] },
-				{ title: "Backend", body: "Needs core types", tasks: ["Import schema"] },
+				{
+					title: "Frontend",
+					body: "Needs core API",
+					tasks: ["Use UserService"],
+				},
+				{
+					title: "Backend",
+					body: "Needs core types",
+					tasks: ["Import schema"],
+				},
 			],
 		};
 		const prompt = buildForwardSummaryPrompt(input);

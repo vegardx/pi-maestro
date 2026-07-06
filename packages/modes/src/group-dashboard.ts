@@ -1,8 +1,8 @@
 // Dashboard widget for the group-based execution model.
 // Renders a tree of groups → agents with real-time status.
 
-import type { GroupExecutor, GroupRunState } from "./group-executor.js";
 import type { PlanEngine } from "./engine.js";
+import type { GroupExecutor } from "./group-executor.js";
 import type { WorkGroup } from "./schema.js";
 
 export interface DashboardLine {

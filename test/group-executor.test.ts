@@ -4,8 +4,8 @@ import {
 	type ExecutorDeps,
 	GroupExecutor,
 } from "../packages/modes/src/group-executor.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
 import type { Plan } from "../packages/modes/src/schema.js";
+import type { PlanStore } from "../packages/modes/src/storage.js";
 
 function memStore(): PlanStore & { last: Plan | null } {
 	let saved: Plan | null = null;

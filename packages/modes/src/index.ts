@@ -45,17 +45,23 @@ export {
 	transitiveDependencies,
 } from "./compaction.js";
 export { PlanEngine } from "./engine.js";
-export {
-	GroupExecutor,
-	type ExecutorDeps,
-	type GroupRunState,
-	type AgentState,
-} from "./group-executor.js";
 export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
 export {
 	buildForwardSummaryPrompt,
 	buildPlanAwareCompactionMarker,
+	type ForwardSummaryInput,
 } from "./forward-summary.js";
+export {
+	renderDashboard,
+	renderDashboardText,
+} from "./group-dashboard.js";
+export {
+	type AgentState,
+	type ExecutorDeps,
+	GroupExecutor,
+	type GroupRunState,
+} from "./group-executor.js";
+export { buildRecap } from "./group-recap.js";
 export {
 	type FooterDeps,
 	formatCacheHitRate,
@@ -63,11 +69,6 @@ export {
 	formatSessionUsage,
 	installFooter,
 } from "./install-footer.js";
-export {
-	renderDashboard,
-	renderDashboardText,
-} from "./group-dashboard.js";
-export { buildRecap } from "./group-recap.js";
 export {
 	type OverlayComponent,
 	type OverlayId,
@@ -114,10 +115,10 @@ export {
 export { createPlanStore, plansRoot } from "./storage.js";
 export { createModesSummariser } from "./summarise.js";
 export {
-	createPlanTool,
-	createGroupTool,
-	createTaskTool,
 	createAgentTool,
+	createGroupTool,
+	createPlanTool,
+	createTaskTool,
 } from "./tools.js";
 export type {
 	CompactionResumeDecision,
@@ -132,7 +133,6 @@ export {
 	shouldResumeAfterCompaction,
 } from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
-export { type ForwardSummaryInput } from "./forward-summary.js";
 
 export default defineExtension(
 	{

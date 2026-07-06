@@ -89,7 +89,10 @@ export default defineExtension(
 				const reply = await runAgentTurn(pi, active, prompt);
 				message = extractCommitMessage(reply) ?? undefined;
 				if (!message) {
-					return { committed: false, error: "failed to generate commit message" };
+					return {
+						committed: false,
+						error: "failed to generate commit message",
+					};
 				}
 			}
 
@@ -108,15 +111,21 @@ export default defineExtension(
 
 		async function ship(input: ShipInput): Promise<ShipResult> {
 			const active = ctx;
-			if (!active) return { branch: "", pushed: false, error: "no active context" };
+			if (!active)
+				return { branch: "", pushed: false, error: "no active context" };
 
 			const cwd = input.cwd ?? active.cwd;
 			const branch = currentBranch(cwd);
-			if (!branch) return { branch: "", pushed: false, error: "not on a branch" };
+			if (!branch)
+				return { branch: "", pushed: false, error: "not on a branch" };
 
 			const defBranch = await defaultBranch(cwd);
 			if (branch === defBranch) {
-				return { branch, pushed: false, error: "refusing to ship default branch" };
+				return {
+					branch,
+					pushed: false,
+					error: "refusing to ship default branch",
+				};
 			}
 
 			// Push
@@ -131,9 +140,14 @@ export default defineExtension(
 				return { branch, pushed: true, pr: existingPr.number };
 			}
 
-			const title = input.title ?? branch.replace(/^feat\//, "").replace(/-/g, " ");
+			const title =
+				input.title ?? branch.replace(/^feat\//, "").replace(/-/g, " ");
 			const body = input.body ?? "";
-			const { url } = await createPr(cwd, { title, body, base: defBranch ?? undefined });
+			const { url } = await createPr(cwd, {
+				title,
+				body,
+				base: defBranch ?? undefined,
+			});
 			const prNum = url?.match(/\/pull\/(\d+)/)?.[1];
 
 			return {
@@ -147,7 +161,8 @@ export default defineExtension(
 		maestro.capabilities.register(CAPABILITIES.ship, { ship });
 
 		pi.registerCommand("commit", {
-			description: "Stage and commit current changes with a conventional-commit message.",
+			description:
+				"Stage and commit current changes with a conventional-commit message.",
 			handler: async (_args: string, active: ExtensionContext) => {
 				const result = await commitLocal({ cwd: active.cwd });
 				const msg = result.committed

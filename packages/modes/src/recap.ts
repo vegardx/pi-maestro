@@ -233,6 +233,24 @@ export function formatRecap(
 		lines.push("");
 	}
 
+	// Orchestrator row (planning/coordination tokens)
+	if (ledger) {
+		const { bySource } = ledger.snapshot();
+		const orchTok = bySource.get("orchestrator") ?? ZERO;
+		if (orchTok.totalTokens > 0) {
+			lines.push("  orchestrator");
+			lines.push(
+				padR("    planning", nameW) +
+				padL(fmtTok(orchTok), tokW) +
+				padL(fmtCache(orchTok), cacheW) +
+				padL(fmtCost(orchTok), costW) +
+				padL("", timeW),
+			);
+			lines.push("");
+			grandTotal = addTokens(grandTotal, orchTok);
+		}
+	}
+
 	// Grand total
 	lines.push(div);
 	lines.push(

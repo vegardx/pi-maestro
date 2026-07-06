@@ -33,16 +33,20 @@ import { completionGateSatisfied, transitionThrough } from "./execution.js";
 import { renderAgentSeed, renderPlanForAgent } from "./markdown.js";
 import { QuestionQueue } from "./question-queue.js";
 import {
+	type AgentMode,
 	type Deliverable,
 	defaultBranchForDeliverable,
 	deliverables,
 	effectiveDependsOn,
 	findDeliverable,
+	getParentId,
+	isChildId,
 	type Plan,
 	pendingLifecycle,
 	pickBaseBranch,
 	readyDeliverables,
 	repoFor,
+	resolveAgentMode,
 } from "./schema.js";
 import {
 	appendToSession,
@@ -50,7 +54,7 @@ import {
 	forkSessionAt,
 	parseSessionFile,
 } from "./session-fork.js";
-import { getModeRoleModel, MAESTRO_ENV } from "./settings.js";
+import { getModeRoleModel } from "./settings.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -72,15 +76,6 @@ export type TmuxAgentStatus =
 	| "done"
 	| "failed";
 
-export interface LensRunRecord {
-	readonly lens: string;
-	readonly findings: number;
-	readonly fixed: number;
-	readonly model?: string;
-	readonly effort?: string;
-	readonly tokens: TokenSnapshot;
-}
-
 export interface TmuxAgentState {
 	readonly deliverableId: string;
 	readonly agentName: string;
@@ -92,15 +87,11 @@ export interface TmuxAgentState {
 	idleCount: number;
 	stuckSteerSent: boolean;
 	tokens: TokenSnapshot;
-	lensRuns: number;
-	reviewCycles: number;
-	lastLensAt?: number;
 	prUrl?: string;
 	summary?: string;
 	errorDetail?: string;
 	commits?: string[];
 	model?: string;
-	lensResults: LensRunRecord[];
 }
 
 export interface TmuxFanoutDeps {
@@ -113,11 +104,6 @@ export interface TmuxFanoutDeps {
 	readonly onAgentStateChanged?: (id: string, state: TmuxAgentState) => void;
 	readonly onAllSettled?: () => void;
 	readonly onQuestionsReceived?: (id: string, count: number) => void;
-	readonly onLensUsage?: (
-		id: string,
-		lens: string,
-		snapshot: TokenSnapshot,
-	) => void;
 	/** Options for the analyze phase. When provided, enables checkpoint forking. */
 	readonly analyzeOpts?: AnalyzeOpts;
 }
@@ -166,7 +152,6 @@ function collectGitInfo(
 }
 
 const POLL_INTERVAL_MS = 3000;
-const MAX_REVIEW_CYCLES = MAESTRO_ENV.maxReviewCycles;
 const ZERO_TOKENS: TokenSnapshot = {
 	input: 0,
 	output: 0,
@@ -422,7 +407,26 @@ export class TmuxFanout {
 		});
 	}
 
-	private async buildEnvVars(agentId: string): Promise<string[]> {
+	/**
+	 * Find the author sibling's worktree for a read-only child agent.
+	 * Convention: parent--author is the author sibling.
+	 */
+	private findAuthorWorktree(childId: string): string | undefined {
+		const parentId = getParentId(childId);
+		if (!parentId) return undefined;
+		// Look for the author sibling: parentId--author
+		const authorId = `${parentId}--author`;
+		const authorState = this.agents.get(authorId);
+		if (authorState?.worktreePath) return authorState.worktreePath;
+		// Fallback: the parent itself might have a worktree (flat structure)
+		const parentState = this.agents.get(parentId);
+		return parentState?.worktreePath;
+	}
+
+	private async buildEnvVars(
+		agentId: string,
+		agentMode?: AgentMode,
+	): Promise<string[]> {
 		const workerSessionDir = join(
 			resolveOrchestratorSessionDir(),
 			"workers",
@@ -433,14 +437,20 @@ export class TmuxFanout {
 			`PI_MAESTRO_AGENT_ID=${agentId}`,
 			`PI_CODING_AGENT_SESSION_DIR=${workerSessionDir}`,
 		];
+		if (agentMode) {
+			vars.push(`PI_MAESTRO_AGENT_MODE=${agentMode}`);
+		}
 		if (process.env.PI_CODING_AGENT_DIR) {
 			vars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
 		}
+		// Resolve model — use deliverable's slot/effort if specified
+		const d = findDeliverable(this.deps.engine.get(), agentId);
 		const resolved = await getModeRoleModel(this.extensionCtx, "agent");
 		if (resolved) {
 			vars.push(`PI_MODEL=${resolved.modelId}`);
-			if (resolved.effort && resolved.effort !== "off") {
-				vars.push(`PI_THINKING=${resolved.effort}`);
+			const effort = d?.effort ?? resolved.effort;
+			if (effort && effort !== "off") {
+				vars.push(`PI_THINKING=${effort}`);
 			}
 		}
 		if (process.env.PATH) {
@@ -546,18 +556,36 @@ export class TmuxFanout {
 	private async spawnAgent(d: Deliverable): Promise<void> {
 		const plan = this.deps.engine.get();
 		const repo = repoFor(plan, d);
-		const branch = d.branch ?? defaultBranchForDeliverable(d);
-		const baseBranch = pickBaseBranch(plan, d.id, this.deps.defaultBranch);
-		const wtPath = worktreePathFor(repo.path, d.id);
+		const agentMode = resolveAgentMode(d);
 
-		const result = addWorktree(repo.path, wtPath, branch, baseBranch);
-		log(
-			`worktree ${d.id}: repo=${repo.path} wt=${wtPath} branch=${branch} base=${baseBranch} ok=${result.ok} path=${result.ok ? result.path : "n/a"}`,
-		);
-		if (!result.ok) {
-			log(`worktree ${d.id}: FAILED — ${result.error}`);
-			this.markFailed(d.id, result.error);
-			return;
+		// Read-only agents reuse the author sibling's worktree (no own branch)
+		let wtPath: string;
+		let branch: string;
+		if (agentMode === "read-only" && isChildId(d.id)) {
+			const authorWt = this.findAuthorWorktree(d.id);
+			if (authorWt) {
+				wtPath = authorWt;
+				branch = d.branch ?? defaultBranchForDeliverable(d);
+			} else {
+				// No author sibling worktree found — use repo root in read-only
+				wtPath = repo.path;
+				branch = this.deps.defaultBranch;
+			}
+		} else {
+			branch = d.branch ?? defaultBranchForDeliverable(d);
+			const baseBranch = pickBaseBranch(plan, d.id, this.deps.defaultBranch);
+			wtPath = worktreePathFor(repo.path, d.id);
+
+			const result = addWorktree(repo.path, wtPath, branch, baseBranch);
+			log(
+				`worktree ${d.id}: repo=${repo.path} wt=${wtPath} branch=${branch} base=${baseBranch} ok=${result.ok} path=${result.ok ? result.path : "n/a"}`,
+			);
+			if (!result.ok) {
+				log(`worktree ${d.id}: FAILED — ${result.error}`);
+				this.markFailed(d.id, result.error);
+				return;
+			}
+			wtPath = result.path;
 		}
 
 		// Assign agent name
@@ -577,14 +605,14 @@ export class TmuxFanout {
 			sessionDir,
 			timestamp,
 			seed,
-			result.path,
+			wtPath,
 		);
 
 		// Register agent state
 		const state: TmuxAgentState = {
 			deliverableId: d.id,
 			agentName: name,
-			worktreePath: result.path,
+			worktreePath: wtPath,
 			sessionFile,
 			startedAt: Date.now(),
 			status: "spawning",
@@ -592,9 +620,6 @@ export class TmuxFanout {
 			idleCount: 0,
 			stuckSteerSent: false,
 			tokens: { ...ZERO_TOKENS },
-			lensRuns: 0,
-			reviewCycles: 0,
-			lensResults: [],
 		};
 		this.agents.set(d.id, state);
 
@@ -606,19 +631,23 @@ export class TmuxFanout {
 		}
 
 		// Spawn tmux session with env vars for RPC discovery.
-		const envVars = await this.buildEnvVars(d.id);
+		const envVars = await this.buildEnvVars(d.id, agentMode);
 		const userMsg =
-			`Implement this deliverable: "${d.title}". ` +
-			"Follow the plan context above. Complete all gating tasks, " +
-			"commit your work, push, and open a PR.";
+			agentMode === "read-only"
+				? `Review deliverable: "${d.title}". ` +
+					"Read the code, analyze it, and report your findings via task update. " +
+					"You cannot modify files."
+				: `Implement this deliverable: "${d.title}". ` +
+					"Follow the plan context above. Complete all gating tasks, " +
+					"commit your work, push, and open a PR.";
 		const escapedMsg = userMsg.replace(/"/g, '\\"');
 		const piCmd = this.deps.extensionPath
 			? `pi --session "${sessionFile}" -e "${this.deps.extensionPath}" "${escapedMsg}"`
 			: `pi --session "${sessionFile}" "${escapedMsg}"`;
 		const command = [...envVars, piCmd].join(" ");
-		log(`spawn ${name}: cwd=${result.path} cmd=${command.slice(0, 200)}`);
+		log(`spawn ${name}: cwd=${wtPath} cmd=${command.slice(0, 200)}`);
 		try {
-			await tmuxSpawn(name, result.path, command, {
+			await tmuxSpawn(name, wtPath, command, {
 				width: process.stdout.columns || 200,
 				height: process.stdout.rows || 50,
 			});
@@ -673,21 +702,7 @@ export class TmuxFanout {
 				this.deps.onAgentStateChanged?.(agentId, state);
 				break;
 			case "lensUsage":
-				state.lensRuns++;
-				state.lastLensAt = Date.now();
-				state.lensResults.push({
-					lens: msg.lens,
-					findings: msg.findings ?? 0,
-					fixed: msg.fixed ?? 0,
-					model: msg.model,
-					effort: msg.effort,
-					tokens: msg.snapshot,
-				});
-				if (msg.lens === "review") {
-					state.reviewCycles++;
-					this.handleReviewCycleCheck(agentId, state);
-				}
-				this.deps.onLensUsage?.(agentId, msg.lens, msg.snapshot);
+				// Legacy lens usage — ignored (lens system removed)
 				break;
 			case "done":
 				this.markDone(agentId, msg.summary, msg.prUrl, msg.commits, msg.model);
@@ -858,31 +873,6 @@ export class TmuxFanout {
 		}
 	}
 
-	private handleReviewCycleCheck(agentId: string, state: TmuxAgentState): void {
-		if (state.reviewCycles === MAX_REVIEW_CYCLES) {
-			this.server.send(agentId, {
-				type: "steer",
-				content:
-					"You have completed multiple review cycles. From this point, only fix IMPORTANT " +
-					"or CRITICAL findings. Accept all MINOR findings as-is and proceed to SHIP. " +
-					"Do not run the review tool again unless you made substantial architectural changes.",
-			});
-			log(
-				`review-loop-breaker: steered ${agentId} after ${state.reviewCycles} cycles`,
-			);
-		} else if (state.reviewCycles > MAX_REVIEW_CYCLES) {
-			this.server.send(agentId, {
-				type: "steer",
-				content:
-					"STOP. You have exceeded the maximum review cycles. Ship your current " +
-					"implementation NOW using the ship tool. Do not run review again.",
-			});
-			log(
-				`review-loop-breaker: FORCE steered ${agentId} after ${state.reviewCycles} cycles`,
-			);
-		}
-	}
-
 	private checkCompletionGate(agentId: string): boolean {
 		const state = this.agents.get(agentId);
 		if (!state || state.status === "done" || state.shutdownSent) return false;
@@ -921,9 +911,66 @@ export class TmuxFanout {
 		transitionThrough(this.deps.engine, agentId, "in-review");
 		this.deps.onAgentStateChanged?.(agentId, state);
 		this.deps.onPlanChanged?.();
+
+		// Check if this was a review agent completing — toggle reviews-gate on author
+		this.checkReviewsGate(agentId);
+
 		// Spawn newly unblocked dependents
 		this.tick();
 		this.checkSettle();
+	}
+
+	/**
+	 * When a review/verify child agent finishes, check if all review siblings
+	 * are done. If so, toggle the `reviews-gate` task on the author sibling.
+	 */
+	private checkReviewsGate(completedId: string): void {
+		if (!isChildId(completedId)) return;
+		const parentId = getParentId(completedId);
+		if (!parentId) return;
+
+		const plan = this.deps.engine.get();
+		const parent = findDeliverable(plan, parentId);
+		if (parent?.type !== "deliverable") return;
+
+		// Find all review/verify children under this parent grouping
+		const reviewChildren = parent.children.filter(
+			(c): c is Deliverable =>
+				c.type === "deliverable" &&
+				(c.agentRole === "review" || c.agentRole === "verify"),
+		);
+		if (reviewChildren.length === 0) return;
+
+		// Check if ALL review children are done/shipped
+		const allDone = reviewChildren.every(
+			(rc) =>
+				rc.status === "in-review" ||
+				rc.status === "ready-to-ship" ||
+				rc.status === "shipped",
+		);
+		if (!allDone) return;
+
+		// Find the author sibling and toggle its reviews-gate task
+		const authorChild = parent.children.find(
+			(c): c is Deliverable =>
+				c.type === "deliverable" && c.agentRole === "author",
+		);
+		if (!authorChild) return;
+
+		// Look for a task with id containing "reviews-gate" on the author
+		const gateTask = authorChild.children.find(
+			(c) =>
+				c.type === "work-item" &&
+				(c.kind === "manual" || c.kind === "task") &&
+				c.id.includes("reviews-gate"),
+		);
+		if (gateTask && gateTask.type === "work-item" && !gateTask.done) {
+			log(
+				`reviews-gate: all reviews done for ${parentId}, toggling ${gateTask.id}`,
+			);
+			this.deps.engine.toggleWorkItem(gateTask.id);
+			this.deps.onPlanChanged?.();
+		}
 	}
 
 	private markFailed(agentId: string, detail?: string): void {

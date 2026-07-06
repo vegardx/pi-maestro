@@ -1,7 +1,7 @@
 // Execution recap — formats a summary of all agent work.
 
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
-import type { LensRunRecord, TmuxAgentState } from "./execution-tmux.js";
+import type { TmuxAgentState } from "./execution-tmux.js";
 import type { UsageLedger } from "./usage-ledger.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -68,7 +68,7 @@ const ZERO: TokenSnapshot = {
 
 // ─── Get per-agent token splits ─────────────────────────────────────────────
 
-function getWorkerTokens(
+function getAgentTokens(
 	agentId: string,
 	state: TmuxAgentState,
 	ledger?: UsageLedger,
@@ -77,36 +77,6 @@ function getWorkerTokens(
 	const { bySource } = ledger.snapshot();
 	return bySource.get(`agent:${agentId}`) ?? state.tokens;
 }
-
-function getLensTokens(agentId: string, ledger?: UsageLedger): TokenSnapshot {
-	if (!ledger) return ZERO;
-	const { bySource } = ledger.snapshot();
-	let result = { ...ZERO };
-	for (const [key, snap] of bySource) {
-		if (key.startsWith(`lens:${agentId}:`)) {
-			result = addTokens(result, snap);
-		}
-	}
-	return result;
-}
-
-// ─── Format findings line ───────────────────────────────────────────────────
-
-function fmtLensLine(r: LensRunRecord): string {
-	const lens = padR(r.lens, 10);
-	let findingsText: string;
-	if (r.findings === 0) {
-		findingsText = "0 findings";
-	} else {
-		const fixedPart = r.fixed > 0 ? ` → ${r.fixed} fixed` : "";
-		findingsText = `${r.findings} finding${r.findings > 1 ? "s" : ""}${fixedPart}`;
-	}
-	const modelPart = r.model
-		? `  ${r.model}${r.effort ? ` (${r.effort})` : ""}`
-		: "";
-	return `       ${lens}${padR(findingsText, 22)}${modelPart}`;
-}
-
 // ─── Main format ────────────────────────────────────────────────────────────
 
 export function formatRecap(
@@ -169,12 +139,6 @@ export function formatRecap(
 		if (agent.status === "failed" && agent.errorDetail) {
 			lines.push(`     Error:    ${agent.errorDetail}`);
 		}
-		if (agent.lensResults.length > 0) {
-			lines.push("     Lenses:");
-			for (const r of agent.lensResults) {
-				lines.push(fmtLensLine(r));
-			}
-		}
 		lines.push("");
 	}
 
@@ -186,7 +150,7 @@ export function formatRecap(
 	const cacheW = 8;
 	const costW = 8;
 	const timeW = 8;
-	const subDiv = "─".repeat(nameW + tokW + cacheW + costW + timeW);
+	const _subDiv = "─".repeat(nameW + tokW + cacheW + costW + timeW);
 
 	lines.push(
 		padR("", nameW) +
@@ -200,44 +164,17 @@ export function formatRecap(
 	const wallClock = now - earliest;
 
 	for (const [id, agent] of agents) {
-		const workerTok = getWorkerTokens(id, agent, ledger);
-		const lensTok = getLensTokens(id, ledger);
-		const subtotal = addTokens(workerTok, lensTok);
+		const agentTok = getAgentTokens(id, agent, ledger);
+		const subtotal = agentTok;
 		grandTotal = addTokens(grandTotal, subtotal);
 		const elapsed = now - agent.startedAt;
 
-		// Agent name header
-		lines.push(`  ${agent.agentName}`);
-
-		// Worker row
+		// Agent row
 		lines.push(
-			padR("    worker", nameW) +
-				padL(fmtTok(workerTok), tokW) +
-				padL(fmtCache(workerTok), cacheW) +
-				padL(fmtCost(workerTok), costW) +
-				padL("", timeW),
-		);
-
-		// Lenses row
-		if (agent.lensResults.length > 0) {
-			lines.push(
-				padR(`    lenses (${agent.lensResults.length} runs)`, nameW) +
-					padL(fmtTok(lensTok), tokW) +
-					padL(fmtCache(lensTok), cacheW) +
-					padL(fmtCost(lensTok), costW) +
-					padL("", timeW),
-			);
-		}
-
-		// Subtotal
-		lines.push(
-			`    ${subDiv.slice(0, nameW + tokW + cacheW + costW + timeW - 4)}`,
-		);
-		lines.push(
-			padR("    subtotal", nameW) +
-				padL(fmtTok(subtotal), tokW) +
-				padL(fmtCache(subtotal), cacheW) +
-				padL(fmtCost(subtotal), costW) +
+			padR(`    ${agent.agentName}`, nameW) +
+				padL(fmtTok(agentTok), tokW) +
+				padL(fmtCache(agentTok), cacheW) +
+				padL(fmtCost(agentTok), costW) +
 				padL(fmtDur(elapsed), timeW),
 		);
 		lines.push("");

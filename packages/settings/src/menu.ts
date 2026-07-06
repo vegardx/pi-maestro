@@ -64,15 +64,10 @@ function paletteFromTheme(theme: Theme): Palette {
 		};
 	}
 	return {
-		// biome-ignore lint/style/noNonNullAssertion: guarded above
 		dim: (s) => t.fg!("dim", s),
-		// biome-ignore lint/style/noNonNullAssertion: guarded above
 		accent: (s) => t.fg!("accent", s),
-		// biome-ignore lint/style/noNonNullAssertion: guarded above
 		heading: (s) => t.bold!(t.fg!("text", s)),
-		// biome-ignore lint/style/noNonNullAssertion: guarded above
 		muted: (s) => t.fg!("muted", s),
-		// biome-ignore lint/style/noNonNullAssertion: guarded above
 		success: (s) => t.fg!("success", s),
 	};
 }
@@ -374,9 +369,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (val === "\u2014") return val;
 		const isModelField =
 			row.key.endsWith(".model") ||
-			(row.extension === "@presets" &&
-				
-				!row.key.startsWith("@name."));
+			(row.extension === "@presets" && !row.key.startsWith("@name."));
 		if (!isModelField) return val;
 		// Handle combined "model · effort" format from slot rows
 		const sep = " \u00b7 ";
@@ -511,7 +504,8 @@ class ConfigMenuComponent implements Component, Focusable {
 					// Determine if this slot belongs to the active preset
 					const presetName = r.key.split(".")[0];
 					const isActivePreset = this.sections[0]?.rows.some(
-						(row) => row.key === `@name.${presetName}` && row.global === "active",
+						(row) =>
+							row.key === `@name.${presetName}` && row.global === "active",
 					);
 					const label = visPad(r.label, labelW - 2);
 					const raw = r.global ?? "";
@@ -773,11 +767,7 @@ class ConfigMenuComponent implements Component, Focusable {
 					break;
 				}
 				// Preset slot rows → column-aware picker
-				if (
-					row?.extension === "@presets" &&
-					
-					!row.key.startsWith("@name.")
-				) {
+				if (row?.extension === "@presets" && !row.key.startsWith("@name.")) {
 					if (this.presetCol === 1) {
 						// Effort column → open effort picker directly
 						this.openSlotEffortPicker();

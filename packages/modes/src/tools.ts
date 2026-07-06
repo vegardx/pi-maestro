@@ -14,6 +14,7 @@ import {
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
+import type { AgentBridge } from "./agent-bridge.js";
 import {
 	type AddDeliverableInput,
 	type AddWorkItemInput,
@@ -51,6 +52,10 @@ export interface PlanToolDeps {
 	readonly onTaskToggle?: (taskId: string) => void;
 	/** Read-only seed content for workers without a local plan engine. */
 	readonly seedContent?: () => string | undefined;
+	/** Agent bridge for RPC plan operations (agent mode only). */
+	readonly agentBridge?: AgentBridge;
+	/** The agent's own deliverable ID (agent mode only). */
+	readonly agentDeliverableId?: () => string | undefined;
 }
 
 interface ToolDetails {
@@ -173,6 +178,17 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 			"deliverable — manage plan deliverables + repo registry (add/update/remove/reorder/list/register-repo/unregister-repo).",
 		parameters: DeliverableParams,
 		async execute(_id, params): Promise<Result> {
+			// Agent mode: agents cannot modify plan structure
+			if (!deps.engine() && deps.agentBridge) {
+				if (params.action === "list") {
+					// Allow reading — redirect to plan tool
+					const content = await deps.agentBridge.planRead();
+					if (content) return ok(content, {});
+				}
+				return error(
+					"agents cannot modify plan structure — use task tool for work items",
+				);
+			}
 			return withEngine(deps, (engine) => {
 				// Lifecycle guards: after execution starts, restrict destructive actions
 				const plan = engine.get();
@@ -310,11 +326,64 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			"task — manage plan work-items (task/followup/question/manual).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
-			// Agent mode: forward toggle over RPC when no local engine
-			if (params.action === "toggle" && !deps.engine() && deps.onTaskToggle) {
-				if (!params.id) return error("toggle requires id");
-				deps.onTaskToggle(params.id);
-				return ok(`${params.id} marked done.`, { done: true });
+			// Agent mode: forward operations over RPC when no local engine
+			if (!deps.engine()) {
+				if (params.action === "toggle" && deps.onTaskToggle) {
+					if (!params.id) return error("toggle requires id");
+					deps.onTaskToggle(params.id);
+					return ok(`${params.id} marked done.`, { done: true });
+				}
+				if (deps.agentBridge) {
+					const delivId =
+						params.deliverableId ?? deps.agentDeliverableId?.() ?? "";
+					switch (params.action) {
+						case "add": {
+							if (!params.title) return error("add requires title");
+							const res = await deps.agentBridge.planMutate(
+								"addTask",
+								delivId,
+								{
+									title: params.title,
+									body: params.body,
+									kind: params.kind as WorkItemKind | undefined,
+								},
+							);
+							if (!res.success) return error(res.error ?? "mutation failed");
+							return ok(`\u2713 ${res.taskId}`, {});
+						}
+						case "update": {
+							if (!params.id) return error("update requires id");
+							const res = await deps.agentBridge.planMutate(
+								"updateTask",
+								delivId,
+								{
+									taskId: params.id,
+									title: params.title,
+									body: params.body,
+								},
+							);
+							if (!res.success) return error(res.error ?? "mutation failed");
+							return ok(`Updated work item ${params.id}.`, {});
+						}
+						case "toggle": {
+							if (!params.id) return error("toggle requires id");
+							const res = await deps.agentBridge.planMutate(
+								"toggleTask",
+								delivId,
+								{
+									taskId: params.id,
+								},
+							);
+							if (!res.success) return error(res.error ?? "mutation failed");
+							return ok(`${params.id} marked done.`, { done: true });
+						}
+						case "remove":
+							return error("agents cannot remove tasks");
+						case "move":
+							return error("agents cannot move tasks");
+					}
+				}
+				return error("no plan active \u2014 run /plan first to start one");
 			}
 			return withEngine(deps, (engine) => {
 				// Lifecycle guards: restrict destructive task actions on active deliverables
@@ -428,7 +497,16 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 		async execute(_id, params): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) {
-				// Worker mode: show seed content (read-only plan context)
+				// Agent mode: use RPC for live plan state
+				if (deps.agentBridge) {
+					try {
+						const content = await deps.agentBridge.planRead();
+						if (content) return ok(content, {});
+					} catch {
+						// Fall through to seed
+					}
+				}
+				// Fallback: show seed content (static cache-prefix view)
 				const seed = deps.seedContent?.();
 				if (seed) return ok(seed, {});
 				return error("no plan active \u2014 run /plan first to start one");

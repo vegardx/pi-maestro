@@ -3,7 +3,7 @@
 export const MODE_NAMES = ["hack", "plan", "auto"] as const;
 
 /** All modes including hidden ones not in the user cycle. */
-export const ALL_MODES = ["hack", "plan", "auto", "worker"] as const;
+export const ALL_MODES = ["hack", "plan", "auto", "agent"] as const;
 
 export type ModeName = (typeof ALL_MODES)[number];
 

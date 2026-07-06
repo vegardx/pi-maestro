@@ -709,9 +709,9 @@ describe("TmuxFanout", () => {
 			expect(call[2]).toContain("_agent-fallback.jsonl");
 		});
 
-		it("passes MAESTRO_WORKER_MODEL as PI_MODEL env var", async () => {
-			const original = process.env.MAESTRO_WORKER_MODEL;
-			process.env.MAESTRO_WORKER_MODEL = "anthropic/test-model";
+		it("passes MAESTRO_AGENT_MODEL as PI_MODEL env var", async () => {
+			const original = process.env.MAESTRO_AGENT_MODEL;
+			process.env.MAESTRO_AGENT_MODEL = "anthropic/test-model";
 
 			try {
 				engine.addDeliverable({ title: "Model", dependsOn: [] });
@@ -722,8 +722,8 @@ describe("TmuxFanout", () => {
 				const call = vi.mocked(tmux.spawn).mock.calls[0];
 				expect(call[2]).toContain("PI_MODEL=anthropic/test-model");
 			} finally {
-				if (original === undefined) delete process.env.MAESTRO_WORKER_MODEL;
-				else process.env.MAESTRO_WORKER_MODEL = original;
+				if (original === undefined) delete process.env.MAESTRO_AGENT_MODEL;
+				else process.env.MAESTRO_AGENT_MODEL = original;
 			}
 		});
 	});

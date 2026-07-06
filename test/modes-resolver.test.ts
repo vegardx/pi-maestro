@@ -39,46 +39,46 @@ describe("getModeRoleModel", () => {
 	afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
 		setImplementOverrides(undefined);
-		delete process.env.MAESTRO_WORKER_MODEL;
-		delete process.env.MAESTRO_WORKER_THINKING;
+		delete process.env.MAESTRO_AGENT_MODEL;
+		delete process.env.MAESTRO_AGENT_THINKING;
 		delete process.env.MAESTRO_ANALYZE_MODEL;
 		delete process.env.MAESTRO_ANALYZE_THINKING;
 	});
 
 	it("returns null when no env, no settings, no ctx.model", async () => {
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result).toBeNull();
 	});
 
-	it("resolves from MAESTRO_WORKER_MODEL env var", async () => {
-		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+	it("resolves from MAESTRO_AGENT_MODEL env var", async () => {
+		process.env.MAESTRO_AGENT_MODEL = "anthropic/claude-sonnet-4-20250514";
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result).not.toBeNull();
 		expect(result!.modelId).toBe("anthropic/claude-sonnet-4-20250514");
 		expect(result!.source).toBe("env");
 	});
 
 	it("includes thinking from env var", async () => {
-		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
-		process.env.MAESTRO_WORKER_THINKING = "high";
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+		process.env.MAESTRO_AGENT_MODEL = "anthropic/claude-sonnet-4-20250514";
+		process.env.MAESTRO_AGENT_THINKING = "high";
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result!.effort).toBe("high");
 	});
 
 	it("ignores invalid thinking level from env", async () => {
-		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
-		process.env.MAESTRO_WORKER_THINKING = "extreme";
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+		process.env.MAESTRO_AGENT_MODEL = "anthropic/claude-sonnet-4-20250514";
+		process.env.MAESTRO_AGENT_THINKING = "extreme";
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result!.effort).toBeUndefined();
 	});
 
 	it("CLI overrides take priority over env", async () => {
-		process.env.MAESTRO_WORKER_MODEL = "anthropic/claude-sonnet-4-20250514";
+		process.env.MAESTRO_AGENT_MODEL = "anthropic/claude-sonnet-4-20250514";
 		setImplementOverrides({
-			workerModel: "openai/gpt-4o",
-			workerThinking: "medium",
+			agentModel: "openai/gpt-4o",
+			agentThinking: "medium",
 		});
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result!.modelId).toBe("openai/gpt-4o");
 		expect(result!.effort).toBe("medium");
 		expect(result!.source).toBe("explicit");
@@ -101,7 +101,7 @@ describe("getModeRoleModel", () => {
 				extensionConfig: {
 					modes: {
 						models: {
-							worker: {
+							agent: {
 								model: "openai/gpt-4o",
 								effort: "minimal",
 							},
@@ -110,7 +110,7 @@ describe("getModeRoleModel", () => {
 				},
 			}),
 		);
-		const result = await getModeRoleModel(mockCtx(root), "worker");
+		const result = await getModeRoleModel(mockCtx(root), "agent");
 		expect(result).not.toBeNull();
 		expect(result!.modelId).toBe("openai/gpt-4o");
 		expect(result!.effort).toBe("minimal");
@@ -129,15 +129,15 @@ describe("ImplementOverrides", () => {
 
 	it("set and get round-trips", () => {
 		const o: ImplementOverrides = {
-			workerModel: "openai/gpt-4o",
-			workerThinking: "high",
+			agentModel: "openai/gpt-4o",
+			agentThinking: "high",
 		};
 		setImplementOverrides(o);
 		expect(getImplementOverrides()).toEqual(o);
 	});
 
 	it("can be cleared", () => {
-		setImplementOverrides({ workerModel: "openai/gpt-4o" });
+		setImplementOverrides({ agentModel: "openai/gpt-4o" });
 		setImplementOverrides(undefined);
 		expect(getImplementOverrides()).toBeUndefined();
 	});

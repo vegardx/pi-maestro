@@ -69,6 +69,8 @@ export {
 	installFooter,
 } from "./install-footer.js";
 export {
+	renderAgentSeed,
+	renderPlanForAgent,
 	renderPlanMarkdown,
 	renderPlanSeed,
 	renderPlanSummary,

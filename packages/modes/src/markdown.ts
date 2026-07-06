@@ -7,6 +7,7 @@ import {
 	type Deliverable,
 	deliverables,
 	effectiveWorkItemKind,
+	findDeliverable,
 	isDeliverable,
 	type Plan,
 	repoFor,
@@ -276,4 +277,136 @@ function renderItemBullet(item: WorkItem): string {
 		kind === "question" && item.answer !== undefined ? " _(answered)_" : "";
 	const checked = item.done ? " _(done)_" : "";
 	return `- ${marker} **${item.title}** \`${item.id}\` _(${kind})_${answered}${checked}`;
+}
+
+// ─── Agent-focused plan view ─────────────────────────────────────────────────
+
+/**
+ * Render a focused seed for an agent. Shorter than renderPlanSeed — includes
+ * only the active deliverable's tasks and dependency summaries. Used as the
+ * cache-prefix-stable content injected at spawn time.
+ *
+ * For live state, agents call `plan` tool which uses `renderPlanForAgent`.
+ */
+export function renderAgentSeed(
+	plan: Plan,
+	activeDeliverableId: string,
+): string {
+	const lines: string[] = [];
+	const active = findDeliverable(plan, activeDeliverableId);
+
+	lines.push("[AUTO MODE — executing plan]");
+	lines.push("");
+
+	if (active) {
+		lines.push(`Active deliverable: \`${active.id}\` — ${active.title}`);
+		if (active.body.trim()) {
+			lines.push("");
+			lines.push(`> ${active.body.trim().split("\n").join("\n> ")}`);
+		}
+		lines.push("");
+		lines.push("Your tasks:");
+		const items = (active.children ?? []).filter(
+			(c): c is WorkItem => c.type === "work-item",
+		);
+		for (const item of items) {
+			const kind = effectiveWorkItemKind(item);
+			if (kind === "task" || kind === "manual") {
+				lines.push(`- [ ] ${item.title} \`${item.id}\``);
+				if (item.body.trim()) {
+					lines.push(`      ${item.body.trim().split("\n")[0]}`);
+				}
+			}
+		}
+	}
+
+	// Carry-forward from dependencies
+	const depSummaries = collectDependencySummaries(plan, activeDeliverableId);
+	if (depSummaries.length > 0) {
+		lines.push("");
+		lines.push("From completed dependencies:");
+		for (const dep of depSummaries) {
+			lines.push(`- ${dep.id}: ${dep.summary}`);
+		}
+	}
+
+	lines.push("");
+	lines.push(
+		"Call `plan` for full current state. Work through tasks. Commit incrementally. Ship when done.",
+	);
+
+	return lines.join("\n");
+}
+
+/**
+ * Render a focused plan view for an agent. Shows the agent's own deliverable
+ * in detail (tasks with checkboxes) plus a concise overview of the rest of
+ * the plan. Used as the response to `planRead` RPC.
+ */
+export function renderPlanForAgent(
+	plan: Plan,
+	activeDeliverableId: string,
+	opts?: { toggledLocally?: ReadonlySet<string> },
+): string {
+	const lines: string[] = [];
+	const active = findDeliverable(plan, activeDeliverableId);
+
+	if (active) {
+		lines.push(
+			`## Your deliverable: ${active.id} — ${active.title} [${active.status}]`,
+		);
+		if (active.body.trim()) {
+			lines.push("");
+			lines.push(`> ${active.body.trim().split("\n").join("\n> ")}`);
+		}
+		lines.push("");
+		lines.push("### Tasks");
+		const items = (active.children ?? []).filter(
+			(c): c is WorkItem => c.type === "work-item",
+		);
+		for (const item of items) {
+			const done = item.done || (opts?.toggledLocally?.has(item.id) ?? false);
+			const kind = effectiveWorkItemKind(item);
+			if (kind === "task" || kind === "manual") {
+				lines.push(`- [${done ? "x" : " "}] ${item.title} \`${item.id}\``);
+			} else {
+				const marker = kind === "question" ? "[?]" : "[~]";
+				lines.push(`- ${marker} ${item.title} \`${item.id}\` _(${kind})_`);
+			}
+			if (item.body.trim()) {
+				lines.push(`      ${item.body.trim().split("\n")[0]}`);
+			}
+		}
+	}
+
+	// Carry-forward from dependencies
+	const depSummaries = collectDependencySummaries(plan, activeDeliverableId);
+	if (depSummaries.length > 0) {
+		lines.push("");
+		lines.push("### From completed dependencies");
+		for (const dep of depSummaries) {
+			lines.push(`- **${dep.id}**: ${dep.summary}`);
+		}
+	}
+
+	// Plan overview (other deliverables — one line each)
+	const all = deliverables(plan);
+	if (all.length > 1) {
+		lines.push("");
+		lines.push("### Plan overview");
+		for (const d of all) {
+			if (d.id === activeDeliverableId) {
+				lines.push(`→ ${d.id} [${d.status}] ← you are here`);
+			} else {
+				const summary = d.summary ? ` — ${d.summary.split("\n")[0]}` : "";
+				lines.push(`- ${d.id} [${d.status}]${summary}`);
+			}
+		}
+	}
+
+	lines.push("");
+	lines.push("---");
+	lines.push("Toggle tasks when done. Commit incrementally. Ship when ready.");
+
+	return lines.join("\n");
 }

@@ -86,7 +86,7 @@ const MODE_COLOR: Record<ModeName, ThemeColor> = {
 	plan: "warning",
 	auto: "accent",
 	hack: "error",
-	worker: "muted",
+	agent: "muted",
 };
 
 export interface FooterDeps {
@@ -94,7 +94,9 @@ export interface FooterDeps {
 	readonly ctx: ExtensionContext;
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
-	readonly getAgentStatus: () => { done: number; total: number; failed: number } | undefined;
+	readonly getAgentStatus: () =>
+		| { done: number; total: number; failed: number }
+		| undefined;
 	readonly getPendingQuestions: () => number;
 }
 
@@ -132,9 +134,7 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const shortPath = cwd.startsWith(home)
 						? `~${cwd.slice(home.length)}`
 						: cwd;
-					const location = branch
-						? `${shortPath} (${branch})`
-						: shortPath;
+					const location = branch ? `${shortPath} (${branch})` : shortPath;
 					leftParts.push(theme.fg("muted", location));
 
 					if (agents && agents.total > 0) {
@@ -146,9 +146,7 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 						leftParts.push(theme.fg(color, agentLabel));
 					}
 					if (questions > 0) {
-						leftParts.push(
-							theme.fg("accent", `Questions: ${questions}`),
-						);
+						leftParts.push(theme.fg("accent", `Questions: ${questions}`));
 					}
 
 					for (const [, val] of statuses) leftParts.push(val);
@@ -174,30 +172,58 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					{
 						const parts: string[] = [];
 						const vis: string[] = [];
-						if (usageLabel) { parts.push(theme.fg("muted", usageLabel)); vis.push(usageLabel); }
-						if (cacheLabel) { parts.push(theme.fg("muted", cacheLabel)); vis.push(cacheLabel); }
-						if (modelLabel) { parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel); }
-						parts.push(modeLabel); vis.push(modeLabelVisible);
-						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
+						if (usageLabel) {
+							parts.push(theme.fg("muted", usageLabel));
+							vis.push(usageLabel);
+						}
+						if (cacheLabel) {
+							parts.push(theme.fg("muted", cacheLabel));
+							vis.push(cacheLabel);
+						}
+						if (modelLabel) {
+							parts.push(theme.fg("muted", modelLabel));
+							vis.push(modelLabel);
+						}
+						parts.push(modeLabel);
+						vis.push(modeLabelVisible);
+						candidates.push({
+							styled: parts.join(sep),
+							visible: vis.join(sepVisible),
+						});
 					}
 
 					// Drop token usage
 					if (usageLabel) {
 						const parts: string[] = [];
 						const vis: string[] = [];
-						if (cacheLabel) { parts.push(theme.fg("muted", cacheLabel)); vis.push(cacheLabel); }
-						if (modelLabel) { parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel); }
-						parts.push(modeLabel); vis.push(modeLabelVisible);
-						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
+						if (cacheLabel) {
+							parts.push(theme.fg("muted", cacheLabel));
+							vis.push(cacheLabel);
+						}
+						if (modelLabel) {
+							parts.push(theme.fg("muted", modelLabel));
+							vis.push(modelLabel);
+						}
+						parts.push(modeLabel);
+						vis.push(modeLabelVisible);
+						candidates.push({
+							styled: parts.join(sep),
+							visible: vis.join(sepVisible),
+						});
 					}
 
 					// Drop cache hit
 					if (modelLabel) {
 						const parts: string[] = [];
 						const vis: string[] = [];
-						parts.push(theme.fg("muted", modelLabel)); vis.push(modelLabel);
-						parts.push(modeLabel); vis.push(modeLabelVisible);
-						candidates.push({ styled: parts.join(sep), visible: vis.join(sepVisible) });
+						parts.push(theme.fg("muted", modelLabel));
+						vis.push(modelLabel);
+						parts.push(modeLabel);
+						vis.push(modeLabelVisible);
+						candidates.push({
+							styled: parts.join(sep),
+							visible: vis.join(sepVisible),
+						});
 					}
 
 					// Slim: just mode

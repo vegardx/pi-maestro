@@ -20,7 +20,8 @@ function fmtDur(ms: number): string {
 	return `${sec}s`;
 }
 
-const k = (n: number): string => (n < 1000 ? `${n}` : `${Math.round(n / 1000)}k`);
+const k = (n: number): string =>
+	n < 1000 ? `${n}` : `${Math.round(n / 1000)}k`;
 
 function fmtTok(t: TokenSnapshot): string {
 	return `↑${k(t.input)} ↓${k(t.output)}`;
@@ -56,8 +57,13 @@ function addTokens(a: TokenSnapshot, b: TokenSnapshot): TokenSnapshot {
 }
 
 const ZERO: TokenSnapshot = {
-	input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
-	totalTokens: 0, cost: 0, turns: 0,
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: 0,
+	turns: 0,
 };
 
 // ─── Get per-agent token splits ─────────────────────────────────────────────
@@ -72,10 +78,7 @@ function getWorkerTokens(
 	return bySource.get(`agent:${agentId}`) ?? state.tokens;
 }
 
-function getLensTokens(
-	agentId: string,
-	ledger?: UsageLedger,
-): TokenSnapshot {
+function getLensTokens(agentId: string, ledger?: UsageLedger): TokenSnapshot {
 	if (!ledger) return ZERO;
 	const { bySource } = ledger.snapshot();
 	let result = { ...ZERO };
@@ -135,10 +138,15 @@ export function formatRecap(
 	// ─── Section 1: Details per agent ─────────────────────────────────────
 	for (const [id, agent] of agents) {
 		const icon =
-			agent.status === "done" ? "✓" :
-			agent.status === "failed" ? "✗" :
-			agent.status === "working" ? "▶" :
-			agent.status === "awaiting-decision" ? "❓" : "○";
+			agent.status === "done"
+				? "✓"
+				: agent.status === "failed"
+					? "✗"
+					: agent.status === "working"
+						? "▶"
+						: agent.status === "awaiting-decision"
+							? "❓"
+							: "○";
 
 		const delivTitle = deliverableTitles?.get(id);
 		const title = delivTitle
@@ -182,10 +190,10 @@ export function formatRecap(
 
 	lines.push(
 		padR("", nameW) +
-		padL("tokens", tokW) +
-		padL("cache", cacheW) +
-		padL("cost", costW) +
-		padL("time", timeW),
+			padL("tokens", tokW) +
+			padL("cache", cacheW) +
+			padL("cost", costW) +
+			padL("time", timeW),
 	);
 
 	let grandTotal = { ...ZERO };
@@ -204,31 +212,33 @@ export function formatRecap(
 		// Worker row
 		lines.push(
 			padR("    worker", nameW) +
-			padL(fmtTok(workerTok), tokW) +
-			padL(fmtCache(workerTok), cacheW) +
-			padL(fmtCost(workerTok), costW) +
-			padL("", timeW),
+				padL(fmtTok(workerTok), tokW) +
+				padL(fmtCache(workerTok), cacheW) +
+				padL(fmtCost(workerTok), costW) +
+				padL("", timeW),
 		);
 
 		// Lenses row
 		if (agent.lensResults.length > 0) {
 			lines.push(
 				padR(`    lenses (${agent.lensResults.length} runs)`, nameW) +
-				padL(fmtTok(lensTok), tokW) +
-				padL(fmtCache(lensTok), cacheW) +
-				padL(fmtCost(lensTok), costW) +
-				padL("", timeW),
+					padL(fmtTok(lensTok), tokW) +
+					padL(fmtCache(lensTok), cacheW) +
+					padL(fmtCost(lensTok), costW) +
+					padL("", timeW),
 			);
 		}
 
 		// Subtotal
-		lines.push(`    ${subDiv.slice(0, nameW + tokW + cacheW + costW + timeW - 4)}`);
+		lines.push(
+			`    ${subDiv.slice(0, nameW + tokW + cacheW + costW + timeW - 4)}`,
+		);
 		lines.push(
 			padR("    subtotal", nameW) +
-			padL(fmtTok(subtotal), tokW) +
-			padL(fmtCache(subtotal), cacheW) +
-			padL(fmtCost(subtotal), costW) +
-			padL(fmtDur(elapsed), timeW),
+				padL(fmtTok(subtotal), tokW) +
+				padL(fmtCache(subtotal), cacheW) +
+				padL(fmtCost(subtotal), costW) +
+				padL(fmtDur(elapsed), timeW),
 		);
 		lines.push("");
 	}
@@ -237,10 +247,10 @@ export function formatRecap(
 	lines.push(div);
 	lines.push(
 		padR("  Workers", nameW) +
-		padL(fmtTok(grandTotal), tokW) +
-		padL(fmtCache(grandTotal), cacheW) +
-		padL(fmtCost(grandTotal), costW) +
-		padL(fmtDur(wallClock), timeW),
+			padL(fmtTok(grandTotal), tokW) +
+			padL(fmtCache(grandTotal), cacheW) +
+			padL(fmtCost(grandTotal), costW) +
+			padL(fmtDur(wallClock), timeW),
 	);
 
 	// Orchestrator row (planning/coordination tokens)
@@ -250,10 +260,10 @@ export function formatRecap(
 		if (orchTok.totalTokens > 0) {
 			lines.push(
 				padR("  Orchestrator", nameW) +
-				padL(fmtTok(orchTok), tokW) +
-				padL(fmtCache(orchTok), cacheW) +
-				padL(fmtCost(orchTok), costW) +
-				padL("", timeW),
+					padL(fmtTok(orchTok), tokW) +
+					padL(fmtCache(orchTok), cacheW) +
+					padL(fmtCost(orchTok), costW) +
+					padL("", timeW),
 			);
 			grandTotal = addTokens(grandTotal, orchTok);
 		}
@@ -263,10 +273,10 @@ export function formatRecap(
 	lines.push(div);
 	lines.push(
 		padR("  Total", nameW) +
-		padL(fmtTok(grandTotal), tokW) +
-		padL(fmtCache(grandTotal), cacheW) +
-		padL(fmtCost(grandTotal), costW) +
-		padL(fmtDur(wallClock), timeW),
+			padL(fmtTok(grandTotal), tokW) +
+			padL(fmtCache(grandTotal), cacheW) +
+			padL(fmtCost(grandTotal), costW) +
+			padL(fmtDur(wallClock), timeW),
 	);
 	lines.push(div);
 

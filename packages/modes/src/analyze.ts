@@ -127,7 +127,6 @@ export function planAnalyzePhases(plan: Plan): AnalyzePhase[] {
 
 	const phases: AnalyzePhase[] = [];
 	for (const key of repoKeys) {
-		// biome-ignore lint/style/noNonNullAssertion: key comes from byRepo.keys()
 		const group = byRepo.get(key)!;
 		const repo = resolveRepo(plan, key);
 		const goals = group.map(

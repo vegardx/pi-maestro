@@ -91,7 +91,10 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 			this.retryDelay = this.initialRetryDelay;
 			this.buffer = "";
 			// Send hello immediately
-			const hello: Record<string, unknown> = { type: "hello", agentId: this.agentId };
+			const hello: Record<string, unknown> = {
+				type: "hello",
+				agentId: this.agentId,
+			};
 			if (this.model) hello.model = this.model;
 			socket.write(`${JSON.stringify(hello)}\n`);
 			this.emit("connected");

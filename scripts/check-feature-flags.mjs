@@ -29,6 +29,7 @@ const EXTENSION_PACKAGES = [
 	"commit",
 	"smart-compact",
 	"modes",
+	{ name: "settings", entry: "packages/settings/src/extension.ts" },
 ];
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -41,7 +42,9 @@ for (const entry of entries) {
 	}
 }
 
-const expected = EXTENSION_PACKAGES.map((n) => `packages/${n}/src/index.ts`);
+const expected = EXTENSION_PACKAGES.map((n) =>
+	typeof n === "string" ? `packages/${n}/src/index.ts` : n.entry,
+);
 for (const want of expected) {
 	if (!entries.includes(want)) {
 		errors.push(`extension package not wired into manifest: ${want}`);

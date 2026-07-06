@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OverlayManager } from "./overlay-manager.js";
 import {
 	defineTool,
 	type ExtensionAPI,
@@ -34,7 +33,7 @@ import {
 	initAgentBridge,
 	isAgentMode,
 } from "./agent-bridge.js";
-import { buildRows, runAgentsDashboard } from "./agents-dashboard.js";
+import { runAgentsDashboard } from "./agents-dashboard.js";
 import { ModesAskQueue } from "./ask-queue.js";
 import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
 import {
@@ -57,7 +56,6 @@ import {
 import { PLAN_CONTAINER, PlanEngine } from "./engine.js";
 import { startSequentialExecution } from "./execution.js";
 import { TmuxFanout } from "./execution-tmux.js";
-import { formatRecap } from "./recap.js";
 import { installFooter } from "./install-footer.js";
 import {
 	formatFindings,
@@ -72,7 +70,9 @@ import {
 	handleViewCommand,
 	type ViewState,
 } from "./orchestrator-tmux.js";
+import { OverlayManager } from "./overlay-manager.js";
 import { computeActiveTools, toolBlockedInPlanMode } from "./policy.js";
+import { formatRecap } from "./recap.js";
 import {
 	type Deliverable,
 	deliverables,
@@ -188,7 +188,7 @@ export function createModesRuntime(
 	let invalidateFooter: (() => void) | undefined;
 	let agentBridge: AgentBridge | undefined;
 	let tmuxFanout: TmuxFanout | undefined;
-	let workerSeedContent: string | undefined;
+	let agentSeedContent: string | undefined;
 	// Central usage ledger (usage.v1). Records orchestrator + agent + lens usage.
 	const usageLedger = new UsageLedger();
 	let orchestratorUsage: TokenSnapshot | undefined;
@@ -205,7 +205,7 @@ export function createModesRuntime(
 	};
 	const viewState: ViewState = { viewPaneId: undefined };
 	const workerPanes = new WorkerPanes();
-	
+
 	let baselineTools: string[] | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	let compactionInFlight = false;
@@ -534,7 +534,7 @@ export function createModesRuntime(
 		onTaskToggle: (taskId) => {
 			agentBridge?.onTaskComplete(taskId);
 		},
-		seedContent: () => workerSeedContent,
+		seedContent: () => agentSeedContent,
 	})) {
 		pi.registerTool(tool);
 	}
@@ -572,21 +572,21 @@ export function createModesRuntime(
 
 	function parseImplementFlags(args: string): ImplementOverrides | undefined {
 		const parts = args.split(/\s+/);
-		let workerModel: string | undefined;
-		let workerThinking: string | undefined;
+		let agentModel: string | undefined;
+		let agentThinking: string | undefined;
 		let analyzeModel: string | undefined;
 		let analyzeThinking: string | undefined;
 
 		for (let i = 0; i < parts.length; i++) {
 			const p = parts[i];
 			if (p.startsWith("--model=")) {
-				workerModel = p.slice("--model=".length);
+				agentModel = p.slice("--model=".length);
 			} else if (p === "--model" && parts[i + 1]) {
-				workerModel = parts[++i];
+				agentModel = parts[++i];
 			} else if (p.startsWith("--thinking=")) {
-				workerThinking = p.slice("--thinking=".length);
+				agentThinking = p.slice("--thinking=".length);
 			} else if (p === "--thinking" && parts[i + 1]) {
-				workerThinking = parts[++i];
+				agentThinking = parts[++i];
 			} else if (p.startsWith("--analyze-model=")) {
 				analyzeModel = p.slice("--analyze-model=".length);
 			} else if (p === "--analyze-model" && parts[i + 1]) {
@@ -600,18 +600,18 @@ export function createModesRuntime(
 
 		const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high"]);
 		const wt =
-			workerThinking && VALID_THINKING.has(workerThinking)
-				? (workerThinking as ImplementOverrides["workerThinking"])
+			agentThinking && VALID_THINKING.has(agentThinking)
+				? (agentThinking as ImplementOverrides["agentThinking"])
 				: undefined;
 		const at =
 			analyzeThinking && VALID_THINKING.has(analyzeThinking)
 				? (analyzeThinking as ImplementOverrides["analyzeThinking"])
 				: undefined;
 
-		if (!workerModel && !wt && !analyzeModel && !at) return undefined;
+		if (!agentModel && !wt && !analyzeModel && !at) return undefined;
 		return {
-			workerModel,
-			workerThinking: wt,
+			agentModel,
+			agentThinking: wt,
 			analyzeModel,
 			analyzeThinking: at,
 		};
@@ -679,7 +679,11 @@ export function createModesRuntime(
 						for (const n of engine.get().nodes) {
 							if (n.type === "deliverable") titles.set(n.id, n.title);
 						}
-						const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger, titles);
+						const recap = formatRecap(
+							tmuxFanout.snapshot().agents,
+							usageLedger,
+							titles,
+						);
 						pi.sendMessage(
 							{
 								customType: "maestro.execution.recap",
@@ -891,7 +895,13 @@ export function createModesRuntime(
 				return;
 			}
 			const queue = tmuxFanout.questionQueue;
-			await runAgentsDashboard(cmdCtx as any, tmuxFanout, engine, usageLedger, queue);
+			await runAgentsDashboard(
+				cmdCtx as any,
+				tmuxFanout,
+				engine,
+				usageLedger,
+				queue,
+			);
 		},
 	});
 
@@ -962,7 +972,9 @@ export function createModesRuntime(
 				"Type your answer...",
 			);
 			if (answer) {
-				entry.resolve([{ questionId: entry.questions[0]?.id ?? "0", value: answer }]);
+				entry.resolve([
+					{ questionId: entry.questions[0]?.id ?? "0", value: answer },
+				]);
 				cmdCtx.ui.notify(`\u2713 Answered ${entry.agentName}`, "info");
 			}
 		},
@@ -981,7 +993,11 @@ export function createModesRuntime(
 					if (n.type === "deliverable") titles.set(n.id, n.title);
 				}
 			}
-			const recap = formatRecap(tmuxFanout.snapshot().agents, usageLedger, titles);
+			const recap = formatRecap(
+				tmuxFanout.snapshot().agents,
+				usageLedger,
+				titles,
+			);
 			pi.sendMessage(
 				{
 					customType: "maestro.execution.recap",
@@ -1242,16 +1258,17 @@ export function createModesRuntime(
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
 		// Extract seed content for workers (read-only plan context)
-		if (state.mode === "worker") {
+		if (state.mode === "agent") {
 			for (const entry of ctx.sessionManager.getEntries()) {
 				const e = entry as unknown as Record<string, unknown>;
 				if (
 					(e.type === "custom" && e.customType === "maestro-execution-seed") ||
-					(e.type === "custom_message" && e.customType === "maestro.execution.seed")
+					(e.type === "custom_message" &&
+						e.customType === "maestro.execution.seed")
 				) {
 					const data = e.data as Record<string, unknown> | undefined;
 					const content = data?.content ?? e.content;
-					if (typeof content === "string") workerSeedContent = content;
+					if (typeof content === "string") agentSeedContent = content;
 				}
 			}
 		}
@@ -1267,9 +1284,9 @@ export function createModesRuntime(
 			openPlan(undefined, ctx);
 		}
 		applyTools();
-			overlayManager.attach(ctx);
+		overlayManager.attach(ctx);
 		// Install custom footer (before notifyMode so invalidate handle exists)
-		if (!agentBridge && state.mode !== "worker") {
+		if (!agentBridge && state.mode !== "agent") {
 			invalidateFooter = installFooter({
 				pi,
 				ctx,
@@ -1281,7 +1298,10 @@ export function createModesRuntime(
 					// Total = all non-terminal deliverables in the plan
 					const plan = engine.get();
 					const allDeliverables = plan.nodes.filter(
-						(n) => n.type === "deliverable" && n.status !== "shipped" && n.status !== "abandoned",
+						(n) =>
+							n.type === "deliverable" &&
+							n.status !== "shipped" &&
+							n.status !== "abandoned",
 					);
 					const total = allDeliverables.length;
 					if (total === 0) return undefined;
@@ -1322,7 +1342,7 @@ export function createModesRuntime(
 		}
 
 		// Worker mode: strip TUI chrome so panes show only output
-		if (state.mode === "worker") {
+		if (state.mode === "agent") {
 			const empty = () => ({
 				render: () => [],
 				invalidate: () => {},
@@ -1359,7 +1379,7 @@ export function createModesRuntime(
 		if (
 			state.mode !== "plan" &&
 			state.mode !== "auto" &&
-			state.mode !== "worker"
+			state.mode !== "agent"
 		)
 			return;
 		if (event.toolName === "ask") return;
@@ -1376,7 +1396,7 @@ export function createModesRuntime(
 						reason: `Use the ${fast.suggestedTool} tool instead.`,
 					};
 				}
-				if (!fast.allowed && state.mode === "worker") {
+				if (!fast.allowed && state.mode === "agent") {
 					// Workers can mutate, but block rm with absolute paths
 					if (/\b(rm|rmdir)\s+.*\//.test(command)) {
 						return { block: true, reason: fast.reason };
@@ -1389,7 +1409,7 @@ export function createModesRuntime(
 				return;
 			}
 			// Workers: ambiguous commands are allowed (no LLM classifier)
-			if (state.mode === "worker") return;
+			if (state.mode === "agent") return;
 			// Ambiguous: LLM classification (orchestrator only)
 			const classifierModel = ctx
 				? (await getModeRoleModel(ctx, "classifier"))?.modelId
@@ -1659,16 +1679,16 @@ export function createModesRuntime(
 
 	// Declare configurable settings for /maestro menu
 	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
-		{ key: "maxWorkers", label: "Max workers", type: "number", default: 4 },
+		{ key: "maxAgents", label: "Max agents", type: "number", default: 4 },
 		{
 			key: "maxReviewCycles",
 			label: "Max review cycles",
 			type: "number",
 			default: 2,
 		},
-		{ key: "models.worker.effort", label: "Worker effort", type: "thinking" },
-		{ key: "models.worker.slot", label: "Worker slot", type: "slot" },
-		{ key: "models.worker.model", label: "Worker model", type: "model" },
+		{ key: "models.agent.effort", label: "Agent effort", type: "thinking" },
+		{ key: "models.agent.slot", label: "Agent slot", type: "slot" },
+		{ key: "models.agent.model", label: "Agent model", type: "model" },
 		{ key: "models.analyze.effort", label: "Analyze effort", type: "thinking" },
 		{ key: "models.analyze.slot", label: "Analyze slot", type: "slot" },
 		{ key: "models.analyze.model", label: "Analyze model", type: "model" },

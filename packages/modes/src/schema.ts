@@ -1,56 +1,32 @@
-// The plan model: a forest of nodes. A node is either a Deliverable (ships as
-// one PR, or groups child deliverables) or a WorkItem (a checklist line). This
-// is the full in-memory model; @vegardx/pi-contracts exposes only the
-// cross-cutting enums + summaries other modules reference.
+// The plan model: a flat list of WorkGroups. A WorkGroup is the atomic unit of
+// execution — one branch, one PR. It contains a worker (primary agent), zero or
+// more support agents with an internal dependency graph, and a set of tasks.
 //
-// Greenfield rules (clean break from the v3 schema this is adapted from): no
-// on-disk migration, no legacy id-prefix matching, no token telemetry, no
-// multi-session driver claims. Branded ids live at the capability boundary;
-// the tree itself uses plain strings for ergonomics.
+// This replaces the v4 deliverable-tree model. No on-disk migration (dev tool).
+// Clean break: groups replace deliverables entirely.
 
 import { basename, resolve } from "node:path";
 import {
-	DELIVERABLE_STATUSES,
-	type DeliverableLifecycle,
-	type DeliverableStatus,
+	type AgentMode,
+	GROUP_STATUSES,
+	type GroupStatus,
+	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 
 export {
-	DELIVERABLE_STATUSES,
-	type DeliverableLifecycle,
-	type DeliverableStatus,
+	type AgentMode,
+	GROUP_STATUSES,
+	type GroupStatus,
+	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 };
 
-// ─── Agent metadata ──────────────────────────────────────────────────────────
-
-export type AgentRole = "author" | "review" | "refine" | "verify";
-export type AgentMode = "full" | "read-only";
-
-/** Default AgentMode for each role. */
-export const ROLE_MODE_DEFAULTS: Record<AgentRole, AgentMode> = {
-	author: "full",
-	review: "read-only",
-	refine: "full",
-	verify: "read-only",
-};
-
-/** Statuses that require a worktree (active editing). */
-export const WORKTREE_STATUSES: readonly DeliverableStatus[] = [
-	"active",
-	"needs-attention",
-];
-
-/** Terminal statuses — the deliverable will not transition again. */
-export const TERMINAL_STATUSES: readonly DeliverableStatus[] = [
-	"shipped",
-	"abandoned",
-];
+// ─── Work items ──────────────────────────────────────────────────────────────
 
 export interface WorkItem {
 	type: "work-item";
@@ -72,70 +48,76 @@ export function effectiveWorkItemKind(
 	return item.kind ?? "task";
 }
 
-export interface Deliverable {
-	type: "deliverable";
+// ─── Agent specification ─────────────────────────────────────────────────────
+
+export interface AgentSpec {
+	/** Unique name within the group (also used in `after` references). */
+	name: string;
+	mode: AgentMode;
+	slot: ModelSlot;
+	effort: ThinkingLevel;
+	/** What this agent should focus on — specific, actionable instructions. */
+	focus: string;
+	/** Dependencies: "worker" or other agent names. Empty = start immediately. */
+	after: string[];
+}
+
+// ─── Worker specification ────────────────────────────────────────────────────
+
+export interface WorkerSpec {
+	mode: AgentMode;
+	/** Model slot. Defaults to "default" at resolution time. */
+	slot?: ModelSlot;
+	/** Thinking effort. Defaults to preset default at resolution time. */
+	effort?: ThinkingLevel;
+	/** Agents that must finish before worker starts. Empty/absent = start first. */
+	after?: string[];
+}
+
+// ─── Work group ──────────────────────────────────────────────────────────────
+
+export interface WorkGroup {
+	type: "group";
 	id: string;
 	title: string;
-	/** What ships when this merges. */
+	/** What ships when this merges — context, criteria. */
 	body: string;
-	status: DeliverableStatus;
-	/** Git branch (typically feat/<id>). Lifecycle/groupings don't claim one. */
-	branch?: string;
-	lifecycle?: DeliverableLifecycle;
-	/** Stacking edges: deliverables this one waits on before starting. */
+	status: GroupStatus;
+	/** Inter-group dependencies. Empty/absent = no deps (root). */
 	dependsOn?: string[];
-	/** Registry key of the repo this deliverable targets; absent ⇒ plan default. */
-	repo?: string;
-	/** Own gating work-items XOR child deliverables. */
-	children: PlanNode[];
-	/** Worktree path while active/needs-attention; cleared when it leaves. */
+	/**
+	 * Branch from predecessor's tip (stacked PR). Default true.
+	 * Set false to branch from main (independent PR).
+	 * Only meaningful when dependsOn is non-empty.
+	 */
+	stacked?: boolean;
+	/** The primary agent — always exists, gets the group's tasks. */
+	worker: WorkerSpec;
+	/** Support agents with an internal dependency graph. */
+	agents: AgentSpec[];
+	/** Gating work items the worker must complete. */
+	tasks: WorkItem[];
+	// ── Runtime state ──
+	/** Git branch (typically feat/<id>). */
+	branch?: string;
+	/** Worktree path while active; cleared on completion. */
 	worktreePath?: string;
-	/** Session file backing this deliverable's auto session. Never cleared. */
+	/** Session file path for the worker session. */
 	sessionPath?: string;
-	issueNumber?: number;
-	prNumber?: number;
-	/** Distilled outcome, written at ship time; carried into later seeds. */
+	/** Combined summary of all agent outputs (produced at group completion). */
 	summary?: string;
-	/** Agent role when this deliverable represents a sub-process. */
-	agentRole?: AgentRole;
-	/** Agent execution mode. Defaults via ROLE_MODE_DEFAULTS if agentRole set. */
-	agentMode?: AgentMode;
-	/** Which model slot to use ("default" or "alternate"). */
-	modelSlot?: "default" | "alternate";
-	/** Thinking effort override for this agent. */
-	effort?: ThinkingLevel;
+	/** PR URL once shipped. */
+	prUrl?: string;
+	prNumber?: number;
 	createdAt: string;
 	updatedAt: string;
 }
 
-export type PlanNode = Deliverable | WorkItem;
-
-/**
- * Resolve the repo a deliverable targets. Returns the registered entry for
- * `d.repo`, falling back to the synthetic default repo (`plan.repoPath`) when
- * `d.repo` is absent (or, defensively, unregistered — `validatePlanShape`
- * rejects unknown keys before they reach here).
- */
-export function repoFor(
-	plan: Pick<Plan, "repoPath" | "repos">,
-	d: Pick<Deliverable, "repo">,
-): PlanRepo {
-	const fallback: PlanRepo = { key: DEFAULT_REPO_KEY, path: plan.repoPath };
-	if (!d.repo || d.repo === DEFAULT_REPO_KEY) return fallback;
-	return plan.repos?.find((r) => r.key === d.repo) ?? fallback;
-}
-
-export function isDeliverable(node: PlanNode): node is Deliverable {
-	return node.type === "deliverable";
-}
-
-export function isWorkItem(node: PlanNode): node is WorkItem {
-	return node.type === "work-item";
-}
+// ─── Plan ────────────────────────────────────────────────────────────────────
 
 /** A repo a plan can target. The default repo is `plan.repoPath` (key "default"). */
 export interface PlanRepo {
-	/** Stable key deliverables reference via `Deliverable.repo`. */
+	/** Stable key groups reference (currently unused but reserved). */
 	key: string;
 	/** Absolute path to the repo. */
 	path: string;
@@ -151,8 +133,9 @@ export interface Plan {
 	repoPath: string;
 	/** Extra repos beyond the default; absent ⇒ single-repo plan. */
 	repos?: PlanRepo[];
-	nodes: PlanNode[];
-	/** GitHub plan-tracking issue (parent of deliverable issues) after park. */
+	/** All work groups in the plan. Flat list — graph structure via dependsOn. */
+	groups: WorkGroup[];
+	/** GitHub plan-tracking issue (parent of group issues) after park. */
 	parentIssueNumber?: number;
 	/** Session file backing this plan's planning session. */
 	planSessionPath?: string;
@@ -161,137 +144,276 @@ export interface Plan {
 	updatedAt: string;
 }
 
-// ---- Forest traversal ---------------------------------------------------
+// ─── Traversal helpers ───────────────────────────────────────────────────────
 
-/** Preorder flatten of every deliverable in the forest. */
-export function deliverables(plan: Pick<Plan, "nodes">): Deliverable[] {
-	const out: Deliverable[] = [];
-	const visit = (nodes: readonly PlanNode[]): void => {
-		for (const node of nodes) {
-			if (isDeliverable(node)) {
-				out.push(node);
-				visit(node.children);
-			}
-		}
-	};
-	visit(plan.nodes);
-	return out;
+/** All groups in the plan. */
+export function groups(plan: Pick<Plan, "groups">): WorkGroup[] {
+	return plan.groups;
 }
 
-export function ownWorkItems(d: Pick<Deliverable, "children">): WorkItem[] {
-	return d.children.filter(isWorkItem);
-}
-
-export function childDeliverables(
-	d: Pick<Deliverable, "children">,
-): Deliverable[] {
-	return d.children.filter(isDeliverable);
-}
-
-export function gatingTasks(d: Pick<Deliverable, "children">): WorkItem[] {
-	return ownWorkItems(d).filter((t) => effectiveWorkItemKind(t) === "task");
-}
-
-export function isGrouping(d: Pick<Deliverable, "children">): boolean {
-	return childDeliverables(d).length > 0;
-}
-
-/** Ships as one PR? Lifecycle never ships; groupings complete via subtree. */
-export function shipsPR(
-	d: Pick<Deliverable, "children" | "lifecycle">,
-): boolean {
-	return !d.lifecycle && !isGrouping(d) && gatingTasks(d).length >= 1;
-}
-
-/** Not a lifecycle checklist, not a grouping — `/implement` can act on it. */
-export function isImplementableLeaf(
-	d: Pick<Deliverable, "children" | "lifecycle">,
-): boolean {
-	return !d.lifecycle && !isGrouping(d);
-}
-
-/** Depth-first preorder walk over every node. */
-export function walk(
-	plan: Pick<Plan, "nodes">,
-	visit: (node: PlanNode, parent: Deliverable | null, depth: number) => void,
-): void {
-	const go = (
-		nodes: readonly PlanNode[],
-		parent: Deliverable | null,
-		depth: number,
-	): void => {
-		for (const node of nodes) {
-			visit(node, parent, depth);
-			if (isDeliverable(node)) go(node.children, node, depth + 1);
-		}
-	};
-	go(plan.nodes, null, 0);
-}
-
-export function findNode(
-	plan: Pick<Plan, "nodes">,
+/** Find a group by ID. */
+export function findGroup(
+	plan: Pick<Plan, "groups">,
 	id: string,
-): PlanNode | null {
-	let found: PlanNode | null = null;
-	walk(plan, (node) => {
-		if (!found && node.id === id) found = node;
-	});
-	return found;
+): WorkGroup | null {
+	return plan.groups.find((g) => g.id === id) ?? null;
 }
 
-export function findDeliverable(
-	plan: Pick<Plan, "nodes">,
-	id: string,
-): Deliverable | null {
-	return deliverables(plan).find((d) => d.id === id) ?? null;
+/** All tasks in a group. */
+export function groupTasks(g: Pick<WorkGroup, "tasks">): WorkItem[] {
+	return g.tasks;
 }
 
-export function parentOf(
-	plan: Pick<Plan, "nodes">,
-	id: string,
-): Deliverable | null {
-	let found: Deliverable | null = null;
-	walk(plan, (node, parent) => {
-		if (!found && node.id === id) found = parent;
-	});
-	return found;
+/** Gating tasks (kind = "task") that must be completed. */
+export function gatingTasks(g: Pick<WorkGroup, "tasks">): WorkItem[] {
+	return g.tasks.filter((t) => effectiveWorkItemKind(t) === "task");
 }
 
-export function topLevelLeaves(plan: Pick<Plan, "nodes">): WorkItem[] {
-	return plan.nodes.filter(isWorkItem);
+/** Find a task by ID within a group. */
+export function findTask(
+	g: Pick<WorkGroup, "tasks">,
+	taskId: string,
+): WorkItem | null {
+	return g.tasks.find((t) => t.id === taskId) ?? null;
 }
 
-/** Is a deliverable's subtree complete? */
-export function subtreeComplete(d: Deliverable): boolean {
-	if (d.lifecycle) return ownWorkItems(d).every((t) => t.done);
-	if (isGrouping(d)) return childDeliverables(d).every(subtreeComplete);
-	if (gatingTasks(d).length === 0) return true;
-	return d.status === "shipped" || d.status === "abandoned";
+/** Find an agent spec by name within a group. */
+export function findAgent(
+	g: Pick<WorkGroup, "agents">,
+	name: string,
+): AgentSpec | null {
+	return g.agents.find((a) => a.name === name) ?? null;
 }
 
-// ---- State machine ------------------------------------------------------
+// ─── State machine ───────────────────────────────────────────────────────────
 
-export const DELIVERABLE_TRANSITIONS: Record<
-	DeliverableStatus,
-	readonly DeliverableStatus[]
-> = {
+export const GROUP_TRANSITIONS: Record<GroupStatus, readonly GroupStatus[]> = {
 	planned: ["active", "abandoned"],
-	active: ["in-review", "abandoned"],
-	"in-review": ["ready-to-ship", "needs-attention", "abandoned"],
-	"needs-attention": ["ready-to-ship", "abandoned"],
-	"ready-to-ship": ["shipped", "abandoned"],
+	active: ["complete", "abandoned"],
+	complete: ["shipped", "superseded", "abandoned"],
 	shipped: [],
+	superseded: [],
 	abandoned: [],
 };
 
-export function canTransition(
-	from: DeliverableStatus,
-	to: DeliverableStatus,
-): boolean {
-	return DELIVERABLE_TRANSITIONS[from].includes(to);
+/** Terminal statuses — the group will not transition again. */
+export const TERMINAL_STATUSES: readonly GroupStatus[] = [
+	"shipped",
+	"superseded",
+	"abandoned",
+];
+
+export function canTransition(from: GroupStatus, to: GroupStatus): boolean {
+	return GROUP_TRANSITIONS[from].includes(to);
 }
 
-// ---- Ids ----------------------------------------------------------------
+// ─── Dependency / activation logic ───────────────────────────────────────────
+
+/** Statuses that satisfy a downstream dependency. */
+const SATISFIED_STATUSES: readonly GroupStatus[] = [
+	"active",
+	"complete",
+	"shipped",
+];
+
+/**
+ * A group is ready to activate when all its dependsOn groups are in a
+ * satisfied status (active, complete, or shipped).
+ */
+export function isGroupReady(
+	plan: Pick<Plan, "groups">,
+	g: Pick<WorkGroup, "id" | "status" | "dependsOn">,
+): boolean {
+	if (g.status !== "planned") return false;
+	const deps = g.dependsOn ?? [];
+	if (deps.length === 0) return true;
+	return deps.every((depId) => {
+		const dep = findGroup(plan, depId);
+		if (!dep) return false;
+		return SATISFIED_STATUSES.includes(dep.status);
+	});
+}
+
+/** All groups that are ready to be activated. */
+export function readyGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
+	return plan.groups.filter((g) => isGroupReady(plan, g));
+}
+
+/** Groups that are terminal (no further transitions). */
+export function terminalGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
+	return plan.groups.filter((g) => TERMINAL_STATUSES.includes(g.status));
+}
+
+/**
+ * A group is terminal in the dependency graph (nothing depends on it).
+ * Terminal groups ship immediately when complete.
+ */
+export function isLeafGroup(
+	plan: Pick<Plan, "groups">,
+	g: Pick<WorkGroup, "id">,
+): boolean {
+	return !plan.groups.some((other) => other.dependsOn?.includes(g.id) ?? false);
+}
+
+/**
+ * Groups that have completed and are ready to ship (complete + no dependents).
+ */
+export function shippableGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
+	return plan.groups.filter(
+		(g) => g.status === "complete" && isLeafGroup(plan, g),
+	);
+}
+
+/** Why a group can't activate yet. Null if ready. */
+export function blockedReason(
+	plan: Pick<Plan, "groups">,
+	g: Pick<WorkGroup, "id" | "status" | "dependsOn">,
+): string | null {
+	if (g.status !== "planned") {
+		return `group \`${g.id}\` is ${g.status}, not planned`;
+	}
+	const deps = g.dependsOn ?? [];
+	if (deps.length === 0) return null;
+	for (const depId of deps) {
+		const dep = findGroup(plan, depId);
+		if (!dep) return `unknown dependency \`${depId}\``;
+		if (!SATISFIED_STATUSES.includes(dep.status)) {
+			return `waiting on \`${dep.id}\` (${dep.status})`;
+		}
+	}
+	return null;
+}
+
+// ─── Internal agent graph ────────────────────────────────────────────────────
+
+/**
+ * Topologically sort agents within a group. Returns agent names in execution
+ * order. Throws if the graph has cycles.
+ */
+export function topologicalSort(
+	g: Pick<WorkGroup, "agents" | "worker">,
+): string[] {
+	const allNames = new Set(["worker", ...g.agents.map((a) => a.name)]);
+
+	// Build adjacency: name → names that must complete before it
+	const deps = new Map<string, string[]>();
+	deps.set(
+		"worker",
+		(g.worker.after ?? []).filter((n) => allNames.has(n)),
+	);
+	for (const agent of g.agents) {
+		deps.set(
+			agent.name,
+			agent.after.filter((n) => allNames.has(n)),
+		);
+	}
+
+	const sorted: string[] = [];
+	const visited = new Set<string>();
+	const visiting = new Set<string>();
+
+	const visit = (name: string): void => {
+		if (visited.has(name)) return;
+		if (visiting.has(name)) {
+			throw new Error(
+				`cycle in agent graph: ${name} is part of a dependency cycle`,
+			);
+		}
+		visiting.add(name);
+		for (const dep of deps.get(name) ?? []) {
+			visit(dep);
+		}
+		visiting.delete(name);
+		visited.add(name);
+		sorted.push(name);
+	};
+
+	for (const name of allNames) {
+		visit(name);
+	}
+
+	return sorted;
+}
+
+/**
+ * Get agents (and/or worker) that can start immediately — those with no
+ * unmet `after` dependencies.
+ */
+export function immediateAgents(
+	g: Pick<WorkGroup, "agents" | "worker">,
+): string[] {
+	const result: string[] = [];
+	if ((g.worker.after ?? []).length === 0) {
+		result.push("worker");
+	}
+	for (const agent of g.agents) {
+		if (agent.after.length === 0) {
+			result.push(agent.name);
+		}
+	}
+	return result;
+}
+
+/**
+ * Given a set of completed agent names, return which agents are now unblocked.
+ */
+export function unblockedAgents(
+	g: Pick<WorkGroup, "agents" | "worker">,
+	completed: ReadonlySet<string>,
+): string[] {
+	const result: string[] = [];
+
+	// Check worker
+	const workerAfter = g.worker.after ?? [];
+	if (
+		!completed.has("worker") &&
+		workerAfter.length > 0 &&
+		workerAfter.every((dep) => completed.has(dep))
+	) {
+		result.push("worker");
+	}
+
+	// Check agents
+	for (const agent of g.agents) {
+		if (completed.has(agent.name)) continue;
+		if (agent.after.length === 0) continue; // Already started immediately
+		if (agent.after.every((dep) => completed.has(dep))) {
+			result.push(agent.name);
+		}
+	}
+
+	return result;
+}
+
+// ─── Branch logic ────────────────────────────────────────────────────────────
+
+export function defaultBranchForGroup(g: Pick<WorkGroup, "id">): string {
+	return `feat/${g.id}`;
+}
+
+/**
+ * Pick the base branch a group should fork from.
+ * Stacked (default): fork from first dependency's branch tip.
+ * Independent (stacked: false): fork from defaultBranch.
+ */
+export function pickBaseBranch(
+	plan: Pick<Plan, "groups">,
+	g: Pick<WorkGroup, "id" | "dependsOn" | "stacked">,
+	defaultBranch: string,
+): string {
+	const deps = g.dependsOn ?? [];
+	if (deps.length === 0) return defaultBranch;
+
+	// Explicit opt-out of stacking
+	if (g.stacked === false) return defaultBranch;
+
+	// Stacked: base off the first dependency's branch
+	const parent = findGroup(plan, deps[0]);
+	if (!parent?.branch) return defaultBranch;
+	return parent.branch;
+}
+
+// ─── IDs ─────────────────────────────────────────────────────────────────────
 
 export function slugify(input: string): string {
 	return input
@@ -305,8 +427,7 @@ export function slugify(input: string): string {
 /**
  * Derive a plan slug + title from seed text (typically the first planning
  * message), falling back to `fallback` (typically the repo name) when the seed
- * is empty or slugifies to nothing. Keeps the slug short (first ~6 words) so a
- * whole sentence doesn't become the identifier.
+ * is empty or slugifies to nothing.
  */
 export function derivePlanName(
 	seed: string | undefined,
@@ -321,207 +442,126 @@ export function derivePlanName(
 	return { slug, title };
 }
 
-export function defaultBranchForDeliverable(
-	d: Pick<Deliverable, "id">,
-): string {
-	return `feat/${d.id}`;
-}
-
-// ---- Lifecycle gates ----------------------------------------------------
-
-export function findLifecycle(
-	plan: Pick<Plan, "nodes">,
-	which: DeliverableLifecycle,
-): Deliverable | undefined {
-	return plan.nodes.filter(isDeliverable).find((d) => d.lifecycle === which);
-}
-
-export function regularDeliverables(plan: Pick<Plan, "nodes">): Deliverable[] {
-	return deliverables(plan).filter((d) => !d.lifecycle);
-}
-
-/** The pre/post deliverable if one exists AND has an unticked item, else null. */
-export function pendingLifecycle(
-	plan: Pick<Plan, "nodes">,
-	which: DeliverableLifecycle,
-): Deliverable | null {
-	const d = findLifecycle(plan, which);
-	if (!d) return null;
-	const items = ownWorkItems(d);
-	if (items.length === 0) return null;
-	return items.every((t) => t.done) ? null : d;
-}
-
-// ---- Dependency / activation logic --------------------------------------
-
-const IN_FLIGHT_PARENT_STATUSES: readonly DeliverableStatus[] = [
-	"active",
-	"in-review",
-	"ready-to-ship",
-	"needs-attention",
-];
-
-const ACTIVATABLE_PARENT_STATUSES: readonly DeliverableStatus[] = [
-	...IN_FLIGHT_PARENT_STATUSES,
-	"shipped",
-];
-
-/**
- * Read a deliverable's dependsOn, defaulting to nearest preceding
- * non-abandoned deliverable in preorder when unset (ad-hoc/test plans).
- */
-export function effectiveDependsOn(
-	plan: Pick<Plan, "nodes">,
-	d: Pick<Deliverable, "id" | "dependsOn">,
-): string[] {
-	if (d.dependsOn !== undefined) return d.dependsOn;
-	const flat = deliverables(plan);
-	const idx = flat.findIndex((p) => p.id === d.id);
-	if (idx <= 0) return [];
-	for (let i = idx - 1; i >= 0; i--) {
-		if (flat[i].status !== "abandoned") return [flat[i].id];
-	}
-	return [];
-}
-
-export function isDeliverableReady(
-	plan: Pick<Plan, "nodes">,
-	d: Pick<
-		Deliverable,
-		"id" | "status" | "dependsOn" | "lifecycle" | "children"
-	>,
-): boolean {
-	if (d.status !== "planned") return false;
-	if (!isImplementableLeaf(d)) return false;
-	const deps = effectiveDependsOn(plan, d);
-	if (deps.length === 0) return true;
-	// ALL dependencies must be satisfied
-	return deps.every((depId) => {
-		const parent = deliverables(plan).find((p) => p.id === depId);
-		if (!parent) return false;
-		if (isGrouping(parent)) return parent.status === "shipped";
-		return ACTIVATABLE_PARENT_STATUSES.includes(parent.status);
-	});
-}
-
-export function readyDeliverables(plan: Pick<Plan, "nodes">): Deliverable[] {
-	return deliverables(plan).filter((d) => isDeliverableReady(plan, d));
-}
-
-export function blockedReason(
-	plan: Pick<Plan, "nodes">,
-	d: Pick<Deliverable, "id" | "status" | "dependsOn">,
-): string | null {
-	if (d.status !== "planned") {
-		return `deliverable \`${d.id}\` is ${d.status}, not planned`;
-	}
-	const deps = effectiveDependsOn(plan, d);
-	if (deps.length === 0) return null;
-	for (const depId of deps) {
-		const parent = deliverables(plan).find((p) => p.id === depId);
-		if (!parent) return `unknown parent \`${depId}\``;
-		if (isGrouping(parent)) {
-			if (parent.status !== "shipped") {
-				return `waiting on grouping \`${parent.id}\` (completes when its children ship)`;
-			}
-			continue;
-		}
-		if (ACTIVATABLE_PARENT_STATUSES.includes(parent.status)) continue;
-		if (parent.status === "abandoned") {
-			return `waiting on abandoned deliverable \`${parent.id}\` — edit dependsOn to unblock`;
-		}
-		return `waiting on \`${parent.id}\` (${parent.status})`;
-	}
-	return null;
-}
-
-/** Next non-shipped PR-shipping successor down the chain rooted at `d`. */
-export function chainHead(
-	plan: Pick<Plan, "nodes">,
-	d: Pick<Deliverable, "id">,
-): Deliverable | null {
-	const flat = deliverables(plan);
-	let curId = d.id;
-	for (let steps = 0; steps < flat.length; steps++) {
-		const next = flat.find((p) => effectiveDependsOn(plan, p)[0] === curId);
-		if (!next) return null;
-		if (!isImplementableLeaf(next) || next.status === "shipped") {
-			curId = next.id;
-			continue;
-		}
-		return next;
-	}
-	return null;
-}
-
-/** Pick the base branch a freshly-activated deliverable should fork from. */
-export function pickBaseBranch(
-	plan: Pick<Plan, "nodes" | "repoPath" | "repos">,
-	activatingId: string,
-	defaultBranch: string,
-): string {
-	const flat = deliverables(plan);
-	const activating = flat.find((d) => d.id === activatingId);
-	if (!activating) return defaultBranch;
-	const parentId = effectiveDependsOn(plan, activating)[0];
-	if (!parentId) return defaultBranch;
-	const parent = flat.find((d) => d.id === parentId);
-	if (!parent) return defaultBranch;
-	if (isGrouping(parent)) return defaultBranch;
-	// Branch stacking needs a shared git base. Cross-repo deps have none, so the
-	// edge is ordering-only: base off the child repo's default branch instead.
-	if (repoFor(plan, parent).path !== repoFor(plan, activating).path) {
-		return defaultBranch;
-	}
-	if (IN_FLIGHT_PARENT_STATUSES.includes(parent.status) && parent.branch) {
-		return parent.branch;
-	}
-	return defaultBranch;
-}
-
-export type ImplementBranchPlan =
-	| { kind: "create"; branch: string; baseBranch: string }
-	| { kind: "resume"; branch: string }
-	| { kind: "abort"; reason: string };
-
-/** Decide what `/implement` should do to set up the deliverable's branch. */
-export function planImplementBranch(
-	plan: Pick<Plan, "nodes" | "repoPath" | "repos">,
-	d: Pick<Deliverable, "id" | "branch" | "status">,
-	defaultBranch: string,
-	branchExists: boolean,
-): ImplementBranchPlan {
-	const branch = d.branch ?? defaultBranchForDeliverable(d);
-	if (d.status === "planned") {
-		return {
-			kind: "create",
-			branch,
-			baseBranch: pickBaseBranch(plan, d.id, defaultBranch),
-		};
-	}
-	if (!branchExists) {
-		return {
-			kind: "abort",
-			reason:
-				`deliverable branch \`${branch}\` is missing locally. Refusing to ` +
-				"recreate — that would reset the deliverable to the default branch " +
-				"and lose commits. Restore the branch before re-running /implement.",
-		};
-	}
-	return { kind: "resume", branch };
-}
-
 export function repoNameFromPath(path: string): string {
 	const name = basename(resolve(path));
 	return name === "" ? "repo" : name;
 }
 
+// ─── Validation ──────────────────────────────────────────────────────────────
+
+/** Structural invariants enforced before saving. Empty array = valid. */
+export function validatePlanShape(
+	plan: Pick<Plan, "groups" | "repos">,
+): string[] {
+	const problems: string[] = [];
+	const groupIds = new Set(plan.groups.map((g) => g.id));
+
+	// Repo key validation
+	const repoKeys = new Set<string>([DEFAULT_REPO_KEY]);
+	for (const r of plan.repos ?? []) {
+		if (repoKeys.has(r.key)) {
+			problems.push(`duplicate repo key \`${r.key}\``);
+		}
+		if (!r.path) {
+			problems.push(`repo \`${r.key}\` has an empty path`);
+		}
+		repoKeys.add(r.key);
+	}
+
+	for (const g of plan.groups) {
+		// dependsOn references exist
+		for (const dep of g.dependsOn ?? []) {
+			if (!groupIds.has(dep)) {
+				problems.push(`group \`${g.id}\` depends on unknown group \`${dep}\``);
+			}
+		}
+
+		// Worker must have tasks (for full-mode workers)
+		if (g.worker.mode === "full" && gatingTasks(g).length === 0) {
+			problems.push(
+				`group \`${g.id}\` has a full-mode worker but no gating tasks`,
+			);
+		}
+
+		// Agent name uniqueness
+		const agentNames = new Set<string>();
+		for (const agent of g.agents) {
+			if (agent.name === "worker") {
+				problems.push(`group \`${g.id}\`: agent name "worker" is reserved`);
+			}
+			if (agentNames.has(agent.name)) {
+				problems.push(
+					`group \`${g.id}\`: duplicate agent name \`${agent.name}\``,
+				);
+			}
+			agentNames.add(agent.name);
+		}
+
+		// Agent `after` references valid
+		const validRefs = new Set(["worker", ...agentNames]);
+		const workerAfter = g.worker.after ?? [];
+		for (const ref of workerAfter) {
+			if (!agentNames.has(ref)) {
+				problems.push(
+					`group \`${g.id}\`: worker after references unknown agent \`${ref}\``,
+				);
+			}
+		}
+		for (const agent of g.agents) {
+			for (const ref of agent.after) {
+				if (!validRefs.has(ref)) {
+					problems.push(
+						`group \`${g.id}\`: agent \`${agent.name}\` after references unknown \`${ref}\``,
+					);
+				}
+			}
+		}
+
+		// Cycle check within agent graph
+		try {
+			topologicalSort(g);
+		} catch {
+			problems.push(`group \`${g.id}\`: agent dependency graph has a cycle`);
+		}
+
+		// stacked only meaningful with dependsOn
+		if (g.stacked === false && (g.dependsOn ?? []).length === 0) {
+			problems.push(
+				`group \`${g.id}\`: stacked=false is meaningless without dependsOn`,
+			);
+		}
+	}
+
+	// Cross-group cycle check
+	const colour = new Map<string, "visiting" | "done">();
+	const visit = (id: string, trail: string[]): void => {
+		const state = colour.get(id);
+		if (state === "done") return;
+		if (state === "visiting") {
+			problems.push(`dependsOn cycle: ${[...trail, id].join(" → ")}`);
+			return;
+		}
+		colour.set(id, "visiting");
+		const g = findGroup(plan, id);
+		for (const dep of g?.dependsOn ?? []) {
+			if (groupIds.has(dep)) visit(dep, [...trail, id]);
+		}
+		colour.set(id, "done");
+	};
+	for (const g of plan.groups) visit(g.id, []);
+
+	return problems;
+}
+
 /**
- * Guard against acting on the wrong repo. A pi session has one cwd modes can't
- * move; if it doesn't resolve to the plan's repo, commit/sync/park would
- * silently hit the wrong tree. Compares git toplevels (not raw paths) so a
- * subdir or symlinked checkout still matches. Returns a warning message on
- * mismatch, or null when the session is in the plan's repo.
+ * True once any group in the plan has moved beyond "planned" status.
+ */
+export function hasExecutionStarted(plan: Pick<Plan, "groups">): boolean {
+	return plan.groups.some((g) => g.status !== "planned");
+}
+
+/**
+ * Guard against acting on the wrong repo.
  */
 export function planRepoMismatch(
 	planTop: string | null,
@@ -544,155 +584,7 @@ export function planRepoMismatch(
 	return null;
 }
 
-// ---- Write-time validation ----------------------------------------------
+// ─── Summary budget ──────────────────────────────────────────────────────────
 
-/** Structural invariants enforced before saving. Empty array = valid. */
-export function validatePlanShape(
-	plan: Pick<Plan, "nodes" | "repos">,
-): string[] {
-	const problems: string[] = [];
-	const flat = deliverables(plan);
-	const ids = new Set(flat.map((d) => d.id));
-
-	const repoKeys = new Set<string>([DEFAULT_REPO_KEY]);
-	for (const r of plan.repos ?? []) {
-		if (repoKeys.has(r.key)) {
-			problems.push(`duplicate repo key \`${r.key}\``);
-		}
-		if (!r.path) {
-			problems.push(`repo \`${r.key}\` has an empty path`);
-		}
-		repoKeys.add(r.key);
-	}
-
-	for (const item of topLevelLeaves(plan)) {
-		if (effectiveWorkItemKind(item) === "task") {
-			problems.push(
-				`plan-level work item \`${item.id}\` cannot be a gating task`,
-			);
-		}
-	}
-
-	for (const d of flat) {
-		if (gatingTasks(d).length > 0 && childDeliverables(d).length > 0) {
-			problems.push(
-				`deliverable \`${d.id}\` has both gating tasks and child deliverables`,
-			);
-		}
-		const deps = d.dependsOn ?? [];
-		for (const dep of deps) {
-			if (!ids.has(dep)) {
-				problems.push(
-					`deliverable \`${d.id}\` depends on unknown deliverable \`${dep}\``,
-				);
-			}
-		}
-		if (d.lifecycle && childDeliverables(d).length > 0) {
-			problems.push(
-				`lifecycle deliverable \`${d.id}\` cannot contain child deliverables`,
-			);
-		}
-		if (d.repo && !repoKeys.has(d.repo)) {
-			problems.push(
-				`deliverable \`${d.id}\` targets unknown repo \`${d.repo}\``,
-			);
-		}
-	}
-
-	const nested = flat.filter((d) => d.lifecycle && !plan.nodes.includes(d));
-	for (const d of nested) {
-		problems.push(`lifecycle deliverable \`${d.id}\` must be top-level`);
-	}
-	for (const which of ["pre", "post"] as const) {
-		const count = flat.filter((d) => d.lifecycle === which).length;
-		if (count > 1) {
-			problems.push(
-				`plan has ${count} \`${which}\` deliverables — at most one`,
-			);
-		}
-	}
-
-	// Cycle check over dependsOn edges.
-	const colour = new Map<string, "visiting" | "done">();
-	const byId = new Map(flat.map((d) => [d.id, d]));
-	const visit = (id: string, trail: string[]): void => {
-		const state = colour.get(id);
-		if (state === "done") return;
-		if (state === "visiting") {
-			problems.push(`dependsOn cycle: ${[...trail, id].join(" → ")}`);
-			return;
-		}
-		colour.set(id, "visiting");
-		for (const dep of byId.get(id)?.dependsOn ?? []) {
-			if (byId.has(dep)) visit(dep, [...trail, id]);
-		}
-		colour.set(id, "done");
-	};
-	for (const d of flat) visit(d.id, []);
-
-	return problems;
-}
-
-/**
- * True once any deliverable in the plan has moved beyond "planned" status.
- * Used by lifecycle guards to switch from free-form editing to additive-only.
- */
-export function hasExecutionStarted(plan: Pick<Plan, "nodes">): boolean {
-	return deliverables(plan).some((d) => d.status !== "planned");
-}
-
-/**
- * True for deliverables that are in-flight or completed — mutations to these
- * are restricted once execution has started.
- */
-export function isActiveOrShipped(d: Deliverable): boolean {
-	return (
-		d.status === "active" ||
-		d.status === "in-review" ||
-		d.status === "needs-attention" ||
-		d.status === "ready-to-ship" ||
-		d.status === "shipped"
-	);
-}
-
-// ─── Deterministic child ID convention ───────────────────────────────────────
-
-const CHILD_SEPARATOR = "--";
-
-/**
- * Generate a deterministic child ID: `parentId--role` or `parentId--role-slot`.
- */
-export function generateChildId(
-	parentId: string,
-	role: AgentRole,
-	slot?: "default" | "alternate",
-): string {
-	const suffix = slot ? `${role}-${slot}` : role;
-	return `${parentId}${CHILD_SEPARATOR}${suffix}`;
-}
-
-/**
- * Extract parent deliverable ID from a child ID.
- * Returns undefined if id has no child separator.
- */
-export function getParentId(childId: string): string | undefined {
-	const idx = childId.indexOf(CHILD_SEPARATOR);
-	return idx > 0 ? childId.slice(0, idx) : undefined;
-}
-
-/**
- * Check if a deliverable ID is a nested child (contains `--`).
- */
-export function isChildId(id: string): boolean {
-	return id.includes(CHILD_SEPARATOR);
-}
-
-/**
- * Resolve the effective AgentMode for a deliverable.
- * Priority: explicit agentMode > role default > "full".
- */
-export function resolveAgentMode(d: Deliverable): AgentMode {
-	if (d.agentMode) return d.agentMode;
-	if (d.agentRole) return ROLE_MODE_DEFAULTS[d.agentRole];
-	return "full";
-}
+/** Default token budget for cross-group summaries before compression kicks in. */
+export const SUMMARY_TOKEN_BUDGET = 5000;

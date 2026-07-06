@@ -148,6 +148,13 @@ import {
 class WorkerPanes {
 	mount() {}
 	unmount() {}
+	isOpen() { return false; }
+	isEnabled() { return false; }
+	async open(..._args: unknown[]) {}
+	async close() {}
+	terminalTooSmall() { return false; }
+	shouldSync(_id: string, _status: string) { return false; }
+	async sync(..._args: unknown[]) {}
 }
 const cleanupInactiveWorktrees = (..._args: unknown[]) => {};
 const recordPlanSession = (..._args: unknown[]) => {};

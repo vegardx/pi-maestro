@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
@@ -32,7 +34,7 @@ import {
 } from "./agent-bridge.js";
 
 // STUB: agents-dashboard deleted (group model)
-const runAgentsDashboard = (..._args: unknown[]) => {};
+const _runAgentsDashboard = (..._args: unknown[]) => {};
 
 import { ModesAskQueue } from "./ask-queue.js";
 import { classifyBashFast, classifyBashIntent } from "./bash-classifier.js";
@@ -148,12 +150,20 @@ import {
 class WorkerPanes {
 	mount() {}
 	unmount() {}
-	isOpen() { return false; }
-	isEnabled() { return false; }
+	isOpen() {
+		return false;
+	}
+	isEnabled() {
+		return false;
+	}
 	async open(..._args: unknown[]) {}
 	async close() {}
-	terminalTooSmall() { return false; }
-	shouldSync(_id: string, _status: string) { return false; }
+	terminalTooSmall() {
+		return false;
+	}
+	shouldSync(_id: string, _status: string) {
+		return false;
+	}
 	async sync(..._args: unknown[]) {}
 }
 const cleanupInactiveWorktrees = (..._args: unknown[]) => {};
@@ -627,6 +637,11 @@ export function createModesRuntime(
 				tmuxFanout = new ExecutionAdapter({
 					engine: activeEngine,
 					ctx,
+					extensionPath: resolve(
+						dirname(fileURLToPath(import.meta.url)),
+						"../../..",
+					),
+					planDir: join(plansRoot(), activeEngine.get().slug),
 					defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 					onPlanChanged: emitPlanChanged,
 					onAgentStateChanged: (id, state) => {
@@ -792,11 +807,17 @@ export function createModesRuntime(
 			}
 			const lines: string[] = [`Plan: ${plan.title} (${plan.slug})`, ""];
 			for (const g of plan.groups) {
-				const icon = g.status === "shipped" ? "\uD83D\uDE80"
-					: g.status === "active" ? "\u25CF"
-					: g.status === "complete" ? "\u2713"
-					: "\u25CB";
-				const deps = g.dependsOn?.length ? ` [after: ${g.dependsOn.join(", ")}]` : "";
+				const icon =
+					g.status === "shipped"
+						? "\uD83D\uDE80"
+						: g.status === "active"
+							? "\u25CF"
+							: g.status === "complete"
+								? "\u2713"
+								: "\u25CB";
+				const deps = g.dependsOn?.length
+					? ` [after: ${g.dependsOn.join(", ")}]`
+					: "";
 				lines.push(`${icon} ${g.title} (${g.status})${deps}`);
 				const tasks = g.tasks.filter((t) => t.kind === "task");
 				const done = tasks.filter((t) => t.done).length;
@@ -804,7 +825,9 @@ export function createModesRuntime(
 					lines.push(`  Tasks: ${done}/${tasks.length}`);
 				}
 				for (const a of g.agents) {
-					lines.push(`  \u2514\u2500 ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})`);
+					lines.push(
+						`  \u2514\u2500 ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})`,
+					);
 				}
 			}
 			cmdCtx.ui.notify(lines.join("\n"), "info");

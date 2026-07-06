@@ -1138,7 +1138,7 @@ export function createModesRuntime(
 				},
 				getPendingQuestions: () => {
 					if (!tmuxFanout) return 0;
-					return tmuxFanout.questionQueue.all().length;
+					return tmuxFanout.questionQueue?.all()?.length ?? 0;
 				},
 			});
 		}

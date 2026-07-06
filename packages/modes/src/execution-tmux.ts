@@ -50,7 +50,7 @@ import {
 	forkSessionAt,
 	parseSessionFile,
 } from "./session-fork.js";
-import { getModeRoleModel, MAESTRO_ENV, readMaxWorkers } from "./settings.js";
+import { getModeRoleModel, MAESTRO_ENV } from "./settings.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -89,8 +89,8 @@ export interface TmuxAgentState {
 	readonly startedAt: number;
 	status: TmuxAgentStatus;
 	shutdownSent: boolean;
-	assessmentSent: boolean;
 	idleCount: number;
+	stuckSteerSent: boolean;
 	tokens: TokenSnapshot;
 	lensRuns: number;
 	reviewCycles: number;
@@ -193,13 +193,9 @@ export class TmuxFanout {
 	/** Planned analyze phases (cached from last analyze run). */
 	private analyzePhases: AnalyzePhase[] = [];
 
-	/** Resolved max concurrent workers. */
-	private readonly maxWorkers: number;
-
 	constructor(private readonly deps: TmuxFanoutDeps) {
 		this.server = new RpcServer();
 		this.socketPath = createSocketPath(deps.planDir);
-		this.maxWorkers = readMaxWorkers(process.cwd());
 	}
 
 	private get extensionCtx(): ExtensionContext {
@@ -263,7 +259,6 @@ export class TmuxFanout {
 
 		let spawned = 0;
 		for (const d of readyDeliverables(plan)) {
-			if (this.activeCount() >= this.maxWorkers) break;
 			if (this.agents.has(d.id)) continue;
 			if (!this.depsComplete(plan, d)) continue;
 			await this.spawnAgent(d);
@@ -413,17 +408,6 @@ export class TmuxFanout {
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
-
-	/**
-	 * Number of agents currently occupying a worker slot (spawning or working).
-	 */
-	private activeCount(): number {
-		let count = 0;
-		for (const state of this.agents.values()) {
-			if (state.status === "spawning" || state.status === "working") count++;
-		}
-		return count;
-	}
 
 	private depsComplete(
 		plan: Pick<Plan, "nodes">,
@@ -605,8 +589,8 @@ export class TmuxFanout {
 			startedAt: Date.now(),
 			status: "spawning",
 			shutdownSent: false,
-			assessmentSent: false,
 			idleCount: 0,
+			stuckSteerSent: false,
 			tokens: { ...ZERO_TOKENS },
 			lensRuns: 0,
 			reviewCycles: 0,
@@ -847,10 +831,11 @@ export class TmuxFanout {
 		// Check if all tasks are done — if so, agent is complete
 		if (this.checkCompletionGate(agentId)) return;
 
-		// After first idle with incomplete tasks, nudge the agent to toggle them
-		if (!state.assessmentSent) {
+		// Stuck detection: 5+ consecutive idles with no progress
+		if (state.idleCount >= 5 && !state.stuckSteerSent) {
+			state.stuckSteerSent = true;
 			const d = findDeliverable(this.deps.engine.get(), agentId);
-			const taskIds = d
+			const remaining = d
 				? d.children
 						.filter(
 							(c) =>
@@ -860,18 +845,16 @@ export class TmuxFanout {
 						)
 						.map((c) => c.id)
 				: [];
-			if (taskIds.length > 0) {
-				this.server.send(agentId, {
-					type: "steer",
-					content:
-						"Mark your completed tasks done. Do not re-verify or re-run tests — just toggle them:\n" +
-						taskIds
-							.map((id) => `  task({action: "toggle", id: "${id}"})`)
-							.join("\n"),
-				});
-				state.assessmentSent = true;
-				log(`steered ${agentId} to toggle tasks: ${taskIds.join(", ")}`);
-			}
+			this.server.send(agentId, {
+				type: "steer",
+				content:
+					"You seem stuck. " +
+					(remaining.length > 0
+						? `Remaining tasks: ${remaining.join(", ")}. `
+						: "") +
+					"Call `plan` to see current state. Commit progress and ship when ready.",
+			});
+			log(`stuck-steer: ${agentId} after ${state.idleCount} idles`);
 		}
 	}
 

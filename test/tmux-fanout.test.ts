@@ -511,7 +511,7 @@ describe("TmuxFanout", () => {
 	});
 
 	describe("concurrency cap", () => {
-		it("limits spawned agents to maxWorkers (default 4)", async () => {
+		it("spawns all ready agents (unbounded parallelism)", async () => {
 			// Add 8 independent deliverables
 			for (let i = 0; i < 8; i++) {
 				engine.addDeliverable({ title: `Task ${i + 1}`, dependsOn: [] });
@@ -519,51 +519,37 @@ describe("TmuxFanout", () => {
 			const f = createFanout();
 			await f.start();
 			const spawned = await f.tick();
-			// Default maxWorkers = 4
-			expect(spawned).toBe(4);
-			expect(tmux.spawn).toHaveBeenCalledTimes(4);
+			// Unbounded: all 8 spawn
+			expect(spawned).toBe(8);
+			expect(tmux.spawn).toHaveBeenCalledTimes(8);
 		});
 
-		it("spawns more when active count drops below limit", async () => {
+		it("spawns additional agents after deps complete", async () => {
 			const ds = [];
-			for (let i = 0; i < 6; i++) {
+			const first = engine.addDeliverable({ title: "Task 1", dependsOn: [] });
+			ds.push(first);
+			for (let i = 1; i < 3; i++) {
 				ds.push(
 					engine.addDeliverable({ title: `Task ${i + 1}`, dependsOn: [] }),
 				);
 			}
+			// Add a dep-gated one
+			ds.push(engine.addDeliverable({ title: "Task 4" })); // depends on Task 3
 			const f = createFanout();
 			await f.start();
 			await f.tick();
-			expect(tmux.spawn).toHaveBeenCalledTimes(4);
+			// 3 independent spawn immediately
+			expect(tmux.spawn).toHaveBeenCalledTimes(3);
 
-			// Simulate first agent completing via RPC
-			const { client, connected } = makeClient(ds[0].id);
+			// Simulate Task 3 completing via RPC
+			const { client, connected } = makeClient(ds[2].id);
 			await connected;
 			await wait(30);
 			client.send({ type: "done", summary: "done" });
 			await wait(80);
 
-			// markDone calls tick() which should spawn one more
-			expect(tmux.spawn).toHaveBeenCalledTimes(5);
-		});
-
-		it("respects MAESTRO_MAX_WORKERS env override", async () => {
-			const original = process.env.MAESTRO_MAX_WORKERS;
-			process.env.MAESTRO_MAX_WORKERS = "2";
-
-			try {
-				for (let i = 0; i < 5; i++) {
-					engine.addDeliverable({ title: `Task ${i + 1}`, dependsOn: [] });
-				}
-				const f = createFanout();
-				await f.start();
-				const spawned = await f.tick();
-				expect(spawned).toBe(2);
-				expect(tmux.spawn).toHaveBeenCalledTimes(2);
-			} finally {
-				if (original === undefined) delete process.env.MAESTRO_MAX_WORKERS;
-				else process.env.MAESTRO_MAX_WORKERS = original;
-			}
+			// markDone calls tick() which spawns the dep-gated one
+			expect(tmux.spawn).toHaveBeenCalledTimes(4);
 		});
 	});
 

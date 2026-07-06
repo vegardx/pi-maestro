@@ -30,11 +30,19 @@ export const MAESTRO_ENV = {
 	get analyzeThinking(): string | undefined {
 		return process.env.MAESTRO_ANALYZE_THINKING || undefined;
 	},
-	get workerModel(): string | undefined {
-		return process.env.MAESTRO_WORKER_MODEL || undefined;
+	get agentModel(): string | undefined {
+		return (
+			process.env.MAESTRO_AGENT_MODEL ||
+			process.env.MAESTRO_WORKER_MODEL ||
+			undefined
+		);
 	},
-	get workerThinking(): string | undefined {
-		return process.env.MAESTRO_WORKER_THINKING || undefined;
+	get agentThinking(): string | undefined {
+		return (
+			process.env.MAESTRO_AGENT_THINKING ||
+			process.env.MAESTRO_WORKER_THINKING ||
+			undefined
+		);
 	},
 	get lensModel(): string | undefined {
 		return process.env.MAESTRO_LENS_MODEL || undefined;
@@ -143,10 +151,10 @@ function envForRole(role: ModesRole): {
 	effort?: ThinkingLevel;
 } {
 	switch (role) {
-		case "worker":
+		case "agent":
 			return {
-				model: MAESTRO_ENV.workerModel,
-				effort: asThinking(MAESTRO_ENV.workerThinking),
+				model: MAESTRO_ENV.agentModel,
+				effort: asThinking(MAESTRO_ENV.agentThinking),
 			};
 		case "analyze":
 			return {
@@ -168,8 +176,8 @@ function envForRole(role: ModesRole): {
 
 /** Per-invocation overrides set by /implement --model/--effort flags. */
 export interface ImplementOverrides {
-	workerModel?: string;
-	workerThinking?: ThinkingLevel;
+	agentModel?: string;
+	agentThinking?: ThinkingLevel;
 	analyzeModel?: string;
 	analyzeThinking?: ThinkingLevel;
 }
@@ -195,8 +203,8 @@ function explicitForRole(role: ModesRole): {
 	const o = _implementOverrides;
 	if (!o) return {};
 	switch (role) {
-		case "worker":
-			return { model: o.workerModel, effort: o.workerThinking };
+		case "agent":
+			return { model: o.agentModel, effort: o.agentThinking };
 		case "analyze":
 			return { model: o.analyzeModel, effort: o.analyzeThinking };
 		default:

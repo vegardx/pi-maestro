@@ -199,8 +199,7 @@ export async function resolveRoleModel(
 					return {
 						...result,
 						modelId: slotConfig.model,
-						effort:
-							roleConfig.effort ?? slotConfig.effort ?? opts.env?.effort,
+						effort: roleConfig.effort ?? slotConfig.effort ?? opts.env?.effort,
 						source: "preset",
 						preset: presetName,
 						slot,

@@ -719,10 +719,10 @@ describe("agent definitions", () => {
 	it("returns just the built-ins for a missing directory", () => {
 		const agents = discoverAgents("/no/such/dir/.pi/agents");
 		expect(Object.keys(agents).sort()).toEqual([
+			"agent",
 			"explore",
 			"plan",
 			"review",
-			"worker",
 		]);
 	});
 });
@@ -815,7 +815,7 @@ describe("subagent delegate tool", () => {
 		const { cap, calls } = fakeCapability();
 		const res: any = await exec(tool(cap), {
 			action: "spawn",
-			agent: "worker",
+			agent: "agent",
 			prompt: "do it",
 		});
 		expect(calls).toContain("spawn:deliverable-worker");

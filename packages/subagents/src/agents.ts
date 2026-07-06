@@ -16,7 +16,7 @@ export interface AgentDefinition {
 	readonly appendSystemPrompt?: string;
 }
 
-// Built-in roles. explore/plan/review are read-only (restricted); worker is a
+// Built-in roles. explore/plan/review are read-only (restricted); agent is a
 // full deliverable-worker. These are always available without any .pi/agents.
 export const BUILTIN_AGENTS: Readonly<Record<string, AgentDefinition>> = {
 	explore: {
@@ -34,9 +34,9 @@ export const BUILTIN_AGENTS: Readonly<Record<string, AgentDefinition>> = {
 		description: "Read-only review of changes.",
 		profile: "restricted",
 	},
-	worker: {
-		name: "worker",
-		description: "Full deliverable worker, worktree-bound.",
+	agent: {
+		name: "agent",
+		description: "Full deliverable agent, worktree-bound.",
 		profile: "deliverable-worker",
 	},
 };

@@ -118,7 +118,9 @@ function handleShow(ctx: ExtensionContext): void {
 				const slotConfig = preset[slot];
 				if (slotConfig?.model) {
 					const effortStr = slotConfig.effort ? ` (${slotConfig.effort})` : "";
-					content.push(`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`);
+					content.push(
+						`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`,
+					);
 				}
 			}
 		}
@@ -144,9 +146,9 @@ function handleShow(ctx: ExtensionContext): void {
 		content.push("No presets or extension settings configured.");
 		content.push("");
 		content.push("Quick start:");
-		content.push("  /maestro set modes.models.worker.effort high");
-		content.push("  /maestro set modes.models.worker.thinking medium");
-		content.push("  /maestro set modes.maxWorkers 4");
+		content.push("  /maestro set modes.models.agent.effort high");
+		content.push("  /maestro set modes.models.agent.thinking medium");
+		content.push("  /maestro set modes.maxAgents 4");
 		content.push("");
 		content.push("Preset example (.pi/settings.json):");
 		content.push('  { "models": { "active": "anthropic", "presets": {');
@@ -169,7 +171,7 @@ function handleGet(args: string, ctx: ExtensionContext): void {
 	const dotIndex = key.indexOf(".");
 	if (dotIndex <= 0) {
 		ctx.ui.notify(
-			"Key must be in format: <extension>.<path> (e.g. modes.models.worker.thinking)",
+			"Key must be in format: <extension>.<path> (e.g. modes.models.agent.thinking)",
 			"warning",
 		);
 		return;
@@ -229,7 +231,7 @@ function handleSet(args: string, ctx: ExtensionContext): void {
 	const dotIndex = key.indexOf(".");
 	if (dotIndex <= 0) {
 		ctx.ui.notify(
-			"Key must be in format: <extension>.<path> (e.g. modes.models.worker.thinking)",
+			"Key must be in format: <extension>.<path> (e.g. modes.models.agent.thinking)",
 			"warning",
 		);
 		return;
@@ -290,7 +292,7 @@ function handleReset(args: string, ctx: ExtensionContext): void {
 	const dotIndex = key.indexOf(".");
 	if (dotIndex <= 0) {
 		ctx.ui.notify(
-			"Key must be in format: <extension>.<path> (e.g. modes.models.worker.thinking)",
+			"Key must be in format: <extension>.<path> (e.g. modes.models.agent.thinking)",
 			"warning",
 		);
 		return;

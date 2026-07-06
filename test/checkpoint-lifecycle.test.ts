@@ -303,7 +303,7 @@ describe("full checkpoint lifecycle (integration)", () => {
 	it("MAESTRO_ENV reads all env vars from centralized config", () => {
 		const original = {
 			MAESTRO_ANALYZE_MODEL: process.env.MAESTRO_ANALYZE_MODEL,
-			MAESTRO_WORKER_MODEL: process.env.MAESTRO_WORKER_MODEL,
+			MAESTRO_AGENT_MODEL: process.env.MAESTRO_AGENT_MODEL,
 			MAESTRO_LENS_MODEL: process.env.MAESTRO_LENS_MODEL,
 			MAESTRO_CLASSIFIER_MODEL: process.env.MAESTRO_CLASSIFIER_MODEL,
 			MAESTRO_MAX_REVIEW_CYCLES: process.env.MAESTRO_MAX_REVIEW_CYCLES,
@@ -312,14 +312,14 @@ describe("full checkpoint lifecycle (integration)", () => {
 
 		try {
 			process.env.MAESTRO_ANALYZE_MODEL = "analyze-model";
-			process.env.MAESTRO_WORKER_MODEL = "worker-model";
+			process.env.MAESTRO_AGENT_MODEL = "agent-model";
 			process.env.MAESTRO_LENS_MODEL = "lens-model";
 			process.env.MAESTRO_CLASSIFIER_MODEL = "classifier-model";
 			process.env.MAESTRO_MAX_REVIEW_CYCLES = "5";
 			process.env.MAESTRO_LENS_DISABLED = "1";
 
 			expect(MAESTRO_ENV.analyzeModel).toBe("analyze-model");
-			expect(MAESTRO_ENV.workerModel).toBe("worker-model");
+			expect(MAESTRO_ENV.agentModel).toBe("agent-model");
 			expect(MAESTRO_ENV.lensModel).toBe("lens-model");
 			expect(MAESTRO_ENV.classifierModel).toBe("classifier-model");
 			expect(MAESTRO_ENV.maxReviewCycles).toBe(5);

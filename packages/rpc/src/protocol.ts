@@ -4,6 +4,7 @@ import type {
 	Answers,
 	Questionnaire,
 	TokenSnapshot,
+	WorkItemKind,
 } from "@vegardx/pi-contracts";
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
@@ -61,6 +62,24 @@ export interface LensUsageMessage {
 	readonly effort?: string;
 }
 
+/** Agent requests current plan state from maestro. */
+export interface PlanReadMessage {
+	readonly type: "planRead";
+}
+
+/** Agent requests a plan mutation from maestro. */
+export interface PlanMutateMessage {
+	readonly type: "planMutate";
+	readonly action: "toggleTask" | "addTask" | "updateTask";
+	readonly deliverableId: string;
+	readonly params: {
+		readonly taskId?: string;
+		readonly title?: string;
+		readonly body?: string;
+		readonly kind?: WorkItemKind;
+	};
+}
+
 export type AgentMessage =
 	| HelloMessage
 	| StatusMessage
@@ -69,6 +88,8 @@ export type AgentMessage =
 	| TaskCompleteMessage
 	| QuestionsMessage
 	| LensUsageMessage
+	| PlanReadMessage
+	| PlanMutateMessage
 	| PongMessage;
 
 // ─── Orchestrator → Agent ───────────────────────────────────────────────────
@@ -93,10 +114,26 @@ export interface AnswersMessage {
 	readonly answers: Answers;
 }
 
+/** Maestro returns rendered plan state in response to planRead. */
+export interface PlanReadResponseMessage {
+	readonly type: "planReadResponse";
+	readonly content: string;
+}
+
+/** Maestro returns the result of a plan mutation. */
+export interface PlanMutateResultMessage {
+	readonly type: "planMutateResult";
+	readonly success: boolean;
+	readonly taskId?: string;
+	readonly error?: string;
+}
+
 export type OrchestratorMessage =
 	| SteerMessage
 	| ShutdownMessage
 	| AnswersMessage
+	| PlanReadResponseMessage
+	| PlanMutateResultMessage
 	| PingMessage;
 
 // ─── Union of all messages ──────────────────────────────────────────────────

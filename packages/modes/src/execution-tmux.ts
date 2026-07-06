@@ -8,6 +8,8 @@ import { addWorktree, removeWorktree, worktreePathFor } from "@vegardx/pi-git";
 import {
 	type AgentMessage,
 	createSocketPath,
+	type PlanMutateMessage,
+	type PlanMutateResultMessage,
 	MaestroRpcServer as RpcServer,
 	type TokenSnapshot,
 } from "@vegardx/pi-rpc";
@@ -28,7 +30,7 @@ import {
 } from "./analyze.js";
 import type { PlanEngine } from "./engine.js";
 import { completionGateSatisfied, transitionThrough } from "./execution.js";
-import { renderPlanSeed } from "./markdown.js";
+import { renderAgentSeed, renderPlanForAgent } from "./markdown.js";
 import { QuestionQueue } from "./question-queue.js";
 import {
 	type Deliverable,
@@ -145,15 +147,21 @@ function collectGitInfo(
 				if (line.trim()) commits.push(line.trim());
 			}
 		}
-	} catch { /* ignore git errors */ }
+	} catch {
+		/* ignore git errors */
+	}
 	try {
 		// Check for open PR on current branch
-		const pr = execSync(
-			"gh pr view --json url -q .url",
-			{ cwd: worktreePath, encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] },
-		).trim();
+		const pr = execSync("gh pr view --json url -q .url", {
+			cwd: worktreePath,
+			encoding: "utf-8",
+			timeout: 10000,
+			stdio: ["pipe", "pipe", "pipe"],
+		}).trim();
 		if (pr.startsWith("http")) prUrl = pr;
-	} catch { /* no PR or gh not available */ }
+	} catch {
+		/* no PR or gh not available */
+	}
 	return { commits, prUrl };
 }
 
@@ -444,7 +452,7 @@ export class TmuxFanout {
 		if (process.env.PI_CODING_AGENT_DIR) {
 			vars.push(`PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR}`);
 		}
-		const resolved = await getModeRoleModel(this.extensionCtx, "worker");
+		const resolved = await getModeRoleModel(this.extensionCtx, "agent");
 		if (resolved) {
 			vars.push(`PI_MODEL=${resolved.modelId}`);
 			if (resolved.effort && resolved.effort !== "off") {
@@ -490,7 +498,7 @@ export class TmuxFanout {
 							"maestro.modes.state",
 							{
 								version: 2,
-								mode: "worker",
+								mode: "agent",
 								execution: { stage: "executing", deliverableId: d.id },
 								updatedAt: new Date().toISOString(),
 							},
@@ -530,7 +538,7 @@ export class TmuxFanout {
 				customType: "maestro.modes.state",
 				data: {
 					version: 2,
-					mode: "worker",
+					mode: "agent",
 					execution: { stage: "executing", deliverableId: d.id },
 					updatedAt: new Date().toISOString(),
 				},
@@ -579,7 +587,7 @@ export class TmuxFanout {
 		const sessionDir = join(resolveOrchestratorSessionDir(), "workers", d.id);
 		mkdirSync(sessionDir, { recursive: true });
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-		const seed = renderPlanSeed(this.deps.engine.get(), d.id);
+		const seed = renderAgentSeed(this.deps.engine.get(), d.id);
 		const sessionFile = this.buildSessionFile(
 			d,
 			sessionDir,
@@ -724,6 +732,109 @@ export class TmuxFanout {
 					// Task may not exist or already toggled
 				}
 				break;
+			case "planRead": {
+				const plan = this.deps.engine.get();
+				const content = renderPlanForAgent(plan, agentId);
+				this.server.send(agentId, { type: "planReadResponse", content });
+				break;
+			}
+			case "planMutate": {
+				const result = this.handlePlanMutate(agentId, msg);
+				this.server.send(agentId, result);
+				break;
+			}
+		}
+	}
+
+	private handlePlanMutate(
+		agentId: string,
+		msg: PlanMutateMessage,
+	): PlanMutateResultMessage {
+		try {
+			switch (msg.action) {
+				case "toggleTask": {
+					if (!msg.params.taskId) {
+						return {
+							type: "planMutateResult",
+							success: false,
+							error: "taskId required",
+						};
+					}
+					this.deps.engine.toggleWorkItem(msg.params.taskId);
+					this.deps.onPlanChanged?.();
+					this.checkCompletionGate(agentId);
+					return {
+						type: "planMutateResult",
+						success: true,
+						taskId: msg.params.taskId,
+					};
+				}
+				case "addTask": {
+					const kind = msg.params.kind ?? "task";
+					// Permission: gating tasks only to own deliverable
+					if (kind === "task" && msg.deliverableId !== agentId) {
+						return {
+							type: "planMutateResult",
+							success: false,
+							error: "can only add gating tasks to own deliverable",
+						};
+					}
+					if (!msg.params.title) {
+						return {
+							type: "planMutateResult",
+							success: false,
+							error: "title required",
+						};
+					}
+					const item = this.deps.engine.addWorkItem(msg.deliverableId, {
+						title: msg.params.title,
+						body: msg.params.body,
+						kind,
+					});
+					this.deps.onPlanChanged?.();
+					return { type: "planMutateResult", success: true, taskId: item.id };
+				}
+				case "updateTask": {
+					if (!msg.params.taskId) {
+						return {
+							type: "planMutateResult",
+							success: false,
+							error: "taskId required",
+						};
+					}
+					// Permission: can only update tasks in own deliverable
+					const d = findDeliverable(this.deps.engine.get(), agentId);
+					const ownsTask = d?.children.some(
+						(c) => c.type === "work-item" && c.id === msg.params.taskId,
+					);
+					if (!ownsTask) {
+						return {
+							type: "planMutateResult",
+							success: false,
+							error: "can only update tasks in own deliverable",
+						};
+					}
+					this.deps.engine.updateWorkItem(msg.params.taskId, {
+						title: msg.params.title,
+						body: msg.params.body,
+					});
+					this.deps.onPlanChanged?.();
+					return {
+						type: "planMutateResult",
+						success: true,
+						taskId: msg.params.taskId,
+					};
+				}
+				default:
+					return {
+						type: "planMutateResult",
+						success: false,
+						error: "unknown action",
+					};
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			return { type: "planMutateResult", success: false, error: message };
 		}
 	}
 

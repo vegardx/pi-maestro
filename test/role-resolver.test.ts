@@ -200,13 +200,13 @@ describe("resolveRoleModel", () => {
 				presets: { anthropic: { default: "anthropic/sonnet" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { effort: "medium" } } },
+				modes: { models: { agent: { effort: "medium" } } },
 			},
 		});
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 			explicit: { model: "openai/o3", effort: "xhigh" },
 		});
 		expect(r?.modelId).toBe("openai/o3");
@@ -221,13 +221,13 @@ describe("resolveRoleModel", () => {
 				presets: { anthropic: { default: "anthropic/sonnet" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { effort: "low" } } },
+				modes: { models: { agent: { effort: "low" } } },
 			},
 		});
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 			env: { model: "openai/o3", effort: "high" },
 		});
 		expect(r?.modelId).toBe("openai/o3");
@@ -290,13 +290,13 @@ describe("resolveRoleModel", () => {
 				presets: { bad: { default: "noauth/model" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { effort: "high" } } },
+				modes: { models: { agent: { effort: "high" } } },
 			},
 		});
 		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 		});
 		expect(r?.modelId).toBe("good/model");
 		expect(r?.source).toBe("session");
@@ -306,7 +306,7 @@ describe("resolveRoleModel", () => {
 		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 		});
 		expect(r?.modelId).toBe("anthropic/sonnet");
 		expect(r?.source).toBe("session");
@@ -335,7 +335,7 @@ describe("resolveRoleModel", () => {
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 		});
 		expect(r).toBeNull();
 	});
@@ -343,13 +343,13 @@ describe("resolveRoleModel", () => {
 	it("effort-only role config uses session model with that effort", async () => {
 		projectSettings({
 			extensionConfig: {
-				modes: { models: { worker: { effort: "low" } } },
+				modes: { models: { agent: { effort: "low" } } },
 			},
 		});
 		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 		});
 		expect(r?.modelId).toBe("anthropic/sonnet");
 		expect(r?.effort).toBe("low");
@@ -363,13 +363,13 @@ describe("resolveRoleModel", () => {
 				presets: { test: { default: "keyless/model" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: {} } },
+				modes: { models: { agent: {} } },
 			},
 		});
 		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 			requireApiKey: true,
 		});
 		expect(r?.modelId).toBe("good/model");
@@ -389,13 +389,13 @@ describe("resolveRoleModel", () => {
 				presets: { p: { default: "project/fast" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { effort: "high" } } },
+				modes: { models: { agent: { effort: "high" } } },
 			},
 		});
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 		});
 		expect(r?.modelId).toBe("project/fast");
 		expect(r?.source).toBe("preset");
@@ -408,13 +408,13 @@ describe("resolveRoleModel", () => {
 				presets: { test: { default: "good/model" } },
 			},
 			extensionConfig: {
-				modes: { models: { worker: { slot: "default" } } },
+				modes: { models: { agent: { slot: "default" } } },
 			},
 		});
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "worker",
+			role: "agent",
 			env: { effort: "high" },
 		});
 		expect(r?.modelId).toBe("good/model");

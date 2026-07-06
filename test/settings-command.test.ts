@@ -60,7 +60,7 @@ describe("/settings command", () => {
 				extensionConfig: {
 					modes: {
 						maxWorkers: 4,
-						models: { worker: { effort: "medium" } },
+						models: { agent: { effort: "medium" } },
 					},
 				},
 			});
@@ -121,24 +121,24 @@ describe("/settings command", () => {
 	describe("set", () => {
 		it("writes to project settings", () => {
 			const ctx = mockCtx(root);
-			handleSettingsCommand("set modes.models.worker.thinking high", ctx);
-			expect(ctx.messages[0]).toContain("Set modes.models.worker.thinking");
+			handleSettingsCommand("set modes.models.agent.thinking high", ctx);
+			expect(ctx.messages[0]).toContain("Set modes.models.agent.thinking");
 			expect(ctx.messages[0]).toContain("high");
 			expect(ctx.messages[0]).toContain("✓");
 
 			const raw = JSON.parse(
 				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
 			);
-			expect(raw.extensionConfig.modes.models.worker.thinking).toBe("high");
+			expect(raw.extensionConfig.modes.models.agent.thinking).toBe("high");
 		});
 
 		it("parses JSON arrays", () => {
 			const ctx = mockCtx(root);
-			handleSettingsCommand('set modes.models.worker.fallback ["a","b"]', ctx);
+			handleSettingsCommand('set modes.models.agent.fallback ["a","b"]', ctx);
 			const raw = JSON.parse(
 				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
 			);
-			expect(raw.extensionConfig.modes.models.worker.fallback).toEqual([
+			expect(raw.extensionConfig.modes.models.agent.fallback).toEqual([
 				"a",
 				"b",
 			]);
@@ -258,13 +258,13 @@ describe("/settings command", () => {
 		it("completes thinking levels for set", () => {
 			writeJson(join(root, ".pi", "settings.json"), {
 				extensionConfig: {
-					modes: { models: { worker: { thinking: "medium" } } },
+					modes: { models: { agent: { thinking: "medium" } } },
 				},
 			});
 
 			const ctx = mockCtx(root);
 			const items = getSettingsCompletions(
-				"set modes.models.worker.thinking ",
+				"set modes.models.agent.thinking ",
 				ctx,
 			);
 			expect(items).toContain("high");

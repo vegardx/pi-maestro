@@ -2,8 +2,16 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
-import { MaestroRpcClient, type OrchestratorMessage } from "@vegardx/pi-rpc";
+import type {
+	Answers,
+	Questionnaire,
+	WorkItemKind,
+} from "@vegardx/pi-contracts";
+import {
+	MaestroRpcClient,
+	type OrchestratorMessage,
+	type PlanMutateResultMessage,
+} from "@vegardx/pi-rpc";
 
 /**
  * Agent-side RPC bridge. Activated when the agent detects it's running
@@ -43,6 +51,10 @@ export class AgentBridge {
 	private totalCacheWrite = 0;
 	private totalCost = 0;
 	private pendingAsk: { resolve: (answers: Answers) => void } | undefined;
+	private pendingPlanRead: { resolve: (content: string) => void } | undefined;
+	private pendingPlanMutate:
+		| { resolve: (result: PlanMutateResultMessage) => void }
+		| undefined;
 
 	constructor(private readonly deps: AgentBridgeDeps) {
 		this.client = new MaestroRpcClient({ reconnect: true });
@@ -111,7 +123,12 @@ export class AgentBridge {
 	reportLensUsage(
 		lens: string,
 		snapshot: import("@vegardx/pi-rpc").TokenSnapshot,
-		opts?: { findings?: number; fixed?: number; model?: string; effort?: string },
+		opts?: {
+			findings?: number;
+			fixed?: number;
+			model?: string;
+			effort?: string;
+		},
 	): void {
 		this.client.send({
 			type: "lensUsage",
@@ -138,6 +155,39 @@ export class AgentBridge {
 		});
 	}
 
+	/** Request the current plan state from maestro. */
+	planRead(): Promise<string> {
+		if (this.pendingPlanRead) return Promise.resolve("");
+		this.client.send({ type: "planRead" });
+		return new Promise<string>((resolve) => {
+			this.pendingPlanRead = { resolve };
+		});
+	}
+
+	/** Request a plan mutation from maestro. */
+	planMutate(
+		action: "toggleTask" | "addTask" | "updateTask",
+		deliverableId: string,
+		params: {
+			taskId?: string;
+			title?: string;
+			body?: string;
+			kind?: WorkItemKind;
+		},
+	): Promise<PlanMutateResultMessage> {
+		if (this.pendingPlanMutate) {
+			return Promise.resolve({
+				type: "planMutateResult",
+				success: false,
+				error: "busy",
+			});
+		}
+		this.client.send({ type: "planMutate", action, deliverableId, params });
+		return new Promise<PlanMutateResultMessage>((resolve) => {
+			this.pendingPlanMutate = { resolve };
+		});
+	}
+
 	/** Clean up — settle any pending ask, then disconnect. */
 	destroy(): void {
 		this.settlePending();
@@ -148,6 +198,18 @@ export class AgentBridge {
 		if (this.pendingAsk) {
 			this.pendingAsk.resolve([]);
 			this.pendingAsk = undefined;
+		}
+		if (this.pendingPlanRead) {
+			this.pendingPlanRead.resolve("");
+			this.pendingPlanRead = undefined;
+		}
+		if (this.pendingPlanMutate) {
+			this.pendingPlanMutate.resolve({
+				type: "planMutateResult",
+				success: false,
+				error: "shutdown",
+			});
+			this.pendingPlanMutate = undefined;
 		}
 	}
 
@@ -162,6 +224,18 @@ export class AgentBridge {
 				const pending = this.pendingAsk;
 				this.pendingAsk = undefined;
 				pending?.resolve(msg.answers);
+				break;
+			}
+			case "planReadResponse": {
+				const pr = this.pendingPlanRead;
+				this.pendingPlanRead = undefined;
+				pr?.resolve(msg.content);
+				break;
+			}
+			case "planMutateResult": {
+				const pm = this.pendingPlanMutate;
+				this.pendingPlanMutate = undefined;
+				pm?.resolve(msg);
 				break;
 			}
 			case "shutdown":

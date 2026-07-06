@@ -247,7 +247,7 @@ describe("AutoAnswerController", () => {
 		expect(queue.pendingForAgent("a1")?.settled).toBe(true);
 	});
 
-	it("30s timeout fires and shows picker", () => {
+	it("30s timeout fires after turn_end when unresolved", () => {
 		const { deps, queue, pickerCalls, notifications } = createDeps();
 		const ctrl = new AutoAnswerController(deps);
 
@@ -261,13 +261,18 @@ describe("AutoAnswerController", () => {
 
 		ctrl.onQuestionReceived("a1");
 
+		// Simulate the triggered turn starting and ending without resolution
+		ctrl.onTurnStart();
+		ctrl.onTurnEnd();
+
+		// Timer starts on turn_end, fires after 30s
 		vi.advanceTimersByTime(30001);
 
 		expect(pickerCalls).toEqual(["a1"]);
 		expect(notifications).toContain("Question timeout — escalating to user.");
 	});
 
-	it("timeout is cancelled when LLM answers in time", () => {
+	it("no timeout during turn (LLM still working)", () => {
 		const { deps, queue, pickerCalls } = createDeps();
 		const ctrl = new AutoAnswerController(deps);
 
@@ -280,10 +285,65 @@ describe("AutoAnswerController", () => {
 		});
 
 		ctrl.onQuestionReceived("a1");
-		ctrl.resolveFromLlm("a1", [{ questionId: "q1", value: "A" }]);
+		ctrl.onTurnStart();
 
+		// 60s pass while turn is active (e.g. LLM called ask(), user is thinking)
+		vi.advanceTimersByTime(60000);
+
+		expect(pickerCalls).toHaveLength(0); // No escalation — turn still open
+	});
+
+	it("no timeout when LLM answers during turn", () => {
+		const { deps, queue, pickerCalls } = createDeps();
+		const ctrl = new AutoAnswerController(deps);
+
+		queue.enqueue({
+			agentId: "a1",
+			agentName: "vivid-cedar",
+			deliverableTitle: "Write docs",
+			questions: makeQuestions(),
+			resolve: () => {},
+		});
+
+		ctrl.onQuestionReceived("a1");
+		ctrl.onTurnStart();
+		// LLM answers during its turn
+		ctrl.resolveFromLlm("a1", [{ questionId: "q1", value: "A" }]);
+		ctrl.onTurnEnd();
+
+		// No timer should fire — question was resolved during the turn
 		vi.advanceTimersByTime(31000);
-		expect(pickerCalls).toHaveLength(0); // No escalation
+		expect(pickerCalls).toHaveLength(0);
+	});
+
+	it("timer cancelled when new turn starts", () => {
+		const { deps, queue, pickerCalls } = createDeps();
+		const ctrl = new AutoAnswerController(deps);
+
+		queue.enqueue({
+			agentId: "a1",
+			agentName: "vivid-cedar",
+			deliverableTitle: "Write docs",
+			questions: makeQuestions(),
+			resolve: () => {},
+		});
+
+		ctrl.onQuestionReceived("a1");
+		ctrl.onTurnStart();
+		ctrl.onTurnEnd(); // Timer starts
+
+		// 15s in, user starts typing (new turn)
+		vi.advanceTimersByTime(15000);
+		ctrl.onTurnStart(); // Cancels timer
+
+		// Another 30s pass
+		vi.advanceTimersByTime(30000);
+		expect(pickerCalls).toHaveLength(0); // Timer was cancelled
+
+		// Turn ends again without resolution — timer restarts
+		ctrl.onTurnEnd();
+		vi.advanceTimersByTime(30001);
+		expect(pickerCalls).toEqual(["a1"]);
 	});
 
 	it("in non-auto mode just notifies", () => {

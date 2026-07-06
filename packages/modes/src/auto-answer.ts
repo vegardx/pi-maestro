@@ -40,12 +40,16 @@ export class AutoAnswerController {
 	/** Call on pi turn_start event. */
 	onTurnStart(): void {
 		this.orchestratorBusy = true;
+		// Cancel any running timers — a turn is active, LLM might address it
+		this.cancelAllTimers();
 	}
 
-	/** Call on pi turn_end event. Flushes any queued questions. */
+	/** Call on pi turn_end event. Flushes any queued questions or starts timers. */
 	onTurnEnd(): void {
 		this.orchestratorBusy = false;
 		this.flushUndelivered();
+		// Start timeout for any delivered-but-unresolved questions
+		this.startTimersForPending();
 	}
 
 	/**
@@ -62,11 +66,9 @@ export class AutoAnswerController {
 			return;
 		}
 
-		// Start the 30s timeout regardless of delivery state
-		this.startTimeout(agentId);
-
 		if (!this.orchestratorBusy) {
 			this.deliverToLlm();
+			// No timer here — it starts on turn_end if still unresolved
 		}
 		// If busy, flushUndelivered() will fire on turn_end
 	}
@@ -149,6 +151,25 @@ export class AutoAnswerController {
 		const undelivered = this.deps.queue.undelivered();
 		if (undelivered.length > 0) {
 			this.deliverToLlm();
+		}
+	}
+
+	/** Start timers for all delivered, unresolved questions (called on turn_end). */
+	private startTimersForPending(): void {
+		for (const entry of this.deps.queue.all()) {
+			if (entry.settled || !entry.deliveredToLlm) continue;
+			if (entry.timeoutHandle) continue; // already has a timer
+			this.startTimeout(entry.agentId);
+		}
+	}
+
+	/** Cancel all running timers (called on turn_start). */
+	private cancelAllTimers(): void {
+		for (const entry of this.deps.queue.all()) {
+			if (entry.timeoutHandle) {
+				clearTimeout(entry.timeoutHandle);
+				entry.timeoutHandle = undefined;
+			}
 		}
 	}
 

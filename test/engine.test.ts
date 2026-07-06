@@ -2,15 +2,27 @@ import { describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 
+import type { PlanStore } from "../packages/modes/src/storage.js";
+
 // Minimal PlanStore stub
-function memStore() {
+function memStore(): PlanStore & { last: Plan | null } {
 	let saved: Plan | null = null;
 	return {
+		root: "/tmp/plans",
 		save(plan: Plan) {
 			saved = plan;
 		},
-		load(): Plan | null {
+		load(_slug: string): Plan | null {
 			return saved;
+		},
+		exists(_slug: string): boolean {
+			return saved !== null;
+		},
+		remove(_slug: string) {
+			saved = null;
+		},
+		list() {
+			return [];
 		},
 		get last() {
 			return saved;

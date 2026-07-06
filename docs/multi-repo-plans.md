@@ -1,10 +1,12 @@
 # Multi-repo plans (design)
 
-Status: **implemented** — the model below ships in the modes extension
-(`Plan.repos`, `Deliverable.repo`, `repoFor`, per-deliverable routing/guard,
-cross-repo ordering-only deps). This document is retained as the design record;
-see [Usage → Multi-repo plans](usage.md#multi-repo-plans) for how to use it.
-Validated against the `maestro-sandbox-{lib,service,docs}` repos.
+Status: **design** — conceptually valid for the group model. Each group can
+target a specific repo. Cross-repo `dependsOn` is ordering-only (no branch
+stacking across repos).
+
+The original deliverable-based implementation has been replaced by the group
+model. The principles remain: a plan-level repo registry, per-group repo
+assignment, and worktree routing per group's repo.
 
 ## Problem
 

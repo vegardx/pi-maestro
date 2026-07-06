@@ -1,71 +1,76 @@
-# Maestro-first execution — implementation plan
+# Maestro execution — group-based model
 
-Status: **in progress** — picker rewrite shipped (PR #59), remaining deliverables below.
+Status: **active** — group model implemented (PR #135).
 
 ## Goal
 
-The main session is always free during implementation. Workers (subagents)
-execute deliverables. The user stays interactive — can add work, steer
+The main session (maestro) is always free during implementation. Workers
+execute group tasks. The user stays interactive — can add work, steer
 agents, answer questions.
 
-## Shipped
+## Model
 
-- **Picker rewrite** (PR #59) — options: Auto/Hack/Ask/Keep planning. Summary
-  line shows "N deliverables, sequential/up to M parallel". Auto is default.
+A **group** is the atomic unit of work — one branch, one PR:
+- A **worker** (primary agent, full mode, gets tasks)
+- Zero or more **support agents** (with focus, mode/slot/effort, DAG via `after`)
 
-## Remaining deliverables
+### Tools (flat params, no nested JSON)
 
-### 2. Always-spawn maestro model
+```
+group(action="add", title, body, dependsOn?, workerMode)
+task(action="add", groupId, title, body?)
+agent(action="add", groupId, name, mode, slot, effort, focus, after)
+```
 
-When subagents available:
-- Always delegate to agents (even sequential = 1 agent at a time).
-- Remove `--fanout` flag; auto-detect parallelism from dependency graph.
-- Main session free in all cases.
-- Fallback (no subagents): current direct-execution behavior unchanged.
-- Fix: `buildShipSummary` reads agent session from disk when shipping a
-  deliverable implemented by a agent (sessionPath differs from current).
+### States
 
-### 3. Maestro preamble
+```
+planned → active → complete → shipped | superseded | abandoned
+```
 
-System prompt when agents are active:
-- "Workers are implementing. You're free — can answer questions, add
-  deliverables/tasks, steer agents."
-- "Don't implement anything yourself."
+### Shipping rule
 
-### 4. Re-tick on mutation and completion
+Maestro ships when group completes AND nothing depends on it.
+Groups with dependents stay `complete` until downstream resolves.
 
-- Worker completes → `fanout.tick()` → spawn next ready deliverables → notify.
-- `deliverable add` → `tick()` → spawn if ready → notify.
-- "All agents finished — N deliverables ready to ship" when last completes.
+## Planning philosophy
 
-### 5. Auto-steer on plan mutation
+- Research via delegates (explorer, researcher, advisor)
+- Plan IS the research output — tasks so detailed a simpler model could implement
+- Convergence: "can I write tasks with file paths and signatures?" = ready
+- Workers follow instructions, they don't design
 
-- `task add/remove/update` on active deliverable → steer agent with change.
-- `deliverable update` (body) on active → steer with updated scope.
-- Confirmation: "Steered agent:X with new requirement."
+## Delegates
 
-### 6. Progress + completion notifications
+| Target | Slot | Effort | Purpose |
+|--------|------|--------|---------|
+| explorer | default | low | Codebase facts |
+| researcher | default | low | Web docs/practices |
+| advisor | alternate | high | Different model's perspective |
 
-- Wire `EVENTS.runProgress` → `ctx.ui.notify` (terse).
-- Worker completion → "✓ agent:X completed — ready to ship."
-- Decision relay: clearly identify which agent is asking.
+## Agent lifecycle
 
-### 7. `/agents` command
+1. Maestro activates group (deps met)
+2. Creates worktree on `feat/{groupId}`
+3. Spawns worker → receives tasks
+4. Worker commits, toggles tasks → done
+5. Maestro sends summarize RPC → extracts summary
+6. Spawns next agents in graph (via `after`)
+7. All agents done → group complete
+8. Terminal group → ship (push + PR)
+9. Predecessors → superseded
 
-- List active/completed runs with status, duration, activity.
-- Optional: `/steer <agent> <msg>` for manual guidance.
+## Stacked PRs (default)
 
-## Follow-up (not in scope)
+Group B (dependsOn A) branches from `feat/group-a` tip.
+`stacked: false` → branch from main.
 
-- Non-blocking review/simplification pipeline after agent completion.
-- Unblock dependents at `in-review` status instead of `shipped`.
+## Seed ordering (cache optimization)
 
-## Key implementation notes
+```
+Worker:  [dep summaries] → [group body + tasks]
+Agent A: [dep summaries] → [worker summary] → [A's focus]
+Agent B: [dep summaries] → [worker + A summaries] → [B's focus]
+```
 
-- `FanoutMaestro.tick()` already checks `readyDeliverables` and spawns.
-- `SubagentService.steer(runId, guidance)` delivers messages to agents.
-- `contact_supervisor` → `needDecision` → `attachSupervisor` → human relay
-  is already wired end-to-end.
-- `resolveShipSummaryInput` returns `ok: false` when sessions differ — need
-  to load agent session from disk instead.
-- `computeMaxParallelism` (shipped in picker PR) simulates wave execution.
+Stable/shared prefix first → agent-specific last.

@@ -63,8 +63,10 @@ export class QuestionQueue {
 		return this.pending[0];
 	}
 
-	pendingForAgent(agentId: string): PendingQuestion | undefined {
-		return this.pending.find((p) => p.agentId === agentId);
+	pendingForAgent(idOrName: string): PendingQuestion | undefined {
+		return this.pending.find(
+			(p) => p.agentId === idOrName || p.agentName === idOrName,
+		);
 	}
 
 	all(): readonly PendingQuestion[] {

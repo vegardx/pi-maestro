@@ -107,12 +107,13 @@ export class ExecutionAdapter {
 
 				// Build pi command with env vars
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
-				const agentDir = join(this.opts.planDir, "agents", sessionName);
+				// Share the maestro's agent dir so agents inherit auth credentials
+				const maestroAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
 				const envVars = [
 					`PI_MAESTRO_SOCK=${this.socketPath}`,
 					`PI_MAESTRO_AGENT_ID=${agentKey}`,
 					`PI_MAESTRO_AGENT_MODE=${agentMode}`,
-					`PI_CODING_AGENT_DIR=${agentDir}`,
+					`PI_CODING_AGENT_DIR=${maestroAgentDir}`,
 				];
 				// Propagate session dir if set
 				if (process.env.PI_CODING_AGENT_SESSION_DIR) {

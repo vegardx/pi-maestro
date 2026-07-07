@@ -131,10 +131,10 @@ export class ExecutionAdapter {
 					"-p", `"${seedFile}"`,
 				].join(" ");
 
-				// tmux needs a shell command string
-				const shellCmd = `${envVars.join(" ")} pi ${piArgs}`;
+				// tmux needs a shell command string — keep session alive after pi exits
+				const shellCmd = `${envVars.join(" ")} pi ${piArgs}; echo "\n[agent done]"; sleep 86400`;
 
-				await tmux.spawn(sessionName, cwd, shellCmd, { width: 200, height: 50 });
+				await tmux.spawn(sessionName, cwd, shellCmd);
 
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",

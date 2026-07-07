@@ -86,6 +86,7 @@ describe("renderPlanForAgent", () => {
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test Plan",
+			repoPath: "/tmp/test-repo",
 		});
 		engine.addGroup({
 			title: "Implement auth",
@@ -127,6 +128,7 @@ describe("renderPlanForAgent", () => {
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test Plan",
+			repoPath: "/tmp/test-repo",
 		});
 		engine.addGroup({
 			title: "Setup DB",
@@ -154,6 +156,7 @@ describe("renderPlanForAgent", () => {
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test Plan",
+			repoPath: "/tmp/test-repo",
 		});
 		const content = renderPlanForAgent(engine, "nonexistent");
 		expect(content).toBe("(group not found)");

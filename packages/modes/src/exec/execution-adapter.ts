@@ -896,7 +896,18 @@ export class ExecutionAdapter {
 
 				try {
 					// Check if tmux session is still alive
-					if (await this.tmux.hasSession(sessionName)) continue;
+					if (await this.tmux.hasSession(sessionName)) {
+						// Re-feed idle gates: agents report idle once per turn end,
+						// but sustained-idle gates (reviewer done, zero-task worker,
+						// stuck-steer) need repeated observations to fire.
+						if (
+							this.lastRpcStatus.get(agentKey) === "idle" &&
+							agentState.status === "working"
+						) {
+							this.evaluateIdle(agentKey, groupId, agentNamePart);
+						}
+						continue;
+					}
 
 					// Session died — attempt respawn or mark done
 					const count = this.respawnCount.get(agentKey) ?? 0;

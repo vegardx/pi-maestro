@@ -146,24 +146,64 @@ import {
 	UsageLedger,
 } from "./usage-ledger.js";
 
-// STUB: worker-panes + worktree deleted (group model)
+// Worker panes: split current tmux window to show agent sessions
 class WorkerPanes {
+	private _open = false;
+	private paneIds: string[] = [];
+
 	mount() {}
 	unmount() {}
-	isOpen() {
-		return false;
+	isOpen() { return this._open; }
+	isEnabled() { return this._open; }
+	terminalTooSmall() { return false; }
+	shouldSync(_id: string, _status: string) { return false; }
+
+	async open(_agents: Map<string, unknown>): Promise<void> {
+		if (this._open) return;
+		const tmuxMod = await import("@vegardx/pi-tmux");
+
+		// Find running agent tmux sessions (not the main one)
+		const sessions = await tmuxMod.list();
+		const mainSession = process.env.TMUX?.split(",")?.[2];
+		const agentSessions = sessions.filter((s) =>
+			s.name !== mainSession && s.name !== "0",
+		);
+
+		if (agentSessions.length === 0) return;
+
+		// First split: create right-side pane (horizontal split)
+		// Subsequent: vertical splits within the right column
+		let targetPane: string | undefined;
+		for (let i = 0; i < agentSessions.length; i++) {
+			const sess = agentSessions[i];
+			try {
+				const paneId = await tmuxMod.splitWindow({
+					horizontal: i === 0,
+					target: targetPane,
+					percent: i === 0 ? 40 : Math.floor(100 / (agentSessions.length - i)),
+					detach: true,
+					command: `unset TMUX; tmux attach-session -t "${sess.name}" -r`,
+				});
+				if (paneId) {
+					this.paneIds.push(paneId);
+					if (i === 0) targetPane = paneId;
+				}
+			} catch {
+				// Split failed
+			}
+		}
+		this._open = this.paneIds.length > 0;
 	}
-	isEnabled() {
-		return false;
+
+	async close(): Promise<void> {
+		const tmuxMod = await import("@vegardx/pi-tmux");
+		for (const paneId of this.paneIds) {
+			await tmuxMod.killPane(paneId).catch(() => {});
+		}
+		this.paneIds = [];
+		this._open = false;
 	}
-	async open(..._args: unknown[]) {}
-	async close() {}
-	terminalTooSmall() {
-		return false;
-	}
-	shouldSync(_id: string, _status: string) {
-		return false;
-	}
+
 	async sync(..._args: unknown[]) {}
 }
 const cleanupInactiveWorktrees = (..._args: unknown[]) => {};

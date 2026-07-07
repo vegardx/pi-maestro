@@ -109,32 +109,40 @@ export class ExecutionAdapter {
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
 				// Share the maestro's agent dir so agents inherit auth credentials
 				const maestroAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
+				const agentSessionDir = join(
+					process.env.PI_CODING_AGENT_SESSION_DIR ?? join(maestroAgentDir, "sessions"),
+					"agents",
+					sessionName,
+				);
 				const envVars = [
 					`PI_MAESTRO_SOCK=${this.socketPath}`,
 					`PI_MAESTRO_AGENT_ID=${agentKey}`,
 					`PI_MAESTRO_AGENT_MODE=${agentMode}`,
 					`PI_CODING_AGENT_DIR=${maestroAgentDir}`,
+					`PI_CODING_AGENT_SESSION_DIR=${agentSessionDir}`,
 				];
-				// Propagate session dir if set
-				if (process.env.PI_CODING_AGENT_SESSION_DIR) {
-					envVars.push(`PI_CODING_AGENT_SESSION_DIR=${process.env.PI_CODING_AGENT_SESSION_DIR}/agents/${sessionName}`);
+				if (process.env.PATH) {
+					envVars.push(`PATH=${process.env.PATH}`);
 				}
 
 				// Build extension args — include all extensions the maestro loaded
 				const extPaths = this.opts.extensionPaths ?? [this.opts.extensionPath];
 				const extArgs = extPaths.map((p) => `-e "${p}"`).join(" ");
 
+				// Run pi interactively with seed as system prompt append
 				const piArgs = [
 					extArgs,
 					"--no-skills", "--no-prompt-templates", "--no-themes",
 					"--no-context-files",
-					"-p", `"${seedFile}"`,
+					`--append-system-prompt "${seedFile}"`,
+					`"Implement the tasks described in your system prompt."`,
 				].join(" ");
 
-				// tmux needs a shell command string — keep session alive after pi exits
-				const shellCmd = `${envVars.join(" ")} pi ${piArgs}; echo "\n[agent done]"; sleep 86400`;
+				const shellCmd = `${envVars.join(" ")} pi ${piArgs}`;
+				const cols = process.stdout.columns || 200;
+				const rows = process.stdout.rows || 50;
 
-				await tmux.spawn(sessionName, cwd, shellCmd);
+				await tmux.spawn(sessionName, cwd, shellCmd, { width: cols, height: rows });
 
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",

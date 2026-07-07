@@ -127,7 +127,7 @@ function formatTask(task: WorkItem): string {
 				.map((line) => `  ${line}`)
 				.join("\n")}`
 		: "";
-	return `- ${checkbox} **${task.title}**${body}`;
+	return `- ${checkbox} **${task.title}** (task id: \`${task.id}\`)${body}`;
 }
 
 // ─── Summary truncation ──────────────────────────────────────────────────────

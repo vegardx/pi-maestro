@@ -282,14 +282,10 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			"task — manage work items within a group (add/update/toggle/remove).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
-			// Agent mode: forward toggle over RPC
+			// Agent mode: forward mutations over RPC and await the result —
+			// a fire-and-forget toggle here once reported success for task ids
+			// that did not exist, wedging the completion gate.
 			if (!deps.engine()) {
-				if (params.action === "toggle" && deps.onTaskToggle) {
-					if (!params.taskId) return error("toggle requires taskId");
-					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";
-					deps.onTaskToggle(gId, params.taskId);
-					return ok(`${params.taskId} marked done.`, { done: true });
-				}
 				const bridge = deps.agentBridge?.();
 				if (bridge) {
 					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";

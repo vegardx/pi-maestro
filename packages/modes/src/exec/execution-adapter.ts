@@ -105,6 +105,7 @@ export class ExecutionAdapter {
 	private sessionNames = new Map<string, string>(); // agentKey → tmux session name
 	private sessionFiles = new Map<string, string>(); // agentKey → session JSONL path
 	private idleCount = new Map<string, number>(); // agentKey → consecutive idle count
+	private lastRpcStatus = new Map<string, string>(); // agentKey → last status report
 	private stuckSteerSent = new Set<string>(); // agentKeys that received a stuck steer
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
@@ -474,12 +475,29 @@ export class ExecutionAdapter {
 		agentNamePart: string,
 		status: "working" | "idle" | "error",
 	): void {
+		this.lastRpcStatus.set(agentId, status);
 		if (status === "working") {
 			this.idleCount.set(agentId, 0);
 			this.stuckSteerSent.delete(agentId);
 			return;
 		}
 		if (status === "idle") {
+			this.evaluateIdle(agentId, groupId, agentNamePart);
+		}
+	}
+
+	/**
+	 * One idle observation for an agent. Fired on every idle status report AND
+	 * from the 5s poll while the last report was idle — a finished agent
+	 * reports idle exactly once, so gates that need "sustained idle" (reviewer
+	 * completion, zero-task workers, stuck-steer) must be re-fed by the poll.
+	 */
+	private evaluateIdle(
+		agentId: string,
+		groupId: string,
+		agentNamePart: string,
+	): void {
+		{
 			const count = (this.idleCount.get(agentId) ?? 0) + 1;
 			this.idleCount.set(agentId, count);
 
@@ -521,11 +539,11 @@ export class ExecutionAdapter {
 				if (group) {
 					const remaining = group.tasks
 						.filter((t) => t.kind === "task" && !t.done)
-						.map((t) => t.title);
+						.map((t) => `${t.title} (task id: \`${t.id}\`)`);
 					if (remaining.length > 0) {
 						this.router.send(agentId, {
 							type: "steer",
-							content: `You seem stuck. Remaining tasks: ${remaining.join(", ")}. Toggle tasks when done, then stop.`,
+							content: `You seem stuck. These tasks are NOT yet marked done in the plan: ${remaining.join(", ")}. For each one you have finished, call task(action="toggle", taskId="<task id>") with the exact task id, then stop.`,
 						});
 					}
 					this.stuckSteerSent.add(agentId);
@@ -1097,7 +1115,9 @@ export function renderPlanForAgent(
 	for (const task of group.tasks) {
 		const check = task.done ? "x" : " ";
 		const kindTag = task.kind !== "task" ? ` _(${task.kind})_` : "";
-		lines.push(`- [${check}] **${task.title}**${kindTag}`);
+		lines.push(
+			`- [${check}] **${task.title}** (task id: \`${task.id}\`)${kindTag}`,
+		);
 		if (task.body) {
 			lines.push(`  ${task.body.split("\n").join("\n  ")}`);
 		}

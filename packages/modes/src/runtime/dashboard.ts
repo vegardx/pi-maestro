@@ -25,13 +25,9 @@ export function installMaestroFooter(
 		getLedger: () => rt.usageLedger,
 		getAgentStatus: () => {
 			if (!rt.execution || !rt.engine) return undefined;
+			// Done and total must count the same population: agents.
 			const agents = rt.execution.snapshot().agents;
-			// Total = all non-terminal deliverables in the plan
-			const plan = rt.engine.get();
-			const activeGroups = plan.groups.filter(
-				(g) => g.status !== "shipped" && g.status !== "abandoned",
-			);
-			const total = activeGroups.length;
+			const total = agents.size;
 			if (total === 0) return undefined;
 			let done = 0;
 			let failed = 0;

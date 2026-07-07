@@ -262,6 +262,25 @@ export class GroupExecutor {
 		return gatingTasks(g).every((t) => t.done);
 	}
 
+	/** Respawn a failed agent (reuse spawnAgentInGroup with fresh state). */
+	async respawnAgent(groupId: string, agentName: string): Promise<void> {
+		const plan = this.engine.get();
+		const g = findGroup(plan, groupId);
+		if (!g) throw new Error(`group ${groupId} not found`);
+		const state = this.groupStates.get(groupId);
+		if (!state) throw new Error(`no state for group ${groupId}`);
+		const agentState = state.agents.get(agentName);
+		if (!agentState) throw new Error(`no state for agent ${agentName}`);
+
+		// Reset agent state for respawn
+		agentState.status = "pending";
+		agentState.sessionId = undefined;
+		agentState.error = undefined;
+		agentState.completedAt = undefined;
+
+		await this.spawnAgentInGroup(g, state, agentName);
+	}
+
 	// ─── Internal ──────────────────────────────────────────────────────────
 
 	private async activateGroup(g: WorkGroup): Promise<void> {

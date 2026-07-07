@@ -19,7 +19,6 @@ import type { PlanEngine } from "../engine.js";
 import { type ExecutorDeps, GroupExecutor } from "../group-executor.js";
 import { QuestionQueue } from "../question-queue.js";
 import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
-import { buildPrBody } from "../shipping.js";
 import {
 	buildAgentSessionFile,
 	buildSpawnSpec,
@@ -30,6 +29,7 @@ import {
 } from "./provisioner.js";
 import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
 import { truncateSummary } from "./seeds.js";
+import { shipGroup as shipGroupReal } from "./shipper.js";
 
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
 export interface TmuxApi {
@@ -274,13 +274,28 @@ export class ExecutionAdapter {
 			},
 
 			shipGroup: async (shipOpts) => {
-				const group = this.engine
-					.get()
-					.groups.find((g) => g.id === shipOpts.groupId);
-				if (!group) return `error: group ${shipOpts.groupId} not found`;
-				// TODO: actual git push + gh pr create
-				const body = buildPrBody(group, []);
-				return `shipped:${group.title} (${body.length} chars)`;
+				const plan = this.engine.get();
+				const group = plan.groups.find((g) => g.id === shipOpts.groupId);
+				if (!group) throw new Error(`group ${shipOpts.groupId} not found`);
+				const groupState = this.executor.getStates().get(shipOpts.groupId);
+				const agentReports = groupState
+					? [...groupState.agents.values()]
+							.filter((a) => a.summary)
+							.map(
+								(a) =>
+									`### ${a.displayName ?? a.name} (${a.name})\n${a.summary}`,
+							)
+					: [];
+				const result = await shipGroupReal({
+					plan,
+					group,
+					worktreePath: shipOpts.worktreePath,
+					agentReports,
+				});
+				if (!result.ok) {
+					throw new Error(`ship failed (${result.code}): ${result.message}`);
+				}
+				return result.prUrl;
 			},
 
 			requestSummary: async (sessionId, consumer, preamble) => {

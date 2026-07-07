@@ -534,13 +534,20 @@ export class GroupExecutor {
 			.filter(Boolean)
 			.join("\n\n");
 
-		const prUrl = await this.deps.shipGroup({
-			groupId: g.id,
-			branch: state.branch ?? defaultBranchForGroup(g),
-			title: g.title,
-			body,
-			worktreePath: state.worktreePath!,
-		});
+		// Ship failure is retryable: leave the group `complete` and let a later
+		// tick (or /ship) try again — durable status never advances without a PR.
+		let prUrl: string;
+		try {
+			prUrl = await this.deps.shipGroup({
+				groupId: g.id,
+				branch: state.branch ?? defaultBranchForGroup(g),
+				title: g.title,
+				body,
+				worktreePath: state.worktreePath!,
+			});
+		} catch {
+			return null;
+		}
 
 		this.engine.setGroupStatus(g.id, "shipped");
 		this.engine.updateGroup(g.id, { prUrl });

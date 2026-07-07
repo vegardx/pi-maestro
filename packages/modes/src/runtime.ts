@@ -146,58 +146,7 @@ import {
 	UsageLedger,
 } from "./usage-ledger.js";
 
-// Worker panes: split current tmux window to show agent sessions
-class WorkerPanes {
-	private _open = false;
-	private paneIds: string[] = [];
-
-	mount() {}
-	unmount() {}
-	isOpen() { return this._open; }
-	isEnabled() { return this._open; }
-	terminalTooSmall() { return false; }
-	shouldSync(_id: string, _status: string) { return false; }
-
-	async open(sessions: string[]): Promise<void> {
-		if (this._open) return;
-		if (sessions.length === 0) return;
-		const tmuxMod = await import("@vegardx/pi-tmux");
-
-		// First split: create right-side pane (horizontal split)
-		// Subsequent: vertical splits within the right column
-		let targetPane: string | undefined;
-		for (let i = 0; i < sessions.length; i++) {
-			const sess = sessions[i];
-			try {
-				const paneId = await tmuxMod.splitWindow({
-					horizontal: i === 0,
-					target: targetPane,
-					percent: i === 0 ? 40 : Math.floor(100 / (sessions.length - i)),
-					detach: true,
-					command: `unset TMUX; tmux attach-session -t "${sess}" -r`,
-				});
-				if (paneId) {
-					this.paneIds.push(paneId);
-					if (i === 0) targetPane = paneId;
-				}
-			} catch {
-				// Split failed
-			}
-		}
-		this._open = this.paneIds.length > 0;
-	}
-
-	async close(): Promise<void> {
-		const tmuxMod = await import("@vegardx/pi-tmux");
-		for (const paneId of this.paneIds) {
-			await tmuxMod.killPane(paneId).catch(() => {});
-		}
-		this.paneIds = [];
-		this._open = false;
-	}
-
-	async sync(..._args: unknown[]) {}
-}
+import { WorkerPanes } from "./worker-panes.js";
 const cleanupInactiveWorktrees = (..._args: unknown[]) => {};
 const recordPlanSession = (..._args: unknown[]) => {};
 

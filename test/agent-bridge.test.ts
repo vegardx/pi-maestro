@@ -142,10 +142,10 @@ describe("AgentBridge", () => {
 		await connected;
 
 		const msgP = waitForEvent(server, "message");
-		server.send("agent-1", { type: "ping" });
+		server.send("agent-1", { type: "ping", id: "ping-1" });
 		const [id, msg] = (await msgP) as [string, any];
 		expect(id).toBe("agent-1");
-		expect(msg).toEqual({ type: "pong" });
+		expect(msg).toEqual({ type: "pong", id: "ping-1" });
 	});
 
 	it("disconnects cleanly on destroy", async () => {

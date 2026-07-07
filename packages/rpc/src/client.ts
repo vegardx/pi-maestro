@@ -1,6 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { connect, type Socket } from "node:net";
-import type { AgentMessage, MaestroMessage } from "./protocol.js";
+import {
+	type AgentMessage,
+	type HelloMessage,
+	type MaestroMessage,
+	PROTOCOL_VERSION,
+} from "./protocol.js";
 
 export interface MaestroRpcClientEvents {
 	connected: [];
@@ -8,6 +14,9 @@ export interface MaestroRpcClientEvents {
 	message: [msg: MaestroMessage];
 	error: [err: Error];
 }
+
+/** Identity fields for the hello sent on (re)connect. */
+export type HelloIdentity = Omit<HelloMessage, "type" | "id" | "v">;
 
 export interface MaestroRpcClientOptions {
 	/** Retry connection on failure. Default: true */
@@ -21,8 +30,7 @@ export interface MaestroRpcClientOptions {
 export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	private socket: Socket | undefined;
 	private socketPath: string | undefined;
-	private agentId: string | undefined;
-	private model: string | undefined;
+	private identity: HelloIdentity | undefined;
 	private buffer = "";
 	private closed = false;
 	private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -42,10 +50,9 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	/**
 	 * Connect to the maestro socket and send hello.
 	 */
-	connect(socketPath: string, agentId: string, model?: string): void {
+	connect(socketPath: string, identity: HelloIdentity): void {
 		this.socketPath = socketPath;
-		this.agentId = agentId;
-		this.model = model;
+		this.identity = identity;
 		this.closed = false;
 		this.attemptConnect();
 	}
@@ -82,7 +89,8 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	}
 
 	private attemptConnect(): void {
-		if (this.closed || !this.socketPath || !this.agentId) return;
+		if (this.closed || !this.socketPath || !this.identity) return;
+		const identity = this.identity;
 
 		const socket = connect(this.socketPath);
 		this.socket = socket;
@@ -91,11 +99,12 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 			this.retryDelay = this.initialRetryDelay;
 			this.buffer = "";
 			// Send hello immediately
-			const hello: Record<string, unknown> = {
+			const hello: HelloMessage = {
 				type: "hello",
-				agentId: this.agentId,
+				id: randomUUID(),
+				v: PROTOCOL_VERSION,
+				...identity,
 			};
-			if (this.model) hello.model = this.model;
 			socket.write(`${JSON.stringify(hello)}\n`);
 			this.emit("connected");
 		});

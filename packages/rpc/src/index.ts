@@ -3,17 +3,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export type {
+	HelloIdentity,
 	MaestroRpcClientEvents,
 	MaestroRpcClientOptions,
 } from "./client.js";
 export { MaestroRpcClient } from "./client.js";
 export type {
 	AgentMessage,
+	AgentMessageHandlers,
+	AgentRole,
 	AnswersMessage,
+	DoneAckMessage,
 	DoneMessage,
+	ErrorMessage,
+	HandlerTable,
+	HelloAckMessage,
 	HelloMessage,
 	LensUsageMessage,
 	MaestroMessage,
+	MaestroMessageHandlers,
 	PingMessage,
 	PlanMutateMessage,
 	PlanMutateResultMessage,
@@ -21,14 +29,19 @@ export type {
 	PlanReadResponseMessage,
 	PongMessage,
 	QuestionsMessage,
+	RequestMessage,
+	ResponseFor,
+	RpcErrorCode,
 	RpcMessage,
 	ShutdownMessage,
 	StatusMessage,
 	SteerMessage,
-	TaskCompleteMessage,
+	SummarizeMessage,
+	SummaryMessage,
 	TokenSnapshot,
 	TokensMessage,
 } from "./protocol.js";
+export { PROTOCOL_VERSION } from "./protocol.js";
 export type {
 	AgentConnection,
 	MaestroRpcServerEvents,

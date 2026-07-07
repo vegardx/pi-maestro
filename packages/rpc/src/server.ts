@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import type { AgentMessage, MaestroMessage } from "./protocol.js";
+import type { AgentMessage, HelloMessage, MaestroMessage } from "./protocol.js";
 
 export interface AgentConnection {
 	readonly agentId: string;
@@ -9,7 +9,7 @@ export interface AgentConnection {
 }
 
 export interface MaestroRpcServerEvents {
-	connected: [agentId: string, model?: string];
+	connected: [agentId: string, hello: HelloMessage];
 	disconnected: [agentId: string];
 	message: [agentId: string, msg: AgentMessage];
 	error: [err: Error];
@@ -153,7 +153,7 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 				existing.socket.destroy();
 			}
 			this.agents.set(msg.agentId, { agentId: msg.agentId, socket });
-			this.emit("connected", msg.agentId, msg.model);
+			this.emit("connected", msg.agentId, msg);
 			return;
 		}
 

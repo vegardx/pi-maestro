@@ -4,14 +4,21 @@ import { join } from "node:path";
 import {
 	type AgentMessage,
 	createSocketPath,
+	type HelloIdentity,
+	type HelloMessage,
 	type MaestroMessage,
 	MaestroRpcClient,
 	MaestroRpcServer,
+	PROTOCOL_VERSION,
 } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 function wait(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
+}
+
+function hello(agentId: string): HelloIdentity {
+	return { agentId, role: "agent", token: "", pid: process.pid };
 }
 
 function waitForEvent(
@@ -91,9 +98,14 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
-			const [agentId] = await connected;
+			client.connect(socketPath, hello("agent-1"));
+			const [agentId, helloMsg] = (await connected) as [string, HelloMessage];
 			expect(agentId).toBe("agent-1");
+			expect(helloMsg.v).toBe(PROTOCOL_VERSION);
+			expect(helloMsg.role).toBe("agent");
+			expect(helloMsg.token).toBe("");
+			expect(helloMsg.pid).toBe(process.pid);
+			expect(helloMsg.id).toBeTruthy();
 			expect(server.size).toBe(1);
 			expect(server.has("agent-1")).toBe(true);
 		});
@@ -102,7 +114,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			const disconnected = waitForEvent(server, "disconnected");
@@ -116,7 +128,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			const msgPromise = waitForEvent(server, "message");
@@ -130,7 +142,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			const msgPromise = waitForEvent(client, "message");
@@ -159,11 +171,11 @@ describe("@vegardx/pi-rpc", () => {
 			const client2 = createClient();
 
 			const connected1 = waitForEvent(server, "connected");
-			client1.connect(socketPath, "agent-1");
+			client1.connect(socketPath, hello("agent-1"));
 			await connected1;
 
 			const connected2 = waitForEvent(server, "connected");
-			client2.connect(socketPath, "agent-2");
+			client2.connect(socketPath, hello("agent-2"));
 			await connected2;
 
 			expect(server.size).toBe(2);
@@ -177,21 +189,21 @@ describe("@vegardx/pi-rpc", () => {
 			const client2 = createClient();
 
 			const connected1 = waitForEvent(server, "connected");
-			client1.connect(socketPath, "agent-1");
+			client1.connect(socketPath, hello("agent-1"));
 			await connected1;
 
 			const connected2 = waitForEvent(server, "connected");
-			client2.connect(socketPath, "agent-2");
+			client2.connect(socketPath, hello("agent-2"));
 			await connected2;
 
 			const msg1 = waitForEvent(client1, "message");
 			const msg2 = waitForEvent(client2, "message");
-			server.broadcast({ type: "ping" });
+			server.broadcast({ type: "ping", id: "ping-1" });
 
 			const [received1] = (await msg1) as [MaestroMessage];
 			const [received2] = (await msg2) as [MaestroMessage];
-			expect(received1).toEqual({ type: "ping" });
-			expect(received2).toEqual({ type: "ping" });
+			expect(received1).toEqual({ type: "ping", id: "ping-1" });
+			expect(received2).toEqual({ type: "ping", id: "ping-1" });
 		});
 
 		it("close() cleans up socket file", async () => {
@@ -204,7 +216,9 @@ describe("@vegardx/pi-rpc", () => {
 
 		it("send returns false for unknown agent", async () => {
 			await server.listen(socketPath);
-			expect(server.send("unknown", { type: "ping" })).toBe(false);
+			expect(server.send("unknown", { type: "ping", id: "ping-1" })).toBe(
+				false,
+			);
 		});
 	});
 
@@ -213,7 +227,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 			expect(client.connected).toBe(true);
 		});
@@ -222,7 +236,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient({ reconnect: true });
 			const connected1 = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected1;
 
 			// Force disconnect by closing server
@@ -241,7 +255,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient({ reconnect: true });
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			client.close();
@@ -256,7 +270,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			const received: MaestroMessage[] = [];
@@ -266,7 +280,7 @@ describe("@vegardx/pi-rpc", () => {
 
 			server.send("agent-1", { type: "steer", content: "msg1" });
 			server.send("agent-1", { type: "steer", content: "msg2" });
-			server.send("agent-1", { type: "ping" });
+			server.send("agent-1", { type: "ping", id: "ping-1" });
 
 			// Give time for messages to arrive
 			await wait(50);
@@ -274,7 +288,7 @@ describe("@vegardx/pi-rpc", () => {
 			expect(received).toEqual([
 				{ type: "steer", content: "msg1" },
 				{ type: "steer", content: "msg2" },
-				{ type: "ping" },
+				{ type: "ping", id: "ping-1" },
 			]);
 		});
 
@@ -282,7 +296,7 @@ describe("@vegardx/pi-rpc", () => {
 			await server.listen(socketPath);
 			const client = createClient();
 			const connected = waitForEvent(server, "connected");
-			client.connect(socketPath, "agent-1");
+			client.connect(socketPath, hello("agent-1"));
 			await connected;
 
 			const msgPromise = waitForEvent(client, "message");

@@ -10,11 +10,12 @@ import {
 	buildAgentSeed,
 	buildWorkerSeed,
 	groupBranch,
-} from "./agent-lifecycle.js";
-import { agentName } from "./agent-names.js";
-import type { PlanEngine } from "./engine.js";
-import { type ExecutorDeps, GroupExecutor } from "./group-executor.js";
-import { buildPrBody } from "./shipping.js";
+} from "../agent-lifecycle.js";
+import { agentName } from "../agent-names.js";
+import type { PlanEngine } from "../engine.js";
+import { type ExecutorDeps, GroupExecutor } from "../group-executor.js";
+import type { PendingQuestion } from "../question-queue.js";
+import { buildPrBody } from "../shipping.js";
 
 export interface ExecutionAdapterOpts {
 	engine: PlanEngine;
@@ -50,13 +51,16 @@ export class ExecutionAdapter {
 	private sessionNames = new Map<string, string>(); // agentKey → tmux session name
 
 	readonly questionQueue = {
-		all: () => [] as { id: string; agentId: string; question: string }[],
+		all: () => [] as readonly PendingQuestion[],
 	};
 
 	constructor(opts: ExecutionAdapterOpts) {
 		this.opts = opts;
 		this.engine = opts.engine;
-		this.socketPath = join("/tmp", `maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`);
+		this.socketPath = join(
+			"/tmp",
+			`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
+		);
 		this.rpcServer = new MaestroRpcServer();
 
 		const deps: ExecutorDeps = {
@@ -108,9 +112,12 @@ export class ExecutionAdapter {
 				// Build pi command with env vars
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
 				// Share the maestro's agent dir so agents inherit auth credentials
-				const maestroAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
+				const maestroAgentDir =
+					process.env.PI_CODING_AGENT_DIR ??
+					join(process.env.HOME ?? "", ".pi", "agent");
 				const agentSessionDir = join(
-					process.env.PI_CODING_AGENT_SESSION_DIR ?? join(maestroAgentDir, "sessions"),
+					process.env.PI_CODING_AGENT_SESSION_DIR ??
+						join(maestroAgentDir, "sessions"),
 					"agents",
 					sessionName,
 				);
@@ -132,7 +139,9 @@ export class ExecutionAdapter {
 				// Run pi interactively with seed as system prompt append
 				const piArgs = [
 					extArgs,
-					"--no-skills", "--no-prompt-templates", "--no-themes",
+					"--no-skills",
+					"--no-prompt-templates",
+					"--no-themes",
 					"--no-context-files",
 					`--append-system-prompt "${seedFile}"`,
 					`"Implement the tasks described in your system prompt."`,
@@ -142,7 +151,10 @@ export class ExecutionAdapter {
 				const cols = process.stdout.columns || 200;
 				const rows = process.stdout.rows || 50;
 
-				await tmux.spawn(sessionName, cwd, shellCmd, { width: cols, height: rows });
+				await tmux.spawn(sessionName, cwd, shellCmd, {
+					width: cols,
+					height: rows,
+				});
 
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",

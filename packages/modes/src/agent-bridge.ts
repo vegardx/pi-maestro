@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -50,10 +51,14 @@ export class AgentBridge {
 	private totalCacheRead = 0;
 	private totalCacheWrite = 0;
 	private totalCost = 0;
-	private pendingAsk: { resolve: (answers: Answers) => void } | undefined;
-	private pendingPlanRead: { resolve: (content: string) => void } | undefined;
+	private pendingAsk:
+		| { id: string; resolve: (answers: Answers) => void }
+		| undefined;
+	private pendingPlanRead:
+		| { id: string; resolve: (content: string) => void }
+		| undefined;
 	private pendingPlanMutate:
-		| { resolve: (result: PlanMutateResultMessage) => void }
+		| { id: string; resolve: (result: PlanMutateResultMessage) => void }
 		| undefined;
 
 	constructor(private readonly deps: AgentBridgeDeps) {
@@ -64,8 +69,12 @@ export class AgentBridge {
 	start(ctx: ExtensionContext): void {
 		this.ctx = ctx;
 		this.client.on("message", (msg) => this.handleMessage(msg));
-		const modelName = ctx.model?.name ?? ctx.model?.id;
-		this.client.connect(this.deps.socketPath, this.deps.agentId, modelName);
+		this.client.connect(this.deps.socketPath, {
+			agentId: this.deps.agentId,
+			role: "agent",
+			token: process.env.PI_MAESTRO_TOKEN ?? "",
+			pid: process.pid,
+		});
 	}
 
 	/** Signal turn started — agent is working. */
@@ -99,24 +108,24 @@ export class AgentBridge {
 	}
 
 	/** Signal the agent completed its work. */
-	onDone(opts?: {
-		summary?: string;
-		prUrl?: string;
-		commits?: string[];
-		model?: string;
-	}): void {
+	onDone(opts?: { summary?: string; commits?: string[] }): void {
 		this.client.send({
 			type: "done",
+			id: randomUUID(),
 			summary: opts?.summary,
-			prUrl: opts?.prUrl,
 			commits: opts?.commits,
-			model: opts?.model,
 		});
 	}
 
-	/** Report a task as completed to the maestro. */
-	onTaskComplete(taskId: string): void {
-		this.client.send({ type: "taskComplete", taskId });
+	/** Report a task as completed to the maestro (fire-and-forget toggle). */
+	onTaskComplete(groupId: string, taskId: string): void {
+		this.client.send({
+			type: "planMutate",
+			id: randomUUID(),
+			action: "toggleTask",
+			groupId,
+			params: { taskId },
+		});
 	}
 
 	/** Report usage from a lens sub-invocation (a child pi process). */
@@ -149,25 +158,27 @@ export class AgentBridge {
 	 */
 	ask(questions: Questionnaire): Promise<Answers> {
 		if (this.pendingAsk) return Promise.resolve([]);
-		this.client.send({ type: "questions", questions });
+		const id = randomUUID();
+		this.client.send({ type: "questions", id, questions });
 		return new Promise<Answers>((resolve) => {
-			this.pendingAsk = { resolve };
+			this.pendingAsk = { id, resolve };
 		});
 	}
 
 	/** Request the current plan state from maestro. */
 	planRead(): Promise<string> {
 		if (this.pendingPlanRead) return Promise.resolve("");
-		this.client.send({ type: "planRead" });
+		const id = randomUUID();
+		this.client.send({ type: "planRead", id });
 		return new Promise<string>((resolve) => {
-			this.pendingPlanRead = { resolve };
+			this.pendingPlanRead = { id, resolve };
 		});
 	}
 
 	/** Request a plan mutation from maestro. */
 	planMutate(
 		action: "toggleTask" | "addTask" | "updateTask",
-		deliverableId: string,
+		groupId: string,
 		params: {
 			taskId?: string;
 			title?: string;
@@ -178,13 +189,15 @@ export class AgentBridge {
 		if (this.pendingPlanMutate) {
 			return Promise.resolve({
 				type: "planMutateResult",
+				id: "",
 				success: false,
 				error: "busy",
 			});
 		}
-		this.client.send({ type: "planMutate", action, deliverableId, params });
+		const id = randomUUID();
+		this.client.send({ type: "planMutate", id, action, groupId, params });
 		return new Promise<PlanMutateResultMessage>((resolve) => {
-			this.pendingPlanMutate = { resolve };
+			this.pendingPlanMutate = { id, resolve };
 		});
 	}
 
@@ -206,6 +219,7 @@ export class AgentBridge {
 		if (this.pendingPlanMutate) {
 			this.pendingPlanMutate.resolve({
 				type: "planMutateResult",
+				id: this.pendingPlanMutate.id,
 				success: false,
 				error: "shutdown",
 			});
@@ -215,6 +229,9 @@ export class AgentBridge {
 
 	private handleMessage(msg: MaestroMessage): void {
 		switch (msg.type) {
+			case "helloAck":
+				// Connection gating on helloAck lands with the supervisor work.
+				break;
 			case "steer":
 				this.deps.pi.sendUserMessage(msg.content, {
 					deliverAs: "followUp",
@@ -222,29 +239,39 @@ export class AgentBridge {
 				break;
 			case "answers": {
 				const pending = this.pendingAsk;
+				if (!pending || pending.id !== msg.id) break;
 				this.pendingAsk = undefined;
-				pending?.resolve(msg.answers);
+				pending.resolve(msg.answers);
 				break;
 			}
 			case "planReadResponse": {
 				const pr = this.pendingPlanRead;
+				if (!pr || pr.id !== msg.id) break;
 				this.pendingPlanRead = undefined;
-				pr?.resolve(msg.content);
+				pr.resolve(msg.content);
 				break;
 			}
 			case "planMutateResult": {
 				const pm = this.pendingPlanMutate;
+				if (!pm || pm.id !== msg.id) break;
 				this.pendingPlanMutate = undefined;
-				pm?.resolve(msg);
+				pm.resolve(msg);
 				break;
 			}
+			case "summarize":
+				// Summary capture flow lands with the rpc-router work.
+				break;
+			case "doneAck":
+				break;
+			case "error":
+				break;
 			case "shutdown":
 				this.settlePending();
 				this.client.close();
 				this.ctx?.shutdown();
 				break;
 			case "ping":
-				this.client.send({ type: "pong" });
+				this.client.send({ type: "pong", id: msg.id });
 				break;
 		}
 	}

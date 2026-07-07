@@ -4,7 +4,7 @@
 // capability. Execution/worktrees/shipping/compaction land in later children.
 
 import { defineExtension } from "@vegardx/pi-core";
-import { createModesRuntime } from "./runtime.js";
+import { createModesRuntime } from "./runtime/index.js";
 
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
@@ -45,6 +45,10 @@ export {
 	transitiveDependencies,
 } from "./compaction.js";
 export { PlanEngine } from "./engine.js";
+export {
+	createExecution,
+	type ExecutionHandle,
+} from "./exec/index.js";
 export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
 export {
 	buildForwardSummaryPrompt,
@@ -80,7 +84,11 @@ export {
 	PLAN_TOOL_NAMES,
 	toolBlockedInPlanMode,
 } from "./policy.js";
-export { createModesRuntime } from "./runtime.js";
+export {
+	createModesRuntime,
+	type ModesRuntime,
+	type ModesRuntimeOptions,
+} from "./runtime/index.js";
 export * from "./schema.js";
 export {
 	appendModesState,

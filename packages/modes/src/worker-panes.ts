@@ -231,7 +231,11 @@ export class WorkerPanes {
 
 	private handleResize(): void {
 		if (!this._enabled) return;
-		if (this.terminalLargeEnough() && !this._isOpen && this.lastSessions.length > 0) {
+		if (
+			this.terminalLargeEnough() &&
+			!this._isOpen &&
+			this.lastSessions.length > 0
+		) {
 			this.open(this.lastSessions).catch(() => {});
 		}
 	}

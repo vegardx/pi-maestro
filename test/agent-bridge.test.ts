@@ -36,6 +36,7 @@ describe("AgentBridge", () => {
 	};
 	const mockCtx = {
 		shutdown: vi.fn(),
+		ui: { notify: vi.fn() },
 	};
 
 	beforeEach(async () => {
@@ -45,6 +46,7 @@ describe("AgentBridge", () => {
 		await server.listen(socketPath);
 		mockPi.sendUserMessage.mockClear();
 		mockCtx.shutdown.mockClear();
+		mockCtx.ui.notify.mockClear();
 	});
 
 	afterEach(async () => {
@@ -53,11 +55,15 @@ describe("AgentBridge", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	function createBridge(agentId = "test-agent"): AgentBridge {
+	function createBridge(
+		agentId = "test-agent",
+		opts?: { requestTimeoutMs?: number },
+	): AgentBridge {
 		bridge = new AgentBridge({
 			pi: mockPi as any,
 			socketPath,
 			agentId,
+			requestTimeoutMs: opts?.requestTimeoutMs,
 		});
 		return bridge;
 	}
@@ -132,6 +138,9 @@ describe("AgentBridge", () => {
 		const messages: any[] = [];
 		server.on("message", (_id, msg) => messages.push(msg));
 
+		// A turn is in flight when the summarize arrives (the completion gate
+		// fires mid-turn, during the agent's toggle tool call).
+		b.onTurnStart();
 		server.send("agent-1", {
 			type: "summarize",
 			id: "sum-1",
@@ -152,7 +161,16 @@ describe("AgentBridge", () => {
 		await wait(50);
 		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
 
-		// The turn's assistant text becomes the summary; queued steer flushes
+		// The in-flight turn ends with mid-work commentary — NOT the summary
+		b.recordAssistantText("Toggling the task now, then wrapping up.");
+		b.onTurnEnd();
+		await wait(50);
+		expect(messages.find((m) => m.type === "summary")).toBeUndefined();
+		// The queued steer is still held back
+		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
+
+		// The injected prompt starts the next turn; its reply is the summary
+		b.onTurnStart();
 		b.recordAssistantText("## Summary\nBuilt the auth endpoints.");
 		b.onTurnEnd();
 		await wait(50);
@@ -167,6 +185,200 @@ describe("AgentBridge", () => {
 		expect(mockPi.sendUserMessage).toHaveBeenLastCalledWith("also fix lint", {
 			deliverAs: "followUp",
 		});
+	});
+
+	it("captures the summarize reply when the agent was idle", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const messages: any[] = [];
+		server.on("message", (_id, msg) => messages.push(msg));
+
+		// No turn in flight: the injected followUp starts the next turn
+		server.send("agent-1", {
+			type: "summarize",
+			id: "sum-2",
+			consumer: "the maestro",
+			preamble: "worker — api group",
+			budget: 5000,
+		});
+		await wait(50);
+
+		b.onTurnStart();
+		b.recordAssistantText("## Summary\nDone.");
+		b.onTurnEnd();
+		await wait(50);
+
+		expect(messages.find((m) => m.type === "summary")).toEqual({
+			type: "summary",
+			id: "sum-2",
+			content: "## Summary\nDone.",
+		});
+	});
+
+	it("replies with an empty summary to a second concurrent summarize", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const messages: any[] = [];
+		server.on("message", (_id, msg) => messages.push(msg));
+
+		server.send("agent-1", {
+			type: "summarize",
+			id: "sum-1",
+			consumer: "the maestro",
+			preamble: "worker",
+			budget: 5000,
+		});
+		server.send("agent-1", {
+			type: "summarize",
+			id: "sum-2",
+			consumer: "the maestro",
+			preamble: "worker",
+			budget: 5000,
+		});
+		await wait(50);
+
+		// The second request settles immediately with an empty summary so the
+		// maestro falls back fast instead of timing out.
+		expect(messages.find((m) => m.type === "summary")).toEqual({
+			type: "summary",
+			id: "sum-2",
+			content: "",
+		});
+		// The first is still pending and captures normally
+		b.onTurnStart();
+		b.recordAssistantText("## Summary\nReal one.");
+		b.onTurnEnd();
+		await wait(50);
+		expect(
+			messages.filter((m) => m.type === "summary").map((m) => m.id),
+		).toEqual(["sum-2", "sum-1"]);
+	});
+
+	it("rejects a second ask while one is pending", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const first = b.ask([{ question: "Which db?" }] as any);
+		await expect(b.ask([{ question: "Which port?" }] as any)).rejects.toThrow(
+			"ask already pending",
+		);
+
+		// The first ask still resolves normally
+		b.destroy();
+		await expect(first).resolves.toEqual([]);
+	});
+
+	it("settles a pending ask on error{id} (cancelled)", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const msgP = waitForEvent(server, "message");
+		const askP = b.ask([{ question: "Which db?" }] as any);
+		const [, msg] = (await msgP) as [string, any];
+		expect(msg.type).toBe("questions");
+
+		server.send("agent-1", {
+			type: "error",
+			id: msg.id,
+			code: "cancelled",
+			message: "user cancelled",
+		});
+		await expect(askP).resolves.toEqual([]);
+	});
+
+	it("settles pending planRead and planMutate on error{id}", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const readMsgP = waitForEvent(server, "message");
+		const readP = b.planRead();
+		const [, readMsg] = (await readMsgP) as [string, any];
+		server.send("agent-1", {
+			type: "error",
+			id: readMsg.id,
+			code: "internal",
+			message: "plan unavailable",
+		});
+		await expect(readP).resolves.toBe("Error: plan unavailable");
+
+		const mutMsgP = waitForEvent(server, "message");
+		const mutP = b.planMutate("toggleTask", "g1", { taskId: "t1" });
+		const [, mutMsg] = (await mutMsgP) as [string, any];
+		server.send("agent-1", {
+			type: "error",
+			id: mutMsg.id,
+			code: "badRequest",
+			message: "no such task",
+		});
+		await expect(mutP).resolves.toEqual({
+			type: "planMutateResult",
+			id: mutMsg.id,
+			success: false,
+			error: "no such task",
+		});
+	});
+
+	it("times out planRead and planMutate instead of hanging", async () => {
+		const b = createBridge("agent-1", { requestTimeoutMs: 50 });
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const readP = b.planRead();
+		await expect(readP).resolves.toBe("Error: plan read timed out after 50ms.");
+
+		const mutP = b.planMutate("toggleTask", "g1", { taskId: "t1" });
+		const mutRes = await mutP;
+		expect(mutRes.success).toBe(false);
+		expect(mutRes.error).toBe("plan mutate timed out after 50ms");
+
+		// A settled timeout leaves the slot free for the next request
+		const readMsgP = waitForEvent(server, "message");
+		const readP2 = b.planRead();
+		const [, readMsg] = (await readMsgP) as [string, any];
+		server.send("agent-1", {
+			type: "planReadResponse",
+			id: readMsg.id,
+			content: "# Plan",
+		});
+		await expect(readP2).resolves.toBe("# Plan");
+	});
+
+	it("shuts down and settles pendings on helloAck{ok:false}", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const askP = b.ask([{ question: "Which db?" }] as any);
+		await wait(30);
+
+		const disconnected = waitForEvent(server, "disconnected");
+		server.send("agent-1", {
+			type: "helloAck",
+			ok: false,
+			error: "token mismatch",
+		});
+		await disconnected;
+
+		await expect(askP).resolves.toEqual([]);
+		expect(mockCtx.shutdown).toHaveBeenCalledTimes(1);
+		expect(mockCtx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("token mismatch"),
+			"error",
+		);
 	});
 
 	it("calls ctx.shutdown on shutdown message", async () => {

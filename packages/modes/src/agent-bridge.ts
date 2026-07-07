@@ -31,7 +31,11 @@ export interface AgentBridgeDeps {
 	readonly pi: ExtensionAPI;
 	readonly socketPath: string;
 	readonly agentId: string;
+	/** Timeout for planRead/planMutate requests. Default: 30s. */
+	readonly requestTimeoutMs?: number;
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /** Minimal shape of pi-ai Usage the bridge consumes (avoids a hard dep). */
 export interface AssistantUsage {
@@ -55,12 +59,27 @@ export class AgentBridge {
 		| { id: string; resolve: (answers: Answers) => void }
 		| undefined;
 	private pendingPlanRead:
-		| { id: string; resolve: (content: string) => void }
+		| {
+				id: string;
+				resolve: (content: string) => void;
+				timer: ReturnType<typeof setTimeout>;
+		  }
 		| undefined;
 	private pendingPlanMutate:
-		| { id: string; resolve: (result: PlanMutateResultMessage) => void }
+		| {
+				id: string;
+				resolve: (result: PlanMutateResultMessage) => void;
+				timer: ReturnType<typeof setTimeout>;
+		  }
 		| undefined;
-	private pendingSummarize: { id: string } | undefined;
+	/**
+	 * Summarize capture state. `armed` flips true on the first turn_start
+	 * after the summarization prompt is injected: pi delivers the followUp as
+	 * the next turn, so that turn's assistant text is the summary. A turn
+	 * already in flight when summarize arrives ends un-armed and its mid-work
+	 * commentary is NOT captured.
+	 */
+	private pendingSummarize: { id: string; armed: boolean } | undefined;
 	private queuedSteers: string[] = [];
 	private lastAssistantText = "";
 
@@ -82,6 +101,12 @@ export class AgentBridge {
 
 	/** Signal turn started — agent is working. */
 	onTurnStart(): void {
+		// Arm the summarize capture: the first turn to start after the prompt
+		// injection is the turn responding to it (a turn already in flight when
+		// summarize arrived has had its turn_start, so it cannot re-arm here).
+		if (this.pendingSummarize && !this.pendingSummarize.armed) {
+			this.pendingSummarize.armed = true;
+		}
 		this.client.send({ type: "status", status: "working" });
 	}
 
@@ -90,8 +115,10 @@ export class AgentBridge {
 		this.turnCount++;
 		// Summarize capture rule: the assistant text of the turn that answered
 		// the injected summarization prompt IS the summary. Other injections are
-		// queued while a summarize is pending so nothing interleaves.
-		if (this.pendingSummarize) {
+		// queued while a summarize is pending so nothing interleaves. An
+		// un-armed pending means this turn was already in flight when the
+		// summarize arrived — skip it; the injected prompt runs next turn.
+		if (this.pendingSummarize?.armed) {
 			this.client.send({
 				type: "summary",
 				id: this.pendingSummarize.id,
@@ -175,11 +202,16 @@ export class AgentBridge {
 	/**
 	 * Send questions to the maestro and block until answers arrive.
 	 * Resolves empty on shutdown/destroy so a blocked agent exits cleanly.
-	 * Only one ask may be pending at a time (guaranteed by the blocking tool
-	 * model); a second while one is pending resolves the newcomer empty.
+	 * No timeout — a human is in the loop — but an error{id} from the maestro
+	 * (e.g. code:"cancelled") settles it empty. Only one ask may be pending at
+	 * a time (guaranteed by the blocking tool model); a second while one is
+	 * pending rejects so the tool layer surfaces a real error to the model
+	 * instead of fabricating an empty answer.
 	 */
 	ask(questions: Questionnaire): Promise<Answers> {
-		if (this.pendingAsk) return Promise.resolve([]);
+		if (this.pendingAsk) {
+			return Promise.reject(new Error("ask already pending"));
+		}
 		const id = randomUUID();
 		this.client.send({ type: "questions", id, questions });
 		return new Promise<Answers>((resolve) => {
@@ -187,17 +219,24 @@ export class AgentBridge {
 		});
 	}
 
-	/** Request the current plan state from maestro. */
+	/** Request the current plan state from maestro. Times out with an error. */
 	planRead(): Promise<string> {
 		if (this.pendingPlanRead) return Promise.resolve("");
 		const id = randomUUID();
+		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		this.client.send({ type: "planRead", id });
 		return new Promise<string>((resolve) => {
-			this.pendingPlanRead = { id, resolve };
+			const timer = setTimeout(() => {
+				if (this.pendingPlanRead?.id !== id) return;
+				this.pendingPlanRead = undefined;
+				resolve(`Error: plan read timed out after ${timeoutMs}ms.`);
+			}, timeoutMs);
+			timer.unref?.();
+			this.pendingPlanRead = { id, resolve, timer };
 		});
 	}
 
-	/** Request a plan mutation from maestro. */
+	/** Request a plan mutation from maestro. Times out with an error result. */
 	planMutate(
 		action: "toggleTask" | "addTask" | "updateTask",
 		groupId: string,
@@ -217,9 +256,21 @@ export class AgentBridge {
 			});
 		}
 		const id = randomUUID();
+		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		this.client.send({ type: "planMutate", id, action, groupId, params });
 		return new Promise<PlanMutateResultMessage>((resolve) => {
-			this.pendingPlanMutate = { id, resolve };
+			const timer = setTimeout(() => {
+				if (this.pendingPlanMutate?.id !== id) return;
+				this.pendingPlanMutate = undefined;
+				resolve({
+					type: "planMutateResult",
+					id,
+					success: false,
+					error: `plan mutate timed out after ${timeoutMs}ms`,
+				});
+			}, timeoutMs);
+			timer.unref?.();
+			this.pendingPlanMutate = { id, resolve, timer };
 		});
 	}
 
@@ -230,32 +281,56 @@ export class AgentBridge {
 	}
 
 	private settlePending(): void {
-		if (this.pendingAsk) {
-			this.pendingAsk.resolve([]);
-			this.pendingAsk = undefined;
-		}
-		if (this.pendingPlanRead) {
-			this.pendingPlanRead.resolve("");
-			this.pendingPlanRead = undefined;
-		}
-		if (this.pendingPlanMutate) {
-			this.pendingPlanMutate.resolve({
-				type: "planMutateResult",
-				id: this.pendingPlanMutate.id,
-				success: false,
-				error: "shutdown",
-			});
-			this.pendingPlanMutate = undefined;
-		}
+		this.settleAsk([]);
+		this.settlePlanRead("");
+		this.settlePlanMutate({
+			type: "planMutateResult",
+			id: this.pendingPlanMutate?.id ?? "",
+			success: false,
+			error: "shutdown",
+		});
 		this.pendingSummarize = undefined;
 		this.queuedSteers.length = 0;
 	}
 
+	private settleAsk(answers: Answers): void {
+		const pending = this.pendingAsk;
+		if (!pending) return;
+		this.pendingAsk = undefined;
+		pending.resolve(answers);
+	}
+
+	private settlePlanRead(content: string): void {
+		const pending = this.pendingPlanRead;
+		if (!pending) return;
+		clearTimeout(pending.timer);
+		this.pendingPlanRead = undefined;
+		pending.resolve(content);
+	}
+
+	private settlePlanMutate(result: PlanMutateResultMessage): void {
+		const pending = this.pendingPlanMutate;
+		if (!pending) return;
+		clearTimeout(pending.timer);
+		this.pendingPlanMutate = undefined;
+		pending.resolve(result);
+	}
+
 	private handleMessage(msg: MaestroMessage): void {
 		switch (msg.type) {
-			case "helloAck":
-				// Connection gating on helloAck lands with the supervisor work.
+			case "helloAck": {
+				if (msg.ok) break;
+				// A rejected agent must not keep working: settle everything,
+				// stop reconnecting, and shut the session down.
+				this.ctx?.ui.notify(
+					`Maestro rejected connection: ${msg.error ?? "unknown error"}`,
+					"error",
+				);
+				this.settlePending();
+				this.client.close();
+				this.ctx?.shutdown();
 				break;
+			}
 			case "steer":
 				if (this.pendingSummarize) {
 					this.queuedSteers.push(msg.content);
@@ -266,29 +341,30 @@ export class AgentBridge {
 				});
 				break;
 			case "answers": {
-				const pending = this.pendingAsk;
-				if (!pending || pending.id !== msg.id) break;
-				this.pendingAsk = undefined;
-				pending.resolve(msg.answers);
+				if (this.pendingAsk?.id !== msg.id) break;
+				this.settleAsk(msg.answers);
 				break;
 			}
 			case "planReadResponse": {
-				const pr = this.pendingPlanRead;
-				if (!pr || pr.id !== msg.id) break;
-				this.pendingPlanRead = undefined;
-				pr.resolve(msg.content);
+				if (this.pendingPlanRead?.id !== msg.id) break;
+				this.settlePlanRead(msg.content);
 				break;
 			}
 			case "planMutateResult": {
-				const pm = this.pendingPlanMutate;
-				if (!pm || pm.id !== msg.id) break;
-				this.pendingPlanMutate = undefined;
-				pm.resolve(msg);
+				if (this.pendingPlanMutate?.id !== msg.id) break;
+				this.settlePlanMutate(msg);
 				break;
 			}
 			case "summarize": {
-				if (this.pendingSummarize) break; // one at a time
-				this.pendingSummarize = { id: msg.id };
+				if (this.pendingSummarize) {
+					// One at a time: settle the newcomer immediately with an
+					// empty summary so the maestro falls back fast instead of
+					// waiting out its request timeout.
+					this.client.send({ type: "summary", id: msg.id, content: "" });
+					break;
+				}
+				// Armed on the next turn_start — see pendingSummarize docs.
+				this.pendingSummarize = { id: msg.id, armed: false };
 				const prompt = [
 					"Write a forward-looking summary of the work you completed in this session.",
 					`It will be read by: ${msg.consumer}.`,
@@ -302,8 +378,24 @@ export class AgentBridge {
 			}
 			case "doneAck":
 				break;
-			case "error":
+			case "error": {
+				// Explicit failure for a pending request: settle it so tool
+				// calls surface the error instead of hanging.
+				if (!msg.id) break;
+				if (this.pendingAsk?.id === msg.id) {
+					this.settleAsk([]);
+				} else if (this.pendingPlanRead?.id === msg.id) {
+					this.settlePlanRead(`Error: ${msg.message}`);
+				} else if (this.pendingPlanMutate?.id === msg.id) {
+					this.settlePlanMutate({
+						type: "planMutateResult",
+						id: msg.id,
+						success: false,
+						error: msg.message,
+					});
+				}
 				break;
+			}
 			case "shutdown":
 				this.settlePending();
 				this.client.close();

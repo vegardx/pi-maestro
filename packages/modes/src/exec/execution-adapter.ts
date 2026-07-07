@@ -2,7 +2,7 @@
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers } from "@vegardx/pi-contracts";
@@ -18,6 +18,7 @@ import { agentName } from "../agent-names.js";
 import type { PlanEngine } from "../engine.js";
 import { type ExecutorDeps, GroupExecutor } from "../group-executor.js";
 import { QuestionQueue } from "../question-queue.js";
+import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
 import { buildPrBody } from "../shipping.js";
 import {
 	buildAgentSessionFile,
@@ -28,6 +29,7 @@ import {
 	provisionWorktree,
 } from "./provisioner.js";
 import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
+import { truncateSummary } from "./seeds.js";
 
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
 export interface TmuxApi {
@@ -80,6 +82,7 @@ export class ExecutionAdapter {
 	private _started = false;
 	private takenNames = new Set<string>();
 	private sessionNames = new Map<string, string>(); // agentKey → tmux session name
+	private sessionFiles = new Map<string, string>(); // agentKey → session JSONL path
 	private idleCount = new Map<string, number>(); // agentKey → consecutive idle count
 	private stuckSteerSent = new Set<string>(); // agentKeys that received a stuck steer
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
@@ -192,6 +195,7 @@ export class ExecutionAdapter {
 					cwd,
 					outDir: agentSessionDir,
 				});
+				this.sessionFiles.set(agentKey, session.path);
 
 				const userMsg = isWorker
 					? "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
@@ -231,6 +235,21 @@ export class ExecutionAdapter {
 			},
 
 			killSession: async (sessionId) => {
+				// Graceful first: shutdown over RPC, short grace, then tmux kill.
+				const agentKey = this.agentKeyForSession(sessionId);
+				if (agentKey) {
+					this.router.send(agentKey, {
+						type: "shutdown",
+						reason: "work complete",
+					});
+					const deadline = Date.now() + 5000;
+					while (
+						Date.now() < deadline &&
+						(await this.tmux.hasSession(sessionId))
+					) {
+						await new Promise((r) => setTimeout(r, 250));
+					}
+				}
 				if (await this.tmux.hasSession(sessionId)) {
 					await this.tmux.kill(sessionId);
 				}
@@ -264,9 +283,31 @@ export class ExecutionAdapter {
 				return `shipped:${group.title} (${body.length} chars)`;
 			},
 
-			requestSummary: async (_sessionId) => {
-				// TODO: send RPC summarize instruction and await response
-				return "## Summary\nWork completed.";
+			requestSummary: async (sessionId, consumer, preamble) => {
+				const agentKey = this.agentKeyForSession(sessionId);
+				if (agentKey) {
+					try {
+						const reply = await this.router.request(
+							agentKey,
+							{
+								type: "summarize",
+								id: randomUUID(),
+								consumer,
+								preamble,
+								budget: SUMMARY_TOKEN_BUDGET,
+							},
+							120_000,
+						);
+						if (reply.content.trim().length > 0) {
+							return truncateSummary(reply.content);
+						}
+					} catch {
+						// Timeout or dead agent — fall through to the transcript.
+					}
+					const fromTranscript = this.lastAssistantFromTranscript(agentKey);
+					if (fromTranscript) return truncateSummary(fromTranscript);
+				}
+				return "## Summary\n(agent produced no summary)";
 			},
 
 			defaultBranch: this.opts.defaultBranch,
@@ -482,11 +523,51 @@ export class ExecutionAdapter {
 		if (gating.length === 0) return;
 		if (!gating.every((t) => t.done)) return;
 
-		// All gating tasks done — shutdown the agent
-		this.router.send(agentId, {
-			type: "shutdown",
-			reason: "all tasks complete",
+		// All gating tasks done — summarize (over the live agent), then shut down.
+		// markAgentDone runs requestSummary before killSession; sending a raw
+		// shutdown here would kill the agent before it could summarize.
+		const agentNamePart = agentId.split("/")[1];
+		if (!agentNamePart) return;
+		const state = this.executor.getAgentState(groupId, agentNamePart);
+		if (state && (state.status === "summarizing" || state.status === "done"))
+			return;
+		this.executor.markAgentDone(groupId, agentNamePart).then(() => {
+			this.opts.onPlanChanged();
+			this.tick();
 		});
+	}
+
+	// --- Session lookups ---
+
+	private agentKeyForSession(sessionName: string): string | undefined {
+		for (const [key, name] of this.sessionNames) {
+			if (name === sessionName) return key;
+		}
+		return undefined;
+	}
+
+	/** Fallback summary source: the agent's last assistant message on disk. */
+	private lastAssistantFromTranscript(agentKey: string): string | undefined {
+		const path = this.sessionFiles.get(agentKey);
+		if (!path) return undefined;
+		try {
+			const lines = readFileSync(path, "utf-8").trim().split("\n");
+			for (let i = lines.length - 1; i >= 0; i--) {
+				let entry: Record<string, unknown>;
+				try {
+					entry = JSON.parse(lines[i]) as Record<string, unknown>;
+				} catch {
+					continue;
+				}
+				const message = (entry.message ?? entry) as Record<string, unknown>;
+				if (message.role !== "assistant") continue;
+				const text = extractAssistantText(message.content);
+				if (text) return text;
+			}
+		} catch {
+			// unreadable transcript — no fallback available
+		}
+		return undefined;
 	}
 
 	// --- Answer pending questions ---
@@ -679,4 +760,24 @@ export function renderPlanForAgent(
 	}
 
 	return lines.join("\n");
+}
+
+/** Pull plain text out of an assistant message's content blocks. */
+function extractAssistantText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((block) => {
+			if (typeof block === "string") return block;
+			if (
+				block &&
+				typeof block === "object" &&
+				(block as { type?: string }).type === "text"
+			) {
+				return (block as { text?: string }).text ?? "";
+			}
+			return "";
+		})
+		.filter((s) => s.length > 0)
+		.join("\n");
 }

@@ -123,6 +123,52 @@ describe("AgentBridge", () => {
 		});
 	});
 
+	it("captures the summarize reply and queues steers meanwhile", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+
+		const messages: any[] = [];
+		server.on("message", (_id, msg) => messages.push(msg));
+
+		server.send("agent-1", {
+			type: "summarize",
+			id: "sum-1",
+			consumer: "the api group worker",
+			preamble: "worker — auth group",
+			budget: 5000,
+		});
+		await wait(50);
+
+		// The summarization prompt was injected as a followUp
+		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
+		const [prompt, opts] = mockPi.sendUserMessage.mock.calls[0];
+		expect(prompt).toContain("the api group worker");
+		expect(opts).toEqual({ deliverAs: "followUp" });
+
+		// A steer arriving mid-summarize is queued, not injected
+		server.send("agent-1", { type: "steer", content: "also fix lint" });
+		await wait(50);
+		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
+
+		// The turn's assistant text becomes the summary; queued steer flushes
+		b.recordAssistantText("## Summary\nBuilt the auth endpoints.");
+		b.onTurnEnd();
+		await wait(50);
+
+		const summary = messages.find((m) => m.type === "summary");
+		expect(summary).toEqual({
+			type: "summary",
+			id: "sum-1",
+			content: "## Summary\nBuilt the auth endpoints.",
+		});
+		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(2);
+		expect(mockPi.sendUserMessage).toHaveBeenLastCalledWith("also fix lint", {
+			deliverAs: "followUp",
+		});
+	});
+
 	it("calls ctx.shutdown on shutdown message", async () => {
 		const b = createBridge("agent-1");
 		const connected = waitForEvent(server, "connected");

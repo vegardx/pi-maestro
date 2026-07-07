@@ -60,6 +60,9 @@ export class AgentBridge {
 	private pendingPlanMutate:
 		| { id: string; resolve: (result: PlanMutateResultMessage) => void }
 		| undefined;
+	private pendingSummarize: { id: string } | undefined;
+	private queuedSteers: string[] = [];
+	private lastAssistantText = "";
 
 	constructor(private readonly deps: AgentBridgeDeps) {
 		this.client = new MaestroRpcClient({ reconnect: true });
@@ -85,8 +88,27 @@ export class AgentBridge {
 	/** Signal turn ended — agent is idle, waiting for maestro decision. */
 	onTurnEnd(): void {
 		this.turnCount++;
+		// Summarize capture rule: the assistant text of the turn that answered
+		// the injected summarization prompt IS the summary. Other injections are
+		// queued while a summarize is pending so nothing interleaves.
+		if (this.pendingSummarize) {
+			this.client.send({
+				type: "summary",
+				id: this.pendingSummarize.id,
+				content: this.lastAssistantText,
+			});
+			this.pendingSummarize = undefined;
+			for (const steer of this.queuedSteers.splice(0)) {
+				this.deps.pi.sendUserMessage(steer, { deliverAs: "followUp" });
+			}
+		}
 		this.client.send({ type: "status", status: "idle" });
 		this.reportTokens();
+	}
+
+	/** Record the latest assistant message text (for summarize capture). */
+	recordAssistantText(text: string): void {
+		if (text.trim().length > 0) this.lastAssistantText = text;
 	}
 
 	/**
@@ -225,6 +247,8 @@ export class AgentBridge {
 			});
 			this.pendingPlanMutate = undefined;
 		}
+		this.pendingSummarize = undefined;
+		this.queuedSteers.length = 0;
 	}
 
 	private handleMessage(msg: MaestroMessage): void {
@@ -233,6 +257,10 @@ export class AgentBridge {
 				// Connection gating on helloAck lands with the supervisor work.
 				break;
 			case "steer":
+				if (this.pendingSummarize) {
+					this.queuedSteers.push(msg.content);
+					break;
+				}
 				this.deps.pi.sendUserMessage(msg.content, {
 					deliverAs: "followUp",
 				});
@@ -258,9 +286,20 @@ export class AgentBridge {
 				pm.resolve(msg);
 				break;
 			}
-			case "summarize":
-				// Summary capture flow lands with the rpc-router work.
+			case "summarize": {
+				if (this.pendingSummarize) break; // one at a time
+				this.pendingSummarize = { id: msg.id };
+				const prompt = [
+					"Write a forward-looking summary of the work you completed in this session.",
+					`It will be read by: ${msg.consumer}.`,
+					msg.preamble,
+					"Include only what future agents need to build on this work: what exists now, key decisions, interfaces and file paths, and gotchas. Do not narrate your process.",
+					`Hard limit: ~${msg.budget} tokens.`,
+					'Reply with ONLY the summary in markdown, starting with "## Summary".',
+				].join("\n");
+				this.deps.pi.sendUserMessage(prompt, { deliverAs: "followUp" });
 				break;
+			}
 			case "doneAck":
 				break;
 			case "error":

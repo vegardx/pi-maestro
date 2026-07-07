@@ -263,9 +263,16 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	// mode the bridge reports it over RPC; the maestro records its own
 	// usage into the ledger (wired by the usage deliverable).
 	pi.on("message_end", (event) => {
-		const message = (event as { message?: { role?: string; usage?: unknown } })
-			.message;
-		if (message?.role !== "assistant" || !message.usage) return;
+		const message = (
+			event as {
+				message?: { role?: string; usage?: unknown; content?: unknown };
+			}
+		).message;
+		if (message?.role !== "assistant") return;
+		if (rt.agentBridge) {
+			rt.agentBridge.recordAssistantText(extractMessageText(message.content));
+		}
+		if (!message.usage) return;
 		if (rt.agentBridge) rt.agentBridge.recordUsage(message.usage as never);
 		else rt.recordMaestroUsage(message.usage);
 	});
@@ -504,4 +511,24 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			{ triggerTurn: false },
 		);
 	});
+}
+
+/** Pull plain text out of an assistant message's content blocks. */
+function extractMessageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((block) => {
+			if (typeof block === "string") return block;
+			if (
+				block &&
+				typeof block === "object" &&
+				(block as { type?: string }).type === "text"
+			) {
+				return (block as { text?: string }).text ?? "";
+			}
+			return "";
+		})
+		.filter((s) => s.length > 0)
+		.join("\n");
 }

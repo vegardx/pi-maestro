@@ -64,6 +64,7 @@ import {
 	UsageLedger,
 } from "../usage-ledger.js";
 import { WorkerPanes } from "../worker-panes.js";
+import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import {
 	cleanupInactiveWorktrees,
@@ -524,22 +525,12 @@ export function createRuntimeContext(
 									.catch(() => {});
 							}
 						},
+						// The settled card (onEvent) is the recap now; onAllSettled only
+						// refreshes the footer.
 						onAllSettled: () => {
-							if (!rt.engine) return;
-							const plan = rt.engine.get();
-							const summary = plan.groups
-								.map((g) => `${g.title}: ${g.status}`)
-								.join("\n");
-							pi.sendMessage(
-								{
-									customType: "maestro.execution.recap",
-									content: `All groups complete.\n\n${summary}`,
-									display: true,
-								},
-								{ triggerTurn: false },
-							);
 							rt.invalidateFooter?.();
 						},
+						onEvent: (event) => sendAgentEvent(pi, event),
 					});
 					await rt.execution.start();
 				}

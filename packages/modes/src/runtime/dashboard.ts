@@ -39,6 +39,7 @@ export function installMaestroFooter(
 			if (!rt.execution) return 0;
 			return rt.execution.questionQueue?.all()?.length ?? 0;
 		},
+		getActiveAgents: () => rt.execution?.snapshot().agents,
 	});
 }
 

@@ -15,6 +15,7 @@ import type { MaestroContext } from "@vegardx/pi-core";
 import type { ModesAskQueue } from "../ask-queue.js";
 import type { PlanEngine } from "../engine.js";
 import { createPlanTools } from "../tools.js";
+import { registerAgentCardRenderer } from "./agent-cards.js";
 import { registerRuntimeCommands } from "./commands.js";
 import {
 	activeDeliverable,
@@ -65,6 +66,8 @@ export function createModesRuntime(
 
 	registerRuntimeCommands(rt);
 	registerRuntimeHooks(rt);
+	// Chat cards for agent lifecycle events (spawn/done/shipped/settled/…).
+	registerAgentCardRenderer(pi);
 
 	maestro.capabilities.register(CAPABILITIES.usage, rt.usageLedger);
 	maestro.capabilities.register(CAPABILITIES.overlays, rt.overlayManager);

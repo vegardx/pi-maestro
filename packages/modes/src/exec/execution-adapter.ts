@@ -48,6 +48,45 @@ const IDLE_DONE_THRESHOLD = 2;
 const CACHE_WARM_WINDOW_MS = 5 * 60_000;
 const CACHE_MISS_RATIO_THRESHOLD = 0.5;
 
+/**
+ * Rich lifecycle event mirrored to the chat as an agent-progress card.
+ * Emitted alongside the events.jsonl log entries, with enough payload for
+ * the card renderer (runtime/agent-cards.ts) to draw collapsed/expanded UI.
+ */
+export type ExecutionEvent =
+	| {
+			kind: "spawn";
+			agentKey: string;
+			session: string;
+			resumed: boolean;
+			groupTitle: string;
+	  }
+	| {
+			kind: "done";
+			agentKey: string;
+			groupTitle: string;
+			durationMs: number;
+			tokens: { input: number; output: number; turns: number };
+			cacheRatio?: number;
+			summary?: string;
+			/** Commit subjects, when the emitter has them. */
+			commits?: string[];
+	  }
+	| {
+			kind: "fix-round";
+			groupId: string;
+			groupTitle: string;
+			round: number;
+			findings: string[];
+	  }
+	| { kind: "blocked"; groupId: string; groupTitle: string; reason: string }
+	| { kind: "failed"; agentKey: string; groupTitle: string; respawns: number }
+	| { kind: "shipped"; groupId: string; groupTitle: string; prUrl?: string }
+	| {
+			kind: "settled";
+			groups: { id: string; title: string; status: string; prUrl?: string }[];
+	  };
+
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
 export interface TmuxApi {
 	spawn(
@@ -86,6 +125,8 @@ export interface ExecutionAdapterOpts {
 	) => void;
 	onQuestionsReceived?: (id: string, count: number) => void;
 	onAllSettled?: () => void;
+	/** Rich lifecycle events for the chat progress cards. */
+	onEvent?: (event: ExecutionEvent) => void;
 }
 
 /**
@@ -287,6 +328,13 @@ export class ExecutionAdapter {
 					session: sessionName,
 					resumed: Boolean(spawnOpts.resumeSessionFile),
 				});
+				this.emitEvent({
+					kind: "spawn",
+					agentKey,
+					session: sessionName,
+					resumed: Boolean(spawnOpts.resumeSessionFile),
+					groupTitle: this.groupTitle(spawnOpts.groupId),
+				});
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
 					tokens: { input: 0, output: 0, turns: 0 },
@@ -319,6 +367,17 @@ export class ExecutionAdapter {
 					}
 				}
 				this.takenNames.delete(sessionId);
+				// Prune live-session bookkeeping so getWorkerSessions() only
+				// returns live workers (auto-closing /watch panes). Guarded on
+				// the session id: a respawn may have remapped the agent key to a
+				// fresh session that must keep its entries. sessionFiles are
+				// deliberately retained — resurrection resumes from them.
+				if (agentKey && this.sessionNames.get(agentKey) === sessionId) {
+					this.sessionNames.delete(agentKey);
+					this.idleCount.delete(agentKey);
+					this.lastRpcStatus.delete(agentKey);
+					this.tokenSnapshots.delete(agentKey);
+				}
 			},
 
 			createWorktree: async (worktreeOpts) => {
@@ -448,6 +507,12 @@ export class ExecutionAdapter {
 			for (const groupId of shipped) {
 				const g = this.engine.get().groups.find((x) => x.id === groupId);
 				this.logEvent("shipped", { group: groupId, prUrl: g?.prUrl });
+				this.emitEvent({
+					kind: "shipped",
+					groupId,
+					groupTitle: g?.title ?? groupId,
+					...(g?.prUrl ? { prUrl: g.prUrl } : {}),
+				});
 			}
 			this.opts.onPlanChanged();
 		}
@@ -463,6 +528,15 @@ export class ExecutionAdapter {
 		if (allDone && plan.groups.length > 0 && !this.settledAnnounced) {
 			this.settledAnnounced = true;
 			this.opts.onAllSettled?.();
+			this.emitEvent({
+				kind: "settled",
+				groups: plan.groups.map((g) => ({
+					id: g.id,
+					title: g.title,
+					status: g.status,
+					...(g.prUrl ? { prUrl: g.prUrl } : {}),
+				})),
+			});
 		}
 
 		const newlyActivated = afterActive - beforeActive;
@@ -583,11 +657,33 @@ export class ExecutionAdapter {
 
 	/** Complete an agent through the executor, logging the lifecycle event. */
 	private async finishAgent(groupId: string, name: string): Promise<void> {
+		const agentKey = `${groupId}/${name}`;
 		const state = this.executor.getAgentState(groupId, name);
-		if (state && state.status !== "done") {
-			this.logEvent("done", { agent: `${groupId}/${name}` });
+		const firstCompletion = Boolean(state && state.status !== "done");
+		// Capture live bookkeeping now — markAgentDone kills the session, which
+		// prunes tokenSnapshots (see killSession) before the event is emitted.
+		const tokens = this.tokenSnapshots.get(agentKey);
+		const cacheRatio = this.firstTurnCacheRatio.get(agentKey);
+		const spawnedAt = this.spawnTimes.get(agentKey);
+		if (firstCompletion) {
+			this.logEvent("done", { agent: agentKey });
 		}
 		await this.executor.markAgentDone(groupId, name);
+		if (firstCompletion) {
+			// Summary exists only after markAgentDone ran requestSummary.
+			const summary = this.executor.getAgentState(groupId, name)?.summary;
+			this.emitEvent({
+				kind: "done",
+				agentKey,
+				groupTitle: this.groupTitle(groupId),
+				durationMs: spawnedAt !== undefined ? Date.now() - spawnedAt : 0,
+				tokens: tokens
+					? { input: tokens.input, output: tokens.output, turns: tokens.turns }
+					: { input: 0, output: 0, turns: 0 },
+				...(cacheRatio !== undefined ? { cacheRatio } : {}),
+				...(summary ? { summary } : {}),
+			});
+		}
 		this.recordGroupTransitions();
 	}
 
@@ -946,6 +1042,12 @@ export class ExecutionAdapter {
 							`agent ${agentNamePart} crashed repeatedly — inspect and /retry`,
 						);
 						this.logEvent("failed", { agent: agentKey, respawns: count });
+						this.emitEvent({
+							kind: "failed",
+							agentKey,
+							groupTitle: this.groupTitle(groupId),
+							respawns: count,
+						});
 					}
 				} catch (e) {
 					// One agent's tmux race must not abort the sweep or leak an
@@ -1026,6 +1128,22 @@ export class ExecutionAdapter {
 
 	// --- Event log ---
 
+	/** Group title for user-facing events; falls back to the id. */
+	private groupTitle(groupId: string): string {
+		return (
+			this.engine.get().groups.find((g) => g.id === groupId)?.title ?? groupId
+		);
+	}
+
+	/** Mirror a rich lifecycle event to the UI. Observability only. */
+	private emitEvent(event: ExecutionEvent): void {
+		try {
+			this.opts.onEvent?.(event);
+		} catch {
+			// A UI listener failure must never break execution.
+		}
+	}
+
 	/** Append one JSON line per lifecycle event to <planDir>/events.jsonl. */
 	private logEvent(event: string, data: Record<string, unknown> = {}): void {
 		try {
@@ -1049,10 +1167,25 @@ export class ExecutionAdapter {
 					round: state.round,
 				});
 				this.lastRounds.set(groupId, state.round);
+				this.emitEvent({
+					kind: "fix-round",
+					groupId,
+					groupTitle: this.groupTitle(groupId),
+					round: state.round,
+					findings: state.lastFindingsByReviewer
+						? [...state.lastFindingsByReviewer.values()].flat()
+						: [],
+				});
 			}
 			if (state.blocked && !this.blockedLogged.has(groupId)) {
 				this.logEvent("blocked", { group: groupId, reason: state.blocked });
 				this.blockedLogged.add(groupId);
+				this.emitEvent({
+					kind: "blocked",
+					groupId,
+					groupTitle: this.groupTitle(groupId),
+					reason: state.blocked,
+				});
 			} else if (!state.blocked) {
 				this.blockedLogged.delete(groupId);
 			}

@@ -13,6 +13,7 @@ import {
 export {
 	ExecutionAdapter,
 	type ExecutionAdapterOpts,
+	type ExecutionEvent,
 } from "./execution-adapter.js";
 export {
 	type ParsedVerdict,

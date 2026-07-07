@@ -88,7 +88,7 @@ export function renderAgentsOverview(
 		for (const a of g.agents) {
 			const live = liveSuffix(snap?.agents.get(`${g.id}/${a.name}`));
 			lines.push(
-				`  └─ ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})${live}`,
+				`  └─ ${a.name} (${a.mode}, ${a.slot}${a.after.length ? `, after: ${a.after.join(", ")}` : ""})${live}`,
 			);
 		}
 	}

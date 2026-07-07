@@ -110,6 +110,7 @@ export class ExecutionAdapter {
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	private settledAnnounced = false;
 	private tokenSnapshots = new Map<string, TokenSnapshot>(); // agentKey → latest tokens
 	private firstTurnCacheRatio = new Map<string, number>(); // agentKey → first-turn cacheRead ratio
 	private firstTokensSeen = new Map<
@@ -459,7 +460,8 @@ export class ExecutionAdapter {
 				g.status === "superseded" ||
 				g.status === "abandoned",
 		);
-		if (allDone && plan.groups.length > 0) {
+		if (allDone && plan.groups.length > 0 && !this.settledAnnounced) {
+			this.settledAnnounced = true;
 			this.opts.onAllSettled?.();
 		}
 

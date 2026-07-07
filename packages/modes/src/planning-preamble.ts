@@ -63,6 +63,8 @@ For complex requests with open decisions:
 4. **Detail** — Call \`task(action="add", groupId="...", title="...", body="...")\`
    for each concrete task. Tasks describe WHAT to implement.
 5. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
+   Give reviewers \`after: ["worker"]\` explicitly so ordering is visible in
+   the plan, not just enforced by the scheduler.
 6. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
    document (Project Structure / Key Patterns / Conventions / Key Interfaces).
    Every agent forks from it; \`/implement\` refuses to start without it. Distill

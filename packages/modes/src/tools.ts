@@ -41,7 +41,7 @@ export interface PlanToolDeps {
 	readonly steerAgent?: (groupId: string, guidance: string) => void;
 	readonly onTaskToggle?: (groupId: string, taskId: string) => void;
 	readonly seedContent?: () => string | undefined;
-	readonly agentBridge?: AgentBridge;
+	readonly agentBridge?: () => AgentBridge | undefined;
 	readonly agentGroupId?: () => string | undefined;
 }
 
@@ -191,9 +191,9 @@ export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 			"group — manage work groups (add/update/remove/list). One group = one branch = one PR.",
 		parameters: GroupParams,
 		async execute(_id, params): Promise<Result> {
-			if (!deps.engine() && deps.agentBridge) {
+			if (!deps.engine() && deps.agentBridge?.()) {
 				if (params.action === "list") {
-					const content = await deps.agentBridge.planRead();
+					const content = await deps.agentBridge?.()?.planRead();
 					if (content) return ok(content, {});
 				}
 				return error("agents cannot modify plan structure");
@@ -290,12 +290,13 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					deps.onTaskToggle(gId, params.taskId);
 					return ok(`${params.taskId} marked done.`, { done: true });
 				}
-				if (deps.agentBridge) {
+				const bridge = deps.agentBridge?.();
+				if (bridge) {
 					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";
 					switch (params.action) {
 						case "add": {
 							if (!params.title) return error("add requires title");
-							const res = await deps.agentBridge.planMutate("addTask", gId, {
+							const res = await bridge.planMutate("addTask", gId, {
 								title: params.title,
 								body: params.body,
 								kind: params.kind as WorkItemKind | undefined,
@@ -305,7 +306,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						case "update": {
 							if (!params.taskId) return error("update requires taskId");
-							const res = await deps.agentBridge.planMutate("updateTask", gId, {
+							const res = await bridge.planMutate("updateTask", gId, {
 								taskId: params.taskId,
 								title: params.title,
 								body: params.body,
@@ -315,7 +316,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						case "toggle": {
 							if (!params.taskId) return error("toggle requires taskId");
-							const res = await deps.agentBridge.planMutate("toggleTask", gId, {
+							const res = await bridge.planMutate("toggleTask", gId, {
 								taskId: params.taskId,
 							});
 							if (!res.success) return error(res.error ?? "mutation failed");
@@ -408,7 +409,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 			"agent — manage support agents in a group (add/update/remove).",
 		parameters: AgentParams,
 		async execute(_id, params): Promise<Result> {
-			if (!deps.engine() && deps.agentBridge) {
+			if (!deps.engine() && deps.agentBridge?.()) {
 				return error("agents cannot modify plan structure");
 			}
 			return withEngine(deps, (engine) => {
@@ -536,9 +537,10 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 		async execute(_id, params): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) {
-				if (deps.agentBridge) {
+				const bridge = deps.agentBridge?.();
+				if (bridge) {
 					try {
-						const content = await deps.agentBridge.planRead();
+						const content = await deps.agentBridge?.()?.planRead();
 						if (content) return ok(content, {});
 					} catch {
 						// Fall through to seed

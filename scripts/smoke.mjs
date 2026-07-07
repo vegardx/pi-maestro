@@ -16,7 +16,11 @@ import { createJiti } from "jiti";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-const entries = pkg.pi?.extensions ?? [];
+// Spawn-only extensions: never in the manifest (the maestro session must not
+// load them) but passed via -e to spawned children — same load path, so the
+// smoke covers them too.
+const SPAWN_ONLY = ["packages/research-tools/src/index.ts"];
+const entries = [...(pkg.pi?.extensions ?? []), ...SPAWN_ONLY];
 const jiti = createJiti(import.meta.url);
 
 let failed = 0;

@@ -86,9 +86,11 @@ describe("execution adapter observability", () => {
 	let engine: PlanEngine;
 	let tmux: ReturnType<typeof stubTmux>;
 	const clients: MaestroRpcClient[] = [];
+	let suiteStart = 0;
 	let prevSessionDir: string | undefined;
 
 	beforeEach(async () => {
+		suiteStart = Date.now();
 		tmpDir = mkdtempSync(join(tmpdir(), "obs-test-"));
 		planDir = join(tmpDir, "plan");
 		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -155,7 +157,6 @@ describe("execution adapter observability", () => {
 	}
 
 	it("snapshot() returns real tokens after a tokens message and real spawn time", async () => {
-		const before = Date.now();
 		const { client, ready } = connect("group-one/worker");
 		await ready;
 
@@ -180,7 +181,7 @@ describe("execution adapter observability", () => {
 		const worker = snap.agents.get("group-one/worker");
 		expect(worker?.tokens).toEqual({ input: 1234, output: 56, turns: 7 });
 		expect(worker?.status).toBe("working");
-		expect(worker?.startedAt).toBeGreaterThanOrEqual(before);
+		expect(worker?.startedAt).toBeGreaterThanOrEqual(suiteStart);
 		expect(worker?.startedAt).toBeLessThanOrEqual(Date.now());
 		expect(snap.groups.get("group-one")).toEqual({ round: 0 });
 	});

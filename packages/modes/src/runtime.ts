@@ -630,6 +630,10 @@ export function createModesRuntime(
 					onAgentStateChanged: (id, state) => {
 						usageLedger.record({ kind: "agent", id }, state.tokens);
 						invalidateFooter?.();
+						// Sync worker panes when agents complete
+						if (tmuxFanout && workerPanes.isOpen()) {
+							workerPanes.sync(tmuxFanout.getWorkerSessions()).catch(() => {});
+						}
 					},
 					onAllSettled: () => {
 						if (!engine) return;
@@ -657,6 +661,11 @@ export function createModesRuntime(
 					{ stage: "executing", deliverableId: "maestro" },
 					ctx,
 				);
+				// Auto-open worker panes
+				const sessions = tmuxFanout.getWorkerSessions();
+				if (sessions.length > 0) {
+					await workerPanes.open(sessions);
+				}
 			} else {
 				const plan = activeEngine.get();
 				const active = plan.groups.filter((g) => g.status === "active");

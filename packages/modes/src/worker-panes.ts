@@ -207,7 +207,8 @@ export class WorkerPanes {
 	}
 
 	private attachCommand(sessionName: string): string {
-		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${sessionName} || exit`;
+		// Attach read-only. When agent exits, show "[session ended]" and wait.
+		return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${sessionName} 2>/dev/null || echo "[session ended: ${sessionName}]" && sleep 86400`;
 	}
 
 	private terminalLargeEnough(): boolean {

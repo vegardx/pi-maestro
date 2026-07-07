@@ -1,11 +1,6 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
-import {
-	buildSessionFile,
-	renderPlanForAgent,
-} from "../packages/modes/src/execution-adapter.js";
+import { renderPlanForAgent } from "../packages/modes/src/exec/execution-adapter.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import type { PlanStore } from "../packages/modes/src/storage.js";
 
@@ -30,55 +25,6 @@ function memStore(): PlanStore {
 		},
 	};
 }
-
-describe("buildSessionFile", () => {
-	const tmpDir = join("/tmp", "test-session-file");
-
-	it("creates a valid JSONL session file", () => {
-		rmSync(tmpDir, { recursive: true, force: true });
-		const { mkdirSync } = require("node:fs");
-		mkdirSync(tmpDir, { recursive: true });
-
-		const path = buildSessionFile({
-			agentKey: "my-group/worker",
-			seed: "# Implement auth\n\nDo the thing.",
-			cwd: "/tmp/worktree",
-			outDir: tmpDir,
-		});
-
-		expect(existsSync(path)).toBe(true);
-		expect(path).toMatch(/agent-my-group_worker\.jsonl$/);
-
-		const content = readFileSync(path, "utf-8");
-		const lines = content.trim().split("\n");
-		expect(lines).toHaveLength(3);
-
-		// Session header
-		const header = JSON.parse(lines[0]);
-		expect(header.type).toBe("session");
-		expect(header.version).toBe(3);
-		expect(header.cwd).toBe("/tmp/worktree");
-
-		// Modes state
-		const modesState = JSON.parse(lines[1]);
-		expect(modesState.type).toBe("custom");
-		expect(modesState.customType).toBe("maestro.modes.state");
-		expect(modesState.data.version).toBe(2);
-		expect(modesState.data.mode).toBe("agent");
-		expect(modesState.data.execution.stage).toBe("executing");
-		expect(modesState.data.execution.deliverableId).toBe("my-group/worker");
-
-		// Seed entry
-		const seedEntry = JSON.parse(lines[2]);
-		expect(seedEntry.type).toBe("custom");
-		expect(seedEntry.customType).toBe("maestro-execution-seed");
-		expect(seedEntry.data.content).toBe("# Implement auth\n\nDo the thing.");
-		expect(seedEntry.data.deliverableId).toBe("my-group/worker");
-		expect(seedEntry.parentId).toBe(modesState.id);
-
-		rmSync(tmpDir, { recursive: true, force: true });
-	});
-});
 
 describe("renderPlanForAgent", () => {
 	it("renders scoped plan view for a group", () => {

@@ -50,19 +50,31 @@ export async function tmuxExec(args: string[]): Promise<string> {
 	});
 }
 
+/** POSIX single-quote escaping — the only safe way to embed a token in a shell word. */
+export function shellEscape(token: string): string {
+	return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
 /**
- * Spawn a new detached tmux session.
+ * Spawn a new detached tmux session. An argv-array command is escaped
+ * per-token; env vars are passed via tmux `-e` flags, never interpolated
+ * into the command string.
  */
 export async function spawn(
 	name: string,
 	cwd: string,
-	command: string,
-	opts?: { width?: number; height?: number },
+	command: string | string[],
+	opts?: { width?: number; height?: number; env?: Record<string, string> },
 ): Promise<void> {
 	const args = ["new-session", "-d", "-s", name, "-c", cwd];
 	if (opts?.width) args.push("-x", String(opts.width));
 	if (opts?.height) args.push("-y", String(opts.height));
-	args.push(command);
+	for (const [key, value] of Object.entries(opts?.env ?? {})) {
+		args.push("-e", `${key}=${value}`);
+	}
+	args.push(
+		Array.isArray(command) ? command.map(shellEscape).join(" ") : command,
+	);
 	await tmuxExec(args);
 }
 

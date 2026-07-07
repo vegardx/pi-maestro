@@ -87,6 +87,8 @@ export interface ExecutorDeps {
 		consumer: string,
 		preamble: string,
 	) => Promise<string>;
+	/** Repo default branch — the base for unstacked groups. */
+	defaultBranch?: string;
 	/** Current time. */
 	now: () => string;
 }
@@ -286,7 +288,11 @@ export class GroupExecutor {
 	private async activateGroup(g: WorkGroup): Promise<void> {
 		const plan = this.engine.get();
 		const branch = g.branch ?? defaultBranchForGroup(g);
-		const baseBranch = pickBaseBranch(plan, g, "main"); // TODO: detect actual default branch
+		const baseBranch = pickBaseBranch(
+			plan,
+			g,
+			this.deps.defaultBranch ?? "main",
+		);
 
 		// Create worktree
 		const worktreePath = await this.deps.createWorktree({

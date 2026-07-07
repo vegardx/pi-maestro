@@ -123,30 +123,33 @@ describe("buildAgentTable", () => {
 			width: 100,
 			now: NOW,
 		});
-		// Box: top border + header + 3 agent rows + bottom border.
-		expect(lines).toHaveLength(6);
+		// Box: header rule + 3 agent rows + bottom border (no title row).
+		expect(lines).toHaveLength(5);
 		for (const line of lines) expect(line).toHaveLength(100);
-		expect(lines[0].startsWith("┌─ agents ─")).toBe(true);
-		expect(lines[0].endsWith("─┐")).toBe(true);
+		// Headers live in the top rule; the "agents" title is gone.
+		expect(lines[0].startsWith("┌─ GROUP ")).toBe(true);
+		expect(lines[0]).not.toContain("agents");
+		for (const h of ["AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"]) {
+			expect(lines[0]).toContain(` ${h} `);
+		}
+		expect(lines[0].endsWith("┐")).toBe(true);
 		expect(lines[lines.length - 1]).toBe(`└${"─".repeat(98)}┘`);
 
 		expect(lines[1]).toContain(
-			"GROUP    AGENT     STATUS       TOKENS        CACHE  ELAPSED",
+			"worker    fixing r1    13.2k / 2.2k  54%    4m12s",
 		);
 		expect(lines[2]).toContain(
-			"clamp    worker    fixing r1    13.2k / 2.2k  54%    4m12s",
+			"reviewer  summarizing   4.3k / 0.9k   0%    1m40s",
 		);
 		expect(lines[3]).toContain(
-			"clamp    reviewer  summarizing   4.3k / 0.9k   0%    1m40s",
-		);
-		expect(lines[4]).toContain(
-			"average  worker    working       8.8k / 1.4k  57%    1m03s",
+			"worker    working       8.8k / 1.4k  57%    1m03s",
 		);
 
-		// Columns align: every row starts each column at the same offset.
-		const agentCol = lines[1].indexOf("AGENT");
-		expect(lines[2].indexOf("worker")).toBe(agentCol);
-		expect(lines[3].indexOf("reviewer")).toBe(agentCol);
+		// GROUP flexes: rows fill the full width, labels sit one cell right
+		// of their column (the rule's "┌─ " prefix vs the rows' "│ ").
+		const agentLabel = lines[0].indexOf("AGENT");
+		expect(lines[1].indexOf("worker")).toBe(agentLabel - 1);
+		expect(lines[2].indexOf("reviewer")).toBe(agentLabel - 1);
 	});
 
 	it("shows fixing rN only for workers of groups with round > 0", () => {
@@ -156,9 +159,9 @@ describe("buildAgentTable", () => {
 			width: 100,
 			now: NOW,
 		});
-		expect(lines[2]).toContain("fixing r1"); // clamp worker
-		expect(lines[3]).toContain("summarizing"); // clamp reviewer keeps status
-		expect(lines[4]).toContain("working"); // average round 0
+		expect(lines[1]).toContain("fixing r1"); // clamp worker
+		expect(lines[2]).toContain("summarizing"); // clamp reviewer keeps status
+		expect(lines[3]).toContain("working"); // average round 0
 	});
 
 	it("drops the CACHE column at width 60", () => {
@@ -169,11 +172,11 @@ describe("buildAgentTable", () => {
 			now: NOW,
 		});
 		for (const line of lines) expect(line).toHaveLength(60);
-		expect(lines[1]).toContain("TOKENS");
-		expect(lines[1]).toContain("ELAPSED");
-		expect(lines[1]).not.toContain("CACHE");
-		expect(lines[2]).not.toContain("54%");
-		expect(lines[2]).toContain("4m12s");
+		expect(lines[0]).toContain("TOKENS");
+		expect(lines[0]).toContain("ELAPSED");
+		expect(lines[0]).not.toContain("CACHE");
+		expect(lines[1]).not.toContain("54%");
+		expect(lines[1]).toContain("4m12s");
 	});
 
 	it("drops ELAPSED too when even narrower", () => {
@@ -184,9 +187,9 @@ describe("buildAgentTable", () => {
 			now: NOW,
 		});
 		for (const line of lines) expect(line).toHaveLength(50);
-		expect(lines[1]).not.toContain("CACHE");
-		expect(lines[1]).not.toContain("ELAPSED");
-		expect(lines[1]).toContain("TOKENS");
+		expect(lines[0]).not.toContain("CACHE");
+		expect(lines[0]).not.toContain("ELAPSED");
+		expect(lines[0]).toContain("TOKENS");
 	});
 
 	it("truncates long group/agent names with an ellipsis", () => {
@@ -197,8 +200,9 @@ describe("buildAgentTable", () => {
 			],
 		]);
 		const lines = buildAgentTable({ agents, width: 80, now: NOW });
-		expect(lines[2]).toContain("a-very-long-gro…");
-		expect(lines[2]).toContain("an-extremely-lo…");
+		// GROUP flexes but still clips when the name exceeds the flexed width.
+		expect(lines[1]).toMatch(/a-very-long-group[a-z-]*…/);
+		expect(lines[1]).toContain("an-extremely-lo…");
 		for (const line of lines) expect(line).toHaveLength(80);
 	});
 
@@ -252,12 +256,16 @@ describe("styleAgentTable", () => {
 			now: NOW,
 		});
 		const styled = styleAgentTable(lines, theme);
-		expect(styled[0]).toMatch(/^<dim>┌/);
-		expect(styled[1]).toMatch(/^<dim>│.*GROUP/);
+		expect(styled[0]).toMatch(/^<dim>┌─ GROUP/);
 		expect(styled[styled.length - 1]).toMatch(/^<dim>└/);
-		expect(styled[2]).toBe(lines[2]); // agent row untouched
+		// Agent rows: frame dimmed, content untouched — color never bleeds
+		// into the box characters.
+		expect(styled[1]).toMatch(/^<dim>│ <\/dim>/);
+		expect(styled[1]).toContain("worker");
+		expect(styled[1]).not.toContain("<error>");
 		const blocked = styled.find((line) => line.includes("⚠"));
-		expect(blocked).toMatch(/^<error>│ ⚠/);
+		expect(blocked).toMatch(/^<dim>│ <\/dim><error>/);
+		expect(blocked).toMatch(/<\/error><dim> │<\/dim>$/);
 	});
 });
 
@@ -303,7 +311,7 @@ describe("syncAgentWidget", () => {
 		expect(typeof factory).toBe("function");
 		const theme = { fg: (_c: string, s: string) => s };
 		const rendered = factory(undefined, theme).render(80);
-		expect(rendered[0]).toContain("agents");
+		expect(rendered[0]).toContain("GROUP");
 		expect(rendered.join("\n")).toContain("g");
 		expect(rt.agentWidgetTimer).toBeDefined();
 

@@ -58,8 +58,10 @@ export function hasActiveAgents(
 	return false;
 }
 
-/** Cap on GROUP/AGENT cells before "…" truncation. */
+/** Cap on AGENT cells before "…" truncation (GROUP flexes to fill). */
 const NAME_CAP = 16;
+/** GROUP never shrinks below its header length + a little room. */
+const MIN_GROUP_WIDTH = 8;
 
 const HEADERS = ["GROUP", "AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"];
 /** Columns dropped (in order) when the full set doesn't fit the width. */
@@ -109,7 +111,7 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 		inputTokens.push(formatTokens(agent.tokens.input));
 		outputTokens.push(formatTokens(agent.tokens.output));
 		rows.push({
-			GROUP: clip(group, NAME_CAP),
+			GROUP: group,
 			AGENT: clip(name, NAME_CAP),
 			STATUS: status,
 			CACHE:
@@ -128,34 +130,45 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 		row.TOKENS = `${inputTokens[i].padStart(inWidth)} / ${outputTokens[i].padStart(outWidth)}`;
 	});
 
-	// ── Fit columns to the width, dropping CACHE then ELAPSED ──────────
+	// ── Fit columns: GROUP flexes to fill; drop CACHE then ELAPSED when
+	// even a minimal GROUP column no longer fits ────────────────────────
 	const inner = Math.max(1, width - FRAME);
-	const widthsFor = (headers: string[]): number[] =>
+	const fixedWidthsFor = (headers: string[]): number[] =>
 		headers.map((h) =>
-			Math.max(h.length, ...rows.map((row) => row[h]?.length ?? 0)),
+			h === "GROUP"
+				? 0
+				: Math.max(h.length, ...rows.map((row) => row[h]?.length ?? 0)),
 		);
-	const totalFor = (widths: number[]): number =>
+	const fixedTotalFor = (widths: number[]): number =>
 		widths.reduce((sum, w) => sum + w, 0) + COLUMN_GAP * (widths.length - 1);
 
 	let headers = HEADERS;
-	let colWidths = widthsFor(headers);
+	let colWidths = fixedWidthsFor(headers);
 	for (const drop of DROP_ORDER) {
-		if (totalFor(colWidths) <= inner) break;
+		if (fixedTotalFor(colWidths) + MIN_GROUP_WIDTH <= inner) break;
 		headers = headers.filter((h) => h !== drop);
-		colWidths = widthsFor(headers);
+		colWidths = fixedWidthsFor(headers);
+	}
+	// GROUP absorbs all remaining width so the box always spans the terminal.
+	// Two chars are held back: header labels sit +1 right of their columns
+	// (the rule's "┌─ " prefix vs the rows' "│ "), and the last label keeps
+	// a trailing "─┐" — "… ELAPSED ─┐" — instead of butting the corner.
+	const groupIdx = headers.indexOf("GROUP");
+	colWidths[groupIdx] = Math.max(
+		MIN_GROUP_WIDTH,
+		inner - fixedTotalFor(colWidths) - 2,
+	);
+	for (const row of rows) {
+		row.GROUP = clip(row.GROUP, colWidths[groupIdx]);
 	}
 
-	// ── Draw the box ───────────────────────────────────────────────────
+	// ── Draw the box (headers live in the top border rule) ─────────────
 	const line = (content: string): string =>
 		`│ ${clip(content, inner).padEnd(inner)} │`;
 	const tableRow = (cells: string[]): string =>
 		line(cells.map((cell, i) => cell.padEnd(colWidths[i])).join("  "));
 
-	const title = " agents ";
-	const lines: string[] = [
-		`┌─${title}${"─".repeat(Math.max(0, width - title.length - 3))}┐`,
-		tableRow(headers),
-	];
+	const lines: string[] = [buildHeaderRule(headers, colWidths, width)];
 	for (const row of rows) {
 		lines.push(tableRow(headers.map((h) => row[h] ?? "")));
 	}
@@ -170,14 +183,43 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 }
 
 /**
- * Theme pass over buildAgentTable output: dim borders and header, plain
- * agent rows, error-colored "⚠ … blocked" rows. Kept separate so the
- * builder stays pure/testable.
+ * Top border with the column headers embedded in the rule:
+ * `┌─ GROUP ────────── AGENT ───── STATUS ─ … ─┐`. Each label sits above
+ * its column (one space either side, dashes filling the gaps).
+ */
+function buildHeaderRule(
+	headers: string[],
+	colWidths: number[],
+	width: number,
+): string {
+	let rule = "┌─ ";
+	headers.forEach((h, i) => {
+		if (i === headers.length - 1) {
+			rule += `${h} `;
+			return;
+		}
+		const span = colWidths[i] + COLUMN_GAP;
+		const seg = `${h} `.padEnd(span, "─");
+		rule += `${seg.slice(0, -1)} `;
+	});
+	return `${rule.slice(0, Math.max(3, width - 2)).padEnd(width - 2, "─")}─┐`;
+}
+
+/**
+ * Theme pass over buildAgentTable output: the frame (borders including the
+ * header rule) is always dim; row CONTENT is styled on its own — plain for
+ * agent rows, error-colored for "⚠ … blocked" rows — so a colored row never
+ * bleeds into the box characters. Kept separate so the builder stays pure.
  */
 export function styleAgentTable(lines: string[], theme: Theme): string[] {
 	return lines.map((line, i) => {
-		if (i <= 1 || i === lines.length - 1) return theme.fg("dim", line);
-		if (line.startsWith("│ ⚠")) return theme.fg("error", line);
-		return line;
+		if (i === 0 || i === lines.length - 1) return theme.fg("dim", line);
+		const left = theme.fg("dim", line.slice(0, 2));
+		const right = theme.fg("dim", line.slice(-2));
+		const content = line.slice(2, -2);
+		const styled = content.trimStart().startsWith("⚠")
+			? theme.fg("error", content)
+			: content;
+		return `${left}${styled}${right}`;
 	});
 }

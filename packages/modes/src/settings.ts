@@ -11,6 +11,8 @@ import {
 } from "@vegardx/pi-models";
 import {
 	getConfigNumber,
+	getConfigString,
+	getConfigStringArray,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
 
@@ -85,6 +87,38 @@ export function readModesCompactionSettings(
 		summaryTokens: read("summaryTokens", 100000),
 		timeoutMs: read("timeoutMs", 90000),
 		planMaxContextTokens: planMax > 0 ? planMax : undefined,
+	};
+}
+
+// ---- Worktree provisioning settings -----------------------------------------
+
+/** Environment setup for freshly provisioned worktrees (provisioner shape). */
+export interface WorktreeSetupSettings {
+	/** Gitignored files copied from the main checkout (e.g. `.env`). */
+	copy?: string[];
+	/** One-shot setup command run in a fresh worktree (e.g. `npm ci`). */
+	setupCommand?: string;
+	/** Paths symlinked from the main checkout — explicit opt-in only. */
+	linkPaths?: string[];
+}
+
+/**
+ * Read worktree environment settings from `extensionConfig.maestro.worktree`:
+ * `copy` (string[]), `setup` (string), and `link` (string[]). Read fresh per
+ * run so project-level overrides apply without restarting the session.
+ */
+export function readWorktreeSetupSettings(
+	cwd: string,
+	agentDir?: string,
+): WorktreeSetupSettings {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const copy = getConfigStringArray(merged, "maestro", "worktree.copy", []);
+	const setup = getConfigString(merged, "maestro", "worktree.setup", "");
+	const link = getConfigStringArray(merged, "maestro", "worktree.link", []);
+	return {
+		...(copy.length > 0 ? { copy: [...copy] } : {}),
+		...(setup.trim() !== "" ? { setupCommand: setup } : {}),
+		...(link.length > 0 ? { linkPaths: [...link] } : {}),
 	};
 }
 

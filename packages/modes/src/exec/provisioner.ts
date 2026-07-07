@@ -2,7 +2,7 @@
 // session assembly for execution agents. Self-contained seam — the supervisor
 // (Wave 3) composes these; nothing here spawns processes or touches tmux.
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	cpSync,
@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
 import {
 	CURRENT_SESSION_VERSION,
 	type SessionHeader,
@@ -86,18 +87,24 @@ export interface ProvisionEnvironmentResult {
 	setupRan: boolean;
 }
 
+const execFileAsync = promisify(execFile);
+
 /**
  * Prepare a fresh worktree's environment: copy gitignored files, symlink
  * explicitly listed paths, clone node_modules copy-on-write where the
  * filesystem supports it, then run the setup command when no dependency
  * fast-path applied. Failures throw — provisioning must not hand agents a
  * half-built tree.
+ *
+ * Async because the clone and the setup command can take seconds to minutes;
+ * their old execFileSync forms blocked the maestro's event loop (RPC, tmux
+ * polling) for the whole install.
  */
-export function provisionEnvironment(
+export async function provisionEnvironment(
 	worktreePath: string,
 	mainCheckoutPath: string,
 	opts: ProvisionEnvironmentOpts = {},
-): ProvisionEnvironmentResult {
+): Promise<ProvisionEnvironmentResult> {
 	const copied: string[] = [];
 	for (const rel of opts.copy ?? []) {
 		const src = join(mainCheckoutPath, rel);
@@ -135,13 +142,20 @@ export function provisionEnvironment(
 		linked.push(rel);
 	}
 
-	const nodeModulesCloned = cloneNodeModules(worktreePath, mainCheckoutPath);
+	const nodeModulesCloned = await cloneNodeModules(
+		worktreePath,
+		mainCheckoutPath,
+	);
 
+	// The fast-path also covers re-activation: a worktree whose node_modules
+	// already exists (provisioned on an earlier run) must not re-run setup.
 	const fastPathApplied =
-		nodeModulesCloned || linked.some((rel) => basename(rel) === "node_modules");
+		nodeModulesCloned ||
+		existsSync(join(worktreePath, "node_modules")) ||
+		linked.some((rel) => basename(rel) === "node_modules");
 	let setupRan = false;
 	if (opts.setupCommand && !fastPathApplied) {
-		runSetupCommand(worktreePath, opts.setupCommand);
+		await runSetupCommand(worktreePath, opts.setupCommand);
 		setupRan = true;
 	}
 
@@ -149,16 +163,16 @@ export function provisionEnvironment(
 }
 
 /** macOS/APFS copy-on-write clone of node_modules; silent no-op elsewhere. */
-function cloneNodeModules(
+async function cloneNodeModules(
 	worktreePath: string,
 	mainCheckoutPath: string,
-): boolean {
+): Promise<boolean> {
 	if (process.platform !== "darwin") return false;
 	const src = join(mainCheckoutPath, "node_modules");
 	const dest = join(worktreePath, "node_modules");
 	if (!existsSync(src) || existsSync(dest)) return false;
 	try {
-		execFileSync("cp", ["-c", "-R", src, dest], { stdio: "pipe" });
+		await execFileAsync("cp", ["-c", "-R", src, dest]);
 		return true;
 	} catch {
 		// Non-APFS or cp without clone support — fall back to setupCommand.
@@ -167,14 +181,14 @@ function cloneNodeModules(
 	}
 }
 
-function runSetupCommand(worktreePath: string, setupCommand: string): void {
+async function runSetupCommand(
+	worktreePath: string,
+	setupCommand: string,
+): Promise<void> {
 	const argv = setupCommand.split(/\s+/).filter((s) => s.length > 0);
 	if (argv.length === 0) return;
 	try {
-		execFileSync(argv[0], argv.slice(1), {
-			cwd: worktreePath,
-			stdio: "pipe",
-		});
+		await execFileAsync(argv[0], argv.slice(1), { cwd: worktreePath });
 	} catch (err) {
 		const stderr =
 			err instanceof Error && "stderr" in err

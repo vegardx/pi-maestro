@@ -2,6 +2,7 @@
 // the concrete adapter — so the execution internals (provisioner, supervisor,
 // rpc-router) can be completed behind this interface.
 
+import type { Answers } from "@vegardx/pi-contracts";
 import type { GroupExecutor } from "../group-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
@@ -45,7 +46,11 @@ export interface ExecutionGroupSnapshot {
  */
 export interface ExecutionHandle {
 	/** Pending agent questions awaiting a user /answer. */
-	readonly questionQueue: { all(): readonly PendingQuestion[] };
+	readonly questionQueue: {
+		all(): readonly PendingQuestion[];
+		/** Resolve an agent's entry and dequeue it (never resolve() directly). */
+		answer(agentId: string, answers: Answers): void;
+	};
 	/** Start the RPC server and prepare the plan dir. */
 	start(): Promise<void>;
 	/** Advance the executor; returns the number of newly activated groups. */

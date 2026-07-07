@@ -2,7 +2,7 @@
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers } from "@vegardx/pi-contracts";
@@ -14,7 +14,6 @@ import {
 	type TokenSnapshot,
 } from "@vegardx/pi-rpc";
 import * as realTmux from "@vegardx/pi-tmux";
-import { buildAgentSeed, buildWorkerSeed } from "../agent-lifecycle.js";
 import { agentName } from "../agent-names.js";
 import type { PlanEngine } from "../engine.js";
 import { type ExecutorDeps, GroupExecutor } from "../group-executor.js";
@@ -29,7 +28,7 @@ import {
 	provisionWorktree,
 } from "./provisioner.js";
 import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
-import { truncateSummary } from "./seeds.js";
+import { buildSeed, type SeedSummaries, truncateSummary } from "./seeds.js";
 import { shipGroup as shipGroupReal } from "./shipper.js";
 
 /**
@@ -160,6 +159,9 @@ export class ExecutionAdapter {
 			},
 			onDisconnect: (agentId) => {
 				this.idleCount.delete(agentId);
+				// A dead agent can never consume answers — drop its pending
+				// question so /answer doesn't offer a phantom entry.
+				this.questionQueue.drop(agentId);
 			},
 		});
 
@@ -203,34 +205,30 @@ export class ExecutionAdapter {
 						spawnOpts.kickoffMessage ??
 						"Your session was resumed. Review your progress and continue.";
 				} else {
-					// Build the seed/prompt for this agent
-					const depSummaries = this.collectDepSummaries(spawnOpts.groupId);
-					let seed: string;
-					if (isWorker) {
-						seed = buildWorkerSeed(group, {
-							depSummaries,
-							siblingeSummaries: [],
-						});
-					} else {
-						const agentSpec = group.agents.find(
-							(a) => a.name === spawnOpts.agentName,
-						);
-						if (!agentSpec)
-							throw new Error(
-								`agent ${spawnOpts.agentName} not found in group`,
-							);
-						seed = buildAgentSeed(group, agentSpec, {
-							depSummaries,
-							siblingeSummaries: [],
-						});
-					}
+					// Deterministic framed seed: Prior Work (dep-group summaries) →
+					// Findings from Earlier Review (done siblings) → the assignment.
+					const seed = buildSeed({
+						plan: this.engine.get(),
+						group,
+						agentName: spawnOpts.agentName,
+						summaries: this.collectSeedSummaries(spawnOpts.groupId),
+					});
 
-					// Build session file (JSONL) with modes state + seed
+					// Build session file (JSONL): fork the plan's frozen knowledge
+					// session when it exists (shared cache prefix), then append
+					// modes state + seed.
+					const knowledgeSessionPath = join(
+						this.opts.planDir,
+						"base-knowledge.jsonl",
+					);
 					const session = buildAgentSessionFile({
 						agentKey,
 						seed,
 						cwd,
 						outDir: agentSessionDir,
+						...(existsSync(knowledgeSessionPath)
+							? { knowledgeSessionPath }
+							: {}),
 					});
 					sessionFile = session.path;
 					kickoffMessage =
@@ -313,7 +311,7 @@ export class ExecutionAdapter {
 					baseBranch: worktreeOpts.baseBranch,
 				});
 				if (!this.provisionedWorktrees.has(path)) {
-					provisionEnvironment(
+					await provisionEnvironment(
 						path,
 						worktreeOpts.repoPath,
 						this.opts.worktreeSetup ?? {},
@@ -936,19 +934,32 @@ export class ExecutionAdapter {
 		}
 	}
 
-	private collectDepSummaries(groupId: string): string[] {
+	/**
+	 * Stored summaries feeding buildSeed: completed dep groups' group
+	 * summaries plus summaries of siblings that already finished in this group
+	 * (e.g. the worker's summary seeding its reviewers).
+	 */
+	private collectSeedSummaries(groupId: string): SeedSummaries {
 		const plan = this.engine.get();
 		const group = plan.groups.find((g) => g.id === groupId);
-		if (!group?.dependsOn?.length) return [];
 
-		const summaries: string[] = [];
-		for (const depId of group.dependsOn) {
+		const groups = new Map<string, string>();
+		for (const depId of group?.dependsOn ?? []) {
 			const dep = plan.groups.find((g) => g.id === depId);
-			if (dep?.summary) {
-				summaries.push(`## From: ${dep.title} (${dep.id})\n${dep.summary}`);
+			if (dep?.summary) groups.set(depId, dep.summary);
+		}
+
+		const agents = new Map<string, string>();
+		const groupState = this.executor.getStates().get(groupId);
+		if (groupState) {
+			for (const [name, state] of groupState.agents) {
+				if (state.status === "done" && state.summary) {
+					agents.set(name, state.summary);
+				}
 			}
 		}
-		return summaries;
+
+		return { groups, agents };
 	}
 }
 

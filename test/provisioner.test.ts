@@ -106,9 +106,9 @@ describe("provisionEnvironment", () => {
 		});
 	});
 
-	it("copies listed gitignored files and skips missing sources", () => {
+	it("copies listed gitignored files and skips missing sources", async () => {
 		writeFileSync(join(repo, ".env"), "SECRET=1\n");
-		const result = provisionEnvironment(worktree, repo, {
+		const result = await provisionEnvironment(worktree, repo, {
 			copy: [".env", ".env.local"],
 		});
 		expect(result.copied).toEqual([".env"]);
@@ -116,10 +116,10 @@ describe("provisionEnvironment", () => {
 		expect(existsSync(join(worktree, ".env.local"))).toBe(false);
 	});
 
-	it("copies nested paths, creating parent directories", () => {
+	it("copies nested paths, creating parent directories", async () => {
 		mkdirSync(join(repo, "config", "local"), { recursive: true });
 		writeFileSync(join(repo, "config", "local", "dev.json"), "{}\n");
-		const result = provisionEnvironment(worktree, repo, {
+		const result = await provisionEnvironment(worktree, repo, {
 			copy: ["config/local/dev.json"],
 		});
 		expect(result.copied).toEqual(["config/local/dev.json"]);
@@ -128,10 +128,10 @@ describe("provisionEnvironment", () => {
 		);
 	});
 
-	it("symlinks only explicitly listed paths", () => {
+	it("symlinks only explicitly listed paths", async () => {
 		mkdirSync(join(repo, "vendor-cache"));
 		writeFileSync(join(repo, "vendor-cache", "blob.bin"), "data");
-		const result = provisionEnvironment(worktree, repo, {
+		const result = await provisionEnvironment(worktree, repo, {
 			linkPaths: ["vendor-cache"],
 		});
 		expect(result.linked).toEqual(["vendor-cache"]);
@@ -140,16 +140,16 @@ describe("provisionEnvironment", () => {
 		expect(readFileSync(join(dest, "blob.bin"), "utf8")).toBe("data");
 	});
 
-	it("throws when a linkPaths source is missing", () => {
-		expect(() =>
+	it("throws when a linkPaths source is missing", async () => {
+		await expect(
 			provisionEnvironment(worktree, repo, { linkPaths: ["nope"] }),
-		).toThrow(/linkPaths source nope does not exist/);
+		).rejects.toThrow(/linkPaths source nope does not exist/);
 	});
 
-	it("clones node_modules on macOS and skips setup when it applied", () => {
+	it("clones node_modules on macOS and skips setup when it applied", async () => {
 		mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
 		writeFileSync(join(repo, "node_modules", "pkg", "index.js"), "x");
-		const result = provisionEnvironment(worktree, repo, {
+		const result = await provisionEnvironment(worktree, repo, {
 			setupCommand: "touch setup.marker",
 		});
 		if (process.platform === "darwin") {
@@ -165,18 +165,30 @@ describe("provisionEnvironment", () => {
 		}
 	});
 
-	it("runs the setup command without a shell when no fast-path applied", () => {
-		const result = provisionEnvironment(worktree, repo, {
+	it("skips setup when node_modules already exists in the worktree", async () => {
+		// Re-activation: a previously provisioned worktree already has its
+		// dependencies — setupCommand must not run again.
+		mkdirSync(join(worktree, "node_modules", "pkg"), { recursive: true });
+		const result = await provisionEnvironment(worktree, repo, {
+			setupCommand: "touch setup.marker",
+		});
+		expect(result.nodeModulesCloned).toBe(false);
+		expect(result.setupRan).toBe(false);
+		expect(existsSync(join(worktree, "setup.marker"))).toBe(false);
+	});
+
+	it("runs the setup command without a shell when no fast-path applied", async () => {
+		const result = await provisionEnvironment(worktree, repo, {
 			setupCommand: "touch setup.marker",
 		});
 		expect(result.setupRan).toBe(true);
 		expect(existsSync(join(worktree, "setup.marker"))).toBe(true);
 	});
 
-	it("does not interpret shell metacharacters in the setup command", () => {
+	it("does not interpret shell metacharacters in the setup command", async () => {
 		// Under a shell `>redir.marker` would be a redirection creating
 		// `redir.marker`; without one it is a literal filename argument.
-		provisionEnvironment(worktree, repo, {
+		await provisionEnvironment(worktree, repo, {
 			setupCommand: "touch a.marker >redir.marker",
 		});
 		expect(existsSync(join(worktree, "a.marker"))).toBe(true);
@@ -184,12 +196,14 @@ describe("provisionEnvironment", () => {
 		expect(existsSync(join(worktree, "redir.marker"))).toBe(false);
 	});
 
-	it("throws with a clear message when the setup command fails", () => {
-		expect(() =>
+	it("throws with a clear message when the setup command fails", async () => {
+		await expect(
 			provisionEnvironment(worktree, repo, {
 				setupCommand: "git rev-parse --verify no-such-ref",
 			}),
-		).toThrow(/setup command "git rev-parse --verify no-such-ref" failed/);
+		).rejects.toThrow(
+			/setup command "git rev-parse --verify no-such-ref" failed/,
+		);
 	});
 });
 

@@ -42,6 +42,7 @@ import { appendModesState, collectBudgetText } from "../session.js";
 import {
 	type ImplementOverrides,
 	readModesCompactionSettings,
+	readWorktreeSetupSettings,
 	setImplementOverrides,
 } from "../settings.js";
 import {
@@ -496,6 +497,7 @@ export function createRuntimeContext(
 						extensionPaths: discoverExtensionPaths(),
 						planDir: join(plansRoot(), activeEngine.get().slug),
 						defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
+						worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
 						onPlanChanged: () => rt.emitPlanChanged(),
 						onAgentStateChanged: (id, state) => {
 							usageLedger.record({ kind: "agent", id }, state.tokens);

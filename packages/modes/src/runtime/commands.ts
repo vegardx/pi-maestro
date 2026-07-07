@@ -5,15 +5,15 @@
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
-	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
+import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
 import { resolveModelWithin } from "@vegardx/pi-models";
 import { buildCarryForwardSummary } from "../compaction.js";
 import type { PlanEngine } from "../engine.js";
+import { reconcileShippedGroups } from "../exec/shipper.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
 import { buildRecap } from "../group-recap.js";
 import { resolveShipSummaryInput } from "../session.js";
@@ -27,10 +27,8 @@ import {
 	type DeliverableId,
 	findDeliverable,
 	nextShippableDeliverable,
-	parkPlan,
 	renderPlanSummary,
 	shipDeliverableFromPlan,
-	syncPrState,
 } from "./stubs.js";
 
 export function registerRuntimeCommands(rt: RuntimeContext): void {
@@ -130,22 +128,34 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	});
 
 	pi.registerCommand("sync", {
-		description: "Reconcile merged/closed deliverable PRs back into the plan.",
+		description:
+			"Reconcile shipped groups' PRs: retarget stacked PRs whose base merged.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (!rt.engine) {
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			// No session-repo guard: sync is gh-only and reconciles each
-			// deliverable against its own repo, regardless of the session cwd.
-			const result = await syncPrState(rt.engine, {
-				state: async (prNumber: number, repoPath: string) =>
-					prStateViaGh(pi, repoPath, prNumber),
-			});
-			rt.emitPlanChanged();
+			// No session-repo guard: sync is gh-only and reconciles each group
+			// against its own repo, regardless of the session cwd.
+			const report = await reconcileShippedGroups({ plan: rt.engine.get() });
+			const lines: string[] = [];
+			for (const r of report.retargeted) {
+				lines.push(
+					`retargeted ${r.groupId} PR #${r.prNumber}: ${r.from} → ${r.to}`,
+				);
+			}
+			for (const r of report.needsRebase) {
+				lines.push(`needs-rebase ${r.groupId}: ${r.message}`);
+			}
+			for (const e of report.errors) {
+				lines.push(`error ${e.groupId}: ${e.message}`);
+			}
+			const summary = `Sync complete: retargeted=${report.retargeted.length} needs-rebase=${report.needsRebase.length} errors=${report.errors.length}.`;
 			ctx.ui.notify(
-				`Sync complete: shipped=${result.shipped.length} closed=${result.closed.length}.`,
-				"info",
+				lines.length > 0 ? `${summary}\n${lines.join("\n")}` : summary,
+				report.errors.length > 0 || report.needsRebase.length > 0
+					? "warning"
+					: "info",
 			);
 		},
 	});
@@ -157,16 +167,9 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			const result = await parkPlan(rt.engine, {
-				createIssue: (
-					input: { title: string; body: string; parent?: number },
-					repoPath: string,
-				) => createIssueViaGh(pi, repoPath, input),
-			});
-			rt.emitPlanChanged();
 			ctx.ui.notify(
-				`Parked plan as issue #${result.parent} (${result.children.length} deliverable issues).`,
-				"info",
+				"/park is not yet implemented in the group model — the plan stays in maestro/plans/ and can be resumed with /plan.",
+				"warning",
 			);
 		},
 	});
@@ -247,16 +250,20 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				cmdCtx.ui.notify("No questions pending.", "info");
 				return;
 			}
-			// Answer the first pending question
+			// Answer the oldest pending entry (FIFO), one prompt per question.
 			const entry = pending[0];
-			const answer = await cmdCtx.ui.input(
-				`${entry.agentName}: ${entry.questions[0]?.question ?? "Question"}`,
-				"Type your answer...",
-			);
-			if (answer) {
-				entry.resolve([
-					{ questionId: entry.questions[0]?.id ?? "0", value: answer },
-				]);
+			const answers: Answer[] = [];
+			for (const question of entry.questions) {
+				const answer = await cmdCtx.ui.input(
+					`${entry.agentName}: ${question.question}`,
+					"Type your answer...",
+				);
+				if (answer) answers.push({ questionId: question.id, value: answer });
+			}
+			if (answers.length > 0) {
+				// Dequeue through the queue so the entry doesn't linger as a
+				// phantom question after it has been resolved.
+				rt.execution.questionQueue.answer(entry.agentId, answers);
 				cmdCtx.ui.notify(`✓ Answered ${entry.agentName}`, "info");
 			}
 		},
@@ -315,20 +322,14 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 						details: {},
 					};
 				}
-				const deliverableId = process.env.PI_MAESTRO_AGENT_ID as
-					| DeliverableId
-					| undefined;
-				const result = await commit.shipDeliverable({
-					autoApprove: true,
-					deliverableId,
+				const result = await commit.commitLocal({
 					message: params.message,
 					paths: params.paths,
-					openPr: false,
 					cwd: active.cwd,
 				});
-				const text = !result.committed
-					? "Nothing to commit."
-					: `Committed ${result.sha ?? result.branch}.`;
+				const text = result.committed
+					? `Committed ${result.sha ?? "changes"}.`
+					: `Nothing committed: ${result.error ?? "no changes staged"}.`;
 				return { content: [{ type: "text", text }], details: { result } };
 			},
 		}),
@@ -337,62 +338,51 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	pi.registerTool(
 		defineTool({
 			name: "ship",
-			label: "Ship deliverable",
+			label: "Ship branch",
 			description:
-				"Push your branch and open/update a PR. This is the FINAL step — " +
-				"commit your work first with the commit tool, then ship when done. " +
-				"Auto-toggles remaining tasks on success.",
+				"Push the current branch and open/update a PR. Maestro/interactive " +
+				"use only — execution agents commit locally and let the maestro " +
+				"ship the group.",
 			parameters: Type.Object({}),
 			async execute(_id, _params, _signal, _onUpdate, active) {
-				const commit = maestro.capabilities.get(CAPABILITIES.commit);
-				if (!commit) {
+				// Execution agents never ship: the maestro pushes the group's
+				// branch and opens the PR once the group completes (exec/shipper).
+				if (process.env.PI_MAESTRO_AGENT_ID) {
 					return {
 						content: [
 							{
 								type: "text",
-								text: "Ship unavailable (commit capability absent).",
+								text:
+									"Shipping is owned by the maestro. Commit your work with " +
+									"the commit tool and toggle your tasks when done — the " +
+									"maestro pushes the branch and opens the PR when the " +
+									"group completes.",
 							},
 						],
 						details: {},
 					};
 				}
-				const deliverableId = process.env.PI_MAESTRO_AGENT_ID as
-					| DeliverableId
-					| undefined;
-				const result = await commit.shipDeliverable({
-					autoApprove: true,
-					deliverableId,
-					openPr: true,
-					cwd: active.cwd,
-				});
-				if (!result.pushed && !result.pr) {
+				const shipper = maestro.capabilities.get(CAPABILITIES.ship);
+				if (!shipper) {
 					return {
 						content: [
-							{ type: "text", text: "Nothing to ship (no commits to push)." },
+							{
+								type: "text",
+								text: "Ship unavailable (ship capability absent).",
+							},
 						],
 						details: {},
 					};
 				}
-
-				// Auto-toggle remaining gating tasks on successful ship
-				if (deliverableId && rt.agentBridge) {
-					const planContent = await rt.agentBridge.planRead();
-					// Parse task IDs from plan markdown: lines matching "- [ ] ... `taskId`"
-					const untoggled: string[] = [];
-					for (const line of planContent.split("\n")) {
-						const m = line.match(/^- \[ \] .+`([^`]+)`/);
-						if (m) untoggled.push(m[1]);
-					}
-					for (const taskId of untoggled) {
-						await rt.agentBridge.planMutate("toggleTask", deliverableId, {
-							taskId,
-						});
-					}
-				}
-
+				const result = await shipper.ship({
+					autoApprove: true,
+					cwd: active.cwd,
+				});
 				const text = result.pr
 					? `Shipped ${result.branch} → PR #${result.pr}.`
-					: `Pushed ${result.branch}.`;
+					: result.pushed
+						? `Pushed ${result.branch}.`
+						: "Nothing shipped (push failed or no commits to push).";
 				return { content: [{ type: "text", text }], details: { result } };
 			},
 		}),
@@ -468,50 +458,6 @@ async function buildShipSummary(
 		maxTokens: settings.phaseTokens,
 	});
 	return text ?? undefined;
-}
-
-async function prStateViaGh(
-	pi: ExtensionAPI,
-	cwd: string,
-	prNumber: number,
-): Promise<"open" | "merged" | "closed" | null> {
-	const result = await pi.exec(
-		"gh",
-		["pr", "view", String(prNumber), "--json", "state,mergedAt"],
-		{ cwd },
-	);
-	if (result.code !== 0) return null;
-	const parsed = JSON.parse(result.stdout) as {
-		state?: string;
-		mergedAt?: string;
-	};
-	if (parsed.mergedAt) return "merged";
-	if (parsed.state === "OPEN") return "open";
-	if (parsed.state === "CLOSED") return "closed";
-	return null;
-}
-
-async function createIssueViaGh(
-	pi: ExtensionAPI,
-	cwd: string,
-	input: { title: string; body: string; parent?: number },
-): Promise<number> {
-	const body = input.parent
-		? `${input.body}\n\nParent: #${input.parent}`
-		: input.body;
-	const result = await pi.exec(
-		"gh",
-		["issue", "create", "--title", input.title, "--body", body],
-		{ cwd },
-	);
-	if (result.code !== 0) {
-		throw new Error(result.stderr.trim() || "gh issue create failed");
-	}
-	const match =
-		result.stdout.match(/\/(?:issues|issue)\/(\d+)\b/) ??
-		result.stdout.match(/#(\d+)\b/);
-	if (!match) throw new Error(`could not parse issue number: ${result.stdout}`);
-	return Number(match[1]);
 }
 
 type ForwardSummaryInput = {

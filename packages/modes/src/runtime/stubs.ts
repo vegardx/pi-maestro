@@ -24,13 +24,12 @@ export const repoFor = (
 export const repoNameFromPath = (p: string) => p.split("/").pop() ?? "";
 
 // STUB: old shipping exports (group model). `any` returns mirror the deleted
-// API surface the callers still consume.
+// API surface the callers still consume. (/sync now uses the real
+// reconcileShippedGroups from exec/shipper.ts; /park degrades gracefully.)
 export const nextShippableDeliverable = (..._args: unknown[]): any => null;
-export const parkPlan = async (..._args: unknown[]): Promise<any> => {};
 export const shipDeliverableFromPlan = async (
 	..._args: unknown[]
 ): Promise<any> => ({ ok: false });
-export const syncPrState = async (..._args: unknown[]): Promise<any> => ({});
 
 // STUB: worktree/session bookkeeping deleted (group model)
 export const cleanupInactiveWorktrees = (..._args: unknown[]) => {};

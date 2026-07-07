@@ -95,9 +95,13 @@ export function renderAgentsOverview(
 	return lines.join("\n");
 }
 
-/** " — status · Nin/Nout · N turns" for a live agent, or "". */
+/** " — status · Nin/Nout · N turns · cache NN%" for a live agent, or "". */
 function liveSuffix(agent: ExecutionAgentSnapshot | undefined): string {
 	if (!agent) return "";
 	const t = agent.tokens;
-	return ` — ${agent.status} · ${t.input}in/${t.output}out · ${t.turns} turns`;
+	const cache =
+		agent.cacheRatio !== undefined
+			? ` · cache ${Math.round(agent.cacheRatio * 100)}%`
+			: "";
+	return ` — ${agent.status} · ${t.input}in/${t.output}out · ${t.turns} turns${cache}`;
 }

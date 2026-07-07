@@ -41,6 +41,59 @@ import {
 	buildPlanModePreamble,
 } from "./preambles.js";
 
+// ─── Agent tool classes ──────────────────────────────────────────────────────
+// Exactly TWO tool sets exist across execution agents (the two prompt-cache
+// classes). Any per-agent variation here would fragment the shared cache
+// prefix, so the lists are fixed constants and the set arithmetic is a pure
+// exported function (pinned by test/cache-invariants.test.ts).
+
+/** Tools stripped from read-only agents (write/commit/ship/ask surface). */
+export const READ_ONLY_STRIPPED_TOOLS = [
+	"commit",
+	"ship",
+	"edit",
+	"write",
+	"ask",
+] as const;
+
+/** Tools ensured present for read-only agents (findings reporting). */
+export const READ_ONLY_ENSURED_TOOLS = ["task", "plan"] as const;
+
+/** Tools ensured present for full-mode agents (the decision loop). */
+export const FULL_MODE_ENSURED_TOOLS = [
+	"task",
+	"ask",
+	"review",
+	"commit",
+	"ship",
+] as const;
+
+/**
+ * Compute the active tool set for an execution agent session. Pure function
+ * of (mode, available, active) — agents of the same mode with the same
+ * baseline always get the identical set; exactly two distinct sets exist
+ * across the two modes.
+ */
+export function computeAgentSessionTools(
+	agentMode: string | undefined,
+	available: readonly string[],
+	active: readonly string[],
+): string[] {
+	const availableSet = new Set(available);
+	if (agentMode === "read-only") {
+		const stripped = new Set<string>(READ_ONLY_STRIPPED_TOOLS);
+		const kept = active.filter((t) => !stripped.has(t));
+		const needed = READ_ONLY_ENSURED_TOOLS.filter(
+			(t) => availableSet.has(t) && !kept.includes(t),
+		);
+		return [...kept, ...needed];
+	}
+	const missing = FULL_MODE_ENSURED_TOOLS.filter(
+		(t) => availableSet.has(t) && !active.includes(t),
+	);
+	return [...active, ...missing];
+}
+
 export function registerRuntimeHooks(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
 
@@ -118,25 +171,12 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			bridge.start(ctx);
 			// Ensure agents have the tools they need (baseline strips `task`;
 			// `ask`/`review`/`ship`/`commit` must be present for the decision loop).
-			const available = new Set(pi.getAllTools().map((t) => t.name));
+			const available = pi.getAllTools().map((t) => t.name);
 			const active = pi.getActiveTools();
 			const agentModeEnv = process.env.PI_MAESTRO_AGENT_MODE;
-
-			if (agentModeEnv === "read-only") {
-				// Read-only agents: strip write/commit/ship/ask tools
-				const writeTool = new Set(["commit", "ship", "edit", "write", "ask"]);
-				const readOnlyActive = active.filter((t) => !writeTool.has(t));
-				// Ensure task + plan are present for findings reporting
-				const needed = ["task", "plan"].filter(
-					(t) => available.has(t) && !readOnlyActive.includes(t),
-				);
-				pi.setActiveTools([...readOnlyActive, ...needed]);
-			} else {
-				// Full-mode agents: ensure commit/ship/task/ask/review present
-				const missing = ["task", "ask", "review", "commit", "ship"].filter(
-					(t) => available.has(t) && !active.includes(t),
-				);
-				if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
+			const next = computeAgentSessionTools(agentModeEnv, available, active);
+			if (agentModeEnv === "read-only" || next.length !== active.length) {
+				pi.setActiveTools(next);
 			}
 
 			// Route the ask tool to the maestro over RPC (G1 transport).

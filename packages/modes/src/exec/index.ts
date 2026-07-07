@@ -31,6 +31,8 @@ export interface ExecutionAgentSnapshot {
 	readonly status: string;
 	readonly startedAt: number;
 	readonly tokens: ExecutionAgentTokens;
+	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
+	readonly cacheRatio?: number;
 }
 
 export interface ExecutionGroupSnapshot {

@@ -39,6 +39,15 @@ import { shipGroup as shipGroupReal } from "./shipper.js";
  */
 const IDLE_DONE_THRESHOLD = 2;
 
+/**
+ * Window within which a same-tool-class agent's first tokens message makes a
+ * warm prompt-cache prefix expected. A first-turn cache-read ratio below
+ * {@link CACHE_MISS_RATIO_THRESHOLD} inside this window means the shared
+ * knowledge-fork prefix did not hit — logged as a `cache-miss` event.
+ */
+const CACHE_WARM_WINDOW_MS = 5 * 60_000;
+const CACHE_MISS_RATIO_THRESHOLD = 0.5;
+
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
 export interface TmuxApi {
 	spawn(
@@ -101,6 +110,11 @@ export class ExecutionAdapter {
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
 	private tokenSnapshots = new Map<string, TokenSnapshot>(); // agentKey → latest tokens
+	private firstTurnCacheRatio = new Map<string, number>(); // agentKey → first-turn cacheRead ratio
+	private firstTokensSeen = new Map<
+		string,
+		{ at: number; toolClass: "full" | "read-only" }
+	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
 	private lastRounds = new Map<string, number>(); // groupId → last logged fix round
 	private blockedLogged = new Set<string>(); // groupIds with a logged blocked event
@@ -137,6 +151,7 @@ export class ExecutionAdapter {
 					this.handleDone(groupId, agentNamePart);
 				},
 				tokens: (agentId, msg) => {
+					this.recordFirstTurnCache(agentId, msg.snapshot);
 					this.tokenSnapshots.set(agentId, msg.snapshot);
 					this.opts.onAgentStateChanged?.(agentId, {
 						status: "working",
@@ -748,6 +763,7 @@ export class ExecutionAdapter {
 				status: string;
 				startedAt: number;
 				tokens: { input: number; output: number; turns: number };
+				cacheRatio?: number;
 			}
 		>;
 		groups: Map<string, { round: number; blocked?: string }>;
@@ -758,6 +774,7 @@ export class ExecutionAdapter {
 				status: string;
 				startedAt: number;
 				tokens: { input: number; output: number; turns: number };
+				cacheRatio?: number;
 			}
 		>();
 		const groups = new Map<string, { round: number; blocked?: string }>();
@@ -771,6 +788,7 @@ export class ExecutionAdapter {
 			for (const [name, agentState] of groupState.agents) {
 				const key = `${groupId}/${name}`;
 				const tokens = this.tokenSnapshots.get(key);
+				const cacheRatio = this.firstTurnCacheRatio.get(key);
 				agents.set(key, {
 					status: agentState.status,
 					startedAt:
@@ -785,6 +803,7 @@ export class ExecutionAdapter {
 								turns: tokens.turns,
 							}
 						: { input: 0, output: 0, turns: 0 },
+					...(cacheRatio !== undefined ? { cacheRatio } : {}),
 				});
 			}
 		}
@@ -896,6 +915,68 @@ export class ExecutionAdapter {
 			}
 		} finally {
 			this.pollInFlight = false;
+		}
+	}
+
+	// --- Cache-efficiency surfacing ---
+
+	/**
+	 * The agent's prompt-cache class: full-mode and read-only agents have
+	 * distinct tool sets (two cache classes); agents of the same class share a
+	 * byte-identical prefix and should hit each other's warm cache.
+	 */
+	private agentToolClass(agentKey: string): "full" | "read-only" {
+		const [groupId, name] = agentKey.split("/");
+		const group = this.engine.get().groups.find((g) => g.id === groupId);
+		if (!group) return "full";
+		const mode =
+			name === "worker"
+				? group.worker.mode
+				: (group.agents.find((a) => a.name === name)?.mode ?? "read-only");
+		return mode === "read-only" ? "read-only" : "full";
+	}
+
+	/**
+	 * On an agent's FIRST tokens message, record its cache-read ratio
+	 * (cacheRead / (cacheRead + input)). When the ratio is low but a warm
+	 * prefix was expected — another agent of the same tool class started
+	 * within {@link CACHE_WARM_WINDOW_MS} — log a `cache-miss` event.
+	 * Observability only: never throws.
+	 */
+	private recordFirstTurnCache(agentKey: string, snap: TokenSnapshot): void {
+		try {
+			if (this.tokenSnapshots.has(agentKey)) return;
+			const toolClass = this.agentToolClass(agentKey);
+			const now = Date.now();
+
+			// Most recent same-class first-tokens arrival inside the warm window.
+			let warmPeer: { key: string; at: number } | undefined;
+			for (const [key, seen] of this.firstTokensSeen) {
+				if (key === agentKey || seen.toolClass !== toolClass) continue;
+				if (now - seen.at > CACHE_WARM_WINDOW_MS) continue;
+				if (!warmPeer || seen.at > warmPeer.at) {
+					warmPeer = { key, at: seen.at };
+				}
+			}
+			this.firstTokensSeen.set(agentKey, { at: now, toolClass });
+
+			const denominator = snap.cacheRead + snap.input;
+			if (denominator <= 0) return;
+			const ratio = snap.cacheRead / denominator;
+			this.firstTurnCacheRatio.set(agentKey, ratio);
+
+			if (ratio < CACHE_MISS_RATIO_THRESHOLD && warmPeer) {
+				this.logEvent("cache-miss", {
+					agentKey,
+					class: toolClass,
+					expectedWarmBecause: `same-class agent ${warmPeer.key} received first tokens ${Math.round((now - warmPeer.at) / 1000)}s ago`,
+					ratio,
+					input: snap.input,
+					cacheRead: snap.cacheRead,
+				});
+			}
+		} catch {
+			// Observability only — never let cache accounting break execution.
 		}
 	}
 

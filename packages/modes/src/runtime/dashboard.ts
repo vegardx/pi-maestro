@@ -5,8 +5,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
+import type { ResearchRunView } from "../research.js";
 import type { Plan } from "../schema.js";
 import {
+	type AgentTableAgent,
 	buildAgentTable,
 	hasActiveAgents,
 	styleAgentTable,
@@ -51,21 +53,60 @@ const AGENT_WIDGET_KEY = "maestro-agents";
 const AGENT_WIDGET_TICK_MS = 5_000;
 
 /**
- * Render the live agent table into the widget above the editor. Called on
- * every agent state change; while any agent is active a 5s timer re-syncs so
- * the ELAPSED column ticks. When none are active the widget is cleared and
- * the timer stopped.
+ * Map live research runs onto agent-table rows: GROUP "research", AGENT =
+ * question slug, STATUS from the child's current tool (searching/reading/
+ * working), TOKENS from run progress events.
+ */
+export function researchTableAgents(
+	runs: ReadonlyMap<string, ResearchRunView>,
+): Map<string, AgentTableAgent> {
+	const rows = new Map<string, AgentTableAgent>();
+	for (const run of runs.values()) {
+		if (run.status !== "running") continue;
+		let key = `research/${run.label}`;
+		for (let n = 2; rows.has(key); n++) key = `research/${run.label}-${n}`;
+		rows.set(key, {
+			status: researchStatus(run),
+			startedAt: run.startedAt,
+			tokens: {
+				input: run.tokensIn ?? 0,
+				output: run.tokensOut ?? 0,
+				turns: 0,
+			},
+		});
+	}
+	return rows;
+}
+
+function researchStatus(run: ResearchRunView): string {
+	if (run.activity === "websearch") return "searching";
+	if (run.activity === "webfetch" || run.activity === "context7")
+		return "reading";
+	if (run.activity === "read" || run.activity === "grep") return "reading";
+	return "working";
+}
+
+/**
+ * Render the live agent table into the widget above the editor. Rows merge
+ * two sources: execution agents (ExecutionHandle.snapshot()) and plan-mode
+ * research runs (rt.researchRuns). Called on every state change; while any
+ * row is active a 5s timer re-syncs so ELAPSED (and research tokens) tick.
+ * When none are active the widget is cleared and the timer stopped.
  */
 export function syncAgentWidget(
 	rt: RuntimeContext,
 	ctx: ExtensionContext,
 ): void {
 	const snap = rt.execution?.snapshot();
-	if (!snap || !hasActiveAgents(snap.agents)) {
+	const agents = new Map([
+		...(snap?.agents ?? []),
+		...researchTableAgents(rt.researchRuns),
+	]);
+	if (!hasActiveAgents(agents)) {
 		clearAgentWidget(rt, ctx);
 		return;
 	}
-	const { agents, groups } = snap;
+	const groups = snap?.groups;
 	const now = Date.now();
 	ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (_tui, theme) => ({
 		render: (width: number) =>

@@ -17,8 +17,31 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExecutionEvent } from "../exec/index.js";
+import type { ResearchKind } from "../research.js";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
+
+/** Plan-phase research milestones, rendered by the same card renderer. */
+export type ResearchCardEvent =
+	| {
+			readonly kind: "research-spawn";
+			readonly question: string;
+			readonly research: ResearchKind;
+	  }
+	| {
+			readonly kind: "research-done";
+			readonly question: string;
+			readonly research: ResearchKind;
+			readonly ok: boolean;
+			readonly durationMs: number;
+			/** Report path relative to the plan dir, e.g. "research/03-….md". */
+			readonly reportPath?: string;
+			readonly report?: string;
+			readonly error?: string;
+	  };
+
+/** Everything the agent-event card renderer accepts. */
+export type AgentCardEvent = ExecutionEvent | ResearchCardEvent;
 
 /** Background tint keys accepted by theme.bg (type not exported upstream). */
 type ThemeBgColor = Parameters<Theme["bg"]>[0];
@@ -51,10 +74,11 @@ function agentRole(agentKey: string): string {
 const plural = (n: number, word: string): string =>
 	`${n} ${word}${n === 1 ? "" : "s"}`;
 
-/** Theme color for a card's header text, keyed by event kind. */
-export function eventColor(kind: ExecutionEvent["kind"]): ThemeColor {
-	switch (kind) {
+/** Theme color for a card's header text, keyed by event. */
+export function eventColor(event: AgentCardEvent): ThemeColor {
+	switch (event.kind) {
 		case "spawn":
+		case "research-spawn":
 			return "accent";
 		case "done":
 		case "shipped":
@@ -66,6 +90,8 @@ export function eventColor(kind: ExecutionEvent["kind"]): ThemeColor {
 			return "error";
 		case "settled":
 			return "accent";
+		case "research-done":
+			return event.ok ? "success" : "error";
 	}
 }
 
@@ -80,8 +106,8 @@ export function eventColor(kind: ExecutionEvent["kind"]): ThemeColor {
  *   spawn/settled  → customMessageBg (neutral/accent tint; accent hue is
  *                    carried by the theme.fg("accent") header)
  */
-export function eventBg(kind: ExecutionEvent["kind"]): ThemeBgColor {
-	switch (kind) {
+export function eventBg(event: AgentCardEvent): ThemeBgColor {
+	switch (event.kind) {
 		case "done":
 		case "shipped":
 			return "toolSuccessBg";
@@ -92,13 +118,28 @@ export function eventBg(kind: ExecutionEvent["kind"]): ThemeBgColor {
 			return "toolErrorBg";
 		case "spawn":
 		case "settled":
+		case "research-spawn":
 			return "customMessageBg";
+		case "research-done":
+			return event.ok ? "toolSuccessBg" : "toolErrorBg";
 	}
 }
 
+/** Question text fit for a one-line header. */
+function shortQuestion(question: string): string {
+	const flat = question.replace(/\s+/g, " ").trim();
+	return flat.length > 64 ? `${flat.slice(0, 63)}…` : flat;
+}
+
 /** One-line card header — `<icon> <group> · <what happened>`. */
-export function buildCardHeader(event: ExecutionEvent): string {
+export function buildCardHeader(event: AgentCardEvent): string {
 	switch (event.kind) {
+		case "research-spawn":
+			return `◇ research (${event.research}) · ${shortQuestion(event.question)}`;
+		case "research-done":
+			return event.ok
+				? `✓ research · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
+				: `✗ research failed · ${shortQuestion(event.question)}`;
 		case "spawn":
 			return `◆ ${event.groupTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
 		case "done":
@@ -142,13 +183,24 @@ function restOfSummary(summary: string): string {
  * commit list.
  */
 export function buildCardBody(
-	event: ExecutionEvent,
+	event: AgentCardEvent,
 	expanded: boolean,
 ): string[] {
 	switch (event.kind) {
 		case "spawn":
+		case "research-spawn":
 			// Spawn stays minimal: header line only, no body.
 			return [];
+		case "research-done": {
+			if (!event.ok) return event.error ? [event.error] : [];
+			if (!event.report) return [];
+			const lines = [firstParagraph(event.report)];
+			if (expanded) {
+				const rest = restOfSummary(event.report);
+				if (rest) lines.push("", rest);
+			}
+			return lines;
+		}
 		case "done": {
 			const lines: string[] = [];
 			if (event.summary) {
@@ -182,11 +234,18 @@ export function buildCardBody(
 }
 
 /** Dim one-line stats trailer — "↳ …" under the body; "" when none. */
-export function buildStatsTrailer(event: ExecutionEvent): string {
+export function buildStatsTrailer(event: AgentCardEvent): string {
 	switch (event.kind) {
 		case "spawn":
 		case "settled":
+		case "research-spawn":
 			return "";
+		case "research-done": {
+			if (!event.ok) return "";
+			const parts: string[] = [event.research];
+			if (event.reportPath) parts.push(event.reportPath);
+			return `↳ ${parts.join(" · ")}`;
+		}
 		case "done": {
 			const t = event.tokens;
 			const parts: string[] = [];
@@ -222,7 +281,7 @@ function assembleLines(
 }
 
 /** Plain-text fallback (message content) — same summary-first layout. */
-export function buildEventContent(event: ExecutionEvent): string {
+export function buildEventContent(event: AgentCardEvent): string {
 	return assembleLines(
 		buildCardHeader(event),
 		buildCardBody(event, false),
@@ -230,8 +289,8 @@ export function buildEventContent(event: ExecutionEvent): string {
 	).join("\n");
 }
 
-/** Mirror an execution event into the chat as a progress-card message. */
-export function sendAgentEvent(pi: ExtensionAPI, event: ExecutionEvent): void {
+/** Mirror an execution/research event into the chat as a progress card. */
+export function sendAgentEvent(pi: ExtensionAPI, event: AgentCardEvent): void {
 	pi.sendMessage(
 		{
 			customType: AGENT_EVENT_MESSAGE_TYPE,
@@ -245,7 +304,7 @@ export function sendAgentEvent(pi: ExtensionAPI, event: ExecutionEvent): void {
 
 /** Register the TUI renderer for maestro.agent.event messages. */
 export function registerAgentCardRenderer(pi: ExtensionAPI): void {
-	pi.registerMessageRenderer<ExecutionEvent>(
+	pi.registerMessageRenderer<AgentCardEvent>(
 		AGENT_EVENT_MESSAGE_TYPE,
 		(message, options, theme) => {
 			const event = message.details;
@@ -255,7 +314,7 @@ export function registerAgentCardRenderer(pi: ExtensionAPI): void {
 					typeof message.content === "string" ? message.content : "";
 				return new Text(content, 0, 0);
 			}
-			const header = theme.fg(eventColor(event.kind), buildCardHeader(event));
+			const header = theme.fg(eventColor(event), buildCardHeader(event));
 			const body = buildCardBody(event, options.expanded === true);
 			const trailer = buildStatsTrailer(event);
 			const lines = [header];
@@ -264,7 +323,7 @@ export function registerAgentCardRenderer(pi: ExtensionAPI): void {
 			// Tool-call style frame: padded Text with a per-kind bg tint,
 			// word-wrapped natively by the component.
 			return new Text(lines.join("\n"), 1, 1, (text) =>
-				theme.bg(eventBg(event.kind), text),
+				theme.bg(eventBg(event), text),
 			);
 		},
 	);

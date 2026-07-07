@@ -30,10 +30,11 @@ function memStore(): PlanStore {
 }
 
 describe("buildPlanModePreamble", () => {
-	it("shows new plan message when no engine", () => {
+	it("starts new plans in the exploring phase", () => {
 		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("PLAN MODE");
-		expect(preamble).toContain("work groups");
+		expect(preamble).toContain("EXPLORING");
+		expect(preamble).toContain("Do NOT form a plan yet");
 	});
 
 	it("shows update message for existing plan", () => {
@@ -46,24 +47,59 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("PLAN MODE updating plan `my-plan`");
 	});
 
-	it("includes delegate guidance", () => {
+	it("exploring guides the research loop and the readiness gate", () => {
 		const preamble = buildPlanModePreamble(undefined);
-		expect(preamble).toContain("explorer");
-		expect(preamble).toContain("researcher");
+		expect(preamble).toContain("`research`");
+		expect(preamble).toContain("codebase");
+		expect(preamble).toContain("web");
 		expect(preamble).toContain("advisor");
+		expect(preamble).toContain("`readiness`");
+		// Structure tools are locked — no structuring workflow yet.
+		expect(preamble).not.toContain("group(action");
 	});
 
-	it("includes convergence criteria", () => {
-		const preamble = buildPlanModePreamble(undefined);
-		expect(preamble).toContain("file paths");
-		expect(preamble).toContain("signatures");
+	it("includes convergence criteria in both phases", () => {
+		const engine = PlanEngine.create(memStore(), {
+			slug: "conv",
+			title: "Conv",
+			repoPath: "/tmp",
+		});
+		engine.setPhase("structuring");
+		for (const preamble of [
+			buildPlanModePreamble(undefined),
+			buildPlanModePreamble(engine),
+		]) {
+			expect(preamble).toContain("file paths");
+			expect(preamble).toContain("signatures");
+		}
 	});
 
-	it("mentions group/task/agent tools", () => {
-		const preamble = buildPlanModePreamble(undefined);
+	it("structuring mentions group/task/agent tools and the understanding", () => {
+		const engine = PlanEngine.create(memStore(), {
+			slug: "structured",
+			title: "Structured",
+			repoPath: "/tmp",
+		});
+		engine.setPhase("structuring", "We will build a clamp helper.");
+		const preamble = buildPlanModePreamble(engine);
+		expect(preamble).toContain("STRUCTURING");
 		expect(preamble).toContain("group(action");
 		expect(preamble).toContain("task(action");
 		expect(preamble).toContain("agent(action");
+		expect(preamble).toContain("We will build a clamp helper.");
+		expect(preamble).toContain("research/");
+	});
+
+	it("plans with groups but no phase field hydrate as structuring", () => {
+		const engine = PlanEngine.create(memStore(), {
+			slug: "legacy",
+			title: "Legacy",
+			repoPath: "/tmp",
+		});
+		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "t1" });
+		const preamble = buildPlanModePreamble(engine);
+		expect(preamble).toContain("STRUCTURING");
 	});
 });
 

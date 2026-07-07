@@ -155,6 +155,20 @@ function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
 			delta: { text: event.toolName },
 		});
 	}
+	// Token progress: assistant messages carry per-turn usage. Best-effort —
+	// absent usage just means no token delta for this turn.
+	if (event.type === "turn_end") {
+		const usage = (
+			event.message as { usage?: { input?: number; output?: number } }
+		)?.usage;
+		if (usage && (usage.input !== undefined || usage.output !== undefined)) {
+			bus.publish({
+				type: "progress",
+				runId,
+				delta: { tokensIn: usage.input, tokensOut: usage.output },
+			});
+		}
+	}
 }
 
 function settle(bus: RunBus, runId: RunId, result: RunResult): RunResult {

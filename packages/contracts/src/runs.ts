@@ -57,6 +57,16 @@ export interface SpawnProfile {
 	readonly session?: boolean;
 	/** Override the child's session storage directory. */
 	readonly sessionDir?: string;
+	/**
+	 * Spawn with --no-extensions so the child loads NONE of the globally
+	 * configured extensions — only the paths in `extraExtensions`. Keeps the
+	 * child's tool namespace deterministic (no collisions with whatever the
+	 * user has installed globally).
+	 */
+	readonly isolateExtensions?: boolean;
+	/** Extension paths loaded into the child via -e (works with or without
+	 *  isolateExtensions). */
+	readonly extraExtensions?: readonly string[];
 	/** Deliberate feature-flag overrides propagated to the child. */
 	readonly featureFlags?: FeatureFlagOverrides;
 	/** Opaque metadata for the maestro. */

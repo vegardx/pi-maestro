@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { ExecutionEvent } from "../packages/modes/src/exec/index.js";
 import {
 	AGENT_EVENT_MESSAGE_TYPE,
+	type AgentCardEvent,
 	buildCardBody,
 	buildCardHeader,
 	buildEventContent,
@@ -51,6 +52,23 @@ const fixRoundEvent: ExecutionEvent = {
 	findings: ["missing CSRF check", "no rate limit"],
 };
 
+const researchDoneEvent = {
+	kind: "research-done",
+	question: "how do competing TUI libraries debounce resize events?",
+	research: "web",
+	ok: true,
+	durationMs: 130_000,
+	reportPath: "research/03-how-do-competing-tui.md",
+	report:
+		"Blessed and Ink both debounce SIGWINCH.\n\npi-tui re-renders synchronously.",
+} satisfies AgentCardEvent;
+
+/** Minimal event of a given kind — for the color/bg lookups that only
+ *  discriminate on `kind`. */
+function evt(kind: string): AgentCardEvent {
+	return { kind } as unknown as AgentCardEvent;
+}
+
 describe("agent card builders", () => {
 	it("formats durations compactly", () => {
 		expect(formatDuration(3_000)).toBe("3s");
@@ -59,24 +77,30 @@ describe("agent card builders", () => {
 	});
 
 	it("colors card headers by kind", () => {
-		expect(eventColor("spawn")).toBe("accent");
-		expect(eventColor("done")).toBe("success");
-		expect(eventColor("fix-round")).toBe("warning");
-		expect(eventColor("blocked")).toBe("error");
-		expect(eventColor("failed")).toBe("error");
-		expect(eventColor("shipped")).toBe("success");
-		expect(eventColor("settled")).toBe("accent");
+		expect(eventColor(evt("spawn"))).toBe("accent");
+		expect(eventColor(evt("done"))).toBe("success");
+		expect(eventColor(evt("fix-round"))).toBe("warning");
+		expect(eventColor(evt("blocked"))).toBe("error");
+		expect(eventColor(evt("failed"))).toBe("error");
+		expect(eventColor(evt("shipped"))).toBe("success");
+		expect(eventColor(evt("settled"))).toBe("accent");
+		expect(eventColor(evt("research-spawn"))).toBe("accent");
+		expect(eventColor({ ...researchDoneEvent, ok: true })).toBe("success");
+		expect(eventColor({ ...researchDoneEvent, ok: false })).toBe("error");
 	});
 
 	it("tints card backgrounds by kind from the available bg keys", () => {
-		expect(eventBg("done")).toBe("toolSuccessBg");
-		expect(eventBg("shipped")).toBe("toolSuccessBg");
+		expect(eventBg(evt("done"))).toBe("toolSuccessBg");
+		expect(eventBg(evt("shipped"))).toBe("toolSuccessBg");
 		// No warning bg exists in the theme — fix-round leans on toolPendingBg.
-		expect(eventBg("fix-round")).toBe("toolPendingBg");
-		expect(eventBg("blocked")).toBe("toolErrorBg");
-		expect(eventBg("failed")).toBe("toolErrorBg");
-		expect(eventBg("spawn")).toBe("customMessageBg");
-		expect(eventBg("settled")).toBe("customMessageBg");
+		expect(eventBg(evt("fix-round"))).toBe("toolPendingBg");
+		expect(eventBg(evt("blocked"))).toBe("toolErrorBg");
+		expect(eventBg(evt("failed"))).toBe("toolErrorBg");
+		expect(eventBg(evt("spawn"))).toBe("customMessageBg");
+		expect(eventBg(evt("settled"))).toBe("customMessageBg");
+		expect(eventBg(evt("research-spawn"))).toBe("customMessageBg");
+		expect(eventBg({ ...researchDoneEvent, ok: true })).toBe("toolSuccessBg");
+		expect(eventBg({ ...researchDoneEvent, ok: false })).toBe("toolErrorBg");
 	});
 
 	it("builds a spawn header and keeps the card body-free", () => {

@@ -21,6 +21,8 @@ export interface ProfileDefaults {
 	readonly session: boolean;
 	/** Extensions forced off in the child (→ PI_EXT_<NAME>=off). */
 	readonly disableExtensions: readonly string[];
+	/** `true` => spawn with --no-extensions (child loads only extraExtensions). */
+	readonly isolateExtensions?: boolean;
 	/** Feature-flag overrides forced in the child (→ PI_DISABLE/PI_ENABLE). */
 	readonly featureFlags?: FeatureFlagOverrides;
 }
@@ -39,6 +41,21 @@ const RESTRICTED: ProfileDefaults = {
 	disableExtensions: ["modes", "subagents"],
 };
 
+// research: a plan-mode research agent. Spawns with --no-extensions so the
+// tool namespace is deterministic — the caller passes the research-tools
+// extension (websearch/webfetch/context7 via direct APIs) through
+// extraExtensions. Read-only over the codebase, web-capable, no session,
+// cannot recurse (nothing that spawns is loaded).
+const RESEARCH: ProfileDefaults = {
+	tools: {
+		allow: ["read", "grep", "find", "ls", "websearch", "webfetch", "context7"],
+	},
+	mode: "plan",
+	session: false,
+	disableExtensions: ["modes", "subagents"],
+	isolateExtensions: true,
+};
+
 // deliverable-agent: implements a single deliverable in a worktree. Can read,
 // edit, and run tests, but cannot commit/push/create PRs — that's the
 // maestro's job at ship time. Commit extension disabled.
@@ -50,6 +67,7 @@ const DELIVERABLE_WORKER: ProfileDefaults = {
 
 export const BUILTIN_PROFILES: Readonly<Record<string, ProfileDefaults>> = {
 	restricted: RESTRICTED,
+	research: RESEARCH,
 	"deliverable-agent": DELIVERABLE_WORKER,
 };
 
@@ -65,6 +83,8 @@ export interface ResolvedProfile {
 	readonly session: boolean;
 	readonly sessionDir?: string;
 	readonly disableExtensions: readonly string[];
+	readonly isolateExtensions: boolean;
+	readonly extraExtensions: readonly string[];
 	readonly featureFlags?: FeatureFlagOverrides;
 }
 
@@ -84,6 +104,9 @@ export function resolveProfile(profile: SpawnProfile): ResolvedProfile {
 		session: profile.session ?? defaults.session,
 		sessionDir: profile.sessionDir,
 		disableExtensions: defaults.disableExtensions,
+		isolateExtensions:
+			profile.isolateExtensions ?? defaults.isolateExtensions ?? false,
+		extraExtensions: profile.extraExtensions ?? [],
 		featureFlags: mergeFlags(defaults.featureFlags, profile.featureFlags),
 	};
 }

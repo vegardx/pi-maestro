@@ -2,26 +2,33 @@
 // plan tools, commands, event hooks, and capability registrations. All
 // behavior lives in the sibling modules; this file only assembles them.
 
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
 	CAPABILITIES,
+	EVENTS,
 	type ModeName,
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import type { ModesAskQueue } from "../ask-queue.js";
 import type { PlanEngine } from "../engine.js";
+import { createResearchTools, type ResearchRunView } from "../research.js";
+import { resolveSpawnModelSafe } from "../spawn-model.js";
+import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
-import { registerAgentCardRenderer } from "./agent-cards.js";
+import { registerAgentCardRenderer, sendAgentEvent } from "./agent-cards.js";
 import { registerRuntimeCommands } from "./commands.js";
 import {
 	activeDeliverable,
 	createRuntimeContext,
 	type ModesRuntimeOptions,
 } from "./context.js";
+import { syncAgentWidget } from "./dashboard.js";
 import { registerRuntimeHooks } from "./hooks.js";
 
 export type { ModesRuntimeOptions } from "./context.js";
@@ -63,6 +70,68 @@ export function createModesRuntime(
 	})) {
 		pi.registerTool(tool);
 	}
+
+	// The research loop: fan-out research agents + the readiness phase gate.
+	// Children spawn isolated (-ne) with the research-tools extension so their
+	// tool namespace is deterministic (websearch/webfetch/context7 + builtins).
+	const repoRoot = resolve(
+		dirname(fileURLToPath(import.meta.url)),
+		"../../../..",
+	);
+	for (const tool of createResearchTools({
+		engine: () => rt.engine,
+		subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
+		ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+		ensurePlanDir: (ctx) => {
+			rt.finalizeDraftPlan(ctx, { force: true });
+			const engine = rt.engine;
+			if (!engine) throw new Error("no plan active");
+			return join(plansRoot(), engine.get().slug);
+		},
+		researchToolsPath: () =>
+			join(repoRoot, "packages/research-tools/src/index.ts"),
+		resolveAdvisorModel: async (ctx) =>
+			(await resolveSpawnModelSafe(ctx, { slot: "alternate", effort: "high" }))
+				?.modelId,
+		onRunStarted: (run, ctx) => {
+			rt.researchRuns.set(run.id, run);
+			sendAgentEvent(pi, {
+				kind: "research-spawn",
+				question: run.question,
+				research: run.kind,
+			});
+			syncAgentWidget(rt, ctx);
+		},
+		onRunSettled: (run, report, ctx) => {
+			rt.researchRuns.delete(run.id);
+			sendAgentEvent(pi, {
+				kind: "research-done",
+				question: run.question,
+				research: run.kind,
+				ok: run.status === "succeeded" && report !== undefined,
+				durationMs: Date.now() - run.startedAt,
+				reportPath: report ? relativeReportPath(report.path) : undefined,
+				report: report?.text,
+			});
+			syncAgentWidget(rt, ctx);
+		},
+		onPhaseChanged: (ctx) => {
+			rt.applyTools();
+			rt.notifyMode(ctx);
+		},
+	})) {
+		pi.registerTool(tool);
+	}
+
+	// Feed live research telemetry (current tool, token deltas) from the
+	// bridged run-bus into the tracked views; the widget's 5s tick renders it.
+	maestro.events.on(EVENTS.runProgress, ({ runId, progress }) => {
+		const run: ResearchRunView | undefined = rt.researchRuns.get(runId);
+		if (!run) return;
+		if (progress.text) run.activity = progress.text;
+		if (progress.tokensIn !== undefined) run.tokensIn = progress.tokensIn;
+		if (progress.tokensOut !== undefined) run.tokensOut = progress.tokensOut;
+	});
 
 	registerRuntimeCommands(rt);
 	registerRuntimeHooks(rt);
@@ -120,4 +189,9 @@ export function createModesRuntime(
 		openPlan: rt.openPlan,
 		cycle: rt.cycle,
 	};
+}
+
+/** "…/plans/<slug>/research/03-x.md" → "research/03-x.md" for display. */
+function relativeReportPath(path: string): string {
+	return path.split("/").slice(-2).join("/");
 }

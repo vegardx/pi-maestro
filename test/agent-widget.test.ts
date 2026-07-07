@@ -272,10 +272,14 @@ describe("styleAgentTable", () => {
 describe("syncAgentWidget", () => {
 	type SetWidgetCall = [string, unknown];
 
-	function fakes(agents: Map<string, AgentTableAgent> | undefined) {
+	function fakes(
+		agents: Map<string, AgentTableAgent> | undefined,
+		researchRuns = new Map(),
+	) {
 		const calls: SetWidgetCall[] = [];
 		const rt = {
 			agentWidgetTimer: undefined,
+			researchRuns,
 			execution: agents
 				? {
 						snapshot: () => ({
@@ -328,5 +332,40 @@ describe("syncAgentWidget", () => {
 			expect(calls).toEqual([["maestro-agents", undefined]]);
 			expect(rt.agentWidgetTimer).toBeUndefined();
 		}
+	});
+
+	it("shows research runs without an execution handle (plan mode)", () => {
+		const research = new Map([
+			[
+				"run-1",
+				{
+					id: "run-1",
+					question: "how do TUI libraries debounce resize?",
+					label: "how-do-tui-libraries",
+					kind: "web",
+					status: "running",
+					startedAt: NOW - 42_000,
+					tokensIn: 8_200,
+					tokensOut: 400,
+					activity: "websearch",
+				},
+			],
+		]);
+		const { calls, rt, ctx } = fakes(undefined, research);
+		syncAgentWidget(rt as any, ctx as any);
+		expect(calls).toHaveLength(1);
+		const factory = calls[0][1] as (
+			tui: unknown,
+			theme: unknown,
+		) => { render(width: number): string[] };
+		const theme = { fg: (_c: string, s: string) => s };
+		const rendered = factory(undefined, theme).render(90);
+		const joined = rendered.join("\n");
+		expect(joined).toContain("research");
+		// AGENT column clips at NAME_CAP (16 cells) with an ellipsis.
+		expect(joined).toContain("how-do-tui-libr…");
+		expect(joined).toContain("searching");
+		expect(joined).toContain("8.2k / 0.4k");
+		clearAgentWidget(rt as any, ctx as any);
 	});
 });

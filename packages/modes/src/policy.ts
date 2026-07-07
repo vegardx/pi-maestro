@@ -1,4 +1,5 @@
 import type { ModeName } from "@vegardx/pi-contracts";
+import type { PlanPhase } from "./schema.js";
 
 export const PLAN_TOOL_NAMES = [
 	"group",
@@ -7,6 +8,20 @@ export const PLAN_TOOL_NAMES = [
 	"plan",
 	"knowledge",
 ] as const;
+
+/**
+ * Structure-mutating plan tools — blocked while the plan is `exploring` so
+ * the maestro must converge (research + readiness) before forming the plan.
+ */
+export const STRUCTURE_TOOL_NAMES = [
+	"group",
+	"task",
+	"agent",
+	"knowledge",
+] as const;
+
+/** Research-loop tools available throughout plan mode. */
+export const RESEARCH_TOOL_NAMES = ["research", "readiness"] as const;
 
 const READ_ONLY_TOOLS = new Set([
 	"read",
@@ -20,6 +35,8 @@ const READ_ONLY_TOOLS = new Set([
 
 const ALWAYS_ALLOWED_TOOLS = new Set(["ask", "suggest_next_prompt"]);
 
+const STRUCTURE_TOOLS = new Set<string>(STRUCTURE_TOOL_NAMES);
+
 export interface ToolPolicyInput {
 	readonly mode: ModeName;
 	readonly availableTools: readonly string[];
@@ -27,6 +44,8 @@ export interface ToolPolicyInput {
 	readonly baselineTools?: readonly string[];
 	/** True when running as a worker/support agent under a maestro. */
 	readonly isAgent?: boolean;
+	/** Planning phase; only narrows the tool set in plan mode. */
+	readonly phase?: PlanPhase;
 }
 
 export function computeActiveTools(input: ToolPolicyInput): string[] {
@@ -51,13 +70,20 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		return input.availableTools.filter((name) => agentAllowed.has(name));
 	}
 
-	// plan + auto: read-only + plan tools + bash (gated by classifier) + always-allowed
+	// plan + auto: read-only + plan tools + research loop + bash (gated by
+	// classifier) + always-allowed
 	const allowed = new Set([
 		...READ_ONLY_TOOLS,
 		...PLAN_TOOL_NAMES,
+		...RESEARCH_TOOL_NAMES,
 		...ALWAYS_ALLOWED_TOOLS,
 		"bash",
 	]);
+	// Exploring phase: the readiness gate — structure tools stay locked until
+	// the model declares readiness and the user confirms.
+	if (input.mode === "plan" && input.phase === "exploring") {
+		for (const name of STRUCTURE_TOOL_NAMES) allowed.delete(name);
+	}
 	return input.availableTools.filter((name) => allowed.has(name));
 }
 
@@ -125,11 +151,22 @@ export function classifyBash(command: string): BashClassification {
 	};
 }
 
-export function toolBlockedInPlanMode(toolName: string): string | null {
+export function toolBlockedInPlanMode(
+	toolName: string,
+	phase?: PlanPhase,
+): string | null {
 	if (toolName === "bash") return null;
+	if (phase === "exploring" && STRUCTURE_TOOLS.has(toolName)) {
+		return (
+			`tool \`${toolName}\` is locked — the plan is still exploring. ` +
+			"Research and clarify until you meet the convergence criteria, then " +
+			"call `readiness` to propose forming the plan."
+		);
+	}
 	if (
 		READ_ONLY_TOOLS.has(toolName) ||
-		PLAN_TOOL_NAMES.includes(toolName as never)
+		PLAN_TOOL_NAMES.includes(toolName as never) ||
+		RESEARCH_TOOL_NAMES.includes(toolName as never)
 	) {
 		return null;
 	}

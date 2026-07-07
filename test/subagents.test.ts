@@ -319,6 +319,42 @@ describe("profiles + invocation mapping", () => {
 		expect(inv.env[DEPTH_ENV]).toBe("2");
 	});
 
+	it("research profile isolates extensions and loads extras via -e", () => {
+		const r = resolveProfile({
+			profile: "research",
+			extraExtensions: ["/maestro/packages/research-tools/src/index.ts"],
+		});
+		expect(r.isolateExtensions).toBe(true);
+		expect(r.session).toBe(false);
+		expect(r.tools?.allow).toContain("websearch");
+		expect(r.tools?.allow).toContain("context7");
+
+		const inv = mapProfileToInvocation(
+			{
+				profile: "research",
+				extraExtensions: ["/maestro/packages/research-tools/src/index.ts"],
+			},
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		// -ne drops global extensions; -e loads exactly the research tools —
+		// the child's tool namespace is deterministic.
+		expect(inv.args).toContain("-ne");
+		const eIdx = inv.args.indexOf("-e");
+		expect(eIdx).toBeGreaterThan(-1);
+		expect(inv.args[eIdx + 1]).toBe(
+			"/maestro/packages/research-tools/src/index.ts",
+		);
+	});
+
+	it("profiles without isolation gain no extension args", () => {
+		const inv = mapProfileToInvocation(
+			{ profile: "restricted" },
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		expect(inv.args).not.toContain("-ne");
+		expect(inv.args).not.toContain("-e");
+	});
+
 	it("computes kill-switch env explicitly, never leaking the parent's", () => {
 		const inv = mapProfileToInvocation(
 			{

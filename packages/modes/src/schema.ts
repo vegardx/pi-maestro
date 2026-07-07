@@ -117,6 +117,16 @@ export interface WorkGroup {
 
 // ─── Plan ────────────────────────────────────────────────────────────────────
 
+/**
+ * Planning phases. A plan starts `exploring` — the maestro researches, asks,
+ * and iterates; structural tools (group/task/agent/knowledge) are blocked.
+ * The `readiness` tool (user-confirmed) or /ready flips it to `structuring`,
+ * unlocking plan structure. Plans persisted before phases existed hydrate as
+ * `structuring` when they already have groups (see planPhase).
+ */
+export const PLAN_PHASES = ["exploring", "structuring"] as const;
+export type PlanPhase = (typeof PLAN_PHASES)[number];
+
 /** A repo a plan can target. The default repo is `plan.repoPath` (key "default"). */
 export interface PlanRepo {
 	/** Stable key groups reference (currently unused but reserved). */
@@ -133,6 +143,13 @@ export interface Plan {
 	slug: string;
 	title: string;
 	repoPath: string;
+	/** Planning phase; absent on older plans (see planPhase for the default). */
+	phase?: PlanPhase;
+	/**
+	 * The maestro's summarized understanding, captured when readiness was
+	 * confirmed. Source material for the knowledge doc and plan summary.
+	 */
+	understanding?: string;
 	/** Extra repos beyond the default; absent ⇒ single-repo plan. */
 	repos?: PlanRepo[];
 	/** All work groups in the plan. Flat list — graph structure via dependsOn. */
@@ -144,6 +161,16 @@ export interface Plan {
 	lastSyncedAt?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/**
+ * Effective planning phase. Plans persisted before phases existed carry no
+ * `phase` field: treat them as `structuring` when they already have groups
+ * (they were planned under the old flow) and `exploring` when empty.
+ */
+export function planPhase(plan: Pick<Plan, "phase" | "groups">): PlanPhase {
+	if (plan.phase) return plan.phase;
+	return plan.groups.length > 0 ? "structuring" : "exploring";
 }
 
 // ─── Traversal helpers ───────────────────────────────────────────────────────

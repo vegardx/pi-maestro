@@ -63,6 +63,13 @@ export function mapProfileToInvocation(
 	if (resolved.appendSystemPrompt) {
 		args.push("--append-system-prompt", resolved.appendSystemPrompt);
 	}
+	// Extension control is pi-native config, so it rides args (not env): -ne
+	// drops every globally configured extension; -e loads explicit paths. An
+	// isolated child's tool namespace is exactly builtins + extraExtensions.
+	if (resolved.isolateExtensions) args.push("-ne");
+	for (const path of resolved.extraExtensions ?? []) {
+		args.push("-e", path);
+	}
 
 	const env: Record<string, string> = { [DEPTH_ENV]: String(depth) };
 	for (const ext of resolved.disableExtensions) env[envVarFor(ext)] = "off";

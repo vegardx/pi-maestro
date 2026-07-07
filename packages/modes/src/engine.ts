@@ -14,6 +14,7 @@ import {
 	type GroupStatus,
 	type ModelSlot,
 	type Plan,
+	type PlanPhase,
 	type PlanRepo,
 	slugify,
 	type ThinkingLevel,
@@ -126,6 +127,18 @@ export class PlanEngine {
 	): void {
 		this.mutate((plan) => {
 			Object.assign(plan, patch);
+		});
+	}
+
+	/**
+	 * Flip the planning phase. Confirming readiness passes the maestro's
+	 * summarized understanding, which is kept as source material for the
+	 * knowledge doc and plan summary.
+	 */
+	setPhase(phase: PlanPhase, understanding?: string): void {
+		this.mutate((plan) => {
+			plan.phase = phase;
+			if (understanding !== undefined) plan.understanding = understanding;
 		});
 	}
 

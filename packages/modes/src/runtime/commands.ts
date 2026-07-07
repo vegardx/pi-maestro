@@ -16,6 +16,7 @@ import type { PlanEngine } from "../engine.js";
 import { reconcileShippedGroups } from "../exec/shipper.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
 import { buildRecap } from "../group-recap.js";
+import { planPhase } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
@@ -64,6 +65,32 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			},
 		});
 	}
+
+	// Manual escape hatch for the readiness gate: flip the plan to structuring
+	// without waiting for the model to call `readiness`.
+	pi.registerCommand("ready", {
+		description:
+			"Unlock plan structuring (skip the exploring phase's readiness gate).",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			const engine = rt.engine;
+			if (!engine) {
+				ctx.ui.notify("No plan active — run /plan first.", "warning");
+				return;
+			}
+			if (planPhase(engine.get()) === "structuring") {
+				ctx.ui.notify("Plan is already structuring.", "info");
+				return;
+			}
+			engine.setPhase("structuring");
+			rt.applyTools();
+			rt.notifyMode(ctx);
+			ctx.ui.notify("Structure tools unlocked — plan away.", "info");
+			pi.sendUserMessage(
+				"The user unlocked plan structuring (/ready). Form the plan now: create groups and tasks from what you know, then the knowledge doc.",
+				{ deliverAs: "followUp" },
+			);
+		},
+	});
 
 	pi.registerCommand("implement", {
 		description:

@@ -1,0 +1,19 @@
+{
+	"name": "@vegardx/pi-research-tools",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Web research tools for spawned agents: websearch (Exa), webfetch (SSRF-guarded), context7 (library docs). Direct REST clients, no MCP.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"dependencies": {
+		"@vegardx/pi-core": "*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@sinclair/typebox": "*"
+	}
+}

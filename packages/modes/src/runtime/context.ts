@@ -38,7 +38,13 @@ import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
-import { derivePlanName, slugify, type WorkGroup } from "../schema.js";
+import type { ResearchRunView } from "../research.js";
+import {
+	derivePlanName,
+	planPhase,
+	slugify,
+	type WorkGroup,
+} from "../schema.js";
 import { appendModesState, collectBudgetText } from "../session.js";
 import {
 	type ImplementOverrides,
@@ -106,6 +112,8 @@ export interface RuntimeContext {
 	engine: PlanEngine | undefined;
 	agentBridge: AgentBridge | undefined;
 	execution: ExecutionHandle | undefined;
+	/** Live research runs (plan-mode fan-out), keyed by run id. */
+	readonly researchRuns: Map<string, ResearchRunView>;
 	agentSeedContent: string | undefined;
 	invalidateFooter: (() => void) | undefined;
 	// Transient: 5s re-render timer for the live agent widget (elapsed ticks).
@@ -137,7 +145,7 @@ export interface RuntimeContext {
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
 	loadEngine(slug: string): PlanEngine | undefined;
 	openPlan(titleOrSlug: string | undefined, ctx: ExtensionContext): PlanEngine;
-	finalizeDraftPlan(ctx: ExtensionContext): void;
+	finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void;
 	cycle(ctx: ExtensionContext): Promise<void>;
 	emitPlanChanged(): void;
 	assertDeliverableRepo(ctx: ExtensionContext, d: Deliverable): boolean;
@@ -200,6 +208,7 @@ export function createRuntimeContext(
 		engine: undefined,
 		agentBridge: undefined,
 		execution: undefined,
+		researchRuns: new Map(),
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
 		agentWidgetTimer: undefined,
@@ -297,6 +306,7 @@ export function createRuntimeContext(
 					availableTools: pi.getAllTools().map((t) => t.name),
 					baselineTools,
 					isAgent: isAgentMode(),
+					phase: rt.engine ? planPhase(rt.engine.get()) : undefined,
 				}),
 			);
 		},
@@ -374,9 +384,11 @@ export function createRuntimeContext(
 
 		// Name and persist a draft plan once it has content. Called at turn_end
 		// while planning and before implement/ship so the plan survives.
-		finalizeDraftPlan(ctx: ExtensionContext): void {
+		// `force` materializes even an empty plan — the research tool needs the
+		// plan directory on disk before any group exists (report persistence).
+		finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void {
 			if (!rt.engine?.isDraft()) return;
-			if (rt.engine.get().groups.length === 0) return;
+			if (!opts?.force && rt.engine.get().groups.length === 0) return;
 			const firstMessage = firstUserMessageText(
 				ctx.sessionManager.getEntries() as readonly Entryish[],
 				draftStartEntries,
@@ -495,7 +507,7 @@ export function createRuntimeContext(
 					"warning",
 				);
 				pi.sendUserMessage(
-					"Before implementation can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use the persisted delegate reports in the plan directory as source material if your own exploration has been compacted away.",
+					"Before implementation can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use the persisted research reports in the plan directory's research/ folder as source material if your own exploration has been compacted away.",
 					{ deliverAs: "followUp" },
 				);
 				return;

@@ -44,8 +44,15 @@ export function formatTokens(n: number): string {
 	return `${(n / 1000).toFixed(1)}k`;
 }
 
-/** Statuses that count as live — everything else is excluded from the table. */
-const ACTIVE_STATUSES = new Set(["working", "summarizing"]);
+/** Statuses that count as live — everything else is excluded from the table.
+ *  working/summarizing come from execution agents; searching/reading from
+ *  research runs (mapped from the child's current tool). */
+const ACTIVE_STATUSES = new Set([
+	"working",
+	"summarizing",
+	"searching",
+	"reading",
+]);
 
 /** Whether any agent would produce a table row (widget shown at all). */
 export function hasActiveAgents(

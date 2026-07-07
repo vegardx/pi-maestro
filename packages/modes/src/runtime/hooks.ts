@@ -18,7 +18,7 @@ import {
 	readModesCompactionDetails,
 } from "../compaction.js";
 import { toolBlockedInPlanMode } from "../policy.js";
-import { gatingTasks } from "../schema.js";
+import { gatingTasks, planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
 import {
 	getModeRoleModel,
@@ -291,7 +291,10 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		// In auto mode, non-bash tools are gated by the active-tools filter
 		// (+ bridge force-add for agents). Only block in plan mode.
 		if (rt.state.mode === "plan") {
-			const reason = toolBlockedInPlanMode(event.toolName);
+			const reason = toolBlockedInPlanMode(
+				event.toolName,
+				rt.engine ? planPhase(rt.engine.get()) : "exploring",
+			);
 			if (reason) return { block: true, reason };
 		}
 	});

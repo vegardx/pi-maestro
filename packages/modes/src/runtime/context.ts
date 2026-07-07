@@ -2,6 +2,7 @@
 // command handlers, event hooks, and dashboard glue all operate on.
 // createRuntimeContext constructs it; runtime/index.ts wires the pieces.
 
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -459,6 +460,26 @@ export function createRuntimeContext(
 			if (!rt.engine) return;
 			rt.finalizeDraftPlan(ctx);
 			const activeEngine = rt.engine;
+
+			// Gate: agents fork from the plan's knowledge session — refuse to
+			// start without it and ask the model to author it now.
+			const knowledgePath = join(
+				plansRoot(),
+				activeEngine.get().slug,
+				"base-knowledge.jsonl",
+			);
+			if (!isAgentMode() && !existsSync(knowledgePath)) {
+				ctx.ui.notify(
+					"No knowledge base yet — asking the model to write it; run /implement again after.",
+					"warning",
+				);
+				pi.sendUserMessage(
+					"Before implementation can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use the persisted delegate reports in the plan directory as source material if your own exploration has been compacted away.",
+					{ deliverAs: "followUp" },
+				);
+				return;
+			}
+
 			const mode = args.includes("--hack") ? "hack" : "auto";
 			rt.setMode(mode as ModeName, ctx);
 

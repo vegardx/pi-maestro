@@ -2,6 +2,7 @@
 // execution model. The session/mode layer owns which plan is active; these
 // tools perform mutations/reads and return readable markdown.
 
+import { join } from "node:path";
 import {
 	type AgentToolResult,
 	defineTool,
@@ -20,6 +21,7 @@ import type {
 	AddWorkItemInput,
 	PlanEngine,
 } from "./engine.js";
+import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
 import type {
 	AgentMode,
 	AgentSpec,
@@ -30,6 +32,7 @@ import type {
 	WorkItem,
 } from "./schema.js";
 import { findGroup, groups, hasExecutionStarted } from "./schema.js";
+import { plansRoot } from "./storage.js";
 
 export interface PlanToolDeps {
 	readonly engine: () => PlanEngine | undefined;
@@ -174,6 +177,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createTaskTool(deps),
 		createAgentTool(deps),
 		createPlanTool(deps),
+		createKnowledgeTool(deps),
 	];
 }
 
@@ -465,6 +469,59 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 					}
 				}
 			});
+		},
+	}) as ToolDefinition;
+}
+
+const KnowledgeParams = Type.Object({
+	content: Type.String({
+		description:
+			"The complete codebase reference document. Required sections: " +
+			"Project Structure, Key Patterns, Conventions, Key Interfaces. " +
+			"Reference material only — where things are and how they connect, " +
+			"not full file contents.",
+	}),
+});
+
+export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
+	return defineTool({
+		name: "knowledge",
+		label: "Knowledge",
+		description:
+			"Write the plan's base-knowledge document — the frozen codebase " +
+			"reference every agent forks from. Call this once, at the end of " +
+			"planning, distilling your codebase understanding into the template " +
+			"sections. Frozen after /implement (rewrites would invalidate every " +
+			"agent's cache prefix).",
+		promptSnippet:
+			"knowledge — write the shared codebase reference agents fork from.",
+		parameters: KnowledgeParams,
+		async execute(_id, params): Promise<Result> {
+			const engine = deps.engine();
+			if (!engine) return error("no plan active — run /plan first");
+			const plan = engine.get();
+			if (hasExecutionStarted(plan)) {
+				return error(
+					"execution has started — the knowledge base is frozen (rewriting it would invalidate every agent's cache prefix)",
+				);
+			}
+			const outPath = join(plansRoot(), plan.slug, "base-knowledge.jsonl");
+			try {
+				buildKnowledgeSession({
+					content: params.content,
+					repoPath: plan.repoPath,
+					outPath,
+				});
+			} catch (e) {
+				const message = e instanceof Error ? e.message : String(e);
+				return error(
+					`knowledge document rejected: ${message}\n\nTemplate:\n${KNOWLEDGE_TEMPLATE}`,
+				);
+			}
+			return ok(
+				`Knowledge base written to ${outPath}. All agents will fork from it; it freezes when /implement runs.`,
+				{},
+			);
 		},
 	}) as ToolDefinition;
 }

@@ -83,8 +83,13 @@ export interface RunSpawnRequest {
 
 export interface RunProgress {
 	readonly text?: string;
+	/** Per-turn deltas, not cumulative — consumers accumulate. */
 	readonly tokensIn?: number;
 	readonly tokensOut?: number;
+	readonly cacheRead?: number;
+	readonly cacheWrite?: number;
+	/** Pre-computed cost for the turn (pi-ai Usage.cost.total). */
+	readonly cost?: number;
 }
 
 export interface RunResult {

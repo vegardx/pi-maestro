@@ -563,7 +563,7 @@ describe("RpcClient-backed runner", () => {
 	// A scriptable RpcClient stand-in.
 	function fakeClient(opts: {
 		text?: string;
-		emit?: { type: string; toolName?: string }[];
+		emit?: { type: string; toolName?: string; message?: unknown }[];
 		startError?: string;
 		hang?: boolean;
 		captureEnv?: (env: Record<string, string> | undefined) => void;
@@ -647,6 +647,41 @@ describe("RpcClient-backed runner", () => {
 		expect(result.summary).toBe("all done");
 		expect(seen).toContain("read");
 		expect(store.readRecord("run-1" as RunId)?.status).toBe("succeeded");
+	});
+
+	it("publishes the full per-turn usage delta on turn_end", async () => {
+		const deltas: unknown[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "progress" && m.delta.tokensOut !== undefined)
+				deltas.push(m.delta);
+		});
+		const { factory } = fakeClient({
+			text: "done",
+			emit: [
+				{
+					type: "turn_end",
+					message: {
+						usage: {
+							input: 100,
+							output: 40,
+							cacheRead: 900,
+							cacheWrite: 50,
+							cost: { total: 0.02 },
+						},
+					},
+				},
+			],
+		});
+		await launch(factory).result();
+		expect(deltas).toEqual([
+			{
+				tokensIn: 100,
+				tokensOut: 40,
+				cacheRead: 900,
+				cacheWrite: 50,
+				cost: 0.02,
+			},
+		]);
 	});
 
 	it("merges baseEnv under the invocation's explicit maestro env", async () => {

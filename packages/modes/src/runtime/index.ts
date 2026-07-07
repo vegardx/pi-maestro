@@ -129,8 +129,24 @@ export function createModesRuntime(
 		const run: ResearchRunView | undefined = rt.researchRuns.get(runId);
 		if (!run) return;
 		if (progress.text) run.activity = progress.text;
-		if (progress.tokensIn !== undefined) run.tokensIn = progress.tokensIn;
-		if (progress.tokensOut !== undefined) run.tokensOut = progress.tokensOut;
+		// Token fields are per-turn deltas: accumulate for the table row and
+		// fold into the session ledger so footer totals include research runs.
+		if (progress.tokensIn !== undefined || progress.tokensOut !== undefined) {
+			run.tokensIn = (run.tokensIn ?? 0) + (progress.tokensIn ?? 0);
+			run.tokensOut = (run.tokensOut ?? 0) + (progress.tokensOut ?? 0);
+			rt.usageLedger.add(
+				{ kind: "agent", id: runId },
+				{
+					input: progress.tokensIn,
+					output: progress.tokensOut,
+					cacheRead: progress.cacheRead,
+					cacheWrite: progress.cacheWrite,
+					cost:
+						progress.cost !== undefined ? { total: progress.cost } : undefined,
+				},
+			);
+			rt.invalidateFooter?.();
+		}
 	});
 
 	registerRuntimeCommands(rt);

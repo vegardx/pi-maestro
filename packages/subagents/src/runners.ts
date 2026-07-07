@@ -159,13 +159,27 @@ function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
 	// absent usage just means no token delta for this turn.
 	if (event.type === "turn_end") {
 		const usage = (
-			event.message as { usage?: { input?: number; output?: number } }
+			event.message as {
+				usage?: {
+					input?: number;
+					output?: number;
+					cacheRead?: number;
+					cacheWrite?: number;
+					cost?: { total?: number };
+				};
+			}
 		)?.usage;
 		if (usage && (usage.input !== undefined || usage.output !== undefined)) {
 			bus.publish({
 				type: "progress",
 				runId,
-				delta: { tokensIn: usage.input, tokensOut: usage.output },
+				delta: {
+					tokensIn: usage.input,
+					tokensOut: usage.output,
+					cacheRead: usage.cacheRead,
+					cacheWrite: usage.cacheWrite,
+					cost: usage.cost?.total,
+				},
 			});
 		}
 	}

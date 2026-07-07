@@ -60,6 +60,17 @@ export class UsageLedger implements UsageLedgerV1 {
 		this.bySource.set(usageSourceKey(source), snapshot);
 	}
 
+	/** Fold a per-turn delta into a source's snapshot (counts as one turn).
+	 * For sources that report deltas (research children) rather than
+	 * cumulative state (execution agents, which use record()). */
+	add(source: UsageSource, delta: UsageDelta): void {
+		const key = usageSourceKey(source);
+		this.bySource.set(
+			key,
+			incrementTurns(accumulate(this.bySource.get(key), delta)),
+		);
+	}
+
 	snapshot(): {
 		bySource: ReadonlyMap<string, TokenSnapshot>;
 		totals: TokenSnapshot;

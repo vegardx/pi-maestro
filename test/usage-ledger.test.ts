@@ -43,6 +43,19 @@ describe("usage ledger", () => {
 		expect(totals.turns).toBe(0);
 	});
 
+	it("add() folds per-turn deltas and counts each as a turn", () => {
+		const ledger = new UsageLedger();
+		const source = { kind: "agent", id: "run-1" } as const;
+		ledger.add(source, { input: 100, output: 20, cost: { total: 0.01 } });
+		ledger.add(source, { input: 50, output: 10, cacheRead: 30 });
+		const { bySource, totals } = ledger.snapshot();
+		const snap = bySource.get("agent:run-1");
+		expect(snap).toMatchObject({ input: 150, output: 30, cacheRead: 30 });
+		expect(snap?.turns).toBe(2);
+		expect(totals.totalTokens).toBe(180);
+		expect(totals.cost).toBeCloseTo(0.01);
+	});
+
 	it("upserts the snapshot for a source key", () => {
 		const ledger = new UsageLedger();
 		ledger.record(

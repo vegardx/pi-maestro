@@ -48,6 +48,21 @@ const VALID_DOC = [
 	"- ExecutionHandle (exec/index.ts)",
 ].join("\n");
 
+type KnowledgeResult = { details?: { error?: string } };
+
+function run(
+	tool: ReturnType<typeof createKnowledgeTool>,
+	params: { content: string },
+): Promise<KnowledgeResult> {
+	return tool.execute(
+		"t",
+		params as never,
+		undefined as never,
+		undefined as never,
+		{} as never,
+	) as Promise<KnowledgeResult>;
+}
+
 describe("knowledge tool", () => {
 	let tmpAgentDir: string;
 
@@ -73,7 +88,7 @@ describe("knowledge tool", () => {
 		const engine = makeEngine();
 		const tool = createKnowledgeTool({ engine: () => engine });
 
-		const result = await tool.execute("t1", { content: VALID_DOC } as never);
+		const result = await run(tool, { content: VALID_DOC });
 
 		expect(result.details?.error).toBeUndefined();
 		const outPath = join(
@@ -90,9 +105,9 @@ describe("knowledge tool", () => {
 		const engine = makeEngine();
 		const tool = createKnowledgeTool({ engine: () => engine });
 
-		const result = await tool.execute("t2", {
+		const result = await run(tool, {
 			content: "# Codebase Reference\nnot much here",
-		} as never);
+		});
 
 		expect(result.details?.error).toBeDefined();
 		const text = JSON.stringify(result);
@@ -102,12 +117,13 @@ describe("knowledge tool", () => {
 
 	it("refuses once execution has started (frozen)", async () => {
 		const engine = makeEngine();
-		engine.addGroup({ title: "g1", body: "", worker: { mode: "full" } });
+		engine.addGroup({ title: "g1", body: "", workerMode: "full" });
 		const groupId = engine.get().groups[0].id;
+		engine.addWorkItem(groupId, { title: "do the thing", kind: "task" });
 		engine.setGroupStatus(groupId, "active");
 		const tool = createKnowledgeTool({ engine: () => engine });
 
-		const result = await tool.execute("t3", { content: VALID_DOC } as never);
+		const result = await run(tool, { content: VALID_DOC });
 
 		expect(result.details?.error).toBeDefined();
 		expect(JSON.stringify(result)).toContain("frozen");

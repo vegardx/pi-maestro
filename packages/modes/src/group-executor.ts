@@ -326,6 +326,12 @@ export class GroupExecutor {
 		agent.completedAt = this.deps.now();
 	}
 
+	/** Block a group with a user-facing reason (surfaced via getStates). */
+	blockGroup(groupId: string, reason: string): void {
+		const state = this.groupStates.get(groupId);
+		if (state) state.blocked = reason;
+	}
+
 	/** Clear a group's blocked reason (user-driven retry). */
 	unblockGroup(groupId: string): void {
 		const state = this.groupStates.get(groupId);

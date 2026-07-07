@@ -332,6 +332,7 @@ describe("buildSpawnSpec", () => {
 		expect(spec.cwd).toBe("/work/tree");
 		expect(spec.command).toEqual([
 			"pi",
+			"-ne",
 			"-e",
 			"/ext/modes.ts",
 			"-e",

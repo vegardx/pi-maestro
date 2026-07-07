@@ -350,6 +350,9 @@ export function defaultAgentDir(): string {
 export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 	const command = [
 		"pi",
+		// Suppress globally-configured extensions: agents load ONLY the
+		// maestro's explicit -e list (global ones collide on tool names).
+		"-ne",
 		...opts.extensionPaths.flatMap((p) => ["-e", p]),
 		"--no-skills",
 		"--no-prompt-templates",

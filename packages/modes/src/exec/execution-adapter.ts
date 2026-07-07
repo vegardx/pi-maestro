@@ -899,9 +899,22 @@ export class ExecutionAdapter {
 							// Respawn failed — mark done
 							this.completeAgent(groupId, agentNamePart);
 						}
-					} else {
-						// No remaining tasks or max respawns — mark done
+					} else if (!hasRemainingTasks) {
+						// Work finished and the session is gone — legit completion.
 						this.completeAgent(groupId, agentNamePart);
+					} else {
+						// Respawn cap with tasks outstanding: a crash, not a
+						// completion. Fail the agent and block the group for the user.
+						this.executor.markAgentFailed(
+							groupId,
+							agentNamePart,
+							"crashed and exhausted respawn attempts",
+						);
+						this.executor.blockGroup(
+							groupId,
+							`agent ${agentNamePart} crashed repeatedly — inspect and /retry`,
+						);
+						this.logEvent("failed", { agent: agentKey, respawns: count });
 					}
 				} catch (e) {
 					// One agent's tmux race must not abort the sweep or leak an

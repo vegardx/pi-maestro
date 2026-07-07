@@ -331,6 +331,7 @@ export function createModesRuntime(
 				mode: state.mode,
 				availableTools: pi.getAllTools().map((t) => t.name),
 				baselineTools,
+				isAgent: isAgentMode(),
 			}),
 		);
 	}
@@ -1074,8 +1075,8 @@ export function createModesRuntime(
 
 	pi.on("session_start", (_event, ctx) => {
 		if (isAgentMode()) {
-			// Agents start in hack mode (full tool access, no plan tools)
-			state = { mode: "hack", execution: { stage: "idle" }, updatedAt: new Date().toISOString() };
+			// Agents start in a special mode — agentBridge handles tool policy
+			state = { mode: "auto", execution: { stage: "executing", deliverableId: process.env.PI_MAESTRO_AGENT_ID ?? "" }, updatedAt: new Date().toISOString() };
 		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;
@@ -1742,63 +1743,47 @@ You can still add groups/tasks if needed.
 Switch back to /auto when done with direct work.`;
 }
 
+
 function buildAgentWorkerPreamble(): string {
 	const agentMode = process.env.PI_MAESTRO_AGENT_MODE;
 	if (agentMode === "read-only") {
 		return `You are a READ-ONLY REVIEW AGENT managed by a maestro session.
 
-Review the code for your deliverable described in the first message.
-You CANNOT modify files, commit, or push. You CAN read, run tests/lint, and
-report findings.
+Your task is described in the first message. You CANNOT modify files, commit,
+or push. You CAN read files, run tests/lint, and report findings.
 
 ## Workflow
-1. Read the code in the worktree (it’s the author’s branch)
-2. Run tests/linters to verify correctness: bash({command: "npm test"})
-3. Record your findings by updating your task body:
-   task({action: "update", phaseId: "<your-deliverable-id>", taskId: "<your-task-id>", body: "<findings>"})
-4. Toggle your task done when finished:
-   task({action: "toggle", phaseId: "<your-deliverable-id>", taskId: "<your-task-id>"})
+1. Read the code described in your focus/task
+2. Run tests/linters to verify correctness
+3. Report findings clearly in your final message
 
 ## Guidelines
 - Focus on correctness bugs, edge cases, missing tests, security issues
-- Be specific: file, line, what’s wrong, suggested fix
-- Note uncertainty (“I’m not sure if X is intentional”) rather than asking
-- Do NOT ask questions — report findings only
+- Be specific: file, line, what's wrong, suggested fix
 - Severity: CRITICAL > IMPORTANT > MINOR > STYLE
-- Skip STYLE unless egregious`;
+- Do NOT ask questions — report findings only
+- When done, just stop. The maestro detects completion.`;
 	}
 
-	return `You are an AGENT WORKER managed by a maestro session.
+	return `You are a WORKER AGENT managed by a maestro session.
 
-Implement the deliverable described in your first message, then ship.
-Work through these phases. Reference tools BY NAME — never hand-run
-\`pi\`, \`git\`, or \`gh\` for these steps.
+Your tasks are described in the first message. Implement them all.
 
-## Phase 1: IMPLEMENT
-Edit code, write/fix tests, verify they pass. Mark tasks done as you finish:
-  task({action: "toggle", phaseId: "<deliverable-id>", taskId: "<task-id>"})
-Task IDs are in the plan context above (the maestro-execution-seed).
-Commit incrementally as you make progress:
-  commit({message: "feat(scope): subject", paths: ["src/file.ts"]})
+## Workflow
+1. Read the task descriptions carefully
+2. Implement the code (edit/write files)
+3. Run tests to verify: bash({command: "npm test"})
+4. Commit your work: commit({message: "feat(scope): subject"})
+5. Toggle each task done when complete:
+   task({action: "toggle", groupId: "<group-id>", taskId: "<task-id>"})
+6. When ALL tasks are toggled and tests pass, stop. The maestro handles
+   pushing and opening the PR.
 
-## Phase 2: ADDRESS REVIEW FINDINGS (if present)
-If your plan shows review summaries or a reviews-gate task was toggled,
-read the review findings. For each finding:
-- Agree → fix it and commit
-- Disagree → note why in your task body
-- Uncertain → ask the maestro
-
-## Phase 3: SHIP
-When all tasks are done and tests pass, ship:
-  ship()
-This pushes, opens/updates a PR, and auto-toggles remaining tasks.
-Do NOT run git/gh yourself.
-
-## Phase 4: VERIFY
-Re-read your requirements (the seed). Does the PR address everything?
-Any gaps → fix, commit, and ship again. Otherwise you’re done — just stop;
-the maestro detects completion. If blocked, describe the problem in
-your final message so the maestro can steer you.`;
+## Rules
+- Do NOT run git push, gh pr create, or any shipping commands
+- Do NOT call group, agent, or plan tools — just implement
+- Commit incrementally as you finish logical chunks
+- If blocked, describe the problem in your final message`;
 }
 
 /**

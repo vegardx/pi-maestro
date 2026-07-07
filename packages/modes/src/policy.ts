@@ -19,6 +19,8 @@ export interface ToolPolicyInput {
 	readonly availableTools: readonly string[];
 	/** User/session tool set captured before modes narrows it. */
 	readonly baselineTools?: readonly string[];
+	/** True when running as a worker/support agent under a maestro. */
+	readonly isAgent?: boolean;
 }
 
 export function computeActiveTools(input: ToolPolicyInput): string[] {
@@ -28,6 +30,20 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		: input.availableTools;
 
 	if (input.mode === "hack") return [...baseline];
+
+	// Agent mode: full implementation tools, no plan-structure tools
+	if (input.isAgent) {
+		const agentAllowed = new Set([
+			...READ_ONLY_TOOLS,
+			...ALWAYS_ALLOWED_TOOLS,
+			"bash",
+			"edit",
+			"write",
+			"commit",
+			"task", // agents can toggle tasks
+		]);
+		return input.availableTools.filter((name) => agentAllowed.has(name));
+	}
 
 	// plan + auto: read-only + plan tools + bash (gated by classifier) + always-allowed
 	const allowed = new Set([

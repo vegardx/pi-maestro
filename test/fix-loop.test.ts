@@ -293,6 +293,43 @@ describe("fix loop — rounds", () => {
 		expect(roundTwoTasks).toHaveLength(0);
 	});
 
+	it("blocks without corrupting state when adding fix tasks fails", async () => {
+		const engine = setupReviewedGroup();
+		const summaries = new Map<string, string>([
+			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
+			["sess-perf", "VERDICT: approve"],
+		]);
+		const { deps, spawnAgent } = makeFixDeps(summaries);
+		const executor = new GroupExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("work", "worker");
+		await executor.tick();
+		await executor.markAgentDone("work", "sec");
+
+		// The last completion triggers the fix round; task creation blows up.
+		const addSpy = vi.spyOn(engine, "addWorkItem").mockImplementation(() => {
+			throw new Error("validation failed");
+		});
+		await executor.markAgentDone("work", "perf");
+		addSpy.mockRestore();
+
+		const state = executor.getStates().get("work")!;
+		expect(state.blocked).toBe("fix round failed: validation failed");
+		expect(state.round).toBe(0); // restored — no half-armed round
+		// No agent was re-pended, and no findings were recorded for the
+		// no-progress guard to false-trip on later.
+		expect(state.agents.get("worker")!.status).toBe("done");
+		expect(state.agents.get("sec")!.status).toBe("done");
+		expect(state.completed.has("worker")).toBe(true);
+		expect(state.lastFindingsByReviewer?.get("sec")).toBeUndefined();
+		// Worker was not resurrected and no round tasks landed.
+		expect(spawnAgent).toHaveBeenCalledTimes(3);
+		expect(
+			engine.get().groups[0].tasks.filter((t) => t.title.startsWith("[round")),
+		).toHaveLength(0);
+		expect(engine.get().groups[0].status).toBe("active");
+	});
+
 	it("blocks when the fix-round cap is reached", async () => {
 		const engine = setupReviewedGroup();
 		engine.updateGroup("work", { maxFixRounds: 1 });

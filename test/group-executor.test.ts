@@ -327,6 +327,102 @@ describe("GroupExecutor — worker done detection", () => {
 	});
 });
 
+describe("GroupExecutor — lifecycle correctness", () => {
+	it("dedupes concurrent markAgentDone calls into one summarize + kill", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+
+		const requestSummary = vi.fn(async () => {
+			await new Promise((r) => setTimeout(r, 25));
+			return "## Summary\ndid work";
+		});
+		const killSession = vi.fn().mockResolvedValue(undefined);
+		const deps = makeDeps({ requestSummary, killSession });
+		const executor = new GroupExecutor(engine, deps);
+		await executor.tick();
+
+		// RPC done and the poll timer race the same completion.
+		await Promise.all([
+			executor.markAgentDone("work", "worker"),
+			executor.markAgentDone("work", "worker"),
+		]);
+
+		expect(requestSummary).toHaveBeenCalledTimes(1);
+		expect(killSession).toHaveBeenCalledTimes(1);
+		expect(executor.getAgentState("work", "worker")!.status).toBe("done");
+		expect(engine.get().groups[0].status).toBe("complete");
+	});
+
+	it("leaves a summarizing agent alone on a late markAgentDone", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+
+		const killSession = vi.fn().mockResolvedValue(undefined);
+		const deps = makeDeps({ killSession });
+		const executor = new GroupExecutor(engine, deps);
+		await executor.tick();
+
+		executor.getAgentState("work", "worker")!.status = "summarizing";
+		await executor.markAgentDone("work", "worker");
+
+		expect(killSession).not.toHaveBeenCalled();
+		expect(executor.getAgentState("work", "worker")!.status).toBe(
+			"summarizing",
+		);
+	});
+
+	it("activates a group exactly once under concurrent ticks", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+
+		// Provisioning awaits before the status flips to active — the window
+		// where an overlapping tick used to double-activate.
+		const createWorktree = vi.fn(async () => {
+			await new Promise((r) => setTimeout(r, 25));
+			return "/tmp/worktree";
+		});
+		const deps = makeDeps({ createWorktree });
+		const executor = new GroupExecutor(engine, deps);
+
+		await Promise.all([executor.tick(), executor.tick()]);
+
+		expect(createWorktree).toHaveBeenCalledTimes(1);
+		expect(deps.spawnAgent).toHaveBeenCalledTimes(1);
+		expect(engine.get().groups[0].status).toBe("active");
+	});
+
+	it("hydrates active groups as blocked and does not respawn agents", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+		engine.setGroupStatus("work", "active");
+		engine.updateGroup("work", { worktreePath: "/tmp/worktree" });
+
+		const deps = makeDeps();
+		const executor = new GroupExecutor(engine, deps);
+
+		const state = executor.getStates().get("work")!;
+		expect(state.blocked).toMatch(/maestro restarted/);
+
+		// Ticks never spawn into the blocked group — orphaned pi processes
+		// may still live in its tmux sessions.
+		await executor.tick();
+		await executor.tick();
+		expect(deps.spawnAgent).not.toHaveBeenCalled();
+
+		// A user-driven retry unblocks and resumes spawning.
+		executor.unblockGroup("work");
+		await executor.tick();
+		expect(deps.spawnAgent).toHaveBeenCalledTimes(1);
+		expect(deps.spawnAgent).toHaveBeenCalledWith(
+			expect.objectContaining({ groupId: "work", agentName: "worker" }),
+		);
+	});
+});
+
 describe("GroupExecutor — seed construction", () => {
 	it("includes dep summaries in worker seed", async () => {
 		const engine = setupPlan();

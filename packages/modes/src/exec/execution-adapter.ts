@@ -32,6 +32,14 @@ import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
 import { truncateSummary } from "./seeds.js";
 import { shipGroup as shipGroupReal } from "./shipper.js";
 
+/**
+ * Consecutive idle reports after which an agent with no task-based completion
+ * signal (read-only reviewers; workers of zero-gating-task groups) is
+ * considered done. Interactive pi never exits on its own, so sustained idle
+ * is the only completion signal these agents produce.
+ */
+const IDLE_DONE_THRESHOLD = 2;
+
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
 export interface TmuxApi {
 	spawn(
@@ -97,6 +105,8 @@ export class ExecutionAdapter {
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
 	private lastRounds = new Map<string, number>(); // groupId → last logged fix round
 	private blockedLogged = new Set<string>(); // groupIds with a logged blocked event
+	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
+	private pollInFlight = false; // skip overlapping pollSessions runs
 
 	readonly questionQueue = new QuestionQueue();
 
@@ -287,7 +297,11 @@ export class ExecutionAdapter {
 					}
 				}
 				if (await this.tmux.hasSession(sessionId)) {
-					await this.tmux.kill(sessionId);
+					try {
+						await this.tmux.kill(sessionId);
+					} catch {
+						// Session vanished between hasSession and kill — already dead.
+					}
 				}
 				this.takenNames.delete(sessionId);
 			},
@@ -373,13 +387,35 @@ export class ExecutionAdapter {
 		mkdirSync(this.opts.planDir, { recursive: true });
 		await this.rpcServer.listen(this.socketPath);
 
-		// Poll timer: check liveness of tmux sessions every 5s
-		this.pollTimer = setInterval(() => this.pollSessions(), 5000);
+		// Poll timer: check liveness of tmux sessions every 5s. Never let a
+		// rejection escape the interval callback — it would crash the maestro.
+		this.pollTimer = setInterval(() => {
+			this.pollSessions().catch((e) => {
+				this.logEvent("error", {
+					scope: "pollSessions",
+					message: e instanceof Error ? e.message : String(e),
+				});
+			});
+		}, 5000);
 
 		this._started = true;
 	}
 
+	/**
+	 * Serialized tick: every entry point (/implement, plan changes, completion
+	 * chains, the poll timer) funnels through a promise-chain mutex so the
+	 * executor never runs two ticks concurrently.
+	 */
 	async tick(): Promise<number> {
+		const run = this.tickChain.then(() => this.tickOnce());
+		this.tickChain = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
+	private async tickOnce(): Promise<number> {
 		if (!this._started) return 0;
 
 		const beforeActive = this.engine
@@ -434,9 +470,35 @@ export class ExecutionAdapter {
 			const count = (this.idleCount.get(agentId) ?? 0) + 1;
 			this.idleCount.set(agentId, count);
 
-			// Check if worker completed all tasks
-			if (agentNamePart === "worker" && this.executor.isWorkerDone(groupId)) {
-				this.checkCompletionGate(agentId, groupId);
+			const state = this.executor.getAgentState(groupId, agentNamePart);
+			if (
+				state &&
+				(state.status === "summarizing" || state.status === "done")
+			) {
+				return;
+			}
+
+			if (agentNamePart === "worker") {
+				// Check if worker completed all tasks
+				if (this.executor.isWorkerDone(groupId)) {
+					const group = this.engine.get().groups.find((g) => g.id === groupId);
+					const gating = group?.tasks.filter((t) => t.kind === "task") ?? [];
+					if (gating.length > 0) {
+						this.checkCompletionGate(agentId, groupId);
+						return;
+					}
+					// Zero gating tasks: "all toggled" is vacuous, so sustained
+					// idling is the worker's only completion signal.
+					if (count >= IDLE_DONE_THRESHOLD && state?.status === "working") {
+						this.completeAgent(groupId, agentNamePart);
+						return;
+					}
+				}
+			} else if (count >= IDLE_DONE_THRESHOLD && state?.status === "working") {
+				// Non-worker agents (read-only reviewers) never toggle tasks and
+				// interactive pi never exits — sustained idle means they're done.
+				// This is what makes the review→fix loop reachable in real runs.
+				this.completeAgent(groupId, agentNamePart);
 				return;
 			}
 
@@ -460,10 +522,30 @@ export class ExecutionAdapter {
 	}
 
 	private handleDone(groupId: string, agentNamePart: string): void {
-		this.finishAgent(groupId, agentNamePart).then(() => {
-			this.opts.onPlanChanged();
-			this.tick();
-		});
+		this.completeAgent(groupId, agentNamePart);
+	}
+
+	/**
+	 * Fire-and-forget completion: finishAgent → plan refresh → tick, with
+	 * rejection safety — a summarize/kill race must never crash the maestro.
+	 */
+	private completeAgent(groupId: string, name: string): void {
+		this.finishAgent(groupId, name).then(
+			() => {
+				this.opts.onPlanChanged();
+				this.tick().catch((e) => {
+					this.logEvent("error", {
+						scope: "tick",
+						message: e instanceof Error ? e.message : String(e),
+					});
+				});
+			},
+			(e) => {
+				const message = e instanceof Error ? e.message : String(e);
+				this.executor.markAgentFailed(groupId, name, message);
+				this.logEvent("error", { agent: `${groupId}/${name}`, message });
+			},
+		);
 	}
 
 	/** Complete an agent through the executor, logging the lifecycle event. */
@@ -597,10 +679,7 @@ export class ExecutionAdapter {
 		const state = this.executor.getAgentState(groupId, agentNamePart);
 		if (state && (state.status === "summarizing" || state.status === "done"))
 			return;
-		this.finishAgent(groupId, agentNamePart).then(() => {
-			this.opts.onPlanChanged();
-			this.tick();
-		});
+		this.completeAgent(groupId, agentNamePart);
 	}
 
 	// --- Session lookups ---
@@ -757,47 +836,68 @@ export class ExecutionAdapter {
 	// --- Poll timer: detect dead sessions ---
 
 	private async pollSessions(): Promise<void> {
-		for (const [agentKey, sessionName] of this.sessionNames) {
-			const [groupId, agentNamePart] = agentKey.split("/");
-			if (!groupId || !agentNamePart) continue;
+		// Overlap guard: a slow run (respawns, kill waits) must finish before
+		// the next interval fire starts inspecting the same agents.
+		if (this.pollInFlight) return;
+		this.pollInFlight = true;
+		try {
+			for (const [agentKey, sessionName] of this.sessionNames) {
+				const [groupId, agentNamePart] = agentKey.split("/");
+				if (!groupId || !agentNamePart) continue;
 
-			// Skip agents already marked done
-			const states = this.executor.getStates();
-			const groupState = states.get(groupId);
-			if (!groupState) continue;
-			const agentState = groupState.agents.get(agentNamePart);
-			if (!agentState || agentState.status === "done") continue;
+				// Skip agents already done or mid-summarize (their session is
+				// being torn down deliberately — not a crash).
+				const states = this.executor.getStates();
+				const groupState = states.get(groupId);
+				if (!groupState) continue;
+				const agentState = groupState.agents.get(agentNamePart);
+				if (
+					!agentState ||
+					agentState.status === "done" ||
+					agentState.status === "summarizing"
+				) {
+					continue;
+				}
 
-			// Check if tmux session is still alive
-			if (!(await this.tmux.hasSession(sessionName))) {
-				// Session died — attempt respawn or mark done
-				const count = this.respawnCount.get(agentKey) ?? 0;
-				const group = this.engine.get().groups.find((g) => g.id === groupId);
-				const hasRemainingTasks =
-					group?.tasks.some((t) => t.kind === "task" && !t.done) ?? false;
+				try {
+					// Check if tmux session is still alive
+					if (await this.tmux.hasSession(sessionName)) continue;
 
-				if (hasRemainingTasks && count < 2) {
-					// Respawn: rebuild session and try again
-					this.respawnCount.set(agentKey, count + 1);
-					this.logEvent("crash-respawn", {
-						agent: agentKey,
-						attempt: count + 1,
-					});
-					try {
-						await this.executor.respawnAgent(groupId, agentNamePart);
-					} catch {
-						// Respawn failed — mark done
-						await this.finishAgent(groupId, agentNamePart);
-						this.opts.onPlanChanged();
-						await this.tick();
+					// Session died — attempt respawn or mark done
+					const count = this.respawnCount.get(agentKey) ?? 0;
+					const group = this.engine.get().groups.find((g) => g.id === groupId);
+					const hasRemainingTasks =
+						group?.tasks.some((t) => t.kind === "task" && !t.done) ?? false;
+
+					if (hasRemainingTasks && count < 2) {
+						// Respawn: rebuild session and try again
+						this.respawnCount.set(agentKey, count + 1);
+						this.logEvent("crash-respawn", {
+							agent: agentKey,
+							attempt: count + 1,
+						});
+						try {
+							await this.executor.respawnAgent(groupId, agentNamePart);
+						} catch {
+							// Respawn failed — mark done
+							this.completeAgent(groupId, agentNamePart);
+						}
+					} else {
+						// No remaining tasks or max respawns — mark done
+						this.completeAgent(groupId, agentNamePart);
 					}
-				} else {
-					// No remaining tasks or max respawns — mark done
-					await this.finishAgent(groupId, agentNamePart);
-					this.opts.onPlanChanged();
-					await this.tick();
+				} catch (e) {
+					// One agent's tmux race must not abort the sweep or leak an
+					// unhandled rejection out of the interval callback.
+					this.logEvent("error", {
+						scope: "pollSessions",
+						agent: agentKey,
+						message: e instanceof Error ? e.message : String(e),
+					});
 				}
 			}
+		} finally {
+			this.pollInFlight = false;
 		}
 	}
 

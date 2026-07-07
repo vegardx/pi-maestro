@@ -146,6 +146,10 @@ export interface ShipGroupOpts {
  */
 export class GroupExecutor {
 	private readonly groupStates = new Map<string, GroupRunState>();
+	/** In-flight markAgentDone per "groupId/agentName" — concurrent callers share it. */
+	private readonly doneInFlight = new Map<string, Promise<void>>();
+	/** Groups mid-activation — a concurrent tick must not activate them again. */
+	private readonly activating = new Set<string>();
 
 	constructor(
 		private readonly engine: PlanEngine,
@@ -159,7 +163,11 @@ export class GroupExecutor {
 		}
 	}
 
-	/** Hydrate runtime state for a group that's already active (resume). */
+	/**
+	 * Hydrate runtime state for a group that's already active (resume).
+	 * A maestro restart ends the run: orphaned pi processes may still live in
+	 * tmux, so hydrated groups come up blocked instead of auto-respawning.
+	 */
 	private hydrateActiveGroup(g: WorkGroup): void {
 		const groupState: GroupRunState = {
 			groupId: g.id,
@@ -168,6 +176,8 @@ export class GroupExecutor {
 			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
 			branch: `feat/${g.id}`,
 			round: 0,
+			blocked:
+				"maestro restarted — agents may still be running in tmux; /retry after inspecting",
 		};
 		groupState.agents.set("worker", {
 			name: "worker",
@@ -226,15 +236,36 @@ export class GroupExecutor {
 
 	/**
 	 * Mark an agent as done (externally triggered by RPC or idle detection).
+	 * Idempotent: concurrent callers (RPC done + poll timer) share one run;
+	 * agents already summarizing or done are left alone.
 	 */
 	async markAgentDone(groupId: string, agentName: string): Promise<void> {
+		const key = `${groupId}/${agentName}`;
+		const inFlight = this.doneInFlight.get(key);
+		if (inFlight) return inFlight;
+		const run = this.runMarkAgentDone(groupId, agentName).finally(() => {
+			this.doneInFlight.delete(key);
+		});
+		this.doneInFlight.set(key, run);
+		return run;
+	}
+
+	private async runMarkAgentDone(
+		groupId: string,
+		agentName: string,
+	): Promise<void> {
 		const state = this.groupStates.get(groupId);
 		if (!state) return;
 		const agent = state.agents.get(agentName);
-		if (!agent || agent.status === "done") return;
+		if (!agent || agent.status === "done" || agent.status === "summarizing")
+			return;
+
+		// Capture before any await: if the agent is respawned while we
+		// summarize, the stale completion must not kill the fresh session.
+		const sessionId = agent.sessionId;
 
 		// Request summary
-		if (agent.sessionId) {
+		if (sessionId) {
 			const plan = this.engine.get();
 			const g = findGroup(plan, groupId);
 			const consumer = this.nextConsumer(g, agentName);
@@ -248,7 +279,7 @@ export class GroupExecutor {
 			try {
 				agent.status = "summarizing";
 				const summary = await this.deps.requestSummary(
-					agent.sessionId,
+					sessionId,
 					consumer,
 					preamble,
 				);
@@ -257,7 +288,7 @@ export class GroupExecutor {
 				// Summary extraction failed — continue without it
 			}
 
-			await this.deps.killSession(agent.sessionId);
+			await this.deps.killSession(sessionId);
 		}
 
 		agent.status = "done";
@@ -279,6 +310,12 @@ export class GroupExecutor {
 		agent.status = "failed";
 		agent.error = error;
 		agent.completedAt = this.deps.now();
+	}
+
+	/** Clear a group's blocked reason (user-driven retry). */
+	unblockGroup(groupId: string): void {
+		const state = this.groupStates.get(groupId);
+		if (state) state.blocked = undefined;
 	}
 
 	/**
@@ -314,6 +351,18 @@ export class GroupExecutor {
 	// ─── Internal ──────────────────────────────────────────────────────────
 
 	private async activateGroup(g: WorkGroup): Promise<void> {
+		// Re-entrancy guard: provisioning awaits before the status flips to
+		// active, so an overlapping tick would otherwise double-activate.
+		if (this.activating.has(g.id) || this.groupStates.has(g.id)) return;
+		this.activating.add(g.id);
+		try {
+			await this.doActivateGroup(g);
+		} finally {
+			this.activating.delete(g.id);
+		}
+	}
+
+	private async doActivateGroup(g: WorkGroup): Promise<void> {
 		const plan = this.engine.get();
 		const branch = g.branch ?? defaultBranchForGroup(g);
 		const baseBranch = pickBaseBranch(
@@ -371,6 +420,10 @@ export class GroupExecutor {
 		g: WorkGroup,
 		state: GroupRunState,
 	): Promise<void> {
+		// Blocked groups (fix-loop stall, maestro restart) need user action
+		// before any further spawning.
+		if (state.blocked) return;
+
 		// Spawn immediate agents that are still pending (e.g. after hydration)
 		const immediate = immediateAgents(g);
 		for (const name of immediate) {
@@ -398,6 +451,9 @@ export class GroupExecutor {
 	): Promise<void> {
 		const agentState = state.agents.get(name);
 		if (!agentState) return;
+
+		// Never spawn into a blocked group (fix rounds clear `blocked` first).
+		if (state.blocked) return;
 
 		const spec =
 			name === "worker" ? g.worker : g.agents.find((a) => a.name === name);
@@ -652,18 +708,30 @@ export class GroupExecutor {
 
 		state.round += 1;
 		state.blocked = undefined;
-		state.lastFindingsByReviewer ??= new Map();
 
+		// Add all work items before mutating any agent state: a mid-loop
+		// validation failure must not leave a half-armed round (round bumped
+		// but nobody re-pended → the group would wedge silently).
 		const allFindings: string[] = [];
+		try {
+			for (const o of objections) {
+				for (const finding of o.findings) {
+					this.engine.addWorkItem(g.id, {
+						title: `[round ${state.round}, ${o.name}] ${finding}`,
+						kind: "task",
+					});
+					allFindings.push(finding);
+				}
+			}
+		} catch (e) {
+			state.round -= 1;
+			state.blocked = `fix round failed: ${e instanceof Error ? e.message : String(e)}`;
+			return;
+		}
+
+		state.lastFindingsByReviewer ??= new Map();
 		for (const o of objections) {
 			state.lastFindingsByReviewer.set(o.name, o.findings);
-			for (const finding of o.findings) {
-				this.engine.addWorkItem(g.id, {
-					title: `[round ${state.round}, ${o.name}] ${finding}`,
-					kind: "task",
-				});
-				allFindings.push(finding);
-			}
 		}
 
 		// Re-pend the worker and every objecting reviewer; approving reviewers

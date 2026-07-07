@@ -121,6 +121,9 @@ describe("execution adapter observability", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
+		// Hydrated active groups come up blocked (restart safety); unblock as
+		// a user's /retry would so the tick spawns the worker.
+		adapter.getExecutor().unblockGroup("group-one");
 		await adapter.tick();
 	});
 

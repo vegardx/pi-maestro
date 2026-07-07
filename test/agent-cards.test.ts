@@ -1,6 +1,6 @@
-// Agent progress cards: the pure header/body/content builders per event
-// kind, the collapsed/expanded TUI renderer output, and the sendAgentEvent
-// message shape.
+// Agent progress cards: the pure header/body/trailer builders per event
+// kind, firstParagraph extraction, the collapsed/expanded tinted-block TUI
+// renderer output, and the sendAgentEvent message shape.
 
 import type {
 	ExtensionAPI,
@@ -14,7 +14,10 @@ import {
 	buildCardBody,
 	buildCardHeader,
 	buildEventContent,
+	buildStatsTrailer,
+	eventBg,
 	eventColor,
+	firstParagraph,
 	formatDuration,
 	registerAgentCardRenderer,
 	sendAgentEvent,
@@ -23,18 +26,29 @@ import {
 /** Identity theme: styling is a no-op so assertions see plain text. */
 const theme = {
 	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 	italic: (text: string) => text,
 } as unknown as Theme;
 
-const doneEvent: ExecutionEvent = {
+const doneEvent = {
 	kind: "done",
 	agentKey: "auth/worker",
 	groupTitle: "Auth",
 	durationMs: 245_000,
 	tokens: { input: 52_000, output: 8_400, turns: 12 },
 	cacheRatio: 0.82,
-	summary: "## Summary\nImplemented the login endpoint.\nAdded tests.",
+	summary:
+		"## Summary\nImplemented the login endpoint.\n\nAdded tests covering refresh and expiry.",
+	commits: ["feat: add login", "test: cover refresh"],
+} satisfies ExecutionEvent;
+
+const fixRoundEvent: ExecutionEvent = {
+	kind: "fix-round",
+	groupId: "auth",
+	groupTitle: "Auth",
+	round: 2,
+	findings: ["missing CSRF check", "no rate limit"],
 };
 
 describe("agent card builders", () => {
@@ -44,7 +58,7 @@ describe("agent card builders", () => {
 		expect(formatDuration(3_720_000)).toBe("1h02m");
 	});
 
-	it("colors cards by kind with sensible fallbacks", () => {
+	it("colors card headers by kind", () => {
 		expect(eventColor("spawn")).toBe("accent");
 		expect(eventColor("done")).toBe("success");
 		expect(eventColor("fix-round")).toBe("warning");
@@ -54,105 +68,144 @@ describe("agent card builders", () => {
 		expect(eventColor("settled")).toBe("accent");
 	});
 
-	it("builds a spawn header", () => {
-		expect(
-			buildCardHeader({
-				kind: "spawn",
-				agentKey: "auth/worker",
-				session: "maestro-ada",
-				resumed: false,
-				groupTitle: "Auth",
-			}),
-		).toBe("▸ spawned auth/worker — Auth");
-		expect(
-			buildCardHeader({
-				kind: "spawn",
-				agentKey: "auth/worker",
-				session: "maestro-ada",
-				resumed: true,
-				groupTitle: "Auth",
-			}),
-		).toContain("(resumed)");
+	it("tints card backgrounds by kind from the available bg keys", () => {
+		expect(eventBg("done")).toBe("toolSuccessBg");
+		expect(eventBg("shipped")).toBe("toolSuccessBg");
+		// No warning bg exists in the theme — fix-round leans on toolPendingBg.
+		expect(eventBg("fix-round")).toBe("toolPendingBg");
+		expect(eventBg("blocked")).toBe("toolErrorBg");
+		expect(eventBg("failed")).toBe("toolErrorBg");
+		expect(eventBg("spawn")).toBe("customMessageBg");
+		expect(eventBg("settled")).toBe("customMessageBg");
 	});
 
-	it("builds a done header with duration, tokens, and cache", () => {
-		const header = buildCardHeader(doneEvent);
-		expect(header).toBe(
-			"✓ done auth/worker · 4m05s · ↑52k ↓8k · 12 turns · cache 82% — Auth",
+	it("builds a spawn header and keeps the card body-free", () => {
+		const spawn: ExecutionEvent = {
+			kind: "spawn",
+			agentKey: "auth/worker",
+			session: "maestro-ada",
+			resumed: false,
+			groupTitle: "Auth",
+		};
+		expect(buildCardHeader(spawn)).toBe("◆ Auth · worker started");
+		expect(buildCardHeader({ ...spawn, resumed: true })).toBe(
+			"◆ Auth · worker started (resumed)",
+		);
+		expect(buildCardBody(spawn, false)).toEqual([]);
+		expect(buildCardBody(spawn, true)).toEqual([]);
+		expect(buildStatsTrailer(spawn)).toBe("");
+		// Single line — the whole card is one tiny tinted block.
+		expect(buildEventContent(spawn)).toBe("◆ Auth · worker started");
+	});
+
+	it("builds a summary-first done header without stats", () => {
+		expect(buildCardHeader(doneEvent)).toBe(
+			"✓ Auth · worker · finished in 4m05s",
 		);
 	});
 
-	it("expands a done card with a capped summary excerpt", () => {
-		const long = {
-			...doneEvent,
-			summary: Array.from({ length: 14 }, (_, i) => `line ${i + 1}`).join("\n"),
-		};
-		const body = buildCardBody(long);
-		expect(body).toHaveLength(11); // 10 lines + ellipsis
-		expect(body[0]).toBe("line 1");
-		expect(body[10]).toBe("…");
+	it("demotes done stats to a dim trailer", () => {
+		expect(buildStatsTrailer(doneEvent)).toBe(
+			"↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+		);
 	});
 
-	it("includes commits before the summary when provided", () => {
-		const body = buildCardBody({
-			...doneEvent,
-			commits: ["feat: add login", "test: cover refresh"],
+	it("omits absent commit and cache stats from the trailer", () => {
+		const { cacheRatio: _cache, commits: _commits, ...rest } = doneEvent;
+		expect(buildStatsTrailer(rest as ExecutionEvent)).toBe(
+			"↳ 52.0k/8.4k tok · 12 turns",
+		);
+	});
+
+	describe("firstParagraph", () => {
+		it("strips a leading ## Summary heading", () => {
+			expect(firstParagraph("## Summary\nDid the thing.")).toBe(
+				"Did the thing.",
+			);
 		});
-		expect(body.slice(0, 3)).toEqual([
+
+		it("splits on the first blank line", () => {
+			expect(firstParagraph("First para\nstill first.\n\nSecond para.")).toBe(
+				"First para\nstill first.",
+			);
+		});
+
+		it("returns the whole summary when it has no blank line", () => {
+			expect(firstParagraph("One line.\nTwo lines.")).toBe(
+				"One line.\nTwo lines.",
+			);
+		});
+	});
+
+	it("collapsed done body is the summary's first paragraph only", () => {
+		expect(buildCardBody(doneEvent, false)).toEqual([
+			"Implemented the login endpoint.",
+		]);
+	});
+
+	it("expanded done body adds the rest of the summary, then commits", () => {
+		expect(buildCardBody(doneEvent, true)).toEqual([
+			"Implemented the login endpoint.",
+			"",
+			"Added tests covering refresh and expiry.",
+			"",
 			"commits:",
 			"  feat: add login",
 			"  test: cover refresh",
 		]);
-		expect(body).toContain("Implemented the login endpoint.");
 	});
 
-	it("builds fix-round header and findings body", () => {
-		const event: ExecutionEvent = {
-			kind: "fix-round",
+	it("builds fix-round header, findings body, and resurrection trailer", () => {
+		expect(buildCardHeader(fixRoundEvent)).toBe("↻ Auth · fix round 2");
+		expect(buildCardBody(fixRoundEvent, false)).toEqual([
+			"missing CSRF check",
+			"no rate limit",
+		]);
+		expect(buildStatsTrailer(fixRoundEvent)).toBe(
+			"↳ round 2 · 2 findings · worker resurrected",
+		);
+	});
+
+	it("builds blocked with the reason as body and a /retry trailer", () => {
+		const blocked: ExecutionEvent = {
+			kind: "blocked",
 			groupId: "auth",
 			groupTitle: "Auth",
-			round: 2,
-			findings: ["missing CSRF check", "no rate limit"],
+			reason: "fix-round cap reached",
 		};
-		expect(buildCardHeader(event)).toBe("↻ fix round 2 — Auth (2 findings)");
-		expect(buildCardBody(event)).toEqual([
-			"• missing CSRF check",
-			"• no rate limit",
+		expect(buildCardHeader(blocked)).toBe("■ Auth · blocked");
+		expect(buildCardBody(blocked, false)).toEqual(["fix-round cap reached"]);
+		expect(buildStatsTrailer(blocked)).toBe("↳ /retry after inspecting");
+	});
+
+	it("builds failed with a respawn-count trailer", () => {
+		const failed: ExecutionEvent = {
+			kind: "failed",
+			agentKey: "auth/worker",
+			groupTitle: "Auth",
+			respawns: 2,
+		};
+		expect(buildCardHeader(failed)).toBe("✗ Auth · worker failed");
+		expect(buildCardBody(failed, false)).toEqual([]);
+		expect(buildStatsTrailer(failed)).toBe("↳ 2 respawns");
+	});
+
+	it("builds shipped with the PR URL as body and the group id trailer", () => {
+		const shipped: ExecutionEvent = {
+			kind: "shipped",
+			groupId: "auth",
+			groupTitle: "Auth",
+			prUrl: "https://github.com/org/repo/pull/42",
+		};
+		expect(buildCardHeader(shipped)).toBe("⇧ Auth · shipped");
+		expect(buildCardBody(shipped, false)).toEqual([
+			"https://github.com/org/repo/pull/42",
 		]);
+		expect(buildStatsTrailer(shipped)).toBe("↳ group auth");
 	});
 
-	it("builds blocked and failed headers", () => {
-		expect(
-			buildCardHeader({
-				kind: "blocked",
-				groupId: "auth",
-				groupTitle: "Auth",
-				reason: "fix-round cap reached",
-			}),
-		).toBe("■ blocked — Auth: fix-round cap reached");
-		expect(
-			buildCardHeader({
-				kind: "failed",
-				agentKey: "auth/worker",
-				groupTitle: "Auth",
-				respawns: 2,
-			}),
-		).toBe("✗ failed auth/worker after 2 respawns — Auth");
-	});
-
-	it("builds a shipped header with the PR number", () => {
-		expect(
-			buildCardHeader({
-				kind: "shipped",
-				groupId: "auth",
-				groupTitle: "Auth",
-				prUrl: "https://github.com/org/repo/pull/42",
-			}),
-		).toBe("⇧ shipped — Auth (PR #42)");
-	});
-
-	it("builds a settled header and group list body", () => {
-		const event: ExecutionEvent = {
+	it("builds a settled header and per-group status body", () => {
+		const settled: ExecutionEvent = {
 			kind: "settled",
 			groups: [
 				{
@@ -164,18 +217,24 @@ describe("agent card builders", () => {
 				{ id: "db", title: "DB", status: "abandoned" },
 			],
 		};
-		expect(buildCardHeader(event)).toBe("◆ all groups settled — 1/2 shipped");
-		expect(buildCardBody(event)).toEqual([
-			"✓ Auth — shipped (#42)",
-			"• DB — abandoned",
+		expect(buildCardHeader(settled)).toBe("◆ all groups settled · 1/2 shipped");
+		expect(buildCardBody(settled, false)).toEqual([
+			"Auth — shipped https://github.com/org/repo/pull/42",
+			"DB — abandoned",
 		]);
+		expect(buildStatsTrailer(settled)).toBe("");
 	});
 
-	it("content fallback carries header plus body as plain text", () => {
-		const content = buildEventContent(doneEvent);
-		const [first, ...rest] = content.split("\n");
-		expect(first).toBe(buildCardHeader(doneEvent));
-		expect(rest.join("\n")).toContain("Implemented the login endpoint.");
+	it("content fallback mirrors the summary-first collapsed layout", () => {
+		expect(buildEventContent(doneEvent)).toBe(
+			[
+				"✓ Auth · worker · finished in 4m05s",
+				"",
+				"Implemented the login endpoint.",
+				"",
+				"  ↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+			].join("\n"),
+		);
 	});
 });
 
@@ -225,29 +284,106 @@ describe("registerAgentCardRenderer", () => {
 		};
 	}
 
-	it("collapsed: renders a single boxed header line", () => {
+	function render(event: ExecutionEvent, expanded: boolean): string {
 		const { pi, renderer } = capture();
 		registerAgentCardRenderer(pi);
-		const text = renderToText(
-			renderer()(message(doneEvent), { expanded: false }, theme),
-		);
+		return renderToText(renderer()(message(event), { expanded }, theme));
+	}
+
+	it("collapsed: padded tinted block with header, first paragraph, trailer", () => {
+		const text = render(doneEvent, false);
 		const lines = text.split("\n");
-		expect(lines).toHaveLength(3); // top border, header, bottom border
-		expect(lines[0]).toMatch(/^╭─+╮$/);
-		expect(lines[1]).toContain("✓ done auth/worker");
-		expect(lines[2]).toMatch(/^╰─+╯$/);
-		expect(text).not.toContain("Implemented the login endpoint.");
+		// paddingY=1: blank tinted rows above and below the content.
+		expect(lines[0]).toBe("");
+		expect(lines[lines.length - 1]).toBe("");
+		// paddingX=1: content is inset one column.
+		expect(lines[1]).toBe(" ✓ Auth · worker · finished in 4m05s");
+		expect(text).toContain("Implemented the login endpoint.");
+		expect(text).toContain(
+			"↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+		);
+		// Summary-first: collapsed hides everything past the first paragraph.
+		expect(text).not.toContain("Added tests covering refresh and expiry.");
+		expect(text).not.toContain("feat: add login");
 	});
 
-	it("expanded: adds the summary excerpt inside the box", () => {
+	it("expanded: adds the rest of the summary and the commit list", () => {
+		const text = render(doneEvent, true);
+		expect(text).toContain("Implemented the login endpoint.");
+		expect(text).toContain("Added tests covering refresh and expiry.");
+		expect(text).toContain("commits:");
+		expect(text).toContain("feat: add login");
+		expect(text).toContain("test: cover refresh");
+	});
+
+	it("wraps long body prose instead of truncating it", () => {
+		const wordy = {
+			...doneEvent,
+			summary: `long-summary ${"word ".repeat(40)}end-of-summary`,
+		};
+		const text = render(wordy, false);
+		expect(text.split("\n").length).toBeGreaterThan(5);
+		expect(text).toContain("end-of-summary");
+	});
+
+	it("spawn renders as a single header line inside the padding", () => {
+		const text = render(
+			{
+				kind: "spawn",
+				agentKey: "auth/worker",
+				session: "maestro-ada",
+				resumed: false,
+				groupTitle: "Auth",
+			},
+			false,
+		);
+		expect(text.split("\n")).toEqual(["", " ◆ Auth · worker started", ""]);
+	});
+
+	it("tints the block with the kind's bg color", () => {
+		const bgCalls: string[] = [];
+		const spyTheme = {
+			fg: (_color: string, text: string) => text,
+			bg: (color: string, text: string) => {
+				bgCalls.push(color);
+				return text;
+			},
+		} as unknown as Theme;
 		const { pi, renderer } = capture();
 		registerAgentCardRenderer(pi);
-		const text = renderToText(
-			renderer()(message(doneEvent), { expanded: true }, theme),
-		);
-		expect(text).toContain("✓ done auth/worker");
-		expect(text).toContain("Implemented the login endpoint.");
-		expect(text).toContain("Added tests.");
+		renderToText(renderer()(message(doneEvent), { expanded: false }, spyTheme));
+		expect(bgCalls.length).toBeGreaterThan(0);
+		expect(new Set(bgCalls)).toEqual(new Set(["toolSuccessBg"]));
+	});
+
+	it("never emits box-drawing characters", () => {
+		const events: ExecutionEvent[] = [
+			doneEvent,
+			fixRoundEvent,
+			{
+				kind: "spawn",
+				agentKey: "auth/worker",
+				session: "s",
+				resumed: true,
+				groupTitle: "Auth",
+			},
+			{ kind: "blocked", groupId: "auth", groupTitle: "Auth", reason: "cap" },
+			{
+				kind: "failed",
+				agentKey: "auth/worker",
+				groupTitle: "Auth",
+				respawns: 1,
+			},
+			{ kind: "shipped", groupId: "auth", groupTitle: "Auth" },
+			{ kind: "settled", groups: [{ id: "a", title: "A", status: "shipped" }] },
+		];
+		for (const event of events) {
+			for (const expanded of [false, true]) {
+				const text = render(event, expanded);
+				expect(text).not.toMatch(/[─-╿]/);
+				expect(buildEventContent(event)).not.toMatch(/[─-╿]/);
+			}
+		}
 	});
 
 	it("falls back to plain content when details are missing", () => {
@@ -290,7 +426,7 @@ describe("sendAgentEvent", () => {
 		expect(msg.customType).toBe(AGENT_EVENT_MESSAGE_TYPE);
 		expect(msg.display).toBe(true);
 		expect(msg.details).toEqual(doneEvent);
-		expect(msg.content).toContain("✓ done auth/worker");
+		expect(msg.content).toContain("✓ Auth · worker · finished in 4m05s");
 		expect(sent[0].options).toEqual({ triggerTurn: false });
 	});
 });

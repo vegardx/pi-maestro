@@ -1,28 +1,31 @@
-// Agent lifecycle cards: bordered, theme-colored, collapsible chat messages
-// for execution milestones (spawn/done/fix-round/blocked/failed/shipped/
-// settled). sendAgentEvent mirrors an ExecutionEvent into the session as a
-// custom message; registerAgentCardRenderer draws it in the TUI. The header/
-// body builders are pure string assembly so tests assert on plain text, and
-// the message `content` carries the same info unstyled for non-TUI modes.
+// Agent lifecycle cards: background-tinted, padded chat messages for
+// execution milestones (spawn/done/fix-round/blocked/failed/shipped/
+// settled), rendered exactly how pi renders tool calls — a Text component
+// with paddingX/paddingY and a theme.bg tint, no box-drawing characters.
+// Layout is summary-first: one header line, the summary's first paragraph
+// as the body, and a dim stats trailer. Expanding adds the rest of the
+// summary and the commit list. sendAgentEvent mirrors an ExecutionEvent
+// into the session as a custom message; registerAgentCardRenderer draws it
+// in the TUI. The header/body/trailer builders are pure string assembly so
+// tests assert on plain text, and the message `content` carries the same
+// summary-first layout unstyled for non-TUI modes.
 
 import type {
 	ExtensionAPI,
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import type { ExecutionEvent } from "../exec/index.js";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
 
-/** Expanded done-cards show at most this many summary lines. */
-const SUMMARY_EXCERPT_LINES = 10;
-/** Card inner width cap — keeps boxes readable on wide terminals. */
-const CARD_MAX_WIDTH = 76;
+/** Background tint keys accepted by theme.bg (type not exported upstream). */
+type ThemeBgColor = Parameters<Theme["bg"]>[0];
 
 const k = (n: number): string => {
 	if (n < 1000) return `${n}`;
-	return `${Math.round(n / 1000)}k`;
+	return `${(n / 1000).toFixed(1)}k`;
 };
 
 /** "3s" / "4m05s" / "1h02m" — compact duration for the done card. */
@@ -39,13 +42,16 @@ export function formatDuration(ms: number): string {
 	return rm > 0 ? `${h}h${String(rm).padStart(2, "0")}m` : `${h}h`;
 }
 
-/** "#123" from a GitHub PR url, or the url itself when it doesn't match. */
-function prLabel(prUrl: string): string {
-	const match = /\/pull\/(\d+)/.exec(prUrl);
-	return match ? `#${match[1]}` : prUrl;
+/** "worker" from "auth/worker" — the role half of an agent key. */
+function agentRole(agentKey: string): string {
+	const slash = agentKey.lastIndexOf("/");
+	return slash === -1 ? agentKey : agentKey.slice(slash + 1);
 }
 
-/** Theme color for a card's border and header, keyed by event kind. */
+const plural = (n: number, word: string): string =>
+	`${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Theme color for a card's header text, keyed by event kind. */
 export function eventColor(kind: ExecutionEvent["kind"]): ThemeColor {
 	switch (kind) {
 		case "spawn":
@@ -63,67 +69,165 @@ export function eventColor(kind: ExecutionEvent["kind"]): ThemeColor {
 	}
 }
 
-/** One-line card header — the entire collapsed card. */
+/**
+ * Background tint for a card, keyed by event kind. The theme exposes only
+ * six bg keys (selectedBg, userMessageBg, customMessageBg, toolPendingBg,
+ * toolSuccessBg, toolErrorBg) — there is no warning or accent bg, so:
+ *   done/shipped   → toolSuccessBg (success tint)
+ *   blocked/failed → toolErrorBg   (error tint)
+ *   fix-round      → toolPendingBg (closest to a warning; the warning hue
+ *                    is carried by the theme.fg("warning") header instead)
+ *   spawn/settled  → customMessageBg (neutral/accent tint; accent hue is
+ *                    carried by the theme.fg("accent") header)
+ */
+export function eventBg(kind: ExecutionEvent["kind"]): ThemeBgColor {
+	switch (kind) {
+		case "done":
+		case "shipped":
+			return "toolSuccessBg";
+		case "fix-round":
+			return "toolPendingBg";
+		case "blocked":
+		case "failed":
+			return "toolErrorBg";
+		case "spawn":
+		case "settled":
+			return "customMessageBg";
+	}
+}
+
+/** One-line card header — `<icon> <group> · <what happened>`. */
 export function buildCardHeader(event: ExecutionEvent): string {
 	switch (event.kind) {
 		case "spawn":
-			return `▸ spawned ${event.agentKey}${event.resumed ? " (resumed)" : ""} — ${event.groupTitle}`;
-		case "done": {
-			const t = event.tokens;
-			const cache =
-				event.cacheRatio !== undefined
-					? ` · cache ${Math.round(event.cacheRatio * 100)}%`
-					: "";
-			return `✓ done ${event.agentKey} · ${formatDuration(event.durationMs)} · ↑${k(t.input)} ↓${k(t.output)} · ${t.turns} turns${cache} — ${event.groupTitle}`;
-		}
+			return `◆ ${event.groupTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
+		case "done":
+			return `✓ ${event.groupTitle} · ${agentRole(event.agentKey)} · finished in ${formatDuration(event.durationMs)}`;
 		case "fix-round":
-			return `↻ fix round ${event.round} — ${event.groupTitle} (${event.findings.length} finding${event.findings.length === 1 ? "" : "s"})`;
+			return `↻ ${event.groupTitle} · fix round ${event.round}`;
 		case "blocked":
-			return `■ blocked — ${event.groupTitle}: ${event.reason}`;
+			return `■ ${event.groupTitle} · blocked`;
 		case "failed":
-			return `✗ failed ${event.agentKey} after ${event.respawns} respawn${event.respawns === 1 ? "" : "s"} — ${event.groupTitle}`;
+			return `✗ ${event.groupTitle} · ${agentRole(event.agentKey)} failed`;
 		case "shipped":
-			return `⇧ shipped — ${event.groupTitle}${event.prUrl ? ` (PR ${prLabel(event.prUrl)})` : ""}`;
+			return `⇧ ${event.groupTitle} · shipped`;
 		case "settled": {
 			const shipped = event.groups.filter((g) => g.status === "shipped").length;
-			return `◆ all groups settled — ${shipped}/${event.groups.length} shipped`;
+			return `◆ all groups settled · ${shipped}/${event.groups.length} shipped`;
 		}
 	}
 }
 
-/** Extra lines shown only when the card is expanded. */
-export function buildCardBody(event: ExecutionEvent): string[] {
+/**
+ * First paragraph of an agent summary: strips a leading "## Summary"
+ * heading (any level), then cuts at the first blank line. Returns the whole
+ * summary when it has no blank line.
+ */
+export function firstParagraph(summary: string): string {
+	const stripped = summary.trim().replace(/^#{1,6}[ \t]*summary[ \t]*\n+/i, "");
+	const blank = stripped.search(/\n[ \t]*\n/);
+	return (blank === -1 ? stripped : stripped.slice(0, blank)).trim();
+}
+
+/** Everything after the first paragraph — shown only when expanded. */
+function restOfSummary(summary: string): string {
+	const stripped = summary.trim().replace(/^#{1,6}[ \t]*summary[ \t]*\n+/i, "");
+	const blank = stripped.search(/\n[ \t]*\n/);
+	return blank === -1 ? "" : stripped.slice(blank).trim();
+}
+
+/**
+ * Card body lines — summary-first prose. Collapsed done cards show only the
+ * summary's first paragraph; expanding adds the rest of the summary and the
+ * commit list.
+ */
+export function buildCardBody(
+	event: ExecutionEvent,
+	expanded: boolean,
+): string[] {
 	switch (event.kind) {
+		case "spawn":
+			// Spawn stays minimal: header line only, no body.
+			return [];
 		case "done": {
 			const lines: string[] = [];
-			if (event.commits?.length) {
+			if (event.summary) {
+				lines.push(firstParagraph(event.summary));
+				if (expanded) {
+					const rest = restOfSummary(event.summary);
+					if (rest) lines.push("", rest);
+				}
+			}
+			if (expanded && event.commits?.length) {
+				if (lines.length > 0) lines.push("");
 				lines.push("commits:");
 				for (const commit of event.commits) lines.push(`  ${commit}`);
-			}
-			if (event.summary) {
-				const all = event.summary.trim().split("\n");
-				lines.push(...all.slice(0, SUMMARY_EXCERPT_LINES));
-				if (all.length > SUMMARY_EXCERPT_LINES) lines.push("…");
 			}
 			return lines;
 		}
 		case "fix-round":
-			return event.findings.map((finding) => `• ${finding}`);
+			return [...event.findings];
+		case "blocked":
+			return [event.reason];
+		case "failed":
+			// The failed event carries no error payload — header + trailer only.
+			return [];
+		case "shipped":
+			return event.prUrl ? [event.prUrl] : [];
 		case "settled":
 			return event.groups.map(
-				(g) =>
-					`${g.status === "shipped" ? "✓" : "•"} ${g.title} — ${g.status}${g.prUrl ? ` (${prLabel(g.prUrl)})` : ""}`,
+				(g) => `${g.title} — ${g.status}${g.prUrl ? ` ${g.prUrl}` : ""}`,
 			);
-		default:
-			return [];
 	}
 }
 
-/** Plain-text fallback (message content) — same info, no styling or box. */
+/** Dim one-line stats trailer — "↳ …" under the body; "" when none. */
+export function buildStatsTrailer(event: ExecutionEvent): string {
+	switch (event.kind) {
+		case "spawn":
+		case "settled":
+			return "";
+		case "done": {
+			const t = event.tokens;
+			const parts: string[] = [];
+			if (event.commits?.length)
+				parts.push(plural(event.commits.length, "commit"));
+			parts.push(`${k(t.input)}/${k(t.output)} tok`);
+			if (event.cacheRatio !== undefined)
+				parts.push(`cache ${Math.round(event.cacheRatio * 100)}%`);
+			parts.push(`${t.turns} turns`);
+			return `↳ ${parts.join(" · ")}`;
+		}
+		case "fix-round":
+			return `↳ round ${event.round} · ${plural(event.findings.length, "finding")} · worker resurrected`;
+		case "blocked":
+			return "↳ /retry after inspecting";
+		case "failed":
+			return `↳ ${plural(event.respawns, "respawn")}`;
+		case "shipped":
+			return `↳ group ${event.groupId}`;
+	}
+}
+
+/** Header + blank line + body + blank line + indented trailer. */
+function assembleLines(
+	header: string,
+	body: string[],
+	trailer: string,
+): string[] {
+	const lines = [header];
+	if (body.length > 0) lines.push("", ...body);
+	if (trailer) lines.push("", `  ${trailer}`);
+	return lines;
+}
+
+/** Plain-text fallback (message content) — same summary-first layout. */
 export function buildEventContent(event: ExecutionEvent): string {
-	const body = buildCardBody(event);
-	const header = buildCardHeader(event);
-	return body.length > 0 ? `${header}\n${body.join("\n")}` : header;
+	return assembleLines(
+		buildCardHeader(event),
+		buildCardBody(event, false),
+		buildStatsTrailer(event),
+	).join("\n");
 }
 
 /** Mirror an execution event into the chat as a progress-card message. */
@@ -139,32 +243,6 @@ export function sendAgentEvent(pi: ExtensionAPI, event: ExecutionEvent): void {
 	);
 }
 
-/** Draw a rounded box around the header (+ body when expanded). */
-function renderCard(
-	header: string,
-	body: string[],
-	color: ThemeColor,
-	theme: Theme,
-): string {
-	const inner = Math.min(
-		CARD_MAX_WIDTH,
-		Math.max(visibleWidth(header), ...body.map((line) => visibleWidth(line))),
-	);
-	const edge = (text: string) => theme.fg(color, text);
-	const row = (text: string, paint: (s: string) => string): string => {
-		const clipped = truncateToWidth(text, inner);
-		const pad = " ".repeat(Math.max(0, inner - visibleWidth(clipped)));
-		return `${edge("│")} ${paint(clipped)}${pad} ${edge("│")}`;
-	};
-	const lines = [
-		edge(`╭${"─".repeat(inner + 2)}╮`),
-		row(header, (s) => theme.fg(color, s)),
-	];
-	for (const line of body) lines.push(row(line, (s) => theme.fg("muted", s)));
-	lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
-	return lines.join("\n");
-}
-
 /** Register the TUI renderer for maestro.agent.event messages. */
 export function registerAgentCardRenderer(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<ExecutionEvent>(
@@ -177,12 +255,16 @@ export function registerAgentCardRenderer(pi: ExtensionAPI): void {
 					typeof message.content === "string" ? message.content : "";
 				return new Text(content, 0, 0);
 			}
-			const header = buildCardHeader(event);
-			const body = options.expanded ? buildCardBody(event) : [];
-			return new Text(
-				renderCard(header, body, eventColor(event.kind), theme),
-				0,
-				0,
+			const header = theme.fg(eventColor(event.kind), buildCardHeader(event));
+			const body = buildCardBody(event, options.expanded === true);
+			const trailer = buildStatsTrailer(event);
+			const lines = [header];
+			if (body.length > 0) lines.push("", ...body);
+			if (trailer) lines.push("", theme.fg("dim", `  ${trailer}`));
+			// Tool-call style frame: padded Text with a per-kind bg tint,
+			// word-wrapped natively by the component.
+			return new Text(lines.join("\n"), 1, 1, (text) =>
+				theme.bg(eventBg(event.kind), text),
 			);
 		},
 	);

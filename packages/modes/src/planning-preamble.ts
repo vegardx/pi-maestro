@@ -63,7 +63,11 @@ For complex requests with open decisions:
 4. **Detail** — Call \`task(action="add", groupId="...", title="...", body="...")\`
    for each concrete task. Tasks describe WHAT to implement.
 5. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
-6. **Summary** — Write a brief text summary. End with "Ready to implement."
+6. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
+   document (Project Structure / Key Patterns / Conventions / Key Interfaces).
+   Every agent forks from it; \`/implement\` refuses to start without it. Distill
+   what you learned during research — reference material, not tasks.
+7. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ## Rules
 

@@ -2,7 +2,7 @@
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers } from "@vegardx/pi-contracts";
@@ -11,6 +11,7 @@ import {
 	type PlanMutateMessage,
 	type PlanReadMessage,
 	type QuestionsMessage,
+	type TokenSnapshot,
 } from "@vegardx/pi-rpc";
 import * as realTmux from "@vegardx/pi-tmux";
 import { buildAgentSeed, buildWorkerSeed } from "../agent-lifecycle.js";
@@ -55,6 +56,10 @@ export interface ExecutionAdapterOpts {
 	worktreeSetup?: ProvisionEnvironmentOpts;
 	/** Injectable tmux implementation; defaults to the real seam. */
 	tmux?: TmuxApi;
+	/** Fixed run token — injectable for tests; defaults to a random UUID. */
+	token?: string;
+	/** Fixed RPC socket path — injectable for tests. */
+	socketPath?: string;
 	onPlanChanged: () => void;
 	onAgentStateChanged?: (
 		id: string,
@@ -78,7 +83,7 @@ export class ExecutionAdapter {
 	private router: RpcRouter;
 	private tmux: TmuxApi;
 	private socketPath: string;
-	private token = randomUUID();
+	private token: string;
 	private _started = false;
 	private takenNames = new Set<string>();
 	private sessionNames = new Map<string, string>(); // agentKey → tmux session name
@@ -88,6 +93,10 @@ export class ExecutionAdapter {
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	private tokenSnapshots = new Map<string, TokenSnapshot>(); // agentKey → latest tokens
+	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
+	private lastRounds = new Map<string, number>(); // groupId → last logged fix round
+	private blockedLogged = new Set<string>(); // groupIds with a logged blocked event
 
 	readonly questionQueue = new QuestionQueue();
 
@@ -95,10 +104,13 @@ export class ExecutionAdapter {
 		this.opts = opts;
 		this.engine = opts.engine;
 		this.tmux = opts.tmux ?? realTmux;
-		this.socketPath = join(
-			"/tmp",
-			`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
-		);
+		this.token = opts.token ?? randomUUID();
+		this.socketPath =
+			opts.socketPath ??
+			join(
+				"/tmp",
+				`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
+			);
 		this.rpcServer = new MaestroRpcServer();
 		this.router = createRpcRouter({
 			server: this.rpcServer,
@@ -116,6 +128,7 @@ export class ExecutionAdapter {
 					this.handleDone(groupId, agentNamePart);
 				},
 				tokens: (agentId, msg) => {
+					this.tokenSnapshots.set(agentId, msg.snapshot);
 					this.opts.onAgentStateChanged?.(agentId, {
 						status: "working",
 						tokens: {
@@ -243,6 +256,12 @@ export class ExecutionAdapter {
 					env: spec.env,
 				});
 
+				this.spawnTimes.set(agentKey, Date.now());
+				this.logEvent("spawn", {
+					agent: agentKey,
+					session: sessionName,
+					resumed: Boolean(spawnOpts.resumeSessionFile),
+				});
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
 					tokens: { input: 0, output: 0, turns: 0 },
@@ -368,12 +387,17 @@ export class ExecutionAdapter {
 			.groups.filter((g) => g.status === "active").length;
 
 		const shipped = await this.executor.tick();
+		this.recordGroupTransitions();
 
 		const afterActive = this.engine
 			.get()
 			.groups.filter((g) => g.status === "active").length;
 
 		if (shipped.length > 0) {
+			for (const groupId of shipped) {
+				const g = this.engine.get().groups.find((x) => x.id === groupId);
+				this.logEvent("shipped", { group: groupId, prUrl: g?.prUrl });
+			}
 			this.opts.onPlanChanged();
 		}
 
@@ -436,10 +460,20 @@ export class ExecutionAdapter {
 	}
 
 	private handleDone(groupId: string, agentNamePart: string): void {
-		this.executor.markAgentDone(groupId, agentNamePart).then(() => {
+		this.finishAgent(groupId, agentNamePart).then(() => {
 			this.opts.onPlanChanged();
 			this.tick();
 		});
+	}
+
+	/** Complete an agent through the executor, logging the lifecycle event. */
+	private async finishAgent(groupId: string, name: string): Promise<void> {
+		const state = this.executor.getAgentState(groupId, name);
+		if (state && state.status !== "done") {
+			this.logEvent("done", { agent: `${groupId}/${name}` });
+		}
+		await this.executor.markAgentDone(groupId, name);
+		this.recordGroupTransitions();
 	}
 
 	private handlePlanMutate(agentId: string, msg: PlanMutateMessage): void {
@@ -563,7 +597,7 @@ export class ExecutionAdapter {
 		const state = this.executor.getAgentState(groupId, agentNamePart);
 		if (state && (state.status === "summarizing" || state.status === "done"))
 			return;
-		this.executor.markAgentDone(groupId, agentNamePart).then(() => {
+		this.finishAgent(groupId, agentNamePart).then(() => {
 			this.opts.onPlanChanged();
 			this.tick();
 		});
@@ -608,9 +642,26 @@ export class ExecutionAdapter {
 		this.questionQueue.answer(agentId, answers);
 	}
 
-	steer(groupId: string, guidance: string): void {
-		const agentKey = `${groupId}/worker`;
-		this.router.send(agentKey, { type: "steer", content: guidance });
+	steer(groupId: string, guidance: string, agentName = "worker"): boolean {
+		const agentKey = `${groupId}/${agentName}`;
+		return this.router.send(agentKey, { type: "steer", content: guidance });
+	}
+
+	/**
+	 * Resolve a user-facing target to a tmux session name. Accepts a full
+	 * agent key (`group/agent`), a group id (→ its worker), a bare agent
+	 * name, or a session name itself.
+	 */
+	resolveSessionName(target: string): string | undefined {
+		const t = target.trim();
+		if (!t) return undefined;
+		const direct =
+			this.sessionNames.get(t) ?? this.sessionNames.get(`${t}/worker`);
+		if (direct) return direct;
+		for (const [key, name] of this.sessionNames) {
+			if (name === t || key.endsWith(`/${t}`)) return name;
+		}
+		return undefined;
 	}
 
 	snapshot(): {
@@ -622,6 +673,7 @@ export class ExecutionAdapter {
 				tokens: { input: number; output: number; turns: number };
 			}
 		>;
+		groups: Map<string, { round: number; blocked?: string }>;
 	} {
 		const agents = new Map<
 			string,
@@ -631,24 +683,40 @@ export class ExecutionAdapter {
 				tokens: { input: number; output: number; turns: number };
 			}
 		>();
+		const groups = new Map<string, { round: number; blocked?: string }>();
 		const states = this.executor.getStates();
 
 		for (const [groupId, groupState] of states) {
+			groups.set(groupId, {
+				round: groupState.round,
+				...(groupState.blocked ? { blocked: groupState.blocked } : {}),
+			});
 			for (const [name, agentState] of groupState.agents) {
 				const key = `${groupId}/${name}`;
+				const tokens = this.tokenSnapshots.get(key);
 				agents.set(key, {
 					status: agentState.status,
-					startedAt: Date.now(),
-					tokens: { input: 0, output: 0, turns: 0 },
+					startedAt:
+						this.spawnTimes.get(key) ??
+						(agentState.startedAt
+							? Date.parse(agentState.startedAt)
+							: Date.now()),
+					tokens: tokens
+						? {
+								input: tokens.input,
+								output: tokens.output,
+								turns: tokens.turns,
+							}
+						: { input: 0, output: 0, turns: 0 },
 				});
 			}
 		}
 
-		return { agents };
+		return { agents, groups };
 	}
 
 	async markAgentDone(groupId: string, name: string): Promise<void> {
-		await this.executor.markAgentDone(groupId, name);
+		await this.finishAgent(groupId, name);
 		this.opts.onPlanChanged();
 	}
 
@@ -711,20 +779,59 @@ export class ExecutionAdapter {
 				if (hasRemainingTasks && count < 2) {
 					// Respawn: rebuild session and try again
 					this.respawnCount.set(agentKey, count + 1);
+					this.logEvent("crash-respawn", {
+						agent: agentKey,
+						attempt: count + 1,
+					});
 					try {
 						await this.executor.respawnAgent(groupId, agentNamePart);
 					} catch {
 						// Respawn failed — mark done
-						await this.executor.markAgentDone(groupId, agentNamePart);
+						await this.finishAgent(groupId, agentNamePart);
 						this.opts.onPlanChanged();
 						await this.tick();
 					}
 				} else {
 					// No remaining tasks or max respawns — mark done
-					await this.executor.markAgentDone(groupId, agentNamePart);
+					await this.finishAgent(groupId, agentNamePart);
 					this.opts.onPlanChanged();
 					await this.tick();
 				}
+			}
+		}
+	}
+
+	// --- Event log ---
+
+	/** Append one JSON line per lifecycle event to <planDir>/events.jsonl. */
+	private logEvent(event: string, data: Record<string, unknown> = {}): void {
+		try {
+			mkdirSync(this.opts.planDir, { recursive: true });
+			appendFileSync(
+				join(this.opts.planDir, "events.jsonl"),
+				`${JSON.stringify({ ts: new Date().toISOString(), event, ...data })}\n`,
+			);
+		} catch {
+			// Observability only — never let logging break execution.
+		}
+	}
+
+	/** Diff executor group state and log fix-round-start / blocked events. */
+	private recordGroupTransitions(): void {
+		for (const [groupId, state] of this.executor.getStates()) {
+			const lastRound = this.lastRounds.get(groupId) ?? 0;
+			if (state.round > lastRound) {
+				this.logEvent("fix-round-start", {
+					group: groupId,
+					round: state.round,
+				});
+				this.lastRounds.set(groupId, state.round);
+			}
+			if (state.blocked && !this.blockedLogged.has(groupId)) {
+				this.logEvent("blocked", { group: groupId, reason: state.blocked });
+				this.blockedLogged.add(groupId);
+			} else if (!state.blocked) {
+				this.blockedLogged.delete(groupId);
 			}
 		}
 	}

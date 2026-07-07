@@ -1,17 +1,12 @@
 // STUB: pre-rewrite modules deleted by the group-model migration. These keep
 // the runtime commands/hooks compiling and inert until their real
-// replacements land (view/steer/recap UI, deliverable shipping, worktrees).
+// replacements land (deliverable shipping, worktrees). View/steer/recap now
+// live in agent-commands.ts and group-recap.ts.
 
 import type { WorkGroup } from "../schema.js";
 
-// STUB: maestro-tmux + markdown deleted (group model)
-export const handleSteerCommand = (..._args: unknown[]) => {};
-export const handleViewCommand = (..._args: unknown[]) => {};
-export type ViewState = { viewPaneId: string | undefined };
+// STUB: markdown plan summary deleted (group model)
 export const renderPlanSummary = (_plan: unknown) => "";
-
-// STUB: recap deleted (group model)
-export const formatRecap = (..._args: unknown[]) => "";
 
 // STUB: old schema exports (group model)
 export type Deliverable = WorkGroup;

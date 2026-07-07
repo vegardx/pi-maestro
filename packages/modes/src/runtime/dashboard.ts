@@ -2,6 +2,7 @@
 // rendering. Presentation only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { Plan } from "../schema.js";
 import type { RuntimeContext } from "./context.js";
@@ -41,8 +42,16 @@ export function installMaestroFooter(
 	});
 }
 
-/** Render the /agents overview: groups, task progress, and agent specs. */
-export function renderAgentsOverview(plan: Plan): string {
+/**
+ * Render the /agents overview: groups, task progress, and agent specs. With
+ * an execution handle, includes live status/tokens/turns per agent plus the
+ * group's fix round and blocked reason.
+ */
+export function renderAgentsOverview(
+	plan: Plan,
+	execution?: ExecutionHandle,
+): string {
+	const snap = execution?.snapshot();
 	const lines: string[] = [`Plan: ${plan.title} (${plan.slug})`, ""];
 	for (const g of plan.groups) {
 		const icon =
@@ -62,11 +71,33 @@ export function renderAgentsOverview(plan: Plan): string {
 		if (tasks.length > 0) {
 			lines.push(`  Tasks: ${done}/${tasks.length}`);
 		}
+		const groupState = snap?.groups.get(g.id);
+		if (groupState && groupState.round > 0) {
+			lines.push(`  Fix round: ${groupState.round}`);
+		}
+		if (groupState?.blocked) {
+			lines.push(`  ⚠ Blocked: ${groupState.blocked}`);
+		}
+		if (g.prUrl) {
+			lines.push(`  PR: ${g.prUrl}`);
+		}
+		const workerLive = liveSuffix(snap?.agents.get(`${g.id}/worker`));
+		if (workerLive) {
+			lines.push(`  └─ worker (${g.worker.mode})${workerLive}`);
+		}
 		for (const a of g.agents) {
+			const live = liveSuffix(snap?.agents.get(`${g.id}/${a.name}`));
 			lines.push(
-				`  └─ ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})`,
+				`  └─ ${a.name} (${a.mode}, ${a.slot}, after: ${a.after.join(",")})${live}`,
 			);
 		}
 	}
 	return lines.join("\n");
+}
+
+/** " — status · Nin/Nout · N turns" for a live agent, or "". */
+function liveSuffix(agent: ExecutionAgentSnapshot | undefined): string {
+	if (!agent) return "";
+	const t = agent.tokens;
+	return ` — ${agent.status} · ${t.input}in/${t.output}out · ${t.turns} turns`;
 }

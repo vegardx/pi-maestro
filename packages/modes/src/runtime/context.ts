@@ -62,6 +62,7 @@ import {
 	UsageLedger,
 } from "../usage-ledger.js";
 import { WorkerPanes } from "../worker-panes.js";
+import type { ViewState } from "./agent-commands.js";
 import {
 	cleanupInactiveWorktrees,
 	type Deliverable,
@@ -69,7 +70,6 @@ import {
 	recordPlanSession,
 	repoFor,
 	repoNameFromPath,
-	type ViewState,
 } from "./stubs.js";
 
 export interface ModesRuntimeOptions {

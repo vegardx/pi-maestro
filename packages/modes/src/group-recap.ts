@@ -66,6 +66,10 @@ function renderGroupRecap(
 		lines.push(`Depends on: ${group.dependsOn.join(", ")}`);
 	}
 
+	if (group.prUrl) {
+		lines.push(`PR: ${group.prUrl}`);
+	}
+
 	if (tasks.length > 0) {
 		lines.push(`Tasks: ${done}/${tasks.length} complete`);
 		for (const t of tasks) {
@@ -76,6 +80,12 @@ function renderGroupRecap(
 	// Agent status from executor
 	const state = executor.getStates().get(group.id);
 	if (state) {
+		if (state.round > 0) {
+			lines.push(`Fix rounds: ${state.round}`);
+		}
+		if (state.blocked) {
+			lines.push(`Blocked: ${state.blocked}`);
+		}
 		const agentLines: string[] = [];
 		for (const [name, a] of state.agents) {
 			const display = a.displayName ?? name;

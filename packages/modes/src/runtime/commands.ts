@@ -15,18 +15,17 @@ import { resolveModelWithin } from "@vegardx/pi-models";
 import { buildCarryForwardSummary } from "../compaction.js";
 import type { PlanEngine } from "../engine.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
+import { buildRecap } from "../group-recap.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
+import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview } from "./dashboard.js";
 import {
 	type Deliverable,
 	type DeliverableId,
 	findDeliverable,
-	formatRecap,
-	handleSteerCommand,
-	handleViewCommand,
 	nextShippableDeliverable,
 	parkPlan,
 	renderPlanSummary,
@@ -184,7 +183,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				cmdCtx.ui.notify("No groups in plan.", "info");
 				return;
 			}
-			cmdCtx.ui.notify(renderAgentsOverview(plan), "info");
+			cmdCtx.ui.notify(renderAgentsOverview(plan, rt.execution), "info");
 		},
 	});
 
@@ -266,21 +265,13 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	pi.registerCommand("recap", {
 		description: "Show summary of completed agent work.",
 		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
-			if (!rt.execution || rt.execution.snapshot().agents.size === 0) {
+			if (!rt.engine || !rt.execution) {
 				cmdCtx.ui.notify("No agent work to recap.", "info");
 				return;
 			}
-			const titles = new Map<string, string>();
-			if (rt.engine) {
-				for (const g of rt.engine.get().groups) {
-					titles.set(g.id, g.title);
-				}
-			}
-			const recap = formatRecap(
-				rt.execution.snapshot().agents,
-				rt.usageLedger,
-				titles,
-			);
+			const recap = buildRecap(rt.engine, rt.execution.getExecutor(), {
+				includeSummaries: true,
+			});
 			pi.sendMessage(
 				{
 					customType: "maestro.execution.recap",

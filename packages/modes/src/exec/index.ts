@@ -2,6 +2,7 @@
 // the concrete adapter — so the execution internals (provisioner, supervisor,
 // rpc-router) can be completed behind this interface.
 
+import type { GroupExecutor } from "../group-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
 	ExecutionAdapter,
@@ -31,6 +32,13 @@ export interface ExecutionAgentSnapshot {
 	readonly tokens: ExecutionAgentTokens;
 }
 
+export interface ExecutionGroupSnapshot {
+	/** Review→fix round counter. 0 = initial implementation. */
+	readonly round: number;
+	/** Set when the fix loop stopped without converging. */
+	readonly blocked?: string;
+}
+
 /**
  * What the runtime needs from execution. Derived from how runtime code uses
  * the adapter today; later phases extend the implementation, not the callers.
@@ -42,10 +50,17 @@ export interface ExecutionHandle {
 	start(): Promise<void>;
 	/** Advance the executor; returns the number of newly activated groups. */
 	tick(): Promise<number>;
-	/** Send guidance to a group's worker agent. */
-	steer(groupId: string, guidance: string): void;
-	/** Current per-agent status/tokens view. */
-	snapshot(): { agents: Map<string, ExecutionAgentSnapshot> };
+	/** Send guidance to a group agent (default: the worker). False if absent. */
+	steer(groupId: string, guidance: string, agentName?: string): boolean;
+	/** Current per-agent status/tokens and per-group round/blocked view. */
+	snapshot(): {
+		agents: Map<string, ExecutionAgentSnapshot>;
+		groups: Map<string, ExecutionGroupSnapshot>;
+	};
+	/** Resolve an agent key, group id, agent or session name to a tmux session. */
+	resolveSessionName(target: string): string | undefined;
+	/** The underlying executor (for recap/state rendering). */
+	getExecutor(): GroupExecutor;
 	/** Mark an agent finished and re-evaluate the group. */
 	markAgentDone(groupId: string, name: string): Promise<void>;
 	/** Whether a group's worker has completed all gating tasks. */

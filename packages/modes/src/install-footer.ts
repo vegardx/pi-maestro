@@ -6,7 +6,7 @@ import type {
 	Theme,
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
 import type { ModeName } from "@vegardx/pi-contracts";
 import { composeFooterLine, type FooterRightCandidate } from "./footer.js";
 import type { UsageLedger } from "./usage-ledger.js";
@@ -80,51 +80,6 @@ export function formatModelLabel(
 	return label;
 }
 
-// ─── Live agent strip ────────────────────────────────────────────────────────
-
-/** One live agent's view for the footer strip (ExecutionHandle.snapshot()). */
-export interface AgentStripAgent {
-	readonly status: string;
-	readonly tokens: {
-		readonly input: number;
-		readonly output: number;
-		readonly turns: number;
-	};
-	readonly cacheRatio?: number;
-}
-
-/** Cap on per-agent strip lines; overflow collapses into "(+N more)". */
-export const AGENT_STRIP_MAX_LINES = 4;
-
-/**
- * One compact line per ACTIVE (working/summarizing) agent:
- * "● <group> <agent> <in>k/<out>k <cache%>". At most
- * {@link AGENT_STRIP_MAX_LINES} lines plus a "(+N more)" overflow line;
- * empty when no agents are active.
- */
-export function buildAgentStripLines(
-	agents: ReadonlyMap<string, AgentStripAgent> | undefined,
-): string[] {
-	if (!agents) return [];
-	const active: string[] = [];
-	for (const [key, agent] of agents) {
-		if (agent.status !== "working" && agent.status !== "summarizing") continue;
-		const [group = "", name = key] = key.split("/");
-		const cache =
-			agent.cacheRatio !== undefined
-				? ` ${Math.round(agent.cacheRatio * 100)}%`
-				: "";
-		active.push(
-			`● ${group} ${name} ${k(agent.tokens.input)}/${k(agent.tokens.output)}${cache}`,
-		);
-	}
-	if (active.length <= AGENT_STRIP_MAX_LINES) return active;
-	return [
-		...active.slice(0, AGENT_STRIP_MAX_LINES),
-		`  (+${active.length - AGENT_STRIP_MAX_LINES} more)`,
-	];
-}
-
 // ─── Footer installer ────────────────────────────────────────────────────────
 
 const MODE_COLOR: Record<ModeName, ThemeColor> = {
@@ -143,10 +98,6 @@ export interface FooterDeps {
 		| { done: number; total: number; failed: number }
 		| undefined;
 	readonly getPendingQuestions: () => number;
-	/** Live agent snapshots for the per-agent strip below the footer line. */
-	readonly getActiveAgents?: () =>
-		| ReadonlyMap<string, AgentStripAgent>
-		| undefined;
 }
 
 /**
@@ -154,15 +105,8 @@ export interface FooterDeps {
  * handle the caller can invoke when mode/usage/plan state changes.
  */
 export function installFooter(deps: FooterDeps): (() => void) | undefined {
-	const {
-		pi,
-		ctx,
-		getMode,
-		getLedger,
-		getAgentStatus,
-		getPendingQuestions,
-		getActiveAgents,
-	} = deps;
+	const { pi, ctx, getMode, getLedger, getAgentStatus, getPendingQuestions } =
+		deps;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 
 	const home = homedir();
@@ -285,23 +229,7 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					// Slim: just mode
 					candidates.push({ styled: modeLabel, visible: modeLabelVisible });
 
-					const mainLine = composeFooterLine(leftText, candidates, width);
-
-					// Live agent strip: one line per active agent, below the
-					// footer line. No agents active → no strip.
-					const strip = buildAgentStripLines(getActiveAgents?.());
-					if (strip.length === 0) return [mainLine];
-					return [
-						mainLine,
-						...strip.map((line) =>
-							truncateToWidth(
-								line.startsWith("●")
-									? theme.fg("accent", "●") + theme.fg("muted", line.slice(1))
-									: theme.fg("dim", line),
-								width,
-							),
-						),
-					];
+					return [composeFooterLine(leftText, candidates, width)];
 				},
 			};
 		},

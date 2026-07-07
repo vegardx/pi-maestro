@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { composeFooterLine } from "../packages/modes/src/footer.js";
 import {
-	type AgentStripAgent,
-	buildAgentStripLines,
 	formatCacheHitRate,
 	formatSessionUsage,
 } from "../packages/modes/src/install-footer.js";
@@ -231,54 +229,5 @@ describe("formatCacheHitRate", () => {
 		);
 		// Only source 1 counts: 15000 / (5000 + 15000) = 0.75 → 75%
 		expect(formatCacheHitRate(ledger)).toBe("CH 75%");
-	});
-});
-
-describe("buildAgentStripLines", () => {
-	function agent(
-		status: string,
-		input = 0,
-		output = 0,
-		cacheRatio?: number,
-	): AgentStripAgent {
-		return {
-			status,
-			tokens: { input, output, turns: 1 },
-			...(cacheRatio !== undefined ? { cacheRatio } : {}),
-		};
-	}
-
-	it("returns no lines without a snapshot or active agents", () => {
-		expect(buildAgentStripLines(undefined)).toEqual([]);
-		expect(
-			buildAgentStripLines(
-				new Map([
-					["g/worker", agent("done")],
-					["g/rev", agent("failed")],
-					["g/other", agent("pending")],
-				]),
-			),
-		).toEqual([]);
-	});
-
-	it("renders one compact line per working/summarizing agent", () => {
-		const lines = buildAgentStripLines(
-			new Map([
-				["auth/worker", agent("working", 12_400, 3_100, 0.85)],
-				["auth/rev", agent("summarizing", 900, 40)],
-				["db/worker", agent("done", 5_000, 5_000)],
-			]),
-		);
-		expect(lines).toEqual(["● auth worker 12k/3k 85%", "● auth rev 900/40"]);
-	});
-
-	it("caps at 4 lines plus an overflow marker", () => {
-		const agents = new Map<string, AgentStripAgent>();
-		for (let i = 0; i < 6; i++) {
-			agents.set(`g${i}/worker`, agent("working", 1000 * i, 100));
-		}
-		const lines = buildAgentStripLines(agents);
-		expect(lines).toHaveLength(5);
-		expect(lines[4]).toBe("  (+2 more)");
 	});
 });

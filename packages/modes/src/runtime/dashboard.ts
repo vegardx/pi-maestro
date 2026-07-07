@@ -1,10 +1,16 @@
-// Dashboard glue: the custom footer installation and the /agents overview
-// rendering. Presentation only — state lives on the RuntimeContext.
+// Dashboard glue: the custom footer installation, the live agent-table
+// widget above the editor, and the /agents overview rendering. Presentation
+// only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { Plan } from "../schema.js";
+import {
+	buildAgentTable,
+	hasActiveAgents,
+	styleAgentTable,
+} from "./agent-widget.js";
 import type { RuntimeContext } from "./context.js";
 
 /** Install the maestro footer and remember its invalidate handle. */
@@ -39,8 +45,57 @@ export function installMaestroFooter(
 			if (!rt.execution) return 0;
 			return rt.execution.questionQueue?.all()?.length ?? 0;
 		},
-		getActiveAgents: () => rt.execution?.snapshot().agents,
 	});
+}
+
+// ─── Live agent widget ───────────────────────────────────────────────────────
+
+const AGENT_WIDGET_KEY = "maestro-agents";
+/** Re-render cadence while agents are active, so ELAPSED ticks. */
+const AGENT_WIDGET_TICK_MS = 5_000;
+
+/**
+ * Render the live agent table into the widget above the editor. Called on
+ * every agent state change; while any agent is active a 5s timer re-syncs so
+ * the ELAPSED column ticks. When none are active the widget is cleared and
+ * the timer stopped.
+ */
+export function syncAgentWidget(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+): void {
+	const snap = rt.execution?.snapshot();
+	if (!snap || !hasActiveAgents(snap.agents)) {
+		clearAgentWidget(rt, ctx);
+		return;
+	}
+	const { agents, groups } = snap;
+	const now = Date.now();
+	ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (_tui, theme) => ({
+		render: (width: number) =>
+			styleAgentTable(buildAgentTable({ agents, groups, width, now }), theme),
+		invalidate: () => {},
+	}));
+	if (rt.agentWidgetTimer === undefined) {
+		const timer = setInterval(
+			() => syncAgentWidget(rt, ctx),
+			AGENT_WIDGET_TICK_MS,
+		);
+		timer.unref?.();
+		rt.agentWidgetTimer = timer;
+	}
+}
+
+/** Clear the agent widget and stop its refresh timer. */
+export function clearAgentWidget(
+	rt: RuntimeContext,
+	ctx?: ExtensionContext,
+): void {
+	if (rt.agentWidgetTimer !== undefined) {
+		clearInterval(rt.agentWidgetTimer);
+		rt.agentWidgetTimer = undefined;
+	}
+	ctx?.ui.setWidget?.(AGENT_WIDGET_KEY, undefined);
 }
 
 /**

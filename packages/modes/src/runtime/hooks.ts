@@ -32,7 +32,7 @@ import {
 	shouldCompactMidDeliverable,
 } from "../trigger.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
-import { installMaestroFooter } from "./dashboard.js";
+import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
 import {
 	buildAgentCompactionGuidance,
 	buildAgentWorkerPreamble,
@@ -204,8 +204,9 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		}
 	});
 
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
 		rt.invalidateFooter = undefined;
+		clearAgentWidget(rt, ctx);
 		if (rt.workerPanes.isOpen()) {
 			await rt.workerPanes.close();
 		}

@@ -66,6 +66,7 @@ import {
 import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
+import { syncAgentWidget } from "./dashboard.js";
 import {
 	cleanupInactiveWorktrees,
 	type Deliverable,
@@ -107,6 +108,8 @@ export interface RuntimeContext {
 	execution: ExecutionHandle | undefined;
 	agentSeedContent: string | undefined;
 	invalidateFooter: (() => void) | undefined;
+	// Transient: 5s re-render timer for the live agent widget (elapsed ticks).
+	agentWidgetTimer: ReturnType<typeof setInterval> | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	compactionInFlight: boolean;
 	// Transient (not persisted): what modes is about to compact. Set just
@@ -199,6 +202,7 @@ export function createRuntimeContext(
 		execution: undefined,
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
+		agentWidgetTimer: undefined,
 		compactionInFlight: false,
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,
@@ -518,6 +522,7 @@ export function createRuntimeContext(
 						onAgentStateChanged: (id, state) => {
 							usageLedger.record({ kind: "agent", id }, state.tokens);
 							rt.invalidateFooter?.();
+							syncAgentWidget(rt, ctx);
 							// Sync worker panes when agents complete
 							if (rt.execution && rt.workerPanes.isOpen()) {
 								rt.workerPanes
@@ -526,15 +531,17 @@ export function createRuntimeContext(
 							}
 						},
 						// The settled card (onEvent) is the recap now; onAllSettled only
-						// refreshes the footer.
+						// refreshes the footer and clears the agent widget.
 						onAllSettled: () => {
 							rt.invalidateFooter?.();
+							syncAgentWidget(rt, ctx);
 						},
 						onEvent: (event) => sendAgentEvent(pi, event),
 					});
 					await rt.execution.start();
 				}
 				const activated = await rt.execution.tick();
+				syncAgentWidget(rt, ctx);
 				if (activated > 0) {
 					ctx.ui.notify(`Activated ${activated} group(s).`, "info");
 					rt.setExecutionStage(

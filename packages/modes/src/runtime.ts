@@ -1092,7 +1092,9 @@ export function createModesRuntime(
 	});
 
 	pi.on("session_start", (_event, ctx) => {
-		if (!isAgentMode()) {
+		if (isAgentMode()) {
+			// Agents start in hack mode (full tool access, no plan tools)
+			state = { mode: "hack", execution: { stage: "idle" }, updatedAt: new Date().toISOString() };
 		}
 		const hydrated = hydrateModesState(ctx.sessionManager.getEntries());
 		if (hydrated) state = hydrated;

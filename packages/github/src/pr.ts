@@ -10,8 +10,11 @@ export interface PrMetadata {
 	title: string;
 	body: string;
 	state: string;
+	url: string;
 	baseRefName: string;
 	headRefName: string;
+	/** gh mergeable state: MERGEABLE | CONFLICTING | UNKNOWN. */
+	mergeable: string;
 	isCrossRepository: boolean;
 	maintainerCanModify: boolean;
 	headRepositoryNameWithOwner: string;
@@ -23,8 +26,10 @@ const PR_FIELDS = [
 	"title",
 	"body",
 	"state",
+	"url",
 	"baseRefName",
 	"headRefName",
+	"mergeable",
 	"isCrossRepository",
 	"maintainerCanModify",
 	"headRepository",
@@ -42,8 +47,10 @@ export function parsePrMetadata(raw: string): PrMetadata | null {
 			title: String(obj.title ?? ""),
 			body: String(obj.body ?? ""),
 			state: String(obj.state ?? ""),
+			url: String(obj.url ?? ""),
 			baseRefName: String(obj.baseRefName ?? ""),
 			headRefName: String(obj.headRefName ?? ""),
+			mergeable: String(obj.mergeable ?? ""),
 			isCrossRepository: Boolean(obj.isCrossRepository),
 			maintainerCanModify: Boolean(obj.maintainerCanModify),
 			headRepositoryNameWithOwner: String(head.nameWithOwner ?? ""),
@@ -145,11 +152,12 @@ export async function createPr(
 export async function editPr(
 	cwd: string,
 	number: number,
-	args: { title?: string; body?: string; target?: RepoSlug },
+	args: { title?: string; body?: string; base?: string; target?: RepoSlug },
 	opts: { signal?: AbortSignal } = {},
 ): Promise<{ ok: boolean; error?: string }> {
 	const ghArgs = ["pr", "edit", String(number)];
 	if (args.title !== undefined) ghArgs.push("--title", args.title);
+	if (args.base !== undefined) ghArgs.push("--base", args.base);
 	const body = args.body;
 	if (body !== undefined) ghArgs.push("--body-file", "-");
 	ghArgs.push(...targetArgs(args.target));

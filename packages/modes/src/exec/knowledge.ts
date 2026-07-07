@@ -19,6 +19,10 @@ export const KNOWLEDGE_SECTIONS = [
 	"Key Interfaces",
 ] as const;
 
+export const KNOWLEDGE_END =
+	"> END OF CODEBASE REFERENCE — everything above is context. Your work " +
+	"instructions arrive separately and are framed as such.";
+
 export const KNOWLEDGE_FRAME =
 	"# Codebase Reference\n" +
 	"> CONTEXT ONLY — This describes the codebase structure and patterns. " +
@@ -108,6 +112,9 @@ export function buildKnowledgeSession(
 			`knowledge doc failed shape validation:\n- ${problems.join("\n- ")}`,
 		);
 	}
+	const content = opts.content.trimEnd().endsWith(KNOWLEDGE_END)
+		? opts.content
+		: `${opts.content.trimEnd()}\n\n${KNOWLEDGE_END}\n`;
 
 	const id = opts.id ?? `base-${randomUUID()}`;
 	const header: SessionHeader = {
@@ -117,12 +124,9 @@ export function buildKnowledgeSession(
 		timestamp: new Date().toISOString(),
 		cwd: opts.repoPath,
 	};
-	const entry = buildCustomMessageEntry(
-		KNOWLEDGE_CUSTOM_TYPE,
-		opts.content,
-		null,
-		{ display: true },
-	);
+	const entry = buildCustomMessageEntry(KNOWLEDGE_CUSTOM_TYPE, content, null, {
+		display: true,
+	});
 
 	mkdirSync(dirname(opts.outPath), { recursive: true });
 	writeFileSync(
@@ -133,7 +137,7 @@ export function buildKnowledgeSession(
 	return {
 		id,
 		cwd: opts.repoPath,
-		content: opts.content,
+		content,
 		entryId: entry.id,
 		path: opts.outPath,
 	};

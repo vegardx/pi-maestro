@@ -531,6 +531,9 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("tool_execution_end", (event, ctx) => {
 		if (!event.isError || !rt.engine) return;
+		// Benign tool misses during planning/hacking are not crashes — snapshots
+		// exist to capture execution failures for recovery.
+		if (rt.state.mode === "plan" || rt.state.mode === "hack") return;
 		const snapshot = createCrashSnapshot(
 			{
 				error: event.result,

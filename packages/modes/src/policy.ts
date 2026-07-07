@@ -1,6 +1,12 @@
 import type { ModeName } from "@vegardx/pi-contracts";
 
-export const PLAN_TOOL_NAMES = ["group", "task", "agent", "plan"] as const;
+export const PLAN_TOOL_NAMES = [
+	"group",
+	"task",
+	"agent",
+	"plan",
+	"knowledge",
+] as const;
 
 const READ_ONLY_TOOLS = new Set([
 	"read",

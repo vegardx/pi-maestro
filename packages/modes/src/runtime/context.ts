@@ -35,6 +35,7 @@ import {
 import type { PendingModesCompaction } from "../compaction.js";
 import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
+import { readKnowledgeSession } from "../exec/knowledge.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
 import { derivePlanName, slugify, type WorkGroup } from "../schema.js";
@@ -469,9 +470,23 @@ export function createRuntimeContext(
 				activeEngine.get().slug,
 				"base-knowledge.jsonl",
 			);
-			if (!isAgentMode() && !existsSync(knowledgePath)) {
+			let knowledgeProblem: string | undefined;
+			if (!isAgentMode()) {
+				if (!existsSync(knowledgePath)) {
+					knowledgeProblem = "missing";
+				} else {
+					try {
+						readKnowledgeSession(knowledgePath);
+					} catch (e) {
+						knowledgeProblem = e instanceof Error ? e.message : String(e);
+					}
+				}
+			}
+			if (knowledgeProblem) {
 				ctx.ui.notify(
-					"No knowledge base yet — asking the model to write it; run /implement again after.",
+					knowledgeProblem === "missing"
+						? "No knowledge base yet — asking the model to write it; run /implement again after."
+						: `Knowledge base failed validation (${knowledgeProblem}) — asking the model to rewrite it.`,
 					"warning",
 				);
 				pi.sendUserMessage(

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	buildKnowledgeSession,
 	KNOWLEDGE_CUSTOM_TYPE,
+	KNOWLEDGE_END,
 	KNOWLEDGE_FRAME,
 	KNOWLEDGE_SECTIONS,
 	KNOWLEDGE_SESSION_VERSION,
@@ -107,7 +108,7 @@ describe("buildKnowledgeSession", () => {
 		const entry = JSON.parse(lines[1]);
 		expect(entry.type).toBe("custom_message");
 		expect(entry.customType).toBe(KNOWLEDGE_CUSTOM_TYPE);
-		expect(entry.content).toBe(VALID_DOC);
+		expect(entry.content).toBe(`${VALID_DOC.trimEnd()}\n\n${KNOWLEDGE_END}\n`);
 		expect(entry.display).toBe(true);
 		expect(entry.parentId).toBeNull();
 		expect(entry.id).toBe(built.entryId);
@@ -148,7 +149,7 @@ describe("readKnowledgeSession", () => {
 		const read = readKnowledgeSession(outPath);
 		expect(read.id).toBe(built.id);
 		expect(read.cwd).toBe("/repo/path");
-		expect(read.content).toBe(VALID_DOC);
+		expect(read.content).toBe(`${VALID_DOC.trimEnd()}\n\n${KNOWLEDGE_END}\n`);
 		expect(read.entryId).toBe(built.entryId);
 	});
 

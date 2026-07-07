@@ -11,9 +11,11 @@
 // 7. Non-terminal groups wait for downstream resolution
 
 import type { PlanEngine } from "./engine.js";
-import type { WorkGroup } from "./schema.js";
+import { parseVerdict, VERDICT_INSTRUCTION } from "./exec/verdicts.js";
+import type { AgentMode, WorkGroup } from "./schema.js";
 import {
 	defaultBranchForGroup,
+	findAgent,
 	findGroup,
 	gatingTasks,
 	immediateAgents,
@@ -42,6 +44,8 @@ export interface AgentState {
 	displayName?: string;
 	/** tmux session id. */
 	sessionId?: string;
+	/** Session JSONL path — retained across kills for resurrection/respawn. */
+	sessionFile?: string;
 	/** Model resolved at spawn time. */
 	model?: string;
 	slot?: "default" | "alternate";
@@ -68,13 +72,26 @@ export interface GroupRunState {
 	worktreePath?: string;
 	/** Branch name. */
 	branch?: string;
+	/** Review→fix round counter. 0 = initial implementation. */
+	round: number;
+	/** Set when the fix loop stopped without converging; surfaced to the user. */
+	blocked?: string;
+	/** Findings from each objecting reviewer's last round (no-progress guard). */
+	lastFindingsByReviewer?: Map<string, string[]>;
 }
 
 // ─── Executor ────────────────────────────────────────────────────────────────
 
+export interface SpawnedAgent {
+	/** tmux session id. */
+	sessionId: string;
+	/** Session JSONL path — the executor threads it for later resurrection. */
+	sessionFile: string;
+}
+
 export interface ExecutorDeps {
-	/** Spawn a tmux session for an agent. Returns session id. */
-	spawnAgent: (opts: SpawnAgentOpts) => Promise<string>;
+	/** Spawn a tmux session for an agent. */
+	spawnAgent: (opts: SpawnAgentOpts) => Promise<SpawnedAgent>;
 	/** Kill a tmux session. */
 	killSession: (sessionId: string) => Promise<void>;
 	/** Create a worktree for a group. */
@@ -102,6 +119,10 @@ export interface SpawnAgentOpts {
 	effort: string;
 	worktreePath: string;
 	seed: string;
+	/** Resume an existing session file instead of seeding a fresh one. */
+	resumeSessionFile?: string;
+	/** Positional kickoff message for the (re)spawned pi process. */
+	kickoffMessage?: string;
 }
 
 export interface CreateWorktreeOpts {
@@ -146,6 +167,7 @@ export class GroupExecutor {
 			completed: new Set(),
 			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
 			branch: `feat/${g.id}`,
+			round: 0,
 		};
 		groupState.agents.set("worker", {
 			name: "worker",
@@ -216,7 +238,12 @@ export class GroupExecutor {
 			const plan = this.engine.get();
 			const g = findGroup(plan, groupId);
 			const consumer = this.nextConsumer(g, agentName);
-			const preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? groupId}`;
+			let preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? groupId}`;
+			// Read-only reviewers must end their summary with a verdict.
+			const spec = g ? findAgent(g, agentName) : null;
+			if (spec?.mode === "read-only") {
+				preamble += `\n\n${VERDICT_INSTRUCTION}`;
+			}
 
 			try {
 				agent.status = "summarizing";
@@ -274,7 +301,8 @@ export class GroupExecutor {
 		const agentState = state.agents.get(agentName);
 		if (!agentState) throw new Error(`no state for agent ${agentName}`);
 
-		// Reset agent state for respawn
+		// Reset agent state for respawn; sessionFile is kept so the respawn
+		// resumes the agent's own transcript instead of starting cold.
 		agentState.status = "pending";
 		agentState.sessionId = undefined;
 		agentState.error = undefined;
@@ -309,6 +337,7 @@ export class GroupExecutor {
 			completed: new Set(),
 			worktreePath,
 			branch,
+			round: 0,
 		};
 
 		// Register all agents (worker + support)
@@ -365,6 +394,7 @@ export class GroupExecutor {
 		g: WorkGroup,
 		state: GroupRunState,
 		name: string,
+		kickoffMessage?: string,
 	): Promise<void> {
 		const agentState = state.agents.get(name);
 		if (!agentState) return;
@@ -372,6 +402,10 @@ export class GroupExecutor {
 		const spec =
 			name === "worker" ? g.worker : g.agents.find((a) => a.name === name);
 		if (!spec) return;
+
+		// Group scheduler invariant: one agent TYPE active per group at a time.
+		// Not spawnable now → stays pending; a later tick retries.
+		if (!this.canSpawnNow(g, state, spec.mode)) return;
 
 		const mode = spec.mode;
 		const slot = ("slot" in spec ? spec.slot : undefined) ?? "default";
@@ -385,14 +419,17 @@ export class GroupExecutor {
 		);
 
 		agentState.status = "spawning";
-		agentState.displayName = genName(g.id, takenNames);
+		agentState.displayName ??= genName(g.id, takenNames);
 		agentState.slot = slot;
 		agentState.effort = effort;
 		agentState.startedAt = this.deps.now();
 
-		const seed = this.buildSeed(g, state, name);
+		// Resurrection: an agent with a prior session file resumes its own
+		// transcript (cache-hot) instead of being re-seeded from scratch.
+		const resumeSessionFile = agentState.sessionFile;
+		const seed = resumeSessionFile ? "" : this.buildSeed(g, state, name);
 
-		const sessionId = await this.deps.spawnAgent({
+		const spawned = await this.deps.spawnAgent({
 			groupId: g.id,
 			agentName: name,
 			displayName: agentState.displayName,
@@ -401,10 +438,60 @@ export class GroupExecutor {
 			effort,
 			worktreePath: state.worktreePath!,
 			seed,
+			...(resumeSessionFile
+				? {
+						resumeSessionFile,
+						kickoffMessage: kickoffMessage ?? this.resumeKickoff(state, name),
+					}
+				: {}),
 		});
 
-		agentState.sessionId = sessionId;
+		agentState.sessionId = spawned.sessionId;
+		agentState.sessionFile = spawned.sessionFile;
 		agentState.status = "working";
+	}
+
+	/**
+	 * Scheduler invariant: within a group, at most one agent type is active at
+	 * a time. Full-mode agents run strictly alone; read-only agents may run
+	 * concurrently with each other but never alongside a full-mode agent.
+	 */
+	private canSpawnNow(
+		g: WorkGroup,
+		state: GroupRunState,
+		mode: AgentMode,
+	): boolean {
+		const active = [...state.agents.values()].filter(
+			(a) =>
+				a.status === "spawning" ||
+				a.status === "working" ||
+				a.status === "summarizing",
+		);
+		if (active.length === 0) return true;
+		if (mode === "full") return false;
+		return active.every((a) => {
+			const spec =
+				a.name === "worker"
+					? g.worker
+					: g.agents.find((x) => x.name === a.name);
+			return (spec?.mode ?? "read-only") === "read-only";
+		});
+	}
+
+	/** Default kickoff for a resumed session when the caller supplies none. */
+	private resumeKickoff(state: GroupRunState, name: string): string {
+		const findings = state.lastFindingsByReviewer?.get(name);
+		if (findings && findings.length > 0) {
+			return (
+				`The worker completed fix round ${state.round} addressing your ` +
+				`findings. Verify each is resolved and finish with a fresh verdict:\n` +
+				findings.map((f) => `- ${f}`).join("\n")
+			);
+		}
+		return (
+			"Your previous session ended unexpectedly and has been resumed. " +
+			"Review your progress, then continue the remaining work."
+		);
 	}
 
 	private buildSeed(g: WorkGroup, state: GroupRunState, name: string): string {
@@ -504,6 +591,26 @@ export class GroupExecutor {
 			return;
 		}
 
+		// Review verdicts: any read-only reviewer requesting changes starts a
+		// fix round (bounded); a missing verdict does not block.
+		const g = findGroup(this.engine.get(), groupId);
+		if (g) {
+			const objections: { name: string; findings: string[] }[] = [];
+			for (const spec of g.agents) {
+				if (spec.mode !== "read-only") continue;
+				const reviewer = state.agents.get(spec.name);
+				if (!reviewer?.summary) continue;
+				const parsed = parseVerdict(reviewer.summary);
+				if (parsed.verdict === "request-changes") {
+					objections.push({ name: spec.name, findings: parsed.findings });
+				}
+			}
+			if (objections.length > 0) {
+				await this.startFixRound(g, state, objections);
+				return;
+			}
+		}
+
 		// Assemble group summary from agent summaries
 		const summaries = [...state.agents.values()]
 			.filter((a) => a.summary)
@@ -512,6 +619,70 @@ export class GroupExecutor {
 
 		this.engine.setGroupStatus(groupId, "complete");
 		this.engine.updateGroup(groupId, { summary: groupSummary });
+	}
+
+	/**
+	 * Start a review→fix round: findings become tagged gating tasks, the
+	 * worker is resurrected from its own session to fix them, and objecting
+	 * reviewers re-run once the worker completes (their "worker" dep becomes
+	 * unsatisfied again). Bounded by the round cap and a no-progress guard;
+	 * either stop leaves the group active with `blocked` set for the user.
+	 */
+	private async startFixRound(
+		g: WorkGroup,
+		state: GroupRunState,
+		objections: { name: string; findings: string[] }[],
+	): Promise<void> {
+		// No-progress guard: a reviewer re-raising byte-identical findings
+		// means fix rounds aren't converging.
+		for (const o of objections) {
+			const prev = state.lastFindingsByReviewer?.get(o.name);
+			if (prev && JSON.stringify(prev) === JSON.stringify(o.findings)) {
+				state.blocked = "review findings unchanged after fix round";
+				return;
+			}
+		}
+
+		const maxFixRounds = g.maxFixRounds ?? 2;
+		if (state.round >= maxFixRounds) {
+			const outstanding = objections.reduce((n, o) => n + o.findings.length, 0);
+			state.blocked = `fix-round cap reached; ${outstanding} findings outstanding`;
+			return;
+		}
+
+		state.round += 1;
+		state.blocked = undefined;
+		state.lastFindingsByReviewer ??= new Map();
+
+		const allFindings: string[] = [];
+		for (const o of objections) {
+			state.lastFindingsByReviewer.set(o.name, o.findings);
+			for (const finding of o.findings) {
+				this.engine.addWorkItem(g.id, {
+					title: `[round ${state.round}, ${o.name}] ${finding}`,
+					kind: "task",
+				});
+				allFindings.push(finding);
+			}
+		}
+
+		// Re-pend the worker and every objecting reviewer; approving reviewers
+		// stay done. Dropping them from `completed` re-arms the after-DAG.
+		for (const name of ["worker", ...objections.map((o) => o.name)]) {
+			const a = state.agents.get(name);
+			if (!a) continue;
+			a.status = "pending";
+			a.summary = undefined;
+			a.completedAt = undefined;
+			a.sessionId = undefined;
+			state.completed.delete(name);
+		}
+
+		const kickoff =
+			`Reviewers found issues with your changes — address each, commit, ` +
+			`and toggle the new [round ${state.round}] tasks:\n` +
+			allFindings.map((f) => `- ${f}`).join("\n");
+		await this.spawnAgentInGroup(g, state, "worker", kickoff);
 	}
 
 	private async shipGroupIfReady(g: WorkGroup): Promise<string | null> {

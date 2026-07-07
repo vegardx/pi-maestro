@@ -159,27 +159,6 @@ export class ExecutionAdapter {
 					: (group.agents.find((a) => a.name === spawnOpts.agentName)?.mode ??
 						"read-only");
 
-				// Build the seed/prompt for this agent
-				const depSummaries = this.collectDepSummaries(spawnOpts.groupId);
-				let seed: string;
-				if (isWorker) {
-					seed = buildWorkerSeed(group, {
-						depSummaries,
-						siblingeSummaries: [],
-					});
-				} else {
-					const agentSpec = group.agents.find(
-						(a) => a.name === spawnOpts.agentName,
-					);
-					if (!agentSpec)
-						throw new Error(`agent ${spawnOpts.agentName} not found in group`);
-					seed = buildAgentSeed(group, agentSpec, {
-						depSummaries,
-						siblingeSummaries: [],
-					});
-				}
-
-				// Build session file (JSONL) with modes state + seed
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
 				// Share the maestro's agent dir so agents inherit auth credentials
 				const agentDir = defaultAgentDir();
@@ -189,22 +168,60 @@ export class ExecutionAdapter {
 					sessionName,
 				);
 				mkdirSync(agentSessionDir, { recursive: true });
-				const session = buildAgentSessionFile({
-					agentKey,
-					seed,
-					cwd,
-					outDir: agentSessionDir,
-				});
-				this.sessionFiles.set(agentKey, session.path);
 
-				const userMsg = isWorker
-					? "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
-					: "Review the code and report your findings. Follow the focus instructions in your seed.";
+				let sessionFile: string;
+				let kickoffMessage: string;
+				if (spawnOpts.resumeSessionFile) {
+					// Resurrection/crash-respawn: pi appends to the existing session
+					// file in place, so resuming it is cache-hot by construction.
+					// Skip seeding and session assembly entirely.
+					sessionFile = spawnOpts.resumeSessionFile;
+					kickoffMessage =
+						spawnOpts.kickoffMessage ??
+						"Your session was resumed. Review your progress and continue.";
+				} else {
+					// Build the seed/prompt for this agent
+					const depSummaries = this.collectDepSummaries(spawnOpts.groupId);
+					let seed: string;
+					if (isWorker) {
+						seed = buildWorkerSeed(group, {
+							depSummaries,
+							siblingeSummaries: [],
+						});
+					} else {
+						const agentSpec = group.agents.find(
+							(a) => a.name === spawnOpts.agentName,
+						);
+						if (!agentSpec)
+							throw new Error(
+								`agent ${spawnOpts.agentName} not found in group`,
+							);
+						seed = buildAgentSeed(group, agentSpec, {
+							depSummaries,
+							siblingeSummaries: [],
+						});
+					}
+
+					// Build session file (JSONL) with modes state + seed
+					const session = buildAgentSessionFile({
+						agentKey,
+						seed,
+						cwd,
+						outDir: agentSessionDir,
+					});
+					sessionFile = session.path;
+					kickoffMessage =
+						spawnOpts.kickoffMessage ??
+						(isWorker
+							? "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
+							: "Review the code and report your findings. Follow the focus instructions in your seed.");
+				}
+				this.sessionFiles.set(agentKey, sessionFile);
 
 				const spec = buildSpawnSpec({
 					sessionName,
 					worktreePath: cwd,
-					sessionFile: session.path,
+					sessionFile,
 					extensionPaths: this.opts.extensionPaths ?? [this.opts.extensionPath],
 					env: {
 						sock: this.socketPath,
@@ -214,7 +231,7 @@ export class ExecutionAdapter {
 						sessionDir: agentSessionDir,
 						token: this.token,
 					},
-					kickoffMessage: userMsg,
+					kickoffMessage,
 				});
 
 				const cols = process.stdout.columns || 200;
@@ -231,7 +248,7 @@ export class ExecutionAdapter {
 					tokens: { input: 0, output: 0, turns: 0 },
 				});
 
-				return sessionName;
+				return { sessionId: sessionName, sessionFile };
 			},
 
 			killSession: async (sessionId) => {

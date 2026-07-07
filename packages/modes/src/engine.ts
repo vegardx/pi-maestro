@@ -195,6 +195,7 @@ export class PlanEngine {
 				| "summary"
 				| "prUrl"
 				| "prNumber"
+				| "maxFixRounds"
 			>
 		> & {
 			workerMode?: AgentMode;

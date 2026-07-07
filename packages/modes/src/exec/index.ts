@@ -12,6 +12,12 @@ export {
 	ExecutionAdapter,
 	type ExecutionAdapterOpts,
 } from "./execution-adapter.js";
+export {
+	type ParsedVerdict,
+	parseVerdict,
+	VERDICT_INSTRUCTION,
+	type Verdict,
+} from "./verdicts.js";
 
 export interface ExecutionAgentTokens {
 	readonly input: number;

@@ -34,7 +34,10 @@ function memStore(): PlanStore & { last: Plan | null } {
 
 function makeDeps(overrides: Partial<ExecutorDeps> = {}): ExecutorDeps {
 	return {
-		spawnAgent: vi.fn().mockResolvedValue("tmux-session-123"),
+		spawnAgent: vi.fn().mockResolvedValue({
+			sessionId: "tmux-session-123",
+			sessionFile: "/tmp/sessions/agent.jsonl",
+		}),
 		killSession: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn().mockResolvedValue("/tmp/worktree"),
 		shipGroup: vi.fn().mockResolvedValue("https://github.com/org/repo/pull/1"),
@@ -337,7 +340,10 @@ describe("GroupExecutor — seed construction", () => {
 		engine.setGroupStatus("a", "active");
 		engine.setGroupStatus("a", "complete");
 
-		const spawnAgent = vi.fn().mockResolvedValue("sess-123");
+		const spawnAgent = vi.fn().mockResolvedValue({
+			sessionId: "sess-123",
+			sessionFile: "/tmp/sessions/agent.jsonl",
+		});
 		const deps = makeDeps({ spawnAgent });
 		const executor = new GroupExecutor(engine, deps);
 		await executor.tick(); // B activates

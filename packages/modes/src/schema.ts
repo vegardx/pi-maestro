@@ -97,6 +97,8 @@ export interface WorkGroup {
 	agents: AgentSpec[];
 	/** Gating work items the worker must complete. */
 	tasks: WorkItem[];
+	/** Review→fix round cap before the group blocks. Default 2. */
+	maxFixRounds?: number;
 	// ── Runtime state ──
 	/** Git branch (typically feat/<id>). */
 	branch?: string;

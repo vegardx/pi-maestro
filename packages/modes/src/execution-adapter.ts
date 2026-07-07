@@ -309,6 +309,15 @@ export class ExecutionAdapter {
 		return this.executor;
 	}
 
+	/** Get tmux session names for worker agents only. */
+	getWorkerSessions(): string[] {
+		const result: string[] = [];
+		for (const [key, name] of this.sessionNames) {
+			if (key.endsWith("/worker")) result.push(name);
+		}
+		return result;
+	}
+
 	async destroy(): Promise<void> {
 		this._started = false;
 		// Kill all tmux sessions

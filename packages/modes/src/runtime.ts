@@ -158,31 +158,23 @@ class WorkerPanes {
 	terminalTooSmall() { return false; }
 	shouldSync(_id: string, _status: string) { return false; }
 
-	async open(_agents: Map<string, unknown>): Promise<void> {
+	async open(sessions: string[]): Promise<void> {
 		if (this._open) return;
+		if (sessions.length === 0) return;
 		const tmuxMod = await import("@vegardx/pi-tmux");
-
-		// Find running agent tmux sessions (not the main one)
-		const sessions = await tmuxMod.list();
-		const mainSession = process.env.TMUX?.split(",")?.[2];
-		const agentSessions = sessions.filter((s) =>
-			s.name !== mainSession && s.name !== "0",
-		);
-
-		if (agentSessions.length === 0) return;
 
 		// First split: create right-side pane (horizontal split)
 		// Subsequent: vertical splits within the right column
 		let targetPane: string | undefined;
-		for (let i = 0; i < agentSessions.length; i++) {
-			const sess = agentSessions[i];
+		for (let i = 0; i < sessions.length; i++) {
+			const sess = sessions[i];
 			try {
 				const paneId = await tmuxMod.splitWindow({
 					horizontal: i === 0,
 					target: targetPane,
-					percent: i === 0 ? 40 : Math.floor(100 / (agentSessions.length - i)),
+					percent: i === 0 ? 40 : Math.floor(100 / (sessions.length - i)),
 					detach: true,
-					command: `unset TMUX; tmux attach-session -t "${sess.name}" -r`,
+					command: `unset TMUX; tmux attach-session -t "${sess}" -r`,
 				});
 				if (paneId) {
 					this.paneIds.push(paneId);
@@ -899,7 +891,7 @@ export function createModesRuntime(
 				await workerPanes.close();
 				ctx.ui.notify("Worker panes closed.", "info");
 			} else {
-				await workerPanes.open(tmuxFanout.snapshot().agents);
+				await workerPanes.open(tmuxFanout.getWorkerSessions());
 				if (workerPanes.terminalTooSmall()) {
 					ctx.ui.notify(
 						"Worker panes enabled — will appear when terminal is larger (≥160×40).",

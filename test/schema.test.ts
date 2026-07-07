@@ -116,11 +116,11 @@ describe("isGroupReady", () => {
 		expect(isGroupReady(plan, b)).toBe(false);
 	});
 
-	it("group with active dep is ready", () => {
+	it("group with active dep is not ready — the dep's branch tip is still empty", () => {
 		const a = makeGroup({ id: "a", status: "active" });
 		const b = makeGroup({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(true);
+		expect(isGroupReady(plan, b)).toBe(false);
 	});
 
 	it("group with complete dep is ready", () => {
@@ -137,11 +137,18 @@ describe("isGroupReady", () => {
 		expect(isGroupReady(plan, b)).toBe(true);
 	});
 
-	it("group with abandoned dep is not ready", () => {
+	it("group with abandoned dep is ready — a dead parent must not wedge the chain", () => {
 		const a = makeGroup({ id: "a", status: "abandoned" });
 		const b = makeGroup({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(false);
+		expect(isGroupReady(plan, b)).toBe(true);
+	});
+
+	it("group with superseded dep is ready", () => {
+		const a = makeGroup({ id: "a", status: "superseded" });
+		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(isGroupReady(plan, b)).toBe(true);
 	});
 
 	it("already-active group is not ready", () => {
@@ -151,8 +158,8 @@ describe("isGroupReady", () => {
 	});
 
 	it("multiple deps — all must be satisfied", () => {
-		const a = makeGroup({ id: "a", status: "active" });
-		const b = makeGroup({ id: "b", status: "planned" });
+		const a = makeGroup({ id: "a", status: "complete" });
+		const b = makeGroup({ id: "b", status: "active" });
 		const c = makeGroup({ id: "c", dependsOn: ["a", "b"] });
 		const plan = makePlan([a, b, c]);
 		expect(isGroupReady(plan, c)).toBe(false);
@@ -161,11 +168,13 @@ describe("isGroupReady", () => {
 
 describe("readyGroups", () => {
 	it("returns groups whose deps are met", () => {
-		const a = makeGroup({ id: "a", status: "active", dependsOn: [] });
+		const a = makeGroup({ id: "a", status: "complete", dependsOn: [] });
 		const b = makeGroup({ id: "b", dependsOn: ["a"] });
 		const c = makeGroup({ id: "c", dependsOn: [] });
-		const plan = makePlan([a, b, c]);
+		const d = makeGroup({ id: "d", dependsOn: ["c"] });
+		const plan = makePlan([a, b, c, d]);
 		const ready = readyGroups(plan);
+		// b's dep is complete; c has no deps; d waits on planned c.
 		expect(ready.map((g) => g.id)).toEqual(["b", "c"]);
 	});
 });
@@ -188,12 +197,40 @@ describe("isLeafGroup", () => {
 });
 
 describe("shippableGroups", () => {
-	it("returns complete leaf groups", () => {
+	it("ships the chain in order: the parent ships first", () => {
 		const a = makeGroup({ id: "a", status: "complete" });
 		const b = makeGroup({ id: "b", status: "complete", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		// a has a dependent → not shippable. b is a leaf → shippable.
+		// a's branch must reach the remote before b's PR can target it.
+		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["a"]);
+	});
+
+	it("dependent becomes shippable once its dep has shipped", () => {
+		const a = makeGroup({ id: "a", status: "shipped" });
+		const b = makeGroup({ id: "b", status: "complete", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
 		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["b"]);
+	});
+
+	it("terminally non-productive deps do not block shipping", () => {
+		const a = makeGroup({ id: "a", status: "abandoned" });
+		const b = makeGroup({ id: "b", status: "superseded" });
+		const c = makeGroup({ id: "c", status: "complete", dependsOn: ["a", "b"] });
+		const plan = makePlan([a, b, c]);
+		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["c"]);
+	});
+
+	it("a complete group with a complete-but-unshipped dep is not shippable", () => {
+		const a = makeGroup({ id: "a", status: "complete" });
+		const b = makeGroup({ id: "b", status: "shipped" });
+		const c = makeGroup({
+			id: "c",
+			status: "complete",
+			dependsOn: ["a", "b"],
+		});
+		const plan = makePlan([a, b, c]);
+		// c waits on a; a itself (no deps) is the one to ship.
+		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["a"]);
 	});
 
 	it("does not return non-complete groups", () => {
@@ -563,22 +600,58 @@ describe("pickBaseBranch", () => {
 		expect(pickBaseBranch(plan, g, "main")).toBe("main");
 	});
 
-	it("stacked group bases off parent branch", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a" });
+	it("stacked group bases off a complete parent's branch", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "complete" });
+		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("feat/a");
+	});
+
+	it("stacked group bases off a shipped parent's branch", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "shipped" });
 		const b = makeGroup({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("feat/a");
 	});
 
 	it("stacked=false bases off default branch", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a" });
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "complete" });
 		const b = makeGroup({ id: "b", dependsOn: ["a"], stacked: false });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("falls back to default when parent has no branch yet", () => {
-		const a = makeGroup({ id: "a" });
+		const a = makeGroup({ id: "a", status: "complete" });
+		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("main");
+	});
+
+	it("skips an abandoned parent — its branch holds no shippable work", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "abandoned" });
+		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("main");
+	});
+
+	it("skips a superseded parent", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "superseded" });
+		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("main");
+	});
+
+	it("falls through a non-productive first dep to the next productive one", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "abandoned" });
+		const b = makeGroup({ id: "b", branch: "feat/b", status: "complete" });
+		const c = makeGroup({ id: "c", dependsOn: ["a", "b"] });
+		const plan = makePlan([a, b, c]);
+		expect(pickBaseBranch(plan, c, "main")).toBe("feat/b");
+	});
+
+	it("does not stack on a parent that has not completed", () => {
+		const a = makeGroup({ id: "a", branch: "feat/a", status: "active" });
 		const b = makeGroup({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");

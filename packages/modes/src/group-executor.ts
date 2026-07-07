@@ -2,13 +2,14 @@
 // One group = one branch = one PR. Worker + support agents with internal DAG.
 //
 // Maestro owns the lifecycle:
-// 1. Groups activate when their dependsOn are satisfied
+// 1. Groups activate when their dependsOn are satisfied (deps complete/shipped
+//    or terminally non-productive — never merely active)
 // 2. Agents spawn when their `after` deps within the group complete
 // 3. Worker done = all tasks toggled
 // 4. Support agent done = session exits or idle detected
 // 5. Group complete = all agents done
-// 6. Terminal groups ship (push + PR)
-// 7. Non-terminal groups wait for downstream resolution
+// 6. Complete groups ship (push + PR) in chain order: a group ships once all
+//    its dependsOn groups have shipped, so stacked PR bases exist on the remote
 
 import type { PlanEngine } from "./engine.js";
 import { parseVerdict, VERDICT_INSTRUCTION } from "./exec/verdicts.js";
@@ -225,10 +226,23 @@ export class GroupExecutor {
 			await this.advanceGroup(g, state);
 		}
 
-		// 3. Ship terminal complete groups
-		for (const g of shippableGroups(plan)) {
-			const url = await this.shipGroupIfReady(g);
-			if (url) shipped.push(g.id);
+		// 3. Ship complete groups in chain order. A parent's ship makes its
+		// dependents shippable, so re-evaluate until a pass makes no progress;
+		// each group is attempted once per tick (a ship failure stays retryable
+		// on a later tick without looping here).
+		const attempted = new Set<string>();
+		let progressed = true;
+		while (progressed) {
+			progressed = false;
+			for (const g of shippableGroups(this.engine.get())) {
+				if (attempted.has(g.id)) continue;
+				attempted.add(g.id);
+				const url = await this.shipGroupIfReady(g);
+				if (url) {
+					shipped.push(g.id);
+					progressed = true;
+				}
+			}
 		}
 
 		return shipped;
@@ -791,27 +805,9 @@ export class GroupExecutor {
 		this.engine.setGroupStatus(g.id, "shipped");
 		this.engine.updateGroup(g.id, { prUrl });
 
-		// Mark superseded predecessors (non-terminal that have shipped all dependents)
-		await this.markSuperseded(g);
+		// Every group ships its own PR — predecessors are never auto-superseded.
+		// `superseded` stays a user-driven status (the transition remains legal).
 
 		return prUrl;
-	}
-
-	private async markSuperseded(shipped: WorkGroup): Promise<void> {
-		const plan = this.engine.get();
-		for (const depId of shipped.dependsOn ?? []) {
-			const dep = findGroup(plan, depId);
-			if (dep?.status !== "complete") continue;
-			// Check if ALL dependents of this dep are now shipped/superseded
-			const dependents = plan.groups.filter((other) =>
-				other.dependsOn?.includes(depId),
-			);
-			const allResolved = dependents.every(
-				(d) => d.status === "shipped" || d.status === "superseded",
-			);
-			if (allResolved) {
-				this.engine.setGroupStatus(depId, "superseded");
-			}
-		}
 	}
 }

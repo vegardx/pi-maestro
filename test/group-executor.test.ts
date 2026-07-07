@@ -92,7 +92,7 @@ describe("GroupExecutor — activation", () => {
 		expect(engine.get().groups[1].status).toBe("planned");
 	});
 
-	it("activates downstream group after dep becomes active", async () => {
+	it("does not activate downstream group while dep is merely active", async () => {
 		const engine = setupPlan();
 		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("auth", { title: "t1" });
@@ -106,9 +106,56 @@ describe("GroupExecutor — activation", () => {
 		await executor.tick();
 		expect(engine.get().groups[0].status).toBe("active");
 
-		// Second tick: api should now activate (auth is "active" which satisfies deps)
+		// auth's branch tip is still empty — api must keep waiting
 		await executor.tick();
+		expect(engine.get().groups[1].status).toBe("planned");
+	});
+
+	it("activates downstream group once dep completes, with dep summary available", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addWorkItem("auth", { title: "t1" });
+		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addWorkItem("api", { title: "t2" });
+
+		const requestSummary = vi
+			.fn()
+			.mockResolvedValue("### Auth summary\nLogin endpoint shipped.");
+		const deps = makeDeps({ requestSummary });
+		const executor = new GroupExecutor(engine, deps);
+
+		await executor.tick(); // auth activates
+		await executor.markAgentDone("auth", "worker"); // auth completes
+		expect(engine.get().groups[0].status).toBe("complete");
+
+		await executor.tick(); // api activates (and auth ships)
 		expect(engine.get().groups[1].status).toBe("active");
+
+		// api's worker was seeded with auth's real summary
+		const call = (deps.spawnAgent as ReturnType<typeof vi.fn>).mock.calls.find(
+			(c: unknown[]) => (c[0] as { groupId: string }).groupId === "api",
+		);
+		expect(call).toBeDefined();
+		expect((call![0] as { seed: string }).seed).toContain("Auth summary");
+	});
+
+	it("activates downstream group when its dep is abandoned, based on the default branch", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addWorkItem("auth", { title: "t1" });
+		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addWorkItem("api", { title: "t2" });
+		engine.setGroupStatus("auth", "abandoned");
+
+		const deps = makeDeps({ defaultBranch: "main" });
+		const executor = new GroupExecutor(engine, deps);
+		await executor.tick();
+
+		// A dead parent must not wedge the chain — api activates from main.
+		expect(engine.get().groups[1].status).toBe("active");
+		expect(deps.createWorktree).toHaveBeenCalledWith(
+			expect.objectContaining({ groupId: "api", baseBranch: "main" }),
+		);
 	});
 });
 
@@ -214,7 +261,7 @@ describe("GroupExecutor — completion and shipping", () => {
 		expect(engine.get().groups[0].status).toBe("complete");
 	});
 
-	it("ships terminal complete group", async () => {
+	it("ships a complete group", async () => {
 		const engine = setupPlan();
 		engine.addGroup({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
@@ -224,14 +271,14 @@ describe("GroupExecutor — completion and shipping", () => {
 		await executor.tick();
 		await executor.markAgentDone("work", "worker");
 
-		// Tick ships the now-complete terminal group
+		// Tick ships the now-complete group
 		const shipped = await executor.tick();
 		expect(shipped).toEqual(["work"]);
 		expect(engine.get().groups[0].status).toBe("shipped");
 		expect(deps.shipGroup).toHaveBeenCalled();
 	});
 
-	it("does not ship non-terminal complete group", async () => {
+	it("ships a complete group even when it has dependents — the chain needs its branch on the remote", async () => {
 		const engine = setupPlan();
 		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
@@ -243,13 +290,12 @@ describe("GroupExecutor — completion and shipping", () => {
 		await executor.tick(); // a activates
 		await executor.markAgentDone("a", "worker"); // a completes
 
-		// a has a dependent (b) → should NOT ship yet
 		const shipped = await executor.tick();
-		expect(shipped).toEqual([]);
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(shipped).toEqual(["a"]);
+		expect(engine.get().groups[0].status).toBe("shipped");
 	});
 
-	it("marks predecessor superseded after downstream ships", async () => {
+	it("ships an A←B chain in order and never auto-supersedes the predecessor", async () => {
 		const engine = setupPlan();
 		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
@@ -259,22 +305,59 @@ describe("GroupExecutor — completion and shipping", () => {
 		const deps = makeDeps();
 		const executor = new GroupExecutor(engine, deps);
 
-		// Activate both
 		await executor.tick(); // a activates
-		await executor.tick(); // b activates (a is active → satisfies dep)
 		await executor.markAgentDone("a", "worker"); // a completes
-		await executor.markAgentDone("b", "worker"); // b completes
+		const firstShipped = await executor.tick(); // a ships, b activates
+		expect(firstShipped).toEqual(["a"]);
 
-		// b is terminal → ship b
-		const shipped = await executor.tick();
-		expect(shipped).toContain("b");
+		// b's worktree stacks on a's real branch tip
+		expect(deps.createWorktree).toHaveBeenCalledWith(
+			expect.objectContaining({ groupId: "b", baseBranch: "feat/a" }),
+		);
+
+		await executor.markAgentDone("b", "worker"); // b completes
+		const secondShipped = await executor.tick();
+		expect(secondShipped).toEqual(["b"]);
+
+		// Both PRs stand: a stays shipped — superseding is a user decision.
+		expect(engine.get().groups.find((g) => g.id === "a")!.status).toBe(
+			"shipped",
+		);
 		expect(engine.get().groups.find((g) => g.id === "b")!.status).toBe(
 			"shipped",
 		);
-		// a should now be superseded (its only dependent shipped)
-		expect(engine.get().groups.find((g) => g.id === "a")!.status).toBe(
-			"superseded",
-		);
+	});
+
+	it("retries a failed ship and ships the unblocked chain in one tick", async () => {
+		const engine = setupPlan();
+		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addWorkItem("a", { title: "t1" });
+		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addWorkItem("b", { title: "t2" });
+
+		const shipGroup = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("push failed"))
+			.mockResolvedValue("https://github.com/org/repo/pull/1");
+		const deps = makeDeps({ shipGroup });
+		const executor = new GroupExecutor(engine, deps);
+
+		await executor.tick(); // a activates
+		await executor.markAgentDone("a", "worker"); // a completes
+
+		// Ship fails → a stays complete (retryable), b still activates
+		const failedShip = await executor.tick();
+		expect(failedShip).toEqual([]);
+		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().groups[1].status).toBe("active");
+
+		await executor.markAgentDone("b", "worker"); // b completes
+
+		// Both complete → one tick ships a, then b (a's ship unblocks b)
+		const shipped = await executor.tick();
+		expect(shipped).toEqual(["a", "b"]);
+		expect(engine.get().groups[0].status).toBe("shipped");
+		expect(engine.get().groups[1].status).toBe("shipped");
 	});
 });
 

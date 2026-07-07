@@ -211,16 +211,23 @@ export function canTransition(from: GroupStatus, to: GroupStatus): boolean {
 
 // ─── Dependency / activation logic ───────────────────────────────────────────
 
-/** Statuses that satisfy a downstream dependency. */
+/**
+ * Statuses that satisfy a downstream dependency. A dep must have finished
+ * producing (complete/shipped) — an `active` dep has an empty branch tip and
+ * no summary yet, so activating on it would stack the dependent on nothing.
+ * Terminal non-productive deps (abandoned/superseded) also count as satisfied
+ * so a chain doesn't wedge on an abandoned parent; base selection skips them.
+ */
 const SATISFIED_STATUSES: readonly GroupStatus[] = [
-	"active",
 	"complete",
 	"shipped",
+	"superseded",
+	"abandoned",
 ];
 
 /**
  * A group is ready to activate when all its dependsOn groups are in a
- * satisfied status (active, complete, or shipped).
+ * satisfied status (complete, shipped, or terminally non-productive).
  */
 export function isGroupReady(
 	plan: Pick<Plan, "groups">,
@@ -247,8 +254,7 @@ export function terminalGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
 }
 
 /**
- * A group is terminal in the dependency graph (nothing depends on it).
- * Terminal groups ship immediately when complete.
+ * A group is a leaf in the dependency graph (nothing depends on it).
  */
 export function isLeafGroup(
 	plan: Pick<Plan, "groups">,
@@ -258,12 +264,18 @@ export function isLeafGroup(
 }
 
 /**
- * Groups that have completed and are ready to ship (complete + no dependents).
+ * Groups ready to ship: complete, with every dependsOn group itself shipped
+ * (or terminally non-productive). Shipping follows the chain — in A←B, A
+ * ships first so `feat/A` exists on the remote when B's PR targets it.
  */
 export function shippableGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
-	return plan.groups.filter(
-		(g) => g.status === "complete" && isLeafGroup(plan, g),
-	);
+	return plan.groups.filter((g) => {
+		if (g.status !== "complete") return false;
+		return (g.dependsOn ?? []).every((depId) => {
+			const dep = findGroup(plan, depId);
+			return dep !== null && TERMINAL_STATUSES.includes(dep.status);
+		});
+	});
 }
 
 /** Why a group can't activate yet. Null if ready. */
@@ -394,9 +406,18 @@ export function defaultBranchForGroup(g: Pick<WorkGroup, "id">): string {
 }
 
 /**
- * Pick the base branch a group should fork from.
- * Stacked (default): fork from first dependency's branch tip.
- * Independent (stacked: false): fork from defaultBranch.
+ * Parent statuses a dependent may stack on: the parent's branch tip actually
+ * holds its work (shipped, or complete and awaiting ship).
+ */
+const STACKABLE_STATUSES: readonly GroupStatus[] = ["complete", "shipped"];
+
+/**
+ * Pick the base branch a group forks from (and its PR targets).
+ * Stacked (default): the first dependency that actually produced work —
+ * non-productive parents (abandoned/superseded) and parents that haven't
+ * completed yet are skipped, falling through to the next dep and finally
+ * the default branch.
+ * Independent (stacked: false): the default branch.
  */
 export function pickBaseBranch(
 	plan: Pick<Plan, "groups">,
@@ -409,10 +430,14 @@ export function pickBaseBranch(
 	// Explicit opt-out of stacking
 	if (g.stacked === false) return defaultBranch;
 
-	// Stacked: base off the first dependency's branch
-	const parent = findGroup(plan, deps[0]);
-	if (!parent?.branch) return defaultBranch;
-	return parent.branch;
+	// Stacked: base off the first dependency whose branch holds real work
+	for (const depId of deps) {
+		const parent = findGroup(plan, depId);
+		if (!parent?.branch) continue;
+		if (!STACKABLE_STATUSES.includes(parent.status)) continue;
+		return parent.branch;
+	}
+	return defaultBranch;
 }
 
 // ─── IDs ─────────────────────────────────────────────────────────────────────

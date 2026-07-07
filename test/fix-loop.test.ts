@@ -330,6 +330,41 @@ describe("fix loop — rounds", () => {
 		expect(engine.get().groups[0].status).toBe("active");
 	});
 
+	it("holds dependent groups back while the group churns through fix rounds", async () => {
+		const engine = setupReviewedGroup();
+		engine.addGroup({
+			title: "Downstream",
+			workerMode: "full",
+			dependsOn: ["work"],
+		});
+		engine.addWorkItem("downstream", { title: "build on work" });
+		const summaries = new Map<string, string>([
+			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
+			["sess-perf", "VERDICT: approve"],
+		]);
+		const { deps } = makeFixDeps(summaries);
+		const executor = await runInitialRound(engine, deps);
+
+		// work is mid fix round (active) — downstream must not activate yet
+		expect(engine.get().groups[0].status).toBe("active");
+		await executor.tick();
+		expect(engine.get().groups.find((g) => g.id === "downstream")!.status).toBe(
+			"planned",
+		);
+
+		// Fix round converges → work completes → downstream activates
+		await executor.markAgentDone("work", "worker");
+		await executor.tick(); // sec resurrected
+		summaries.set("sess-sec", "fixed\nVERDICT: approve");
+		await executor.markAgentDone("work", "sec");
+		expect(engine.get().groups[0].status).toBe("complete");
+
+		await executor.tick();
+		expect(engine.get().groups.find((g) => g.id === "downstream")!.status).toBe(
+			"active",
+		);
+	});
+
 	it("blocks when the fix-round cap is reached", async () => {
 		const engine = setupReviewedGroup();
 		engine.updateGroup("work", { maxFixRounds: 1 });

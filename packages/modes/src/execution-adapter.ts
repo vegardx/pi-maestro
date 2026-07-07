@@ -1,10 +1,12 @@
 // Execution adapter: wraps GroupExecutor with real tmux+RPC spawning.
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
-import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MaestroRpcServer } from "@vegardx/pi-rpc";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import { type AgentMessage, MaestroRpcServer } from "@vegardx/pi-rpc";
 import * as tmux from "@vegardx/pi-tmux";
 import {
 	buildAgentSeed,
@@ -48,15 +50,38 @@ export class ExecutionAdapter {
 	private _started = false;
 	private takenNames = new Set<string>();
 	private sessionNames = new Map<string, string>(); // agentKey → tmux session name
+	private idleCount = new Map<string, number>(); // agentKey → consecutive idle count
+	private stuckSteerSent = new Set<string>(); // agentKeys that received a stuck steer
+	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
+	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	private pendingQuestions = new Map<
+		string,
+		{
+			agentId: string;
+			questions: Questionnaire;
+			resolve: (answers: Answers) => void;
+		}
+	>(); // agentKey → pending question
 
 	readonly questionQueue = {
-		all: () => [] as { id: string; agentId: string; question: string }[],
+		all: () => {
+			const items: { id: string; agentId: string; question: string }[] = [];
+			for (const [key, entry] of this.pendingQuestions) {
+				for (const q of entry.questions) {
+					items.push({ id: key, agentId: entry.agentId, question: String(q) });
+				}
+			}
+			return items;
+		},
 	};
 
 	constructor(opts: ExecutionAdapterOpts) {
 		this.opts = opts;
 		this.engine = opts.engine;
-		this.socketPath = join("/tmp", `maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`);
+		this.socketPath = join(
+			"/tmp",
+			`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
+		);
 		this.rpcServer = new MaestroRpcServer();
 
 		const deps: ExecutorDeps = {
@@ -98,22 +123,26 @@ export class ExecutionAdapter {
 					});
 				}
 
-				// Write seed to file for pi to read
-				const seedDir = join(this.opts.planDir, "seeds");
-				mkdirSync(seedDir, { recursive: true });
-				const seedFile = join(seedDir, `${sessionName}.md`);
-				const { writeFileSync } = await import("node:fs");
-				writeFileSync(seedFile, seed);
-
-				// Build pi command with env vars
+				// Build session file (JSONL) with modes state + seed
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
-				// Share the maestro's agent dir so agents inherit auth credentials
-				const maestroAgentDir = process.env.PI_CODING_AGENT_DIR ?? join(process.env.HOME ?? "", ".pi", "agent");
+				const maestroAgentDir =
+					process.env.PI_CODING_AGENT_DIR ??
+					join(process.env.HOME ?? "", ".pi", "agent");
 				const agentSessionDir = join(
-					process.env.PI_CODING_AGENT_SESSION_DIR ?? join(maestroAgentDir, "sessions"),
+					process.env.PI_CODING_AGENT_SESSION_DIR ??
+						join(maestroAgentDir, "sessions"),
 					"agents",
 					sessionName,
 				);
+				mkdirSync(agentSessionDir, { recursive: true });
+				const sessionFile = buildSessionFile({
+					agentKey,
+					seed,
+					cwd,
+					outDir: agentSessionDir,
+				});
+
+				// Env vars for RPC discovery and agent identity
 				const envVars = [
 					`PI_MAESTRO_SOCK=${this.socketPath}`,
 					`PI_MAESTRO_AGENT_ID=${agentKey}`,
@@ -129,20 +158,31 @@ export class ExecutionAdapter {
 				const extPaths = this.opts.extensionPaths ?? [this.opts.extensionPath];
 				const extArgs = extPaths.map((p) => `-e "${p}"`).join(" ");
 
-				// Run pi interactively with seed as system prompt append
+				// Build user message for the agent
+				const userMsg = isWorker
+					? "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
+					: "Review the code and report your findings. Follow the focus instructions in your seed.";
+				const escapedMsg = userMsg.replace(/"/g, '\\"');
+
+				// Run pi interactively with session file (proper modes state hydration)
 				const piArgs = [
 					extArgs,
-					"--no-skills", "--no-prompt-templates", "--no-themes",
+					"--no-skills",
+					"--no-prompt-templates",
+					"--no-themes",
 					"--no-context-files",
-					`--append-system-prompt "${seedFile}"`,
-					`"Implement the tasks described in your system prompt."`,
+					`--session "${sessionFile}"`,
+					`"${escapedMsg}"`,
 				].join(" ");
 
 				const shellCmd = `${envVars.join(" ")} pi ${piArgs}`;
 				const cols = process.stdout.columns || 200;
 				const rows = process.stdout.rows || 50;
 
-				await tmux.spawn(sessionName, cwd, shellCmd, { width: cols, height: rows });
+				await tmux.spawn(sessionName, cwd, shellCmd, {
+					width: cols,
+					height: rows,
+				});
 
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
@@ -194,40 +234,11 @@ export class ExecutionAdapter {
 
 		// Listen for agent events via RPC
 		this.rpcServer.on("message", (agentId, msg) => {
-			if (msg.type === "status" && msg.status === "idle") {
-				// Agent went idle — check if worker is done (all tasks toggled)
-				const parts = agentId.split("/");
-				const groupId = parts[0];
-				const agentNamePart = parts[1];
-				if (agentNamePart === "worker" && this.executor.isWorkerDone(groupId)) {
-					this.executor.markAgentDone(groupId, "worker").then(() => {
-						this.opts.onPlanChanged();
-						this.tick();
-					});
-				}
-			}
-			if (msg.type === "done") {
-				const parts = agentId.split("/");
-				const groupId = parts[0];
-				const agentNamePart = parts[1];
-				if (agentNamePart) {
-					this.executor.markAgentDone(groupId, agentNamePart).then(() => {
-						this.opts.onPlanChanged();
-						this.tick();
-					});
-				}
-			}
-			if (msg.type === "tokens") {
-				this.opts.onAgentStateChanged?.(agentId, {
-					status: "working",
-					tokens: {
-						input: msg.snapshot.input,
-						output: msg.snapshot.output,
-						turns: msg.snapshot.turns,
-					},
-				});
-			}
+			this.handleRpcMessage(agentId, msg);
 		});
+
+		// Poll timer: check liveness of tmux sessions every 5s
+		this.pollTimer = setInterval(() => this.pollSessions(), 5000);
 
 		this._started = true;
 	}
@@ -263,6 +274,224 @@ export class ExecutionAdapter {
 
 		const newlyActivated = afterActive - beforeActive;
 		return Math.max(0, newlyActivated + shipped.length);
+	}
+
+	// --- RPC message dispatch ---
+
+	private handleRpcMessage(agentId: string, msg: AgentMessage): void {
+		const [groupId, agentNamePart] = agentId.split("/");
+		if (!groupId || !agentNamePart) return;
+
+		switch (msg.type) {
+			case "status":
+				this.handleStatus(agentId, groupId, agentNamePart, msg.status);
+				break;
+			case "done":
+				this.handleDone(groupId, agentNamePart);
+				break;
+			case "tokens":
+				this.opts.onAgentStateChanged?.(agentId, {
+					status: "working",
+					tokens: {
+						input: msg.snapshot.input,
+						output: msg.snapshot.output,
+						turns: msg.snapshot.turns,
+					},
+				});
+				break;
+			case "taskComplete":
+				// Legacy path — prefer planMutate/toggleTask
+				this.handleTaskComplete(agentId, groupId, msg.taskId);
+				break;
+			case "planMutate":
+				this.handlePlanMutate(agentId, msg);
+				break;
+			case "planRead":
+				this.handlePlanRead(agentId);
+				break;
+			case "questions":
+				this.handleQuestions(agentId, msg.questions);
+				break;
+		}
+	}
+
+	private handleStatus(
+		agentId: string,
+		groupId: string,
+		agentNamePart: string,
+		status: "working" | "idle" | "error",
+	): void {
+		if (status === "working") {
+			this.idleCount.set(agentId, 0);
+			this.stuckSteerSent.delete(agentId);
+			return;
+		}
+		if (status === "idle") {
+			const count = (this.idleCount.get(agentId) ?? 0) + 1;
+			this.idleCount.set(agentId, count);
+
+			// Check if worker completed all tasks
+			if (agentNamePart === "worker" && this.executor.isWorkerDone(groupId)) {
+				this.checkCompletionGate(agentId, groupId);
+				return;
+			}
+
+			// Stuck detection: steer after 5 consecutive idles
+			if (count >= 5 && !this.stuckSteerSent.has(agentId)) {
+				const group = this.engine.get().groups.find((g) => g.id === groupId);
+				if (group) {
+					const remaining = group.tasks
+						.filter((t) => t.kind === "task" && !t.done)
+						.map((t) => t.title);
+					if (remaining.length > 0) {
+						this.rpcServer.send(agentId, {
+							type: "steer",
+							content: `You seem stuck. Remaining tasks: ${remaining.join(", ")}. Toggle tasks when done, then stop.`,
+						});
+					}
+					this.stuckSteerSent.add(agentId);
+				}
+			}
+		}
+	}
+
+	private handleDone(groupId: string, agentNamePart: string): void {
+		this.executor.markAgentDone(groupId, agentNamePart).then(() => {
+			this.opts.onPlanChanged();
+			this.tick();
+		});
+	}
+
+	private handleTaskComplete(
+		agentId: string,
+		groupId: string,
+		taskId: string,
+	): void {
+		try {
+			this.engine.toggleWorkItem(groupId, taskId);
+			this.opts.onPlanChanged();
+			this.checkCompletionGate(agentId, groupId);
+		} catch {
+			// Task not found — ignore
+		}
+	}
+
+	private handlePlanMutate(
+		agentId: string,
+		msg: {
+			action: string;
+			deliverableId: string;
+			params: Record<string, unknown>;
+		},
+	): void {
+		const groupId = msg.deliverableId;
+		const params = msg.params ?? {};
+
+		try {
+			switch (msg.action) {
+				case "toggleTask": {
+					const taskId = params.taskId as string;
+					if (!taskId) throw new Error("taskId required");
+					this.engine.toggleWorkItem(groupId, taskId);
+					this.opts.onPlanChanged();
+					this.rpcServer.send(agentId, {
+						type: "planMutateResult",
+						success: true,
+						taskId,
+					});
+					this.checkCompletionGate(agentId, groupId);
+					break;
+				}
+				case "addTask": {
+					const title = params.title as string;
+					if (!title) throw new Error("title required");
+					const item = this.engine.addWorkItem(groupId, {
+						title,
+						body: (params.body as string) ?? "",
+						kind:
+							(params.kind as "task" | "followup" | "question") ?? "followup",
+					});
+					this.opts.onPlanChanged();
+					this.rpcServer.send(agentId, {
+						type: "planMutateResult",
+						success: true,
+						taskId: item.id,
+					});
+					break;
+				}
+				case "updateTask": {
+					const taskId = params.taskId as string;
+					if (!taskId) throw new Error("taskId required");
+					this.engine.updateWorkItem(groupId, taskId, {
+						...(params.title ? { title: params.title as string } : {}),
+						...(params.body ? { body: params.body as string } : {}),
+					});
+					this.opts.onPlanChanged();
+					this.rpcServer.send(agentId, {
+						type: "planMutateResult",
+						success: true,
+						taskId,
+					});
+					break;
+				}
+				default:
+					this.rpcServer.send(agentId, {
+						type: "planMutateResult",
+						success: false,
+						error: `unknown action: ${msg.action}`,
+					});
+			}
+		} catch (e) {
+			this.rpcServer.send(agentId, {
+				type: "planMutateResult",
+				success: false,
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
+	}
+
+	private handlePlanRead(agentId: string): void {
+		const [groupId] = agentId.split("/");
+		const content = renderPlanForAgent(this.engine, groupId);
+		this.rpcServer.send(agentId, { type: "planReadResponse", content });
+	}
+
+	private handleQuestions(agentId: string, questions: unknown): void {
+		const qArray = (Array.isArray(questions) ? questions : []) as Questionnaire;
+		this.pendingQuestions.set(agentId, {
+			agentId,
+			questions: qArray,
+			resolve: (answers) => {
+				this.rpcServer.send(agentId, { type: "answers", answers });
+				this.pendingQuestions.delete(agentId);
+			},
+		});
+		this.opts.onQuestionsReceived?.(agentId, qArray.length);
+	}
+
+	// --- Completion gate ---
+
+	private checkCompletionGate(agentId: string, groupId: string): void {
+		const group = this.engine.get().groups.find((g) => g.id === groupId);
+		if (!group) return;
+		const gating = group.tasks.filter((t) => t.kind === "task");
+		if (gating.length === 0) return;
+		if (!gating.every((t) => t.done)) return;
+
+		// All gating tasks done — shutdown the agent
+		this.rpcServer.send(agentId, {
+			type: "shutdown",
+			reason: "all tasks complete",
+		});
+	}
+
+	// --- Answer pending questions ---
+
+	answerQuestions(agentId: string, answers: Answers): void {
+		const pending = this.pendingQuestions.get(agentId);
+		if (pending) {
+			pending.resolve(answers);
+		}
 	}
 
 	steer(groupId: string, guidance: string): void {
@@ -328,6 +557,10 @@ export class ExecutionAdapter {
 
 	async destroy(): Promise<void> {
 		this._started = false;
+		if (this.pollTimer) {
+			clearInterval(this.pollTimer);
+			this.pollTimer = undefined;
+		}
 		// Kill all tmux sessions
 		for (const sessionName of this.sessionNames.values()) {
 			if (await tmux.hasSession(sessionName)) {
@@ -336,6 +569,49 @@ export class ExecutionAdapter {
 		}
 		this.sessionNames.clear();
 		this.rpcServer.close();
+	}
+
+	// --- Poll timer: detect dead sessions ---
+
+	private async pollSessions(): Promise<void> {
+		for (const [agentKey, sessionName] of this.sessionNames) {
+			const [groupId, agentNamePart] = agentKey.split("/");
+			if (!groupId || !agentNamePart) continue;
+
+			// Skip agents already marked done
+			const states = this.executor.getStates();
+			const groupState = states.get(groupId);
+			if (!groupState) continue;
+			const agentState = groupState.agents.get(agentNamePart);
+			if (!agentState || agentState.status === "done") continue;
+
+			// Check if tmux session is still alive
+			if (!(await tmux.hasSession(sessionName))) {
+				// Session died — attempt respawn or mark done
+				const count = this.respawnCount.get(agentKey) ?? 0;
+				const group = this.engine.get().groups.find((g) => g.id === groupId);
+				const hasRemainingTasks =
+					group?.tasks.some((t) => t.kind === "task" && !t.done) ?? false;
+
+				if (hasRemainingTasks && count < 2) {
+					// Respawn: rebuild session and try again
+					this.respawnCount.set(agentKey, count + 1);
+					try {
+						await this.executor.respawnAgent(groupId, agentNamePart);
+					} catch {
+						// Respawn failed — mark done
+						await this.executor.markAgentDone(groupId, agentNamePart);
+						this.opts.onPlanChanged();
+						await this.tick();
+					}
+				} else {
+					// No remaining tasks or max respawns — mark done
+					await this.executor.markAgentDone(groupId, agentNamePart);
+					this.opts.onPlanChanged();
+					await this.tick();
+				}
+			}
+		}
 	}
 
 	private collectDepSummaries(groupId: string): string[] {
@@ -352,4 +628,111 @@ export class ExecutionAdapter {
 		}
 		return summaries;
 	}
+}
+
+// --- Session file builder ---
+
+interface BuildSessionFileOpts {
+	agentKey: string; // e.g. "group-id/worker"
+	seed: string;
+	cwd: string;
+	outDir: string;
+}
+
+/**
+ * Build a JSONL session file that pi can hydrate on session_start.
+ * Contains: session header + maestro.modes.state + maestro-execution-seed.
+ */
+export function buildSessionFile(opts: BuildSessionFileOpts): string {
+	const { agentKey, seed, cwd, outDir } = opts;
+	const now = new Date().toISOString();
+	const sessionId = randomUUID();
+	const modesStateId = randomUUID().slice(0, 8);
+	const seedId = randomUUID().slice(0, 8);
+
+	const lines = [
+		JSON.stringify({
+			type: "session",
+			version: 3,
+			id: sessionId,
+			timestamp: now,
+			cwd,
+		}),
+		JSON.stringify({
+			type: "custom",
+			customType: "maestro.modes.state",
+			data: {
+				version: 2,
+				mode: "agent",
+				execution: { stage: "executing", deliverableId: agentKey },
+				updatedAt: now,
+			},
+			id: modesStateId,
+			parentId: null,
+			timestamp: now,
+		}),
+		JSON.stringify({
+			type: "custom",
+			customType: "maestro-execution-seed",
+			data: { content: seed, deliverableId: agentKey },
+			id: seedId,
+			parentId: modesStateId,
+			timestamp: now,
+		}),
+	];
+
+	const timestamp = now.replace(/[:.]/g, "-");
+	const fileName = `${timestamp}_agent-${agentKey.replace(/\//g, "_")}.jsonl`;
+	const filePath = join(outDir, fileName);
+	writeFileSync(filePath, `${lines.join("\n")}\n`);
+	return filePath;
+}
+
+// --- Plan rendering for agents ---
+
+/**
+ * Render a filtered plan view for an agent, scoped to its group.
+ * Shows group title, body, tasks (with done status), and dep summaries.
+ */
+export function renderPlanForAgent(
+	engine: PlanEngine,
+	groupId: string,
+): string {
+	const plan = engine.get();
+	const group = plan.groups.find((g) => g.id === groupId);
+	if (!group) return "(group not found)";
+
+	const lines: string[] = [];
+	lines.push(`# ${group.title}`);
+	lines.push("");
+	if (group.body) {
+		lines.push(group.body);
+		lines.push("");
+	}
+
+	// Dependency summaries
+	if (group.dependsOn?.length) {
+		for (const depId of group.dependsOn) {
+			const dep = plan.groups.find((g) => g.id === depId);
+			if (dep?.summary) {
+				lines.push(`## Dependency: ${dep.title}`);
+				lines.push(dep.summary);
+				lines.push("");
+			}
+		}
+	}
+
+	// Tasks
+	lines.push("## Tasks");
+	lines.push("");
+	for (const task of group.tasks) {
+		const check = task.done ? "x" : " ";
+		const kindTag = task.kind !== "task" ? ` _(${task.kind})_` : "";
+		lines.push(`- [${check}] **${task.title}**${kindTag}`);
+		if (task.body) {
+			lines.push(`  ${task.body.split("\n").join("\n  ")}`);
+		}
+	}
+
+	return lines.join("\n");
 }

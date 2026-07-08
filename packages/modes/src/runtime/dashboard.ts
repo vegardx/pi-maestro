@@ -172,9 +172,6 @@ export function renderAgentsOverview(
 			lines.push(`  Tasks: ${done}/${tasks.length}`);
 		}
 		const deliverableState = snap?.deliverables.get(g.id);
-		if (deliverableState && deliverableState.round > 0) {
-			lines.push(`  Fix round: ${deliverableState.round}`);
-		}
 		if (deliverableState?.blocked) {
 			lines.push(`  ⚠ Blocked: ${deliverableState.blocked}`);
 		}

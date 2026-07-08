@@ -44,9 +44,8 @@ export function formatEffort(effort?: string, adaptive?: boolean): string {
 	return adaptive ? `A/${abbr}` : abbr;
 }
 
-/** Per-deliverable round/blocked view (ExecutionHandle.snapshot().deliverables). */
+/** Per-deliverable blocked view (ExecutionHandle.snapshot().deliverables). */
 export interface AgentTableDeliverable {
-	readonly round: number;
 	readonly blocked?: string;
 }
 
@@ -139,14 +138,7 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	for (const [key, agent] of agents) {
 		if (!ACTIVE_STATUSES.has(agent.status)) continue;
 		const [deliverable = "", name = key] = key.split("/");
-		const deliverableState = deliverables?.get(deliverable);
-		const status =
-			agent.status === "working" &&
-			name === "worker" &&
-			deliverableState &&
-			deliverableState.round > 0
-				? `fixing r${deliverableState.round}`
-				: agent.status;
+		const status = agent.status;
 		inputTokens.push(formatTokens(agent.tokens.input));
 		outputTokens.push(formatTokens(agent.tokens.output));
 		rows.push({

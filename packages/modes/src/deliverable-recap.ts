@@ -84,9 +84,6 @@ function renderDeliverableRecap(
 	// Agent status from executor
 	const state = executor.getStates().get(deliverable.id);
 	if (state) {
-		if (state.round > 0) {
-			lines.push(`Fix rounds: ${state.round}`);
-		}
 		if (state.blocked) {
 			lines.push(`Blocked: ${state.blocked}`);
 		}

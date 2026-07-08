@@ -1,6 +1,6 @@
-// Reviewer verdict protocol. Read-only reviewers end their summary with a
-// structured verdict line; the maestro parses it mechanically to drive the
-// review→fix loop — no LLM orchestration in the loop decisions.
+// Reviewer verdict protocol. A persona reviewer ends its report with a
+// structured verdict line; it's parsed mechanically (no LLM in the decision)
+// to feed the worker's review panel and the executor's ship gate.
 
 export type Verdict = "approve" | "request-changes" | "none";
 

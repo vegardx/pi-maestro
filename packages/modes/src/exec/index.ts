@@ -43,9 +43,7 @@ export interface ExecutionAgentSnapshot {
 }
 
 export interface ExecutionDeliverableSnapshot {
-	/** Review→fix round counter. 0 = initial implementation. */
-	readonly round: number;
-	/** Set when the fix loop stopped without converging. */
+	/** Set when the deliverable can't proceed (e.g. a blocked ship gate). */
 	readonly blocked?: string;
 }
 

@@ -38,7 +38,7 @@ function agent(
 	};
 }
 
-/** The approved-design population: two deliverables, one with a fix round. */
+/** The approved-design population: a spread of live agents across deliverables. */
 function sampleAgents(): Map<string, AgentTableAgent> {
 	return new Map([
 		[
@@ -83,8 +83,8 @@ function sampleAgents(): Map<string, AgentTableAgent> {
 
 function sampleDeliverables(): Map<string, AgentTableDeliverable> {
 	return new Map([
-		["clamp", { round: 1 }],
-		["average", { round: 0 }],
+		["clamp", {}],
+		["average", {}],
 	]);
 }
 
@@ -160,7 +160,7 @@ describe("buildAgentTable", () => {
 		// Row content, checked by component (column spacing is layout-dependent).
 		for (const part of [
 			"worker",
-			"fixing r1",
+			"working",
 			"fable-5",
 			"A/M",
 			"13.2k / 2.2k",
@@ -189,18 +189,6 @@ describe("buildAgentTable", () => {
 		const agentLabel = lines[0].indexOf("AGENT");
 		expect(lines[1].indexOf("worker")).toBe(agentLabel - 1);
 		expect(lines[2].indexOf("reviewer")).toBe(agentLabel - 1);
-	});
-
-	it("shows fixing rN only for workers of deliverables with round > 0", () => {
-		const lines = buildAgentTable({
-			agents: sampleAgents(),
-			deliverables: sampleDeliverables(),
-			width: 100,
-			now: NOW,
-		});
-		expect(lines[1]).toContain("fixing r1"); // clamp worker
-		expect(lines[2]).toContain("summarizing"); // clamp reviewer keeps status
-		expect(lines[3]).toContain("working"); // average round 0
 	});
 
 	it("drops CACHE/ELAPSED before MODEL as width shrinks", () => {
@@ -247,8 +235,8 @@ describe("buildAgentTable", () => {
 
 	it("adds a full-width truncated row for a blocked deliverable", () => {
 		const deliverables = new Map<string, AgentTableDeliverable>([
-			["clamp", { round: 1 }],
-			["average", { round: 0, blocked: `review stalled: ${"x".repeat(200)}` }],
+			["clamp", {}],
+			["average", { blocked: `review stalled: ${"x".repeat(200)}` }],
 		]);
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
@@ -286,7 +274,7 @@ describe("styleAgentTable", () => {
 
 	it("dims borders and header, colors blocked rows, leaves rows plain", () => {
 		const deliverables = new Map<string, AgentTableDeliverable>([
-			["average", { round: 0, blocked: "reviewer stalled" }],
+			["average", { blocked: "reviewer stalled" }],
 		]);
 		const lines = buildAgentTable({
 			agents: sampleAgents(),

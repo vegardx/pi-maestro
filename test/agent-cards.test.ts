@@ -44,14 +44,6 @@ const doneEvent = {
 	commits: ["feat: add login", "test: cover refresh"],
 } satisfies ExecutionEvent;
 
-const fixRoundEvent: ExecutionEvent = {
-	kind: "fix-round",
-	deliverableId: "auth",
-	deliverableTitle: "Auth",
-	round: 2,
-	findings: ["missing CSRF check", "no rate limit"],
-};
-
 const researchDoneEvent = {
 	kind: "research-done",
 	question: "how do competing TUI libraries debounce resize events?",
@@ -79,7 +71,6 @@ describe("agent card builders", () => {
 	it("colors card headers by kind", () => {
 		expect(eventColor(evt("spawn"))).toBe("accent");
 		expect(eventColor(evt("done"))).toBe("success");
-		expect(eventColor(evt("fix-round"))).toBe("warning");
 		expect(eventColor(evt("blocked"))).toBe("error");
 		expect(eventColor(evt("failed"))).toBe("error");
 		expect(eventColor(evt("shipped"))).toBe("success");
@@ -92,8 +83,6 @@ describe("agent card builders", () => {
 	it("tints card backgrounds by kind from the available bg keys", () => {
 		expect(eventBg(evt("done"))).toBe("toolSuccessBg");
 		expect(eventBg(evt("shipped"))).toBe("toolSuccessBg");
-		// No warning bg exists in the theme — fix-round leans on toolPendingBg.
-		expect(eventBg(evt("fix-round"))).toBe("toolPendingBg");
 		expect(eventBg(evt("blocked"))).toBe("toolErrorBg");
 		expect(eventBg(evt("failed"))).toBe("toolErrorBg");
 		expect(eventBg(evt("spawn"))).toBe("customMessageBg");
@@ -179,26 +168,17 @@ describe("agent card builders", () => {
 		]);
 	});
 
-	it("builds fix-round header, findings body, and resurrection trailer", () => {
-		expect(buildCardHeader(fixRoundEvent)).toBe("↻ Auth · fix round 2");
-		expect(buildCardBody(fixRoundEvent, false)).toEqual([
-			"missing CSRF check",
-			"no rate limit",
-		]);
-		expect(buildStatsTrailer(fixRoundEvent)).toBe(
-			"↳ round 2 · 2 findings · worker resurrected",
-		);
-	});
-
 	it("builds blocked with the reason as body and a /retry trailer", () => {
 		const blocked: ExecutionEvent = {
 			kind: "blocked",
 			deliverableId: "auth",
 			deliverableTitle: "Auth",
-			reason: "fix-round cap reached",
+			reason: "ship gate: security-audit requested changes",
 		};
 		expect(buildCardHeader(blocked)).toBe("■ Auth · blocked");
-		expect(buildCardBody(blocked, false)).toEqual(["fix-round cap reached"]);
+		expect(buildCardBody(blocked, false)).toEqual([
+			"ship gate: security-audit requested changes",
+		]);
 		expect(buildStatsTrailer(blocked)).toBe("↳ /retry after inspecting");
 	});
 
@@ -385,7 +365,6 @@ describe("registerAgentCardRenderer", () => {
 	it("never emits box-drawing characters", () => {
 		const events: ExecutionEvent[] = [
 			doneEvent,
-			fixRoundEvent,
 			{
 				kind: "spawn",
 				agentKey: "auth/worker",

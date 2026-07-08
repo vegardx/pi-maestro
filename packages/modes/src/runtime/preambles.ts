@@ -68,8 +68,9 @@ Your tasks are described in the first message. Implement them all.
 - The reviewers overlap and sometimes contradict. YOU reconcile: dedupe, rank,
   and decide what to fix. Not every advisory finding must be actioned.
 - If a finding forces a choice you can't make locally — a design fork whose
-  answer affects other deliverables — describe it and stop; the maestro will
-  decide, consult the advisor, or ask the human.
+  answer affects other deliverables — escalate with ask(): you stay live and
+  resume when the answer arrives (no need to stop). The maestro decides,
+  consults the advisor, or asks the human.
 
 ## Rules
 - Do NOT run git push, gh pr create, or any shipping commands

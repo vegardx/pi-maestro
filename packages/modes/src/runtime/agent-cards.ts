@@ -1,5 +1,5 @@
 // Agent lifecycle cards: background-tinted, padded chat messages for
-// execution milestones (spawn/done/fix-round/blocked/failed/shipped/
+// execution milestones (spawn/done/blocked/failed/shipped/
 // settled), rendered exactly how pi renders tool calls — a Text component
 // with paddingX/paddingY and a theme.bg tint, no box-drawing characters.
 // Layout is summary-first: one header line, the summary's first paragraph
@@ -84,8 +84,6 @@ export function eventColor(event: AgentCardEvent): ThemeColor {
 		case "done":
 		case "shipped":
 			return "success";
-		case "fix-round":
-			return "warning";
 		case "blocked":
 		case "failed":
 			return "error";
@@ -102,8 +100,6 @@ export function eventColor(event: AgentCardEvent): ThemeColor {
  * toolSuccessBg, toolErrorBg) — there is no warning or accent bg, so:
  *   done/shipped   → toolSuccessBg (success tint)
  *   blocked/failed → toolErrorBg   (error tint)
- *   fix-round      → toolPendingBg (closest to a warning; the warning hue
- *                    is carried by the theme.fg("warning") header instead)
  *   spawn/settled  → customMessageBg (neutral/accent tint; accent hue is
  *                    carried by the theme.fg("accent") header)
  */
@@ -112,8 +108,6 @@ export function eventBg(event: AgentCardEvent): ThemeBgColor {
 		case "done":
 		case "shipped":
 			return "toolSuccessBg";
-		case "fix-round":
-			return "toolPendingBg";
 		case "blocked":
 		case "failed":
 			return "toolErrorBg";
@@ -145,8 +139,6 @@ export function buildCardHeader(event: AgentCardEvent): string {
 			return `◆ ${event.deliverableTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
 		case "done":
 			return `✓ ${event.deliverableTitle} · ${agentRole(event.agentKey)} · finished in ${formatDuration(event.durationMs)}`;
-		case "fix-round":
-			return `↻ ${event.deliverableTitle} · fix round ${event.round}`;
 		case "blocked":
 			return `■ ${event.deliverableTitle} · blocked`;
 		case "failed":
@@ -220,8 +212,6 @@ export function buildCardBody(
 			}
 			return lines;
 		}
-		case "fix-round":
-			return [...event.findings];
 		case "blocked":
 			return [event.reason];
 		case "failed":
@@ -262,8 +252,6 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 			parts.push(`${t.turns} turns`);
 			return `↳ ${parts.join(" · ")}`;
 		}
-		case "fix-round":
-			return `↳ round ${event.round} · ${plural(event.findings.length, "finding")} · worker resurrected`;
 		case "blocked":
 			return "↳ /retry after inspecting";
 		case "failed":

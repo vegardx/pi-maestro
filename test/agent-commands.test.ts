@@ -199,7 +199,7 @@ describe("renderAgentsOverview", () => {
 		return engine;
 	}
 
-	it("renders live status, tokens, round, and blocked reason", () => {
+	it("renders live status, tokens, and blocked reason", () => {
 		const engine = planWithDeliverable();
 		const handle = makeHandle({
 			snapshot: () => ({
@@ -214,14 +214,15 @@ describe("renderAgentsOverview", () => {
 					],
 				]),
 				deliverables: new Map<string, ExecutionDeliverableSnapshot>([
-					["auth", { round: 2, blocked: "fix-round cap reached" }],
+					["auth", { blocked: "ship gate: security-audit requested changes" }],
 				]),
 			}),
 		});
 		const out = renderAgentsOverview(engine.get(), handle);
 		expect(out).toContain("worker (full) — working · 5000in/120out · 9 turns");
-		expect(out).toContain("Fix round: 2");
-		expect(out).toContain("Blocked: fix-round cap reached");
+		expect(out).toContain(
+			"Blocked: ship gate: security-audit requested changes",
+		);
 		// Spec-only agent (not spawned yet) renders without a live suffix.
 		expect(out).toContain("sec (read-only, default, after: worker)");
 	});
@@ -235,7 +236,7 @@ describe("renderAgentsOverview", () => {
 });
 
 describe("buildRecap", () => {
-	it("includes rounds, blocked reason, PR url, and agent summaries", () => {
+	it("includes blocked reason, PR url, and agent summaries", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "t",
 			title: "T",
@@ -264,8 +265,7 @@ describe("buildRecap", () => {
 			deliverableId: "auth",
 			agents,
 			completed: new Set(["worker"]),
-			round: 1,
-			blocked: "review findings unchanged after fix round",
+			blocked: "ship gate: security-audit requested changes",
 		};
 		const executor = {
 			getStates: () => new Map([["auth", state]]),
@@ -274,9 +274,8 @@ describe("buildRecap", () => {
 		const recap = buildRecap(engine, executor, { includeSummaries: true });
 		expect(recap).toContain("## Auth [planned]");
 		expect(recap).toContain("PR: https://github.com/org/repo/pull/7");
-		expect(recap).toContain("Fix rounds: 1");
 		expect(recap).toContain(
-			"Blocked: review findings unchanged after fix round",
+			"Blocked: ship gate: security-audit requested changes",
 		);
 		expect(recap).toContain("ada: done");
 		expect(recap).toContain("shipped the auth flow");

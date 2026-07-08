@@ -12,11 +12,9 @@
 //    its dependsOn deliverables have shipped, so stacked PR bases exist on the remote
 
 import type { PlanEngine } from "./engine.js";
-import { parseVerdict, VERDICT_INSTRUCTION } from "./exec/verdicts.js";
 import type { AgentMode, Deliverable } from "./schema.js";
 import {
 	defaultBranchForDeliverable,
-	findAgent,
 	findDeliverable,
 	gatingTasks,
 	immediateAgents,
@@ -73,12 +71,8 @@ export interface DeliverableRunState {
 	worktreePath?: string;
 	/** Branch name. */
 	branch?: string;
-	/** Review→fix round counter. 0 = initial implementation. */
-	round: number;
-	/** Set when the fix loop stopped without converging; surfaced to the user. */
+	/** Set when the deliverable can't proceed (e.g. a blocked ship gate). */
 	blocked?: string;
-	/** Findings from each objecting reviewer's last round (no-progress guard). */
-	lastFindingsByReviewer?: Map<string, string[]>;
 }
 
 // ─── Executor ────────────────────────────────────────────────────────────────
@@ -183,7 +177,6 @@ export class DeliverableExecutor {
 			completed: new Set(),
 			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
 			branch: `feat/${g.id}`,
-			round: 0,
 			blocked:
 				"maestro restarted — agents may still be running in tmux; /retry after inspecting",
 		};
@@ -293,12 +286,7 @@ export class DeliverableExecutor {
 			const plan = this.engine.get();
 			const g = findDeliverable(plan, deliverableId);
 			const consumer = this.nextConsumer(g, agentName);
-			let preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? deliverableId}`;
-			// Read-only reviewers must end their summary with a verdict.
-			const spec = g ? findAgent(g, agentName) : null;
-			if (spec?.mode === "read-only") {
-				preamble += `\n\n${VERDICT_INSTRUCTION}`;
-			}
+			const preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? deliverableId}`;
 
 			try {
 				agent.status = "summarizing";
@@ -420,7 +408,6 @@ export class DeliverableExecutor {
 			completed: new Set(),
 			worktreePath,
 			branch,
-			round: 0,
 		};
 
 		// Register all agents (worker + support)
@@ -486,7 +473,7 @@ export class DeliverableExecutor {
 		const agentState = state.agents.get(name);
 		if (!agentState) return;
 
-		// Never spawn into a blocked deliverable (fix rounds clear `blocked` first).
+		// Never spawn into a blocked deliverable (the user clears `blocked` first).
 		if (state.blocked) return;
 
 		const spec =
@@ -569,15 +556,7 @@ export class DeliverableExecutor {
 	}
 
 	/** Default kickoff for a resumed session when the caller supplies none. */
-	private resumeKickoff(state: DeliverableRunState, name: string): string {
-		const findings = state.lastFindingsByReviewer?.get(name);
-		if (findings && findings.length > 0) {
-			return (
-				`The worker completed fix round ${state.round} addressing your ` +
-				`findings. Verify each is resolved and finish with a fresh verdict:\n` +
-				findings.map((f) => `- ${f}`).join("\n")
-			);
-		}
+	private resumeKickoff(_state: DeliverableRunState, _name: string): string {
 		return (
 			"Your previous session ended unexpectedly and has been resumed. " +
 			"Review your progress, then continue the remaining work."
@@ -687,25 +666,10 @@ export class DeliverableExecutor {
 			return;
 		}
 
-		// Review verdicts: any read-only reviewer requesting changes starts a
-		// fix round (bounded); a missing verdict does not block.
-		const g = findDeliverable(this.engine.get(), deliverableId);
-		if (g) {
-			const objections: { name: string; findings: string[] }[] = [];
-			for (const spec of g.agents) {
-				if (spec.mode !== "read-only") continue;
-				const reviewer = state.agents.get(spec.name);
-				if (!reviewer?.summary) continue;
-				const parsed = parseVerdict(reviewer.summary);
-				if (parsed.verdict === "request-changes") {
-					objections.push({ name: spec.name, findings: parsed.findings });
-				}
-			}
-			if (objections.length > 0) {
-				await this.startFixRound(g, state, objections);
-				return;
-			}
-		}
+		// Review iteration is the worker's own (it runs `review()` in its live
+		// session and fixes findings before it stops); the executor only gates
+		// ship on the required panel verdicts. So completion here is final —
+		// there is no executor-orchestrated fix round.
 
 		// Assemble deliverable summary from agent summaries
 		const summaries = [...state.agents.values()]
@@ -717,82 +681,6 @@ export class DeliverableExecutor {
 		this.engine.updateDeliverable(deliverableId, {
 			summary: deliverableSummary,
 		});
-	}
-
-	/**
-	 * Start a review→fix round: findings become tagged gating tasks, the
-	 * worker is resurrected from its own session to fix them, and objecting
-	 * reviewers re-run once the worker completes (their "worker" dep becomes
-	 * unsatisfied again). Bounded by the round cap and a no-progress guard;
-	 * either stop leaves the deliverable active with `blocked` set for the user.
-	 */
-	private async startFixRound(
-		g: Deliverable,
-		state: DeliverableRunState,
-		objections: { name: string; findings: string[] }[],
-	): Promise<void> {
-		// No-progress guard: a reviewer re-raising byte-identical findings
-		// means fix rounds aren't converging.
-		for (const o of objections) {
-			const prev = state.lastFindingsByReviewer?.get(o.name);
-			if (prev && JSON.stringify(prev) === JSON.stringify(o.findings)) {
-				state.blocked = "review findings unchanged after fix round";
-				return;
-			}
-		}
-
-		const maxFixRounds = g.maxFixRounds ?? 2;
-		if (state.round >= maxFixRounds) {
-			const outstanding = objections.reduce((n, o) => n + o.findings.length, 0);
-			state.blocked = `fix-round cap reached; ${outstanding} findings outstanding`;
-			return;
-		}
-
-		state.round += 1;
-		state.blocked = undefined;
-
-		// Add all work items before mutating any agent state: a mid-loop
-		// validation failure must not leave a half-armed round (round bumped
-		// but nobody re-pended → the deliverable would wedge silently).
-		const allFindings: string[] = [];
-		try {
-			for (const o of objections) {
-				for (const finding of o.findings) {
-					this.engine.addWorkItem(g.id, {
-						title: `[round ${state.round}, ${o.name}] ${finding}`,
-						kind: "task",
-					});
-					allFindings.push(finding);
-				}
-			}
-		} catch (e) {
-			state.round -= 1;
-			state.blocked = `fix round failed: ${e instanceof Error ? e.message : String(e)}`;
-			return;
-		}
-
-		state.lastFindingsByReviewer ??= new Map();
-		for (const o of objections) {
-			state.lastFindingsByReviewer.set(o.name, o.findings);
-		}
-
-		// Re-pend the worker and every objecting reviewer; approving reviewers
-		// stay done. Dropping them from `completed` re-arms the after-DAG.
-		for (const name of ["worker", ...objections.map((o) => o.name)]) {
-			const a = state.agents.get(name);
-			if (!a) continue;
-			a.status = "pending";
-			a.summary = undefined;
-			a.completedAt = undefined;
-			a.sessionId = undefined;
-			state.completed.delete(name);
-		}
-
-		const kickoff =
-			`Reviewers found issues with your changes — address each, commit, ` +
-			`and toggle the new [round ${state.round}] tasks:\n` +
-			allFindings.map((f) => `- ${f}`).join("\n");
-		await this.spawnAgentInDeliverable(g, state, "worker", kickoff);
 	}
 
 	private async shipDeliverableIfReady(g: Deliverable): Promise<string | null> {

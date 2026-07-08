@@ -189,7 +189,7 @@ describe("execution adapter observability", () => {
 		expect(worker?.status).toBe("working");
 		expect(worker?.startedAt).toBeGreaterThanOrEqual(suiteStart);
 		expect(worker?.startedAt).toBeLessThanOrEqual(Date.now());
-		expect(snap.deliverables.get("deliverable-one")).toEqual({ round: 0 });
+		expect(snap.deliverables.get("deliverable-one")).toEqual({});
 	});
 
 	it("steer targets the worker by default and named agents by prefix", async () => {

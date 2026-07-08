@@ -83,13 +83,6 @@ export type ExecutionEvent =
 			commits?: string[];
 	  }
 	| {
-			kind: "fix-round";
-			deliverableId: string;
-			deliverableTitle: string;
-			round: number;
-			findings: string[];
-	  }
-	| {
 			kind: "blocked";
 			deliverableId: string;
 			deliverableTitle: string;
@@ -196,7 +189,6 @@ export class ExecutionAdapter {
 		{ at: number; toolClass: "full" | "read-only" }
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
-	private lastRounds = new Map<string, number>(); // deliverableId → last logged fix round
 	private panelVerdicts = new Map<string, PanelVerdictMessage>(); // deliverableId → latest round
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
@@ -750,9 +742,8 @@ export class ExecutionAdapter {
 					}
 				}
 			} else if (count >= IDLE_DONE_THRESHOLD && state?.status === "working") {
-				// Non-worker agents (read-only reviewers) never toggle tasks and
-				// interactive pi never exits — sustained idle means they're done.
-				// This is what makes the review→fix loop reachable in real runs.
+				// Non-worker support agents never toggle tasks and interactive pi
+				// never exits — sustained idle is their only completion signal.
 				this.completeAgent(deliverableId, agentNamePart);
 				return;
 			}
@@ -1055,7 +1046,7 @@ export class ExecutionAdapter {
 				adaptive?: boolean;
 			}
 		>;
-		deliverables: Map<string, { round: number; blocked?: string }>;
+		deliverables: Map<string, { blocked?: string }>;
 	} {
 		const agents = new Map<
 			string,
@@ -1069,12 +1060,11 @@ export class ExecutionAdapter {
 				adaptive?: boolean;
 			}
 		>();
-		const deliverables = new Map<string, { round: number; blocked?: string }>();
+		const deliverables = new Map<string, { blocked?: string }>();
 		const states = this.executor.getStates();
 
 		for (const [deliverableId, deliverableState] of states) {
 			deliverables.set(deliverableId, {
-				round: deliverableState.round,
 				...(deliverableState.blocked
 					? { blocked: deliverableState.blocked }
 					: {}),
@@ -1345,26 +1335,9 @@ export class ExecutionAdapter {
 		}
 	}
 
-	/** Diff executor deliverable state and log fix-round-start / blocked events. */
+	/** Diff executor deliverable state and log blocked-transition events. */
 	private recordDeliverableTransitions(): void {
 		for (const [deliverableId, state] of this.executor.getStates()) {
-			const lastRound = this.lastRounds.get(deliverableId) ?? 0;
-			if (state.round > lastRound) {
-				this.logEvent("fix-round-start", {
-					deliverable: deliverableId,
-					round: state.round,
-				});
-				this.lastRounds.set(deliverableId, state.round);
-				this.emitEvent({
-					kind: "fix-round",
-					deliverableId,
-					deliverableTitle: this.deliverableTitle(deliverableId),
-					round: state.round,
-					findings: state.lastFindingsByReviewer
-						? [...state.lastFindingsByReviewer.values()].flat()
-						: [],
-				});
-			}
 			if (state.blocked && !this.blockedLogged.has(deliverableId)) {
 				this.logEvent("blocked", {
 					deliverable: deliverableId,

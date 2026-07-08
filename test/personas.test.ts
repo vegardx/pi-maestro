@@ -62,6 +62,10 @@ describe("buildPersonaProfile", () => {
 		expect(profile?.session).toBe(false);
 		expect(profile?.isolateExtensions).toBe(true);
 		expect(profile?.thinking).toBe("high"); // persona default
+		// The harness names the persona deterministically (not inferred prose).
+		expect(profile?.appendSystemPrompt).toContain(
+			'You are the "security-audit" reviewer',
+		);
 		expect(profile?.appendSystemPrompt).toContain("VERDICT: PASS");
 		expect(profile?.appendSystemPrompt).toContain("OWASP");
 	});

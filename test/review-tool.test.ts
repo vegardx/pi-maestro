@@ -16,8 +16,11 @@ function fakeSubagents(
 ): SubagentsCapabilityV1 {
 	let n = 0;
 	return {
-		spawn(prompt: string, _profile: SpawnProfile): RunHandle {
-			const persona = Object.keys(byPersona).find((p) => prompt.includes(p));
+		spawn(_prompt: string, profile: SpawnProfile): RunHandle {
+			// Persona lives in the profile's system prompt, not the constant kickoff.
+			const persona = Object.keys(byPersona).find((p) =>
+				profile.appendSystemPrompt?.includes(`"${p}"`),
+			);
 			const result = byPersona[persona ?? ""] ?? { status: "failed" as const };
 			return {
 				id: `run-${++n}` as RunId,

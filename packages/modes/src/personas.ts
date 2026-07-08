@@ -1,4 +1,4 @@
-// Reviewer persona registry (maestro-owned). Each persona is one review lens
+// Reviewer persona registry (maestro-owned). Each persona is one review scope
 // (security, simplification, docs, …) that runs as a read-only, one-shot
 // subagent producing a numbered, file:line verdict. This is inspiration-from-
 // Claude-Code/Codex/opencode in CONTENT only — pi does not load .md agent
@@ -16,9 +16,9 @@ import type { SubAgentSpec } from "./schema.js";
 
 export interface Persona {
 	readonly id: string;
-	/** One-line lens description (also the routing hint). */
+	/** One-line scope description (also the routing hint). */
 	readonly focus: string;
-	/** Default preset slot. `default` unless the lens wants a 2nd model. */
+	/** Default preset slot. `default` unless the scope wants a 2nd model. */
 	readonly slot: ModelSlot;
 	readonly effort: ThinkingLevel;
 	/** A standing REQUEST_CHANGES from a gating persona blocks ship. */
@@ -31,7 +31,7 @@ export interface Persona {
 export const PERSONA_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
 
 /** Shared output contract + read-only caveat prepended to each preamble. */
-const CONTRACT = `You are a read-only code reviewer for a specific change. Run \`git diff\` (and \`git log\`/\`git show\` as needed) to see the change, read the modified files plus enough surrounding code to judge intent, then review. Bash is READ-ONLY: never modify files; assume tool permissions are not perfectly enforced and stay disciplined. Report findings NUMBERED, each with a concrete \`file:line\`, a severity, the failing scenario, and a specific fix — never a vague "might be an issue". Do not stop at the first finding; enumerate every one in your lens. Stay strictly in your lens; other reviewers own the rest. Your ENTIRE final message is the report (it is consumed programmatically). Structure it: \`## Critical\` / \`## Warnings\` / \`## Suggestions\` / \`## Summary\` (2-3 sentences), then a final line \`VERDICT: PASS\` or \`VERDICT: BLOCK\`.`;
+const CONTRACT = `You are a read-only code reviewer for a specific change. Run \`git diff\` (and \`git log\`/\`git show\` as needed) to see the change, read the modified files plus enough surrounding code to judge intent, then review. Bash is READ-ONLY: never modify files; assume tool permissions are not perfectly enforced and stay disciplined. Report findings NUMBERED, each with a concrete \`file:line\`, a severity, the failing scenario, and a specific fix — never a vague "might be an issue". Do not stop at the first finding; enumerate every one within your scope. Stay strictly within your assigned scope; other reviewers own the rest. Your ENTIRE final message is the report (it is consumed programmatically). Structure it: \`## Critical\` / \`## Warnings\` / \`## Suggestions\` / \`## Summary\` (2-3 sentences), then a final line \`VERDICT: PASS\` or \`VERDICT: BLOCK\`.`;
 
 function persona(
 	id: string,
@@ -148,8 +148,12 @@ export function buildPersonaProfile(
 ): SpawnProfile | null {
 	const persona = getPersona(spec.persona);
 	if (!persona) return null;
+	// The harness sets the persona directly — a deterministic identity line,
+	// not a sentence the model has to infer. `focus` is the ONE place to say
+	// what specifically to scrutinize within that scope for this deliverable.
+	const identity = `You are the "${persona.id}" reviewer — ${persona.focus}.`;
 	const focusBlock = spec.focus
-		? `\n\nDeliverable-specific focus for this review: ${spec.focus}`
+		? `\n\nFor THIS deliverable, focus specifically on: ${spec.focus}`
 		: "";
 	const effort = (spec.effort ?? persona.effort) as ThinkingLevel;
 	return {
@@ -159,7 +163,7 @@ export function buildPersonaProfile(
 		thinking: effort,
 		session: false,
 		isolateExtensions: true,
-		appendSystemPrompt: persona.preamble + focusBlock,
+		appendSystemPrompt: `${identity}\n\n${persona.preamble}${focusBlock}`,
 		...(opts.model ? { model: opts.model } : {}),
 	};
 }

@@ -20,9 +20,13 @@ function fakeSubagents(byPersona: Record<string, RunResult>): {
 	const calls: SpawnProfile[] = [];
 	let n = 0;
 	const capability = {
-		spawn(prompt: string, profile: SpawnProfile): RunHandle {
+		spawn(_prompt: string, profile: SpawnProfile): RunHandle {
 			calls.push(profile);
-			const persona = Object.keys(byPersona).find((p) => prompt.includes(p));
+			// The persona is carried by the profile (system prompt), not the
+			// kickoff prompt — which is now a constant. Route on that.
+			const persona = Object.keys(byPersona).find((p) =>
+				profile.appendSystemPrompt?.includes(`"${p}"`),
+			);
 			const result = byPersona[persona ?? ""] ?? { status: "failed" as const };
 			return {
 				id: `run-${++n}` as RunId,

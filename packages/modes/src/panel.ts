@@ -69,7 +69,7 @@ async function runOne(
 	}
 
 	try {
-		const handle = deps.subagents.spawn(reviewPrompt(spec), profile);
+		const handle = deps.subagents.spawn(REVIEW_KICKOFF, profile);
 		const result = await settle(handle, deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 		const report = result.summary?.trim() ?? "";
 		if (result.status !== "succeeded" || !report) {
@@ -108,13 +108,14 @@ export function panelGateSatisfied(results: readonly PanelResult[]): boolean {
 		.every((r) => r.verdict === "approve");
 }
 
-function reviewPrompt(spec: SubAgentSpec): string {
-	return (
-		`Review the current change in this worktree as the ${spec.persona} lens.` +
-		(spec.focus ? ` Focus: ${spec.focus}.` : "") +
-		" Start with `git diff` against the base branch."
-	);
-}
+// A constant, mechanical trigger — identical for every reviewer. The persona
+// (who you are) and the deliverable focus (what to scrutinize) are set
+// deterministically by buildPersonaProfile in the system prompt, never
+// re-derived from this prose.
+const REVIEW_KICKOFF =
+	"Review the current change in this worktree. Start with `git diff` against " +
+	"the base branch, read enough surrounding code to judge intent, then report " +
+	"strictly within your assigned scope.";
 
 interface HandleLike {
 	result(): Promise<{ status: string; summary?: string; error?: string }>;

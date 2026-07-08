@@ -238,6 +238,8 @@ describe("readiness tool", () => {
 					return [{ questionId: q[0].id, value }];
 				},
 				queue: () => {},
+				post: () => {},
+				pending: () => [],
 			},
 		};
 	}

@@ -4,7 +4,7 @@
 // importing the sibling extension. The CapabilityMap gives the registry its
 // typed require<K>(id): CapabilityMap[K] signature (defined in core).
 
-import type { Answers, Questionnaire } from "./ask.js";
+import type { Answers, PendingAsk, Questionnaire } from "./ask.js";
 import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
 import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
@@ -40,6 +40,14 @@ export interface AskCapabilityV1 {
 	ask(questions: Questionnaire): Promise<Answers>;
 	/** Non-blocking: queue questions for the next flush (plan-mode driver). */
 	queue(questions: Questionnaire): void;
+	/**
+	 * Non-blocking: merge questions into the pending set (badge widget) and
+	 * return immediately. Answers are delivered to the agent as a follow-up
+	 * user message when the user commits them.
+	 */
+	post(questions: Questionnaire): void;
+	/** Posted-but-unanswered questions, for turn-start context lines. */
+	pending(): readonly PendingAsk[];
 }
 
 /**

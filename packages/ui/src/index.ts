@@ -5,6 +5,15 @@
 // extensions that consume it.
 
 export {
+	type ExplorerView,
+	explorerTabRow,
+	initExplorerView,
+	isExplorerQuestion,
+	optionPageLines,
+	renderCompareMatrix,
+	renderExplorer,
+} from "./explorer.js";
+export {
 	defaultPalette,
 	formatCount,
 	formatElapsed,
@@ -38,6 +47,7 @@ export {
 } from "./progress.js";
 export {
 	CollapsibleQuestionnaireComponent,
+	type CollapsibleQuestionnaireOptions,
 	type CommitResult,
 	commitQuestion,
 	initQuestionnaireState,

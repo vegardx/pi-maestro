@@ -20,6 +20,38 @@ export function buildPlanModePreamble(engine: PlanEngine | undefined): string {
 		: buildStructuringPreamble(header, engine);
 }
 
+const ASKING = `## Asking the user
+
+Run this ladder before asking anything:
+
+1. **Defensible recommendation + cheap to undo** → don't ask. Proceed on the
+   recommendation and note the assumption ("assuming X — say the word to flip").
+2. **You can progress on other work meanwhile** → \`ask\` non-blocking (the
+   default) and keep working this turn. Answers arrive as a user message.
+3. **Nothing independent left, but the turn can end usefully** → ask
+   non-blocking, finish with a short status. The answer starts the next turn.
+4. **The next action depends on it AND guessing is expensive to undo** →
+   \`ask\` with \`blocking: true\` and a one-sentence \`whyBlocking\`. Rare.
+
+Batch related questions (max 4), 2-4 options each with a one-line trade-off,
+always a recommendation. For real architecture forks give options \`body\`,
+\`tradeoffs\`, and \`dimensions\` — the user gets a full-screen explorer with
+a compare matrix.
+
+When you lay out alternatives as plain text instead, use exactly this shape
+(numbered decisions, lettered options, \`← rec\` marker):
+
+◆ Where I need your direction
+
+  1. <decision title>
+       a. <option> — <one-line trade-off>   ← rec
+       b. <option> — <one-line trade-off>
+
+  Reply \`1a\`, \`rec\`, or just talk to me.
+
+Bare shorthand replies (\`1a 2b\`, \`rec\`, \`b\`) expand automatically — never
+ask the user to repeat themselves in full sentences.`;
+
 const CONVERGENCE = `## Convergence
 
 You have enough information when you can write tasks that specify:
@@ -40,9 +72,9 @@ and gather the facts a good plan needs — through conversation and research.
 
 1. **Reason first.** What is the user really asking for? What is ambiguous?
    What must be true about the codebase or the ecosystem for each approach?
-2. **Ask** — use the \`ask\` tool for decisions only the user can make.
-   Batch related questions, give 2-4 concrete options with trade-offs, and
-   always mark a recommendation. Suggest directions; don't interrogate.
+2. **Ask** — use the \`ask\` tool for decisions only the user can make
+   (see "Asking the user"). Non-blocking by default: post the questions and
+   keep researching — don't sit idle waiting for answers.
 3. **Research** — use the \`research\` tool for facts. Batch ALL questions for
    the round into ONE call; they run as parallel agents:
    - \`codebase\` — what exists in this repo: files, patterns, seams, tests.
@@ -52,6 +84,8 @@ and gather the facts a good plan needs — through conversation and research.
 4. **Evaluate.** Read the reports. Did they settle your questions or open new
    ones? Say what you learned in one or two sentences, then loop: more
    research, more questions — or converge.
+
+${ASKING}
 
 ${CONVERGENCE}
 
@@ -103,6 +137,8 @@ is still available for gaps that surface while structuring.
    Distill it from the research reports in the plan directory's research/
    folder plus your confirmed understanding — reference material, not tasks.
 5. **Summary** — Write a brief text summary. End with "Ready to implement."
+
+${ASKING}
 
 ${CONVERGENCE}
 

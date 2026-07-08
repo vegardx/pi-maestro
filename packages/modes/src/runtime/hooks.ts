@@ -98,21 +98,49 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
 
 	pi.on("before_agent_start", (event) => {
+		// Posted-but-unanswered ask questions, so the model never re-asks and
+		// knows answers arrive as user messages when the user commits them.
+		const pendingAsks =
+			maestro.capabilities.get(CAPABILITIES.ask)?.pending() ?? [];
+		const pendingBlock =
+			pendingAsks.length > 0
+				? `\n\n## Pending user questions (already asked — do NOT re-ask)\n${pendingAsks
+						.map(
+							(p) =>
+								`- ${p.id}${p.header ? ` (${p.header})` : ""}: ${p.question}${
+									p.deferred ? " [blocking, deferred by the user]" : ""
+								}`,
+						)
+						.join(
+							"\n",
+						)}\nAnswers arrive as a user message when committed. Work on what does not depend on them.`
+				: "";
 		if (rt.state.mode === "plan") {
 			const preamble = buildPlanModePreamble(rt.engine);
-			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+			};
 		}
 		if (rt.state.mode === "hack" && rt.execution) {
 			const preamble = buildHackModePreamble();
-			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+			};
 		}
 		if (rt.execution) {
 			const preamble = buildMaestroPreamble(rt.engine, rt.execution);
-			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+			};
 		}
 		if (rt.agentBridge) {
 			const preamble = buildAgentWorkerPreamble();
-			return { systemPrompt: `${event.systemPrompt}\n\n${preamble}` };
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+			};
+		}
+		if (pendingBlock) {
+			return { systemPrompt: `${event.systemPrompt}${pendingBlock}` };
 		}
 	});
 

@@ -142,7 +142,14 @@ export class OverlayManager {
 				// Esc: collapse and return to input
 				if (data === KEY_ESC) {
 					if (this.inputBlocked) {
-						// Can't escape when blocked — stay in ask
+						// Blocked: hand esc to the ask component so it can
+						// defer the blocking question (it unblocks us back —
+						// which nulls focusedId, so capture the id first).
+						if (this.focusedId === "ask") {
+							const id = this.focusedId;
+							overlay.component.handleInput(data);
+							this.syncWidget(id);
+						}
 						return { consume: true };
 					}
 					this.focusInput();

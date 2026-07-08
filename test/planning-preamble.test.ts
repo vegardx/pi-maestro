@@ -58,6 +58,24 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).not.toContain("group(action");
 	});
 
+	it("teaches the ask ladder and decision-block format in both phases", () => {
+		const engine = PlanEngine.create(memStore(), {
+			slug: "ladder",
+			title: "Ladder",
+			repoPath: "/tmp",
+		});
+		engine.setPhase("structuring");
+		for (const preamble of [
+			buildPlanModePreamble(undefined),
+			buildPlanModePreamble(engine),
+		]) {
+			expect(preamble).toContain("blocking: true");
+			expect(preamble).toContain("whyBlocking");
+			expect(preamble).toContain("◆ Where I need your direction");
+			expect(preamble).toContain("don't ask");
+		}
+	});
+
 	it("includes convergence criteria in both phases", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "conv",

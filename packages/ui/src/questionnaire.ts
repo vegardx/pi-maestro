@@ -13,11 +13,20 @@ import type {
 	Questionnaire,
 	QuestionOption,
 } from "@vegardx/pi-contracts";
+import {
+	type ExplorerView,
+	initExplorerView,
+	isExplorerQuestion,
+	renderExplorer,
+} from "./explorer.js";
 import { defaultPalette, type Palette, padRight, truncate } from "./format.js";
 
 export function optionValue(option: QuestionOption): string {
 	return option.value ?? option.label;
 }
+
+/** Terminal width at which the panel goes two-column (options ┃ detail). */
+export const WIDE_MIN_WIDTH = 100;
 
 export interface QuestionnaireState {
 	readonly index: number;
@@ -149,7 +158,13 @@ export function commitQuestion(
 	const answers = [...state.answers, ...built];
 	const nextIndex = state.index + 1;
 	if (nextIndex >= questionnaire.length) {
-		return { state: { ...state, answers }, done: true, answers };
+		// freeText is consumed by the commit — clearing it keeps the review
+		// step from routing input back into free-text editing.
+		return {
+			state: { ...state, answers, freeText: undefined },
+			done: true,
+			answers,
+		};
 	}
 	return {
 		state: {
@@ -168,20 +183,26 @@ export interface QuestionnaireRenderOptions {
 	palette?: Palette;
 }
 
-function wrap(text: string, width: number, palette: Palette): string[] {
+function wrap(
+	text: string,
+	width: number,
+	palette: Palette,
+	color?: (s: string) => string,
+): string[] {
 	if (width <= 0) return [];
+	const paint = color ?? palette.dim;
 	const words = text.split(/\s+/);
 	const lines: string[] = [];
 	let line = "";
 	for (const word of words) {
 		if (line.length + word.length + 1 > width) {
-			if (line) lines.push(palette.dim(line));
+			if (line) lines.push(paint(line));
 			line = word;
 		} else {
 			line = line ? `${line} ${word}` : word;
 		}
 	}
-	if (line) lines.push(palette.dim(line));
+	if (line) lines.push(paint(line));
 	return lines;
 }
 
@@ -211,11 +232,22 @@ export function renderQuestionnaire(
 		const answered = state.answers.filter((a) => !a.skipped).length;
 		const progress = `Question ${state.index + 1} of ${questionnaire.length}`;
 		const suffix = answered > 0 ? `  (${answered} answered)` : "";
-		lines.push(boxLine(palette.muted(progress + suffix)));
+		const blocked = question.blocking ? palette.warning("  ⛔ blocking") : "";
+		lines.push(boxLine(palette.muted(progress + suffix) + blocked));
 		lines.push(emptyLine);
 	}
 
 	lines.push(boxLine(palette.heading(truncate(question.question, innerWidth))));
+	if (question.blocking && question.whyBlocking) {
+		for (const l of wrap(
+			`⛔ why this blocks: ${question.whyBlocking}`,
+			innerWidth,
+			palette,
+			palette.warning,
+		)) {
+			lines.push(boxLine(l));
+		}
+	}
 	if (question.context) {
 		for (const l of wrap(question.context, innerWidth, palette)) {
 			lines.push(boxLine(l));
@@ -225,7 +257,8 @@ export function renderQuestionnaire(
 
 	const recIdx = recommendedIndex(question);
 	const optCount = question.options?.length ?? 0;
-	for (let i = 0; i < optCount; i++) {
+
+	const optionRow = (i: number, colWidth: number): string => {
 		const option = (question.options as QuestionOption[])[i];
 		const value = optionValue(option);
 		const cursor = i === state.cursor ? palette.accent("›") : " ";
@@ -238,47 +271,79 @@ export function renderQuestionnaire(
 		const rec = i === recIdx ? palette.muted(" [rec]") : "";
 		const label =
 			i === state.cursor ? palette.accent(option.label) : option.label;
-		lines.push(
-			boxLine(
-				truncate(
-					`${cursor} ${num} ${box ? `${box} ` : ""}${label}${rec}`,
-					innerWidth,
-				),
-			),
+		return truncate(
+			`${cursor} ${num} ${box ? `${box} ` : ""}${label}${rec}`,
+			colWidth,
 		);
-		if (option.description) {
-			for (const l of wrap(option.description, innerWidth - 6, palette)) {
-				lines.push(boxLine(`      ${l}`));
-			}
-		}
-	}
+	};
 
 	// Free-text input field (always visible as last numbered item)
 	const freeIdx = optCount;
-	const freeCursor = state.cursor === freeIdx ? palette.accent("›") : " ";
-	const freeNum = `${freeIdx + 1}.`;
-	const placeholderWidth = Math.min(Math.floor(innerWidth * 0.5), 40);
-	if (state.freeText !== undefined && state.cursor === freeIdx) {
-		lines.push(
-			boxLine(
-				palette.accent(
-					truncate(`${freeCursor} ${freeNum} ${state.freeText}▌`, innerWidth),
-				),
-			),
-		);
-	} else if (state.freeText !== undefined && state.freeText.trim() !== "") {
-		lines.push(
-			boxLine(
-				truncate(`${freeCursor} ${freeNum} ${state.freeText}`, innerWidth),
-			),
-		);
-	} else {
+	const freeTextRow = (colWidth: number): string => {
+		const freeCursor = state.cursor === freeIdx ? palette.accent("›") : " ";
+		const freeNum = `${freeIdx + 1}.`;
+		const placeholderWidth = Math.min(Math.floor(colWidth * 0.5), 40);
+		if (state.freeText !== undefined && state.cursor === freeIdx) {
+			return palette.accent(
+				truncate(`${freeCursor} ${freeNum} ${state.freeText}▌`, colWidth),
+			);
+		}
+		if (state.freeText !== undefined && state.freeText.trim() !== "") {
+			return truncate(`${freeCursor} ${freeNum} ${state.freeText}`, colWidth);
+		}
 		const underscores = "_".repeat(placeholderWidth);
-		const placeholder =
-			state.cursor === freeIdx
-				? palette.accent(`${freeCursor} ${freeNum} ${underscores}`)
-				: palette.muted(`${freeCursor} ${freeNum} ${underscores}`);
-		lines.push(boxLine(truncate(placeholder, innerWidth)));
+		return state.cursor === freeIdx
+			? palette.accent(`${freeCursor} ${freeNum} ${underscores}`)
+			: palette.muted(`${freeCursor} ${freeNum} ${underscores}`);
+	};
+
+	// Two-column panel at comfortable widths: options left, the highlighted
+	// option's full detail right. Narrow terminals keep the stacked layout.
+	const wide = width >= WIDE_MIN_WIDTH && optCount > 0;
+	if (wide) {
+		const leftW = Math.min(Math.floor(innerWidth * 0.42), 46);
+		const rightW = innerWidth - leftW - 3;
+		const left: string[] = [];
+		for (let i = 0; i < optCount; i++) left.push(optionRow(i, leftW));
+		left.push(freeTextRow(leftW));
+
+		const right: string[] = [];
+		const sel =
+			state.cursor < optCount
+				? (question.options as QuestionOption[])[state.cursor]
+				: undefined;
+		if (sel) {
+			right.push(palette.heading(truncate(sel.label, rightW)));
+			if (sel.description) {
+				right.push("");
+				right.push(...wrap(sel.description, rightW, palette, (s) => s));
+			}
+			if (sel.preview) {
+				right.push("");
+				right.push(...wrap(sel.preview, rightW, palette));
+			}
+		}
+
+		const sep = ` ${palette.dim("┃")} `;
+		const rows = Math.max(left.length, right.length);
+		for (let i = 0; i < rows; i++) {
+			lines.push(
+				boxLine(
+					`${padRight(left[i] ?? "", leftW)}${sep}${truncate(right[i] ?? "", rightW)}`,
+				),
+			);
+		}
+	} else {
+		for (let i = 0; i < optCount; i++) {
+			const option = (question.options as QuestionOption[])[i];
+			lines.push(boxLine(optionRow(i, innerWidth)));
+			if (option.description) {
+				for (const l of wrap(option.description, innerWidth - 6, palette)) {
+					lines.push(boxLine(`      ${l}`));
+				}
+			}
+		}
+		lines.push(boxLine(freeTextRow(innerWidth)));
 	}
 
 	if (state.noteEdit !== undefined) {
@@ -298,9 +363,11 @@ export function renderQuestionnaire(
 		}
 	}
 
-	// Preview pane: shows contextual info for the highlighted option
+	// Preview pane (narrow layout only — the wide layout shows it inline)
 	const highlighted =
-		state.cursor < optCount ? question.options?.[state.cursor] : undefined;
+		!wide && state.cursor < optCount
+			? question.options?.[state.cursor]
+			: undefined;
 	if (highlighted?.preview) {
 		lines.push(emptyLine);
 		for (const l of wrap(highlighted.preview, innerWidth, palette)) {
@@ -329,6 +396,12 @@ export interface QuestionnaireRunOptions extends QuestionnaireRenderOptions {
 	readonly initialAnswers?: Answers;
 	/** Called with the partial draft when the user closes without sending. */
 	readonly onCancel?: (draft: Answers) => void;
+	/**
+	 * Called as each question is committed (including showIf skips), so a
+	 * pending-set host can settle and deliver answers piecemeal instead of
+	 * waiting for the review step.
+	 */
+	readonly onQuestionCommitted?: (answers: Answers) => void;
 }
 
 /**
@@ -342,6 +415,8 @@ export class QuestionnaireComponent implements Component, Focusable {
 	private state: QuestionnaireState;
 	/** true once past the last shown question (review step). */
 	private review = false;
+	/** Explorer view state (page scroll, compare) — reset per question. */
+	private explorerView: ExplorerView = initExplorerView();
 
 	constructor(
 		private readonly questionnaire: Questionnaire,
@@ -364,6 +439,16 @@ export class QuestionnaireComponent implements Component, Focusable {
 
 	render(width: number): string[] {
 		if (this.review) return this.renderReview(width);
+		const question = this.questionnaire[this.state.index];
+		if (question && isExplorerQuestion(question)) {
+			return renderExplorer(
+				this.questionnaire,
+				this.state,
+				this.explorerView,
+				width,
+				this.opts,
+			);
+		}
 		return renderQuestionnaire(
 			this.questionnaire,
 			this.state,
@@ -393,6 +478,12 @@ export class QuestionnaireComponent implements Component, Focusable {
 
 		const question = this.questionnaire[this.state.index];
 		if (!question) return;
+		if (
+			isExplorerQuestion(question) &&
+			this.handleExplorerKeys(data, question)
+		) {
+			return;
+		}
 		const optCount = question.options?.length ?? 0;
 		const isFreeSlot = this.state.cursor === optCount;
 
@@ -469,6 +560,55 @@ export class QuestionnaireComponent implements Component, Focusable {
 		}
 	}
 
+	/**
+	 * Explorer pages own ←/→ (cycle options), ↑/↓ (scroll), c (compare),
+	 * o (free-text counter-proposal), and bare digits (jump). Everything
+	 * else — enter to choose, esc, notes — falls through to the regular
+	 * handler. Returns true when the key was consumed.
+	 */
+	private handleExplorerKeys(data: string, question: Question): boolean {
+		const optCount = question.options?.length ?? 0;
+		if (optCount === 0) return false;
+		switch (data) {
+			case KEY_LEFT:
+				this.state = {
+					...this.state,
+					cursor: (this.state.cursor - 1 + optCount) % optCount,
+				};
+				this.explorerView.scroll = 0;
+				return true;
+			case KEY_RIGHT:
+				this.state = {
+					...this.state,
+					cursor: (this.state.cursor + 1) % optCount,
+				};
+				this.explorerView.scroll = 0;
+				return true;
+			case KEY_UP:
+				this.explorerView.scroll = Math.max(this.explorerView.scroll - 1, 0);
+				return true;
+			case KEY_DOWN:
+				this.explorerView.scroll += 1; // clamped at render time
+				return true;
+			case "c":
+				this.explorerView.compare = !this.explorerView.compare;
+				return true;
+			case "o":
+				this.state = startFreeText(this.state);
+				return true;
+			default:
+				if (data >= "1" && data <= "9") {
+					const target = Number.parseInt(data, 10) - 1;
+					if (target < optCount) {
+						this.state = { ...this.state, cursor: target };
+						this.explorerView.scroll = 0;
+					}
+					return true;
+				}
+				return false;
+		}
+	}
+
 	private handleFreeText(data: string): void {
 		const buf = this.state.freeText ?? "";
 		if (data === "\r" || data === "\n") this.commit();
@@ -524,11 +664,19 @@ export class QuestionnaireComponent implements Component, Focusable {
 		if (data === "\r" || data === "\n") this.done(this.state.answers);
 	}
 
+	/** The question the user currently has open (pending-set raise anchor). */
+	get currentQuestionId(): string | undefined {
+		return this.questionnaire[this.state.index]?.id;
+	}
+
 	/** Commit the current question, then advance to the next shown one. */
 	private commit(): void {
+		const before = this.state.answers.length;
 		const result = commitQuestion(this.questionnaire, this.state);
 		this.state = { ...result.state, index: this.state.index };
 		// commitQuestion already appended this question's answer(s).
+		const committed = this.state.answers.slice(before);
+		if (committed.length > 0) this.opts.onQuestionCommitted?.(committed);
 		this.advanceFrom(this.state.index + 1);
 	}
 
@@ -536,16 +684,20 @@ export class QuestionnaireComponent implements Component, Focusable {
 	private advanceFrom(from: number): void {
 		let i = from;
 		const answers = [...this.state.answers];
+		const skips: Answer[] = [];
 		while (i < this.questionnaire.length) {
 			if (isShown(this.questionnaire[i], answers)) break;
-			answers.push({
+			const skip = {
 				questionId: this.questionnaire[i].id,
 				value: "",
 				skipped: true,
-			});
+			};
+			answers.push(skip);
+			skips.push(skip);
 			i++;
 		}
 		this.state = { ...this.state, answers };
+		if (skips.length > 0) this.opts.onQuestionCommitted?.(skips);
 		if (i >= this.questionnaire.length) {
 			this.review = true;
 			return;
@@ -585,6 +737,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 			noteEdit: undefined,
 			answers,
 		};
+		this.explorerView = initExplorerView();
 	}
 
 	private acceptRecommendations(): void {
@@ -629,6 +782,16 @@ export class QuestionnaireComponent implements Component, Focusable {
 
 const KEY_TAB = "\t";
 
+export interface CollapsibleQuestionnaireOptions
+	extends QuestionnaireRunOptions {
+	/** Live badge counts; falls back to the wrapped question count. */
+	readonly badge?: () => { pending: number; deferred: number };
+	/** Whether an undeferred blocking question is in the set. */
+	readonly hasBlocking?: () => boolean;
+	/** Esc while a blocking question is active: defer instead of collapse. */
+	readonly onDefer?: () => void;
+}
+
 /**
  * Collapsible overlay wrapper around QuestionnaireComponent.
  * Starts collapsed (single-line badge). Tab expands/collapses.
@@ -641,16 +804,23 @@ export class CollapsibleQuestionnaireComponent implements Component, Focusable {
 	private readonly inner: QuestionnaireComponent;
 	private readonly palette: Palette;
 	private readonly questionCount: number;
+	private readonly copts: CollapsibleQuestionnaireOptions;
 	private handle: OverlayHandle | undefined;
 
 	constructor(
 		questionnaire: Questionnaire,
 		readonly done: (answers: Answers | undefined) => void,
-		opts: QuestionnaireRunOptions = {},
+		opts: CollapsibleQuestionnaireOptions = {},
 	) {
 		this.palette = opts.palette ?? defaultPalette();
 		this.questionCount = questionnaire.length;
+		this.copts = opts;
 		this.inner = new QuestionnaireComponent(questionnaire, done, opts);
+	}
+
+	/** The question the user currently has open. */
+	get currentQuestionId(): string | undefined {
+		return this.inner.currentQuestionId;
 	}
 
 	/** Attach the overlay handle for focus control. */
@@ -677,6 +847,12 @@ export class CollapsibleQuestionnaireComponent implements Component, Focusable {
 			return;
 		}
 		if (data === "\u001b" && this.expanded) {
+			// A blocking question owns esc: defer it (the host unblocks and
+			// collapses). Otherwise esc just collapses to the badge.
+			if (this.copts.hasBlocking?.()) {
+				this.copts.onDefer?.();
+				return;
+			}
 			this.expanded = false;
 			this.handle?.unfocus();
 			return;
@@ -690,7 +866,13 @@ export class CollapsibleQuestionnaireComponent implements Component, Focusable {
 		const p = this.focused ? this.palette : dimmedPalette(this.palette);
 		// Top line: ╭─ label ─── hint ─╮  (total = width)
 		// Overhead: ╭─␣ (3) + ␣ (1) + ␣ (1) + ␣─╮ (3) = 8
-		const label = `${this.questionCount} question${this.questionCount === 1 ? "" : "s"} pending`;
+		const counts = this.copts.badge?.() ?? {
+			pending: this.questionCount,
+			deferred: 0,
+		};
+		const label =
+			`◆ ${counts.pending} pending` +
+			(counts.deferred > 0 ? ` · ${counts.deferred} ⛔` : "");
 		const hint = "Tab to expand";
 		const fillWidth = Math.max(width - 8 - label.length - hint.length, 0);
 		const fill = "─".repeat(fillWidth);

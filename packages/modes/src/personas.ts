@@ -7,7 +7,12 @@
 // panel from these; the worker runs it and the executor gates on the
 // `gating` ones' verdicts.
 
-import type { ModelSlot, ThinkingLevel } from "@vegardx/pi-contracts";
+import type {
+	ModelSlot,
+	SpawnProfile,
+	ThinkingLevel,
+} from "@vegardx/pi-contracts";
+import type { SubAgentSpec } from "./schema.js";
 
 export interface Persona {
 	readonly id: string;
@@ -128,6 +133,35 @@ const BY_ID = new Map(PERSONAS.map((p) => [p.id, p]));
 
 export function getPersona(id: string): Persona | undefined {
 	return BY_ID.get(id);
+}
+
+/**
+ * Resolve a deliverable's SubAgentSpec to a headless spawn profile: read-only
+ * tools in the worker's worktree, the persona body (+ any deliverable focus)
+ * as the appended system prompt, isolated extensions (-ne) for a deterministic
+ * tool namespace, and the resolved model/effort. Returns null for an unknown
+ * persona id (the caller skips it and logs).
+ */
+export function buildPersonaProfile(
+	spec: SubAgentSpec,
+	opts: { cwd: string; model?: string },
+): SpawnProfile | null {
+	const persona = getPersona(spec.persona);
+	if (!persona) return null;
+	const focusBlock = spec.focus
+		? `\n\nDeliverable-specific focus for this review: ${spec.focus}`
+		: "";
+	const effort = (spec.effort ?? persona.effort) as ThinkingLevel;
+	return {
+		profile: "research",
+		cwd: opts.cwd,
+		tools: { allow: [...PERSONA_TOOLS] },
+		thinking: effort,
+		session: false,
+		isolateExtensions: true,
+		appendSystemPrompt: persona.preamble + focusBlock,
+		...(opts.model ? { model: opts.model } : {}),
+	};
 }
 
 export const PERSONA_IDS: readonly string[] = PERSONAS.map((p) => p.id);

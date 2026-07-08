@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	buildPersonaProfile,
 	getPersona,
 	PERSONA_IDS,
 	PERSONA_TOOLS,
@@ -45,5 +46,45 @@ describe("persona registry", () => {
 		expect(getPersona("security-audit")?.effort).toBe("high");
 		expect(getPersona("documentation")?.effort).toBe("low");
 		expect(getPersona("nope")).toBeUndefined();
+	});
+});
+
+describe("buildPersonaProfile", () => {
+	it("builds a read-only, isolated, one-shot spawn profile in the worktree", () => {
+		const profile = buildPersonaProfile(
+			{ name: "security-audit", persona: "security-audit" },
+			{ cwd: "/wt" },
+		);
+		expect(profile).not.toBeNull();
+		expect(profile?.cwd).toBe("/wt");
+		expect(profile?.tools?.allow).toEqual([...PERSONA_TOOLS]);
+		expect(profile?.tools?.allow).not.toContain("write");
+		expect(profile?.session).toBe(false);
+		expect(profile?.isolateExtensions).toBe(true);
+		expect(profile?.thinking).toBe("high"); // persona default
+		expect(profile?.appendSystemPrompt).toContain("VERDICT: PASS");
+		expect(profile?.appendSystemPrompt).toContain("OWASP");
+	});
+
+	it("applies effort/focus/model overrides", () => {
+		const profile = buildPersonaProfile(
+			{
+				name: "security-audit-alt",
+				persona: "security-audit",
+				effort: "medium",
+				focus: "token refresh path",
+				model: "openai/o3",
+			},
+			{ cwd: "/wt", model: "openai/o3" },
+		);
+		expect(profile?.thinking).toBe("medium");
+		expect(profile?.model).toBe("openai/o3");
+		expect(profile?.appendSystemPrompt).toContain("token refresh path");
+	});
+
+	it("returns null for an unknown persona", () => {
+		expect(
+			buildPersonaProfile({ name: "x", persona: "nope" }, { cwd: "/wt" }),
+		).toBeNull();
 	});
 });

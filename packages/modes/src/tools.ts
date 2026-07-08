@@ -625,10 +625,14 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 const KnowledgeParams = Type.Object({
 	content: Type.String({
 		description:
-			"The complete codebase reference document. Required sections: " +
-			"Project Structure, Key Patterns, Conventions, Key Interfaces. " +
-			"Reference material only — where things are and how they connect, " +
-			"not full file contents.",
+			"The complete codebase reference document. It MUST follow this exact " +
+			"skeleton — the leading `# Codebase Reference` header, the " +
+			"`> CONTEXT ONLY` framing line, and every `## ` section — or it is " +
+			"rejected:\n\n" +
+			`${KNOWLEDGE_TEMPLATE}\n\n` +
+			"Fill each section with reference material only — where things are and " +
+			"how they connect, not full file contents. Keep the section headings " +
+			"verbatim.",
 	}),
 });
 

@@ -23,7 +23,7 @@ export const STRUCTURE_TOOL_NAMES = [
 ] as const;
 
 /** Research-loop tools available throughout plan mode. */
-export const RESEARCH_TOOL_NAMES = ["research", "readiness"] as const;
+export const RESEARCH_TOOL_NAMES = ["research", "readiness", "dig"] as const;
 
 const READ_ONLY_TOOLS = new Set([
 	"read",

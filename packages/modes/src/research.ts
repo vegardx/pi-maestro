@@ -1,14 +1,24 @@
 // The plan-mode research loop: the `research` tool fans out headless
-// subagents (codebase / web / advisor) through the subagents.v1 capability
-// and persists their reports under <planDir>/research/; the `readiness` tool
-// is the phase gate — it presents the maestro's summarized understanding and,
-// on user confirmation, flips the plan from `exploring` to `structuring`.
+// subagents (codebase / web / advisor / consult) through the subagents.v1
+// capability. Each agent writes a full report to the session-scoped scratch
+// dir and the tool delivers only a bounded digest per question; `dig(ref)`
+// returns a report's full text on demand. The `readiness` tool is the phase
+// gate — it presents the maestro's summarized understanding and, on user
+// confirmation, flips the plan from `exploring` to `structuring`.
 //
 // Parallelism note: one `research` call takes a BATCH of questions and runs
 // them concurrently (bounded by the subagents semaphore). Batching inside one
 // call guarantees the fan-out regardless of how the host executes tool calls.
 
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -115,7 +125,11 @@ function error(message: string): Result {
 }
 
 export function createResearchTools(deps: ResearchDeps): ToolDefinition[] {
-	return [createResearchTool(deps), createReadinessTool(deps)];
+	return [
+		createResearchTool(deps),
+		createReadinessTool(deps),
+		createDigTool(deps),
+	];
 }
 
 const ResearchParams = Type.Object({
@@ -162,8 +176,8 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			"Fan out parallel research agents and get their reports back. Batch " +
 			"ALL questions for this round into ONE call — they run concurrently. " +
 			"Each agent is read-only; web agents can search (Exa), fetch pages, " +
-			"and pull library docs (Context7). Reports persist in the plan " +
-			"directory and are returned here.",
+			"and pull library docs (Context7). You get back a bounded digest per " +
+			"question; call `dig(ref)` for a report's full analysis if needed.",
 		promptSnippet:
 			"research — fan out parallel research agents (codebase/web/advisor); batch questions into one call.",
 		parameters: ResearchParams,
@@ -184,8 +198,10 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 				);
 			}
 
-			const planDir = deps.ensurePlanDir(ctx);
-			const researchDir = join(planDir, "research");
+			deps.ensurePlanDir(ctx);
+			// Full reports go to the session-scoped scratch dir (wiped on settle),
+			// not the curated plan dir — only the bounded digest reaches the model.
+			const researchDir = researchScratchDir(engine.get().slug);
 			mkdirSync(researchDir, { recursive: true });
 
 			const timeoutMs = deps.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
@@ -236,7 +252,7 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 				const sections = await Promise.all(
 					spawned.map(async (entry) => {
 						if ("spawnError" in entry) {
-							return `## ${entry.question}\n\n(${entry.spawnError})`;
+							return `### ${entry.question}\n(${entry.spawnError})`;
 						}
 						const { view, handle } = entry;
 						const result = await settleWithTimeout(handle, timeoutMs);
@@ -246,20 +262,26 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 						if (!report) {
 							deps.onRunSettled?.(view, undefined, ctx);
 							return (
-								`## ${view.question}\n\n` +
+								`### ${view.question}\n` +
 								`(research agent ${result.status}: ${result.error ?? "no report produced"})`
 							);
 						}
-						const path = persistReport(researchDir, view, report);
+						// Persist the FULL report to scratch; deliver only the digest
+						// plus a dig ref. The maestro reasons on the digest and calls
+						// dig(ref) if it needs the full analysis.
+						const ref = uniqueRef(researchDir, view.question);
+						const path = persistReport(researchDir, view, report, ref);
 						deps.onRunSettled?.(view, { text: report, path }, ctx);
-						return `## ${view.question}\n(report: ${path})\n\n${report}`;
+						const digest = extractDigest(report);
+						return `### ${view.question}\n[ref: ${ref}]\n${digest}`;
 					}),
 				);
 				return (
-					`${sections.join("\n\n---\n\n")}\n\n` +
-					"Evaluate: do these answers settle your open questions, or open " +
-					"new ones? Ask the user / research further, or call `readiness` " +
-					"when the convergence criteria are met."
+					`${sections.join("\n\n")}\n\n` +
+					'Each entry is a self-sufficient digest; call `dig("<ref>")` for a ' +
+					"report's full analysis if you need more. Evaluate: do these settle " +
+					"your open questions, or open new ones? Research further, or call " +
+					"`readiness` when the convergence criteria are met."
 				);
 			};
 
@@ -392,6 +414,45 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 	}) as ToolDefinition;
 }
 
+const DigParams = Type.Object({
+	ref: Type.String({
+		description: "The [ref: …] shown beside a research digest to expand.",
+	}),
+});
+
+export function createDigTool(deps: ResearchDeps): ToolDefinition {
+	return defineTool({
+		name: "dig",
+		label: "Dig",
+		description:
+			"Return the full analysis behind a research digest. Pass the [ref: …] " +
+			"printed beside a digest and you get that report's complete text (the " +
+			"digest is a summary of it). Use only when the digest isn't enough.",
+		promptSnippet:
+			"dig — expand a research digest to its full report (by ref).",
+		parameters: DigParams,
+		async execute(_id, params): Promise<Result> {
+			const engine = deps.engine();
+			if (!engine) return error("no plan active");
+			const dir = researchScratchDir(engine.get().slug);
+			// Sanitize: refs are slugs, so a path-traversal attempt can't escape.
+			const safe = params.ref.replace(/[^a-z0-9-]/gi, "").toLowerCase();
+			const path = join(dir, `${safe}.md`);
+			if (!safe || !existsSync(path)) {
+				const avail = existsSync(dir)
+					? readdirSync(dir)
+							.filter((f) => f.endsWith(".md"))
+							.map((f) => f.slice(0, -3))
+					: [];
+				return error(
+					`no research report "${params.ref}". Available refs: ${avail.join(", ") || "(none)"}`,
+				);
+			}
+			return ok(readFileSync(path, "utf8"));
+		},
+	}) as ToolDefinition;
+}
+
 // ─── Spawn assembly ──────────────────────────────────────────────────────────
 
 async function buildResearchProfile(
@@ -422,10 +483,13 @@ function researcherPreamble(kind: ResearchKind): string {
 		"research brief you are given — nothing else. You are read-only: never " +
 		"modify files. Your ENTIRE final message is the report; it is consumed " +
 		"programmatically.\n\n" +
-		"Report format: start with a one-paragraph answer/summary, then " +
-		"supporting detail. Cite evidence — file:line for code claims, URLs for " +
-		"web claims. State what you could NOT determine explicitly. Be dense " +
-		"and factual; no preamble, no offers to help further.";
+		"Report format: write your full findings first — supporting detail, " +
+		"evidence (file:line for code claims, URLs for web claims), and what you " +
+		"could NOT determine. THEN end with a `## Digest` block: at most 6 lines " +
+		"/ 500 characters, dense and self-sufficient — the answer plus the two " +
+		"or three load-bearing facts and any caveat, enough that the reader " +
+		"rarely needs the detail above it. Be factual; no preamble, no offers to " +
+		"help further.";
 	switch (kind) {
 		case "codebase":
 			return `${shared}\n\nScope: THIS repository. Use read/grep/find/ls to establish facts (existing patterns, types, seams, tests).`;
@@ -536,23 +600,59 @@ function persistReport(
 	researchDir: string,
 	run: ResearchRunView,
 	report: string,
+	ref: string,
 ): string {
-	const existing = existsSync(researchDir)
-		? readdirSync(researchDir).filter((f) => /^\d{2}-.*\.md$/.test(f)).length
-		: 0;
-	const name = `${String(existing + 1).padStart(2, "0")}-${slugify(run.question).slice(0, 48)}.md`;
-	const path = join(researchDir, name);
+	const path = join(researchDir, `${ref}.md`);
 	const frontmatter = [
 		"---",
 		`question: ${JSON.stringify(run.question)}`,
 		`kind: ${run.kind}`,
-		`run: ${run.id}`,
+		`ref: ${ref}`,
 		`createdAt: ${new Date(run.startedAt).toISOString()}`,
 		"---",
 		"",
 	].join("\n");
 	writeFileSync(path, `${frontmatter}${report}\n`);
 	return path;
+}
+
+/**
+ * The session-scoped scratch dir holding a plan's full research reports. It
+ * lives under the maestro's session dir (NOT the curated plan dir), keyed by
+ * slug, and is wiped when the plan settles (see clearResearchScratch). Nothing
+ * reaps it automatically, so the wipe-on-settle is what bounds it.
+ */
+export function researchScratchDir(slug: string): string {
+	const base =
+		process.env.PI_CODING_AGENT_SESSION_DIR ??
+		join(tmpdir(), "maestro-sessions");
+	return join(base, "research-cache", slug);
+}
+
+/** Wipe a plan's research scratch (called when the plan settles/abandons). */
+export function clearResearchScratch(slug: string): void {
+	rmSync(researchScratchDir(slug), { recursive: true, force: true });
+}
+
+/** A stable, filesystem-safe ref for a question, de-duped within the dir. */
+function uniqueRef(dir: string, question: string): string {
+	const root = slugify(question).slice(0, 48) || "research";
+	if (!existsSync(join(dir, `${root}.md`))) return root;
+	for (let n = 2; ; n++) {
+		if (!existsSync(join(dir, `${root}-${n}.md`))) return `${root}-${n}`;
+	}
+}
+
+/**
+ * Extract the deliverable digest: the `## Digest` block if the researcher
+ * emitted one, else the first paragraph as a fallback. Hard-capped so a
+ * run-on can't blow up the transcript.
+ */
+export function extractDigest(report: string): string {
+	const m = report.match(/##\s*Digest\s*\n([\s\S]+?)(?:\n##\s|\s*$)/i);
+	let digest = (m ? m[1] : report.split(/\n\s*\n/)[0]).trim();
+	if (digest.length > 500) digest = `${digest.slice(0, 499).trimEnd()}…`;
+	return digest;
 }
 
 // ─── Settle helpers ──────────────────────────────────────────────────────────

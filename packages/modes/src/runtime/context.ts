@@ -38,7 +38,7 @@ import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
-import type { ResearchRunView } from "../research.js";
+import { clearResearchScratch, type ResearchRunView } from "../research.js";
 import {
 	type Deliverable,
 	derivePlanName,
@@ -541,11 +541,15 @@ export function createRuntimeContext(
 									.catch(() => {});
 							}
 						},
-						// The settled card (onEvent) is the recap now; onAllSettled only
-						// refreshes the footer and clears the agent widget.
+						// The settled card (onEvent) is the recap now; onAllSettled
+						// refreshes the footer, clears the agent widget, and wipes the
+						// plan's research scratch (full reports are throwaway once the
+						// plan has shipped).
 						onAllSettled: () => {
 							rt.invalidateFooter?.();
 							syncAgentWidget(rt, ctx);
+							const eng = rt.engine;
+							if (eng) clearResearchScratch(eng.get().slug);
 						},
 						onEvent: (event) => sendAgentEvent(pi, event),
 					});

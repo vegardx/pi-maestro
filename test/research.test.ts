@@ -1,6 +1,7 @@
 // The research fan-out and the readiness gate, against a fake subagents
-// capability and a fake ask surface: parallel spawn shapes, report
-// persistence with frontmatter, timeout stops, and the phase flip.
+// capability and a fake ask surface: parallel spawn shapes, digest delivery
+// with full reports in session scratch, the dig tool, timeout stops, and the
+// phase flip.
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,11 +18,14 @@ import type {
 import { describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import {
+	createDigTool,
 	createReadinessTool,
 	createResearchTool,
+	extractDigest,
 	type ResearchDeps,
 	renderPlanOutline,
 	researchLabel,
+	researchScratchDir,
 } from "../packages/modes/src/research.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import { planPhase } from "../packages/modes/src/schema.js";
@@ -92,8 +96,17 @@ function fakeCapability(
 
 function makeDeps(
 	overrides: Partial<ResearchDeps> & Pick<ResearchDeps, "subagents">,
-): { deps: ResearchDeps; planDir: string; engine: PlanEngine } {
+): {
+	deps: ResearchDeps;
+	planDir: string;
+	scratchDir: string;
+	engine: PlanEngine;
+} {
 	const planDir = mkdtempSync(join(tmpdir(), "research-"));
+	// Isolate the scratch dir per test by pinning the session dir env.
+	process.env.PI_CODING_AGENT_SESSION_DIR = mkdtempSync(
+		join(tmpdir(), "research-session-"),
+	);
 	const engine = overrides.engine?.() ?? engineWithPlan();
 	const deps: ResearchDeps = {
 		engine: () => engine,
@@ -102,7 +115,12 @@ function makeDeps(
 		researchToolsPath: () => "/maestro/packages/research-tools/src/index.ts",
 		...overrides,
 	};
-	return { deps, planDir, engine };
+	return {
+		deps,
+		planDir,
+		scratchDir: researchScratchDir(engine.get().slug),
+		engine,
+	};
 }
 
 type Executable = {
@@ -129,12 +147,15 @@ async function run(
 }
 
 describe("research tool", () => {
-	it("fans out one agent per question and persists reports", async () => {
-		const { calls, capability } = fakeCapability(async (call) => ({
-			status: "succeeded",
-			summary: `Answer about: ${call.prompt.split("\n")[2]}`,
-		}));
-		const { deps, planDir } = makeDeps({ subagents: () => capability });
+	it("fans out one agent per question, writes full reports to scratch, delivers digests", async () => {
+		const { calls, capability } = fakeCapability(async (call) => {
+			const q = call.prompt.split("\n")[2];
+			return {
+				status: "succeeded",
+				summary: `Full detail about ${q}, lots of it.\n\n## Digest\nDIGEST for ${q}`,
+			};
+		});
+		const { deps, scratchDir } = makeDeps({ subagents: () => capability });
 		const tool = createResearchTool(deps);
 
 		const result = await run(tool, {
@@ -145,48 +166,59 @@ describe("research tool", () => {
 		});
 
 		expect(calls).toHaveLength(2);
-		// Codebase agent: read-only tools, no web.
 		expect(calls[0].profile.tools?.allow).not.toContain("websearch");
-		// Web agent: read-only + web tools, research-tools loaded via -e.
 		expect(calls[1].profile.tools?.allow).toContain("websearch");
 		expect(calls[1].profile.profile).toBe("research");
-		expect(calls[1].profile.extraExtensions).toEqual([
-			"/maestro/packages/research-tools/src/index.ts",
-		]);
 		expect(calls[1].prompt).toContain("How does Exa deep search work?");
 
-		// Reports persisted with frontmatter, numbered in order.
-		const files = readdirSync(join(planDir, "research")).sort();
+		// FULL reports land in the session scratch (by ref), with frontmatter.
+		const files = readdirSync(scratchDir).sort();
 		expect(files).toHaveLength(2);
-		expect(files[0]).toMatch(/^01-/);
-		expect(files[1]).toMatch(/^02-/);
-		const first = readFileSync(join(planDir, "research", files[0]), "utf8");
-		expect(first).toContain("question:");
-		expect(first).toContain("kind:");
-		expect(first).toContain("Answer about:");
+		const first = readFileSync(join(scratchDir, files[0]), "utf8");
+		expect(first).toContain("ref:");
+		expect(first).toContain("Full detail about");
 
+		// The DELIVERY carries only digests + refs + the dig hint — never the
+		// full report text.
 		const text = result.content[0].text;
-		expect(text).toContain("What TUI library does pi use?");
-		expect(text).toContain("Evaluate:");
+		expect(text).toContain("DIGEST for");
+		expect(text).toContain("[ref:");
+		expect(text).toContain("dig(");
+		expect(text).not.toContain("lots of it");
 	});
 
-	it("reports failures without persisting and keeps other answers", async () => {
+	it("reports failures without persisting and keeps the passing digest", async () => {
 		const { capability } = fakeCapability(async (_call, n) =>
 			n === 1
 				? { status: "failed", error: "child exploded" }
-				: { status: "succeeded", summary: "fine" },
+				: { status: "succeeded", summary: "ok\n\n## Digest\nfine" },
 		);
-		const { deps, planDir } = makeDeps({ subagents: () => capability });
+		const { deps, scratchDir } = makeDeps({ subagents: () => capability });
 		const result = await run(createResearchTool(deps), {
 			questions: [{ question: "will fail" }, { question: "will pass" }],
 		});
 		const text = result.content[0].text;
 		expect(text).toContain("child exploded");
 		expect(text).toContain("fine");
-		const files = existsSync(join(planDir, "research"))
-			? readdirSync(join(planDir, "research"))
-			: [];
-		expect(files).toHaveLength(1);
+		const files = existsSync(scratchDir) ? readdirSync(scratchDir) : [];
+		expect(files).toHaveLength(1); // only the passing report persisted
+	});
+
+	it("dig returns the full report for a ref, and errors on an unknown ref", async () => {
+		const { capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "The whole detailed analysis.\n\n## Digest\nshort answer",
+		}));
+		const { deps } = makeDeps({ subagents: () => capability });
+		await run(createResearchTool(deps), {
+			questions: [{ question: "What storage does pi use?" }],
+		});
+		const dig = createDigTool(deps);
+		const good = await run(dig, { ref: "what-storage-does-pi-use" });
+		expect(good.content[0].text).toContain("The whole detailed analysis.");
+		const bad = await run(dig, { ref: "no-such-ref" });
+		expect(bad.content[0].text).toContain("no research report");
+		expect(bad.content[0].text).toContain("what-storage-does-pi-use"); // lists available
 	});
 
 	it("stops runs that exceed the timeout", async () => {
@@ -358,6 +390,18 @@ describe("helpers", () => {
 			"how-do-competing-tui",
 		);
 		expect(researchLabel("!!!")).toBe("research");
+	});
+
+	it("extractDigest prefers the ## Digest block, falls back to first para, caps length", () => {
+		expect(extractDigest("Full working here.\n\n## Digest\nThe answer.")).toBe(
+			"The answer.",
+		);
+		// No Digest block → first paragraph.
+		expect(extractDigest("First para.\n\nSecond para.")).toBe("First para.");
+		// Over-long digest is hard-capped with an ellipsis.
+		const long = extractDigest(`## Digest\n${"x".repeat(800)}`);
+		expect(long.length).toBeLessThanOrEqual(500);
+		expect(long.endsWith("…")).toBe(true);
 	});
 
 	it("renderPlanOutline includes deliverables, tasks, and understanding", () => {

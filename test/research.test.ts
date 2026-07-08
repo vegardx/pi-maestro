@@ -225,6 +225,44 @@ describe("research tool", () => {
 		expect(calls[0].prompt).toContain("Draft Plan Under Review");
 		expect(calls[0].prompt).toContain("add login");
 	});
+
+	it("non-blocking: returns immediately, delivers the whole round as a follow-up", async () => {
+		const { capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "the answer",
+		}));
+		const delivered: string[] = [];
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			deliver: (t) => delivered.push(t),
+		});
+		const result = await run(createResearchTool(deps), {
+			questions: [{ question: "q1" }, { question: "q2" }],
+		});
+		// Returns immediately with a "started" ack — not the reports.
+		expect(result.content[0].text).toContain("Started 2 research agent");
+		expect(result.content[0].text).not.toContain("the answer");
+		// The whole round is delivered together, once, after settlement.
+		await new Promise((r) => setImmediate(r));
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toContain("Research round complete");
+		expect(delivered[0]).toContain("the answer");
+		expect(delivered[0]).toContain("Evaluate:");
+	});
+
+	it("serializes: refuses a second round while one is in flight", async () => {
+		const { capability } = fakeCapability(
+			() => new Promise<never>(() => {}), // never settles
+		);
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			deliver: () => {},
+		});
+		const tool = createResearchTool(deps);
+		await run(tool, { questions: [{ question: "q1" }] });
+		const second = await run(tool, { questions: [{ question: "q2" }] });
+		expect(second.content[0].text).toContain("already running");
+	});
 });
 
 describe("readiness tool", () => {

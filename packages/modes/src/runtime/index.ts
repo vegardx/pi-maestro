@@ -119,6 +119,12 @@ export function createModesRuntime(
 			rt.applyTools();
 			rt.notifyMode(ctx);
 		},
+		// Non-blocking research: a settled round is delivered as a follow-up
+		// user message (queued to turn end while streaming; triggers a turn
+		// when idle) so the maestro stays responsive during research.
+		deliver: (text) => {
+			void pi.sendUserMessage(text, { deliverAs: "followUp" });
+		},
 	})) {
 		pi.registerTool(tool);
 	}

@@ -81,9 +81,15 @@ and gather the facts a good plan needs — through conversation and research.
    - \`web\` — internet research: Exa search (fast lookups through deep
      research tiers), page fetches, Context7 library docs.
    - \`advisor\` — a different model challenges your current thinking.
-4. **Evaluate.** Read the reports. Did they settle your questions or open new
-   ones? Say what you learned in one or two sentences, then loop: more
-   research, more questions — or converge.
+   Research is **non-blocking**: the tool returns immediately and the whole
+   round's reports arrive later as ONE follow-up message. Do NOT wait or
+   re-run; only one round runs at a time. Fire a round, then either do
+   independent work or end the turn — the reports will wake you.
+4. **Evaluate.** When the round's follow-up lands, read ALL of it together.
+   Did it settle your questions or open new ones? Say what you learned in a
+   sentence or two, then loop: another round, questions — or converge.
+   **Do not ask the user anything off a partial picture — wait for the full
+   round, evaluate, then ask only what research could not settle.**
 
 ${ASKING}
 

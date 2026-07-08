@@ -78,6 +78,12 @@ export interface ResearchDeps {
 	readonly onPhaseChanged?: (ctx: ExtensionContext) => void;
 	/** Per-question wall-clock cap. Default 180s. */
 	readonly timeoutMs?: () => number;
+	/**
+	 * Deliver a completed round's combined report to the model as a follow-up
+	 * message (non-blocking research). When absent, the tool falls back to
+	 * blocking (awaits the round and returns it inline).
+	 */
+	readonly deliver?: (text: string) => void;
 }
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -134,6 +140,9 @@ const ResearchParams = Type.Object({
 });
 
 export function createResearchTool(deps: ResearchDeps): ToolDefinition {
+	// Serialize: one active research round at a time (exploring). A second
+	// call while a round is in flight is refused so rounds never interleave.
+	let roundActive = false;
 	return defineTool({
 		name: "research",
 		label: "Research",
@@ -153,6 +162,13 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			if (!capability) {
 				return error(
 					"research unavailable: the subagents extension is not loaded",
+				);
+			}
+			if (roundActive) {
+				return ok(
+					"A research round is already running — its reports arrive as a " +
+						"follow-up message when the whole round settles. Wait for it " +
+						"(and evaluate all of it) before starting another round.",
 				);
 			}
 
@@ -201,33 +217,66 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 				}),
 			);
 
-			const sections = await Promise.all(
-				spawned.map(async (entry) => {
-					if ("spawnError" in entry) {
-						return `## ${entry.question}\n\n(${entry.spawnError})`;
-					}
-					const { view, handle } = entry;
-					const result = await settleWithTimeout(handle, timeoutMs);
-					view.status = result.status === "succeeded" ? "succeeded" : "failed";
-					const report = result.summary?.trim();
-					if (!report) {
-						deps.onRunSettled?.(view, undefined, ctx);
-						return (
-							`## ${view.question}\n\n` +
-							`(research agent ${result.status}: ${result.error ?? "no report produced"})`
-						);
-					}
-					const path = persistReport(researchDir, view, report);
-					deps.onRunSettled?.(view, { text: report, path }, ctx);
-					return `## ${view.question}\n(report: ${path})\n\n${report}`;
-				}),
-			);
-
-			return ok(
-				`${sections.join("\n\n---\n\n")}\n\n` +
+			// Settle the whole round, then compose ONE combined report. Each
+			// agent's card/widget row still updates per-agent (onRunSettled),
+			// but the MODEL sees the round atomically — never a per-agent trickle.
+			const settleRound = async (): Promise<string> => {
+				const sections = await Promise.all(
+					spawned.map(async (entry) => {
+						if ("spawnError" in entry) {
+							return `## ${entry.question}\n\n(${entry.spawnError})`;
+						}
+						const { view, handle } = entry;
+						const result = await settleWithTimeout(handle, timeoutMs);
+						view.status =
+							result.status === "succeeded" ? "succeeded" : "failed";
+						const report = result.summary?.trim();
+						if (!report) {
+							deps.onRunSettled?.(view, undefined, ctx);
+							return (
+								`## ${view.question}\n\n` +
+								`(research agent ${result.status}: ${result.error ?? "no report produced"})`
+							);
+						}
+						const path = persistReport(researchDir, view, report);
+						deps.onRunSettled?.(view, { text: report, path }, ctx);
+						return `## ${view.question}\n(report: ${path})\n\n${report}`;
+					}),
+				);
+				return (
+					`${sections.join("\n\n---\n\n")}\n\n` +
 					"Evaluate: do these answers settle your open questions, or open " +
 					"new ones? Ask the user / research further, or call `readiness` " +
-					"when the convergence criteria are met.",
+					"when the convergence criteria are met."
+				);
+			};
+
+			// Non-blocking (deliver wired): spawn-and-return; the whole round is
+			// delivered as one follow-up when it settles. Fallback (tests, no
+			// deliver): block and return the report inline.
+			if (!deps.deliver) return ok(await settleRound());
+
+			roundActive = true;
+			void settleRound()
+				.then((text) => deps.deliver?.(`Research round complete.\n\n${text}`))
+				.catch((err) =>
+					deps.deliver?.(
+						`Research round failed: ${err instanceof Error ? err.message : String(err)}`,
+					),
+				)
+				.finally(() => {
+					roundActive = false;
+				});
+
+			const labels = spawned
+				.map((e) => ("spawnError" in e ? e.question : e.view.label))
+				.join(", ");
+			return ok(
+				`Started ${spawned.length} research agent(s) [${labels}]. They run in ` +
+					"parallel; the whole round's reports arrive as ONE follow-up " +
+					"message when every agent settles. Do NOT wait or re-run — continue " +
+					"with independent work or end the turn. When the round lands, " +
+					"evaluate ALL of it before asking the user anything.",
 			);
 		},
 	}) as ToolDefinition;

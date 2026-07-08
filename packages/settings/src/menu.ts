@@ -264,11 +264,18 @@ function getOptionsForKey(
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".model") || extension === "@presets") {
-		const models = ctx.modelRegistry.getAvailable();
-		return models.map((m) => ({
-			label: m.name || `${m.provider}/${m.id}`,
-			value: `${m.provider}/${m.id}`,
-		}));
+		// getAll (not getAvailable): configuring a preset/model setting must offer
+		// EVERY known model, not only ones already authed — on a clean config
+		// almost nothing is authed yet. Mark the un-authed ones so the choice is
+		// informed, but let them be picked.
+		return ctx.modelRegistry.getAll().map((m) => {
+			const authed = ctx.modelRegistry.hasConfiguredAuth(m);
+			const base = m.name || `${m.provider}/${m.id}`;
+			return {
+				label: authed ? base : `${base} · needs auth`,
+				value: `${m.provider}/${m.id}`,
+			};
+		});
 	}
 	return null;
 }
@@ -1050,12 +1057,18 @@ class ConfigMenuComponent implements Component, Focusable {
 	// ─── Slot picker (two-step: model then effort) ──────────────────────────
 
 	private openSlotModelPicker(): void {
-		const models = this.ctx.modelRegistry.getAvailable();
+		// getAll, not getAvailable: on a clean config few/no providers are authed
+		// yet, so getAvailable would leave the picker empty and the slot
+		// unsettable. Offer every known model; flag the un-authed ones.
+		const models = this.ctx.modelRegistry.getAll();
 		this.slotPickerModels = models.map((m) => {
 			const modelName = (m as { name?: string }).name || m.id;
+			const suffix = this.ctx.modelRegistry.hasConfiguredAuth(m)
+				? ""
+				: " · needs auth";
 			return {
 				modelId: `${m.provider}/${m.id}`,
-				name: `${modelName} (${m.provider})`,
+				name: `${modelName} (${m.provider})${suffix}`,
 				adaptive: isAdaptiveThinking(m),
 			};
 		});

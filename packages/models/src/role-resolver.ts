@@ -119,6 +119,35 @@ async function tryAuth(
 	return { model, apiKey: auth.apiKey, headers: auth.headers };
 }
 
+/**
+ * Resolve a model directly from a preset slot (default/alternate), bypassing
+ * role-config lookup. Use when you want "the alternate slot of the active
+ * preset" regardless of whether a role is configured — e.g. the advisor's
+ * second-pair-of-eyes model. Returns null when the slot is unconfigured or
+ * auth fails (caller then falls back).
+ */
+export async function resolveSlotModel(
+	ctx: ExtensionContext,
+	slot: Slot,
+	effort?: ThinkingLevel,
+): Promise<ResolvedRoleModelFull | null> {
+	const modelsConfig = readModelsConfig(ctx.cwd);
+	if (!modelsConfig) return null;
+	const preset = modelsConfig.presets[modelsConfig.active];
+	const slotConfig = preset?.[slot];
+	if (!slotConfig?.model) return null;
+	const result = await tryAuth(ctx, slotConfig.model);
+	if (!result) return null;
+	return {
+		...result,
+		modelId: slotConfig.model,
+		effort: effort ?? slotConfig.effort,
+		source: "preset",
+		preset: modelsConfig.active,
+		slot,
+	};
+}
+
 function readRoleConfig(
 	merged: ExtensionConfigMap,
 	extension: string,

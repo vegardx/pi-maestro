@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	readModelsConfig,
 	resolveRoleModel,
+	resolveSlotModel,
 	validateRoleModelConfig,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -87,6 +88,36 @@ beforeEach(() => {
 });
 afterEach(() => {
 	if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
+});
+
+// ─── resolveSlotModel (the advisor second-pair-of-eyes fix) ──────────────────
+
+describe("resolveSlotModel", () => {
+	it("resolves the active preset's alternate slot directly", async () => {
+		projectSettings({
+			models: {
+				active: "anthropic",
+				presets: {
+					anthropic: { default: "anthropic/sonnet", alternate: "openai/o3" },
+				},
+			},
+		});
+		const res = await resolveSlotModel(fakeCtx({}), "alternate", "high");
+		expect(res?.modelId).toBe("openai/o3");
+		expect(res?.effort).toBe("high");
+		expect(res?.slot).toBe("alternate");
+		expect(res?.apiKey).toBe("sk-test");
+	});
+
+	it("returns null when the slot is unconfigured (caller falls back)", async () => {
+		projectSettings({
+			models: {
+				active: "solo",
+				presets: { solo: { default: "anthropic/sonnet" } },
+			},
+		});
+		expect(await resolveSlotModel(fakeCtx({}), "alternate")).toBeNull();
+	});
 });
 
 // ─── validateRoleModelConfig ─────────────────────────────────────────────────

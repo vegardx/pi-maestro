@@ -12,5 +12,6 @@ export {
 	type RoleResolveOptions,
 	resolveRoleModel,
 	resolveRoleModelWithin,
+	resolveSlotModel,
 	validateRoleModelConfig,
 } from "./role-resolver.js";

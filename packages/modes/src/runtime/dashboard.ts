@@ -73,6 +73,7 @@ export function researchTableAgents(
 				output: run.tokensOut ?? 0,
 				turns: 0,
 			},
+			...(run.cacheRatio !== undefined ? { cacheRatio: run.cacheRatio } : {}),
 		});
 	}
 	return rows;

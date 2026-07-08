@@ -7,6 +7,7 @@ import type { ModelSlot, ThinkingLevel } from "@vegardx/pi-contracts";
 import {
 	type ResolvedRoleModelFull,
 	resolveRoleModel,
+	resolveSlotModel,
 } from "@vegardx/pi-models";
 
 export interface SpawnModelRequest {
@@ -30,20 +31,24 @@ export interface ResolvedSpawnModel {
 /**
  * Resolve a model for spawning an agent at execution time.
  *
- * Uses the preset system: the slot maps to the preset's default/alternate
- * entry. Effort overrides the preset's default effort if specified.
- *
- * Falls back to the session model if preset resolution fails.
+ * Resolves the active preset's slot (default/alternate) DIRECTLY first — the
+ * old path went through a `slotToRole` name (`agent`/`agent-alternate`) that
+ * is usually unconfigured, so `alternate` silently fell back to the session
+ * model (the advisor never got a second-pair-of-eyes model). If the slot is
+ * unconfigured we fall back to role-based resolution (which lands on the
+ * session model). Effort from the request overrides the preset default.
  */
 export async function resolveSpawnModel(
 	ctx: ExtensionContext,
 	request: SpawnModelRequest,
 ): Promise<ResolvedSpawnModel | null> {
-	const result = await resolveRoleModel(ctx, {
-		extension: "modes",
-		role: slotToRole(request.slot),
-		explicit: request.effort ? { effort: request.effort } : undefined,
-	});
+	const result =
+		(await resolveSlotModel(ctx, request.slot, request.effort)) ??
+		(await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: slotToRole(request.slot),
+			explicit: request.effort ? { effort: request.effort } : undefined,
+		}));
 
 	if (!result) return null;
 

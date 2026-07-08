@@ -62,6 +62,34 @@ export interface AgentSpec {
 	after: string[];
 }
 
+// ─── Sub-agent specification (persona panel) ─────────────────────────────────
+
+/**
+ * One entry in a deliverable's up-front sub-agent plan (Phase 7). The worker
+ * runs these as headless one-shot subagents. Multiple entries may share a
+ * `persona` with different `slot`/`model` — that's the multi-model escalation
+ * (e.g. security-audit on default AND alternate). `required` review verdicts
+ * gate ship at the executor.
+ */
+export interface SubAgentSpec {
+	/** Unique name within the deliverable. */
+	name: string;
+	/** Persona id from the registry (PERSONAS). */
+	persona: string;
+	/** Optional per-deliverable specialization of the persona's focus. */
+	focus?: string;
+	/** Model slot override; defaults to the persona's default. */
+	slot?: ModelSlot;
+	/** Explicit model override ("provider/id"), for a multi-model panel. */
+	model?: string;
+	/** Effort override; defaults to the persona's default. */
+	effort?: ThinkingLevel;
+	/** "review" = verdict-gated; "helper" = info scout. Default "review". */
+	kind?: "review" | "helper";
+	/** Required reviews must reach SHIPPED before the deliverable ships. */
+	required?: boolean;
+}
+
 // ─── Worker specification ────────────────────────────────────────────────────
 
 export interface WorkerSpec {
@@ -95,6 +123,12 @@ export interface Deliverable {
 	worker: WorkerSpec;
 	/** Support agents with an internal dependency graph. */
 	agents: AgentSpec[];
+	/**
+	 * The worker's up-front review/helper panel (Phase 7). Composed from the
+	 * persona registry at plan time; the worker runs it. Optional/absent on
+	 * older plans, which use `agents` instead.
+	 */
+	subAgents?: SubAgentSpec[];
 	/** Gating work items the worker must complete. */
 	tasks: WorkItem[];
 	/** Review→fix round cap before the deliverable blocks. Default 2. */

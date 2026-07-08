@@ -17,6 +17,7 @@ import {
 	type Plan,
 	type PlanPhase,
 	type PlanRepo,
+	type SubAgentSpec,
 	slugify,
 	type ThinkingLevel,
 	validatePlanShape,
@@ -301,6 +302,36 @@ export class PlanEngine {
 			const idx = g.agents.findIndex((a) => a.name === name);
 			if (idx < 0) throw new Error(`unknown agent: ${name}`);
 			g.agents.splice(idx, 1);
+			g.updatedAt = this.now();
+		});
+	}
+
+	// ── Sub-agent panel (persona reviewers) ──────────────────────────────────
+
+	addSubAgent(deliverableId: string, spec: SubAgentSpec): SubAgentSpec {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+			if ((g.subAgents ?? []).some((s) => s.name === spec.name))
+				throw new Error(`sub-agent already exists: ${spec.name}`);
+			g.subAgents = [...(g.subAgents ?? []), spec];
+			g.updatedAt = this.now();
+		});
+		const g = findDeliverable(this.plan, deliverableId) as Deliverable;
+		return (g.subAgents ?? []).find(
+			(s) => s.name === spec.name,
+		) as SubAgentSpec;
+	}
+
+	removeSubAgent(deliverableId: string, name: string): void {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+			const list = g.subAgents ?? [];
+			const idx = list.findIndex((s) => s.name === name);
+			if (idx < 0) throw new Error(`unknown sub-agent: ${name}`);
+			list.splice(idx, 1);
+			g.subAgents = list;
 			g.updatedAt = this.now();
 		});
 	}

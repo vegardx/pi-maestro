@@ -22,12 +22,14 @@ import type {
 	PlanEngine,
 } from "./engine.js";
 import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
+import { getPersona, PERSONA_IDS } from "./personas.js";
 import type {
 	AgentMode,
 	AgentSpec,
 	Deliverable,
 	ModelSlot,
 	Plan,
+	SubAgentSpec,
 	ThinkingLevel,
 	WorkItem,
 } from "./schema.js";
@@ -56,6 +58,7 @@ interface ToolDetails {
 	readonly deliverables?: readonly Deliverable[];
 	readonly workItem?: WorkItem;
 	readonly agent?: AgentSpec;
+	readonly subAgent?: SubAgentSpec;
 	readonly done?: boolean;
 }
 
@@ -188,9 +191,136 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createDeliverableTool(deps),
 		createTaskTool(deps),
 		createAgentTool(deps),
+		createSubAgentTool(deps),
 		createPlanTool(deps),
 		createKnowledgeTool(deps),
 	];
+}
+
+const SubAgentParams = Type.Object({
+	action: Type.Union([
+		Type.Literal("add"),
+		Type.Literal("remove"),
+		Type.Literal("list"),
+	]),
+	deliverableId: Type.Optional(Type.String()),
+	/** Persona id from the registry (required for add). */
+	persona: Type.Optional(
+		Type.String({
+			description: `Review lens: one of ${PERSONA_IDS.join(", ")}.`,
+		}),
+	),
+	/** Unique instance name; defaults to the persona id (or persona-2, … for a
+	 *  multi-model panel of the same lens). */
+	name: Type.Optional(Type.String()),
+	focus: Type.Optional(
+		Type.String({
+			description: "Specialize the persona for this deliverable.",
+		}),
+	),
+	slot: Type.Optional(Type.String({ description: "default | alternate." })),
+	model: Type.Optional(
+		Type.String({ description: "Explicit provider/id (multi-model panel)." }),
+	),
+	effort: Type.Optional(Type.String()),
+	required: Type.Optional(
+		Type.Boolean({
+			description:
+				"Gating: a review persona whose latest verdict must be SHIPPED " +
+				"before the deliverable ships.",
+		}),
+	),
+});
+
+export function createSubAgentTool(deps: PlanToolDeps): ToolDefinition {
+	return defineTool({
+		name: "subagent",
+		label: "Sub-agent",
+		description:
+			"Compose a deliverable's review/helper panel from the persona palette " +
+			`(${PERSONA_IDS.join(", ")}): add, remove, list. Add multiple instances ` +
+			"of one persona with different slot/model for a multi-model second " +
+			"pair of eyes on sensitive deliverables. The worker runs the panel.",
+		promptSnippet:
+			"subagent — compose a deliverable's persona review panel (add/remove/list).",
+		parameters: SubAgentParams,
+		async execute(_id, params): Promise<Result> {
+			if (!deps.engine() && deps.agentBridge?.()) {
+				return error("agents cannot modify plan structure");
+			}
+			return withEngine(deps, (engine) => {
+				const plan = engine.get();
+				const deliverableId = params.deliverableId;
+				if (!deliverableId) return error("deliverableId is required");
+				if (hasExecutionStarted(plan)) {
+					const g = findDeliverable(plan, deliverableId);
+					if (g && g.status !== "planned") {
+						return error("cannot modify sub-agents in an active deliverable");
+					}
+				}
+				switch (params.action) {
+					case "add": {
+						if (!params.persona) return error("add requires persona");
+						if (!getPersona(params.persona)) {
+							return error(
+								`unknown persona "${params.persona}" (have: ${PERSONA_IDS.join(", ")})`,
+							);
+						}
+						const g = findDeliverable(plan, deliverableId);
+						const existing = g?.subAgents ?? [];
+						const name =
+							params.name ??
+							uniqueName(
+								params.persona,
+								existing.map((s) => s.name),
+							);
+						const spec: SubAgentSpec = {
+							name,
+							persona: params.persona,
+							...(params.focus ? { focus: params.focus } : {}),
+							...(params.slot ? { slot: params.slot as ModelSlot } : {}),
+							...(params.model ? { model: params.model } : {}),
+							...(params.effort
+								? { effort: params.effort as ThinkingLevel }
+								: {}),
+							...(params.required ? { required: true } : {}),
+						};
+						const added = engine.addSubAgent(deliverableId, spec);
+						notify(deps, engine);
+						return ok(
+							`✓ ${deliverableId} panel: ${added.name} (${added.persona})`,
+							{ subAgent: added, plan: engine.get() },
+						);
+					}
+					case "remove": {
+						if (!params.name) return error("remove requires name");
+						engine.removeSubAgent(deliverableId, params.name);
+						notify(deps, engine);
+						return ok(`Removed ${params.name}.`, { plan: engine.get() });
+					}
+					default: {
+						const g = findDeliverable(plan, deliverableId);
+						const list = (g?.subAgents ?? [])
+							.map(
+								(s) =>
+									`${s.name} (${s.persona}${s.required ? ", required" : ""})`,
+							)
+							.join(", ");
+						return ok(list || "(no sub-agents)", { plan });
+					}
+				}
+			});
+		},
+	}) as ToolDefinition;
+}
+
+/** persona → persona, persona-2, … avoiding taken names. */
+function uniqueName(persona: string, taken: string[]): string {
+	if (!taken.includes(persona)) return persona;
+	for (let n = 2; ; n++) {
+		const candidate = `${persona}-${n}`;
+		if (!taken.includes(candidate)) return candidate;
+	}
 }
 
 export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {

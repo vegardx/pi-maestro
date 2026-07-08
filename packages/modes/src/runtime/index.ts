@@ -230,6 +230,11 @@ export function createModesRuntime(
 			type: "thinking",
 		},
 		{ key: "models.classifier.slot", label: "Classifier slot", type: "slot" },
+		{
+			key: "models.classifier.model",
+			label: "Classifier model",
+			type: "model",
+		},
 		// Compaction budgets — read by readModesCompactionSettings; declared here
 		// so they're discoverable/editable in /maestro (were hidden before).
 		{

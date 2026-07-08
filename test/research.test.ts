@@ -226,6 +226,31 @@ describe("research tool", () => {
 		expect(calls[0].prompt).toContain("add login");
 	});
 
+	it("consult runs unbiased on the alternate model with plan context", async () => {
+		const { calls, capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "go with option B\nRECOMMENDATION: B",
+		}));
+		const engine = engineWithPlan();
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "add login", body: "src/auth.ts" });
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			engine: () => engine,
+			resolveAdvisorModel: async () => "other/model-x",
+		});
+		await run(createResearchTool(deps), {
+			questions: [
+				{ question: "A: cookie vs B: JWT — which?", kind: "consult" },
+			],
+		});
+		expect(calls[0].profile.model).toBe("other/model-x");
+		expect(calls[0].profile.thinking).toBe("high");
+		// Gets whole-plan context but is told the preference was withheld.
+		expect(calls[0].prompt).toContain("Plan Context");
+		expect(calls[0].profile.appendSystemPrompt).toContain("WITHHELD");
+	});
+
 	it("non-blocking: returns immediately, delivers the whole round as a follow-up", async () => {
 		const { capability } = fakeCapability(async () => ({
 			status: "succeeded",

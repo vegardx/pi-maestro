@@ -30,8 +30,16 @@ import { type Plan, slugify } from "./schema.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
-export const RESEARCH_KINDS = ["codebase", "web", "advisor"] as const;
+export const RESEARCH_KINDS = [
+	"codebase",
+	"web",
+	"advisor",
+	"consult",
+] as const;
 export type ResearchKind = (typeof RESEARCH_KINDS)[number];
+
+/** Kinds that run on the different-bias alternate model at high effort. */
+const ALTERNATE_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
 
 /** Live view of one research run — feeds the agent table and cards. */
 export interface ResearchRunView {
@@ -124,7 +132,10 @@ const ResearchParams = Type.Object({
 						description:
 							"codebase (default): read/grep this repo. web: internet " +
 							"research (Exa search, page fetch, Context7 library docs). " +
-							"advisor: a different model reviews the draft plan.",
+							"advisor: a different model reviews the draft plan. consult: " +
+							"a different model makes an unbiased call on a specific fork — " +
+							"put the options in the question and WITHHOLD your own " +
+							"preference (use this for an escalated decision).",
 					},
 				),
 			),
@@ -373,13 +384,14 @@ async function buildResearchProfile(
 ): Promise<SpawnProfile> {
 	const tools =
 		kind === "web" ? [...READ_TOOLS, ...WEB_TOOLS] : [...READ_TOOLS];
-	const model =
-		kind === "advisor" ? await deps.resolveAdvisorModel?.(ctx) : undefined;
+	const model = ALTERNATE_MODEL_KINDS.has(kind)
+		? await deps.resolveAdvisorModel?.(ctx)
+		: undefined;
 	return {
 		profile: "research",
 		cwd: plan.repoPath,
 		tools: { allow: tools },
-		thinking: kind === "advisor" ? "high" : "low",
+		thinking: ALTERNATE_MODEL_KINDS.has(kind) ? "high" : "low",
 		...(model ? { model } : {}),
 		extraExtensions: [deps.researchToolsPath()],
 		appendSystemPrompt: researcherPreamble(kind),
@@ -414,6 +426,17 @@ function researcherPreamble(kind: ResearchKind): string {
 				"find gaps and risks, and say what you would change — concretely. " +
 				"Verify claims against the repository where possible."
 			);
+		case "consult":
+			return (
+				`${shared}\n\nRole: unbiased advisor deciding a specific question. ` +
+				"You are a DIFFERENT model; the maestro has DELIBERATELY WITHHELD " +
+				"its own preference so your recommendation is unbiased — do not try " +
+				"to guess what it wants. Weigh the options given (and propose a " +
+				"better one if you see it) against the goal and constraints, verify " +
+				"the relevant facts in the repository, and commit to a single clear " +
+				"recommendation with your reasoning and the key trade-off you're " +
+				"accepting. End with a line `RECOMMENDATION: <the option>`."
+			);
 	}
 }
 
@@ -427,6 +450,10 @@ function buildResearchPrompt(
 	if (context) lines.push("", "## Context", context);
 	if (kind === "advisor") {
 		lines.push("", "## Draft Plan Under Review", renderPlanOutline(plan));
+	} else if (kind === "consult") {
+		// The advisor decides a specific fork; the whole-plan view is the context
+		// the maestro holds and is consulting on its behalf.
+		lines.push("", "## Plan Context", renderPlanOutline(plan));
 	}
 	return lines.join("\n");
 }

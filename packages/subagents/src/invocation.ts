@@ -59,7 +59,10 @@ export function mapProfileToInvocation(
 	}
 	if (resolved.thinking) args.push("--thinking", resolved.thinking);
 	if (resolved.mode) args.push("--mode", resolved.mode);
-	if (resolved.session === false) args.push("--no-session");
+	// An explicit session file wins: pi creates-or-resumes it. Otherwise honor
+	// the session:false one-shot default (--no-session).
+	if (resolved.sessionFile) args.push("--session", resolved.sessionFile);
+	else if (resolved.session === false) args.push("--no-session");
 	if (resolved.appendSystemPrompt) {
 		args.push("--append-system-prompt", resolved.appendSystemPrompt);
 	}

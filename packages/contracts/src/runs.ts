@@ -58,6 +58,13 @@ export interface SpawnProfile {
 	/** Override the child's session storage directory. */
 	readonly sessionDir?: string;
 	/**
+	 * Explicit session file the child spawns with (`--session <file>`). pi
+	 * creates it if absent and RESUMES it (appending the new prompt to the
+	 * prior transcript) if present — so a one-shot run can later be re-entered
+	 * with a follow-up. Takes precedence over `session: false`.
+	 */
+	readonly sessionFile?: string;
+	/**
 	 * Spawn with --no-extensions so the child loads NONE of the globally
 	 * configured extensions — only the paths in `extraExtensions`. Keeps the
 	 * child's tool namespace deterministic (no collisions with whatever the

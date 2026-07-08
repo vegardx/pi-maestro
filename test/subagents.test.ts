@@ -297,6 +297,20 @@ describe("profiles + invocation mapping", () => {
 		expect(inv.env.PI_EXT_SUBAGENTS).toBe("off");
 	});
 
+	it("an explicit sessionFile becomes --session and suppresses --no-session", () => {
+		const inv = mapProfileToInvocation(
+			{
+				profile: "restricted",
+				sessionFile: "/plan/research-sessions/01.jsonl",
+			},
+			{ repoRoot: "/repo", parentDepth: 0 },
+		);
+		const sIdx = inv.args.indexOf("--session");
+		expect(sIdx).toBeGreaterThanOrEqual(0);
+		expect(inv.args[sIdx + 1]).toBe("/plan/research-sessions/01.jsonl");
+		expect(inv.args).not.toContain("--no-session");
+	});
+
 	it("resolves cwd as profile → spawner → repoRoot and bumps depth", () => {
 		expect(
 			mapProfileToInvocation(

@@ -82,6 +82,7 @@ export interface ResolvedProfile {
 	readonly appendSystemPrompt?: string;
 	readonly session: boolean;
 	readonly sessionDir?: string;
+	readonly sessionFile?: string;
 	readonly disableExtensions: readonly string[];
 	readonly isolateExtensions: boolean;
 	readonly extraExtensions: readonly string[];
@@ -103,6 +104,7 @@ export function resolveProfile(profile: SpawnProfile): ResolvedProfile {
 		appendSystemPrompt: profile.appendSystemPrompt,
 		session: profile.session ?? defaults.session,
 		sessionDir: profile.sessionDir,
+		sessionFile: profile.sessionFile,
 		disableExtensions: defaults.disableExtensions,
 		isolateExtensions:
 			profile.isolateExtensions ?? defaults.isolateExtensions ?? false,

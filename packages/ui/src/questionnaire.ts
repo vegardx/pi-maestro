@@ -5,7 +5,12 @@
 // the host UI.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	type Focusable,
+	type TUI,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import type {
 	Answer,
 	Answers,
@@ -874,10 +879,20 @@ export class CollapsibleQuestionnaireComponent implements Component, Focusable {
 			`◆ ${counts.pending} pending` +
 			(counts.deferred > 0 ? ` · ${counts.deferred} ⛔` : "");
 		const hint = "Tab to expand";
-		const fillWidth = Math.max(width - 8 - label.length - hint.length, 0);
+		// Measure DISPLAY width, not JS string length: ⛔ (and ◆) are wide/emoji
+		// glyphs whose .length undercounts their terminal columns, which would
+		// otherwise push the border one column past `width` and crash the TUI.
+		const overhead = 8; // "╭─ " + " " + " " + " ─╮"
+		const fillWidth = Math.max(
+			width - overhead - visibleWidth(label) - visibleWidth(hint),
+			0,
+		);
 		const fill = "─".repeat(fillWidth);
-		const top = p.dim(`╭─ ${label} ${fill} ${hint} ─╮`);
-		const bot = p.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+		const top = truncate(p.dim(`╭─ ${label} ${fill} ${hint} ─╮`), width);
+		const bot = truncate(
+			p.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`),
+			width,
+		);
 		return [top, bot];
 	}
 

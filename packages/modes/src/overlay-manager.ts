@@ -59,6 +59,20 @@ export class OverlayManager {
 		this.ctx = undefined;
 	}
 
+	/**
+	 * Re-assert every mounted overlay's widget in focus order. The host renders
+	 * `aboveEditor` widgets in Map-insertion order and a re-set moves a key to
+	 * the end, so an unrelated widget re-syncing (e.g. the agents table on its
+	 * timer) would otherwise reshuffle the stack. Calling this after such a
+	 * re-sync pins the overlays back below it in a stable order. Cheap: it
+	 * re-sets the SAME component instances, so no UI state is lost.
+	 */
+	reassert(): void {
+		for (const id of this.focusOrder) {
+			if (this.overlays.get(id)?.mounted) this.syncWidget(id);
+		}
+	}
+
 	/** Register an overlay component. Mounts it as a widget. */
 	mount(id: OverlayId, component: OverlayComponent): void {
 		const overlay: ManagedOverlay = { id, component, mounted: true };

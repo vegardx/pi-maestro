@@ -3,8 +3,10 @@
 // compare matrix) — plus the component key flow that drives them. Default
 // palette is identity, so assertions run on plain strings.
 
+import { visibleWidth } from "@earendil-works/pi-tui";
 import type { Answers, Question } from "@vegardx/pi-contracts";
 import {
+	CollapsibleQuestionnaireComponent,
 	initExplorerView,
 	initQuestionnaireState,
 	isExplorerQuestion,
@@ -227,5 +229,35 @@ describe("explorer key flow", () => {
 		expect(c.render(110).join("\n")).toContain("line 0");
 		for (let i = 0; i < 6; i++) c.handleInput(DOWN);
 		expect(c.render(110).join("\n")).not.toContain("line 0");
+	});
+});
+
+describe("collapsed badge width (regression: ESC-defer crash)", () => {
+	// The deferred badge carries ⛔ (U+26D4), a 2-column emoji whose JS .length
+	// is 1. Sizing the border with .length made it one column too wide and
+	// crashed the TUI. Every collapsed line must measure ≤ width in DISPLAY
+	// columns, including when a deferred count shows the emoji.
+	function collapsed(width: number, deferred: number): string[] {
+		const comp = new CollapsibleQuestionnaireComponent([panelQ], () => {}, {
+			palette: defaultPalette(),
+			badge: () => ({ pending: 2, deferred }),
+		});
+		comp.focused = true;
+		comp.expanded = false; // collapsed = the badge line
+		return comp.render(width);
+	}
+
+	it("keeps every collapsed line within the terminal width, with ⛔", () => {
+		for (const width of [40, 60, 80, 88, 120]) {
+			for (const deferred of [0, 1, 12]) {
+				for (const line of collapsed(width, deferred)) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+				}
+			}
+		}
+	});
+
+	it("shows the deferred ⛔ badge when a question was deferred", () => {
+		expect(collapsed(88, 3).join("\n")).toContain("⛔");
 	});
 });

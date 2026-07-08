@@ -307,6 +307,7 @@ describe("syncAgentWidget", () => {
 		const rt = {
 			agentWidgetTimer: undefined,
 			researchRuns,
+			overlayManager: { reassert: () => {} },
 			execution: agents
 				? {
 						snapshot: () => ({

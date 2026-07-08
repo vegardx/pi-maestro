@@ -120,6 +120,10 @@ export function syncAgentWidget(
 			),
 		invalidate: () => {},
 	}));
+	// Re-setting the agents widget moves it to the bottom of the aboveEditor
+	// stack; pin the question/config overlays back below it so the order the
+	// user tabs through stays stable across agent-table ticks.
+	rt.overlayManager.reassert();
 	if (rt.agentWidgetTimer === undefined) {
 		const timer = setInterval(
 			() => syncAgentWidget(rt, ctx),

@@ -81,11 +81,13 @@ export function optionPageLines(
 	if (option.sketch) {
 		const sketchLines = option.sketch.split("\n");
 		const clamp = Math.max(width - 4, 8);
-		lines.push(palette.dim(`┌ sketch ${"─".repeat(Math.max(clamp - 9, 0))}┐`));
+		// "┌ sketch " is 9 cols + trailing "┐" is 1 → dashes = clamp - 10 keeps
+		// the top border exactly `clamp` wide, matching the content/bottom rows.
+		lines.push(palette.dim(`┌ sketch ${"─".repeat(Math.max(clamp - 10, 0))}┐`));
 		for (const raw of sketchLines) {
 			lines.push(palette.dim("│ ") + truncate(raw, clamp - 2));
 		}
-		lines.push(palette.dim(`└${"─".repeat(Math.max(clamp - 1, 0))}┘`));
+		lines.push(palette.dim(`└${"─".repeat(Math.max(clamp - 2, 0))}┘`));
 		lines.push("");
 	}
 	if (option.touches && option.touches.length > 0) {

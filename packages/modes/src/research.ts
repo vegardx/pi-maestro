@@ -297,21 +297,27 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 const ReadinessParams = Type.Object({
 	understanding: Type.String({
 		description:
-			"Your summarized understanding, written as STRUCTURED markdown so the " +
-			"user can scan it (it is rendered with paragraphs, bullets, and bold " +
-			"headings — do NOT write one long paragraph). Use this shape:\n" +
+			"Your summarized understanding, ALWAYS in this exact structure (it is " +
+			"rendered with headings and bullets for the user to scan — never one " +
+			"long paragraph):\n\n" +
 			"A one- or two-sentence summary of what will be built.\n\n" +
 			"**Key decisions**\n" +
-			"- <decision> — <why / what backs it>\n" +
-			"- <decision> — <why>\n\n" +
-			"Keep each bullet to one line's worth of idea; lead bullets with the " +
-			"decision, not the rationale.",
+			"- <the decision> — <why it's the choice / what research or answer " +
+			"backs it>\n" +
+			"- <the decision> — <why>\n\n" +
+			"Write it FORWARD-ONLY: state what WILL be done and why. Do NOT " +
+			"enumerate rejected alternatives or 'we could have'. Lead each bullet " +
+			"with the decision, not the rationale; keep it to one line's idea. " +
+			"Scale the number of bullets to the work — a trivial request may have " +
+			"one.",
 	}),
 	open_risks: Type.Optional(
 		Type.String({
 			description:
-				"Known risks or open questions you propose to accept, as `- ` " +
-				"bullets (one per risk). Rendered under an 'Open risks' heading.",
+				"Risks or open questions you propose to ACCEPT (not resolve), as " +
+				"`- ` bullets, one per risk. Omit entirely if there are none — the " +
+				"tool then records 'Open risks: none'. Always shown as its own " +
+				"section so the user sees what is being waived.",
 		}),
 	),
 });
@@ -340,9 +346,11 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 				return ok("Readiness accepted (no ask surface) — structure the plan.");
 			}
 
-			const context = params.open_risks
-				? `${params.understanding}\n\n**Open risks:**\n${params.open_risks}`
-				: params.understanding;
+			// The template is fixed: understanding + Key decisions, then an Open
+			// risks section that is ALWAYS present ("none" when there are none) so
+			// the user always sees what is being waived.
+			const risks = params.open_risks?.trim() || "- none";
+			const context = `${params.understanding}\n\n**Open risks:**\n${risks}`;
 			const answers = await ask.ask([
 				{
 					id: "readiness",

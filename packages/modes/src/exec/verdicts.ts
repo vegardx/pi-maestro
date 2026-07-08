@@ -38,9 +38,13 @@ export function parseVerdict(summary: string): ParsedVerdict {
 		.replace(/^\s*verdict\s*:\s*/i, "")
 		.trim()
 		.toLowerCase();
+	// Accept both the exec vocabulary (approve / request-changes) and the
+	// persona vocabulary (PASS / BLOCK). PASS≈approve, BLOCK≈request-changes.
 	let verdict: Verdict = "none";
-	if (/request[\s_-]*changes/.test(value)) verdict = "request-changes";
-	else if (value.startsWith("approve")) verdict = "approve";
+	if (/request[\s_-]*changes/.test(value) || value.startsWith("block"))
+		verdict = "request-changes";
+	else if (value.startsWith("approve") || value.startsWith("pass"))
+		verdict = "approve";
 
 	const findings: string[] = [];
 	for (const line of lines.slice(verdictIdx + 1)) {

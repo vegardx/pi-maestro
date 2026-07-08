@@ -62,6 +62,29 @@ describe("PlanEngine — deliverables", () => {
 		expect(g2.id).toBe("auth-2");
 	});
 
+	it("honors a caller-provided id on add (slugified), else derives from title", () => {
+		const store = memStore();
+		const engine = PlanEngine.create(store, {
+			slug: "test",
+			title: "Test",
+			repoPath: "/tmp/repo",
+		});
+		// Provided id wins over the title-derived one.
+		const g = engine.addDeliverable({
+			id: "AWS Static Site",
+			title: "AWS static website deployment",
+			workerMode: "full",
+		});
+		expect(g.id).toBe("aws-static-site");
+		// Collisions on the provided id still de-dupe.
+		const g2 = engine.addDeliverable({
+			id: "aws-static-site",
+			title: "Another",
+			workerMode: "full",
+		});
+		expect(g2.id).toBe("aws-static-site-2");
+	});
+
 	it("updates a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {

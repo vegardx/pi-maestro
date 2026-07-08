@@ -73,7 +73,14 @@ const DeliverableParams = Type.Object({
 		Type.Literal("remove"),
 		Type.Literal("list"),
 	]),
-	id: Type.Optional(Type.String({ description: "Deliverable id." })),
+	id: Type.Optional(
+		Type.String({
+			description:
+				"Deliverable id. On add: your preferred id (slugified + de-duped); " +
+				"omit to derive it from the title. On update/remove: which " +
+				"deliverable to target.",
+		}),
+	),
 	title: Type.Optional(Type.String({ description: "Deliverable title." })),
 	body: Type.Optional(
 		Type.String({ description: "What ships when this merges." }),
@@ -364,6 +371,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 						if (!params.title) return error("add requires title");
 						if (!params.workerMode) return error("add requires workerMode");
 						const input: AddDeliverableInput = {
+							...(params.id ? { id: params.id } : {}),
 							title: params.title,
 							body: params.body,
 							dependsOn: params.dependsOn,

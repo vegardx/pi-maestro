@@ -27,6 +27,8 @@ import {
 import type { PlanStore } from "./storage.js";
 
 export interface AddDeliverableInput {
+	/** Preferred id. Slugified + de-duped; falls back to the title if absent. */
+	id?: string;
 	title: string;
 	body?: string;
 	dependsOn?: string[];
@@ -167,7 +169,9 @@ export class PlanEngine {
 
 	addDeliverable(input: AddDeliverableInput): Deliverable {
 		const ts = this.now();
-		const id = this.uniqueDeliverableId(input.title);
+		// Honor a caller-provided id (slugified + de-duped) so a plan tool that
+		// passes `id` gets the id it expects; otherwise derive it from the title.
+		const id = this.uniqueDeliverableId(input.id?.trim() || input.title);
 		const deliverable: Deliverable = {
 			type: "deliverable",
 			id,

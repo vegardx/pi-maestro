@@ -1,10 +1,10 @@
-// Forward-looking summary generation for completed groups.
-// Shapes what a completed group's output looks like to downstream consumers.
+// Forward-looking summary generation for completed deliverables.
+// Shapes what a completed deliverable's output looks like to downstream consumers.
 
 /**
  * Input for building a forward-looking summary prompt.
- * Used when a group completes and needs to produce a summary
- * for downstream groups that depend on it.
+ * Used when a deliverable completes and needs to produce a summary
+ * for downstream deliverables that depend on it.
  */
 export interface ForwardSummaryInput {
 	completed: {
@@ -31,9 +31,9 @@ export function buildForwardSummaryPrompt(input: ForwardSummaryInput): string {
 		)
 		.join("\n");
 
-	return `You are summarizing the output of a completed group for downstream consumers.
+	return `You are summarizing the output of a completed deliverable for downstream consumers.
 
-## Completed group
+## Completed deliverable
 Title: ${input.completed.title}
 Description: ${input.completed.body}
 
@@ -44,7 +44,7 @@ ${input.agentOutput || "(no output captured)"}
 ${consumerLines}
 
 ## Instructions
-Write a concise summary (max 200 words) of what this group produced.
+Write a concise summary (max 200 words) of what this deliverable produced.
 Preserve ONLY what downstream consumers need to do their work.
 Focus on: public API, behavior, signatures, edge cases, decisions made.
 Omit: implementation internals, refactoring history, test iteration, tool output.
@@ -56,8 +56,8 @@ Format: factual, terse. No filler words.`;
  * This shapes what the compaction preserves vs drops.
  */
 export function buildPlanAwareCompactionMarker(opts: {
-	groupId: string;
-	groupTitle: string;
+	deliverableId: string;
+	deliverableTitle: string;
 	remainingTasks: Array<{ title: string; body?: string }>;
 	completedTasks: Array<{ title: string }>;
 	depSummaryIds: string[];
@@ -73,7 +73,7 @@ export function buildPlanAwareCompactionMarker(opts: {
 			? opts.depSummaryIds.map((id) => `- ${id}: available in plan`).join("\n")
 			: "(none)";
 
-	return `Compacting agent session for group: ${opts.groupId} — ${opts.groupTitle}
+	return `Compacting agent session for deliverable: ${opts.deliverableId} — ${opts.deliverableTitle}
 
 Remaining tasks (MUST preserve context for):
 ${remaining || "(all done)"}

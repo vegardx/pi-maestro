@@ -117,10 +117,10 @@ describe("knowledge tool", () => {
 
 	it("refuses once execution has started (frozen)", async () => {
 		const engine = makeEngine();
-		engine.addGroup({ title: "g1", body: "", workerMode: "full" });
-		const groupId = engine.get().groups[0].id;
-		engine.addWorkItem(groupId, { title: "do the thing", kind: "task" });
-		engine.setGroupStatus(groupId, "active");
+		engine.addDeliverable({ title: "g1", body: "", workerMode: "full" });
+		const deliverableId = engine.get().deliverables[0].id;
+		engine.addWorkItem(deliverableId, { title: "do the thing", kind: "task" });
+		engine.setDeliverableStatus(deliverableId, "active");
 		const tool = createKnowledgeTool({ engine: () => engine });
 
 		const result = await run(tool, { content: VALID_DOC });

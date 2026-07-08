@@ -6,7 +6,7 @@ import {
 } from "../packages/modes/src/forward-summary.js";
 
 describe("buildForwardSummaryPrompt", () => {
-	it("includes completed group info", () => {
+	it("includes completed deliverable info", () => {
 		const input: ForwardSummaryInput = {
 			completed: { title: "Auth System", body: "Implement OAuth2 login" },
 			agentOutput: "Implemented refresh tokens",
@@ -58,8 +58,8 @@ describe("buildForwardSummaryPrompt", () => {
 describe("buildPlanAwareCompactionMarker", () => {
 	it("includes remaining tasks", () => {
 		const marker = buildPlanAwareCompactionMarker({
-			groupId: "auth",
-			groupTitle: "Auth System",
+			deliverableId: "auth",
+			deliverableTitle: "Auth System",
 			remainingTasks: [
 				{ title: "Add refresh", body: "In src/auth/refresh.ts" },
 				{ title: "Add revoke" },
@@ -76,8 +76,8 @@ describe("buildPlanAwareCompactionMarker", () => {
 
 	it("handles no remaining tasks", () => {
 		const marker = buildPlanAwareCompactionMarker({
-			groupId: "done",
-			groupTitle: "Done",
+			deliverableId: "done",
+			deliverableTitle: "Done",
 			remainingTasks: [],
 			completedTasks: [{ title: "Everything" }],
 			depSummaryIds: [],

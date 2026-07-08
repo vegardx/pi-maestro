@@ -3,7 +3,7 @@
 // see deterministic strings. Live callers pass theme-derived ANSI styles.
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { GroupStatus, RunStatus } from "@vegardx/pi-contracts";
+import type { DeliverableStatus, RunStatus } from "@vegardx/pi-contracts";
 
 export type Style = (s: string) => string;
 
@@ -45,7 +45,7 @@ const RUN_GLYPHS: Record<RunStatus, string> = {
 	canceled: "⊘",
 };
 
-const GROUP_GLYPHS: Record<GroupStatus, string> = {
+const DELIVERABLE_GLYPHS: Record<DeliverableStatus, string> = {
 	planned: "○",
 	active: "◐",
 	complete: "◎",
@@ -58,8 +58,8 @@ export function runStatusGlyph(status: RunStatus): string {
 	return RUN_GLYPHS[status] ?? "?";
 }
 
-export function groupStatusGlyph(status: GroupStatus): string {
-	return GROUP_GLYPHS[status] ?? "?";
+export function deliverableStatusGlyph(status: DeliverableStatus): string {
+	return DELIVERABLE_GLYPHS[status] ?? "?";
 }
 
 /** Style slot appropriate to a run status (for colored live rendering). */
@@ -78,7 +78,10 @@ export function runStatusStyle(palette: Palette, status: RunStatus): Style {
 	}
 }
 
-export function groupStatusStyle(palette: Palette, status: GroupStatus): Style {
+export function deliverableStatusStyle(
+	palette: Palette,
+	status: DeliverableStatus,
+): Style {
 	switch (status) {
 		case "shipped":
 			return palette.success;

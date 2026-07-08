@@ -2,11 +2,11 @@
 // package; contracts exposes only the cross-cutting enums and lightweight
 // summaries that other modules (commit, subagents) reference.
 
-import type { GroupId, WorkItemId } from "./ids.js";
+import type { DeliverableId, WorkItemId } from "./ids.js";
 
-// ─── Group statuses ──────────────────────────────────────────────────────────
+// ─── Deliverable statuses ──────────────────────────────────────────────────────────
 
-export const GROUP_STATUSES = [
+export const DELIVERABLE_STATUSES = [
 	"planned",
 	"active",
 	"complete",
@@ -15,7 +15,7 @@ export const GROUP_STATUSES = [
 	"abandoned",
 ] as const;
 
-export type GroupStatus = (typeof GROUP_STATUSES)[number];
+export type DeliverableStatus = (typeof DELIVERABLE_STATUSES)[number];
 
 // ─── Work item kinds ─────────────────────────────────────────────────────────
 
@@ -38,11 +38,11 @@ export type ModelSlot = "default" | "alternate";
 
 // ─── Minimal cross-boundary summaries ────────────────────────────────────────
 
-/** Minimal group view passed across capability boundaries. */
-export interface GroupSummary {
-	readonly id: GroupId;
+/** Minimal deliverable view passed across capability boundaries. */
+export interface DeliverableSummary {
+	readonly id: DeliverableId;
 	readonly title: string;
-	readonly status: GroupStatus;
+	readonly status: DeliverableStatus;
 }
 
 /** Minimal work-item view passed across capability boundaries. */

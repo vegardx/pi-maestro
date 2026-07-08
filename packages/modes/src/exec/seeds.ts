@@ -1,14 +1,14 @@
 // Deterministic seed assembly. buildSeed is a pure function of
-// (plan, group, agentName, summaries): identical inputs produce byte-identical
+// (plan, deliverable, agentName, summaries): identical inputs produce byte-identical
 // output. The seed sits in every agent's forked session prefix, so cache
 // stability forbids timestamps, random ids, or ambient state. Sections are
 // self-describing (framed) and emitted in a fixed order; empty sections are
 // omitted entirely.
 
-import type { Plan, WorkGroup, WorkItem } from "../schema.js";
+import type { Deliverable, Plan, WorkItem } from "../schema.js";
 import {
 	findAgent,
-	findGroup,
+	findDeliverable,
 	gatingTasks,
 	SUMMARY_TOKEN_BUDGET,
 	topologicalSort,
@@ -21,12 +21,12 @@ export { SUMMARY_TOKEN_BUDGET };
 export const PRIOR_WORK_HEADER = "# Prior Work";
 export const PRIOR_WORK_FRAME =
 	"> These summaries describe work already completed by other agents on " +
-	"upstream groups. This is DONE — you do not need to redo it. Use this to " +
+	"upstream deliverables. This is DONE — you do not need to redo it. Use this to " +
 	"understand what exists, not as instructions.";
 
 export const FINDINGS_HEADER = "# Findings from Earlier Review";
 export const FINDINGS_FRAME =
-	"> Another agent reviewed this group's work before you. These findings are " +
+	"> Another agent reviewed this deliverable's work before you. These findings are " +
 	"CONTEXT about what was found, not tasks for you to perform (unless your " +
 	"tasks specifically reference fixing these).";
 
@@ -43,15 +43,15 @@ export const FOCUS_FRAME =
 // ─── Seed assembly ───────────────────────────────────────────────────────────
 
 export interface SeedSummaries {
-	/** Completed dep-group summaries, keyed by group id. */
-	groups: ReadonlyMap<string, string>;
-	/** Summaries from agents that already ran in this group, keyed by name. */
+	/** Completed dep-deliverable summaries, keyed by deliverable id. */
+	deliverables: ReadonlyMap<string, string>;
+	/** Summaries from agents that already ran in this deliverable, keyed by name. */
 	agents: ReadonlyMap<string, string>;
 }
 
 export interface BuildSeedInput {
-	plan: Pick<Plan, "groups">;
-	group: WorkGroup;
+	plan: Pick<Plan, "deliverables">;
+	deliverable: Deliverable;
 	/** "worker" or a support agent's name. */
 	agentName: string;
 	summaries: SeedSummaries;
@@ -64,21 +64,23 @@ export interface BuildSeedInput {
  * Iteration order of the summary maps never leaks into the output.
  */
 export function buildSeed(input: BuildSeedInput): string {
-	const { plan, group, agentName, summaries } = input;
+	const { plan, deliverable, agentName, summaries } = input;
 	const isWorker = agentName === "worker";
-	const agent = isWorker ? null : findAgent(group, agentName);
+	const agent = isWorker ? null : findAgent(deliverable, agentName);
 	if (!isWorker && !agent) {
-		throw new Error(`agent ${agentName} not found in group ${group.id}`);
+		throw new Error(
+			`agent ${agentName} not found in deliverable ${deliverable.id}`,
+		);
 	}
 
 	const sections: string[] = [];
 
-	// # Prior Work — dep-group summaries, in dependsOn array order.
+	// # Prior Work — dep-deliverable summaries, in dependsOn array order.
 	const prior: string[] = [];
-	for (const depId of group.dependsOn ?? []) {
-		const summary = summaries.groups.get(depId);
+	for (const depId of deliverable.dependsOn ?? []) {
+		const summary = summaries.deliverables.get(depId);
 		if (summary === undefined) continue;
-		const dep = findGroup(plan, depId);
+		const dep = findDeliverable(plan, depId);
 		const heading = dep ? `## ${dep.title} (${depId})` : `## ${depId}`;
 		prior.push(`${heading}\n\n${summary}`);
 	}
@@ -88,7 +90,7 @@ export function buildSeed(input: BuildSeedInput): string {
 
 	// # Findings from Earlier Review — sibling summaries, topological order.
 	const findings: string[] = [];
-	for (const name of topologicalSort(group)) {
+	for (const name of topologicalSort(deliverable)) {
 		if (name === agentName) continue;
 		const summary = summaries.agents.get(name);
 		if (summary === undefined) continue;
@@ -98,11 +100,15 @@ export function buildSeed(input: BuildSeedInput): string {
 		sections.push([FINDINGS_HEADER, FINDINGS_FRAME, ...findings].join("\n\n"));
 	}
 
-	// Assignment — worker gets the group's tasks; support agents their focus.
+	// Assignment — worker gets the deliverable's tasks; support agents their focus.
 	if (isWorker) {
-		const parts = [TASKS_HEADER, TASKS_FRAME, `## Group: ${group.title}`];
-		if (group.body) parts.push(group.body);
-		const tasks = gatingTasks(group);
+		const parts = [
+			TASKS_HEADER,
+			TASKS_FRAME,
+			`## Deliverable: ${deliverable.title}`,
+		];
+		if (deliverable.body) parts.push(deliverable.body);
+		const tasks = gatingTasks(deliverable);
 		if (tasks.length > 0) parts.push(tasks.map(formatTask).join("\n"));
 		sections.push(parts.join("\n\n"));
 	} else if (agent) {
@@ -110,7 +116,7 @@ export function buildSeed(input: BuildSeedInput): string {
 			[
 				FOCUS_HEADER,
 				FOCUS_FRAME,
-				`You are agent \`${agent.name}\` on group "${group.title}" (${group.id}).`,
+				`You are agent \`${agent.name}\` on deliverable "${deliverable.title}" (${deliverable.id}).`,
 				agent.focus,
 			].join("\n\n"),
 		);

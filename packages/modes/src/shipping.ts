@@ -1,36 +1,39 @@
-// Shipping for the group model. The maestro owns shipping — agents never
+// Shipping for the deliverable model. The maestro owns shipping — agents never
 // push or create PRs. This module provides the concrete implementation of
-// the `shipGroup` dependency that the GroupExecutor calls.
+// the `shipDeliverable` dependency that the DeliverableExecutor calls.
 
-import type { WorkGroup } from "./schema.js";
+import type { Deliverable } from "./schema.js";
 import { gatingTasks } from "./schema.js";
 
-export interface ShipGroupInput {
-	group: WorkGroup;
+export interface ShipDeliverableInput {
+	deliverable: Deliverable;
 	branch: string;
 	worktreePath: string;
 	/** Agent summaries assembled into PR body sections. */
 	agentReports: string[];
 }
 
-export interface ShipGroupResult {
+export interface ShipDeliverableResult {
 	prUrl: string;
 	prNumber: number;
 }
 
 /**
- * Build the PR body for a shipped group.
+ * Build the PR body for a shipped deliverable.
  */
-export function buildPrBody(group: WorkGroup, agentReports: string[]): string {
+export function buildPrBody(
+	deliverable: Deliverable,
+	agentReports: string[],
+): string {
 	const sections: string[] = [];
 
-	// Group description
-	if (group.body) {
-		sections.push(group.body);
+	// Deliverable description
+	if (deliverable.body) {
+		sections.push(deliverable.body);
 	}
 
 	// Task checklist
-	const tasks = gatingTasks(group);
+	const tasks = gatingTasks(deliverable);
 	if (tasks.length > 0) {
 		const list = tasks.map((t) => `- [x] ${t.title}`).join("\n");
 		sections.push(`## Tasks\n\n${list}`);
@@ -45,12 +48,12 @@ export function buildPrBody(group: WorkGroup, agentReports: string[]): string {
 }
 
 /**
- * Determine if a group needs shipping (complete + terminal).
- * Used by the executor — external callers use shippableGroups() from schema.
+ * Determine if a deliverable needs shipping (complete + terminal).
+ * Used by the executor — external callers use shippableDeliverables() from schema.
  */
 export function shouldShip(
-	group: WorkGroup,
+	deliverable: Deliverable,
 	hasDownstreamDeps: boolean,
 ): boolean {
-	return group.status === "complete" && !hasDownstreamDeps;
+	return deliverable.status === "complete" && !hasDownstreamDeps;
 }

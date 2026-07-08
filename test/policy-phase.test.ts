@@ -1,5 +1,5 @@
 // The readiness gate at the tool-policy layer: exploring blocks the
-// structure tools (group/task/agent/knowledge) while keeping the research
+// structure tools (deliverable/task/agent/knowledge) while keeping the research
 // loop available; structuring restores the full plan tool set.
 
 import { describe, expect, it } from "vitest";
@@ -19,7 +19,7 @@ const ALL_TOOLS = [
 	"ask",
 	"websearch",
 	"webfetch",
-	"group",
+	"deliverable",
 	"task",
 	"agent",
 	"plan",
@@ -35,7 +35,7 @@ describe("phase-gated tool policy", () => {
 			availableTools: ALL_TOOLS,
 			phase: "exploring",
 		});
-		for (const locked of ["group", "task", "agent", "knowledge"]) {
+		for (const locked of ["deliverable", "task", "agent", "knowledge"]) {
 			expect(active).not.toContain(locked);
 		}
 		for (const open of ["research", "readiness", "ask", "plan", "read"]) {
@@ -49,7 +49,13 @@ describe("phase-gated tool policy", () => {
 			availableTools: ALL_TOOLS,
 			phase: "structuring",
 		});
-		for (const tool of ["group", "task", "agent", "knowledge", "research"]) {
+		for (const tool of [
+			"deliverable",
+			"task",
+			"agent",
+			"knowledge",
+			"research",
+		]) {
 			expect(active).toContain(tool);
 		}
 	});
@@ -59,7 +65,7 @@ describe("phase-gated tool policy", () => {
 			mode: "plan",
 			availableTools: ALL_TOOLS,
 		});
-		expect(active).toContain("group");
+		expect(active).toContain("deliverable");
 	});
 
 	it("auto mode ignores the phase gate", () => {
@@ -68,18 +74,20 @@ describe("phase-gated tool policy", () => {
 			availableTools: ALL_TOOLS,
 			phase: "exploring",
 		});
-		expect(active).toContain("group");
+		expect(active).toContain("deliverable");
 		expect(active).toContain("task");
 	});
 
 	it("toolBlockedInPlanMode explains the readiness gate while exploring", () => {
-		expect(toolBlockedInPlanMode("group", "exploring")).toMatch(/readiness/);
+		expect(toolBlockedInPlanMode("deliverable", "exploring")).toMatch(
+			/readiness/,
+		);
 		expect(toolBlockedInPlanMode("knowledge", "exploring")).toMatch(
 			/exploring/,
 		);
 		expect(toolBlockedInPlanMode("research", "exploring")).toBeNull();
 		expect(toolBlockedInPlanMode("readiness", "exploring")).toBeNull();
-		expect(toolBlockedInPlanMode("group", "structuring")).toBeNull();
+		expect(toolBlockedInPlanMode("deliverable", "structuring")).toBeNull();
 		// Non-plan tools stay blocked in either phase.
 		expect(toolBlockedInPlanMode("edit", "structuring")).toMatch(/disabled/);
 	});

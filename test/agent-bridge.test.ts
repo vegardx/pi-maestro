@@ -144,8 +144,8 @@ describe("AgentBridge", () => {
 		server.send("agent-1", {
 			type: "summarize",
 			id: "sum-1",
-			consumer: "the api group worker",
-			preamble: "worker — auth group",
+			consumer: "the api deliverable worker",
+			preamble: "worker — auth deliverable",
 			budget: 5000,
 		});
 		await wait(50);
@@ -153,7 +153,7 @@ describe("AgentBridge", () => {
 		// The summarization prompt was injected as a followUp
 		expect(mockPi.sendUserMessage).toHaveBeenCalledTimes(1);
 		const [prompt, opts] = mockPi.sendUserMessage.mock.calls[0];
-		expect(prompt).toContain("the api group worker");
+		expect(prompt).toContain("the api deliverable worker");
 		expect(opts).toEqual({ deliverAs: "followUp" });
 
 		// A steer arriving mid-summarize is queued, not injected
@@ -201,7 +201,7 @@ describe("AgentBridge", () => {
 			type: "summarize",
 			id: "sum-2",
 			consumer: "the maestro",
-			preamble: "worker — api group",
+			preamble: "worker — api deliverable",
 			budget: 5000,
 		});
 		await wait(50);

@@ -19,7 +19,7 @@ import {
 } from "../packages/modes/src/exec/execution-adapter.js";
 import type {
 	ExecutionAgentSnapshot,
-	ExecutionGroupSnapshot,
+	ExecutionDeliverableSnapshot,
 	ExecutionHandle,
 } from "../packages/modes/src/exec/index.js";
 import {
@@ -156,7 +156,7 @@ const KNOWLEDGE_DOC = [
 	"Tabs, biome, sparse comments.",
 	"",
 	"## Key Interfaces",
-	"Plan/WorkGroup/AgentSpec in schema.ts; GroupExecutor drives execution.",
+	"Plan/Deliverable/AgentSpec in schema.ts; DeliverableExecutor drives execution.",
 ].join("\n");
 
 describe("knowledge-fork prefix identity", () => {
@@ -440,13 +440,16 @@ describe("first-turn cache ratio surfacing", () => {
 			title: "Cache Plan",
 			repoPath: tmpDir,
 		});
-		// Two full-class workers in separate groups: same tool class, so the
+		// Two full-class workers in separate deliverables: same tool class, so the
 		// second one's first turn is expected to hit the first one's warm cache.
-		for (const title of ["Group One", "Group Two"]) {
-			const group = engine.addGroup({ title, workerMode: "full" });
-			engine.addWorkItem(group.id, { title: "do the thing", kind: "task" });
-			engine.setGroupStatus(group.id, "active");
-			engine.updateGroup(group.id, { worktreePath: tmpDir });
+		for (const title of ["Deliverable One", "Deliverable Two"]) {
+			const deliverable = engine.addDeliverable({ title, workerMode: "full" });
+			engine.addWorkItem(deliverable.id, {
+				title: "do the thing",
+				kind: "task",
+			});
+			engine.setDeliverableStatus(deliverable.id, "active");
+			engine.updateDeliverable(deliverable.id, { worktreePath: tmpDir });
 		}
 
 		adapter = new ExecutionAdapter({
@@ -464,8 +467,8 @@ describe("first-turn cache ratio surfacing", () => {
 			},
 		});
 		await adapter.start();
-		adapter.getExecutor().unblockGroup("group-one");
-		adapter.getExecutor().unblockGroup("group-two");
+		adapter.getExecutor().unblockDeliverable("deliverable-one");
+		adapter.getExecutor().unblockDeliverable("deliverable-two");
 		await adapter.tick();
 	});
 
@@ -524,7 +527,7 @@ describe("first-turn cache ratio surfacing", () => {
 	}
 
 	it("sets cacheRatio from the FIRST tokens message and never re-computes it", async () => {
-		const { client, ready } = connect("group-one/worker");
+		const { client, ready } = connect("deliverable-one/worker");
 		await ready;
 
 		client.send({
@@ -533,7 +536,8 @@ describe("first-turn cache ratio surfacing", () => {
 		});
 		await until(
 			() =>
-				adapter.snapshot().agents.get("group-one/worker")?.cacheRatio === 0.8,
+				adapter.snapshot().agents.get("deliverable-one/worker")?.cacheRatio ===
+				0.8,
 		);
 
 		// A later, colder tokens message must not move the first-turn ratio.
@@ -543,40 +547,40 @@ describe("first-turn cache ratio surfacing", () => {
 		});
 		await until(
 			() =>
-				adapter.snapshot().agents.get("group-one/worker")?.tokens.input ===
-				9000,
+				adapter.snapshot().agents.get("deliverable-one/worker")?.tokens
+					.input === 9000,
 		);
-		expect(adapter.snapshot().agents.get("group-one/worker")?.cacheRatio).toBe(
-			0.8,
-		);
+		expect(
+			adapter.snapshot().agents.get("deliverable-one/worker")?.cacheRatio,
+		).toBe(0.8);
 	});
 
 	it("guards division by zero: no ratio, no event, no crash", async () => {
-		const { client, ready } = connect("group-one/worker");
+		const { client, ready } = connect("deliverable-one/worker");
 		await ready;
 
-		const reported = nextReport("group-one/worker");
+		const reported = nextReport("deliverable-one/worker");
 		client.send({
 			type: "tokens",
 			snapshot: snapshotOf({ input: 0, cacheRead: 0 }),
 		});
 		await reported();
 
-		const worker = adapter.snapshot().agents.get("group-one/worker");
+		const worker = adapter.snapshot().agents.get("deliverable-one/worker");
 		expect(worker).toBeDefined();
 		expect(worker?.cacheRatio).toBeUndefined();
 		expect(cacheMissEvents()).toHaveLength(0);
 	});
 
 	it("logs cache-miss when a cold first turn follows a same-class agent", async () => {
-		const one = connect("group-one/worker");
-		const two = connect("group-two/worker");
+		const one = connect("deliverable-one/worker");
+		const two = connect("deliverable-two/worker");
 		await one.ready;
 		await two.ready;
 
 		// First agent of the class: cold ratio, but no warm prefix was expected
 		// yet — must NOT produce an event.
-		const oneReported = nextReport("group-one/worker");
+		const oneReported = nextReport("deliverable-one/worker");
 		one.client.send({
 			type: "tokens",
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
@@ -594,23 +598,25 @@ describe("first-turn cache ratio surfacing", () => {
 		const event = cacheMissEvents()[0];
 		expect(event).toMatchObject({
 			event: "cache-miss",
-			agentKey: "group-two/worker",
+			agentKey: "deliverable-two/worker",
 			class: "full",
 			input: 1000,
 			cacheRead: 100,
 		});
 		expect(event.ratio).toBeCloseTo(100 / 1100);
-		expect(String(event.expectedWarmBecause)).toContain("group-one/worker");
+		expect(String(event.expectedWarmBecause)).toContain(
+			"deliverable-one/worker",
+		);
 		expect(typeof event.ts).toBe("string");
 	});
 
 	it("does not log cache-miss for a warm first turn", async () => {
-		const one = connect("group-one/worker");
-		const two = connect("group-two/worker");
+		const one = connect("deliverable-one/worker");
+		const two = connect("deliverable-two/worker");
 		await one.ready;
 		await two.ready;
 
-		const oneReported = nextReport("group-one/worker");
+		const oneReported = nextReport("deliverable-one/worker");
 		one.client.send({
 			type: "tokens",
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
@@ -623,26 +629,27 @@ describe("first-turn cache ratio surfacing", () => {
 		});
 		await until(
 			() =>
-				adapter.snapshot().agents.get("group-two/worker")?.cacheRatio === 0.95,
+				adapter.snapshot().agents.get("deliverable-two/worker")?.cacheRatio ===
+				0.95,
 		);
 		expect(cacheMissEvents()).toHaveLength(0);
 	});
 
 	it("does not treat an agent of the OTHER tool class as a warm peer", async () => {
-		const worker = connect("group-one/worker");
+		const worker = connect("deliverable-one/worker");
 		// Not in the plan's agent specs → derives to the read-only class.
-		const reviewer = connect("group-one/reviewer-x");
+		const reviewer = connect("deliverable-one/reviewer-x");
 		await worker.ready;
 		await reviewer.ready;
 
-		const workerReported = nextReport("group-one/worker");
+		const workerReported = nextReport("deliverable-one/worker");
 		worker.client.send({
 			type: "tokens",
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
 		});
 		await workerReported();
 
-		const reviewerReported = nextReport("group-one/reviewer-x");
+		const reviewerReported = nextReport("deliverable-one/reviewer-x");
 		reviewer.client.send({
 			type: "tokens",
 			snapshot: snapshotOf({ input: 1000, cacheRead: 0 }),
@@ -665,7 +672,7 @@ describe("renderAgentsOverview cache suffix", () => {
 			steer: () => true,
 			snapshot: () => ({
 				agents,
-				groups: new Map<string, ExecutionGroupSnapshot>(),
+				deliverables: new Map<string, ExecutionDeliverableSnapshot>(),
 			}),
 			resolveSessionName: () => undefined,
 			getExecutor: () => {
@@ -678,18 +685,18 @@ describe("renderAgentsOverview cache suffix", () => {
 		};
 	}
 
-	function planWithGroup(): PlanEngine {
+	function planWithDeliverable(): PlanEngine {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "t",
 			title: "T",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		return engine;
 	}
 
 	it("appends cache NN% when the ratio is known", () => {
-		const engine = planWithGroup();
+		const engine = planWithDeliverable();
 		const handle = makeHandle(
 			new Map([
 				[
@@ -710,7 +717,7 @@ describe("renderAgentsOverview cache suffix", () => {
 	});
 
 	it("omits the cache suffix when the ratio is unknown", () => {
-		const engine = planWithGroup();
+		const engine = planWithDeliverable();
 		const handle = makeHandle(
 			new Map([
 				[

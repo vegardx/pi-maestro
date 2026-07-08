@@ -7,10 +7,10 @@ const CONVENTIONAL =
 	/^(feat|fix|refactor|docs|chore|test|style|perf|ci|build)(\([^)]+\))?!?: .+/;
 
 export function buildCommitMessagePrompt(
-	groupId: string | undefined,
+	deliverableId: string | undefined,
 	paths: readonly string[],
 ): string {
-	const scope = groupId ? ` for group "${groupId}"` : "";
+	const scope = deliverableId ? ` for deliverable "${deliverableId}"` : "";
 	const fileList =
 		paths.length > 0
 			? `\n\nStaged paths:\n${paths.map((p) => `- ${p}`).join("\n")}`

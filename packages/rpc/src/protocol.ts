@@ -63,7 +63,7 @@ export interface PlanMutateMessage {
 	readonly type: "planMutate";
 	readonly id: string;
 	readonly action: "toggleTask" | "addTask" | "updateTask";
-	readonly groupId: string;
+	readonly deliverableId: string;
 	readonly params: {
 		readonly taskId?: string;
 		readonly title?: string;

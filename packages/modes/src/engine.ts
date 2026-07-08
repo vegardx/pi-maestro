@@ -8,10 +8,11 @@ import {
 	type AgentSpec,
 	canTransition,
 	DEFAULT_REPO_KEY,
-	defaultBranchForGroup,
-	findGroup,
+	type Deliverable,
+	type DeliverableStatus,
+	defaultBranchForDeliverable,
+	findDeliverable,
 	findTask,
-	type GroupStatus,
 	type ModelSlot,
 	type Plan,
 	type PlanPhase,
@@ -19,13 +20,12 @@ import {
 	slugify,
 	type ThinkingLevel,
 	validatePlanShape,
-	type WorkGroup,
 	type WorkItem,
 	type WorkItemKind,
 } from "./schema.js";
 import type { PlanStore } from "./storage.js";
 
-export interface AddGroupInput {
+export interface AddDeliverableInput {
 	title: string;
 	body?: string;
 	dependsOn?: string[];
@@ -74,7 +74,7 @@ export class PlanEngine {
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
-			groups: [],
+			deliverables: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -93,7 +93,7 @@ export class PlanEngine {
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
-			groups: [],
+			deliverables: [],
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -162,13 +162,13 @@ export class PlanEngine {
 		});
 	}
 
-	// ── Groups ─────────────────────────────────────────────────────────────
+	// ── Deliverables ─────────────────────────────────────────────────────────────
 
-	addGroup(input: AddGroupInput): WorkGroup {
+	addDeliverable(input: AddDeliverableInput): Deliverable {
 		const ts = this.now();
-		const id = this.uniqueGroupId(input.title);
-		const group: WorkGroup = {
-			type: "group",
+		const id = this.uniqueDeliverableId(input.title);
+		const deliverable: Deliverable = {
+			type: "deliverable",
 			id,
 			title: input.title,
 			body: input.body ?? "",
@@ -183,21 +183,21 @@ export class PlanEngine {
 			},
 			agents: [],
 			tasks: [],
-			branch: defaultBranchForGroup({ id }),
+			branch: defaultBranchForDeliverable({ id }),
 			createdAt: ts,
 			updatedAt: ts,
 		};
 		this.mutate((plan) => {
-			plan.groups.push(group);
+			plan.deliverables.push(deliverable);
 		});
-		return findGroup(this.plan, id) as WorkGroup;
+		return findDeliverable(this.plan, id) as Deliverable;
 	}
 
-	updateGroup(
+	updateDeliverable(
 		id: string,
 		patch: Partial<
 			Pick<
-				WorkGroup,
+				Deliverable,
 				| "title"
 				| "body"
 				| "dependsOn"
@@ -218,16 +218,16 @@ export class PlanEngine {
 		},
 	): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, id);
-			if (!g) throw new Error(`unknown group: ${id}`);
+			const g = findDeliverable(plan, id);
+			if (!g) throw new Error(`unknown deliverable: ${id}`);
 			const {
 				workerMode,
 				workerSlot,
 				workerEffort,
 				workerAfter,
-				...groupPatch
+				...deliverablePatch
 			} = patch;
-			Object.assign(g, groupPatch);
+			Object.assign(g, deliverablePatch);
 			if (workerMode !== undefined) g.worker.mode = workerMode;
 			if (workerSlot !== undefined) g.worker.slot = workerSlot;
 			if (workerEffort !== undefined) g.worker.effort = workerEffort;
@@ -236,10 +236,10 @@ export class PlanEngine {
 		});
 	}
 
-	setGroupStatus(id: string, status: GroupStatus): void {
+	setDeliverableStatus(id: string, status: DeliverableStatus): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, id);
-			if (!g) throw new Error(`unknown group: ${id}`);
+			const g = findDeliverable(plan, id);
+			if (!g) throw new Error(`unknown deliverable: ${id}`);
 			if (g.status !== status && !canTransition(g.status, status)) {
 				throw new Error(`illegal status transition: ${g.status} → ${status}`);
 			}
@@ -248,17 +248,17 @@ export class PlanEngine {
 		});
 	}
 
-	removeGroup(id: string): void {
+	removeDeliverable(id: string): void {
 		this.mutate((plan) => {
-			const idx = plan.groups.findIndex((g) => g.id === id);
-			if (idx < 0) throw new Error(`unknown group: ${id}`);
-			plan.groups.splice(idx, 1);
+			const idx = plan.deliverables.findIndex((g) => g.id === id);
+			if (idx < 0) throw new Error(`unknown deliverable: ${id}`);
+			plan.deliverables.splice(idx, 1);
 		});
 	}
 
 	// ── Agents ─────────────────────────────────────────────────────────────
 
-	addAgent(groupId: string, input: AddAgentInput): AgentSpec {
+	addAgent(deliverableId: string, input: AddAgentInput): AgentSpec {
 		const agent: AgentSpec = {
 			name: input.name,
 			mode: input.mode,
@@ -268,25 +268,25 @@ export class PlanEngine {
 			after: input.after,
 		};
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			g.agents.push(agent);
 			g.updatedAt = this.now();
 		});
-		const g = findGroup(this.plan, groupId) as WorkGroup;
+		const g = findDeliverable(this.plan, deliverableId) as Deliverable;
 		return g.agents.find((a) => a.name === input.name) as AgentSpec;
 	}
 
 	updateAgent(
-		groupId: string,
+		deliverableId: string,
 		name: string,
 		patch: Partial<
 			Pick<AgentSpec, "mode" | "slot" | "effort" | "focus" | "after">
 		>,
 	): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const agent = g.agents.find((a) => a.name === name);
 			if (!agent) throw new Error(`unknown agent: ${name}`);
 			Object.assign(agent, patch);
@@ -294,10 +294,10 @@ export class PlanEngine {
 		});
 	}
 
-	removeAgent(groupId: string, name: string): void {
+	removeAgent(deliverableId: string, name: string): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const idx = g.agents.findIndex((a) => a.name === name);
 			if (idx < 0) throw new Error(`unknown agent: ${name}`);
 			g.agents.splice(idx, 1);
@@ -307,9 +307,9 @@ export class PlanEngine {
 
 	// ── Work items ─────────────────────────────────────────────────────────
 
-	addWorkItem(groupId: string, input: AddWorkItemInput): WorkItem {
+	addWorkItem(deliverableId: string, input: AddWorkItemInput): WorkItem {
 		const ts = this.now();
-		const id = this.uniqueTaskId(groupId, input.title);
+		const id = this.uniqueTaskId(deliverableId, input.title);
 		const item: WorkItem = {
 			type: "work-item",
 			id,
@@ -321,8 +321,8 @@ export class PlanEngine {
 			updatedAt: ts,
 		};
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			if (input.position !== undefined && input.position < g.tasks.length) {
 				g.tasks.splice(input.position, 0, item);
 			} else {
@@ -330,20 +330,20 @@ export class PlanEngine {
 			}
 			g.updatedAt = this.now();
 		});
-		const g = findGroup(this.plan, groupId) as WorkGroup;
+		const g = findDeliverable(this.plan, deliverableId) as Deliverable;
 		return findTask(g, id) as WorkItem;
 	}
 
 	updateWorkItem(
-		groupId: string,
+		deliverableId: string,
 		taskId: string,
 		patch: Partial<Pick<WorkItem, "title" | "body" | "kind">> & {
 			answer?: string;
 		},
 	): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const item = findTask(g, taskId);
 			if (!item) throw new Error(`unknown task: ${taskId}`);
 			const { answer, ...rest } = patch;
@@ -358,11 +358,11 @@ export class PlanEngine {
 		});
 	}
 
-	toggleWorkItem(groupId: string, taskId: string): boolean {
+	toggleWorkItem(deliverableId: string, taskId: string): boolean {
 		let done = false;
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const item = findTask(g, taskId);
 			if (!item) throw new Error(`unknown task: ${taskId}`);
 			item.done = !item.done;
@@ -373,10 +373,10 @@ export class PlanEngine {
 		return done;
 	}
 
-	removeWorkItem(groupId: string, taskId: string): void {
+	removeWorkItem(deliverableId: string, taskId: string): void {
 		this.mutate((plan) => {
-			const g = findGroup(plan, groupId);
-			if (!g) throw new Error(`unknown group: ${groupId}`);
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const idx = g.tasks.findIndex((t) => t.id === taskId);
 			if (idx < 0) throw new Error(`unknown task: ${taskId}`);
 			g.tasks.splice(idx, 1);
@@ -398,9 +398,9 @@ export class PlanEngine {
 		this.plan = next;
 	}
 
-	private uniqueGroupId(base: string): string {
-		const root = slugify(base) || "group";
-		const taken = new Set(this.plan.groups.map((g) => g.id));
+	private uniqueDeliverableId(base: string): string {
+		const root = slugify(base) || "deliverable";
+		const taken = new Set(this.plan.deliverables.map((g) => g.id));
 		if (!taken.has(root)) return root;
 		for (let n = 2; ; n++) {
 			const candidate = `${root}-${n}`;
@@ -408,9 +408,9 @@ export class PlanEngine {
 		}
 	}
 
-	private uniqueTaskId(groupId: string, base: string): string {
+	private uniqueTaskId(deliverableId: string, base: string): string {
 		const root = slugify(base) || "task";
-		const g = findGroup(this.plan, groupId);
+		const g = findDeliverable(this.plan, deliverableId);
 		const taken = new Set(g?.tasks.map((t) => t.id) ?? []);
 		if (!taken.has(root)) return root;
 		for (let n = 2; ; n++) {

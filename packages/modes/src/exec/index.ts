@@ -3,7 +3,7 @@
 // rpc-router) can be completed behind this interface.
 
 import type { Answers } from "@vegardx/pi-contracts";
-import type { GroupExecutor } from "../group-executor.js";
+import type { DeliverableExecutor } from "../deliverable-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
 	ExecutionAdapter,
@@ -36,7 +36,7 @@ export interface ExecutionAgentSnapshot {
 	readonly cacheRatio?: number;
 }
 
-export interface ExecutionGroupSnapshot {
+export interface ExecutionDeliverableSnapshot {
 	/** Review→fix round counter. 0 = initial implementation. */
 	readonly round: number;
 	/** Set when the fix loop stopped without converging. */
@@ -56,23 +56,23 @@ export interface ExecutionHandle {
 	};
 	/** Start the RPC server and prepare the plan dir. */
 	start(): Promise<void>;
-	/** Advance the executor; returns the number of newly activated groups. */
+	/** Advance the executor; returns the number of newly activated deliverables. */
 	tick(): Promise<number>;
-	/** Send guidance to a group agent (default: the worker). False if absent. */
-	steer(groupId: string, guidance: string, agentName?: string): boolean;
-	/** Current per-agent status/tokens and per-group round/blocked view. */
+	/** Send guidance to a deliverable agent (default: the worker). False if absent. */
+	steer(deliverableId: string, guidance: string, agentName?: string): boolean;
+	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;
-		groups: Map<string, ExecutionGroupSnapshot>;
+		deliverables: Map<string, ExecutionDeliverableSnapshot>;
 	};
-	/** Resolve an agent key, group id, agent or session name to a tmux session. */
+	/** Resolve an agent key, deliverable id, agent or session name to a tmux session. */
 	resolveSessionName(target: string): string | undefined;
 	/** The underlying executor (for recap/state rendering). */
-	getExecutor(): GroupExecutor;
-	/** Mark an agent finished and re-evaluate the group. */
-	markAgentDone(groupId: string, name: string): Promise<void>;
-	/** Whether a group's worker has completed all gating tasks. */
-	isWorkerDone(groupId: string): boolean;
+	getExecutor(): DeliverableExecutor;
+	/** Mark an agent finished and re-evaluate the deliverable. */
+	markAgentDone(deliverableId: string, name: string): Promise<void>;
+	/** Whether a deliverable's worker has completed all gating tasks. */
+	isWorkerDone(deliverableId: string): boolean;
 	/** Tmux session names for worker agents (for /watch panes). */
 	getWorkerSessions(): string[];
 	/** Tear down agents, tmux sessions, and the RPC server. */

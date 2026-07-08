@@ -2,7 +2,7 @@ import type { ModeName } from "@vegardx/pi-contracts";
 import type { PlanPhase } from "./schema.js";
 
 export const PLAN_TOOL_NAMES = [
-	"group",
+	"deliverable",
 	"task",
 	"agent",
 	"plan",
@@ -14,7 +14,7 @@ export const PLAN_TOOL_NAMES = [
  * the maestro must converge (research + readiness) before forming the plan.
  */
 export const STRUCTURE_TOOL_NAMES = [
-	"group",
+	"deliverable",
 	"task",
 	"agent",
 	"knowledge",

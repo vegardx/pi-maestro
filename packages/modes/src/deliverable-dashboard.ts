@@ -1,9 +1,9 @@
-// Dashboard widget for the group-based execution model.
-// Renders a tree of groups → agents with real-time status.
+// Dashboard widget for the deliverable-based execution model.
+// Renders a tree of deliverables → agents with real-time status.
 
+import type { DeliverableExecutor } from "./deliverable-executor.js";
 import type { PlanEngine } from "./engine.js";
-import type { GroupExecutor } from "./group-executor.js";
-import type { WorkGroup } from "./schema.js";
+import type { Deliverable } from "./schema.js";
 
 export interface DashboardLine {
 	indent: number;
@@ -36,7 +36,7 @@ const AGENT_ICONS: Record<string, string> = {
  */
 export function renderDashboard(
 	engine: PlanEngine,
-	executor: GroupExecutor,
+	executor: DeliverableExecutor,
 ): DashboardLine[] {
 	const plan = engine.get();
 	const states = executor.getStates();
@@ -46,12 +46,12 @@ export function renderDashboard(
 		indent: 0,
 		icon: "📋",
 		label: plan.title,
-		meta: `${plan.groups.length} groups`,
+		meta: `${plan.deliverables.length} deliverables`,
 	});
 
-	for (const group of plan.groups) {
-		const state = states.get(group.id);
-		lines.push(renderGroupLine(group));
+	for (const deliverable of plan.deliverables) {
+		const state = states.get(deliverable.id);
+		lines.push(renderDeliverableLine(deliverable));
 
 		if (state) {
 			for (const [name, agentState] of state.agents) {
@@ -63,16 +63,16 @@ export function renderDashboard(
 	return lines;
 }
 
-function renderGroupLine(group: WorkGroup): DashboardLine {
-	const icon = STATUS_ICONS[group.status] ?? "?";
-	const depInfo = group.dependsOn?.length
-		? ` [after: ${group.dependsOn.join(", ")}]`
+function renderDeliverableLine(deliverable: Deliverable): DashboardLine {
+	const icon = STATUS_ICONS[deliverable.status] ?? "?";
+	const depInfo = deliverable.dependsOn?.length
+		? ` [after: ${deliverable.dependsOn.join(", ")}]`
 		: "";
 	return {
 		indent: 1,
 		icon,
-		label: group.title,
-		meta: `${group.status}${depInfo}`,
+		label: deliverable.title,
+		meta: `${deliverable.status}${depInfo}`,
 	};
 }
 
@@ -95,7 +95,7 @@ function renderAgentLine(
  */
 export function renderDashboardText(
 	engine: PlanEngine,
-	executor: GroupExecutor,
+	executor: DeliverableExecutor,
 ): string {
 	const lines = renderDashboard(engine, executor);
 	return lines

@@ -1,37 +1,40 @@
 // Agent lifecycle management. Defines how agents are seeded, how they
 // produce summaries, and how stacked branches work.
 
-import type { AgentSpec, WorkGroup, WorkItem } from "./schema.js";
+import type { AgentSpec, Deliverable, WorkItem } from "./schema.js";
 import { gatingTasks } from "./schema.js";
 
 // ─── Seed construction ───────────────────────────────────────────────────────
 
 export interface SeedContext {
-	/** Summaries from completed upstream groups (dependency chain). */
+	/** Summaries from completed upstream deliverables (dependency chain). */
 	depSummaries: string[];
-	/** Summaries from sibling agents that completed earlier in this group. */
+	/** Summaries from sibling agents that completed earlier in this deliverable. */
 	siblingeSummaries: string[];
 }
 
 /**
  * Build the seed for a worker agent.
- * Ordering: dep summaries → group body → tasks
+ * Ordering: dep summaries → deliverable body → tasks
  */
-export function buildWorkerSeed(group: WorkGroup, ctx: SeedContext): string {
+export function buildWorkerSeed(
+	deliverable: Deliverable,
+	ctx: SeedContext,
+): string {
 	const parts: string[] = [];
 
-	// Stable prefix: dep summaries (shared with all agents in this group)
+	// Stable prefix: dep summaries (shared with all agents in this deliverable)
 	if (ctx.depSummaries.length > 0) {
-		parts.push("## Context from completed groups\n");
+		parts.push("## Context from completed deliverables\n");
 		parts.push(ctx.depSummaries.join("\n\n"));
 	}
 
-	// Group-specific
-	parts.push(`## Group: ${group.title}\n`);
-	if (group.body) parts.push(group.body);
+	// Deliverable-specific
+	parts.push(`## Deliverable: ${deliverable.title}\n`);
+	if (deliverable.body) parts.push(deliverable.body);
 
 	// Tasks
-	const tasks = gatingTasks(group);
+	const tasks = gatingTasks(deliverable);
 	if (tasks.length > 0) {
 		parts.push("\n## Tasks\n");
 		parts.push(tasks.map((t) => formatTask(t)).join("\n\n"));
@@ -54,7 +57,7 @@ export function buildWorkerSeed(group: WorkGroup, ctx: SeedContext): string {
  * Ordering: dep summaries → sibling summaries → focus
  */
 export function buildAgentSeed(
-	group: WorkGroup,
+	deliverable: Deliverable,
 	agent: AgentSpec,
 	ctx: SeedContext,
 ): string {
@@ -62,7 +65,7 @@ export function buildAgentSeed(
 
 	// Stable prefix: dep summaries
 	if (ctx.depSummaries.length > 0) {
-		parts.push("## Context from completed groups\n");
+		parts.push("## Context from completed deliverables\n");
 		parts.push(ctx.depSummaries.join("\n\n"));
 	}
 
@@ -109,10 +112,10 @@ export function buildSummarizeInstruction(
 
 /**
  * Build the consumer description for a worker's summary.
- * Tells the worker who will read its summary (downstream agents or groups).
+ * Tells the worker who will read its summary (downstream agents or deliverables).
  */
 export function workerSummaryConsumer(
-	group: WorkGroup,
+	deliverable: Deliverable,
 	nextAgents: AgentSpec[],
 ): string {
 	if (nextAgents.length > 0) {
@@ -123,7 +126,7 @@ export function workerSummaryConsumer(
 		);
 	}
 	return (
-		"Downstream groups will consume your summary. " +
+		"Downstream deliverables will consume your summary. " +
 		"Summarize what was built, public API, key decisions, and edge cases."
 	);
 }
@@ -138,7 +141,7 @@ export function agentSummaryConsumer(
 ): string {
 	if (isLastAgent) {
 		return (
-			"This is the final agent summary for the group. " +
+			"This is the final agent summary for the deliverable. " +
 			"Summarize your findings, any issues found, and whether the work is acceptable."
 		);
 	}
@@ -149,33 +152,33 @@ export function agentSummaryConsumer(
 // ─── Stacked branches ────────────────────────────────────────────────────────
 
 /**
- * Determine the base branch for a group's worktree.
+ * Determine the base branch for a deliverable's worktree.
  * Stacked: branch from predecessor tip. Non-stacked: branch from main.
  */
 export function resolveBaseBranch(
-	group: WorkGroup,
-	allGroups: readonly WorkGroup[],
+	deliverable: Deliverable,
+	allDeliverables: readonly Deliverable[],
 	defaultBranch: string,
 ): string {
 	// No dependencies → branch from main
-	if (!group.dependsOn?.length) return defaultBranch;
+	if (!deliverable.dependsOn?.length) return defaultBranch;
 
 	// Explicitly non-stacked → branch from main
-	if (group.stacked === false) return defaultBranch;
+	if (deliverable.stacked === false) return defaultBranch;
 
 	// Stacked (default): branch from last dependency's branch
-	const lastDep = group.dependsOn[group.dependsOn.length - 1];
-	const depGroup = allGroups.find((g) => g.id === lastDep);
-	if (!depGroup) return defaultBranch;
+	const lastDep = deliverable.dependsOn[deliverable.dependsOn.length - 1];
+	const depDeliverable = allDeliverables.find((g) => g.id === lastDep);
+	if (!depDeliverable) return defaultBranch;
 
-	return `feat/${depGroup.id}`;
+	return `feat/${depDeliverable.id}`;
 }
 
 /**
- * Get the branch name for a group.
+ * Get the branch name for a deliverable.
  */
-export function groupBranch(groupId: string): string {
-	return `feat/${groupId}`;
+export function deliverableBranch(deliverableId: string): string {
+	return `feat/${deliverableId}`;
 }
 
 // ─── Completion detection ────────────────────────────────────────────────────
@@ -183,8 +186,8 @@ export function groupBranch(groupId: string): string {
 /**
  * Check if a worker agent is done (all gating tasks toggled).
  */
-export function isWorkerComplete(group: WorkGroup): boolean {
-	const tasks = gatingTasks(group);
+export function isWorkerComplete(deliverable: Deliverable): boolean {
+	const tasks = gatingTasks(deliverable);
 	if (tasks.length === 0) return false;
 	return tasks.every((t) => t.done);
 }
@@ -194,10 +197,10 @@ export function isWorkerComplete(group: WorkGroup): boolean {
  * Returns agents whose `after` deps are all in the `completed` set.
  */
 export function nextUnblockedAgents(
-	group: WorkGroup,
+	deliverable: Deliverable,
 	completed: ReadonlySet<string>,
 ): AgentSpec[] {
-	return group.agents.filter((agent) =>
+	return deliverable.agents.filter((agent) =>
 		agent.after.every((dep) => completed.has(dep)),
 	);
 }

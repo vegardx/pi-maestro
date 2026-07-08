@@ -1,4 +1,4 @@
-// Plan tools: group, task, agent — flat-parameter tools for the group-based
+// Plan tools: deliverable, task, agent — flat-parameter tools for the deliverable-based
 // execution model. The session/mode layer owns which plan is active; these
 // tools perform mutations/reads and return readable markdown.
 
@@ -10,14 +10,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
-	GROUP_STATUSES,
+	DELIVERABLE_STATUSES,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
 import type {
 	AddAgentInput,
-	AddGroupInput,
+	AddDeliverableInput,
 	AddWorkItemInput,
 	PlanEngine,
 } from "./engine.js";
@@ -25,31 +25,35 @@ import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
 import type {
 	AgentMode,
 	AgentSpec,
+	Deliverable,
 	ModelSlot,
 	Plan,
 	ThinkingLevel,
-	WorkGroup,
 	WorkItem,
 } from "./schema.js";
-import { findGroup, groups, hasExecutionStarted } from "./schema.js";
+import {
+	deliverables,
+	findDeliverable,
+	hasExecutionStarted,
+} from "./schema.js";
 import { plansRoot } from "./storage.js";
 
 export interface PlanToolDeps {
 	readonly engine: () => PlanEngine | undefined;
 	readonly onPlanChanged?: (plan: Plan) => void;
 	readonly mode?: () => string;
-	readonly steerAgent?: (groupId: string, guidance: string) => void;
-	readonly onTaskToggle?: (groupId: string, taskId: string) => void;
+	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
+	readonly onTaskToggle?: (deliverableId: string, taskId: string) => void;
 	readonly seedContent?: () => string | undefined;
 	readonly agentBridge?: () => AgentBridge | undefined;
-	readonly agentGroupId?: () => string | undefined;
+	readonly agentDeliverableId?: () => string | undefined;
 }
 
 interface ToolDetails {
 	readonly error?: string;
 	readonly plan?: Plan;
-	readonly group?: WorkGroup;
-	readonly groups?: readonly WorkGroup[];
+	readonly deliverable?: Deliverable;
+	readonly deliverables?: readonly Deliverable[];
 	readonly workItem?: WorkItem;
 	readonly agent?: AgentSpec;
 	readonly done?: boolean;
@@ -59,21 +63,25 @@ type Result = AgentToolResult<ToolDetails>;
 
 // ─── Parameter schemas ───────────────────────────────────────────────────────
 
-const GroupParams = Type.Object({
+const DeliverableParams = Type.Object({
 	action: Type.Union([
 		Type.Literal("add"),
 		Type.Literal("update"),
 		Type.Literal("remove"),
 		Type.Literal("list"),
 	]),
-	id: Type.Optional(Type.String({ description: "Group id." })),
-	title: Type.Optional(Type.String({ description: "Group title." })),
+	id: Type.Optional(Type.String({ description: "Deliverable id." })),
+	title: Type.Optional(Type.String({ description: "Deliverable title." })),
 	body: Type.Optional(
 		Type.String({ description: "What ships when this merges." }),
 	),
-	status: Type.Optional(Type.Union(GROUP_STATUSES.map((s) => Type.Literal(s)))),
+	status: Type.Optional(
+		Type.Union(DELIVERABLE_STATUSES.map((s) => Type.Literal(s))),
+	),
 	dependsOn: Type.Optional(
-		Type.Array(Type.String(), { description: "Group ids this one waits on." }),
+		Type.Array(Type.String(), {
+			description: "Deliverable ids this one waits on.",
+		}),
 	),
 	stacked: Type.Optional(
 		Type.Boolean({
@@ -104,7 +112,9 @@ const TaskParams = Type.Object({
 		Type.Literal("toggle"),
 		Type.Literal("remove"),
 	]),
-	groupId: Type.Optional(Type.String({ description: "Parent group id." })),
+	deliverableId: Type.Optional(
+		Type.String({ description: "Parent deliverable id." }),
+	),
 	taskId: Type.Optional(Type.String({ description: "Work-item id." })),
 	title: Type.Optional(Type.String({ description: "Work-item title." })),
 	body: Type.Optional(
@@ -127,9 +137,11 @@ const AgentParams = Type.Object({
 		Type.Literal("update"),
 		Type.Literal("remove"),
 	]),
-	groupId: Type.Optional(Type.String({ description: "Parent group id." })),
+	deliverableId: Type.Optional(
+		Type.String({ description: "Parent deliverable id." }),
+	),
 	name: Type.Optional(
-		Type.String({ description: "Agent name (unique within group)." }),
+		Type.String({ description: "Agent name (unique within deliverable)." }),
 	),
 	mode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
@@ -164,8 +176,8 @@ const PlanParams = Type.Object({
 			Type.Literal("json"),
 		]),
 	),
-	activeGroupId: Type.Optional(
-		Type.String({ description: "Seed focus group id." }),
+	activeDeliverableId: Type.Optional(
+		Type.String({ description: "Seed focus deliverable id." }),
 	),
 });
 
@@ -173,7 +185,7 @@ const PlanParams = Type.Object({
 
 export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
-		createGroupTool(deps),
+		createDeliverableTool(deps),
 		createTaskTool(deps),
 		createAgentTool(deps),
 		createPlanTool(deps),
@@ -181,15 +193,15 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	];
 }
 
-export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
+export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
-		name: "group",
-		label: "Group",
+		name: "deliverable",
+		label: "Deliverable",
 		description:
-			"Manage work groups in the active plan: add, update, remove, list. One group = one branch = one PR.",
+			"Manage work deliverables in the active plan: add, update, remove, list. One deliverable = one branch = one PR.",
 		promptSnippet:
-			"group — manage work groups (add/update/remove/list). One group = one branch = one PR.",
-		parameters: GroupParams,
+			"deliverable — manage work deliverables (add/update/remove/list). One deliverable = one branch = one PR.",
+		parameters: DeliverableParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {
 				if (params.action === "list") {
@@ -203,13 +215,15 @@ export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 
 				if (hasExecutionStarted(plan)) {
 					if (params.id) {
-						const target = findGroup(plan, params.id);
+						const target = findDeliverable(plan, params.id);
 						if (target && target.status !== "planned") {
 							if (params.action === "remove") {
-								return error("cannot remove an active group");
+								return error("cannot remove an active deliverable");
 							}
 							if (params.action === "update" && (params.title || params.body)) {
-								return error("cannot update title/body of an active group");
+								return error(
+									"cannot update title/body of an active deliverable",
+								);
 							}
 						}
 					}
@@ -219,7 +233,7 @@ export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 					case "add": {
 						if (!params.title) return error("add requires title");
 						if (!params.workerMode) return error("add requires workerMode");
-						const input: AddGroupInput = {
+						const input: AddDeliverableInput = {
 							title: params.title,
 							body: params.body,
 							dependsOn: params.dependsOn,
@@ -228,13 +242,16 @@ export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 							workerSlot: params.workerSlot as ModelSlot | undefined,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						};
-						const group = engine.addGroup(input);
+						const deliverable = engine.addDeliverable(input);
 						notify(deps, engine);
-						return ok(`✓ ${group.id}`, { group, plan: engine.get() });
+						return ok(`✓ ${deliverable.id}`, {
+							deliverable,
+							plan: engine.get(),
+						});
 					}
 					case "update": {
 						if (!params.id) return error("update requires id");
-						engine.updateGroup(params.id, {
+						engine.updateDeliverable(params.id, {
 							title: params.title,
 							body: params.body,
 							dependsOn: params.dependsOn,
@@ -244,28 +261,31 @@ export function createGroupTool(deps: PlanToolDeps): ToolDefinition {
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
 						if (params.status) {
-							engine.setGroupStatus(params.id, params.status);
+							engine.setDeliverableStatus(params.id, params.status);
 						}
 						notify(deps, engine);
-						return ok(`Updated group ${params.id}.`, {
-							group: findGroup(engine.get(), params.id) ?? undefined,
+						return ok(`Updated deliverable ${params.id}.`, {
+							deliverable:
+								findDeliverable(engine.get(), params.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "remove": {
 						if (!params.id) return error("remove requires id");
-						engine.removeGroup(params.id);
+						engine.removeDeliverable(params.id);
 						notify(deps, engine);
-						return ok(`Removed group ${params.id}.`, { plan: engine.get() });
+						return ok(`Removed deliverable ${params.id}.`, {
+							plan: engine.get(),
+						});
 					}
 					case "list": {
-						const rows = groups(engine.get());
+						const rows = deliverables(engine.get());
 						const text = rows.length
 							? rows
 									.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
 									.join("\n")
-							: "No groups.";
-						return ok(text, { groups: rows, plan: engine.get() });
+							: "No deliverables.";
+						return ok(text, { deliverables: rows, plan: engine.get() });
 					}
 				}
 			});
@@ -277,9 +297,10 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "task",
 		label: "Task",
-		description: "Manage work items in a group: add, update, toggle, remove.",
+		description:
+			"Manage work items in a deliverable: add, update, toggle, remove.",
 		promptSnippet:
-			"task — manage work items within a group (add/update/toggle/remove).",
+			"task — manage work items within a deliverable (add/update/toggle/remove).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
 			// Agent mode: forward mutations over RPC and await the result —
@@ -288,7 +309,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			if (!deps.engine()) {
 				const bridge = deps.agentBridge?.();
 				if (bridge) {
-					const gId = params.groupId ?? deps.agentGroupId?.() ?? "";
+					const gId = params.deliverableId ?? deps.agentDeliverableId?.() ?? "";
 					switch (params.action) {
 						case "add": {
 							if (!params.title) return error("add requires title");
@@ -325,14 +346,14 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 				return error("no plan active — run /plan first to start one");
 			}
 			return withEngine(deps, (engine) => {
-				const groupId = params.groupId;
-				if (!groupId) return error("groupId is required");
+				const deliverableId = params.deliverableId;
+				if (!deliverableId) return error("deliverableId is required");
 
 				const plan = engine.get();
 				if (hasExecutionStarted(plan)) {
-					const g = findGroup(plan, groupId);
+					const g = findDeliverable(plan, deliverableId);
 					if (g && g.status !== "planned" && params.action === "remove") {
-						return error("cannot remove tasks from an active group");
+						return error("cannot remove tasks from an active deliverable");
 					}
 				}
 
@@ -345,27 +366,27 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 							kind: params.kind as WorkItemKind | undefined,
 							position: params.position,
 						};
-						const item = engine.addWorkItem(groupId, input);
+						const item = engine.addWorkItem(deliverableId, input);
 						notify(deps, engine);
 						deps.steerAgent?.(
-							groupId,
+							deliverableId,
 							`New task: "${item.title}". ${item.body ?? ""}`.trim(),
 						);
 						return ok(`✓ ${item.id}`, { workItem: item, plan: engine.get() });
 					}
 					case "update": {
 						if (!params.taskId) return error("update requires taskId");
-						engine.updateWorkItem(groupId, params.taskId, {
+						engine.updateWorkItem(deliverableId, params.taskId, {
 							title: params.title,
 							body: params.body,
 							kind: params.kind as WorkItemKind | undefined,
 							answer: params.answer,
 						});
 						notify(deps, engine);
-						const g = findGroup(engine.get(), groupId);
+						const g = findDeliverable(engine.get(), deliverableId);
 						return ok(`Updated task ${params.taskId}.`, {
 							workItem: g
-								? (findGroup(engine.get(), groupId)?.tasks.find(
+								? (findDeliverable(engine.get(), deliverableId)?.tasks.find(
 										(t) => t.id === params.taskId,
 									) ?? undefined)
 								: undefined,
@@ -374,7 +395,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "toggle": {
 						if (!params.taskId) return error("toggle requires taskId");
-						const done = engine.toggleWorkItem(groupId, params.taskId);
+						const done = engine.toggleWorkItem(deliverableId, params.taskId);
 						notify(deps, engine);
 						return ok(
 							`${params.taskId} is now ${done ? "done" : "not done"}.`,
@@ -386,7 +407,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "remove": {
 						if (!params.taskId) return error("remove requires taskId");
-						engine.removeWorkItem(groupId, params.taskId);
+						engine.removeWorkItem(deliverableId, params.taskId);
 						notify(deps, engine);
 						return ok(`Removed task ${params.taskId}.`, { plan: engine.get() });
 					}
@@ -400,9 +421,10 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "agent",
 		label: "Agent",
-		description: "Manage support agents within a group: add, update, remove.",
+		description:
+			"Manage support agents within a deliverable: add, update, remove.",
 		promptSnippet:
-			"agent — manage support agents in a group (add/update/remove).",
+			"agent — manage support agents in a deliverable (add/update/remove).",
 		parameters: AgentParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {
@@ -410,13 +432,13 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 			}
 			return withEngine(deps, (engine) => {
 				const plan = engine.get();
-				const groupId = params.groupId;
-				if (!groupId) return error("groupId is required");
+				const deliverableId = params.deliverableId;
+				if (!deliverableId) return error("deliverableId is required");
 
 				if (hasExecutionStarted(plan)) {
-					const g = findGroup(plan, groupId);
+					const g = findDeliverable(plan, deliverableId);
 					if (g && g.status !== "planned") {
-						return error("cannot modify agents in an active group");
+						return error("cannot modify agents in an active deliverable");
 					}
 				}
 
@@ -435,16 +457,16 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 							focus: params.focus,
 							after: params.after ?? [],
 						};
-						const agent = engine.addAgent(groupId, input);
+						const agent = engine.addAgent(deliverableId, input);
 						notify(deps, engine);
-						return ok(`✓ ${groupId}/${agent.name}`, {
+						return ok(`✓ ${deliverableId}/${agent.name}`, {
 							agent,
 							plan: engine.get(),
 						});
 					}
 					case "update": {
 						if (!params.name) return error("update requires name");
-						engine.updateAgent(groupId, params.name, {
+						engine.updateAgent(deliverableId, params.name, {
 							mode: params.mode as AgentMode | undefined,
 							slot: params.slot as ModelSlot | undefined,
 							effort: params.effort as ThinkingLevel | undefined,
@@ -452,7 +474,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 							after: params.after,
 						});
 						notify(deps, engine);
-						const g = findGroup(engine.get(), groupId);
+						const g = findDeliverable(engine.get(), deliverableId);
 						return ok(`Updated agent ${params.name}.`, {
 							agent: g?.agents.find((a) => a.name === params.name) ?? undefined,
 							plan: engine.get(),
@@ -460,7 +482,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "remove": {
 						if (!params.name) return error("remove requires name");
-						engine.removeAgent(groupId, params.name);
+						engine.removeAgent(deliverableId, params.name);
 						notify(deps, engine);
 						return ok(`Removed agent ${params.name}.`, { plan: engine.get() });
 					}
@@ -552,12 +574,12 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 					plan,
 				});
 			}
-			// TODO: implement renderPlanMarkdown / renderPlanSeed for group model
-			const text = groups(plan).length
-				? groups(plan)
+			// TODO: implement renderPlanMarkdown / renderPlanSeed for deliverable model
+			const text = deliverables(plan).length
+				? deliverables(plan)
 						.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
 						.join("\n")
-				: "No groups.";
+				: "No deliverables.";
 			return ok(text, { plan });
 		},
 	}) as ToolDefinition;

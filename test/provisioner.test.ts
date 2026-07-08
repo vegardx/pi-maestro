@@ -45,10 +45,10 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("provisionWorktree", () => {
-	it("creates a worktree on feat/<groupId> from the base branch", () => {
+	it("creates a worktree on feat/<deliverableId> from the base branch", () => {
 		const path = provisionWorktree({
 			repoPath: repo,
-			groupId: "g1",
+			deliverableId: "g1",
 			baseBranch: "main",
 			worktreesRoot: join(dir, "wt"),
 		});
@@ -60,7 +60,7 @@ describe("provisionWorktree", () => {
 	it("is idempotent — a second call reuses the existing worktree", () => {
 		const opts = {
 			repoPath: repo,
-			groupId: "g1",
+			deliverableId: "g1",
 			baseBranch: "main",
 			worktreesRoot: join(dir, "wt"),
 		};
@@ -74,7 +74,7 @@ describe("provisionWorktree", () => {
 		git(["checkout", "feat/g2"]);
 		const path = provisionWorktree({
 			repoPath: repo,
-			groupId: "g2",
+			deliverableId: "g2",
 			baseBranch: "main",
 			worktreesRoot: join(dir, "wt"),
 		});
@@ -86,11 +86,11 @@ describe("provisionWorktree", () => {
 		expect(() =>
 			provisionWorktree({
 				repoPath: repo,
-				groupId: "g3",
+				deliverableId: "g3",
 				baseBranch: "no-such-branch",
 				worktreesRoot: join(dir, "wt"),
 			}),
-		).toThrow(/worktree provisioning for group g3 .*failed/);
+		).toThrow(/worktree provisioning for deliverable g3 .*failed/);
 	});
 });
 
@@ -100,7 +100,7 @@ describe("provisionEnvironment", () => {
 	beforeEach(() => {
 		worktree = provisionWorktree({
 			repoPath: repo,
-			groupId: "env",
+			deliverableId: "env",
 			baseBranch: "main",
 			worktreesRoot: join(dir, "wt"),
 		});

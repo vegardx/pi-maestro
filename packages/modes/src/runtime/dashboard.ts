@@ -53,7 +53,7 @@ const AGENT_WIDGET_KEY = "maestro-agents";
 const AGENT_WIDGET_TICK_MS = 5_000;
 
 /**
- * Map live research runs onto agent-table rows: GROUP "research", AGENT =
+ * Map live research runs onto agent-table rows: DELIVERABLE "research", AGENT =
  * question slug, STATUS from the child's current tool (searching/reading/
  * working), TOKENS from run progress events.
  */
@@ -106,11 +106,14 @@ export function syncAgentWidget(
 		clearAgentWidget(rt, ctx);
 		return;
 	}
-	const groups = snap?.groups;
+	const deliverables = snap?.deliverables;
 	const now = Date.now();
 	ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (_tui, theme) => ({
 		render: (width: number) =>
-			styleAgentTable(buildAgentTable({ agents, groups, width, now }), theme),
+			styleAgentTable(
+				buildAgentTable({ agents, deliverables, width, now }),
+				theme,
+			),
 		invalidate: () => {},
 	}));
 	if (rt.agentWidgetTimer === undefined) {
@@ -136,9 +139,9 @@ export function clearAgentWidget(
 }
 
 /**
- * Render the /agents overview: groups, task progress, and agent specs. With
+ * Render the /agents overview: deliverables, task progress, and agent specs. With
  * an execution handle, includes live status/tokens/turns per agent plus the
- * group's fix round and blocked reason.
+ * deliverable's fix round and blocked reason.
  */
 export function renderAgentsOverview(
 	plan: Plan,
@@ -146,7 +149,7 @@ export function renderAgentsOverview(
 ): string {
 	const snap = execution?.snapshot();
 	const lines: string[] = [`Plan: ${plan.title} (${plan.slug})`, ""];
-	for (const g of plan.groups) {
+	for (const g of plan.deliverables) {
 		const icon =
 			g.status === "shipped"
 				? "🚀"
@@ -164,12 +167,12 @@ export function renderAgentsOverview(
 		if (tasks.length > 0) {
 			lines.push(`  Tasks: ${done}/${tasks.length}`);
 		}
-		const groupState = snap?.groups.get(g.id);
-		if (groupState && groupState.round > 0) {
-			lines.push(`  Fix round: ${groupState.round}`);
+		const deliverableState = snap?.deliverables.get(g.id);
+		if (deliverableState && deliverableState.round > 0) {
+			lines.push(`  Fix round: ${deliverableState.round}`);
 		}
-		if (groupState?.blocked) {
-			lines.push(`  ⚠ Blocked: ${groupState.blocked}`);
+		if (deliverableState?.blocked) {
+			lines.push(`  ⚠ Blocked: ${deliverableState.blocked}`);
 		}
 		if (g.prUrl) {
 			lines.push(`  PR: ${g.prUrl}`);

@@ -318,7 +318,7 @@ describe("fake-agent harness", () => {
 				type: "summarize",
 				id: "sum-1",
 				consumer: "g2/worker",
-				preamble: "Write for the next group.",
+				preamble: "Write for the next deliverable.",
 				budget: 500,
 			});
 			await stub.until(() =>

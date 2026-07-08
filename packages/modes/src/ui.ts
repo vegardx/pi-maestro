@@ -1,4 +1,4 @@
-// Simple UI rendering utilities for the group-based plan model.
+// Simple UI rendering utilities for the deliverable-based plan model.
 
 import type { ModeName } from "@vegardx/pi-contracts";
 import type { Plan } from "./schema.js";
@@ -33,19 +33,19 @@ export function renderPlanPanel(plan: Plan, maxLines = 30): string[] {
 
 export function renderPlanSidebar(plan: Plan): string[] {
 	const counts = new Map<string, number>();
-	for (const g of plan.groups)
+	for (const g of plan.deliverables)
 		counts.set(g.status, (counts.get(g.status) ?? 0) + 1);
 	return [
 		`Plan: ${plan.title}`,
 		`Slug: ${plan.slug}`,
-		`Groups: ${plan.groups.length}`,
+		`Deliverables: ${plan.deliverables.length}`,
 		...[...counts].map(([status, count]) => `${status}: ${count}`),
 	];
 }
 
 function renderPlanText(plan: Plan): string {
 	const lines: string[] = [`# ${plan.title}`, ""];
-	for (const g of plan.groups) {
+	for (const g of plan.deliverables) {
 		const icon =
 			g.status === "shipped" ? "🚀" : g.status === "active" ? "●" : "○";
 		const deps = g.dependsOn?.length

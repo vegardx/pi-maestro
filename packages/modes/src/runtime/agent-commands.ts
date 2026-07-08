@@ -16,7 +16,7 @@ function readOnlyAttachCommand(sessionName: string): string {
 }
 
 /**
- * `/view <agent-or-group>` — open a read-only tmux split attached to that
+ * `/view <agent-or-deliverable>` — open a read-only tmux split attached to that
  * agent's session. No argument: pick from active agents; with an open pane
  * and no argument, close it (toggle).
  */
@@ -73,20 +73,20 @@ export async function handleViewCommand(
 }
 
 export interface SteerTarget {
-	groupId: string;
+	deliverableId: string;
 	/** Optional `name:` prefix before the guidance; defaults to the worker. */
 	agentName?: string;
 	guidance: string;
 }
 
-/** Parse `/steer <group> [agent:] <guidance>`. */
+/** Parse `/steer <deliverable> [agent:] <guidance>`. */
 export function parseSteerArgs(args: string): SteerTarget | undefined {
 	const trimmed = args.trim();
 	const space = trimmed.indexOf(" ");
 	if (space === -1) return undefined;
-	const groupId = trimmed.slice(0, space);
+	const deliverableId = trimmed.slice(0, space);
 	let rest = trimmed.slice(space + 1).trim();
-	if (!groupId || !rest) return undefined;
+	if (!deliverableId || !rest) return undefined;
 
 	let agentName: string | undefined;
 	const prefix = rest.match(/^([A-Za-z0-9._-]+):\s*(.*)$/s);
@@ -94,10 +94,10 @@ export function parseSteerArgs(args: string): SteerTarget | undefined {
 		agentName = prefix[1];
 		rest = prefix[2];
 	}
-	return { groupId, ...(agentName ? { agentName } : {}), guidance: rest };
+	return { deliverableId, ...(agentName ? { agentName } : {}), guidance: rest };
 }
 
-/** `/steer <group> [agent:] <guidance>` — routed via ExecutionHandle.steer. */
+/** `/steer <deliverable> [agent:] <guidance>` — routed via ExecutionHandle.steer. */
 export function handleSteerCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
@@ -105,19 +105,19 @@ export function handleSteerCommand(
 ): void {
 	const target = parseSteerArgs(args);
 	if (!target) {
-		ctx.ui.notify("Usage: /steer <group> [agent:] <guidance>", "warning");
+		ctx.ui.notify("Usage: /steer <deliverable> [agent:] <guidance>", "warning");
 		return;
 	}
 	const agent = target.agentName ?? "worker";
 	const sent = execution.steer(
-		target.groupId,
+		target.deliverableId,
 		target.guidance,
 		target.agentName,
 	);
 	ctx.ui.notify(
 		sent
-			? `Steered ${target.groupId}/${agent}.`
-			: `${target.groupId}/${agent} is not connected.`,
+			? `Steered ${target.deliverableId}/${agent}.`
+			: `${target.deliverableId}/${agent} is not connected.`,
 		sent ? "info" : "warning",
 	);
 }

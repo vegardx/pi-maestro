@@ -35,7 +35,7 @@ const theme = {
 const doneEvent = {
 	kind: "done",
 	agentKey: "auth/worker",
-	groupTitle: "Auth",
+	deliverableTitle: "Auth",
 	durationMs: 245_000,
 	tokens: { input: 52_000, output: 8_400, turns: 12 },
 	cacheRatio: 0.82,
@@ -46,8 +46,8 @@ const doneEvent = {
 
 const fixRoundEvent: ExecutionEvent = {
 	kind: "fix-round",
-	groupId: "auth",
-	groupTitle: "Auth",
+	deliverableId: "auth",
+	deliverableTitle: "Auth",
 	round: 2,
 	findings: ["missing CSRF check", "no rate limit"],
 };
@@ -109,7 +109,7 @@ describe("agent card builders", () => {
 			agentKey: "auth/worker",
 			session: "maestro-ada",
 			resumed: false,
-			groupTitle: "Auth",
+			deliverableTitle: "Auth",
 		};
 		expect(buildCardHeader(spawn)).toBe("◆ Auth · worker started");
 		expect(buildCardHeader({ ...spawn, resumed: true })).toBe(
@@ -193,8 +193,8 @@ describe("agent card builders", () => {
 	it("builds blocked with the reason as body and a /retry trailer", () => {
 		const blocked: ExecutionEvent = {
 			kind: "blocked",
-			groupId: "auth",
-			groupTitle: "Auth",
+			deliverableId: "auth",
+			deliverableTitle: "Auth",
 			reason: "fix-round cap reached",
 		};
 		expect(buildCardHeader(blocked)).toBe("■ Auth · blocked");
@@ -206,7 +206,7 @@ describe("agent card builders", () => {
 		const failed: ExecutionEvent = {
 			kind: "failed",
 			agentKey: "auth/worker",
-			groupTitle: "Auth",
+			deliverableTitle: "Auth",
 			respawns: 2,
 		};
 		expect(buildCardHeader(failed)).toBe("✗ Auth · worker failed");
@@ -214,24 +214,24 @@ describe("agent card builders", () => {
 		expect(buildStatsTrailer(failed)).toBe("↳ 2 respawns");
 	});
 
-	it("builds shipped with the PR URL as body and the group id trailer", () => {
+	it("builds shipped with the PR URL as body and the deliverable id trailer", () => {
 		const shipped: ExecutionEvent = {
 			kind: "shipped",
-			groupId: "auth",
-			groupTitle: "Auth",
+			deliverableId: "auth",
+			deliverableTitle: "Auth",
 			prUrl: "https://github.com/org/repo/pull/42",
 		};
 		expect(buildCardHeader(shipped)).toBe("⇧ Auth · shipped");
 		expect(buildCardBody(shipped, false)).toEqual([
 			"https://github.com/org/repo/pull/42",
 		]);
-		expect(buildStatsTrailer(shipped)).toBe("↳ group auth");
+		expect(buildStatsTrailer(shipped)).toBe("↳ deliverable auth");
 	});
 
-	it("builds a settled header and per-group status body", () => {
+	it("builds a settled header and per-deliverable status body", () => {
 		const settled: ExecutionEvent = {
 			kind: "settled",
-			groups: [
+			deliverables: [
 				{
 					id: "auth",
 					title: "Auth",
@@ -241,7 +241,9 @@ describe("agent card builders", () => {
 				{ id: "db", title: "DB", status: "abandoned" },
 			],
 		};
-		expect(buildCardHeader(settled)).toBe("◆ all groups settled · 1/2 shipped");
+		expect(buildCardHeader(settled)).toBe(
+			"◆ all deliverables settled · 1/2 shipped",
+		);
 		expect(buildCardBody(settled, false)).toEqual([
 			"Auth — shipped https://github.com/org/repo/pull/42",
 			"DB — abandoned",
@@ -357,7 +359,7 @@ describe("registerAgentCardRenderer", () => {
 				agentKey: "auth/worker",
 				session: "maestro-ada",
 				resumed: false,
-				groupTitle: "Auth",
+				deliverableTitle: "Auth",
 			},
 			false,
 		);
@@ -389,17 +391,25 @@ describe("registerAgentCardRenderer", () => {
 				agentKey: "auth/worker",
 				session: "s",
 				resumed: true,
-				groupTitle: "Auth",
+				deliverableTitle: "Auth",
 			},
-			{ kind: "blocked", groupId: "auth", groupTitle: "Auth", reason: "cap" },
+			{
+				kind: "blocked",
+				deliverableId: "auth",
+				deliverableTitle: "Auth",
+				reason: "cap",
+			},
 			{
 				kind: "failed",
 				agentKey: "auth/worker",
-				groupTitle: "Auth",
+				deliverableTitle: "Auth",
 				respawns: 1,
 			},
-			{ kind: "shipped", groupId: "auth", groupTitle: "Auth" },
-			{ kind: "settled", groups: [{ id: "a", title: "A", status: "shipped" }] },
+			{ kind: "shipped", deliverableId: "auth", deliverableTitle: "Auth" },
+			{
+				kind: "settled",
+				deliverables: [{ id: "a", title: "A", status: "shipped" }],
+			},
 		];
 		for (const event of events) {
 			for (const expanded of [false, true]) {

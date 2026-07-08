@@ -2,7 +2,7 @@
 // Agents get: commitLocal (stage + commit).
 // Maestro/interactive gets: commitLocal + /ship (push + PR).
 //
-// The executor calls shipping programmatically for automatic group shipping.
+// The executor calls shipping programmatically for automatic deliverable shipping.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";

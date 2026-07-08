@@ -12,10 +12,10 @@ import { Type } from "@sinclair/typebox";
 import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
 import { resolveModelWithin } from "@vegardx/pi-models";
 import { buildCarryForwardSummary } from "../compaction.js";
+import { buildRecap } from "../deliverable-recap.js";
 import type { PlanEngine } from "../engine.js";
-import { reconcileShippedGroups } from "../exec/shipper.js";
+import { reconcileShippedDeliverables } from "../exec/shipper.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
-import { buildRecap } from "../group-recap.js";
 import { planPhase } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
@@ -86,7 +86,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			rt.notifyMode(ctx);
 			ctx.ui.notify("Structure tools unlocked — plan away.", "info");
 			pi.sendUserMessage(
-				"The user unlocked plan structuring (/ready). Form the plan now: create groups and tasks from what you know, then the knowledge doc.",
+				"The user unlocked plan structuring (/ready). Form the plan now: create deliverables and tasks from what you know, then the knowledge doc.",
 				{ deliverAs: "followUp" },
 			);
 		},
@@ -156,26 +156,28 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	pi.registerCommand("sync", {
 		description:
-			"Reconcile shipped groups' PRs: retarget stacked PRs whose base merged.",
+			"Reconcile shipped deliverables' PRs: retarget stacked PRs whose base merged.",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			if (!rt.engine) {
 				ctx.ui.notify("No active plan.", "warning");
 				return;
 			}
-			// No session-repo guard: sync is gh-only and reconciles each group
+			// No session-repo guard: sync is gh-only and reconciles each deliverable
 			// against its own repo, regardless of the session cwd.
-			const report = await reconcileShippedGroups({ plan: rt.engine.get() });
+			const report = await reconcileShippedDeliverables({
+				plan: rt.engine.get(),
+			});
 			const lines: string[] = [];
 			for (const r of report.retargeted) {
 				lines.push(
-					`retargeted ${r.groupId} PR #${r.prNumber}: ${r.from} → ${r.to}`,
+					`retargeted ${r.deliverableId} PR #${r.prNumber}: ${r.from} → ${r.to}`,
 				);
 			}
 			for (const r of report.needsRebase) {
-				lines.push(`needs-rebase ${r.groupId}: ${r.message}`);
+				lines.push(`needs-rebase ${r.deliverableId}: ${r.message}`);
 			}
 			for (const e of report.errors) {
-				lines.push(`error ${e.groupId}: ${e.message}`);
+				lines.push(`error ${e.deliverableId}: ${e.message}`);
 			}
 			const summary = `Sync complete: retargeted=${report.retargeted.length} needs-rebase=${report.needsRebase.length} errors=${report.errors.length}.`;
 			ctx.ui.notify(
@@ -195,22 +197,22 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				return;
 			}
 			ctx.ui.notify(
-				"/park is not yet implemented in the group model — the plan stays in maestro/plans/ and can be resumed with /plan.",
+				"/park is not yet implemented in the deliverable model — the plan stays in maestro/plans/ and can be resumed with /plan.",
 				"warning",
 			);
 		},
 	});
 
 	pi.registerCommand("agents", {
-		description: "Show active groups and agent status.",
+		description: "Show active deliverables and agent status.",
 		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
 			if (!rt.engine) {
 				cmdCtx.ui.notify("No active plan.", "info");
 				return;
 			}
 			const plan = rt.engine.get();
-			if (plan.groups.length === 0) {
-				cmdCtx.ui.notify("No groups in plan.", "info");
+			if (plan.deliverables.length === 0) {
+				cmdCtx.ui.notify("No deliverables in plan.", "info");
 				return;
 			}
 			cmdCtx.ui.notify(renderAgentsOverview(plan, rt.execution), "info");
@@ -369,11 +371,11 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			description:
 				"Push the current branch and open/update a PR. Maestro/interactive " +
 				"use only — execution agents commit locally and let the maestro " +
-				"ship the group.",
+				"ship the deliverable.",
 			parameters: Type.Object({}),
 			async execute(_id, _params, _signal, _onUpdate, active) {
-				// Execution agents never ship: the maestro pushes the group's
-				// branch and opens the PR once the group completes (exec/shipper).
+				// Execution agents never ship: the maestro pushes the deliverable's
+				// branch and opens the PR once the deliverable completes (exec/shipper).
 				if (process.env.PI_MAESTRO_AGENT_ID) {
 					return {
 						content: [
@@ -383,7 +385,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 									"Shipping is owned by the maestro. Commit your work with " +
 									"the commit tool and toggle your tasks when done — the " +
 									"maestro pushes the branch and opens the PR when the " +
-									"group completes.",
+									"deliverable completes.",
 							},
 						],
 						details: {},
@@ -420,8 +422,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			const plan = rt.engine?.get();
 			ctx.ui.notify(
-				`mode=${rt.state.mode} plan=${plan?.slug ?? "none"} groups=${
-					plan?.groups.length ?? 0
+				`mode=${rt.state.mode} plan=${plan?.slug ?? "none"} deliverables=${
+					plan?.deliverables.length ?? 0
 				}`,
 				"info",
 			);

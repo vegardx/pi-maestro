@@ -1,4 +1,4 @@
-// Execution adapter: wraps GroupExecutor with real tmux+RPC spawning.
+// Execution adapter: wraps DeliverableExecutor with real tmux+RPC spawning.
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
 import { randomUUID } from "node:crypto";
@@ -15,8 +15,11 @@ import {
 } from "@vegardx/pi-rpc";
 import * as realTmux from "@vegardx/pi-tmux";
 import { agentName } from "../agent-names.js";
+import {
+	DeliverableExecutor,
+	type ExecutorDeps,
+} from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
-import { type ExecutorDeps, GroupExecutor } from "../group-executor.js";
 import { QuestionQueue } from "../question-queue.js";
 import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
 import {
@@ -29,11 +32,11 @@ import {
 } from "./provisioner.js";
 import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
 import { buildSeed, type SeedSummaries, truncateSummary } from "./seeds.js";
-import { shipGroup as shipGroupReal } from "./shipper.js";
+import { shipDeliverable as shipDeliverableReal } from "./shipper.js";
 
 /**
  * Consecutive idle reports after which an agent with no task-based completion
- * signal (read-only reviewers; workers of zero-gating-task groups) is
+ * signal (read-only reviewers; workers of zero-gating-task deliverables) is
  * considered done. Interactive pi never exits on its own, so sustained idle
  * is the only completion signal these agents produce.
  */
@@ -59,12 +62,12 @@ export type ExecutionEvent =
 			agentKey: string;
 			session: string;
 			resumed: boolean;
-			groupTitle: string;
+			deliverableTitle: string;
 	  }
 	| {
 			kind: "done";
 			agentKey: string;
-			groupTitle: string;
+			deliverableTitle: string;
 			durationMs: number;
 			tokens: { input: number; output: number; turns: number };
 			cacheRatio?: number;
@@ -74,17 +77,37 @@ export type ExecutionEvent =
 	  }
 	| {
 			kind: "fix-round";
-			groupId: string;
-			groupTitle: string;
+			deliverableId: string;
+			deliverableTitle: string;
 			round: number;
 			findings: string[];
 	  }
-	| { kind: "blocked"; groupId: string; groupTitle: string; reason: string }
-	| { kind: "failed"; agentKey: string; groupTitle: string; respawns: number }
-	| { kind: "shipped"; groupId: string; groupTitle: string; prUrl?: string }
+	| {
+			kind: "blocked";
+			deliverableId: string;
+			deliverableTitle: string;
+			reason: string;
+	  }
+	| {
+			kind: "failed";
+			agentKey: string;
+			deliverableTitle: string;
+			respawns: number;
+	  }
+	| {
+			kind: "shipped";
+			deliverableId: string;
+			deliverableTitle: string;
+			prUrl?: string;
+	  }
 	| {
 			kind: "settled";
-			groups: { id: string; title: string; status: string; prUrl?: string }[];
+			deliverables: {
+				id: string;
+				title: string;
+				status: string;
+				prUrl?: string;
+			}[];
 	  };
 
 /** The tmux surface the adapter consumes — injectable for tests (FakeTmux). */
@@ -130,10 +153,10 @@ export interface ExecutionAdapterOpts {
 }
 
 /**
- * ExecutionAdapter wraps GroupExecutor and provides real tmux+RPC execution.
+ * ExecutionAdapter wraps DeliverableExecutor and provides real tmux+RPC execution.
  */
 export class ExecutionAdapter {
-	private executor: GroupExecutor;
+	private executor: DeliverableExecutor;
 	private engine: PlanEngine;
 	private opts: ExecutionAdapterOpts;
 	private rpcServer: MaestroRpcServer;
@@ -159,8 +182,8 @@ export class ExecutionAdapter {
 		{ at: number; toolClass: "full" | "read-only" }
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
-	private lastRounds = new Map<string, number>(); // groupId → last logged fix round
-	private blockedLogged = new Set<string>(); // groupIds with a logged blocked event
+	private lastRounds = new Map<string, number>(); // deliverableId → last logged fix round
+	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
 	private pollInFlight = false; // skip overlapping pollSessions runs
 
@@ -183,15 +206,15 @@ export class ExecutionAdapter {
 			token: this.token,
 			handlers: {
 				status: (agentId, msg) => {
-					const [groupId, agentNamePart] = agentId.split("/");
-					if (!groupId || !agentNamePart) return;
-					this.handleStatus(agentId, groupId, agentNamePart, msg.status);
+					const [deliverableId, agentNamePart] = agentId.split("/");
+					if (!deliverableId || !agentNamePart) return;
+					this.handleStatus(agentId, deliverableId, agentNamePart, msg.status);
 				},
 				done: (agentId, msg) => {
-					const [groupId, agentNamePart] = agentId.split("/");
-					if (!groupId || !agentNamePart) return;
+					const [deliverableId, agentNamePart] = agentId.split("/");
+					if (!deliverableId || !agentNamePart) return;
 					this.router.send(agentId, { type: "doneAck", id: msg.id });
-					this.handleDone(groupId, agentNamePart);
+					this.handleDone(deliverableId, agentNamePart);
 				},
 				tokens: (agentId, msg) => {
 					this.recordFirstTurnCache(agentId, msg.snapshot);
@@ -208,9 +231,9 @@ export class ExecutionAdapter {
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
 				planRead: (agentId, msg) => this.handlePlanRead(agentId, msg),
 				questions: (agentId, msg) => {
-					const [groupId, agentNamePart] = agentId.split("/");
-					if (!groupId || !agentNamePart) return;
-					this.handleQuestions(agentId, groupId, agentNamePart, msg);
+					const [deliverableId, agentNamePart] = agentId.split("/");
+					if (!deliverableId || !agentNamePart) return;
+					this.handleQuestions(agentId, deliverableId, agentNamePart, msg);
 				},
 				// Explicit no-op: lens usage feeds the ledger once Wave 4 wires it.
 				lensUsage: () => {},
@@ -225,22 +248,23 @@ export class ExecutionAdapter {
 
 		const deps: ExecutorDeps = {
 			spawnAgent: async (spawnOpts) => {
-				const sessionName = agentName(spawnOpts.groupId, this.takenNames);
+				const sessionName = agentName(spawnOpts.deliverableId, this.takenNames);
 				this.takenNames.add(sessionName);
-				const agentKey = `${spawnOpts.groupId}/${spawnOpts.agentName}`;
+				const agentKey = `${spawnOpts.deliverableId}/${spawnOpts.agentName}`;
 				this.sessionNames.set(agentKey, sessionName);
 
-				const group = this.engine
+				const deliverable = this.engine
 					.get()
-					.groups.find((g) => g.id === spawnOpts.groupId);
-				if (!group) throw new Error(`group ${spawnOpts.groupId} not found`);
+					.deliverables.find((g) => g.id === spawnOpts.deliverableId);
+				if (!deliverable)
+					throw new Error(`deliverable ${spawnOpts.deliverableId} not found`);
 
 				// Determine agent mode
 				const isWorker = spawnOpts.agentName === "worker";
 				const agentMode = isWorker
-					? group.worker.mode
-					: (group.agents.find((a) => a.name === spawnOpts.agentName)?.mode ??
-						"read-only");
+					? deliverable.worker.mode
+					: (deliverable.agents.find((a) => a.name === spawnOpts.agentName)
+							?.mode ?? "read-only");
 
 				const cwd = spawnOpts.worktreePath ?? this.opts.ctx.cwd;
 				// Share the maestro's agent dir so agents inherit auth credentials
@@ -263,13 +287,13 @@ export class ExecutionAdapter {
 						spawnOpts.kickoffMessage ??
 						"Your session was resumed. Review your progress and continue.";
 				} else {
-					// Deterministic framed seed: Prior Work (dep-group summaries) →
+					// Deterministic framed seed: Prior Work (dep-deliverable summaries) →
 					// Findings from Earlier Review (done siblings) → the assignment.
 					const seed = buildSeed({
 						plan: this.engine.get(),
-						group,
+						deliverable,
 						agentName: spawnOpts.agentName,
-						summaries: this.collectSeedSummaries(spawnOpts.groupId),
+						summaries: this.collectSeedSummaries(spawnOpts.deliverableId),
 					});
 
 					// Build session file (JSONL): fork the plan's frozen knowledge
@@ -333,7 +357,7 @@ export class ExecutionAdapter {
 					agentKey,
 					session: sessionName,
 					resumed: Boolean(spawnOpts.resumeSessionFile),
-					groupTitle: this.groupTitle(spawnOpts.groupId),
+					deliverableTitle: this.deliverableTitle(spawnOpts.deliverableId),
 				});
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
@@ -383,7 +407,7 @@ export class ExecutionAdapter {
 			createWorktree: async (worktreeOpts) => {
 				const path = provisionWorktree({
 					repoPath: worktreeOpts.repoPath,
-					groupId: worktreeOpts.groupId,
+					deliverableId: worktreeOpts.deliverableId,
 					baseBranch: worktreeOpts.baseBranch,
 				});
 				if (!this.provisionedWorktrees.has(path)) {
@@ -397,22 +421,27 @@ export class ExecutionAdapter {
 				return path;
 			},
 
-			shipGroup: async (shipOpts) => {
+			shipDeliverable: async (shipOpts) => {
 				const plan = this.engine.get();
-				const group = plan.groups.find((g) => g.id === shipOpts.groupId);
-				if (!group) throw new Error(`group ${shipOpts.groupId} not found`);
-				const groupState = this.executor.getStates().get(shipOpts.groupId);
-				const agentReports = groupState
-					? [...groupState.agents.values()]
+				const deliverable = plan.deliverables.find(
+					(g) => g.id === shipOpts.deliverableId,
+				);
+				if (!deliverable)
+					throw new Error(`deliverable ${shipOpts.deliverableId} not found`);
+				const deliverableState = this.executor
+					.getStates()
+					.get(shipOpts.deliverableId);
+				const agentReports = deliverableState
+					? [...deliverableState.agents.values()]
 							.filter((a) => a.summary)
 							.map(
 								(a) =>
 									`### ${a.displayName ?? a.name} (${a.name})\n${a.summary}`,
 							)
 					: [];
-				const result = await shipGroupReal({
+				const result = await shipDeliverableReal({
 					plan,
-					group,
+					deliverable,
 					worktreePath: shipOpts.worktreePath,
 					agentReports,
 				});
@@ -454,7 +483,7 @@ export class ExecutionAdapter {
 			now: () => new Date().toISOString(),
 		};
 
-		this.executor = new GroupExecutor(this.engine, deps);
+		this.executor = new DeliverableExecutor(this.engine, deps);
 	}
 
 	async start(): Promise<void> {
@@ -494,43 +523,48 @@ export class ExecutionAdapter {
 
 		const beforeActive = this.engine
 			.get()
-			.groups.filter((g) => g.status === "active").length;
+			.deliverables.filter((g) => g.status === "active").length;
 
 		const shipped = await this.executor.tick();
-		this.recordGroupTransitions();
+		this.recordDeliverableTransitions();
 
 		const afterActive = this.engine
 			.get()
-			.groups.filter((g) => g.status === "active").length;
+			.deliverables.filter((g) => g.status === "active").length;
 
 		if (shipped.length > 0) {
-			for (const groupId of shipped) {
-				const g = this.engine.get().groups.find((x) => x.id === groupId);
-				this.logEvent("shipped", { group: groupId, prUrl: g?.prUrl });
+			for (const deliverableId of shipped) {
+				const g = this.engine
+					.get()
+					.deliverables.find((x) => x.id === deliverableId);
+				this.logEvent("shipped", {
+					deliverable: deliverableId,
+					prUrl: g?.prUrl,
+				});
 				this.emitEvent({
 					kind: "shipped",
-					groupId,
-					groupTitle: g?.title ?? groupId,
+					deliverableId,
+					deliverableTitle: g?.title ?? deliverableId,
 					...(g?.prUrl ? { prUrl: g.prUrl } : {}),
 				});
 			}
 			this.opts.onPlanChanged();
 		}
 
-		// Check if all groups are terminal
+		// Check if all deliverables are terminal
 		const plan = this.engine.get();
-		const allDone = plan.groups.every(
+		const allDone = plan.deliverables.every(
 			(g) =>
 				g.status === "shipped" ||
 				g.status === "superseded" ||
 				g.status === "abandoned",
 		);
-		if (allDone && plan.groups.length > 0 && !this.settledAnnounced) {
+		if (allDone && plan.deliverables.length > 0 && !this.settledAnnounced) {
 			this.settledAnnounced = true;
 			this.opts.onAllSettled?.();
 			this.emitEvent({
 				kind: "settled",
-				groups: plan.groups.map((g) => ({
+				deliverables: plan.deliverables.map((g) => ({
 					id: g.id,
 					title: g.title,
 					status: g.status,
@@ -547,7 +581,7 @@ export class ExecutionAdapter {
 
 	private handleStatus(
 		agentId: string,
-		groupId: string,
+		deliverableId: string,
 		agentNamePart: string,
 		status: "working" | "idle" | "error",
 	): void {
@@ -558,7 +592,7 @@ export class ExecutionAdapter {
 			return;
 		}
 		if (status === "idle") {
-			this.evaluateIdle(agentId, groupId, agentNamePart);
+			this.evaluateIdle(agentId, deliverableId, agentNamePart);
 		}
 	}
 
@@ -570,14 +604,14 @@ export class ExecutionAdapter {
 	 */
 	private evaluateIdle(
 		agentId: string,
-		groupId: string,
+		deliverableId: string,
 		agentNamePart: string,
 	): void {
 		{
 			const count = (this.idleCount.get(agentId) ?? 0) + 1;
 			this.idleCount.set(agentId, count);
 
-			const state = this.executor.getAgentState(groupId, agentNamePart);
+			const state = this.executor.getAgentState(deliverableId, agentNamePart);
 			if (
 				state &&
 				(state.status === "summarizing" || state.status === "done")
@@ -587,17 +621,20 @@ export class ExecutionAdapter {
 
 			if (agentNamePart === "worker") {
 				// Check if worker completed all tasks
-				if (this.executor.isWorkerDone(groupId)) {
-					const group = this.engine.get().groups.find((g) => g.id === groupId);
-					const gating = group?.tasks.filter((t) => t.kind === "task") ?? [];
+				if (this.executor.isWorkerDone(deliverableId)) {
+					const deliverable = this.engine
+						.get()
+						.deliverables.find((g) => g.id === deliverableId);
+					const gating =
+						deliverable?.tasks.filter((t) => t.kind === "task") ?? [];
 					if (gating.length > 0) {
-						this.checkCompletionGate(agentId, groupId);
+						this.checkCompletionGate(agentId, deliverableId);
 						return;
 					}
 					// Zero gating tasks: "all toggled" is vacuous, so sustained
 					// idling is the worker's only completion signal.
 					if (count >= IDLE_DONE_THRESHOLD && state?.status === "working") {
-						this.completeAgent(groupId, agentNamePart);
+						this.completeAgent(deliverableId, agentNamePart);
 						return;
 					}
 				}
@@ -605,15 +642,17 @@ export class ExecutionAdapter {
 				// Non-worker agents (read-only reviewers) never toggle tasks and
 				// interactive pi never exits — sustained idle means they're done.
 				// This is what makes the review→fix loop reachable in real runs.
-				this.completeAgent(groupId, agentNamePart);
+				this.completeAgent(deliverableId, agentNamePart);
 				return;
 			}
 
 			// Stuck detection: steer after 5 consecutive idles
 			if (count >= 5 && !this.stuckSteerSent.has(agentId)) {
-				const group = this.engine.get().groups.find((g) => g.id === groupId);
-				if (group) {
-					const remaining = group.tasks
+				const deliverable = this.engine
+					.get()
+					.deliverables.find((g) => g.id === deliverableId);
+				if (deliverable) {
+					const remaining = deliverable.tasks
 						.filter((t) => t.kind === "task" && !t.done)
 						.map((t) => `${t.title} (task id: \`${t.id}\`)`);
 					if (remaining.length > 0) {
@@ -628,16 +667,16 @@ export class ExecutionAdapter {
 		}
 	}
 
-	private handleDone(groupId: string, agentNamePart: string): void {
-		this.completeAgent(groupId, agentNamePart);
+	private handleDone(deliverableId: string, agentNamePart: string): void {
+		this.completeAgent(deliverableId, agentNamePart);
 	}
 
 	/**
 	 * Fire-and-forget completion: finishAgent → plan refresh → tick, with
 	 * rejection safety — a summarize/kill race must never crash the maestro.
 	 */
-	private completeAgent(groupId: string, name: string): void {
-		this.finishAgent(groupId, name).then(
+	private completeAgent(deliverableId: string, name: string): void {
+		this.finishAgent(deliverableId, name).then(
 			() => {
 				this.opts.onPlanChanged();
 				this.tick().catch((e) => {
@@ -649,16 +688,19 @@ export class ExecutionAdapter {
 			},
 			(e) => {
 				const message = e instanceof Error ? e.message : String(e);
-				this.executor.markAgentFailed(groupId, name, message);
-				this.logEvent("error", { agent: `${groupId}/${name}`, message });
+				this.executor.markAgentFailed(deliverableId, name, message);
+				this.logEvent("error", { agent: `${deliverableId}/${name}`, message });
 			},
 		);
 	}
 
 	/** Complete an agent through the executor, logging the lifecycle event. */
-	private async finishAgent(groupId: string, name: string): Promise<void> {
-		const agentKey = `${groupId}/${name}`;
-		const state = this.executor.getAgentState(groupId, name);
+	private async finishAgent(
+		deliverableId: string,
+		name: string,
+	): Promise<void> {
+		const agentKey = `${deliverableId}/${name}`;
+		const state = this.executor.getAgentState(deliverableId, name);
 		const firstCompletion = Boolean(state && state.status !== "done");
 		// Capture live bookkeeping now — markAgentDone kills the session, which
 		// prunes tokenSnapshots (see killSession) before the event is emitted.
@@ -668,14 +710,14 @@ export class ExecutionAdapter {
 		if (firstCompletion) {
 			this.logEvent("done", { agent: agentKey });
 		}
-		await this.executor.markAgentDone(groupId, name);
+		await this.executor.markAgentDone(deliverableId, name);
 		if (firstCompletion) {
 			// Summary exists only after markAgentDone ran requestSummary.
-			const summary = this.executor.getAgentState(groupId, name)?.summary;
+			const summary = this.executor.getAgentState(deliverableId, name)?.summary;
 			this.emitEvent({
 				kind: "done",
 				agentKey,
-				groupTitle: this.groupTitle(groupId),
+				deliverableTitle: this.deliverableTitle(deliverableId),
 				durationMs: spawnedAt !== undefined ? Date.now() - spawnedAt : 0,
 				tokens: tokens
 					? { input: tokens.input, output: tokens.output, turns: tokens.turns }
@@ -684,11 +726,11 @@ export class ExecutionAdapter {
 				...(summary ? { summary } : {}),
 			});
 		}
-		this.recordGroupTransitions();
+		this.recordDeliverableTransitions();
 	}
 
 	private handlePlanMutate(agentId: string, msg: PlanMutateMessage): void {
-		const groupId = msg.groupId;
+		const deliverableId = msg.deliverableId;
 		const params = msg.params ?? {};
 
 		try {
@@ -696,7 +738,7 @@ export class ExecutionAdapter {
 				case "toggleTask": {
 					const taskId = params.taskId;
 					if (!taskId) throw new Error("taskId required");
-					this.engine.toggleWorkItem(groupId, taskId);
+					this.engine.toggleWorkItem(deliverableId, taskId);
 					this.opts.onPlanChanged();
 					this.router.send(agentId, {
 						type: "planMutateResult",
@@ -704,13 +746,13 @@ export class ExecutionAdapter {
 						success: true,
 						taskId,
 					});
-					this.checkCompletionGate(agentId, groupId);
+					this.checkCompletionGate(agentId, deliverableId);
 					break;
 				}
 				case "addTask": {
 					const title = params.title;
 					if (!title) throw new Error("title required");
-					const item = this.engine.addWorkItem(groupId, {
+					const item = this.engine.addWorkItem(deliverableId, {
 						title,
 						body: params.body ?? "",
 						kind: params.kind ?? "followup",
@@ -727,7 +769,7 @@ export class ExecutionAdapter {
 				case "updateTask": {
 					const taskId = params.taskId;
 					if (!taskId) throw new Error("taskId required");
-					this.engine.updateWorkItem(groupId, taskId, {
+					this.engine.updateWorkItem(deliverableId, taskId, {
 						...(params.title ? { title: params.title } : {}),
 						...(params.body ? { body: params.body } : {}),
 					});
@@ -759,8 +801,8 @@ export class ExecutionAdapter {
 	}
 
 	private handlePlanRead(agentId: string, msg: PlanReadMessage): void {
-		const [groupId] = agentId.split("/");
-		const content = renderPlanForAgent(this.engine, groupId);
+		const [deliverableId] = agentId.split("/");
+		const content = renderPlanForAgent(this.engine, deliverableId);
 		this.router.send(agentId, {
 			type: "planReadResponse",
 			id: msg.id,
@@ -770,15 +812,17 @@ export class ExecutionAdapter {
 
 	private handleQuestions(
 		agentId: string,
-		groupId: string,
+		deliverableId: string,
 		agentNamePart: string,
 		msg: QuestionsMessage,
 	): void {
-		const group = this.engine.get().groups.find((g) => g.id === groupId);
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((g) => g.id === deliverableId);
 		this.questionQueue.enqueue({
 			agentId,
 			agentName: agentNamePart,
-			deliverableTitle: group?.title ?? groupId,
+			deliverableTitle: deliverable?.title ?? deliverableId,
 			questions: msg.questions,
 			resolve: (answers) => {
 				this.router.send(agentId, {
@@ -793,10 +837,12 @@ export class ExecutionAdapter {
 
 	// --- Completion gate ---
 
-	private checkCompletionGate(agentId: string, groupId: string): void {
-		const group = this.engine.get().groups.find((g) => g.id === groupId);
-		if (!group) return;
-		const gating = group.tasks.filter((t) => t.kind === "task");
+	private checkCompletionGate(agentId: string, deliverableId: string): void {
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((g) => g.id === deliverableId);
+		if (!deliverable) return;
+		const gating = deliverable.tasks.filter((t) => t.kind === "task");
 		if (gating.length === 0) return;
 		if (!gating.every((t) => t.done)) return;
 
@@ -805,10 +851,10 @@ export class ExecutionAdapter {
 		// shutdown here would kill the agent before it could summarize.
 		const agentNamePart = agentId.split("/")[1];
 		if (!agentNamePart) return;
-		const state = this.executor.getAgentState(groupId, agentNamePart);
+		const state = this.executor.getAgentState(deliverableId, agentNamePart);
 		if (state && (state.status === "summarizing" || state.status === "done"))
 			return;
-		this.completeAgent(groupId, agentNamePart);
+		this.completeAgent(deliverableId, agentNamePart);
 	}
 
 	// --- Session lookups ---
@@ -850,14 +896,18 @@ export class ExecutionAdapter {
 		this.questionQueue.answer(agentId, answers);
 	}
 
-	steer(groupId: string, guidance: string, agentName = "worker"): boolean {
-		const agentKey = `${groupId}/${agentName}`;
+	steer(
+		deliverableId: string,
+		guidance: string,
+		agentName = "worker",
+	): boolean {
+		const agentKey = `${deliverableId}/${agentName}`;
 		return this.router.send(agentKey, { type: "steer", content: guidance });
 	}
 
 	/**
 	 * Resolve a user-facing target to a tmux session name. Accepts a full
-	 * agent key (`group/agent`), a group id (→ its worker), a bare agent
+	 * agent key (`deliverable/agent`), a deliverable id (→ its worker), a bare agent
 	 * name, or a session name itself.
 	 */
 	resolveSessionName(target: string): string | undefined {
@@ -882,7 +932,7 @@ export class ExecutionAdapter {
 				cacheRatio?: number;
 			}
 		>;
-		groups: Map<string, { round: number; blocked?: string }>;
+		deliverables: Map<string, { round: number; blocked?: string }>;
 	} {
 		const agents = new Map<
 			string,
@@ -893,16 +943,18 @@ export class ExecutionAdapter {
 				cacheRatio?: number;
 			}
 		>();
-		const groups = new Map<string, { round: number; blocked?: string }>();
+		const deliverables = new Map<string, { round: number; blocked?: string }>();
 		const states = this.executor.getStates();
 
-		for (const [groupId, groupState] of states) {
-			groups.set(groupId, {
-				round: groupState.round,
-				...(groupState.blocked ? { blocked: groupState.blocked } : {}),
+		for (const [deliverableId, deliverableState] of states) {
+			deliverables.set(deliverableId, {
+				round: deliverableState.round,
+				...(deliverableState.blocked
+					? { blocked: deliverableState.blocked }
+					: {}),
 			});
-			for (const [name, agentState] of groupState.agents) {
-				const key = `${groupId}/${name}`;
+			for (const [name, agentState] of deliverableState.agents) {
+				const key = `${deliverableId}/${name}`;
 				const tokens = this.tokenSnapshots.get(key);
 				const cacheRatio = this.firstTurnCacheRatio.get(key);
 				agents.set(key, {
@@ -924,19 +976,19 @@ export class ExecutionAdapter {
 			}
 		}
 
-		return { agents, groups };
+		return { agents, deliverables };
 	}
 
-	async markAgentDone(groupId: string, name: string): Promise<void> {
-		await this.finishAgent(groupId, name);
+	async markAgentDone(deliverableId: string, name: string): Promise<void> {
+		await this.finishAgent(deliverableId, name);
 		this.opts.onPlanChanged();
 	}
 
-	isWorkerDone(groupId: string): boolean {
-		return this.executor.isWorkerDone(groupId);
+	isWorkerDone(deliverableId: string): boolean {
+		return this.executor.isWorkerDone(deliverableId);
 	}
 
-	getExecutor(): GroupExecutor {
+	getExecutor(): DeliverableExecutor {
 		return this.executor;
 	}
 
@@ -975,15 +1027,15 @@ export class ExecutionAdapter {
 		this.pollInFlight = true;
 		try {
 			for (const [agentKey, sessionName] of this.sessionNames) {
-				const [groupId, agentNamePart] = agentKey.split("/");
-				if (!groupId || !agentNamePart) continue;
+				const [deliverableId, agentNamePart] = agentKey.split("/");
+				if (!deliverableId || !agentNamePart) continue;
 
 				// Skip agents already done or mid-summarize (their session is
 				// being torn down deliberately — not a crash).
 				const states = this.executor.getStates();
-				const groupState = states.get(groupId);
-				if (!groupState) continue;
-				const agentState = groupState.agents.get(agentNamePart);
+				const deliverableState = states.get(deliverableId);
+				if (!deliverableState) continue;
+				const agentState = deliverableState.agents.get(agentNamePart);
 				if (
 					!agentState ||
 					agentState.status === "done" ||
@@ -1002,16 +1054,19 @@ export class ExecutionAdapter {
 							this.lastRpcStatus.get(agentKey) === "idle" &&
 							agentState.status === "working"
 						) {
-							this.evaluateIdle(agentKey, groupId, agentNamePart);
+							this.evaluateIdle(agentKey, deliverableId, agentNamePart);
 						}
 						continue;
 					}
 
 					// Session died — attempt respawn or mark done
 					const count = this.respawnCount.get(agentKey) ?? 0;
-					const group = this.engine.get().groups.find((g) => g.id === groupId);
+					const deliverable = this.engine
+						.get()
+						.deliverables.find((g) => g.id === deliverableId);
 					const hasRemainingTasks =
-						group?.tasks.some((t) => t.kind === "task" && !t.done) ?? false;
+						deliverable?.tasks.some((t) => t.kind === "task" && !t.done) ??
+						false;
 
 					if (hasRemainingTasks && count < 2) {
 						// Respawn: rebuild session and try again
@@ -1021,31 +1076,31 @@ export class ExecutionAdapter {
 							attempt: count + 1,
 						});
 						try {
-							await this.executor.respawnAgent(groupId, agentNamePart);
+							await this.executor.respawnAgent(deliverableId, agentNamePart);
 						} catch {
 							// Respawn failed — mark done
-							this.completeAgent(groupId, agentNamePart);
+							this.completeAgent(deliverableId, agentNamePart);
 						}
 					} else if (!hasRemainingTasks) {
 						// Work finished and the session is gone — legit completion.
-						this.completeAgent(groupId, agentNamePart);
+						this.completeAgent(deliverableId, agentNamePart);
 					} else {
 						// Respawn cap with tasks outstanding: a crash, not a
-						// completion. Fail the agent and block the group for the user.
+						// completion. Fail the agent and block the deliverable for the user.
 						this.executor.markAgentFailed(
-							groupId,
+							deliverableId,
 							agentNamePart,
 							"crashed and exhausted respawn attempts",
 						);
-						this.executor.blockGroup(
-							groupId,
+						this.executor.blockDeliverable(
+							deliverableId,
 							`agent ${agentNamePart} crashed repeatedly — inspect and /retry`,
 						);
 						this.logEvent("failed", { agent: agentKey, respawns: count });
 						this.emitEvent({
 							kind: "failed",
 							agentKey,
-							groupTitle: this.groupTitle(groupId),
+							deliverableTitle: this.deliverableTitle(deliverableId),
 							respawns: count,
 						});
 					}
@@ -1072,13 +1127,16 @@ export class ExecutionAdapter {
 	 * byte-identical prefix and should hit each other's warm cache.
 	 */
 	private agentToolClass(agentKey: string): "full" | "read-only" {
-		const [groupId, name] = agentKey.split("/");
-		const group = this.engine.get().groups.find((g) => g.id === groupId);
-		if (!group) return "full";
+		const [deliverableId, name] = agentKey.split("/");
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((g) => g.id === deliverableId);
+		if (!deliverable) return "full";
 		const mode =
 			name === "worker"
-				? group.worker.mode
-				: (group.agents.find((a) => a.name === name)?.mode ?? "read-only");
+				? deliverable.worker.mode
+				: (deliverable.agents.find((a) => a.name === name)?.mode ??
+					"read-only");
 		return mode === "read-only" ? "read-only" : "full";
 	}
 
@@ -1128,10 +1186,11 @@ export class ExecutionAdapter {
 
 	// --- Event log ---
 
-	/** Group title for user-facing events; falls back to the id. */
-	private groupTitle(groupId: string): string {
+	/** Deliverable title for user-facing events; falls back to the id. */
+	private deliverableTitle(deliverableId: string): string {
 		return (
-			this.engine.get().groups.find((g) => g.id === groupId)?.title ?? groupId
+			this.engine.get().deliverables.find((g) => g.id === deliverableId)
+				?.title ?? deliverableId
 		);
 	}
 
@@ -1157,96 +1216,99 @@ export class ExecutionAdapter {
 		}
 	}
 
-	/** Diff executor group state and log fix-round-start / blocked events. */
-	private recordGroupTransitions(): void {
-		for (const [groupId, state] of this.executor.getStates()) {
-			const lastRound = this.lastRounds.get(groupId) ?? 0;
+	/** Diff executor deliverable state and log fix-round-start / blocked events. */
+	private recordDeliverableTransitions(): void {
+		for (const [deliverableId, state] of this.executor.getStates()) {
+			const lastRound = this.lastRounds.get(deliverableId) ?? 0;
 			if (state.round > lastRound) {
 				this.logEvent("fix-round-start", {
-					group: groupId,
+					deliverable: deliverableId,
 					round: state.round,
 				});
-				this.lastRounds.set(groupId, state.round);
+				this.lastRounds.set(deliverableId, state.round);
 				this.emitEvent({
 					kind: "fix-round",
-					groupId,
-					groupTitle: this.groupTitle(groupId),
+					deliverableId,
+					deliverableTitle: this.deliverableTitle(deliverableId),
 					round: state.round,
 					findings: state.lastFindingsByReviewer
 						? [...state.lastFindingsByReviewer.values()].flat()
 						: [],
 				});
 			}
-			if (state.blocked && !this.blockedLogged.has(groupId)) {
-				this.logEvent("blocked", { group: groupId, reason: state.blocked });
-				this.blockedLogged.add(groupId);
+			if (state.blocked && !this.blockedLogged.has(deliverableId)) {
+				this.logEvent("blocked", {
+					deliverable: deliverableId,
+					reason: state.blocked,
+				});
+				this.blockedLogged.add(deliverableId);
 				this.emitEvent({
 					kind: "blocked",
-					groupId,
-					groupTitle: this.groupTitle(groupId),
+					deliverableId,
+					deliverableTitle: this.deliverableTitle(deliverableId),
 					reason: state.blocked,
 				});
 			} else if (!state.blocked) {
-				this.blockedLogged.delete(groupId);
+				this.blockedLogged.delete(deliverableId);
 			}
 		}
 	}
 
 	/**
-	 * Stored summaries feeding buildSeed: completed dep groups' group
-	 * summaries plus summaries of siblings that already finished in this group
+	 * Stored summaries feeding buildSeed: completed dep deliverables' deliverable
+	 * summaries plus summaries of siblings that already finished in this deliverable
 	 * (e.g. the worker's summary seeding its reviewers).
 	 */
-	private collectSeedSummaries(groupId: string): SeedSummaries {
+	private collectSeedSummaries(deliverableId: string): SeedSummaries {
 		const plan = this.engine.get();
-		const group = plan.groups.find((g) => g.id === groupId);
+		const deliverable = plan.deliverables.find((g) => g.id === deliverableId);
 
-		const groups = new Map<string, string>();
-		for (const depId of group?.dependsOn ?? []) {
-			const dep = plan.groups.find((g) => g.id === depId);
-			if (dep?.summary) groups.set(depId, dep.summary);
+		const deliverables = new Map<string, string>();
+		for (const depId of deliverable?.dependsOn ?? []) {
+			const dep = plan.deliverables.find((g) => g.id === depId);
+			if (dep?.summary) deliverables.set(depId, dep.summary);
 		}
 
 		const agents = new Map<string, string>();
-		const groupState = this.executor.getStates().get(groupId);
-		if (groupState) {
-			for (const [name, state] of groupState.agents) {
+		const deliverableState = this.executor.getStates().get(deliverableId);
+		if (deliverableState) {
+			for (const [name, state] of deliverableState.agents) {
 				if (state.status === "done" && state.summary) {
 					agents.set(name, state.summary);
 				}
 			}
 		}
 
-		return { groups, agents };
+		return { deliverables, agents };
 	}
 }
 
 // --- Plan rendering for agents ---
 
 /**
- * Render a filtered plan view for an agent, scoped to its group.
- * Shows group title, body, tasks (with done status), and dep summaries.
+ * Render a filtered plan view for an agent, scoped to its deliverable.
+ * Shows deliverable title, body, tasks (with done status), and dep summaries.
  */
 export function renderPlanForAgent(
 	engine: PlanEngine,
-	groupId: string,
+	deliverableId: string,
 ): string {
 	const plan = engine.get();
-	const group = plan.groups.find((g) => g.id === groupId);
-	if (!group) return "(group not found)";
+	const deliverable = plan.deliverables.find((g) => g.id === deliverableId);
+	if (!deliverable) return "(deliverable not found)";
 
 	const lines: string[] = [];
-	lines.push(`# ${group.title}`);
+	lines.push(`# ${deliverable.title}`);
 	lines.push("");
-	if (group.body) {
-		lines.push(group.body);
+	if (deliverable.body) {
+		lines.push(deliverable.body);
 		lines.push("");
 	}
 
 	// Dependency summaries
-	if (group.dependsOn?.length) {
-		for (const depId of group.dependsOn) {
-			const dep = plan.groups.find((g) => g.id === depId);
+	if (deliverable.dependsOn?.length) {
+		for (const depId of deliverable.dependsOn) {
+			const dep = plan.deliverables.find((g) => g.id === depId);
 			if (dep?.summary) {
 				lines.push(`## Dependency: ${dep.title}`);
 				lines.push(dep.summary);
@@ -1258,7 +1320,7 @@ export function renderPlanForAgent(
 	// Tasks
 	lines.push("## Tasks");
 	lines.push("");
-	for (const task of group.tasks) {
+	for (const task of deliverable.tasks) {
 		const check = task.done ? "x" : " ";
 		const kindTag = task.kind !== "task" ? ` _(${task.kind})_` : "";
 		lines.push(

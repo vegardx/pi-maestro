@@ -44,6 +44,17 @@ export {
 	summaryHash,
 	transitiveDependencies,
 } from "./compaction.js";
+export {
+	renderDashboard,
+	renderDashboardText,
+} from "./deliverable-dashboard.js";
+export {
+	type AgentState,
+	DeliverableExecutor,
+	type DeliverableRunState,
+	type ExecutorDeps,
+} from "./deliverable-executor.js";
+export { buildRecap } from "./deliverable-recap.js";
 export { PlanEngine } from "./engine.js";
 export {
 	createExecution,
@@ -55,17 +66,6 @@ export {
 	buildPlanAwareCompactionMarker,
 	type ForwardSummaryInput,
 } from "./forward-summary.js";
-export {
-	renderDashboard,
-	renderDashboardText,
-} from "./group-dashboard.js";
-export {
-	type AgentState,
-	type ExecutorDeps,
-	GroupExecutor,
-	type GroupRunState,
-} from "./group-executor.js";
-export { buildRecap } from "./group-recap.js";
 export {
 	type FooterDeps,
 	formatCacheHitRate,
@@ -124,7 +124,7 @@ export { createPlanStore, plansRoot } from "./storage.js";
 export { createModesSummariser } from "./summarise.js";
 export {
 	createAgentTool,
-	createGroupTool,
+	createDeliverableTool,
 	createPlanTool,
 	createTaskTool,
 } from "./tools.js";

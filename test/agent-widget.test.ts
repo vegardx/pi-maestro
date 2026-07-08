@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	type AgentTableAgent,
-	type AgentTableGroup,
+	type AgentTableDeliverable,
 	buildAgentTable,
 	formatElapsed,
 	formatTokens,
@@ -32,7 +32,7 @@ function agent(
 	};
 }
 
-/** The approved-design population: two groups, one with a fix round. */
+/** The approved-design population: two deliverables, one with a fix round. */
 function sampleAgents(): Map<string, AgentTableAgent> {
 	return new Map([
 		[
@@ -62,12 +62,12 @@ function sampleAgents(): Map<string, AgentTableAgent> {
 				elapsedMs: 63_000, // 1m03s
 			}),
 		],
-		["done-group/worker", agent("done", { input: 9_999 })],
-		["pending-group/worker", agent("pending")],
+		["done-deliverable/worker", agent("done", { input: 9_999 })],
+		["pending-deliverable/worker", agent("pending")],
 	]);
 }
 
-function sampleGroups(): Map<string, AgentTableGroup> {
+function sampleDeliverables(): Map<string, AgentTableDeliverable> {
 	return new Map([
 		["clamp", { round: 1 }],
 		["average", { round: 0 }],
@@ -119,7 +119,7 @@ describe("buildAgentTable", () => {
 	it("renders an aligned full-width box at width 100", () => {
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups: sampleGroups(),
+			deliverables: sampleDeliverables(),
 			width: 100,
 			now: NOW,
 		});
@@ -127,7 +127,7 @@ describe("buildAgentTable", () => {
 		expect(lines).toHaveLength(5);
 		for (const line of lines) expect(line).toHaveLength(100);
 		// Headers live in the top rule; the "agents" title is gone.
-		expect(lines[0].startsWith("┌─ GROUP ")).toBe(true);
+		expect(lines[0].startsWith("┌─ DELIV ")).toBe(true);
 		expect(lines[0]).not.toContain("agents");
 		for (const h of ["AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"]) {
 			expect(lines[0]).toContain(` ${h} `);
@@ -145,17 +145,17 @@ describe("buildAgentTable", () => {
 			"worker    working       8.8k / 1.4k  57%    1m03s",
 		);
 
-		// GROUP flexes: rows fill the full width, labels sit one cell right
+		// DELIVERABLE flexes: rows fill the full width, labels sit one cell right
 		// of their column (the rule's "┌─ " prefix vs the rows' "│ ").
 		const agentLabel = lines[0].indexOf("AGENT");
 		expect(lines[1].indexOf("worker")).toBe(agentLabel - 1);
 		expect(lines[2].indexOf("reviewer")).toBe(agentLabel - 1);
 	});
 
-	it("shows fixing rN only for workers of groups with round > 0", () => {
+	it("shows fixing rN only for workers of deliverables with round > 0", () => {
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups: sampleGroups(),
+			deliverables: sampleDeliverables(),
 			width: 100,
 			now: NOW,
 		});
@@ -167,7 +167,7 @@ describe("buildAgentTable", () => {
 	it("drops the CACHE column at width 60", () => {
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups: sampleGroups(),
+			deliverables: sampleDeliverables(),
 			width: 60,
 			now: NOW,
 		});
@@ -182,7 +182,7 @@ describe("buildAgentTable", () => {
 	it("drops ELAPSED too when even narrower", () => {
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups: sampleGroups(),
+			deliverables: sampleDeliverables(),
 			width: 50,
 			now: NOW,
 		});
@@ -192,28 +192,28 @@ describe("buildAgentTable", () => {
 		expect(lines[0]).toContain("TOKENS");
 	});
 
-	it("truncates long group/agent names with an ellipsis", () => {
+	it("truncates long deliverable/agent names with an ellipsis", () => {
 		const agents = new Map([
 			[
-				"a-very-long-group-name-indeed/an-extremely-long-agent-name",
+				"a-very-long-deliverable-name-indeed/an-extremely-long-agent-name",
 				agent("working", { input: 1_000, output: 100, elapsedMs: 1_000 }),
 			],
 		]);
 		const lines = buildAgentTable({ agents, width: 80, now: NOW });
-		// GROUP flexes but still clips when the name exceeds the flexed width.
-		expect(lines[1]).toMatch(/a-very-long-group[a-z-]*…/);
+		// DELIVERABLE flexes but still clips when the name exceeds the flexed width.
+		expect(lines[1]).toMatch(/a-very-long-deliv[a-z-]*…/);
 		expect(lines[1]).toContain("an-extremely-lo…");
 		for (const line of lines) expect(line).toHaveLength(80);
 	});
 
-	it("adds a full-width truncated row for a blocked group", () => {
-		const groups = new Map<string, AgentTableGroup>([
+	it("adds a full-width truncated row for a blocked deliverable", () => {
+		const deliverables = new Map<string, AgentTableDeliverable>([
 			["clamp", { round: 1 }],
 			["average", { round: 0, blocked: `review stalled: ${"x".repeat(200)}` }],
 		]);
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups,
+			deliverables,
 			width: 80,
 			now: NOW,
 		});
@@ -246,17 +246,17 @@ describe("styleAgentTable", () => {
 	} as unknown as Parameters<typeof styleAgentTable>[1];
 
 	it("dims borders and header, colors blocked rows, leaves rows plain", () => {
-		const groups = new Map<string, AgentTableGroup>([
+		const deliverables = new Map<string, AgentTableDeliverable>([
 			["average", { round: 0, blocked: "reviewer stalled" }],
 		]);
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
-			groups,
+			deliverables,
 			width: 80,
 			now: NOW,
 		});
 		const styled = styleAgentTable(lines, theme);
-		expect(styled[0]).toMatch(/^<dim>┌─ GROUP/);
+		expect(styled[0]).toMatch(/^<dim>┌─ DELIV/);
 		expect(styled[styled.length - 1]).toMatch(/^<dim>└/);
 		// Agent rows: frame dimmed, content untouched — color never bleeds
 		// into the box characters.
@@ -284,7 +284,7 @@ describe("syncAgentWidget", () => {
 				? {
 						snapshot: () => ({
 							agents,
-							groups: new Map<string, AgentTableGroup>(),
+							deliverables: new Map<string, AgentTableDeliverable>(),
 						}),
 					}
 				: undefined,
@@ -315,7 +315,7 @@ describe("syncAgentWidget", () => {
 		expect(typeof factory).toBe("function");
 		const theme = { fg: (_c: string, s: string) => s };
 		const rendered = factory(undefined, theme).render(80);
-		expect(rendered[0]).toContain("GROUP");
+		expect(rendered[0]).toContain("DELIV");
 		expect(rendered.join("\n")).toContain("g");
 		expect(rt.agentWidgetTimer).toBeDefined();
 

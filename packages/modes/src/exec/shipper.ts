@@ -1,10 +1,10 @@
-// Shipper — the maestro's push + PR seam for completed groups. Owns:
-//   - shipGroup: preflight (clean tree) → push → find/create/edit PR
+// Shipper — the maestro's push + PR seam for completed deliverables. Owns:
+//   - shipDeliverable: preflight (clean tree) → push → find/create/edit PR
 //   - shipBaseBranch: stacked bases within a repo; cross-repo deps are
-//     ordering-only (base falls back to the group's own repo default branch)
-//   - reconcileShippedGroups: retarget open PRs whose stacked base merged;
+//     ordering-only (base falls back to the deliverable's own repo default branch)
+//   - reconcileShippedDeliverables: retarget open PRs whose stacked base merged;
 //     conflicts are flagged needs-rebase, never auto-resolved
-//   - cleanupWorktrees: DAG-driven retention — a terminal group's worktree is
+//   - cleanupWorktrees: DAG-driven retention — a terminal deliverable's worktree is
 //     removable only once no dependent is unshipped
 //
 // Self-contained: no plan mutation, no engine access. Callers persist results
@@ -27,35 +27,37 @@ import {
 } from "@vegardx/pi-github";
 import {
 	DEFAULT_REPO_KEY,
-	defaultBranchForGroup,
-	findGroup,
+	type Deliverable,
+	defaultBranchForDeliverable,
+	findDeliverable,
 	type Plan,
 	type PlanRepo,
 	pickBaseBranch,
 	TERMINAL_STATUSES,
-	type WorkGroup,
 } from "../schema.js";
 import { buildPrBody } from "../shipping.js";
 
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
 /**
- * Registry key of the repo a group targets. The `repo` field is reserved on
- * WorkGroup per docs/multi-repo-plans.md; read loosely until schema lands it.
+ * Registry key of the repo a deliverable targets. The `repo` field is reserved on
+ * Deliverable per docs/multi-repo-plans.md; read loosely until schema lands it.
  */
-export function groupRepoKey(group: WorkGroup): string {
-	return (group as WorkGroup & { repo?: string }).repo ?? DEFAULT_REPO_KEY;
+export function deliverableRepoKey(deliverable: Deliverable): string {
+	return (
+		(deliverable as Deliverable & { repo?: string }).repo ?? DEFAULT_REPO_KEY
+	);
 }
 
 /**
- * Resolve the repo a group targets: its registry entry when it names one,
+ * Resolve the repo a deliverable targets: its registry entry when it names one,
  * else the plan's default repo.
  */
 export function repoFor(
 	plan: Pick<Plan, "repoPath" | "repos">,
-	group: WorkGroup,
+	deliverable: Deliverable,
 ): PlanRepo {
-	const key = groupRepoKey(group);
+	const key = deliverableRepoKey(deliverable);
 	const entry = plan.repos?.find((r) => r.key === key);
 	return entry ?? { key: DEFAULT_REPO_KEY, path: plan.repoPath };
 }
@@ -103,25 +105,26 @@ export const defaultShipGit: ShipGit = {
 // ─── Base resolution ─────────────────────────────────────────────────────────
 
 /**
- * Base branch for a group's PR. Stacked groups base off their first
+ * Base branch for a deliverable's PR. Stacked deliverables base off their first
  * dependency's branch — but only when that dependency lives in the same repo;
  * cross-repo dependsOn is ordering-only, so the base falls back to the
- * group's own repo default branch.
+ * deliverable's own repo default branch.
  */
 export function shipBaseBranch(
-	plan: Pick<Plan, "groups" | "repoPath" | "repos">,
-	group: WorkGroup,
+	plan: Pick<Plan, "deliverables" | "repoPath" | "repos">,
+	deliverable: Deliverable,
 	defaultBranch: string,
 ): string {
-	const deps = group.dependsOn ?? [];
-	if (deps.length === 0 || group.stacked === false) return defaultBranch;
-	const parent = findGroup(plan, deps[0]);
+	const deps = deliverable.dependsOn ?? [];
+	if (deps.length === 0 || deliverable.stacked === false) return defaultBranch;
+	const parent = findDeliverable(plan, deps[0]);
 	if (!parent) return defaultBranch;
-	if (groupRepoKey(parent) !== groupRepoKey(group)) return defaultBranch;
-	return pickBaseBranch(plan, group, defaultBranch);
+	if (deliverableRepoKey(parent) !== deliverableRepoKey(deliverable))
+		return defaultBranch;
+	return pickBaseBranch(plan, deliverable, defaultBranch);
 }
 
-// ─── shipGroup ───────────────────────────────────────────────────────────────
+// ─── shipDeliverable ───────────────────────────────────────────────────────────────
 
 export type ShipErrorCode =
 	| "dirty-worktree"
@@ -140,11 +143,11 @@ export type ShipResult =
 	  }
 	| { ok: false; code: ShipErrorCode; message: string; retryable: boolean };
 
-export interface ShipGroupOpts {
+export interface ShipDeliverableOpts {
 	plan: Plan;
-	group: WorkGroup;
+	deliverable: Deliverable;
 	worktreePath: string;
-	/** PR-body agent reports; defaults to the group summary when present. */
+	/** PR-body agent reports; defaults to the deliverable summary when present. */
 	agentReports?: string[];
 	prClient?: PrClient;
 	git?: ShipGit;
@@ -161,12 +164,14 @@ function shipError(code: ShipErrorCode, message: string): ShipResult {
 }
 
 /**
- * Push a completed group's branch and create (or update) its PR. Never ships
+ * Push a completed deliverable's branch and create (or update) its PR. Never ships
  * a dirty tree; every failure is a typed, retryable result — callers decide
  * whether and when to retry, and persist prUrl/prNumber on success.
  */
-export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
-	const { plan, group, worktreePath } = opts;
+export async function shipDeliverable(
+	opts: ShipDeliverableOpts,
+): Promise<ShipResult> {
+	const { plan, deliverable, worktreePath } = opts;
 	const prClient = opts.prClient ?? defaultPrClient;
 	const git = opts.git ?? defaultShipGit;
 
@@ -177,7 +182,7 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 		);
 	}
 
-	const branch = group.branch ?? defaultBranchForGroup(group);
+	const branch = deliverable.branch ?? defaultBranchForDeliverable(deliverable);
 	const push = await git.pushBranch(worktreePath, branch);
 	if (!push.ok) {
 		return shipError(
@@ -186,7 +191,7 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 		);
 	}
 
-	const repo = repoFor(plan, group);
+	const repo = repoFor(plan, deliverable);
 	const defaultBranch =
 		repo.defaultBranch ?? git.detectDefaultBranch(repo.path);
 	if (!defaultBranch) {
@@ -195,10 +200,11 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 			`cannot detect the default branch of ${repo.path}`,
 		);
 	}
-	const base = shipBaseBranch(plan, group, defaultBranch);
+	const base = shipBaseBranch(plan, deliverable, defaultBranch);
 
-	const reports = opts.agentReports ?? (group.summary ? [group.summary] : []);
-	const body = buildPrBody(group, reports);
+	const reports =
+		opts.agentReports ?? (deliverable.summary ? [deliverable.summary] : []);
+	const body = buildPrBody(deliverable, reports);
 
 	const existing = await prClient.findOpenPr(worktreePath, branch);
 	if (existing.error) return shipError("pr-failed", existing.error);
@@ -211,7 +217,7 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 		}
 		return {
 			ok: true,
-			prUrl: existing.pr.url || group.prUrl || "",
+			prUrl: existing.pr.url || deliverable.prUrl || "",
 			prNumber: existing.pr.number,
 			base: existing.pr.baseRefName || base,
 			created: false,
@@ -219,7 +225,7 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 	}
 
 	const created = await prClient.createPr(worktreePath, {
-		title: group.title,
+		title: deliverable.title,
 		body,
 		base,
 	});
@@ -243,15 +249,20 @@ export async function shipGroup(opts: ShipGroupOpts): Promise<ShipResult> {
 
 export interface ReconcileReport {
 	/** PRs whose base branch merged, retargeted to the repo default branch. */
-	retargeted: { groupId: string; prNumber: number; from: string; to: string }[];
+	retargeted: {
+		deliverableId: string;
+		prNumber: number;
+		from: string;
+		to: string;
+	}[];
 	/** Retargeted PRs now conflicting — surfaced for a human, never auto-resolved. */
 	needsRebase: {
-		groupId: string;
+		deliverableId: string;
 		prNumber: number;
 		base: string;
 		message: string;
 	}[];
-	errors: { groupId: string; message: string }[];
+	errors: { deliverableId: string; message: string }[];
 }
 
 export interface ReconcileOpts {
@@ -260,29 +271,29 @@ export interface ReconcileOpts {
 	git?: ShipGit;
 }
 
-/** Group whose branch is `branch` in the same repo as `group`, or null. */
+/** Deliverable whose branch is `branch` in the same repo as `deliverable`, or null. */
 function stackedParentByBranch(
 	plan: Plan,
-	group: WorkGroup,
+	deliverable: Deliverable,
 	branch: string,
-): WorkGroup | null {
+): Deliverable | null {
 	return (
-		plan.groups.find(
+		plan.deliverables.find(
 			(g) =>
-				g.id !== group.id &&
-				(g.branch ?? defaultBranchForGroup(g)) === branch &&
-				groupRepoKey(g) === groupRepoKey(group),
+				g.id !== deliverable.id &&
+				(g.branch ?? defaultBranchForDeliverable(g)) === branch &&
+				deliverableRepoKey(g) === deliverableRepoKey(deliverable),
 		) ?? null
 	);
 }
 
 /**
- * For every shipped group with an open PR based on a sibling group's branch:
+ * For every shipped deliverable with an open PR based on a sibling deliverable's branch:
  * once that sibling's PR has merged, retarget the PR to the repo default
  * branch. Conflicts after retarget are reported as needs-rebase. Pure report
  * out — plan mutation happens in the caller.
  */
-export async function reconcileShippedGroups(
+export async function reconcileShippedDeliverables(
 	opts: ReconcileOpts,
 ): Promise<ReconcileReport> {
 	const { plan } = opts;
@@ -294,25 +305,36 @@ export async function reconcileShippedGroups(
 		errors: [],
 	};
 
-	for (const group of plan.groups) {
-		if (group.status !== "shipped" || group.prNumber === undefined) continue;
-		const repo = repoFor(plan, group);
-		const cwd = group.worktreePath ?? repo.path;
+	for (const deliverable of plan.deliverables) {
+		if (deliverable.status !== "shipped" || deliverable.prNumber === undefined)
+			continue;
+		const repo = repoFor(plan, deliverable);
+		const cwd = deliverable.worktreePath ?? repo.path;
 
-		const view = await prClient.viewPr(cwd, group.prNumber);
+		const view = await prClient.viewPr(cwd, deliverable.prNumber);
 		if (!view.pr) {
 			if (view.error)
-				report.errors.push({ groupId: group.id, message: view.error });
+				report.errors.push({
+					deliverableId: deliverable.id,
+					message: view.error,
+				});
 			continue;
 		}
 		if (view.pr.state !== "OPEN") continue;
 
-		const parent = stackedParentByBranch(plan, group, view.pr.baseRefName);
+		const parent = stackedParentByBranch(
+			plan,
+			deliverable,
+			view.pr.baseRefName,
+		);
 		if (!parent || parent.prNumber === undefined) continue;
 		const parentView = await prClient.viewPr(cwd, parent.prNumber);
 		if (!parentView.pr) {
 			if (parentView.error)
-				report.errors.push({ groupId: group.id, message: parentView.error });
+				report.errors.push({
+					deliverableId: deliverable.id,
+					message: parentView.error,
+				});
 			continue;
 		}
 		if (parentView.pr.state !== "MERGED") continue;
@@ -321,36 +343,36 @@ export async function reconcileShippedGroups(
 			repo.defaultBranch ?? git.detectDefaultBranch(repo.path);
 		if (!defaultBranch) {
 			report.errors.push({
-				groupId: group.id,
+				deliverableId: deliverable.id,
 				message: `cannot detect the default branch of ${repo.path}`,
 			});
 			continue;
 		}
 
-		const edit = await prClient.editPr(cwd, group.prNumber, {
+		const edit = await prClient.editPr(cwd, deliverable.prNumber, {
 			base: defaultBranch,
 		});
 		if (!edit.ok) {
 			report.errors.push({
-				groupId: group.id,
-				message: edit.error ?? `retargeting PR #${group.prNumber} failed`,
+				deliverableId: deliverable.id,
+				message: edit.error ?? `retargeting PR #${deliverable.prNumber} failed`,
 			});
 			continue;
 		}
 		report.retargeted.push({
-			groupId: group.id,
-			prNumber: group.prNumber,
+			deliverableId: deliverable.id,
+			prNumber: deliverable.prNumber,
 			from: view.pr.baseRefName,
 			to: defaultBranch,
 		});
 
-		const after = await prClient.viewPr(cwd, group.prNumber);
+		const after = await prClient.viewPr(cwd, deliverable.prNumber);
 		if (after.pr?.mergeable === "CONFLICTING") {
 			report.needsRebase.push({
-				groupId: group.id,
-				prNumber: group.prNumber,
+				deliverableId: deliverable.id,
+				prNumber: deliverable.prNumber,
 				base: defaultBranch,
-				message: `PR #${group.prNumber} conflicts with ${defaultBranch} after retarget — rebase required`,
+				message: `PR #${deliverable.prNumber} conflicts with ${defaultBranch} after retarget — rebase required`,
 			});
 		}
 	}
@@ -361,8 +383,8 @@ export async function reconcileShippedGroups(
 // ─── DAG-driven worktree cleanup ─────────────────────────────────────────────
 
 export interface CleanupReport {
-	removed: { groupId: string; path: string }[];
-	retained: { groupId: string; path: string; reason: string }[];
+	removed: { deliverableId: string; path: string }[];
+	retained: { deliverableId: string; path: string; reason: string }[];
 }
 
 export interface CleanupOpts {
@@ -372,7 +394,7 @@ export interface CleanupOpts {
 
 /**
  * Remove worktrees the DAG no longer needs: a terminal (shipped/superseded/
- * abandoned) group's worktree is removable only when no dependent group is
+ * abandoned) deliverable's worktree is removable only when no dependent deliverable is
  * unshipped — unshipped dependents may still need it for stacking or rebase.
  * Active worktrees are not candidates. Never forces removal, so a dirty
  * worktree is retained with its reason. Pure report out — callers clear
@@ -383,31 +405,35 @@ export function cleanupWorktrees(opts: CleanupOpts): CleanupReport {
 	const git = opts.git ?? defaultShipGit;
 	const report: CleanupReport = { removed: [], retained: [] };
 
-	for (const group of plan.groups) {
-		const path = group.worktreePath;
+	for (const deliverable of plan.deliverables) {
+		const path = deliverable.worktreePath;
 		if (!path) continue;
-		if (!TERMINAL_STATUSES.includes(group.status)) continue;
+		if (!TERMINAL_STATUSES.includes(deliverable.status)) continue;
 
-		const blocker = plan.groups.find(
+		const blocker = plan.deliverables.find(
 			(g) =>
-				(g.dependsOn ?? []).includes(group.id) &&
+				(g.dependsOn ?? []).includes(deliverable.id) &&
 				!TERMINAL_STATUSES.includes(g.status),
 		);
 		if (blocker) {
 			report.retained.push({
-				groupId: group.id,
+				deliverableId: deliverable.id,
 				path,
 				reason: `dependent \`${blocker.id}\` is ${blocker.status} and may need it for stacking/rebase`,
 			});
 			continue;
 		}
 
-		const repo = repoFor(plan, group);
+		const repo = repoFor(plan, deliverable);
 		const removed = git.removeWorktree(repo.path, path);
 		if (removed.ok) {
-			report.removed.push({ groupId: group.id, path });
+			report.removed.push({ deliverableId: deliverable.id, path });
 		} else {
-			report.retained.push({ groupId: group.id, path, reason: removed.error });
+			report.retained.push({
+				deliverableId: deliverable.id,
+				path,
+				reason: removed.error,
+			});
 		}
 	}
 

@@ -130,15 +130,17 @@ describe("execution adapter — onEvent emission", () => {
 		return adapter;
 	}
 
-	/** Start the adapter over a pre-provisioned active group (no git). */
-	async function startAdapter(groupId: string): Promise<ExecutionAdapter> {
-		engine.setGroupStatus(groupId, "active");
-		engine.updateGroup(groupId, { worktreePath: tmpDir });
+	/** Start the adapter over a pre-provisioned active deliverable (no git). */
+	async function startAdapter(
+		deliverableId: string,
+	): Promise<ExecutionAdapter> {
+		engine.setDeliverableStatus(deliverableId, "active");
+		engine.updateDeliverable(deliverableId, { worktreePath: tmpDir });
 		const a = makeAdapter();
 		await a.start();
-		// Hydrated active groups come up blocked (restart safety); unblock as
+		// Hydrated active deliverables come up blocked (restart safety); unblock as
 		// a user's /retry would so ticks may spawn agents.
-		a.getExecutor().unblockGroup(groupId);
+		a.getExecutor().unblockDeliverable(deliverableId);
 		await a.tick();
 		return a;
 	}
@@ -170,7 +172,7 @@ describe("execution adapter — onEvent emission", () => {
 	}
 
 	it("emits spawn and done (summary + duration + tokens) and prunes live-session bookkeeping", async () => {
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "implement it" });
 		const adapter = await startAdapter("work");
 
@@ -179,7 +181,7 @@ describe("execution adapter — onEvent emission", () => {
 			kind: "spawn",
 			agentKey: "work/worker",
 			resumed: false,
-			groupTitle: "Work",
+			deliverableTitle: "Work",
 		});
 		expect(spawn && "session" in spawn && spawn.session).toBe(tmux.spawned[0]);
 
@@ -213,7 +215,7 @@ describe("execution adapter — onEvent emission", () => {
 		expect(done).toBeDefined();
 		if (done?.kind !== "done") throw new Error("unreachable");
 		expect(done.agentKey).toBe("work/worker");
-		expect(done.groupTitle).toBe("Work");
+		expect(done.deliverableTitle).toBe("Work");
 		expect(done.summary).toContain("shipped the login flow");
 		expect(done.durationMs).toBeGreaterThanOrEqual(0);
 		expect(done.tokens).toEqual({ input: 4000, output: 900, turns: 5 });
@@ -224,10 +226,10 @@ describe("execution adapter — onEvent emission", () => {
 		expect(adapter.resolveSessionName("work")).toBeUndefined();
 	});
 
-	it("emits settled exactly once with the final group list", async () => {
-		engine.addGroup({ title: "Alpha", workerMode: "full" });
+	it("emits settled exactly once with the final deliverable list", async () => {
+		engine.addDeliverable({ title: "Alpha", workerMode: "full" });
 		engine.addWorkItem("alpha", { title: "some task" });
-		engine.setGroupStatus("alpha", "abandoned");
+		engine.setDeliverableStatus("alpha", "abandoned");
 		const adapter = makeAdapter();
 		await adapter.start();
 
@@ -237,7 +239,7 @@ describe("execution adapter — onEvent emission", () => {
 		const settled = events.filter((e) => e.kind === "settled");
 		expect(settled).toHaveLength(1);
 		if (settled[0]?.kind !== "settled") throw new Error("unreachable");
-		expect(settled[0].groups).toEqual([
+		expect(settled[0].deliverables).toEqual([
 			{ id: "alpha", title: "Alpha", status: "abandoned" },
 		]);
 		expect(settledCalls).toBe(1);

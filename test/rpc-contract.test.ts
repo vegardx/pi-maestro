@@ -59,7 +59,7 @@ const AGENT_FIXTURES = {
 		type: "planMutate",
 		id: "pm-1",
 		action: "toggleTask",
-		groupId: "g1",
+		deliverableId: "g1",
 		params: { taskId: "t1" },
 	},
 	questions: {
@@ -312,7 +312,7 @@ describe("rpc-router contract", () => {
 					type: "summarize",
 					id: "req-2",
 					consumer: "g2/worker",
-					preamble: "write for the next group",
+					preamble: "write for the next deliverable",
 					budget: 500,
 				},
 				2000,

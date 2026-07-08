@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
 import {
+	DeliverableExecutor,
 	type ExecutorDeps,
-	GroupExecutor,
-} from "../packages/modes/src/group-executor.js";
+} from "../packages/modes/src/deliverable-executor.js";
+import { PlanEngine } from "../packages/modes/src/engine.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import type { PlanStore } from "../packages/modes/src/storage.js";
 
@@ -40,7 +40,9 @@ function makeDeps(overrides: Partial<ExecutorDeps> = {}): ExecutorDeps {
 		}),
 		killSession: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn().mockResolvedValue("/tmp/worktree"),
-		shipGroup: vi.fn().mockResolvedValue("https://github.com/org/repo/pull/1"),
+		shipDeliverable: vi
+			.fn()
+			.mockResolvedValue("https://github.com/org/repo/pull/1"),
 		requestSummary: vi.fn().mockResolvedValue("Agent summary here."),
 		now: () => "2026-01-01T00:00:00Z",
 		...overrides,
@@ -57,112 +59,129 @@ function setupPlan() {
 	return engine;
 }
 
-describe("GroupExecutor — activation", () => {
-	it("activates a ready group on tick", async () => {
+describe("DeliverableExecutor — activation", () => {
+	it("activates a ready deliverable on tick", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Implement login" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 		expect(deps.createWorktree).toHaveBeenCalledWith(
-			expect.objectContaining({ groupId: "auth", branch: "feat/auth" }),
+			expect.objectContaining({ deliverableId: "auth", branch: "feat/auth" }),
 		);
 		expect(deps.spawnAgent).toHaveBeenCalledWith(
-			expect.objectContaining({ groupId: "auth", agentName: "worker" }),
+			expect.objectContaining({ deliverableId: "auth", agentName: "worker" }),
 		);
 	});
 
-	it("does not activate group with unmet deps", async () => {
+	it("does not activate deliverable with unmet deps", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "Auth", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("auth", { title: "t1" });
-		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addDeliverable({
+			title: "API",
+			workerMode: "full",
+			dependsOn: ["auth"],
+		});
 		engine.addWorkItem("api", { title: "t2" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// auth activated, api still planned
-		expect(engine.get().groups[0].status).toBe("active");
-		expect(engine.get().groups[1].status).toBe("planned");
+		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(engine.get().deliverables[1].status).toBe("planned");
 	});
 
-	it("does not activate downstream group while dep is merely active", async () => {
+	it("does not activate downstream deliverable while dep is merely active", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "Auth", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("auth", { title: "t1" });
-		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addDeliverable({
+			title: "API",
+			workerMode: "full",
+			dependsOn: ["auth"],
+		});
 		engine.addWorkItem("api", { title: "t2" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		// First tick: auth activates
 		await executor.tick();
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 
 		// auth's branch tip is still empty — api must keep waiting
 		await executor.tick();
-		expect(engine.get().groups[1].status).toBe("planned");
+		expect(engine.get().deliverables[1].status).toBe("planned");
 	});
 
-	it("activates downstream group once dep completes, with dep summary available", async () => {
+	it("activates downstream deliverable once dep completes, with dep summary available", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "Auth", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("auth", { title: "t1" });
-		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addDeliverable({
+			title: "API",
+			workerMode: "full",
+			dependsOn: ["auth"],
+		});
 		engine.addWorkItem("api", { title: "t2" });
 
 		const requestSummary = vi
 			.fn()
 			.mockResolvedValue("### Auth summary\nLogin endpoint shipped.");
 		const deps = makeDeps({ requestSummary });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await executor.tick(); // auth activates
 		await executor.markAgentDone("auth", "worker"); // auth completes
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 
 		await executor.tick(); // api activates (and auth ships)
-		expect(engine.get().groups[1].status).toBe("active");
+		expect(engine.get().deliverables[1].status).toBe("active");
 
 		// api's worker was seeded with auth's real summary
 		const call = (deps.spawnAgent as ReturnType<typeof vi.fn>).mock.calls.find(
-			(c: unknown[]) => (c[0] as { groupId: string }).groupId === "api",
+			(c: unknown[]) =>
+				(c[0] as { deliverableId: string }).deliverableId === "api",
 		);
 		expect(call).toBeDefined();
 		expect((call![0] as { seed: string }).seed).toContain("Auth summary");
 	});
 
-	it("activates downstream group when its dep is abandoned, based on the default branch", async () => {
+	it("activates downstream deliverable when its dep is abandoned, based on the default branch", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "Auth", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("auth", { title: "t1" });
-		engine.addGroup({ title: "API", workerMode: "full", dependsOn: ["auth"] });
+		engine.addDeliverable({
+			title: "API",
+			workerMode: "full",
+			dependsOn: ["auth"],
+		});
 		engine.addWorkItem("api", { title: "t2" });
-		engine.setGroupStatus("auth", "abandoned");
+		engine.setDeliverableStatus("auth", "abandoned");
 
 		const deps = makeDeps({ defaultBranch: "main" });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// A dead parent must not wedge the chain — api activates from main.
-		expect(engine.get().groups[1].status).toBe("active");
+		expect(engine.get().deliverables[1].status).toBe("active");
 		expect(deps.createWorktree).toHaveBeenCalledWith(
-			expect.objectContaining({ groupId: "api", baseBranch: "main" }),
+			expect.objectContaining({ deliverableId: "api", baseBranch: "main" }),
 		);
 	});
 });
 
-describe("GroupExecutor — agent graph", () => {
+describe("DeliverableExecutor — agent graph", () => {
 	it("spawns worker immediately when no pre-agents", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		engine.addAgent("work", {
 			name: "review",
@@ -174,7 +193,7 @@ describe("GroupExecutor — agent graph", () => {
 		});
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// Worker spawned immediately, review is pending
@@ -185,7 +204,7 @@ describe("GroupExecutor — agent graph", () => {
 
 	it("spawns next agent after dependency completes", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		engine.addAgent("work", {
 			name: "review",
@@ -197,7 +216,7 @@ describe("GroupExecutor — agent graph", () => {
 		});
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// Mark worker done
@@ -211,7 +230,7 @@ describe("GroupExecutor — agent graph", () => {
 
 	it("spawns parallel agents together", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		engine.addAgent("work", {
 			name: "security",
@@ -231,7 +250,7 @@ describe("GroupExecutor — agent graph", () => {
 		});
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// Mark worker done
@@ -245,65 +264,65 @@ describe("GroupExecutor — agent graph", () => {
 	});
 });
 
-describe("GroupExecutor — completion and shipping", () => {
-	it("marks group complete when all agents done", async () => {
+describe("DeliverableExecutor — completion and shipping", () => {
+	it("marks deliverable complete when all agents done", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// Mark worker done
 		await executor.markAgentDone("work", "worker");
 
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 	});
 
-	it("ships a complete group", async () => {
+	it("ships a complete deliverable", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 		await executor.markAgentDone("work", "worker");
 
-		// Tick ships the now-complete group
+		// Tick ships the now-complete deliverable
 		const shipped = await executor.tick();
 		expect(shipped).toEqual(["work"]);
-		expect(engine.get().groups[0].status).toBe("shipped");
-		expect(deps.shipGroup).toHaveBeenCalled();
+		expect(engine.get().deliverables[0].status).toBe("shipped");
+		expect(deps.shipDeliverable).toHaveBeenCalled();
 	});
 
-	it("ships a complete group even when it has dependents — the chain needs its branch on the remote", async () => {
+	it("ships a complete deliverable even when it has dependents — the chain needs its branch on the remote", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: ["a"] });
 		engine.addWorkItem("b", { title: "t2" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick(); // a activates
 		await executor.markAgentDone("a", "worker"); // a completes
 
 		const shipped = await executor.tick();
 		expect(shipped).toEqual(["a"]);
-		expect(engine.get().groups[0].status).toBe("shipped");
+		expect(engine.get().deliverables[0].status).toBe("shipped");
 	});
 
 	it("ships an A←B chain in order and never auto-supersedes the predecessor", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: ["a"] });
 		engine.addWorkItem("b", { title: "t2" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await executor.tick(); // a activates
 		await executor.markAgentDone("a", "worker"); // a completes
@@ -312,7 +331,7 @@ describe("GroupExecutor — completion and shipping", () => {
 
 		// b's worktree stacks on a's real branch tip
 		expect(deps.createWorktree).toHaveBeenCalledWith(
-			expect.objectContaining({ groupId: "b", baseBranch: "feat/a" }),
+			expect.objectContaining({ deliverableId: "b", baseBranch: "feat/a" }),
 		);
 
 		await executor.markAgentDone("b", "worker"); // b completes
@@ -320,27 +339,27 @@ describe("GroupExecutor — completion and shipping", () => {
 		expect(secondShipped).toEqual(["b"]);
 
 		// Both PRs stand: a stays shipped — superseding is a user decision.
-		expect(engine.get().groups.find((g) => g.id === "a")!.status).toBe(
+		expect(engine.get().deliverables.find((g) => g.id === "a")!.status).toBe(
 			"shipped",
 		);
-		expect(engine.get().groups.find((g) => g.id === "b")!.status).toBe(
+		expect(engine.get().deliverables.find((g) => g.id === "b")!.status).toBe(
 			"shipped",
 		);
 	});
 
 	it("retries a failed ship and ships the unblocked chain in one tick", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: ["a"] });
 		engine.addWorkItem("b", { title: "t2" });
 
-		const shipGroup = vi
+		const shipDeliverable = vi
 			.fn()
 			.mockRejectedValueOnce(new Error("push failed"))
 			.mockResolvedValue("https://github.com/org/repo/pull/1");
-		const deps = makeDeps({ shipGroup });
-		const executor = new GroupExecutor(engine, deps);
+		const deps = makeDeps({ shipDeliverable });
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await executor.tick(); // a activates
 		await executor.markAgentDone("a", "worker"); // a completes
@@ -348,28 +367,28 @@ describe("GroupExecutor — completion and shipping", () => {
 		// Ship fails → a stays complete (retryable), b still activates
 		const failedShip = await executor.tick();
 		expect(failedShip).toEqual([]);
-		expect(engine.get().groups[0].status).toBe("complete");
-		expect(engine.get().groups[1].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("complete");
+		expect(engine.get().deliverables[1].status).toBe("active");
 
 		await executor.markAgentDone("b", "worker"); // b completes
 
 		// Both complete → one tick ships a, then b (a's ship unblocks b)
 		const shipped = await executor.tick();
 		expect(shipped).toEqual(["a", "b"]);
-		expect(engine.get().groups[0].status).toBe("shipped");
-		expect(engine.get().groups[1].status).toBe("shipped");
+		expect(engine.get().deliverables[0].status).toBe("shipped");
+		expect(engine.get().deliverables[1].status).toBe("shipped");
 	});
 });
 
-describe("GroupExecutor — summary extraction", () => {
+describe("DeliverableExecutor — summary extraction", () => {
 	it("requests summary from agent on completion", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const requestSummary = vi.fn().mockResolvedValue("### summary\nDid stuff.");
 		const deps = makeDeps({ requestSummary });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 		await executor.markAgentDone("work", "worker");
 
@@ -380,12 +399,12 @@ describe("GroupExecutor — summary extraction", () => {
 
 	it("kills session after summary extraction", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const killSession = vi.fn().mockResolvedValue(undefined);
 		const deps = makeDeps({ killSession });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 		await executor.markAgentDone("work", "worker");
 
@@ -393,14 +412,14 @@ describe("GroupExecutor — summary extraction", () => {
 	});
 });
 
-describe("GroupExecutor — worker done detection", () => {
+describe("DeliverableExecutor — worker done detection", () => {
 	it("isWorkerDone returns true when all tasks toggled", () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "t1" });
 		engine.addWorkItem("work", { title: "t2" });
 
-		const executor = new GroupExecutor(engine, makeDeps());
+		const executor = new DeliverableExecutor(engine, makeDeps());
 
 		expect(executor.isWorkerDone("work")).toBe(false);
 		engine.toggleWorkItem("work", "t1");
@@ -410,10 +429,10 @@ describe("GroupExecutor — worker done detection", () => {
 	});
 });
 
-describe("GroupExecutor — lifecycle correctness", () => {
+describe("DeliverableExecutor — lifecycle correctness", () => {
 	it("dedupes concurrent markAgentDone calls into one summarize + kill", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const requestSummary = vi.fn(async () => {
@@ -422,7 +441,7 @@ describe("GroupExecutor — lifecycle correctness", () => {
 		});
 		const killSession = vi.fn().mockResolvedValue(undefined);
 		const deps = makeDeps({ requestSummary, killSession });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		// RPC done and the poll timer race the same completion.
@@ -434,17 +453,17 @@ describe("GroupExecutor — lifecycle correctness", () => {
 		expect(requestSummary).toHaveBeenCalledTimes(1);
 		expect(killSession).toHaveBeenCalledTimes(1);
 		expect(executor.getAgentState("work", "worker")!.status).toBe("done");
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 	});
 
 	it("leaves a summarizing agent alone on a late markAgentDone", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		const killSession = vi.fn().mockResolvedValue(undefined);
 		const deps = makeDeps({ killSession });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 
 		executor.getAgentState("work", "worker")!.status = "summarizing";
@@ -456,9 +475,9 @@ describe("GroupExecutor — lifecycle correctness", () => {
 		);
 	});
 
-	it("activates a group exactly once under concurrent ticks", async () => {
+	it("activates a deliverable exactly once under concurrent ticks", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 
 		// Provisioning awaits before the status flips to active — the window
@@ -468,68 +487,71 @@ describe("GroupExecutor — lifecycle correctness", () => {
 			return "/tmp/worktree";
 		});
 		const deps = makeDeps({ createWorktree });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await Promise.all([executor.tick(), executor.tick()]);
 
 		expect(createWorktree).toHaveBeenCalledTimes(1);
 		expect(deps.spawnAgent).toHaveBeenCalledTimes(1);
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 	});
 
-	it("hydrates active groups as blocked and does not respawn agents", async () => {
+	it("hydrates active deliverables as blocked and does not respawn agents", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
-		engine.setGroupStatus("work", "active");
-		engine.updateGroup("work", { worktreePath: "/tmp/worktree" });
+		engine.setDeliverableStatus("work", "active");
+		engine.updateDeliverable("work", { worktreePath: "/tmp/worktree" });
 
 		const deps = makeDeps();
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		const state = executor.getStates().get("work")!;
 		expect(state.blocked).toMatch(/maestro restarted/);
 
-		// Ticks never spawn into the blocked group — orphaned pi processes
+		// Ticks never spawn into the blocked deliverable — orphaned pi processes
 		// may still live in its tmux sessions.
 		await executor.tick();
 		await executor.tick();
 		expect(deps.spawnAgent).not.toHaveBeenCalled();
 
 		// A user-driven retry unblocks and resumes spawning.
-		executor.unblockGroup("work");
+		executor.unblockDeliverable("work");
 		await executor.tick();
 		expect(deps.spawnAgent).toHaveBeenCalledTimes(1);
 		expect(deps.spawnAgent).toHaveBeenCalledWith(
-			expect.objectContaining({ groupId: "work", agentName: "worker" }),
+			expect.objectContaining({ deliverableId: "work", agentName: "worker" }),
 		);
 	});
 });
 
-describe("GroupExecutor — seed construction", () => {
+describe("DeliverableExecutor — seed construction", () => {
 	it("includes dep summaries in worker seed", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: ["a"] });
 		engine.addWorkItem("b", { title: "t2" });
 
 		// Manually set A's summary (simulating completion)
-		engine.updateGroup("a", { summary: "### A summary\nDid auth stuff." });
-		engine.setGroupStatus("a", "active");
-		engine.setGroupStatus("a", "complete");
+		engine.updateDeliverable("a", {
+			summary: "### A summary\nDid auth stuff.",
+		});
+		engine.setDeliverableStatus("a", "active");
+		engine.setDeliverableStatus("a", "complete");
 
 		const spawnAgent = vi.fn().mockResolvedValue({
 			sessionId: "sess-123",
 			sessionFile: "/tmp/sessions/agent.jsonl",
 		});
 		const deps = makeDeps({ spawnAgent });
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick(); // B activates
 
 		// Check the seed passed to B's worker contains A's summary
 		const call = spawnAgent.mock.calls.find(
-			(c: unknown[]) => (c[0] as { groupId: string }).groupId === "b",
+			(c: unknown[]) =>
+				(c[0] as { deliverableId: string }).deliverableId === "b",
 		);
 		expect(call).toBeDefined();
 		const seed = (call![0] as { seed: string }).seed;

@@ -15,10 +15,10 @@ export {
 } from "./explorer.js";
 export {
 	defaultPalette,
+	deliverableStatusGlyph,
+	deliverableStatusStyle,
 	formatCount,
 	formatElapsed,
-	groupStatusGlyph,
-	groupStatusStyle,
 	type Palette,
 	padRight,
 	runStatusGlyph,

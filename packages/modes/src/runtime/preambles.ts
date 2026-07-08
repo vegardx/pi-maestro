@@ -20,7 +20,7 @@ export function buildMaestroPreamble(
 export function buildHackModePreamble(): string {
 	return `You are in HACK MODE. Full tool access. Implement directly when asked.
 Agents continue running in the background independently.
-You can still add groups/tasks if needed.
+You can still add deliverables/tasks if needed.
 Switch back to /auto when done with direct work.`;
 }
 
@@ -55,13 +55,13 @@ Your tasks are described in the first message. Implement them all.
 3. Run tests to verify: bash({command: "npm test"})
 4. Commit your work: commit({message: "feat(scope): subject"})
 5. Toggle each task done when complete:
-   task({action: "toggle", groupId: "<group-id>", taskId: "<task-id>"})
+   task({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
 6. When ALL tasks are toggled and tests pass, stop. The maestro handles
    pushing and opening the PR.
 
 ## Rules
 - Do NOT run git push, gh pr create, or any shipping commands
-- Do NOT call group, agent, or plan tools — just implement
+- Do NOT call deliverable, agent, or plan tools — just implement
 - Commit incrementally as you finish logical chunks
 - If blocked, describe the problem in your final message`;
 }

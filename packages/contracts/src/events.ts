@@ -2,7 +2,7 @@
 // typed payloads. Emitters/subscribers live in @vegardx/pi-core; this is the
 // shared contract so any module can publish or listen with type safety.
 
-import type { GroupId, PlanId, RunId } from "./ids.js";
+import type { DeliverableId, PlanId, RunId } from "./ids.js";
 import type { ModeName } from "./modes.js";
 import type {
 	RunProgress,
@@ -42,7 +42,7 @@ export interface EventPayloads {
 	};
 	[EVENTS.planUpdated]: { readonly planId: PlanId };
 	[EVENTS.shipCompleted]: {
-		readonly groupId: GroupId;
+		readonly deliverableId: DeliverableId;
 		readonly pr?: number;
 	};
 }

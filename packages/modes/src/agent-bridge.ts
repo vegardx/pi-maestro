@@ -167,12 +167,12 @@ export class AgentBridge {
 	}
 
 	/** Report a task as completed to the maestro (fire-and-forget toggle). */
-	onTaskComplete(groupId: string, taskId: string): void {
+	onTaskComplete(deliverableId: string, taskId: string): void {
 		this.client.send({
 			type: "planMutate",
 			id: randomUUID(),
 			action: "toggleTask",
-			groupId,
+			deliverableId,
 			params: { taskId },
 		});
 	}
@@ -239,7 +239,7 @@ export class AgentBridge {
 	/** Request a plan mutation from maestro. Times out with an error result. */
 	planMutate(
 		action: "toggleTask" | "addTask" | "updateTask",
-		groupId: string,
+		deliverableId: string,
 		params: {
 			taskId?: string;
 			title?: string;
@@ -257,7 +257,7 @@ export class AgentBridge {
 		}
 		const id = randomUUID();
 		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-		this.client.send({ type: "planMutate", id, action, groupId, params });
+		this.client.send({ type: "planMutate", id, action, deliverableId, params });
 		return new Promise<PlanMutateResultMessage>((resolve) => {
 			const timer = setTimeout(() => {
 				if (this.pendingPlanMutate?.id !== id) return;

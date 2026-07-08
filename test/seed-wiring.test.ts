@@ -1,6 +1,6 @@
 // Seed + knowledge wiring in the execution adapter's spawn path: a spawned
 // agent's session file must fork the plan's frozen knowledge session (when
-// present) and carry the deterministic framed seed (Prior Work from dep-group
+// present) and carry the deterministic framed seed (Prior Work from dep-deliverable
 // summaries, Your Tasks) — not the legacy unframed seed.
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -110,18 +110,18 @@ describe("execution adapter seed wiring", () => {
 			title: "Seed Wiring Plan",
 			repoPath: tmpDir,
 		});
-		// Shipped dependency with a stored group summary → # Prior Work.
-		engine.addGroup({ title: "Setup DB", workerMode: "full" });
+		// Shipped dependency with a stored deliverable summary → # Prior Work.
+		engine.addDeliverable({ title: "Setup DB", workerMode: "full" });
 		engine.addWorkItem("setup-db", { title: "Create tables", kind: "task" });
 		engine.toggleWorkItem("setup-db", "create-tables");
-		engine.updateGroup("setup-db", {
+		engine.updateDeliverable("setup-db", {
 			summary: "Database tables created: users, sessions.",
 		});
-		engine.setGroupStatus("setup-db", "active");
-		engine.setGroupStatus("setup-db", "complete");
-		engine.setGroupStatus("setup-db", "shipped");
-		// Active group whose worker we spawn (pre-provisioned worktree).
-		engine.addGroup({
+		engine.setDeliverableStatus("setup-db", "active");
+		engine.setDeliverableStatus("setup-db", "complete");
+		engine.setDeliverableStatus("setup-db", "shipped");
+		// Active deliverable whose worker we spawn (pre-provisioned worktree).
+		engine.addDeliverable({
 			title: "Implement Auth",
 			workerMode: "full",
 			dependsOn: ["setup-db"],
@@ -130,8 +130,8 @@ describe("execution adapter seed wiring", () => {
 			title: "Create login endpoint",
 			kind: "task",
 		});
-		engine.setGroupStatus("implement-auth", "active");
-		engine.updateGroup("implement-auth", { worktreePath: tmpDir });
+		engine.setDeliverableStatus("implement-auth", "active");
+		engine.updateDeliverable("implement-auth", { worktreePath: tmpDir });
 
 		tmux = stubTmux();
 	});
@@ -160,7 +160,7 @@ describe("execution adapter seed wiring", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
-		adapter.getExecutor().unblockGroup("implement-auth");
+		adapter.getExecutor().unblockDeliverable("implement-auth");
 		await adapter.tick();
 
 		const sessionName = tmux.spawned[0];
@@ -209,7 +209,7 @@ describe("execution adapter seed wiring", () => {
 		expect(knowledgeIdx).toBeGreaterThan(0);
 		expect(seedIdx).toBeGreaterThan(knowledgeIdx);
 
-		// Framed seed: Prior Work (dep-group summary) then Your Tasks.
+		// Framed seed: Prior Work (dep-deliverable summary) then Your Tasks.
 		const seed = seedContent(lines);
 		expect(seed).toContain(PRIOR_WORK_HEADER);
 		expect(seed).toContain(PRIOR_WORK_FRAME);

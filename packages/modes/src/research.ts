@@ -235,7 +235,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 		description:
 			"Declare you have enough information to form the plan. Presents your " +
 			"understanding to the user for confirmation; approval unlocks the " +
-			"structure tools (group/task/agent/knowledge). Call this as soon as " +
+			"structure tools (deliverable/task/agent/knowledge). Call this as soon as " +
 			"the convergence criteria are met — or immediately for trivial " +
 			"requests.",
 		promptSnippet:
@@ -284,7 +284,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 				deps.onPhaseChanged?.(ctx);
 				return ok(
 					`Readiness confirmed — structure tools unlocked.${note} ` +
-						"Create groups and tasks now, then the knowledge doc " +
+						"Create deliverables and tasks now, then the knowledge doc " +
 						"(distill it from the research reports in the plan directory).",
 				);
 			}
@@ -364,14 +364,14 @@ function buildResearchPrompt(
 	return lines.join("\n");
 }
 
-/** Compact plan outline for the advisor — title, phase, groups, tasks. */
+/** Compact plan outline for the advisor — title, phase, deliverables, tasks. */
 export function renderPlanOutline(plan: Plan): string {
 	const lines = [`Plan: ${plan.title} (${plan.slug})`];
 	if (plan.understanding) lines.push("", plan.understanding);
-	for (const g of plan.groups) {
+	for (const g of plan.deliverables) {
 		lines.push(
 			"",
-			`## group ${g.id} [${g.status}]${g.dependsOn?.length ? ` dependsOn: ${g.dependsOn.join(", ")}` : ""}`,
+			`## deliverable ${g.id} [${g.status}]${g.dependsOn?.length ? ` dependsOn: ${g.dependsOn.join(", ")}` : ""}`,
 			g.title,
 		);
 		if (g.body) lines.push(g.body);
@@ -381,7 +381,7 @@ export function renderPlanOutline(plan: Plan): string {
 			);
 		}
 	}
-	if (plan.groups.length === 0) lines.push("", "(no groups yet)");
+	if (plan.deliverables.length === 0) lines.push("", "(no deliverables yet)");
 	return lines.join("\n");
 }
 

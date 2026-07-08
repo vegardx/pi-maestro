@@ -27,14 +27,14 @@ function memStore(): PlanStore {
 }
 
 describe("renderPlanForAgent", () => {
-	it("renders scoped plan view for a group", () => {
+	it("renders scoped plan view for a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test Plan",
 			repoPath: "/tmp/test-repo",
 		});
-		engine.addGroup({
+		engine.addDeliverable({
 			title: "Implement auth",
 			body: "Build the auth system with JWT tokens.",
 			workerMode: "full",
@@ -76,19 +76,19 @@ describe("renderPlanForAgent", () => {
 			title: "Test Plan",
 			repoPath: "/tmp/test-repo",
 		});
-		engine.addGroup({
+		engine.addDeliverable({
 			title: "Setup DB",
 			body: "Create database schema.",
 			workerMode: "full",
 		});
-		engine.addGroup({
+		engine.addDeliverable({
 			title: "Implement auth",
 			body: "Auth depends on DB.",
 			workerMode: "full",
 			dependsOn: ["setup-db"],
 		});
 		// Simulate summary on the dependency
-		engine.updateGroup("setup-db", {
+		engine.updateDeliverable("setup-db", {
 			summary: "Database tables created: users, sessions.",
 		});
 
@@ -97,7 +97,7 @@ describe("renderPlanForAgent", () => {
 		expect(content).toContain("Database tables created: users, sessions.");
 	});
 
-	it("returns fallback for unknown group", () => {
+	it("returns fallback for unknown deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
@@ -105,6 +105,6 @@ describe("renderPlanForAgent", () => {
 			repoPath: "/tmp/test-repo",
 		});
 		const content = renderPlanForAgent(engine, "nonexistent");
-		expect(content).toBe("(group not found)");
+		expect(content).toBe("(deliverable not found)");
 	});
 });

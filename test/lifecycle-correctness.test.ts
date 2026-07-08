@@ -111,10 +111,12 @@ describe("execution adapter — lifecycle correctness", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	/** Start the adapter over a pre-provisioned active group (no git). */
-	async function startAdapter(groupId: string): Promise<ExecutionAdapter> {
-		engine.setGroupStatus(groupId, "active");
-		engine.updateGroup(groupId, { worktreePath: tmpDir });
+	/** Start the adapter over a pre-provisioned active deliverable (no git). */
+	async function startAdapter(
+		deliverableId: string,
+	): Promise<ExecutionAdapter> {
+		engine.setDeliverableStatus(deliverableId, "active");
+		engine.updateDeliverable(deliverableId, { worktreePath: tmpDir });
 		adapter = new ExecutionAdapter({
 			engine,
 			ctx: { cwd: tmpDir } as ExtensionContext,
@@ -127,9 +129,9 @@ describe("execution adapter — lifecycle correctness", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
-		// Hydrated active groups come up blocked (restart safety); unblock as
+		// Hydrated active deliverables come up blocked (restart safety); unblock as
 		// a user's /retry would so ticks may spawn agents.
-		adapter.getExecutor().unblockGroup(groupId);
+		adapter.getExecutor().unblockDeliverable(deliverableId);
 		await adapter.tick();
 		return adapter;
 	}
@@ -161,7 +163,7 @@ describe("execution adapter — lifecycle correctness", () => {
 	}
 
 	it("completes a read-only reviewer after consecutive idle reports", async () => {
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "implement it" });
 		engine.addAgent("work", {
 			name: "rev",
@@ -190,19 +192,19 @@ describe("execution adapter — lifecycle correctness", () => {
 		await wait(100);
 		expect(executor.getAgentState("work", "rev")!.status).toBe("working");
 
-		// The second consecutive idle is: summarize → done → group complete.
+		// The second consecutive idle is: summarize → done → deliverable complete.
 		client.send({ type: "status", status: "idle" });
 		await until(() => executor.getAgentState("work", "rev")!.status === "done");
 		expect(executor.getAgentState("work", "rev")!.summary).toContain(
 			"VERDICT: approve",
 		);
-		await until(() => engine.get().groups[0].status === "complete");
+		await until(() => engine.get().deliverables[0].status === "complete");
 	});
 
 	it("completes a zero-gating-task worker via consecutive idles", async () => {
 		// Read-only workers may activate with no gating tasks; "all toggled"
 		// is vacuously true, so idling is the only completion signal.
-		engine.addGroup({ title: "Zero", workerMode: "read-only" });
+		engine.addDeliverable({ title: "Zero", workerMode: "read-only" });
 		const adapter = await startAdapter("zero");
 		const executor = adapter.getExecutor();
 		expect(executor.getAgentState("zero", "worker")!.status).toBe("working");
@@ -221,11 +223,11 @@ describe("execution adapter — lifecycle correctness", () => {
 		await until(
 			() => executor.getAgentState("zero", "worker")!.status === "done",
 		);
-		await until(() => engine.get().groups[0].status === "complete");
+		await until(() => engine.get().deliverables[0].status === "complete");
 	});
 
 	it("serializes overlapping tick calls through the mutex", async () => {
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		const adapter = await startAdapter("work");
 
@@ -248,7 +250,7 @@ describe("execution adapter — lifecycle correctness", () => {
 	});
 
 	it("skips overlapping pollSessions runs and summarizing agents", async () => {
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		const adapter = await startAdapter("work");
 		const poll = () =>

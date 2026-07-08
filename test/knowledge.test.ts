@@ -27,7 +27,7 @@ const VALID_DOC = [
 	"Tabs, biome, sparse comments.",
 	"",
 	"## Key Interfaces",
-	"Plan/WorkGroup/AgentSpec in schema.ts; GroupExecutor drives execution.",
+	"Plan/Deliverable/AgentSpec in schema.ts; DeliverableExecutor drives execution.",
 ].join("\n");
 
 let dir: string;

@@ -192,7 +192,7 @@ class FakeAgentRunner implements FakeAgentHandle {
 			type: "planMutate",
 			id,
 			action: "toggleTask",
-			groupId: this.groupId,
+			deliverableId: this.deliverableId,
 			params: { taskId },
 		});
 		const result = await this.take((m) => "id" in m && m.id === id);
@@ -240,7 +240,8 @@ class FakeAgentRunner implements FakeAgentHandle {
 			this.send({
 				type: "summary",
 				id: msg.id,
-				content: "## Summary\nFake forward-looking notes for the next group.",
+				content:
+					"## Summary\nFake forward-looking notes for the next deliverable.",
 			});
 			return;
 		}
@@ -286,8 +287,8 @@ class FakeAgentRunner implements FakeAgentHandle {
 		for (const resolve of waiters) resolve();
 	}
 
-	private get groupId(): string {
-		// agentId follows the adapter's "groupId/agentName" convention.
+	private get deliverableId(): string {
+		// agentId follows the adapter's "deliverableId/agentName" convention.
 		return this.opts.agentId.split("/")[0] || this.opts.agentId;
 	}
 }

@@ -119,7 +119,7 @@ describe("commit tool", () => {
 
 describe("ship tool", () => {
 	it("refuses in agent context — the maestro owns shipping", async () => {
-		process.env.PI_MAESTRO_AGENT_ID = "group-one/worker";
+		process.env.PI_MAESTRO_AGENT_ID = "deliverable-one/worker";
 		const { tools, capabilities } = makeRuntime();
 		const ship = vi.fn();
 		capabilities.set("ship.v1", { ship });
@@ -154,9 +154,9 @@ describe("/answer", () => {
 		const queue = new QuestionQueue();
 		const resolve = vi.fn();
 		queue.enqueue({
-			agentId: "group-one/worker",
+			agentId: "deliverable-one/worker",
 			agentName: "worker",
-			deliverableTitle: "Group One",
+			deliverableTitle: "Deliverable One",
 			questions: [{ id: "q1", question: "Proceed with plan B?" }],
 			resolve,
 		});
@@ -179,9 +179,9 @@ describe("/answer", () => {
 		const queue = new QuestionQueue();
 		const resolve = vi.fn();
 		queue.enqueue({
-			agentId: "group-one/worker",
+			agentId: "deliverable-one/worker",
 			agentName: "worker",
-			deliverableTitle: "Group One",
+			deliverableTitle: "Deliverable One",
 			questions: [{ id: "q1", question: "Proceed?" }],
 			resolve,
 		});
@@ -200,7 +200,7 @@ describe("/answer", () => {
 describe("/sync and /park", () => {
 	it("/sync reports an empty reconcile without crashing", async () => {
 		const { commands } = makeRuntime({
-			engine: { get: () => ({ groups: [], repoPath: "/repo" }) },
+			engine: { get: () => ({ deliverables: [], repoPath: "/repo" }) },
 		});
 		const { ctx, notify } = makeCmdCtx();
 
@@ -214,7 +214,7 @@ describe("/sync and /park", () => {
 
 	it("/park degrades gracefully instead of crashing", async () => {
 		const { commands } = makeRuntime({
-			engine: { get: () => ({ groups: [], repoPath: "/repo" }) },
+			engine: { get: () => ({ deliverables: [], repoPath: "/repo" }) },
 		});
 		const { ctx, notify } = makeCmdCtx();
 

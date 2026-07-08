@@ -1,15 +1,15 @@
-// The plan model: a flat list of WorkGroups. A WorkGroup is the atomic unit of
+// The plan model: a flat list of Deliverables. A Deliverable is the atomic unit of
 // execution — one branch, one PR. It contains a worker (primary agent), zero or
 // more support agents with an internal dependency graph, and a set of tasks.
 //
 // This replaces the v4 deliverable-tree model. No on-disk migration (dev tool).
-// Clean break: groups replace deliverables entirely.
+// Clean break: deliverables replace deliverables entirely.
 
 import { basename, resolve } from "node:path";
 import {
 	type AgentMode,
-	GROUP_STATUSES,
-	type GroupStatus,
+	DELIVERABLE_STATUSES,
+	type DeliverableStatus,
 	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
@@ -18,8 +18,8 @@ import {
 
 export {
 	type AgentMode,
-	GROUP_STATUSES,
-	type GroupStatus,
+	DELIVERABLE_STATUSES,
+	type DeliverableStatus,
 	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
@@ -51,7 +51,7 @@ export function effectiveWorkItemKind(
 // ─── Agent specification ─────────────────────────────────────────────────────
 
 export interface AgentSpec {
-	/** Unique name within the group (also used in `after` references). */
+	/** Unique name within the deliverable (also used in `after` references). */
 	name: string;
 	mode: AgentMode;
 	slot: ModelSlot;
@@ -74,16 +74,16 @@ export interface WorkerSpec {
 	after?: string[];
 }
 
-// ─── Work group ──────────────────────────────────────────────────────────────
+// ─── Work deliverable ──────────────────────────────────────────────────────────────
 
-export interface WorkGroup {
-	type: "group";
+export interface Deliverable {
+	type: "deliverable";
 	id: string;
 	title: string;
 	/** What ships when this merges — context, criteria. */
 	body: string;
-	status: GroupStatus;
-	/** Inter-group dependencies. Empty/absent = no deps (root). */
+	status: DeliverableStatus;
+	/** Inter-deliverable dependencies. Empty/absent = no deps (root). */
 	dependsOn?: string[];
 	/**
 	 * Branch from predecessor's tip (stacked PR). Default true.
@@ -91,13 +91,13 @@ export interface WorkGroup {
 	 * Only meaningful when dependsOn is non-empty.
 	 */
 	stacked?: boolean;
-	/** The primary agent — always exists, gets the group's tasks. */
+	/** The primary agent — always exists, gets the deliverable's tasks. */
 	worker: WorkerSpec;
 	/** Support agents with an internal dependency graph. */
 	agents: AgentSpec[];
 	/** Gating work items the worker must complete. */
 	tasks: WorkItem[];
-	/** Review→fix round cap before the group blocks. Default 2. */
+	/** Review→fix round cap before the deliverable blocks. Default 2. */
 	maxFixRounds?: number;
 	// ── Runtime state ──
 	/** Git branch (typically feat/<id>). */
@@ -106,7 +106,7 @@ export interface WorkGroup {
 	worktreePath?: string;
 	/** Session file path for the worker session. */
 	sessionPath?: string;
-	/** Combined summary of all agent outputs (produced at group completion). */
+	/** Combined summary of all agent outputs (produced at deliverable completion). */
 	summary?: string;
 	/** PR URL once shipped. */
 	prUrl?: string;
@@ -119,17 +119,17 @@ export interface WorkGroup {
 
 /**
  * Planning phases. A plan starts `exploring` — the maestro researches, asks,
- * and iterates; structural tools (group/task/agent/knowledge) are blocked.
+ * and iterates; structural tools (deliverable/task/agent/knowledge) are blocked.
  * The `readiness` tool (user-confirmed) or /ready flips it to `structuring`,
  * unlocking plan structure. Plans persisted before phases existed hydrate as
- * `structuring` when they already have groups (see planPhase).
+ * `structuring` when they already have deliverables (see planPhase).
  */
 export const PLAN_PHASES = ["exploring", "structuring"] as const;
 export type PlanPhase = (typeof PLAN_PHASES)[number];
 
 /** A repo a plan can target. The default repo is `plan.repoPath` (key "default"). */
 export interface PlanRepo {
-	/** Stable key groups reference (currently unused but reserved). */
+	/** Stable key deliverables reference (currently unused but reserved). */
 	key: string;
 	/** Absolute path to the repo. */
 	path: string;
@@ -152,9 +152,9 @@ export interface Plan {
 	understanding?: string;
 	/** Extra repos beyond the default; absent ⇒ single-repo plan. */
 	repos?: PlanRepo[];
-	/** All work groups in the plan. Flat list — graph structure via dependsOn. */
-	groups: WorkGroup[];
-	/** GitHub plan-tracking issue (parent of group issues) after park. */
+	/** All work deliverables in the plan. Flat list — graph structure via dependsOn. */
+	deliverables: Deliverable[];
+	/** GitHub plan-tracking issue (parent of deliverable issues) after park. */
 	parentIssueNumber?: number;
 	/** Session file backing this plan's planning session. */
 	planSessionPath?: string;
@@ -165,50 +165,52 @@ export interface Plan {
 
 /**
  * Effective planning phase. Plans persisted before phases existed carry no
- * `phase` field: treat them as `structuring` when they already have groups
+ * `phase` field: treat them as `structuring` when they already have deliverables
  * (they were planned under the old flow) and `exploring` when empty.
  */
-export function planPhase(plan: Pick<Plan, "phase" | "groups">): PlanPhase {
+export function planPhase(
+	plan: Pick<Plan, "phase" | "deliverables">,
+): PlanPhase {
 	if (plan.phase) return plan.phase;
-	return plan.groups.length > 0 ? "structuring" : "exploring";
+	return plan.deliverables.length > 0 ? "structuring" : "exploring";
 }
 
 // ─── Traversal helpers ───────────────────────────────────────────────────────
 
-/** All groups in the plan. */
-export function groups(plan: Pick<Plan, "groups">): WorkGroup[] {
-	return plan.groups;
+/** All deliverables in the plan. */
+export function deliverables(plan: Pick<Plan, "deliverables">): Deliverable[] {
+	return plan.deliverables;
 }
 
-/** Find a group by ID. */
-export function findGroup(
-	plan: Pick<Plan, "groups">,
+/** Find a deliverable by ID. */
+export function findDeliverable(
+	plan: Pick<Plan, "deliverables">,
 	id: string,
-): WorkGroup | null {
-	return plan.groups.find((g) => g.id === id) ?? null;
+): Deliverable | null {
+	return plan.deliverables.find((g) => g.id === id) ?? null;
 }
 
-/** All tasks in a group. */
-export function groupTasks(g: Pick<WorkGroup, "tasks">): WorkItem[] {
+/** All tasks in a deliverable. */
+export function deliverableTasks(g: Pick<Deliverable, "tasks">): WorkItem[] {
 	return g.tasks;
 }
 
 /** Gating tasks (kind = "task") that must be completed. */
-export function gatingTasks(g: Pick<WorkGroup, "tasks">): WorkItem[] {
+export function gatingTasks(g: Pick<Deliverable, "tasks">): WorkItem[] {
 	return g.tasks.filter((t) => effectiveWorkItemKind(t) === "task");
 }
 
-/** Find a task by ID within a group. */
+/** Find a task by ID within a deliverable. */
 export function findTask(
-	g: Pick<WorkGroup, "tasks">,
+	g: Pick<Deliverable, "tasks">,
 	taskId: string,
 ): WorkItem | null {
 	return g.tasks.find((t) => t.id === taskId) ?? null;
 }
 
-/** Find an agent spec by name within a group. */
+/** Find an agent spec by name within a deliverable. */
 export function findAgent(
-	g: Pick<WorkGroup, "agents">,
+	g: Pick<Deliverable, "agents">,
 	name: string,
 ): AgentSpec | null {
 	return g.agents.find((a) => a.name === name) ?? null;
@@ -216,7 +218,10 @@ export function findAgent(
 
 // ─── State machine ───────────────────────────────────────────────────────────
 
-export const GROUP_TRANSITIONS: Record<GroupStatus, readonly GroupStatus[]> = {
+export const DELIVERABLE_TRANSITIONS: Record<
+	DeliverableStatus,
+	readonly DeliverableStatus[]
+> = {
 	planned: ["active", "abandoned"],
 	active: ["complete", "abandoned"],
 	complete: ["shipped", "superseded", "abandoned"],
@@ -225,15 +230,18 @@ export const GROUP_TRANSITIONS: Record<GroupStatus, readonly GroupStatus[]> = {
 	abandoned: [],
 };
 
-/** Terminal statuses — the group will not transition again. */
-export const TERMINAL_STATUSES: readonly GroupStatus[] = [
+/** Terminal statuses — the deliverable will not transition again. */
+export const TERMINAL_STATUSES: readonly DeliverableStatus[] = [
 	"shipped",
 	"superseded",
 	"abandoned",
 ];
 
-export function canTransition(from: GroupStatus, to: GroupStatus): boolean {
-	return GROUP_TRANSITIONS[from].includes(to);
+export function canTransition(
+	from: DeliverableStatus,
+	to: DeliverableStatus,
+): boolean {
+	return DELIVERABLE_TRANSITIONS[from].includes(to);
 }
 
 // ─── Dependency / activation logic ───────────────────────────────────────────
@@ -245,7 +253,7 @@ export function canTransition(from: GroupStatus, to: GroupStatus): boolean {
  * Terminal non-productive deps (abandoned/superseded) also count as satisfied
  * so a chain doesn't wedge on an abandoned parent; base selection skips them.
  */
-const SATISFIED_STATUSES: readonly GroupStatus[] = [
+const SATISFIED_STATUSES: readonly DeliverableStatus[] = [
 	"complete",
 	"shipped",
 	"superseded",
@@ -253,70 +261,78 @@ const SATISFIED_STATUSES: readonly GroupStatus[] = [
 ];
 
 /**
- * A group is ready to activate when all its dependsOn groups are in a
+ * A deliverable is ready to activate when all its dependsOn deliverables are in a
  * satisfied status (complete, shipped, or terminally non-productive).
  */
-export function isGroupReady(
-	plan: Pick<Plan, "groups">,
-	g: Pick<WorkGroup, "id" | "status" | "dependsOn">,
+export function isDeliverableReady(
+	plan: Pick<Plan, "deliverables">,
+	g: Pick<Deliverable, "id" | "status" | "dependsOn">,
 ): boolean {
 	if (g.status !== "planned") return false;
 	const deps = g.dependsOn ?? [];
 	if (deps.length === 0) return true;
 	return deps.every((depId) => {
-		const dep = findGroup(plan, depId);
+		const dep = findDeliverable(plan, depId);
 		if (!dep) return false;
 		return SATISFIED_STATUSES.includes(dep.status);
 	});
 }
 
-/** All groups that are ready to be activated. */
-export function readyGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
-	return plan.groups.filter((g) => isGroupReady(plan, g));
+/** All deliverables that are ready to be activated. */
+export function readyDeliverables(
+	plan: Pick<Plan, "deliverables">,
+): Deliverable[] {
+	return plan.deliverables.filter((g) => isDeliverableReady(plan, g));
 }
 
-/** Groups that are terminal (no further transitions). */
-export function terminalGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
-	return plan.groups.filter((g) => TERMINAL_STATUSES.includes(g.status));
+/** Deliverables that are terminal (no further transitions). */
+export function terminalDeliverables(
+	plan: Pick<Plan, "deliverables">,
+): Deliverable[] {
+	return plan.deliverables.filter((g) => TERMINAL_STATUSES.includes(g.status));
 }
 
 /**
- * A group is a leaf in the dependency graph (nothing depends on it).
+ * A deliverable is a leaf in the dependency graph (nothing depends on it).
  */
-export function isLeafGroup(
-	plan: Pick<Plan, "groups">,
-	g: Pick<WorkGroup, "id">,
+export function isLeafDeliverable(
+	plan: Pick<Plan, "deliverables">,
+	g: Pick<Deliverable, "id">,
 ): boolean {
-	return !plan.groups.some((other) => other.dependsOn?.includes(g.id) ?? false);
+	return !plan.deliverables.some(
+		(other) => other.dependsOn?.includes(g.id) ?? false,
+	);
 }
 
 /**
- * Groups ready to ship: complete, with every dependsOn group itself shipped
+ * Deliverables ready to ship: complete, with every dependsOn deliverable itself shipped
  * (or terminally non-productive). Shipping follows the chain — in A←B, A
  * ships first so `feat/A` exists on the remote when B's PR targets it.
  */
-export function shippableGroups(plan: Pick<Plan, "groups">): WorkGroup[] {
-	return plan.groups.filter((g) => {
+export function shippableDeliverables(
+	plan: Pick<Plan, "deliverables">,
+): Deliverable[] {
+	return plan.deliverables.filter((g) => {
 		if (g.status !== "complete") return false;
 		return (g.dependsOn ?? []).every((depId) => {
-			const dep = findGroup(plan, depId);
+			const dep = findDeliverable(plan, depId);
 			return dep !== null && TERMINAL_STATUSES.includes(dep.status);
 		});
 	});
 }
 
-/** Why a group can't activate yet. Null if ready. */
+/** Why a deliverable can't activate yet. Null if ready. */
 export function blockedReason(
-	plan: Pick<Plan, "groups">,
-	g: Pick<WorkGroup, "id" | "status" | "dependsOn">,
+	plan: Pick<Plan, "deliverables">,
+	g: Pick<Deliverable, "id" | "status" | "dependsOn">,
 ): string | null {
 	if (g.status !== "planned") {
-		return `group \`${g.id}\` is ${g.status}, not planned`;
+		return `deliverable \`${g.id}\` is ${g.status}, not planned`;
 	}
 	const deps = g.dependsOn ?? [];
 	if (deps.length === 0) return null;
 	for (const depId of deps) {
-		const dep = findGroup(plan, depId);
+		const dep = findDeliverable(plan, depId);
 		if (!dep) return `unknown dependency \`${depId}\``;
 		if (!SATISFIED_STATUSES.includes(dep.status)) {
 			return `waiting on \`${dep.id}\` (${dep.status})`;
@@ -328,11 +344,11 @@ export function blockedReason(
 // ─── Internal agent graph ────────────────────────────────────────────────────
 
 /**
- * Topologically sort agents within a group. Returns agent names in execution
+ * Topologically sort agents within a deliverable. Returns agent names in execution
  * order. Throws if the graph has cycles.
  */
 export function topologicalSort(
-	g: Pick<WorkGroup, "agents" | "worker">,
+	g: Pick<Deliverable, "agents" | "worker">,
 ): string[] {
 	const allNames = new Set(["worker", ...g.agents.map((a) => a.name)]);
 
@@ -381,7 +397,7 @@ export function topologicalSort(
  * unmet `after` dependencies.
  */
 export function immediateAgents(
-	g: Pick<WorkGroup, "agents" | "worker">,
+	g: Pick<Deliverable, "agents" | "worker">,
 ): string[] {
 	const result: string[] = [];
 	if ((g.worker.after ?? []).length === 0) {
@@ -399,7 +415,7 @@ export function immediateAgents(
  * Given a set of completed agent names, return which agents are now unblocked.
  */
 export function unblockedAgents(
-	g: Pick<WorkGroup, "agents" | "worker">,
+	g: Pick<Deliverable, "agents" | "worker">,
 	completed: ReadonlySet<string>,
 ): string[] {
 	const result: string[] = [];
@@ -428,7 +444,9 @@ export function unblockedAgents(
 
 // ─── Branch logic ────────────────────────────────────────────────────────────
 
-export function defaultBranchForGroup(g: Pick<WorkGroup, "id">): string {
+export function defaultBranchForDeliverable(
+	g: Pick<Deliverable, "id">,
+): string {
 	return `feat/${g.id}`;
 }
 
@@ -436,10 +454,13 @@ export function defaultBranchForGroup(g: Pick<WorkGroup, "id">): string {
  * Parent statuses a dependent may stack on: the parent's branch tip actually
  * holds its work (shipped, or complete and awaiting ship).
  */
-const STACKABLE_STATUSES: readonly GroupStatus[] = ["complete", "shipped"];
+const STACKABLE_STATUSES: readonly DeliverableStatus[] = [
+	"complete",
+	"shipped",
+];
 
 /**
- * Pick the base branch a group forks from (and its PR targets).
+ * Pick the base branch a deliverable forks from (and its PR targets).
  * Stacked (default): the first dependency that actually produced work —
  * non-productive parents (abandoned/superseded) and parents that haven't
  * completed yet are skipped, falling through to the next dep and finally
@@ -447,8 +468,8 @@ const STACKABLE_STATUSES: readonly GroupStatus[] = ["complete", "shipped"];
  * Independent (stacked: false): the default branch.
  */
 export function pickBaseBranch(
-	plan: Pick<Plan, "groups">,
-	g: Pick<WorkGroup, "id" | "dependsOn" | "stacked">,
+	plan: Pick<Plan, "deliverables">,
+	g: Pick<Deliverable, "id" | "dependsOn" | "stacked">,
 	defaultBranch: string,
 ): string {
 	const deps = g.dependsOn ?? [];
@@ -459,7 +480,7 @@ export function pickBaseBranch(
 
 	// Stacked: base off the first dependency whose branch holds real work
 	for (const depId of deps) {
-		const parent = findGroup(plan, depId);
+		const parent = findDeliverable(plan, depId);
 		if (!parent?.branch) continue;
 		if (!STACKABLE_STATUSES.includes(parent.status)) continue;
 		return parent.branch;
@@ -505,10 +526,10 @@ export function repoNameFromPath(path: string): string {
 
 /** Structural invariants enforced before saving. Empty array = valid. */
 export function validatePlanShape(
-	plan: Pick<Plan, "groups" | "repos">,
+	plan: Pick<Plan, "deliverables" | "repos">,
 ): string[] {
 	const problems: string[] = [];
-	const groupIds = new Set(plan.groups.map((g) => g.id));
+	const deliverableIds = new Set(plan.deliverables.map((g) => g.id));
 
 	// Repo key validation
 	const repoKeys = new Set<string>([DEFAULT_REPO_KEY]);
@@ -522,11 +543,13 @@ export function validatePlanShape(
 		repoKeys.add(r.key);
 	}
 
-	for (const g of plan.groups) {
+	for (const g of plan.deliverables) {
 		// dependsOn references exist
 		for (const dep of g.dependsOn ?? []) {
-			if (!groupIds.has(dep)) {
-				problems.push(`group \`${g.id}\` depends on unknown group \`${dep}\``);
+			if (!deliverableIds.has(dep)) {
+				problems.push(
+					`deliverable \`${g.id}\` depends on unknown deliverable \`${dep}\``,
+				);
 			}
 		}
 
@@ -537,7 +560,7 @@ export function validatePlanShape(
 			gatingTasks(g).length === 0
 		) {
 			problems.push(
-				`group \`${g.id}\` has a full-mode worker but no gating tasks`,
+				`deliverable \`${g.id}\` has a full-mode worker but no gating tasks`,
 			);
 		}
 
@@ -545,11 +568,13 @@ export function validatePlanShape(
 		const agentNames = new Set<string>();
 		for (const agent of g.agents) {
 			if (agent.name === "worker") {
-				problems.push(`group \`${g.id}\`: agent name "worker" is reserved`);
+				problems.push(
+					`deliverable \`${g.id}\`: agent name "worker" is reserved`,
+				);
 			}
 			if (agentNames.has(agent.name)) {
 				problems.push(
-					`group \`${g.id}\`: duplicate agent name \`${agent.name}\``,
+					`deliverable \`${g.id}\`: duplicate agent name \`${agent.name}\``,
 				);
 			}
 			agentNames.add(agent.name);
@@ -561,7 +586,7 @@ export function validatePlanShape(
 		for (const ref of workerAfter) {
 			if (!agentNames.has(ref)) {
 				problems.push(
-					`group \`${g.id}\`: worker after references unknown agent \`${ref}\``,
+					`deliverable \`${g.id}\`: worker after references unknown agent \`${ref}\``,
 				);
 			}
 		}
@@ -569,7 +594,7 @@ export function validatePlanShape(
 			for (const ref of agent.after) {
 				if (!validRefs.has(ref)) {
 					problems.push(
-						`group \`${g.id}\`: agent \`${agent.name}\` after references unknown \`${ref}\``,
+						`deliverable \`${g.id}\`: agent \`${agent.name}\` after references unknown \`${ref}\``,
 					);
 				}
 			}
@@ -579,18 +604,20 @@ export function validatePlanShape(
 		try {
 			topologicalSort(g);
 		} catch {
-			problems.push(`group \`${g.id}\`: agent dependency graph has a cycle`);
+			problems.push(
+				`deliverable \`${g.id}\`: agent dependency graph has a cycle`,
+			);
 		}
 
 		// stacked only meaningful with dependsOn
 		if (g.stacked === false && (g.dependsOn ?? []).length === 0) {
 			problems.push(
-				`group \`${g.id}\`: stacked=false is meaningless without dependsOn`,
+				`deliverable \`${g.id}\`: stacked=false is meaningless without dependsOn`,
 			);
 		}
 	}
 
-	// Cross-group cycle check
+	// Cross-deliverable cycle check
 	const colour = new Map<string, "visiting" | "done">();
 	const visit = (id: string, trail: string[]): void => {
 		const state = colour.get(id);
@@ -600,22 +627,22 @@ export function validatePlanShape(
 			return;
 		}
 		colour.set(id, "visiting");
-		const g = findGroup(plan, id);
+		const g = findDeliverable(plan, id);
 		for (const dep of g?.dependsOn ?? []) {
-			if (groupIds.has(dep)) visit(dep, [...trail, id]);
+			if (deliverableIds.has(dep)) visit(dep, [...trail, id]);
 		}
 		colour.set(id, "done");
 	};
-	for (const g of plan.groups) visit(g.id, []);
+	for (const g of plan.deliverables) visit(g.id, []);
 
 	return problems;
 }
 
 /**
- * True once any group in the plan has moved beyond "planned" status.
+ * True once any deliverable in the plan has moved beyond "planned" status.
  */
-export function hasExecutionStarted(plan: Pick<Plan, "groups">): boolean {
-	return plan.groups.some((g) => g.status !== "planned");
+export function hasExecutionStarted(plan: Pick<Plan, "deliverables">): boolean {
+	return plan.deliverables.some((g) => g.status !== "planned");
 }
 
 /**
@@ -644,5 +671,5 @@ export function planRepoMismatch(
 
 // ─── Summary budget ──────────────────────────────────────────────────────────
 
-/** Default token budget for cross-group summaries before compression kicks in. */
+/** Default token budget for cross-deliverable summaries before compression kicks in. */
 export const SUMMARY_TOKEN_BUDGET = 5000;

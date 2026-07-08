@@ -12,7 +12,6 @@ import { redactSecrets } from "@vegardx/pi-core";
 import {
 	type Deliverable,
 	deliverables,
-	effectiveDependsOn,
 	type Plan,
 	TERMINAL_STATUSES,
 } from "./schema.js";
@@ -142,17 +141,14 @@ export function summaryHash(text: string): string {
 
 /** Transitive dependency ancestors of `id` (deepest-first dedup, no cycles). */
 export function transitiveDependencies(
-	plan: Pick<Plan, "nodes">,
+	plan: Pick<Plan, "deliverables">,
 	id: string,
 ): Deliverable[] {
 	const byId = new Map(deliverables(plan).map((d) => [d.id, d]));
 	const seen = new Set<string>();
 	const out: Deliverable[] = [];
 	const visit = (current: string) => {
-		for (const depId of effectiveDependsOn(plan, {
-			id: current,
-			dependsOn: byId.get(current)?.dependsOn,
-		})) {
+		for (const depId of byId.get(current)?.dependsOn ?? []) {
 			if (seen.has(depId)) continue;
 			seen.add(depId);
 			const dep = byId.get(depId);
@@ -171,7 +167,7 @@ export function transitiveDependencies(
  * These are the future readers the summary should retain detail for.
  */
 export function downstreamDependents(
-	plan: Pick<Plan, "nodes">,
+	plan: Pick<Plan, "deliverables">,
 	id: string,
 ): Deliverable[] {
 	const all = deliverables(plan);
@@ -181,7 +177,7 @@ export function downstreamDependents(
 		grew = false;
 		for (const d of all) {
 			if (d.id === id || dependents.has(d.id)) continue;
-			const deps = effectiveDependsOn(plan, d);
+			const deps = d.dependsOn ?? [];
 			if (deps.some((dep) => dep === id || dependents.has(dep))) {
 				dependents.add(d.id);
 				grew = true;
@@ -458,7 +454,7 @@ export interface DependencySummary {
  * are never included — only this deliverable's dependency closure.
  */
 export function collectDependencySummaries(
-	plan: Pick<Plan, "nodes">,
+	plan: Pick<Plan, "deliverables">,
 	deliverableId: string,
 ): DependencySummary[] {
 	const out: DependencySummary[] = [];

@@ -30,15 +30,15 @@ function memStore(): PlanStore & { last: Plan | null } {
 	};
 }
 
-describe("PlanEngine — groups", () => {
-	it("creates a plan and adds a group", () => {
+describe("PlanEngine — deliverables", () => {
+	it("creates a plan and adds a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		const g = engine.addGroup({
+		const g = engine.addDeliverable({
 			title: "Implement auth",
 			body: "JWT-based auth",
 			workerMode: "full",
@@ -47,7 +47,7 @@ describe("PlanEngine — groups", () => {
 		expect(g.status).toBe("planned");
 		expect(g.branch).toBe("feat/implement-auth");
 		expect(g.worker.mode).toBe("full");
-		expect(engine.get().groups).toHaveLength(1);
+		expect(engine.get().deliverables).toHaveLength(1);
 	});
 
 	it("generates unique ids on collision", () => {
@@ -57,74 +57,78 @@ describe("PlanEngine — groups", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
-		const g2 = engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		const g2 = engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		expect(g2.id).toBe("auth-2");
 	});
 
-	it("updates a group", () => {
+	it("updates a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
-		engine.updateGroup("auth", {
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.updateDeliverable("auth", {
 			body: "updated body",
 			workerSlot: "alternate",
 		});
-		const g = engine.get().groups[0];
+		const g = engine.get().deliverables[0];
 		expect(g.body).toBe("updated body");
 		expect(g.worker.slot).toBe("alternate");
 	});
 
-	it("sets group status with transition check", () => {
+	it("sets deliverable status with transition check", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Implement" });
-		engine.setGroupStatus("auth", "active");
-		expect(engine.get().groups[0].status).toBe("active");
-		expect(() => engine.setGroupStatus("auth", "shipped")).toThrow(/illegal/);
+		engine.setDeliverableStatus("auth", "active");
+		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(() => engine.setDeliverableStatus("auth", "shipped")).toThrow(
+			/illegal/,
+		);
 	});
 
-	it("removes a group", () => {
+	it("removes a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
-		engine.removeGroup("auth");
-		expect(engine.get().groups).toHaveLength(0);
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.removeDeliverable("auth");
+		expect(engine.get().deliverables).toHaveLength(0);
 	});
 
-	it("rejects removal of unknown group", () => {
+	it("rejects removal of unknown deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		expect(() => engine.removeGroup("nope")).toThrow(/unknown group/);
+		expect(() => engine.removeDeliverable("nope")).toThrow(
+			/unknown deliverable/,
+		);
 	});
 });
 
 describe("PlanEngine — agents", () => {
-	it("adds an agent to a group", () => {
+	it("adds an agent to a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		const agent = engine.addAgent("auth", {
 			name: "security",
 			mode: "read-only",
@@ -134,7 +138,7 @@ describe("PlanEngine — agents", () => {
 			after: ["worker"],
 		});
 		expect(agent.name).toBe("security");
-		expect(engine.get().groups[0].agents).toHaveLength(1);
+		expect(engine.get().deliverables[0].agents).toHaveLength(1);
 	});
 
 	it("updates an agent", () => {
@@ -144,7 +148,7 @@ describe("PlanEngine — agents", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
@@ -157,7 +161,7 @@ describe("PlanEngine — agents", () => {
 			effort: "high",
 			focus: "security focus",
 		});
-		const agent = engine.get().groups[0].agents[0];
+		const agent = engine.get().deliverables[0].agents[0];
 		expect(agent.effort).toBe("high");
 		expect(agent.focus).toBe("security focus");
 	});
@@ -169,7 +173,7 @@ describe("PlanEngine — agents", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
@@ -179,7 +183,7 @@ describe("PlanEngine — agents", () => {
 			after: ["worker"],
 		});
 		engine.removeAgent("auth", "review");
-		expect(engine.get().groups[0].agents).toHaveLength(0);
+		expect(engine.get().deliverables[0].agents).toHaveLength(0);
 	});
 
 	it("rejects duplicate agent name", () => {
@@ -189,7 +193,7 @@ describe("PlanEngine — agents", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
@@ -217,7 +221,7 @@ describe("PlanEngine — agents", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		expect(() =>
 			engine.addAgent("auth", {
 				name: "worker",
@@ -232,21 +236,21 @@ describe("PlanEngine — agents", () => {
 });
 
 describe("PlanEngine — work items", () => {
-	it("adds a task to a group", () => {
+	it("adds a task to a deliverable", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {
 			slug: "test",
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		const item = engine.addWorkItem("auth", {
 			title: "Implement login",
 			body: "POST /login with bcrypt",
 		});
 		expect(item.id).toBe("implement-login");
 		expect(item.done).toBe(false);
-		expect(engine.get().groups[0].tasks).toHaveLength(1);
+		expect(engine.get().deliverables[0].tasks).toHaveLength(1);
 	});
 
 	it("toggles a task", () => {
@@ -256,11 +260,11 @@ describe("PlanEngine — work items", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Login" });
 		const done = engine.toggleWorkItem("auth", "login");
 		expect(done).toBe(true);
-		expect(engine.get().groups[0].tasks[0].done).toBe(true);
+		expect(engine.get().deliverables[0].tasks[0].done).toBe(true);
 	});
 
 	it("updates a task", () => {
@@ -270,10 +274,10 @@ describe("PlanEngine — work items", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Login" });
 		engine.updateWorkItem("auth", "login", { body: "updated details" });
-		expect(engine.get().groups[0].tasks[0].body).toBe("updated details");
+		expect(engine.get().deliverables[0].tasks[0].body).toBe("updated details");
 	});
 
 	it("removes a task", () => {
@@ -283,10 +287,10 @@ describe("PlanEngine — work items", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Login" });
 		engine.removeWorkItem("auth", "login");
-		expect(engine.get().groups[0].tasks).toHaveLength(0);
+		expect(engine.get().deliverables[0].tasks).toHaveLength(0);
 	});
 
 	it("answers a question item", () => {
@@ -296,10 +300,10 @@ describe("PlanEngine — work items", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "Which hash?", kind: "question" });
 		engine.updateWorkItem("auth", "which-hash", { answer: "bcrypt" });
-		const item = engine.get().groups[0].tasks[0];
+		const item = engine.get().deliverables[0].tasks[0];
 		expect(item.answer).toBe("bcrypt");
 		expect(item.done).toBe(true);
 		expect(item.decidedAt).toBeDefined();
@@ -316,7 +320,7 @@ describe("PlanEngine — draft lifecycle", () => {
 		});
 		expect(engine.isDraft()).toBe(true);
 		expect(store.last).toBeNull();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		expect(store.last).toBeNull(); // Still not persisted
 		engine.materialize("final-slug", "Final Title");
 		expect(engine.isDraft()).toBe(false);
@@ -333,11 +337,11 @@ describe("PlanEngine — validation integration", () => {
 			title: "Test",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "task a" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: ["a"] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: ["a"] });
 		engine.addWorkItem("b", { title: "task b" });
-		expect(() => engine.updateGroup("a", { dependsOn: ["b"] })).toThrow(
+		expect(() => engine.updateDeliverable("a", { dependsOn: ["b"] })).toThrow(
 			/cycle/,
 		);
 	});
@@ -350,9 +354,9 @@ describe("PlanEngine — validation integration", () => {
 			repoPath: "/tmp/repo",
 		});
 		// Adding with no tasks is fine (planned status)
-		engine.addGroup({ title: "Empty", workerMode: "full" });
+		engine.addDeliverable({ title: "Empty", workerMode: "full" });
 		// But activating without tasks fails
-		expect(() => engine.setGroupStatus("empty", "active")).toThrow(
+		expect(() => engine.setDeliverableStatus("empty", "active")).toThrow(
 			/no gating tasks/,
 		);
 	});

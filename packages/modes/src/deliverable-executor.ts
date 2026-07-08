@@ -1,28 +1,28 @@
-// Group execution engine — graph-based spawning and lifecycle management.
-// One group = one branch = one PR. Worker + support agents with internal DAG.
+// Deliverable execution engine — graph-based spawning and lifecycle management.
+// One deliverable = one branch = one PR. Worker + support agents with internal DAG.
 //
 // Maestro owns the lifecycle:
-// 1. Groups activate when their dependsOn are satisfied (deps complete/shipped
+// 1. Deliverables activate when their dependsOn are satisfied (deps complete/shipped
 //    or terminally non-productive — never merely active)
-// 2. Agents spawn when their `after` deps within the group complete
+// 2. Agents spawn when their `after` deps within the deliverable complete
 // 3. Worker done = all tasks toggled
 // 4. Support agent done = session exits or idle detected
-// 5. Group complete = all agents done
-// 6. Complete groups ship (push + PR) in chain order: a group ships once all
-//    its dependsOn groups have shipped, so stacked PR bases exist on the remote
+// 5. Deliverable complete = all agents done
+// 6. Complete deliverables ship (push + PR) in chain order: a deliverable ships once all
+//    its dependsOn deliverables have shipped, so stacked PR bases exist on the remote
 
 import type { PlanEngine } from "./engine.js";
 import { parseVerdict, VERDICT_INSTRUCTION } from "./exec/verdicts.js";
-import type { AgentMode, WorkGroup } from "./schema.js";
+import type { AgentMode, Deliverable } from "./schema.js";
 import {
-	defaultBranchForGroup,
+	defaultBranchForDeliverable,
 	findAgent,
-	findGroup,
+	findDeliverable,
 	gatingTasks,
 	immediateAgents,
 	pickBaseBranch,
-	readyGroups,
-	shippableGroups,
+	readyDeliverables,
+	shippableDeliverables,
 	unblockedAgents,
 } from "./schema.js";
 
@@ -39,7 +39,7 @@ export type AgentStatus =
 export interface AgentState {
 	/** "worker" or agent name. */
 	name: string;
-	groupId: string;
+	deliverableId: string;
 	status: AgentStatus;
 	/** Random display name (from agent-names.ts). */
 	displayName?: string;
@@ -61,10 +61,10 @@ export interface AgentState {
 	error?: string;
 }
 
-// ─── Group runtime state ─────────────────────────────────────────────────────
+// ─── Deliverable runtime state ─────────────────────────────────────────────────────
 
-export interface GroupRunState {
-	groupId: string;
+export interface DeliverableRunState {
+	deliverableId: string;
 	/** All agents (worker + support) and their runtime status. */
 	agents: Map<string, AgentState>;
 	/** Names of agents that have completed. */
@@ -95,24 +95,24 @@ export interface ExecutorDeps {
 	spawnAgent: (opts: SpawnAgentOpts) => Promise<SpawnedAgent>;
 	/** Kill a tmux session. */
 	killSession: (sessionId: string) => Promise<void>;
-	/** Create a worktree for a group. */
+	/** Create a worktree for a deliverable. */
 	createWorktree: (opts: CreateWorktreeOpts) => Promise<string>;
 	/** Push branch and create PR. Returns PR URL. */
-	shipGroup: (opts: ShipGroupOpts) => Promise<string>;
+	shipDeliverable: (opts: ShipDeliverableOpts) => Promise<string>;
 	/** Request agent summary (sends summarize RPC). */
 	requestSummary: (
 		sessionId: string,
 		consumer: string,
 		preamble: string,
 	) => Promise<string>;
-	/** Repo default branch — the base for unstacked groups. */
+	/** Repo default branch — the base for unstacked deliverables. */
 	defaultBranch?: string;
 	/** Current time. */
 	now: () => string;
 }
 
 export interface SpawnAgentOpts {
-	groupId: string;
+	deliverableId: string;
 	agentName: string;
 	displayName: string;
 	mode: "full" | "read-only";
@@ -127,14 +127,14 @@ export interface SpawnAgentOpts {
 }
 
 export interface CreateWorktreeOpts {
-	groupId: string;
+	deliverableId: string;
 	branch: string;
 	baseBranch: string;
 	repoPath: string;
 }
 
-export interface ShipGroupOpts {
-	groupId: string;
+export interface ShipDeliverableOpts {
+	deliverableId: string;
 	branch: string;
 	title: string;
 	body: string;
@@ -142,36 +142,36 @@ export interface ShipGroupOpts {
 }
 
 /**
- * The GroupExecutor manages the lifecycle of all groups and their agents.
+ * The DeliverableExecutor manages the lifecycle of all deliverables and their agents.
  * It's driven by `tick()` which advances the state machine.
  */
-export class GroupExecutor {
-	private readonly groupStates = new Map<string, GroupRunState>();
-	/** In-flight markAgentDone per "groupId/agentName" — concurrent callers share it. */
+export class DeliverableExecutor {
+	private readonly deliverableStates = new Map<string, DeliverableRunState>();
+	/** In-flight markAgentDone per "deliverableId/agentName" — concurrent callers share it. */
 	private readonly doneInFlight = new Map<string, Promise<void>>();
-	/** Groups mid-activation — a concurrent tick must not activate them again. */
+	/** Deliverables mid-activation — a concurrent tick must not activate them again. */
 	private readonly activating = new Set<string>();
 
 	constructor(
 		private readonly engine: PlanEngine,
 		private readonly deps: ExecutorDeps,
 	) {
-		// Hydrate state for already-active groups (e.g. resumed session)
-		for (const g of engine.get().groups) {
-			if (g.status === "active" && !this.groupStates.has(g.id)) {
-				this.hydrateActiveGroup(g);
+		// Hydrate state for already-active deliverables (e.g. resumed session)
+		for (const g of engine.get().deliverables) {
+			if (g.status === "active" && !this.deliverableStates.has(g.id)) {
+				this.hydrateActiveDeliverable(g);
 			}
 		}
 	}
 
 	/**
-	 * Hydrate runtime state for a group that's already active (resume).
+	 * Hydrate runtime state for a deliverable that's already active (resume).
 	 * A maestro restart ends the run: orphaned pi processes may still live in
-	 * tmux, so hydrated groups come up blocked instead of auto-respawning.
+	 * tmux, so hydrated deliverables come up blocked instead of auto-respawning.
 	 */
-	private hydrateActiveGroup(g: WorkGroup): void {
-		const groupState: GroupRunState = {
-			groupId: g.id,
+	private hydrateActiveDeliverable(g: Deliverable): void {
+		const deliverableState: DeliverableRunState = {
+			deliverableId: g.id,
 			agents: new Map(),
 			completed: new Set(),
 			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
@@ -180,64 +180,67 @@ export class GroupExecutor {
 			blocked:
 				"maestro restarted — agents may still be running in tmux; /retry after inspecting",
 		};
-		groupState.agents.set("worker", {
+		deliverableState.agents.set("worker", {
 			name: "worker",
-			groupId: g.id,
+			deliverableId: g.id,
 			status: "pending",
 		});
 		for (const agent of g.agents) {
-			groupState.agents.set(agent.name, {
+			deliverableState.agents.set(agent.name, {
 				name: agent.name,
-				groupId: g.id,
+				deliverableId: g.id,
 				status: "pending",
 			});
 		}
-		this.groupStates.set(g.id, groupState);
+		this.deliverableStates.set(g.id, deliverableState);
 	}
 
-	/** Get all group runtime states. */
-	getStates(): ReadonlyMap<string, GroupRunState> {
-		return this.groupStates;
+	/** Get all deliverable runtime states. */
+	getStates(): ReadonlyMap<string, DeliverableRunState> {
+		return this.deliverableStates;
 	}
 
 	/** Get a specific agent's state. */
-	getAgentState(groupId: string, agentName: string): AgentState | undefined {
-		return this.groupStates.get(groupId)?.agents.get(agentName);
+	getAgentState(
+		deliverableId: string,
+		agentName: string,
+	): AgentState | undefined {
+		return this.deliverableStates.get(deliverableId)?.agents.get(agentName);
 	}
 
 	/**
 	 * Main tick — advances execution state machine.
 	 * Call periodically or on state-change events.
-	 * Returns names of groups that were shipped this tick.
+	 * Returns names of deliverables that were shipped this tick.
 	 */
 	async tick(): Promise<string[]> {
 		const plan = this.engine.get();
 		const shipped: string[] = [];
 
-		// 1. Activate ready groups
-		for (const g of readyGroups(plan)) {
-			await this.activateGroup(g);
+		// 1. Activate ready deliverables
+		for (const g of readyDeliverables(plan)) {
+			await this.activateDeliverable(g);
 		}
 
-		// 2. For each active group, check agent completion → spawn next
-		for (const [groupId, state] of this.groupStates) {
-			const g = findGroup(plan, groupId);
+		// 2. For each active deliverable, check agent completion → spawn next
+		for (const [deliverableId, state] of this.deliverableStates) {
+			const g = findDeliverable(plan, deliverableId);
 			if (g?.status !== "active") continue;
-			await this.advanceGroup(g, state);
+			await this.advanceDeliverable(g, state);
 		}
 
-		// 3. Ship complete groups in chain order. A parent's ship makes its
+		// 3. Ship complete deliverables in chain order. A parent's ship makes its
 		// dependents shippable, so re-evaluate until a pass makes no progress;
-		// each group is attempted once per tick (a ship failure stays retryable
+		// each deliverable is attempted once per tick (a ship failure stays retryable
 		// on a later tick without looping here).
 		const attempted = new Set<string>();
 		let progressed = true;
 		while (progressed) {
 			progressed = false;
-			for (const g of shippableGroups(this.engine.get())) {
+			for (const g of shippableDeliverables(this.engine.get())) {
 				if (attempted.has(g.id)) continue;
 				attempted.add(g.id);
-				const url = await this.shipGroupIfReady(g);
+				const url = await this.shipDeliverableIfReady(g);
 				if (url) {
 					shipped.push(g.id);
 					progressed = true;
@@ -253,11 +256,11 @@ export class GroupExecutor {
 	 * Idempotent: concurrent callers (RPC done + poll timer) share one run;
 	 * agents already summarizing or done are left alone.
 	 */
-	async markAgentDone(groupId: string, agentName: string): Promise<void> {
-		const key = `${groupId}/${agentName}`;
+	async markAgentDone(deliverableId: string, agentName: string): Promise<void> {
+		const key = `${deliverableId}/${agentName}`;
 		const inFlight = this.doneInFlight.get(key);
 		if (inFlight) return inFlight;
-		const run = this.runMarkAgentDone(groupId, agentName).finally(() => {
+		const run = this.runMarkAgentDone(deliverableId, agentName).finally(() => {
 			this.doneInFlight.delete(key);
 		});
 		this.doneInFlight.set(key, run);
@@ -265,10 +268,10 @@ export class GroupExecutor {
 	}
 
 	private async runMarkAgentDone(
-		groupId: string,
+		deliverableId: string,
 		agentName: string,
 	): Promise<void> {
-		const state = this.groupStates.get(groupId);
+		const state = this.deliverableStates.get(deliverableId);
 		if (!state) return;
 		const agent = state.agents.get(agentName);
 		if (!agent || agent.status === "done" || agent.status === "summarizing")
@@ -281,9 +284,9 @@ export class GroupExecutor {
 		// Request summary
 		if (sessionId) {
 			const plan = this.engine.get();
-			const g = findGroup(plan, groupId);
+			const g = findDeliverable(plan, deliverableId);
 			const consumer = this.nextConsumer(g, agentName);
-			let preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? groupId}`;
+			let preamble = `${agent.displayName ?? agentName} (${agentName}) — ${g?.title ?? deliverableId}`;
 			// Read-only reviewers must end their summary with a verdict.
 			const spec = g ? findAgent(g, agentName) : null;
 			if (spec?.mode === "read-only") {
@@ -309,15 +312,19 @@ export class GroupExecutor {
 		agent.completedAt = this.deps.now();
 		state.completed.add(agentName);
 
-		// Check if group is complete
-		await this.checkGroupCompletion(groupId);
+		// Check if deliverable is complete
+		await this.checkDeliverableCompletion(deliverableId);
 	}
 
 	/**
 	 * Mark an agent as failed.
 	 */
-	markAgentFailed(groupId: string, agentName: string, error: string): void {
-		const state = this.groupStates.get(groupId);
+	markAgentFailed(
+		deliverableId: string,
+		agentName: string,
+		error: string,
+	): void {
+		const state = this.deliverableStates.get(deliverableId);
 		if (!state) return;
 		const agent = state.agents.get(agentName);
 		if (!agent) return;
@@ -326,35 +333,35 @@ export class GroupExecutor {
 		agent.completedAt = this.deps.now();
 	}
 
-	/** Block a group with a user-facing reason (surfaced via getStates). */
-	blockGroup(groupId: string, reason: string): void {
-		const state = this.groupStates.get(groupId);
+	/** Block a deliverable with a user-facing reason (surfaced via getStates). */
+	blockDeliverable(deliverableId: string, reason: string): void {
+		const state = this.deliverableStates.get(deliverableId);
 		if (state) state.blocked = reason;
 	}
 
-	/** Clear a group's blocked reason (user-driven retry). */
-	unblockGroup(groupId: string): void {
-		const state = this.groupStates.get(groupId);
+	/** Clear a deliverable's blocked reason (user-driven retry). */
+	unblockDeliverable(deliverableId: string): void {
+		const state = this.deliverableStates.get(deliverableId);
 		if (state) state.blocked = undefined;
 	}
 
 	/**
 	 * Check if all gating tasks for a worker are toggled.
 	 */
-	isWorkerDone(groupId: string): boolean {
+	isWorkerDone(deliverableId: string): boolean {
 		const plan = this.engine.get();
-		const g = findGroup(plan, groupId);
+		const g = findDeliverable(plan, deliverableId);
 		if (!g) return false;
 		return gatingTasks(g).every((t) => t.done);
 	}
 
-	/** Respawn a failed agent (reuse spawnAgentInGroup with fresh state). */
-	async respawnAgent(groupId: string, agentName: string): Promise<void> {
+	/** Respawn a failed agent (reuse spawnAgentInDeliverable with fresh state). */
+	async respawnAgent(deliverableId: string, agentName: string): Promise<void> {
 		const plan = this.engine.get();
-		const g = findGroup(plan, groupId);
-		if (!g) throw new Error(`group ${groupId} not found`);
-		const state = this.groupStates.get(groupId);
-		if (!state) throw new Error(`no state for group ${groupId}`);
+		const g = findDeliverable(plan, deliverableId);
+		if (!g) throw new Error(`deliverable ${deliverableId} not found`);
+		const state = this.deliverableStates.get(deliverableId);
+		if (!state) throw new Error(`no state for deliverable ${deliverableId}`);
 		const agentState = state.agents.get(agentName);
 		if (!agentState) throw new Error(`no state for agent ${agentName}`);
 
@@ -365,26 +372,26 @@ export class GroupExecutor {
 		agentState.error = undefined;
 		agentState.completedAt = undefined;
 
-		await this.spawnAgentInGroup(g, state, agentName);
+		await this.spawnAgentInDeliverable(g, state, agentName);
 	}
 
 	// ─── Internal ──────────────────────────────────────────────────────────
 
-	private async activateGroup(g: WorkGroup): Promise<void> {
+	private async activateDeliverable(g: Deliverable): Promise<void> {
 		// Re-entrancy guard: provisioning awaits before the status flips to
 		// active, so an overlapping tick would otherwise double-activate.
-		if (this.activating.has(g.id) || this.groupStates.has(g.id)) return;
+		if (this.activating.has(g.id) || this.deliverableStates.has(g.id)) return;
 		this.activating.add(g.id);
 		try {
-			await this.doActivateGroup(g);
+			await this.doActivateDeliverable(g);
 		} finally {
 			this.activating.delete(g.id);
 		}
 	}
 
-	private async doActivateGroup(g: WorkGroup): Promise<void> {
+	private async doActivateDeliverable(g: Deliverable): Promise<void> {
 		const plan = this.engine.get();
-		const branch = g.branch ?? defaultBranchForGroup(g);
+		const branch = g.branch ?? defaultBranchForDeliverable(g);
 		const baseBranch = pickBaseBranch(
 			plan,
 			g,
@@ -393,15 +400,15 @@ export class GroupExecutor {
 
 		// Create worktree
 		const worktreePath = await this.deps.createWorktree({
-			groupId: g.id,
+			deliverableId: g.id,
 			branch,
 			baseBranch,
 			repoPath: plan.repoPath,
 		});
 
 		// Initialize runtime state
-		const groupState: GroupRunState = {
-			groupId: g.id,
+		const deliverableState: DeliverableRunState = {
+			deliverableId: g.id,
 			agents: new Map(),
 			completed: new Set(),
 			worktreePath,
@@ -410,37 +417,37 @@ export class GroupExecutor {
 		};
 
 		// Register all agents (worker + support)
-		groupState.agents.set("worker", {
+		deliverableState.agents.set("worker", {
 			name: "worker",
-			groupId: g.id,
+			deliverableId: g.id,
 			status: "pending",
 		});
 		for (const agent of g.agents) {
-			groupState.agents.set(agent.name, {
+			deliverableState.agents.set(agent.name, {
 				name: agent.name,
-				groupId: g.id,
+				deliverableId: g.id,
 				status: "pending",
 			});
 		}
 
-		this.groupStates.set(g.id, groupState);
+		this.deliverableStates.set(g.id, deliverableState);
 
 		// Transition to active
-		this.engine.setGroupStatus(g.id, "active");
-		this.engine.updateGroup(g.id, { branch, worktreePath });
+		this.engine.setDeliverableStatus(g.id, "active");
+		this.engine.updateDeliverable(g.id, { branch, worktreePath });
 
 		// Spawn immediately-startable agents
 		const immediate = immediateAgents(g);
 		for (const name of immediate) {
-			await this.spawnAgentInGroup(g, groupState, name);
+			await this.spawnAgentInDeliverable(g, deliverableState, name);
 		}
 	}
 
-	private async advanceGroup(
-		g: WorkGroup,
-		state: GroupRunState,
+	private async advanceDeliverable(
+		g: Deliverable,
+		state: DeliverableRunState,
 	): Promise<void> {
-		// Blocked groups (fix-loop stall, maestro restart) need user action
+		// Blocked deliverables (fix-loop stall, maestro restart) need user action
 		// before any further spawning.
 		if (state.blocked) return;
 
@@ -449,7 +456,7 @@ export class GroupExecutor {
 		for (const name of immediate) {
 			const agent = state.agents.get(name);
 			if (agent && agent.status === "pending") {
-				await this.spawnAgentInGroup(g, state, name);
+				await this.spawnAgentInDeliverable(g, state, name);
 			}
 		}
 
@@ -458,28 +465,28 @@ export class GroupExecutor {
 		for (const name of unblocked) {
 			const agent = state.agents.get(name);
 			if (agent && agent.status === "pending") {
-				await this.spawnAgentInGroup(g, state, name);
+				await this.spawnAgentInDeliverable(g, state, name);
 			}
 		}
 	}
 
-	private async spawnAgentInGroup(
-		g: WorkGroup,
-		state: GroupRunState,
+	private async spawnAgentInDeliverable(
+		g: Deliverable,
+		state: DeliverableRunState,
 		name: string,
 		kickoffMessage?: string,
 	): Promise<void> {
 		const agentState = state.agents.get(name);
 		if (!agentState) return;
 
-		// Never spawn into a blocked group (fix rounds clear `blocked` first).
+		// Never spawn into a blocked deliverable (fix rounds clear `blocked` first).
 		if (state.blocked) return;
 
 		const spec =
 			name === "worker" ? g.worker : g.agents.find((a) => a.name === name);
 		if (!spec) return;
 
-		// Group scheduler invariant: one agent TYPE active per group at a time.
+		// Deliverable scheduler invariant: one agent TYPE active per deliverable at a time.
 		// Not spawnable now → stays pending; a later tick retries.
 		if (!this.canSpawnNow(g, state, spec.mode)) return;
 
@@ -506,7 +513,7 @@ export class GroupExecutor {
 		const seed = resumeSessionFile ? "" : this.buildSeed(g, state, name);
 
 		const spawned = await this.deps.spawnAgent({
-			groupId: g.id,
+			deliverableId: g.id,
 			agentName: name,
 			displayName: agentState.displayName,
 			mode,
@@ -528,13 +535,13 @@ export class GroupExecutor {
 	}
 
 	/**
-	 * Scheduler invariant: within a group, at most one agent type is active at
+	 * Scheduler invariant: within a deliverable, at most one agent type is active at
 	 * a time. Full-mode agents run strictly alone; read-only agents may run
 	 * concurrently with each other but never alongside a full-mode agent.
 	 */
 	private canSpawnNow(
-		g: WorkGroup,
-		state: GroupRunState,
+		g: Deliverable,
+		state: DeliverableRunState,
 		mode: AgentMode,
 	): boolean {
 		const active = [...state.agents.values()].filter(
@@ -555,7 +562,7 @@ export class GroupExecutor {
 	}
 
 	/** Default kickoff for a resumed session when the caller supplies none. */
-	private resumeKickoff(state: GroupRunState, name: string): string {
+	private resumeKickoff(state: DeliverableRunState, name: string): string {
 		const findings = state.lastFindingsByReviewer?.get(name);
 		if (findings && findings.length > 0) {
 			return (
@@ -570,19 +577,23 @@ export class GroupExecutor {
 		);
 	}
 
-	private buildSeed(g: WorkGroup, state: GroupRunState, name: string): string {
+	private buildSeed(
+		g: Deliverable,
+		state: DeliverableRunState,
+		name: string,
+	): string {
 		const parts: string[] = [];
 		const plan = this.engine.get();
 
-		// 1. Dep summaries from prior groups (cache-stable prefix)
+		// 1. Dep summaries from prior deliverables (cache-stable prefix)
 		for (const depId of g.dependsOn ?? []) {
-			const dep = findGroup(plan, depId);
+			const dep = findDeliverable(plan, depId);
 			if (dep?.summary) {
 				parts.push(dep.summary);
 			}
 		}
 
-		// 2. Accumulated sibling summaries (from completed agents in this group)
+		// 2. Accumulated sibling summaries (from completed agents in this deliverable)
 		for (const [agentName, agentState] of state.agents) {
 			if (agentName === name) continue; // Don't include self
 			if (agentState.summary) {
@@ -592,7 +603,7 @@ export class GroupExecutor {
 
 		// 3. Agent-specific content (last — unique to this agent)
 		if (name === "worker") {
-			parts.push(`## Group: ${g.title}\n\n${g.body}`);
+			parts.push(`## Deliverable: ${g.title}\n\n${g.body}`);
 			const tasks = gatingTasks(g);
 			if (tasks.length > 0) {
 				parts.push("\n## Tasks\n");
@@ -616,7 +627,7 @@ export class GroupExecutor {
 		return parts.join("\n\n");
 	}
 
-	private nextConsumer(g: WorkGroup | null, completedAgent: string): string {
+	private nextConsumer(g: Deliverable | null, completedAgent: string): string {
 		if (!g) return "the next step in the workflow";
 
 		// Find next agent in the graph that depends on this one
@@ -634,22 +645,24 @@ export class GroupExecutor {
 			}
 		}
 
-		// No dependents within group — next consumer is downstream groups
+		// No dependents within deliverable — next consumer is downstream deliverables
 		const plan = this.engine.get();
-		const downstream = plan.groups.filter((other) =>
+		const downstream = plan.deliverables.filter((other) =>
 			other.dependsOn?.includes(g.id),
 		);
 		if (downstream.length > 0) {
 			return downstream
-				.map((d) => `group "${d.title}": ${d.body.slice(0, 100)}`)
+				.map((d) => `deliverable "${d.title}": ${d.body.slice(0, 100)}`)
 				.join("; ");
 		}
 
 		return "the project completion summary";
 	}
 
-	private async checkGroupCompletion(groupId: string): Promise<void> {
-		const state = this.groupStates.get(groupId);
+	private async checkDeliverableCompletion(
+		deliverableId: string,
+	): Promise<void> {
+		const state = this.deliverableStates.get(deliverableId);
 		if (!state) return;
 
 		// All agents must be done
@@ -669,7 +682,7 @@ export class GroupExecutor {
 
 		// Review verdicts: any read-only reviewer requesting changes starts a
 		// fix round (bounded); a missing verdict does not block.
-		const g = findGroup(this.engine.get(), groupId);
+		const g = findDeliverable(this.engine.get(), deliverableId);
 		if (g) {
 			const objections: { name: string; findings: string[] }[] = [];
 			for (const spec of g.agents) {
@@ -687,14 +700,16 @@ export class GroupExecutor {
 			}
 		}
 
-		// Assemble group summary from agent summaries
+		// Assemble deliverable summary from agent summaries
 		const summaries = [...state.agents.values()]
 			.filter((a) => a.summary)
 			.map((a) => a.summary as string);
-		const groupSummary = summaries.join("\n\n");
+		const deliverableSummary = summaries.join("\n\n");
 
-		this.engine.setGroupStatus(groupId, "complete");
-		this.engine.updateGroup(groupId, { summary: groupSummary });
+		this.engine.setDeliverableStatus(deliverableId, "complete");
+		this.engine.updateDeliverable(deliverableId, {
+			summary: deliverableSummary,
+		});
 	}
 
 	/**
@@ -702,11 +717,11 @@ export class GroupExecutor {
 	 * worker is resurrected from its own session to fix them, and objecting
 	 * reviewers re-run once the worker completes (their "worker" dep becomes
 	 * unsatisfied again). Bounded by the round cap and a no-progress guard;
-	 * either stop leaves the group active with `blocked` set for the user.
+	 * either stop leaves the deliverable active with `blocked` set for the user.
 	 */
 	private async startFixRound(
-		g: WorkGroup,
-		state: GroupRunState,
+		g: Deliverable,
+		state: DeliverableRunState,
 		objections: { name: string; findings: string[] }[],
 	): Promise<void> {
 		// No-progress guard: a reviewer re-raising byte-identical findings
@@ -731,7 +746,7 @@ export class GroupExecutor {
 
 		// Add all work items before mutating any agent state: a mid-loop
 		// validation failure must not leave a half-armed round (round bumped
-		// but nobody re-pended → the group would wedge silently).
+		// but nobody re-pended → the deliverable would wedge silently).
 		const allFindings: string[] = [];
 		try {
 			for (const o of objections) {
@@ -770,11 +785,11 @@ export class GroupExecutor {
 			`Reviewers found issues with your changes — address each, commit, ` +
 			`and toggle the new [round ${state.round}] tasks:\n` +
 			allFindings.map((f) => `- ${f}`).join("\n");
-		await this.spawnAgentInGroup(g, state, "worker", kickoff);
+		await this.spawnAgentInDeliverable(g, state, "worker", kickoff);
 	}
 
-	private async shipGroupIfReady(g: WorkGroup): Promise<string | null> {
-		const state = this.groupStates.get(g.id);
+	private async shipDeliverableIfReady(g: Deliverable): Promise<string | null> {
+		const state = this.deliverableStates.get(g.id);
 		if (!state) return null;
 
 		// Assemble PR body
@@ -793,13 +808,13 @@ export class GroupExecutor {
 			.filter(Boolean)
 			.join("\n\n");
 
-		// Ship failure is retryable: leave the group `complete` and let a later
+		// Ship failure is retryable: leave the deliverable `complete` and let a later
 		// tick (or /ship) try again — durable status never advances without a PR.
 		let prUrl: string;
 		try {
-			prUrl = await this.deps.shipGroup({
-				groupId: g.id,
-				branch: state.branch ?? defaultBranchForGroup(g),
+			prUrl = await this.deps.shipDeliverable({
+				deliverableId: g.id,
+				branch: state.branch ?? defaultBranchForDeliverable(g),
 				title: g.title,
 				body,
 				worktreePath: state.worktreePath!,
@@ -808,10 +823,10 @@ export class GroupExecutor {
 			return null;
 		}
 
-		this.engine.setGroupStatus(g.id, "shipped");
-		this.engine.updateGroup(g.id, { prUrl });
+		this.engine.setDeliverableStatus(g.id, "shipped");
+		this.engine.updateDeliverable(g.id, { prUrl });
 
-		// Every group ships its own PR — predecessors are never auto-superseded.
+		// Every deliverable ships its own PR — predecessors are never auto-superseded.
 		// `superseded` stays a user-driven status (the transition remains legal).
 
 		return prUrl;

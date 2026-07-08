@@ -131,7 +131,7 @@ function shortQuestion(question: string): string {
 	return flat.length > 64 ? `${flat.slice(0, 63)}…` : flat;
 }
 
-/** One-line card header — `<icon> <group> · <what happened>`. */
+/** One-line card header — `<icon> <deliverable> · <what happened>`. */
 export function buildCardHeader(event: AgentCardEvent): string {
 	switch (event.kind) {
 		case "research-spawn":
@@ -141,20 +141,22 @@ export function buildCardHeader(event: AgentCardEvent): string {
 				? `✓ research · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
 				: `✗ research failed · ${shortQuestion(event.question)}`;
 		case "spawn":
-			return `◆ ${event.groupTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
+			return `◆ ${event.deliverableTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
 		case "done":
-			return `✓ ${event.groupTitle} · ${agentRole(event.agentKey)} · finished in ${formatDuration(event.durationMs)}`;
+			return `✓ ${event.deliverableTitle} · ${agentRole(event.agentKey)} · finished in ${formatDuration(event.durationMs)}`;
 		case "fix-round":
-			return `↻ ${event.groupTitle} · fix round ${event.round}`;
+			return `↻ ${event.deliverableTitle} · fix round ${event.round}`;
 		case "blocked":
-			return `■ ${event.groupTitle} · blocked`;
+			return `■ ${event.deliverableTitle} · blocked`;
 		case "failed":
-			return `✗ ${event.groupTitle} · ${agentRole(event.agentKey)} failed`;
+			return `✗ ${event.deliverableTitle} · ${agentRole(event.agentKey)} failed`;
 		case "shipped":
-			return `⇧ ${event.groupTitle} · shipped`;
+			return `⇧ ${event.deliverableTitle} · shipped`;
 		case "settled": {
-			const shipped = event.groups.filter((g) => g.status === "shipped").length;
-			return `◆ all groups settled · ${shipped}/${event.groups.length} shipped`;
+			const shipped = event.deliverables.filter(
+				(g) => g.status === "shipped",
+			).length;
+			return `◆ all deliverables settled · ${shipped}/${event.deliverables.length} shipped`;
 		}
 	}
 }
@@ -227,7 +229,7 @@ export function buildCardBody(
 		case "shipped":
 			return event.prUrl ? [event.prUrl] : [];
 		case "settled":
-			return event.groups.map(
+			return event.deliverables.map(
 				(g) => `${g.title} — ${g.status}${g.prUrl ? ` ${g.prUrl}` : ""}`,
 			);
 	}
@@ -264,7 +266,7 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 		case "failed":
 			return `↳ ${plural(event.respawns, "respawn")}`;
 		case "shipped":
-			return `↳ group ${event.groupId}`;
+			return `↳ deliverable ${event.deliverableId}`;
 	}
 }
 

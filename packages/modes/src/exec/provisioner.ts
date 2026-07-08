@@ -20,7 +20,7 @@ import {
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { addWorktree, worktreePathFor } from "@vegardx/pi-git";
-import { groupBranch } from "../agent-lifecycle.js";
+import { deliverableBranch } from "../agent-lifecycle.js";
 import {
 	EXECUTION_SEED_ENTRY,
 	MODES_STATE_ENTRY,
@@ -37,29 +37,29 @@ import {
 export interface ProvisionWorktreeOpts {
 	/** Main checkout of the repo. */
 	repoPath: string;
-	/** Group id — determines the branch (`feat/<groupId>`) and path segment. */
-	groupId: string;
-	/** Branch to create `feat/<groupId>` from when it doesn't exist yet. */
+	/** Deliverable id — determines the branch (`feat/<deliverableId>`) and path segment. */
+	deliverableId: string;
+	/** Branch to create `feat/<deliverableId>` from when it doesn't exist yet. */
 	baseBranch: string;
 	/** Parent directory for worktrees. Defaults to the repo's sibling root. */
 	worktreesRoot?: string;
 }
 
 /**
- * Create (or reuse) the worktree for a group on branch `feat/<groupId>`.
+ * Create (or reuse) the worktree for a deliverable on branch `feat/<deliverableId>`.
  * Idempotent — delegates reuse semantics to `addWorktree`. Returns the
  * worktree path; throws with a clear message on failure so no agent is
  * spawned into a broken tree.
  */
 export function provisionWorktree(opts: ProvisionWorktreeOpts): string {
-	const branch = groupBranch(opts.groupId);
+	const branch = deliverableBranch(opts.deliverableId);
 	const target = opts.worktreesRoot
-		? join(opts.worktreesRoot, opts.groupId)
-		: worktreePathFor(opts.repoPath, opts.groupId);
+		? join(opts.worktreesRoot, opts.deliverableId)
+		: worktreePathFor(opts.repoPath, opts.deliverableId);
 	const result = addWorktree(opts.repoPath, target, branch, opts.baseBranch);
 	if (!result.ok) {
 		throw new Error(
-			`worktree provisioning for group ${opts.groupId} (branch ${branch}) failed: ${result.error}`,
+			`worktree provisioning for deliverable ${opts.deliverableId} (branch ${branch}) failed: ${result.error}`,
 		);
 	}
 	return result.path;
@@ -203,7 +203,7 @@ async function runSetupCommand(
 // ─── Session assembly (fork-and-append) ─────────────────────────────────────
 
 export interface BuildAgentSessionOpts {
-	/** `<groupId>/<agentName>` — becomes the session file name. */
+	/** `<deliverableId>/<agentName>` — becomes the session file name. */
 	agentKey: string;
 	/** Framed seed markdown, appended as the LLM-visible execution seed. */
 	seed: string;
@@ -299,7 +299,7 @@ export function buildAgentSessionFile(
 export interface SpawnEnv {
 	/** Maestro RPC socket path. */
 	sock: string;
-	/** Agent key (`<groupId>/<agentName>`). */
+	/** Agent key (`<deliverableId>/<agentName>`). */
 	agentId: string;
 	/** Agent tool policy: `full` or `read-only`. */
 	agentMode: string;

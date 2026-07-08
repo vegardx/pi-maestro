@@ -101,12 +101,15 @@ describe("execution adapter observability", () => {
 			title: "Obs Plan",
 			repoPath: tmpDir,
 		});
-		engine.addGroup({ title: "Group One", workerMode: "full" });
-		engine.addWorkItem("group-one", { title: "do the thing", kind: "task" });
-		// Pre-provisioned active group: the executor hydrates it and spawns the
+		engine.addDeliverable({ title: "Deliverable One", workerMode: "full" });
+		engine.addWorkItem("deliverable-one", {
+			title: "do the thing",
+			kind: "task",
+		});
+		// Pre-provisioned active deliverable: the executor hydrates it and spawns the
 		// worker without touching git worktree provisioning.
-		engine.setGroupStatus("group-one", "active");
-		engine.updateGroup("group-one", { worktreePath: tmpDir });
+		engine.setDeliverableStatus("deliverable-one", "active");
+		engine.updateDeliverable("deliverable-one", { worktreePath: tmpDir });
 
 		tmux = stubTmux();
 		adapter = new ExecutionAdapter({
@@ -121,9 +124,9 @@ describe("execution adapter observability", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
-		// Hydrated active groups come up blocked (restart safety); unblock as
+		// Hydrated active deliverables come up blocked (restart safety); unblock as
 		// a user's /retry would so the tick spawns the worker.
-		adapter.getExecutor().unblockGroup("group-one");
+		adapter.getExecutor().unblockDeliverable("deliverable-one");
 		await adapter.tick();
 	});
 
@@ -160,7 +163,7 @@ describe("execution adapter observability", () => {
 	}
 
 	it("snapshot() returns real tokens after a tokens message and real spawn time", async () => {
-		const { client, ready } = connect("group-one/worker");
+		const { client, ready } = connect("deliverable-one/worker");
 		await ready;
 
 		client.send({
@@ -176,26 +179,26 @@ describe("execution adapter observability", () => {
 			},
 		});
 		await until(() => {
-			const agent = adapter.snapshot().agents.get("group-one/worker");
+			const agent = adapter.snapshot().agents.get("deliverable-one/worker");
 			return agent?.tokens.input === 1234;
 		});
 
 		const snap = adapter.snapshot();
-		const worker = snap.agents.get("group-one/worker");
+		const worker = snap.agents.get("deliverable-one/worker");
 		expect(worker?.tokens).toEqual({ input: 1234, output: 56, turns: 7 });
 		expect(worker?.status).toBe("working");
 		expect(worker?.startedAt).toBeGreaterThanOrEqual(suiteStart);
 		expect(worker?.startedAt).toBeLessThanOrEqual(Date.now());
-		expect(snap.groups.get("group-one")).toEqual({ round: 0 });
+		expect(snap.deliverables.get("deliverable-one")).toEqual({ round: 0 });
 	});
 
 	it("steer targets the worker by default and named agents by prefix", async () => {
-		const worker = connect("group-one/worker");
-		const reviewer = connect("group-one/reviewer-x");
+		const worker = connect("deliverable-one/worker");
+		const reviewer = connect("deliverable-one/reviewer-x");
 		await worker.ready;
 		await reviewer.ready;
 
-		expect(adapter.steer("group-one", "focus on the tests")).toBe(true);
+		expect(adapter.steer("deliverable-one", "focus on the tests")).toBe(true);
 		await until(() =>
 			worker.received.some(
 				(m) => m.type === "steer" && m.content === "focus on the tests",
@@ -203,23 +206,25 @@ describe("execution adapter observability", () => {
 		);
 		expect(reviewer.received.some((m) => m.type === "steer")).toBe(false);
 
-		expect(adapter.steer("group-one", "check the tests", "reviewer-x")).toBe(
-			true,
-		);
+		expect(
+			adapter.steer("deliverable-one", "check the tests", "reviewer-x"),
+		).toBe(true);
 		await until(() =>
 			reviewer.received.some(
 				(m) => m.type === "steer" && m.content === "check the tests",
 			),
 		);
 
-		expect(adapter.steer("group-one", "hello?", "nobody")).toBe(false);
+		expect(adapter.steer("deliverable-one", "hello?", "nobody")).toBe(false);
 	});
 
-	it("resolves group ids, agent keys, agent names, and session names", () => {
+	it("resolves deliverable ids, agent keys, agent names, and session names", () => {
 		const sessionName = tmux.spawned[0];
 		expect(sessionName).toBeTruthy();
-		expect(adapter.resolveSessionName("group-one")).toBe(sessionName);
-		expect(adapter.resolveSessionName("group-one/worker")).toBe(sessionName);
+		expect(adapter.resolveSessionName("deliverable-one")).toBe(sessionName);
+		expect(adapter.resolveSessionName("deliverable-one/worker")).toBe(
+			sessionName,
+		);
 		expect(adapter.resolveSessionName("worker")).toBe(sessionName);
 		expect(adapter.resolveSessionName(sessionName)).toBe(sessionName);
 		expect(adapter.resolveSessionName("nope")).toBeUndefined();
@@ -229,16 +234,16 @@ describe("execution adapter observability", () => {
 		const afterSpawn = readEvents(planDir);
 		const spawn = afterSpawn.find((e) => e.event === "spawn");
 		expect(spawn).toMatchObject({
-			agent: "group-one/worker",
+			agent: "deliverable-one/worker",
 			session: tmux.spawned[0],
 			resumed: false,
 		});
 		expect(typeof spawn?.ts).toBe("string");
 
-		await adapter.markAgentDone("group-one", "worker");
+		await adapter.markAgentDone("deliverable-one", "worker");
 		const events = readEvents(planDir).map((e) => e.event);
 		expect(events).toContain("done");
 		const done = readEvents(planDir).find((e) => e.event === "done");
-		expect(done?.agent).toBe("group-one/worker");
+		expect(done?.agent).toBe("deliverable-one/worker");
 	});
 });

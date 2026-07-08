@@ -1,4 +1,4 @@
-// Spawn-time model resolution for the group executor.
+// Spawn-time model resolution for the deliverable executor.
 // Maps (slot, effort) from an AgentSpec/WorkerSpec to a concrete model
 // via the preset system.
 

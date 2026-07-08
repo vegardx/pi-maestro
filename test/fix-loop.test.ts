@@ -1,18 +1,18 @@
 // Review→fix loop: reviewer verdicts, findings→tasks, worker/objector
-// resurrection, round cap, no-progress guard, and the group scheduler
-// invariant (one agent type active per group at a time).
+// resurrection, round cap, no-progress guard, and the deliverable scheduler
+// invariant (one agent type active per deliverable at a time).
 
 import { describe, expect, it, vi } from "vitest";
+import {
+	DeliverableExecutor,
+	type ExecutorDeps,
+	type SpawnAgentOpts,
+} from "../packages/modes/src/deliverable-executor.js";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import {
 	parseVerdict,
 	VERDICT_INSTRUCTION,
 } from "../packages/modes/src/exec/verdicts.js";
-import {
-	type ExecutorDeps,
-	GroupExecutor,
-	type SpawnAgentOpts,
-} from "../packages/modes/src/group-executor.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import type { PlanStore } from "../packages/modes/src/storage.js";
 
@@ -47,9 +47,9 @@ function setupPlan(): PlanEngine {
 }
 
 /** Worker + two read-only reviewers (sec, perf) gated on the worker. */
-function setupReviewedGroup(): PlanEngine {
+function setupReviewedDeliverable(): PlanEngine {
 	const engine = setupPlan();
-	engine.addGroup({ title: "Work", workerMode: "full" });
+	engine.addDeliverable({ title: "Work", workerMode: "full" });
 	engine.addWorkItem("work", { title: "implement it" });
 	engine.addAgent("work", {
 		name: "sec",
@@ -85,19 +85,21 @@ function makeFixDeps(summaries: Map<string, string>) {
 		spawnAgent,
 		killSession: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn().mockResolvedValue("/tmp/worktree"),
-		shipGroup: vi.fn().mockResolvedValue("https://github.com/org/repo/pull/1"),
+		shipDeliverable: vi
+			.fn()
+			.mockResolvedValue("https://github.com/org/repo/pull/1"),
 		requestSummary,
 		now: () => "2026-01-01T00:00:00Z",
 	};
 	return { deps, spawnAgent, requestSummary };
 }
 
-/** Drive the group to the point where both reviewers have reported. */
+/** Drive the deliverable to the point where both reviewers have reported. */
 async function runInitialRound(
 	engine: PlanEngine,
 	deps: ExecutorDeps,
-): Promise<GroupExecutor> {
-	const executor = new GroupExecutor(engine, deps);
+): Promise<DeliverableExecutor> {
+	const executor = new DeliverableExecutor(engine, deps);
 	await executor.tick(); // worker spawns
 	await executor.markAgentDone("work", "worker");
 	await executor.tick(); // reviewers spawn
@@ -161,7 +163,7 @@ describe("parseVerdict", () => {
 
 describe("fix loop — verdict instruction", () => {
 	it("appends VERDICT_INSTRUCTION to reviewer summarize preambles only", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			["sess-sec", "fine\nVERDICT: approve"],
 			["sess-perf", "fine\nVERDICT: approve"],
@@ -179,7 +181,7 @@ describe("fix loop — verdict instruction", () => {
 
 describe("fix loop — rounds", () => {
 	it("completes with no extra round when all reviewers approve", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			["sess-sec", "clean\nVERDICT: approve"],
 			["sess-perf", "no verdict either way"], // none → does not block
@@ -187,7 +189,7 @@ describe("fix loop — rounds", () => {
 		const { deps, spawnAgent } = makeFixDeps(summaries);
 		const executor = await runInitialRound(engine, deps);
 
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 		const state = executor.getStates().get("work")!;
 		expect(state.round).toBe(0);
 		expect(state.blocked).toBeUndefined();
@@ -196,7 +198,7 @@ describe("fix loop — rounds", () => {
 	});
 
 	it("starts a fix round on request-changes: tasks, resurrection, re-pending", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			[
 				"sess-sec",
@@ -207,11 +209,11 @@ describe("fix loop — rounds", () => {
 		const { deps, spawnAgent } = makeFixDeps(summaries);
 		const executor = await runInitialRound(engine, deps);
 
-		const group = engine.get().groups[0];
-		expect(group.status).toBe("active");
+		const deliverable = engine.get().deliverables[0];
+		expect(deliverable.status).toBe("active");
 
 		// Findings became tagged gating tasks
-		const roundTasks = group.tasks.filter((t) =>
+		const roundTasks = deliverable.tasks.filter((t) =>
 			t.title.startsWith("[round 1, sec]"),
 		);
 		expect(roundTasks).toHaveLength(2);
@@ -239,7 +241,7 @@ describe("fix loop — rounds", () => {
 	});
 
 	it("completes at round 1 after the objector re-approves", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
 			["sess-perf", "VERDICT: approve"],
@@ -263,14 +265,14 @@ describe("fix loop — rounds", () => {
 		summaries.set("sess-sec", "fixed\nVERDICT: approve");
 		await executor.markAgentDone("work", "sec");
 
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 		const state = executor.getStates().get("work")!;
 		expect(state.round).toBe(1);
 		expect(state.blocked).toBeUndefined();
 	});
 
 	it("blocks on byte-identical findings instead of looping", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
 			["sess-perf", "VERDICT: approve"],
@@ -286,21 +288,21 @@ describe("fix loop — rounds", () => {
 		const state = executor.getStates().get("work")!;
 		expect(state.blocked).toBe("review findings unchanged after fix round");
 		expect(state.round).toBe(1); // no third round started
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 		const roundTwoTasks = engine
 			.get()
-			.groups[0].tasks.filter((t) => t.title.startsWith("[round 2"));
+			.deliverables[0].tasks.filter((t) => t.title.startsWith("[round 2"));
 		expect(roundTwoTasks).toHaveLength(0);
 	});
 
 	it("blocks without corrupting state when adding fix tasks fails", async () => {
-		const engine = setupReviewedGroup();
+		const engine = setupReviewedDeliverable();
 		const summaries = new Map<string, string>([
 			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
 			["sess-perf", "VERDICT: approve"],
 		]);
 		const { deps, spawnAgent } = makeFixDeps(summaries);
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 		await executor.tick();
 		await executor.markAgentDone("work", "worker");
 		await executor.tick();
@@ -325,14 +327,16 @@ describe("fix loop — rounds", () => {
 		// Worker was not resurrected and no round tasks landed.
 		expect(spawnAgent).toHaveBeenCalledTimes(3);
 		expect(
-			engine.get().groups[0].tasks.filter((t) => t.title.startsWith("[round")),
+			engine
+				.get()
+				.deliverables[0].tasks.filter((t) => t.title.startsWith("[round")),
 		).toHaveLength(0);
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 	});
 
-	it("holds dependent groups back while the group churns through fix rounds", async () => {
-		const engine = setupReviewedGroup();
-		engine.addGroup({
+	it("holds dependent deliverables back while the deliverable churns through fix rounds", async () => {
+		const engine = setupReviewedDeliverable();
+		engine.addDeliverable({
 			title: "Downstream",
 			workerMode: "full",
 			dependsOn: ["work"],
@@ -346,28 +350,28 @@ describe("fix loop — rounds", () => {
 		const executor = await runInitialRound(engine, deps);
 
 		// work is mid fix round (active) — downstream must not activate yet
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 		await executor.tick();
-		expect(engine.get().groups.find((g) => g.id === "downstream")!.status).toBe(
-			"planned",
-		);
+		expect(
+			engine.get().deliverables.find((g) => g.id === "downstream")!.status,
+		).toBe("planned");
 
 		// Fix round converges → work completes → downstream activates
 		await executor.markAgentDone("work", "worker");
 		await executor.tick(); // sec resurrected
 		summaries.set("sess-sec", "fixed\nVERDICT: approve");
 		await executor.markAgentDone("work", "sec");
-		expect(engine.get().groups[0].status).toBe("complete");
+		expect(engine.get().deliverables[0].status).toBe("complete");
 
 		await executor.tick();
-		expect(engine.get().groups.find((g) => g.id === "downstream")!.status).toBe(
-			"active",
-		);
+		expect(
+			engine.get().deliverables.find((g) => g.id === "downstream")!.status,
+		).toBe("active");
 	});
 
 	it("blocks when the fix-round cap is reached", async () => {
-		const engine = setupReviewedGroup();
-		engine.updateGroup("work", { maxFixRounds: 1 });
+		const engine = setupReviewedDeliverable();
+		engine.updateDeliverable("work", { maxFixRounds: 1 });
 		const summaries = new Map<string, string>([
 			["sess-sec", "issues\nVERDICT: request-changes\n- auth.ts:12 — bug"],
 			["sess-perf", "VERDICT: approve"],
@@ -387,14 +391,14 @@ describe("fix loop — rounds", () => {
 		const state = executor.getStates().get("work")!;
 		expect(state.blocked).toBe("fix-round cap reached; 1 findings outstanding");
 		expect(state.round).toBe(1);
-		expect(engine.get().groups[0].status).toBe("active");
+		expect(engine.get().deliverables[0].status).toBe("active");
 	});
 });
 
-describe("fix loop — group scheduler", () => {
+describe("fix loop — deliverable scheduler", () => {
 	it("never spawns a read-only reviewer while the full-mode worker is active", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		// Reviewer with no deps — spawnable immediately by the DAG alone
 		engine.addAgent("work", {
@@ -408,7 +412,7 @@ describe("fix loop — group scheduler", () => {
 		const { deps, spawnAgent } = makeFixDeps(
 			new Map([["sess-sec", "VERDICT: approve"]]),
 		);
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await executor.tick();
 		const state = executor.getStates().get("work")!;
@@ -428,7 +432,7 @@ describe("fix loop — group scheduler", () => {
 
 	it("runs read-only reviewers concurrently but holds the worker back", async () => {
 		const engine = setupPlan();
-		engine.addGroup({ title: "Work", workerMode: "full" });
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });
 		engine.addAgent("work", {
 			name: "sec",
@@ -446,9 +450,9 @@ describe("fix loop — group scheduler", () => {
 			focus: "scout performance",
 			after: [],
 		});
-		engine.updateGroup("work", { workerAfter: ["sec", "perf"] });
+		engine.updateDeliverable("work", { workerAfter: ["sec", "perf"] });
 		const { deps } = makeFixDeps(new Map());
-		const executor = new GroupExecutor(engine, deps);
+		const executor = new DeliverableExecutor(engine, deps);
 
 		await executor.tick();
 		const state = executor.getStates().get("work")!;

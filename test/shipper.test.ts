@@ -13,27 +13,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	cleanupWorktrees,
 	defaultShipGit,
-	groupRepoKey,
+	deliverableRepoKey,
 	type PrClient,
 	prNumberFromUrl,
-	reconcileShippedGroups,
+	reconcileShippedDeliverables,
 	repoFor,
 	type ShipGit,
 	shipBaseBranch,
-	shipGroup,
+	shipDeliverable,
 } from "../packages/modes/src/exec/shipper.js";
-import type { Plan, WorkGroup } from "../packages/modes/src/schema.js";
+import type { Deliverable, Plan } from "../packages/modes/src/schema.js";
 
 // ─── Builders ────────────────────────────────────────────────────────────────
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
-function makeGroup(
-	overrides: Partial<WorkGroup> & { id: string; repo?: string },
-): WorkGroup {
+function makeDeliverable(
+	overrides: Partial<Deliverable> & { id: string; repo?: string },
+): Deliverable {
 	return {
-		type: "group",
-		title: `Group ${overrides.id}`,
+		type: "deliverable",
+		title: `Deliverable ${overrides.id}`,
 		body: `Ships ${overrides.id}.`,
 		status: "complete",
 		worker: { mode: "full" },
@@ -56,12 +56,15 @@ function makeGroup(
 	};
 }
 
-function makePlan(groups: WorkGroup[], overrides: Partial<Plan> = {}): Plan {
+function makePlan(
+	deliverables: Deliverable[],
+	overrides: Partial<Plan> = {},
+): Plan {
 	return {
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/repos/app",
-		groups,
+		deliverables,
 		createdAt: NOW,
 		updatedAt: NOW,
 		...overrides,
@@ -189,9 +192,9 @@ function remoteHasBranch(branch: string): boolean {
 	return git(["ls-remote", "origin", `refs/heads/${branch}`]).trim().length > 0;
 }
 
-// ─── shipGroup against a real remote ─────────────────────────────────────────
+// ─── shipDeliverable against a real remote ─────────────────────────────────────────
 
-describe("shipGroup (real push)", () => {
+describe("shipDeliverable (real push)", () => {
 	beforeEach(initRemoteAndClone);
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -201,13 +204,16 @@ describe("shipGroup (real push)", () => {
 		git(["add", "g1.txt"]);
 		git(["commit", "-m", "feat: g1"]);
 
-		const group = makeGroup({ id: "g1", summary: "Did the g1 work." });
-		const plan = makePlan([group], { repoPath: repo });
+		const deliverable = makeDeliverable({
+			id: "g1",
+			summary: "Did the g1 work.",
+		});
+		const plan = makePlan([deliverable], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipGroup({
+		const result = await shipDeliverable({
 			plan,
-			group,
+			deliverable,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -223,7 +229,7 @@ describe("shipGroup (real push)", () => {
 		expect(calls.created).toHaveLength(1);
 		expect(calls.created[0]).toMatchObject({
 			cwd: repo,
-			title: "Group g1",
+			title: "Deliverable g1",
 			base: "main",
 		});
 		expect(calls.created[0].body).toContain("Ships g1.");
@@ -235,13 +241,13 @@ describe("shipGroup (real push)", () => {
 		git(["checkout", "-b", "feat/g2"]);
 		writeFileSync(join(repo, "uncommitted.txt"), "wip\n");
 
-		const group = makeGroup({ id: "g2" });
-		const plan = makePlan([group], { repoPath: repo });
+		const deliverable = makeDeliverable({ id: "g2" });
+		const plan = makePlan([deliverable], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipGroup({
+		const result = await shipDeliverable({
 			plan,
-			group,
+			deliverable,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -262,17 +268,17 @@ describe("shipGroup (real push)", () => {
 		git(["add", "g3.txt"]);
 		git(["commit", "-m", "feat: g3"]);
 
-		const group = makeGroup({ id: "g3" });
-		const plan = makePlan([group], { repoPath: repo });
+		const deliverable = makeDeliverable({ id: "g3" });
+		const plan = makePlan([deliverable], { repoPath: repo });
 		const { client, calls } = recordingPrClient({
 			open: {
 				"feat/g3": makePr({ number: 7, baseRefName: "main" }),
 			},
 		});
 
-		const result = await shipGroup({
+		const result = await shipDeliverable({
 			plan,
-			group,
+			deliverable,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -296,13 +302,13 @@ describe("shipGroup (real push)", () => {
 		git(["commit", "-m", "feat: g4"]);
 		git(["remote", "set-url", "origin", join(dir, "nowhere.git")]);
 
-		const group = makeGroup({ id: "g4" });
-		const plan = makePlan([group], { repoPath: repo });
+		const deliverable = makeDeliverable({ id: "g4" });
+		const plan = makePlan([deliverable], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipGroup({
+		const result = await shipDeliverable({
 			plan,
-			group,
+			deliverable,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -320,18 +326,18 @@ describe("shipGroup (real push)", () => {
 
 describe("stacked bases", () => {
 	it("ships an A←B←C chain with each PR based on its predecessor", async () => {
-		const a = makeGroup({ id: "a", status: "shipped" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"], status: "shipped" });
-		const c = makeGroup({ id: "c", dependsOn: ["b"] });
+		const a = makeDeliverable({ id: "a", status: "shipped" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"], status: "shipped" });
+		const c = makeDeliverable({ id: "c", dependsOn: ["b"] });
 		const plan = makePlan([a, b, c]);
 		const { client, calls } = recordingPrClient();
 		const { git, pushes } = fakeGit();
 
-		for (const group of [a, b, c]) {
-			const result = await shipGroup({
+		for (const deliverable of [a, b, c]) {
+			const result = await shipDeliverable({
 				plan,
-				group,
-				worktreePath: `/wt/${group.id}`,
+				deliverable,
+				worktreePath: `/wt/${deliverable.id}`,
 				prClient: client,
 				git,
 			});
@@ -347,15 +353,15 @@ describe("stacked bases", () => {
 	});
 
 	it("bases an unstacked dependent on the default branch", () => {
-		const a = makeGroup({ id: "a" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"], stacked: false });
+		const a = makeDeliverable({ id: "a" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"], stacked: false });
 		const plan = makePlan([a, b]);
 		expect(shipBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("treats cross-repo dependsOn as ordering-only", async () => {
-		const lib = makeGroup({ id: "lib-x", repo: "lib" });
-		const app = makeGroup({ id: "app-y", dependsOn: ["lib-x"] });
+		const lib = makeDeliverable({ id: "lib-x", repo: "lib" });
+		const app = makeDeliverable({ id: "app-y", dependsOn: ["lib-x"] });
 		const plan = makePlan([lib, app], {
 			repoPath: "/repos/app",
 			repos: [{ key: "lib", path: "/repos/lib", defaultBranch: "trunk" }],
@@ -365,16 +371,16 @@ describe("stacked bases", () => {
 			detectDefaultBranch: (cwd) => (cwd === "/repos/lib" ? "trunk" : "main"),
 		});
 
-		const shippedLib = await shipGroup({
+		const shippedLib = await shipDeliverable({
 			plan,
-			group: lib,
+			deliverable: lib,
 			worktreePath: "/wt/lib-x",
 			prClient: client,
 			git,
 		});
-		const shippedApp = await shipGroup({
+		const shippedApp = await shipDeliverable({
 			plan,
-			group: app,
+			deliverable: app,
 			worktreePath: "/wt/app-y",
 			prClient: client,
 			git,
@@ -387,14 +393,14 @@ describe("stacked bases", () => {
 	});
 
 	it("errors when the default branch cannot be detected", async () => {
-		const group = makeGroup({ id: "g" });
-		const plan = makePlan([group]);
+		const deliverable = makeDeliverable({ id: "g" });
+		const plan = makePlan([deliverable]);
 		const { client } = recordingPrClient();
 		const { git } = fakeGit({ detectDefaultBranch: () => null });
 
-		const result = await shipGroup({
+		const result = await shipDeliverable({
 			plan,
-			group,
+			deliverable,
 			worktreePath: "/wt/g",
 			prClient: client,
 			git,
@@ -405,12 +411,12 @@ describe("stacked bases", () => {
 
 describe("repo resolution", () => {
 	it("resolves the plan default repo and registry entries", () => {
-		const app = makeGroup({ id: "a" });
-		const lib = makeGroup({ id: "b", repo: "lib" });
+		const app = makeDeliverable({ id: "a" });
+		const lib = makeDeliverable({ id: "b", repo: "lib" });
 		const plan = makePlan([app, lib], {
 			repos: [{ key: "lib", path: "/repos/lib" }],
 		});
-		expect(groupRepoKey(app)).toBe("default");
+		expect(deliverableRepoKey(app)).toBe("default");
 		expect(repoFor(plan, app)).toMatchObject({ path: "/repos/app" });
 		expect(repoFor(plan, lib)).toMatchObject({
 			key: "lib",
@@ -426,10 +432,10 @@ describe("repo resolution", () => {
 
 // ─── Retarget / reconcile ────────────────────────────────────────────────────
 
-describe("reconcileShippedGroups", () => {
-	function stackedPlan(): { a: WorkGroup; b: WorkGroup; plan: Plan } {
-		const a = makeGroup({ id: "a", status: "shipped", prNumber: 1 });
-		const b = makeGroup({
+describe("reconcileShippedDeliverables", () => {
+	function stackedPlan(): { a: Deliverable; b: Deliverable; plan: Plan } {
+		const a = makeDeliverable({ id: "a", status: "shipped", prNumber: 1 });
+		const b = makeDeliverable({
 			id: "b",
 			status: "shipped",
 			prNumber: 2,
@@ -448,14 +454,14 @@ describe("reconcileShippedGroups", () => {
 		});
 		const { git } = fakeGit();
 
-		const report = await reconcileShippedGroups({
+		const report = await reconcileShippedDeliverables({
 			plan,
 			prClient: client,
 			git,
 		});
 
 		expect(report.retargeted).toEqual([
-			{ groupId: "b", prNumber: 2, from: "feat/a", to: "main" },
+			{ deliverableId: "b", prNumber: 2, from: "feat/a", to: "main" },
 		]);
 		expect(report.needsRebase).toEqual([]);
 		expect(report.errors).toEqual([]);
@@ -473,7 +479,7 @@ describe("reconcileShippedGroups", () => {
 			},
 		});
 
-		const report = await reconcileShippedGroups({
+		const report = await reconcileShippedDeliverables({
 			plan,
 			prClient: client,
 			git: fakeGit().git,
@@ -491,7 +497,7 @@ describe("reconcileShippedGroups", () => {
 			},
 		});
 
-		const report = await reconcileShippedGroups({
+		const report = await reconcileShippedDeliverables({
 			plan,
 			prClient: client,
 			git: fakeGit().git,
@@ -514,7 +520,7 @@ describe("reconcileShippedGroups", () => {
 			},
 		});
 
-		const report = await reconcileShippedGroups({
+		const report = await reconcileShippedDeliverables({
 			plan,
 			prClient: client,
 			git: fakeGit().git,
@@ -522,7 +528,7 @@ describe("reconcileShippedGroups", () => {
 		expect(report.retargeted).toHaveLength(1);
 		expect(report.needsRebase).toEqual([
 			{
-				groupId: "b",
+				deliverableId: "b",
 				prNumber: 2,
 				base: "main",
 				message: expect.stringContaining("rebase required"),
@@ -532,13 +538,13 @@ describe("reconcileShippedGroups", () => {
 		expect(calls.edited).toHaveLength(1);
 	});
 
-	it("skips groups that are not shipped or have no PR", async () => {
-		const a = makeGroup({ id: "a", status: "complete", prNumber: 1 });
-		const b = makeGroup({ id: "b", status: "shipped" });
+	it("skips deliverables that are not shipped or have no PR", async () => {
+		const a = makeDeliverable({ id: "a", status: "complete", prNumber: 1 });
+		const b = makeDeliverable({ id: "b", status: "shipped" });
 		const plan = makePlan([a, b]);
 		const { client, calls } = recordingPrClient();
 
-		const report = await reconcileShippedGroups({
+		const report = await reconcileShippedDeliverables({
 			plan,
 			prClient: client,
 			git: fakeGit().git,
@@ -551,9 +557,13 @@ describe("reconcileShippedGroups", () => {
 // ─── DAG-driven worktree cleanup ─────────────────────────────────────────────
 
 describe("cleanupWorktrees", () => {
-	it("retains a shipped group's worktree while a dependent is unshipped", () => {
-		const a = makeGroup({ id: "a", status: "shipped", worktreePath: "/wt/a" });
-		const b = makeGroup({
+	it("retains a shipped deliverable's worktree while a dependent is unshipped", () => {
+		const a = makeDeliverable({
+			id: "a",
+			status: "shipped",
+			worktreePath: "/wt/a",
+		});
+		const b = makeDeliverable({
 			id: "b",
 			status: "active",
 			dependsOn: ["a"],
@@ -567,7 +577,7 @@ describe("cleanupWorktrees", () => {
 		expect(report.removed).toEqual([]);
 		expect(report.retained).toEqual([
 			{
-				groupId: "a",
+				deliverableId: "a",
 				path: "/wt/a",
 				reason: expect.stringContaining("`b` is active"),
 			},
@@ -577,14 +587,18 @@ describe("cleanupWorktrees", () => {
 	});
 
 	it("removes worktrees once the DAG has no unshipped dependents", () => {
-		const a = makeGroup({ id: "a", status: "shipped", worktreePath: "/wt/a" });
-		const b = makeGroup({
+		const a = makeDeliverable({
+			id: "a",
+			status: "shipped",
+			worktreePath: "/wt/a",
+		});
+		const b = makeDeliverable({
 			id: "b",
 			status: "shipped",
 			dependsOn: ["a"],
 			worktreePath: "/wt/b",
 		});
-		const c = makeGroup({
+		const c = makeDeliverable({
 			id: "c",
 			status: "abandoned",
 			dependsOn: ["b"],
@@ -595,7 +609,7 @@ describe("cleanupWorktrees", () => {
 
 		const report = cleanupWorktrees({ plan, git });
 
-		expect(report.removed.map((r) => r.groupId)).toEqual(["a", "b", "c"]);
+		expect(report.removed.map((r) => r.deliverableId)).toEqual(["a", "b", "c"]);
 		expect(report.retained).toEqual([]);
 		expect(removals.map((r) => r.targetPath)).toEqual([
 			"/wt/a",
@@ -605,7 +619,11 @@ describe("cleanupWorktrees", () => {
 	});
 
 	it("retains a worktree the removal refuses (dirty) with the reason", () => {
-		const a = makeGroup({ id: "a", status: "shipped", worktreePath: "/wt/a" });
+		const a = makeDeliverable({
+			id: "a",
+			status: "shipped",
+			worktreePath: "/wt/a",
+		});
 		const plan = makePlan([a]);
 		const { git } = fakeGit({
 			removeWorktree: () => ({
@@ -619,7 +637,7 @@ describe("cleanupWorktrees", () => {
 		expect(report.removed).toEqual([]);
 		expect(report.retained).toEqual([
 			{
-				groupId: "a",
+				deliverableId: "a",
 				path: "/wt/a",
 				reason: "worktree /wt/a has uncommitted changes",
 			},
@@ -633,15 +651,15 @@ describe("cleanupWorktrees", () => {
 			git(["worktree", "add", "-b", "feat/g1", wt, "main"]);
 			expect(existsSync(wt)).toBe(true);
 
-			const group = makeGroup({
+			const deliverable = makeDeliverable({
 				id: "g1",
 				status: "shipped",
 				worktreePath: wt,
 			});
-			const plan = makePlan([group], { repoPath: repo });
+			const plan = makePlan([deliverable], { repoPath: repo });
 
 			const report = cleanupWorktrees({ plan, git: defaultShipGit });
-			expect(report.removed).toEqual([{ groupId: "g1", path: wt }]);
+			expect(report.removed).toEqual([{ deliverableId: "g1", path: wt }]);
 			expect(existsSync(wt)).toBe(false);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });

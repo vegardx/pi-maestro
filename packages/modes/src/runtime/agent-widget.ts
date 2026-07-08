@@ -23,15 +23,15 @@ export interface AgentTableAgent {
 	readonly cacheRatio?: number;
 }
 
-/** Per-group round/blocked view (ExecutionHandle.snapshot().groups). */
-export interface AgentTableGroup {
+/** Per-deliverable round/blocked view (ExecutionHandle.snapshot().deliverables). */
+export interface AgentTableDeliverable {
 	readonly round: number;
 	readonly blocked?: string;
 }
 
 export interface AgentTableInput {
 	readonly agents: ReadonlyMap<string, AgentTableAgent> | undefined;
-	readonly groups?: ReadonlyMap<string, AgentTableGroup>;
+	readonly deliverables?: ReadonlyMap<string, AgentTableDeliverable>;
 	/** Full terminal width the box is drawn to. */
 	readonly width: number;
 	/** Injectable clock for deterministic elapsed columns in tests. */
@@ -65,12 +65,12 @@ export function hasActiveAgents(
 	return false;
 }
 
-/** Cap on AGENT cells before "…" truncation (GROUP flexes to fill). */
+/** Cap on AGENT cells before "…" truncation (DELIVERABLE flexes to fill). */
 const NAME_CAP = 16;
-/** GROUP never shrinks below its header length + a little room. */
-const MIN_GROUP_WIDTH = 8;
+/** DELIVERABLE never shrinks below its header length + a little room. */
+const MIN_DELIVERABLE_WIDTH = 8;
 
-const HEADERS = ["GROUP", "AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"];
+const HEADERS = ["DELIV", "AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"];
 /** Columns dropped (in order) when the full set doesn't fit the width. */
 const DROP_ORDER = ["CACHE", "ELAPSED"];
 const COLUMN_GAP = 2;
@@ -87,15 +87,15 @@ function clip(text: string, max: number): string {
 /**
  * Build the full-width live-agent panel. One row per ACTIVE (working/
  * summarizing) agent; done/pending/failed agents are excluded. A blocked
- * group contributes a full-width "⚠ <group> blocked: <reason>" row. Returns
+ * deliverable contributes a full-width "⚠ <deliverable> blocked: <reason>" row. Returns
  * [] when no agents are active (the widget is cleared).
  *
  * Columns are padded to align and the box is drawn to `width`. Below ~60
- * cols the CACHE column is dropped first, then ELAPSED; long group/agent
+ * cols the CACHE column is dropped first, then ELAPSED; long deliverable/agent
  * names are truncated with "…".
  */
 export function buildAgentTable(input: AgentTableInput): string[] {
-	const { agents, groups, width } = input;
+	const { agents, deliverables, width } = input;
 	if (!agents) return [];
 	const now = input.now ?? Date.now();
 
@@ -106,19 +106,19 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	const outputTokens: string[] = [];
 	for (const [key, agent] of agents) {
 		if (!ACTIVE_STATUSES.has(agent.status)) continue;
-		const [group = "", name = key] = key.split("/");
-		const groupState = groups?.get(group);
+		const [deliverable = "", name = key] = key.split("/");
+		const deliverableState = deliverables?.get(deliverable);
 		const status =
 			agent.status === "working" &&
 			name === "worker" &&
-			groupState &&
-			groupState.round > 0
-				? `fixing r${groupState.round}`
+			deliverableState &&
+			deliverableState.round > 0
+				? `fixing r${deliverableState.round}`
 				: agent.status;
 		inputTokens.push(formatTokens(agent.tokens.input));
 		outputTokens.push(formatTokens(agent.tokens.output));
 		rows.push({
-			GROUP: group,
+			DELIV: deliverable,
 			AGENT: clip(name, NAME_CAP),
 			STATUS: status,
 			CACHE:
@@ -137,12 +137,12 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 		row.TOKENS = `${inputTokens[i].padStart(inWidth)} / ${outputTokens[i].padStart(outWidth)}`;
 	});
 
-	// ── Fit columns: GROUP flexes to fill; drop CACHE then ELAPSED when
-	// even a minimal GROUP column no longer fits ────────────────────────
+	// ── Fit columns: DELIVERABLE flexes to fill; drop CACHE then ELAPSED when
+	// even a minimal DELIVERABLE column no longer fits ────────────────────────
 	const inner = Math.max(1, width - FRAME);
 	const fixedWidthsFor = (headers: string[]): number[] =>
 		headers.map((h) =>
-			h === "GROUP"
+			h === "DELIV"
 				? 0
 				: Math.max(h.length, ...rows.map((row) => row[h]?.length ?? 0)),
 		);
@@ -152,21 +152,21 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	let headers = HEADERS;
 	let colWidths = fixedWidthsFor(headers);
 	for (const drop of DROP_ORDER) {
-		if (fixedTotalFor(colWidths) + MIN_GROUP_WIDTH <= inner) break;
+		if (fixedTotalFor(colWidths) + MIN_DELIVERABLE_WIDTH <= inner) break;
 		headers = headers.filter((h) => h !== drop);
 		colWidths = fixedWidthsFor(headers);
 	}
-	// GROUP absorbs all remaining width so the box always spans the terminal.
+	// DELIVERABLE absorbs all remaining width so the box always spans the terminal.
 	// Two chars are held back: header labels sit +1 right of their columns
 	// (the rule's "┌─ " prefix vs the rows' "│ "), and the last label keeps
 	// a trailing "─┐" — "… ELAPSED ─┐" — instead of butting the corner.
-	const groupIdx = headers.indexOf("GROUP");
-	colWidths[groupIdx] = Math.max(
-		MIN_GROUP_WIDTH,
+	const deliverableIdx = headers.indexOf("DELIV");
+	colWidths[deliverableIdx] = Math.max(
+		MIN_DELIVERABLE_WIDTH,
 		inner - fixedTotalFor(colWidths) - 2,
 	);
 	for (const row of rows) {
-		row.GROUP = clip(row.GROUP, colWidths[groupIdx]);
+		row.DELIV = clip(row.DELIV, colWidths[deliverableIdx]);
 	}
 
 	// ── Draw the box (headers live in the top border rule) ─────────────
@@ -179,10 +179,12 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	for (const row of rows) {
 		lines.push(tableRow(headers.map((h) => row[h] ?? "")));
 	}
-	if (groups) {
-		for (const [groupId, groupState] of groups) {
-			if (!groupState.blocked) continue;
-			lines.push(line(`⚠ ${groupId} blocked: ${groupState.blocked}`));
+	if (deliverables) {
+		for (const [deliverableId, deliverableState] of deliverables) {
+			if (!deliverableState.blocked) continue;
+			lines.push(
+				line(`⚠ ${deliverableId} blocked: ${deliverableState.blocked}`),
+			);
 		}
 	}
 	lines.push(`└${"─".repeat(Math.max(0, width - 2))}┘`);
@@ -191,7 +193,7 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 
 /**
  * Top border with the column headers embedded in the rule:
- * `┌─ GROUP ────────── AGENT ───── STATUS ─ … ─┐`. Each label sits above
+ * `┌─ DELIVERABLE ────────── AGENT ───── STATUS ─ … ─┐`. Each label sits above
  * its column (one space either side, dashes filling the gaps).
  */
 function buildHeaderRule(

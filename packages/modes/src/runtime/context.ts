@@ -40,10 +40,10 @@ import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
 import type { ResearchRunView } from "../research.js";
 import {
+	type Deliverable,
 	derivePlanName,
 	planPhase,
 	slugify,
-	type WorkGroup,
 } from "../schema.js";
 import { appendModesState, collectBudgetText } from "../session.js";
 import {
@@ -75,7 +75,6 @@ import type { ViewState } from "./agent-commands.js";
 import { syncAgentWidget } from "./dashboard.js";
 import {
 	cleanupInactiveWorktrees,
-	type Deliverable,
 	planRepoMismatch,
 	recordPlanSession,
 	repoFor,
@@ -385,10 +384,10 @@ export function createRuntimeContext(
 		// Name and persist a draft plan once it has content. Called at turn_end
 		// while planning and before implement/ship so the plan survives.
 		// `force` materializes even an empty plan — the research tool needs the
-		// plan directory on disk before any group exists (report persistence).
+		// plan directory on disk before any deliverable exists (report persistence).
 		finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void {
 			if (!rt.engine?.isDraft()) return;
-			if (!opts?.force && rt.engine.get().groups.length === 0) return;
+			if (!opts?.force && rt.engine.get().deliverables.length === 0) return;
 			const firstMessage = firstUserMessageText(
 				ctx.sessionManager.getEntries() as readonly Entryish[],
 				draftStartEntries,
@@ -516,7 +515,7 @@ export function createRuntimeContext(
 			const mode = args.includes("--hack") ? "hack" : "auto";
 			rt.setMode(mode as ModeName, ctx);
 
-			// Group execution via the execution seam
+			// Deliverable execution via the execution seam
 			if (!isAgentMode()) {
 				if (!rt.execution) {
 					rt.execution = createExecution({
@@ -555,7 +554,7 @@ export function createRuntimeContext(
 				const activated = await rt.execution.tick();
 				syncAgentWidget(rt, ctx);
 				if (activated > 0) {
-					ctx.ui.notify(`Activated ${activated} group(s).`, "info");
+					ctx.ui.notify(`Activated ${activated} deliverable(s).`, "info");
 					rt.setExecutionStage(
 						{ stage: "executing", deliverableId: "maestro" },
 						ctx,
@@ -567,14 +566,14 @@ export function createRuntimeContext(
 					}
 				} else {
 					const plan = activeEngine.get();
-					const active = plan.groups.filter((g) => g.status === "active");
+					const active = plan.deliverables.filter((g) => g.status === "active");
 					if (active.length > 0) {
 						ctx.ui.notify(
-							`${active.length} group(s) already executing.`,
+							`${active.length} deliverable(s) already executing.`,
 							"info",
 						);
 					} else {
-						ctx.ui.notify("No groups ready to start.", "warning");
+						ctx.ui.notify("No deliverables ready to start.", "warning");
 					}
 				}
 				return;
@@ -616,8 +615,8 @@ export function createRuntimeContext(
 	return rt;
 }
 
-export function activeDeliverable(plan: { groups: WorkGroup[] }) {
-	return plan.groups.find((g) => g.status === "active");
+export function activeDeliverable(plan: { deliverables: Deliverable[] }) {
+	return plan.deliverables.find((g) => g.status === "active");
 }
 
 type Entryish = {

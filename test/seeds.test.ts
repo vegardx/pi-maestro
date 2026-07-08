@@ -16,8 +16,8 @@ import {
 } from "../packages/modes/src/exec/seeds.js";
 import type {
 	AgentSpec,
+	Deliverable,
 	Plan,
-	WorkGroup,
 	WorkItem,
 } from "../packages/modes/src/schema.js";
 
@@ -49,9 +49,9 @@ function makeAgent(overrides: Partial<AgentSpec> = {}): AgentSpec {
 	};
 }
 
-function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
+function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
-		type: "group",
+		type: "deliverable",
 		id: "auth",
 		title: "Auth System",
 		body: "Implement authentication",
@@ -65,15 +65,15 @@ function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
 	};
 }
 
-function makePlan(groups: WorkGroup[]): Pick<Plan, "groups"> {
-	return { groups };
+function makePlan(deliverables: Deliverable[]): Pick<Plan, "deliverables"> {
+	return { deliverables };
 }
 
 function summaries(
-	groups: [string, string][] = [],
+	deliverables: [string, string][] = [],
 	agents: [string, string][] = [],
 ): SeedSummaries {
-	return { groups: new Map(groups), agents: new Map(agents) };
+	return { deliverables: new Map(deliverables), agents: new Map(agents) };
 }
 
 /** Deterministic LCG-based shuffle so property runs are reproducible. */
@@ -91,9 +91,9 @@ function shuffled<T>(items: readonly T[], seed: number): T[] {
 describe("buildSeed determinism", () => {
 	it("produces byte-identical output across 50 shuffled map insertion orders", () => {
 		const deps = ["core", "db", "api"].map((id) =>
-			makeGroup({ id, title: `Group ${id}` }),
+			makeDeliverable({ id, title: `Deliverable ${id}` }),
 		);
-		const group = makeGroup({
+		const deliverable = makeDeliverable({
 			dependsOn: ["core", "db", "api"],
 			agents: [
 				makeAgent({ name: "security", after: ["worker"] }),
@@ -101,8 +101,8 @@ describe("buildSeed determinism", () => {
 				makeAgent({ name: "docs", after: ["perf"] }),
 			],
 		});
-		const plan = makePlan([...deps, group]);
-		const groupEntries: [string, string][] = [
+		const plan = makePlan([...deps, deliverable]);
+		const deliverableEntries: [string, string][] = [
 			["core", "core summary"],
 			["db", "db summary"],
 			["api", "api summary"],
@@ -115,18 +115,18 @@ describe("buildSeed determinism", () => {
 
 		const baseline = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "docs",
-			summaries: summaries(groupEntries, agentEntries),
+			summaries: summaries(deliverableEntries, agentEntries),
 		});
 
 		for (let i = 1; i <= 50; i++) {
 			const seed = buildSeed({
 				plan,
-				group,
+				deliverable,
 				agentName: "docs",
 				summaries: {
-					groups: new Map(shuffled(groupEntries, i)),
+					deliverables: new Map(shuffled(deliverableEntries, i)),
 					agents: new Map(shuffled(agentEntries, i * 7 + 1)),
 				},
 			});
@@ -135,17 +135,17 @@ describe("buildSeed determinism", () => {
 	});
 
 	it("is a pure function — repeated calls with the same input are identical", () => {
-		const group = makeGroup();
-		const plan = makePlan([group]);
+		const deliverable = makeDeliverable();
+		const plan = makePlan([deliverable]);
 		const a = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries(),
 		});
 		const b = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries(),
 		});
@@ -153,11 +153,14 @@ describe("buildSeed determinism", () => {
 	});
 
 	it("contains no timestamps", () => {
-		const group = makeGroup({ dependsOn: ["core"] });
-		const plan = makePlan([makeGroup({ id: "core", title: "Core" }), group]);
+		const deliverable = makeDeliverable({ dependsOn: ["core"] });
+		const plan = makePlan([
+			makeDeliverable({ id: "core", title: "Core" }),
+			deliverable,
+		]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries([["core", "core summary"]]),
 		});
@@ -167,14 +170,17 @@ describe("buildSeed determinism", () => {
 
 describe("buildSeed section ordering + framing", () => {
 	it("orders sections Prior Work → Findings → Your Tasks with frames", () => {
-		const group = makeGroup({
+		const deliverable = makeDeliverable({
 			dependsOn: ["core"],
 			agents: [makeAgent({ name: "security" })],
 		});
-		const plan = makePlan([makeGroup({ id: "core", title: "Core" }), group]);
+		const plan = makePlan([
+			makeDeliverable({ id: "core", title: "Core" }),
+			deliverable,
+		]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries(
 				[["core", "core summary"]],
@@ -194,15 +200,15 @@ describe("buildSeed section ordering + framing", () => {
 	});
 
 	it("orders dep summaries by dependsOn array order, not map order", () => {
-		const group = makeGroup({ dependsOn: ["zeta", "alpha"] });
+		const deliverable = makeDeliverable({ dependsOn: ["zeta", "alpha"] });
 		const plan = makePlan([
-			makeGroup({ id: "alpha", title: "Alpha" }),
-			makeGroup({ id: "zeta", title: "Zeta" }),
-			group,
+			makeDeliverable({ id: "alpha", title: "Alpha" }),
+			makeDeliverable({ id: "zeta", title: "Zeta" }),
+			deliverable,
 		]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries([
 				["alpha", "alpha summary"],
@@ -215,17 +221,17 @@ describe("buildSeed section ordering + framing", () => {
 	});
 
 	it("orders sibling summaries topologically, not by map order", () => {
-		const group = makeGroup({
+		const deliverable = makeDeliverable({
 			agents: [
 				makeAgent({ name: "second", after: ["first"] }),
 				makeAgent({ name: "first", after: ["worker"] }),
 				makeAgent({ name: "third", after: ["second"] }),
 			],
 		});
-		const plan = makePlan([group]);
+		const plan = makePlan([deliverable]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "third",
 			summaries: summaries(
 				[],
@@ -244,18 +250,20 @@ describe("buildSeed section ordering + framing", () => {
 	});
 
 	it("excludes the agent's own summary from findings", () => {
-		const group = makeGroup({ agents: [makeAgent({ name: "security" })] });
+		const deliverable = makeDeliverable({
+			agents: [makeAgent({ name: "security" })],
+		});
 		const seed = buildSeed({
-			plan: makePlan([group]),
-			group,
+			plan: makePlan([deliverable]),
+			deliverable,
 			agentName: "security",
 			summaries: summaries([], [["security", "my own old summary"]]),
 		});
 		expect(seed).not.toContain("my own old summary");
 	});
 
-	it("worker seed includes group body and task list with done markers", () => {
-		const group = makeGroup({
+	it("worker seed includes deliverable body and task list with done markers", () => {
+		const deliverable = makeDeliverable({
 			tasks: [
 				makeTask({ id: "t1", title: "Login endpoint", done: true }),
 				makeTask({
@@ -267,22 +275,24 @@ describe("buildSeed section ordering + framing", () => {
 			],
 		});
 		const seed = buildSeed({
-			plan: makePlan([group]),
-			group,
+			plan: makePlan([deliverable]),
+			deliverable,
 			agentName: "worker",
 			summaries: summaries(),
 		});
-		expect(seed).toContain("## Group: Auth System");
+		expect(seed).toContain("## Deliverable: Auth System");
 		expect(seed).toContain("Implement authentication");
 		expect(seed).toContain("- [x] **Login endpoint**");
 		expect(seed).toContain("- [ ] **Refresh endpoint**");
 	});
 
 	it("support agent gets Your Focus (framed), not Your Tasks", () => {
-		const group = makeGroup({ agents: [makeAgent({ name: "security" })] });
+		const deliverable = makeDeliverable({
+			agents: [makeAgent({ name: "security" })],
+		});
 		const seed = buildSeed({
-			plan: makePlan([group]),
-			group,
+			plan: makePlan([deliverable]),
+			deliverable,
 			agentName: "security",
 			summaries: summaries(),
 		});
@@ -293,11 +303,11 @@ describe("buildSeed section ordering + framing", () => {
 	});
 
 	it("throws for an unknown agent name", () => {
-		const group = makeGroup();
+		const deliverable = makeDeliverable();
 		expect(() =>
 			buildSeed({
-				plan: makePlan([group]),
-				group,
+				plan: makePlan([deliverable]),
+				deliverable,
 				agentName: "ghost",
 				summaries: summaries(),
 			}),
@@ -307,11 +317,11 @@ describe("buildSeed section ordering + framing", () => {
 
 describe("buildSeed empty-section omission", () => {
 	it("omits Prior Work and Findings entirely when there are no summaries", () => {
-		const group = makeGroup({ dependsOn: ["core"] });
-		const plan = makePlan([makeGroup({ id: "core" }), group]);
+		const deliverable = makeDeliverable({ dependsOn: ["core"] });
+		const plan = makePlan([makeDeliverable({ id: "core" }), deliverable]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries(),
 		});
@@ -321,15 +331,15 @@ describe("buildSeed empty-section omission", () => {
 	});
 
 	it("omits deps that have no stored summary", () => {
-		const group = makeGroup({ dependsOn: ["core", "db"] });
+		const deliverable = makeDeliverable({ dependsOn: ["core", "db"] });
 		const plan = makePlan([
-			makeGroup({ id: "core", title: "Core" }),
-			makeGroup({ id: "db", title: "DB" }),
-			group,
+			makeDeliverable({ id: "core", title: "Core" }),
+			makeDeliverable({ id: "db", title: "DB" }),
+			deliverable,
 		]);
 		const seed = buildSeed({
 			plan,
-			group,
+			deliverable,
 			agentName: "worker",
 			summaries: summaries([["db", "db summary"]]),
 		});

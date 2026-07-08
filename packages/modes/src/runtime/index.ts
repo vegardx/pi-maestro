@@ -57,15 +57,15 @@ export function createModesRuntime(
 		engine: () => rt.engine,
 		onPlanChanged: () => rt.emitPlanChanged(),
 		mode: () => rt.state.mode,
-		steerAgent: (groupId, guidance) => {
-			rt.execution?.steer(groupId, guidance);
+		steerAgent: (deliverableId, guidance) => {
+			rt.execution?.steer(deliverableId, guidance);
 		},
-		onTaskToggle: (groupId, taskId) => {
-			rt.agentBridge?.onTaskComplete(groupId, taskId);
+		onTaskToggle: (deliverableId, taskId) => {
+			rt.agentBridge?.onTaskComplete(deliverableId, taskId);
 		},
 		seedContent: () => rt.agentSeedContent,
 		agentBridge: () => rt.agentBridge,
-		agentGroupId: () =>
+		agentDeliverableId: () =>
 			process.env.PI_MAESTRO_AGENT_ID?.split("/")[0] || undefined,
 	})) {
 		pi.registerTool(tool);

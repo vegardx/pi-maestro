@@ -3,18 +3,18 @@
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import type {
+	AgentState,
+	DeliverableExecutor,
+	DeliverableRunState,
+} from "../packages/modes/src/deliverable-executor.js";
+import { buildRecap } from "../packages/modes/src/deliverable-recap.js";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import type {
 	ExecutionAgentSnapshot,
-	ExecutionGroupSnapshot,
+	ExecutionDeliverableSnapshot,
 	ExecutionHandle,
 } from "../packages/modes/src/exec/index.js";
-import type {
-	AgentState,
-	GroupExecutor,
-	GroupRunState,
-} from "../packages/modes/src/group-executor.js";
-import { buildRecap } from "../packages/modes/src/group-recap.js";
 import {
 	handleSteerCommand,
 	handleViewCommand,
@@ -55,7 +55,7 @@ function makeHandle(overrides: Partial<ExecutionHandle> = {}): ExecutionHandle {
 		steer: () => true,
 		snapshot: () => ({
 			agents: new Map<string, ExecutionAgentSnapshot>(),
-			groups: new Map<string, ExecutionGroupSnapshot>(),
+			deliverables: new Map<string, ExecutionDeliverableSnapshot>(),
 		}),
 		resolveSessionName: () => undefined,
 		getExecutor: () => {
@@ -77,16 +77,18 @@ function makeCtx() {
 }
 
 describe("parseSteerArgs", () => {
-	it("parses group + guidance, defaulting to the worker", () => {
-		expect(parseSteerArgs("api-group tighten the tests")).toEqual({
-			groupId: "api-group",
+	it("parses deliverable + guidance, defaulting to the worker", () => {
+		expect(parseSteerArgs("api-deliverable tighten the tests")).toEqual({
+			deliverableId: "api-deliverable",
 			guidance: "tighten the tests",
 		});
 	});
 
 	it("parses an optional agent: prefix", () => {
-		expect(parseSteerArgs("api-group reviewer-x: check the tests")).toEqual({
-			groupId: "api-group",
+		expect(
+			parseSteerArgs("api-deliverable reviewer-x: check the tests"),
+		).toEqual({
+			deliverableId: "api-deliverable",
 			agentName: "reviewer-x",
 			guidance: "check the tests",
 		});
@@ -94,19 +96,19 @@ describe("parseSteerArgs", () => {
 
 	it("does not treat a colon mid-guidance as an agent prefix", () => {
 		expect(parseSteerArgs("g1 look at foo.ts: the bug is there")).toEqual({
-			groupId: "g1",
+			deliverableId: "g1",
 			guidance: "look at foo.ts: the bug is there",
 		});
 		expect(parseSteerArgs("g1 fix a:b and c")).toEqual({
-			groupId: "g1",
+			deliverableId: "g1",
 			guidance: "fix a:b and c",
 		});
 	});
 
 	it("rejects missing guidance", () => {
-		expect(parseSteerArgs("api-group")).toBeUndefined();
+		expect(parseSteerArgs("api-deliverable")).toBeUndefined();
 		expect(parseSteerArgs("")).toBeUndefined();
-		expect(parseSteerArgs("api-group   ")).toBeUndefined();
+		expect(parseSteerArgs("api-deliverable   ")).toBeUndefined();
 	});
 });
 
@@ -115,17 +117,17 @@ describe("handleSteerCommand", () => {
 		const steer = vi.fn(() => true);
 		const { ctx, notify } = makeCtx();
 		handleSteerCommand(
-			"api-group reviewer-x: check the tests",
+			"api-deliverable reviewer-x: check the tests",
 			ctx,
 			makeHandle({ steer }),
 		);
 		expect(steer).toHaveBeenCalledWith(
-			"api-group",
+			"api-deliverable",
 			"check the tests",
 			"reviewer-x",
 		);
 		expect(notify).toHaveBeenCalledWith(
-			"Steered api-group/reviewer-x.",
+			"Steered api-deliverable/reviewer-x.",
 			"info",
 		);
 	});
@@ -142,10 +144,10 @@ describe("handleSteerCommand", () => {
 	it("shows usage on unparseable input", () => {
 		const steer = vi.fn(() => true);
 		const { ctx, notify } = makeCtx();
-		handleSteerCommand("just-a-group", ctx, makeHandle({ steer }));
+		handleSteerCommand("just-a-deliverable", ctx, makeHandle({ steer }));
 		expect(steer).not.toHaveBeenCalled();
 		expect(notify).toHaveBeenCalledWith(
-			"Usage: /steer <group> [agent:] <guidance>",
+			"Usage: /steer <deliverable> [agent:] <guidance>",
 			"warning",
 		);
 	});
@@ -179,13 +181,13 @@ describe("handleViewCommand", () => {
 });
 
 describe("renderAgentsOverview", () => {
-	function planWithGroup(): PlanEngine {
+	function planWithDeliverable(): PlanEngine {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "t",
 			title: "T",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addAgent("auth", {
 			name: "sec",
 			mode: "read-only",
@@ -198,7 +200,7 @@ describe("renderAgentsOverview", () => {
 	}
 
 	it("renders live status, tokens, round, and blocked reason", () => {
-		const engine = planWithGroup();
+		const engine = planWithDeliverable();
 		const handle = makeHandle({
 			snapshot: () => ({
 				agents: new Map<string, ExecutionAgentSnapshot>([
@@ -211,7 +213,7 @@ describe("renderAgentsOverview", () => {
 						},
 					],
 				]),
-				groups: new Map<string, ExecutionGroupSnapshot>([
+				deliverables: new Map<string, ExecutionDeliverableSnapshot>([
 					["auth", { round: 2, blocked: "fix-round cap reached" }],
 				]),
 			}),
@@ -225,7 +227,7 @@ describe("renderAgentsOverview", () => {
 	});
 
 	it("renders without execution state (planning view)", () => {
-		const engine = planWithGroup();
+		const engine = planWithDeliverable();
 		const out = renderAgentsOverview(engine.get());
 		expect(out).toContain("Auth (planned)");
 		expect(out).not.toContain("worker (full) —");
@@ -239,9 +241,9 @@ describe("buildRecap", () => {
 			title: "T",
 			repoPath: "/tmp/repo",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "do it", kind: "task" });
-		engine.updateGroup("auth", {
+		engine.updateDeliverable("auth", {
 			prUrl: "https://github.com/org/repo/pull/7",
 			summary: "shipped the auth flow",
 		});
@@ -251,15 +253,15 @@ describe("buildRecap", () => {
 				"worker",
 				{
 					name: "worker",
-					groupId: "auth",
+					deliverableId: "auth",
 					status: "done",
 					displayName: "ada",
 					summary: "implemented login",
 				},
 			],
 		]);
-		const state: GroupRunState = {
-			groupId: "auth",
+		const state: DeliverableRunState = {
+			deliverableId: "auth",
 			agents,
 			completed: new Set(["worker"]),
 			round: 1,
@@ -267,7 +269,7 @@ describe("buildRecap", () => {
 		};
 		const executor = {
 			getStates: () => new Map([["auth", state]]),
-		} as unknown as GroupExecutor;
+		} as unknown as DeliverableExecutor;
 
 		const recap = buildRecap(engine, executor, { includeSummaries: true });
 		expect(recap).toContain("## Auth [planned]");

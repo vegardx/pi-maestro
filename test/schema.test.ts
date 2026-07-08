@@ -2,31 +2,31 @@ import { describe, expect, it } from "vitest";
 import {
 	blockedReason,
 	canTransition,
-	defaultBranchForGroup,
+	type Deliverable,
+	defaultBranchForDeliverable,
 	findAgent,
-	findGroup,
+	findDeliverable,
 	findTask,
 	immediateAgents,
-	isGroupReady,
-	isLeafGroup,
+	isDeliverableReady,
+	isLeafDeliverable,
 	type Plan,
 	pickBaseBranch,
-	readyGroups,
-	shippableGroups,
+	readyDeliverables,
+	shippableDeliverables,
 	slugify,
 	topologicalSort,
 	unblockedAgents,
 	validatePlanShape,
-	type WorkGroup,
 } from "../packages/modes/src/schema.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
+function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
-		type: "group",
-		id: overrides.id ?? "test-group",
-		title: overrides.title ?? "Test Group",
+		type: "deliverable",
+		id: overrides.id ?? "test-deliverable",
+		title: overrides.title ?? "Test Deliverable",
 		body: overrides.body ?? "Test body",
 		status: overrides.status ?? "planned",
 		dependsOn: overrides.dependsOn,
@@ -50,12 +50,12 @@ function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
 	};
 }
 
-function makePlan(groups: WorkGroup[]): Plan {
+function makePlan(deliverables: Deliverable[]): Plan {
 	return {
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/tmp/repo",
-		groups,
+		deliverables,
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
 	};
@@ -63,7 +63,7 @@ function makePlan(groups: WorkGroup[]): Plan {
 
 // ─── State machine ───────────────────────────────────────────────────────────
 
-describe("GroupStatus transitions", () => {
+describe("DeliverableStatus transitions", () => {
 	it("allows planned → active", () => {
 		expect(canTransition("planned", "active")).toBe(true);
 	});
@@ -100,80 +100,80 @@ describe("GroupStatus transitions", () => {
 	});
 });
 
-// ─── Group readiness ─────────────────────────────────────────────────────────
+// ─── Deliverable readiness ─────────────────────────────────────────────────────────
 
-describe("isGroupReady", () => {
-	it("root group (no deps) is always ready", () => {
-		const g = makeGroup({ dependsOn: [] });
+describe("isDeliverableReady", () => {
+	it("root deliverable (no deps) is always ready", () => {
+		const g = makeDeliverable({ dependsOn: [] });
 		const plan = makePlan([g]);
-		expect(isGroupReady(plan, g)).toBe(true);
+		expect(isDeliverableReady(plan, g)).toBe(true);
 	});
 
-	it("group with unmet dep is not ready", () => {
-		const a = makeGroup({ id: "a", status: "planned" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with unmet dep is not ready", () => {
+		const a = makeDeliverable({ id: "a", status: "planned" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(false);
+		expect(isDeliverableReady(plan, b)).toBe(false);
 	});
 
-	it("group with active dep is not ready — the dep's branch tip is still empty", () => {
-		const a = makeGroup({ id: "a", status: "active" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with active dep is not ready — the dep's branch tip is still empty", () => {
+		const a = makeDeliverable({ id: "a", status: "active" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(false);
+		expect(isDeliverableReady(plan, b)).toBe(false);
 	});
 
-	it("group with complete dep is ready", () => {
-		const a = makeGroup({ id: "a", status: "complete" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with complete dep is ready", () => {
+		const a = makeDeliverable({ id: "a", status: "complete" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(true);
+		expect(isDeliverableReady(plan, b)).toBe(true);
 	});
 
-	it("group with shipped dep is ready", () => {
-		const a = makeGroup({ id: "a", status: "shipped" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with shipped dep is ready", () => {
+		const a = makeDeliverable({ id: "a", status: "shipped" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(true);
+		expect(isDeliverableReady(plan, b)).toBe(true);
 	});
 
-	it("group with abandoned dep is ready — a dead parent must not wedge the chain", () => {
-		const a = makeGroup({ id: "a", status: "abandoned" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with abandoned dep is ready — a dead parent must not wedge the chain", () => {
+		const a = makeDeliverable({ id: "a", status: "abandoned" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(true);
+		expect(isDeliverableReady(plan, b)).toBe(true);
 	});
 
-	it("group with superseded dep is ready", () => {
-		const a = makeGroup({ id: "a", status: "superseded" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("deliverable with superseded dep is ready", () => {
+		const a = makeDeliverable({ id: "a", status: "superseded" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isGroupReady(plan, b)).toBe(true);
+		expect(isDeliverableReady(plan, b)).toBe(true);
 	});
 
-	it("already-active group is not ready", () => {
-		const g = makeGroup({ status: "active", dependsOn: [] });
+	it("already-active deliverable is not ready", () => {
+		const g = makeDeliverable({ status: "active", dependsOn: [] });
 		const plan = makePlan([g]);
-		expect(isGroupReady(plan, g)).toBe(false);
+		expect(isDeliverableReady(plan, g)).toBe(false);
 	});
 
 	it("multiple deps — all must be satisfied", () => {
-		const a = makeGroup({ id: "a", status: "complete" });
-		const b = makeGroup({ id: "b", status: "active" });
-		const c = makeGroup({ id: "c", dependsOn: ["a", "b"] });
+		const a = makeDeliverable({ id: "a", status: "complete" });
+		const b = makeDeliverable({ id: "b", status: "active" });
+		const c = makeDeliverable({ id: "c", dependsOn: ["a", "b"] });
 		const plan = makePlan([a, b, c]);
-		expect(isGroupReady(plan, c)).toBe(false);
+		expect(isDeliverableReady(plan, c)).toBe(false);
 	});
 });
 
-describe("readyGroups", () => {
-	it("returns groups whose deps are met", () => {
-		const a = makeGroup({ id: "a", status: "complete", dependsOn: [] });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
-		const c = makeGroup({ id: "c", dependsOn: [] });
-		const d = makeGroup({ id: "d", dependsOn: ["c"] });
+describe("readyDeliverables", () => {
+	it("returns deliverables whose deps are met", () => {
+		const a = makeDeliverable({ id: "a", status: "complete", dependsOn: [] });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
+		const c = makeDeliverable({ id: "c", dependsOn: [] });
+		const d = makeDeliverable({ id: "d", dependsOn: ["c"] });
 		const plan = makePlan([a, b, c, d]);
-		const ready = readyGroups(plan);
+		const ready = readyDeliverables(plan);
 		// b's dep is complete; c has no deps; d waits on planned c.
 		expect(ready.map((g) => g.id)).toEqual(["b", "c"]);
 	});
@@ -181,62 +181,74 @@ describe("readyGroups", () => {
 
 // ─── Leaf / shippable ────────────────────────────────────────────────────────
 
-describe("isLeafGroup", () => {
+describe("isLeafDeliverable", () => {
 	it("true when nothing depends on it", () => {
-		const g = makeGroup({ id: "a" });
+		const g = makeDeliverable({ id: "a" });
 		const plan = makePlan([g]);
-		expect(isLeafGroup(plan, g)).toBe(true);
+		expect(isLeafDeliverable(plan, g)).toBe(true);
 	});
 
-	it("false when another group depends on it", () => {
-		const a = makeGroup({ id: "a" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("false when another deliverable depends on it", () => {
+		const a = makeDeliverable({ id: "a" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
-		expect(isLeafGroup(plan, a)).toBe(false);
+		expect(isLeafDeliverable(plan, a)).toBe(false);
 	});
 });
 
-describe("shippableGroups", () => {
+describe("shippableDeliverables", () => {
 	it("ships the chain in order: the parent ships first", () => {
-		const a = makeGroup({ id: "a", status: "complete" });
-		const b = makeGroup({ id: "b", status: "complete", dependsOn: ["a"] });
+		const a = makeDeliverable({ id: "a", status: "complete" });
+		const b = makeDeliverable({
+			id: "b",
+			status: "complete",
+			dependsOn: ["a"],
+		});
 		const plan = makePlan([a, b]);
 		// a's branch must reach the remote before b's PR can target it.
-		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["a"]);
+		expect(shippableDeliverables(plan).map((g) => g.id)).toEqual(["a"]);
 	});
 
 	it("dependent becomes shippable once its dep has shipped", () => {
-		const a = makeGroup({ id: "a", status: "shipped" });
-		const b = makeGroup({ id: "b", status: "complete", dependsOn: ["a"] });
+		const a = makeDeliverable({ id: "a", status: "shipped" });
+		const b = makeDeliverable({
+			id: "b",
+			status: "complete",
+			dependsOn: ["a"],
+		});
 		const plan = makePlan([a, b]);
-		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["b"]);
+		expect(shippableDeliverables(plan).map((g) => g.id)).toEqual(["b"]);
 	});
 
 	it("terminally non-productive deps do not block shipping", () => {
-		const a = makeGroup({ id: "a", status: "abandoned" });
-		const b = makeGroup({ id: "b", status: "superseded" });
-		const c = makeGroup({ id: "c", status: "complete", dependsOn: ["a", "b"] });
+		const a = makeDeliverable({ id: "a", status: "abandoned" });
+		const b = makeDeliverable({ id: "b", status: "superseded" });
+		const c = makeDeliverable({
+			id: "c",
+			status: "complete",
+			dependsOn: ["a", "b"],
+		});
 		const plan = makePlan([a, b, c]);
-		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["c"]);
+		expect(shippableDeliverables(plan).map((g) => g.id)).toEqual(["c"]);
 	});
 
-	it("a complete group with a complete-but-unshipped dep is not shippable", () => {
-		const a = makeGroup({ id: "a", status: "complete" });
-		const b = makeGroup({ id: "b", status: "shipped" });
-		const c = makeGroup({
+	it("a complete deliverable with a complete-but-unshipped dep is not shippable", () => {
+		const a = makeDeliverable({ id: "a", status: "complete" });
+		const b = makeDeliverable({ id: "b", status: "shipped" });
+		const c = makeDeliverable({
 			id: "c",
 			status: "complete",
 			dependsOn: ["a", "b"],
 		});
 		const plan = makePlan([a, b, c]);
 		// c waits on a; a itself (no deps) is the one to ship.
-		expect(shippableGroups(plan).map((g) => g.id)).toEqual(["a"]);
+		expect(shippableDeliverables(plan).map((g) => g.id)).toEqual(["a"]);
 	});
 
-	it("does not return non-complete groups", () => {
-		const a = makeGroup({ id: "a", status: "active" });
+	it("does not return non-complete deliverables", () => {
+		const a = makeDeliverable({ id: "a", status: "active" });
 		const plan = makePlan([a]);
-		expect(shippableGroups(plan)).toEqual([]);
+		expect(shippableDeliverables(plan)).toEqual([]);
 	});
 });
 
@@ -244,12 +256,12 @@ describe("shippableGroups", () => {
 
 describe("topologicalSort", () => {
 	it("worker only (no agents)", () => {
-		const g = makeGroup({ agents: [] });
+		const g = makeDeliverable({ agents: [] });
 		expect(topologicalSort(g)).toEqual(["worker"]);
 	});
 
 	it("linear chain: worker → review → fix", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "review",
@@ -275,7 +287,7 @@ describe("topologicalSort", () => {
 	});
 
 	it("parallel agents (no deps on each other)", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "security",
@@ -301,7 +313,7 @@ describe("topologicalSort", () => {
 	});
 
 	it("throws on cycle", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			worker: { mode: "full", after: ["fix"] },
 			agents: [
 				{
@@ -318,7 +330,7 @@ describe("topologicalSort", () => {
 	});
 
 	it("pre-worker agents: worker.after = ['lint']", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			worker: { mode: "full", after: ["lint"] },
 			agents: [
 				{
@@ -338,12 +350,12 @@ describe("topologicalSort", () => {
 
 describe("immediateAgents", () => {
 	it("worker starts first when no after", () => {
-		const g = makeGroup({ agents: [] });
+		const g = makeDeliverable({ agents: [] });
 		expect(immediateAgents(g)).toEqual(["worker"]);
 	});
 
 	it("worker and parallel agents with empty after", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "lint",
@@ -359,7 +371,7 @@ describe("immediateAgents", () => {
 	});
 
 	it("worker delayed by after", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			worker: { mode: "full", after: ["lint"] },
 			agents: [
 				{
@@ -378,7 +390,7 @@ describe("immediateAgents", () => {
 
 describe("unblockedAgents", () => {
 	it("unblocks agents when their deps complete", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "review",
@@ -405,7 +417,7 @@ describe("unblockedAgents", () => {
 	});
 
 	it("unblocks worker when pre-agents complete", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			worker: { mode: "full", after: ["lint"] },
 			agents: [
 				{
@@ -422,7 +434,7 @@ describe("unblockedAgents", () => {
 	});
 
 	it("does not unblock already-completed agents", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "review",
@@ -443,37 +455,37 @@ describe("unblockedAgents", () => {
 
 describe("validatePlanShape", () => {
 	it("valid plan returns no problems", () => {
-		const g = makeGroup();
+		const g = makeDeliverable();
 		const plan = makePlan([g]);
 		expect(validatePlanShape(plan)).toEqual([]);
 	});
 
 	it("detects unknown dependsOn reference", () => {
-		const g = makeGroup({ dependsOn: ["nonexistent"] });
+		const g = makeDeliverable({ dependsOn: ["nonexistent"] });
 		const plan = makePlan([g]);
 		const problems = validatePlanShape(plan);
 		expect(problems).toContain(
-			"group `test-group` depends on unknown group `nonexistent`",
+			"deliverable `test-deliverable` depends on unknown deliverable `nonexistent`",
 		);
 	});
 
 	it("detects full-mode worker with no tasks when active", () => {
-		const g = makeGroup({ tasks: [], status: "active" });
+		const g = makeDeliverable({ tasks: [], status: "active" });
 		const plan = makePlan([g]);
 		const problems = validatePlanShape(plan);
 		expect(problems).toContain(
-			"group `test-group` has a full-mode worker but no gating tasks",
+			"deliverable `test-deliverable` has a full-mode worker but no gating tasks",
 		);
 	});
 
 	it("allows read-only worker with no tasks", () => {
-		const g = makeGroup({ worker: { mode: "read-only" }, tasks: [] });
+		const g = makeDeliverable({ worker: { mode: "read-only" }, tasks: [] });
 		const plan = makePlan([g]);
 		expect(validatePlanShape(plan)).toEqual([]);
 	});
 
 	it("detects reserved agent name 'worker'", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "worker",
@@ -491,7 +503,7 @@ describe("validatePlanShape", () => {
 	});
 
 	it("detects duplicate agent names", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "review",
@@ -517,7 +529,7 @@ describe("validatePlanShape", () => {
 	});
 
 	it("detects unknown agent after reference", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "review",
@@ -537,7 +549,7 @@ describe("validatePlanShape", () => {
 	});
 
 	it("detects agent graph cycle", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "a",
@@ -562,16 +574,16 @@ describe("validatePlanShape", () => {
 		expect(problems.some((p) => p.includes("cycle"))).toBe(true);
 	});
 
-	it("detects cross-group dependency cycle", () => {
-		const a = makeGroup({ id: "a", dependsOn: ["b"] });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("detects cross-deliverable dependency cycle", () => {
+		const a = makeDeliverable({ id: "a", dependsOn: ["b"] });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		const problems = validatePlanShape(plan);
 		expect(problems.some((p) => p.includes("cycle"))).toBe(true);
 	});
 
 	it("warns on stacked=false without dependsOn", () => {
-		const g = makeGroup({ stacked: false, dependsOn: [] });
+		const g = makeDeliverable({ stacked: false, dependsOn: [] });
 		const plan = makePlan([g]);
 		const problems = validatePlanShape(plan);
 		expect(
@@ -580,7 +592,7 @@ describe("validatePlanShape", () => {
 	});
 
 	it("detects worker.after referencing unknown agent", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			worker: { mode: "full", after: ["ghost"] },
 		});
 		const plan = makePlan([g]);
@@ -594,73 +606,97 @@ describe("validatePlanShape", () => {
 // ─── Branch logic ────────────────────────────────────────────────────────────
 
 describe("pickBaseBranch", () => {
-	it("root group bases off default branch", () => {
-		const g = makeGroup({ dependsOn: [] });
+	it("root deliverable bases off default branch", () => {
+		const g = makeDeliverable({ dependsOn: [] });
 		const plan = makePlan([g]);
 		expect(pickBaseBranch(plan, g, "main")).toBe("main");
 	});
 
-	it("stacked group bases off a complete parent's branch", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "complete" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("stacked deliverable bases off a complete parent's branch", () => {
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "complete",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("feat/a");
 	});
 
-	it("stacked group bases off a shipped parent's branch", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "shipped" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+	it("stacked deliverable bases off a shipped parent's branch", () => {
+		const a = makeDeliverable({ id: "a", branch: "feat/a", status: "shipped" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("feat/a");
 	});
 
 	it("stacked=false bases off default branch", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "complete" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"], stacked: false });
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "complete",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"], stacked: false });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("falls back to default when parent has no branch yet", () => {
-		const a = makeGroup({ id: "a", status: "complete" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const a = makeDeliverable({ id: "a", status: "complete" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("skips an abandoned parent — its branch holds no shippable work", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "abandoned" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "abandoned",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("skips a superseded parent", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "superseded" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "superseded",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 
 	it("falls through a non-productive first dep to the next productive one", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "abandoned" });
-		const b = makeGroup({ id: "b", branch: "feat/b", status: "complete" });
-		const c = makeGroup({ id: "c", dependsOn: ["a", "b"] });
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "abandoned",
+		});
+		const b = makeDeliverable({
+			id: "b",
+			branch: "feat/b",
+			status: "complete",
+		});
+		const c = makeDeliverable({ id: "c", dependsOn: ["a", "b"] });
 		const plan = makePlan([a, b, c]);
 		expect(pickBaseBranch(plan, c, "main")).toBe("feat/b");
 	});
 
 	it("does not stack on a parent that has not completed", () => {
-		const a = makeGroup({ id: "a", branch: "feat/a", status: "active" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const a = makeDeliverable({ id: "a", branch: "feat/a", status: "active" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");
 	});
 });
 
-describe("defaultBranchForGroup", () => {
+describe("defaultBranchForDeliverable", () => {
 	it("generates feat/<id> branch name", () => {
-		expect(defaultBranchForGroup({ id: "implement-auth" })).toBe(
+		expect(defaultBranchForDeliverable({ id: "implement-auth" })).toBe(
 			"feat/implement-auth",
 		);
 	});
@@ -668,22 +704,22 @@ describe("defaultBranchForGroup", () => {
 
 // ─── Traversal ───────────────────────────────────────────────────────────────
 
-describe("findGroup / findTask / findAgent", () => {
-	it("findGroup returns group by id", () => {
-		const g = makeGroup({ id: "my-group" });
+describe("findDeliverable / findTask / findAgent", () => {
+	it("findDeliverable returns deliverable by id", () => {
+		const g = makeDeliverable({ id: "my-deliverable" });
 		const plan = makePlan([g]);
-		expect(findGroup(plan, "my-group")).toBe(g);
-		expect(findGroup(plan, "nope")).toBeNull();
+		expect(findDeliverable(plan, "my-deliverable")).toBe(g);
+		expect(findDeliverable(plan, "nope")).toBeNull();
 	});
 
 	it("findTask returns task by id", () => {
-		const g = makeGroup();
+		const g = makeDeliverable();
 		expect(findTask(g, "t1")?.title).toBe("Task 1");
 		expect(findTask(g, "nope")).toBeNull();
 	});
 
 	it("findAgent returns agent by name", () => {
-		const g = makeGroup({
+		const g = makeDeliverable({
 			agents: [
 				{
 					name: "sec",
@@ -726,27 +762,27 @@ describe("slugify", () => {
 // ─── Blocked reason ──────────────────────────────────────────────────────────
 
 describe("blockedReason", () => {
-	it("null for ready group", () => {
-		const g = makeGroup({ dependsOn: [] });
+	it("null for ready deliverable", () => {
+		const g = makeDeliverable({ dependsOn: [] });
 		const plan = makePlan([g]);
 		expect(blockedReason(plan, g)).toBeNull();
 	});
 
 	it("reports waiting on planned dep", () => {
-		const a = makeGroup({ id: "a", status: "planned" });
-		const b = makeGroup({ id: "b", dependsOn: ["a"] });
+		const a = makeDeliverable({ id: "a", status: "planned" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(blockedReason(plan, b)).toContain("waiting on `a`");
 	});
 
 	it("reports unknown dep", () => {
-		const g = makeGroup({ dependsOn: ["ghost"] });
+		const g = makeDeliverable({ dependsOn: ["ghost"] });
 		const plan = makePlan([g]);
 		expect(blockedReason(plan, g)).toContain("unknown dependency");
 	});
 
-	it("reports status for non-planned group", () => {
-		const g = makeGroup({ status: "active" });
+	it("reports status for non-planned deliverable", () => {
+		const g = makeDeliverable({ status: "active" });
 		const plan = makePlan([g]);
 		expect(blockedReason(plan, g)).toContain("is active, not planned");
 	});

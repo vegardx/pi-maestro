@@ -1,18 +1,18 @@
-// STUB: pre-rewrite modules deleted by the group-model migration. These keep
+// STUB: pre-rewrite modules deleted by the deliverable-model migration. These keep
 // the runtime commands/hooks compiling and inert until their real
 // replacements land (deliverable shipping, worktrees). View/steer/recap now
-// live in agent-commands.ts and group-recap.ts.
+// live in agent-commands.ts and deliverable-recap.ts.
 
-import type { WorkGroup } from "../schema.js";
+import type { DeliverableId } from "@vegardx/pi-contracts";
+import type { Deliverable } from "../schema.js";
 
-// STUB: markdown plan summary deleted (group model)
+// STUB: markdown plan summary deleted (deliverable model)
 export const renderPlanSummary = (_plan: unknown) => "";
 
-// STUB: old schema exports (group model)
-export type Deliverable = WorkGroup;
-export type DeliverableId = string;
+// Re-export the canonical types (renamed WorkGroup + the branded id).
+export type { Deliverable, DeliverableId };
 export const findDeliverable = (_plan: unknown, _id: string) =>
-	undefined as WorkGroup | undefined;
+	undefined as Deliverable | undefined;
 export const planRepoMismatch = (..._args: unknown[]): string | null => null;
 export const repoFor = (
 	_plan: unknown,
@@ -23,14 +23,14 @@ export const repoFor = (
 });
 export const repoNameFromPath = (p: string) => p.split("/").pop() ?? "";
 
-// STUB: old shipping exports (group model). `any` returns mirror the deleted
+// STUB: old shipping exports (deliverable model). `any` returns mirror the deleted
 // API surface the callers still consume. (/sync now uses the real
-// reconcileShippedGroups from exec/shipper.ts; /park degrades gracefully.)
+// reconcileShippedDeliverables from exec/shipper.ts; /park degrades gracefully.)
 export const nextShippableDeliverable = (..._args: unknown[]): any => null;
 export const shipDeliverableFromPlan = async (
 	..._args: unknown[]
 ): Promise<any> => ({ ok: false });
 
-// STUB: worktree/session bookkeeping deleted (group model)
+// STUB: worktree/session bookkeeping deleted (deliverable model)
 export const cleanupInactiveWorktrees = (..._args: unknown[]) => {};
 export const recordPlanSession = (..._args: unknown[]) => {};

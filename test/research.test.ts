@@ -210,7 +210,7 @@ describe("research tool", () => {
 			summary: "looks risky",
 		}));
 		const engine = engineWithPlan();
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "add login", body: "src/auth.ts" });
 		const { deps } = makeDeps({
 			subagents: () => capability,
@@ -297,14 +297,14 @@ describe("helpers", () => {
 		expect(researchLabel("!!!")).toBe("research");
 	});
 
-	it("renderPlanOutline includes groups, tasks, and understanding", () => {
+	it("renderPlanOutline includes deliverables, tasks, and understanding", () => {
 		const engine = engineWithPlan();
 		engine.setPhase("exploring", "Build clamp.");
-		engine.addGroup({ title: "Clamp", workerMode: "full" });
+		engine.addDeliverable({ title: "Clamp", workerMode: "full" });
 		engine.addWorkItem("clamp", { title: "implement", body: "src/clamp.ts" });
 		const outline = renderPlanOutline(engine.get());
 		expect(outline).toContain("Build clamp.");
-		expect(outline).toContain("group clamp");
+		expect(outline).toContain("deliverable clamp");
 		expect(outline).toContain("implement — src/clamp.ts");
 	});
 });

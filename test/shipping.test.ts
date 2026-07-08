@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { WorkGroup } from "../packages/modes/src/schema.js";
+import type { Deliverable } from "../packages/modes/src/schema.js";
 import { buildPrBody, shouldShip } from "../packages/modes/src/shipping.js";
 
-function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
+function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
-		id: "test-group" as never,
-		title: "Test Group",
-		body: "Group description",
+		id: "test-deliverable" as never,
+		title: "Test Deliverable",
+		body: "Deliverable description",
 		status: "complete",
 		dependsOn: [],
 		stacked: true,
@@ -21,37 +21,41 @@ function makeGroup(overrides: Partial<WorkGroup> = {}): WorkGroup {
 }
 
 describe("shouldShip", () => {
-	it("returns true for complete terminal group", () => {
-		expect(shouldShip(makeGroup(), false)).toBe(true);
+	it("returns true for complete terminal deliverable", () => {
+		expect(shouldShip(makeDeliverable(), false)).toBe(true);
 	});
 
-	it("returns false for complete non-terminal group", () => {
-		expect(shouldShip(makeGroup(), true)).toBe(false);
+	it("returns false for complete non-terminal deliverable", () => {
+		expect(shouldShip(makeDeliverable(), true)).toBe(false);
 	});
 
-	it("returns false for non-complete group", () => {
-		expect(shouldShip(makeGroup({ status: "active" }), false)).toBe(false);
+	it("returns false for non-complete deliverable", () => {
+		expect(shouldShip(makeDeliverable({ status: "active" }), false)).toBe(
+			false,
+		);
 	});
 
-	it("returns false for already-shipped group", () => {
-		expect(shouldShip(makeGroup({ status: "shipped" }), false)).toBe(false);
+	it("returns false for already-shipped deliverable", () => {
+		expect(shouldShip(makeDeliverable({ status: "shipped" }), false)).toBe(
+			false,
+		);
 	});
 });
 
 describe("buildPrBody", () => {
-	it("includes group body", () => {
-		const body = buildPrBody(makeGroup(), []);
-		expect(body).toContain("Group description");
+	it("includes deliverable body", () => {
+		const body = buildPrBody(makeDeliverable(), []);
+		expect(body).toContain("Deliverable description");
 	});
 
 	it("renders task checklist", () => {
-		const body = buildPrBody(makeGroup(), []);
+		const body = buildPrBody(makeDeliverable(), []);
 		expect(body).toContain("- [x] Task one");
 		expect(body).toContain("- [x] Task two");
 	});
 
 	it("includes agent reports", () => {
-		const body = buildPrBody(makeGroup(), [
+		const body = buildPrBody(makeDeliverable(), [
 			"### Worker\nDid stuff.",
 			"### Review\nLooks good.",
 		]);
@@ -62,12 +66,12 @@ describe("buildPrBody", () => {
 	});
 
 	it("omits sections when empty", () => {
-		const body = buildPrBody(makeGroup({ body: "", tasks: [] }), []);
+		const body = buildPrBody(makeDeliverable({ body: "", tasks: [] }), []);
 		expect(body).toBe("");
 	});
 
-	it("omits tasks section for groups with no tasks", () => {
-		const body = buildPrBody(makeGroup({ tasks: [] }), ["Report"]);
+	it("omits tasks section for deliverables with no tasks", () => {
+		const body = buildPrBody(makeDeliverable({ tasks: [] }), ["Report"]);
 		expect(body).not.toContain("## Tasks");
 		expect(body).toContain("Report");
 	});

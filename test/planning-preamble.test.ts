@@ -55,7 +55,7 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("advisor");
 		expect(preamble).toContain("`readiness`");
 		// Structure tools are locked — no structuring workflow yet.
-		expect(preamble).not.toContain("group(action");
+		expect(preamble).not.toContain("deliverable(action");
 	});
 
 	it("teaches the ask ladder and decision-block format in both phases", () => {
@@ -92,7 +92,7 @@ describe("buildPlanModePreamble", () => {
 		}
 	});
 
-	it("structuring mentions group/task/agent tools and the understanding", () => {
+	it("structuring mentions deliverable/task/agent tools and the understanding", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "structured",
 			title: "Structured",
@@ -101,20 +101,20 @@ describe("buildPlanModePreamble", () => {
 		engine.setPhase("structuring", "We will build a clamp helper.");
 		const preamble = buildPlanModePreamble(engine);
 		expect(preamble).toContain("STRUCTURING");
-		expect(preamble).toContain("group(action");
+		expect(preamble).toContain("deliverable(action");
 		expect(preamble).toContain("task(action");
 		expect(preamble).toContain("agent(action");
 		expect(preamble).toContain("We will build a clamp helper.");
 		expect(preamble).toContain("research/");
 	});
 
-	it("plans with groups but no phase field hydrate as structuring", () => {
+	it("plans with deliverables but no phase field hydrate as structuring", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "legacy",
 			title: "Legacy",
 			repoPath: "/tmp",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "t1" });
 		const preamble = buildPlanModePreamble(engine);
 		expect(preamble).toContain("STRUCTURING");
@@ -122,19 +122,19 @@ describe("buildPlanModePreamble", () => {
 });
 
 describe("buildExecutionPreamble", () => {
-	it("shows group status overview", () => {
+	it("shows deliverable status overview", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "exec-plan",
 			title: "Exec",
 			repoPath: "/tmp",
 		});
-		engine.addGroup({ title: "Auth", workerMode: "full" });
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.addWorkItem("auth", { title: "t1" });
-		engine.setGroupStatus("auth", "active");
+		engine.setDeliverableStatus("auth", "active");
 
 		const preamble = buildExecutionPreamble(engine);
 		expect(preamble).toContain("EXECUTION MODE");
-		expect(preamble).toContain("group:auth");
+		expect(preamble).toContain("deliverable:auth");
 		expect(preamble).toContain("active");
 	});
 
@@ -144,14 +144,14 @@ describe("buildExecutionPreamble", () => {
 			title: "Multi",
 			repoPath: "/tmp",
 		});
-		engine.addGroup({ title: "A", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("a", { title: "t1" });
-		engine.addGroup({ title: "B", workerMode: "full", dependsOn: [] });
+		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: [] });
 		engine.addWorkItem("b", { title: "t2" });
-		engine.setGroupStatus("a", "active");
+		engine.setDeliverableStatus("a", "active");
 
 		const preamble = buildExecutionPreamble(engine);
-		expect(preamble).toContain("group:a — active");
-		expect(preamble).toContain("group:b — planned");
+		expect(preamble).toContain("deliverable:a — active");
+		expect(preamble).toContain("deliverable:b — planned");
 	});
 });

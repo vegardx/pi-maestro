@@ -1,6 +1,6 @@
 // Planning preamble for the maestro's plan mode, split by planning phase:
 // EXPLORING (research + clarify until convergence; structure tools locked)
-// and STRUCTURING (form groups/tasks/knowledge from what was learned).
+// and STRUCTURING (form deliverables/tasks/knowledge from what was learned).
 
 import type { PlanEngine } from "./engine.js";
 import { planPhase } from "./schema.js";
@@ -64,7 +64,7 @@ If you can't write that level of detail → you need more research.`;
 function buildExploringPreamble(header: string): string {
 	return `${header} Phase: EXPLORING.
 
-**Do NOT form a plan yet.** The structure tools (group/task/agent/knowledge)
+**Do NOT form a plan yet.** The structure tools (deliverable/task/agent/knowledge)
 are locked. Your job right now is to understand what the user actually wants
 and gather the facts a good plan needs — through conversation and research.
 
@@ -102,7 +102,7 @@ research. Never try to write the plan as text to dodge the gate.
 - Read files directly only for quick orientation; delegate real digging to
   \`research\` — it runs in parallel and its reports persist for later phases.
 - Prefer several focused research questions over one broad one.
-- Do NOT implement code. Do NOT create groups or tasks yet.`;
+- Do NOT implement code. Do NOT create deliverables or tasks yet.`;
 }
 
 function buildStructuringPreamble(
@@ -115,7 +115,7 @@ function buildStructuringPreamble(
 		: "";
 	return `${header} Phase: STRUCTURING — readiness confirmed.
 ${understandingBlock}
-**You MUST use the \`group\` and \`task\` tools to structure work. Do NOT just
+**You MUST use the \`deliverable\` and \`task\` tools to structure work. Do NOT just
 write a plan as text — call the tools to create it in the system.**
 
 Produce tasks so detailed that a simpler model could implement them
@@ -124,9 +124,9 @@ is still available for gaps that surface while structuring.
 
 ## Workflow
 
-1. **Structure** — Call \`group(action="add", title="...", workerMode="full")\`.
-   Each group = one branch + one PR. Use \`dependsOn\` for ordering.
-2. **Detail** — Call \`task(action="add", groupId="...", title="...", body="...")\`
+1. **Structure** — Call \`deliverable(action="add", title="...", workerMode="full")\`.
+   Each deliverable = one branch + one PR. Use \`dependsOn\` for ordering.
+2. **Detail** — Call \`task(action="add", deliverableId="...", title="...", body="...")\`
    for each concrete task. Tasks describe WHAT to implement.
 3. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
    Give reviewers \`after: ["worker"]\` explicitly so ordering is visible in
@@ -145,47 +145,47 @@ ${CONVERGENCE}
 ## Rules
 
 - Be concise. No narration, no thinking out loud between tool calls.
-- Each group = one PR. Keep them small and focused.
-- Groups with \`dependsOn\` create stacked PRs (B branches from A's tip).
+- Each deliverable = one PR. Keep them small and focused.
+- Deliverables with \`dependsOn\` create stacked PRs (B branches from A's tip).
 - Do NOT implement code yourself.
 - Worker mode is always "full" (read+write+bash). Support agents are "read-only".
 - Default slot for workers. Alternate slot for review/advisor agents.`;
 }
 
 /**
- * Build the execution-mode preamble for the maestro while groups are running.
+ * Build the execution-mode preamble for the maestro while deliverables are running.
  * Injected when the maestro enters auto mode with an active plan.
  */
 export function buildExecutionPreamble(engine: PlanEngine): string {
 	const plan = engine.get();
-	const active = plan.groups.filter((g) => g.status === "active");
-	const complete = plan.groups.filter((g) => g.status === "complete");
-	const planned = plan.groups.filter((g) => g.status === "planned");
+	const active = plan.deliverables.filter((g) => g.status === "active");
+	const complete = plan.deliverables.filter((g) => g.status === "complete");
+	const planned = plan.deliverables.filter((g) => g.status === "planned");
 
-	const groupLines = active.map(
-		(g) => `  group:${g.id} — active (worker running)`,
+	const deliverableLines = active.map(
+		(g) => `  deliverable:${g.id} — active (worker running)`,
 	);
 	const completeLines = complete.map(
-		(g) => `  group:${g.id} — complete (awaiting ship)`,
+		(g) => `  deliverable:${g.id} — complete (awaiting ship)`,
 	);
-	const plannedLines = planned.map((g) => `  group:${g.id} — planned`);
+	const plannedLines = planned.map((g) => `  deliverable:${g.id} — planned`);
 
-	const allLines = [...groupLines, ...completeLines, ...plannedLines];
+	const allLines = [...deliverableLines, ...completeLines, ...plannedLines];
 
-	return `You are in EXECUTION MODE. The executor is running groups.
+	return `You are in EXECUTION MODE. The executor is running deliverables.
 
-Groups:
+Deliverables:
 ${allLines.join("\n") || "  (none)"}
 
 The executor manages agent lifecycle automatically:
-- Activates groups when dependencies are met
+- Activates deliverables when dependencies are met
 - Spawns worker + support agents per the internal DAG
-- Extracts summaries and ships terminal groups
+- Extracts summaries and ships terminal deliverables
 
 You can intervene when needed:
 - If a worker is stuck: check its tasks, provide guidance
-- If the user discusses new ideas: propose as a new group with dependencies
-- If scope changes: update planned groups (not active ones)
+- If the user discusses new ideas: propose as a new deliverable with dependencies
+- If scope changes: update planned deliverables (not active ones)
 
-When all groups ship, the plan is complete.`;
+When all deliverables ship, the plan is complete.`;
 }

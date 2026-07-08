@@ -5,6 +5,7 @@ export const PLAN_TOOL_NAMES = [
 	"deliverable",
 	"task",
 	"agent",
+	"panel",
 	"plan",
 	"knowledge",
 ] as const;
@@ -17,6 +18,7 @@ export const STRUCTURE_TOOL_NAMES = [
 	"deliverable",
 	"task",
 	"agent",
+	"panel",
 	"knowledge",
 ] as const;
 

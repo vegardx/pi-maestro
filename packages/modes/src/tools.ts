@@ -191,7 +191,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createDeliverableTool(deps),
 		createTaskTool(deps),
 		createAgentTool(deps),
-		createSubAgentTool(deps),
+		createPanelTool(deps),
 		createPlanTool(deps),
 		createKnowledgeTool(deps),
 	];
@@ -232,17 +232,17 @@ const SubAgentParams = Type.Object({
 	),
 });
 
-export function createSubAgentTool(deps: PlanToolDeps): ToolDefinition {
+export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
-		name: "subagent",
-		label: "Sub-agent",
+		name: "panel",
+		label: "Panel",
 		description:
 			"Compose a deliverable's review/helper panel from the persona palette " +
 			`(${PERSONA_IDS.join(", ")}): add, remove, list. Add multiple instances ` +
 			"of one persona with different slot/model for a multi-model second " +
 			"pair of eyes on sensitive deliverables. The worker runs the panel.",
 		promptSnippet:
-			"subagent — compose a deliverable's persona review panel (add/remove/list).",
+			"panel — compose a deliverable's persona review panel (add/remove/list).",
 		parameters: SubAgentParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {

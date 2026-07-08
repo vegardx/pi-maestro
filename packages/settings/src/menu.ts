@@ -1325,8 +1325,40 @@ class ConfigMenuComponent implements Component, Focusable {
 	}
 }
 
+/**
+ * Seed a `default` preset from the current session model + thinking level when
+ * NO preset exists yet, and make it active. Runs lazily the first time the menu
+ * opens, so a clean config lands on a working active preset that mirrors what
+ * the user already picked via /model and /settings — instead of an empty
+ * presets section they have to build by hand.
+ */
+export function ensureDefaultPreset(
+	ctx: ExtensionContext,
+	thinking?: string,
+): void {
+	const existing = readModelsConfig(ctx.cwd);
+	if (existing && Object.keys(existing.presets).length > 0) return;
+	const model = ctx.model;
+	if (!model) return; // nothing to seed from
+	const modelId = `${model.provider}/${model.id}`;
+	const effort = thinking ?? "high";
+	updateSettingsFile("global", ctx.cwd, undefined, (raw) => {
+		if (!isPlainObject(raw.models)) raw.models = {};
+		const models = raw.models as Record<string, unknown>;
+		if (!isPlainObject(models.presets)) models.presets = {};
+		const presets = models.presets as Record<string, unknown>;
+		if (Object.keys(presets).length > 0) return; // race guard
+		presets.default = {
+			default: { model: modelId, effort },
+			alternate: { model: modelId, effort },
+		};
+		if (!models.active) models.active = "default";
+	});
+}
+
 // ─── Public API ─────────────────────────────────────────────────────────────
-export function showConfigMenu(ctx: ExtensionContext): void {
+export function showConfigMenu(ctx: ExtensionContext, thinking?: string): void {
+	ensureDefaultPreset(ctx, thinking);
 	const palette = paletteFromTheme(ctx.ui.theme);
 	ctx.ui.custom((tui, theme, keybindings, done) => {
 		const comp = new ConfigMenuComponent(ctx, palette, () => done(undefined));

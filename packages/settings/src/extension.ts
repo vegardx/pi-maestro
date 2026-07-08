@@ -40,7 +40,7 @@ export default defineExtension(
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					showConfigMenu(ctx);
+					showConfigMenu(ctx, pi.getThinkingLevel?.());
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx);

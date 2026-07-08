@@ -66,6 +66,7 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 			"write",
 			"commit",
 			"task", // agents can toggle tasks
+			"review", // a worker runs its own review panel
 		]);
 		return input.availableTools.filter((name) => agentAllowed.has(name));
 	}

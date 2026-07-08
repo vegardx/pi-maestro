@@ -15,9 +15,12 @@ import {
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
+import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
 import type { PlanEngine } from "../engine.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
+import { createReviewTool } from "../review-tool.js";
+import type { SubAgentSpec } from "../schema.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
 import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
@@ -127,6 +130,51 @@ export function createModesRuntime(
 		},
 	})) {
 		pi.registerTool(tool);
+	}
+
+	// Worker-side review tool — registered only in a worker (agent mode). It
+	// runs the deliverable's persona panel over the subagents transport,
+	// fetching the panel live via panelRead and reporting each round's verdicts
+	// back over panelVerdict so the executor's ship gate can read them. The
+	// maestro never sees this tool (it has no single deliverable to review).
+	if (isAgentMode()) {
+		const deliverableId = () =>
+			process.env.PI_MAESTRO_AGENT_ID?.split("/")[0] || undefined;
+		let reviewRound = 0;
+		pi.registerTool(
+			createReviewTool({
+				subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
+				panel: async () => {
+					const bridge = rt.agentBridge;
+					const id = deliverableId();
+					if (!bridge || !id) return [];
+					return (await bridge.panelRead(id)) as SubAgentSpec[];
+				},
+				cwd: () => process.cwd(),
+				// default slot inherits the worker's model (cache-warm); an
+				// explicit spec.model drives the multi-model second-pair-of-eyes.
+				resolveModel: async (spec) => spec.model,
+				reportVerdicts: (results) => {
+					const bridge = rt.agentBridge;
+					const id = deliverableId();
+					if (!bridge || !id) return;
+					reviewRound += 1;
+					bridge.reportPanelVerdict(
+						id,
+						reviewRound,
+						results
+							.filter((r) => r.kind === "review")
+							.map((r) => ({
+								name: r.name,
+								persona: r.persona,
+								required: r.required,
+								verdict: r.verdict,
+								ok: r.ok,
+							})),
+					);
+				},
+			}),
+		);
 	}
 
 	// Feed live research telemetry (current tool, token deltas) from the

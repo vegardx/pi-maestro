@@ -20,8 +20,13 @@ import type { SubAgentSpec } from "./schema.js";
 
 export interface ReviewToolDeps {
 	readonly subagents: () => SubagentsCapabilityV1 | undefined;
-	/** This worker's review panel (from the deliverable's subAgents). */
-	readonly panel: () => readonly SubAgentSpec[];
+	/**
+	 * This worker's review panel (its deliverable's subAgents). Async in the
+	 * runtime (fetched live over the panelRead RPC); may be sync in tests.
+	 */
+	readonly panel: () =>
+		| readonly SubAgentSpec[]
+		| Promise<readonly SubAgentSpec[]>;
 	/** The worktree the reviewers read (usually process.cwd()). */
 	readonly cwd: () => string;
 	/** Resolve a spec's model id (spec.model, or spec.slot via presets). */
@@ -58,7 +63,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 					details: {},
 				};
 			}
-			const panel = deps.panel();
+			const panel = await deps.panel();
 			if (panel.length === 0) {
 				return {
 					content: [

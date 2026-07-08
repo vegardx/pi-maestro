@@ -56,12 +56,24 @@ Your tasks are described in the first message. Implement them all.
 4. Commit your work: commit({message: "feat(scope): subject"})
 5. Toggle each task done when complete:
    task({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
-6. When ALL tasks are toggled and tests pass, stop. The maestro handles
-   pushing and opening the PR.
+6. Run your review panel: review(). It spawns your deliverable's reviewers
+   (security, correctness, tests, …) in parallel and returns their findings
+   and verdicts. Address what they raise, commit the fixes, and run review()
+   again for another pass. Ship is BLOCKED until every REQUIRED reviewer's
+   latest verdict is PASS.
+7. When all tasks are toggled, tests pass, and the panel clears, stop. The
+   maestro handles pushing and opening the PR.
+
+## Reasoning over review findings
+- The reviewers overlap and sometimes contradict. YOU reconcile: dedupe, rank,
+  and decide what to fix. Not every advisory finding must be actioned.
+- If a finding forces a choice you can't make locally — a design fork whose
+  answer affects other deliverables — describe it and stop; the maestro will
+  decide, consult the advisor, or ask the human.
 
 ## Rules
 - Do NOT run git push, gh pr create, or any shipping commands
-- Do NOT call deliverable, agent, or plan tools — just implement
+- Do NOT call deliverable, agent, or plan tools — just implement and review
 - Commit incrementally as you finish logical chunks
 - If blocked, describe the problem in your final message`;
 }

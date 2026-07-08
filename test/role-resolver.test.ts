@@ -343,6 +343,21 @@ describe("resolveRoleModel", () => {
 		expect(r?.source).toBe("session");
 	});
 
+	it("an UNSET role resolves through the active preset, not the raw session model", async () => {
+		// No role config at all, but an active preset exists — the preset is the
+		// source of truth, so it must win over the differing session model.
+		projectSettings({
+			models: { active: "a", presets: { a: { default: "good/model" } } },
+		});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "agent",
+		});
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.source).toBe("preset");
+	});
+
 	it("effort from role config preserved when resolving via preset", async () => {
 		projectSettings({
 			models: {

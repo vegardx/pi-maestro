@@ -255,6 +255,20 @@ export async function resolveRoleModel(
 		}
 	}
 
+	// Priority 3.5: the ACTIVE PRESET's default slot. An unset (or model-less)
+	// role resolves THROUGH the preset — the configured source of truth —
+	// before the raw session model, so changing the active preset moves every
+	// role that hasn't been pinned. (A role with an explicit slot already
+	// resolved in 3b above; this is the "no role config at all" path.)
+	const presetSlot = await resolveSlotModel(
+		ctx,
+		"default",
+		roleConfig?.effort ?? opts.env?.effort ?? opts.explicit?.effort,
+	);
+	if (presetSlot && (!requireApiKey || presetSlot.apiKey)) {
+		return presetSlot;
+	}
+
 	// Priority 4: session model fallback
 	if (ctx.model) {
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);

@@ -264,11 +264,7 @@ function getOptionsForKey(
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".model") || extension === "@presets") {
-		// getAll (not getAvailable): configuring a preset/model setting must offer
-		// EVERY known model, not only ones already authed — on a clean config
-		// almost nothing is authed yet. Mark the un-authed ones so the choice is
-		// informed, but let them be picked.
-		return ctx.modelRegistry.getAll().map((m) => {
+		return pickerModels(ctx).map((m) => {
 			const authed = ctx.modelRegistry.hasConfiguredAuth(m);
 			const base = m.name || `${m.provider}/${m.id}`;
 			return {
@@ -278,6 +274,17 @@ function getOptionsForKey(
 		});
 	}
 	return null;
+}
+
+/**
+ * Models to offer when picking one. Prefer authed models (scoped, matches
+ * /model, doesn't overflow the screen); fall back to ALL known models only
+ * when nothing is authed yet — the clean-config case where the scoped list
+ * would be empty and the slot unsettable.
+ */
+function pickerModels(ctx: ExtensionContext) {
+	const authed = ctx.modelRegistry.getAvailable();
+	return authed.length > 0 ? authed : ctx.modelRegistry.getAll();
 }
 
 class ConfigMenuComponent implements Component, Focusable {
@@ -1057,10 +1064,10 @@ class ConfigMenuComponent implements Component, Focusable {
 	// ─── Slot picker (two-step: model then effort) ──────────────────────────
 
 	private openSlotModelPicker(): void {
-		// getAll, not getAvailable: on a clean config few/no providers are authed
-		// yet, so getAvailable would leave the picker empty and the slot
-		// unsettable. Offer every known model; flag the un-authed ones.
-		const models = this.ctx.modelRegistry.getAll();
+		// Authed models (scoped, like /model) so the list doesn't overflow; fall
+		// back to all models only when nothing is authed (clean config), so the
+		// slot is still settable there.
+		const models = pickerModels(this.ctx);
 		this.slotPickerModels = models.map((m) => {
 			const modelName = (m as { name?: string }).name || m.id;
 			const suffix = this.ctx.modelRegistry.hasConfiguredAuth(m)

@@ -32,11 +32,20 @@ function mockCtx(cwd: string): ExtensionContext {
 describe("getModeRoleModel", () => {
 	let root: string;
 
+	let prevAgentDir: string | undefined;
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "modes-resolver-"));
+		// Isolate the GLOBAL config too: readModelsConfig reads global+project,
+		// and unset roles now resolve through the active preset — so without
+		// this the dev's real ~/.config/pi preset leaks in and "no settings"
+		// isn't. Point the agent dir at an empty temp.
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(root, "empty-agent");
 	});
 
 	afterEach(() => {
+		if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		rmSync(root, { recursive: true, force: true });
 		setImplementOverrides(undefined);
 		delete process.env.MAESTRO_AGENT_MODEL;

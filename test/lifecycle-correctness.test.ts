@@ -85,12 +85,17 @@ describe("execution adapter — lifecycle correctness", () => {
 	let tmux: ReturnType<typeof stubTmux>;
 	let adapter: ExecutionAdapter | undefined;
 	let prevSessionDir: string | undefined;
+	let prevAgentDir: string | undefined;
 	const clients: MaestroRpcClient[] = [];
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "lifecycle-test-"));
 		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
+		// Isolate the global config: role resolution now reads the active preset,
+		// so without this the dev's real ~/.config/pi preset leaks in.
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(tmpDir, "empty-agent");
 		engine = PlanEngine.create(memStore(), {
 			slug: "lifecycle",
 			title: "Lifecycle Plan",
@@ -108,6 +113,8 @@ describe("execution adapter — lifecycle correctness", () => {
 		} else {
 			process.env.PI_CODING_AGENT_SESSION_DIR = prevSessionDir;
 		}
+		if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 

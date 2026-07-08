@@ -34,6 +34,12 @@ export interface ExecutionAgentSnapshot {
 	readonly tokens: ExecutionAgentTokens;
 	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
 	readonly cacheRatio?: number;
+	/** Short model name for telemetry (e.g. "fable-5"). */
+	readonly model?: string;
+	/** Thinking effort level. */
+	readonly effort?: string;
+	/** True when the model uses adaptive thinking → renders "A/<level>". */
+	readonly adaptive?: boolean;
 }
 
 export interface ExecutionDeliverableSnapshot {

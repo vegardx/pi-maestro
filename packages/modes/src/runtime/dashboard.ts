@@ -74,6 +74,9 @@ export function researchTableAgents(
 				turns: 0,
 			},
 			...(run.cacheRatio !== undefined ? { cacheRatio: run.cacheRatio } : {}),
+			...(run.model ? { model: run.model } : {}),
+			...(run.effort ? { effort: run.effort } : {}),
+			...(run.adaptive !== undefined ? { adaptive: run.adaptive } : {}),
 		});
 	}
 	return rows;

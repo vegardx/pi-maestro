@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
+import { getModelMeta } from "@vegardx/pi-models";
 import {
 	MaestroRpcServer,
 	type PlanMutateMessage,
@@ -72,6 +73,9 @@ export type ExecutionEvent =
 			durationMs: number;
 			tokens: { input: number; output: number; turns: number };
 			cacheRatio?: number;
+			model?: string;
+			effort?: string;
+			adaptive?: boolean;
 			summary?: string;
 			/** Commit subjects, when the emitter has them. */
 			commits?: string[];
@@ -178,6 +182,11 @@ export class ExecutionAdapter {
 	private settledAnnounced = false;
 	private tokenSnapshots = new Map<string, TokenSnapshot>(); // agentKey → latest tokens
 	private firstTurnCacheRatio = new Map<string, number>(); // agentKey → first-turn cacheRead ratio
+	// agentKey → resolved display model + adaptive flag (telemetry)
+	private agentModelMeta = new Map<
+		string,
+		{ model: string; adaptive: boolean }
+	>();
 	private firstTokensSeen = new Map<
 		string,
 		{ at: number; toolClass: "full" | "read-only" }
@@ -334,6 +343,18 @@ export class ExecutionAdapter {
 					});
 					modelOverride = resolved?.modelId;
 					thinkingOverride = spawnOpts.effort;
+				}
+				// Display metadata: the alternate override, or the session model.
+				const sessionModelId = this.opts.ctx.model
+					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
+					: undefined;
+				const displayModelId = modelOverride ?? sessionModelId;
+				if (displayModelId) {
+					const meta = getModelMeta(this.opts.ctx, displayModelId);
+					this.agentModelMeta.set(agentKey, {
+						model: meta.shortName,
+						adaptive: meta.adaptive,
+					});
 				}
 
 				const spec = buildSpawnSpec({
@@ -731,6 +752,11 @@ export class ExecutionAdapter {
 		if (firstCompletion) {
 			// Summary exists only after markAgentDone ran requestSummary.
 			const summary = this.executor.getAgentState(deliverableId, name)?.summary;
+			const doneMeta = this.agentModelMeta.get(agentKey);
+			const doneEffort = this.executor.getAgentState(
+				deliverableId,
+				name,
+			)?.effort;
 			this.emitEvent({
 				kind: "done",
 				agentKey,
@@ -740,6 +766,10 @@ export class ExecutionAdapter {
 					? { input: tokens.input, output: tokens.output, turns: tokens.turns }
 					: { input: 0, output: 0, turns: 0 },
 				...(cacheRatio !== undefined ? { cacheRatio } : {}),
+				...(doneMeta
+					? { model: doneMeta.model, adaptive: doneMeta.adaptive }
+					: {}),
+				...(doneEffort ? { effort: doneEffort } : {}),
 				...(summary ? { summary } : {}),
 			});
 		}
@@ -947,6 +977,9 @@ export class ExecutionAdapter {
 				startedAt: number;
 				tokens: { input: number; output: number; turns: number };
 				cacheRatio?: number;
+				model?: string;
+				effort?: string;
+				adaptive?: boolean;
 			}
 		>;
 		deliverables: Map<string, { round: number; blocked?: string }>;
@@ -958,6 +991,9 @@ export class ExecutionAdapter {
 				startedAt: number;
 				tokens: { input: number; output: number; turns: number };
 				cacheRatio?: number;
+				model?: string;
+				effort?: string;
+				adaptive?: boolean;
 			}
 		>();
 		const deliverables = new Map<string, { round: number; blocked?: string }>();
@@ -974,6 +1010,7 @@ export class ExecutionAdapter {
 				const key = `${deliverableId}/${name}`;
 				const tokens = this.tokenSnapshots.get(key);
 				const cacheRatio = this.firstTurnCacheRatio.get(key);
+				const meta = this.agentModelMeta.get(key);
 				agents.set(key, {
 					status: agentState.status,
 					startedAt:
@@ -989,6 +1026,8 @@ export class ExecutionAdapter {
 							}
 						: { input: 0, output: 0, turns: 0 },
 					...(cacheRatio !== undefined ? { cacheRatio } : {}),
+					...(meta ? { model: meta.model, adaptive: meta.adaptive } : {}),
+					...(agentState.effort ? { effort: agentState.effort } : {}),
 				});
 			}
 		}

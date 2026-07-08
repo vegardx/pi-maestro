@@ -21,6 +21,27 @@ export interface AgentTableAgent {
 	};
 	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
 	readonly cacheRatio?: number;
+	/** Short model name (e.g. "fable-5"). */
+	readonly model?: string;
+	/** Thinking effort level (low/medium/high/…). */
+	readonly effort?: string;
+	/** True when the model uses adaptive thinking → renders "A/<level>". */
+	readonly adaptive?: boolean;
+}
+
+/** Effort → compact cell: "A/H" for adaptive models, bare "H" for fixed. */
+const EFFORT_ABBR: Record<string, string> = {
+	off: "off",
+	minimal: "min",
+	low: "L",
+	medium: "M",
+	high: "H",
+	xhigh: "XH",
+};
+export function formatEffort(effort?: string, adaptive?: boolean): string {
+	if (!effort) return "";
+	const abbr = EFFORT_ABBR[effort] ?? effort.slice(0, 2).toUpperCase();
+	return adaptive ? `A/${abbr}` : abbr;
 }
 
 /** Per-deliverable round/blocked view (ExecutionHandle.snapshot().deliverables). */
@@ -70,9 +91,20 @@ const NAME_CAP = 16;
 /** DELIVERABLE never shrinks below its header length + a little room. */
 const MIN_DELIVERABLE_WIDTH = 8;
 
-const HEADERS = ["DELIV", "AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"];
-/** Columns dropped (in order) when the full set doesn't fit the width. */
-const DROP_ORDER = ["CACHE", "ELAPSED"];
+const HEADERS = [
+	"DELIV",
+	"AGENT",
+	"STATUS",
+	"MODEL",
+	"EFF",
+	"TOKENS",
+	"CACHE",
+	"ELAPSED",
+];
+/** Columns dropped (in order) when the full set doesn't fit the width.
+ *  MODEL/EFF are kept longer than CACHE/ELAPSED — they're the "is this on the
+ *  model I expect" glance the table exists for. */
+const DROP_ORDER = ["CACHE", "ELAPSED", "EFF", "MODEL"];
 const COLUMN_GAP = 2;
 /** "│ " + " │" around each row's content. */
 const FRAME = 4;
@@ -121,6 +153,8 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 			DELIV: deliverable,
 			AGENT: clip(name, NAME_CAP),
 			STATUS: status,
+			MODEL: agent.model ?? "",
+			EFF: formatEffort(agent.effort, agent.adaptive),
 			CACHE:
 				agent.cacheRatio !== undefined
 					? `${String(Math.round(agent.cacheRatio * 100)).padStart(2)}%`

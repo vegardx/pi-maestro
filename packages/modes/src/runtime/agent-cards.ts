@@ -18,6 +18,7 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import type { ExecutionEvent } from "../exec/index.js";
 import type { ResearchKind } from "../research.js";
+import { formatEffort } from "./agent-widget.js";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
 
@@ -251,6 +252,8 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 		case "done": {
 			const t = event.tokens;
 			const parts: string[] = [];
+			if (event.model) parts.push(event.model);
+			if (event.effort) parts.push(formatEffort(event.effort, event.adaptive));
 			if (event.commits?.length)
 				parts.push(plural(event.commits.length, "commit"));
 			parts.push(`${k(t.input)}/${k(t.output)} tok`);

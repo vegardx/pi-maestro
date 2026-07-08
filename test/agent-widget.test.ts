@@ -22,6 +22,9 @@ function agent(
 		output?: number;
 		cacheRatio?: number;
 		elapsedMs?: number;
+		model?: string;
+		effort?: string;
+		adaptive?: boolean;
 	} = {},
 ): AgentTableAgent {
 	return {
@@ -29,6 +32,9 @@ function agent(
 		startedAt: NOW - (opts.elapsedMs ?? 0),
 		tokens: { input: opts.input ?? 0, output: opts.output ?? 0, turns: 1 },
 		...(opts.cacheRatio !== undefined ? { cacheRatio: opts.cacheRatio } : {}),
+		...(opts.model ? { model: opts.model } : {}),
+		...(opts.effort ? { effort: opts.effort } : {}),
+		...(opts.adaptive !== undefined ? { adaptive: opts.adaptive } : {}),
 	};
 }
 
@@ -42,6 +48,9 @@ function sampleAgents(): Map<string, AgentTableAgent> {
 				output: 2_200,
 				cacheRatio: 0.54,
 				elapsedMs: 252_000, // 4m12s
+				model: "fable-5",
+				effort: "medium",
+				adaptive: true,
 			}),
 		],
 		[
@@ -51,6 +60,9 @@ function sampleAgents(): Map<string, AgentTableAgent> {
 				output: 900,
 				cacheRatio: 0,
 				elapsedMs: 100_000, // 1m40s
+				model: "opus-4-8",
+				effort: "high",
+				adaptive: true,
 			}),
 		],
 		[
@@ -60,6 +72,8 @@ function sampleAgents(): Map<string, AgentTableAgent> {
 				output: 1_400,
 				cacheRatio: 0.57,
 				elapsedMs: 63_000, // 1m03s
+				model: "haiku-4-5",
+				effort: "low",
 			}),
 		],
 		["done-deliverable/worker", agent("done", { input: 9_999 })],
@@ -129,21 +143,46 @@ describe("buildAgentTable", () => {
 		// Headers live in the top rule; the "agents" title is gone.
 		expect(lines[0].startsWith("┌─ DELIV ")).toBe(true);
 		expect(lines[0]).not.toContain("agents");
-		for (const h of ["AGENT", "STATUS", "TOKENS", "CACHE", "ELAPSED"]) {
+		for (const h of [
+			"AGENT",
+			"STATUS",
+			"MODEL",
+			"EFF",
+			"TOKENS",
+			"CACHE",
+			"ELAPSED",
+		]) {
 			expect(lines[0]).toContain(` ${h} `);
 		}
 		expect(lines[0].endsWith("┐")).toBe(true);
 		expect(lines[lines.length - 1]).toBe(`└${"─".repeat(98)}┘`);
 
-		expect(lines[1]).toContain(
-			"worker    fixing r1    13.2k / 2.2k  54%    4m12s",
-		);
-		expect(lines[2]).toContain(
-			"reviewer  summarizing   4.3k / 0.9k   0%    1m40s",
-		);
-		expect(lines[3]).toContain(
-			"worker    working       8.8k / 1.4k  57%    1m03s",
-		);
+		// Row content, checked by component (column spacing is layout-dependent).
+		for (const part of [
+			"worker",
+			"fixing r1",
+			"fable-5",
+			"A/M",
+			"13.2k / 2.2k",
+			"54%",
+			"4m12s",
+		]) {
+			expect(lines[1]).toContain(part);
+		}
+		for (const part of [
+			"reviewer",
+			"opus-4-8",
+			"A/H",
+			"4.3k / 0.9k",
+			"1m40s",
+		]) {
+			expect(lines[2]).toContain(part);
+		}
+		// Fixed-effort model shows a bare level (no A/ prefix).
+		for (const part of ["haiku-4-5", "8.8k / 1.4k", "57%", "1m03s"]) {
+			expect(lines[3]).toContain(part);
+		}
+		expect(lines[3]).toContain(" L "); // bare low, not A/L
 
 		// DELIVERABLE flexes: rows fill the full width, labels sit one cell right
 		// of their column (the rule's "┌─ " prefix vs the rows' "│ ").
@@ -164,7 +203,7 @@ describe("buildAgentTable", () => {
 		expect(lines[3]).toContain("working"); // average round 0
 	});
 
-	it("drops the CACHE column at width 60", () => {
+	it("drops CACHE/ELAPSED before MODEL as width shrinks", () => {
 		const lines = buildAgentTable({
 			agents: sampleAgents(),
 			deliverables: sampleDeliverables(),
@@ -173,10 +212,10 @@ describe("buildAgentTable", () => {
 		});
 		for (const line of lines) expect(line).toHaveLength(60);
 		expect(lines[0]).toContain("TOKENS");
-		expect(lines[0]).toContain("ELAPSED");
+		// MODEL survives; CACHE/ELAPSED are shed first.
+		expect(lines[0]).toContain("MODEL");
 		expect(lines[0]).not.toContain("CACHE");
 		expect(lines[1]).not.toContain("54%");
-		expect(lines[1]).toContain("4m12s");
 	});
 
 	it("drops ELAPSED too when even narrower", () => {
@@ -201,7 +240,7 @@ describe("buildAgentTable", () => {
 		]);
 		const lines = buildAgentTable({ agents, width: 80, now: NOW });
 		// DELIVERABLE flexes but still clips when the name exceeds the flexed width.
-		expect(lines[1]).toMatch(/a-very-long-deliv[a-z-]*…/);
+		expect(lines[1]).toMatch(/a-very-[a-z-]*…/);
 		expect(lines[1]).toContain("an-extremely-lo…");
 		for (const line of lines) expect(line).toHaveLength(80);
 	});

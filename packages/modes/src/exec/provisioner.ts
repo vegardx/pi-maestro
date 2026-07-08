@@ -322,6 +322,14 @@ export interface BuildSpawnSpecOpts {
 	env: SpawnEnv;
 	/** Kickoff message — the final positional argument to pi. */
 	kickoffMessage: string;
+	/**
+	 * Explicit model override ("provider/id"). Omitted for session-pinned
+	 * agents (the default) so they inherit the session model cache-warm; set
+	 * only for the deliberate alternate-slot case.
+	 */
+	model?: string;
+	/** Explicit thinking/effort level. Omitted inherits the session default. */
+	thinking?: string;
 }
 
 export interface SpawnSpec {
@@ -358,6 +366,8 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 		"--no-prompt-templates",
 		"--no-themes",
 		"--no-context-files",
+		...(opts.model ? ["--model", opts.model] : []),
+		...(opts.thinking ? ["--thinking", opts.thinking] : []),
 		"--session",
 		opts.sessionFile,
 		opts.kickoffMessage,

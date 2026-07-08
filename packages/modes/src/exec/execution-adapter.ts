@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Answers } from "@vegardx/pi-contracts";
+import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
 import {
 	MaestroRpcServer,
 	type PlanMutateMessage,
@@ -22,6 +22,7 @@ import {
 import type { PlanEngine } from "../engine.js";
 import { QuestionQueue } from "../question-queue.js";
 import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
+import { resolveSpawnModelSafe } from "../spawn-model.js";
 import {
 	buildAgentSessionFile,
 	buildSpawnSpec,
@@ -321,6 +322,20 @@ export class ExecutionAdapter {
 				}
 				this.sessionFiles.set(agentKey, sessionFile);
 
+				// Model plumbing: workers/agents are session-pinned by default
+				// (no --model, cache-warm). Only the deliberate `alternate` slot
+				// resolves an explicit model + effort — the permissioned override.
+				let modelOverride: string | undefined;
+				let thinkingOverride: string | undefined;
+				if (spawnOpts.slot === "alternate") {
+					const resolved = await resolveSpawnModelSafe(this.opts.ctx, {
+						slot: "alternate",
+						effort: spawnOpts.effort as ThinkingLevel | undefined,
+					});
+					modelOverride = resolved?.modelId;
+					thinkingOverride = spawnOpts.effort;
+				}
+
 				const spec = buildSpawnSpec({
 					sessionName,
 					worktreePath: cwd,
@@ -335,6 +350,8 @@ export class ExecutionAdapter {
 						token: this.token,
 					},
 					kickoffMessage,
+					...(modelOverride ? { model: modelOverride } : {}),
+					...(thinkingOverride ? { thinking: thinkingOverride } : {}),
 				});
 
 				const cols = process.stdout.columns || 200;

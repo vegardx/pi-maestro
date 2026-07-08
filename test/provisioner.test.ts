@@ -360,6 +360,28 @@ describe("buildSpawnSpec", () => {
 		expect(spec.command.some((arg) => arg.startsWith('"'))).toBe(false);
 	});
 
+	it("omits --model/--thinking by default (session-pinned)", () => {
+		const spec = buildSpawnSpec(baseOpts);
+		expect(spec.command).not.toContain("--model");
+		expect(spec.command).not.toContain("--thinking");
+	});
+
+	it("emits --model/--thinking for the deliberate alternate override", () => {
+		const spec = buildSpawnSpec({
+			...baseOpts,
+			model: "openai/o3",
+			thinking: "high",
+		});
+		expect(spec.command).toContain("--model");
+		expect(spec.command[spec.command.indexOf("--model") + 1]).toBe("openai/o3");
+		expect(spec.command).toContain("--thinking");
+		expect(spec.command[spec.command.indexOf("--thinking") + 1]).toBe("high");
+		// Still before --session/kickoff.
+		expect(spec.command.indexOf("--model")).toBeLessThan(
+			spec.command.indexOf("--session"),
+		);
+	});
+
 	it("maps env fields to PI_* variables including the run token", () => {
 		const spec = buildSpawnSpec(baseOpts);
 		expect(spec.env.PI_MAESTRO_SOCK).toBe("/tmp/maestro.sock");

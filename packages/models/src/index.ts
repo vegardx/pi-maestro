@@ -1,5 +1,10 @@
 // @vegardx/pi-models — preset-based model resolution with slots.
 
+export {
+	getModelMeta,
+	type ModelMeta,
+	shortModelName,
+} from "./model-meta.js";
 export { readModelsConfig } from "./presets.js";
 export {
 	parseModelSpec,

@@ -24,6 +24,7 @@ import type {
 	SpawnProfile,
 	SubagentsCapabilityV1,
 } from "@vegardx/pi-contracts";
+import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
 import { type Plan, slugify } from "./schema.js";
 
@@ -46,6 +47,10 @@ export interface ResearchRunView {
 	tokensOut?: number;
 	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
 	cacheRatio?: number;
+	/** Resolved display metadata (Phase 2), for telemetry. */
+	model?: string;
+	effort?: string;
+	adaptive?: boolean;
 	/** Last tool the child ran ("websearch", "read", …). */
 	activity?: string;
 }
@@ -165,6 +170,13 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 					const prompt = buildResearchPrompt(plan, kind, q.question, q.context);
 					try {
 						const handle = capability.spawn(prompt, profile);
+						// Display metadata: the child's effective model is the profile's
+						// (advisor's alternate) or, when unset, the session model.
+						const sessionModel = ctx.model
+							? `${ctx.model.provider}/${ctx.model.id}`
+							: undefined;
+						const modelId = profile.model ?? sessionModel;
+						const meta = modelId ? getModelMeta(ctx, modelId) : undefined;
 						const view: ResearchRunView = {
 							id: handle.id,
 							question: q.question,
@@ -172,6 +184,10 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 							kind,
 							status: "running",
 							startedAt: Date.now(),
+							...(meta
+								? { model: meta.shortName, adaptive: meta.adaptive }
+								: {}),
+							...(profile.thinking ? { effort: profile.thinking } : {}),
 						};
 						deps.onRunStarted?.(view, ctx);
 						return { view, handle };

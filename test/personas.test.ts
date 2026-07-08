@@ -5,7 +5,12 @@ import {
 	PERSONA_IDS,
 	PERSONA_TOOLS,
 	PERSONAS,
+	panelTopologyGaps,
 } from "../packages/modes/src/personas.js";
+import type {
+	Deliverable,
+	SubAgentSpec,
+} from "../packages/modes/src/schema.js";
 
 describe("persona registry", () => {
 	it("ships the 8 starter personas with unique ids", () => {
@@ -90,5 +95,53 @@ describe("buildPersonaProfile", () => {
 		expect(
 			buildPersonaProfile({ name: "x", persona: "nope" }, { cwd: "/wt" }),
 		).toBeNull();
+	});
+});
+
+describe("panelTopologyGaps", () => {
+	const deliv = (
+		id: string,
+		mode: "full" | "read-only",
+		subAgents: SubAgentSpec[],
+	): Deliverable =>
+		({
+			id,
+			title: id.toUpperCase(),
+			worker: { mode },
+			subAgents,
+			tasks: [],
+		}) as unknown as Deliverable;
+
+	it("flags a code-changing deliverable with no reviewers", () => {
+		const gaps = panelTopologyGaps([deliv("auth", "full", [])]);
+		expect(gaps).toHaveLength(1);
+		expect(gaps[0]).toContain("no reviewers");
+	});
+
+	it("flags reviewers present but none required", () => {
+		const gaps = panelTopologyGaps([
+			deliv("auth", "full", [{ name: "s", persona: "simplification" }]),
+		]);
+		expect(gaps[0]).toContain("none are required");
+	});
+
+	it("flags a gating persona that isn't marked required", () => {
+		const gaps = panelTopologyGaps([
+			deliv("auth", "full", [
+				{ name: "sec", persona: "security-audit" }, // gating but not required
+				{ name: "corr", persona: "correctness-review", required: true },
+			]),
+		]);
+		expect(gaps.some((g) => g.includes("gating persona"))).toBe(true);
+	});
+
+	it("passes a well-formed panel and ignores read-only deliverables", () => {
+		const gaps = panelTopologyGaps([
+			deliv("auth", "full", [
+				{ name: "sec", persona: "security-audit", required: true },
+			]),
+			deliv("docs", "read-only", []), // no code change → no reviewer needed
+		]);
+		expect(gaps).toEqual([]);
 	});
 });

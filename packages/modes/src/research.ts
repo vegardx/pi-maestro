@@ -26,6 +26,7 @@ import type {
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
+import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
@@ -424,7 +425,13 @@ function researcherPreamble(kind: ResearchKind): string {
 				`${shared}\n\nRole: second-opinion advisor. You are a DIFFERENT ` +
 				"model reviewing the maestro's draft plan. Challenge assumptions, " +
 				"find gaps and risks, and say what you would change — concretely. " +
-				"Verify claims against the repository where possible."
+				"Verify claims against the repository where possible.\n\n" +
+				"Also sanity-check the review-panel topology (each deliverable's " +
+				"`panel:` line): does every code-changing deliverable have a " +
+				"required reviewer that gates ship? Do security- or data-sensitive " +
+				"deliverables carry a security persona AND a second-pair-of-eyes " +
+				"pass on a different model (a same-persona instance with an explicit " +
+				"model)? Flag deliverables whose risk the panel under-covers."
 			);
 		case "consult":
 			return (
@@ -450,6 +457,15 @@ function buildResearchPrompt(
 	if (context) lines.push("", "## Context", context);
 	if (kind === "advisor") {
 		lines.push("", "## Draft Plan Under Review", renderPlanOutline(plan));
+		const gaps = panelTopologyGaps(plan.deliverables);
+		if (gaps.length) {
+			lines.push(
+				"",
+				"## Automated Panel-Topology Gaps",
+				"These were found mechanically — confirm them and look for what the check can't judge (sensitivity, missing multi-model escalation):",
+				...gaps.map((g) => `- ${g}`),
+			);
+		}
 	} else if (kind === "consult") {
 		// The advisor decides a specific fork; the whole-plan view is the context
 		// the maestro holds and is consulting on its behalf.
@@ -473,6 +489,19 @@ export function renderPlanOutline(plan: Plan): string {
 			lines.push(
 				`- [${t.done ? "x" : " "}] ${t.title}${t.body ? ` — ${t.body}` : ""}`,
 			);
+		}
+		if (g.subAgents?.length) {
+			const panel = g.subAgents
+				.map((s) => {
+					const flags = [
+						s.required ? "required" : "advisory",
+						s.model ?? s.slot ?? "default",
+						(s.kind ?? "review") === "helper" ? "helper" : null,
+					].filter(Boolean);
+					return `${s.persona} (${flags.join(", ")})`;
+				})
+				.join("; ");
+			lines.push(`  panel: ${panel}`);
 		}
 	}
 	if (plan.deliverables.length === 0) lines.push("", "(no deliverables yet)");

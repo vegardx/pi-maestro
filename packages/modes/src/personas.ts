@@ -12,7 +12,7 @@ import type {
 	SpawnProfile,
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
-import type { SubAgentSpec } from "./schema.js";
+import type { Deliverable, SubAgentSpec } from "./schema.js";
 
 export interface Persona {
 	readonly id: string;
@@ -133,6 +133,45 @@ const BY_ID = new Map(PERSONAS.map((p) => [p.id, p]));
 
 export function getPersona(id: string): Persona | undefined {
 	return BY_ID.get(id);
+}
+
+/**
+ * Deterministic sub-agent topology gaps across a plan — the mechanical half of
+ * advisor plan-review (the advisor judges the rest: sensitivity, multi-model
+ * escalation). Flags code-changing deliverables (worker mode `full`) that:
+ *   - have no reviewers at all (nothing checks the change), or
+ *   - have reviewers but none `required` (nothing gates ship), or
+ *   - carry a gating persona (security/correctness/test-coverage) that isn't
+ *     marked `required` — so it produces a verdict that can't actually block.
+ * Returns a flat list of human-readable findings (empty = clean).
+ */
+export function panelTopologyGaps(
+	deliverables: readonly Deliverable[],
+): string[] {
+	const gaps: string[] = [];
+	for (const d of deliverables) {
+		if (d.worker?.mode !== "full") continue; // read-only deliverables don't change code
+		const reviews = (d.subAgents ?? []).filter(
+			(s) => (s.kind ?? "review") === "review",
+		);
+		if (reviews.length === 0) {
+			gaps.push(`${d.id} (${d.title}) changes code but has no reviewers.`);
+			continue;
+		}
+		if (!reviews.some((s) => s.required)) {
+			gaps.push(
+				`${d.id} (${d.title}) has reviewers but none are required — nothing gates ship.`,
+			);
+		}
+		for (const s of reviews) {
+			if (getPersona(s.persona)?.gating && !s.required) {
+				gaps.push(
+					`${d.id}: ${s.name} is a gating persona (${s.persona}) but not marked required.`,
+				);
+			}
+		}
+	}
+	return gaps;
 }
 
 /**

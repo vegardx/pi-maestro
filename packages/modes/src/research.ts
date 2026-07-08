@@ -297,12 +297,21 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 const ReadinessParams = Type.Object({
 	understanding: Type.String({
 		description:
-			"Your summarized understanding: what will be built, the key design " +
-			"decisions made (and why), and what research/answers back them.",
+			"Your summarized understanding, written as STRUCTURED markdown so the " +
+			"user can scan it (it is rendered with paragraphs, bullets, and bold " +
+			"headings — do NOT write one long paragraph). Use this shape:\n" +
+			"A one- or two-sentence summary of what will be built.\n\n" +
+			"**Key decisions**\n" +
+			"- <decision> — <why / what backs it>\n" +
+			"- <decision> — <why>\n\n" +
+			"Keep each bullet to one line's worth of idea; lead bullets with the " +
+			"decision, not the rationale.",
 	}),
 	open_risks: Type.Optional(
 		Type.String({
-			description: "Known risks or open questions you propose to accept.",
+			description:
+				"Known risks or open questions you propose to accept, as `- ` " +
+				"bullets (one per risk). Rendered under an 'Open risks' heading.",
 		}),
 	),
 });
@@ -332,7 +341,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 			}
 
 			const context = params.open_risks
-				? `${params.understanding}\n\n**Open risks:** ${params.open_risks}`
+				? `${params.understanding}\n\n**Open risks:**\n${params.open_risks}`
 				: params.understanding;
 			const answers = await ask.ask([
 				{

@@ -62,6 +62,7 @@ export {
 	type QuestionnaireState,
 	recommendedIndex,
 	renderQuestionnaire,
+	renderRichText,
 	runQuestionnaire,
 	setFreeText,
 	startFreeText,

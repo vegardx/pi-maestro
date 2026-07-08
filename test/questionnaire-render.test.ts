@@ -14,6 +14,7 @@ import {
 	renderCompareMatrix,
 	renderExplorer,
 	renderQuestionnaire,
+	renderRichText,
 } from "@vegardx/pi-ui";
 import { describe, expect, it } from "vitest";
 import { defaultPalette } from "../packages/ui/src/format.js";
@@ -259,5 +260,43 @@ describe("collapsed badge width (regression: ESC-defer crash)", () => {
 
 	it("shows the deferred ⛔ badge when a question was deferred", () => {
 		expect(collapsed(88, 3).join("\n")).toContain("⛔");
+	});
+});
+
+describe("renderRichText (structured question context)", () => {
+	const p = defaultPalette(); // identity palette → assert on plain text
+
+	it("keeps paragraphs separate instead of flattening to one block", () => {
+		const lines = renderRichText("First para.\n\nSecond para.", 40, p);
+		expect(lines).toEqual(["First para.", "", "Second para."]);
+	});
+
+	it("renders bullets with a • glyph and hanging indent", () => {
+		const lines = renderRichText(
+			"- S3 + CloudFront — private origin with OAC is the production default here",
+			30,
+			p,
+		);
+		expect(lines[0].startsWith("• ")).toBe(true);
+		expect(lines.length).toBeGreaterThan(1); // wrapped
+		expect(lines[1].startsWith("  ")).toBe(true); // continuation indented
+	});
+
+	it("promotes a **Heading:** lead onto its own line, bullets under it", () => {
+		const lines = renderRichText(
+			"**Open risks:**\n- generic\n- pricing varies",
+			60,
+			p,
+		);
+		expect(lines[0]).toBe("Open risks"); // colon + ** stripped
+		expect(lines[1]).toBe("• generic");
+		expect(lines[2]).toBe("• pricing varies");
+	});
+
+	it("strips inline **bold** markers and stays within width", () => {
+		const lines = renderRichText("use **OAC** always and never go wide", 12, p);
+		for (const l of lines) expect(l.length).toBeLessThanOrEqual(12);
+		expect(lines.join(" ")).not.toContain("**");
+		expect(lines.join(" ")).toContain("OAC");
 	});
 });

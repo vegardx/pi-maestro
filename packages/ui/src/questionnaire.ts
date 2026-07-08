@@ -211,6 +211,74 @@ function wrap(
 	return lines;
 }
 
+/** Word-wrap plain text to a display width (visible-width aware). */
+function wrapPlain(text: string, width: number): string[] {
+	if (width <= 0) return [];
+	const words = text.split(/\s+/).filter(Boolean);
+	const lines: string[] = [];
+	let line = "";
+	for (const word of words) {
+		const candidate = line ? `${line} ${word}` : word;
+		if (line && visibleWidth(candidate) > width) {
+			lines.push(line);
+			line = word;
+		} else {
+			line = candidate;
+		}
+	}
+	if (line) lines.push(line);
+	return lines;
+}
+
+const stripBold = (s: string): string => s.replace(/\*\*(.+?)\*\*/g, "$1");
+
+/**
+ * Render lightly-structured text (from a model) to styled, wrapped lines.
+ * Understands three things so a long summary reads as sections instead of a
+ * wall of prose: blank lines separate paragraphs; a leading `-`/`*`/`•` is a
+ * hanging-indent bullet; and a `**Heading:**` lead becomes its own emphasized
+ * line (with the following text wrapped under it). Inline `**bold**` markers
+ * are stripped. Every returned line is ≤ width in display columns.
+ */
+export function renderRichText(
+	text: string,
+	width: number,
+	palette: Palette,
+): string[] {
+	if (width <= 0) return [];
+	const out: string[] = [];
+	const pushBlank = () => {
+		if (out.length > 0 && out[out.length - 1] !== "") out.push("");
+	};
+	for (const raw of text.split("\n")) {
+		const line = raw.trim();
+		if (line === "") {
+			pushBlank();
+			continue;
+		}
+		const bullet = line.match(/^[-*•]\s+(.*)$/);
+		if (bullet) {
+			const wrapped = wrapPlain(stripBold(bullet[1]), Math.max(width - 2, 1));
+			wrapped.forEach((l, i) =>
+				out.push(palette.dim(i === 0 ? `• ${l}` : `  ${l}`)),
+			);
+			continue;
+		}
+		const heading = line.match(/^\*\*(.+?)\*\*:?\s*(.*)$/);
+		if (heading) {
+			pushBlank();
+			out.push(palette.heading(truncate(heading[1].replace(/:$/, ""), width)));
+			for (const l of wrapPlain(stripBold(heading[2]), width)) {
+				out.push(palette.dim(l));
+			}
+			continue;
+		}
+		for (const l of wrapPlain(stripBold(line), width)) out.push(palette.dim(l));
+	}
+	while (out.length > 0 && out[out.length - 1] === "") out.pop();
+	return out;
+}
+
 /** Render the current question of a questionnaire to plain lines. */
 export function renderQuestionnaire(
 	questionnaire: Questionnaire,
@@ -254,7 +322,7 @@ export function renderQuestionnaire(
 		}
 	}
 	if (question.context) {
-		for (const l of wrap(question.context, innerWidth, palette)) {
+		for (const l of renderRichText(question.context, innerWidth, palette)) {
 			lines.push(boxLine(l));
 		}
 	}

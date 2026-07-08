@@ -6,7 +6,9 @@
 
 import type {
 	Answers,
+	ModelSlot,
 	Questionnaire,
+	ThinkingLevel,
 	TokenSnapshot,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
@@ -94,15 +96,58 @@ export interface SummaryMessage {
 	readonly content: string;
 }
 
-/** Agent reports usage from a lens sub-invocation (a child pi process). */
-export interface LensUsageMessage {
-	readonly type: "lensUsage";
-	readonly lens: string;
-	readonly snapshot: TokenSnapshot;
-	readonly findings?: number;
-	readonly fixed?: number;
+/**
+ * One reviewer in a deliverable's review panel. Structural mirror of modes'
+ * `SubAgentSpec` (rpc must not depend on the modes package); the field types
+ * come from pi-contracts so the two are assignment-compatible.
+ */
+export interface PanelReviewerSpec {
+	readonly name: string;
+	readonly persona: string;
+	readonly focus?: string;
+	readonly slot?: ModelSlot;
 	readonly model?: string;
-	readonly effort?: string;
+	readonly effort?: ThinkingLevel;
+	readonly kind?: "review" | "helper";
+	readonly required?: boolean;
+}
+
+/** Agent requests its deliverable's review panel (the subAgents to run). */
+export interface PanelReadMessage {
+	readonly type: "panelRead";
+	readonly id: string;
+	readonly deliverableId: string;
+}
+
+/** Maestro returns the deliverable's live panel. */
+export interface PanelReadResponseMessage {
+	readonly type: "panelReadResponse";
+	readonly id: string;
+	readonly panel: readonly PanelReviewerSpec[];
+}
+
+/** Verdict of one reviewer in a completed panel round. */
+export type PanelVerdict = "approve" | "request-changes" | "none";
+
+export interface PanelVerdictEntry {
+	readonly name: string;
+	readonly persona: string;
+	readonly required: boolean;
+	readonly verdict: PanelVerdict;
+	/** False when the reviewer failed to run / produced no verdict. */
+	readonly ok: boolean;
+}
+
+/**
+ * Agent reports a completed panel round's verdicts. Fire-and-forget: it drives
+ * the executor's ship gate, which reads the latest round per deliverable. The
+ * executor gates independently of the worker's own "done" claim.
+ */
+export interface PanelVerdictMessage {
+	readonly type: "panelVerdict";
+	readonly deliverableId: string;
+	readonly round: number;
+	readonly verdicts: readonly PanelVerdictEntry[];
 }
 
 /** Agent answers a ping. */
@@ -117,10 +162,11 @@ export type AgentMessage =
 	| TokensMessage
 	| PlanReadMessage
 	| PlanMutateMessage
+	| PanelReadMessage
+	| PanelVerdictMessage
 	| QuestionsMessage
 	| DoneMessage
 	| SummaryMessage
-	| LensUsageMessage
 	| PongMessage;
 
 // ─── Maestro → Agent ─────────────────────────────────────────────────────────
@@ -203,6 +249,7 @@ export type MaestroMessage =
 	| SteerMessage
 	| AnswersMessage
 	| PlanReadResponseMessage
+	| PanelReadResponseMessage
 	| PlanMutateResultMessage
 	| DoneAckMessage
 	| ShutdownMessage
@@ -219,6 +266,7 @@ export type RpcMessage = AgentMessage | MaestroMessage;
 interface ResponseByRequestType {
 	readonly hello: HelloAckMessage;
 	readonly planRead: PlanReadResponseMessage;
+	readonly panelRead: PanelReadResponseMessage;
 	readonly planMutate: PlanMutateResultMessage;
 	readonly questions: AnswersMessage;
 	readonly done: DoneAckMessage;

@@ -107,6 +107,11 @@ export interface ExecutorDeps {
 	) => Promise<string>;
 	/** Repo default branch — the base for unstacked deliverables. */
 	defaultBranch?: string;
+	/**
+	 * Ship gate: returns false while a deliverable's required review verdicts
+	 * are not all PASS. Blocks ship (stays retryable). Absent → always ships.
+	 */
+	panelGate?: (deliverableId: string) => boolean;
 	/** Current time. */
 	now: () => string;
 }
@@ -791,6 +796,11 @@ export class DeliverableExecutor {
 	private async shipDeliverableIfReady(g: Deliverable): Promise<string | null> {
 		const state = this.deliverableStates.get(g.id);
 		if (!state) return null;
+
+		// Ship gate: hold until every required reviewer's latest verdict is PASS.
+		// Returning null keeps the deliverable `complete` and retryable — a later
+		// tick ships once the worker's panel round clears the gate.
+		if (this.deps.panelGate && !this.deps.panelGate(g.id)) return null;
 
 		// Assemble PR body
 		const tasks = gatingTasks(g);

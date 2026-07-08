@@ -8,6 +8,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
 	panelGateSatisfied,
+	requiredGateSatisfied,
 	runReviewPanel,
 } from "../packages/modes/src/panel.js";
 import type { SubAgentSpec } from "../packages/modes/src/schema.js";
@@ -102,6 +103,40 @@ describe("runReviewPanel", () => {
 				{ ...passing[0], required: false, verdict: "request-changes" as const },
 			]),
 		).toBe(true);
+	});
+
+	it("executor gate: required names must all approve in the latest round", () => {
+		// No required reviewers → always open.
+		expect(requiredGateSatisfied([], undefined)).toBe(true);
+		// Required but no verdicts reported yet → blocked.
+		expect(requiredGateSatisfied(["security-audit"], undefined)).toBe(false);
+		// Required present but only advisory approved → blocked.
+		expect(
+			requiredGateSatisfied(
+				["security-audit"],
+				[{ name: "documentation", verdict: "approve" }],
+			),
+		).toBe(false);
+		// Required approved → open.
+		expect(
+			requiredGateSatisfied(
+				["security-audit"],
+				[
+					{ name: "security-audit", verdict: "approve" },
+					{ name: "correctness-review", verdict: "request-changes" },
+				],
+			),
+		).toBe(true);
+		// One of two required still requesting changes → blocked.
+		expect(
+			requiredGateSatisfied(
+				["security-audit", "correctness-review"],
+				[
+					{ name: "security-audit", verdict: "approve" },
+					{ name: "correctness-review", verdict: "request-changes" },
+				],
+			),
+		).toBe(false);
 	});
 
 	it("marks a failed reviewer ok=false with no verdict", async () => {

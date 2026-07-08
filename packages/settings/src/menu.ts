@@ -235,7 +235,6 @@ type ColIdx = 0 | 1 | 2;
 type PresetColIdx = 0 | 1;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
-const BOOL_OPTIONS = ["true", "false"];
 
 const ADAPTIVE_DESCRIPTIONS: Record<string, string> = {
 	low: "may skip thinking on simple problems",
@@ -264,8 +263,6 @@ function getOptionsForKey(
 	if (key.endsWith(".thinking") || key.endsWith(".effort"))
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
-	if (key === "lensDisabled")
-		return BOOL_OPTIONS.map((v) => ({ label: v, value: v }));
 	if (key.endsWith(".model") || extension === "@presets") {
 		const models = ctx.modelRegistry.getAvailable();
 		return models.map((m) => ({

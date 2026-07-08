@@ -9,6 +9,7 @@ import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
 	MaestroRpcServer,
+	type PanelVerdictMessage,
 	type PlanMutateMessage,
 	type PlanReadMessage,
 	type QuestionsMessage,
@@ -21,6 +22,7 @@ import {
 	type ExecutorDeps,
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
+import { requiredGateSatisfied } from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
 import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
@@ -155,6 +157,8 @@ export interface ExecutionAdapterOpts {
 	onAllSettled?: () => void;
 	/** Rich lifecycle events for the chat progress cards. */
 	onEvent?: (event: ExecutionEvent) => void;
+	/** A worker reported a completed review-panel round (drives the gate). */
+	onPanelVerdict?: (msg: PanelVerdictMessage) => void;
 }
 
 /**
@@ -193,6 +197,7 @@ export class ExecutionAdapter {
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
 	private lastRounds = new Map<string, number>(); // deliverableId → last logged fix round
+	private panelVerdicts = new Map<string, PanelVerdictMessage>(); // deliverableId → latest round
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
 	private pollInFlight = false; // skip overlapping pollSessions runs
@@ -240,13 +245,28 @@ export class ExecutionAdapter {
 				},
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
 				planRead: (agentId, msg) => this.handlePlanRead(agentId, msg),
+				panelRead: (agentId, msg) => {
+					// The worker's review panel = its deliverable's subAgents, live
+					// from the plan (edits mid-flight take effect on the next read).
+					const deliverable = this.engine
+						.get()
+						.deliverables.find((d) => d.id === msg.deliverableId);
+					this.router.send(agentId, {
+						type: "panelReadResponse",
+						id: msg.id,
+						panel: deliverable?.subAgents ?? [],
+					});
+				},
+				panelVerdict: (_agentId, msg) => {
+					// Latest round per deliverable drives the executor ship gate.
+					this.panelVerdicts.set(msg.deliverableId, msg);
+					this.opts.onPanelVerdict?.(msg);
+				},
 				questions: (agentId, msg) => {
 					const [deliverableId, agentNamePart] = agentId.split("/");
 					if (!deliverableId || !agentNamePart) return;
 					this.handleQuestions(agentId, deliverableId, agentNamePart, msg);
 				},
-				// Explicit no-op: lens usage feeds the ledger once Wave 4 wires it.
-				lensUsage: () => {},
 			},
 			onDisconnect: (agentId) => {
 				this.idleCount.delete(agentId);
@@ -518,10 +538,32 @@ export class ExecutionAdapter {
 
 			defaultBranch: this.opts.defaultBranch,
 
+			panelGate: (deliverableId) =>
+				this.deliverableGateSatisfied(deliverableId),
+
 			now: () => new Date().toISOString(),
 		};
 
 		this.executor = new DeliverableExecutor(this.engine, deps);
+	}
+
+	/**
+	 * The ship gate for a deliverable: every REQUIRED review in its panel (per
+	 * the plan) must have an approving verdict in the latest reported round. No
+	 * verdict yet → not satisfied (blocks ship, stays retryable). A deliverable
+	 * with no required reviewers is always satisfied.
+	 */
+	deliverableGateSatisfied(deliverableId: string): boolean {
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((d) => d.id === deliverableId);
+		const requiredNames = (deliverable?.subAgents ?? [])
+			.filter((s) => s.required && (s.kind ?? "review") === "review")
+			.map((s) => s.name);
+		return requiredGateSatisfied(
+			requiredNames,
+			this.panelVerdicts.get(deliverableId)?.verdicts,
+		);
 	}
 
 	async start(): Promise<void> {

@@ -108,6 +108,24 @@ export function panelGateSatisfied(results: readonly PanelResult[]): boolean {
 		.every((r) => r.verdict === "approve");
 }
 
+/**
+ * The executor's ship gate, computed from the PLAN's required reviewers (source
+ * of truth) against the latest reported verdicts. A required reviewer with no
+ * verdict yet — worker never ran it, or it's still running — blocks ship. This
+ * is deliberately independent of the worker's own "done" claim.
+ */
+export function requiredGateSatisfied(
+	requiredNames: readonly string[],
+	latest: readonly { name: string; verdict: string }[] | undefined,
+): boolean {
+	if (requiredNames.length === 0) return true;
+	if (!latest) return false;
+	const approved = new Set(
+		latest.filter((v) => v.verdict === "approve").map((v) => v.name),
+	);
+	return requiredNames.every((n) => approved.has(n));
+}
+
 // A constant, mechanical trigger — identical for every reviewer. The persona
 // (who you are) and the deliverable focus (what to scrutinize) are set
 // deterministically by buildPersonaProfile in the system prompt, never

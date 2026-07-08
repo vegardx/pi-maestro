@@ -69,7 +69,21 @@ const AGENT_FIXTURES = {
 	},
 	done: { type: "done", id: "d-1", summary: "did the thing" },
 	summary: { type: "summary", id: "s-1", content: "forward-looking summary" },
-	lensUsage: { type: "lensUsage", lens: "review", snapshot },
+	panelRead: { type: "panelRead", id: "pnr-1", deliverableId: "g1" },
+	panelVerdict: {
+		type: "panelVerdict",
+		deliverableId: "g1",
+		round: 1,
+		verdicts: [
+			{
+				name: "security-audit",
+				persona: "security-audit",
+				required: true,
+				verdict: "approve",
+				ok: true,
+			},
+		],
+	},
 	pong: { type: "pong", id: "po-1" },
 } as const satisfies {
 	[T in AgentMessage["type"]]: Extract<AgentMessage, { type: T }>;
@@ -99,7 +113,8 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 		questions: ack,
 		done: ack,
 		summary: ack,
-		lensUsage: ack,
+		panelRead: ack,
+		panelVerdict: ack,
 		pong: ack,
 	};
 }

@@ -540,6 +540,8 @@ export class ExecutionAdapter {
 
 			panelGate: (deliverableId) =>
 				this.deliverableGateSatisfied(deliverableId),
+			panelGateDetail: (deliverableId) =>
+				this.deliverableGateDetail(deliverableId),
 
 			now: () => new Date().toISOString(),
 		};
@@ -554,16 +556,45 @@ export class ExecutionAdapter {
 	 * with no required reviewers is always satisfied.
 	 */
 	deliverableGateSatisfied(deliverableId: string): boolean {
+		return requiredGateSatisfied(
+			this.requiredReviewerNames(deliverableId),
+			this.panelVerdicts.get(deliverableId)?.verdicts,
+		);
+	}
+
+	private requiredReviewerNames(deliverableId: string): string[] {
 		const deliverable = this.engine
 			.get()
 			.deliverables.find((d) => d.id === deliverableId);
-		const requiredNames = (deliverable?.subAgents ?? [])
+		return (deliverable?.subAgents ?? [])
 			.filter((s) => s.required && (s.kind ?? "review") === "review")
 			.map((s) => s.name);
-		return requiredGateSatisfied(
-			requiredNames,
-			this.panelVerdicts.get(deliverableId)?.verdicts,
+	}
+
+	/**
+	 * Why the gate is blocking: which required reviewers have no verdict yet
+	 * (never ran, or still running) vs. which returned changes. Drives the
+	 * blocked card the maestro/human sees when a completed worker didn't clear
+	 * its panel.
+	 */
+	private deliverableGateDetail(deliverableId: string): string {
+		const required = this.requiredReviewerNames(deliverableId);
+		const byName = new Map(
+			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
+				v.name,
+				v.verdict,
+			]),
 		);
+		const missing = required.filter((n) => !byName.has(n));
+		const failing = required.filter(
+			(n) => byName.has(n) && byName.get(n) !== "approve",
+		);
+		const parts: string[] = [];
+		if (failing.length) parts.push(`${failing.join(", ")} requested changes`);
+		if (missing.length) parts.push(`${missing.join(", ")} not yet reviewed`);
+		return parts.length
+			? parts.join("; ")
+			: "required review verdicts not satisfied";
 	}
 
 	async start(): Promise<void> {

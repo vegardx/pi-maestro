@@ -112,6 +112,8 @@ export interface ExecutorDeps {
 	 * are not all PASS. Blocks ship (stays retryable). Absent → always ships.
 	 */
 	panelGate?: (deliverableId: string) => boolean;
+	/** Human-readable reason the gate is blocking (which reviewers, why). */
+	panelGateDetail?: (deliverableId: string) => string;
 	/** Current time. */
 	now: () => string;
 }
@@ -798,9 +800,21 @@ export class DeliverableExecutor {
 		if (!state) return null;
 
 		// Ship gate: hold until every required reviewer's latest verdict is PASS.
-		// Returning null keeps the deliverable `complete` and retryable — a later
-		// tick ships once the worker's panel round clears the gate.
-		if (this.deps.panelGate && !this.deps.panelGate(g.id)) return null;
+		// We only reach here for a `complete` deliverable — the worker is already
+		// done — so a blocking gate is a genuine deadlock, not mid-iteration: the
+		// worker finished without clearing its required reviewers. Surface it
+		// (state.blocked → a blocked card the maestro/human acts on) instead of
+		// silently retrying forever. Stays retryable: a later PASS verdict opens
+		// the gate and ships. No verdict at all (worker never ran review) blocks
+		// the same way — which is correct, an unreviewed required deliverable
+		// must not ship.
+		if (this.deps.panelGate && !this.deps.panelGate(g.id)) {
+			const reason = `ship gate: ${this.deps.panelGateDetail?.(g.id) ?? "required review verdicts not satisfied"}`;
+			if (state.blocked !== reason) state.blocked = reason;
+			return null;
+		}
+		// Gate satisfied — clear any stale gate-block note before shipping.
+		if (state.blocked?.startsWith("ship gate:")) state.blocked = undefined;
 
 		// Assemble PR body
 		const tasks = gatingTasks(g);

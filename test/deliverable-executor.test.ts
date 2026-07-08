@@ -297,6 +297,54 @@ describe("DeliverableExecutor — completion and shipping", () => {
 		expect(deps.shipDeliverable).toHaveBeenCalled();
 	});
 
+	it("holds ship and surfaces a blocked reason when the panel gate fails", async () => {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+
+		const deps = makeDeps({
+			panelGate: () => false,
+			panelGateDetail: () => "security-audit requested changes",
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("work", "worker");
+
+		const shipped = await executor.tick();
+		// The worker is done but the gate blocks: no ship, deadlock surfaced.
+		expect(shipped).toEqual([]);
+		expect(engine.get().deliverables[0].status).toBe("complete");
+		expect(deps.shipDeliverable).not.toHaveBeenCalled();
+		expect(executor.getStates().get("work")?.blocked).toBe(
+			"ship gate: security-audit requested changes",
+		);
+	});
+
+	it("ships once the gate opens, clearing the stale gate-block note", async () => {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+
+		let gateOpen = false;
+		const deps = makeDeps({
+			panelGate: () => gateOpen,
+			panelGateDetail: () => "correctness-review not yet reviewed",
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("work", "worker");
+
+		await executor.tick(); // blocked
+		expect(engine.get().deliverables[0].status).toBe("complete");
+		expect(executor.getStates().get("work")?.blocked).toContain("ship gate:");
+
+		gateOpen = true; // worker's next panel round passed
+		const shipped = await executor.tick();
+		expect(shipped).toEqual(["work"]);
+		expect(engine.get().deliverables[0].status).toBe("shipped");
+		expect(executor.getStates().get("work")?.blocked).toBeUndefined();
+	});
+
 	it("ships a complete deliverable even when it has dependents — the chain needs its branch on the remote", async () => {
 		const engine = setupPlan();
 		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });

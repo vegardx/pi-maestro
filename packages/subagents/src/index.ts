@@ -156,7 +156,9 @@ function resolveCliPath(): string | undefined {
 	return entry;
 }
 
-const DEFAULT_CONCURRENCY = 3;
+// Bounded, but set high on purpose — the goal is to explore how wide we can
+// fan out (persona panels, research rounds). Ceiling raiseable with hardware.
+const DEFAULT_CONCURRENCY = 50;
 
 export default defineExtension(
 	{

@@ -165,25 +165,37 @@ export function createModesRuntime(
 
 	// Declare configurable settings for /maestro menu
 	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
-		{ key: "maxAgents", label: "Max agents", type: "number", default: 4 },
-		{
-			key: "maxReviewCycles",
-			label: "Max review cycles",
-			type: "number",
-			default: 2,
-		},
+		// Agent + classifier model roles (classifier is read by the bash-intent
+		// hook; agent slot/effort feed the exec spawn's alternate override).
 		{ key: "models.agent.effort", label: "Agent effort", type: "thinking" },
 		{ key: "models.agent.slot", label: "Agent slot", type: "slot" },
 		{ key: "models.agent.model", label: "Agent model", type: "model" },
-		{ key: "models.analyze.effort", label: "Analyze effort", type: "thinking" },
-		{ key: "models.analyze.slot", label: "Analyze slot", type: "slot" },
-		{ key: "models.analyze.model", label: "Analyze model", type: "model" },
 		{
 			key: "models.classifier.effort",
 			label: "Classifier effort",
 			type: "thinking",
 		},
 		{ key: "models.classifier.slot", label: "Classifier slot", type: "slot" },
+		// Compaction budgets — read by readModesCompactionSettings; declared here
+		// so they're discoverable/editable in /maestro (were hidden before).
+		{
+			key: "compaction.workingTokens",
+			label: "Compaction: working budget",
+			type: "number",
+			default: 150000,
+		},
+		{
+			key: "compaction.summaryTokens",
+			label: "Compaction: summary budget",
+			type: "number",
+			default: 100000,
+		},
+		{
+			key: "compaction.timeoutMs",
+			label: "Compaction: timeout (ms)",
+			type: "number",
+			default: 90000,
+		},
 	]);
 
 	maestro.capabilities.register(CAPABILITIES.modes, {

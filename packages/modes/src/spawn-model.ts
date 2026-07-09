@@ -1,19 +1,17 @@
 // Spawn-time model resolution for the deliverable executor.
-// Maps (slot, effort) from an AgentSpec/WorkerSpec to a concrete model
-// via the preset system.
+// Resolves a tier (work/review/fast) to a concrete model via the active profile.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ModelSlot, ThinkingLevel } from "@vegardx/pi-contracts";
+import type { ThinkingLevel, Tier } from "@vegardx/pi-contracts";
 import {
 	type ResolvedRoleModelFull,
-	resolveRoleModel,
-	resolveSlotModel,
+	resolveTierModel,
 } from "@vegardx/pi-models";
 
 export interface SpawnModelRequest {
-	/** Model slot from the agent/worker spec. */
-	slot: ModelSlot;
-	/** Thinking effort from the agent/worker spec. */
+	/** Which tier to resolve (work for the implementer, review for reviewers, …). */
+	tier: Tier;
+	/** Thinking effort override. */
 	effort?: ThinkingLevel;
 }
 
@@ -29,27 +27,17 @@ export interface ResolvedSpawnModel {
 }
 
 /**
- * Resolve a model for spawning an agent at execution time.
- *
- * Resolves the active preset's slot (default/alternate) DIRECTLY first — the
- * old path went through a `slotToRole` name (`agent`/`agent-alternate`) that
- * is usually unconfigured, so `alternate` silently fell back to the session
- * model (the advisor never got a second-pair-of-eyes model). If the slot is
- * unconfigured we fall back to role-based resolution (which lands on the
- * session model). Effort from the request overrides the preset default.
+ * Resolve a model for spawning an agent at execution time. The tier resolves
+ * through the active profile (pinned model, or tracking the session model when
+ * the tier is unset). Effort from the request overrides the tier default.
  */
 export async function resolveSpawnModel(
 	ctx: ExtensionContext,
 	request: SpawnModelRequest,
 ): Promise<ResolvedSpawnModel | null> {
-	const result =
-		(await resolveSlotModel(ctx, request.slot, request.effort)) ??
-		(await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: slotToRole(request.slot),
-			explicit: request.effort ? { effort: request.effort } : undefined,
-		}));
-
+	const result = await resolveTierModel(ctx, request.tier, {
+		effort: request.effort,
+	});
 	if (!result) return null;
 
 	return {
@@ -78,11 +66,6 @@ export async function resolveSpawnModelSafe(
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
-}
-
-// Map our ModelSlot to the role the resolver uses for settings lookup.
-function slotToRole(slot: ModelSlot): string {
-	return slot === "alternate" ? "agent-alternate" : "agent";
 }
 
 export type { ResolvedRoleModelFull };

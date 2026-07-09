@@ -51,21 +51,18 @@ describe("sub-agent panel (engine)", () => {
 		expect(d?.subAgents?.every((s) => s.required)).toBe(true);
 	});
 
-	it("supports multiple instances of one persona (multi-model panel)", () => {
+	it("supports multiple instances of one persona", () => {
 		const engine = engineWith();
 		engine.addSubAgent("oauth", {
 			name: "security-audit",
 			persona: "security-audit",
-			slot: "default",
 		});
 		engine.addSubAgent("oauth", {
-			name: "security-audit-alt",
+			name: "security-audit-2",
 			persona: "security-audit",
-			slot: "alternate",
 		});
 		const d = engine.get().deliverables.find((x) => x.id === "oauth");
 		expect(d?.subAgents).toHaveLength(2);
-		expect(d?.subAgents?.map((s) => s.slot)).toEqual(["default", "alternate"]);
 		expect(new Set(d?.subAgents?.map((s) => s.persona)).size).toBe(1);
 	});
 

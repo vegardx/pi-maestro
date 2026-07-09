@@ -266,7 +266,6 @@ describe("topologicalSort", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "alternate",
 					effort: "high",
 					focus: "security",
 					after: ["worker"],
@@ -274,7 +273,6 @@ describe("topologicalSort", () => {
 				{
 					name: "fix",
 					mode: "full",
-					slot: "default",
 					effort: "low",
 					focus: "apply fixes",
 					after: ["review"],
@@ -292,7 +290,6 @@ describe("topologicalSort", () => {
 				{
 					name: "security",
 					mode: "read-only",
-					slot: "alternate",
 					effort: "high",
 					focus: "sec",
 					after: ["worker"],
@@ -300,7 +297,6 @@ describe("topologicalSort", () => {
 				{
 					name: "perf",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "perf",
 					after: ["worker"],
@@ -319,7 +315,6 @@ describe("topologicalSort", () => {
 				{
 					name: "fix",
 					mode: "full",
-					slot: "default",
 					effort: "low",
 					focus: "fix",
 					after: ["worker"],
@@ -336,7 +331,6 @@ describe("topologicalSort", () => {
 				{
 					name: "lint",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "lint check",
 					after: [],
@@ -360,7 +354,6 @@ describe("immediateAgents", () => {
 				{
 					name: "lint",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "lint",
 					after: [],
@@ -377,7 +370,6 @@ describe("immediateAgents", () => {
 				{
 					name: "lint",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "lint",
 					after: [],
@@ -395,7 +387,6 @@ describe("unblockedAgents", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "alternate",
 					effort: "high",
 					focus: "sec",
 					after: ["worker"],
@@ -403,7 +394,6 @@ describe("unblockedAgents", () => {
 				{
 					name: "fix",
 					mode: "full",
-					slot: "default",
 					effort: "low",
 					focus: "fix",
 					after: ["review"],
@@ -423,7 +413,6 @@ describe("unblockedAgents", () => {
 				{
 					name: "lint",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "lint",
 					after: [],
@@ -439,7 +428,6 @@ describe("unblockedAgents", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "alternate",
 					effort: "high",
 					focus: "sec",
 					after: ["worker"],
@@ -490,7 +478,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "worker",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "x",
 					after: [],
@@ -508,7 +495,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "x",
 					after: [],
@@ -516,7 +502,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "y",
 					after: [],
@@ -534,7 +519,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "review",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "x",
 					after: ["nonexistent"],
@@ -554,7 +538,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "a",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "x",
 					after: ["b"],
@@ -562,7 +545,6 @@ describe("validatePlanShape", () => {
 				{
 					name: "b",
 					mode: "read-only",
-					slot: "default",
 					effort: "low",
 					focus: "y",
 					after: ["a"],
@@ -724,7 +706,6 @@ describe("findDeliverable / findTask / findAgent", () => {
 				{
 					name: "sec",
 					mode: "read-only",
-					slot: "alternate",
 					effort: "high",
 					focus: "security",
 					after: [],

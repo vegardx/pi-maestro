@@ -175,7 +175,6 @@ describe("execution adapter — lifecycle correctness", () => {
 		engine.addAgent("work", {
 			name: "rev",
 			mode: "read-only",
-			slot: "alternate",
 			effort: "high",
 			focus: "security review",
 			after: ["worker"],

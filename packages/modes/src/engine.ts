@@ -13,7 +13,6 @@ import {
 	defaultBranchForDeliverable,
 	findDeliverable,
 	findTask,
-	type ModelSlot,
 	type Plan,
 	type PlanPhase,
 	type PlanRepo,
@@ -34,7 +33,6 @@ export interface AddDeliverableInput {
 	dependsOn?: string[];
 	stacked?: boolean;
 	workerMode: AgentMode;
-	workerSlot?: ModelSlot;
 	workerEffort?: ThinkingLevel;
 	workerAfter?: string[];
 }
@@ -42,7 +40,6 @@ export interface AddDeliverableInput {
 export interface AddAgentInput {
 	name: string;
 	mode: AgentMode;
-	slot: ModelSlot;
 	effort: ThinkingLevel;
 	focus: string;
 	after: string[];
@@ -182,7 +179,6 @@ export class PlanEngine {
 			stacked: input.stacked,
 			worker: {
 				mode: input.workerMode,
-				slot: input.workerSlot,
 				effort: input.workerEffort,
 				after: input.workerAfter,
 			},
@@ -217,7 +213,6 @@ export class PlanEngine {
 			>
 		> & {
 			workerMode?: AgentMode;
-			workerSlot?: ModelSlot;
 			workerEffort?: ThinkingLevel;
 			workerAfter?: string[];
 		},
@@ -225,16 +220,10 @@ export class PlanEngine {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, id);
 			if (!g) throw new Error(`unknown deliverable: ${id}`);
-			const {
-				workerMode,
-				workerSlot,
-				workerEffort,
-				workerAfter,
-				...deliverablePatch
-			} = patch;
+			const { workerMode, workerEffort, workerAfter, ...deliverablePatch } =
+				patch;
 			Object.assign(g, deliverablePatch);
 			if (workerMode !== undefined) g.worker.mode = workerMode;
-			if (workerSlot !== undefined) g.worker.slot = workerSlot;
 			if (workerEffort !== undefined) g.worker.effort = workerEffort;
 			if (workerAfter !== undefined) g.worker.after = workerAfter;
 			g.updatedAt = this.now();
@@ -267,7 +256,6 @@ export class PlanEngine {
 		const agent: AgentSpec = {
 			name: input.name,
 			mode: input.mode,
-			slot: input.slot,
 			effort: input.effort,
 			focus: input.focus,
 			after: input.after,
@@ -285,9 +273,7 @@ export class PlanEngine {
 	updateAgent(
 		deliverableId: string,
 		name: string,
-		patch: Partial<
-			Pick<AgentSpec, "mode" | "slot" | "effort" | "focus" | "after">
-		>,
+		patch: Partial<Pick<AgentSpec, "mode" | "effort" | "focus" | "after">>,
 	): void {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, deliverableId);

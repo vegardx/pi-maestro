@@ -27,7 +27,6 @@ import type {
 	AgentMode,
 	AgentSpec,
 	Deliverable,
-	ModelSlot,
 	Plan,
 	SubAgentSpec,
 	ThinkingLevel,
@@ -101,9 +100,6 @@ const DeliverableParams = Type.Object({
 	workerMode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
 	),
-	workerSlot: Type.Optional(
-		Type.Union([Type.Literal("default"), Type.Literal("alternate")]),
-	),
 	workerEffort: Type.Optional(
 		Type.Union([
 			Type.Literal("off"),
@@ -155,9 +151,6 @@ const AgentParams = Type.Object({
 	),
 	mode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
-	),
-	slot: Type.Optional(
-		Type.Union([Type.Literal("default"), Type.Literal("alternate")]),
 	),
 	effort: Type.Optional(
 		Type.Union([
@@ -217,19 +210,18 @@ const SubAgentParams = Type.Object({
 			description: `Review lens: one of ${PERSONA_IDS.join(", ")}.`,
 		}),
 	),
-	/** Unique instance name; defaults to the persona id (or persona-2, … for a
-	 *  multi-model panel of the same lens). */
+	/** Unique instance name; defaults to the persona id. */
 	name: Type.Optional(Type.String()),
 	focus: Type.Optional(
 		Type.String({
 			description: "Specialize the persona for this deliverable.",
 		}),
 	),
-	slot: Type.Optional(Type.String({ description: "default | alternate." })),
-	model: Type.Optional(
-		Type.String({ description: "Explicit provider/id (multi-model panel)." }),
+	effort: Type.Optional(
+		Type.String({
+			description: "How hard to look: low (quick sanity) … xhigh (deep audit).",
+		}),
 	),
-	effort: Type.Optional(Type.String()),
 	required: Type.Optional(
 		Type.Boolean({
 			description:
@@ -245,9 +237,9 @@ export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
 		label: "Panel",
 		description:
 			"Compose a deliverable's review/helper panel from the persona palette " +
-			`(${PERSONA_IDS.join(", ")}): add, remove, list. Add multiple instances ` +
-			"of one persona with different slot/model for a multi-model second " +
-			"pair of eyes on sensitive deliverables. The worker runs the panel.",
+			`(${PERSONA_IDS.join(", ")}): add, remove, list. Reviewers run on the ` +
+			"review model; set effort (low…xhigh) for how hard to look and required " +
+			"to gate ship. The worker runs the panel.",
 		promptSnippet:
 			"panel — compose a deliverable's persona review panel (add/remove/list).",
 		parameters: SubAgentParams,
@@ -285,8 +277,6 @@ export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
 							name,
 							persona: params.persona,
 							...(params.focus ? { focus: params.focus } : {}),
-							...(params.slot ? { slot: params.slot as ModelSlot } : {}),
-							...(params.model ? { model: params.model } : {}),
 							...(params.effort
 								? { effort: params.effort as ThinkingLevel }
 								: {}),
@@ -377,7 +367,6 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							dependsOn: params.dependsOn,
 							stacked: params.stacked,
 							workerMode: params.workerMode,
-							workerSlot: params.workerSlot as ModelSlot | undefined,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						};
 						const deliverable = engine.addDeliverable(input);
@@ -395,7 +384,6 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							dependsOn: params.dependsOn,
 							stacked: params.stacked,
 							workerMode: params.workerMode as AgentMode | undefined,
-							workerSlot: params.workerSlot as ModelSlot | undefined,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
 						if (params.status) {
@@ -584,13 +572,11 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 					case "add": {
 						if (!params.name) return error("add requires name");
 						if (!params.mode) return error("add requires mode");
-						if (!params.slot) return error("add requires slot");
 						if (!params.effort) return error("add requires effort");
 						if (!params.focus) return error("add requires focus");
 						const input: AddAgentInput = {
 							name: params.name,
 							mode: params.mode,
-							slot: params.slot as ModelSlot,
 							effort: params.effort as ThinkingLevel,
 							focus: params.focus,
 							after: params.after ?? [],
@@ -606,7 +592,6 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						if (!params.name) return error("update requires name");
 						engine.updateAgent(deliverableId, params.name, {
 							mode: params.mode as AgentMode | undefined,
-							slot: params.slot as ModelSlot | undefined,
 							effort: params.effort as ThinkingLevel | undefined,
 							focus: params.focus,
 							after: params.after,

@@ -44,7 +44,6 @@ function makeAgent(overrides: Partial<AgentSpec> = {}): AgentSpec {
 	return {
 		name: "security",
 		mode: "read-only",
-		slot: "alternate",
 		effort: "high",
 		focus: "Check for auth vulnerabilities",
 		after: ["worker"],

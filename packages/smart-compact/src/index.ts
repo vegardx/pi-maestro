@@ -70,11 +70,6 @@ export default defineExtension(
 				label: "Summarizer effort",
 				type: "thinking",
 			},
-			{
-				key: "models.summarizer.slot",
-				label: "Summarizer slot",
-				type: "slot",
-			},
 		]);
 
 		// In-flight guard for the proactive compactAt trigger (see turn_end).
@@ -118,7 +113,12 @@ export default defineExtension(
 
 			const resolved = await resolveModelWithin(
 				ctx,
-				{ extension: "smart-compact", role: "summarizer", requireApiKey: true },
+				{
+					extension: "smart-compact",
+					role: "summarizer",
+					tier: "fast",
+					requireApiKey: true,
+				},
 				settings.timeoutMs,
 			);
 			if (!resolved?.apiKey) {

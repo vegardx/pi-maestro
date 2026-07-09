@@ -343,23 +343,25 @@ export class ExecutionAdapter {
 				}
 				this.sessionFiles.set(agentKey, sessionFile);
 
-				// Model plumbing: workers/agents are session-pinned by default
-				// (no --model, cache-warm). Only the deliberate `alternate` slot
-				// resolves an explicit model + effort — the permissioned override.
-				let modelOverride: string | undefined;
-				let thinkingOverride: string | undefined;
-				if (spawnOpts.slot === "alternate") {
-					const resolved = await resolveSpawnModelSafe(this.opts.ctx, {
-						slot: "alternate",
-						effort: spawnOpts.effort as ThinkingLevel | undefined,
-					});
-					modelOverride = resolved?.modelId;
-					thinkingOverride = spawnOpts.effort;
-				}
-				// Display metadata: the alternate override, or the session model.
+				// Model plumbing: the worker runs on the `work` tier. When work
+				// tracks the session model (the common case) we session-pin (no
+				// --model, cache-warm); when it's pinned to a distinct model we
+				// pass --model + effort. Reviewers use the headless subagent path,
+				// not this one.
 				const sessionModelId = this.opts.ctx.model
 					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
 					: undefined;
+				let modelOverride: string | undefined;
+				let thinkingOverride: string | undefined;
+				const resolvedWork = await resolveSpawnModelSafe(this.opts.ctx, {
+					tier: "work",
+					effort: spawnOpts.effort as ThinkingLevel | undefined,
+				});
+				if (resolvedWork && resolvedWork.modelId !== sessionModelId) {
+					modelOverride = resolvedWork.modelId;
+					thinkingOverride =
+						resolvedWork.effort ?? (spawnOpts.effort || undefined);
+				}
 				const displayModelId = modelOverride ?? sessionModelId;
 				if (displayModelId) {
 					const meta = getModelMeta(this.opts.ctx, displayModelId);

@@ -29,10 +29,6 @@ describe("persona registry", () => {
 		]);
 	});
 
-	it("every persona defaults to the default slot (multi-model is plan-time)", () => {
-		for (const p of PERSONAS) expect(p.slot).toBe("default");
-	});
-
 	it("each preamble carries the read-only contract + verdict line", () => {
 		for (const p of PERSONAS) {
 			expect(p.preamble).toContain("read-only");
@@ -82,7 +78,6 @@ describe("buildPersonaProfile", () => {
 				persona: "security-audit",
 				effort: "medium",
 				focus: "token refresh path",
-				model: "openai/o3",
 			},
 			{ cwd: "/wt", model: "openai/o3" },
 		);

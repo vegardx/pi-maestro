@@ -191,7 +191,6 @@ describe("renderAgentsOverview", () => {
 		engine.addAgent("auth", {
 			name: "sec",
 			mode: "read-only",
-			slot: "default",
 			effort: "low",
 			focus: "security",
 			after: ["worker"],
@@ -224,7 +223,7 @@ describe("renderAgentsOverview", () => {
 			"Blocked: ship gate: security-audit requested changes",
 		);
 		// Spec-only agent (not spawned yet) renders without a live suffix.
-		expect(out).toContain("sec (read-only, default, after: worker)");
+		expect(out).toContain("sec (read-only, after: worker)");
 	});
 
 	it("renders without execution state (planning view)", () => {

@@ -10,7 +10,6 @@ import {
 	type AgentMode,
 	DELIVERABLE_STATUSES,
 	type DeliverableStatus,
-	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
@@ -20,7 +19,6 @@ export {
 	type AgentMode,
 	DELIVERABLE_STATUSES,
 	type DeliverableStatus,
-	type ModelSlot,
 	type ThinkingLevel,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
@@ -54,7 +52,6 @@ export interface AgentSpec {
 	/** Unique name within the deliverable (also used in `after` references). */
 	name: string;
 	mode: AgentMode;
-	slot: ModelSlot;
 	effort: ThinkingLevel;
 	/** What this agent should focus on — specific, actionable instructions. */
 	focus: string;
@@ -66,10 +63,10 @@ export interface AgentSpec {
 
 /**
  * One entry in a deliverable's up-front sub-agent plan (Phase 7). The worker
- * runs these as headless one-shot subagents. Multiple entries may share a
- * `persona` with different `slot`/`model` — that's the multi-model escalation
- * (e.g. security-audit on default AND alternate). `required` review verdicts
- * gate ship at the executor.
+ * runs these as headless one-shot subagents. Reviewers always run on the
+ * `review` tier (the model lives in the profile, not the spec) — the planner
+ * sets persona, whether it gates, and how hard to look (`effort`). `required`
+ * review verdicts gate ship at the executor.
  */
 export interface SubAgentSpec {
 	/** Unique name within the deliverable. */
@@ -78,10 +75,6 @@ export interface SubAgentSpec {
 	persona: string;
 	/** Optional per-deliverable specialization of the persona's focus. */
 	focus?: string;
-	/** Model slot override; defaults to the persona's default. */
-	slot?: ModelSlot;
-	/** Explicit model override ("provider/id"), for a multi-model panel. */
-	model?: string;
 	/** Effort override; defaults to the persona's default. */
 	effort?: ThinkingLevel;
 	/** "review" = verdict-gated; "helper" = info scout. Default "review". */
@@ -94,9 +87,7 @@ export interface SubAgentSpec {
 
 export interface WorkerSpec {
 	mode: AgentMode;
-	/** Model slot. Defaults to "default" at resolution time. */
-	slot?: ModelSlot;
-	/** Thinking effort. Defaults to preset default at resolution time. */
+	/** Thinking effort. Defaults to the work tier's effort at resolution time. */
 	effort?: ThinkingLevel;
 	/** Agents that must finish before worker starts. Empty/absent = start first. */
 	after?: string[];

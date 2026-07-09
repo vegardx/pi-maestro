@@ -1,31 +1,29 @@
-// Preset-based role-model resolver.
+// Tier-based role-model resolver.
 //
-// Resolves a model + effort level for a named extension role using the
-// preset system. Resolution priority (high → low):
+// Resolves a model + effort level for a named extension role. Each role maps to a
+// tier (the caller passes `opts.tier`); the tier resolves through the active
+// profile. Resolution priority (high → low):
 //
 //   1. opts.explicit       — per-invocation override (CLI arg)
 //   2. opts.env            — per-session override (env var)
-//   3. extensionConfig.<ext>.models.<role> from settings:
-//      a. role.model (explicit provider/id) → try auth
-//      b. role.slot  → resolve preset → look up slot
-//   4. ctx.model           — active session model
-//   5. null                — feature disabled
+//   3. extensionConfig.<ext>.models.<role>.model — per-role escape hatch
+//   4. the role's TIER, resolved through the active profile (or tracking plan)
+//   5. null                — feature disabled (no session model to fall back to)
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	ResolvedRoleModel,
 	RoleModelConfig,
-	Slot,
 	ThinkingLevel,
+	Tier,
 } from "@vegardx/pi-contracts";
-import { SLOTS } from "@vegardx/pi-contracts";
 import {
 	type ExtensionConfigMap,
 	getConfigObject,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
-import { readModelsConfig } from "./presets.js";
+import { readModelsConfig, resolveTierConfig } from "./profiles.js";
 import { parseModelSpec } from "./resolver.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
@@ -35,6 +33,8 @@ export interface RoleResolveOptions {
 	extension: string;
 	/** Role within the extension (e.g. "agent", "analyze"). */
 	role: string;
+	/** Tier this role resolves through the active profile. Defaults to "work". */
+	tier?: Tier;
 	/** Highest-priority override — typically from a CLI arg. */
 	explicit?: { model?: string; effort?: ThinkingLevel };
 	/** Second-priority override — typically from an env var. */
@@ -60,7 +60,6 @@ const EFFORT_LEVELS: ReadonlySet<string> = new Set([
 	"high",
 	"xhigh",
 ]);
-const SLOT_SET: ReadonlySet<string> = new Set(SLOTS);
 
 /**
  * Validate a raw object as a RoleModelConfig. Returns undefined if the shape
@@ -73,25 +72,13 @@ export function validateRoleModelConfig(
 		typeof raw.model === "string" && raw.model.length > 0
 			? raw.model
 			: undefined;
-	const slot =
-		typeof raw.slot === "string" && SLOT_SET.has(raw.slot)
-			? (raw.slot as Slot)
-			: undefined;
-	const preset =
-		typeof raw.preset === "string" && raw.preset.length > 0
-			? raw.preset
-			: undefined;
 	const effort =
 		typeof raw.effort === "string" && EFFORT_LEVELS.has(raw.effort)
 			? (raw.effort as ThinkingLevel)
 			: undefined;
 
-	// At least one field must be present for the config to be useful
-	if (!model && !slot && !preset && !effort) return undefined;
-	// model bypasses preset — slot/preset are irrelevant with model
-	if (model && slot) return undefined;
-
-	return { model, slot, preset, effort };
+	if (!model && !effort) return undefined;
+	return { model, effort };
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -119,33 +106,8 @@ async function tryAuth(
 	return { model, apiKey: auth.apiKey, headers: auth.headers };
 }
 
-/**
- * Resolve a model directly from a preset slot (default/alternate), bypassing
- * role-config lookup. Use when you want "the alternate slot of the active
- * preset" regardless of whether a role is configured — e.g. the advisor's
- * second-pair-of-eyes model. Returns null when the slot is unconfigured or
- * auth fails (caller then falls back).
- */
-export async function resolveSlotModel(
-	ctx: ExtensionContext,
-	slot: Slot,
-	effort?: ThinkingLevel,
-): Promise<ResolvedRoleModelFull | null> {
-	const modelsConfig = readModelsConfig(ctx.cwd);
-	if (!modelsConfig) return null;
-	const preset = modelsConfig.presets[modelsConfig.active];
-	const slotConfig = preset?.[slot];
-	if (!slotConfig?.model) return null;
-	const result = await tryAuth(ctx, slotConfig.model);
-	if (!result) return null;
-	return {
-		...result,
-		modelId: slotConfig.model,
-		effort: effort ?? slotConfig.effort,
-		source: "preset",
-		preset: modelsConfig.active,
-		slot,
-	};
+function sessionModelId(ctx: ExtensionContext): string | undefined {
+	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
 function readRoleConfig(
@@ -156,6 +118,39 @@ function readRoleConfig(
 	const raw = getConfigObject(merged, extension, `models.${role}`);
 	if (!raw) return undefined;
 	return validateRoleModelConfig(raw);
+}
+
+/**
+ * Resolve a tier directly to a model, with auth — regardless of any role config.
+ * Use when you want "the review tier model" for a spawn (workers, reviewers,
+ * advisor). Returns null when the tier can't resolve (no session model) or auth
+ * fails.
+ */
+export async function resolveTierModel(
+	ctx: ExtensionContext,
+	tier: Tier,
+	opts?: { effort?: ThinkingLevel; requireApiKey?: boolean },
+): Promise<ResolvedRoleModelFull | null> {
+	const cfg = readModelsConfig(ctx.cwd);
+	const resolution = resolveTierConfig(cfg, tier, session(ctx));
+	if (!resolution) return null;
+	const result = await tryAuth(ctx, resolution.modelId, opts?.requireApiKey);
+	if (!result) return null;
+	return {
+		...result,
+		modelId: resolution.modelId,
+		effort: opts?.effort ?? resolution.effort,
+		source: resolution.tracksPlan ? "session" : "profile",
+		profile: resolution.profile,
+		tier,
+	};
+}
+
+function session(
+	ctx: ExtensionContext,
+): { modelId: string; effort?: ThinkingLevel } | undefined {
+	const modelId = sessionModelId(ctx);
+	return modelId ? { modelId } : undefined;
 }
 
 // ─── Main resolver ───────────────────────────────────────────────────────────
@@ -169,6 +164,7 @@ export async function resolveRoleModel(
 	opts: RoleResolveOptions,
 ): Promise<ResolvedRoleModelFull | null> {
 	const { extension, role, requireApiKey } = opts;
+	const tier: Tier = opts.tier ?? "work";
 
 	// Priority 1: explicit override (CLI arg)
 	if (opts.explicit?.model) {
@@ -196,87 +192,46 @@ export async function resolveRoleModel(
 		}
 	}
 
-	// Priority 3: settings (extensionConfig.<ext>.models.<role>)
+	// Priority 3: per-role escape hatch (extensionConfig.<ext>.models.<role>.model)
 	const { merged } = readLayeredExtensionConfig(ctx.cwd);
 	const roleConfig = readRoleConfig(merged, extension, role);
-
-	if (roleConfig) {
-		// 3a: explicit model on the role config
-		if (roleConfig.model) {
-			const result = await tryAuth(ctx, roleConfig.model, requireApiKey);
-			if (result) {
-				return {
-					...result,
-					modelId: roleConfig.model,
-					effort: roleConfig.effort ?? opts.env?.effort,
-					source: "preset",
-				};
-			}
-		}
-
-		// 3b: slot-based resolution via presets
-		const modelsConfig = readModelsConfig(ctx.cwd);
-		if (modelsConfig) {
-			const presetName = roleConfig.preset ?? modelsConfig.active;
-			const preset = modelsConfig.presets[presetName];
-			const slot: Slot = roleConfig.slot ?? "default";
-			const slotConfig = preset?.[slot];
-
-			if (slotConfig?.model) {
-				const result = await tryAuth(ctx, slotConfig.model, requireApiKey);
-				if (result) {
-					return {
-						...result,
-						modelId: slotConfig.model,
-						effort: roleConfig.effort ?? slotConfig.effort ?? opts.env?.effort,
-						source: "preset",
-						preset: presetName,
-						slot,
-					};
-				}
-			}
-		}
-
-		// Role config has only effort — continue to session but carry effort
-		if (roleConfig.effort && !roleConfig.model) {
-			if (ctx.model) {
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
-				if (auth.ok && (!requireApiKey || auth.apiKey)) {
-					return {
-						model: ctx.model,
-						modelId: `${ctx.model.provider}/${ctx.model.id}`,
-						effort: roleConfig.effort,
-						source: "session",
-						apiKey: auth.apiKey,
-						headers: auth.headers,
-					};
-				}
-			}
+	if (roleConfig?.model) {
+		const result = await tryAuth(ctx, roleConfig.model, requireApiKey);
+		if (result) {
+			return {
+				...result,
+				modelId: roleConfig.model,
+				effort: roleConfig.effort ?? opts.env?.effort,
+				source: "profile",
+			};
 		}
 	}
 
-	// Priority 3.5: the ACTIVE PRESET's default slot. An unset (or model-less)
-	// role resolves THROUGH the preset — the configured source of truth —
-	// before the raw session model, so changing the active preset moves every
-	// role that hasn't been pinned. (A role with an explicit slot already
-	// resolved in 3b above; this is the "no role config at all" path.)
-	const presetSlot = await resolveSlotModel(
-		ctx,
-		"default",
-		roleConfig?.effort ?? opts.env?.effort ?? opts.explicit?.effort,
-	);
-	if (presetSlot && (!requireApiKey || presetSlot.apiKey)) {
-		return presetSlot;
+	// Priority 4: the role's TIER, resolved through the active profile.
+	const cfg = readModelsConfig(ctx.cwd);
+	const resolution = resolveTierConfig(cfg, tier, session(ctx));
+	if (resolution) {
+		const result = await tryAuth(ctx, resolution.modelId, requireApiKey);
+		if (result) {
+			return {
+				...result,
+				modelId: resolution.modelId,
+				effort: roleConfig?.effort ?? resolution.effort ?? opts.env?.effort,
+				source: resolution.tracksPlan ? "session" : "profile",
+				profile: resolution.profile,
+				tier,
+			};
+		}
 	}
 
-	// Priority 4: session model fallback
+	// Priority 5: bare session model (covers a role-config effort-only override).
 	if (ctx.model) {
 		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
 		if (auth.ok && (!requireApiKey || auth.apiKey)) {
 			return {
 				model: ctx.model,
 				modelId: `${ctx.model.provider}/${ctx.model.id}`,
-				effort: opts.env?.effort ?? opts.explicit?.effort,
+				effort: roleConfig?.effort ?? opts.env?.effort ?? opts.explicit?.effort,
 				source: "session",
 				apiKey: auth.apiKey,
 				headers: auth.headers,

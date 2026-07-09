@@ -1,17 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSpawnModel } from "../packages/modes/src/spawn-model.js";
 
-// Mock the resolvers. resolveSlotModel defaults to null (slot unconfigured →
-// fall back to the role path); resolveRoleModel returns the session-ish model.
+// Mock the resolver. resolveTierModel resolves a tier → concrete model.
 vi.mock("@vegardx/pi-models", () => ({
-	resolveSlotModel: vi.fn().mockResolvedValue(null),
-	resolveRoleModel: vi.fn().mockResolvedValue({
+	resolveTierModel: vi.fn().mockResolvedValue({
 		model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
 		modelId: "anthropic/claude-sonnet-4-20250514",
 		effort: "medium",
 		apiKey: "sk-test",
 		headers: {},
-		source: "preset",
+		source: "profile",
+		tier: "work",
 	}),
 }));
 
@@ -31,9 +30,9 @@ function mockCtx() {
 describe("resolveSpawnModel", () => {
 	beforeEach(() => vi.clearAllMocks());
 
-	it("resolves default slot", async () => {
+	it("resolves the work tier", async () => {
 		const ctx = mockCtx();
-		const result = await resolveSpawnModel(ctx, { slot: "default" });
+		const result = await resolveSpawnModel(ctx, { tier: "work" });
 		expect(result).not.toBeNull();
 		expect(result!.modelId).toBe("anthropic/claude-sonnet-4-20250514");
 	});
@@ -41,47 +40,37 @@ describe("resolveSpawnModel", () => {
 	it("passes effort override", async () => {
 		const ctx = mockCtx();
 		const result = await resolveSpawnModel(ctx, {
-			slot: "default",
+			tier: "work",
 			effort: "high",
 		});
 		expect(result).not.toBeNull();
 		expect(result!.effort).toBe("high");
 	});
 
-	it("prefers the direct slot resolution over the role", async () => {
-		const { resolveSlotModel, resolveRoleModel } = await import(
-			"@vegardx/pi-models"
-		);
-		(resolveSlotModel as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+	it("resolves a distinct model for the review tier", async () => {
+		const { resolveTierModel } = await import("@vegardx/pi-models");
+		(resolveTierModel as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
 			model: { provider: "openai", id: "o3" },
 			modelId: "openai/o3",
 			effort: "high",
 			apiKey: "sk-alt",
 			headers: {},
-			source: "preset",
-			slot: "alternate",
+			source: "profile",
+			tier: "review",
 		});
 		const ctx = mockCtx();
-		const result = await resolveSpawnModel(ctx, { slot: "alternate" });
+		const result = await resolveSpawnModel(ctx, { tier: "review" });
 		expect(result!.modelId).toBe("openai/o3");
-		expect(resolveRoleModel).not.toHaveBeenCalled();
+		expect(resolveTierModel).toHaveBeenCalledWith(ctx, "review", {
+			effort: undefined,
+		});
 	});
 
-	it("falls back to the agent-alternate role when the slot is unconfigured", async () => {
-		const { resolveRoleModel } = await import("@vegardx/pi-models");
+	it("returns null when tier resolution returns null", async () => {
+		const { resolveTierModel } = await import("@vegardx/pi-models");
+		(resolveTierModel as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
 		const ctx = mockCtx();
-		await resolveSpawnModel(ctx, { slot: "alternate", effort: "low" });
-		expect(resolveRoleModel).toHaveBeenCalledWith(
-			ctx,
-			expect.objectContaining({ role: "agent-alternate" }),
-		);
-	});
-
-	it("returns null when both slot and role resolution return null", async () => {
-		const { resolveRoleModel } = await import("@vegardx/pi-models");
-		(resolveRoleModel as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
-		const ctx = mockCtx();
-		const result = await resolveSpawnModel(ctx, { slot: "default" });
+		const result = await resolveSpawnModel(ctx, { tier: "work" });
 		expect(result).toBeNull();
 	});
 });

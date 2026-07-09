@@ -3,23 +3,17 @@
 // subagent producing a numbered, file:line verdict. This is inspiration-from-
 // Claude-Code/Codex/opencode in CONTENT only — pi does not load .md agent
 // files; a persona resolves to a SpawnProfile (read-only tools + the persona
-// body as appendSystemPrompt + a slot). The plan composes a per-deliverable
-// panel from these; the worker runs it and the executor gates on the
-// `gating` ones' verdicts.
+// body as appendSystemPrompt). Reviewers always run on the `review` tier — the
+// plan composes a per-deliverable panel from these; the worker runs it and the
+// executor gates on the `gating` ones' verdicts.
 
-import type {
-	ModelSlot,
-	SpawnProfile,
-	ThinkingLevel,
-} from "@vegardx/pi-contracts";
+import type { SpawnProfile, ThinkingLevel } from "@vegardx/pi-contracts";
 import type { Deliverable, SubAgentSpec } from "./schema.js";
 
 export interface Persona {
 	readonly id: string;
 	/** One-line scope description (also the routing hint). */
 	readonly focus: string;
-	/** Default preset slot. `default` unless the scope wants a 2nd model. */
-	readonly slot: ModelSlot;
 	readonly effort: ThinkingLevel;
 	/** A standing REQUEST_CHANGES from a gating persona blocks ship. */
 	readonly gating: boolean;
@@ -37,7 +31,6 @@ function persona(
 	id: string,
 	focus: string,
 	opts: {
-		slot?: ModelSlot;
 		effort: ThinkingLevel;
 		gating: boolean;
 		body: string;
@@ -46,7 +39,6 @@ function persona(
 	return {
 		id,
 		focus,
-		slot: opts.slot ?? "default",
 		effort: opts.effort,
 		gating: opts.gating,
 		preamble: `${CONTRACT}\n\n${opts.body}`,

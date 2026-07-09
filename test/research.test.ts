@@ -247,7 +247,7 @@ describe("research tool", () => {
 		const { deps } = makeDeps({
 			subagents: () => capability,
 			engine: () => engine,
-			resolveAdvisorModel: async () => "other/model-x",
+			resolveTierModel: async () => "other/model-x",
 		});
 		await run(createResearchTool(deps), {
 			questions: [{ question: "poke holes in this plan", kind: "advisor" }],
@@ -269,7 +269,7 @@ describe("research tool", () => {
 		const { deps } = makeDeps({
 			subagents: () => capability,
 			engine: () => engine,
-			resolveAdvisorModel: async () => "other/model-x",
+			resolveTierModel: async () => "other/model-x",
 		});
 		await run(createResearchTool(deps), {
 			questions: [

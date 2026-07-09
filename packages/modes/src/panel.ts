@@ -28,8 +28,11 @@ export interface RunPanelDeps {
 	readonly subagents: SubagentsCapabilityV1;
 	/** The worker's worktree — reviewers read the change here (read-only). */
 	readonly cwd: string;
-	/** Resolve a spec's model id (spec.model, or spec.slot via presets). */
-	readonly resolveModel?: (spec: SubAgentSpec) => Promise<string | undefined>;
+	/**
+	 * The `review` tier model id for every reviewer, or undefined when the tier
+	 * tracks the session model (⇒ inherit the default).
+	 */
+	readonly resolveModel?: () => Promise<string | undefined>;
 	readonly timeoutMs?: number;
 }
 
@@ -56,7 +59,7 @@ async function runOne(
 		kind,
 	};
 
-	const model = await deps.resolveModel?.(spec);
+	const model = await deps.resolveModel?.();
 	const profile = buildPersonaProfile(spec, { cwd: deps.cwd, model });
 	if (!profile) {
 		return {

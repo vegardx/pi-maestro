@@ -32,10 +32,6 @@ export type WorkItemKind = (typeof WORK_ITEM_KINDS)[number];
 
 export type AgentMode = "full" | "read-only";
 
-// ─── Model slot ──────────────────────────────────────────────────────────────
-
-export type ModelSlot = "default" | "alternate";
-
 // ─── Minimal cross-boundary summaries ────────────────────────────────────────
 
 /** Minimal deliverable view passed across capability boundaries. */

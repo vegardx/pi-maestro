@@ -33,6 +33,7 @@ import type {
 	RunResult,
 	SpawnProfile,
 	SubagentsCapabilityV1,
+	Tier,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
@@ -49,8 +50,8 @@ export const RESEARCH_KINDS = [
 ] as const;
 export type ResearchKind = (typeof RESEARCH_KINDS)[number];
 
-/** Kinds that run on the different-bias alternate model at high effort. */
-const ALTERNATE_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
+/** Kinds that run on the `review` tier (cross-model second opinion) at high effort. */
+const REVIEW_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
 
 /** Live view of one research run — feeds the agent table and cards. */
 export interface ResearchRunView {
@@ -82,9 +83,13 @@ export interface ResearchDeps {
 	readonly ensurePlanDir: (ctx: ExtensionContext) => string;
 	/** Absolute path to the research-tools extension entry (-e for children). */
 	readonly researchToolsPath: () => string;
-	/** Advisor model (alternate slot); undefined ⇒ session default. */
-	readonly resolveAdvisorModel?: (
+	/**
+	 * Resolve a tier to a pinned model id for a research subagent. Returns
+	 * undefined when the tier tracks the session model (⇒ inherit the default).
+	 */
+	readonly resolveTierModel?: (
 		ctx: ExtensionContext,
+		tier: Tier,
 	) => Promise<string | undefined>;
 	/** Run lifecycle callbacks (widget rows + chat cards). */
 	readonly onRunStarted?: (run: ResearchRunView, ctx: ExtensionContext) => void;
@@ -463,14 +468,13 @@ async function buildResearchProfile(
 ): Promise<SpawnProfile> {
 	const tools =
 		kind === "web" ? [...READ_TOOLS, ...WEB_TOOLS] : [...READ_TOOLS];
-	const model = ALTERNATE_MODEL_KINDS.has(kind)
-		? await deps.resolveAdvisorModel?.(ctx)
-		: undefined;
+	const tier: Tier = REVIEW_MODEL_KINDS.has(kind) ? "review" : "fast";
+	const model = await deps.resolveTierModel?.(ctx, tier);
 	return {
 		profile: "research",
 		cwd: plan.repoPath,
 		tools: { allow: tools },
-		thinking: ALTERNATE_MODEL_KINDS.has(kind) ? "high" : "low",
+		thinking: REVIEW_MODEL_KINDS.has(kind) ? "high" : "low",
 		...(model ? { model } : {}),
 		extraExtensions: [deps.researchToolsPath()],
 		appendSystemPrompt: researcherPreamble(kind),
@@ -576,8 +580,8 @@ export function renderPlanOutline(plan: Plan): string {
 				.map((s) => {
 					const flags = [
 						s.required ? "required" : "advisory",
-						s.model ?? s.slot ?? "default",
-						(s.kind ?? "review") === "helper" ? "helper" : null,
+						(s.kind ?? "review") === "helper" ? "helper" : "review",
+						s.effort ?? null,
 					].filter(Boolean);
 					return `${s.persona} (${flags.join(", ")})`;
 				})

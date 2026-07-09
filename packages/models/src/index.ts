@@ -1,11 +1,16 @@
-// @vegardx/pi-models — preset-based model resolution with slots.
+// @vegardx/pi-models — tier-based model resolution via profiles.
 
 export {
 	getModelMeta,
 	type ModelMeta,
 	shortModelName,
 } from "./model-meta.js";
-export { readModelsConfig } from "./presets.js";
+export {
+	activeProfile,
+	readModelsConfig,
+	resolveTierConfig,
+	type TierResolution,
+} from "./profiles.js";
 export {
 	parseModelSpec,
 	type ResolvedBackgroundModel,
@@ -17,6 +22,6 @@ export {
 	type RoleResolveOptions,
 	resolveRoleModel,
 	resolveRoleModelWithin,
-	resolveSlotModel,
+	resolveTierModel,
 	validateRoleModelConfig,
 } from "./role-resolver.js";

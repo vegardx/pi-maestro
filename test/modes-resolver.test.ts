@@ -123,7 +123,7 @@ describe("getModeRoleModel", () => {
 		expect(result).not.toBeNull();
 		expect(result!.modelId).toBe("openai/gpt-4o");
 		expect(result!.effort).toBe("minimal");
-		expect(result!.source).toBe("preset");
+		expect(result!.source).toBe("profile");
 	});
 });
 

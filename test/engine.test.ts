@@ -95,11 +95,9 @@ describe("PlanEngine — deliverables", () => {
 		engine.addDeliverable({ title: "Auth", workerMode: "full" });
 		engine.updateDeliverable("auth", {
 			body: "updated body",
-			workerSlot: "alternate",
 		});
 		const g = engine.get().deliverables[0];
 		expect(g.body).toBe("updated body");
-		expect(g.worker.slot).toBe("alternate");
 	});
 
 	it("sets deliverable status with transition check", () => {
@@ -155,7 +153,6 @@ describe("PlanEngine — agents", () => {
 		const agent = engine.addAgent("auth", {
 			name: "security",
 			mode: "read-only",
-			slot: "alternate",
 			effort: "high",
 			focus: "Check for timing attacks",
 			after: ["worker"],
@@ -175,7 +172,6 @@ describe("PlanEngine — agents", () => {
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
-			slot: "default",
 			effort: "low",
 			focus: "general review",
 			after: ["worker"],
@@ -200,7 +196,6 @@ describe("PlanEngine — agents", () => {
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
-			slot: "default",
 			effort: "low",
 			focus: "review",
 			after: ["worker"],
@@ -220,7 +215,6 @@ describe("PlanEngine — agents", () => {
 		engine.addAgent("auth", {
 			name: "review",
 			mode: "read-only",
-			slot: "default",
 			effort: "low",
 			focus: "review",
 			after: ["worker"],
@@ -229,7 +223,6 @@ describe("PlanEngine — agents", () => {
 			engine.addAgent("auth", {
 				name: "review",
 				mode: "read-only",
-				slot: "default",
 				effort: "low",
 				focus: "dup",
 				after: [],
@@ -249,7 +242,6 @@ describe("PlanEngine — agents", () => {
 			engine.addAgent("auth", {
 				name: "worker",
 				mode: "read-only",
-				slot: "default",
 				effort: "low",
 				focus: "x",
 				after: [],

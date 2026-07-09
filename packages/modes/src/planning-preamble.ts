@@ -155,7 +155,9 @@ ${CONVERGENCE}
 - Deliverables with \`dependsOn\` create stacked PRs (B branches from A's tip).
 - Do NOT implement code yourself.
 - Worker mode is always "full" (read+write+bash). Support agents are "read-only".
-- Default slot for workers. Alternate slot for review/advisor agents.`;
+- Reviewers run on the review model automatically — never pick a model. Per
+  reviewer, set the persona, whether it's \`required\` (gates ship), and \`effort\`
+  (low = quick sanity … xhigh = deep audit).`;
 }
 
 /**

@@ -4,10 +4,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
-import { readModelsConfig } from "@vegardx/pi-models";
+import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
 import { showConfigMenu } from "./menu.js";
-import { updateSettingsFile } from "./writer.js";
 
 /** Global registry of declared settings, populated by extensions. */
 export const settingsRegistry: Map<string, SettingDeclaration[]> = new Map();
@@ -36,11 +35,11 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open maestro config menu. Subcommands: show, get, set, reset, preset.",
+				"Open maestro config menu. Subcommands: show, get, set, reset, profiles.",
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					showConfigMenu(ctx, pi.getThinkingLevel?.());
+					showConfigMenu(ctx);
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx);
@@ -53,22 +52,15 @@ export default defineExtension(
 			},
 		});
 
-		// Auto-switch models.active when user changes model via /model
+		// The session model selects the active profile (derived from target
+		// membership \u2014 no stored `active`). Notify which profile /model activated.
 		pi.on("model_select", (event, ctx) => {
 			if (event.source === "restore") return;
-			const provider = event.model.provider;
 			const config = readModelsConfig(ctx.cwd);
-			if (config?.presets[provider] && config.active !== provider) {
-				updateSettingsFile("project", ctx.cwd, undefined, (raw) => {
-					const models =
-						typeof raw.models === "object" && raw.models !== null
-							? (raw.models as Record<string, unknown>)
-							: {};
-					models.active = provider;
-					raw.models = models;
-				});
-				ctx.ui.notify(`Preset \u2192 ${provider}`, "info");
-			}
+			if (!config) return;
+			const modelId = `${event.model.provider}/${event.model.id}`;
+			const active = activeProfile(config, modelId);
+			if (active) ctx.ui.notify(`Profile \u2192 ${active.name}`, "info");
 		});
 	},
 );

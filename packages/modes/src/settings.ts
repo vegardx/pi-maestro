@@ -4,7 +4,7 @@
 // of pi's native `compaction.*` and of `extensionConfig.smart-compact.*`.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ModesRole, ThinkingLevel } from "@vegardx/pi-contracts";
+import type { ModesRole, ThinkingLevel, Tier } from "@vegardx/pi-contracts";
 import {
 	type ResolvedRoleModelFull,
 	resolveRoleModel,
@@ -198,9 +198,16 @@ function explicitForRole(role: ModesRole): {
 	}
 }
 
+/** Fixed role → tier mapping. The tier resolves through the active profile. */
+const ROLE_TIER: Record<ModesRole, Tier> = {
+	agent: "work",
+	analyze: "work",
+	classifier: "fast",
+};
+
 /**
  * Resolve a model + effort level for a modes role.
- * Priority: CLI arg → env var → settings (preset/tier) → session model → null.
+ * Priority: CLI arg → env var → role escape hatch → the role's tier → session.
  */
 export async function getModeRoleModel(
 	ctx: ExtensionContext,
@@ -211,6 +218,7 @@ export async function getModeRoleModel(
 	return resolveRoleModel(ctx, {
 		extension: NAME,
 		role,
+		tier: ROLE_TIER[role],
 		explicit: explicit.model || explicit.effort ? explicit : undefined,
 		env: env.model || env.effort ? env : undefined,
 	});

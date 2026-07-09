@@ -7,6 +7,7 @@
 import {
 	type AgentToolResult,
 	defineTool,
+	type ExtensionContext,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -29,8 +30,10 @@ export interface ReviewToolDeps {
 		| Promise<readonly SubAgentSpec[]>;
 	/** The worktree the reviewers read (usually process.cwd()). */
 	readonly cwd: () => string;
-	/** Resolve a spec's model id (spec.model, or spec.slot via presets). */
-	readonly resolveModel?: (spec: SubAgentSpec) => Promise<string | undefined>;
+	/** The `review` tier model for every reviewer (undefined ⇒ inherit default). */
+	readonly resolveModel?: (
+		ctx: ExtensionContext,
+	) => Promise<string | undefined>;
 	/** Report the round's verdicts upward for the executor ship-gate. */
 	readonly reportVerdicts?: (results: readonly PanelResult[]) => void;
 	readonly timeoutMs?: () => number;
@@ -53,7 +56,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		promptSnippet:
 			"review — run your review panel (reviewers report findings + verdicts).",
 		parameters: ReviewParams,
-		async execute(): Promise<Result> {
+		async execute(_id, _params, _signal, _onUpdate, ctx): Promise<Result> {
 			const subagents = deps.subagents();
 			if (!subagents) {
 				return {
@@ -79,7 +82,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			const results = await runReviewPanel(panel, {
 				subagents,
 				cwd: deps.cwd(),
-				resolveModel: deps.resolveModel,
+				resolveModel: deps.resolveModel
+					? () => deps.resolveModel!(ctx)
+					: undefined,
 				timeoutMs: deps.timeoutMs?.(),
 			});
 			deps.reportVerdicts?.(results);

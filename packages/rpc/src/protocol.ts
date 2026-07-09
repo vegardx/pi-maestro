@@ -6,7 +6,6 @@
 
 import type {
 	Answers,
-	ModelSlot,
 	Questionnaire,
 	ThinkingLevel,
 	TokenSnapshot,
@@ -105,8 +104,6 @@ export interface PanelReviewerSpec {
 	readonly name: string;
 	readonly persona: string;
 	readonly focus?: string;
-	readonly slot?: ModelSlot;
-	readonly model?: string;
 	readonly effort?: ThinkingLevel;
 	readonly kind?: "review" | "helper";
 	readonly required?: boolean;

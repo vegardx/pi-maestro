@@ -73,13 +73,13 @@ describe("/settings command", () => {
 			expect(ctx.messages[0]).toContain("[project]");
 		});
 
-		it("shows models presets section", () => {
+		it("shows model profiles section", () => {
 			writeJson(join(root, ".pi", "settings.json"), {
 				models: {
-					active: "anthropic",
-					presets: {
-						anthropic: {
-							default: "anthropic/claude-sonnet-4-5",
+					profiles: {
+						opus: {
+							targets: ["anthropic/claude-sonnet-4-5"],
+							review: { model: "openai/gpt-4o", effort: "high" },
 						},
 					},
 				},
@@ -87,9 +87,10 @@ describe("/settings command", () => {
 
 			const ctx = mockCtx(root);
 			handleSettingsCommand("show", ctx);
-			expect(ctx.messages[0]).toContain("Models");
-			expect(ctx.messages[0]).toContain("active preset: anthropic");
-			expect(ctx.messages[0]).toContain("anthropic (active)");
+			expect(ctx.messages[0]).toContain("Model profiles");
+			expect(ctx.messages[0]).toContain("opus");
+			expect(ctx.messages[0]).toContain("anthropic/claude-sonnet-4-5");
+			expect(ctx.messages[0]).toContain("openai/gpt-4o");
 		});
 	});
 
@@ -185,56 +186,31 @@ describe("/settings command", () => {
 		});
 	});
 
-	describe("preset", () => {
-		it("shows presets when no arg", () => {
+	describe("profiles", () => {
+		it("lists profiles and their tiers", () => {
 			writeJson(join(root, ".pi", "settings.json"), {
 				models: {
-					active: "anthropic",
-					presets: {
-						anthropic: { default: "anthropic/claude-sonnet-4-5" },
-						openai: { default: "openai/gpt-4o" },
+					profiles: {
+						opus: {
+							targets: ["anthropic/claude-sonnet-4-5"],
+							review: { model: "openai/gpt-4o" },
+						},
+						gpt: { targets: ["openai/gpt-5.5"] },
 					},
 				},
 			});
 
 			const ctx = mockCtx(root);
-			handleSettingsCommand("preset", ctx);
-			expect(ctx.messages[0]).toContain("Active preset: anthropic");
-			expect(ctx.messages[0]).toContain("openai");
+			handleSettingsCommand("profiles", ctx);
+			expect(ctx.messages[0]).toContain("opus");
+			expect(ctx.messages[0]).toContain("gpt");
+			expect(ctx.messages[0]).toContain("Switch profiles with /model");
 		});
 
-		it("switches preset", () => {
-			writeJson(join(root, ".pi", "settings.json"), {
-				models: {
-					active: "anthropic",
-					presets: {
-						anthropic: { default: "anthropic/claude-sonnet-4-5" },
-						openai: { default: "openai/gpt-4o" },
-					},
-				},
-			});
-
+		it("reports when no profiles are configured", () => {
 			const ctx = mockCtx(root);
-			handleSettingsCommand("preset openai", ctx);
-			expect(ctx.messages[0]).toContain("✓ Preset → openai");
-
-			const raw = JSON.parse(
-				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
-			);
-			expect(raw.models.active).toBe("openai");
-		});
-
-		it("errors on unknown preset", () => {
-			writeJson(join(root, ".pi", "settings.json"), {
-				models: {
-					active: "anthropic",
-					presets: { anthropic: { default: "anthropic/claude-sonnet-4-5" } },
-				},
-			});
-
-			const ctx = mockCtx(root);
-			handleSettingsCommand("preset unknown", ctx);
-			expect(ctx.messages[0]).toContain("not found");
+			handleSettingsCommand("profiles", ctx);
+			expect(ctx.messages[0]).toContain("No model profiles");
 		});
 	});
 
@@ -269,23 +245,6 @@ describe("/settings command", () => {
 			);
 			expect(items).toContain("high");
 			expect(items).toContain("off");
-		});
-
-		it("completes preset names", () => {
-			writeJson(join(root, ".pi", "settings.json"), {
-				models: {
-					active: "anthropic",
-					presets: {
-						anthropic: { default: "anthropic/claude-sonnet-4-5" },
-						openai: { default: "openai/gpt-4o" },
-					},
-				},
-			});
-
-			const ctx = mockCtx(root);
-			const items = getSettingsCompletions("preset o", ctx);
-			expect(items).toContain("openai");
-			expect(items).not.toContain("anthropic");
 		});
 	});
 });

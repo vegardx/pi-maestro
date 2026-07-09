@@ -1,4 +1,9 @@
-// Interactive /maestro menu — TUI overlay with scope columns.
+// Interactive /maestro menu — TUI overlay for model profiles + scoped settings.
+//
+// A profile owns a SET of /model targets (exclusive across profiles) and pins the
+// work/review/fast tiers; `plan` always tracks the session model. Activation is
+// derived — the profile whose targets include the current /model is active. There
+// is no "activate" action here; switching /model switches the profile.
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
@@ -7,8 +12,8 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { SLOTS } from "@vegardx/pi-contracts";
-import { readModelsConfig } from "@vegardx/pi-models";
+import { PINNABLE_TIERS } from "@vegardx/pi-contracts";
+import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { settingsRegistry } from "./extension.js";
 import { readLayeredExtensionConfig } from "./reader.js";
 import { updateSettingsFile, writeExtensionConfigKey } from "./writer.js";
@@ -16,22 +21,21 @@ import { updateSettingsFile, writeExtensionConfigKey } from "./writer.js";
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 interface SettingRow {
-	/** Display label (e.g. "models.agent.tier") */
+	/** Display label. */
 	label: string;
-	/** Extension name (e.g. "modes") */
+	/** Extension name (e.g. "modes") or "@profiles" for the profile section. */
 	extension: string;
-	/** Dot-path key within the extension (e.g. "models.agent.tier") */
+	/** Dot-path key within the extension, or a @profiles-encoded key. */
 	key: string;
-	/** Value at global scope, or undefined */
 	global: string | undefined;
-	/** Value at project scope, or undefined */
 	project: string | undefined;
-	/** Value at session scope, or undefined */
 	session: string | undefined;
-	/** If true, only the global column is editable (project/session show ·) */
+	/** If true, only the global column is editable (project/session show ·). */
 	globalOnly?: boolean;
-	/** Default value (shown dimmed in global column when no explicit value set) */
+	/** Default value (shown dimmed in global column when no explicit value set). */
 	defaultValue?: string;
+	/** Profile-section rows are not scope-editable; they open dedicated pickers. */
+	profileRow?: boolean;
 }
 
 interface Section {
@@ -99,8 +103,12 @@ function formatVal(v: unknown): string | undefined {
 	if (v === undefined) return undefined;
 	if (typeof v === "string") return v;
 	if (typeof v === "number" || typeof v === "boolean") return String(v);
-	if (Array.isArray(v)) return v.join(" \u2192 ");
+	if (Array.isArray(v)) return v.join(" → ");
 	return JSON.stringify(v);
+}
+
+function sessionModelId(ctx: ExtensionContext): string | undefined {
+	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
 // ─── Known settings from capability registry ───────────────────────────────
@@ -137,45 +145,85 @@ function sessionKey(extension: string, key: string): string {
 
 // ─── Build sections ─────────────────────────────────────────────────────────
 
+/** Human display for a tier config: pinned model+effort, or "= plan". */
+function tierDisplay(
+	ctx: ExtensionContext,
+	tc: { model?: string; effort?: string } | undefined,
+): string {
+	if (!tc?.model) return "= plan";
+	const name = resolveModelName(ctx, tc.model);
+	return tc.effort ? `${name} · ${tc.effort}` : name;
+}
+
+function resolveModelName(ctx: ExtensionContext, modelId: string): string {
+	if (!modelId.includes("/")) return modelId;
+	const [provider, ...rest] = modelId.split("/");
+	const model = ctx.modelRegistry.find(provider, rest.join("/"));
+	return (model as { name?: string } | undefined)?.name ?? modelId;
+}
+
 function buildSections(ctx: ExtensionContext): Section[] {
 	const { global, project } = readLayeredExtensionConfig(ctx.cwd);
 	const modelsConfig = readModelsConfig(ctx.cwd);
+	const activeName = activeProfile(modelsConfig, sessionModelId(ctx))?.name;
 	const sections: Section[] = [];
 
-	// Model presets section (always first)
-	const presetRows: SettingRow[] = [];
+	// Model profiles section (always first)
+	const profileRows: SettingRow[] = [];
 	if (modelsConfig) {
-		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
-			// Preset name row (navigable for delete/rename/activate)
-			presetRows.push({
+		for (const [name, profile] of Object.entries(modelsConfig.profiles)) {
+			profileRows.push({
 				label: name,
-				extension: "@presets",
+				extension: "@profiles",
 				key: `@name.${name}`,
-				global: name === modelsConfig.active ? "active" : undefined,
+				global: name === activeName ? "active" : undefined,
 				project: undefined,
 				session: undefined,
 				globalOnly: true,
+				profileRow: true,
 			});
-			for (const slot of SLOTS) {
-				const slotConfig = preset[slot];
-				const display = slotConfig?.model
-					? slotConfig.effort
-						? `${slotConfig.model} \u00b7 ${slotConfig.effort}`
-						: slotConfig.model
-					: undefined;
-				presetRows.push({
-					label: `  ${slot}`,
-					extension: "@presets",
-					key: `${name}.${slot}`,
-					global: display,
+			// targets
+			profileRows.push({
+				label: "  targets",
+				extension: "@profiles",
+				key: `${name}.@targets`,
+				global: profile.targets.length
+					? profile.targets.map((t) => resolveModelName(ctx, t)).join(", ")
+					: undefined,
+				project: undefined,
+				session: undefined,
+				globalOnly: true,
+				profileRow: true,
+			});
+			// plan (read-only, always the session model)
+			profileRows.push({
+				label: "  plan",
+				extension: "@profiles",
+				key: `${name}.plan`,
+				global: ctx.model
+					? `${resolveModelName(ctx, sessionModelId(ctx)!)} · = /model`
+					: "= /model",
+				project: undefined,
+				session: undefined,
+				globalOnly: true,
+				profileRow: true,
+			});
+			// pinnable tiers
+			for (const tier of PINNABLE_TIERS) {
+				profileRows.push({
+					label: `  ${tier}`,
+					extension: "@profiles",
+					key: `${name}.${tier}`,
+					global: tierDisplay(ctx, profile[tier]),
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
+					profileRow: true,
 				});
 			}
 		}
 	}
-	sections.push({ title: "presets", rows: presetRows });
+	sections.push({ title: "profiles", rows: profileRows });
 
 	// Extension settings from capability registry
 	const registered = getRegisteredSettings();
@@ -212,13 +260,14 @@ function buildSections(ctx: ExtensionContext): Section[] {
 
 // ─── Interactive Component ──────────────────────────────────────────────────
 
-const KEY_UP = "\u001b[A";
-const KEY_DOWN = "\u001b[B";
-const KEY_LEFT = "\u001b[D";
-const KEY_RIGHT = "\u001b[C";
+const KEY_UP = "[A";
+const KEY_DOWN = "[B";
+const KEY_LEFT = "[D";
+const KEY_RIGHT = "[C";
 const KEY_ENTER = "\r";
-const KEY_ESC = "\u001b";
-const KEY_BACKSPACE = "\u007f";
+const KEY_ESC = "";
+const KEY_BACKSPACE = "";
+const KEY_SPACE = " ";
 
 type Mode =
 	| "browse"
@@ -227,12 +276,12 @@ type Mode =
 	| "naming"
 	| "renaming"
 	| "confirm-delete"
-	| "slot-pick-model"
-	| "slot-pick-effort";
+	| "tier-pick-model"
+	| "tier-pick-effort"
+	| "targets";
 
 const COL_NAMES = ["global", "project", "session"] as const;
 type ColIdx = 0 | 1 | 2;
-type PresetColIdx = 0 | 1;
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -255,37 +304,30 @@ interface OptionItem {
 	value: string;
 }
 
-function getOptionsForKey(
-	key: string,
-	extension: string,
-	ctx: ExtensionContext,
-): OptionItem[] | null {
+function getOptionsForKey(key: string): OptionItem[] | null {
 	if (key.endsWith(".thinking") || key.endsWith(".effort"))
 		return THINKING_LEVELS.map((v) => ({ label: v, value: v }));
-	if (key.endsWith(".slot")) return SLOTS.map((v) => ({ label: v, value: v }));
-	if (key.endsWith(".model") || extension === "@presets") {
-		return pickerModels(ctx).map((m) => {
-			const authed = ctx.modelRegistry.hasConfiguredAuth(m);
-			const base = m.name || `${m.provider}/${m.id}`;
-			return {
-				label: authed ? base : `${base} · needs auth`,
-				value: `${m.provider}/${m.id}`,
-			};
-		});
-	}
 	return null;
 }
 
 /**
  * Models to offer when picking one. Prefer authed models (scoped, matches
  * /model, doesn't overflow the screen); fall back to ALL known models only
- * when nothing is authed yet — the clean-config case where the scoped list
- * would be empty and the slot unsettable.
+ * when nothing is authed yet — the clean-config case.
  */
 function pickerModels(ctx: ExtensionContext) {
 	const authed = ctx.modelRegistry.getAvailable();
 	return authed.length > 0 ? authed : ctx.modelRegistry.getAll();
 }
+
+interface PickerModel {
+	modelId: string;
+	name: string;
+	adaptive: boolean;
+}
+
+/** The "= plan" pseudo-entry the tier model picker offers first. */
+const TRACK_PLAN = "@plan";
 
 class ConfigMenuComponent implements Component, Focusable {
 	focused = true;
@@ -294,27 +336,24 @@ class ConfigMenuComponent implements Component, Focusable {
 	private flatRows: SettingRow[] = [];
 	private cursor = 0;
 	private col: ColIdx = 0;
-	private presetCol: PresetColIdx = 0;
 	private mode: Mode = "browse";
 	private editBuffer = "";
 	private options: Array<{ label: string; value: string }> = [];
 	private optionCursor = 0;
 	private statusMessage = "";
-	private pendingDeletePreset = "";
-	private deleteReferences: string[] = [];
-	private slotPickerModels: Array<{
-		modelId: string;
-		name: string;
-		adaptive: boolean;
-	}> = [];
-	private slotPickerEfforts: Array<{
-		level: string;
-		desc?: string;
-	}> = [];
-	private slotPickerCursor = 0;
-	private slotPickerSelectedModel = "";
-	private slotPickerModelName = "";
-	private slotPickerAdaptive = false;
+	private pendingDeleteProfile = "";
+	// Tier picker state
+	private tierPickerModels: PickerModel[] = [];
+	private tierPickerEfforts: Array<{ level: string; desc?: string }> = [];
+	private tierPickerCursor = 0;
+	private tierPickerSelectedModel = "";
+	private tierPickerModelName = "";
+	private tierPickerAdaptive = false;
+	// Targets multi-select state
+	private targetModels: PickerModel[] = [];
+	private targetSelected: Set<string> = new Set();
+	private targetOwner: Map<string, string> = new Map();
+	private targetCursor = 0;
 	private readonly palette: Palette;
 	private readonly ctx: ExtensionContext;
 	private readonly done: (result: undefined) => void;
@@ -340,64 +379,18 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 	}
 
-	/** Is the row in the preset definitions area (top section)? */
-	private isPresetDefRow(row?: SettingRow): boolean {
-		if (!row) return false;
-		return row.extension === "@presets";
+	private isProfileRow(row?: SettingRow): boolean {
+		return row?.extension === "@profiles";
+	}
+
+	private isNameRow(row?: SettingRow): boolean {
+		return Boolean(row?.key.startsWith("@name."));
 	}
 
 	private effective(row: SettingRow): string {
 		const val =
-			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "\u2014";
-		// For slot fields, resolve to the actual model from the active preset
-		if (
-			row.key.endsWith(".slot") &&
-			(val === "default" || val === "alternate")
-		) {
-			return this.resolveSlotToModel(val) ?? val;
-		}
-		return this.displayModel(row, val);
-	}
-
-	/** Resolve a slot value to the human-readable model name from active preset. */
-	private resolveSlotToModel(slot: string): string | undefined {
-		const config = readModelsConfig(this.ctx.cwd);
-		if (!config) return undefined;
-		const preset = config.presets[config.active];
-		if (!preset) return undefined;
-		const slotConfig = slot === "alternate" ? preset.alternate : preset.default;
-		const modelId = slotConfig?.model;
-		if (!modelId) return undefined;
-		if (!modelId.includes("/")) return modelId;
-		const [provider, ...rest] = modelId.split("/");
-		const id = rest.join("/");
-		const model = this.ctx.modelRegistry.find(provider, id);
-		return (model as { name?: string } | undefined)?.name ?? modelId;
-	}
-
-	/** Resolve provider/id to human-readable model name for display. */
-	private displayModel(row: SettingRow, val: string): string {
-		if (val === "\u2014") return val;
-		const isModelField =
-			row.key.endsWith(".model") ||
-			(row.extension === "@presets" && !row.key.startsWith("@name."));
-		if (!isModelField) return val;
-		// Handle combined "model · effort" format from slot rows
-		const sep = " \u00b7 ";
-		if (val.includes(sep)) {
-			const [modelPart, effortPart] = val.split(sep);
-			const name = this.resolveModelName(modelPart);
-			return `${name} \u00b7 ${effortPart}`;
-		}
-		return this.resolveModelName(val);
-	}
-
-	private resolveModelName(val: string): string {
-		if (!val.includes("/")) return val;
-		const [provider, ...rest] = val.split("/");
-		const id = rest.join("/");
-		const model = this.ctx.modelRegistry.find(provider, id);
-		return (model as { name?: string } | undefined)?.name ?? val;
+			row.session ?? row.project ?? row.global ?? row.defaultValue ?? "—";
+		return val;
 	}
 
 	invalidate(): void {}
@@ -406,342 +399,345 @@ class ConfigMenuComponent implements Component, Focusable {
 		const p = this.palette;
 		const lines: string[] = [];
 
-		// Layout
 		const innerW = _width - 4;
-		const labelW = Math.max(20, Math.floor(innerW * 0.25));
-		const colW = Math.min(30, Math.max(8, Math.floor(innerW * 0.14)));
+		const labelW = Math.max(18, Math.floor(innerW * 0.24));
+		const colW = Math.min(24, Math.max(8, Math.floor(innerW * 0.14)));
 		const spacerTotal = Math.max(0, innerW - labelW - colW * 4);
 		const spacer1 = Math.floor(spacerTotal * 0.6);
 		const spacer2 = spacerTotal - spacer1;
 		const boxW = _width;
 
 		const line = (content: string): string => {
-			const raw = `${p.dim("\u2502")} ${visPad(content, innerW)} ${p.dim("\u2502")}`;
+			const raw = `${p.dim("│")} ${visPad(content, innerW)} ${p.dim("│")}`;
 			if (visibleWidth(raw) > _width) return truncateToWidth(raw, _width);
 			return raw;
 		};
 
-		// Title bar
-		const title = " maestro config ";
-		const topFill = "\u2500".repeat(Math.max(boxW - 3 - title.length, 0));
-		lines.push(p.dim(`\u256d\u2500${title}${topFill}\u256e`));
+		const title = " maestro · models ";
+		const topFill = "─".repeat(Math.max(boxW - 3 - title.length, 0));
+		lines.push(p.dim(`╭─${title}${topFill}╮`));
 
-		// Slot picker modes take over the body
-		if (this.mode === "slot-pick-model") {
-			const row = this.flatRows[this.cursor];
-			lines.push(line(""));
-			lines.push(
-				line(`  ${p.accent(`Select model for ${row?.key ?? "slot"}`)}`),
-			);
-			lines.push(line(""));
-			for (let i = 0; i < this.slotPickerModels.length; i++) {
-				const m = this.slotPickerModels[i];
-				const ptr = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
-				const badge = m.adaptive ? p.muted(" [adaptive]") : "";
-				lines.push(line(`  ${ptr}${m.name}${badge}`));
-			}
-			lines.push(line(""));
-		} else if (this.mode === "slot-pick-effort") {
-			const badge = this.slotPickerAdaptive ? p.muted(" [adaptive]") : "";
-			lines.push(line(""));
-			lines.push(
-				line(
-					`  ${p.accent(`Select effort for ${this.slotPickerModelName}`)}${badge}`,
-				),
-			);
-			lines.push(line(""));
-			if (this.slotPickerAdaptive) {
-				lines.push(
-					line(
-						p.muted(
-							"  Thinking is adaptive \u2014 the model decides how deeply to reason.",
-						),
-					),
-				);
-				lines.push(
-					line(p.muted("  Effort controls the ceiling, not a fixed budget.")),
-				);
-				lines.push(line(""));
-			}
-			for (let i = 0; i < this.slotPickerEfforts.length; i++) {
-				const e = this.slotPickerEfforts[i];
-				const ptr = i === this.slotPickerCursor ? p.accent("\u25b6 ") : "  ";
-				const desc = e.desc ? p.muted(`  ${e.desc}`) : "";
-				lines.push(line(`  ${ptr}${e.level}${desc}`));
-			}
-			lines.push(line(""));
+		if (this.mode === "tier-pick-model") {
+			this.renderTierModelPicker(lines, line);
+		} else if (this.mode === "tier-pick-effort") {
+			this.renderTierEffortPicker(lines, line);
+		} else if (this.mode === "targets") {
+			this.renderTargetsPicker(lines, line);
 		} else {
-			// ─── Top section: Preset definitions ───────────────────────────────
-			const presetModelW = Math.min(30, Math.floor(innerW * 0.3));
-			const presetEffortW = Math.min(15, Math.floor(innerW * 0.12));
-			const presetSpacer = Math.max(
-				0,
-				innerW - labelW - presetModelW - presetEffortW,
-			);
+			this.renderBrowse(lines, line, {
+				innerW,
+				labelW,
+				colW,
+				spacer1,
+				spacer2,
+			});
+		}
 
-			const presetHdr =
-				visPad("presets", labelW) +
-				" ".repeat(presetSpacer) +
-				[
-					["model", presetModelW],
-					["effort", presetEffortW],
-				]
-					.map(([name, w], i) => {
-						const cell = visPad(name as string, w as number);
-						const active =
-							i === this.presetCol &&
-							this.mode === "browse" &&
-							this.isPresetDefRow(this.flatRows[this.cursor]);
-						return active ? p.accent(cell) : p.muted(cell);
-					})
-					.join("");
-			lines.push(line(""));
-			lines.push(line(presetHdr));
-			lines.push(line(""));
+		this.renderOverlays(lines, line);
+		this.renderHelp(lines, line);
+		lines.push(p.dim(`╰${"─".repeat(boxW - 2)}╯`));
+		return lines;
+	}
 
-			for (let fi = 0; fi < this.flatRows.length; fi++) {
-				const r = this.flatRows[fi];
-				if (!this.isPresetDefRow(r)) continue;
-				const selected = fi === this.cursor;
-				const ptr = selected ? p.accent("\u25b6 ") : "  ";
+	private renderBrowse(
+		lines: string[],
+		line: (s: string) => string,
+		dims: {
+			innerW: number;
+			labelW: number;
+			colW: number;
+			spacer1: number;
+			spacer2: number;
+		},
+	): void {
+		const p = this.palette;
+		const { innerW, labelW, colW, spacer1, spacer2 } = dims;
 
-				if (r.key.startsWith("@name.")) {
-					const nm = r.key.slice(6);
-					const isActive = r.global === "active";
-					const suffix = isActive ? p.muted(" (active)") : "";
-					const nameText = isActive ? p.heading(nm) : p.dim(nm);
-					lines.push(line(`${ptr}${nameText}${suffix}`));
+		// ─── Profiles section ───────────────────────────────────────────────
+		const modelW = Math.min(34, Math.floor(innerW * 0.42));
+		lines.push(line(""));
+		lines.push(line(p.heading("profiles")));
+		lines.push(line(""));
+		for (let fi = 0; fi < this.flatRows.length; fi++) {
+			const r = this.flatRows[fi];
+			if (!this.isProfileRow(r)) continue;
+			const selected = fi === this.cursor;
+			const ptr = selected ? p.accent("▶ ") : "  ";
+			if (this.isNameRow(r)) {
+				const nm = r.key.slice(6);
+				const isActive = r.global === "active";
+				const suffix = isActive ? p.muted(" (active · via /model)") : "";
+				const nameText = isActive ? p.heading(nm) : p.dim(nm);
+				lines.push(line(`${ptr}${nameText}${suffix}`));
+			} else {
+				const label = visPad(r.label, labelW - 2);
+				const raw = r.global ?? "= plan";
+				const readOnly = r.key.endsWith(".plan");
+				let cell: string;
+				if (selected && !readOnly) {
+					const inner = truncateToWidth(raw, modelW - 4);
+					cell = p.accent(visPad(`[${inner}]`, modelW));
+				} else if (readOnly) {
+					cell = p.dim(visPad(truncateToWidth(raw, modelW - 1), modelW));
+				} else if (r.global) {
+					cell = visPad(truncateToWidth(raw, modelW - 1), modelW);
 				} else {
-					// Determine if this slot belongs to the active preset
-					const presetName = r.key.split(".")[0];
-					const isActivePreset = this.sections[0]?.rows.some(
-						(row) =>
-							row.key === `@name.${presetName}` && row.global === "active",
-					);
-					const label = visPad(r.label, labelW - 2);
-					const raw = r.global ?? "";
-					const sep = " \u00b7 ";
-					let modelVal = raw;
-					let effortVal = "";
-					if (raw.includes(sep)) {
-						[modelVal, effortVal] = raw.split(sep);
-					}
-					const modelDisp = this.resolveModelName(modelVal) || "\u2014";
-					const effortDisp = effortVal || "\u2014";
-
-					let mCell = visPad(
-						truncateToWidth(modelDisp, presetModelW - 1),
-						presetModelW,
-					);
-					let eCell = visPad(
-						truncateToWidth(effortDisp, presetEffortW - 1),
-						presetEffortW,
-					);
-					if (selected && this.presetCol === 0) {
-						const inner = truncateToWidth(modelDisp, presetModelW - 4);
-						mCell = p.accent(visPad(`[${inner}]`, presetModelW));
-					} else if (!modelVal) {
-						mCell = p.dim(mCell);
-					}
-					if (selected && this.presetCol === 1) {
-						const inner = truncateToWidth(effortDisp, presetEffortW - 4);
-						eCell = p.accent(visPad(`[${inner}]`, presetEffortW));
-					} else if (!effortVal) {
-						eCell = p.dim(eCell);
-					}
-					const rowContent = `${ptr}${label}${" ".repeat(presetSpacer)}${mCell}${eCell}`;
-					lines.push(
-						line(!isActivePreset && !selected ? p.dim(rowContent) : rowContent),
-					);
+					cell = p.dim(visPad(truncateToWidth(raw, modelW - 1), modelW));
 				}
+				lines.push(line(`${ptr}${label}${cell}`));
 			}
+		}
+		if (!this.flatRows.some((r) => this.isProfileRow(r))) {
+			lines.push(line(p.dim("  (no profiles — press n to create one)")));
+		}
 
-			// Divider
-			lines.push(line(""));
-			lines.push(line(p.dim("\u2500".repeat(innerW))));
-			lines.push(line(""));
+		// Divider
+		lines.push(line(""));
+		lines.push(line(p.dim("─".repeat(innerW))));
+		lines.push(line(""));
 
-			// ─── Bottom section: Scoped settings ──────────────────────────────
-			const sp1 = " ".repeat(spacer1);
-			const sp2 = " ".repeat(spacer2);
-			const hdr =
-				visPad("", labelW) +
-				sp1 +
-				COL_NAMES.map((name, i) => {
-					const cell = visPad(name, colW);
-					const active =
-						i === this.col &&
-						this.mode === "browse" &&
-						!this.isPresetDefRow(this.flatRows[this.cursor]);
-					return active ? p.accent(cell) : p.muted(cell);
-				}).join("") +
-				sp2 +
-				p.muted(visPad("effective", colW));
-			lines.push(line(hdr));
-			lines.push(line(""));
+		// ─── Scoped settings section ────────────────────────────────────────
+		const sp1 = " ".repeat(spacer1);
+		const sp2 = " ".repeat(spacer2);
+		const hdr =
+			visPad("", labelW) +
+			sp1 +
+			COL_NAMES.map((name, i) => {
+				const cell = visPad(name, colW);
+				const active =
+					i === this.col &&
+					this.mode === "browse" &&
+					!this.isProfileRow(this.flatRows[this.cursor]);
+				return active ? p.accent(cell) : p.muted(cell);
+			}).join("") +
+			sp2 +
+			p.muted(visPad("effective", colW));
+		lines.push(line(hdr));
+		lines.push(line(""));
 
-			{
-				let lastSection = "";
-				for (let fi = 0; fi < this.flatRows.length; fi++) {
-					const r = this.flatRows[fi];
-					if (this.isPresetDefRow(r)) continue;
-					// Section header
-					const sectionTitle = this.sections.find((s) =>
-						s.rows.includes(r),
-					)?.title;
-					if (sectionTitle && sectionTitle !== lastSection) {
-						lines.push(line(p.heading(sectionTitle)));
-						lastSection = sectionTitle;
-					}
-					const selected = fi === this.cursor;
-					const ptr = selected ? p.accent("\u25b6 ") : "  ";
-					const label = visPad(r.label, labelW - 2);
-
-					const cells = [r.global, r.project, r.session].map((val, i) => {
-						if (r.globalOnly && i > 0) return p.dim(visPad("\u00b7", colW));
-						const isActive = selected && i === this.col;
-						const actualVal = val;
-						const showDefault = !actualVal && i === 0 && r.defaultValue;
-						let display: string;
-						if (this.mode === "edit" && isActive) {
-							display = `${this.editBuffer}\u2588`;
-						} else if (isActive) {
-							const v = actualVal ?? r.defaultValue ?? "\u2014";
-							const inner = truncateToWidth(this.displayModel(r, v), colW - 4);
-							display = `[${inner}]`;
-						} else if (showDefault) {
-							display = `${r.defaultValue} (def)`;
-						} else {
-							display = this.displayModel(r, actualVal ?? "\u2014");
-						}
-						const cell = visPad(truncateToWidth(display, colW - 1), colW);
-						if (isActive) return p.accent(cell);
-						if (showDefault) return p.dim(cell);
-						if (actualVal) return cell;
-						return p.dim(cell);
-					});
-
-					const eff = this.effective(r);
-					const effCell = p.success(
-						visPad(truncateToWidth(eff, colW - 1), colW),
-					);
-					lines.push(
-						line(`${ptr}${label}${sp1}${cells.join("")}${sp2}${effCell}`),
-					);
+		let lastSection = "";
+		for (let fi = 0; fi < this.flatRows.length; fi++) {
+			const r = this.flatRows[fi];
+			if (this.isProfileRow(r)) continue;
+			const sectionTitle = this.sections.find((s) => s.rows.includes(r))?.title;
+			if (sectionTitle && sectionTitle !== lastSection) {
+				lines.push(line(p.heading(sectionTitle)));
+				lastSection = sectionTitle;
+			}
+			const selected = fi === this.cursor;
+			const ptr = selected ? p.accent("▶ ") : "  ";
+			const label = visPad(r.label, labelW - 2);
+			const cells = [r.global, r.project, r.session].map((val, i) => {
+				if (r.globalOnly && i > 0) return p.dim(visPad("·", colW));
+				const isActive = selected && i === this.col;
+				const showDefault = !val && i === 0 && r.defaultValue;
+				let display: string;
+				if (this.mode === "edit" && isActive) {
+					display = `${this.editBuffer}█`;
+				} else if (isActive) {
+					const v = val ?? r.defaultValue ?? "—";
+					display = `[${truncateToWidth(v, colW - 4)}]`;
+				} else if (showDefault) {
+					display = `${r.defaultValue} (def)`;
+				} else {
+					display = val ?? "—";
 				}
-			}
+				const cell = visPad(truncateToWidth(display, colW - 1), colW);
+				if (isActive) return p.accent(cell);
+				if (showDefault) return p.dim(cell);
+				if (val) return cell;
+				return p.dim(cell);
+			});
+			const effCell = p.success(
+				visPad(truncateToWidth(this.effective(r), colW - 1), colW),
+			);
+			lines.push(line(`${ptr}${label}${sp1}${cells.join("")}${sp2}${effCell}`));
+		}
 
-			// Option list (select mode)
-			if (this.mode === "select" && this.options.length > 0) {
-				lines.push(line(p.heading("Select value:")));
-				for (let i = 0; i < this.options.length; i++) {
-					const opt = this.options[i];
-					const sel = i === this.optionCursor;
-					const marker = sel ? p.accent("\u25b6 ") : "  ";
-					const text = sel ? p.accent(opt.label) : opt.label;
-					lines.push(line(`    ${marker}${text}`));
-				}
-				lines.push(line(""));
+		if (this.mode === "select" && this.options.length > 0) {
+			lines.push(line(p.heading("Select value:")));
+			for (let i = 0; i < this.options.length; i++) {
+				const opt = this.options[i];
+				const sel = i === this.optionCursor;
+				const marker = sel ? p.accent("▶ ") : "  ";
+				const text = sel ? p.accent(opt.label) : opt.label;
+				lines.push(line(`    ${marker}${text}`));
 			}
-		} // end else (normal rendering)
+			lines.push(line(""));
+		}
+	}
 
-		// Naming mode (create new preset)
+	private renderTierModelPicker(
+		lines: string[],
+		line: (s: string) => string,
+	): void {
+		const p = this.palette;
+		const row = this.flatRows[this.cursor];
+		const tier = row?.key.split(".")[1] ?? "tier";
+		lines.push(line(""));
+		lines.push(line(`  ${p.accent(`Model for ${tier}`)}`));
+		lines.push(line(""));
+		for (let i = 0; i < this.tierPickerModels.length; i++) {
+			const m = this.tierPickerModels[i];
+			const ptr = i === this.tierPickerCursor ? p.accent("▶ ") : "  ";
+			const badge =
+				m.modelId === TRACK_PLAN
+					? ""
+					: m.adaptive
+						? p.muted(" [adaptive]")
+						: "";
+			const label = m.modelId === TRACK_PLAN ? p.muted(m.name) : m.name;
+			lines.push(line(`  ${ptr}${label}${badge}`));
+		}
+		lines.push(line(""));
+		lines.push(
+			line(
+				p.muted(
+					"  Pin review to a DIFFERENT model than work for a true 2nd opinion.",
+				),
+			),
+		);
+	}
+
+	private renderTierEffortPicker(
+		lines: string[],
+		line: (s: string) => string,
+	): void {
+		const p = this.palette;
+		const badge = this.tierPickerAdaptive ? p.muted(" [adaptive]") : "";
+		lines.push(line(""));
+		lines.push(
+			line(`  ${p.accent(`Effort for ${this.tierPickerModelName}`)}${badge}`),
+		);
+		lines.push(line(""));
+		if (this.tierPickerAdaptive) {
+			lines.push(
+				line(p.muted("  Adaptive — effort steers, the model sets its budget.")),
+			);
+		} else {
+			lines.push(line(p.muted("  Fixed — effort IS the reasoning budget.")));
+		}
+		lines.push(line(""));
+		for (let i = 0; i < this.tierPickerEfforts.length; i++) {
+			const e = this.tierPickerEfforts[i];
+			const ptr = i === this.tierPickerCursor ? p.accent("▶ ") : "  ";
+			const desc = e.desc ? p.muted(`  ${e.desc}`) : "";
+			lines.push(line(`  ${ptr}${e.level}${desc}`));
+		}
+	}
+
+	private renderTargetsPicker(
+		lines: string[],
+		line: (s: string) => string,
+	): void {
+		const p = this.palette;
+		const profile = this.currentProfileName();
+		lines.push(line(""));
+		lines.push(line(`  ${p.accent(`Targets for "${profile}"`)}`));
+		lines.push(
+			line(
+				p.muted("  Which /model choices activate this profile (exclusive)."),
+			),
+		);
+		lines.push(line(""));
+		for (let i = 0; i < this.targetModels.length; i++) {
+			const m = this.targetModels[i];
+			const ptr = i === this.targetCursor ? p.accent("▶ ") : "  ";
+			const box = this.targetSelected.has(m.modelId) ? "[x]" : "[ ]";
+			const owner = this.targetOwner.get(m.modelId);
+			const note =
+				owner && owner !== profile
+					? p.muted(`  → in "${owner}" (checking moves it here)`)
+					: "";
+			lines.push(line(`  ${ptr}${box} ${m.name}${note}`));
+		}
+		lines.push(line(""));
+	}
+
+	private renderOverlays(lines: string[], line: (s: string) => string): void {
+		const p = this.palette;
 		if (this.mode === "naming") {
 			lines.push(line(""));
 			lines.push(
-				line(`  New preset name: ${p.accent(`${this.editBuffer}\u2588`)}`),
+				line(`  New profile name: ${p.accent(`${this.editBuffer}█`)}`),
 			);
 			lines.push(line(""));
 		}
-
-		// Renaming mode
 		if (this.mode === "renaming") {
 			lines.push(line(""));
-			lines.push(
-				line(`  Rename preset: ${p.accent(`${this.editBuffer}\u2588`)}`),
-			);
+			lines.push(line(`  Rename profile: ${p.accent(`${this.editBuffer}█`)}`));
 			lines.push(line(""));
 		}
-
-		// Status
 		if (this.mode === "confirm-delete") {
 			lines.push(line(""));
 			lines.push(
-				line(`  ${p.accent(`Delete preset "${this.pendingDeletePreset}"?`)}`),
+				line(`  ${p.accent(`Delete profile "${this.pendingDeleteProfile}"?`)}`),
 			);
-			if (this.deleteReferences.length > 0) {
-				lines.push(line(""));
-				lines.push(line(`  ${p.muted("Referenced by:")}`));
-				for (const ref of this.deleteReferences) {
-					lines.push(line(`    ${p.muted("\u2022")} ${ref}`));
-				}
-				lines.push(line(""));
-				lines.push(line(`  ${p.muted("These references will be cleared.")}`));
-			}
 			lines.push(line(""));
 		} else if (this.statusMessage) {
 			lines.push(line(`  ${p.success(this.statusMessage)}`));
 		}
-
-		// Help bar
-		const isPresetNameRow =
-			this.flatRows[this.cursor]?.key.startsWith("@name.");
-		const help =
-			this.mode === "slot-pick-model"
-				? "\u2191\u2193 navigate  Enter select  Esc cancel"
-				: this.mode === "slot-pick-effort"
-					? "\u2191\u2193 navigate  Enter confirm  Esc back"
-					: this.mode === "confirm-delete"
-						? "y confirm  Esc cancel"
-						: this.mode === "select"
-							? "\u2191\u2193 choose  Enter confirm  Esc cancel"
-							: this.mode === "edit"
-								? "Enter: save  Esc: cancel"
-								: this.mode === "naming" || this.mode === "renaming"
-									? "Enter: confirm  Esc: cancel"
-									: isPresetNameRow
-										? "\u2191\u2193 navigate  a activate  r rename  d delete  n new  Esc close"
-										: "\u2191\u2193 navigate  \u2190\u2192 scope  Enter edit  d delete  n new preset  Esc close";
-		lines.push(line(p.muted(help)));
-
-		// Bottom border
-		lines.push(p.dim(`\u2570${"\u2500".repeat(boxW - 2)}\u256f`));
-
-		return lines;
 	}
+
+	private renderHelp(lines: string[], line: (s: string) => string): void {
+		const p = this.palette;
+		const row = this.flatRows[this.cursor];
+		const help =
+			this.mode === "tier-pick-model"
+				? "↑↓ navigate  Enter select  Esc cancel"
+				: this.mode === "tier-pick-effort"
+					? "↑↓ navigate  Enter confirm  Esc back"
+					: this.mode === "targets"
+						? "↑↓ navigate  Space toggle  Esc done"
+						: this.mode === "confirm-delete"
+							? "y confirm  Esc cancel"
+							: this.mode === "select"
+								? "↑↓ choose  Enter confirm  Esc cancel"
+								: this.mode === "edit"
+									? "Enter: save  Esc: cancel"
+									: this.mode === "naming" || this.mode === "renaming"
+										? "Enter: confirm  Esc: cancel"
+										: this.isNameRow(row)
+											? "↑↓ navigate  r rename  d delete  n new  Esc close"
+											: "↑↓ navigate  ←→ scope  Enter edit  n new profile  Esc close";
+		lines.push(line(p.muted(help)));
+	}
+
+	// ─── Input ────────────────────────────────────────────────────────────────
 
 	handleInput(data: string): void {
 		this.statusMessage = "";
+		switch (this.mode) {
+			case "edit":
+				this.handleEditInput(data);
+				break;
+			case "select":
+				this.handleSelectInput(data);
+				break;
+			case "naming":
+				this.handleNamingInput(data);
+				break;
+			case "renaming":
+				this.handleRenamingInput(data);
+				break;
+			case "confirm-delete":
+				this.handleConfirmDeleteInput(data);
+				break;
+			case "tier-pick-model":
+				this.handleTierModelInput(data);
+				break;
+			case "tier-pick-effort":
+				this.handleTierEffortInput(data);
+				break;
+			case "targets":
+				this.handleTargetsInput(data);
+				break;
+			default:
+				this.handleBrowseInput(data);
+		}
+	}
 
-		if (this.mode === "edit") {
-			this.handleEditInput(data);
-			return;
-		}
-		if (this.mode === "select") {
-			this.handleSelectInput(data);
-			return;
-		}
-		if (this.mode === "naming") {
-			this.handleNamingInput(data);
-			return;
-		}
-		if (this.mode === "renaming") {
-			this.handleRenamingInput(data);
-			return;
-		}
-		if (this.mode === "confirm-delete") {
-			this.handleConfirmDeleteInput(data);
-			return;
-		}
-		if (this.mode === "slot-pick-model") {
-			this.handleSlotModelInput(data);
-			return;
-		}
-		if (this.mode === "slot-pick-effort") {
-			this.handleSlotEffortInput(data);
-			return;
-		}
-
+	private handleBrowseInput(data: string): void {
 		switch (data) {
 			case KEY_UP:
 				this.cursor = Math.max(0, this.cursor - 1);
@@ -751,83 +747,30 @@ class ConfigMenuComponent implements Component, Focusable {
 				break;
 			case KEY_LEFT: {
 				const r = this.flatRows[this.cursor];
-				if (this.isPresetDefRow(r)) {
-					if (!r?.key.startsWith("@name."))
-						this.presetCol = Math.max(0, this.presetCol - 1) as PresetColIdx;
-				} else {
-					if (r?.globalOnly) break;
+				if (!this.isProfileRow(r) && !r?.globalOnly)
 					this.col = Math.max(0, this.col - 1) as ColIdx;
-				}
 				break;
 			}
 			case KEY_RIGHT: {
 				const r = this.flatRows[this.cursor];
-				if (this.isPresetDefRow(r)) {
-					if (!r?.key.startsWith("@name."))
-						this.presetCol = Math.min(1, this.presetCol + 1) as PresetColIdx;
-				} else {
-					if (r?.globalOnly) break;
+				if (!this.isProfileRow(r) && !r?.globalOnly)
 					this.col = Math.min(2, this.col + 1) as ColIdx;
-				}
 				break;
 			}
-			case KEY_ENTER: {
-				const row = this.flatRows[this.cursor];
-				if (row?.key.startsWith("@name.")) {
-					this.activatePreset(row.key.slice(6));
-					break;
-				}
-				// Preset slot rows → column-aware picker
-				if (row?.extension === "@presets" && !row.key.startsWith("@name.")) {
-					if (this.presetCol === 1) {
-						// Effort column → open effort picker directly
-						this.openSlotEffortPicker();
-					} else {
-						// Model column → open model picker
-						this.openSlotModelPicker();
-					}
-					break;
-				}
-				if (row) {
-					const opts = getOptionsForKey(row.key, row.extension, this.ctx);
-					if (opts && opts.length > 0) {
-						this.options = opts;
-						const current = [row.global, row.project, row.session][this.col];
-						const matchVal = current ?? row.defaultValue ?? "";
-						this.optionCursor = Math.max(
-							0,
-							opts.findIndex((o) => o.value === matchVal),
-						);
-						this.mode = "select";
-					} else {
-						const current = [row.global, row.project, row.session][this.col];
-						this.editBuffer = current ?? row.defaultValue ?? "";
-						this.mode = "edit";
-					}
-				}
+			case KEY_ENTER:
+				this.onEnter();
 				break;
-			}
 			case "d": {
 				const row = this.flatRows[this.cursor];
-				if (row?.key.startsWith("@name.")) {
-					this.startDeletePreset(row.key.slice(6));
-				} else if (row) {
-					this.deleteCell(row);
-				}
+				if (this.isNameRow(row)) this.startDeleteProfile(row.key.slice(6));
+				else if (row && !this.isProfileRow(row)) this.deleteCell(row);
 				break;
 			}
 			case "r": {
 				const row = this.flatRows[this.cursor];
-				if (row?.key.startsWith("@name.")) {
+				if (this.isNameRow(row)) {
 					this.editBuffer = row.key.slice(6);
 					this.mode = "renaming";
-				}
-				break;
-			}
-			case "a": {
-				const row = this.flatRows[this.cursor];
-				if (row?.key.startsWith("@name.")) {
-					this.activatePreset(row.key.slice(6));
 				}
 				break;
 			}
@@ -839,6 +782,36 @@ class ConfigMenuComponent implements Component, Focusable {
 			case "q":
 				this.done(undefined);
 				break;
+		}
+	}
+
+	private onEnter(): void {
+		const row = this.flatRows[this.cursor];
+		if (!row) return;
+		if (this.isProfileRow(row)) {
+			if (this.isNameRow(row)) return; // name row: use r/d/n
+			if (row.key.endsWith(".@targets")) {
+				this.openTargetsPicker();
+			} else if (!row.key.endsWith(".plan")) {
+				this.openTierModelPicker(); // work/review/fast (plan is read-only)
+			}
+			return;
+		}
+		// Scoped setting row
+		const opts = getOptionsForKey(row.key);
+		if (opts && opts.length > 0) {
+			this.options = opts;
+			const current = [row.global, row.project, row.session][this.col];
+			const matchVal = current ?? row.defaultValue ?? "";
+			this.optionCursor = Math.max(
+				0,
+				opts.findIndex((o) => o.value === matchVal),
+			);
+			this.mode = "select";
+		} else {
+			const current = [row.global, row.project, row.session][this.col];
+			this.editBuffer = current ?? row.defaultValue ?? "";
+			this.mode = "edit";
 		}
 	}
 
@@ -859,9 +832,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			this.editBuffer = this.editBuffer.slice(0, -1);
 			return;
 		}
-		if (data.length === 1 && data >= " ") {
-			this.editBuffer += data;
-		}
+		if (data.length === 1 && data >= " ") this.editBuffer += data;
 	}
 
 	private handleSelectInput(data: string): void {
@@ -900,9 +871,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 		if (data === KEY_ENTER) {
 			const name = this.editBuffer.trim();
-			if (name) {
-				this.createPreset(name);
-			}
+			if (name) this.createProfile(name);
 			this.mode = "browse";
 			this.editBuffer = "";
 			return;
@@ -911,10 +880,9 @@ class ConfigMenuComponent implements Component, Focusable {
 			this.editBuffer = this.editBuffer.slice(0, -1);
 			return;
 		}
-		if (data.length === 1 && data >= " ") {
-			this.editBuffer += data;
-		}
+		if (data.length === 1 && data >= " ") this.editBuffer += data;
 	}
+
 	private handleRenamingInput(data: string): void {
 		if (data === KEY_ESC) {
 			this.mode = "browse";
@@ -923,11 +891,10 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 		if (data === KEY_ENTER) {
 			const row = this.flatRows[this.cursor];
-			const oldName = row?.key.slice(6); // @name.xxx
+			const oldName = row?.key.slice(6);
 			const newName = this.editBuffer.trim();
-			if (oldName && newName && newName !== oldName) {
-				this.renamePreset(oldName, newName);
-			}
+			if (oldName && newName && newName !== oldName)
+				this.renameProfile(oldName, newName);
 			this.mode = "browse";
 			this.editBuffer = "";
 			return;
@@ -936,139 +903,174 @@ class ConfigMenuComponent implements Component, Focusable {
 			this.editBuffer = this.editBuffer.slice(0, -1);
 			return;
 		}
-		if (data.length === 1 && data >= " ") {
-			this.editBuffer += data;
-		}
+		if (data.length === 1 && data >= " ") this.editBuffer += data;
 	}
 
 	private handleConfirmDeleteInput(data: string): void {
 		if (data === "y" || data === "Y") {
-			this.executeDeletePreset(this.pendingDeletePreset);
+			this.executeDeleteProfile(this.pendingDeleteProfile);
 			this.mode = "browse";
-			this.pendingDeletePreset = "";
-			this.deleteReferences = [];
+			this.pendingDeleteProfile = "";
 			return;
 		}
-		// Any other key cancels
 		this.mode = "browse";
-		this.pendingDeletePreset = "";
-		this.deleteReferences = [];
+		this.pendingDeleteProfile = "";
 		this.statusMessage = "Delete cancelled";
 	}
 
-	private startDeletePreset(name: string): void {
-		// Find references to this preset
-		const refs: string[] = [];
-		const config = readModelsConfig(this.ctx.cwd);
-		if (config?.active === name) refs.push("models.active");
-		const { global } = readLayeredExtensionConfig(this.ctx.cwd);
-		for (const [ext, extConfig] of Object.entries(global)) {
-			if (!isPlainObject(extConfig)) continue;
-			const models = (extConfig as Record<string, unknown>).models;
-			if (!isPlainObject(models)) continue;
-			for (const [role, roleConfig] of Object.entries(
-				models as Record<string, unknown>,
-			)) {
-				if (isPlainObject(roleConfig) && roleConfig.preset === name) {
-					refs.push(`${ext}.models.${role}.preset`);
-				}
-			}
-		}
-		this.pendingDeletePreset = name;
-		this.deleteReferences = refs;
-		this.mode = "confirm-delete";
-	}
+	// ─── Tier picker ────────────────────────────────────────────────────────
 
-	private executeDeletePreset(name: string): void {
-		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
-			if (!isPlainObject(raw.models)) return;
-			const models = raw.models as Record<string, unknown>;
-			if (isPlainObject(models.presets)) {
-				delete (models.presets as Record<string, unknown>)[name];
-			}
-			// Update active if it pointed to deleted preset
-			if (models.active === name) {
-				const remaining = isPlainObject(models.presets)
-					? Object.keys(models.presets as Record<string, unknown>)
-					: [];
-				models.active = remaining[0] ?? "";
-			}
-			// Cascade: remove preset references from extensionConfig
-			if (isPlainObject(raw.extensionConfig)) {
-				for (const extConfig of Object.values(
-					raw.extensionConfig as Record<string, unknown>,
-				)) {
-					if (!isPlainObject(extConfig)) continue;
-					const m = (extConfig as Record<string, unknown>).models;
-					if (!isPlainObject(m)) continue;
-					for (const roleConfig of Object.values(
-						m as Record<string, unknown>,
-					)) {
-						if (isPlainObject(roleConfig) && roleConfig.preset === name) {
-							delete roleConfig.preset;
-						}
-					}
-				}
-			}
-		});
-		this.statusMessage = `\u2713 Deleted preset "${name}"`;
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
-		this.cursor = Math.min(this.cursor, this.flatRows.length - 1);
-	}
-
-	private renamePreset(oldName: string, newName: string): void {
-		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
-			if (!isPlainObject(raw.models)) return;
-			const models = raw.models as Record<string, unknown>;
-			if (isPlainObject(models.presets)) {
-				const presets = models.presets as Record<string, unknown>;
-				presets[newName] = presets[oldName];
-				delete presets[oldName];
-			}
-			// Update active
-			if (models.active === oldName) models.active = newName;
-			// Cascade: update preset references in extensionConfig
-			if (isPlainObject(raw.extensionConfig)) {
-				for (const extConfig of Object.values(
-					raw.extensionConfig as Record<string, unknown>,
-				)) {
-					if (!isPlainObject(extConfig)) continue;
-					const m = (extConfig as Record<string, unknown>).models;
-					if (!isPlainObject(m)) continue;
-					for (const roleConfig of Object.values(
-						m as Record<string, unknown>,
-					)) {
-						if (isPlainObject(roleConfig) && roleConfig.preset === oldName) {
-							(roleConfig as Record<string, unknown>).preset = newName;
-						}
-					}
-				}
-			}
-		});
-		this.statusMessage = `\u2713 Renamed "${oldName}" \u2192 "${newName}"`;
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
-	}
-
-	private activatePreset(name: string): void {
-		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
-			if (!isPlainObject(raw.models)) raw.models = {};
-			(raw.models as Record<string, unknown>).active = name;
-		});
-		this.statusMessage = `\u2713 Active preset \u2192 "${name}"`;
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
-	}
-
-	// ─── Slot picker (two-step: model then effort) ──────────────────────────
-
-	private openSlotModelPicker(): void {
-		// Authed models (scoped, like /model) so the list doesn't overflow; fall
-		// back to all models only when nothing is authed (clean config), so the
-		// slot is still settable there.
+	private openTierModelPicker(): void {
 		const models = pickerModels(this.ctx);
-		this.slotPickerModels = models.map((m) => {
+		this.tierPickerModels = [
+			{
+				modelId: TRACK_PLAN,
+				name: "= plan (track session model)",
+				adaptive: false,
+			},
+			...models.map((m) => {
+				const modelName = (m as { name?: string }).name || m.id;
+				const suffix = this.ctx.modelRegistry.hasConfiguredAuth(m)
+					? ""
+					: " · needs auth";
+				return {
+					modelId: `${m.provider}/${m.id}`,
+					name: `${modelName} (${m.provider})${suffix}`,
+					adaptive: isAdaptiveThinking(m),
+				};
+			}),
+		];
+		this.tierPickerCursor = 0;
+		this.mode = "tier-pick-model";
+	}
+
+	private handleTierModelInput(data: string): void {
+		switch (data) {
+			case KEY_UP:
+				this.tierPickerCursor = Math.max(0, this.tierPickerCursor - 1);
+				break;
+			case KEY_DOWN:
+				this.tierPickerCursor = Math.min(
+					this.tierPickerModels.length - 1,
+					this.tierPickerCursor + 1,
+				);
+				break;
+			case KEY_ENTER: {
+				const selected = this.tierPickerModels[this.tierPickerCursor];
+				if (!selected) break;
+				if (selected.modelId === TRACK_PLAN) {
+					this.commitTierPick(undefined, undefined);
+					break;
+				}
+				this.tierPickerSelectedModel = selected.modelId;
+				this.tierPickerModelName = selected.name;
+				this.tierPickerAdaptive = selected.adaptive;
+				this.tierPickerEfforts = this.getValidEfforts(
+					selected.modelId,
+					selected.adaptive,
+				);
+				if (this.tierPickerEfforts.length === 1) {
+					this.commitTierPick(
+						this.tierPickerSelectedModel,
+						this.tierPickerEfforts[0].level,
+					);
+				} else {
+					this.tierPickerCursor = Math.max(
+						0,
+						this.tierPickerEfforts.findIndex((e) => e.level === "high"),
+					);
+					this.mode = "tier-pick-effort";
+				}
+				break;
+			}
+			case KEY_ESC:
+				this.mode = "browse";
+				break;
+		}
+	}
+
+	private handleTierEffortInput(data: string): void {
+		switch (data) {
+			case KEY_UP:
+				this.tierPickerCursor = Math.max(0, this.tierPickerCursor - 1);
+				break;
+			case KEY_DOWN:
+				this.tierPickerCursor = Math.min(
+					this.tierPickerEfforts.length - 1,
+					this.tierPickerCursor + 1,
+				);
+				break;
+			case KEY_ENTER: {
+				const selected = this.tierPickerEfforts[this.tierPickerCursor];
+				if (selected)
+					this.commitTierPick(this.tierPickerSelectedModel, selected.level);
+				break;
+			}
+			case KEY_ESC:
+				this.tierPickerCursor = 0;
+				this.mode = "tier-pick-model";
+				break;
+		}
+	}
+
+	private commitTierPick(model: string | undefined, effort?: string): void {
+		const row = this.flatRows[this.cursor];
+		if (!row) return;
+		const dot = row.key.indexOf(".");
+		const profileName = row.key.slice(0, dot);
+		const tier = row.key.slice(dot + 1);
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			const profile = ensureProfileObject(obj, profileName);
+			if (model) profile[tier] = { model, ...(effort ? { effort } : {}) };
+			else delete profile[tier];
+		});
+		this.statusMessage = model
+			? `✓ ${profileName}.${tier} = ${this.tierPickerModelName}${effort ? ` · ${effort}` : ""}`
+			: `✓ ${profileName}.${tier} = plan`;
+		this.refresh();
+		this.mode = "browse";
+	}
+
+	private getValidEfforts(
+		modelId: string,
+		adaptive: boolean,
+	): Array<{ level: string; desc?: string }> {
+		const parsed = modelId.split("/");
+		const model = this.ctx.modelRegistry.find(
+			parsed[0],
+			parsed.slice(1).join("/"),
+		);
+		const reasoning =
+			(model as { reasoning?: boolean } | undefined)?.reasoning ?? true;
+		if (!reasoning) return [{ level: "off", desc: "thinking not supported" }];
+		const map = (
+			model as { thinkingLevelMap?: Record<string, string | null> } | undefined
+		)?.thinkingLevelMap;
+		const levels = THINKING_LEVELS.filter((l) => map?.[l] !== null);
+		if (adaptive) {
+			return levels
+				.filter((l) => l !== "off" && l !== "minimal")
+				.map((l) => ({ level: l, desc: ADAPTIVE_DESCRIPTIONS[l] }));
+		}
+		return levels.map((l) => ({ level: l }));
+	}
+
+	// ─── Targets picker ─────────────────────────────────────────────────────
+
+	private currentProfileName(): string {
+		const row = this.flatRows[this.cursor];
+		return row?.key.split(".")[0] ?? "";
+	}
+
+	private openTargetsPicker(): void {
+		const profile = this.currentProfileName();
+		const config = readModelsConfig(this.ctx.cwd);
+		this.targetSelected = new Set(config?.profiles[profile]?.targets ?? []);
+		this.targetOwner = new Map();
+		for (const [name, prof] of Object.entries(config?.profiles ?? {})) {
+			for (const t of prof.targets) this.targetOwner.set(t, name);
+		}
+		this.targetModels = pickerModels(this.ctx).map((m) => {
 			const modelName = (m as { name?: string }).name || m.id;
 			const suffix = this.ctx.modelRegistry.hasConfiguredAuth(m)
 				? ""
@@ -1079,223 +1081,131 @@ class ConfigMenuComponent implements Component, Focusable {
 				adaptive: isAdaptiveThinking(m),
 			};
 		});
-		this.slotPickerCursor = 0;
-		this.mode = "slot-pick-model";
+		this.targetCursor = 0;
+		this.mode = "targets";
 	}
 
-	private openSlotEffortPicker(): void {
-		// Read current model from the slot
-		const row = this.flatRows[this.cursor];
-		if (!row) return;
-		const dotIdx = row.key.indexOf(".");
-		const presetName = row.key.slice(0, dotIdx);
-		const slot = row.key.slice(dotIdx + 1);
-		const config = readModelsConfig(this.ctx.cwd);
-		const preset = config?.presets[presetName];
-		const slotConfig = preset?.[slot as "default" | "alternate"];
-		if (!slotConfig?.model) {
-			// No model set yet — redirect to model picker
-			this.openSlotModelPicker();
-			return;
-		}
-		const modelId = slotConfig.model;
-		const parsed = modelId.split("/");
-		const model = this.ctx.modelRegistry.find(
-			parsed[0],
-			parsed.slice(1).join("/"),
-		);
-		const modelName = (model as { name?: string } | undefined)?.name || modelId;
-		const adaptive = model ? isAdaptiveThinking(model) : false;
-
-		this.slotPickerSelectedModel = modelId;
-		this.slotPickerModelName = modelName;
-		this.slotPickerAdaptive = adaptive;
-		this.slotPickerEfforts = this.getValidEfforts(modelId, adaptive);
-		this.slotPickerCursor = this.slotPickerEfforts.findIndex(
-			(e) => e.level === (slotConfig.effort ?? "high"),
-		);
-		if (this.slotPickerCursor < 0) this.slotPickerCursor = 0;
-		this.mode = "slot-pick-effort";
-	}
-
-	private handleSlotModelInput(data: string): void {
+	private handleTargetsInput(data: string): void {
 		switch (data) {
 			case KEY_UP:
-				this.slotPickerCursor = Math.max(0, this.slotPickerCursor - 1);
+				this.targetCursor = Math.max(0, this.targetCursor - 1);
 				break;
 			case KEY_DOWN:
-				this.slotPickerCursor = Math.min(
-					this.slotPickerModels.length - 1,
-					this.slotPickerCursor + 1,
+				this.targetCursor = Math.min(
+					this.targetModels.length - 1,
+					this.targetCursor + 1,
 				);
 				break;
-			case KEY_ENTER: {
-				const selected = this.slotPickerModels[this.slotPickerCursor];
-				if (selected) {
-					this.slotPickerSelectedModel = selected.modelId;
-					this.slotPickerModelName = selected.name;
-					this.slotPickerAdaptive = selected.adaptive;
-					this.slotPickerEfforts = this.getValidEfforts(
-						selected.modelId,
-						selected.adaptive,
-					);
-					// If only one option, auto-select
-					if (this.slotPickerEfforts.length === 1) {
-						this.commitSlotPick(this.slotPickerEfforts[0].level);
-					} else {
-						this.slotPickerCursor = this.slotPickerEfforts.findIndex(
-							(e) => e.level === "high",
-						);
-						if (this.slotPickerCursor < 0) this.slotPickerCursor = 0;
-						this.mode = "slot-pick-effort";
-					}
-				}
+			case KEY_SPACE:
+			case KEY_ENTER:
+				this.toggleTarget();
 				break;
-			}
 			case KEY_ESC:
 				this.mode = "browse";
+				this.refresh();
 				break;
 		}
 	}
 
-	private handleSlotEffortInput(data: string): void {
-		switch (data) {
-			case KEY_UP:
-				this.slotPickerCursor = Math.max(0, this.slotPickerCursor - 1);
-				break;
-			case KEY_DOWN:
-				this.slotPickerCursor = Math.min(
-					this.slotPickerEfforts.length - 1,
-					this.slotPickerCursor + 1,
-				);
-				break;
-			case KEY_ENTER: {
-				const selected = this.slotPickerEfforts[this.slotPickerCursor];
-				if (selected) this.commitSlotPick(selected.level);
-				break;
-			}
-			case KEY_ESC:
-				// Back to model picker
-				this.slotPickerCursor = 0;
-				this.mode = "slot-pick-model";
-				break;
-		}
-	}
-
-	private commitSlotPick(effort: string): void {
-		const row = this.flatRows[this.cursor];
-		if (!row) return;
-		const dotIdx = row.key.indexOf(".");
-		const presetName = row.key.slice(0, dotIdx);
-		const slot = row.key.slice(dotIdx + 1);
+	private toggleTarget(): void {
+		const m = this.targetModels[this.targetCursor];
+		if (!m) return;
+		const profile = this.currentProfileName();
+		const modelId = m.modelId;
+		const owner = this.targetOwner.get(modelId);
 		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
-			if (!isPlainObject(obj.models)) obj.models = {};
-			const models = obj.models as Record<string, unknown>;
-			if (!isPlainObject(models.presets)) models.presets = {};
-			const presets = models.presets as Record<string, unknown>;
-			if (!isPlainObject(presets[presetName])) presets[presetName] = {};
-			(presets[presetName] as Record<string, unknown>)[slot] = {
-				model: this.slotPickerSelectedModel,
-				effort,
-			};
+			const profiles = ensureProfilesMap(obj);
+			if (this.targetSelected.has(modelId)) {
+				// Remove from this profile.
+				setTargets(
+					profiles,
+					profile,
+					(profiles[profile]?.targets ?? []).filter((t) => t !== modelId),
+				);
+				this.targetSelected.delete(modelId);
+				this.targetOwner.delete(modelId);
+			} else {
+				// Move here: strip from any current owner, then add.
+				if (owner && owner !== profile) {
+					setTargets(
+						profiles,
+						owner,
+						(profiles[owner]?.targets ?? []).filter((t) => t !== modelId),
+					);
+				}
+				setTargets(profiles, profile, [
+					...(profiles[profile]?.targets ?? []),
+					modelId,
+				]);
+				this.targetSelected.add(modelId);
+				this.targetOwner.set(modelId, profile);
+			}
 		});
-		this.statusMessage = `\u2713 ${presetName}.${slot} = ${this.slotPickerModelName} \u00b7 ${effort}`;
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
-		this.mode = "browse";
 	}
 
-	private getValidEfforts(
-		modelId: string,
-		adaptive: boolean,
-	): Array<{ level: string; desc?: string }> {
-		const ALL_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
-		const parsed = modelId.split("/");
-		const model = this.ctx.modelRegistry.find(
-			parsed[0],
-			parsed.slice(1).join("/"),
-		);
-		const reasoning =
-			(model as { reasoning?: boolean } | undefined)?.reasoning ?? true;
-		if (!reasoning) return [{ level: "off", desc: "thinking not supported" }];
+	// ─── Profile CRUD ───────────────────────────────────────────────────────
 
-		const map = (
-			model as { thinkingLevelMap?: Record<string, string | null> } | undefined
-		)?.thinkingLevelMap;
-
-		const levels = ALL_LEVELS.filter((l) => map?.[l] !== null);
-
-		if (adaptive) {
-			return levels
-				.filter((l) => l !== "off" && l !== "minimal")
-				.map((l) => ({
-					level: l,
-					desc: ADAPTIVE_DESCRIPTIONS[l],
-				}));
-		}
-		return levels.map((l) => ({ level: l }));
-	}
-
-	private createPreset(name: string): void {
-		updateSettingsFile("global", this.ctx.cwd, undefined, (raw) => {
-			if (!isPlainObject(raw.models)) raw.models = {};
-			const models = raw.models as Record<string, unknown>;
-			if (!isPlainObject(models.presets)) models.presets = {};
-			const presets = models.presets as Record<string, unknown>;
-			presets[name] = { default: { model: "" }, alternate: { model: "" } };
-			if (!models.active) models.active = name;
+	private createProfile(name: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			ensureProfileObject(obj, name);
 		});
-		this.statusMessage = `\u2713 Created preset "${name}"`;
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
+		this.statusMessage = `✓ Created profile "${name}"`;
+		this.refresh();
 	}
+
+	private renameProfile(oldName: string, newName: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			const profiles = ensureProfilesMap(obj);
+			if (profiles[oldName]) {
+				profiles[newName] = profiles[oldName];
+				delete profiles[oldName];
+			}
+		});
+		this.statusMessage = `✓ Renamed "${oldName}" → "${newName}"`;
+		this.refresh();
+	}
+
+	private startDeleteProfile(name: string): void {
+		this.pendingDeleteProfile = name;
+		this.mode = "confirm-delete";
+	}
+
+	private executeDeleteProfile(name: string): void {
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			const profiles = ensureProfilesMap(obj);
+			delete profiles[name];
+		});
+		this.statusMessage = `✓ Deleted profile "${name}"`;
+		this.refresh();
+		this.cursor = Math.min(this.cursor, this.flatRows.length - 1);
+	}
+
+	// ─── Scoped setting writes ──────────────────────────────────────────────
 
 	private writeCell(row: SettingRow, raw: string): void {
 		const scope = COL_NAMES[this.col];
-		const value = this.parseValue(raw);
-
 		if (scope === "session") {
 			sessionStore.set(sessionKey(row.extension, row.key), raw);
-			this.statusMessage = `\u2713 ${row.extension}.${row.key} = ${raw} [session]`;
-		} else if (row.extension === "@presets") {
-			// Preset slot field: key is "name.slot.field" e.g. "anthropic.default.model"
-			const parts = row.key.split(".");
-			const presetName = parts[0];
-			const slot = parts[1];
-			const field = parts[2]; // "model" or "effort"
-			updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
-				if (!isPlainObject(obj.models)) obj.models = {};
-				const models = obj.models as Record<string, unknown>;
-				if (!isPlainObject(models.presets)) models.presets = {};
-				const presets = models.presets as Record<string, unknown>;
-				if (!isPlainObject(presets[presetName])) presets[presetName] = {};
-				const preset = presets[presetName] as Record<string, unknown>;
-				if (!isPlainObject(preset[slot])) preset[slot] = {};
-				(preset[slot] as Record<string, unknown>)[field] = raw;
-			});
-			this.statusMessage = `\u2713 ${presetName}.${slot}.${field} = ${raw} [global]`;
+			this.statusMessage = `✓ ${row.extension}.${row.key} = ${raw} [session]`;
 		} else {
 			writeExtensionConfigKey(
 				scope,
 				this.ctx.cwd,
 				row.extension,
 				row.key,
-				value,
+				this.parseValue(raw),
 			);
-			this.statusMessage = `\u2713 ${row.extension}.${row.key} = ${raw} [${scope}]`;
+			this.statusMessage = `✓ ${row.extension}.${row.key} = ${raw} [${scope}]`;
 		}
-
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
+		this.refresh();
 	}
 
 	private deleteCell(row: SettingRow): void {
 		const scope = COL_NAMES[this.col];
-
 		if (scope === "session") {
 			sessionStore.delete(sessionKey(row.extension, row.key));
-			this.statusMessage = `\u2713 cleared ${row.extension}.${row.key} [session]`;
-		} else if (row.extension !== "@presets") {
+			this.statusMessage = `✓ cleared ${row.extension}.${row.key} [session]`;
+		} else {
 			writeExtensionConfigKey(
 				scope,
 				this.ctx.cwd,
@@ -1303,11 +1213,9 @@ class ConfigMenuComponent implements Component, Focusable {
 				row.key,
 				null,
 			);
-			this.statusMessage = `\u2713 cleared ${row.extension}.${row.key} [${scope}]`;
+			this.statusMessage = `✓ cleared ${row.extension}.${row.key} [${scope}]`;
 		}
-
-		this.sections = buildSections(this.ctx);
-		this.rebuildFlat();
+		this.refresh();
 	}
 
 	private parseValue(
@@ -1330,46 +1238,75 @@ class ConfigMenuComponent implements Component, Focusable {
 		if (Number.isFinite(num) && raw.trim() !== "") return num;
 		return raw;
 	}
+
+	private refresh(): void {
+		this.sections = buildSections(this.ctx);
+		this.rebuildFlat();
+	}
 }
 
-/**
- * Seed a `default` preset from the current session model + thinking level when
- * NO preset exists yet, and make it active. Runs lazily the first time the menu
- * opens, so a clean config lands on a working active preset that mirrors what
- * the user already picked via /model and /settings — instead of an empty
- * presets section they have to build by hand.
- */
-export function ensureDefaultPreset(
-	ctx: ExtensionContext,
-	thinking?: string,
+// ─── settings.json mutation helpers ──────────────────────────────────────────
+
+type RawProfile = Record<string, unknown> & { targets?: string[] };
+
+function ensureProfilesMap(
+	obj: Record<string, unknown>,
+): Record<string, RawProfile> {
+	if (!isPlainObject(obj.models)) obj.models = {};
+	const models = obj.models as Record<string, unknown>;
+	if (!isPlainObject(models.profiles)) models.profiles = {};
+	return models.profiles as Record<string, RawProfile>;
+}
+
+function ensureProfileObject(
+	obj: Record<string, unknown>,
+	name: string,
+): RawProfile {
+	const profiles = ensureProfilesMap(obj);
+	if (!isPlainObject(profiles[name]))
+		profiles[name] = { targets: [] } as RawProfile;
+	const profile = profiles[name] as RawProfile;
+	if (!Array.isArray(profile.targets)) profile.targets = [];
+	return profile;
+}
+
+function setTargets(
+	profiles: Record<string, RawProfile>,
+	name: string,
+	targets: string[],
 ): void {
+	if (!isPlainObject(profiles[name]))
+		profiles[name] = { targets: [] } as RawProfile;
+	(profiles[name] as RawProfile).targets = targets;
+}
+
+// ─── Seeding + public API ────────────────────────────────────────────────────
+
+/**
+ * Seed a profile from the current session model when NO profile exists yet:
+ * one target (the session model), all tiers tracking plan. Runs lazily the
+ * first time the menu opens so a clean config lands on a working profile that
+ * mirrors /model — the user then pins review/fast to differentiate.
+ */
+export function ensureDefaultProfile(ctx: ExtensionContext): void {
 	const existing = readModelsConfig(ctx.cwd);
-	if (existing && Object.keys(existing.presets).length > 0) return;
+	if (existing && Object.keys(existing.profiles).length > 0) return;
 	const model = ctx.model;
-	if (!model) return; // nothing to seed from
+	if (!model) return;
 	const modelId = `${model.provider}/${model.id}`;
-	const effort = thinking ?? "high";
+	const name = (model as { name?: string }).name?.trim() || model.id;
 	updateSettingsFile("global", ctx.cwd, undefined, (raw) => {
-		if (!isPlainObject(raw.models)) raw.models = {};
-		const models = raw.models as Record<string, unknown>;
-		if (!isPlainObject(models.presets)) models.presets = {};
-		const presets = models.presets as Record<string, unknown>;
-		if (Object.keys(presets).length > 0) return; // race guard
-		presets.default = {
-			default: { model: modelId, effort },
-			alternate: { model: modelId, effort },
-		};
-		if (!models.active) models.active = "default";
+		const profiles = ensureProfilesMap(raw);
+		if (Object.keys(profiles).length > 0) return; // race guard
+		profiles[name] = { targets: [modelId] } as RawProfile;
 	});
 }
 
-// ─── Public API ─────────────────────────────────────────────────────────────
-export function showConfigMenu(ctx: ExtensionContext, thinking?: string): void {
-	ensureDefaultPreset(ctx, thinking);
+export function showConfigMenu(ctx: ExtensionContext): void {
+	ensureDefaultProfile(ctx);
 	const palette = paletteFromTheme(ctx.ui.theme);
-	ctx.ui.custom((tui, theme, keybindings, done) => {
-		const comp = new ConfigMenuComponent(ctx, palette, () => done(undefined));
-		return comp;
+	ctx.ui.custom((_tui, _theme, _keybindings, done) => {
+		return new ConfigMenuComponent(ctx, palette, () => done(undefined));
 	});
 }
 

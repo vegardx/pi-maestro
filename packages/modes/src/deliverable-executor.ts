@@ -47,7 +47,6 @@ export interface AgentState {
 	sessionFile?: string;
 	/** Model resolved at spawn time. */
 	model?: string;
-	slot?: "default" | "alternate";
 	effort?: string;
 	/** Produced after completion. */
 	summary?: string;
@@ -117,7 +116,6 @@ export interface SpawnAgentOpts {
 	agentName: string;
 	displayName: string;
 	mode: "full" | "read-only";
-	slot: "default" | "alternate";
 	effort: string;
 	worktreePath: string;
 	seed: string;
@@ -485,7 +483,6 @@ export class DeliverableExecutor {
 		if (!this.canSpawnNow(g, state, spec.mode)) return;
 
 		const mode = spec.mode;
-		const slot = ("slot" in spec ? spec.slot : undefined) ?? "default";
 		const effort = ("effort" in spec ? spec.effort : undefined) ?? "low";
 
 		const { agentName: genName } = await import("./agent-names.js");
@@ -497,7 +494,6 @@ export class DeliverableExecutor {
 
 		agentState.status = "spawning";
 		agentState.displayName ??= genName(g.id, takenNames);
-		agentState.slot = slot;
 		agentState.effort = effort;
 		agentState.startedAt = this.deps.now();
 
@@ -511,7 +507,6 @@ export class DeliverableExecutor {
 			agentName: name,
 			displayName: agentState.displayName,
 			mode,
-			slot,
 			effort,
 			worktreePath: state.worktreePath!,
 			seed,

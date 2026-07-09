@@ -13,6 +13,7 @@ import {
 	EVENTS,
 	type ModeName,
 	type ModesExecutionStatus,
+	type Tier,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import { isAgentMode } from "../agent-bridge.js";
@@ -39,6 +40,24 @@ export type { ModesRuntimeOptions } from "./context.js";
 const PLAN_CONTAINER = "plan" as const;
 
 export { PLAN_CONTAINER };
+
+/**
+ * The pinned model id for a tier, or undefined when the tier tracks the session
+ * model (⇒ let the subagent inherit the default, cache-warm). Used to wire the
+ * research/advisor and reviewer spawns to their tiers.
+ */
+async function pinnedTierModel(
+	ctx: ExtensionContext,
+	tier: Tier,
+): Promise<string | undefined> {
+	const sessionId = ctx.model
+		? `${ctx.model.provider}/${ctx.model.id}`
+		: undefined;
+	const resolved = await resolveSpawnModelSafe(ctx, { tier });
+	return resolved && resolved.modelId !== sessionId
+		? resolved.modelId
+		: undefined;
+}
 
 export interface ModesRuntime {
 	readonly askQueue: ModesAskQueue;
@@ -93,9 +112,7 @@ export function createModesRuntime(
 		},
 		researchToolsPath: () =>
 			join(repoRoot, "packages/research-tools/src/index.ts"),
-		resolveAdvisorModel: async (ctx) =>
-			(await resolveSpawnModelSafe(ctx, { slot: "alternate", effort: "high" }))
-				?.modelId,
+		resolveTierModel: (ctx, tier) => pinnedTierModel(ctx, tier),
 		onRunStarted: (run, ctx) => {
 			rt.researchRuns.set(run.id, run);
 			sendAgentEvent(pi, {
@@ -151,9 +168,10 @@ export function createModesRuntime(
 					return (await bridge.panelRead(id)) as SubAgentSpec[];
 				},
 				cwd: () => process.cwd(),
-				// default slot inherits the worker's model (cache-warm); an
-				// explicit spec.model drives the multi-model second-pair-of-eyes.
-				resolveModel: async (spec) => spec.model,
+				// Reviewers run on the `review` tier: a pinned distinct model
+				// (cross-model second opinion), or undefined to inherit the
+				// session model when review tracks plan.
+				resolveModel: (ctx) => pinnedTierModel(ctx, "review"),
 				reportVerdicts: (results) => {
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
@@ -219,21 +237,14 @@ export function createModesRuntime(
 
 	// Declare configurable settings for /maestro menu
 	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
-		// Agent + classifier model roles (classifier is read by the bash-intent
-		// hook; agent slot/effort feed the exec spawn's alternate override).
+		// Role → tier is hardcoded (worker→work, classifier→fast, …); tiers'
+		// models live in the active profile. Only per-role effort is exposed as
+		// an override (rarely needed).
 		{ key: "models.agent.effort", label: "Agent effort", type: "thinking" },
-		{ key: "models.agent.slot", label: "Agent slot", type: "slot" },
-		{ key: "models.agent.model", label: "Agent model", type: "model" },
 		{
 			key: "models.classifier.effort",
 			label: "Classifier effort",
 			type: "thinking",
-		},
-		{ key: "models.classifier.slot", label: "Classifier slot", type: "slot" },
-		{
-			key: "models.classifier.model",
-			label: "Classifier model",
-			type: "model",
 		},
 		// Compaction budgets — read by readModesCompactionSettings; declared here
 		// so they're discoverable/editable in /maestro (were hidden before).

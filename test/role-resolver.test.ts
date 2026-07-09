@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	activeProfile,
 	readModelsConfig,
 	resolveRoleModel,
-	resolveSlotModel,
+	resolveTierModel,
 	validateRoleModelConfig,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 let cwd: string;
 let agentDir: string;
+let prevAgentDir: string | undefined;
 
 function writeSettings(path: string, obj: Record<string, unknown>) {
 	mkdirSync(join(path, ".."), { recursive: true });
@@ -85,90 +87,37 @@ beforeEach(() => {
 	agentDir = join(cwd, ".pi-agent");
 	mkdirSync(join(cwd, ".pi"), { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
+	// The resolver reads the global layer from PI_CODING_AGENT_DIR (it calls
+	// readModelsConfig(ctx.cwd) with no explicit agentDir). Point it at our temp
+	// so global settings are our fixtures — and the dev's real profile can't leak.
+	prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 });
 afterEach(() => {
+	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 	if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
-});
-
-// ─── resolveSlotModel (the advisor second-pair-of-eyes fix) ──────────────────
-
-describe("resolveSlotModel", () => {
-	it("resolves the active preset's alternate slot directly", async () => {
-		projectSettings({
-			models: {
-				active: "anthropic",
-				presets: {
-					anthropic: { default: "anthropic/sonnet", alternate: "openai/o3" },
-				},
-			},
-		});
-		const res = await resolveSlotModel(fakeCtx({}), "alternate", "high");
-		expect(res?.modelId).toBe("openai/o3");
-		expect(res?.effort).toBe("high");
-		expect(res?.slot).toBe("alternate");
-		expect(res?.apiKey).toBe("sk-test");
-	});
-
-	it("returns null when the slot is unconfigured (caller falls back)", async () => {
-		projectSettings({
-			models: {
-				active: "solo",
-				presets: { solo: { default: "anthropic/sonnet" } },
-			},
-		});
-		expect(await resolveSlotModel(fakeCtx({}), "alternate")).toBeNull();
-	});
 });
 
 // ─── validateRoleModelConfig ─────────────────────────────────────────────────
 
 describe("validateRoleModelConfig", () => {
-	it("accepts valid slot config", () => {
-		const cfg = validateRoleModelConfig({ slot: "alternate", effort: "high" });
-		expect(cfg).toEqual({ slot: "alternate", effort: "high" });
-	});
-
-	it("accepts valid explicit model config", () => {
-		const cfg = validateRoleModelConfig({
-			model: "anthropic/sonnet",
-			effort: "medium",
-		});
-		expect(cfg).toEqual({ model: "anthropic/sonnet", effort: "medium" });
-	});
-
-	it("accepts slot with preset affinity", () => {
-		const cfg = validateRoleModelConfig({
-			slot: "alternate",
-			preset: "openai",
-			effort: "low",
-		});
-		expect(cfg).toEqual({ slot: "alternate", preset: "openai", effort: "low" });
-	});
-
-	it("rejects when both model and slot are set", () => {
-		const cfg = validateRoleModelConfig({
-			model: "x/y",
-			slot: "alternate",
-		});
-		expect(cfg).toBeUndefined();
-	});
-
-	it("rejects unknown slot values", () => {
-		const cfg = validateRoleModelConfig({ slot: "tertiary" });
-		expect(cfg).toBeUndefined();
-	});
-
-	it("rejects unknown effort levels", () => {
-		const cfg = validateRoleModelConfig({
-			slot: "default",
-			effort: "ultra",
-		});
-		expect(cfg).toEqual({ slot: "default" });
+	it("accepts explicit model config", () => {
+		expect(
+			validateRoleModelConfig({ model: "anthropic/sonnet", effort: "medium" }),
+		).toEqual({ model: "anthropic/sonnet", effort: "medium" });
 	});
 
 	it("accepts effort-only config", () => {
-		const cfg = validateRoleModelConfig({ effort: "xhigh" });
-		expect(cfg).toEqual({ effort: "xhigh" });
+		expect(validateRoleModelConfig({ effort: "xhigh" })).toEqual({
+			effort: "xhigh",
+		});
+	});
+
+	it("drops unknown effort levels", () => {
+		expect(validateRoleModelConfig({ model: "x/y", effort: "ultra" })).toEqual({
+			model: "x/y",
+		});
 	});
 
 	it("rejects empty config", () => {
@@ -179,45 +128,71 @@ describe("validateRoleModelConfig", () => {
 // ─── readModelsConfig ────────────────────────────────────────────────────────
 
 describe("readModelsConfig", () => {
-	it("reads new preset format from project settings", () => {
+	it("reads profiles from project settings", () => {
 		projectSettings({
 			models: {
-				active: "anthropic",
-				presets: {
-					anthropic: { default: "anthropic/sonnet", alternate: "openai/o3" },
+				profiles: {
+					opus: {
+						targets: ["anthropic/sonnet"],
+						review: { model: "openai/o3", effort: "high" },
+					},
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.active).toBe("anthropic");
-		expect(config?.presets.anthropic.default.model).toBe("anthropic/sonnet");
-		expect(config?.presets.anthropic.alternate?.model).toBe("openai/o3");
+		expect(config?.profiles.opus.targets).toEqual(["anthropic/sonnet"]);
+		expect(config?.profiles.opus.review?.model).toBe("openai/o3");
 	});
 
-	it("merges global and project — project wins per slot", () => {
+	it("merges global and project — project wins per tier, globals survive", () => {
 		globalSettings({
 			models: {
-				active: "anthropic",
-				presets: {
-					anthropic: { default: "anthropic/haiku", alternate: "openai/mini" },
+				profiles: {
+					opus: {
+						targets: ["anthropic/haiku"],
+						fast: { model: "openai/mini" },
+						review: { model: "global/fast" },
+					},
 				},
 			},
 		});
 		projectSettings({
 			models: {
-				active: "anthropic",
-				presets: {
-					anthropic: { default: "anthropic/sonnet" },
+				profiles: {
+					opus: {
+						targets: ["anthropic/sonnet"],
+						review: { model: "openai/o3" },
+					},
 				},
 			},
 		});
 		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.presets.anthropic.default.model).toBe("anthropic/sonnet");
-		expect(config?.presets.anthropic.alternate?.model).toBe("openai/mini");
+		expect(config?.profiles.opus.targets).toEqual(["anthropic/sonnet"]);
+		expect(config?.profiles.opus.review?.model).toBe("openai/o3");
+		expect(config?.profiles.opus.fast?.model).toBe("openai/mini");
 	});
 
 	it("returns undefined when nothing is configured", () => {
 		expect(readModelsConfig(cwd, agentDir)).toBeUndefined();
+	});
+});
+
+// ─── activeProfile ───────────────────────────────────────────────────────────
+
+describe("activeProfile", () => {
+	it("matches the profile whose targets include the session model", () => {
+		projectSettings({
+			models: {
+				profiles: {
+					a: { targets: ["anthropic/sonnet", "anthropic/haiku"] },
+					b: { targets: ["openai/o3"] },
+				},
+			},
+		});
+		const cfg = readModelsConfig(cwd, agentDir);
+		expect(activeProfile(cfg, "anthropic/haiku")?.name).toBe("a");
+		expect(activeProfile(cfg, "openai/o3")?.name).toBe("b");
+		expect(activeProfile(cfg, "good/model")).toBeUndefined();
 	});
 });
 
@@ -227,17 +202,16 @@ describe("resolveRoleModel", () => {
 	it("explicit override wins over everything", async () => {
 		projectSettings({
 			models: {
-				active: "anthropic",
-				presets: { anthropic: { default: "anthropic/sonnet" } },
-			},
-			extensionConfig: {
-				modes: { models: { agent: { effort: "medium" } } },
+				profiles: {
+					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
+				},
 			},
 		});
-		const ctx = fakeCtx({});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 			explicit: { model: "openai/o3", effort: "xhigh" },
 		});
 		expect(r?.modelId).toBe("openai/o3");
@@ -245,148 +219,156 @@ describe("resolveRoleModel", () => {
 		expect(r?.source).toBe("explicit");
 	});
 
-	it("env var wins over settings", async () => {
+	it("env var wins over profile/session", async () => {
 		projectSettings({
 			models: {
-				active: "anthropic",
-				presets: { anthropic: { default: "anthropic/sonnet" } },
-			},
-			extensionConfig: {
-				modes: { models: { agent: { effort: "low" } } },
+				profiles: {
+					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
+				},
 			},
 		});
-		const ctx = fakeCtx({});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 			env: { model: "openai/o3", effort: "high" },
 		});
 		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.effort).toBe("high");
 		expect(r?.source).toBe("env");
 	});
 
-	it("preset affinity on role overrides models.active", async () => {
+	it("per-role model escape hatch overrides the tier", async () => {
 		projectSettings({
 			models: {
-				active: "anthropic",
-				presets: {
-					anthropic: { default: "anthropic/haiku" },
-					openai: { default: "openai/mini" },
+				profiles: {
+					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
 				},
 			},
 			extensionConfig: {
-				modes: {
-					models: {
-						classifier: { preset: "openai", effort: "off" },
+				modes: { models: { agent: { model: "openai/o3", effort: "low" } } },
+			},
+		});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "agent",
+			tier: "work",
+		});
+		expect(r?.modelId).toBe("openai/o3");
+		expect(r?.effort).toBe("low");
+		expect(r?.source).toBe("profile");
+	});
+
+	it("resolves the tier's pinned model via the active profile", async () => {
+		projectSettings({
+			models: {
+				profiles: {
+					a: {
+						targets: ["anthropic/sonnet"],
+						review: { model: "openai/o3", effort: "high" },
 					},
 				},
 			},
 		});
-		const ctx = fakeCtx({});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
-			role: "classifier",
-		});
-		expect(r?.modelId).toBe("openai/mini");
-		expect(r?.effort).toBe("off");
-		expect(r?.preset).toBe("openai");
-		expect(r?.slot).toBe("default");
-	});
-
-	it("slot resolves model from preset", async () => {
-		projectSettings({
-			models: {
-				active: "test",
-				presets: { test: { default: "good/model", alternate: "openai/o3" } },
-			},
-			extensionConfig: {
-				modes: { models: { analyze: { slot: "alternate", effort: "xhigh" } } },
-			},
-		});
-		const ctx = fakeCtx({});
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "analyze",
+			role: "reviewer",
+			tier: "review",
 		});
 		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.effort).toBe("xhigh");
-		expect(r?.slot).toBe("alternate");
+		expect(r?.effort).toBe("high");
+		expect(r?.source).toBe("profile");
+		expect(r?.tier).toBe("review");
+		expect(r?.profile).toBe("a");
 	});
 
-	it("slot with no auth fails through to session model", async () => {
+	it("an unset tier tracks plan (the session model)", async () => {
+		projectSettings({
+			models: { profiles: { a: { targets: ["anthropic/sonnet"] } } },
+		});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "agent",
+			tier: "work",
+		});
+		expect(r?.modelId).toBe("anthropic/sonnet");
+		expect(r?.source).toBe("session");
+	});
+
+	it("falls back to the session model when no profile claims it", async () => {
 		projectSettings({
 			models: {
-				active: "bad",
-				presets: { bad: { default: "noauth/model" } },
+				profiles: {
+					a: { targets: ["openai/o3"], work: { model: "good/model" } },
+				},
 			},
-			extensionConfig: {
-				modes: { models: { agent: { effort: "high" } } },
+		});
+		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "agent",
+			tier: "work",
+		});
+		expect(r?.modelId).toBe("anthropic/sonnet");
+		expect(r?.source).toBe("session");
+	});
+
+	it("a pinned tier model without auth fails through to session", async () => {
+		projectSettings({
+			models: {
+				profiles: {
+					a: { targets: ["good/model"], work: { model: "noauth/model" } },
+				},
 			},
 		});
 		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 		});
 		expect(r?.modelId).toBe("good/model");
 		expect(r?.source).toBe("session");
 	});
 
-	it("falls back to session model when no settings configured", async () => {
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-		});
-		expect(r?.modelId).toBe("anthropic/sonnet");
-		expect(r?.source).toBe("session");
-	});
-
-	it("an UNSET role resolves through the active preset, not the raw session model", async () => {
-		// No role config at all, but an active preset exists — the preset is the
-		// source of truth, so it must win over the differing session model.
-		projectSettings({
-			models: { active: "a", presets: { a: { default: "good/model" } } },
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.source).toBe("preset");
-	});
-
-	it("effort from role config preserved when resolving via preset", async () => {
-		projectSettings({
-			models: {
-				active: "a",
-				presets: { a: { default: "good/model" } },
-			},
-			extensionConfig: {
-				modes: { models: { analyze: { effort: "xhigh" } } },
-			},
-		});
-		const ctx = fakeCtx({});
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "analyze",
-		});
-		expect(r?.effort).toBe("xhigh");
-		expect(r?.modelId).toBe("good/model");
-	});
-
-	it("returns null when nothing resolves and no session model", async () => {
+	it("returns null when no session model and nothing resolves", async () => {
 		const ctx = fakeCtx({});
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 		});
 		expect(r).toBeNull();
 	});
 
-	it("effort-only role config uses session model with that effort", async () => {
+	it("effort from role config is preserved over the tier effort", async () => {
+		projectSettings({
+			models: {
+				profiles: {
+					a: {
+						targets: ["good/model"],
+						work: { model: "good/model", effort: "low" },
+					},
+				},
+			},
+			extensionConfig: {
+				modes: { models: { agent: { effort: "xhigh" } } },
+			},
+		});
+		const ctx = fakeCtx({ sessionModel: "good/model" });
+		const r = await resolveRoleModel(ctx, {
+			extension: "modes",
+			role: "agent",
+			tier: "work",
+		});
+		expect(r?.modelId).toBe("good/model");
+		expect(r?.effort).toBe("xhigh");
+	});
+
+	it("effort-only role config uses the session model with that effort", async () => {
 		projectSettings({
 			extensionConfig: {
 				modes: { models: { agent: { effort: "low" } } },
@@ -396,74 +378,96 @@ describe("resolveRoleModel", () => {
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 		});
 		expect(r?.modelId).toBe("anthropic/sonnet");
 		expect(r?.effort).toBe("low");
 		expect(r?.source).toBe("session");
 	});
 
-	it("requireApiKey: model without key fails through to session", async () => {
+	it("requireApiKey: a keyless tier model fails through to session", async () => {
 		projectSettings({
 			models: {
-				active: "test",
-				presets: { test: { default: "keyless/model" } },
-			},
-			extensionConfig: {
-				modes: { models: { agent: {} } },
+				profiles: {
+					a: { targets: ["good/model"], work: { model: "keyless/model" } },
+				},
 			},
 		});
 		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 			requireApiKey: true,
 		});
 		expect(r?.modelId).toBe("good/model");
 		expect(r?.source).toBe("session");
 	});
 
-	it("project settings override global per-slot", async () => {
+	it("project profile config overrides global", async () => {
 		globalSettings({
 			models: {
-				active: "p",
-				presets: { p: { default: "global/fast" } },
+				profiles: {
+					p: { targets: ["good/model"], work: { model: "global/fast" } },
+				},
 			},
 		});
 		projectSettings({
 			models: {
-				active: "p",
-				presets: { p: { default: "project/fast" } },
-			},
-			extensionConfig: {
-				modes: { models: { agent: { effort: "high" } } },
+				profiles: {
+					p: { targets: ["good/model"], work: { model: "project/fast" } },
+				},
 			},
 		});
-		const ctx = fakeCtx({});
+		const ctx = fakeCtx({ sessionModel: "good/model" });
 		const r = await resolveRoleModel(ctx, {
 			extension: "modes",
 			role: "agent",
+			tier: "work",
 		});
 		expect(r?.modelId).toBe("project/fast");
-		expect(r?.source).toBe("preset");
+		expect(r?.source).toBe("profile");
 	});
+});
 
-	it("env effort used when role config has no effort", async () => {
+// ─── resolveTierModel ────────────────────────────────────────────────────────
+
+describe("resolveTierModel", () => {
+	it("resolves the review tier's pinned model directly", async () => {
 		projectSettings({
 			models: {
-				active: "test",
-				presets: { test: { default: "good/model" } },
-			},
-			extensionConfig: {
-				modes: { models: { agent: { slot: "default" } } },
+				profiles: {
+					a: {
+						targets: ["anthropic/sonnet"],
+						review: { model: "openai/o3", effort: "high" },
+					},
+				},
 			},
 		});
-		const ctx = fakeCtx({});
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			env: { effort: "high" },
+		const res = await resolveTierModel(
+			fakeCtx({ sessionModel: "anthropic/sonnet" }),
+			"review",
+			{ effort: "high" },
+		);
+		expect(res?.modelId).toBe("openai/o3");
+		expect(res?.effort).toBe("high");
+		expect(res?.source).toBe("profile");
+		expect(res?.tier).toBe("review");
+	});
+
+	it("returns the session model when the tier tracks plan", async () => {
+		projectSettings({
+			models: { profiles: { a: { targets: ["anthropic/sonnet"] } } },
 		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.effort).toBe("high");
+		const res = await resolveTierModel(
+			fakeCtx({ sessionModel: "anthropic/sonnet" }),
+			"review",
+		);
+		expect(res?.modelId).toBe("anthropic/sonnet");
+		expect(res?.source).toBe("session");
+	});
+
+	it("returns null with no session model", async () => {
+		expect(await resolveTierModel(fakeCtx({}), "review")).toBeNull();
 	});
 });

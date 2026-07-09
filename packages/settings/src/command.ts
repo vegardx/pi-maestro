@@ -4,17 +4,13 @@
 // modification of project/global settings.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SLOTS } from "@vegardx/pi-contracts";
-import { readModelsConfig } from "@vegardx/pi-models";
+import { type ModelsConfig, PINNABLE_TIERS } from "@vegardx/pi-contracts";
+import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import {
 	type ExtensionConfigMap,
 	readLayeredExtensionConfig,
 } from "./reader.js";
-import {
-	type SettingsScope,
-	updateSettingsFile,
-	writeExtensionConfigKey,
-} from "./writer.js";
+import { type SettingsScope, writeExtensionConfigKey } from "./writer.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -23,6 +19,17 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 type Source = "global" | "project" | "env" | "default";
+
+/** The profile whose targets include the current session model (derived). */
+function activeProfileName(
+	ctx: ExtensionContext,
+	cfg: ModelsConfig,
+): string | undefined {
+	const sessionId = ctx.model
+		? `${ctx.model.provider}/${ctx.model.id}`
+		: undefined;
+	return activeProfile(cfg, sessionId)?.name;
+}
 
 interface AnnotatedValue {
 	key: string;
@@ -106,22 +113,25 @@ function handleShow(ctx: ExtensionContext): void {
 
 	const content: string[] = [];
 
-	// Models presets section
+	// Model profiles section
 	if (modelsConfig) {
-		content.push("Models");
-		content.push(`  active preset: ${modelsConfig.active}`);
+		const active = activeProfileName(ctx, modelsConfig);
+		content.push("Model profiles");
 		content.push("");
-		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
-			const marker = name === modelsConfig.active ? " (active)" : "";
+		for (const [name, profile] of Object.entries(modelsConfig.profiles)) {
+			const marker = name === active ? " (active)" : "";
 			content.push(`  ${name}${marker}`);
-			for (const slot of SLOTS) {
-				const slotConfig = preset[slot];
-				if (slotConfig?.model) {
-					const effortStr = slotConfig.effort ? ` (${slotConfig.effort})` : "";
-					content.push(
-						`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`,
-					);
-				}
+			content.push(
+				`    targets: ${profile.targets.length ? profile.targets.join(", ") : "(none)"}`,
+			);
+			for (const tier of PINNABLE_TIERS) {
+				const tc = profile[tier];
+				const disp = tc?.model
+					? tc.effort
+						? `${tc.model} (${tc.effort})`
+						: tc.model
+					: "= plan";
+				content.push(`    ${tier.padEnd(8)} ${disp}`);
 			}
 		}
 		content.push("");
@@ -143,19 +153,17 @@ function handleShow(ctx: ExtensionContext): void {
 	}
 
 	if (content.length === 0) {
-		content.push("No presets or extension settings configured.");
+		content.push("No profiles or extension settings configured.");
 		content.push("");
-		content.push("Quick start:");
-		content.push("  /maestro set modes.models.agent.effort high");
-		content.push("  /maestro set modes.models.agent.thinking medium");
-		content.push("  /maestro set modes.maxAgents 4");
-		content.push("");
-		content.push("Preset example (.pi/settings.json):");
-		content.push('  { "models": { "active": "anthropic", "presets": {');
+		content.push("Open the interactive editor with /maestro, or hand-edit");
+		content.push("settings.json:");
+		content.push('  { "models": { "profiles": {');
+		content.push('    "opus": {');
+		content.push('      "targets": ["anthropic/claude-opus-4-8"],');
 		content.push(
-			'    "anthropic": { "normal": ["anthropic/claude-sonnet-4-5"] }',
+			'      "review": { "model": "openai/gpt-5.5", "effort": "high" }',
 		);
-		content.push("  } } }");
+		content.push("    } } } }");
 	}
 
 	ctx.ui.notify(boxDraw("Maestro Configuration", content), "info");
@@ -312,56 +320,44 @@ function handleReset(args: string, ctx: ExtensionContext): void {
 	}
 }
 
-function handlePreset(args: string, ctx: ExtensionContext): void {
-	let scope: SettingsScope = "project";
-	let rest = args.trim();
-
-	if (rest.startsWith("--global ")) {
-		scope = "global";
-		rest = rest.slice("--global ".length).trim();
-	}
-
+function handleProfiles(ctx: ExtensionContext): void {
 	const modelsConfig = readModelsConfig(ctx.cwd);
-
-	if (!rest) {
-		// Show presets
-		if (!modelsConfig) {
-			ctx.ui.notify("No model presets configured.", "info");
-			return;
-		}
-		const lines: string[] = [`Active preset: ${modelsConfig.active}`, ""];
-		for (const [name, preset] of Object.entries(modelsConfig.presets)) {
-			const marker = name === modelsConfig.active ? " (active)" : "";
-			lines.push(`  ${name}${marker}`);
-			for (const slot of SLOTS) {
-				const slotConfig = preset[slot];
-				if (slotConfig?.model) {
-					const effortStr = slotConfig.effort ? ` (${slotConfig.effort})` : "";
-					lines.push(`    ${slot.padEnd(10)} ${slotConfig.model}${effortStr}`);
-				}
-			}
-		}
-		ctx.ui.notify(lines.join("\n"), "info");
-		return;
-	}
-
-	// Switch preset
-	const presetName = rest;
-	if (modelsConfig && !modelsConfig.presets[presetName]) {
-		const available = Object.keys(modelsConfig.presets).join(", ");
+	if (!modelsConfig) {
 		ctx.ui.notify(
-			`Preset "${presetName}" not found. Available: ${available}`,
-			"warning",
+			"No model profiles configured. Open /maestro to create one.",
+			"info",
 		);
 		return;
 	}
-
-	updateSettingsFile(scope, ctx.cwd, undefined, (raw) => {
-		if (!isPlainObject(raw.models)) raw.models = {};
-		(raw.models as Record<string, unknown>).active = presetName;
-	});
-
-	ctx.ui.notify(`\u2713 Preset \u2192 ${presetName} [${scope}]`, "info");
+	const active = activeProfileName(ctx, modelsConfig);
+	const lines: string[] = [];
+	lines.push(
+		active
+			? `Active profile: ${active} (via /model)`
+			: "No active profile \u2014 every tier tracks the session model.",
+	);
+	lines.push("");
+	for (const [name, profile] of Object.entries(modelsConfig.profiles)) {
+		const marker = name === active ? " (active)" : "";
+		lines.push(`  ${name}${marker}`);
+		lines.push(
+			`    targets: ${profile.targets.length ? profile.targets.join(", ") : "(none)"}`,
+		);
+		for (const tier of PINNABLE_TIERS) {
+			const tc = profile[tier];
+			const disp = tc?.model
+				? tc.effort
+					? `${tc.model} (${tc.effort})`
+					: tc.model
+				: "= plan";
+			lines.push(`    ${tier.padEnd(8)} ${disp}`);
+		}
+	}
+	lines.push("");
+	lines.push(
+		"Switch profiles with /model \u2014 the session model selects it.",
+	);
+	ctx.ui.notify(lines.join("\n"), "info");
 }
 
 // ─── Main dispatch ──────────────────────────────────────────────────────────
@@ -388,12 +384,12 @@ export function handleSettingsCommand(
 		case "reset":
 			handleReset(subArgs, ctx);
 			break;
-		case "preset":
-			handlePreset(subArgs, ctx);
+		case "profiles":
+			handleProfiles(ctx);
 			break;
 		default:
 			ctx.ui.notify(
-				`Unknown subcommand "${sub}". Use: show, get, set, reset, preset`,
+				`Unknown subcommand "${sub}". Use: show, get, set, reset, profiles`,
 				"warning",
 			);
 	}
@@ -401,7 +397,7 @@ export function handleSettingsCommand(
 
 // ─── Tab completions ────────────────────────────────────────────────────────
 
-const SUBCOMMANDS = ["show", "get", "set", "reset", "preset"] as const;
+const SUBCOMMANDS = ["show", "get", "set", "reset", "profiles"] as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
 export function getSettingsCompletions(
@@ -428,11 +424,8 @@ export function getSettingsCompletions(
 			parts.length > offset && (hasTrailingSpace || parts.length > offset + 1);
 		if (sub === "set" && keyComplete) {
 			const key = parts[offset];
-			if (key.endsWith("thinking")) {
+			if (key.endsWith("thinking") || key.endsWith("effort")) {
 				return [...THINKING_LEVELS];
-			}
-			if (key.endsWith("slot")) {
-				return [...SLOTS];
 			}
 			return [];
 		}
@@ -454,15 +447,6 @@ export function getSettingsCompletions(
 		if (sub !== "get" && parts.length === 2 && "--global".startsWith(keyPart)) {
 			return ["--global"];
 		}
-	}
-
-	// Complete preset name
-	if (sub === "preset") {
-		const modelsConfig = readModelsConfig(ctx.cwd);
-		if (!modelsConfig) return [];
-		const prefix = parts[parts.length - 1] ?? "";
-		const names = Object.keys(modelsConfig.presets);
-		return names.filter((n) => n.startsWith(prefix));
 	}
 
 	return [];

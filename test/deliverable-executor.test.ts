@@ -186,7 +186,6 @@ describe("DeliverableExecutor — agent graph", () => {
 		engine.addAgent("work", {
 			name: "review",
 			mode: "read-only",
-			slot: "alternate",
 			effort: "high",
 			focus: "security",
 			after: ["worker"],
@@ -209,7 +208,6 @@ describe("DeliverableExecutor — agent graph", () => {
 		engine.addAgent("work", {
 			name: "review",
 			mode: "read-only",
-			slot: "alternate",
 			effort: "high",
 			focus: "security",
 			after: ["worker"],
@@ -235,7 +233,6 @@ describe("DeliverableExecutor — agent graph", () => {
 		engine.addAgent("work", {
 			name: "security",
 			mode: "read-only",
-			slot: "alternate",
 			effort: "high",
 			focus: "sec",
 			after: ["worker"],
@@ -243,7 +240,6 @@ describe("DeliverableExecutor — agent graph", () => {
 		engine.addAgent("work", {
 			name: "perf",
 			mode: "read-only",
-			slot: "default",
 			effort: "low",
 			focus: "perf",
 			after: ["worker"],

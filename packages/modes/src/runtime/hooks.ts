@@ -185,6 +185,40 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			installMaestroFooter(rt, ctx);
 		}
 		rt.notifyMode(ctx);
+
+		// Interrupted execution: the previous session ended (quit/crash) with
+		// deliverables mid-flight. Detect it and offer recovery — the state
+		// hydrates but nothing recreates the executor, so without this the
+		// plan silently sits "active" with no one driving it.
+		if (
+			!isAgentMode() &&
+			rt.engine &&
+			(rt.state.mode === "auto" || rt.state.mode === "hack") &&
+			!rt.execution
+		) {
+			const actives = rt.engine
+				.get()
+				.deliverables.filter((g) => g.status === "active");
+			if (actives.length > 0) {
+				ctx.ui.notify(
+					`${actives.length} deliverable(s) were mid-execution when the last session ended: ` +
+						`${actives.map((g) => g.id).join(", ")} — /recover audits the plan and resumes them.`,
+					"warning",
+				);
+				void (async () => {
+					try {
+						const yes = await ctx.ui.confirm(
+							"Recover execution",
+							`Resume ${actives.length} interrupted deliverable(s)? Workers respawn from their saved sessions; /recover also works later.`,
+						);
+						if (yes) await rt.runRecover(ctx);
+					} catch {
+						// Confirm surface unavailable this early — the notify above
+						// already points at /recover.
+					}
+				})();
+			}
+		}
 		// Agent-side RPC bridge: connect to maestro if running as agent
 		rt.agentBridge = initAgentBridge(pi);
 		if (rt.agentBridge) {

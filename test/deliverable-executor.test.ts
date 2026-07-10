@@ -877,3 +877,92 @@ describe("DeliverableExecutor — send back to worker (gate rework)", () => {
 		expect(await executor.sendBackToWorker("ghost", "go")).toBe(false);
 	});
 });
+
+describe("DeliverableExecutor — restart recovery", () => {
+	function hydratedExecutor(opts: {
+		sessionPath?: string;
+		worktreeExists?: boolean;
+		deps?: Partial<ExecutorDeps>;
+	}) {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "t" });
+		engine.setDeliverableStatus("auth", "active");
+		engine.updateDeliverable("auth", {
+			branch: "feat/auth",
+			// A real dir vs a gone one — recovery re-provisions the latter.
+			worktreePath: opts.worktreeExists === false ? "/nonexistent/wt" : "/tmp",
+			...(opts.sessionPath ? { sessionPath: opts.sessionPath } : {}),
+		});
+		const deps = makeDeps(opts.deps);
+		// Constructor hydrates the already-active deliverable as blocked.
+		const executor = new DeliverableExecutor(engine, deps);
+		return { engine, deps, executor };
+	}
+
+	it("hydration parks restarts blocked, pointing at /recover, with the session file seeded", () => {
+		const { executor } = hydratedExecutor({
+			sessionPath: "/tmp/sessions/auth-worker.jsonl",
+		});
+		const state = executor.getStates().get("auth");
+		expect(state?.blocked).toContain("maestro restarted");
+		expect(state?.blocked).toContain("/recover");
+		expect(state?.agents.get("worker")?.sessionFile).toBe(
+			"/tmp/sessions/auth-worker.jsonl",
+		);
+	});
+
+	it("recoverInterrupted respawns the worker RESUMED from the persisted session", async () => {
+		const { deps, executor } = hydratedExecutor({
+			sessionPath: "/tmp/sessions/auth-worker.jsonl",
+		});
+		const { recovered, failed } = await executor.recoverInterrupted();
+		expect(recovered).toEqual(["auth"]);
+		expect(failed).toEqual([]);
+		expect(executor.getStates().get("auth")?.blocked).toBeUndefined();
+		expect(deps.spawnAgent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				agentName: "worker",
+				resumeSessionFile: "/tmp/sessions/auth-worker.jsonl",
+			}),
+		);
+	});
+
+	it("re-provisions a vanished worktree before respawning", async () => {
+		const { deps, executor } = hydratedExecutor({ worktreeExists: false });
+		const { recovered } = await executor.recoverInterrupted();
+		expect(recovered).toEqual(["auth"]);
+		expect(deps.createWorktree).toHaveBeenCalledWith(
+			expect.objectContaining({ deliverableId: "auth", branch: "feat/auth" }),
+		);
+		// No session file persisted → fresh seed, not a resume.
+		const spawn = (deps.spawnAgent as ReturnType<typeof vi.fn>).mock
+			.calls[0][0] as { resumeSessionFile?: string };
+		expect(spawn.resumeSessionFile).toBeUndefined();
+	});
+
+	it("re-parks the deliverable when recovery itself fails", async () => {
+		const { executor } = hydratedExecutor({
+			worktreeExists: false,
+			deps: {
+				createWorktree: vi.fn().mockRejectedValue(new Error("repo gone")),
+			},
+		});
+		const { recovered, failed } = await executor.recoverInterrupted();
+		expect(recovered).toEqual([]);
+		expect(failed).toEqual([{ id: "auth", error: "repo gone" }]);
+		expect(executor.getStates().get("auth")?.blocked).toContain(
+			"recovery failed: repo gone",
+		);
+		expect(executor.getStates().get("auth")?.blocked).toContain("/retry auth");
+	});
+
+	it("does not touch deliverables blocked for other reasons", async () => {
+		const { executor } = hydratedExecutor({});
+		const state = executor.getStates().get("auth");
+		state!.blocked = "ship gate: security-audit requested changes";
+		const { recovered } = await executor.recoverInterrupted();
+		expect(recovered).toEqual([]);
+		expect(state?.blocked).toContain("ship gate:");
+	});
+});

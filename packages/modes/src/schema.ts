@@ -142,8 +142,14 @@ export interface Deliverable {
 	branch?: string;
 	/** Worktree path while active; cleared on completion. */
 	worktreePath?: string;
-	/** Session file path for the worker session. */
+	/**
+	 * Session file path for the worker session. Persisted at spawn so a
+	 * restarted maestro can respawn the worker RESUMED (pi appends to the
+	 * session file in place — the transcript survives the process).
+	 */
 	sessionPath?: string;
+	/** Worker tmux session name; persisted at spawn for orphan cleanup on recovery. */
+	sessionName?: string;
 	/** Combined summary of all agent outputs (produced at deliverable completion). */
 	summary?: string;
 	/** PR URL once shipped. */

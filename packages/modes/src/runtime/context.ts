@@ -37,6 +37,7 @@ import type { PendingModesCompaction } from "../compaction.js";
 import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
+import { auditPlan, renderAudit } from "../exec/recovery.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
 import { clearResearchScratch, type ResearchRunView } from "../research.js";
@@ -158,6 +159,10 @@ export interface RuntimeContext {
 	recordMaestroUsage(usage: unknown): void;
 	incrementMaestroTurn(): void;
 	runImplement(args: string, ctx: ExtensionContext): Promise<void>;
+	/** Build the execution adapter for the active plan if absent (idempotent). */
+	ensureExecution(ctx: ExtensionContext): Promise<void>;
+	/** Audit the plan against reality and resume interrupted deliverables. */
+	runRecover(ctx: ExtensionContext): Promise<void>;
 }
 
 export function createRuntimeContext(
@@ -532,73 +537,8 @@ export function createRuntimeContext(
 
 			// Deliverable execution via the execution seam
 			if (!isAgentMode()) {
-				if (!rt.execution) {
-					const maestroRoot = resolve(
-						dirname(fileURLToPath(import.meta.url)),
-						"../../../..",
-					);
-					rt.execution = createExecution({
-						engine: activeEngine,
-						ctx,
-						extensionPath: maestroRoot,
-						// Workers MUST load the maestro package itself (agent bridge,
-						// task tool, RPC idle reports) — argv discovery alone finds
-						// nothing when the maestro is loaded via pi's `packages`
-						// mechanism instead of -e, which left workers as vanilla pi:
-						// they finished their work but could never report back, so
-						// the run hung forever. Then any extra -e extensions the
-						// maestro was launched with, then the childExtensions
-						// passthrough (custom model providers etc).
-						extensionPaths: [
-							...new Set([
-								maestroRoot,
-								...discoverExtensionPaths().map((p) => resolve(p)),
-								...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
-							]),
-						],
-						planDir: join(plansRoot(), activeEngine.get().slug),
-						defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
-						worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
-						onPlanChanged: () => rt.emitPlanChanged(),
-						onAgentStateChanged: (id, state) => {
-							usageLedger.record({ kind: "agent", id }, state.tokens);
-							rt.invalidateFooter?.();
-							syncAgentWidget(rt, ctx);
-							// Sync worker panes when agents complete
-							if (rt.execution && rt.workerPanes.isOpen()) {
-								rt.workerPanes
-									.sync(rt.execution.getWorkerSessions())
-									.catch(() => {});
-							}
-						},
-						// The settled card (onEvent) is the recap now; onAllSettled
-						// refreshes the footer, clears the agent widget, and wipes the
-						// plan's research scratch (full reports are throwaway once the
-						// plan has shipped).
-						// Gate disagreements go to the HUMAN as a question; the
-						// override route executes extension-side on their answer.
-						onShipGateBlocked: (deliverableId, reason) => {
-							void presentGateDecision(
-								{
-									ask: () => maestro.capabilities.get(CAPABILITIES.ask),
-									execution: () => rt.execution,
-									pi,
-									notify: (m, level) => ctx.ui.notify(m, level),
-								},
-								deliverableId,
-								reason,
-							);
-						},
-						onAllSettled: () => {
-							rt.invalidateFooter?.();
-							syncAgentWidget(rt, ctx);
-							const eng = rt.engine;
-							if (eng) clearResearchScratch(eng.get().slug);
-						},
-						onEvent: (event) => sendAgentEvent(pi, event),
-					});
-					await rt.execution.start();
-				}
+				await rt.ensureExecution(ctx);
+				if (!rt.execution) return;
 				const activated = await rt.execution.tick();
 				syncAgentWidget(rt, ctx);
 				if (activated > 0) {
@@ -632,6 +572,132 @@ export function createRuntimeContext(
 				"tmux is required for /implement. Install tmux and try again.",
 				"warning",
 			);
+		},
+
+		// Build (once) the execution adapter for the active plan. Shared by
+		// /implement and /recover — a restarted session has mode/plan hydrated
+		// but no adapter until one of them runs.
+		async ensureExecution(ctx: ExtensionContext): Promise<void> {
+			if (rt.execution || !rt.engine || isAgentMode()) return;
+			const activeEngine = rt.engine;
+			const maestroRoot = resolve(
+				dirname(fileURLToPath(import.meta.url)),
+				"../../../..",
+			);
+			rt.execution = createExecution({
+				engine: activeEngine,
+				ctx,
+				extensionPath: maestroRoot,
+				// Workers MUST load the maestro package itself (agent bridge,
+				// task tool, RPC idle reports) — argv discovery alone finds
+				// nothing when the maestro is loaded via pi's `packages`
+				// mechanism instead of -e, which left workers as vanilla pi:
+				// they finished their work but could never report back, so
+				// the run hung forever. Then any extra -e extensions the
+				// maestro was launched with, then the childExtensions
+				// passthrough (custom model providers etc).
+				extensionPaths: [
+					...new Set([
+						maestroRoot,
+						...discoverExtensionPaths().map((p) => resolve(p)),
+						...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
+					]),
+				],
+				planDir: join(plansRoot(), activeEngine.get().slug),
+				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
+				worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
+				onPlanChanged: () => rt.emitPlanChanged(),
+				onAgentStateChanged: (id, state) => {
+					usageLedger.record({ kind: "agent", id }, state.tokens);
+					rt.invalidateFooter?.();
+					syncAgentWidget(rt, ctx);
+					// Sync worker panes when agents complete
+					if (rt.execution && rt.workerPanes.isOpen()) {
+						rt.workerPanes
+							.sync(rt.execution.getWorkerSessions())
+							.catch(() => {});
+					}
+				},
+				// The settled card (onEvent) is the recap now; onAllSettled
+				// refreshes the footer, clears the agent widget, and wipes the
+				// plan's research scratch (full reports are throwaway once the
+				// plan has shipped).
+				// Gate disagreements go to the HUMAN as a question; the
+				// override route executes extension-side on their answer.
+				onShipGateBlocked: (deliverableId, reason) => {
+					void presentGateDecision(
+						{
+							ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+							execution: () => rt.execution,
+							pi,
+							notify: (m, level) => ctx.ui.notify(m, level),
+						},
+						deliverableId,
+						reason,
+					);
+				},
+				onAllSettled: () => {
+					rt.invalidateFooter?.();
+					syncAgentWidget(rt, ctx);
+					const eng = rt.engine;
+					if (eng) clearResearchScratch(eng.get().slug);
+				},
+				onEvent: (event) => sendAgentEvent(pi, event),
+			});
+			await rt.execution.start();
+		},
+
+		// /recover: audit the plan against reality (worktrees, branches, PRs),
+		// then resume every deliverable interrupted by the restart — workers
+		// respawn RESUMED from their persisted session files.
+		async runRecover(ctx: ExtensionContext): Promise<void> {
+			if (!rt.engine) {
+				ctx.ui.notify("No active plan — /plan <slug> first.", "warning");
+				return;
+			}
+			const plan = rt.engine.get();
+			const started = plan.deliverables.some((g) => g.status !== "planned");
+			if (!started) {
+				ctx.ui.notify("Nothing to recover — the plan never started.", "info");
+				return;
+			}
+
+			// 1. Reality check: verify claimed statuses against disk/git/GitHub.
+			const audit = await auditPlan(plan);
+			ctx.ui.notify(
+				renderAudit(audit),
+				audit.problems > 0 ? "warning" : "info",
+			);
+
+			// 2. Resume interrupted execution.
+			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
+				rt.setMode("auto", ctx);
+			}
+			await rt.ensureExecution(ctx);
+			if (!rt.execution) {
+				ctx.ui.notify("tmux is required to resume workers.", "warning");
+				return;
+			}
+			const { recovered, failed } = await rt.execution
+				.getExecutor()
+				.recoverInterrupted();
+			await rt.execution.tick();
+			syncAgentWidget(rt, ctx);
+			if (recovered.length > 0) {
+				rt.setExecutionStage(
+					{ stage: "executing", deliverableId: "maestro" },
+					ctx,
+				);
+				const sessions = rt.execution.getWorkerSessions();
+				if (sessions.length > 0) await rt.workerPanes.open(sessions);
+			}
+			const parts = [
+				recovered.length > 0
+					? `Resumed ${recovered.length} deliverable(s): ${recovered.join(", ")}.`
+					: "No interrupted deliverables to resume.",
+				...failed.map((f) => `✗ ${f.id}: ${f.error}`),
+			];
+			ctx.ui.notify(parts.join("\n"), failed.length > 0 ? "warning" : "info");
 		},
 	};
 

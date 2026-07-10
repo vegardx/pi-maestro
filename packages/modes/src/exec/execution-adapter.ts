@@ -423,11 +423,35 @@ export class ExecutionAdapter {
 				const cols = process.stdout.columns || 200;
 				const rows = process.stdout.rows || 50;
 
+				// A previous maestro run's worker may still be running for this
+				// deliverable (crash orphan) — its RPC socket is dead, so it can
+				// never report. Kill it before spawning the replacement.
+				if (isWorker && deliverable.sessionName) {
+					const stale = deliverable.sessionName;
+					if (stale !== sessionName && (await this.tmux.hasSession(stale))) {
+						await this.tmux.kill(stale).catch(() => {});
+					}
+				}
+
 				await this.tmux.spawn(spec.sessionName, spec.cwd, spec.command, {
 					width: cols,
 					height: rows,
 					env: spec.env,
 				});
+
+				// Persist the worker's resume ingredients on the plan: a restarted
+				// maestro (which loses these in-memory maps) can then respawn the
+				// worker RESUMED from its session file instead of from scratch.
+				if (isWorker) {
+					try {
+						this.engine.updateDeliverable(spawnOpts.deliverableId, {
+							sessionPath: sessionFile,
+							sessionName,
+						});
+					} catch {
+						// Persistence is best-effort — recovery degrades to re-seed.
+					}
+				}
 
 				this.spawnTimes.set(agentKey, Date.now());
 				this.logEvent("spawn", {

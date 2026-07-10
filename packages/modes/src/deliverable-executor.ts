@@ -81,6 +81,9 @@ export interface DeliverableRunState {
 	blocked?: string;
 }
 
+/** Blocked-reason prefix for deliverables parked by restart hydration. */
+export const RESTART_BLOCK_PREFIX = "maestro restarted";
+
 // ─── Executor ────────────────────────────────────────────────────────────────
 
 export interface SpawnedAgent {
@@ -195,13 +198,16 @@ export class DeliverableExecutor {
 				deliverableWorkspace(g) === "scratch"
 					? undefined
 					: (g.branch ?? defaultBranchForDeliverable(g)),
-			blocked:
-				"maestro restarted — agents may still be running in tmux; /retry after inspecting",
+			blocked: `${RESTART_BLOCK_PREFIX} — /recover resumes the interrupted workers (or /retry ${g.id} for just this one)`,
 		};
 		deliverableState.agents.set("worker", {
 			name: "worker",
 			deliverableId: g.id,
 			status: "pending",
+			// The persisted session file makes the respawn a RESUME — the
+			// worker comes back cache-hot with its full transcript instead of
+			// being re-seeded from scratch.
+			...(g.sessionPath ? { sessionFile: g.sessionPath } : {}),
 		});
 		for (const agent of g.agents) {
 			deliverableState.agents.set(agent.name, {
@@ -360,6 +366,41 @@ export class DeliverableExecutor {
 	}
 
 	/**
+	 * Recover every deliverable parked by restart hydration: re-provision the
+	 * workspace when it vanished (idempotent), clear the block, and respawn
+	 * pending agents — the worker resumes from its persisted session file.
+	 * Failures re-park the deliverable with the cause (per-deliverable /retry).
+	 */
+	async recoverInterrupted(): Promise<{
+		recovered: string[];
+		failed: Array<{ id: string; error: string }>;
+	}> {
+		const recovered: string[] = [];
+		const failed: Array<{ id: string; error: string }> = [];
+		for (const [id, state] of this.deliverableStates) {
+			if (!state.blocked?.startsWith(RESTART_BLOCK_PREFIX)) continue;
+			const g = findDeliverable(this.engine.get(), id);
+			if (g?.status !== "active") continue;
+			try {
+				if (!state.worktreePath || !existsSync(state.worktreePath)) {
+					const { worktreePath, branch } = await this.provisionWorkspace(g);
+					state.worktreePath = worktreePath;
+					state.branch = branch;
+					this.engine.updateDeliverable(id, { branch, worktreePath });
+				}
+				state.blocked = undefined;
+				await this.advanceDeliverable(g, state);
+				recovered.push(id);
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				state.blocked = `recovery failed: ${message} — fix the cause, then /retry ${id}`;
+				failed.push({ id, error: message });
+			}
+		}
+		return { recovered, failed };
+	}
+
+	/**
 	 * Check if all gating tasks for a worker are toggled.
 	 */
 	isWorkerDone(deliverableId: string): boolean {
@@ -425,12 +466,16 @@ export class DeliverableExecutor {
 		}
 	}
 
-	private async doActivateDeliverable(g: Deliverable): Promise<void> {
+	/**
+	 * Provision (or idempotently re-provision) a deliverable's workspace:
+	 * a git worktree on its branch, or a plain scratch directory.
+	 */
+	private async provisionWorkspace(
+		g: Deliverable,
+	): Promise<{ worktreePath: string; branch?: string }> {
 		const plan = this.engine.get();
 		const scratch = deliverableWorkspace(g) === "scratch";
 
-		let worktreePath: string;
-		let branch: string | undefined;
 		if (scratch) {
 			// Scratch: a plain directory, no repo/branch/worktree machinery.
 			if (!this.deps.createScratchWorkspace) {
@@ -438,31 +483,35 @@ export class DeliverableExecutor {
 					`deliverable ${g.id} is scratch but this runtime cannot provision scratch workspaces`,
 				);
 			}
-			worktreePath = await this.deps.createScratchWorkspace(g.id);
-		} else {
-			const repo = repoFor(plan, g);
-			// Late-bound repos (createdBy) materialize during execution; the DAG
-			// should guarantee existence by now — if not, fail activation with
-			// the cause instead of a cryptic git error.
-			if (repo.createdBy !== undefined && !existsSync(repo.path)) {
-				throw new Error(
-					`repo "${repo.key}" (${repo.path}) is not materialized — ` +
-						`deliverable "${repo.createdBy}" was expected to create it`,
-				);
-			}
-			branch = g.branch ?? defaultBranchForDeliverable(g);
-			const defaultBranch =
-				this.deps.defaultBranchFor?.(repo.path) ??
-				this.deps.defaultBranch ??
-				"main";
-			const baseBranch = pickBaseBranch(plan, g, defaultBranch);
-			worktreePath = await this.deps.createWorktree({
-				deliverableId: g.id,
-				branch,
-				baseBranch,
-				repoPath: repo.path,
-			});
+			return { worktreePath: await this.deps.createScratchWorkspace(g.id) };
 		}
+		const repo = repoFor(plan, g);
+		// Late-bound repos (createdBy) materialize during execution; the DAG
+		// should guarantee existence by now — if not, fail activation with
+		// the cause instead of a cryptic git error.
+		if (repo.createdBy !== undefined && !existsSync(repo.path)) {
+			throw new Error(
+				`repo "${repo.key}" (${repo.path}) is not materialized — ` +
+					`deliverable "${repo.createdBy}" was expected to create it`,
+			);
+		}
+		const branch = g.branch ?? defaultBranchForDeliverable(g);
+		const defaultBranch =
+			this.deps.defaultBranchFor?.(repo.path) ??
+			this.deps.defaultBranch ??
+			"main";
+		const baseBranch = pickBaseBranch(plan, g, defaultBranch);
+		const worktreePath = await this.deps.createWorktree({
+			deliverableId: g.id,
+			branch,
+			baseBranch,
+			repoPath: repo.path,
+		});
+		return { worktreePath, branch };
+	}
+
+	private async doActivateDeliverable(g: Deliverable): Promise<void> {
+		const { worktreePath, branch } = await this.provisionWorkspace(g);
 
 		// Initialize runtime state
 		const deliverableState: DeliverableRunState = {

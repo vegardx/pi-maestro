@@ -219,6 +219,13 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
+	pi.registerCommand("recover", {
+		description:
+			"Recover an interrupted execution: audit the plan against reality (worktrees, branches, PRs) and resume interrupted workers from their saved sessions.",
+		handler: (_args: string, ctx: ExtensionCommandContext) =>
+			rt.runRecover(ctx),
+	});
+
 	pi.registerCommand("retry", {
 		description:
 			"Clear a blocked deliverable and re-attempt it. /retry <deliverable-id>",

@@ -216,6 +216,7 @@ export class PlanEngine {
 				| "branch"
 				| "worktreePath"
 				| "sessionPath"
+				| "sessionName"
 				| "summary"
 				| "prUrl"
 				| "prNumber"

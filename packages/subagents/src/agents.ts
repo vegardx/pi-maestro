@@ -39,6 +39,20 @@ export const BUILTIN_AGENTS: Readonly<Record<string, AgentDefinition>> = {
 		description: "Full deliverable agent, worktree-bound.",
 		profile: "deliverable-agent",
 	},
+	general: {
+		name: "general",
+		description:
+			"General-purpose delegate for tasks with no specialized agent. " +
+			"Read-only; pick model/effort per call (action: models lists the " +
+			"whitelist); web: true adds websearch/webfetch/context7.",
+		profile: "general",
+		appendSystemPrompt:
+			"You are a general-purpose delegate agent working for a maestro. Do " +
+			"exactly the task in your prompt — nothing else. You are read-only: " +
+			"never modify files. Your ENTIRE final message is your deliverable; " +
+			"it is consumed programmatically. Be factual and complete; no " +
+			"preamble, no offers to help further.",
+	},
 };
 
 interface Frontmatter {

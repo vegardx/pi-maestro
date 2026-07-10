@@ -65,10 +65,23 @@ const DELIVERABLE_WORKER: ProfileDefaults = {
 	disableExtensions: ["commit"],
 };
 
+// general: the ad-hoc delegate for tasks with no specialized agent. Read-only
+// and isolated (-ne) so its tool namespace is deterministic; the caller picks
+// model/effort per spawn and opts into web tools (research-tools extension)
+// when the task needs them.
+const GENERAL: ProfileDefaults = {
+	tools: { allow: ["read", "grep", "find", "ls"] },
+	mode: "plan",
+	session: false,
+	disableExtensions: ["modes", "subagents"],
+	isolateExtensions: true,
+};
+
 export const BUILTIN_PROFILES: Readonly<Record<string, ProfileDefaults>> = {
 	restricted: RESTRICTED,
 	research: RESEARCH,
 	"deliverable-agent": DELIVERABLE_WORKER,
+	general: GENERAL,
 };
 
 /** A SpawnProfile resolved against its named built-in. */

@@ -451,6 +451,30 @@ describe("SubagentService", () => {
 		expect(svc.list().map((r) => r.id)).toEqual(["run-1"]);
 	});
 
+	it("merges the childExtensions passthrough into every spawn (deduped)", () => {
+		// The single seam: research, named agents, and general delegates all get
+		// configured infra extensions (e.g. custom model providers) under -ne.
+		const captured: LaunchRequest[] = [];
+		const svc = new SubagentService({
+			bus,
+			store,
+			runner: fakeRunner(captured),
+			repoRoot: "/repo",
+			mintId: () => "run-1" as RunId,
+			ownDepth: 0,
+			extraExtensions: () => ["/ext/provider", "/ext/tools"],
+		});
+		svc.spawn("go", {
+			profile: "research",
+			extraExtensions: ["/ext/tools", "/ext/research"],
+		});
+		expect(captured[0].profile.extraExtensions).toEqual([
+			"/ext/tools",
+			"/ext/research",
+			"/ext/provider",
+		]);
+	});
+
 	it("enforces the depth cap", () => {
 		const svc = new SubagentService({
 			bus,
@@ -590,8 +614,10 @@ describe("RpcClient-backed runner", () => {
 			for (const l of [...listeners]) l(e);
 		};
 		let aborted = false;
+		const steers: string[] = [];
 		const client = {
 			exitError: opts.exitError ?? null,
+			steers,
 			abort: async () => {
 				aborted = true;
 			},
@@ -609,7 +635,9 @@ describe("RpcClient-backed runner", () => {
 					if (!opts.hang && !opts.exitError) emit({ type: "agent_end" });
 				});
 			},
-			steer: async () => {},
+			steer: async (m: string) => {
+				steers.push(m);
+			},
 			stop: async () => {},
 			onEvent: (l: (e: any) => void) => {
 				listeners.add(l);
@@ -627,7 +655,11 @@ describe("RpcClient-backed runner", () => {
 		return { client, factory };
 	}
 
-	function launch(factory: any, extra: Record<string, unknown> = {}) {
+	function launch(
+		factory: any,
+		extra: Record<string, unknown> = {},
+		profileExtra: Record<string, unknown> = {},
+	) {
 		const runner = createAgentRunner({
 			factory,
 			semaphore: createSemaphore(2),
@@ -637,7 +669,7 @@ describe("RpcClient-backed runner", () => {
 		const req = {
 			runId: "run-1" as RunId,
 			prompt: "go",
-			profile: { profile: "deliverable-agent" as const },
+			profile: { profile: "deliverable-agent" as const, ...profileExtra },
 			invocation: {
 				cwd: "/wt",
 				args: ["--mode", "auto"],
@@ -752,6 +784,50 @@ describe("RpcClient-backed runner", () => {
 		expect(result.error).toContain("run timed out");
 	});
 
+	it("watchdog: stalls (event silence) stop the run and salvage partial text", async () => {
+		// hang emits no events, so activity stays at spawn time → stall fires.
+		const { factory } = fakeClient({ hang: true, text: "half an answer" });
+		const result = await launch(
+			factory,
+			{},
+			{ watchdog: { stallMs: 20 } },
+		).result();
+		expect(result.status).toBe("stopped");
+		expect(result.error).toContain("stalled");
+		expect(result.summary).toBe("half an answer");
+	});
+
+	it("watchdog: steers at the soft deadline, hard cap stops with salvage", async () => {
+		const { client, factory } = fakeClient({ hang: true, text: "loops" });
+		const result = await launch(
+			factory,
+			{},
+			{
+				watchdog: {
+					softMs: 15,
+					hardMs: 80,
+					wrapUpSteer: "wrap it up",
+				},
+			},
+		).result();
+		expect(client.steers).toEqual(["wrap it up"]);
+		expect(result.status).toBe("stopped");
+		expect(result.error).toContain("hard cap");
+		expect(result.summary).toBe("loops");
+	});
+
+	it("watchdog: an active run finishing on time is untouched", async () => {
+		const { client, factory } = fakeClient({ text: "done fine" });
+		const result = await launch(
+			factory,
+			{},
+			{ watchdog: { stallMs: 5_000, softMs: 5_000, hardMs: 10_000 } },
+		).result();
+		expect(result.status).toBe("succeeded");
+		expect(result.summary).toBe("done fine");
+		expect(client.steers).toEqual([]);
+	});
+
 	it("stop aborts the client and settles stopped", async () => {
 		const { client, factory } = fakeClient({ hang: true });
 		const ctrl = launch(factory);
@@ -833,6 +909,7 @@ describe("agent definitions", () => {
 		expect(Object.keys(agents).sort()).toEqual([
 			"agent",
 			"explore",
+			"general",
 			"plan",
 			"review",
 		]);

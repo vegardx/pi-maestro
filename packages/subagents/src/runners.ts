@@ -11,7 +11,11 @@
 
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { RpcClientOptions } from "@earendil-works/pi-coding-agent";
-import type { RunId, RunResult } from "@vegardx/pi-contracts";
+import type {
+	RunId,
+	RunResult,
+	RunWatchdogConfig,
+} from "@vegardx/pi-contracts";
 import type { RunBus } from "./bus.js";
 import type { Semaphore } from "./semaphore.js";
 import type {
@@ -142,7 +146,7 @@ async function execute(
 		// carries a hidden 60s DEFAULT timeout when called without one, which
 		// killed every child that needed more than a minute of honest work.
 		// One timeout owner: opts.timeoutMs (unset ⇒ no runner-level timeout —
-		// callers like the research watchdog own stall/timeout policy).
+		// per-run policy comes from profile.watchdog below).
 		// Subscribed BEFORE prompt so a fast run can't end before we listen.
 		const idle = waitUntilIdle(client);
 		idle.catch(() => {}); // guard: abort/timeout may win the race first
@@ -151,9 +155,39 @@ async function execute(
 		bus.publish({ type: "status", runId, status: "running", at: Date.now() });
 
 		await client.prompt(prompt);
-		await raceAbort(withTimeout(idle, opts.timeoutMs), signal);
+
+		// Per-run liveness watchdog (profile.watchdog): stall kills wedged
+		// children fast, the soft deadline steers slow ones to wrap up, the
+		// hard cap backstops unbounded runs. Applied here so EVERY child —
+		// research, named agents, general delegates — gets one implementation.
+		const wd = request.profile.watchdog;
+		let tripped: string | undefined;
+		if (wd) {
+			tripped = await raceAbort(
+				withTimeout(
+					raceWatchdog(idle, wd, client, activity ?? { at: Date.now() }),
+					opts.timeoutMs,
+				),
+				signal,
+			);
+		} else {
+			await raceAbort(withTimeout(idle, opts.timeoutMs), signal);
+		}
 
 		if (signal.aborted) return settle(bus, runId, stopped("aborted"));
+
+		if (tripped) {
+			// Salvage BEFORE aborting — abort kills the child process.
+			const partial = (
+				await client.getLastAssistantText().catch(() => null)
+			)?.trim();
+			await client.abort().catch(() => {});
+			return settle(bus, runId, {
+				status: "stopped",
+				error: tripped,
+				...(partial ? { summary: capText(partial, cap) } : {}),
+			});
+		}
 
 		const text = (await client.getLastAssistantText()) ?? "";
 		return settle(bus, runId, {
@@ -171,6 +205,70 @@ async function execute(
 		await client?.stop().catch(() => {});
 		release?.();
 	}
+}
+
+/**
+ * Race the idle wait against the run's watchdog thresholds. Resolves
+ * `undefined` when the run finishes on its own, or a human-readable trip
+ * reason when the watchdog fires (stall / hard cap). The soft deadline
+ * doesn't trip — it steers the child ONCE to wrap up and keeps waiting.
+ */
+function raceWatchdog(
+	idle: Promise<void>,
+	wd: RunWatchdogConfig,
+	client: RpcLike,
+	activity: { at: number },
+): Promise<string | undefined> {
+	const startedAt = Date.now();
+	const thresholds = [wd.stallMs, wd.softMs, wd.hardMs].filter(
+		(n): n is number => typeof n === "number" && n > 0,
+	);
+	if (thresholds.length === 0) return idle.then(() => undefined);
+	// Poll fast enough to honor the tightest threshold (tests use tiny ones).
+	const pollMs = Math.max(
+		1,
+		Math.min(5_000, Math.floor(Math.min(...thresholds) / 4)),
+	);
+	let steered = false;
+	return new Promise((resolve, reject) => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		const finish = (v: string | undefined): void => {
+			if (timer) clearInterval(timer);
+			resolve(v);
+		};
+		idle.then(
+			() => finish(undefined),
+			(err) => {
+				if (timer) clearInterval(timer);
+				reject(err);
+			},
+		);
+		timer = setInterval(() => {
+			const now = Date.now();
+			if (wd.stallMs && now - activity.at > wd.stallMs) {
+				finish(
+					`stalled: no activity for ${Math.round((now - activity.at) / 1000)}s`,
+				);
+				return;
+			}
+			if (wd.hardMs && now - startedAt > wd.hardMs) {
+				finish(
+					`hard cap: still running after ${Math.round(wd.hardMs / 1000)}s`,
+				);
+				return;
+			}
+			if (
+				!steered &&
+				wd.softMs &&
+				wd.wrapUpSteer &&
+				now - startedAt > wd.softMs
+			) {
+				steered = true;
+				void client.steer?.(wd.wrapUpSteer);
+			}
+		}, pollMs);
+		timer.unref?.();
+	});
 }
 
 /** How often the idle wait probes for a silently dead child process. */
@@ -285,15 +383,18 @@ async function withTimeout<T>(
 // On abort the caller re-checks signal.aborted and settles as stopped; the
 // orphaned work promise is left to unwind on its own (the client is aborted in
 // the finally block).
-function raceAbort(work: Promise<unknown>, signal: AbortSignal): Promise<void> {
-	if (signal.aborted) return Promise.resolve();
-	return new Promise<void>((resolve, reject) => {
-		const onAbort = () => resolve();
+function raceAbort<T>(
+	work: Promise<T>,
+	signal: AbortSignal,
+): Promise<T | undefined> {
+	if (signal.aborted) return Promise.resolve(undefined);
+	return new Promise<T | undefined>((resolve, reject) => {
+		const onAbort = () => resolve(undefined);
 		signal.addEventListener("abort", onAbort, { once: true });
 		work.then(
-			() => {
+			(value) => {
 				signal.removeEventListener("abort", onAbort);
-				resolve();
+				resolve(value);
 			},
 			(err) => {
 				signal.removeEventListener("abort", onAbort);

@@ -29,7 +29,6 @@ import {
 import { Type } from "@sinclair/typebox";
 import type {
 	AskCapabilityV1,
-	RunHandle,
 	RunResult,
 	SpawnProfile,
 	SubagentsCapabilityV1,
@@ -39,10 +38,7 @@ import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
 import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
-import {
-	type ResearchWatchdogSettings,
-	readChildExtensions,
-} from "./settings.js";
+import type { ResearchWatchdogSettings } from "./settings.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -105,12 +101,10 @@ export interface ResearchDeps {
 	/** Side effects after a phase flip (applyTools + footer refresh). */
 	readonly onPhaseChanged?: (ctx: ExtensionContext) => void;
 	/**
-	 * Watchdog thresholds (stall/soft-steer/hard-cap) for research children.
-	 * `pollMs` tightens the check interval (tests). Defaults: 120s/240s/600s.
+	 * Watchdog thresholds (stall/soft-steer/hard-cap) for research children,
+	 * enforced by the subagents runner. Defaults: 120s/240s/600s.
 	 */
-	readonly watchdog?: (
-		ctx: ExtensionContext,
-	) => ResearchWatchdogSettings & { pollMs?: number };
+	readonly watchdog?: (ctx: ExtensionContext) => ResearchWatchdogSettings;
 	/**
 	 * Deliver a completed round's combined report to the model as a follow-up
 	 * message (non-blocking research). When absent, the tool falls back to
@@ -119,7 +113,7 @@ export interface ResearchDeps {
 	readonly deliver?: (text: string) => void;
 }
 
-const DEFAULT_WATCHDOG: ResearchWatchdogSettings & { pollMs?: number } = {
+const DEFAULT_WATCHDOG: ResearchWatchdogSettings = {
 	stallMs: 120_000,
 	softMs: 240_000,
 	hardMs: 600_000,
@@ -228,7 +222,11 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			const spawned = await Promise.all(
 				params.questions.map(async (q) => {
 					const kind = (q.kind ?? "codebase") as ResearchKind;
-					const profile = await buildResearchProfile(deps, ctx, plan, kind);
+					const profile = {
+						...(await buildResearchProfile(deps, ctx, plan, kind)),
+						// Liveness policy is enforced by the subagents runner.
+						watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
+					};
 					const prompt = buildResearchPrompt(plan, kind, q.question, q.context);
 					try {
 						const handle = capability.spawn(prompt, profile);
@@ -273,16 +271,16 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 							return `### ${entry.question}\n(${entry.spawnError})`;
 						}
 						const { view, handle } = entry;
-						const result = await superviseRun(
-							handle,
-							watchdog,
-							watchdog.pollMs,
-						);
+						const result: RunResult = await handle.result().catch((err) => ({
+							status: "failed" as const,
+							error: err instanceof Error ? err.message : String(err),
+						}));
 						view.status =
 							result.status === "succeeded" ? "succeeded" : "failed";
-						// A stopped run may still carry salvaged partial findings —
-						// deliver them with a caveat instead of empty-handed failure.
-						const report = result.summary?.trim() || result.partial;
+						// A watchdog-stopped run carries salvaged partial findings in
+						// summary — deliver them with a caveat instead of empty-handed
+						// failure.
+						const report = result.summary?.trim();
 						if (!report) {
 							deps.onRunSettled?.(view, undefined, ctx);
 							return (
@@ -499,13 +497,7 @@ async function buildResearchProfile(
 		tools: { allow: tools },
 		thinking: REVIEW_MODEL_KINDS.has(kind) ? "high" : "low",
 		...(model ? { model } : {}),
-		// Children run -ne (isolated); childExtensions passes tool-less infra
-		// like custom model providers back through, or pinned models on those
-		// providers don't resolve inside the child.
-		extraExtensions: [
-			deps.researchToolsPath(),
-			...readChildExtensions(ctx.cwd),
-		],
+		extraExtensions: [deps.researchToolsPath()],
 		appendSystemPrompt: researcherPreamble(kind),
 	};
 }
@@ -698,78 +690,3 @@ const WRAP_UP_STEER =
 	"Time budget nearly exhausted. Stop researching NOW and write your final " +
 	"report from what you already have: full findings with evidence, then the " +
 	"`## Digest` block. State explicitly what you did not get to.";
-
-/** A settled run, possibly with salvaged partial text from a stopped child. */
-type SupervisedResult = RunResult & { partial?: string };
-
-/**
- * Watchdog settle: distinguishes a WEDGED child (event silence → stop fast,
- * salvage) from a SLOW one (steer it once at the soft deadline to write its
- * report with what it has), with a generous hard cap as the only true
- * timeout. Replaces the old flat per-question timeout, which killed
- * productive runs and stalled ones at the same age — and discarded whatever
- * the child had already found.
- */
-async function superviseRun(
-	handle: RunHandle,
-	cfg: ResearchWatchdogSettings,
-	pollMs = 5_000,
-): Promise<SupervisedResult> {
-	const startedAt = Date.now();
-	let steered = false;
-	let settled = false;
-
-	return new Promise<SupervisedResult>((resolve) => {
-		let timer: ReturnType<typeof setInterval> | undefined;
-		const finish = (result: SupervisedResult): void => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearInterval(timer);
-			resolve(result);
-		};
-
-		handle.result().then(
-			(result) => finish(result),
-			(err) =>
-				finish({
-					status: "failed",
-					error: err instanceof Error ? err.message : String(err),
-				}),
-		);
-
-		const salvageAndStop = async (why: string): Promise<void> => {
-			// Read partial text BEFORE stopping — stop kills the child process.
-			const partial = await handle.partialText?.().catch(() => undefined);
-			if (settled) return; // the run settled while we were salvaging
-			handle.stop(why);
-			finish({
-				status: "stopped",
-				error: why,
-				...(partial?.trim() ? { partial: partial.trim() } : {}),
-			});
-		};
-
-		timer = setInterval(() => {
-			if (settled) return;
-			const now = Date.now();
-			const lastEvent = handle.lastEventAt?.() ?? startedAt;
-			if (now - lastEvent > cfg.stallMs) {
-				void salvageAndStop(
-					`stalled: no activity for ${Math.round((now - lastEvent) / 1000)}s`,
-				);
-				return;
-			}
-			if (now - startedAt > cfg.hardMs) {
-				void salvageAndStop(
-					`hard cap: still running after ${Math.round(cfg.hardMs / 1000)}s`,
-				);
-				return;
-			}
-			if (!steered && now - startedAt > cfg.softMs) {
-				steered = true;
-				handle.steer(WRAP_UP_STEER);
-			}
-		}, pollMs);
-		timer.unref?.();
-	});
-}

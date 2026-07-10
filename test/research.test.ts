@@ -3,14 +3,7 @@
 // with full reports in session scratch, the dig tool, timeout stops, and the
 // phase flip.
 
-import {
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -234,119 +227,43 @@ describe("research tool", () => {
 		expect(bad.content[0].text).toContain("what-storage-does-pi-use"); // lists available
 	});
 
-	it("watchdog: kills a stalled run (event silence) and salvages partial text", async () => {
-		// No lastEventAt override → the handle looks silent since spawn, so the
-		// stall threshold fires. partialText is what the child had written.
-		const { capability, stopped } = fakeCapability(
-			() => new Promise<never>(() => {}),
-			{ partialText: async () => "Found half the answer so far." },
-		);
-		const { deps } = makeDeps({
-			subagents: () => capability,
-			watchdog: () => ({
-				stallMs: 30,
-				softMs: 5_000,
-				hardMs: 10_000,
-				pollMs: 5,
-			}),
-		});
-		const result = await run(createResearchTool(deps), {
-			questions: [{ question: "hangs forever" }],
-		});
-		const text = result.content[0].text;
-		expect(stopped).toEqual(["run-1"]);
-		expect(text).toContain("stalled");
-		expect(text).toContain("partial findings salvaged");
-		expect(text).toContain("Found half the answer so far.");
-	});
-
-	it("watchdog: steers a slow-but-active run to wrap up instead of killing it", async () => {
-		// lastEventAt: now → always active, so no stall. The run finishes on its
-		// own after the soft deadline steered it.
-		let resolveRun: (r: RunResult) => void = () => {};
-		const settled = new Promise<RunResult>((r) => {
-			resolveRun = r;
-		});
-		const { capability, stopped, steers } = fakeCapability(() => settled, {
-			lastEventAt: () => Date.now(),
-		});
-		const { deps } = makeDeps({
-			subagents: () => capability,
-			watchdog: () => ({
-				stallMs: 5_000,
-				softMs: 20,
-				hardMs: 10_000,
-				pollMs: 5,
-			}),
-		});
-		const pending = run(createResearchTool(deps), {
-			questions: [{ question: "slow but productive" }],
-		});
-		// Give the watchdog time to fire the wrap-up steer, then finish the run.
-		await new Promise((r) => setTimeout(r, 60));
-		expect(steers.length).toBe(1);
-		expect(steers[0]).toContain("Stop researching NOW");
-		resolveRun({
-			status: "succeeded",
-			summary: "Full findings.\n\n## Digest\nwrapped up in time",
-		});
-		const result = await pending;
-		expect(result.content[0].text).toContain("wrapped up in time");
-		expect(stopped).toEqual([]); // never killed
-	});
-
-	it("watchdog: hard cap stops a run that stays active but never converges", async () => {
-		const { capability, stopped, steers } = fakeCapability(
-			() => new Promise<never>(() => {}),
-			{
-				lastEventAt: () => Date.now(), // always active → stall never fires
-				partialText: async () => "Kept looping over the same ground.",
-			},
-		);
-		const { deps } = makeDeps({
-			subagents: () => capability,
-			watchdog: () => ({ stallMs: 10_000, softMs: 20, hardMs: 60, pollMs: 5 }),
-		});
-		const result = await run(createResearchTool(deps), {
-			questions: [{ question: "loops forever" }],
-		});
-		const text = result.content[0].text;
-		expect(steers.length).toBe(1); // wrap-up steer came first
-		expect(stopped).toEqual(["run-1"]);
-		expect(text).toContain("hard cap");
-		expect(text).toContain("Kept looping over the same ground.");
-	});
-
-	it("passes configured child extensions through to research children", async () => {
-		// A provider extension configured under modes.childExtensions must reach
-		// the child's -e list (children spawn -ne, which would suppress it).
-		const projectDir = mkdtempSync(join(tmpdir(), "childext-"));
-		const extDir = mkdtempSync(join(tmpdir(), "provider-ext-"));
-		mkdirSync(join(projectDir, ".pi"), { recursive: true });
-		writeFileSync(
-			join(projectDir, ".pi", "settings.json"),
-			JSON.stringify({
-				extensionConfig: {
-					modes: { childExtensions: [extDir, "/does/not/exist"] },
-				},
-			}),
-		);
+	it("passes the watchdog policy to the runner via the spawn profile", async () => {
+		// Liveness is enforced by the subagents runner; research supplies its
+		// thresholds and the wrap-up steer through profile.watchdog.
 		const { calls, capability } = fakeCapability(async () => ({
 			status: "succeeded",
-			summary: "x\n\n## Digest\nd",
+			summary: "ok\n\n## Digest\nfine",
+		}));
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			watchdog: () => ({ stallMs: 111, softMs: 222, hardMs: 333 }),
+		});
+		await run(createResearchTool(deps), {
+			questions: [{ question: "q" }],
+		});
+		const wd = calls[0].profile.watchdog;
+		expect(wd?.stallMs).toBe(111);
+		expect(wd?.softMs).toBe(222);
+		expect(wd?.hardMs).toBe(333);
+		expect(wd?.wrapUpSteer).toContain("Stop researching NOW");
+	});
+
+	it("delivers a stopped run's salvaged partial findings with a caveat", async () => {
+		// A watchdog-stopped run carries its salvaged text in summary; the
+		// digest is delivered marked incomplete instead of empty-handed failure.
+		const { capability } = fakeCapability(async () => ({
+			status: "stopped",
+			error: "stalled: no activity for 130s",
+			summary: "Found half the answer so far.",
 		}));
 		const { deps } = makeDeps({ subagents: () => capability });
-		const tool = createResearchTool(deps) as unknown as Executable;
-		await tool.execute(
-			"call-1",
-			{ questions: [{ question: "q" }] },
-			undefined,
-			undefined,
-			{ cwd: projectDir } as ExtensionContext,
-		);
-		expect(calls[0].profile.extraExtensions).toContain(extDir);
-		// Vanished paths are dropped (a child would die at startup on them).
-		expect(calls[0].profile.extraExtensions).not.toContain("/does/not/exist");
+		const result = await run(createResearchTool(deps), {
+			questions: [{ question: "was stopped mid-flight" }],
+		});
+		const text = result.content[0].text;
+		expect(text).toContain("stalled: no activity for 130s");
+		expect(text).toContain("partial findings salvaged");
+		expect(text).toContain("Found half the answer so far.");
 	});
 
 	it("advisor gets the plan outline, high thinking, and the alternate model", async () => {

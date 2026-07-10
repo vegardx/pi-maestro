@@ -58,6 +58,13 @@ export interface SubagentServiceOptions {
 	readonly maxDepth?: number;
 	/** This agent's own nesting depth. Defaults to reading PI_MAESTRO_DEPTH. */
 	readonly ownDepth?: number;
+	/**
+	 * Extension paths merged into EVERY spawn's extraExtensions (read fresh
+	 * per spawn). The childExtensions passthrough: children run -ne, which
+	 * also suppresses tool-less infra like custom model providers — this is
+	 * the single seam that restores them for all callers.
+	 */
+	readonly extraExtensions?: () => readonly string[];
 }
 
 const DEFAULT_MAX_DEPTH = 3;
@@ -73,6 +80,8 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	private readonly ownDepth: number;
 	private readonly controllers = new Map<RunId, RunnerController>();
 
+	private readonly extraExtensions?: () => readonly string[];
+
 	constructor(opts: SubagentServiceOptions) {
 		this.bus = opts.bus;
 		this.store = opts.store;
@@ -82,6 +91,7 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		this.mintId = opts.mintId ?? defaultMintId;
 		this.maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
 		this.ownDepth = opts.ownDepth ?? currentDepth();
+		this.extraExtensions = opts.extraExtensions;
 	}
 
 	spawn(prompt: string, profile: SpawnProfile): RunHandle {
@@ -89,6 +99,18 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			throw new Error(
 				`subagent depth cap reached (${this.ownDepth}/${this.maxDepth})`,
 			);
+		}
+
+		// Merge the configured passthrough extensions (deduped) so every
+		// caller's children get e.g. custom model providers under -ne.
+		const passthrough = this.extraExtensions?.() ?? [];
+		if (passthrough.length > 0) {
+			profile = {
+				...profile,
+				extraExtensions: [
+					...new Set([...(profile.extraExtensions ?? []), ...passthrough]),
+				],
+			};
 		}
 
 		const ctx: SpawnContext = {

@@ -76,8 +76,28 @@ export interface SpawnProfile {
 	readonly extraExtensions?: readonly string[];
 	/** Deliberate feature-flag overrides propagated to the child. */
 	readonly featureFlags?: FeatureFlagOverrides;
+	/**
+	 * Liveness watchdog the runner enforces for this run. Distinguishes a
+	 * WEDGED child (event silence → stop at `stallMs`, salvage last text)
+	 * from a SLOW one (steered once with `wrapUpSteer` at `softMs`), with
+	 * `hardMs` as the only true timeout. Absent ⇒ no watchdog (callers own
+	 * their policy).
+	 */
+	readonly watchdog?: RunWatchdogConfig;
 	/** Opaque metadata for the maestro. */
 	readonly meta?: Readonly<Record<string, unknown>>;
+}
+
+/** Watchdog thresholds for one run (all optional; absent checks are skipped). */
+export interface RunWatchdogConfig {
+	/** Event silence that counts as wedged → stop + salvage. */
+	readonly stallMs?: number;
+	/** Elapsed time after which the child is steered ONCE to wrap up. */
+	readonly softMs?: number;
+	/** Absolute wall-clock backstop → stop + salvage. */
+	readonly hardMs?: number;
+	/** The wrap-up steer message sent at softMs (requires softMs). */
+	readonly wrapUpSteer?: string;
 }
 
 export interface RunSpawnRequest {
@@ -101,6 +121,11 @@ export interface RunProgress {
 
 export interface RunResult {
 	readonly status: TerminalRunStatus;
+	/**
+	 * The child's final text. On a watchdog-stopped run this is the SALVAGED
+	 * partial text (last completed assistant message), delivered so a stopped
+	 * run still contributes what it learned — `error` says why it stopped.
+	 */
 	readonly summary?: string;
 	readonly error?: string;
 }

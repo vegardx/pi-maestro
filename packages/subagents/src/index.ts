@@ -17,6 +17,9 @@
 //   * the run-bus is bridged onto the typed maestro event bus so modes and the
 //     UI observe status/progress/needDecision without importing this package.
 
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import {
@@ -27,8 +30,13 @@ import {
 	type SupervisorDecisionRequest,
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
+import {
+	getConfigStringArray,
+	readLayeredExtensionConfig,
+} from "@vegardx/pi-settings";
 import { type AgentDefinition, discoverAgents } from "./agents.js";
 import { createRunBus } from "./bus.js";
+import { delegableModels, workTierDefault } from "./catalog.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
@@ -160,6 +168,37 @@ function resolveCliPath(): string | undefined {
 // fan out (persona panels, research rounds). Ceiling raiseable with hardware.
 const DEFAULT_CONCURRENCY = 50;
 
+/**
+ * Liveness watchdog for delegate spawns (the subagent tool): kill wedged
+ * children fast, steer slow ones to wrap up, hard-cap unbounded runs. Same
+ * defaults as the research watchdog.
+ */
+const DELEGATE_WATCHDOG = {
+	stallMs: 120_000,
+	softMs: 240_000,
+	hardMs: 600_000,
+	wrapUpSteer:
+		"Time budget nearly exhausted. Stop and write your final deliverable " +
+		"NOW from what you already have; state explicitly what you did not " +
+		"get to.",
+} as const;
+
+/**
+ * The childExtensions passthrough set (extensionConfig.modes.childExtensions,
+ * toggled in /maestro). Vanished paths are dropped — a missing -e path would
+ * kill every child at startup.
+ */
+function readChildExtensionPaths(cwd: string): string[] {
+	try {
+		const { merged } = readLayeredExtensionConfig(cwd);
+		return getConfigStringArray(merged, "modes", "childExtensions", []).filter(
+			(p) => existsSync(p),
+		);
+	} catch {
+		return [];
+	}
+}
+
 export default defineExtension(
 	{
 		name: "subagents",
@@ -193,6 +232,9 @@ export default defineExtension(
 				repoRoot: next.cwd,
 				spawnerCwd: next.cwd,
 				ownDepth: currentDepth(),
+				// Children run -ne; pass configured infra extensions (custom model
+				// providers etc) back through for EVERY caller at this one seam.
+				extraExtensions: () => readChildExtensionPaths(next.cwd),
 			});
 			if (maestro.flags.enabled("retention")) {
 				try {
@@ -257,6 +299,14 @@ export default defineExtension(
 			createSubagentTool({
 				capability: () => maestro.capabilities.get(CAPABILITIES.subagents),
 				agents: () => agents,
+				delegable: () => (ctx ? delegableModels(ctx, ctx.cwd) : []),
+				defaultSpawn: () => (ctx ? workTierDefault(ctx, ctx.cwd) : {}),
+				researchToolsPath: () =>
+					resolve(
+						dirname(fileURLToPath(import.meta.url)),
+						"../../research-tools/src/index.ts",
+					),
+				watchdog: () => DELEGATE_WATCHDOG,
 			}),
 		);
 

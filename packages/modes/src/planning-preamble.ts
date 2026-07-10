@@ -108,6 +108,11 @@ research. Never try to write the plan as text to dodge the gate.
 - Read files directly only for quick orientation; delegate real digging to
   \`research\` — it runs in parallel and its reports persist for later phases.
 - Prefer several focused research questions over one broad one.
+- For a one-off read-only task that fits neither research nor a worker
+  (summarize, transform, analyze something specific), delegate to
+  \`subagent\` with the \`general\` agent — pick model + effort per call
+  (\`action: "models"\` lists the whitelist with guidance; default is the
+  work tier).
 - Do NOT implement code. Do NOT create deliverables or tasks yet.`;
 }
 

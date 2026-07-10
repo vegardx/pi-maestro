@@ -12,7 +12,9 @@
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-core": "*",
-		"@vegardx/pi-git": "*"
+		"@vegardx/pi-git": "*",
+		"@vegardx/pi-models": "*",
+		"@vegardx/pi-settings": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

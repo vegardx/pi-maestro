@@ -48,6 +48,7 @@ import {
 import { appendModesState, collectBudgetText } from "../session.js";
 import {
 	type ImplementOverrides,
+	readChildExtensions,
 	readModesCompactionSettings,
 	readWorktreeSetupSettings,
 	setImplementOverrides,
@@ -525,7 +526,13 @@ export function createRuntimeContext(
 							dirname(fileURLToPath(import.meta.url)),
 							"../../../..",
 						),
-						extensionPaths: discoverExtensionPaths(),
+						// The maestro's own -e list, plus the configured passthrough of
+						// tool-less global extensions (e.g. custom model providers) that
+						// -ne would otherwise suppress in the child.
+						extensionPaths: [
+							...discoverExtensionPaths(),
+							...readChildExtensions(ctx.cwd),
+						],
 						planDir: join(plansRoot(), activeEngine.get().slug),
 						defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 						worktreeSetup: readWorktreeSetupSettings(ctx.cwd),

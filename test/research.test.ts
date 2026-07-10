@@ -3,7 +3,14 @@
 // with full reports in session scratch, the dig tool, timeout stops, and the
 // phase flip.
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -308,6 +315,38 @@ describe("research tool", () => {
 		expect(stopped).toEqual(["run-1"]);
 		expect(text).toContain("hard cap");
 		expect(text).toContain("Kept looping over the same ground.");
+	});
+
+	it("passes configured child extensions through to research children", async () => {
+		// A provider extension configured under modes.childExtensions must reach
+		// the child's -e list (children spawn -ne, which would suppress it).
+		const projectDir = mkdtempSync(join(tmpdir(), "childext-"));
+		const extDir = mkdtempSync(join(tmpdir(), "provider-ext-"));
+		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		writeFileSync(
+			join(projectDir, ".pi", "settings.json"),
+			JSON.stringify({
+				extensionConfig: {
+					modes: { childExtensions: [extDir, "/does/not/exist"] },
+				},
+			}),
+		);
+		const { calls, capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "x\n\n## Digest\nd",
+		}));
+		const { deps } = makeDeps({ subagents: () => capability });
+		const tool = createResearchTool(deps) as unknown as Executable;
+		await tool.execute(
+			"call-1",
+			{ questions: [{ question: "q" }] },
+			undefined,
+			undefined,
+			{ cwd: projectDir } as ExtensionContext,
+		);
+		expect(calls[0].profile.extraExtensions).toContain(extDir);
+		// Vanished paths are dropped (a child would die at startup on them).
+		expect(calls[0].profile.extraExtensions).not.toContain("/does/not/exist");
 	});
 
 	it("advisor gets the plan outline, high thinking, and the alternate model", async () => {

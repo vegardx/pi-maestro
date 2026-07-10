@@ -3,6 +3,7 @@
 // knobs live under `extensionConfig.modes.compaction`. These are independent
 // of pi's native `compaction.*` and of `extensionConfig.smart-compact.*`.
 
+import { existsSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ModesRole, ThinkingLevel, Tier } from "@vegardx/pi-contracts";
 import {
@@ -122,6 +123,24 @@ export function readResearchWatchdogSettings(
 		softMs: read("softMs", 240_000),
 		hardMs: read("hardMs", 600_000),
 	};
+}
+
+// ---- Child extension passthrough ---------------------------------------------
+
+/**
+ * Extension/package paths that maestro children (research subagents, workers)
+ * load via `-e` despite spawning with `-ne`. Children isolate extensions
+ * because global ones collide with maestro's tool names — but that also
+ * suppresses tool-less infra extensions like custom model providers, without
+ * which a child can't resolve models such as `radicalai/...`. Toggled in the
+ * /maestro menu; stored at `extensionConfig.modes.childExtensions`.
+ */
+export function readChildExtensions(cwd: string, agentDir?: string): string[] {
+	if (!cwd) return [];
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const paths = getConfigStringArray(merged, NAME, "childExtensions", []);
+	// A vanished path would make every child die at startup — drop it.
+	return paths.filter((p) => existsSync(p));
 }
 
 // ---- Worktree provisioning settings -----------------------------------------

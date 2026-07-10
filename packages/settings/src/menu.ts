@@ -5,7 +5,14 @@
 // derived — the profile whose targets include the current /model is active. There
 // is no "activate" action here; switching /model switches the profile.
 
-import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+	type ExtensionContext,
+	getAgentDir,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
 import {
 	type Component,
 	type Focusable,
@@ -162,6 +169,47 @@ function resolveModelName(ctx: ExtensionContext, modelId: string): string {
 	return (model as { name?: string } | undefined)?.name ?? modelId;
 }
 
+// ─── Child extension passthrough ─────────────────────────────────────────────
+
+/**
+ * Globally installed pi packages that could be passed through to maestro
+ * children (research subagents, workers). Children spawn -ne because global
+ * extensions collide with maestro's tool names, but that also suppresses
+ * tool-less infra like custom model providers — without them a child can't
+ * resolve models on those providers. Excludes pi-maestro itself: passing it
+ * through would recreate the very collisions -ne exists to prevent.
+ */
+function childExtensionCandidates(): string[] {
+	try {
+		const raw = JSON.parse(
+			readFileSync(join(getAgentDir(), "settings.json"), "utf8"),
+		) as { packages?: unknown };
+		const pkgs = Array.isArray(raw.packages)
+			? raw.packages.filter((p): p is string => typeof p === "string")
+			: [];
+		const selfRepo = resolve(
+			dirname(fileURLToPath(import.meta.url)),
+			"../../..",
+		);
+		return pkgs.filter((p) => resolve(p) !== selfRepo);
+	} catch {
+		return [];
+	}
+}
+
+/** The currently toggled-on passthrough set (modes.childExtensions, merged). */
+function selectedChildExtensions(ctx: ExtensionContext): Set<string> {
+	const { global, project } = readLayeredExtensionConfig(ctx.cwd);
+	const val =
+		readPath(project.modes, "childExtensions") ??
+		readPath(global.modes, "childExtensions");
+	return new Set(
+		Array.isArray(val)
+			? val.filter((p): p is string => typeof p === "string")
+			: [],
+	);
+}
+
 function buildSections(ctx: ExtensionContext): Section[] {
 	const { global, project } = readLayeredExtensionConfig(ctx.cwd);
 	const modelsConfig = readModelsConfig(ctx.cwd);
@@ -224,6 +272,22 @@ function buildSections(ctx: ExtensionContext): Section[] {
 		}
 	}
 	sections.push({ title: "profiles", rows: profileRows });
+
+	// Child extension passthrough (only when global packages exist to offer)
+	const candidates = childExtensionCandidates();
+	if (candidates.length > 0) {
+		const selected = selectedChildExtensions(ctx);
+		const childExtRows: SettingRow[] = candidates.map((path) => ({
+			label: basename(path),
+			extension: "@childext",
+			key: `@childext.${path}`,
+			global: selected.has(path) ? "on" : undefined,
+			project: undefined,
+			session: undefined,
+			globalOnly: true,
+		}));
+		sections.push({ title: "child extensions", rows: childExtRows });
+	}
 
 	// Extension settings from capability registry
 	const registered = getRegisteredSettings();
@@ -408,6 +472,10 @@ export class ConfigMenuComponent implements Component, Focusable {
 		return row?.extension === "@profiles";
 	}
 
+	private isChildExtRow(row?: SettingRow): boolean {
+		return row?.extension === "@childext";
+	}
+
 	private isNameRow(row?: SettingRow): boolean {
 		return Boolean(row?.key.startsWith("@name."));
 	}
@@ -561,6 +629,33 @@ export class ConfigMenuComponent implements Component, Focusable {
 			lines.push(line(p.dim("  (no profiles — press n to create one)")));
 		}
 
+		// ─── Child extension passthrough section ────────────────────────────
+		if (this.flatRows.some((r) => this.isChildExtRow(r))) {
+			lines.push(line(""));
+			lines.push(line(p.heading("child extensions")));
+			lines.push(
+				line(
+					p.muted(
+						"  Global packages loaded into research/worker agents (providers etc).",
+					),
+				),
+			);
+			for (let fi = 0; fi < this.flatRows.length; fi++) {
+				const r = this.flatRows[fi];
+				if (!this.isChildExtRow(r)) continue;
+				const selected = fi === this.cursor;
+				const ptr = selected ? p.accent("▶ ") : "  ";
+				if (selected && this.mode === "browse")
+					this.activeLineIdx = lines.length;
+				const box = r.global === "on" ? "[x]" : "[ ]";
+				const name = selected ? p.accent(r.label) : r.label;
+				const path = p.dim(
+					`  ${truncateToWidth(r.key.slice(10), Math.max(innerW - visibleWidth(r.label) - 10, 8))}`,
+				);
+				lines.push(line(`${ptr}${box} ${name}${path}`));
+			}
+		}
+
 		// Divider
 		lines.push(line(""));
 		lines.push(line(p.dim("─".repeat(innerW))));
@@ -588,7 +683,7 @@ export class ConfigMenuComponent implements Component, Focusable {
 		let lastSection = "";
 		for (let fi = 0; fi < this.flatRows.length; fi++) {
 			const r = this.flatRows[fi];
-			if (this.isProfileRow(r)) continue;
+			if (this.isProfileRow(r) || this.isChildExtRow(r)) continue;
 			const sectionTitle = this.sections.find((s) => s.rows.includes(r))?.title;
 			if (sectionTitle && sectionTitle !== lastSection) {
 				lines.push(line(p.heading(sectionTitle)));
@@ -777,7 +872,9 @@ export class ConfigMenuComponent implements Component, Focusable {
 										? "Enter: confirm  Esc: cancel"
 										: this.isNameRow(row)
 											? "↑↓ navigate  r rename  d delete  n new  Esc close"
-											: "↑↓ navigate  ←→ scope  Enter edit  n new profile  Esc close";
+											: this.isChildExtRow(row)
+												? "↑↓ navigate  Space/Enter toggle  Esc close"
+												: "↑↓ navigate  ←→ scope  Enter edit  n new profile  Esc close";
 		lines.push(line(p.muted(help)));
 	}
 
@@ -839,10 +936,16 @@ export class ConfigMenuComponent implements Component, Focusable {
 			case KEY_ENTER:
 				this.onEnter();
 				break;
+			case KEY_SPACE: {
+				const row = this.flatRows[this.cursor];
+				if (this.isChildExtRow(row)) this.toggleChildExtension(row);
+				break;
+			}
 			case "d": {
 				const row = this.flatRows[this.cursor];
 				if (this.isNameRow(row)) this.startDeleteProfile(row.key.slice(6));
-				else if (row && !this.isProfileRow(row)) this.deleteCell(row);
+				else if (row && !this.isProfileRow(row) && !this.isChildExtRow(row))
+					this.deleteCell(row);
 				break;
 			}
 			case "r": {
@@ -867,6 +970,10 @@ export class ConfigMenuComponent implements Component, Focusable {
 	private onEnter(): void {
 		const row = this.flatRows[this.cursor];
 		if (!row) return;
+		if (this.isChildExtRow(row)) {
+			this.toggleChildExtension(row);
+			return;
+		}
 		if (this.isProfileRow(row)) {
 			if (this.isNameRow(row)) return; // name row: use r/d/n
 			if (row.key.endsWith(".@targets")) {
@@ -1220,6 +1327,34 @@ export class ConfigMenuComponent implements Component, Focusable {
 				this.targetOwner.set(modelId, profile);
 			}
 		});
+	}
+
+	// ─── Child extension passthrough toggle ───────────────────────────────────
+
+	private toggleChildExtension(row: SettingRow): void {
+		const path = row.key.slice("@childext.".length);
+		let nowOn = false;
+		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
+			if (!isPlainObject(obj.extensionConfig)) obj.extensionConfig = {};
+			const ec = obj.extensionConfig as Record<string, unknown>;
+			if (!isPlainObject(ec.modes)) ec.modes = {};
+			const modes = ec.modes as Record<string, unknown>;
+			const current = Array.isArray(modes.childExtensions)
+				? modes.childExtensions.filter(
+						(p): p is string => typeof p === "string",
+					)
+				: [];
+			if (current.includes(path)) {
+				modes.childExtensions = current.filter((p) => p !== path);
+			} else {
+				modes.childExtensions = [...current, path];
+				nowOn = true;
+			}
+		});
+		this.statusMessage = nowOn
+			? `✓ children will load ${row.label}`
+			: `✓ removed ${row.label} from children`;
+		this.refresh();
 	}
 
 	// ─── Profile CRUD ───────────────────────────────────────────────────────

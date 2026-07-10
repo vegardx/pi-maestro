@@ -39,7 +39,10 @@ import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
 import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
-import type { ResearchWatchdogSettings } from "./settings.js";
+import {
+	type ResearchWatchdogSettings,
+	readChildExtensions,
+} from "./settings.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -496,7 +499,13 @@ async function buildResearchProfile(
 		tools: { allow: tools },
 		thinking: REVIEW_MODEL_KINDS.has(kind) ? "high" : "low",
 		...(model ? { model } : {}),
-		extraExtensions: [deps.researchToolsPath()],
+		// Children run -ne (isolated); childExtensions passes tool-less infra
+		// like custom model providers back through, or pinned models on those
+		// providers don't resolve inside the child.
+		extraExtensions: [
+			deps.researchToolsPath(),
+			...readChildExtensions(ctx.cwd),
+		],
 		appendSystemPrompt: researcherPreamble(kind),
 	};
 }

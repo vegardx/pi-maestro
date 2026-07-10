@@ -182,6 +182,38 @@ describe("ConfigMenuComponent", () => {
 		expect(lines.join("\n")).not.toContain("⋯");
 	});
 
+	it("lists global packages as child-extension toggles and persists the set", () => {
+		// Global settings carry a `packages` list (pi package manager); each
+		// non-maestro entry becomes a toggle for the -ne passthrough.
+		writeFileSync(
+			join(root, "agent", "settings.json"),
+			JSON.stringify({
+				packages: ["/ext/custom-provider", "/ext/other-infra"],
+				extensionConfig: {},
+				models: { profiles: { opus: { targets: ["anthropic/sonnet"] } } },
+			}),
+		);
+		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
+		// 6 profile rows (name/targets/plan/work/review/fast), then the toggles.
+		expect(rowKeyAt(c, 6)).toBe("@childext./ext/custom-provider");
+		expect(rowKeyAt(c, 7)).toBe("@childext./ext/other-infra");
+
+		for (let i = 0; i < 6; i++) c.handleInput(KEY_DOWN);
+		c.handleInput(" "); // toggle on
+		let saved = JSON.parse(
+			readFileSync(join(root, "agent", "settings.json"), "utf8"),
+		);
+		expect(saved.extensionConfig.modes.childExtensions).toEqual([
+			"/ext/custom-provider",
+		]);
+
+		c.handleInput(KEY_ENTER); // Enter toggles too — back off
+		saved = JSON.parse(
+			readFileSync(join(root, "agent", "settings.json"), "utf8"),
+		);
+		expect(saved.extensionConfig.modes.childExtensions).toEqual([]);
+	});
+
 	it("toggling a target in the picker persists to settings", () => {
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
 		c.handleInput(KEY_DOWN); // → targets row

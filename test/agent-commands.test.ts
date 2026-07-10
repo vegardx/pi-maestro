@@ -54,6 +54,7 @@ function makeHandle(overrides: Partial<ExecutionHandle> = {}): ExecutionHandle {
 		tick: async () => 0,
 		steer: () => true,
 		failingRequiredReviewers: () => [],
+		reviewerFindings: () => [],
 		overrideReviewerVerdict: () => {},
 		sendBackToWorker: async () => true,
 		snapshot: () => ({

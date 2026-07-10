@@ -134,6 +134,12 @@ export interface PanelVerdictEntry {
 	/** False when the reviewer failed to run / produced no verdict. */
 	readonly ok: boolean;
 	/**
+	 * The reviewer's findings report (clipped at the sender). Carried so the
+	 * maestro can show the HUMAN what is holding the gate — without it, the
+	 * gate-decision question asks for an override/send-back blind.
+	 */
+	readonly report?: string;
+	/**
 	 * Set when a HUMAN overrode this verdict (gate-decision flow): the
 	 * human's reason. Surfaces in the PR body and recap for provenance.
 	 */

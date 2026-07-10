@@ -67,6 +67,16 @@ export interface ExecutionHandle {
 	/** Required reviewers currently holding a deliverable's ship gate. */
 	failingRequiredReviewers(deliverableId: string): string[];
 	/**
+	 * Latest panel round's verdicts with their (clipped) findings reports —
+	 * what the human reads before deciding an override/send-back.
+	 */
+	reviewerFindings(deliverableId: string): ReadonlyArray<{
+		readonly name: string;
+		readonly verdict: string;
+		readonly required: boolean;
+		readonly report?: string;
+	}>;
+	/**
 	 * Record a HUMAN override as a reviewer's latest verdict (gate-decision
 	 * answer flow only — deliberately not reachable from any model tool).
 	 */

@@ -21,6 +21,12 @@ function fakes(opts: {
 	}) => Answers[number] | undefined;
 	failing?: string[];
 	sendBackOk?: boolean;
+	findings?: Array<{
+		name: string;
+		verdict: string;
+		required: boolean;
+		report?: string;
+	}>;
 }) {
 	const overrides: Array<[string, string, string]> = [];
 	const sendBacks: Array<[string, string]> = [];
@@ -29,6 +35,7 @@ function fakes(opts: {
 	let ticks = 0;
 	const execution = {
 		failingRequiredReviewers: () => opts.failing ?? ["security-audit"],
+		reviewerFindings: () => opts.findings ?? [],
 		overrideReviewerVerdict: (d: string, r: string, why: string) => {
 			overrides.push([d, r, why]);
 		},
@@ -91,6 +98,38 @@ describe("buildGateQuestion", () => {
 		]);
 		expect(q.options?.[1].description).toContain("security-audit");
 	});
+
+	it("carries the findings as question context — the human never decides blind", () => {
+		const q = buildGateQuestion(
+			"auth",
+			"ship gate: security-audit requested changes",
+			["security-audit"],
+			[
+				{
+					name: "security-audit",
+					verdict: "request-changes",
+					required: true,
+					report: "Critical: token is logged at src/auth.ts:42.",
+				},
+				{
+					name: "docs",
+					verdict: "approve",
+					required: false,
+				},
+			],
+		);
+		expect(q.context).toContain(
+			"security-audit [required] — ✗ request-changes",
+		);
+		expect(q.context).toContain("token is logged at src/auth.ts:42");
+		// Passing reviewers without a report add noise, not signal.
+		expect(q.context).not.toContain("docs");
+	});
+
+	it("omits context when no findings arrived (older workers)", () => {
+		const q = buildGateQuestion("auth", "ship gate: …", ["security-audit"]);
+		expect(q.context).toBeUndefined();
+	});
 });
 
 describe("presentGateDecision", () => {
@@ -129,6 +168,28 @@ describe("presentGateDecision", () => {
 		expect(sendBacks[0][1]).toContain("re-run the review panel");
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toContain("respawned");
+	});
+
+	it("send back carries the holding reviewers' findings in the kickoff", async () => {
+		const { deps, sendBacks } = fakes({
+			failing: ["security-audit"],
+			findings: [
+				{
+					name: "security-audit",
+					verdict: "request-changes",
+					required: true,
+					report: "Critical: token is logged at src/auth.ts:42.",
+				},
+			],
+			answer: () => ({
+				questionId: "x",
+				value: GATE_OPTION_SEND_BACK,
+				note: "scrub the log line",
+			}),
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(sendBacks[0][1]).toContain("token is logged at src/auth.ts:42");
+		expect(sendBacks[0][1]).toContain("scrub the log line");
 	});
 
 	it("send back falls back to informing the model when respawn is impossible", async () => {

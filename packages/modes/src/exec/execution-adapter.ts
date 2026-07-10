@@ -648,6 +648,21 @@ export class ExecutionAdapter {
 		}
 	}
 
+	/** Latest panel round's verdicts + clipped findings (human decision context). */
+	reviewerFindings(deliverableId: string): ReadonlyArray<{
+		readonly name: string;
+		readonly verdict: string;
+		readonly required: boolean;
+		readonly report?: string;
+	}> {
+		return (this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => ({
+			name: v.name,
+			verdict: v.verdict,
+			required: v.required,
+			...(v.report ? { report: v.report } : {}),
+		}));
+	}
+
 	/** Required reviewers currently holding the gate (changes or no verdict). */
 	failingRequiredReviewers(deliverableId: string): string[] {
 		const required = this.requiredReviewerNames(deliverableId);

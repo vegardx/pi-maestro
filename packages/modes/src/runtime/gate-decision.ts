@@ -20,16 +20,44 @@ export const GATE_OPTION_SEND_BACK = "Send back with guidance";
 export const GATE_OPTION_OVERRIDE = "Override and ship";
 export const GATE_OPTION_PARK = "Leave parked";
 
+export interface ReviewerFinding {
+	readonly name: string;
+	readonly verdict: string;
+	readonly required: boolean;
+	readonly report?: string;
+}
+
+/**
+ * The findings that justify the decision, as question context. The human is
+ * choosing to override or send back — they must see WHAT they'd be
+ * overriding, not just which reviewer is holding.
+ */
+export function renderFindings(
+	findings: readonly ReviewerFinding[],
+): string | undefined {
+	const relevant = findings.filter((f) => f.verdict !== "approve" || f.report);
+	if (relevant.length === 0) return undefined;
+	const blocks = relevant.map((f) => {
+		const tag = f.required ? " [required]" : "";
+		const verdict = f.verdict === "approve" ? "✓ pass" : `✗ ${f.verdict}`;
+		return `### ${f.name}${tag} — ${verdict}\n${f.report ?? "(no report received from this reviewer)"}`;
+	});
+	return blocks.join("\n\n");
+}
+
 /** Build the decision question for one blocked deliverable. Pure. */
 export function buildGateQuestion(
 	deliverableId: string,
 	reason: string,
 	failing: readonly string[],
+	findings: readonly ReviewerFinding[] = [],
 ): Question {
 	const holders = failing.length ? failing.join(", ") : "required reviewers";
+	const context = renderFindings(findings);
 	return {
 		id: `ship-gate:${deliverableId}`,
 		question: `${reason} — "${deliverableId}" is parked. How should this resolve?`,
+		...(context ? { context } : {}),
 		options: [
 			{
 				label: GATE_OPTION_SEND_BACK,
@@ -69,11 +97,12 @@ export async function presentGateDecision(
 	const execution = deps.execution();
 	if (!ask || !execution) return; // blocked card remains the fallback surface
 	const failing = execution.failingRequiredReviewers(deliverableId);
+	const findings = execution.reviewerFindings(deliverableId);
 
 	let answers: Answers;
 	try {
 		answers = await ask.ask([
-			buildGateQuestion(deliverableId, reason, failing),
+			buildGateQuestion(deliverableId, reason, failing, findings),
 		]);
 	} catch {
 		return; // ask surface unavailable — blocked card remains
@@ -102,10 +131,16 @@ export async function presentGateDecision(
 		// deliverable and respawn its worker with the findings. Telling the
 		// model to do it dead-ended — complete → active was illegal and no
 		// model tool can respawn a worker.
+		const failingFindings = renderFindings(
+			findings.filter((f) => failing.includes(f.name)),
+		);
 		const kickoff =
 			`Your deliverable was held at the ship gate: ${reason}. ` +
 			`The human sent it back to you (${failing.join(", ") || "required reviewers"} holding). ` +
 			`Guidance: ${note || "(none given — address the reviewers' findings)"}. ` +
+			(failingFindings
+				? `\n\nThe holding findings:\n\n${failingFindings}\n\n`
+				: "") +
 			"Fix the findings, commit, re-run the review panel, and finish again.";
 		const sent = await execution.sendBackToWorker(deliverableId, kickoff);
 		if (sent) {

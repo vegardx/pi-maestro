@@ -190,6 +190,9 @@ export function createModesRuntime(
 								required: r.required,
 								verdict: r.verdict,
 								ok: r.ok,
+								// The findings travel with the verdict so the maestro
+								// can show the human WHAT holds the gate.
+								report: clipReport(r.report),
 							})),
 					);
 				},
@@ -321,4 +324,13 @@ export function createModesRuntime(
 /** "…/plans/<slug>/research/03-x.md" → "research/03-x.md" for display. */
 function relativeReportPath(path: string): string {
 	return path.split("/").slice(-2).join("/");
+}
+
+/** Clip a reviewer report for the panelVerdict wire message (RPC hygiene). */
+const REPORT_CLIP_CHARS = 4000;
+function clipReport(report: string): string | undefined {
+	const trimmed = report.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.length <= REPORT_CLIP_CHARS) return trimmed;
+	return `${trimmed.slice(0, REPORT_CLIP_CHARS)}\n[…report clipped]`;
 }

@@ -64,6 +64,17 @@ export interface ExecutionHandle {
 	tick(): Promise<number>;
 	/** Send guidance to a deliverable agent (default: the worker). False if absent. */
 	steer(deliverableId: string, guidance: string, agentName?: string): boolean;
+	/** Required reviewers currently holding a deliverable's ship gate. */
+	failingRequiredReviewers(deliverableId: string): string[];
+	/**
+	 * Record a HUMAN override as a reviewer's latest verdict (gate-decision
+	 * answer flow only — deliberately not reachable from any model tool).
+	 */
+	overrideReviewerVerdict(
+		deliverableId: string,
+		reviewer: string,
+		reason: string,
+	): void;
 	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;

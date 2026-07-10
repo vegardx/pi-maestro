@@ -53,6 +53,8 @@ function makeHandle(overrides: Partial<ExecutionHandle> = {}): ExecutionHandle {
 		start: async () => {},
 		tick: async () => 0,
 		steer: () => true,
+		failingRequiredReviewers: () => [],
+		overrideReviewerVerdict: () => {},
 		snapshot: () => ({
 			agents: new Map<string, ExecutionAgentSnapshot>(),
 			deliverables: new Map<string, ExecutionDeliverableSnapshot>(),

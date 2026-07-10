@@ -1,0 +1,135 @@
+// The ship-gate disagreement question: build, and the three answer routes.
+// The override executes in EXTENSION code on the human's answer — no model
+// tool can reach it.
+
+import type { Answers } from "@vegardx/pi-contracts";
+import { describe, expect, it } from "vitest";
+import type { ExecutionHandle } from "../packages/modes/src/exec/index.js";
+import {
+	buildGateQuestion,
+	GATE_OPTION_OVERRIDE,
+	GATE_OPTION_PARK,
+	GATE_OPTION_SEND_BACK,
+	presentGateDecision,
+} from "../packages/modes/src/runtime/gate-decision.js";
+
+function fakes(opts: {
+	answer?: (a: {
+		value: string;
+		note?: string;
+		deferred?: boolean;
+	}) => Answers[number] | undefined;
+	failing?: string[];
+}) {
+	const overrides: Array<[string, string, string]> = [];
+	const messages: string[] = [];
+	const notices: string[] = [];
+	let ticks = 0;
+	const execution = {
+		failingRequiredReviewers: () => opts.failing ?? ["security-audit"],
+		overrideReviewerVerdict: (d: string, r: string, why: string) => {
+			overrides.push([d, r, why]);
+		},
+		tick: async () => {
+			ticks++;
+			return 0;
+		},
+	} as unknown as ExecutionHandle;
+	const deps = {
+		ask: () => ({
+			ask: async (qs: { id: string }[]) => {
+				const built = opts.answer?.({ value: "" })
+					? [opts.answer({ value: "" })]
+					: [];
+				void built;
+				const a = opts.answer?.({ value: "" });
+				return a ? [{ ...a, questionId: qs[0].id }] : [];
+			},
+			queue: () => {},
+			post: () => {},
+			pending: () => [],
+		}),
+		execution: () => execution,
+		pi: {
+			sendUserMessage: (text: string) => {
+				messages.push(text);
+			},
+		},
+		notify: (m: string) => {
+			notices.push(m);
+		},
+	};
+	return {
+		deps: deps as never,
+		overrides,
+		messages,
+		notices,
+		ticks: () => ticks,
+	};
+}
+
+describe("buildGateQuestion", () => {
+	it("names the holding reviewers and the three routes", () => {
+		const q = buildGateQuestion(
+			"auth",
+			"ship gate: security-audit requested changes",
+			["security-audit"],
+		);
+		expect(q.question).toContain("security-audit requested changes");
+		expect(q.question).toContain('"auth" is parked');
+		expect(q.options?.map((o) => o.label)).toEqual([
+			GATE_OPTION_SEND_BACK,
+			GATE_OPTION_OVERRIDE,
+			GATE_OPTION_PARK,
+		]);
+		expect(q.options?.[1].description).toContain("security-audit");
+	});
+});
+
+describe("presentGateDecision", () => {
+	it("override: records a human verdict per holding reviewer and re-ticks", async () => {
+		const { deps, overrides, ticks } = fakes({
+			failing: ["security-audit", "correctness"],
+			answer: () => ({
+				questionId: "x",
+				value: GATE_OPTION_OVERRIDE,
+				note: "false positive — token already scoped",
+			}),
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(overrides).toEqual([
+			["auth", "security-audit", "false positive — token already scoped"],
+			["auth", "correctness", "false positive — token already scoped"],
+		]);
+		expect(ticks()).toBe(1);
+	});
+
+	it("send back: informs the maestro model with the guidance, no override", async () => {
+		const { deps, overrides, messages } = fakes({
+			answer: () => ({
+				questionId: "x",
+				value: GATE_OPTION_SEND_BACK,
+				note: "narrow the scope but keep repo read",
+			}),
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(overrides).toHaveLength(0);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("narrow the scope but keep repo read");
+		expect(messages[0]).toContain("re-run the review panel");
+	});
+
+	it("park / deferred: does nothing", async () => {
+		for (const answer of [
+			{ questionId: "x", value: GATE_OPTION_PARK },
+			{ questionId: "x", value: GATE_OPTION_OVERRIDE, deferred: true },
+		]) {
+			const { deps, overrides, messages } = fakes({
+				answer: () => answer as Answers[number],
+			});
+			await presentGateDecision(deps, "auth", "ship gate: …");
+			expect(overrides).toHaveLength(0);
+			expect(messages).toHaveLength(0);
+		}
+	});
+});

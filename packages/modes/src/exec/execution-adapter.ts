@@ -152,6 +152,12 @@ export interface ExecutionAdapterOpts {
 	onEvent?: (event: ExecutionEvent) => void;
 	/** A worker reported a completed review-panel round (drives the gate). */
 	onPanelVerdict?: (msg: PanelVerdictMessage) => void;
+	/**
+	 * A deliverable just transitioned into a ship-gate block (worker done,
+	 * required verdicts unsatisfied). Fired once per distinct reason — the
+	 * runtime turns it into a decision question for the human.
+	 */
+	onShipGateBlocked?: (deliverableId: string, reason: string) => void;
 }
 
 /**
@@ -190,6 +196,8 @@ export class ExecutionAdapter {
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
 	private panelVerdicts = new Map<string, PanelVerdictMessage>(); // deliverableId → latest round
+	/** Last ship-gate block reason surfaced per deliverable (dedupe). */
+	private gateBlockSurfaced = new Map<string, string>();
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
 	private pollInFlight = false; // skip overlapping pollSessions runs
@@ -491,6 +499,22 @@ export class ExecutionAdapter {
 									`### ${a.displayName ?? a.name} (${a.name})\n${a.summary}`,
 							)
 					: [];
+				// Human review overrides are part of the record: name them in the PR.
+				const overridden = (
+					this.panelVerdicts.get(shipOpts.deliverableId)?.verdicts ?? []
+				).filter(
+					(v) => (v as { humanOverride?: string }).humanOverride !== undefined,
+				);
+				if (overridden.length > 0) {
+					agentReports.push(
+						`### Review overrides\n${overridden
+							.map(
+								(v) =>
+									`- **${v.name}**: approved by human override — ${(v as { humanOverride?: string }).humanOverride}`,
+							)
+							.join("\n")}`,
+					);
+				}
 				const result = await shipDeliverableReal({
 					plan,
 					deliverable,
@@ -571,6 +595,74 @@ export class ExecutionAdapter {
 	 * blocked card the maestro/human sees when a completed worker didn't clear
 	 * its panel.
 	 */
+	/** Fire onShipGateBlocked once per new ship-gate reason; re-arm on clear. */
+	private surfaceGateBlocks(): void {
+		for (const [id, state] of this.executor.getStates()) {
+			const reason = state.blocked;
+			if (!reason?.startsWith("ship gate:")) {
+				this.gateBlockSurfaced.delete(id);
+				continue;
+			}
+			if (this.gateBlockSurfaced.get(id) === reason) continue;
+			this.gateBlockSurfaced.set(id, reason);
+			this.opts.onShipGateBlocked?.(id, reason);
+		}
+	}
+
+	/** Required reviewers currently holding the gate (changes or no verdict). */
+	failingRequiredReviewers(deliverableId: string): string[] {
+		const required = this.requiredReviewerNames(deliverableId);
+		const byName = new Map(
+			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
+				v.name,
+				v.verdict,
+			]),
+		);
+		return required.filter((n) => byName.get(n) !== "approve");
+	}
+
+	/**
+	 * Record a HUMAN override as a reviewer's latest verdict. The gate opens
+	 * through its own rules (latest verdict per required reviewer) — the human
+	 * simply becomes the author of a verdict, with provenance that surfaces in
+	 * the PR body. Only reachable from the gate-decision answer flow, never
+	 * from a model-facing tool.
+	 */
+	overrideReviewerVerdict(
+		deliverableId: string,
+		reviewer: string,
+		reason: string,
+	): void {
+		const current = this.panelVerdicts.get(deliverableId);
+		const verdicts = [...(current?.verdicts ?? [])];
+		const idx = verdicts.findIndex((v) => v.name === reviewer);
+		const entry =
+			idx >= 0
+				? {
+						...verdicts[idx],
+						verdict: "approve" as const,
+						humanOverride: reason,
+					}
+				: {
+						name: reviewer,
+						persona: reviewer,
+						required: true,
+						ok: true,
+						verdict: "approve" as const,
+						humanOverride: reason,
+					};
+		if (idx >= 0) verdicts[idx] = entry;
+		else verdicts.push(entry);
+		const baseMsg: PanelVerdictMessage = current ?? {
+			type: "panelVerdict",
+			deliverableId,
+			round: 0,
+			verdicts: [],
+		};
+		this.panelVerdicts.set(deliverableId, { ...baseMsg, verdicts });
+		this.logEvent("human-override", { deliverableId, reviewer, reason });
+	}
+
 	private deliverableGateDetail(deliverableId: string): string {
 		const required = this.requiredReviewerNames(deliverableId);
 		const byName = new Map(
@@ -632,6 +724,7 @@ export class ExecutionAdapter {
 
 		const shipped = await this.executor.tick();
 		this.recordDeliverableTransitions();
+		this.surfaceGateBlocks();
 
 		const afterActive = this.engine
 			.get()

@@ -133,6 +133,11 @@ export interface PanelVerdictEntry {
 	readonly verdict: PanelVerdict;
 	/** False when the reviewer failed to run / produced no verdict. */
 	readonly ok: boolean;
+	/**
+	 * Set when a HUMAN overrode this verdict (gate-decision flow): the
+	 * human's reason. Surfaces in the PR body and recap for provenance.
+	 */
+	readonly humanOverride?: string;
 }
 
 /**

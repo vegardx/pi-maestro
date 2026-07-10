@@ -10,6 +10,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+	CAPABILITIES,
 	EVENTS,
 	type ModeName,
 	type PlanId,
@@ -74,6 +75,7 @@ import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { syncAgentWidget } from "./dashboard.js";
+import { presentGateDecision } from "./gate-decision.js";
 import {
 	cleanupInactiveWorktrees,
 	planRepoMismatch,
@@ -573,6 +575,20 @@ export function createRuntimeContext(
 						// refreshes the footer, clears the agent widget, and wipes the
 						// plan's research scratch (full reports are throwaway once the
 						// plan has shipped).
+						// Gate disagreements go to the HUMAN as a question; the
+						// override route executes extension-side on their answer.
+						onShipGateBlocked: (deliverableId, reason) => {
+							void presentGateDecision(
+								{
+									ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+									execution: () => rt.execution,
+									pi,
+									notify: (m, level) => ctx.ui.notify(m, level),
+								},
+								deliverableId,
+								reason,
+							);
+						},
 						onAllSettled: () => {
 							rt.invalidateFooter?.();
 							syncAgentWidget(rt, ctx);

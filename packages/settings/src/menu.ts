@@ -329,7 +329,7 @@ interface PickerModel {
 /** The "= plan" pseudo-entry the tier model picker offers first. */
 const TRACK_PLAN = "@plan";
 
-class ConfigMenuComponent implements Component, Focusable {
+export class ConfigMenuComponent implements Component, Focusable {
 	focused = true;
 	expanded = true;
 	private sections: Section[];
@@ -357,15 +357,25 @@ class ConfigMenuComponent implements Component, Focusable {
 	private readonly palette: Palette;
 	private readonly ctx: ExtensionContext;
 	private readonly done: (result: undefined) => void;
+	/** Live terminal height in rows (for scroll windowing). */
+	private readonly viewportRows: () => number;
+	/**
+	 * Index into the just-rendered `lines` of the currently-active row (cursor
+	 * or picker selection). The scroll window centers on it so the selected row
+	 * is always visible. Reset each render, set by the sub-renderers.
+	 */
+	private activeLineIdx = -1;
 
 	constructor(
 		ctx: ExtensionContext,
 		palette: Palette,
 		done: (result: undefined) => void,
+		viewport: () => number = () => Number.POSITIVE_INFINITY,
 	) {
 		this.ctx = ctx;
 		this.palette = palette;
 		this.done = done;
+		this.viewportRows = viewport;
 		this.sections = buildSections(ctx);
 		this.rebuildFlat();
 	}
@@ -398,6 +408,7 @@ class ConfigMenuComponent implements Component, Focusable {
 	render(_width: number): string[] {
 		const p = this.palette;
 		const lines: string[] = [];
+		this.activeLineIdx = -1;
 
 		const innerW = _width - 4;
 		const labelW = Math.max(18, Math.floor(innerW * 0.24));
@@ -436,7 +447,51 @@ class ConfigMenuComponent implements Component, Focusable {
 		this.renderOverlays(lines, line);
 		this.renderHelp(lines, line);
 		lines.push(p.dim(`╰${"─".repeat(boxW - 2)}╯`));
-		return lines;
+		return this.windowLines(lines, line);
+	}
+
+	/**
+	 * Bound the rendered box to a fraction of the live terminal height, keeping
+	 * the active row visible. The overlay host clips anything past its maxHeight
+	 * with a plain top-slice (no scrolling), so the component must window itself
+	 * or rows fall off-screen and become unselectable. We stay comfortably under
+	 * the overlay's maxHeight so our own window is always the binding constraint.
+	 *
+	 * Layout is [top border, ...content..., help, bottom border]; the top border
+	 * and the trailing help + bottom border stay pinned while the content region
+	 * scrolls around `activeLineIdx`.
+	 */
+	private windowLines(lines: string[], line: (s: string) => string): string[] {
+		const rows = this.viewportRows();
+		if (!Number.isFinite(rows)) return lines;
+		// Match the overlay's anchor headroom: keep well under maxHeight ("80%").
+		const budget = Math.max(12, Math.floor(rows * 0.6));
+		if (lines.length <= budget) return lines;
+
+		const top = lines[0];
+		const help = lines[lines.length - 2];
+		const bottom = lines[lines.length - 1];
+		const content = lines.slice(1, lines.length - 2);
+		// Reserve: top + help + bottom (3) + up to two "⋯ more" markers.
+		const avail = Math.max(3, budget - 5);
+		const focus =
+			this.activeLineIdx >= 1
+				? Math.min(this.activeLineIdx - 1, content.length - 1)
+				: 0;
+
+		let start = Math.max(0, focus - Math.floor(avail / 2));
+		start = Math.min(start, Math.max(0, content.length - avail));
+		const end = Math.min(content.length, start + avail);
+
+		const out = [top];
+		if (start > 0) out.push(line(this.palette.dim(`  ⋯ ${start} more above`)));
+		out.push(...content.slice(start, end));
+		if (end < content.length)
+			out.push(
+				line(this.palette.dim(`  ⋯ ${content.length - end} more below`)),
+			);
+		out.push(help, bottom);
+		return out;
 	}
 
 	private renderBrowse(
@@ -463,6 +518,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			if (!this.isProfileRow(r)) continue;
 			const selected = fi === this.cursor;
 			const ptr = selected ? p.accent("▶ ") : "  ";
+			if (selected && this.mode === "browse") this.activeLineIdx = lines.length;
 			if (this.isNameRow(r)) {
 				const nm = r.key.slice(6);
 				const isActive = r.global === "active";
@@ -526,6 +582,7 @@ class ConfigMenuComponent implements Component, Focusable {
 			}
 			const selected = fi === this.cursor;
 			const ptr = selected ? p.accent("▶ ") : "  ";
+			if (selected && this.mode === "browse") this.activeLineIdx = lines.length;
 			const label = visPad(r.label, labelW - 2);
 			const cells = [r.global, r.project, r.session].map((val, i) => {
 				if (r.globalOnly && i > 0) return p.dim(visPad("·", colW));
@@ -561,6 +618,7 @@ class ConfigMenuComponent implements Component, Focusable {
 				const sel = i === this.optionCursor;
 				const marker = sel ? p.accent("▶ ") : "  ";
 				const text = sel ? p.accent(opt.label) : opt.label;
+				if (sel) this.activeLineIdx = lines.length;
 				lines.push(line(`    ${marker}${text}`));
 			}
 			lines.push(line(""));
@@ -580,6 +638,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		for (let i = 0; i < this.tierPickerModels.length; i++) {
 			const m = this.tierPickerModels[i];
 			const ptr = i === this.tierPickerCursor ? p.accent("▶ ") : "  ";
+			if (i === this.tierPickerCursor) this.activeLineIdx = lines.length;
 			const badge =
 				m.modelId === TRACK_PLAN
 					? ""
@@ -621,6 +680,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		for (let i = 0; i < this.tierPickerEfforts.length; i++) {
 			const e = this.tierPickerEfforts[i];
 			const ptr = i === this.tierPickerCursor ? p.accent("▶ ") : "  ";
+			if (i === this.tierPickerCursor) this.activeLineIdx = lines.length;
 			const desc = e.desc ? p.muted(`  ${e.desc}`) : "";
 			lines.push(line(`  ${ptr}${e.level}${desc}`));
 		}
@@ -643,6 +703,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		for (let i = 0; i < this.targetModels.length; i++) {
 			const m = this.targetModels[i];
 			const ptr = i === this.targetCursor ? p.accent("▶ ") : "  ";
+			if (i === this.targetCursor) this.activeLineIdx = lines.length;
 			const box = this.targetSelected.has(m.modelId) ? "[x]" : "[ ]";
 			const owner = this.targetOwner.get(m.modelId);
 			const note =
@@ -658,6 +719,7 @@ class ConfigMenuComponent implements Component, Focusable {
 		const p = this.palette;
 		if (this.mode === "naming") {
 			lines.push(line(""));
+			this.activeLineIdx = lines.length;
 			lines.push(
 				line(`  New profile name: ${p.accent(`${this.editBuffer}█`)}`),
 			);
@@ -665,11 +727,13 @@ class ConfigMenuComponent implements Component, Focusable {
 		}
 		if (this.mode === "renaming") {
 			lines.push(line(""));
+			this.activeLineIdx = lines.length;
 			lines.push(line(`  Rename profile: ${p.accent(`${this.editBuffer}█`)}`));
 			lines.push(line(""));
 		}
 		if (this.mode === "confirm-delete") {
 			lines.push(line(""));
+			this.activeLineIdx = lines.length;
 			lines.push(
 				line(`  ${p.accent(`Delete profile "${this.pendingDeleteProfile}"?`)}`),
 			);
@@ -1305,9 +1369,23 @@ export function ensureDefaultProfile(ctx: ExtensionContext): void {
 export function showConfigMenu(ctx: ExtensionContext): void {
 	ensureDefaultProfile(ctx);
 	const palette = paletteFromTheme(ctx.ui.theme);
-	ctx.ui.custom((_tui, _theme, _keybindings, done) => {
-		return new ConfigMenuComponent(ctx, palette, () => done(undefined));
-	});
+	ctx.ui.custom(
+		(tui, _theme, _keybindings, done) =>
+			new ConfigMenuComponent(
+				ctx,
+				palette,
+				() => done(undefined),
+				() => tui.terminal.rows,
+			),
+		{
+			overlay: true,
+			overlayOptions: {
+				anchor: "bottom-center",
+				width: "100%",
+				maxHeight: "80%",
+			},
+		},
+	);
 }
 
 /** Read session-scoped value (for resolver integration). */

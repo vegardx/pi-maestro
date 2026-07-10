@@ -580,13 +580,18 @@ describe("RpcClient-backed runner", () => {
 		emit?: { type: string; toolName?: string; message?: unknown }[];
 		startError?: string;
 		hang?: boolean;
+		/** Simulate the child process dying (RpcClient sets exitError on exit). */
+		exitError?: Error;
 		captureEnv?: (env: Record<string, string> | undefined) => void;
 		captureArgs?: (args: string[] | undefined) => void;
 	}) {
-		let listener: ((e: any) => void) | undefined;
+		const listeners = new Set<(e: any) => void>();
+		const emit = (e: any) => {
+			for (const l of [...listeners]) l(e);
+		};
 		let aborted = false;
 		const client = {
-			listener: () => listener,
+			exitError: opts.exitError ?? null,
 			abort: async () => {
 				aborted = true;
 			},
@@ -596,18 +601,21 @@ describe("RpcClient-backed runner", () => {
 			start: async () => {
 				if (opts.startError) throw new Error(opts.startError);
 			},
-			prompt: async () => {},
+			// The runner owns the idle wait now (agent_end event); the fake emits
+			// its scripted events on prompt and ends the run unless told to hang.
+			prompt: async () => {
+				queueMicrotask(() => {
+					for (const e of opts.emit ?? []) emit(e);
+					if (!opts.hang && !opts.exitError) emit({ type: "agent_end" });
+				});
+			},
 			steer: async () => {},
 			stop: async () => {},
 			onEvent: (l: (e: any) => void) => {
-				listener = l;
+				listeners.add(l);
 				return () => {
-					listener = undefined;
+					listeners.delete(l);
 				};
-			},
-			waitForIdle: async () => {
-				for (const e of opts.emit ?? []) listener?.(e);
-				if (opts.hang) await new Promise(() => {});
 			},
 			getLastAssistantText: async () => opts.text ?? null,
 		};
@@ -723,6 +731,25 @@ describe("RpcClient-backed runner", () => {
 		const result = await launch(factory).result();
 		expect(result.status).toBe("failed");
 		expect(result.error).toContain("EACCES");
+	});
+
+	it("fails fast when the child process dies mid-run (exitError probe)", async () => {
+		// RpcClient rejects pending sends on exit but never notifies onEvent
+		// subscribers — the idle wait must catch a dead child via exitError
+		// instead of hanging forever (or inheriting waitForIdle's 60s default).
+		const { factory } = fakeClient({
+			exitError: new Error("Agent process exited (code=1 signal=null)"),
+		});
+		const result = await launch(factory).result();
+		expect(result.status).toBe("failed");
+		expect(result.error).toContain("exited (code=1");
+	});
+
+	it("applies the runner timeout as the single owner when configured", async () => {
+		const { factory } = fakeClient({ hang: true });
+		const result = await launch(factory, { timeoutMs: 15 }).result();
+		expect(result.status).toBe("failed");
+		expect(result.error).toContain("run timed out");
 	});
 
 	it("stop aborts the client and settles stopped", async () => {

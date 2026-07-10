@@ -29,7 +29,6 @@ export interface RpcLike {
 	abort(): Promise<void>;
 	stop(): Promise<void>;
 	onEvent(listener: (event: AgentEvent) => void): () => void;
-	waitForIdle(timeout?: number): Promise<void>;
 	getLastAssistantText(): Promise<string | null>;
 }
 
@@ -139,14 +138,20 @@ async function execute(
 			mapEvent(bus, runId, event);
 		});
 
+		// Own the idle wait instead of client.waitForIdle: RpcClient's version
+		// carries a hidden 60s DEFAULT timeout when called without one, which
+		// killed every child that needed more than a minute of honest work.
+		// One timeout owner: opts.timeoutMs (unset ⇒ no runner-level timeout —
+		// callers like the research watchdog own stall/timeout policy).
+		// Subscribed BEFORE prompt so a fast run can't end before we listen.
+		const idle = waitUntilIdle(client);
+		idle.catch(() => {}); // guard: abort/timeout may win the race first
+
 		await client.start();
 		bus.publish({ type: "status", runId, status: "running", at: Date.now() });
 
 		await client.prompt(prompt);
-		await raceAbort(
-			withTimeout(client.waitForIdle(opts.timeoutMs), opts.timeoutMs),
-			signal,
-		);
+		await raceAbort(withTimeout(idle, opts.timeoutMs), signal);
 
 		if (signal.aborted) return settle(bus, runId, stopped("aborted"));
 
@@ -166,6 +171,42 @@ async function execute(
 		await client?.stop().catch(() => {});
 		release?.();
 	}
+}
+
+/** How often the idle wait probes for a silently dead child process. */
+const DEAD_POLL_MS = 5_000;
+
+/**
+ * Resolve when the child reports `agent_end`; reject when its process dies.
+ * RpcClient rejects pending send() requests on exit but never notifies
+ * onEvent subscribers, so a child dying mid-run (no outstanding request)
+ * would hang a bare event wait forever — poll the client's `exitError`
+ * (set on process exit/error) to catch that.
+ */
+function waitUntilIdle(client: RpcLike, pollMs = DEAD_POLL_MS): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		const cleanup = (): void => {
+			if (timer) clearInterval(timer);
+			unsub();
+		};
+		const unsub = client.onEvent((event) => {
+			if (event.type === "agent_end") {
+				cleanup();
+				resolve();
+			}
+		});
+		const checkDead = (): void => {
+			const err = (client as { exitError?: Error | null }).exitError;
+			if (err) {
+				cleanup();
+				reject(err);
+			}
+		};
+		timer = setInterval(checkDead, pollMs);
+		timer.unref?.();
+		checkDead(); // it may already be dead
+	});
 }
 
 function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {

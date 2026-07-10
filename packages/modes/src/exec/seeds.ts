@@ -7,6 +7,7 @@
 
 import type { Deliverable, Plan, WorkItem } from "../schema.js";
 import {
+	deliverableWorkspace,
 	findAgent,
 	findDeliverable,
 	gatingTasks,
@@ -34,6 +35,10 @@ export const TASKS_HEADER = "# Your Tasks";
 export const TASKS_FRAME =
 	"> These are YOUR tasks. Implement each one, commit as you go, and toggle " +
 	"when complete. Stop when all tasks are done.";
+export const TASKS_FRAME_SCRATCH =
+	"> These are YOUR tasks. Complete each one and toggle when done. This is a " +
+	"plain working directory — no git branch, no PR; your summary and side " +
+	"effects are the deliverable. Stop when all tasks are done.";
 
 export const FOCUS_HEADER = "# Your Focus";
 export const FOCUS_FRAME =
@@ -55,6 +60,12 @@ export interface BuildSeedInput {
 	/** "worker" or a support agent's name. */
 	agentName: string;
 	summaries: SeedSummaries;
+	/**
+	 * Repo commit-policy paragraph (commitPolicyInstruction), included for
+	 * workers ahead of their tasks. Caller-computed: buildSeed stays a pure
+	 * function of its inputs (cache stability), so no filesystem reads here.
+	 */
+	policyNote?: string;
 }
 
 /**
@@ -102,11 +113,10 @@ export function buildSeed(input: BuildSeedInput): string {
 
 	// Assignment — worker gets the deliverable's tasks; support agents their focus.
 	if (isWorker) {
-		const parts = [
-			TASKS_HEADER,
-			TASKS_FRAME,
-			`## Deliverable: ${deliverable.title}`,
-		];
+		const scratch = deliverableWorkspace(deliverable) === "scratch";
+		const parts = [TASKS_HEADER, scratch ? TASKS_FRAME_SCRATCH : TASKS_FRAME];
+		if (input.policyNote) parts.push(input.policyNote);
+		parts.push(`## Deliverable: ${deliverable.title}`);
 		if (deliverable.body) parts.push(deliverable.body);
 		const tasks = gatingTasks(deliverable);
 		if (tasks.length > 0) parts.push(tasks.map(formatTask).join("\n"));

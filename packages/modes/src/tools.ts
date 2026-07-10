@@ -97,6 +97,22 @@ const DeliverableParams = Type.Object({
 			description: "Branch from predecessor tip (default true).",
 		}),
 	),
+	workspace: Type.Optional(
+		Type.Union([Type.Literal("repo"), Type.Literal("scratch")], {
+			description:
+				'"repo" (default): worktree + branch, ships as a PR. "scratch": a ' +
+				"plain directory for work not tied to any repo (creating repos, " +
+				"provisioning, ops) — no branch, no PR; ships when its review gate " +
+				"passes and its summary is recorded.",
+		}),
+	),
+	repo: Type.Optional(
+		Type.String({
+			description:
+				"Repo registry key this deliverable targets (see the repo tool); " +
+				"omit for the plan's default repo. Not allowed with workspace=scratch.",
+		}),
+	),
 	workerMode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
 	),
@@ -171,6 +187,40 @@ const AgentParams = Type.Object({
 	),
 });
 
+const RepoParams = Type.Object({
+	action: Type.Union([
+		Type.Literal("add"),
+		Type.Literal("remove"),
+		Type.Literal("list"),
+	]),
+	key: Type.Optional(
+		Type.String({
+			description: 'Registry key deliverables reference (e.g. "service").',
+		}),
+	),
+	path: Type.Optional(
+		Type.String({
+			description:
+				"Absolute path to the repo. For a late-bound repo (createdBy) this " +
+				"is where it WILL live once its creator deliverable runs.",
+		}),
+	),
+	defaultBranch: Type.Optional(
+		Type.String({
+			description: "Default branch; detected from the repo when omitted.",
+		}),
+	),
+	createdBy: Type.Optional(
+		Type.String({
+			description:
+				"Deliverable id expected to create this repo (a scratch " +
+				"deliverable running e.g. `gh repo create` + clone). Add that " +
+				"deliverable first; every deliverable targeting this repo must " +
+				"depend on it.",
+		}),
+	),
+});
+
 const PlanParams = Type.Object({
 	view: Type.Optional(
 		Type.Union([
@@ -193,6 +243,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createAgentTool(deps),
 		createPanelTool(deps),
 		createPlanTool(deps),
+		createRepoTool(deps),
 		createKnowledgeTool(deps),
 	];
 }
@@ -325,9 +376,12 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 		name: "deliverable",
 		label: "Deliverable",
 		description:
-			"Manage work deliverables in the active plan: add, update, remove, list. One deliverable = one branch = one PR.",
+			"Manage work deliverables in the active plan: add, update, remove, list. " +
+			"One repo deliverable = one branch = one PR; a scratch deliverable " +
+			"(workspace=scratch) runs in a plain directory with no branch or PR — " +
+			"for work not tied to any repo yet (creating repos, provisioning, ops).",
 		promptSnippet:
-			"deliverable — manage work deliverables (add/update/remove/list). One deliverable = one branch = one PR.",
+			"deliverable — manage work deliverables (add/update/remove/list). One deliverable = one branch = one PR; workspace=scratch for non-repo work.",
 		parameters: DeliverableParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {
@@ -366,6 +420,8 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							body: params.body,
 							dependsOn: params.dependsOn,
 							stacked: params.stacked,
+							workspace: params.workspace,
+							repo: params.repo,
 							workerMode: params.workerMode,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						};
@@ -383,6 +439,8 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							body: params.body,
 							dependsOn: params.dependsOn,
 							stacked: params.stacked,
+							workspace: params.workspace,
+							repo: params.repo,
 							workerMode: params.workerMode as AgentMode | undefined,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
@@ -668,6 +726,64 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 				`Knowledge base written to ${outPath}. All agents will fork from it; it freezes when /implement runs.`,
 				{},
 			);
+		},
+	}) as ToolDefinition;
+}
+
+export function createRepoTool(deps: PlanToolDeps): ToolDefinition {
+	return defineTool({
+		name: "repo",
+		label: "Repo",
+		description:
+			"Manage the plan's repo registry: add, remove, list. Deliverables " +
+			"target a registry key via their `repo` field (default: the repo the " +
+			"plan started in). A repo may be late-bound (`createdBy` = the " +
+			"deliverable that creates it) — its path materializes during execution.",
+		promptSnippet:
+			"repo — manage the plan's repo registry (add/remove/list); createdBy marks a repo a deliverable will create.",
+		parameters: RepoParams,
+		async execute(_id, params): Promise<Result> {
+			if (!deps.engine() && deps.agentBridge?.()) {
+				return error("agents cannot modify the repo registry");
+			}
+			return withEngine(deps, (engine) => {
+				switch (params.action) {
+					case "add": {
+						if (!params.key || !params.path) {
+							return error("add requires key and path");
+						}
+						engine.registerRepo({
+							key: params.key,
+							path: params.path,
+							...(params.defaultBranch
+								? { defaultBranch: params.defaultBranch }
+								: {}),
+							...(params.createdBy ? { createdBy: params.createdBy } : {}),
+						});
+						notify(deps, engine);
+						return ok(`✓ repo ${params.key} → ${params.path}`, {
+							plan: engine.get(),
+						});
+					}
+					case "remove": {
+						if (!params.key) return error("remove requires key");
+						engine.unregisterRepo(params.key);
+						notify(deps, engine);
+						return ok(`Removed repo ${params.key}.`, { plan: engine.get() });
+					}
+					case "list": {
+						const plan = engine.get();
+						const rows = [
+							`- default: ${plan.repoPath}`,
+							...(plan.repos ?? []).map(
+								(r) =>
+									`- ${r.key}: ${r.path}${r.defaultBranch ? ` (${r.defaultBranch})` : ""}${r.createdBy ? ` — created by \`${r.createdBy}\`` : ""}`,
+							),
+						];
+						return ok(rows.join("\n"), { plan });
+					}
+				}
+			});
 		},
 	}) as ToolDefinition;
 }

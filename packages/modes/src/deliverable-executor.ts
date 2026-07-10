@@ -11,6 +11,7 @@
 // 6. Complete deliverables ship (push + PR) in chain order: a deliverable ships once all
 //    its dependsOn deliverables have shipped, so stacked PR bases exist on the remote
 
+import { existsSync } from "node:fs";
 import type { PlanEngine } from "./engine.js";
 import {
 	commitPolicyInstruction,
@@ -19,11 +20,13 @@ import {
 import type { AgentMode, Deliverable } from "./schema.js";
 import {
 	defaultBranchForDeliverable,
+	deliverableWorkspace,
 	findDeliverable,
 	gatingTasks,
 	immediateAgents,
 	pickBaseBranch,
 	readyDeliverables,
+	repoFor,
 	shippableDeliverables,
 	unblockedAgents,
 } from "./schema.js";
@@ -94,6 +97,11 @@ export interface ExecutorDeps {
 	killSession: (sessionId: string) => Promise<void>;
 	/** Create a worktree for a deliverable. */
 	createWorktree: (opts: CreateWorktreeOpts) => Promise<string>;
+	/**
+	 * Create the plain working directory for a scratch deliverable (no repo,
+	 * no branch). Returns its path. Absent → scratch deliverables fail activation.
+	 */
+	createScratchWorkspace?: (deliverableId: string) => Promise<string>;
 	/** Push branch and create PR. Returns PR URL. */
 	shipDeliverable: (opts: ShipDeliverableOpts) => Promise<string>;
 	/** Request agent summary (sends summarize RPC). */
@@ -104,6 +112,11 @@ export interface ExecutorDeps {
 	) => Promise<string>;
 	/** Repo default branch — the base for unstacked deliverables. */
 	defaultBranch?: string;
+	/**
+	 * Per-repo default branch (multi-repo / late-bound registry). Falls back
+	 * to `defaultBranch` when absent — correct for single-repo plans.
+	 */
+	defaultBranchFor?: (repoPath: string) => string | null;
 	/**
 	 * Ship gate: returns false while a deliverable's required review verdicts
 	 * are not all PASS. Blocks ship (stays retryable). Absent → always ships.
@@ -178,7 +191,10 @@ export class DeliverableExecutor {
 			agents: new Map(),
 			completed: new Set(),
 			worktreePath: (g as unknown as { worktreePath?: string }).worktreePath,
-			branch: `feat/${g.id}`,
+			branch:
+				deliverableWorkspace(g) === "scratch"
+					? undefined
+					: (g.branch ?? defaultBranchForDeliverable(g)),
 			blocked:
 				"maestro restarted — agents may still be running in tmux; /retry after inspecting",
 		};
@@ -242,8 +258,9 @@ export class DeliverableExecutor {
 			for (const g of shippableDeliverables(this.engine.get())) {
 				if (attempted.has(g.id)) continue;
 				attempted.add(g.id);
+				// "" = shipped without a PR (scratch); null = not shipped.
 				const url = await this.shipDeliverableIfReady(g);
-				if (url) {
+				if (url !== null) {
 					shipped.push(g.id);
 					progressed = true;
 				}
@@ -410,20 +427,42 @@ export class DeliverableExecutor {
 
 	private async doActivateDeliverable(g: Deliverable): Promise<void> {
 		const plan = this.engine.get();
-		const branch = g.branch ?? defaultBranchForDeliverable(g);
-		const baseBranch = pickBaseBranch(
-			plan,
-			g,
-			this.deps.defaultBranch ?? "main",
-		);
+		const scratch = deliverableWorkspace(g) === "scratch";
 
-		// Create worktree
-		const worktreePath = await this.deps.createWorktree({
-			deliverableId: g.id,
-			branch,
-			baseBranch,
-			repoPath: plan.repoPath,
-		});
+		let worktreePath: string;
+		let branch: string | undefined;
+		if (scratch) {
+			// Scratch: a plain directory, no repo/branch/worktree machinery.
+			if (!this.deps.createScratchWorkspace) {
+				throw new Error(
+					`deliverable ${g.id} is scratch but this runtime cannot provision scratch workspaces`,
+				);
+			}
+			worktreePath = await this.deps.createScratchWorkspace(g.id);
+		} else {
+			const repo = repoFor(plan, g);
+			// Late-bound repos (createdBy) materialize during execution; the DAG
+			// should guarantee existence by now — if not, fail activation with
+			// the cause instead of a cryptic git error.
+			if (repo.createdBy !== undefined && !existsSync(repo.path)) {
+				throw new Error(
+					`repo "${repo.key}" (${repo.path}) is not materialized — ` +
+						`deliverable "${repo.createdBy}" was expected to create it`,
+				);
+			}
+			branch = g.branch ?? defaultBranchForDeliverable(g);
+			const defaultBranch =
+				this.deps.defaultBranchFor?.(repo.path) ??
+				this.deps.defaultBranch ??
+				"main";
+			const baseBranch = pickBaseBranch(plan, g, defaultBranch);
+			worktreePath = await this.deps.createWorktree({
+				deliverableId: g.id,
+				branch,
+				baseBranch,
+				repoPath: repo.path,
+			});
+		}
 
 		// Initialize runtime state
 		const deliverableState: DeliverableRunState = {
@@ -610,13 +649,16 @@ export class DeliverableExecutor {
 
 		// 3. Agent-specific content (last — unique to this agent)
 		if (name === "worker") {
+			const scratch = deliverableWorkspace(g) === "scratch";
 			// Repo commit policy first — a worker committing "Add …" in a
 			// semantic-release repo makes the release run green and publish
 			// nothing; the ship audit would then block the branch.
-			const policyNote = commitPolicyInstruction(
-				detectCommitPolicy(plan.repoPath),
-			);
-			if (policyNote) parts.push(policyNote);
+			if (!scratch) {
+				const policyNote = commitPolicyInstruction(
+					detectCommitPolicy(repoFor(plan, g).path),
+				);
+				if (policyNote) parts.push(policyNote);
+			}
 			parts.push(`## Deliverable: ${g.title}\n\n${g.body}`);
 			const tasks = gatingTasks(g);
 			if (tasks.length > 0) {
@@ -628,8 +670,12 @@ export class DeliverableExecutor {
 				}
 			}
 			parts.push(
-				"\n---\nDo your work. Commit as you go. Toggle tasks when done. " +
-					"Exit when complete. The maestro handles pushing and opening the PR.",
+				scratch
+					? "\n---\nDo your work in this directory. Toggle tasks when done. " +
+							"Exit when complete. There is no git branch or PR here — your " +
+							"summary and side effects are the deliverable."
+					: "\n---\nDo your work. Commit as you go. Toggle tasks when done. " +
+							"Exit when complete. The maestro handles pushing and opening the PR.",
 			);
 		} else {
 			const spec = g.agents.find((a) => a.name === name);
@@ -731,6 +777,14 @@ export class DeliverableExecutor {
 		}
 		// Gate satisfied — clear any stale gate-block note before shipping.
 		if (state.blocked?.startsWith("ship gate:")) state.blocked = undefined;
+
+		// Scratch deliverables have nothing to push and no PR: shipping is the
+		// gate above plus the recorded summary. Terminal status stays `shipped`
+		// so dependents unblock through the same DAG rule.
+		if (deliverableWorkspace(g) === "scratch") {
+			this.engine.setDeliverableStatus(g.id, "shipped");
+			return "";
+		}
 
 		// Assemble PR body
 		const tasks = gatingTasks(g);

@@ -110,6 +110,19 @@ export interface Deliverable {
 	 * Only meaningful when dependsOn is non-empty.
 	 */
 	stacked?: boolean;
+	/**
+	 * Where the worker runs. "repo" (default): a git worktree on a branch,
+	 * shipped as a PR. "scratch": a plain directory under the plan dir — for
+	 * work not tied to any repo (creating repos, provisioning infra, ops).
+	 * A scratch deliverable has no branch and no PR; it "ships" when its
+	 * required review verdicts are satisfied and its summary is recorded.
+	 */
+	workspace?: "repo" | "scratch";
+	/**
+	 * Repo registry key this deliverable targets (see Plan.repos); absent ⇒
+	 * the plan's default repo. Meaningless for scratch deliverables.
+	 */
+	repo?: string;
 	/** The primary agent — always exists, gets the deliverable's tasks. */
 	worker: WorkerSpec;
 	/** Support agents with an internal dependency graph. */
@@ -154,12 +167,20 @@ export type PlanPhase = (typeof PLAN_PHASES)[number];
 
 /** A repo a plan can target. The default repo is `plan.repoPath` (key "default"). */
 export interface PlanRepo {
-	/** Stable key deliverables reference (currently unused but reserved). */
+	/** Stable key deliverables reference via `Deliverable.repo`. */
 	key: string;
 	/** Absolute path to the repo. */
 	path: string;
 	/** Cached default branch; detected at use when absent. */
 	defaultBranch?: string;
+	/**
+	 * Late-bound repo: the deliverable expected to materialize it at `path`
+	 * (e.g. a scratch deliverable running `gh repo create` + clone). The path
+	 * need not exist at plan time; every deliverable targeting this repo must
+	 * (transitively) depend on `createdBy`, so the DAG guarantees the repo
+	 * exists before any dependent activates.
+	 */
+	createdBy?: string;
 }
 
 export const DEFAULT_REPO_KEY = "default";
@@ -198,6 +219,36 @@ export function planPhase(
 ): PlanPhase {
 	if (plan.phase) return plan.phase;
 	return plan.deliverables.length > 0 ? "structuring" : "exploring";
+}
+
+// ─── Workspace / repo resolution ─────────────────────────────────────────────
+
+/** Effective workspace kind; absent means repo-backed (the historical default). */
+export function deliverableWorkspace(
+	g: Pick<Deliverable, "workspace">,
+): "repo" | "scratch" {
+	return g.workspace ?? "repo";
+}
+
+/** Registry key of the repo a deliverable targets. */
+export function deliverableRepoKey(
+	deliverable: Pick<Deliverable, "repo">,
+): string {
+	return deliverable.repo ?? DEFAULT_REPO_KEY;
+}
+
+/**
+ * Resolve the repo a deliverable targets: its registry entry when it names one,
+ * else the plan's default repo. Callers must not assume the path exists on
+ * disk — a late-bound entry (`createdBy`) materializes during execution.
+ */
+export function repoFor(
+	plan: Pick<Plan, "repoPath" | "repos">,
+	deliverable: Pick<Deliverable, "repo">,
+): PlanRepo {
+	const key = deliverableRepoKey(deliverable);
+	const entry = plan.repos?.find((r) => r.key === key);
+	return entry ?? { key: DEFAULT_REPO_KEY, path: plan.repoPath };
 }
 
 // ─── Traversal helpers ───────────────────────────────────────────────────────
@@ -491,10 +542,12 @@ const STACKABLE_STATUSES: readonly DeliverableStatus[] = [
  * completed yet are skipped, falling through to the next dep and finally
  * the default branch.
  * Independent (stacked: false): the default branch.
+ * Cross-repo and scratch parents are never stacked on (no shared git
+ * history / no branch at all) — those edges are ordering-only.
  */
 export function pickBaseBranch(
 	plan: Pick<Plan, "deliverables">,
-	g: Pick<Deliverable, "id" | "dependsOn" | "stacked">,
+	g: Pick<Deliverable, "id" | "dependsOn" | "stacked" | "repo">,
 	defaultBranch: string,
 ): string {
 	const deps = g.dependsOn ?? [];
@@ -507,6 +560,8 @@ export function pickBaseBranch(
 	for (const depId of deps) {
 		const parent = findDeliverable(plan, depId);
 		if (!parent?.branch) continue;
+		if (deliverableWorkspace(parent) === "scratch") continue;
+		if (deliverableRepoKey(parent) !== deliverableRepoKey(g)) continue;
 		if (!STACKABLE_STATUSES.includes(parent.status)) continue;
 		return parent.branch;
 	}
@@ -565,10 +620,66 @@ export function validatePlanShape(
 		if (!r.path) {
 			problems.push(`repo \`${r.key}\` has an empty path`);
 		}
+		if (r.createdBy !== undefined && !deliverableIds.has(r.createdBy)) {
+			problems.push(
+				`repo \`${r.key}\` createdBy references unknown deliverable \`${r.createdBy}\``,
+			);
+		}
 		repoKeys.add(r.key);
 	}
 
+	// All deps reachable from a deliverable (memoized; cycles reported separately).
+	const reachable = new Map<string, Set<string>>();
+	const depsOf = (id: string, seen: Set<string>): Set<string> => {
+		const cached = reachable.get(id);
+		if (cached) return cached;
+		const out = new Set<string>();
+		if (!seen.has(id)) {
+			seen.add(id);
+			for (const dep of findDeliverable(plan, id)?.dependsOn ?? []) {
+				out.add(dep);
+				for (const d of depsOf(dep, seen)) out.add(d);
+			}
+		}
+		reachable.set(id, out);
+		return out;
+	};
+
 	for (const g of plan.deliverables) {
+		// Workspace / repo coherence
+		if (deliverableWorkspace(g) === "scratch") {
+			if (g.repo !== undefined) {
+				problems.push(
+					`deliverable \`${g.id}\` is scratch — it cannot target a repo`,
+				);
+			}
+			if (g.stacked !== undefined) {
+				problems.push(
+					`deliverable \`${g.id}\` is scratch — stacked is meaningless (no branch)`,
+				);
+			}
+		} else if (g.repo !== undefined && !repoKeys.has(g.repo)) {
+			problems.push(
+				`deliverable \`${g.id}\` targets unknown repo \`${g.repo}\``,
+			);
+		} else if (g.repo !== undefined) {
+			// Late-bound repo: the creator must finish (transitively) first.
+			const entry = (plan.repos ?? []).find((r) => r.key === g.repo);
+			if (entry?.createdBy === g.id) {
+				problems.push(
+					`deliverable \`${g.id}\` targets repo \`${g.repo}\` it is supposed to create — the creator must be a scratch deliverable`,
+				);
+			} else if (
+				entry?.createdBy !== undefined &&
+				deliverableIds.has(entry.createdBy) &&
+				!depsOf(g.id, new Set()).has(entry.createdBy)
+			) {
+				problems.push(
+					`deliverable \`${g.id}\` targets repo \`${g.repo}\` created by \`${entry.createdBy}\` but does not depend on it (add it to dependsOn so the repo exists before activation)`,
+				);
+			}
+		}
+
 		// dependsOn references exist
 		for (const dep of g.dependsOn ?? []) {
 			if (!deliverableIds.has(dep)) {

@@ -10,6 +10,7 @@ import {
 	PRIOR_WORK_HEADER,
 	type SeedSummaries,
 	TASKS_FRAME,
+	TASKS_FRAME_SCRATCH,
 	TASKS_HEADER,
 	TRUNCATION_MARKER,
 	truncateSummary,
@@ -376,5 +377,51 @@ describe("truncateSummary", () => {
 		const a = truncateSummary(input, 25);
 		const b = truncateSummary(input, 25);
 		expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+	});
+});
+
+describe("buildSeed workspace + commit policy", () => {
+	it("scratch workers get the scratch frame — no commit/PR instructions", () => {
+		const deliverable = makeDeliverable({ workspace: "scratch" });
+		const seed = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries(),
+		});
+		expect(seed).toContain(TASKS_FRAME_SCRATCH);
+		expect(seed).not.toContain(TASKS_FRAME);
+		expect(seed).not.toContain("commit as you go");
+	});
+
+	it("includes the caller-computed policy note for repo workers", () => {
+		const deliverable = makeDeliverable();
+		const note =
+			"## Commit policy\n\nThis repo mandates Conventional Commits (.releaserc).";
+		const seed = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries(),
+			policyNote: note,
+		});
+		expect(seed).toContain(note);
+		// Policy sits inside the tasks section, after the frame, before the work.
+		expect(seed.indexOf(TASKS_FRAME)).toBeLessThan(seed.indexOf(note));
+		expect(seed.indexOf(note)).toBeLessThan(
+			seed.indexOf("## Deliverable: Auth System"),
+		);
+	});
+
+	it("support agents never get the policy note", () => {
+		const deliverable = makeDeliverable({ agents: [makeAgent()] });
+		const seed = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "security",
+			summaries: summaries(),
+			policyNote: "## Commit policy\n\nirrelevant to reviewers",
+		});
+		expect(seed).not.toContain("Commit policy");
 	});
 });

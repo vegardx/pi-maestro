@@ -13,15 +13,8 @@ export const renderPlanSummary = (_plan: unknown) => "";
 export type { Deliverable, DeliverableId };
 export const findDeliverable = (_plan: unknown, _id: string) =>
 	undefined as Deliverable | undefined;
-export const planRepoMismatch = (..._args: unknown[]): string | null => null;
-export const repoFor = (
-	_plan: unknown,
-	_d: unknown,
-): { key: string; path: string; defaultBranch?: string } => ({
-	key: "default",
-	path: "",
-});
-export const repoNameFromPath = (p: string) => p.split("/").pop() ?? "";
+// planRepoMismatch/repoFor/repoNameFromPath stubs removed — context.ts now
+// imports the real implementations from ../schema.js.
 
 // STUB: old shipping exports (deliverable model). `any` returns mirror the deleted
 // API surface the callers still consume. (/sync now uses the real

@@ -32,6 +32,10 @@ export interface AddDeliverableInput {
 	body?: string;
 	dependsOn?: string[];
 	stacked?: boolean;
+	/** "repo" (default, worktree + PR) or "scratch" (plain dir, no PR). */
+	workspace?: "repo" | "scratch";
+	/** Repo registry key; absent ⇒ the plan's default repo. */
+	repo?: string;
 	workerMode: AgentMode;
 	workerEffort?: ThinkingLevel;
 	workerAfter?: string[];
@@ -169,6 +173,7 @@ export class PlanEngine {
 		// Honor a caller-provided id (slugified + de-duped) so a plan tool that
 		// passes `id` gets the id it expects; otherwise derive it from the title.
 		const id = this.uniqueDeliverableId(input.id?.trim() || input.title);
+		const scratch = input.workspace === "scratch";
 		const deliverable: Deliverable = {
 			type: "deliverable",
 			id,
@@ -176,7 +181,10 @@ export class PlanEngine {
 			body: input.body ?? "",
 			status: "planned",
 			dependsOn: input.dependsOn,
-			stacked: input.stacked,
+			// Scratch deliverables have no branch and can't be stacked on.
+			stacked: scratch ? undefined : input.stacked,
+			workspace: input.workspace,
+			repo: scratch ? undefined : input.repo,
 			worker: {
 				mode: input.workerMode,
 				effort: input.workerEffort,
@@ -184,7 +192,7 @@ export class PlanEngine {
 			},
 			agents: [],
 			tasks: [],
-			branch: defaultBranchForDeliverable({ id }),
+			branch: scratch ? undefined : defaultBranchForDeliverable({ id }),
 			createdAt: ts,
 			updatedAt: ts,
 		};
@@ -203,6 +211,8 @@ export class PlanEngine {
 				| "body"
 				| "dependsOn"
 				| "stacked"
+				| "workspace"
+				| "repo"
 				| "branch"
 				| "worktreePath"
 				| "sessionPath"

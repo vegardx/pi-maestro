@@ -6,6 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
+import { detectDefaultBranch } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
 	MaestroRpcServer,
@@ -24,8 +25,16 @@ import {
 import type { PlanEngine } from "../engine.js";
 import { requiredGateSatisfied } from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
-import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
+import {
+	deliverableWorkspace,
+	repoFor,
+	SUMMARY_TOKEN_BUDGET,
+} from "../schema.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
+import {
+	commitPolicyInstruction,
+	detectCommitPolicy,
+} from "./commit-policy.js";
 import {
 	buildAgentSessionFile,
 	buildSpawnSpec,
@@ -319,11 +328,23 @@ export class ExecutionAdapter {
 				} else {
 					// Deterministic framed seed: Prior Work (dep-deliverable summaries) →
 					// Findings from Earlier Review (done siblings) → the assignment.
+					// Repo-backed workers also get the repo's commit policy — a bare
+					// "Add …" subject in a semantic-release repo publishes nothing.
+					const scratch = deliverableWorkspace(deliverable) === "scratch";
+					const policyNote =
+						isWorker && !scratch
+							? (commitPolicyInstruction(
+									detectCommitPolicy(
+										repoFor(this.engine.get(), deliverable).path,
+									),
+								) ?? undefined)
+							: undefined;
 					const seed = buildSeed({
 						plan: this.engine.get(),
 						deliverable,
 						agentName: spawnOpts.agentName,
 						summaries: this.collectSeedSummaries(spawnOpts.deliverableId),
+						...(policyNote ? { policyNote } : {}),
 					});
 
 					// Build session file (JSONL): fork the plan's frozen knowledge
@@ -346,7 +367,9 @@ export class ExecutionAdapter {
 					kickoffMessage =
 						spawnOpts.kickoffMessage ??
 						(isWorker
-							? "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
+							? scratch
+								? "Complete the tasks described in your seed. Toggle tasks when done."
+								: "Implement the tasks described in your seed. Commit as you go. Toggle tasks when done."
 							: "Review the code and report your findings. Follow the focus instructions in your seed.");
 				}
 				this.sessionFiles.set(agentKey, sessionFile);
@@ -479,6 +502,22 @@ export class ExecutionAdapter {
 					this.provisionedWorktrees.add(path);
 				}
 				return path;
+			},
+
+			createScratchWorkspace: async (deliverableId) => {
+				const path = join(this.opts.planDir, "workspaces", deliverableId);
+				mkdirSync(path, { recursive: true });
+				return path;
+			},
+
+			// Per-repo default branch: the registry's cached value wins (set at
+			// register time), else live detection. Null falls back to the
+			// executor's plan-wide defaultBranch.
+			defaultBranchFor: (repoPath) => {
+				const cached = this.engine
+					.get()
+					.repos?.find((r) => r.path === repoPath)?.defaultBranch;
+				return cached ?? detectDefaultBranch(repoPath);
 			},
 
 			shipDeliverable: async (shipOpts) => {

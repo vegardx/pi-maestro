@@ -31,6 +31,8 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 		status: overrides.status ?? "planned",
 		dependsOn: overrides.dependsOn,
 		stacked: overrides.stacked,
+		workspace: overrides.workspace,
+		repo: overrides.repo,
 		worker: overrides.worker ?? { mode: "full" },
 		agents: overrides.agents ?? [],
 		tasks: overrides.tasks ?? [
@@ -472,6 +474,92 @@ describe("validatePlanShape", () => {
 		expect(validatePlanShape(plan)).toEqual([]);
 	});
 
+	it("scratch deliverables cannot target a repo or set stacked", () => {
+		const g = makeDeliverable({
+			workspace: "scratch",
+			repo: "service",
+			stacked: false,
+			dependsOn: [],
+		});
+		const plan = makePlan([g]);
+		const problems = validatePlanShape(plan);
+		expect(
+			problems.some((p) => p.includes("scratch — it cannot target a repo")),
+		).toBe(true);
+		expect(problems.some((p) => p.includes("stacked is meaningless"))).toBe(
+			true,
+		);
+	});
+
+	it("detects an unknown repo key", () => {
+		const g = makeDeliverable({ repo: "ghost" });
+		const plan = makePlan([g]);
+		expect(validatePlanShape(plan)).toContain(
+			"deliverable `test-deliverable` targets unknown repo `ghost`",
+		);
+	});
+
+	it("createdBy must reference an existing deliverable", () => {
+		const g = makeDeliverable();
+		const plan = {
+			...makePlan([g]),
+			repos: [{ key: "svc", path: "/tmp/svc", createdBy: "ghost" }],
+		};
+		expect(validatePlanShape(plan)).toContain(
+			"repo `svc` createdBy references unknown deliverable `ghost`",
+		);
+	});
+
+	it("a deliverable targeting a late-bound repo must depend on its creator", () => {
+		const creator = makeDeliverable({ id: "bootstrap", workspace: "scratch" });
+		const user = makeDeliverable({ id: "impl", repo: "svc" }); // no dependsOn
+		const plan = {
+			...makePlan([creator, user]),
+			repos: [{ key: "svc", path: "/tmp/svc", createdBy: "bootstrap" }],
+		};
+		const problems = validatePlanShape(plan);
+		expect(
+			problems.some(
+				(p) =>
+					p.includes("`impl` targets repo `svc` created by `bootstrap`") &&
+					p.includes("does not depend on it"),
+			),
+		).toBe(true);
+	});
+
+	it("accepts a late-bound repo chain when the dependency is transitive", () => {
+		const creator = makeDeliverable({ id: "bootstrap", workspace: "scratch" });
+		const mid = makeDeliverable({
+			id: "mid",
+			repo: "svc",
+			dependsOn: ["bootstrap"],
+		});
+		const leaf = makeDeliverable({
+			id: "leaf",
+			repo: "svc",
+			dependsOn: ["mid"],
+		});
+		const plan = {
+			...makePlan([creator, mid, leaf]),
+			repos: [{ key: "svc", path: "/tmp/svc", createdBy: "bootstrap" }],
+		};
+		expect(validatePlanShape(plan)).toEqual([]);
+	});
+
+	it("a deliverable cannot target the repo it is supposed to create", () => {
+		const g = makeDeliverable({ id: "bootstrap", repo: "svc" });
+		const plan = {
+			...makePlan([g]),
+			repos: [{ key: "svc", path: "/tmp/svc", createdBy: "bootstrap" }],
+		};
+		const problems = validatePlanShape(plan);
+		expect(
+			problems.some((p) =>
+				p.includes("targets repo `svc` it is supposed to create"),
+			),
+		).toBe(true);
+	});
+
 	it("detects reserved agent name 'worker'", () => {
 		const g = makeDeliverable({
 			agents: [
@@ -670,6 +758,42 @@ describe("pickBaseBranch", () => {
 
 	it("does not stack on a parent that has not completed", () => {
 		const a = makeDeliverable({ id: "a", branch: "feat/a", status: "active" });
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("main");
+	});
+
+	it("cross-repo dependsOn is ordering-only — never stacks", () => {
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "complete",
+			repo: "service",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] }); // default repo
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("main");
+	});
+
+	it("stacks within an explicit shared repo key", () => {
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a",
+			status: "complete",
+			repo: "service",
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"], repo: "service" });
+		const plan = makePlan([a, b]);
+		expect(pickBaseBranch(plan, b, "main")).toBe("feat/a");
+	});
+
+	it("never stacks on a scratch parent, even with a stale branch field", () => {
+		const a = makeDeliverable({
+			id: "a",
+			branch: "feat/a", // defensive: scratch deliverables shouldn't have one
+			status: "shipped",
+			workspace: "scratch",
+		});
 		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(pickBaseBranch(plan, b, "main")).toBe("main");

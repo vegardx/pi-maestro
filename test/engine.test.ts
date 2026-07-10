@@ -376,3 +376,81 @@ describe("PlanEngine — validation integration", () => {
 		);
 	});
 });
+
+describe("PlanEngine — workspaces and the repo registry", () => {
+	function setup() {
+		const store = memStore();
+		return PlanEngine.create(store, {
+			slug: "test",
+			title: "Test",
+			repoPath: "/tmp/repo",
+		});
+	}
+
+	it("scratch deliverables get no branch and drop stacked/repo", () => {
+		const engine = setup();
+		const g = engine.addDeliverable({
+			title: "Bootstrap repos",
+			workerMode: "full",
+			workspace: "scratch",
+			stacked: false, // meaningless for scratch — dropped, not rejected
+			repo: "svc", // likewise
+		});
+		expect(g.workspace).toBe("scratch");
+		expect(g.branch).toBeUndefined();
+		expect(g.stacked).toBeUndefined();
+		expect(g.repo).toBeUndefined();
+	});
+
+	it("repo-backed deliverables keep the branch default", () => {
+		const engine = setup();
+		const g = engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		expect(g.branch).toBe("feat/auth");
+	});
+
+	it("registers a late-bound repo and validates its createdBy reference", () => {
+		const engine = setup();
+		engine.addDeliverable({
+			title: "Bootstrap",
+			workerMode: "full",
+			workspace: "scratch",
+		});
+		engine.registerRepo({
+			key: "svc",
+			path: "/tmp/svc",
+			createdBy: "bootstrap",
+		});
+		expect(engine.get().repos).toEqual([
+			{ key: "svc", path: "/tmp/svc", createdBy: "bootstrap" },
+		]);
+
+		expect(() =>
+			engine.registerRepo({ key: "x", path: "/tmp/x", createdBy: "ghost" }),
+		).toThrow(/unknown deliverable/);
+	});
+
+	it("rejects a deliverable targeting a late-bound repo without depending on its creator", () => {
+		const engine = setup();
+		engine.addDeliverable({
+			title: "Bootstrap",
+			workerMode: "full",
+			workspace: "scratch",
+		});
+		engine.registerRepo({
+			key: "svc",
+			path: "/tmp/svc",
+			createdBy: "bootstrap",
+		});
+		expect(() =>
+			engine.addDeliverable({ title: "Impl", workerMode: "full", repo: "svc" }),
+		).toThrow(/does not depend on it/);
+		// With the dependency it goes through.
+		const g = engine.addDeliverable({
+			title: "Impl",
+			workerMode: "full",
+			repo: "svc",
+			dependsOn: ["bootstrap"],
+		});
+		expect(g.repo).toBe("svc");
+	});
+});

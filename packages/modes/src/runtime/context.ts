@@ -42,8 +42,12 @@ import { computeActiveTools } from "../policy.js";
 import { clearResearchScratch, type ResearchRunView } from "../research.js";
 import {
 	type Deliverable,
+	deliverableWorkspace,
 	derivePlanName,
 	planPhase,
+	planRepoMismatch,
+	repoFor,
+	repoNameFromPath,
 	slugify,
 } from "../schema.js";
 import { appendModesState, collectBudgetText } from "../session.js";
@@ -76,13 +80,7 @@ import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { syncAgentWidget } from "./dashboard.js";
 import { presentGateDecision } from "./gate-decision.js";
-import {
-	cleanupInactiveWorktrees,
-	planRepoMismatch,
-	recordPlanSession,
-	repoFor,
-	repoNameFromPath,
-} from "./stubs.js";
+import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
@@ -457,6 +455,8 @@ export function createRuntimeContext(
 		// per-deliverable worktrees and is not guarded.
 		assertDeliverableRepo(ctx: ExtensionContext, d: Deliverable): boolean {
 			if (!rt.engine) return true;
+			// Scratch deliverables have no repo to mismatch.
+			if (deliverableWorkspace(d) === "scratch") return true;
 			const repoPath = repoFor(rt.engine.get(), d).path;
 			const problem = planRepoMismatch(
 				gitToplevel(repoPath),

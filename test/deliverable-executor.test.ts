@@ -638,3 +638,169 @@ describe("DeliverableExecutor — seed construction", () => {
 		expect(seed).toContain("Did auth stuff");
 	});
 });
+
+describe("DeliverableExecutor — scratch deliverables", () => {
+	function addScratch(engine: PlanEngine, title: string, id: string) {
+		engine.addDeliverable({ title, workerMode: "full", workspace: "scratch" });
+		engine.addWorkItem(id, { title: "do the thing" });
+	}
+
+	it("activates in a scratch workspace — no worktree, no branch", async () => {
+		const engine = setupPlan();
+		addScratch(engine, "Bootstrap", "bootstrap");
+
+		const createScratchWorkspace = vi
+			.fn()
+			.mockResolvedValue("/tmp/plans/test/workspaces/bootstrap");
+		const deps = makeDeps({ createScratchWorkspace });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+
+		expect(createScratchWorkspace).toHaveBeenCalledWith("bootstrap");
+		expect(deps.createWorktree).not.toHaveBeenCalled();
+		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(engine.get().deliverables[0].branch).toBeUndefined();
+		expect(executor.getStates().get("bootstrap")?.branch).toBeUndefined();
+		expect(deps.spawnAgent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				worktreePath: "/tmp/plans/test/workspaces/bootstrap",
+			}),
+		);
+	});
+
+	it("parks scratch activation blocked when the runtime lacks scratch support", async () => {
+		const engine = setupPlan();
+		addScratch(engine, "Bootstrap", "bootstrap");
+
+		const deps = makeDeps(); // no createScratchWorkspace
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+
+		expect(executor.getStates().get("bootstrap")?.blocked).toContain(
+			"cannot provision scratch workspaces",
+		);
+	});
+
+	it("ships without push or PR — status shipped, no prUrl, dependents unblock", async () => {
+		const engine = setupPlan();
+		addScratch(engine, "Bootstrap", "bootstrap");
+		engine.addDeliverable({
+			title: "Impl",
+			workerMode: "full",
+			dependsOn: ["bootstrap"],
+		});
+		engine.addWorkItem("impl", { title: "t" });
+
+		const createScratchWorkspace = vi.fn().mockResolvedValue("/tmp/ws");
+		const deps = makeDeps({ createScratchWorkspace });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("bootstrap", "worker");
+
+		const shipped = await executor.tick();
+		expect(shipped).toContain("bootstrap");
+		const bootstrap = engine.get().deliverables[0];
+		expect(bootstrap.status).toBe("shipped");
+		expect(bootstrap.prUrl).toBeUndefined();
+		expect(deps.shipDeliverable).not.toHaveBeenCalled();
+		// The dependent activated through the normal DAG rule in the same tick.
+		expect(engine.get().deliverables[1].status).toBe("active");
+	});
+
+	it("the ship gate still gates a scratch deliverable", async () => {
+		const engine = setupPlan();
+		addScratch(engine, "Bootstrap", "bootstrap");
+
+		const deps = makeDeps({
+			createScratchWorkspace: vi.fn().mockResolvedValue("/tmp/ws"),
+			panelGate: () => false,
+			panelGateDetail: () => "security-audit requested changes",
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("bootstrap", "worker");
+
+		const shipped = await executor.tick();
+		expect(shipped).toEqual([]);
+		expect(engine.get().deliverables[0].status).toBe("complete");
+		expect(executor.getStates().get("bootstrap")?.blocked).toBe(
+			"ship gate: security-audit requested changes",
+		);
+	});
+
+	it("scratch worker seed has no commit/PR instructions", async () => {
+		const engine = setupPlan();
+		addScratch(engine, "Bootstrap", "bootstrap");
+
+		const spawnAgent = vi.fn().mockResolvedValue({
+			sessionId: "sess",
+			sessionFile: "/tmp/s.jsonl",
+		});
+		const deps = makeDeps({
+			spawnAgent,
+			createScratchWorkspace: vi.fn().mockResolvedValue("/tmp/ws"),
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+
+		const seed = (spawnAgent.mock.calls[0][0] as { seed: string }).seed;
+		expect(seed).toContain("no git branch or PR here");
+		expect(seed).not.toContain("Commit as you go");
+	});
+});
+
+describe("DeliverableExecutor — late-bound repos", () => {
+	it("activation fails with the creator named when the repo is not materialized", async () => {
+		const engine = setupPlan();
+		// The creator first (createdBy must reference an existing deliverable),
+		// then the registry entry, then the dependent targeting the repo.
+		engine.addDeliverable({
+			title: "Bootstrap",
+			workerMode: "full",
+			workspace: "scratch",
+		});
+		engine.addWorkItem("bootstrap", { title: "create the repo" });
+		engine.registerRepo({
+			key: "svc",
+			path: "/nonexistent/svc-repo",
+			createdBy: "bootstrap",
+		});
+		engine.addDeliverable({
+			title: "Impl",
+			workerMode: "full",
+			repo: "svc",
+			dependsOn: ["bootstrap"],
+		});
+		engine.addWorkItem("impl", { title: "t" });
+
+		const deps = makeDeps({
+			createScratchWorkspace: vi.fn().mockResolvedValue("/tmp/ws"),
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("bootstrap", "worker");
+		await executor.tick(); // bootstrap ships; impl tries to activate
+
+		const state = executor.getStates().get("impl");
+		expect(state?.blocked).toContain('repo "svc"');
+		expect(state?.blocked).toContain("not materialized");
+		expect(state?.blocked).toContain('"bootstrap"');
+		expect(deps.createWorktree).not.toHaveBeenCalled();
+	});
+
+	it("routes worktree creation through the deliverable's registry repo", async () => {
+		const engine = setupPlan();
+		// Registry repo that exists on disk (any real dir works for the check).
+		engine.registerRepo({ key: "svc", path: "/tmp" });
+		engine.addDeliverable({ title: "Impl", workerMode: "full", repo: "svc" });
+		engine.addWorkItem("impl", { title: "t" });
+
+		const deps = makeDeps({ defaultBranchFor: () => "develop" });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+
+		expect(deps.createWorktree).toHaveBeenCalledWith(
+			expect.objectContaining({ repoPath: "/tmp", baseBranch: "develop" }),
+		);
+	});
+});

@@ -137,6 +137,13 @@ is still available for gaps that surface while structuring.
 
 1. **Structure** — Call \`deliverable(action="add", title="...", workerMode="full")\`.
    Each deliverable = one branch + one PR. Use \`dependsOn\` for ordering.
+   Work not tied to any repo (creating repos, provisioning infra, ops) is a
+   \`workspace="scratch"\` deliverable: it runs in a plain directory, has no
+   branch or PR, and ships when its review gate passes. If a scratch
+   deliverable creates a repo that later deliverables work in, register it
+   with \`repo(action="add", key="...", path="...", createdBy="<that deliverable>")\`
+   and give the later deliverables \`repo: "<key>"\` plus a \`dependsOn\` on the
+   creator — the DAG then guarantees the repo exists before they start.
 2. **Detail** — Call \`task(action="add", deliverableId="...", title="...", body="...")\`
    for each concrete task. Tasks describe WHAT to implement.
 3. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.

@@ -26,13 +26,14 @@ import {
 	viewPr,
 } from "@vegardx/pi-github";
 import {
-	DEFAULT_REPO_KEY,
 	type Deliverable,
 	defaultBranchForDeliverable,
+	deliverableRepoKey,
+	deliverableWorkspace,
 	findDeliverable,
 	type Plan,
-	type PlanRepo,
 	pickBaseBranch,
+	repoFor,
 	TERMINAL_STATUSES,
 } from "../schema.js";
 import { buildPrBody } from "../shipping.js";
@@ -40,28 +41,9 @@ import { auditBranchCommits, detectCommitPolicy } from "./commit-policy.js";
 
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
-/**
- * Registry key of the repo a deliverable targets. The `repo` field is reserved on
- * Deliverable per docs/multi-repo-plans.md; read loosely until schema lands it.
- */
-export function deliverableRepoKey(deliverable: Deliverable): string {
-	return (
-		(deliverable as Deliverable & { repo?: string }).repo ?? DEFAULT_REPO_KEY
-	);
-}
-
-/**
- * Resolve the repo a deliverable targets: its registry entry when it names one,
- * else the plan's default repo.
- */
-export function repoFor(
-	plan: Pick<Plan, "repoPath" | "repos">,
-	deliverable: Deliverable,
-): PlanRepo {
-	const key = deliverableRepoKey(deliverable);
-	const entry = plan.repos?.find((r) => r.key === key);
-	return entry ?? { key: DEFAULT_REPO_KEY, path: plan.repoPath };
-}
+// Canonical implementations live in the schema (Deliverable.repo landed);
+// re-exported here because ship-path callers historically import from shipper.
+export { deliverableRepoKey, repoFor } from "../schema.js";
 
 // ─── Injectable seams ────────────────────────────────────────────────────────
 
@@ -300,6 +282,7 @@ function stackedParentByBranch(
 		plan.deliverables.find(
 			(g) =>
 				g.id !== deliverable.id &&
+				deliverableWorkspace(g) === "repo" &&
 				(g.branch ?? defaultBranchForDeliverable(g)) === branch &&
 				deliverableRepoKey(g) === deliverableRepoKey(deliverable),
 		) ?? null
@@ -428,6 +411,9 @@ export function cleanupWorktrees(opts: CleanupOpts): CleanupReport {
 		const path = deliverable.worktreePath;
 		if (!path) continue;
 		if (!TERMINAL_STATUSES.includes(deliverable.status)) continue;
+		// Scratch workspaces are plain dirs under the plan dir, not git
+		// worktrees — they persist (artifacts may be read later).
+		if (deliverableWorkspace(deliverable) === "scratch") continue;
 
 		const blocker = plan.deliverables.find(
 			(g) =>

@@ -7,6 +7,7 @@ export const PLAN_TOOL_NAMES = [
 	"agent",
 	"panel",
 	"plan",
+	"repo",
 	"knowledge",
 ] as const;
 
@@ -19,6 +20,7 @@ export const STRUCTURE_TOOL_NAMES = [
 	"task",
 	"agent",
 	"panel",
+	"repo",
 	"knowledge",
 ] as const;
 

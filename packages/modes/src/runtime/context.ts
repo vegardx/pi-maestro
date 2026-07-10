@@ -528,19 +528,28 @@ export function createRuntimeContext(
 			// Deliverable execution via the execution seam
 			if (!isAgentMode()) {
 				if (!rt.execution) {
+					const maestroRoot = resolve(
+						dirname(fileURLToPath(import.meta.url)),
+						"../../../..",
+					);
 					rt.execution = createExecution({
 						engine: activeEngine,
 						ctx,
-						extensionPath: resolve(
-							dirname(fileURLToPath(import.meta.url)),
-							"../../../..",
-						),
-						// The maestro's own -e list, plus the configured passthrough of
-						// tool-less global extensions (e.g. custom model providers) that
-						// -ne would otherwise suppress in the child.
+						extensionPath: maestroRoot,
+						// Workers MUST load the maestro package itself (agent bridge,
+						// task tool, RPC idle reports) — argv discovery alone finds
+						// nothing when the maestro is loaded via pi's `packages`
+						// mechanism instead of -e, which left workers as vanilla pi:
+						// they finished their work but could never report back, so
+						// the run hung forever. Then any extra -e extensions the
+						// maestro was launched with, then the childExtensions
+						// passthrough (custom model providers etc).
 						extensionPaths: [
-							...discoverExtensionPaths(),
-							...readChildExtensions(ctx.cwd),
+							...new Set([
+								maestroRoot,
+								...discoverExtensionPaths().map((p) => resolve(p)),
+								...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
+							]),
 						],
 						planDir: join(plansRoot(), activeEngine.get().slug),
 						defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",

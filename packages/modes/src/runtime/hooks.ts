@@ -2,7 +2,6 @@
 // lifecycle, bash/tool gating, usage accounting, the mid-deliverable
 // compaction trigger, and compaction ownership.
 
-import { randomUUID } from "node:crypto";
 import type {
 	ExtensionContext,
 	ToolCallEvent,
@@ -11,14 +10,13 @@ import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import { classifyBashFast, classifyBashIntent } from "../bash-classifier.js";
 import {
-	buildCompactionMarker,
 	buildDeliverableSliceCompactionResult,
 	createCrashSnapshot,
 	decideCompactionOwnership,
 	readModesCompactionDetails,
 } from "../compaction.js";
 import { toolBlockedInPlanMode } from "../policy.js";
-import { gatingTasks, planPhase } from "../schema.js";
+import { planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
 import {
 	getModeRoleModel,
@@ -26,11 +24,6 @@ import {
 	readModesCompactionSettings,
 } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
-import {
-	awaitCompaction,
-	diagnoseResumeAfterCompaction,
-	shouldCompactMidDeliverable,
-} from "../trigger.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
 import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
 import {
@@ -351,7 +344,14 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("turn_end", async (_event, ctx) => {
 		rt.agentBridge?.onTurnEnd();
-		if (!rt.agentBridge) rt.incrementMaestroTurn();
+		if (!rt.agentBridge) {
+			rt.incrementMaestroTurn();
+			// The maestro NEVER auto-compacts (plan/auto/hack) — a mid-flight
+			// compaction loses more orchestration state than it saves. Instead,
+			// warn at fill thresholds so the user compacts at a boundary of
+			// their choosing (or hands off to a fresh session).
+			warnOnContextFill(rt, ctx);
+		}
 		if (rt.state.mode === "plan") {
 			rt.finalizeDraftPlan(ctx);
 			rt.askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
@@ -374,112 +374,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			ctx.ui.notify(
 				`Maestro carry-forward summaries (${buckets.summaryUsed} tokens) exceed compaction.summaryTokens (${settings.summaryTokens}); consider lowering compaction.phaseTokens`,
 				"warning",
-			);
-		}
-
-		const active = activeDeliverable(rt.engine.get());
-		const fire = shouldCompactMidDeliverable({
-			mode: rt.state.mode,
-			compactionInFlight: rt.compactionInFlight,
-			hasActiveDeliverable: !!active,
-			// Never trigger on stale data: when total is unknown `workingUsed`
-			// collapses to `sys`, so gate it out explicitly.
-			workingUsed: buckets.total === null ? null : buckets.workingUsed,
-			workingTokens: settings.workingTokens,
-		});
-		if (!fire || !active) return;
-		// A timed-out/aborted compaction may still be running in pi; don't stack a
-		// second until the orphan should have settled.
-		if (Date.now() < rt.compactionCooldownUntil) return;
-
-		const nonce = randomUUID();
-		const stageAtEntry = rt.state.execution.stage;
-		const modeAtEntry = rt.state.mode;
-		const deliverableAtEntry = active.id;
-		rt.pendingCompaction = {
-			nonce,
-			deliverableId: active.id,
-			reason: "modes-trigger",
-			buckets: {
-				sys: buckets.sys,
-				seed: buckets.seed,
-				rollingSummary: buckets.rollingSummary,
-				hotTail: buckets.hotTail,
-				workingUsed: buckets.workingUsed,
-				summaryUsed: buckets.summaryUsed,
-			},
-		};
-		rt.compactionInFlight = true;
-
-		let compacted = false;
-		try {
-			await awaitCompaction({
-				start: ({ onComplete, onError }) =>
-					ctx.compact({
-						customInstructions: buildCompactionMarker(nonce),
-						onComplete,
-						onError,
-					}),
-				timeoutMs: settings.timeoutMs,
-			});
-			compacted = true;
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			ctx.ui.notify(
-				`Maestro mid-deliverable compaction skipped (${msg}).`,
-				"warning",
-			);
-			if (msg === "aborted" || msg.includes("timed out")) {
-				rt.compactionCooldownUntil = Date.now() + settings.timeoutMs;
-			}
-		} finally {
-			rt.compactionInFlight = false;
-			rt.pendingCompaction = undefined;
-		}
-
-		// Resume the auto loop exactly once when the gates still hold. The nonce
-		// already guarantees exact-once ownership of THIS compaction; the gates
-		// guard against mid-flight drift (Shift+Tab, deliverable switch, finish).
-		const current = activeDeliverable(rt.engine.get());
-		const remaining = current
-			? gatingTasks(current).filter((t) => !t.done).length
-			: 0;
-		const decision = diagnoseResumeAfterCompaction({
-			compacted,
-			stageAtEntry,
-			modeAtEntry,
-			deliverableAtEntry,
-			currentStage: rt.state.execution.stage,
-			currentMode: rt.state.mode,
-			currentDeliverable: current?.id,
-			remainingTaskCount: remaining,
-		});
-		if (decision.resume) {
-			pi.sendMessage(
-				{
-					customType: "maestro.compaction.resume",
-					content:
-						"[Maestro: context was compacted mid-deliverable. The rolling " +
-						"summary above captures the work so far. Continue the active " +
-						"deliverable's remaining tasks — do NOT restart from the beginning.]",
-					display: false,
-					details: {
-						postCompactionResume: true,
-						deliverableId: deliverableAtEntry,
-					},
-				},
-				{ deliverAs: "followUp", triggerTurn: true },
-			);
-		} else if (
-			compacted &&
-			decision.gate !== "stage-at-entry-not-executing" &&
-			decision.gate !== "mode-drifted"
-		) {
-			// Surface unexpected gate trips so a stalled auto run has an observable
-			// reason. Skip the routine "user left auto" cases to avoid notify spam.
-			ctx.ui.notify(
-				`Maestro post-compaction resume skipped (gate: ${decision.gate}).`,
-				"info",
 			);
 		}
 	});
@@ -606,4 +500,39 @@ function extractMessageText(content: unknown): string {
 		})
 		.filter((s) => s.length > 0)
 		.join("\n");
+}
+
+/** Fill thresholds (percent of context window) that fire a one-shot warning. */
+const CONTEXT_WARN_STEPS = [70, 90] as const;
+
+/**
+ * Warn once per threshold as the maestro's context fills, re-arming when
+ * usage drops back down (manual /compact, /new). Replaces auto-compaction:
+ * the user picks the boundary; the maestro never compacts itself.
+ */
+export function warnOnContextFill(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+): void {
+	const usage = ctx.getContextUsage?.();
+	const pct = usage?.percent;
+	if (typeof pct !== "number") return;
+	if (pct < CONTEXT_WARN_STEPS[0] - 5) {
+		rt.contextWarnedAt = 0;
+		return;
+	}
+	for (const step of [...CONTEXT_WARN_STEPS].reverse()) {
+		if (pct >= step && rt.contextWarnedAt < step) {
+			rt.contextWarnedAt = step;
+			const detail =
+				usage && usage.tokens !== null && usage.contextWindow
+					? ` (${Math.round(usage.tokens / 1000)}k/${Math.round(usage.contextWindow / 1000)}k)`
+					: "";
+			ctx.ui.notify(
+				`Maestro context ${pct.toFixed(0)}% full${detail} — compact at a natural boundary (/compact) or hand off to a fresh session. The maestro never auto-compacts.`,
+				step >= 90 ? "error" : "warning",
+			);
+			break;
+		}
+	}
 }

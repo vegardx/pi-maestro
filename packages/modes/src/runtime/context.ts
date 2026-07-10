@@ -134,6 +134,8 @@ export interface RuntimeContext {
 	compactionCooldownUntil: number;
 	// Transient: soft summary-budget warning fires at most once per session.
 	summaryBudgetWarnFired: boolean;
+	// Highest context-fill warning step already fired (70/90); 0 = armed.
+	contextWarnedAt: number;
 	// Transient: per-session guard for the seed dependency-summary warning.
 	seedSummaryBudgetWarnFired: boolean;
 
@@ -222,6 +224,7 @@ export function createRuntimeContext(
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,
 		summaryBudgetWarnFired: false,
+		contextWarnedAt: 0,
 		seedSummaryBudgetWarnFired: false,
 
 		currentMode(): ModeName {

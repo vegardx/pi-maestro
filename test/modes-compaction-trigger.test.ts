@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { warnOnContextFill } from "../packages/modes/src/runtime/hooks.js";
 import {
 	awaitCompaction,
 	diagnoseResumeAfterCompaction,
@@ -183,5 +184,57 @@ describe("diagnoseResumeAfterCompaction", () => {
 		expect(
 			diagnoseResumeAfterCompaction({ ...ok, remainingTaskCount: 0 }),
 		).toMatchObject({ resume: false, gate: "no-remaining-tasks" });
+	});
+});
+
+describe("warnOnContextFill (auto-compaction replaced by warnings)", () => {
+	function fakes(percent: number | null, warnedAt = 0) {
+		const notes: Array<[string, string]> = [];
+		const rt = { contextWarnedAt: warnedAt };
+		const ctx = {
+			getContextUsage: () => ({
+				percent,
+				tokens: percent === null ? null : percent * 2_000,
+				contextWindow: 200_000,
+			}),
+			ui: {
+				notify: (msg: string, level: string) => {
+					notes.push([msg, level]);
+				},
+			},
+		};
+		return { notes, rt, ctx };
+	}
+
+	it("fires once at 70% as warning, escalates once at 90% as error", () => {
+		const { notes, rt, ctx } = fakes(72);
+		warnOnContextFill(rt as never, ctx as never);
+		warnOnContextFill(rt as never, ctx as never); // no repeat
+		expect(notes).toHaveLength(1);
+		expect(notes[0][0]).toContain("72% full");
+		expect(notes[0][0]).toContain("144k/200k");
+		expect(notes[0][1]).toBe("warning");
+
+		(ctx as { getContextUsage: unknown }).getContextUsage = () => ({
+			percent: 91,
+			tokens: 182_000,
+			contextWindow: 200_000,
+		});
+		warnOnContextFill(rt as never, ctx as never);
+		expect(notes).toHaveLength(2);
+		expect(notes[1][1]).toBe("error");
+	});
+
+	it("re-arms after usage drops (manual compaction)", () => {
+		const { notes, rt, ctx } = fakes(40, 90);
+		warnOnContextFill(rt as never, ctx as never);
+		expect(rt.contextWarnedAt).toBe(0);
+		expect(notes).toHaveLength(0);
+	});
+
+	it("does nothing when usage is unknown (right after compaction)", () => {
+		const { notes, rt, ctx } = fakes(null);
+		warnOnContextFill(rt as never, ctx as never);
+		expect(notes).toHaveLength(0);
 	});
 });

@@ -110,20 +110,43 @@ export function syncAgentWidget(
 		clearAgentWidget(rt, ctx);
 		return;
 	}
-	const deliverables = snap?.deliverables;
-	const now = Date.now();
-	ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (_tui, theme) => ({
-		render: (width: number) =>
-			styleAgentTable(
-				buildAgentTable({ agents, deliverables, width, now }),
-				theme,
-			),
-		invalidate: () => {},
-	}));
-	// Re-setting the agents widget moves it to the bottom of the aboveEditor
-	// stack; pin the question/config overlays back below it so the order the
-	// user tabs through stays stable across agent-table ticks.
-	rt.overlayManager.reassert();
+	// Mount ONCE with a render that pulls live data from rt; later syncs just
+	// request a render. Re-setting the widget per sync is what made the ask
+	// dialog blink: pi's setWidget deletes + re-appends the key (moving it to
+	// the bottom of the stack), forcing overlayManager.reassert() to re-set
+	// every overlay widget too — several consecutive frames with the dialog
+	// on different rows, on every tick AND every agent state change.
+	if (rt.agentWidgetMounted) {
+		rt.agentWidgetRefresh?.();
+	} else {
+		rt.agentWidgetMounted = true;
+		ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (tui, theme) => {
+			rt.agentWidgetRefresh = () =>
+				(tui as { requestRender?: () => void } | undefined)?.requestRender?.();
+			return {
+				render: (width: number) => {
+					const live = rt.execution?.snapshot();
+					const liveAgents = new Map([
+						...(live?.agents ?? []),
+						...researchTableAgents(rt.researchRuns),
+					]);
+					return styleAgentTable(
+						buildAgentTable({
+							agents: liveAgents,
+							deliverables: live?.deliverables,
+							width,
+							now: Date.now(),
+						}),
+						theme,
+					);
+				},
+				invalidate: () => {},
+			};
+		});
+		// One-time ordering fix: the fresh widget landed at the bottom of the
+		// aboveEditor stack; pin the question/config overlays back below it.
+		rt.overlayManager.reassert();
+	}
 	if (rt.agentWidgetTimer === undefined) {
 		const timer = setInterval(
 			() => syncAgentWidget(rt, ctx),
@@ -143,6 +166,8 @@ export function clearAgentWidget(
 		clearInterval(rt.agentWidgetTimer);
 		rt.agentWidgetTimer = undefined;
 	}
+	rt.agentWidgetMounted = false;
+	rt.agentWidgetRefresh = undefined;
 	ctx?.ui.setWidget?.(AGENT_WIDGET_KEY, undefined);
 }
 

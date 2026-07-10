@@ -118,6 +118,10 @@ export interface RuntimeContext {
 	invalidateFooter: (() => void) | undefined;
 	// Transient: 5s re-render timer for the live agent widget (elapsed ticks).
 	agentWidgetTimer: ReturnType<typeof setInterval> | undefined;
+	// The agent widget is mounted once and re-rendered in place — re-setting
+	// it per sync reshuffles the widget stack and blinks the ask overlays.
+	agentWidgetMounted: boolean;
+	agentWidgetRefresh: (() => void) | undefined;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	compactionInFlight: boolean;
 	// Transient (not persisted): what modes is about to compact. Set just
@@ -212,6 +216,8 @@ export function createRuntimeContext(
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
 		agentWidgetTimer: undefined,
+		agentWidgetMounted: false,
+		agentWidgetRefresh: undefined,
 		compactionInFlight: false,
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,

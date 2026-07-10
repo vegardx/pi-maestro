@@ -304,10 +304,18 @@ describe("syncAgentWidget", () => {
 		researchRuns = new Map(),
 	) {
 		const calls: SetWidgetCall[] = [];
+		let reasserts = 0;
 		const rt = {
 			agentWidgetTimer: undefined,
+			agentWidgetMounted: false,
+			agentWidgetRefresh: undefined,
 			researchRuns,
-			overlayManager: { reassert: () => {} },
+			overlayManager: {
+				reassert: () => {
+					reasserts++;
+				},
+			},
+			reasserts: () => reasserts,
 			execution: agents
 				? {
 						snapshot: () => ({
@@ -326,6 +334,38 @@ describe("syncAgentWidget", () => {
 		};
 		return { calls, rt, ctx };
 	}
+
+	it("mounts once: re-syncs refresh in place, never re-set the widget", () => {
+		// Regression: re-setting the widget per sync reshuffled pi's widget
+		// stack (setWidget deletes + re-appends) and forced every overlay to be
+		// re-set too — the readiness/ask dialog visibly blinked on every tick
+		// and agent state change.
+		const agents = new Map([
+			["g/worker", agent("working", { input: 1_500, elapsedMs: 3_000 })],
+		]);
+		const { calls, rt, ctx } = fakes(agents);
+		let renders = 0;
+		syncAgentWidget(rt as any, ctx as any);
+		// Simulate pi invoking the factory (captures the refresh handle).
+		const factory = calls[0][1] as (tui: unknown, theme: unknown) => unknown;
+		factory(
+			{ requestRender: () => renders++ },
+			{ fg: (_c: string, s: string) => s },
+		);
+
+		syncAgentWidget(rt as any, ctx as any);
+		syncAgentWidget(rt as any, ctx as any);
+
+		expect(calls).toHaveLength(1); // never re-set
+		expect((rt as any).reasserts()).toBe(1); // ordering fixed once
+		expect(renders).toBe(2); // later syncs re-render in place
+
+		clearAgentWidget(rt as any, ctx as any);
+		expect((rt as any).agentWidgetMounted).toBe(false);
+		// After a clear, the next sync mounts fresh.
+		syncAgentWidget(rt as any, ctx as any);
+		expect(calls.filter(([, c]) => c !== undefined)).toHaveLength(2);
+	});
 
 	it("sets a themed component for active agents and starts the timer", () => {
 		const agents = new Map([

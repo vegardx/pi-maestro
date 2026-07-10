@@ -25,6 +25,20 @@ import {
 } from "./schema.js";
 import type { PlanStore } from "./storage.js";
 
+/**
+ * Object.assign that skips undefined values. Tool handlers forward EVERY
+ * optional param (present or not) into patches — a plain Object.assign
+ * copied the explicit `undefined`s and wiped real fields (a live update
+ * nulled a deliverable's title, dependsOn, and stacked).
+ */
+function assignDefined<T extends object>(target: T, patch: Partial<T>): void {
+	for (const [key, value] of Object.entries(patch)) {
+		if (value !== undefined) {
+			(target as Record<string, unknown>)[key] = value;
+		}
+	}
+}
+
 export interface AddDeliverableInput {
 	/** Preferred id. Slugified + de-duped; falls back to the title if absent. */
 	id?: string;
@@ -130,7 +144,7 @@ export class PlanEngine {
 		>,
 	): void {
 		this.mutate((plan) => {
-			Object.assign(plan, patch);
+			assignDefined(plan, patch);
 		});
 	}
 
@@ -233,7 +247,7 @@ export class PlanEngine {
 			if (!g) throw new Error(`unknown deliverable: ${id}`);
 			const { workerMode, workerEffort, workerAfter, ...deliverablePatch } =
 				patch;
-			Object.assign(g, deliverablePatch);
+			assignDefined(g, deliverablePatch);
 			if (workerMode !== undefined) g.worker.mode = workerMode;
 			if (workerEffort !== undefined) g.worker.effort = workerEffort;
 			if (workerAfter !== undefined) g.worker.after = workerAfter;
@@ -291,7 +305,7 @@ export class PlanEngine {
 			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			const agent = g.agents.find((a) => a.name === name);
 			if (!agent) throw new Error(`unknown agent: ${name}`);
-			Object.assign(agent, patch);
+			assignDefined(agent, patch);
 			g.updatedAt = this.now();
 		});
 	}
@@ -379,7 +393,7 @@ export class PlanEngine {
 			const item = findTask(g, taskId);
 			if (!item) throw new Error(`unknown task: ${taskId}`);
 			const { answer, ...rest } = patch;
-			Object.assign(item, rest);
+			assignDefined(item, rest);
 			if (answer !== undefined) {
 				item.answer = answer;
 				item.decidedAt = this.now();

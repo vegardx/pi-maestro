@@ -454,3 +454,69 @@ describe("PlanEngine — workspaces and the repo registry", () => {
 		expect(g.repo).toBe("svc");
 	});
 });
+
+describe("PlanEngine — update patches never wipe unset fields", () => {
+	// Live incident: `deliverable(action="update", id=…, status=…)` nulled the
+	// deliverable's title, dependsOn, and stacked — tool handlers forward all
+	// optional params as explicit undefined, and Object.assign copied them.
+	it("updateDeliverable with sparse patch keeps title/dependsOn/stacked", () => {
+		const store = memStore();
+		const engine = PlanEngine.create(store, {
+			slug: "test",
+			title: "Test",
+			repoPath: "/tmp/repo",
+		});
+		engine.addDeliverable({ title: "Base", workerMode: "full" });
+		engine.addDeliverable({
+			title: "Provision",
+			workerMode: "full",
+			dependsOn: ["base"],
+			stacked: false,
+		});
+		// The exact shape the deliverable tool sends when only updating status.
+		engine.updateDeliverable("provision", {
+			title: undefined,
+			body: undefined,
+			dependsOn: undefined,
+			stacked: undefined,
+			workspace: undefined,
+			repo: undefined,
+			workerMode: undefined,
+			workerEffort: undefined,
+		});
+		const g = engine.get().deliverables[1];
+		expect(g.title).toBe("Provision");
+		expect(g.dependsOn).toEqual(["base"]);
+		expect(g.stacked).toBe(false);
+	});
+
+	it("updateWorkItem and updateAgent keep unset fields too", () => {
+		const store = memStore();
+		const engine = PlanEngine.create(store, {
+			slug: "test",
+			title: "Test",
+			repoPath: "/tmp/repo",
+		});
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "Task A", body: "details" });
+		engine.updateWorkItem("work", "task-a", {
+			title: undefined,
+			body: undefined,
+			kind: undefined,
+		});
+		expect(engine.get().deliverables[0].tasks[0].title).toBe("Task A");
+		expect(engine.get().deliverables[0].tasks[0].body).toBe("details");
+
+		engine.addAgent("work", {
+			name: "sec",
+			mode: "read-only",
+			effort: "high",
+			focus: "audit",
+			after: [],
+		});
+		engine.updateAgent("work", "sec", { focus: undefined, effort: undefined });
+		const agent = engine.get().deliverables[0].agents[0];
+		expect(agent.focus).toBe("audit");
+		expect(agent.effort).toBe("high");
+	});
+});

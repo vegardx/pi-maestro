@@ -123,7 +123,10 @@ export class WorkerPanes {
 
 	// ─── Private ──────────────────────────────────────────────────────────────
 
-	private async createPanes(sessions: string[]): Promise<void> {
+	private async createPanes(rawSessions: string[]): Promise<void> {
+		// One pane per session, ever — a duplicate name in the input must not
+		// produce a second attach pane.
+		const sessions = [...new Set(rawSessions)];
 		if (sessions.length === 0) return;
 
 		// Create first pane as a horizontal split (30% right column). The

@@ -34,8 +34,9 @@ export function buildGateQuestion(
 			{
 				label: GATE_OPTION_SEND_BACK,
 				description:
-					"Tell the maestro how the worker should address the findings — " +
-					"add a note with your guidance; the panel re-runs after the fix.",
+					"Reopen the deliverable and respawn its worker with the findings " +
+					"and your guidance (add a note) — it fixes, re-runs the panel, " +
+					"and the gate re-evaluates.",
 			},
 			{
 				label: GATE_OPTION_OVERRIDE,
@@ -97,12 +98,36 @@ export async function presentGateDecision(
 		return;
 	}
 	if (answer.value === GATE_OPTION_SEND_BACK) {
-		deps.pi.sendUserMessage(
-			`[Human decision on the ${deliverableId} ship gate (${failing.join(", ")} holding): ` +
-				`send the worker back to address the findings. Guidance: ${note || "(none given — use the reviewers' findings)"}. ` +
-				"Respawn or steer the worker, have it fix and re-run the review panel.]",
-			{ deliverAs: "followUp" },
-		);
+		// Execute the send-back here, in extension code: reopen the completed
+		// deliverable and respawn its worker with the findings. Telling the
+		// model to do it dead-ended — complete → active was illegal and no
+		// model tool can respawn a worker.
+		const kickoff =
+			`Your deliverable was held at the ship gate: ${reason}. ` +
+			`The human sent it back to you (${failing.join(", ") || "required reviewers"} holding). ` +
+			`Guidance: ${note || "(none given — address the reviewers' findings)"}. ` +
+			"Fix the findings, commit, re-run the review panel, and finish again.";
+		const sent = await execution.sendBackToWorker(deliverableId, kickoff);
+		if (sent) {
+			deps.notify(
+				`Sent ${deliverableId} back to its worker — reopened for rework.`,
+				"info",
+			);
+			deps.pi.sendUserMessage(
+				`[Human decision on the ${deliverableId} ship gate: sent back to the worker with guidance: ` +
+					`${note || "(none — the reviewers' findings)"}. The worker was respawned; the panel re-runs after the fix.]`,
+				{ deliverAs: "followUp" },
+			);
+		} else {
+			// Nothing to respawn into (e.g. post-restart) — fall back to
+			// informing the model so it can recover manually.
+			deps.pi.sendUserMessage(
+				`[Human decision on the ${deliverableId} ship gate (${failing.join(", ")} holding): ` +
+					`send the worker back to address the findings. Guidance: ${note || "(none given — use the reviewers' findings)"}. ` +
+					"Automatic respawn was not possible — respawn or steer the worker yourself, have it fix and re-run the review panel.]",
+				{ deliverAs: "followUp" },
+			);
+		}
 		return;
 	}
 	// Leave parked — the blocked card and /retry remain.

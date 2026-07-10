@@ -75,6 +75,12 @@ export interface ExecutionHandle {
 		reviewer: string,
 		reason: string,
 	): void;
+	/**
+	 * Reopen a gate-blocked deliverable and respawn its worker with the
+	 * review findings (the gate-decision "send back" route). Resumes the
+	 * worker's own session when possible. False when nothing to send back to.
+	 */
+	sendBackToWorker(deliverableId: string, kickoff: string): Promise<boolean>;
 	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;

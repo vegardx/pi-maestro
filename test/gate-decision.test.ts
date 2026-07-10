@@ -20,8 +20,10 @@ function fakes(opts: {
 		deferred?: boolean;
 	}) => Answers[number] | undefined;
 	failing?: string[];
+	sendBackOk?: boolean;
 }) {
 	const overrides: Array<[string, string, string]> = [];
+	const sendBacks: Array<[string, string]> = [];
 	const messages: string[] = [];
 	const notices: string[] = [];
 	let ticks = 0;
@@ -29,6 +31,10 @@ function fakes(opts: {
 		failingRequiredReviewers: () => opts.failing ?? ["security-audit"],
 		overrideReviewerVerdict: (d: string, r: string, why: string) => {
 			overrides.push([d, r, why]);
+		},
+		sendBackToWorker: async (d: string, kickoff: string) => {
+			sendBacks.push([d, kickoff]);
+			return opts.sendBackOk ?? true;
 		},
 		tick: async () => {
 			ticks++;
@@ -62,6 +68,7 @@ function fakes(opts: {
 	return {
 		deps: deps as never,
 		overrides,
+		sendBacks,
 		messages,
 		notices,
 		ticks: () => ticks,
@@ -104,8 +111,8 @@ describe("presentGateDecision", () => {
 		expect(ticks()).toBe(1);
 	});
 
-	it("send back: informs the maestro model with the guidance, no override", async () => {
-		const { deps, overrides, messages } = fakes({
+	it("send back: reopens + respawns the worker in extension code, no override", async () => {
+		const { deps, overrides, sendBacks, messages } = fakes({
 			answer: () => ({
 				questionId: "x",
 				value: GATE_OPTION_SEND_BACK,
@@ -114,9 +121,30 @@ describe("presentGateDecision", () => {
 		});
 		await presentGateDecision(deps, "auth", "ship gate: …");
 		expect(overrides).toHaveLength(0);
+		// The send-back EXECUTES — telling the model to respawn dead-ended
+		// (complete → active was illegal; no model tool respawns workers).
+		expect(sendBacks).toHaveLength(1);
+		expect(sendBacks[0][0]).toBe("auth");
+		expect(sendBacks[0][1]).toContain("narrow the scope but keep repo read");
+		expect(sendBacks[0][1]).toContain("re-run the review panel");
 		expect(messages).toHaveLength(1);
-		expect(messages[0]).toContain("narrow the scope but keep repo read");
-		expect(messages[0]).toContain("re-run the review panel");
+		expect(messages[0]).toContain("respawned");
+	});
+
+	it("send back falls back to informing the model when respawn is impossible", async () => {
+		const { deps, sendBacks, messages } = fakes({
+			sendBackOk: false,
+			answer: () => ({
+				questionId: "x",
+				value: GATE_OPTION_SEND_BACK,
+				note: "fix the leak",
+			}),
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(sendBacks).toHaveLength(1);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("respawn or steer the worker yourself");
+		expect(messages[0]).toContain("fix the leak");
 	});
 
 	it("park / deferred: does nothing", async () => {

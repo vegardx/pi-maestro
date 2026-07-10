@@ -804,3 +804,76 @@ describe("DeliverableExecutor — late-bound repos", () => {
 		);
 	});
 });
+
+describe("DeliverableExecutor — send back to worker (gate rework)", () => {
+	// Regression for the live incident: a required reviewer held the gate on a
+	// COMPLETE deliverable; "send back" told the model to respawn the worker,
+	// but complete → active was illegal and no tool could respawn — dead end.
+	it("reopens a complete deliverable and respawns the worker resumed with the findings", async () => {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Provision", workerMode: "full" });
+		engine.addWorkItem("provision", { title: "provision the repos" });
+
+		let gateOpen = false;
+		const spawnAgent = vi
+			.fn()
+			.mockResolvedValueOnce({
+				sessionId: "sess-1",
+				sessionFile: "/tmp/sessions/provision-worker.jsonl",
+			})
+			.mockResolvedValueOnce({
+				sessionId: "sess-2",
+				sessionFile: "/tmp/sessions/provision-worker.jsonl",
+			});
+		const deps = makeDeps({
+			spawnAgent,
+			panelGate: () => gateOpen,
+			panelGateDetail: () => "provisioning-correctness requested changes",
+		});
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.markAgentDone("provision", "worker");
+		await executor.tick(); // gate blocks the complete deliverable
+		expect(engine.get().deliverables[0].status).toBe("complete");
+		expect(executor.getStates().get("provision")?.blocked).toContain(
+			"ship gate:",
+		);
+
+		// Human answers "send back with guidance".
+		const ok = await executor.sendBackToWorker(
+			"provision",
+			"Fix the findings: use the org template. Re-run the panel.",
+		);
+		expect(ok).toBe(true);
+
+		// complete → active reopened; block cleared; worker respawned RESUMED.
+		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(executor.getStates().get("provision")?.blocked).toBeUndefined();
+		expect(spawnAgent).toHaveBeenCalledTimes(2);
+		const respawn = spawnAgent.mock.calls[1][0] as {
+			resumeSessionFile?: string;
+			kickoffMessage?: string;
+		};
+		expect(respawn.resumeSessionFile).toBe(
+			"/tmp/sessions/provision-worker.jsonl",
+		);
+		expect(respawn.kickoffMessage).toContain("use the org template");
+
+		// The rework pass finishes, the panel passes, the gate opens — ships.
+		await executor.markAgentDone("provision", "worker");
+		gateOpen = true;
+		const shipped = await executor.tick();
+		expect(shipped).toEqual(["provision"]);
+		expect(engine.get().deliverables[0].status).toBe("shipped");
+	});
+
+	it("returns false when there is nothing to send back to", async () => {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "t" });
+		const executor = new DeliverableExecutor(engine, makeDeps());
+		// Never activated — no runtime state.
+		expect(await executor.sendBackToWorker("work", "go")).toBe(false);
+		expect(await executor.sendBackToWorker("ghost", "go")).toBe(false);
+	});
+});

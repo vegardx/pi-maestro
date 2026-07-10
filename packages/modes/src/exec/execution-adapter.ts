@@ -702,6 +702,27 @@ export class ExecutionAdapter {
 		this.logEvent("human-override", { deliverableId, reviewer, reason });
 	}
 
+	/**
+	 * Reopen a gate-blocked deliverable and respawn its worker with the review
+	 * findings (the gate-decision "send back" route). The executor resumes the
+	 * worker's own session file when it has one — cache-hot, full context of
+	 * its earlier pass. Re-arms the gate question: a fresh block after the
+	 * rework round asks the human again.
+	 */
+	async sendBackToWorker(
+		deliverableId: string,
+		kickoff: string,
+	): Promise<boolean> {
+		const ok = await this.executor.sendBackToWorker(deliverableId, kickoff);
+		if (ok) {
+			// The spawn seam already emitted the agent-state event; just re-arm
+			// the gate question and record the decision.
+			this.gateBlockSurfaced.delete(deliverableId);
+			this.logEvent("send-back", { deliverableId });
+		}
+		return ok;
+	}
+
 	private deliverableGateDetail(deliverableId: string): string {
 		const required = this.requiredReviewerNames(deliverableId);
 		const byName = new Map(

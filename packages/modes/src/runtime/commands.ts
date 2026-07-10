@@ -219,6 +219,49 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
+	pi.registerCommand("retry", {
+		description:
+			"Clear a blocked deliverable and re-attempt it. /retry <deliverable-id>",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (!rt.execution) {
+				ctx.ui.notify("No execution running — /implement first.", "info");
+				return;
+			}
+			const executor = rt.execution.getExecutor();
+			const blocked = [...executor.getStates().entries()].filter(
+				([, s]) => s.blocked,
+			);
+			const id = args.trim();
+			if (!id) {
+				ctx.ui.notify(
+					blocked.length
+						? `Blocked deliverables:\n${blocked
+								.map(([bid, s]) => `  ${bid} — ${s.blocked}`)
+								.join("\n")}\nRun /retry <deliverable-id>.`
+						: "Nothing is blocked.",
+					"info",
+				);
+				return;
+			}
+			const state = executor.getStates().get(id);
+			if (!state) {
+				ctx.ui.notify(`Unknown deliverable: ${id}`, "warning");
+				return;
+			}
+			if (!state.blocked) {
+				ctx.ui.notify(`${id} is not blocked.`, "info");
+				return;
+			}
+			const reason = state.blocked;
+			executor.unblockDeliverable(id);
+			ctx.ui.notify(
+				`Cleared block on ${id} (was: ${reason}) — retrying.`,
+				"info",
+			);
+			await rt.execution.tick();
+		},
+	});
+
 	pi.registerCommand("view", {
 		description:
 			"View an agent's tmux session in a split pane. /view <name> or /view for dialog.",

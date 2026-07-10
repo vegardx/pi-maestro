@@ -300,7 +300,9 @@ export const DELIVERABLE_TRANSITIONS: Record<
 > = {
 	planned: ["active", "abandoned"],
 	active: ["complete", "abandoned"],
-	complete: ["shipped", "superseded", "abandoned"],
+	// complete → active: reopened for rework (a human sent the worker back to
+	// address review findings at the ship gate).
+	complete: ["active", "shipped", "superseded", "abandoned"],
 	shipped: [],
 	superseded: [],
 	abandoned: [],

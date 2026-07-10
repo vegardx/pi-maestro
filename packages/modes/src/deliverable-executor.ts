@@ -580,12 +580,51 @@ export class DeliverableExecutor {
 						resumeSessionFile,
 						kickoffMessage: kickoffMessage ?? this.resumeKickoff(state, name),
 					}
-				: {}),
+				: kickoffMessage
+					? { kickoffMessage }
+					: {}),
 		});
 
 		agentState.sessionId = spawned.sessionId;
 		agentState.sessionFile = spawned.sessionFile;
 		agentState.status = "working";
+	}
+
+	/**
+	 * Send a completed deliverable's worker back to address review findings
+	 * (the ship-gate "send back" decision). Reopens the deliverable
+	 * (complete → active), clears the gate block, and respawns the worker —
+	 * resumed from its own session file when available (cache-hot, full
+	 * context of its earlier work), else re-seeded. Returns false when there
+	 * is nothing to send back to (unknown deliverable, wrong status).
+	 */
+	async sendBackToWorker(
+		deliverableId: string,
+		kickoffMessage: string,
+	): Promise<boolean> {
+		const state = this.deliverableStates.get(deliverableId);
+		if (!state) return false;
+		const g = findDeliverable(this.engine.get(), deliverableId);
+		if (!g) return false;
+		if (g.status === "complete") {
+			this.engine.setDeliverableStatus(deliverableId, "active");
+		} else if (g.status !== "active") {
+			return false;
+		}
+		const worker = state.agents.get("worker");
+		if (!worker) return false;
+
+		state.blocked = undefined;
+		state.completed.delete("worker");
+		worker.status = "pending";
+		worker.summary = undefined; // the rework pass produces the real one
+		worker.completedAt = undefined;
+
+		const fresh = findDeliverable(this.engine.get(), deliverableId);
+		if (!fresh) return false;
+		await this.spawnAgentInDeliverable(fresh, state, "worker", kickoffMessage);
+		// Re-read: spawnAgentInDeliverable mutates the state entry.
+		return state.agents.get("worker")?.status === "working";
 	}
 
 	/**

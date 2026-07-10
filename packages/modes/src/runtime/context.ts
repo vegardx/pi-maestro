@@ -437,7 +437,10 @@ export function createRuntimeContext(
 				planId: rt.engine.get().slug as PlanId,
 			});
 			// Re-tick: if a new deliverable was added (or deps changed), spawn it.
-			rt.execution?.tick();
+			// Floating on purpose — but NEVER let a rejection escape (it becomes
+			// an uncaughtException and kills pi). Failures park the deliverable
+			// blocked (activation catch) or resurface on the next poll tick.
+			rt.execution?.tick().catch(() => {});
 		},
 
 		// Sequential execution stays in the session's cwd; check out the

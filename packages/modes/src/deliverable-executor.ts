@@ -373,10 +373,32 @@ export class DeliverableExecutor {
 	private async activateDeliverable(g: Deliverable): Promise<void> {
 		// Re-entrancy guard: provisioning awaits before the status flips to
 		// active, so an overlapping tick would otherwise double-activate.
-		if (this.activating.has(g.id) || this.deliverableStates.has(g.id)) return;
+		if (this.activating.has(g.id)) return;
+		const existing = this.deliverableStates.get(g.id);
+		if (existing) {
+			// Re-attempt only an activation-failure placeholder whose blocked
+			// reason the user cleared (/retry); anything else is already live.
+			const retryableFailure =
+				existing.worktreePath === undefined &&
+				existing.agents.size === 0 &&
+				!existing.blocked;
+			if (!retryableFailure) return;
+		}
 		this.activating.add(g.id);
 		try {
 			await this.doActivateDeliverable(g);
+		} catch (err) {
+			// NEVER let provisioning failures (missing base branch, dirty
+			// worktree dir, …) escape the tick — that crashed the whole
+			// maestro. Park the deliverable blocked with the reason; the user
+			// fixes the cause and /retry re-attempts activation.
+			const message = err instanceof Error ? err.message : String(err);
+			this.deliverableStates.set(g.id, {
+				deliverableId: g.id,
+				agents: new Map(),
+				completed: new Set(),
+				blocked: `activation failed: ${message} — fix the cause, then /retry ${g.id}`,
+			});
 		} finally {
 			this.activating.delete(g.id);
 		}

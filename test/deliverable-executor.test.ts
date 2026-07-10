@@ -60,6 +60,41 @@ function setupPlan() {
 }
 
 describe("DeliverableExecutor — activation", () => {
+	it("parks a deliverable blocked when provisioning fails — never throws", async () => {
+		// A provisioning error (e.g. base branch missing after origin's default
+		// changed) escaped the tick and crashed the whole maestro as an
+		// uncaughtException. It must park the deliverable blocked instead.
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "Implement login" });
+
+		const deps = makeDeps();
+		deps.createWorktree = vi
+			.fn()
+			.mockRejectedValue(
+				new Error('git worktree add failed: base branch "dev" not found'),
+			);
+		const executor = new DeliverableExecutor(engine, deps);
+		await expect(executor.tick()).resolves.toBeDefined(); // no throw
+		expect(deps.spawnAgent).not.toHaveBeenCalled();
+
+		const state = executor.getStates().get("auth");
+		expect(state?.blocked).toContain("activation failed");
+		expect(state?.blocked).toContain('base branch "dev" not found');
+		expect(state?.blocked).toContain("/retry auth");
+
+		// Still blocked on later ticks: no activation retry storm.
+		await executor.tick();
+		expect(deps.createWorktree).toHaveBeenCalledTimes(1);
+
+		// /retry clears the block; the next tick re-attempts activation.
+		deps.createWorktree = vi.fn().mockResolvedValue("/tmp/worktree");
+		executor.unblockDeliverable("auth");
+		await executor.tick();
+		expect(deps.createWorktree).toHaveBeenCalledTimes(1);
+		expect(engine.get().deliverables[0].status).toBe("active");
+	});
+
 	it("activates a ready deliverable on tick", async () => {
 		const engine = setupPlan();
 		engine.addDeliverable({ title: "Auth", workerMode: "full" });

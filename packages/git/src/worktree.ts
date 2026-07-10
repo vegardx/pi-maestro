@@ -110,9 +110,25 @@ export function addWorktree(
 	const parent = dirname(target);
 	if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
 
-	const args = branchExists(repo, branch)
-		? ["worktree", "add", target, branch]
-		: ["worktree", "add", "-b", branch, target, baseBranch];
+	let args: string[];
+	if (branchExists(repo, branch)) {
+		args = ["worktree", "add", target, branch];
+	} else {
+		// The base may exist only as a remote-tracking ref — e.g. origin's
+		// default branch changed and was fetched, but no local branch tracks
+		// it. Resolve local → origin/<base> → clear error, instead of handing
+		// git a name it can't resolve ("fatal: invalid reference").
+		const base = resolveBaseRef(repo, baseBranch);
+		if (!base) {
+			return {
+				ok: false,
+				error:
+					`base branch "${baseBranch}" not found — no local branch and no ` +
+					`origin/${baseBranch}. Fetch the remote or pick an existing base.`,
+			};
+		}
+		args = ["worktree", "add", "-b", branch, target, base];
+	}
 
 	const result = runCommand("git", args, { cwd: repo });
 	if (!result.ok) {
@@ -122,6 +138,22 @@ export function addWorktree(
 		};
 	}
 	return { ok: true, path: target, created: true };
+}
+
+/**
+ * Resolve a base branch name to a ref `git worktree add` can use: the local
+ * branch if it exists, else the remote-tracking `origin/<name>` (which also
+ * sets up branch tracking), else null.
+ */
+function resolveBaseRef(repo: string, baseBranch: string): string | null {
+	if (branchExists(repo, baseBranch)) return baseBranch;
+	const remote = runCommand(
+		"git",
+		["show-ref", "--verify", "--quiet", `refs/remotes/origin/${baseBranch}`],
+		{ cwd: repo },
+	);
+	if (remote.ok) return `origin/${baseBranch}`;
+	return null;
 }
 
 export type WorktreeRemoveResult =

@@ -149,6 +149,25 @@ describe("repo + branch ops", () => {
 });
 
 describe("worktree mechanics", () => {
+	it("resolves a base that exists only as a remote-tracking ref", () => {
+		// origin's default branch changed (e.g. to dev) and was fetched, but no
+		// local branch tracks it — the reference that crashed provisioning.
+		git(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+		const target = agentWorktreePath(repo, "run-remote" as RunId);
+		const res = addWorktree(repo, target, "agent/run-remote", "dev");
+		expect(res).toMatchObject({ ok: true, created: true });
+	});
+
+	it("fails with a clear message when the base branch exists nowhere", () => {
+		const target = agentWorktreePath(repo, "run-nobase" as RunId);
+		const res = addWorktree(repo, target, "agent/run-nobase", "dev");
+		expect(res.ok).toBe(false);
+		if (!res.ok) {
+			expect(res.error).toContain('base branch "dev" not found');
+			expect(res.error).toContain("origin/dev");
+		}
+	});
+
 	it("adds a worktree on a new branch and lists it", () => {
 		const target = agentWorktreePath(repo, "run-abc" as RunId);
 		const res = addWorktree(repo, target, "agent/run-abc", "main");

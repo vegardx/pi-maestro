@@ -269,6 +269,21 @@ const KEY_ESC = "";
 const KEY_BACKSPACE = "";
 const KEY_SPACE = " ";
 
+/**
+ * Terminals in application-cursor-keys mode (DECCKM) — the common state when pi
+ * runs OUTSIDE tmux — send arrows as SS3 (ESC O A) rather than CSI (ESC [ A).
+ * pi forwards raw input bytes straight to the focused component (no key
+ * canonicalization), so unless we fold SS3 back to CSI the arrow keys never
+ * match and navigation dies. tmux happens to re-emit arrows as CSI, which is
+ * why the menu only breaks when it wasn't launched under tmux.
+ */
+const SS3_TO_CSI: Record<string, string> = {
+	"\x1bOA": KEY_UP,
+	"\x1bOB": KEY_DOWN,
+	"\x1bOC": KEY_RIGHT,
+	"\x1bOD": KEY_LEFT,
+};
+
 type Mode =
 	| "browse"
 	| "edit"
@@ -769,6 +784,7 @@ export class ConfigMenuComponent implements Component, Focusable {
 	// ─── Input ────────────────────────────────────────────────────────────────
 
 	handleInput(data: string): void {
+		data = SS3_TO_CSI[data] ?? data;
 		this.statusMessage = "";
 		switch (this.mode) {
 			case "edit":

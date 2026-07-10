@@ -88,6 +88,17 @@ describe("ConfigMenuComponent", () => {
 		expect(rowKeyAt(c, 5)).toBe("opus.fast");
 	});
 
+	it("navigates with SS3 arrows (application-cursor mode, e.g. outside tmux)", () => {
+		// Terminals in DECCKM mode send arrows as ESC O B, not ESC [ B. pi
+		// forwards raw bytes, so the component must accept both forms.
+		const SS3_DOWN = "OB";
+		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
+		expect(cursorOf(c)).toBe(0);
+		c.handleInput(SS3_DOWN);
+		expect(cursorOf(c)).toBe(1);
+		expect(rowKeyAt(c, cursorOf(c))).toBe("opus.@targets");
+	});
+
 	it("Enter on the targets row opens the targets picker", () => {
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
 		c.handleInput(KEY_DOWN); // → targets

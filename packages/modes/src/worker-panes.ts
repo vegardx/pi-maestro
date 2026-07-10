@@ -12,6 +12,14 @@ const MIN_ROWS_PER_PANE = 6;
 const MIN_COLS = 160;
 const MIN_ROWS = 40;
 
+/**
+ * Pane-level tmux user option marking maestro-owned worker panes. Panes
+ * outlive the maestro process (attach commands end in a long sleep so output
+ * stays inspectable), so a fresh instance must be able to find and kill the
+ * previous run's panes — the in-memory map alone can't.
+ */
+const PANE_MARKER = "@maestro_worker";
+
 export class WorkerPanes {
 	/** Map from session name → tmux pane ID. */
 	private panes = new Map<string, string>();
@@ -24,6 +32,21 @@ export class WorkerPanes {
 	private lastSessions: string[] = [];
 	/** Resize listener cleanup. */
 	private resizeHandler: (() => void) | undefined;
+	/**
+	 * Serializes open/close/sync. sync() is fired un-awaited from agent
+	 * state-change callbacks; overlapping kill+create sequences interleave
+	 * into duplicate columns without this.
+	 */
+	private chain: Promise<void> = Promise.resolve();
+
+	private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.chain.then(fn);
+		this.chain = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
 
 	isOpen(): boolean {
 		return this._isOpen;
@@ -56,7 +79,13 @@ export class WorkerPanes {
 			return;
 		}
 
-		await this.createPanes(sessions);
+		await this.enqueue(async () => {
+			// A previous maestro run's panes may still be in the window
+			// (attach commands outlive the process) — sweep them first, or
+			// the new column gets carved out of a stale one.
+			await this.killAllPanes();
+			await this.createPanes(sessions);
+		});
 		this._isOpen = true;
 		this.opening = false;
 	}
@@ -67,7 +96,7 @@ export class WorkerPanes {
 	async close(): Promise<void> {
 		this._enabled = false;
 		this.stopListenResize();
-		await this.killAllPanes();
+		await this.enqueue(() => this.killAllPanes());
 		this._isOpen = false;
 	}
 
@@ -75,18 +104,21 @@ export class WorkerPanes {
 		if (!this._isOpen) return;
 		this.lastSessions = sessions;
 
-		// Check if set changed
-		const currentNames = [...this.panes.keys()].sort().join(",");
-		const newNames = [...sessions].sort().join(",");
-		if (currentNames === newNames) return;
+		await this.enqueue(async () => {
+			// Compare inside the queued op: an earlier queued redraw may have
+			// changed the pane set by the time this one runs.
+			const currentNames = [...this.panes.keys()].sort().join(",");
+			const newNames = [...sessions].sort().join(",");
+			if (currentNames === newNames) return;
 
-		// Full redraw
-		await this.killAllPanes();
-		if (sessions.length > 0) {
-			await this.createPanes(sessions);
-		} else {
-			this._isOpen = false;
-		}
+			// Full redraw
+			await this.killAllPanes();
+			if (sessions.length > 0) {
+				await this.createPanes(sessions);
+			} else {
+				this._isOpen = false;
+			}
+		});
 	}
 
 	// ─── Private ──────────────────────────────────────────────────────────────
@@ -94,11 +126,15 @@ export class WorkerPanes {
 	private async createPanes(sessions: string[]): Promise<void> {
 		if (sessions.length === 0) return;
 
-		// Create first pane as a horizontal split (30% right column)
+		// Create first pane as a horizontal split (30% right column). The
+		// split MUST target the maestro's own pane: without -t, tmux splits
+		// the window's *active* pane — which after restarts or focus changes
+		// can be a previous (narrow) worker pane, producing sliver columns.
 		const first = sessions[0];
 		let firstPaneId: string;
 		try {
 			firstPaneId = await splitWindow({
+				...(this.ownPaneId() ? { target: this.ownPaneId() } : {}),
 				horizontal: true,
 				percent: 30,
 				detach: true,
@@ -109,6 +145,7 @@ export class WorkerPanes {
 		}
 		this.columnPaneId = firstPaneId;
 		this.panes.set(first, firstPaneId);
+		await this.markPane(firstPaneId, first);
 
 		// Determine how many additional panes fit
 		const maxPanes = await this.maxPanesForColumn(firstPaneId);
@@ -124,6 +161,7 @@ export class WorkerPanes {
 					command: this.attachCommand(sess),
 				});
 				this.panes.set(sess, paneId);
+				await this.markPane(paneId, sess);
 			} catch {
 				break;
 			}
@@ -136,6 +174,20 @@ export class WorkerPanes {
 		await this.resizeSessionsToMatchPanes();
 	}
 
+	/** The tmux pane the maestro itself runs in, if inside tmux. */
+	private ownPaneId(): string | undefined {
+		return process.env.TMUX_PANE || undefined;
+	}
+
+	/** Tag a pane as maestro-owned so later runs can find and kill it. */
+	private async markPane(paneId: string, session: string): Promise<void> {
+		try {
+			await tmuxExec(["set-option", "-p", "-t", paneId, PANE_MARKER, session]);
+		} catch {
+			// Best-effort — worst case the pane survives a restart sweep.
+		}
+	}
+
 	private async killAllPanes(): Promise<void> {
 		for (const paneId of this.panes.values()) {
 			try {
@@ -144,9 +196,31 @@ export class WorkerPanes {
 		}
 		this.panes.clear();
 		this.columnPaneId = undefined;
-		// Re-focus the main pane
+		// Sweep strays this instance never knew about (panes from a previous
+		// maestro run persist — their attach commands outlive pi). Marked
+		// panes are ours by definition; the start-command match also catches
+		// panes created before the marker existed.
 		try {
-			await tmuxExec(["select-pane", "-t", ":.0"]);
+			const out = await tmuxExec([
+				"list-panes",
+				"-F",
+				`#{pane_id}\t#{${PANE_MARKER}}\t#{pane_start_command}`,
+			]);
+			for (const line of out.split("\n")) {
+				const [id, marker, ...rest] = line.split("\t");
+				const startCommand = rest.join("\t");
+				const ours =
+					Boolean(marker) || startCommand.includes("tmux attach-session -r -t");
+				if (id && ours) {
+					try {
+						await killPane(id);
+					} catch {}
+				}
+			}
+		} catch {}
+		// Re-focus the maestro's pane (fall back to the window's first pane).
+		try {
+			await tmuxExec(["select-pane", "-t", this.ownPaneId() ?? ":.0"]);
 		} catch {}
 	}
 

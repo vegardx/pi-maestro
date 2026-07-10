@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { composeFooterLine } from "../packages/modes/src/footer.js";
 import {
 	formatCacheHitRate,
+	formatContextUsage,
 	formatSessionUsage,
 } from "../packages/modes/src/install-footer.js";
 import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
@@ -229,5 +230,48 @@ describe("formatCacheHitRate", () => {
 		);
 		// Only source 1 counts: 15000 / (5000 + 15000) = 0.75 → 75%
 		expect(formatCacheHitRate(ledger)).toBe("CH 75%");
+	});
+});
+
+describe("formatContextUsage", () => {
+	const fake = (usage: unknown) =>
+		({ getContextUsage: () => usage }) as unknown as Parameters<
+			typeof formatContextUsage
+		>[0];
+
+	it("returns null when no usage is available", () => {
+		expect(formatContextUsage(fake(undefined))).toBeNull();
+		expect(
+			formatContextUsage(fake({ tokens: 5, contextWindow: 0, percent: 0 })),
+		).toBeNull();
+	});
+
+	it("formats tokens/window and stays muted at low fill", () => {
+		expect(
+			formatContextUsage(
+				fake({ tokens: 84_000, contextWindow: 200_000, percent: 42 }),
+			),
+		).toEqual({ visible: "84k/200k", color: "muted" });
+	});
+
+	it("escalates warning past 70% and error past 90%", () => {
+		expect(
+			formatContextUsage(
+				fake({ tokens: 150_000, contextWindow: 200_000, percent: 75 }),
+			)?.color,
+		).toBe("warning");
+		expect(
+			formatContextUsage(
+				fake({ tokens: 186_000, contextWindow: 200_000, percent: 93 }),
+			)?.color,
+		).toBe("error");
+	});
+
+	it("shows ?/window right after compaction (tokens unknown)", () => {
+		expect(
+			formatContextUsage(
+				fake({ tokens: null, contextWindow: 200_000, percent: null }),
+			),
+		).toEqual({ visible: "?/200k", color: "muted" });
 	});
 });

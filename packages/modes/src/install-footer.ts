@@ -49,6 +49,25 @@ export function formatCacheHitRate(ledger: UsageLedger): string | null {
 }
 
 /**
+ * The maestro's OWN context fill: tokens/window (e.g. "84k/200k"), distinct
+ * from the ledger's fleet-wide ↑/↓ totals. Sourced from ctx.getContextUsage()
+ * — the same compaction-aware estimate pi's native footer uses; tokens are
+ * unknown right after a compaction, shown as "?/200k". The color escalates
+ * muted → warning (>70%) → error (>90%) as compaction approaches.
+ */
+export function formatContextUsage(
+	ctx: ExtensionContext,
+): { visible: string; color: ThemeColor } | null {
+	const usage = ctx.getContextUsage?.();
+	if (!usage?.contextWindow) return null;
+	const max = k(usage.contextWindow);
+	if (usage.tokens === null) return { visible: `?/${max}`, color: "muted" };
+	const pct = usage.percent ?? (usage.tokens / usage.contextWindow) * 100;
+	const color: ThemeColor = pct > 90 ? "error" : pct > 70 ? "warning" : "muted";
+	return { visible: `${k(usage.tokens)}/${max}`, color };
+}
+
+/**
  * Model display label: strip "claude " prefix, drop trailing parentheticals,
  * append thinking level if not "off".
  */
@@ -157,6 +176,7 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const ledger = getLedger();
 					const usageLabel = formatSessionUsage(ledger);
 					const cacheLabel = formatCacheHitRate(ledger);
+					const ctxUsage = formatContextUsage(ctx);
 					const modelLabel = formatModelLabel(ctx, pi);
 					const modeLabel = theme.bold(
 						theme.fg(MODE_COLOR[mode] ?? "muted", mode),
@@ -166,68 +186,43 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const sep = theme.fg("muted", " | ");
 					const sepVisible = " | ";
 
+					// A segment: [styled, visible]; assemble candidates by slicing
+					// richest → sparsest so each drop step stays consistent.
+					type Segment = readonly [string, string];
+					const usageSeg: Segment | undefined = usageLabel
+						? [theme.fg("muted", usageLabel), usageLabel]
+						: undefined;
+					const cacheSeg: Segment | undefined = cacheLabel
+						? [theme.fg("muted", cacheLabel), cacheLabel]
+						: undefined;
+					const ctxSeg: Segment | undefined = ctxUsage
+						? [theme.fg(ctxUsage.color, ctxUsage.visible), ctxUsage.visible]
+						: undefined;
+					const modelSeg: Segment | undefined = modelLabel
+						? [theme.fg("muted", modelLabel), modelLabel]
+						: undefined;
+					const modeSeg: Segment = [modeLabel, modeLabelVisible];
+
 					const candidates: FooterRightCandidate[] = [];
-
-					// Full: "↑124k ↓45k | CH 78% | Sonnet 4 (high) | auto"
-					{
-						const parts: string[] = [];
-						const vis: string[] = [];
-						if (usageLabel) {
-							parts.push(theme.fg("muted", usageLabel));
-							vis.push(usageLabel);
-						}
-						if (cacheLabel) {
-							parts.push(theme.fg("muted", cacheLabel));
-							vis.push(cacheLabel);
-						}
-						if (modelLabel) {
-							parts.push(theme.fg("muted", modelLabel));
-							vis.push(modelLabel);
-						}
-						parts.push(modeLabel);
-						vis.push(modeLabelVisible);
+					const pushCandidate = (segs: Array<Segment | undefined>): void => {
+						const present = segs.filter((s): s is Segment => s !== undefined);
 						candidates.push({
-							styled: parts.join(sep),
-							visible: vis.join(sepVisible),
+							styled: present.map((s) => s[0]).join(sep),
+							visible: present.map((s) => s[1]).join(sepVisible),
 						});
-					}
+					};
 
-					// Drop token usage
-					if (usageLabel) {
-						const parts: string[] = [];
-						const vis: string[] = [];
-						if (cacheLabel) {
-							parts.push(theme.fg("muted", cacheLabel));
-							vis.push(cacheLabel);
-						}
-						if (modelLabel) {
-							parts.push(theme.fg("muted", modelLabel));
-							vis.push(modelLabel);
-						}
-						parts.push(modeLabel);
-						vis.push(modeLabelVisible);
-						candidates.push({
-							styled: parts.join(sep),
-							visible: vis.join(sepVisible),
-						});
-					}
-
-					// Drop cache hit
-					if (modelLabel) {
-						const parts: string[] = [];
-						const vis: string[] = [];
-						parts.push(theme.fg("muted", modelLabel));
-						vis.push(modelLabel);
-						parts.push(modeLabel);
-						vis.push(modeLabelVisible);
-						candidates.push({
-							styled: parts.join(sep),
-							visible: vis.join(sepVisible),
-						});
-					}
-
+					// Full: "↑124k ↓45k | CH 78% | 84k/200k | Opus 4.8 (high) | plan"
+					pushCandidate([usageSeg, cacheSeg, ctxSeg, modelSeg, modeSeg]);
+					// Drop fleet ↑/↓ totals first — ctx fill predicts compaction and
+					// outranks them.
+					if (usageSeg) pushCandidate([cacheSeg, ctxSeg, modelSeg, modeSeg]);
+					// Then cache hit rate
+					if (cacheSeg) pushCandidate([ctxSeg, modelSeg, modeSeg]);
+					// Then the context fill
+					if (ctxSeg) pushCandidate([modelSeg, modeSeg]);
 					// Slim: just mode
-					candidates.push({ styled: modeLabel, visible: modeLabelVisible });
+					pushCandidate([modeSeg]);
 
 					return [composeFooterLine(leftText, candidates, width)];
 				},

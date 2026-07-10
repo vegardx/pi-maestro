@@ -188,6 +188,27 @@ export interface QuestionnaireRenderOptions {
 	palette?: Palette;
 }
 
+/**
+ * Split a single word wider than `width` into display-width chunks. Word
+ * wrappers can't break such words at whitespace (paths, slash-joined lists,
+ * URLs), and emitting them whole overflows the box border — which crashes
+ * pi's renderer ("Rendered line exceeds terminal width").
+ */
+function hardBreak(word: string, width: number): string[] {
+	const chunks: string[] = [];
+	let current = "";
+	for (const ch of word) {
+		if (current && visibleWidth(current + ch) > width) {
+			chunks.push(current);
+			current = ch;
+		} else {
+			current += ch;
+		}
+	}
+	if (current) chunks.push(current);
+	return chunks;
+}
+
 function wrap(
 	text: string,
 	width: number,
@@ -200,6 +221,13 @@ function wrap(
 	const lines: string[] = [];
 	let line = "";
 	for (const word of words) {
+		if (visibleWidth(word) > width) {
+			if (line) lines.push(paint(line));
+			const chunks = hardBreak(word, width);
+			line = chunks.pop() ?? "";
+			for (const c of chunks) lines.push(paint(c));
+			continue;
+		}
 		if (line.length + word.length + 1 > width) {
 			if (line) lines.push(paint(line));
 			line = word;
@@ -218,6 +246,13 @@ function wrapPlain(text: string, width: number): string[] {
 	const lines: string[] = [];
 	let line = "";
 	for (const word of words) {
+		if (visibleWidth(word) > width) {
+			if (line) lines.push(line);
+			const chunks = hardBreak(word, width);
+			line = chunks.pop() ?? "";
+			lines.push(...chunks);
+			continue;
+		}
 		const candidate = line ? `${line} ${word}` : word;
 		if (line && visibleWidth(candidate) > width) {
 			lines.push(line);
@@ -259,9 +294,9 @@ export function renderRichText(
 		const bullet = line.match(/^[-*•]\s+(.*)$/);
 		if (bullet) {
 			const wrapped = wrapPlain(stripBold(bullet[1]), Math.max(width - 2, 1));
-			wrapped.forEach((l, i) =>
-				out.push(palette.dim(i === 0 ? `• ${l}` : `  ${l}`)),
-			);
+			wrapped.forEach((l, i) => {
+				out.push(palette.dim(i === 0 ? `• ${l}` : `  ${l}`));
+			});
 			continue;
 		}
 		const heading = line.match(/^\*\*(.+?)\*\*:?\s*(.*)$/);
@@ -294,8 +329,10 @@ export function renderQuestionnaire(
 	const innerWidth = Math.max(width - 4, 0);
 	const topBorder = palette.dim(`╭${"─".repeat(Math.max(width - 2, 0))}╮`);
 	const botBorder = palette.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+	// truncate before padRight: padRight passes over-wide content through
+	// untouched, and an overflowing line crashes pi's renderer.
 	const boxLine = (content: string) =>
-		`${palette.dim("│")} ${padRight(content, innerWidth)} ${palette.dim("│")}`;
+		`${palette.dim("│")} ${padRight(truncate(content, innerWidth), innerWidth)} ${palette.dim("│")}`;
 	const emptyLine = boxLine("");
 
 	const lines: string[] = [];
@@ -464,6 +501,19 @@ const KEY_DOWN = "\u001b[B";
 const KEY_RIGHT = "\u001b[C";
 const KEY_LEFT = "\u001b[D";
 
+/**
+ * Terminals in application-cursor-keys mode (DECCKM) — the common state when
+ * pi runs OUTSIDE tmux — send arrows as SS3 (ESC O A) rather than CSI
+ * (ESC [ A). pi forwards raw input bytes to the focused component with no key
+ * canonicalization, so both forms must be accepted or arrow navigation dies.
+ */
+const SS3_TO_CSI: Record<string, string> = {
+	"\u001bOA": KEY_UP,
+	"\u001bOB": KEY_DOWN,
+	"\u001bOC": KEY_RIGHT,
+	"\u001bOD": KEY_LEFT,
+};
+
 export interface QuestionnaireRunOptions extends QuestionnaireRenderOptions {
 	/** Prior answers to pre-fill (draft rehydration). */
 	readonly initialAnswers?: Answers;
@@ -531,6 +581,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
+		data = SS3_TO_CSI[data] ?? data;
 		if (this.state.noteEdit !== undefined) {
 			this.handleNote(data);
 			return;

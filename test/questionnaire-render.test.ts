@@ -300,3 +300,70 @@ describe("renderRichText (structured question context)", () => {
 		expect(lines.join(" ")).toContain("OAC");
 	});
 });
+
+describe("unbreakable-word width (regression: renderer crash)", () => {
+	// A single word wider than the box (a slash-joined component list, a long
+	// path, a URL) cannot wrap at whitespace. Emitting it whole overflowed the
+	// box border and crashed pi ("Rendered line 1100 exceeds terminal width").
+	const LONG =
+		"Text/Box/Container/SelectList/SettingsList/TreeSelectorComponent/Markdown/Loader/DynamicBorder";
+
+	it("hard-breaks long words in renderRichText bullets", () => {
+		const p = defaultPalette();
+		const lines = renderRichText(`- taxonomy: (${LONG} + helpers)`, 60, p);
+		for (const l of lines) expect(visibleWidth(l)).toBeLessThanOrEqual(60);
+		// Nothing lost: the pieces reassemble the word.
+		expect(lines.join("").replace(/[•\s]/g, "")).toContain("DynamicBorder");
+	});
+
+	it("keeps every panel line within width when a description has a long word", () => {
+		const q: Question = {
+			id: "w",
+			question: "pick",
+			options: [{ label: "a", description: `wraps ${LONG} fine` }],
+		};
+		const width = 88;
+		const lines = renderQuestionnaire([q], initQuestionnaireState(), width, {
+			palette: defaultPalette(),
+		});
+		for (const line of lines)
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	});
+
+	it("keeps every explorer line within width when a body has a long word", () => {
+		const q: Question = {
+			id: "w",
+			question: "pick",
+			options: [
+				{
+					label: "a",
+					body: `the ${LONG} taxonomy`,
+					dimensions: { effort: "S" },
+				},
+			],
+		};
+		const width = 88;
+		const lines = renderExplorer(
+			[q],
+			initQuestionnaireState(),
+			initExplorerView(),
+			width,
+			{ palette: defaultPalette() },
+		);
+		for (const line of lines)
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+	});
+});
+
+describe("SS3 arrows (application-cursor mode, e.g. outside tmux)", () => {
+	// DECCKM terminals send arrows as ESC O B rather than ESC [ B; pi forwards
+	// raw bytes, so the component must accept both forms.
+	const SS3_DOWN = "\u001bOB";
+
+	it("navigates options with SS3 arrows", () => {
+		const c = new QuestionnaireComponent([panelQ], () => {});
+		c.handleInput(SS3_DOWN);
+		const text = c.render(60).join(String.fromCharCode(10));
+		expect(text).toContain("› 2. JSONL log");
+	});
+});

@@ -41,6 +41,19 @@ function wrapPlain(text: string, width: number): string[] {
 		const words = raw.split(/\s+/);
 		let line = "";
 		for (const word of words) {
+			// An unbreakable word wider than the box (path, URL, slash-joined
+			// list) must be hard-broken — emitting it whole overflows the border
+			// and crashes pi's renderer.
+			if (word.length > width) {
+				if (line) out.push(line);
+				line = "";
+				for (let i = 0; i < word.length; i += width) {
+					const chunk = word.slice(i, i + width);
+					if (i + width >= word.length) line = chunk;
+					else out.push(chunk);
+				}
+				continue;
+			}
 			if (line.length + word.length + 1 > width) {
 				if (line) out.push(line);
 				line = word;
@@ -193,8 +206,10 @@ export function renderExplorer(
 	const innerWidth = Math.max(width - 4, 0);
 	const topBorder = palette.dim(`╭${"─".repeat(Math.max(width - 2, 0))}╮`);
 	const botBorder = palette.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`);
+	// truncate before padRight: padRight passes over-wide content through
+	// untouched, and an overflowing line crashes pi's renderer.
 	const boxLine = (content: string) =>
-		`${palette.dim("│")} ${padRight(content, innerWidth)} ${palette.dim("│")}`;
+		`${palette.dim("│")} ${padRight(truncate(content, innerWidth), innerWidth)} ${palette.dim("│")}`;
 	const emptyLine = boxLine("");
 
 	const lines: string[] = [];

@@ -237,6 +237,95 @@ describe("shipDeliverable (real push)", () => {
 		expect(calls.created[0].body).toContain("Did the g1 work.");
 	});
 
+	it("blocks non-conventional commits in a semantic-release repo — no push", async () => {
+		// Regression: a worker pushed "Add RadicalAI production and SIT provider
+		// configs" to a semantic-release repo; the release ran green and
+		// published nothing. The audit must stop the branch BEFORE push, while
+		// it is still rewritable, and explain the release impact.
+		writeFileSync(join(repo, ".releaserc"), "{}");
+		git(["add", ".releaserc"]);
+		git(["commit", "-m", "chore: add releaserc"]);
+		git(["push", "origin", "main"]);
+		git(["checkout", "-b", "feat/g1"]);
+		writeFileSync(join(repo, "provider.ts"), "export const x = 1;\n");
+		git(["add", "provider.ts"]);
+		git(["commit", "-m", "Add RadicalAI production and SIT provider configs"]);
+
+		const deliverable = makeDeliverable({ id: "g1" });
+		const plan = makePlan([deliverable], { repoPath: repo });
+		const { client, calls } = recordingPrClient();
+
+		const result = await shipDeliverable({
+			plan,
+			deliverable,
+			worktreePath: repo,
+			prClient: client,
+		});
+
+		expect(result).toMatchObject({ ok: false, code: "commit-policy" });
+		if (!result.ok) {
+			expect(result.message).toContain("release nothing");
+			expect(result.message).toContain(
+				"Add RadicalAI production and SIT provider configs",
+			);
+			expect(result.retryable).toBe(true);
+		}
+		expect(remoteHasBranch("feat/g1")).toBe(false); // never left the machine
+		expect(calls.created).toHaveLength(0);
+	});
+
+	it("blocks a runtime change with no release-triggering commit", async () => {
+		writeFileSync(join(repo, ".releaserc"), "{}");
+		git(["add", ".releaserc"]);
+		git(["commit", "-m", "chore: add releaserc"]);
+		git(["push", "origin", "main"]);
+		git(["checkout", "-b", "feat/g1"]);
+		writeFileSync(join(repo, "provider.ts"), "export const x = 1;\n");
+		git(["add", "provider.ts"]);
+		git(["commit", "-m", "chore(radicalai): add provider configs"]);
+
+		const deliverable = makeDeliverable({ id: "g1" });
+		const plan = makePlan([deliverable], { repoPath: repo });
+		const { client } = recordingPrClient();
+
+		const result = await shipDeliverable({
+			plan,
+			deliverable,
+			worktreePath: repo,
+			prClient: client,
+		});
+		expect(result).toMatchObject({ ok: false, code: "commit-policy" });
+		if (!result.ok) expect(result.message).toContain("publish nothing");
+	});
+
+	it("ships conventional feat commits in a semantic-release repo", async () => {
+		writeFileSync(join(repo, ".releaserc"), "{}");
+		git(["add", ".releaserc"]);
+		git(["commit", "-m", "chore: add releaserc"]);
+		git(["push", "origin", "main"]);
+		git(["checkout", "-b", "feat/g1"]);
+		writeFileSync(join(repo, "provider.ts"), "export const x = 1;\n");
+		git(["add", "provider.ts"]);
+		git([
+			"commit",
+			"-m",
+			"feat(radicalai): support production and SIT providers",
+		]);
+
+		const deliverable = makeDeliverable({ id: "g1" });
+		const plan = makePlan([deliverable], { repoPath: repo });
+		const { client } = recordingPrClient();
+
+		const result = await shipDeliverable({
+			plan,
+			deliverable,
+			worktreePath: repo,
+			prClient: client,
+		});
+		expect(result).toMatchObject({ ok: true, created: true });
+		expect(remoteHasBranch("feat/g1")).toBe(true);
+	});
+
 	it("refuses to ship a dirty worktree — no push, no PR", async () => {
 		git(["checkout", "-b", "feat/g2"]);
 		writeFileSync(join(repo, "uncommitted.txt"), "wip\n");

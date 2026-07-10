@@ -12,6 +12,10 @@
 //    its dependsOn deliverables have shipped, so stacked PR bases exist on the remote
 
 import type { PlanEngine } from "./engine.js";
+import {
+	commitPolicyInstruction,
+	detectCommitPolicy,
+} from "./exec/commit-policy.js";
 import type { AgentMode, Deliverable } from "./schema.js";
 import {
 	defaultBranchForDeliverable,
@@ -606,6 +610,13 @@ export class DeliverableExecutor {
 
 		// 3. Agent-specific content (last — unique to this agent)
 		if (name === "worker") {
+			// Repo commit policy first — a worker committing "Add …" in a
+			// semantic-release repo makes the release run green and publish
+			// nothing; the ship audit would then block the branch.
+			const policyNote = commitPolicyInstruction(
+				detectCommitPolicy(plan.repoPath),
+			);
+			if (policyNote) parts.push(policyNote);
 			parts.push(`## Deliverable: ${g.title}\n\n${g.body}`);
 			const tasks = gatingTasks(g);
 			if (tasks.length > 0) {

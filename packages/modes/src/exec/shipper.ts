@@ -36,6 +36,7 @@ import {
 	TERMINAL_STATUSES,
 } from "../schema.js";
 import { buildPrBody } from "../shipping.js";
+import { auditBranchCommits, detectCommitPolicy } from "./commit-policy.js";
 
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ export function shipBaseBranch(
 
 export type ShipErrorCode =
 	| "dirty-worktree"
+	| "commit-policy"
 	| "no-default-branch"
 	| "push-failed"
 	| "pr-failed";
@@ -183,13 +185,6 @@ export async function shipDeliverable(
 	}
 
 	const branch = deliverable.branch ?? defaultBranchForDeliverable(deliverable);
-	const push = await git.pushBranch(worktreePath, branch);
-	if (!push.ok) {
-		return shipError(
-			"push-failed",
-			push.stderr.trim() || `git push exited ${push.exitCode}`,
-		);
-	}
 
 	const repo = repoFor(plan, deliverable);
 	const defaultBranch =
@@ -201,6 +196,30 @@ export async function shipDeliverable(
 		);
 	}
 	const base = shipBaseBranch(plan, deliverable, defaultBranch);
+
+	// Commit-policy audit BEFORE anything leaves the machine: in a
+	// conventional-commit repo a bare "Add …" subject makes semantic-release
+	// run green and publish nothing. Blocked here, the branch is still local
+	// and rewritable (reword/amend), and the reason explains exactly what the
+	// pushed commits would have done to the release.
+	const policy = detectCommitPolicy(repo.path);
+	if (policy.conventional) {
+		const audit = auditBranchCommits(worktreePath, base, policy);
+		if (!audit.ok) {
+			const offenders = audit.violations.length
+				? ` Offending subjects: ${audit.violations.map((s) => `"${s}"`).join(", ")}.`
+				: "";
+			return shipError("commit-policy", `${audit.explanation}${offenders}`);
+		}
+	}
+
+	const push = await git.pushBranch(worktreePath, branch);
+	if (!push.ok) {
+		return shipError(
+			"push-failed",
+			push.stderr.trim() || `git push exited ${push.exitCode}`,
+		);
+	}
 
 	const reports =
 		opts.agentReports ?? (deliverable.summary ? [deliverable.summary] : []);

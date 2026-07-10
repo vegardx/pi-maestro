@@ -90,6 +90,40 @@ export function readModesCompactionSettings(
 	};
 }
 
+// ---- Research watchdog settings ---------------------------------------------
+
+/**
+ * Watchdog thresholds for research children (extensionConfig.modes.research).
+ * Replaces the old flat timeout: stalls (event silence) die fast, slow-but-
+ * productive runs get steered to wrap up, and the hard cap only backstops
+ * truly unbounded runs.
+ */
+export interface ResearchWatchdogSettings {
+	/** Event silence that counts as wedged. Must exceed the longest legitimately silent tool call (a deep web search). */
+	stallMs: number;
+	/** Elapsed time after which the child is steered once to write its report now. */
+	softMs: number;
+	/** Absolute wall-clock backstop; the run is stopped and partial output salvaged. */
+	hardMs: number;
+}
+
+export function readResearchWatchdogSettings(
+	cwd: string,
+	agentDir?: string,
+): ResearchWatchdogSettings {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const read = (key: string, fallback: number): number =>
+		positive(
+			getConfigNumber(merged, NAME, `research.${key}`, fallback),
+			fallback,
+		);
+	return {
+		stallMs: read("stallMs", 120_000),
+		softMs: read("softMs", 240_000),
+		hardMs: read("hardMs", 600_000),
+	};
+}
+
 // ---- Worktree provisioning settings -----------------------------------------
 
 /** Environment setup for freshly provisioned worktrees (provisioner shape). */

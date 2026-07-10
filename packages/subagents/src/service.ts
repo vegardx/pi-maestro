@@ -27,6 +27,10 @@ export interface RunnerController {
 	stop(reason?: string): void;
 	/** Resolves when the child settles. */
 	result(): Promise<RunResult>;
+	/** Timestamp of the child's most recent event (liveness for watchdogs). */
+	lastEventAt?(): number;
+	/** Last completed assistant text — salvage for stopped runs. */
+	partialText?(): Promise<string | undefined>;
 }
 
 export interface LaunchRequest {
@@ -114,6 +118,12 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			steer: (guidance) => this.steer(runId, guidance),
 			stop: (reason) => this.stop(runId, reason),
 			result: () => controller.result(),
+			...(controller.lastEventAt
+				? { lastEventAt: controller.lastEventAt.bind(controller) }
+				: {}),
+			...(controller.partialText
+				? { partialText: controller.partialText.bind(controller) }
+				: {}),
 		};
 	}
 

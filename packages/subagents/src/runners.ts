@@ -59,10 +59,21 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 		launch(request: LaunchRequest, bus: RunBus): RunnerController {
 			const abort = new AbortController();
 			let client: RpcLike | undefined;
+			// Liveness: bumped on every child event so a watchdog can tell a
+			// stalled run (event silence) from a slow-but-working one.
+			const activity = { at: Date.now() };
 
-			const done = execute(request, bus, abort.signal, opts, cap, (c) => {
-				client = c;
-			}).then((result) => {
+			const done = execute(
+				request,
+				bus,
+				abort.signal,
+				opts,
+				cap,
+				(c) => {
+					client = c;
+				},
+				activity,
+			).then((result) => {
 				opts.onSettled?.(request.runId, result);
 				return result;
 			});
@@ -76,6 +87,15 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 					void client?.abort();
 				},
 				result: () => done,
+				lastEventAt: () => activity.at,
+				async partialText() {
+					if (!client) return undefined;
+					try {
+						return (await client.getLastAssistantText()) ?? undefined;
+					} catch {
+						return undefined;
+					}
+				},
 			};
 		},
 	};
@@ -88,6 +108,7 @@ async function execute(
 	opts: RunnerOptions,
 	cap: number,
 	bindClient: (client: RpcLike) => void,
+	activity?: { at: number },
 ): Promise<RunResult> {
 	const { runId, prompt, invocation } = request;
 
@@ -113,7 +134,10 @@ async function execute(
 		client = opts.factory(options);
 		bindClient(client);
 
-		unsubscribe = client.onEvent((event) => mapEvent(bus, runId, event));
+		unsubscribe = client.onEvent((event) => {
+			if (activity) activity.at = Date.now();
+			mapEvent(bus, runId, event);
+		});
 
 		await client.start();
 		bus.publish({ type: "status", runId, status: "running", at: Date.now() });

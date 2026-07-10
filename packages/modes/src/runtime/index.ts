@@ -22,6 +22,7 @@ import type { PlanEngine } from "../engine.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
 import { createReviewTool } from "../review-tool.js";
 import type { SubAgentSpec } from "../schema.js";
+import { readResearchWatchdogSettings } from "../settings.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
 import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
@@ -113,6 +114,7 @@ export function createModesRuntime(
 		researchToolsPath: () =>
 			join(repoRoot, "packages/research-tools/src/index.ts"),
 		resolveTierModel: (ctx, tier) => pinnedTierModel(ctx, tier),
+		watchdog: (ctx) => readResearchWatchdogSettings(ctx.cwd),
 		onRunStarted: (run, ctx) => {
 			rt.researchRuns.set(run.id, run);
 			sendAgentEvent(pi, {
@@ -265,6 +267,27 @@ export function createModesRuntime(
 			label: "Compaction: timeout (ms)",
 			type: "number",
 			default: 90000,
+		},
+		// Research watchdog — read by readResearchWatchdogSettings. Stall kills
+		// wedged children fast; soft steers slow ones to wrap up; hard is the
+		// unbounded-run backstop.
+		{
+			key: "research.stallMs",
+			label: "Research: stall kill (ms of event silence)",
+			type: "number",
+			default: 120000,
+		},
+		{
+			key: "research.softMs",
+			label: "Research: wrap-up steer (ms)",
+			type: "number",
+			default: 240000,
+		},
+		{
+			key: "research.hardMs",
+			label: "Research: hard cap (ms)",
+			type: "number",
+			default: 600000,
 		},
 	]);
 

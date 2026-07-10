@@ -176,4 +176,16 @@ export interface RunHandle {
 	steer(guidance: string): void;
 	stop(reason?: string): void;
 	result(): Promise<RunResult>;
+	/**
+	 * Timestamp of the child's most recent event (any tool start, delta, or
+	 * turn end) — the liveness signal a watchdog distinguishes "stalled" from
+	 * "slow but working" with. Optional: fakes and remote transports may not
+	 * track it.
+	 */
+	lastEventAt?(): number;
+	/**
+	 * The child's last completed assistant text so far — salvage for runs a
+	 * watchdog has to stop. Optional, best-effort.
+	 */
+	partialText?(): Promise<string | undefined>;
 }

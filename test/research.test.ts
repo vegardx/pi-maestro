@@ -64,12 +64,15 @@ interface SpawnCall {
 
 function fakeCapability(
 	result: (call: SpawnCall, n: number) => Promise<RunResult>,
+	handleExtras: Partial<Pick<RunHandle, "lastEventAt" | "partialText">> = {},
 ) {
 	const calls: SpawnCall[] = [];
 	const stopped: string[] = [];
+	const steers: string[] = [];
 	return {
 		calls,
 		stopped,
+		steers,
 		capability: {
 			spawn(prompt: string, profile: SpawnProfile): RunHandle {
 				const call = { prompt, profile };
@@ -79,11 +82,14 @@ function fakeCapability(
 				return {
 					id,
 					status: () => "running" as const,
-					steer: () => {},
+					steer: (guidance: string) => {
+						steers.push(guidance);
+					},
 					stop: () => {
 						stopped.push(id);
 					},
 					result: () => result(call, n),
+					...handleExtras,
 				};
 			},
 			get: () => undefined,
@@ -221,19 +227,87 @@ describe("research tool", () => {
 		expect(bad.content[0].text).toContain("what-storage-does-pi-use"); // lists available
 	});
 
-	it("stops runs that exceed the timeout", async () => {
+	it("watchdog: kills a stalled run (event silence) and salvages partial text", async () => {
+		// No lastEventAt override → the handle looks silent since spawn, so the
+		// stall threshold fires. partialText is what the child had written.
 		const { capability, stopped } = fakeCapability(
 			() => new Promise<never>(() => {}),
+			{ partialText: async () => "Found half the answer so far." },
 		);
 		const { deps } = makeDeps({
 			subagents: () => capability,
-			timeoutMs: () => 20,
+			watchdog: () => ({
+				stallMs: 30,
+				softMs: 5_000,
+				hardMs: 10_000,
+				pollMs: 5,
+			}),
 		});
 		const result = await run(createResearchTool(deps), {
 			questions: [{ question: "hangs forever" }],
 		});
-		expect(result.content[0].text).toContain("timed out");
+		const text = result.content[0].text;
 		expect(stopped).toEqual(["run-1"]);
+		expect(text).toContain("stalled");
+		expect(text).toContain("partial findings salvaged");
+		expect(text).toContain("Found half the answer so far.");
+	});
+
+	it("watchdog: steers a slow-but-active run to wrap up instead of killing it", async () => {
+		// lastEventAt: now → always active, so no stall. The run finishes on its
+		// own after the soft deadline steered it.
+		let resolveRun: (r: RunResult) => void = () => {};
+		const settled = new Promise<RunResult>((r) => {
+			resolveRun = r;
+		});
+		const { capability, stopped, steers } = fakeCapability(() => settled, {
+			lastEventAt: () => Date.now(),
+		});
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			watchdog: () => ({
+				stallMs: 5_000,
+				softMs: 20,
+				hardMs: 10_000,
+				pollMs: 5,
+			}),
+		});
+		const pending = run(createResearchTool(deps), {
+			questions: [{ question: "slow but productive" }],
+		});
+		// Give the watchdog time to fire the wrap-up steer, then finish the run.
+		await new Promise((r) => setTimeout(r, 60));
+		expect(steers.length).toBe(1);
+		expect(steers[0]).toContain("Stop researching NOW");
+		resolveRun({
+			status: "succeeded",
+			summary: "Full findings.\n\n## Digest\nwrapped up in time",
+		});
+		const result = await pending;
+		expect(result.content[0].text).toContain("wrapped up in time");
+		expect(stopped).toEqual([]); // never killed
+	});
+
+	it("watchdog: hard cap stops a run that stays active but never converges", async () => {
+		const { capability, stopped, steers } = fakeCapability(
+			() => new Promise<never>(() => {}),
+			{
+				lastEventAt: () => Date.now(), // always active → stall never fires
+				partialText: async () => "Kept looping over the same ground.",
+			},
+		);
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			watchdog: () => ({ stallMs: 10_000, softMs: 20, hardMs: 60, pollMs: 5 }),
+		});
+		const result = await run(createResearchTool(deps), {
+			questions: [{ question: "loops forever" }],
+		});
+		const text = result.content[0].text;
+		expect(steers.length).toBe(1); // wrap-up steer came first
+		expect(stopped).toEqual(["run-1"]);
+		expect(text).toContain("hard cap");
+		expect(text).toContain("Kept looping over the same ground.");
 	});
 
 	it("advisor gets the plan outline, high thinking, and the alternate model", async () => {

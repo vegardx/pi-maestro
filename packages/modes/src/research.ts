@@ -39,6 +39,7 @@ import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
 import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
+import type { ResearchWatchdogSettings } from "./settings.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -100,8 +101,13 @@ export interface ResearchDeps {
 	) => void;
 	/** Side effects after a phase flip (applyTools + footer refresh). */
 	readonly onPhaseChanged?: (ctx: ExtensionContext) => void;
-	/** Per-question wall-clock cap. Default 180s. */
-	readonly timeoutMs?: () => number;
+	/**
+	 * Watchdog thresholds (stall/soft-steer/hard-cap) for research children.
+	 * `pollMs` tightens the check interval (tests). Defaults: 120s/240s/600s.
+	 */
+	readonly watchdog?: (
+		ctx: ExtensionContext,
+	) => ResearchWatchdogSettings & { pollMs?: number };
 	/**
 	 * Deliver a completed round's combined report to the model as a follow-up
 	 * message (non-blocking research). When absent, the tool falls back to
@@ -110,7 +116,11 @@ export interface ResearchDeps {
 	readonly deliver?: (text: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_WATCHDOG: ResearchWatchdogSettings & { pollMs?: number } = {
+	stallMs: 120_000,
+	softMs: 240_000,
+	hardMs: 600_000,
+};
 const READ_TOOLS = ["read", "grep", "find", "ls"] as const;
 const WEB_TOOLS = ["websearch", "webfetch", "context7"] as const;
 
@@ -209,7 +219,7 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			const researchDir = researchScratchDir(engine.get().slug);
 			mkdirSync(researchDir, { recursive: true });
 
-			const timeoutMs = deps.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
+			const watchdog = deps.watchdog?.(ctx) ?? DEFAULT_WATCHDOG;
 			const plan = engine.get();
 
 			const spawned = await Promise.all(
@@ -260,10 +270,16 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 							return `### ${entry.question}\n(${entry.spawnError})`;
 						}
 						const { view, handle } = entry;
-						const result = await settleWithTimeout(handle, timeoutMs);
+						const result = await superviseRun(
+							handle,
+							watchdog,
+							watchdog.pollMs,
+						);
 						view.status =
 							result.status === "succeeded" ? "succeeded" : "failed";
-						const report = result.summary?.trim();
+						// A stopped run may still carry salvaged partial findings —
+						// deliver them with a caveat instead of empty-handed failure.
+						const report = result.summary?.trim() || result.partial;
 						if (!report) {
 							deps.onRunSettled?.(view, undefined, ctx);
 							return (
@@ -278,7 +294,11 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 						const path = persistReport(researchDir, view, report, ref);
 						deps.onRunSettled?.(view, { text: report, path }, ctx);
 						const digest = extractDigest(report);
-						return `### ${view.question}\n[ref: ${ref}]\n${digest}`;
+						const caveat =
+							result.status === "succeeded"
+								? ""
+								: `\n(${result.error ?? result.status} — partial findings salvaged; treat as incomplete)`;
+						return `### ${view.question}\n[ref: ${ref}]${caveat}\n${digest}`;
 					}),
 				);
 				return (
@@ -661,29 +681,86 @@ export function extractDigest(report: string): string {
 
 // ─── Settle helpers ──────────────────────────────────────────────────────────
 
-async function settleWithTimeout(
+/**
+ * The one steer a slow-but-productive child gets at the soft deadline. A fresh
+ * user message also tends to break tool loops, which liveness can't detect.
+ */
+const WRAP_UP_STEER =
+	"Time budget nearly exhausted. Stop researching NOW and write your final " +
+	"report from what you already have: full findings with evidence, then the " +
+	"`## Digest` block. State explicitly what you did not get to.";
+
+/** A settled run, possibly with salvaged partial text from a stopped child. */
+type SupervisedResult = RunResult & { partial?: string };
+
+/**
+ * Watchdog settle: distinguishes a WEDGED child (event silence → stop fast,
+ * salvage) from a SLOW one (steer it once at the soft deadline to write its
+ * report with what it has), with a generous hard cap as the only true
+ * timeout. Replaces the old flat per-question timeout, which killed
+ * productive runs and stalled ones at the same age — and discarded whatever
+ * the child had already found.
+ */
+async function superviseRun(
 	handle: RunHandle,
-	timeoutMs: number,
-): Promise<RunResult> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<RunResult>((resolve) => {
-		timer = setTimeout(() => {
-			handle.stop("research timeout");
-			resolve({
+	cfg: ResearchWatchdogSettings,
+	pollMs = 5_000,
+): Promise<SupervisedResult> {
+	const startedAt = Date.now();
+	let steered = false;
+	let settled = false;
+
+	return new Promise<SupervisedResult>((resolve) => {
+		let timer: ReturnType<typeof setInterval> | undefined;
+		const finish = (result: SupervisedResult): void => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearInterval(timer);
+			resolve(result);
+		};
+
+		handle.result().then(
+			(result) => finish(result),
+			(err) =>
+				finish({
+					status: "failed",
+					error: err instanceof Error ? err.message : String(err),
+				}),
+		);
+
+		const salvageAndStop = async (why: string): Promise<void> => {
+			// Read partial text BEFORE stopping — stop kills the child process.
+			const partial = await handle.partialText?.().catch(() => undefined);
+			if (settled) return; // the run settled while we were salvaging
+			handle.stop(why);
+			finish({
 				status: "stopped",
-				error: `timed out after ${Math.round(timeoutMs / 1000)}s`,
+				error: why,
+				...(partial?.trim() ? { partial: partial.trim() } : {}),
 			});
-		}, timeoutMs);
+		};
+
+		timer = setInterval(() => {
+			if (settled) return;
+			const now = Date.now();
+			const lastEvent = handle.lastEventAt?.() ?? startedAt;
+			if (now - lastEvent > cfg.stallMs) {
+				void salvageAndStop(
+					`stalled: no activity for ${Math.round((now - lastEvent) / 1000)}s`,
+				);
+				return;
+			}
+			if (now - startedAt > cfg.hardMs) {
+				void salvageAndStop(
+					`hard cap: still running after ${Math.round(cfg.hardMs / 1000)}s`,
+				);
+				return;
+			}
+			if (!steered && now - startedAt > cfg.softMs) {
+				steered = true;
+				handle.steer(WRAP_UP_STEER);
+			}
+		}, pollMs);
 		timer.unref?.();
 	});
-	try {
-		return await Promise.race([handle.result(), timeout]);
-	} catch (err) {
-		return {
-			status: "failed",
-			error: err instanceof Error ? err.message : String(err),
-		};
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
 }

@@ -452,10 +452,10 @@ export class ConfigMenuComponent implements Component, Focusable {
 
 	/**
 	 * Bound the rendered box to a fraction of the live terminal height, keeping
-	 * the active row visible. The overlay host clips anything past its maxHeight
-	 * with a plain top-slice (no scrolling), so the component must window itself
-	 * or rows fall off-screen and become unselectable. We stay comfortably under
-	 * the overlay's maxHeight so our own window is always the binding constraint.
+	 * the active row visible. The menu mounts in place of the editor (like core's
+	 * /settings), so an unbounded dynamic profile list would grow past the screen
+	 * and push rows out of reach. Window the content to ~60% of the terminal so
+	 * the menu stays a panel above the chat rather than swallowing it.
 	 *
 	 * Layout is [top border, ...content..., help, bottom border]; the top border
 	 * and the trailing help + bottom border stay pinned while the content region
@@ -464,7 +464,6 @@ export class ConfigMenuComponent implements Component, Focusable {
 	private windowLines(lines: string[], line: (s: string) => string): string[] {
 		const rows = this.viewportRows();
 		if (!Number.isFinite(rows)) return lines;
-		// Match the overlay's anchor headroom: keep well under maxHeight ("80%").
 		const budget = Math.max(12, Math.floor(rows * 0.6));
 		if (lines.length <= budget) return lines;
 
@@ -1369,6 +1368,9 @@ export function ensureDefaultProfile(ctx: ExtensionContext): void {
 export function showConfigMenu(ctx: ExtensionContext): void {
 	ensureDefaultProfile(ctx);
 	const palette = paletteFromTheme(ctx.ui.theme);
+	// No options → pi mounts the component in place of the editor (editorContainer
+	// swap), exactly like core's /settings selector. The component self-windows to
+	// the live terminal height so its dynamic profile list never overflows.
 	ctx.ui.custom(
 		(tui, _theme, _keybindings, done) =>
 			new ConfigMenuComponent(
@@ -1377,14 +1379,6 @@ export function showConfigMenu(ctx: ExtensionContext): void {
 				() => done(undefined),
 				() => tui.terminal.rows,
 			),
-		{
-			overlay: true,
-			overlayOptions: {
-				anchor: "bottom-center",
-				width: "100%",
-				maxHeight: "80%",
-			},
-		},
 	);
 }
 

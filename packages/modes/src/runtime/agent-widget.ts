@@ -135,12 +135,18 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	const rows: Row[] = [];
 	const inputTokens: string[] = [];
 	const outputTokens: string[] = [];
+	const noUsage: boolean[] = [];
 	for (const [key, agent] of agents) {
 		if (!ACTIVE_STATUSES.has(agent.status)) continue;
 		const [deliverable = "", name = key] = key.split("/");
 		const status = agent.status;
 		inputTokens.push(formatTokens(agent.tokens.input));
 		outputTokens.push(formatTokens(agent.tokens.output));
+		noUsage.push(
+			agent.tokens.input === 0 &&
+				agent.tokens.output === 0 &&
+				agent.tokens.turns > 0,
+		);
 		rows.push({
 			DELIV: deliverable,
 			AGENT: clip(name, NAME_CAP),
@@ -156,11 +162,15 @@ export function buildAgentTable(input: AgentTableInput): string[] {
 	}
 	if (rows.length === 0) return [];
 
-	// TOKENS aligns its in/out halves on the "/" across rows.
+	// TOKENS aligns its in/out halves on the "/" across rows. "0 / 0" after
+	// real turns means the provider reports no usage — render "–" instead of
+	// a plausible-looking zero count.
 	const inWidth = Math.max(...inputTokens.map((t) => t.length));
 	const outWidth = Math.max(...outputTokens.map((t) => t.length));
 	rows.forEach((row, i) => {
-		row.TOKENS = `${inputTokens[i].padStart(inWidth)} / ${outputTokens[i].padStart(outWidth)}`;
+		row.TOKENS = noUsage[i]
+			? "–"
+			: `${inputTokens[i].padStart(inWidth)} / ${outputTokens[i].padStart(outWidth)}`;
 	});
 
 	// ── Fit columns: DELIVERABLE flexes to fill; drop CACHE then ELAPSED when

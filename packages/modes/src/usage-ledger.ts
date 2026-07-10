@@ -49,6 +49,34 @@ export function incrementTurns(prev: TokenSnapshot): TokenSnapshot {
 	return { ...prev, turns: prev.turns + 1 };
 }
 
+const num = (n: number | undefined): number =>
+	typeof n === "number" && Number.isFinite(n) ? n : 0;
+
+/**
+ * Coerce a possibly-partial snapshot into a complete one. Callers (the
+ * execution adapter's spawn-time state, test fakes) legitimately hand over
+ * `{input, output, turns}` — summing the missing fields as `undefined`
+ * poisoned the footer totals into NaN ("CH NaN%", phantom "↑0 ↓0").
+ */
+export function normalizeSnapshot(s: Partial<TokenSnapshot>): TokenSnapshot {
+	const input = num(s.input);
+	const output = num(s.output);
+	const cacheRead = num(s.cacheRead);
+	const cacheWrite = num(s.cacheWrite);
+	return {
+		input,
+		output,
+		cacheRead,
+		cacheWrite,
+		totalTokens:
+			typeof s.totalTokens === "number" && Number.isFinite(s.totalTokens)
+				? s.totalTokens
+				: input + output,
+		cost: num(s.cost),
+		turns: num(s.turns),
+	};
+}
+
 /**
  * Central usage ledger (usage.v1). Every source records its cumulative
  * snapshot; `snapshot()` aggregates them so cost/tokens are attributable.
@@ -56,8 +84,8 @@ export function incrementTurns(prev: TokenSnapshot): TokenSnapshot {
 export class UsageLedger implements UsageLedgerV1 {
 	private bySource = new Map<string, TokenSnapshot>();
 
-	record(source: UsageSource, snapshot: TokenSnapshot): void {
-		this.bySource.set(usageSourceKey(source), snapshot);
+	record(source: UsageSource, snapshot: Partial<TokenSnapshot>): void {
+		this.bySource.set(usageSourceKey(source), normalizeSnapshot(snapshot));
 	}
 
 	/** Fold a per-turn delta into a source's snapshot (counts as one turn).

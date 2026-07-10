@@ -246,9 +246,16 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 			if (event.effort) parts.push(formatEffort(event.effort, event.adaptive));
 			if (event.commits?.length)
 				parts.push(plural(event.commits.length, "commit"));
-			parts.push(`${k(t.input)}/${k(t.output)} tok`);
-			if (event.cacheRatio !== undefined)
-				parts.push(`cache ${Math.round(event.cacheRatio * 100)}%`);
+			// Zero tokens across real turns = the provider reported no usage
+			// (e.g. a gateway that drops streaming usage) — say so instead of
+			// rendering a plausible-looking "0/0 tok".
+			if (t.input === 0 && t.output === 0 && t.turns > 0) {
+				parts.push("no usage reported");
+			} else {
+				parts.push(`${k(t.input)}/${k(t.output)} tok`);
+				if (event.cacheRatio !== undefined)
+					parts.push(`cache ${Math.round(event.cacheRatio * 100)}%`);
+			}
 			parts.push(`${t.turns} turns`);
 			return `↳ ${parts.join(" · ")}`;
 		}

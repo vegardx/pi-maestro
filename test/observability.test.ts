@@ -247,3 +247,37 @@ describe("execution adapter observability", () => {
 		expect(done?.agent).toBe("deliverable-one/worker");
 	});
 });
+
+describe("UsageLedger snapshot normalization", () => {
+	it("partial snapshots (spawn-time {input,output,turns}) never poison totals into NaN", async () => {
+		const { UsageLedger } = await import(
+			"../packages/modes/src/usage-ledger.js"
+		);
+		const ledger = new UsageLedger();
+		// The execution adapter reports exactly this shape at spawn — the
+		// missing cacheRead/totalTokens/cost summed as undefined → NaN, which
+		// rendered as "CH NaN%" and a phantom "↑0 ↓0" in the footer.
+		ledger.record({ kind: "agent", id: "g/worker" }, {
+			input: 0,
+			output: 0,
+			turns: 0,
+		} as never);
+		const { totals } = ledger.snapshot();
+		expect(totals.totalTokens).toBe(0);
+		expect(Number.isNaN(totals.cacheRead)).toBe(false);
+		expect(Number.isNaN(totals.cost)).toBe(false);
+	});
+
+	it("computes totalTokens when the partial omits it", async () => {
+		const { UsageLedger } = await import(
+			"../packages/modes/src/usage-ledger.js"
+		);
+		const ledger = new UsageLedger();
+		ledger.record({ kind: "agent", id: "g/worker" }, {
+			input: 100,
+			output: 50,
+			turns: 2,
+		} as never);
+		expect(ledger.snapshot().totals.totalTokens).toBe(150);
+	});
+});

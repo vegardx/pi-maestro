@@ -437,3 +437,32 @@ describe("syncAgentWidget", () => {
 		clearAgentWidget(rt as any, ctx as any);
 	});
 });
+
+describe("no-usage providers", () => {
+	it("renders – instead of 0 / 0 once turns exist without tokens", () => {
+		const lines = buildAgentTable({
+			agents: new Map([
+				["arch/worker", agent("working", { elapsedMs: 60_000 })], // turns: 1, 0/0
+			]),
+			width: 100,
+			now: NOW,
+		});
+		const row = lines[1];
+		expect(row).toContain("–");
+		expect(row).not.toContain("0 / 0");
+	});
+
+	it("keeps real zero-token display for agents that have not turned yet", () => {
+		const fresh = {
+			status: "working",
+			startedAt: NOW,
+			tokens: { input: 0, output: 0, turns: 0 },
+		};
+		const lines = buildAgentTable({
+			agents: new Map([["arch/worker", fresh]]),
+			width: 100,
+			now: NOW,
+		});
+		expect(lines[1]).toContain("0 / 0");
+	});
+});

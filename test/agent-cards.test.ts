@@ -443,3 +443,23 @@ describe("sendAgentEvent", () => {
 		expect(sent[0].options).toEqual({ triggerTurn: false });
 	});
 });
+
+describe("done card with a no-usage provider", () => {
+	it('says "no usage reported" instead of 0/0 tok', async () => {
+		const { buildStatsTrailer } = await import(
+			"../packages/modes/src/runtime/agent-cards.js"
+		);
+		const trailer = buildStatsTrailer({
+			kind: "done",
+			agentKey: "arch/worker",
+			deliverableTitle: "Arch",
+			elapsedMs: 60_000,
+			tokens: { input: 0, output: 0, turns: 38 },
+			model: "gpt-5.6-sol",
+			effort: "high",
+		} as never);
+		expect(trailer).toContain("no usage reported");
+		expect(trailer).toContain("38 turns");
+		expect(trailer).not.toContain("0/0 tok");
+	});
+});

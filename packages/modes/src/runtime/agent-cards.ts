@@ -134,10 +134,18 @@ export function buildCardHeader(event: AgentCardEvent): string {
 				? `◇ verify · ${shortQuestion(event.question)}`
 				: `◇ research (${event.research}) · ${shortQuestion(event.question)}`;
 		case "research-done": {
-			const noun = event.research === "verify" ? "verify" : "research";
+			if (event.research === "verify") {
+				// A block verdict is a successful verification that FOUND problems
+				// — "failed" is reserved for the verifier itself erroring.
+				if (event.ok)
+					return `✓ verify · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`;
+				return event.report
+					? `✗ verify · ${shortQuestion(event.question)} · verdict: block`
+					: `! verify errored · ${shortQuestion(event.question)}`;
+			}
 			return event.ok
-				? `✓ ${noun} · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
-				: `✗ ${noun} failed · ${shortQuestion(event.question)}`;
+				? `✓ research · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
+				: `✗ research failed · ${shortQuestion(event.question)}`;
 		}
 		case "spawn":
 			return `◆ ${event.deliverableTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
@@ -191,13 +199,15 @@ export function buildCardBody(
 			// Spawn stays minimal: header line only, no body.
 			return [];
 		case "research-done": {
-			if (!event.ok) return event.error ? [event.error] : [];
-			if (!event.report) return [];
+			// A not-ok result WITH a report is a verify block verdict — the
+			// findings are the whole point; never render an evidence-free card.
+			if (!event.report) return event.error ? [event.error] : [];
 			const lines = [firstParagraph(event.report)];
 			if (expanded) {
 				const rest = restOfSummary(event.report);
 				if (rest) lines.push("", rest);
 			}
+			if (!event.ok && event.error) lines.push("", event.error);
 			return lines;
 		}
 		case "done": {

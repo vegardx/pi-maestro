@@ -463,3 +463,44 @@ describe("done card with a no-usage provider", () => {
 		expect(trailer).not.toContain("0/0 tok");
 	});
 });
+
+describe("verify done cards", () => {
+	it("a block verdict shows the verdict and the findings, not 'failed'", async () => {
+		const { buildCardHeader, buildCardBody } = await import(
+			"../packages/modes/src/runtime/agent-cards.js"
+		);
+		const event = {
+			kind: "research-done",
+			question: "verify sdk-foundation",
+			research: "verify",
+			ok: false,
+			durationMs: 60_000,
+			report:
+				"Activation is sequential and start() double-activates.\nVERDICT: block",
+		} as never;
+		expect(buildCardHeader(event)).toBe(
+			"✗ verify · verify sdk-foundation · verdict: block",
+		);
+		expect(buildCardBody(event, false)[0]).toContain(
+			"Activation is sequential",
+		);
+	});
+
+	it("a verifier error (no report) says errored and shows the error", async () => {
+		const { buildCardHeader, buildCardBody } = await import(
+			"../packages/modes/src/runtime/agent-cards.js"
+		);
+		const event = {
+			kind: "research-done",
+			question: "verify execution-plugin",
+			research: "verify",
+			ok: false,
+			durationMs: 1000,
+			error: "verifier succeeded with no report",
+		} as never;
+		expect(buildCardHeader(event)).toContain("! verify errored");
+		expect(buildCardBody(event, false)).toEqual([
+			"verifier succeeded with no report",
+		]);
+	});
+});

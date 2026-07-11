@@ -74,6 +74,8 @@ export class AgentBridge {
 				timer: ReturnType<typeof setTimeout>;
 		  }
 		| undefined;
+	/** Serializes planMutate calls — one in flight, the rest queue behind it. */
+	private mutateChain: Promise<unknown> = Promise.resolve();
 	private pendingPanelRead:
 		| {
 				id: string;
@@ -253,7 +255,13 @@ export class AgentBridge {
 		});
 	}
 
-	/** Request a plan mutation from maestro. Times out with an error result. */
+	/**
+	 * Request a plan mutation from maestro. Calls SERIALIZE: a model turn often
+	 * toggles several tasks as parallel tool calls, and rejecting the overlap
+	 * with "busy" silently dropped all but one — task state drifted from the
+	 * real work until someone reconciled by hand. Times out with an error
+	 * result.
+	 */
 	planMutate(
 		action: "toggleTask" | "addTask" | "updateTask",
 		deliverableId: string,
@@ -264,14 +272,26 @@ export class AgentBridge {
 			kind?: WorkItemKind;
 		},
 	): Promise<PlanMutateResultMessage> {
-		if (this.pendingPlanMutate) {
-			return Promise.resolve({
-				type: "planMutateResult",
-				id: "",
-				success: false,
-				error: "busy",
-			});
-		}
+		const run = this.mutateChain.then(() =>
+			this.planMutateNow(action, deliverableId, params),
+		);
+		this.mutateChain = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
+	private planMutateNow(
+		action: "toggleTask" | "addTask" | "updateTask",
+		deliverableId: string,
+		params: {
+			taskId?: string;
+			title?: string;
+			body?: string;
+			kind?: WorkItemKind;
+		},
+	): Promise<PlanMutateResultMessage> {
 		const id = randomUUID();
 		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		this.client.send({ type: "planMutate", id, action, deliverableId, params });

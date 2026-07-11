@@ -36,7 +36,10 @@ export interface RunPanelDeps {
 	readonly timeoutMs?: number;
 }
 
-const DEFAULT_TIMEOUT_MS = 300_000;
+// Deep reviews on slow gateway routes routinely take 4–6 minutes; a 5-minute
+// cap killed thorough required reviewers mid-read and blocked ship with
+// "timed out" instead of a verdict (radicalai dogfood, 2026-07-11).
+const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** Spawn every panel entry concurrently and collect normalized verdicts. */
 export async function runReviewPanel(
@@ -78,10 +81,14 @@ async function runOne(
 			timeoutMs,
 		);
 		let report = result.summary?.trim() ?? "";
-		if (result.status === "succeeded" && !report) {
-			// Some gateway models occasionally end a run with no final text. A
-			// silently empty REQUIRED reviewer would hold the ship gate with
-			// nothing to show the human — retry once before giving up.
+		// One retry for the two transient failure modes: a gateway model ending
+		// the run with no final text, and a reviewer killed by the timeout. A
+		// silently missing REQUIRED verdict holds the ship gate with nothing to
+		// show the human — a second attempt is cheap next to that.
+		const transient =
+			(result.status === "succeeded" && !report) ||
+			(result.status === "failed" && result.error === "timed out");
+		if (transient) {
 			result = await settle(
 				deps.subagents.spawn(REVIEW_KICKOFF, profile),
 				timeoutMs,

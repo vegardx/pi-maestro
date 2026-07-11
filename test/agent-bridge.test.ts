@@ -418,3 +418,65 @@ describe("AgentBridge", () => {
 		expect(agentId).toBe("agent-1");
 	});
 });
+
+describe("AgentBridge planMutate serialization", () => {
+	let server: MaestroRpcServer;
+	let socketPath: string;
+	let tmpDir: string;
+	let bridge: AgentBridge;
+	const mockPi = { sendUserMessage: vi.fn() };
+	const mockCtx = { shutdown: vi.fn(), ui: { notify: vi.fn() } };
+
+	beforeEach(async () => {
+		tmpDir = mkdtempSync(join(tmpdir(), "maestro-bridge-mutate-"));
+		socketPath = join(tmpDir, "maestro.sock");
+		server = new MaestroRpcServer();
+		await server.listen(socketPath);
+	});
+
+	afterEach(async () => {
+		bridge?.destroy();
+		await server.close();
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("queues concurrent toggles instead of rejecting with busy", async () => {
+		// A model turn toggles several tasks as PARALLEL tool calls; the old
+		// single-flight guard accepted one and returned "busy" for the rest —
+		// task state silently drifted from the real work (radicalai dogfood).
+		bridge = new AgentBridge({
+			pi: mockPi as any,
+			socketPath,
+			agentId: "worker-1",
+		});
+		const connected = waitForEvent(server, "connected");
+		bridge.start(mockCtx as any);
+		await connected;
+
+		const seen: any[] = [];
+		server.on("message", (_id, msg: any) => {
+			if (msg.type !== "planMutate") return;
+			seen.push(msg);
+			// Answer each request after a beat, like the real adapter.
+			setTimeout(() => {
+				server.send("worker-1", {
+					type: "planMutateResult",
+					id: msg.id,
+					success: true,
+					taskId: msg.params.taskId,
+				});
+			}, 20);
+		});
+
+		const results = await Promise.all([
+			bridge.planMutate("toggleTask", "d1", { taskId: "t1" }),
+			bridge.planMutate("toggleTask", "d1", { taskId: "t2" }),
+			bridge.planMutate("toggleTask", "d1", { taskId: "t3" }),
+		]);
+
+		expect(results.map((r) => r.success)).toEqual([true, true, true]);
+		expect(results.every((r) => r.error === undefined)).toBe(true);
+		// All three reached the maestro, one at a time.
+		expect(seen.map((m) => m.params.taskId).sort()).toEqual(["t1", "t2", "t3"]);
+	});
+});

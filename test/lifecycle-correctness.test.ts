@@ -3,7 +3,7 @@
 // tick serialization, and pollSessions overlap/summarizing guards — driven
 // over a real RPC socket with a stub tmux, like observability.test.ts.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -454,5 +454,83 @@ describe("execution adapter — lifecycle correctness", () => {
 		// Restore a benign stub so destroy() does not hang on hasSession.
 		worker.status = "working";
 		tmux.hasSessionImpl = async () => false;
+	});
+});
+
+describe("crash-cap fail fires once", () => {
+	let tmpDir: string;
+	let engine: PlanEngine;
+	let tmux: ReturnType<typeof stubTmux>;
+	let adapter: ExecutionAdapter | undefined;
+	let prevSessionDir: string | undefined;
+	let prevAgentDir: string | undefined;
+
+	beforeEach(() => {
+		tmpDir = mkdtempSync(join(tmpdir(), "lifecycle-failspam-"));
+		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
+		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
+		prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(tmpDir, "empty-agent");
+		engine = PlanEngine.create(memStore(), {
+			slug: "failspam",
+			title: "Failspam",
+			repoPath: tmpDir,
+		});
+		tmux = stubTmux();
+	});
+
+	afterEach(async () => {
+		await adapter?.destroy();
+		adapter = undefined;
+		if (prevSessionDir === undefined)
+			delete process.env.PI_CODING_AGENT_SESSION_DIR;
+		else process.env.PI_CODING_AGENT_SESSION_DIR = prevSessionDir;
+		if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("a crash-capped worker fails ONCE — later polls skip it", async () => {
+		// The radicalai run logged ~30 identical failed events at 5s cadence:
+		// the poll's skip-list did not include status "failed", so the same
+		// dead session re-failed/re-blocked/re-carded forever.
+		engine.addDeliverable({ title: "Doc", workerMode: "full" });
+		engine.addWorkItem("doc", { title: "write docs" });
+		engine.setDeliverableStatus("doc", "active");
+		engine.updateDeliverable("doc", { worktreePath: tmpDir });
+		adapter = new ExecutionAdapter({
+			engine,
+			ctx: { cwd: tmpDir } as ExtensionContext,
+			extensionPath: "/nonexistent/ext",
+			defaultBranch: "main",
+			planDir: join(tmpDir, "plan"),
+			tmux,
+			token: TOKEN,
+			socketPath: join(tmpDir, "maestro.sock"),
+			onPlanChanged: () => {},
+		});
+		await adapter.start();
+		adapter.getExecutor().unblockDeliverable("doc");
+		await adapter.tick();
+		const executor = adapter.getExecutor();
+		expect(executor.getAgentState("doc", "worker")!.status).toBe("working");
+
+		// Session is gone and the respawn budget is spent.
+		tmux.hasSessionImpl = async () => false;
+		(adapter as unknown as { respawnCount: Map<string, number> }).respawnCount =
+			new Map([["doc/worker", 2]]);
+		const poll = () =>
+			(adapter as unknown as { pollSessions(): Promise<void> }).pollSessions();
+
+		await poll();
+		expect(executor.getAgentState("doc", "worker")!.status).toBe("failed");
+		await poll();
+		await poll();
+
+		const events = readFileSync(join(tmpDir, "plan", "events.jsonl"), "utf-8")
+			.trim()
+			.split("\n")
+			.map((l) => JSON.parse(l) as { event: string });
+		expect(events.filter((e) => e.event === "failed")).toHaveLength(1);
 	});
 });

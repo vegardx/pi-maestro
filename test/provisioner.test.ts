@@ -355,9 +355,10 @@ describe("buildSpawnSpec", () => {
 		});
 		expect(spec.command).toContain('do "this" && rm -rf $HOME; `boom`');
 		expect(spec.command).toContain("/ext/path with spaces/x.ts");
-		expect(spec.command.at(-1)).toBe('do "this" && rm -rf $HOME; `boom`');
+		const argv = spec.command as string[];
+		expect(argv.at(-1)).toBe('do "this" && rm -rf $HOME; `boom`');
 		// No element picked up shell quoting.
-		expect(spec.command.some((arg) => arg.startsWith('"'))).toBe(false);
+		expect(argv.some((arg) => arg.startsWith('"'))).toBe(false);
 	});
 
 	it("omits --model/--thinking by default (session-pinned)", () => {
@@ -412,5 +413,52 @@ describe("buildSpawnSpec", () => {
 			env: { ...baseOpts.env, agentDir: "/custom/agent" },
 		});
 		expect(spec.env.PI_CODING_AGENT_DIR).toBe("/custom/agent");
+	});
+});
+
+describe("buildSpawnSpec crash capture", () => {
+	const baseOpts = {
+		sessionName: "maestro-g1-worker",
+		worktreePath: "/work/tree",
+		sessionFile: "/plans/slug/sessions/g1-worker.jsonl",
+		extensionPaths: ["/ext/modes.ts"],
+		env: {
+			sock: "/tmp/maestro.sock",
+			agentId: "g1/worker",
+			agentMode: "full",
+			sessionDir: "/plans/slug/sessions",
+			token: "tok",
+		},
+		kickoffMessage: "Implement the tasks in your seed.",
+	};
+
+	it("wraps pi in a pane-capture shell when crashFile is set", () => {
+		const spec = buildSpawnSpec({
+			...baseOpts,
+			crashFile: "/plans/slug/crashes/maestro-g1-worker.log",
+		});
+		expect(typeof spec.command).toBe("string");
+		const cmd = spec.command as string;
+		// pi argv is single-quoted; the wrapper captures the pane and preserves
+		// pi's exit code so hasSession-based crash detection still works.
+		expect(cmd).toContain("'pi' '-ne'");
+		expect(cmd).toContain('tmux capture-pane -p -S -120 -t "$TMUX_PANE"');
+		expect(cmd).toContain("'/plans/slug/crashes/maestro-g1-worker.log'");
+		expect(cmd).toContain("[pi exited code=$ec]");
+		expect(cmd.trim().endsWith("exit $ec")).toBe(true);
+	});
+
+	it("quotes hazardous kickoff text inside the wrapper", () => {
+		const spec = buildSpawnSpec({
+			...baseOpts,
+			crashFile: "/plans/slug/crashes/x.log",
+			kickoffMessage: "don't `boom` && $HOME",
+		});
+		const cmd = spec.command as string;
+		expect(cmd).toContain(`'don'\\''t \`boom\` && $HOME'`);
+	});
+
+	it("stays a plain argv array without crashFile", () => {
+		expect(Array.isArray(buildSpawnSpec(baseOpts).command)).toBe(true);
 	});
 });

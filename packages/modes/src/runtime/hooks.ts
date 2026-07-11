@@ -489,6 +489,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		}
 	});
 
+	// Dedupe snapshots per error text: the maestro poking around after a block
+	// (wrong-cwd reads, missing scripts) produced a barrage of identical loud
+	// cards. The first occurrence displays; repeats persist silently — the
+	// recovery value is in the transcript, not in re-alarming the human.
+	const snapshotSeen = new Set<string>();
 	pi.on("tool_execution_end", (event, ctx) => {
 		if (!event.isError || !rt.engine) return;
 		// Benign tool misses during planning/hacking are not crashes — snapshots
@@ -504,11 +509,16 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			},
 			rt.now,
 		);
+		const seen = snapshotSeen.has(snapshot.error);
+		if (!seen) {
+			snapshotSeen.add(snapshot.error);
+			if (snapshotSeen.size > 200) snapshotSeen.clear();
+		}
 		pi.sendMessage(
 			{
 				customType: "maestro.crash.snapshot",
 				content: `Maestro captured a tool failure: ${snapshot.error}`,
-				display: true,
+				display: !seen,
 				details: snapshot,
 			},
 			{ triggerTurn: false },

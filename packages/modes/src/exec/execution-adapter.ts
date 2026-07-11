@@ -358,7 +358,7 @@ export class ExecutionAdapter {
 					// Repo-backed workers also get the repo's commit policy — a bare
 					// "Add …" subject in a semantic-release repo publishes nothing.
 					const scratch = deliverableWorkspace(deliverable) === "scratch";
-					const policyNote =
+					const commitNote =
 						isWorker && !scratch
 							? (commitPolicyInstruction(
 									detectCommitPolicy(
@@ -366,6 +366,23 @@ export class ExecutionAdapter {
 									),
 								) ?? undefined)
 							: undefined;
+					// A fresh worktree shares NO node_modules with the main checkout
+					// — workers burned a cycle discovering "biome: command not found"
+					// before figuring out to install. Say it up front.
+					const needsInstall =
+						isWorker &&
+						!scratch &&
+						existsSync(join(cwd, "package.json")) &&
+						!existsSync(join(cwd, "node_modules"));
+					const setupNote = needsInstall
+						? "This is a fresh git worktree: dependencies are NOT installed " +
+							"(node_modules is not shared with the main checkout). Run the " +
+							"repo's install (bun install / npm ci / pnpm install — match " +
+							"the lockfile) before running any checks or tests."
+						: undefined;
+					const policyNote = [commitNote, setupNote]
+						.filter(Boolean)
+						.join("\n\n");
 					const seed = buildSeed({
 						plan: this.engine.get(),
 						deliverable,
@@ -429,6 +446,9 @@ export class ExecutionAdapter {
 					});
 				}
 
+				try {
+					mkdirSync(join(this.opts.planDir, "crashes"), { recursive: true });
+				} catch {}
 				const spec = buildSpawnSpec({
 					sessionName,
 					worktreePath: cwd,
@@ -443,6 +463,7 @@ export class ExecutionAdapter {
 						token: this.token,
 					},
 					kickoffMessage,
+					crashFile: this.crashFileFor(sessionName),
 					...(modelOverride ? { model: modelOverride } : {}),
 					...(thinkingOverride ? { thinking: thinkingOverride } : {}),
 				});
@@ -1423,6 +1444,25 @@ export class ExecutionAdapter {
 		this.rpcServer.close();
 	}
 
+	/** Where a session's dying screen is captured (see buildSpawnSpec). */
+	private crashFileFor(sessionName: string): string {
+		return join(this.opts.planDir, "crashes", `${sessionName}.log`);
+	}
+
+	/** The captured final screen of a dead session, ANSI-stripped and clipped. */
+	private readCrashTail(sessionName: string): string | undefined {
+		try {
+			const raw = readFileSync(this.crashFileFor(sessionName), "utf-8");
+			const text = raw
+				// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escapes
+				.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(\x07|\x1b\\)/g, "")
+				.trim();
+			return text ? text.slice(-600) : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	// --- Poll timer: detect dead sessions ---
 
 	private async pollSessions(): Promise<void> {
@@ -1435,8 +1475,10 @@ export class ExecutionAdapter {
 				const [deliverableId, agentNamePart] = agentKey.split("/");
 				if (!deliverableId || !agentNamePart) continue;
 
-				// Skip agents already done or mid-summarize (their session is
-				// being torn down deliberately — not a crash).
+				// Skip agents already done, mid-summarize (session torn down
+				// deliberately — not a crash), or FAILED: a crash-capped agent's
+				// session stays gone, and re-entering the fail branch every 5s
+				// re-failed/re-blocked/re-carded the same agent forever.
 				const states = this.executor.getStates();
 				const deliverableState = states.get(deliverableId);
 				if (!deliverableState) continue;
@@ -1444,7 +1486,8 @@ export class ExecutionAdapter {
 				if (
 					!agentState ||
 					agentState.status === "done" ||
-					agentState.status === "summarizing"
+					agentState.status === "summarizing" ||
+					agentState.status === "failed"
 				) {
 					continue;
 				}
@@ -1476,9 +1519,11 @@ export class ExecutionAdapter {
 					if (hasRemainingTasks && count < 2) {
 						// Respawn: rebuild session and try again
 						this.respawnCount.set(agentKey, count + 1);
+						const lastOutput = this.readCrashTail(sessionName);
 						this.logEvent("crash-respawn", {
 							agent: agentKey,
 							attempt: count + 1,
+							...(lastOutput ? { lastOutput } : {}),
 						});
 						try {
 							await this.executor.respawnAgent(deliverableId, agentNamePart);
@@ -1491,7 +1536,11 @@ export class ExecutionAdapter {
 						this.completeAgent(deliverableId, agentNamePart);
 					} else {
 						// Respawn cap with tasks outstanding: a crash, not a
-						// completion. Fail the agent and block the deliverable for the user.
+						// completion. Fail the agent ONCE and block the deliverable —
+						// dropping the session from the poll map guarantees this
+						// branch can't re-fire on the next interval.
+						this.sessionNames.delete(agentKey);
+						const lastOutput = this.readCrashTail(sessionName);
 						this.executor.markAgentFailed(
 							deliverableId,
 							agentNamePart,
@@ -1499,9 +1548,13 @@ export class ExecutionAdapter {
 						);
 						this.executor.blockDeliverable(
 							deliverableId,
-							`agent ${agentNamePart} crashed repeatedly — inspect and /retry`,
+							`agent ${agentNamePart} crashed repeatedly — see ${this.crashFileFor(sessionName)}, then /retry`,
 						);
-						this.logEvent("failed", { agent: agentKey, respawns: count });
+						this.logEvent("failed", {
+							agent: agentKey,
+							respawns: count,
+							...(lastOutput ? { lastOutput } : {}),
+						});
 						this.emitEvent({
 							kind: "failed",
 							agentKey,

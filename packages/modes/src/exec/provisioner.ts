@@ -330,14 +330,26 @@ export interface BuildSpawnSpecOpts {
 	model?: string;
 	/** Explicit thinking/effort level. Omitted inherits the session default. */
 	thinking?: string;
+	/**
+	 * When set, pi runs inside a shell wrapper that — after pi exits for ANY
+	 * reason — captures the final pane content plus exit code to this file
+	 * before the tmux session dies. Without it a crashing worker takes its
+	 * stack trace to the grave: the poll only ever sees "session gone".
+	 */
+	crashFile?: string;
 }
 
 export interface SpawnSpec {
 	sessionName: string;
 	cwd: string;
-	/** argv array — never joined into a shell string. */
-	command: string[];
+	/** argv array, or a shell string when the crash-capture wrapper is on. */
+	command: string[] | string;
 	env: Record<string, string>;
+}
+
+/** Single-quote a token for the crash-capture shell wrapper. */
+function shellEscape(token: string): string {
+	return `'${token.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -384,10 +396,20 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 	if (process.env.PATH) env.PATH = process.env.PATH;
 	if (process.env.HOME) env.HOME = process.env.HOME;
 
+	// Crash capture: run pi under a wrapper so its dying screen (stack trace,
+	// provider error, OOM message) survives the session. capture-pane runs
+	// while the shell still owns the pane — the last window before tmux
+	// reaps it.
+	const wrapped = opts.crashFile
+		? `${command.map(shellEscape).join(" ")}; ec=$?; ` +
+			`tmux capture-pane -p -S -120 -t "$TMUX_PANE" > ${shellEscape(opts.crashFile)} 2>/dev/null; ` +
+			`echo "[pi exited code=$ec]" >> ${shellEscape(opts.crashFile)}; exit $ec`
+		: undefined;
+
 	return {
 		sessionName: opts.sessionName,
 		cwd: opts.worktreePath,
-		command,
+		command: wrapped ?? command,
 		env,
 	};
 }

@@ -63,8 +63,9 @@ export function researchTableAgents(
 	const rows = new Map<string, AgentTableAgent>();
 	for (const run of runs.values()) {
 		if (run.status !== "running") continue;
-		let key = `research/${run.label}`;
-		for (let n = 2; rows.has(key); n++) key = `research/${run.label}-${n}`;
+		const prefix = run.kind === "verify" ? "verify" : "research";
+		let key = `${prefix}/${run.label}`;
+		for (let n = 2; rows.has(key); n++) key = `${prefix}/${run.label}-${n}`;
 		rows.set(key, {
 			status: researchStatus(run),
 			startedAt: run.startedAt,

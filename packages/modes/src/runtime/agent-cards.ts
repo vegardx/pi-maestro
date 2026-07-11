@@ -17,7 +17,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { ExecutionEvent } from "../exec/index.js";
-import type { ResearchKind } from "../research.js";
+import type { ResearchDisplayKind } from "../research.js";
 import { formatEffort } from "./agent-widget.js";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
@@ -27,12 +27,12 @@ export type ResearchCardEvent =
 	| {
 			readonly kind: "research-spawn";
 			readonly question: string;
-			readonly research: ResearchKind;
+			readonly research: ResearchDisplayKind;
 	  }
 	| {
 			readonly kind: "research-done";
 			readonly question: string;
-			readonly research: ResearchKind;
+			readonly research: ResearchDisplayKind;
 			readonly ok: boolean;
 			readonly durationMs: number;
 			/** Report path relative to the plan dir, e.g. "research/03-….md". */
@@ -130,11 +130,15 @@ function shortQuestion(question: string): string {
 export function buildCardHeader(event: AgentCardEvent): string {
 	switch (event.kind) {
 		case "research-spawn":
-			return `◇ research (${event.research}) · ${shortQuestion(event.question)}`;
-		case "research-done":
+			return event.research === "verify"
+				? `◇ verify · ${shortQuestion(event.question)}`
+				: `◇ research (${event.research}) · ${shortQuestion(event.question)}`;
+		case "research-done": {
+			const noun = event.research === "verify" ? "verify" : "research";
 			return event.ok
-				? `✓ research · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
-				: `✗ research failed · ${shortQuestion(event.question)}`;
+				? `✓ ${noun} · ${shortQuestion(event.question)} · ${formatDuration(event.durationMs)}`
+				: `✗ ${noun} failed · ${shortQuestion(event.question)}`;
+		}
 		case "spawn":
 			return `◆ ${event.deliverableTitle} · ${agentRole(event.agentKey)} started${event.resumed ? " (resumed)" : ""}`;
 		case "done":

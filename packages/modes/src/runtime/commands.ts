@@ -10,19 +10,25 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
-import { resolveModelWithin } from "@vegardx/pi-models";
+import { getModelMeta, resolveModelWithin } from "@vegardx/pi-models";
 import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
 import type { PlanEngine } from "../engine.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
+import {
+	renderVerification,
+	runVerification,
+	verifyTargets,
+} from "../exec/verify.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
 import { planPhase } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
+import { sendAgentEvent } from "./agent-cards.js";
 import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
-import { renderAgentsOverview } from "./dashboard.js";
+import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
 import {
 	type Deliverable,
 	type DeliverableId,
@@ -224,6 +230,79 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			"Recover an interrupted execution: audit the plan against reality (worktrees, branches, PRs) and resume interrupted workers from their saved sessions.",
 		handler: (_args: string, ctx: ExtensionCommandContext) =>
 			rt.runRecover(ctx),
+	});
+
+	pi.registerCommand("verify", {
+		description:
+			"Deep-verify started deliverables: read-only subagents read each " +
+			"deliverable's actual diff and judge whether its tasks were genuinely " +
+			"accomplished. /verify [deliverable-id]",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (!rt.engine) {
+				ctx.ui.notify("No active plan.", "warning");
+				return;
+			}
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			if (!subagents) {
+				ctx.ui.notify(
+					"Verify unavailable: the subagents extension is not loaded.",
+					"warning",
+				);
+				return;
+			}
+			const plan = rt.engine.get();
+			const id = args.trim() || undefined;
+			const targets = verifyTargets(plan, id);
+			if (targets.length === 0) {
+				ctx.ui.notify(
+					id
+						? `Nothing to verify for "${id}" — unknown id or not started yet.`
+						: "Nothing to verify — no deliverable has started work.",
+					"info",
+				);
+				return;
+			}
+			const sessionModel = ctx.model
+				? `${ctx.model.provider}/${ctx.model.id}`
+				: undefined;
+			const meta = sessionModel ? getModelMeta(ctx, sessionModel) : undefined;
+			ctx.ui.notify(
+				`Verifying ${targets.length} deliverable(s) — read-only agents are checking the actual diffs…`,
+				"info",
+			);
+			const entries = await runVerification(plan, targets, {
+				spawn: (prompt, profile) => subagents.spawn(prompt, profile),
+				...(meta
+					? { display: { model: meta.shortName, adaptive: meta.adaptive } }
+					: {}),
+				onStarted: (view) => {
+					rt.researchRuns.set(view.id, view);
+					sendAgentEvent(pi, {
+						kind: "research-spawn",
+						question: view.question,
+						research: "verify",
+					});
+					syncAgentWidget(rt, ctx);
+				},
+				onSettled: (view, entry) => {
+					rt.researchRuns.delete(view.id);
+					sendAgentEvent(pi, {
+						kind: "research-done",
+						question: view.question,
+						research: "verify",
+						ok: entry.verdict === "pass",
+						durationMs: Date.now() - view.startedAt,
+						...(entry.report ? { report: entry.report } : {}),
+						...(entry.error ? { error: entry.error } : {}),
+					});
+					syncAgentWidget(rt, ctx);
+				},
+			});
+			const problems = entries.some(
+				(e) => e.verdict === "fail" || e.verdict === "error",
+			);
+			ctx.ui.notify(renderVerification(entries), problems ? "warning" : "info");
+		},
 	});
 
 	pi.registerCommand("retry", {

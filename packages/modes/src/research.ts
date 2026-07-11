@@ -50,6 +50,10 @@ export const RESEARCH_KINDS = [
 ] as const;
 export type ResearchKind = (typeof RESEARCH_KINDS)[number];
 
+/** Kinds a run VIEW can carry — research kinds plus /verify's verifiers,
+ *  which reuse the research widget rows and chat cards. */
+export type ResearchDisplayKind = ResearchKind | "verify";
+
 /** Kinds that run on the `review` tier (cross-model second opinion) at high effort. */
 const REVIEW_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
 
@@ -59,7 +63,7 @@ export interface ResearchRunView {
 	readonly question: string;
 	/** Short slug shown in the AGENT column. */
 	readonly label: string;
-	readonly kind: ResearchKind;
+	readonly kind: ResearchDisplayKind;
 	status: "running" | "succeeded" | "failed" | "stopped";
 	readonly startedAt: number;
 	/** Last-turn token usage, fed from run progress events. */

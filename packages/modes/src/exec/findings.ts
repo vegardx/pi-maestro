@@ -184,6 +184,13 @@ export interface ReviewLedger {
 	/** Fix+verify cycles run against this ledger. */
 	cycle: number;
 	entries: LedgerEntry[];
+	/**
+	 * Panel reviewers that ran this episode and whether they reported. The
+	 * gate needs this independently of the in-memory verdict cache: a
+	 * required reviewer that never reported must hold ship even after a
+	 * maestro restart rehydrates from the plan.
+	 */
+	participants?: Array<{ name: string; ok: boolean }>;
 	updatedAt: string;
 }
 

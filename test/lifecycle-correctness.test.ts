@@ -455,6 +455,279 @@ describe("execution adapter — lifecycle correctness", () => {
 		worker.status = "working";
 		tmux.hasSessionImpl = async () => false;
 	});
+
+	// ── Ledger-based completion: the redesigned loop ────────────────────────
+
+	/** A ledger with one open major finding from required reviewer "sec". */
+	const failingLedger = () => ({
+		round: 1,
+		cycle: 0,
+		entries: [
+			{
+				finding: {
+					id: "sec.1",
+					severity: "major" as const,
+					category: "security",
+					file: "a.ts",
+					actual: "hole",
+				},
+				reviewer: "sec",
+			},
+		],
+		participants: [{ name: "sec", ok: true }],
+		updatedAt: new Date().toISOString(),
+	});
+
+	function gatedDeliverable(title: string, id: string): void {
+		engine.addDeliverable({ title, workerMode: "full" });
+		engine.addWorkItem(id, { title: "implement it" });
+		engine.addSubAgent(id, {
+			name: "sec",
+			persona: "security-audit",
+			kind: "review",
+			required: true,
+		});
+	}
+
+	it("a failing ledger steers a fix cycle instead of killing; a verified one completes", async () => {
+		gatedDeliverable("Ledgered", "ledgered");
+		const adapter = await startAdapter("ledgered");
+		const executor = adapter.getExecutor();
+
+		const steers: string[] = [];
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const received: MaestroMessage[] = [];
+		client.on("message", (msg) => {
+			received.push(msg);
+			if (msg.type === "steer") steers.push(msg.content);
+			if (msg.type === "summarize") {
+				client.send({ type: "summary", id: msg.id, content: "done" });
+			}
+		});
+		client.connect(join(tmpDir, "maestro.sock"), {
+			agentId: "ledgered/worker",
+			role: "agent",
+			token: TOKEN,
+			pid: process.pid,
+		});
+		await until(() => received.some((m) => m.type === "helloAck" && m.ok));
+
+		// Panel round reports a failing ledger; the executor persists it.
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "ledgered",
+			round: 1,
+			roundKind: "panel",
+			verdicts: [
+				{
+					name: "sec",
+					persona: "security-audit",
+					required: true,
+					verdict: "request-changes",
+					ok: true,
+					report: "hole in a.ts\nVERDICT: BLOCK",
+				},
+			],
+			ledger: failingLedger(),
+		});
+		await until(() => engine.get().deliverables[0].reviewLedger?.round === 1);
+
+		// All tasks toggled with a failing gate → a fix-cycle steer, not a kill.
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "ledgered",
+			params: { taskId },
+		});
+		await until(() => steers.length > 0);
+		expect(steers[0]).toContain("sec.1");
+		expect(steers[0]).toContain("fix cycle 1/3");
+		expect(executor.getAgentState("ledgered", "worker")!.status).toBe(
+			"working",
+		);
+
+		// Idling inside the fix window still must not complete it.
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await wait(150);
+		expect(executor.getAgentState("ledgered", "worker")!.status).toBe(
+			"working",
+		);
+
+		// The verification run settles the finding → gate clear → completes.
+		const verified = failingLedger();
+		verified.cycle = 1;
+		(verified.entries[0] as Record<string, unknown>).resolution = {
+			id: "sec.1",
+			status: "fixed",
+			note: "commit abc",
+			at: new Date().toISOString(),
+		};
+		(verified.entries[0] as Record<string, unknown>).check = {
+			id: "sec.1",
+			result: "verified",
+			note: "guard added",
+			at: new Date().toISOString(),
+		};
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "ledgered",
+			round: 2,
+			roundKind: "verification",
+			verdicts: [],
+			ledger: verified,
+		});
+		client.send({ type: "status", status: "idle" });
+		await until(
+			() => executor.getAgentState("ledgered", "worker")!.status === "done",
+		);
+		// The verification round must not wipe the panel round's reports.
+		expect(adapter.reviewerFindings("ledgered").length).toBeGreaterThan(0);
+	});
+
+	it("disputed-only ledgers complete into the visible gate (triage owns them)", async () => {
+		gatedDeliverable("Disputed", "disputed");
+		const adapter = await startAdapter("disputed");
+		const executor = adapter.getExecutor();
+		const { client, ready } = connect("disputed/worker", "done");
+		await ready;
+
+		const ledger = failingLedger();
+		(ledger.entries[0] as Record<string, unknown>).resolution = {
+			id: "sec.1",
+			status: "disputed",
+			note: "unreachable — guarded at entry.ts:41",
+			at: new Date().toISOString(),
+		};
+		(ledger.entries[0] as Record<string, unknown>).disputes = 1;
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "disputed",
+			round: 1,
+			roundKind: "panel",
+			verdicts: [],
+			ledger,
+		});
+		await until(() => engine.get().deliverables[0].reviewLedger !== undefined);
+
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "disputed",
+			params: { taskId },
+		});
+		await until(
+			() => executor.getAgentState("disputed", "worker")!.status === "done",
+		);
+	});
+
+	it("an exhausted fix budget completes into the visible gate", async () => {
+		gatedDeliverable("Spent", "spent");
+		const adapter = await startAdapter("spent");
+		const executor = adapter.getExecutor();
+		const { client, ready } = connect("spent/worker", "done");
+		await ready;
+
+		const ledger = failingLedger();
+		ledger.cycle = 3; // budget (default 3) burned, finding still open
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "spent",
+			round: 4,
+			roundKind: "verification",
+			verdicts: [],
+			ledger,
+		});
+		await until(() => engine.get().deliverables[0].reviewLedger !== undefined);
+
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "spent",
+			params: { taskId },
+		});
+		await until(
+			() => executor.getAgentState("spent", "worker")!.status === "done",
+		);
+	});
+
+	it("send-back resets the fix budget so the rework episode gets real cycles", async () => {
+		gatedDeliverable("Rework", "rework");
+		const adapter = await startAdapter("rework");
+		const executor = adapter.getExecutor();
+		const { client, ready } = connect("rework/worker", "done");
+		await ready;
+
+		// Complete through an exhausted budget (blocked at the ship gate).
+		const ledger = failingLedger();
+		ledger.cycle = 3;
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "rework",
+			round: 1,
+			roundKind: "panel",
+			verdicts: [],
+			ledger,
+		});
+		await until(() => engine.get().deliverables[0].reviewLedger !== undefined);
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "rework",
+			params: { taskId },
+		});
+		await until(
+			() => executor.getAgentState("rework", "worker")!.status === "done",
+		);
+
+		// The human sends it back: the ledger (work list) survives, the cycle
+		// budget resets — the respawned worker gets fix cycles, not a 16-second
+		// re-complete.
+		const sent = await adapter.sendBackToWorker("rework", "fix the findings");
+		expect(sent).toBe(true);
+		const after = engine.get().deliverables[0].reviewLedger;
+		expect(after?.cycle).toBe(0);
+		expect(after?.entries).toHaveLength(1);
+		expect(executor.getAgentState("rework", "worker")!.status).toBe("working");
+	});
+
+	it("a human override waives the ledger findings and opens the gate", async () => {
+		gatedDeliverable("Waived", "waived");
+		const adapter = await startAdapter("waived");
+		engine.setReviewLedger("waived", failingLedger());
+		expect(adapter.deliverableGateSatisfied("waived")).toBe(false);
+
+		adapter.overrideReviewerVerdict(
+			"waived",
+			"sec",
+			"accepted: demo-only path",
+		);
+
+		const waivers = engine.get().deliverables[0].waivers ?? [];
+		expect(waivers.some((w) => w.findingId === "sec.1")).toBe(true);
+		expect(waivers[0]?.claim).toBeTruthy();
+		expect(adapter.deliverableGateSatisfied("waived")).toBe(true);
+	});
+
+	it("a required reviewer that never reported holds the ledger gate", async () => {
+		gatedDeliverable("Ghosted", "ghosted");
+		const adapter = await startAdapter("ghosted");
+		const ledger = failingLedger();
+		ledger.entries = []; // no findings…
+		ledger.participants = [{ name: "sec", ok: false }]; // …but sec never reported
+		engine.setReviewLedger("ghosted", ledger);
+		expect(adapter.deliverableGateSatisfied("ghosted")).toBe(false);
+		expect(adapter.failingRequiredReviewers("ghosted")).toContain("sec");
+	});
 });
 
 describe("crash-cap fail fires once", () => {

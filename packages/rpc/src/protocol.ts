@@ -175,6 +175,10 @@ export interface ReviewLedgerWire {
 	readonly round: number;
 	readonly cycle: number;
 	readonly entries: readonly LedgerEntryWire[];
+	readonly participants?: ReadonlyArray<{
+		readonly name: string;
+		readonly ok: boolean;
+	}>;
 	readonly updatedAt: string;
 }
 

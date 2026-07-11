@@ -219,12 +219,17 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		// re-review through the back door). One targeted re-run, then report.
 		const results = await rerunFailed(d, subagents, panel, firstPass, ctx);
 
-		const ledger = buildLedger(
-			results
-				.filter((r) => r.kind === "review" && r.ok)
-				.map((r) => ({ reviewer: r.name, findings: r.structured })),
-			now(),
-		);
+		const ledger: ReviewLedger = {
+			...buildLedger(
+				results
+					.filter((r) => r.kind === "review" && r.ok)
+					.map((r) => ({ reviewer: r.name, findings: r.structured })),
+				now(),
+			),
+			participants: results
+				.filter((r) => r.kind === "review")
+				.map((r) => ({ name: r.name, ok: r.ok })),
+		};
 		episode = { ledger, lastResults: results };
 		d.report?.("panel", results, ledger);
 		return renderPanelResult(results, ledger, waived);
@@ -268,6 +273,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 					now(),
 				).entries,
 			],
+			participants: merged
+				.filter((r) => r.kind === "review")
+				.map((r) => ({ name: r.name, ok: r.ok })),
 			updatedAt: now(),
 		};
 		episode = { ledger, lastResults: merged };

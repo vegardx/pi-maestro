@@ -23,7 +23,10 @@ import {
 	type ExecutorDeps,
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
-import { requiredGateSatisfied } from "../panel.js";
+import {
+	DEFAULT_TIMEOUT_MS as PANEL_REVIEWER_TIMEOUT_MS,
+	requiredGateSatisfied,
+} from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
 import {
 	deliverableWorkspace,
@@ -35,6 +38,12 @@ import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
 } from "./commit-policy.js";
+import {
+	ledgerSummary,
+	openBlocking,
+	openDisputed,
+	type ReviewLedger,
+} from "./findings.js";
 import {
 	buildAgentSessionFile,
 	buildSpawnSpec,
@@ -55,12 +64,19 @@ import { shipDeliverable as shipDeliverableReal } from "./shipper.js";
  */
 const IDLE_DONE_THRESHOLD = 2;
 /** How long an in-flight review round may defer worker completion before we
- *  assume the round died with its reviewers. */
-const REVIEW_IN_FLIGHT_TIMEOUT_MS = 15 * 60_000;
+ *  assume the round died with its reviewers. DERIVED from the reviewer
+ *  timeout: a legitimate slow round (cap × retry) must never outlive its own
+ *  protection, or the kill-mid-review hole reopens in the tail. */
+const REVIEW_IN_FLIGHT_TIMEOUT_MS = 2 * PANEL_REVIEWER_TIMEOUT_MS + 5 * 60_000;
 /** After steering "run review now", how long completion stays deferred. A
  *  worker that still never reviews then completes into the ship gate, which
  *  blocks visibly — better than hanging the deliverable forever. */
 const REVIEW_STEER_GRACE_MS = 10 * 60_000;
+/** Fix+verify cycle budget when the deliverable doesn't set maxFixRounds. */
+const DEFAULT_MAX_FIX_ROUNDS = 3;
+/** Protected fixing window after each fix-cycle steer. The worker re-arms
+ *  stronger protection the moment it re-enters review (reviewInFlight). */
+const FIX_CYCLE_GRACE_MS = 15 * 60_000;
 
 /**
  * Window within which a same-tool-class agent's first tokens message makes a
@@ -222,6 +238,12 @@ export class ExecutionAdapter {
 	private reviewInFlight = new Map<string, number>();
 	/** agentKey → epoch ms of the run-your-review steer (sent once). */
 	private reviewSteerAt = new Map<string, number>();
+	/**
+	 * deliverableId → the fix-cycle steer sent for a failing gate: one steer
+	 * per ledger cycle, then a grace window, then the visible ship gate.
+	 * Cleared on send-back (fresh rework episode).
+	 */
+	private fixSteer = new Map<string, { cycle: number; at: number }>();
 	/** Last ship-gate block reason surfaced per deliverable (dedupe). */
 	private gateBlockSurfaced = new Map<string, string>();
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
@@ -283,16 +305,42 @@ export class ExecutionAdapter {
 					if (panel.length > 0) {
 						this.reviewInFlight.set(msg.deliverableId, Date.now());
 					}
+					// A respawned worker rehydrates its episode from the persisted
+					// ledger; waived finding ids are excluded from its gate math.
+					const waived = (deliverable?.waivers ?? []).flatMap((w) =>
+						w.findingId ? [w.findingId] : [],
+					);
 					this.router.send(agentId, {
 						type: "panelReadResponse",
 						id: msg.id,
 						panel,
+						...(deliverable?.reviewLedger
+							? { ledger: deliverable.reviewLedger }
+							: {}),
+						...(waived.length > 0 ? { waivedFindingIds: waived } : {}),
 					});
 				},
 				panelVerdict: (_agentId, msg) => {
 					// Latest round per deliverable drives the executor ship gate.
 					this.reviewInFlight.delete(msg.deliverableId);
-					this.panelVerdicts.set(msg.deliverableId, msg);
+					// Verification runs carry no per-reviewer verdicts — keep the
+					// last panel round's reports for the human-facing surfaces.
+					if (msg.roundKind !== "verification" || msg.verdicts.length > 0) {
+						this.panelVerdicts.set(msg.deliverableId, msg);
+					}
+					// The ledger is the gate's source of truth — persist it on the
+					// plan so it survives worker respawns and maestro restarts.
+					if (msg.ledger) {
+						try {
+							this.engine.setReviewLedger(
+								msg.deliverableId,
+								structuredClone(msg.ledger) as ReviewLedger,
+							);
+							this.opts.onPlanChanged();
+						} catch {
+							// Unknown deliverable — the verdict cache still applies.
+						}
+					}
 					this.opts.onPanelVerdict?.(msg);
 				},
 				questions: (agentId, msg) => {
@@ -679,16 +727,51 @@ export class ExecutionAdapter {
 	}
 
 	/**
-	 * The ship gate for a deliverable: every REQUIRED review in its panel (per
-	 * the plan) must have an approving verdict in the latest reported round. No
-	 * verdict yet → not satisfied (blocks ship, stays retryable). A deliverable
-	 * with no required reviewers is always satisfied.
+	 * The ship gate for a deliverable. With a review ledger (the redesigned
+	 * loop): every required reviewer participated in the panel round AND no
+	 * blocking finding is open (unwaived critical/major without a verified
+	 * fix). Without one (legacy round): every required reviewer's latest
+	 * verdict approves. A deliverable with no required reviewers is always
+	 * satisfied; no round at all blocks (stays retryable).
 	 */
 	deliverableGateSatisfied(deliverableId: string): boolean {
+		const required = this.requiredReviewerNames(deliverableId);
+		if (required.length === 0) return true;
+		const { ledger, waived } = this.ledgerState(deliverableId);
+		if (ledger) {
+			const participated = ledger.participants
+				? required.every((n) =>
+						ledger.participants?.some((p) => p.name === n && p.ok),
+					)
+				: true;
+			return participated && openBlocking(ledger, waived).length === 0;
+		}
 		return requiredGateSatisfied(
-			this.requiredReviewerNames(deliverableId),
+			required,
 			this.panelVerdicts.get(deliverableId)?.verdicts,
 		);
+	}
+
+	/** The persisted ledger + waived finding ids + cycle budget for a deliverable. */
+	private ledgerState(deliverableId: string): {
+		ledger?: ReviewLedger;
+		waived: Set<string>;
+		maxCycles: number;
+	} {
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((d) => d.id === deliverableId);
+		return {
+			...(deliverable?.reviewLedger
+				? { ledger: deliverable.reviewLedger }
+				: {}),
+			waived: new Set(
+				(deliverable?.waivers ?? []).flatMap((w) =>
+					w.findingId ? [w.findingId] : [],
+				),
+			),
+			maxCycles: deliverable?.maxFixRounds ?? DEFAULT_MAX_FIX_ROUNDS,
+		};
 	}
 
 	private requiredReviewerNames(deliverableId: string): string[] {
@@ -735,9 +818,29 @@ export class ExecutionAdapter {
 		}));
 	}
 
-	/** Required reviewers currently holding the gate (changes or no verdict). */
+	/**
+	 * Who is holding the gate. With a ledger: the distinct reviewers (incl.
+	 * verifier regressions) owning open blocking findings, plus required
+	 * reviewers that never reported. Legacy: required reviewers whose latest
+	 * verdict isn't approve. These names are what a human override waives.
+	 */
 	failingRequiredReviewers(deliverableId: string): string[] {
 		const required = this.requiredReviewerNames(deliverableId);
+		const { ledger, waived } = this.ledgerState(deliverableId);
+		if (ledger) {
+			const holders = new Set(
+				openBlocking(ledger, waived).map((e) => e.reviewer),
+			);
+			for (const n of required) {
+				if (
+					ledger.participants &&
+					!ledger.participants.some((p) => p.name === n && p.ok)
+				) {
+					holders.add(n);
+				}
+			}
+			return [...holders];
+		}
 		const byName = new Map(
 			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
 				v.name,
@@ -788,9 +891,28 @@ export class ExecutionAdapter {
 		this.panelVerdicts.set(deliverableId, { ...baseMsg, verdicts });
 		this.logEvent("human-override", { deliverableId, reviewer, reason });
 		// Persist the waiver on the plan — the in-memory verdict dies with this
-		// process, but /verify must keep honoring the human's acceptance.
+		// process, but /verify must keep honoring the human's acceptance. With
+		// a ledger, the override waives this reviewer's OPEN BLOCKING findings
+		// individually (id + claim + file — the claim is the durable identity
+		// that crosses into /verify), which is what actually opens the gate.
 		try {
-			this.engine.addWaiver(deliverableId, { reviewer, reason });
+			const { ledger, waived } = this.ledgerState(deliverableId);
+			const mine = ledger
+				? openBlocking(ledger, waived).filter((e) => e.reviewer === reviewer)
+				: [];
+			if (mine.length > 0) {
+				for (const e of mine) {
+					this.engine.addWaiver(deliverableId, {
+						reviewer,
+						reason,
+						findingId: e.finding.id,
+						claim: e.finding.claim ?? e.finding.actual,
+						...(e.finding.file ? { file: e.finding.file } : {}),
+					});
+				}
+			} else {
+				this.engine.addWaiver(deliverableId, { reviewer, reason });
+			}
 			this.opts.onPlanChanged();
 		} catch {
 			// The override still applies for this session even if the plan write
@@ -811,9 +933,29 @@ export class ExecutionAdapter {
 	): Promise<boolean> {
 		const ok = await this.executor.sendBackToWorker(deliverableId, kickoff);
 		if (ok) {
-			// The spawn seam already emitted the agent-state event; just re-arm
-			// the gate question and record the decision.
+			// Rework epoch: the respawned worker must not inherit exhausted or
+			// stale review state — a stale failing round used to re-complete it
+			// within seconds of the respawn (sdk-foundation, 16s death loop).
+			// The ledger (the work list) stays; the cycle budget and steer
+			// bookkeeping reset so the fix loop actually runs.
 			this.gateBlockSurfaced.delete(deliverableId);
+			this.fixSteer.delete(deliverableId);
+			this.reviewInFlight.delete(deliverableId);
+			const deliverable = this.engine
+				.get()
+				.deliverables.find((d) => d.id === deliverableId);
+			if (deliverable?.reviewLedger && deliverable.reviewLedger.cycle > 0) {
+				try {
+					this.engine.setReviewLedger(deliverableId, {
+						...deliverable.reviewLedger,
+						cycle: 0,
+						updatedAt: new Date().toISOString(),
+					});
+					this.opts.onPlanChanged();
+				} catch {
+					// Plan write failure — the in-memory resets still apply.
+				}
+			}
 			this.logEvent("send-back", { deliverableId });
 		}
 		return ok;
@@ -821,6 +963,23 @@ export class ExecutionAdapter {
 
 	private deliverableGateDetail(deliverableId: string): string {
 		const required = this.requiredReviewerNames(deliverableId);
+		const { ledger, waived, maxCycles } = this.ledgerState(deliverableId);
+		if (ledger) {
+			const open = openBlocking(ledger, waived);
+			const parts: string[] = [ledgerSummary(ledger, maxCycles, waived)];
+			if (open.length > 0) {
+				parts.push(`open: ${open.map((e) => e.finding.id).join(", ")}`);
+			}
+			const missing = ledger.participants
+				? required.filter(
+						(n) => !ledger.participants?.some((p) => p.name === n && p.ok),
+					)
+				: [];
+			if (missing.length > 0) {
+				parts.push(`${missing.join(", ")} never reported`);
+			}
+			return parts.join(" — ");
+		}
 		const byName = new Map(
 			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
 				v.name,
@@ -1035,16 +1194,21 @@ export class ExecutionAdapter {
 	}
 
 	/**
-	 * Whether the worker may complete now, review-wise. Two rules close the
-	 * kill-mid-review hole (a worker that toggled its last task and then called
-	 * `review` used to be summarized/killed before the round returned — the
-	 * verdicts never arrived and the gate blocked "not yet reviewed" with
-	 * nothing to show the human):
-	 *   1. an in-flight review round defers completion until it reports;
-	 *   2. a deliverable with REQUIRED reviewers and no recorded round steers
-	 *      the worker to run `review` instead of completing it. Completion
-	 *      resumes after a grace period so a non-compliant worker still lands
-	 *      at the visible ship gate rather than hanging forever.
+	 * Whether the worker may complete now, review-wise. The rules, in order:
+	 *   1. an in-flight review/verification run defers completion until it
+	 *      reports (window derived from the reviewer timeout);
+	 *   2. required reviewers + no round this episode → steer "run review
+	 *      now" once, then a grace period;
+	 *   3. the gate is SATISFIED (blocking ledger empty / verdicts approve)
+	 *      → complete;
+	 *   4. the gate is failing → the worker gets protected fix cycles: one
+	 *      steer per ledger cycle listing the open finding ids, a grace
+	 *      window per steer, budget deliverable.maxFixRounds (default 3);
+	 *   5. only disputes remain, the budget is exhausted, or a steer's grace
+	 *      expired → complete into the VISIBLE ship gate (triage/human own
+	 *      it from there). A failing round is never a kill signal by itself
+	 *      — that rule turned every request-changes into a dead worker and a
+	 *      human question (orchestra run, 2026-07-11).
 	 */
 	private workerMayComplete(agentId: string, deliverableId: string): boolean {
 		const startedAt = this.reviewInFlight.get(deliverableId);
@@ -1059,22 +1223,66 @@ export class ExecutionAdapter {
 			(s) => (s.kind ?? "review") === "review" && s.required,
 		);
 		if (requiredReviews.length === 0) return true;
-		if (this.panelVerdicts.has(deliverableId)) return true;
-		const steeredAt = this.reviewSteerAt.get(agentId);
-		if (steeredAt === undefined) {
-			this.reviewSteerAt.set(agentId, Date.now());
+
+		const { ledger, waived, maxCycles } = this.ledgerState(deliverableId);
+		const hasRound = Boolean(ledger) || this.panelVerdicts.has(deliverableId);
+		if (!hasRound) {
+			const steeredAt = this.reviewSteerAt.get(agentId);
+			if (steeredAt === undefined) {
+				this.reviewSteerAt.set(agentId, Date.now());
+				this.router.send(agentId, {
+					type: "steer",
+					content:
+						"All tasks are toggled, but this deliverable's REQUIRED review " +
+						"panel has not reported a round. Call the `review` tool now, " +
+						"resolve any blocking findings, and verify your fixes. Do not " +
+						"stop before the panel has reported.",
+				});
+				this.logEvent("review-steer", { agent: agentId });
+				return false;
+			}
+			return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
+		}
+
+		if (this.deliverableGateSatisfied(deliverableId)) return true;
+
+		// Gate failing. What can the worker still act on?
+		let cycle = this.panelVerdicts.get(deliverableId)?.round ?? 1;
+		let actionable: string[] | undefined;
+		if (ledger) {
+			cycle = ledger.cycle;
+			const open = openBlocking(ledger, waived);
+			const disputed = new Set(
+				openDisputed(ledger, waived).map((e) => e.finding.id),
+			);
+			actionable = open
+				.map((e) => e.finding.id)
+				.filter((id) => !disputed.has(id));
+			// Only disputes (or missing reviewers) remain — nothing left for
+			// the worker; the gate surfaces it to triage/human.
+			if (actionable.length === 0) return true;
+		}
+		if (cycle >= maxCycles) return true;
+
+		const steer = this.fixSteer.get(deliverableId);
+		if (!steer || steer.cycle !== cycle) {
+			this.fixSteer.set(deliverableId, { cycle, at: Date.now() });
+			const what = actionable?.length
+				? `Open blocking findings: ${actionable.join(", ")}.`
+				: `Holding reviewers: ${this.failingRequiredReviewers(deliverableId).join(", ")}.`;
 			this.router.send(agentId, {
 				type: "steer",
 				content:
-					"All tasks are toggled, but this deliverable's REQUIRED review " +
-					"panel has not reported a round. Call the `review` tool now, " +
-					"address any blocking findings, and re-run it until the required " +
-					"reviewers approve. Do not stop before the panel has reported.",
+					`The review gate is holding this deliverable. ${what} ` +
+					`Fix them, commit, and run review({resolutions: [...]}) to verify ` +
+					`— fix cycle ${cycle + 1}/${maxCycles}. Dispute a finding only ` +
+					`with a code-referencing rationale; wont-fix is for minors only.`,
 			});
-			this.logEvent("review-steer", { agent: agentId });
+			this.logEvent("fix-steer", { agent: agentId, cycle: cycle + 1 });
 			return false;
 		}
-		return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
+		if (Date.now() - steer.at <= FIX_CYCLE_GRACE_MS) return false;
+		return true;
 	}
 
 	/**

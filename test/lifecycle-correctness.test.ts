@@ -232,6 +232,170 @@ describe("execution adapter — lifecycle correctness", () => {
 		await until(() => engine.get().deliverables[0].status === "complete");
 	});
 
+	// Replays the crisp-oak incident: a worker with a REQUIRED review panel
+	// toggled its last task, called `review`, and was summarized/killed before
+	// the round returned — verdicts never arrived, the gate blocked "not yet
+	// reviewed", and the human overrode blind.
+	it("does not complete a worker whose required panel never reported — steers it to review", async () => {
+		engine.addDeliverable({ title: "Gated", workerMode: "full" });
+		engine.addWorkItem("gated", { title: "implement it" });
+		engine.addSubAgent("gated", {
+			name: "sec",
+			persona: "security-audit",
+			kind: "review",
+			required: true,
+		});
+		const adapter = await startAdapter("gated");
+		const executor = adapter.getExecutor();
+
+		const steers: string[] = [];
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const received: MaestroMessage[] = [];
+		client.on("message", (msg) => {
+			received.push(msg);
+			if (msg.type === "steer") steers.push(msg.content);
+			if (msg.type === "summarize") {
+				client.send({ type: "summary", id: msg.id, content: "done" });
+			}
+		});
+		client.connect(join(tmpDir, "maestro.sock"), {
+			agentId: "gated/worker",
+			role: "agent",
+			token: TOKEN,
+			pid: process.pid,
+		});
+		await until(() => received.some((m) => m.type === "helloAck" && m.ok));
+
+		// Toggle the only gating task — previously this killed the worker here.
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "gated",
+			params: { taskId },
+		});
+		await until(() => steers.length > 0);
+		expect(steers[0]).toContain("review");
+		expect(executor.getAgentState("gated", "worker")!.status).toBe("working");
+
+		// Sustained idling without a panel round still must not complete it.
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await wait(150);
+		expect(executor.getAgentState("gated", "worker")!.status).toBe("working");
+
+		// The worker complies: runs the panel and reports a round. Now idle
+		// completes it normally.
+		client.send({ type: "panelRead", id: "p1", deliverableId: "gated" });
+		await until(() => received.some((m) => m.type === "panelReadResponse"));
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "gated",
+			round: 1,
+			verdicts: [
+				{
+					name: "sec",
+					persona: "security-audit",
+					required: true,
+					verdict: "approve",
+					ok: true,
+				},
+			],
+		});
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await until(
+			() => executor.getAgentState("gated", "worker")!.status === "done",
+		);
+	});
+
+	it("defers completion while a review round is in flight (panelRead seen, no verdict yet)", async () => {
+		engine.addDeliverable({ title: "Midreview", workerMode: "full" });
+		engine.addWorkItem("midreview", { title: "implement it" });
+		engine.addSubAgent("midreview", {
+			name: "cor",
+			persona: "correctness-review",
+			kind: "review",
+			required: true,
+		});
+		const adapter = await startAdapter("midreview");
+		const executor = adapter.getExecutor();
+
+		const { client, ready } = connect("midreview/worker", "done");
+		await ready;
+
+		// The worker starts its review round FIRST (panelRead), then toggles the
+		// last task while reviewers are still running. The toggle-triggered
+		// completion check must hold — killing here is the incident.
+		client.send({ type: "panelRead", id: "p1", deliverableId: "midreview" });
+		await wait(50);
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "midreview",
+			params: { taskId },
+		});
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await wait(150);
+		expect(executor.getAgentState("midreview", "worker")!.status).toBe(
+			"working",
+		);
+
+		// Round reports → completion proceeds.
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "midreview",
+			round: 1,
+			verdicts: [
+				{
+					name: "cor",
+					persona: "correctness-review",
+					required: true,
+					verdict: "approve",
+					ok: true,
+				},
+			],
+		});
+		client.send({ type: "status", status: "idle" });
+		await until(
+			() => executor.getAgentState("midreview", "worker")!.status === "done",
+		);
+	});
+
+	it("workers without required reviewers complete exactly as before", async () => {
+		engine.addDeliverable({ title: "Plain", workerMode: "full" });
+		engine.addWorkItem("plain", { title: "implement it" });
+		// Advisory-only panel: not required → must not hold completion.
+		engine.addSubAgent("plain", {
+			name: "docs",
+			persona: "documentation",
+			kind: "review",
+			required: false,
+		});
+		const adapter = await startAdapter("plain");
+		const executor = adapter.getExecutor();
+
+		const { client, ready } = connect("plain/worker", "done");
+		await ready;
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "plain",
+			params: { taskId },
+		});
+		await until(
+			() => executor.getAgentState("plain", "worker")!.status === "done",
+		);
+	});
+
 	it("serializes overlapping tick calls through the mutex", async () => {
 		engine.addDeliverable({ title: "Work", workerMode: "full" });
 		engine.addWorkItem("work", { title: "task" });

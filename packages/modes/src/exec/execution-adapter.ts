@@ -54,6 +54,13 @@ import { shipDeliverable as shipDeliverableReal } from "./shipper.js";
  * is the only completion signal these agents produce.
  */
 const IDLE_DONE_THRESHOLD = 2;
+/** How long an in-flight review round may defer worker completion before we
+ *  assume the round died with its reviewers. */
+const REVIEW_IN_FLIGHT_TIMEOUT_MS = 15 * 60_000;
+/** After steering "run review now", how long completion stays deferred. A
+ *  worker that still never reviews then completes into the ship gate, which
+ *  blocks visibly — better than hanging the deliverable forever. */
+const REVIEW_STEER_GRACE_MS = 10 * 60_000;
 
 /**
  * Window within which a same-tool-class agent's first tokens message makes a
@@ -205,6 +212,16 @@ export class ExecutionAdapter {
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
 	private panelVerdicts = new Map<string, PanelVerdictMessage>(); // deliverableId → latest round
+	/**
+	 * deliverableId → epoch ms a worker began a review round (panelRead with a
+	 * non-empty panel). Cleared by panelVerdict. While fresh, worker completion
+	 * is deferred — summarize/kill during an in-flight round is how verdicts
+	 * silently vanished (review tool call with no result, gate blocked
+	 * "not yet reviewed", human overrode blind).
+	 */
+	private reviewInFlight = new Map<string, number>();
+	/** agentKey → epoch ms of the run-your-review steer (sent once). */
+	private reviewSteerAt = new Map<string, number>();
 	/** Last ship-gate block reason surfaced per deliverable (dedupe). */
 	private gateBlockSurfaced = new Map<string, string>();
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
@@ -260,14 +277,21 @@ export class ExecutionAdapter {
 					const deliverable = this.engine
 						.get()
 						.deliverables.find((d) => d.id === msg.deliverableId);
+					const panel = deliverable?.subAgents ?? [];
+					// Reading a non-empty panel is how a review round starts — hold
+					// worker completion until the round reports (panelVerdict).
+					if (panel.length > 0) {
+						this.reviewInFlight.set(msg.deliverableId, Date.now());
+					}
 					this.router.send(agentId, {
 						type: "panelReadResponse",
 						id: msg.id,
-						panel: deliverable?.subAgents ?? [],
+						panel,
 					});
 				},
 				panelVerdict: (_agentId, msg) => {
 					// Latest round per deliverable drives the executor ship gate.
+					this.reviewInFlight.delete(msg.deliverableId);
 					this.panelVerdicts.set(msg.deliverableId, msg);
 					this.opts.onPanelVerdict?.(msg);
 				},
@@ -279,6 +303,9 @@ export class ExecutionAdapter {
 			},
 			onDisconnect: (agentId) => {
 				this.idleCount.delete(agentId);
+				// A respawned worker starts a fresh review episode — a stale steer
+				// stamp must not let it complete through the grace period.
+				this.reviewSteerAt.delete(agentId);
 				// A dead agent can never consume answers — drop its pending
 				// question so /answer doesn't offer a phantom entry.
 				this.questionQueue.drop(agentId);
@@ -931,6 +958,7 @@ export class ExecutionAdapter {
 					// Zero gating tasks: "all toggled" is vacuous, so sustained
 					// idling is the worker's only completion signal.
 					if (count >= IDLE_DONE_THRESHOLD && state?.status === "working") {
+						if (!this.workerMayComplete(agentId, deliverableId)) return;
 						this.completeAgent(deliverableId, agentNamePart);
 						return;
 					}
@@ -964,7 +992,59 @@ export class ExecutionAdapter {
 	}
 
 	private handleDone(deliverableId: string, agentNamePart: string): void {
+		if (
+			agentNamePart === "worker" &&
+			!this.workerMayComplete(
+				`${deliverableId}/${agentNamePart}`,
+				deliverableId,
+			)
+		) {
+			return;
+		}
 		this.completeAgent(deliverableId, agentNamePart);
+	}
+
+	/**
+	 * Whether the worker may complete now, review-wise. Two rules close the
+	 * kill-mid-review hole (a worker that toggled its last task and then called
+	 * `review` used to be summarized/killed before the round returned — the
+	 * verdicts never arrived and the gate blocked "not yet reviewed" with
+	 * nothing to show the human):
+	 *   1. an in-flight review round defers completion until it reports;
+	 *   2. a deliverable with REQUIRED reviewers and no recorded round steers
+	 *      the worker to run `review` instead of completing it. Completion
+	 *      resumes after a grace period so a non-compliant worker still lands
+	 *      at the visible ship gate rather than hanging forever.
+	 */
+	private workerMayComplete(agentId: string, deliverableId: string): boolean {
+		const startedAt = this.reviewInFlight.get(deliverableId);
+		if (startedAt !== undefined) {
+			if (Date.now() - startedAt <= REVIEW_IN_FLIGHT_TIMEOUT_MS) return false;
+			this.reviewInFlight.delete(deliverableId);
+		}
+		const deliverable = this.engine
+			.get()
+			.deliverables.find((g) => g.id === deliverableId);
+		const requiredReviews = (deliverable?.subAgents ?? []).filter(
+			(s) => (s.kind ?? "review") === "review" && s.required,
+		);
+		if (requiredReviews.length === 0) return true;
+		if (this.panelVerdicts.has(deliverableId)) return true;
+		const steeredAt = this.reviewSteerAt.get(agentId);
+		if (steeredAt === undefined) {
+			this.reviewSteerAt.set(agentId, Date.now());
+			this.router.send(agentId, {
+				type: "steer",
+				content:
+					"All tasks are toggled, but this deliverable's REQUIRED review " +
+					"panel has not reported a round. Call the `review` tool now, " +
+					"address any blocking findings, and re-run it until the required " +
+					"reviewers approve. Do not stop before the panel has reported.",
+			});
+			this.logEvent("review-steer", { agent: agentId });
+			return false;
+		}
+		return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
 	}
 
 	/**
@@ -1159,6 +1239,9 @@ export class ExecutionAdapter {
 		const state = this.executor.getAgentState(deliverableId, agentNamePart);
 		if (state && (state.status === "summarizing" || state.status === "done"))
 			return;
+		// Tasks done is not enough: the required review panel must have
+		// reported (and no round may be in flight) before the worker is killed.
+		if (!this.workerMayComplete(agentId, deliverableId)) return;
 		this.completeAgent(deliverableId, agentNamePart);
 	}
 

@@ -3,6 +3,7 @@
 
 import type { AgentBridge } from "../agent-bridge.js";
 import type { PlanEngine } from "../engine.js";
+import { openBlocking, type ReviewLedger } from "../exec/findings.js";
 import type { ExecutionHandle } from "../exec/index.js";
 import { buildPlanAwareCompactionMarker } from "../forward-summary.js";
 import { buildExecutionPreamble } from "../planning-preamble.js";
@@ -21,7 +22,20 @@ export function buildHackModePreamble(): string {
 	return `You are in HACK MODE. Full tool access. Implement directly when asked.
 Agents continue running in the background independently.
 You can still add deliverables/tasks if needed.
-Switch back to /auto when done with direct work.`;
+Switch back to /auto when done with direct work.
+
+## Review discipline (hack mode)
+When you spawn review subagents over your own changes, reviews CONVERGE — they
+do not loop:
+- Run ONE broad review round. Later runs verify the fixes for the findings you
+  addressed (pass the prior findings + what you did about them into the
+  prompt) — never a fresh open-scope "review it all again".
+- Only critical/major findings warrant another pass. Minors are yours to
+  accept or fix; document accepted ones.
+- Hard cap: THREE rounds. Still not clean after three? Stop reviewing — ship
+  with the remaining findings documented, or ask the human about the genuine
+  sticking points. "One final ship-gate review" number four has never
+  converged and will not start now.`;
 }
 
 export function buildAgentWorkerPreamble(): string {
@@ -56,21 +70,41 @@ Your tasks are described in the first message. Implement them all.
 4. Commit your work: commit({message: "feat(scope): subject"})
 5. Toggle each task done when complete:
    task({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
-6. Run your review panel: review(). It spawns your deliverable's reviewers
-   (security, correctness, tests, …) in parallel and returns their findings
-   and verdicts. Address what they raise, commit the fixes, and run review()
-   again for another pass. Ship is BLOCKED until every REQUIRED reviewer's
-   latest verdict is PASS.
-7. When all tasks are toggled, tests pass, and the panel clears, stop. The
-   maestro handles pushing and opening the PR.
+6. Finish through the review episode (below). Reviewing is PART of finishing,
+   not an afterthought — do not end your turn idle with unresolved blocking
+   findings; the executor steers or completes you on idle.
+7. When all tasks are toggled, tests pass, and the review gate is clear, stop.
+   The maestro handles pushing and opening the PR.
 
-## Reasoning over review findings
-- The reviewers overlap and sometimes contradict. YOU reconcile: dedupe, rank,
-  and decide what to fix. Not every advisory finding must be actioned.
+## The review episode — panel once, then verify claims
+- review() runs your FULL reviewer panel ONCE (parallel) and returns findings
+  with canonical ids (e.g. security-audit.2). It never re-runs open-scope:
+  extra thoroughness came from panel composition, not more rounds.
+- Normalize the ledger, then RESOLVE EVERY blocking finding (critical/major):
+    {id, status: "fixed", note: "<commit>"} — you fixed it (committed)
+    {id, status: "duplicateOf", canonical, note} — same flaw as another id
+    {id, status: "disputed", note: "<code-referencing rationale>"} — you
+      disagree; blocking findings only, ONE dispute per finding
+    {id, status: "wont-fix", note} — minors ONLY; your call, note required
+- Call review({resolutions: [...]}). A single scope-locked verifier checks
+  exactly your fixed claims (evidence per claim; it may flag regressions your
+  fixes introduced). still-open → fix and verify again. You have a bounded
+  number of fix cycles — use them on real fixes, not re-litigating.
+- Disputes leave your loop immediately: the maestro triages them (it can side
+  with the reviewer and send you back, or take your side to the human). Never
+  re-dispute; never silently ignore a blocking finding — the completeness
+  check rejects unaccounted ids.
+- A reviewer that failed to report: review({action: "repair"}) re-runs just it.
+
+## Reasoning over findings
+- Reviewers overlap: merge duplicates via duplicateOf (the harness takes the
+  max severity). A finding only one duplicate-persona reviewer caught is
+  exactly why the panel ran two.
+- Minors never block ship — fix the cheap ones, wont-fix the rest with honest
+  notes. They surface in the PR body.
 - If a finding forces a choice you can't make locally — a design fork whose
   answer affects other deliverables — escalate with ask(): you stay live and
-  resume when the answer arrives (no need to stop). The maestro decides,
-  consults the advisor, or asks the human.
+  resume when the answer arrives.
 
 ## Rules
 - Do NOT run git push, gh pr create, or any shipping commands
@@ -109,12 +143,32 @@ export async function buildAgentCompactionGuidance(
 			if (titleMatch) deliverableTitle = titleMatch[1];
 		}
 
+		// The open ledger findings are fix DUTIES — a compacted worker that
+		// forgets them idles into a fix-cycle steer it no longer understands.
+		let reviewLedgerLines: string[] = [];
+		try {
+			const state = await bridge.panelRead(deliverableId);
+			if (state.ledger) {
+				const waived = new Set(state.waivedFindingIds ?? []);
+				reviewLedgerLines = openBlocking(
+					structuredClone(state.ledger) as unknown as ReviewLedger,
+					waived,
+				).map(
+					(e) =>
+						`- ${e.finding.id} [${e.finding.severity}] ${e.finding.actual}${e.resolution ? ` — ${e.resolution.status}` : " — unresolved"}`,
+				);
+			}
+		} catch {
+			// No ledger available — task state alone still helps.
+		}
+
 		return buildPlanAwareCompactionMarker({
 			deliverableId,
 			deliverableTitle,
 			remainingTasks: remaining,
 			completedTasks: completed,
 			depSummaryIds: [],
+			reviewLedgerLines,
 		});
 	} catch {
 		return undefined;

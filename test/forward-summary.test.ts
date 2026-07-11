@@ -85,4 +85,20 @@ describe("buildPlanAwareCompactionMarker", () => {
 		expect(marker).toContain("(all done)");
 		expect(marker).toContain("(none)");
 	});
+
+	it("carries open review-ledger findings so a compacted worker keeps its fix duties", () => {
+		const marker = buildPlanAwareCompactionMarker({
+			deliverableId: "auth",
+			deliverableTitle: "Auth System",
+			remainingTasks: [],
+			completedTasks: [{ title: "Everything" }],
+			depSummaryIds: [],
+			reviewLedgerLines: [
+				"- security-audit.1 [major] token logged at auth.ts:42 — unresolved",
+			],
+		});
+		expect(marker).toContain("Open review findings (MUST preserve");
+		expect(marker).toContain("security-audit.1 [major]");
+		expect(marker).toContain("review({resolutions");
+	});
 });

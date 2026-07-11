@@ -30,7 +30,7 @@ import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
-import { sendAgentEvent } from "./agent-cards.js";
+import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
@@ -297,7 +297,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 						research: "verify",
 						ok: entry.verdict === "pass",
 						durationMs: Date.now() - view.startedAt,
-						...(entry.report ? { report: entry.report } : {}),
+						// Clipped: the round file under verification/ has the full text.
+						...(entry.report ? { report: clipReport(entry.report) } : {}),
 						...(entry.error ? { error: entry.error } : {}),
 					});
 					syncAgentWidget(rt, ctx);

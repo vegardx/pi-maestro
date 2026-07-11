@@ -303,6 +303,21 @@ export function buildEventContent(event: AgentCardEvent): string {
 	).join("\n");
 }
 
+/**
+ * Clip a report for a persisted card event. Cards render the first paragraph
+ * (expanded: up to this cap); the FULL text already lives on disk (research/
+ * verification files) and can be pulled with dig(ref). Without the clip every
+ * research/verify run persisted its whole report into the session transcript
+ * — ~18KB per card, ~1MB of a 6.8MB dogfood session.
+ */
+const CARD_REPORT_CLIP_CHARS = 4000;
+export function clipReport(report: string): string | undefined {
+	const trimmed = report.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.length <= CARD_REPORT_CLIP_CHARS) return trimmed;
+	return `${trimmed.slice(0, CARD_REPORT_CLIP_CHARS)}\n[…report clipped — full text on disk]`;
+}
+
 /** Mirror an execution/research event into the chat as a progress card. */
 export function sendAgentEvent(pi: ExtensionAPI, event: AgentCardEvent): void {
 	pi.sendMessage(

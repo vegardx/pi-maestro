@@ -338,6 +338,19 @@ export class PlanEngine {
 		) as SubAgentSpec;
 	}
 
+	/** Record a human gate override permanently (see ReviewWaiver). */
+	addWaiver(
+		deliverableId: string,
+		waiver: { reviewer: string; reason: string },
+	): void {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+			g.waivers = [...(g.waivers ?? []), { ...waiver, at: this.now() }];
+			g.updatedAt = this.now();
+		});
+	}
+
 	removeSubAgent(deliverableId: string, name: string): void {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, deliverableId);

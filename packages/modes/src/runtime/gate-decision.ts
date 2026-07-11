@@ -8,6 +8,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { Answers, AskCapabilityV1, Question } from "@vegardx/pi-contracts";
 import type { ExecutionHandle } from "../exec/index.js";
+import { parseVerdict } from "../exec/verdicts.js";
 
 export interface GateDecisionDeps {
 	readonly ask: () => AskCapabilityV1 | undefined;
@@ -27,22 +28,63 @@ export interface ReviewerFinding {
 	readonly report?: string;
 }
 
+/** Findings shown inline before the full reports — enough to decide fast. */
+const MAX_TOP_FINDINGS = 6;
+
+const verdictIcon = (v: string): string =>
+	v === "approve" ? "✓" : v === "request-changes" ? "✗" : "–";
+
 /**
  * The findings that justify the decision, as question context. The human is
  * choosing to override or send back — they must see WHAT they'd be
- * overriding, not just which reviewer is holding.
+ * overriding, not just which reviewer is holding. Layout is glance-first:
+ * a one-line-per-reviewer scoreboard, the top finding bullets, then the
+ * full reports for whoever wants the detail.
  */
 export function renderFindings(
 	findings: readonly ReviewerFinding[],
 ): string | undefined {
 	const relevant = findings.filter((f) => f.verdict !== "approve" || f.report);
 	if (relevant.length === 0) return undefined;
-	const blocks = relevant.map((f) => {
-		const tag = f.required ? " [required]" : "";
-		const verdict = f.verdict === "approve" ? "✓ pass" : `✗ ${f.verdict}`;
-		return `### ${f.name}${tag} — ${verdict}\n${f.report ?? "(no report received from this reviewer)"}`;
+
+	const parsed = new Map(
+		relevant.map((f) => [
+			f.name,
+			f.report ? parseVerdict(f.report) : { verdict: "none", findings: [] },
+		]),
+	);
+	const scoreboard = relevant.map((f) => {
+		const n = parsed.get(f.name)?.findings.length ?? 0;
+		const count = n > 0 ? ` (${n} finding${n === 1 ? "" : "s"})` : "";
+		return `${verdictIcon(f.verdict)} ${f.name}${f.required ? " [required]" : ""} — ${f.verdict}${count}`;
 	});
-	return blocks.join("\n\n");
+
+	const top: string[] = [];
+	let overflow = 0;
+	for (const f of relevant) {
+		if (f.verdict === "approve") continue;
+		for (const bullet of parsed.get(f.name)?.findings ?? []) {
+			if (top.length < MAX_TOP_FINDINGS) {
+				top.push(`${top.length + 1}. (${f.name}) ${bullet}`);
+			} else {
+				overflow++;
+			}
+		}
+	}
+
+	const reports = relevant.map(
+		(f) =>
+			`### ${f.name}${f.required ? " [required]" : ""} — ${verdictIcon(f.verdict)} ${f.verdict}\n${f.report ?? "(no report received from this reviewer)"}`,
+	);
+
+	const sections = [scoreboard.join("\n")];
+	if (top.length > 0) {
+		sections.push(
+			`Top findings:\n${top.join("\n")}${overflow > 0 ? `\n(+${overflow} more in the full reports)` : ""}`,
+		);
+	}
+	sections.push(`── Full reports ──\n\n${reports.join("\n\n")}`);
+	return sections.join("\n\n");
 }
 
 /** Build the decision question for one blocked deliverable. Pure. */
@@ -69,9 +111,9 @@ export function buildGateQuestion(
 			{
 				label: GATE_OPTION_OVERRIDE,
 				description:
-					`Record YOUR approval as the latest verdict for ${holders} ` +
-					"(add the reason as a note). The override is attributed in the " +
-					"PR body — the gate opens through its own rules.",
+					`Record YOUR approval as the latest verdict for ${holders}. ` +
+					"REQUIRES a note with the reason — it is recorded as a waiver " +
+					"on the deliverable and attributed in the PR body.",
 			},
 			{
 				label: GATE_OPTION_PARK,
@@ -99,27 +141,45 @@ export async function presentGateDecision(
 	const failing = execution.failingRequiredReviewers(deliverableId);
 	const findings = execution.reviewerFindings(deliverableId);
 
-	let answers: Answers;
-	try {
-		answers = await ask.ask([
-			buildGateQuestion(deliverableId, reason, failing, findings),
-		]);
-	} catch {
-		return; // ask surface unavailable — blocked card remains
-	}
-	const answer = answers.find(
-		(a) => a.questionId === `ship-gate:${deliverableId}`,
-	);
-	if (!answer || answer.deferred || answer.skipped) return;
-
-	const note = answer.note?.trim() ?? "";
-	if (answer.value === GATE_OPTION_OVERRIDE) {
-		const reasonText = note || "human override, no reason given";
-		for (const reviewer of failing) {
-			execution.overrideReviewerVerdict(deliverableId, reviewer, reasonText);
+	// Overriding without a reason is the blind-override anti-pattern that let
+	// unreviewed work ship — re-ask until a note arrives (bounded).
+	const MAX_ASKS = 3;
+	let answer: Answers[number] | undefined;
+	let note = "";
+	for (let attempt = 1; attempt <= MAX_ASKS; attempt++) {
+		let answers: Answers;
+		try {
+			answers = await ask.ask([
+				buildGateQuestion(deliverableId, reason, failing, findings),
+			]);
+		} catch {
+			return; // ask surface unavailable — blocked card remains
+		}
+		answer = answers.find((a) => a.questionId === `ship-gate:${deliverableId}`);
+		if (!answer || answer.deferred || answer.skipped) return;
+		note = answer.note?.trim() ?? "";
+		if (answer.value !== GATE_OPTION_OVERRIDE || note) break;
+		if (attempt === MAX_ASKS) {
+			deps.notify(
+				`Override without a reason — leaving ${deliverableId} parked. Answer again with a note, or /retry.`,
+				"warning",
+			);
+			return;
 		}
 		deps.notify(
-			`Overrode ${failing.join(", ") || "the gate"} on ${deliverableId} — shipping.`,
+			"Overriding requires a reason — answer again and attach a note " +
+				"explaining why the findings don't block. It becomes the waiver record.",
+			"warning",
+		);
+	}
+	if (!answer) return;
+
+	if (answer.value === GATE_OPTION_OVERRIDE) {
+		for (const reviewer of failing) {
+			execution.overrideReviewerVerdict(deliverableId, reviewer, note);
+		}
+		deps.notify(
+			`Overrode ${failing.join(", ") || "the gate"} on ${deliverableId} — shipping. Waiver: ${note}`,
 			"info",
 		);
 		// The next tick re-evaluates the gate and ships.

@@ -51,10 +51,6 @@ function fakes(opts: {
 	const deps = {
 		ask: () => ({
 			ask: async (qs: { id: string }[]) => {
-				const built = opts.answer?.({ value: "" })
-					? [opts.answer({ value: "" })]
-					: [];
-				void built;
 				const a = opts.answer?.({ value: "" });
 				return a ? [{ ...a, questionId: qs[0].id }] : [];
 			},
@@ -220,5 +216,68 @@ describe("presentGateDecision", () => {
 			expect(overrides).toHaveLength(0);
 			expect(messages).toHaveLength(0);
 		}
+	});
+
+	it("override without a reason re-asks until a note arrives", async () => {
+		// The five blind dogfood overrides ("no reason given") are the exact
+		// anti-pattern this closes: no note, no override.
+		let asks = 0;
+		const { deps, overrides, notices } = fakes({
+			answer: () => {
+				asks += 1;
+				return asks === 1
+					? { questionId: "x", value: GATE_OPTION_OVERRIDE }
+					: {
+							questionId: "x",
+							value: GATE_OPTION_OVERRIDE,
+							note: "reviewer misread the diff",
+						};
+			},
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(asks).toBe(2);
+		expect(notices.some((n) => n.includes("requires a reason"))).toBe(true);
+		expect(overrides).toEqual([
+			["auth", "security-audit", "reviewer misread the diff"],
+		]);
+	});
+
+	it("override with no reason after repeated asks stays parked", async () => {
+		let asks = 0;
+		const { deps, overrides, notices } = fakes({
+			answer: () => {
+				asks += 1;
+				return { questionId: "x", value: GATE_OPTION_OVERRIDE };
+			},
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(asks).toBe(3);
+		expect(overrides).toHaveLength(0);
+		expect(notices.some((n) => n.includes("leaving auth parked"))).toBe(true);
+	});
+
+	it("context leads with a scoreboard and top findings before the reports", () => {
+		const q = buildGateQuestion(
+			"auth",
+			"ship gate: …",
+			["security-audit"],
+			[
+				{
+					name: "security-audit",
+					verdict: "request-changes",
+					required: true,
+					report:
+						"bad stuff\nVERDICT: request-changes\n- src/auth.ts:42 — token logged\n- src/auth.ts:50 — token reused",
+				},
+			],
+		);
+		const ctx = q.context ?? "";
+		expect(ctx).toContain(
+			"✗ security-audit [required] — request-changes (2 findings)",
+		);
+		expect(ctx).toContain("1. (security-audit) src/auth.ts:42 — token logged");
+		expect(ctx.indexOf("Top findings")).toBeLessThan(
+			ctx.indexOf("── Full reports ──"),
+		);
 	});
 });

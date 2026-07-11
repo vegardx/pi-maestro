@@ -766,6 +766,15 @@ export class ExecutionAdapter {
 		};
 		this.panelVerdicts.set(deliverableId, { ...baseMsg, verdicts });
 		this.logEvent("human-override", { deliverableId, reviewer, reason });
+		// Persist the waiver on the plan — the in-memory verdict dies with this
+		// process, but /verify must keep honoring the human's acceptance.
+		try {
+			this.engine.addWaiver(deliverableId, { reviewer, reason });
+			this.opts.onPlanChanged();
+		} catch {
+			// The override still applies for this session even if the plan write
+			// failed; the event log above keeps the audit trail.
+		}
 	}
 
 	/**

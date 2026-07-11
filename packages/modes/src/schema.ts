@@ -155,8 +155,23 @@ export interface Deliverable {
 	/** PR URL once shipped. */
 	prUrl?: string;
 	prNumber?: number;
+	/**
+	 * Human gate overrides, recorded permanently. A waiver is the durable
+	 * counterpart of overrideReviewerVerdict's in-memory verdict: /verify
+	 * treats waived findings as acknowledged instead of re-flagging them.
+	 */
+	waivers?: ReviewWaiver[];
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** A human's recorded acceptance of a blocking review verdict (gate override). */
+export interface ReviewWaiver {
+	/** Reviewer whose verdict the human overrode. */
+	reviewer: string;
+	/** The mandatory override note — why the findings don't block. */
+	reason: string;
+	at: string;
 }
 
 // ─── Plan ────────────────────────────────────────────────────────────────────

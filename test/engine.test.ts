@@ -50,6 +50,29 @@ describe("PlanEngine — deliverables", () => {
 		expect(engine.get().deliverables).toHaveLength(1);
 	});
 
+	it("addWaiver records human gate overrides permanently", () => {
+		const store = memStore();
+		const engine = PlanEngine.create(store, {
+			slug: "test",
+			title: "Test",
+			repoPath: "/tmp/repo",
+		});
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWaiver("auth", {
+			reviewer: "security-audit",
+			reason: "token already scoped",
+		});
+		engine.addWaiver("auth", {
+			reviewer: "correctness",
+			reason: "flagged path is dead code",
+		});
+		const waivers = store.last?.deliverables[0].waivers ?? [];
+		expect(waivers).toHaveLength(2);
+		expect(waivers[0].reviewer).toBe("security-audit");
+		expect(waivers[0].reason).toBe("token already scoped");
+		expect(waivers[0].at).toBeTruthy();
+	});
+
 	it("generates unique ids on collision", () => {
 		const store = memStore();
 		const engine = PlanEngine.create(store, {

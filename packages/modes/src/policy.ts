@@ -76,13 +76,16 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 	}
 
 	// plan + auto: read-only + plan tools + research loop + bash (gated by
-	// classifier) + always-allowed
+	// classifier) + always-allowed. `gate` is the maestro's ship-gate triage
+	// tool (send back with guidance / escalate with a recommendation) — auto
+	// mode only in practice; plan mode blocks it via toolBlockedInPlanMode.
 	const allowed = new Set([
 		...READ_ONLY_TOOLS,
 		...PLAN_TOOL_NAMES,
 		...RESEARCH_TOOL_NAMES,
 		...ALWAYS_ALLOWED_TOOLS,
 		"bash",
+		"gate",
 	]);
 	// Exploring phase: the readiness gate — structure tools stay locked until
 	// the model declares readiness and the user confirms.

@@ -20,6 +20,21 @@ export interface GateDecisionDeps {
 export const GATE_OPTION_SEND_BACK = "Send back with guidance";
 export const GATE_OPTION_OVERRIDE = "Override and ship";
 export const GATE_OPTION_PARK = "Leave parked";
+export const GATE_OPTION_DISCUSS = "Discuss / research first";
+
+/** The maestro's triage recommendation, rendered at the top of the question. */
+export interface GateRecommendation {
+	/** The concrete action it would take — orders that option first. */
+	readonly action?: "send-back" | "override" | "park";
+	readonly text: string;
+	readonly why?: string;
+}
+
+export interface GateDecisionOpts {
+	readonly recommendation?: GateRecommendation;
+	/** A one-line banner above everything (e.g. "maestro already sent back once"). */
+	readonly banner?: string;
+}
 
 export interface ReviewerFinding {
 	readonly name: string;
@@ -93,36 +108,92 @@ export function buildGateQuestion(
 	reason: string,
 	failing: readonly string[],
 	findings: readonly ReviewerFinding[] = [],
+	opts: GateDecisionOpts = {},
 ): Question {
 	const holders = failing.length ? failing.join(", ") : "required reviewers";
-	const context = renderFindings(findings);
+	const sections: string[] = [];
+	if (opts.banner) sections.push(opts.banner);
+	if (opts.recommendation) {
+		sections.push(
+			`Maestro recommends: ${opts.recommendation.text}${opts.recommendation.why ? `\nWhy: ${opts.recommendation.why}` : ""}`,
+		);
+	}
+	const findingsText = renderFindings(findings);
+	if (findingsText) sections.push(findingsText);
+	const context = sections.join("\n\n");
+
+	const options = [
+		{
+			label: GATE_OPTION_SEND_BACK,
+			description:
+				"Reopen the deliverable and respawn its worker with the findings " +
+				"and your guidance (add a note) — it fixes, re-runs the panel, " +
+				"and the gate re-evaluates.",
+		},
+		{
+			label: GATE_OPTION_OVERRIDE,
+			description:
+				`Record YOUR approval as the latest verdict for ${holders}. ` +
+				"REQUIRES a note with the reason — it is recorded as a waiver " +
+				"on the deliverable and attributed in the PR body.",
+		},
+		{
+			label: GATE_OPTION_PARK,
+			description:
+				"Decide later. The deliverable stays blocked and visible; a new " +
+				"review verdict or /retry re-opens the question.",
+		},
+		{
+			label: GATE_OPTION_DISCUSS,
+			description:
+				"Not ready to decide — open a conversation with the maestro (it " +
+				"has read everything and can run research on request). The " +
+				"question re-appears with an updated recommendation when you're " +
+				"ready.",
+		},
+	];
+	// The recommended action leads — the human reads the recommendation first
+	// and its option is the first thing under their cursor.
+	const lead =
+		opts.recommendation?.action === "send-back"
+			? GATE_OPTION_SEND_BACK
+			: opts.recommendation?.action === "override"
+				? GATE_OPTION_OVERRIDE
+				: opts.recommendation?.action === "park"
+					? GATE_OPTION_PARK
+					: undefined;
+	if (lead) {
+		options.sort((a, b) => (a.label === lead ? -1 : b.label === lead ? 1 : 0));
+	}
 	return {
 		id: `ship-gate:${deliverableId}`,
 		question: `${reason} — "${deliverableId}" is parked. How should this resolve?`,
 		...(context ? { context } : {}),
-		options: [
-			{
-				label: GATE_OPTION_SEND_BACK,
-				description:
-					"Reopen the deliverable and respawn its worker with the findings " +
-					"and your guidance (add a note) — it fixes, re-runs the panel, " +
-					"and the gate re-evaluates.",
-			},
-			{
-				label: GATE_OPTION_OVERRIDE,
-				description:
-					`Record YOUR approval as the latest verdict for ${holders}. ` +
-					"REQUIRES a note with the reason — it is recorded as a waiver " +
-					"on the deliverable and attributed in the PR body.",
-			},
-			{
-				label: GATE_OPTION_PARK,
-				description:
-					"Decide later. The deliverable stays blocked and visible; a new " +
-					"review verdict or /retry re-opens the question.",
-			},
-		],
+		options,
 	};
+}
+
+/**
+ * The worker kickoff for a send-back — one composition for both authors (the
+ * human's gate answer and the maestro's triage), so the rework episode starts
+ * identically regardless of who ordered it.
+ */
+export function buildSendBackKickoff(
+	reason: string,
+	failing: readonly string[],
+	guidance: string,
+	failingFindings?: string,
+	author: "human" | "maestro" = "human",
+): string {
+	return (
+		`Your deliverable was held at the ship gate: ${reason}. ` +
+		`The ${author} sent it back to you (${failing.join(", ") || "required reviewers"} holding). ` +
+		`Guidance: ${guidance || "(none given — address the reviewers' findings)"}. ` +
+		(failingFindings
+			? `\n\nThe holding findings:\n\n${failingFindings}\n\n`
+			: "") +
+		"Fix the findings, commit, and verify the fixes with review({resolutions: [...]}), then finish again."
+	);
 }
 
 /**
@@ -134,6 +205,7 @@ export async function presentGateDecision(
 	deps: GateDecisionDeps,
 	deliverableId: string,
 	reason: string,
+	opts: GateDecisionOpts = {},
 ): Promise<void> {
 	const ask = deps.ask();
 	const execution = deps.execution();
@@ -150,7 +222,7 @@ export async function presentGateDecision(
 		let answers: Answers;
 		try {
 			answers = await ask.ask([
-				buildGateQuestion(deliverableId, reason, failing, findings),
+				buildGateQuestion(deliverableId, reason, failing, findings, opts),
 			]);
 		} catch {
 			return; // ask surface unavailable — blocked card remains
@@ -186,6 +258,24 @@ export async function presentGateDecision(
 		void execution.tick();
 		return;
 	}
+	if (answer.value === GATE_OPTION_DISCUSS) {
+		// The human wants to explore before deciding. The deliverable stays
+		// blocked (park semantics); the maestro — which just read all of this —
+		// hosts the conversation and re-presents the decision when ready.
+		deps.notify(
+			`${deliverableId} stays parked — discuss it with the maestro; the question re-appears when you're ready.`,
+			"info",
+		);
+		deps.pi.sendUserMessage(
+			`[The human chose "Discuss / research first" on the ${deliverableId} ship gate (${reason}). ` +
+				"Engage them directly: answer questions about the findings and the dispute, run research or " +
+				"read-only delegates on request (the disputed code, the reviewers' claims, prior art). You may " +
+				"NOT open the gate yourself. When they are ready to decide, re-present the question by calling " +
+				'gate(action: "escalate", ...) with your updated recommendation.]',
+			{ deliverAs: "followUp" },
+		);
+		return;
+	}
 	if (answer.value === GATE_OPTION_SEND_BACK) {
 		// Execute the send-back here, in extension code: reopen the completed
 		// deliverable and respawn its worker with the findings. Telling the
@@ -194,14 +284,13 @@ export async function presentGateDecision(
 		const failingFindings = renderFindings(
 			findings.filter((f) => failing.includes(f.name)),
 		);
-		const kickoff =
-			`Your deliverable was held at the ship gate: ${reason}. ` +
-			`The human sent it back to you (${failing.join(", ") || "required reviewers"} holding). ` +
-			`Guidance: ${note || "(none given — address the reviewers' findings)"}. ` +
-			(failingFindings
-				? `\n\nThe holding findings:\n\n${failingFindings}\n\n`
-				: "") +
-			"Fix the findings, commit, re-run the review panel, and finish again.";
+		const kickoff = buildSendBackKickoff(
+			reason,
+			failing,
+			note,
+			failingFindings,
+			"human",
+		);
 		const sent = await execution.sendBackToWorker(deliverableId, kickoff);
 		if (sent) {
 			deps.notify(

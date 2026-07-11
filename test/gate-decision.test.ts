@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { ExecutionHandle } from "../packages/modes/src/exec/index.js";
 import {
 	buildGateQuestion,
+	GATE_OPTION_DISCUSS,
 	GATE_OPTION_OVERRIDE,
 	GATE_OPTION_PARK,
 	GATE_OPTION_SEND_BACK,
@@ -79,7 +80,7 @@ function fakes(opts: {
 }
 
 describe("buildGateQuestion", () => {
-	it("names the holding reviewers and the three routes", () => {
+	it("names the holding reviewers and the four routes", () => {
 		const q = buildGateQuestion(
 			"auth",
 			"ship gate: security-audit requested changes",
@@ -91,8 +92,28 @@ describe("buildGateQuestion", () => {
 			GATE_OPTION_SEND_BACK,
 			GATE_OPTION_OVERRIDE,
 			GATE_OPTION_PARK,
+			GATE_OPTION_DISCUSS,
 		]);
 		expect(q.options?.[1].description).toContain("security-audit");
+	});
+
+	it("leads with the maestro recommendation and orders its option first", () => {
+		const q = buildGateQuestion(
+			"auth",
+			"ship gate: 1 blocking finding open",
+			["security-audit"],
+			[],
+			{
+				recommendation: {
+					action: "override",
+					text: "waive sec.1 — the worker's boundary-check argument holds",
+					why: "the digest is length-checked at envelope.go:41",
+				},
+			},
+		);
+		expect(q.context).toContain("Maestro recommends: waive sec.1");
+		expect(q.context).toContain("Why: the digest is length-checked");
+		expect(q.options?.[0].label).toBe(GATE_OPTION_OVERRIDE);
 	});
 
 	it("carries the findings as question context — the human never decides blind", () => {
@@ -161,7 +182,7 @@ describe("presentGateDecision", () => {
 		expect(sendBacks).toHaveLength(1);
 		expect(sendBacks[0][0]).toBe("auth");
 		expect(sendBacks[0][1]).toContain("narrow the scope but keep repo read");
-		expect(sendBacks[0][1]).toContain("re-run the review panel");
+		expect(sendBacks[0][1]).toContain("review({resolutions");
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toContain("respawned");
 	});
@@ -202,6 +223,20 @@ describe("presentGateDecision", () => {
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toContain("respawn or steer the worker yourself");
 		expect(messages[0]).toContain("fix the leak");
+	});
+
+	it("discuss: parks the decision and opens the maestro conversation", async () => {
+		const { deps, overrides, sendBacks, messages, notices } = fakes({
+			answer: () => ({ questionId: "x", value: GATE_OPTION_DISCUSS }),
+		});
+		await presentGateDecision(deps, "auth", "ship gate: …");
+		expect(overrides).toHaveLength(0);
+		expect(sendBacks).toHaveLength(0);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("Discuss / research first");
+		expect(messages[0]).toContain("re-present the question");
+		expect(messages[0]).toContain("NOT open the gate");
+		expect(notices.some((n) => n.includes("stays parked"))).toBe(true);
 	});
 
 	it("park / deferred: does nothing", async () => {

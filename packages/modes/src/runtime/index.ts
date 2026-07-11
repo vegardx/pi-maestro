@@ -36,6 +36,7 @@ import {
 	type ModesRuntimeOptions,
 } from "./context.js";
 import { syncAgentWidget } from "./dashboard.js";
+import { createGateTool } from "./gate-triage.js";
 import { registerRuntimeHooks } from "./hooks.js";
 
 export type { ModesRuntimeOptions } from "./context.js";
@@ -151,6 +152,14 @@ export function createModesRuntime(
 		},
 	})) {
 		pi.registerTool(tool);
+	}
+
+	// Maestro-side ship-gate triage tool: when a gate blocks, the maestro is
+	// the first responder — one send-back with guidance per deliverable, or
+	// escalate to the human with a mandatory recommendation. No override
+	// action exists; only the human's gate answer opens a gate.
+	if (!isAgentMode()) {
+		pi.registerTool(createGateTool(() => rt.gateTriage));
 	}
 
 	// Worker-side review tool — registered only in a worker (agent mode). It

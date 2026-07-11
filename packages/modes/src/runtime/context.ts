@@ -81,7 +81,7 @@ import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { syncAgentWidget } from "./dashboard.js";
-import { presentGateDecision } from "./gate-decision.js";
+import { GateTriage } from "./gate-triage.js";
 import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 
 export interface ModesRuntimeOptions {
@@ -114,6 +114,8 @@ export interface RuntimeContext {
 	engine: PlanEngine | undefined;
 	agentBridge: AgentBridge | undefined;
 	execution: ExecutionHandle | undefined;
+	/** Ship-gate triage controller (maestro-first escalation); with execution. */
+	gateTriage: GateTriage | undefined;
 	/** Live research runs (plan-mode fan-out), keyed by run id. */
 	readonly researchRuns: Map<string, ResearchRunView>;
 	agentSeedContent: string | undefined;
@@ -220,6 +222,7 @@ export function createRuntimeContext(
 		engine: undefined,
 		agentBridge: undefined,
 		execution: undefined,
+		gateTriage: undefined,
 		researchRuns: new Map(),
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
@@ -646,19 +649,12 @@ export function createRuntimeContext(
 				// refreshes the footer, clears the agent widget, and wipes the
 				// plan's research scratch (full reports are throwaway once the
 				// plan has shipped).
-				// Gate disagreements go to the HUMAN as a question; the
-				// override route executes extension-side on their answer.
+				// Gate disagreements go to the MAESTRO first (triage: one
+				// send-back with guidance, or escalate with a recommendation);
+				// the human decides genuine disagreements. Override still
+				// executes extension-side on the human's answer only.
 				onShipGateBlocked: (deliverableId, reason) => {
-					void presentGateDecision(
-						{
-							ask: () => maestro.capabilities.get(CAPABILITIES.ask),
-							execution: () => rt.execution,
-							pi,
-							notify: (m, level) => ctx.ui.notify(m, level),
-						},
-						deliverableId,
-						reason,
-					);
+					rt.gateTriage?.handleBlock(deliverableId, reason);
 				},
 				onAllSettled: () => {
 					rt.invalidateFooter?.();
@@ -667,6 +663,12 @@ export function createRuntimeContext(
 					if (eng) clearResearchScratch(eng.get().slug);
 				},
 				onEvent: (event) => sendAgentEvent(pi, event),
+			});
+			rt.gateTriage = new GateTriage({
+				ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+				execution: () => rt.execution,
+				pi,
+				notify: (m, level) => ctx.ui.notify(m, level),
 			});
 			await rt.execution.start();
 		},

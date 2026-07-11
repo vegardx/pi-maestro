@@ -41,6 +41,7 @@ import {
 } from "./panel.js";
 import { buildVerifierProfile } from "./personas.js";
 import type { SubAgentSpec } from "./schema.js";
+import { renderCollapsedResult } from "./tool-render.js";
 
 /** Panel + persisted episode state, fetched live from the maestro. */
 export interface PanelState {
@@ -138,6 +139,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			"review — run your review panel once, then verify your fixes " +
 			"(resolutions: fixed/wont-fix/disputed/duplicateOf per finding id).",
 		parameters: ReviewParams,
+		// Panel rounds concatenate full reviewer reports — the WORKER model
+		// needs them; the human watching the pane gets a preview + expand.
+		renderResult: renderCollapsedResult,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
 			const subagents = deps.subagents();
 			if (!subagents) {

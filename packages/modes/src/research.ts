@@ -39,6 +39,7 @@ import type { PlanEngine } from "./engine.js";
 import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
 import type { ResearchWatchdogSettings } from "./settings.js";
+import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -197,6 +198,7 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 		promptSnippet:
 			"research — fan out parallel research agents (codebase/web/advisor); batch questions into one call.",
 		parameters: ResearchParams,
+		renderResult: renderCollapsedResult,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) return error("no plan active — run /plan first");
@@ -461,6 +463,8 @@ export function createDigTool(deps: ResearchDeps): ToolDefinition {
 		promptSnippet:
 			"dig — expand a research digest to its full report (by ref).",
 		parameters: DigParams,
+		// Full reports are for the MODEL; the human gets a preview + expand.
+		renderResult: renderCollapsedResult,
 		async execute(_id, params): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) return error("no plan active");
@@ -518,7 +522,13 @@ function researcherPreamble(kind: ResearchKind): string {
 		"/ 500 characters, dense and self-sufficient — the answer plus the two " +
 		"or three load-bearing facts and any caveat, enough that the reader " +
 		"rarely needs the detail above it. Be factual; no preamble, no offers to " +
-		"help further.";
+		"help further.\n\n" +
+		"LENGTH BUDGET — hard limits, not suggestions: findings ≤ 700 words. " +
+		"Evidence is a REFERENCE (file:line, URL, doc section), never a quoted " +
+		"wall — cite where it lives, state what it shows in one sentence. Depth " +
+		"comes from precision, not volume; a reader who wants the raw source " +
+		"follows your reference. Cut anything that does not change what the " +
+		"maestro would decide.";
 	switch (kind) {
 		case "codebase":
 			return `${shared}\n\nScope: THIS repository. Use read/grep/find/ls to establish facts (existing patterns, types, seams, tests).`;

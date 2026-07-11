@@ -6,8 +6,10 @@
 import {
 	type AgentToolResult,
 	defineTool,
+	type Theme,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type {
 	RunId,
@@ -119,6 +121,37 @@ function formatModels(models: DelegableModel[]): string {
 	return `Delegable models (pick per task):\n${lines.join("\n")}`;
 }
 
+/**
+ * Collapsed result rendering: a foreground review/general run returns its
+ * whole report as the tool result — pi's fallback renderer would dump ALL of
+ * it into the dialog (custom tools have no built-in preview). Display-only;
+ * the model always receives the full text. (Duplicated from modes'
+ * tool-render.ts — extension packages must not import each other.)
+ */
+const PREVIEW_LINES = 8;
+function renderCollapsedResult(
+	result: { content: ReadonlyArray<{ type: string; text?: string }> },
+	options: { expanded: boolean },
+	theme: Theme,
+): Text {
+	const full = result.content
+		.filter((c) => c.type === "text" && c.text)
+		.map((c) => c.text)
+		.join("\n")
+		.trimEnd();
+	const lines = full.split("\n");
+	if (options.expanded || lines.length <= PREVIEW_LINES + 2) {
+		return new Text(theme.fg("toolOutput", full), 0, 0);
+	}
+	const preview = lines.slice(0, PREVIEW_LINES).join("\n");
+	const tail = `(+${lines.length - PREVIEW_LINES} more lines — expand to read)`;
+	return new Text(
+		`${theme.fg("toolOutput", preview)}\n${theme.fg("dim", tail)}`,
+		0,
+		0,
+	);
+}
+
 export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 	const text = (t: string) => ({
 		content: [{ type: "text" as const, text: t }],
@@ -136,6 +169,7 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 		promptSnippet:
 			"subagent — delegate a focused task (general/explore/plan/review/agent); general takes any whitelisted model + effort.",
 		parameters: SubagentParams,
+		renderResult: renderCollapsedResult,
 		async execute(_id, params): Promise<AgentToolResult<SubagentDetails>> {
 			const cap = deps.capability();
 			if (!cap) {

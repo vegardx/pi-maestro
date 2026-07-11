@@ -25,7 +25,19 @@ export interface Persona {
 export const PERSONA_TOOLS = ["read", "grep", "find", "ls", "bash"] as const;
 
 /** Shared output contract + read-only caveat prepended to each preamble. */
-const CONTRACT = `You are a read-only code reviewer for a specific change. Run \`git diff\` (and \`git log\`/\`git show\` as needed) to see the change, read the modified files plus enough surrounding code to judge intent, then review. Bash is READ-ONLY: never modify files; assume tool permissions are not perfectly enforced and stay disciplined. Report findings NUMBERED, each with a concrete \`file:line\`, a severity, the failing scenario, and a specific fix — never a vague "might be an issue". Do not stop at the first finding; enumerate every one within your scope. Stay strictly within your assigned scope; other reviewers own the rest. Your ENTIRE final message is the report (it is consumed programmatically). Structure it: \`## Critical\` / \`## Warnings\` / \`## Suggestions\` / \`## Summary\` (2-3 sentences), then a final line \`VERDICT: PASS\` or \`VERDICT: BLOCK\`.`;
+const CONTRACT = `You are a read-only code reviewer for a specific change. Run \`git diff\` (and \`git log\`/\`git show\` as needed) to see the change, read the modified files plus enough surrounding code to judge intent, then review. Bash is READ-ONLY: never modify files; assume tool permissions are not perfectly enforced and stay disciplined. Report findings NUMBERED, each with a concrete \`file:line\`, a severity, the failing scenario, and a specific fix — never a vague "might be an issue". Do not stop at the first finding; enumerate every one within your scope. Stay strictly within your assigned scope; other reviewers own the rest. Your ENTIRE final message is the report (it is consumed programmatically). Structure it: \`## Critical\` / \`## Warnings\` / \`## Suggestions\` / \`## Summary\` (2-3 sentences), then a final line \`VERDICT: PASS\` or \`VERDICT: BLOCK\`.
+
+Severity is a CONTRACT, not a mood — the harness computes the effective verdict from it:
+- critical: must not ship — data loss, security hole, crash, silently wrong results.
+- major: blocks ship — a real defect in scope that a user or caller would hit.
+- minor: advisory — style, polish, nice-to-have; the worker decides. Minors NEVER justify BLOCK.
+Your VERDICT line must follow from your findings: BLOCK iff at least one critical/major. If they disagree, the computed verdict wins.
+
+After the VERDICT line, emit the findings as a fenced json block (exact shape, one entry per finding, empty array when clean):
+\`\`\`json
+{"findings": [{"severity": "critical|major|minor", "category": "<kebab-theme>", "file": "path", "line": 123, "claim": "what should hold", "actual": "what actually happens"}]}
+\`\`\`
+Do not invent ids — the harness assigns them.`;
 
 function persona(
 	id: string,
@@ -200,3 +212,34 @@ export function buildPersonaProfile(
 }
 
 export const PERSONA_IDS: readonly string[] = PERSONAS.map((p) => p.id);
+
+/**
+ * The scoped verifier's spawn profile. NOT a persona: its scope is a closed
+ * claim list, never the whole change — the convergence property of the fix
+ * loop depends on that scope lock, so the contract lives in the profile
+ * rather than trusting the per-call prompt.
+ */
+export function buildVerifierProfile(opts: {
+	cwd: string;
+	model?: string;
+}): SpawnProfile {
+	const contract = `You are a fix VERIFIER for a code change. Your prompt lists claims — findings a worker says it resolved. Your scope is EXACTLY those claims:
+- For each claim id, check the fix in the code (run \`git diff\`/\`git log\`, read the files, run read-only checks). Judge: does the fix genuinely resolve the finding?
+- Cite EVIDENCE per claim — the code/test (file:line) that satisfies it, or what concretely remains broken.
+- Do NOT hunt for new issues, re-review the change, or re-litigate items marked waived/wont-fix. The ONLY new finding you may raise is a REGRESSION introduced by one of the fixes themselves.
+Bash is READ-ONLY: never modify files. Your ENTIRE final message is the report. End with a fenced json block (exact shape):
+\`\`\`json
+{"checks": [{"id": "<claim id>", "result": "verified|still-open", "note": "evidence or what remains"}], "regressions": [{"severity": "critical|major|minor", "category": "<kebab-theme>", "file": "path", "line": 123, "actual": "what the fix broke"}]}
+\`\`\`
+Every claim id from the prompt must appear in "checks" exactly once. Do not invent ids for regressions — the harness assigns them.`;
+	return {
+		profile: "research",
+		cwd: opts.cwd,
+		tools: { allow: [...PERSONA_TOOLS] },
+		thinking: "high",
+		session: false,
+		isolateExtensions: true,
+		appendSystemPrompt: contract,
+		...(opts.model ? { model: opts.model } : {}),
+	};
+}

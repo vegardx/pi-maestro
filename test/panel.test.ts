@@ -87,6 +87,7 @@ describe("runReviewPanel", () => {
 				kind: "review" as const,
 				verdict: "approve" as const,
 				findings: [],
+				structured: [],
 				report: "",
 				ok: true,
 			},

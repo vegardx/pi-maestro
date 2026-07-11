@@ -126,6 +126,11 @@ export interface PanelReadResponseMessage {
 	 * rehydrates its review episode from this instead of starting blind.
 	 */
 	readonly ledger?: ReviewLedgerWire;
+	/**
+	 * Canonical finding ids the human has waived — the worker and verifier
+	 * must not re-litigate these; they no longer hold the gate.
+	 */
+	readonly waivedFindingIds?: readonly string[];
 }
 
 // ─── Review ledger (wire mirror of modes' exec/findings.ts) ─────────────────

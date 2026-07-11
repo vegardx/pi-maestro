@@ -47,28 +47,39 @@ export function computedVerdict(
 }
 
 /**
+ * Extract findings from the fenced ```json block only — null when the report
+ * has no valid block. Callers that normalize verdicts from severity must use
+ * this strict form: fallback-parsed bullets carry made-up severities, so they
+ * are display material, never verdict material.
+ */
+export function parseJsonFindings(report: string): StructuredFinding[] | null {
+	const blocks = [...report.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+	const last = blocks.at(-1)?.[1];
+	if (!last) return null;
+	try {
+		const parsed = JSON.parse(last) as {
+			findings?: Array<Record<string, unknown>>;
+		};
+		if (Array.isArray(parsed.findings)) {
+			return parsed.findings
+				.map((f, i) => normalizeFinding(f, i))
+				.filter((f): f is StructuredFinding => f !== null);
+		}
+	} catch {
+		// fall through to the bullet fallback
+	}
+	return null;
+}
+
+/**
  * Extract structured findings from a reviewer report: the fenced ```json
  * block after the verdict line. Tolerant — a model that answers with plain
  * bullets instead falls back to parsing "file.ts:12 — description" lines, so
  * older reports and non-compliant runs still yield usable structure.
  */
 export function parseStructuredFindings(report: string): StructuredFinding[] {
-	const blocks = [...report.matchAll(/```json\s*\n([\s\S]*?)```/g)];
-	const last = blocks.at(-1)?.[1];
-	if (last) {
-		try {
-			const parsed = JSON.parse(last) as {
-				findings?: Array<Record<string, unknown>>;
-			};
-			if (Array.isArray(parsed.findings)) {
-				return parsed.findings
-					.map((f, i) => normalizeFinding(f, i))
-					.filter((f): f is StructuredFinding => f !== null);
-			}
-		} catch {
-			// fall through to the bullet fallback
-		}
-	}
+	const json = parseJsonFindings(report);
+	if (json) return json;
 	return parseVerdict(report).findings.map((bullet, i) => {
 		const m = bullet.match(/^`?([^\s`—:]+):(\d+)`?\s*—\s*(.*)$/);
 		return {

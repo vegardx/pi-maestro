@@ -8,6 +8,12 @@ import type {
 	SpawnProfile,
 	SubagentsCapabilityV1,
 } from "@vegardx/pi-contracts";
+import {
+	computedVerdict,
+	parseJsonFindings,
+	parseStructuredFindings,
+	type StructuredFinding,
+} from "./exec/findings.js";
 import { parseVerdict, type Verdict } from "./exec/verdicts.js";
 import { buildPersonaProfile } from "./personas.js";
 import type { SubAgentSpec } from "./schema.js";
@@ -19,6 +25,14 @@ export interface PanelResult {
 	readonly kind: "review" | "helper";
 	readonly verdict: Verdict;
 	readonly findings: readonly string[];
+	/**
+	 * Ledger-eligible structured findings. From the report's JSON block when
+	 * the reviewer complied (and then the verdict is COMPUTED from severity —
+	 * the stated VERDICT line loses on mismatch); for non-compliant reviewers,
+	 * fallback-parsed bullets count only when the reviewer itself blocked, so
+	 * a PASS with suggestion bullets never fabricates blocking findings.
+	 */
+	readonly structured: readonly StructuredFinding[];
 	/** The reviewer's full report (or an error line when it failed). */
 	readonly report: string;
 	readonly ok: boolean;
@@ -38,8 +52,10 @@ export interface RunPanelDeps {
 
 // Deep reviews on slow gateway routes routinely take 4–6 minutes; a 5-minute
 // cap killed thorough required reviewers mid-read and blocked ship with
-// "timed out" instead of a verdict (radicalai dogfood, 2026-07-11).
-const DEFAULT_TIMEOUT_MS = 600_000;
+// "timed out" instead of a verdict (radicalai dogfood, 2026-07-11). Exported
+// so the executor derives its in-flight protection window from it — a guard
+// shorter than a legitimate round reopens the kill-mid-review hole.
+export const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** Spawn every panel entry concurrently and collect normalized verdicts. */
 export async function runReviewPanel(
@@ -55,7 +71,10 @@ async function runOne(
 ): Promise<PanelResult> {
 	const kind = spec.kind ?? "review";
 	const required = Boolean(spec.required);
-	const base: Omit<PanelResult, "verdict" | "findings" | "report" | "ok"> = {
+	const base: Omit<
+		PanelResult,
+		"verdict" | "findings" | "structured" | "report" | "ok"
+	> = {
 		name: spec.name,
 		persona: spec.persona,
 		required,
@@ -69,6 +88,7 @@ async function runOne(
 			...base,
 			verdict: "none",
 			findings: [],
+			structured: [],
 			report: `(unknown persona: ${spec.persona})`,
 			ok: false,
 		};
@@ -100,16 +120,39 @@ async function runOne(
 				...base,
 				verdict: "none",
 				findings: [],
+				structured: [],
 				report: `(reviewer ${result.status}: ${result.error ?? "no report"})`,
 				ok: false,
 			};
 		}
 		// Helpers produce info, not a gating verdict.
-		const parsed = kind === "review" ? parseVerdict(report) : null;
+		if (kind !== "review") {
+			return {
+				...base,
+				verdict: "none",
+				findings: [],
+				structured: [],
+				report,
+				ok: true,
+			};
+		}
+		const parsed = parseVerdict(report);
+		const json = parseJsonFindings(report);
+		// JSON-compliant: severity decides the verdict — a stated BLOCK over
+		// three minors normalizes to approve, a stated PASS over a critical
+		// blocks. Non-compliant: the stated verdict stands, and its bullets
+		// become (major) findings only when the reviewer itself blocked.
+		const structured =
+			json ??
+			(parsed.verdict === "request-changes"
+				? parseStructuredFindings(report)
+				: []);
+		const verdict = json ? computedVerdict(json) : parsed.verdict;
 		return {
 			...base,
-			verdict: parsed?.verdict ?? "none",
-			findings: parsed?.findings ?? [],
+			verdict,
+			findings: parsed.findings,
+			structured,
 			report,
 			ok: true,
 		};
@@ -118,6 +161,7 @@ async function runOne(
 			...base,
 			verdict: "none",
 			findings: [],
+			structured: [],
 			report: `(spawn failed: ${err instanceof Error ? err.message : String(err)})`,
 			ok: false,
 		};

@@ -16,9 +16,11 @@ import {
 	type Tier,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
+import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
 import type { PlanEngine } from "../engine.js";
+import type { ReviewLedger } from "../exec/findings.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
 import { createReviewTool } from "../review-tool.js";
 import type { SubAgentSpec } from "../schema.js";
@@ -152,9 +154,10 @@ export function createModesRuntime(
 	}
 
 	// Worker-side review tool — registered only in a worker (agent mode). It
-	// runs the deliverable's persona panel over the subagents transport,
-	// fetching the panel live via panelRead and reporting each round's verdicts
-	// back over panelVerdict so the executor's ship gate can read them. The
+	// runs the deliverable's persona panel ONCE over the subagents transport,
+	// then scope-locked verification runs; each run reports its verdicts AND
+	// the review ledger over panelVerdict so the executor's ship gate reads
+	// "blocking ledger empty" (and persists the ledger on the plan). The
 	// maestro never sees this tool (it has no single deliverable to review).
 	if (isAgentMode()) {
 		const deliverableId = () =>
@@ -163,18 +166,33 @@ export function createModesRuntime(
 		pi.registerTool(
 			createReviewTool({
 				subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
-				panel: async () => {
+				panelState: async () => {
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
-					if (!bridge || !id) return [];
-					return (await bridge.panelRead(id)).panel as SubAgentSpec[];
+					if (!bridge || !id) return { panel: [] };
+					const result = await bridge.panelRead(id);
+					return {
+						panel: result.panel as SubAgentSpec[],
+						// Wire ledger and the canonical one are structurally
+						// identical (see ReviewLedgerWire); clone out of readonly.
+						...(result.ledger
+							? {
+									ledger: structuredClone(
+										result.ledger,
+									) as unknown as ReviewLedger,
+								}
+							: {}),
+						...(result.waivedFindingIds
+							? { waived: result.waivedFindingIds }
+							: {}),
+					};
 				},
 				cwd: () => process.cwd(),
 				// Reviewers run on the `review` tier: a pinned distinct model
 				// (cross-model second opinion), or undefined to inherit the
 				// session model when review tracks plan.
 				resolveModel: (ctx) => pinnedTierModel(ctx, "review"),
-				reportVerdicts: (results) => {
+				report: (roundKind, results, ledger) => {
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
 					if (!bridge || !id) return;
@@ -194,6 +212,10 @@ export function createModesRuntime(
 								// can show the human WHAT holds the gate.
 								report: clipReport(r.report),
 							})),
+						{
+							roundKind,
+							ledger: structuredClone(ledger) as ReviewLedgerWire,
+						},
 					);
 				},
 			}),

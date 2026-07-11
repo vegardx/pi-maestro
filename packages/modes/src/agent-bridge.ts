@@ -21,6 +21,8 @@ import {
 export interface PanelReadResult {
 	readonly panel: readonly PanelReviewerSpec[];
 	readonly ledger?: ReviewLedgerWire;
+	/** Canonical finding ids the human has waived (never re-litigated). */
+	readonly waivedFindingIds?: readonly string[];
 }
 
 /**
@@ -422,6 +424,9 @@ export class AgentBridge {
 				this.settlePanelRead({
 					panel: msg.panel,
 					...(msg.ledger ? { ledger: msg.ledger } : {}),
+					...(msg.waivedFindingIds
+						? { waivedFindingIds: msg.waivedFindingIds }
+						: {}),
 				});
 				break;
 			}

@@ -121,6 +121,56 @@ export interface PanelReadResponseMessage {
 	readonly type: "panelReadResponse";
 	readonly id: string;
 	readonly panel: readonly PanelReviewerSpec[];
+	/**
+	 * The persisted review ledger, when one exists — a respawned worker
+	 * rehydrates its review episode from this instead of starting blind.
+	 */
+	readonly ledger?: ReviewLedgerWire;
+}
+
+// ─── Review ledger (wire mirror of modes' exec/findings.ts) ─────────────────
+// Structural duplicate on purpose: rpc is a library package that modes depends
+// on, so the canonical types (which live with the ledger logic in modes)
+// cannot be imported here. Same pattern as PanelReviewerSpec ↔ SubAgentSpec.
+
+export type LedgerSeverity = "critical" | "major" | "minor";
+
+export interface LedgerFindingWire {
+	readonly id: string;
+	readonly severity: LedgerSeverity;
+	readonly category: string;
+	readonly file?: string;
+	readonly line?: number;
+	readonly task?: string;
+	readonly claim?: string;
+	readonly actual: string;
+}
+
+export interface LedgerEntryWire {
+	readonly finding: LedgerFindingWire;
+	readonly reviewer: string;
+	readonly resolution?: {
+		readonly id: string;
+		readonly status: "fixed" | "wont-fix" | "disputed" | "duplicateOf";
+		readonly note: string;
+		readonly canonical?: string;
+		readonly at: string;
+	};
+	readonly check?: {
+		readonly id: string;
+		readonly result: "verified" | "still-open";
+		readonly note?: string;
+		readonly at: string;
+	};
+	readonly duplicates?: readonly string[];
+	readonly disputes?: number;
+}
+
+export interface ReviewLedgerWire {
+	readonly round: number;
+	readonly cycle: number;
+	readonly entries: readonly LedgerEntryWire[];
+	readonly updatedAt: string;
 }
 
 /** Verdict of one reviewer in a completed panel round. */
@@ -156,6 +206,14 @@ export interface PanelVerdictMessage {
 	readonly deliverableId: string;
 	readonly round: number;
 	readonly verdicts: readonly PanelVerdictEntry[];
+	/**
+	 * What kind of run this reports: a full persona panel round, or a scoped
+	 * verification of claimed fixes. Absent on messages from older workers
+	 * (treated as "panel").
+	 */
+	readonly roundKind?: "panel" | "verification";
+	/** The review ledger after this run — the executor persists it on the plan. */
+	readonly ledger?: ReviewLedgerWire;
 }
 
 /** Agent answers a ping. */

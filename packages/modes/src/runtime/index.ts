@@ -167,7 +167,7 @@ export function createModesRuntime(
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
 					if (!bridge || !id) return [];
-					return (await bridge.panelRead(id)) as SubAgentSpec[];
+					return (await bridge.panelRead(id)).panel as SubAgentSpec[];
 				},
 				cwd: () => process.cwd(),
 				// Reviewers run on the `review` tier: a pinned distinct model

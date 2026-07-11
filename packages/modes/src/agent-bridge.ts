@@ -14,7 +14,14 @@ import {
 	type PanelReviewerSpec,
 	type PanelVerdictEntry,
 	type PlanMutateResultMessage,
+	type ReviewLedgerWire,
 } from "@vegardx/pi-rpc";
+
+/** What panelRead returns: the live panel + the persisted review ledger. */
+export interface PanelReadResult {
+	readonly panel: readonly PanelReviewerSpec[];
+	readonly ledger?: ReviewLedgerWire;
+}
 
 /**
  * Agent-side RPC bridge. Activated when the agent detects it's running
@@ -79,7 +86,7 @@ export class AgentBridge {
 	private pendingPanelRead:
 		| {
 				id: string;
-				resolve: (panel: readonly PanelReviewerSpec[]) => void;
+				resolve: (result: PanelReadResult) => void;
 				timer: ReturnType<typeof setTimeout>;
 		  }
 		| undefined;
@@ -197,21 +204,35 @@ export class AgentBridge {
 		deliverableId: string,
 		round: number,
 		verdicts: readonly PanelVerdictEntry[],
+		opts?: {
+			roundKind?: "panel" | "verification";
+			ledger?: ReviewLedgerWire;
+		},
 	): void {
-		this.client.send({ type: "panelVerdict", deliverableId, round, verdicts });
+		this.client.send({
+			type: "panelVerdict",
+			deliverableId,
+			round,
+			verdicts,
+			...(opts?.roundKind ? { roundKind: opts.roundKind } : {}),
+			...(opts?.ledger ? { ledger: opts.ledger } : {}),
+		});
 	}
 
-	/** Request this deliverable's live review panel (the subAgents to run). */
-	panelRead(deliverableId: string): Promise<readonly PanelReviewerSpec[]> {
-		if (this.pendingPanelRead) return Promise.resolve([]);
+	/**
+	 * Request this deliverable's live review panel plus the persisted review
+	 * ledger (a respawned worker rehydrates its review episode from it).
+	 */
+	panelRead(deliverableId: string): Promise<PanelReadResult> {
+		if (this.pendingPanelRead) return Promise.resolve({ panel: [] });
 		const id = randomUUID();
 		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
 		this.client.send({ type: "panelRead", id, deliverableId });
-		return new Promise<readonly PanelReviewerSpec[]>((resolve) => {
+		return new Promise<PanelReadResult>((resolve) => {
 			const timer = setTimeout(() => {
 				if (this.pendingPanelRead?.id !== id) return;
 				this.pendingPanelRead = undefined;
-				resolve([]);
+				resolve({ panel: [] });
 			}, timeoutMs);
 			timer.unref?.();
 			this.pendingPanelRead = { id, resolve, timer };
@@ -320,7 +341,7 @@ export class AgentBridge {
 	private settlePending(): void {
 		this.settleAsk([]);
 		this.settlePlanRead("");
-		this.settlePanelRead([]);
+		this.settlePanelRead({ panel: [] });
 		this.settlePlanMutate({
 			type: "planMutateResult",
 			id: this.pendingPlanMutate?.id ?? "",
@@ -354,12 +375,12 @@ export class AgentBridge {
 		pending.resolve(result);
 	}
 
-	private settlePanelRead(panel: readonly PanelReviewerSpec[]): void {
+	private settlePanelRead(result: PanelReadResult): void {
 		const pending = this.pendingPanelRead;
 		if (!pending) return;
 		clearTimeout(pending.timer);
 		this.pendingPanelRead = undefined;
-		pending.resolve(panel);
+		pending.resolve(result);
 	}
 
 	private handleMessage(msg: MaestroMessage): void {
@@ -398,7 +419,10 @@ export class AgentBridge {
 			}
 			case "panelReadResponse": {
 				if (this.pendingPanelRead?.id !== msg.id) break;
-				this.settlePanelRead(msg.panel);
+				this.settlePanelRead({
+					panel: msg.panel,
+					...(msg.ledger ? { ledger: msg.ledger } : {}),
+				});
 				break;
 			}
 			case "planMutateResult": {
@@ -438,7 +462,7 @@ export class AgentBridge {
 				} else if (this.pendingPlanRead?.id === msg.id) {
 					this.settlePlanRead(`Error: ${msg.message}`);
 				} else if (this.pendingPanelRead?.id === msg.id) {
-					this.settlePanelRead([]);
+					this.settlePanelRead({ panel: [] });
 				} else if (this.pendingPlanMutate?.id === msg.id) {
 					this.settlePlanMutate({
 						type: "planMutateResult",

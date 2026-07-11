@@ -16,34 +16,28 @@ import {
 	pickBaseBranch,
 	repoFor,
 } from "../schema.js";
+import {
+	parseStructuredFindings,
+	renderFinding,
+	type StructuredFinding,
+} from "./findings.js";
 import { parseVerdict } from "./verdicts.js";
+
+// The structured-finding vocabulary moved to the shared findings module (the
+// panel ledger uses the same schema); re-exported here for existing callers.
+export {
+	FINDING_SEVERITIES,
+	type FindingSeverity,
+	parseStructuredFindings,
+	renderFinding,
+	type StructuredFinding,
+} from "./findings.js";
 
 /** Statuses with work on disk/remote worth verifying. */
 const STARTED = new Set(["active", "complete", "shipped"]);
 
 /** Diffs beyond this are clipped in the prompt (the agent can read files). */
 const DIFF_CLIP = 50_000;
-
-/** Severity buckets — "critical" is un-ship-this, "minor" is note-for-later. */
-export const FINDING_SEVERITIES = ["critical", "major", "minor"] as const;
-export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
-
-/**
- * One structured verifier finding. The claim/actual pair is what makes a
- * finding decidable without reading the full report; `category` groups the
- * cross-cutting themes (copied broken patterns) across deliverables; `task`
- * links back to the WorkItem whose claimed completion it contradicts.
- */
-export interface StructuredFinding {
-	readonly id: string;
-	readonly severity: FindingSeverity;
-	readonly category: string;
-	readonly file?: string;
-	readonly line?: number;
-	readonly task?: string;
-	readonly claim?: string;
-	readonly actual: string;
-}
 
 export interface VerifyEntry {
 	readonly id: string;
@@ -231,72 +225,6 @@ export function gatherEvidence(
 		return { facts, problems, diff: diff.stdout, cwd };
 	}
 	return { facts, problems, cwd };
-}
-
-/**
- * Extract structured findings from a verifier report: the fenced ```json
- * block after the verdict line. Tolerant — a model that answers with plain
- * bullets instead falls back to parsing "file.ts:12 — description" lines, so
- * older reports and non-compliant runs still yield usable structure.
- */
-export function parseStructuredFindings(report: string): StructuredFinding[] {
-	const blocks = [...report.matchAll(/```json\s*\n([\s\S]*?)```/g)];
-	const last = blocks.at(-1)?.[1];
-	if (last) {
-		try {
-			const parsed = JSON.parse(last) as {
-				findings?: Array<Record<string, unknown>>;
-			};
-			if (Array.isArray(parsed.findings)) {
-				return parsed.findings
-					.map((f, i) => normalizeFinding(f, i))
-					.filter((f): f is StructuredFinding => f !== null);
-			}
-		} catch {
-			// fall through to the bullet fallback
-		}
-	}
-	return parseVerdict(report).findings.map((bullet, i) => {
-		const m = bullet.match(/^`?([^\s`—:]+):(\d+)`?\s*—\s*(.*)$/);
-		return {
-			id: `F${i + 1}`,
-			severity: "major" as const,
-			category: "uncategorized",
-			...(m ? { file: m[1], line: Number.parseInt(m[2], 10) } : {}),
-			actual: m ? m[3] : bullet,
-		};
-	});
-}
-
-function normalizeFinding(
-	f: Record<string, unknown>,
-	index: number,
-): StructuredFinding | null {
-	const actual = String(f.actual ?? f.summary ?? f.description ?? "").trim();
-	if (!actual) return null;
-	const severity = FINDING_SEVERITIES.includes(f.severity as FindingSeverity)
-		? (f.severity as FindingSeverity)
-		: "major";
-	const line = Number(f.line);
-	return {
-		id: typeof f.id === "string" && f.id ? f.id : `F${index + 1}`,
-		severity,
-		category:
-			typeof f.category === "string" && f.category
-				? f.category
-				: "uncategorized",
-		...(typeof f.file === "string" && f.file ? { file: f.file } : {}),
-		...(Number.isFinite(line) && line > 0 ? { line } : {}),
-		...(typeof f.task === "string" && f.task ? { task: f.task } : {}),
-		...(typeof f.claim === "string" && f.claim ? { claim: f.claim } : {}),
-		actual,
-	};
-}
-
-/** One-line rendering of a structured finding for notify-style output. */
-export function renderFinding(f: StructuredFinding): string {
-	const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""} — ` : "";
-	return `${where}${f.actual}`;
 }
 
 const clipDiff = (diff: string): string =>

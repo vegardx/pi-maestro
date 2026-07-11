@@ -14,6 +14,7 @@ import {
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
+import type { ReviewLedger } from "./exec/findings.js";
 
 export {
 	type AgentMode,
@@ -135,7 +136,7 @@ export interface Deliverable {
 	subAgents?: SubAgentSpec[];
 	/** Gating work items the worker must complete. */
 	tasks: WorkItem[];
-	/** Review→fix round cap before the deliverable blocks. Default 2. */
+	/** Fix+verify cycle cap before the deliverable blocks. Default 3. */
 	maxFixRounds?: number;
 	// ── Runtime state ──
 	/** Git branch (typically feat/<id>). */
@@ -161,6 +162,13 @@ export interface Deliverable {
 	 * treats waived findings as acknowledged instead of re-flagging them.
 	 */
 	waivers?: ReviewWaiver[];
+	/**
+	 * The panel review ledger (minted findings + resolution state across fix
+	 * cycles). Persisted so the gate survives worker respawns and maestro
+	 * restarts — the in-memory verdict maps are a cache of this, never the
+	 * source of truth.
+	 */
+	reviewLedger?: ReviewLedger;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -171,6 +179,15 @@ export interface ReviewWaiver {
 	reviewer: string;
 	/** The mandatory override note — why the findings don't block. */
 	reason: string;
+	/**
+	 * Canonical ledger id of the waived finding (when the waiver targets one
+	 * finding rather than a whole verdict). claim/file carry the durable
+	 * identity across systems — panel ids and /verify ids never match, so
+	 * cross-loop matching is semantic (claim text), not by id.
+	 */
+	findingId?: string;
+	claim?: string;
+	file?: string;
 	at: string;
 }
 

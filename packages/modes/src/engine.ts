@@ -3,6 +3,7 @@
 // timestamps and persists atomically. Invalid mutations throw before touching
 // disk, so the in-memory plan and the file never diverge.
 
+import type { ReviewLedger } from "./exec/findings.js";
 import {
 	type AgentMode,
 	type AgentSpec,
@@ -341,12 +342,36 @@ export class PlanEngine {
 	/** Record a human gate override permanently (see ReviewWaiver). */
 	addWaiver(
 		deliverableId: string,
-		waiver: { reviewer: string; reason: string },
+		waiver: {
+			reviewer: string;
+			reason: string;
+			findingId?: string;
+			claim?: string;
+			file?: string;
+		},
 	): void {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, deliverableId);
 			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			g.waivers = [...(g.waivers ?? []), { ...waiver, at: this.now() }];
+			g.updatedAt = this.now();
+		});
+	}
+
+	/**
+	 * Persist the panel review ledger (source of truth for the ship gate —
+	 * survives worker respawns and maestro restarts). Undefined clears it
+	 * (fresh review episode after a structural reopen).
+	 */
+	setReviewLedger(
+		deliverableId: string,
+		ledger: ReviewLedger | undefined,
+	): void {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+			if (ledger) g.reviewLedger = ledger;
+			else delete g.reviewLedger;
 			g.updatedAt = this.now();
 		});
 	}

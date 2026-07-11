@@ -3,6 +3,7 @@
 // only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ledgerSummary, openBlocking } from "../exec/findings.js";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { ResearchRunView } from "../research.js";
@@ -204,6 +205,19 @@ export function renderAgentsOverview(
 		const deliverableState = snap?.deliverables.get(g.id);
 		if (deliverableState?.blocked) {
 			lines.push(`  ⚠ Blocked: ${deliverableState.blocked}`);
+		}
+		// The review loop at a glance — mid-fix-cycle state is otherwise
+		// invisible until the deliverable blocks ("why is it steering again?").
+		if (g.reviewLedger) {
+			const waived = new Set(
+				(g.waivers ?? []).flatMap((w) => (w.findingId ? [w.findingId] : [])),
+			);
+			const open = openBlocking(g.reviewLedger, waived);
+			if (open.length > 0 || g.reviewLedger.cycle > 0) {
+				lines.push(
+					`  Review: ${ledgerSummary(g.reviewLedger, g.maxFixRounds ?? 3, waived)}`,
+				);
+			}
 		}
 		if (g.prUrl) {
 			lines.push(`  PR: ${g.prUrl}`);

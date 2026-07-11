@@ -322,9 +322,12 @@ export const DELIVERABLE_TRANSITIONS: Record<
 	planned: ["active", "abandoned"],
 	active: ["complete", "abandoned"],
 	// complete → active: reopened for rework (a human sent the worker back to
-	// address review findings at the ship gate).
-	complete: ["active", "shipped", "superseded", "abandoned"],
-	shipped: [],
+	// address review findings at the ship gate). complete/shipped → planned:
+	// reopened by /verify remediation — the deliverable re-enters the DAG
+	// queue (its branch/worktree/PR are reused) and normal activation
+	// re-provisions and respawns a worker when its dependencies allow.
+	complete: ["active", "planned", "shipped", "superseded", "abandoned"],
+	shipped: ["planned"],
 	superseded: [],
 	abandoned: [],
 };

@@ -90,8 +90,8 @@ describe("DeliverableStatus transitions", () => {
 		expect(canTransition("planned", "shipped")).toBe(false);
 	});
 
-	it("does not allow shipped → anything", () => {
-		expect(canTransition("shipped", "planned")).toBe(false);
+	it("shipped can only reopen to planned (verify remediation)", () => {
+		expect(canTransition("shipped", "planned")).toBe(true);
 		expect(canTransition("shipped", "active")).toBe(false);
 		expect(canTransition("shipped", "abandoned")).toBe(false);
 	});

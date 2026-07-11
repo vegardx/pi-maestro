@@ -15,13 +15,15 @@ import { getModelMeta, resolveModelWithin } from "@vegardx/pi-models";
 import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
 import type { PlanEngine } from "../engine.js";
+import { applyRemediation, renderRemediation } from "../exec/remediate.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
 import {
 	renderVerification,
 	runVerification,
+	type VerifyEntry,
 	verifyTargets,
 } from "../exec/verify.js";
-import { writeVerificationReport } from "../exec/verify-report.js";
+import { themeRollup, writeVerificationReport } from "../exec/verify-report.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
 import { planPhase } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
@@ -307,11 +309,13 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			// Persist the round: the markdown is the triage surface, the JSON is
 			// what the remediation flow consumes.
 			let reportNote = "";
+			let round: number | undefined;
 			try {
 				const paths = writeVerificationReport(
 					join(plansRoot(), plan.slug),
 					entries,
 				);
+				round = paths.round;
 				reportNote = `\nFull report: ${paths.mdPath}`;
 			} catch {
 				// Report persistence is best-effort — the notify still carries
@@ -321,6 +325,10 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				`${renderVerification(entries)}${reportNote}`,
 				problems ? "warning" : "info",
 			);
+			const failed = entries.filter((e) => e.verdict === "fail");
+			if (failed.length > 0) {
+				await presentRemediationTriage(rt, ctx, entries, round, failed.length);
+			}
 		},
 	});
 
@@ -688,4 +696,100 @@ function _createForwardSummaryGenerator(
 		if (!text) throw new Error("Empty summary response");
 		return text;
 	};
+}
+
+// ─── /verify remediation triage ──────────────────────────────────────────────
+
+const REMEDIATE_LEADERS = "Remediate: theme leaders first";
+const REMEDIATE_ALL = "Remediate: reopen all now";
+const REMEDIATE_NONE = "Report only";
+
+/**
+ * After a failing verification round: ask the human how to remediate, then
+ * execute the choice. Theme-leaders mode reopens everything but sequences
+ * cross-cutting themes behind ONE leader deliverable via ordinary dependsOn
+ * edges — the executor's DAG activation runs wave 2 automatically when a
+ * leader re-lands, so no human action is needed between waves.
+ */
+async function presentRemediationTriage(
+	rt: RuntimeContext,
+	ctx: ExtensionCommandContext,
+	entries: readonly VerifyEntry[],
+	round: number | undefined,
+	failedCount: number,
+): Promise<void> {
+	const ask = rt.maestro.capabilities.get(CAPABILITIES.ask);
+	if (!ask || !rt.engine) return;
+	const themes = themeRollup(entries.filter((e) => e.verdict === "fail"))
+		.filter((t) => t.deliverables.length > 1)
+		.map(
+			(t) =>
+				`${t.category} — ${t.count} finding(s) across ${t.deliverables.length}: ${t.deliverables.join(", ")}`,
+		);
+	const qid = `verify-remediate:${round ?? 0}`;
+	let answers: readonly Answer[];
+	try {
+		answers = await ask.ask([
+			{
+				id: qid,
+				question: `Verification found ${failedCount} failing deliverable(s). Remediate?`,
+				...(themes.length > 0
+					? { context: `Cross-cutting themes:\n${themes.join("\n")}` }
+					: {}),
+				options: [
+					{
+						label: REMEDIATE_LEADERS,
+						description:
+							"Reopen every failing deliverable with its findings as gating " +
+							"tasks. Each cross-cutting theme converges on ONE leader first; " +
+							"the rest reopen queued and activate automatically when their " +
+							"leader lands.",
+					},
+					{
+						label: REMEDIATE_ALL,
+						description:
+							"Reopen everything at once — no theme sequencing; workers may " +
+							"solve the same cross-repo pattern independently.",
+					},
+					{
+						label: REMEDIATE_NONE,
+						description:
+							"Do nothing — the report is on disk; run /verify again later " +
+							"or remediate manually.",
+					},
+				],
+			},
+		]);
+	} catch {
+		return; // ask surface unavailable — the report notify already landed
+	}
+	const answer = answers.find((a: Answer) => a.questionId === qid);
+	if (!answer || answer.deferred || answer.skipped) return;
+	if (answer.value !== REMEDIATE_LEADERS && answer.value !== REMEDIATE_ALL)
+		return;
+
+	const result = await applyRemediation(entries, {
+		engine: rt.engine,
+		...(round !== undefined ? { round } : {}),
+		waves: answer.value === REMEDIATE_LEADERS,
+	});
+	rt.emitPlanChanged();
+	ctx.ui.notify(renderRemediation(result), "info");
+	if (result.reopened.length === 0) return;
+
+	// Reopened deliverables sit in `planned` — run the ordinary execution
+	// loop: wave 1 activates now, wave 2 follows its leaders through the DAG.
+	if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
+		rt.setMode("auto", ctx);
+	}
+	await rt.ensureExecution(ctx);
+	if (!rt.execution) return;
+	const activated = await rt.execution.tick();
+	syncAgentWidget(rt, ctx);
+	if (activated > 0) {
+		ctx.ui.notify(
+			`Activated ${activated} deliverable(s) — remediation wave 1 running.`,
+			"info",
+		);
+	}
 }

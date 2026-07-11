@@ -148,4 +148,57 @@ describe("runReviewPanel", () => {
 		expect(results[0].ok).toBe(false);
 		expect(results[0].verdict).toBe("none");
 	});
+
+	it("retries once when a reviewer succeeds with an empty report", async () => {
+		// Gateway models occasionally end a run with no final text; a silent
+		// required reviewer would hold the ship gate with nothing to show.
+		let spawns = 0;
+		const capability = {
+			spawn(): RunHandle {
+				spawns += 1;
+				const result: RunResult =
+					spawns === 1
+						? { status: "succeeded", summary: "   " }
+						: { status: "succeeded", summary: "fine\nVERDICT: approve" };
+				return {
+					id: `run-${spawns}` as RunId,
+					status: () => "running" as const,
+					steer: () => {},
+					stop: () => {},
+					result: async () => result,
+				};
+			},
+		} as unknown as SubagentsCapabilityV1;
+		const results = await runReviewPanel(
+			[{ name: "sec", persona: "security-audit", required: true }],
+			{ subagents: capability, cwd: "/wt" },
+		);
+		expect(spawns).toBe(2);
+		expect(results[0].ok).toBe(true);
+		expect(results[0].verdict).toBe("approve");
+	});
+
+	it("a reviewer empty twice is ok=false — no verdict, gate stays closed", async () => {
+		let spawns = 0;
+		const capability = {
+			spawn(): RunHandle {
+				spawns += 1;
+				return {
+					id: `run-${spawns}` as RunId,
+					status: () => "running" as const,
+					steer: () => {},
+					stop: () => {},
+					result: async () => ({ status: "succeeded" as const, summary: "" }),
+				};
+			},
+		} as unknown as SubagentsCapabilityV1;
+		const results = await runReviewPanel(
+			[{ name: "sec", persona: "security-audit", required: true }],
+			{ subagents: capability, cwd: "/wt" },
+		);
+		expect(spawns).toBe(2);
+		expect(results[0].ok).toBe(false);
+		expect(results[0].verdict).toBe("none");
+		expect(panelGateSatisfied(results)).toBe(false);
+	});
 });

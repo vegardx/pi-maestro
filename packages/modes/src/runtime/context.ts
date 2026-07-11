@@ -39,6 +39,7 @@ import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
 import { auditPlan, renderAudit } from "../exec/recovery.js";
 import { OverlayManager } from "../overlay-manager.js";
+import { panelTopologyGaps } from "../personas.js";
 import { computeActiveTools } from "../policy.js";
 import { clearResearchScratch, type ResearchRunView } from "../research.js";
 import {
@@ -530,6 +531,29 @@ export function createRuntimeContext(
 					{ deliverAs: "followUp" },
 				);
 				return;
+			}
+
+			// Panel topology preflight: a code-changing deliverable without a
+			// required reviewer ships ungated (the orchestra-baseline hole).
+			// Surface the gaps BEFORE any worker spawns; proceeding is a
+			// deliberate human choice, not a silent default.
+			if (!isAgentMode()) {
+				const gaps = panelTopologyGaps(activeEngine.get().deliverables);
+				if (gaps.length > 0) {
+					const proceed = await ctx.ui.confirm(
+						"Review panel gaps",
+						`${gaps.length} gap(s) mean work could ship without a gating review:\n` +
+							`${gaps.map((g) => `  • ${g}`).join("\n")}\n` +
+							"Start implementation anyway?",
+					);
+					if (!proceed) {
+						ctx.ui.notify(
+							"Implementation not started — fix the panel via the subagent tool (add required reviewers), then /implement again.",
+							"info",
+						);
+						return;
+					}
+				}
 			}
 
 			const mode = args.includes("--hack") ? "hack" : "auto";

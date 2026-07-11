@@ -286,6 +286,32 @@ describe("runVerification", () => {
 		expect(entries[0].error).toBe("boom");
 	});
 
+	it("retries once when a verifier succeeds with no final text", async () => {
+		const g = makeDeliverable({
+			id: "auth",
+			status: "complete",
+			branch: "feat/auth",
+		});
+		let spawns = 0;
+		const entries = await runVerification(makePlan([g]), [g], {
+			...baseDeps,
+			runGit: gitFake({}),
+			spawn: () => {
+				spawns += 1;
+				const first = spawns === 1;
+				return {
+					id: `r${spawns}`,
+					result: async () =>
+						first
+							? { status: "succeeded" as const, summary: "" }
+							: { status: "succeeded" as const, summary: "ok\nVERDICT: pass" },
+				};
+			},
+		});
+		expect(spawns).toBe(2);
+		expect(entries[0].verdict).toBe("pass");
+	});
+
 	it("no verdict line renders as inconclusive", async () => {
 		const g = makeDeliverable({
 			id: "auth",

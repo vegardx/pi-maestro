@@ -72,9 +72,22 @@ async function runOne(
 	}
 
 	try {
-		const handle = deps.subagents.spawn(REVIEW_KICKOFF, profile);
-		const result = await settle(handle, deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-		const report = result.summary?.trim() ?? "";
+		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+		let result = await settle(
+			deps.subagents.spawn(REVIEW_KICKOFF, profile),
+			timeoutMs,
+		);
+		let report = result.summary?.trim() ?? "";
+		if (result.status === "succeeded" && !report) {
+			// Some gateway models occasionally end a run with no final text. A
+			// silently empty REQUIRED reviewer would hold the ship gate with
+			// nothing to show the human — retry once before giving up.
+			result = await settle(
+				deps.subagents.spawn(REVIEW_KICKOFF, profile),
+				timeoutMs,
+			);
+			report = result.summary?.trim() ?? "";
+		}
 		if (result.status !== "succeeded" || !report) {
 			return {
 				...base,

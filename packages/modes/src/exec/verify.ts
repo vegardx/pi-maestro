@@ -307,17 +307,26 @@ export async function runVerification(
 					? { adaptive: deps.display.adaptive }
 					: {}),
 			};
+			const profile = {
+				profile: "general",
+				cwd: evidence.cwd,
+				thinking: "high" as const,
+				watchdog: deps.watchdog ?? DEFAULT_WATCHDOG,
+			};
+			const prompt = buildVerifyPrompt(g, evidence);
 			let result: RunResult;
 			try {
-				const handle = deps.spawn(buildVerifyPrompt(g, evidence), {
-					profile: "general",
-					cwd: evidence.cwd,
-					thinking: "high",
-					watchdog: deps.watchdog ?? DEFAULT_WATCHDOG,
-				});
+				const handle = deps.spawn(prompt, profile);
 				(view as { id: string }).id = handle.id;
 				deps.onStarted?.(view);
 				result = await handle.result();
+				if (result.status === "succeeded" && !result.summary?.trim()) {
+					// Some gateway models occasionally end a run with no final text
+					// — retry once rather than reporting an empty verification. The
+					// widget keeps the original run's row; only the result is
+					// replaced.
+					result = await deps.spawn(prompt, profile).result();
+				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				view.status = "failed";

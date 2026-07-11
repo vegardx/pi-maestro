@@ -2,6 +2,7 @@
 // tools and the Shift+Tab mode-cycle shortcut. Handlers operate on the shared
 // RuntimeContext; heavy lifting stays in context.ts / the execution seam.
 
+import { join } from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
@@ -20,10 +21,12 @@ import {
 	runVerification,
 	verifyTargets,
 } from "../exec/verify.js";
+import { writeVerificationReport } from "../exec/verify-report.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
 import { planPhase } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
+import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
@@ -301,7 +304,23 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			const problems = entries.some(
 				(e) => e.verdict === "fail" || e.verdict === "error",
 			);
-			ctx.ui.notify(renderVerification(entries), problems ? "warning" : "info");
+			// Persist the round: the markdown is the triage surface, the JSON is
+			// what the remediation flow consumes.
+			let reportNote = "";
+			try {
+				const paths = writeVerificationReport(
+					join(plansRoot(), plan.slug),
+					entries,
+				);
+				reportNote = `\nFull report: ${paths.mdPath}`;
+			} catch {
+				// Report persistence is best-effort — the notify still carries
+				// the findings.
+			}
+			ctx.ui.notify(
+				`${renderVerification(entries)}${reportNote}`,
+				problems ? "warning" : "info",
+			);
 		},
 	});
 

@@ -24,6 +24,27 @@ const STARTED = new Set(["active", "complete", "shipped"]);
 /** Diffs beyond this are clipped in the prompt (the agent can read files). */
 const DIFF_CLIP = 50_000;
 
+/** Severity buckets — "critical" is un-ship-this, "minor" is note-for-later. */
+export const FINDING_SEVERITIES = ["critical", "major", "minor"] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+
+/**
+ * One structured verifier finding. The claim/actual pair is what makes a
+ * finding decidable without reading the full report; `category` groups the
+ * cross-cutting themes (copied broken patterns) across deliverables; `task`
+ * links back to the WorkItem whose claimed completion it contradicts.
+ */
+export interface StructuredFinding {
+	readonly id: string;
+	readonly severity: FindingSeverity;
+	readonly category: string;
+	readonly file?: string;
+	readonly line?: number;
+	readonly task?: string;
+	readonly claim?: string;
+	readonly actual: string;
+}
+
 export interface VerifyEntry {
 	readonly id: string;
 	readonly title: string;
@@ -32,8 +53,10 @@ export interface VerifyEntry {
 	 *  mechanical evidence contradicts the claimed status; inconclusive = the
 	 *  agent returned no parseable verdict; error = spawn/run failure. */
 	readonly verdict: "pass" | "fail" | "inconclusive" | "error";
-	/** Agent findings ("file.ts:12 — description"). */
+	/** Agent findings rendered one-line ("file.ts:12 — description"). */
 	readonly findings: readonly string[];
+	/** The findings with structure (severity/category/claim/actual). */
+	readonly structured: readonly StructuredFinding[];
 	/** Mechanical (git/gh) problems found before the agent ran. */
 	readonly problems: readonly string[];
 	/** Mechanical facts fed to the agent (shown when expanding a report). */
@@ -210,6 +233,72 @@ export function gatherEvidence(
 	return { facts, problems, cwd };
 }
 
+/**
+ * Extract structured findings from a verifier report: the fenced ```json
+ * block after the verdict line. Tolerant — a model that answers with plain
+ * bullets instead falls back to parsing "file.ts:12 — description" lines, so
+ * older reports and non-compliant runs still yield usable structure.
+ */
+export function parseStructuredFindings(report: string): StructuredFinding[] {
+	const blocks = [...report.matchAll(/```json\s*\n([\s\S]*?)```/g)];
+	const last = blocks.at(-1)?.[1];
+	if (last) {
+		try {
+			const parsed = JSON.parse(last) as {
+				findings?: Array<Record<string, unknown>>;
+			};
+			if (Array.isArray(parsed.findings)) {
+				return parsed.findings
+					.map((f, i) => normalizeFinding(f, i))
+					.filter((f): f is StructuredFinding => f !== null);
+			}
+		} catch {
+			// fall through to the bullet fallback
+		}
+	}
+	return parseVerdict(report).findings.map((bullet, i) => {
+		const m = bullet.match(/^`?([^\s`—:]+):(\d+)`?\s*—\s*(.*)$/);
+		return {
+			id: `F${i + 1}`,
+			severity: "major" as const,
+			category: "uncategorized",
+			...(m ? { file: m[1], line: Number.parseInt(m[2], 10) } : {}),
+			actual: m ? m[3] : bullet,
+		};
+	});
+}
+
+function normalizeFinding(
+	f: Record<string, unknown>,
+	index: number,
+): StructuredFinding | null {
+	const actual = String(f.actual ?? f.summary ?? f.description ?? "").trim();
+	if (!actual) return null;
+	const severity = FINDING_SEVERITIES.includes(f.severity as FindingSeverity)
+		? (f.severity as FindingSeverity)
+		: "major";
+	const line = Number(f.line);
+	return {
+		id: typeof f.id === "string" && f.id ? f.id : `F${index + 1}`,
+		severity,
+		category:
+			typeof f.category === "string" && f.category
+				? f.category
+				: "uncategorized",
+		...(typeof f.file === "string" && f.file ? { file: f.file } : {}),
+		...(Number.isFinite(line) && line > 0 ? { line } : {}),
+		...(typeof f.task === "string" && f.task ? { task: f.task } : {}),
+		...(typeof f.claim === "string" && f.claim ? { claim: f.claim } : {}),
+		actual,
+	};
+}
+
+/** One-line rendering of a structured finding for notify-style output. */
+export function renderFinding(f: StructuredFinding): string {
+	const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""} — ` : "";
+	return `${where}${f.actual}`;
+}
+
 const clipDiff = (diff: string): string =>
 	diff.length > DIFF_CLIP
 		? `${diff.slice(0, DIFF_CLIP)}\n[…diff clipped — read the files for the rest]`
@@ -274,8 +363,19 @@ export function buildVerifyPrompt(g: Deliverable, evidence: Evidence): string {
 		"",
 		"End your report with a line `VERDICT: pass` (every expected task is " +
 			"genuinely accomplished) or `VERDICT: block` (something claimed is " +
-			"missing, fake, or broken), followed by one markdown bullet per " +
-			'finding ("- file.ts:12 — description").',
+			"missing, fake, or broken), then a fenced ```json block:",
+		"",
+		"```json",
+		'{"findings": [{"severity": "critical|major|minor", "category": ' +
+			'"<kebab-case theme, e.g. packaging, fake-verification, ' +
+			'missing-artifact, correctness-bug, unimplemented-integration>", ' +
+			'"file": "path.ts", "line": 12, "task": "<the task it contradicts>", ' +
+			'"claim": "<what is claimed to exist>", "actual": "<what is actually there>"}]}',
+		"```",
+		"",
+		"One entry per finding; an empty findings array when passing. The " +
+			"claim/actual pair must make the finding decidable without reading " +
+			"your prose.",
 	);
 	return lines.join("\n");
 }
@@ -301,7 +401,12 @@ export async function runVerification(
 				facts: evidence.facts,
 			};
 			if (!evidence.cwd) {
-				return { ...base, verdict: "fail" as const, findings: [] };
+				return {
+					...base,
+					verdict: "fail" as const,
+					findings: [],
+					structured: [],
+				};
 			}
 			const view: VerifyRunView = {
 				id: "",
@@ -343,6 +448,7 @@ export async function runVerification(
 					...base,
 					verdict: "error" as const,
 					findings: [],
+					structured: [],
 					error: message,
 				};
 				deps.onSettled?.(view, entry);
@@ -355,6 +461,7 @@ export async function runVerification(
 					...base,
 					verdict: "error" as const,
 					findings: [],
+					structured: [],
 					error: result.error ?? `verifier ${result.status} with no report`,
 				};
 				deps.onSettled?.(view, entry);
@@ -367,10 +474,12 @@ export async function runVerification(
 					: parsed.verdict === "request-changes"
 						? ("fail" as const)
 						: ("inconclusive" as const);
+			const structured = parseStructuredFindings(report);
 			const entry = {
 				...base,
 				verdict,
-				findings: parsed.findings,
+				findings: structured.map(renderFinding),
+				structured,
 				report,
 			};
 			deps.onSettled?.(view, entry);

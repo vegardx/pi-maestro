@@ -1,102 +1,183 @@
 # Usage
 
+The lifecycle of a maestro session: plan → implement → watch/steer/answer →
+review gate → ship → distill or handoff. This page follows that arc; the
+[command reference](#command-reference) at the end lists everything.
+
 ## Install
 
 ```bash
 pi install git:github.com/vegardx/pi-maestro
 ```
 
-The root package is the pi bundle manifest. Pi loads the TypeScript extension
-entries directly through jiti; there is no build step.
-
-## Commands
-
-- `/plan [title-or-slug]`: enter plan mode. Creates a draft named from your first message.
-- `/implement`: start execution of the active plan (group executor).
-- `/ship`: push and open/update a PR for the current branch.
-- `/hack`, `/ask`, `/auto`: switch permission mode.
-- `Alt+M`: cycle `hack → plan → ask → auto`.
-
-## Plan tools
-
-The modes extension registers three LLM tools:
-
-- `group`: create/update/remove/list work groups.
-- `task`: create/update/toggle/remove work items within a group.
-- `agent`: create/update/remove support agents within a group.
-
-Plus `plan` for rendering the active plan as markdown.
-
-### Example workflow
-
-```
-group(add, title="Implement auth", body="OAuth2 login", workerMode="full")
-task(add, groupId="implement-auth", title="POST /login", body="In src/routes/auth.ts...")
-task(add, groupId="implement-auth", title="Refresh endpoint", body="...")
-agent(add, groupId="implement-auth", name="security", mode="read-only",
-      slot="alternate", effort="high", focus="Check for auth vulns", after=["worker"])
-```
-
-## Groups
-
-A group is the atomic unit of work — one branch, one PR:
-- **Worker**: primary agent (full mode, gets tasks, commits)
-- **Support agents**: reviewers/fixers (with focus, after graph)
-
-### States
-
-`planned` → `active` → `complete` → `shipped` | `superseded` | `abandoned`
-
-### Dependencies
-
-Groups use `dependsOn` for ordering. By default, dependent groups create
-stacked PRs (branch from predecessor tip). Set `stacked: false` for
-independent PRs.
+The root package is the pi bundle manifest; pi loads the TypeScript entries
+directly through jiti — no build step. Requirements beyond pi itself:
+`tmux` (workers run in tmux sessions) and the `gh` CLI (shipping opens PRs).
 
 ## Modes
 
-- `hack`: unrestricted pi default behaviour.
-- `plan`: read-only shell policy; only planning tools and `ask` active.
-- `ask`: implementation with confirmation prompts.
-- `auto`: autonomous implementation mode.
+- `hack` — unrestricted pi default behaviour. `/hack`
+- `plan` — read-only shell policy; planning tools and `ask` active. `/plan`
+- `auto` — autonomous implementation; execution tools unlocked. `/auto`
+
+A fourth mode, `agent`, is internal: workers run in it with a dedicated tool
+policy and preamble. You never switch to it yourself.
+
+## Planning
+
+`/plan [title-or-slug]` opens (or creates) a plan and enters plan mode. A new
+plan starts in an **exploring** phase: the maestro researches until it can
+write tasks with file paths and signatures — the plan *is* the research
+output. Structuring unlocks when the readiness gate passes (or `/ready`
+skips it).
+
+Research runs through two tools:
+
+- `research` — fans out parallel read-only subagents (codebase and web;
+  web agents can search, fetch pages, and pull library docs). All questions
+  for a round go in one call; you get a bounded digest per question.
+- `dig` — expands a digest to its full report via the `[ref: …]` printed
+  beside it.
+
+The plan is shaped with three flat tools (plus `plan` to render the active
+plan as markdown, seed text, or JSON):
+
+- `deliverable` — create/update/remove deliverables, manage the repo
+  registry, and wire dependencies.
+- `task` — work items within a deliverable: file paths, signatures, edge
+  cases. Tasks are the worker's instructions.
+- `agent` — support agents within a deliverable: reviewers (a `persona`
+  from the [palette](review-loop.md#the-panel), an `effort` dial, a `focus`
+  specialization) and helpers, ordered by an `after` graph.
+
+### Deliverables
+
+A deliverable is the atomic unit of work — one branch, one PR. It carries
+tasks, a worker, and its review panel. States:
+
+```
+planned → active → complete → shipped | superseded | abandoned
+```
+
+Deliverables order themselves with `dependsOn`. Dependent deliverables
+create **stacked PRs** by default (branch from the predecessor's tip);
+`stacked: false` branches from the default branch instead.
+
+### Multi-repo plans
+
+A plan lives in one repo by default, but can register more: the
+`deliverable` tool manages a repo registry (key → path), and each
+deliverable may target a registry key. Worktrees, branches, and PRs route
+to the deliverable's repo. Cross-repo `dependsOn` is ordering-only — no
+branch stacking across repos.
+
+## Execution
+
+`/implement` starts the active plan. The executor activates deliverables
+whose dependencies are met, creates a worktree per deliverable, and spawns
+a worker in each — a full pi session on tmux, seeded with upstream
+summaries and its tasks. Workers implement, commit locally (never push),
+toggle tasks, and run their own review panel before completing.
+
+While the fleet runs, the maestro session stays yours:
+
+- `/agents` — live overview: deliverable states, task progress, and each
+  review ledger (`cycle 1/3 · 2 blocking open`).
+- `/watch` — toggle stacked tmux panes showing all active workers.
+- `/view <name>` — one worker's session in a split pane.
+- `/steer <name> <guidance>` — inject guidance into a running worker.
+- `/answer` — answer questions workers have raised.
+- `/recap` — summary of completed agent work.
+
+Workers that hit something outside their deliverable escalate to the
+maestro over the supervisor channel; the maestro decides, consults, or
+raises a question to you.
+
+## The review gate
+
+A worker cannot complete while its ledger has open blocking findings. The
+short version: the panel runs **once**, findings get canonical ids, the
+worker resolves each one (fix / wont-fix for minors / dispute with
+rationale), and a scope-locked verifier checks exactly those claims — with
+a bounded fix-cycle budget, maestro triage on the first block, and a human
+question only on repeat blocks. The full design is in
+[review-loop.md](review-loop.md).
+
+## Verification and recovery
+
+- `/verify [deliverable-id]` — deep verification of started deliverables:
+  read-only subagents read each deliverable's actual diff and judge whether
+  its tasks were genuinely accomplished.
+- `/retry <deliverable-id>` — clear a blocked deliverable and re-attempt it.
+- `/recover` — after an interruption: audit the plan against reality
+  (worktrees, branches, PRs) and resume interrupted workers from their
+  saved sessions.
 
 ## Shipping
 
-Maestro owns shipping. Agents only commit locally.
+The maestro owns shipping; workers only commit locally.
 
-- `/ship` pushes the current branch and opens/updates a PR.
-- During execution, the GroupExecutor ships terminal groups automatically.
-- PR body assembled from group body + task checklist + agent summaries.
+- During execution, the executor ships deliverables automatically once they
+  complete and the gate is satisfied.
+- `/ship` ships the next shippable deliverable (push + open/update PR). The
+  PR body is assembled from the deliverable body, task checklist, and agent
+  summaries.
+- `/sync` reconciles shipped deliverables' PRs — retargets stacked PRs
+  whose base has merged.
+- `/park` creates GitHub tracking issues for the active plan.
+- `/commit` stages and commits with a conventional-commit message (works in
+  any mode, plan or no plan).
 
-## Delegates
+When every deliverable is delivered, the maestro returns to plan mode —
+the arc is over, and the natural next step is one of the two commands
+below.
 
-During planning, use delegates for research:
+## Session continuity
 
-| Target | Slot | Effort | Purpose |
-|--------|------|--------|---------|
-| `explorer` | default | low | Find codebase facts |
-| `researcher` | default | low | Web docs/practices |
-| `advisor` | alternate | high | Plan review (different model) |
+Long sessions rot: context fills, attention degrades, threads get dropped.
+Two commands, one curation flow:
 
-## Model presets
+- `/distill` — curated in-place compaction. The maestro inventories the
+  session (plan state, open questions, live threads), proposes topics, and
+  asks you (multi-select) what carries forward. The curated document
+  *replaces* the compaction summary — same plan, same session, keep
+  working.
+- `/handoff` — close the arc. A transcript archaeologist hunts unanswered
+  questions, unimplemented promises, and orphaned threads; you curate; the
+  session ends and a **new planning session** opens, seeded with the
+  document as context only — no active plan. Refuses while workers are
+  mid-flight.
 
-Two slots: `default` (workhorse, cache-friendly) and `alternate` (different
-family, fresh perspective).
+A threshold ladder watches context fill: at 30% you're nudged to `/distill`;
+at 50% a self-curated distill runs automatically (with a divergence check
+that suggests `/handoff` when the session has drifted from its original
+goal). Both thresholds are tunable — see [models.md](models.md#distill).
 
-Configure in settings:
-```json
-{
-  "models": {
-    "active": "my-preset",
-    "presets": {
-      "my-preset": {
-        "default": { "model": "anthropic/claude-sonnet-4-20250514" },
-        "alternate": { "model": "openai/o3" }
-      }
-    }
-  }
-}
-```
+## Command reference
+
+| Command | What it does |
+|---|---|
+| `/plan [title-or-slug]` | Open or create a plan; enter plan mode |
+| `/ready` | Unlock plan structuring (skip the readiness gate) |
+| `/implement` | Start executing the active plan |
+| `/agents` | Active deliverables and agent status |
+| `/watch` | Toggle stacked tmux panes for all active workers |
+| `/view <name>` | View one agent's tmux session in a split pane |
+| `/steer <name> <guidance>` | Steer a running agent |
+| `/answer` | Answer pending agent questions |
+| `/recap` | Summary of completed agent work |
+| `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |
+| `/retry <deliverable-id>` | Clear a blocked deliverable and re-attempt |
+| `/recover` | Audit plan vs reality; resume interrupted workers |
+| `/ship` | Ship the next shippable deliverable (push + PR) |
+| `/sync` | Retarget stacked PRs whose base merged |
+| `/park` | Create GitHub tracking issues for the active plan |
+| `/commit` | Conventional commit of current changes |
+| `/distill` | Curated in-place compaction; keep working |
+| `/handoff` | End the arc; seed a new planning session |
+| `/hack`, `/auto` | Switch mode |
+| `/maestro` | Settings menu (models, profiles, tiers) |
+| `/modes-status` | Show mode and active plan status |
 
 ## Feature flags
 
@@ -106,8 +187,11 @@ Disable a whole extension:
 PI_EXT_MODES=off pi
 ```
 
-Disable a specific feature path:
+Disable or force a specific feature path (kill switch wins):
 
 ```bash
 PI_DISABLE="modes.plan-tools" pi
+PI_ENABLE="modes.some-flag" pi
 ```
+
+<!-- verified against 83bfcbe -->

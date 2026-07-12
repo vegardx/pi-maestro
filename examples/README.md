@@ -15,6 +15,8 @@ The root manifest loads:
 
 - `packages/ask/src/index.ts`
 - `packages/prompt-assist/src/index.ts`
+- `packages/settings/src/extension.ts`
 - `packages/subagents/src/index.ts`
 - `packages/commit/src/index.ts`
+- `packages/smart-compact/src/index.ts`
 - `packages/modes/src/index.ts`

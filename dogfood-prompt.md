@@ -1,9 +1,9 @@
 Create a plan called "sandbox-features" for this repo.
 
-This plan exercises group model features: parallel groups, dependencies, stacked
-PRs, and support agents.
+This plan exercises the deliverable model: parallel deliverables,
+dependencies, stacked PRs, and review agents.
 
-**Groups:**
+**Deliverables:**
 
 1. **[parallel]** `Add statistics module` — Create `src/stats.ts` with:
    - `mean(numbers: number[]): number` — arithmetic mean, throw on empty array
@@ -16,8 +16,8 @@ PRs, and support agents.
    - `isInteger(n: number): boolean`
    - `assertInRange(n: number, min: number, max: number): void` — throws RangeError
    - Add tests in `tests/validate.test.ts`
-   - **Add a security review agent** (read-only, alternate slot, high effort) to
-     check for edge cases around NaN, Infinity, and type coercion
+   - **Add a `security-audit` review agent** (high effort) focused on edge
+     cases around NaN, Infinity, and type coercion
 
 3. **[depends on #1 and #2]** `Add advanced math` — Create `src/advanced.ts` with:
    - `standardDeviation(numbers: number[]): number` — uses mean from stats
@@ -32,8 +32,8 @@ PRs, and support agents.
    with signatures and examples.
 
 This plan tests:
-- Parallel groups (#1 and #2 run simultaneously)
-- Support agents (security review on #2)
-- Group dependencies (#3 depends on both #1 and #2)
+- Parallel deliverables (#1 and #2 run simultaneously)
+- Review agents (security-audit on #2)
+- Deliverable dependencies (#3 depends on both #1 and #2)
 - Stacked PRs (#3 branches from #2's tip, #4 from #3's tip)
-- Forward summaries (downstream groups receive upstream context)
+- Forward summaries (downstream deliverables receive upstream context)

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { warnOnContextFill } from "../packages/modes/src/runtime/hooks.js";
+import { contextFillLadder } from "../packages/modes/src/runtime/carry-commands.js";
 import {
 	awaitCompaction,
 	diagnoseResumeAfterCompaction,
@@ -187,11 +187,45 @@ describe("diagnoseResumeAfterCompaction", () => {
 	});
 });
 
-describe("warnOnContextFill (auto-compaction replaced by warnings)", () => {
+describe("contextFillLadder (nudge → force → warnings)", () => {
 	function fakes(percent: number | null, warnedAt = 0) {
 		const notes: Array<[string, string]> = [];
-		const rt = { contextWarnedAt: warnedAt };
+		const messages: string[] = [];
+		const asked: string[] = [];
+		let episode: unknown;
+		const rt = {
+			contextWarnedAt: warnedAt,
+			engine: undefined,
+			pendingCompaction: undefined,
+			carryForward: {
+				get: () => episode,
+				begin: (e: unknown) => {
+					if (episode) return false;
+					episode = e;
+					return true;
+				},
+				end: () => {
+					episode = undefined;
+				},
+			},
+			pi: {
+				sendUserMessage: (text: string) => {
+					messages.push(text);
+				},
+			},
+			maestro: {
+				capabilities: {
+					get: () => ({
+						ask: async (qs: Array<{ question: string }>) => {
+							asked.push(qs[0].question);
+							return [];
+						},
+					}),
+				},
+			},
+		};
 		const ctx = {
+			// No cwd → the ladder falls back to default thresholds (30/50).
 			getContextUsage: () => ({
 				percent,
 				tokens: percent === null ? null : percent * 2_000,
@@ -203,13 +237,13 @@ describe("warnOnContextFill (auto-compaction replaced by warnings)", () => {
 				},
 			},
 		};
-		return { notes, rt, ctx };
+		return { notes, messages, asked, rt, ctx };
 	}
 
 	it("fires once at 70% as warning, escalates once at 90% as error", () => {
-		const { notes, rt, ctx } = fakes(72);
-		warnOnContextFill(rt as never, ctx as never);
-		warnOnContextFill(rt as never, ctx as never); // no repeat
+		const { notes, rt, ctx } = fakes(72, 50); // nudge+force already fired
+		contextFillLadder(rt as never, ctx as never);
+		contextFillLadder(rt as never, ctx as never); // no repeat
 		expect(notes).toHaveLength(1);
 		expect(notes[0][0]).toContain("72% full");
 		expect(notes[0][0]).toContain("144k/200k");
@@ -220,21 +254,43 @@ describe("warnOnContextFill (auto-compaction replaced by warnings)", () => {
 			tokens: 182_000,
 			contextWindow: 200_000,
 		});
-		warnOnContextFill(rt as never, ctx as never);
+		contextFillLadder(rt as never, ctx as never);
 		expect(notes).toHaveLength(2);
 		expect(notes[1][1]).toBe("error");
 	});
 
-	it("re-arms after usage drops (manual compaction)", () => {
-		const { notes, rt, ctx } = fakes(40, 90);
-		warnOnContextFill(rt as never, ctx as never);
+	it("nudges a distill question once at 30%", () => {
+		const { asked, messages, rt, ctx } = fakes(35);
+		contextFillLadder(rt as never, ctx as never);
+		contextFillLadder(rt as never, ctx as never); // no repeat
+		expect(asked).toHaveLength(1);
+		expect(asked[0]).toContain("distill now");
+		expect(messages).toHaveLength(0); // nudge asks; it never forces
+		expect(rt.contextWarnedAt).toBe(30);
+	});
+
+	it("forces a self-curated distill episode at 50%", () => {
+		const { messages, rt, ctx } = fakes(55, 30); // nudge already fired
+		contextFillLadder(rt as never, ctx as never);
+		expect(rt.carryForward.get()).toBeTruthy();
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("FORCED distill");
+		expect(messages[0]).toContain("divergence check");
+		// Fires once — the running episode is never restarted.
+		contextFillLadder(rt as never, ctx as never);
+		expect(messages).toHaveLength(1);
+	});
+
+	it("re-arms after usage drops (a distill does that)", () => {
+		const { notes, rt, ctx } = fakes(20, 90);
+		contextFillLadder(rt as never, ctx as never);
 		expect(rt.contextWarnedAt).toBe(0);
 		expect(notes).toHaveLength(0);
 	});
 
 	it("does nothing when usage is unknown (right after compaction)", () => {
 		const { notes, rt, ctx } = fakes(null);
-		warnOnContextFill(rt as never, ctx as never);
+		contextFillLadder(rt as never, ctx as never);
 		expect(notes).toHaveLength(0);
 	});
 });

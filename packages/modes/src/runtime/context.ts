@@ -33,6 +33,7 @@ import {
 	estimateTokens,
 	formatBudget,
 } from "../budget.js";
+import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
 import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
@@ -116,6 +117,8 @@ export interface RuntimeContext {
 	execution: ExecutionHandle | undefined;
 	/** Ship-gate triage controller (maestro-first escalation); with execution. */
 	gateTriage: GateTriage | undefined;
+	/** Carry-forward episode controller (/distill and /handoff). */
+	readonly carryForward: CarryForwardController;
 	/** Live research runs (plan-mode fan-out), keyed by run id. */
 	readonly researchRuns: Map<string, ResearchRunView>;
 	agentSeedContent: string | undefined;
@@ -223,6 +226,7 @@ export function createRuntimeContext(
 		agentBridge: undefined,
 		execution: undefined,
 		gateTriage: undefined,
+		carryForward: new CarryForwardController(() => rt.applyTools()),
 		researchRuns: new Map(),
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
@@ -325,6 +329,7 @@ export function createRuntimeContext(
 					baselineTools,
 					isAgent: isAgentMode(),
 					phase: rt.engine ? planPhase(rt.engine.get()) : undefined,
+					carryForwardActive: Boolean(rt.carryForward.get()),
 				}),
 			);
 		},
@@ -661,6 +666,16 @@ export function createRuntimeContext(
 					syncAgentWidget(rt, ctx);
 					const eng = rt.engine;
 					if (eng) clearResearchScratch(eng.get().slug);
+					// The arc is over: every deliverable is terminal. Return to
+					// PLAN mode — the maestro ends the arc standing at the
+					// /handoff doorway (or ready to extend the plan).
+					if (rt.state.mode !== "plan") {
+						rt.setMode("plan", ctx);
+						ctx.ui.notify(
+							"All work delivered — back to plan mode. Extend the plan, or /handoff to seed the next arc.",
+							"info",
+						);
+					}
 				},
 				onEvent: (event) => sendAgentEvent(pi, event),
 			});

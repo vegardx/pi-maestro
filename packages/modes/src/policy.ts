@@ -50,6 +50,13 @@ export interface ToolPolicyInput {
 	readonly isAgent?: boolean;
 	/** Planning phase; only narrows the tool set in plan mode. */
 	readonly phase?: PlanPhase;
+	/**
+	 * A carry-forward episode (/distill or /handoff) is running: the
+	 * episode-scoped `carryforward` tool becomes visible. Outside an episode
+	 * it stays out of the set entirely — no standing prompt clutter, no
+	 * model-initiated handoffs.
+	 */
+	readonly carryForwardActive?: boolean;
 }
 
 export function computeActiveTools(input: ToolPolicyInput): string[] {
@@ -58,7 +65,14 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		? input.baselineTools.filter((t) => available.has(t))
 		: input.availableTools;
 
-	if (input.mode === "hack") return [...baseline];
+	const withEpisode = (tools: string[]): string[] =>
+		input.carryForwardActive &&
+		available.has("carryforward") &&
+		!tools.includes("carryforward")
+			? [...tools, "carryforward"]
+			: tools;
+
+	if (input.mode === "hack") return withEpisode([...baseline]);
 
 	// Agent mode: full implementation tools, no plan-structure tools
 	if (input.isAgent) {
@@ -92,7 +106,7 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 	if (input.mode === "plan" && input.phase === "exploring") {
 		for (const name of STRUCTURE_TOOL_NAMES) allowed.delete(name);
 	}
-	return input.availableTools.filter((name) => allowed.has(name));
+	return withEpisode(input.availableTools.filter((name) => allowed.has(name)));
 }
 
 export interface BashClassification {
@@ -179,5 +193,9 @@ export function toolBlockedInPlanMode(
 		return null;
 	}
 	if (ALWAYS_ALLOWED_TOOLS.has(toolName)) return null;
+	// Episode-scoped: visibility is governed by computeActiveTools; when it IS
+	// visible (an episode is running), plan mode must not block it — /distill
+	// exists precisely to run mid-planning.
+	if (toolName === "carryforward") return null;
 	return `tool \`${toolName}\` is disabled in plan mode`;
 }

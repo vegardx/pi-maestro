@@ -91,6 +91,34 @@ export function readModesCompactionSettings(
 	};
 }
 
+// ---- Distill threshold ladder -------------------------------------------------
+
+/**
+ * The /distill threshold ladder (extensionConfig.modes.distill). Fractions of
+ * context fill: at `nudgeAt` a non-blocking question suggests /distill; at
+ * `forceAt` a self-curated distill runs (never blocking on an absent human).
+ * `forceAt: 0` disables the force for users who prefer to ride the cache.
+ */
+export interface DistillSettings {
+	nudgeAt: number;
+	forceAt: number;
+}
+
+export function readDistillSettings(
+	cwd: string,
+	agentDir?: string,
+): DistillSettings {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const fraction = (key: string, fallback: number): number => {
+		const v = getConfigNumber(merged, NAME, `distill.${key}`, fallback);
+		return Number.isFinite(v) && v >= 0 && v <= 1 ? v : fallback;
+	};
+	return {
+		nudgeAt: fraction("nudgeAt", 0.3),
+		forceAt: fraction("forceAt", 0.5),
+	};
+}
+
 // ---- Research watchdog settings ---------------------------------------------
 
 /**

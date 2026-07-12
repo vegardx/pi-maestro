@@ -55,7 +55,9 @@ export interface CompactionBucketSnapshot {
  */
 export interface ModesCompactionDetails {
 	readonly schemaVersion: number;
-	readonly modesKind: "deliverable-slice";
+	/** deliverable-slice: a worker's mid-deliverable compaction. maestro-distill:
+	 *  the maestro's human-curated /distill (summary = the carry-forward doc). */
+	readonly modesKind: "deliverable-slice" | "maestro-distill";
 	readonly planSlug: string;
 	readonly deliverableId: string;
 	/** 1-indexed slice number for this deliverable on the current branch. */
@@ -71,7 +73,7 @@ export interface ModesCompactionDetails {
 	readonly previousSummaryHash: string;
 }
 
-/** Read modes details off an entry, or undefined when it isn't a modes slice. */
+/** Read modes details off an entry, or undefined when it isn't modes-owned. */
 export function readModesCompactionDetails(
 	entry: SessionEntry,
 ): ModesCompactionDetails | undefined {
@@ -79,7 +81,8 @@ export function readModesCompactionDetails(
 	const details = (entry as { details?: unknown }).details;
 	if (!details || typeof details !== "object") return undefined;
 	const d = details as Partial<ModesCompactionDetails>;
-	if (d.modesKind !== "deliverable-slice") return undefined;
+	if (d.modesKind !== "deliverable-slice" && d.modesKind !== "maestro-distill")
+		return undefined;
 	if (typeof d.deliverableId !== "string") return undefined;
 	return d as ModesCompactionDetails;
 }
@@ -99,6 +102,12 @@ export interface PendingModesCompaction {
 	readonly deliverableId: string;
 	readonly reason: string;
 	readonly buckets?: CompactionBucketSnapshot;
+	/**
+	 * Set by /distill: the human-curated carry-forward document IS the
+	 * summary — the before_compact handler returns it directly instead of
+	 * running the summariser. Curated-early beats compressed-late.
+	 */
+	readonly summaryOverride?: string;
 }
 
 /** The exact `customInstructions` value modes sets to claim a compaction. */

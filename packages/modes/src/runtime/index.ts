@@ -19,6 +19,7 @@ import type { MaestroContext } from "@vegardx/pi-core";
 import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
+import { createCarryForwardTool, harvestInventory } from "../carry-forward.js";
 import type { PlanEngine } from "../engine.js";
 import type { ReviewLedger } from "../exec/findings.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
@@ -166,6 +167,42 @@ export function createModesRuntime(
 	// action exists; only the human's gate answer opens a gate.
 	if (!isAgentMode()) {
 		pi.registerTool(createGateTool(() => rt.gateTriage));
+
+		// The carry-forward episode tool (/distill and /handoff). Registered
+		// once, VISIBLE only while an episode is active (applyTools flag).
+		pi.registerTool(
+			createCarryForwardTool({
+				controller: () => rt.carryForward,
+				ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+				inventory: () => {
+					const plan = rt.engine?.get();
+					const snap = rt.execution?.snapshot();
+					return harvestInventory({
+						...(plan ? { plan } : {}),
+						mode: rt.state.mode,
+						workers: snap
+							? [...snap.agents.entries()].map(([agent, a]) => ({
+									agent,
+									status: a.status,
+								}))
+							: [],
+						blocked: snap
+							? [...snap.deliverables.entries()].flatMap(([id, d]) =>
+									d.blocked ? [{ id, reason: d.blocked }] : [],
+								)
+							: [],
+						pendingAsks:
+							maestro.capabilities.get(CAPABILITIES.ask)?.pending?.() ?? [],
+						...(plan ? { planDir: join(plansRoot(), plan.slug) } : {}),
+					});
+				},
+				planDir: () => {
+					const plan = rt.engine?.get();
+					return plan ? join(plansRoot(), plan.slug) : undefined;
+				},
+				planSlug: () => rt.engine?.get().slug,
+			}),
+		);
 	}
 
 	// Worker-side review tool — registered only in a worker (agent mode). It

@@ -11,9 +11,11 @@ import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import { classifyBashFast, classifyBashIntent } from "../bash-classifier.js";
 import {
 	buildDeliverableSliceCompactionResult,
+	COMPACTION_SCHEMA_VERSION,
 	createCrashSnapshot,
 	decideCompactionOwnership,
 	readModesCompactionDetails,
+	summaryHash,
 } from "../compaction.js";
 import { toolBlockedInPlanMode } from "../policy.js";
 import { planPhase } from "../schema.js";
@@ -24,6 +26,7 @@ import {
 	readModesCompactionSettings,
 } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
+import { contextFillLadder } from "./carry-commands.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
 import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
 import {
@@ -380,11 +383,10 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.agentBridge?.onTurnEnd();
 		if (!rt.agentBridge) {
 			rt.incrementMaestroTurn();
-			// The maestro NEVER auto-compacts (plan/auto/hack) — a mid-flight
-			// compaction loses more orchestration state than it saves. Instead,
-			// warn at fill thresholds so the user compacts at a boundary of
-			// their choosing (or hands off to a fresh session).
-			warnOnContextFill(rt, ctx);
+			// The maestro never BLINDLY auto-compacts — the ladder nudges a
+			// human-curated /distill early (30%), forces a self-curated one at
+			// the threshold (50%), and warns at 70/90 as the backstop.
+			contextFillLadder(rt, ctx);
 		}
 		if (rt.state.mode === "plan") {
 			rt.finalizeDraftPlan(ctx);
@@ -442,9 +444,35 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		}
 
 		const pending = decision.pending;
+		const { preparation } = event;
+
+		// /distill: the human-curated carry-forward document IS the summary —
+		// no summariser call; the curation already happened at full quality.
+		if (pending.summaryOverride !== undefined) {
+			rt.pendingCompaction = undefined;
+			const previous = preparation.previousSummary ?? "";
+			return {
+				compaction: {
+					summary: pending.summaryOverride,
+					firstKeptEntryId: preparation.firstKeptEntryId,
+					tokensBefore: preparation.tokensBefore,
+					details: {
+						schemaVersion: COMPACTION_SCHEMA_VERSION,
+						modesKind: "maestro-distill",
+						planSlug: rt.engine.get().slug,
+						deliverableId: pending.deliverableId,
+						sliceNumber: 0,
+						nonce: pending.nonce,
+						reason: pending.reason,
+						previousSummaryLength: previous.length,
+						previousSummaryHash: summaryHash(previous),
+					},
+				},
+			};
+		}
+
 		const settings = readModesCompactionSettings(ctx.cwd);
 		const summarise = createModesSummariser(ctx, settings.timeoutMs);
-		const { preparation } = event;
 		const rawMessages = [
 			...preparation.messagesToSummarize,
 			...preparation.turnPrefixMessages,
@@ -547,36 +575,5 @@ function extractMessageText(content: unknown): string {
 }
 
 /** Fill thresholds (percent of context window) that fire a one-shot warning. */
-const CONTEXT_WARN_STEPS = [70, 90] as const;
-
-/**
- * Warn once per threshold as the maestro's context fills, re-arming when
- * usage drops back down (manual /compact, /new). Replaces auto-compaction:
- * the user picks the boundary; the maestro never compacts itself.
- */
-export function warnOnContextFill(
-	rt: RuntimeContext,
-	ctx: ExtensionContext,
-): void {
-	const usage = ctx.getContextUsage?.();
-	const pct = usage?.percent;
-	if (typeof pct !== "number") return;
-	if (pct < CONTEXT_WARN_STEPS[0] - 5) {
-		rt.contextWarnedAt = 0;
-		return;
-	}
-	for (const step of [...CONTEXT_WARN_STEPS].reverse()) {
-		if (pct >= step && rt.contextWarnedAt < step) {
-			rt.contextWarnedAt = step;
-			const detail =
-				usage && usage.tokens !== null && usage.contextWindow
-					? ` (${Math.round(usage.tokens / 1000)}k/${Math.round(usage.contextWindow / 1000)}k)`
-					: "";
-			ctx.ui.notify(
-				`Maestro context ${pct.toFixed(0)}% full${detail} — compact at a natural boundary (/compact) or hand off to a fresh session. The maestro never auto-compacts.`,
-				step >= 90 ? "error" : "warning",
-			);
-			break;
-		}
-	}
-}
+// Context-fill handling lives in carry-commands.ts (contextFillLadder):
+// 30% distill nudge → 50% forced self-curated distill → 70/90 warnings.

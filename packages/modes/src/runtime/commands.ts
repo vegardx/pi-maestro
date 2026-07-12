@@ -12,6 +12,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
 import { getModelMeta, resolveModelWithin } from "@vegardx/pi-models";
+import { isAgentMode } from "../agent-bridge.js";
 import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
 import type { PlanEngine } from "../engine.js";
@@ -32,6 +33,7 @@ import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
+import { beginDistill, beginHandoff } from "./carry-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
 import {
@@ -235,6 +237,33 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			"Recover an interrupted execution: audit the plan against reality (worktrees, branches, PRs) and resume interrupted workers from their saved sessions.",
 		handler: (_args: string, ctx: ExtensionCommandContext) =>
 			rt.runRecover(ctx),
+	});
+
+	pi.registerCommand("distill", {
+		description:
+			"Curated in-place compaction: carry the essentials (you pick the " +
+			"threads), cut the rest, keep working — same plan, same session.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (isAgentMode()) {
+				ctx.ui.notify("/distill is a maestro command.", "warning");
+				return;
+			}
+			beginDistill(rt, ctx);
+		},
+	});
+
+	pi.registerCommand("handoff", {
+		description:
+			"Close this arc: curate the unfinished threads (a transcript " +
+			"archaeologist hunts dropped balls) and seed a NEW planning session " +
+			"with no active plan. Refuses while workers are mid-flight.",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (isAgentMode()) {
+				ctx.ui.notify("/handoff is a maestro command.", "warning");
+				return;
+			}
+			await beginHandoff(rt, ctx);
+		},
 	});
 
 	pi.registerCommand("verify", {

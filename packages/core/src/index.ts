@@ -28,3 +28,4 @@ export {
 	setSettingsLayer,
 } from "./feature-flags.js";
 export { redactSecrets } from "./redact.js";
+export { uiTrace } from "./ui-trace.js";

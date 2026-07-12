@@ -242,4 +242,73 @@ describe("OverlayManager", () => {
 		expect(agents.expanded).toBe(true);
 		expect(ask.focused).toBe(false);
 	});
+
+	// pi's setWidget disposes + deletes + re-appends the key and rebuilds the
+	// whole widget container — repeated calls are the flicker mechanism. The
+	// manager must set each key ONCE and drive everything else through state
+	// mutation + re-render.
+	describe("render discipline (flicker guard)", () => {
+		function setWidgetCallsFor(ctx: ReturnType<typeof mockCtx>, key: string) {
+			return ctx.ui.setWidget.mock.calls.filter((c) => c[0] === key);
+		}
+
+		it("re-mounting the same id swaps the component without a second setWidget", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx();
+			mgr.attach(ctx as any);
+			const first = mockComponent();
+			mgr.mount("ask", first);
+			mgr.focusOverlay("ask");
+			expect(first.expanded).toBe(true);
+
+			const second = mockComponent();
+			second.render = () => ["second"];
+			mgr.mount("ask", second);
+
+			// Only the initial mount touched the widget stack.
+			expect(setWidgetCallsFor(ctx, "maestro.overlay.ask")).toHaveLength(1);
+			// Expansion/focus survive the rebuild — no collapsed blink frame.
+			expect(second.expanded).toBe(true);
+			expect(second.focused).toBe(true);
+			// The stable wrapper delegates to the CURRENT component.
+			const factory = setWidgetCallsFor(ctx, "maestro.overlay.ask")[0][1];
+			const wrapper = factory({ requestRender: () => {} });
+			expect(wrapper.render(80)).toEqual(["second"]);
+		});
+
+		it("keystrokes and focus changes never re-set the widget", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx();
+			mgr.attach(ctx as any);
+			const ask = mockComponent();
+			const agents = mockComponent();
+			mgr.mount("ask", ask);
+			mgr.mount("agents", agents);
+			const before = ctx.ui.setWidget.mock.calls.length;
+
+			ctx.sendInput("\t"); // focus ask
+			ctx.sendInput("\u001b[A"); // arrow into the component
+			ctx.sendInput("\u001b[B");
+			ctx.sendInput("\t"); // focus agents
+			ctx.sendInput("\u001b"); // esc back to input
+			mgr.blockInput();
+			mgr.unblockInput();
+
+			expect(ctx.ui.setWidget.mock.calls.length).toBe(before);
+		});
+
+		it("unmount then mount re-sets the widget (real removal, real return)", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx();
+			mgr.attach(ctx as any);
+			mgr.mount("ask", mockComponent());
+			mgr.unmount("ask");
+			mgr.mount("ask", mockComponent());
+
+			const calls = setWidgetCallsFor(ctx, "maestro.overlay.ask");
+			expect(calls).toHaveLength(3);
+			expect(calls[1][1]).toBeUndefined();
+			expect(calls[2][1]).toEqual(expect.any(Function));
+		});
+	});
 });

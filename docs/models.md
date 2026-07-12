@@ -103,4 +103,11 @@ These are independent of pi's native `compaction.*` and of
 - `PI_DISABLE="a.b,c.d"` / `PI_ENABLE="a.b"` — flip single feature paths;
   the kill switch (`PI_DISABLE`) wins.
 
+### Debugging (environment)
+
+- `MAESTRO_UI_TRACE=1` (or a file path) — append timestamped overlay/widget
+  lifecycle events to a log (`1` → `$TMPDIR/maestro-ui-trace.log`). Use when
+  chasing UI flicker: a healthy session shows sparse mounts/unmounts; a bug
+  shows the same key cycling many times per second.
+
 <!-- verified against 83bfcbe -->

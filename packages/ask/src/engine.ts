@@ -16,7 +16,7 @@ import type {
 	Questionnaire,
 } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
-import { getCapability } from "@vegardx/pi-core";
+import { getCapability, uiTrace } from "@vegardx/pi-core";
 import {
 	CollapsibleQuestionnaireComponent,
 	paletteFromTheme,
@@ -93,6 +93,7 @@ export class AskEngine {
 	 */
 	post(questions: Questionnaire): void {
 		if (questions.length === 0) return;
+		uiTrace("ask.post", `n=${questions.length}`);
 		for (const q of questions) this.#questionById.set(q.id, q);
 		// Agent mode: route to the maestro; deliver whatever comes back.
 		const transport = getCapability(CAPABILITIES.askTransport);
@@ -134,6 +135,7 @@ export class AskEngine {
 		source: AskSource = "main",
 	): Promise<Answers> {
 		if (questions.length === 0) return [];
+		uiTrace("ask.present", `n=${questions.length} source=${source}`);
 		for (const q of questions) this.#questionById.set(q.id, q);
 		// Agent mode: an ask-transport capability routes questions to the
 		// maestro over RPC. Checked before the local-UI fallback so a
@@ -316,6 +318,7 @@ export class AskEngine {
 	): void {
 		if (this.#set.size === 0) {
 			if (this.#mounted) {
+				uiTrace("ask.widget.unmount");
 				overlays.unmount("ask");
 				this.#mounted = false;
 				this.#component = undefined;
@@ -324,6 +327,7 @@ export class AskEngine {
 			return;
 		}
 		if (!opts.rebuild && this.#mounted) return;
+		uiTrace("ask.widget.rebuild", `size=${this.#set.size}`);
 
 		const wasExpanded = this.#component?.expanded ?? false;
 		const palette = this.#ctx?.ui

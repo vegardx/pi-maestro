@@ -267,7 +267,6 @@ export function createRuntimeContext(
 					}),
 				);
 			}
-			if (rt.engine) ctx.ui.setWidget?.("maestro.plan", undefined);
 		},
 
 		// Best-effort context-budget breakdown. Deterministic given its inputs

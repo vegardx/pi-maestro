@@ -392,14 +392,35 @@ describe("syncAgentWidget", () => {
 		expect(calls[calls.length - 1]).toEqual(["maestro-agents", undefined]);
 	});
 
-	it("clears the widget when no agents are active or execution is gone", () => {
+	it("is a no-op when nothing is mounted and no agents are active", () => {
+		// Guard against the flicker storm: syncAgentWidget runs on EVERY agent
+		// event; while the fleet is quiet it must not touch the widget stack
+		// (each setWidget forces pi to rebuild the whole container).
 		const inactive = new Map([["g/worker", agent("done")]]);
 		for (const agents of [inactive, undefined]) {
 			const { calls, rt, ctx } = fakes(agents);
 			syncAgentWidget(rt as any, ctx as any);
-			expect(calls).toEqual([["maestro-agents", undefined]]);
+			expect(calls).toEqual([]);
 			expect(rt.agentWidgetTimer).toBeUndefined();
 		}
+	});
+
+	it("clears the mounted widget once when agents go quiet", () => {
+		const active = new Map([["g/worker", agent("working")]]);
+		const { calls, rt, ctx } = fakes(active);
+		syncAgentWidget(rt as any, ctx as any);
+		expect(calls).toHaveLength(1);
+
+		rt.execution = {
+			snapshot: () => ({
+				agents: new Map([["g/worker", agent("done")]]),
+				deliverables: new Map(),
+			}),
+		};
+		syncAgentWidget(rt as any, ctx as any); // mounted → real clear
+		expect(calls[calls.length - 1]).toEqual(["maestro-agents", undefined]);
+		syncAgentWidget(rt as any, ctx as any); // already cleared → no-op
+		expect(calls).toHaveLength(2);
 	});
 
 	it("shows research runs without an execution handle (plan mode)", () => {

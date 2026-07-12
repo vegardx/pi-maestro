@@ -4,10 +4,19 @@
  * Two overlays: "ask" (questions) and "agents" (dashboard).
  * Tab cycles focus between them and the input.
  * Only one expanded at a time. When input is focused, both collapse.
+ *
+ * Render discipline: pi's `ui.setWidget` is NOT an update — it disposes the
+ * existing component, deletes the key, re-appends it, and rebuilds the whole
+ * widget container. Calling it per keystroke/focus change/rebuild is what made
+ * the ask dialog flicker. So each overlay key is set ONCE with a stable
+ * wrapper that delegates to the current component; everything after that —
+ * component swaps, focus changes, input routing — only mutates state and asks
+ * the TUI to re-render.
  */
 
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { uiTrace } from "@vegardx/pi-core";
 
 export type OverlayId = "ask" | "agents" | "config";
 
@@ -17,6 +26,8 @@ export interface ManagedOverlay {
 	component: OverlayComponent;
 	/** Whether this overlay is currently mounted (visible as a widget). */
 	mounted: boolean;
+	/** Stable delegating component handed to pi ONCE; survives swaps. */
+	readonly wrapper: Component;
 }
 
 export interface OverlayComponent extends Component {
@@ -35,6 +46,7 @@ export class OverlayManager {
 	private inputBlocked = false;
 	private removeInputListener: (() => void) | undefined;
 	private ctx: ExtensionContext | undefined;
+	private requestRender: (() => void) | undefined;
 
 	/** Whether main-agent questions are blocking input. */
 	get isInputBlocked(): boolean {
@@ -50,6 +62,10 @@ export class OverlayManager {
 				this.handleTerminalInput(data),
 			);
 		}
+		// Recover overlays mounted before the context existed.
+		for (const overlay of this.overlays.values()) {
+			if (overlay.mounted) this.setWidget(overlay.id);
+		}
 	}
 
 	/** Detach from context, remove listener. */
@@ -62,24 +78,55 @@ export class OverlayManager {
 	/**
 	 * Re-assert every mounted overlay's widget in focus order. The host renders
 	 * `aboveEditor` widgets in Map-insertion order and a re-set moves a key to
-	 * the end, so an unrelated widget re-syncing (e.g. the agents table on its
-	 * timer) would otherwise reshuffle the stack. Calling this after such a
-	 * re-sync pins the overlays back below it in a stable order. Cheap: it
-	 * re-sets the SAME component instances, so no UI state is lost.
+	 * the end, so an unrelated widget mounting (e.g. the agents table) would
+	 * otherwise land below the overlays. Calling this after such a mount pins
+	 * the overlays back below it in a stable order. Cheap and RARE (once per
+	 * agent-table mount): it re-sets the SAME wrapper instances, so no UI state
+	 * is lost.
 	 */
 	reassert(): void {
+		uiTrace("overlay.reassert");
 		for (const id of this.focusOrder) {
-			if (this.overlays.get(id)?.mounted) this.syncWidget(id);
+			if (this.overlays.get(id)?.mounted) this.setWidget(id);
 		}
 	}
 
-	/** Register an overlay component. Mounts it as a widget. */
+	/**
+	 * Register an overlay component. First mount sets the widget; a re-mount
+	 * of the same id swaps the component into the existing wrapper WITHOUT
+	 * touching the widget stack, preserving focus/expansion — a rebuild must
+	 * not blink the dialog.
+	 */
 	mount(id: OverlayId, component: OverlayComponent): void {
-		const overlay: ManagedOverlay = { id, component, mounted: true };
+		const existing = this.overlays.get(id);
+		if (existing) {
+			component.focused = existing.component.focused;
+			component.expanded = existing.component.expanded;
+			existing.component = component;
+			existing.mounted = true;
+			uiTrace("overlay.swap", id);
+			this.refresh();
+			return;
+		}
+		const overlay: ManagedOverlay = {
+			id,
+			component,
+			mounted: true,
+			wrapper: {
+				render: (width: number) => {
+					const current = this.overlays.get(id);
+					return current ? current.component.render(width) : [];
+				},
+				invalidate: () => {
+					this.overlays.get(id)?.component.invalidate?.();
+				},
+			},
+		};
 		this.overlays.set(id, overlay);
 		component.focused = false;
 		component.expanded = false;
-		this.syncWidget(id);
+		uiTrace("overlay.mount", id);
+		this.setWidget(id);
 	}
 
 	/** Remove an overlay widget entirely. */
@@ -88,6 +135,7 @@ export class OverlayManager {
 			this.focusedId = null;
 		}
 		this.overlays.delete(id);
+		uiTrace("overlay.unmount", id);
 		this.ctx?.ui.setWidget(widgetKey(id), undefined);
 	}
 
@@ -102,14 +150,14 @@ export class OverlayManager {
 			if (prev) {
 				prev.component.focused = false;
 				prev.component.expanded = false;
-				this.syncWidget(this.focusedId);
 			}
 		}
 
 		this.focusedId = id;
 		overlay.component.focused = true;
 		overlay.component.expanded = true;
-		this.syncWidget(id);
+		uiTrace("overlay.focus", id);
+		this.refresh();
 	}
 
 	/** Return focus to input. Collapse all overlays. */
@@ -119,8 +167,9 @@ export class OverlayManager {
 			if (prev) {
 				prev.component.focused = false;
 				prev.component.expanded = false;
-				this.syncWidget(this.focusedId);
 			}
+			uiTrace("overlay.focus", "input");
+			this.refresh();
 		}
 		this.focusedId = null;
 	}
@@ -128,6 +177,7 @@ export class OverlayManager {
 	/** Block input (for main-agent questions). Auto-expands ask overlay. */
 	blockInput(): void {
 		this.inputBlocked = true;
+		uiTrace("overlay.blockInput");
 		// Auto-expand the ask overlay
 		if (this.overlays.has("ask")) {
 			this.focusOverlay("ask");
@@ -137,6 +187,7 @@ export class OverlayManager {
 	/** Unblock input. Collapse overlays, return focus to input. */
 	unblockInput(): void {
 		this.inputBlocked = false;
+		uiTrace("overlay.unblockInput");
 		this.focusInput();
 	}
 
@@ -157,12 +208,10 @@ export class OverlayManager {
 				if (data === KEY_ESC) {
 					if (this.inputBlocked) {
 						// Blocked: hand esc to the ask component so it can
-						// defer the blocking question (it unblocks us back —
-						// which nulls focusedId, so capture the id first).
+						// defer the blocking question (it unblocks us back).
 						if (this.focusedId === "ask") {
-							const id = this.focusedId;
 							overlay.component.handleInput(data);
-							this.syncWidget(id);
+							this.refresh();
 						}
 						return { consume: true };
 					}
@@ -170,7 +219,7 @@ export class OverlayManager {
 					return { consume: true };
 				}
 				overlay.component.handleInput(data);
-				this.syncWidget(this.focusedId);
+				this.refresh();
 				return { consume: true };
 			}
 		}
@@ -210,13 +259,22 @@ export class OverlayManager {
 		}
 	}
 
-	private syncWidget(id: OverlayId): void {
+	/** Re-render without touching the widget stack (state already mutated). */
+	private refresh(): void {
+		this.requestRender?.();
+	}
+
+	/** Hand the stable wrapper to pi. The ONLY place a widget key is (re)set. */
+	private setWidget(id: OverlayId): void {
 		const overlay = this.overlays.get(id);
 		if (!overlay || !this.ctx) return;
-		// setWidget with a component factory
 		this.ctx.ui.setWidget(
 			widgetKey(id),
-			(_tui: TUI, _theme: Theme) => overlay.component,
+			(tui: TUI, _theme: Theme) => {
+				this.requestRender = () =>
+					(tui as unknown as { requestRender?: () => void })?.requestRender?.();
+				return overlay.wrapper;
+			},
 			{ placement: "aboveEditor" },
 		);
 	}

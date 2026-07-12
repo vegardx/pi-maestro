@@ -3,6 +3,7 @@
 // only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { uiTrace } from "@vegardx/pi-core";
 import { ledgerSummary, openBlocking } from "../exec/findings.js";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
@@ -122,6 +123,7 @@ export function syncAgentWidget(
 		rt.agentWidgetRefresh?.();
 	} else {
 		rt.agentWidgetMounted = true;
+		uiTrace("agents.widget.mount");
 		ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (tui, theme) => {
 			rt.agentWidgetRefresh = () =>
 				(tui as { requestRender?: () => void } | undefined)?.requestRender?.();
@@ -168,8 +170,13 @@ export function clearAgentWidget(
 		clearInterval(rt.agentWidgetTimer);
 		rt.agentWidgetTimer = undefined;
 	}
+	// No-op when nothing is mounted: syncAgentWidget calls this on EVERY
+	// agent event while the fleet is quiet, and an unguarded setWidget forces
+	// pi to rebuild the whole widget container (ask dialog included) each time.
+	if (!rt.agentWidgetMounted) return;
 	rt.agentWidgetMounted = false;
 	rt.agentWidgetRefresh = undefined;
+	uiTrace("agents.widget.clear");
 	ctx?.ui.setWidget?.(AGENT_WIDGET_KEY, undefined);
 }
 

@@ -28,6 +28,7 @@ import {
 import { createModesSummariser } from "../summarise.js";
 import {
 	contextFillLadder,
+	firePendingForcedDistill,
 	handoffSeedPromptBlock,
 	scheduleHandoffArrival,
 } from "./carry-commands.js";
@@ -375,6 +376,12 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("turn_start", () => {
 		rt.agentBridge?.onTurnStart();
+	});
+
+	// The run actually finished (agent idle) — safe moment for the forced
+	// distill the ladder armed mid-run (turn_end fires between tool loops).
+	pi.on("agent_end", (_event, ctx) => {
+		if (!rt.agentBridge) firePendingForcedDistill(rt, ctx);
 	});
 
 	// Accumulate real usage from assistant messages (tokens + cost). In agent

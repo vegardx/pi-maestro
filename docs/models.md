@@ -81,7 +81,7 @@ All keys live under `extensionConfig.<extension>` in layered settings
 | Key | Default | Meaning |
 |---|---|---|
 | `nudgeAt` | `0.3` | Context fill fraction where a non-blocking question suggests `/distill` |
-| `forceAt` | `0.5` | Fraction where a self-curated distill runs automatically (with a divergence check that suggests `/handoff` instead when the session has drifted); `0` disables the force |
+| `forceAt` | `0.5` | Fraction where a self-curated distill runs automatically — queued when crossed mid-run and fired once the agent finishes its current work (with a divergence check that suggests `/handoff` instead when the session has drifted); `0` disables the force |
 
 ### `modes.compaction` — work-continuity compaction
 

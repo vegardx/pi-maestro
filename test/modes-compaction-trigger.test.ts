@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { contextFillLadder } from "../packages/modes/src/runtime/carry-commands.js";
+import {
+	contextFillLadder,
+	firePendingForcedDistill,
+} from "../packages/modes/src/runtime/carry-commands.js";
 import {
 	awaitCompaction,
 	diagnoseResumeAfterCompaction,
@@ -269,16 +272,42 @@ describe("contextFillLadder (nudge → force → warnings)", () => {
 		expect(rt.contextWarnedAt).toBe(30);
 	});
 
-	it("forces a self-curated distill episode at 50%", () => {
-		const { messages, rt, ctx } = fakes(55, 30); // nudge already fired
+	it("50% crossing ARMS the force; agent_end fires it (never mid-run)", () => {
+		const { messages, notes, rt, ctx } = fakes(55, 30); // nudge already fired
 		contextFillLadder(rt as never, ctx as never);
+		// Mid-run (turn_end fires between tool loops): nothing starts yet.
+		expect(rt.carryForward.get()).toBeFalsy();
+		expect(messages).toHaveLength(0);
+		expect(
+			(rt as { pendingForcedDistill?: { fillPct: number } })
+				.pendingForcedDistill,
+		).toEqual({ fillPct: 55 });
+		expect(notes.some(([m]) => m.includes("queued"))).toBe(true);
+		// Arms once — no re-arm on the next turn_end.
+		contextFillLadder(rt as never, ctx as never);
+		expect(notes.filter(([m]) => m.includes("queued"))).toHaveLength(1);
+
+		// The run settles: agent_end fires the armed distill.
+		firePendingForcedDistill(rt as never, ctx as never);
 		expect(rt.carryForward.get()).toBeTruthy();
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toContain("FORCED distill");
 		expect(messages[0]).toContain("divergence check");
-		// Fires once — the running episode is never restarted.
-		contextFillLadder(rt as never, ctx as never);
+		// Disarmed + episode running — later agent_ends are no-ops.
+		firePendingForcedDistill(rt as never, ctx as never);
 		expect(messages).toHaveLength(1);
+	});
+
+	it("an armed force is dropped when an episode started meanwhile", () => {
+		const { messages, rt, ctx } = fakes(55, 30);
+		contextFillLadder(rt as never, ctx as never);
+		// e.g. the user ran /distill themselves before the run settled.
+		rt.carryForward.begin({ kind: "distill" });
+		firePendingForcedDistill(rt as never, ctx as never);
+		expect(messages).toHaveLength(0);
+		expect(
+			(rt as { pendingForcedDistill?: unknown }).pendingForcedDistill,
+		).toBeUndefined();
 	});
 
 	it("re-arms after usage drops (a distill does that)", () => {

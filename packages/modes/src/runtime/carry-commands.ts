@@ -444,7 +444,15 @@ export function contextFillLadder(
 			at: force,
 			run: () => {
 				if (rt.carryForward.get()) return; // an episode is already running
-				beginDistill(rt, ctx, { forced: true, fillPct: pct });
+				// turn_end fires BETWEEN the round-trips of an agentic run, so
+				// firing here would inject the forced-distill directive into the
+				// middle of ongoing work. Arm instead; agent_end (the run truly
+				// finishing) fires it via firePendingForcedDistill.
+				rt.pendingForcedDistill = { fillPct: pct };
+				ctx.ui.notify(
+					`Maestro context ${pct.toFixed(0)}% full${detail} — forced /distill queued for when the current work settles.`,
+					"warning",
+				);
 			},
 		},
 		{
@@ -460,6 +468,21 @@ export function contextFillLadder(
 			break;
 		}
 	}
+}
+
+/**
+ * Fire an armed forced distill now that the run has actually finished
+ * (agent_end). No-op when nothing is armed or an episode is already live.
+ */
+export function firePendingForcedDistill(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+): void {
+	const armed = rt.pendingForcedDistill;
+	if (!armed) return;
+	rt.pendingForcedDistill = undefined;
+	if (rt.carryForward.get()) return;
+	beginDistill(rt, ctx, { forced: true, fillPct: armed.fillPct });
 }
 
 function nudgeDistill(

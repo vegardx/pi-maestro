@@ -144,8 +144,9 @@ is still available for gaps that surface while structuring.
    with \`repo(action="add", key="...", path="...", createdBy="<that deliverable>")\`
    and give the later deliverables \`repo: "<key>"\` plus a \`dependsOn\` on the
    creator — the DAG then guarantees the repo exists before they start.
-2. **Detail** — Call \`task(action="add", deliverableId="...", title="...", body="...")\`
-   for each concrete task. Tasks describe WHAT to implement.
+2. **Detail** — Call \`task(action="add", deliverableId="...", items=[{title, body}, …])\`
+   ONCE per deliverable to add ALL its tasks in a single batched call (not one
+   \`add\` per task). Tasks describe WHAT to implement.
 3. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
    Give reviewers \`after: ["worker"]\` explicitly so ordering is visible in
    the plan, not just enforced by the scheduler.

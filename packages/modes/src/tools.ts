@@ -57,6 +57,7 @@ interface ToolDetails {
 	readonly deliverable?: Deliverable;
 	readonly deliverables?: readonly Deliverable[];
 	readonly workItem?: WorkItem;
+	readonly workItems?: readonly WorkItem[];
 	readonly agent?: AgentSpec;
 	readonly subAgent?: SubAgentSpec;
 	readonly done?: boolean;
@@ -151,6 +152,28 @@ const TaskParams = Type.Object({
 	),
 	position: Type.Optional(
 		Type.Number({ description: "0-based insertion position." }),
+	),
+	items: Type.Optional(
+		Type.Array(
+			Type.Object({
+				title: Type.String({ description: "Work-item title." }),
+				body: Type.Optional(
+					Type.String({
+						description:
+							"Work-item details — file paths, signatures, edge cases.",
+					}),
+				),
+				kind: Type.Optional(
+					Type.Union(WORK_ITEM_KINDS.map((k) => Type.Literal(k))),
+				),
+			}),
+			{
+				description:
+					"BATCH add: create many work items in ONE call, in order. Use " +
+					"this instead of one add per task. All-or-nothing (a bad item " +
+					"rejects the whole batch). `add` only; ignores title/body/kind.",
+			},
+		),
 	),
 });
 
@@ -544,7 +567,35 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 
 				switch (params.action) {
 					case "add": {
-						if (!params.title) return error("add requires title");
+						// Batch: create many items in one call, all-or-nothing.
+						if (params.items && params.items.length > 0) {
+							if (params.items.some((i) => !i.title?.trim())) {
+								return error("every batch item requires a title");
+							}
+							const created = params.items.map((i, n) =>
+								engine.addWorkItem(deliverableId, {
+									title: i.title,
+									body: i.body,
+									kind: i.kind as WorkItemKind | undefined,
+									position:
+										params.position !== undefined
+											? params.position + n
+											: undefined,
+								}),
+							);
+							notify(deps, engine);
+							for (const item of created) {
+								deps.steerAgent?.(
+									deliverableId,
+									`New task: "${item.title}". ${item.body ?? ""}`.trim(),
+								);
+							}
+							return ok(
+								`✓ ${created.length} tasks: ${created.map((i) => i.id).join(", ")}`,
+								{ workItems: created, plan: engine.get() },
+							);
+						}
+						if (!params.title) return error("add requires title or items");
 						const input: AddWorkItemInput = {
 							title: params.title,
 							body: params.body,

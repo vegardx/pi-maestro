@@ -41,7 +41,7 @@
 		"@earendil-works/pi-agent-core": "^0.80.2",
 		"@earendil-works/pi-ai": "^0.80.2",
 		"@earendil-works/pi-coding-agent": "^0.80.2",
-		"@earendil-works/pi-tui": "^0.80.2",
+		"@earendil-works/pi-tui": "^0.80.6",
 		"@sinclair/typebox": "^0.34.49",
 		"@types/node": "^24",
 		"husky": "^9.1.7",

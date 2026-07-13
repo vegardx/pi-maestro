@@ -3,6 +3,7 @@
 // force at modes.distill.forceAt; force never blocks on an absent human).
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type {
 	ExtensionCommandContext,
 	ExtensionContext,
@@ -147,7 +148,7 @@ export async function beginHandoff(
 
 	const archaeology = await runArchaeologist(rt, ctx);
 
-	const sink: CarrySink = async (doc, path, toolCtx) => {
+	const sink: CarrySink = async (_doc, path, toolCtx) => {
 		// Close out this arc's runtime before switching sessions.
 		if (rt.execution) {
 			try {
@@ -158,8 +159,15 @@ export async function beginHandoff(
 			rt.execution = undefined;
 			rt.gateTriage = undefined;
 		}
+		// The seed is NOT sent from here: this sink runs mid-turn, and a
+		// message sent across the session switch gets orphaned in the old
+		// turn's follow-up queue — the user landed in a blank session once.
+		// Instead the marker rides modes state; session_start (or the
+		// belt-and-braces schedule below) delivers when the agent is idle.
+		rt.state = { ...rt.state, pendingHandoffSeedPath: path };
 		const result = await ctx.newSession();
 		if (result.cancelled) {
+			rt.state = { ...rt.state, pendingHandoffSeedPath: undefined };
 			return `Handoff document written to ${path}, but the new session was cancelled — /new manually; the seed is on disk.`;
 		}
 		// We are IN the new session now: no active plan, plan mode, seeded.
@@ -167,14 +175,7 @@ export async function beginHandoff(
 		rt.state = { ...rt.state, activePlanSlug: undefined };
 		rt.persist();
 		rt.setMode("plan", toolCtx);
-		rt.pi.sendUserMessage(
-			`<handoff-seed>\n${doc}\n</handoff-seed>\n\n` +
-				"[New arc. The seed above is CONTEXT ONLY — raw material for the " +
-				"NEXT plan. Open with ONE short orientation paragraph (where things " +
-				"stand, your suggested first arc) and then WAIT for the human. Do " +
-				"not start research or form a plan until asked.]",
-			{ deliverAs: "followUp" },
-		);
+		scheduleHandoffArrival(rt, toolCtx);
 		return `Arc closed — seed written to ${path}; the new planning session is opening.`;
 	};
 
@@ -194,6 +195,132 @@ export async function beginHandoff(
 		"Handoff episode started — the archaeologist's findings feed the proposal; curate when asked.",
 		"info",
 	);
+}
+
+// ─── Handoff arrival (the NEW session's side) ────────────────────────────────
+
+/** Custom-message type of the arrival card; also the delivered-once marker. */
+export const HANDOFF_ARRIVAL_ENTRY = "maestro.handoff.arrival";
+
+const ARRIVAL_POLL_MS = 400;
+/** ~20s of idle-polling, then deliver as a follow-up rather than never. */
+const ARRIVAL_MAX_POLLS = 50;
+
+/**
+ * The handoff seed as a system-prompt block for the plan-mode preamble.
+ * Rides EVERY plan-mode turn while no plan is active — the doc is the raw
+ * material for the next plan, and it's cache-stable (constant per session).
+ * Retires automatically once a plan exists.
+ */
+export function handoffSeedPromptBlock(rt: RuntimeContext): string | undefined {
+	const path = rt.state.pendingHandoffSeedPath;
+	if (!path) return undefined;
+	// A draft engine is auto-opened the moment plan mode starts — the seed
+	// must survive that. It retires once a REAL plan is formed.
+	if (rt.engine && !rt.engine.isDraft()) return undefined;
+	try {
+		const doc = readFileSync(path, "utf8");
+		return `## Handoff seed (previous arc — raw material for the next plan, context only)\n${doc}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Deliver the arrival experience in the post-handoff session: the extension-
+ * owned card (exists even if the model never speaks) and the orientation
+ * prompt (fires a model turn). Deferred + idle-gated because the sink runs
+ * mid-turn: a message sent across the session switch lands in the DYING
+ * turn's follow-up queue and is orphaned — the blank-session bug.
+ *
+ * Idempotent: the card entry doubles as the delivered-once marker, so the
+ * sink and session_start can both call this (and a reopened session won't
+ * re-orient).
+ */
+export function scheduleHandoffArrival(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+): void {
+	const path = rt.state.pendingHandoffSeedPath;
+	if (!path || rt.handoffArrivalScheduled) return;
+	const entries = ctx.sessionManager?.getEntries?.() ?? [];
+	if (hasArrivalCard(entries)) return;
+	rt.handoffArrivalScheduled = true;
+	let polls = 0;
+	const attempt = () => {
+		if (rt.state.pendingHandoffSeedPath !== path) {
+			rt.handoffArrivalScheduled = false;
+			return;
+		}
+		if (!ctx.isIdle?.() && polls < ARRIVAL_MAX_POLLS) {
+			polls += 1;
+			const t = setTimeout(attempt, ARRIVAL_POLL_MS);
+			t.unref?.();
+			return;
+		}
+		rt.handoffArrivalScheduled = false;
+		deliverArrival(rt, ctx, path);
+	};
+	attempt();
+}
+
+function deliverArrival(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+	path: string,
+): void {
+	let doc = "";
+	try {
+		doc = readFileSync(path, "utf8");
+	} catch {
+		// Card still renders with the path; the seed block will be absent too.
+	}
+	rt.pi.sendMessage(
+		{
+			customType: HANDOFF_ARRIVAL_ENTRY,
+			content: buildArrivalCard(path, doc),
+			display: true,
+		},
+		{ triggerTurn: false },
+	);
+	ctx.ui?.notify?.("New arc — continuing from a handoff.", "info");
+	rt.pi.sendUserMessage(
+		"[New arc from a /handoff. The full handoff seed is in your system " +
+			"context under '## Handoff seed' — CONTEXT ONLY, raw material for " +
+			"the NEXT plan. Open with ONE short orientation paragraph (where " +
+			"things stand, your suggested first arc) and then WAIT for the " +
+			"human. Do not start research or form a plan until asked.]",
+		{ deliverAs: "followUp" },
+	);
+}
+
+function buildArrivalCard(path: string, doc: string): string {
+	const threads = (doc.match(/^### /gm) ?? []).length;
+	const radarSection = doc.split(/^## Also on the radar$/m)[1];
+	const radar = radarSection ? (radarSection.match(/^- /gm) ?? []).length : 0;
+	const facts = [
+		`${threads} thread(s) carried`,
+		`${radar} radar item(s)`,
+		...(/^## Divergence note$/m.test(doc) ? ["divergence noted"] : []),
+	];
+	const prevPlan = doc.match(/via \/plan ([^\s.]+)/)?.[1];
+	const lines = [
+		"⇄ New arc — continuing from a handoff",
+		doc ? `Carried: ${facts.join(" · ")}` : "(seed document unreadable)",
+		`Seed: ${path}`,
+	];
+	if (prevPlan) lines.push(`Previous arc: /plan ${prevPlan} reopens it`);
+	return lines.join("\n");
+}
+
+function hasArrivalCard(entries: readonly unknown[]): boolean {
+	return entries.some((entry) => {
+		const e = entry as { type?: string; customType?: string };
+		return (
+			(e.type === "custom_message" || e.type === "custom") &&
+			e.customType === HANDOFF_ARRIVAL_ENTRY
+		);
+	});
 }
 
 /**

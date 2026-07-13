@@ -26,7 +26,11 @@ import {
 	readModesCompactionSettings,
 } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
-import { contextFillLadder } from "./carry-commands.js";
+import {
+	contextFillLadder,
+	handoffSeedPromptBlock,
+	scheduleHandoffArrival,
+} from "./carry-commands.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
 import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
 import {
@@ -113,8 +117,14 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 				: "";
 		if (rt.state.mode === "plan") {
 			const preamble = buildPlanModePreamble(rt.engine);
+			// Post-handoff: the seed doc rides the system prompt (context-only —
+			// option B) until a plan exists. The user surface is the arrival
+			// card + orientation paragraph, never the raw document.
+			const seed = handoffSeedPromptBlock(rt);
 			return {
-				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${
+					seed ? `\n\n${seed}` : ""
+				}${pendingBlock}`,
 			};
 		}
 		if (rt.state.mode === "hack" && rt.execution) {
@@ -188,6 +198,12 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			installMaestroFooter(rt, ctx);
 		}
 		rt.notifyMode(ctx);
+
+		// Post-handoff arrival: render the card and fire the orientation turn
+		// once the agent is idle. Covers both the in-process session switch
+		// (the sink's own schedule can race it — both are idempotent) and a
+		// pi restart between the handoff and the first prompt.
+		if (!isAgentMode()) scheduleHandoffArrival(rt, ctx);
 
 		// Interrupted execution: the previous session ended (quit/crash) with
 		// deliverables mid-flight. Detect it and offer recovery — the state

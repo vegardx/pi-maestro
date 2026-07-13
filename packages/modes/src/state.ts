@@ -15,6 +15,13 @@ export interface ModesState {
 	activePlanSlug?: string;
 	execution: ExecutionState;
 	updatedAt: string;
+	/**
+	 * Path of the /handoff seed document this session was opened from. While
+	 * set (and no plan is active) the doc rides the plan-mode system prompt as
+	 * raw material for the next plan; session_start uses it to render the
+	 * arrival card + fire the orientation turn exactly once.
+	 */
+	pendingHandoffSeedPath?: string;
 }
 
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;

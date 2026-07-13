@@ -129,6 +129,9 @@ export interface RuntimeContext {
 	// it per sync reshuffles the widget stack and blinks the ask overlays.
 	agentWidgetMounted: boolean;
 	agentWidgetRefresh: (() => void) | undefined;
+	// Transient: a post-handoff arrival delivery is idle-polling (dedupes the
+	// sink's schedule against session_start's).
+	handoffArrivalScheduled?: boolean;
 	// Transient (not persisted): a modes-owned compaction is in flight.
 	compactionInFlight: boolean;
 	// Transient (not persisted): what modes is about to compact. Set just

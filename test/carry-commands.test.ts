@@ -2,6 +2,9 @@
 // document to the integrated compaction (maestro-owned marker + summary
 // override), and a handoff refuses while workers are mid-flight.
 
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
 	ExtensionCommandContext,
 	ExtensionContext,
@@ -12,9 +15,16 @@ import { CarryForwardController } from "../packages/modes/src/carry-forward.js";
 import {
 	beginDistill,
 	beginHandoff,
+	HANDOFF_ARRIVAL_ENTRY,
+	handoffSeedPromptBlock,
 	liveWorkers,
+	scheduleHandoffArrival,
 } from "../packages/modes/src/runtime/carry-commands.js";
 import type { RuntimeContext } from "../packages/modes/src/runtime/context.js";
+import {
+	appendModesState,
+	hydrateModesState,
+} from "../packages/modes/src/session.js";
 
 function fakes(
 	opts: {
@@ -26,15 +36,22 @@ function fakes(
 	const messages: string[] = [];
 	const notes: Array<[string, string]> = [];
 	const compacts: Array<{ customInstructions?: string }> = [];
+	const cards: Array<{ customType?: string; content?: string }> = [];
 	const rt = {
 		carryForward: new CarryForwardController(),
 		engine: undefined,
+		state: { mode: "plan", execution: { stage: "idle" }, updatedAt: "t" },
 		pendingCompaction: undefined as
 			| { nonce: string; summaryOverride?: string }
 			| undefined,
+		persist: () => {},
+		setMode: () => {},
 		pi: {
 			sendUserMessage: (text: string) => {
 				messages.push(text);
+			},
+			sendMessage: (msg: { customType?: string; content?: string }) => {
+				cards.push(msg);
 			},
 		},
 		maestro: {
@@ -49,6 +66,7 @@ function fakes(
 						agents: new Map(opts.agents),
 						deliverables: new Map(),
 					}),
+					destroy: async () => {},
 				}
 			: undefined,
 	} as unknown as RuntimeContext;
@@ -61,9 +79,11 @@ function fakes(
 		compact: (o: { customInstructions?: string }) => {
 			compacts.push(o);
 		},
+		newSession: async () => ({ cancelled: false }),
+		isIdle: () => true,
 		sessionManager: { getEntries: () => opts.entries ?? [] },
 	} as unknown as ExtensionContext;
-	return { rt, ctx, messages, notes, compacts };
+	return { rt, ctx, messages, notes, compacts, cards };
 }
 
 describe("beginDistill", () => {
@@ -127,6 +147,124 @@ describe("beginHandoff — refusal", () => {
 		expect(rt.carryForward.get()?.kind).toBe("handoff");
 		expect(messages[0]).toContain("/handoff episode started");
 		expect(messages[0]).toContain("archaeologist was unavailable");
+	});
+});
+
+describe("handoff arrival (the new session's side)", () => {
+	const SEED_DOC = [
+		"# Handoff seed — t",
+		"",
+		"CONTEXT ONLY — the previous arc is closed; its plan `old-arc` remains loadable via /plan old-arc.",
+		"",
+		"## State",
+		"stuff",
+		"",
+		"## Threads",
+		"### Thread one",
+		"body",
+		"",
+		"### Thread two",
+		"body",
+		"",
+		"## Also on the radar",
+		"- a — thing",
+		"- b — thing",
+		"- c — thing",
+	].join("\n");
+
+	function withSeedFile(fn: (path: string) => void): void {
+		const dir = mkdtempSync(join(tmpdir(), "maestro-seed-"));
+		const path = join(dir, "01-handoff.md");
+		writeFileSync(path, SEED_DOC);
+		try {
+			fn(path);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it("the sink stashes the marker instead of sending the seed mid-turn", async () => {
+		const { rt, ctx, messages, cards } = fakes();
+		await beginHandoff(rt, ctx as ExtensionCommandContext);
+		const episode = rt.carryForward.get();
+		const outcome = await episode?.sink(
+			"THE DOC",
+			"/plans/x/01-handoff.md",
+			ctx,
+		);
+
+		expect(rt.state.pendingHandoffSeedPath).toBe("/plans/x/01-handoff.md");
+		expect(outcome).toContain("Arc closed");
+		// Option B: the raw document is never a visible user message.
+		expect(messages.some((m) => m.includes("<handoff-seed>"))).toBe(false);
+		expect(messages.some((m) => m.includes("THE DOC"))).toBe(false);
+		// The arrival delivered: card + orientation prompt.
+		expect(cards).toHaveLength(1);
+		expect(cards[0].customType).toBe(HANDOFF_ARRIVAL_ENTRY);
+		expect(messages.some((m) => m.includes("orientation paragraph"))).toBe(
+			true,
+		);
+	});
+
+	it("arrival card summarizes the seed: threads, radar, previous plan", () => {
+		withSeedFile((path) => {
+			const { rt, ctx, cards } = fakes();
+			rt.state.pendingHandoffSeedPath = path;
+			scheduleHandoffArrival(rt, ctx);
+			expect(cards).toHaveLength(1);
+			const card = cards[0].content ?? "";
+			expect(card).toContain("continuing from a handoff");
+			expect(card).toContain("2 thread(s) carried");
+			expect(card).toContain("3 radar item(s)");
+			expect(card).toContain("/plan old-arc");
+			expect(card).toContain(path);
+		});
+	});
+
+	it("does not re-deliver when the session already has the arrival card", () => {
+		const { rt, ctx, cards, messages } = fakes({
+			entries: [{ type: "custom_message", customType: HANDOFF_ARRIVAL_ENTRY }],
+		});
+		rt.state.pendingHandoffSeedPath = "/plans/x/01-handoff.md";
+		scheduleHandoffArrival(rt, ctx);
+		expect(cards).toHaveLength(0);
+		expect(messages).toHaveLength(0);
+	});
+
+	it("seed rides the plan-mode prompt block until a real plan exists", () => {
+		withSeedFile((path) => {
+			const { rt } = fakes();
+			rt.state.pendingHandoffSeedPath = path;
+
+			// No engine yet → injected.
+			expect(handoffSeedPromptBlock(rt)).toContain("Thread one");
+			// Auto-opened draft → still injected.
+			(rt as { engine: unknown }).engine = { isDraft: () => true };
+			expect(handoffSeedPromptBlock(rt)).toContain("## Handoff seed");
+			// A real plan formed → the seed retires.
+			(rt as { engine: unknown }).engine = { isDraft: () => false };
+			expect(handoffSeedPromptBlock(rt)).toBeUndefined();
+		});
+	});
+
+	it("the marker round-trips modes-state persistence (survives reopen)", () => {
+		const entries: Array<{ type: string; customType: string; data: unknown }> =
+			[];
+		appendModesState(
+			{
+				appendEntry: (customType: string, data?: unknown) => {
+					entries.push({ type: "custom", customType, data });
+				},
+			},
+			{
+				mode: "plan",
+				execution: { stage: "idle" },
+				updatedAt: "t",
+				pendingHandoffSeedPath: "/plans/x/01-handoff.md",
+			},
+		);
+		const hydrated = hydrateModesState(entries as never);
+		expect(hydrated?.pendingHandoffSeedPath).toBe("/plans/x/01-handoff.md");
 	});
 });
 

@@ -144,9 +144,11 @@ Two commands, one curation flow:
   working.
 - `/handoff` — close the arc. A transcript archaeologist hunts unanswered
   questions, unimplemented promises, and orphaned threads; you curate; the
-  session ends and a **new planning session** opens, seeded with the
-  document as context only — no active plan. Refuses while workers are
-  mid-flight.
+  session ends and a **new planning session** opens — no active plan. You
+  arrive to a card ("continuing from a handoff · N threads carried") and a
+  one-paragraph orientation; the full seed document rides the model's
+  context invisibly until a real plan is formed, and stays on disk under
+  the old plan's `handoffs/`. Refuses while workers are mid-flight.
 
 A threshold ladder watches context fill: at 30% you're nudged to `/distill`;
 at 50% a self-curated distill runs automatically (with a divergence check

@@ -451,6 +451,42 @@ describe("SubagentService", () => {
 		expect(svc.list().map((r) => r.id)).toEqual(["run-1"]);
 	});
 
+	it("stop on a settled run never throws (timer-callback safety)", async () => {
+		// A stale timeout firing stop() after completion once escaped a timer
+		// callback as an uncaught exception and killed pi (post-/handoff crash):
+		// the RPC client throws synchronously once its transport is gone.
+		const svc = new SubagentService({
+			bus,
+			store,
+			runner: {
+				launch(request, b): RunnerController {
+					const result = { status: "succeeded" as const, summary: "ok" };
+					b.publish({
+						type: "status",
+						runId: request.runId,
+						status: "running",
+						at: 1,
+					});
+					b.publish({ type: "result", runId: request.runId, result });
+					return {
+						steer: () => {},
+						stop: () => {
+							throw new Error("Client not started");
+						},
+						result: () => Promise.resolve(result),
+					};
+				},
+			},
+			repoRoot: "/repo",
+			mintId: () => "run-1" as RunId,
+			ownDepth: 0,
+		});
+
+		const handle = svc.spawn("do it", { profile: "restricted" });
+		await handle.result();
+		expect(() => handle.stop("timeout")).not.toThrow();
+	});
+
 	it("merges the childExtensions passthrough into every spawn (deduped)", () => {
 		// The single seam: research, named agents, and general delegates all get
 		// configured infra extensions (e.g. custom model providers) under -ne.

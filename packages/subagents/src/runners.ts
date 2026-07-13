@@ -83,11 +83,23 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 
 			return {
 				steer(guidance: string) {
-					void client?.steer?.(guidance);
+					try {
+						asFireAndForget(client?.steer?.(guidance));
+					} catch {
+						// Steering a finished run is a no-op.
+					}
 				},
 				stop() {
+					// Stopping a finished run must be a no-op, not a crash: the
+					// RPC client throws synchronously ("Client not started") once
+					// its transport is gone, and that has escaped a timer callback
+					// as an uncaught exception before (post-/handoff crash).
 					abort.abort();
-					void client?.abort();
+					try {
+						asFireAndForget(client?.abort());
+					} catch {
+						// Already finished.
+					}
 				},
 				result: () => done,
 				lastEventAt: () => activity.at,
@@ -402,4 +414,9 @@ function raceAbort<T>(
 			},
 		);
 	});
+}
+
+/** Detach a possibly-undefined promise, swallowing its rejection. */
+function asFireAndForget(p: Promise<unknown> | undefined): void {
+	void p?.catch?.(() => {});
 }

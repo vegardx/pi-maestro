@@ -229,16 +229,29 @@ async function runArchaeologist(
 				isolateExtensions: true,
 			},
 		);
-		const result = await Promise.race([
-			handle.result(),
-			new Promise<{ status: string; summary?: string }>((resolve) => {
-				const t = setTimeout(() => {
-					handle.stop("timeout");
+		// The timer MUST be cleared once the run settles: a stale timeout that
+		// fires stop() on a finished run detonated as an uncaught exception in
+		// the post-handoff session once (RpcClient throws "Client not started").
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<{ status: string; summary?: string }>(
+			(resolve) => {
+				timer = setTimeout(() => {
+					try {
+						handle.stop("timeout");
+					} catch {
+						// Completion raced the timeout — nothing to stop.
+					}
 					resolve({ status: "failed" });
 				}, 3 * 60_000);
-				t.unref?.();
-			}),
-		]);
+				timer.unref?.();
+			},
+		);
+		let result: { status: string; summary?: string };
+		try {
+			result = await Promise.race([handle.result(), timeout]);
+		} finally {
+			if (timer) clearTimeout(timer);
+		}
 		const report = result.summary?.trim();
 		return result.status === "succeeded" && report ? report : undefined;
 	} catch {

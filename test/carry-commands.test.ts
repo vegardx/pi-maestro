@@ -7,7 +7,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CarryForwardController } from "../packages/modes/src/carry-forward.js";
 import {
 	beginDistill,
@@ -16,7 +16,13 @@ import {
 } from "../packages/modes/src/runtime/carry-commands.js";
 import type { RuntimeContext } from "../packages/modes/src/runtime/context.js";
 
-function fakes(opts: { agents?: Array<[string, { status: string }]> } = {}) {
+function fakes(
+	opts: {
+		agents?: Array<[string, { status: string }]>;
+		subagents?: unknown;
+		entries?: unknown[];
+	} = {},
+) {
 	const messages: string[] = [];
 	const notes: Array<[string, string]> = [];
 	const compacts: Array<{ customInstructions?: string }> = [];
@@ -31,7 +37,12 @@ function fakes(opts: { agents?: Array<[string, { status: string }]> } = {}) {
 				messages.push(text);
 			},
 		},
-		maestro: { capabilities: { get: () => undefined } },
+		maestro: {
+			capabilities: {
+				get: (name: string) =>
+					name === "subagents.v1" ? opts.subagents : undefined,
+			},
+		},
 		execution: opts.agents
 			? {
 					snapshot: () => ({
@@ -50,7 +61,7 @@ function fakes(opts: { agents?: Array<[string, { status: string }]> } = {}) {
 		compact: (o: { customInstructions?: string }) => {
 			compacts.push(o);
 		},
-		sessionManager: { getEntries: () => [] },
+		sessionManager: { getEntries: () => opts.entries ?? [] },
 	} as unknown as ExtensionContext;
 	return { rt, ctx, messages, notes, compacts };
 }
@@ -116,5 +127,38 @@ describe("beginHandoff — refusal", () => {
 		expect(rt.carryForward.get()?.kind).toBe("handoff");
 		expect(messages[0]).toContain("/handoff episode started");
 		expect(messages[0]).toContain("archaeologist was unavailable");
+	});
+});
+
+describe("beginHandoff — archaeologist timeout hygiene", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("clears the 3-minute timer once the run settles (no late stop)", async () => {
+		// Regression: the un-cleared timeout fired stop() on the finished run
+		// minutes later, in the NEW post-handoff session — an uncaught
+		// exception in a timer callback that killed pi.
+		vi.useFakeTimers();
+		const stop = vi.fn(() => {
+			throw new Error("Client not started");
+		});
+		const subagents = {
+			spawn: () => ({
+				result: () =>
+					Promise.resolve({ status: "succeeded", summary: "- (clean)" }),
+				stop,
+			}),
+		};
+		const entries = [
+			{ message: { role: "user", content: "do the thing" } },
+			{ message: { role: "assistant", content: "on it" } },
+		];
+		const { rt, ctx } = fakes({ subagents, entries });
+
+		await beginHandoff(rt, ctx as ExtensionCommandContext);
+		await vi.advanceTimersByTimeAsync(4 * 60_000);
+
+		expect(stop).not.toHaveBeenCalled();
 	});
 });

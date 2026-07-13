@@ -163,7 +163,13 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	}
 
 	stop(runId: RunId, reason?: string): void {
-		this.controllers.get(runId)?.stop(reason);
+		try {
+			this.controllers.get(runId)?.stop(reason);
+		} catch {
+			// Stopping a settled run is a no-op; a transport error here must
+			// never propagate into the caller (often a timer callback, where a
+			// throw becomes an uncaught exception that kills pi).
+		}
 		this.bus.publish({ type: "stop", runId, reason });
 	}
 }

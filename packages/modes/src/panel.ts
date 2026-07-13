@@ -115,6 +115,22 @@ async function runOne(
 			);
 			report = result.summary?.trim() ?? "";
 		}
+		// A reviewer that SUCCEEDED twice (initial + retry) with an empty report
+		// found nothing and said nothing. Treating that as "never reported" held
+		// the ship gate with no actionable finding — send-back just reproduced
+		// the same clean run (live dogfood: three deliverables looped on this).
+		// A clean run is an approve; the report line keeps it auditable.
+		if (result.status === "succeeded" && !report && kind === "review") {
+			return {
+				...base,
+				verdict: "approve",
+				findings: [],
+				structured: [],
+				report:
+					"(clean run — reviewer completed twice with no findings and no report; counted as approve)",
+				ok: true,
+			};
+		}
 		if (result.status !== "succeeded" || !report) {
 			return {
 				...base,

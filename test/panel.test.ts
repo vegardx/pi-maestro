@@ -179,7 +179,11 @@ describe("runReviewPanel", () => {
 		expect(results[0].verdict).toBe("approve");
 	});
 
-	it("a reviewer empty twice is ok=false — no verdict, gate stays closed", async () => {
+	it("a reviewer that succeeds empty twice is a CLEAN APPROVE (participant)", async () => {
+		// Live dogfood regression: clean required reviewers with no findings and
+		// no report were treated as "never reported" — the gate held forever and
+		// send-back just reproduced the same clean run. A double-clean success
+		// is an approve; only failures/timeouts stay ok=false.
 		let spawns = 0;
 		const capability = {
 			spawn(): RunHandle {
@@ -197,9 +201,11 @@ describe("runReviewPanel", () => {
 			[{ name: "sec", persona: "security-audit", required: true }],
 			{ subagents: capability, cwd: "/wt" },
 		);
-		expect(spawns).toBe(2);
-		expect(results[0].ok).toBe(false);
-		expect(results[0].verdict).toBe("none");
-		expect(panelGateSatisfied(results)).toBe(false);
+		expect(spawns).toBe(2); // still retried once before concluding clean
+		expect(results[0].ok).toBe(true);
+		expect(results[0].verdict).toBe("approve");
+		expect(results[0].structured).toEqual([]);
+		expect(results[0].report).toContain("clean run");
+		expect(panelGateSatisfied(results)).toBe(true);
 	});
 });

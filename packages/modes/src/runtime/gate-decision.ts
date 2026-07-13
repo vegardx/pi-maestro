@@ -134,8 +134,9 @@ export function buildGateQuestion(
 			label: GATE_OPTION_OVERRIDE,
 			description:
 				`Record YOUR approval as the latest verdict for ${holders}. ` +
-				"REQUIRES a note with the reason — it is recorded as a waiver " +
-				"on the deliverable and attributed in the PR body.",
+				"REQUIRES a reason: press `n` on this option to attach the note " +
+				"BEFORE committing — it is recorded as a waiver on the " +
+				"deliverable and attributed in the PR body.",
 		},
 		{
 			label: GATE_OPTION_PARK,
@@ -239,8 +240,9 @@ export async function presentGateDecision(
 			return;
 		}
 		deps.notify(
-			"Overriding requires a reason — answer again and attach a note " +
-				"explaining why the findings don't block. It becomes the waiver record.",
+			"Overriding requires a reason — answer again and press `n` on the " +
+				"override option to type the note BEFORE committing the answer. " +
+				"It becomes the waiver record.",
 			"warning",
 		);
 	}

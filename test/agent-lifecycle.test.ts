@@ -13,6 +13,9 @@ import type { AgentSpec, Deliverable } from "../packages/modes/src/schema.js";
 
 function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
+		type: "deliverable" as const,
+		createdAt: "t",
+		updatedAt: "t",
 		id: "auth" as never,
 		title: "Auth System",
 		body: "Implement authentication",
@@ -26,12 +29,19 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 				body: "POST /login in src/auth.ts",
 				kind: "task",
 				done: false,
+				type: "work-item" as const,
+				createdAt: "t",
+				updatedAt: "t",
 			},
 			{
 				id: "t2" as never,
 				title: "Refresh endpoint",
+				body: "",
 				kind: "task",
 				done: false,
+				type: "work-item" as const,
+				createdAt: "t",
+				updatedAt: "t",
 			},
 		],
 		worker: { mode: "full" },
@@ -176,8 +186,26 @@ describe("isWorkerComplete", () => {
 	it("returns true when all tasks done", () => {
 		const g = makeDeliverable({
 			tasks: [
-				{ id: "t1" as never, title: "T1", kind: "task", done: true },
-				{ id: "t2" as never, title: "T2", kind: "task", done: true },
+				{
+					id: "t1" as never,
+					title: "T1",
+					body: "",
+					kind: "task",
+					done: true,
+					type: "work-item" as const,
+					createdAt: "t",
+					updatedAt: "t",
+				},
+				{
+					id: "t2" as never,
+					title: "T2",
+					body: "",
+					kind: "task",
+					done: true,
+					type: "work-item" as const,
+					createdAt: "t",
+					updatedAt: "t",
+				},
 			],
 		});
 		expect(isWorkerComplete(g)).toBe(true);

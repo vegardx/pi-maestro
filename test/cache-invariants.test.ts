@@ -666,7 +666,11 @@ describe("renderAgentsOverview cache suffix", () => {
 		agents: Map<string, ExecutionAgentSnapshot>,
 	): ExecutionHandle {
 		return {
-			questionQueue: { all: () => [] },
+			questionQueue: { all: () => [], answer: () => {} },
+			failingRequiredReviewers: () => [],
+			reviewerFindings: () => [],
+			overrideReviewerVerdict: () => {},
+			sendBackToWorker: async () => false,
 			start: async () => {},
 			tick: async () => 0,
 			steer: () => true,

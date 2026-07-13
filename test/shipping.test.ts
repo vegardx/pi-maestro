@@ -4,6 +4,9 @@ import { buildPrBody, shouldShip } from "../packages/modes/src/shipping.js";
 
 function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
+		type: "deliverable" as const,
+		createdAt: "t",
+		updatedAt: "t",
 		id: "test-deliverable" as never,
 		title: "Test Deliverable",
 		body: "Deliverable description",
@@ -11,8 +14,26 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 		dependsOn: [],
 		stacked: true,
 		tasks: [
-			{ id: "t1" as never, title: "Task one", kind: "task", done: true },
-			{ id: "t2" as never, title: "Task two", kind: "task", done: true },
+			{
+				id: "t1" as never,
+				title: "Task one",
+				body: "",
+				kind: "task",
+				done: true,
+				type: "work-item" as const,
+				createdAt: "t",
+				updatedAt: "t",
+			},
+			{
+				id: "t2" as never,
+				title: "Task two",
+				body: "",
+				kind: "task",
+				done: true,
+				type: "work-item" as const,
+				createdAt: "t",
+				updatedAt: "t",
+			},
 		],
 		worker: { mode: "full" },
 		agents: [],

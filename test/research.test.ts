@@ -350,6 +350,24 @@ describe("research tool", () => {
 		expect(calls[0].profile.appendSystemPrompt).toContain("WITHHELD");
 	});
 
+	it("surfaces per-question role-policy rejection without spawning", async () => {
+		const { calls, capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "unused",
+		}));
+		const { deps } = makeDeps({
+			subagents: () => capability,
+			resolveRoleModel: async () => {
+				throw new Error("Model outside/x is not in the research pool");
+			},
+		});
+		const result = await run(createResearchTool(deps), {
+			questions: [{ question: "reject me", model: "outside/x" }],
+		});
+		expect(result.content[0].text).toContain("not in the research pool");
+		expect(calls).toHaveLength(0);
+	});
+
 	it("non-blocking: returns immediately, delivers the whole round as a follow-up", async () => {
 		const { capability } = fakeCapability(async () => ({
 			status: "succeeded",

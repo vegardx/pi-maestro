@@ -113,6 +113,29 @@ describe("runReviewPanel", () => {
 		]);
 	});
 
+	it("isolates a reviewer model-resolution failure", async () => {
+		const { capability } = fakeSubagents({
+			documentation: { status: "succeeded", summary: "VERDICT: PASS" },
+		});
+		const results = await runReviewPanel(
+			[
+				{ name: "bad", persona: "security-audit", model: "bad/model" },
+				{ name: "good", persona: "documentation" },
+			],
+			{
+				subagents: capability,
+				cwd: "/wt",
+				resolveModel: async (spec) => {
+					if (spec.name === "bad") throw new Error("not in reviewer pool");
+					return { model: "good/model", effort: "low" };
+				},
+			},
+		);
+		expect(results[0]).toMatchObject({ ok: false, verdict: "none" });
+		expect(results[0].report).toContain("not in reviewer pool");
+		expect(results[1]).toMatchObject({ ok: true, verdict: "approve" });
+	});
+
 	it("gate is satisfied only when every required review approves", async () => {
 		const passing = [
 			{

@@ -84,27 +84,27 @@ async function runOne(
 		kind,
 	};
 
-	const resolved = await deps.resolveModel?.(spec);
-	const model = resolved?.model;
-	const profile = buildPersonaProfile(
-		{ ...spec, ...(resolved?.effort ? { effort: resolved.effort } : {}) },
-		{ cwd: deps.cwd, model },
-	);
-	if (resolved) {
-		Object.assign(base, { model: resolved.model, effort: resolved.effort });
-	}
-	if (!profile) {
-		return {
-			...base,
-			verdict: "none",
-			findings: [],
-			structured: [],
-			report: `(unknown persona: ${spec.persona})`,
-			ok: false,
-		};
-	}
-
 	try {
+		const resolved = await deps.resolveModel?.(spec);
+		const model = resolved?.model;
+		const profile = buildPersonaProfile(
+			{ ...spec, ...(resolved?.effort ? { effort: resolved.effort } : {}) },
+			{ cwd: deps.cwd, model },
+		);
+		if (resolved) {
+			Object.assign(base, { model: resolved.model, effort: resolved.effort });
+		}
+		if (!profile) {
+			return {
+				...base,
+				verdict: "none",
+				findings: [],
+				structured: [],
+				report: `(unknown persona: ${spec.persona})`,
+				ok: false,
+			};
+		}
+
 		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 		let result = await settle(
 			deps.subagents.spawn(REVIEW_KICKOFF, profile),

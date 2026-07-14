@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import type { PlanStore } from "../packages/modes/src/storage.js";
+import { createPanelTool } from "../packages/modes/src/tools.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -30,7 +31,56 @@ function engineWith(): PlanEngine {
 	return engine;
 }
 
-describe("sub-agent panel (engine)", () => {
+describe("sub-agent panel", () => {
+	it("panel tool enforces justification and two-model cap", async () => {
+		const engine = engineWith();
+		const tool = createPanelTool({ engine: () => engine });
+		const run = (params: Record<string, unknown>) =>
+			tool.execute(
+				"panel",
+				params as never,
+				undefined as never,
+				undefined as never,
+				{} as never,
+			) as Promise<{ details: { error?: string } }>;
+		await run({
+			action: "add",
+			deliverableId: "oauth",
+			persona: "security-audit",
+			name: "sec-a",
+			model: "provider/a",
+		});
+		const missing = await run({
+			action: "add",
+			deliverableId: "oauth",
+			persona: "security-audit",
+			name: "sec-b",
+			model: "provider/b",
+		});
+		expect(missing.details.error).toContain("modelJustification");
+		expect(
+			(
+				await run({
+					action: "add",
+					deliverableId: "oauth",
+					persona: "security-audit",
+					name: "sec-b",
+					model: "provider/b",
+					modelJustification: "independent audit",
+				})
+			).details.error,
+		).toBeUndefined();
+		const third = await run({
+			action: "add",
+			deliverableId: "oauth",
+			persona: "security-audit",
+			name: "sec-c",
+			model: "provider/c",
+			modelJustification: "third audit",
+		});
+		expect(third.details.error).toContain("at most two");
+	});
+
 	it("adds and lists a persona panel per deliverable", () => {
 		const engine = engineWith();
 		engine.addSubAgent("oauth", {

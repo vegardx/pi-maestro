@@ -67,10 +67,8 @@ export interface AgentSpec {
 
 /**
  * One entry in a deliverable's up-front sub-agent plan (Phase 7). The worker
- * runs these as headless one-shot subagents. Reviewers always run on the
- * `review` tier (the model lives in the profile, not the spec) — the planner
- * sets persona, whether it gates, and how hard to look (`effort`). `required`
- * review verdicts gate ship at the executor.
+ * runs these as headless one-shot subagents. Reviewers resolve the active
+ * `reviewer` role pool; exact optional model/effort choices persist in the spec.
  */
 export interface SubAgentSpec {
 	/** Unique name within the deliverable. */

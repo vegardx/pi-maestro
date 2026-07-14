@@ -320,17 +320,9 @@ export function createModesRuntime(
 	maestro.capabilities.register(CAPABILITIES.usage, rt.usageLedger);
 	maestro.capabilities.register(CAPABILITIES.overlays, rt.overlayManager);
 
-	// Declare configurable settings for /maestro menu
+	// Declare non-model runtime knobs for /maestro Advanced settings. Direct
+	// model and effort policy lives exclusively in profile role pools.
 	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
-		// Role → tier is hardcoded (worker→work, classifier→fast, …); tiers'
-		// models live in the active profile. Only per-role effort is exposed as
-		// an override (rarely needed).
-		{ key: "models.agent.effort", label: "Agent effort", type: "thinking" },
-		{
-			key: "models.classifier.effort",
-			label: "Classifier effort",
-			type: "thinking",
-		},
 		// Compaction budgets — read by readModesCompactionSettings; declared here
 		// so they're discoverable/editable in /maestro (were hidden before).
 		{

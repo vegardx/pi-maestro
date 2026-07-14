@@ -60,8 +60,11 @@ plan as markdown, seed text, or JSON):
   cases. Tasks are the worker's instructions. Add many at once with
   `items: [{title, body}, …]` (one batched call per deliverable).
 - `agent` — support agents within a deliverable: reviewers (a `persona`
-  from the [palette](review-loop.md#the-panel), an `effort` dial, a `focus`
-  specialization) and helpers, ordered by an `after` graph.
+  from the [palette](review-loop.md#the-panel), an exact optional `model` from
+  the reviewer role pool, an `effort` allowlist choice, a `focus`
+  specialization) and helpers, ordered by an `after` graph. Prefer raising
+  effort before adding a second model; cross-model duplicate personas require
+  unique names and explicit justification.
 
 ### Deliverables
 
@@ -191,8 +194,15 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/distill` | Curated in-place compaction; keep working |
 | `/handoff` | End the arc; seed a new planning session |
 | `/recon`, `/hack`, `/auto` | Switch mode |
-| `/maestro` | Settings menu (models, profiles, tiers) |
+| `/maestro` | Hierarchical settings: profiles, ordered role pools, child extensions, advanced scopes |
 | `/modes-status` | Show mode and active plan status |
+
+`/maestro` uses standard searchable pi settings lists. Profile activation is
+derived from `/model`; role model/effort arrays are ordered (first item is the
+default) and layer session → project → global. Use `/maestro show|get|set|reset|profiles`
+for scripts; JSON arrays are required for role leaves. See
+[Models & settings](models.md) for exact paths, session lifetime, and migration
+from legacy tier keys.
 
 ## Feature flags
 
@@ -209,4 +219,4 @@ PI_DISABLE="modes.plan-tools" pi
 PI_ENABLE="modes.some-flag" pi
 ```
 
-<!-- verified against 83bfcbe -->
+<!-- verified against maestro-settings-ui -->

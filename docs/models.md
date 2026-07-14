@@ -1,27 +1,46 @@
 # Models & settings
 
-## Role pools
+Maestro has one model policy: **profile-scoped, ordered role pools**. The old
+`plan/work/review/fast` tier abstraction and the separate
+`backgroundModels.primary|secondary` system are removed. Runtime paths resolve a
+named role directly, which makes cost and fallback policy visible instead of
+routing through hidden tier mappings.
 
-Every model-consuming runtime resolves through a curated **role**. Each active
-profile contains ordered allowlists of exact `provider/model` IDs and thinking
-efforts. The first available compatible entry is the default.
+## Roles
 
-Roles are: `worker`, `reviewer`, `research`, `advisor`, `classifier`,
-`plan-summarizer`, `compact-summarizer`, `verifier`, and `delegate`.
+| Role | Consumers |
+|---|---|
+| `worker` | Deliverable workers and support agents |
+| `reviewer` | Review panel personas and the scope-locked fix verifier |
+| `research` | Codebase and web research questions |
+| `advisor` | Advisor and consult research questions |
+| `classifier` | Bash intent classification |
+| `plan-summarizer` | Modes compaction, forward summaries, and handoff analysis |
+| `compact-summarizer` | Smart compact |
+| `verifier` | User-invoked `/verify` agents |
+| `delegate` | General ad-hoc subagents |
 
-- Workers and support agents use `worker`.
-- Review personas and the scope-locked fix verifier use `reviewer`.
-- Codebase/web research uses `research`; advisor/consult uses `advisor`.
-- Bash classification, modes summaries, smart compaction, `/verify`, and general
-  subagents use their corresponding roles.
-- Explicit choices are exact: they must be in the active pool, available,
-  authenticated, allowed by the effort pool, and supported by the model.
-- Omitted choices walk configured models in order, then use the live session
-  model when compatible.
+The fix verifier intentionally uses `reviewer`; `/verify` intentionally uses
+`verifier`. Modes summaries and smart compact likewise remain separate roles.
 
-## Profiles
+## Ordered pools
 
-A profile owns a set of `/model` targets and direct role pools:
+Each role has two independent ordered allowlists:
+
+- `models`: exact `provider/model` IDs;
+- `efforts`: `off|minimal|low|medium|high|xhigh`.
+
+The first available model is the default. The first configured effort supported
+by that model is the default effort. Later values are allowed alternates, not
+anonymous slots. Plans and tool calls persist exact values—never indexes—so
+reordering a profile cannot silently change an authored choice.
+
+An explicit model must be in the active role's effective model pool and must be
+available/authenticated. An explicit effort must be in the effort pool and
+supported by the selected model. Invalid authored choices fail visibly; Maestro
+does not clamp, downgrade, or substitute them. When a choice is omitted,
+resolution walks the ordered configured models and then may use the live session
+model when policy-compatible.
 
 ```jsonc
 {
@@ -31,11 +50,17 @@ A profile owns a set of `/model` targets and direct role pools:
         "targets": ["anthropic/claude-opus-4-8"],
         "roles": {
           "worker": {
-            "models": ["anthropic/claude-sonnet-4-6"],
+            "models": [
+              "anthropic/claude-sonnet-4-6",
+              "openai/gpt-5.5"
+            ],
             "efforts": ["high", "medium"]
           },
           "reviewer": {
-            "models": ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
+            "models": [
+              "openai/gpt-5.5",
+              "anthropic/claude-opus-4-8"
+            ],
             "efforts": ["high", "xhigh"]
           },
           "research": {
@@ -49,27 +74,112 @@ A profile owns a set of `/model` targets and direct role pools:
 }
 ```
 
-- **Activation is derived, not stored.** `/model` selects the profile whose
-  `targets` contains the live exact model ID.
-- **Targets are exclusive.** A model should belong to at most one profile.
-- **Arrays are ordered leaf values.** Project `models` or `efforts` arrays
-  replace the corresponding global array; they do not concatenate.
-- **Missing role leaves inherit the live session model.**
-- **Explicit model/effort selections fail visibly.** They are never silently
-  substituted or downgraded.
-- **Spend rule:** prefer raising effort before selecting a second model. A
-  repeated review persona may use at most two distinct models and requires a
-  justification for the cross-model duplicate.
+A one-item array is a fixed allowlist. Reset a scope to inherit; do not author an
+empty array.
 
-Edit profiles with `/maestro`. Session-local role leaves override project and
-global leaves for the active host session; resolved choices are passed exactly
-to children rather than inherited through process globals.
+## Profiles and activation
 
-## Settings reference
+A profile owns exclusive exact `/model` targets and its role pools. Activation is
+derived: the live session model selects the profile whose `targets` contains its
+`provider/model` ID. No `active` value is persisted. Assigning a target to a new
+profile removes it from its previous owner.
 
-All extension settings are layered project over global and read fresh.
+A missing role or leaf ultimately falls back to the live session model/provider
+default. This is intentional inheritance, not a hidden role-to-role fallback:
+`advisor` does not inherit `reviewer`, and `classifier` does not inherit
+`research`.
 
-### `modes.distill` — the context-fill ladder {#distill}
+## Scope precedence
+
+For each `models` and `efforts` leaf independently:
+
+```text
+session → project → global → live session fallback
+```
+
+Higher-scope arrays **replace** lower-scope arrays. Arrays never concatenate or
+identity-merge. For example, a project `models` array replaces global models
+while still inheriting global `efforts` if the project does not author that
+leaf.
+
+- Global and project values are atomic `settings.json` writes that preserve
+  unrelated settings.
+- Session role overrides are typed process-local values consumed directly by
+  runtime resolution. They last for the host session and are cleared on session
+  start/shutdown; they are never written to disk or inherited by a later pi
+  session.
+- Explicit selections are resolved once and passed exactly to child processes.
+
+## `/maestro`
+
+`/maestro` opens the hierarchical core `SettingsList` UI with standard search,
+keybindings, scrolling, and submenus:
+
+- session model and active profile;
+- effective summaries for every active role;
+- Profiles → targets and role pool editors;
+- Child extensions;
+- Advanced capability-declared settings.
+
+Role editors expose session/project/global leaves, effective source, and the full
+precedence chain. Pool actions add/search, remove, move up/down, make default,
+and reset the current scope. Model IDs are exact even when friendly registry
+names are displayed. Effort choices are filtered against configured model
+support. Child extensions are global infrastructure passthroughs for isolated
+children; Maestro itself and vanished candidates are excluded.
+
+### Scripting
+
+The text command uses the same normalized paths:
+
+```bash
+/maestro show
+/maestro profiles
+/maestro get models.profiles.opus.roles.reviewer.models
+/maestro set --global models.profiles.opus.roles.research.models '["anthropic/claude-haiku-4-5"]'
+/maestro set --project models.profiles.opus.roles.research.efforts '["low","minimal"]'
+/maestro set --session models.profiles.opus.roles.worker.models '["openai/gpt-5.5"]'
+/maestro reset --session models.profiles.opus.roles.worker.models
+/maestro reset --project models.profiles.opus.roles.research.efforts
+```
+
+`--project` is the default. Role models, efforts, and profile targets require a
+non-empty JSON string array. Profile targets support persistent global/project
+scope; role leaves and advanced declared settings also support session scope.
+
+## Review spend guardrails
+
+Multi-model review is exceptional. First raise the review effort. Add a second
+model only when model diversity buys a meaningful independent perspective—for
+example security-sensitive code, provider-specific behavior, or a disputed
+architectural judgment. By default:
+
+- one persona uses one model;
+- at most two distinct models may run the same persona;
+- duplicate persona instances need unique names;
+- a cross-model duplicate needs an explicit `modelJustification`;
+- resolved exact model metadata remains auditable in the plan/run surfaces.
+
+## Migration from tiers
+
+Legacy `plan/work/review/fast` and background primary/secondary settings no
+longer participate in runtime resolution. Migrate each old consumer to the role
+inventory above. When an old tier fanned out to several consumers, copy its
+model/effort into each corresponding role, then tune independently:
+
+- old work → `worker` (and usually `delegate` if that shared the policy);
+- old review → `reviewer` and, only if desired, `verifier`;
+- old fast → `research`, `classifier`, and summarizer roles as appropriate;
+- advisor/consult → `advisor`;
+- legacy background normal summaries → `plan-summarizer`;
+- smart compact → `compact-summarizer`.
+
+Direct role entries win. Keep old keys only long enough to roll back an older
+Maestro build; current code ignores them.
+
+## Extension settings reference
+
+### `modes.distill` — context-fill ladder {#distill}
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -95,4 +205,4 @@ All extension settings are layered project over global and read fresh.
 
 `MAESTRO_UI_TRACE=1` (or a file path) appends overlay/widget lifecycle events.
 
-<!-- verified against role-pool-runtime -->
+<!-- verified against maestro-settings-ui -->

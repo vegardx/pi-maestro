@@ -32,9 +32,11 @@ Each deliverable's plan declares its reviewers via the `agent` tool: a
 **persona** from the palette, an **effort** dial, and an optional **focus**
 specialization. Reviewers are one-shot, read-only, headless subagents run
 against the worker's worktree — they have no tmux pane and no memory beyond
-their report. Running the *same* persona twice (e.g. on a different model
-tier) is a legitimate plan-time choice for sensitive deliverables; the
-panel makes duplicates apparent rather than merging them.
+their report. Running the *same* persona twice on a deliberately different
+allowed model is legitimate for sensitive deliverables, but exceptional:
+raise effort first, use at most two distinct models for a persona, give each
+instance a unique name, and record the cross-model justification. The panel
+keeps both provenance trails rather than merging them.
 
 The built-in palette:
 
@@ -126,4 +128,4 @@ The net effect: reviewers are heard exactly once, every finding has an
 auditable fate (fixed, verified, waived, wont-fixed, or disputed-and-ruled),
 and the only loops left are bounded fix cycles with a budget.
 
-<!-- verified against 83bfcbe -->
+<!-- verified against maestro-settings-ui -->

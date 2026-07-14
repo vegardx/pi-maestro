@@ -8,17 +8,14 @@ import {
 	cpSync,
 	existsSync,
 	mkdirSync,
+	renameSync,
 	rmSync,
 	symlinkSync,
-	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
-import {
-	CURRENT_SESSION_VERSION,
-	type SessionHeader,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { addWorktree, worktreePathFor } from "@vegardx/pi-git";
 import { deliverableBranch } from "../agent-lifecycle.js";
 import {
@@ -26,11 +23,7 @@ import {
 	MODES_STATE_ENTRY,
 	type PersistedModesState,
 } from "../session.js";
-import {
-	buildCustomEntry,
-	buildCustomMessageEntry,
-	parseSessionFile,
-} from "../session-fork.js";
+import { createSessionFileAt, parseSessionFile } from "../session-fork.js";
 
 // ─── Worktree provisioning ───────────────────────────────────────────────────
 
@@ -223,73 +216,52 @@ export interface AgentSessionFile {
 }
 
 /**
- * Assemble an agent's session file. With a knowledge session: copy its
- * entries under a fresh header (new id, agent cwd, parentSession lineage) and
- * append the modes-state + seed entries — the fork-and-append design, since
- * `pi --fork` can't append. Without one: header + the same two entries.
- * Entry order is deterministic: knowledge entries, modes state, seed.
+ * Assemble an agent's session file via the pi SDK. With a knowledge session:
+ * `SessionManager.forkFrom()` copies its entries under a fresh header (new
+ * id, agent cwd, parentSession → the knowledge file's path), then the
+ * modes-state + seed entries are appended — the fork-and-append design.
+ * Without one: a header-only bootstrap plus the same two appends. Entry
+ * order is deterministic: knowledge entries, modes state, seed. Either way
+ * the file ends up at `<outDir>/<agentKey>.jsonl`.
  */
 export function buildAgentSessionFile(
 	opts: BuildAgentSessionOpts,
 ): AgentSessionFile {
 	const sessionId = randomUUID();
-	const timestamp = new Date().toISOString();
+	mkdirSync(opts.outDir, { recursive: true });
+	const fileName = `${opts.agentKey.replace(/[^A-Za-z0-9._-]+/g, "-")}.jsonl`;
+	const path = join(opts.outDir, fileName);
 
-	let header: SessionHeader;
-	let baseLines: string[] = [];
-	let lastEntryId: string | null = null;
+	let session: SessionManager;
 	let forkedFrom: string | undefined;
-
 	if (opts.knowledgeSessionPath) {
-		const knowledge = parseSessionFile(opts.knowledgeSessionPath);
-		forkedFrom = knowledge.header.id;
-		header = {
-			...knowledge.header,
-			id: sessionId,
-			timestamp,
-			cwd: opts.cwd,
-			parentSession: knowledge.header.id,
-		};
-		baseLines = knowledge.entries.map((entry) => JSON.stringify(entry));
-		lastEntryId = knowledge.entries.at(-1)?.id ?? null;
+		forkedFrom = parseSessionFile(opts.knowledgeSessionPath).header.id;
+		session = SessionManager.forkFrom(
+			opts.knowledgeSessionPath,
+			opts.cwd,
+			opts.outDir,
+			{ id: sessionId },
+		);
 	} else {
-		header = {
-			type: "session",
-			version: CURRENT_SESSION_VERSION,
-			id: sessionId,
-			timestamp,
-			cwd: opts.cwd,
-		};
+		session = createSessionFileAt(path, opts.cwd, { id: sessionId });
 	}
 
 	const modesState: PersistedModesState = {
 		version: 2,
 		mode: "agent",
 		execution: { stage: "executing" },
-		updatedAt: timestamp,
+		updatedAt: new Date().toISOString(),
 	};
-	const stateEntry = buildCustomEntry(
-		MODES_STATE_ENTRY,
-		modesState,
-		lastEntryId,
-	);
-	const seedEntry = buildCustomMessageEntry(
-		EXECUTION_SEED_ENTRY,
-		opts.seed,
-		stateEntry.id,
-		{ display: true },
-	);
+	session.appendCustomEntry(MODES_STATE_ENTRY, modesState);
+	session.appendCustomMessageEntry(EXECUTION_SEED_ENTRY, opts.seed, true);
 
-	mkdirSync(opts.outDir, { recursive: true });
-	const fileName = `${opts.agentKey.replace(/[^A-Za-z0-9._-]+/g, "-")}.jsonl`;
-	const path = join(opts.outDir, fileName);
-	const lines = [
-		JSON.stringify(header),
-		...baseLines,
-		JSON.stringify(stateEntry),
-		JSON.stringify(seedEntry),
-	];
-	writeFileSync(path, `${lines.join("\n")}\n`);
+	// forkFrom names its file `<timestamp>_<id>.jsonl`; agents are addressed
+	// by key, so move the finished session onto the deterministic path.
+	const written = session.getSessionFile();
+	if (!written) {
+		throw new Error(`session assembly for ${opts.agentKey} produced no file`);
+	}
+	if (written !== path) renameSync(written, path);
 
 	return { path, sessionId, forkedFrom };
 }

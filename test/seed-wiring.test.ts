@@ -193,9 +193,10 @@ describe("execution adapter seed wiring", () => {
 
 		const lines = await spawnWorker();
 
-		// Header: fresh id, agent cwd, lineage back to the knowledge session.
+		// Header: fresh id, agent cwd, lineage back to the knowledge session
+		// (pi convention: parentSession is the source file's path).
 		const header = lines[0];
-		expect(header.parentSession).toBe(knowledge.id);
+		expect(header.parentSession).toBe(knowledge.path);
 		expect(header.id).not.toBe(knowledge.id);
 		expect(header.cwd).toBe(tmpDir);
 

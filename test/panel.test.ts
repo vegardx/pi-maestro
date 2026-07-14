@@ -105,7 +105,9 @@ describe("runReviewPanel", () => {
 			"openai/a",
 			"anthropic/b",
 		]);
-		expect(results.map((result) => [result.name, result.model, result.effort])).toEqual([
+		expect(
+			results.map((result) => [result.name, result.model, result.effort]),
+		).toEqual([
 			["security-a", "openai/a", "high"],
 			["security-b", "anthropic/b", "high"],
 		]);

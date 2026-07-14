@@ -21,9 +21,8 @@ import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
 import {
-	getModeRoleModel,
-	MAESTRO_ENV,
 	readModesCompactionSettings,
+	resolveInternalRoleModel,
 } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
 import {
@@ -364,8 +363,8 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			}
 			// Ambiguous: LLM classification (maestro only)
 			const classifierModel = ctx
-				? (await getModeRoleModel(ctx, "classifier"))?.modelId
-				: MAESTRO_ENV.classifierModel;
+				? (await resolveInternalRoleModel(ctx, "classifier")).modelId
+				: undefined;
 			const intent = await classifyBashIntent(command, {
 				model: classifierModel,
 			});

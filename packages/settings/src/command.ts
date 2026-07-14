@@ -4,7 +4,7 @@
 // modification of project/global settings.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ModelsConfig, PINNABLE_TIERS } from "@vegardx/pi-contracts";
+import { MODEL_ROLES, type ModelsConfig } from "@vegardx/pi-contracts";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import {
 	type ExtensionConfigMap,
@@ -88,6 +88,15 @@ function hasKey(
 	return true;
 }
 
+function formatRole(config: {
+	readonly models?: readonly string[];
+	readonly efforts?: readonly string[];
+}): string {
+	const models = config.models?.join(" → ") ?? "session";
+	const efforts = config.efforts?.join(" → ");
+	return efforts ? `${models} (${efforts})` : models;
+}
+
 function formatValue(v: unknown): string {
 	if (typeof v === "string") return v;
 	if (Array.isArray(v)) return v.join(" \u2192 ");
@@ -124,14 +133,10 @@ function handleShow(ctx: ExtensionContext): void {
 			content.push(
 				`    targets: ${profile.targets.length ? profile.targets.join(", ") : "(none)"}`,
 			);
-			for (const tier of PINNABLE_TIERS) {
-				const tc = profile[tier];
-				const disp = tc?.model
-					? tc.effort
-						? `${tc.model} (${tc.effort})`
-						: tc.model
-					: "= plan";
-				content.push(`    ${tier.padEnd(8)} ${disp}`);
+			for (const role of MODEL_ROLES) {
+				const config = profile.roles[role];
+				if (!config) continue;
+				content.push(`    ${role.padEnd(20)} ${formatRole(config)}`);
 			}
 		}
 		content.push("");
@@ -161,7 +166,7 @@ function handleShow(ctx: ExtensionContext): void {
 		content.push('    "opus": {');
 		content.push('      "targets": ["anthropic/claude-opus-4-8"],');
 		content.push(
-			'      "review": { "model": "openai/gpt-5.5", "effort": "high" }',
+			'      "roles": { "reviewer": { "models": ["openai/gpt-5.5"], "efforts": ["high"] } }',
 		);
 		content.push("    } } } }");
 	}
@@ -334,7 +339,7 @@ function handleProfiles(ctx: ExtensionContext): void {
 	lines.push(
 		active
 			? `Active profile: ${active} (via /model)`
-			: "No active profile \u2014 every tier tracks the session model.",
+			: "No active profile — roles fall back to the session model.",
 	);
 	lines.push("");
 	for (const [name, profile] of Object.entries(modelsConfig.profiles)) {
@@ -343,14 +348,10 @@ function handleProfiles(ctx: ExtensionContext): void {
 		lines.push(
 			`    targets: ${profile.targets.length ? profile.targets.join(", ") : "(none)"}`,
 		);
-		for (const tier of PINNABLE_TIERS) {
-			const tc = profile[tier];
-			const disp = tc?.model
-				? tc.effort
-					? `${tc.model} (${tc.effort})`
-					: tc.model
-				: "= plan";
-			lines.push(`    ${tier.padEnd(8)} ${disp}`);
+		for (const role of MODEL_ROLES) {
+			const config = profile.roles[role];
+			if (!config) continue;
+			lines.push(`    ${role.padEnd(20)} ${formatRole(config)}`);
 		}
 	}
 	lines.push("");

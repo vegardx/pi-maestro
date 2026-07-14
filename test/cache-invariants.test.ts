@@ -474,6 +474,10 @@ describe("first-turn cache ratio surfacing", () => {
 			tmux: stubTmux(),
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
 			onPlanChanged: () => {},
 			onAgentStateChanged: (id) => {
 				tokenReports.push(id);

@@ -79,7 +79,12 @@ describe("/settings command", () => {
 					profiles: {
 						opus: {
 							targets: ["anthropic/claude-sonnet-4-5"],
-							review: { model: "openai/gpt-4o", effort: "high" },
+							roles: {
+								reviewer: {
+									models: ["openai/gpt-4o"],
+									efforts: ["high"],
+								},
+							},
 						},
 					},
 				},

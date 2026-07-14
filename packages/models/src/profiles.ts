@@ -1,10 +1,8 @@
-// Layered `/model`-selected role profiles with deprecated tier input support.
+// Layered `/model`-selected direct role pools.
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	getSessionRoleOverride,
-	type LegacyPinnableTier,
-	type LegacyTierConfig,
 	MODEL_ROLES,
 	type ModelConfigScope,
 	type ModelRole,
@@ -13,38 +11,28 @@ import {
 	type ProfileRoleConfig,
 	type RolePoolSource,
 	type ThinkingLevel,
-	type Tier,
 } from "@vegardx/pi-contracts";
 
-const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const EFFORT_SET = new Set<string>(EFFORTS);
+const EFFORT_SET = new Set([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+]);
 const ROLE_SET = new Set<string>(MODEL_ROLES);
-
-/** Legacy fan-out is intentionally centralized and read-only. */
-export const LEGACY_TIER_ROLES: Readonly<
-	Record<LegacyPinnableTier, readonly ModelRole[]>
-> = {
-	work: ["worker", "delegate"],
-	review: ["reviewer", "advisor", "verifier"],
-	fast: ["research", "classifier", "plan-summarizer", "compact-summarizer"],
-};
-
-interface ParsedProfile {
-	readonly targets: readonly string[];
-	readonly targetsPresent: boolean;
-	readonly direct: Partial<Record<ModelRole, ProfileRoleConfig>>;
-	readonly legacy: Partial<Record<LegacyPinnableTier, LegacyTierConfig>>;
-}
-
-interface ParsedModels {
-	readonly profiles: Readonly<Record<string, ParsedProfile>>;
-}
-
 type Leaf = "models" | "efforts";
 type MutableSource = Partial<
 	Record<ModelRole, Partial<Record<Leaf, RolePoolSource[Leaf]>>>
 >;
 const PROFILE_SOURCES = new WeakMap<ProfileConfig, MutableSource>();
+
+interface ParsedProfile {
+	readonly targets: readonly string[];
+	readonly targetsPresent: boolean;
+	readonly direct: Partial<Record<ModelRole, ProfileRoleConfig>>;
+}
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -60,11 +48,9 @@ function validArray<T>(
 	raw: unknown,
 	valid: (value: unknown) => value is T,
 ): readonly T[] | undefined {
-	if (!Array.isArray(raw) || raw.length === 0 || !raw.every(valid)) {
+	if (!Array.isArray(raw) || raw.length === 0 || !raw.every(valid))
 		return undefined;
-	}
-	const values = raw as T[];
-	return new Set(values).size === values.length ? [...values] : undefined;
+	return new Set(raw).size === raw.length ? ([...raw] as T[]) : undefined;
 }
 
 function modelArray(raw: unknown): readonly string[] | undefined {
@@ -83,147 +69,86 @@ function extractRole(raw: unknown): ProfileRoleConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	const models = modelArray(raw.models);
 	const efforts = effortArray(raw.efforts);
-	if (!models && !efforts) return undefined;
-	return { ...(models ? { models } : {}), ...(efforts ? { efforts } : {}) };
-}
-
-function extractLegacy(raw: unknown): LegacyTierConfig | undefined {
-	if (typeof raw === "string")
-		return isModelId(raw) ? { model: raw } : undefined;
-	if (!isPlainObject(raw)) return undefined;
-	const model = isModelId(raw.model) ? raw.model : undefined;
-	const effort =
-		typeof raw.effort === "string" && EFFORT_SET.has(raw.effort)
-			? (raw.effort as ThinkingLevel)
-			: undefined;
-	if (!model && !effort) return undefined;
-	return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
+	return models || efforts
+		? { ...(models ? { models } : {}), ...(efforts ? { efforts } : {}) }
+		: undefined;
 }
 
 function extractProfile(raw: unknown): ParsedProfile | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	const targetsPresent = Object.hasOwn(raw, "targets");
-	const targets = validArray(raw.targets, isModelId) ?? [];
 	const direct: Partial<Record<ModelRole, ProfileRoleConfig>> = {};
 	if (isPlainObject(raw.roles)) {
 		for (const [name, value] of Object.entries(raw.roles)) {
-			// Unknown role names and malformed role values never enter config.
 			if (!ROLE_SET.has(name)) continue;
 			const role = extractRole(value);
 			if (role) direct[name as ModelRole] = role;
 		}
 	}
-	const legacy: Partial<Record<LegacyPinnableTier, LegacyTierConfig>> = {};
-	for (const tier of ["work", "review", "fast"] as const) {
-		const value = extractLegacy(raw[tier]);
-		if (value) legacy[tier] = value;
-	}
-	return { targets, targetsPresent, direct, legacy };
+	return {
+		targets: validArray(raw.targets, isModelId) ?? [],
+		targetsPresent: Object.hasOwn(raw, "targets"),
+		direct,
+	};
 }
 
-function extractModels(raw: unknown): ParsedModels | undefined {
-	if (!isPlainObject(raw) || !isPlainObject(raw.models)) return undefined;
-	const rawProfiles = raw.models.profiles;
-	if (!isPlainObject(rawProfiles)) return undefined;
+function extractModels(
+	raw: unknown,
+): Record<string, ParsedProfile> | undefined {
+	if (
+		!isPlainObject(raw) ||
+		!isPlainObject(raw.models) ||
+		!isPlainObject(raw.models.profiles)
+	)
+		return undefined;
 	const profiles: Record<string, ParsedProfile> = {};
-	for (const [name, value] of Object.entries(rawProfiles)) {
+	for (const [name, value] of Object.entries(raw.models.profiles)) {
 		const profile = extractProfile(value);
 		if (profile) profiles[name] = profile;
 	}
-	return Object.keys(profiles).length > 0 ? { profiles } : undefined;
+	return Object.keys(profiles).length ? profiles : undefined;
 }
 
-function source(
-	scope: ModelConfigScope,
-	profile: string,
-	role: ModelRole,
-	legacyTier?: LegacyPinnableTier,
-) {
-	return { scope, profile, role, ...(legacyTier ? { legacyTier } : {}) };
+function source(scope: ModelConfigScope, profile: string, role: ModelRole) {
+	return { scope, profile, role };
 }
 
 function materializeProfile(
 	name: string,
-	global: ParsedProfile | undefined,
-	project: ParsedProfile | undefined,
+	global?: ParsedProfile,
+	project?: ParsedProfile,
 ): ProfileConfig {
 	const roles: Partial<Record<ModelRole, ProfileRoleConfig>> = {};
 	const sources: MutableSource = {};
 	for (const role of MODEL_ROLES) {
 		const g = global?.direct[role];
 		const p = project?.direct[role];
-		let models = p?.models ?? g?.models;
-		let efforts = p?.efforts ?? g?.efforts;
-		let modelsSource = p?.models
-			? source("project", name, role)
-			: g?.models
-				? source("global", name, role)
-				: undefined;
-		let effortsSource = p?.efforts
-			? source("project", name, role)
-			: g?.efforts
-				? source("global", name, role)
-				: undefined;
-
-		// Direct leaves at either persistent scope always beat legacy fallback.
-		for (const tier of ["work", "review", "fast"] as const) {
-			if (!LEGACY_TIER_ROLES[tier].includes(role)) continue;
-			const pLegacy = project?.legacy[tier];
-			const gLegacy = global?.legacy[tier];
-			if (!models) {
-				const model = pLegacy?.model ?? gLegacy?.model;
-				if (model) {
-					models = [model];
-					modelsSource = source(
-						pLegacy?.model ? "project" : "global",
-						name,
-						role,
-						tier,
-					);
-				}
-			}
-			if (!efforts) {
-				const effort = pLegacy?.effort ?? gLegacy?.effort;
-				if (effort) {
-					efforts = [effort];
-					effortsSource = source(
-						pLegacy?.effort ? "project" : "global",
-						name,
-						role,
-						tier,
-					);
-				}
-			}
-			break;
-		}
-		if (models || efforts) {
-			roles[role] = {
-				...(models ? { models } : {}),
-				...(efforts ? { efforts } : {}),
-			};
-			sources[role] = {
-				...(modelsSource ? { models: modelsSource } : {}),
-				...(effortsSource ? { efforts: effortsSource } : {}),
-			};
-		}
+		const models = p?.models ?? g?.models;
+		const efforts = p?.efforts ?? g?.efforts;
+		if (!models && !efforts) continue;
+		roles[role] = {
+			...(models ? { models } : {}),
+			...(efforts ? { efforts } : {}),
+		};
+		sources[role] = {
+			...(models
+				? { models: source(p?.models ? "project" : "global", name, role) }
+				: {}),
+			...(efforts
+				? { efforts: source(p?.efforts ? "project" : "global", name, role) }
+				: {}),
+		};
 	}
-	const targets =
-		project?.targetsPresent && project.targets.length > 0
-			? project.targets
-			: (global?.targets ?? project?.targets ?? []);
 	const profile: ProfileConfig = {
-		targets,
+		targets:
+			project?.targetsPresent && project.targets.length
+				? project.targets
+				: (global?.targets ?? project?.targets ?? []),
 		roles,
-		// Preserve parsed compatibility input for old settings/UI readers.
-		work: project?.legacy.work ?? global?.legacy.work,
-		review: project?.legacy.review ?? global?.legacy.review,
-		fast: project?.legacy.fast ?? global?.legacy.fast,
 	};
 	PROFILE_SOURCES.set(profile, sources);
 	return profile;
 }
 
-/** Read global/project profiles; project role arrays replace global per leaf. */
 export function readModelsConfig(
 	cwd: string,
 	agentDir?: string,
@@ -233,18 +158,17 @@ export function readModelsConfig(
 	const project = extractModels(manager.getProjectSettings() as unknown);
 	if (!global && !project) return undefined;
 	const names = new Set([
-		...Object.keys(global?.profiles ?? {}),
-		...Object.keys(project?.profiles ?? {}),
+		...Object.keys(global ?? {}),
+		...Object.keys(project ?? {}),
 	]);
-	const profiles: Record<string, ProfileConfig> = {};
-	for (const name of names) {
-		profiles[name] = materializeProfile(
-			name,
-			global?.profiles[name],
-			project?.profiles[name],
-		);
-	}
-	return { profiles };
+	return {
+		profiles: Object.fromEntries(
+			[...names].map((name) => [
+				name,
+				materializeProfile(name, global?.[name], project?.[name]),
+			]),
+		),
+	};
 }
 
 export function activeProfile(
@@ -266,7 +190,6 @@ export interface EffectiveRolePool {
 	readonly provenance: RolePoolSource;
 }
 
-/** Apply the typed session patch to an active persistent role pool. */
 export function effectiveRolePool(
 	cfg: ModelsConfig | undefined,
 	role: ModelRole,
@@ -279,13 +202,11 @@ export function effectiveRolePool(
 	const patch = getSessionRoleOverride(active.name, role);
 	const patchModels = patch ? modelArray(patch.models) : undefined;
 	const patchEfforts = patch ? effortArray(patch.efforts) : undefined;
-	const models = patchModels ?? persistent?.models ?? [];
-	const efforts = patchEfforts ?? persistent?.efforts ?? [];
 	return {
 		profile: active.name,
 		role,
-		models,
-		efforts,
+		models: patchModels ?? persistent?.models ?? [],
+		efforts: patchEfforts ?? persistent?.efforts ?? [],
 		provenance: {
 			models: patchModels
 				? source("session", active.name, role)
@@ -294,50 +215,5 @@ export function effectiveRolePool(
 				? source("session", active.name, role)
 				: persistentSource.efforts,
 		},
-	};
-}
-
-// ─── Deprecated tier facade for unchanged runtime callers ──────────────────
-
-export interface TierResolution {
-	readonly modelId: string;
-	readonly effort?: ThinkingLevel;
-	readonly tier: Tier;
-	readonly tracksPlan: boolean;
-	readonly profile?: string;
-}
-
-const TIER_ROLE: Record<Exclude<Tier, "plan">, ModelRole> = {
-	work: "worker",
-	review: "reviewer",
-	fast: "research",
-};
-
-/** @deprecated Resolve a ModelRole pool instead. */
-export function resolveTierConfig(
-	cfg: ModelsConfig | undefined,
-	tier: Tier,
-	session: { modelId: string; effort?: ThinkingLevel } | undefined,
-): TierResolution | undefined {
-	if (tier === "plan") {
-		return session ? { ...session, tier, tracksPlan: true } : undefined;
-	}
-	const pool = effectiveRolePool(cfg, TIER_ROLE[tier], session?.modelId);
-	if (pool?.models[0]) {
-		return {
-			modelId: pool.models[0],
-			effort: pool.efforts[0],
-			tier,
-			tracksPlan: false,
-			profile: pool.profile,
-		};
-	}
-	if (!session) return undefined;
-	return {
-		modelId: session.modelId,
-		effort: pool?.efforts[0] ?? session.effort,
-		tier,
-		tracksPlan: true,
-		profile: pool?.profile,
 	};
 }

@@ -158,48 +158,6 @@ describe("role profile parsing", () => {
 		expect(roles).toEqual({});
 	});
 
-	it("fans legacy tiers out while direct role leaves win", () => {
-		projectSettings({
-			models: {
-				profiles: {
-					main: {
-						targets: ["anthropic/sonnet"],
-						work: { model: "global/one", effort: "medium" },
-						review: { model: "openai/o3", effort: "high" },
-						fast: { model: "anthropic/haiku", effort: "low" },
-						roles: { advisor: { models: ["project/one"] } },
-					},
-				},
-			},
-		});
-		const profile = readModelsConfig(cwd, agentDir)!.profiles.main;
-		for (const role of ["worker", "delegate"] as const) {
-			expect(profile.roles[role]?.models).toEqual(["global/one"]);
-		}
-		for (const role of ["reviewer", "verifier"] as const) {
-			expect(profile.roles[role]?.models).toEqual(["openai/o3"]);
-		}
-		expect(profile.roles.advisor).toEqual({
-			models: ["project/one"],
-			efforts: ["high"],
-		});
-		for (const role of [
-			"research",
-			"classifier",
-			"plan-summarizer",
-			"compact-summarizer",
-		] as const) {
-			expect(profile.roles[role]?.models).toEqual(["anthropic/haiku"]);
-		}
-		expect(
-			effectiveRolePool(
-				readModelsConfig(cwd, agentDir),
-				"reviewer",
-				"anthropic/sonnet",
-			)?.provenance.models,
-		).toMatchObject({ scope: "project", legacyTier: "review" });
-	});
-
 	it("derives active profiles only from exact target membership", () => {
 		projectSettings({
 			models: {

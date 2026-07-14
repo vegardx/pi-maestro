@@ -86,6 +86,7 @@ export interface VerifyDeps {
 	/** Display metadata for run views (resolved session model). */
 	readonly display?: {
 		readonly model?: string;
+		readonly effort?: string;
 		readonly adaptive?: boolean;
 	};
 	/** Lifecycle hooks — feed the live agent table + chat cards. */
@@ -343,7 +344,7 @@ export async function runVerification(
 				kind: "verify",
 				status: "running",
 				startedAt: Date.now(),
-				effort: "high",
+				effort: deps.display?.effort ?? "high",
 				...(deps.display?.model ? { model: deps.display.model } : {}),
 				...(deps.display?.adaptive !== undefined
 					? { adaptive: deps.display.adaptive }
@@ -352,7 +353,13 @@ export async function runVerification(
 			const profile = {
 				profile: "general",
 				cwd: evidence.cwd,
-				thinking: "high" as const,
+				thinking: (deps.display?.effort ?? "high") as
+					| "off"
+					| "minimal"
+					| "low"
+					| "medium"
+					| "high"
+					| "xhigh",
 				watchdog: deps.watchdog ?? DEFAULT_WATCHDOG,
 			};
 			const prompt = buildVerifyPrompt(g, evidence);

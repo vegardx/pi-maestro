@@ -172,6 +172,11 @@ export interface ExecutionAdapterOpts {
 	token?: string;
 	/** Fixed RPC socket path — injectable for tests. */
 	socketPath?: string;
+	/** Injectable worker-role resolver for deterministic adapter tests. */
+	resolveWorkerModel?: (choice: {
+		model?: string;
+		effort?: ThinkingLevel;
+	}) => Promise<{ modelId: string; effort?: ThinkingLevel }>;
 	onPlanChanged: () => void;
 	onAgentStateChanged?: (
 		id: string,
@@ -483,12 +488,20 @@ export class ExecutionAdapter {
 				const authored = isWorker
 					? deliverable.worker
 					: deliverable.agents.find((a) => a.name === spawnOpts.agentName);
-				const resolvedWork = await resolveSpawnModelSafe(this.opts.ctx, {
-					role: "worker",
-					model: authored?.model ?? spawnOpts.model,
-					effort:
-						(authored?.effort ?? spawnOpts.effort) as ThinkingLevel | undefined,
-				});
+				const resolvedWork = await (this.opts.resolveWorkerModel
+					? this.opts.resolveWorkerModel({
+							model: authored?.model ?? spawnOpts.model,
+							effort: (authored?.effort ?? spawnOpts.effort) as
+								| ThinkingLevel
+								| undefined,
+						})
+					: resolveSpawnModelSafe(this.opts.ctx, {
+							role: "worker",
+							model: authored?.model ?? spawnOpts.model,
+							effort: (authored?.effort ?? spawnOpts.effort) as
+								| ThinkingLevel
+								| undefined,
+						}));
 				const sessionModelId = this.opts.ctx.model
 					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
 					: undefined;

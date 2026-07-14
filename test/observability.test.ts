@@ -121,6 +121,10 @@ describe("execution adapter observability", () => {
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
 			onPlanChanged: () => {},
 		});
 		await adapter.start();

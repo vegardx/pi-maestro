@@ -1,113 +1,98 @@
 # Models & settings
 
-## The tier model
+## Role pools
 
-Every background agent resolves its model through one of four **tiers**,
-named by intent:
+Every model-consuming runtime resolves through a curated **role**. Each active
+profile contains ordered allowlists of exact `provider/model` IDs and thinking
+efforts. The first available compatible entry is the default.
 
-```
-plan   — the maestro reasons and plans here. ALWAYS the session model (/model).
-work   — workers implement here.
-review — reviewers + advisor run here (cross-model second opinion).
-fast   — cheap mechanical subagents (classify, scout, quick research).
-```
+Roles are: `worker`, `reviewer`, `research`, `advisor`, `classifier`,
+`plan-summarizer`, `compact-summarizer`, `verifier`, and `delegate`.
 
-Role → tier is a fixed table:
-
-| Role | Tier |
-|---|---|
-| maestro | plan |
-| worker | work |
-| analyze | work |
-| reviewer, advisor | review |
-| research, classifier, summarizer | fast |
-
-The planner never picks models — it picks personas, `required` flags, and
-effort. Which model a tier means is the profile's business.
+- Workers and support agents use `worker`.
+- Review personas and the scope-locked fix verifier use `reviewer`.
+- Codebase/web research uses `research`; advisor/consult uses `advisor`.
+- Bash classification, modes summaries, smart compaction, `/verify`, and general
+  subagents use their corresponding roles.
+- Explicit choices are exact: they must be in the active pool, available,
+  authenticated, allowed by the effort pool, and supported by the model.
+- Omitted choices walk configured models in order, then use the live session
+  model when compatible.
 
 ## Profiles
 
-A **profile** owns a set of `/model` targets and pins the `work` / `review`
-/ `fast` tiers (`plan` is implicit — whichever target is live):
+A profile owns a set of `/model` targets and direct role pools:
 
 ```jsonc
-// settings.json → models
 {
-  "profiles": {
-    "opus": {
-      "targets": ["anthropic/claude-opus-4-8", "anthropic/claude-opus-4-7"],
-      "work":   {},                                                    // {} = track plan
-      "review": { "model": "openai/gpt-5.5", "effort": "high" },
-      "fast":   { "model": "anthropic/claude-haiku-4-5", "effort": "low" }
+  "models": {
+    "profiles": {
+      "opus": {
+        "targets": ["anthropic/claude-opus-4-8"],
+        "roles": {
+          "worker": {
+            "models": ["anthropic/claude-sonnet-4-6"],
+            "efforts": ["high", "medium"]
+          },
+          "reviewer": {
+            "models": ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
+            "efforts": ["high", "xhigh"]
+          },
+          "research": {
+            "models": ["anthropic/claude-haiku-4-5"],
+            "efforts": ["low"]
+          }
+        }
+      }
     }
   }
 }
 ```
 
-- **Activation is derived, not stored.** The active profile is the one
-  whose `targets` include the current session model. There is no `active`
-  key — `/model` *is* the switch.
-- **Targets are an exclusive partition.** Each model belongs to at most one
-  profile.
-- **`{}` means "track plan".** A tier without a pinned model uses the live
-  session model. A profile with every tier `{}` is identical to having no
-  profile at all — that's the zero-config default.
-- **Effort is a per-tier dial.** For adaptive models it's a steer; for
-  fixed-thinking models it's a budget.
+- **Activation is derived, not stored.** `/model` selects the profile whose
+  `targets` contains the live exact model ID.
+- **Targets are exclusive.** A model should belong to at most one profile.
+- **Arrays are ordered leaf values.** Project `models` or `efforts` arrays
+  replace the corresponding global array; they do not concatenate.
+- **Missing role leaves inherit the live session model.**
+- **Explicit model/effort selections fail visibly.** They are never silently
+  substituted or downgraded.
+- **Spend rule:** prefer raising effort before selecting a second model. A
+  repeated review persona may use at most two distinct models and requires a
+  justification for the cross-model duplicate.
 
-Edit all of this interactively with `/maestro`, which seeds a default
-profile (single target = your session model, all tiers tracking plan) on
-first open.
-
-## Escape hatches
-
-Resolution priority per role: explicit override → environment → per-role
-settings → tier via the active profile → session model.
-
-- Per-role pin (the `/maestro` menu does not write these):
-  `extensionConfig.modes.models.<role>.{model, effort}` for roles `agent`,
-  `analyze`, `classifier`; `extensionConfig.smart-compact.models.summarizer.*`.
-- Environment: `MAESTRO_AGENT_MODEL` / `MAESTRO_AGENT_THINKING`,
-  `MAESTRO_ANALYZE_MODEL` / `MAESTRO_ANALYZE_THINKING`,
-  `MAESTRO_CLASSIFIER_MODEL` / `MAESTRO_CLASSIFIER_THINKING`.
+Edit profiles with `/maestro`. Session-local role leaves override project and
+global leaves for the active host session; resolved choices are passed exactly
+to children rather than inherited through process globals.
 
 ## Settings reference
 
-All keys live under `extensionConfig.<extension>` in layered settings
-(project overrides global; read fresh, no restart needed).
+All extension settings are layered project over global and read fresh.
 
 ### `modes.distill` — the context-fill ladder {#distill}
 
 | Key | Default | Meaning |
 |---|---|---|
 | `nudgeAt` | `0.3` | Context fill fraction where a non-blocking question suggests `/distill` |
-| `forceAt` | `0.5` | Fraction where a self-curated distill runs automatically — queued when crossed mid-run and fired once the agent finishes its current work (with a divergence check that suggests `/handoff` instead when the session has drifted); `0` disables the force |
+| `forceAt` | `0.5` | Fraction where self-curated distillation runs; `0` disables it |
 
 ### `modes.compaction` — work-continuity compaction
 
 | Key | Default | Meaning |
 |---|---|---|
 | `phaseTokens` | `10000` | Max output tokens per new raw-slice summary section |
-| `workingTokens` | `150000` | Budget for the working bucket; drives the trigger |
-| `summaryTokens` | `100000` | Soft warning threshold for the stable summary burden |
+| `workingTokens` | `150000` | Working-bucket budget that drives the trigger |
+| `summaryTokens` | `100000` | Soft warning threshold for stable summary burden |
 | `timeoutMs` | `90000` | Deadline for a modes-triggered compaction |
-| `planMaxContextTokens` | unset | Context-window size for the plan-mode footer display |
+| `planMaxContextTokens` | unset | Optional context-window size for plan-mode footer display |
 
-These are independent of pi's native `compaction.*` and of
-`extensionConfig.smart-compact.*`.
+### Feature flags
 
-### Feature flags (environment)
+- `PI_EXT_<NAME>=on|off` enables/disables an extension.
+- `PI_DISABLE="a.b,c.d"` / `PI_ENABLE="a.b"` flips feature paths; disable wins.
 
-- `PI_EXT_<NAME>=on|off` — enable/disable a whole extension
-  (e.g. `PI_EXT_MODES=off`, `PI_EXT_SMART_COMPACT=off`).
-- `PI_DISABLE="a.b,c.d"` / `PI_ENABLE="a.b"` — flip single feature paths;
-  the kill switch (`PI_DISABLE`) wins.
+### Debugging
 
-### Debugging (environment)
+`MAESTRO_UI_TRACE=1` (or a file path) appends overlay/widget lifecycle events.
 
-- `MAESTRO_UI_TRACE=1` (or a file path) — append timestamped overlay/widget
-  lifecycle events to a log (`1` → `$TMPDIR/maestro-ui-trace.log`). Use when
-  chasing UI flicker: a healthy session shows sparse mounts/unmounts; a bug
-  shows the same key cycling many times per second.
-
-<!-- verified against 83bfcbe -->
+<!-- verified against role-pool-runtime -->

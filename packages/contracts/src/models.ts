@@ -1,5 +1,4 @@
-// Shared model-profile vocabulary. New configuration is role-first; the tier
-// shapes at the bottom of this file are compatibility input only.
+// Shared role-pool model profile vocabulary.
 
 import type { ThinkingLevel } from "./runs.js";
 
@@ -17,11 +16,7 @@ export const MODEL_ROLES = [
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
-/**
- * Ordered allowlists for one role. The first item is the default. A present
- * list must be non-empty and contain no duplicates; readers validate these
- * invariants at trust boundaries.
- */
+/** Ordered allowlists for one role. The first item is the default. */
 export interface ProfileRoleConfig {
 	readonly models?: readonly string[];
 	readonly efforts?: readonly ThinkingLevel[];
@@ -35,12 +30,6 @@ export type ProfileRoleMap = Readonly<
 export interface ProfileConfig {
 	readonly targets: readonly string[];
 	readonly roles: ProfileRoleMap;
-	/** @deprecated Compatibility input. New writers must use `roles`. */
-	readonly work?: LegacyTierConfig;
-	/** @deprecated Compatibility input. New writers must use `roles`. */
-	readonly review?: LegacyTierConfig;
-	/** @deprecated Compatibility input. New writers must use `roles`. */
-	readonly fast?: LegacyTierConfig;
 }
 
 export interface ModelsConfig {
@@ -53,13 +42,12 @@ export interface SessionProfileRoleOverride {
 	readonly efforts?: readonly ThinkingLevel[];
 }
 
-export type ModelConfigScope = "global" | "project" | "session" | "legacy";
+export type ModelConfigScope = "global" | "project" | "session";
 
 export interface RolePoolLeafSource {
 	readonly scope: ModelConfigScope;
 	readonly profile: string;
 	readonly role: ModelRole;
-	readonly legacyTier?: LegacyPinnableTier;
 }
 
 export interface RolePoolSource {
@@ -86,12 +74,7 @@ export interface ResolvedRoleCandidate {
 	readonly supportedEfforts: readonly ThinkingLevel[];
 }
 
-export type ResolutionSource =
-	| "explicit"
-	| "env"
-	| "role-config"
-	| "profile"
-	| "session";
+export type ResolutionSource = "profile" | "session";
 
 /** Successful role-pool selection metadata used by callers and diagnostics. */
 export interface ResolvedRoleModel {
@@ -105,40 +88,4 @@ export interface ResolvedRoleModel {
 	readonly allowedEfforts: readonly ThinkingLevel[];
 	readonly provenance: RolePoolSource;
 	readonly validationErrors: readonly RoleResolutionError[];
-	/** @deprecated Populated only by compatibility tier callers. */
-	readonly tier?: Tier;
 }
-
-// ─── Legacy compatibility input ─────────────────────────────────────────────
-
-/** @deprecated Use ModelRole and profile role pools. */
-export const TIERS = ["plan", "work", "review", "fast"] as const;
-/** @deprecated Use ModelRole. */
-export type Tier = (typeof TIERS)[number];
-/** @deprecated Use ModelRole. */
-export const PINNABLE_TIERS = ["work", "review", "fast"] as const;
-/** @deprecated Use ModelRole. */
-export type PinnableTier = (typeof PINNABLE_TIERS)[number];
-export type LegacyPinnableTier = PinnableTier;
-
-/** @deprecated Read-only compatibility shape for old profiles. */
-export interface LegacyTierConfig {
-	readonly model?: string;
-	readonly effort?: ThinkingLevel;
-}
-/** @deprecated Alias retained for source compatibility. */
-export type TierConfig = LegacyTierConfig;
-
-/** @deprecated Extension-local scalar role settings are compatibility input. */
-export interface RoleModelConfig {
-	readonly model?: string;
-	readonly effort?: ThinkingLevel;
-}
-/** @deprecated Extension-local scalar role settings are compatibility input. */
-export type RoleModelMap = Readonly<Record<string, RoleModelConfig>>;
-
-/** Legacy extension role names retained until runtime callers migrate. */
-export const MODES_ROLES = ["agent", "analyze", "classifier"] as const;
-export type ModesRole = (typeof MODES_ROLES)[number];
-export const COMPACT_ROLES = ["summarizer"] as const;
-export type CompactRole = (typeof COMPACT_ROLES)[number];

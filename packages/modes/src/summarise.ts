@@ -1,4 +1,4 @@
-// Modes-local summariser: wires a normal-tier background model + pi-ai's
+// Modes-local summariser: wires the plan-summarizer role default + pi-ai's
 // `complete` into the pure `SummariseFn` the compaction builder consumes.
 //
 // Soft-failing by contract: returns null on no model/auth, abort, empty
@@ -11,7 +11,7 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { resolveModelWithin } from "@vegardx/pi-models";
+import { resolveRolePoolWithin } from "@vegardx/pi-models";
 import type { SummariseFn } from "./compaction.js";
 
 /** Abort the call when pi's signal fires OR our own timeout elapses. */
@@ -35,19 +35,20 @@ function withTimeout(
 }
 
 /**
- * Build a {@link SummariseFn} bound to `ctx`. Resolves the `modes` normal-tier
- * model once per call so project settings take effect live.
+ * Build a {@link SummariseFn} bound to `ctx`. Resolves the plan-summarizer
+ * policy default once per call so project settings take effect live.
  */
 export function createModesSummariser(
 	ctx: ExtensionContext,
 	timeoutMs: number,
 ): SummariseFn {
 	return async ({ messages, preamble, maxTokens, signal }) => {
-		const resolved = await resolveModelWithin(
+		const resolution = await resolveRolePoolWithin(
 			ctx,
-			{ name: "modes", tier: "normal", requireApiKey: true },
+			{ role: "plan-summarizer", requireApiKey: true },
 			timeoutMs,
 		);
+		const resolved = resolution.selected;
 		if (!resolved?.apiKey) return null;
 		if (messages.length === 0) return null;
 

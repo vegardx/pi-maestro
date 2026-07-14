@@ -119,6 +119,10 @@ describe("execution adapter — onEvent emission", () => {
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
 			onPlanChanged: () => {},
 			onAllSettled: () => {
 				settledCalls++;

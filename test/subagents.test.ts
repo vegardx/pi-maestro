@@ -1033,6 +1033,20 @@ describe("subagent delegate tool", () => {
 		return createSubagentTool({
 			capability: () => cap,
 			agents: () => discoverAgents("/no/such/dir"),
+			resolveDelegate: async (choice) => ({
+				model: choice?.model ?? "anthropic/default",
+				effort: choice?.effort ?? "low",
+				allowedEfforts: ["low", "high"],
+				models: [
+					{
+						id: "anthropic/default",
+						facts: "200k ctx · fixed thinking",
+						efforts: ["low", "high"],
+						default: true,
+						available: true,
+					},
+				],
+			}),
 		});
 	}
 

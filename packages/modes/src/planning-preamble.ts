@@ -111,8 +111,8 @@ research. Never try to write the plan as text to dodge the gate.
 - For a one-off read-only task that fits neither research nor a worker
   (summarize, transform, analyze something specific), delegate to
   \`subagent\` with the \`general\` agent — pick model + effort per call
-  (\`action: "models"\` lists the whitelist with guidance; default is the
-  work tier).
+  (\`action: "models"\` lists the ordered delegate pool, availability,
+  supported efforts, and spend guidance; omitted choices use its default).
 - Do NOT implement code. Do NOT create deliverables or tasks yet.`;
 }
 

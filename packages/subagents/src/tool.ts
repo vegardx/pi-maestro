@@ -36,10 +36,16 @@ export interface SubagentToolDeps {
 	readonly capability: () => SubagentsCapabilityV1 | undefined;
 	/** Resolve the available agent definitions by name. */
 	readonly agents: () => Record<string, AgentDefinition>;
-	/** The delegable-model whitelist with guidance (action: models). */
-	readonly delegable?: () => DelegableModel[];
-	/** Default model/effort when a spawn names none: the WORK tier. */
-	readonly defaultSpawn?: () => { model?: string; effort?: ThinkingLevel };
+	/** Resolve exact/default choices against the delegate role pool. */
+	readonly resolveDelegate?: (choice?: {
+		model?: string;
+		effort?: ThinkingLevel;
+	}) => Promise<{
+		model: string;
+		effort?: ThinkingLevel;
+		models: readonly DelegableModel[];
+		allowedEfforts: readonly ThinkingLevel[];
+	}>;
 	/** research-tools extension path for web-enabled spawns. */
 	readonly researchToolsPath?: () => string;
 	/** Liveness watchdog applied to every spawn from this tool. */
@@ -81,8 +87,9 @@ const SubagentParams = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Model for this spawn — must be on the whitelist (action: models " +
-				"shows it with guidance). Omit to use the work tier.",
+				"Model for this spawn — must be in the active delegate role pool " +
+				"(action: models shows ordered defaults and capability facts). Omit " +
+				"to use the first available configured model.",
 		}),
 	),
 	effort: Type.Optional(
@@ -112,13 +119,29 @@ const SubagentParams = Type.Object({
 
 const WEB_TOOLS = ["websearch", "webfetch", "context7"] as const;
 
-function formatModels(models: DelegableModel[]): string {
-	if (models.length === 0)
-		return "No delegable models configured — spawns use the work tier. Add entries under extensionConfig.modes.catalog ({model, note}).";
-	const lines = models.map(
-		(m) => `- ${m.id} (${m.facts})${m.note ? ` — ${m.note}` : ""}`,
-	);
-	return `Delegable models (pick per task):\n${lines.join("\n")}`;
+async function formatModels(
+	resolveDelegate: SubagentToolDeps["resolveDelegate"],
+): Promise<string> {
+	if (!resolveDelegate) return "Delegate role policy is unavailable.";
+	try {
+		const policy = await resolveDelegate();
+		const lines = policy.models.map((m) => {
+			const tags = [
+				m.default ? "default" : "alternate",
+				m.available ? "available" : "unavailable",
+				m.facts,
+				m.efforts.length > 0 ? `efforts: ${m.efforts.join("|")}` : undefined,
+			].filter(Boolean);
+			return `- ${m.id} (${tags.join(" · ")})${m.note ? ` — ${m.note}` : ""}`;
+		});
+		return (
+			`Delegate role pool (ordered; exact choices only):\n${lines.join("\n")}\n` +
+			`Allowed efforts: ${policy.allowedEfforts.join(", ") || "model-supported defaults"}. ` +
+			"Prefer raising effort before selecting a more expensive alternate model."
+		);
+	} catch (err) {
+		return err instanceof Error ? err.message : String(err);
+	}
 }
 
 /**
@@ -162,12 +185,13 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 		label: "Subagent",
 		description:
 			"Delegate work to a focused subagent. Actions: spawn (run a named " +
-			"agent, foreground or background), models (the delegable-model " +
-			"whitelist with guidance), status, steer, stop. The `general` agent " +
-			"handles any read-only task with no specialized agent — pick model " +
-			"and effort per call; it defaults to the work tier.",
+			"agent, foreground or background), models (the ordered delegate role " +
+			"pool with defaults, availability, capability facts, and effort envelope), " +
+			"status, steer, stop. The `general` agent handles any read-only task with " +
+			"no specialized agent. Exact choices must remain inside policy; omit them " +
+			"for defaults and prefer effort before a costlier alternate.",
 		promptSnippet:
-			"subagent — delegate a focused task (general/explore/plan/review/agent); general takes any whitelisted model + effort.",
+			"subagent — delegate a focused task; general uses exact choices from the delegate role pool (models lists policy).",
 		parameters: SubagentParams,
 		renderResult: renderCollapsedResult,
 		async execute(_id, params): Promise<AgentToolResult<SubagentDetails>> {
@@ -179,7 +203,7 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 			switch (params.action) {
 				case "models": {
 					return {
-						...text(formatModels(deps.delegable?.() ?? [])),
+						...text(await formatModels(deps.resolveDelegate)),
 						details: {},
 					};
 				}
@@ -194,60 +218,59 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 						return { ...text("spawn requires a prompt."), details: {} };
 					}
 
-					// Model: explicit (whitelisted) > agent definition > work tier.
-					const whitelist = deps.delegable?.() ?? [];
-					if (
-						params.model &&
-						whitelist.length > 0 &&
-						!whitelist.some((m) => m.id === params.model)
-					) {
+					try {
+						const selected = await deps.resolveDelegate?.({
+							model: params.model ?? def.model,
+							effort: params.effort as ThinkingLevel | undefined,
+						});
+						if (!selected)
+							throw new Error("Delegate role policy is unavailable.");
+						const model = selected.model;
+						const effort = selected.effort;
+
+						let profile: SpawnProfile = {
+							profile: def.profile,
+							...(model ? { model } : {}),
+							...(effort ? { thinking: effort } : {}),
+							appendSystemPrompt: def.appendSystemPrompt,
+							...(deps.watchdog ? { watchdog: deps.watchdog() } : {}),
+						};
+						if (params.web) {
+							const researchTools = deps.researchToolsPath?.();
+							profile = {
+								...profile,
+								tools: { allow: ["read", "grep", "find", "ls", ...WEB_TOOLS] },
+								...(researchTools ? { extraExtensions: [researchTools] } : {}),
+							};
+						}
+
+						const handle = cap.spawn(params.prompt, profile);
+						if (params.background) {
+							return {
+								...text(`Spawned ${name} in background as ${handle.id}.`),
+								details: { runId: handle.id, background: true },
+							};
+						}
+						const result = await handle.result();
+						return {
+							content: [
+								{
+									type: "text",
+									text:
+										`${name} (${handle.id}) ${result.status}.\n\n` +
+										(result.summary ?? result.error ?? ""),
+								},
+							],
+							details: { runId: handle.id, result },
+						};
+					} catch (err) {
 						return {
 							...text(
-								`Model ${params.model} is not on the whitelist.\n\n${formatModels(whitelist)}`,
+								`${err instanceof Error ? err.message : String(err)}\n\n${await formatModels(deps.resolveDelegate)}`,
 							),
 							details: {},
 						};
 					}
-					const defaults = deps.defaultSpawn?.() ?? {};
-					const model = params.model ?? def.model ?? defaults.model;
-					const effort =
-						(params.effort as ThinkingLevel | undefined) ?? defaults.effort;
-
-					let profile: SpawnProfile = {
-						profile: def.profile,
-						...(model ? { model } : {}),
-						...(effort ? { thinking: effort } : {}),
-						appendSystemPrompt: def.appendSystemPrompt,
-						...(deps.watchdog ? { watchdog: deps.watchdog() } : {}),
-					};
-					if (params.web) {
-						const researchTools = deps.researchToolsPath?.();
-						profile = {
-							...profile,
-							tools: { allow: ["read", "grep", "find", "ls", ...WEB_TOOLS] },
-							...(researchTools ? { extraExtensions: [researchTools] } : {}),
-						};
-					}
-
-					const handle = cap.spawn(params.prompt, profile);
-					if (params.background) {
-						return {
-							...text(`Spawned ${name} in background as ${handle.id}.`),
-							details: { runId: handle.id, background: true },
-						};
-					}
-					const result = await handle.result();
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									`${name} (${handle.id}) ${result.status}.\n\n` +
-									(result.summary ?? result.error ?? ""),
-							},
-						],
-						details: { runId: handle.id, result },
-					};
 				}
 
 				case "status": {

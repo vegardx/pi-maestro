@@ -2,7 +2,11 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
-import { CAPABILITIES, resetSessionRoleOverrides } from "@vegardx/pi-contracts";
+import {
+	CAPABILITIES,
+	resetSessionRoleOverrides,
+	resetSessionSettingOverrides,
+} from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
@@ -28,10 +32,12 @@ export default defineExtension(
 		let lastCtx: ExtensionContext | undefined;
 		pi.on("session_start", (_e, ctx) => {
 			resetSessionRoleOverrides();
+			resetSessionSettingOverrides();
 			lastCtx = ctx;
 		});
 		pi.on("session_shutdown", () => {
 			resetSessionRoleOverrides();
+			resetSessionSettingOverrides();
 			lastCtx = undefined;
 		});
 		pi.on("input", (_e, ctx) => {
@@ -40,7 +46,7 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open maestro config menu. Subcommands: show, get, set, reset, profiles.",
+				"Open hierarchical Maestro settings. Subcommands: show, get, set, reset, profiles.",,
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {

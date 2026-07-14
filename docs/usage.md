@@ -53,7 +53,9 @@ The plan is shaped with three flat tools (plus `plan` to render the active
 plan as markdown, seed text, or JSON):
 
 - `deliverable` — create/update/remove deliverables, manage the repo
-  registry, and wire dependencies.
+  registry, and wire dependencies. Add many at once with
+  `items: [{id, title, dependsOn}, …]` (one batched call; sibling `dependsOn`
+  refs resolve to the minted ids).
 - `task` — work items within a deliverable: file paths, signatures, edge
   cases. Tasks are the worker's instructions. Add many at once with
   `items: [{title, body}, …]` (one batched call per deliverable).

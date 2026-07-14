@@ -37,6 +37,7 @@ import {
 	deliverables,
 	findDeliverable,
 	hasExecutionStarted,
+	slugify,
 } from "./schema.js";
 import { plansRoot } from "./storage.js";
 
@@ -126,6 +127,67 @@ const DeliverableParams = Type.Object({
 			Type.Literal("medium"),
 			Type.Literal("high"),
 		]),
+	),
+	items: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.Optional(
+					Type.String({
+						description:
+							"Preferred id (slugified + de-duped). Give one so siblings " +
+							"can reference it in `dependsOn`.",
+					}),
+				),
+				title: Type.String({ description: "Deliverable title." }),
+				body: Type.Optional(
+					Type.String({ description: "What ships when this merges." }),
+				),
+				dependsOn: Type.Optional(
+					Type.Array(Type.String(), {
+						description:
+							"Ids this one waits on: sibling ids from THIS batch (resolved " +
+							"to their minted ids) or existing deliverable ids (passed " +
+							"through). Order items dependencies-first.",
+					}),
+				),
+				stacked: Type.Optional(
+					Type.Boolean({
+						description: "Branch from predecessor tip (default true).",
+					}),
+				),
+				workspace: Type.Optional(
+					Type.Union([Type.Literal("repo"), Type.Literal("scratch")]),
+				),
+				repo: Type.Optional(
+					Type.String({
+						description: "Repo registry key; omit for the plan's default repo.",
+					}),
+				),
+				workerMode: Type.Optional(
+					Type.Union([Type.Literal("full"), Type.Literal("read-only")], {
+						description: "Default full.",
+					}),
+				),
+				workerEffort: Type.Optional(
+					Type.Union([
+						Type.Literal("off"),
+						Type.Literal("minimal"),
+						Type.Literal("low"),
+						Type.Literal("medium"),
+						Type.Literal("high"),
+					]),
+				),
+			}),
+			{
+				description:
+					"BATCH add: create many deliverables in ONE call, in order. Use " +
+					"this instead of one add per deliverable. Give each an explicit " +
+					"`id` and reference those ids in `dependsOn` — sibling refs resolve " +
+					"to the minted ids, existing-deliverable refs pass through. " +
+					"All-or-nothing (a bad item rejects the whole batch). `add` only; " +
+					"ignores the top-level title/body/dependsOn/etc.",
+			},
+		),
 	),
 });
 
@@ -436,7 +498,51 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 
 				switch (params.action) {
 					case "add": {
-						if (!params.title) return error("add requires title");
+						// Batch: create many deliverables in one call, all-or-nothing.
+						// Two passes so `dependsOn` is order-independent: pass 1 mints
+						// every id (deps withheld), building a handle→minted-id map;
+						// pass 2 resolves each dependsOn through it — sibling handles
+						// become minted ids, existing-deliverable refs pass through.
+						if (params.items && params.items.length > 0) {
+							if (params.items.some((i) => !i.title?.trim())) {
+								return error("every batch item requires a title");
+							}
+							const idMap = new Map<string, string>();
+							const created = params.items.map((i) => {
+								const d = engine.addDeliverable({
+									...(i.id ? { id: i.id } : {}),
+									title: i.title,
+									body: i.body,
+									stacked: i.stacked,
+									workspace: i.workspace,
+									repo: i.repo,
+									workerMode: i.workerMode ?? "full",
+									workerEffort: i.workerEffort as ThinkingLevel | undefined,
+								});
+								// Map both the written handle and its slug form to the
+								// minted id, so a dependsOn ref written either way resolves.
+								const handle = i.id?.trim() || i.title;
+								idMap.set(handle, d.id);
+								idMap.set(slugify(handle), d.id);
+								return d;
+							});
+							params.items.forEach((i, n) => {
+								if (i.dependsOn && i.dependsOn.length > 0) {
+									engine.updateDeliverable(created[n].id, {
+										dependsOn: i.dependsOn.map((d) => idMap.get(d) ?? d),
+									});
+								}
+							});
+							notify(deps, engine);
+							const fresh = created.map(
+								(d) => findDeliverable(engine.get(), d.id) ?? d,
+							);
+							return ok(
+								`✓ ${created.length} deliverables: ${created.map((d) => d.id).join(", ")}`,
+								{ deliverables: fresh, plan: engine.get() },
+							);
+						}
+						if (!params.title) return error("add requires title or items");
 						if (!params.workerMode) return error("add requires workerMode");
 						const input: AddDeliverableInput = {
 							...(params.id ? { id: params.id } : {}),

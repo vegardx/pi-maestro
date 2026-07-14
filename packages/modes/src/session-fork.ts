@@ -1,20 +1,18 @@
-// Session forking primitives: parse JSONL session files, extract linear paths,
-// create forked sessions, and append entries. Used by the analyze phase and
-// Agent checkpoint forking.
+// Session-file primitives: validation-grade parsing plus a header-only
+// bootstrap that hands the file to the pi SDK's SessionManager. Session
+// assembly (fork + append) lives on the SDK; parseSessionFile stays a dumb
+// reader on purpose — SessionManager.open() migrates old versions in place,
+// and frozen files (the knowledge base) must fail loudly instead of being
+// silently rewritten.
 
 import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
-	appendFileSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
-import type {
-	CustomEntry,
-	CustomMessageEntry,
-	SessionEntry,
-	SessionHeader,
+	CURRENT_SESSION_VERSION,
+	type SessionEntry,
+	type SessionHeader,
+	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
 export interface ParsedSession {
@@ -52,131 +50,33 @@ export function parseSessionFile(path: string): ParsedSession {
 	return { header, entries };
 }
 
-/**
- * Walk entries from the start up to (and including) the entry with targetId.
- * Follows the linear parentId chain. Returns the ordered slice.
- *
- * For linear sessions (single branch), this is simply all entries up to the target.
- * For tree sessions, this walks the parentId chain from the target back to root.
- */
-export function pathToEntry(
-	entries: readonly SessionEntry[],
-	targetId: string,
-): SessionEntry[] {
-	// Build a lookup map
-	const byId = new Map<string, SessionEntry>();
-	for (const entry of entries) {
-		byId.set(entry.id, entry);
-	}
-
-	const target = byId.get(targetId);
-	if (!target) {
-		throw new Error(`Entry not found: ${targetId}`);
-	}
-
-	// Walk from target back to root via parentId
-	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = target;
-	while (current) {
-		path.unshift(current);
-		if (current.parentId === null) break;
-		current = byId.get(current.parentId);
-	}
-
-	return path;
-}
-
-export interface ForkOptions {
-	/** Override cwd in the forked session header. */
-	readonly cwd?: string;
-	/** Custom session id for the fork. Defaults to a new UUID. */
+export interface CreateSessionFileOpts {
+	/** Session id; defaults to a new UUID. */
 	readonly id?: string;
+	/** Header version; defaults to the SDK's current session version. */
+	readonly version?: number;
 }
 
 /**
- * Create a new session file by forking from a source at a specific entry.
- * The fork contains the header (optionally with overridden cwd) and all entries
- * in the path to the target entry.
- *
- * Returns the path to the newly created session file.
+ * Bootstrap a session file at an exact path and hand it to the SDK: write the
+ * one-line header, then open it with SessionManager so subsequent appendXXX()
+ * calls persist eagerly. SessionManager.create() can't be used here — it
+ * defers file creation until the first assistant message, and these files
+ * must exist on disk before `pi --session <file>` spawns.
  */
-export function forkSessionAt(
-	sourceFile: string,
-	targetEntryId: string,
-	outputDir: string,
-	opts?: ForkOptions,
-): string {
-	const { header, entries } = parseSessionFile(sourceFile);
-	const path = pathToEntry(entries, targetEntryId);
-
-	const forkedHeader: SessionHeader = {
-		...header,
+export function createSessionFileAt(
+	path: string,
+	cwd: string,
+	opts?: CreateSessionFileOpts,
+): SessionManager {
+	const header: SessionHeader = {
+		type: "session",
+		version: opts?.version ?? CURRENT_SESSION_VERSION,
 		id: opts?.id ?? randomUUID(),
 		timestamp: new Date().toISOString(),
-		parentSession: header.id,
-		...(opts?.cwd !== undefined && { cwd: opts.cwd }),
+		cwd,
 	};
-
-	mkdirSync(outputDir, { recursive: true });
-	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const shortId = randomUUID().slice(0, 8);
-	const outputFile = join(outputDir, `fork_${timestamp}_${shortId}.jsonl`);
-
-	const lines = [
-		JSON.stringify(forkedHeader),
-		...path.map((entry) => JSON.stringify(entry)),
-	];
-	writeFileSync(outputFile, `${lines.join("\n")}\n`);
-
-	return outputFile;
-}
-
-/**
- * Append entries as JSONL lines to an existing session file.
- * Used to add modes state, execution seed, or persona overrides after forking.
- */
-export function appendToSession(
-	sessionFile: string,
-	entries: readonly (SessionEntry | CustomEntry | CustomMessageEntry)[],
-): void {
-	const lines = entries.map((entry) => JSON.stringify(entry)).join("\n");
-	appendFileSync(sessionFile, `${lines}\n`);
-}
-
-/**
- * Build a custom entry (non-LLM-visible) for use with appendToSession.
- */
-export function buildCustomEntry<T = unknown>(
-	customType: string,
-	data: T,
-	parentId: string | null,
-): CustomEntry<T> {
-	return {
-		type: "custom",
-		customType,
-		data,
-		id: randomUUID().slice(0, 8),
-		parentId,
-		timestamp: new Date().toISOString(),
-	};
-}
-
-/**
- * Build a custom message entry (LLM-visible) for use with appendToSession.
- */
-export function buildCustomMessageEntry(
-	customType: string,
-	content: string,
-	parentId: string | null,
-	opts?: { display?: boolean },
-): CustomMessageEntry {
-	return {
-		type: "custom_message",
-		customType,
-		content,
-		display: opts?.display ?? false,
-		id: randomUUID().slice(0, 8),
-		parentId,
-		timestamp: new Date().toISOString(),
-	};
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(header)}\n`);
+	return SessionManager.open(path);
 }

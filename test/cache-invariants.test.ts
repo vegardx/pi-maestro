@@ -207,7 +207,7 @@ describe("knowledge-fork prefix identity", () => {
 		const headerA = JSON.parse(a[0]) as Record<string, unknown>;
 		const headerB = JSON.parse(b[0]) as Record<string, unknown>;
 		expect(headerA.id).not.toBe(headerB.id);
-		expect(headerA.parentSession).toBe(knowledge.id);
+		expect(headerA.parentSession).toBe(knowledge.path);
 		expect({ ...headerA, id: null, timestamp: null }).toEqual({
 			...headerB,
 			id: null,
@@ -216,7 +216,8 @@ describe("knowledge-fork prefix identity", () => {
 
 		// The knowledge content line is byte-identical between the two agent
 		// files AND byte-identical to the frozen knowledge session's own line —
-		// the fork copies bytes, never re-serializes content.
+		// the fork's parse→stringify round-trip is deterministic for files the
+		// SDK itself serialized.
 		expect(a[1]).toBe(b[1]);
 		expect(a[1]).toBe(knowledgeLines[1]);
 		expect(a[1]).toContain("maestro.base-knowledge");

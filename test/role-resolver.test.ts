@@ -303,6 +303,42 @@ describe("role pool resolution", () => {
 		expect(disallowed.errors[0]?.code).toBe("explicit-effort-not-allowed");
 	});
 
+	it("rejects an unsupported effort paired with an explicit model", async () => {
+		configure("research", ["anthropic/haiku"], ["xhigh", "low"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{
+				role: "research",
+				choice: { model: "anthropic/haiku", effort: "xhigh" },
+			},
+		);
+		expect(result.selected).toBeNull();
+		expect(result.errors[0]?.code).toBe("explicit-effort-unsupported");
+	});
+
+	it("leaves effort undefined when no effort pool is configured", async () => {
+		configure("reviewer", ["openai/o3"], []);
+		// Empty persisted arrays are invalid, so rewrite with a model-only role.
+		projectSettings({
+			models: {
+				profiles: {
+					main: {
+						targets: ["anthropic/sonnet"],
+						roles: { reviewer: { models: ["openai/o3"] } },
+					},
+				},
+			},
+		});
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{
+				role: "reviewer",
+			},
+		);
+		expect(result.selected?.modelId).toBe("openai/o3");
+		expect(result.selected?.effort).toBeUndefined();
+	});
+
 	it("falls back to the authenticated live session model only for omitted choice", async () => {
 		configure("worker", ["global/one"]);
 		const result = await resolveRolePool(

@@ -32,7 +32,12 @@ export function setSessionRoleOverride(
 	patch: SessionProfileRoleOverride | undefined,
 ): void {
 	const storeKey = key(profile, role);
-	if (!patch || (patch.models === undefined && patch.efforts === undefined)) {
+	if (
+		!patch ||
+		(patch.models === undefined && patch.efforts === undefined) ||
+		patch.models?.length === 0 ||
+		patch.efforts?.length === 0
+	) {
 		roleOverrides.delete(storeKey);
 		return;
 	}

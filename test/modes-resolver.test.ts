@@ -52,6 +52,8 @@ describe("getModeRoleModel", () => {
 		delete process.env.MAESTRO_AGENT_THINKING;
 		delete process.env.MAESTRO_ANALYZE_MODEL;
 		delete process.env.MAESTRO_ANALYZE_THINKING;
+		delete process.env.MAESTRO_CLASSIFIER_MODEL;
+		delete process.env.MAESTRO_CLASSIFIER_THINKING;
 	});
 
 	it("returns null when no env, no settings, no ctx.model", async () => {
@@ -99,6 +101,38 @@ describe("getModeRoleModel", () => {
 		const result = await getModeRoleModel(mockCtx(root), "analyze");
 		expect(result!.modelId).toBe("anthropic/claude-sonnet-4-20250514");
 		expect(result!.effort).toBe("low");
+	});
+
+	it("resolves classifier env overrides without requiring pool membership", async () => {
+		process.env.MAESTRO_CLASSIFIER_MODEL = "openai/gpt-4o";
+		const result = await getModeRoleModel(mockCtx(root), "classifier");
+		expect(result).toMatchObject({
+			modelId: "openai/gpt-4o",
+			source: "env",
+		});
+	});
+
+	it("resolves classifier from its extension escape hatch", async () => {
+		const piDir = join(root, ".pi");
+		mkdirSync(piDir, { recursive: true });
+		writeFileSync(
+			join(piDir, "settings.json"),
+			JSON.stringify({
+				extensionConfig: {
+					modes: {
+						models: {
+							classifier: { model: "openai/gpt-4o", effort: "low" },
+						},
+					},
+				},
+			}),
+		);
+		const result = await getModeRoleModel(mockCtx(root), "classifier");
+		expect(result).toMatchObject({
+			modelId: "openai/gpt-4o",
+			effort: "low",
+			source: "role-config",
+		});
 	});
 
 	it("resolves from settings when no env", async () => {

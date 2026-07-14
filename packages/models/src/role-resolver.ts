@@ -4,16 +4,15 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	MODEL_ROLES,
-	type ModelRole,
-	type ResolvedRoleCandidate,
-	type ResolvedRoleModel,
-	type RoleModelConfig,
-	type RolePoolSource,
-	type RoleResolutionError,
-	type ThinkingLevel,
-	type Tier,
+import type {
+	ModelRole,
+	ResolvedRoleCandidate,
+	ResolvedRoleModel,
+	RoleModelConfig,
+	RolePoolSource,
+	RoleResolutionError,
+	ThinkingLevel,
+	Tier,
 } from "@vegardx/pi-contracts";
 import {
 	type ExtensionConfigMap,
@@ -32,7 +31,6 @@ const EFFORTS: readonly ThinkingLevel[] = [
 	"xhigh",
 ];
 const EFFORT_SET = new Set<string>(EFFORTS);
-const ROLE_SET = new Set<string>(MODEL_ROLES);
 
 export interface ExactRoleChoice {
 	readonly model?: string;
@@ -209,10 +207,25 @@ export async function resolveRolePool(
 			];
 			return { ...base, selected: null, errors };
 		}
+		if (
+			choice.effort !== undefined &&
+			!selectedCandidate.supportedEfforts.includes(choice.effort)
+		) {
+			const errors = [
+				error(
+					"explicit-effort-unsupported",
+					`Effort ${choice.effort} is unsupported by model ${choice.model}`,
+					choice,
+				),
+			];
+			return { ...base, selected: null, errors };
+		}
 	} else {
 		selectedCandidate = candidates.find(
 			(item) =>
-				(!choice.effort && item.supportedEfforts.length > 0) ||
+				(!choice.effort &&
+					(configuredEfforts.length === 0 ||
+						item.supportedEfforts.length > 0)) ||
 				(choice.effort !== undefined &&
 					item.supportedEfforts.includes(choice.effort)),
 		);
@@ -227,7 +240,8 @@ export async function resolveRolePool(
 				supportedEfforts(ctx.model as Model<Api>),
 			);
 			if (
-				(!choice.effort && efforts.length > 0) ||
+				(!choice.effort &&
+					(configuredEfforts.length === 0 || efforts.length > 0)) ||
 				(choice.effort !== undefined && efforts.includes(choice.effort))
 			) {
 				selectedCandidate = {
@@ -260,7 +274,11 @@ export async function resolveRolePool(
 		return { ...base, selected: null, errors };
 	}
 
-	const effort = choice.effort ?? selectedCandidate.supportedEfforts[0];
+	const effort =
+		choice.effort ??
+		(configuredEfforts.length > 0
+			? selectedCandidate.supportedEfforts[0]
+			: undefined);
 	const selected: ResolvedRoleModelFull = {
 		role: opts.role,
 		modelId: selectedCandidate.modelId,
@@ -328,20 +346,6 @@ export async function resolveRoleModel(
 	ctx: ExtensionContext,
 	opts: RoleResolveOptions,
 ): Promise<ResolvedRoleModelFull | null> {
-	const directRole = ROLE_SET.has(opts.role)
-		? (opts.role as ModelRole)
-		: undefined;
-	if (directRole) {
-		const choice = opts.explicit ?? opts.env;
-		return (
-			await resolveRolePool(ctx, {
-				role: directRole,
-				choice,
-				requireApiKey: opts.requireApiKey,
-			})
-		).selected;
-	}
-
 	const role = TIER_ROLE[opts.tier ?? "work"];
 	const { merged } = readLayeredExtensionConfig(ctx.cwd);
 	const scalar = readRoleConfig(merged, opts.extension, opts.role);

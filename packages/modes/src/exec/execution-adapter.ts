@@ -222,7 +222,7 @@ export class ExecutionAdapter {
 	// agentKey → resolved display model + adaptive flag (telemetry)
 	private agentModelMeta = new Map<
 		string,
-		{ model: string; adaptive: boolean }
+		{ model: string; modelId: string; effort?: string; adaptive: boolean }
 	>();
 	private firstTokensSeen = new Map<
 		string,
@@ -477,33 +477,33 @@ export class ExecutionAdapter {
 				}
 				this.sessionFiles.set(agentKey, sessionFile);
 
-				// Model plumbing: the worker runs on the `work` tier. When work
-				// tracks the session model (the common case) we session-pin (no
-				// --model, cache-warm); when it's pinned to a distinct model we
-				// pass --model + effort. Reviewers use the headless subagent path,
-				// not this one.
+				// Worker and support agents share the worker role policy. Authored exact
+				// choices are persisted on their plan specs and revalidated on every fresh
+				// spawn/resume, so unavailable or out-of-pool choices fail visibly.
+				const authored = isWorker
+					? deliverable.worker
+					: deliverable.agents.find((a) => a.name === spawnOpts.agentName);
+				const resolvedWork = await resolveSpawnModelSafe(this.opts.ctx, {
+					role: "worker",
+					model: authored?.model ?? spawnOpts.model,
+					effort:
+						(authored?.effort ?? spawnOpts.effort) as ThinkingLevel | undefined,
+				});
 				const sessionModelId = this.opts.ctx.model
 					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
 					: undefined;
-				let modelOverride: string | undefined;
-				let thinkingOverride: string | undefined;
-				const resolvedWork = await resolveSpawnModelSafe(this.opts.ctx, {
-					tier: "work",
-					effort: spawnOpts.effort as ThinkingLevel | undefined,
+				const modelOverride =
+					resolvedWork.modelId === sessionModelId
+						? undefined
+						: resolvedWork.modelId;
+				const thinkingOverride = resolvedWork.effort;
+				const meta = getModelMeta(this.opts.ctx, resolvedWork.modelId);
+				this.agentModelMeta.set(agentKey, {
+					model: meta.shortName,
+					modelId: resolvedWork.modelId,
+					effort: resolvedWork.effort,
+					adaptive: meta.adaptive,
 				});
-				if (resolvedWork && resolvedWork.modelId !== sessionModelId) {
-					modelOverride = resolvedWork.modelId;
-					thinkingOverride =
-						resolvedWork.effort ?? (spawnOpts.effort || undefined);
-				}
-				const displayModelId = modelOverride ?? sessionModelId;
-				if (displayModelId) {
-					const meta = getModelMeta(this.opts.ctx, displayModelId);
-					this.agentModelMeta.set(agentKey, {
-						model: meta.shortName,
-						adaptive: meta.adaptive,
-					});
-				}
 
 				try {
 					mkdirSync(join(this.opts.planDir, "crashes"), { recursive: true });

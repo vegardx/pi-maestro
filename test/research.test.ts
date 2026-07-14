@@ -308,7 +308,10 @@ describe("research tool", () => {
 		const { deps } = makeDeps({
 			subagents: () => capability,
 			engine: () => engine,
-			resolveTierModel: async () => "other/model-x",
+			resolveRoleModel: async (_ctx, role, choice) => ({
+				model: "other/model-x",
+				effort: choice?.effort ?? (role === "advisor" ? "high" : "low"),
+			}),
 		});
 		await run(createResearchTool(deps), {
 			questions: [{ question: "poke holes in this plan", kind: "advisor" }],
@@ -330,7 +333,10 @@ describe("research tool", () => {
 		const { deps } = makeDeps({
 			subagents: () => capability,
 			engine: () => engine,
-			resolveTierModel: async () => "other/model-x",
+			resolveRoleModel: async (_ctx, role, choice) => ({
+				model: "other/model-x",
+				effort: choice?.effort ?? (role === "advisor" ? "high" : "low"),
+			}),
 		});
 		await run(createResearchTool(deps), {
 			questions: [

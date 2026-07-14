@@ -119,6 +119,12 @@ const DeliverableParams = Type.Object({
 	workerMode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
 	),
+	workerModel: Type.Optional(
+		Type.String({
+			description:
+				"Exact provider/model id from the active worker role pool. Omit for its default.",
+		}),
+	),
 	workerEffort: Type.Optional(
 		Type.Union([
 			Type.Literal("off"),
@@ -166,6 +172,12 @@ const DeliverableParams = Type.Object({
 				workerMode: Type.Optional(
 					Type.Union([Type.Literal("full"), Type.Literal("read-only")], {
 						description: "Default full.",
+					}),
+				),
+				workerModel: Type.Optional(
+					Type.String({
+						description:
+							"Exact provider/model id from the active worker role pool.",
 					}),
 				),
 				workerEffort: Type.Optional(
@@ -253,6 +265,12 @@ const AgentParams = Type.Object({
 	),
 	mode: Type.Optional(
 		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
+	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Exact provider/model id from the active worker role pool. Omit for its default.",
+		}),
 	),
 	effort: Type.Optional(
 		Type.Union([
@@ -517,6 +535,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 									workspace: i.workspace,
 									repo: i.repo,
 									workerMode: i.workerMode ?? "full",
+									workerModel: i.workerModel,
 									workerEffort: i.workerEffort as ThinkingLevel | undefined,
 								});
 								// Map both the written handle and its slug form to the
@@ -553,6 +572,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							workspace: params.workspace,
 							repo: params.repo,
 							workerMode: params.workerMode,
+							workerModel: params.workerModel,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						};
 						const deliverable = engine.addDeliverable(input);
@@ -572,6 +592,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							workspace: params.workspace,
 							repo: params.repo,
 							workerMode: params.workerMode as AgentMode | undefined,
+							workerModel: params.workerModel,
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
 						if (params.status) {
@@ -818,7 +839,8 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						const input: AddAgentInput = {
 							name: params.name,
 							mode: params.mode,
-							effort: params.effort as ThinkingLevel,
+							model: params.model,
+							effort: params.effort as ThinkingLevel | undefined,
 							focus: params.focus,
 							after: params.after ?? [],
 						};
@@ -833,6 +855,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						if (!params.name) return error("update requires name");
 						engine.updateAgent(deliverableId, params.name, {
 							mode: params.mode as AgentMode | undefined,
+							model: params.model,
 							effort: params.effort as ThinkingLevel | undefined,
 							focus: params.focus,
 							after: params.after,

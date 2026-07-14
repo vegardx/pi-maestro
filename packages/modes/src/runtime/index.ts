@@ -12,8 +12,8 @@ import {
 	CAPABILITIES,
 	EVENTS,
 	type ModeName,
+	type ModelRole,
 	type ModesExecutionStatus,
-	type Tier,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
@@ -50,22 +50,19 @@ const PLAN_CONTAINER = "plan" as const;
 
 export { PLAN_CONTAINER };
 
-/**
- * The pinned model id for a tier, or undefined when the tier tracks the session
- * model (⇒ let the subagent inherit the default, cache-warm). Used to wire the
- * research/advisor and reviewer spawns to their tiers.
- */
-async function pinnedTierModel(
+/** Resolve one authenticated role-pool selection for child spawning. */
+async function roleSelection(
 	ctx: ExtensionContext,
-	tier: Tier,
-): Promise<string | undefined> {
-	const sessionId = ctx.model
-		? `${ctx.model.provider}/${ctx.model.id}`
-		: undefined;
-	const resolved = await resolveSpawnModelSafe(ctx, { tier });
-	return resolved && resolved.modelId !== sessionId
-		? resolved.modelId
-		: undefined;
+	role: ModelRole,
+	choice?: { model?: string; effort?: import("@vegardx/pi-contracts").ThinkingLevel },
+) {
+	const resolved = await resolveSpawnModelSafe(ctx, { role, ...choice });
+	return {
+		model: resolved.modelId,
+		effort: resolved.effort,
+		allowedModels: resolved.resolved.configuredModels,
+		allowedEfforts: resolved.resolved.allowedEfforts,
+	};
 }
 
 export interface ModesRuntime {
@@ -121,7 +118,8 @@ export function createModesRuntime(
 		},
 		researchToolsPath: () =>
 			join(repoRoot, "packages/research-tools/src/index.ts"),
-		resolveTierModel: (ctx, tier) => pinnedTierModel(ctx, tier),
+		resolveRoleModel: (ctx, role, choice) =>
+			roleSelection(ctx, role, choice),
 		watchdog: (ctx) => readResearchWatchdogSettings(ctx.cwd),
 		onRunStarted: (run, ctx) => {
 			rt.researchRuns.set(run.id, run);
@@ -243,7 +241,8 @@ export function createModesRuntime(
 				// Reviewers run on the `review` tier: a pinned distinct model
 				// (cross-model second opinion), or undefined to inherit the
 				// session model when review tracks plan.
-				resolveModel: (ctx) => pinnedTierModel(ctx, "review"),
+				resolveModel: async (ctx) =>
+					(await roleSelection(ctx, "reviewer")).model,
 				report: (roundKind, results, ledger) => {
 					const bridge = rt.agentBridge;
 					const id = deliverableId();

@@ -53,7 +53,10 @@ export interface AgentSpec {
 	/** Unique name within the deliverable (also used in `after` references). */
 	name: string;
 	mode: AgentMode;
-	effort: ThinkingLevel;
+	/** Optional exact worker-pool model choice, persisted across resume. */
+	model?: string;
+	/** Optional exact worker-pool effort choice. */
+	effort?: ThinkingLevel;
 	/** What this agent should focus on — specific, actionable instructions. */
 	focus: string;
 	/** Dependencies: "worker" or other agent names. Empty = start immediately. */
@@ -88,7 +91,9 @@ export interface SubAgentSpec {
 
 export interface WorkerSpec {
 	mode: AgentMode;
-	/** Thinking effort. Defaults to the work tier's effort at resolution time. */
+	/** Optional exact worker-pool model choice, persisted across resume. */
+	model?: string;
+	/** Thinking effort. Defaults to the worker pool's first compatible effort. */
 	effort?: ThinkingLevel;
 	/** Agents that must finish before worker starts. Empty/absent = start first. */
 	after?: string[];

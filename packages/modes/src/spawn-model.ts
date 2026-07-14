@@ -1,18 +1,25 @@
-// Spawn-time model resolution for the deliverable executor.
-// Resolves a tier (work/review/fast) to a concrete model via the active profile.
+// Spawn-time model resolution for model-consuming runtimes.
+// Authenticates exact choices against the active ordered role pool.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevel, Tier } from "@vegardx/pi-contracts";
+import type {
+	ModelRole,
+	ThinkingLevel,
+} from "@vegardx/pi-contracts";
 import {
 	type ResolvedRoleModelFull,
-	resolveTierModel,
+	resolveRolePool,
 } from "@vegardx/pi-models";
 
 export interface SpawnModelRequest {
-	/** Which tier to resolve (work for the implementer, review for reviewers, …). */
-	tier: Tier;
-	/** Thinking effort override. */
+	/** Curated policy role whose ordered pool constrains this spawn. */
+	role: ModelRole;
+	/** Optional exact authored model choice (must be in and available from the pool). */
+	model?: string;
+	/** Optional exact authored effort choice. */
 	effort?: ThinkingLevel;
+	/** Exclude candidates without an API key. */
+	requireApiKey?: boolean;
 }
 
 export interface ResolvedSpawnModel {
@@ -24,41 +31,66 @@ export interface ResolvedSpawnModel {
 	apiKey?: string;
 	/** Extra headers for the resolved model. */
 	headers?: Record<string, string>;
+	/** Resolution metadata retained for telemetry and diagnostics. */
+	resolved: ResolvedRoleModelFull;
 }
 
-/**
- * Resolve a model for spawning an agent at execution time. The tier resolves
- * through the active profile (pinned model, or tracking the session model when
- * the tier is unset). Effort from the request overrides the tier default.
- */
+export class SpawnModelResolutionError extends Error {
+	constructor(
+		readonly request: SpawnModelRequest,
+		readonly reasons: readonly string[],
+	) {
+		super(
+			`No policy-compatible ${request.role} model resolved: ${reasons.join("; ") || "no model available"}`,
+		);
+		this.name = "SpawnModelResolutionError";
+	}
+}
+
+/** Resolve an authenticated exact/default selection from a direct role pool. */
 export async function resolveSpawnModel(
 	ctx: ExtensionContext,
 	request: SpawnModelRequest,
-): Promise<ResolvedSpawnModel | null> {
-	const result = await resolveTierModel(ctx, request.tier, {
-		effort: request.effort,
+): Promise<ResolvedSpawnModel> {
+	const resolution = await resolveRolePool(ctx, {
+		role: request.role,
+		choice:
+			request.model || request.effort
+				? { model: request.model, effort: request.effort }
+				: undefined,
+		requireApiKey: request.requireApiKey,
 	});
-	if (!result) return null;
+	const result = resolution.selected;
+	if (!result) {
+		throw new SpawnModelResolutionError(
+			request,
+			resolution.errors.map((item) => item.message),
+		);
+	}
 
 	return {
 		modelId: result.modelId,
-		effort: request.effort ?? result.effort,
+		effort: result.effort,
 		apiKey: result.apiKey,
 		headers: result.headers,
+		resolved: result,
 	};
 }
 
-/**
- * Resolve with a hard 5s timeout. Returns null if resolution doesn't settle
- * (e.g. provider is unreachable for auth check).
- */
+/** Resolve with a hard 5s timeout while preserving visible policy failures. */
 export async function resolveSpawnModelSafe(
 	ctx: ExtensionContext,
 	request: SpawnModelRequest,
-): Promise<ResolvedSpawnModel | null> {
+): Promise<ResolvedSpawnModel> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timeout = new Promise<null>((resolve) => {
-		timer = setTimeout(() => resolve(null), 5_000);
+	const timeout = new Promise<never>((_resolve, reject) => {
+		timer = setTimeout(
+			() =>
+				reject(
+					new SpawnModelResolutionError(request, ["resolution timed out after 5s"]),
+				),
+			5_000,
+		);
 		timer.unref?.();
 	});
 	try {

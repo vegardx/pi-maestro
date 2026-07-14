@@ -30,10 +30,11 @@ import {
 import { Type } from "@sinclair/typebox";
 import type {
 	AskCapabilityV1,
+	ModelRole,
 	RunResult,
 	SpawnProfile,
 	SubagentsCapabilityV1,
-	Tier,
+	ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
@@ -56,8 +57,8 @@ export type ResearchKind = (typeof RESEARCH_KINDS)[number];
  *  which reuse the research widget rows and chat cards. */
 export type ResearchDisplayKind = ResearchKind | "verify";
 
-/** Kinds that run on the `review` tier (cross-model second opinion) at high effort. */
-const REVIEW_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
+/** Kinds that use the advisor pool (cross-model second opinion). */
+const ADVISOR_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
 
 /** Live view of one research run — feeds the agent table and cards. */
 export interface ResearchRunView {
@@ -89,14 +90,17 @@ export interface ResearchDeps {
 	readonly ensurePlanDir: (ctx: ExtensionContext) => string;
 	/** Absolute path to the research-tools extension entry (-e for children). */
 	readonly researchToolsPath: () => string;
-	/**
-	 * Resolve a tier to a pinned model id for a research subagent. Returns
-	 * undefined when the tier tracks the session model (⇒ inherit the default).
-	 */
-	readonly resolveTierModel?: (
+	/** Resolve and validate one exact/default selection inside a role pool. */
+	readonly resolveRoleModel?: (
 		ctx: ExtensionContext,
-		tier: Tier,
-	) => Promise<string | undefined>;
+		role: Extract<ModelRole, "research" | "advisor">,
+		choice?: { model?: string; effort?: ThinkingLevel },
+	) => Promise<{
+		model: string;
+		effort?: ThinkingLevel;
+		allowedModels?: readonly string[];
+		allowedEfforts?: readonly ThinkingLevel[];
+	}>;
 	/** Run lifecycle callbacks (widget rows + chat cards). */
 	readonly onRunStarted?: (run: ResearchRunView, ctx: ExtensionContext) => void;
 	readonly onRunSettled?: (
@@ -172,6 +176,28 @@ const ResearchParams = Type.Object({
 					},
 				),
 			),
+			model: Type.Optional(
+				Type.String({
+					description:
+						"Exact provider/model id from the active research/advisor pool. Omit for the first available default.",
+				}),
+			),
+			effort: Type.Optional(
+				Type.Union(
+					[
+						"off",
+						"minimal",
+						"low",
+						"medium",
+						"high",
+						"xhigh",
+					].map((level) => Type.Literal(level)),
+					{
+						description:
+							"Exact effort from the role pool and selected model's supported levels. Prefer raising effort before selecting a costlier alternate model.",
+					},
+				),
+			),
 			context: Type.Optional(
 				Type.String({
 					description:
@@ -193,9 +219,13 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 		description:
 			"Fan out parallel research agents and get their reports back. Batch " +
 			"ALL questions for this round into ONE call — they run concurrently. " +
-			"Each agent is read-only; web agents can search (Exa), fetch pages, " +
-			"and pull library docs (Context7). You get back a bounded digest per " +
-			"question; call `dig(ref)` for a report's full analysis if needed.",
+			"codebase/web choices are constrained by the active research role pool; " +
+			"advisor/consult use the advisor pool. Omit model/effort for the first " +
+			"available defaults; explicit exact choices are rejected unless allowed, " +
+			"available, and mutually compatible. Prefer effort before a costlier " +
+			"alternate. Each agent is read-only; web agents can search (Exa), fetch " +
+			"pages, and pull library docs (Context7). You get back a bounded digest " +
+			"per question; call `dig(ref)` for a report's full analysis if needed.",
 		promptSnippet:
 			"research — fan out parallel research agents (codebase/web/advisor); batch questions into one call.",
 		parameters: ResearchParams,
@@ -229,13 +259,21 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			const spawned = await Promise.all(
 				params.questions.map(async (q) => {
 					const kind = (q.kind ?? "codebase") as ResearchKind;
-					const profile = {
-						...(await buildResearchProfile(deps, ctx, plan, kind)),
-						// Liveness policy is enforced by the subagents runner.
-						watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
-					};
-					const prompt = buildResearchPrompt(plan, kind, q.question, q.context);
 					try {
+						const profile = {
+							...(await buildResearchProfile(deps, ctx, plan, kind, {
+								model: q.model,
+								effort: q.effort as ThinkingLevel | undefined,
+							})),
+							// Liveness policy is enforced by the subagents runner.
+							watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
+						};
+						const prompt = buildResearchPrompt(
+							plan,
+							kind,
+							q.question,
+							q.context,
+						);
 						const handle = capability.spawn(prompt, profile);
 						// Display metadata: the child's effective model is the profile's
 						// (advisor's alternate) or, when unset, the session model.
@@ -503,19 +541,24 @@ async function buildResearchProfile(
 	ctx: ExtensionContext,
 	plan: Plan,
 	kind: ResearchKind,
+	choice?: { model?: string; effort?: ThinkingLevel },
 ): Promise<SpawnProfile> {
 	const tools =
 		kind === "web" ? [...READ_TOOLS, ...WEB_TOOLS] : [...READ_TOOLS];
-	const tier: Tier = REVIEW_MODEL_KINDS.has(kind) ? "review" : "fast";
-	const model = await deps.resolveTierModel?.(ctx, tier);
+	const role = ADVISOR_MODEL_KINDS.has(kind) ? "advisor" : "research";
+	const resolved = await deps.resolveRoleModel?.(ctx, role, choice);
+	const allowed = resolved
+		? `\n\nModel policy: role=${role}; selected=${resolved.model}${resolved.effort ? ` @ ${resolved.effort}` : ""}; allowed models=${resolved.allowedModels?.join(", ") || resolved.model}; allowed efforts=${resolved.allowedEfforts?.join(", ") || "model-supported defaults"}. Prefer more effort before another model.`
+		: "";
 	return {
 		profile: "research",
 		cwd: plan.repoPath,
 		tools: { allow: tools },
-		thinking: REVIEW_MODEL_KINDS.has(kind) ? "high" : "low",
-		...(model ? { model } : {}),
+		thinking:
+			resolved?.effort ?? (ADVISOR_MODEL_KINDS.has(kind) ? "high" : "low"),
+		...(resolved?.model ? { model: resolved.model } : {}),
 		extraExtensions: [deps.researchToolsPath()],
-		appendSystemPrompt: researcherPreamble(kind),
+		appendSystemPrompt: `${researcherPreamble(kind)}${allowed}`,
 	};
 }
 

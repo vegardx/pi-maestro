@@ -27,9 +27,14 @@ export interface ModesState {
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;
 
 export function initialModesState(now: () => string = isoNow): ModesState {
-	return { mode: "plan", execution: { stage: "idle" }, updatedAt: now() };
+	return { mode: "recon", execution: { stage: "idle" }, updatedAt: now() };
 }
 
+/**
+ * Next mode in the Shift+Tab cycle. Off-cycle modes (recon/hack/agent) are
+ * not in MODE_CYCLE — indexOf yields -1, so they all exit into the cycle's
+ * first entry, plan. That IS the exit ramp, not an accident.
+ */
 export function nextMode(mode: ModeName): ModeName {
 	const idx = MODE_CYCLE.indexOf(mode);
 	return MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];

@@ -102,6 +102,7 @@ export function formatModelLabel(
 // ─── Footer installer ────────────────────────────────────────────────────────
 
 const MODE_COLOR: Record<ModeName, ThemeColor> = {
+	recon: "success",
 	plan: "warning",
 	auto: "accent",
 	hack: "error",

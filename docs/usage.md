@@ -16,12 +16,18 @@ directly through jiti — no build step. Requirements beyond pi itself:
 
 ## Modes
 
-- `hack` — unrestricted pi default behaviour. `/hack`
+- `recon` — the default on session start: a read-only research posture with
+  the `research`/`dig` loop and no plan surface at all. Shift+Tab exits it
+  one-way into plan (the first plan turn orients: summary + open questions);
+  `/recon` re-enters it later. It is never part of the Shift+Tab cycle.
+- `hack` — unrestricted pi default behaviour. `/hack` only — also outside
+  the cycle; Shift+Tab from hack exits back to plan.
 - `plan` — read-only shell policy; planning tools and `ask` active. `/plan`
 - `auto` — autonomous implementation; execution tools unlocked. `/auto`
 
-A fourth mode, `agent`, is internal: workers run in it with a dedicated tool
-policy and preamble. You never switch to it yourself.
+Shift+Tab cycles plan ⇄ auto (from plan it asks auto vs hack). A fifth mode,
+`agent`, is internal: workers run in it with a dedicated tool policy and
+preamble. You never switch to it yourself.
 
 ## Planning
 
@@ -177,7 +183,7 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/commit` | Conventional commit of current changes |
 | `/distill` | Curated in-place compaction; keep working |
 | `/handoff` | End the arc; seed a new planning session |
-| `/hack`, `/auto` | Switch mode |
+| `/recon`, `/hack`, `/auto` | Switch mode |
 | `/maestro` | Settings menu (models, profiles, tiers) |
 | `/modes-status` | Show mode and active plan status |
 

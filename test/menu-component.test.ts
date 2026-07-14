@@ -13,6 +13,8 @@ import { SettingsList } from "@earendil-works/pi-tui";
 import {
 	getSessionRoleOverride,
 	resetSessionRoleOverrides,
+	resetSessionSettingOverrides,
+	setSessionSettingOverride,
 } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -21,6 +23,7 @@ import {
 	modelOptions,
 } from "../packages/settings/src/menu.js";
 import { readRoleLeaf, writeRoleLeaf } from "../packages/settings/src/model.js";
+import { readLayeredExtensionConfig } from "../packages/settings/src/reader.js";
 
 let root: string;
 let prevAgentDir: string | undefined;
@@ -92,10 +95,12 @@ beforeEach(() => {
 		},
 	});
 	resetSessionRoleOverrides();
+	resetSessionSettingOverrides();
 });
 
 afterEach(() => {
 	resetSessionRoleOverrides();
+	resetSessionSettingOverrides();
 	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 	rmSync(root, { recursive: true, force: true });
@@ -176,6 +181,14 @@ describe("hierarchical Maestro settings", () => {
 			"/ext/provider",
 			"/ext/tools",
 		]);
+	});
+
+	it("applies typed advanced session overrides to runtime readers", () => {
+		setSessionSettingOverride("modes", "research.softMs", 1234);
+		const { merged } = readLayeredExtensionConfig(root);
+		expect((merged.modes.research as Record<string, unknown>).softMs).toBe(
+			1234,
+		);
 	});
 
 	it("persists exact ordered values rather than indexes", () => {

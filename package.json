@@ -46,6 +46,7 @@
 		"@types/node": "^24",
 		"husky": "^9.1.7",
 		"jiti": "^2.7.0",
+		"semantic-release": "^25.0.7",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"
 	},

@@ -36,7 +36,7 @@ import {
 } from "@vegardx/pi-settings";
 import { type AgentDefinition, discoverAgents } from "./agents.js";
 import { createRunBus } from "./bus.js";
-import { delegableModels, workTierDefault } from "./catalog.js";
+import { resolveDelegateSelection } from "./catalog.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
@@ -299,8 +299,10 @@ export default defineExtension(
 			createSubagentTool({
 				capability: () => maestro.capabilities.get(CAPABILITIES.subagents),
 				agents: () => agents,
-				delegable: () => (ctx ? delegableModels(ctx, ctx.cwd) : []),
-				defaultSpawn: () => (ctx ? workTierDefault(ctx, ctx.cwd) : {}),
+				resolveDelegate: (choice) => {
+					if (!ctx) throw new Error("Delegate role policy is unavailable.");
+					return resolveDelegateSelection(ctx, choice);
+				},
 				researchToolsPath: () =>
 					resolve(
 						dirname(fileURLToPath(import.meta.url)),

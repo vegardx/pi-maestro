@@ -136,7 +136,9 @@ export interface SpawnAgentOpts {
 	agentName: string;
 	displayName: string;
 	mode: "full" | "read-only";
-	effort: string;
+	/** Persisted exact authored worker-pool choices. */
+	model?: string;
+	effort?: string;
 	worktreePath: string;
 	seed: string;
 	/** Resume an existing session file instead of seeding a fresh one. */
@@ -597,7 +599,8 @@ export class DeliverableExecutor {
 		if (!this.canSpawnNow(g, state, spec.mode)) return;
 
 		const mode = spec.mode;
-		const effort = ("effort" in spec ? spec.effort : undefined) ?? "low";
+		const model = "model" in spec ? spec.model : undefined;
+		const effort = "effort" in spec ? spec.effort : undefined;
 
 		const { agentName: genName } = await import("./agent-names.js");
 		const takenNames = new Set(
@@ -621,6 +624,7 @@ export class DeliverableExecutor {
 			agentName: name,
 			displayName: agentState.displayName,
 			mode,
+			model,
 			effort,
 			worktreePath: state.worktreePath!,
 			seed,

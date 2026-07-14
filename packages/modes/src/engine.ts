@@ -52,6 +52,7 @@ export interface AddDeliverableInput {
 	/** Repo registry key; absent ⇒ the plan's default repo. */
 	repo?: string;
 	workerMode: AgentMode;
+	workerModel?: string;
 	workerEffort?: ThinkingLevel;
 	workerAfter?: string[];
 }
@@ -59,7 +60,8 @@ export interface AddDeliverableInput {
 export interface AddAgentInput {
 	name: string;
 	mode: AgentMode;
-	effort: ThinkingLevel;
+	model?: string;
+	effort?: ThinkingLevel;
 	focus: string;
 	after: string[];
 }
@@ -202,6 +204,7 @@ export class PlanEngine {
 			repo: scratch ? undefined : input.repo,
 			worker: {
 				mode: input.workerMode,
+				model: input.workerModel,
 				effort: input.workerEffort,
 				after: input.workerAfter,
 			},
@@ -239,6 +242,7 @@ export class PlanEngine {
 			>
 		> & {
 			workerMode?: AgentMode;
+			workerModel?: string;
 			workerEffort?: ThinkingLevel;
 			workerAfter?: string[];
 		},
@@ -246,10 +250,16 @@ export class PlanEngine {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, id);
 			if (!g) throw new Error(`unknown deliverable: ${id}`);
-			const { workerMode, workerEffort, workerAfter, ...deliverablePatch } =
-				patch;
+			const {
+				workerMode,
+				workerModel,
+				workerEffort,
+				workerAfter,
+				...deliverablePatch
+			} = patch;
 			assignDefined(g, deliverablePatch);
 			if (workerMode !== undefined) g.worker.mode = workerMode;
+			if (workerModel !== undefined) g.worker.model = workerModel;
 			if (workerEffort !== undefined) g.worker.effort = workerEffort;
 			if (workerAfter !== undefined) g.worker.after = workerAfter;
 			g.updatedAt = this.now();
@@ -282,6 +292,7 @@ export class PlanEngine {
 		const agent: AgentSpec = {
 			name: input.name,
 			mode: input.mode,
+			model: input.model,
 			effort: input.effort,
 			focus: input.focus,
 			after: input.after,
@@ -299,7 +310,9 @@ export class PlanEngine {
 	updateAgent(
 		deliverableId: string,
 		name: string,
-		patch: Partial<Pick<AgentSpec, "mode" | "effort" | "focus" | "after">>,
+		patch: Partial<
+			Pick<AgentSpec, "mode" | "model" | "effort" | "focus" | "after">
+		>,
 	): void {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, deliverableId);

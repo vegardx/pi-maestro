@@ -78,6 +78,39 @@ describe("runReviewPanel", () => {
 		);
 	});
 
+	it("resolves duplicate personas independently on justified distinct models", async () => {
+		const { capability, calls } = fakeSubagents({
+			"security-audit": { status: "succeeded", summary: "VERDICT: PASS" },
+		});
+		const specs: SubAgentSpec[] = [
+			{ name: "security-a", persona: "security-audit", model: "openai/a" },
+			{
+				name: "security-b",
+				persona: "security-audit",
+				model: "anthropic/b",
+				modelJustification: "Independent provider audit for auth changes",
+			},
+		];
+		const selected: string[] = [];
+		const results = await runReviewPanel(specs, {
+			subagents: capability,
+			cwd: "/wt",
+			resolveModel: async (spec) => {
+				selected.push(spec.model ?? "default/model");
+				return { model: spec.model ?? "default/model", effort: "high" };
+			},
+		});
+		expect(selected).toEqual(["openai/a", "anthropic/b"]);
+		expect(calls.map((profile) => profile.model)).toEqual([
+			"openai/a",
+			"anthropic/b",
+		]);
+		expect(results.map((result) => [result.name, result.model, result.effort])).toEqual([
+			["security-a", "openai/a", "high"],
+			["security-b", "anthropic/b", "high"],
+		]);
+	});
+
 	it("gate is satisfied only when every required review approves", async () => {
 		const passing = [
 			{

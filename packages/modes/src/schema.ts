@@ -79,7 +79,11 @@ export interface SubAgentSpec {
 	persona: string;
 	/** Optional per-deliverable specialization of the persona's focus. */
 	focus?: string;
-	/** Effort override; defaults to the persona's default. */
+	/** Optional exact reviewer-pool model choice. */
+	model?: string;
+	/** Required rationale when this persona is intentionally run on another model. */
+	modelJustification?: string;
+	/** Effort override; defaults through reviewer policy/persona behavior. */
 	effort?: ThinkingLevel;
 	/** "review" = verdict-gated; "helper" = info scout. Default "review". */
 	kind?: "review" | "helper";
@@ -781,6 +785,40 @@ export function validatePlanShape(
 						`deliverable \`${g.id}\`: agent \`${agent.name}\` after references unknown \`${ref}\``,
 					);
 				}
+			}
+		}
+
+		// Review panel identity/model policy.
+		const reviewerNames = new Set<string>();
+		const personaModels = new Map<string, Set<string>>();
+		for (const reviewer of g.subAgents ?? []) {
+			if (reviewerNames.has(reviewer.name)) {
+				problems.push(
+					`deliverable \`${g.id}\`: duplicate reviewer name \`${reviewer.name}\``,
+				);
+			}
+			reviewerNames.add(reviewer.name);
+			if (!reviewer.model) continue;
+			const models = personaModels.get(reviewer.persona) ?? new Set<string>();
+			models.add(reviewer.model);
+			personaModels.set(reviewer.persona, models);
+		}
+		for (const [persona, models] of personaModels) {
+			if (models.size > 2) {
+				problems.push(
+					`deliverable \`${g.id}\`: persona \`${persona}\` uses more than two distinct models`,
+				);
+			}
+			if (
+				models.size > 1 &&
+				!(g.subAgents ?? []).some(
+					(item) =>
+						item.persona === persona && item.modelJustification?.trim(),
+				)
+			) {
+				problems.push(
+					`deliverable \`${g.id}\`: cross-model persona \`${persona}\` requires modelJustification`,
+				);
 			}
 		}
 

@@ -1,9 +1,17 @@
 // The research fan-out and the readiness gate, against a fake subagents
 // capability and a fake ask surface: parallel spawn shapes, digest delivery
-// with full reports in session scratch, the dig tool, timeout stops, and the
+// with full reports in <planDir>/research/, the dig tool (engine and
+// worker-env paths), the report index helpers, timeout stops, and the
 // phase flip.
 
-import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -22,10 +30,15 @@ import {
 	createReadinessTool,
 	createResearchTool,
 	extractDigest,
+	listResearchReports,
+	RESEARCH_INDEX_HEADER,
 	type ResearchDeps,
+	refsInText,
 	renderPlanOutline,
+	renderResearchIndex,
+	reportsNotInText,
 	researchLabel,
-	researchScratchDir,
+	researchReportsDir,
 } from "../packages/modes/src/research.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import { planPhase } from "../packages/modes/src/schema.js";
@@ -105,14 +118,12 @@ function makeDeps(
 ): {
 	deps: ResearchDeps;
 	planDir: string;
-	scratchDir: string;
+	reportsDir: string;
 	engine: PlanEngine;
 } {
 	const planDir = mkdtempSync(join(tmpdir(), "research-"));
-	// Isolate the scratch dir per test by pinning the session dir env.
-	process.env.PI_CODING_AGENT_SESSION_DIR = mkdtempSync(
-		join(tmpdir(), "research-session-"),
-	);
+	// A leaked worker env var would reroute dig away from the engine's plan.
+	delete process.env.PI_MAESTRO_PLAN_DIR;
 	const engine = overrides.engine?.() ?? engineWithPlan();
 	const deps: ResearchDeps = {
 		engine: () => engine,
@@ -124,7 +135,7 @@ function makeDeps(
 	return {
 		deps,
 		planDir,
-		scratchDir: researchScratchDir(engine.get().slug),
+		reportsDir: researchReportsDir(planDir),
 		engine,
 	};
 }
@@ -153,7 +164,7 @@ async function run(
 }
 
 describe("research tool", () => {
-	it("fans out one agent per question, writes full reports to scratch, delivers digests", async () => {
+	it("fans out one agent per question, writes full reports to the plan dir, delivers digests", async () => {
 		const { calls, capability } = fakeCapability(async (call) => {
 			const q = call.prompt.split("\n")[2];
 			return {
@@ -161,7 +172,7 @@ describe("research tool", () => {
 				summary: `Full detail about ${q}, lots of it.\n\n## Digest\nDIGEST for ${q}`,
 			};
 		});
-		const { deps, scratchDir } = makeDeps({ subagents: () => capability });
+		const { deps, reportsDir } = makeDeps({ subagents: () => capability });
 		const tool = createResearchTool(deps);
 
 		const result = await run(tool, {
@@ -177,10 +188,10 @@ describe("research tool", () => {
 		expect(calls[1].profile.profile).toBe("research");
 		expect(calls[1].prompt).toContain("How does Exa deep search work?");
 
-		// FULL reports land in the session scratch (by ref), with frontmatter.
-		const files = readdirSync(scratchDir).sort();
+		// FULL reports land in <planDir>/research/ (by ref), with frontmatter.
+		const files = readdirSync(reportsDir).sort();
 		expect(files).toHaveLength(2);
-		const first = readFileSync(join(scratchDir, files[0]), "utf8");
+		const first = readFileSync(join(reportsDir, files[0]), "utf8");
 		expect(first).toContain("ref:");
 		expect(first).toContain("Full detail about");
 
@@ -199,14 +210,14 @@ describe("research tool", () => {
 				? { status: "failed", error: "child exploded" }
 				: { status: "succeeded", summary: "ok\n\n## Digest\nfine" },
 		);
-		const { deps, scratchDir } = makeDeps({ subagents: () => capability });
+		const { deps, reportsDir } = makeDeps({ subagents: () => capability });
 		const result = await run(createResearchTool(deps), {
 			questions: [{ question: "will fail" }, { question: "will pass" }],
 		});
 		const text = result.content[0].text;
 		expect(text).toContain("child exploded");
 		expect(text).toContain("fine");
-		const files = existsSync(scratchDir) ? readdirSync(scratchDir) : [];
+		const files = existsSync(reportsDir) ? readdirSync(reportsDir) : [];
 		expect(files).toHaveLength(1); // only the passing report persisted
 	});
 
@@ -225,6 +236,26 @@ describe("research tool", () => {
 		const bad = await run(dig, { ref: "no-such-ref" });
 		expect(bad.content[0].text).toContain("no research report");
 		expect(bad.content[0].text).toContain("what-storage-does-pi-use"); // lists available
+	});
+
+	it("dig works engine-less via PI_MAESTRO_PLAN_DIR (the worker path)", async () => {
+		const { capability } = fakeCapability(async () => ({
+			status: "succeeded",
+			summary: "Deep dive into auth.\n\n## Digest\ntokens are minted in core",
+		}));
+		const { deps, planDir } = makeDeps({ subagents: () => capability });
+		await run(createResearchTool(deps), {
+			questions: [{ question: "How does auth work?" }],
+		});
+		// A worker has no engine — only the env var its spawner set.
+		process.env.PI_MAESTRO_PLAN_DIR = planDir;
+		try {
+			const dig = createDigTool({ ...deps, engine: () => undefined });
+			const good = await run(dig, { ref: "how-does-auth-work" });
+			expect(good.content[0].text).toContain("Deep dive into auth.");
+		} finally {
+			delete process.env.PI_MAESTRO_PLAN_DIR;
+		}
 	});
 
 	it("passes the watchdog policy to the runner via the spawn profile", async () => {
@@ -443,5 +474,48 @@ describe("helpers", () => {
 		expect(outline).toContain("Build clamp.");
 		expect(outline).toContain("deliverable clamp");
 		expect(outline).toContain("implement — src/clamp.ts");
+	});
+});
+
+describe("research report index helpers", () => {
+	function writeReport(dir: string, ref: string, question: string): void {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(
+			join(dir, `${ref}.md`),
+			`---\nquestion: ${JSON.stringify(question)}\nkind: codebase\nref: ${ref}\n---\n\nBody of ${ref}.\n`,
+		);
+	}
+
+	it("lists reports sorted by ref with questions from frontmatter", () => {
+		const dir = join(mkdtempSync(join(tmpdir(), "research-idx-")), "research");
+		writeReport(dir, "zeta", "Z question?");
+		writeReport(dir, "alpha", "A question?");
+		const reports = listResearchReports(dir);
+		expect(reports.map((r) => r.ref)).toEqual(["alpha", "zeta"]);
+		expect(reports[0].question).toBe("A question?");
+		expect(reports[0].kind).toBe("codebase");
+	});
+
+	it("renders the index with dig guidance, or undefined when empty", () => {
+		const dir = join(mkdtempSync(join(tmpdir(), "research-idx-")), "research");
+		expect(renderResearchIndex(dir)).toBeUndefined();
+		writeReport(dir, "auth-flow", "How does auth work?");
+		const index = renderResearchIndex(dir);
+		expect(index).toContain(RESEARCH_INDEX_HEADER);
+		expect(index).toContain("dig(ref)");
+		expect(index).toContain(
+			"- [ref: auth-flow] How does auth work? (codebase)",
+		);
+	});
+
+	it("reportsNotInText returns only refs the frozen doc does not cover", () => {
+		const dir = join(mkdtempSync(join(tmpdir(), "research-idx-")), "research");
+		writeReport(dir, "covered", "old news?");
+		writeReport(dir, "fresh", "new finding?");
+		const frozen = "…doc…\n- [ref: covered] old news? (codebase)\n…end…";
+		expect(refsInText(frozen)).toEqual(new Set(["covered"]));
+		expect(reportsNotInText(dir, frozen).map((r) => r.ref)).toEqual(["fresh"]);
+		// No frozen doc → everything is post-freeze.
+		expect(reportsNotInText(dir, undefined)).toHaveLength(2);
 	});
 });

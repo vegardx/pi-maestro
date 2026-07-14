@@ -8,6 +8,8 @@ import {
 	FOCUS_HEADER,
 	PRIOR_WORK_FRAME,
 	PRIOR_WORK_HEADER,
+	RESEARCH_REFS_FRAME,
+	RESEARCH_REFS_HEADER,
 	type SeedSummaries,
 	TASKS_FRAME,
 	TASKS_FRAME_SCRATCH,
@@ -312,6 +314,75 @@ describe("buildSeed section ordering + framing", () => {
 				summaries: summaries(),
 			}),
 		).toThrow(/ghost/);
+	});
+});
+
+describe("buildSeed research refs (post-freeze)", () => {
+	it("emits the framed section between Findings and Tasks, sorted by ref", () => {
+		const deliverable = makeDeliverable({
+			dependsOn: ["core"],
+			agents: [makeAgent()],
+		});
+		const seed = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries([["core", "Core done."]]),
+			researchRefs: [
+				{ ref: "zeta-cache", question: "How does the cache key work?" },
+				{ ref: "auth-flow", question: "How does auth work?" },
+			],
+		});
+		expect(seed).toContain(RESEARCH_REFS_HEADER);
+		expect(seed).toContain(RESEARCH_REFS_FRAME);
+		expect(seed.indexOf(RESEARCH_REFS_HEADER)).toBeGreaterThan(
+			seed.indexOf(PRIOR_WORK_HEADER),
+		);
+		expect(seed.indexOf(RESEARCH_REFS_HEADER)).toBeLessThan(
+			seed.indexOf(TASKS_HEADER),
+		);
+		// Sorted by ref regardless of input order.
+		expect(seed.indexOf("[ref: auth-flow]")).toBeLessThan(
+			seed.indexOf("[ref: zeta-cache]"),
+		);
+		expect(seed).toContain("[ref: auth-flow] How does auth work?");
+	});
+
+	it("input order never leaks into the bytes", () => {
+		const deliverable = makeDeliverable();
+		const refs = [
+			{ ref: "b-ref", question: "b?" },
+			{ ref: "a-ref", question: "a?" },
+			{ ref: "c-ref", question: "c?" },
+		];
+		const a = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries(),
+			researchRefs: refs,
+		});
+		const b = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries(),
+			researchRefs: [...refs].reverse(),
+		});
+		expect(a).toBe(b);
+	});
+
+	it("is omitted entirely when there are no refs", () => {
+		const deliverable = makeDeliverable();
+		const seed = buildSeed({
+			plan: makePlan([deliverable]),
+			deliverable,
+			agentName: "worker",
+			summaries: summaries(),
+			researchRefs: [],
+		});
+		expect(seed).not.toContain(RESEARCH_REFS_HEADER);
+		expect(seed.startsWith(TASKS_HEADER)).toBe(true);
 	});
 });
 

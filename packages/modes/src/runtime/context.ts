@@ -42,7 +42,7 @@ import { auditPlan, renderAudit } from "../exec/recovery.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { panelTopologyGaps } from "../personas.js";
 import { computeActiveTools } from "../policy.js";
-import { clearResearchScratch, type ResearchRunView } from "../research.js";
+import type { ResearchRunView } from "../research.js";
 import {
 	type Deliverable,
 	deliverableWorkspace,
@@ -695,9 +695,9 @@ export function createRuntimeContext(
 					}
 				},
 				// The settled card (onEvent) is the recap now; onAllSettled
-				// refreshes the footer, clears the agent widget, and wipes the
-				// plan's research scratch (full reports are throwaway once the
-				// plan has shipped).
+				// refreshes the footer and clears the agent widget. Research
+				// reports are NOT wiped — they live in the plan dir and stay
+				// dig()-able across arcs (carry-forward advertises exactly that).
 				// Gate disagreements go to the MAESTRO first (triage: one
 				// send-back with guidance, or escalate with a recommendation);
 				// the human decides genuine disagreements. Override still
@@ -708,8 +708,6 @@ export function createRuntimeContext(
 				onAllSettled: () => {
 					rt.invalidateFooter?.();
 					syncAgentWidget(rt, ctx);
-					const eng = rt.engine;
-					if (eng) clearResearchScratch(eng.get().slug);
 					// The arc is over: every deliverable is terminal. Return to
 					// PLAN mode — the maestro ends the arc standing at the
 					// /handoff doorway (or ready to extend the plan).

@@ -23,6 +23,7 @@ import type {
 } from "./engine.js";
 import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
 import { getPersona, PERSONA_IDS } from "./personas.js";
+import { renderResearchIndex, researchReportsDir } from "./research.js";
 import type {
 	AgentMode,
 	AgentSpec,
@@ -709,12 +710,18 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 					"execution has started — the knowledge base is frozen (rewriting it would invalidate every agent's cache prefix)",
 				);
 			}
-			const outPath = join(plansRoot(), plan.slug, "base-knowledge.jsonl");
+			const planDir = join(plansRoot(), plan.slug);
+			const outPath = join(planDir, "base-knowledge.jsonl");
+			// Mechanical: the ref index of on-disk research reports is appended
+			// by the system, not authored — agents dig(ref) full reports on
+			// demand instead of the doc carrying every deep-dive.
+			const researchIndex = renderResearchIndex(researchReportsDir(planDir));
 			try {
 				buildKnowledgeSession({
 					content: params.content,
 					repoPath: plan.repoPath,
 					outPath,
+					...(researchIndex ? { researchIndex } : {}),
 				});
 			} catch (e) {
 				const message = e instanceof Error ? e.message : String(e);
@@ -723,7 +730,9 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 				);
 			}
 			return ok(
-				`Knowledge base written to ${outPath}. All agents will fork from it; it freezes when /implement runs.`,
+				`Knowledge base written to ${outPath}${
+					researchIndex ? " (research index auto-appended)" : ""
+				}. All agents will fork from it; it freezes when /implement runs.`,
 				{},
 			);
 		},

@@ -45,6 +45,12 @@ export const FOCUS_FRAME =
 	"> This is YOUR assignment. Everything above is context; this section is " +
 	"what you were spawned to do.";
 
+export const RESEARCH_REFS_HEADER = "# Research Since the Knowledge Base Froze";
+export const RESEARCH_REFS_FRAME =
+	"> Full reports exist for these — they are NOT in your Codebase Reference " +
+	"(they landed after it froze). Expand one with dig(ref) when your work " +
+	"touches its area.";
+
 // ─── Seed assembly ───────────────────────────────────────────────────────────
 
 export interface SeedSummaries {
@@ -52,6 +58,11 @@ export interface SeedSummaries {
 	deliverables: ReadonlyMap<string, string>;
 	/** Summaries from agents that already ran in this deliverable, keyed by name. */
 	agents: ReadonlyMap<string, string>;
+}
+
+export interface SeedResearchRef {
+	readonly ref: string;
+	readonly question: string;
 }
 
 export interface BuildSeedInput {
@@ -66,12 +77,19 @@ export interface BuildSeedInput {
 	 * function of its inputs (cache stability), so no filesystem reads here.
 	 */
 	policyNote?: string;
+	/**
+	 * Research refs that landed AFTER the knowledge base froze (its Research
+	 * Index covers everything before). Caller-computed (no FS reads here);
+	 * emitted sorted by ref so map/list order never leaks into the bytes.
+	 */
+	researchRefs?: readonly SeedResearchRef[];
 }
 
 /**
  * Assemble the framed seed for one agent. Fixed section order:
  * Prior Work (dependsOn array order) → Findings from Earlier Review
- * (topological agent order) → Your Tasks (worker) / Your Focus (support).
+ * (topological agent order) → Research Since the Knowledge Base Froze
+ * (sorted by ref) → Your Tasks (worker) / Your Focus (support).
  * Iteration order of the summary maps never leaks into the output.
  */
 export function buildSeed(input: BuildSeedInput): string {
@@ -109,6 +127,20 @@ export function buildSeed(input: BuildSeedInput): string {
 	}
 	if (findings.length > 0) {
 		sections.push([FINDINGS_HEADER, FINDINGS_FRAME, ...findings].join("\n\n"));
+	}
+
+	// # Research Since the Knowledge Base Froze — post-freeze refs, by ref.
+	const refs = [...(input.researchRefs ?? [])].sort((a, b) =>
+		a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0,
+	);
+	if (refs.length > 0) {
+		sections.push(
+			[
+				RESEARCH_REFS_HEADER,
+				RESEARCH_REFS_FRAME,
+				refs.map((r) => `- [ref: ${r.ref}] ${r.question}`).join("\n"),
+			].join("\n\n"),
+		);
 	}
 
 	// Assignment — worker gets the deliverable's tasks; support agents their focus.

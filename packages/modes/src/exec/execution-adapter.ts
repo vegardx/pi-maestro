@@ -28,6 +28,7 @@ import {
 	requiredGateSatisfied,
 } from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
+import { reportsNotInText, researchReportsDir } from "../research.js";
 import {
 	deliverableWorkspace,
 	repoFor,
@@ -44,6 +45,7 @@ import {
 	openDisputed,
 	type ReviewLedger,
 } from "./findings.js";
+import { readKnowledgeSession } from "./knowledge.js";
 import {
 	buildAgentSessionFile,
 	buildSpawnSpec,
@@ -431,21 +433,30 @@ export class ExecutionAdapter {
 					const policyNote = [commitNote, setupNote]
 						.filter(Boolean)
 						.join("\n\n");
+					const knowledgeSessionPath = join(
+						this.opts.planDir,
+						"base-knowledge.jsonl",
+					);
+					// Post-freeze research refs: reports on disk that the frozen
+					// knowledge doc's Research Index does not cover. They ride the
+					// per-agent seed (after the shared prefix), so later workers see
+					// the expanding picture without the base ever changing bytes.
+					const researchRefs = reportsNotInText(
+						researchReportsDir(this.opts.planDir),
+						this.readKnowledgeContent(knowledgeSessionPath),
+					).map((r) => ({ ref: r.ref, question: r.question }));
 					const seed = buildSeed({
 						plan: this.engine.get(),
 						deliverable,
 						agentName: spawnOpts.agentName,
 						summaries: this.collectSeedSummaries(spawnOpts.deliverableId),
 						...(policyNote ? { policyNote } : {}),
+						...(researchRefs.length > 0 ? { researchRefs } : {}),
 					});
 
 					// Build session file (JSONL): fork the plan's frozen knowledge
 					// session when it exists (shared cache prefix), then append
 					// modes state + seed.
-					const knowledgeSessionPath = join(
-						this.opts.planDir,
-						"base-knowledge.jsonl",
-					);
 					const session = buildAgentSessionFile({
 						agentKey,
 						seed,
@@ -509,6 +520,7 @@ export class ExecutionAdapter {
 						agentDir,
 						sessionDir: agentSessionDir,
 						token: this.token,
+						planDir: this.opts.planDir,
 					},
 					kickoffMessage,
 					crashFile: this.crashFileFor(sessionName),
@@ -1900,6 +1912,20 @@ export class ExecutionAdapter {
 			} else if (!state.blocked) {
 				this.blockedLogged.delete(deliverableId);
 			}
+		}
+	}
+
+	/**
+	 * The frozen knowledge doc's content (its Research Index tells us which
+	 * refs the base already covers), or undefined when absent or invalid —
+	 * then ALL on-disk reports count as post-freeze and ride the seed.
+	 */
+	private readKnowledgeContent(path: string): string | undefined {
+		if (!existsSync(path)) return undefined;
+		try {
+			return readKnowledgeSession(path).content;
+		} catch {
+			return undefined;
 		}
 	}
 

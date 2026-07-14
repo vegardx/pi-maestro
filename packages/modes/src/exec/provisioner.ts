@@ -281,6 +281,11 @@ export interface SpawnEnv {
 	sessionDir: string;
 	/** Run token — prevents wire-crossing between concurrent maestros. */
 	token: string;
+	/**
+	 * The plan directory. Workers use it to reach `<planDir>/research/` —
+	 * the `dig` tool's report source (they have no plan engine of their own).
+	 */
+	planDir: string;
 }
 
 export interface BuildSpawnSpecOpts {
@@ -362,6 +367,7 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 		PI_MAESTRO_AGENT_ID: opts.env.agentId,
 		PI_MAESTRO_AGENT_MODE: opts.env.agentMode,
 		PI_MAESTRO_TOKEN: opts.env.token,
+		PI_MAESTRO_PLAN_DIR: opts.env.planDir,
 		PI_CODING_AGENT_DIR: opts.env.agentDir ?? defaultAgentDir(),
 		PI_CODING_AGENT_SESSION_DIR: opts.env.sessionDir,
 	};

@@ -55,12 +55,14 @@ import {
 } from "../schema.js";
 import { appendModesState, collectBudgetText } from "../session.js";
 import {
+	getImplementOverrides,
 	type ImplementOverrides,
 	readChildExtensions,
 	readModesCompactionSettings,
 	readWorktreeSetupSettings,
 	setImplementOverrides,
 } from "../settings.js";
+import { resolveSpawnModelSafe } from "../spawn-model.js";
 import {
 	type ExecutionState,
 	initialModesState,
@@ -682,6 +684,15 @@ export function createRuntimeContext(
 				planDir: join(plansRoot(), activeEngine.get().slug),
 				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 				worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
+				resolveWorkerModel: async (choice) => {
+					const authored = getImplementOverrides();
+					const resolved = await resolveSpawnModelSafe(ctx, {
+						role: "worker",
+						model: choice.model ?? authored?.agentModel,
+						effort: choice.effort ?? authored?.agentThinking,
+					});
+					return { modelId: resolved.modelId, effort: resolved.effort };
+				},
 				onPlanChanged: () => rt.emitPlanChanged(),
 				onAgentStateChanged: (id, state) => {
 					usageLedger.record({ kind: "agent", id }, state.tokens);
@@ -857,8 +868,6 @@ export function parseImplementFlags(
 	const parts = args.split(/\s+/);
 	let agentModel: string | undefined;
 	let agentThinking: string | undefined;
-	let analyzeModel: string | undefined;
-	let analyzeThinking: string | undefined;
 
 	for (let i = 0; i < parts.length; i++) {
 		const p = parts[i];
@@ -870,14 +879,6 @@ export function parseImplementFlags(
 			agentThinking = p.slice("--thinking=".length);
 		} else if (p === "--thinking" && parts[i + 1]) {
 			agentThinking = parts[++i];
-		} else if (p.startsWith("--analyze-model=")) {
-			analyzeModel = p.slice("--analyze-model=".length);
-		} else if (p === "--analyze-model" && parts[i + 1]) {
-			analyzeModel = parts[++i];
-		} else if (p.startsWith("--analyze-thinking=")) {
-			analyzeThinking = p.slice("--analyze-thinking=".length);
-		} else if (p === "--analyze-thinking" && parts[i + 1]) {
-			analyzeThinking = parts[++i];
 		}
 	}
 
@@ -886,17 +887,11 @@ export function parseImplementFlags(
 		agentThinking && VALID_THINKING.has(agentThinking)
 			? (agentThinking as ImplementOverrides["agentThinking"])
 			: undefined;
-	const at =
-		analyzeThinking && VALID_THINKING.has(analyzeThinking)
-			? (analyzeThinking as ImplementOverrides["analyzeThinking"])
-			: undefined;
 
-	if (!agentModel && !wt && !analyzeModel && !at) return undefined;
+	if (!agentModel && !wt) return undefined;
 	return {
 		agentModel,
 		agentThinking: wt,
-		analyzeModel,
-		analyzeThinking: at,
 	};
 }
 

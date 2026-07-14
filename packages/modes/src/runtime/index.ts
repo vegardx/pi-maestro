@@ -11,8 +11,8 @@ import type {
 import {
 	CAPABILITIES,
 	EVENTS,
-	type ModeName,
 	type ModelRole,
+	type ModeName,
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
@@ -54,7 +54,10 @@ export { PLAN_CONTAINER };
 async function roleSelection(
 	ctx: ExtensionContext,
 	role: ModelRole,
-	choice?: { model?: string; effort?: import("@vegardx/pi-contracts").ThinkingLevel },
+	choice?: {
+		model?: string;
+		effort?: import("@vegardx/pi-contracts").ThinkingLevel;
+	},
 ) {
 	const resolved = await resolveSpawnModelSafe(ctx, { role, ...choice });
 	return {
@@ -118,8 +121,7 @@ export function createModesRuntime(
 		},
 		researchToolsPath: () =>
 			join(repoRoot, "packages/research-tools/src/index.ts"),
-		resolveRoleModel: (ctx, role, choice) =>
-			roleSelection(ctx, role, choice),
+		resolveRoleModel: (ctx, role, choice) => roleSelection(ctx, role, choice),
 		watchdog: (ctx) => readResearchWatchdogSettings(ctx.cwd),
 		onRunStarted: (run, ctx) => {
 			rt.researchRuns.set(run.id, run);
@@ -239,9 +241,11 @@ export function createModesRuntime(
 				},
 				cwd: () => process.cwd(),
 				resolveModel: async (ctx, spec) => {
-					const resolved = await roleSelection(ctx, "reviewer", spec
-						? { model: spec.model, effort: spec.effort }
-						: undefined);
+					const resolved = await roleSelection(
+						ctx,
+						"reviewer",
+						spec ? { model: spec.model, effort: spec.effort } : undefined,
+					);
 					return { model: resolved.model, effort: resolved.effort };
 				},
 				report: (roundKind, results, ledger) => {

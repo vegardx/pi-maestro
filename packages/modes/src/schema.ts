@@ -812,8 +812,7 @@ export function validatePlanShape(
 			if (
 				models.size > 1 &&
 				!(g.subAgents ?? []).some(
-					(item) =>
-						item.persona === persona && item.modelJustification?.trim(),
+					(item) => item.persona === persona && item.modelJustification?.trim(),
 				)
 			) {
 				problems.push(

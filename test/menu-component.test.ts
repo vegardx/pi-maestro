@@ -66,7 +66,7 @@ beforeEach(() => {
 		join(root, "agent", "settings.json"),
 		JSON.stringify({
 			models: {
-				profiles: { opus: { targets: ["anthropic/sonnet"] } },
+				profiles: { opus: { targets: ["anthropic/sonnet"], roles: {} } },
 			},
 		}),
 	);
@@ -78,14 +78,14 @@ afterEach(() => {
 });
 
 describe("ConfigMenuComponent", () => {
-	it("builds name + targets + plan + work/review/fast rows for a profile", () => {
+	it("builds name, targets, plan, and curated role rows for a profile", () => {
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
 		expect(rowKeyAt(c, 0)).toBe("@name.opus");
 		expect(rowKeyAt(c, 1)).toBe("opus.@targets");
 		expect(rowKeyAt(c, 2)).toBe("opus.plan");
-		expect(rowKeyAt(c, 3)).toBe("opus.work");
-		expect(rowKeyAt(c, 4)).toBe("opus.review");
-		expect(rowKeyAt(c, 5)).toBe("opus.fast");
+		expect(rowKeyAt(c, 3)).toBe("opus.worker");
+		expect(rowKeyAt(c, 4)).toBe("opus.reviewer");
+		expect(rowKeyAt(c, 11)).toBe("opus.delegate");
 	});
 
 	it("navigates with SS3 arrows (application-cursor mode, e.g. outside tmux)", () => {
@@ -107,12 +107,12 @@ describe("ConfigMenuComponent", () => {
 		expect(modeOf(c)).toBe("targets");
 	});
 
-	it("Enter on the work row opens the tier model picker", () => {
+	it("Enter on the worker row opens the role model picker", () => {
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
 		c.handleInput(KEY_DOWN); // targets
 		c.handleInput(KEY_DOWN); // plan
 		c.handleInput(KEY_DOWN); // work
-		expect(rowKeyAt(c, cursorOf(c))).toBe("opus.work");
+		expect(rowKeyAt(c, cursorOf(c))).toBe("opus.worker");
 		c.handleInput(KEY_ENTER);
 		expect(modeOf(c)).toBe("tier-pick-model");
 	});
@@ -122,11 +122,11 @@ describe("ConfigMenuComponent", () => {
 		expect(() => c.render(100)).not.toThrow();
 	});
 
-	it("picking a model + effort for a tier persists to settings", () => {
+	it("picking a model + effort for a role persists to settings", () => {
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
 		// Navigate to the review row (name,targets,plan,work,review).
 		for (let i = 0; i < 4; i++) c.handleInput(KEY_DOWN);
-		expect(rowKeyAt(c, cursorOf(c))).toBe("opus.review");
+		expect(rowKeyAt(c, cursorOf(c))).toBe("opus.reviewer");
 		c.handleInput(KEY_ENTER); // open model picker (cursor 0 = "= plan", 1 = sonnet, 2 = o3)
 		expect(modeOf(c)).toBe("tier-pick-model");
 		c.handleInput(KEY_DOWN); // → sonnet
@@ -139,7 +139,9 @@ describe("ConfigMenuComponent", () => {
 		const saved = JSON.parse(
 			readFileSync(join(root, "agent", "settings.json"), "utf8"),
 		);
-		expect(saved.models.profiles.opus.review.model).toBe("openai/o3");
+		expect(saved.models.profiles.opus.roles.reviewer.models).toEqual([
+			"openai/o3",
+		]);
 	});
 
 	it("windows the box to the viewport and keeps the cursor visible", () => {
@@ -190,15 +192,17 @@ describe("ConfigMenuComponent", () => {
 			JSON.stringify({
 				packages: ["/ext/custom-provider", "/ext/other-infra"],
 				extensionConfig: {},
-				models: { profiles: { opus: { targets: ["anthropic/sonnet"] } } },
+				models: {
+					profiles: { opus: { targets: ["anthropic/sonnet"], roles: {} } },
+				},
 			}),
 		);
 		const c = new ConfigMenuComponent(fakeCtx(), NOOP_PALETTE, () => {});
-		// 6 profile rows (name/targets/plan/work/review/fast), then the toggles.
-		expect(rowKeyAt(c, 6)).toBe("@childext./ext/custom-provider");
-		expect(rowKeyAt(c, 7)).toBe("@childext./ext/other-infra");
+		// 12 profile rows (name/targets/plan + nine roles), then toggles.
+		expect(rowKeyAt(c, 12)).toBe("@childext./ext/custom-provider");
+		expect(rowKeyAt(c, 13)).toBe("@childext./ext/other-infra");
 
-		for (let i = 0; i < 6; i++) c.handleInput(KEY_DOWN);
+		for (let i = 0; i < 12; i++) c.handleInput(KEY_DOWN);
 		c.handleInput(" "); // toggle on
 		let saved = JSON.parse(
 			readFileSync(join(root, "agent", "settings.json"), "utf8"),

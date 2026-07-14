@@ -133,6 +133,10 @@ describe("execution adapter — lifecycle correctness", () => {
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
@@ -780,6 +784,10 @@ describe("crash-cap fail fires once", () => {
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
 			onPlanChanged: () => {},
 		});
 		await adapter.start();

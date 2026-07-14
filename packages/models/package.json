@@ -3,15 +3,14 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Background-model tier resolution (fast/normal/heavy).",
+	"description": "Authenticated ordered role-pool model resolution.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@vegardx/pi-contracts": "*",
-		"@vegardx/pi-settings": "*"
+		"@vegardx/pi-contracts": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

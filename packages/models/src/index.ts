@@ -1,37 +1,25 @@
-// @vegardx/pi-models — tier-based model resolution via profiles.
+// @vegardx/pi-models — authenticated ordered role-pool resolution.
 
 export {
 	getModelMeta,
 	type ModelMeta,
 	shortModelName,
 } from "./model-meta.js";
+export { type ParsedModelSpec, parseModelSpec } from "./model-spec.js";
 export {
 	activeProfile,
 	type EffectiveRolePool,
 	effectiveRolePool,
 	isModelId,
-	LEGACY_TIER_ROLES,
 	readModelsConfig,
-	resolveTierConfig,
-	type TierResolution,
 } from "./profiles.js";
-export {
-	parseModelSpec,
-	type ResolvedBackgroundModel,
-	resolveModel,
-	resolveModelWithin,
-} from "./resolver.js";
 export {
 	type AuthenticatedRoleCandidate,
 	type ExactRoleChoice,
 	type ResolvedRoleModelFull,
 	type RolePoolResolution,
 	type RolePoolResolveOptions,
-	type RoleResolveOptions,
-	resolveRoleModel,
-	resolveRoleModelWithin,
 	resolveRolePool,
-	resolveTierModel,
+	resolveRolePoolWithin,
 	supportedEfforts,
-	validateRoleModelConfig,
 } from "./role-resolver.js";

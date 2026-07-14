@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
-import { getModelMeta, resolveModelWithin } from "@vegardx/pi-models";
+import { getModelMeta, resolveRolePoolWithin } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
@@ -312,19 +312,36 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				);
 				return;
 			}
-			const sessionModel = ctx.model
-				? `${ctx.model.provider}/${ctx.model.id}`
-				: undefined;
-			const meta = sessionModel ? getModelMeta(ctx, sessionModel) : undefined;
+			const verifierResolution = await resolveRolePoolWithin(
+				ctx,
+				{ role: "verifier", requireApiKey: true },
+				30_000,
+			);
+			const verifier = verifierResolution.selected;
+			if (!verifier) {
+				ctx.ui.notify(
+					`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
+					"error",
+				);
+				return;
+			}
+			const meta = getModelMeta(ctx, verifier.modelId);
 			ctx.ui.notify(
 				`Verifying ${targets.length} deliverable(s) — read-only agents are checking the actual diffs…`,
 				"info",
 			);
 			const entries = await runVerification(plan, targets, {
-				spawn: (prompt, profile) => subagents.spawn(prompt, profile),
-				...(meta
-					? { display: { model: meta.shortName, adaptive: meta.adaptive } }
-					: {}),
+				spawn: (prompt, profile) =>
+					subagents.spawn(prompt, {
+						...profile,
+						model: verifier.modelId,
+						...(verifier.effort ? { thinking: verifier.effort } : {}),
+					}),
+				display: {
+					model: meta.shortName,
+					adaptive: meta.adaptive,
+					effort: verifier.effort,
+				},
 				onStarted: (view) => {
 					rt.researchRuns.set(view.id, view);
 					sendAgentEvent(pi, {
@@ -700,17 +717,18 @@ type ForwardSummaryInput = {
 
 /**
  * Create a forward-looking summary generator bound to the extension context.
- * Uses the modes normal-tier model for the LLM call.
+ * Uses the plan-summarizer role policy default for the LLM call.
  */
 function _createForwardSummaryGenerator(
 	ctx: ExtensionContext,
 ): (input: ForwardSummaryInput) => Promise<string> {
 	return async (input) => {
-		const resolved = await resolveModelWithin(
+		const resolution = await resolveRolePoolWithin(
 			ctx,
-			{ name: "modes", tier: "normal", requireApiKey: true },
+			{ role: "plan-summarizer", requireApiKey: true },
 			30_000,
 		);
+		const resolved = resolution.selected;
 		if (!resolved?.apiKey) {
 			throw new Error("No model available for summary generation");
 		}

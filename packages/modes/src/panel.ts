@@ -46,9 +46,10 @@ export interface RunPanelDeps {
 	/** The worker's worktree — reviewers read the change here (read-only). */
 	readonly cwd: string;
 	/** Resolve each reviewer independently against reviewer policy. */
-	readonly resolveModel?: (
-		spec: SubAgentSpec,
-	) => Promise<{ model: string; effort?: import("@vegardx/pi-contracts").ThinkingLevel }>;
+	readonly resolveModel?: (spec: SubAgentSpec) => Promise<{
+		model: string;
+		effort?: import("@vegardx/pi-contracts").ThinkingLevel;
+	}>;
 	readonly timeoutMs?: number;
 }
 

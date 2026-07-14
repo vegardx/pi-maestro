@@ -103,9 +103,9 @@ export {
 } from "./session.js";
 export {
 	getImplementOverrides,
-	getModeRoleModel,
 	type ImplementOverrides,
 	readModesCompactionSettings,
+	resolveInternalRoleModel,
 	setImplementOverrides,
 } from "./settings.js";
 export {

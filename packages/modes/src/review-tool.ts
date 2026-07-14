@@ -552,8 +552,8 @@ async function rerunFailed(
 		subagents,
 		cwd: d.cwd(),
 		resolveModel: d.resolveModel
-				? (spec) => d.resolveModel!(ctx, spec)
-				: undefined,
+			? (spec) => d.resolveModel!(ctx, spec)
+			: undefined,
 		timeoutMs: d.timeoutMs?.(),
 	});
 	const byName = new Map(repaired.map((r) => [r.name, r]));

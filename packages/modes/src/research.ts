@@ -184,14 +184,9 @@ const ResearchParams = Type.Object({
 			),
 			effort: Type.Optional(
 				Type.Union(
-					[
-						"off",
-						"minimal",
-						"low",
-						"medium",
-						"high",
-						"xhigh",
-					].map((level) => Type.Literal(level)),
+					["off", "minimal", "low", "medium", "high", "xhigh"].map((level) =>
+						Type.Literal(level),
+					),
 					{
 						description:
 							"Exact effort from the role pool and selected model's supported levels. Prefer raising effort before selecting a costlier alternate model.",

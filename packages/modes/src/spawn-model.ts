@@ -2,10 +2,7 @@
 // Authenticates exact choices against the active ordered role pool.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type {
-	ModelRole,
-	ThinkingLevel,
-} from "@vegardx/pi-contracts";
+import type { ModelRole, ThinkingLevel } from "@vegardx/pi-contracts";
 import {
 	type ResolvedRoleModelFull,
 	resolveRolePool,
@@ -87,7 +84,9 @@ export async function resolveSpawnModelSafe(
 		timer = setTimeout(
 			() =>
 				reject(
-					new SpawnModelResolutionError(request, ["resolution timed out after 5s"]),
+					new SpawnModelResolutionError(request, [
+						"resolution timed out after 5s",
+					]),
 				),
 			5_000,
 		);

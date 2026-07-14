@@ -1,9 +1,7 @@
 // Interactive /maestro menu — TUI overlay for model profiles + scoped settings.
 //
-// A profile owns a SET of /model targets (exclusive across profiles) and pins the
-// work/review/fast tiers; `plan` always tracks the session model. Activation is
-// derived — the profile whose targets include the current /model is active. There
-// is no "activate" action here; switching /model switches the profile.
+// Model profiles own an exclusive SET of /model targets and ordered role pools.
+// Activation is derived from the live model; no active-profile flag is persisted.
 
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -19,7 +17,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { PINNABLE_TIERS } from "@vegardx/pi-contracts";
+import { MODEL_ROLES } from "@vegardx/pi-contracts";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { settingsRegistry } from "./extension.js";
 import { readLayeredExtensionConfig } from "./reader.js";
@@ -152,14 +150,20 @@ function sessionKey(extension: string, key: string): string {
 
 // ─── Build sections ─────────────────────────────────────────────────────────
 
-/** Human display for a tier config: pinned model+effort, or "= plan". */
+/** Human display for an ordered role pool. */
 function tierDisplay(
 	ctx: ExtensionContext,
-	tc: { model?: string; effort?: string } | undefined,
+	config:
+		| { models?: readonly string[]; efforts?: readonly string[] }
+		| undefined,
 ): string {
-	if (!tc?.model) return "= plan";
-	const name = resolveModelName(ctx, tc.model);
-	return tc.effort ? `${name} · ${tc.effort}` : name;
+	if (!config?.models?.length) return "= session";
+	const names = config.models
+		.map((id) => resolveModelName(ctx, id))
+		.join(" → ");
+	return config.efforts?.length
+		? `${names} · ${config.efforts.join(" → ")}`
+		: names;
 }
 
 function resolveModelName(ctx: ExtensionContext, modelId: string): string {
@@ -256,13 +260,13 @@ function buildSections(ctx: ExtensionContext): Section[] {
 				globalOnly: true,
 				profileRow: true,
 			});
-			// pinnable tiers
-			for (const tier of PINNABLE_TIERS) {
+			// ordered role pools
+			for (const tier of MODEL_ROLES) {
 				profileRows.push({
 					label: `  ${tier}`,
 					extension: "@profiles",
 					key: `${name}.${tier}`,
-					global: tierDisplay(ctx, profile[tier]),
+					global: tierDisplay(ctx, profile.roles[tier]),
 					project: undefined,
 					session: undefined,
 					globalOnly: true,
@@ -421,7 +425,7 @@ export class ConfigMenuComponent implements Component, Focusable {
 	private optionCursor = 0;
 	private statusMessage = "";
 	private pendingDeleteProfile = "";
-	// Tier picker state
+	// Role pool picker state
 	private tierPickerModels: PickerModel[] = [];
 	private tierPickerEfforts: Array<{ level: string; desc?: string }> = [];
 	private tierPickerCursor = 0;
@@ -979,7 +983,7 @@ export class ConfigMenuComponent implements Component, Focusable {
 			if (row.key.endsWith(".@targets")) {
 				this.openTargetsPicker();
 			} else if (!row.key.endsWith(".plan")) {
-				this.openTierModelPicker(); // work/review/fast (plan is read-only)
+				this.openTierModelPicker(); // editable role pool (plan is read-only)
 			}
 			return;
 		}
@@ -1104,7 +1108,7 @@ export class ConfigMenuComponent implements Component, Focusable {
 		this.statusMessage = "Delete cancelled";
 	}
 
-	// ─── Tier picker ────────────────────────────────────────────────────────
+	// ─── Role pool picker ───────────────────────────────────────────────────
 
 	private openTierModelPicker(): void {
 		const models = pickerModels(this.ctx);
@@ -1207,8 +1211,14 @@ export class ConfigMenuComponent implements Component, Focusable {
 		const tier = row.key.slice(dot + 1);
 		updateSettingsFile("global", this.ctx.cwd, undefined, (obj) => {
 			const profile = ensureProfileObject(obj, profileName);
-			if (model) profile[tier] = { model, ...(effort ? { effort } : {}) };
-			else delete profile[tier];
+			const roles = isPlainObject(profile.roles) ? profile.roles : {};
+			if (model)
+				roles[tier] = {
+					models: [model],
+					...(effort ? { efforts: [effort] } : {}),
+				};
+			else delete roles[tier];
+			profile.roles = roles;
 		});
 		this.statusMessage = model
 			? `✓ ${profileName}.${tier} = ${this.tierPickerModelName}${effort ? ` · ${effort}` : ""}`

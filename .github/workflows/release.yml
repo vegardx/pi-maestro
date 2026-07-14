@@ -1,0 +1,39 @@
+# Semantic release on merge to main: analyze conventional commits, tag, and
+# publish a GitHub release with generated notes. No changelog file, no npm
+# publish, no version-bump commits — the version lives in tags/releases only.
+# This workflow owns the main-branch check run (ci.yml covers pull requests),
+# so nothing broken ever gets tagged.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: check + release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # semantic-release needs the full history + tags to find the last release.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # biome -> tsc -> boundary linter -> feature-flag contract -> vitest -> smoke
+      - run: npm run check
+      - run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

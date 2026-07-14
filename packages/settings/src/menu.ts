@@ -504,13 +504,17 @@ function targetsEditor(
 					if (enabled) {
 						const owner = owners.get(modelId);
 						if (owner && owner !== profile) {
-							const ownerTargets = readProfileTargets(ctx, owner)[scope] ?? [];
-							writeProfileTargets(
-								ctx,
-								owner,
-								scope,
-								ownerTargets.filter((value) => value !== modelId),
-							);
+							for (const ownerScope of PERSISTENT_SCOPES) {
+								const ownerTargets = readProfileTargets(ctx, owner)[ownerScope];
+								if (ownerTargets?.includes(modelId)) {
+									writeProfileTargets(
+										ctx,
+										owner,
+										ownerScope,
+										ownerTargets.filter((value) => value !== modelId),
+									);
+								}
+							}
 						}
 						selected = [
 							...selected.filter((value) => value !== modelId),
@@ -558,13 +562,11 @@ function profileDetail(
 			currentValue: profile,
 			submenu: (_value, renameDone) =>
 				makeInput(profile, (name) => {
-					if (name?.trim() && name.trim() !== profile)
-						renameProfile(
-							ctx,
-							profile,
-							name.trim(),
-							targets.source === "project" ? "project" : "global",
-						);
+					if (name?.trim() && name.trim() !== profile) {
+						for (const scope of PERSISTENT_SCOPES) {
+							renameProfile(ctx, profile, name.trim(), scope);
+						}
+					}
 					renameDone(name?.trim());
 					done(name?.trim());
 				}),
@@ -605,31 +607,18 @@ function profilesMenu(
 		currentValue: profileSummary(ctx, profile),
 		submenu: (_value, profileDone) => profileDetail(ctx, profile, profileDone),
 	}));
-	items.push({
-		id: "create",
-		label: "Create profile",
-		currentValue: "project or global",
-		submenu: (_value, createDone) =>
-			selectComponent(
-				PERSISTENT_SCOPES.map((scope) => ({ value: scope, label: scope })),
-				(scope) => {
-					if (!scope) return createDone();
-					return createDone(scope);
-				},
-			),
-	});
-	// Core SettingItem submenus only return a value; use a second standard input
-	// row after scope selection to keep creation keyboard-native and scriptable.
-	items.push({
-		id: "create-name",
-		label: "New profile name",
-		currentValue: "enter name (project)",
-		submenu: (_value, createDone) =>
-			makeInput("", (name) => {
-				if (name?.trim()) createProfile(ctx, name.trim(), "project");
-				createDone(name?.trim());
-			}),
-	});
+	for (const scope of PERSISTENT_SCOPES) {
+		items.push({
+			id: `create:${scope}`,
+			label: `Create ${scope} profile`,
+			currentValue: "enter name",
+			submenu: (_value, createDone) =>
+				makeInput("", (name) => {
+					if (name?.trim()) createProfile(ctx, name.trim(), scope);
+					createDone(name?.trim());
+				}),
+		});
+	}
 	return settingsComponent(
 		items,
 		() => done(`${modelProfileKeys(ctx).length} profile(s)`),
@@ -658,8 +647,8 @@ export function childExtensionCandidates(agentDir = getAgentDir()): string[] {
 }
 
 function selectedChildExtensions(ctx: ExtensionContext): string[] {
-	const { global, project } = readLayeredExtensionConfig(ctx.cwd);
-	const value = project.modes?.childExtensions ?? global.modes?.childExtensions;
+	const { global } = readLayeredExtensionConfig(ctx.cwd);
+	const value = global.modes?.childExtensions;
 	const candidates = new Set(childExtensionCandidates());
 	return Array.isArray(value)
 		? value.filter(

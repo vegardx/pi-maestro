@@ -36,17 +36,7 @@ function parseProfileKey(key: string): ProfileKey | undefined {
 	if (parts.length === 4 && parts[3] === "targets")
 		return { profile: parts[2], kind: "targets" };
 	if (
-		parts.length === 7 &&
-		parts[3] === "roles" &&
-		isModelRole(parts[4]) &&
-		(parts[5] === "models" || parts[5] === "efforts")
-	) {
-		// Accept the documented path without a trailing segment. The length guard
-		// above is retained below for compatibility with shell-added empty pieces.
-		return { profile: parts[2], kind: "role", role: parts[4], leaf: parts[5] };
-	}
-	if (
-		parts.length === 6 &&
+		(parts.length === 6 || (parts.length === 7 && parts[6] === "")) &&
 		parts[3] === "roles" &&
 		isModelRole(parts[4]) &&
 		(parts[5] === "models" || parts[5] === "efforts")

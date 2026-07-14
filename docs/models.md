@@ -205,4 +205,4 @@ Maestro build; current code ignores them.
 
 `MAESTRO_UI_TRACE=1` (or a file path) appends overlay/widget lifecycle events.
 
-<!-- verified against maestro-settings-ui -->
+<!-- verified against eb4ef95ff0cf -->

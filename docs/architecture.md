@@ -170,4 +170,4 @@ Persistent state lives under the pi agent directory:
   `SettingsList`, `SelectList`, and `DynamicBorder`; domain-specific components
   are limited to focused target/extension multi-selects.
 
-<!-- verified against maestro-settings-ui -->
+<!-- verified against eb4ef95ff0cf -->

@@ -135,8 +135,11 @@ is still available for gaps that surface while structuring.
 
 ## Workflow
 
-1. **Structure** — Call \`deliverable(action="add", title="...", workerMode="full")\`.
-   Each deliverable = one branch + one PR. Use \`dependsOn\` for ordering.
+1. **Structure** — Call \`deliverable(action="add", items=[{id, title, body, dependsOn}, …])\`
+   ONCE to create ALL deliverables in a single batched call (not one \`add\` per
+   deliverable). Each deliverable = one branch + one PR. Give each an explicit
+   \`id\` and reference those ids in \`dependsOn\` for ordering — sibling refs
+   resolve to the minted ids. List them dependencies-first.
    Work not tied to any repo (creating repos, provisioning infra, ops) is a
    \`workspace="scratch"\` deliverable: it runs in a plain directory, has no
    branch or PR, and ships when its review gate passes. If a scratch

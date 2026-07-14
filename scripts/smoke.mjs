@@ -23,6 +23,32 @@ const SPAWN_ONLY = ["packages/research-tools/src/index.ts"];
 const entries = [...(pkg.pi?.extensions ?? []), ...SPAWN_ONLY];
 const jiti = createJiti(import.meta.url);
 
+// /maestro is intentionally pinned to pi's core list primitives. This static
+// smoke catches accidental regressions to a private cursor/matrix renderer.
+const maestroMenuSource = readFileSync(
+	join(ROOT, "packages/settings/src/menu.ts"),
+	"utf8",
+);
+for (const primitive of [
+	"SettingsList",
+	"SelectList",
+	"DynamicBorder",
+	"getSettingsListTheme",
+	"getSelectListTheme",
+]) {
+	if (!maestroMenuSource.includes(primitive)) {
+		console.error(`  ✗ /maestro no longer uses core ${primitive}`);
+		process.exit(1);
+	}
+}
+if (maestroMenuSource.includes("class ConfigMenuComponent")) {
+	console.error(
+		"  ✗ /maestro restored the removed bespoke ConfigMenuComponent",
+	);
+	process.exit(1);
+}
+console.log("  ✓ /maestro uses pinned core settings primitives");
+
 let failed = 0;
 for (const entry of entries) {
 	const abs = join(ROOT, entry);

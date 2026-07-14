@@ -519,7 +519,32 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					const gId = params.deliverableId ?? deps.agentDeliverableId?.() ?? "";
 					switch (params.action) {
 						case "add": {
-							if (!params.title) return error("add requires title");
+							// Batch: title-preflight is atomic (a bad item rejects the
+							// whole batch before any add); the RPC adds are sequential, so
+							// a mid-loop RPC failure is reported with a count, not rolled
+							// back — the common failure (a missing title) still can't leave
+							// a partial batch.
+							if (params.items && params.items.length > 0) {
+								if (params.items.some((i) => !i.title?.trim())) {
+									return error("every batch item requires a title");
+								}
+								const ids: string[] = [];
+								for (const i of params.items) {
+									const r = await bridge.planMutate("addTask", gId, {
+										title: i.title,
+										body: i.body,
+										kind: i.kind as WorkItemKind | undefined,
+									});
+									if (!r.success) {
+										return error(
+											`${r.error ?? "mutation failed"} (added ${ids.length}/${params.items.length})`,
+										);
+									}
+									ids.push(r.taskId ?? "?");
+								}
+								return ok(`✓ ${ids.length} tasks: ${ids.join(", ")}`, {});
+							}
+							if (!params.title) return error("add requires title or items");
 							const res = await bridge.planMutate("addTask", gId, {
 								title: params.title,
 								body: params.body,

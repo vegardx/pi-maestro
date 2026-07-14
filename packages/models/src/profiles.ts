@@ -207,9 +207,10 @@ function materializeProfile(
 			};
 		}
 	}
-	const targets = project?.targetsPresent
-		? project.targets
-		: (global?.targets ?? project?.targets ?? []);
+	const targets =
+		project?.targetsPresent && project.targets.length > 0
+			? project.targets
+			: (global?.targets ?? project?.targets ?? []);
 	const profile: ProfileConfig = {
 		targets,
 		roles,

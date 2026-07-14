@@ -274,7 +274,8 @@ describe("buildAgentSessionFile", () => {
 		const { header, entries } = parseSessionFile(result.path);
 		expect(header.id).toBe(result.sessionId);
 		expect(header.id).not.toBe("base-abc");
-		expect(header.parentSession).toBe("base-abc");
+		// pi convention: parentSession is the source file's path, not its id.
+		expect(header.parentSession).toBe(knowledgeFile);
 		expect(header.cwd).toBe("/work/tree");
 
 		// Deterministic order: knowledge entries, modes state, seed.

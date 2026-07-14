@@ -101,3 +101,60 @@ describe("task batch add", () => {
 		]);
 	});
 });
+
+// The `task` tool schema is shared with workers, which run engine-less and
+// forward mutations over the RPC bridge. Batch add must work there too.
+describe("task batch add (agent/RPC path)", () => {
+	type MutateCall = { title?: string; body?: string; kind?: string };
+
+	function runAgent(
+		bridge: { planMutate: (a: string, g: string, p: MutateCall) => unknown },
+		params: unknown,
+	): Promise<Res> {
+		const tool = createTaskTool({
+			engine: () => undefined,
+			agentBridge: () => bridge as never,
+			agentDeliverableId: () => "d1",
+		});
+		return tool.execute(
+			"t",
+			params as never,
+			undefined as never,
+			undefined as never,
+			{} as never,
+		) as Promise<Res>;
+	}
+
+	it("forwards each item over the bridge, in order", async () => {
+		const calls: MutateCall[] = [];
+		let n = 0;
+		const bridge = {
+			planMutate: async (_a: string, _g: string, p: MutateCall) => {
+				calls.push(p);
+				return { success: true, taskId: `t${++n}` };
+			},
+		};
+		const res = await runAgent(bridge, {
+			action: "add",
+			items: [{ title: "First" }, { title: "Second", body: "b" }],
+		});
+		expect(res.details?.error).toBeUndefined();
+		expect(calls.map((c) => c.title)).toEqual(["First", "Second"]);
+	});
+
+	it("rejects a titleless batch before any RPC (all-or-nothing)", async () => {
+		let called = false;
+		const bridge = {
+			planMutate: async () => {
+				called = true;
+				return { success: true, taskId: "t1" };
+			},
+		};
+		const res = await runAgent(bridge, {
+			action: "add",
+			items: [{ title: "Good" }, { title: " " }],
+		});
+		expect(res.details?.error).toContain("title");
+		expect(called).toBe(false); // nothing forwarded
+	});
+});

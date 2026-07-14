@@ -46,7 +46,7 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open hierarchical Maestro settings. Subcommands: show, get, set, reset, profiles.",,
+				"Open hierarchical Maestro settings. Subcommands: show, get, set, reset, profiles.",
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {

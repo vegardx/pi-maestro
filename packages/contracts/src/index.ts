@@ -13,6 +13,7 @@ export * from "./models.js";
 export * from "./modes.js";
 export * from "./plan.js";
 export * from "./runs.js";
+export * from "./session-model-overrides.js";
 export * from "./settings.js";
 export * from "./ship.js";
 export * from "./usage.js";

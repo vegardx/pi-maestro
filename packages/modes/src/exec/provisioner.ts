@@ -165,7 +165,7 @@ async function cloneNodeModules(
 	const dest = join(worktreePath, "node_modules");
 	if (!existsSync(src) || existsSync(dest)) return false;
 	try {
-		await execFileAsync("cp", ["-c", "-R", src, dest]);
+		await execFileAsync("/bin/cp", ["-c", "-R", src, dest]);
 		return true;
 	} catch {
 		// Non-APFS or cp without clone support — fall back to setupCommand.

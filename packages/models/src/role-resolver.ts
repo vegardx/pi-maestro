@@ -20,11 +20,7 @@ import {
 	getConfigObject,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
-import {
-	effectiveRolePool,
-	readModelsConfig,
-	resolveTierConfig,
-} from "./profiles.js";
+import { effectiveRolePool, readModelsConfig } from "./profiles.js";
 import { parseModelSpec } from "./resolver.js";
 
 const EFFORTS: readonly ThinkingLevel[] = [
@@ -200,7 +196,9 @@ export async function resolveRolePool(
 
 	let selectedCandidate: AuthenticatedRoleCandidate | undefined;
 	if (choice.model) {
-		selectedCandidate = candidates.find((item) => item.modelId === choice.model);
+		selectedCandidate = candidates.find(
+			(item) => item.modelId === choice.model,
+		);
 		if (!selectedCandidate) {
 			const errors = [
 				error(
@@ -367,9 +365,7 @@ export async function resolveRoleModel(
 				source: source ?? "role-config",
 				tier: opts.tier,
 				configuredModels: [authored.model],
-				candidates: [
-					{ modelId: authored.model, supportedEfforts: supported },
-				],
+				candidates: [{ modelId: authored.model, supportedEfforts: supported }],
 				allowedEfforts: supported,
 				provenance: {},
 				validationErrors: [],

@@ -2,10 +2,7 @@
 // dependency-neutral contracts package: settings can mutate it and model
 // resolution can consume it without either extension importing the other.
 
-import type {
-	ModelRole,
-	SessionProfileRoleOverride,
-} from "./models.js";
+import type { ModelRole, SessionProfileRoleOverride } from "./models.js";
 
 const roleOverrides = new Map<string, SessionProfileRoleOverride>();
 
@@ -14,9 +11,7 @@ function key(profile: string, role: ModelRole): string {
 	return JSON.stringify([profile, role]);
 }
 
-function copy(
-	patch: SessionProfileRoleOverride,
-): SessionProfileRoleOverride {
+function copy(patch: SessionProfileRoleOverride): SessionProfileRoleOverride {
 	return {
 		...(patch.models ? { models: [...patch.models] } : {}),
 		...(patch.efforts ? { efforts: [...patch.efforts] } : {}),

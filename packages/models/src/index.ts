@@ -7,8 +7,12 @@ export {
 } from "./model-meta.js";
 export {
 	activeProfile,
+	effectiveRolePool,
+	isModelId,
+	LEGACY_TIER_ROLES,
 	readModelsConfig,
 	resolveTierConfig,
+	type EffectiveRolePool,
 	type TierResolution,
 } from "./profiles.js";
 export {
@@ -18,10 +22,16 @@ export {
 	resolveModelWithin,
 } from "./resolver.js";
 export {
+	type AuthenticatedRoleCandidate,
+	type ExactRoleChoice,
 	type ResolvedRoleModelFull,
+	type RolePoolResolution,
+	type RolePoolResolveOptions,
 	type RoleResolveOptions,
 	resolveRoleModel,
 	resolveRoleModelWithin,
+	resolveRolePool,
 	resolveTierModel,
+	supportedEfforts,
 	validateRoleModelConfig,
 } from "./role-resolver.js";

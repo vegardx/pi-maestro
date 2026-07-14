@@ -63,14 +63,8 @@ export default defineExtension(
 		doc: "Replaces default compaction with a work-focused summary optimised for continuing the active task.",
 	},
 	(pi, maestro) => {
-		// Declare configurable settings for /maestro menu
-		maestro.capabilities.get(CAPABILITIES.settings)?.declare("smart-compact", [
-			{
-				key: "models.summarizer.effort",
-				label: "Summarizer effort",
-				type: "thinking",
-			},
-		]);
+		// Model/effort selection belongs to the compact-summarizer role pool;
+		// only ordinary compaction knobs are declared under Advanced.
 
 		// In-flight guard for the proactive compactAt trigger (see turn_end).
 		let compacting = false;

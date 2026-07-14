@@ -3,7 +3,7 @@
 // subagent producing a numbered, file:line verdict. This is inspiration-from-
 // Claude-Code/Codex/opencode in CONTENT only — pi does not load .md agent
 // files; a persona resolves to a SpawnProfile (read-only tools + the persona
-// body as appendSystemPrompt). Reviewers always run on the `review` tier — the
+// body as appendSystemPrompt). Reviewers resolve the direct `reviewer` role; the
 // plan composes a per-deliverable panel from these; the worker runs it and the
 // executor gates on the `gating` ones' verdicts.
 

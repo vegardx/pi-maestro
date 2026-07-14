@@ -60,8 +60,8 @@ needs the `gh` CLI.
   review, shipping, carry-forward, and every command.
 - [The review loop](docs/review-loop.md) — findings, the ledger,
   resolutions, verification, and the escalation ladder.
-- [Models & settings](docs/models.md) — the tier model, profiles, and the
-  settings surface.
+- [Models & settings](docs/models.md) — ordered role pools, profiles, scopes,
+  exact choices, and the hierarchical settings surface.
 - [Architecture](docs/architecture.md) — packages, boundaries, capabilities,
   and the runtime flow.
 

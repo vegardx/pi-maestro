@@ -28,7 +28,7 @@ Libraries:
   and model vocabulary. Depends on nothing.
 - `@vegardx/pi-core` — extension wrapper, capability registry, typed
   events, feature flags.
-- `@vegardx/pi-models` — tier/profile model resolution (see
+- `@vegardx/pi-models` — profile/role-pool model resolution (see
   [models.md](models.md)).
 - `@vegardx/pi-ui` — pure renderers and thin TUI component wrappers.
 - `@vegardx/pi-git` / `@vegardx/pi-github` — typed git/worktree and
@@ -88,7 +88,8 @@ graph TD
 ```
 
 (`settings ⇄ models` is a deliberate type-level coupling: settings persists
-the model vocabulary, models reads layered settings.)
+profile role pools and process-local typed overrides live in contracts; models
+reads layered settings and consumes those overrides.)
 
 ## Capabilities and events
 
@@ -162,7 +163,11 @@ Persistent state lives under the pi agent directory:
   ladder (worker → maestro → human).
 - **Plans out-detail the executor** — tasks carry file paths and
   signatures; workers follow instructions, they don't design.
-- **Summaries are self-describing and immutable** — cache-stable seeds for
-  downstream workers by construction.
+- **Direct role pools** — model-consuming paths resolve curated roles; ordered
+  exact models and efforts are layered session → project → global, with the
+  live session model as the final fallback. No runtime tier graph remains.
+- **Core settings presentation** — `/maestro` composes pi's pinned
+  `SettingsList`, `SelectList`, and `DynamicBorder`; domain-specific components
+  are limited to focused target/extension multi-selects.
 
-<!-- verified against 83bfcbe -->
+<!-- verified against maestro-settings-ui -->

@@ -104,6 +104,8 @@ export interface PanelReviewerSpec {
 	readonly name: string;
 	readonly persona: string;
 	readonly focus?: string;
+	readonly model?: string;
+	readonly modelJustification?: string;
 	readonly effort?: ThinkingLevel;
 	readonly kind?: "review" | "helper";
 	readonly required?: boolean;
@@ -192,6 +194,8 @@ export interface PanelVerdictEntry {
 	readonly verdict: PanelVerdict;
 	/** False when the reviewer failed to run / produced no verdict. */
 	readonly ok: boolean;
+	readonly model?: string;
+	readonly effort?: ThinkingLevel;
 	/**
 	 * The reviewer's findings report (clipped at the sender). Carried so the
 	 * maestro can show the HUMAN what is holding the gate — without it, the

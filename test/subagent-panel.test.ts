@@ -66,6 +66,25 @@ describe("sub-agent panel (engine)", () => {
 		expect(new Set(d?.subAgents?.map((s) => s.persona)).size).toBe(1);
 	});
 
+	it("persists a justified cross-model duplicate", () => {
+		const engine = engineWith();
+		engine.addSubAgent("oauth", {
+			name: "security-a",
+			persona: "security-audit",
+			model: "openai/a",
+		});
+		engine.addSubAgent("oauth", {
+			name: "security-b",
+			persona: "security-audit",
+			model: "anthropic/b",
+			modelJustification: "Independent provider audit",
+		});
+		expect(engine.get().deliverables[0].subAgents?.[1]).toMatchObject({
+			model: "anthropic/b",
+			modelJustification: "Independent provider audit",
+		});
+	});
+
 	it("rejects a duplicate instance name and removes by name", () => {
 		const engine = engineWith();
 		engine.addSubAgent("oauth", { name: "docs", persona: "documentation" });

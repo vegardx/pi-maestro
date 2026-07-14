@@ -36,17 +36,19 @@ export interface PanelResult {
 	/** The reviewer's full report (or an error line when it failed). */
 	readonly report: string;
 	readonly ok: boolean;
+	/** Exact resolved selection for verdict/ledger telemetry. */
+	readonly model?: string;
+	readonly effort?: import("@vegardx/pi-contracts").ThinkingLevel;
 }
 
 export interface RunPanelDeps {
 	readonly subagents: SubagentsCapabilityV1;
 	/** The worker's worktree — reviewers read the change here (read-only). */
 	readonly cwd: string;
-	/**
-	 * The `review` tier model id for every reviewer, or undefined when the tier
-	 * tracks the session model (⇒ inherit the default).
-	 */
-	readonly resolveModel?: () => Promise<string | undefined>;
+	/** Resolve each reviewer independently against reviewer policy. */
+	readonly resolveModel?: (
+		spec: SubAgentSpec,
+	) => Promise<{ model: string; effort?: import("@vegardx/pi-contracts").ThinkingLevel }>;
 	readonly timeoutMs?: number;
 }
 
@@ -81,8 +83,15 @@ async function runOne(
 		kind,
 	};
 
-	const model = await deps.resolveModel?.();
-	const profile = buildPersonaProfile(spec, { cwd: deps.cwd, model });
+	const resolved = await deps.resolveModel?.(spec);
+	const model = resolved?.model;
+	const profile = buildPersonaProfile(
+		{ ...spec, ...(resolved?.effort ? { effort: resolved.effort } : {}) },
+		{ cwd: deps.cwd, model },
+	);
+	if (resolved) {
+		Object.assign(base, { model: resolved.model, effort: resolved.effort });
+	}
 	if (!profile) {
 		return {
 			...base,

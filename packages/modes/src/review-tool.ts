@@ -57,10 +57,14 @@ export interface ReviewToolDeps {
 	readonly panelState: () => PanelState | Promise<PanelState>;
 	/** The worktree the reviewers/verifier read (usually process.cwd()). */
 	readonly cwd: () => string;
-	/** The `review` tier model (undefined ⇒ inherit the session default). */
+	/** Resolve reviewer policy; omitted spec is the fixed verifier default. */
 	readonly resolveModel?: (
 		ctx: ExtensionContext,
-	) => Promise<string | undefined>;
+		spec?: SubAgentSpec,
+	) => Promise<{
+		model: string;
+		effort?: import("@vegardx/pi-contracts").ThinkingLevel;
+	}>;
 	/** Report a completed run + the resulting ledger upward (ship gate). */
 	readonly report?: (
 		roundKind: "panel" | "verification",
@@ -215,7 +219,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		const firstPass = await runReviewPanel(panel, {
 			subagents,
 			cwd: d.cwd(),
-			resolveModel: d.resolveModel ? () => d.resolveModel!(ctx) : undefined,
+			resolveModel: d.resolveModel
+				? (spec) => d.resolveModel!(ctx, spec)
+				: undefined,
 			timeoutMs: d.timeoutMs?.(),
 		});
 		// Partial-round repair, inline: a failed reviewer must not force the
@@ -259,7 +265,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		const repaired = await runReviewPanel(failedSpecs, {
 			subagents,
 			cwd: d.cwd(),
-			resolveModel: d.resolveModel ? () => d.resolveModel!(ctx) : undefined,
+			resolveModel: d.resolveModel
+				? (spec) => d.resolveModel!(ctx, spec)
+				: undefined,
 			timeoutMs: d.timeoutMs?.(),
 		});
 		const merged = [
@@ -342,8 +350,11 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		}
 
 		const verifierName = `verifier-${applied.ledger.cycle + 1}`;
-		const model = await d.resolveModel?.(ctx);
-		const profile = buildVerifierProfile({ cwd: d.cwd(), model });
+		const resolvedVerifier = await d.resolveModel?.(ctx);
+		const profile = buildVerifierProfile({
+			cwd: d.cwd(),
+			model: resolvedVerifier?.model,
+		});
 		const prompt = buildVerifierPrompt(claims.map((e) => e));
 		const timeoutMs = d.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
 
@@ -540,7 +551,9 @@ async function rerunFailed(
 	const repaired = await runReviewPanel(failedSpecs, {
 		subagents,
 		cwd: d.cwd(),
-		resolveModel: d.resolveModel ? () => d.resolveModel!(ctx) : undefined,
+		resolveModel: d.resolveModel
+				? (spec) => d.resolveModel!(ctx, spec)
+				: undefined,
 		timeoutMs: d.timeoutMs?.(),
 	});
 	const byName = new Map(repaired.map((r) => [r.name, r]));

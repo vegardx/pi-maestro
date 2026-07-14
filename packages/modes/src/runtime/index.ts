@@ -238,11 +238,12 @@ export function createModesRuntime(
 					};
 				},
 				cwd: () => process.cwd(),
-				// Reviewers run on the `review` tier: a pinned distinct model
-				// (cross-model second opinion), or undefined to inherit the
-				// session model when review tracks plan.
-				resolveModel: async (ctx) =>
-					(await roleSelection(ctx, "reviewer")).model,
+				resolveModel: async (ctx, spec) => {
+					const resolved = await roleSelection(ctx, "reviewer", spec
+						? { model: spec.model, effort: spec.effort }
+						: undefined);
+					return { model: resolved.model, effort: resolved.effort };
+				},
 				report: (roundKind, results, ledger) => {
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
@@ -259,6 +260,8 @@ export function createModesRuntime(
 								required: r.required,
 								verdict: r.verdict,
 								ok: r.ok,
+								model: r.model,
+								effort: r.effort,
 								// The findings travel with the verdict so the maestro
 								// can show the human WHAT holds the gate.
 								report: clipReport(r.report),

@@ -372,6 +372,18 @@ const SubAgentParams = Type.Object({
 			description: "Specialize the persona for this deliverable.",
 		}),
 	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Exact provider/model id from the active reviewer pool. Omit for its default; normally raise effort before adding a second model.",
+		}),
+	),
+	modelJustification: Type.Optional(
+		Type.String({
+			description:
+				"Required when the same persona is duplicated across distinct models: explain why the extra spend/independent perspective is warranted.",
+		}),
+	),
 	effort: Type.Optional(
 		Type.String({
 			description: "How hard to look: low (quick sanity) … xhigh (deep audit).",
@@ -392,9 +404,11 @@ export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
 		label: "Panel",
 		description:
 			"Compose a deliverable's review/helper panel from the persona palette " +
-			`(${PERSONA_IDS.join(", ")}): add, remove, list. Reviewers run on the ` +
-			"review model; set effort (low…xhigh) for how hard to look and required " +
-			"to gate ship. The worker runs the panel.",
+			`(${PERSONA_IDS.join(", ")}): add, remove, list. Reviewers default to ` +
+			"the reviewer pool's first available model. Prefer raising effort before " +
+			"a second model; at most two distinct models may run one persona, and a " +
+			"cross-model duplicate requires unique names plus modelJustification. " +
+			"Set required to gate ship. The worker runs the panel.",
 		promptSnippet:
 			"panel — compose a deliverable's persona review panel (add/remove/list).",
 		parameters: SubAgentParams,
@@ -428,10 +442,37 @@ export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
 								params.persona,
 								existing.map((s) => s.name),
 							);
+						const samePersona = existing.filter(
+							(item) => item.persona === params.persona,
+						);
+						const distinctModels = new Set(
+							samePersona
+								.map((item) => item.model)
+								.filter((item): item is string => Boolean(item)),
+						);
+						if (params.model) distinctModels.add(params.model);
+						if (distinctModels.size > 2) {
+							return error(
+								`persona ${params.persona} may use at most two distinct models`,
+							);
+						}
+						if (
+							samePersona.length > 0 &&
+							params.model &&
+							!params.modelJustification?.trim()
+						) {
+							return error(
+								"duplicating a persona with an explicit model requires modelJustification",
+							);
+						}
 						const spec: SubAgentSpec = {
 							name,
 							persona: params.persona,
 							...(params.focus ? { focus: params.focus } : {}),
+							...(params.model ? { model: params.model } : {}),
+							...(params.modelJustification
+								? { modelJustification: params.modelJustification }
+								: {}),
 							...(params.effort
 								? { effort: params.effort as ThinkingLevel }
 								: {}),

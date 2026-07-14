@@ -1,121 +1,137 @@
-// Model configuration vocabulary: tiers, profiles, and per-role config.
-//
-// Shared by the model resolver and every extension that declares background
-// model roles. The settings layer reads/writes this shape; the resolver
-// consumes it at runtime.
+// Shared model-profile vocabulary. New configuration is role-first; the tier
+// shapes at the bottom of this file are compatibility input only.
 
 import type { ThinkingLevel } from "./runs.js";
 
-// ─── Tiers ───────────────────────────────────────────────────────────────────
+/** Stable, user-facing model roles. Additions are a public settings API change. */
+export const MODEL_ROLES = [
+	"worker",
+	"reviewer",
+	"research",
+	"advisor",
+	"classifier",
+	"plan-summarizer",
+	"compact-summarizer",
+	"verifier",
+	"delegate",
+] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
 
 /**
- * The four model tiers, named by intent (not cost):
- *   plan   — the maestro reasons & plans here; ALWAYS the session model (/model).
- *   work   — workers implement here.
- *   review — reviewers + advisor run here (cross-model second opinion).
- *   fast   — cheap mechanical subagents (classify, scout, quick research).
+ * Ordered allowlists for one role. The first item is the default. A present
+ * list must be non-empty and contain no duplicates; readers validate these
+ * invariants at trust boundaries.
  */
-export const TIERS = ["plan", "work", "review", "fast"] as const;
-export type Tier = (typeof TIERS)[number];
-
-/** Tiers a profile can pin. `plan` is implicit — always the live session model. */
-export const PINNABLE_TIERS = ["work", "review", "fast"] as const;
-export type PinnableTier = (typeof PINNABLE_TIERS)[number];
-
-// ─── Profiles ─────────────────────────────────────────────────────────────────
-
-/**
- * A single tier's model config within a profile. Absent `model` ⇒ "track plan"
- * (use the live session model). `effort` steers adaptive models / budgets fixed
- * ones.
- */
-export interface TierConfig {
-	readonly model?: string;
-	readonly effort?: ThinkingLevel;
+export interface ProfileRoleConfig {
+	readonly models?: readonly string[];
+	readonly efforts?: readonly ThinkingLevel[];
 }
 
-/**
- * A profile owns a SET of `/model` targets (an exclusive partition — each model
- * belongs to at most one profile) and pins the work/review/fast tiers. `plan` is
- * implicit = whichever target is currently live. Activation is DERIVED: the
- * active profile is the one whose `targets` include the session model.
- *
- * ```json
- * {
- *   "models": {
- *     "profiles": {
- *       "opus": {
- *         "targets": ["anthropic/claude-opus-4-8", "anthropic/claude-opus-4-7"],
- *         "work":   {},
- *         "review": { "model": "openai/gpt-5.5", "effort": "high" },
- *         "fast":   { "model": "anthropic/claude-haiku-4-5", "effort": "low" }
- *       }
- *     }
- *   }
- * }
- * ```
- */
+export type ProfileRoleMap = Readonly<
+	Partial<Record<ModelRole, ProfileRoleConfig>>
+>;
+
+/** Persistent profile selected by membership of the live `/model` in targets. */
 export interface ProfileConfig {
-	/** `"provider/id"` values that activate this profile (exclusive across profiles). */
 	readonly targets: readonly string[];
-	readonly work?: TierConfig;
-	readonly review?: TierConfig;
-	readonly fast?: TierConfig;
+	readonly roles: ProfileRoleMap;
+	/** @deprecated Compatibility input. New writers must use `roles`. */
+	readonly work?: LegacyTierConfig;
+	/** @deprecated Compatibility input. New writers must use `roles`. */
+	readonly review?: LegacyTierConfig;
+	/** @deprecated Compatibility input. New writers must use `roles`. */
+	readonly fast?: LegacyTierConfig;
 }
 
-/**
- * Top-level `models` key in settings.json. There is no `active` key — the active
- * profile is derived from the session model's membership in a profile's targets.
- */
 export interface ModelsConfig {
-	/** Named profiles, keyed by a user-chosen label. */
 	readonly profiles: Readonly<Record<string, ProfileConfig>>;
 }
 
-// ─── Per-role config ─────────────────────────────────────────────────────────
+/** A typed, leaf-wise session patch for one named profile and role. */
+export interface SessionProfileRoleOverride {
+	readonly models?: readonly string[];
+	readonly efforts?: readonly ThinkingLevel[];
+}
 
-/**
- * Per-role escape hatch, living at `extensionConfig.<ext>.models.<role>`. Roles
- * normally map to a tier (hardcoded), which resolves through the active profile;
- * this lets a power user pin one role to a specific model/effort. The `/maestro`
- * menu does not write these by default.
- */
-export interface RoleModelConfig {
-	/** Explicit `"provider/id"` — bypasses tier resolution entirely. */
-	readonly model?: string;
-	/** Reasoning effort level for this role. */
+export type ModelConfigScope = "global" | "project" | "session" | "legacy";
+
+export interface RolePoolLeafSource {
+	readonly scope: ModelConfigScope;
+	readonly profile: string;
+	readonly role: ModelRole;
+	readonly legacyTier?: LegacyPinnableTier;
+}
+
+export interface RolePoolSource {
+	readonly models?: RolePoolLeafSource;
+	readonly efforts?: RolePoolLeafSource;
+}
+
+export type RoleResolutionErrorCode =
+	| "explicit-model-not-allowed"
+	| "explicit-model-unavailable"
+	| "explicit-effort-not-allowed"
+	| "explicit-effort-unsupported"
+	| "no-model-available";
+
+export interface RoleResolutionError {
+	readonly code: RoleResolutionErrorCode;
+	readonly message: string;
+	readonly modelId?: string;
 	readonly effort?: ThinkingLevel;
 }
 
-/** Map of role name → config. Stored at `extensionConfig.<ext>.models`. */
+export interface ResolvedRoleCandidate {
+	readonly modelId: string;
+	readonly supportedEfforts: readonly ThinkingLevel[];
+}
+
+export type ResolutionSource = "profile" | "session";
+
+/** Successful role-pool selection metadata used by callers and diagnostics. */
+export interface ResolvedRoleModel {
+	readonly role: ModelRole;
+	readonly modelId: string;
+	readonly effort?: ThinkingLevel;
+	readonly source: ResolutionSource;
+	readonly profile?: string;
+	readonly configuredModels: readonly string[];
+	readonly candidates: readonly ResolvedRoleCandidate[];
+	readonly allowedEfforts: readonly ThinkingLevel[];
+	readonly provenance: RolePoolSource;
+	readonly validationErrors: readonly RoleResolutionError[];
+}
+
+// ─── Legacy compatibility input ─────────────────────────────────────────────
+
+/** @deprecated Use ModelRole and profile role pools. */
+export const TIERS = ["plan", "work", "review", "fast"] as const;
+/** @deprecated Use ModelRole. */
+export type Tier = (typeof TIERS)[number];
+/** @deprecated Use ModelRole. */
+export const PINNABLE_TIERS = ["work", "review", "fast"] as const;
+/** @deprecated Use ModelRole. */
+export type PinnableTier = (typeof PINNABLE_TIERS)[number];
+export type LegacyPinnableTier = PinnableTier;
+
+/** @deprecated Read-only compatibility shape for old profiles. */
+export interface LegacyTierConfig {
+	readonly model?: string;
+	readonly effort?: ThinkingLevel;
+}
+/** @deprecated Alias retained for source compatibility. */
+export type TierConfig = LegacyTierConfig;
+
+/** @deprecated Extension-local scalar role settings are compatibility input. */
+export interface RoleModelConfig {
+	readonly model?: string;
+	readonly effort?: ThinkingLevel;
+}
+/** @deprecated Extension-local scalar role settings are compatibility input. */
 export type RoleModelMap = Readonly<Record<string, RoleModelConfig>>;
 
-// ─── Role name constants ─────────────────────────────────────────────────────
-
+/** Legacy extension role names retained until runtime callers migrate. */
 export const MODES_ROLES = ["agent", "analyze", "classifier"] as const;
 export type ModesRole = (typeof MODES_ROLES)[number];
-
 export const COMPACT_ROLES = ["summarizer"] as const;
 export type CompactRole = (typeof COMPACT_ROLES)[number];
-
-// ─── Resolved output ─────────────────────────────────────────────────────────
-
-/** Source of the resolved model — indicates which priority layer won. */
-export type ResolutionSource = "explicit" | "env" | "profile" | "session";
-
-/**
- * Return type of `resolveRoleModel()`. Tells the caller what model to use,
- * at what effort level, and where the decision came from.
- */
-export interface ResolvedRoleModel {
-	/** The winning `"provider/id"` string. */
-	readonly modelId: string;
-	/** Effort/thinking level from the winning config layer. */
-	readonly effort?: ThinkingLevel;
-	/** Which priority layer provided this resolution. */
-	readonly source: ResolutionSource;
-	/** Which profile the model was resolved from (if source is "profile"). */
-	readonly profile?: string;
-	/** Which tier was used (if resolved via a profile/tier). */
-	readonly tier?: Tier;
-}

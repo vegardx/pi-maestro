@@ -347,6 +347,13 @@ export async function resolveRoleModel(
 	const role = TIER_ROLE[opts.tier ?? "work"];
 	const { merged } = readLayeredExtensionConfig(ctx.cwd);
 	const scalar = readRoleConfig(merged, opts.extension, opts.role);
+	const source = opts.explicit?.model
+		? "explicit"
+		: opts.env?.model
+			? "env"
+			: scalar?.model
+				? "role-config"
+				: undefined;
 	const authored = opts.explicit ?? opts.env ?? scalar;
 	if (authored?.model) {
 		const auth = await authenticate(ctx, authored.model, opts.requireApiKey);
@@ -357,7 +364,8 @@ export async function resolveRoleModel(
 				modelId: authored.model,
 				...auth,
 				effort: authored.effort,
-				source: "profile",
+				source: source ?? "role-config",
+				tier: opts.tier,
 				configuredModels: [authored.model],
 				candidates: [
 					{ modelId: authored.model, supportedEfforts: supported },
@@ -370,10 +378,15 @@ export async function resolveRoleModel(
 	}
 	const resolved = await resolveRolePool(ctx, {
 		role,
-		choice: authored?.effort ? { effort: authored.effort } : undefined,
 		requireApiKey: opts.requireApiKey,
 	});
-	return resolved.selected;
+	return resolved.selected
+		? {
+				...resolved.selected,
+				effort: authored?.effort ?? resolved.selected.effort,
+				tier: opts.tier,
+			}
+		: null;
 }
 
 /** @deprecated Direct tier facade retained until spawn callers migrate. */
@@ -410,7 +423,7 @@ export async function resolveTierModel(
 			requireApiKey: opts?.requireApiKey,
 		})
 	).selected;
-	return selected;
+	return selected ? { ...selected, tier } : null;
 }
 
 export async function resolveRoleModelWithin(

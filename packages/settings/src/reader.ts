@@ -24,7 +24,7 @@ export interface LayeredExtensionConfig {
 	merged: ExtensionConfigMap;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
@@ -97,7 +97,10 @@ function setPath(entry: ExtensionConfig, key: string, value: unknown): void {
 	current[parts.at(-1)!] = value;
 }
 
-function readPath(entry: ExtensionConfig | undefined, key: string): unknown {
+export function readPath(
+	entry: ExtensionConfig | undefined,
+	key: string,
+): unknown {
 	if (!entry) return undefined;
 	let current: unknown = entry;
 	for (const part of key.split(".")) {

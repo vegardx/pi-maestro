@@ -128,4 +128,4 @@ The net effect: reviewers are heard exactly once, every finding has an
 auditable fate (fixed, verified, waived, wont-fixed, or disputed-and-ruled),
 and the only loops left are bounded fix cycles with a budget.
 
-<!-- verified against maestro-settings-ui -->
+<!-- verified against eb4ef95ff0cf -->

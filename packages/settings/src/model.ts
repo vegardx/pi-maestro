@@ -22,7 +22,11 @@ import {
 	effectiveRolePool,
 	readModelsConfig,
 } from "@vegardx/pi-models";
-import { readLayeredExtensionConfig } from "./reader.js";
+import {
+	isPlainObject,
+	readLayeredExtensionConfig,
+	readPath,
+} from "./reader.js";
 import { updateSettingsFile, writeExtensionConfigKey } from "./writer.js";
 
 export const THINKING_LEVELS = [
@@ -43,22 +47,6 @@ export interface LayeredValue<T> {
 	readonly session?: T;
 	readonly effective?: T;
 	readonly source?: MaestroScope | "default";
-}
-
-export function isPlainObject(
-	value: unknown,
-): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-export function readPath(object: unknown, path: string): unknown {
-	let current = object;
-	for (const part of path.split(".")) {
-		if (!isPlainObject(current) || !Object.hasOwn(current, part))
-			return undefined;
-		current = current[part];
-	}
-	return current;
 }
 
 export function parseSettingValue(raw: string): SessionSettingValue {

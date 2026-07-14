@@ -79,6 +79,22 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		});
 	}
 
+	// Recon is command-only on re-entry (never part of the Shift+Tab cycle):
+	// the mode's whole point is that leaving it is a deliberate one-way step.
+	pi.registerCommand("recon", {
+		description: "Switch to Maestro recon mode (read-only research posture).",
+		handler: async (_args: string, ctx: ExtensionCommandContext) => {
+			if (rt.execution) {
+				ctx.ui.notify(
+					"Execution is running — recon is unavailable until it settles.",
+					"warning",
+				);
+				return;
+			}
+			rt.setMode("recon", ctx);
+		},
+	});
+
 	// Manual escape hatch for the readiness gate: flip the plan to structuring
 	// without waiting for the model to call `readiness`.
 	pi.registerCommand("ready", {
@@ -617,7 +633,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	});
 
 	pi.registerShortcut("shift+tab", {
-		description: "Cycle Maestro mode: hack → plan → auto.",
+		description:
+			"Cycle Maestro mode: plan ⇄ auto (recon and hack exit into plan).",
 		handler: (ctx) => rt.cycle(ctx),
 	});
 }

@@ -1,9 +1,12 @@
-// Permission modes. Ordered as the Shift+Tab cycle presents them.
+// Permission modes. MODE_NAMES is the Shift+Tab cycle (plan ⇄ auto); recon
+// and hack sit outside it — recon is the session-start research posture that
+// exits one-way into plan, hack is the /hack escape hatch, and both fall back
+// into the cycle at plan. `agent` is the hidden worker mode.
 
-export const MODE_NAMES = ["hack", "plan", "auto"] as const;
+export const MODE_NAMES = ["plan", "auto"] as const;
 
-/** All modes including hidden ones not in the user cycle. */
-export const ALL_MODES = ["hack", "plan", "auto", "agent"] as const;
+/** All modes including ones not in the user cycle. */
+export const ALL_MODES = ["recon", "plan", "auto", "hack", "agent"] as const;
 
 export type ModeName = (typeof ALL_MODES)[number];
 

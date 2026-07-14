@@ -17,7 +17,7 @@ import {
 	readModesCompactionDetails,
 	summaryHash,
 } from "../compaction.js";
-import { toolBlockedInPlanMode } from "../policy.js";
+import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
 import {
@@ -40,6 +40,7 @@ import {
 	buildHackModePreamble,
 	buildMaestroPreamble,
 	buildPlanModePreamble,
+	buildReconPreamble,
 } from "./preambles.js";
 
 // ─── Agent tool classes ──────────────────────────────────────────────────────
@@ -116,6 +117,12 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 							"\n",
 						)}\nAnswers arrive as a user message when committed. Work on what does not depend on them.`
 				: "";
+		if (rt.state.mode === "recon") {
+			const preamble = buildReconPreamble();
+			return {
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+			};
+		}
 		if (rt.state.mode === "plan") {
 			const preamble = buildPlanModePreamble(rt.engine);
 			// Post-handoff: the seed doc rides the system prompt (context-only —
@@ -188,8 +195,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.resetCalibration();
 		if (rt.state.activePlanSlug)
 			rt.engine = rt.loadEngine(rt.state.activePlanSlug);
-		// Auto-open a draft plan when starting in plan mode with no active plan
-		if (rt.state.mode === "plan" && !rt.engine) {
+		// Auto-open a draft plan when starting in plan/recon mode with no active
+		// plan. Recon's draft is invisible plumbing: it never surfaces (the plan
+		// tool is hidden there) but keys the research scratch dir so the
+		// research/dig loop works from turn one.
+		if ((rt.state.mode === "plan" || rt.state.mode === "recon") && !rt.engine) {
 			rt.openPlan(undefined, ctx);
 		}
 		rt.applyTools();
@@ -297,6 +307,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
 		if (
+			rt.state.mode !== "recon" &&
 			rt.state.mode !== "plan" &&
 			rt.state.mode !== "auto" &&
 			rt.state.mode !== "agent"
@@ -364,7 +375,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			return;
 		}
 		// In auto mode, non-bash tools are gated by the active-tools filter
-		// (+ bridge force-add for agents). Only block in plan mode.
+		// (+ bridge force-add for agents). Only block in recon/plan mode.
+		if (rt.state.mode === "recon") {
+			const reason = toolBlockedInReconMode(event.toolName);
+			if (reason) return { block: true, reason };
+		}
 		if (rt.state.mode === "plan") {
 			const reason = toolBlockedInPlanMode(
 				event.toolName,
@@ -411,8 +426,10 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			// the threshold (50%), and warns at 70/90 as the backstop.
 			contextFillLadder(rt, ctx);
 		}
-		if (rt.state.mode === "plan") {
-			rt.finalizeDraftPlan(ctx);
+		if (rt.state.mode === "plan" || rt.state.mode === "recon") {
+			// Recon drafts never gain deliverables, so finalize is a no-op there
+			// unless research force-materialized the plan dir.
+			if (rt.state.mode === "plan") rt.finalizeDraftPlan(ctx);
 			rt.askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;
 		}
@@ -547,9 +564,14 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	const snapshotSeen = new Set<string>();
 	pi.on("tool_execution_end", (event, ctx) => {
 		if (!event.isError || !rt.engine) return;
-		// Benign tool misses during planning/hacking are not crashes — snapshots
-		// exist to capture execution failures for recovery.
-		if (rt.state.mode === "plan" || rt.state.mode === "hack") return;
+		// Benign tool misses during recon/planning/hacking are not crashes —
+		// snapshots exist to capture execution failures for recovery.
+		if (
+			rt.state.mode === "recon" ||
+			rt.state.mode === "plan" ||
+			rt.state.mode === "hack"
+		)
+			return;
 		const snapshot = createCrashSnapshot(
 			{
 				error: event.result,

@@ -2,7 +2,10 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
-import { CAPABILITIES } from "@vegardx/pi-contracts";
+import {
+	CAPABILITIES,
+	resetSessionRoleOverrides,
+} from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
@@ -27,7 +30,12 @@ export default defineExtension(
 
 		let lastCtx: ExtensionContext | undefined;
 		pi.on("session_start", (_e, ctx) => {
+			resetSessionRoleOverrides();
 			lastCtx = ctx;
+		});
+		pi.on("session_shutdown", () => {
+			resetSessionRoleOverrides();
+			lastCtx = undefined;
 		});
 		pi.on("input", (_e, ctx) => {
 			lastCtx = ctx;

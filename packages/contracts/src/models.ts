@@ -86,7 +86,12 @@ export interface ResolvedRoleCandidate {
 	readonly supportedEfforts: readonly ThinkingLevel[];
 }
 
-export type ResolutionSource = "profile" | "session";
+export type ResolutionSource =
+	| "explicit"
+	| "env"
+	| "role-config"
+	| "profile"
+	| "session";
 
 /** Successful role-pool selection metadata used by callers and diagnostics. */
 export interface ResolvedRoleModel {
@@ -100,6 +105,8 @@ export interface ResolvedRoleModel {
 	readonly allowedEfforts: readonly ThinkingLevel[];
 	readonly provenance: RolePoolSource;
 	readonly validationErrors: readonly RoleResolutionError[];
+	/** @deprecated Populated only by compatibility tier callers. */
+	readonly tier?: Tier;
 }
 
 // ─── Legacy compatibility input ─────────────────────────────────────────────

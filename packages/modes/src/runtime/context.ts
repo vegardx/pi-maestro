@@ -177,6 +177,21 @@ export interface RuntimeContext {
 	runRecover(ctx: ExtensionContext): Promise<void>;
 }
 
+/**
+ * One-shot orientation instruction fired on the recon → plan toggle. This
+ * message (and the model's reply to it) IS the recon handoff: generated
+ * in-band from full context, visible to the user, cached as part of the
+ * message prefix — no seed document.
+ */
+const RECON_TO_PLAN_ORIENTATION =
+	"[Mode switch: recon → plan. Orient before planning: review the " +
+	"conversation and research so far, then reply with (1) a short summary " +
+	"of what we intend to build or do, and (2) a bullet list of the open " +
+	"questions that must be answered before a solid plan can form — noting " +
+	"for each whether research or only the user can answer it. If nothing " +
+	"is open, say so. Do not call readiness or fire research yet — wait for " +
+	"the user's reaction.]";
+
 export function createRuntimeContext(
 	pi: ExtensionAPI,
 	maestro: MaestroContext,
@@ -346,7 +361,9 @@ export function createRuntimeContext(
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {
 			// Entering plan mode without an active plan auto-opens a draft so the
 			// planning tools work immediately — no need for an explicit /plan.
-			if (mode === "plan" && !rt.engine && ctx) {
+			// Recon gets the same invisible draft: it keys the research scratch
+			// dir so research/dig work, but no plan tool ever surfaces it.
+			if ((mode === "plan" || mode === "recon") && !rt.engine && ctx) {
 				rt.openPlan(undefined, ctx);
 			}
 			const changed = transitionMode(rt.state, mode, now);
@@ -436,6 +453,27 @@ export function createRuntimeContext(
 		},
 
 		async cycle(ctx: ExtensionContext): Promise<void> {
+			if (rt.state.mode === "recon") {
+				// One-way exit: recon → plan. The toggle IS the readiness signal.
+				// The first plan-mode turn orients — summary + open questions —
+				// generated from the full recon conversation; that in-band message
+				// is the handoff (no seed document, no re-research).
+				rt.setMode("plan", ctx);
+				const hasConversation = ctx.sessionManager
+					.getEntries()
+					.some(
+						(entry) =>
+							(entry as { type?: string }).type === "message" &&
+							(entry as { message?: { role?: string } }).message?.role ===
+								"user",
+					);
+				if (hasConversation) {
+					pi.sendUserMessage(RECON_TO_PLAN_ORIENTATION, {
+						deliverAs: "followUp",
+					});
+				}
+				return;
+			}
 			if (rt.state.mode === "plan") {
 				// Prompt which mode to enter from plan
 				const choice = await ctx.ui.select("Switch to", [
@@ -449,6 +487,7 @@ export function createRuntimeContext(
 				}
 				return;
 			}
+			// auto → plan; hack (off-cycle) also exits to plan — see nextMode.
 			rt.setMode(nextMode(rt.state.mode), ctx);
 		},
 

@@ -27,6 +27,13 @@ export const STRUCTURE_TOOL_NAMES = [
 /** Research-loop tools available throughout plan mode. */
 export const RESEARCH_TOOL_NAMES = ["research", "readiness", "dig"] as const;
 
+/**
+ * Research tools available in recon mode. Deliberately NOT `readiness` — the
+ * user leaving recon (Shift+Tab) is the readiness signal there; the mode has
+ * no plan surface at all.
+ */
+export const RECON_TOOL_NAMES = ["research", "dig"] as const;
+
 const READ_ONLY_TOOLS = new Set([
 	"read",
 	"grep",
@@ -73,6 +80,22 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 			: tools;
 
 	if (input.mode === "hack") return withEpisode([...baseline]);
+
+	// Recon: pure research posture — read-only tools + the research loop.
+	// No plan surface (`plan`/`readiness`/structure tools stay out entirely);
+	// bash is allowed but gated read-only by the classifier, like plan mode.
+	if (input.mode === "recon") {
+		const reconAllowed = new Set([
+			...READ_ONLY_TOOLS,
+			...RECON_TOOL_NAMES,
+			...ALWAYS_ALLOWED_TOOLS,
+			"bash",
+		]);
+		reconAllowed.delete("plan");
+		return withEpisode(
+			input.availableTools.filter((name) => reconAllowed.has(name)),
+		);
+	}
 
 	// Agent mode: full implementation tools, no plan-structure tools
 	if (input.isAgent) {
@@ -171,6 +194,23 @@ export function classifyBash(command: string): BashClassification {
 		readOnly: false,
 		reason: `\`${first}\` is not in the plan-mode read-only allowlist`,
 	};
+}
+
+/**
+ * Call-time gate for recon mode (the belt to computeActiveTools' braces —
+ * some clients cache tool lists across a mode switch).
+ */
+export function toolBlockedInReconMode(toolName: string): string | null {
+	if (toolName === "bash") return null;
+	if (READ_ONLY_TOOLS.has(toolName) && toolName !== "plan") return null;
+	if (RECON_TOOL_NAMES.includes(toolName as never)) return null;
+	if (ALWAYS_ALLOWED_TOOLS.has(toolName)) return null;
+	if (toolName === "carryforward") return null;
+	return (
+		`tool \`${toolName}\` is disabled in recon mode — recon is a read-only ` +
+		"research posture. When the user is ready to plan or build, they switch " +
+		"modes themselves (Shift+Tab)."
+	);
 }
 
 export function toolBlockedInPlanMode(

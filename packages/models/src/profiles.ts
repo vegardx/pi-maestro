@@ -3,9 +3,9 @@
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	getSessionRoleOverride,
-	MODEL_ROLES,
 	type LegacyPinnableTier,
 	type LegacyTierConfig,
+	MODEL_ROLES,
 	type ModelConfigScope,
 	type ModelRole,
 	type ModelsConfig,
@@ -26,12 +26,7 @@ export const LEGACY_TIER_ROLES: Readonly<
 > = {
 	work: ["worker", "delegate"],
 	review: ["reviewer", "advisor", "verifier"],
-	fast: [
-		"research",
-		"classifier",
-		"plan-summarizer",
-		"compact-summarizer",
-	],
+	fast: ["research", "classifier", "plan-summarizer", "compact-summarizer"],
 };
 
 interface ParsedProfile {
@@ -46,7 +41,9 @@ interface ParsedModels {
 }
 
 type Leaf = "models" | "efforts";
-type MutableSource = Partial<Record<ModelRole, Partial<Record<Leaf, RolePoolSource[Leaf]>>>>;
+type MutableSource = Partial<
+	Record<ModelRole, Partial<Record<Leaf, RolePoolSource[Leaf]>>>
+>;
 const PROFILE_SOURCES = new WeakMap<ProfileConfig, MutableSource>();
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -91,7 +88,8 @@ function extractRole(raw: unknown): ProfileRoleConfig | undefined {
 }
 
 function extractLegacy(raw: unknown): LegacyTierConfig | undefined {
-	if (typeof raw === "string") return isModelId(raw) ? { model: raw } : undefined;
+	if (typeof raw === "string")
+		return isModelId(raw) ? { model: raw } : undefined;
 	if (!isPlainObject(raw)) return undefined;
 	const model = isModelId(raw.model) ? raw.model : undefined;
 	const effort =
@@ -321,9 +319,7 @@ export function resolveTierConfig(
 	session: { modelId: string; effort?: ThinkingLevel } | undefined,
 ): TierResolution | undefined {
 	if (tier === "plan") {
-		return session
-			? { ...session, tier, tracksPlan: true }
-			: undefined;
+		return session ? { ...session, tier, tracksPlan: true } : undefined;
 	}
 	const pool = effectiveRolePool(cfg, TIER_ROLE[tier], session?.modelId);
 	if (pool?.models[0]) {

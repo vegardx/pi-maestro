@@ -7,12 +7,12 @@ export {
 } from "./model-meta.js";
 export {
 	activeProfile,
+	type EffectiveRolePool,
 	effectiveRolePool,
 	isModelId,
 	LEGACY_TIER_ROLES,
 	readModelsConfig,
 	resolveTierConfig,
-	type EffectiveRolePool,
 	type TierResolution,
 } from "./profiles.js";
 export {

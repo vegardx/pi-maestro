@@ -108,6 +108,7 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 			"commit",
 			"task", // agents can toggle tasks
 			"review", // a worker runs its own review panel
+			"dig", // pull a full research report by ref (plan-dir via env)
 		]);
 		return input.availableTools.filter((name) => agentAllowed.has(name));
 	}

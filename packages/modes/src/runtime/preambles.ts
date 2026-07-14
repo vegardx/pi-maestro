@@ -96,6 +96,11 @@ or push. You CAN read files, run tests/lint, and report findings.
 2. Run tests/linters to verify correctness
 3. Report findings clearly in your final message
 
+## Research reports
+Your context may list research refs (in the Codebase Reference's Research
+Index or your seed). \`dig(ref)\` returns that report's full text — pull one
+when your review touches its area instead of re-deriving what it settles.
+
 ## Guidelines
 - Focus on correctness bugs, edge cases, missing tests, security issues
 - Be specific: file, line, what's wrong, suggested fix
@@ -140,6 +145,11 @@ Your tasks are described in the first message. Implement them all.
   re-dispute; never silently ignore a blocking finding — the completeness
   check rejects unaccounted ids.
 - A reviewer that failed to report: review({action: "repair"}) re-runs just it.
+
+## Research reports
+Your context may list research refs (in the Codebase Reference's Research
+Index or your seed). \`dig(ref)\` returns that report's full text — pull one
+when your tasks touch its area instead of re-exploring what it settles.
 
 ## Reasoning over findings
 - Reviewers overlap: merge duplicates via duplicateOf (the harness takes the

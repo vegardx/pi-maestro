@@ -125,6 +125,41 @@ describe("buildKnowledgeSession", () => {
 		expect(built.id).toBe("base-fixed");
 	});
 
+	it("appends the research index between the authored doc and the END marker", () => {
+		const index =
+			"## Research Index\n\n- [ref: auth-flow] How auth works (codebase)";
+		const built = buildKnowledgeSession({
+			content: VALID_DOC,
+			repoPath: "/repo/path",
+			outPath: join(dir, "base-knowledge.jsonl"),
+			researchIndex: index,
+		});
+		expect(built.content).toContain("[ref: auth-flow]");
+		expect(built.content.indexOf(index)).toBeGreaterThan(
+			built.content.indexOf("## Key Interfaces"),
+		);
+		expect(built.content.indexOf(index)).toBeLessThan(
+			built.content.indexOf(KNOWLEDGE_END),
+		);
+		// The result still round-trips the frozen-base validation.
+		expect(readKnowledgeSession(built.path).content).toBe(built.content);
+	});
+
+	it("places the index before END even when the author already closed with it", () => {
+		const authored = `${VALID_DOC}\n\n${KNOWLEDGE_END}\n`;
+		const built = buildKnowledgeSession({
+			content: authored,
+			repoPath: "/repo/path",
+			outPath: join(dir, "base-knowledge.jsonl"),
+			researchIndex: "## Research Index\n\n- [ref: x] q (web)",
+		});
+		expect(built.content.indexOf("[ref: x]")).toBeLessThan(
+			built.content.indexOf(KNOWLEDGE_END),
+		);
+		// Exactly one END marker survives.
+		expect(built.content.split(KNOWLEDGE_END)).toHaveLength(2);
+	});
+
 	it("refuses to write a doc that fails shape validation", () => {
 		const outPath = join(dir, "base-knowledge.jsonl");
 		expect(() =>

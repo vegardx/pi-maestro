@@ -323,6 +323,7 @@ describe("buildSpawnSpec", () => {
 			agentMode: "full",
 			sessionDir: "/agent/sessions/g1-worker",
 			token: "run-token-1",
+			planDir: "/plans/slug",
 		},
 		kickoffMessage: "Implement the tasks in your seed.",
 	};
@@ -390,6 +391,7 @@ describe("buildSpawnSpec", () => {
 		expect(spec.env.PI_MAESTRO_AGENT_ID).toBe("g1/worker");
 		expect(spec.env.PI_MAESTRO_AGENT_MODE).toBe("full");
 		expect(spec.env.PI_MAESTRO_TOKEN).toBe("run-token-1");
+		expect(spec.env.PI_MAESTRO_PLAN_DIR).toBe("/plans/slug");
 		expect(spec.env.PI_CODING_AGENT_SESSION_DIR).toBe(
 			"/agent/sessions/g1-worker",
 		);
@@ -429,6 +431,7 @@ describe("buildSpawnSpec crash capture", () => {
 			agentMode: "full",
 			sessionDir: "/plans/slug/sessions",
 			token: "tok",
+			planDir: "/plans/slug",
 		},
 		kickoffMessage: "Implement the tasks in your seed.",
 	};

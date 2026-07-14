@@ -84,6 +84,12 @@ export interface BuildKnowledgeSessionOpts {
 	outPath: string;
 	/** Session id override; defaults to "base-<uuid>". */
 	id?: string;
+	/**
+	 * Mechanical research-ref index (renderResearchIndex) appended after the
+	 * authored doc, before the END marker. System-generated — never part of
+	 * the validated authored content.
+	 */
+	researchIndex?: string;
 }
 
 export interface KnowledgeSession {
@@ -110,9 +116,16 @@ export function buildKnowledgeSession(
 			`knowledge doc failed shape validation:\n- ${problems.join("\n- ")}`,
 		);
 	}
-	const content = opts.content.trimEnd().endsWith(KNOWLEDGE_END)
-		? opts.content
-		: `${opts.content.trimEnd()}\n\n${KNOWLEDGE_END}\n`;
+	// Assembly order: authored doc → mechanical research index → END marker.
+	// The index goes in even when the author already closed with the marker.
+	let body = opts.content.trimEnd();
+	if (body.endsWith(KNOWLEDGE_END)) {
+		body = body.slice(0, -KNOWLEDGE_END.length).trimEnd();
+	}
+	if (opts.researchIndex) {
+		body = `${body}\n\n${opts.researchIndex.trimEnd()}`;
+	}
+	const content = `${body}\n\n${KNOWLEDGE_END}\n`;
 
 	const id = opts.id ?? `base-${randomUUID()}`;
 	const session = createSessionFileAt(opts.outPath, opts.repoPath, {

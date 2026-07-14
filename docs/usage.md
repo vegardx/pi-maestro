@@ -41,9 +41,13 @@ Research runs through two tools:
 
 - `research` — fans out parallel read-only subagents (codebase and web;
   web agents can search, fetch pages, and pull library docs). All questions
-  for a round go in one call; you get a bounded digest per question.
+  for a round go in one call; you get a bounded digest per question. Full
+  reports persist to the plan directory's `research/` folder.
 - `dig` — expands a digest to its full report via the `[ref: …]` printed
-  beside it.
+  beside it. Execution agents have it too: the knowledge base ends with an
+  auto-appended **Research Index** of every report, and reports that land
+  after the base froze ride each later worker's seed — so agents pull a
+  deep-dive on demand instead of every fork carrying every report.
 
 The plan is shaped with three flat tools (plus `plan` to render the active
 plan as markdown, seed text, or JSON):

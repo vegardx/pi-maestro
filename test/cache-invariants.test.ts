@@ -34,6 +34,8 @@ import {
 	FOCUS_HEADER,
 	PRIOR_WORK_FRAME,
 	PRIOR_WORK_HEADER,
+	RESEARCH_REFS_FRAME,
+	RESEARCH_REFS_HEADER,
 	TASKS_FRAME,
 	TASKS_HEADER,
 	TRUNCATION_MARKER,
@@ -258,6 +260,7 @@ describe("agent tool classes", () => {
 		"plan",
 		"review",
 		"websearch",
+		"dig",
 	];
 	// Baseline active set as pi hands it to an agent session (task stripped).
 	const ACTIVE = AVAILABLE.filter((t) => t !== "task");
@@ -313,6 +316,13 @@ describe("agent tool classes", () => {
 		}
 	});
 
+	it("dig is ensured in BOTH classes (research pull is not a write privilege)", () => {
+		const full = computeAgentSessionTools("full", AVAILABLE, ACTIVE);
+		const ro = computeAgentSessionTools("read-only", AVAILABLE, ACTIVE);
+		expect(full).toContain("dig");
+		expect(ro).toContain("dig");
+	});
+
 	it("the strip and ensure lists define disjoint class behavior", () => {
 		// The two classes must actually differ — otherwise there is one cache
 		// class, and the read-only/full distinction is dead code.
@@ -332,6 +342,8 @@ describe("seed framing constants", () => {
 		PRIOR_WORK_FRAME,
 		FINDINGS_HEADER,
 		FINDINGS_FRAME,
+		RESEARCH_REFS_HEADER,
+		RESEARCH_REFS_FRAME,
 		TASKS_HEADER,
 		TASKS_FRAME,
 		FOCUS_HEADER,

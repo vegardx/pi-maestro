@@ -1,10 +1,13 @@
-// The plan-mode research loop: the `research` tool fans out headless
+// The recon/plan research loop: the `research` tool fans out headless
 // subagents (codebase / web / advisor / consult) through the subagents.v1
-// capability. Each agent writes a full report to the session-scoped scratch
-// dir and the tool delivers only a bounded digest per question; `dig(ref)`
-// returns a report's full text on demand. The `readiness` tool is the phase
-// gate — it presents the maestro's summarized understanding and, on user
-// confirmation, flips the plan from `exploring` to `structuring`.
+// capability. Each agent writes a full report to `<planDir>/research/` —
+// the durable, curated location every downstream consumer (knowledge doc,
+// carry-forward harvest, execution workers) reads — and the tool delivers
+// only a bounded digest per question; `dig(ref)` returns a report's full
+// text on demand, in the maestro AND in worker agents (via
+// PI_MAESTRO_PLAN_DIR). The `readiness` tool is the phase gate — it presents
+// the maestro's summarized understanding and, on user confirmation, flips
+// the plan from `exploring` to `structuring`.
 //
 // Parallelism note: one `research` call takes a BATCH of questions and runs
 // them concurrently (bounded by the subagents semaphore). Batching inside one
@@ -15,10 +18,8 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
-	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -216,10 +217,10 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 				);
 			}
 
-			deps.ensurePlanDir(ctx);
-			// Full reports go to the session-scoped scratch dir (wiped on settle),
-			// not the curated plan dir — only the bounded digest reaches the model.
-			const researchDir = researchScratchDir(engine.get().slug);
+			// Full reports persist to <planDir>/research/ (durable — the knowledge
+			// index, carry-forward harvest, and execution workers all read it);
+			// only the bounded digest reaches the model.
+			const researchDir = researchReportsDir(deps.ensurePlanDir(ctx));
 			mkdirSync(researchDir, { recursive: true });
 
 			const watchdog = deps.watchdog?.(ctx) ?? DEFAULT_WATCHDOG;
@@ -465,10 +466,18 @@ export function createDigTool(deps: ResearchDeps): ToolDefinition {
 		parameters: DigParams,
 		// Full reports are for the MODEL; the human gets a preview + expand.
 		renderResult: renderCollapsedResult,
-		async execute(_id, params): Promise<Result> {
-			const engine = deps.engine();
-			if (!engine) return error("no plan active");
-			const dir = researchScratchDir(engine.get().slug);
+		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
+			// Workers have no engine — they resolve the plan dir from the env
+			// their spawner set. The maestro resolves through the active plan.
+			const envPlanDir = process.env.PI_MAESTRO_PLAN_DIR;
+			let dir: string;
+			if (envPlanDir) {
+				dir = researchReportsDir(envPlanDir);
+			} else {
+				const engine = deps.engine();
+				if (!engine) return error("no plan active");
+				dir = researchReportsDir(deps.ensurePlanDir(ctx));
+			}
 			// Sanitize: refs are slugs, so a path-traversal attempt can't escape.
 			const safe = params.ref.replace(/[^a-z0-9-]/gi, "").toLowerCase();
 			const path = join(dir, `${safe}.md`);
@@ -656,21 +665,92 @@ function persistReport(
 }
 
 /**
- * The session-scoped scratch dir holding a plan's full research reports. It
- * lives under the maestro's session dir (NOT the curated plan dir), keyed by
- * slug, and is wiped when the plan settles (see clearResearchScratch). Nothing
- * reaps it automatically, so the wipe-on-settle is what bounds it.
+ * The durable home of a plan's full research reports: `<planDir>/research/`.
+ * This is the location the structuring preamble, /implement guidance, and
+ * carry-forward harvest have always pointed at; reports live and die with
+ * the plan directory (no separate wipe).
  */
-export function researchScratchDir(slug: string): string {
-	const base =
-		process.env.PI_CODING_AGENT_SESSION_DIR ??
-		join(tmpdir(), "maestro-sessions");
-	return join(base, "research-cache", slug);
+export function researchReportsDir(planDir: string): string {
+	return join(planDir, "research");
 }
 
-/** Wipe a plan's research scratch (called when the plan settles/abandons). */
-export function clearResearchScratch(slug: string): void {
-	rmSync(researchScratchDir(slug), { recursive: true, force: true });
+export interface ResearchReportMeta {
+	readonly ref: string;
+	readonly question: string;
+	readonly kind: string;
+}
+
+/**
+ * List the reports in a research dir, sorted by ref (deterministic). The
+ * question/kind come from the report frontmatter; files without parseable
+ * frontmatter fall back to the ref.
+ */
+export function listResearchReports(dir: string): ResearchReportMeta[] {
+	if (!existsSync(dir)) return [];
+	return readdirSync(dir)
+		.filter((f) => f.endsWith(".md"))
+		.sort()
+		.map((file) => {
+			const ref = file.slice(0, -3);
+			let question = ref;
+			let kind = "research";
+			try {
+				const head = readFileSync(join(dir, file), "utf8").slice(0, 2000);
+				const q = head.match(/^question: (.+)$/m);
+				if (q) question = String(JSON.parse(q[1]));
+				const k = head.match(/^kind: (.+)$/m);
+				if (k) kind = k[1].trim();
+			} catch {
+				// Unreadable/odd frontmatter — the ref alone is still useful.
+			}
+			return { ref, question, kind };
+		});
+}
+
+export const RESEARCH_INDEX_HEADER = "## Research Index";
+
+/**
+ * Render the mechanical Research Index appended to the frozen knowledge doc:
+ * one line per on-disk report so any agent can `dig(ref)` the full text on
+ * demand instead of carrying every deep-dive in its context. Returns
+ * undefined when there are no reports.
+ */
+export function renderResearchIndex(dir: string): string | undefined {
+	const reports = listResearchReports(dir);
+	if (reports.length === 0) return undefined;
+	const lines = reports.map(
+		(r) => `- [ref: ${r.ref}] ${r.question} (${r.kind})`,
+	);
+	return [
+		RESEARCH_INDEX_HEADER,
+		"Full research reports are on disk. Expand any of them with `dig(ref)` " +
+			"when your work touches that area — do not guess at details a report " +
+			"already settles.",
+		lines.join("\n"),
+	].join("\n\n");
+}
+
+/** Extract the set of `[ref: …]` markers present in a text. */
+export function refsInText(text: string): Set<string> {
+	const refs = new Set<string>();
+	for (const match of text.matchAll(/\[ref: ([a-z0-9-]+)\]/g)) {
+		refs.add(match[1]);
+	}
+	return refs;
+}
+
+/**
+ * Reports NOT covered by the given text's `[ref: …]` markers — i.e. the
+ * research that landed after the frozen knowledge doc (and its Research
+ * Index) was written. Seeds list these so later-spawned workers see the
+ * expanding picture without the frozen base ever changing.
+ */
+export function reportsNotInText(
+	dir: string,
+	text: string | undefined,
+): ResearchReportMeta[] {
+	const covered = text ? refsInText(text) : new Set<string>();
+	return listResearchReports(dir).filter((r) => !covered.has(r.ref));
 }
 
 /** A stable, filesystem-safe ref for a question, de-duped within the dir. */

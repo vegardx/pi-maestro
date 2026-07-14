@@ -58,8 +58,10 @@ export const READ_ONLY_STRIPPED_TOOLS = [
 	"ask",
 ] as const;
 
-/** Tools ensured present for read-only agents (findings reporting). */
-export const READ_ONLY_ENSURED_TOOLS = ["task", "plan"] as const;
+/** Tools ensured present for read-only agents (findings reporting + research
+ *  pull). `dig` is in BOTH classes on purpose — one-sided would still keep
+ *  two distinct sets, but research access is not a write privilege. */
+export const READ_ONLY_ENSURED_TOOLS = ["task", "plan", "dig"] as const;
 
 /** Tools ensured present for full-mode agents (the decision loop). */
 export const FULL_MODE_ENSURED_TOOLS = [
@@ -68,6 +70,7 @@ export const FULL_MODE_ENSURED_TOOLS = [
 	"review",
 	"commit",
 	"ship",
+	"dig",
 ] as const;
 
 /**

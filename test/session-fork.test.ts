@@ -1,14 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	appendToSession,
-	buildCustomEntry,
-	buildCustomMessageEntry,
-	forkSessionAt,
+	createSessionFileAt,
 	parseSessionFile,
-	pathToEntry,
 } from "../packages/modes/src/session-fork.js";
 
 function makeSession(
@@ -106,154 +108,49 @@ describe("session-fork primitives", () => {
 		});
 	});
 
-	describe("pathToEntry", () => {
-		it("returns linear path to target", () => {
-			const entries = [
-				{ type: "message", id: "a", parentId: null, timestamp: "t" },
-				{ type: "message", id: "b", parentId: "a", timestamp: "t" },
-				{ type: "message", id: "c", parentId: "b", timestamp: "t" },
-			] as any[];
-			const path = pathToEntry(entries, "c");
-			expect(path.map((e) => e.id)).toEqual(["a", "b", "c"]);
-		});
+	describe("createSessionFileAt", () => {
+		it("writes the header eagerly and returns an append-ready manager", () => {
+			const path = join(root, "nested", "boot.jsonl");
+			const sm = createSessionFileAt(path, "/work/tree", { id: "boot-1" });
+			// The file must exist on disk immediately — agents are spawned with
+			// `pi --session <file>` before any assistant turn runs.
+			expect(existsSync(path)).toBe(true);
 
-		it("returns single entry when target has no parent", () => {
-			const entries = [
-				{ type: "message", id: "root", parentId: null, timestamp: "t" },
-			] as any[];
-			const path = pathToEntry(entries, "root");
-			expect(path).toHaveLength(1);
-			expect(path[0].id).toBe("root");
-		});
+			sm.appendCustomEntry("test.state", { mode: "agent" });
+			sm.appendCustomMessageEntry("test.seed", "# Your Tasks", true);
 
-		it("handles tree (skips sibling branches)", () => {
-			const entries = [
-				{ type: "message", id: "a", parentId: null, timestamp: "t" },
-				{ type: "message", id: "b1", parentId: "a", timestamp: "t" },
-				{ type: "message", id: "b2", parentId: "a", timestamp: "t" },
-				{ type: "message", id: "c", parentId: "b2", timestamp: "t" },
-			] as any[];
-			const path = pathToEntry(entries, "c");
-			expect(path.map((e) => e.id)).toEqual(["a", "b2", "c"]);
-		});
+			const { header, entries } = parseSessionFile(path);
+			expect(header.type).toBe("session");
+			expect(header.id).toBe("boot-1");
+			expect(header.cwd).toBe("/work/tree");
+			expect(header.parentSession).toBeUndefined();
 
-		it("throws if target not found", () => {
-			const entries = [
-				{ type: "message", id: "a", parentId: null, timestamp: "t" },
-			] as any[];
-			expect(() => pathToEntry(entries, "nonexistent")).toThrow(
-				"Entry not found",
-			);
-		});
-	});
-
-	describe("forkSessionAt", () => {
-		it("creates a forked session file with path to target", () => {
-			const source = join(root, "source.jsonl");
-			writeFileSync(
-				source,
-				makeSession([
-					{ id: "a", parentId: null },
-					{ id: "b", parentId: "a" },
-					{ id: "c", parentId: "b" },
-				]),
-			);
-
-			const outDir = join(root, "forks");
-			const forked = forkSessionAt(source, "b", outDir);
-
-			expect(forked).toContain("fork_");
-			expect(forked).toContain(outDir);
-
-			const { header, entries } = parseSessionFile(forked);
-			expect(header.parentSession).toBe("sess-001");
-			expect(header.cwd).toBe("/repo");
-			expect(entries.map((e) => e.id)).toEqual(["a", "b"]);
-		});
-
-		it("overrides cwd when specified", () => {
-			const source = join(root, "source.jsonl");
-			writeFileSync(source, makeSession([{ id: "a", parentId: null }]));
-
-			const outDir = join(root, "forks");
-			const forked = forkSessionAt(source, "a", outDir, { cwd: "/new/path" });
-
-			const { header } = parseSessionFile(forked);
-			expect(header.cwd).toBe("/new/path");
-		});
-
-		it("uses custom id when specified", () => {
-			const source = join(root, "source.jsonl");
-			writeFileSync(source, makeSession([{ id: "a", parentId: null }]));
-
-			const outDir = join(root, "forks");
-			const forked = forkSessionAt(source, "a", outDir, { id: "custom-id" });
-
-			const { header } = parseSessionFile(forked);
-			expect(header.id).toBe("custom-id");
-		});
-	});
-
-	describe("appendToSession", () => {
-		it("appends entries without corrupting existing content", () => {
-			const file = join(root, "append.jsonl");
-			writeFileSync(file, makeSession([{ id: "a", parentId: null }]));
-
-			const entry = buildCustomEntry("test.type", { key: "value" }, "a");
-			appendToSession(file, [entry]);
-
-			const { entries } = parseSessionFile(file);
 			expect(entries).toHaveLength(2);
-			expect(entries[0].id).toBe("a");
-			expect(entries[1].type).toBe("custom");
-			expect((entries[1] as any).customType).toBe("test.type");
-			expect((entries[1] as any).data).toEqual({ key: "value" });
+			const [state, seed] = entries as any[];
+			expect(state.type).toBe("custom");
+			expect(state.customType).toBe("test.state");
+			expect(state.parentId).toBeNull();
+			expect(seed.type).toBe("custom_message");
+			expect(seed.content).toBe("# Your Tasks");
+			expect(seed.display).toBe(true);
+			expect(seed.parentId).toBe(state.id);
 		});
 
-		it("appends multiple entries", () => {
-			const file = join(root, "multi.jsonl");
-			writeFileSync(file, makeSession([{ id: "a", parentId: null }]));
+		it("defaults to a fresh UUID id and honours a version override", () => {
+			const a = createSessionFileAt(join(root, "a.jsonl"), "/w");
+			const b = createSessionFileAt(join(root, "b.jsonl"), "/w");
+			expect(a.getSessionId()).not.toBe(b.getSessionId());
 
-			const e1 = buildCustomEntry("t1", null, "a");
-			const e2 = buildCustomMessageEntry("t2", "hello context", e1.id);
-			appendToSession(file, [e1, e2]);
-
-			const { entries } = parseSessionFile(file);
-			expect(entries).toHaveLength(3);
-			expect((entries[2] as any).content).toBe("hello context");
-		});
-	});
-
-	describe("buildCustomEntry", () => {
-		it("produces a valid custom entry", () => {
-			const entry = buildCustomEntry("my.type", { x: 1 }, "parent-1");
-			expect(entry.type).toBe("custom");
-			expect(entry.customType).toBe("my.type");
-			expect(entry.data).toEqual({ x: 1 });
-			expect(entry.parentId).toBe("parent-1");
-			expect(entry.id).toHaveLength(8);
-			expect(entry.timestamp).toBeTruthy();
-		});
-	});
-
-	describe("buildCustomMessageEntry", () => {
-		it("produces a valid custom message entry", () => {
-			const entry = buildCustomMessageEntry(
-				"lens.persona",
-				"Review this diff",
-				null,
-				{ display: true },
-			);
-			expect(entry.type).toBe("custom_message");
-			expect(entry.customType).toBe("lens.persona");
-			expect(entry.content).toBe("Review this diff");
-			expect(entry.display).toBe(true);
-			expect(entry.parentId).toBeNull();
+			createSessionFileAt(join(root, "v.jsonl"), "/w", { version: 3 });
+			const { header } = parseSessionFile(join(root, "v.jsonl"));
+			expect(header.version).toBe(3);
 		});
 
-		it("defaults display to false", () => {
-			const entry = buildCustomMessageEntry("x", "y", null);
-			expect(entry.display).toBe(false);
+		it("keeps the header cwd verbatim even when the directory does not exist", () => {
+			const path = join(root, "ghost.jsonl");
+			createSessionFileAt(path, "/nope/nowhere");
+			expect(parseSessionFile(path).header.cwd).toBe("/nope/nowhere");
+			expect(readFileSync(path, "utf8").trim().split("\n")).toHaveLength(1);
 		});
 	});
 });

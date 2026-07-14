@@ -4,10 +4,7 @@
 // as a two-line JSONL pi session: header + one custom_message entry.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import type { SessionHeader } from "@earendil-works/pi-coding-agent";
-import { buildCustomMessageEntry, parseSessionFile } from "../session-fork.js";
+import { createSessionFileAt, parseSessionFile } from "../session-fork.js";
 
 export const KNOWLEDGE_CUSTOM_TYPE = "maestro.base-knowledge";
 export const KNOWLEDGE_SESSION_VERSION = 3;
@@ -100,8 +97,9 @@ export interface KnowledgeSession {
 
 /**
  * Write the knowledge session JSONL: a version-3 session header plus one
- * LLM-visible custom_message carrying the knowledge doc. Throws if the doc
- * fails shape validation — a malformed doc must never become the frozen base.
+ * LLM-visible custom_message carrying the knowledge doc, appended via the
+ * SDK's SessionManager. Throws if the doc fails shape validation — a
+ * malformed doc must never become the frozen base.
  */
 export function buildKnowledgeSession(
 	opts: BuildKnowledgeSessionOpts,
@@ -117,28 +115,21 @@ export function buildKnowledgeSession(
 		: `${opts.content.trimEnd()}\n\n${KNOWLEDGE_END}\n`;
 
 	const id = opts.id ?? `base-${randomUUID()}`;
-	const header: SessionHeader = {
-		type: "session",
-		version: KNOWLEDGE_SESSION_VERSION,
+	const session = createSessionFileAt(opts.outPath, opts.repoPath, {
 		id,
-		timestamp: new Date().toISOString(),
-		cwd: opts.repoPath,
-	};
-	const entry = buildCustomMessageEntry(KNOWLEDGE_CUSTOM_TYPE, content, null, {
-		display: true,
+		version: KNOWLEDGE_SESSION_VERSION,
 	});
-
-	mkdirSync(dirname(opts.outPath), { recursive: true });
-	writeFileSync(
-		opts.outPath,
-		`${JSON.stringify(header)}\n${JSON.stringify(entry)}\n`,
+	const entryId = session.appendCustomMessageEntry(
+		KNOWLEDGE_CUSTOM_TYPE,
+		content,
+		true,
 	);
 
 	return {
 		id,
 		cwd: opts.repoPath,
 		content,
-		entryId: entry.id,
+		entryId,
 		path: opts.outPath,
 	};
 }

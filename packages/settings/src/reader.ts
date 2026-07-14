@@ -12,6 +12,7 @@
 //                                       ...arbitrary knobs } } }
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { listSessionSettingOverrides } from "@vegardx/pi-contracts";
 
 export type ExtensionConfig = Record<string, unknown>;
 export type ExtensionConfigMap = Record<string, ExtensionConfig>;
@@ -75,12 +76,26 @@ export function readLayeredExtensionConfig(
 			project[name] ?? {},
 		) as ExtensionConfig;
 	}
+	for (const override of listSessionSettingOverrides()) {
+		if (!merged[override.extension]) merged[override.extension] = {};
+		setPath(merged[override.extension], override.path, override.value);
+	}
 	return { global, project, merged };
 }
 
 // ---- Typed accessors ---------------------------------------------------
 // Fail closed: a wrong-typed value returns the default rather than coercing,
 // so a settings typo can't silently flip behaviour. `key` may be dotted.
+
+function setPath(entry: ExtensionConfig, key: string, value: unknown): void {
+	let current = entry;
+	const parts = key.split(".");
+	for (const part of parts.slice(0, -1)) {
+		if (!isPlainObject(current[part])) current[part] = {};
+		current = current[part] as Record<string, unknown>;
+	}
+	current[parts.at(-1)!] = value;
+}
 
 function readPath(entry: ExtensionConfig | undefined, key: string): unknown {
 	if (!entry) return undefined;

@@ -261,6 +261,16 @@ describe("role pool resolution", () => {
 		expect(disallowed.errors[0]?.code).toBe("explicit-effort-not-allowed");
 	});
 
+	it("rejects an explicit model supporting none of the pool efforts", async () => {
+		configure("research", ["anthropic/haiku"], ["high"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "research", choice: { model: "anthropic/haiku" } },
+		);
+		expect(result.selected).toBeNull();
+		expect(result.errors[0]?.code).toBe("explicit-effort-unsupported");
+	});
+
 	it("rejects an unsupported effort paired with an explicit model", async () => {
 		configure("research", ["anthropic/haiku"], ["xhigh", "low"]);
 		const result = await resolveRolePool(

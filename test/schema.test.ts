@@ -20,7 +20,39 @@ import {
 	validatePlanShape,
 } from "../packages/modes/src/schema.js";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+it("validates reviewer identity and cross-model policy", () => {
+	const duplicate = makeDeliverable({
+		subAgents: [
+			{ name: "sec", persona: "security-audit" },
+			{ name: "sec", persona: "documentation" },
+		],
+	});
+	expect(validatePlanShape(makePlan([duplicate])).join("\n")).toContain(
+		"duplicate reviewer name",
+	);
+
+	const threeModels = makeDeliverable({
+		subAgents: ["a", "b", "c"].map((model) => ({
+			name: `sec-${model}`,
+			persona: "security-audit",
+			model: `provider/${model}`,
+			modelJustification: "independent audit",
+		})),
+	});
+	expect(validatePlanShape(makePlan([threeModels])).join("\n")).toContain(
+		"more than two distinct models",
+	);
+
+	const missingWhy = makeDeliverable({
+		subAgents: [
+			{ name: "sec-a", persona: "security-audit", model: "provider/a" },
+			{ name: "sec-b", persona: "security-audit", model: "provider/b" },
+		],
+	});
+	expect(validatePlanShape(makePlan([missingWhy])).join("\n")).toContain(
+		"requires modelJustification",
+	);
+});
 
 function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {
@@ -35,6 +67,7 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 		repo: overrides.repo,
 		worker: overrides.worker ?? { mode: "full" },
 		agents: overrides.agents ?? [],
+		subAgents: overrides.subAgents,
 		tasks: overrides.tasks ?? [
 			{
 				type: "work-item",

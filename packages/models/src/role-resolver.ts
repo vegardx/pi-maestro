@@ -197,6 +197,20 @@ export async function resolveRolePool(
 			return { ...base, selected: null, errors };
 		}
 		if (
+			choice.effort === undefined &&
+			configuredEfforts.length > 0 &&
+			selectedCandidate.supportedEfforts.length === 0
+		) {
+			const errors = [
+				error(
+					"explicit-effort-unsupported",
+					`Model ${choice.model} supports none of the allowed ${opts.role} efforts`,
+					choice,
+				),
+			];
+			return { ...base, selected: null, errors };
+		}
+		if (
 			choice.effort !== undefined &&
 			!selectedCandidate.supportedEfforts.includes(choice.effort)
 		) {

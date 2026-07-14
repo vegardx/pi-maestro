@@ -219,6 +219,57 @@ describe("/settings command", () => {
 		});
 	});
 
+	describe("profile role arrays", () => {
+		it("sets, gets, completes, and resets a project role leaf", () => {
+			writeJson(join(root, ".pi", "settings.json"), {
+				models: { profiles: { opus: { targets: ["anthropic/sonnet"] } } },
+			});
+			const ctx = mockCtx(root);
+			const key = "models.profiles.opus.roles.reviewer.models";
+			handleSettingsCommand(`set ${key} ["openai/o3","anthropic/sonnet"]`, ctx);
+			let raw = JSON.parse(
+				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
+			);
+			expect(raw.models.profiles.opus.roles.reviewer.models).toEqual([
+				"openai/o3",
+				"anthropic/sonnet",
+			]);
+			handleSettingsCommand(`get ${key}`, ctx);
+			expect(ctx.messages.at(-1)).toContain("openai/o3 → anthropic/sonnet");
+			expect(
+				getSettingsCompletions("get models.profiles.opus.roles.rev", ctx),
+			).toContain(key);
+			handleSettingsCommand(`reset ${key}`, ctx);
+			raw = JSON.parse(
+				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
+			);
+			expect(raw.models.profiles.opus.roles?.reviewer).toBeUndefined();
+		});
+
+		it("supports typed session arrays without writing a file", () => {
+			writeJson(join(root, ".pi", "settings.json"), {
+				models: { profiles: { opus: { targets: ["anthropic/sonnet"] } } },
+			});
+			const ctx = mockCtx(root);
+			const key = "models.profiles.opus.roles.worker.efforts";
+			handleSettingsCommand(`set --session ${key} ["xhigh","high"]`, ctx);
+			expect(ctx.messages.at(-1)).toContain("[session]");
+			handleSettingsCommand(`get ${key}`, ctx);
+			expect(ctx.messages.at(-1)).toContain("xhigh → high");
+			handleSettingsCommand(`reset --session ${key}`, ctx);
+			expect(ctx.messages.at(-1)).toContain("Reset");
+		});
+
+		it("rejects empty or non-array role policies", () => {
+			const ctx = mockCtx(root);
+			handleSettingsCommand(
+				"set models.profiles.opus.roles.worker.models []",
+				ctx,
+			);
+			expect(ctx.messages.at(-1)).toContain("non-empty JSON string array");
+		});
+	});
+
 	describe("completions", () => {
 		it("completes subcommands", () => {
 			const ctx = mockCtx(root);

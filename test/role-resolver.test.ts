@@ -3,471 +3,279 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	resetSessionRoleOverrides,
+	setSessionRoleOverride,
+} from "@vegardx/pi-contracts";
+import {
 	activeProfile,
+	effectiveRolePool,
 	readModelsConfig,
-	resolveRoleModel,
-	resolveTierModel,
-	validateRoleModelConfig,
+	resolveRolePool,
+	supportedEfforts,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-// ─── Test setup ──────────────────────────────────────────────────────────────
-
 let cwd: string;
 let agentDir: string;
-let prevAgentDir: string | undefined;
+let previousAgentDir: string | undefined;
 
-function writeSettings(path: string, obj: Record<string, unknown>) {
+function writeSettings(path: string, value: Record<string, unknown>) {
 	mkdirSync(join(path, ".."), { recursive: true });
-	writeFileSync(path, JSON.stringify(obj));
+	writeFileSync(path, JSON.stringify(value));
 }
-function projectSettings(obj: Record<string, unknown>) {
-	writeSettings(join(cwd, ".pi", "settings.json"), obj);
+function projectSettings(value: Record<string, unknown>) {
+	writeSettings(join(cwd, ".pi", "settings.json"), value);
 }
-function globalSettings(obj: Record<string, unknown>) {
-	writeSettings(join(agentDir, "settings.json"), obj);
+function globalSettings(value: Record<string, unknown>) {
+	writeSettings(join(agentDir, "settings.json"), value);
 }
 
-function fakeCtx(opts: {
-	withApiKey?: Set<string>;
-	sessionModel?: string;
+function model(id: string, options?: { reasoning?: boolean; unsupported?: string[] }) {
+	const [provider, ...rest] = id.split("/");
+	return {
+		provider,
+		id: rest.join("/"),
+		name: id,
+		api: "anthropic-messages",
+		reasoning: options?.reasoning ?? true,
+		thinkingLevelMap: Object.fromEntries(
+			(options?.unsupported ?? []).map((effort) => [effort, null]),
+		),
+	};
+}
+
+function fakeCtx(options: {
+	session?: string;
+	unavailable?: readonly string[];
+	requireKeyless?: readonly string[];
 }): ExtensionContext {
-	const models = new Map<string, { provider: string; id: string }>();
-	models.set("anthropic/sonnet", { provider: "anthropic", id: "sonnet" });
-	models.set("anthropic/haiku", { provider: "anthropic", id: "haiku" });
-	models.set("openai/o3", { provider: "openai", id: "o3" });
-	models.set("openai/mini", { provider: "openai", id: "mini" });
-	models.set("good/model", { provider: "good", id: "model" });
-	models.set("noauth/model", { provider: "noauth", id: "model" });
-	models.set("keyless/model", { provider: "keyless", id: "model" });
-	models.set("global/fast", { provider: "global", id: "fast" });
-	models.set("project/fast", { provider: "project", id: "fast" });
-
-	const withApiKey =
-		opts.withApiKey ??
-		new Set(["anthropic", "openai", "good", "global", "project"]);
-
-	const sessionModel = opts.sessionModel
-		? {
-				provider: opts.sessionModel.split("/")[0],
-				id: opts.sessionModel.split("/").slice(1).join("/"),
-			}
-		: undefined;
-
+	const entries = new Map(
+		[
+			model("anthropic/sonnet", { unsupported: ["xhigh"] }),
+			model("anthropic/haiku", { unsupported: ["high", "xhigh"] }),
+			model("openai/o3"),
+			model("openai/mini", { unsupported: ["high", "xhigh"] }),
+			model("plain/basic", { reasoning: false }),
+			model("global/one"),
+			model("global/two"),
+			model("project/one"),
+		].map((entry) => [`${entry.provider}/${entry.id}`, entry]),
+	);
+	const unavailable = new Set(options.unavailable ?? []);
+	const keyless = new Set(options.requireKeyless ?? []);
+	const session = options.session ? entries.get(options.session) : undefined;
 	return {
 		cwd,
-		model: sessionModel as any,
+		model: session,
 		modelRegistry: {
-			find: (provider: string, id: string) => {
-				const key = `${provider}/${id}`;
-				const m = models.get(key);
-				return m ? { ...m, api: "anthropic-messages" } : undefined;
-			},
-			getApiKeyAndHeaders: (model: any) => {
-				const hasKey = withApiKey.has(model.provider);
-				if (model.provider === "noauth") return Promise.resolve({ ok: false });
-				if (model.provider === "keyless")
-					return Promise.resolve({ ok: true, apiKey: undefined, headers: {} });
-				return Promise.resolve({
+			find: (provider: string, id: string) => entries.get(`${provider}/${id}`),
+			getApiKeyAndHeaders: async (entry: { provider: string; id: string }) => {
+				const id = `${entry.provider}/${entry.id}`;
+				if (unavailable.has(id)) return { ok: false };
+				return {
 					ok: true,
-					apiKey: hasKey ? "sk-test" : undefined,
+					apiKey: keyless.has(id) ? undefined : "test-key",
 					headers: {},
-				});
+				};
 			},
-			getAvailable: () => [],
 		},
 	} as unknown as ExtensionContext;
 }
 
 beforeEach(() => {
-	cwd = join(
-		tmpdir(),
-		`pi-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-	);
-	agentDir = join(cwd, ".pi-agent");
+	cwd = join(tmpdir(), `role-pool-${Date.now()}-${Math.random()}`);
+	agentDir = join(cwd, ".agent");
 	mkdirSync(join(cwd, ".pi"), { recursive: true });
 	mkdirSync(agentDir, { recursive: true });
-	// The resolver reads the global layer from PI_CODING_AGENT_DIR (it calls
-	// readModelsConfig(ctx.cwd) with no explicit agentDir). Point it at our temp
-	// so global settings are our fixtures — and the dev's real profile can't leak.
-	prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
+	resetSessionRoleOverrides();
 });
+
 afterEach(() => {
-	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+	resetSessionRoleOverrides();
+	if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
 });
 
-// ─── validateRoleModelConfig ─────────────────────────────────────────────────
-
-describe("validateRoleModelConfig", () => {
-	it("accepts explicit model config", () => {
-		expect(
-			validateRoleModelConfig({ model: "anthropic/sonnet", effort: "medium" }),
-		).toEqual({ model: "anthropic/sonnet", effort: "medium" });
-	});
-
-	it("accepts effort-only config", () => {
-		expect(validateRoleModelConfig({ effort: "xhigh" })).toEqual({
-			effort: "xhigh",
-		});
-	});
-
-	it("drops unknown effort levels", () => {
-		expect(validateRoleModelConfig({ model: "x/y", effort: "ultra" })).toEqual({
-			model: "x/y",
-		});
-	});
-
-	it("rejects empty config", () => {
-		expect(validateRoleModelConfig({})).toBeUndefined();
-	});
-});
-
-// ─── readModelsConfig ────────────────────────────────────────────────────────
-
-describe("readModelsConfig", () => {
-	it("reads profiles from project settings", () => {
-		projectSettings({
-			models: {
-				profiles: {
-					opus: {
-						targets: ["anthropic/sonnet"],
-						review: { model: "openai/o3", effort: "high" },
-					},
-				},
-			},
-		});
-		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.profiles.opus.targets).toEqual(["anthropic/sonnet"]);
-		expect(config?.profiles.opus.review?.model).toBe("openai/o3");
-	});
-
-	it("merges global and project — project wins per tier, globals survive", () => {
+describe("role profile parsing", () => {
+	it("replaces arrays leaf-wise while retaining the other global leaf", () => {
 		globalSettings({
-			models: {
-				profiles: {
-					opus: {
-						targets: ["anthropic/haiku"],
-						fast: { model: "openai/mini" },
-						review: { model: "global/fast" },
-					},
-				},
-			},
+			models: { profiles: { main: {
+				targets: ["anthropic/sonnet"],
+				roles: { worker: {
+					models: ["global/one", "global/two"],
+					efforts: ["medium", "low"],
+				} },
+			} } },
 		});
 		projectSettings({
-			models: {
-				profiles: {
-					opus: {
-						targets: ["anthropic/sonnet"],
-						review: { model: "openai/o3" },
-					},
-				},
-			},
+			models: { profiles: { main: {
+				roles: { worker: { models: ["project/one"] } },
+			} } },
 		});
-		const config = readModelsConfig(cwd, agentDir);
-		expect(config?.profiles.opus.targets).toEqual(["anthropic/sonnet"]);
-		expect(config?.profiles.opus.review?.model).toBe("openai/o3");
-		expect(config?.profiles.opus.fast?.model).toBe("openai/mini");
+		const cfg = readModelsConfig(cwd, agentDir)!;
+		expect(cfg.profiles.main.roles.worker).toEqual({
+			models: ["project/one"],
+			efforts: ["medium", "low"],
+		});
+		const pool = effectiveRolePool(cfg, "worker", "anthropic/sonnet")!;
+		expect(pool.provenance.models?.scope).toBe("project");
+		expect(pool.provenance.efforts?.scope).toBe("global");
 	});
 
-	it("returns undefined when nothing is configured", () => {
-		expect(readModelsConfig(cwd, agentDir)).toBeUndefined();
-	});
-});
-
-// ─── activeProfile ───────────────────────────────────────────────────────────
-
-describe("activeProfile", () => {
-	it("matches the profile whose targets include the session model", () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["anthropic/sonnet", "anthropic/haiku"] },
-					b: { targets: ["openai/o3"] },
-				},
+	it("rejects malformed IDs, empty/duplicate arrays, efforts, and unknown roles", () => {
+		projectSettings({ models: { profiles: { main: {
+			targets: ["anthropic/sonnet"],
+			roles: {
+				worker: { models: ["bad"], efforts: ["ultra"] },
+				reviewer: { models: ["openai/o3", "openai/o3"] },
+				advisor: { models: [] },
+				unknown: { models: ["openai/o3"] },
 			},
+		} } } });
+		const roles = readModelsConfig(cwd, agentDir)!.profiles.main.roles;
+		expect(roles).toEqual({});
+	});
+
+	it("fans legacy tiers out while direct role leaves win", () => {
+		projectSettings({ models: { profiles: { main: {
+			targets: ["anthropic/sonnet"],
+			work: { model: "global/one", effort: "medium" },
+			review: { model: "openai/o3", effort: "high" },
+			fast: { model: "anthropic/haiku", effort: "low" },
+			roles: { advisor: { models: ["project/one"] } },
+		} } } });
+		const profile = readModelsConfig(cwd, agentDir)!.profiles.main;
+		for (const role of ["worker", "delegate"] as const) {
+			expect(profile.roles[role]?.models).toEqual(["global/one"]);
+		}
+		for (const role of ["reviewer", "verifier"] as const) {
+			expect(profile.roles[role]?.models).toEqual(["openai/o3"]);
+		}
+		expect(profile.roles.advisor).toEqual({
+			models: ["project/one"], efforts: ["high"],
 		});
+		for (const role of [
+			"research", "classifier", "plan-summarizer", "compact-summarizer",
+		] as const) {
+			expect(profile.roles[role]?.models).toEqual(["anthropic/haiku"]);
+		}
+		expect(effectiveRolePool(readModelsConfig(cwd, agentDir), "reviewer", "anthropic/sonnet")
+			?.provenance.models).toMatchObject({ scope: "project", legacyTier: "review" });
+	});
+
+	it("derives active profiles only from exact target membership", () => {
+		projectSettings({ models: { profiles: {
+			a: { targets: ["anthropic/sonnet"] },
+			b: { targets: ["openai/o3"] },
+		} } });
 		const cfg = readModelsConfig(cwd, agentDir);
-		expect(activeProfile(cfg, "anthropic/haiku")?.name).toBe("a");
 		expect(activeProfile(cfg, "openai/o3")?.name).toBe("b");
-		expect(activeProfile(cfg, "good/model")).toBeUndefined();
+		expect(activeProfile(cfg, "anthropic/haiku")).toBeUndefined();
 	});
 });
 
-// ─── resolveRoleModel ────────────────────────────────────────────────────────
+describe("role pool resolution", () => {
+	function configure(role: string, models: string[], efforts = ["low", "high"]) {
+		projectSettings({ models: { profiles: { main: {
+			targets: ["anthropic/sonnet"],
+			roles: { [role]: { models, efforts } },
+		} } } });
+	}
 
-describe("resolveRoleModel", () => {
-	it("explicit override wins over everything", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-			explicit: { model: "openai/o3", effort: "xhigh" },
-		});
-		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.effort).toBe("xhigh");
-		expect(r?.source).toBe("explicit");
+	it("walks ordered unavailable models before selecting the default", async () => {
+		configure("research", ["openai/mini", "anthropic/haiku"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet", unavailable: ["openai/mini"] }),
+			{ role: "research" },
+		);
+		expect(result.selected?.modelId).toBe("anthropic/haiku");
+		expect(result.candidates.map((entry) => entry.modelId)).toEqual(["anthropic/haiku"]);
 	});
 
-	it("env var wins over profile/session", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-			env: { model: "openai/o3", effort: "high" },
-		});
-		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.source).toBe("env");
+	it("does not substitute an unavailable explicit model", async () => {
+		configure("research", ["openai/mini", "anthropic/haiku"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet", unavailable: ["openai/mini"] }),
+			{ role: "research", choice: { model: "openai/mini" } },
+		);
+		expect(result.selected).toBeNull();
+		expect(result.errors[0]?.code).toBe("explicit-model-unavailable");
 	});
 
-	it("per-role model escape hatch overrides the tier", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["anthropic/sonnet"], work: { model: "good/model" } },
-				},
-			},
-			extensionConfig: {
-				modes: { models: { agent: { model: "openai/o3", effort: "low" } } },
-			},
+	it("rejects an explicit model outside the effective pool", async () => {
+		configure("reviewer", ["openai/o3"]);
+		const result = await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
+			role: "reviewer", choice: { model: "anthropic/haiku" },
 		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
+		expect(result.errors[0]).toMatchObject({
+			code: "explicit-model-not-allowed", modelId: "anthropic/haiku",
 		});
-		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.effort).toBe("low");
-		expect(r?.source).toBe("profile");
 	});
 
-	it("resolves the tier's pinned model via the active profile", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: {
-						targets: ["anthropic/sonnet"],
-						review: { model: "openai/o3", effort: "high" },
-					},
-				},
-			},
+	it("intersects configured efforts with each model's support", async () => {
+		configure("research", ["anthropic/haiku"], ["high", "low"]);
+		const result = await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
+			role: "research",
 		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
+		expect(result.candidates[0]?.supportedEfforts).toEqual(["low"]);
+		expect(result.selected?.effort).toBe("low");
+	});
+
+	it("rejects explicit disallowed and unsupported effort without clamping", async () => {
+		configure("research", ["anthropic/haiku"], ["xhigh", "low"]);
+		const unsupported = await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
+			role: "research", choice: { effort: "xhigh" },
+		});
+		expect(unsupported.selected).toBeNull();
+		expect(unsupported.errors[0]?.code).toBe("explicit-effort-unsupported");
+		const disallowed = await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
+			role: "research", choice: { effort: "medium" },
+		});
+		expect(disallowed.errors[0]?.code).toBe("explicit-effort-not-allowed");
+	});
+
+	it("falls back to the authenticated live session model only for omitted choice", async () => {
+		configure("worker", ["global/one"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet", unavailable: ["global/one"] }),
+			{ role: "worker" },
+		);
+		expect(result.selected).toMatchObject({
+			modelId: "anthropic/sonnet", source: "session", profile: "main",
+		});
+	});
+
+	it("uses session leaves above project/global and reports provenance", async () => {
+		configure("reviewer", ["openai/o3"], ["high"]);
+		setSessionRoleOverride("main", "reviewer", {
+			models: ["anthropic/haiku"], efforts: ["low"],
+		});
+		const result = await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
 			role: "reviewer",
-			tier: "review",
 		});
-		expect(r?.modelId).toBe("openai/o3");
-		expect(r?.effort).toBe("high");
-		expect(r?.source).toBe("profile");
-		expect(r?.tier).toBe("review");
-		expect(r?.profile).toBe("a");
+		expect(result.selected?.modelId).toBe("anthropic/haiku");
+		expect(result.provenance.models?.scope).toBe("session");
+		expect(result.provenance.efforts?.scope).toBe("session");
+		resetSessionRoleOverrides();
+		expect((await resolveRolePool(fakeCtx({ session: "anthropic/sonnet" }), {
+			role: "reviewer",
+		})).selected?.modelId).toBe("openai/o3");
 	});
 
-	it("an unset tier tracks plan (the session model)", async () => {
-		projectSettings({
-			models: { profiles: { a: { targets: ["anthropic/sonnet"] } } },
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("anthropic/sonnet");
-		expect(r?.source).toBe("session");
-	});
-
-	it("falls back to the session model when no profile claims it", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["openai/o3"], work: { model: "good/model" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("anthropic/sonnet");
-		expect(r?.source).toBe("session");
-	});
-
-	it("a pinned tier model without auth fails through to session", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["good/model"], work: { model: "noauth/model" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "good/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.source).toBe("session");
-	});
-
-	it("returns null when no session model and nothing resolves", async () => {
-		const ctx = fakeCtx({});
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r).toBeNull();
-	});
-
-	it("effort from role config is preserved over the tier effort", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: {
-						targets: ["good/model"],
-						work: { model: "good/model", effort: "low" },
-					},
-				},
-			},
-			extensionConfig: {
-				modes: { models: { agent: { effort: "xhigh" } } },
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "good/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.effort).toBe("xhigh");
-	});
-
-	it("effort-only role config uses the session model with that effort", async () => {
-		projectSettings({
-			extensionConfig: {
-				modes: { models: { agent: { effort: "low" } } },
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "anthropic/sonnet" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("anthropic/sonnet");
-		expect(r?.effort).toBe("low");
-		expect(r?.source).toBe("session");
-	});
-
-	it("requireApiKey: a keyless tier model fails through to session", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: { targets: ["good/model"], work: { model: "keyless/model" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "good/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-			requireApiKey: true,
-		});
-		expect(r?.modelId).toBe("good/model");
-		expect(r?.source).toBe("session");
-	});
-
-	it("project profile config overrides global", async () => {
-		globalSettings({
-			models: {
-				profiles: {
-					p: { targets: ["good/model"], work: { model: "global/fast" } },
-				},
-			},
-		});
-		projectSettings({
-			models: {
-				profiles: {
-					p: { targets: ["good/model"], work: { model: "project/fast" } },
-				},
-			},
-		});
-		const ctx = fakeCtx({ sessionModel: "good/model" });
-		const r = await resolveRoleModel(ctx, {
-			extension: "modes",
-			role: "agent",
-			tier: "work",
-		});
-		expect(r?.modelId).toBe("project/fast");
-		expect(r?.source).toBe("profile");
-	});
-});
-
-// ─── resolveTierModel ────────────────────────────────────────────────────────
-
-describe("resolveTierModel", () => {
-	it("resolves the review tier's pinned model directly", async () => {
-		projectSettings({
-			models: {
-				profiles: {
-					a: {
-						targets: ["anthropic/sonnet"],
-						review: { model: "openai/o3", effort: "high" },
-					},
-				},
-			},
-		});
-		const res = await resolveTierModel(
-			fakeCtx({ sessionModel: "anthropic/sonnet" }),
-			"review",
-			{ effort: "high" },
+	it("requires an API key when requested", async () => {
+		configure("worker", ["global/one"]);
+		const result = await resolveRolePool(
+			fakeCtx({ requireKeyless: ["global/one", "anthropic/sonnet"], session: "anthropic/sonnet" }),
+			{ role: "worker", requireApiKey: true },
 		);
-		expect(res?.modelId).toBe("openai/o3");
-		expect(res?.effort).toBe("high");
-		expect(res?.source).toBe("profile");
-		expect(res?.tier).toBe("review");
+		expect(result.selected).toBeNull();
+		expect(result.errors[0]?.code).toBe("no-model-available");
 	});
 
-	it("returns the session model when the tier tracks plan", async () => {
-		projectSettings({
-			models: { profiles: { a: { targets: ["anthropic/sonnet"] } } },
-		});
-		const res = await resolveTierModel(
-			fakeCtx({ sessionModel: "anthropic/sonnet" }),
-			"review",
-		);
-		expect(res?.modelId).toBe("anthropic/sonnet");
-		expect(res?.source).toBe("session");
-	});
-
-	it("returns null with no session model", async () => {
-		expect(await resolveTierModel(fakeCtx({}), "review")).toBeNull();
+	it("treats non-reasoning models as supporting only off", () => {
+		expect(supportedEfforts(model("plain/basic", { reasoning: false }) as any)).toEqual(["off"]);
 	});
 });

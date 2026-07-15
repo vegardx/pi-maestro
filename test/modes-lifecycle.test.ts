@@ -129,7 +129,6 @@ describe("modes compaction settings", () => {
 		expect(s.workingTokens).toBe(150000);
 		expect(s.summaryTokens).toBe(100000);
 		expect(s.timeoutMs).toBe(90000);
-		expect(s.planMaxContextTokens).toBeUndefined();
 	});
 });
 

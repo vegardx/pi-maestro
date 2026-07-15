@@ -47,7 +47,7 @@ needs the `gh` CLI.
   research(...)             # parallel codebase/web subagents report back
   deliverable/task/agent    # tools shape the plan: branches, tasks, reviewers
 /implement                  # workers spawn in worktrees, panes open
-/agents                     # live status: tasks, review ledger, cycles
+/agents                     # focus the HUD: live agents, plan, questions
   ...worker finishes, runs its review panel, fixes findings, verifies...
   ...gate blocks? maestro triages; only repeats reach you as a question...
 /ship                       # push + PR for the next shippable deliverable

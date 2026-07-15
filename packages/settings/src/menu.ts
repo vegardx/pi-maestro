@@ -404,29 +404,31 @@ export function rolePoolEditor(
 	return new OrderedPoolComponent(ctx, profile, role, done);
 }
 
-function targetsEditor(
+export function targetsEditor(
 	ctx: ExtensionContext,
 	profile: string,
 	done: (value?: string) => void,
 ): Component {
-	const targets = readProfileTargets(ctx, profile);
-	return selectComponent(
-		PERSISTENT_SCOPES.map((scope) => ({
-			value: scope,
-			label: `${scope}: ${targets[scope]?.length ?? 0} target(s)`,
-			description:
-				scope === targets.source ? "effective source" : "inherits when unset",
-		})),
-		(scopeValue) => {
-			if (!scopeValue) return done();
-			const scope = scopeValue as "global" | "project";
+	// Scope rows are SettingItems: only SettingsList submenus actually mount a
+	// returned component (plain SelectList.onSelect discards return values), so
+	// the multi-select must hang off a `submenu` to ever appear.
+	const targetCount = (scope: "global" | "project"): string =>
+		`${readProfileTargets(ctx, profile)[scope]?.length ?? 0} target(s)`;
+	const source = readProfileTargets(ctx, profile).source;
+	const items: SettingItem[] = PERSISTENT_SCOPES.map((scope) => ({
+		id: scope,
+		label: scope,
+		currentValue: targetCount(scope),
+		description: scope === source ? "effective source" : "inherits when unset",
+		submenu: (_value, scopeDone) => {
+			const targets = readProfileTargets(ctx, profile);
 			let selected = [...(targets[scope] ?? targets.effective ?? [])];
 			const owners = new Map<string, string>();
 			for (const [name, config] of Object.entries(
 				readModelsConfig(ctx.cwd)?.profiles ?? {},
 			))
 				for (const target of config.targets) owners.set(target, name);
-			const component = new MultiSelectComponent(
+			return new MultiSelectComponent(
 				modelOptions(ctx).map((model) => ({
 					value: model.id,
 					label: model.label,
@@ -459,10 +461,15 @@ function targetsEditor(
 					} else selected = selected.filter((value) => value !== modelId);
 					writeProfileTargets(ctx, profile, scope, selected);
 				},
-				() => done(`${selected.length} target(s) · ${scope}`),
+				// A fresh summary refreshes the scope row's currentValue on close.
+				() => scopeDone(targetCount(scope)),
 			);
-			return component;
 		},
+	}));
+	return settingsComponent(
+		items,
+		() => {},
+		() => done(),
 	);
 }
 

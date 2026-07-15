@@ -1192,6 +1192,7 @@ export class ExecutionAdapter {
 				plan,
 				deliverable,
 				this.opts.workspaceValidation,
+				this.opts.planDir,
 			),
 		};
 	}

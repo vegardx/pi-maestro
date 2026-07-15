@@ -45,6 +45,7 @@ export function validateRestartWorkspace(
 	plan: Plan,
 	deliverable: Deliverable,
 	overrides: Partial<WorkspaceValidationDeps> = {},
+	planDir?: string,
 ): WorkspaceValidationResult {
 	const deps = { ...defaults, ...overrides };
 	const path = deliverable.worktreePath;
@@ -103,6 +104,31 @@ export function validateRestartWorkspace(
 	}
 
 	if (deliverableWorkspace(deliverable) === "scratch") {
+		// Scratch dirs have no repo/branch proof, so the only ownership claim is
+		// the authoritative provisioning path under the plan directory.
+		if (!planDir) {
+			return {
+				ok: false,
+				error:
+					"scratch workspace validation requires the authoritative plan directory",
+			};
+		}
+		const expected = resolve(planDir, "workspaces", deliverable.id);
+		let expectedPath: string;
+		try {
+			expectedPath = canonical(expected, deps);
+		} catch (error) {
+			return {
+				ok: false,
+				error: `cannot resolve expected scratch workspace ${expected}: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+		if (actualPath !== expectedPath) {
+			return {
+				ok: false,
+				error: `scratch workspace mismatch: expected ${expectedPath}, found ${actualPath}`,
+			};
+		}
 		return { ok: true, path: actualPath };
 	}
 

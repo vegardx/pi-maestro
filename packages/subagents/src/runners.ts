@@ -49,11 +49,33 @@ export interface RunnerOptions {
 	readonly resultCapBytes?: number;
 	/** Idle timeout for a run. Default none. */
 	readonly timeoutMs?: number;
+	/** Transport startup/readiness deadline (client.start). Default 20s. */
+	readonly startupTimeoutMs?: number;
+	/** Deadline for each individual RPC request (prompt/abort/getLast…).
+	 *  This bounds the request ACK, not the child's thinking time — the run
+	 *  itself is bounded by watchdog/timeoutMs. Default 30s. */
+	readonly rpcTimeoutMs?: number;
 	/** Fired when a run settles (the background completion notification). */
 	readonly onSettled?: (runId: RunId, result: RunResult) => void;
 }
 
 const DEFAULT_RESULT_CAP = 16 * 1024;
+const DEFAULT_STARTUP_TIMEOUT_MS = 20_000;
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+/** A deadline kill — settles the run `timed-out`, distinct from `failed`. */
+class DeadlineError extends Error {
+	constructor(boundary: string, ms: number) {
+		super(`${boundary} deadline exceeded (${Math.round(ms / 1000)}s)`);
+		this.name = "DeadlineError";
+	}
+}
+
+/** One run's settle-once latch, shared between execute() and the controller. */
+interface Lifecycle {
+	settled: boolean;
+	interruptPublished: boolean;
+}
 
 export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 	const cap = opts.resultCapBytes ?? DEFAULT_RESULT_CAP;
@@ -65,6 +87,10 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 			// Liveness: bumped on every child event so a watchdog can tell a
 			// stalled run (event silence) from a slow-but-working one.
 			const activity = { at: Date.now() };
+			const lifecycle: Lifecycle = {
+				settled: false,
+				interruptPublished: false,
+			};
 
 			const done = execute(
 				request,
@@ -76,6 +102,7 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 					client = c;
 				},
 				activity,
+				lifecycle,
 			).then((result) => {
 				opts.onSettled?.(request.runId, result);
 				return result;
@@ -90,10 +117,19 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 					}
 				},
 				stop() {
-					// Stopping a finished run must be a no-op, not a crash: the
-					// RPC client throws synchronously ("Client not started") once
-					// its transport is gone, and that has escaped a timer callback
-					// as an uncaught exception before (post-/handoff crash).
+					// Stop after settlement is a no-op — no status transition, no
+					// transport call that could throw out of a timer callback (the
+					// RPC client throws synchronously once its transport is gone;
+					// that escaped as an uncaught post-/handoff crash before).
+					if (!lifecycle.settled && !lifecycle.interruptPublished) {
+						lifecycle.interruptPublished = true;
+						bus.publish({
+							type: "status",
+							runId: request.runId,
+							status: "interrupting",
+							at: Date.now(),
+						});
+					}
 					abort.abort();
 					try {
 						asFireAndForget(client?.abort());
@@ -123,16 +159,21 @@ async function execute(
 	opts: RunnerOptions,
 	cap: number,
 	bindClient: (client: RpcLike) => void,
-	activity?: { at: number },
+	activity: { at: number },
+	lifecycle: Lifecycle,
 ): Promise<RunResult> {
 	const { runId, prompt, invocation } = request;
+	const done = (result: RunResult): RunResult => {
+		lifecycle.settled = true;
+		return settle(bus, runId, result);
+	};
 
-	if (signal.aborted)
-		return settle(bus, runId, stopped("aborted before start"));
+	if (signal.aborted) return done(stopped("aborted before start"));
 
 	let release: (() => void) | undefined;
 	let client: RpcLike | undefined;
 	let unsubscribe: (() => void) | undefined;
+	const rpcMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
 
 	try {
 		release = await opts.semaphore.acquire(signal);
@@ -150,9 +191,11 @@ async function execute(
 		bindClient(client);
 
 		unsubscribe = client.onEvent((event) => {
-			if (activity) activity.at = Date.now();
+			activity.at = Date.now();
 			mapEvent(bus, runId, event);
 		});
+
+		bus.publish({ type: "status", runId, status: "starting", at: Date.now() });
 
 		// Own the idle wait instead of client.waitForIdle: RpcClient's version
 		// carries a hidden 60s DEFAULT timeout when called without one, which
@@ -163,10 +206,23 @@ async function execute(
 		const idle = waitUntilIdle(client);
 		idle.catch(() => {}); // guard: abort/timeout may win the race first
 
-		await client.start();
-		bus.publish({ type: "status", runId, status: "running", at: Date.now() });
-
-		await client.prompt(prompt);
+		// Startup, the initial prompt, and the idle wait all run INSIDE the
+		// watchdog/timeout race. These were awaited bare before it, so a child
+		// that wedged during startup or never acked the first prompt hung the
+		// run with no protection at all — liveness must exist before the first
+		// transport await, not after it. The per-request deadlines bound the
+		// ACK of each RPC; the child's actual work is bounded by the watchdog.
+		const body = (async () => {
+			await deadline(
+				client.start(),
+				opts.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+				"startup",
+			);
+			bus.publish({ type: "status", runId, status: "running", at: Date.now() });
+			await deadline(client.prompt(prompt), rpcMs, "prompt request");
+			await idle;
+		})();
+		body.catch(() => {}); // raced below; abort/trip may win first
 
 		// Per-run liveness watchdog (profile.watchdog): stall kills wedged
 		// children fast, the soft deadline steers slow ones to wrap up, the
@@ -176,39 +232,58 @@ async function execute(
 		let tripped: string | undefined;
 		if (wd) {
 			tripped = await raceAbort(
+				withTimeout(raceWatchdog(body, wd, client, activity), opts.timeoutMs),
+				signal,
+			);
+		} else {
+			await raceAbort(
 				withTimeout(
-					raceWatchdog(idle, wd, client, activity ?? { at: Date.now() }),
+					body.then(() => undefined),
 					opts.timeoutMs,
 				),
 				signal,
 			);
-		} else {
-			await raceAbort(withTimeout(idle, opts.timeoutMs), signal);
 		}
 
-		if (signal.aborted) return settle(bus, runId, stopped("aborted"));
+		if (signal.aborted) return done(stopped("aborted"));
 
 		if (tripped) {
-			// Salvage BEFORE aborting — abort kills the child process.
+			// Salvage BEFORE aborting — abort kills the child process. The
+			// partial text is diagnostic material for the caller; consumers
+			// (e.g. the review panel) must never read it as a valid report.
 			const partial = (
-				await client.getLastAssistantText().catch(() => null)
+				await deadline(client.getLastAssistantText(), rpcMs, "salvage").catch(
+					() => null,
+				)
 			)?.trim();
-			await client.abort().catch(() => {});
-			return settle(bus, runId, {
-				status: "stopped",
+			await deadline(client.abort(), rpcMs, "abort request").catch(() => {});
+			return done({
+				status: "timed-out",
 				error: tripped,
 				...(partial ? { summary: capText(partial, cap) } : {}),
 			});
 		}
 
-		const text = (await client.getLastAssistantText()) ?? "";
-		return settle(bus, runId, {
+		const text =
+			(await deadline(
+				client.getLastAssistantText(),
+				rpcMs,
+				"result request",
+			).catch(() => null)) ?? "";
+		return done({
 			status: "succeeded",
 			summary: capText(text, cap),
 		});
 	} catch (err) {
-		if (signal.aborted) return settle(bus, runId, stopped("aborted"));
-		return settle(bus, runId, {
+		// Explicit interrupt is terminal and wins over whatever the abort broke
+		// mid-flight; deadline kills settle timed-out; everything else failed
+		// (including child death, which rejects the idle wait and thereby every
+		// pending operation of this run).
+		if (signal.aborted) return done(stopped("aborted"));
+		if (err instanceof DeadlineError) {
+			return done({ status: "timed-out", error: err.message });
+		}
+		return done({
 			status: "failed",
 			error: err instanceof Error ? err.message : String(err),
 		});
@@ -220,10 +295,11 @@ async function execute(
 }
 
 /**
- * Race the idle wait against the run's watchdog thresholds. Resolves
- * `undefined` when the run finishes on its own, or a human-readable trip
- * reason when the watchdog fires (stall / hard cap). The soft deadline
- * doesn't trip — it steers the child ONCE to wrap up and keeps waiting.
+ * Race the run body (startup → prompt → idle) against the run's watchdog
+ * thresholds. Resolves `undefined` when the run finishes on its own, or a
+ * human-readable trip reason when the watchdog fires (stall / hard cap). The
+ * soft deadline doesn't trip — it steers the child ONCE to wrap up and keeps
+ * waiting. A trip settles the run `timed-out`; it is never retried.
  */
 function raceWatchdog(
 	idle: Promise<void>,
@@ -382,7 +458,28 @@ async function withTimeout<T>(
 	if (!timeoutMs) return work;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error("run timed out")), timeoutMs);
+		timer = setTimeout(
+			() => reject(new DeadlineError("run", timeoutMs)),
+			timeoutMs,
+		);
+	});
+	try {
+		return await Promise.race([work, timeout]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+/** Bound one transport await; rejection carries the boundary that tripped. */
+async function deadline<T>(
+	work: Promise<T>,
+	ms: number,
+	boundary: string,
+): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new DeadlineError(boundary, ms)), ms);
+		timer.unref?.();
 	});
 	try {
 		return await Promise.race([work, timeout]);

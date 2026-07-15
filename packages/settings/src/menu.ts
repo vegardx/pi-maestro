@@ -38,9 +38,9 @@ import {
 	deleteProfile,
 	formatSettingValue,
 	type MaestroScope,
+	modelOptions,
 	modelProfileKeys,
 	parseSettingValue,
-	type RoleLeaf,
 	readAdvancedValue,
 	readProfileTargets,
 	readRoleLeaf,
@@ -55,6 +55,8 @@ import {
 } from "./model.js";
 import { readLayeredExtensionConfig } from "./reader.js";
 import { updateSettingsFile } from "./writer.js";
+
+export { modelOptions } from "./model.js";
 
 const MAX_VISIBLE = 14;
 const SCOPES = [
@@ -120,46 +122,6 @@ function settingsComponent(
 	);
 }
 
-interface ModelOption {
-	readonly id: string;
-	readonly label: string;
-	readonly description: string;
-	readonly supported: readonly ThinkingLevel[];
-}
-
-function supportedEfforts(model: unknown): readonly ThinkingLevel[] {
-	const entry = model as {
-		reasoning?: boolean;
-		thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
-		compat?: { forceAdaptiveThinking?: boolean };
-	};
-	if (entry.reasoning === false) return ["off"];
-	let efforts = THINKING_LEVELS.filter(
-		(level) => entry.thinkingLevelMap?.[level] !== null,
-	);
-	if (entry.compat?.forceAdaptiveThinking)
-		efforts = efforts.filter((level) => level !== "off" && level !== "minimal");
-	return efforts;
-}
-
-export function modelOptions(ctx: ExtensionContext): ModelOption[] {
-	// The FULL catalog, always. Profile targets are configuration, not
-	// activation: the runtime role resolver already filters pools to
-	// authenticated models at spawn time, so selecting a "needs
-	// authentication" model is a dormant target, never a live call. Listing
-	// only getAvailable() hid every other provider's models the moment ONE
-	// provider had auth — the label below was unreachable and the global
-	// anthropic/openai/grok catalog could not be assigned to profiles.
-	return ctx.modelRegistry.getAll().map((model) => ({
-		id: `${model.provider}/${model.id}`,
-		label: `${(model as { name?: string }).name ?? model.id} (${model.provider})`,
-		description: ctx.modelRegistry.hasConfiguredAuth(model)
-			? "available"
-			: "needs authentication",
-		supported: supportedEfforts(model),
-	}));
-}
-
 function profileSummary(ctx: ExtensionContext, profile: string): string {
 	const cfg = readModelsConfig(ctx.cwd)?.profiles[profile];
 	if (!cfg) return "empty";
@@ -184,20 +146,6 @@ function roleSummary(
 		? summarizeOrdered(efforts.effective)
 		: "provider default";
 	return `${modelSummary} · ${effortSummary}`;
-}
-
-function sourceChain<T>(value: {
-	session?: T;
-	project?: T;
-	global?: T;
-	source?: string;
-}): string {
-	const authored = [
-		value.session !== undefined ? "session" : undefined,
-		value.project !== undefined ? "project" : undefined,
-		value.global !== undefined ? "global" : undefined,
-	].filter(Boolean);
-	return `${value.source ?? "fallback"}; precedence session → project → global${authored.length ? `; authored: ${authored.join(", ")}` : ""}`;
 }
 
 function move<T>(values: readonly T[], from: number, to: number): T[] {
@@ -266,211 +214,194 @@ export class MultiSelectComponent implements Component {
 	}
 }
 
-function arrayEditor(
-	ctx: ExtensionContext,
-	profile: string,
-	role: ModelRole,
-	leaf: RoleLeaf,
-	scope: MaestroScope,
-	done: (value?: string) => void,
-): Component {
-	const layered = readRoleLeaf(ctx, profile, role, leaf);
-	const local = layered[scope] ?? [];
-	const effective = layered.effective ?? [];
-	const display =
-		leaf === "models"
-			? (id: string) => resolveModelName(ctx, id)
-			: (id: string) => id;
-	const items: SettingItem[] = [
-		{
-			id: "source",
-			label: "Effective source",
-			currentValue: sourceChain(layered),
-			description:
-				"Arrays replace the lower-precedence leaf; they never concatenate.",
-		},
-	];
-	for (let index = 0; index < local.length; index++) {
-		const value = local[index];
-		items.push({
-			id: `entry:${index}`,
-			label: index === 0 ? "Default" : `Alternate ${index}`,
-			currentValue: display(value),
-			description: value,
-			submenu: (_current, entryDone) =>
-				selectComponent(
-					[
-						{
-							value: "default",
-							label: "Make default",
-							description: "Move this exact value to index 0",
-						},
-						{ value: "up", label: "Move up" },
-						{ value: "down", label: "Move down" },
-						{ value: "remove", label: "Remove" },
-					],
-					(action) => {
-						if (!action) return entryDone();
-						let next = [...local];
-						if (action === "default") next = move(next, index, 0);
-						if (action === "up") next = move(next, index, index - 1);
-						if (action === "down") next = move(next, index, index + 1);
-						if (action === "remove") {
-							if (next.length === 1) {
-								ctx.ui.notify(
-									"An explicit pool cannot be empty. Reset this scope instead.",
-									"warning",
-								);
-								return entryDone();
-							}
-							next.splice(index, 1);
-						}
-						writeRoleLeaf(ctx, profile, role, leaf, scope, next);
-						entryDone(summarizeOrdered(next.map(display)));
-						done(summarizeOrdered(next.map(display)));
-					},
-				),
-		});
+/**
+ * One-screen ordered role pool editor. The checked, numbered head of the list
+ * IS the pool (row 1 is the default); unchecked rows are the remaining
+ * candidates. Every mutation writes through writeRoleLeaf immediately — the
+ * same live-write style as the other editors — so esc/return only reports.
+ */
+class OrderedPoolComponent implements Component {
+	private list: SelectList;
+	private scope: Exclude<MaestroScope, "session">;
+	private pool: string[];
+
+	constructor(
+		private readonly ctx: ExtensionContext,
+		private readonly profile: string,
+		private readonly role: ModelRole,
+		private readonly done: (value?: string) => void,
+	) {
+		// Session overrides are runtime patches, not an editing surface here;
+		// the editor persists to global/project only and starts at the models
+		// leaf's effective source when that source is persistent.
+		const source = readRoleLeaf(ctx, profile, role, "models").source;
+		this.scope = source === "project" ? "project" : "global";
+		this.pool = this.readPool();
+		this.list = this.createList(this.pool[0]);
 	}
-	items.push({
-		id: "add",
-		label: "Add value",
-		currentValue: leaf === "models" ? "search models" : "compatible efforts",
-		submenu: (_current, addDone) => {
-			if (leaf === "models") {
-				const selected = new Set(local);
-				return selectComponent(
-					modelOptions(ctx)
-						.filter((model) => !selected.has(model.id))
-						.map((model) => ({
-							value: model.id,
-							label: model.label,
-							description: model.description,
-						})),
-					(value) => {
-						if (!value) return addDone();
-						const next = [...local, value];
-						writeRoleLeaf(ctx, profile, role, leaf, scope, next);
-						addDone(summarizeOrdered(next.map(display)));
-						done(summarizeOrdered(next.map(display)));
-					},
-				);
-			}
-			const configuredModels =
-				readRoleLeaf(ctx, profile, role, "models").effective ?? [];
-			const supported = configuredModels.length
-				? THINKING_LEVELS.filter((effort) =>
-						configuredModels.some((id) =>
-							modelOptions(ctx)
-								.find((model) => model.id === id)
-								?.supported.includes(effort),
-						),
-					)
-				: [...THINKING_LEVELS];
-			return selectComponent(
-				supported
-					.filter((effort) => !local.includes(effort))
-					.map((effort) => ({ value: effort, label: effort })),
-				(value) => {
-					if (!value) return addDone();
-					const next = [...local, value];
-					writeRoleLeaf(ctx, profile, role, leaf, scope, next);
-					addDone(summarizeOrdered(next));
-					done(summarizeOrdered(next));
-				},
+
+	private readPool(): string[] {
+		const layered = readRoleLeaf(this.ctx, this.profile, this.role, "models");
+		// An unauthored write scope starts from the effective pool so the first
+		// mutation copies it rather than silently shadowing it with a fragment.
+		return [...(layered[this.scope] ?? layered.effective ?? [])];
+	}
+
+	private buildItems(): SelectItem[] {
+		const options = modelOptions(this.ctx);
+		const byId = new Map(options.map((option) => [option.id, option]));
+		const items: SelectItem[] = this.pool.map((id, index) => ({
+			value: id,
+			label: `[x] ${index + 1}. ${byId.get(id)?.label ?? id}${index === 0 ? " · default" : ""}`,
+			description: byId.get(id)?.description ?? "needs authentication",
+		}));
+		for (const option of options) {
+			if (this.pool.includes(option.id)) continue;
+			items.push({
+				value: option.id,
+				label: `[ ]    ${option.label}`,
+				description: option.description,
+			});
+		}
+		return items;
+	}
+
+	private createList(follow: string | undefined): SelectList {
+		const items = this.buildItems();
+		const list = new SelectList(
+			items,
+			Math.min(MAX_VISIBLE, Math.max(items.length, 1)),
+			getSelectListTheme(),
+			// Pool rows carry checkbox + index + default marker; the default
+			// 32-column primary would truncate exactly the ordering signal.
+			{ minPrimaryColumnWidth: 32, maxPrimaryColumnWidth: 64 },
+		);
+		const index = items.findIndex((item) => item.value === follow);
+		if (index >= 0) list.setSelectedIndex(index);
+		const finish = () =>
+			this.done(roleSummary(this.ctx, this.profile, this.role));
+		list.onSelect = finish;
+		list.onCancel = finish;
+		return list;
+	}
+
+	/** Rebuild rows after a mutation, keeping the cursor on `follow`. */
+	private refresh(follow?: string): void {
+		this.list = this.createList(
+			follow ?? this.list.getSelectedItem()?.value ?? undefined,
+		);
+	}
+
+	private write(next: readonly string[]): void {
+		// Empty pools are stored as a reset scope, never an empty array.
+		writeRoleLeaf(
+			this.ctx,
+			this.profile,
+			this.role,
+			"models",
+			this.scope,
+			next.length ? next : undefined,
+		);
+	}
+
+	private toggle(): void {
+		const id = this.list.getSelectedItem()?.value;
+		if (!id) return;
+		const next = this.pool.includes(id)
+			? this.pool.filter((value) => value !== id)
+			: [...this.pool, id];
+		this.write(next);
+		this.pool = next;
+		this.refresh(id);
+	}
+
+	private movePool(delta: number): void {
+		const id = this.list.getSelectedItem()?.value;
+		if (!id) return;
+		const index = this.pool.indexOf(id);
+		// Ordering applies to checked rows only; candidates have no position.
+		if (index < 0) return;
+		const target = index + delta;
+		if (target < 0 || target >= this.pool.length) return;
+		this.pool = move(this.pool, index, target);
+		this.write(this.pool);
+		this.refresh(id);
+	}
+
+	private switchScope(): void {
+		this.scope = this.scope === "global" ? "project" : "global";
+		this.pool = this.readPool();
+		this.refresh();
+	}
+
+	private cycleEffort(): void {
+		const defaultModel = this.pool[0];
+		if (!defaultModel) {
+			this.ctx.ui.notify(
+				"Add a model first — the default effort follows the default model.",
+				"warning",
 			);
-		},
-	});
-	if (local.length > 0)
-		items.push({
-			id: "reset",
-			label: "Reset current scope",
-			currentValue: `inherit ${scope === "session" ? "project/global" : scope === "project" ? "global" : "session model"}`,
-			values: ["reset"],
-		});
-	if (local.length === 0 && effective.length > 0)
-		items.push({
-			id: "replace",
-			label: "Replace at this scope",
-			currentValue: `copy ${effective.length} effective value(s)`,
-			values: ["copy"],
-		});
-	return settingsComponent(
-		items,
-		(id) => {
-			if (id === "reset")
-				writeRoleLeaf(ctx, profile, role, leaf, scope, undefined);
-			if (id === "replace")
-				writeRoleLeaf(ctx, profile, role, leaf, scope, effective);
-			done(roleSummary(ctx, profile, role));
-		},
-		() => done(),
-	);
+			return;
+		}
+		const supported =
+			modelOptions(this.ctx).find((option) => option.id === defaultModel)
+				?.supported ?? THINKING_LEVELS;
+		if (supported.length === 0) return;
+		const layered = readRoleLeaf(this.ctx, this.profile, this.role, "efforts");
+		const configured = [...(layered[this.scope] ?? layered.effective ?? [])];
+		// indexOf misses (unset or unsupported default) wrap to supported[0].
+		const next =
+			supported[
+				(supported.indexOf(configured[0] as ThinkingLevel) + 1) %
+					supported.length
+			];
+		// The chosen level leads; other configured levels stay as alternates.
+		writeRoleLeaf(this.ctx, this.profile, this.role, "efforts", this.scope, [
+			next,
+			...configured.filter((level) => level !== next),
+		]);
+		this.refresh();
+	}
+
+	render(width: number): string[] {
+		const theme = this.ctx.ui.theme;
+		const efforts = readRoleLeaf(this.ctx, this.profile, this.role, "efforts");
+		const effort =
+			(efforts[this.scope] ?? efforts.effective)?.[0] ?? "provider default";
+		const header = theme.fg(
+			"accent",
+			theme.bold(
+				`${this.role} · ${this.profile} · scope: ${this.scope} · effort: ${effort}`,
+			),
+		);
+		const hint = theme.fg(
+			"dim",
+			"space toggle · +/- reorder · g scope · e effort · enter/esc done",
+		);
+		return [` ${header}`, ...this.list.render(width), ` ${hint}`];
+	}
+
+	invalidate(): void {
+		this.list.invalidate();
+	}
+
+	handleInput(data: string): void {
+		if (data === " ") this.toggle();
+		else if (data === "+" || data === "K") this.movePool(-1);
+		else if (data === "-" || data === "J") this.movePool(1);
+		else if (data === "g") this.switchScope();
+		else if (data === "e") this.cycleEffort();
+		else this.list.handleInput(data);
+	}
 }
 
-function leafScopes(
+export function rolePoolEditor(
 	ctx: ExtensionContext,
 	profile: string,
 	role: ModelRole,
-	leaf: RoleLeaf,
 	done: (value?: string) => void,
 ): Component {
-	const layered = readRoleLeaf(ctx, profile, role, leaf);
-	const items = SCOPES.map(
-		(scope): SettingItem => ({
-			id: scope,
-			label: scope[0].toUpperCase() + scope.slice(1),
-			currentValue: layered[scope]?.length
-				? summarizeOrdered(layered[scope]!)
-				: "inherit",
-			description: `${scope === layered.source ? "Effective source. " : ""}Precedence: session → project → global → live session fallback.`,
-			submenu: (_value, scopeDone) =>
-				arrayEditor(ctx, profile, role, leaf, scope, scopeDone),
-		}),
-	);
-	return settingsComponent(
-		items,
-		() => done(roleSummary(ctx, profile, role)),
-		() => done(),
-	);
-}
-
-function roleDetail(
-	ctx: ExtensionContext,
-	profile: string,
-	role: ModelRole,
-	done: (value?: string) => void,
-): Component {
-	const models = readRoleLeaf(ctx, profile, role, "models");
-	const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-	return settingsComponent(
-		[
-			{
-				id: "models",
-				label: "Models",
-				currentValue: models.effective?.length
-					? summarizeOrdered(
-							models.effective.map((id) => resolveModelName(ctx, id)),
-						)
-					: "live session fallback",
-				description: `Ordered exact provider/model allowlist. ${sourceChain(models)}`,
-				submenu: (_value, leafDone) =>
-					leafScopes(ctx, profile, role, "models", leafDone),
-			},
-			{
-				id: "efforts",
-				label: "Efforts",
-				currentValue: efforts.effective?.length
-					? summarizeOrdered(efforts.effective)
-					: "provider default",
-				description: `Ordered effort allowlist, filtered by configured model support. ${sourceChain(efforts)}`,
-				submenu: (_value, leafDone) =>
-					leafScopes(ctx, profile, role, "efforts", leafDone),
-			},
-		],
-		() => done(roleSummary(ctx, profile, role)),
-		() => done(),
-	);
+	return new OrderedPoolComponent(ctx, profile, role, done);
 }
 
 function targetsEditor(
@@ -558,7 +489,8 @@ function profileDetail(
 				currentValue: roleSummary(ctx, profile, role),
 				description:
 					"First model and first compatible effort are defaults; remaining values are exact allowed alternates.",
-				submenu: (_value, roleDone) => roleDetail(ctx, profile, role, roleDone),
+				submenu: (_value, roleDone) =>
+					rolePoolEditor(ctx, profile, role, roleDone),
 			}),
 		),
 		{
@@ -837,7 +769,7 @@ export function createMaestroSettingsList(
 				currentValue: roleSummary(ctx, active.name, role),
 				description: "Effective role pool summary for the active profile.",
 				submenu: (_value, roleDone) =>
-					roleDetail(ctx, active.name, role, roleDone),
+					rolePoolEditor(ctx, active.name, role, roleDone),
 			});
 	}
 	items.push(

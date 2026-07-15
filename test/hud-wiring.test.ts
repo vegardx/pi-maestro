@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { ExecutionAgentSnapshot } from "../packages/modes/src/exec/index.js";
 import {
 	buildAgentNodes,
+	buildPlanView,
 	steerPrefix,
 } from "../packages/modes/src/runtime/hud-wiring.js";
 
@@ -114,6 +115,61 @@ describe("buildAgentNodes", () => {
 		expect(nodes.map((n) => n.status)).toEqual(["done", "failed", "stopped"]);
 	});
 });
+
+describe("buildPlanView", () => {
+	it("maps deliverable statuses to checkbox states and counts done", () => {
+		const plan = {
+			deliverables: [
+				deliverable("d1", "shipped"),
+				deliverable("d2", "complete"),
+				deliverable("d3", "active", [
+					{ id: "t1", title: "do it", done: false, kind: "task" },
+					{ id: "q1", title: "a question", done: false, kind: "question" },
+				]),
+				deliverable("d4", "planned"),
+			],
+		};
+		const view = buildPlanView(plan as never, {
+			agents: new Map([["d3/worker", execAgent("working")]]),
+		});
+		expect(view?.done).toBe(2);
+		expect(view?.total).toBe(4);
+		expect(view?.rows.map((r) => r.state)).toEqual([
+			"shipped",
+			"complete",
+			"active",
+			"queued",
+		]);
+		// Worker named (with live status) only on the active row.
+		expect(view?.rows[2].worker).toBe("worker running");
+		expect(view?.rows[0].worker).toBeUndefined();
+		// Only kind=task work items surface as checkbox tasks.
+		expect(view?.rows[2].tasks).toEqual([
+			{ id: "t1", title: "do it", done: false },
+		]);
+	});
+
+	it("returns undefined without a plan", () => {
+		expect(buildPlanView(undefined)).toBeUndefined();
+	});
+});
+
+function deliverable(
+	id: string,
+	status: string,
+	tasks: unknown[] = [],
+): Record<string, unknown> {
+	return {
+		type: "deliverable",
+		id,
+		title: `Deliverable ${id}`,
+		body: "",
+		status,
+		worker: { mode: "full" },
+		agents: [],
+		tasks,
+	};
+}
 
 describe("steerPrefix", () => {
 	it("addresses workers, named agents, and runs", () => {

@@ -7,12 +7,15 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES, EVENTS, type RunRecord } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
+import { effectiveWorkItemKind, type Plan } from "../schema.js";
 import { handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
 import {
 	type HudAgentLeaf,
 	type HudAgentNode,
 	HudComponent,
+	type HudPlanRow,
+	type HudPlanView,
 	type HudSnapshot,
 	type HudStatus,
 	type HudTab,
@@ -164,15 +167,52 @@ function hasLiveAgents(rt: RuntimeContext): boolean {
 /** Assemble the live snapshot the HUD renders from. */
 export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
+	const snap = rt.execution?.snapshot();
 	return {
-		agents: buildAgentNodes(
-			rt.execution?.snapshot(),
-			subagents?.list() ?? [],
-			Date.now(),
-		),
-		plan: undefined,
+		agents: buildAgentNodes(snap, subagents?.list() ?? [], Date.now()),
+		plan: buildPlanView(rt.engine?.get(), snap),
 		questions: [],
 	};
+}
+
+// ─── Plan tab data ───────────────────────────────────────────────────────────
+
+/**
+ * Plan tab rows: deliverables as checkboxes ([x] shipped/complete, [~]
+ * active, [ ] queued) with the assigned worker's live status named on active
+ * rows. Tasks travel along; the component auto-expands the active row's.
+ */
+export function buildPlanView(
+	plan: Pick<Plan, "deliverables"> | undefined,
+	execution?: { agents: ReadonlyMap<string, ExecutionAgentSnapshot> },
+): HudPlanView | undefined {
+	if (!plan) return undefined;
+	let done = 0;
+	const rows: HudPlanRow[] = plan.deliverables.map((d) => {
+		const state =
+			d.status === "shipped"
+				? "shipped"
+				: d.status === "complete"
+					? "complete"
+					: d.status === "active"
+						? "active"
+						: "queued";
+		if (state === "shipped" || state === "complete") done++;
+		const workerAgent = execution?.agents.get(`${d.id}/worker`);
+		const worker = workerAgent
+			? `worker ${execStatus(workerAgent, undefined)}`
+			: `worker (${d.worker.mode})`;
+		return {
+			id: d.id,
+			title: d.title,
+			state,
+			...(state === "active" ? { worker } : {}),
+			tasks: d.tasks
+				.filter((t) => effectiveWorkItemKind(t) === "task")
+				.map((t) => ({ id: t.id, title: t.title, done: t.done })),
+		};
+	});
+	return { rows, done, total: rows.length };
 }
 
 // ─── Agents tab data ─────────────────────────────────────────────────────────

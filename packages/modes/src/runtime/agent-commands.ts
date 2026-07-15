@@ -28,11 +28,12 @@ function readOnlyAttachCommand(sessionName: string): string {
 /**
  * `/view <agent-or-deliverable>` — open a read-only tmux split attached to that
  * agent's session. No argument: pick from active agents; with an open pane
- * and no argument, close it (toggle).
+ * and no argument, close it (toggle). Takes the base ExtensionContext so the
+ * HUD's Enter action (no command context) can reuse it.
  */
 export async function handleViewCommand(
 	args: string,
-	ctx: ExtensionCommandContext,
+	ctx: ExtensionContext,
 	execution: ExecutionHandle | undefined,
 	viewState: ViewState,
 	subagents?: SubagentsCapabilityV1,

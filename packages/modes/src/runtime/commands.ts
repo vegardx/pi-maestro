@@ -241,6 +241,12 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	pi.registerCommand("agents", {
 		description: "Show active deliverables and agent status.",
 		handler: async (_args: string, cmdCtx: ExtensionCommandContext) => {
+			// The HUD is the agents surface: expand + focus it on the Agents tab.
+			if (rt.hud) {
+				rt.hud.show("agents");
+				return;
+			}
+			// No HUD (headless/RPC session): fall back to the text overview.
 			if (!rt.engine) {
 				cmdCtx.ui.notify("No active plan.", "info");
 				return;

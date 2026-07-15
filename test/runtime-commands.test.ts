@@ -360,6 +360,30 @@ describe("/answer", () => {
 	});
 });
 
+describe("/agents", () => {
+	it("expands and focuses the HUD on the Agents tab", async () => {
+		const show = vi.fn();
+		const { commands } = makeRuntime({
+			hud: { show, refresh: vi.fn(), component: {}, dispose: vi.fn() },
+		});
+		const { ctx, notify } = makeCmdCtx();
+
+		await commands.get("agents")?.("", ctx);
+
+		expect(show).toHaveBeenCalledWith("agents");
+		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the text overview without a HUD (headless)", async () => {
+		const { commands } = makeRuntime({ hud: undefined, engine: null });
+		const { ctx, notify } = makeCmdCtx();
+
+		await commands.get("agents")?.("", ctx);
+
+		expect(notify).toHaveBeenCalledWith("No active plan.", "info");
+	});
+});
+
 describe("/sync and /park", () => {
 	it("/sync reports an empty reconcile without crashing", async () => {
 		const { commands } = makeRuntime({

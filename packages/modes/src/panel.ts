@@ -111,10 +111,12 @@ export async function runReviewPanel(
 	return Promise.all(started.map((s) => s.settled));
 }
 
-type PanelResultBase = Omit<
+/** The identity/spec half of a PanelResult, known before the run settles. */
+export type PanelResultSeed = Omit<
 	PanelResult,
 	"status" | "verdict" | "findings" | "structured" | "report" | "ok"
 >;
+type PanelResultBase = PanelResultSeed;
 
 async function startOne(
 	spec: SubAgentSpec,
@@ -183,70 +185,7 @@ async function settleOne(
 ): Promise<PanelResult> {
 	try {
 		const result = await settle(handle, timeoutMs);
-		const report = result.summary?.trim() ?? "";
-		if (result.status !== "succeeded") {
-			const status: PanelRunStatus =
-				result.status === "timed-out"
-					? "timed-out"
-					: result.status === "stopped"
-						? "interrupted"
-						: "failed";
-			return notReported(
-				base,
-				status,
-				`(reviewer ${status}: ${result.error ?? "no report"})`,
-				report,
-			);
-		}
-		// Helpers produce info, not a gating verdict — but silence is still not
-		// information.
-		if (kind !== "review") {
-			return report
-				? {
-						...base,
-						status: "helper",
-						verdict: "none",
-						findings: [],
-						structured: [],
-						report,
-						ok: true,
-					}
-				: notReported(base, "malformed", "(helper completed with no report)");
-		}
-		// Strict output contract: a review counts as reported ONLY with both a
-		// parseable VERDICT line and a valid fenced findings JSON block (empty
-		// findings array = clean approve). Anything less — empty output, prose
-		// without a verdict, a verdict without the block — is malformed and
-		// holds the gate as "never reported". An empty report is NEVER an
-		// approve: the old clean-run rule turned silent gateway failures into
-		// shipped deliverables.
-		const parsed = parseVerdict(report);
-		const json = parseJsonFindings(report);
-		if (!report || parsed.verdict === "none" || json === null) {
-			const why = !report
-				? "empty report"
-				: parsed.verdict === "none"
-					? "no parseable VERDICT line"
-					: "no valid fenced findings JSON block";
-			return notReported(
-				base,
-				"malformed",
-				`(malformed report: ${why})`,
-				report,
-			);
-		}
-		// Severity decides the verdict — a stated BLOCK over three minors
-		// normalizes to approve, a stated PASS over a critical blocks.
-		const verdict = computedVerdict(json);
-		return {
-			...base,
-			status: verdict === "approve" ? "approve" : "request-changes",
-			verdict,
-			findings: parsed.findings,
-			structured: json,
-			report,
-			ok: true,
-		};
+		return panelResultFromRun(base, kind, result);
 	} catch (err) {
 		return notReported(
 			base,
@@ -254,6 +193,80 @@ async function settleOne(
 			`(run failed: ${err instanceof Error ? err.message : String(err)})`,
 		);
 	}
+}
+
+/**
+ * Normalize one TERMINAL run outcome into a PanelResult — the single
+ * validation gate for reviewer output. Shared by the live settle path and
+ * the reattach-after-respawn path (review-tool harvesting the run store), so
+ * a report reconstructed from a stored summary obeys exactly the same strict
+ * contract — same verdict/JSON parsing, same terminal-status mapping — as a
+ * live one.
+ */
+export function panelResultFromRun(
+	base: PanelResultSeed,
+	kind: "review" | "helper",
+	result: { status: string; summary?: string; error?: string },
+): PanelResult {
+	const report = result.summary?.trim() ?? "";
+	if (result.status !== "succeeded") {
+		const status: PanelRunStatus =
+			result.status === "timed-out"
+				? "timed-out"
+				: result.status === "stopped"
+					? "interrupted"
+					: "failed";
+		return notReported(
+			base,
+			status,
+			`(reviewer ${status}: ${result.error ?? "no report"})`,
+			report,
+		);
+	}
+	// Helpers produce info, not a gating verdict — but silence is still not
+	// information.
+	if (kind !== "review") {
+		return report
+			? {
+					...base,
+					status: "helper",
+					verdict: "none",
+					findings: [],
+					structured: [],
+					report,
+					ok: true,
+				}
+			: notReported(base, "malformed", "(helper completed with no report)");
+	}
+	// Strict output contract: a review counts as reported ONLY with both a
+	// parseable VERDICT line and a valid fenced findings JSON block (empty
+	// findings array = clean approve). Anything less — empty output, prose
+	// without a verdict, a verdict without the block — is malformed and
+	// holds the gate as "never reported". An empty report is NEVER an
+	// approve: the old clean-run rule turned silent gateway failures into
+	// shipped deliverables.
+	const parsed = parseVerdict(report);
+	const json = parseJsonFindings(report);
+	if (!report || parsed.verdict === "none" || json === null) {
+		const why = !report
+			? "empty report"
+			: parsed.verdict === "none"
+				? "no parseable VERDICT line"
+				: "no valid fenced findings JSON block";
+		return notReported(base, "malformed", `(malformed report: ${why})`, report);
+	}
+	// Severity decides the verdict — a stated BLOCK over three minors
+	// normalizes to approve, a stated PASS over a critical blocks.
+	const verdict = computedVerdict(json);
+	return {
+		...base,
+		status: verdict === "approve" ? "approve" : "request-changes",
+		verdict,
+		findings: parsed.findings,
+		structured: json,
+		report,
+		ok: true,
+	};
 }
 
 /** A non-reporting terminal result; the raw partial output stays diagnostic. */

@@ -24,7 +24,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import type { SubagentsCapabilityV1 } from "@vegardx/pi-contracts";
+import type { RunId, SubagentsCapabilityV1 } from "@vegardx/pi-contracts";
 import {
 	applyChecks,
 	applyResolutions,
@@ -45,6 +45,7 @@ import {
 	DEFAULT_TIMEOUT_MS,
 	type PanelResult,
 	type PanelRunStart,
+	panelResultFromRun,
 	type RunPanelDeps,
 	startReviewPanel,
 } from "./panel.js";
@@ -93,6 +94,9 @@ export interface ReviewToolDeps {
 	 */
 	readonly deliver: (text: string) => void;
 	readonly timeoutMs?: () => number;
+	/** Poll cadence while a reattached round waits out still-active runs in
+	 *  the shared store (test hook; defaults to REATTACH_POLL_MS). */
+	readonly reattachPollMs?: () => number;
 	readonly now?: () => string;
 }
 
@@ -203,6 +207,23 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 				episode = { ledger: state.ledger, lastResults: [] };
 			}
 			const waived = new Set(state.waived ?? []);
+
+			// A round persisted as in-flight by a previous process (its settle
+			// continuation died with it): NEVER spawn a duplicate — the round's
+			// reviewers ran (or are still running) in the shared store. Reattach
+			// to the recorded runs and settle them exactly like a normal round;
+			// this call gets the standard in-flight ack.
+			const pendingRound = episode?.ledger.pendingRound;
+			if (pendingRound) {
+				inFlight =
+					pendingRound.kind === "verification" ? "verify" : pendingRound.kind;
+				settleInBackground(() =>
+					reattachRound(subagents, pendingRound, panel, waived),
+				);
+				return text(
+					`A review round (${inFlight}) is already running — wait for its report; it will arrive as a message when the round settles. Do not re-run review().`,
+				);
+			}
 
 			const action =
 				params.action ??
@@ -571,6 +592,189 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		]);
 	}
 
+	/**
+	 * Settle a round a PREVIOUS process left in flight: harvest its recorded
+	 * runs from the shared store (waiting out still-active ones, bounded by
+	 * the panel deadline measured from the ROUND's original start), push the
+	 * stored summaries through the exact same validation as a live settle,
+	 * then merge, report, and deliver like a normal round. Never spawns.
+	 */
+	async function reattachRound(
+		subagents: SubagentsCapabilityV1,
+		pending: PendingReviewRound,
+		panel: readonly SubAgentSpec[],
+		waived: ReadonlySet<string>,
+	): Promise<string | null> {
+		// The rehydrated ledger minus the marker: the base every settled shape
+		// (repair merge, verification checks) builds on.
+		const { pendingRound: _cleared, ...prior } = episode!.ledger;
+		const timeoutMs = deps.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
+		const startedMs = Date.parse(pending.startedAt);
+		// Time that elapsed before the respawn counts: a round near its cap
+		// when the process died times out promptly, not a full cap later.
+		const deadline =
+			(Number.isFinite(startedMs) ? startedMs : Date.now()) + timeoutMs;
+		const pollMs = deps.reattachPollMs?.() ?? REATTACH_POLL_MS;
+
+		if (pending.kind === "verification") {
+			return reattachVerification(
+				subagents,
+				pending,
+				waived,
+				prior,
+				deadline,
+				pollMs,
+			);
+		}
+
+		const specByName = new Map(panel.map((s) => [s.name, s]));
+		const results = await Promise.all(
+			pending.runs.map(async ({ name, runId }) => {
+				const spec = specByName.get(name);
+				const kind = spec?.kind ?? "review";
+				const run = await harvestRun(subagents, runId, deadline, pollMs);
+				return panelResultFromRun(
+					{
+						name,
+						persona: spec?.persona ?? name,
+						required: Boolean(spec?.required),
+						kind,
+						runId,
+					},
+					kind,
+					run,
+				);
+			}),
+		);
+		// Panel reviewers the marker has no run id for never spawned (or died
+		// before an id was recorded) — surface them as failed so the repair
+		// path can target them instead of silently dropping a required seat.
+		const lost =
+			pending.kind === "panel"
+				? panel
+						.filter(
+							(s) =>
+								(s.kind ?? "review") === "review" &&
+								!pending.runs.some((r) => r.name === s.name),
+						)
+						.map((s) =>
+							panelResultFromRun(
+								{
+									name: s.name,
+									persona: s.persona,
+									required: Boolean(s.required),
+									kind: "review",
+								},
+								"review",
+								{
+									status: "failed",
+									error: "run was never recorded (lost at respawn)",
+								},
+							),
+						)
+				: [];
+		const all = [...results, ...lost];
+		if (!(await claimSettle(pending))) return null;
+
+		if (pending.kind === "panel") {
+			// A reattached panel settles exactly like a live one: fresh ledger
+			// from the validated results, attempt 1 for every participant.
+			const ledger: ReviewLedger = {
+				...buildLedger(
+					all
+						.filter((r) => r.kind === "review" && r.ok)
+						.map((r) => ({ reviewer: r.name, findings: r.structured })),
+					now(),
+				),
+				participants: all
+					.filter((r) => r.kind === "review")
+					.map((r) => participant(r, 1)),
+			};
+			episode = { ledger, lastResults: all };
+			deps.report?.("panel", all, ledger);
+			return renderPanelReport(all, ledger, waived);
+		}
+		// Repair: merge the harvested re-runs into the persisted ledger like a
+		// live repair — earlier findings stay, prior participants not re-run
+		// keep their rows, each re-run reviewer's attempt increments.
+		const prevAttempt = new Map(
+			(prior.participants ?? []).map((p) => [p.name, p.attempt ?? 1]),
+		);
+		const reran = new Set(all.map((r) => r.name));
+		const ledger: ReviewLedger = {
+			...prior,
+			entries: [
+				...prior.entries,
+				...buildLedger(
+					all
+						.filter((r) => r.kind === "review" && r.ok)
+						.map((r) => ({ reviewer: r.name, findings: r.structured })),
+					now(),
+				).entries,
+			],
+			participants: [
+				...(prior.participants ?? []).filter((p) => !reran.has(p.name)),
+				...all
+					.filter((r) => r.kind === "review")
+					.map((r) => participant(r, (prevAttempt.get(r.name) ?? 1) + 1)),
+			],
+			updatedAt: now(),
+		};
+		episode = { ledger, lastResults: all };
+		deps.report?.("panel", all, ledger);
+		return renderPanelReport(all, ledger, waived);
+	}
+
+	/**
+	 * Reattach a scoped verification round. The claim scope is recomputed
+	 * from the persisted ledger — resolutions were applied and persisted at
+	 * round start, so it matches what the verifier was spawned with.
+	 */
+	async function reattachVerification(
+		subagents: SubagentsCapabilityV1,
+		pending: PendingReviewRound,
+		waived: ReadonlySet<string>,
+		prior: ReviewLedger,
+		deadline: number,
+		pollMs: number,
+	): Promise<string | null> {
+		const claims = prior.entries.filter(
+			(e) =>
+				e.resolution?.status === "fixed" &&
+				e.check?.result !== "verified" &&
+				!waived.has(e.finding.id),
+		);
+		const runRef = pending.runs[0];
+		const verifierName = runRef?.name ?? `verifier-${prior.cycle + 1}`;
+		const run: HarvestedRun = runRef
+			? await harvestRun(subagents, runRef.runId, deadline, pollMs)
+			: {
+					status: "failed",
+					error: "run was never recorded (lost at respawn)",
+				};
+		if (!(await claimSettle(pending))) return null;
+		const report = run.summary?.trim() ?? "";
+		if (run.status !== "succeeded" || !report) {
+			// The round is over even without a report: clear the marker upward
+			// so respawns stop reattaching to a dead run. Retrying stays the
+			// worker's explicit call — same contract as a live failed verifier.
+			episode = { ...episode!, ledger: prior };
+			deps.report?.("verification", [], prior);
+			return `Verifier ${run.status}: ${run.error ?? "no report"} — fix nothing, just run review({action: "verify", resolutions: [...]}) again.`;
+		}
+		const parsed = parseVerifierReport(report, claims);
+		const { ledger: checked, errors } = applyChecks(
+			prior,
+			parsed.checks,
+			parsed.regressions,
+			verifierName,
+			now(),
+		);
+		episode = { ...episode!, ledger: checked };
+		deps.report?.("verification", [], checked);
+		return renderVerificationReport(checked, waived, errors, report);
+	}
+
 	function renderPanelReport(
 		results: readonly PanelResult[],
 		ledger: ReviewLedger,
@@ -610,6 +814,74 @@ const GLYPH: Record<string, string> = {
 	"request-changes": "✗ CHANGES",
 	none: "· no verdict",
 };
+
+// ─── Reattach: harvesting a previous process's round from the run store ─────
+
+/** Statuses a stored run can settle in; everything else is still running. */
+const TERMINAL_RUN_STATUSES = new Set([
+	"succeeded",
+	"failed",
+	"stopped",
+	"canceled",
+	"timed-out",
+]);
+
+/** Poll cadence while a reattached round waits out still-active runs. Modest
+ *  on purpose: reattach is a rare crash-recovery path, and the round is
+ *  already bounded by the panel deadline. */
+const REATTACH_POLL_MS = 2_000;
+
+/** The terminal outcome harvested from the store for one reattached run. */
+interface HarvestedRun {
+	status: string;
+	summary?: string;
+	error?: string;
+}
+
+/**
+ * Wait for one reattached run to turn terminal in the shared store. Runs
+ * already terminal return their stored result immediately; active ones are
+ * polled until the ROUND deadline (the same boundary a live round enforces),
+ * then stopped and reported timed-out.
+ */
+async function harvestRun(
+	subagents: SubagentsCapabilityV1,
+	runId: string,
+	deadline: number,
+	pollMs: number,
+): Promise<HarvestedRun> {
+	for (;;) {
+		const record = subagents.get(runId as RunId);
+		if (!record) {
+			// The store no longer knows the run (retention purge, or the spawn
+			// never registered) — nothing to wait for, nothing to validate.
+			return { status: "failed", error: "run not found in the store" };
+		}
+		if (TERMINAL_RUN_STATUSES.has(record.status)) {
+			return (
+				record.result ?? {
+					status: record.status,
+					error: "run settled without a result",
+				}
+			);
+		}
+		if (Date.now() >= deadline) {
+			subagents.stop(runId as RunId, "review round deadline (reattach)");
+			return {
+				status: "timed-out",
+				error: "timed out (panel deadline elapsed across a respawn)",
+			};
+		}
+		await sleep(pollMs);
+	}
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		const t = setTimeout(resolve, ms);
+		t.unref?.();
+	});
+}
 
 /** Same round identity: the marker names exactly the runs we spawned. */
 function sameRound(a: PendingReviewRound, b: PendingReviewRound): boolean {

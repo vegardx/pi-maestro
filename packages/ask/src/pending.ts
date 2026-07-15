@@ -70,14 +70,20 @@ export class PendingSet {
 		return this.#entries.map((e) => e.question);
 	}
 
-	/** Posted-but-unanswered view for preamble context lines. */
+	/** Posted-but-unanswered view for preamble context lines / the HUD. */
 	list(): readonly PendingAsk[] {
 		return this.#entries.map((e) => ({
 			id: e.question.id,
 			header: e.question.header,
 			question: e.question.question,
+			...(e.blocking && !e.deferred ? { blocking: true } : {}),
 			...(e.deferred ? { deferred: true } : {}),
 		}));
+	}
+
+	/** The full Question for a pending id (the HUD's answer-mode entry). */
+	find(id: string): Question | undefined {
+		return this.#entries.find((e) => e.question.id === id)?.question;
 	}
 
 	/**

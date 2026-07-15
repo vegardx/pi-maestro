@@ -2,17 +2,19 @@
 //   * the `ask` tool — non-blocking pending set by default, blocking on
 //     request (whyBlocking required);
 //   * the ask.v1 capability (ask = blocking, post = pending, queue = legacy
-//     deferred) other extensions resolve by id (modes gates, commits);
+//     deferred, open = answer mode) other extensions resolve by id;
 //   * a queued plan-mode driver: questions accumulated during a turn are
-//     flushed as one combined dialog at turn_end;
+//     flushed as one combined presentation at turn_end;
 //   * shorthand replies: `2` / `1a 2b` / `rec` typed in chat resolve the
-//     pending widget, or expand against the last ◆ decision block in text.
+//     pending set, or expand against the last ◆ decision block in text.
+// Presentation is the maestro HUD (Questions tab) + the answer-editor input
+// takeover; pending-set changes are broadcast as EVENTS.askChanged.
 //
 // The engine renders through whatever ExtensionContext was last seen on a
 // lifecycle event — captured below — since the capability methods carry none.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { AskEngine } from "./engine.js";
 import {
@@ -61,6 +63,14 @@ export default defineExtension(
 		pi.on("session_start", capture);
 		pi.on("turn_start", capture);
 
+		// Pending-set changes drive the HUD's Questions tab + tab-bar counts.
+		// The "queued while blocked" notify re-arms whenever blocking clears.
+		let queuedNotified = false;
+		engine.setOnChanged((change) => {
+			if (change.blocking === 0) queuedNotified = false;
+			maestro.events.emit(EVENTS.askChanged, change);
+		});
+
 		// The latest assistant message's ◆ decision block (if any) — the
 		// mapping bare-letter/number replies expand against.
 		let decisionPoints: DecisionPoint[] = [];
@@ -76,9 +86,9 @@ export default defineExtension(
 			decisionPoints = parseDecisionBlock(text);
 		});
 
-		// Shorthand replies: try the pending widget set first (answers settle
-		// and deliver, input is consumed), then the chat decision block
-		// (input transforms into explicit decisions text).
+		// Shorthand replies: try the pending set first (answers settle and
+		// deliver, input is consumed), then the chat decision block (input
+		// transforms into explicit decisions text).
 		pi.on("input", (event, ctx: ExtensionContext) => {
 			engine.setContext(ctx);
 			const e = event as { text?: string; source?: string };
@@ -94,6 +104,16 @@ export default defineExtension(
 					decisionPoints = [];
 					return { action: "transform" as const, text: match.expansion };
 				}
+			}
+			// A normal prompt while the maestro is blocked on a question: let
+			// it queue as usual (pi handles mid-turn user messages) but say so
+			// once, so the silence has an explanation.
+			if (engine.blockingCount > 0 && !queuedNotified) {
+				queuedNotified = true;
+				ctx.ui.notify(
+					"queued — maestro is waiting on a question (Tab → Questions)",
+					"info",
+				);
 			}
 			return { action: "continue" as const };
 		});
@@ -111,6 +131,7 @@ export default defineExtension(
 			queue: (questions) => engine.queue(questions),
 			post: (questions) => engine.post(questions),
 			pending: () => engine.pending(),
+			open: (questionId) => engine.openAnswers(questionId),
 		});
 
 		// Plan-mode driver: flush whatever was queued as one dialog when the

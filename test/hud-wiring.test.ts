@@ -7,6 +7,7 @@ import type { ExecutionAgentSnapshot } from "../packages/modes/src/exec/index.js
 import {
 	buildAgentNodes,
 	buildPlanView,
+	buildQuestionRows,
 	steerPrefix,
 } from "../packages/modes/src/runtime/hud-wiring.js";
 
@@ -170,6 +171,35 @@ function deliverable(
 		tasks,
 	};
 }
+
+describe("buildQuestionRows", () => {
+	it("merges engine asks and worker-queue questions, blocking first", () => {
+		const rows = buildQuestionRows(
+			[
+				{ id: "posted", question: "posted first" },
+				{ id: "urgent", question: "the gate question", blocking: true },
+			],
+			[
+				{
+					agentId: "auth/worker",
+					agentName: "worker",
+					deliverableTitle: "Auth",
+					questions: [{ id: "wq", question: "keep endpoint?" }],
+					draft: [],
+					resolve: () => {},
+					receivedAt: 10,
+				},
+			],
+		);
+		expect(rows.map((r) => r.key)).toEqual([
+			"ask:urgent",
+			"ask:posted",
+			"queue:auth/worker:wq",
+		]);
+		expect(rows[0].blocking).toBe(true);
+		expect(rows[2].asker).toBe("worker · auth");
+	});
+});
 
 describe("steerPrefix", () => {
 	it("addresses workers, named agents, and runs", () => {

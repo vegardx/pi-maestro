@@ -4,9 +4,17 @@
 // any agent is live. Presentation lives in runtime/hud.ts.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITIES, EVENTS, type RunRecord } from "@vegardx/pi-contracts";
+import {
+	type Answer,
+	CAPABILITIES,
+	EVENTS,
+	type PendingAsk,
+	type RunRecord,
+} from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
+import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
+import type { PendingQuestion } from "../question-queue.js";
 import { effectiveWorkItemKind, type Plan } from "../schema.js";
 import { handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
@@ -16,6 +24,7 @@ import {
 	HudComponent,
 	type HudPlanRow,
 	type HudPlanView,
+	type HudQuestionRow,
 	type HudSnapshot,
 	type HudStatus,
 	type HudTab,
@@ -100,7 +109,24 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 					rt.hud?.refresh();
 				})();
 			},
-			answer: () => {},
+			// Enter on a question row: answer mode. Engine questions route
+			// through the ask capability (same settle paths as the engine's
+			// own takeover); worker-queue questions get the same editor with
+			// answers resolving back over RPC.
+			answer: (question) => {
+				rt.overlayManager.focusInput();
+				if (question.key.startsWith("ask:")) {
+					rt.maestro.capabilities
+						.get(CAPABILITIES.ask)
+						?.open?.(question.key.slice("ask:".length));
+					return;
+				}
+				if (question.key.startsWith("queue:")) {
+					const rest = question.key.slice("queue:".length);
+					const agentId = rest.slice(0, rest.lastIndexOf(":"));
+					openWorkerAnswerMode(rt, ctx, agentId);
+				}
+			},
 		},
 	});
 
@@ -117,12 +143,14 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		}
 	};
 
-	// Event-driven refresh: plan changes, subagent run lifecycle/progress.
-	// Execution agent state changes call rt.hud.refresh() directly.
+	// Event-driven refresh: plan changes, subagent run lifecycle/progress,
+	// ask pending-set changes. Execution agent state changes call
+	// rt.hud.refresh() directly.
 	const unsubscribe = [
 		rt.maestro.events.on(EVENTS.planUpdated, refresh),
 		rt.maestro.events.on(EVENTS.runStatus, refresh),
 		rt.maestro.events.on(EVENTS.runProgress, refresh),
+		rt.maestro.events.on(EVENTS.askChanged, refresh),
 	];
 
 	rt.hud = {
@@ -171,8 +199,47 @@ export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 	return {
 		agents: buildAgentNodes(snap, subagents?.list() ?? [], Date.now()),
 		plan: buildPlanView(rt.engine?.get(), snap),
-		questions: [],
+		questions: buildQuestionRows(
+			rt.maestro.capabilities.get(CAPABILITIES.ask)?.pending() ?? [],
+			rt.execution?.questionQueue.all() ?? [],
+		),
 	};
+}
+
+// ─── Questions tab data ──────────────────────────────────────────────────────
+
+/**
+ * Questions tab rows: the ask engine's pending set (asker "maestro";
+ * blocking entries carry the accent) merged with the worker question queue
+ * (asker "worker · slug"). Blocking first, then oldest-first.
+ */
+export function buildQuestionRows(
+	pendingAsks: readonly PendingAsk[],
+	workerEntries: readonly PendingQuestion[],
+): HudQuestionRow[] {
+	const engineRows: HudQuestionRow[] = pendingAsks.map((p) => ({
+		key: `ask:${p.id}`,
+		asker: "maestro",
+		blocking: p.blocking === true,
+		...(p.deferred ? { deferred: true } : {}),
+		text: p.question,
+	}));
+	const workerRows: HudQuestionRow[] = [...workerEntries]
+		.sort((a, b) => a.receivedAt - b.receivedAt)
+		.flatMap((entry) => {
+			const [deliverableId = entry.agentId] = entry.agentId.split("/");
+			return entry.questions.map((q) => ({
+				key: `queue:${entry.agentId}:${q.id}`,
+				asker: `${entry.agentName} · ${deliverableId}`,
+				blocking: false,
+				text: q.question,
+			}));
+		});
+	const merged = [...engineRows, ...workerRows];
+	return [
+		...merged.filter((row) => row.blocking),
+		...merged.filter((row) => !row.blocking),
+	];
 }
 
 // ─── Plan tab data ───────────────────────────────────────────────────────────
@@ -372,6 +439,40 @@ export function buildAgentNodes(
 		nodes.push({ ...node, children });
 	}
 	return nodes;
+}
+
+/**
+ * Answer mode for a worker-queue entry: the same editor takeover the ask
+ * engine uses, with committed answers resolving the queue entry (RPC reply
+ * to the worker). Esc mid-way sends whatever was answered so far; nothing
+ * answered leaves the entry queued.
+ */
+function openWorkerAnswerMode(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+	agentId: string,
+): void {
+	const entry = rt.execution?.questionQueue
+		.all()
+		.find((candidate) => candidate.agentId === agentId);
+	if (!entry) return;
+	const [deliverableId = entry.agentId] = entry.agentId.split("/");
+	const collected: Answer[] = [];
+	const palette = ctx.ui.theme ? paletteFromTheme(ctx.ui.theme) : undefined;
+	openAnswerMode(ctx.ui, {
+		title: `${entry.agentName} · ${deliverableId}`,
+		blocking: false,
+		questions: entry.questions,
+		...(palette ? { palette } : {}),
+		onAnswer: (answer) => collected.push(answer),
+		onClose: () => {
+			if (collected.length > 0) {
+				rt.execution?.questionQueue.answer(entry.agentId, collected);
+				ctx.ui.notify(`Answered ${entry.agentName}`, "info");
+			}
+			rt.hud?.refresh();
+		},
+	});
 }
 
 /** The /steer prefix the runtime parses, addressed to the given target. */

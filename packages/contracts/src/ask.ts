@@ -84,6 +84,8 @@ export interface PendingAsk {
 	readonly id: string;
 	readonly header?: string;
 	readonly question: string;
+	/** True when this is an active blocking question (the asker is waiting). */
+	readonly blocking?: boolean;
 	/** True when this was blocking and the user deferred it. */
 	readonly deferred?: boolean;
 }

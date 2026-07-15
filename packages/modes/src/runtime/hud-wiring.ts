@@ -1,7 +1,13 @@
 // HUD glue: builds the live HudSnapshot from runtime state, wires actions
-// (attach/steer/interrupt/answer) and owns the refresh loop — mount-once via
-// the OverlayManager, requestRender on events, plus a 5s elapsed tick while
-// any agent is live. Presentation lives in runtime/hud.ts.
+// (attach/steer/interrupt/answer) and owns the refresh loop — plus a 5s
+// elapsed tick while any agent is live. Presentation lives in runtime/hud.ts
+// (the expand-above panel) and runtime/maestro-editor.ts (the tab bar in the
+// input's top border); both read the shared HudFocusState owned here.
+//
+// Render discipline: pi's `ui.setWidget` is NOT an update — it disposes the
+// existing component and rebuilds the widget container (the flicker
+// mechanism). The panel widget is therefore set ONCE with a stable wrapper;
+// everything after that mutates state and calls requestRender.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -22,6 +28,7 @@ import {
 	type HudAgentLeaf,
 	type HudAgentNode,
 	HudComponent,
+	type HudFocusState,
 	type HudPlanRow,
 	type HudPlanView,
 	type HudQuestionRow,
@@ -29,12 +36,18 @@ import {
 	type HudStatus,
 	type HudTab,
 } from "./hud.js";
+import { hudTabCounts, MaestroEditor } from "./maestro-editor.js";
 
 /** Re-render cadence while agents are live, so elapsed columns tick. */
 const HUD_TICK_MS = 5_000;
 
+/** The panel's widget key — set once, mutated via state + requestRender. */
+const HUD_WIDGET_KEY = "maestro.hud";
+
 export interface HudHandle {
 	readonly component: HudComponent;
+	/** Shared focus/expansion state (the editor mutates, the panel reads). */
+	readonly state: HudFocusState;
 	/** Request a re-render and (re)arm the elapsed tick when agents are live. */
 	refresh(): void;
 	/** Switch tab + expand/focus the HUD (the /agents command). */
@@ -42,21 +55,36 @@ export interface HudHandle {
 	dispose(): void;
 }
 
-/** Mount the HUD in the overlay manager's "agents" slot (idempotent). */
+/**
+ * Install the HUD (idempotent): the panel widget directly above the editor
+ * and the MaestroEditor tab bar as the session's editor component. Host
+ * sessions only — worker/agent sessions strip chrome instead (hooks.ts).
+ */
 export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 	if (rt.hud) {
 		rt.hud.refresh();
 		return;
 	}
 	let timer: ReturnType<typeof setInterval> | undefined;
+	let requestRender: (() => void) | undefined;
+
+	const state: HudFocusState = { focus: "input", expanded: false };
+
+	/** Collapse the panel and hand the keys back to the input. */
+	const returnToInput = (): void => {
+		state.focus = "input";
+		state.expanded = false;
+		requestRender?.();
+	};
 
 	const component = new HudComponent({
+		state,
 		data: () => buildHudSnapshot(rt),
 		theme: () => ctx.ui.theme,
 		actions: {
 			// Enter on an agent row: the /view tmux split (read-only attach).
 			attach: (targetId) => {
-				rt.overlayManager.focusInput();
+				returnToInput();
 				void handleViewCommand(
 					targetId,
 					ctx,
@@ -70,7 +98,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 			steer: (targetId) => {
 				const prefix = steerPrefix(targetId);
 				if (!prefix) return;
-				rt.overlayManager.focusInput();
+				returnToInput();
 				ctx.ui.setEditorText(prefix);
 			},
 			// i on an agent row: confirm, then abort that agent's turn/run.
@@ -114,7 +142,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 			// own takeover); worker-queue questions get the same editor with
 			// answers resolving back over RPC.
 			answer: (question) => {
-				rt.overlayManager.focusInput();
+				returnToInput();
 				if (question.key.startsWith("ask:")) {
 					rt.maestro.capabilities
 						.get(CAPABILITIES.ask)
@@ -131,7 +159,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 	});
 
 	const refresh = (): void => {
-		rt.overlayManager.invalidate();
+		requestRender?.();
 		const live = hasLiveAgents(rt);
 		if (live && timer === undefined) {
 			const t = setInterval(refresh, HUD_TICK_MS);
@@ -153,24 +181,57 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		rt.maestro.events.on(EVENTS.askChanged, refresh),
 	];
 
+	// The panel widget: set ONCE with a stable wrapper (pi's setWidget
+	// disposes on every call); afterwards only state changes + requestRender.
+	ctx.ui.setWidget(
+		HUD_WIDGET_KEY,
+		(tui) => {
+			requestRender = () =>
+				(tui as unknown as { requestRender?: () => void })?.requestRender?.();
+			return {
+				render: (width: number) => component.render(width),
+				invalidate: () => component.invalidate(),
+			};
+		},
+		{ placement: "aboveEditor" },
+	);
+
+	// The tab bar rides the editor's top border: swap in MaestroEditor and
+	// restore whatever factory was configured before on dispose. Answer mode
+	// does its own swap/restore dance on top of this one (packages/ui).
+	const previousEditor = ctx.ui.getEditorComponent();
+	ctx.ui.setEditorComponent(
+		(tui, theme, keybindings) =>
+			new MaestroEditor(tui, theme, keybindings, {
+				state,
+				counts: () => hudTabCounts(buildHudSnapshot(rt)),
+				panel: component,
+				theme: () => ctx.ui.theme,
+				requestRender: () => requestRender?.(),
+			}),
+	);
+
 	rt.hud = {
 		component,
+		state,
 		refresh,
 		show(tab: HudTab): void {
 			component.setTab(tab);
-			rt.overlayManager.focusOverlay("agents");
+			state.focus = tab;
+			state.expanded = true;
+			refresh();
 		},
 		dispose(): void {
 			if (timer !== undefined) clearInterval(timer);
 			timer = undefined;
 			for (const off of unsubscribe) off();
-			rt.overlayManager.unmount("agents");
+			ctx.ui.setEditorComponent(previousEditor);
+			ctx.ui.setWidget(HUD_WIDGET_KEY, undefined);
 			rt.hud = undefined;
 		},
 	};
 
 	uiTrace("hud.mount");
-	rt.overlayManager.mount("agents", component);
 	refresh();
 }
 

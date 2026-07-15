@@ -14,13 +14,15 @@ function mockComponent(): OverlayComponent {
 	};
 }
 
-function mockCtx() {
+function mockCtx(editorText = "") {
 	let handler:
 		| ((data: string) => { consume?: boolean } | undefined)
 		| undefined;
 	const ctx = {
+		editorText,
 		ui: {
 			setWidget: vi.fn(),
+			getEditorText: () => ctx.editorText,
 			onTerminalInput: (
 				fn: (data: string) => { consume?: boolean } | undefined,
 			) => {
@@ -80,6 +82,54 @@ describe("OverlayManager", () => {
 		ctx.sendInput("\t");
 		expect(ask.focused).toBe(false);
 		expect(agents.focused).toBe(false);
+	});
+
+	// Tab consumption rule: the ring takes Tab only when it can meaningfully
+	// use it — an overlay is focused, or the editor is empty with something
+	// mounted. Everything else keeps Tab for editor autocomplete.
+	describe("Tab consumption rule", () => {
+		it("passes Tab through when nothing is mounted", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx();
+			mgr.attach(ctx as any);
+			expect(ctx.sendInput("\t")).toBeUndefined();
+		});
+
+		it("passes Tab through when the editor has a draft", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx("half-typed prom");
+			mgr.attach(ctx as any);
+			const ask = mockComponent();
+			mgr.mount("ask", ask);
+			expect(ctx.sendInput("\t")).toBeUndefined();
+			expect(ask.focused).toBe(false);
+		});
+
+		it("consumes Tab with a draft once an overlay is focused", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx();
+			mgr.attach(ctx as any);
+			const ask = mockComponent();
+			mgr.mount("ask", ask);
+			ctx.sendInput("\t"); // empty editor → focus ask
+			expect(ask.focused).toBe(true);
+			ctx.editorText = "draft written while overlay focused";
+			// Focused ring keeps cycling regardless of the draft.
+			const result = ctx.sendInput("\t");
+			expect(result?.consume).toBe(true);
+			expect(ask.focused).toBe(false); // cycled back to input
+		});
+
+		it("consumes Tab on an empty editor with an overlay mounted", () => {
+			const mgr = new OverlayManager();
+			const ctx = mockCtx("");
+			mgr.attach(ctx as any);
+			const ask = mockComponent();
+			mgr.mount("ask", ask);
+			const result = ctx.sendInput("\t");
+			expect(result?.consume).toBe(true);
+			expect(ask.focused).toBe(true);
+		});
 	});
 
 	it("Esc returns focus to input", () => {
@@ -208,9 +258,9 @@ describe("OverlayManager", () => {
 			"maestro.overlay.ask",
 			undefined,
 		);
-		// Tab should not crash with no overlays
+		// With nothing mounted, Tab passes through to the editor (autocomplete).
 		const result = ctx.sendInput("\t");
-		expect(result?.consume).toBe(true);
+		expect(result).toBeUndefined();
 	});
 
 	it("skips unmounted overlays in focus ring", () => {

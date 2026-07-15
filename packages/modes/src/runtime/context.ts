@@ -115,6 +115,8 @@ export interface RuntimeContext {
 	readonly researchRuns: Map<string, ResearchRunView>;
 	agentSeedContent: string | undefined;
 	invalidateFooter: (() => void) | undefined;
+	/** The live HUD handle (mounted at session_start in TUI sessions). */
+	hud: import("./hud-wiring.js").HudHandle | undefined;
 	// Transient: 5s re-render timer for the live agent widget (elapsed ticks).
 	agentWidgetTimer: ReturnType<typeof setInterval> | undefined;
 	// The agent widget is mounted once and re-rendered in place — re-setting
@@ -234,6 +236,7 @@ export function createRuntimeContext(
 		researchRuns: new Map(),
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
+		hud: undefined,
 		agentWidgetTimer: undefined,
 		agentWidgetMounted: false,
 		agentWidgetRefresh: undefined,

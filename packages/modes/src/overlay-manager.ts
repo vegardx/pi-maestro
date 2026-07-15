@@ -1,9 +1,11 @@
 /**
  * Manages overlay widgets positioned above the editor.
  *
- * Two overlays: "ask" (questions) and "agents" (dashboard).
- * Tab cycles focus between them and the input.
- * Only one expanded at a time. When input is focused, both collapse.
+ * Overlay slots: "maestro" (settings), "ask" (legacy questions slot) and
+ * "agents" (the HUD). Tab cycles focus between mounted overlays and the
+ * input — consumed only when the editor is empty or an overlay is already
+ * focused, so editor Tab-autocomplete keeps working. Only one overlay is
+ * expanded at a time; focusing the input collapses them.
  *
  * Render discipline: pi's `ui.setWidget` is NOT an update — it disposes the
  * existing component, deletes the key, re-appends it, and rebuilds the whole
@@ -18,7 +20,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { uiTrace } from "@vegardx/pi-core";
 
-export type OverlayId = "ask" | "agents" | "config";
+export type OverlayId = "ask" | "agents" | "maestro";
 
 export interface ManagedOverlay {
 	readonly id: OverlayId;
@@ -41,7 +43,7 @@ const KEY_ESC = "\u001b";
 
 export class OverlayManager {
 	private overlays = new Map<OverlayId, ManagedOverlay>();
-	private focusOrder: OverlayId[] = ["config", "ask", "agents"];
+	private focusOrder: OverlayId[] = ["maestro", "ask", "agents"];
 	private focusedId: OverlayId | null = null;
 	private inputBlocked = false;
 	private removeInputListener: (() => void) | undefined;
@@ -194,10 +196,22 @@ export class OverlayManager {
 	private handleTerminalInput(
 		data: string,
 	): { consume?: boolean; data?: string } | undefined {
-		// Tab: cycle focus ring
+		// Tab: cycle focus ring — but ONLY when the ring can meaningfully take
+		// it. Consuming Tab unconditionally killed the editor's Tab-autocomplete
+		// in every maestro session (even with nothing mounted). New rule: Tab is
+		// ours when an overlay is already focused, or when the editor is empty
+		// and there is at least one mounted overlay to cycle into. A non-empty
+		// editor with input focus keeps Tab for autocomplete.
 		if (data === KEY_TAB) {
-			this.cycleNext();
-			return { consume: true };
+			const anyMounted = this.focusOrder.some(
+				(id) => this.overlays.get(id)?.mounted,
+			);
+			const editorText = this.ctx?.ui.getEditorText?.() ?? "";
+			if (this.focusedId !== null || (anyMounted && editorText === "")) {
+				this.cycleNext();
+				return { consume: true };
+			}
+			return undefined;
 		}
 
 		// If an overlay is focused, route all input to it
@@ -261,6 +275,14 @@ export class OverlayManager {
 
 	/** Re-render without touching the widget stack (state already mutated). */
 	private refresh(): void {
+		this.requestRender?.();
+	}
+
+	/**
+	 * Public re-render request for overlay content that changed outside the
+	 * input path (timers, execution events, plan updates). No widget re-set.
+	 */
+	invalidate(): void {
 		this.requestRender?.();
 	}
 

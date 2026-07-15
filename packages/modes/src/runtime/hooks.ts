@@ -7,6 +7,7 @@ import type {
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import { classifyBashFast, classifyBashIntent } from "../bash-classifier.js";
 import {
@@ -25,6 +26,7 @@ import {
 	resolveInternalRoleModel,
 } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
+import { tmuxRequirementIssues } from "../tmux-check.js";
 import {
 	contextFillLadder,
 	firePendingForcedDistill,
@@ -213,6 +215,20 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			installMaestroFooter(rt, ctx);
 		}
 		rt.notifyMode(ctx);
+
+		// tmux is a REQUIREMENT (workers and subagent runs live in tmux
+		// sessions): catch a missing binary or a maestro started outside tmux
+		// loudly at startup, instead of discovering it later as mysteriously
+		// wedged spawns and dead panes. Children skip it — their transport is
+		// the maestro's problem, and they may legitimately run headless.
+		if (!isAgentMode()) {
+			for (const issue of tmuxRequirementIssues({
+				tmuxAvailable: isTmuxAvailable(),
+				env: process.env,
+			})) {
+				ctx.ui.notify(issue.message, issue.severity);
+			}
+		}
 
 		// Post-handoff arrival: render the card and fire the orientation turn
 		// once the agent is idle. Covers both the in-process session switch

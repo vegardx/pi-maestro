@@ -6,10 +6,12 @@
 //
 // Layout (self-capped at 10 lines — pi slices widgets at MAX_WIDGET_LINES):
 //   line 1     tab rule:  ──[ Agents 4 ]─── Plan 2/5 ─── Questions 1 ── tab ──
-//   lines 2..9 content rows for the active tab (≤8; scrolls with selection)
-//   last line  dim rule separating the HUD from the input
+//   lines 2..  content rows for the active tab (scrolls with selection)
+//   last line  overflow rule — ONLY when rows scroll (pi's editor draws its
+//              own top border, so an unconditional separator doubles it)
 // Idle (no agents, no active deliverable, no questions) collapses to ONE
-// summary line plus the rule. When the HUD is focused the last content row
+// summary line — unless the HUD is focused, which always shows the full tab
+// view (Tab must land somewhere visible). When focused the last content row
 // is replaced by an action-hint row.
 //
 // Key scheme while focused (documented in the hint row): up/down move the
@@ -107,7 +109,8 @@ export interface HudDeps {
 
 /** pi hard-caps widgets at 10 lines (MAX_WIDGET_LINES); we self-limit. */
 const MAX_LINES = 10;
-const MAX_CONTENT_ROWS = MAX_LINES - 2;
+/** Rows available after the tab rule; hint and overflow rule subtract more. */
+const MAX_CONTENT_ROWS = MAX_LINES - 1;
 const INDENT = "  ";
 
 const KEY_UP = "\u001b[A";
@@ -376,13 +379,14 @@ export class HudComponent implements OverlayComponent {
 		width: number,
 	): { lines: PlainLine[]; sig: string } {
 		const lines: PlainLine[] = [];
-		if (this.#idle(snap)) {
+		// Focused always gets the full tab view — Tab must land somewhere
+		// visible, even when everything is idle.
+		if (this.#idle(snap) && !this.focused) {
 			const plan = snap.plan;
 			const summary = plan
 				? `${INDENT}agents idle · plan ${plan.done}/${plan.total}`
 				: `${INDENT}agents idle`;
 			lines.push({ text: truncateToWidth(summary, width), kind: "idle" });
-			lines.push({ text: "─".repeat(width), kind: "rule" });
 			return { lines, sig: lines.map((l) => l.text).join("\n") };
 		}
 
@@ -398,7 +402,11 @@ export class HudComponent implements OverlayComponent {
 			? selectable[this.#selected]?.key
 			: undefined;
 
-		const maxRows = this.focused ? MAX_CONTENT_ROWS - 1 : MAX_CONTENT_ROWS;
+		// Budget: tabs always; hint when focused; the overflow rule only when
+		// rows actually scroll (pi's editor top border handles separation).
+		const base = this.focused ? MAX_CONTENT_ROWS - 1 : MAX_CONTENT_ROWS;
+		const overflows = rows.length > base;
+		const maxRows = overflows ? base - 1 : base;
 		// Keep the selection inside the window.
 		const selectedRowIndex = selectedKey
 			? rows.findIndex((r) => r.key === selectedKey)
@@ -430,9 +438,11 @@ export class HudComponent implements OverlayComponent {
 			});
 		}
 
-		const above = this.#scroll;
-		const below = Math.max(0, rows.length - this.#scroll - maxRows);
-		lines.push({ text: bottomRule(width, above, below), kind: "rule" });
+		if (overflows) {
+			const above = this.#scroll;
+			const below = Math.max(0, rows.length - this.#scroll - maxRows);
+			lines.push({ text: bottomRule(width, above, below), kind: "rule" });
+		}
 		return {
 			lines,
 			sig: lines

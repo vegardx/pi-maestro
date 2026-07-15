@@ -197,6 +197,67 @@ describe("HUD agents tab", () => {
 	});
 });
 
+describe("HUD plan tab", () => {
+	function planSnap(): HudSnapshot {
+		return {
+			agents: [],
+			plan: {
+				done: 1,
+				total: 3,
+				rows: [
+					{ id: "d1", title: "Ship the API", state: "shipped", tasks: [] },
+					{
+						id: "d2",
+						title: "Wire the HUD",
+						state: "active",
+						worker: "worker running",
+						tasks: [
+							{ id: "t1", title: "shell", done: true },
+							{ id: "t2", title: "tabs", done: false },
+						],
+					},
+					{
+						id: "d3",
+						title: "Docs",
+						state: "queued",
+						tasks: [{ id: "t3", title: "usage", done: false }],
+					},
+				],
+			},
+			questions: [
+				{ key: "q", asker: "maestro", blocking: false, text: "keep hud?" },
+			],
+		};
+	}
+
+	it("renders checkbox rows, names the worker, and auto-expands the active row", () => {
+		const c = hud(planSnap());
+		c.setTab("plan");
+		const lines = c.render(W);
+		expect(lines[1]).toContain("[x] Ship the API");
+		expect(lines[2]).toContain("[~] Wire the HUD · worker running");
+		expect(lines[3]).toContain("[x] shell");
+		expect(lines[4]).toContain("[ ] tabs");
+		expect(lines[5]).toContain("[ ] ▸ Docs");
+		expect(lines.join("\n")).not.toContain("usage");
+	});
+
+	it("enter collapses/expands with a sticky override", () => {
+		const c = hud(planSnap());
+		c.setTab("plan");
+		c.focused = true;
+		c.render(W);
+		c.handleInput("[B"); // select the active deliverable
+		c.handleInput("\r"); // collapse it (override the auto-expand)
+		let lines = c.render(W);
+		expect(lines[2]).toContain("[~] ▸ Wire the HUD");
+		expect(lines.join("\n")).not.toContain("[ ] tabs");
+		// Sticky across re-renders.
+		lines = c.render(W);
+		expect(lines[2]).toContain("[~] ▸ Wire the HUD");
+	});
+});
+
 describe("HUD 10-line self-cap and scrolling", () => {
 	function bigSnap(): HudSnapshot {
 		return {

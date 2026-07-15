@@ -140,6 +140,8 @@ interface HudRow {
 	readonly question?: HudQuestionRow;
 	/** Fold toggling: the key whose fold state left/right/space flips. */
 	readonly foldKey?: string;
+	/** EFFECTIVE expansion (manual override or auto rule) for toggling. */
+	readonly foldExpanded?: boolean;
 }
 
 export class HudComponent implements OverlayComponent {
@@ -195,7 +197,7 @@ export class HudComponent implements OverlayComponent {
 		}
 		if (data === KEY_LEFT || data === KEY_RIGHT || data === " ") {
 			if (current?.foldKey) {
-				const expandedNow = this.#isExpanded(current.foldKey);
+				const expandedNow = current.foldExpanded ?? false;
 				const want =
 					data === KEY_RIGHT ? true : data === KEY_LEFT ? false : !expandedNow;
 				this.#folds.set(current.foldKey, want);
@@ -208,7 +210,7 @@ export class HudComponent implements OverlayComponent {
 			} else if (this.#tab === "agents" && current?.targetId) {
 				this.deps.actions.attach(current.targetId);
 			} else if (this.#tab === "plan" && current?.foldKey) {
-				this.#folds.set(current.foldKey, !this.#isExpanded(current.foldKey));
+				this.#folds.set(current.foldKey, !(current.foldExpanded ?? false));
 			}
 			return;
 		}
@@ -237,10 +239,6 @@ export class HudComponent implements OverlayComponent {
 	}
 
 	// ── model → plain rows ────────────────────────────────────────────────────
-
-	#isExpanded(foldKey: string): boolean {
-		return this.#folds.get(foldKey) ?? false;
-	}
 
 	#pruneFolds(snap: HudSnapshot): void {
 		if (this.#folds.size === 0) return;
@@ -283,7 +281,7 @@ export class HudComponent implements OverlayComponent {
 				left: `${INDENT}${marker}${node.label}${suffix}`,
 				right: agentRight(node, now),
 				targetId: node.targetId,
-				...(hasChildren ? { foldKey: node.key } : {}),
+				...(hasChildren ? { foldKey: node.key, foldExpanded: expanded } : {}),
 				...(node.status === "failed" ? { tone: "error" as const } : {}),
 			});
 			if (hasChildren && expanded) {
@@ -338,6 +336,7 @@ export class HudComponent implements OverlayComponent {
 			rows.push({
 				key: foldKey,
 				foldKey,
+				foldExpanded: expanded,
 				left: `${INDENT}${box} ${marker}${row.title}${worker}`,
 				...(row.state === "active" ? { tone: "accent" as const } : {}),
 			});
@@ -346,6 +345,7 @@ export class HudComponent implements OverlayComponent {
 					rows.push({
 						key: `${foldKey}:${task.id}`,
 						foldKey,
+						foldExpanded: expanded,
 						left: `${INDENT}   ${task.done ? "[x]" : "[ ]"} ${task.title}`,
 						...(task.done ? { tone: "dim" as const } : {}),
 					});

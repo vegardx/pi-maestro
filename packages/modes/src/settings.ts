@@ -20,27 +20,6 @@ import {
 const NAME = "modes";
 const SECTION = "compaction";
 
-// ---- Centralized env var config -------------------------------------------
-
-/**
- * All MAESTRO_* environment variables read from a single location.
- * Modules import this instead of scattered process.env reads.
- */
-export const MAESTRO_ENV = {
-	get agentModel(): string | undefined {
-		return process.env.MAESTRO_AGENT_MODEL || undefined;
-	},
-	get agentThinking(): string | undefined {
-		return process.env.MAESTRO_AGENT_THINKING || undefined;
-	},
-	get classifierModel(): string | undefined {
-		return process.env.MAESTRO_CLASSIFIER_MODEL || undefined;
-	},
-	get classifierThinking(): string | undefined {
-		return process.env.MAESTRO_CLASSIFIER_THINKING || undefined;
-	},
-} as const;
-
 // ---- Compaction settings --------------------------------------------------
 
 export interface ModesCompactionSettings {
@@ -52,8 +31,6 @@ export interface ModesCompactionSettings {
 	summaryTokens: number;
 	/** Deadline for a modes-triggered compaction. */
 	timeoutMs: number;
-	/** Optional context-window size for plan-mode footer display. Unset = off. */
-	planMaxContextTokens: number | undefined;
 }
 
 function positive(value: number, fallback: number): number {
@@ -70,18 +47,11 @@ export function readModesCompactionSettings(
 			getConfigNumber(merged, NAME, `${SECTION}.${key}`, fallback),
 			fallback,
 		);
-	const planMax = getConfigNumber(
-		merged,
-		NAME,
-		`${SECTION}.planMaxContextTokens`,
-		0,
-	);
 	return {
 		phaseTokens: read("phaseTokens", 10000),
 		workingTokens: read("workingTokens", 150000),
 		summaryTokens: read("summaryTokens", 100000),
 		timeoutMs: read("timeoutMs", 90000),
-		planMaxContextTokens: planMax > 0 ? planMax : undefined,
 	};
 }
 

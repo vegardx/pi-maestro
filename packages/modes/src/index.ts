@@ -45,10 +45,6 @@ export {
 	transitiveDependencies,
 } from "./compaction.js";
 export {
-	renderDashboard,
-	renderDashboardText,
-} from "./deliverable-dashboard.js";
-export {
 	type AgentState,
 	DeliverableExecutor,
 	type DeliverableRunState,
@@ -128,18 +124,6 @@ export {
 	createPlanTool,
 	createTaskTool,
 } from "./tools.js";
-export type {
-	CompactionResumeDecision,
-	CompactionResumeGate,
-	MidDeliverableTriggerInput,
-	ResumeAfterCompactionInput,
-} from "./trigger.js";
-export {
-	awaitCompaction,
-	diagnoseResumeAfterCompaction,
-	shouldCompactMidDeliverable,
-	shouldResumeAfterCompaction,
-} from "./trigger.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 
 export default defineExtension(

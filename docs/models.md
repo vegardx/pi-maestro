@@ -222,7 +222,6 @@ Maestro build; current code ignores them.
 | `workingTokens` | `150000` | Working-bucket budget that drives the trigger |
 | `summaryTokens` | `100000` | Soft warning threshold for stable summary burden |
 | `timeoutMs` | `90000` | Deadline for a modes-triggered compaction |
-| `planMaxContextTokens` | unset | Optional context-window size for plan-mode footer display |
 
 ### Feature flags
 

@@ -26,10 +26,7 @@ import {
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
 import { planFingerprint } from "../engine.js";
-import {
-	DEFAULT_TIMEOUT_MS as PANEL_REVIEWER_TIMEOUT_MS,
-	requiredGateSatisfied,
-} from "../panel.js";
+import { PANEL_HARD_TIMEOUT_MS, requiredGateSatisfied } from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
 import { reportsNotInText, researchReportsDir } from "../research.js";
 import {
@@ -77,10 +74,15 @@ import {
  */
 const IDLE_DONE_THRESHOLD = 2;
 /** How long an in-flight review round may defer worker completion before we
- *  assume the round died with its reviewers. DERIVED from the reviewer
- *  timeout: a legitimate slow round (cap × retry) must never outlive its own
- *  protection, or the kill-mid-review hole reopens in the tail. */
-const REVIEW_IN_FLIGHT_TIMEOUT_MS = 2 * PANEL_REVIEWER_TIMEOUT_MS + 5 * 60_000;
+ *  assume the round died with its reviewers. DERIVED from the ONE panel
+ *  deadline: reviewers run concurrently and exactly once (no retries), so a
+ *  legitimate round settles within PANEL_HARD_TIMEOUT_MS — the margin covers
+ *  result plumbing and cleanup. A guard shorter than a legitimate round
+ *  reopens the kill-mid-review hole; the old retry-sized guard (2× cap)
+ *  hung dead rounds for ~25 minutes. */
+const REVIEW_CLEANUP_MARGIN_MS = 2 * 60_000;
+const REVIEW_IN_FLIGHT_TIMEOUT_MS =
+	PANEL_HARD_TIMEOUT_MS + REVIEW_CLEANUP_MARGIN_MS;
 /** After steering "run review now", how long completion stays deferred. A
  *  worker that still never reviews then completes into the ship gate, which
  *  blocks visibly — better than hanging the deliverable forever. */
@@ -277,6 +279,14 @@ export class ExecutionAdapter {
 	private reviewInFlight = new Map<string, number>();
 	/** agentKey → epoch ms of the run-your-review steer (sent once). */
 	private reviewSteerAt = new Map<string, number>();
+	/**
+	 * deliverableId → epoch ms of the targeted repair steer: when the gate is
+	 * held ONLY by required reviewers that never reported (no open findings),
+	 * the worker is steered once to review({action:"repair"}) — never sent
+	 * back for rework it doesn't have. After the grace window it completes
+	 * into the visible gate, where triage/human own it.
+	 */
+	private repairSteerAt = new Map<string, number>();
 	/**
 	 * deliverableId → the fix-cycle steer sent for a failing gate: one steer
 	 * per ledger cycle, then a grace window, then the visible ship gate.
@@ -1632,7 +1642,11 @@ export class ExecutionAdapter {
 	 *   4. the gate is failing → the worker gets protected fix cycles: one
 	 *      steer per ledger cycle listing the open finding ids, a grace
 	 *      window per steer, budget deliverable.maxFixRounds (default 3);
-	 *   5. only disputes remain, the budget is exhausted, or a steer's grace
+	 *   5. the gate is held ONLY by required reviewers that never reported →
+	 *      one steer to review({action:"repair"}) (a missing reviewer is not
+	 *      rework — send-back respawned workers with nothing to fix), then
+	 *      the visible gate;
+	 *   6. only disputes remain, the budget is exhausted, or a steer's grace
 	 *      expired → complete into the VISIBLE ship gate (triage/human own
 	 *      it from there). A failing round is never a kill signal by itself
 	 *      — that rule turned every request-changes into a dead worker and a
@@ -1686,9 +1700,44 @@ export class ExecutionAdapter {
 			actionable = open
 				.map((e) => e.finding.id)
 				.filter((id) => !disputed.has(id));
-			// Only disputes (or missing reviewers) remain — nothing left for
-			// the worker; the gate surfaces it to triage/human.
-			if (actionable.length === 0) return true;
+			if (actionable.length === 0) {
+				// No open findings — the gate is held by required reviewers that
+				// never reported. That is a review-run failure, not rework:
+				// completing here parked the deliverable at triage, whose
+				// send-back respawned a worker with nothing to fix, which
+				// completed straight back into the same gate (infinite loop).
+				// One targeted steer to review({action:"repair"}), a grace
+				// window, then the VISIBLE gate — a second failure is a human's
+				// call, never an automatic respawn.
+				const missing = requiredReviews
+					.map((s) => s.name)
+					.filter(
+						(n) => !ledger.participants?.some((p) => p.name === n && p.ok),
+					);
+				if (ledger.participants && missing.length > 0) {
+					const steeredAt = this.repairSteerAt.get(deliverableId);
+					if (steeredAt === undefined) {
+						this.repairSteerAt.set(deliverableId, Date.now());
+						this.router.send(agentId, {
+							type: "steer",
+							content:
+								`Required reviewer(s) never reported a valid review: ` +
+								`${missing.join(", ")}. Do NOT rework the deliverable — ` +
+								`run review({action: "repair"}) once to re-run just them. ` +
+								`If the repair fails too, stop; the gate escalates to a human.`,
+						});
+						this.logEvent("repair-steer", {
+							agent: agentId,
+							missing: missing.join(", "),
+						});
+						return false;
+					}
+					return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
+				}
+				// Only disputes remain — nothing left for the worker; the gate
+				// surfaces it to triage/human.
+				return true;
+			}
 		}
 		if (cycle >= maxCycles) return true;
 

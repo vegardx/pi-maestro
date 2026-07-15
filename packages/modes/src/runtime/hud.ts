@@ -28,6 +28,16 @@ export type HudTab = "agents" | "plan" | "questions";
 
 const TABS: readonly HudTab[] = ["agents", "plan", "questions"];
 
+/**
+ * Shared focus/expansion state for the tab-bar + panel pair. The editor
+ * mutates it (Tab/Esc grammar); the panel and the tab bar only read it.
+ * Panel "focused" = focus !== "input"; "pinned" = expanded && focus="input".
+ */
+export interface HudFocusState {
+	focus: "input" | HudTab;
+	expanded: boolean;
+}
+
 /** Status words the HUD renders — words, never glyphs. */
 export type HudStatus =
 	| "starting"

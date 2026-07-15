@@ -17,6 +17,7 @@
 //   * the run-bus is bridged onto the typed maestro event bus so modes and the
 //     UI observe status/progress/needDecision without importing this package.
 
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -163,6 +164,22 @@ function makeDecider(
 // CLI entry point for spawned children, mirroring pi's subagent example: the
 // path pi itself was launched from. undefined in a bundled binary — the runner
 // then relies on RpcClient's own default discovery.
+/**
+ * Kill a retained run's tmux session and verify it is gone. Returns true only
+ * on verified absence — retention keeps the run record otherwise, so the
+ * session pointer is never lost while the session might still exist.
+ */
+function killAndVerifyTmuxSession(session: string): boolean {
+	const tmux = (args: string[]) =>
+		spawnSync("tmux", args, { stdio: "ignore", timeout: 5_000 });
+	const probe = tmux(["has-session", "-t", session]);
+	// tmux not installed / server not running / session gone: verified absent.
+	if (probe.error || probe.status !== 0) return true;
+	tmux(["kill-session", "-t", session]);
+	const after = tmux(["has-session", "-t", session]);
+	return Boolean(after.error) || after.status !== 0;
+}
+
 function resolveCliPath(): string | undefined {
 	const entry = process.argv[1];
 	if (!entry || entry.startsWith("/$bunfs/")) return undefined;
@@ -259,7 +276,9 @@ export default defineExtension(
 			});
 			if (maestro.flags.enabled("retention")) {
 				try {
-					pruneRuns(store, DEFAULT_RETENTION);
+					pruneRuns(store, DEFAULT_RETENTION, Date.now(), {
+						killTmuxSession: killAndVerifyTmuxSession,
+					});
 				} catch {
 					// Retention is best-effort; never block startup on it.
 				}

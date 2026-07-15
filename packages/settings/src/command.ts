@@ -3,7 +3,11 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
-import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
+import {
+	activeProfile,
+	readModelsConfig,
+	SESSION_MODEL_SENTINEL,
+} from "@vegardx/pi-models";
 import {
 	activeProfileName,
 	formatSettingValue,
@@ -18,6 +22,7 @@ import {
 	resolveModelName,
 	sessionFallbackLabel,
 	sessionModelId,
+	supportedEfforts,
 	THINKING_LEVELS,
 	writeAdvancedValue,
 	writeProfileTargets,
@@ -396,6 +401,12 @@ function defaultEffortModel(
 ): { supported: readonly string[]; model: string } | undefined {
 	const model = pool[0];
 	if (!model) return undefined;
+	// The sentinel default narrows to the live session model's support.
+	if (model === SESSION_MODEL_SENTINEL)
+		return {
+			supported: ctx.model ? supportedEfforts(ctx.model) : THINKING_LEVELS,
+			model: sessionModelId(ctx) ?? model,
+		};
 	// Ids the registry does not know cannot be narrowed; allow every level.
 	const supported =
 		modelOptions(ctx).find((option) => option.id === model)?.supported ??
@@ -425,7 +436,7 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 			lines.push(`  (empty — ${sessionFallbackLabel(ctx)})`);
 		for (const [index, id] of pool.entries())
 			lines.push(
-				`  ${index + 1}. ${resolveModelName(ctx, id)} — ${id}${index === 0 ? " (default)" : ""}`,
+				`  ${index + 1}. ${id === SESSION_MODEL_SENTINEL ? sessionFallbackLabel(ctx) : resolveModelName(ctx, id)} — ${id}${index === 0 ? " (default)" : ""}`,
 			);
 		lines.push(`default effort: ${efforts.effective?.[0] ?? "auto"}`);
 		return ctx.ui.notify(lines.join("\n"), "info");
@@ -436,7 +447,10 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 				`Usage: /maestro ${role} ${verb} <provider/model>`,
 				"warning",
 			);
-		if (!modelOptions(ctx).some((option) => option.id === argument)) {
+		if (
+			argument !== SESSION_MODEL_SENTINEL &&
+			!modelOptions(ctx).some((option) => option.id === argument)
+		) {
 			const suggestions = modelSuggestions(ctx, argument);
 			return ctx.ui.notify(
 				`Unknown model "${argument}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
@@ -551,9 +565,10 @@ function roleCompletions(
 	const verb = parts[1];
 	const prefix = trailing ? "" : (parts[2] ?? "");
 	if (verb === "add" || verb === "remove" || verb === "default")
-		return modelOptions(ctx)
-			.map((option) => option.id)
-			.filter((id) => id.startsWith(prefix));
+		return [
+			SESSION_MODEL_SENTINEL,
+			...modelOptions(ctx).map((option) => option.id),
+		].filter((id) => id.startsWith(prefix));
 	if (verb === "effort") {
 		const profile = activeProfileName(ctx);
 		const pool = profile

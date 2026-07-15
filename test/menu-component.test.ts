@@ -292,6 +292,7 @@ describe("hierarchical Maestro settings", () => {
 		const ctx = fakeCtx();
 		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
 		editor.handleInput?.("\x1b[B"); // row 2 (o3)
+		editor.handleInput?.("\x1b[B"); // candidate row (session sentinel)
 		editor.handleInput?.("\x1b[B"); // candidate row (gemini)
 		editor.handleInput?.(" ");
 		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
@@ -331,6 +332,7 @@ describe("hierarchical Maestro settings", () => {
 		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
 		editor.handleInput?.("g");
 		expect(editor.render(120).join("\n")).toContain("scope: project");
+		editor.handleInput?.("\x1b[B");
 		editor.handleInput?.("\x1b[B");
 		editor.handleInput?.("\x1b[B");
 		editor.handleInput?.(" ");
@@ -399,6 +401,26 @@ describe("hierarchical Maestro settings", () => {
 		list.handleInput("\r");
 		expect(list.render(120).join("\n")).toContain(
 			"worker · opus · scope: global",
+		);
+	});
+
+	it("offers the session sentinel as an orderable pool entry", () => {
+		const ctx = fakeCtx();
+		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
+		// Synthetic first candidate with a live resolved label.
+		expect(editor.render(140).join("\n")).toContain(
+			"[ ]    session → anthropic/sonnet",
+		);
+		editor.handleInput?.("\x1b[B"); // o3
+		editor.handleInput?.("\x1b[B"); // session sentinel
+		editor.handleInput?.(" "); // toggle it into the pool
+		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+			"session",
+		]);
+		expect(editor.render(140).join("\n")).toContain(
+			"[x] 3. session → anthropic/sonnet",
 		);
 	});
 

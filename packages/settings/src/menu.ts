@@ -33,13 +33,18 @@ import {
 	setSessionSettingOverride,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
-import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
+import {
+	activeProfile,
+	readModelsConfig,
+	SESSION_MODEL_SENTINEL,
+} from "@vegardx/pi-models";
 import { settingsRegistry } from "./extension.js";
 import {
 	createProfile,
 	deleteProfile,
 	formatSettingValue,
 	type MaestroScope,
+	type ModelOption,
 	modelOptions,
 	modelProfileKeys,
 	parseSettingValue,
@@ -51,6 +56,7 @@ import {
 	sessionFallbackLabel,
 	sessionModelId,
 	shortModelName,
+	supportedEfforts,
 	THINKING_LEVELS,
 	writeAdvancedValue,
 	writeProfileTargets,
@@ -148,7 +154,13 @@ function roleModelsCell(
 ): string {
 	const models = readRoleLeaf(ctx, profile, role, "models").effective ?? [];
 	if (models.length === 0) return sessionFallbackLabel(ctx);
-	return models.map((id) => shortModelName(ctx, id)).join(" › ");
+	return models
+		.map((id) =>
+			id === SESSION_MODEL_SENTINEL
+				? sessionFallbackLabel(ctx)
+				: shortModelName(ctx, id),
+		)
+		.join(" › ");
 }
 
 /** Only the default effort (first configured); unset renders as auto. */
@@ -196,6 +208,22 @@ function roleTableRow(
 		true,
 	);
 	return `${models} · ${roleEffortCell(ctx, profile, role)}`;
+}
+
+/**
+ * Registry options plus the orderable `"session"` sentinel entry, first. Its
+ * label resolves the current session model whenever the rows are (re)built.
+ */
+function poolModelOptions(ctx: ExtensionContext): ModelOption[] {
+	return [
+		{
+			id: SESSION_MODEL_SENTINEL,
+			label: sessionFallbackLabel(ctx),
+			description: "follows /model live",
+			supported: ctx.model ? supportedEfforts(ctx.model) : [...THINKING_LEVELS],
+		},
+		...modelOptions(ctx),
+	];
 }
 
 function move<T>(values: readonly T[], from: number, to: number): T[] {
@@ -298,7 +326,7 @@ class OrderedPoolComponent implements Component {
 	}
 
 	private buildItems(): SelectItem[] {
-		const options = modelOptions(this.ctx);
+		const options = poolModelOptions(this.ctx);
 		const byId = new Map(options.map((option) => [option.id, option]));
 		const items: SelectItem[] = this.pool.map((id, index) => ({
 			value: id,
@@ -394,7 +422,7 @@ class OrderedPoolComponent implements Component {
 			return;
 		}
 		const supported =
-			modelOptions(this.ctx).find((option) => option.id === defaultModel)
+			poolModelOptions(this.ctx).find((option) => option.id === defaultModel)
 				?.supported ?? THINKING_LEVELS;
 		if (supported.length === 0) return;
 		const layered = readRoleLeaf(this.ctx, this.profile, this.role, "efforts");

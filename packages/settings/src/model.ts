@@ -21,6 +21,7 @@ import {
 	activeProfile,
 	effectiveRolePool,
 	readModelsConfig,
+	SESSION_MODEL_SENTINEL,
 } from "@vegardx/pi-models";
 import {
 	isPlainObject,
@@ -393,6 +394,9 @@ function referencedModelIds(ctx: ExtensionContext): Set<string> {
 				ids.add(id);
 		}
 	}
+	// The "session" sentinel is a pool position, not a model id; the editors
+	// surface it as a dedicated synthetic option instead.
+	ids.delete(SESSION_MODEL_SENTINEL);
 	return ids;
 }
 

@@ -11,7 +11,11 @@ import type {
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { parseModelSpec } from "./model-spec.js";
-import { effectiveRolePool, readModelsConfig } from "./profiles.js";
+import {
+	effectiveRolePool,
+	readModelsConfig,
+	SESSION_MODEL_SENTINEL,
+} from "./profiles.js";
 
 const EFFORTS: readonly ThinkingLevel[] = [
 	"off",
@@ -84,6 +88,25 @@ function modelId(ctx: ExtensionContext): string | undefined {
 	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
+/**
+ * Display helper: replace the `"session"` sentinel with the concrete live
+ * session model id, keeping only the first occurrence of any id. Spawner-
+ * facing pool descriptions must show exact ids, never the sentinel.
+ */
+export function resolveSentinelPool(
+	ctx: ExtensionContext,
+	ids: readonly string[],
+): string[] {
+	const sessionId = modelId(ctx);
+	const out: string[] = [];
+	for (const id of ids) {
+		const resolved =
+			id === SESSION_MODEL_SENTINEL && sessionId ? sessionId : id;
+		if (!out.includes(resolved)) out.push(resolved);
+	}
+	return out;
+}
+
 /** Pi's null map entries are explicitly unsupported; missing entries default. */
 export function supportedEfforts(model: Model<Api>): readonly ThinkingLevel[] {
 	const details = model as Model<Api> & {
@@ -122,6 +145,12 @@ function error(
  * Resolve an authenticated direct-role pool. Explicit choices are exact and
  * never substituted; omitted model choices walk the ordered pool, then the
  * live session model. Omitted efforts use the first supported allowed effort.
+ *
+ * The literal `"session"` pool entry is a first-class sentinel: it resolves
+ * to the live session model at its pool position (deduplicated when the same
+ * concrete id also appears in the pool). Pools WITHOUT the sentinel keep the
+ * implicit last-resort session fallback for omitted choices — an empty/unset
+ * pool is semantically equivalent to `["session"]`.
  */
 export async function resolveRolePool(
 	ctx: ExtensionContext,
@@ -136,9 +165,31 @@ export async function resolveRolePool(
 	const configuredModels = pool?.models ?? [];
 	const configuredEfforts = pool?.efforts ?? [];
 	const candidates: AuthenticatedRoleCandidate[] = [];
+	const resolvedIds = new Set<string>();
 	for (const candidateId of configuredModels) {
+		if (candidateId === SESSION_MODEL_SENTINEL) {
+			// The sentinel authenticates the live session model directly (like
+			// the implicit fallback below) and takes this pool position.
+			if (!ctx.model || !sessionId || resolvedIds.has(sessionId)) continue;
+			const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+			if (!auth.ok || (opts.requireApiKey && !auth.apiKey)) continue;
+			resolvedIds.add(sessionId);
+			candidates.push({
+				modelId: sessionId,
+				model: ctx.model as Model<Api>,
+				apiKey: auth.apiKey,
+				headers: auth.headers,
+				supportedEfforts: intersection(
+					configuredEfforts,
+					supportedEfforts(ctx.model as Model<Api>),
+				),
+			});
+			continue;
+		}
+		if (resolvedIds.has(candidateId)) continue;
 		const auth = await authenticate(ctx, candidateId, opts.requireApiKey);
 		if (!auth) continue;
+		resolvedIds.add(candidateId);
 		candidates.push({
 			modelId: candidateId,
 			...auth,
@@ -157,8 +208,20 @@ export async function resolveRolePool(
 		allowedEfforts: configuredEfforts,
 		provenance: pool?.provenance ?? {},
 	};
-	const choice = opts.choice ?? {};
-	if (choice.model && !configuredModels.includes(choice.model)) {
+	// An explicit literal "session" choice means the resolved session model.
+	const choice: ExactRoleChoice =
+		opts.choice?.model === SESSION_MODEL_SENTINEL && sessionId
+			? { ...opts.choice, model: sessionId }
+			: (opts.choice ?? {});
+	// A pool containing the sentinel admits the resolved session id exactly.
+	const sessionAllowed =
+		configuredModels.includes(SESSION_MODEL_SENTINEL) &&
+		choice.model === sessionId;
+	if (
+		choice.model &&
+		!configuredModels.includes(choice.model) &&
+		!sessionAllowed
+	) {
 		const errors = [
 			error(
 				"explicit-model-not-allowed",

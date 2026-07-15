@@ -56,6 +56,16 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 		return true;
 	}
 
+	/** Force-close one authenticated agent connection and reject buffered traffic. */
+	disconnect(agentId: string): boolean {
+		const conn = this.agents.get(agentId);
+		if (!conn) return false;
+		this.agents.delete(agentId);
+		conn.socket.destroy();
+		this.emit("disconnected", agentId);
+		return true;
+	}
+
 	/**
 	 * Broadcast a message to all connected agents.
 	 */

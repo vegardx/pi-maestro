@@ -57,7 +57,11 @@ import {
 	provisionEnvironment,
 	provisionWorktree,
 } from "./provisioner.js";
-import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
+import {
+	createRpcRouter,
+	type RpcRouter,
+	type RpcRouterHandlers,
+} from "./rpc-router.js";
 import { buildSeed, type SeedSummaries, truncateSummary } from "./seeds.js";
 import { shipDeliverable as shipDeliverableReal } from "./shipper.js";
 import {
@@ -323,7 +327,7 @@ export class ExecutionAdapter {
 		this.router = createRpcRouter({
 			server: this.rpcServer,
 			token: this.token,
-			handlers: {
+			handlers: this.ignoreRestartingWorkers({
 				status: (agentId, msg) => {
 					const [deliverableId, agentNamePart] = agentId.split("/");
 					if (!deliverableId || !agentNamePart) return;
@@ -420,7 +424,7 @@ export class ExecutionAdapter {
 					if (!deliverableId || !agentNamePart) return;
 					this.handleQuestions(agentId, deliverableId, agentNamePart, msg);
 				},
-			},
+			}),
 			onDisconnect: (agentId) => {
 				this.idleCount.delete(agentId);
 				// A respawned worker starts a fresh review episode — a stale steer
@@ -1103,6 +1107,37 @@ export class ExecutionAdapter {
 			: "required review verdicts not satisfied";
 	}
 
+	/**
+	 * Whether inbound RPC from this agent may act right now. A restarting
+	 * deliverable's old worker generation can still flush buffered messages or
+	 * reconnect mid-barrier; none of that may mutate state.
+	 */
+	private acceptsWorkerRpc(agentId: string): boolean {
+		const [deliverableId, agentName] = agentId.split("/");
+		return !(
+			agentName === "worker" &&
+			deliverableId &&
+			this.restarting.has(deliverableId)
+		);
+	}
+
+	/** Gate every router entrypoint on {@link acceptsWorkerRpc}. */
+	private ignoreRestartingWorkers(
+		handlers: RpcRouterHandlers,
+	): RpcRouterHandlers {
+		const guarded: Record<string, unknown> = {};
+		for (const [type, handler] of Object.entries(handlers)) {
+			guarded[type] = (agentId: string, msg: never) => {
+				if (!this.acceptsWorkerRpc(agentId)) return;
+				return (handler as (a: string, m: never) => void | Promise<void>)(
+					agentId,
+					msg,
+				);
+			};
+		}
+		return guarded as RpcRouterHandlers;
+	}
+
 	/** Run one lifecycle mutation after all prior lifecycle work settles. */
 	private withLifecycle<T>(fn: () => Promise<T>): Promise<T> {
 		const run = this.lifecycleTail.then(fn, fn);
@@ -1185,6 +1220,9 @@ export class ExecutionAdapter {
 			const deliverable = findDeliverable(this.engine.get(), deliverableId);
 			if (!state || !worker || !deliverable) return preview;
 			this.restarting.add(deliverableId);
+			// Detach the old generation before any await. Buffered messages on its
+			// socket can no longer route, and reconnects are ignored while restarting.
+			this.rpcServer.disconnect(`${deliverableId}/worker`);
 			worker.status = "restarting";
 			this.executor.blockDeliverable(
 				deliverableId,

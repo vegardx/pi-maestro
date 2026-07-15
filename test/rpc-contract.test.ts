@@ -102,6 +102,12 @@ const AGENT_FIXTURES = {
 			rationale: "resume after crash",
 		},
 	},
+	interruptAck: {
+		type: "interruptAck",
+		id: "int-1",
+		turnId: "turn-1",
+		outcome: "accepted",
+	},
 	pong: { type: "pong", id: "po-1" },
 } as const satisfies {
 	[T in AgentMessage["type"]]: Extract<AgentMessage, { type: T }>;
@@ -134,6 +140,7 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 		panelRead: ack,
 		panelVerdict: ack,
 		debugProposal: ack,
+		interruptAck: ack,
 		pong: ack,
 	};
 }

@@ -51,7 +51,7 @@ describe("persona registry", () => {
 });
 
 describe("buildPersonaProfile", () => {
-	it("builds a read-only, isolated, one-shot spawn profile in the worktree", () => {
+	it("builds a read-only, isolated, inspectable spawn profile in the worktree", () => {
 		const profile = buildPersonaProfile(
 			{ name: "security-audit", persona: "security-audit" },
 			{ cwd: "/wt" },
@@ -60,7 +60,9 @@ describe("buildPersonaProfile", () => {
 		expect(profile?.cwd).toBe("/wt");
 		expect(profile?.tools?.allow).toEqual([...PERSONA_TOOLS]);
 		expect(profile?.tools?.allow).not.toContain("write");
-		expect(profile?.session).toBe(false);
+		expect(profile?.session).toBe(true);
+		expect(profile?.transport).toBe("tmux");
+		expect(profile?.role).toBe("reviewer");
 		expect(profile?.isolateExtensions).toBe(true);
 		expect(profile?.thinking).toBe("high"); // persona default
 		// The harness names the persona deterministically (not inferred prose).

@@ -872,6 +872,26 @@ describe("RpcClient-backed runner", () => {
 		expect(client.steers).toEqual([]);
 	});
 
+	it("interrupt salvages text, is idempotent, and settles stopped", async () => {
+		const { client, factory } = fakeClient({
+			hang: true,
+			text: "partial work",
+		});
+		const ctrl = launch(factory);
+		await new Promise((r) => setTimeout(r, 5));
+		const first = await ctrl.interrupt?.("user interrupt");
+		const second = await ctrl.interrupt?.("user interrupt");
+		const result = await ctrl.result();
+		expect(first?.outcome).toBe("accepted");
+		expect(second?.outcome).toBe("already-interrupting");
+		expect(result).toMatchObject({
+			status: "stopped",
+			error: "user interrupt",
+			summary: "partial work",
+		});
+		expect(client.aborted).toBe(true);
+	});
+
 	it("stop aborts the client and settles stopped", async () => {
 		const { client, factory } = fakeClient({ hang: true });
 		const ctrl = launch(factory);

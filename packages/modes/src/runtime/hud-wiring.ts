@@ -4,10 +4,19 @@
 // any agent is live. Presentation lives in runtime/hud.ts.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { CAPABILITIES, EVENTS, type RunRecord } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
+import type { ExecutionAgentSnapshot } from "../exec/index.js";
+import { handleViewCommand } from "./agent-commands.js";
 import type { RuntimeContext } from "./context.js";
-import { HudComponent, type HudSnapshot, type HudTab } from "./hud.js";
+import {
+	type HudAgentLeaf,
+	type HudAgentNode,
+	HudComponent,
+	type HudSnapshot,
+	type HudStatus,
+	type HudTab,
+} from "./hud.js";
 
 /** Re-render cadence while agents are live, so elapsed columns tick. */
 const HUD_TICK_MS = 5_000;
@@ -33,9 +42,61 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		data: () => buildHudSnapshot(rt),
 		theme: () => ctx.ui.theme,
 		actions: {
-			attach: () => {},
-			steer: () => {},
-			interrupt: () => {},
+			// Enter on an agent row: the /view tmux split (read-only attach).
+			attach: (targetId) => {
+				rt.overlayManager.focusInput();
+				void handleViewCommand(
+					targetId,
+					ctx,
+					rt.execution,
+					rt.viewState,
+					rt.maestro.capabilities.get(CAPABILITIES.subagents),
+				);
+			},
+			// s on an agent row: prefill the addressed /steer the runtime
+			// already understands and hand focus back to the input.
+			steer: (targetId) => {
+				const prefix = steerPrefix(targetId);
+				if (!prefix) return;
+				rt.overlayManager.focusInput();
+				ctx.ui.setEditorText(prefix);
+			},
+			// i on an agent row: confirm, then abort that agent's turn/run.
+			interrupt: (targetId) => {
+				void (async () => {
+					const yes = await ctx.ui.confirm(
+						"Interrupt agent",
+						`Interrupt ${targetId}? The session survives; only the current turn/run is aborted.`,
+					);
+					if (!yes) return;
+					if (targetId.startsWith("worker:")) {
+						const key = targetId.slice("worker:".length);
+						const [deliverableId, name] = key.split("/");
+						const result =
+							deliverableId && rt.execution?.interrupt
+								? await rt.execution.interrupt(deliverableId, name)
+								: undefined;
+						ctx.ui.notify(
+							`${targetId}: ${result?.outcome ?? "disconnected"}`,
+							"info",
+						);
+					} else if (targetId.startsWith("run:")) {
+						const runId = targetId.slice("run:".length);
+						const subagents = rt.maestro.capabilities.get(
+							CAPABILITIES.subagents,
+						);
+						const result = await subagents?.interrupt?.(
+							runId as never,
+							"user interrupt",
+						);
+						ctx.ui.notify(
+							`${targetId}: ${result?.outcome ?? "disconnected"}`,
+							"info",
+						);
+					}
+					rt.hud?.refresh();
+				})();
+			},
 			answer: () => {},
 		},
 	});
@@ -53,6 +114,14 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		}
 	};
 
+	// Event-driven refresh: plan changes, subagent run lifecycle/progress.
+	// Execution agent state changes call rt.hud.refresh() directly.
+	const unsubscribe = [
+		rt.maestro.events.on(EVENTS.planUpdated, refresh),
+		rt.maestro.events.on(EVENTS.runStatus, refresh),
+		rt.maestro.events.on(EVENTS.runProgress, refresh),
+	];
+
 	rt.hud = {
 		component,
 		refresh,
@@ -63,6 +132,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		dispose(): void {
 			if (timer !== undefined) clearInterval(timer);
 			timer = undefined;
+			for (const off of unsubscribe) off();
 			rt.overlayManager.unmount("agents");
 			rt.hud = undefined;
 		},
@@ -92,6 +162,189 @@ function hasLiveAgents(rt: RuntimeContext): boolean {
 }
 
 /** Assemble the live snapshot the HUD renders from. */
-export function buildHudSnapshot(_rt: RuntimeContext): HudSnapshot {
-	return { agents: [], plan: undefined, questions: [] };
+export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
+	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
+	return {
+		agents: buildAgentNodes(
+			rt.execution?.snapshot(),
+			subagents?.list() ?? [],
+			Date.now(),
+		),
+		plan: undefined,
+		questions: [],
+	};
+}
+
+// ─── Agents tab data ─────────────────────────────────────────────────────────
+
+/** Terminal runs stay visible this long after their last event. */
+const RECENT_TERMINAL_MS = 120_000;
+
+const TERMINAL_RUN_STATUSES = new Set([
+	"succeeded",
+	"failed",
+	"stopped",
+	"canceled",
+	"timed-out",
+]);
+
+function execStatus(
+	agent: ExecutionAgentSnapshot,
+	blocked: string | undefined,
+): HudStatus {
+	if (blocked) return "blocked";
+	switch (agent.status) {
+		case "pending":
+		case "spawning":
+		case "restarting":
+			return "starting";
+		case "done":
+			return "done";
+		case "failed":
+			return "failed";
+		default:
+			return "running";
+	}
+}
+
+function runStatus(status: RunRecord["status"]): HudStatus {
+	switch (status) {
+		case "queued":
+		case "starting":
+			return "starting";
+		case "blocked":
+			return "blocked";
+		case "succeeded":
+			return "done";
+		case "failed":
+		case "timed-out":
+			return "failed";
+		case "stopped":
+		case "canceled":
+			return "stopped";
+		default:
+			return "running";
+	}
+}
+
+/** Compact display name for a run: displayName minus a trailing "-<runId>". */
+function runLabel(run: RunRecord): string {
+	const role = run.metadata?.role ?? run.profile.role ?? run.profile.profile;
+	const display = run.metadata?.displayName ?? run.profile.displayName;
+	if (display && display !== `${role}-${run.id}` && display !== run.id) {
+		return `${role} · ${display}`;
+	}
+	return `${role} · ${run.id}`;
+}
+
+/**
+ * Agents tab tree: execution workers at root with their same-deliverable
+ * one-shot agents nested; subagent runs nest under their parent run when it
+ * is displayed (auto-parent from RUN_ID_ENV), otherwise sit at root
+ * (maestro-direct research/verify/delegate spawns). Terminal runs age out
+ * after two minutes so the persisted run store never floods the tab.
+ */
+export function buildAgentNodes(
+	execution:
+		| {
+				agents: ReadonlyMap<string, ExecutionAgentSnapshot>;
+				deliverables: ReadonlyMap<string, { blocked?: string }>;
+		  }
+		| undefined,
+	runs: readonly RunRecord[],
+	now: number,
+): HudAgentNode[] {
+	const workers = new Map<
+		string,
+		{ node: HudAgentLeaf; children: HudAgentLeaf[] }
+	>();
+	const looseExec: HudAgentLeaf[] = [];
+
+	for (const [key, agent] of execution?.agents ?? []) {
+		const [deliverableId = "", name = key] = key.split("/");
+		const blocked = execution?.deliverables.get(deliverableId)?.blocked;
+		const leaf: HudAgentLeaf = {
+			key: `exec:${key}`,
+			label: `${name} · ${deliverableId}`,
+			status: execStatus(agent, name === "worker" ? blocked : undefined),
+			startedAt: agent.startedAt,
+			...(agent.model ? { note: agent.model } : {}),
+			targetId: `worker:${key}`,
+		};
+		if (name === "worker") {
+			const existing = workers.get(deliverableId);
+			workers.set(deliverableId, {
+				node: leaf,
+				children: existing?.children ?? [],
+			});
+		} else {
+			const parent = workers.get(deliverableId);
+			if (parent) parent.children.push(leaf);
+			else looseExec.push(leaf);
+		}
+	}
+	// One-shots that arrived before their worker: re-home or keep at root.
+	for (const leaf of looseExec) {
+		const deliverableId = leaf.label.split(" · ")[1] ?? "";
+		const parent = workers.get(deliverableId);
+		if (parent) parent.children.push(leaf);
+	}
+
+	// Subagent runs: fresh non-terminal always; terminal only while recent.
+	const visibleRuns = runs.filter((run) => {
+		if (!TERMINAL_RUN_STATUSES.has(run.status)) return true;
+		return now - (run.lastEventAt ?? run.updatedAt) <= RECENT_TERMINAL_MS;
+	});
+	const visibleIds = new Set(visibleRuns.map((run) => run.id as string));
+	const rootRuns: { node: HudAgentLeaf; children: HudAgentLeaf[] }[] = [];
+	const runChildren = new Map<string, HudAgentLeaf[]>();
+	for (const run of visibleRuns) {
+		const leaf: HudAgentLeaf = {
+			key: `run:${run.id}`,
+			label: runLabel(run),
+			status: runStatus(run.status),
+			startedAt: run.createdAt,
+			...(run.profile.model ? { note: run.profile.model } : {}),
+			targetId: `run:${run.id}`,
+		};
+		if (run.parent && visibleIds.has(run.parent as string)) {
+			const list = runChildren.get(run.parent as string) ?? [];
+			list.push(leaf);
+			runChildren.set(run.parent as string, list);
+		} else {
+			rootRuns.push({ node: leaf, children: [] });
+		}
+	}
+	for (const root of rootRuns) {
+		const children = runChildren.get(root.node.key.slice("run:".length));
+		if (children) root.children.push(...children);
+	}
+
+	const nodes: HudAgentNode[] = [];
+	for (const { node, children } of workers.values()) {
+		nodes.push({ ...node, children });
+	}
+	for (const leaf of looseExec) {
+		const deliverableId = leaf.label.split(" · ")[1] ?? "";
+		if (!workers.has(deliverableId)) nodes.push({ ...leaf, children: [] });
+	}
+	for (const { node, children } of rootRuns) {
+		nodes.push({ ...node, children });
+	}
+	return nodes;
+}
+
+/** The /steer prefix the runtime parses, addressed to the given target. */
+export function steerPrefix(targetId: string): string | undefined {
+	if (targetId.startsWith("worker:")) {
+		const [deliverableId, name] = targetId.slice("worker:".length).split("/");
+		if (!deliverableId) return undefined;
+		return name && name !== "worker"
+			? `/steer ${deliverableId} ${name}: `
+			: `/steer ${deliverableId} `;
+	}
+	if (targetId.startsWith("run:")) {
+		return `/steer ${targetId.slice("run:".length)} `;
+	}
+	return undefined;
 }

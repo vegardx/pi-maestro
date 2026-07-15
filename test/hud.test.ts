@@ -1,13 +1,17 @@
-// HUD render snapshots: fixed-width string arrays over a static HudSnapshot
-// (no terminal). Covers the idle collapse, the tab rule, per-tab rows, fold
-// rules (auto + sticky manual overrides), focus hints, the 10-line self-cap
-// with selection scrolling, and the render cache (identical array back when
-// nothing changed).
+// HUD panel render snapshots: fixed-width string arrays over a static
+// HudSnapshot (no terminal). The panel is the expand-above stratum — the tab
+// bar lives in MaestroEditor (test/maestro-editor.test.ts). Covers the
+// collapsed [] state, the expanded+focused view (cap rule + hint row), the
+// pinned/passive view (muted, no hint, no selection), per-tab rows, fold
+// rules (auto + sticky manual overrides), the 10-line self-cap with
+// selection scrolling, and the render cache.
 
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
 	type HudActions,
 	HudComponent,
+	type HudFocusState,
 	type HudSnapshot,
 	hudElapsed,
 } from "../packages/modes/src/runtime/hud.js";
@@ -24,12 +28,31 @@ function actions() {
 	} satisfies HudActions;
 }
 
-function hud(snap: HudSnapshot, acts: HudActions = actions()): HudComponent {
-	return new HudComponent({
+/** Marker-style fake theme so styling is assertable as plain text. */
+function fakeTheme(): Theme {
+	return {
+		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+		bold: (text: string) => `<b>${text}</b>`,
+	} as unknown as Theme;
+}
+
+function hud(
+	snap: HudSnapshot,
+	opts: {
+		acts?: HudActions;
+		state?: HudFocusState;
+		theme?: Theme;
+	} = {},
+): { c: HudComponent; state: HudFocusState } {
+	const state = opts.state ?? { focus: "agents", expanded: true };
+	const c = new HudComponent({
+		state,
 		data: () => snap,
-		actions: acts,
+		actions: opts.acts ?? actions(),
 		now: () => NOW,
+		...(opts.theme ? { theme: () => opts.theme } : {}),
 	});
+	return { c, state };
 }
 
 const EMPTY: HudSnapshot = { agents: [], plan: undefined, questions: [] };
@@ -102,59 +125,73 @@ describe("hudElapsed", () => {
 	});
 });
 
-describe("HUD idle state", () => {
-	it("collapses to one summary line (pi's editor border separates below)", () => {
-		const lines = hud({
-			agents: [],
-			plan: { rows: [], done: 4, total: 5 },
-			questions: [],
-		}).render(40);
-		expect(lines).toEqual(["  agents idle · plan 4/5"]);
-	});
-
-	it("omits the plan fragment when no plan exists", () => {
-		expect(hud(EMPTY).render(30)).toEqual(["  agents idle"]);
-	});
-
-	it("focused idle shows the full tab view, never the collapse", () => {
-		const c = hud({
-			agents: [],
-			plan: { rows: [], done: 4, total: 5 },
-			questions: [],
+describe("HUD collapsed state", () => {
+	it("renders zero lines while collapsed (the tab bar carries the counts)", () => {
+		const { c } = hud(agentsSnap(), {
+			state: { focus: "input", expanded: false },
 		});
-		c.focused = true;
-		const lines = c.render(W);
-		expect(lines[0]).toContain("[ Agents ]");
-		expect(lines[0]).toContain("Plan 4/5");
-		// Hint row present; no idle summary anywhere.
-		expect(lines.some((l) => l.includes("agents idle"))).toBe(false);
-		expect(lines[lines.length - 1]).toContain("s steer");
+		expect(c.render(W)).toEqual([]);
+	});
+
+	it("renders zero lines even on an empty snapshot", () => {
+		const { c } = hud(EMPTY, { state: { focus: "input", expanded: false } });
+		expect(c.render(W)).toEqual([]);
 	});
 });
 
-describe("HUD tab rule", () => {
-	it("marks the active tab and carries the counts", () => {
+describe("HUD expanded + focused", () => {
+	it("caps with a plain top rule and ends with the hint row", () => {
+		const { c } = hud(agentsSnap());
+		const lines = c.render(W);
+		// First line: the stratum's own top edge — a full-width plain rule.
+		expect(lines[0]).toBe("─".repeat(W));
+		// Last line: the action hints for the focused tab.
+		expect(lines[lines.length - 1]).toContain("enter attach");
+		expect(lines[lines.length - 1]).toContain("s steer");
+		expect(lines[lines.length - 1]).toContain("i interrupt");
+	});
+
+	it("shows placeholder rows on an empty snapshot (never idle-collapses)", () => {
+		const { c } = hud(EMPTY);
+		const lines = c.render(W);
+		expect(lines[0]).toBe("─".repeat(W));
+		expect(lines[1]).toContain("no agents");
+		expect(lines[lines.length - 1]).toContain("tab switch");
+	});
+});
+
+describe("HUD pinned (passive) state", () => {
+	it("mutes every line, drops the hint row and the selection", () => {
+		const theme = fakeTheme();
 		const snap: HudSnapshot = {
-			agents: agentsSnap().agents,
-			plan: { rows: [], done: 2, total: 5 },
+			...agentsSnap(),
 			questions: [
 				{ key: "q1", asker: "maestro", blocking: true, text: "Pick a tier" },
-				{ key: "q2", asker: "worker · auth", blocking: false, text: "hm" },
 			],
 		};
-		const c = hud(snap);
-		const [rule] = c.render(W);
-		expect(rule).toContain("[ Agents 6 ]");
-		expect(rule).toContain("Plan 2/5");
-		expect(rule).toContain("Questions 2 · 1 blocking");
-		expect(rule).toMatch(/ tab ──$/);
-		expect(rule.length).toBeLessThanOrEqual(W + 20); // plain, no ANSI
+		const { c, state } = hud(snap, { theme });
+		// Focused first: hint present, selection inverse band on a row.
+		let lines = c.render(W);
+		expect(lines.some((l) => l.includes("\u001b[7m"))).toBe(true);
+		expect(lines[lines.length - 1]).toContain("tab switch");
+		// Pin: focus back on the input, panel stays expanded.
+		state.focus = "input";
+		lines = c.render(W);
+		// No hint row, no selection highlight.
+		expect(lines.join("\n")).not.toContain("tab switch");
+		expect(lines.some((l) => l.includes("\u001b[7m"))).toBe(false);
+		// Rules dim; every content line muted; tone accents suppressed.
+		expect(lines[0]).toBe(`<dim>${"─".repeat(W)}</dim>`);
+		for (const line of lines.slice(1)) {
+			expect(line).toMatch(/^<muted>/);
+		}
+		expect(lines.join("\n")).not.toContain("<accent>");
 	});
 });
 
 describe("HUD agents tab", () => {
 	it("nests running children under an auto-expanded worker", () => {
-		const c = hud(agentsSnap());
+		const { c } = hud(agentsSnap());
 		const lines = c.render(W);
 		// worker with a RUNNING child auto-expands with tree connectors.
 		expect(lines[1]).toContain("▾ worker · auth-api");
@@ -165,14 +202,12 @@ describe("HUD agents tab", () => {
 		expect(lines[4]).toContain("▸ worker · billing · 1 subagents");
 		// maestro-direct run at root, no fold marker.
 		expect(lines[5]).toContain("research · caching-strategy");
-		// No bottom rule when nothing scrolls — the editor border separates.
-		expect(lines[lines.length - 1]).not.toMatch(/^─+$/);
+		// No bottom rule when nothing scrolls (hint is the last line).
+		expect(lines[lines.length - 2]).not.toMatch(/^─+$/);
 	});
 
 	it("manual folds are sticky and beat the auto rule", () => {
-		const snap = agentsSnap();
-		const c = hud(snap);
-		c.focused = true;
+		const { c } = hud(agentsSnap());
 		c.render(W);
 		// Selection starts on the auth worker; left arrow folds it manually.
 		c.handleInput("\u001b[D");
@@ -191,8 +226,7 @@ describe("HUD agents tab", () => {
 
 	it("enter attaches, s steers, i interrupts the selected row", () => {
 		const acts = actions();
-		const c = hud(agentsSnap(), acts);
-		c.focused = true;
+		const { c } = hud(agentsSnap(), { acts });
 		c.render(W);
 		c.handleInput("\r");
 		expect(acts.attach).toHaveBeenCalledWith("worker:auth-api/worker");
@@ -201,15 +235,6 @@ describe("HUD agents tab", () => {
 		expect(acts.steer).toHaveBeenCalledWith("run:r1");
 		c.handleInput("i");
 		expect(acts.interrupt).toHaveBeenCalledWith("run:r1");
-	});
-
-	it("ends with the hint row when focused (no trailing rule)", () => {
-		const c = hud(agentsSnap());
-		c.focused = true;
-		const lines = c.render(W);
-		expect(lines[lines.length - 1]).toContain("enter attach");
-		expect(lines[lines.length - 1]).toContain("s steer");
-		expect(lines[lines.length - 1]).toContain("i interrupt");
 	});
 });
 
@@ -247,7 +272,7 @@ describe("HUD plan tab", () => {
 	}
 
 	it("renders checkbox rows, names the worker, and auto-expands the active row", () => {
-		const c = hud(planSnap());
+		const { c } = hud(planSnap(), { state: { focus: "plan", expanded: true } });
 		c.setTab("plan");
 		const lines = c.render(W);
 		expect(lines[1]).toContain("[x] Ship the API");
@@ -259,11 +284,10 @@ describe("HUD plan tab", () => {
 	});
 
 	it("enter collapses/expands with a sticky override", () => {
-		const c = hud(planSnap());
+		const { c } = hud(planSnap(), { state: { focus: "plan", expanded: true } });
 		c.setTab("plan");
-		c.focused = true;
 		c.render(W);
-		c.handleInput("[B"); // select the active deliverable
+		c.handleInput("\u001b[B"); // select the active deliverable
 		c.handleInput("\r"); // collapse it (override the auto-expand)
 		let lines = c.render(W);
 		expect(lines[2]).toContain("[~] ▸ Wire the HUD");
@@ -303,11 +327,12 @@ describe("HUD questions tab", () => {
 		};
 	}
 
-	it("renders asker, blocking marker, and truncated question text", () => {
-		const c = hud(questionsSnap());
+	it("renders asker, blocking marker, and question text", () => {
+		const { c } = hud(questionsSnap(), {
+			state: { focus: "questions", expanded: true },
+		});
 		c.setTab("questions");
 		const lines = c.render(W);
-		expect(lines[0]).toContain("Questions 3 · 1 blocking");
 		expect(lines[1]).toContain("maestro · blocking — Which tier");
 		expect(lines[2]).toContain("worker · auth — Keep the legacy endpoint?");
 		expect(lines[3]).toContain("maestro · deferred — Deferred one");
@@ -315,9 +340,11 @@ describe("HUD questions tab", () => {
 
 	it("enter on a question row invokes the answer action", () => {
 		const acts = actions();
-		const c = hud(questionsSnap(), acts);
+		const { c } = hud(questionsSnap(), {
+			acts,
+			state: { focus: "questions", expanded: true },
+		});
 		c.setTab("questions");
-		c.focused = true;
 		c.render(W);
 		c.handleInput("\r");
 		expect(acts.answer).toHaveBeenCalledWith(
@@ -343,15 +370,15 @@ describe("HUD 10-line self-cap and scrolling", () => {
 	}
 
 	it("never exceeds 10 lines and reports overflow in the bottom rule", () => {
-		const c = hud(bigSnap());
+		// Pinned view: no hint row, so the row budget is one line larger.
+		const { c } = hud(bigSnap(), { state: { focus: "input", expanded: true } });
 		const lines = c.render(W);
 		expect(lines.length).toBeLessThanOrEqual(10);
 		expect(lines[lines.length - 1]).toContain("↓ 6 more");
 	});
 
-	it("scrolls the window with the selection", () => {
-		const c = hud(bigSnap());
-		c.focused = true;
+	it("scrolls the window with the selection while focused", () => {
+		const { c } = hud(bigSnap());
 		for (let i = 0; i < 9; i++) c.handleInput("\u001b[B");
 		const lines = c.render(W);
 		expect(lines.length).toBeLessThanOrEqual(10);
@@ -362,33 +389,43 @@ describe("HUD 10-line self-cap and scrolling", () => {
 });
 
 describe("HUD tab switching", () => {
-	it("[ and ] cycle tabs and reset the selection", () => {
+	it("[ and ] cycle tabs, reset the selection and track the shared focus", () => {
 		const snap: HudSnapshot = {
 			agents: agentsSnap().agents,
 			plan: { rows: [], done: 0, total: 0 },
 			questions: [],
 		};
-		const c = hud(snap);
-		c.focused = true;
+		const { c, state } = hud(snap);
 		expect(c.activeTab).toBe("agents");
 		c.handleInput("]");
 		expect(c.activeTab).toBe("plan");
+		expect(state.focus).toBe("plan");
 		c.handleInput("]");
 		expect(c.activeTab).toBe("questions");
+		expect(state.focus).toBe("questions");
 		c.handleInput("]");
 		expect(c.activeTab).toBe("agents");
 		c.handleInput("[");
 		expect(c.activeTab).toBe("questions");
+		expect(state.focus).toBe("questions");
 	});
 });
 
 describe("HUD render cache", () => {
 	it("returns the identical array when nothing changed", () => {
-		const c = hud(agentsSnap());
+		const { c } = hud(agentsSnap());
 		const first = c.render(W);
 		const second = c.render(W);
 		expect(second).toBe(first);
 		const other = c.render(W - 10);
 		expect(other).not.toBe(first);
+	});
+
+	it("invalidates when the focus state flips to pinned", () => {
+		const { c, state } = hud(agentsSnap());
+		const focused = c.render(W);
+		state.focus = "input";
+		const pinned = c.render(W);
+		expect(pinned).not.toBe(focused);
 	});
 });

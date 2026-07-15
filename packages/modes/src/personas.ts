@@ -7,7 +7,11 @@
 // plan composes a per-deliverable panel from these; the worker runs it and the
 // executor gates on the `gating` ones' verdicts.
 
-import type { SpawnProfile, ThinkingLevel } from "@vegardx/pi-contracts";
+import type {
+	RunWatchdogConfig,
+	SpawnProfile,
+	ThinkingLevel,
+} from "@vegardx/pi-contracts";
 import type { Deliverable, SubAgentSpec } from "./schema.js";
 
 export interface Persona {
@@ -185,6 +189,23 @@ export function panelTopologyGaps(
  * tool namespace, and the resolved model/effort. Returns null for an unknown
  * persona id (the caller skips it and logs).
  */
+/**
+ * Liveness policy for review-family runs (panel reviewers + the verifier) —
+ * the graduated deadline table, in ONE place so it stays tunable without code
+ * changes elsewhere. stall catches a wedged child fast; soft steers a slow
+ * one to wrap up with its verdict; hard is the reviewer's true cap. These
+ * values sit above the observed 4–6 min routine deep reviews on slow gateway
+ * routes — if a route starts producing false stall kills, loosen HERE.
+ */
+export const REVIEW_WATCHDOG: RunWatchdogConfig = {
+	stallMs: 120_000,
+	softMs: 4 * 60_000,
+	hardMs: 8 * 60_000,
+	wrapUpSteer:
+		"Time is nearly up. Wrap up NOW: finish your report, end with the " +
+		"VERDICT line and the fenced findings JSON block.",
+};
+
 export function buildPersonaProfile(
 	spec: SubAgentSpec,
 	opts: { cwd: string; model?: string },
@@ -206,6 +227,7 @@ export function buildPersonaProfile(
 		thinking: effort,
 		session: false,
 		isolateExtensions: true,
+		watchdog: REVIEW_WATCHDOG,
 		appendSystemPrompt: `${identity}\n\n${persona.preamble}${focusBlock}`,
 		...(opts.model ? { model: opts.model } : {}),
 	};
@@ -239,6 +261,7 @@ Every claim id from the prompt must appear in "checks" exactly once. Do not inve
 		thinking: "high",
 		session: false,
 		isolateExtensions: true,
+		watchdog: REVIEW_WATCHDOG,
 		appendSystemPrompt: contract,
 		...(opts.model ? { model: opts.model } : {}),
 	};

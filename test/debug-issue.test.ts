@@ -219,6 +219,8 @@ describe("diagnostic issue review", () => {
 			"episode",
 			freezeDiagnosticIssue(draft),
 		);
+		// Posting is an external mutation — the review must block until answered.
+		expect(questions[0]?.blocking).toBe(true);
 		expect(questions[1]?.allowFreeText).toBe(true);
 		expect(questions[1]?.showIf).toEqual({
 			questionId: "debug-issue-action-episode",

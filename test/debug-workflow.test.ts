@@ -1,5 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -126,6 +126,29 @@ describe("debug diagnosis and recovery", () => {
 		expect(JSON.stringify(snapshot)).not.toContain("secret-value");
 	});
 
+	it("normalizes home paths so episodes never leak the user directory", () => {
+		const { engine, execution } = fixture();
+		const home = homedir();
+		const snapshot = collectDebugSnapshot({
+			cwd: join(home, "src", "repo"),
+			mode: "agent",
+			executionStage: "executing",
+			sessionPath: join(home, "sessions", "current.jsonl"),
+			entries: [],
+			engine,
+			execution: execution as never,
+			planRoot: join(home, "plans"),
+			agentId: "worker/worker",
+			now: () => "now",
+		});
+		expect(snapshot.cwd.value).toBe("~/src/repo");
+		expect(snapshot.sessionPath?.value).toBe("~/sessions/current.jsonl");
+		expect(snapshot.plan?.path).toBe("~/plans/debug/plan.json");
+		// The agent id, not a guess from the plan, identifies the worker.
+		expect(snapshot.role).toEqual({ value: "worker", source: "environment" });
+		expect(JSON.stringify(snapshot)).not.toContain(home);
+	});
+
 	it("preselects a single recovery but executes nothing merely from recommendation", () => {
 		const { engine, execution } = fixture();
 		const snapshot = collectDebugSnapshot({
@@ -143,6 +166,8 @@ describe("debug diagnosis and recovery", () => {
 		const episode = controller.begin(snapshot, diagnosis)!;
 		const question = renderRecoveryQuestion(episode);
 		expect(question.multiple).not.toBe(true);
+		// The consent gate is mandatory — recovery can replace a worker.
+		expect(question.blocking).toBe(true);
 		expect(question.recommendation).toBe(diagnosis.recommendation);
 		expect(execution.steer).not.toHaveBeenCalled();
 	});

@@ -3,6 +3,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { createIssue } from "@vegardx/pi-github";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
 import {
 	askAndExecuteDebugRecovery,
@@ -13,6 +14,12 @@ import {
 	diagnoseDebugSnapshot,
 	validateWorkerDebugProposal,
 } from "../debug.js";
+import {
+	buildDiagnosticIssueDraft,
+	type DebugIssueEvidence,
+	reviewAndPostDiagnosticIssue,
+} from "../debug-issue.js";
+import { createDebugIssueReviser } from "../debug-reviser.js";
 import { planFingerprint } from "../engine.js";
 import { plansRoot } from "../storage.js";
 import type { RuntimeContext } from "./context.js";
@@ -45,11 +52,112 @@ function snapshot(rt: RuntimeContext, ctx: ExtensionContext) {
 	});
 }
 
+function issueEvidence(
+	episode: NonNullable<ReturnType<RuntimeContext["debug"]["get"]>>,
+): DebugIssueEvidence {
+	const result = episode.result;
+	if (!result) throw new Error("debug recovery result is unavailable");
+	return {
+		observed: episode.diagnosis.observed,
+		likelyCause: episode.diagnosis.likelyCause,
+		recentFailures: episode.snapshot.recentFailures.map(
+			(failure) => `${failure.source}: ${failure.error}`,
+		),
+		runtime: {
+			role: episode.snapshot.role.value,
+			mode: episode.snapshot.mode.value,
+			stage: episode.snapshot.execution.stage,
+			cwd: episode.snapshot.cwd.value,
+			...(episode.snapshot.sessionPath
+				? { sessionPath: episode.snapshot.sessionPath.value }
+				: {}),
+			...(episode.snapshot.plan
+				? { planSlug: episode.snapshot.plan.slug }
+				: {}),
+			...(episode.snapshot.execution.activeDeliverableId
+				? {
+						deliverableId: episode.snapshot.execution.activeDeliverableId,
+					}
+				: {}),
+			...(episode.snapshot.worker
+				? { generation: episode.snapshot.worker.generation }
+				: {}),
+			node: episode.snapshot.runtime.node,
+			platform: episode.snapshot.runtime.platform,
+			architecture: episode.snapshot.runtime.architecture,
+			maestroRevision: episode.snapshot.runtime.maestroRevision,
+		},
+		recovery: {
+			attemptedAction: result.action,
+			attemptedAt: result.attemptedAt,
+			status: result.ok ? "succeeded" : "failed",
+			detail: result.detail,
+		},
+	};
+}
+
+async function reviewDebugIssue(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+): Promise<void> {
+	const episode = rt.debug.get();
+	if (!episode?.result) return;
+	const evidence = issueEvidence(episode);
+	const review = await reviewAndPostDiagnosticIssue({
+		id: episode.id,
+		controller: rt.debug,
+		ask: rt.maestro.capabilities.get(CAPABILITIES.ask),
+		reviser: createDebugIssueReviser(ctx),
+		evidence,
+		initialDraft: buildDiagnosticIssueDraft(evidence),
+		post: (draft) =>
+			createIssue(ctx.cwd, {
+				title: draft.title,
+				body: draft.body,
+				target: {
+					host: "github.com",
+					owner: "vegardx",
+					repo: "pi-maestro",
+				},
+			}),
+		now: rt.now,
+		onRevisionError: (error) => ctx.ui.notify(error, "warning"),
+	});
+	switch (review.status) {
+		case "posted":
+			ctx.ui.notify(
+				review.url
+					? `Created pi-maestro issue: ${review.url}`
+					: "Created pi-maestro issue.",
+				"info",
+			);
+			break;
+		case "post-failed":
+			ctx.ui.notify(
+				`Recovery was not rolled back. GitHub issue creation failed and was not retried: ${review.error}`,
+				"error",
+			);
+			break;
+		case "canceled":
+			ctx.ui.notify("Issue review canceled; nothing was posted.", "info");
+			break;
+		case "unavailable":
+			ctx.ui.notify(review.error, "warning");
+			break;
+	}
+}
+
 export async function runDebugCommand(
 	rt: RuntimeContext,
 	args: string,
 	ctx: ExtensionCommandContext,
 ): Promise<void> {
+	configureStore(rt);
+	const active = rt.debug.get();
+	if (active?.result && active.issueReview) {
+		await reviewDebugIssue(rt, ctx);
+		return;
+	}
 	const hint =
 		args.trim() ||
 		(await ctx.ui.input(
@@ -61,7 +169,6 @@ export async function runDebugCommand(
 		ctx.ui.notify("Debug canceled; no recovery was attempted.", "info");
 		return;
 	}
-	configureStore(rt);
 	const snap = snapshot(rt, ctx);
 	const diagnosis = diagnoseDebugSnapshot(snap, hint);
 	const episode = rt.debug.begin(snap, diagnosis);
@@ -82,6 +189,7 @@ export async function runDebugCommand(
 		`${result.ok ? "Recovery completed" : "Recovery failed"}: ${result.detail}`,
 		result.ok ? "info" : "warning",
 	);
+	await reviewDebugIssue(rt, ctx);
 }
 
 export function installDebugProposalHandler(
@@ -124,6 +232,7 @@ async function handleWorkerDebugProposal(
 		rt.maestro.capabilities.get(CAPABILITIES.ask),
 		{ engine: rt.engine, execution: rt.execution, now: rt.now },
 	);
+	if (result) await reviewDebugIssue(rt, ctx);
 	return {
 		type: "debugResult",
 		id: message.id,

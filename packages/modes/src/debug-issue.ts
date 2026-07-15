@@ -381,6 +381,41 @@ export function renderDiagnosticIssue(draft: DiagnosticIssueDraft): string {
 	return `${sections.join("\n\n")}\n`;
 }
 
+export function redactDiagnosticIssueDraft(
+	draft: DiagnosticIssueDraft,
+): DiagnosticIssueDraft {
+	return {
+		version: 1,
+		model: {
+			title: redactSecrets(draft.model.title),
+			summary: redactSecrets(draft.model.summary),
+			stepsToReproduce: draft.model.stepsToReproduce.map(
+				(item) => redactSecrets(item) ?? "[redacted]",
+			),
+			expectedBehavior: redactSecrets(draft.model.expectedBehavior),
+			actualBehavior: redactSecrets(draft.model.actualBehavior),
+			...(draft.model.likelyCause
+				? { likelyCause: redactSecrets(draft.model.likelyCause) }
+				: {}),
+			recoveryWorkaround: redactSecrets(draft.model.recoveryWorkaround),
+			suggestedFix: redactSecrets(draft.model.suggestedFix),
+		},
+		mechanical: {
+			observedFacts: draft.mechanical.observedFacts.map(
+				(item) => redactSecrets(item) ?? "[redacted]",
+			),
+			runtimeContext: draft.mechanical.runtimeContext.map((fact) => ({
+				...fact,
+				value: redactSecrets(fact.value),
+			})),
+			recoveryOutcome: {
+				...draft.mechanical.recoveryOutcome,
+				detail: redactSecrets(draft.mechanical.recoveryOutcome.detail),
+			},
+		},
+	};
+}
+
 /** Final privacy boundary. The returned title/body are the only postable bytes. */
 export function freezeDiagnosticIssue(
 	draft: DiagnosticIssueDraft,
@@ -503,7 +538,9 @@ export async function reviewAndPostDiagnosticIssue(input: {
 		};
 	let state =
 		input.controller.getIssueReview() ??
-		input.controller.startIssueReview(input.initialDraft);
+		input.controller.startIssueReview(
+			redactDiagnosticIssueDraft(input.initialDraft),
+		);
 	for (;;) {
 		const frozen = freezeDiagnosticIssue(state.draft);
 		const answers = await input.ask.ask(
@@ -561,7 +598,7 @@ export async function reviewAndPostDiagnosticIssue(input: {
 			);
 			if (!validated.ok) throw new Error(validated.error);
 			state = input.controller.recordIssueRevision(
-				validated.draft,
+				redactDiagnosticIssueDraft(validated.draft),
 				instruction,
 				(input.now ?? (() => new Date().toISOString()))(),
 			);

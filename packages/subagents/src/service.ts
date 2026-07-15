@@ -72,8 +72,8 @@ export interface SubagentServiceOptions {
 	 */
 	readonly extraExtensions?: () => readonly string[];
 	/**
-	 * Transport for profiles that don't select one. Defaults to "headless" —
-	 * tmux stays opt-in until it has passed real transport-failure tests.
+	 * Transport for profiles that don't select one. Defaults to "tmux" —
+	 * inspectable runs are the norm; headless is an explicit choice.
 	 */
 	readonly defaultTransport?: RunTransport;
 }
@@ -127,11 +127,11 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		}
 
 		const runId = this.mintId();
-		// Headless is the default until the tmux transport has passed real
-		// transport-failure tests (prompt-loss handshake, pending-RPC rejection
-		// on child death, session GC). Opt in per profile, or process-wide via
-		// PI_MAESTRO_TRANSPORT=tmux (dogfood) — see index.ts.
-		const transport = profile.transport ?? this.defaultTransport ?? "headless";
+		// Inspectable tmux runs are the default — pi-maestro requires tmux
+		// (workers have always lived in it) and the transport-failure battery
+		// covers the bridge. Headless is an explicit choice: per profile, per
+		// service, or PI_MAESTRO_TRANSPORT=headless (see index.ts).
+		const transport = profile.transport ?? this.defaultTransport ?? "tmux";
 		// Lineage is populated at the spawn boundary: a run spawning children
 		// carries its own id in PI_MAESTRO_RUN_ID, so parent linkage (and with
 		// it --children/--tree) works without every caller threading it.

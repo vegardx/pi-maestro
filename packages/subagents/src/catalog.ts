@@ -2,7 +2,7 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@vegardx/pi-contracts";
-import { resolveRolePool } from "@vegardx/pi-models";
+import { resolveRolePool, resolveSentinelPool } from "@vegardx/pi-models";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 
 export interface CatalogEntry {
@@ -92,9 +92,11 @@ export async function resolveDelegateSelection(
 	const candidateById = new Map(
 		resolution.candidates.map((candidate) => [candidate.modelId, candidate]),
 	);
+	// Spawners must see concrete model ids: the "session" pool sentinel is
+	// rendered resolved (deduplicated against explicit pool entries).
 	const ids =
 		resolution.configuredModels.length > 0
-			? resolution.configuredModels
+			? resolveSentinelPool(ctx, resolution.configuredModels)
 			: [selected.modelId];
 	const models = ids.map((id, index) => {
 		const candidate = candidateById.get(id);

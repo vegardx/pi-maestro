@@ -44,6 +44,16 @@ export function isModelId(value: unknown): value is string {
 	return slash > 0 && slash < value.length - 1;
 }
 
+/**
+ * First-class pool entry that resolves to the live `/model` selection at its
+ * pool position. Valid in role `models` arrays only, never in targets.
+ */
+export const SESSION_MODEL_SENTINEL = "session";
+
+function isPoolEntry(value: unknown): value is string {
+	return isModelId(value) || value === SESSION_MODEL_SENTINEL;
+}
+
 function validArray<T>(
 	raw: unknown,
 	valid: (value: unknown) => value is T,
@@ -54,7 +64,7 @@ function validArray<T>(
 }
 
 function modelArray(raw: unknown): readonly string[] | undefined {
-	return validArray(raw, isModelId);
+	return validArray(raw, isPoolEntry);
 }
 
 function effortArray(raw: unknown): readonly ThinkingLevel[] | undefined {

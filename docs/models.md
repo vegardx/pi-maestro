@@ -27,7 +27,13 @@ The fix verifier intentionally uses `reviewer`; `/verify` intentionally uses
 
 Each role has two independent ordered allowlists:
 
-- `models`: exact `provider/model` IDs;
+- `models`: exact `provider/model` IDs, plus the literal `"session"` sentinel —
+  a first-class ordered entry that resolves to the live `/model` selection at
+  its pool position (deduplicated when the session model already appears as a
+  concrete entry). An unset pool behaves like `["session"]`; explicit choices
+  of the resolved session id are accepted when the pool contains the sentinel.
+  Spawner-facing pool descriptions always render the sentinel resolved to the
+  concrete model id.
 - `efforts`: `off|minimal|low|medium|high|xhigh`.
 
 The first available model is the default. The first configured effort supported
@@ -145,6 +151,7 @@ effective-source scope (global when the leaf is unset):
 ```bash
 /maestro worker                # or `worker list`: ordered pool, default effort, scope
 /maestro worker add openai/gpt-5.5
+/maestro worker add session        # the live /model as an ordered pool entry
 /maestro worker remove openai/gpt-5.5
 /maestro worker default anthropic/claude-haiku-4-5   # move to front; adds if absent
 /maestro worker effort high    # validated against the default model's support

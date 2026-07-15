@@ -364,3 +364,87 @@ describe("role pool resolution", () => {
 		).toEqual(["off"]);
 	});
 });
+
+describe("session pool sentinel", () => {
+	function configureModels(role: string, models: string[]) {
+		projectSettings({
+			models: {
+				profiles: {
+					main: {
+						targets: ["anthropic/sonnet"],
+						roles: { [role]: { models } },
+					},
+				},
+			},
+		});
+	}
+
+	it("resolves the sentinel at position 0 to the live session model", async () => {
+		configureModels("worker", ["session", "anthropic/haiku"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "worker" },
+		);
+		expect(result.selected?.modelId).toBe("anthropic/sonnet");
+		expect(result.candidates.map((entry) => entry.modelId)).toEqual([
+			"anthropic/sonnet",
+			"anthropic/haiku",
+		]);
+		// The authored pool is reported as written.
+		expect(result.configuredModels).toEqual(["session", "anthropic/haiku"]);
+	});
+
+	it("keeps the sentinel's mid-pool position behind earlier entries", async () => {
+		configureModels("worker", ["openai/mini", "session"]);
+		const first = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "worker" },
+		);
+		expect(first.selected?.modelId).toBe("openai/mini");
+		const second = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet", unavailable: ["openai/mini"] }),
+			{ role: "worker" },
+		);
+		expect(second.selected?.modelId).toBe("anthropic/sonnet");
+	});
+
+	it("dedups when the resolved session id also appears concretely", async () => {
+		configureModels("worker", ["anthropic/sonnet", "session", "openai/o3"]);
+		const result = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "worker" },
+		);
+		expect(result.candidates.map((entry) => entry.modelId)).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+		]);
+	});
+
+	it("allows an explicit choice of the resolved session id", async () => {
+		configureModels("worker", ["openai/o3", "session"]);
+		const exact = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "worker", choice: { model: "anthropic/sonnet" } },
+		);
+		expect(exact.errors).toEqual([]);
+		expect(exact.selected?.modelId).toBe("anthropic/sonnet");
+		// The literal sentinel is accepted as an explicit choice too.
+		const literal = await resolveRolePool(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "worker", choice: { model: "session" } },
+		);
+		expect(literal.selected?.modelId).toBe("anthropic/sonnet");
+	});
+
+	it("falls through to the next entry when the session model is unauthenticated", async () => {
+		configureModels("worker", ["session", "anthropic/haiku"]);
+		const result = await resolveRolePool(
+			fakeCtx({
+				session: "anthropic/sonnet",
+				unavailable: ["anthropic/sonnet"],
+			}),
+			{ role: "worker" },
+		);
+		expect(result.selected?.modelId).toBe("anthropic/haiku");
+	});
+});

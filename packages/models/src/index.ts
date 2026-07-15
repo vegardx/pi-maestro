@@ -12,6 +12,7 @@ export {
 	effectiveRolePool,
 	isModelId,
 	readModelsConfig,
+	SESSION_MODEL_SENTINEL,
 } from "./profiles.js";
 export {
 	type AuthenticatedRoleCandidate,
@@ -21,5 +22,6 @@ export {
 	type RolePoolResolveOptions,
 	resolveRolePool,
 	resolveRolePoolWithin,
+	resolveSentinelPool,
 	supportedEfforts,
 } from "./role-resolver.js";

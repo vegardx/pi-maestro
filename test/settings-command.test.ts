@@ -411,6 +411,23 @@ describe("/settings command", () => {
 			expect(workerModels()).toBeUndefined();
 		});
 
+		it("adds the session sentinel and lists it resolved", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker add session", ctx);
+			expect(workerModels()).toEqual([
+				"anthropic/sonnet",
+				"openai/o3",
+				"session",
+			]);
+			handleSettingsCommand("worker list", ctx);
+			expect(ctx.messages.at(-1)).toContain(
+				"3. session → anthropic/sonnet — session",
+			);
+			expect(getSettingsCompletions("worker add ses", ctx)).toEqual([
+				"session",
+			]);
+		});
+
 		it("default moves an existing model to the front and adds absent ones", () => {
 			const ctx = roleCtx();
 			handleSettingsCommand("worker default openai/o3", ctx);

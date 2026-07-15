@@ -16,6 +16,7 @@ import {
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
+import { resolveSentinelPool } from "@vegardx/pi-models";
 import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
@@ -63,7 +64,8 @@ async function roleSelection(
 	return {
 		model: resolved.modelId,
 		effort: resolved.effort,
-		allowedModels: resolved.resolved.configuredModels,
+		// Spawners choose exact ids; the "session" sentinel renders resolved.
+		allowedModels: resolveSentinelPool(ctx, resolved.resolved.configuredModels),
 		allowedEfforts: resolved.resolved.allowedEfforts,
 	};
 }

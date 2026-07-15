@@ -99,11 +99,23 @@ While the fleet runs, the maestro session stays yours:
 
 ### The HUD
 
-A borderless status strip lives directly above the input for the whole
-maestro session (at most 10 lines; idle it collapses to one summary line
-like `agents idle · plan 4/5`). Its first line is a tab rule —
-`──[ Agents 4 ]─── Plan 2/5 ─── Questions 2 · 1 blocking ─── tab ──` —
-and the content rows below belong to the active tab:
+The HUD lives in the input box itself: the input's top border is a tab
+bar —
+`──[ Input ]─── Agents 4 ─── Plan 5/9 ─── Questions 2 · 1 blocking ── tab ──`
+— so the box always reads tab bar / input text / bottom border. The
+bracketed member is the one holding the keys; counts are live (omitted at
+zero) and a blocking ask accents the Questions label. Collapsed — the
+default, with **Input** focused — the HUD costs zero extra lines.
+
+**Tab** walks the ring. On an empty input it enters the panel at Agents;
+each further Tab moves Agents → Plan → Questions; one more wraps focus back
+to **Input** while *pinning* the panel open on the last tab. A draft keeps
+Tab for autocomplete (the trailing `tab` hint dims to say so) — the ring is
+only ever entered from an empty input.
+
+The panel expands *above* the tab bar (at most 10 lines, capped by its own
+plain rule; rows beyond the cap scroll behind an overflow rule with
+`↑/↓ N more` counts). Its tabs:
 
 - **Agents** — workers at root with their one-shot review/verify/research
   runs nested under tree connectors; maestro-direct spawns at root. Each row
@@ -117,14 +129,18 @@ and the content rows below belong to the active tab:
 - **Questions** — every pending ask: blocking first (accented), asker
   (`maestro` or `worker · slug`) plus the question text.
 
-Focus: **Tab** cycles input → HUD → input, and is consumed only when the
-editor is empty (or the HUD is already focused) — a draft keeps Tab for
-autocomplete. While the HUD is focused, the last row shows the keys:
-up/down move the selection, `[`/`]` switch tabs, left/right/space
-fold/unfold, **Enter** is the context action (Agents: attach a read-only
-tmux split; Plan: expand/collapse; Questions: answer), `s` prefills an
-addressed `/steer`, `i` interrupts after a confirm, **Esc** returns to the
-input.
+While a panel tab is focused the panel is bright, its last row lists the
+keys, and the input text below dims: up/down move the selection, Tab (or
+`[`/`]`) switches tabs, left/right/space fold/unfold, **Enter** is the
+context action (Agents: attach a read-only tmux split; Plan:
+expand/collapse; Questions: answer), `s` prefills an addressed `/steer`,
+`i` interrupts after a confirm.
+
+**Pinned** — after Tab wraps back to Input — the panel stays open as a
+passive monitor: every row muted, no selection, no hint row. You type
+normally while it live-updates. **Esc** collapses: from a panel tab it
+focuses the input *and* collapses; from the input it folds a pinned panel
+away; with no panel open it keeps its usual editor meaning.
 
 ### Questions and answer mode
 

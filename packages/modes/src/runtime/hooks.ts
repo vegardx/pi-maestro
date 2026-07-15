@@ -36,6 +36,7 @@ import {
 import { activeDeliverable, type RuntimeContext } from "./context.js";
 import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
 import { hydrateDebugEpisode } from "./debug-command.js";
+import { installHud } from "./hud-wiring.js";
 import {
 	buildAgentCompactionGuidance,
 	buildAgentWorkerPreamble,
@@ -210,6 +211,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		// Install custom footer (before notifyMode so invalidate handle exists)
 		if (!rt.agentBridge && rt.state.mode !== "agent") {
 			installMaestroFooter(rt, ctx);
+			// The HUD is always mounted while a maestro session is active; it
+			// collapses itself to an idle line when nothing is running.
+			if (ctx.hasUI && ctx.mode === "tui" && !isAgentMode()) {
+				installHud(rt, ctx);
+			}
 		}
 		rt.notifyMode(ctx);
 
@@ -308,6 +314,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		rt.invalidateFooter = undefined;
+		rt.hud?.dispose();
 		clearAgentWidget(rt, ctx);
 		if (rt.workerPanes.isOpen()) {
 			await rt.workerPanes.close();

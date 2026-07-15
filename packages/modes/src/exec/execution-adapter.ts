@@ -1206,20 +1206,17 @@ export class ExecutionAdapter {
 						"worker restart",
 					);
 					if (!gone) {
-						const error = `old tmux session ${oldSession} did not exit before timeout`;
-						this.engine.updateWorkerSession(deliverableId, {
-							restartState: "blocked",
-						});
-						this.executor.blockDeliverable(deliverableId, error);
-						return { ...preview, ok: false, error };
+						return this.failWorkerRestart(
+							preview,
+							`old tmux session ${oldSession} did not exit before timeout`,
+						);
 					}
 				}
 				if ((worker.generation ?? 0) !== oldGeneration) {
-					return {
-						...preview,
-						ok: false,
-						error: "worker generation changed during restart barrier",
-					};
+					return this.failWorkerRestart(
+						preview,
+						"worker generation changed during restart barrier",
+					);
 				}
 
 				let workspace = preview;
@@ -1230,14 +1227,16 @@ export class ExecutionAdapter {
 						await this.executor.reprovisionWorkspace(deliverableId);
 					workspace = this.previewWorkerRestart(deliverableId, mode);
 					if (!workspace.ok) {
-						return { ...workspace, ok: false };
+						return this.failWorkerRestart(
+							workspace,
+							workspace.error ?? "reprovisioned workspace validation failed",
+						);
 					}
 					if (provisioned.worktreePath !== workspace.path) {
-						return {
-							...workspace,
-							ok: false,
-							error: "reprovisioned workspace could not be reserved",
-						};
+						return this.failWorkerRestart(
+							workspace,
+							"reprovisioned workspace could not be reserved",
+						);
 					}
 				}
 
@@ -1278,18 +1277,27 @@ export class ExecutionAdapter {
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				this.engine.updateWorkerSession(deliverableId, {
-					restartState: "blocked",
-				});
-				this.executor.blockDeliverable(
-					deliverableId,
-					`restart failed: ${message}`,
-				);
-				return { ...preview, ok: false, error: message };
+				return this.failWorkerRestart(preview, `restart failed: ${message}`);
 			} finally {
 				this.restarting.delete(deliverableId);
 			}
 		});
+	}
+
+	/**
+	 * Every restart failure funnels here: the persisted restart state blocks,
+	 * and the executor state becomes retryable (pending, no session) instead of
+	 * a wedged "restarting" worker no later attempt can pick up.
+	 */
+	private failWorkerRestart(
+		preview: WorkerRestartPreview,
+		error: string,
+	): WorkerRestartResult {
+		this.engine.updateWorkerSession(preview.deliverableId, {
+			restartState: "blocked",
+		});
+		this.executor.failWorkerReplacement(preview.deliverableId, error);
+		return { ...preview, ok: false, error };
 	}
 
 	private async stopAndProveGone(

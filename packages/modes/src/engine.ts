@@ -600,7 +600,9 @@ export class PlanEngine {
 							title: op.task.title,
 							body: op.task.body ?? "",
 							done: false,
-							kind: op.type === "addManualCheckpoint" ? "manual" : "followup",
+							// Corrective tasks must gate completion (kind "task"): a repair
+							// that the worker can finish without doing is no repair at all.
+							kind: op.type === "addManualCheckpoint" ? "manual" : "task",
 							createdAt: ts,
 							updatedAt: ts,
 						});

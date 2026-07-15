@@ -3,6 +3,7 @@
 // timestamps and persists atomically. Invalid mutations throw before touching
 // disk, so the in-memory plan and the file never diverge.
 
+import { createHash, randomUUID } from "node:crypto";
 import type { ReviewLedger } from "./exec/findings.js";
 import {
 	type AgentMode,
@@ -21,6 +22,9 @@ import {
 	slugify,
 	type ThinkingLevel,
 	validatePlanShape,
+	type WorkerRestartMode,
+	type WorkerRestartState,
+	boundedPreviousSessionPaths,
 	type WorkItem,
 	type WorkItemKind,
 } from "./schema.js";
@@ -71,6 +75,40 @@ export interface AddWorkItemInput {
 	body?: string;
 	kind?: WorkItemKind;
 	position?: number;
+}
+
+export type PlanRepairOperation =
+	| {
+			type: "addCorrectiveTask" | "addManualCheckpoint";
+			deliverableId: string;
+			task: { id: string; title: string; body?: string };
+	  }
+	| {
+			type: "clarifyTask";
+			deliverableId: string;
+			taskId: string;
+			title?: string;
+			body?: string;
+	  }
+	| {
+			type: "reopenTask";
+			deliverableId: string;
+			taskId: string;
+	  };
+
+export interface PlanRepairInput {
+	baseFingerprint: string;
+	reason: string;
+	operations: readonly PlanRepairOperation[];
+	/** Execution-aware caller assertion: each affected deliverable is stopped. */
+	stoppedDeliverableIds: readonly string[];
+}
+
+/** Stable semantic fingerprint. Audit timestamps are excluded from drift checks. */
+export function planFingerprint(plan: Plan): string {
+	const value = structuredClone(plan) as Plan;
+	delete value.repairAudit;
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 export class PlanEngine {
@@ -235,6 +273,10 @@ export class PlanEngine {
 				| "worktreePath"
 				| "sessionPath"
 				| "sessionName"
+				| "sessionGeneration"
+				| "previousSessionPaths"
+				| "restartMode"
+				| "restartState"
 				| "summary"
 				| "prUrl"
 				| "prNumber"
@@ -262,6 +304,30 @@ export class PlanEngine {
 			if (workerModel !== undefined) g.worker.model = workerModel;
 			if (workerEffort !== undefined) g.worker.effort = workerEffort;
 			if (workerAfter !== undefined) g.worker.after = workerAfter;
+			g.updatedAt = this.now();
+		});
+	}
+
+	updateWorkerSession(
+		id: string,
+		patch: {
+			sessionPath?: string;
+			sessionName?: string;
+			sessionGeneration?: number;
+			previousSessionPaths?: string[];
+			restartMode?: WorkerRestartMode;
+			restartState?: WorkerRestartState;
+		},
+	): void {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, id);
+			if (!g) throw new Error(`unknown deliverable: ${id}`);
+			assignDefined(g, patch);
+			if (patch.previousSessionPaths) {
+				g.previousSessionPaths = boundedPreviousSessionPaths(
+					patch.previousSessionPaths,
+				);
+			}
 			g.updatedAt = this.now();
 		});
 	}
@@ -479,6 +545,105 @@ export class PlanEngine {
 			g.tasks.splice(idx, 1);
 			g.updatedAt = this.now();
 		});
+	}
+
+	/**
+	 * Apply the complete, narrow debug repair to one clone/save. The operation
+	 * vocabulary cannot express topology, lifecycle, review, or runtime edits.
+	 */
+	applyTaskRepair(input: PlanRepairInput): { fingerprint: string; auditId: string } {
+		if (!input.reason.trim()) throw new Error("repair reason required");
+		if (input.operations.length === 0) throw new Error("repair has no operations");
+		const actual = planFingerprint(this.plan);
+		if (actual !== input.baseFingerprint) {
+			throw new Error(
+				`plan fingerprint drift: expected ${input.baseFingerprint}, found ${actual}`,
+			);
+		}
+		const stopped = new Set(input.stoppedDeliverableIds);
+		const touched = new Set(input.operations.map((op) => op.deliverableId));
+		for (const id of touched) {
+			const g = findDeliverable(this.plan, id);
+			if (!g) throw new Error(`unknown deliverable: ${id}`);
+			if (!stopped.has(id)) {
+				throw new Error(`deliverable ${id} is not confirmed stopped`);
+			}
+			if (["shipped", "abandoned", "superseded"].includes(g.status)) {
+				throw new Error(`deliverable ${id} is terminal (${g.status})`);
+			}
+			if (g.restartState === "restarting") {
+				throw new Error(`deliverable ${id} is restarting`);
+			}
+		}
+		const ts = this.now();
+		const auditId = randomUUID();
+		this.mutate((plan) => {
+			for (const op of input.operations) {
+				const g = findDeliverable(plan, op.deliverableId);
+				if (!g) throw new Error(`unknown deliverable: ${op.deliverableId}`);
+				switch (op.type) {
+					case "addCorrectiveTask":
+					case "addManualCheckpoint": {
+						if (!op.task.id.trim() || !op.task.title.trim()) {
+							throw new Error(`${op.type} requires task id and title`);
+						}
+						if (findTask(g, op.task.id)) {
+							throw new Error(`task already exists: ${op.task.id}`);
+						}
+						g.tasks.push({
+							type: "work-item",
+							id: op.task.id,
+							title: op.task.title,
+							body: op.task.body ?? "",
+							done: false,
+							kind:
+								op.type === "addManualCheckpoint" ? "manual" : "followup",
+							createdAt: ts,
+							updatedAt: ts,
+						});
+						break;
+					}
+					case "clarifyTask": {
+						const task = findTask(g, op.taskId);
+						if (!task) throw new Error(`unknown task: ${op.taskId}`);
+						if (task.done || task.answer !== undefined) {
+							throw new Error(`task ${op.taskId} was already acted upon`);
+						}
+						if (op.title === undefined && op.body === undefined) {
+							throw new Error(`clarifyTask ${op.taskId} has no text change`);
+						}
+						if (op.title !== undefined) task.title = op.title;
+						if (op.body !== undefined) task.body = op.body;
+						task.updatedAt = ts;
+						break;
+					}
+					case "reopenTask": {
+						const task = findTask(g, op.taskId);
+						if (!task) throw new Error(`unknown task: ${op.taskId}`);
+						if (task.answer !== undefined || task.decidedAt !== undefined) {
+							throw new Error(`cannot reopen decided task ${op.taskId}`);
+						}
+						// Idempotent: retries leave an already-open task open.
+						task.done = false;
+						task.updatedAt = ts;
+						break;
+					}
+				}
+				g.updatedAt = ts;
+			}
+			plan.repairAudit = [
+				...(plan.repairAudit ?? []),
+				{
+					id: auditId,
+					at: ts,
+					baseFingerprint: input.baseFingerprint,
+					reason: input.reason,
+					deliverableIds: [...touched],
+					operations: input.operations.map((op) => op.type),
+				},
+			];
+		});
+		return { fingerprint: planFingerprint(this.plan), auditId };
 	}
 
 	// ── Internal ───────────────────────────────────────────────────────────

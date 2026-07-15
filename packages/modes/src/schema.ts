@@ -101,6 +101,21 @@ export interface WorkerSpec {
 	after?: string[];
 }
 
+export type WorkerRestartMode = "resume" | "fresh";
+export type WorkerRestartState = "idle" | "restarting" | "running" | "blocked";
+
+/** Historical worker transcripts retained when a fresh session replaces one. */
+export const MAX_PREVIOUS_WORKER_SESSIONS = 5;
+
+export interface PlanRepairAuditEvent {
+	id: string;
+	at: string;
+	baseFingerprint: string;
+	reason: string;
+	deliverableIds: string[];
+	operations: string[];
+}
+
 // ─── Work deliverable ──────────────────────────────────────────────────────────────
 
 export interface Deliverable {
@@ -158,6 +173,16 @@ export interface Deliverable {
 	sessionPath?: string;
 	/** Worker tmux session name; persisted at spawn for orphan cleanup on recovery. */
 	sessionName?: string;
+	/**
+	 * Monotonic worker replacement epoch. Plans written before epochs existed
+	 * omit it and hydrate as generation 0 via workerSessionGeneration().
+	 */
+	sessionGeneration?: number;
+	/** Older durable transcript paths, newest last and bounded. */
+	previousSessionPaths?: string[];
+	/** Last explicit replacement mode and its durable lifecycle state. */
+	restartMode?: WorkerRestartMode;
+	restartState?: WorkerRestartState;
 	/** Combined summary of all agent outputs (produced at deliverable completion). */
 	summary?: string;
 	/** PR URL once shipped. */
@@ -250,6 +275,8 @@ export interface Plan {
 	/** Session file backing this plan's planning session. */
 	planSessionPath?: string;
 	lastSyncedAt?: string;
+	/** Immutable audit trail for narrow, fingerprinted debug repairs. */
+	repairAudit?: PlanRepairAuditEvent[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -652,6 +679,24 @@ export function repoNameFromPath(path: string): string {
 	return name === "" ? "repo" : name;
 }
 
+export function workerSessionGeneration(
+	deliverable: Pick<Deliverable, "sessionGeneration">,
+): number {
+	return deliverable.sessionGeneration ?? 0;
+}
+
+export function workerRestartState(
+	deliverable: Pick<Deliverable, "restartState">,
+): WorkerRestartState {
+	return deliverable.restartState ?? "idle";
+}
+
+export function boundedPreviousSessionPaths(paths: readonly string[]): string[] {
+	return [...new Set(paths.filter((path) => path.trim().length > 0))].slice(
+		-MAX_PREVIOUS_WORKER_SESSIONS,
+	);
+}
+
 // ─── Validation ──────────────────────────────────────────────────────────────
 
 /** Structural invariants enforced before saving. Empty array = valid. */
@@ -696,6 +741,39 @@ export function validatePlanShape(
 	};
 
 	for (const g of plan.deliverables) {
+		if (
+			g.sessionGeneration !== undefined &&
+			(!Number.isSafeInteger(g.sessionGeneration) || g.sessionGeneration < 0)
+		) {
+			problems.push(
+				`deliverable \`${g.id}\`: sessionGeneration must be a non-negative safe integer`,
+			);
+		}
+		if (
+			g.previousSessionPaths !== undefined &&
+			g.previousSessionPaths.length > MAX_PREVIOUS_WORKER_SESSIONS
+		) {
+			problems.push(
+				`deliverable \`${g.id}\`: previousSessionPaths exceeds ${MAX_PREVIOUS_WORKER_SESSIONS}`,
+			);
+		}
+		if (
+			g.sessionPath &&
+			g.previousSessionPaths?.includes(g.sessionPath)
+		) {
+			problems.push(
+				`deliverable \`${g.id}\`: current sessionPath cannot also be historical`,
+			);
+		}
+		if (
+			g.previousSessionPaths &&
+			new Set(g.previousSessionPaths).size !== g.previousSessionPaths.length
+		) {
+			problems.push(
+				`deliverable \`${g.id}\`: previousSessionPaths contains duplicates`,
+			);
+		}
+
 		// Workspace / repo coherence
 		if (deliverableWorkspace(g) === "scratch") {
 			if (g.repo !== undefined) {

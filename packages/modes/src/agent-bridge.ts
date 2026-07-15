@@ -9,6 +9,9 @@ import type {
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
 import {
+	type DebugProposalMessage,
+	type DebugRecoveryProposalWire,
+	type DebugResultMessage,
 	type MaestroMessage,
 	MaestroRpcClient,
 	type PanelReviewerSpec,
@@ -80,6 +83,13 @@ export class AgentBridge {
 		| {
 				id: string;
 				resolve: (result: PlanMutateResultMessage) => void;
+				timer: ReturnType<typeof setTimeout>;
+		  }
+		| undefined;
+	private pendingDebug:
+		| {
+				id: string;
+				resolve: (result: DebugResultMessage) => void;
 				timer: ReturnType<typeof setTimeout>;
 		  }
 		| undefined;
@@ -334,6 +344,59 @@ export class AgentBridge {
 		});
 	}
 
+	/**
+	 * Submit a generation/fingerprint-bound debug proposal to the maestro.
+	 * A timeout is an explicit local-only result; workers never recover themselves.
+	 */
+	proposeDebug(input: {
+		proposalId?: string;
+		generation: number;
+		planFingerprint: string;
+		observed: readonly string[];
+		likelyCause: string;
+		recovery?: DebugRecoveryProposalWire;
+	}): Promise<DebugResultMessage> {
+		if (this.pendingDebug) {
+			return Promise.resolve({
+				type: "debugResult",
+				id: "",
+				proposalId: input.proposalId ?? "",
+				accepted: false,
+				error: "another debug proposal is pending",
+			});
+		}
+		const id = randomUUID();
+		const proposalId = input.proposalId ?? randomUUID();
+		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+		const message: DebugProposalMessage = {
+			type: "debugProposal",
+			id,
+			proposalId,
+			agentId: this.deps.agentId,
+			generation: input.generation,
+			planFingerprint: input.planFingerprint,
+			observed: input.observed.slice(0, 32),
+			likelyCause: input.likelyCause.slice(0, 2000),
+			...(input.recovery ? { recovery: input.recovery } : {}),
+		};
+		this.client.send(message);
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				if (this.pendingDebug?.id !== id) return;
+				this.pendingDebug = undefined;
+				resolve({
+					type: "debugResult",
+					id,
+					proposalId,
+					accepted: false,
+					error: `maestro unavailable after ${timeoutMs}ms; no recovery was attempted`,
+				});
+			}, timeoutMs);
+			timer.unref?.();
+			this.pendingDebug = { id, resolve, timer };
+		});
+	}
+
 	/** Clean up — settle any pending ask, then disconnect. */
 	destroy(): void {
 		this.settlePending();
@@ -344,6 +407,13 @@ export class AgentBridge {
 		this.settleAsk([]);
 		this.settlePlanRead("");
 		this.settlePanelRead({ panel: [] });
+		this.settleDebug({
+			type: "debugResult",
+			id: this.pendingDebug?.id ?? "",
+			proposalId: "",
+			accepted: false,
+			error: "shutdown",
+		});
 		this.settlePlanMutate({
 			type: "planMutateResult",
 			id: this.pendingPlanMutate?.id ?? "",
@@ -382,6 +452,14 @@ export class AgentBridge {
 		if (!pending) return;
 		clearTimeout(pending.timer);
 		this.pendingPanelRead = undefined;
+		pending.resolve(result);
+	}
+
+	private settleDebug(result: DebugResultMessage): void {
+		const pending = this.pendingDebug;
+		if (!pending) return;
+		clearTimeout(pending.timer);
+		this.pendingDebug = undefined;
 		pending.resolve(result);
 	}
 
@@ -435,6 +513,11 @@ export class AgentBridge {
 				this.settlePlanMutate(msg);
 				break;
 			}
+			case "debugResult": {
+				if (this.pendingDebug?.id !== msg.id) break;
+				this.settleDebug(msg);
+				break;
+			}
 			case "summarize": {
 				if (this.pendingSummarize) {
 					// One at a time: settle the newcomer immediately with an
@@ -468,6 +551,14 @@ export class AgentBridge {
 					this.settlePlanRead(`Error: ${msg.message}`);
 				} else if (this.pendingPanelRead?.id === msg.id) {
 					this.settlePanelRead({ panel: [] });
+				} else if (this.pendingDebug?.id === msg.id) {
+					this.settleDebug({
+						type: "debugResult",
+						id: msg.id,
+						proposalId: "",
+						accepted: false,
+						error: msg.message,
+					});
 				} else if (this.pendingPlanMutate?.id === msg.id) {
 					this.settlePlanMutate({
 						type: "planMutateResult",

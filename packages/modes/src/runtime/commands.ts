@@ -36,6 +36,7 @@ import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
 import { beginDistill, beginHandoff } from "./carry-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
+import { runDebugCommand, runWorkerDebugCommand } from "./debug-command.js";
 import {
 	type Deliverable,
 	type DeliverableId,
@@ -392,6 +393,15 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			if (failed.length > 0) {
 				await presentRemediationTriage(rt, ctx, entries, round, failed.length);
 			}
+		},
+	});
+
+	pi.registerCommand("debug", {
+		description:
+			"Diagnose this session and choose one explicit recovery action.",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (isAgentMode()) await runWorkerDebugCommand(rt, args, ctx);
+			else await runDebugCommand(rt, args, ctx);
 		},
 	});
 

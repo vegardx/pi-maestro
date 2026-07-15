@@ -1,4 +1,4 @@
-// ─── RPC protocol v2 ─────────────────────────────────────────────────────────
+// ─── RPC protocol v3 ─────────────────────────────────────────────────────────
 //
 // Requests carry `id: string`; responses echo it. Fire-and-forget messages
 // omit `id`. Every inbound type must have a handler; unknown types answer
@@ -14,7 +14,7 @@ import type {
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type AgentRole = "agent" | "delegate";
 
@@ -229,6 +229,42 @@ export interface PanelVerdictMessage {
 	readonly ledger?: ReviewLedgerWire;
 }
 
+export interface DebugRecoveryProposalWire {
+	readonly kind:
+		| "steer"
+		| "retry-activation"
+		| "restart-resume"
+		| "restart-fresh"
+		| "repair"
+		| "none";
+	readonly targetDeliverableId?: string;
+	readonly expectedGeneration?: number;
+	readonly basePlanFingerprint?: string;
+	readonly guidance?: string;
+	readonly repairReason?: string;
+	readonly repairOperations?: readonly unknown[];
+	readonly continuation?:
+		| "retry-activation"
+		| "restart-resume"
+		| "restart-fresh"
+		| "none";
+	readonly confidence: number;
+	readonly rationale: string;
+}
+
+/** A worker's bounded diagnosis proposal. Maestro validates and owns action. */
+export interface DebugProposalMessage {
+	readonly type: "debugProposal";
+	readonly id: string;
+	readonly proposalId: string;
+	readonly agentId: string;
+	readonly generation: number;
+	readonly planFingerprint: string;
+	readonly observed: readonly string[];
+	readonly likelyCause: string;
+	readonly recovery?: DebugRecoveryProposalWire;
+}
+
 /** Agent answers a ping. */
 export interface PongMessage {
 	readonly type: "pong";
@@ -243,6 +279,7 @@ export type AgentMessage =
 	| PlanMutateMessage
 	| PanelReadMessage
 	| PanelVerdictMessage
+	| DebugProposalMessage
 	| QuestionsMessage
 	| DoneMessage
 	| SummaryMessage
@@ -304,6 +341,20 @@ export interface DoneAckMessage {
 	readonly id: string;
 }
 
+export interface DebugResultMessage {
+	readonly type: "debugResult";
+	readonly id: string;
+	readonly proposalId: string;
+	readonly accepted: boolean;
+	readonly episodeId?: string;
+	readonly recovery?: {
+		readonly action: DebugRecoveryProposalWire["kind"];
+		readonly ok: boolean;
+		readonly detail: string;
+	};
+	readonly error?: string;
+}
+
 export interface ShutdownMessage {
 	readonly type: "shutdown";
 	readonly reason?: string;
@@ -330,6 +381,7 @@ export type MaestroMessage =
 	| PlanReadResponseMessage
 	| PanelReadResponseMessage
 	| PlanMutateResultMessage
+	| DebugResultMessage
 	| DoneAckMessage
 	| ShutdownMessage
 	| PingMessage
@@ -349,6 +401,7 @@ interface ResponseByRequestType {
 	readonly planMutate: PlanMutateResultMessage;
 	readonly questions: AnswersMessage;
 	readonly done: DoneAckMessage;
+	readonly debugProposal: DebugResultMessage;
 	readonly summarize: SummaryMessage;
 	readonly ping: PongMessage;
 }

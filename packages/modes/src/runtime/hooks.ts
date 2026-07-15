@@ -33,6 +33,7 @@ import {
 } from "./carry-commands.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
 import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
+import { hydrateDebugEpisode } from "./debug-command.js";
 import {
 	buildAgentCompactionGuidance,
 	buildAgentWorkerPreamble,
@@ -197,6 +198,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.resetCalibration();
 		if (rt.state.activePlanSlug)
 			rt.engine = rt.loadEngine(rt.state.activePlanSlug);
+		if (!isAgentMode() && rt.engine) hydrateDebugEpisode(rt);
 		// Auto-open a draft plan when starting in plan/recon mode with no active
 		// plan. Recon's draft is invisible plumbing: it never surfaces (the plan
 		// tool is hidden there) but keys the research scratch dir so the

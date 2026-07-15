@@ -23,6 +23,7 @@ import {
 	type SpawnContext,
 } from "./invocation.js";
 import type { RunStore } from "./store.js";
+import { RUN_ID_ENV } from "./supervisor.js";
 
 /** Live control over one launched child. Implemented by the runners. */
 export interface RunnerController {
@@ -131,9 +132,15 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		// on child death, session GC). Opt in per profile, or process-wide via
 		// PI_MAESTRO_TRANSPORT=tmux (dogfood) — see index.ts.
 		const transport = profile.transport ?? this.defaultTransport ?? "headless";
+		// Lineage is populated at the spawn boundary: a run spawning children
+		// carries its own id in PI_MAESTRO_RUN_ID, so parent linkage (and with
+		// it --children/--tree) works without every caller threading it.
+		const parent =
+			profile.parent ?? (process.env[RUN_ID_ENV] as RunId | undefined);
 		profile = {
 			...profile,
 			transport,
+			...(parent ? { parent } : {}),
 			role: profile.role ?? profile.profile,
 			displayName:
 				profile.displayName ?? `${profile.role ?? profile.profile}-${runId}`,

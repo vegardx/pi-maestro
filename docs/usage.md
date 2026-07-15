@@ -124,6 +124,7 @@ question only on repeat blocks. The full design is in
 - `/verify [deliverable-id]` — deep verification of started deliverables:
   read-only subagents read each deliverable's actual diff and judge whether
   its tasks were genuinely accomplished.
+- `/debug [symptom]` — collect bounded current-session diagnostics and present one mutually exclusive recovery decision. A recommendation is preselected, but no steering, retry, restart, or repair runs until the user submits it.
 - `/retry <deliverable-id>` — clear a blocked deliverable and re-attempt it.
 - `/recover` — after an interruption: audit the plan against reality
   (worktrees, branches, PRs) and resume interrupted workers from their
@@ -185,6 +186,7 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/answer` | Answer pending agent questions |
 | `/recap` | Summary of completed agent work |
 | `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |
+| `/debug [symptom]` | Diagnose the current session and explicitly choose one recovery action |
 | `/retry <deliverable-id>` | Clear a blocked deliverable and re-attempt |
 | `/recover` | Audit plan vs reality; resume interrupted workers |
 | `/ship` | Ship the next shippable deliverable (push + PR) |

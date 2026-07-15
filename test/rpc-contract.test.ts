@@ -84,6 +84,24 @@ const AGENT_FIXTURES = {
 			},
 		],
 	},
+	debugProposal: {
+		type: "debugProposal",
+		id: "dbg-1",
+		proposalId: "proposal-1",
+		agentId: "g1/worker",
+		generation: 2,
+		planFingerprint: "abc123",
+		observed: ["worker is blocked"],
+		likelyCause: "last tool failed",
+		recovery: {
+			kind: "restart-resume",
+			targetDeliverableId: "g1",
+			expectedGeneration: 2,
+			basePlanFingerprint: "abc123",
+			confidence: 0.8,
+			rationale: "resume after crash",
+		},
+	},
 	pong: { type: "pong", id: "po-1" },
 } as const satisfies {
 	[T in AgentMessage["type"]]: Extract<AgentMessage, { type: T }>;
@@ -115,6 +133,7 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 		summary: ack,
 		panelRead: ack,
 		panelVerdict: ack,
+		debugProposal: ack,
 		pong: ack,
 	};
 }

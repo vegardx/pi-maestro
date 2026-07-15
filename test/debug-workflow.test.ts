@@ -1,0 +1,283 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	askAndExecuteDebugRecovery,
+	collectDebugSnapshot,
+	DebugController,
+	DebugEpisodeStore,
+	diagnoseDebugSnapshot,
+	executeDebugRecovery,
+	renderRecoveryQuestion,
+	validateWorkerDebugProposal,
+} from "../packages/modes/src/debug.js";
+import { PlanEngine, planFingerprint } from "../packages/modes/src/engine.js";
+import type { Plan } from "../packages/modes/src/schema.js";
+import type { PlanStore } from "../packages/modes/src/storage.js";
+
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
+	return {
+		root: "/tmp",
+		save: (p) => {
+			saved = structuredClone(p);
+		},
+		load: () => saved,
+		exists: () => !!saved,
+		remove: () => {
+			saved = null;
+		},
+		list: () => [],
+	};
+}
+
+function fixture() {
+	const engine = PlanEngine.create(
+		memStore(),
+		{ slug: "debug", title: "Debug", repoPath: "/repo" },
+		() => "2026-01-01T00:00:00Z",
+	);
+	engine.addDeliverable({ title: "Worker", workerMode: "full" });
+	engine.addWorkItem("worker", { title: "Implement fix" });
+	engine.setDeliverableStatus("worker", "active");
+	engine.updateWorkerSession("worker", {
+		sessionPath: "/home/test/current.jsonl",
+		sessionName: "tmux-worker",
+		sessionGeneration: 3,
+		restartState: "running",
+	});
+	const state = {
+		deliverableId: "worker",
+		agents: new Map([
+			[
+				"worker",
+				{
+					name: "worker",
+					deliverableId: "worker",
+					status: "working",
+					generation: 3,
+				},
+			],
+		]),
+		completed: new Set<string>(),
+		blocked: undefined,
+	};
+	const execution = {
+		questionQueue: { all: () => [] },
+		getExecutor: () => ({
+			getStates: () => new Map([["worker", state]]),
+			getAgentState: () => state.agents.get("worker"),
+			unblockDeliverable: vi.fn(),
+		}),
+		snapshot: () => ({
+			agents: new Map([
+				[
+					"worker/worker",
+					{
+						status: "working",
+						startedAt: 1,
+						tokens: { input: 1, output: 1, turns: 2 },
+					},
+				],
+			]),
+			deliverables: new Map(),
+		}),
+		steer: vi.fn(() => true),
+	};
+	return { engine, execution, state };
+}
+
+describe("debug diagnosis and recovery", () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0))
+			rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("collects bounded provenance facts and redacts failures", () => {
+		const { engine, execution } = fixture();
+		const entries = [
+			{
+				type: "custom_message",
+				customType: "maestro.crash.snapshot",
+				details: {
+					at: "now",
+					error: "token=secret-value-which-is-long-enough-to-redact",
+				},
+			},
+		] as never;
+		const snapshot = collectDebugSnapshot({
+			cwd: "/repo",
+			mode: "auto",
+			executionStage: "executing",
+			activeDeliverableId: "worker",
+			sessionPath: "/session.jsonl",
+			entries,
+			engine,
+			execution: execution as never,
+			planRoot: "/plans",
+			now: () => "now",
+		});
+		expect(snapshot.sessionPath?.source).toBe("session-manager");
+		expect(snapshot.worker?.generation).toBe(3);
+		expect(snapshot.worker?.tmuxSession).toBe("tmux-worker");
+		expect(snapshot.recentFailures[0]?.error).toContain("[redacted]");
+		expect(JSON.stringify(snapshot)).not.toContain("secret-value");
+	});
+
+	it("preselects a single recovery but executes nothing merely from recommendation", () => {
+		const { engine, execution } = fixture();
+		const snapshot = collectDebugSnapshot({
+			cwd: "/repo",
+			mode: "auto",
+			executionStage: "executing",
+			activeDeliverableId: "worker",
+			entries: [],
+			engine,
+			execution: execution as never,
+			now: () => "now",
+		});
+		const diagnosis = diagnoseDebugSnapshot(snapshot, "worker is confused");
+		const controller = new DebugController();
+		const episode = controller.begin(snapshot, diagnosis)!;
+		const question = renderRecoveryQuestion(episode);
+		expect(question.multiple).not.toBe(true);
+		expect(question.recommendation).toBe(diagnosis.recommendation);
+		expect(execution.steer).not.toHaveBeenCalled();
+	});
+
+	it("dispatches the submitted action once and survives controller rehydration", async () => {
+		const { engine, execution } = fixture();
+		const dir = mkdtempSync(join(tmpdir(), "debug-episode-"));
+		dirs.push(dir);
+		const store = new DebugEpisodeStore(join(dir, "active.json"));
+		const snapshot = collectDebugSnapshot({
+			cwd: "/repo",
+			mode: "auto",
+			executionStage: "executing",
+			activeDeliverableId: "worker",
+			entries: [],
+			engine,
+			execution: execution as never,
+			now: () => "now",
+		});
+		const diagnosis = diagnoseDebugSnapshot(snapshot, "guide it");
+		const controller = new DebugController(store);
+		const episode = controller.begin(snapshot, diagnosis)!;
+		const selected = diagnosis.recoveries.find((r) => r.kind === "steer")!;
+		const ask = {
+			ask: vi.fn(async () => [
+				{ questionId: `debug-recovery-${episode.id}`, value: selected.id },
+			]),
+		};
+		const result = await askAndExecuteDebugRecovery(controller, ask as never, {
+			engine,
+			execution: execution as never,
+			now: () => "later",
+		});
+		expect(result?.ok).toBe(true);
+		expect(execution.steer).toHaveBeenCalledOnce();
+		const rehydrated = new DebugController(store);
+		rehydrated.setStore(store);
+		const again = await askAndExecuteDebugRecovery(rehydrated, ask as never, {
+			engine,
+			execution: execution as never,
+		});
+		expect(again).toBeUndefined();
+		expect(execution.steer).toHaveBeenCalledOnce();
+		expect(
+			JSON.parse(readFileSync(join(dir, "active.json"), "utf8")).result.ok,
+		).toBe(true);
+	});
+
+	it("fails closed on stale generation and fingerprint", async () => {
+		const { engine, execution } = fixture();
+		const staleGeneration = await executeDebugRecovery(
+			{
+				id: "x",
+				kind: "steer",
+				targetDeliverableId: "worker",
+				expectedGeneration: 2,
+				basePlanFingerprint: planFingerprint(engine.get()),
+				guidance: "x",
+				confidence: 1,
+				rationale: "x",
+			},
+			{ engine, execution: execution as never },
+		);
+		expect(staleGeneration.ok).toBe(false);
+		const stalePlan = await executeDebugRecovery(
+			{
+				id: "y",
+				kind: "steer",
+				targetDeliverableId: "worker",
+				expectedGeneration: 3,
+				basePlanFingerprint: "stale",
+				guidance: "x",
+				confidence: 1,
+				rationale: "x",
+			},
+			{ engine, execution: execution as never },
+		);
+		expect(stalePlan.ok).toBe(false);
+		expect(execution.steer).not.toHaveBeenCalled();
+	});
+
+	it("validates worker identity, generation, target, and fingerprint", () => {
+		const { engine, execution } = fixture();
+		const message = {
+			type: "debugProposal",
+			id: "rpc",
+			proposalId: "p",
+			agentId: "worker/worker",
+			generation: 3,
+			planFingerprint: planFingerprint(engine.get()),
+			observed: [],
+			likelyCause: "x",
+			recovery: { kind: "restart-resume", confidence: 0.8, rationale: "x" },
+		} as const;
+		expect(
+			validateWorkerDebugProposal({
+				message,
+				authenticatedAgentId: "worker/worker",
+				engine,
+				execution: execution as never,
+			}).ok,
+		).toBe(true);
+		expect(
+			validateWorkerDebugProposal({
+				message,
+				authenticatedAgentId: "other/worker",
+				engine,
+				execution: execution as never,
+			}).ok,
+		).toBe(false);
+	});
+
+	it("cancellation clears persisted transient state without action", async () => {
+		const { engine, execution } = fixture();
+		const dir = mkdtempSync(join(tmpdir(), "debug-cancel-"));
+		dirs.push(dir);
+		const store = new DebugEpisodeStore(join(dir, "active.json"));
+		const snapshot = collectDebugSnapshot({
+			cwd: "/repo",
+			mode: "auto",
+			executionStage: "executing",
+			activeDeliverableId: "worker",
+			entries: [],
+			engine,
+			execution: execution as never,
+		});
+		const controller = new DebugController(store);
+		controller.begin(snapshot, diagnoseDebugSnapshot(snapshot));
+		const result = await askAndExecuteDebugRecovery(
+			controller,
+			{ ask: async () => [] } as never,
+			{ engine, execution: execution as never },
+		);
+		expect(result).toBeUndefined();
+		expect(store.exists()).toBe(false);
+		expect(execution.steer).not.toHaveBeenCalled();
+	});
+});

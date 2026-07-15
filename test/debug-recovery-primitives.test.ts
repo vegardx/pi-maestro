@@ -186,6 +186,25 @@ describe("safe worker restart primitives", () => {
 		expect(engine.get().deliverables[0].restartState).toBe("blocked");
 	});
 
+	it("leaves a failed restart retryable instead of wedged in restarting", async () => {
+		const { tmux } = await started(true);
+		const failed = await adapter!.restartWorkerFresh("auth");
+		expect(failed.ok).toBe(false);
+		const executor = adapter!.getExecutor();
+		const worker = executor.getAgentState("auth", "worker")!;
+		expect(worker.status).toBe("pending");
+		expect(worker.sessionId).toBeUndefined();
+		expect(worker.error).toMatch(/did not exit/);
+		expect(executor.getStates().get("auth")?.blocked).toMatch(/did not exit/);
+
+		// The wedge test: once the cause is fixed, the SAME deliverable restarts.
+		tmux.sticky = false;
+		const retried = await adapter!.restartWorkerFresh("auth");
+		expect(retried.ok, retried.error).toBe(true);
+		expect(executor.getAgentState("auth", "worker")?.status).toBe("working");
+		expect(executor.getStates().get("auth")?.blocked).toBeUndefined();
+	});
+
 	it("ignores stale generation completion after replacement", async () => {
 		const { engine } = await started();
 		const worker = adapter!.getExecutor().getAgentState("auth", "worker")!;

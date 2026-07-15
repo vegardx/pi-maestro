@@ -439,6 +439,18 @@ export class DeliverableExecutor {
 		return { recovered, failed };
 	}
 
+	/** Make a failed replacement retryable without resurrecting the killed process. */
+	failWorkerReplacement(deliverableId: string, reason: string): void {
+		const state = this.deliverableStates.get(deliverableId);
+		const worker = state?.agents.get("worker");
+		if (worker) {
+			worker.status = "pending";
+			worker.sessionId = undefined;
+			worker.error = reason;
+		}
+		if (state) state.blocked = reason;
+	}
+
 	/** Re-provision only a missing persisted workspace during validated recovery. */
 	async reprovisionWorkspace(
 		deliverableId: string,

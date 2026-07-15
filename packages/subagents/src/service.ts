@@ -4,6 +4,8 @@
 // service tests as pure orchestration (the real RpcClient / foreground runners
 // land in the runners+concurrency child deliverable).
 
+import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	InterruptResult,
@@ -22,6 +24,7 @@ import {
 	mapProfileToInvocation,
 	type SpawnContext,
 } from "./invocation.js";
+import { isTerminal } from "./state-machine.js";
 import type { RunStore } from "./store.js";
 import { RUN_ID_ENV } from "./supervisor.js";
 
@@ -76,6 +79,16 @@ export interface SubagentServiceOptions {
 	 * inspectable runs are the norm; headless is an explicit choice.
 	 */
 	readonly defaultTransport?: RunTransport;
+	/**
+	 * Cross-process control seams for the steer/interrupt transport fallbacks
+	 * (runs owned by another process have no in-process controller here).
+	 * Tests fake them; the defaults hit the real OS/tmux.
+	 */
+	readonly killProcessGroup?: (
+		processGroup: number,
+		signal: NodeJS.Signals,
+	) => void;
+	readonly tmuxSendKeys?: (session: string, keys: string) => void;
 }
 
 const DEFAULT_MAX_DEPTH = 3;
@@ -93,6 +106,11 @@ export class SubagentService implements SubagentsCapabilityV1 {
 
 	private readonly extraExtensions?: () => readonly string[];
 	private readonly defaultTransport?: RunTransport;
+	private readonly killProcessGroup: (
+		processGroup: number,
+		signal: NodeJS.Signals,
+	) => void;
+	private readonly tmuxSendKeys: (session: string, keys: string) => void;
 
 	constructor(opts: SubagentServiceOptions) {
 		this.bus = opts.bus;
@@ -105,6 +123,8 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		this.ownDepth = opts.ownDepth ?? currentDepth();
 		this.extraExtensions = opts.extraExtensions;
 		this.defaultTransport = opts.defaultTransport;
+		this.killProcessGroup = opts.killProcessGroup ?? defaultKillProcessGroup;
+		this.tmuxSendKeys = opts.tmuxSendKeys ?? defaultTmuxSendKeys;
 	}
 
 	spawn(prompt: string, profile: SpawnProfile): RunHandle {
@@ -218,13 +238,21 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	}
 
 	steer(runId: RunId, guidance: string): void {
-		this.controllers.get(runId)?.steer(guidance);
-		this.bus.publish({ type: "steer", runId, guidance });
+		const controller = this.controllers.get(runId);
+		if (controller) {
+			controller.steer(guidance);
+			this.bus.publish({ type: "steer", runId, guidance });
+			return;
+		}
+		this.steerViaTransport(runId, guidance);
 	}
 
 	async interrupt(runId: RunId, reason?: string): Promise<InterruptResult> {
 		const controller = this.controllers.get(runId);
 		if (!controller?.interrupt) {
+			// The fallback is only for runs owned by ANOTHER process. A live
+			// controller without interrupt support keeps the old contract.
+			if (!controller) return this.interruptViaTransport(runId);
 			return { outcome: "disconnected", targetId: `run:${runId}` };
 		}
 		this.bus.publish({ type: "interrupt", runId, reason, phase: "requested" });
@@ -261,6 +289,111 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		const text = await this.controllers.get(runId)?.capture?.(lines);
 		if (text) this.bus.publish({ type: "capture", runId, text });
 		return text;
+	}
+
+	/**
+	 * Transport-level steer for a run owned by another process. The tmux file
+	 * bridge is append-only and the child's tail reads it regardless of which
+	 * process appends — so a well-formed steer line reaches the child without
+	 * an in-process controller. No-op for terminal/unknown runs.
+	 */
+	private steerViaTransport(runId: RunId, guidance: string): void {
+		const record = this.store.readRecord(runId);
+		if (!record || isTerminal(record.status)) return;
+		if (record.metadata?.transport !== "tmux") return;
+		// Host-minted id, disjoint from the owning supervisor's r<N> counter —
+		// its pending map ignores response ids it never issued.
+		const line = JSON.stringify({
+			id: `xsteer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+			type: "steer",
+			message: guidance,
+		});
+		try {
+			appendFileSync(
+				join(this.store.root, runId, "rpc-input.jsonl"),
+				`${line}\n`,
+			);
+		} catch {
+			return; // Bridge file unwritable — nothing reachable to steer.
+		}
+		this.bus.publish({ type: "steer", runId, guidance });
+	}
+
+	/**
+	 * Transport-level interrupt for a run owned by another process, derived
+	 * from the persisted record: signal the recorded process group directly,
+	 * falling back to C-c into the tmux session when only the session is
+	 * known. Terminal runs are never signalled — their process facts are stale
+	 * (pids recycle), so a signal could hit an unrelated process.
+	 */
+	private async interruptViaTransport(runId: RunId): Promise<InterruptResult> {
+		const targetId = `run:${runId}`;
+		const record = this.store.readRecord(runId);
+		if (!record) return { outcome: "disconnected", targetId };
+		if (isTerminal(record.status)) return { outcome: "already-idle", targetId };
+
+		const metadata = record.metadata;
+		const detail = "via transport (no in-process controller)";
+		if (metadata?.processGroup) {
+			try {
+				this.killProcessGroup(metadata.processGroup, "SIGTERM");
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				// ESRCH: already gone; EPERM: alive but not ours to signal —
+				// either way the interrupt request itself stands.
+				if (code !== "ESRCH" && code !== "EPERM") {
+					return {
+						outcome: "disconnected",
+						targetId,
+						detail: error instanceof Error ? error.message : String(error),
+					};
+				}
+			}
+			this.bus.publish({
+				type: "status",
+				runId,
+				status: "interrupting",
+				at: Date.now(),
+			});
+			return { outcome: "accepted", targetId, detail };
+		}
+		if (metadata?.tmuxSession) {
+			try {
+				this.tmuxSendKeys(metadata.tmuxSession, "C-c");
+			} catch (error) {
+				return {
+					outcome: "disconnected",
+					targetId,
+					detail: error instanceof Error ? error.message : String(error),
+				};
+			}
+			this.bus.publish({
+				type: "status",
+				runId,
+				status: "interrupting",
+				at: Date.now(),
+			});
+			return { outcome: "accepted", targetId, detail };
+		}
+		return { outcome: "disconnected", targetId };
+	}
+}
+
+function defaultKillProcessGroup(
+	processGroup: number,
+	signal: NodeJS.Signals,
+): void {
+	process.kill(-processGroup, signal);
+}
+
+function defaultTmuxSendKeys(session: string, keys: string): void {
+	const result = spawnSync("tmux", ["send-keys", "-t", session, keys], {
+		stdio: "ignore",
+		timeout: 5_000,
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(`tmux send-keys exited ${result.status}`);
 	}
 }
 

@@ -251,6 +251,11 @@ export default defineExtension(
 				// Children run -ne; pass configured infra extensions (custom model
 				// providers etc) back through for EVERY caller at this one seam.
 				extraExtensions: () => readChildExtensionPaths(next.cwd),
+				// Dogfood opt-in for the inspectable tmux transport; headless
+				// stays the default until tmux passes transport-failure tests.
+				...(process.env.PI_MAESTRO_TRANSPORT === "tmux"
+					? { defaultTransport: "tmux" as const }
+					: {}),
 			});
 			if (maestro.flags.enabled("retention")) {
 				try {

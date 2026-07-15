@@ -547,7 +547,6 @@ async function buildResearchProfile(
 		: "";
 	return {
 		profile: "research",
-		transport: "tmux",
 		role,
 		displayName: `${kind}-research`,
 		cwd: plan.repoPath,

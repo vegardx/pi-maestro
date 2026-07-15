@@ -141,7 +141,11 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 						try {
 							partialText =
 								(
-									await deadline(client.getLastAssistantText(), rpcMs, "salvage")
+									await deadline(
+										client.getLastAssistantText(),
+										rpcMs,
+										"salvage",
+									)
 								)?.trim() || undefined;
 						} catch {
 							// best-effort salvage
@@ -149,7 +153,11 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 					}
 					abort.abort(reason);
 					try {
-						await deadline(client?.abort() ?? Promise.resolve(), rpcMs, "abort");
+						await deadline(
+							client?.abort() ?? Promise.resolve(),
+							rpcMs,
+							"abort",
+						);
 					} catch {
 						// The process may have settled between observation and abort.
 					}
@@ -324,9 +332,11 @@ async function execute(
 		if (signal.aborted) {
 			const partial = client
 				? (
-						await deadline(client.getLastAssistantText(), rpcMs, "salvage").catch(
-							() => null,
-						)
+						await deadline(
+							client.getLastAssistantText(),
+							rpcMs,
+							"salvage",
+						).catch(() => null)
 					)?.trim()
 				: undefined;
 			return done({

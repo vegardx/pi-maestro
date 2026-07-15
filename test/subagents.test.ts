@@ -451,6 +451,36 @@ describe("SubagentService", () => {
 		expect(svc.list().map((r) => r.id)).toEqual(["run-1"]);
 	});
 
+	it("transport defaults to headless; tmux is opt-in per profile or per service", async () => {
+		// tmux must stay opt-in until it passes real transport-failure tests
+		// (prompt-loss handshake, pending rejection on child death, session GC).
+		const captured: LaunchRequest[] = [];
+		let n = 0;
+		const make = (defaultTransport?: "headless" | "tmux") =>
+			new SubagentService({
+				bus,
+				store,
+				runner: fakeRunner(captured),
+				repoRoot: "/repo",
+				mintId: () => `run-${++n}` as RunId,
+				ownDepth: 0,
+				...(defaultTransport ? { defaultTransport } : {}),
+			});
+
+		make().spawn("a", { profile: "restricted" });
+		expect(captured[0].profile.transport).toBe("headless");
+
+		make().spawn("b", { profile: "restricted", transport: "tmux" });
+		expect(captured[1].profile.transport).toBe("tmux");
+
+		make("tmux").spawn("c", { profile: "restricted" });
+		expect(captured[2].profile.transport).toBe("tmux");
+
+		// An explicit profile choice beats the service default.
+		make("tmux").spawn("d", { profile: "restricted", transport: "headless" });
+		expect(captured[3].profile.transport).toBe("headless");
+	});
+
 	it("stop on a settled run never throws (timer-callback safety)", async () => {
 		// A stale timeout firing stop() after completion once escaped a timer
 		// callback as an uncaught exception and killed pi (post-/handoff crash):

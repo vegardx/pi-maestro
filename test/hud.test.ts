@@ -103,17 +103,32 @@ describe("hudElapsed", () => {
 });
 
 describe("HUD idle state", () => {
-	it("collapses to one summary line plus the rule", () => {
+	it("collapses to one summary line (pi's editor border separates below)", () => {
 		const lines = hud({
 			agents: [],
 			plan: { rows: [], done: 4, total: 5 },
 			questions: [],
 		}).render(40);
-		expect(lines).toEqual(["  agents idle · plan 4/5", "─".repeat(40)]);
+		expect(lines).toEqual(["  agents idle · plan 4/5"]);
 	});
 
 	it("omits the plan fragment when no plan exists", () => {
-		expect(hud(EMPTY).render(30)).toEqual(["  agents idle", "─".repeat(30)]);
+		expect(hud(EMPTY).render(30)).toEqual(["  agents idle"]);
+	});
+
+	it("focused idle shows the full tab view, never the collapse", () => {
+		const c = hud({
+			agents: [],
+			plan: { rows: [], done: 4, total: 5 },
+			questions: [],
+		});
+		c.focused = true;
+		const lines = c.render(W);
+		expect(lines[0]).toContain("[ Agents ]");
+		expect(lines[0]).toContain("Plan 4/5");
+		// Hint row present; no idle summary anywhere.
+		expect(lines.some((l) => l.includes("agents idle"))).toBe(false);
+		expect(lines[lines.length - 1]).toContain("s steer");
 	});
 });
 
@@ -150,7 +165,8 @@ describe("HUD agents tab", () => {
 		expect(lines[4]).toContain("▸ worker · billing · 1 subagents");
 		// maestro-direct run at root, no fold marker.
 		expect(lines[5]).toContain("research · caching-strategy");
-		expect(lines[lines.length - 1]).toBe("─".repeat(W));
+		// No bottom rule when nothing scrolls — the editor border separates.
+		expect(lines[lines.length - 1]).not.toMatch(/^─+$/);
 	});
 
 	it("manual folds are sticky and beat the auto rule", () => {
@@ -187,13 +203,13 @@ describe("HUD agents tab", () => {
 		expect(acts.interrupt).toHaveBeenCalledWith("run:r1");
 	});
 
-	it("replaces the last content row with the hint row when focused", () => {
+	it("ends with the hint row when focused (no trailing rule)", () => {
 		const c = hud(agentsSnap());
 		c.focused = true;
 		const lines = c.render(W);
-		expect(lines[lines.length - 2]).toContain("enter attach");
-		expect(lines[lines.length - 2]).toContain("s steer");
-		expect(lines[lines.length - 2]).toContain("i interrupt");
+		expect(lines[lines.length - 1]).toContain("enter attach");
+		expect(lines[lines.length - 1]).toContain("s steer");
+		expect(lines[lines.length - 1]).toContain("i interrupt");
 	});
 });
 

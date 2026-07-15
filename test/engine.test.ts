@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PlanEngine, planFingerprint } from "../packages/modes/src/engine.js";
 import {
+	gatingTasks,
 	type Plan,
 	validatePlanShape,
 	workerRestartState,
@@ -113,6 +114,34 @@ describe("PlanEngine — safe recovery metadata and repair", () => {
 			baseFingerprint: base,
 			operations: ["clarifyTask", "addManualCheckpoint"],
 		});
+	});
+
+	it("adds corrective tasks as gating work, not non-gating follow-ups", () => {
+		const { engine } = repairEngine();
+		engine.applyTaskRepair({
+			baseFingerprint: planFingerprint(engine.get()),
+			reason: "repair must gate completion",
+			stoppedDeliverableIds: ["auth"],
+			operations: [
+				{
+					type: "addCorrectiveTask",
+					deliverableId: "auth",
+					task: { id: "fix-regression", title: "Fix regression" },
+				},
+				{
+					type: "addManualCheckpoint",
+					deliverableId: "auth",
+					task: { id: "confirm-fix", title: "Confirm fix" },
+				},
+			],
+		});
+		const deliverable = engine.get().deliverables[0];
+		const byId = new Map(deliverable.tasks.map((t) => [t.id, t]));
+		expect(byId.get("fix-regression")?.kind).toBe("task");
+		expect(byId.get("confirm-fix")?.kind).toBe("manual");
+		expect(gatingTasks(deliverable).map((t) => t.id)).toContain(
+			"fix-regression",
+		);
 	});
 
 	it("rejects fingerprint drift and rolls the entire repair back", () => {

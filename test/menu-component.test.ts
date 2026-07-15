@@ -21,6 +21,7 @@ import {
 	childExtensionCandidates,
 	createMaestroSettingsList,
 	modelOptions,
+	rolePoolEditor,
 } from "../packages/settings/src/menu.js";
 import { readRoleLeaf, writeRoleLeaf } from "../packages/settings/src/model.js";
 import { readLayeredExtensionConfig } from "../packages/settings/src/reader.js";
@@ -54,6 +55,13 @@ function fakeCtx(): ExtensionContext {
 					name: "o3",
 					reasoning: true,
 					thinkingLevelMap: { minimal: null },
+				},
+				{
+					provider: "google",
+					id: "gemini",
+					name: "Gemini",
+					reasoning: true,
+					thinkingLevelMap: {},
 				},
 			],
 			hasConfiguredAuth: () => true,
@@ -173,11 +181,11 @@ describe("hierarchical Maestro settings", () => {
 		expect(o3?.supported).toContain("xhigh");
 	});
 
-	it("lists the FULL catalog — unauthenticated providers stay selectable", () => {
-		// Regression: one authenticated provider (e.g. a gateway) used to hide
-		// every other provider's models from profile selection entirely —
-		// profile targets are configuration; the runtime role resolver filters
-		// to authenticated models at spawn time.
+	it("lists authenticated + referenced models, hiding the idle catalog", () => {
+		// Candidate rule: authenticated registry models plus any id referenced
+		// anywhere in config (targets or role models leaves, both scopes).
+		// Unauthenticated + unreferenced models are hidden;
+		// unauthenticated-but-referenced ones stay visible and selectable.
 		const ctx = fakeCtx();
 		const registry = (
 			ctx as unknown as {
@@ -193,12 +201,19 @@ describe("hierarchical Maestro settings", () => {
 			{ provider: "grok", id: "grok-4.1", name: "Grok 4.1" },
 		];
 		registry.hasConfiguredAuth = (m) => m.provider === "radicalai";
+		// Referencing a known-but-unauthenticated model keeps it selectable.
+		writeRoleLeaf(ctx, "opus", "reviewer", "models", "project", [
+			"anthropic/claude-fable-5",
+		]);
 
 		const options = modelOptions(ctx);
+		// Registry order first; referenced ids the registry does not know
+		// (the fixture's anthropic/sonnet and openai/o3) trail with raw labels.
 		expect(options.map((o) => o.id)).toEqual([
 			"radicalai/gpt-5.6-sol",
 			"anthropic/claude-fable-5",
-			"grok/grok-4.1",
+			"anthropic/sonnet",
+			"openai/o3",
 		]);
 		expect(
 			options.find((o) => o.id === "radicalai/gpt-5.6-sol")?.description,
@@ -206,9 +221,10 @@ describe("hierarchical Maestro settings", () => {
 		expect(
 			options.find((o) => o.id === "anthropic/claude-fable-5")?.description,
 		).toBe("needs authentication");
-		expect(options.find((o) => o.id === "grok/grok-4.1")?.description).toBe(
-			"needs authentication",
+		expect(options.find((o) => o.id === "anthropic/sonnet")?.label).toBe(
+			"anthropic/sonnet",
 		);
+		expect(options.some((o) => o.id === "grok/grok-4.1")).toBe(false);
 	});
 
 	it("discovers child extensions, excludes Maestro, and leaves exact paths", () => {
@@ -225,6 +241,130 @@ describe("hierarchical Maestro settings", () => {
 		const { merged } = readLayeredExtensionConfig(root);
 		expect((merged.modes.research as Record<string, unknown>).softMs).toBe(
 			1234,
+		);
+	});
+
+	it("renders the pool first, ordered, checked, with the default marker", () => {
+		const editor = rolePoolEditor(fakeCtx(), "opus", "worker", () => {});
+		const out = editor.render(120).join("\n");
+		expect(out).toContain("worker · opus · scope: global · effort: high");
+		expect(out).toContain("[x] 1. Sonnet (anthropic) · default");
+		expect(out).toContain("[x] 2. o3 (openai)");
+		expect(out).toContain("[ ]    Gemini (google)");
+		expect(out).toContain("space toggle");
+	});
+
+	it("space toggles membership through writeRoleLeaf at the active scope", () => {
+		const ctx = fakeCtx();
+		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
+		editor.handleInput?.("\x1b[B"); // row 2 (o3)
+		editor.handleInput?.("\x1b[B"); // candidate row (gemini)
+		editor.handleInput?.(" ");
+		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+			"google/gemini",
+		]);
+		expect(editor.render(120).join("\n")).toContain("[x] 3. Gemini (google)");
+		// The cursor followed the toggled row; a second space removes it again.
+		editor.handleInput?.(" ");
+		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+		]);
+	});
+
+	it("+/- reorders checked rows and persists the exact order", () => {
+		const ctx = fakeCtx();
+		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
+		editor.handleInput?.("-"); // default moves down
+		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
+			"openai/o3",
+			"anthropic/sonnet",
+		]);
+		expect(editor.render(120).join("\n")).toContain(
+			"[x] 1. o3 (openai) · default",
+		);
+		editor.handleInput?.("+"); // cursor followed the row; move it back up
+		expect(readRoleLeaf(ctx, "opus", "worker", "models").global).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+		]);
+	});
+
+	it("g switches the write scope between global and project", () => {
+		const ctx = fakeCtx();
+		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
+		editor.handleInput?.("g");
+		expect(editor.render(120).join("\n")).toContain("scope: project");
+		editor.handleInput?.("\x1b[B");
+		editor.handleInput?.("\x1b[B");
+		editor.handleInput?.(" ");
+		const pool = readRoleLeaf(ctx, "opus", "worker", "models");
+		expect(pool.project).toEqual([
+			"anthropic/sonnet",
+			"openai/o3",
+			"google/gemini",
+		]);
+		expect(pool.global).toEqual(["anthropic/sonnet", "openai/o3"]);
+	});
+
+	it("e cycles the default effort, keeping other levels as alternates", () => {
+		const ctx = fakeCtx();
+		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
+		editor.handleInput?.("e"); // high → xhigh (Sonnet supports all levels)
+		expect(readRoleLeaf(ctx, "opus", "worker", "efforts").global).toEqual([
+			"xhigh",
+			"high",
+			"medium",
+		]);
+		editor.handleInput?.("e"); // xhigh wraps to off
+		expect(readRoleLeaf(ctx, "opus", "worker", "efforts").global).toEqual([
+			"off",
+			"xhigh",
+			"high",
+			"medium",
+		]);
+		expect(editor.render(120).join("\n")).toContain("effort: off");
+	});
+
+	it("e stays within the default model's supported efforts", () => {
+		const ctx = fakeCtx();
+		writeRoleLeaf(ctx, "opus", "research", "models", "project", ["openai/o3"]);
+		writeRoleLeaf(ctx, "opus", "research", "efforts", "project", ["high"]);
+		const editor = rolePoolEditor(ctx, "opus", "research", () => {});
+		const seen = new Set<string>();
+		for (let press = 0; press < 6; press++) {
+			editor.handleInput?.("e");
+			seen.add(
+				readRoleLeaf(ctx, "opus", "research", "efforts").project?.[0] ?? "",
+			);
+		}
+		expect(seen.has("minimal")).toBe(false); // o3 maps minimal to null
+		expect(seen.has("xhigh")).toBe(true);
+	});
+
+	it("enter and escape finish with a role summary", () => {
+		let entered: string | undefined;
+		let escaped: string | undefined;
+		const byEnter = rolePoolEditor(fakeCtx(), "opus", "worker", (value) => {
+			entered = value;
+		});
+		byEnter.handleInput?.("\r");
+		expect(entered).toContain("anthropic/sonnet +1");
+		const byEscape = rolePoolEditor(fakeCtx(), "opus", "worker", (value) => {
+			escaped = value;
+		});
+		byEscape.handleInput?.("\x1b");
+		expect(escaped).toContain("anthropic/sonnet +1");
+	});
+
+	it("opens the one-screen editor from the top-level active role rows", () => {
+		const list = createMaestroSettingsList(fakeCtx(), () => {});
+		list.handleInput("worker"); // search narrows to the worker role row
+		list.handleInput("\r");
+		expect(list.render(120).join("\n")).toContain(
+			"worker · opus · scope: global",
 		);
 	});
 

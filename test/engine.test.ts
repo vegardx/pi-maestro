@@ -144,6 +144,21 @@ describe("PlanEngine — safe recovery metadata and repair", () => {
 		);
 	});
 
+	it("keeps the fingerprint stable across session bookkeeping and timestamps", () => {
+		const { engine } = repairEngine();
+		const base = planFingerprint(engine.get());
+		engine.updateWorkerSession("auth", {
+			sessionPath: "/sessions/current.jsonl",
+			sessionName: "tmux-auth",
+			sessionGeneration: 4,
+			restartMode: "resume",
+			restartState: "running",
+		});
+		expect(planFingerprint(engine.get())).toBe(base);
+		engine.toggleWorkItem("auth", "implement-auth");
+		expect(planFingerprint(engine.get())).not.toBe(base);
+	});
+
 	it("rejects fingerprint drift and rolls the entire repair back", () => {
 		const { engine, store } = repairEngine();
 		const base = planFingerprint(engine.get());

@@ -327,6 +327,32 @@ describe("debug diagnosis and recovery", () => {
 		).toBe(false);
 	});
 
+	it("worker-local diagnosis proposes real recoveries from the authenticated identity", () => {
+		const snapshot = collectDebugSnapshot({
+			cwd: "/workspace",
+			mode: "agent",
+			executionStage: "executing",
+			entries: [],
+			sessionPath: "/sessions/auth-worker.jsonl",
+			agentId: "auth/worker",
+			workerGeneration: 2,
+			now: () => "now",
+		});
+		expect(snapshot.execution.activeDeliverableId).toBe("auth");
+		expect(snapshot.worker?.agentId).toBe("auth/worker");
+		expect(snapshot.worker?.generation).toBe(2);
+		const diagnosis = diagnoseDebugSnapshot(snapshot, "worker is stuck");
+		const kinds = diagnosis.recoveries.map((r) => r.kind);
+		expect(kinds).toContain("restart-resume");
+		expect(kinds).toContain("restart-fresh");
+		const recommended = diagnosis.recoveries.find(
+			(r) => r.id === diagnosis.recommendation,
+		);
+		expect(recommended?.kind).not.toBe("none");
+		expect(recommended?.targetDeliverableId).toBe("auth");
+		expect(recommended?.expectedGeneration).toBe(2);
+	});
+
 	it("persists redacted review state across rehydration without repeating recovery", () => {
 		const { engine, execution } = fixture();
 		const dir = mkdtempSync(join(tmpdir(), "debug-review-rehydrate-"));

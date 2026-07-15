@@ -16,11 +16,14 @@ import type {
 	ExecutionHandle,
 } from "../packages/modes/src/exec/index.js";
 import {
+	handleInterruptCommand,
 	handleSteerCommand,
 	handleViewCommand,
+	parseInterruptArgs,
 	parseSteerArgs,
 	type ViewState,
 } from "../packages/modes/src/runtime/agent-commands.js";
+import { resolveAgentTarget } from "../packages/modes/src/runtime/agent-targets.js";
 import { renderAgentsOverview } from "../packages/modes/src/runtime/dashboard.js";
 import type { Plan } from "../packages/modes/src/schema.js";
 import type { PlanStore } from "../packages/modes/src/storage.js";
@@ -116,6 +119,69 @@ describe("parseSteerArgs", () => {
 	});
 });
 
+describe("interrupt target resolution", () => {
+	it("prefers exact opaque ids and rejects ambiguous aliases", () => {
+		const base = {
+			kind: "run" as const,
+			role: "reviewer",
+			status: "running",
+			transport: "tmux" as const,
+			createdAt: 1,
+			updatedAt: 2,
+			capabilities: {
+				view: true,
+				capture: true,
+				steer: true,
+				interrupt: true,
+				shutdown: true,
+			},
+		};
+		const targets = [
+			{ ...base, id: "run:a", displayName: "security" },
+			{ ...base, id: "run:b", displayName: "security" },
+		];
+		expect(resolveAgentTarget(targets, "run:b")).toMatchObject({
+			ok: true,
+			target: { id: "run:b" },
+		});
+		expect(resolveAgentTarget(targets, "security")).toMatchObject({
+			ok: false,
+			reason: "ambiguous",
+		});
+	});
+
+	it("parses explicit propagation without defaulting to all", () => {
+		expect(parseInterruptArgs("run:a")).toEqual({
+			selector: "run:a",
+			scope: "self",
+		});
+		expect(parseInterruptArgs("worker:g/w --tree")).toEqual({
+			selector: "worker:g/w",
+			scope: "tree",
+		});
+	});
+
+	it("aborts a host turn without shutdown", async () => {
+		const abort = vi.fn();
+		const shutdown = vi.fn();
+		const { notify } = makeCtx();
+		const ctx = {
+			ui: { notify },
+			cwd: "/repo",
+			isIdle: () => false,
+			abort,
+			shutdown,
+		} as unknown as ExtensionCommandContext;
+		await handleInterruptCommand("", ctx, undefined, undefined);
+		expect(abort).toHaveBeenCalledOnce();
+		expect(shutdown).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledWith(
+			expect.stringContaining("session preserved"),
+			"info",
+		);
+	});
+});
+
 describe("handleSteerCommand", () => {
 	it("routes parsed targets through ExecutionHandle.steer", () => {
 		const steer = vi.fn(() => true);
@@ -163,7 +229,7 @@ describe("handleViewCommand", () => {
 		const viewState: ViewState = { viewPaneId: undefined };
 		await handleViewCommand("ghost", ctx, makeHandle(), viewState);
 		expect(notify).toHaveBeenCalledWith(
-			'No agent session matches "ghost".',
+			'No agent target matches "ghost".',
 			"warning",
 		);
 		expect(viewState.viewPaneId).toBeUndefined();

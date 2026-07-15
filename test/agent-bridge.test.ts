@@ -36,6 +36,8 @@ describe("AgentBridge", () => {
 	};
 	const mockCtx = {
 		shutdown: vi.fn(),
+		abort: vi.fn(),
+		isIdle: vi.fn(() => false),
 		ui: { notify: vi.fn() },
 	};
 
@@ -46,6 +48,8 @@ describe("AgentBridge", () => {
 		await server.listen(socketPath);
 		mockPi.sendUserMessage.mockClear();
 		mockCtx.shutdown.mockClear();
+		mockCtx.abort.mockClear();
+		mockCtx.isIdle.mockReturnValue(false);
 		mockCtx.ui.notify.mockClear();
 	});
 
@@ -379,6 +383,39 @@ describe("AgentBridge", () => {
 			expect.stringContaining("token mismatch"),
 			"error",
 		);
+	});
+
+	it("acknowledges worker interrupts, aborts the turn, and preserves process", async () => {
+		const b = createBridge("agent-1");
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+		b.onTurnStart();
+		await wait(10);
+		const ack = waitForEvent(server, "message");
+		server.send("agent-1", {
+			type: "interrupt",
+			id: "int-1",
+			reason: "user interrupt",
+		});
+		const [, message] = (await ack) as [
+			string,
+			{ type: string; outcome: string },
+		];
+		expect(message).toMatchObject({
+			type: "interruptAck",
+			outcome: "accepted",
+		});
+		expect(mockCtx.abort).toHaveBeenCalledOnce();
+		expect(mockCtx.shutdown).not.toHaveBeenCalled();
+
+		const duplicate = waitForEvent(server, "message");
+		server.send("agent-1", { type: "interrupt", id: "int-2" });
+		const [, duplicateMessage] = (await duplicate) as [
+			string,
+			{ outcome: string },
+		];
+		expect(duplicateMessage.outcome).toBe("already-interrupting");
 	});
 
 	it("calls ctx.shutdown on shutdown message", async () => {

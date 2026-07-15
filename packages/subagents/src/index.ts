@@ -165,6 +165,19 @@ function makeDecider(
 // path pi itself was launched from. undefined in a bundled binary — the runner
 // then relies on RpcClient's own default discovery.
 /**
+ * The process-wide spawn transport default. pi-maestro REQUIRES tmux (workers
+ * have always lived in tmux sessions), so inspectable tmux runs are the
+ * default with no silent degradation — a missing tmux is surfaced loudly at
+ * startup, not papered over with headless spawns. PI_MAESTRO_TRANSPORT is the
+ * explicit escape hatch (debugging, harness runs).
+ */
+function resolveDefaultTransport(): "tmux" | "headless" {
+	const forced = process.env.PI_MAESTRO_TRANSPORT;
+	if (forced === "headless" || forced === "tmux") return forced;
+	return "tmux";
+}
+
+/**
  * Kill a retained run's tmux session and verify it is gone. Returns true only
  * on verified absence — retention keeps the run record otherwise, so the
  * session pointer is never lost while the session might still exist.
@@ -268,11 +281,10 @@ export default defineExtension(
 				// Children run -ne; pass configured infra extensions (custom model
 				// providers etc) back through for EVERY caller at this one seam.
 				extraExtensions: () => readChildExtensionPaths(next.cwd),
-				// Dogfood opt-in for the inspectable tmux transport; headless
-				// stays the default until tmux passes transport-failure tests.
-				...(process.env.PI_MAESTRO_TRANSPORT === "tmux"
-					? { defaultTransport: "tmux" as const }
-					: {}),
+				// Inspectable tmux runs are the default from day one — workers
+				// already live in tmux and pi-maestro requires it. Headless is
+				// the explicit PI_MAESTRO_TRANSPORT=headless escape hatch only.
+				defaultTransport: resolveDefaultTransport(),
 			});
 			if (maestro.flags.enabled("retention")) {
 				try {

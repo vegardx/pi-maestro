@@ -451,9 +451,10 @@ describe("SubagentService", () => {
 		expect(svc.list().map((r) => r.id)).toEqual(["run-1"]);
 	});
 
-	it("transport defaults to headless; tmux is opt-in per profile or per service", async () => {
-		// tmux must stay opt-in until it passes real transport-failure tests
-		// (prompt-loss handshake, pending rejection on child death, session GC).
+	it("transport defaults to tmux (required); headless is an explicit choice", async () => {
+		// pi-maestro requires tmux — inspectable runs are the day-one default.
+		// Headless never happens silently: per profile, per service, or the
+		// PI_MAESTRO_TRANSPORT=headless escape hatch only.
 		const captured: LaunchRequest[] = [];
 		let n = 0;
 		const make = (defaultTransport?: "headless" | "tmux") =>
@@ -468,17 +469,16 @@ describe("SubagentService", () => {
 			});
 
 		make().spawn("a", { profile: "restricted" });
-		expect(captured[0].profile.transport).toBe("headless");
+		expect(captured[0].profile.transport).toBe("tmux");
 
-		make().spawn("b", { profile: "restricted", transport: "tmux" });
-		expect(captured[1].profile.transport).toBe("tmux");
+		make("headless").spawn("b", { profile: "restricted" });
+		expect(captured[1].profile.transport).toBe("headless");
 
-		make("tmux").spawn("c", { profile: "restricted" });
-		expect(captured[2].profile.transport).toBe("tmux");
-
-		// An explicit profile choice beats the service default.
-		make("tmux").spawn("d", { profile: "restricted", transport: "headless" });
-		expect(captured[3].profile.transport).toBe("headless");
+		// An explicit profile choice beats the service default, both ways.
+		make("tmux").spawn("c", { profile: "restricted", transport: "headless" });
+		expect(captured[2].profile.transport).toBe("headless");
+		make("headless").spawn("d", { profile: "restricted", transport: "tmux" });
+		expect(captured[3].profile.transport).toBe("tmux");
 	});
 
 	it("stop on a settled run never throws (timer-callback safety)", async () => {

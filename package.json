@@ -40,7 +40,7 @@
 		"@biomejs/biome": "^2.5.2",
 		"@earendil-works/pi-agent-core": "^0.80.3",
 		"@earendil-works/pi-ai": "^0.80.3",
-		"@earendil-works/pi-coding-agent": "^0.80.3",
+		"@earendil-works/pi-coding-agent": "^0.80.7",
 		"@earendil-works/pi-tui": "^0.80.3",
 		"@sinclair/typebox": "^0.34.49",
 		"@types/node": "^24",

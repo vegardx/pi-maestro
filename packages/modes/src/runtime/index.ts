@@ -41,7 +41,6 @@ import {
 	createRuntimeContext,
 	type ModesRuntimeOptions,
 } from "./context.js";
-import { syncAgentWidget } from "./dashboard.js";
 import { createGateTool } from "./gate-triage.js";
 import { registerRuntimeHooks } from "./hooks.js";
 
@@ -132,7 +131,7 @@ export function createModesRuntime(
 				question: run.question,
 				research: run.kind,
 			});
-			syncAgentWidget(rt, ctx);
+			rt.hud?.refresh();
 		},
 		onRunSettled: (run, report, ctx) => {
 			rt.researchRuns.delete(run.id);
@@ -147,7 +146,7 @@ export function createModesRuntime(
 				// on disk (reportPath) and expandable via dig(ref).
 				report: report ? clipReport(report.text) : undefined,
 			});
-			syncAgentWidget(rt, ctx);
+			rt.hud?.refresh();
 		},
 		onPhaseChanged: (ctx) => {
 			rt.applyTools();

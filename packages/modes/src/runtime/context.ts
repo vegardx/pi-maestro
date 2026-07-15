@@ -75,7 +75,6 @@ import {
 import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
-import { syncAgentWidget } from "./dashboard.js";
 import { installDebugProposalHandler } from "./debug-command.js";
 import { GateTriage } from "./gate-triage.js";
 import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
@@ -117,12 +116,6 @@ export interface RuntimeContext {
 	invalidateFooter: (() => void) | undefined;
 	/** The live HUD handle (mounted at session_start in TUI sessions). */
 	hud: import("./hud-wiring.js").HudHandle | undefined;
-	// Transient: 5s re-render timer for the live agent widget (elapsed ticks).
-	agentWidgetTimer: ReturnType<typeof setInterval> | undefined;
-	// The agent widget is mounted once and re-rendered in place — re-setting
-	// it per sync reshuffles the widget stack and blinks the ask overlays.
-	agentWidgetMounted: boolean;
-	agentWidgetRefresh: (() => void) | undefined;
 	// Transient: a post-handoff arrival delivery is idle-polling (dedupes the
 	// sink's schedule against session_start's).
 	handoffArrivalScheduled?: boolean;
@@ -237,9 +230,6 @@ export function createRuntimeContext(
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
 		hud: undefined,
-		agentWidgetTimer: undefined,
-		agentWidgetMounted: false,
-		agentWidgetRefresh: undefined,
 		compactionInFlight: false,
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,
@@ -538,7 +528,7 @@ export function createRuntimeContext(
 				await rt.ensureExecution(ctx);
 				if (!rt.execution) return;
 				const activated = await rt.execution.tick();
-				syncAgentWidget(rt, ctx);
+				rt.hud?.refresh();
 				if (activated > 0) {
 					ctx.ui.notify(`Activated ${activated} deliverable(s).`, "info");
 					rt.setExecutionStage(
@@ -617,7 +607,7 @@ export function createRuntimeContext(
 				onAgentStateChanged: (id, state) => {
 					usageLedger.record({ kind: "agent", id }, state.tokens);
 					rt.invalidateFooter?.();
-					syncAgentWidget(rt, ctx);
+					rt.hud?.refresh();
 					// Sync worker panes when agents complete
 					if (rt.execution && rt.workerPanes.isOpen()) {
 						rt.workerPanes
@@ -638,7 +628,7 @@ export function createRuntimeContext(
 				},
 				onAllSettled: () => {
 					rt.invalidateFooter?.();
-					syncAgentWidget(rt, ctx);
+					rt.hud?.refresh();
 					// The arc is over: every deliverable is terminal. Return to
 					// PLAN mode — the maestro ends the arc standing at the
 					// /handoff doorway (or ready to extend the plan).
@@ -697,7 +687,7 @@ export function createRuntimeContext(
 				.getExecutor()
 				.recoverInterrupted();
 			await rt.execution.tick();
-			syncAgentWidget(rt, ctx);
+			rt.hud?.refresh();
 			if (recovered.length > 0) {
 				rt.setExecutionStage(
 					{ stage: "executing", deliverableId: "maestro" },

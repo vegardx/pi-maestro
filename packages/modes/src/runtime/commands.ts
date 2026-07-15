@@ -40,7 +40,7 @@ import {
 import { listAgentTargets } from "./agent-targets.js";
 import { beginDistill, beginHandoff } from "./carry-commands.js";
 import type { RuntimeContext } from "./context.js";
-import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
+import { renderAgentsOverview } from "./dashboard.js";
 import { runDebugCommand, runWorkerDebugCommand } from "./debug-command.js";
 import {
 	type Deliverable,
@@ -376,7 +376,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 						question: view.question,
 						research: "verify",
 					});
-					syncAgentWidget(rt, ctx);
+					rt.hud?.refresh();
 				},
 				onSettled: (view, entry) => {
 					rt.researchRuns.delete(view.id);
@@ -390,7 +390,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 						...(entry.report ? { report: clipReport(entry.report) } : {}),
 						...(entry.error ? { error: entry.error } : {}),
 					});
-					syncAgentWidget(rt, ctx);
+					rt.hud?.refresh();
 				},
 			});
 			const problems = entries.some(
@@ -901,7 +901,7 @@ async function presentRemediationTriage(
 	await rt.ensureExecution(ctx);
 	if (!rt.execution) return;
 	const activated = await rt.execution.tick();
-	syncAgentWidget(rt, ctx);
+	rt.hud?.refresh();
 	if (activated > 0) {
 		ctx.ui.notify(
 			`Activated ${activated} deliverable(s) — remediation wave 1 running.`,

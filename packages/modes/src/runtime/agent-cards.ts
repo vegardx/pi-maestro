@@ -18,9 +18,23 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import type { ExecutionEvent } from "../exec/index.js";
 import type { ResearchDisplayKind } from "../research.js";
-import { formatEffort } from "./agent-widget.js";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
+
+/** Effort → compact cell: "A/H" for adaptive models, bare "H" for fixed. */
+const EFFORT_ABBR: Record<string, string> = {
+	off: "off",
+	minimal: "min",
+	low: "L",
+	medium: "M",
+	high: "H",
+	xhigh: "XH",
+};
+export function formatEffort(effort?: string, adaptive?: boolean): string {
+	if (!effort) return "";
+	const abbr = EFFORT_ABBR[effort] ?? effort.slice(0, 2).toUpperCase();
+	return adaptive ? `A/${abbr}` : abbr;
+}
 
 /** Plan-phase research milestones, rendered by the same card renderer. */
 export type ResearchCardEvent =

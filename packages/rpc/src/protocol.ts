@@ -1,4 +1,4 @@
-// ─── RPC protocol v3 ─────────────────────────────────────────────────────────
+// ─── RPC protocol v4 ─────────────────────────────────────────────────────────
 //
 // Requests carry `id: string`; responses echo it. Fire-and-forget messages
 // omit `id`. Every inbound type must have a handler; unknown types answer
@@ -14,7 +14,7 @@ import type {
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type AgentRole = "agent" | "delegate";
 
@@ -283,6 +283,7 @@ export type AgentMessage =
 	| QuestionsMessage
 	| DoneMessage
 	| SummaryMessage
+	| InterruptAckMessage
 	| PongMessage;
 
 // ─── Maestro → Agent ─────────────────────────────────────────────────────────
@@ -305,6 +306,24 @@ export interface SummarizeMessage {
 	readonly preamble: string;
 	/** Hard token budget for the summary. */
 	readonly budget: number;
+}
+
+export interface InterruptMessage {
+	readonly type: "interrupt";
+	readonly id: string;
+	readonly turnId?: string;
+	readonly reason?: string;
+}
+
+export interface InterruptAckMessage {
+	readonly type: "interruptAck";
+	readonly id: string;
+	readonly turnId?: string;
+	readonly outcome:
+		| "accepted"
+		| "already-idle"
+		| "already-interrupting"
+		| "disconnected";
 }
 
 export interface SteerMessage {
@@ -376,6 +395,7 @@ export interface ErrorMessage {
 export type MaestroMessage =
 	| HelloAckMessage
 	| SummarizeMessage
+	| InterruptMessage
 	| SteerMessage
 	| AnswersMessage
 	| PlanReadResponseMessage
@@ -403,6 +423,7 @@ interface ResponseByRequestType {
 	readonly done: DoneAckMessage;
 	readonly debugProposal: DebugResultMessage;
 	readonly summarize: SummaryMessage;
+	readonly interrupt: InterruptAckMessage;
 	readonly ping: PongMessage;
 }
 

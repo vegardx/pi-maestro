@@ -1,9 +1,19 @@
 // /view and /steer command handlers: read-only tmux splits onto agent
 // sessions and targeted guidance routed through the execution seam.
 
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import type { SubagentsCapabilityV1 } from "@vegardx/pi-contracts";
 import { killPane, splitWindow } from "@vegardx/pi-tmux";
 import type { ExecutionHandle } from "../exec/index.js";
+import {
+	descendantsOf,
+	listAgentTargets,
+	renderTargetResolutionError,
+	resolveAgentTarget,
+} from "./agent-targets.js";
 
 /** Tracks the single /view split pane so a second /view replaces it. */
 export interface ViewState {
@@ -23,8 +33,9 @@ function readOnlyAttachCommand(sessionName: string): string {
 export async function handleViewCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
-	execution: ExecutionHandle,
+	execution: ExecutionHandle | undefined,
 	viewState: ViewState,
+	subagents?: SubagentsCapabilityV1,
 ): Promise<void> {
 	let target = args.trim();
 
@@ -38,7 +49,9 @@ export async function handleViewCommand(
 	}
 
 	if (!target) {
-		const keys = [...execution.snapshot().agents.keys()];
+		const keys = listAgentTargets({ execution, subagents })
+			.filter((candidate) => candidate.capabilities.view)
+			.map((candidate) => candidate.id);
 		if (keys.length === 0) {
 			ctx.ui.notify("No agents to view.", "info");
 			return;
@@ -48,9 +61,18 @@ export async function handleViewCommand(
 		target = choice;
 	}
 
-	const sessionName = execution.resolveSessionName(target);
+	const targets = listAgentTargets({ execution, subagents });
+	const resolution = resolveAgentTarget(targets, target);
+	if (!resolution.ok) {
+		ctx.ui.notify(renderTargetResolutionError(resolution), "warning");
+		return;
+	}
+	const sessionName = resolution.target.tmuxSession;
 	if (!sessionName) {
-		ctx.ui.notify(`No agent session matches "${target}".`, "warning");
+		ctx.ui.notify(
+			`Target ${resolution.target.id} has no tmux session.`,
+			"warning",
+		);
 		return;
 	}
 
@@ -97,12 +119,39 @@ export function parseSteerArgs(args: string): SteerTarget | undefined {
 	return { deliverableId, ...(agentName ? { agentName } : {}), guidance: rest };
 }
 
-/** `/steer <deliverable> [agent:] <guidance>` — routed via ExecutionHandle.steer. */
+/** `/steer <target> <guidance>` — one resolver for workers and runs. */
 export function handleSteerCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
 	execution: ExecutionHandle,
+	subagents?: SubagentsCapabilityV1,
 ): void {
+	const space = args.trim().indexOf(" ");
+	if (space > 0) {
+		const selector = args.trim().slice(0, space);
+		const guidance = args
+			.trim()
+			.slice(space + 1)
+			.trim();
+		const resolution = resolveAgentTarget(
+			listAgentTargets({ execution, subagents }),
+			selector,
+		);
+		if (guidance && resolution.ok && resolution.target.kind === "run") {
+			const run = subagents
+				?.list()
+				.find((candidate) => `run:${candidate.id}` === resolution.target.id);
+			if (run) {
+				subagents?.steer(run.id, guidance);
+				ctx.ui.notify(`Steered ${resolution.target.id}.`, "info");
+				return;
+			}
+		}
+		if (guidance && !resolution.ok && resolution.reason === "ambiguous") {
+			ctx.ui.notify(renderTargetResolutionError(resolution), "warning");
+			return;
+		}
+	}
 	const target = parseSteerArgs(args);
 	if (!target) {
 		ctx.ui.notify("Usage: /steer <deliverable> [agent:] <guidance>", "warning");
@@ -119,5 +168,92 @@ export function handleSteerCommand(
 			? `Steered ${target.deliverableId}/${agent}.`
 			: `${target.deliverableId}/${agent} is not connected.`,
 		sent ? "info" : "warning",
+	);
+}
+
+export interface ParsedInterrupt {
+	readonly selector?: string;
+	readonly scope: "self" | "children" | "tree" | "all";
+}
+
+export function parseInterruptArgs(args: string): ParsedInterrupt {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	let scope: ParsedInterrupt["scope"] = "self";
+	const selector: string[] = [];
+	for (const token of tokens) {
+		if (token === "--children") scope = "children";
+		else if (token === "--tree") scope = "tree";
+		else if (token === "--all") scope = "all";
+		else selector.push(token);
+	}
+	return {
+		...(selector.length ? { selector: selector.join(" ") } : {}),
+		scope,
+	};
+}
+
+export async function handleInterruptCommand(
+	args: string,
+	ctx: ExtensionContext,
+	execution: ExecutionHandle | undefined,
+	subagents: SubagentsCapabilityV1 | undefined,
+): Promise<void> {
+	const parsed = parseInterruptArgs(args);
+	const targets = listAgentTargets({ execution, subagents, host: ctx });
+	let selected: typeof targets;
+	if (parsed.scope === "all") {
+		selected = targets.filter((target) => target.capabilities.interrupt);
+	} else {
+		const resolution = resolveAgentTarget(
+			targets,
+			parsed.selector ?? "host:current",
+		);
+		if (!resolution.ok) {
+			ctx.ui.notify(renderTargetResolutionError(resolution), "warning");
+			return;
+		}
+		selected =
+			parsed.scope === "self"
+				? [resolution.target]
+				: descendantsOf(targets, resolution.target.id);
+		if (parsed.scope === "tree") selected = [resolution.target, ...selected];
+	}
+	if (selected.length === 0) {
+		ctx.ui.notify("No interruptible targets in that scope.", "info");
+		return;
+	}
+	const results: string[] = [];
+	for (const target of selected) {
+		if (target.kind === "host") {
+			if (ctx.isIdle()) results.push(`${target.id}: already-idle`);
+			else {
+				ctx.abort();
+				results.push(`${target.id}: accepted (session preserved)`);
+			}
+		} else if (target.kind === "worker") {
+			const key = target.id.slice("worker:".length);
+			const [deliverable, name] = key.split("/");
+			const result =
+				deliverable && execution?.interrupt
+					? await execution.interrupt(deliverable, name)
+					: undefined;
+			results.push(
+				`${target.id}: ${result?.outcome ?? "disconnected"} (session preserved)`,
+			);
+		} else {
+			const runId = target.id.slice("run:".length);
+			const run = subagents?.list().find((candidate) => candidate.id === runId);
+			const result =
+				run && subagents?.interrupt
+					? await subagents.interrupt(run.id, "user interrupt")
+					: undefined;
+			results.push(
+				`${target.id}: ${result?.outcome ?? "disconnected"} (run settles)`,
+			);
+		}
+	}
+	ctx.ui.notify(
+		results.join("\n"),
+		results.some((line) => line.includes("disconnected")) ? "warning" : "info",
 	);
 }

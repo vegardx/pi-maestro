@@ -4,7 +4,9 @@
 // service tests as pure orchestration (the real RpcClient / foreground runners
 // land in the runners+concurrency child deliverable).
 
+import { join } from "node:path";
 import type {
+	InterruptResult,
 	RunHandle,
 	RunId,
 	RunRecord,
@@ -24,6 +26,7 @@ import type { RunStore } from "./store.js";
 /** Live control over one launched child. Implemented by the runners. */
 export interface RunnerController {
 	steer(guidance: string): void;
+	interrupt?(reason?: string): Promise<InterruptResult>;
 	stop(reason?: string): void;
 	/** Resolves when the child settles. */
 	result(): Promise<RunResult>;
@@ -31,6 +34,7 @@ export interface RunnerController {
 	lastEventAt?(): number;
 	/** Last completed assistant text — salvage for stopped runs. */
 	partialText?(): Promise<string | undefined>;
+	capture?(lines?: number): Promise<string | undefined>;
 }
 
 export interface LaunchRequest {
@@ -113,19 +117,57 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			};
 		}
 
+		const runId = this.mintId();
+		// Inspectable is the safe default. Headless remains available only when a
+		// caller explicitly marks genuinely short/internal work.
+		const transport = profile.transport ?? "tmux";
+		profile = {
+			...profile,
+			transport,
+			role: profile.role ?? profile.profile,
+			displayName:
+				profile.displayName ?? `${profile.role ?? profile.profile}-${runId}`,
+			...(transport === "tmux"
+				? {
+						session: true,
+						sessionFile:
+							profile.sessionFile ??
+							join(this.store.root, runId, "session.jsonl"),
+					}
+				: {}),
+		};
 		const ctx: SpawnContext = {
 			spawnerCwd: this.spawnerCwd,
 			repoRoot: this.repoRoot,
 			parentDepth: this.ownDepth,
 		};
 		const invocation = mapProfileToInvocation(profile, ctx);
-		const runId = this.mintId();
 
 		// Announce the run first so the store has a record before the runner
 		// emits any status/progress.
 		this.bus.publish({
 			type: "spawn",
-			run: { id: runId, prompt, profile },
+			run: {
+				id: runId,
+				prompt,
+				profile,
+				...(profile.parent ? { parent: profile.parent } : {}),
+			},
+		});
+
+		this.bus.publish({
+			type: "metadata",
+			runId,
+			metadata: {
+				transport,
+				...(profile.parent ? { parent: profile.parent } : {}),
+				...(profile.rootTurnId ? { rootTurnId: profile.rootTurnId } : {}),
+				...(profile.sessionFile ? { sessionFile: profile.sessionFile } : {}),
+				cwd: invocation.cwd,
+				role: profile.role ?? profile.profile,
+				displayName: profile.displayName ?? runId,
+				...(profile.retainUntil ? { retainUntil: profile.retainUntil } : {}),
+			},
 		});
 
 		const controller = this.runner.launch(
@@ -138,6 +180,7 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			id: runId,
 			status: () => this.store.readRecord(runId)?.status ?? "queued",
 			steer: (guidance) => this.steer(runId, guidance),
+			interrupt: (reason) => this.interrupt(runId, reason),
 			stop: (reason) => this.stop(runId, reason),
 			result: () => controller.result(),
 			...(controller.lastEventAt
@@ -162,6 +205,30 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		this.bus.publish({ type: "steer", runId, guidance });
 	}
 
+	async interrupt(runId: RunId, reason?: string): Promise<InterruptResult> {
+		const controller = this.controllers.get(runId);
+		if (!controller?.interrupt) {
+			return { outcome: "disconnected", targetId: `run:${runId}` };
+		}
+		this.bus.publish({ type: "interrupt", runId, reason, phase: "requested" });
+		try {
+			const result = await controller.interrupt(reason);
+			this.bus.publish({
+				type: "interrupt",
+				runId,
+				reason,
+				phase: "acknowledged",
+			});
+			return result;
+		} catch (error) {
+			return {
+				outcome: "disconnected",
+				targetId: `run:${runId}`,
+				detail: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
+
 	stop(runId: RunId, reason?: string): void {
 		try {
 			this.controllers.get(runId)?.stop(reason);
@@ -171,6 +238,12 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			// throw becomes an uncaught exception that kills pi).
 		}
 		this.bus.publish({ type: "stop", runId, reason });
+	}
+
+	async capture(runId: RunId, lines?: number): Promise<string | undefined> {
+		const text = await this.controllers.get(runId)?.capture?.(lines);
+		if (text) this.bus.publish({ type: "capture", runId, text });
+		return text;
 	}
 }
 

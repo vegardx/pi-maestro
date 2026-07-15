@@ -110,6 +110,8 @@ export class AgentBridge {
 	 * commentary is NOT captured.
 	 */
 	private pendingSummarize: { id: string; armed: boolean } | undefined;
+	private activeTurnId: string | undefined;
+	private interruptingTurnId: string | undefined;
 	private queuedSteers: string[] = [];
 	private lastAssistantText = "";
 
@@ -131,6 +133,8 @@ export class AgentBridge {
 
 	/** Signal turn started — agent is working. */
 	onTurnStart(): void {
+		this.activeTurnId = randomUUID();
+		this.interruptingTurnId = undefined;
 		// Arm the summarize capture: the first turn to start after the prompt
 		// injection is the turn responding to it (a turn already in flight when
 		// summarize arrived has had its turn_start, so it cannot re-arm here).
@@ -143,6 +147,8 @@ export class AgentBridge {
 	/** Signal turn ended — agent is idle, waiting for maestro decision. */
 	onTurnEnd(): void {
 		this.turnCount++;
+		this.activeTurnId = undefined;
+		this.interruptingTurnId = undefined;
 		// Summarize capture rule: the assistant text of the turn that answered
 		// the injected summarization prompt IS the summary. Other injections are
 		// queued while a summarize is pending so nothing interleaves. An
@@ -476,6 +482,45 @@ export class AgentBridge {
 				this.settlePending();
 				this.client.close();
 				this.ctx?.shutdown();
+				break;
+			}
+			case "interrupt": {
+				const active = this.activeTurnId;
+				if (!active || this.ctx?.isIdle()) {
+					this.client.send({
+						type: "interruptAck",
+						id: msg.id,
+						turnId: active,
+						outcome: "already-idle",
+					});
+					break;
+				}
+				if (msg.turnId && msg.turnId !== active) {
+					this.client.send({
+						type: "interruptAck",
+						id: msg.id,
+						turnId: active,
+						outcome: "already-idle",
+					});
+					break;
+				}
+				if (this.interruptingTurnId === active) {
+					this.client.send({
+						type: "interruptAck",
+						id: msg.id,
+						turnId: active,
+						outcome: "already-interrupting",
+					});
+					break;
+				}
+				this.interruptingTurnId = active;
+				this.ctx?.abort();
+				this.client.send({
+					type: "interruptAck",
+					id: msg.id,
+					turnId: active,
+					outcome: "accepted",
+				});
 				break;
 			}
 			case "steer":

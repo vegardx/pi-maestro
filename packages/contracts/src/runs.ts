@@ -42,6 +42,39 @@ export type ThinkingLevel =
 	| "high"
 	| "xhigh";
 
+export type RunTransport = "headless" | "tmux";
+
+export interface RunProcessMetadata {
+	readonly transport: RunTransport;
+	readonly parent?: RunId;
+	readonly rootTurnId?: string;
+	readonly pid?: number;
+	readonly processGroup?: number;
+	readonly tmuxSession?: string;
+	readonly tmuxPane?: string;
+	readonly sessionFile?: string;
+	readonly cwd?: string;
+	readonly role: string;
+	readonly displayName: string;
+	readonly retainUntil?: number;
+}
+
+export type InterruptOutcome =
+	| "accepted"
+	| "already-idle"
+	| "already-interrupting"
+	| "disconnected"
+	| "timed-out"
+	| "escalated-term"
+	| "escalated-kill";
+
+export interface InterruptResult {
+	readonly outcome: InterruptOutcome;
+	readonly targetId: string;
+	readonly detail?: string;
+	readonly partialText?: string;
+}
+
 export interface ToolPolicy {
 	readonly allow?: readonly string[];
 	readonly deny?: readonly string[];
@@ -93,6 +126,14 @@ export interface SpawnProfile {
 	 * their policy).
 	 */
 	readonly watchdog?: RunWatchdogConfig;
+	/** Execution transport. Long-running work should select tmux explicitly. */
+	readonly transport?: RunTransport;
+	/** Human-facing identity and lineage for the unified target registry. */
+	readonly role?: string;
+	readonly displayName?: string;
+	readonly parent?: RunId;
+	readonly rootTurnId?: string;
+	readonly retainUntil?: number;
 	/** Opaque metadata for the maestro. */
 	readonly meta?: Readonly<Record<string, unknown>>;
 }
@@ -170,6 +211,22 @@ export type RunBusMessage =
 			readonly guidance: string;
 	  }
 	| {
+			readonly type: "interrupt";
+			readonly runId: RunId;
+			readonly reason?: string;
+			readonly phase?: "requested" | "acknowledged" | "term" | "kill";
+	  }
+	| {
+			readonly type: "metadata";
+			readonly runId: RunId;
+			readonly metadata: RunProcessMetadata;
+	  }
+	| {
+			readonly type: "capture";
+			readonly runId: RunId;
+			readonly text: string;
+	  }
+	| {
 			readonly type: "stop";
 			readonly runId: RunId;
 			readonly reason?: string;
@@ -201,6 +258,8 @@ export interface RunRecord {
 	readonly createdAt: number;
 	readonly updatedAt: number;
 	readonly result?: RunResult;
+	readonly metadata?: RunProcessMetadata;
+	readonly lastEventAt?: number;
 }
 
 /** Live control surface returned by a spawn. */
@@ -208,6 +267,8 @@ export interface RunHandle {
 	readonly id: RunId;
 	status(): RunStatus;
 	steer(guidance: string): void;
+	interrupt?(reason?: string): Promise<InterruptResult>;
+	/** Compatibility alias for terminal one-shot interruption. */
 	stop(reason?: string): void;
 	result(): Promise<RunResult>;
 	/**

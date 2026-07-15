@@ -22,6 +22,8 @@ export type {
 	HandlerTable,
 	HelloAckMessage,
 	HelloMessage,
+	InterruptAckMessage,
+	InterruptMessage,
 	LedgerEntryWire,
 	LedgerFindingWire,
 	LedgerSeverity,

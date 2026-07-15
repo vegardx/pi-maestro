@@ -230,6 +230,9 @@ export function createSubagentTool(deps: SubagentToolDeps): ToolDefinition {
 
 						let profile: SpawnProfile = {
 							profile: def.profile,
+							transport: "tmux",
+							role: "delegate",
+							displayName: name,
 							...(model ? { model } : {}),
 							...(effort ? { thinking: effort } : {}),
 							appendSystemPrompt: def.appendSystemPrompt,

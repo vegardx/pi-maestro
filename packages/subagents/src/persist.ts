@@ -37,6 +37,22 @@ export function persistRunBus(bus: RunBus, store: RunStore): () => void {
 					}
 				}
 				break;
+			case "metadata": {
+				const current = store.readRecord(message.runId)?.metadata;
+				if (store.readRecord(message.runId)) {
+					store.setMetadata(message.runId, {
+						...current,
+						...message.metadata,
+					});
+				}
+				break;
+			}
+			case "agentEvent":
+			case "progress":
+				if (store.readRecord(message.runId)) {
+					store.setLastEventAt(message.runId);
+				}
+				break;
 			case "result":
 				if (store.readRecord(message.runId)) {
 					store.setResult(message.runId, message.result);

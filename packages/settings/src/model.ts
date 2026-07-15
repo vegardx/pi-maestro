@@ -345,3 +345,82 @@ export function modelProfileKeys(ctx: ExtensionContext): string[] {
 export function isModelRole(value: string): value is ModelRole {
 	return (MODEL_ROLES as readonly string[]).includes(value);
 }
+
+export interface ModelOption {
+	readonly id: string;
+	readonly label: string;
+	readonly description: string;
+	readonly supported: readonly ThinkingLevel[];
+}
+
+export function supportedEfforts(model: unknown): readonly ThinkingLevel[] {
+	const entry = model as {
+		reasoning?: boolean;
+		thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
+		compat?: { forceAdaptiveThinking?: boolean };
+	};
+	if (entry.reasoning === false) return ["off"];
+	let efforts = THINKING_LEVELS.filter(
+		(level) => entry.thinkingLevelMap?.[level] !== null,
+	);
+	if (entry.compat?.forceAdaptiveThinking)
+		efforts = efforts.filter((level) => level !== "off" && level !== "minimal");
+	return efforts;
+}
+
+/**
+ * Every exact model id referenced by any profile's targets or role models
+ * leaves, in every authored scope. Referenced ids must stay selectable even
+ * without auth, or an unauthenticated provider's config would become
+ * uneditable from the UI.
+ */
+function referencedModelIds(ctx: ExtensionContext): Set<string> {
+	const ids = new Set<string>();
+	for (const profile of modelProfileKeys(ctx)) {
+		const targets = readProfileTargets(ctx, profile);
+		for (const id of [...(targets.global ?? []), ...(targets.project ?? [])])
+			ids.add(id);
+		for (const role of MODEL_ROLES) {
+			const leaf = readRoleLeaf(ctx, profile, role, "models");
+			for (const id of [
+				...(leaf.global ?? []),
+				...(leaf.project ?? []),
+				...(leaf.session ?? []),
+			])
+				ids.add(id);
+		}
+	}
+	return ids;
+}
+
+export function modelOptions(ctx: ExtensionContext): ModelOption[] {
+	// Candidates are authenticated models plus anything the config already
+	// references. Unauthenticated-but-referenced models are dormant targets —
+	// the runtime role resolver filters to authenticated models at spawn time
+	// — but the rest of the catalog is noise and stays hidden.
+	const referenced = referencedModelIds(ctx);
+	const options: ModelOption[] = [];
+	for (const model of ctx.modelRegistry.getAll()) {
+		const id = `${model.provider}/${model.id}`;
+		const isReferenced = referenced.delete(id);
+		const authenticated = ctx.modelRegistry.hasConfiguredAuth(model);
+		if (!authenticated && !isReferenced) continue;
+		options.push({
+			id,
+			label: `${(model as { name?: string }).name ?? model.id} (${model.provider})`,
+			description: authenticated ? "available" : "needs authentication",
+			supported: supportedEfforts(model),
+		});
+	}
+	// Referenced ids the registry does not know keep their raw id as label.
+	// Without registry metadata, effort support cannot be narrowed.
+	for (const id of referenced) {
+		options.push({
+			id,
+			label: id,
+			description: "needs authentication",
+			supported: [...THINKING_LEVELS],
+		});
+	}
+	return options;
+}

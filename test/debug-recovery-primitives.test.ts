@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/engine.js";
 import {
@@ -59,6 +60,19 @@ class RestartTmux implements TmuxApi {
 	}
 }
 
+async function until(
+	condition: () => boolean,
+	what: string,
+	timeoutMs = 2000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (condition()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`timed out waiting for ${what}`);
+}
+
 function sessionSeed(path: string): string {
 	return readFileSync(path, "utf8")
 		.split("\n")
@@ -70,14 +84,37 @@ function sessionSeed(path: string): string {
 
 describe("safe worker restart primitives", () => {
 	const cleanups: string[] = [];
+	const clients: MaestroRpcClient[] = [];
 	let adapter: ExecutionAdapter | undefined;
 
 	afterEach(async () => {
+		for (const client of clients.splice(0)) client.close();
 		await adapter?.destroy();
 		adapter = undefined;
 		for (const dir of cleanups.splice(0))
 			rmSync(dir, { recursive: true, force: true });
 	});
+
+	async function connectWorker(socketPath: string): Promise<MaestroRpcClient> {
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const ack = new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error("no helloAck")), 2000);
+			client.once("message", (msg) => {
+				clearTimeout(timer);
+				if (msg.type === "helloAck" && msg.ok) resolve();
+				else reject(new Error(`hello rejected: ${JSON.stringify(msg)}`));
+			});
+		});
+		client.connect(socketPath, {
+			agentId: "auth/worker",
+			role: "agent",
+			token: "test-token",
+			pid: process.pid,
+		});
+		await ack;
+		return client;
+	}
 
 	function activePlan() {
 		const root = mkdtempSync(join(tmpdir(), "restart-worker-"));
@@ -106,7 +143,10 @@ describe("safe worker restart primitives", () => {
 		return { root, workspace, engine };
 	}
 
-	async function started(sticky = false) {
+	async function started(
+		sticky = false,
+		timing: { restartKillTimeoutMs?: number; restartPollMs?: number } = {},
+	) {
 		const { root, workspace, engine } = activePlan();
 		const tmux = new RestartTmux();
 		tmux.sticky = sticky;
@@ -120,8 +160,8 @@ describe("safe worker restart primitives", () => {
 			tmux,
 			token: "test-token",
 			socketPath: join(root, "rpc.sock"),
-			restartKillTimeoutMs: 15,
-			restartPollMs: 1,
+			restartKillTimeoutMs: timing.restartKillTimeoutMs ?? 15,
+			restartPollMs: timing.restartPollMs ?? 1,
 			workspaceValidation: {
 				pathExists: () => true,
 				realpath: (path) => resolve(path),
@@ -203,6 +243,45 @@ describe("safe worker restart primitives", () => {
 		expect(retried.ok, retried.error).toBe(true);
 		expect(executor.getAgentState("auth", "worker")?.status).toBe("working");
 		expect(executor.getStates().get("auth")?.blocked).toBeUndefined();
+	});
+
+	it("detaches the old connection and ignores stale worker rpc during restart", async () => {
+		const { root, engine } = await started(false, {
+			restartKillTimeoutMs: 1500,
+			restartPollMs: 10,
+		});
+		const stale = await connectWorker(join(root, "rpc.sock"));
+		expect(stale.connected).toBe(true);
+
+		// Parked in the graceful-shutdown window while the tmux session lives.
+		const restart = adapter!.restartWorkerResume("auth");
+		await until(() => !stale.connected, "old connection detach");
+
+		// A reconnecting old generation passes hello but must not mutate state.
+		const reconnected = await connectWorker(join(root, "rpc.sock"));
+		reconnected.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "auth",
+			params: { taskId: "remaining-task" },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const task = () =>
+			engine.get().deliverables[0].tasks.find((t) => t.id === "remaining-task");
+		expect(task()?.done).toBe(false);
+
+		const result = await restart;
+		expect(result.ok, result.error).toBe(true);
+		// The gate is the restart barrier, not a permanent lockout.
+		reconnected.send({
+			type: "planMutate",
+			id: "m2",
+			action: "toggleTask",
+			deliverableId: "auth",
+			params: { taskId: "remaining-task" },
+		});
+		await until(() => task()?.done === true, "post-restart mutate");
 	});
 
 	it("ignores stale generation completion after replacement", async () => {

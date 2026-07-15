@@ -143,9 +143,14 @@ function supportedEfforts(model: unknown): readonly ThinkingLevel[] {
 }
 
 export function modelOptions(ctx: ExtensionContext): ModelOption[] {
-	const available = ctx.modelRegistry.getAvailable();
-	const models = available.length > 0 ? available : ctx.modelRegistry.getAll();
-	return models.map((model) => ({
+	// The FULL catalog, always. Profile targets are configuration, not
+	// activation: the runtime role resolver already filters pools to
+	// authenticated models at spawn time, so selecting a "needs
+	// authentication" model is a dormant target, never a live call. Listing
+	// only getAvailable() hid every other provider's models the moment ONE
+	// provider had auth — the label below was unreachable and the global
+	// anthropic/openai/grok catalog could not be assigned to profiles.
+	return ctx.modelRegistry.getAll().map((model) => ({
 		id: `${model.provider}/${model.id}`,
 		label: `${(model as { name?: string }).name ?? model.id} (${model.provider})`,
 		description: ctx.modelRegistry.hasConfiguredAuth(model)

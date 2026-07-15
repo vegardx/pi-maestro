@@ -40,7 +40,7 @@ function fakeCtx(): ExtensionContext {
 				reasoning: true,
 				thinkingLevelMap: id === "o3" ? { minimal: null } : {},
 			}),
-			getAvailable: () => [
+			getAll: () => [
 				{
 					provider: "anthropic",
 					id: "sonnet",
@@ -56,7 +56,6 @@ function fakeCtx(): ExtensionContext {
 					thinkingLevelMap: { minimal: null },
 				},
 			],
-			getAll: () => [],
 			hasConfiguredAuth: () => true,
 		},
 		ui: {
@@ -172,6 +171,44 @@ describe("hierarchical Maestro settings", () => {
 		);
 		expect(o3?.supported).not.toContain("minimal");
 		expect(o3?.supported).toContain("xhigh");
+	});
+
+	it("lists the FULL catalog — unauthenticated providers stay selectable", () => {
+		// Regression: one authenticated provider (e.g. a gateway) used to hide
+		// every other provider's models from profile selection entirely —
+		// profile targets are configuration; the runtime role resolver filters
+		// to authenticated models at spawn time.
+		const ctx = fakeCtx();
+		const registry = (
+			ctx as unknown as {
+				modelRegistry: {
+					getAll: () => Array<{ provider: string; id: string; name: string }>;
+					hasConfiguredAuth: (m: { provider: string }) => boolean;
+				};
+			}
+		).modelRegistry;
+		registry.getAll = () => [
+			{ provider: "radicalai", id: "gpt-5.6-sol", name: "GPT 5.6 Sol" },
+			{ provider: "anthropic", id: "claude-fable-5", name: "Claude Fable 5" },
+			{ provider: "grok", id: "grok-4.1", name: "Grok 4.1" },
+		];
+		registry.hasConfiguredAuth = (m) => m.provider === "radicalai";
+
+		const options = modelOptions(ctx);
+		expect(options.map((o) => o.id)).toEqual([
+			"radicalai/gpt-5.6-sol",
+			"anthropic/claude-fable-5",
+			"grok/grok-4.1",
+		]);
+		expect(
+			options.find((o) => o.id === "radicalai/gpt-5.6-sol")?.description,
+		).toBe("available");
+		expect(
+			options.find((o) => o.id === "anthropic/claude-fable-5")?.description,
+		).toBe("needs authentication");
+		expect(options.find((o) => o.id === "grok/grok-4.1")?.description).toBe(
+			"needs authentication",
+		);
 	});
 
 	it("discovers child extensions, excludes Maestro, and leaves exact paths", () => {

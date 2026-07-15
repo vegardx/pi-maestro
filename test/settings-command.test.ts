@@ -407,7 +407,7 @@ describe("/settings command", () => {
 			handleSettingsCommand("worker remove openai/o3", ctx);
 			expect(ctx.messages.at(-1)).toContain("not in the worker pool");
 			handleSettingsCommand("worker remove anthropic/sonnet", ctx);
-			expect(ctx.messages.at(-1)).toContain("session fallback");
+			expect(ctx.messages.at(-1)).toContain("role follows session →");
 			expect(workerModels()).toBeUndefined();
 		});
 

@@ -16,6 +16,7 @@ import {
 	readProfileTargets,
 	readRoleLeaf,
 	resolveModelName,
+	sessionFallbackLabel,
 	sessionModelId,
 	THINKING_LEVELS,
 	writeAdvancedValue,
@@ -102,7 +103,7 @@ function handleShow(ctx: ExtensionContext): void {
 	const lines = [
 		"Maestro Configuration",
 		`Session model: ${sessionModelId(ctx) ?? "none"}`,
-		`Active profile: ${active?.name ?? "none (live-session fallbacks)"}`,
+		`Active profile: ${active?.name ?? "none (all roles follow session)"}`,
 		"",
 		"Model profiles:",
 	];
@@ -117,10 +118,10 @@ function handleShow(ctx: ExtensionContext): void {
 			const efforts = readRoleLeaf(ctx, profile, role, "efforts");
 			if (!models.effective?.length && !efforts.effective?.length) continue;
 			lines.push(
-				`    ${role}.models = ${formatSettingValue(models.effective)} [${models.source ?? "session fallback"}]`,
+				`    ${role}.models = ${models.effective?.length ? formatSettingValue(models.effective) : sessionFallbackLabel(ctx)} [${models.source ?? "unset"}]`,
 			);
 			lines.push(
-				`    ${role}.efforts = ${formatSettingValue(efforts.effective)} [${efforts.source ?? "provider default"}]`,
+				`    ${role}.efforts = ${efforts.effective?.length ? formatSettingValue(efforts.effective) : "auto"} [${efforts.source ?? "unset"}]`,
 			);
 		}
 	}
@@ -322,7 +323,7 @@ function handleProfiles(ctx: ExtensionContext) {
 		);
 	const active = activeProfileName(ctx);
 	const lines = [
-		`Active profile: ${active ?? "none — roles use session fallbacks"}`,
+		`Active profile: ${active ?? "none — all roles follow session"}`,
 		"",
 	];
 	for (const profile of modelProfileKeys(ctx)) {
@@ -420,14 +421,13 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 		const lines = [
 			`${role} · ${profile} · scope: ${layered.source ?? "unset (writes global)"}`,
 		];
-		if (pool.length === 0) lines.push("  (empty — session fallback)");
+		if (pool.length === 0)
+			lines.push(`  (empty — ${sessionFallbackLabel(ctx)})`);
 		for (const [index, id] of pool.entries())
 			lines.push(
 				`  ${index + 1}. ${resolveModelName(ctx, id)} — ${id}${index === 0 ? " (default)" : ""}`,
 			);
-		lines.push(
-			`default effort: ${efforts.effective?.[0] ?? "provider default"}`,
-		);
+		lines.push(`default effort: ${efforts.effective?.[0] ?? "auto"}`);
 		return ctx.ui.notify(lines.join("\n"), "info");
 	}
 	if (verb === "add" || verb === "default") {
@@ -482,7 +482,7 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 		return ctx.ui.notify(
 			next.length
 				? `✓ ${role}.models = ${next.join(" → ")} [${scope}]`
-				: `✓ ${role}.models reset [${scope}] — role uses session fallback`,
+				: `✓ ${role}.models reset [${scope}] — role follows ${sessionFallbackLabel(ctx)}`,
 			"info",
 		);
 	}

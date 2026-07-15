@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -131,6 +131,7 @@ export interface DebugEpisode {
 	selectedRecoveryId?: string;
 	attemptedAt?: string;
 	result?: DebugOperationResult;
+	issueReview?: import("./debug-issue.js").DebugIssueReviewState;
 }
 
 export interface DebugSnapshotInput {
@@ -521,6 +522,49 @@ export class DebugController {
 		if (!this.episode || this.episode.result) return;
 		this.episode.result = result;
 		this.store?.save(this.episode);
+	}
+	getIssueReview():
+		| import("./debug-issue.js").DebugIssueReviewState
+		| undefined {
+		return this.episode?.issueReview;
+	}
+	startIssueReview(
+		draft: import("./debug-issue.js").DiagnosticIssueDraft,
+	): import("./debug-issue.js").DebugIssueReviewState {
+		if (!this.episode) throw new Error("no active debug episode");
+		if (!this.episode.result)
+			throw new Error("debug recovery must finish before issue review");
+		if (!this.episode.issueReview) {
+			this.episode.issueReview = { draft, revision: 0, history: [] };
+			this.store?.save(this.episode);
+		}
+		return this.episode.issueReview;
+	}
+	recordIssueRevision(
+		draft: import("./debug-issue.js").DiagnosticIssueDraft,
+		instruction: string,
+		at: string,
+	): import("./debug-issue.js").DebugIssueReviewState {
+		if (!this.episode?.issueReview)
+			throw new Error("no active debug issue review");
+		const current = this.episode.issueReview;
+		const history = [
+			...current.history,
+			{
+				at,
+				instruction: redactSecrets(instruction).slice(0, 1000),
+				previousDraftHash: createHash("sha256")
+					.update(JSON.stringify(current.draft))
+					.digest("hex"),
+			},
+		].slice(-20);
+		this.episode.issueReview = {
+			draft,
+			revision: current.revision + 1,
+			history,
+		};
+		this.store?.save(this.episode);
+		return this.episode.issueReview;
 	}
 	cancel(): void {
 		this.episode = undefined;

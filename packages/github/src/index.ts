@@ -11,6 +11,13 @@ export {
 	targetArgs,
 } from "./host.js";
 export {
+	buildCreateIssueArgs,
+	type CreateIssueInput,
+	type CreateIssueResult,
+	createIssue,
+	type IssueCommandRunner,
+} from "./issue.js";
+export {
 	type CheckState,
 	type CheckSummary,
 	createPr,

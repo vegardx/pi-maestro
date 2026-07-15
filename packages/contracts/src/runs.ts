@@ -54,8 +54,13 @@ export interface RunProcessMetadata {
 	readonly tmuxPane?: string;
 	readonly sessionFile?: string;
 	readonly cwd?: string;
-	readonly role: string;
-	readonly displayName: string;
+	/**
+	 * Caller identity — set once by the service at spawn from the profile.
+	 * Transports publish only process facts (pid/session/…) and must never
+	 * overwrite these (metadata messages merge, so omitting preserves them).
+	 */
+	readonly role?: string;
+	readonly displayName?: string;
 	readonly retainUntil?: number;
 }
 

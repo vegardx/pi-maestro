@@ -10,6 +10,12 @@
 // verification of claims, so the loop terminates by construction. The ledger
 // (minted ids, resolutions, checks) is reported upward after every run — the
 // executor persists it on the plan and gates ship on "blocking ledger empty".
+//
+// Rounds settle ASYNCHRONOUSLY: a spawning call acknowledges immediately (run
+// ids only, no gate claim) and the report is injected as a user message when
+// the round settles. Awaiting a whole panel inside execute() wedged the worker
+// mid-tool-call for up to PANEL_HARD_TIMEOUT_MS — maestro steers queued behind
+// the turn, and interrupting a reviewer stranded the tool call.
 
 import {
 	type AgentToolResult,
@@ -37,7 +43,9 @@ import {
 import {
 	DEFAULT_TIMEOUT_MS,
 	type PanelResult,
-	runReviewPanel,
+	type PanelRunStart,
+	type RunPanelDeps,
+	startReviewPanel,
 } from "./panel.js";
 import { buildVerifierProfile } from "./personas.js";
 import type { SubAgentSpec } from "./schema.js";
@@ -71,6 +79,13 @@ export interface ReviewToolDeps {
 		results: readonly PanelResult[],
 		ledger: ReviewLedger,
 	) => void;
+	/**
+	 * Deliver a settled round's report to the worker as an injected user
+	 * message (pi.sendUserMessage deliverAs:"followUp" — the same channel
+	 * maestro steers arrive on). Rounds settle behind the tool call, so this
+	 * is the ONLY way findings reach the worker; there is no blocking mode.
+	 */
+	readonly deliver: (text: string) => void;
 	readonly timeoutMs?: () => number;
 	readonly now?: () => string;
 }
@@ -126,27 +141,40 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 	// persisted ledger (panelState) after a respawn; reset by an explicit
 	// action:"panel" (the executor clears the persisted ledger on send-back).
 	let episode: Episode | undefined;
+	// The round settling behind the last spawning call. While set, review() is
+	// a no-op pointer at the pending report — a second round would fork the
+	// episode state the background settle is about to write.
+	let inFlight: "panel" | "repair" | "verify" | undefined;
 	const now = () => (deps.now ? deps.now() : new Date().toISOString());
 
 	return defineTool({
 		name: "review",
 		label: "Review",
 		description:
-			"Your review episode. First call (no args) runs the full reviewer " +
-			"panel ONCE and returns findings with canonical ids. Then resolve " +
-			"every blocking finding (fix+commit / wont-fix minors / dispute with " +
+			"Your review episode. First call (no args) starts the full reviewer " +
+			"panel ONCE; the findings report (with canonical ids) arrives as a " +
+			"message when the panel settles — wait for it. Then resolve every " +
+			"blocking finding (fix+commit / wont-fix minors / dispute with " +
 			"rationale / duplicateOf) and call again with `resolutions` — a " +
-			"scope-locked verifier checks exactly your claims. Ship is blocked " +
-			"until no blocking finding is open. Disputes go to the maestro, not " +
-			"another review round.",
+			"scope-locked verifier checks exactly your claims, reporting the " +
+			"same way. Ship is blocked until no blocking finding is open. " +
+			"Disputes go to the maestro, not another review round.",
 		promptSnippet:
-			"review — run your review panel once, then verify your fixes " +
-			"(resolutions: fixed/wont-fix/disputed/duplicateOf per finding id).",
+			"review — start your review panel once (the report arrives as a " +
+			"message), then verify your fixes (resolutions: " +
+			"fixed/wont-fix/disputed/duplicateOf per finding id).",
 		parameters: ReviewParams,
 		// Panel rounds concatenate full reviewer reports — the WORKER model
 		// needs them; the human watching the pane gets a preview + expand.
 		renderResult: renderCollapsedResult,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
+			// Checked before anything else (no RPC, no rehydration): a second
+			// spawn-capable call while a round settles must be a pure no-op.
+			if (inFlight) {
+				return text(
+					`A review round (${inFlight}) is already running — wait for its report; it will arrive as a message when the round settles. Do not re-run review().`,
+				);
+			}
 			const subagents = deps.subagents();
 			if (!subagents) {
 				return text("review unavailable: subagents not loaded");
@@ -175,13 +203,13 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 				(params.resolutions?.length ? "verify" : episode ? undefined : "panel");
 
 			if (action === "panel" || (!episode && !action)) {
-				return await runPanelRound(deps, subagents, panel, waived, ctx);
+				return await startPanelRound(deps, subagents, panel, waived, ctx);
 			}
 			if (action === "repair") {
-				return await repairRound(deps, subagents, panel, waived, ctx);
+				return await startRepairRound(deps, subagents, panel, waived, ctx);
 			}
 			if (action === "verify") {
-				return await verifyClaims(
+				return await startVerification(
 					deps,
 					subagents,
 					params.resolutions ?? [],
@@ -209,7 +237,56 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		};
 	}
 
-	async function runPanelRound(
+	/** RunPanelDeps for one round, with the tool ctx bound into resolveModel. */
+	function panelDeps(
+		d: ReviewToolDeps,
+		subagents: SubagentsCapabilityV1,
+		ctx: ExtensionContext,
+	): RunPanelDeps {
+		return {
+			subagents,
+			cwd: d.cwd(),
+			resolveModel: d.resolveModel
+				? (spec) => d.resolveModel!(ctx, spec)
+				: undefined,
+			timeoutMs: d.timeoutMs?.(),
+		};
+	}
+
+	/** The immediate acknowledgment for a spawned round — names + run ids,
+	 *  never a gate claim (the gate travels with the settled report). */
+	function runningText(
+		label: string,
+		started: ReadonlyArray<Pick<PanelRunStart, "name" | "runId">>,
+	) {
+		const who = started
+			.map((s) => (s.runId ? `${s.name} (${s.runId})` : s.name))
+			.join(", ");
+		return text(
+			`${label} running: ${who}. Wait for the report — it will arrive as a message when the round settles. Do not re-run review().`,
+		);
+	}
+
+	/**
+	 * Settle a spawned round behind the returned tool result and inject the
+	 * report. inFlight clears BEFORE delivery so the worker's reaction to the
+	 * report (repair/verify) is never bounced by its own round's guard. A
+	 * throw here is a harness bug, not a reviewer failure — the worker gets
+	 * told to escalate rather than a silently vanished round.
+	 */
+	function settleInBackground(round: () => Promise<string>): void {
+		void round()
+			.catch(
+				(err) =>
+					`Review round failed to settle: ${err instanceof Error ? err.message : String(err)}. Raise this with the maestro via the ask tool instead of re-running review().`,
+			)
+			.then((report) => {
+				inFlight = undefined;
+				deps.deliver(report);
+			});
+	}
+
+	async function startPanelRound(
 		d: ReviewToolDeps,
 		subagents: SubagentsCapabilityV1,
 		panel: readonly SubAgentSpec[],
@@ -219,34 +296,31 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		// Each reviewer runs exactly once. No inline rerun of failures here —
 		// that layer stacked on the panel's own (since removed) retry to run one
 		// reviewer up to four times per "single" round. Failed reviewers stay
-		// failed in the returned partial panel; only an explicit
+		// failed in the settled partial panel; only an explicit
 		// review({action:"repair"}) retries them, once.
-		const results = await runReviewPanel(panel, {
-			subagents,
-			cwd: d.cwd(),
-			resolveModel: d.resolveModel
-				? (spec) => d.resolveModel!(ctx, spec)
-				: undefined,
-			timeoutMs: d.timeoutMs?.(),
+		const started = await startReviewPanel(panel, panelDeps(d, subagents, ctx));
+		inFlight = "panel";
+		settleInBackground(async () => {
+			const results = await Promise.all(started.map((s) => s.settled));
+			const ledger: ReviewLedger = {
+				...buildLedger(
+					results
+						.filter((r) => r.kind === "review" && r.ok)
+						.map((r) => ({ reviewer: r.name, findings: r.structured })),
+					now(),
+				),
+				participants: results
+					.filter((r) => r.kind === "review")
+					.map((r) => participant(r, 1)),
+			};
+			episode = { ledger, lastResults: results };
+			d.report?.("panel", results, ledger);
+			return renderPanelReport(results, ledger, waived);
 		});
-
-		const ledger: ReviewLedger = {
-			...buildLedger(
-				results
-					.filter((r) => r.kind === "review" && r.ok)
-					.map((r) => ({ reviewer: r.name, findings: r.structured })),
-				now(),
-			),
-			participants: results
-				.filter((r) => r.kind === "review")
-				.map((r) => participant(r, 1)),
-		};
-		episode = { ledger, lastResults: results };
-		d.report?.("panel", results, ledger);
-		return renderPanelResult(results, ledger, waived);
+		return runningText("Review panel", started);
 	}
 
-	async function repairRound(
+	async function startRepairRound(
 		d: ReviewToolDeps,
 		subagents: SubagentsCapabilityV1,
 		panel: readonly SubAgentSpec[],
@@ -256,8 +330,9 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		if (!episode) {
 			return text("Nothing to repair — the panel has not run yet.");
 		}
+		const ep = episode;
 		const okNames = new Set(
-			episode.lastResults.filter((r) => r.ok).map((r) => r.name),
+			ep.lastResults.filter((r) => r.ok).map((r) => r.name),
 		);
 		const failedSpecs = panel.filter((s) => !okNames.has(s.name));
 		if (failedSpecs.length === 0) {
@@ -267,46 +342,47 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		// re-run, and their earlier findings stay in the ledger — the repaired
 		// results merge in by reviewer identity.
 		const prevAttempt = new Map(
-			(episode.ledger.participants ?? []).map((p) => [p.name, p.attempt ?? 1]),
+			(ep.ledger.participants ?? []).map((p) => [p.name, p.attempt ?? 1]),
 		);
-		const repaired = await runReviewPanel(failedSpecs, {
-			subagents,
-			cwd: d.cwd(),
-			resolveModel: d.resolveModel
-				? (spec) => d.resolveModel!(ctx, spec)
-				: undefined,
-			timeoutMs: d.timeoutMs?.(),
+		const started = await startReviewPanel(
+			failedSpecs,
+			panelDeps(d, subagents, ctx),
+		);
+		inFlight = "repair";
+		settleInBackground(async () => {
+			const repaired = await Promise.all(started.map((s) => s.settled));
+			const merged = [
+				...ep.lastResults.filter((r) => okNames.has(r.name)),
+				...repaired,
+			];
+			const attemptOf = (r: PanelResult) =>
+				okNames.has(r.name)
+					? (prevAttempt.get(r.name) ?? 1)
+					: (prevAttempt.get(r.name) ?? 1) + 1;
+			const ledger: ReviewLedger = {
+				...ep.ledger,
+				entries: [
+					...ep.ledger.entries,
+					...buildLedger(
+						repaired
+							.filter((r) => r.kind === "review" && r.ok)
+							.map((r) => ({ reviewer: r.name, findings: r.structured })),
+						now(),
+					).entries,
+				],
+				participants: merged
+					.filter((r) => r.kind === "review")
+					.map((r) => participant(r, attemptOf(r))),
+				updatedAt: now(),
+			};
+			episode = { ledger, lastResults: merged };
+			d.report?.("panel", merged, ledger);
+			return renderPanelReport(merged, ledger, waived);
 		});
-		const merged = [
-			...episode.lastResults.filter((r) => okNames.has(r.name)),
-			...repaired,
-		];
-		const attemptOf = (r: PanelResult) =>
-			okNames.has(r.name)
-				? (prevAttempt.get(r.name) ?? 1)
-				: (prevAttempt.get(r.name) ?? 1) + 1;
-		const ledger: ReviewLedger = {
-			...episode.ledger,
-			entries: [
-				...episode.ledger.entries,
-				...buildLedger(
-					repaired
-						.filter((r) => r.kind === "review" && r.ok)
-						.map((r) => ({ reviewer: r.name, findings: r.structured })),
-					now(),
-				).entries,
-			],
-			participants: merged
-				.filter((r) => r.kind === "review")
-				.map((r) => participant(r, attemptOf(r))),
-			updatedAt: now(),
-		};
-		episode = { ledger, lastResults: merged };
-		deps.report?.("panel", merged, ledger);
-		return renderPanelResult(merged, ledger, waived);
+		return runningText("Repair round", started);
 	}
 
-	async function verifyClaims(
+	async function startVerification(
 		d: ReviewToolDeps,
 		subagents: SubagentsCapabilityV1,
 		resolutions: readonly FindingResolution[],
@@ -337,7 +413,8 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		episode = { ...episode, ledger: applied.ledger };
 
 		// The claims to verify: fixed + not yet verified. Disputes and wont-fix
-		// need no verifier — disputes go to triage, minors are decided.
+		// need no verifier — disputes go to triage, minors are decided. No spawn
+		// here, so these results stay synchronous (gate detail included).
 		const claims = applied.ledger.entries.filter(
 			(e) =>
 				e.resolution?.status === "fixed" &&
@@ -371,57 +448,63 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 
 		// One attempt — a failed/empty verifier is reported back to the worker,
 		// which re-invokes verify explicitly. No implicit re-spawn layers.
-		const run = await settleRun(subagents.spawn(prompt, profile), timeoutMs);
-		const report = run.summary?.trim() ?? "";
-		if (run.status !== "succeeded" || !report) {
-			return text(
-				`Verifier ${run.status}: ${run.error ?? "no report"} — fix nothing, just run review({action: "verify", resolutions: [...]}) again.`,
-				false,
+		const handle = subagents.spawn(prompt, profile);
+		inFlight = "verify";
+		settleInBackground(async () => {
+			const run = await settleRun(handle, timeoutMs);
+			const report = run.summary?.trim() ?? "";
+			if (run.status !== "succeeded" || !report) {
+				return `Verifier ${run.status}: ${run.error ?? "no report"} — fix nothing, just run review({action: "verify", resolutions: [...]}) again.`;
+			}
+			const parsed = parseVerifierReport(report, claims);
+			const { ledger: checked, errors } = applyChecks(
+				applied.ledger,
+				parsed.checks,
+				parsed.regressions,
+				verifierName,
+				now(),
 			);
-		}
-		const parsed = parseVerifierReport(report, claims);
-		const { ledger: checked, errors } = applyChecks(
-			applied.ledger,
-			parsed.checks,
-			parsed.regressions,
-			verifierName,
-			now(),
-		);
-		episode = { ...episode, ledger: checked };
-		d.report?.("verification", [], checked);
+			episode = { ...episode!, ledger: checked };
+			d.report?.("verification", [], checked);
 
-		const open = openBlocking(checked, waived);
-		const disputed = openDisputed(checked, waived);
-		const gate = open.length === 0;
-		const lines = [
-			gate
-				? "All blocking findings are settled — the gate is clear (finish up and stop)."
-				: `${open.length} blocking finding(s) still open after verification — fix and verify again.`,
-			"",
-			renderLedger(checked, waived),
-		];
-		if (disputed.length > 0) {
-			lines.push(
+			const open = openBlocking(checked, waived);
+			const disputed = openDisputed(checked, waived);
+			const lines = [
+				open.length === 0
+					? "All blocking findings are settled — the gate is clear (finish up and stop)."
+					: `${open.length} blocking finding(s) still open after verification — fix and verify again.`,
 				"",
-				`${disputed.length} disputed finding(s) go to the maestro's triage — do not fix or re-dispute them.`,
-			);
-		}
-		if (errors.length > 0) {
-			lines.push("", `Verifier protocol notes: ${errors.join("; ")}`);
-		}
-		lines.push("", `Verifier report:\n${report}`);
-		return text(lines.join("\n"), gate);
+				renderLedger(checked, waived),
+			];
+			if (disputed.length > 0) {
+				lines.push(
+					"",
+					`${disputed.length} disputed finding(s) go to the maestro's triage — do not fix or re-dispute them.`,
+				);
+			}
+			if (errors.length > 0) {
+				lines.push("", `Verifier protocol notes: ${errors.join("; ")}`);
+			}
+			lines.push("", `Verifier report:\n${report}`);
+			return lines.join("\n");
+		});
+		return runningText("Verifier", [
+			{
+				name: verifierName,
+				...(handle.id ? { runId: String(handle.id) } : {}),
+			},
+		]);
 	}
 
-	function renderPanelResult(
+	function renderPanelReport(
 		results: readonly PanelResult[],
 		ledger: ReviewLedger,
 		waived: ReadonlySet<string>,
-	): Result {
+	): string {
 		const open = openBlocking(ledger, waived);
 		const failed = results.filter((r) => !r.ok && r.kind === "review");
-		const gate = open.length === 0 && failed.length === 0;
-		const head = gate
+		const clean = open.length === 0 && failed.length === 0;
+		const head = clean
 			? "Panel clean — no blocking findings. You can finish once your work is done."
 			: `Panel found ${open.length} blocking finding(s). Resolve EVERY one (fix+commit / wont-fix minors / disputed with rationale / duplicateOf), then call review({resolutions: [...]}).`;
 		const sections = [head];
@@ -443,10 +526,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 				})
 				.join("\n\n---\n\n"),
 		);
-		return {
-			content: [{ type: "text", text: sections.join("\n\n") }],
-			details: { gate },
-		};
+		return sections.join("\n\n");
 	}
 }
 

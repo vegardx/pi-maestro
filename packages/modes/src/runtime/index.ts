@@ -240,6 +240,14 @@ export function createModesRuntime(
 					};
 				},
 				cwd: () => process.cwd(),
+				// Non-blocking rounds: the settled report is injected as a
+				// follow-up user message (queued to turn end while streaming;
+				// triggers a turn when idle) — the same channel maestro steers
+				// arrive on (agent-bridge) — so the worker stays steerable and
+				// interruptible while reviewers run.
+				deliver: (text) => {
+					void pi.sendUserMessage(text, { deliverAs: "followUp" });
+				},
 				resolveModel: async (ctx, spec) => {
 					const resolved = await roleSelection(
 						ctx,

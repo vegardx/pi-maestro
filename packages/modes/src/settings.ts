@@ -25,11 +25,7 @@ const SECTION = "compaction";
 export interface ModesCompactionSettings {
 	/** Max output tokens per new raw-slice summary section. */
 	phaseTokens: number;
-	/** Budget for the working bucket (`sys + hotTail`); drives the trigger. */
-	workingTokens: number;
-	/** Soft warning threshold for the stable summary burden (`seed + rolling`). */
-	summaryTokens: number;
-	/** Deadline for a modes-triggered compaction. */
+	/** Deadline for the summariser (distill compactions, ship-time carry-forward). */
 	timeoutMs: number;
 }
 
@@ -49,8 +45,6 @@ export function readModesCompactionSettings(
 		);
 	return {
 		phaseTokens: read("phaseTokens", 10000),
-		workingTokens: read("workingTokens", 150000),
-		summaryTokens: read("summaryTokens", 100000),
 		timeoutMs: read("timeoutMs", 90000),
 	};
 }

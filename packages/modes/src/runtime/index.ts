@@ -334,23 +334,26 @@ export function createModesRuntime(
 	// Declare non-model runtime knobs for /maestro Advanced settings. Direct
 	// model and effort policy lives exclusively in profile role pools.
 	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
-		// Compaction budgets — read by readModesCompactionSettings; declared here
-		// so they're discoverable/editable in /maestro (were hidden before).
+		// Distill threshold ladder — read by readDistillSettings under
+		// extensionConfig.modes.distill. Fractions of context fill.
 		{
-			key: "compaction.workingTokens",
-			label: "Compaction: working budget",
+			key: "distill.nudgeAt",
+			label: "Distill: suggest at (fraction full)",
 			type: "number",
-			default: 150000,
+			default: 0.3,
 		},
 		{
-			key: "compaction.summaryTokens",
-			label: "Compaction: summary budget",
+			key: "distill.forceAt",
+			label: "Distill: auto-run at (fraction full, 0 = off)",
 			type: "number",
-			default: 100000,
+			default: 0.5,
 		},
+		// Summariser deadline — read by readModesCompactionSettings; deadlines
+		// createModesSummariser for distill compactions and ship-time
+		// carry-forward summaries. Nothing auto-compacts on a timer anymore.
 		{
 			key: "compaction.timeoutMs",
-			label: "Compaction: timeout (ms)",
+			label: "Summariser timeout (ms) — distill/ship",
 			type: "number",
 			default: 90000,
 		},

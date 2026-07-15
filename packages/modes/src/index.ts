@@ -8,13 +8,6 @@ import { createModesRuntime } from "./runtime/index.js";
 
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
-export {
-	calibrateSys,
-	calibrationKey,
-	computeBuckets,
-	estimateTokens,
-	formatBudget,
-} from "./budget.js";
 export type {
 	CompactionBucketSnapshot,
 	CompactionDecision,
@@ -88,7 +81,6 @@ export {
 export * from "./schema.js";
 export {
 	appendModesState,
-	collectBudgetText,
 	collectCarryForwardInput,
 	EXECUTION_SEED_ENTRY,
 	hasExecutionSeed,

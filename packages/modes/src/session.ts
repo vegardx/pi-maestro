@@ -102,69 +102,8 @@ export function hasExecutionSeed(
 	);
 }
 
-export interface BudgetText {
-	/** Latest execution-seed content (seed bucket). */
-	readonly seed: string;
-	/** Latest compaction summary (rolling-summary bucket). */
-	readonly rollingSummary: string;
-	/** Live message tail since the latest compaction (hot-tail bucket). */
-	readonly hotTail: string;
-}
-
-/**
- * Extract the raw text behind each context bucket so the caller can estimate
- * tokens. Session-coupled extraction lives here; the arithmetic lives in
- * budget.ts. The seed and rolling summary are excluded from the hot tail.
- */
-export function collectBudgetText(
-	entries: readonly SessionEntry[],
-): BudgetText {
-	let compactionIdx = -1;
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (entries[i].type === "compaction") {
-			compactionIdx = i;
-			break;
-		}
-	}
-	const rollingSummary =
-		compactionIdx >= 0
-			? ((entries[compactionIdx] as CompactionEntry).summary ?? "")
-			: "";
-
-	let seed = "";
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (
-			entry.type === "custom_message" &&
-			entry.customType === EXECUTION_SEED_ENTRY
-		) {
-			seed =
-				typeof entry.content === "string"
-					? entry.content
-					: JSON.stringify(entry.content);
-			break;
-		}
-	}
-
-	const tail: string[] = [];
-	for (let i = compactionIdx + 1; i < entries.length; i++) {
-		const entry = entries[i];
-		if (entry.type === "message") {
-			tail.push(JSON.stringify(entry.message));
-		} else if (entry.type === "custom_message") {
-			if (entry.customType === EXECUTION_SEED_ENTRY) continue;
-			tail.push(
-				typeof entry.content === "string"
-					? entry.content
-					: JSON.stringify(entry.content),
-			);
-		}
-	}
-	return { seed, rollingSummary, hotTail: tail.join("\n") };
-}
-
 /** Latest rolling summary + the raw message tail after it, for ship-time
- * carry-forward distillation. Mirrors {@link collectBudgetText}'s cut point. */
+ * carry-forward distillation (cut at the latest compaction entry). */
 export interface CarryForwardInput {
 	readonly rollingSummary: string;
 	readonly rawTail: SessionMessageEntry["message"][];

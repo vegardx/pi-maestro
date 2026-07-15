@@ -34,7 +34,7 @@ import {
 	scheduleHandoffArrival,
 } from "./carry-commands.js";
 import { activeDeliverable, type RuntimeContext } from "./context.js";
-import { clearAgentWidget, installMaestroFooter } from "./dashboard.js";
+import { installMaestroFooter } from "./dashboard.js";
 import { hydrateDebugEpisode } from "./debug-command.js";
 import { installHud } from "./hud-wiring.js";
 import {
@@ -315,7 +315,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		rt.invalidateFooter = undefined;
 		rt.hud?.dispose();
-		clearAgentWidget(rt, ctx);
 		if (rt.workerPanes.isOpen()) {
 			await rt.workerPanes.close();
 		}

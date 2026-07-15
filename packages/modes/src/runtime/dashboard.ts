@@ -1,20 +1,12 @@
-// Dashboard glue: the custom footer installation, the live agent-table
-// widget above the editor, and the /agents overview rendering. Presentation
-// only — state lives on the RuntimeContext.
+// Dashboard glue: the custom footer installation and the /agents overview
+// rendering (headless fallback — the HUD is the interactive surface).
+// Presentation only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { uiTrace } from "@vegardx/pi-core";
 import { ledgerSummary, openBlocking } from "../exec/findings.js";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
-import type { ResearchRunView } from "../research.js";
 import type { Plan } from "../schema.js";
-import {
-	type AgentTableAgent,
-	buildAgentTable,
-	hasActiveAgents,
-	styleAgentTable,
-} from "./agent-widget.js";
 import type { RuntimeContext } from "./context.js";
 
 /** Install the maestro footer and remember its invalidate handle. */
@@ -46,138 +38,6 @@ export function installMaestroFooter(
 			return rt.execution.questionQueue?.all()?.length ?? 0;
 		},
 	});
-}
-
-// ─── Live agent widget ───────────────────────────────────────────────────────
-
-const AGENT_WIDGET_KEY = "maestro-agents";
-/** Re-render cadence while agents are active, so ELAPSED ticks. */
-const AGENT_WIDGET_TICK_MS = 5_000;
-
-/**
- * Map live research runs onto agent-table rows: DELIVERABLE "research", AGENT =
- * question slug, STATUS from the child's current tool (searching/reading/
- * working), TOKENS from run progress events.
- */
-export function researchTableAgents(
-	runs: ReadonlyMap<string, ResearchRunView>,
-): Map<string, AgentTableAgent> {
-	const rows = new Map<string, AgentTableAgent>();
-	for (const run of runs.values()) {
-		if (run.status !== "running") continue;
-		const prefix = run.kind === "verify" ? "verify" : "research";
-		let key = `${prefix}/${run.label}`;
-		for (let n = 2; rows.has(key); n++) key = `${prefix}/${run.label}-${n}`;
-		rows.set(key, {
-			status: researchStatus(run),
-			startedAt: run.startedAt,
-			tokens: {
-				input: run.tokensIn ?? 0,
-				output: run.tokensOut ?? 0,
-				turns: 0,
-			},
-			...(run.cacheRatio !== undefined ? { cacheRatio: run.cacheRatio } : {}),
-			...(run.model ? { model: run.model } : {}),
-			...(run.effort ? { effort: run.effort } : {}),
-			...(run.adaptive !== undefined ? { adaptive: run.adaptive } : {}),
-		});
-	}
-	return rows;
-}
-
-function researchStatus(run: ResearchRunView): string {
-	if (run.activity === "websearch") return "searching";
-	if (run.activity === "webfetch" || run.activity === "context7")
-		return "reading";
-	if (run.activity === "read" || run.activity === "grep") return "reading";
-	return "working";
-}
-
-/**
- * Render the live agent table into the widget above the editor. Rows merge
- * two sources: execution agents (ExecutionHandle.snapshot()) and plan-mode
- * research runs (rt.researchRuns). Called on every state change; while any
- * row is active a 5s timer re-syncs so ELAPSED (and research tokens) tick.
- * When none are active the widget is cleared and the timer stopped.
- */
-export function syncAgentWidget(
-	rt: RuntimeContext,
-	ctx: ExtensionContext,
-): void {
-	const snap = rt.execution?.snapshot();
-	const agents = new Map([
-		...(snap?.agents ?? []),
-		...researchTableAgents(rt.researchRuns),
-	]);
-	if (!hasActiveAgents(agents)) {
-		clearAgentWidget(rt, ctx);
-		return;
-	}
-	// Mount ONCE with a render that pulls live data from rt; later syncs just
-	// request a render. Re-setting the widget per sync is what made the ask
-	// dialog blink: pi's setWidget deletes + re-appends the key (moving it to
-	// the bottom of the stack), forcing overlayManager.reassert() to re-set
-	// every overlay widget too — several consecutive frames with the dialog
-	// on different rows, on every tick AND every agent state change.
-	if (rt.agentWidgetMounted) {
-		rt.agentWidgetRefresh?.();
-	} else {
-		rt.agentWidgetMounted = true;
-		uiTrace("agents.widget.mount");
-		ctx.ui.setWidget?.(AGENT_WIDGET_KEY, (tui, theme) => {
-			rt.agentWidgetRefresh = () =>
-				(tui as { requestRender?: () => void } | undefined)?.requestRender?.();
-			return {
-				render: (width: number) => {
-					const live = rt.execution?.snapshot();
-					const liveAgents = new Map([
-						...(live?.agents ?? []),
-						...researchTableAgents(rt.researchRuns),
-					]);
-					return styleAgentTable(
-						buildAgentTable({
-							agents: liveAgents,
-							deliverables: live?.deliverables,
-							width,
-							now: Date.now(),
-						}),
-						theme,
-					);
-				},
-				invalidate: () => {},
-			};
-		});
-		// One-time ordering fix: the fresh widget landed at the bottom of the
-		// aboveEditor stack; pin the question/config overlays back below it.
-		rt.overlayManager.reassert();
-	}
-	if (rt.agentWidgetTimer === undefined) {
-		const timer = setInterval(
-			() => syncAgentWidget(rt, ctx),
-			AGENT_WIDGET_TICK_MS,
-		);
-		timer.unref?.();
-		rt.agentWidgetTimer = timer;
-	}
-}
-
-/** Clear the agent widget and stop its refresh timer. */
-export function clearAgentWidget(
-	rt: RuntimeContext,
-	ctx?: ExtensionContext,
-): void {
-	if (rt.agentWidgetTimer !== undefined) {
-		clearInterval(rt.agentWidgetTimer);
-		rt.agentWidgetTimer = undefined;
-	}
-	// No-op when nothing is mounted: syncAgentWidget calls this on EVERY
-	// agent event while the fleet is quiet, and an unguarded setWidget forces
-	// pi to rebuild the whole widget container (ask dialog included) each time.
-	if (!rt.agentWidgetMounted) return;
-	rt.agentWidgetMounted = false;
-	rt.agentWidgetRefresh = undefined;
-	uiTrace("agents.widget.clear");
-	ctx?.ui.setWidget?.(AGENT_WIDGET_KEY, undefined);
 }
 
 /**

@@ -78,22 +78,6 @@ export class OverlayManager {
 	}
 
 	/**
-	 * Re-assert every mounted overlay's widget in focus order. The host renders
-	 * `aboveEditor` widgets in Map-insertion order and a re-set moves a key to
-	 * the end, so an unrelated widget mounting (e.g. the agents table) would
-	 * otherwise land below the overlays. Calling this after such a mount pins
-	 * the overlays back below it in a stable order. Cheap and RARE (once per
-	 * agent-table mount): it re-sets the SAME wrapper instances, so no UI state
-	 * is lost.
-	 */
-	reassert(): void {
-		uiTrace("overlay.reassert");
-		for (const id of this.focusOrder) {
-			if (this.overlays.get(id)?.mounted) this.setWidget(id);
-		}
-	}
-
-	/**
 	 * Register an overlay component. First mount sets the widget; a re-mount
 	 * of the same id swaps the component into the existing wrapper WITHOUT
 	 * touching the widget stack, preserving focus/expansion — a rebuild must

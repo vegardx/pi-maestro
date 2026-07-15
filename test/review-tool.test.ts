@@ -328,30 +328,130 @@ describe("review tool — verification", () => {
 });
 
 describe("review tool — repair and rehydration", () => {
-	it("a failed reviewer is re-run targeted, then repairable, never the whole panel", async () => {
+	it("a failed reviewer stays failed (ONE attempt), repair re-runs just it", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: {
-				// Fails twice (initial + inline re-run), then succeeds on repair.
-				"security-audit": [
-					{ status: "failed", error: "spawn error" },
-					{ status: "failed", error: "spawn error" },
-					pass(),
-				],
+				// Fails once — the panel round runs each reviewer exactly once
+				// (no inline re-run); the explicit repair then succeeds.
+				"security-audit": [{ status: "failed", error: "spawn error" }, pass()],
 				simplification: [pass()],
 			},
 		});
-		const tool = makeTool(capability, [SEC, SIMP]);
+		const reports: Reported[] = [];
+		const tool = makeTool(capability, [SEC, SIMP], { reports });
 		const first = await run(tool);
 		expect(first.details.gate).toBe(false);
 		expect(first.content[0].text).toContain('review({action: "repair"})');
-		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(2);
+		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		expect(spawns.filter((s) => s === "simplification")).toHaveLength(1);
+		const failedParticipant = reports[0].ledger.participants?.find(
+			(p) => p.name === "security-audit",
+		);
+		expect(failedParticipant).toMatchObject({
+			ok: false,
+			status: "failed",
+			attempt: 1,
+		});
+		expect(failedParticipant?.error).toContain("spawn error");
 
 		const repaired = await run(tool, { action: "repair" });
 		expect(repaired.details.gate).toBe(true);
-		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(3);
+		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(2);
 		// simplification was fine — repair never touched it.
 		expect(spawns.filter((s) => s === "simplification")).toHaveLength(1);
+		const repairedParticipant = reports
+			.at(-1)
+			?.ledger.participants?.find((p) => p.name === "security-audit");
+		expect(repairedParticipant).toMatchObject({
+			ok: true,
+			status: "approve",
+			attempt: 2,
+		});
+		expect(repairedParticipant?.runId).toBeDefined();
+	});
+
+	it("a repair that fails again runs its reviewer exactly once more, no cascade", async () => {
+		const { capability, spawns } = fakeSubagents({
+			personas: {
+				"security-audit": [
+					{ status: "failed", error: "spawn error" },
+					{ status: "failed", error: "still down" },
+				],
+			},
+		});
+		const reports: Reported[] = [];
+		const tool = makeTool(capability, [SEC], { reports });
+		await run(tool);
+		const res = await run(tool, { action: "repair" });
+		expect(res.details.gate).toBe(false);
+		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(2);
+		expect(
+			reports
+				.at(-1)
+				?.ledger.participants?.find((p) => p.name === "security-audit"),
+		).toMatchObject({ ok: false, status: "failed", attempt: 2 });
+	});
+
+	it("a timed-out reviewer is terminal for the round and holds the gate", async () => {
+		const { capability, spawns } = fakeSubagents({
+			personas: {
+				"security-audit": [
+					{ status: "timed-out", error: "hard cap: still running after 480s" },
+				],
+			},
+		});
+		const reports: Reported[] = [];
+		const tool = makeTool(capability, [SEC], { reports });
+		const res = await run(tool);
+		expect(res.details.gate).toBe(false);
+		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
+		expect(
+			reports[0].ledger.participants?.find((p) => p.name === "security-audit"),
+		).toMatchObject({ ok: false, status: "timed-out", attempt: 1 });
+	});
+
+	it("successful reviewers' findings survive another reviewer's failure and its repair", async () => {
+		const { capability } = fakeSubagents({
+			personas: {
+				"security-audit": [blockWithMajor("injection in a.ts")],
+				simplification: [{ status: "failed", error: "gateway down" }, pass()],
+			},
+		});
+		const reports: Reported[] = [];
+		const tool = makeTool(capability, [SEC, SIMP], { reports });
+		await run(tool);
+		expect(reports[0].ledger.entries.map((e) => e.finding.id)).toEqual([
+			"security-audit.1",
+		]);
+		await run(tool, { action: "repair" });
+		const merged = reports.at(-1)?.ledger;
+		// The earlier actionable finding is still on the books after repair.
+		expect(merged?.entries.map((e) => e.finding.id)).toEqual([
+			"security-audit.1",
+		]);
+		expect(merged?.participants?.map((p) => [p.name, p.ok, p.attempt])).toEqual(
+			[
+				["security-audit", true, 1],
+				["simplification", true, 2],
+			],
+		);
+	});
+
+	it("a failed verifier is reported back, never implicitly re-spawned", async () => {
+		const { capability, spawns } = fakeSubagents({
+			personas: { "security-audit": [blockWithMajor("flaw")] },
+			verifier: [{ status: "failed", error: "gateway down" }],
+		});
+		const tool = makeTool(capability, [SEC]);
+		await run(tool);
+		const res = await run(tool, {
+			resolutions: [
+				{ id: "security-audit.1", status: "fixed", note: "commit" },
+			],
+		});
+		expect(res.details.gate).toBe(false);
+		expect(res.content[0].text).toContain("Verifier failed");
+		expect(spawns.filter((s) => s === "verifier")).toHaveLength(1);
 	});
 
 	it("rehydrates a persisted ledger — resolutions work without re-running the panel", async () => {

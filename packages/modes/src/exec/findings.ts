@@ -188,9 +188,22 @@ export interface ReviewLedger {
 	 * Panel reviewers that ran this episode and whether they reported. The
 	 * gate needs this independently of the in-memory verdict cache: a
 	 * required reviewer that never reported must hold ship even after a
-	 * maestro restart rehydrates from the plan.
+	 * maestro restart rehydrates from the plan. `ok` is the gate bit
+	 * (reported validly); status/attempt/error carry the audit trail —
+	 * status is the latest run's terminal outcome (approve/request-changes/
+	 * failed/interrupted/timed-out/malformed), attempt counts runs this
+	 * episode (explicit repair increments it), error is the first line of
+	 * the failure diagnostic.
 	 */
-	participants?: Array<{ name: string; ok: boolean }>;
+	participants?: Array<{
+		name: string;
+		ok: boolean;
+		status?: string;
+		attempt?: number;
+		/** The subagent run behind the latest attempt (audit/debug linkage). */
+		runId?: string;
+		error?: string;
+	}>;
 	updatedAt: string;
 }
 

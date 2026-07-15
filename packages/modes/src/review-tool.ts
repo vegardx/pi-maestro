@@ -216,7 +216,12 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		waived: ReadonlySet<string>,
 		ctx: ExtensionContext,
 	): Promise<Result> {
-		const firstPass = await runReviewPanel(panel, {
+		// Each reviewer runs exactly once. No inline rerun of failures here —
+		// that layer stacked on the panel's own (since removed) retry to run one
+		// reviewer up to four times per "single" round. Failed reviewers stay
+		// failed in the returned partial panel; only an explicit
+		// review({action:"repair"}) retries them, once.
+		const results = await runReviewPanel(panel, {
 			subagents,
 			cwd: d.cwd(),
 			resolveModel: d.resolveModel
@@ -224,10 +229,6 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 				: undefined,
 			timeoutMs: d.timeoutMs?.(),
 		});
-		// Partial-round repair, inline: a failed reviewer must not force the
-		// worker to re-run the WHOLE panel (that would reopen open-scope
-		// re-review through the back door). One targeted re-run, then report.
-		const results = await rerunFailed(d, subagents, panel, firstPass, ctx);
 
 		const ledger: ReviewLedger = {
 			...buildLedger(
@@ -238,7 +239,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			),
 			participants: results
 				.filter((r) => r.kind === "review")
-				.map((r) => ({ name: r.name, ok: r.ok })),
+				.map((r) => participant(r, 1)),
 		};
 		episode = { ledger, lastResults: results };
 		d.report?.("panel", results, ledger);
@@ -262,6 +263,12 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		if (failedSpecs.length === 0) {
 			return text("Nothing to repair — every reviewer reported.");
 		}
+		// One new attempt per selected reviewer; successful reviewers are never
+		// re-run, and their earlier findings stay in the ledger — the repaired
+		// results merge in by reviewer identity.
+		const prevAttempt = new Map(
+			(episode.ledger.participants ?? []).map((p) => [p.name, p.attempt ?? 1]),
+		);
 		const repaired = await runReviewPanel(failedSpecs, {
 			subagents,
 			cwd: d.cwd(),
@@ -274,6 +281,10 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			...episode.lastResults.filter((r) => okNames.has(r.name)),
 			...repaired,
 		];
+		const attemptOf = (r: PanelResult) =>
+			okNames.has(r.name)
+				? (prevAttempt.get(r.name) ?? 1)
+				: (prevAttempt.get(r.name) ?? 1) + 1;
 		const ledger: ReviewLedger = {
 			...episode.ledger,
 			entries: [
@@ -287,7 +298,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			],
 			participants: merged
 				.filter((r) => r.kind === "review")
-				.map((r) => ({ name: r.name, ok: r.ok })),
+				.map((r) => participant(r, attemptOf(r))),
 			updatedAt: now(),
 		};
 		episode = { ledger, lastResults: merged };
@@ -358,15 +369,14 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		const prompt = buildVerifierPrompt(claims.map((e) => e));
 		const timeoutMs = d.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
 
-		let run = await settleRun(subagents.spawn(prompt, profile), timeoutMs);
-		let report = run.summary?.trim() ?? "";
-		if (run.status === "succeeded" && !report) {
-			run = await settleRun(subagents.spawn(prompt, profile), timeoutMs);
-			report = run.summary?.trim() ?? "";
-		}
+		// One attempt — a failed/empty verifier is reported back to the worker,
+		// which re-invokes verify explicitly. No implicit re-spawn layers.
+		const run = await settleRun(subagents.spawn(prompt, profile), timeoutMs);
+		const report = run.summary?.trim() ?? "";
 		if (run.status !== "succeeded" || !report) {
 			return text(
 				`Verifier ${run.status}: ${run.error ?? "no report"} — fix nothing, just run review({action: "verify", resolutions: [...]}) again.`,
+				false,
 			);
 		}
 		const parsed = parseVerifierReport(report, claims);
@@ -417,7 +427,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		const sections = [head];
 		if (failed.length > 0) {
 			sections.push(
-				`Reviewers that failed to report: ${failed.map((r) => r.name).join(", ")} — run review({action: "repair"}) to re-run just them.`,
+				`Reviewers that failed to report: ${failed.map((r) => `${r.name} (${r.status})`).join(", ")} — run review({action: "repair"}) to re-run just them.`,
 			);
 		}
 		sections.push(
@@ -537,25 +547,17 @@ async function settleRun(
 	}
 }
 
-/** Re-run reviewers that failed (spawn error / no report) once, targeted. */
-async function rerunFailed(
-	d: ReviewToolDeps,
-	subagents: SubagentsCapabilityV1,
-	panel: readonly SubAgentSpec[],
-	results: readonly PanelResult[],
-	ctx: ExtensionContext,
-): Promise<readonly PanelResult[]> {
-	const failedNames = new Set(results.filter((r) => !r.ok).map((r) => r.name));
-	if (failedNames.size === 0) return results;
-	const failedSpecs = panel.filter((s) => failedNames.has(s.name));
-	const repaired = await runReviewPanel(failedSpecs, {
-		subagents,
-		cwd: d.cwd(),
-		resolveModel: d.resolveModel
-			? (spec) => d.resolveModel!(ctx, spec)
-			: undefined,
-		timeoutMs: d.timeoutMs?.(),
-	});
-	const byName = new Map(repaired.map((r) => [r.name, r]));
-	return results.map((r) => byName.get(r.name) ?? r);
+/** Persisted participant state for one reviewer's latest attempt. */
+function participant(
+	r: PanelResult,
+	attempt: number,
+): NonNullable<ReviewLedger["participants"]>[number] {
+	return {
+		name: r.name,
+		ok: r.ok,
+		status: r.status,
+		attempt,
+		...(r.runId ? { runId: r.runId } : {}),
+		...(r.ok ? {} : { error: r.report.split("\n")[0] }),
+	};
 }

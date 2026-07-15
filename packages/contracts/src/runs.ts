@@ -9,20 +9,29 @@ import type { ModeName } from "./modes.js";
 
 export const RUN_STATUSES = [
 	"queued",
+	"starting",
 	"running",
 	"blocked",
+	"interrupting",
 	"succeeded",
 	"failed",
 	"stopped",
 	"canceled",
+	"timed-out",
 ] as const;
 
 export type RunStatus = (typeof RUN_STATUSES)[number];
 
-/** Statuses a run can settle in. */
+/**
+ * Statuses a run can settle in. Monotonic lifecycle:
+ * queued → starting → running (⇄ blocked) → [interrupting] → terminal.
+ * `stopped` is an explicit interrupt (terminal — NEVER auto-retried);
+ * `timed-out` is a deadline kill (startup, RPC, stall, or hard cap — also
+ * terminal, also never auto-retried); `canceled` never started.
+ */
 export type TerminalRunStatus = Extract<
 	RunStatus,
-	"succeeded" | "failed" | "stopped" | "canceled"
+	"succeeded" | "failed" | "stopped" | "canceled" | "timed-out"
 >;
 
 export type ThinkingLevel =

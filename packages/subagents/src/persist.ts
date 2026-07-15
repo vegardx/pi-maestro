@@ -28,7 +28,13 @@ export function persistRunBus(bus: RunBus, store: RunStore): () => void {
 			}
 			case "status":
 				if (store.readRecord(message.runId)) {
-					store.setStatus(message.runId, message.status, message.at);
+					try {
+						store.setStatus(message.runId, message.status, message.at);
+					} catch {
+						// A status arriving after the run settled (e.g. an interrupt
+						// losing the race to a natural finish) is a no-op, not a
+						// crash — terminal states never regress.
+					}
 				}
 				break;
 			case "result":

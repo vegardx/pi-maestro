@@ -640,6 +640,10 @@ describe("RpcClient-backed runner", () => {
 		emit?: { type: string; toolName?: string; message?: unknown }[];
 		startError?: string;
 		hang?: boolean;
+		/** start() never resolves — a child wedged during transport startup. */
+		startHang?: boolean;
+		/** prompt() never acks — a wedged RPC request. */
+		promptHang?: boolean;
 		/** Simulate the child process dying (RpcClient sets exitError on exit). */
 		exitError?: Error;
 		captureEnv?: (env: Record<string, string> | undefined) => void;
@@ -661,11 +665,13 @@ describe("RpcClient-backed runner", () => {
 				return aborted;
 			},
 			start: async () => {
+				if (opts.startHang) return new Promise<void>(() => {});
 				if (opts.startError) throw new Error(opts.startError);
 			},
 			// The runner owns the idle wait now (agent_end event); the fake emits
 			// its scripted events on prompt and ends the run unless told to hang.
 			prompt: async () => {
+				if (opts.promptHang) return new Promise<void>(() => {});
 				queueMicrotask(() => {
 					for (const e of opts.emit ?? []) emit(e);
 					if (!opts.hang && !opts.exitError) emit({ type: "agent_end" });
@@ -816,11 +822,13 @@ describe("RpcClient-backed runner", () => {
 	it("applies the runner timeout as the single owner when configured", async () => {
 		const { factory } = fakeClient({ hang: true });
 		const result = await launch(factory, { timeoutMs: 15 }).result();
-		expect(result.status).toBe("failed");
-		expect(result.error).toContain("run timed out");
+		// A deadline kill settles timed-out — terminal, distinct from failed,
+		// and never retried by any layer.
+		expect(result.status).toBe("timed-out");
+		expect(result.error).toContain("run deadline exceeded");
 	});
 
-	it("watchdog: stalls (event silence) stop the run and salvage partial text", async () => {
+	it("watchdog: stalls (event silence) time out the run and salvage partial text", async () => {
 		// hang emits no events, so activity stays at spawn time → stall fires.
 		const { factory } = fakeClient({ hang: true, text: "half an answer" });
 		const result = await launch(
@@ -828,12 +836,12 @@ describe("RpcClient-backed runner", () => {
 			{},
 			{ watchdog: { stallMs: 20 } },
 		).result();
-		expect(result.status).toBe("stopped");
+		expect(result.status).toBe("timed-out");
 		expect(result.error).toContain("stalled");
 		expect(result.summary).toBe("half an answer");
 	});
 
-	it("watchdog: steers at the soft deadline, hard cap stops with salvage", async () => {
+	it("watchdog: steers at the soft deadline, hard cap times out with salvage", async () => {
 		const { client, factory } = fakeClient({ hang: true, text: "loops" });
 		const result = await launch(
 			factory,
@@ -847,7 +855,7 @@ describe("RpcClient-backed runner", () => {
 			},
 		).result();
 		expect(client.steers).toEqual(["wrap it up"]);
-		expect(result.status).toBe("stopped");
+		expect(result.status).toBe("timed-out");
 		expect(result.error).toContain("hard cap");
 		expect(result.summary).toBe("loops");
 	});
@@ -872,6 +880,79 @@ describe("RpcClient-backed runner", () => {
 		const result = await ctrl.result();
 		expect(result.status).toBe("stopped");
 		expect(client.aborted).toBe(true);
+	});
+
+	it("a wedged transport startup times out — protection exists before start()", async () => {
+		const { factory } = fakeClient({ startHang: true });
+		const result = await launch(factory, { startupTimeoutMs: 15 }).result();
+		expect(result.status).toBe("timed-out");
+		expect(result.error).toContain("startup deadline exceeded");
+	});
+
+	it("a prompt that never acks times out — protection exists before the first prompt", async () => {
+		const { factory } = fakeClient({ promptHang: true });
+		const result = await launch(factory, { rpcTimeoutMs: 15 }).result();
+		expect(result.status).toBe("timed-out");
+		expect(result.error).toContain("prompt request deadline exceeded");
+	});
+
+	it("the watchdog is armed before startup and the initial prompt", async () => {
+		// No runner-level timeout at all: the per-run watchdog alone must bound
+		// a child that wedges before ever answering the prompt. Before the fix,
+		// start()/prompt() were awaited outside the watchdog race and this hung
+		// forever.
+		const { factory } = fakeClient({ promptHang: true, text: "partial" });
+		const result = await launch(
+			factory,
+			{ rpcTimeoutMs: 60_000 }, // RPC deadline slack — the watchdog must win
+			{ watchdog: { stallMs: 20 } },
+		).result();
+		expect(result.status).toBe("timed-out");
+		expect(result.error).toContain("stalled");
+	});
+
+	it("publishes the monotonic status lifecycle: starting → running → terminal", async () => {
+		const statuses: string[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "status") statuses.push(m.status);
+		});
+		const { factory } = fakeClient({ text: "ok" });
+		const result = await launch(factory).result();
+		expect(result.status).toBe("succeeded");
+		expect(statuses).toEqual(["starting", "running", "succeeded"]);
+		expect(store.readRecord("run-1" as RunId)?.status).toBe("succeeded");
+	});
+
+	it("interrupt publishes interrupting once and settles once; stop after settle is a no-op", async () => {
+		const statuses: string[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "status") statuses.push(m.status);
+		});
+		const { factory } = fakeClient({ hang: true });
+		const ctrl = launch(factory);
+		await new Promise((r) => setTimeout(r, 5));
+		ctrl.stop();
+		ctrl.stop(); // double interrupt — must not publish twice
+		const result = await ctrl.result();
+		expect(result.status).toBe("stopped");
+		expect(statuses.filter((s) => s === "interrupting")).toHaveLength(1);
+		const settledStatuses = statuses.length;
+		ctrl.stop(); // after settlement — no status traffic, no throw
+		expect(statuses.length).toBe(settledStatuses);
+		expect(store.readRecord("run-1" as RunId)?.status).toBe("stopped");
+	});
+
+	it("a status arriving after settlement never corrupts the terminal record", async () => {
+		const { factory } = fakeClient({ text: "ok" });
+		await launch(factory).result();
+		// e.g. an interrupt racing a natural finish — persisted store must hold.
+		bus.publish({
+			type: "status",
+			runId: "run-1" as RunId,
+			status: "interrupting",
+			at: Date.now(),
+		});
+		expect(store.readRecord("run-1" as RunId)?.status).toBe("succeeded");
 	});
 
 	it("fires onSettled for background completion notification", async () => {

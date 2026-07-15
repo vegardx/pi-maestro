@@ -1,28 +1,32 @@
-// The maestro HUD: one borderless component in the overlay manager's
-// "agents" slot, always mounted while a maestro session is active. Three
-// tabs — Agents / Plan / Questions — rendered from a HudSnapshot the wiring
-// pulls live (runtime/hud-wiring.ts); this module is pure presentation +
-// input state so tests snapshot fixed-width string arrays.
+// The maestro HUD panel: a widget mounted directly above the editor that
+// expands ABOVE the tab bar (the tab bar itself lives in MaestroEditor's top
+// border — runtime/maestro-editor.ts). Three tabs — Agents / Plan /
+// Questions — rendered from a HudSnapshot the wiring pulls live
+// (runtime/hud-wiring.ts); this module is pure presentation + input state so
+// tests snapshot fixed-width string arrays.
 //
-// Layout (self-capped at 10 lines — pi slices widgets at MAX_WIDGET_LINES):
-//   line 1     tab rule:  ──[ Agents 4 ]─── Plan 2/5 ─── Questions 1 ── tab ──
+// Focus/expansion live in a shared HudFocusState (single source of truth,
+// owned by hud-wiring, mutated by the editor):
+//   collapsed  (expanded=false)          → render [] — zero extra lines
+//   focused    (focus is a panel tab)    → bright rows + hint row
+//   pinned     (expanded, focus="input") → passive monitor: every line muted,
+//                                          no selection, no hint
+//
+// Layout when expanded (self-capped at 10 lines — pi slices widgets at
+// MAX_WIDGET_LINES):
+//   line 1     plain cap rule: ──────────────────────────── (panel top)
 //   lines 2..  content rows for the active tab (scrolls with selection)
-//   last line  overflow rule — ONLY when rows scroll (pi's editor draws its
-//              own top border, so an unconditional separator doubles it)
-// Idle (no agents, no active deliverable, no questions) collapses to ONE
-// summary line — unless the HUD is focused, which always shows the full tab
-// view (Tab must land somewhere visible). When focused the last content row
-// is replaced by an action-hint row.
+//   hint row   ONLY while a panel tab is focused
+//   last line  overflow rule with ↑/↓ counts — ONLY when rows scroll
 //
 // Key scheme while focused (documented in the hint row): up/down move the
-// selection, [ and ] switch tabs, left/right/space fold/unfold the selected
-// row, Enter is the context action (Agents: attach, Plan: expand/collapse,
-// Questions: answer), s steers and i interrupts on agent rows, Esc returns
-// to the input (handled by the OverlayManager).
+// selection, tab (and [ / ]) switch tabs, left/right/space fold/unfold the
+// selected row, Enter is the context action (Agents: attach, Plan:
+// expand/collapse, Questions: answer), s steers and i interrupts on agent
+// rows, Esc collapses back to the input (handled by MaestroEditor).
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { OverlayComponent } from "../overlay-manager.js";
 
 export type HudTab = "agents" | "plan" | "questions";
 
@@ -91,7 +95,7 @@ export interface HudQuestionRow {
 
 export interface HudPlanView {
 	readonly rows: readonly HudPlanRow[];
-	/** shipped+complete count for the tab label / idle line. */
+	/** shipped+complete count for the tab-bar label. */
 	readonly done: number;
 	readonly total: number;
 }
@@ -110,6 +114,8 @@ export interface HudActions {
 }
 
 export interface HudDeps {
+	/** Shared focus/expansion state (owned by hud-wiring). */
+	readonly state: HudFocusState;
 	readonly data: () => HudSnapshot;
 	readonly actions: HudActions;
 	/** Theme accessor; absent (tests) renders plain text. */
@@ -119,7 +125,7 @@ export interface HudDeps {
 
 /** pi hard-caps widgets at 10 lines (MAX_WIDGET_LINES); we self-limit. */
 const MAX_LINES = 10;
-/** Rows available after the tab rule; hint and overflow rule subtract more. */
+/** Rows available after the cap rule; hint and overflow rule subtract more. */
 const MAX_CONTENT_ROWS = MAX_LINES - 1;
 const INDENT = "  ";
 
@@ -157,10 +163,7 @@ interface HudRow {
 	readonly foldExpanded?: boolean;
 }
 
-export class HudComponent implements OverlayComponent {
-	focused = false;
-	expanded = false;
-
+export class HudComponent {
 	#tab: HudTab = "agents";
 	#selected = 0;
 	#scroll = 0;
@@ -172,6 +175,16 @@ export class HudComponent implements OverlayComponent {
 
 	get activeTab(): HudTab {
 		return this.#tab;
+	}
+
+	/** Whether a panel tab (not the input) owns keystrokes. */
+	get #focused(): boolean {
+		return this.deps.state.focus !== "input";
+	}
+
+	/** Expanded as a passive monitor while the input keeps the keys. */
+	get #passive(): boolean {
+		return this.deps.state.expanded && this.deps.state.focus === "input";
 	}
 
 	setTab(tab: HudTab): void {
@@ -192,6 +205,8 @@ export class HudComponent implements OverlayComponent {
 					? TABS[(at + 1) % TABS.length]
 					: TABS[(at + TABS.length - 1) % TABS.length];
 			this.setTab(next);
+			// Keep the shared focus in step so the tab-bar bracket follows.
+			if (this.deps.state.focus !== "input") this.deps.state.focus = next;
 			return;
 		}
 		const rows = this.#contentRows(this.deps.data());
@@ -239,10 +254,13 @@ export class HudComponent implements OverlayComponent {
 
 	render(width: number): string[] {
 		if (width <= 0) return [];
+		// Collapsed: the panel contributes zero lines — the tab bar (in the
+		// editor's top border) carries the counts.
+		if (!this.deps.state.expanded) return [];
 		const snap = this.deps.data();
 		this.#pruneFolds(snap);
 		const plain = this.#buildPlain(snap, width);
-		const sig = `${this.#tab}|${this.focused}|${this.#selected}|${plain.sig}`;
+		const sig = `${this.#tab}|${this.#focused}|${this.#passive}|${this.#selected}|${plain.sig}`;
 		if (this.#cache && this.#cache.width === width && this.#cache.sig === sig) {
 			return this.#cache.lines;
 		}
@@ -261,14 +279,6 @@ export class HudComponent implements OverlayComponent {
 		for (const key of [...this.#folds.keys()]) {
 			if (!live.has(key)) this.#folds.delete(key);
 		}
-	}
-
-	#idle(snap: HudSnapshot): boolean {
-		return (
-			snap.agents.length === 0 &&
-			snap.questions.length === 0 &&
-			!snap.plan?.rows.some((row) => row.state === "active")
-		);
 	}
 
 	#contentRows(snap: HudSnapshot): HudRow[] {
@@ -389,18 +399,9 @@ export class HudComponent implements OverlayComponent {
 		width: number,
 	): { lines: PlainLine[]; sig: string } {
 		const lines: PlainLine[] = [];
-		// Focused always gets the full tab view — Tab must land somewhere
-		// visible, even when everything is idle.
-		if (this.#idle(snap) && !this.focused) {
-			const plan = snap.plan;
-			const summary = plan
-				? `${INDENT}agents idle · plan ${plan.done}/${plan.total}`
-				: `${INDENT}agents idle`;
-			lines.push({ text: truncateToWidth(summary, width), kind: "idle" });
-			return { lines, sig: lines.map((l) => l.text).join("\n") };
-		}
-
-		lines.push({ text: this.#tabRule(snap, width), kind: "tabs" });
+		// The panel's own top edge: a plain cap rule. (The tab bar below the
+		// content is the editor's border — the stratum only caps itself.)
+		lines.push({ text: "─".repeat(width), kind: "rule" });
 
 		const rows = this.#contentRows(snap);
 		const selectable = rows.filter((r) => r.key !== undefined);
@@ -408,13 +409,13 @@ export class HudComponent implements OverlayComponent {
 			this.#selected,
 			Math.max(0, selectable.length - 1),
 		);
-		const selectedKey = this.focused
+		const selectedKey = this.#focused
 			? selectable[this.#selected]?.key
 			: undefined;
 
-		// Budget: tabs always; hint when focused; the overflow rule only when
-		// rows actually scroll (pi's editor top border handles separation).
-		const base = this.focused ? MAX_CONTENT_ROWS - 1 : MAX_CONTENT_ROWS;
+		// Budget: cap rule always; hint when focused; the overflow rule only
+		// when rows actually scroll.
+		const base = this.#focused ? MAX_CONTENT_ROWS - 1 : MAX_CONTENT_ROWS;
 		const overflows = rows.length > base;
 		const maxRows = overflows ? base - 1 : base;
 		// Keep the selection inside the window.
@@ -441,7 +442,7 @@ export class HudComponent implements OverlayComponent {
 				selected: row.key !== undefined && row.key === selectedKey,
 			});
 		}
-		if (this.focused) {
+		if (this.#focused) {
 			lines.push({
 				text: truncateToWidth(`${INDENT}${this.#hint()}`, width),
 				kind: "hint",
@@ -461,35 +462,14 @@ export class HudComponent implements OverlayComponent {
 		};
 	}
 
-	#tabRule(snap: HudSnapshot, width: number): string {
-		const agentCount = countAgents(snap.agents);
-		const plan = snap.plan;
-		const blocking = snap.questions.filter((q) => q.blocking).length;
-		const labels: Record<HudTab, string> = {
-			agents: `Agents${agentCount > 0 ? ` ${agentCount}` : ""}`,
-			plan: plan ? `Plan ${plan.done}/${plan.total}` : "Plan",
-			questions: `Questions${
-				snap.questions.length > 0 ? ` ${snap.questions.length}` : ""
-			}${blocking > 0 ? ` · ${blocking} blocking` : ""}`,
-		};
-		let rule = "──";
-		for (const tab of TABS) {
-			rule += tab === this.#tab ? `[ ${labels[tab]} ]` : `─ ${labels[tab]} ─`;
-			rule += "──";
-		}
-		const hint = " tab ──";
-		const fill = Math.max(0, width - visibleWidth(rule) - visibleWidth(hint));
-		return truncateToWidth(`${rule}${"─".repeat(fill)}${hint}`, width);
-	}
-
 	#hint(): string {
 		if (this.#tab === "agents") {
-			return "↑↓ move · [ ] tab · ←→ fold · enter attach · s steer · i interrupt · esc";
+			return "tab switch · ←→ fold · enter attach · s steer · i interrupt";
 		}
 		if (this.#tab === "plan") {
-			return "↑↓ move · [ ] tab · enter expand/collapse · esc";
+			return "↑↓ move · tab switch · enter expand/collapse · esc";
 		}
-		return "↑↓ move · [ ] tab · enter answer · esc";
+		return "↑↓ move · tab switch · enter answer · esc";
 	}
 
 	// ── styling ───────────────────────────────────────────────────────────────
@@ -497,16 +477,18 @@ export class HudComponent implements OverlayComponent {
 	#style(plain: { lines: PlainLine[] }, width: number): string[] {
 		const theme = this.deps.theme?.();
 		if (!theme) return plain.lines.map((l) => l.text);
+		// Pinned/passive: the whole stratum reads as a background monitor —
+		// every line muted, tone accents suppressed, no selection band.
+		if (this.#passive) {
+			return plain.lines.map((line) =>
+				line.kind === "rule"
+					? theme.fg("dim", line.text)
+					: theme.fg("muted", line.text),
+			);
+		}
 		return plain.lines.map((line) => {
-			if (
-				line.kind === "rule" ||
-				line.kind === "idle" ||
-				line.kind === "hint"
-			) {
+			if (line.kind === "rule" || line.kind === "hint") {
 				return theme.fg("dim", line.text);
-			}
-			if (line.kind === "tabs") {
-				return styleTabRule(line.text, theme);
 			}
 			// Content row: selection is inverse-video; tone colors the text.
 			let text = line.text;
@@ -525,15 +507,9 @@ export class HudComponent implements OverlayComponent {
 
 interface PlainLine {
 	readonly text: string;
-	readonly kind: "tabs" | "row" | "hint" | "rule" | "idle";
+	readonly kind: "row" | "hint" | "rule";
 	readonly tone?: "accent" | "error" | "dim";
 	readonly selected?: boolean;
-}
-
-function countAgents(agents: readonly HudAgentNode[]): number {
-	let n = 0;
-	for (const node of agents) n += 1 + node.children.length;
-	return n;
 }
 
 function agentRight(agent: HudAgentLeaf, now: number): string {
@@ -563,21 +539,6 @@ function bottomRule(width: number, above: number, below: number): string {
 	const lead = "──";
 	const fill = Math.max(0, width - visibleWidth(lead) - visibleWidth(label));
 	return truncateToWidth(`${lead}${label}${"─".repeat(fill)}`, width);
-}
-
-/** Dim the rule dashes, bold+accent the active `[ … ]` tab label. */
-function styleTabRule(text: string, theme: Theme): string {
-	const open = text.indexOf("[");
-	const close = text.indexOf("]");
-	if (open === -1 || close === -1 || close < open) return theme.fg("dim", text);
-	const before = text.slice(0, open);
-	const active = text.slice(open, close + 1);
-	const after = text.slice(close + 1);
-	return (
-		theme.fg("dim", before) +
-		theme.bold(theme.fg("accent", active)) +
-		theme.fg("dim", after)
-	);
 }
 
 function inverse(text: string): string {

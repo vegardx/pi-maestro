@@ -1,1 +1,6 @@
+# git exports GIT_DIR (and friends) to hooks when pushing from a linked
+# worktree; child git processes in the test suite then operate on THIS repo
+# instead of their temp fixtures (vitest.setup.ts is the second line of
+# defense inside the suite itself).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 npm run check

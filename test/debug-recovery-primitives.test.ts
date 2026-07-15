@@ -387,6 +387,29 @@ describe("restart workspace validation", () => {
 		expect(result.error).toMatch(/branch feat\/one is also claimed/);
 	});
 
+	it("pins scratch workspaces to the authoritative plan directory", () => {
+		const { plan } = planWithTwoClaims();
+		const scratch = plan.deliverables[0];
+		scratch.workspace = "scratch";
+		scratch.worktreePath = "/plans/p/workspaces/one";
+		const deps = {
+			pathExists: () => true,
+			realpath: (path: string) => path,
+		};
+
+		const ok = validateRestartWorkspace(plan, scratch, deps, "/plans/p");
+		expect(ok).toMatchObject({ ok: true, path: "/plans/p/workspaces/one" });
+
+		scratch.worktreePath = "/elsewhere/one";
+		const mismatch = validateRestartWorkspace(plan, scratch, deps, "/plans/p");
+		expect(mismatch.ok).toBe(false);
+		expect(mismatch.error).toMatch(/scratch workspace mismatch/);
+
+		const noPlanDir = validateRestartWorkspace(plan, scratch, deps);
+		expect(noPlanDir.ok).toBe(false);
+		expect(noPlanDir.error).toMatch(/authoritative plan directory/);
+	});
+
 	it("rejects repository and branch mismatches with previewable errors", () => {
 		const { plan, paths } = planWithTwoClaims();
 		const mismatch = validateRestartWorkspace(plan, plan.deliverables[0], {

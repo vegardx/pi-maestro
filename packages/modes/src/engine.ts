@@ -104,10 +104,28 @@ export interface PlanRepairInput {
 	stoppedDeliverableIds: readonly string[];
 }
 
-/** Stable semantic fingerprint. Audit timestamps are excluded from drift checks. */
+/**
+ * Stable semantic fingerprint. Repairs and debug proposals are pinned to it,
+ * so it must only drift on changes a proposer could have reasoned about:
+ * audit history, mutation timestamps, and worker session/process bookkeeping
+ * (which churns on every spawn, restart, and status persist) are excluded —
+ * otherwise a fingerprint minted at spawn is stale before the worker's first
+ * turn. Generation drift is checked separately via expectedGeneration.
+ */
 export function planFingerprint(plan: Plan): string {
 	const value = structuredClone(plan) as Plan;
 	delete value.repairAudit;
+	value.updatedAt = "";
+	for (const g of value.deliverables) {
+		delete g.sessionPath;
+		delete g.sessionName;
+		delete g.sessionGeneration;
+		delete g.previousSessionPaths;
+		delete g.restartMode;
+		delete g.restartState;
+		g.updatedAt = "";
+		for (const task of g.tasks) task.updatedAt = "";
+	}
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 

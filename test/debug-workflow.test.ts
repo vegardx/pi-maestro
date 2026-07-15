@@ -280,6 +280,53 @@ describe("debug diagnosis and recovery", () => {
 		).toBe(false);
 	});
 
+	it("accepts proposals pinned before session bookkeeping and timestamp churn", () => {
+		const { engine, execution } = fixture();
+		const pinned = planFingerprint(engine.get());
+		// The spawn path persists session facts AFTER the env fingerprint is
+		// minted — bookkeeping churn must not reject the worker's proposals.
+		engine.updateWorkerSession("worker", {
+			sessionName: "tmux-respawned",
+			sessionPath: "/home/test/respawned.jsonl",
+			restartState: "running",
+		});
+		const result = validateWorkerDebugProposal({
+			message: {
+				type: "debugProposal",
+				id: "rpc",
+				proposalId: "p2",
+				agentId: "worker/worker",
+				generation: 3,
+				planFingerprint: pinned,
+				observed: [],
+				likelyCause: "x",
+			},
+			authenticatedAgentId: "worker/worker",
+			engine,
+			execution: execution as never,
+		});
+		expect(result.ok).toBe(true);
+		// Semantic drift still rejects: the plan the proposal reasoned about is gone.
+		engine.addWorkItem("worker", { title: "New scope" });
+		expect(
+			validateWorkerDebugProposal({
+				message: {
+					type: "debugProposal",
+					id: "rpc2",
+					proposalId: "p3",
+					agentId: "worker/worker",
+					generation: 3,
+					planFingerprint: pinned,
+					observed: [],
+					likelyCause: "x",
+				},
+				authenticatedAgentId: "worker/worker",
+				engine,
+				execution: execution as never,
+			}).ok,
+		).toBe(false);
+	});
+
 	it("persists redacted review state across rehydration without repeating recovery", () => {
 		const { engine, execution } = fixture();
 		const dir = mkdtempSync(join(tmpdir(), "debug-review-rehydrate-"));

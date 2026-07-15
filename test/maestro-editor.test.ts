@@ -346,3 +346,19 @@ describe("answer-mode round-trip", () => {
 		expect(current).toBe(maestroFactory);
 	});
 });
+
+describe("MaestroEditor control chords", () => {
+	it("Ctrl+C / Ctrl+D bypass a focused panel and reach the app", () => {
+		const { e, state, panel } = editor();
+		state.focus = "agents";
+		state.expanded = true;
+		const superInput = vi.spyOn(CustomEditor.prototype, "handleInput");
+		e.handleInput("\u0003");
+		e.handleInput("\u0004");
+		expect(superInput).toHaveBeenCalledTimes(2);
+		expect(panel.handleInput).not.toHaveBeenCalled();
+		// The chord is not a focus change — the panel stays focused.
+		expect(state.focus).toBe("agents");
+		superInput.mockRestore();
+	});
+});

@@ -200,6 +200,12 @@ export class MaestroEditor extends CustomEditor {
 				requestRender();
 				return;
 			}
+			// Control chords (Ctrl+C interrupt, Ctrl+D exit) must always
+			// reach the app — a focused panel must never trap them.
+			if (data === "\u0003" || data === "\u0004") {
+				super.handleInput(data);
+				return;
+			}
 			// Panel owns every other key while focused — nothing may leak
 			// into the text editor.
 			panel.handleInput(data);

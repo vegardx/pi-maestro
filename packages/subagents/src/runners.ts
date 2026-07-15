@@ -65,7 +65,7 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 20_000;
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 
 /** A deadline kill — settles the run `timed-out`, distinct from `failed`. */
-class DeadlineError extends Error {
+export class DeadlineError extends Error {
 	constructor(boundary: string, ms: number) {
 		super(`${boundary} deadline exceeded (${Math.round(ms / 1000)}s)`);
 		this.name = "DeadlineError";

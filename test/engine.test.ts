@@ -1,13 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { PlanEngine, planFingerprint } from "../packages/modes/src/engine.js";
 import {
-	PlanEngine,
-	planFingerprint,
-} from "../packages/modes/src/engine.js";
-import {
+	type Plan,
 	validatePlanShape,
 	workerRestartState,
 	workerSessionGeneration,
-	type Plan,
 } from "../packages/modes/src/schema.js";
 
 import type { PlanStore } from "../packages/modes/src/storage.js";

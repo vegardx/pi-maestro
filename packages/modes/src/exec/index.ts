@@ -91,6 +91,19 @@ export interface ExecutionHandle {
 	 * worker's own session when possible. False when nothing to send back to.
 	 */
 	sendBackToWorker(deliverableId: string, kickoff: string): Promise<boolean>;
+	/** Preview read-only validation for explicit worker replacement. */
+	previewWorkerRestart?(
+		deliverableId: string,
+		mode: "resume" | "fresh",
+	): import("./execution-adapter.js").WorkerRestartPreview;
+	/** Replace the worker process while retaining its current JSONL. */
+	restartWorkerResume?(
+		deliverableId: string,
+	): Promise<import("./execution-adapter.js").WorkerRestartResult>;
+	/** Replace worker process and JSONL while preserving the validated workspace. */
+	restartWorkerFresh?(
+		deliverableId: string,
+	): Promise<import("./execution-adapter.js").WorkerRestartResult>;
 	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;

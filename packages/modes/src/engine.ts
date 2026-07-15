@@ -8,6 +8,7 @@ import type { ReviewLedger } from "./exec/findings.js";
 import {
 	type AgentMode,
 	type AgentSpec,
+	boundedPreviousSessionPaths,
 	canTransition,
 	DEFAULT_REPO_KEY,
 	type Deliverable,
@@ -24,7 +25,6 @@ import {
 	validatePlanShape,
 	type WorkerRestartMode,
 	type WorkerRestartState,
-	boundedPreviousSessionPaths,
 	type WorkItem,
 	type WorkItemKind,
 } from "./schema.js";
@@ -551,9 +551,13 @@ export class PlanEngine {
 	 * Apply the complete, narrow debug repair to one clone/save. The operation
 	 * vocabulary cannot express topology, lifecycle, review, or runtime edits.
 	 */
-	applyTaskRepair(input: PlanRepairInput): { fingerprint: string; auditId: string } {
+	applyTaskRepair(input: PlanRepairInput): {
+		fingerprint: string;
+		auditId: string;
+	} {
 		if (!input.reason.trim()) throw new Error("repair reason required");
-		if (input.operations.length === 0) throw new Error("repair has no operations");
+		if (input.operations.length === 0)
+			throw new Error("repair has no operations");
 		const actual = planFingerprint(this.plan);
 		if (actual !== input.baseFingerprint) {
 			throw new Error(
@@ -596,8 +600,7 @@ export class PlanEngine {
 							title: op.task.title,
 							body: op.task.body ?? "",
 							done: false,
-							kind:
-								op.type === "addManualCheckpoint" ? "manual" : "followup",
+							kind: op.type === "addManualCheckpoint" ? "manual" : "followup",
 							createdAt: ts,
 							updatedAt: ts,
 						});

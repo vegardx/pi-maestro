@@ -691,7 +691,9 @@ export function workerRestartState(
 	return deliverable.restartState ?? "idle";
 }
 
-export function boundedPreviousSessionPaths(paths: readonly string[]): string[] {
+export function boundedPreviousSessionPaths(
+	paths: readonly string[],
+): string[] {
 	return [...new Set(paths.filter((path) => path.trim().length > 0))].slice(
 		-MAX_PREVIOUS_WORKER_SESSIONS,
 	);
@@ -757,10 +759,7 @@ export function validatePlanShape(
 				`deliverable \`${g.id}\`: previousSessionPaths exceeds ${MAX_PREVIOUS_WORKER_SESSIONS}`,
 			);
 		}
-		if (
-			g.sessionPath &&
-			g.previousSessionPaths?.includes(g.sessionPath)
-		) {
+		if (g.sessionPath && g.previousSessionPaths?.includes(g.sessionPath)) {
 			problems.push(
 				`deliverable \`${g.id}\`: current sessionPath cannot also be historical`,
 			);

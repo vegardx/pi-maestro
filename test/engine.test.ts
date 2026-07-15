@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import type { Plan } from "../packages/modes/src/schema.js";
+import {
+	PlanEngine,
+	planFingerprint,
+} from "../packages/modes/src/engine.js";
+import {
+	validatePlanShape,
+	workerRestartState,
+	workerSessionGeneration,
+	type Plan,
+} from "../packages/modes/src/schema.js";
 
 import type { PlanStore } from "../packages/modes/src/storage.js";
 
@@ -29,6 +37,174 @@ function memStore(): PlanStore & { last: Plan | null } {
 		},
 	};
 }
+
+describe("PlanEngine — safe recovery metadata and repair", () => {
+	function repairEngine() {
+		const store = memStore();
+		const engine = PlanEngine.create(
+			store,
+			{ slug: "repair", title: "Repair", repoPath: "/tmp/repo" },
+			() => "2026-01-01T00:00:00.000Z",
+		);
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "Implement auth" });
+		return { engine, store };
+	}
+
+	it("hydrates absent restart metadata with generation zero and idle state", () => {
+		const { engine } = repairEngine();
+		const deliverable = engine.get().deliverables[0];
+		expect(workerSessionGeneration(deliverable)).toBe(0);
+		expect(workerRestartState(deliverable)).toBe("idle");
+		expect(validatePlanShape(engine.get())).toEqual([]);
+	});
+
+	it("validates and bounds persisted worker session history", () => {
+		const { engine } = repairEngine();
+		engine.updateWorkerSession("auth", {
+			sessionGeneration: 2,
+			sessionPath: "/sessions/current.jsonl",
+			previousSessionPaths: [
+				"/sessions/0.jsonl",
+				"/sessions/1.jsonl",
+				"/sessions/2.jsonl",
+				"/sessions/3.jsonl",
+				"/sessions/4.jsonl",
+				"/sessions/5.jsonl",
+			],
+			restartMode: "fresh",
+			restartState: "running",
+		});
+		const deliverable = engine.get().deliverables[0];
+		expect(deliverable.previousSessionPaths).toEqual([
+			"/sessions/1.jsonl",
+			"/sessions/2.jsonl",
+			"/sessions/3.jsonl",
+			"/sessions/4.jsonl",
+			"/sessions/5.jsonl",
+		]);
+		expect(workerSessionGeneration(deliverable)).toBe(2);
+	});
+
+	it("applies a fingerprinted repair in one save and emits an audit event", () => {
+		const { engine, store } = repairEngine();
+		const base = planFingerprint(engine.get());
+		const savesBefore = store.last;
+		const result = engine.applyTaskRepair({
+			baseFingerprint: base,
+			reason: "review found missing verification",
+			stoppedDeliverableIds: ["auth"],
+			operations: [
+				{
+					type: "clarifyTask",
+					deliverableId: "auth",
+					taskId: "implement-auth",
+					body: "Include expiry validation",
+				},
+				{
+					type: "addManualCheckpoint",
+					deliverableId: "auth",
+					task: { id: "confirm-keys", title: "Confirm production keys" },
+				},
+			],
+		});
+		expect(store.last).not.toBe(savesBefore);
+		expect(engine.get().deliverables[0].tasks).toHaveLength(2);
+		expect(engine.get().deliverables[0].tasks[1].kind).toBe("manual");
+		expect(engine.get().repairAudit?.[0]).toMatchObject({
+			id: result.auditId,
+			baseFingerprint: base,
+			operations: ["clarifyTask", "addManualCheckpoint"],
+		});
+	});
+
+	it("rejects fingerprint drift and rolls the entire repair back", () => {
+		const { engine, store } = repairEngine();
+		const base = planFingerprint(engine.get());
+		engine.updateWorkItem("auth", "implement-auth", { body: "changed" });
+		const before = structuredClone(engine.get());
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: base,
+				reason: "stale proposal",
+				stoppedDeliverableIds: ["auth"],
+				operations: [
+					{
+						type: "addCorrectiveTask",
+						deliverableId: "auth",
+						task: { id: "fix", title: "Fix" },
+					},
+				],
+			}),
+		).toThrow(/fingerprint drift/);
+		expect(engine.get()).toEqual(before);
+		expect(store.last).toEqual(before);
+	});
+
+	it("rolls back earlier operations when a later operation is disallowed", () => {
+		const { engine } = repairEngine();
+		const before = structuredClone(engine.get());
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprint(engine.get()),
+				reason: "bad batch",
+				stoppedDeliverableIds: ["auth"],
+				operations: [
+					{
+						type: "addCorrectiveTask",
+						deliverableId: "auth",
+						task: { id: "new", title: "New" },
+					},
+					{
+						type: "clarifyTask",
+						deliverableId: "auth",
+						taskId: "missing",
+						body: "nope",
+					},
+				],
+			}),
+		).toThrow(/unknown task/);
+		expect(engine.get()).toEqual(before);
+	});
+
+	it("reopens completed tasks idempotently but never rewrites decisions", () => {
+		const { engine } = repairEngine();
+		engine.toggleWorkItem("auth", "implement-auth");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprint(engine.get()),
+				reason: "completion was incorrect",
+				stoppedDeliverableIds: ["auth"],
+				operations: [
+					{
+						type: "reopenTask",
+						deliverableId: "auth",
+						taskId: "implement-auth",
+					},
+				],
+			});
+		}
+		expect(engine.get().deliverables[0].tasks[0].done).toBe(false);
+	});
+
+	it("requires execution-aware stopped confirmation", () => {
+		const { engine } = repairEngine();
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprint(engine.get()),
+				reason: "unsafe",
+				stoppedDeliverableIds: [],
+				operations: [
+					{
+						type: "addCorrectiveTask",
+						deliverableId: "auth",
+						task: { id: "fix", title: "Fix" },
+					},
+				],
+			}),
+		).toThrow(/not confirmed stopped/);
+	});
+});
 
 describe("PlanEngine — deliverables", () => {
 	it("creates a plan and adds a deliverable", () => {

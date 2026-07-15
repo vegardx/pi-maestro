@@ -18,6 +18,7 @@ export const EVENTS = {
 	supervisorNeedDecision: "maestro.supervisor.needDecision",
 	planUpdated: "maestro.plan.updated",
 	shipCompleted: "maestro.ship.completed",
+	askChanged: "maestro.ask.changed",
 } as const;
 
 export type EventName = (typeof EVENTS)[keyof typeof EVENTS];
@@ -44,6 +45,11 @@ export interface EventPayloads {
 	[EVENTS.shipCompleted]: {
 		readonly deliverableId: DeliverableId;
 		readonly pr?: number;
+	};
+	/** The ask engine's pending set changed (post/raise/settle/defer). */
+	[EVENTS.askChanged]: {
+		readonly pending: number;
+		readonly blocking: number;
 	};
 }
 

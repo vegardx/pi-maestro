@@ -258,6 +258,58 @@ describe("HUD plan tab", () => {
 	});
 });
 
+describe("HUD questions tab", () => {
+	function questionsSnap(): HudSnapshot {
+		return {
+			agents: [],
+			plan: undefined,
+			questions: [
+				{
+					key: "ask:tier",
+					asker: "maestro",
+					blocking: true,
+					text: "Which tier should the workers use?",
+				},
+				{
+					key: "queue:auth/worker:q1",
+					asker: "worker · auth",
+					blocking: false,
+					text: "Keep the legacy endpoint?",
+				},
+				{
+					key: "ask:old",
+					asker: "maestro",
+					blocking: false,
+					deferred: true,
+					text: "Deferred one",
+				},
+			],
+		};
+	}
+
+	it("renders asker, blocking marker, and truncated question text", () => {
+		const c = hud(questionsSnap());
+		c.setTab("questions");
+		const lines = c.render(W);
+		expect(lines[0]).toContain("Questions 3 · 1 blocking");
+		expect(lines[1]).toContain("maestro · blocking — Which tier");
+		expect(lines[2]).toContain("worker · auth — Keep the legacy endpoint?");
+		expect(lines[3]).toContain("maestro · deferred — Deferred one");
+	});
+
+	it("enter on a question row invokes the answer action", () => {
+		const acts = actions();
+		const c = hud(questionsSnap(), acts);
+		c.setTab("questions");
+		c.focused = true;
+		c.render(W);
+		c.handleInput("\r");
+		expect(acts.answer).toHaveBeenCalledWith(
+			expect.objectContaining({ key: "ask:tier", blocking: true }),
+		);
+	});
+});
+
 describe("HUD 10-line self-cap and scrolling", () => {
 	function bigSnap(): HudSnapshot {
 		return {

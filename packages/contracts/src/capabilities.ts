@@ -56,6 +56,12 @@ export interface AskCapabilityV1 {
 	post(questions: Questionnaire): void;
 	/** Posted-but-unanswered questions, for turn-start context lines. */
 	pending(): readonly PendingAsk[];
+	/**
+	 * Open the interactive answer editor for a pending question (the HUD's
+	 * Questions tab Enter action). No-op when the id is unknown. Optional:
+	 * only the interactive engine provides it.
+	 */
+	open?(questionId: string): void;
 }
 
 /**
@@ -126,11 +132,17 @@ export interface OverlaysCapabilityV1 {
 	focusOverlay(id: string): void;
 	/** Return focus to input, collapse all. */
 	focusInput(): void;
-	/** Block input (main-agent questions). Auto-expands ask overlay. */
+	/**
+	 * @deprecated Blocking asks no longer capture input — the answer editor
+	 * takeover (ask engine) presents them instead. Kept for contract
+	 * stability; no current caller.
+	 */
 	blockInput(): void;
-	/** Unblock input. */
+	/**
+	 * @deprecated See {@link OverlaysCapabilityV1.blockInput}.
+	 */
 	unblockInput(): void;
-	/** Whether input is currently blocked. */
+	/** Whether input is currently blocked. Always false since the ask redesign. */
 	readonly isInputBlocked: boolean;
 }
 

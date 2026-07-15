@@ -3,86 +3,82 @@ import { AskEngine, createAskTool } from "@vegardx/pi-ask";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { registerCapability } from "@vegardx/pi-core";
-import type { CollapsibleQuestionnaireComponent } from "@vegardx/pi-ui";
+import type { AnswerModeOptions, openAnswerMode } from "@vegardx/pi-ui";
 import { afterEach, describe, expect, it } from "vitest";
 import { PendingSet } from "../packages/ask/src/pending.js";
 
 // A context whose ui.custom resolves to a fixed answer set — runQuestionnaire
 // just returns whatever ui.custom yields, so we never touch a real terminal.
-function fakeCtx(result: Answers | undefined, hasUI = true): ExtensionContext {
+// editorText drives the "auto-enter answer mode only when empty" rule.
+function fakeCtx(
+	result: Answers | undefined,
+	hasUI = true,
+	editorText = "",
+): ExtensionContext & { statuses: Map<string, string | undefined> } {
+	const statuses = new Map<string, string | undefined>();
 	return {
 		hasUI,
-		ui: { custom: async () => result },
-	} as unknown as ExtensionContext;
+		statuses,
+		ui: {
+			custom: async () => result,
+			getEditorText: () => editorText,
+			setStatus: (key: string, text: string | undefined) => {
+				statuses.set(key, text);
+			},
+			notify: () => {},
+		},
+	} as unknown as ExtensionContext & {
+		statuses: Map<string, string | undefined>;
+	};
 }
 
 const Q = [
 	{ id: "tier", question: "Pick a tier", options: [{ label: "fast" }] },
 ];
 
-const ESC = "";
-const ENTER = "\r";
-
-// A scriptable overlays capability: exposes the mounted ask component so
-// tests drive it with raw key input, exactly as the overlay manager would.
-function fakeOverlays() {
-	const mounted = new Map<string, CollapsibleQuestionnaireComponent>();
-	let blocked = false;
-	const overlays = {
-		mount: (id: string, c: unknown) => {
-			mounted.set(id, c as CollapsibleQuestionnaireComponent);
-		},
-		unmount: (id: string) => {
-			mounted.delete(id);
-		},
-		focusOverlay: (id: string) => {
-			const c = mounted.get(id);
-			if (c) {
-				c.focused = true;
-				c.expanded = true;
-			}
-		},
-		focusInput: () => {
-			for (const c of mounted.values()) {
-				c.focused = false;
-				c.expanded = false;
-			}
-		},
-		blockInput: () => {
-			blocked = true;
-			const c = mounted.get("ask");
-			if (c) {
-				c.focused = true;
-				c.expanded = true;
-			}
-		},
-		unblockInput: () => {
-			blocked = false;
-		},
-		get isInputBlocked() {
-			return blocked;
-		},
+// A scriptable answer-mode presenter: captures each open() so tests drive
+// commits/defers exactly as the editor takeover would.
+function fakePresenter() {
+	const sessions: Array<{
+		opts: AnswerModeOptions;
+		closed: boolean;
+		close(): void;
+	}> = [];
+	const open: typeof openAnswerMode = (_ui, opts) => {
+		const session = {
+			opts,
+			closed: false,
+			close() {
+				if (session.closed) return;
+				session.closed = true;
+				opts.onClose?.();
+			},
+		};
+		sessions.push(session);
+		return {
+			get currentQuestionId() {
+				return opts.questions[0]?.id;
+			},
+			close: () => session.close(),
+		};
 	};
 	return {
-		overlays,
-		ask: () => mounted.get("ask"),
-		get blocked() {
-			return blocked;
-		},
+		open,
+		sessions,
+		/** The most recent still-open session. */
+		current: () => sessions.filter((s) => !s.closed).at(-1),
 	};
 }
 
-function pendingEngine() {
-	const fake = fakeOverlays();
-	const dispose = registerCapability(
-		CAPABILITIES.overlays,
-		fake.overlays as never,
-	);
+function pendingEngine(editorText = "") {
+	const presenter = fakePresenter();
+	const dispose = registerCapability(CAPABILITIES.overlays, {} as never);
 	const delivered: string[] = [];
-	const engine = new AskEngine();
-	engine.setContext(fakeCtx(undefined));
+	const engine = new AskEngine(presenter.open);
+	const ctx = fakeCtx(undefined, true, editorText);
+	engine.setContext(ctx);
 	engine.setDeliver((text) => delivered.push(text));
-	return { engine, fake, delivered, dispose };
+	return { engine, presenter, ctx, delivered, dispose };
 }
 
 describe("PendingSet", () => {
@@ -131,65 +127,88 @@ describe("PendingSet", () => {
 	});
 });
 
-describe("AskEngine pending set (overlays)", () => {
+describe("AskEngine pending set (HUD presentation)", () => {
 	let dispose: (() => void) | undefined;
 	afterEach(() => {
 		dispose?.();
 		dispose = undefined;
 	});
 
-	it("post mounts a badge and delivers committed answers as follow-up", () => {
+	it("post pends without any takeover and delivers committed answers", () => {
 		const rig = pendingEngine();
 		dispose = rig.dispose;
+		const changes: Array<{ pending: number; blocking: number }> = [];
+		rig.engine.setOnChanged((c) => changes.push(c));
 		rig.engine.post(Q);
-		const comp = rig.fake.ask();
-		expect(comp).toBeDefined();
-		expect(comp?.expanded).toBe(false);
-		expect(rig.fake.blocked).toBe(false);
+		// No answer-mode session, no input capture — just the pending set.
+		expect(rig.presenter.sessions).toHaveLength(0);
 		expect(rig.engine.pending().map((p) => p.id)).toEqual(["tier"]);
+		expect(changes.at(-1)).toEqual({ pending: 1, blocking: 0 });
 
-		// User tabs in and picks the first option.
-		rig.fake.overlays.focusOverlay("ask");
-		comp?.handleInput(ENTER);
+		// HUD Enter → answer mode for that question; option commit delivers.
+		rig.engine.openAnswers("tier");
+		const session = rig.presenter.current();
+		expect(session?.opts.blocking).toBe(false);
+		session?.opts.onAnswer({ questionId: "tier", value: "fast" });
+		session?.close();
 
 		expect(rig.delivered).toHaveLength(1);
 		expect(rig.delivered[0]).toContain("tier");
 		expect(rig.delivered[0]).toContain("fast");
 		expect(rig.engine.pending()).toEqual([]);
-		expect(rig.fake.ask()).toBeUndefined();
 	});
 
-	it("present blocks input and resolves with the committed answer", async () => {
+	it("blocking present with an empty editor auto-enters answer mode", async () => {
 		const rig = pendingEngine();
 		dispose = rig.dispose;
 		const promise = rig.engine.present([
 			{ ...Q[0], blocking: true, whyBlocking: "next step depends on it" },
 		]);
-		expect(rig.fake.blocked).toBe(true);
-		const comp = rig.fake.ask();
-		expect(comp?.expanded).toBe(true);
+		// Footer badge on, answer mode open, but input never captured.
+		expect(rig.ctx.statuses.get("maestro.ask")).toBe("maestro waiting on you");
+		const session = rig.presenter.current();
+		expect(session?.opts.blocking).toBe(true);
+		expect(session?.opts.title).toBe("maestro");
 
-		comp?.handleInput(ENTER);
+		session?.opts.onAnswer({ questionId: "tier", value: "fast" });
 		const answers = await promise;
 		expect(answers).toEqual([{ questionId: "tier", value: "fast" }]);
-		expect(rig.fake.blocked).toBe(false);
+		expect(rig.ctx.statuses.get("maestro.ask")).toBeUndefined();
 		expect(rig.delivered).toEqual([]);
 	});
 
-	it("esc defers a blocking question: demoted, resolved, unblocked", async () => {
+	it("blocking present with a user draft badges only — input is never stolen", () => {
+		const rig = pendingEngine("half-typed prompt");
+		dispose = rig.dispose;
+		void rig.engine.present([{ ...Q[0], blocking: true, whyBlocking: "gate" }]);
+		expect(rig.presenter.sessions).toHaveLength(0);
+		expect(rig.ctx.statuses.get("maestro.ask")).toBe("maestro waiting on you");
+		expect(rig.engine.pending()).toEqual([
+			{
+				id: "tier",
+				header: undefined,
+				question: "Pick a tier",
+				blocking: true,
+			},
+		]);
+		expect(rig.engine.blockingCount).toBe(1);
+	});
+
+	it("esc defers a blocking question: demoted, waiter resolves deferred", async () => {
 		const rig = pendingEngine();
 		dispose = rig.dispose;
 		const promise = rig.engine.present([
 			{ ...Q[0], blocking: true, whyBlocking: "gate" },
 		]);
-		const comp = rig.fake.ask();
-		comp?.handleInput(ESC);
+		const session = rig.presenter.current();
+		session?.opts.onDefer?.();
+		session?.close();
 
 		const answers = await promise;
 		expect(answers).toEqual([
 			{ questionId: "tier", value: "", deferred: true },
 		]);
-		expect(rig.fake.blocked).toBe(false);
+		expect(rig.ctx.statuses.get("maestro.ask")).toBeUndefined();
 		// Stays pending (deferred) and can still be answered later.
 		expect(rig.engine.pending()).toEqual([
 			{
@@ -199,15 +218,16 @@ describe("AskEngine pending set (overlays)", () => {
 				deferred: true,
 			},
 		]);
-		const after = rig.fake.ask();
-		rig.fake.overlays.focusOverlay("ask");
-		after?.handleInput(ENTER);
+		rig.engine.openAnswers("tier");
+		const again = rig.presenter.current();
+		again?.opts.onAnswer({ questionId: "tier", value: "fast" });
+		again?.close();
 		expect(rig.delivered).toHaveLength(1);
 		expect(rig.delivered[0]).toContain("fast");
 	});
 
 	it("a blocking raise jumps ahead of posted questions", () => {
-		const rig = pendingEngine();
+		const rig = pendingEngine("draft keeps answer mode shut");
 		dispose = rig.dispose;
 		rig.engine.post([
 			{ id: "a", question: "posted a" },
@@ -217,6 +237,18 @@ describe("AskEngine pending set (overlays)", () => {
 			{ id: "x", question: "urgent", blocking: true, whyBlocking: "gate" },
 		]);
 		expect(rig.engine.pending().map((p) => p.id)).toEqual(["x", "a", "b"]);
+	});
+
+	it("shorthand still settles the pending set and delivers at once", () => {
+		const rig = pendingEngine();
+		dispose = rig.dispose;
+		rig.engine.post(Q);
+		expect(rig.engine.applyShorthand("1")).toBe(true);
+		expect(rig.engine.pending()).toEqual([]);
+		expect(rig.delivered).toHaveLength(1);
+		expect(rig.delivered[0]).toContain("fast");
+		// Non-matching text is left alone.
+		expect(rig.engine.applyShorthand("just some prompt")).toBe(false);
 	});
 });
 

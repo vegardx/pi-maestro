@@ -5,6 +5,14 @@
 // extensions that consume it.
 
 export {
+	AnswerEditor,
+	AnswerFlow,
+	type AnswerHeaderLine,
+	type AnswerModeHandle,
+	type AnswerModeOptions,
+	openAnswerMode,
+} from "./answer-editor.js";
+export {
 	type ExplorerView,
 	explorerTabRow,
 	initExplorerView,

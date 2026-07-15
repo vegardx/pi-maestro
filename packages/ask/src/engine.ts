@@ -1,8 +1,11 @@
-// The questionnaire engine: a pending set of questions rendered as one
-// merged overlay widget. Non-blocking `post()` returns immediately (answers
-// deliver later as a follow-up user message); blocking `present()` raises
-// the widget, captures input, and resolves when its questions are answered
-// or deferred. It needs an ExtensionContext to reach ctx.ui, but the
+// The questionnaire engine: one pending set of questions surfaced through
+// the maestro HUD (Questions tab + tab-bar counts) instead of a widget.
+// Non-blocking `post()` returns immediately (answers deliver later as a
+// follow-up user message); blocking `present()` keeps its promise pending,
+// badges the footer ("maestro waiting on you") and — when the editor is
+// empty — takes over the input with the answer editor. Input is NEVER
+// captured wholesale: a user with a draft keeps typing and the blocking ask
+// waits as a badge. It needs an ExtensionContext to reach ctx.ui, but the
 // ask.v1 capability contract carries no ctx — so the extension captures the
 // latest context off lifecycle events and the engine reads it here.
 
@@ -18,7 +21,8 @@ import type {
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { getCapability, uiTrace } from "@vegardx/pi-core";
 import {
-	CollapsibleQuestionnaireComponent,
+	type AnswerModeHandle,
+	openAnswerMode,
 	paletteFromTheme,
 	runQuestionnaire,
 } from "@vegardx/pi-ui";
@@ -30,6 +34,9 @@ export type AskSource = "main" | string;
 /** How long after the last committed answer the outbox flushes (batching). */
 const FLUSH_DELAY_MS = 2_000;
 
+/** Footer status key for the blocking-ask badge. */
+const STATUS_KEY = "maestro.ask";
+
 interface Waiter {
 	readonly ids: ReadonlySet<string>;
 	readonly collected: Map<string, Answer>;
@@ -39,6 +46,12 @@ interface Waiter {
 interface OutboxEntry {
 	readonly answer: Answer;
 	readonly question: Question;
+}
+
+/** Pending-set counts pushed to the change listener (HUD refresh + event). */
+export interface AskChange {
+	readonly pending: number;
+	readonly blocking: number;
 }
 
 /** Format settled answers as the follow-up message the agent receives. */
@@ -65,8 +78,14 @@ export class AskEngine {
 	/** Free text riding along with the next outbox flush (shorthand trailer). */
 	#trailer: string | undefined;
 	#deliver: ((text: string) => void) | undefined;
-	#component: CollapsibleQuestionnaireComponent | undefined;
-	#mounted = false;
+	#onChanged: ((change: AskChange) => void) | undefined;
+	#answerHandle: AnswerModeHandle | undefined;
+	/** Injectable presenter (tests swap the editor takeover for a fake). */
+	readonly #openAnswerMode: typeof openAnswerMode;
+
+	constructor(present: typeof openAnswerMode = openAnswerMode) {
+		this.#openAnswerMode = present;
+	}
 
 	private get overlays(): OverlaysCapabilityV1 | undefined {
 		return getCapability(CAPABILITIES.overlays) as
@@ -82,6 +101,16 @@ export class AskEngine {
 	/** Wire the follow-up message sink for non-blocking answers. */
 	setDeliver(deliver: (text: string) => void): void {
 		this.#deliver = deliver;
+	}
+
+	/** Observe pending-set changes (HUD refresh + askChanged event). */
+	setOnChanged(listener: (change: AskChange) => void): void {
+		this.#onChanged = listener;
+	}
+
+	/** Active (not deferred) blocking questions the maestro is waiting on. */
+	get blockingCount(): number {
+		return this.#set.activeBlockingIds.length;
 	}
 
 	/** @deprecated Use overlays capability instead. */
@@ -106,8 +135,7 @@ export class AskEngine {
 		}
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return;
-		const overlays = this.overlays;
-		if (!overlays) {
+		if (!this.overlays) {
 			// Legacy dialog cannot pend; run it and deliver the answers.
 			void runQuestionnaire(ctx, questions).then((answers) => {
 				const entries = this.#toEntries(answers ?? []);
@@ -116,19 +144,21 @@ export class AskEngine {
 			return;
 		}
 		this.#set.post(questions);
-		this.#syncWidget(overlays, { rebuild: true });
+		this.#changed();
 	}
 
-	/** Posted-but-unanswered questions (turn-start context lines). */
+	/** Posted-but-unanswered questions (turn-start context lines, the HUD). */
 	pending(): readonly PendingAsk[] {
 		return this.#set.list();
 	}
 
 	/**
-	 * Blocking: present the questionnaire and resolve with answers (or with
-	 * `deferred` answers when the user escapes out).
+	 * Blocking: keep the promise pending until the questions are answered (or
+	 * deferred). Presentation: the tab bar shows the blocking count, the
+	 * footer says the maestro is waiting, and answer mode auto-opens ONLY
+	 * when the editor is empty — a user mid-draft is never interrupted.
 	 * @param questions - The questions to present
-	 * @param source - "main" blocks input; agent IDs don't
+	 * @param source - "main" is the maestro's own blocking ask; agent ids pend
 	 */
 	async present(
 		questions: Questionnaire,
@@ -145,8 +175,7 @@ export class AskEngine {
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return [];
 
-		const overlays = this.overlays;
-		if (!overlays) {
+		if (!this.overlays) {
 			// Fallback: legacy blocking dialog
 			const answers = await runQuestionnaire(ctx, questions);
 			return answers ?? [];
@@ -159,20 +188,32 @@ export class AskEngine {
 				resolve,
 			});
 			if (source === "main") {
-				// Blocking questions jump the queue — next-up when the user
-				// is mid-questionnaire (widget expanded), front otherwise.
-				const anchor = this.#component?.expanded
-					? this.#component.currentQuestionId
-					: undefined;
-				this.#set.raise(questions, anchor);
-				this.#syncWidget(overlays, { rebuild: true });
-				overlays.blockInput();
+				// Blocking questions jump the queue — right after the question
+				// the user currently has open in answer mode, front otherwise.
+				this.#set.raise(questions, this.#answerHandle?.currentQuestionId);
+				this.#changed();
+				const draft = ctx.ui.getEditorText?.() ?? "";
+				if (draft === "") this.#openBlockingAnswers();
 			} else {
-				// Worker questions: pend without capturing input.
+				// Worker questions: pend without stealing anything.
 				this.#set.post(questions);
-				this.#syncWidget(overlays, { rebuild: true });
+				this.#changed();
 			}
 		});
+	}
+
+	/**
+	 * Enter answer mode for one pending question (the HUD's Questions tab
+	 * Enter action). Replaces any open answer session.
+	 */
+	openAnswers(questionId: string): void {
+		const ctx = this.#ctx;
+		if (!ctx?.hasUI) return;
+		const entry = this.#set.list().find((p) => p.id === questionId);
+		const question = this.#set.find(questionId);
+		if (!entry || !question) return;
+		this.#answerHandle?.close();
+		this.#openAnswerSession([question], entry.blocking === true);
 	}
 
 	/** Queue questions for the next flush (the plan-mode driver). */
@@ -211,18 +252,13 @@ export class AskEngine {
 		// The trailer rides along with whichever flush delivers the batch —
 		// set before settling, since an emptied set flushes immediately.
 		this.#trailer = match.trailer;
-		const overlays = this.overlays;
-		if (overlays) {
-			this.#handleCommitted(match.answers, overlays);
-		} else {
-			this.#set.settle(match.answers);
-		}
+		this.#handleCommitted(match.answers);
 		this.#flushOutbox();
 		return true;
 	}
 
 	/** Settled answers → waiters first, then the outbox (batched delivery). */
-	#handleCommitted(answers: Answers, overlays: OverlaysCapabilityV1): void {
+	#handleCommitted(answers: Answers): void {
 		const settled = this.#set.settle(answers);
 		if (settled.length === 0) return;
 		for (const answer of settled) {
@@ -239,16 +275,12 @@ export class AskEngine {
 		}
 		this.#resolveReadyWaiters();
 		this.#scheduleFlush();
-		if (this.#set.activeBlockingIds.length === 0 && overlays.isInputBlocked) {
-			overlays.unblockInput();
-			// The user was mid-questionnaire; keep them in it if more remains.
-			if (this.#set.size > 0) overlays.focusOverlay("ask");
-		}
-		this.#syncWidget(overlays, { rebuild: false });
+		if (this.#set.size === 0) this.#flushOutbox();
+		this.#changed();
 	}
 
-	/** Esc on a blocking question: demote it, resolve its waiter, unblock. */
-	#handleDefer(overlays: OverlaysCapabilityV1): void {
+	/** Esc on a blocking question: demote it, resolve its waiter, move on. */
+	#handleDefer(): void {
 		const ids = this.#set.defer();
 		for (const id of ids) {
 			const waiter = this.#waiters.find(
@@ -257,9 +289,8 @@ export class AskEngine {
 			waiter?.collected.set(id, { questionId: id, value: "", deferred: true });
 		}
 		this.#resolveReadyWaiters();
-		if (overlays.isInputBlocked) overlays.unblockInput();
 		this.#flushOutbox();
-		this.#syncWidget(overlays, { rebuild: false });
+		this.#changed();
 	}
 
 	#resolveReadyWaiters(): void {
@@ -307,58 +338,51 @@ export class AskEngine {
 		this.#deliver?.(formatDelivery(batch) + suffix);
 	}
 
-	/**
-	 * Reconcile the overlay widget with the set. `rebuild` remounts with the
-	 * current questionnaire (set grew); otherwise only emptiness is checked —
-	 * mid-flow commits keep the live component so navigation state survives.
-	 */
-	#syncWidget(
-		overlays: OverlaysCapabilityV1,
-		opts: { rebuild: boolean },
-	): void {
-		if (this.#set.size === 0) {
-			if (this.#mounted) {
-				uiTrace("ask.widget.unmount");
-				overlays.unmount("ask");
-				this.#mounted = false;
-				this.#component = undefined;
-			}
-			this.#flushOutbox();
-			return;
-		}
-		if (!opts.rebuild && this.#mounted) return;
-		uiTrace("ask.widget.rebuild", `size=${this.#set.size}`);
+	/** Pending-set change: sync the footer badge and notify the listener. */
+	#changed(): void {
+		const blocking = this.#set.activeBlockingIds.length;
+		this.#ctx?.ui.setStatus?.(
+			STATUS_KEY,
+			blocking > 0 ? "maestro waiting on you" : undefined,
+		);
+		this.#onChanged?.({ pending: this.#set.size, blocking });
+	}
 
-		const wasExpanded = this.#component?.expanded ?? false;
-		const palette = this.#ctx?.ui
-			? paletteFromTheme(this.#ctx.ui.theme)
-			: undefined;
-		const comp = new CollapsibleQuestionnaireComponent(
-			this.#set.questionnaire(),
-			(answers) => {
-				if (answers) this.#handleCommitted(answers, overlays);
+	/** Answer mode for every active blocking question, oldest first. */
+	#openBlockingAnswers(): void {
+		if (this.#answerHandle) return;
+		const questions = this.#set.activeBlockingIds
+			.map((id) => this.#set.find(id))
+			.filter((q): q is Question => q !== undefined);
+		if (questions.length === 0) return;
+		this.#openAnswerSession(questions, true);
+	}
+
+	#openAnswerSession(questions: Questionnaire, blocking: boolean): void {
+		const ctx = this.#ctx;
+		if (!ctx?.hasUI) return;
+		uiTrace(
+			"ask.answerMode.open",
+			`n=${questions.length} blocking=${blocking}`,
+		);
+		const palette = ctx.ui.theme ? paletteFromTheme(ctx.ui.theme) : undefined;
+		this.#answerHandle = this.#openAnswerMode(ctx.ui, {
+			title: "maestro",
+			blocking,
+			questions,
+			...(palette ? { palette } : {}),
+			onAnswer: (answer) => this.#handleCommitted([answer]),
+			onDefer: () => this.#handleDefer(),
+			onClose: () => {
+				this.#answerHandle = undefined;
 				this.#flushOutbox();
-				this.#syncWidget(overlays, { rebuild: false });
-				if (this.#set.size === 0 && !overlays.isInputBlocked) {
-					overlays.focusInput();
+				// Blocking questions that arrived mid-session: reopen for the
+				// remainder (never when the user started a draft meanwhile).
+				const draft = this.#ctx?.ui.getEditorText?.() ?? "";
+				if (this.#set.activeBlockingIds.length > 0 && draft === "") {
+					this.#openBlockingAnswers();
 				}
 			},
-			{
-				palette,
-				onQuestionCommitted: (answers) =>
-					this.#handleCommitted(answers, overlays),
-				onCancel: (draft) => this.#handleCommitted(draft, overlays),
-				hasBlocking: () => this.#set.activeBlockingIds.length > 0,
-				onDefer: () => this.#handleDefer(overlays),
-				badge: () => ({
-					pending: this.#set.size,
-					deferred: this.#set.deferredCount,
-				}),
-			},
-		);
-		this.#component = comp;
-		overlays.mount("ask", comp);
-		this.#mounted = true;
-		if (wasExpanded) overlays.focusOverlay("ask");
+		});
 	}
 }

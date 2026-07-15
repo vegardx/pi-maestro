@@ -97,9 +97,53 @@ toggle tasks, and run their own review panel before completing.
 
 While the fleet runs, the maestro session stays yours:
 
-- `/agents` — live overview: deliverable states, task progress, each review
-  ledger, and active/failed subagent runs with role, model, elapsed/event age,
-  status, and exact opaque run ID.
+### The HUD
+
+A borderless status strip lives directly above the input for the whole
+maestro session (at most 10 lines; idle it collapses to one summary line
+like `agents idle · plan 4/5`). Its first line is a tab rule —
+`──[ Agents 4 ]─── Plan 2/5 ─── Questions 2 · 1 blocking ─── tab ──` —
+and the content rows below belong to the active tab:
+
+- **Agents** — workers at root with their one-shot review/verify/research
+  runs nested under tree connectors; maestro-direct spawns at root. Each row
+  shows `name · slug`, a status word (starting/running/done/blocked/
+  stopped/failed), elapsed time, and the model or a context note. A worker
+  auto-expands only while a child is running; done/blocked workers collapse
+  to one line with an `N subagents` suffix; manual folds are sticky.
+- **Plan** — deliverables as checkboxes (`[x]` shipped/complete, `[~]`
+  active, `[ ]` queued) with the assigned worker named on active rows; the
+  active deliverable auto-expands its tasks.
+- **Questions** — every pending ask: blocking first (accented), asker
+  (`maestro` or `worker · slug`) plus the question text.
+
+Focus: **Tab** cycles input → HUD → input, and is consumed only when the
+editor is empty (or the HUD is already focused) — a draft keeps Tab for
+autocomplete. While the HUD is focused, the last row shows the keys:
+up/down move the selection, `[`/`]` switch tabs, left/right/space
+fold/unfold, **Enter** is the context action (Agents: attach a read-only
+tmux split; Plan: expand/collapse; Questions: answer), `s` prefills an
+addressed `/steer`, `i` interrupts after a confirm, **Esc** returns to the
+input.
+
+### Questions and answer mode
+
+Worker questions pend quietly — they surface only as the Questions tab and
+its count. A blocking maestro ask badges the tab bar (`1 blocking`) and the
+footer ("maestro waiting on you"); if the editor is empty it opens **answer
+mode** immediately, and if you have a draft it never steals the input.
+Answer mode replaces the input line: the question and numbered options
+render above it, digits 1–9 pick an option, typed text is a custom answer,
+Enter submits, Esc defers a blocking question (the maestro unblocks and
+carries on) or returns to the list. Multi-question sets step `1/N → 2/N`
+in place. Shorthand replies (`2`, `1a 2b`, `rec`) typed at the normal
+prompt still settle pending questions directly, and a normal prompt sent
+while the maestro is blocked simply queues (you are told once).
+
+### Fleet commands
+
+- `/agents` — expand and focus the HUD on the Agents tab (headless sessions
+  get a text overview instead).
 - `/watch` — toggle stacked tmux panes showing all active workers (large review
   panels are intentionally not tiled automatically).
 - `/view <target>` — read-only split for any tmux-backed worker or run. Exact
@@ -262,7 +306,7 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/plan [title-or-slug]` | Open or create a plan; enter plan mode |
 | `/ready` | Unlock plan structuring (skip the readiness gate) |
 | `/implement` | Start executing the active plan |
-| `/agents` | Active deliverables plus inspectable run IDs, role/model/status, elapsed and event age |
+| `/agents` | Expand + focus the HUD on the Agents tab (text overview when headless) |
 | `/watch` | Toggle stacked tmux panes for all active workers |
 | `/view <target>` | View any tmux-backed worker/run read-only; exact opaque IDs win |
 | `/steer <name> <guidance>` | Steer a running worker without aborting it |

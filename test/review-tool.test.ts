@@ -123,7 +123,7 @@ const run = (t: ReturnType<typeof createReviewTool>, params: unknown = {}) =>
 	);
 
 interface Reported {
-	kind: "panel" | "verification";
+	kind: "panel" | "verification" | "round-started";
 	results: readonly PanelResult[];
 	ledger: ReviewLedger;
 }
@@ -131,17 +131,34 @@ interface Reported {
 function makeTool(
 	capability: SubagentsCapabilityV1,
 	panel: SubAgentSpec[],
-	opts: { state?: Partial<PanelState>; reports?: Reported[] } = {},
+	opts: {
+		state?: Partial<PanelState>;
+		reports?: Reported[];
+		/** Shared persisted-ledger store — pass the same object to two tools
+		 *  to model a crashed worker racing its respawned successor. */
+		store?: { ledger?: ReviewLedger };
+	} = {},
 ) {
 	const delivered: string[] = [];
+	// Model the executor: every reported ledger (round-started markers
+	// included) is persisted and served back through panelState — the settle
+	// path re-reads it as the delivery latch.
+	const store: { ledger?: ReviewLedger } = opts.store ?? {
+		...(opts.state?.ledger ? { ledger: opts.state.ledger } : {}),
+	};
 	const tool = createReviewTool({
 		subagents: () => capability,
-		panelState: () => ({ panel, ...opts.state }),
+		panelState: () => ({
+			panel,
+			...opts.state,
+			...(store.ledger ? { ledger: structuredClone(store.ledger) } : {}),
+		}),
 		cwd: () => "/wt",
 		deliver: (text) => {
 			delivered.push(text);
 		},
 		report: (kind, results, ledger) => {
+			store.ledger = structuredClone(ledger);
 			opts.reports?.push({ kind, results, ledger });
 		},
 		now: () => "2026-07-12T00:00:00.000Z",
@@ -157,6 +174,10 @@ function makeTool(
 	};
 	return { tool, delivered, delivery };
 }
+
+/** The settled-round reports only — round-started crash markers filtered. */
+const settled = (reports: readonly Reported[]) =>
+	reports.filter((r) => r.kind !== "round-started");
 
 const SEC: SubAgentSpec = {
 	name: "security-audit",
@@ -198,12 +219,12 @@ describe("review tool — async panel round", () => {
 		expect(report).toContain("review({resolutions");
 		expect(report).not.toContain("Panel clean");
 
-		// The upward report flow is unchanged by async delivery.
-		expect(reports).toHaveLength(1);
-		expect(reports[0].kind).toBe("panel");
-		expect(reports[0].ledger.entries.map((e) => e.finding.id)).toEqual([
-			"security-audit.1",
-		]);
+		// The upward report flow: the round-started crash marker first (with
+		// the pending runs), then exactly one settled panel report.
+		expect(reports.map((r) => r.kind)).toEqual(["round-started", "panel"]);
+		expect(settled(reports)[0].ledger.entries.map((e) => e.finding.id)).toEqual(
+			["security-audit.1"],
+		);
 	});
 
 	it("delivers 'Panel clean' only when the panel is clean", async () => {
@@ -450,7 +471,7 @@ describe("review tool — repair and rehydration", () => {
 		expect(first).toContain('review({action: "repair"})');
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		expect(spawns.filter((s) => s === "simplification")).toHaveLength(1);
-		const failedParticipant = reports[0].ledger.participants?.find(
+		const failedParticipant = settled(reports)[0].ledger.participants?.find(
 			(p) => p.name === "security-audit",
 		);
 		expect(failedParticipant).toMatchObject({
@@ -521,7 +542,9 @@ describe("review tool — repair and rehydration", () => {
 		expect(report).toContain("security-audit (timed-out)");
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		expect(
-			reports[0].ledger.participants?.find((p) => p.name === "security-audit"),
+			settled(reports)[0].ledger.participants?.find(
+				(p) => p.name === "security-audit",
+			),
 		).toMatchObject({ ok: false, status: "timed-out", attempt: 1 });
 	});
 
@@ -536,9 +559,9 @@ describe("review tool — repair and rehydration", () => {
 		const { tool, delivery } = makeTool(capability, [SEC, SIMP], { reports });
 		await run(tool);
 		await delivery();
-		expect(reports[0].ledger.entries.map((e) => e.finding.id)).toEqual([
-			"security-audit.1",
-		]);
+		expect(settled(reports)[0].ledger.entries.map((e) => e.finding.id)).toEqual(
+			["security-audit.1"],
+		);
 		await run(tool, { action: "repair" });
 		await delivery(1);
 		const merged = reports.at(-1)?.ledger;

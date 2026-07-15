@@ -34,6 +34,7 @@ import {
 	ledgerSummary,
 	openBlocking,
 	openDisputed,
+	type PendingReviewRound,
 	parseJsonFindings,
 	type ReviewLedger,
 	renderFinding,
@@ -73,9 +74,14 @@ export interface ReviewToolDeps {
 		model: string;
 		effort?: import("@vegardx/pi-contracts").ThinkingLevel;
 	}>;
-	/** Report a completed run + the resulting ledger upward (ship gate). */
+	/**
+	 * Report a run + the resulting ledger upward (ship gate). "round-started"
+	 * carries no results — it persists the ledger's `pendingRound` crash
+	 * marker before the spawning call returns, so a respawned worker can
+	 * reattach to the round instead of duplicating it.
+	 */
 	readonly report?: (
-		roundKind: "panel" | "verification",
+		roundKind: "panel" | "verification" | "round-started",
 		results: readonly PanelResult[],
 		ledger: ReviewLedger,
 	) => void;
@@ -272,9 +278,11 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 	 * report. inFlight clears BEFORE delivery so the worker's reaction to the
 	 * report (repair/verify) is never bounced by its own round's guard. A
 	 * throw here is a harness bug, not a reviewer failure — the worker gets
-	 * told to escalate rather than a silently vanished round.
+	 * told to escalate rather than a silently vanished round. A null report
+	 * means the round lost the delivery latch (another settle path already
+	 * reported it) — nothing is injected.
 	 */
-	function settleInBackground(round: () => Promise<string>): void {
+	function settleInBackground(round: () => Promise<string | null>): void {
 		void round()
 			.catch(
 				(err) =>
@@ -282,8 +290,73 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			)
 			.then((report) => {
 				inFlight = undefined;
-				deps.deliver(report);
+				if (report !== null) deps.deliver(report);
 			});
+	}
+
+	/**
+	 * Record a round as in-flight ON THE LEDGER and report the marker upward
+	 * BEFORE the spawning call returns: the settle continuation lives only in
+	 * this process, so the persisted marker is what a respawned worker uses to
+	 * reattach instead of spawning a duplicate round. A first panel round has
+	 * no episode yet — the marker rides an empty stub ledger.
+	 */
+	function markRoundPending(
+		d: ReviewToolDeps,
+		kind: PendingReviewRound["kind"],
+		started: ReadonlyArray<Pick<PanelRunStart, "name" | "runId">>,
+	): PendingReviewRound {
+		const pending: PendingReviewRound = {
+			kind,
+			// Only runs that actually spawned are reattachable; a spawn that
+			// failed before yielding an id settled as failed already.
+			runs: started.flatMap((s) =>
+				s.runId ? [{ name: s.name, runId: s.runId }] : [],
+			),
+			startedAt: now(),
+		};
+		episode = episode
+			? { ...episode, ledger: { ...episode.ledger, pendingRound: pending } }
+			: {
+					ledger: {
+						round: 1,
+						cycle: 0,
+						entries: [],
+						pendingRound: pending,
+						updatedAt: now(),
+					},
+					lastResults: [],
+				};
+		d.report?.("round-started", [], episode.ledger);
+		return pending;
+	}
+
+	/**
+	 * The delivery latch, checked right before a settled round reports: the
+	 * persisted `pendingRound` marker is the source of truth for who owns the
+	 * round's single report + delivery. If the marker no longer matches ours,
+	 * a competing settle path — a respawned worker's reattach, or the original
+	 * round racing that reattach — already reported it; adopt the persisted
+	 * outcome and deliver nothing. A state without any persisted ledger never
+	 * had the marker persisted, so no competitor can exist — claim granted.
+	 */
+	async function claimSettle(pending: PendingReviewRound): Promise<boolean> {
+		let persisted: PanelState;
+		try {
+			persisted = await deps.panelState();
+		} catch {
+			// An unreadable store cannot prove a competing settle — the round
+			// must not strand undelivered on a transient read failure.
+			return true;
+		}
+		if (!persisted.ledger) return true;
+		const marker = persisted.ledger.pendingRound;
+		if (marker && sameRound(marker, pending)) return true;
+		episode = {
+			ledger: persisted.ledger,
+			lastResults: episode?.lastResults ?? [],
+		};
+		return false;
 	}
 
 	async function startPanelRound(
@@ -299,9 +372,11 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		// failed in the settled partial panel; only an explicit
 		// review({action:"repair"}) retries them, once.
 		const started = await startReviewPanel(panel, panelDeps(d, subagents, ctx));
+		const pending = markRoundPending(d, "panel", started);
 		inFlight = "panel";
 		settleInBackground(async () => {
 			const results = await Promise.all(started.map((s) => s.settled));
+			if (!(await claimSettle(pending))) return null;
 			const ledger: ReviewLedger = {
 				...buildLedger(
 					results
@@ -331,9 +406,13 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			return text("Nothing to repair — the panel has not run yet.");
 		}
 		const ep = episode;
-		const okNames = new Set(
-			ep.lastResults.filter((r) => r.ok).map((r) => r.name),
-		);
+		const okNames = new Set([
+			...ep.lastResults.filter((r) => r.ok).map((r) => r.name),
+			// After a respawn lastResults is empty — the persisted participants
+			// carry which reviewers already reported validly, so repair still
+			// re-runs ONLY the failed ones.
+			...(ep.ledger.participants ?? []).filter((p) => p.ok).map((p) => p.name),
+		]);
 		const failedSpecs = panel.filter((s) => !okNames.has(s.name));
 		if (failedSpecs.length === 0) {
 			return text("Nothing to repair — every reviewer reported.");
@@ -348,9 +427,11 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			failedSpecs,
 			panelDeps(d, subagents, ctx),
 		);
+		const pending = markRoundPending(d, "repair", started);
 		inFlight = "repair";
 		settleInBackground(async () => {
 			const repaired = await Promise.all(started.map((s) => s.settled));
+			if (!(await claimSettle(pending))) return null;
 			const merged = [
 				...ep.lastResults.filter((r) => okNames.has(r.name)),
 				...repaired,
@@ -449,11 +530,25 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		// One attempt — a failed/empty verifier is reported back to the worker,
 		// which re-invokes verify explicitly. No implicit re-spawn layers.
 		const handle = subagents.spawn(prompt, profile);
+		const pending = markRoundPending(d, "verification", [
+			{
+				name: verifierName,
+				...(handle.id ? { runId: String(handle.id) } : {}),
+			},
+		]);
 		inFlight = "verify";
 		settleInBackground(async () => {
 			const run = await settleRun(handle, timeoutMs);
+			if (!(await claimSettle(pending))) return null;
 			const report = run.summary?.trim() ?? "";
 			if (run.status !== "succeeded" || !report) {
+				// The round is over even though it produced nothing: report the
+				// resolution-carrying ledger upward WITHOUT the marker, so the
+				// pending round clears (a lingering marker would make every
+				// respawn reattach to this dead run) and the applied resolutions
+				// survive a respawn.
+				episode = { ...episode!, ledger: applied.ledger };
+				d.report?.("verification", [], applied.ledger);
 				return `Verifier ${run.status}: ${run.error ?? "no report"} — fix nothing, just run review({action: "verify", resolutions: [...]}) again.`;
 			}
 			const parsed = parseVerifierReport(report, claims);
@@ -466,27 +561,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			);
 			episode = { ...episode!, ledger: checked };
 			d.report?.("verification", [], checked);
-
-			const open = openBlocking(checked, waived);
-			const disputed = openDisputed(checked, waived);
-			const lines = [
-				open.length === 0
-					? "All blocking findings are settled — the gate is clear (finish up and stop)."
-					: `${open.length} blocking finding(s) still open after verification — fix and verify again.`,
-				"",
-				renderLedger(checked, waived),
-			];
-			if (disputed.length > 0) {
-				lines.push(
-					"",
-					`${disputed.length} disputed finding(s) go to the maestro's triage — do not fix or re-dispute them.`,
-				);
-			}
-			if (errors.length > 0) {
-				lines.push("", `Verifier protocol notes: ${errors.join("; ")}`);
-			}
-			lines.push("", `Verifier report:\n${report}`);
-			return lines.join("\n");
+			return renderVerificationReport(checked, waived, errors, report);
 		});
 		return runningText("Verifier", [
 			{
@@ -535,6 +610,48 @@ const GLYPH: Record<string, string> = {
 	"request-changes": "✗ CHANGES",
 	none: "· no verdict",
 };
+
+/** Same round identity: the marker names exactly the runs we spawned. */
+function sameRound(a: PendingReviewRound, b: PendingReviewRound): boolean {
+	return (
+		a.kind === b.kind &&
+		a.startedAt === b.startedAt &&
+		a.runs.length === b.runs.length &&
+		a.runs.every(
+			(r, i) => r.name === b.runs[i].name && r.runId === b.runs[i].runId,
+		)
+	);
+}
+
+/** The worker-facing report for a settled verification round — shared by the
+ *  live settle path and the reattach path so both read identically. */
+function renderVerificationReport(
+	checked: ReviewLedger,
+	waived: ReadonlySet<string>,
+	errors: readonly string[],
+	report: string,
+): string {
+	const open = openBlocking(checked, waived);
+	const disputed = openDisputed(checked, waived);
+	const lines = [
+		open.length === 0
+			? "All blocking findings are settled — the gate is clear (finish up and stop)."
+			: `${open.length} blocking finding(s) still open after verification — fix and verify again.`,
+		"",
+		renderLedger(checked, waived),
+	];
+	if (disputed.length > 0) {
+		lines.push(
+			"",
+			`${disputed.length} disputed finding(s) go to the maestro's triage — do not fix or re-dispute them.`,
+		);
+	}
+	if (errors.length > 0) {
+		lines.push("", `Verifier protocol notes: ${errors.join("; ")}`);
+	}
+	lines.push("", `Verifier report:\n${report}`);
+	return lines.join("\n");
+}
 
 /** The verifier's prompt: the closed claim list with the worker's notes. */
 export function buildVerifierPrompt(

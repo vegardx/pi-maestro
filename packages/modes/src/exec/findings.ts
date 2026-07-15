@@ -173,6 +173,29 @@ export interface LedgerEntry {
 }
 
 /**
+ * A review round that has spawned but not yet settled. Persisted on the
+ * ledger the moment the round starts (before the review tool's ack returns),
+ * because the settle continuation lives only in the worker's memory: if the
+ * process dies mid-round, this marker is what lets a respawned worker
+ * REATTACH to the recorded runs in the shared store instead of spawning a
+ * duplicate round. It doubles as the delivery latch — the settle path that
+ * clears it (reports the ledger without it) owns the round's single
+ * report + delivery.
+ */
+export interface PendingReviewRound {
+	/** What kind of round is settling — decides how a reattach merges it. */
+	readonly kind: "panel" | "repair" | "verification";
+	/** The spawned runs; ids resolve in the subagents run store. */
+	readonly runs: ReadonlyArray<{
+		readonly name: string;
+		readonly runId: string;
+	}>;
+	/** Round start — the panel deadline is measured from here, so time that
+	 *  elapsed before a respawn still counts against the round. */
+	readonly startedAt: string;
+}
+
+/**
  * The per-deliverable review ledger: minted findings + their resolution state
  * across fix cycles. Persisted on the Deliverable so it survives worker
  * respawns and maestro restarts; the gate reads it, the human sees it, /verify
@@ -204,6 +227,8 @@ export interface ReviewLedger {
 		runId?: string;
 		error?: string;
 	}>;
+	/** The round currently settling behind the review tool, if any. */
+	pendingRound?: PendingReviewRound;
 	updatedAt: string;
 }
 

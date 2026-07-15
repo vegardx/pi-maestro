@@ -19,12 +19,17 @@ const DEFAULT_RING = 1000;
 
 export function createRunBus(ringSize = DEFAULT_RING): RunBus {
 	const handlers = new Set<RunBusHandler>();
-	const ring: RunBusMessage[] = [];
+	// Circular buffer — shift() on a full array was O(ringSize) per publish,
+	// which multiplies across every event of every parallel run.
+	const ring: RunBusMessage[] = new Array(ringSize);
+	let head = 0; // next write slot
+	let count = 0;
 
 	return {
 		publish(message) {
-			ring.push(message);
-			if (ring.length > ringSize) ring.shift();
+			ring[head] = message;
+			head = (head + 1) % ringSize;
+			if (count < ringSize) count += 1;
 			// Snapshot so a handler that (un)subscribes mid-dispatch is safe.
 			for (const handler of [...handlers]) handler(message);
 		},
@@ -33,7 +38,12 @@ export function createRunBus(ringSize = DEFAULT_RING): RunBus {
 			return () => handlers.delete(handler);
 		},
 		replay(runId) {
-			return runId ? ring.filter((m) => msgRunId(m) === runId) : [...ring];
+			const start = (head - count + ringSize) % ringSize;
+			const ordered: RunBusMessage[] = [];
+			for (let i = 0; i < count; i++) {
+				ordered.push(ring[(start + i) % ringSize]);
+			}
+			return runId ? ordered.filter((m) => msgRunId(m) === runId) : ordered;
 		},
 	};
 }

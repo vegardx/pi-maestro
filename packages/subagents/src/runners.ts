@@ -461,18 +461,32 @@ function waitUntilIdle(client: RpcLike, pollMs = DEAD_POLL_MS): Promise<void> {
 }
 
 function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
-	// Forward all events for live-view subscribers.
-	bus.publish({ type: "agentEvent", runId, event });
-	// Keep the progress shortcut for the widget.
+	// Lifecycle events only. Children stream token-by-token deltas
+	// (thinking/text/message_update) at hundreds of messages per second per
+	// run; forwarding them onto the host bus meant a synchronous events.jsonl
+	// append AND a status.json rewrite per token, across every parallel run —
+	// the maestro's event loop drowned (221MB of delta logs, laggy TUI,
+	// 2026-07-15 dogfood). Nothing consumes them: watchdog liveness is
+	// tracked in the runner's own onEvent (before this filter), salvage uses
+	// getLastAssistantText, and live inspection watches the tmux pane.
 	if (event.type === "tool_execution_start") {
+		bus.publish({ type: "agentEvent", runId, event });
+		// Keep the progress shortcut for the widget.
 		bus.publish({
 			type: "progress",
 			runId,
 			delta: { text: event.toolName },
 		});
+		return;
+	}
+	if (event.type === "agent_end") {
+		bus.publish({ type: "agentEvent", runId, event });
+		return;
 	}
 	// Token progress: assistant messages carry per-turn usage. Best-effort —
-	// absent usage just means no token delta for this turn.
+	// absent usage just means no token delta for this turn. The full message
+	// body stays OUT of the bus/journal (it already lives in the child's
+	// session file); only the usage numbers travel.
 	if (event.type === "turn_end") {
 		const usage = (
 			event.message as {
@@ -485,6 +499,11 @@ function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
 				};
 			}
 		)?.usage;
+		bus.publish({
+			type: "agentEvent",
+			runId,
+			event: { type: "turn_end", ...(usage ? { message: { usage } } : {}) },
+		});
 		if (usage && (usage.input !== undefined || usage.output !== undefined)) {
 			bus.publish({
 				type: "progress",

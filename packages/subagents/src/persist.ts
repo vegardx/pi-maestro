@@ -2,12 +2,18 @@
 // and status/result/spawn messages keep the RunRecord in sync. Returns a
 // disposer that detaches the mirror.
 
-import type { RunBusMessage, RunRecord } from "@vegardx/pi-contracts";
+import type { RunBusMessage, RunId, RunRecord } from "@vegardx/pi-contracts";
 import type { RunBus } from "./bus.js";
 import { msgRunId } from "./bus.js";
 import type { RunStore } from "./store.js";
 
+/** Floor between lastEventAt persists per run — the field feeds staleness
+ *  displays, so second-granularity is plenty; per-message it was an atomic
+ *  status.json rewrite for every tool start across every parallel run. */
+const LAST_EVENT_WRITE_FLOOR_MS = 5_000;
+
 export function persistRunBus(bus: RunBus, store: RunStore): () => void {
+	const lastEventWrites = new Map<RunId, number>();
 	return bus.subscribe((message: RunBusMessage) => {
 		const runId = msgRunId(message);
 		if (runId) store.appendEvent(runId, message);
@@ -48,11 +54,18 @@ export function persistRunBus(bus: RunBus, store: RunStore): () => void {
 				break;
 			}
 			case "agentEvent":
-			case "progress":
-				if (store.readRecord(message.runId)) {
-					store.setLastEventAt(message.runId);
+			case "progress": {
+				const now = Date.now();
+				const lastWrite = lastEventWrites.get(message.runId) ?? 0;
+				if (
+					now - lastWrite >= LAST_EVENT_WRITE_FLOOR_MS &&
+					store.readRecord(message.runId)
+				) {
+					lastEventWrites.set(message.runId, now);
+					store.setLastEventAt(message.runId, now);
 				}
 				break;
+			}
 			case "result":
 				if (store.readRecord(message.runId)) {
 					store.setResult(message.runId, message.result);

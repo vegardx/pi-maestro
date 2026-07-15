@@ -191,6 +191,42 @@ describe("RunBus + persistence", () => {
 		expect(store.readResult(id("r1"))).toBe("ok");
 		expect(store.readEvents(id("r1"))).toHaveLength(3);
 	});
+
+	it("the ring keeps the newest messages in order past capacity", () => {
+		const bus = createRunBus(4);
+		for (let i = 0; i < 10; i++) {
+			bus.publish({
+				type: "status",
+				runId: id(`r${i}`),
+				status: "queued",
+				at: i,
+			});
+		}
+		const replayed = bus.replay();
+		expect(replayed).toHaveLength(4);
+		expect(replayed.map((m) => (m.type === "status" ? m.at : -1))).toEqual([
+			6, 7, 8, 9,
+		]);
+	});
+
+	it("throttles lastEventAt persistence — no status.json rewrite per event", () => {
+		// Every agentEvent/progress used to rewrite status.json (temp+rename):
+		// two sync fs ops per tool start across every parallel run.
+		const bus = createRunBus();
+		const off = persistRunBus(bus, store);
+		bus.publish({
+			type: "spawn",
+			run: { id: id("r1"), prompt: "go", profile: PROFILE },
+		});
+		bus.publish({ type: "progress", runId: id("r1"), delta: { text: "grep" } });
+		const first = store.readRecord(id("r1"))?.lastEventAt;
+		expect(first).toBeDefined();
+		bus.publish({ type: "progress", runId: id("r1"), delta: { text: "read" } });
+		bus.publish({ type: "agentEvent", runId: id("r1"), event: { type: "x" } });
+		// Within the floor window the record is untouched.
+		expect(store.readRecord(id("r1"))?.lastEventAt).toBe(first);
+		off();
+	});
 });
 
 describe("retention", () => {
@@ -959,6 +995,50 @@ describe("RpcClient-backed runner", () => {
 		).result();
 		expect(result.status).toBe("timed-out");
 		expect(result.error).toContain("stalled");
+	});
+
+	it("drops the streaming delta firehose — only lifecycle events reach the bus", async () => {
+		// Children emit token-by-token deltas at hundreds/sec/run; forwarding
+		// them meant sync disk writes per token across every parallel run
+		// (221MB of delta logs, laggy maestro — 2026-07-15 dogfood).
+		const fatMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "x".repeat(10_000) }],
+			usage: { input: 10, output: 20 },
+		};
+		const { factory } = fakeClient({
+			text: "done",
+			emit: [
+				{ type: "message_start" },
+				{ type: "message_update", message: fatMessage },
+				{ type: "thinking_delta" },
+				{ type: "text_delta" },
+				{ type: "tool_execution_start", toolName: "grep" },
+				{ type: "turn_end", message: fatMessage },
+			],
+		});
+		const forwarded: string[] = [];
+		let turnEndBytes = 0;
+		bus.subscribe((m) => {
+			if (m.type !== "agentEvent") return;
+			const type = (m.event as { type?: string }).type ?? "?";
+			forwarded.push(type);
+			if (type === "turn_end") turnEndBytes = JSON.stringify(m.event).length;
+		});
+		const result = await launch(factory).result();
+		expect(result.status).toBe("succeeded");
+		expect(forwarded).toEqual([
+			"tool_execution_start",
+			"turn_end",
+			"agent_end",
+		]);
+		// turn_end travels slimmed to usage — the 10KB body stays in the
+		// child's session file, not the bus/journal.
+		expect(turnEndBytes).toBeLessThan(200);
+		const persisted = readFileSync(join(root, "run-1", "events.jsonl"), "utf8");
+		expect(persisted).not.toContain("text_delta");
+		expect(persisted).not.toContain("message_update");
+		expect(persisted).not.toContain("x".repeat(100));
 	});
 
 	it("publishes the monotonic status lifecycle: starting → running → terminal", async () => {

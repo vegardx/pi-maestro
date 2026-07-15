@@ -17,7 +17,7 @@ import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
 } from "./exec/commit-policy.js";
-import type { AgentMode, Deliverable } from "./schema.js";
+import type { AgentMode, Deliverable, WorkerRestartMode } from "./schema.js";
 import {
 	defaultBranchForDeliverable,
 	deliverableWorkspace,
@@ -38,6 +38,7 @@ export type AgentStatus =
 	| "spawning"
 	| "working"
 	| "summarizing"
+	| "restarting"
 	| "done"
 	| "failed";
 
@@ -46,6 +47,8 @@ export interface AgentState {
 	name: string;
 	deliverableId: string;
 	status: AgentStatus;
+	/** Monotonic worker process epoch; absent on legacy/test support state = 0. */
+	generation?: number;
 	/** Random display name (from agent-names.ts). */
 	displayName?: string;
 	/** tmux session id. */
@@ -141,6 +144,8 @@ export interface SpawnAgentOpts {
 	effort?: string;
 	worktreePath: string;
 	seed: string;
+	/** Explicit fresh-restart packet; adapter must use seed verbatim. */
+	freshRecovery?: boolean;
 	/** Resume an existing session file instead of seeding a fresh one. */
 	resumeSessionFile?: string;
 	/** Positional kickoff message for the (re)spawned pi process. */
@@ -206,6 +211,7 @@ export class DeliverableExecutor {
 			name: "worker",
 			deliverableId: g.id,
 			status: "pending",
+			generation: g.sessionGeneration ?? 0,
 			// The persisted session file makes the respawn a RESUME — the
 			// worker comes back cache-hot with its full transcript instead of
 			// being re-seeded from scratch.
@@ -216,6 +222,7 @@ export class DeliverableExecutor {
 				name: agent.name,
 				deliverableId: g.id,
 				status: "pending",
+				generation: 0,
 			});
 		}
 		this.deliverableStates.set(g.id, deliverableState);
@@ -283,11 +290,29 @@ export class DeliverableExecutor {
 	 * Idempotent: concurrent callers (RPC done + poll timer) share one run;
 	 * agents already summarizing or done are left alone.
 	 */
-	async markAgentDone(deliverableId: string, agentName: string): Promise<void> {
+	async markAgentDone(
+		deliverableId: string,
+		agentName: string,
+		expected?: { generation: number; sessionId?: string },
+	): Promise<void> {
 		const key = `${deliverableId}/${agentName}`;
+		const agent = this.getAgentState(deliverableId, agentName);
+		if (
+			expected &&
+			(!agent ||
+				(agent.generation ?? 0) !== expected.generation ||
+				(expected.sessionId !== undefined &&
+					agent.sessionId !== expected.sessionId))
+		) {
+			return;
+		}
 		const inFlight = this.doneInFlight.get(key);
 		if (inFlight) return inFlight;
-		const run = this.runMarkAgentDone(deliverableId, agentName).finally(() => {
+		const run = this.runMarkAgentDone(
+			deliverableId,
+			agentName,
+			expected,
+		).finally(() => {
 			this.doneInFlight.delete(key);
 		});
 		this.doneInFlight.set(key, run);
@@ -297,6 +322,7 @@ export class DeliverableExecutor {
 	private async runMarkAgentDone(
 		deliverableId: string,
 		agentName: string,
+		expected?: { generation: number; sessionId?: string },
 	): Promise<void> {
 		const state = this.deliverableStates.get(deliverableId);
 		if (!state) return;
@@ -307,6 +333,7 @@ export class DeliverableExecutor {
 		// Capture before any await: if the agent is respawned while we
 		// summarize, the stale completion must not kill the fresh session.
 		const sessionId = agent.sessionId;
+		const generation = agent.generation ?? 0;
 
 		// Request summary
 		if (sessionId) {
@@ -328,6 +355,16 @@ export class DeliverableExecutor {
 			}
 
 			await this.deps.killSession(sessionId);
+		}
+
+		// The awaited summary/kill may have crossed a replacement. A stale
+		// completion must not mark the fresh generation done.
+		if (
+			(agent.generation ?? 0) !== generation ||
+			agent.sessionId !== sessionId ||
+			(expected && expected.generation !== generation)
+		) {
+			return;
 		}
 
 		agent.status = "done";
@@ -402,6 +439,23 @@ export class DeliverableExecutor {
 		return { recovered, failed };
 	}
 
+	/** Re-provision only a missing persisted workspace during validated recovery. */
+	async reprovisionWorkspace(
+		deliverableId: string,
+	): Promise<{ worktreePath: string; branch?: string }> {
+		const g = findDeliverable(this.engine.get(), deliverableId);
+		const state = this.deliverableStates.get(deliverableId);
+		if (!g || !state) throw new Error(`no active deliverable ${deliverableId}`);
+		if (state.worktreePath && existsSync(state.worktreePath)) {
+			throw new Error(`workspace ${state.worktreePath} still exists`);
+		}
+		const result = await this.provisionWorkspace(g);
+		state.worktreePath = result.worktreePath;
+		state.branch = result.branch;
+		this.engine.updateDeliverable(deliverableId, result);
+		return result;
+	}
+
 	/**
 	 * Check if all gating tasks for a worker are toggled.
 	 */
@@ -423,13 +477,60 @@ export class DeliverableExecutor {
 		if (!agentState) throw new Error(`no state for agent ${agentName}`);
 
 		// Reset agent state for respawn; sessionFile is kept so the respawn
-		// resumes the agent's own transcript instead of starting cold.
+		// resumes the agent's own transcript instead of starting cold. A worker
+		// process replacement advances its epoch even when JSONL is retained.
 		agentState.status = "pending";
+		if (agentName === "worker")
+			agentState.generation = (agentState.generation ?? 0) + 1;
 		agentState.sessionId = undefined;
 		agentState.error = undefined;
 		agentState.completedAt = undefined;
 
 		await this.spawnAgentInDeliverable(g, state, agentName);
+	}
+
+	/**
+	 * Replace a stopped worker after the adapter has proven the old process is
+	 * absent and the workspace is safe. Resume retains JSONL; fresh uses the
+	 * supplied recovery seed and allocates a new JSONL in spawnAgent.
+	 */
+	async replaceWorker(
+		deliverableId: string,
+		mode: WorkerRestartMode,
+		generation: number,
+		recoverySeed?: string,
+	): Promise<AgentState> {
+		const g = findDeliverable(this.engine.get(), deliverableId);
+		const state = this.deliverableStates.get(deliverableId);
+		const worker = state?.agents.get("worker");
+		if (!g || !state || !worker) {
+			throw new Error(`no active worker state for ${deliverableId}`);
+		}
+		if (!state.worktreePath)
+			throw new Error(`no workspace for ${deliverableId}`);
+		state.blocked = undefined;
+		state.completed.delete("worker");
+		worker.status = "restarting";
+		worker.generation = generation;
+		worker.sessionId = undefined;
+		worker.summary = undefined;
+		worker.error = undefined;
+		worker.completedAt = undefined;
+		if (mode === "fresh") worker.sessionFile = undefined;
+		worker.status = "pending";
+		await this.spawnAgentInDeliverable(
+			g,
+			state,
+			"worker",
+			mode === "resume"
+				? "Your worker process was safely replaced. Review progress and continue."
+				: "Continue from the fresh-session recovery seed. Inspect and preserve existing work before editing.",
+			recoverySeed,
+		);
+		if (this.getAgentState(deliverableId, "worker")?.status !== "working") {
+			throw new Error(`replacement worker for ${deliverableId} did not spawn`);
+		}
+		return worker;
 	}
 
 	// ─── Internal ──────────────────────────────────────────────────────────
@@ -529,12 +630,14 @@ export class DeliverableExecutor {
 			name: "worker",
 			deliverableId: g.id,
 			status: "pending",
+			generation: 0,
 		});
 		for (const agent of g.agents) {
 			deliverableState.agents.set(agent.name, {
 				name: agent.name,
 				deliverableId: g.id,
 				status: "pending",
+				generation: 0,
 			});
 		}
 
@@ -583,6 +686,7 @@ export class DeliverableExecutor {
 		state: DeliverableRunState,
 		name: string,
 		kickoffMessage?: string,
+		seedOverride?: string,
 	): Promise<void> {
 		const agentState = state.agents.get(name);
 		if (!agentState) return;
@@ -617,7 +721,9 @@ export class DeliverableExecutor {
 		// Resurrection: an agent with a prior session file resumes its own
 		// transcript (cache-hot) instead of being re-seeded from scratch.
 		const resumeSessionFile = agentState.sessionFile;
-		const seed = resumeSessionFile ? "" : this.buildSeed(g, state, name);
+		const seed = resumeSessionFile
+			? ""
+			: (seedOverride ?? this.buildSeed(g, state, name));
 
 		const spawned = await this.deps.spawnAgent({
 			deliverableId: g.id,
@@ -628,6 +734,7 @@ export class DeliverableExecutor {
 			effort,
 			worktreePath: state.worktreePath!,
 			seed,
+			...(seedOverride !== undefined ? { freshRecovery: true } : {}),
 			...(resumeSessionFile
 				? {
 						resumeSessionFile,
@@ -694,7 +801,8 @@ export class DeliverableExecutor {
 			(a) =>
 				a.status === "spawning" ||
 				a.status === "working" ||
-				a.status === "summarizing",
+				a.status === "summarizing" ||
+				a.status === "restarting",
 		);
 		if (active.length === 0) return true;
 		if (mode === "full") return false;

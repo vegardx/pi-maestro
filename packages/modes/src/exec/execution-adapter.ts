@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
-import { detectDefaultBranch } from "@vegardx/pi-git";
+import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
 	MaestroRpcServer,
@@ -31,8 +31,11 @@ import { QuestionQueue } from "../question-queue.js";
 import { reportsNotInText, researchReportsDir } from "../research.js";
 import {
 	deliverableWorkspace,
+	findDeliverable,
 	repoFor,
 	SUMMARY_TOKEN_BUDGET,
+	type WorkerRestartMode,
+	workerSessionGeneration,
 } from "../schema.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
 import {
@@ -57,6 +60,11 @@ import {
 import { createRpcRouter, type RpcRouter } from "./rpc-router.js";
 import { buildSeed, type SeedSummaries, truncateSummary } from "./seeds.js";
 import { shipDeliverable as shipDeliverableReal } from "./shipper.js";
+import {
+	validateRestartWorkspace,
+	type WorkspaceValidationDeps,
+	type WorkspaceValidationResult,
+} from "./workspace-validation.js";
 
 /**
  * Consecutive idle reports after which an agent with no task-based completion
@@ -177,6 +185,11 @@ export interface ExecutionAdapterOpts {
 		model?: string;
 		effort?: ThinkingLevel;
 	}) => Promise<{ modelId: string; effort?: ThinkingLevel }>;
+	/** Injectable read-only git/filesystem facts for restart validation. */
+	workspaceValidation?: Partial<WorkspaceValidationDeps>;
+	/** Restart kill barrier timing (shortened in tests). */
+	restartKillTimeoutMs?: number;
+	restartPollMs?: number;
 	onPlanChanged: () => void;
 	onAgentStateChanged?: (
 		id: string,
@@ -197,6 +210,22 @@ export interface ExecutionAdapterOpts {
 	 * runtime turns it into a decision question for the human.
 	 */
 	onShipGateBlocked?: (deliverableId: string, reason: string) => void;
+}
+
+export interface WorkerRestartResult {
+	ok: boolean;
+	deliverableId: string;
+	mode: WorkerRestartMode;
+	generation: number;
+	workspace?: WorkspaceValidationResult;
+	sessionPath?: string;
+	error?: string;
+}
+
+export interface WorkerRestartPreview extends WorkspaceValidationResult {
+	deliverableId: string;
+	mode: WorkerRestartMode;
+	generation: number;
 }
 
 /**
@@ -256,6 +285,9 @@ export class ExecutionAdapter {
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
 	private pollInFlight = false; // skip overlapping pollSessions runs
+	/** All spawn/kill/poll/completion/restart/shutdown transitions serialize here. */
+	private lifecycleTail: Promise<void> = Promise.resolve();
+	private restarting = new Set<string>();
 
 	readonly questionQueue = new QuestionQueue();
 
@@ -450,14 +482,16 @@ export class ExecutionAdapter {
 						researchReportsDir(this.opts.planDir),
 						this.readKnowledgeContent(knowledgeSessionPath),
 					).map((r) => ({ ref: r.ref, question: r.question }));
-					const seed = buildSeed({
-						plan: this.engine.get(),
-						deliverable,
-						agentName: spawnOpts.agentName,
-						summaries: this.collectSeedSummaries(spawnOpts.deliverableId),
-						...(policyNote ? { policyNote } : {}),
-						...(researchRefs.length > 0 ? { researchRefs } : {}),
-					});
+					const seed = spawnOpts.freshRecovery
+						? spawnOpts.seed
+						: buildSeed({
+								plan: this.engine.get(),
+								deliverable,
+								agentName: spawnOpts.agentName,
+								summaries: this.collectSeedSummaries(spawnOpts.deliverableId),
+								...(policyNote ? { policyNote } : {}),
+								...(researchRefs.length > 0 ? { researchRefs } : {}),
+							});
 
 					// Build session file (JSONL): fork the plan's frozen knowledge
 					// session when it exists (shared cache prefix), then append
@@ -565,9 +599,18 @@ export class ExecutionAdapter {
 				// worker RESUMED from its session file instead of from scratch.
 				if (isWorker) {
 					try {
-						this.engine.updateDeliverable(spawnOpts.deliverableId, {
+						const current = findDeliverable(
+							this.engine.get(),
+							spawnOpts.deliverableId,
+						);
+						const generation =
+							this.executor?.getAgentState(spawnOpts.deliverableId, "worker")
+								?.generation ?? workerSessionGeneration(current ?? deliverable);
+						this.engine.updateWorkerSession(spawnOpts.deliverableId, {
 							sessionPath: sessionFile,
 							sessionName,
+							sessionGeneration: generation,
+							restartState: "running",
 						});
 					} catch {
 						// Persistence is best-effort — recovery degrades to re-seed.
@@ -1023,6 +1066,319 @@ export class ExecutionAdapter {
 			: "required review verdicts not satisfied";
 	}
 
+	/** Run one lifecycle mutation after all prior lifecycle work settles. */
+	private withLifecycle<T>(fn: () => Promise<T>): Promise<T> {
+		const run = this.lifecycleTail.then(fn, fn);
+		this.lifecycleTail = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
+	}
+
+	previewWorkerRestart(
+		deliverableId: string,
+		mode: WorkerRestartMode,
+	): WorkerRestartPreview {
+		const plan = this.engine.get();
+		const deliverable = findDeliverable(plan, deliverableId);
+		const generation = deliverable
+			? workerSessionGeneration(deliverable) + 1
+			: 0;
+		if (!deliverable) {
+			return {
+				ok: false,
+				deliverableId,
+				mode,
+				generation,
+				error: `unknown deliverable: ${deliverableId}`,
+			};
+		}
+		if (deliverable.status !== "active") {
+			return {
+				ok: false,
+				deliverableId,
+				mode,
+				generation,
+				error: `deliverable ${deliverableId} is ${deliverable.status}, not active`,
+			};
+		}
+		return {
+			deliverableId,
+			mode,
+			generation,
+			...validateRestartWorkspace(
+				plan,
+				deliverable,
+				this.opts.workspaceValidation,
+			),
+		};
+	}
+
+	async restartWorkerResume(
+		deliverableId: string,
+	): Promise<WorkerRestartResult> {
+		return this.restartWorker(deliverableId, "resume");
+	}
+
+	async restartWorkerFresh(
+		deliverableId: string,
+	): Promise<WorkerRestartResult> {
+		return this.restartWorker(deliverableId, "fresh");
+	}
+
+	private async restartWorker(
+		deliverableId: string,
+		mode: WorkerRestartMode,
+	): Promise<WorkerRestartResult> {
+		return this.withLifecycle(async () => {
+			const preview = this.previewWorkerRestart(deliverableId, mode);
+			if (!preview.ok && !preview.missing) return preview;
+			const state = this.executor.getStates().get(deliverableId);
+			const worker = state?.agents.get("worker");
+			const deliverable = findDeliverable(this.engine.get(), deliverableId);
+			if (!state || !worker || !deliverable) return preview;
+			this.restarting.add(deliverableId);
+			worker.status = "restarting";
+			this.executor.blockDeliverable(
+				deliverableId,
+				`worker restarting (${mode})`,
+			);
+			this.engine.updateWorkerSession(deliverableId, {
+				restartMode: mode,
+				restartState: "restarting",
+			});
+			const oldSession = worker.sessionId ?? deliverable.sessionName;
+			const oldGeneration =
+				worker.generation ?? workerSessionGeneration(deliverable);
+			const oldPath = deliverable.sessionPath ?? worker.sessionFile;
+			try {
+				if (oldSession) {
+					const gone = await this.stopAndProveGone(
+						`${deliverableId}/worker`,
+						oldSession,
+						"worker restart",
+					);
+					if (!gone) {
+						const error = `old tmux session ${oldSession} did not exit before timeout`;
+						this.engine.updateWorkerSession(deliverableId, {
+							restartState: "blocked",
+						});
+						this.executor.blockDeliverable(deliverableId, error);
+						return { ...preview, ok: false, error };
+					}
+				}
+				if ((worker.generation ?? 0) !== oldGeneration) {
+					return {
+						...preview,
+						ok: false,
+						error: "worker generation changed during restart barrier",
+					};
+				}
+
+				let workspace = preview;
+				if (preview.missing) {
+					// Missing is the sole mutation-allowing validation result. Existing
+					// invalid workspaces never trigger Git state changes.
+					const provisioned =
+						await this.executor.reprovisionWorkspace(deliverableId);
+					workspace = this.previewWorkerRestart(deliverableId, mode);
+					if (!workspace.ok) {
+						return { ...workspace, ok: false };
+					}
+					if (provisioned.worktreePath !== workspace.path) {
+						return {
+							...workspace,
+							ok: false,
+							error: "reprovisioned workspace could not be reserved",
+						};
+					}
+				}
+
+				const nextGeneration = oldGeneration + 1;
+				const history =
+					mode === "fresh" && oldPath
+						? [...(deliverable.previousSessionPaths ?? []), oldPath]
+						: deliverable.previousSessionPaths;
+				this.engine.updateWorkerSession(deliverableId, {
+					sessionGeneration: nextGeneration,
+					restartMode: mode,
+					restartState: "restarting",
+				});
+				const seed =
+					mode === "fresh"
+						? this.buildFreshRecoverySeed(deliverableId, nextGeneration)
+						: undefined;
+				await this.executor.replaceWorker(
+					deliverableId,
+					mode,
+					nextGeneration,
+					seed,
+				);
+				this.engine.updateWorkerSession(deliverableId, {
+					...(history ? { previousSessionPaths: history } : {}),
+					restartState: "running",
+				});
+				const persisted = findDeliverable(this.engine.get(), deliverableId);
+				return {
+					...workspace,
+					ok: true,
+					deliverableId,
+					mode,
+					generation: nextGeneration,
+					...(persisted?.sessionPath
+						? { sessionPath: persisted.sessionPath }
+						: {}),
+				};
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				this.engine.updateWorkerSession(deliverableId, {
+					restartState: "blocked",
+				});
+				this.executor.blockDeliverable(
+					deliverableId,
+					`restart failed: ${message}`,
+				);
+				return { ...preview, ok: false, error: message };
+			} finally {
+				this.restarting.delete(deliverableId);
+			}
+		});
+	}
+
+	private async stopAndProveGone(
+		agentKey: string,
+		sessionId: string,
+		reason: string,
+	): Promise<boolean> {
+		this.router.send(agentKey, { type: "shutdown", reason });
+		const gracefulUntil =
+			Date.now() + Math.min(1000, this.opts.restartKillTimeoutMs ?? 5000);
+		while (Date.now() < gracefulUntil) {
+			if (!(await this.tmux.hasSession(sessionId))) break;
+			await new Promise((resolve) =>
+				setTimeout(resolve, this.opts.restartPollMs ?? 50),
+			);
+		}
+		if (await this.tmux.hasSession(sessionId)) {
+			await this.tmux.kill(sessionId).catch(() => {});
+		}
+		const deadline = Date.now() + (this.opts.restartKillTimeoutMs ?? 5000);
+		while (Date.now() < deadline) {
+			if (!(await this.tmux.hasSession(sessionId))) {
+				if (this.sessionNames.get(agentKey) === sessionId) {
+					this.sessionNames.delete(agentKey);
+				}
+				return true;
+			}
+			await new Promise((resolve) =>
+				setTimeout(resolve, this.opts.restartPollMs ?? 50),
+			);
+		}
+		return !(await this.tmux.hasSession(sessionId));
+	}
+
+	private buildFreshRecoverySeed(
+		deliverableId: string,
+		generation: number,
+	): string {
+		const plan = this.engine.get();
+		const g = findDeliverable(plan, deliverableId);
+		if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+		const state = this.executor.getStates().get(deliverableId);
+		const workspace = state?.worktreePath ?? g.worktreePath ?? "(missing)";
+		const branch = g.branch ?? "(scratch workspace — no branch)";
+		const done = g.tasks.filter((task) => task.done);
+		const remaining = g.tasks.filter((task) => !task.done);
+		const commits = this.commitsFor(workspace);
+		const open = g.reviewLedger
+			? openBlocking(
+					g.reviewLedger,
+					new Set(
+						(g.waivers ?? []).flatMap((waiver) =>
+							waiver.findingId ? [waiver.findingId] : [],
+						),
+					),
+				).map((entry) => `${entry.finding.id}: ${entry.finding.claim}`)
+			: [];
+		const agentFacts = state
+			? [...state.agents.values()]
+					.filter((agent) => agent.summary || agent.error)
+					.map(
+						(agent) =>
+							`- ${agent.name}: ${agent.summary ?? `error: ${agent.error}`}`,
+					)
+			: [];
+		const repository =
+			deliverableWorkspace(g) === "scratch"
+				? "(scratch workspace)"
+				: repoFor(plan, g).path;
+		return [
+			"# Fresh-session recovery",
+			`Plan: ${plan.slug}`,
+			`Deliverable: ${g.id} — ${g.title}`,
+			`Worker generation: ${generation}`,
+			"",
+			"## Assigned workspace",
+			`- Workspace: ${workspace}`,
+			`- Repository: ${repository}`,
+			`- Branch: ${branch}`,
+			"- The workspace is already provisioned. Do not create another worktree or checkout/change branches.",
+			"- Inspect git status and existing files first. Preserve all valid dirty/uncommitted changes.",
+			"",
+			"## Deliverable",
+			g.body,
+			"",
+			"## Done tasks",
+			...(done.length
+				? done.map((task) => `- [x] ${task.title}: ${task.body}`)
+				: ["- None"]),
+			"",
+			"## Remaining tasks",
+			...(remaining.length
+				? remaining.map((task) => `- [ ] ${task.title}: ${task.body}`)
+				: ["- None"]),
+			"",
+			"## Existing summaries and errors",
+			...(g.summary ? [g.summary] : []),
+			...(agentFacts.length ? agentFacts : ["- None recorded"]),
+			"",
+			"## Existing commits",
+			...(commits.length
+				? commits.map((commit) => `- ${commit}`)
+				: ["- None recorded"]),
+			"",
+			"## Review ledger and open findings",
+			...(g.reviewLedger
+				? [`- cycle ${g.reviewLedger.cycle}, round ${g.reviewLedger.round}`]
+				: ["- No review ledger"]),
+			...(open.length
+				? open.map((finding) => `- ${finding}`)
+				: ["- No open blocking findings"]),
+			"",
+			"## Artifacts",
+			...(g.prUrl ? [`- PR: ${g.prUrl}`] : []),
+			...(g.previousSessionPaths ?? []).map(
+				(path) => `- Previous session: ${path}`,
+			),
+			...(g.sessionPath ? [`- Replaced session: ${g.sessionPath}`] : []),
+			"",
+			"Continue only in the assigned workspace. Inspect and preserve existing changes; do not reset, clean, checkout, or create worktrees. Commit as you go, update tasks normally, and satisfy the existing review ledger without rewriting it.",
+		].join("\n");
+	}
+
+	private commitsFor(workspace: string): string[] {
+		const result = runCommand("git", ["log", "-10", "--pretty=%h %s"], {
+			cwd: workspace,
+		});
+		return result.ok
+			? result.stdout
+					.split("\n")
+					.map((line) => line.trim())
+					.filter(Boolean)
+			: [];
+	}
+
 	async start(): Promise<void> {
 		mkdirSync(this.opts.planDir, { recursive: true });
 		await this.rpcServer.listen(this.socketPath);
@@ -1047,7 +1403,9 @@ export class ExecutionAdapter {
 	 * executor never runs two ticks concurrently.
 	 */
 	async tick(): Promise<number> {
-		const run = this.tickChain.then(() => this.tickOnce());
+		const run = this.tickChain.then(() =>
+			this.withLifecycle(() => this.tickOnce()),
+		);
 		this.tickChain = run.then(
 			() => undefined,
 			() => undefined,
@@ -1123,6 +1481,10 @@ export class ExecutionAdapter {
 		agentNamePart: string,
 		status: "working" | "idle" | "error",
 	): void {
+		if (this.restarting.has(deliverableId)) return;
+		const mapped = this.sessionNames.get(agentId);
+		const state = this.executor.getAgentState(deliverableId, agentNamePart);
+		if (mapped && state?.sessionId && mapped !== state.sessionId) return;
 		this.lastRpcStatus.set(agentId, status);
 		if (status === "working") {
 			this.idleCount.set(agentId, 0);
@@ -1206,6 +1568,11 @@ export class ExecutionAdapter {
 	}
 
 	private handleDone(deliverableId: string, agentNamePart: string): void {
+		if (this.restarting.has(deliverableId)) return;
+		const agentKey = `${deliverableId}/${agentNamePart}`;
+		const state = this.executor.getAgentState(deliverableId, agentNamePart);
+		const mapped = this.sessionNames.get(agentKey);
+		if (mapped && state?.sessionId && mapped !== state.sessionId) return;
 		if (
 			agentNamePart === "worker" &&
 			!this.workerMayComplete(
@@ -1315,7 +1682,7 @@ export class ExecutionAdapter {
 	 * rejection safety — a summarize/kill race must never crash the maestro.
 	 */
 	private completeAgent(deliverableId: string, name: string): void {
-		this.finishAgent(deliverableId, name).then(
+		this.withLifecycle(() => this.finishAgent(deliverableId, name)).then(
 			() => {
 				this.opts.onPlanChanged();
 				this.tick().catch((e) => {
@@ -1341,6 +1708,8 @@ export class ExecutionAdapter {
 		const agentKey = `${deliverableId}/${name}`;
 		const state = this.executor.getAgentState(deliverableId, name);
 		const firstCompletion = Boolean(state && state.status !== "done");
+		const capturedGeneration = state?.generation ?? 0;
+		const capturedSession = state?.sessionId;
 		// Capture live bookkeeping now — markAgentDone kills the session, which
 		// prunes tokenSnapshots (see killSession) before the event is emitted.
 		const tokens = this.tokenSnapshots.get(agentKey);
@@ -1349,7 +1718,10 @@ export class ExecutionAdapter {
 		if (firstCompletion) {
 			this.logEvent("done", { agent: agentKey });
 		}
-		await this.executor.markAgentDone(deliverableId, name);
+		await this.executor.markAgentDone(deliverableId, name, {
+			generation: capturedGeneration,
+			...(capturedSession ? { sessionId: capturedSession } : {}),
+		});
 		if (firstCompletion) {
 			// Summary exists only after markAgentDone ran requestSummary.
 			const summary = this.executor.getAgentState(deliverableId, name)?.summary;
@@ -1639,7 +2011,7 @@ export class ExecutionAdapter {
 	}
 
 	async markAgentDone(deliverableId: string, name: string): Promise<void> {
-		await this.finishAgent(deliverableId, name);
+		await this.withLifecycle(() => this.finishAgent(deliverableId, name));
 		this.opts.onPlanChanged();
 	}
 
@@ -1661,20 +2033,22 @@ export class ExecutionAdapter {
 	}
 
 	async destroy(): Promise<void> {
-		this._started = false;
-		if (this.pollTimer) {
-			clearInterval(this.pollTimer);
-			this.pollTimer = undefined;
-		}
-		// Kill all tmux sessions
-		for (const sessionName of this.sessionNames.values()) {
-			if (await this.tmux.hasSession(sessionName)) {
-				await this.tmux.kill(sessionName).catch(() => {});
+		return this.withLifecycle(async () => {
+			this._started = false;
+			if (this.pollTimer) {
+				clearInterval(this.pollTimer);
+				this.pollTimer = undefined;
 			}
-		}
-		this.sessionNames.clear();
-		this.router.dispose();
-		this.rpcServer.close();
+			// Kill all tmux sessions
+			for (const sessionName of this.sessionNames.values()) {
+				if (await this.tmux.hasSession(sessionName)) {
+					await this.tmux.kill(sessionName).catch(() => {});
+				}
+			}
+			this.sessionNames.clear();
+			this.router.dispose();
+			this.rpcServer.close();
+		});
 	}
 
 	/** Where a session's dying screen is captured (see buildSpawnSpec). */
@@ -1699,14 +2073,23 @@ export class ExecutionAdapter {
 	// --- Poll timer: detect dead sessions ---
 
 	private async pollSessions(): Promise<void> {
-		// Overlap guard: a slow run (respawns, kill waits) must finish before
-		// the next interval fire starts inspecting the same agents.
+		// Set before joining the lifecycle queue so concurrent interval/manual
+		// calls skip rather than queue a duplicate sweep behind the first.
 		if (this.pollInFlight) return;
 		this.pollInFlight = true;
+		try {
+			await this.withLifecycle(() => this.pollSessionsLocked());
+		} finally {
+			this.pollInFlight = false;
+		}
+	}
+
+	private async pollSessionsLocked(): Promise<void> {
 		try {
 			for (const [agentKey, sessionName] of this.sessionNames) {
 				const [deliverableId, agentNamePart] = agentKey.split("/");
 				if (!deliverableId || !agentNamePart) continue;
+				if (this.restarting.has(deliverableId)) continue;
 
 				// Skip agents already done, mid-summarize (session torn down
 				// deliberately — not a crash), or FAILED: a crash-capped agent's
@@ -1716,6 +2099,7 @@ export class ExecutionAdapter {
 				const deliverableState = states.get(deliverableId);
 				if (!deliverableState) continue;
 				const agentState = deliverableState.agents.get(agentNamePart);
+				if (agentState?.sessionId !== sessionName) continue;
 				if (
 					!agentState ||
 					agentState.status === "done" ||
@@ -1806,7 +2190,7 @@ export class ExecutionAdapter {
 				}
 			}
 		} finally {
-			this.pollInFlight = false;
+			// pollSessions owns the overlap flag outside the lifecycle queue.
 		}
 	}
 

@@ -37,12 +37,15 @@ export function defaultPalette(overrides: Partial<Palette> = {}): Palette {
 
 const RUN_GLYPHS: Record<RunStatus, string> = {
 	queued: "○",
+	starting: "◌",
 	running: "◐",
 	blocked: "⏸",
+	interrupting: "◑",
 	succeeded: "✓",
 	failed: "✗",
 	stopped: "■",
 	canceled: "⊘",
+	"timed-out": "⏱",
 };
 
 const DELIVERABLE_GLYPHS: Record<DeliverableStatus, string> = {

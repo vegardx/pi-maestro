@@ -732,6 +732,120 @@ describe("execution adapter — lifecycle correctness", () => {
 		expect(adapter.deliverableGateSatisfied("ghosted")).toBe(false);
 		expect(adapter.failingRequiredReviewers("ghosted")).toContain("sec");
 	});
+
+	it("a missing required reviewer steers ONE targeted repair — never rework or respawn", async () => {
+		// The loop that wedged live runs: reviewer times out → no findings, no
+		// participation → worker completes into the gate → send-back respawns a
+		// worker with NOTHING to fix → it completes → same gate. A missing
+		// reviewer is a review-run failure: the worker gets one steer to
+		// review({action:"repair"}), and only after that fails does the visible
+		// gate (triage/human) own it.
+		gatedDeliverable("Ghost", "ghost");
+		const adapter = await startAdapter("ghost");
+		const executor = adapter.getExecutor();
+
+		const steers: string[] = [];
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const received: MaestroMessage[] = [];
+		client.on("message", (msg) => {
+			received.push(msg);
+			if (msg.type === "steer") steers.push(msg.content);
+			if (msg.type === "summarize") {
+				client.send({ type: "summary", id: msg.id, content: "done" });
+			}
+		});
+		client.connect(join(tmpDir, "maestro.sock"), {
+			agentId: "ghost/worker",
+			role: "agent",
+			token: TOKEN,
+			pid: process.pid,
+		});
+		await until(() => received.some((m) => m.type === "helloAck" && m.ok));
+
+		// Panel round: reviewer timed out — no findings, not participating.
+		const ledger = failingLedger();
+		ledger.entries = [];
+		(ledger.participants as unknown[]) = [
+			{
+				name: "sec",
+				ok: false,
+				status: "timed-out",
+				attempt: 1,
+				error: "(reviewer timed-out: timed out)",
+			},
+		];
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "ghost",
+			round: 1,
+			roundKind: "panel",
+			verdicts: [
+				{
+					name: "sec",
+					persona: "security-audit",
+					required: true,
+					verdict: "none",
+					ok: false,
+					report: "(reviewer timed-out: timed out)",
+				},
+			],
+			ledger,
+		});
+		await until(() => engine.get().deliverables[0].reviewLedger?.round === 1);
+
+		// All tasks toggled with a missing reviewer → repair steer, not a kill,
+		// not completion into the gate.
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "ghost",
+			params: { taskId },
+		});
+		await until(() => steers.length > 0);
+		expect(steers[0]).toContain('review({action: "repair"})');
+		expect(steers[0]).toContain("sec");
+		expect(steers[0]).toContain("Do NOT rework");
+		expect(executor.getAgentState("ghost", "worker")!.status).toBe("working");
+
+		// Repeated idle polls within the grace window: no completion, no
+		// second steer, and — critically — no new review work spawned.
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await wait(150);
+		expect(steers).toHaveLength(1);
+		expect(executor.getAgentState("ghost", "worker")!.status).toBe("working");
+
+		// The explicit repair reports the reviewer in → gate clear → done.
+		const repaired = failingLedger();
+		repaired.entries = [];
+		(repaired.participants as unknown[]) = [
+			{ name: "sec", ok: true, status: "approve", attempt: 2 },
+		];
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "ghost",
+			round: 2,
+			roundKind: "panel",
+			verdicts: [
+				{
+					name: "sec",
+					persona: "security-audit",
+					required: true,
+					verdict: "approve",
+					ok: true,
+					report: "clean\nVERDICT: PASS",
+				},
+			],
+			ledger: repaired,
+		});
+		client.send({ type: "status", status: "idle" });
+		await until(
+			() => executor.getAgentState("ghost", "worker")!.status === "done",
+		);
+	});
 });
 
 describe("crash-cap fail fires once", () => {

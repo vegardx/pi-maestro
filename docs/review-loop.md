@@ -106,6 +106,17 @@ Beats 2–3 repeat as **fix cycles**, budgeted per deliverable
 claiming completion mid-cycle gets steered back to the open ids instead of
 being killed.
 
+## Debug repair does not rewrite review governance
+
+The debug repair vocabulary is intentionally unable to alter this ledger.
+Automatic repair may only add a corrective task, clarify untouched task text,
+add a manual checkpoint, or idempotently reopen an erroneously completed task
+on a stopped affected deliverable. It cannot change panel membership or
+requiredness, finding severities/statuses, resolutions, waivers, verdicts,
+fix-cycle history, PR metadata, or deliverable lifecycle/dependencies. Any such
+change remains a dedicated human/runtime workflow, preserving the evidence
+that originally gated shipping.
+
 ## The escalation ladder
 
 When the gate blocks — open blocking findings survive the budget, or a

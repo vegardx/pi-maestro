@@ -124,11 +124,84 @@ question only on repeat blocks. The full design is in
 - `/verify [deliverable-id]` — deep verification of started deliverables:
   read-only subagents read each deliverable's actual diff and judge whether
   its tasks were genuinely accomplished.
-- `/debug [symptom]` — collect bounded current-session diagnostics and present one mutually exclusive recovery decision. A recommendation is preselected, but no steering, retry, restart, or repair runs until the user submits it.
+- `/debug [symptom]` — collect bounded current-session diagnostics and present
+  one mutually exclusive recovery decision. A recommendation is preselected,
+  but no steering, retry, restart, or repair runs until you submit it. Recovery
+  runs at most once; afterward, the issue review offers **Create issue** /
+  **Revise draft** / **Cancel**. Revisions take a conditional free-text
+  instruction and may repeat without a cap because each iteration is
+  user-driven. Cancel/defer posts nothing and deletes transient state.
 - `/retry <deliverable-id>` — clear a blocked deliverable and re-attempt it.
 - `/recover` — after an interruption: audit the plan against reality
   (worktrees, branches, PRs) and resume interrupted workers from their
   saved sessions.
+
+### Debug recovery and issue review
+
+Recovery labels describe their exact effect:
+
+- **Steer current worker** preserves process, JSONL session, and workspace.
+- **Retry activation** clears only a retryable activation block and ticks the
+  scheduler; it does not promise a process restart.
+- **Restart and resume** replaces the process after a lifecycle barrier and
+  appends to the same JSONL.
+- **Restart fresh** replaces the process and JSONL, preserves the validated
+  existing worktree/branch, and retains the old session path as history. It
+  never creates a second worktree merely to get fresh model context.
+- **Plan repair** is atomic and fingerprint-pinned. It may add a corrective
+  task, clarify untouched task text, add a manual checkpoint, or idempotently
+  reopen an erroneously completed task, and only for a stopped affected
+  deliverable. Dependencies/lifecycle, agents, panels, review ledger and
+  waivers, repository/workspace/branch/session/PR metadata remain manual.
+
+A worker may inspect its own bounded transcript/workspace and propose a
+fingerprint- and generation-bound diagnosis. The maestro alone validates the
+proposal, asks for consent, mutates plans/workers/workspaces, and posts issues.
+A stale or mismatched proposal fails closed.
+
+Example recovery question:
+
+```text
+Recovery (recommended option is preselected; submission is consent)
+  Steer current worker       process preserved · session preserved
+  Restart and resume session process replaced  · same JSONL
+  Restart with fresh session process replaced  · new JSONL · workspace reused
+  No recovery                no mutation
+```
+
+Recovery success or failure does not block issue review. Its attempted action,
+timestamp, exact outcome, and error are inserted mechanically, so the changed
+issue is displayed for a separate final confirmation. Issue Markdown always
+contains Summary, Steps to reproduce, Expected behavior, Actual behavior,
+Observed facts, optional Likely cause, Recovery/workaround, mechanically sourced
+Runtime context, and Suggested fix. For example:
+
+```markdown
+# Debug: worker process exited unexpectedly
+
+## Summary
+Worker process exited unexpectedly.
+
+## Observed facts
+- deliverable=docs, generation=4
+
+## Recovery / workaround
+- Attempted action: `restart-fresh`
+- Exact outcome: **failed** — worker shutdown timed out
+
+## Runtime context
+- Mode: `auto` _(source: runtime)_
+- Worker generation: `4` _(source: executor)_
+```
+
+Only bounded structured evidence is accepted—never raw transcript,
+environment, source-tree, or log attachments. The complete title/body is
+redacted at final assembly, displayed, frozen, and sent byte-for-byte via
+stdin to `github.com/vegardx/pi-maestro` only after **Create issue** is
+submitted. Posting failure never rolls back recovery and is never silently
+retried when the external result may be uncertain. Active review state and
+bounded revision history survive compaction; recovery is not repeated after
+rehydration.
 
 ## Shipping
 
@@ -186,7 +259,7 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/answer` | Answer pending agent questions |
 | `/recap` | Summary of completed agent work |
 | `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |
-| `/debug [symptom]` | Diagnose the current session and explicitly choose one recovery action |
+| `/debug [symptom]` | Diagnose, run one explicitly selected recovery, then review/revise/cancel an exact GitHub issue draft |
 | `/retry <deliverable-id>` | Clear a blocked deliverable and re-attempt |
 | `/recover` | Audit plan vs reality; resume interrupted workers |
 | `/ship` | Ship the next shippable deliverable (push + PR) |

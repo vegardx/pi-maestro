@@ -149,6 +149,48 @@ Persistent state lives under the pi agent directory:
   `/handoff` carry documents
 - Worker sessions managed via tmux (ephemeral); usage recorded in the
   unified ledger
+- `<agentDir>/maestro/plans/<slug>/debug/active.json` — active structured,
+  redacted debug recovery/issue-review state only; deleted on cancel, defer,
+  successful post, or failed post
+
+## Debug episode architecture
+
+`/debug` is an episode-scoped state machine owned by `pi-modes`, not a generic
+model conversation. Mechanical collectors freeze role/mode/session/plan,
+worker generation, runtime versions, bounded failures, and the selected
+recovery outcome. Model-authored summary/cause/fix fields are kept in a
+separate structured object so a reviser cannot rewrite observed facts.
+
+The phases are ordered and non-reentrant:
+
+1. collect bounded facts and diagnose;
+2. ask one mutually exclusive recovery question;
+3. execute the selected action once through `ExecutionHandle`/`PlanEngine`;
+4. mechanically record success or failure;
+5. enter the issue review loop; and
+6. freeze the final redacted title/body, display it, and optionally call the
+   typed `@vegardx/pi-github` issue seam.
+
+The active artifact persists outside the conversational tail, so compaction
+rehydrates phase 5 without dispatching phase 3 again. Revision calls receive
+only the current structured draft, frozen bounded evidence, recovery result,
+and the user's instruction. They must return a complete replacement with
+byte-identical mechanical provenance. Invalid or failed revisions retain the
+prior draft. Revision history is bounded even though user-driven iterations
+are unlimited.
+
+The final external privacy boundary assembles all Markdown, applies
+`redactSecrets()`, displays that exact value, and passes the same bytes on
+stdin to `gh issue create --body-file - -R github.com/vegardx/pi-maestro`.
+Recovery and posting are independent best effort: neither failure undoes the
+other, and uncertain GitHub mutations are not retried silently.
+
+Worker authority is intentionally narrower. A worker can submit a proposal
+bound to its authenticated composite identity, plan fingerprint, and session
+generation. The maestro validates it and exclusively owns consent, plan
+repair, steering, retry/restart, workspace validation, and issue posting.
+Fresh restart creates a new JSONL but reuses the one validated worktree and
+branch; prior transcript paths remain history.
 
 ## Key design decisions
 

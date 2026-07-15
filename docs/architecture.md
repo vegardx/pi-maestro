@@ -14,8 +14,10 @@ The manifest loads seven extension entries:
 - `@vegardx/pi-prompt-assist` — ghost prompt suggestions and input assists.
 - `@vegardx/pi-settings` — layered settings (also a library), the
   `/maestro` menu.
-- `@vegardx/pi-subagents` — one-shot headless agents (research, review,
-  verify) over the RPC transport; exposes `subagents.v1`.
+- `@vegardx/pi-subagents` — persistent inspectable agents (research, review,
+  verify, and focused subagent runs) through a common run service. Long-running runs use detached
+  tmux sessions with explicit session JSONL; explicitly short/internal work may
+  opt into the legacy headless transport. Exposes `subagents.v1`.
 - `@vegardx/pi-commit` — conventional commits + `ship.v1`.
 - `@vegardx/pi-smart-compact` — work-continuity compaction: replaces pi's
   default compaction summary with a work-focused one, with safe fallback.
@@ -95,7 +97,7 @@ reads layered settings and consumes those overrides.)
 
 Capabilities (versioned, registered at load, looked up at use):
 
-- `subagents.v1` — spawn one-shot headless agents
+- `subagents.v1` — spawn, inspect, steer, interrupt, capture, and retain agent runs
 - `ask.v1` / `ask-transport.v1` — questionnaire presentation and transport
 - `commit.v1` / `ship.v1` — local conventional commits; push + PR
 - `modes.v1` — mode state + execution status
@@ -137,8 +139,22 @@ sequenceDiagram
 ```
 
 Workers are full pi sessions in per-deliverable worktrees — observable,
-steerable, resumable. Reviewers and researchers are headless one-shot
-subagents. The review gate itself is documented in
+steerable, resumable. Reviewers, fix verifiers, researchers, `/verify`, support,
+and delegate runs use the same subagents service and are tmux-backed by default.
+Every run has an opaque `run:<id>`, explicit session JSONL, process/tmux metadata,
+and durable events. Tmux is the live inspection surface; run/session files are
+historical truth. Headless transport is reserved for callers that explicitly
+mark short internal work.
+
+A unified target registry normalizes `host:current`, `worker:<deliverable/agent>`,
+and `run:<id>`. Commands resolve exact opaque IDs before display aliases and
+reject ambiguous aliases. `/interrupt` is distinct from steer and shutdown:
+workers acknowledge an RPC abort of only the current turn while preserving the
+process/session/worktree; one-shot runs salvage partial assistant text, settle
+`stopped`, and clean up their process group. Propagation is explicit (`--children`,
+`--tree`, `--all`) and never defaults to all.
+
+The review gate itself is documented in
 [review-loop.md](review-loop.md).
 
 Persistent state lives under the pi agent directory:

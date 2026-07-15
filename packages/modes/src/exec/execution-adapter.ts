@@ -9,6 +9,8 @@ import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
 import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
+	type DebugProposalMessage,
+	type DebugResultMessage,
 	MaestroRpcServer,
 	type PanelVerdictMessage,
 	type PlanMutateMessage,
@@ -23,6 +25,7 @@ import {
 	type ExecutorDeps,
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
+import { planFingerprint } from "../engine.js";
 import {
 	DEFAULT_TIMEOUT_MS as PANEL_REVIEWER_TIMEOUT_MS,
 	requiredGateSatisfied,
@@ -288,6 +291,10 @@ export class ExecutionAdapter {
 	/** All spawn/kill/poll/completion/restart/shutdown transitions serialize here. */
 	private lifecycleTail: Promise<void> = Promise.resolve();
 	private restarting = new Set<string>();
+	private debugProposalHandler?: (
+		agentId: string,
+		proposal: DebugProposalMessage,
+	) => Promise<DebugResultMessage>;
 
 	readonly questionQueue = new QuestionQueue();
 
@@ -381,6 +388,22 @@ export class ExecutionAdapter {
 						}
 					}
 					this.opts.onPanelVerdict?.(msg);
+				},
+				debugProposal: async (agentId, msg) => {
+					let result: DebugResultMessage;
+					if (!this.debugProposalHandler) {
+						result = {
+							type: "debugResult",
+							id: msg.id,
+							proposalId: msg.proposalId,
+							accepted: false,
+							error:
+								"maestro debug UI is unavailable; no recovery was attempted",
+						};
+					} else {
+						result = await this.debugProposalHandler(agentId, msg);
+					}
+					this.router.send(agentId, result);
 				},
 				questions: (agentId, msg) => {
 					const [deliverableId, agentNamePart] = agentId.split("/");
@@ -564,6 +587,10 @@ export class ExecutionAdapter {
 						sock: this.socketPath,
 						agentId: agentKey,
 						agentMode,
+						generation:
+							this.executor.getAgentState(spawnOpts.deliverableId, "worker")
+								?.generation ?? workerSessionGeneration(deliverable),
+						planFingerprint: planFingerprint(this.engine.get()),
 						agentDir,
 						sessionDir: agentSessionDir,
 						token: this.token,
@@ -1074,6 +1101,15 @@ export class ExecutionAdapter {
 			() => undefined,
 		);
 		return run;
+	}
+
+	setDebugProposalHandler(
+		handler: (
+			agentId: string,
+			proposal: DebugProposalMessage,
+		) => Promise<DebugResultMessage>,
+	): void {
+		this.debugProposalHandler = handler;
 	}
 
 	previewWorkerRestart(
@@ -1751,6 +1787,16 @@ export class ExecutionAdapter {
 
 	private handlePlanMutate(agentId: string, msg: PlanMutateMessage): void {
 		const deliverableId = msg.deliverableId;
+		const [authenticatedDeliverable] = agentId.split("/");
+		if (authenticatedDeliverable !== deliverableId) {
+			this.router.send(agentId, {
+				type: "planMutateResult",
+				id: msg.id,
+				success: false,
+				error: "agent may only mutate its own deliverable",
+			});
+			return;
+		}
 		const params = msg.params ?? {};
 
 		try {

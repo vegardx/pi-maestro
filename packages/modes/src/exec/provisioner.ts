@@ -275,6 +275,10 @@ export interface SpawnEnv {
 	agentId: string;
 	/** Agent tool policy: `full` or `read-only`. */
 	agentMode: string;
+	/** Worker generation bound into debug proposals. */
+	generation?: number;
+	/** Semantic plan fingerprint bound into debug proposals. */
+	planFingerprint?: string;
 	/** pi agent dir (auth lives here). Defaults to {@link defaultAgentDir}. */
 	agentDir?: string;
 	/** Session dir for the agent's own pi session bookkeeping. */
@@ -368,6 +372,12 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 		PI_MAESTRO_AGENT_MODE: opts.env.agentMode,
 		PI_MAESTRO_TOKEN: opts.env.token,
 		PI_MAESTRO_PLAN_DIR: opts.env.planDir,
+		...(opts.env.generation !== undefined
+			? { PI_MAESTRO_GENERATION: String(opts.env.generation) }
+			: {}),
+		...(opts.env.planFingerprint
+			? { PI_MAESTRO_PLAN_FINGERPRINT: opts.env.planFingerprint }
+			: {}),
 		PI_CODING_AGENT_DIR: opts.env.agentDir ?? defaultAgentDir(),
 		PI_CODING_AGENT_SESSION_DIR: opts.env.sessionDir,
 	};

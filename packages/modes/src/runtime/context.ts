@@ -35,6 +35,7 @@ import {
 } from "../budget.js";
 import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
+import { DebugController } from "../debug.js";
 import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
@@ -84,6 +85,7 @@ import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { syncAgentWidget } from "./dashboard.js";
+import { installDebugProposalHandler } from "./debug-command.js";
 import { GateTriage } from "./gate-triage.js";
 import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 
@@ -119,6 +121,8 @@ export interface RuntimeContext {
 	execution: ExecutionHandle | undefined;
 	/** Ship-gate triage controller (maestro-first escalation); with execution. */
 	gateTriage: GateTriage | undefined;
+	/** Active, persisted diagnosis/recovery episode. */
+	readonly debug: DebugController;
 	/** Carry-forward episode controller (/distill and /handoff). */
 	readonly carryForward: CarryForwardController;
 	/** Live research runs (plan-mode fan-out), keyed by run id. */
@@ -249,6 +253,7 @@ export function createRuntimeContext(
 		agentBridge: undefined,
 		execution: undefined,
 		gateTriage: undefined,
+		debug: new DebugController(),
 		carryForward: new CarryForwardController(() => rt.applyTools()),
 		researchRuns: new Map(),
 		agentSeedContent: undefined,
@@ -738,6 +743,7 @@ export function createRuntimeContext(
 				pi,
 				notify: (m, level) => ctx.ui.notify(m, level),
 			});
+			installDebugProposalHandler(rt, ctx);
 			await rt.execution.start();
 		},
 

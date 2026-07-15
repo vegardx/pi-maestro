@@ -52,6 +52,13 @@ export interface ExecutionDeliverableSnapshot {
  * the adapter today; later phases extend the implementation, not the callers.
  */
 export interface ExecutionHandle {
+	/** Install the maestro-owned worker debug proposal receiver. */
+	setDebugProposalHandler?(
+		handler: (
+			agentId: string,
+			proposal: import("@vegardx/pi-rpc").DebugProposalMessage,
+		) => Promise<import("@vegardx/pi-rpc").DebugResultMessage>,
+	): void;
 	/** Pending agent questions awaiting a user /answer. */
 	readonly questionQueue: {
 		all(): readonly PendingQuestion[];

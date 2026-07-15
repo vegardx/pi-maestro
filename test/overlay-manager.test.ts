@@ -51,37 +51,63 @@ describe("OverlayManager", () => {
 		);
 	});
 
-	it("Tab cycles focus: input → ask → agents → input", () => {
+	it("Tab cycles focus: input → maestro → ask → input", () => {
 		const mgr = new OverlayManager();
 		const ctx = mockCtx();
 		mgr.attach(ctx as any);
+		const maestro = mockComponent();
 		const ask = mockComponent();
-		const agents = mockComponent();
+		mgr.mount("maestro", maestro);
 		mgr.mount("ask", ask);
-		mgr.mount("agents", agents);
 
 		// Initially input focused (no overlay focused)
+		expect(maestro.focused).toBe(false);
 		expect(ask.focused).toBe(false);
-		expect(agents.focused).toBe(false);
 
-		// Tab → focus ask
+		// Tab → focus maestro
 		const r1 = ctx.sendInput("\t");
 		expect(r1?.consume).toBe(true);
+		expect(maestro.focused).toBe(true);
+		expect(maestro.expanded).toBe(true);
+		expect(ask.focused).toBe(false);
+
+		// Tab → focus ask
+		ctx.sendInput("\t");
+		expect(maestro.focused).toBe(false);
+		expect(maestro.expanded).toBe(false);
 		expect(ask.focused).toBe(true);
 		expect(ask.expanded).toBe(true);
-		expect(agents.focused).toBe(false);
-
-		// Tab → focus agents
-		ctx.sendInput("\t");
-		expect(ask.focused).toBe(false);
-		expect(ask.expanded).toBe(false);
-		expect(agents.focused).toBe(true);
-		expect(agents.expanded).toBe(true);
 
 		// Tab → back to input
 		ctx.sendInput("\t");
+		expect(maestro.focused).toBe(false);
 		expect(ask.focused).toBe(false);
-		expect(agents.focused).toBe(false);
+	});
+
+	// The HUD left the manager: its slot no longer exists, so a session with
+	// no dialog open (the normal state — "maestro" is mounted only while the
+	// /maestro dialog is open) must let plain Tab through to the focused
+	// editor component (MaestroEditor's ring grammar).
+	it("has no agents slot — Tab reaches the editor in a bare session", () => {
+		const mgr = new OverlayManager();
+		const ctx = mockCtx("");
+		mgr.attach(ctx as any);
+		expect(ctx.sendInput("\t")).toBeUndefined();
+		// @ts-expect-error "agents" is no longer an OverlayId
+		mgr.mount("agents", mockComponent());
+	});
+
+	it("/maestro dialog stays focusable: Tab is consumed only while mounted", () => {
+		const mgr = new OverlayManager();
+		const ctx = mockCtx("");
+		mgr.attach(ctx as any);
+		const dialog = mockComponent();
+		mgr.mount("maestro", dialog);
+		const result = ctx.sendInput("\t");
+		expect(result?.consume).toBe(true);
+		expect(dialog.focused).toBe(true);
+		mgr.unmount("maestro");
+		expect(ctx.sendInput("\t")).toBeUndefined();
 	});
 
 	// Tab consumption rule: the ring takes Tab only when it can meaningfully
@@ -208,20 +234,20 @@ describe("OverlayManager", () => {
 		const mgr = new OverlayManager();
 		const ctx = mockCtx();
 		mgr.attach(ctx as any);
+		const maestro = mockComponent();
 		const ask = mockComponent();
-		const agents = mockComponent();
+		mgr.mount("maestro", maestro);
 		mgr.mount("ask", ask);
-		mgr.mount("agents", agents);
 
 		mgr.blockInput();
 		// ask is focused (auto-expanded by blockInput)
 		expect(ask.focused).toBe(true);
 
-		// Tab → agents
+		// Tab → wraps to maestro (skips input because blocked)
 		ctx.sendInput("\t");
-		expect(agents.focused).toBe(true);
+		expect(maestro.focused).toBe(true);
 
-		// Tab → back to ask (skips input because blocked)
+		// Tab → back to ask
 		ctx.sendInput("\t");
 		expect(ask.focused).toBe(true);
 	});
@@ -267,30 +293,30 @@ describe("OverlayManager", () => {
 		const mgr = new OverlayManager();
 		const ctx = mockCtx();
 		mgr.attach(ctx as any);
-		const agents = mockComponent();
-		mgr.mount("agents", agents);
-		// Only agents mounted, no ask
+		const ask = mockComponent();
+		mgr.mount("ask", ask);
+		// Only ask mounted, no maestro
 
-		ctx.sendInput("\t"); // focus agents (skip ask)
-		expect(agents.focused).toBe(true);
+		ctx.sendInput("\t"); // focus ask (skip maestro)
+		expect(ask.focused).toBe(true);
 
 		ctx.sendInput("\t"); // back to input
-		expect(agents.focused).toBe(false);
+		expect(ask.focused).toBe(false);
 	});
 
 	it("focusOverlay expands specific overlay directly", () => {
 		const mgr = new OverlayManager();
 		const ctx = mockCtx();
 		mgr.attach(ctx as any);
+		const maestro = mockComponent();
 		const ask = mockComponent();
-		const agents = mockComponent();
+		mgr.mount("maestro", maestro);
 		mgr.mount("ask", ask);
-		mgr.mount("agents", agents);
 
-		mgr.focusOverlay("agents");
-		expect(agents.focused).toBe(true);
-		expect(agents.expanded).toBe(true);
-		expect(ask.focused).toBe(false);
+		mgr.focusOverlay("ask");
+		expect(ask.focused).toBe(true);
+		expect(ask.expanded).toBe(true);
+		expect(maestro.focused).toBe(false);
 	});
 
 	// pi's setWidget disposes + deletes + re-appends the key and rebuilds the
@@ -330,16 +356,16 @@ describe("OverlayManager", () => {
 			const mgr = new OverlayManager();
 			const ctx = mockCtx();
 			mgr.attach(ctx as any);
+			const maestro = mockComponent();
 			const ask = mockComponent();
-			const agents = mockComponent();
+			mgr.mount("maestro", maestro);
 			mgr.mount("ask", ask);
-			mgr.mount("agents", agents);
 			const before = ctx.ui.setWidget.mock.calls.length;
 
-			ctx.sendInput("\t"); // focus ask
+			ctx.sendInput("\t"); // focus maestro
 			ctx.sendInput("\u001b[A"); // arrow into the component
 			ctx.sendInput("\u001b[B");
-			ctx.sendInput("\t"); // focus agents
+			ctx.sendInput("\t"); // focus ask
 			ctx.sendInput("\u001b"); // esc back to input
 			mgr.blockInput();
 			mgr.unblockInput();

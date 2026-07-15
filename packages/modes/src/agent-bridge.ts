@@ -223,7 +223,7 @@ export class AgentBridge {
 		round: number,
 		verdicts: readonly PanelVerdictEntry[],
 		opts?: {
-			roundKind?: "panel" | "verification";
+			roundKind?: "panel" | "verification" | "round-started";
 			ledger?: ReviewLedgerWire;
 		},
 	): void {

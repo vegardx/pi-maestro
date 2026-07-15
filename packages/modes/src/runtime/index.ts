@@ -260,10 +260,13 @@ export function createModesRuntime(
 					const bridge = rt.agentBridge;
 					const id = deliverableId();
 					if (!bridge || !id) return;
-					reviewRound += 1;
+					// Round-started markers announce the round the NEXT settle will
+					// report; only settled rounds consume a round number (the
+					// executor never caches markers as verdicts).
+					if (roundKind !== "round-started") reviewRound += 1;
 					bridge.reportPanelVerdict(
 						id,
-						reviewRound,
+						roundKind === "round-started" ? reviewRound + 1 : reviewRound,
 						results
 							.filter((r) => r.kind === "review")
 							.map((r) => ({

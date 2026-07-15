@@ -181,6 +181,20 @@ export interface ReviewLedgerWire {
 		readonly name: string;
 		readonly ok: boolean;
 	}>;
+	/**
+	 * The round currently settling behind the worker's review tool — the
+	 * crash marker. Persisted at round START (roundKind "round-started") so a
+	 * respawned worker reattaches to the recorded runs instead of spawning a
+	 * duplicate round; the settled round's report clears it.
+	 */
+	readonly pendingRound?: {
+		readonly kind: "panel" | "repair" | "verification";
+		readonly runs: ReadonlyArray<{
+			readonly name: string;
+			readonly runId: string;
+		}>;
+		readonly startedAt: string;
+	};
 	readonly updatedAt: string;
 }
 
@@ -222,9 +236,13 @@ export interface PanelVerdictMessage {
 	/**
 	 * What kind of run this reports: a full persona panel round, or a scoped
 	 * verification of claimed fixes. Absent on messages from older workers
-	 * (treated as "panel").
+	 * (treated as "panel"). "round-started" is the crash marker: NO verdicts
+	 * yet — it only carries the ledger with `pendingRound` set, so the
+	 * executor persists the in-flight round (and arms its completion
+	 * deferral) before any reviewer settles. It never touches the verdict
+	 * cache of the last real round.
 	 */
-	readonly roundKind?: "panel" | "verification";
+	readonly roundKind?: "panel" | "verification" | "round-started";
 	/** The review ledger after this run — the executor persists it on the plan. */
 	readonly ledger?: ReviewLedgerWire;
 }

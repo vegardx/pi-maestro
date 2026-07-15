@@ -381,6 +381,17 @@ export class ExecutionAdapter {
 					});
 				},
 				panelVerdict: (_agentId, msg) => {
+					// A round-STARTED marker: no verdicts exist yet — the worker is
+					// persisting its in-flight round (ledger.pendingRound) so a
+					// respawn reattaches instead of duplicating the round. Arm the
+					// completion-deferral window here too (panelRead arming stays —
+					// it also covers workers that never send this) and persist the
+					// marker WITHOUT touching the last real round's verdict cache.
+					if (msg.roundKind === "round-started") {
+						this.reviewInFlight.set(msg.deliverableId, Date.now());
+						this.persistReportedLedger(msg.deliverableId, msg.ledger);
+						return;
+					}
 					// Latest round per deliverable drives the executor ship gate.
 					this.reviewInFlight.delete(msg.deliverableId);
 					// Verification runs carry no per-reviewer verdicts — keep the
@@ -388,19 +399,7 @@ export class ExecutionAdapter {
 					if (msg.roundKind !== "verification" || msg.verdicts.length > 0) {
 						this.panelVerdicts.set(msg.deliverableId, msg);
 					}
-					// The ledger is the gate's source of truth — persist it on the
-					// plan so it survives worker respawns and maestro restarts.
-					if (msg.ledger) {
-						try {
-							this.engine.setReviewLedger(
-								msg.deliverableId,
-								structuredClone(msg.ledger) as ReviewLedger,
-							);
-							this.opts.onPlanChanged();
-						} catch {
-							// Unknown deliverable — the verdict cache still applies.
-						}
-					}
+					this.persistReportedLedger(msg.deliverableId, msg.ledger);
 					this.opts.onPanelVerdict?.(msg);
 				},
 				debugProposal: async (agentId, msg) => {
@@ -848,6 +847,10 @@ export class ExecutionAdapter {
 		if (required.length === 0) return true;
 		const { ledger, waived } = this.ledgerState(deliverableId);
 		if (ledger) {
+			// A round is still settling — its verdicts are not in yet. The
+			// marker ledger may be an empty round-start stub, which must never
+			// read as a clear gate.
+			if (ledger.pendingRound) return false;
 			const participated = ledger.participants
 				? required.every((n) =>
 						ledger.participants?.some((p) => p.name === n && p.ok),
@@ -859,6 +862,36 @@ export class ExecutionAdapter {
 			required,
 			this.panelVerdicts.get(deliverableId)?.verdicts,
 		);
+	}
+
+	/**
+	 * Persist a reported review ledger on the plan — the gate's source of
+	 * truth; it must survive worker respawns and maestro restarts. Shared by
+	 * settled rounds and the round-started crash marker.
+	 */
+	private persistReportedLedger(
+		deliverableId: string,
+		ledger: PanelVerdictMessage["ledger"],
+	): void {
+		if (!ledger) return;
+		try {
+			this.engine.setReviewLedger(
+				deliverableId,
+				structuredClone(ledger) as ReviewLedger,
+			);
+			this.opts.onPlanChanged();
+		} catch {
+			// Unknown deliverable — the verdict cache still applies.
+		}
+	}
+
+	/** Epoch ms a persisted pending round started (parseable marker only) —
+	 *  the review-in-flight signal that survives a maestro restart. */
+	private pendingRoundStartMs(deliverableId: string): number | undefined {
+		const marker = this.ledgerState(deliverableId).ledger?.pendingRound;
+		if (!marker) return undefined;
+		const at = Date.parse(marker.startedAt);
+		return Number.isFinite(at) ? at : undefined;
 	}
 
 	/** The persisted ledger + waived finding ids + cycle budget for a deliverable. */
@@ -1700,7 +1733,12 @@ export class ExecutionAdapter {
 	 *      human question (orchestra run, 2026-07-11).
 	 */
 	private workerMayComplete(agentId: string, deliverableId: string): boolean {
-		const startedAt = this.reviewInFlight.get(deliverableId);
+		// The in-memory window dies with a maestro restart; the persisted
+		// pendingRound marker carries the same in-flight signal across it,
+		// bounded by the round's OWN start time (elapsed time counts).
+		const startedAt =
+			this.reviewInFlight.get(deliverableId) ??
+			this.pendingRoundStartMs(deliverableId);
 		if (startedAt !== undefined) {
 			if (Date.now() - startedAt <= REVIEW_IN_FLIGHT_TIMEOUT_MS) return false;
 			this.reviewInFlight.delete(deliverableId);

@@ -154,7 +154,7 @@ export async function runDebugCommand(
 ): Promise<void> {
 	configureStore(rt);
 	const active = rt.debug.get();
-	if (active?.result && active.issueReview) {
+	if (active?.result) {
 		await reviewDebugIssue(rt, ctx);
 		return;
 	}

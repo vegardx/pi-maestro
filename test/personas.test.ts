@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildPersonaProfile,
+	buildVerifierProfile,
 	getPersona,
 	PERSONA_IDS,
 	PERSONA_TOOLS,
@@ -11,6 +12,8 @@ import type {
 	Deliverable,
 	SubAgentSpec,
 } from "../packages/modes/src/schema.js";
+import { mapProfileToInvocation } from "../packages/subagents/src/invocation.js";
+import { resolveProfile } from "../packages/subagents/src/profiles.js";
 
 describe("persona registry", () => {
 	it("ships the 8 starter personas with unique ids", () => {
@@ -95,6 +98,63 @@ describe("buildPersonaProfile", () => {
 		expect(
 			buildPersonaProfile({ name: "x", persona: "nope" }, { cwd: "/wt" }),
 		).toBeNull();
+	});
+});
+
+describe("one-shot subagents are leaves", () => {
+	// Reviewers, the verifier, and research children must never be able to
+	// spawn: the depth cap is only the backstop; the structural guarantee is
+	// that their profiles grant no spawn tool and isolate extensions, so the
+	// subagents extension (the `subagent` tool) can never load in the child.
+	const SPAWN_TOOLS = ["subagent", "agent", "task"];
+	const ctx = { repoRoot: "/repo", parentDepth: 1 };
+
+	const leafProfiles = () => [
+		buildPersonaProfile(
+			{ name: "security-audit", persona: "security-audit" },
+			{ cwd: "/wt" },
+		)!,
+		buildVerifierProfile({ cwd: "/wt" }),
+	];
+
+	it("reviewer and verifier profiles grant no spawn capability", () => {
+		for (const profile of leafProfiles()) {
+			for (const tool of SPAWN_TOOLS) {
+				expect(profile.tools?.allow).not.toContain(tool);
+			}
+			expect(profile.isolateExtensions).toBe(true);
+			expect(profile.extraExtensions).toBeUndefined();
+		}
+	});
+
+	it("their child invocation cannot load the subagents extension", () => {
+		for (const profile of leafProfiles()) {
+			const inv = mapProfileToInvocation(profile, ctx);
+			// -ne drops every globally configured extension; with no -e the
+			// child's namespace is exactly the builtins.
+			expect(inv.args).toContain("-ne");
+			expect(inv.args).not.toContain("-e");
+			const tools = inv.args[inv.args.indexOf("--tools") + 1];
+			for (const tool of SPAWN_TOOLS) {
+				expect(tools.split(",")).not.toContain(tool);
+			}
+		}
+	});
+
+	it("the research builtin profile is isolated with no spawn tool", () => {
+		// Research runs pass extraExtensions=[research-tools] on this profile —
+		// isolation must survive that, and the default tool set must not spawn.
+		const resolved = resolveProfile({
+			profile: "research",
+			extraExtensions: ["/repo/packages/research-tools/src/index.ts"],
+		});
+		expect(resolved.isolateExtensions).toBe(true);
+		for (const tool of SPAWN_TOOLS) {
+			expect(resolved.tools?.allow).not.toContain(tool);
+		}
+		expect(resolved.extraExtensions.some((e) => e.includes("subagents"))).toBe(
+			false,
+		);
 	});
 });
 

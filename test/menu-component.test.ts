@@ -345,7 +345,7 @@ describe("hierarchical Maestro settings", () => {
 		expect(pool.global).toEqual(["anthropic/sonnet", "openai/o3"]);
 	});
 
-	it("e cycles the default effort, keeping other levels as alternates", () => {
+	it("e cycles the default effort and wraps to auto by clearing the leaf", () => {
 		const ctx = fakeCtx();
 		const editor = rolePoolEditor(ctx, "opus", "worker", () => {});
 		editor.handleInput?.("e"); // high → xhigh (Sonnet supports all levels)
@@ -354,12 +354,14 @@ describe("hierarchical Maestro settings", () => {
 			"high",
 			"medium",
 		]);
-		editor.handleInput?.("e"); // xhigh wraps to off
+		editor.handleInput?.("e"); // past the last level: auto — leaf deleted
+		expect(
+			readRoleLeaf(ctx, "opus", "worker", "efforts").global,
+		).toBeUndefined();
+		expect(editor.render(120).join("\n")).toContain("effort: auto");
+		editor.handleInput?.("e"); // auto → first supported level
 		expect(readRoleLeaf(ctx, "opus", "worker", "efforts").global).toEqual([
 			"off",
-			"xhigh",
-			"high",
-			"medium",
 		]);
 		expect(editor.render(120).join("\n")).toContain("effort: off");
 	});

@@ -427,12 +427,23 @@ class OrderedPoolComponent implements Component {
 		if (supported.length === 0) return;
 		const layered = readRoleLeaf(this.ctx, this.profile, this.role, "efforts");
 		const configured = [...(layered[this.scope] ?? layered.effective ?? [])];
-		// indexOf misses (unset or unsupported default) wrap to supported[0].
-		const next =
-			supported[
-				(supported.indexOf(configured[0] as ThinkingLevel) + 1) %
-					supported.length
-			];
+		const index = supported.indexOf(configured[0] as ThinkingLevel);
+		// Past the last supported level the cycle reaches "auto": the leaf is
+		// deleted at the write scope and the spawner picks per task.
+		if (index === supported.length - 1) {
+			writeRoleLeaf(
+				this.ctx,
+				this.profile,
+				this.role,
+				"efforts",
+				this.scope,
+				undefined,
+			);
+			this.refresh();
+			return;
+		}
+		// indexOf misses (auto or unsupported default) start at supported[0].
+		const next = supported[index + 1];
 		// The chosen level leads; other configured levels stay as alternates.
 		writeRoleLeaf(this.ctx, this.profile, this.role, "efforts", this.scope, [
 			next,

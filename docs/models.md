@@ -41,6 +41,11 @@ by that model is the default effort. Later values are allowed alternates, not
 anonymous slots. Plans and tool calls persist exact values—never indexes—so
 reordering a profile cannot silently change an authored choice.
 
+An unset `efforts` leaf is **auto**: the spawner picks an effort per task, and
+the provider default applies if it stays silent. Set it back to auto with
+`/maestro <role> effort auto` (or cycle `e` past the last supported level in
+the pool editor, which deletes the leaf at the write scope).
+
 An explicit model must be in the active role's effective model pool and must be
 available/authenticated. An explicit effort must be in the effort pool and
 supported by the selected model. Invalid authored choices fail visibly; Maestro
@@ -132,8 +137,9 @@ numbered head of the list is the pool (row 1 is the default), followed by the
 remaining candidates. Keys: `space` toggles membership (on appends to the pool
 end), `+`/`-` (or `K`/`J`) move the selected checked row up/down, `g` switches
 the write scope between global and project, `e` cycles the default effort
-through the default model's supported levels, and enter/esc finishes. Every
-mutation writes immediately at the shown scope.
+through the default model's supported levels and then `auto` (which clears
+the efforts leaf at the write scope), and enter/esc finishes. Every mutation
+writes immediately at the shown scope.
 
 Candidates are authenticated registry models plus any model id already
 referenced in config (any profile's targets or role models leaves, both
@@ -155,6 +161,7 @@ effective-source scope (global when the leaf is unset):
 /maestro worker remove openai/gpt-5.5
 /maestro worker default anthropic/claude-haiku-4-5   # move to front; adds if absent
 /maestro worker effort high    # validated against the default model's support
+/maestro worker effort auto    # clear the leaf; the spawner picks per task
 ```
 
 Unknown model ids get "did you mean" suggestions from the registry; removing

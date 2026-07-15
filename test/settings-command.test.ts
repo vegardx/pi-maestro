@@ -456,6 +456,22 @@ describe("/settings command", () => {
 			]);
 		});
 
+		it("effort auto clears the leaf so the spawner picks per task", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker effort auto", ctx);
+			expect(ctx.messages.at(-1)).toContain("worker.efforts = auto");
+			const raw = readProject() as {
+				models: {
+					profiles: {
+						opus: { roles: { worker: { efforts?: string[] } } };
+					};
+				};
+			};
+			expect(raw.models.profiles.opus.roles.worker.efforts).toBeUndefined();
+			handleSettingsCommand("worker list", ctx);
+			expect(ctx.messages.at(-1)).toContain("default effort: auto");
+		});
+
 		it("effort validates against the default model's supported set", () => {
 			const ctx = roleCtx();
 			// o3 becomes default; it does not support minimal
@@ -494,6 +510,7 @@ describe("/settings command", () => {
 			// worker's default model is Sonnet — every level is supported
 			expect(getSettingsCompletions("worker effort ", ctx)).toContain("xhigh");
 			expect(getSettingsCompletions("worker effort x", ctx)).toEqual(["xhigh"]);
+			expect(getSettingsCompletions("worker effort a", ctx)).toEqual(["auto"]);
 		});
 	});
 

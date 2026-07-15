@@ -502,7 +502,19 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 	}
 	if (verb === "effort") {
 		if (!argument)
-			return ctx.ui.notify(`Usage: /maestro ${role} effort <level>`, "warning");
+			return ctx.ui.notify(
+				`Usage: /maestro ${role} effort <level|auto>`,
+				"warning",
+			);
+		// "auto" clears the leaf: the spawner picks the effort per task (the
+		// provider default applies if it stays silent). No default model needed.
+		if (argument === "auto") {
+			writeRoleLeaf(ctx, profile, role, "efforts", scope, undefined);
+			return ctx.ui.notify(
+				`✓ ${role}.efforts = auto [${scope}] — spawner picks per task`,
+				"info",
+			);
+		}
 		const target = defaultEffortModel(ctx, pool);
 		if (!target)
 			return ctx.ui.notify(
@@ -511,7 +523,7 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 			);
 		if (!target.supported.includes(argument))
 			return ctx.ui.notify(
-				`"${argument}" is not supported by ${target.model}. Supported: ${target.supported.join(", ")}.`,
+				`"${argument}" is not supported by ${target.model}. Supported: ${target.supported.join(", ")}, or auto.`,
 				"warning",
 			);
 		const efforts = readRoleLeaf(ctx, profile, role, "efforts");
@@ -576,7 +588,7 @@ function roleCompletions(
 			: [];
 		const supported =
 			defaultEffortModel(ctx, pool)?.supported ?? THINKING_LEVELS;
-		return supported.filter((level) => level.startsWith(prefix));
+		return [...supported, "auto"].filter((level) => level.startsWith(prefix));
 	}
 	return [];
 }

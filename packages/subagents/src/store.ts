@@ -54,10 +54,21 @@ export interface RunStore {
 
 export function createRunStore(root: string): RunStore {
 	const dir = (runId: RunId) => join(root, runId);
+	// Run dirs are created once and never removed while a run is live —
+	// re-issuing mkdirSync on every event append doubled the sync fs work on
+	// the hottest path in the process.
+	const dirsEnsured = new Set<RunId>();
+	const ensureDir = (runId: RunId): string => {
+		const d = dir(runId);
+		if (!dirsEnsured.has(runId)) {
+			mkdirSync(d, { recursive: true });
+			dirsEnsured.add(runId);
+		}
+		return d;
+	};
 
 	function writeRecord(record: RunRecord): void {
-		const d = dir(record.id);
-		mkdirSync(d, { recursive: true });
+		const d = ensureDir(record.id);
 		const path = join(d, STATUS);
 		const tmp = `${path}.${process.pid}.tmp`;
 		writeFileSync(tmp, JSON.stringify(record, null, 2));
@@ -128,14 +139,12 @@ export function createRunStore(root: string): RunStore {
 		},
 
 		appendEvent(runId, message) {
-			const d = dir(runId);
-			mkdirSync(d, { recursive: true });
+			const d = ensureDir(runId);
 			appendFileSync(join(d, EVENTS), `${JSON.stringify(message)}\n`);
 		},
 
 		writeResult(runId, markdown) {
-			const d = dir(runId);
-			mkdirSync(d, { recursive: true });
+			const d = ensureDir(runId);
 			writeFileSync(join(d, RESULT), markdown);
 		},
 
@@ -173,6 +182,7 @@ export function createRunStore(root: string): RunStore {
 		},
 
 		remove(runId) {
+			dirsEnsured.delete(runId);
 			rmSync(dir(runId), { recursive: true, force: true });
 		},
 	};

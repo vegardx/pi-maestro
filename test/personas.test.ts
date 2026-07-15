@@ -61,7 +61,10 @@ describe("buildPersonaProfile", () => {
 		expect(profile?.tools?.allow).toEqual([...PERSONA_TOOLS]);
 		expect(profile?.tools?.allow).not.toContain("write");
 		expect(profile?.session).toBe(true);
-		expect(profile?.transport).toBe("tmux");
+		// No transport selection here: the service default decides (headless
+		// until tmux passes transport-failure tests; PI_MAESTRO_TRANSPORT=tmux
+		// opts in process-wide).
+		expect(profile?.transport).toBeUndefined();
 		expect(profile?.role).toBe("reviewer");
 		expect(profile?.isolateExtensions).toBe(true);
 		expect(profile?.thinking).toBe("high"); // persona default

@@ -11,6 +11,7 @@ import type {
 	RunId,
 	RunRecord,
 	RunResult,
+	RunTransport,
 	SpawnProfile,
 	SubagentsCapabilityV1,
 } from "@vegardx/pi-contracts";
@@ -69,6 +70,11 @@ export interface SubagentServiceOptions {
 	 * the single seam that restores them for all callers.
 	 */
 	readonly extraExtensions?: () => readonly string[];
+	/**
+	 * Transport for profiles that don't select one. Defaults to "headless" —
+	 * tmux stays opt-in until it has passed real transport-failure tests.
+	 */
+	readonly defaultTransport?: RunTransport;
 }
 
 const DEFAULT_MAX_DEPTH = 3;
@@ -85,6 +91,7 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	private readonly controllers = new Map<RunId, RunnerController>();
 
 	private readonly extraExtensions?: () => readonly string[];
+	private readonly defaultTransport?: RunTransport;
 
 	constructor(opts: SubagentServiceOptions) {
 		this.bus = opts.bus;
@@ -96,6 +103,7 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		this.maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
 		this.ownDepth = opts.ownDepth ?? currentDepth();
 		this.extraExtensions = opts.extraExtensions;
+		this.defaultTransport = opts.defaultTransport;
 	}
 
 	spawn(prompt: string, profile: SpawnProfile): RunHandle {
@@ -118,9 +126,11 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		}
 
 		const runId = this.mintId();
-		// Inspectable is the safe default. Headless remains available only when a
-		// caller explicitly marks genuinely short/internal work.
-		const transport = profile.transport ?? "tmux";
+		// Headless is the default until the tmux transport has passed real
+		// transport-failure tests (prompt-loss handshake, pending-RPC rejection
+		// on child death, session GC). Opt in per profile, or process-wide via
+		// PI_MAESTRO_TRANSPORT=tmux (dogfood) — see index.ts.
+		const transport = profile.transport ?? this.defaultTransport ?? "headless";
 		profile = {
 			...profile,
 			transport,

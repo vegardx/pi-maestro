@@ -352,7 +352,6 @@ export async function runVerification(
 			};
 			const profile = {
 				profile: "general",
-				transport: "tmux" as const,
 				role: "verifier",
 				displayName: `verify-${g.id}`,
 				cwd: evidence.cwd,

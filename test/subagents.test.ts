@@ -1,4 +1,5 @@
 import {
+	existsSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -43,6 +44,7 @@ import {
 	type RunStore,
 	resolveProfile,
 	SubagentService,
+	type SubagentServiceOptions,
 } from "../packages/subagents/src/index.js";
 
 const PROFILE: SpawnProfile = { profile: "restricted" };
@@ -620,6 +622,169 @@ describe("SubagentService", () => {
 		expect(stopped).toEqual(["done"]);
 		expect(seen).toContain("steer");
 		expect(seen).toContain("stop");
+	});
+});
+
+describe("SubagentService transport fallbacks (cross-process run authority)", () => {
+	// Runs owned by ANOTHER process have a store record but no in-process
+	// controller here. steer/interrupt must still reach them via the persisted
+	// process facts; the in-process paths above stay untouched.
+	let root: string;
+	let store: RunStore;
+	let bus: RunBus;
+
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), "maestro-authority-"));
+		store = createRunStore(root);
+		bus = createRunBus();
+		persistRunBus(bus, store);
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+	const neverLaunch: AgentRunner = {
+		launch() {
+			throw new Error("these tests never spawn");
+		},
+	};
+
+	function seed(runId: string, over: Partial<RunRecord> = {}): void {
+		store.create(record({ id: id(runId), status: "running", ...over }));
+	}
+
+	function service(over: Partial<SubagentServiceOptions> = {}) {
+		return new SubagentService({
+			bus,
+			store,
+			runner: neverLaunch,
+			repoRoot: "/repo",
+			ownDepth: 0,
+			...over,
+		});
+	}
+
+	it("steer without a controller appends a well-formed line to the file bridge", () => {
+		seed("run-x", {
+			metadata: { transport: "tmux", tmuxSession: "maestro-run-run-x" },
+		});
+		const seen: string[] = [];
+		bus.subscribe((m) => seen.push(m.type));
+
+		service().steer(id("run-x"), "focus on the tests");
+
+		const raw = readFileSync(join(root, "run-x", "rpc-input.jsonl"), "utf8");
+		const lines = raw.split("\n").filter(Boolean);
+		expect(lines).toHaveLength(1);
+		const parsed = JSON.parse(lines[0]);
+		expect(parsed.type).toBe("steer");
+		expect(parsed.message).toBe("focus on the tests");
+		expect(typeof parsed.id).toBe("string");
+		expect(parsed.id.length).toBeGreaterThan(0);
+		expect(seen).toContain("steer");
+	});
+
+	it("steer fallback is a no-op for terminal and unknown runs", () => {
+		seed("run-done", {
+			status: "succeeded",
+			metadata: { transport: "tmux", tmuxSession: "maestro-run-run-done" },
+		});
+		const svc = service();
+		svc.steer(id("run-done"), "too late");
+		expect(() => svc.steer(id("run-nope"), "nobody home")).not.toThrow();
+		expect(existsSync(join(root, "run-done", "rpc-input.jsonl"))).toBe(false);
+	});
+
+	it("steer fallback engages only for the tmux transport", () => {
+		seed("run-h", { metadata: { transport: "headless" } });
+		service().steer(id("run-h"), "guidance");
+		expect(existsSync(join(root, "run-h", "rpc-input.jsonl"))).toBe(false);
+	});
+
+	it("interrupt without a controller SIGTERMs the recorded process group", async () => {
+		seed("run-y", { metadata: { transport: "tmux", processGroup: 4242 } });
+		const kills: [number, string][] = [];
+		const statuses: string[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "status") statuses.push(m.status);
+		});
+
+		const result = await service({
+			killProcessGroup: (pgid: number, signal: string) =>
+				kills.push([pgid, signal]),
+		}).interrupt(id("run-y"), "wrap up");
+
+		expect(kills).toEqual([[4242, "SIGTERM"]]);
+		expect(result.outcome).toBe("accepted");
+		expect(result.targetId).toBe("run:run-y");
+		expect(result.detail).toContain("no in-process controller");
+		expect(statuses).toContain("interrupting");
+		expect(store.readRecord(id("run-y"))?.status).toBe("interrupting");
+	});
+
+	it("interrupt fallback survives ESRCH/EPERM from the signal (already gone / not ours)", async () => {
+		seed("run-y", { metadata: { transport: "tmux", processGroup: 4242 } });
+		const result = await service({
+			killProcessGroup: () => {
+				const err = new Error("kill ESRCH") as NodeJS.ErrnoException;
+				err.code = "ESRCH";
+				throw err;
+			},
+		}).interrupt(id("run-y"));
+		expect(result.outcome).toBe("accepted");
+	});
+
+	it("interrupt without a process group sends C-c into the tmux session", async () => {
+		seed("run-z", {
+			metadata: { transport: "tmux", tmuxSession: "maestro-run-run-z" },
+		});
+		const sent: [string, string][] = [];
+
+		const result = await service({
+			killProcessGroup: () => {
+				throw new Error("no process group recorded — must not be called");
+			},
+			tmuxSendKeys: (session: string, keys: string) =>
+				sent.push([session, keys]),
+		}).interrupt(id("run-z"));
+
+		expect(sent).toEqual([["maestro-run-run-z", "C-c"]]);
+		expect(result.outcome).toBe("accepted");
+	});
+
+	it("interrupt stays disconnected with no process facts at all", async () => {
+		seed("run-bare");
+		const svc = service({
+			killProcessGroup: () => {
+				throw new Error("must not signal");
+			},
+			tmuxSendKeys: () => {
+				throw new Error("must not send keys");
+			},
+		});
+		expect((await svc.interrupt(id("run-bare"))).outcome).toBe("disconnected");
+		expect((await svc.interrupt(id("run-unknown"))).outcome).toBe(
+			"disconnected",
+		);
+	});
+
+	it("interrupt fallback never signals a terminal run (stale pids recycle)", async () => {
+		seed("run-done", {
+			status: "succeeded",
+			metadata: {
+				transport: "tmux",
+				processGroup: 4242,
+				tmuxSession: "maestro-run-run-done",
+			},
+		});
+		const result = await service({
+			killProcessGroup: () => {
+				throw new Error("must not signal a settled run");
+			},
+			tmuxSendKeys: () => {
+				throw new Error("must not send keys to a settled run");
+			},
+		}).interrupt(id("run-done"));
+		expect(result.outcome).toBe("already-idle");
+		expect(store.readRecord(id("run-done"))?.status).toBe("succeeded");
 	});
 });
 

@@ -1,11 +1,15 @@
 /**
  * Manages overlay widgets positioned above the editor.
  *
- * Overlay slots: "maestro" (settings), "ask" (legacy questions slot) and
- * "agents" (the HUD). Tab cycles focus between mounted overlays and the
- * input — consumed only when the editor is empty or an overlay is already
- * focused, so editor Tab-autocomplete keeps working. Only one overlay is
- * expanded at a time; focusing the input collapses them.
+ * Overlay slots: "maestro" (the /maestro settings dialog) and "ask" (legacy
+ * questions slot). The HUD does NOT live here — its panel is a widget set
+ * directly by hud-wiring and its focus grammar belongs to MaestroEditor.
+ * Tab cycles focus between mounted overlays and the input — consumed ONLY
+ * when an overlay is actually mounted (the maestro dialog is mounted only
+ * while /maestro is open) and the editor is empty, or an overlay is already
+ * focused; a bare session must let Tab through to the focused editor
+ * component. Only one overlay is expanded at a time; focusing the input
+ * collapses them.
  *
  * Render discipline: pi's `ui.setWidget` is NOT an update — it disposes the
  * existing component, deletes the key, re-appends it, and rebuilds the whole
@@ -20,7 +24,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { uiTrace } from "@vegardx/pi-core";
 
-export type OverlayId = "ask" | "agents" | "maestro";
+export type OverlayId = "ask" | "maestro";
 
 export interface ManagedOverlay {
 	readonly id: OverlayId;
@@ -43,7 +47,7 @@ const KEY_ESC = "\u001b";
 
 export class OverlayManager {
 	private overlays = new Map<OverlayId, ManagedOverlay>();
-	private focusOrder: OverlayId[] = ["maestro", "ask", "agents"];
+	private focusOrder: OverlayId[] = ["maestro", "ask"];
 	private focusedId: OverlayId | null = null;
 	private inputBlocked = false;
 	private removeInputListener: (() => void) | undefined;

@@ -255,6 +255,62 @@ describe("debug diagnosis and recovery", () => {
 		).toBe(false);
 	});
 
+	it("persists redacted review state across rehydration without repeating recovery", () => {
+		const { engine, execution } = fixture();
+		const dir = mkdtempSync(join(tmpdir(), "debug-review-rehydrate-"));
+		dirs.push(dir);
+		const store = new DebugEpisodeStore(join(dir, "active.json"));
+		const snapshot = collectDebugSnapshot({
+			cwd: "/repo",
+			mode: "auto",
+			executionStage: "executing",
+			activeDeliverableId: "worker",
+			entries: [],
+			engine,
+			execution: execution as never,
+			now: () => "now",
+		});
+		const controller = new DebugController(store);
+		const episode = controller.begin(
+			snapshot,
+			diagnoseDebugSnapshot(snapshot),
+		)!;
+		controller.selectOnce(episode.diagnosis.recommendation, "attempted");
+		controller.record({
+			action: "steer",
+			attemptedAt: "attempted",
+			ok: true,
+			detail: "sent",
+		});
+		controller.startIssueReview({
+			version: 1,
+			model: {
+				title: "Debug",
+				summary: "Summary",
+				stepsToReproduce: ["Run"],
+				expectedBehavior: "Expected",
+				actualBehavior: "Actual",
+				recoveryWorkaround: "Recovery",
+				suggestedFix: "Fix",
+			},
+			mechanical: {
+				observedFacts: ["Fact"],
+				runtimeContext: [{ label: "Mode", value: "auto", source: "runtime" }],
+				recoveryOutcome: {
+					attemptedAction: "steer",
+					attemptedAt: "attempted",
+					status: "succeeded",
+					detail: "sent",
+				},
+			},
+		});
+		const rehydrated = new DebugController(store);
+		rehydrated.setStore(store);
+		expect(rehydrated.getIssueReview()?.draft.model.title).toBe("Debug");
+		expect(rehydrated.get()?.result?.detail).toBe("sent");
+		expect(execution.steer).not.toHaveBeenCalled();
+	});
+
 	it("cancellation clears persisted transient state without action", async () => {
 		const { engine, execution } = fixture();
 		const dir = mkdtempSync(join(tmpdir(), "debug-cancel-"));

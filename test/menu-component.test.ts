@@ -22,8 +22,13 @@ import {
 	createMaestroSettingsList,
 	modelOptions,
 	rolePoolEditor,
+	targetsEditor,
 } from "../packages/settings/src/menu.js";
-import { readRoleLeaf, writeRoleLeaf } from "../packages/settings/src/model.js";
+import {
+	readProfileTargets,
+	readRoleLeaf,
+	writeRoleLeaf,
+} from "../packages/settings/src/model.js";
 import { readLayeredExtensionConfig } from "../packages/settings/src/reader.js";
 
 let root: string;
@@ -366,6 +371,32 @@ describe("hierarchical Maestro settings", () => {
 		expect(list.render(120).join("\n")).toContain(
 			"worker · opus · scope: global",
 		);
+	});
+
+	it("mounts the targets multi-select from a scope row and toggles write", () => {
+		const ctx = fakeCtx();
+		const editor = targetsEditor(ctx, "opus", () => {});
+		let out = editor.render(120).join("\n");
+		// Scope rows with counts; the fixture authors one global target.
+		expect(out).toContain("project");
+		expect(out).toContain("global");
+		expect(out).toContain("1 target(s)");
+		editor.handleInput?.("\x1b[B"); // project → global row
+		editor.handleInput?.("\r"); // Enter mounts the multi-select
+		out = editor.render(120).join("\n");
+		expect(out).toContain("[x] Sonnet (anthropic)");
+		expect(out).toContain("[ ] Gemini (google)");
+		editor.handleInput?.("\x1b[B"); // o3
+		editor.handleInput?.("\x1b[B"); // gemini
+		editor.handleInput?.("\r"); // toggle writes through immediately
+		expect(readProfileTargets(ctx, "opus").global).toEqual([
+			"anthropic/sonnet",
+			"google/gemini",
+		]);
+		editor.handleInput?.("\x1b"); // close the multi-select
+		out = editor.render(120).join("\n");
+		// The scope row refreshed from the fresh summary passed to done().
+		expect(out).toContain("2 target(s)");
 	});
 
 	it("persists exact ordered values rather than indexes", () => {

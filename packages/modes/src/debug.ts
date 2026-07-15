@@ -146,6 +146,8 @@ export interface DebugSnapshotInput {
 	readonly execution?: ExecutionHandle;
 	readonly planRoot?: string;
 	readonly agentId?: string;
+	/** Worker-local generation binding (from the spawn environment). */
+	readonly workerGeneration?: number;
 	readonly maestroRevision?: string;
 }
 
@@ -199,7 +201,10 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 		(plan && requestedDeliverableId
 			? findDeliverable(plan, requestedDeliverableId)?.id
 			: undefined) ??
-		plan?.deliverables.find((item) => item.status === "active")?.id;
+		plan?.deliverables.find((item) => item.status === "active")?.id ??
+		// Worker-local snapshots have no plan to verify against; the deliverable
+		// identity comes from the authenticated agent id, never from model input.
+		input.agentId?.split("/")[0];
 	const deliverable =
 		plan && deliverableId ? findDeliverable(plan, deliverableId) : undefined;
 	const executorState = deliverableId
@@ -262,7 +267,21 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 						...(deliverable.branch ? { branch: deliverable.branch } : {}),
 					},
 				}
-			: {}),
+			: input.agentId && input.workerGeneration !== undefined
+				? {
+						// Worker-local facts: enough for the diagnosis to propose real
+						// recoveries (restart-resume/-fresh) instead of only "none".
+						// The maestro revalidates every binding before anything runs.
+						worker: {
+							agentId: input.agentId,
+							generation: input.workerGeneration,
+							...(input.sessionPath
+								? { sessionPath: normalizeDebugPath(input.sessionPath) }
+								: {}),
+							previousSessionPaths: [],
+						},
+					}
+				: {}),
 		recentFailures: boundedFailures(input.entries),
 		runtime: {
 			node: process.version,

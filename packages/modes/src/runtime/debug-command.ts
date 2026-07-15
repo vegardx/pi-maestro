@@ -36,12 +36,16 @@ export function hydrateDebugEpisode(rt: RuntimeContext): void {
 	configureStore(rt);
 }
 
-function snapshot(rt: RuntimeContext, ctx: ExtensionContext) {
+function snapshot(
+	rt: RuntimeContext,
+	ctx: ExtensionContext,
+	deliverableId?: string,
+) {
 	return collectDebugSnapshot({
 		cwd: ctx.cwd,
 		mode: rt.state.mode,
 		executionStage: rt.state.execution.stage,
-		activeDeliverableId: rt.state.execution.deliverableId,
+		activeDeliverableId: deliverableId ?? rt.state.execution.deliverableId,
 		sessionPath: ctx.sessionManager.getSessionFile(),
 		entries: ctx.sessionManager.getEntries(),
 		engine: rt.engine,
@@ -215,7 +219,9 @@ async function handleWorkerDebugProposal(
 	});
 	if (!checked.ok) return debugResultForError(message, checked.error);
 	configureStore(rt);
-	const snap = snapshot(rt, ctx);
+	// Pin the episode to the proposing worker's deliverable (authenticated id),
+	// not whatever deliverable the maestro UI happens to focus.
+	const snap = snapshot(rt, ctx, agentId.split("/")[0]);
 	const diagnosis = diagnoseDebugSnapshot(
 		snap,
 		message.likelyCause,
@@ -276,6 +282,7 @@ export async function runWorkerDebugCommand(
 		sessionPath: ctx.sessionManager.getSessionFile(),
 		entries: ctx.sessionManager.getEntries(),
 		agentId,
+		workerGeneration: generation,
 		now: rt.now,
 	});
 	const diagnosis = diagnoseDebugSnapshot(local, args);

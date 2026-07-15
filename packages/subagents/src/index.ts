@@ -50,6 +50,7 @@ import {
 	createSupervisorTool,
 	RUN_ID_ENV,
 } from "./supervisor.js";
+import { createTmuxAgentRunner } from "./tmux-runner.js";
 import { createSubagentTool } from "./tool.js";
 
 export {
@@ -115,6 +116,10 @@ export {
 	type SupervisorProjectorDeps,
 	type SupervisorToolOptions,
 } from "./supervisor.js";
+export {
+	createTmuxAgentRunner,
+	type TmuxRunnerOptions,
+} from "./tmux-runner.js";
 export { createSubagentTool, type SubagentToolDeps } from "./tool.js";
 
 // Relay a supervisor request to the human: ask.v1 when present, else the bare
@@ -225,10 +230,21 @@ export default defineExtension(
 			agents = discoverAgents(`${next.cwd}/.pi/agents`);
 			const store = createRunStore(runsRoot(next.cwd));
 			persistRunBus(bus, store);
+			const tmuxRunner = createTmuxAgentRunner({
+				semaphore,
+				cliPath: resolveCliPath(),
+				runsRoot: store.root,
+			});
+			const transportRunner: AgentRunner = {
+				launch: (request, targetBus) =>
+					request.profile.transport === "headless"
+						? runner.launch(request, targetBus)
+						: tmuxRunner.launch(request, targetBus),
+			};
 			service = new SubagentService({
 				bus,
 				store,
-				runner,
+				runner: transportRunner,
 				repoRoot: next.cwd,
 				spawnerCwd: next.cwd,
 				ownDepth: currentDepth(),
@@ -257,7 +273,9 @@ export default defineExtension(
 			get: (runId) => requireService().get(runId),
 			list: () => requireService().list(),
 			steer: (runId, guidance) => requireService().steer(runId, guidance),
+			interrupt: (runId, reason) => requireService().interrupt(runId, reason),
 			stop: (runId, reason) => requireService().stop(runId, reason),
+			capture: (runId, lines) => requireService().capture(runId, lines),
 		});
 
 		// Bridge the in-process run-bus onto the typed maestro event bus so modes

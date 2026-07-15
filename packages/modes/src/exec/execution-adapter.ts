@@ -2023,8 +2023,35 @@ export class ExecutionAdapter {
 		return this.router.send(agentKey, { type: "steer", content: guidance });
 	}
 
+	async interrupt(
+		deliverableId: string,
+		agentName = "worker",
+	): Promise<import("@vegardx/pi-contracts").InterruptResult> {
+		const agentKey = `${deliverableId}/${agentName}`;
+		const targetId = `worker:${agentKey}`;
+		try {
+			const response = await this.router.request(
+				agentKey,
+				{
+					type: "interrupt",
+					id: randomUUID(),
+					reason: "user interrupt",
+				},
+				3000,
+			);
+			return { outcome: response.outcome, targetId };
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return {
+				outcome: message.includes("timed out") ? "timed-out" : "disconnected",
+				targetId,
+				detail: message,
+			};
+		}
+	}
+
 	/**
-	 * Resolve a user-facing target to a tmux session name. Accepts a full
+	 * Resolve to a tmux session name. Accepts a full
 	 * agent key (`deliverable/agent`), a deliverable id (→ its worker), a bare agent
 	 * name, or a session name itself.
 	 */

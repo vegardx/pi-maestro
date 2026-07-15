@@ -37,6 +37,12 @@ export interface RunStore {
 	create(record: RunRecord): void;
 	setStatus(runId: RunId, status: RunStatus, at?: number): RunRecord;
 	setResult(runId: RunId, result: RunResult, at?: number): RunRecord;
+	setMetadata(
+		runId: RunId,
+		metadata: NonNullable<RunRecord["metadata"]>,
+		at?: number,
+	): RunRecord;
+	setLastEventAt(runId: RunId, at?: number): RunRecord;
 	appendEvent(runId: RunId, message: RunBusMessage): void;
 	writeResult(runId: RunId, markdown: string): void;
 	readResult(runId: RunId): string | undefined;
@@ -103,6 +109,22 @@ export function createRunStore(root: string): RunStore {
 					updatedAt: at,
 				};
 			});
+		},
+
+		setMetadata(runId, metadata, at = Date.now()) {
+			return mutate(runId, (record) => ({
+				...record,
+				metadata,
+				updatedAt: at,
+			}));
+		},
+
+		setLastEventAt(runId, at = Date.now()) {
+			return mutate(runId, (record) => ({
+				...record,
+				lastEventAt: at,
+				updatedAt: Math.max(record.updatedAt, at),
+			}));
 		},
 
 		appendEvent(runId, message) {

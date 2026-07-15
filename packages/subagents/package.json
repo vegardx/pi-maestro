@@ -14,7 +14,8 @@
 		"@vegardx/pi-core": "*",
 		"@vegardx/pi-git": "*",
 		"@vegardx/pi-models": "*",
-		"@vegardx/pi-settings": "*"
+		"@vegardx/pi-settings": "*",
+		"@vegardx/pi-tmux": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

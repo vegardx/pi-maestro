@@ -6,6 +6,7 @@
 import type {
 	AgentMessage,
 	HelloMessage,
+	InterruptMessage,
 	MaestroMessage,
 	MaestroRpcServer,
 	PingMessage,
@@ -30,11 +31,15 @@ export type RpcRouterHandlers = {
 };
 
 /** Maestro→agent messages that expect a correlated response. */
-export type MaestroRequestMessage = SummarizeMessage | PingMessage;
+export type MaestroRequestMessage =
+	| SummarizeMessage
+	| InterruptMessage
+	| PingMessage;
 
 /** Response `type` expected for each outbound request `type`. */
 const RESPONSE_TYPE = {
 	summarize: "summary",
+	interrupt: "interruptAck",
 	ping: "pong",
 } as const satisfies Record<MaestroRequestMessage["type"], string>;
 

@@ -3,6 +3,7 @@
 // maps (capability ids, event names, status/mode enums) needed for lookup
 // and iteration. No logic, no host dependencies.
 
+export * from "./agents.js";
 export * from "./ask.js";
 export * from "./capabilities.js";
 export * from "./compaction.js";

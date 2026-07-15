@@ -32,7 +32,12 @@ import { readModesCompactionSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
-import { handleSteerCommand, handleViewCommand } from "./agent-commands.js";
+import {
+	handleInterruptCommand,
+	handleSteerCommand,
+	handleViewCommand,
+} from "./agent-commands.js";
+import { listAgentTargets } from "./agent-targets.js";
 import { beginDistill, beginHandoff } from "./carry-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview, syncAgentWidget } from "./dashboard.js";
@@ -245,7 +250,22 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				cmdCtx.ui.notify("No deliverables in plan.", "info");
 				return;
 			}
-			cmdCtx.ui.notify(renderAgentsOverview(plan, rt.execution), "info");
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			const targets = listAgentTargets({ execution: rt.execution, subagents });
+			const runLines = targets
+				.filter((target) => target.kind === "run")
+				.map((target) => {
+					const elapsed = Math.max(0, Date.now() - target.createdAt);
+					const age = Math.max(0, Date.now() - target.updatedAt);
+					return `${target.id} · ${target.role} · ${target.status} · ${Math.round(elapsed / 1000)}s elapsed · event ${Math.round(age / 1000)}s ago · ${target.model ?? "default model"}`;
+				});
+			const overview = renderAgentsOverview(plan, rt.execution);
+			cmdCtx.ui.notify(
+				runLines.length
+					? `${overview}\n\nInspectable runs:\n${runLines.join("\n")}`
+					: overview,
+				"info",
+			);
 		},
 	});
 
@@ -450,13 +470,10 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	pi.registerCommand("view", {
 		description:
-			"View an agent's tmux session in a split pane. /view <name> or /view for dialog.",
+			"View any tmux-backed agent session in a split pane. /view <opaque-id> or /view for dialog.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			if (rt.execution) {
-				await handleViewCommand(args, ctx, rt.execution, rt.viewState);
-			} else {
-				ctx.ui.notify("No agents active (tmux required).", "info");
-			}
+			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+			await handleViewCommand(args, ctx, rt.execution, rt.viewState, subagents);
 		},
 	});
 
@@ -489,10 +506,28 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		description: "Steer an agent. /steer <name> <guidance>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			if (rt.execution) {
-				handleSteerCommand(args, ctx, rt.execution);
+				handleSteerCommand(
+					args,
+					ctx,
+					rt.execution,
+					maestro.capabilities.get(CAPABILITIES.subagents),
+				);
 			} else {
 				ctx.ui.notify("No agents active (tmux required).", "info");
 			}
+		},
+	});
+
+	pi.registerCommand("interrupt", {
+		description:
+			"Abort one agent turn/run without shutdown. /interrupt [target] [--children|--tree|--all]",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			await handleInterruptCommand(
+				args,
+				ctx,
+				rt.execution,
+				maestro.capabilities.get(CAPABILITIES.subagents),
+			);
 		},
 	});
 

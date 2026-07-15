@@ -352,6 +352,9 @@ export async function runVerification(
 			};
 			const profile = {
 				profile: "general",
+				transport: "tmux" as const,
+				role: "verifier",
+				displayName: `verify-${g.id}`,
 				cwd: evidence.cwd,
 				thinking: (deps.display?.effort ?? "high") as
 					| "off"
@@ -369,7 +372,11 @@ export async function runVerification(
 				(view as { id: string }).id = handle.id;
 				deps.onStarted?.(view);
 				result = await handle.result();
-				if (result.status === "succeeded" && !result.summary?.trim()) {
+				if (
+					result.status === "succeeded" &&
+					!result.summary?.trim() &&
+					!result.error?.includes("user interrupt")
+				) {
 					// Some gateway models occasionally end a run with no final text
 					// — retry once rather than reporting an empty verification. The
 					// widget keeps the original run's row; only the result is

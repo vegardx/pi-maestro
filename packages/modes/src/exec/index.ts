@@ -2,7 +2,7 @@
 // the concrete adapter — so the execution internals (provisioner, supervisor,
 // rpc-router) can be completed behind this interface.
 
-import type { Answers } from "@vegardx/pi-contracts";
+import type { Answers, InterruptResult } from "@vegardx/pi-contracts";
 import type { DeliverableExecutor } from "../deliverable-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
@@ -71,6 +71,11 @@ export interface ExecutionHandle {
 	tick(): Promise<number>;
 	/** Send guidance to a deliverable agent (default: the worker). False if absent. */
 	steer(deliverableId: string, guidance: string, agentName?: string): boolean;
+	/** Abort only the current turn; the worker process/session/worktree survive. */
+	interrupt?(
+		deliverableId: string,
+		agentName?: string,
+	): Promise<InterruptResult>;
 	/** Required reviewers currently holding a deliverable's ship gate. */
 	failingRequiredReviewers(deliverableId: string): string[];
 	/**

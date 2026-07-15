@@ -12,6 +12,7 @@
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { RpcClientOptions } from "@earendil-works/pi-coding-agent";
 import type {
+	InterruptResult,
 	RunId,
 	RunResult,
 	RunWatchdogConfig,
@@ -83,6 +84,7 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 	return {
 		launch(request: LaunchRequest, bus: RunBus): RunnerController {
 			const abort = new AbortController();
+			const rpcMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
 			let client: RpcLike | undefined;
 			// Liveness: bumped on every child event so a watchdog can tell a
 			// stalled run (event silence) from a slow-but-working one.
@@ -116,26 +118,53 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 						// Steering a finished run is a no-op.
 					}
 				},
-				stop() {
-					// Stop after settlement is a no-op — no status transition, no
-					// transport call that could throw out of a timer callback (the
-					// RPC client throws synchronously once its transport is gone;
-					// that escaped as an uncaught post-/handoff crash before).
-					if (!lifecycle.settled && !lifecycle.interruptPublished) {
-						lifecycle.interruptPublished = true;
-						bus.publish({
-							type: "status",
-							runId: request.runId,
-							status: "interrupting",
-							at: Date.now(),
-						});
+				async interrupt(reason?: string): Promise<InterruptResult> {
+					const targetId = `run:${request.runId}`;
+					// Interrupt settles once: after settlement it is a no-op report,
+					// and a second interrupt while one is in flight is acknowledged,
+					// not repeated. The `interrupting` status is published before the
+					// transport abort so watchers see the transition.
+					if (lifecycle.settled) return { outcome: "already-idle", targetId };
+					if (lifecycle.interruptPublished)
+						return { outcome: "already-interrupting", targetId };
+					lifecycle.interruptPublished = true;
+					bus.publish({
+						type: "status",
+						runId: request.runId,
+						status: "interrupting",
+						at: Date.now(),
+					});
+					// Salvage BEFORE aborting — abort kills the child. Bounded: a
+					// wedged transport must not turn the interrupt itself into a hang.
+					let partialText: string | undefined;
+					if (client) {
+						try {
+							partialText =
+								(
+									await deadline(client.getLastAssistantText(), rpcMs, "salvage")
+								)?.trim() || undefined;
+						} catch {
+							// best-effort salvage
+						}
 					}
-					abort.abort();
+					abort.abort(reason);
 					try {
-						asFireAndForget(client?.abort());
+						await deadline(client?.abort() ?? Promise.resolve(), rpcMs, "abort");
 					} catch {
-						// Already finished.
+						// The process may have settled between observation and abort.
 					}
+					return {
+						outcome: "accepted",
+						targetId,
+						...(reason ? { detail: reason } : {}),
+						...(partialText ? { partialText } : {}),
+					};
+				},
+				stop(reason?: string) {
+					// Fire-and-forget interrupt. Never throws out of a timer callback
+					// (the RPC client throws synchronously once its transport is gone;
+					// that escaped as an uncaught post-/handoff crash before).
+					this.interrupt?.(reason)?.catch(() => {});
 				},
 				result: () => done,
 				lastEventAt: () => activity.at,
@@ -245,7 +274,20 @@ async function execute(
 			);
 		}
 
-		if (signal.aborted) return done(stopped("aborted"));
+		if (signal.aborted) {
+			// Explicit interrupt: salvage what the child had (bounded — a wedged
+			// transport must not hang the settle) and settle stopped, terminal.
+			const partial = (
+				await deadline(client.getLastAssistantText(), rpcMs, "salvage").catch(
+					() => null,
+				)
+			)?.trim();
+			return done({
+				status: "stopped",
+				error: abortReason(signal),
+				...(partial ? { summary: capText(partial, cap) } : {}),
+			});
+		}
 
 		if (tripped) {
 			// Salvage BEFORE aborting — abort kills the child process. The
@@ -279,7 +321,20 @@ async function execute(
 		// mid-flight; deadline kills settle timed-out; everything else failed
 		// (including child death, which rejects the idle wait and thereby every
 		// pending operation of this run).
-		if (signal.aborted) return done(stopped("aborted"));
+		if (signal.aborted) {
+			const partial = client
+				? (
+						await deadline(client.getLastAssistantText(), rpcMs, "salvage").catch(
+							() => null,
+						)
+					)?.trim()
+				: undefined;
+			return done({
+				status: "stopped",
+				error: abortReason(signal),
+				...(partial ? { summary: capText(partial, cap) } : {}),
+			});
+		}
 		if (err instanceof DeadlineError) {
 			return done({ status: "timed-out", error: err.message });
 		}
@@ -440,6 +495,12 @@ function settle(bus: RunBus, runId: RunId, result: RunResult): RunResult {
 	bus.publish({ type: "status", runId, status: result.status, at: Date.now() });
 	bus.publish({ type: "result", runId, result });
 	return result;
+}
+
+function abortReason(signal: AbortSignal): string {
+	return typeof signal.reason === "string" && signal.reason.trim()
+		? signal.reason
+		: "aborted";
 }
 
 function stopped(reason: string): RunResult {

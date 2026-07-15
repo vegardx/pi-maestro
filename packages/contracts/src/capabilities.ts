@@ -7,7 +7,12 @@
 import type { Answers, PendingAsk, Questionnaire } from "./ask.js";
 import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
-import type { RunHandle, RunRecord, SpawnProfile } from "./runs.js";
+import type {
+	InterruptResult,
+	RunHandle,
+	RunRecord,
+	SpawnProfile,
+} from "./runs.js";
 import type { SettingsCapabilityV1 } from "./settings.js";
 import type { ShipResult } from "./ship.js";
 import type { TokenSnapshot, UsageSource } from "./usage.js";
@@ -32,7 +37,10 @@ export interface SubagentsCapabilityV1 {
 	get(runId: RunId): RunRecord | undefined;
 	list(): readonly RunRecord[];
 	steer(runId: RunId, guidance: string): void;
+	interrupt?(runId: RunId, reason?: string): Promise<InterruptResult>;
+	/** Compatibility alias for interrupting one-shot work. */
 	stop(runId: RunId, reason?: string): void;
+	capture?(runId: RunId, lines?: number): Promise<string | undefined>;
 }
 
 export interface AskCapabilityV1 {

@@ -30,9 +30,11 @@ The redesign rests on five principles:
 
 Each deliverable's plan declares its reviewers via the `agent` tool: a
 **persona** from the palette, an **effort** dial, and an optional **focus**
-specialization. Reviewers are one-shot, read-only, headless subagents run
-against the worker's worktree — they have no tmux pane and no memory beyond
-their report. Running the *same* persona twice on a deliberately different
+specialization. Reviewers are one-shot, read-only subagents run against the
+worker's worktree. They are tmux-backed by default with persistent session
+JSONL and stable run IDs, so `/agents` and `/view run:<id>` can inspect them;
+their process still settles after the report and retained panes are bounded by
+run retention. Running the *same* persona twice on a deliberately different
 allowed model is legitimate for sensitive deliverables, but exceptional:
 raise effort first, use at most two distinct models for a persona, give each
 instance a unique name, and record the cross-model justification. The panel

@@ -97,11 +97,21 @@ toggle tasks, and run their own review panel before completing.
 
 While the fleet runs, the maestro session stays yours:
 
-- `/agents` — live overview: deliverable states, task progress, and each
-  review ledger (`cycle 1/3 · 2 blocking open`).
-- `/watch` — toggle stacked tmux panes showing all active workers.
-- `/view <name>` — one worker's session in a split pane.
-- `/steer <name> <guidance>` — inject guidance into a running worker.
+- `/agents` — live overview: deliverable states, task progress, each review
+  ledger, and active/failed subagent runs with role, model, elapsed/event age,
+  status, and exact opaque run ID.
+- `/watch` — toggle stacked tmux panes showing all active workers (large review
+  panels are intentionally not tiled automatically).
+- `/view <target>` — read-only split for any tmux-backed worker or run. Exact
+  IDs (`worker:<deliverable/agent>`, `run:<id>`) are preferred; ambiguous
+  display names are rejected.
+- `/steer <name> <guidance>` — inject guidance into a running worker. Steering
+  continues the turn and is not interruption or shutdown.
+- `/interrupt [target] [--children|--tree|--all]` — abort the selected current
+  turn. With no target it affects only the current host turn. Workers preserve
+  their process, transcript, and worktree after acknowledged RPC abort;
+  one-shot runs salvage partial text, settle stopped, and clean up. Descendant,
+  tree, and all-agent propagation are explicit only.
 - `/answer` — answer questions workers have raised.
 - `/recap` — summary of completed agent work.
 
@@ -252,10 +262,11 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/plan [title-or-slug]` | Open or create a plan; enter plan mode |
 | `/ready` | Unlock plan structuring (skip the readiness gate) |
 | `/implement` | Start executing the active plan |
-| `/agents` | Active deliverables and agent status |
+| `/agents` | Active deliverables plus inspectable run IDs, role/model/status, elapsed and event age |
 | `/watch` | Toggle stacked tmux panes for all active workers |
-| `/view <name>` | View one agent's tmux session in a split pane |
-| `/steer <name> <guidance>` | Steer a running agent |
+| `/view <target>` | View any tmux-backed worker/run read-only; exact opaque IDs win |
+| `/steer <name> <guidance>` | Steer a running worker without aborting it |
+| `/interrupt [target] [--children\|--tree\|--all]` | Abort current turn/run; preserve persistent sessions, settle one-shots |
 | `/answer` | Answer pending agent questions |
 | `/recap` | Summary of completed agent work |
 | `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |

@@ -1,6 +1,8 @@
-// The review episode state machine: panel-once, minted ids, resolution
-// completeness, scoped verification as the gate, targeted repair, and
-// rehydration from a persisted ledger.
+// The review episode state machine under the ASYNC contract: a spawning call
+// acknowledges immediately (names + run ids, no gate claim) and the report is
+// injected as a message when the round settles. Panel-once, minted ids,
+// resolution completeness, scoped verification as the gate, targeted repair,
+// the in-flight guard, and rehydration from a persisted ledger.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
@@ -23,10 +25,13 @@ import type { SubAgentSpec } from "../packages/modes/src/schema.js";
  * Fake subagents: personas matched by the identity line in their profile,
  * the verifier by its contract marker. Values are queues — one entry per
  * expected spawn, so panel-once and retry behavior are asserted by count.
+ * A queued Promise keeps that run pending until the test resolves it.
  */
+type Scripted = RunResult | Promise<RunResult>;
+
 function fakeSubagents(config: {
-	personas?: Record<string, RunResult[]>;
-	verifier?: RunResult[];
+	personas?: Record<string, Scripted[]>;
+	verifier?: Scripted[];
 }): { capability: SubagentsCapabilityV1; spawns: string[] } {
 	const spawns: string[] = [];
 	let n = 0;
@@ -34,7 +39,7 @@ function fakeSubagents(config: {
 		spawn(_prompt: string, profile: SpawnProfile): RunHandle {
 			const sys = profile.appendSystemPrompt ?? "";
 			let key: string;
-			let queue: RunResult[] | undefined;
+			let queue: Scripted[] | undefined;
 			if (sys.includes("fix VERIFIER")) {
 				key = "verifier";
 				queue = config.verifier;
@@ -46,16 +51,16 @@ function fakeSubagents(config: {
 				queue = config.personas?.[key];
 			}
 			spawns.push(key);
-			const result: RunResult =
+			const result: Scripted =
 				queue && queue.length > 0
-					? (queue.shift() as RunResult)
+					? (queue.shift() as Scripted)
 					: ({ status: "failed", error: "no scripted result" } as RunResult);
 			return {
 				id: `run-${++n}` as RunId,
 				status: () => "running" as const,
 				steer: () => {},
 				stop: () => {},
-				result: async () => result,
+				result: async () => await result,
 			};
 		},
 		get: () => undefined,
@@ -83,6 +88,18 @@ const verifierSays = (
 	status: "succeeded",
 	summary: `checked\n\`\`\`json\n${JSON.stringify({ checks, regressions })}\n\`\`\``,
 });
+
+/** A run the test settles by hand — keeps its round in flight until then. */
+function deferred(): {
+	promise: Promise<RunResult>;
+	resolve: (r: RunResult) => void;
+} {
+	let resolve!: (r: RunResult) => void;
+	const promise = new Promise<RunResult>((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
+}
 
 type Exec = {
 	execute(
@@ -116,15 +133,29 @@ function makeTool(
 	panel: SubAgentSpec[],
 	opts: { state?: Partial<PanelState>; reports?: Reported[] } = {},
 ) {
-	return createReviewTool({
+	const delivered: string[] = [];
+	const tool = createReviewTool({
 		subagents: () => capability,
 		panelState: () => ({ panel, ...opts.state }),
 		cwd: () => "/wt",
+		deliver: (text) => {
+			delivered.push(text);
+		},
 		report: (kind, results, ledger) => {
 			opts.reports?.push({ kind, results, ledger });
 		},
 		now: () => "2026-07-12T00:00:00.000Z",
 	});
+	// The background settle runs behind the tool result — poll for the nth
+	// injected message instead of racing its microtask chain.
+	const delivery = async (n = 0): Promise<string> => {
+		for (let i = 0; i < 200 && delivered.length <= n; i++) {
+			await new Promise<void>((r) => setImmediate(r));
+		}
+		if (delivered.length <= n) throw new Error("no report was delivered");
+		return delivered[n];
+	};
+	return { tool, delivered, delivery };
 }
 
 const SEC: SubAgentSpec = {
@@ -137,8 +168,8 @@ const SIMP: SubAgentSpec = {
 	persona: "simplification",
 };
 
-describe("review tool — panel round", () => {
-	it("runs the panel once, mints ids, and blocks on a major finding", async () => {
+describe("review tool — async panel round", () => {
+	it("acknowledges immediately without a gate claim; the findings report arrives as a message", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: {
 				"security-audit": [blockWithMajor("injection in a.ts")],
@@ -146,12 +177,28 @@ describe("review tool — panel round", () => {
 			},
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC, SIMP], { reports });
+		const { tool, delivery } = makeTool(capability, [SEC, SIMP], { reports });
+
 		const res = await run(tool);
-		expect(res.details.gate).toBe(false);
-		expect(res.content[0].text).toContain("security-audit.1");
-		expect(res.content[0].text).toContain("review({resolutions");
+		// The tool result is only the acknowledgment: run ids, wait pointer,
+		// and NO gate verdict (the round has not settled).
+		expect(res.details.gate).toBeUndefined();
+		expect(res.content[0].text).toContain("Review panel running:");
+		expect(res.content[0].text).toContain("security-audit (run-1)");
+		expect(res.content[0].text).toContain("simplification (run-2)");
+		expect(res.content[0].text).toContain("Do not re-run review()");
+		expect(res.content[0].text).not.toContain("security-audit.1");
 		expect(spawns).toEqual(["security-audit", "simplification"]);
+
+		// The settled report — minted ids, ledger, resolution pointer — is
+		// delivered as an injected message, not a tool result.
+		const report = await delivery();
+		expect(report).toContain("Panel found 1 blocking finding(s)");
+		expect(report).toContain("security-audit.1");
+		expect(report).toContain("review({resolutions");
+		expect(report).not.toContain("Panel clean");
+
+		// The upward report flow is unchanged by async delivery.
 		expect(reports).toHaveLength(1);
 		expect(reports[0].kind).toBe("panel");
 		expect(reports[0].ledger.entries.map((e) => e.finding.id)).toEqual([
@@ -159,37 +206,61 @@ describe("review tool — panel round", () => {
 		]);
 	});
 
-	it("clean panel opens the gate", async () => {
+	it("delivers 'Panel clean' only when the panel is clean", async () => {
 		const { capability } = fakeSubagents({
 			personas: { "security-audit": [pass()] },
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		const res = await run(tool);
-		expect(res.details.gate).toBe(true);
-		expect(res.content[0].text).toContain("Panel clean");
+		expect(res.details.gate).toBeUndefined();
+		expect(res.content[0].text).not.toContain("Panel clean");
+		expect(await delivery()).toContain("Panel clean");
 	});
 
-	it("an empty panel does not block ship", async () => {
+	it("an empty panel resolves synchronously and does not block ship", async () => {
 		const { capability } = fakeSubagents({});
-		const tool = makeTool(capability, []);
+		const { tool, delivered } = makeTool(capability, []);
 		const res = await run(tool);
 		expect(res.details.gate).toBe(true);
 		expect(res.content[0].text).toContain("No review panel");
+		expect(delivered).toHaveLength(0);
 	});
 
-	it("a second bare call does NOT re-run the panel (panel-once)", async () => {
+	it("a second review() while the round is in flight spawns NOTHING", async () => {
+		const pending = deferred();
+		const { capability, spawns } = fakeSubagents({
+			personas: { "security-audit": [pending.promise] },
+		});
+		const { tool, delivered, delivery } = makeTool(capability, [SEC]);
+		await run(tool);
+		expect(spawns).toHaveLength(1);
+
+		const second = await run(tool);
+		expect(spawns).toHaveLength(1);
+		expect(delivered).toHaveLength(0);
+		expect(second.details.gate).toBeUndefined();
+		expect(second.content[0].text).toContain("already running");
+		expect(second.content[0].text).toContain("wait for its report");
+
+		pending.resolve(pass());
+		expect(await delivery()).toContain("Panel clean");
+		expect(delivered).toHaveLength(1);
+	});
+
+	it("a second bare call after the report does NOT re-run the panel (panel-once)", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		await run(tool);
+		await delivery();
 		const spawnsAfterPanel = spawns.length;
 		const res = await run(tool);
 		expect(spawns.length).toBe(spawnsAfterPanel);
 		expect(res.content[0].text).toContain("do not re-run it");
 	});
 
-	it("normalizes a stated BLOCK over minors to approve", async () => {
+	it("normalizes a stated BLOCK over minors to a clean report", async () => {
 		const { capability } = fakeSubagents({
 			personas: {
 				"security-audit": [
@@ -201,15 +272,15 @@ describe("review tool — panel round", () => {
 				],
 			},
 		});
-		const tool = makeTool(capability, [SEC]);
-		const res = await run(tool);
+		const { tool, delivery } = makeTool(capability, [SEC]);
+		await run(tool);
 		// Minors never hold the gate, whatever the reviewer's mood said.
-		expect(res.details.gate).toBe(true);
+		expect(await delivery()).toContain("Panel clean");
 	});
 });
 
 describe("review tool — verification", () => {
-	it("fixed claims spawn ONE scoped verifier; verified closes the gate", async () => {
+	it("fixed claims spawn ONE scoped verifier; the verified report arrives as a message", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 			verifier: [
@@ -219,15 +290,22 @@ describe("review tool — verification", () => {
 			],
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC], { reports });
+		const { tool, delivery } = makeTool(capability, [SEC], { reports });
 		await run(tool);
+		await delivery();
+
 		const res = await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit abc" },
 			],
 		});
-		expect(res.details.gate).toBe(true);
-		expect(res.content[0].text).toContain("gate is clear");
+		expect(res.details.gate).toBeUndefined();
+		expect(res.content[0].text).toContain("Verifier running:");
+		expect(res.content[0].text).toContain("verifier-1 (run-2)");
+		expect(res.content[0].text).toContain("Do not re-run review()");
+
+		const report = await delivery(1);
+		expect(report).toContain("gate is clear");
 		expect(spawns.filter((s) => s === "verifier")).toHaveLength(1);
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		const last = reports.at(-1);
@@ -235,15 +313,16 @@ describe("review tool — verification", () => {
 		expect(last?.ledger.cycle).toBe(1);
 	});
 
-	it("rejects incomplete resolutions without spawning the verifier", async () => {
+	it("rejects incomplete resolutions synchronously, without spawning the verifier", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: {
 				"security-audit": [blockWithMajor("flaw one")],
 				simplification: [blockWithMajor("flaw two")],
 			},
 		});
-		const tool = makeTool(capability, [SEC, SIMP]);
+		const { tool, delivered, delivery } = makeTool(capability, [SEC, SIMP]);
 		await run(tool);
+		await delivery();
 		const res = await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit" },
@@ -252,9 +331,10 @@ describe("review tool — verification", () => {
 		expect(res.content[0].text).toContain("unaccounted");
 		expect(res.content[0].text).toContain("simplification.1");
 		expect(spawns.filter((s) => s === "verifier")).toHaveLength(0);
+		expect(delivered).toHaveLength(1); // only the panel report
 	});
 
-	it("still-open keeps the gate held", async () => {
+	it("still-open keeps the gate held in the delivered report", async () => {
 		const { capability } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 			verifier: [
@@ -267,15 +347,17 @@ describe("review tool — verification", () => {
 				]),
 			],
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		await run(tool);
-		const res = await run(tool, {
+		await delivery();
+		await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit" },
 			],
 		});
-		expect(res.details.gate).toBe(false);
-		expect(res.content[0].text).toContain("still open");
+		const report = await delivery(1);
+		expect(report).toContain("still open");
+		expect(report).not.toContain("gate is clear");
 	});
 
 	it("a verifier regression reopens the gate with a minted id", async () => {
@@ -295,23 +377,24 @@ describe("review tool — verification", () => {
 				),
 			],
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		await run(tool);
-		const res = await run(tool, {
+		await delivery();
+		await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit" },
 			],
 		});
-		expect(res.details.gate).toBe(false);
-		expect(res.content[0].text).toContain("verifier-1.1");
+		expect(await delivery(1)).toContain("verifier-1.1");
 	});
 
-	it("disputes skip the verifier and point at triage", async () => {
+	it("disputes skip the verifier and resolve synchronously at triage", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		await run(tool);
+		await delivery();
 		const res = await run(tool, {
 			resolutions: [
 				{
@@ -324,6 +407,29 @@ describe("review tool — verification", () => {
 		expect(res.details.gate).toBe(false);
 		expect(res.content[0].text).toContain("triage");
 		expect(spawns.filter((s) => s === "verifier")).toHaveLength(0);
+	});
+
+	it("a second review() while the verifier is in flight spawns nothing", async () => {
+		const pending = deferred();
+		const { capability, spawns } = fakeSubagents({
+			personas: { "security-audit": [blockWithMajor("flaw")] },
+			verifier: [pending.promise],
+		});
+		const { tool, delivery } = makeTool(capability, [SEC]);
+		await run(tool);
+		await delivery();
+		await run(tool, {
+			resolutions: [
+				{ id: "security-audit.1", status: "fixed", note: "commit" },
+			],
+		});
+		const during = await run(tool);
+		expect(during.content[0].text).toContain("already running");
+		expect(spawns.filter((s) => s === "verifier")).toHaveLength(1);
+		pending.resolve(
+			verifierSays([{ id: "security-audit.1", result: "verified" }]),
+		);
+		expect(await delivery(1)).toContain("gate is clear");
 	});
 });
 
@@ -338,10 +444,10 @@ describe("review tool — repair and rehydration", () => {
 			},
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC, SIMP], { reports });
-		const first = await run(tool);
-		expect(first.details.gate).toBe(false);
-		expect(first.content[0].text).toContain('review({action: "repair"})');
+		const { tool, delivery } = makeTool(capability, [SEC, SIMP], { reports });
+		await run(tool);
+		const first = await delivery();
+		expect(first).toContain('review({action: "repair"})');
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		expect(spawns.filter((s) => s === "simplification")).toHaveLength(1);
 		const failedParticipant = reports[0].ledger.participants?.find(
@@ -354,8 +460,14 @@ describe("review tool — repair and rehydration", () => {
 		});
 		expect(failedParticipant?.error).toContain("spawn error");
 
-		const repaired = await run(tool, { action: "repair" });
-		expect(repaired.details.gate).toBe(true);
+		const ack = await run(tool, { action: "repair" });
+		expect(ack.details.gate).toBeUndefined();
+		expect(ack.content[0].text).toContain("Repair round running:");
+		expect(ack.content[0].text).toContain("security-audit");
+		expect(ack.content[0].text).not.toContain("simplification");
+
+		const repaired = await delivery(1);
+		expect(repaired).toContain("Panel clean");
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(2);
 		// simplification was fine — repair never touched it.
 		expect(spawns.filter((s) => s === "simplification")).toHaveLength(1);
@@ -380,10 +492,12 @@ describe("review tool — repair and rehydration", () => {
 			},
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC], { reports });
+		const { tool, delivery } = makeTool(capability, [SEC], { reports });
 		await run(tool);
-		const res = await run(tool, { action: "repair" });
-		expect(res.details.gate).toBe(false);
+		await delivery();
+		await run(tool, { action: "repair" });
+		const report = await delivery(1);
+		expect(report).toContain('review({action: "repair"})');
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(2);
 		expect(
 			reports
@@ -392,7 +506,7 @@ describe("review tool — repair and rehydration", () => {
 		).toMatchObject({ ok: false, status: "failed", attempt: 2 });
 	});
 
-	it("a timed-out reviewer is terminal for the round and holds the gate", async () => {
+	it("a timed-out reviewer is terminal for the round and named in the report", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: {
 				"security-audit": [
@@ -401,9 +515,10 @@ describe("review tool — repair and rehydration", () => {
 			},
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC], { reports });
-		const res = await run(tool);
-		expect(res.details.gate).toBe(false);
+		const { tool, delivery } = makeTool(capability, [SEC], { reports });
+		await run(tool);
+		const report = await delivery();
+		expect(report).toContain("security-audit (timed-out)");
 		expect(spawns.filter((s) => s === "security-audit")).toHaveLength(1);
 		expect(
 			reports[0].ledger.participants?.find((p) => p.name === "security-audit"),
@@ -418,12 +533,14 @@ describe("review tool — repair and rehydration", () => {
 			},
 		});
 		const reports: Reported[] = [];
-		const tool = makeTool(capability, [SEC, SIMP], { reports });
+		const { tool, delivery } = makeTool(capability, [SEC, SIMP], { reports });
 		await run(tool);
+		await delivery();
 		expect(reports[0].ledger.entries.map((e) => e.finding.id)).toEqual([
 			"security-audit.1",
 		]);
 		await run(tool, { action: "repair" });
+		await delivery(1);
 		const merged = reports.at(-1)?.ledger;
 		// The earlier actionable finding is still on the books after repair.
 		expect(merged?.entries.map((e) => e.finding.id)).toEqual([
@@ -437,20 +554,22 @@ describe("review tool — repair and rehydration", () => {
 		);
 	});
 
-	it("a failed verifier is reported back, never implicitly re-spawned", async () => {
+	it("a failed verifier delivers a retry pointer, never an implicit re-spawn", async () => {
 		const { capability, spawns } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 			verifier: [{ status: "failed", error: "gateway down" }],
 		});
-		const tool = makeTool(capability, [SEC]);
+		const { tool, delivery } = makeTool(capability, [SEC]);
 		await run(tool);
-		const res = await run(tool, {
+		await delivery();
+		await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit" },
 			],
 		});
-		expect(res.details.gate).toBe(false);
-		expect(res.content[0].text).toContain("Verifier failed");
+		const report = await delivery(1);
+		expect(report).toContain("Verifier failed");
+		expect(report).toContain('review({action: "verify"');
 		expect(spawns.filter((s) => s === "verifier")).toHaveLength(1);
 	});
 
@@ -476,13 +595,17 @@ describe("review tool — repair and rehydration", () => {
 				verifierSays([{ id: "security-audit.1", result: "verified" }]),
 			],
 		});
-		const tool = makeTool(capability, [SEC], { state: { ledger } });
+		const { tool, delivery } = makeTool(capability, [SEC], {
+			state: { ledger },
+		});
 		const res = await run(tool, {
 			resolutions: [
 				{ id: "security-audit.1", status: "fixed", note: "commit" },
 			],
 		});
-		expect(res.details.gate).toBe(true);
+		expect(res.details.gate).toBeUndefined();
+		expect(res.content[0].text).toContain("Verifier running:");
+		expect(await delivery()).toContain("gate is clear");
 		expect(spawns).toEqual(["verifier"]);
 	});
 
@@ -490,10 +613,11 @@ describe("review tool — repair and rehydration", () => {
 		const { capability } = fakeSubagents({
 			personas: { "security-audit": [blockWithMajor("flaw")] },
 		});
-		const tool = makeTool(capability, [SEC], {
+		const { tool, delivery } = makeTool(capability, [SEC], {
 			state: { waived: ["security-audit.1"] },
 		});
 		await run(tool);
+		await delivery();
 		const res = await run(tool);
 		expect(res.details.gate).toBe(true);
 		expect(res.content[0].text).toContain("Nothing to verify");

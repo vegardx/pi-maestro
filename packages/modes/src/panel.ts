@@ -11,31 +11,48 @@ import type {
 import {
 	computedVerdict,
 	parseJsonFindings,
-	parseStructuredFindings,
 	type StructuredFinding,
 } from "./exec/findings.js";
 import { parseVerdict, type Verdict } from "./exec/verdicts.js";
 import { buildPersonaProfile } from "./personas.js";
 import type { SubAgentSpec } from "./schema.js";
 
+/**
+ * Terminal outcome of one panel entry's SINGLE run. Every value except
+ * approve/request-changes/helper means "did not report" — the entry stays in
+ * that state until an explicit review({action:"repair"}); nothing here is
+ * ever retried implicitly.
+ */
+export type PanelRunStatus =
+	| "approve"
+	| "request-changes"
+	| "helper"
+	| "failed"
+	| "interrupted"
+	| "timed-out"
+	| "malformed";
+
 export interface PanelResult {
 	readonly name: string;
 	readonly persona: string;
 	readonly required: boolean;
 	readonly kind: "review" | "helper";
+	readonly status: PanelRunStatus;
 	readonly verdict: Verdict;
 	readonly findings: readonly string[];
 	/**
-	 * Ledger-eligible structured findings. From the report's JSON block when
-	 * the reviewer complied (and then the verdict is COMPUTED from severity —
-	 * the stated VERDICT line loses on mismatch); for non-compliant reviewers,
-	 * fallback-parsed bullets count only when the reviewer itself blocked, so
-	 * a PASS with suggestion bullets never fabricates blocking findings.
+	 * Ledger-eligible structured findings, from the report's fenced JSON block.
+	 * The verdict is COMPUTED from their severities — the stated VERDICT line
+	 * loses on mismatch. A report without a valid JSON block is `malformed`
+	 * and contributes nothing: bullets never fabricate ledger findings.
 	 */
 	readonly structured: readonly StructuredFinding[];
 	/** The reviewer's full report (or an error line when it failed). */
 	readonly report: string;
+	/** True iff the entry reported validly (approve/request-changes/helper). */
 	readonly ok: boolean;
+	/** The subagent run that produced this result (audit/debug linkage). */
+	readonly runId?: string;
 	/** Exact resolved selection for verdict/ledger telemetry. */
 	readonly model?: string;
 	readonly effort?: import("@vegardx/pi-contracts").ThinkingLevel;
@@ -53,12 +70,18 @@ export interface RunPanelDeps {
 	readonly timeoutMs?: number;
 }
 
-// Deep reviews on slow gateway routes routinely take 4–6 minutes; a 5-minute
-// cap killed thorough required reviewers mid-read and blocked ship with
-// "timed out" instead of a verdict (radicalai dogfood, 2026-07-11). Exported
-// so the executor derives its in-flight protection window from it — a guard
-// shorter than a legitimate round reopens the kill-mid-review hole.
-export const DEFAULT_TIMEOUT_MS = 600_000;
+// The panel's share of the graduated deadline table (REVIEW_WATCHDOG in
+// personas.ts owns the in-run boundaries: stall 2min / soft wrap-up 4min /
+// reviewer hard cap 8min). This is the WHOLE-PANEL bound: reviewers run
+// concurrently and exactly once, so the panel settles within the reviewer
+// cap plus a margin for spawn/summarize overhead. It backstops the watchdog
+// (it fires only if the runner's own protection didn't) and is the single
+// number the executor derives its in-flight guard from — a guard shorter
+// than a legitimate round reopens the kill-mid-review hole (a 5-minute cap
+// killed honest 4–6 min deep reviews, radicalai dogfood 2026-07-11); one
+// sized for retries that no longer exist left dead rounds hanging ~25 min.
+export const PANEL_HARD_TIMEOUT_MS = 8.5 * 60_000;
+export const DEFAULT_TIMEOUT_MS = PANEL_HARD_TIMEOUT_MS;
 
 /** Spawn every panel entry concurrently and collect normalized verdicts. */
 export async function runReviewPanel(
@@ -76,7 +99,7 @@ async function runOne(
 	const required = Boolean(spec.required);
 	const base: Omit<
 		PanelResult,
-		"verdict" | "findings" | "structured" | "report" | "ok"
+		"status" | "verdict" | "findings" | "structured" | "report" | "ok"
 	> = {
 		name: spec.name,
 		persona: spec.persona,
@@ -95,103 +118,110 @@ async function runOne(
 			Object.assign(base, { model: resolved.model, effort: resolved.effort });
 		}
 		if (!profile) {
-			return {
-				...base,
-				verdict: "none",
-				findings: [],
-				structured: [],
-				report: `(unknown persona: ${spec.persona})`,
-				ok: false,
-			};
+			return notReported(base, "failed", `(unknown persona: ${spec.persona})`);
 		}
 
 		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-		let result = await settle(
-			deps.subagents.spawn(REVIEW_KICKOFF, profile),
-			timeoutMs,
-		);
-		let report = result.summary?.trim() ?? "";
-		// One retry for the two transient failure modes: a gateway model ending
-		// the run with no final text, and a reviewer killed by the timeout. A
-		// silently missing REQUIRED verdict holds the ship gate with nothing to
-		// show the human — a second attempt is cheap next to that.
-		const transient =
-			(result.status === "succeeded" && !report) ||
-			(result.status === "failed" && result.error === "timed out");
-		if (transient) {
-			result = await settle(
-				deps.subagents.spawn(REVIEW_KICKOFF, profile),
-				timeoutMs,
-			);
-			report = result.summary?.trim() ?? "";
-		}
-		// A reviewer that SUCCEEDED twice (initial + retry) with an empty report
-		// found nothing and said nothing. Treating that as "never reported" held
-		// the ship gate with no actionable finding — send-back just reproduced
-		// the same clean run (live dogfood: three deliverables looped on this).
-		// A clean run is an approve; the report line keeps it auditable.
-		if (result.status === "succeeded" && !report && kind === "review") {
-			return {
-				...base,
-				verdict: "approve",
-				findings: [],
-				structured: [],
-				report:
-					"(clean run — reviewer completed twice with no findings and no report; counted as approve)",
-				ok: true,
-			};
-		}
-		if (result.status !== "succeeded" || !report) {
-			return {
-				...base,
-				verdict: "none",
-				findings: [],
-				structured: [],
-				report: `(reviewer ${result.status}: ${result.error ?? "no report"})`,
-				ok: false,
-			};
-		}
-		// Helpers produce info, not a gating verdict.
-		if (kind !== "review") {
-			return {
-				...base,
-				verdict: "none",
-				findings: [],
-				structured: [],
+		// Exactly ONE attempt. The implicit "retry transient failures" here
+		// stacked with the review tool's own rerun layer to run one reviewer up
+		// to four times, so a wedged panel outlived every deadline derived from
+		// this cap. A failed reviewer now stays failed — visible in the ledger,
+		// recoverable only through an explicit review({action:"repair"}).
+		const handle = deps.subagents.spawn(REVIEW_KICKOFF, profile);
+		if (handle.id) Object.assign(base, { runId: handle.id });
+		const result = await settle(handle, timeoutMs);
+		const report = result.summary?.trim() ?? "";
+		if (result.status !== "succeeded") {
+			const status: PanelRunStatus =
+				result.status === "timed-out"
+					? "timed-out"
+					: result.status === "stopped"
+						? "interrupted"
+						: "failed";
+			return notReported(
+				base,
+				status,
+				`(reviewer ${status}: ${result.error ?? "no report"})`,
 				report,
-				ok: true,
-			};
+			);
 		}
+		// Helpers produce info, not a gating verdict — but silence is still not
+		// information.
+		if (kind !== "review") {
+			return report
+				? {
+						...base,
+						status: "helper",
+						verdict: "none",
+						findings: [],
+						structured: [],
+						report,
+						ok: true,
+					}
+				: notReported(base, "malformed", "(helper completed with no report)");
+		}
+		// Strict output contract: a review counts as reported ONLY with both a
+		// parseable VERDICT line and a valid fenced findings JSON block (empty
+		// findings array = clean approve). Anything less — empty output, prose
+		// without a verdict, a verdict without the block — is malformed and
+		// holds the gate as "never reported". An empty report is NEVER an
+		// approve: the old clean-run rule turned silent gateway failures into
+		// shipped deliverables.
 		const parsed = parseVerdict(report);
 		const json = parseJsonFindings(report);
-		// JSON-compliant: severity decides the verdict — a stated BLOCK over
-		// three minors normalizes to approve, a stated PASS over a critical
-		// blocks. Non-compliant: the stated verdict stands, and its bullets
-		// become (major) findings only when the reviewer itself blocked.
-		const structured =
-			json ??
-			(parsed.verdict === "request-changes"
-				? parseStructuredFindings(report)
-				: []);
-		const verdict = json ? computedVerdict(json) : parsed.verdict;
+		if (!report || parsed.verdict === "none" || json === null) {
+			const why = !report
+				? "empty report"
+				: parsed.verdict === "none"
+					? "no parseable VERDICT line"
+					: "no valid fenced findings JSON block";
+			return notReported(
+				base,
+				"malformed",
+				`(malformed report: ${why})`,
+				report,
+			);
+		}
+		// Severity decides the verdict — a stated BLOCK over three minors
+		// normalizes to approve, a stated PASS over a critical blocks.
+		const verdict = computedVerdict(json);
 		return {
 			...base,
+			status: verdict === "approve" ? "approve" : "request-changes",
 			verdict,
 			findings: parsed.findings,
-			structured,
+			structured: json,
 			report,
 			ok: true,
 		};
 	} catch (err) {
-		return {
-			...base,
-			verdict: "none",
-			findings: [],
-			structured: [],
-			report: `(spawn failed: ${err instanceof Error ? err.message : String(err)})`,
-			ok: false,
-		};
+		return notReported(
+			base,
+			"failed",
+			`(spawn failed: ${err instanceof Error ? err.message : String(err)})`,
+		);
 	}
+}
+
+/** A non-reporting terminal result; the raw partial output stays diagnostic. */
+function notReported(
+	base: Omit<
+		PanelResult,
+		"status" | "verdict" | "findings" | "structured" | "report" | "ok"
+	>,
+	status: PanelRunStatus,
+	line: string,
+	partial?: string,
+): PanelResult {
+	return {
+		...base,
+		status,
+		verdict: "none",
+		findings: [],
+		structured: [],
+		report: partial ? `${line}\n\n${partial}` : line,
+		ok: false,
+	};
 }
 
 /** True when every REQUIRED review reached an approving verdict (ship-gate). */
@@ -229,10 +259,14 @@ const REVIEW_KICKOFF =
 	"strictly within your assigned scope.";
 
 interface HandleLike {
+	readonly id?: string;
 	result(): Promise<{ status: string; summary?: string; error?: string }>;
 	stop(reason?: string): void;
 }
 
+// The deadline is installed BEFORE the run settles and reports "timed-out"
+// distinctly from a child-side failure: timeouts are terminal for the attempt
+// (never retried), and the ledger records which boundary killed the run.
 async function settle(
 	handle: HandleLike,
 	timeoutMs: number,
@@ -241,7 +275,7 @@ async function settle(
 	const timeout = new Promise<{ status: string; error: string }>((resolve) => {
 		timer = setTimeout(() => {
 			handle.stop("timeout");
-			resolve({ status: "failed", error: "timed out" });
+			resolve({ status: "timed-out", error: "timed out" });
 		}, timeoutMs);
 		timer.unref?.();
 	});

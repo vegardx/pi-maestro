@@ -22,6 +22,8 @@ import {
 	type SettingItem,
 	SettingsList,
 	Text,
+	truncateToWidth,
+	visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
 	getSessionSettingOverride,
@@ -46,8 +48,9 @@ import {
 	readRoleLeaf,
 	renameProfile,
 	resolveModelName,
+	sessionFallbackLabel,
 	sessionModelId,
-	summarizeOrdered,
+	shortModelName,
 	THINKING_LEVELS,
 	writeAdvancedValue,
 	writeProfileTargets,
@@ -125,11 +128,36 @@ function settingsComponent(
 function profileSummary(ctx: ExtensionContext, profile: string): string {
 	const cfg = readModelsConfig(ctx.cwd)?.profiles[profile];
 	if (!cfg) return "empty";
-	const configured = MODEL_ROLES.filter((role) => cfg.roles[role]).length;
+	const configured = MODEL_ROLES.filter((role) => cfg.roles[role]);
+	if (configured.length === 0) return "no overrides — all roles follow session";
 	const live =
 		activeProfile(readModelsConfig(ctx.cwd), sessionModelId(ctx))?.name ===
 		profile;
-	return `${live ? "active · " : ""}${configured} role${configured === 1 ? "" : "s"}`;
+	const names =
+		configured.length > 4
+			? `${configured.length} of ${MODEL_ROLES.length} roles configured`
+			: configured.join(", ");
+	return `${live ? "active · " : ""}${names}`;
+}
+
+/** Full ordered pool (first = default), or the resolved session fallback. */
+function roleModelsCell(
+	ctx: ExtensionContext,
+	profile: string,
+	role: ModelRole,
+): string {
+	const models = readRoleLeaf(ctx, profile, role, "models").effective ?? [];
+	if (models.length === 0) return sessionFallbackLabel(ctx);
+	return models.map((id) => shortModelName(ctx, id)).join(" › ");
+}
+
+/** Only the default effort (first configured); unset renders as auto. */
+function roleEffortCell(
+	ctx: ExtensionContext,
+	profile: string,
+	role: ModelRole,
+): string {
+	return readRoleLeaf(ctx, profile, role, "efforts").effective?.[0] ?? "auto";
 }
 
 function roleSummary(
@@ -137,15 +165,37 @@ function roleSummary(
 	profile: string,
 	role: ModelRole,
 ): string {
-	const models = readRoleLeaf(ctx, profile, role, "models");
-	const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-	const modelSummary = models.effective?.length
-		? summarizeOrdered(models.effective.map((id) => resolveModelName(ctx, id)))
-		: "session fallback";
-	const effortSummary = efforts.effective?.length
-		? summarizeOrdered(efforts.effective)
-		: "provider default";
-	return `${modelSummary} · ${effortSummary}`;
+	return `${roleModelsCell(ctx, profile, role)} · ${roleEffortCell(ctx, profile, role)}`;
+}
+
+/** Cap the MODELS column so one long pool cannot push efforts off-screen. */
+const MODELS_CELL_MAX = 56;
+
+/**
+ * One aligned `MODELS · EFFORT` table row. The role name is the SettingItem
+ * label (SettingsList aligns labels itself); models pad to the widest pool
+ * across roles so the effort column lines up.
+ */
+function roleTableRow(
+	ctx: ExtensionContext,
+	profile: string,
+	role: ModelRole,
+): string {
+	const width = Math.min(
+		MODELS_CELL_MAX,
+		Math.max(
+			...MODEL_ROLES.map((other) =>
+				visibleWidth(roleModelsCell(ctx, profile, other)),
+			),
+		),
+	);
+	const models = truncateToWidth(
+		roleModelsCell(ctx, profile, role),
+		width,
+		"…",
+		true,
+	);
+	return `${models} · ${roleEffortCell(ctx, profile, role)}`;
 }
 
 function move<T>(values: readonly T[], from: number, to: number): T[] {
@@ -366,8 +416,7 @@ class OrderedPoolComponent implements Component {
 	render(width: number): string[] {
 		const theme = this.ctx.ui.theme;
 		const efforts = readRoleLeaf(this.ctx, this.profile, this.role, "efforts");
-		const effort =
-			(efforts[this.scope] ?? efforts.effective)?.[0] ?? "provider default";
+		const effort = (efforts[this.scope] ?? efforts.effective)?.[0] ?? "auto";
 		const header = theme.fg(
 			"accent",
 			theme.bold(
@@ -466,11 +515,13 @@ export function targetsEditor(
 			);
 		},
 	}));
-	return settingsComponent(
-		items,
-		() => {},
-		() => done(),
-	);
+	// Both exit paths report a fresh summary so the parent Targets row can
+	// never go stale (SettingsList only refreshes on a string done()).
+	const finish = () => {
+		const fresh = readProfileTargets(ctx, profile);
+		done(`${fresh.effective?.length ?? 0} · ${fresh.source ?? "unset"}`);
+	};
+	return settingsComponent(items, () => {}, finish);
 }
 
 function profileDetail(
@@ -506,13 +557,17 @@ function profileDetail(
 			currentValue: profile,
 			submenu: (_value, renameDone) =>
 				makeInput(profile, (name) => {
-					if (name?.trim() && name.trim() !== profile) {
+					const trimmed = name?.trim();
+					const target = trimmed && trimmed !== profile ? trimmed : undefined;
+					if (target) {
 						for (const scope of PERSISTENT_SCOPES) {
-							renameProfile(ctx, profile, name.trim(), scope);
+							renameProfile(ctx, profile, target, scope);
 						}
 					}
-					renameDone(name?.trim());
-					done(name?.trim());
+					renameDone(trimmed);
+					// The detail items were built for the old name; bail out and
+					// hand the parent row a fresh summary either way.
+					done(profileSummary(ctx, target ?? profile));
 				}),
 		},
 		{
@@ -536,7 +591,9 @@ function profileDetail(
 				done("deleted");
 			}
 		},
-		() => done(),
+		// Fresh summary on cancel too: edits inside (targets, role pools)
+		// must reach the profile row in profilesMenu.
+		() => done(profileSummary(ctx, profile)),
 	);
 }
 
@@ -565,8 +622,13 @@ function profilesMenu(
 	}
 	return settingsComponent(
 		items,
-		() => done(`${modelProfileKeys(ctx).length} profile(s)`),
-		() => done(),
+		(id) => {
+			// The item list is fixed at construction: a created profile has no
+			// row yet, so close and let the parent rebuild on re-entry. Edits to
+			// existing profiles refresh their row in place and stay open.
+			if (id.startsWith("create:")) done(`${modelProfileKeys(ctx).length}`);
+		},
+		() => done(`${modelProfileKeys(ctx).length}`),
 	);
 }
 
@@ -629,7 +691,11 @@ function childExtensionsMenu(
 				];
 			});
 		},
-		() => done(`${selected.length} enabled`),
+		// Match the parent row's `enabled / candidates` format, freshly read.
+		() =>
+			done(
+				`${selectedChildExtensions(ctx).length} / ${childExtensionCandidates().length}`,
+			),
 	);
 }
 
@@ -642,6 +708,11 @@ function advancedScopeMenu(
 	done: (value?: string) => void,
 ): Component {
 	const layered = readAdvancedValue(ctx.cwd, extension, path, defaultValue);
+	// Match the parent row's `effective · source` format, freshly read.
+	const finish = () => {
+		const fresh = readAdvancedValue(ctx.cwd, extension, path, defaultValue);
+		done(`${formatSettingValue(fresh.effective)} · ${fresh.source}`);
+	};
 	return settingsComponent(
 		SCOPES.map(
 			(scope): SettingItem => ({
@@ -672,7 +743,6 @@ function advancedScopeMenu(
 									value === "reset" ? undefined : parseSettingValue(value),
 								);
 								editDone(value);
-								done(value);
 							},
 						);
 					return makeInput(
@@ -690,19 +760,15 @@ function advancedScopeMenu(
 									value === "" ? undefined : parseSettingValue(value),
 								);
 							editDone(value);
-							done(value);
 						},
 					);
 				},
 			}),
 		),
-		() =>
-			done(
-				formatSettingValue(
-					readAdvancedValue(ctx.cwd, extension, path, defaultValue).effective,
-				),
-			),
-		() => done(),
+		// Scope rows refresh in place via editDone; both exit paths hand the
+		// parent a fresh effective summary.
+		() => {},
+		finish,
 	);
 }
 
@@ -741,8 +807,9 @@ function advancedMenu(
 	}
 	return settingsComponent(
 		items,
-		() => done(`${items.length} settings`),
-		() => done(),
+		// Rows refresh in place from advancedScopeMenu's fresh summaries.
+		() => {},
+		() => done(`${items.length}`),
 	);
 }
 
@@ -765,18 +832,27 @@ export function createMaestroSettingsList(
 		{
 			id: "active-profile",
 			label: "Active profile",
-			currentValue: active?.name ?? "none · session fallbacks",
+			currentValue: active?.name ?? "none — all roles follow session",
 		},
 	];
 	if (active) {
+		const profileName = active.name;
 		for (const role of MODEL_ROLES)
 			items.push({
 				id: `active-role:${role}`,
 				label: role,
-				currentValue: roleSummary(ctx, active.name, role),
-				description: "Effective role pool summary for the active profile.",
+				// A getter keeps the row live: the session-fallback cell resolves
+				// the current session model on every render, and pool edits show
+				// without waiting for a submenu summary. SettingsList assigns
+				// currentValue when a submenu closes; accept and ignore it.
+				get currentValue() {
+					return roleTableRow(ctx, profileName, role);
+				},
+				set currentValue(_value: string) {},
+				description:
+					"Ordered pool (first = default) · default effort. Enter opens the pool editor.",
 				submenu: (_value, roleDone) =>
-					rolePoolEditor(ctx, active.name, role, roleDone),
+					rolePoolEditor(ctx, profileName, role, roleDone),
 			});
 	}
 	items.push(

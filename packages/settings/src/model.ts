@@ -94,12 +94,15 @@ export function resolveModelName(
 	return (model as { name?: string } | undefined)?.name ?? modelId;
 }
 
-export function summarizeOrdered(
-	values: readonly string[],
-	empty = "session fallback",
-): string {
-	if (values.length === 0) return empty;
-	return values.length === 1 ? values[0] : `${values[0]} +${values.length - 1}`;
+/** "Claude Sonnet 4.5" → "Sonnet 4.5": compact display names for table cells. */
+export function shortModelName(ctx: ExtensionContext, modelId: string): string {
+	return resolveModelName(ctx, modelId).replace(/^Claude /, "");
+}
+
+/** Resolved live-session fallback label, recomputed at every call site. */
+export function sessionFallbackLabel(ctx: ExtensionContext): string {
+	const id = sessionModelId(ctx);
+	return `session → ${id ? shortModelName(ctx, id) : "none"}`;
 }
 
 function rawProfiles(raw: unknown): Record<string, unknown> {

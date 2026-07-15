@@ -132,14 +132,43 @@ describe("hierarchical Maestro settings", () => {
 		expect(cancelled).toBe(true);
 	});
 
-	it("shows active profile and ordered default/alternate summaries", () => {
+	it("shows active profile and an aligned full-pool models · effort table", () => {
 		const rendered = createMaestroSettingsList(fakeCtx(), () => {})
-			.render(120)
+			.render(160)
 			.join("\n");
 		expect(rendered).toContain("Active profile");
 		expect(rendered).toContain("opus");
-		expect(rendered).toContain("anthropic/sonnet +1");
-		expect(rendered).toContain("high +1");
+		// Full ordered pool joined with ›, no +N counts, default effort only.
+		expect(rendered).toContain("anthropic/sonnet › openai/o3");
+		expect(rendered).toContain("· high");
+		expect(rendered).not.toContain("+1");
+		expect(rendered).not.toContain("medium");
+		// Unconfigured roles resolve the live session model and auto effort.
+		expect(rendered).toContain("session → anthropic/sonnet");
+		expect(rendered).toContain("· auto");
+	});
+
+	it("summarizes profiles by configured role names, not counts", () => {
+		const ctx = fakeCtx();
+		const list = createMaestroSettingsList(ctx, () => {});
+		list.handleInput("Profiles");
+		list.handleInput("\r");
+		expect(list.render(160).join("\n")).toContain("active · worker");
+	});
+
+	it("refreshes profile rows after nested edits on every exit path", () => {
+		const ctx = fakeCtx();
+		const list = createMaestroSettingsList(ctx, () => {});
+		list.handleInput("Profiles");
+		list.handleInput("\r"); // open profiles menu
+		list.handleInput("opus");
+		list.handleInput("\r"); // open profile detail
+		list.handleInput("reviewer");
+		list.handleInput("\r"); // open the reviewer pool editor
+		list.handleInput(" "); // toggle first candidate into the pool
+		list.handleInput("\x1b"); // close editor → fresh role summary
+		list.handleInput("\x1b"); // cancel profile detail (previously stale)
+		expect(list.render(160).join("\n")).toContain("active · worker, reviewer");
 	});
 
 	it("replaces project arrays leaf-wise and preserves global siblings", () => {
@@ -356,12 +385,12 @@ describe("hierarchical Maestro settings", () => {
 			entered = value;
 		});
 		byEnter.handleInput?.("\r");
-		expect(entered).toContain("anthropic/sonnet +1");
+		expect(entered).toContain("anthropic/sonnet › openai/o3 · high");
 		const byEscape = rolePoolEditor(fakeCtx(), "opus", "worker", (value) => {
 			escaped = value;
 		});
 		byEscape.handleInput?.("\x1b");
-		expect(escaped).toContain("anthropic/sonnet +1");
+		expect(escaped).toContain("anthropic/sonnet › openai/o3 · high");
 	});
 
 	it("opens the one-screen editor from the top-level active role rows", () => {

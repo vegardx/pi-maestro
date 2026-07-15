@@ -704,6 +704,92 @@ describe("execution adapter — lifecycle correctness", () => {
 		expect(executor.getAgentState("rework", "worker")!.status).toBe("working");
 	});
 
+	it("a round-started marker defers completion and persists without touching the verdict cache", async () => {
+		gatedDeliverable("Marked", "marked");
+		const adapter = await startAdapter("marked");
+		const executor = adapter.getExecutor();
+		const { client, ready } = connect("marked/worker", "done");
+		await ready;
+
+		// The worker announces its in-flight round: a marker ledger with zero
+		// verdicts (crash-safety persistence, PR #158 follow-up).
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "marked",
+			round: 1,
+			roundKind: "round-started",
+			verdicts: [],
+			ledger: {
+				round: 1,
+				cycle: 0,
+				entries: [],
+				pendingRound: {
+					kind: "panel",
+					runs: [{ name: "sec", runId: "run-1" }],
+					startedAt: new Date().toISOString(),
+				},
+				updatedAt: new Date().toISOString(),
+			},
+		});
+		await until(
+			() =>
+				engine.get().deliverables[0].reviewLedger?.pendingRound !== undefined,
+		);
+		// Persisted on the plan, but NOT cached as a reported round — and the
+		// (empty) marker stub must never read as a satisfied gate.
+		expect(adapter.reviewerFindings("marked")).toHaveLength(0);
+		expect(adapter.deliverableGateSatisfied("marked")).toBe(false);
+
+		// All tasks toggled + sustained idling while the round settles behind
+		// the marker: completion stays deferred (armed by round-started alone —
+		// no panelRead was ever sent).
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "marked",
+			params: { taskId },
+		});
+		client.send({ type: "status", status: "idle" });
+		client.send({ type: "status", status: "idle" });
+		await wait(150);
+		expect(executor.getAgentState("marked", "worker")!.status).toBe("working");
+
+		// The settled round reports with the marker cleared → gate clear →
+		// idle completes the worker normally.
+		client.send({
+			type: "panelVerdict",
+			deliverableId: "marked",
+			round: 1,
+			roundKind: "panel",
+			verdicts: [
+				{
+					name: "sec",
+					persona: "security-audit",
+					required: true,
+					verdict: "approve",
+					ok: true,
+				},
+			],
+			ledger: {
+				round: 1,
+				cycle: 0,
+				entries: [],
+				participants: [{ name: "sec", ok: true }],
+				updatedAt: new Date().toISOString(),
+			},
+		});
+		await until(
+			() =>
+				engine.get().deliverables[0].reviewLedger?.pendingRound === undefined,
+		);
+		client.send({ type: "status", status: "idle" });
+		await until(
+			() => executor.getAgentState("marked", "worker")!.status === "done",
+		);
+	});
+
 	it("a human override waives the ledger findings and opens the gate", async () => {
 		gatedDeliverable("Waived", "waived");
 		const adapter = await startAdapter("waived");

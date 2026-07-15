@@ -270,6 +270,216 @@ describe("/settings command", () => {
 		});
 	});
 
+	describe("role one-liners", () => {
+		let prevAgentDir: string | undefined;
+
+		function roleCtx(
+			overrides: { model?: unknown } = {},
+		): ExtensionContext & { messages: string[] } {
+			const messages: string[] = [];
+			const entry = (provider: string, id: string, name: string) => ({
+				provider,
+				id,
+				name,
+				reasoning: true,
+				thinkingLevelMap: id === "o3" ? { minimal: null } : {},
+			});
+			return {
+				cwd: root,
+				model:
+					"model" in overrides
+						? overrides.model
+						: { provider: "anthropic", id: "sonnet", name: "Sonnet" },
+				modelRegistry: {
+					find: (provider: string, id: string) =>
+						entry(provider, id, `${provider}/${id}`),
+					getAll: () => [
+						entry("anthropic", "sonnet", "Sonnet"),
+						entry("openai", "o3", "o3"),
+						entry("google", "gemini", "Gemini"),
+					],
+					hasConfiguredAuth: () => true,
+				},
+				ui: {
+					notify: (msg: string) => {
+						messages.push(msg);
+					},
+				},
+				messages,
+			} as unknown as ExtensionContext & { messages: string[] };
+		}
+
+		function readProject(): Record<string, unknown> {
+			return JSON.parse(
+				readFileSync(join(root, ".pi", "settings.json"), "utf8"),
+			);
+		}
+
+		function workerModels(): unknown {
+			const raw = readProject() as {
+				models?: {
+					profiles?: Record<
+						string,
+						{ roles?: Record<string, { models?: string[] }> }
+					>;
+				};
+			};
+			return raw.models?.profiles?.opus?.roles?.worker?.models;
+		}
+
+		beforeEach(() => {
+			// Isolate global scope: role verbs read layered leaves, and the real
+			// user-global settings must not leak into candidate/scope resolution.
+			prevAgentDir = process.env.PI_CODING_AGENT_DIR;
+			process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+			mkdirSync(join(root, "agent"), { recursive: true });
+			writeJson(join(root, ".pi", "settings.json"), {
+				models: {
+					profiles: {
+						opus: {
+							targets: ["anthropic/sonnet"],
+							roles: {
+								worker: {
+									models: ["anthropic/sonnet", "openai/o3"],
+									efforts: ["high"],
+								},
+							},
+						},
+					},
+				},
+			});
+		});
+
+		afterEach(() => {
+			if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+		});
+
+		it("errors clearly when no profile is active", () => {
+			const ctx = roleCtx({ model: undefined });
+			handleSettingsCommand("worker list", ctx);
+			expect(ctx.messages[0]).toContain("No active profile");
+		});
+
+		it("lists the pool with default marker, effort, and scope source", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker", ctx);
+			expect(ctx.messages[0]).toContain("worker · opus · scope: project");
+			expect(ctx.messages[0]).toContain("1. anthropic/sonnet");
+			expect(ctx.messages[0]).toContain("(default)");
+			expect(ctx.messages[0]).toContain("2. openai/o3");
+			expect(ctx.messages[0]).toContain("default effort: high");
+			// `<role>` and `<role> list` are the same verb
+			handleSettingsCommand("worker list", ctx);
+			expect(ctx.messages[1]).toBe(ctx.messages[0]);
+		});
+
+		it("add appends without duplicates at the effective-source scope", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker add google/gemini", ctx);
+			expect(workerModels()).toEqual([
+				"anthropic/sonnet",
+				"openai/o3",
+				"google/gemini",
+			]);
+			handleSettingsCommand("worker add google/gemini", ctx);
+			expect(ctx.messages.at(-1)).toContain("already in the worker pool");
+			expect(workerModels()).toEqual([
+				"anthropic/sonnet",
+				"openai/o3",
+				"google/gemini",
+			]);
+		});
+
+		it("add rejects unknown models with a did-you-mean suggestion", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker add google/gemni", ctx);
+			expect(ctx.messages[0]).toContain('Unknown model "google/gemni"');
+			expect(ctx.messages[0]).toContain("Did you mean");
+			expect(ctx.messages[0]).toContain("google/gemini");
+			expect(workerModels()).toEqual(["anthropic/sonnet", "openai/o3"]);
+		});
+
+		it("remove drops a model and resets the leaf when it empties", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker remove openai/o3", ctx);
+			expect(workerModels()).toEqual(["anthropic/sonnet"]);
+			handleSettingsCommand("worker remove openai/o3", ctx);
+			expect(ctx.messages.at(-1)).toContain("not in the worker pool");
+			handleSettingsCommand("worker remove anthropic/sonnet", ctx);
+			expect(ctx.messages.at(-1)).toContain("session fallback");
+			expect(workerModels()).toBeUndefined();
+		});
+
+		it("default moves an existing model to the front and adds absent ones", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker default openai/o3", ctx);
+			expect(workerModels()).toEqual(["openai/o3", "anthropic/sonnet"]);
+			handleSettingsCommand("worker default google/gemini", ctx);
+			expect(workerModels()).toEqual([
+				"google/gemini",
+				"openai/o3",
+				"anthropic/sonnet",
+			]);
+		});
+
+		it("effort sets the default level, keeping alternates after it", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker effort xhigh", ctx);
+			const raw = readProject() as {
+				models: {
+					profiles: {
+						opus: { roles: { worker: { efforts: string[] } } };
+					};
+				};
+			};
+			expect(raw.models.profiles.opus.roles.worker.efforts).toEqual([
+				"xhigh",
+				"high",
+			]);
+		});
+
+		it("effort validates against the default model's supported set", () => {
+			const ctx = roleCtx();
+			// o3 becomes default; it does not support minimal
+			handleSettingsCommand("worker default openai/o3", ctx);
+			handleSettingsCommand("worker effort minimal", ctx);
+			expect(ctx.messages.at(-1)).toContain("not supported by openai/o3");
+			handleSettingsCommand("worker effort banana", ctx);
+			expect(ctx.messages.at(-1)).toContain("not supported");
+			expect(ctx.messages.at(-1)).toContain("Supported:");
+		});
+
+		it("rejects unknown verbs with the verb list", () => {
+			const ctx = roleCtx();
+			handleSettingsCommand("worker frobnicate", ctx);
+			expect(ctx.messages[0]).toContain('Unknown verb "frobnicate"');
+			expect(ctx.messages[0]).toContain("list, add, remove, default, effort");
+		});
+
+		it("completes roles, verbs, candidate models, and supported efforts", () => {
+			const ctx = roleCtx();
+			expect(getSettingsCompletions("wor", ctx)).toContain("worker");
+			expect(getSettingsCompletions("worker ", ctx)).toEqual([
+				"list",
+				"add",
+				"remove",
+				"default",
+				"effort",
+			]);
+			expect(getSettingsCompletions("worker ad", ctx)).toEqual(["add"]);
+			expect(getSettingsCompletions("worker add ", ctx)).toContain(
+				"google/gemini",
+			);
+			expect(getSettingsCompletions("worker add anthropic/", ctx)).toEqual([
+				"anthropic/sonnet",
+			]);
+			// worker's default model is Sonnet — every level is supported
+			expect(getSettingsCompletions("worker effort ", ctx)).toContain("xhigh");
+			expect(getSettingsCompletions("worker effort x", ctx)).toEqual(["xhigh"]);
+		});
+	});
+
 	describe("completions", () => {
 		it("completes subcommands", () => {
 			const ctx = mockCtx(root);

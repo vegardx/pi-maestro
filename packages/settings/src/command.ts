@@ -9,11 +9,13 @@ import {
 	formatSettingValue,
 	isModelRole,
 	type MaestroScope,
+	modelOptions,
 	modelProfileKeys,
 	parseSettingValue,
 	readAdvancedValue,
 	readProfileTargets,
 	readRoleLeaf,
+	resolveModelName,
 	sessionModelId,
 	THINKING_LEVELS,
 	writeAdvancedValue,
@@ -345,6 +347,178 @@ function handleProfiles(ctx: ExtensionContext) {
 	ctx.ui.notify(lines.join("\n"), "info");
 }
 
+const ROLE_VERBS = ["list", "add", "remove", "default", "effort"] as const;
+
+/**
+ * One-liners edit the pool the user currently sees: the models leaf's
+ * effective source, falling back to global for leaves not yet authored.
+ */
+function roleWriteScope(
+	ctx: ExtensionContext,
+	profile: string,
+	role: ModelRole,
+): MaestroScope {
+	const source = readRoleLeaf(ctx, profile, role, "models").source;
+	return source === undefined || source === "default" ? "global" : source;
+}
+
+/** True when every character of `needle` appears in `haystack`, in order. */
+function isSubsequence(needle: string, haystack: string): boolean {
+	let matched = 0;
+	for (const char of haystack) if (char === needle[matched]) matched += 1;
+	return matched === needle.length;
+}
+
+/** Registry ids resembling `query`, for "did you mean" on unknown models. */
+function modelSuggestions(ctx: ExtensionContext, query: string): string[] {
+	const fragment = (query.split("/").pop() ?? query).toLowerCase();
+	return ctx.modelRegistry
+		.getAll()
+		.map((model) => `${model.provider}/${model.id}`)
+		.filter((id) => {
+			const name = id.split("/")[1]?.toLowerCase() ?? id.toLowerCase();
+			// Subsequence in either direction absorbs missing/extra characters
+			// (gemni → gemini); substring covers partial ids (sonnet → …sonnet…).
+			return (
+				name.includes(fragment) ||
+				fragment.includes(name) ||
+				isSubsequence(fragment, name) ||
+				isSubsequence(name, fragment)
+			);
+		})
+		.slice(0, 3);
+}
+
+function defaultEffortModel(
+	ctx: ExtensionContext,
+	pool: readonly string[],
+): { supported: readonly string[]; model: string } | undefined {
+	const model = pool[0];
+	if (!model) return undefined;
+	// Ids the registry does not know cannot be narrowed; allow every level.
+	const supported =
+		modelOptions(ctx).find((option) => option.id === model)?.supported ??
+		THINKING_LEVELS;
+	return { supported, model };
+}
+
+function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
+	const profile = activeProfileName(ctx);
+	if (!profile)
+		return ctx.ui.notify(
+			"No active profile — select a model owned by a profile's targets with /model first.",
+			"warning",
+		);
+	const [verb = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+	const argument = rest.join(" ").trim();
+	const scope = roleWriteScope(ctx, profile, role);
+	const layered = readRoleLeaf(ctx, profile, role, "models");
+	const pool = [...(layered[scope] ?? layered.effective ?? [])];
+
+	if (verb === "list") {
+		const efforts = readRoleLeaf(ctx, profile, role, "efforts");
+		const lines = [
+			`${role} · ${profile} · scope: ${layered.source ?? "unset (writes global)"}`,
+		];
+		if (pool.length === 0) lines.push("  (empty — session fallback)");
+		for (const [index, id] of pool.entries())
+			lines.push(
+				`  ${index + 1}. ${resolveModelName(ctx, id)} — ${id}${index === 0 ? " (default)" : ""}`,
+			);
+		lines.push(
+			`default effort: ${efforts.effective?.[0] ?? "provider default"}`,
+		);
+		return ctx.ui.notify(lines.join("\n"), "info");
+	}
+	if (verb === "add" || verb === "default") {
+		if (!argument)
+			return ctx.ui.notify(
+				`Usage: /maestro ${role} ${verb} <provider/model>`,
+				"warning",
+			);
+		if (!modelOptions(ctx).some((option) => option.id === argument)) {
+			const suggestions = modelSuggestions(ctx, argument);
+			return ctx.ui.notify(
+				`Unknown model "${argument}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
+				"warning",
+			);
+		}
+		if (verb === "add" && pool.includes(argument))
+			return ctx.ui.notify(
+				`${argument} is already in the ${role} pool.`,
+				"info",
+			);
+		const next =
+			verb === "add"
+				? [...pool, argument]
+				: [argument, ...pool.filter((id) => id !== argument)];
+		writeRoleLeaf(ctx, profile, role, "models", scope, next);
+		return ctx.ui.notify(
+			`✓ ${role}.models = ${next.join(" → ")} [${scope}]`,
+			"info",
+		);
+	}
+	if (verb === "remove") {
+		if (!argument)
+			return ctx.ui.notify(
+				`Usage: /maestro ${role} remove <provider/model>`,
+				"warning",
+			);
+		if (!pool.includes(argument))
+			return ctx.ui.notify(
+				`${argument} is not in the ${role} pool.`,
+				"warning",
+			);
+		const next = pool.filter((id) => id !== argument);
+		// Empty pools are stored as a reset scope, never an empty array.
+		writeRoleLeaf(
+			ctx,
+			profile,
+			role,
+			"models",
+			scope,
+			next.length ? next : undefined,
+		);
+		return ctx.ui.notify(
+			next.length
+				? `✓ ${role}.models = ${next.join(" → ")} [${scope}]`
+				: `✓ ${role}.models reset [${scope}] — role uses session fallback`,
+			"info",
+		);
+	}
+	if (verb === "effort") {
+		if (!argument)
+			return ctx.ui.notify(`Usage: /maestro ${role} effort <level>`, "warning");
+		const target = defaultEffortModel(ctx, pool);
+		if (!target)
+			return ctx.ui.notify(
+				`${role} has no default model — add one before setting effort.`,
+				"warning",
+			);
+		if (!target.supported.includes(argument))
+			return ctx.ui.notify(
+				`"${argument}" is not supported by ${target.model}. Supported: ${target.supported.join(", ")}.`,
+				"warning",
+			);
+		const efforts = readRoleLeaf(ctx, profile, role, "efforts");
+		const configured = [...(efforts[scope] ?? efforts.effective ?? [])];
+		// The chosen level leads; other configured levels stay as alternates.
+		const next = [
+			argument,
+			...configured.filter((level) => level !== argument),
+		];
+		writeRoleLeaf(ctx, profile, role, "efforts", scope, next);
+		return ctx.ui.notify(
+			`✓ ${role}.efforts = ${next.join(" → ")} [${scope}]`,
+			"info",
+		);
+	}
+	ctx.ui.notify(
+		`Unknown verb "${verb}". Use: ${ROLE_VERBS.join(", ")}`,
+		"warning",
+	);
+}
+
 export function handleSettingsCommand(args: string, ctx: ExtensionContext) {
 	const trimmed = args.trim();
 	const [sub = "show", ...rest] = trimmed.split(/\s+/);
@@ -354,13 +528,43 @@ export function handleSettingsCommand(args: string, ctx: ExtensionContext) {
 	if (sub === "set") return handleSet(subArgs, ctx);
 	if (sub === "reset") return handleReset(subArgs, ctx);
 	if (sub === "profiles") return handleProfiles(ctx);
+	if (isModelRole(sub)) return handleRole(sub, subArgs, ctx);
 	ctx.ui.notify(
-		`Unknown subcommand "${sub}". Use: show, get, set, reset, profiles`,
+		`Unknown subcommand "${sub}". Use: show, get, set, reset, profiles, or a role name (${MODEL_ROLES.join(", ")})`,
 		"warning",
 	);
 }
 
 const SUBCOMMANDS = ["show", "get", "set", "reset", "profiles"] as const;
+
+function roleCompletions(
+	role: ModelRole,
+	parts: string[],
+	trailing: boolean,
+	ctx: ExtensionContext,
+): string[] {
+	if (parts.length === 1 && trailing) return [...ROLE_VERBS];
+	if (parts.length === 2 && !trailing)
+		return ROLE_VERBS.filter((verb) => verb.startsWith(parts[1] ?? ""));
+	// Role verbs take exactly one argument.
+	if (parts.length > 3 || (parts.length === 3 && trailing)) return [];
+	const verb = parts[1];
+	const prefix = trailing ? "" : (parts[2] ?? "");
+	if (verb === "add" || verb === "remove" || verb === "default")
+		return modelOptions(ctx)
+			.map((option) => option.id)
+			.filter((id) => id.startsWith(prefix));
+	if (verb === "effort") {
+		const profile = activeProfileName(ctx);
+		const pool = profile
+			? (readRoleLeaf(ctx, profile, role, "models").effective ?? [])
+			: [];
+		const supported =
+			defaultEffortModel(ctx, pool)?.supported ?? THINKING_LEVELS;
+		return supported.filter((level) => level.startsWith(prefix));
+	}
+	return [];
+}
 
 export function getSettingsCompletions(
 	args: string,
@@ -369,8 +573,11 @@ export function getSettingsCompletions(
 	const trailing = args.endsWith(" ");
 	const parts = args.trim().split(/\s+/);
 	if (parts.length <= 1 && !trailing)
-		return SUBCOMMANDS.filter((item) => item.startsWith(parts[0] ?? ""));
+		return [...SUBCOMMANDS, ...MODEL_ROLES].filter((item) =>
+			item.startsWith(parts[0] ?? ""),
+		);
 	const sub = parts[0];
+	if (isModelRole(sub)) return roleCompletions(sub, parts, trailing, ctx);
 	if (sub !== "get" && sub !== "set" && sub !== "reset") return [];
 	const flags = ["--session", "--project", "--global"];
 	const offset = flags.includes(parts[1]) ? 2 : 1;

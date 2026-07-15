@@ -285,10 +285,13 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 
 `/maestro` uses standard searchable pi settings lists. Profile activation is
 derived from `/model`; role model/effort arrays are ordered (first item is the
-default) and layer session → project → global. Use `/maestro show|get|set|reset|profiles`
-for scripts; JSON arrays are required for role leaves. See
-[Models & settings](models.md) for exact paths, session lifetime, and migration
-from legacy tier keys.
+default) and layer session → project → global. Selecting a role opens a
+one-screen ordered pool editor (space toggles, `+`/`-` reorder, `g` scope,
+`e` default effort). Role one-liners edit the active profile directly:
+`/maestro <role> [list|add|remove|default|effort]`. Use
+`/maestro show|get|set|reset|profiles` for scripts; JSON arrays are required
+for role leaves. See [Models & settings](models.md) for exact paths, session
+lifetime, and migration from legacy tier keys.
 
 ## Feature flags
 

@@ -116,17 +116,43 @@ leaf.
 keybindings, scrolling, and submenus:
 
 - session model and active profile;
-- effective summaries for every active role;
-- Profiles → targets and role pool editors;
+- one-screen pool editors for every active role;
+- Profiles → targets and per-role pool editors;
 - Child extensions;
 - Advanced capability-declared settings.
 
-Role editors expose session/project/global leaves, effective source, and the full
-precedence chain. Pool actions add/search, remove, move up/down, make default,
-and reset the current scope. Model IDs are exact even when friendly registry
-names are displayed. Effort choices are filtered against configured model
-support. Child extensions are global infrastructure passthroughs for isolated
-children; Maestro itself and vanished candidates are excluded.
+Selecting a role opens a single-screen ordered pool editor: the checked,
+numbered head of the list is the pool (row 1 is the default), followed by the
+remaining candidates. Keys: `space` toggles membership (on appends to the pool
+end), `+`/`-` (or `K`/`J`) move the selected checked row up/down, `g` switches
+the write scope between global and project, `e` cycles the default effort
+through the default model's supported levels, and enter/esc finishes. Every
+mutation writes immediately at the shown scope.
+
+Candidates are authenticated registry models plus any model id already
+referenced in config (any profile's targets or role models leaves, both
+scopes); referenced-but-unauthenticated entries are labeled
+`needs authentication` and stay selectable as dormant targets. Model IDs are
+exact even when friendly registry names are displayed. Child extensions are
+global infrastructure passthroughs for isolated children; Maestro itself and
+vanished candidates are excluded.
+
+### Role one-liners
+
+Role subcommands operate on the active profile at the models leaf's
+effective-source scope (global when the leaf is unset):
+
+```bash
+/maestro worker                # or `worker list`: ordered pool, default effort, scope
+/maestro worker add openai/gpt-5.5
+/maestro worker remove openai/gpt-5.5
+/maestro worker default anthropic/claude-haiku-4-5   # move to front; adds if absent
+/maestro worker effort high    # validated against the default model's support
+```
+
+Unknown model ids get "did you mean" suggestions from the registry; removing
+the last model resets the leaf to session fallback. Completions cover role
+names, verbs, candidate model ids, and supported effort levels.
 
 ### Scripting
 
@@ -144,8 +170,10 @@ The text command uses the same normalized paths:
 ```
 
 `--project` is the default. Role models, efforts, and profile targets require a
-non-empty JSON string array. Profile targets support persistent global/project
-scope; role leaves and advanced declared settings also support session scope.
+non-empty JSON string array — `set …roles.<role>.efforts` remains the escape
+hatch for authoring a full effort allowlist. Profile targets support persistent
+global/project scope; role leaves and advanced declared settings also support
+session scope.
 
 ## Review spend guardrails
 

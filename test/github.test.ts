@@ -1,5 +1,7 @@
 import {
 	type BranchProtection,
+	buildCreateIssueArgs,
+	createIssue,
 	parseBranchProtection,
 	parseChecks,
 	parseDefaultBranch,
@@ -8,6 +10,78 @@ import {
 	type RepoSlug,
 	targetArgs,
 } from "@vegardx/pi-github";
+
+describe("issue creation", () => {
+	const target: RepoSlug = {
+		host: "github.com",
+		owner: "vegardx",
+		repo: "pi-maestro",
+	};
+
+	it("routes to the fixed target and passes the body byte-for-byte on stdin", async () => {
+		const runner = vi.fn(async () => ({
+			ok: true,
+			stdout: "https://github.com/vegardx/pi-maestro/issues/9\n",
+			stderr: "",
+			exitCode: 0,
+		}));
+		const body = "line one\n`code`\nline three\n";
+		const result = await createIssue(
+			"/repo",
+			{ title: "Debug report", body, target },
+			{ runner },
+		);
+		expect(buildCreateIssueArgs({ title: "Debug report", target })).toEqual([
+			"issue",
+			"create",
+			"--title",
+			"Debug report",
+			"--body-file",
+			"-",
+			"-R",
+			"github.com/vegardx/pi-maestro",
+		]);
+		expect(runner).toHaveBeenCalledWith(
+			"gh",
+			expect.not.arrayContaining([body]),
+			expect.objectContaining({ cwd: "/repo", stdin: body }),
+		);
+		expect(result.url).toContain("/vegardx/pi-maestro/issues/9");
+	});
+
+	it("handles aborts, thrown runners, and unknown successful results without retry", async () => {
+		const aborted = vi.fn(async () => ({
+			ok: false,
+			stdout: "",
+			stderr: "aborted",
+			exitCode: -1,
+			aborted: true,
+		}));
+		expect(
+			(
+				await createIssue(
+					"/repo",
+					{ title: "x", body: "y", target },
+					{ runner: aborted },
+				)
+			).error,
+		).toContain("status is unknown");
+		expect(aborted).toHaveBeenCalledOnce();
+		const thrown = vi.fn(async () => {
+			throw new Error("spawn failed");
+		});
+		expect(
+			(
+				await createIssue(
+					"/repo",
+					{ title: "x", body: "y", target },
+					{ runner: thrown },
+				)
+			).error,
+		).toContain("spawn failed");
+		expect(thrown).toHaveBeenCalledOnce();
+	});
+});
 
 describe("host routing", () => {
 	it("parses scp-style, ssh, and https remotes", () => {

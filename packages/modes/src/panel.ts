@@ -83,24 +83,46 @@ export interface RunPanelDeps {
 export const PANEL_HARD_TIMEOUT_MS = 8.5 * 60_000;
 export const DEFAULT_TIMEOUT_MS = PANEL_HARD_TIMEOUT_MS;
 
+/**
+ * One panel entry's spawned run. The spawn happens eagerly (the run id is
+ * known before any result settles) so the review tool can acknowledge the
+ * round immediately and let the worker's turn end; `settled` never rejects.
+ */
+export interface PanelRunStart {
+	readonly name: string;
+	readonly runId?: string;
+	readonly settled: Promise<PanelResult>;
+}
+
+/** Spawn every panel entry concurrently; results settle behind the starts. */
+export async function startReviewPanel(
+	specs: readonly SubAgentSpec[],
+	deps: RunPanelDeps,
+): Promise<PanelRunStart[]> {
+	return Promise.all(specs.map((spec) => startOne(spec, deps)));
+}
+
 /** Spawn every panel entry concurrently and collect normalized verdicts. */
 export async function runReviewPanel(
 	specs: readonly SubAgentSpec[],
 	deps: RunPanelDeps,
 ): Promise<PanelResult[]> {
-	return Promise.all(specs.map((spec) => runOne(spec, deps)));
+	const started = await startReviewPanel(specs, deps);
+	return Promise.all(started.map((s) => s.settled));
 }
 
-async function runOne(
+type PanelResultBase = Omit<
+	PanelResult,
+	"status" | "verdict" | "findings" | "structured" | "report" | "ok"
+>;
+
+async function startOne(
 	spec: SubAgentSpec,
 	deps: RunPanelDeps,
-): Promise<PanelResult> {
+): Promise<PanelRunStart> {
 	const kind = spec.kind ?? "review";
 	const required = Boolean(spec.required);
-	const base: Omit<
-		PanelResult,
-		"status" | "verdict" | "findings" | "structured" | "report" | "ok"
-	> = {
+	const base: PanelResultBase = {
 		name: spec.name,
 		persona: spec.persona,
 		required,
@@ -118,7 +140,12 @@ async function runOne(
 			Object.assign(base, { model: resolved.model, effort: resolved.effort });
 		}
 		if (!profile) {
-			return notReported(base, "failed", `(unknown persona: ${spec.persona})`);
+			return {
+				name: spec.name,
+				settled: Promise.resolve(
+					notReported(base, "failed", `(unknown persona: ${spec.persona})`),
+				),
+			};
 		}
 
 		const timeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -129,6 +156,32 @@ async function runOne(
 		// recoverable only through an explicit review({action:"repair"}).
 		const handle = deps.subagents.spawn(REVIEW_KICKOFF, profile);
 		if (handle.id) Object.assign(base, { runId: handle.id });
+		return {
+			name: spec.name,
+			...(handle.id ? { runId: handle.id } : {}),
+			settled: settleOne(base, kind, handle, timeoutMs),
+		};
+	} catch (err) {
+		return {
+			name: spec.name,
+			settled: Promise.resolve(
+				notReported(
+					base,
+					"failed",
+					`(spawn failed: ${err instanceof Error ? err.message : String(err)})`,
+				),
+			),
+		};
+	}
+}
+
+async function settleOne(
+	base: PanelResultBase,
+	kind: "review" | "helper",
+	handle: HandleLike,
+	timeoutMs: number,
+): Promise<PanelResult> {
+	try {
 		const result = await settle(handle, timeoutMs);
 		const report = result.summary?.trim() ?? "";
 		if (result.status !== "succeeded") {
@@ -198,7 +251,7 @@ async function runOne(
 		return notReported(
 			base,
 			"failed",
-			`(spawn failed: ${err instanceof Error ? err.message : String(err)})`,
+			`(run failed: ${err instanceof Error ? err.message : String(err)})`,
 		);
 	}
 }

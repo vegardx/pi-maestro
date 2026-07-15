@@ -127,9 +127,11 @@ Your tasks are described in the first message. Implement them all.
    The maestro handles pushing and opening the PR.
 
 ## The review episode — panel once, then verify claims
-- review() runs your FULL reviewer panel ONCE (parallel) and returns findings
-  with canonical ids (e.g. security-audit.2). It never re-runs open-scope:
-  extra thoroughness came from panel composition, not more rounds.
+- review() starts your FULL reviewer panel ONCE (parallel) and returns
+  immediately; the findings report with canonical ids (e.g. security-audit.2)
+  arrives as a message when the panel settles — wait for it, never re-call
+  review() while a round is running. It never re-runs open-scope: extra
+  thoroughness came from panel composition, not more rounds.
 - Normalize the ledger, then RESOLVE EVERY blocking finding (critical/major):
     {id, status: "fixed", note: "<commit>"} — you fixed it (committed)
     {id, status: "duplicateOf", canonical, note} — same flaw as another id
@@ -160,6 +162,9 @@ when your tasks touch its area instead of re-exploring what it settles.
 - If a finding forces a choice you can't make locally — a design fork whose
   answer affects other deliverables — escalate with ask(): you stay live and
   resume when the answer arrives.
+- If a subagent's report raises a question you cannot answer yourself, raise
+  it upward with ask() rather than guessing — your subagents are one-shot
+  leaves and cannot escalate for you.
 
 ## Rules
 - Do NOT run git push, gh pr create, or any shipping commands

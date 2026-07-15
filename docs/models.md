@@ -209,19 +209,20 @@ Maestro build; current code ignores them.
 
 ### `modes.distill` — context-fill ladder {#distill}
 
+Editable in `/maestro` Advanced settings ("Distill: suggest at" / "Distill:
+auto-run at").
+
 | Key | Default | Meaning |
 |---|---|---|
 | `nudgeAt` | `0.3` | Context fill fraction where a non-blocking question suggests `/distill` |
 | `forceAt` | `0.5` | Fraction where self-curated distillation runs; `0` disables it |
 
-### `modes.compaction` — work-continuity compaction
+### `modes.compaction` — summariser settings
 
 | Key | Default | Meaning |
 |---|---|---|
 | `phaseTokens` | `10000` | Max output tokens per new raw-slice summary section |
-| `workingTokens` | `150000` | Working-bucket budget that drives the trigger |
-| `summaryTokens` | `100000` | Soft warning threshold for stable summary burden |
-| `timeoutMs` | `90000` | Deadline for a modes-triggered compaction |
+| `timeoutMs` | `90000` | Summariser deadline for distill compactions and ship-time carry-forward summaries |
 
 ### Feature flags
 

@@ -26,13 +26,6 @@ import {
 } from "@vegardx/pi-git";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
-import {
-	calibrateSys,
-	calibrationKey,
-	computeBuckets,
-	estimateTokens,
-	formatBudget,
-} from "../budget.js";
 import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
 import { DebugController } from "../debug.js";
@@ -54,12 +47,11 @@ import {
 	repoNameFromPath,
 	slugify,
 } from "../schema.js";
-import { appendModesState, collectBudgetText } from "../session.js";
+import { appendModesState } from "../session.js";
 import {
 	getImplementOverrides,
 	type ImplementOverrides,
 	readChildExtensions,
-	readModesCompactionSettings,
 	readWorktreeSetupSettings,
 	setImplementOverrides,
 } from "../settings.js";
@@ -74,7 +66,6 @@ import {
 	transitionMode,
 } from "../state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "../storage.js";
-import { renderModeFooter } from "../ui.js";
 import {
 	accumulate,
 	incrementTurns,
@@ -92,11 +83,6 @@ import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
 	readonly now?: () => string;
-}
-
-export interface BudgetSnapshot {
-	buckets: ReturnType<typeof computeBuckets>;
-	settings: ReturnType<typeof readModesCompactionSettings>;
 }
 
 /**
@@ -151,21 +137,14 @@ export interface RuntimeContext {
 	// Transient: after a timed-out/aborted compaction pi may still be
 	// summarising in the background; hold off re-triggering until this passes.
 	compactionCooldownUntil: number;
-	// Transient: soft summary-budget warning fires at most once per session.
-	summaryBudgetWarnFired: boolean;
 	// Highest context-fill warning step already fired (70/90); 0 = armed.
 	contextWarnedAt: number;
-	// Transient: per-session guard for the seed dependency-summary warning.
-	seedSummaryBudgetWarnFired: boolean;
 
 	currentMode(): ModeName;
 	currentEngine(): PlanEngine | undefined;
 	persist(): void;
 	notifyMode(ctx: ExtensionContext): void;
-	budgetSnapshot(ctx: ExtensionContext): BudgetSnapshot | undefined;
-	budgetFooter(ctx: ExtensionContext): string | undefined;
 	applyTools(): void;
-	resetCalibration(): void;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
 	loadEngine(slug: string): PlanEngine | undefined;
@@ -231,9 +210,6 @@ export function createRuntimeContext(
 	// Central usage ledger (usage.v1). Records maestro + agent usage.
 	const usageLedger = new UsageLedger();
 	let maestroUsage: TokenSnapshot | undefined;
-	// Cached system-prompt+tools token estimate, invalidated when the
-	// calibration key (mode/toolset/system-prompt length) changes.
-	let calibration: { sig: string; sys: number } | undefined;
 	let baselineTools: string[] | undefined;
 
 	const rt: RuntimeContext = {
@@ -264,9 +240,7 @@ export function createRuntimeContext(
 		compactionInFlight: false,
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,
-		summaryBudgetWarnFired: false,
 		contextWarnedAt: 0,
-		seedSummaryBudgetWarnFired: false,
 
 		currentMode(): ModeName {
 			return rt.state.mode;
@@ -280,66 +254,8 @@ export function createRuntimeContext(
 			appendModesState(pi, rt.state);
 		},
 
-		notifyMode(ctx: ExtensionContext): void {
-			if (rt.invalidateFooter) {
-				rt.invalidateFooter();
-			} else {
-				// Fallback before footer is installed (e.g. early session_start)
-				ctx.ui.setStatus(
-					"maestro.mode",
-					renderModeFooter({
-						mode: rt.state.mode,
-						planSlug: rt.state.activePlanSlug,
-						budget: rt.budgetFooter(ctx),
-						contextPercent: ctx.getContextUsage?.()?.percent,
-					}),
-				);
-			}
-		},
-
-		// Best-effort context-budget breakdown. Deterministic given its inputs
-		// and defensive: when total usage is unknown (e.g. right after
-		// compaction) `hotTail` is 0 and a prior calibrated `sys` is reused.
-		// Returns undefined outside ask/auto execution. Shared by the footer and
-		// the trigger so both read the SAME bucket math.
-		budgetSnapshot(ctx: ExtensionContext): BudgetSnapshot | undefined {
-			if (rt.state.mode !== "auto") return undefined;
-			const entries = ctx.sessionManager?.getEntries?.() ?? [];
-			const text = collectBudgetText(entries);
-			const seed = estimateTokens(text.seed);
-			const rollingSummary = estimateTokens(text.rollingSummary);
-			const total = ctx.getContextUsage?.()?.tokens ?? null;
-			const systemPrompt = ctx.getSystemPrompt?.() ?? "";
-			const sig = calibrationKey({
-				mode: rt.state.mode,
-				toolSignature: pi.getActiveTools().join(","),
-				systemPromptLength: systemPrompt.length,
-			});
-			if (calibration && calibration.sig !== sig) calibration = undefined;
-			let sys: number;
-			if (total !== null) {
-				sys = calibrateSys({
-					total,
-					seed,
-					rollingSummary,
-					hotTailEstimate: estimateTokens(text.hotTail),
-				});
-				calibration = { sig, sys };
-			} else {
-				sys = calibration?.sys ?? estimateTokens(systemPrompt);
-			}
-			const buckets = computeBuckets({ total, sys, seed, rollingSummary });
-			const settings = readModesCompactionSettings(ctx.cwd);
-			return { buckets, settings };
-		},
-
-		budgetFooter(ctx: ExtensionContext): string | undefined {
-			const snapshot = rt.budgetSnapshot(ctx);
-			if (!snapshot) return undefined;
-			return formatBudget(
-				snapshot.buckets,
-				snapshot.settings.workingTokens + snapshot.settings.summaryTokens,
-			);
+		notifyMode(_ctx: ExtensionContext): void {
+			rt.invalidateFooter?.();
 		},
 
 		applyTools(): void {
@@ -359,10 +275,6 @@ export function createRuntimeContext(
 					carryForwardActive: Boolean(rt.carryForward.get()),
 				}),
 			);
-		},
-
-		resetCalibration(): void {
-			calibration = undefined;
 		},
 
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {

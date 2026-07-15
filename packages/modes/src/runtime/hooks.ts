@@ -195,9 +195,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.compactionInFlight = false;
 		rt.pendingCompaction = undefined;
 		rt.compactionCooldownUntil = 0;
-		rt.summaryBudgetWarnFired = false;
-		rt.seedSummaryBudgetWarnFired = false;
-		rt.resetCalibration();
 		if (rt.state.activePlanSlug)
 			rt.engine = rt.loadEngine(rt.state.activePlanSlug);
 		if (!isAgentMode() && rt.engine) hydrateDebugEpisode(rt);
@@ -452,25 +449,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (rt.state.mode === "plan") rt.finalizeDraftPlan(ctx);
 			rt.askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;
-		}
-		if (rt.state.mode !== "auto") return;
-
-		const snapshot = rt.budgetSnapshot(ctx);
-		if (!snapshot || !rt.engine) return;
-		const { buckets, settings } = snapshot;
-
-		// Soft warn (once per session) when the stable summary burden
-		// (seed + rollingSummary) outgrows its budget. Not enforced — dropping
-		// older summaries would lose the carry-forward signal that motivates them.
-		if (
-			!rt.summaryBudgetWarnFired &&
-			buckets.summaryUsed > settings.summaryTokens
-		) {
-			rt.summaryBudgetWarnFired = true;
-			ctx.ui.notify(
-				`Maestro carry-forward summaries (${buckets.summaryUsed} tokens) exceed compaction.summaryTokens (${settings.summaryTokens}); consider lowering compaction.phaseTokens`,
-				"warning",
-			);
 		}
 	});
 

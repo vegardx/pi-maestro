@@ -336,7 +336,7 @@ describe("answer-mode round-trip", () => {
 			title: "maestro",
 			blocking: false,
 			questions: [{ id: "q", question: "Keep the tab bar?" }],
-			onAnswer: () => {},
+			onDone: () => {},
 		});
 		// Answer mode swapped its own editor in…
 		expect(current).not.toBe(maestroFactory);

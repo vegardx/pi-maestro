@@ -16,7 +16,7 @@ import {
 	renderQuestionnaire,
 	renderRichText,
 } from "@vegardx/pi-ui";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defaultPalette } from "../packages/ui/src/format.js";
 
 const ENTER = "\r";
@@ -230,6 +230,83 @@ describe("explorer key flow", () => {
 		expect(c.render(110).join("\n")).toContain("line 0");
 		for (let i = 0; i < 6; i++) c.handleInput(DOWN);
 		expect(c.render(110).join("\n")).not.toContain("line 0");
+	});
+});
+
+describe("review confirmation", () => {
+	it("shows boxed Edit/Send actions, defaults to Send, and has no recommendation shortcut", () => {
+		let answers: Answers | undefined;
+		const c = new QuestionnaireComponent(
+			[panelQ],
+			(value) => {
+				answers = value;
+			},
+			{ recipient: "maestro" },
+		);
+		c.handleInput(ENTER); // recommended SQLite → review
+		const review = c.render(100).join("\n");
+		expect(review).toContain("Review answers");
+		expect(review).toContain("Confirm what will be sent to maestro");
+		expect(review).toContain("[ Edit answers ]");
+		expect(review).toContain("› [ Send answer ]");
+		expect(review).not.toContain("accept recommended");
+		expect(answers).toBeUndefined();
+		c.handleInput(ENTER);
+		expect(answers).toEqual([{ questionId: "storage", value: "SQLite" }]);
+	});
+
+	it("Esc from review returns to editing instead of cancelling", () => {
+		const done = vi.fn();
+		const c = new QuestionnaireComponent([panelQ], done);
+		c.handleInput(ENTER);
+		c.handleInput("\u001b");
+		expect(done).not.toHaveBeenCalled();
+		expect(c.render(100).join("\n")).toContain("Which storage backend?");
+		c.handleInput("2");
+		c.handleInput(ENTER);
+		c.handleInput(ENTER);
+		expect(done).toHaveBeenCalledWith([
+			{ questionId: "storage", value: "JSONL log" },
+		]);
+	});
+
+	it("Edit action restores a custom answer", () => {
+		const c = new QuestionnaireComponent([panelQ], () => {});
+		c.handleInput("3"); // free-text row
+		for (const ch of "Postgres") c.handleInput(ch);
+		c.handleInput(ENTER); // review
+		c.handleInput("\u001b"); // edit
+		expect(c.render(100).join("\n")).toContain("Postgres▌");
+	});
+
+	it("editing an upstream conditional answer removes stale downstream answers", () => {
+		const q: Question[] = [
+			{
+				id: "mode",
+				question: "Mode?",
+				options: [{ label: "advanced" }, { label: "simple" }],
+			},
+			{
+				id: "detail",
+				question: "Detail?",
+				options: [{ label: "verbose" }],
+				showIf: { questionId: "mode", choice: "advanced" },
+			},
+		];
+		let answers: Answers | undefined;
+		const c = new QuestionnaireComponent(q, (value) => {
+			answers = value;
+		});
+		c.handleInput(ENTER); // advanced
+		c.handleInput(ENTER); // verbose → review
+		c.handleInput("\u001b"); // edit from first question
+		c.handleInput("2"); // simple
+		c.handleInput(ENTER); // detail hidden → review
+		c.handleInput(ENTER); // send
+		expect(answers).toEqual([
+			{ questionId: "mode", value: "simple" },
+			{ questionId: "detail", value: "", skipped: true },
+		]);
 	});
 });
 

@@ -52,7 +52,7 @@ function memStore(): PlanStore {
 
 function makeHandle(overrides: Partial<ExecutionHandle> = {}): ExecutionHandle {
 	return {
-		questionQueue: { all: () => [], answer: () => {} },
+		questionQueue: { all: () => [], saveDraft: () => {}, answer: () => {} },
 		start: async () => {},
 		tick: async () => 0,
 		steer: () => true,

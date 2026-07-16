@@ -149,7 +149,7 @@ describe("AskEngine pending set (HUD presentation)", () => {
 		rig.engine.openAnswers("tier");
 		const session = rig.presenter.current();
 		expect(session?.opts.blocking).toBe(false);
-		session?.opts.onAnswer({ questionId: "tier", value: "fast" });
+		session?.opts.onDone([{ questionId: "tier", value: "fast" }]);
 		session?.close();
 
 		expect(rig.delivered).toHaveLength(1);
@@ -170,7 +170,7 @@ describe("AskEngine pending set (HUD presentation)", () => {
 		expect(session?.opts.blocking).toBe(true);
 		expect(session?.opts.title).toBe("maestro");
 
-		session?.opts.onAnswer({ questionId: "tier", value: "fast" });
+		session?.opts.onDone([{ questionId: "tier", value: "fast" }]);
 		const answers = await promise;
 		expect(answers).toEqual([{ questionId: "tier", value: "fast" }]);
 		expect(rig.ctx.statuses.get("maestro.ask")).toBeUndefined();
@@ -220,7 +220,7 @@ describe("AskEngine pending set (HUD presentation)", () => {
 		]);
 		rig.engine.openAnswers("tier");
 		const again = rig.presenter.current();
-		again?.opts.onAnswer({ questionId: "tier", value: "fast" });
+		again?.opts.onDone([{ questionId: "tier", value: "fast" }]);
 		again?.close();
 		expect(rig.delivered).toHaveLength(1);
 		expect(rig.delivered[0]).toContain("fast");

@@ -683,7 +683,7 @@ describe("renderAgentsOverview cache suffix", () => {
 		agents: Map<string, ExecutionAgentSnapshot>,
 	): ExecutionHandle {
 		return {
-			questionQueue: { all: () => [], answer: () => {} },
+			questionQueue: { all: () => [], saveDraft: () => {}, answer: () => {} },
 			failingRequiredReviewers: () => [],
 			reviewerFindings: () => [],
 			overrideReviewerVerdict: () => {},

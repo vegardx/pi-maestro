@@ -136,11 +136,9 @@ context action (Agents: attach a read-only tmux split; Plan:
 expand/collapse; Questions: answer), `s` prefills an addressed `/steer`,
 `i` interrupts after a confirm.
 
-**Pinned** — after Tab wraps back to Input — the panel stays open as a
-passive monitor: every row muted, no selection, no hint row. You type
-normally while it live-updates. **Esc** collapses: from a panel tab it
-focuses the input *and* collapses; from the input it folds a pinned panel
-away; with no panel open it keeps its usual editor meaning.
+After Tab moves through Agents → Plan → Questions and returns to Input, the
+panel fully collapses. **Esc** from any panel tab likewise focuses Input and
+collapses the panel; with no panel open it keeps its usual editor meaning.
 
 ### Questions and answer mode
 
@@ -148,13 +146,19 @@ Worker questions pend quietly — they surface only as the Questions tab and
 its count. A blocking maestro ask badges the tab bar (`1 blocking`) and the
 footer ("maestro waiting on you"); if the editor is empty it opens **answer
 mode** immediately, and if you have a draft it never steals the input.
-Answer mode replaces the input line: the question and numbered options
-render above it, digits 1–9 pick an option, typed text is a custom answer,
-Enter submits, Esc defers a blocking question (the maestro unblocks and
-carries on) or returns to the list. Multi-question sets step `1/N → 2/N`
-in place. Shorthand replies (`2`, `1a 2b`, `rec`) typed at the normal
-prompt still settle pending questions directly, and a normal prompt sent
-while the maestro is blocked simply queues (you are told once).
+Answer mode replaces the input with the full questionnaire: digits 1–9 or
+arrow keys choose options, rich option pages and comparisons remain available,
+and free text is entered in the questionnaire's custom-answer row. Enter
+commits each question, then every set — including one simple choice — opens a
+boxed **Review answers** screen. Send is selected by default; left/right or Tab
+switches between Edit and Send, Enter confirms, and Esc returns to editing.
+There is no "accept recommended" review action: recommendations are already
+preselected on their question pages. Esc from a blocking question defers it
+(the maestro unblocks and carries on); Esc from a pending question closes it.
+A prompt draft is preserved exactly when answer mode is opened from Questions.
+Shorthand replies (`2`, `1a 2b`, `rec`) at the normal prompt still settle
+pending questions directly, and a normal prompt sent while the maestro is
+blocked simply queues (you are told once).
 
 ### Fleet commands
 

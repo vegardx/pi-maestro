@@ -11,7 +11,6 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	type Answer,
 	CAPABILITIES,
 	EVENTS,
 	type PendingAsk,
@@ -504,9 +503,8 @@ export function buildAgentNodes(
 
 /**
  * Answer mode for a worker-queue entry: the same editor takeover the ask
- * engine uses, with committed answers resolving the queue entry (RPC reply
- * to the worker). Esc mid-way sends whatever was answered so far; nothing
- * answered leaves the entry queued.
+ * engine uses. Answers resolve the queue entry (RPC reply to the worker) only
+ * after the review screen's explicit Send action; Esc preserves a draft.
  */
 function openWorkerAnswerMode(
 	rt: RuntimeContext,
@@ -518,19 +516,21 @@ function openWorkerAnswerMode(
 		.find((candidate) => candidate.agentId === agentId);
 	if (!entry) return;
 	const [deliverableId = entry.agentId] = entry.agentId.split("/");
-	const collected: Answer[] = [];
 	const palette = ctx.ui.theme ? paletteFromTheme(ctx.ui.theme) : undefined;
 	openAnswerMode(ctx.ui, {
 		title: `${entry.agentName} · ${deliverableId}`,
 		blocking: false,
 		questions: entry.questions,
 		...(palette ? { palette } : {}),
-		onAnswer: (answer) => collected.push(answer),
+		...(entry.draft.length > 0 ? { initialAnswers: entry.draft } : {}),
+		onDone: (answers) => {
+			rt.execution?.questionQueue.answer(entry.agentId, answers);
+			ctx.ui.notify(`Answered ${entry.agentName}`, "info");
+		},
+		onCancel: (draft) => {
+			rt.execution?.questionQueue.saveDraft(entry.agentId, draft);
+		},
 		onClose: () => {
-			if (collected.length > 0) {
-				rt.execution?.questionQueue.answer(entry.agentId, collected);
-				ctx.ui.notify(`Answered ${entry.agentName}`, "info");
-			}
 			rt.hud?.refresh();
 		},
 	});

@@ -62,6 +62,8 @@ export interface ExecutionHandle {
 	/** Pending agent questions awaiting a user /answer. */
 	readonly questionQueue: {
 		all(): readonly PendingQuestion[];
+		/** Preserve partial questionnaire progress without resolving the agent. */
+		saveDraft(agentId: string, draft: Answers): void;
 		/** Resolve an agent's entry and dequeue it (never resolve() directly). */
 		answer(agentId: string, answers: Answers): void;
 	};

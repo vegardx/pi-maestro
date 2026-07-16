@@ -104,7 +104,6 @@ export {
 	type ExecutorDeps,
 } from "./deliverable-executor.js";
 export { buildRecap } from "./deliverable-recap.js";
-export { PlanEngine } from "./engine.js";
 export {
 	createExecution,
 	type ExecutionHandle,
@@ -122,6 +121,29 @@ export {
 	formatSessionUsage,
 	installFooter,
 } from "./install-footer.js";
+export {
+	type IsolationBackend,
+	type IsolationBackendState,
+	type IsolationBackendStatus,
+	type IsolationBackendTier,
+	IsolationUnavailableError,
+	ReservedStrongIsolationBackend,
+} from "./isolation/backend.js";
+export {
+	createResearchEnvironment,
+	LightweightSeatbeltBackend,
+	type LightweightSeatbeltOptions,
+	networkDestinationAllowed,
+	type SandboxRuntimeAdapter,
+	seatbeltConfig,
+} from "./isolation/lightweight-seatbelt.js";
+export {
+	enumerateWorkspace,
+	type ResearchWorkspace,
+	ResearchWorkspaceManager,
+	type ResearchWorkspaceManagerOptions,
+	workspaceManifest,
+} from "./isolation/workspace.js";
 export {
 	type OverlayComponent,
 	type OverlayId,

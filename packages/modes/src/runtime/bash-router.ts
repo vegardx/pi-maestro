@@ -11,6 +11,10 @@ import {
 	type BashPolicyDecision,
 	decideBashPolicy,
 } from "../bash-policy.js";
+import {
+	type IsolationBackendTier,
+	IsolationUnavailableError,
+} from "../isolation/backend.js";
 import { readExecutionPolicySettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -37,20 +41,50 @@ export function registerBashRouter(rt: RuntimeContext): void {
 		...definition,
 		async execute(id, params, signal, onUpdate, ctx) {
 			const actor = currentActor(rt);
-			const decision = decideBashPolicy({
+			const policy = readExecutionPolicySettings(ctx.cwd);
+			let decision = decideBashPolicy({
 				command: params.command,
 				mode: rt.state.mode,
 				actor,
-				policy: readExecutionPolicySettings(ctx.cwd),
+				policy,
 			});
+			if (
+				rt.isolationNoneSession &&
+				(decision.route === "lightweight" || decision.route === "strong")
+			) {
+				decision = {
+					...decision,
+					route: "confirm",
+					reason: `${decision.reason}. Isolation is disabled for this session; direct host execution requires confirmation`,
+				};
+			}
 			await authorizeBashDecision(decision, ctx, params.command);
-			const operations = resolveBashOperations(
-				decision,
-				rt.bashBackends,
-				ctx.cwd,
-			);
-			const delegated = createBashToolDefinition(ctx.cwd, { operations });
-			return delegated.execute(id, params, signal, onUpdate, ctx);
+			const execute = (selected: BashPolicyDecision) => {
+				const operations = resolveBashOperations(
+					selected,
+					rt.bashBackends,
+					ctx.cwd,
+				);
+				const delegated = createBashToolDefinition(ctx.cwd, { operations });
+				return delegated.execute(id, params, signal, onUpdate, ctx);
+			};
+			try {
+				return await execute(decision);
+			} catch (error) {
+				if (!(error instanceof IsolationUnavailableError)) throw error;
+				const action = await isolationFailureAction(
+					error.tier,
+					error.message,
+					ctx,
+				);
+				if (action === "cancel") throw error;
+				if (action === "hack") {
+					rt.setMode("hack", ctx);
+					return execute({ ...decision, route: "direct" });
+				}
+				if (action === "none-session") rt.isolationNoneSession = true;
+				return execute({ ...decision, route: "direct" });
+			}
 		},
 	};
 	rt.pi.registerTool(routed);
@@ -63,11 +97,47 @@ export async function authorizeBashDecision(
 ): Promise<void> {
 	if (decision.route === "deny") throw new Error(decision.reason);
 	if (decision.route !== "confirm") return;
+	const title =
+		decision.mode === "recon" || decision.mode === "plan"
+			? "Run without research isolation?"
+			: "Run consequential command?";
 	const approved = await ctx.ui.confirm(
-		"Run consequential command?",
+		title,
 		`Mode: ${decision.mode} · actor: ${decision.actor}\nReason: ${decision.reason}\nCommand:\n  ${command}`,
 	);
 	if (!approved) throw new Error("Bash command canceled by user");
+}
+
+export type IsolationFailureAction =
+	| "cancel"
+	| "direct-once"
+	| "none-session"
+	| "hack";
+
+export async function isolationFailureAction(
+	tier: IsolationBackendTier,
+	detail: string,
+	ctx: Pick<ExtensionContext, "ui">,
+): Promise<IsolationFailureAction> {
+	const choices = [
+		"Cancel (recommended)",
+		"Run direct once",
+		"Use None for this session",
+		"Enter Hack and run direct",
+	];
+	const choice = await ctx.ui.select(
+		`${tier[0]?.toUpperCase()}${tier.slice(1)} isolation failed`,
+		choices,
+	);
+	if (!choice || choice === choices[0]) return "cancel";
+	const approved = await ctx.ui.confirm(
+		"Weaken isolation?",
+		`${detail}\n\n${choice}\nThis runs on the host and can modify the real checkout.`,
+	);
+	if (!approved) return "cancel";
+	if (choice === choices[1]) return "direct-once";
+	if (choice === choices[2]) return "none-session";
+	return "hack";
 }
 
 export function resolveBashOperations(
@@ -81,7 +151,7 @@ export function resolveBashOperations(
 		case "confirm":
 			return direct;
 		case "host-read":
-			return requiredBackend("host-read", backends.hostRead?.(cwd));
+			return backends.hostRead?.(cwd) ?? direct;
 		case "lightweight":
 			return requiredBackend("lightweight", backends.lightweight?.(cwd));
 		case "strong":
@@ -92,12 +162,13 @@ export function resolveBashOperations(
 }
 
 function requiredBackend(
-	tier: "host-read" | "lightweight" | "strong",
+	tier: "lightweight" | "strong",
 	operations: BashOperations | undefined,
 ): BashOperations {
 	if (operations) return operations;
-	throw new Error(
-		`${tier === "host-read" ? "Protected host-read" : `${tier[0]?.toUpperCase()}${tier.slice(1)} Bash isolation`} is required by policy but no ${tier} backend is available. Configure a backend, change the execution policy explicitly, or use Hack for authorized direct execution.`,
+	throw new IsolationUnavailableError(
+		tier,
+		`${tier[0]?.toUpperCase()}${tier.slice(1)} Bash isolation is required by policy but no ${tier} backend is available.`,
 	);
 }
 

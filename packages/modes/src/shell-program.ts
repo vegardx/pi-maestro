@@ -2,6 +2,8 @@ export type ShellFeature =
 	| "chain"
 	| "pipeline"
 	| "redirect"
+	| "input-redirect"
+	| "output-redirect"
 	| "heredoc"
 	| "substitution"
 	| "grouping"
@@ -52,8 +54,6 @@ const WRAPPERS = new Set([
 	"nohup",
 	"time",
 	"timeout",
-	"sudo",
-	"doas",
 ]);
 const OPAQUE = new Set(["eval", "xargs", "parallel", "make", "just", "task"]);
 
@@ -162,6 +162,8 @@ function lex(source: string): LexResult {
 		}
 		if ((char === "<" || char === ">") && next === "(") {
 			features.add("substitution");
+			features.add("redirect");
+			features.add(char === "<" ? "input-redirect" : "output-redirect");
 			operator(char, "redirect", false);
 			continue;
 		}
@@ -189,6 +191,8 @@ function lex(source: string): LexResult {
 		}
 		if (char === ">" || char === "<") {
 			const heredoc = char === "<" && next === "<";
+			features.add("redirect");
+			features.add(char === ">" ? "output-redirect" : "input-redirect");
 			operator(char, heredoc ? "heredoc" : "redirect", false);
 			if (next === char) {
 				segment += next;
@@ -236,18 +240,7 @@ function parseSimple(
 		const wrapper = words[index] ?? "";
 		wrappers.push(wrapper);
 		features.add("wrapper");
-		index += 1;
-		if (wrapper === "env") {
-			while (
-				index < words.length &&
-				(ASSIGNMENT.test(words[index] ?? "") ||
-					(words[index] ?? "").startsWith("-"))
-			)
-				index += 1;
-		} else {
-			while (index < words.length && (words[index] ?? "").startsWith("-"))
-				index += 1;
-		}
+		index = skipWrapperArguments(words, index + 1, wrapper, features);
 	}
 	const executable = words[index];
 	const args = words.slice(index + 1);
@@ -259,7 +252,7 @@ function parseSimple(
 	if (executable && INTERPRETERS.has(executable)) {
 		const carrier =
 			(SHELLS.has(executable) &&
-				args.some((arg) => arg === "-c" || arg.includes("c"))) ||
+				args.some((arg) => /^-[^-]*c[^-]*$/u.test(arg))) ||
 			args.some((arg) => ["-c", "-e", "--eval", "--execute"].includes(arg)) ||
 			features.has("heredoc");
 		if (carrier) {
@@ -282,6 +275,74 @@ function parseSimple(
 		opaque = true;
 	}
 	return { source, words, executable, args, environment, wrappers, opaque };
+}
+
+function skipWrapperArguments(
+	words: readonly string[],
+	start: number,
+	wrapper: string,
+	features: Set<ShellFeature>,
+): number {
+	let index = start;
+	const unknown = (): number => {
+		features.add("opaque-dispatch");
+		return words.length;
+	};
+	if (wrapper === "env") {
+		while (index < words.length) {
+			const arg = words[index] ?? "";
+			if (ASSIGNMENT.test(arg)) {
+				index += 1;
+				continue;
+			}
+			if (
+				["-u", "--unset", "-C", "--chdir", "-S", "--split-string"].includes(arg)
+			) {
+				if (words[index + 1] === undefined) return unknown();
+				index += 2;
+				continue;
+			}
+			if (
+				arg === "-i" ||
+				arg === "--ignore-environment" ||
+				arg === "-0" ||
+				arg === "--null"
+			) {
+				index += 1;
+				continue;
+			}
+			if (arg.startsWith("-")) return unknown();
+			break;
+		}
+		return index;
+	}
+	if (wrapper === "timeout") {
+		while (index < words.length && (words[index] ?? "").startsWith("-")) {
+			const arg = words[index] ?? "";
+			if (["-k", "--kill-after", "-s", "--signal"].includes(arg)) index += 2;
+			else if (
+				arg.startsWith("--kill-after=") ||
+				arg.startsWith("--signal=") ||
+				["--foreground", "--preserve-status", "--verbose"].includes(arg)
+			)
+				index += 1;
+			else return unknown();
+		}
+		if (words[index] === undefined) return unknown();
+		return index + 1; // mandatory duration
+	}
+	if (wrapper === "nice") {
+		if (words[index] === "-n" || words[index] === "--adjustment") {
+			if (words[index + 1] === undefined) return unknown();
+			return index + 2;
+		}
+		if ((words[index] ?? "").startsWith("--adjustment=")) return index + 1;
+		if (/^-\d+$/u.test(words[index] ?? "")) return index + 1;
+		return index;
+	}
+	while (index < words.length && (words[index] ?? "").startsWith("-"))
+		index += 1;
+	return index;
 }
 
 function tokenizeWords(source: string): string[] {

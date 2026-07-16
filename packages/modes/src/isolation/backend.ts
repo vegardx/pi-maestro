@@ -1,6 +1,6 @@
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 
-/** Isolation tiers exposed by execution policy. Strong is intentionally reserved. */
+/** Isolation tiers exposed by execution policy. */
 export type IsolationBackendTier = "lightweight" | "strong" | "none";
 
 export type IsolationBackendState =
@@ -47,7 +47,10 @@ export class IsolationUnavailableError extends Error {
 	}
 }
 
-/** Reserved contract advertised by Strict policy until a VM backend ships. */
+/**
+ * Compatibility provider for embedders that intentionally do not install a
+ * Strong backend. The default modes runtime uses AppleContainerStrongBackend.
+ */
 export class ReservedStrongIsolationBackend implements IsolationBackend {
 	readonly tier = "strong" as const;
 

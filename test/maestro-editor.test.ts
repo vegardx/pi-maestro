@@ -1,7 +1,7 @@
 // MaestroEditor: the tab bar in the input's top border and the Tab/Esc
 // grammar. Covers the tab-bar line (brackets follow focus, live counts,
 // blocking accent, draft-dims-tab-hint), the ring walk including the
-// wrap-to-pinned step, Esc collapse from both states, draft-keeps-Tab
+// wrap-to-collapsed-input step, Esc collapse from both states, draft-keeps-Tab
 // (super called), panel-key forwarding, and the install/dispose wiring
 // (host sessions install the editor + panel widget; worker mode never
 // reaches installHud and the answer-mode swap restores the factory).
@@ -193,7 +193,7 @@ describe("MaestroEditor ring walk", () => {
 		expect(panel.setTab).toHaveBeenCalledWith("agents");
 	});
 
-	it("walks Agents → Plan → Questions → pinned input (panel stays expanded)", () => {
+	it("walks Agents → Plan → Questions → collapsed input", () => {
 		const { e, state, panel } = editor();
 		e.handleInput("\t"); // → agents
 		e.handleInput("\t"); // → plan
@@ -201,14 +201,14 @@ describe("MaestroEditor ring walk", () => {
 		expect(panel.setTab).toHaveBeenLastCalledWith("plan");
 		e.handleInput("\t"); // → questions
 		expect(state.focus).toBe("questions");
-		e.handleInput("\t"); // → wrap: input keeps the keys, panel pinned
+		e.handleInput("\t"); // → wrap: input gets the keys, panel collapses
 		expect(state.focus).toBe("input");
-		expect(state.expanded).toBe(true);
-		// The panel keeps its last tab — no setTab back to agents.
+		expect(state.expanded).toBe(false);
+		// No extra tab switch occurs while returning to the input.
 		expect(panel.setTab).toHaveBeenLastCalledWith("questions");
 	});
 
-	it("re-entering the ring from pinned focuses Agents again", () => {
+	it("entering the ring from an expanded input state focuses Agents", () => {
 		const { e, state } = editor({
 			state: { focus: "input", expanded: true },
 		});

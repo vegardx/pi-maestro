@@ -98,3 +98,5 @@ PI_MAESTRO_APPLE_CONTAINER_INTEGRATION=1 npm test -- test/apple-container.integr
 The probe uses the same digest and validates workspace copy-in, offline network,
 environment isolation, limits, abort cleanup, and stale reconciliation. It is
 skipped everywhere else.
+
+Reset and destroy invalidate the epoch first, then drain any in-flight setup and force-delete its locally held container name, preventing setup/teardown races from orphaning a VM.

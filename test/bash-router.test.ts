@@ -426,7 +426,7 @@ describe("bash coaching and routing policy", () => {
 		const selectLightweight = vi.fn(async () => "Try Lightweight once");
 		const approveLightweight = vi.fn(async () => true);
 		await expect(
-			isolationFailureAction("strong", "container unavailable", {
+			isolationFailureAction("strong", "container unavailable", "confirm", {
 				ui: {
 					select: selectLightweight,
 					confirm: approveLightweight,

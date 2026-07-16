@@ -287,6 +287,36 @@ describe("Apple container Strong workspace and execution", () => {
 		]);
 	});
 
+	it("destroy during setup cannot orphan a container", async () => {
+		const { source, workspaces } = await fixture();
+		const runner = new FakeContainerRunner();
+		let releaseCreate: (() => void) | undefined;
+		let enteredCreate = false;
+		const gate = new Promise<void>((resolve) => {
+			releaseCreate = resolve;
+		});
+		const originalRun = runner.run.bind(runner);
+		runner.run = async (args, options) => {
+			if (args[0] === "create" && args[1] !== "--help") {
+				enteredCreate = true;
+				await gate;
+			}
+			return originalRun(args, options);
+		};
+		const strong = backend(runner, workspaces, source);
+		const execution = strong
+			.operations(source)
+			.exec("true", source, { onData: vi.fn() })
+			.catch((error) => error);
+		await vi.waitFor(() => expect(enteredCreate).toBe(true));
+		const destroyed = strong.destroy();
+		releaseCreate?.();
+		await destroyed;
+		await execution;
+		expect(runner.containers.size).toBe(0);
+		expect(strong.status().state).toBe("destroyed");
+	});
+
 	it("cleans a tainted VM on abort and does not expose a fallback-eligible error", async () => {
 		const { source, workspaces } = await fixture();
 		const runner = new FakeContainerRunner();
@@ -390,7 +420,7 @@ describe("Apple container policy helpers", () => {
 			expect(guest[key]).toBeUndefined();
 	});
 
-	it("recognizes only extension-owned stale containers", () => {
+	it("requires an exact ownership label for stale containers", () => {
 		expect(
 			ownedContainerNames(
 				JSON.stringify([
@@ -399,6 +429,6 @@ describe("Apple container policy helpers", () => {
 					{ name: "pi-maestro-research-crashed", labels: {} },
 				]),
 			),
-		).toEqual(["owned", "pi-maestro-research-crashed"]);
+		).toEqual(["owned"]);
 	});
 });

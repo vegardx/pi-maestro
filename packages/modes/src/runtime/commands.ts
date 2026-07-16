@@ -65,14 +65,21 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					: `Plan ${opened.get().slug} active.`,
 				"info",
 			);
-			pi.sendMessage(
-				{
-					customType: "maestro.plan.document",
-					content: renderPlanSummary(opened.get()),
-					display: true,
-				},
-				{ triggerTurn: false },
-			);
+			// Never send an empty custom message: convertToLlm turns it into a
+			// user message with an empty text block, which the gateway's
+			// Responses-dialect translation rejects on every subsequent request —
+			// permanently poisoning the session history.
+			const planDocument = renderPlanSummary(opened.get());
+			if (planDocument.trim().length > 0) {
+				pi.sendMessage(
+					{
+						customType: "maestro.plan.document",
+						content: planDocument,
+						display: true,
+					},
+					{ triggerTurn: false },
+				);
+			}
 		},
 	});
 

@@ -15,6 +15,7 @@ import {
 	getConfigString,
 	getConfigStringArray,
 	readLayeredExtensionConfig,
+	readPath,
 } from "@vegardx/pi-settings";
 
 const NAME = "modes";
@@ -127,6 +128,137 @@ export function readChildExtensions(cwd: string, agentDir?: string): string[] {
 	const paths = getConfigStringArray(merged, NAME, "childExtensions", []);
 	// A vanished path would make every child die at startup — drop it.
 	return paths.filter((p) => existsSync(p));
+}
+
+// ---- Execution policy -------------------------------------------------------
+
+export type ExecutionPolicyPreset = "guided" | "strict" | "permissive";
+export type IsolationTier = "lightweight" | "strong" | "none";
+
+export interface ExecutionPolicySettings {
+	preset: ExecutionPolicyPreset | "custom";
+	toolGuidance: "mode-aware" | "advisory" | "off";
+	modeRoutes: "protected-research" | "isolated" | "direct";
+	isolation: IsolationTier;
+	delivery: "dedicated-tools";
+	consequential: "confirm" | "confirm-mutations" | "allow";
+	privilegedRemote: "hack-only" | "confirm" | "deny";
+	githubReads: "allow-apparent-reads" | "confirm";
+	unknowns: "isolate" | "confirm" | "deny";
+	fallback: "fail-closed" | "confirm";
+}
+
+const POLICY_PRESETS: Record<
+	ExecutionPolicyPreset,
+	Omit<ExecutionPolicySettings, "preset">
+> = {
+	guided: {
+		toolGuidance: "mode-aware",
+		modeRoutes: "protected-research",
+		isolation: "lightweight",
+		delivery: "dedicated-tools",
+		consequential: "confirm",
+		privilegedRemote: "hack-only",
+		githubReads: "allow-apparent-reads",
+		unknowns: "isolate",
+		fallback: "fail-closed",
+	},
+	strict: {
+		toolGuidance: "mode-aware",
+		modeRoutes: "isolated",
+		isolation: "strong",
+		delivery: "dedicated-tools",
+		consequential: "confirm-mutations",
+		privilegedRemote: "confirm",
+		githubReads: "confirm",
+		unknowns: "deny",
+		fallback: "fail-closed",
+	},
+	permissive: {
+		toolGuidance: "advisory",
+		modeRoutes: "direct",
+		isolation: "none",
+		delivery: "dedicated-tools",
+		consequential: "allow",
+		privilegedRemote: "hack-only",
+		githubReads: "allow-apparent-reads",
+		unknowns: "confirm",
+		fallback: "confirm",
+	},
+};
+
+function choice<T extends string>(
+	raw: unknown,
+	allowed: readonly T[],
+	fallback: T,
+): T {
+	return typeof raw === "string" && allowed.includes(raw as T)
+		? (raw as T)
+		: fallback;
+}
+
+/** Validated layered policy. Invalid values fall back to the selected preset. */
+export function readExecutionPolicySettings(
+	cwd: string,
+	agentDir?: string,
+): ExecutionPolicySettings {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const config = merged.modes;
+	const preset = choice(
+		readPath(config, "execution.preset"),
+		["guided", "strict", "permissive"] as const,
+		"guided",
+	);
+	const defaults = POLICY_PRESETS[preset];
+	const read = <T extends string>(
+		key: string,
+		allowed: readonly T[],
+		fallback: T,
+	) => choice(readPath(config, `execution.${key}`), allowed, fallback);
+	const resolved = {
+		toolGuidance: read(
+			"toolGuidance",
+			["mode-aware", "advisory", "off"],
+			defaults.toolGuidance,
+		),
+		modeRoutes: read(
+			"modeRoutes",
+			["protected-research", "isolated", "direct"],
+			defaults.modeRoutes,
+		),
+		isolation: read(
+			"isolation",
+			["lightweight", "strong", "none"],
+			defaults.isolation,
+		),
+		delivery: read("delivery", ["dedicated-tools"], defaults.delivery),
+		consequential: read(
+			"consequential",
+			["confirm", "confirm-mutations", "allow"],
+			defaults.consequential,
+		),
+		privilegedRemote: read(
+			"privilegedRemote",
+			["hack-only", "confirm", "deny"],
+			defaults.privilegedRemote,
+		),
+		githubReads: read(
+			"githubReads",
+			["allow-apparent-reads", "confirm"],
+			defaults.githubReads,
+		),
+		unknowns: read(
+			"unknowns",
+			["isolate", "confirm", "deny"],
+			defaults.unknowns,
+		),
+		fallback: read("fallback", ["fail-closed", "confirm"], defaults.fallback),
+	};
+	const custom = Object.keys(resolved).some((key) => {
+		const raw = readPath(config, `execution.${key}`);
+		return raw !== undefined && raw === resolved[key as keyof typeof resolved];
+	});
+	return { preset: custom ? "custom" : preset, ...resolved };
 }
 
 // ---- Worktree provisioning settings -----------------------------------------

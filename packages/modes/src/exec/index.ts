@@ -118,6 +118,11 @@ export interface ExecutionHandle {
 	restartWorkerFresh?(
 		deliverableId: string,
 	): Promise<import("./execution-adapter.js").WorkerRestartResult>;
+	/**
+	 * Kill a worker and park its deliverable in the /recover-able restart
+	 * shape, suppressing the crash-respawn loop. False when nothing to fail.
+	 */
+	forceFailWorker?(deliverableId: string, reason: string): Promise<boolean>;
 	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;

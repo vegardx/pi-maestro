@@ -688,6 +688,47 @@ export function createRuntimeContext(
 				ctx.ui.notify("tmux is required to resume workers.", "warning");
 				return;
 			}
+
+			// 3. Stuck-live preflight: workers still (nominally) running are
+			// invisible to recoverInterrupted, and force-exiting one by hand just
+			// triggers the crash-respawn loop. Offer to force-fail them into the
+			// recoverable shape so this run picks them up too.
+			const liveWorkers: string[] = [];
+			for (const [id, state] of rt.execution.getExecutor().getStates()) {
+				const worker = state.agents.get("worker");
+				if (!worker) continue;
+				if (
+					worker.status === "working" ||
+					worker.status === "spawning" ||
+					worker.status === "restarting"
+				) {
+					liveWorkers.push(id);
+				}
+			}
+			if (liveWorkers.length > 0) {
+				const proceed = await ctx.ui.confirm(
+					"Recover running workers",
+					`${liveWorkers.length} worker(s) are still running:\n` +
+						`${liveWorkers.map((id) => `  • ${id}`).join("\n")}\n` +
+						"Force-fail them so recovery can re-provision and respawn? " +
+						"(No leaves them running and recovers only parked deliverables.)",
+				);
+				if (proceed) {
+					for (const id of liveWorkers) {
+						const ok = await rt.execution.forceFailWorker?.(
+							id,
+							"user ran /recover",
+						);
+						if (!ok) {
+							ctx.ui.notify(
+								`Could not force-fail ${id} — its session refused to die; try again or kill it manually.`,
+								"warning",
+							);
+						}
+					}
+				}
+			}
+
 			const { recovered, failed } = await rt.execution
 				.getExecutor()
 				.recoverInterrupted();

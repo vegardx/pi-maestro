@@ -148,7 +148,9 @@ export function buildSeed(input: BuildSeedInput): string {
 		const scratch = deliverableWorkspace(deliverable) === "scratch";
 		const parts = [TASKS_HEADER, scratch ? TASKS_FRAME_SCRATCH : TASKS_FRAME];
 		if (input.policyNote) parts.push(input.policyNote);
-		parts.push(`## Deliverable: ${deliverable.title}`);
+		parts.push(
+			`## Deliverable: ${deliverable.title} (id: \`${deliverable.id}\`)`,
+		);
 		if (deliverable.body) parts.push(deliverable.body);
 		const tasks = gatingTasks(deliverable);
 		if (tasks.length > 0) parts.push(tasks.map(formatTask).join("\n"));

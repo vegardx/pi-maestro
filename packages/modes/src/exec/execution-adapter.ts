@@ -1926,14 +1926,16 @@ export class ExecutionAdapter {
 	}
 
 	private handlePlanMutate(agentId: string, msg: PlanMutateMessage): void {
-		const deliverableId = msg.deliverableId;
 		const [authenticatedDeliverable] = agentId.split("/");
+		// A blank id means "my own deliverable" — models routinely send "" for
+		// optional params, and the agent can only ever target itself anyway.
+		const deliverableId = msg.deliverableId?.trim() || authenticatedDeliverable;
 		if (authenticatedDeliverable !== deliverableId) {
 			this.router.send(agentId, {
 				type: "planMutateResult",
 				id: msg.id,
 				success: false,
-				error: "agent may only mutate its own deliverable",
+				error: `agent may only mutate its own deliverable ("${authenticatedDeliverable}")`,
 			});
 			return;
 		}

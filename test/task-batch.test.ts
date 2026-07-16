@@ -158,3 +158,52 @@ describe("task batch add (agent/RPC path)", () => {
 		expect(called).toBe(false); // nothing forwarded
 	});
 });
+
+// Models fill optional params with "" or a slug guessed from the deliverable
+// title; the authenticated identity must win or every mutation is rejected
+// with "agent may only mutate its own deliverable" and the worker wedges.
+describe("task deliverableId routing (agent/RPC path)", () => {
+	function toggleWith(
+		deliverableId: string | undefined,
+	): Promise<{ res: Res; gIds: string[] }> {
+		const gIds: string[] = [];
+		const bridge = {
+			planMutate: async (_a: string, g: string) => {
+				gIds.push(g);
+				return { success: true, taskId: "t1" };
+			},
+		};
+		const tool = createTaskTool({
+			engine: () => undefined,
+			agentBridge: () => bridge as never,
+			agentDeliverableId: () => "d1",
+		});
+		return (
+			tool.execute(
+				"t",
+				{ action: "toggle", taskId: "t1", deliverableId } as never,
+				undefined as never,
+				undefined as never,
+				{} as never,
+			) as Promise<Res>
+		).then((res) => ({ res, gIds }));
+	}
+
+	it("routes an empty-string deliverableId to the agent's own deliverable", async () => {
+		const { res, gIds } = await toggleWith("");
+		expect(res.details?.error).toBeUndefined();
+		expect(gIds).toEqual(["d1"]);
+	});
+
+	it("routes a guessed wrong slug to the agent's own deliverable", async () => {
+		const { res, gIds } = await toggleWith("guessed-title-slug");
+		expect(res.details?.error).toBeUndefined();
+		expect(gIds).toEqual(["d1"]);
+	});
+
+	it("routes an omitted deliverableId to the agent's own deliverable", async () => {
+		const { res, gIds } = await toggleWith(undefined);
+		expect(res.details?.error).toBeUndefined();
+		expect(gIds).toEqual(["d1"]);
+	});
+});

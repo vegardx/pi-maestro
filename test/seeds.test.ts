@@ -282,7 +282,9 @@ describe("buildSeed section ordering + framing", () => {
 			agentName: "worker",
 			summaries: summaries(),
 		});
-		expect(seed).toContain("## Deliverable: Auth System");
+		// The id is the handle for `task` toggles — the worker must see it, not
+		// guess a slug from the title.
+		expect(seed).toContain("## Deliverable: Auth System (id: `auth`)");
 		expect(seed).toContain("Implement authentication");
 		expect(seed).toContain("- [x] **Login endpoint**");
 		expect(seed).toContain("- [ ] **Refresh endpoint**");

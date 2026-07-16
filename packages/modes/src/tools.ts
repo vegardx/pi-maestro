@@ -211,7 +211,10 @@ const TaskParams = Type.Object({
 		Type.Literal("remove"),
 	]),
 	deliverableId: Type.Optional(
-		Type.String({ description: "Parent deliverable id." }),
+		Type.String({
+			description:
+				"Parent deliverable id. Worker agents: omit — your own deliverable is used automatically.",
+		}),
 	),
 	taskId: Type.Optional(Type.String({ description: "Work-item id." })),
 	title: Type.Optional(Type.String({ description: "Work-item title." })),
@@ -685,7 +688,11 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			if (!deps.engine()) {
 				const bridge = deps.agentBridge?.();
 				if (bridge) {
-					const gId = params.deliverableId ?? deps.agentDeliverableId?.() ?? "";
+					// The authenticated identity wins: agents may only mutate their own
+					// deliverable, and models fill the optional param with "" or a slug
+					// guessed from the deliverable title.
+					const gId =
+						deps.agentDeliverableId?.() ?? (params.deliverableId?.trim() || "");
 					switch (params.action) {
 						case "add": {
 							// Batch: title-preflight is atomic (a bad item rejects the

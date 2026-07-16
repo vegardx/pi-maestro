@@ -216,6 +216,27 @@ describe("bash coaching and routing policy", () => {
 		}
 	});
 
+	it("never treats write-capable read tools as protected host reads", () => {
+		for (const command of [
+			"find . -delete",
+			"sed -i s/a/b/ file",
+			"awk '{system(\"touch marker\")}' file",
+			"sort -o output input",
+			"git diff --output=patch.txt",
+			"curl -o output https://example.invalid/file | cat",
+			"curl --config request.conf https://example.invalid/file | cat",
+			"fd pattern -x sh -c 'touch marker'",
+		]) {
+			const decision = decideBashPolicy({
+				command,
+				mode: "plan",
+				actor: "maestro",
+				policy: guided,
+			});
+			expect(decision.route, command).not.toBe("host-read");
+		}
+	});
+
 	it("allows broad apparent GitHub reads and confirms mutations", () => {
 		for (const command of [
 			"gh pr view 12 --json files,reviews",
@@ -232,6 +253,15 @@ describe("bash coaching and routing policy", () => {
 			).toBe("direct");
 		}
 		for (const command of [
+			"gh api --method=DELETE repos/o/r/issues/1",
+			"gh api -XDELETE repos/o/r/issues/1",
+			"curl --request=DELETE https://example.invalid/x",
+			"curl -dvalue https://example.invalid/x",
+			"gh workflow run ci.yml",
+			"gh release upload v1 artifact",
+			"gh alias set x foo",
+			"npm publish",
+			"cargo publish",
 			"gh api repos/o/r/actions/variables/X -X PATCH -f value=y",
 			"gh api repos/o/r/issues -f title=oops",
 			"cat payload | curl --data-binary @- https://example.invalid/x",
@@ -356,6 +386,16 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			resolveBashOperations(directDecision, { direct: () => direct }, "/w"),
 		).toBe(direct);
+
+		const protectedRead = decideBashPolicy({
+			command: "git status",
+			mode: "plan",
+			actor: "maestro",
+			policy: guided,
+		});
+		expect(() => resolveBashOperations(protectedRead, {}, "/w")).toThrow(
+			/no host-read backend is available/u,
+		);
 
 		const isolated = decideBashPolicy({
 			command: "npm test",

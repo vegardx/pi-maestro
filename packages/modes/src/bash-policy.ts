@@ -157,6 +157,26 @@ const GH_MUTATIONS = new Set([
 	"set-default",
 	"fork",
 	"sync",
+	"upload",
+	"set",
+	"login",
+	"logout",
+	"refresh",
+]);
+const GH_READS = new Set([
+	"view",
+	"list",
+	"status",
+	"diff",
+	"checks",
+	"watch",
+	"ready",
+]);
+const PACKAGE_REMOTE_MUTATIONS = new Set([
+	"publish",
+	"unpublish",
+	"deprecate",
+	"yank",
 ]);
 const PRIVILEGED = new Set([
 	"sudo",
@@ -250,26 +270,28 @@ export function classifyBashEffects(
 		effects.add("unknown");
 
 	for (const command of analysis.commands) {
+		if (hasExecutionEnvironmentOverride(command.environment))
+			effects.add("unknown");
 		const executable = command.executable;
 		if (!executable) {
 			effects.add("unknown");
 			continue;
 		}
 		if (HOST_READ.has(executable)) effects.add("host-read");
-		else if (
-			FILE_READ.has(executable) ||
-			SEARCH.has(executable) ||
-			FIND.has(executable) ||
-			TEXT_FILTER.has(executable)
-		)
+		else if (FILE_READ.has(executable) || SEARCH.has(executable))
 			effects.add("workspace-read");
+		else if (FIND.has(executable)) classifyFind(command.args, effects);
+		else if (TEXT_FILTER.has(executable))
+			classifyTextFilter(executable, command.args, effects);
 		else if (executable === "echo" || executable === "printf")
 			effects.add("host-read");
 		else if (LOCAL_WRITES.has(executable)) effects.add("workspace-write");
 		else if (DESTRUCTIVE.has(executable)) {
 			effects.add("workspace-write");
 			effects.add("destructive");
-		} else if (PACKAGE.has(executable) || isInterpreter(executable)) {
+		} else if (PACKAGE.has(executable))
+			classifyPackage(executable, command.args, effects);
+		else if (isInterpreter(executable)) {
 			effects.add("repository-code");
 			effects.add("workspace-write");
 		} else if (executable === "git") classifyGit(command.args, effects);
@@ -450,6 +472,68 @@ function guidanceFor(
 	return "redirect";
 }
 
+function classifyFind(args: readonly string[], effects: Set<BashEffect>): void {
+	effects.add("workspace-read");
+	if (hasOption(args, ["-x", "--exec", "-X", "--exec-batch"]))
+		effects.add("unknown");
+	if (
+		args.some((arg) =>
+			["-delete", "-fprint", "-fprint0", "-fls", "-fprintf"].includes(arg),
+		)
+	) {
+		effects.add("workspace-write");
+		if (args.includes("-delete")) effects.add("destructive");
+	}
+}
+
+function classifyTextFilter(
+	executable: string,
+	args: readonly string[],
+	effects: Set<BashEffect>,
+): void {
+	effects.add("workspace-read");
+	if (executable === "awk" || executable === "sed" || executable === "yq") {
+		// These languages/options can execute commands or write files from their
+		// program text. Route them conservatively unless a real sandbox owns them.
+		effects.add("unknown");
+	}
+	if (
+		(executable === "sort" && hasOption(args, ["-o", "--output"])) ||
+		((executable === "sed" || executable === "yq") &&
+			args.some(
+				(arg) =>
+					arg === "-i" || arg.startsWith("-i") || arg.startsWith("--in-place"),
+			))
+	)
+		effects.add("workspace-write");
+}
+
+function classifyPackage(
+	executable: string,
+	args: readonly string[],
+	effects: Set<BashEffect>,
+): void {
+	effects.add("repository-code");
+	effects.add("workspace-write");
+	const normalized = args.map((arg) => arg.toLowerCase());
+	if (
+		normalized.some((arg) => PACKAGE_REMOTE_MUTATIONS.has(arg)) ||
+		(executable === "npm" &&
+			normalized.some((arg) => ["dist-tag", "owner", "access"].includes(arg)))
+	)
+		effects.add("remote-write");
+}
+
+function hasExecutionEnvironmentOverride(
+	environment: Readonly<Record<string, string>>,
+): boolean {
+	return Object.keys(environment).some((key) =>
+		/^(?:PATH|BASH_ENV|ENV|SHELLOPTS|NODE_OPTIONS|PYTHONPATH|RUBYOPT|PERL5OPT|LD_|DYLD_|GIT_CONFIG)/u.test(
+			key,
+		),
+	);
+}
+
 function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 	const subcommand = gitSubcommand(args);
 	if (!subcommand) {
@@ -457,8 +541,11 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 		return;
 	}
 	if (GIT_DELIVERY.has(subcommand)) effects.add("delivery");
-	else if (GIT_READ.has(subcommand)) effects.add("workspace-read");
-	else if (GIT_LOCAL.has(subcommand)) {
+	else if (GIT_READ.has(subcommand)) {
+		effects.add("workspace-read");
+		if (args.some((arg) => arg === "--output" || arg.startsWith("--output=")))
+			effects.add("workspace-write");
+	} else if (GIT_LOCAL.has(subcommand)) {
 		effects.add("local-git");
 		effects.add("workspace-write");
 		if (
@@ -494,55 +581,57 @@ function gitSubcommand(args: readonly string[]): string | undefined {
 function classifyGh(args: readonly string[], effects: Set<BashEffect>): void {
 	const lower = args.map((arg) => arg.toLowerCase());
 	if (lower[0] === "api") {
-		const methodIndex = lower.findIndex(
-			(arg) => arg === "-x" || arg === "--method",
-		);
-		const method =
-			methodIndex >= 0 ? lower[methodIndex + 1]?.toUpperCase() : undefined;
-		const hasBody = lower.some(
-			(arg) =>
-				["-f", "--field", "-F", "--raw-field", "--input"].includes(arg) ||
-				/^--(?:field|raw-field|input)=/u.test(arg),
-		);
+		const method = optionValue(lower.slice(1), ["-x", "--method"]);
+		const hasBody = hasOption(lower.slice(1), [
+			"-f",
+			"--field",
+			"-F",
+			"--raw-field",
+			"--input",
+		]);
 		const apparentGraphqlRead =
 			lower[1] === "graphql" &&
 			method === undefined &&
 			!lower.some((arg) => /\bmutation\b/u.test(arg));
 		if (
-			(method && method !== "GET" && method !== "HEAD") ||
+			(method && method !== "get" && method !== "head") ||
 			(hasBody && !apparentGraphqlRead)
 		)
 			effects.add("remote-write");
 		else effects.add("github-read");
 		return;
 	}
-	if (lower.some((arg) => GH_MUTATIONS.has(arg))) {
-		if (
-			lower[0] === "pr" &&
-			(lower.includes("create") || lower.includes("merge"))
-		)
-			effects.add("delivery");
-		else effects.add("remote-write");
-	} else effects.add("github-read");
+	const verb = lower[1];
+	if (lower[0] === "workflow" && verb === "run") {
+		effects.add("remote-write");
+		return;
+	}
+	if (lower[0] === "pr" && (verb === "create" || verb === "merge")) {
+		effects.add("delivery");
+		return;
+	}
+	if (verb && GH_READS.has(verb)) {
+		effects.add("github-read");
+		return;
+	}
+	if (verb && GH_MUTATIONS.has(verb)) {
+		effects.add("remote-write");
+		return;
+	}
+	// Unknown extension/alias/subcommand behavior must never inherit read auth.
+	effects.add("unknown");
 }
 
 function classifyHttp(args: readonly string[], effects: Set<BashEffect>): void {
+	if (hasOption(args, ["-K", "--config"])) effects.add("unknown");
 	if (isReadOnlyHttp(args)) effects.add("remote-read");
 	else effects.add("remote-write");
+	if (hasLocalHttpOutput(args)) effects.add("workspace-write");
 }
 
 function isReadOnlyHttp(args: readonly string[]): boolean {
-	const methodAt = args.findIndex(
-		(arg) => arg === "-X" || arg === "--request" || /^-X\w+/u.test(arg),
-	);
-	const methodToken = methodAt >= 0 ? args[methodAt] : undefined;
-	const method =
-		methodToken && /^-X\w+/u.test(methodToken)
-			? methodToken.slice(2).toUpperCase()
-			: methodAt >= 0
-				? args[methodAt + 1]?.toUpperCase()
-				: undefined;
-	const bodyFlags = new Set([
+	const method = optionValue(args, ["-X", "--request"]);
+	const hasBody = hasOption(args, [
 		"-d",
 		"--data",
 		"--data-raw",
@@ -557,14 +646,46 @@ function isReadOnlyHttp(args: readonly string[]): boolean {
 		"--post-data",
 		"--post-file",
 	]);
-	const hasBody = args.some(
-		(arg) =>
-			bodyFlags.has(arg) ||
-			/^--(?:data|data-raw|data-binary|data-urlencode|upload-file|form|form-string|json|post-data|post-file)=/u.test(
-				arg,
-			),
+	return (!method || method === "get" || method === "head") && !hasBody;
+}
+
+function hasLocalHttpOutput(args: readonly string[]): boolean {
+	return hasOption(args, [
+		"-o",
+		"--output",
+		"-O",
+		"--output-document",
+		"-P",
+		"--directory-prefix",
+	]);
+}
+
+function optionValue(
+	args: readonly string[],
+	names: readonly string[],
+): string | undefined {
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index] ?? "";
+		for (const name of names) {
+			if (arg === name) return args[index + 1]?.toLowerCase();
+			if (arg.startsWith(`${name}=`))
+				return arg.slice(name.length + 1).toLowerCase();
+			if (name.length === 2 && arg.startsWith(name) && arg.length > 2)
+				return arg.slice(2).toLowerCase();
+		}
+	}
+	return undefined;
+}
+
+function hasOption(args: readonly string[], names: readonly string[]): boolean {
+	return args.some((arg) =>
+		names.some(
+			(name) =>
+				arg === name ||
+				arg.startsWith(`${name}=`) ||
+				(name.length === 2 && arg.startsWith(name) && arg.length > 2),
+		),
 	);
-	return (!method || method === "GET" || method === "HEAD") && !hasBody;
 }
 
 function privilegedRoute(

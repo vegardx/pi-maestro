@@ -22,7 +22,8 @@ export const EXECUTION_POLICY_SETTINGS = [
 			{
 				value: "strict",
 				label: "Strict",
-				description: "Prefer strong isolation and confirm all mutations.",
+				description:
+					"Protect Recon/Plan with strong isolation and confirm local mutations elsewhere.",
 			},
 			{
 				value: "permissive",
@@ -63,10 +64,9 @@ export const EXECUTION_POLICY_SETTINGS = [
 		default: "protected-research",
 		group: "execution-policy",
 		description:
-			"Protect recon and plan, isolate workers, and keep Hack direct.",
+			"Protect Recon and Plan while keeping Auto work direct and Hack explicitly unrestricted.",
 		options: [
 			{ value: "protected-research", label: "Protected research", recommended },
-			{ value: "isolated", label: "Isolate all non-Hack modes" },
 			{
 				value: "direct",
 				label: "Prefer direct",
@@ -188,89 +188,6 @@ export const EXECUTION_POLICY_SETTINGS = [
 				label: "Confirm weaker tier",
 				warning: "May weaken isolation.",
 			},
-		],
-	},
-] as const satisfies readonly SettingDeclaration[];
-
-export const WORKER_POLICY_SETTINGS = [
-	{
-		key: "workers.dependencyStrategy",
-		label: "Dependency strategy",
-		type: "choice",
-		default: "local-install",
-		group: "worker-worktrees",
-		description:
-			"Prefer worktree-local dependencies backed by shared content caches.",
-		options: [
-			{ value: "local-install", label: "Local install", recommended },
-			{ value: "copy-on-write", label: "Copy-on-write snapshot" },
-			{
-				value: "explicit-links",
-				label: "Explicit shared links",
-				warning: "Creates shared mutable state.",
-			},
-		],
-	},
-	{
-		key: "workers.packageManager",
-		label: "Package manager",
-		type: "choice",
-		default: "auto",
-		group: "worker-worktrees",
-		description:
-			"Detect from lockfiles or select the expected package manager.",
-		options: [
-			{ value: "auto", label: "Detect from lockfile", recommended },
-			{ value: "npm", label: "npm" },
-			{ value: "pnpm", label: "pnpm" },
-			{ value: "yarn", label: "Yarn" },
-			{ value: "bun", label: "Bun" },
-		],
-	},
-	{
-		key: "workers.sharedCache",
-		label: "Shared package cache",
-		type: "choice",
-		default: "enabled",
-		group: "worker-worktrees",
-		description:
-			"Share immutable package content caches, not installed dependency trees.",
-		options: [
-			{ value: "enabled", label: "Enabled", recommended },
-			{ value: "disabled", label: "Disabled" },
-		],
-	},
-	{
-		key: "workers.failurePolicy",
-		label: "Provisioning failure",
-		type: "choice",
-		default: "stop",
-		group: "worker-worktrees",
-		description:
-			"Do not activate a worker in a partially provisioned environment.",
-		options: [{ value: "stop", label: "Stop activation", recommended }],
-	},
-	{
-		key: "workers.repoOverrides",
-		label: "Repository overrides",
-		type: "string-list",
-		default: [],
-		group: "worker-worktrees",
-		description:
-			"Repository-specific provisioning hints; project scope normally owns these values.",
-	},
-	{
-		key: "workers.provisioningReport",
-		label: "Provisioning report",
-		type: "choice",
-		default: "summary",
-		group: "worker-worktrees",
-		description:
-			"Report copied, linked, installed, skipped, and failed provisioning outcomes.",
-		options: [
-			{ value: "summary", label: "Always summarize", recommended },
-			{ value: "problems", label: "Problems only" },
-			{ value: "quiet", label: "Quiet" },
 		],
 	},
 ] as const satisfies readonly SettingDeclaration[];

@@ -19,7 +19,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	EXECUTION_POLICY_SETTINGS,
-	WORKER_POLICY_SETTINGS,
 	WORKTREE_SETTINGS,
 } from "../packages/modes/src/setting-declarations.js";
 import {
@@ -114,10 +113,7 @@ beforeEach(() => {
 	});
 	resetSessionRoleOverrides();
 	resetSessionSettingOverrides();
-	settingsRegistry.set("modes", [
-		...EXECUTION_POLICY_SETTINGS,
-		...WORKER_POLICY_SETTINGS,
-	]);
+	settingsRegistry.set("modes", [...EXECUTION_POLICY_SETTINGS]);
 	settingsRegistry.set("maestro", [...WORKTREE_SETTINGS]);
 });
 
@@ -147,10 +143,8 @@ describe("hierarchical Maestro settings", () => {
 		worktrees.handleInput("Worker worktrees");
 		worktrees.handleInput("\r");
 		rendered = worktrees.render(160).join("\n");
-		expect(rendered).toContain("Dependency strategy");
 		expect(rendered).toContain("Post-setup command");
 		expect(rendered).toContain("Ignored assets to copy");
-		expect(rendered).toContain("Provisioning report");
 	});
 
 	it("uses core SettingsList with search and standard cancellation", () => {

@@ -138,7 +138,7 @@ export type IsolationTier = "lightweight" | "strong" | "none";
 export interface ExecutionPolicySettings {
 	preset: ExecutionPolicyPreset | "custom";
 	toolGuidance: "mode-aware" | "advisory" | "off";
-	modeRoutes: "protected-research" | "isolated" | "direct";
+	modeRoutes: "protected-research" | "direct";
 	isolation: IsolationTier;
 	delivery: "dedicated-tools";
 	consequential: "confirm" | "confirm-mutations" | "allow";
@@ -165,7 +165,7 @@ const POLICY_PRESETS: Record<
 	},
 	strict: {
 		toolGuidance: "mode-aware",
-		modeRoutes: "isolated",
+		modeRoutes: "protected-research",
 		isolation: "strong",
 		delivery: "dedicated-tools",
 		consequential: "confirm-mutations",
@@ -223,7 +223,7 @@ export function readExecutionPolicySettings(
 		),
 		modeRoutes: read(
 			"modeRoutes",
-			["protected-research", "isolated", "direct"],
+			["protected-research", "direct"],
 			defaults.modeRoutes,
 		),
 		isolation: read(

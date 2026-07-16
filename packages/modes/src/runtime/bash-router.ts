@@ -81,7 +81,7 @@ export function resolveBashOperations(
 		case "confirm":
 			return direct;
 		case "host-read":
-			return backends.hostRead?.(cwd) ?? direct;
+			return requiredBackend("host-read", backends.hostRead?.(cwd));
 		case "lightweight":
 			return requiredBackend("lightweight", backends.lightweight?.(cwd));
 		case "strong":
@@ -92,12 +92,12 @@ export function resolveBashOperations(
 }
 
 function requiredBackend(
-	tier: "lightweight" | "strong",
+	tier: "host-read" | "lightweight" | "strong",
 	operations: BashOperations | undefined,
 ): BashOperations {
 	if (operations) return operations;
 	throw new Error(
-		`${tier[0]?.toUpperCase()}${tier.slice(1)} Bash isolation is required by policy but no ${tier} backend is available. Configure an isolation provider, change the execution policy explicitly, or use Hack for authorized direct execution.`,
+		`${tier === "host-read" ? "Protected host-read" : `${tier[0]?.toUpperCase()}${tier.slice(1)} Bash isolation`} is required by policy but no ${tier} backend is available. Configure a backend, change the execution policy explicitly, or use Hack for authorized direct execution.`,
 	);
 }
 

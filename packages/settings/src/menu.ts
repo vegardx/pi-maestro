@@ -746,11 +746,22 @@ function advancedScopeMenu(
 	declaration: SettingDeclaration,
 	done: (value?: string) => void,
 ): Component {
-	const { key: path, type, default: defaultValue } = declaration;
-	const layered = readDeclaredValue(ctx.cwd, extension, declaration);
+	const { key: path, type } = declaration;
+	const defaultValue = declarationDefault(ctx, extension, declaration);
+	const layered = readDeclaredValue(
+		ctx.cwd,
+		extension,
+		declaration,
+		defaultValue,
+	);
 	// Match the parent row's `effective · source` format, freshly read.
 	const finish = () => {
-		const fresh = readDeclaredValue(ctx.cwd, extension, declaration);
+		const fresh = readDeclaredValue(
+			ctx.cwd,
+			extension,
+			declaration,
+			defaultValue,
+		);
 		done(`${formatSettingValue(fresh.effective)} · ${fresh.source}`);
 	};
 	return settingsComponent(

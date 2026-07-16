@@ -11,7 +11,6 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	EXECUTION_POLICY_SETTINGS,
-	WORKER_POLICY_SETTINGS,
 	WORKTREE_SETTINGS,
 } from "../packages/modes/src/setting-declarations.js";
 import { readExecutionPolicySettings } from "../packages/modes/src/settings.js";
@@ -49,10 +48,7 @@ describe("/settings command", () => {
 
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "settings-cmd-"));
-		settingsRegistry.set("modes", [
-			...EXECUTION_POLICY_SETTINGS,
-			...WORKER_POLICY_SETTINGS,
-		]);
+		settingsRegistry.set("modes", [...EXECUTION_POLICY_SETTINGS]);
 		settingsRegistry.set("maestro", [...WORKTREE_SETTINGS]);
 	});
 

@@ -28,7 +28,6 @@ import { createReviewTool } from "../review-tool.js";
 import type { SubAgentSpec } from "../schema.js";
 import {
 	EXECUTION_POLICY_SETTINGS,
-	WORKER_POLICY_SETTINGS,
 	WORKTREE_SETTINGS,
 } from "../setting-declarations.js";
 import { readResearchWatchdogSettings } from "../settings.js";
@@ -344,7 +343,6 @@ export function createModesRuntime(
 	const settings = maestro.capabilities.get(CAPABILITIES.settings);
 	settings?.declare("modes", [
 		...EXECUTION_POLICY_SETTINGS,
-		...WORKER_POLICY_SETTINGS,
 		// Distill threshold ladder — read by readDistillSettings under
 		// extensionConfig.modes.distill. Fractions of context fill.
 		{

@@ -17,14 +17,16 @@ The controller:
 - gives commands a private home, temp directory, and caches;
 - allows writes only in that phase directory and explicitly denies the real
   checkout and sandbox-runtime's broad compatibility write defaults;
-- keeps broad host reads for developer-tool compatibility, while denying common
-  credential stores;
-- proxy-mediates general external network access, rejects localhost/private
-  address ranges, blocks local binding, and allows no Unix control sockets;
+- keeps broad system/repository reads for developer-tool compatibility while
+  denying the host home/config hierarchy;
+- disables network access because hostname-only proxy approval cannot safely
+  prevent DNS rebinding/private-address resolution; blocks local binding and
+  allows no Unix control sockets;
 - constructs an allowlisted child environment without Maestro RPC/session,
   tmux, SSH/GPG agent, or obvious secret variables;
-- supervises the detached process group and kills descendants on cancellation,
-  timeout, mode exit, or session shutdown.
+- supervises the detached process group and kills it on cancellation, timeout,
+  mode exit, or session shutdown. This is best-effort process cleanup, not a
+  VM/cgroup guarantee; use Strong for adversarial code.
 
 There is no copy-back. Entering Auto or Hack ends the epoch. Recon→Plan shares
 the same private workspace so generated research artifacts remain available.
@@ -32,8 +34,9 @@ the same private workspace so generated research artifacts remain available.
 ## Failure and tier behavior
 
 Isolation never retries directly by itself. A setup failure is visible and
-presents Cancel, direct-once, None-for-session, and Hack choices; every weaker
-choice requires explicit confirmation. Configured `None` likewise confirms
+obeys the selected fallback policy. Fail-closed offers only cancellation;
+confirmation-enabled fallback may offer direct-once, None-for-session, or Hack,
+and every weaker choice requires explicit confirmation. Configured `None` likewise confirms
 host execution in protected modes. `Strong` is a reserved backend contract and
 reports unavailable until a VM/container provider is installed.
 

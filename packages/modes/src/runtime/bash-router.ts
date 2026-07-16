@@ -75,6 +75,7 @@ export function registerBashRouter(rt: RuntimeContext): void {
 				const action = await isolationFailureAction(
 					error.tier,
 					error.message,
+					policy.fallback,
 					ctx,
 				);
 				if (action === "cancel") throw error;
@@ -117,14 +118,18 @@ export type IsolationFailureAction =
 export async function isolationFailureAction(
 	tier: IsolationBackendTier,
 	detail: string,
+	fallback: "fail-closed" | "confirm",
 	ctx: Pick<ExtensionContext, "ui">,
 ): Promise<IsolationFailureAction> {
-	const choices = [
-		"Cancel (recommended)",
-		"Run direct once",
-		"Use None for this session",
-		"Enter Hack and run direct",
-	];
+	const choices =
+		fallback === "fail-closed"
+			? ["Cancel (policy is fail-closed)"]
+			: [
+					"Cancel (recommended)",
+					"Run direct once",
+					"Use None for this session",
+					"Enter Hack and run direct",
+				];
 	const choice = await ctx.ui.select(
 		`${tier[0]?.toUpperCase()}${tier.slice(1)} isolation failed`,
 		choices,
@@ -151,7 +156,7 @@ export function resolveBashOperations(
 		case "confirm":
 			return direct;
 		case "host-read":
-			return backends.hostRead?.(cwd) ?? direct;
+			return requiredBackend("host-read", backends.hostRead?.(cwd));
 		case "lightweight":
 			return requiredBackend("lightweight", backends.lightweight?.(cwd));
 		case "strong":
@@ -162,10 +167,14 @@ export function resolveBashOperations(
 }
 
 function requiredBackend(
-	tier: "lightweight" | "strong",
+	tier: "host-read" | "lightweight" | "strong",
 	operations: BashOperations | undefined,
 ): BashOperations {
 	if (operations) return operations;
+	if (tier === "host-read")
+		throw new Error(
+			"Protected host-read is required by policy but no write-restricted host-read backend is available.",
+		);
 	throw new IsolationUnavailableError(
 		tier,
 		`${tier[0]?.toUpperCase()}${tier.slice(1)} Bash isolation is required by policy but no ${tier} backend is available.`,

@@ -228,6 +228,12 @@ export function createRuntimeContext(
 		opts.isolationBackends?.strong ?? new ReservedStrongIsolationBackend();
 	const bashBackends = {
 		...opts.bashBackends,
+		// Protected reads use the same private-workspace policy rather than an
+		// unrestricted local shell. This also avoids a separate writable host-read
+		// implementation accidentally broadening the policy.
+		hostRead:
+			opts.bashBackends?.hostRead ??
+			((cwd: string) => lightweightIsolation.operations(cwd)),
 		lightweight:
 			opts.bashBackends?.lightweight ??
 			((cwd: string) => lightweightIsolation.operations(cwd)),

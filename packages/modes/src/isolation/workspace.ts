@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import {
-	copyFile,
 	lstat,
 	mkdir,
 	mkdtemp,
+	open,
 	readdir,
 	readlink,
 	realpath,
@@ -192,7 +193,46 @@ async function copySafeEntry(
 	}
 	if (!stat.isFile())
 		throw new Error(`Snapshot excludes non-regular entry: ${entry}`);
-	await copyFile(source, destination);
+	await copyRegularFileNoFollow(source, destination, stat.mode);
+}
+
+async function copyRegularFileNoFollow(
+	source: string,
+	destination: string,
+	mode: number,
+): Promise<void> {
+	// O_NOFOLLOW closes the regular-file -> symlink swap between lstat and open.
+	// fstat then verifies the opened inode before any bytes are copied.
+	const input = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+	let output: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		const opened = await input.stat();
+		if (!opened.isFile())
+			throw new Error(`Snapshot source changed type during copy: ${source}`);
+		output = await open(
+			destination,
+			constants.O_WRONLY |
+				constants.O_CREAT |
+				constants.O_EXCL |
+				constants.O_NOFOLLOW,
+			mode & 0o777,
+		);
+		const buffer = Buffer.allocUnsafe(64 * 1024);
+		let position = 0;
+		for (;;) {
+			const { bytesRead } = await input.read(
+				buffer,
+				0,
+				buffer.length,
+				position,
+			);
+			if (bytesRead === 0) break;
+			await output.write(buffer, 0, bytesRead, position);
+			position += bytesRead;
+		}
+	} finally {
+		await Promise.allSettled([input.close(), output?.close()]);
+	}
 }
 
 function safeRelative(path: string): boolean {

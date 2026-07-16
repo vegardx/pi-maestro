@@ -575,8 +575,14 @@ export class ExecutionAdapter {
 				const sessionModelId = this.opts.ctx.model
 					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
 					: undefined;
+				// A resumed worker restores its model from its own session file
+				// (pi falls back to the last assistant message's model), which may
+				// be stale or no longer served by the gateway. Always pass the
+				// freshly resolved model on resume; only fresh spawns may omit it
+				// when it matches the maestro session's model.
 				const modelOverride =
-					resolvedWork.modelId === sessionModelId
+					resolvedWork.modelId === sessionModelId &&
+					!spawnOpts.resumeSessionFile
 						? undefined
 						: resolvedWork.modelId;
 				const thinkingOverride = resolvedWork.effort;

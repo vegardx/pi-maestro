@@ -77,8 +77,8 @@ export function buildCorpusFixtures(
 	options: FixtureOptions = {},
 ): FixtureSet {
 	const sorted = [...calls].sort(compareChronologically);
-	const dated = sorted.filter((call) =>
-		validDate(call.timestamp ?? call.sessionTimestamp),
+	const dated = sorted.filter(
+		(call) => parseTimestamp(call.timestamp ?? call.sessionTimestamp) !== null,
 	);
 	const boundary = resolveBoundary(dated, options);
 	const maxPerPartition = Math.max(0, options.maxPerPartition ?? 200);
@@ -86,8 +86,9 @@ export function buildCorpusFixtures(
 	const holdout: SanitizedBashFixture[] = [];
 
 	for (const call of sorted) {
+		const callTime = parseTimestamp(call.timestamp ?? call.sessionTimestamp);
 		const partition =
-			boundary && validDate(call.timestamp ?? call.sessionTimestamp) >= boundary
+			boundary !== null && callTime !== null && callTime >= boundary
 				? "holdout"
 				: "training";
 		const target = partition === "holdout" ? holdout : training;
@@ -127,7 +128,7 @@ export function buildCorpusFixtures(
 
 	return {
 		version: 1,
-		holdoutStart: boundary ? new Date(boundary).toISOString() : null,
+		holdoutStart: boundary !== null ? new Date(boundary).toISOString() : null,
 		training,
 		holdout,
 		adversarial,
@@ -217,22 +218,29 @@ function resolveBoundary(
 	const fraction = Math.min(0.9, Math.max(0, options.holdoutFraction ?? 0.2));
 	if (fraction === 0) return null;
 	const index = Math.max(0, Math.floor(calls.length * (1 - fraction)));
-	return validDate(
-		calls[Math.min(index, calls.length - 1)].timestamp ??
-			calls[Math.min(index, calls.length - 1)].sessionTimestamp,
+	return (
+		parseTimestamp(
+			calls[Math.min(index, calls.length - 1)].timestamp ??
+				calls[Math.min(index, calls.length - 1)].sessionTimestamp,
+		) ?? null
 	);
 }
 
 function compareChronologically(a: BashCorpusCall, b: BashCorpusCall): number {
-	const aTime = validDate(a.timestamp ?? a.sessionTimestamp);
-	const bTime = validDate(b.timestamp ?? b.sessionTimestamp);
+	const aTime =
+		parseTimestamp(a.timestamp ?? a.sessionTimestamp) ??
+		Number.NEGATIVE_INFINITY;
+	const bTime =
+		parseTimestamp(b.timestamp ?? b.sessionTimestamp) ??
+		Number.NEGATIVE_INFINITY;
 	if (aTime !== bTime) return aTime - bTime;
 	return a.id.localeCompare(b.id);
 }
 
-function validDate(value: string | undefined): number {
-	const parsed = value ? Date.parse(value) : Number.NEGATIVE_INFINITY;
-	return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+function parseTimestamp(value: string | undefined): number | null {
+	if (!value) return null;
+	const parsed = Date.parse(value);
+	return Number.isFinite(parsed) ? parsed : null;
 }
 
 function fixtureId(source: string, kind: string, command: string): string {

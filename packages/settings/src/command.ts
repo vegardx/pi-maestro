@@ -2,6 +2,7 @@
 // the interactive hierarchy; output stays intentionally plain and stable.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SettingDeclaration } from "@vegardx/pi-contracts";
 import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
 import {
 	activeProfile,
@@ -16,7 +17,9 @@ import {
 	modelOptions,
 	modelProfileKeys,
 	parseSettingValue,
+	parseStringList,
 	readAdvancedValue,
+	readDeclaredValue,
 	readProfileTargets,
 	readRoleLeaf,
 	resolveModelName,
@@ -29,6 +32,11 @@ import {
 	writeRoleLeaf,
 } from "./model.js";
 import { readLayeredExtensionConfig } from "./reader.js";
+import {
+	declaredSetting,
+	declaredSettingKeys,
+	settingsRegistry,
+} from "./registry.js";
 
 interface ProfileKey {
 	readonly profile: string;
@@ -86,6 +94,37 @@ function profileKeySuggestions(ctx: ExtensionContext): string[] {
 	return suggestions;
 }
 
+function declarationDefault(
+	ctx: ExtensionContext,
+	extension: string,
+	declaration: SettingDeclaration,
+) {
+	if (!declaration.presetDefaults) return declaration.default;
+	const preset = settingsRegistry
+		.get(extension)
+		?.find((candidate) => candidate.key === "execution.preset");
+	const selected = preset
+		? readDeclaredValue(ctx.cwd, extension, preset).effective
+		: undefined;
+	return typeof selected === "string"
+		? (declaration.presetDefaults[selected] ?? declaration.default)
+		: declaration.default;
+}
+
+function declaredLayered(ctx: ExtensionContext, key: string) {
+	const declared = declaredSetting(key);
+	if (!declared) return undefined;
+	return {
+		...declared,
+		layered: readDeclaredValue(
+			ctx.cwd,
+			declared.extension,
+			declared.declaration,
+			declarationDefault(ctx, declared.extension, declared.declaration),
+		),
+	};
+}
+
 function extensionKeySuggestions(ctx: ExtensionContext): string[] {
 	const { merged } = readLayeredExtensionConfig(ctx.cwd);
 	const out: string[] = [];
@@ -99,7 +138,7 @@ function extensionKeySuggestions(ctx: ExtensionContext): string[] {
 	};
 	for (const [extension, config] of Object.entries(merged))
 		walk(config, extension);
-	return out;
+	return [...new Set([...out, ...declaredSettingKeys()])];
 }
 
 function handleShow(ctx: ExtensionContext): void {
@@ -130,11 +169,11 @@ function handleShow(ctx: ExtensionContext): void {
 			);
 		}
 	}
-	const { merged } = readLayeredExtensionConfig(ctx.cwd);
-	if (Object.keys(merged).length > 0) {
+	const keys = extensionKeySuggestions(ctx);
+	if (keys.length > 0) {
 		lines.push("", "Extension settings:");
 		let previousExtension = "";
-		for (const key of extensionKeySuggestions(ctx)) {
+		for (const key of keys) {
 			const dot = key.indexOf(".");
 			if (dot < 1) continue;
 			const extension = key.slice(0, dot);
@@ -142,7 +181,10 @@ function handleShow(ctx: ExtensionContext): void {
 				lines.push(`Extension: ${extension}`);
 				previousExtension = extension;
 			}
-			const layered = readAdvancedValue(ctx.cwd, extension, key.slice(dot + 1));
+			const declared = declaredLayered(ctx, key);
+			const layered =
+				declared?.layered ??
+				readAdvancedValue(ctx.cwd, extension, key.slice(dot + 1));
 			lines.push(
 				`  ${key} = ${formatSettingValue(layered.effective)} [${layered.source}]`,
 			);
@@ -172,6 +214,14 @@ function handleGet(args: string, ctx: ExtensionContext) {
 		);
 		ctx.ui.notify(
 			`${key} = ${formatSettingValue(value.effective)} [${value.source ?? "fallback"}]`,
+			"info",
+		);
+		return;
+	}
+	const declared = declaredLayered(ctx, key);
+	if (declared) {
+		ctx.ui.notify(
+			`${key} = ${formatSettingValue(declared.layered.effective)} [${declared.layered.source}]`,
 			"info",
 		);
 		return;
@@ -239,6 +289,40 @@ function handleSet(args: string, ctx: ExtensionContext) {
 		}
 		ctx.ui.notify(
 			`✓ Set ${parsed.key} = ${formatSettingValue(values)} [${scope}]`,
+			"info",
+		);
+		return;
+	}
+	const declared = declaredSetting(parsed.key);
+	if (declared) {
+		const parsedValue =
+			declared.declaration.type === "string-list"
+				? parseStringList(parsed.raw)
+				: parseSettingValue(parsed.raw);
+		if (parsedValue === undefined)
+			return ctx.ui.notify(
+				"String-list values require JSON or newline-separated strings.",
+				"warning",
+			);
+		if (
+			declared.declaration.type === "choice" &&
+			!declared.declaration.options?.some(
+				(option) => option.value === parsedValue,
+			)
+		)
+			return ctx.ui.notify(
+				`Invalid value. Choose: ${declared.declaration.options?.map((option) => option.value).join(", ")}`,
+				"warning",
+			);
+		writeAdvancedValue(
+			ctx.cwd,
+			declared.extension,
+			declared.declaration.key,
+			scope,
+			parsedValue,
+		);
+		ctx.ui.notify(
+			`✓ Set ${parsed.key} = ${formatSettingValue(parsedValue)} [${scope}]`,
 			"info",
 		);
 		return;
@@ -612,6 +696,13 @@ export function getSettingsCompletions(
 	const valuePosition =
 		parts.length > offset + 1 || (trailing && parts.length > offset);
 	if (sub === "set" && valuePosition) {
+		const declared = declaredSetting(key);
+		const valuePrefix = trailing ? "" : (parts.at(-1) ?? "");
+		if (declared?.declaration.type === "choice")
+			return (declared.declaration.options ?? [])
+				.map((option) => option.value)
+				.filter((value) => value.startsWith(valuePrefix));
+		if (declared?.declaration.type === "string-list") return ['["path"]'];
 		if (key.endsWith(".efforts"))
 			return [`["${THINKING_LEVELS[0]}"]`, ...THINKING_LEVELS];
 		if (key.endsWith(".models") || key.endsWith(".targets"))

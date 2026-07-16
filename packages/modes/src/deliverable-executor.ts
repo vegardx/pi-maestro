@@ -130,6 +130,11 @@ export interface ExecutorDeps {
 	panelGate?: (deliverableId: string) => boolean;
 	/** Human-readable reason the gate is blocking (which reviewers, why). */
 	panelGateDetail?: (deliverableId: string) => string;
+	/**
+	 * New-deliverable activation gate: false defers phase-1 activation (running
+	 * deliverables still advance and ship). Absent → always allowed.
+	 */
+	canActivate?: () => boolean;
 	/** Current time. */
 	now: () => string;
 }
@@ -250,9 +255,13 @@ export class DeliverableExecutor {
 		const plan = this.engine.get();
 		const shipped: string[] = [];
 
-		// 1. Activate ready deliverables
-		for (const g of readyDeliverables(plan)) {
-			await this.activateDeliverable(g);
+		// 1. Activate ready deliverables — gated so plan edits outside an
+		// autonomous mode never start new work (ticks reach here from every
+		// plan mutation and the poll timer, not just /implement).
+		if (this.deps.canActivate?.() !== false) {
+			for (const g of readyDeliverables(plan)) {
+				await this.activateDeliverable(g);
+			}
 		}
 
 		// 2. For each active deliverable, check agent completion → spawn next

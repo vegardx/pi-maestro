@@ -113,6 +113,73 @@ describe("DeliverableExecutor — activation", () => {
 		);
 	});
 
+	it("does not activate anything while canActivate is false", async () => {
+		// Plan edits tick the executor from any mode; without the gate a
+		// `task add` in plan mode spawned workers (2026-07-16 incident).
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "Implement login" });
+
+		const deps = makeDeps({ canActivate: () => false });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		await executor.tick();
+
+		expect(engine.get().deliverables[0].status).toBe("planned");
+		expect(deps.createWorktree).not.toHaveBeenCalled();
+		expect(deps.spawnAgent).not.toHaveBeenCalled();
+	});
+
+	it("activates on the next tick once canActivate flips true", async () => {
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Auth", workerMode: "full" });
+		engine.addWorkItem("auth", { title: "Implement login" });
+
+		let autonomous = false;
+		const deps = makeDeps({ canActivate: () => autonomous });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick();
+		expect(deps.spawnAgent).not.toHaveBeenCalled();
+
+		autonomous = true;
+		await executor.tick();
+		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(deps.spawnAgent).toHaveBeenCalledWith(
+			expect.objectContaining({ deliverableId: "auth", agentName: "worker" }),
+		);
+	});
+
+	it("a closed gate still advances and ships running work", async () => {
+		// Leaving auto mid-run must not freeze in-flight deliverables: follow-on
+		// agents still spawn and completed work still ships.
+		const engine = setupPlan();
+		engine.addDeliverable({ title: "Work", workerMode: "full" });
+		engine.addWorkItem("work", { title: "task" });
+		engine.addAgent("work", {
+			name: "review",
+			mode: "read-only",
+			effort: "high",
+			focus: "security",
+			after: ["worker"],
+		});
+
+		let autonomous = true;
+		const deps = makeDeps({ canActivate: () => autonomous });
+		const executor = new DeliverableExecutor(engine, deps);
+		await executor.tick(); // activates while autonomous
+
+		autonomous = false; // user left auto mode mid-run
+		await executor.markAgentDone("work", "worker");
+		await executor.tick();
+		const state = executor.getStates().get("work")!;
+		expect(state.agents.get("review")!.status).toBe("working"); // phase 2 ran
+
+		await executor.markAgentDone("work", "review");
+		const shipped = await executor.tick();
+		expect(shipped).toEqual(["work"]); // phase 3 ran
+		expect(engine.get().deliverables[0].status).toBe("shipped");
+	});
+
 	it("does not activate deliverable with unmet deps", async () => {
 		const engine = setupPlan();
 		engine.addDeliverable({ title: "Auth", workerMode: "full", dependsOn: [] });

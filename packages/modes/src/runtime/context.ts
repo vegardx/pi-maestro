@@ -603,6 +603,11 @@ export function createRuntimeContext(
 					});
 					return { modelId: resolved.modelId, effort: resolved.effort };
 				},
+				// New deliverables activate only while autonomous. The adapter
+				// outlives mode switches (running workers must finish and ship),
+				// and every plan mutation ticks it — without this gate a `task
+				// add` in plan/recon mode spawns workers.
+				canActivate: () => rt.state.mode === "auto" || rt.state.mode === "hack",
 				onPlanChanged: () => rt.emitPlanChanged(),
 				onAgentStateChanged: (id, state) => {
 					usageLedger.record({ kind: "agent", id }, state.tokens);

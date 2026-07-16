@@ -9,6 +9,7 @@ import {
 import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.js";
 import {
 	authorizeBashDecision,
+	isolationFailureAction,
 	resolveBashOperations,
 } from "../packages/modes/src/runtime/bash-router.js";
 import type { ExecutionPolicySettings } from "../packages/modes/src/settings.js";
@@ -346,12 +347,12 @@ describe("bash coaching and routing policy", () => {
 		};
 		expect(
 			decideBashPolicy({
-				command: "cat README.md",
-				mode: "auto",
+				command: "npm test",
+				mode: "plan",
 				actor: "maestro",
-				policy: permissive,
-			}),
-		).toMatchObject({ route: "direct", guidance: "advisory" });
+				policy: { ...guided, isolation: "none" },
+			}).route,
+		).toBe("confirm");
 		expect(
 			decideBashPolicy({
 				command: "curl -X DELETE https://example.invalid/resource",
@@ -420,6 +421,18 @@ describe("bash coaching and routing policy", () => {
 		expect(confirm).toHaveBeenCalledWith(
 			"Run consequential command?",
 			expect.stringContaining("remote mutation"),
+		);
+
+		const select = vi.fn(async () => "Run direct once");
+		const approveFallback = vi.fn(async () => true);
+		await expect(
+			isolationFailureAction("lightweight", "seatbelt failed", {
+				ui: { select, confirm: approveFallback } as never,
+			}),
+		).resolves.toBe("direct-once");
+		expect(approveFallback).toHaveBeenCalledWith(
+			"Weaken isolation?",
+			expect.stringContaining("can modify the real checkout"),
 		);
 	});
 

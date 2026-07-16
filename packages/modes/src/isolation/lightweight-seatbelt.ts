@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
@@ -32,9 +33,11 @@ export interface SandboxRuntimeAdapter {
 			port?: number;
 		}) => Promise<boolean>,
 	): Promise<void>;
-	wrap(command: string, signal?: AbortSignal): Promise<string>;
+	wrap(command: string, signal?: AbortSignal, privateTmp?: string): Promise<string>;
 	reset(): Promise<void>;
 }
+
+let productionWrapQueue: Promise<void> = Promise.resolve();
 
 const productionRuntime: SandboxRuntimeAdapter = {
 	isSupportedPlatform: (platform) =>
@@ -47,8 +50,37 @@ const productionRuntime: SandboxRuntimeAdapter = {
 		),
 	initialize: (config, allowNetwork) =>
 		SandboxManager.initialize(config, allowNetwork, false),
-	wrap: (command, signal) =>
-		SandboxManager.wrapWithSandbox(command, "bash", undefined, signal),
+	wrap: (command, signal, privateTmp) => {
+		const run = productionWrapQueue.then(async () => {
+			// sandbox-runtime derives policy and an injected TMPDIR from controller
+			// globals. Point both at the private epoch while compiling the profile;
+			// otherwise its compatibility default broadens writes under host /tmp.
+			const previousTmp = process.env.TMPDIR;
+			const previousClaudeTmp = process.env.CLAUDE_TMPDIR;
+			if (privateTmp) {
+				process.env.TMPDIR = privateTmp;
+				process.env.CLAUDE_TMPDIR = privateTmp;
+			}
+			try {
+				return await SandboxManager.wrapWithSandbox(
+					command,
+					"bash",
+					undefined,
+					signal,
+				);
+			} finally {
+				if (previousTmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = previousTmp;
+				if (previousClaudeTmp === undefined) delete process.env.CLAUDE_TMPDIR;
+				else process.env.CLAUDE_TMPDIR = previousClaudeTmp;
+			}
+		});
+		productionWrapQueue = run.then(
+			() => {},
+			() => {},
+		);
+		return run;
+	},
 	reset: () => SandboxManager.reset(),
 };
 
@@ -152,10 +184,14 @@ export class LightweightSeatbeltBackend implements IsolationBackend {
 				"Research epoch ended during sandbox preparation",
 			);
 
-		const targetCwd = mapWorkspaceCwd(workspace, sourceCwd);
+		const targetCwd = mapWorkspaceCwd(workspace, await realpath(sourceCwd));
 		let wrapped: string;
 		try {
-			wrapped = await this.runtime.wrap(command, options.signal);
+			wrapped = await this.runtime.wrap(
+				command,
+				options.signal,
+				workspace.tmp,
+			);
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
 			this.state = "failed";

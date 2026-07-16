@@ -316,6 +316,82 @@ describe("execution adapter — lifecycle correctness", () => {
 		);
 	});
 
+	it("routes a blank planMutate deliverableId to the authenticated deliverable", async () => {
+		// Models routinely send "" for optional params; a blank id must mean
+		// "my own deliverable", not an ownership rejection.
+		engine.addDeliverable({ title: "Blank Id", workerMode: "full" });
+		engine.addWorkItem("blank-id", { title: "first" });
+		engine.addWorkItem("blank-id", { title: "second" });
+		await startAdapter("blank-id");
+
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const received: MaestroMessage[] = [];
+		client.on("message", (msg) => received.push(msg));
+		client.connect(join(tmpDir, "maestro.sock"), {
+			agentId: "blank-id/worker",
+			role: "agent",
+			token: TOKEN,
+			pid: process.pid,
+		});
+		await until(() => received.some((m) => m.type === "helloAck" && m.ok));
+
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "",
+			params: { taskId },
+		});
+		await until(() =>
+			received.some((m) => m.type === "planMutateResult" && m.id === "m1"),
+		);
+		const result = received.find(
+			(m) => m.type === "planMutateResult" && m.id === "m1",
+		) as { success: boolean };
+		expect(result.success).toBe(true);
+		expect(engine.get().deliverables[0].tasks[0].done).toBe(true);
+	});
+
+	it("rejects a foreign planMutate deliverableId, naming the agent's own", async () => {
+		engine.addDeliverable({ title: "Mine", workerMode: "full" });
+		engine.addWorkItem("mine", { title: "first" });
+		engine.addWorkItem("mine", { title: "second" });
+		await startAdapter("mine");
+
+		const client = new MaestroRpcClient({ reconnect: false });
+		clients.push(client);
+		const received: MaestroMessage[] = [];
+		client.on("message", (msg) => received.push(msg));
+		client.connect(join(tmpDir, "maestro.sock"), {
+			agentId: "mine/worker",
+			role: "agent",
+			token: TOKEN,
+			pid: process.pid,
+		});
+		await until(() => received.some((m) => m.type === "helloAck" && m.ok));
+
+		const taskId = engine.get().deliverables[0].tasks[0].id;
+		client.send({
+			type: "planMutate",
+			id: "m1",
+			action: "toggleTask",
+			deliverableId: "someone-elses",
+			params: { taskId },
+		});
+		await until(() =>
+			received.some((m) => m.type === "planMutateResult" && m.id === "m1"),
+		);
+		const result = received.find(
+			(m) => m.type === "planMutateResult" && m.id === "m1",
+		) as { success: boolean; error?: string };
+		expect(result.success).toBe(false);
+		// The error names the correct id so a looping model can self-correct.
+		expect(result.error).toContain('"mine"');
+		expect(engine.get().deliverables[0].tasks[0].done).toBe(false);
+	});
+
 	it("defers completion while a review round is in flight (panelRead seen, no verdict yet)", async () => {
 		engine.addDeliverable({ title: "Midreview", workerMode: "full" });
 		engine.addWorkItem("midreview", { title: "implement it" });

@@ -1014,4 +1014,101 @@ describe("crash-cap fail fires once", () => {
 			.map((l) => JSON.parse(l) as { event: string });
 		expect(events.filter((e) => e.event === "failed")).toHaveLength(1);
 	});
+
+	/** Build a started adapter over a pre-provisioned active deliverable. */
+	async function startOver(deliverableId: string): Promise<ExecutionAdapter> {
+		engine.setDeliverableStatus(deliverableId, "active");
+		engine.updateDeliverable(deliverableId, { worktreePath: tmpDir });
+		adapter = new ExecutionAdapter({
+			engine,
+			ctx: { cwd: tmpDir } as ExtensionContext,
+			extensionPath: "/nonexistent/ext",
+			defaultBranch: "main",
+			planDir: join(tmpDir, "plan"),
+			tmux,
+			token: TOKEN,
+			socketPath: join(tmpDir, "maestro.sock"),
+			restartKillTimeoutMs: 50,
+			restartPollMs: 5,
+			resolveWorkerModel: async (choice) => ({
+				modelId: choice.model ?? "test/worker",
+				effort: choice.effort ?? "low",
+			}),
+			onPlanChanged: () => {},
+		});
+		await adapter.start();
+		adapter.getExecutor().unblockDeliverable(deliverableId);
+		await adapter.tick();
+		return adapter;
+	}
+
+	it("force-fail parks a live worker recoverable and beats the respawn loop", async () => {
+		// Force-exiting a worker used to trigger crash-respawn (tasks remain,
+		// budget < 2) — the user could never fail a worker to run /recover.
+		engine.addDeliverable({ title: "Stuck", workerMode: "full" });
+		engine.addWorkItem("stuck", { title: "task" });
+		const adapter = await startOver("stuck");
+		const executor = adapter.getExecutor();
+		expect(executor.getAgentState("stuck", "worker")!.status).toBe("working");
+		expect(tmux.spawned).toHaveLength(1);
+
+		// A spent crash budget must not leak into the recovered worker.
+		const internals = adapter as unknown as {
+			respawnCount: Map<string, number>;
+			pollSessions(): Promise<void>;
+		};
+		internals.respawnCount.set("stuck/worker", 1);
+
+		// The user force-exited the worker: its tmux session is gone.
+		tmux.hasSessionImpl = async () => false;
+		await expect(
+			adapter.forceFailWorker("stuck", "user ran /recover"),
+		).resolves.toBe(true);
+
+		const worker = executor.getAgentState("stuck", "worker")!;
+		expect(worker.status).toBe("pending");
+		expect(worker.sessionId).toBeUndefined();
+		expect(executor.getStates().get("stuck")!.blocked).toContain(
+			"maestro restarted",
+		);
+		expect(internals.respawnCount.has("stuck/worker")).toBe(false);
+
+		// The crash-respawn loop must not resurrect it.
+		await internals.pollSessions();
+		await internals.pollSessions();
+		expect(tmux.spawned).toHaveLength(1);
+		expect(executor.getAgentState("stuck", "worker")!.status).toBe("pending");
+
+		// recoverInterrupted claims exactly this shape and respawns the worker.
+		const { recovered, failed } = await executor.recoverInterrupted();
+		expect(recovered).toEqual(["stuck"]);
+		expect(failed).toEqual([]);
+		expect(executor.getAgentState("stuck", "worker")!.status).toBe("working");
+		expect(tmux.spawned).toHaveLength(2);
+	});
+
+	it("force-fail aborts untouched when the session refuses to die", async () => {
+		engine.addDeliverable({ title: "Immortal", workerMode: "full" });
+		engine.addWorkItem("immortal", { title: "task" });
+		const adapter = await startOver("immortal");
+		const executor = adapter.getExecutor();
+		expect(executor.getAgentState("immortal", "worker")!.status).toBe(
+			"working",
+		);
+
+		tmux.hasSessionImpl = async () => true; // kill never lands
+		await expect(adapter.forceFailWorker("immortal", "test")).resolves.toBe(
+			false,
+		);
+		// Still live and still watched — nothing was marked pending.
+		expect(executor.getAgentState("immortal", "worker")!.status).toBe(
+			"working",
+		);
+		expect(executor.getStates().get("immortal")!.blocked).toBeUndefined();
+
+		// Nothing to fail at all → false, not a throw.
+		await expect(adapter.forceFailWorker("nonexistent", "test")).resolves.toBe(
+			false,
+		);
+	});
 });

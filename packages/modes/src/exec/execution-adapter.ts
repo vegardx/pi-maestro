@@ -23,6 +23,7 @@ import { agentName } from "../agent-names.js";
 import {
 	DeliverableExecutor,
 	type ExecutorDeps,
+	RESTART_BLOCK_PREFIX,
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
 import { planFingerprint } from "../engine.js";
@@ -1376,6 +1377,64 @@ export class ExecutionAdapter {
 		});
 		this.executor.failWorkerReplacement(preview.deliverableId, error);
 		return { ...preview, ok: false, error };
+	}
+
+	/**
+	 * Force-fail a worker on user demand (the /recover preflight): kill its
+	 * session, park the deliverable in the /recover-able restart shape, and
+	 * suppress the crash-respawn loop. Returns false when there is nothing to
+	 * fail (unknown deliverable, worker already done/summarizing) or the tmux
+	 * session refused to die — in that case nothing is mutated.
+	 */
+	async forceFailWorker(
+		deliverableId: string,
+		reason: string,
+	): Promise<boolean> {
+		return this.withLifecycle(async () => {
+			const state = this.executor.getStates().get(deliverableId);
+			const worker = state?.agents.get("worker");
+			if (!state || !worker) return false;
+			if (worker.status === "done" || worker.status === "summarizing") {
+				return false;
+			}
+			const agentKey = `${deliverableId}/worker`;
+			this.restarting.add(deliverableId);
+			try {
+				// Detach the RPC route before any await — buffered messages from
+				// the dying process must not land as fresh state.
+				this.rpcServer.disconnect(agentKey);
+				const session = worker.sessionId ?? this.sessionNames.get(agentKey);
+				// Dropping the poll mapping and the crash budget is what breaks
+				// the force-exit → auto-respawn loop: pollSessionsLocked iterates
+				// sessionNames, and a later /recover gets fresh respawn attempts.
+				this.sessionNames.delete(agentKey);
+				this.respawnCount.delete(agentKey);
+				if (session) {
+					const gone = await this.stopAndProveGone(agentKey, session, reason);
+					if (!gone) {
+						// Session survived the kill barrier: keep watching it and
+						// report failure instead of marking a live process pending.
+						this.sessionNames.set(agentKey, session);
+						return false;
+					}
+				}
+				this.executor.failWorkerReplacement(
+					deliverableId,
+					`${RESTART_BLOCK_PREFIX} — force-failed (${reason}); /recover respawns it (or /retry ${deliverableId})`,
+				);
+				this.logEvent("force-fail", { agent: agentKey, reason });
+				this.emitEvent({
+					kind: "failed",
+					agentKey,
+					deliverableTitle: this.deliverableTitle(deliverableId),
+					respawns: 0,
+				});
+				this.opts.onPlanChanged();
+				return true;
+			} finally {
+				this.restarting.delete(deliverableId);
+			}
+		});
 	}
 
 	private async stopAndProveGone(

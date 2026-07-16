@@ -159,7 +159,7 @@ describe("tmux transport hardening", () => {
 		return runner.launch(request, bus);
 	}
 
-	/** A compliant child: acks the prompt, emits agent_end, answers salvage. */
+	/** A compliant child: acks the prompt, settles, and answers salvage. */
 	const wellBehaved = () =>
 		fakeTmux({
 			respond: (req) => {
@@ -168,7 +168,7 @@ describe("tmux transport hardening", () => {
 					setTimeout(() => {
 						appendFileSync(
 							join(root, "run-1", "rpc-output.jsonl"),
-							`${JSON.stringify({ type: "agent_end" })}\n`,
+							`${JSON.stringify({ type: "agent_end" })}\n${JSON.stringify({ type: "agent_settled" })}\n`,
 						);
 					}, 30);
 					return { type: "response", id: req.id, success: true };
@@ -243,7 +243,7 @@ describe("tmux transport hardening", () => {
 			respond: (req) => {
 				if (req.type === "prompt") {
 					const out = join(root, "run-1", "rpc-output.jsonl");
-					const event = `${JSON.stringify({ type: "tool_execution_start", toolName: "grep" })}\n${JSON.stringify({ type: "agent_end" })}\n`;
+					const event = `${JSON.stringify({ type: "tool_execution_start", toolName: "grep" })}\n${JSON.stringify({ type: "agent_end" })}\n${JSON.stringify({ type: "agent_settled" })}\n`;
 					// Two writes, split mid-JSON.
 					setTimeout(() => appendFileSync(out, event.slice(0, 17)), 20);
 					setTimeout(() => appendFileSync(out, event.slice(17)), 50);

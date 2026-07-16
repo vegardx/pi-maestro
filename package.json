@@ -37,20 +37,20 @@
 		"prepare": "husky"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.2",
-		"@earendil-works/pi-agent-core": "^0.80.3",
-		"@earendil-works/pi-ai": "^0.80.3",
-		"@earendil-works/pi-coding-agent": "^0.80.3",
-		"@earendil-works/pi-tui": "^0.80.3",
-		"@sinclair/typebox": "^0.34.49",
-		"@types/node": "^24",
+		"@biomejs/biome": "^2.5.4",
+		"@earendil-works/pi-agent-core": "^0.80.8",
+		"@earendil-works/pi-ai": "^0.80.8",
+		"@earendil-works/pi-coding-agent": "^0.80.8",
+		"@earendil-works/pi-tui": "^0.80.8",
+		"@sinclair/typebox": "^0.34.52",
+		"@types/node": "^24.13.3",
 		"husky": "^9.1.7",
 		"jiti": "^2.7.0",
 		"semantic-release": "^25.0.7",
 		"typescript": "^6.0.3",
-		"vitest": "^4.1.9"
+		"vitest": "^4.1.10"
 	},
 	"engines": {
-		"node": ">=22"
+		"node": ">=22.19.0"
 	}
 }

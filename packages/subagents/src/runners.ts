@@ -9,8 +9,10 @@
 // fire-and-forget with onSettled firing the completion notification. The
 // mechanics are identical, so one runner serves both.
 
-import type { AgentEvent } from "@earendil-works/pi-agent-core";
-import type { RpcClientOptions } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSessionEvent,
+	RpcClientOptions,
+} from "@earendil-works/pi-coding-agent";
 import type {
 	InterruptResult,
 	RunId,
@@ -33,7 +35,7 @@ export interface RpcLike {
 	steer?(message: string): Promise<void>;
 	abort(): Promise<void>;
 	stop(): Promise<void>;
-	onEvent(listener: (event: AgentEvent) => void): () => void;
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void;
 	getLastAssistantText(): Promise<string | null>;
 }
 
@@ -442,7 +444,7 @@ function waitUntilIdle(client: RpcLike, pollMs = DEAD_POLL_MS): Promise<void> {
 			unsub();
 		};
 		const unsub = client.onEvent((event) => {
-			if (event.type === "agent_end") {
+			if (event.type === "agent_settled") {
 				cleanup();
 				resolve();
 			}
@@ -460,7 +462,7 @@ function waitUntilIdle(client: RpcLike, pollMs = DEAD_POLL_MS): Promise<void> {
 	});
 }
 
-function mapEvent(bus: RunBus, runId: RunId, event: AgentEvent): void {
+function mapEvent(bus: RunBus, runId: RunId, event: AgentSessionEvent): void {
 	// Lifecycle events only. Children stream token-by-token deltas
 	// (thinking/text/message_update) at hundreds of messages per second per
 	// run; forwarding them onto the host bus meant a synchronous events.jsonl

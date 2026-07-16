@@ -877,6 +877,8 @@ describe("RpcClient-backed runner", () => {
 		promptHang?: boolean;
 		/** Simulate the child process dying (RpcClient sets exitError on exit). */
 		exitError?: Error;
+		/** Emit agent_end without agent_settled to model retry/compaction. */
+		endOnly?: boolean;
 		captureEnv?: (env: Record<string, string> | undefined) => void;
 		captureArgs?: (args: string[] | undefined) => void;
 	}) {
@@ -899,13 +901,16 @@ describe("RpcClient-backed runner", () => {
 				if (opts.startHang) return new Promise<void>(() => {});
 				if (opts.startError) throw new Error(opts.startError);
 			},
-			// The runner owns the idle wait now (agent_end event); the fake emits
-			// its scripted events on prompt and ends the run unless told to hang.
+			// The runner owns the idle wait now (agent_settled event); the fake emits
+			// its scripted events on prompt and settles the run unless told to hang.
 			prompt: async () => {
 				if (opts.promptHang) return new Promise<void>(() => {});
 				queueMicrotask(() => {
 					for (const e of opts.emit ?? []) emit(e);
-					if (!opts.hang && !opts.exitError) emit({ type: "agent_end" });
+					if (!opts.hang && !opts.exitError) {
+						emit({ type: "agent_end" });
+						if (!opts.endOnly) emit({ type: "agent_settled" });
+					}
 				});
 			},
 			steer: async (m: string) => {
@@ -1055,6 +1060,13 @@ describe("RpcClient-backed runner", () => {
 		const result = await launch(factory, { timeoutMs: 15 }).result();
 		// A deadline kill settles timed-out — terminal, distinct from failed,
 		// and never retried by any layer.
+		expect(result.status).toBe("timed-out");
+		expect(result.error).toContain("run deadline exceeded");
+	});
+
+	it("waits for agent_settled rather than an intermediate agent_end", async () => {
+		const { factory } = fakeClient({ endOnly: true });
+		const result = await launch(factory, { timeoutMs: 15 }).result();
 		expect(result.status).toBe("timed-out");
 		expect(result.error).toContain("run deadline exceeded");
 	});

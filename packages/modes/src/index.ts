@@ -8,6 +8,18 @@ import { createModesRuntime } from "./runtime/index.js";
 
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
+export {
+	type AgentPosture,
+	type BashCorpusCall,
+	type BashCorpusOutcome,
+	type CorpusActor,
+	type CorpusDiagnostic,
+	type CorpusMode,
+	type ExtractCorpusOptions,
+	extractBashCorpusFile,
+	extractBashCorpusJsonl,
+	type SessionCorpus,
+} from "./bash-corpus.js";
 export type {
 	CompactionBucketSnapshot,
 	CompactionDecision,

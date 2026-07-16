@@ -39,6 +39,19 @@ export {
 	type TaxonomyRepresentative,
 	taxonomyDigest,
 } from "./bash-corpus-taxonomy.js";
+export {
+	replayShadowPolicies,
+	type ShadowBaselineReport,
+	type ShadowComparison,
+	type ShadowDecisionRecord,
+	type ShadowPolicy,
+	type ShadowPolicyDecision,
+	type ShadowPolicySummary,
+	type ShadowReplayInput,
+	type ShadowReplayOptions,
+	type ShadowRoute,
+	shadowBaselineDigest,
+} from "./bash-shadow-replay.js";
 export type {
 	CompactionBucketSnapshot,
 	CompactionDecision,

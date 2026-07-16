@@ -26,6 +26,11 @@ import type { ReviewLedger } from "../exec/findings.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
 import { createReviewTool } from "../review-tool.js";
 import type { SubAgentSpec } from "../schema.js";
+import {
+	EXECUTION_POLICY_SETTINGS,
+	WORKER_POLICY_SETTINGS,
+	WORKTREE_SETTINGS,
+} from "../setting-declarations.js";
 import { readResearchWatchdogSettings } from "../settings.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
 import { plansRoot } from "../storage.js";
@@ -334,7 +339,10 @@ export function createModesRuntime(
 
 	// Declare non-model runtime knobs for /maestro Advanced settings. Direct
 	// model and effort policy lives exclusively in profile role pools.
-	maestro.capabilities.get(CAPABILITIES.settings)?.declare("modes", [
+	const settings = maestro.capabilities.get(CAPABILITIES.settings);
+	settings?.declare("modes", [
+		...EXECUTION_POLICY_SETTINGS,
+		...WORKER_POLICY_SETTINGS,
 		// Distill threshold ladder — read by readDistillSettings under
 		// extensionConfig.modes.distill. Fractions of context fill.
 		{
@@ -380,6 +388,8 @@ export function createModesRuntime(
 			default: 600000,
 		},
 	]);
+	// Preserve the established extensionConfig.maestro.worktree.* namespace.
+	settings?.declare("maestro", [...WORKTREE_SETTINGS]);
 
 	maestro.capabilities.register(CAPABILITIES.modes, {
 		current: rt.currentMode,

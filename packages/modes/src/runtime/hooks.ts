@@ -172,9 +172,9 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		}
 	});
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		rt.isolationNoneSession = false;
-		void Promise.allSettled([
+		await Promise.allSettled([
 			rt.isolationBackends.lightweight.reset(),
 			rt.isolationBackends.strong.reset(),
 		]);

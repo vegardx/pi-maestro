@@ -51,6 +51,11 @@ export {
 	dedicatedToolSuggestion,
 } from "./bash-policy.js";
 export {
+	auditBashShadowCorpus,
+	type BashShadowReport,
+	createBashShadowPolicy,
+} from "./bash-policy-shadow.js";
+export {
 	replayShadowPolicies,
 	type ShadowBaselineReport,
 	type ShadowComparison,

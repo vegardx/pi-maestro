@@ -1,10 +1,12 @@
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import type { BashCorpusCall } from "../packages/modes/src/bash-corpus.js";
 import {
 	classifyBashEffects,
 	decideBashPolicy,
 	dedicatedToolSuggestion,
 } from "../packages/modes/src/bash-policy.js";
+import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.js";
 import {
 	authorizeBashDecision,
 	resolveBashOperations,
@@ -314,5 +316,33 @@ describe("bash coaching and routing policy", () => {
 			"Run consequential command?",
 			expect.stringContaining("remote mutation"),
 		);
+	});
+
+	it("shadow replay reports zero protected host-write routes", () => {
+		const commands = [
+			["recon-read", "git status", "recon"],
+			[
+				"plan-bypass",
+				"git status && python3 <<'PY'\nopen('owned','w').write('x')\nPY",
+				"plan",
+			],
+			["holdout-build", "npm test", "plan"],
+			["auto-remote", "gh api /x -X PATCH", "auto"],
+		] as const;
+		const calls: BashCorpusCall[] = commands.map(([id, command, mode]) => ({
+			id,
+			sessionId: "fixture",
+			command,
+			commandBytes: Buffer.byteLength(command),
+			commandTruncated: false,
+			mode,
+			actor: "maestro",
+			posture: "unknown",
+			nearbyTools: [],
+			outcome: { status: "missing" },
+		}));
+		const report = auditBashShadowCorpus(calls, guided);
+		expect(report.unexplainedProtectedHostWrites).toEqual([]);
+		expect(report.unknown).toContain("plan-bypass");
 	});
 });

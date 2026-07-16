@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+	BashOperations,
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -82,6 +83,13 @@ import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
 	readonly now?: () => string;
+	/** Injectable execution providers; missing isolation tiers fail closed. */
+	readonly bashBackends?: {
+		readonly direct?: (cwd: string) => BashOperations | undefined;
+		readonly hostRead?: (cwd: string) => BashOperations | undefined;
+		readonly lightweight?: (cwd: string) => BashOperations | undefined;
+		readonly strong?: (cwd: string) => BashOperations | undefined;
+	};
 }
 
 /**
@@ -97,6 +105,7 @@ export interface RuntimeContext {
 	readonly overlayManager: OverlayManager;
 	readonly usageLedger: UsageLedger;
 	readonly workerPanes: WorkerPanes;
+	readonly bashBackends: NonNullable<ModesRuntimeOptions["bashBackends"]>;
 	readonly viewState: ViewState;
 	readonly listeners: Set<(mode: ModeName, previous: ModeName) => void>;
 
@@ -216,6 +225,7 @@ export function createRuntimeContext(
 		overlayManager,
 		usageLedger,
 		workerPanes: new WorkerPanes(),
+		bashBackends: opts.bashBackends ?? {},
 		viewState: { viewPaneId: undefined },
 		listeners: new Set(),
 

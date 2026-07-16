@@ -9,7 +9,6 @@ import type {
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
-import { classifyBashFast, classifyBashIntent } from "../bash-classifier.js";
 import {
 	buildDeliverableSliceCompactionResult,
 	COMPACTION_SCHEMA_VERSION,
@@ -21,10 +20,7 @@ import {
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
-import {
-	readModesCompactionSettings,
-	resolveInternalRoleModel,
-} from "../settings.js";
+import { readModesCompactionSettings } from "../settings.js";
 import { createModesSummariser } from "../summarise.js";
 import { tmuxRequirementIssues } from "../tmux-check.js";
 import {
@@ -349,66 +345,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		)
 			return;
 		if (event.toolName === "ask") return;
-		if (event.toolName === "bash") {
-			const command =
-				typeof event.input.command === "string" ? event.input.command : "";
-			// Fast path: regex classification
-			const fast = classifyBashFast(command);
-			if (fast !== null) {
-				// Workers: only block on tool suggestions + rm outside worktree
-				if (fast.suggestedTool) {
-					return {
-						block: true,
-						reason: `Use the ${fast.suggestedTool} tool instead.`,
-					};
-				}
-				if (!fast.allowed && rt.state.mode === "agent") {
-					// Read-only agents: block ALL non-allowed bash commands
-					if (process.env.PI_MAESTRO_AGENT_MODE === "read-only") {
-						return {
-							block: true,
-							reason:
-								"Read-only agent: only read commands allowed (ls, cat, grep, git log/status/diff, test/lint).",
-						};
-					}
-					// Full agents can mutate, but block rm with absolute paths
-					if (/\b(rm|rmdir)\s+.*\//.test(command)) {
-						return { block: true, reason: fast.reason };
-					}
-					return;
-				}
-				if (!fast.allowed) {
-					return { block: true, reason: fast.reason };
-				}
-				return;
-			}
-			// Workers: ambiguous commands are allowed (no LLM classifier)
-			// EXCEPT read-only agents which block anything ambiguous
-			if (rt.state.mode === "agent") {
-				if (process.env.PI_MAESTRO_AGENT_MODE === "read-only") {
-					return {
-						block: true,
-						reason:
-							"Read-only agent: only read commands allowed (ls, cat, grep, git log/status/diff, test/lint).",
-					};
-				}
-				return;
-			}
-			// Ambiguous: LLM classification (maestro only)
-			const classifierModel = ctx
-				? (await resolveInternalRoleModel(ctx, "classifier")).modelId
-				: undefined;
-			const intent = await classifyBashIntent(command, {
-				model: classifierModel,
-			});
-			if (!intent.allowed) return { block: true, reason: intent.reason };
-			if (intent.suggestedTool)
-				return {
-					block: true,
-					reason: `Use the ${intent.suggestedTool} tool instead: ${intent.intent}`,
-				};
-			return;
-		}
+		if (event.toolName === "bash") return;
 		// In auto mode, non-bash tools are gated by the active-tools filter
 		// (+ bridge force-add for agents). Only block in recon/plan mode.
 		if (rt.state.mode === "recon") {

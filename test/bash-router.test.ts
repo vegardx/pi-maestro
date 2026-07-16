@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 import {
 	classifyBashEffects,
 	decideBashPolicy,
 	dedicatedToolSuggestion,
 } from "../packages/modes/src/bash-policy.js";
+import {
+	authorizeBashDecision,
+	resolveBashOperations,
+} from "../packages/modes/src/runtime/bash-router.js";
 import type { ExecutionPolicySettings } from "../packages/modes/src/settings.js";
 import { analyzeShellProgram } from "../packages/modes/src/shell-program.js";
 
@@ -266,5 +271,48 @@ describe("bash coaching and routing policy", () => {
 				policy: permissive,
 			}).route,
 		).toBe("deny");
+	});
+
+	it("routes through injected operations and fails closed without isolation", async () => {
+		const direct: BashOperations = {
+			exec: vi.fn(async (_command, _cwd, { onData }) => {
+				onData(Buffer.from("streamed"));
+				return { exitCode: 0 };
+			}),
+		};
+		const directDecision = decideBashPolicy({
+			command: "npm test",
+			mode: "auto",
+			actor: "worker",
+			policy: guided,
+		});
+		expect(
+			resolveBashOperations(directDecision, { direct: () => direct }, "/w"),
+		).toBe(direct);
+
+		const isolated = decideBashPolicy({
+			command: "npm test",
+			mode: "plan",
+			actor: "maestro",
+			policy: guided,
+		});
+		expect(() => resolveBashOperations(isolated, {}, "/w")).toThrow(
+			/no lightweight backend is available/u,
+		);
+
+		const confirm = vi.fn(async () => true);
+		await authorizeBashDecision(
+			{
+				...directDecision,
+				route: "confirm",
+				reason: "remote mutation",
+			},
+			{ ui: { confirm } as never },
+			"gh api -X PATCH /x",
+		);
+		expect(confirm).toHaveBeenCalledWith(
+			"Run consequential command?",
+			expect.stringContaining("remote mutation"),
+		);
 	});
 });

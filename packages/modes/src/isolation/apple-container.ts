@@ -122,16 +122,18 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 
 	async reset(sourceRoot?: string): Promise<void> {
 		this.generation += 1;
+		this.enabled = false;
+		const preparing = this.preparing;
+		await preparing?.catch(() => undefined);
+		await Promise.allSettled([
+			this.cleanupContainer(),
+			this.workspaces.reset(),
+		]);
 		this.enabled = true;
 		this.state = "idle";
 		this.error = undefined;
 		this.detail = platformReason(this.platform, this.arch, this.macosVersion);
 		this.sourceRoot = sourceRoot;
-		this.preparing = undefined;
-		await Promise.allSettled([
-			this.cleanupContainer(),
-			this.workspaces.reset(),
-		]);
 	}
 
 	async destroy(): Promise<void> {
@@ -139,7 +141,8 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 		this.generation += 1;
 		this.enabled = false;
 		this.state = "destroyed";
-		this.preparing = undefined;
+		const preparing = this.preparing;
+		await preparing?.catch(() => undefined);
 		await Promise.allSettled([
 			this.cleanupContainer(),
 			this.workspaces.reset(),
@@ -220,6 +223,12 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 			prepared = await this.prepare(sourceCwd, epoch);
 		} catch (cause) {
 			if (cause instanceof IsolationUnavailableError) throw cause;
+			if (epoch !== this.generation || !this.enabled)
+				throw new IsolationUnavailableError(
+					this.tier,
+					"Research epoch ended during Strong preparation",
+					cause,
+				);
 			this.fail(cause);
 			throw new IsolationUnavailableError(
 				this.tier,
@@ -313,11 +322,14 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 				createArgs(name, this.image, workspace.id, createdAt),
 				"container creation",
 			);
+			this.assertEpoch(epoch);
 			await this.required(["start", name], "container start");
+			this.assertEpoch(epoch);
 			await this.required(
 				["cp", `${workspace.root}/.`, `${name}:${GUEST_WORKSPACE}`],
 				"private workspace copy-in",
 			);
+			this.assertEpoch(epoch);
 			await this.required(
 				[
 					"exec",
@@ -328,6 +340,7 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 				],
 				"container workspace verification",
 			);
+			this.assertEpoch(epoch);
 		} catch (cause) {
 			await this.cleanupContainer(name);
 			throw cause;
@@ -337,6 +350,11 @@ export class AppleContainerStrongBackend implements IsolationBackend {
 		this.detail =
 			"Strong Apple-container VM ready: offline, capability-dropped, resource-bounded, private snapshot only.";
 		return { name, workspace };
+	}
+
+	private assertEpoch(epoch: number): void {
+		if (epoch !== this.generation || !this.enabled)
+			throw new Error("Research epoch ended during Strong container setup");
 	}
 
 	private async reconcileStaleContainers(): Promise<void> {
@@ -575,16 +593,12 @@ export function ownedContainerNames(stdout: string): string[] {
 						"true") ||
 				(typeof labels === "string" &&
 					labels.includes(`${APPLE_CONTAINER_OWNER_LABEL}=true`));
-			return typeof name === "string" &&
-				(labelOwned || name.startsWith(CONTAINER_PREFIX))
-				? [name]
-				: [];
+			return typeof name === "string" && labelOwned ? [name] : [];
 		});
 	} catch {
-		return stdout
-			.split(/\r?\n/u)
-			.map((line) => line.trim().split(/\s+/u)[0] ?? "")
-			.filter((name) => name.startsWith(CONTAINER_PREFIX));
+		// Ownership must come from structured labels. Never authorize deletion
+		// from a predictable name prefix or unparseable CLI output.
+		return [];
 	}
 }
 

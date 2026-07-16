@@ -83,6 +83,8 @@ export function registerBashRouter(rt: RuntimeContext): void {
 					rt.setMode("hack", ctx);
 					return execute({ ...decision, route: "direct" });
 				}
+				if (action === "lightweight")
+					return execute({ ...decision, route: "lightweight" });
 				if (action === "none-session") rt.isolationNoneSession = true;
 				return execute({ ...decision, route: "direct" });
 			}
@@ -111,6 +113,7 @@ export async function authorizeBashDecision(
 
 export type IsolationFailureAction =
 	| "cancel"
+	| "lightweight"
 	| "direct-once"
 	| "none-session"
 	| "hack";
@@ -126,6 +129,7 @@ export async function isolationFailureAction(
 			? ["Cancel (policy is fail-closed)"]
 			: [
 					"Cancel (recommended)",
+					...(tier === "strong" ? ["Try Lightweight once"] : []),
 					"Run direct once",
 					"Use None for this session",
 					"Enter Hack and run direct",
@@ -135,13 +139,17 @@ export async function isolationFailureAction(
 		choices,
 	);
 	if (!choice || choice === choices[0]) return "cancel";
+	const lightweight = choice === "Try Lightweight once";
 	const approved = await ctx.ui.confirm(
-		"Weaken isolation?",
-		`${detail}\n\n${choice}\nThis runs on the host and can modify the real checkout.`,
+		lightweight ? "Use weaker isolation?" : "Weaken isolation?",
+		lightweight
+			? `${detail}\n\n${choice}\nLightweight is process-policy isolation, not a VM, and keeps host home/network denied.`
+			: `${detail}\n\n${choice}\nThis runs on the host and can modify the real checkout.`,
 	);
 	if (!approved) return "cancel";
-	if (choice === choices[1]) return "direct-once";
-	if (choice === choices[2]) return "none-session";
+	if (lightweight) return "lightweight";
+	if (choice === "Run direct once") return "direct-once";
+	if (choice === "Use None for this session") return "none-session";
 	return "hack";
 }
 

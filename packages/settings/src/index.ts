@@ -27,7 +27,13 @@ export {
 	getConfigStringArray,
 	type LayeredExtensionConfig,
 	readLayeredExtensionConfig,
+	readPath,
 } from "./reader.js";
+export {
+	declaredSetting,
+	declaredSettingKeys,
+	settingsRegistry,
+} from "./registry.js";
 export {
 	readExtensionConfigKey,
 	type SettingsScope,

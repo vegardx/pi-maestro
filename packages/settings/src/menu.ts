@@ -30,6 +30,7 @@ import {
 	MODEL_ROLES,
 	type ModelRole,
 	type SessionSettingValue,
+	type SettingDeclaration,
 	setSessionSettingOverride,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
@@ -38,7 +39,6 @@ import {
 	readModelsConfig,
 	SESSION_MODEL_SENTINEL,
 } from "@vegardx/pi-models";
-import { settingsRegistry } from "./extension.js";
 import {
 	createProfile,
 	deleteProfile,
@@ -48,7 +48,8 @@ import {
 	modelOptions,
 	modelProfileKeys,
 	parseSettingValue,
-	readAdvancedValue,
+	parseStringList,
+	readDeclaredValue,
 	readProfileTargets,
 	readRoleLeaf,
 	renameProfile,
@@ -63,6 +64,7 @@ import {
 	writeRoleLeaf,
 } from "./model.js";
 import { readLayeredExtensionConfig } from "./reader.js";
+import { settingsRegistry } from "./registry.js";
 import { updateSettingsFile } from "./writer.js";
 
 export { modelOptions } from "./model.js";
@@ -741,15 +743,14 @@ function childExtensionsMenu(
 function advancedScopeMenu(
 	ctx: ExtensionContext,
 	extension: string,
-	path: string,
-	defaultValue: SessionSettingValue | undefined,
-	type: string,
+	declaration: SettingDeclaration,
 	done: (value?: string) => void,
 ): Component {
-	const layered = readAdvancedValue(ctx.cwd, extension, path, defaultValue);
+	const { key: path, type, default: defaultValue } = declaration;
+	const layered = readDeclaredValue(ctx.cwd, extension, declaration);
 	// Match the parent row's `effective · source` format, freshly read.
 	const finish = () => {
-		const fresh = readAdvancedValue(ctx.cwd, extension, path, defaultValue);
+		const fresh = readDeclaredValue(ctx.cwd, extension, declaration);
 		done(`${formatSettingValue(fresh.effective)} · ${fresh.source}`);
 	};
 	return settingsComponent(
@@ -763,15 +764,21 @@ function advancedScopeMenu(
 						? "Effective source"
 						: "Unset values inherit the next scope.",
 				submenu: (_value, editDone) => {
-					const values =
-						type === "boolean"
-							? ["true", "false", "reset"]
-							: type === "thinking"
-								? [...THINKING_LEVELS, "reset"]
-								: undefined;
-					if (values)
+					const choices =
+						type === "choice"
+							? declaration.options?.map((option) => ({
+									value: option.value,
+									label: `${option.label}${option.recommended ? " · recommended" : ""}`,
+									description: option.warning ?? option.description,
+								}))
+							: type === "boolean"
+								? ["true", "false"].map((value) => ({ value, label: value }))
+								: type === "thinking"
+									? THINKING_LEVELS.map((value) => ({ value, label: value }))
+									: undefined;
+					if (choices)
 						return selectComponent(
-							values.map((value) => ({ value, label: value })),
+							[...choices, { value: "__reset__", label: "reset" }],
 							(value) => {
 								if (!value) return editDone();
 								writeAdvancedValue(
@@ -779,28 +786,32 @@ function advancedScopeMenu(
 									extension,
 									path,
 									scope,
-									value === "reset" ? undefined : parseSettingValue(value),
+									value === "__reset__" ? undefined : parseSettingValue(value),
 								);
 								editDone(value);
 							},
+							typeof layered[scope] === "string" ? layered[scope] : undefined,
 						);
-					return makeInput(
-						formatSettingValue(layered[scope] ?? defaultValue).replace(
-							/^—$/,
-							"",
-						),
-						(value) => {
-							if (value !== undefined)
-								writeAdvancedValue(
-									ctx.cwd,
-									extension,
-									path,
-									scope,
-									value === "" ? undefined : parseSettingValue(value),
+					const initial =
+						type === "string-list"
+							? JSON.stringify(layered[scope] ?? defaultValue ?? [])
+							: formatSettingValue(layered[scope] ?? defaultValue).replace(
+									/^—$/,
+									"",
 								);
-							editDone(value);
-						},
-					);
+					return makeInput(initial, (value) => {
+						if (value !== undefined) {
+							const parsed =
+								type === "string-list"
+									? parseStringList(value)
+									: value === ""
+										? undefined
+										: parseSettingValue(value);
+							if (parsed !== undefined)
+								writeAdvancedValue(ctx.cwd, extension, path, scope, parsed);
+						}
+						editDone(value);
+					});
 				},
 			}),
 		),
@@ -811,39 +822,127 @@ function advancedScopeMenu(
 	);
 }
 
+function declarationsForGroup(
+	group?: string,
+): Array<{ extension: string; declaration: SettingDeclaration }> {
+	return [...settingsRegistry].flatMap(([extension, declarations]) =>
+		declarations
+			.filter((declaration) => declaration.group === group)
+			.map((declaration) => ({ extension, declaration })),
+	);
+}
+
+function declarationDefault(
+	ctx: ExtensionContext,
+	extension: string,
+	declaration: SettingDeclaration,
+): SessionSettingValue | undefined {
+	if (!declaration.presetDefaults) return declaration.default;
+	const preset = settingsRegistry
+		.get(extension)
+		?.find((candidate) => candidate.key === "execution.preset");
+	if (!preset) return declaration.default;
+	const selected = readDeclaredValue(ctx.cwd, extension, preset).effective;
+	return typeof selected === "string"
+		? (declaration.presetDefaults[selected] ?? declaration.default)
+		: declaration.default;
+}
+
+function layeredDeclaration(
+	ctx: ExtensionContext,
+	extension: string,
+	declaration: SettingDeclaration,
+) {
+	return readDeclaredValue(
+		ctx.cwd,
+		extension,
+		declaration,
+		declarationDefault(ctx, extension, declaration),
+	);
+}
+
+function declarationDescription(
+	extension: string,
+	declaration: SettingDeclaration,
+): string {
+	const metadata = [
+		declaration.description,
+		declaration.recommended ? "Recommended." : undefined,
+		declaration.warning ? `Warning: ${declaration.warning}` : undefined,
+	].filter(Boolean);
+	return metadata.length > 0
+		? metadata.join(" ")
+		: `${extension}.${declaration.key}`;
+}
+
+function declarationItems(
+	ctx: ExtensionContext,
+	declarations: Array<{
+		extension: string;
+		declaration: SettingDeclaration;
+	}>,
+): SettingItem[] {
+	return declarations
+		.filter(({ declaration }) => declaration.type !== "model")
+		.map(({ extension, declaration }) => {
+			const layered = layeredDeclaration(ctx, extension, declaration);
+			return {
+				id: `${extension}.${declaration.key}`,
+				label: declaration.label,
+				currentValue: `${formatSettingValue(layered.effective)} · ${layered.source}`,
+				description: declarationDescription(extension, declaration),
+				submenu: (_value, settingDone) =>
+					advancedScopeMenu(ctx, extension, declaration, settingDone),
+			};
+		});
+}
+
+function groupedSettingsMenu(
+	ctx: ExtensionContext,
+	group: string,
+	done: (value?: string) => void,
+): Component {
+	const items = declarationItems(ctx, declarationsForGroup(group));
+	return settingsComponent(
+		items,
+		() => {},
+		() => done(`${items.length}`),
+	);
+}
+
+function groupSummary(ctx: ExtensionContext, group: string): string {
+	const declarations = declarationsForGroup(group);
+	if (group === "execution-policy") {
+		const preset = declarations.find(
+			({ declaration }) => declaration.key === "execution.preset",
+		);
+		if (!preset) return "Guided";
+		const presetValue = layeredDeclaration(
+			ctx,
+			preset.extension,
+			preset.declaration,
+		).effective;
+		const overrides = declarations.filter(({ extension, declaration }) => {
+			if (declaration.key === "execution.preset") return false;
+			return (
+				layeredDeclaration(ctx, extension, declaration).source !== "default"
+			);
+		});
+		return overrides.length > 0 ? "Custom" : String(presetValue ?? "Guided");
+	}
+	const configured = declarations.filter(
+		({ extension, declaration }) =>
+			layeredDeclaration(ctx, extension, declaration).source !== "default",
+	).length;
+	return configured > 0 ? `${configured} override(s)` : "Guided defaults";
+}
+
 function advancedMenu(
 	ctx: ExtensionContext,
 	done: (value?: string) => void,
 ): Component {
-	const items: SettingItem[] = [];
-	for (const [extension, declarations] of settingsRegistry) {
-		for (const declaration of declarations) {
-			// Model policy belongs only in profile role pools; stale scalar role
-			// declarations must not recreate a second policy surface.
-			if (declaration.type === "model") continue;
-			const layered = readAdvancedValue(
-				ctx.cwd,
-				extension,
-				declaration.key,
-				declaration.default,
-			);
-			items.push({
-				id: `${extension}.${declaration.key}`,
-				label: declaration.label,
-				currentValue: `${formatSettingValue(layered.effective)} · ${layered.source}`,
-				description: `${extension}.${declaration.key}`,
-				submenu: (_value, settingDone) =>
-					advancedScopeMenu(
-						ctx,
-						extension,
-						declaration.key,
-						declaration.default,
-						declaration.type,
-						settingDone,
-					),
-			});
-		}
-	}
+	const declarations = declarationsForGroup(undefined);
+	const items = declarationItems(ctx, declarations);
 	return settingsComponent(
 		items,
 		// Rows refresh in place from advancedScopeMenu's fresh summaries.
@@ -896,6 +995,24 @@ export function createMaestroSettingsList(
 	}
 	items.push(
 		{
+			id: "execution-policy",
+			label: "Execution policy",
+			currentValue: groupSummary(ctx, "execution-policy"),
+			description:
+				"Mode-aware tool guidance, isolation, delivery, consequential actions, remote behavior, unknowns, and fallback.",
+			submenu: (_value, policyDone) =>
+				groupedSettingsMenu(ctx, "execution-policy", policyDone),
+		},
+		{
+			id: "worker-worktrees",
+			label: "Worker worktrees",
+			currentValue: groupSummary(ctx, "worker-worktrees"),
+			description:
+				"Dependency provisioning, shared caches, ignored assets, setup, failure policy, and reports.",
+			submenu: (_value, worktreeDone) =>
+				groupedSettingsMenu(ctx, "worker-worktrees", worktreeDone),
+		},
+		{
 			id: "profiles",
 			label: "Profiles",
 			currentValue: `${modelProfileKeys(ctx).length}`,
@@ -914,7 +1031,7 @@ export function createMaestroSettingsList(
 		{
 			id: "advanced",
 			label: "Advanced settings",
-			currentValue: `${[...settingsRegistry.values()].reduce((count, declarations) => count + declarations.length, 0)}`,
+			currentValue: `${declarationsForGroup(undefined).length}`,
 			description:
 				"Capability-declared non-model settings with typed session/project/global overrides.",
 			submenu: (_value, advancedDone) => advancedMenu(ctx, advancedDone),

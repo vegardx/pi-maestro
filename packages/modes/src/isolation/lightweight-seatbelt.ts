@@ -1,12 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	SandboxManager,
 	type SandboxRuntimeConfig,
 } from "@anthropic-ai/sandbox-runtime";
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import {
+	type BashOperations,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import {
 	type IsolationBackend,
 	type IsolationBackendStatus,
@@ -295,6 +299,7 @@ export function seatbeltConfig(
 	sourceRoot: string,
 ): SandboxRuntimeConfig {
 	const hostHome = homedir();
+	const agentDir = resolve(getAgentDir());
 	return {
 		network: {
 			// A sentinel starts proxy mediation; the callback authorizes ordinary
@@ -315,7 +320,10 @@ export function seatbeltConfig(
 				resolve(hostHome, ".config", "gcloud"),
 				resolve(hostHome, ".kube"),
 				resolve(hostHome, ".docker"),
-				resolve(hostHome, ".pi", "agent", "auth.json"),
+				// Pi's configured agent directory contains auth.json, models.json,
+				// provider extensions, and session/control state. getAgentDir()
+				// honors PI_CODING_AGENT_DIR and piConfig.configDir.
+				agentDir,
 			],
 			allowWrite: [
 				workspace.root,
@@ -378,25 +386,99 @@ export function createResearchEnvironment(
 }
 
 export function networkDestinationAllowed(host: string): boolean {
-	const normalized = host.toLowerCase().replace(/^\[|\]$/gu, "");
-	if (
-		normalized === "localhost" ||
-		normalized.endsWith(".localhost") ||
-		normalized === "0.0.0.0" ||
-		normalized === "::" ||
-		normalized === "::1" ||
-		normalized.startsWith("127.") ||
-		normalized.startsWith("169.254.") ||
-		normalized.startsWith("10.") ||
-		normalized.startsWith("192.168.")
-	)
+	const input = host
+		.toLowerCase()
+		.replace(/^\[|\]$/gu, "")
+		.split("%", 1)[0];
+	if (!input || input === "localhost" || input.endsWith(".localhost"))
 		return false;
-	const octets = normalized.split(".").map(Number);
-	if (octets.length === 4 && octets.every(Number.isFinite)) {
-		if (octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31)
-			return false;
+
+	const mapped = /^::ffff:(.+)$/iu.exec(input)?.[1];
+	if (mapped) {
+		const ipv4 = canonicalIPv4(mapped);
+		return ipv4 ? publicIPv4(ipv4) : false;
 	}
+
+	if (isIP(input) === 6) return publicIPv6(input);
+	const ipv4 = canonicalIPv4(input);
+	if (ipv4) return publicIPv4(ipv4);
+
+	// Numeric-looking hosts that URL canonicalization cannot understand are
+	// denied rather than treated as DNS names. This covers malformed alternate
+	// IPv4 encodings without narrowing ordinary external domains.
+	if (/^(?:0x[0-9a-f]+|[0-9.]+)$/iu.test(input)) return false;
 	return true;
+}
+
+function canonicalIPv4(input: string): readonly number[] | undefined {
+	try {
+		// WHATWG URL canonicalizes decimal, octal, hexadecimal, shortened, and
+		// ordinary dotted IPv4 forms (e.g. 2130706433 and 0177.0.0.1).
+		const canonical = new URL(`http://${input}/`).hostname;
+		if (isIP(canonical) !== 4) return undefined;
+		const octets = canonical.split(".").map(Number);
+		return octets.length === 4 ? octets : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function publicIPv4(octets: readonly number[]): boolean {
+	const [a = -1, b = -1] = octets;
+	return !(
+		a === 0 ||
+		a === 10 ||
+		a === 127 ||
+		(a === 169 && b === 254) ||
+		(a === 172 && b >= 16 && b <= 31) ||
+		(a === 192 && b === 168) ||
+		a >= 224
+	);
+}
+
+function publicIPv6(input: string): boolean {
+	const bytes = ipv6Bytes(input);
+	if (!bytes) return false;
+	const allZero = bytes.every((byte) => byte === 0);
+	const loopback =
+		bytes.slice(0, 15).every((byte) => byte === 0) && bytes[15] === 1;
+	const uniqueLocal = (bytes[0]! & 0xfe) === 0xfc;
+	const linkLocal = bytes[0] === 0xfe && (bytes[1]! & 0xc0) === 0x80;
+	const multicast = bytes[0] === 0xff;
+	const mapped =
+		bytes.slice(0, 10).every((byte) => byte === 0) &&
+		bytes[10] === 0xff &&
+		bytes[11] === 0xff;
+	const compatible = bytes.slice(0, 12).every((byte) => byte === 0);
+	if (mapped || compatible) return publicIPv4([...bytes.slice(12)]);
+	return !(allZero || loopback || uniqueLocal || linkLocal || multicast);
+}
+
+function ipv6Bytes(input: string): number[] | undefined {
+	if (isIP(input) !== 6) return undefined;
+	const halves = input.split("::");
+	if (halves.length > 2) return undefined;
+	const parseHalf = (half: string): number[] | undefined => {
+		if (!half) return [];
+		const groups: number[] = [];
+		for (const token of half.split(":")) {
+			if (!/^[0-9a-f]{1,4}$/iu.test(token)) return undefined;
+			groups.push(Number.parseInt(token, 16));
+		}
+		return groups;
+	};
+	const left = parseHalf(halves[0] ?? "");
+	const right = parseHalf(halves[1] ?? "");
+	if (!left || !right) return undefined;
+	const omitted = 8 - left.length - right.length;
+	if ((halves.length === 1 && omitted !== 0) || omitted < 0) return undefined;
+	const groups = [
+		...left,
+		...Array.from({ length: omitted }, () => 0),
+		...right,
+	];
+	if (groups.length !== 8) return undefined;
+	return groups.flatMap((group) => [group >> 8, group & 0xff]);
 }
 
 function mapWorkspaceCwd(

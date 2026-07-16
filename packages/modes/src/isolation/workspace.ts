@@ -65,14 +65,36 @@ export class ResearchWorkspaceManager {
 	async reset(): Promise<void> {
 		const current = this.workspace;
 		this.workspace = undefined;
-		if (current) await rm(current.root, { recursive: true, force: true });
+		if (current)
+			await rm(dirname(current.root), { recursive: true, force: true });
 	}
 
 	private async create(sourceRoot: string): Promise<ResearchWorkspace> {
 		await this.reset();
-		const base = this.opts.baseDir ?? join(tmpdir(), "pi-maestro-research");
-		await mkdir(base, { recursive: true, mode: 0o700 });
-		const phaseRoot = await mkdtemp(join(base, "epoch-"));
+		const configuredBase = this.opts.baseDir;
+		let phaseRoot: string;
+		if (configuredBase) {
+			await mkdir(configuredBase, { recursive: true, mode: 0o700 });
+			const baseStat = await lstat(configuredBase);
+			if (!baseStat.isDirectory() || baseStat.isSymbolicLink())
+				throw new Error(
+					`Research workspace base is not a real directory: ${configuredBase}`,
+				);
+			if (
+				typeof process.getuid === "function" &&
+				baseStat.uid !== process.getuid()
+			)
+				throw new Error(
+					`Research workspace base is not controller-owned: ${configuredBase}`,
+				);
+			phaseRoot = await mkdtemp(join(await realpath(configuredBase), "epoch-"));
+		} else {
+			// Create the epoch atomically under the OS temp directory. A fixed
+			// shared base could be pre-planted as a symlink by another local user.
+			phaseRoot = await mkdtemp(
+				join(await realpath(tmpdir()), "pi-maestro-research-"),
+			);
+		}
 		const root = join(phaseRoot, "workspace");
 		const home = join(phaseRoot, "home");
 		const privateTmp = join(phaseRoot, "tmp");

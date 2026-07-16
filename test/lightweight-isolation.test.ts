@@ -7,7 +7,8 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createResearchEnvironment,
@@ -64,7 +65,7 @@ describe("private research workspace", () => {
 		).rejects.toThrow();
 
 		await manager.reset();
-		await expect(lstat(first.root)).rejects.toThrow();
+		await expect(lstat(dirname(first.root))).rejects.toThrow();
 	});
 
 	it("preserves safe relative symlinks and rejects path escapes", async () => {
@@ -110,9 +111,7 @@ describe("Lightweight policy", () => {
 			expect.arrayContaining([workspace.root, workspace.home, workspace.tmp]),
 		);
 		expect(config.filesystem.denyWrite).toContain("/repo");
-		expect(config.filesystem.denyRead).toEqual(
-			expect.arrayContaining([expect.stringContaining("auth.json")]),
-		);
+		expect(config.filesystem.denyRead).toContain(resolve(getAgentDir()));
 		expect(config.network.allowUnixSockets).toEqual([]);
 		expect(config.network.allowAllUnixSockets).toBe(false);
 		expect(config.network.allowLocalBinding).toBe(false);
@@ -122,7 +121,15 @@ describe("Lightweight policy", () => {
 		for (const host of [
 			"localhost",
 			"127.0.0.1",
+			"2130706433",
+			"0177.0.0.1",
+			"0x7f000001",
 			"::1",
+			"::ffff:127.0.0.1",
+			"::ffff:169.254.169.254",
+			"fc00::1",
+			"fd00::1",
+			"fe80::1",
 			"10.0.0.5",
 			"172.20.1.2",
 			"192.168.1.2",
@@ -132,6 +139,7 @@ describe("Lightweight policy", () => {
 		}
 		expect(networkDestinationAllowed("registry.npmjs.org")).toBe(true);
 		expect(networkDestinationAllowed("1.1.1.1")).toBe(true);
+		expect(networkDestinationAllowed("2606:4700:4700::1111")).toBe(true);
 	});
 
 	it("constructs a private environment and removes credentials/control endpoints", () => {

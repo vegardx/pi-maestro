@@ -10,9 +10,16 @@ import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	EXECUTION_POLICY_SETTINGS,
+	WORKER_POLICY_SETTINGS,
+	WORKTREE_SETTINGS,
+} from "../packages/modes/src/setting-declarations.js";
+import { readExecutionPolicySettings } from "../packages/modes/src/settings.js";
+import {
 	getSettingsCompletions,
 	handleSettingsCommand,
 } from "../packages/settings/src/command.js";
+import { settingsRegistry } from "../packages/settings/src/registry.js";
 
 function writeJson(path: string, data: unknown): void {
 	mkdirSync(join(path, ".."), { recursive: true });
@@ -42,9 +49,15 @@ describe("/settings command", () => {
 
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "settings-cmd-"));
+		settingsRegistry.set("modes", [
+			...EXECUTION_POLICY_SETTINGS,
+			...WORKER_POLICY_SETTINGS,
+		]);
+		settingsRegistry.set("maestro", [...WORKTREE_SETTINGS]);
 	});
 
 	afterEach(() => {
+		settingsRegistry.clear();
 		rmSync(root, { recursive: true, force: true });
 	});
 
@@ -188,6 +201,61 @@ describe("/settings command", () => {
 			const ctx = mockCtx(root);
 			handleSettingsCommand("reset modes.nonexistent", ctx);
 			expect(ctx.messages[0]).toContain("was not set");
+		});
+	});
+
+	describe("declared policy settings", () => {
+		it("completes choices and round-trips string lists", () => {
+			const ctx = mockCtx(root);
+			expect(
+				getSettingsCompletions("set modes.execution.isolation ", ctx),
+			).toEqual(["lightweight", "strong", "none"]);
+			handleSettingsCommand(
+				'set maestro.worktree.copy [".env.local","fixtures/cache"]',
+				ctx,
+			);
+			handleSettingsCommand("get maestro.worktree.copy", ctx);
+			expect(ctx.messages.at(-1)).toContain(".env.local → fixtures/cache");
+			expect(getSettingsCompletions("set maestro.worktree.copy ", ctx)).toEqual(
+				['["path"]'],
+			);
+		});
+
+		it("rejects invalid choices without persisting them", () => {
+			const ctx = mockCtx(root);
+			handleSettingsCommand("set modes.execution.isolation magical", ctx);
+			expect(ctx.messages.at(-1)).toContain("Invalid value");
+			expect(readExecutionPolicySettings(root).isolation).toBe("lightweight");
+		});
+
+		it("applies preset defaults and marks individual overrides custom", () => {
+			const ctx = mockCtx(root);
+			handleSettingsCommand("set modes.execution.preset strict", ctx);
+			let policy = readExecutionPolicySettings(root);
+			expect(policy).toMatchObject({
+				preset: "strict",
+				isolation: "strong",
+				consequential: "confirm-mutations",
+			});
+			handleSettingsCommand("set modes.execution.isolation lightweight", ctx);
+			policy = readExecutionPolicySettings(root);
+			expect(policy.preset).toBe("custom");
+			expect(policy.isolation).toBe("lightweight");
+		});
+
+		it("falls back to Guided when persisted values are invalid", () => {
+			writeJson(join(root, ".pi", "settings.json"), {
+				extensionConfig: {
+					modes: {
+						execution: { preset: "unsafe", isolation: "magic" },
+					},
+				},
+			});
+			expect(readExecutionPolicySettings(root)).toMatchObject({
+				preset: "guided",
+				isolation: "lightweight",
+				fallback: "fail-closed",
+			});
 		});
 	});
 

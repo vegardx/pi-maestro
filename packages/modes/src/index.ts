@@ -40,6 +40,17 @@ export {
 	taxonomyDigest,
 } from "./bash-corpus-taxonomy.js";
 export {
+	type BashActor,
+	type BashEffect,
+	type BashGuidance,
+	type BashPolicyDecision,
+	type BashPolicyInput,
+	type BashRoute,
+	classifyBashEffects,
+	decideBashPolicy,
+	dedicatedToolSuggestion,
+} from "./bash-policy.js";
+export {
 	replayShadowPolicies,
 	type ShadowBaselineReport,
 	type ShadowComparison,
@@ -112,7 +123,6 @@ export {
 	OverlayManager,
 } from "./overlay-manager.js";
 export {
-	classifyBash,
 	computeActiveTools,
 	PLAN_TOOL_NAMES,
 	toolBlockedInPlanMode,
@@ -134,8 +144,10 @@ export {
 	toPersistedState,
 } from "./session.js";
 export {
+	type ExecutionPolicySettings,
 	getImplementOverrides,
 	type ImplementOverrides,
+	readExecutionPolicySettings,
 	readModesCompactionSettings,
 	resolveInternalRoleModel,
 	setImplementOverrides,

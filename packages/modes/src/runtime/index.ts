@@ -40,6 +40,7 @@ import {
 	registerAgentCardRenderer,
 	sendAgentEvent,
 } from "./agent-cards.js";
+import { registerBashRouter } from "./bash-router.js";
 import { registerRuntimeCommands } from "./commands.js";
 import {
 	activeDeliverable,
@@ -89,6 +90,7 @@ export function createModesRuntime(
 	opts: ModesRuntimeOptions = {},
 ): ModesRuntime {
 	const rt = createRuntimeContext(pi, maestro, opts);
+	registerBashRouter(rt);
 
 	for (const tool of createPlanTools({
 		engine: () => rt.engine,

@@ -10,8 +10,7 @@
 //   input focused + draft present → super (autocomplete owns Tab); the
 //                                   trailing " tab ──" hint renders extra-dim
 //   panel tab focused             → next tab; past Questions → back to the
-//                                   input with the panel KEPT expanded on the
-//                                   last tab (pinned/passive state)
+//                                   input with the panel fully collapsed
 // Esc: from a panel tab → focus input AND collapse; from the input with a
 // pinned panel → collapse; otherwise super (default editor behavior).
 // While a panel tab is focused every other key is forwarded to the panel
@@ -178,8 +177,8 @@ export class MaestroEditor extends CustomEditor {
 				super.handleInput(data);
 				return;
 			}
-			// Walk the ring; past Questions the panel stays expanded on the
-			// last tab while the input takes the keys back (pinned).
+			// Walk the ring; past Questions, return to the input and fully
+			// collapse the panel.
 			const at = RING.indexOf(state.focus);
 			const next = RING[at + 1];
 			if (next !== undefined) {
@@ -187,6 +186,7 @@ export class MaestroEditor extends CustomEditor {
 				panel.setTab(next);
 			} else {
 				state.focus = "input";
+				state.expanded = false;
 			}
 			requestRender();
 			return;

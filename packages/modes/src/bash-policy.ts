@@ -185,17 +185,50 @@ export function dedicatedToolSuggestion(
 	if (!analysis.completeSimple) return undefined;
 	const command = analysis.commands[0];
 	if (!command?.executable) return undefined;
-	if (FILE_READ.has(command.executable)) return "read";
-	if (SEARCH.has(command.executable)) return "grep";
+	if (command.executable === "cat" && noFlags(command.args)) return "read";
 	if (
-		FIND.has(command.executable) &&
-		!command.args.some((arg) => arg.startsWith("-exec"))
+		["head", "tail", "less", "more", "bat"].includes(command.executable) &&
+		noFlags(command.args)
 	)
+		return "read";
+	if (SEARCH.has(command.executable) && exactSearchArgs(command.args))
+		return "grep";
+	if (FIND.has(command.executable) && exactFindArgs(command.args))
 		return "find";
-	if (command.executable === "curl" || command.executable === "wget")
+	if (
+		(command.executable === "curl" || command.executable === "wget") &&
+		isReadOnlyHttp(command.args)
+	)
 		return "webfetch";
-	if (command.executable === "ls") return "ls";
+	if (command.executable === "ls" && noFlags(command.args)) return "ls";
 	return undefined;
+}
+
+function noFlags(args: readonly string[]): boolean {
+	return args.every((arg) => !arg.startsWith("-"));
+}
+
+function exactSearchArgs(args: readonly string[]): boolean {
+	const unsupported = new Set([
+		"-c",
+		"--count",
+		"--count-matches",
+		"-l",
+		"--files-with-matches",
+		"-L",
+		"--files-without-match",
+		"-o",
+		"--only-matching",
+	]);
+	return !args.some((arg) => unsupported.has(arg));
+}
+
+function exactFindArgs(args: readonly string[]): boolean {
+	return !args.some(
+		(arg) =>
+			arg.startsWith("-") &&
+			!["-name", "-path", "-type", "-maxdepth", "-mindepth"].includes(arg),
+	);
 }
 
 export function classifyBashEffects(
@@ -207,7 +240,7 @@ export function classifyBashEffects(
 		return effects;
 	}
 	if (!analysis.parseComplete) effects.add("unknown");
-	if (analysis.features.has("redirect")) effects.add("workspace-write");
+	if (analysis.features.has("output-redirect")) effects.add("workspace-write");
 	if (
 		analysis.features.has("substitution") ||
 		analysis.features.has("interpreter-carrier") ||
@@ -465,8 +498,21 @@ function classifyGh(args: readonly string[], effects: Set<BashEffect>): void {
 			(arg) => arg === "-x" || arg === "--method",
 		);
 		const method =
-			methodIndex >= 0 ? lower[methodIndex + 1]?.toUpperCase() : "GET";
-		if (method && method !== "GET") effects.add("remote-write");
+			methodIndex >= 0 ? lower[methodIndex + 1]?.toUpperCase() : undefined;
+		const hasBody = lower.some(
+			(arg) =>
+				["-f", "--field", "-F", "--raw-field", "--input"].includes(arg) ||
+				/^--(?:field|raw-field|input)=/u.test(arg),
+		);
+		const apparentGraphqlRead =
+			lower[1] === "graphql" &&
+			method === undefined &&
+			!lower.some((arg) => /\bmutation\b/u.test(arg));
+		if (
+			(method && method !== "GET" && method !== "HEAD") ||
+			(hasBody && !apparentGraphqlRead)
+		)
+			effects.add("remote-write");
 		else effects.add("github-read");
 		return;
 	}
@@ -481,16 +527,44 @@ function classifyGh(args: readonly string[], effects: Set<BashEffect>): void {
 }
 
 function classifyHttp(args: readonly string[], effects: Set<BashEffect>): void {
-	const methodAt = args.findIndex((arg) => arg === "-X" || arg === "--request");
-	const method = methodAt >= 0 ? args[methodAt + 1]?.toUpperCase() : undefined;
-	if (
-		(method && method !== "GET" && method !== "HEAD") ||
-		args.some((arg) =>
-			["-d", "--data", "--data-raw", "--upload-file", "-T"].includes(arg),
-		)
-	)
-		effects.add("remote-write");
-	else effects.add("remote-read");
+	if (isReadOnlyHttp(args)) effects.add("remote-read");
+	else effects.add("remote-write");
+}
+
+function isReadOnlyHttp(args: readonly string[]): boolean {
+	const methodAt = args.findIndex(
+		(arg) => arg === "-X" || arg === "--request" || /^-X\w+/u.test(arg),
+	);
+	const methodToken = methodAt >= 0 ? args[methodAt] : undefined;
+	const method =
+		methodToken && /^-X\w+/u.test(methodToken)
+			? methodToken.slice(2).toUpperCase()
+			: methodAt >= 0
+				? args[methodAt + 1]?.toUpperCase()
+				: undefined;
+	const bodyFlags = new Set([
+		"-d",
+		"--data",
+		"--data-raw",
+		"--data-binary",
+		"--data-urlencode",
+		"--upload-file",
+		"-T",
+		"-F",
+		"--form",
+		"--form-string",
+		"--json",
+		"--post-data",
+		"--post-file",
+	]);
+	const hasBody = args.some(
+		(arg) =>
+			bodyFlags.has(arg) ||
+			/^--(?:data|data-raw|data-binary|data-urlencode|upload-file|form|form-string|json|post-data|post-file)=/u.test(
+				arg,
+			),
+	);
+	return (!method || method === "GET" || method === "HEAD") && !hasBody;
 }
 
 function privilegedRoute(
@@ -553,9 +627,11 @@ function unknownRoute(
 	if (input.actor === "worker")
 		return {
 			...base,
-			route: "direct",
-			reason: "Unknown command retained as one expected worker worktree unit",
+			route: isolationRoute(input.policy),
+			reason:
+				"Unknown worker command requires configured isolation; escalate to the parent maestro or Hack when unavailable",
 			confidence: "low",
+			invariant: "worker-escalation",
 		};
 	if (input.policy.unknowns === "deny")
 		return {

@@ -81,12 +81,22 @@ describe("shell program analysis", () => {
 
 		const dispatcher = analyzeShellProgram("find . -exec rm {} +");
 		expect(dispatcher.features.has("opaque-dispatch")).toBe(true);
+
+		const shellScript = analyzeShellProgram("bash ci.sh");
+		expect(shellScript.features.has("interpreter-carrier")).toBe(false);
+		const shellCarrier = analyzeShellProgram("bash -lc 'touch marker'");
+		expect(shellCarrier.features.has("interpreter-carrier")).toBe(true);
 	});
 
 	it("fails closed on malformed quoting", () => {
 		const analysis = analyzeShellProgram("git status 'unterminated");
 		expect(analysis.parseComplete).toBe(false);
 		expect(analysis.completeSimple).toBe(false);
+
+		const input = analyzeShellProgram("sort < input.txt");
+		expect(input.features.has("input-redirect")).toBe(true);
+		expect(input.features.has("output-redirect")).toBe(false);
+		expect(classifyBashEffects(input).has("workspace-write")).toBe(false);
 	});
 });
 
@@ -100,6 +110,25 @@ describe("bash coaching and routing policy", () => {
 				analyzeShellProgram("cat README.md | sed 's/a/b/' > out"),
 			),
 		).toBeUndefined();
+		for (const command of [
+			"tail -f app.log",
+			"find . -mtime -1",
+			"grep -c TODO README.md",
+			"curl -X DELETE https://example.invalid/x",
+		]) {
+			expect(
+				dedicatedToolSuggestion(analyzeShellProgram(command)),
+				command,
+			).toBeUndefined();
+		}
+		expect(
+			decideBashPolicy({
+				command: "curl -X DELETE https://example.invalid/x",
+				mode: "auto",
+				actor: "maestro",
+				policy: guided,
+			}).route,
+		).toBe("confirm");
 		expect(
 			decideBashPolicy({
 				command: "rg TODO src",
@@ -156,6 +185,14 @@ describe("bash coaching and routing policy", () => {
 		).toBe("direct");
 		expect(
 			decideBashPolicy({
+				command: "fixture-command --opaque",
+				mode: "agent",
+				actor: "worker",
+				policy: guided,
+			}).route,
+		).toBe("lightweight");
+		expect(
+			decideBashPolicy({
 				command: "npm test",
 				mode: "agent",
 				actor: "reviewer",
@@ -194,14 +231,21 @@ describe("bash coaching and routing policy", () => {
 				}).route,
 			).toBe("direct");
 		}
-		expect(
-			decideBashPolicy({
-				command: "gh api repos/o/r/actions/variables/X -X PATCH -f value=y",
-				mode: "auto",
-				actor: "maestro",
-				policy: guided,
-			}).route,
-		).toBe("confirm");
+		for (const command of [
+			"gh api repos/o/r/actions/variables/X -X PATCH -f value=y",
+			"gh api repos/o/r/issues -f title=oops",
+			"cat payload | curl --data-binary @- https://example.invalid/x",
+			"curl -XPOST --json '{}' https://example.invalid/x",
+		]) {
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "auto",
+					actor: "maestro",
+					policy: guided,
+				}).route,
+			).toBe("confirm");
+		}
 	});
 
 	it("enforces delivery and worker escalation invariants", () => {
@@ -231,6 +275,27 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "kubectl delete deployment api",
+				mode: "agent",
+				actor: "worker",
+				policy: guided,
+			}),
+		).toMatchObject({ route: "deny", invariant: "worker-escalation" });
+		for (const command of [
+			"timeout 30 git push origin main",
+			"nice -n 10 git push origin main",
+		]) {
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "agent",
+					actor: "worker",
+					policy: guided,
+				}),
+			).toMatchObject({ route: "deny", invariant: "delivery" });
+		}
+		expect(
+			decideBashPolicy({
+				command: "timeout 5 rm -rf /tmp/x",
 				mode: "agent",
 				actor: "worker",
 				policy: guided,

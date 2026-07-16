@@ -87,7 +87,7 @@ export function classifyCorpusCommand(
 	const features: ParserFeature[] = [];
 	if (/&&|\|\||(^|[^;]);(?:;)?/u.test(command)) features.push("chain");
 	if (/(^|[^|])\|([^|]|$)/u.test(command)) features.push("pipeline");
-	if (/(^|\s)(?:\d*>>?|\d*<)(?!<)/u.test(command)) features.push("redirect");
+	if (hasShellRedirect(command)) features.push("redirect");
 	if (/<<-?\s*['"]?[A-Za-z_][\w-]*/u.test(command)) features.push("heredoc");
 	if (/\$\(|`[^`]*`|<\(|>\(/u.test(command)) features.push("substitution");
 	if (
@@ -225,6 +225,33 @@ function classifyFamily(
 	)
 		return "filesystem-write";
 	return "other";
+}
+
+function hasShellRedirect(command: string): boolean {
+	let single = false;
+	let double = false;
+	let escaped = false;
+	for (let index = 0; index < command.length; index++) {
+		const char = command[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (char === "\\" && !single) {
+			escaped = true;
+			continue;
+		}
+		if (char === "'" && !double) {
+			single = !single;
+			continue;
+		}
+		if (char === '"' && !single) {
+			double = !double;
+			continue;
+		}
+		if (!single && !double && (char === ">" || char === "<")) return true;
+	}
+	return false;
 }
 
 function hasUnbalancedQuotes(command: string): boolean {

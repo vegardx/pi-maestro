@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
 	replayShadowPolicies,
 	shadowBaselineDigest,
 } from "../packages/modes/src/bash-shadow-replay.js";
+import { buildAgentSessionFile } from "../packages/modes/src/exec/provisioner.js";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -69,6 +70,27 @@ describe("historical bash corpus", () => {
 			posture: "read-only",
 			nearbyTools: ["bash", "read"],
 			outcome: { status: "success", exitCode: 0 },
+		});
+	});
+
+	it("extracts context persisted by real agent session provisioning", () => {
+		const directory = mkdtempSync(join(tmpdir(), "maestro-agent-corpus-"));
+		temporaryDirectories.push(directory);
+		const session = buildAgentSessionFile({
+			agentKey: "g1/reviewer",
+			agentMode: "read-only",
+			activeTools: ["read", "bash", "read"],
+			seed: "review",
+			cwd: directory,
+			outDir: join(directory, "sessions"),
+		});
+		const source = `${readFileSync(session.path, "utf8")}${JSON.stringify(assistantCall("audit", "git status"))}\n`;
+		const corpus = extractBashCorpusJsonl(source);
+		expect(corpus.calls[0]).toMatchObject({
+			mode: "agent",
+			actor: "reviewer",
+			posture: "read-only",
+			nearbyTools: ["bash", "read"],
 		});
 	});
 
@@ -203,6 +225,22 @@ describe("historical bash corpus", () => {
 		expect(JSON.stringify(fixtures)).not.toContain("/Users/person");
 	});
 
+	it("keeps sanitized commands out of both training and holdout", () => {
+		const corpus = extractBashCorpusJsonl(
+			jsonl(
+				{ type: "session", id: "s" },
+				assistantCall("old", "git status", "2025-01-01T00:00:00.000Z"),
+				assistantCall("new", "git status", "2025-02-01T00:00:00.000Z"),
+			),
+		);
+		const fixtures = buildCorpusFixtures(corpus.calls, {
+			holdoutStart: "2025-02-01T00:00:00.000Z",
+		});
+		expect(fixtures.training).toHaveLength(1);
+		expect(fixtures.holdout).toHaveLength(0);
+		expect(fixtures.omitted.holdoutDuplicates).toBe(1);
+	});
+
 	it("produces stable bounded shadow baselines and fail-visible policy errors", () => {
 		const corpus = extractBashCorpusJsonl(
 			jsonl({ type: "session", id: "s" }, assistantCall("one", "git status")),
@@ -243,6 +281,36 @@ describe("historical bash corpus", () => {
 		);
 		expect(sanitized).toContain("https://example.invalid/resource");
 		expect(sanitized).not.toMatch(/bearer-secret|internal\.example|alice/u);
+		for (const secret of ["-pSUPERSECRET", "-ISECRET", "-kSECRET"]) {
+			expect(
+				sanitizeCommand(`curl ${secret} https://example.test`),
+			).not.toContain("SECRET");
+		}
+	});
+
+	it("recognizes unspaced redirects without treating quoted operators as writes", () => {
+		expect(classifyCorpusCommand("cat input>output").features).toContain(
+			"redirect",
+		);
+		expect(classifyCorpusCommand("git status 2>/dev/null").features).toContain(
+			"redirect",
+		);
+		expect(classifyCorpusCommand("printf 'a>b'").features).not.toContain(
+			"redirect",
+		);
+	});
+
+	it("changes the corpus digest when routing metadata changes", () => {
+		const base = extractBashCorpusJsonl(
+			jsonl({ type: "session", id: "s" }, assistantCall("one", "git status")),
+		).calls[0];
+		const policy = {
+			id: "p",
+			evaluate: () => ({ route: "direct" as const, reason: "x" }),
+		};
+		const first = replayShadowPolicies([base], [policy]);
+		const second = replayShadowPolicies([{ ...base, mode: "plan" }], [policy]);
+		expect(first.corpusDigest).not.toBe(second.corpusDigest);
 	});
 });
 

@@ -19,6 +19,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { addWorktree, worktreePathFor } from "@vegardx/pi-git";
 import { deliverableBranch } from "../agent-lifecycle.js";
 import {
+	AGENT_CONTEXT_ENTRY,
 	EXECUTION_SEED_ENTRY,
 	MODES_STATE_ENTRY,
 	type PersistedModesState,
@@ -204,6 +205,10 @@ export interface BuildAgentSessionOpts {
 	cwd: string;
 	/** Directory the session file is written to. */
 	outDir: string;
+	/** Agent policy posture persisted into the session audit context. */
+	agentMode: "full" | "read-only";
+	/** Normalized tool class known at provisioning time, when available. */
+	activeTools?: readonly string[];
 	/** Knowledge session to fork from (shared cache prefix). */
 	knowledgeSessionPath?: string;
 }
@@ -253,6 +258,12 @@ export function buildAgentSessionFile(
 		updatedAt: new Date().toISOString(),
 	};
 	session.appendCustomEntry(MODES_STATE_ENTRY, modesState);
+	session.appendCustomEntry(AGENT_CONTEXT_ENTRY, {
+		version: 1,
+		role: opts.agentMode === "read-only" ? "reviewer" : "worker",
+		posture: opts.agentMode,
+		activeTools: [...new Set(opts.activeTools ?? [])].sort(),
+	});
 	session.appendCustomMessageEntry(EXECUTION_SEED_ENTRY, opts.seed, true);
 
 	// forkFrom names its file `<timestamp>_<id>.jsonl`; agents are addressed

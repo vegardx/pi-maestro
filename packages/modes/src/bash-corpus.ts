@@ -125,7 +125,7 @@ export function extractBashCorpusJsonl(
 			if (entry.customType === "maestro.modes.state" && data) {
 				mode = parseMode(data.mode) ?? mode;
 			}
-			if (data) {
+			if (entry.customType === "maestro.agent.context" && data) {
 				const context = parseActorContext(data);
 				actor = context.actor ?? actor;
 				posture = context.posture ?? posture;

@@ -21,6 +21,14 @@ export {
 	type SessionCorpus,
 } from "./bash-corpus.js";
 export {
+	buildCorpusFixtures,
+	type FixtureOptions,
+	type FixturePartition,
+	type FixtureSet,
+	type SanitizedBashFixture,
+	sanitizeCommand,
+} from "./bash-corpus-fixtures.js";
+export {
 	buildTaxonomyReport,
 	type CommandFamily,
 	type CommandTaxonomy,

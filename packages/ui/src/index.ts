@@ -6,8 +6,6 @@
 
 export {
 	AnswerEditor,
-	AnswerFlow,
-	type AnswerHeaderLine,
 	type AnswerModeHandle,
 	type AnswerModeOptions,
 	openAnswerMode,

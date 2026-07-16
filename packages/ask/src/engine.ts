@@ -371,7 +371,7 @@ export class AskEngine {
 			blocking,
 			questions,
 			...(palette ? { palette } : {}),
-			onAnswer: (answer) => this.#handleCommitted([answer]),
+			onDone: (answers) => this.#handleCommitted(answers),
 			onDefer: () => this.#handleDefer(),
 			onClose: () => {
 				this.#answerHandle = undefined;

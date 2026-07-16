@@ -515,6 +515,8 @@ const SS3_TO_CSI: Record<string, string> = {
 };
 
 export interface QuestionnaireRunOptions extends QuestionnaireRenderOptions {
+	/** Recipient label used by the final confirmation screen. */
+	readonly recipient?: string;
 	/** Prior answers to pre-fill (draft rehydration). */
 	readonly initialAnswers?: Answers;
 	/** Called with the partial draft when the user closes without sending. */
@@ -538,6 +540,8 @@ export class QuestionnaireComponent implements Component, Focusable {
 	private state: QuestionnaireState;
 	/** true once past the last shown question (review step). */
 	private review = false;
+	/** Focused confirmation action; Send is deliberately the default. */
+	private reviewAction: "edit" | "send" = "send";
 	/** Explorer view state (page scroll, compare) — reset per question. */
 	private explorerView: ExplorerView = initExplorerView();
 
@@ -591,12 +595,12 @@ export class QuestionnaireComponent implements Component, Focusable {
 			this.handleFreeText(data);
 			return;
 		}
-		if (data === "\u001b") {
-			this.cancel();
-			return;
-		}
 		if (this.review) {
 			this.handleReview(data);
+			return;
+		}
+		if (data === "\u001b") {
+			this.cancel();
 			return;
 		}
 
@@ -781,11 +785,22 @@ export class QuestionnaireComponent implements Component, Focusable {
 	}
 
 	private handleReview(data: string): void {
-		if (data === "r") {
-			this.acceptRecommendations();
+		if (data === KEY_LEFT || data === KEY_RIGHT || data === "\t") {
+			this.reviewAction = this.reviewAction === "send" ? "edit" : "send";
 			return;
 		}
-		if (data === "\r" || data === "\n") this.done(this.state.answers);
+		if (data === "e" || data === "\u001b") {
+			this.editAnswers();
+			return;
+		}
+		if (data === "s") {
+			this.done(this.state.answers);
+			return;
+		}
+		if (data === "\r" || data === "\n") {
+			if (this.reviewAction === "send") this.done(this.state.answers);
+			else this.editAnswers();
+		}
 	}
 
 	/** The question the user currently has open (pending-set raise anchor). */
@@ -811,11 +826,13 @@ export class QuestionnaireComponent implements Component, Focusable {
 		const skips: Answer[] = [];
 		while (i < this.questionnaire.length) {
 			if (isShown(this.questionnaire[i], answers)) break;
-			const skip = {
-				questionId: this.questionnaire[i].id,
-				value: "",
-				skipped: true,
-			};
+			const questionId = this.questionnaire[i].id;
+			// Editing an upstream choice can hide a question that already had an
+			// answer. Remove that stale answer before recording the fresh skip.
+			for (let at = answers.length - 1; at >= 0; at--) {
+				if (answers[at].questionId === questionId) answers.splice(at, 1);
+			}
+			const skip = { questionId, value: "", skipped: true };
 			answers.push(skip);
 			skips.push(skip);
 			i++;
@@ -824,6 +841,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 		if (skips.length > 0) this.opts.onQuestionCommitted?.(skips);
 		if (i >= this.questionnaire.length) {
 			this.review = true;
+			this.reviewAction = "send";
 			return;
 		}
 		this.enter(i);
@@ -833,6 +851,7 @@ export class QuestionnaireComponent implements Component, Focusable {
 	private enter(idx: number): void {
 		if (idx >= this.questionnaire.length) {
 			this.review = true;
+			this.reviewAction = "send";
 			return;
 		}
 		const q = this.questionnaire[idx];
@@ -841,13 +860,20 @@ export class QuestionnaireComponent implements Component, Focusable {
 		);
 		let cursor = recommendedIndex(q);
 		const selected = new Set<string>();
-		if (prior.length > 0 && q.options) {
-			if (q.multiple) for (const a of prior) selected.add(a.value);
-			else {
-				const at = q.options.findIndex(
-					(o) => optionValue(o) === prior[0].value,
-				);
-				if (at >= 0) cursor = at;
+		let freeText: string | undefined;
+		if (prior.length > 0) {
+			const custom = prior.find((answer) => answer.custom);
+			if (custom) {
+				freeText = custom.value;
+				cursor = q.options?.length ?? 0;
+			} else if (q.options) {
+				if (q.multiple) for (const a of prior) selected.add(a.value);
+				else {
+					const at = q.options.findIndex(
+						(o) => optionValue(o) === prior[0].value,
+					);
+					if (at >= 0) cursor = at;
+				}
 			}
 		}
 		// Drop any prior answers for this question; they'll be re-committed.
@@ -857,23 +883,20 @@ export class QuestionnaireComponent implements Component, Focusable {
 			index: idx,
 			cursor: cursor < 0 ? 0 : cursor,
 			selected,
-			freeText: undefined,
+			freeText,
 			noteEdit: undefined,
 			answers,
 		};
 		this.explorerView = initExplorerView();
 	}
 
-	private acceptRecommendations(): void {
-		const answers = [...this.state.answers];
-		const have = new Set(answers.map((a) => a.questionId));
-		for (const q of this.questionnaire) {
-			if (have.has(q.id) || !isShown(q, answers)) continue;
-			const idx = recommendedIndex(q);
-			if (idx >= 0 && q.options)
-				answers.push({ questionId: q.id, value: optionValue(q.options[idx]) });
-		}
-		this.done(answers);
+	private editAnswers(): void {
+		this.review = false;
+		this.reviewAction = "send";
+		const firstShown = this.questionnaire.findIndex((question) =>
+			isShown(question, this.state.answers),
+		);
+		this.enter(firstShown >= 0 ? firstShown : 0);
 	}
 
 	private cancel(): void {
@@ -883,23 +906,58 @@ export class QuestionnaireComponent implements Component, Focusable {
 
 	private renderReview(width: number): string[] {
 		const palette = this.opts.palette ?? defaultPalette();
-		const lines = [palette.heading("Review your answers"), ""];
+		const innerWidth = Math.max(width - 4, 0);
+		const boxLine = (content: string) =>
+			`${palette.dim("│")} ${padRight(truncate(content, innerWidth), innerWidth)} ${palette.dim("│")}`;
+		const lines = [
+			palette.dim(`╭${"─".repeat(Math.max(width - 2, 0))}╮`),
+			boxLine(palette.heading("Review answers")),
+			boxLine(
+				palette.muted(
+					`Confirm what will be sent${this.opts.recipient ? ` to ${this.opts.recipient}` : ""}.`,
+				),
+			),
+			boxLine(""),
+		];
 		for (const q of this.questionnaire) {
-			const header = q.header ?? q.id;
 			const mine = this.state.answers.filter((a) => a.questionId === q.id);
-			if (mine.length === 0 || mine.every((a) => a.skipped)) {
-				lines.push(palette.dim(truncate(`  ${header} → (skipped)`, width)));
-				continue;
+			if (mine.length === 0 || mine.every((a) => a.skipped)) continue;
+			lines.push(boxLine(palette.heading(q.header ?? q.question)));
+			for (const answer of mine) {
+				const option = q.options?.find(
+					(candidate) => optionValue(candidate) === answer.value,
+				);
+				const label = option?.label ?? answer.value;
+				const rec = q.recommendation === answer.value ? " [rec]" : "";
+				const custom = answer.custom ? " [custom]" : "";
+				lines.push(boxLine(`  ${label}${rec}${custom}`));
+				if (option?.description) {
+					for (const detail of wrap(
+						option.description,
+						innerWidth - 4,
+						palette,
+					)) {
+						lines.push(boxLine(`    ${detail}`));
+					}
+				}
+				if (answer.note) {
+					lines.push(boxLine(palette.dim(`    note: ${answer.note}`)));
+				}
 			}
-			const val = mine.map((a) => a.value).join(", ");
-			lines.push(truncate(`  ${header} → ${val}`, width));
-			const note = mine.find((a) => a.note)?.note;
-			if (note) lines.push(palette.dim(truncate(`      note: ${note}`, width)));
+			lines.push(boxLine(""));
 		}
-		lines.push("");
+		const edit = "[ Edit answers ]";
+		const send = `[ Send ${this.state.answers.filter((a) => !a.skipped).length === 1 ? "answer" : "answers"} ]`;
+		const actions =
+			this.reviewAction === "edit"
+				? `${palette.accent(`› ${edit}`)}    ${send}`
+				: `  ${edit}    ${palette.accent(`› ${send}`)}`;
+		lines.push(boxLine(actions));
+		lines.push(boxLine(""));
 		lines.push(
-			palette.muted("[r] accept recommended   [enter] send   [esc] close"),
+			boxLine(palette.muted("←/→ or tab choose · enter confirm · esc edit")),
 		);
+		lines.push(palette.dim(`╰${"─".repeat(Math.max(width - 2, 0))}╯`));
 		return lines;
 	}
 }
@@ -1048,15 +1106,14 @@ export function runQuestionnaire(
 	questionnaire: Questionnaire,
 	opts: QuestionnaireRunOptions = {},
 ): Promise<Answers | undefined> {
-	let comp: CollapsibleQuestionnaireComponent | undefined;
 	return ctx.ui.custom<Answers | undefined>(
 		(_tui: TUI, theme, _keybindings, done) => {
-			const palette = paletteFromTheme(theme);
-			comp = new CollapsibleQuestionnaireComponent(questionnaire, done, {
+			const component = new QuestionnaireComponent(questionnaire, done, {
 				...opts,
-				palette,
+				palette: paletteFromTheme(theme),
 			});
-			return comp;
+			component.focused = true;
+			return component;
 		},
 		{
 			overlay: true,
@@ -1064,9 +1121,6 @@ export function runQuestionnaire(
 				anchor: "bottom-center",
 				width: "100%",
 				maxHeight: "60%",
-			},
-			onHandle: (handle: OverlayHandle) => {
-				comp?.setHandle(handle);
 			},
 		} as any,
 	);

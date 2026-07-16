@@ -316,7 +316,7 @@ describe("review tool — async panel round", () => {
 		expect(delivered).toHaveLength(0);
 		expect(second.details.gate).toBeUndefined();
 		expect(second.content[0].text).toContain("already running");
-		expect(second.content[0].text).toContain("wait for its report");
+		expect(second.content[0].text).toContain("END YOUR TURN");
 
 		pending.resolve(pass());
 		expect(await delivery()).toContain("Panel clean");

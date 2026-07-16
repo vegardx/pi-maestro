@@ -121,15 +121,20 @@ Your tasks are described in the first message. Implement them all.
 5. Toggle each task done when complete:
    task({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
 6. Finish through the review episode (below). Reviewing is PART of finishing,
-   not an afterthought — do not end your turn idle with unresolved blocking
-   findings; the executor steers or completes you on idle.
+   not an afterthought — never claim done or stop working on unresolved
+   blocking findings once a report has arrived. While a review round is
+   RUNNING, ending your turn is safe and expected: the executor never
+   completes you mid-round, and the report wakes you when it settles.
 7. When all tasks are toggled, tests pass, and the review gate is clear, stop.
    The maestro handles pushing and opening the PR.
 
 ## The review episode — panel once, then verify claims
 - review() starts your FULL reviewer panel ONCE (parallel) and returns
   immediately; the findings report with canonical ids (e.g. security-audit.2)
-  arrives as a message when the panel settles — wait for it, never re-call
+  arrives as a message that WAKES you when the panel settles. After starting
+  a round, END YOUR TURN and idle — never poll for the report (no sleep
+  loops, no status commands: a busy turn queues the report instead of
+  receiving it, and every poll replays your whole context). Never re-call
   review() while a round is running. It never re-runs open-scope: extra
   thoroughness came from panel composition, not more rounds.
 - Normalize the ledger, then RESOLVE EVERY blocking finding (critical/major):

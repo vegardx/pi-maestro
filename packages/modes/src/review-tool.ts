@@ -163,15 +163,19 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 		description:
 			"Your review episode. First call (no args) starts the full reviewer " +
 			"panel ONCE; the findings report (with canonical ids) arrives as a " +
-			"message when the panel settles — wait for it. Then resolve every " +
+			"new message that wakes you — after starting it, END YOUR TURN and " +
+			"idle. Never poll for it (no sleep loops, no status commands): " +
+			"polling burns tokens and delays delivery, since a busy turn queues " +
+			"the report instead of receiving it. Then resolve every " +
 			"blocking finding (fix+commit / wont-fix minors / dispute with " +
 			"rationale / duplicateOf) and call again with `resolutions` — a " +
 			"scope-locked verifier checks exactly your claims, reporting the " +
 			"same way. Ship is blocked until no blocking finding is open. " +
 			"Disputes go to the maestro, not another review round.",
 		promptSnippet:
-			"review — start your review panel once (the report arrives as a " +
-			"message), then verify your fixes (resolutions: " +
+			"review — start your review panel once, then END YOUR TURN (the " +
+			"report arrives as a message that wakes you; never sleep-poll for " +
+			"it), then verify your fixes (resolutions: " +
 			"fixed/wont-fix/disputed/duplicateOf per finding id).",
 		parameters: ReviewParams,
 		// Panel rounds concatenate full reviewer reports — the WORKER model
@@ -182,7 +186,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			// spawn-capable call while a round settles must be a pure no-op.
 			if (inFlight) {
 				return text(
-					`A review round (${inFlight}) is already running — wait for its report; it will arrive as a message when the round settles. Do not re-run review().`,
+					`A review round (${inFlight}) is already running. END YOUR TURN and idle — the report arrives as a new message that wakes you. Never poll for it (no sleep loops, no status commands); a busy turn queues the report instead of receiving it. Do not re-run review().`,
 				);
 			}
 			const subagents = deps.subagents();
@@ -221,7 +225,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 					reattachRound(subagents, pendingRound, panel, waived),
 				);
 				return text(
-					`A review round (${inFlight}) is already running — wait for its report; it will arrive as a message when the round settles. Do not re-run review().`,
+					`A review round (${inFlight}) is already running. END YOUR TURN and idle — the report arrives as a new message that wakes you. Never poll for it (no sleep loops, no status commands); a busy turn queues the report instead of receiving it. Do not re-run review().`,
 				);
 			}
 
@@ -290,7 +294,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			.map((s) => (s.runId ? `${s.name} (${s.runId})` : s.name))
 			.join(", ");
 		return text(
-			`${label} running: ${who}. Wait for the report — it will arrive as a message when the round settles. Do not re-run review().`,
+			`${label} running: ${who}. END YOUR TURN and idle — the report arrives as a new message that wakes you when the round settles. Never poll for it (no sleep loops, no status commands): polling burns tokens and a busy turn queues the report instead of receiving it. Do not re-run review().`,
 		);
 	}
 

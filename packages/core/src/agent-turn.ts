@@ -4,9 +4,8 @@
 // re-deriving the idle-wait dance.
 //
 // It works from a plain ExtensionContext (no ExtensionCommandContext /
-// waitForIdle), because modes drives it from an agent_end handler where only
-// the bare context exists. We install one shared agent_end listener per `pi`
-// and queue resolvers behind it.
+// waitForIdle), because callers may only have the bare context. We install one
+// shared agent_settled listener per `pi` and queue resolvers behind it.
 
 import type {
 	ExtensionAPI,
@@ -22,7 +21,7 @@ function ensureIdleListener(pi: ExtensionAPI): void {
 	if (installedFor.has(pi)) return;
 	installedFor.add(pi);
 	idleResolvers.set(pi, []);
-	pi.on("agent_end", () => {
+	pi.on("agent_settled", () => {
 		// One microtask of slack so post-turn state settles before callers
 		// read the transcript.
 		queueMicrotask(() => {

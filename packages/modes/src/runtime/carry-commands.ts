@@ -446,8 +446,8 @@ export function contextFillLadder(
 				if (rt.carryForward.get()) return; // an episode is already running
 				// turn_end fires BETWEEN the round-trips of an agentic run, so
 				// firing here would inject the forced-distill directive into the
-				// middle of ongoing work. Arm instead; agent_end (the run truly
-				// finishing) fires it via firePendingForcedDistill.
+				// middle of ongoing work. Arm instead; agent_settled (the session
+				// truly idle) fires it via firePendingForcedDistill.
 				rt.pendingForcedDistill = { fillPct: pct };
 				ctx.ui.notify(
 					`Maestro context ${pct.toFixed(0)}% full${detail} — forced /distill queued for when the current work settles.`,
@@ -472,7 +472,7 @@ export function contextFillLadder(
 
 /**
  * Fire an armed forced distill now that the run has actually finished
- * (agent_end). No-op when nothing is armed or an episode is already live.
+ * (agent_settled). No-op when nothing is armed or an episode is already live.
  */
 export function firePendingForcedDistill(
 	rt: RuntimeContext,

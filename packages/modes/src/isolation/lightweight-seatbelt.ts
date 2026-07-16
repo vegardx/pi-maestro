@@ -104,9 +104,8 @@ export interface LightweightSeatbeltOptions {
 /**
  * Lightweight is a Seatbelt/bubblewrap accident-prevention boundary, not a VM
  * and not adversarial-code isolation. Host reads remain broadly compatible;
- * writes are confined to a controller-owned private workspace. Network is
- * proxy-mediated and generally allowed, while localhost/private endpoints and
- * Unix control sockets remain unavailable.
+ * writes are confined to a controller-owned private workspace. Host home and
+ * network access are denied; Unix control sockets remain unavailable.
  */
 export class LightweightSeatbeltBackend implements IsolationBackend {
 	readonly tier = "lightweight" as const;
@@ -137,7 +136,7 @@ export class LightweightSeatbeltBackend implements IsolationBackend {
 			supported,
 			workspace: workspace?.root,
 			detail: supported
-				? "Lightweight process-policy isolation; broad host reads and network compatibility, private-workspace writes only."
+				? "Lightweight process-policy isolation; host home/network denied, private-workspace writes only."
 				: `Lightweight isolation is unavailable on ${this.platform}.`,
 			...(this.error ? { error: this.error } : {}),
 		};
@@ -221,7 +220,7 @@ export class LightweightSeatbeltBackend implements IsolationBackend {
 			await this.runtime.reset();
 			await this.runtime.initialize(
 				seatbeltConfig(workspace, sourceRoot),
-				async ({ host }) => networkDestinationAllowed(host),
+				async () => false,
 			);
 			this.initializedWorkspace = workspace.root;
 		}
@@ -302,10 +301,10 @@ export function seatbeltConfig(
 	const agentDir = resolve(getAgentDir());
 	return {
 		network: {
-			// A sentinel starts proxy mediation; the callback authorizes ordinary
-			// external destinations and rejects local/control endpoints.
-			allowedDomains: ["network-probe.invalid"],
-			deniedDomains: [],
+			// Hostname authorization cannot safely prevent DNS rebinding because
+			// sandbox-runtime resolves after the callback. Keep network off.
+			allowedDomains: [],
+			deniedDomains: ["*"],
 			allowUnixSockets: [],
 			allowAllUnixSockets: false,
 			allowLocalBinding: false,
@@ -314,6 +313,9 @@ export function seatbeltConfig(
 			// Lightweight intentionally keeps broad reads for developer-tool
 			// compatibility. Known credentials and control state are unreadable.
 			denyRead: [
+				// Broad host reads are useful, but the home/config hierarchy is the
+				// credential boundary. Commands use the private workspace.home instead.
+				hostHome,
 				resolve(hostHome, ".ssh"),
 				resolve(hostHome, ".aws"),
 				resolve(hostHome, ".gnupg"),

@@ -105,19 +105,24 @@ describe("Lightweight policy", () => {
 		createdAt: "now",
 	};
 
-	it("confines writes, blocks control sockets, and keeps broad reads/network", () => {
+	it("confines writes and denies host home, network, and control sockets", () => {
 		const config = seatbeltConfig(workspace, "/repo");
 		expect(config.filesystem.allowWrite).toEqual(
 			expect.arrayContaining([workspace.root, workspace.home, workspace.tmp]),
 		);
 		expect(config.filesystem.denyWrite).toContain("/repo");
 		expect(config.filesystem.denyRead).toContain(resolve(getAgentDir()));
+		expect(config.filesystem.denyRead).toContain(
+			resolve(process.env.HOME ?? ""),
+		);
+		expect(config.network.allowedDomains).toEqual([]);
+		expect(config.network.deniedDomains).toContain("*");
 		expect(config.network.allowUnixSockets).toEqual([]);
 		expect(config.network.allowAllUnixSockets).toBe(false);
 		expect(config.network.allowLocalBinding).toBe(false);
 	});
 
-	it("allows external destinations but rejects local and host-control ranges", () => {
+	it("classifies literal destinations conservatively for future pinned DNS use", () => {
 		for (const host of [
 			"localhost",
 			"127.0.0.1",

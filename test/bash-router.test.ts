@@ -395,7 +395,7 @@ describe("bash coaching and routing policy", () => {
 			policy: guided,
 		});
 		expect(() => resolveBashOperations(protectedRead, {}, "/w")).toThrow(
-			/no host-read backend is available/u,
+			/no write-restricted host-read backend is available/u,
 		);
 
 		const isolated = decideBashPolicy({
@@ -426,7 +426,7 @@ describe("bash coaching and routing policy", () => {
 		const select = vi.fn(async () => "Run direct once");
 		const approveFallback = vi.fn(async () => true);
 		await expect(
-			isolationFailureAction("lightweight", "seatbelt failed", {
+			isolationFailureAction("lightweight", "seatbelt failed", "confirm", {
 				ui: { select, confirm: approveFallback } as never,
 			}),
 		).resolves.toBe("direct-once");
@@ -434,6 +434,19 @@ describe("bash coaching and routing policy", () => {
 			"Weaken isolation?",
 			expect.stringContaining("can modify the real checkout"),
 		);
+
+		const failClosedSelect = vi.fn(
+			async (_title: string, _choices: string[]) =>
+				"Cancel (policy is fail-closed)",
+		);
+		await expect(
+			isolationFailureAction("lightweight", "seatbelt failed", "fail-closed", {
+				ui: { select: failClosedSelect } as never,
+			}),
+		).resolves.toBe("cancel");
+		expect(failClosedSelect.mock.calls[0]?.[1]).toEqual([
+			"Cancel (policy is fail-closed)",
+		]);
 	});
 
 	it("shadow replay reports zero protected host-write routes", () => {

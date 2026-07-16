@@ -102,6 +102,18 @@ export function computeAgentSessionTools(
 	return [...active, ...missing];
 }
 
+/** Install the true session-idle boundary for a distill armed mid-run. */
+export function registerForcedDistillSettlementHook(
+	pi: RuntimeContext["pi"],
+	rt: RuntimeContext,
+): void {
+	// agent_end can precede automatic retry, compaction recovery, or queued
+	// continuation. Only agent_settled means it is safe to inject new work.
+	pi.on("agent_settled", (_event, ctx) => {
+		if (!rt.agentBridge) firePendingForcedDistill(rt, ctx);
+	});
+}
+
 export function registerRuntimeHooks(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
 
@@ -416,11 +428,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.agentBridge?.onTurnStart();
 	});
 
-	// The run actually finished (agent idle) — safe moment for the forced
-	// distill the ladder armed mid-run (turn_end fires between tool loops).
-	pi.on("agent_end", (_event, ctx) => {
-		if (!rt.agentBridge) firePendingForcedDistill(rt, ctx);
-	});
+	registerForcedDistillSettlementHook(pi, rt);
 
 	// Accumulate real usage from assistant messages (tokens + cost). In agent
 	// mode the bridge reports it over RPC; the maestro records its own

@@ -246,13 +246,23 @@ describe("defineExtension", () => {
 });
 
 describe("runAgentTurn", () => {
-	it("sends the message, waits for agent_end, returns assistant text", async () => {
+	it("waits through an intermediate agent_end until agent_settled", async () => {
 		const pi = fakePi();
 		const ctx = fakeCtx({ idle: false, assistantText: "done" });
-		const promise = runAgentTurn(pi.api, ctx, "do the thing");
+		let resolved = false;
+		const promise = runAgentTurn(pi.api, ctx, "do the thing").then((text) => {
+			resolved = true;
+			return text;
+		});
 		expect(pi.sent).toHaveLength(1);
 		expect(pi.sent[0]?.content).toBe("do the thing");
+
+		// A low-level run ended, but retry/compaction/continuation may follow.
 		pi.fire("agent_end");
+		await Promise.resolve();
+		expect(resolved).toBe(false);
+
+		pi.fire("agent_settled");
 		await expect(promise).resolves.toBe("done");
 	});
 

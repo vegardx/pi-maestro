@@ -430,7 +430,7 @@ function raceWatchdog(
 const DEAD_POLL_MS = 5_000;
 
 /**
- * Resolve when the child reports `agent_end`; reject when its process dies.
+ * Resolve when the child reports `agent_settled`; reject when its process dies.
  * RpcClient rejects pending send() requests on exit but never notifies
  * onEvent subscribers, so a child dying mid-run (no outstanding request)
  * would hang a bare event wait forever — poll the client's `exitError`

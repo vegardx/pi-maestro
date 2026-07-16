@@ -1,8 +1,10 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
 	contextFillLadder,
 	firePendingForcedDistill,
 } from "../packages/modes/src/runtime/carry-commands.js";
+import { registerForcedDistillSettlementHook } from "../packages/modes/src/runtime/hooks.js";
 
 describe("contextFillLadder (nudge → force → warnings)", () => {
 	function fakes(percent: number | null, warnedAt = 0) {
@@ -86,7 +88,7 @@ describe("contextFillLadder (nudge → force → warnings)", () => {
 		expect(rt.contextWarnedAt).toBe(30);
 	});
 
-	it("50% crossing ARMS the force; agent_end fires it (never mid-run)", () => {
+	it("50% crossing arms the force until the session settles", () => {
 		const { messages, notes, rt, ctx } = fakes(55, 30); // nudge already fired
 		contextFillLadder(rt as never, ctx as never);
 		// Mid-run (turn_end fires between tool loops): nothing starts yet.
@@ -101,15 +103,43 @@ describe("contextFillLadder (nudge → force → warnings)", () => {
 		contextFillLadder(rt as never, ctx as never);
 		expect(notes.filter(([m]) => m.includes("queued"))).toHaveLength(1);
 
-		// The run settles: agent_end fires the armed distill.
+		// The run settles: the armed distill can now fire.
 		firePendingForcedDistill(rt as never, ctx as never);
 		expect(rt.carryForward.get()).toBeTruthy();
 		expect(messages).toHaveLength(1);
 		expect(messages[0]).toContain("FORCED distill");
 		expect(messages[0]).toContain("divergence check");
-		// Disarmed + episode running — later agent_ends are no-ops.
+		// Disarmed + episode running — later settlements are no-ops.
 		firePendingForcedDistill(rt as never, ctx as never);
 		expect(messages).toHaveLength(1);
+	});
+
+	it("agent_end cannot fire an armed distill before agent_settled", () => {
+		const { messages, rt, ctx } = fakes(55, 30);
+		contextFillLadder(rt as never, ctx as never);
+
+		const listeners = new Map<
+			string,
+			(event: unknown, ctx: ExtensionContext) => void
+		>();
+		const pi = {
+			on: (
+				event: string,
+				handler: (event: unknown, ctx: ExtensionContext) => void,
+			) => {
+				listeners.set(event, handler);
+			},
+		};
+		registerForcedDistillSettlementHook(pi as never, rt as never);
+
+		expect(listeners.has("agent_end")).toBe(false);
+		expect(listeners.has("agent_settled")).toBe(true);
+		listeners.get("agent_end")?.({}, ctx as never);
+		expect(messages).toHaveLength(0);
+
+		listeners.get("agent_settled")?.({}, ctx as never);
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toContain("FORCED distill");
 	});
 
 	it("an armed force is dropped when an episode started meanwhile", () => {

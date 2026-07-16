@@ -11,9 +11,9 @@ import { defineExtension } from "@vegardx/pi-core";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
 import { showConfigMenu } from "./menu.js";
+import { settingsRegistry } from "./registry.js";
 
-/** Global registry of declared settings, populated by extensions. */
-export const settingsRegistry: Map<string, SettingDeclaration[]> = new Map();
+export { settingsRegistry } from "./registry.js";
 
 export default defineExtension(
 	{

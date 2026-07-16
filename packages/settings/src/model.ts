@@ -13,6 +13,7 @@ import {
 	type ModelConfigScope,
 	type ModelRole,
 	type SessionSettingValue,
+	type SettingDeclaration,
 	setSessionRoleOverride,
 	setSessionSettingOverride,
 	type ThinkingLevel,
@@ -48,6 +49,26 @@ export interface LayeredValue<T> {
 	readonly session?: T;
 	readonly effective?: T;
 	readonly source?: MaestroScope | "default";
+}
+
+export function parseStringList(raw: string): readonly string[] | undefined {
+	const trimmed = raw.trim();
+	if (trimmed === "") return [];
+	try {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (
+			Array.isArray(parsed) &&
+			parsed.every((value) => typeof value === "string")
+		)
+			return parsed;
+	} catch {
+		// The interactive editor also accepts newline-separated values.
+	}
+	const values = raw
+		.split(/\r?\n/)
+		.map((value) => value.trim())
+		.filter(Boolean);
+	return values.length > 0 ? values : undefined;
 }
 
 export function parseSettingValue(raw: string): SessionSettingValue {
@@ -295,6 +316,62 @@ export function writeRoleLeaf(
 		else delete roleObject[leaf];
 		pruneRole(raw, profile, role);
 	});
+}
+
+export function validateDeclaredValue(
+	declaration: SettingDeclaration,
+	value: unknown,
+): SessionSettingValue | undefined {
+	switch (declaration.type) {
+		case "choice":
+			return typeof value === "string" &&
+				declaration.options?.some((option) => option.value === value)
+				? value
+				: undefined;
+		case "string-list":
+			return Array.isArray(value) &&
+				value.every((entry) => typeof entry === "string")
+				? [...value]
+				: undefined;
+		case "number":
+			return typeof value === "number" && Number.isFinite(value)
+				? value
+				: undefined;
+		case "boolean":
+			return typeof value === "boolean" ? value : undefined;
+		default:
+			return typeof value === "string" ? value : undefined;
+	}
+}
+
+export function readDeclaredValue(
+	cwd: string,
+	extension: string,
+	declaration: SettingDeclaration,
+	defaultValue: SessionSettingValue | undefined = validateDeclaredValue(
+		declaration,
+		declaration.default,
+	),
+): LayeredValue<SessionSettingValue> {
+	const raw = readAdvancedValue(cwd, extension, declaration.key);
+	const fallback = validateDeclaredValue(declaration, defaultValue);
+	const global = validateDeclaredValue(declaration, raw.global);
+	const project = validateDeclaredValue(declaration, raw.project);
+	const session = validateDeclaredValue(declaration, raw.session);
+	return {
+		global,
+		project,
+		session,
+		effective: session ?? project ?? global ?? fallback,
+		source:
+			session !== undefined
+				? "session"
+				: project !== undefined
+					? "project"
+					: global !== undefined
+						? "global"
+						: "default",
+	};
 }
 
 export function readAdvancedValue(

@@ -1,0 +1,615 @@
+import type { ModeName } from "@vegardx/pi-contracts";
+import type { ExecutionPolicySettings } from "./settings.js";
+import {
+	analyzeShellProgram,
+	type ShellProgramAnalysis,
+} from "./shell-program.js";
+
+export type BashActor = "maestro" | "worker" | "reviewer";
+export type BashEffect =
+	| "host-read"
+	| "workspace-read"
+	| "workspace-write"
+	| "repository-code"
+	| "local-git"
+	| "delivery"
+	| "github-read"
+	| "remote-read"
+	| "remote-write"
+	| "privileged"
+	| "destructive"
+	| "unknown";
+export type BashRoute =
+	| "direct"
+	| "host-read"
+	| "lightweight"
+	| "strong"
+	| "confirm"
+	| "deny";
+export type BashGuidance = "redirect" | "advisory" | "none";
+
+export interface BashPolicyInput {
+	readonly command: string;
+	readonly mode: ModeName;
+	readonly actor: BashActor;
+	readonly policy: ExecutionPolicySettings;
+}
+
+export interface BashPolicyDecision {
+	readonly analysis: ShellProgramAnalysis;
+	readonly actor: BashActor;
+	readonly mode: ModeName;
+	readonly effects: ReadonlySet<BashEffect>;
+	readonly route: BashRoute;
+	readonly reason: string;
+	readonly confidence: "low" | "medium" | "high";
+	readonly guidance: BashGuidance;
+	readonly suggestedTool?: string;
+	readonly invariant?: "delivery" | "worker-escalation" | "read-only";
+}
+
+const HOST_READ = new Set([
+	"pwd",
+	"ls",
+	"wc",
+	"file",
+	"stat",
+	"du",
+	"df",
+	"which",
+	"type",
+	"date",
+	"printenv",
+	"whoami",
+	"hostname",
+	"uname",
+	"true",
+	"false",
+]);
+const FILE_READ = new Set(["cat", "head", "tail", "less", "more", "bat"]);
+const SEARCH = new Set(["grep", "rg", "ag", "ack"]);
+const FIND = new Set(["find", "fd"]);
+const TEXT_FILTER = new Set([
+	"jq",
+	"yq",
+	"awk",
+	"sed",
+	"sort",
+	"uniq",
+	"cut",
+	"tr",
+]);
+const PACKAGE = new Set([
+	"npm",
+	"npx",
+	"pnpm",
+	"yarn",
+	"bun",
+	"deno",
+	"cargo",
+	"go",
+	"make",
+	"just",
+]);
+const LOCAL_WRITES = new Set([
+	"cp",
+	"mv",
+	"mkdir",
+	"touch",
+	"ln",
+	"install",
+	"tee",
+	"truncate",
+	"patch",
+]);
+const DESTRUCTIVE = new Set(["rm", "rmdir", "shred"]);
+const GIT_READ = new Set([
+	"status",
+	"diff",
+	"log",
+	"show",
+	"rev-parse",
+	"remote",
+	"ls-files",
+	"grep",
+	"describe",
+	"shortlog",
+	"blame",
+	"cat-file",
+	"for-each-ref",
+	"merge-base",
+	"name-rev",
+]);
+const GIT_LOCAL = new Set([
+	"add",
+	"checkout",
+	"switch",
+	"restore",
+	"merge",
+	"rebase",
+	"cherry-pick",
+	"revert",
+	"reset",
+	"clean",
+	"stash",
+	"worktree",
+	"branch",
+	"tag",
+	"update-ref",
+	"apply",
+	"am",
+]);
+const GIT_DELIVERY = new Set(["commit", "push", "send-email"]);
+const GH_MUTATIONS = new Set([
+	"create",
+	"edit",
+	"delete",
+	"close",
+	"reopen",
+	"merge",
+	"review",
+	"comment",
+	"approve",
+	"cancel",
+	"rerun",
+	"enable",
+	"disable",
+	"set-default",
+	"fork",
+	"sync",
+]);
+const PRIVILEGED = new Set([
+	"sudo",
+	"doas",
+	"launchctl",
+	"systemctl",
+	"service",
+	"kubectl",
+	"helm",
+	"terraform",
+	"ansible",
+	"aws",
+	"gcloud",
+	"az",
+	"docker",
+	"podman",
+	"ssh",
+	"scp",
+	"rsync",
+]);
+
+/** Exact simple equivalents only. Compound shell automation is never split. */
+export function dedicatedToolSuggestion(
+	analysis: ShellProgramAnalysis,
+): string | undefined {
+	if (!analysis.completeSimple) return undefined;
+	const command = analysis.commands[0];
+	if (!command?.executable) return undefined;
+	if (FILE_READ.has(command.executable)) return "read";
+	if (SEARCH.has(command.executable)) return "grep";
+	if (
+		FIND.has(command.executable) &&
+		!command.args.some((arg) => arg.startsWith("-exec"))
+	)
+		return "find";
+	if (command.executable === "curl" || command.executable === "wget")
+		return "webfetch";
+	if (command.executable === "ls") return "ls";
+	return undefined;
+}
+
+export function classifyBashEffects(
+	analysis: ShellProgramAnalysis,
+): ReadonlySet<BashEffect> {
+	const effects = new Set<BashEffect>();
+	if (analysis.source.trim() === "") {
+		effects.add("host-read");
+		return effects;
+	}
+	if (!analysis.parseComplete) effects.add("unknown");
+	if (analysis.features.has("redirect")) effects.add("workspace-write");
+	if (
+		analysis.features.has("substitution") ||
+		analysis.features.has("interpreter-carrier") ||
+		analysis.features.has("opaque-dispatch") ||
+		analysis.features.has("git-extensibility")
+	)
+		effects.add("unknown");
+
+	for (const command of analysis.commands) {
+		const executable = command.executable;
+		if (!executable) {
+			effects.add("unknown");
+			continue;
+		}
+		if (HOST_READ.has(executable)) effects.add("host-read");
+		else if (
+			FILE_READ.has(executable) ||
+			SEARCH.has(executable) ||
+			FIND.has(executable) ||
+			TEXT_FILTER.has(executable)
+		)
+			effects.add("workspace-read");
+		else if (executable === "echo" || executable === "printf")
+			effects.add("host-read");
+		else if (LOCAL_WRITES.has(executable)) effects.add("workspace-write");
+		else if (DESTRUCTIVE.has(executable)) {
+			effects.add("workspace-write");
+			effects.add("destructive");
+		} else if (PACKAGE.has(executable) || isInterpreter(executable)) {
+			effects.add("repository-code");
+			effects.add("workspace-write");
+		} else if (executable === "git") classifyGit(command.args, effects);
+		else if (executable === "gh") classifyGh(command.args, effects);
+		else if (executable === "curl" || executable === "wget")
+			classifyHttp(command.args, effects);
+		else if (
+			PRIVILEGED.has(executable) ||
+			command.wrappers.some(
+				(wrapper) => wrapper === "sudo" || wrapper === "doas",
+			)
+		) {
+			effects.add("privileged");
+			effects.add("remote-write");
+		} else effects.add("unknown");
+	}
+	return effects;
+}
+
+export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
+	const analysis = analyzeShellProgram(input.command);
+	const effects = classifyBashEffects(analysis);
+	const suggestedTool = dedicatedToolSuggestion(analysis);
+	const guidance = guidanceFor(input, suggestedTool);
+	const base = {
+		analysis,
+		actor: input.actor,
+		mode: input.mode,
+		effects,
+		guidance,
+		...(suggestedTool ? { suggestedTool } : {}),
+	};
+
+	// Hack is the explicit operator authorisation boundary. Nothing in command
+	// classification can turn it into a prompt or denial.
+	if (input.mode === "hack")
+		return {
+			...base,
+			route: "direct",
+			reason: "Hack explicitly authorizes direct host execution",
+			confidence: "high",
+		};
+
+	if (guidance === "redirect" && suggestedTool) {
+		return {
+			...base,
+			route: "deny",
+			reason: `Use the ${suggestedTool} tool for this complete simple equivalent`,
+			confidence: "high",
+		};
+	}
+	if (effects.has("delivery")) {
+		return {
+			...base,
+			route: "deny",
+			reason: deliveryReason(input.command),
+			confidence: "high",
+			invariant: "delivery",
+		};
+	}
+	if (
+		input.actor === "reviewer" &&
+		hasAny(effects, [
+			"workspace-write",
+			"repository-code",
+			"local-git",
+			"remote-write",
+			"privileged",
+			"destructive",
+			"unknown",
+		])
+	) {
+		return {
+			...base,
+			route: "deny",
+			reason:
+				"Read-only reviewer cannot run commands with writes, repository code, or uncertain effects",
+			confidence: "high",
+			invariant: "read-only",
+		};
+	}
+	if (
+		input.actor === "worker" &&
+		hasAny(effects, ["remote-write", "privileged", "destructive"])
+	) {
+		return {
+			...base,
+			route: "deny",
+			reason:
+				"Worker cannot approve consequential effects; ask the parent maestro to perform it or use Hack explicitly",
+			confidence: "high",
+			invariant: "worker-escalation",
+		};
+	}
+	if (effects.has("privileged")) return privilegedRoute(input, base);
+	if (effects.has("remote-write") || effects.has("destructive"))
+		return consequentialRoute(
+			input,
+			base,
+			"Command likely has consequential external or destructive effects",
+		);
+	if (effects.has("github-read")) {
+		if (input.policy.githubReads === "confirm" && input.actor === "maestro")
+			return {
+				...base,
+				route: "confirm",
+				reason: "Policy requires confirmation for apparent GitHub reads",
+				confidence: "medium",
+			};
+		return {
+			...base,
+			route: "direct",
+			reason: "Apparent GitHub read",
+			confidence: "medium",
+		};
+	}
+
+	if (
+		input.mode === "recon" ||
+		input.mode === "plan" ||
+		input.actor === "reviewer"
+	) {
+		if (only(effects, ["host-read", "workspace-read", "remote-read"]))
+			return {
+				...base,
+				route: "host-read",
+				reason: "Narrow read command is eligible for protected host execution",
+				confidence: "high",
+			};
+		if (input.policy.modeRoutes === "direct" && !effects.has("unknown"))
+			return {
+				...base,
+				route: "direct",
+				reason: "Configured direct research route",
+				confidence: "medium",
+			};
+		if (hasAny(effects, ["repository-code", "workspace-write", "local-git"]))
+			return {
+				...base,
+				route: isolationRoute(input.policy),
+				reason:
+					"Research command may execute repository code or write workspace state",
+				confidence: "high",
+			};
+	}
+
+	if (effects.has("unknown")) return unknownRoute(input, base);
+	if (
+		input.policy.consequential === "confirm-mutations" &&
+		hasAny(effects, ["workspace-write", "local-git", "repository-code"]) &&
+		input.actor === "maestro"
+	) {
+		return {
+			...base,
+			route: "confirm",
+			reason: "Policy confirms mutating Bash commands",
+			confidence: "high",
+		};
+	}
+	return {
+		...base,
+		route: "direct",
+		reason:
+			input.actor === "worker"
+				? "Expected worker worktree activity"
+				: "Expected local workspace activity",
+		confidence: "high",
+	};
+}
+
+function guidanceFor(
+	input: BashPolicyInput,
+	suggestion: string | undefined,
+): BashGuidance {
+	if (!suggestion || input.policy.toolGuidance === "off") return "none";
+	if (input.mode === "hack" || input.policy.toolGuidance === "advisory")
+		return "advisory";
+	return "redirect";
+}
+
+function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
+	const subcommand = gitSubcommand(args);
+	if (!subcommand) {
+		effects.add("unknown");
+		return;
+	}
+	if (GIT_DELIVERY.has(subcommand)) effects.add("delivery");
+	else if (GIT_READ.has(subcommand)) effects.add("workspace-read");
+	else if (GIT_LOCAL.has(subcommand)) {
+		effects.add("local-git");
+		effects.add("workspace-write");
+		if (
+			(subcommand === "reset" && args.includes("--hard")) ||
+			subcommand === "clean"
+		)
+			effects.add("destructive");
+	} else effects.add("unknown");
+}
+
+function gitSubcommand(args: readonly string[]): string | undefined {
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (
+			[
+				"-C",
+				"--git-dir",
+				"--work-tree",
+				"--namespace",
+				"-c",
+				"--config-env",
+			].includes(arg)
+		) {
+			index += 1;
+			continue;
+		}
+		if (arg.startsWith("-")) continue;
+		return arg;
+	}
+	return undefined;
+}
+
+function classifyGh(args: readonly string[], effects: Set<BashEffect>): void {
+	const lower = args.map((arg) => arg.toLowerCase());
+	if (lower[0] === "api") {
+		const methodIndex = lower.findIndex(
+			(arg) => arg === "-x" || arg === "--method",
+		);
+		const method =
+			methodIndex >= 0 ? lower[methodIndex + 1]?.toUpperCase() : "GET";
+		if (method && method !== "GET") effects.add("remote-write");
+		else effects.add("github-read");
+		return;
+	}
+	if (lower.some((arg) => GH_MUTATIONS.has(arg))) {
+		if (
+			lower[0] === "pr" &&
+			(lower.includes("create") || lower.includes("merge"))
+		)
+			effects.add("delivery");
+		else effects.add("remote-write");
+	} else effects.add("github-read");
+}
+
+function classifyHttp(args: readonly string[], effects: Set<BashEffect>): void {
+	const methodAt = args.findIndex((arg) => arg === "-X" || arg === "--request");
+	const method = methodAt >= 0 ? args[methodAt + 1]?.toUpperCase() : undefined;
+	if (
+		(method && method !== "GET" && method !== "HEAD") ||
+		args.some((arg) =>
+			["-d", "--data", "--data-raw", "--upload-file", "-T"].includes(arg),
+		)
+	)
+		effects.add("remote-write");
+	else effects.add("remote-read");
+}
+
+function privilegedRoute(
+	input: BashPolicyInput,
+	base: Omit<BashPolicyDecision, "route" | "reason" | "confidence">,
+): BashPolicyDecision {
+	if (input.actor === "worker")
+		return {
+			...base,
+			route: "deny",
+			reason: "Privileged commands require parent or Hack escalation",
+			confidence: "high",
+			invariant: "worker-escalation",
+		};
+	if (
+		input.policy.privilegedRemote === "deny" ||
+		input.policy.privilegedRemote === "hack-only"
+	)
+		return {
+			...base,
+			route: "deny",
+			reason: "Privileged remote administration is restricted to Hack",
+			confidence: "high",
+		};
+	return {
+		...base,
+		route: "confirm",
+		reason: "Confirm privileged remote administration",
+		confidence: "high",
+	};
+}
+
+function consequentialRoute(
+	input: BashPolicyInput,
+	base: Omit<BashPolicyDecision, "route" | "reason" | "confidence">,
+	reason: string,
+): BashPolicyDecision {
+	if (input.actor === "worker")
+		return {
+			...base,
+			route: "deny",
+			reason: `${reason}; escalate to the parent maestro or Hack`,
+			confidence: "high",
+			invariant: "worker-escalation",
+		};
+	if (input.policy.consequential === "allow")
+		return {
+			...base,
+			route: "direct",
+			reason: `${reason}; explicitly allowed by policy`,
+			confidence: "high",
+		};
+	return { ...base, route: "confirm", reason, confidence: "high" };
+}
+
+function unknownRoute(
+	input: BashPolicyInput,
+	base: Omit<BashPolicyDecision, "route" | "reason" | "confidence">,
+): BashPolicyDecision {
+	if (input.actor === "worker")
+		return {
+			...base,
+			route: "direct",
+			reason: "Unknown command retained as one expected worker worktree unit",
+			confidence: "low",
+		};
+	if (input.policy.unknowns === "deny")
+		return {
+			...base,
+			route: "deny",
+			reason: "Command effects could not be determined",
+			confidence: "low",
+		};
+	if (input.policy.unknowns === "confirm")
+		return {
+			...base,
+			route: "confirm",
+			reason: "Confirm command with unknown effects",
+			confidence: "low",
+		};
+	return {
+		...base,
+		route: isolationRoute(input.policy),
+		reason: "Unknown command is routed to configured isolation",
+		confidence: "low",
+	};
+}
+
+function isolationRoute(
+	policy: ExecutionPolicySettings,
+): "lightweight" | "strong" | "deny" {
+	if (policy.isolation === "strong") return "strong";
+	if (policy.isolation === "lightweight") return "lightweight";
+	return "deny";
+}
+
+function deliveryReason(command: string): string {
+	if (/\bgit\s+(?:[^;&|\n]*\s)?commit\b/u.test(command))
+		return "Use the commit tool; Bash commits bypass the reviewed staging route";
+	return "Use the ship tool; Bash delivery bypasses the reviewed shipping route";
+}
+
+function isInterpreter(executable: string): boolean {
+	return /^(?:node|deno|python\d*|ruby|perl|php|tsx|ts-node)$/u.test(
+		executable,
+	);
+}
+
+function hasAny(
+	effects: ReadonlySet<BashEffect>,
+	values: readonly BashEffect[],
+): boolean {
+	return values.some((value) => effects.has(value));
+}
+
+function only(
+	effects: ReadonlySet<BashEffect>,
+	allowed: readonly BashEffect[],
+): boolean {
+	const set = new Set(allowed);
+	return effects.size > 0 && [...effects].every((effect) => set.has(effect));
+}

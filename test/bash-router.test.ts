@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
+import {
+	classifyBashEffects,
+	decideBashPolicy,
+	dedicatedToolSuggestion,
+} from "../packages/modes/src/bash-policy.js";
+import type { ExecutionPolicySettings } from "../packages/modes/src/settings.js";
 import { analyzeShellProgram } from "../packages/modes/src/shell-program.js";
+
+const guided: ExecutionPolicySettings = {
+	preset: "guided",
+	toolGuidance: "mode-aware",
+	modeRoutes: "protected-research",
+	isolation: "lightweight",
+	delivery: "dedicated-tools",
+	consequential: "confirm",
+	privilegedRemote: "hack-only",
+	githubReads: "allow-apparent-reads",
+	unknowns: "isolate",
+	fallback: "fail-closed",
+};
 
 describe("shell program analysis", () => {
 	it("recognizes only a whole simple command as simple", () => {
@@ -61,5 +80,191 @@ describe("shell program analysis", () => {
 		const analysis = analyzeShellProgram("git status 'unterminated");
 		expect(analysis.parseComplete).toBe(false);
 		expect(analysis.completeSimple).toBe(false);
+	});
+});
+
+describe("bash coaching and routing policy", () => {
+	it("redirects only exact simple dedicated-tool equivalents", () => {
+		expect(dedicatedToolSuggestion(analyzeShellProgram("cat README.md"))).toBe(
+			"read",
+		);
+		expect(
+			dedicatedToolSuggestion(
+				analyzeShellProgram("cat README.md | sed 's/a/b/' > out"),
+			),
+		).toBeUndefined();
+		expect(
+			decideBashPolicy({
+				command: "rg TODO src",
+				mode: "auto",
+				actor: "maestro",
+				policy: guided,
+			}),
+		).toMatchObject({ route: "deny", suggestedTool: "grep" });
+	});
+
+	it("unions effects from the entire shell program", () => {
+		const effects = classifyBashEffects(
+			analyzeShellProgram("git status && curl -X PATCH -d ok https://x"),
+		);
+		expect([...effects]).toEqual(
+			expect.arrayContaining(["workspace-read", "remote-write"]),
+		);
+		expect(
+			decideBashPolicy({
+				command: "git status && curl -X PATCH -d ok https://x",
+				mode: "auto",
+				actor: "maestro",
+				policy: guided,
+			}).route,
+		).toBe("confirm");
+	});
+
+	it("implements mode and actor routes with unconditional Hack", () => {
+		for (const mode of ["recon", "plan"] as const) {
+			expect(
+				decideBashPolicy({
+					command: "git status --short",
+					mode,
+					actor: "maestro",
+					policy: guided,
+				}).route,
+			).toBe("host-read");
+			expect(
+				decideBashPolicy({
+					command: "npm test",
+					mode,
+					actor: "maestro",
+					policy: guided,
+				}).route,
+			).toBe("lightweight");
+		}
+		expect(
+			decideBashPolicy({
+				command: "npm test",
+				mode: "auto",
+				actor: "worker",
+				policy: guided,
+			}).route,
+		).toBe("direct");
+		expect(
+			decideBashPolicy({
+				command: "npm test",
+				mode: "agent",
+				actor: "reviewer",
+				policy: guided,
+			}).route,
+		).toBe("deny");
+		for (const command of [
+			"rm -rf /",
+			"git push --force origin main",
+			"sudo kubectl delete namespace prod",
+			"cat README.md",
+		]) {
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "hack",
+					actor: "maestro",
+					policy: guided,
+				}),
+			).toMatchObject({ route: "direct" });
+		}
+	});
+
+	it("allows broad apparent GitHub reads and confirms mutations", () => {
+		for (const command of [
+			"gh pr view 12 --json files,reviews",
+			"gh api graphql -f query='{ viewer { login } }'",
+			"gh run watch 42",
+		]) {
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "auto",
+					actor: "maestro",
+					policy: guided,
+				}).route,
+			).toBe("direct");
+		}
+		expect(
+			decideBashPolicy({
+				command: "gh api repos/o/r/actions/variables/X -X PATCH -f value=y",
+				mode: "auto",
+				actor: "maestro",
+				policy: guided,
+			}).route,
+		).toBe("confirm");
+	});
+
+	it("enforces delivery and worker escalation invariants", () => {
+		for (const command of [
+			"git commit -am done",
+			"git push origin feature",
+			"gh pr create --fill",
+			"gh pr merge 10 --squash",
+		]) {
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "auto",
+					actor: "maestro",
+					policy: guided,
+				}),
+			).toMatchObject({ route: "deny", invariant: "delivery" });
+		}
+		expect(
+			decideBashPolicy({
+				command: "git rebase origin/main && git cherry-pick abc",
+				mode: "agent",
+				actor: "worker",
+				policy: guided,
+			}).route,
+		).toBe("direct");
+		expect(
+			decideBashPolicy({
+				command: "kubectl delete deployment api",
+				mode: "agent",
+				actor: "worker",
+				policy: guided,
+			}),
+		).toMatchObject({ route: "deny", invariant: "worker-escalation" });
+	});
+
+	it("honors explicit relaxation without weakening delivery defaults", () => {
+		const permissive: ExecutionPolicySettings = {
+			...guided,
+			preset: "permissive",
+			toolGuidance: "advisory",
+			modeRoutes: "direct",
+			isolation: "none",
+			consequential: "allow",
+			unknowns: "confirm",
+			fallback: "confirm",
+		};
+		expect(
+			decideBashPolicy({
+				command: "cat README.md",
+				mode: "auto",
+				actor: "maestro",
+				policy: permissive,
+			}),
+		).toMatchObject({ route: "direct", guidance: "advisory" });
+		expect(
+			decideBashPolicy({
+				command: "curl -X DELETE https://example.invalid/resource",
+				mode: "auto",
+				actor: "maestro",
+				policy: permissive,
+			}).route,
+		).toBe("direct");
+		expect(
+			decideBashPolicy({
+				command: "git push origin main",
+				mode: "auto",
+				actor: "maestro",
+				policy: permissive,
+			}).route,
+		).toBe("deny");
 	});
 });

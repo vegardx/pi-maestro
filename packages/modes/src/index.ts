@@ -20,6 +20,17 @@ export {
 	extractBashCorpusJsonl,
 	type SessionCorpus,
 } from "./bash-corpus.js";
+export {
+	buildTaxonomyReport,
+	type CommandFamily,
+	type CommandTaxonomy,
+	classifyCorpusCommand,
+	type ParserFeature,
+	type TaxonomyReport,
+	type TaxonomyReportOptions,
+	type TaxonomyRepresentative,
+	taxonomyDigest,
+} from "./bash-corpus-taxonomy.js";
 export type {
 	CompactionBucketSnapshot,
 	CompactionDecision,

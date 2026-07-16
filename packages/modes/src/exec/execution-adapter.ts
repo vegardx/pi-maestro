@@ -199,6 +199,11 @@ export interface ExecutionAdapterOpts {
 	/** Restart kill barrier timing (shortened in tests). */
 	restartKillTimeoutMs?: number;
 	restartPollMs?: number;
+	/**
+	 * New-deliverable activation gate, threaded to the executor. False defers
+	 * activation (running work still advances/ships). Absent → always allowed.
+	 */
+	canActivate?: () => boolean;
 	onPlanChanged: () => void;
 	onAgentStateChanged?: (
 		id: string,
@@ -833,6 +838,8 @@ export class ExecutionAdapter {
 				this.deliverableGateSatisfied(deliverableId),
 			panelGateDetail: (deliverableId) =>
 				this.deliverableGateDetail(deliverableId),
+
+			canActivate: this.opts.canActivate,
 
 			now: () => new Date().toISOString(),
 		};

@@ -540,6 +540,7 @@ export class ExecutionAdapter {
 					// modes state + seed.
 					const session = buildAgentSessionFile({
 						agentKey,
+						agentMode,
 						seed,
 						cwd,
 						outDir: agentSessionDir,

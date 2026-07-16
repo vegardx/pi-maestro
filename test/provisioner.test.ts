@@ -212,6 +212,7 @@ describe("buildAgentSessionFile", () => {
 		const outDir = join(dir, "sessions");
 		const result = buildAgentSessionFile({
 			agentKey: "g1/worker",
+			agentMode: "full",
 			seed: "# Your Tasks\ndo the thing",
 			cwd: "/work/tree",
 			outDir,
@@ -225,18 +226,20 @@ describe("buildAgentSessionFile", () => {
 		expect(header.cwd).toBe("/work/tree");
 		expect(header.parentSession).toBeUndefined();
 
-		expect(entries).toHaveLength(2);
-		const [state, seed] = entries as any[];
+		expect(entries).toHaveLength(3);
+		const [state, context, seed] = entries as any[];
 		expect(state.type).toBe("custom");
 		expect(state.customType).toBe("maestro.modes.state");
 		expect(state.data.mode).toBe("agent");
 		expect(state.data.execution.stage).toBe("executing");
 		expect(state.parentId).toBeNull();
+		expect(context.customType).toBe("maestro.agent.context");
+		expect(context.data).toMatchObject({ role: "worker", posture: "full" });
 		expect(seed.type).toBe("custom_message");
 		expect(seed.customType).toBe("maestro.execution.seed");
 		expect(seed.content).toBe("# Your Tasks\ndo the thing");
 		expect(seed.display).toBe(true);
-		expect(seed.parentId).toBe(state.id);
+		expect(seed.parentId).toBe(context.id);
 	});
 
 	it("forks a knowledge session: fresh header, entries preserved, seed appended", () => {
@@ -264,6 +267,7 @@ describe("buildAgentSessionFile", () => {
 		const outDir = join(dir, "sessions");
 		const result = buildAgentSessionFile({
 			agentKey: "g1/reviewer",
+			agentMode: "read-only",
 			seed: "# Your Tasks\nreview it",
 			cwd: "/work/tree",
 			outDir,
@@ -279,14 +283,14 @@ describe("buildAgentSessionFile", () => {
 		expect(header.cwd).toBe("/work/tree");
 
 		// Deterministic order: knowledge entries, modes state, seed.
-		expect(entries).toHaveLength(3);
-		const [knowledge, state, seed] = entries as any[];
+		expect(entries).toHaveLength(4);
+		const [knowledge, state, context, seed] = entries as any[];
 		expect(knowledge.customType).toBe("maestro.base-knowledge");
 		expect(knowledge.content).toContain("# Codebase Reference");
 		expect(state.customType).toBe("maestro.modes.state");
 		expect(state.parentId).toBe("know-1");
 		expect(seed.customType).toBe("maestro.execution.seed");
-		expect(seed.parentId).toBe(state.id);
+		expect(seed.parentId).toBe(context.id);
 
 		// The knowledge session itself is untouched (frozen).
 		expect(readFileSync(knowledgeFile, "utf8")).toBe(`${lines.join("\n")}\n`);
@@ -296,12 +300,14 @@ describe("buildAgentSessionFile", () => {
 		const outDir = join(dir, "sessions");
 		const a = buildAgentSessionFile({
 			agentKey: "g1/worker",
+			agentMode: "full",
 			seed: "s",
 			cwd: "/w",
 			outDir,
 		});
 		const b = buildAgentSessionFile({
 			agentKey: "g1/reviewer",
+			agentMode: "read-only",
 			seed: "s",
 			cwd: "/w",
 			outDir,

@@ -225,7 +225,20 @@ function emptyRoutes(): Record<ShadowRoute, number> {
 function digestCalls(calls: readonly BashCorpusCall[]): string {
 	const hash = createHash("sha256");
 	for (const call of calls) {
-		hash.update(call.id).update("\0").update(call.command).update("\0");
+		hash
+			.update(
+				JSON.stringify({
+					id: call.id,
+					command: call.command,
+					commandTruncated: call.commandTruncated,
+					cwd: call.cwd ?? null,
+					mode: call.mode,
+					actor: call.actor,
+					posture: call.posture,
+					nearbyTools: [...call.nearbyTools].sort(),
+				}),
+			)
+			.update("\0");
 	}
 	return hash.digest("hex");
 }

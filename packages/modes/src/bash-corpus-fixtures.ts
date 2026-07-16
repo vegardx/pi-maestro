@@ -23,6 +23,7 @@ export interface FixtureSet {
 	readonly training: readonly SanitizedBashFixture[];
 	readonly holdout: readonly SanitizedBashFixture[];
 	readonly adversarial: readonly SanitizedBashFixture[];
+	readonly omitted: { readonly holdoutDuplicates: number };
 }
 
 export interface FixtureOptions {
@@ -32,6 +33,17 @@ export interface FixtureOptions {
 	readonly maxPerPartition?: number;
 	readonly adversarialPerSource?: number;
 }
+
+const SAFE_VALUELESS_FLAGS = new Set([
+	"-v",
+	"--verbose",
+	"-q",
+	"--quiet",
+	"--json",
+	"--short",
+	"--porcelain",
+	"--no-pager",
+]);
 
 const ADVERSARIAL: readonly {
 	feature: ParserFeature;
@@ -105,6 +117,17 @@ export function buildCorpusFixtures(
 		});
 	}
 
+	// Keep the holdout semantically independent after sanitization. Repeated
+	// commands on both sides of the time boundary are training knowledge, not
+	// evidence of holdout generalization.
+	const trainingFingerprints = new Set(
+		training.map((fixture) => commandFingerprint(fixture.command)),
+	);
+	const deduplicatedHoldout = holdout.filter(
+		(fixture) => !trainingFingerprints.has(commandFingerprint(fixture.command)),
+	);
+	const holdoutDuplicates = holdout.length - deduplicatedHoldout.length;
+
 	const adversarial: SanitizedBashFixture[] = [];
 	const sourceLimit = Math.max(
 		0,
@@ -130,8 +153,9 @@ export function buildCorpusFixtures(
 		version: 1,
 		holdoutStart: boundary !== null ? new Date(boundary).toISOString() : null,
 		training,
-		holdout,
+		holdout: deduplicatedHoldout,
 		adversarial,
+		omitted: { holdoutDuplicates },
 	};
 }
 
@@ -151,7 +175,8 @@ function sanitizeToken(token: string, index: number): string {
 	if (index === 0 && /^[A-Za-z][\w.-]*$/u.test(bare))
 		return safeExecutable(bare);
 	if (/^(?:&&|\|\||\||;|>|>>|<)$/u.test(bare)) return bare;
-	if (/^-[A-Za-z0-9][\w-]*$/u.test(bare)) return bare.slice(0, 40);
+	if (SAFE_VALUELESS_FLAGS.has(bare)) return bare;
+	if (/^-{1,2}[A-Za-z0-9]/u.test(bare)) return "--fixture-flag";
 	if (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(bare))
 		return `${bare.split("=", 1)[0]}=FIXTURE`;
 	if (
@@ -241,6 +266,10 @@ function parseTimestamp(value: string | undefined): number | null {
 	if (!value) return null;
 	const parsed = Date.parse(value);
 	return Number.isFinite(parsed) ? parsed : null;
+}
+
+function commandFingerprint(command: string): string {
+	return createHash("sha256").update(command).digest("hex");
 }
 
 function fixtureId(source: string, kind: string, command: string): string {

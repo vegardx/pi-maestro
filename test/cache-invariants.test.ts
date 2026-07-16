@@ -185,6 +185,7 @@ describe("knowledge-fork prefix identity", () => {
 
 		const worker = buildAgentSessionFile({
 			agentKey: "g1/worker",
+			agentMode: "full",
 			seed: "# Your Tasks\n\nImplement the adapter.\n",
 			cwd: dir,
 			outDir: join(dir, "sessions"),
@@ -192,6 +193,7 @@ describe("knowledge-fork prefix identity", () => {
 		});
 		const reviewer = buildAgentSessionFile({
 			agentKey: "g1/reviewer",
+			agentMode: "read-only",
 			seed: "# Your Focus\n\nReview the adapter.\n",
 			cwd: dir,
 			outDir: join(dir, "sessions"),
@@ -200,9 +202,9 @@ describe("knowledge-fork prefix identity", () => {
 
 		const a = readFileSync(worker.path, "utf-8").trim().split("\n");
 		const b = readFileSync(reviewer.path, "utf-8").trim().split("\n");
-		// header + knowledge entry + modes-state + seed
-		expect(a).toHaveLength(4);
-		expect(b).toHaveLength(4);
+		// header + knowledge entry + modes-state + agent-context + seed
+		expect(a).toHaveLength(5);
+		expect(b).toHaveLength(5);
 
 		// Session headers differ ONLY in their fresh session id: everything
 		// else — version, cwd, parentSession lineage — is identical.
@@ -237,8 +239,8 @@ describe("knowledge-fork prefix identity", () => {
 			}
 		}
 		expect(divergence).toBe(1); // index 0 = knowledge entry, 1 = modes-state
-		expect(a[3]).toContain("Implement the adapter.");
-		expect(b[3]).toContain("Review the adapter.");
+		expect(a[4]).toContain("Implement the adapter.");
+		expect(b[4]).toContain("Review the adapter.");
 	});
 });
 

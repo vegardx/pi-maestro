@@ -12,6 +12,9 @@ export const MODES_STATE_ENTRY = "maestro.modes.state";
 /** Custom entry type for the byte-stable execution seed (see runtime). */
 export const EXECUTION_SEED_ENTRY = "maestro.execution.seed";
 
+/** Versioned worker/reviewer context persisted for audit and corpus extraction. */
+export const AGENT_CONTEXT_ENTRY = "maestro.agent.context";
+
 export interface PersistedModesState {
 	readonly version: 2;
 	readonly mode: ModeName;

@@ -4,11 +4,31 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      pi-stack:
+        patterns:
+          - "@earendil-works/pi-*"
+        update-types:
+          - minor
+          - patch
+      npm-tooling:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@earendil-works/pi-*"
+        update-types:
+          - minor
+          - patch
     ignore:
       - dependency-name: "@types/node"
         update-types:
           - version-update:semver-major
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

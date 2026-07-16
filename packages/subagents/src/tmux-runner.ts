@@ -29,8 +29,10 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { AgentEvent } from "@earendil-works/pi-agent-core";
-import type { RpcClientOptions } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSessionEvent,
+	RpcClientOptions,
+} from "@earendil-works/pi-coding-agent";
 import type { RunId, RunProcessMetadata } from "@vegardx/pi-contracts";
 import { capturePane, shellEscape, spawn, tmuxExec } from "@vegardx/pi-tmux";
 import type { RunBus } from "./bus.js";
@@ -116,7 +118,7 @@ export function resolveChildArgv(cliPath: string | undefined): string[] {
 }
 
 class TmuxRpcClient implements RpcLike {
-	private readonly listeners = new Set<(event: AgentEvent) => void>();
+	private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
 	private readonly pending = new Map<string, Pending>();
 	private readonly runDir: string;
 	private readonly input: string;
@@ -234,7 +236,7 @@ class TmuxRpcClient implements RpcLike {
 	abort(): Promise<void> {
 		return this.send({ type: "abort" }).then(() => undefined);
 	}
-	onEvent(listener: (event: AgentEvent) => void): () => void {
+	onEvent(listener: (event: AgentSessionEvent) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -393,7 +395,7 @@ class TmuxRpcClient implements RpcLike {
 					}
 					continue;
 				}
-				const event = value as unknown as AgentEvent;
+				const event = value as unknown as AgentSessionEvent;
 				if (event.type === "message_end") {
 					const message = (
 						event as { message?: { role?: string; content?: unknown } }

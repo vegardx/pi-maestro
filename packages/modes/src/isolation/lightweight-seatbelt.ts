@@ -33,7 +33,11 @@ export interface SandboxRuntimeAdapter {
 			port?: number;
 		}) => Promise<boolean>,
 	): Promise<void>;
-	wrap(command: string, signal?: AbortSignal, privateTmp?: string): Promise<string>;
+	wrap(
+		command: string,
+		signal?: AbortSignal,
+		privateTmp?: string,
+	): Promise<string>;
 	reset(): Promise<void>;
 }
 
@@ -187,11 +191,7 @@ export class LightweightSeatbeltBackend implements IsolationBackend {
 		const targetCwd = mapWorkspaceCwd(workspace, await realpath(sourceCwd));
 		let wrapped: string;
 		try {
-			wrapped = await this.runtime.wrap(
-				command,
-				options.signal,
-				workspace.tmp,
-			);
+			wrapped = await this.runtime.wrap(command, options.signal, workspace.tmp);
 		} catch (cause) {
 			const message = cause instanceof Error ? cause.message : String(cause);
 			this.state = "failed";
@@ -343,7 +343,10 @@ export function createResearchEnvironment(
 	workspace: ResearchWorkspace,
 ): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {};
-	for (const source of [base, requested ?? {}]) {
+	// The Pi tool supplies a resolved shell environment. It is authoritative;
+	// falling back to the controller environment is only for direct adapter use.
+	const sources = requested ? [requested] : [base];
+	for (const source of sources) {
 		for (const [key, value] of Object.entries(source)) {
 			if (
 				value !== undefined &&

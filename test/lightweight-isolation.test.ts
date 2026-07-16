@@ -146,12 +146,17 @@ describe("Lightweight policy", () => {
 				AWS_ACCESS_KEY_ID: "secret",
 				UNRELATED: "not allowlisted",
 			},
-			{ NODE_OPTIONS: "--no-warnings", API_KEY: "secret" },
+			{
+				PATH: "/requested/bin",
+				LANG: "nb_NO.UTF-8",
+				NODE_OPTIONS: "--no-warnings",
+				API_KEY: "secret",
+			},
 			workspace,
 		);
 		expect(env).toMatchObject({
-			PATH: "/bin:/usr/bin",
-			LANG: "en_US.UTF-8",
+			PATH: "/requested/bin",
+			LANG: "nb_NO.UTF-8",
 			HOME: workspace.home,
 			TMPDIR: workspace.tmp,
 			XDG_CACHE_HOME: workspace.cache,

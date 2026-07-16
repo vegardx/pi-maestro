@@ -423,6 +423,21 @@ describe("bash coaching and routing policy", () => {
 			expect.stringContaining("remote mutation"),
 		);
 
+		const selectLightweight = vi.fn(async () => "Try Lightweight once");
+		const approveLightweight = vi.fn(async () => true);
+		await expect(
+			isolationFailureAction("strong", "container unavailable", {
+				ui: {
+					select: selectLightweight,
+					confirm: approveLightweight,
+				} as never,
+			}),
+		).resolves.toBe("lightweight");
+		expect(approveLightweight).toHaveBeenCalledWith(
+			"Use weaker isolation?",
+			expect.stringContaining("not a VM"),
+		);
+
 		const select = vi.fn(async () => "Run direct once");
 		const approveFallback = vi.fn(async () => true);
 		await expect(

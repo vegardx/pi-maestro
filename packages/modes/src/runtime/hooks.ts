@@ -173,6 +173,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	});
 
 	pi.on("session_start", (_event, ctx) => {
+		rt.isolationNoneSession = false;
+		void Promise.allSettled([
+			rt.isolationBackends.lightweight.reset(),
+			rt.isolationBackends.strong.reset(),
+		]);
 		if (isAgentMode()) {
 			// Agents start in a special mode — agentBridge handles tool policy
 			rt.state = {
@@ -321,6 +326,11 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		await Promise.allSettled([
+			rt.isolationBackends.lightweight.destroy(),
+			rt.isolationBackends.strong.destroy(),
+		]);
+		rt.isolationNoneSession = false;
 		rt.invalidateFooter = undefined;
 		rt.hud?.dispose();
 		if (rt.workerPanes.isOpen()) {

@@ -34,6 +34,11 @@ import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
 import { auditPlan, renderAudit } from "../exec/recovery.js";
+import {
+	type IsolationBackend,
+	ReservedStrongIsolationBackend,
+} from "../isolation/backend.js";
+import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { panelTopologyGaps } from "../personas.js";
 import { computeActiveTools } from "../policy.js";
@@ -90,6 +95,11 @@ export interface ModesRuntimeOptions {
 		readonly lightweight?: (cwd: string) => BashOperations | undefined;
 		readonly strong?: (cwd: string) => BashOperations | undefined;
 	};
+	/** Stateful isolation providers. Defaults install Lightweight and reserved Strong. */
+	readonly isolationBackends?: {
+		readonly lightweight?: IsolationBackend;
+		readonly strong?: IsolationBackend;
+	};
 }
 
 /**
@@ -106,6 +116,12 @@ export interface RuntimeContext {
 	readonly usageLedger: UsageLedger;
 	readonly workerPanes: WorkerPanes;
 	readonly bashBackends: NonNullable<ModesRuntimeOptions["bashBackends"]>;
+	readonly isolationBackends: {
+		readonly lightweight: IsolationBackend;
+		readonly strong: IsolationBackend;
+	};
+	/** Explicit per-session fallback after a visible isolation failure. */
+	isolationNoneSession: boolean;
 	readonly viewState: ViewState;
 	readonly listeners: Set<(mode: ModeName, previous: ModeName) => void>;
 
@@ -206,6 +222,19 @@ export function createRuntimeContext(
 		},
 	};
 	const overlayManager = new OverlayManager();
+	const lightweightIsolation =
+		opts.isolationBackends?.lightweight ?? new LightweightSeatbeltBackend();
+	const strongIsolation =
+		opts.isolationBackends?.strong ?? new ReservedStrongIsolationBackend();
+	const bashBackends = {
+		...opts.bashBackends,
+		lightweight:
+			opts.bashBackends?.lightweight ??
+			((cwd: string) => lightweightIsolation.operations(cwd)),
+		strong:
+			opts.bashBackends?.strong ??
+			((cwd: string) => strongIsolation.operations(cwd)),
+	};
 
 	// While a draft plan is open: the entry count at /plan time (to locate the
 	// first planning message) and an explicit name from `/plan <name>`.
@@ -225,7 +254,12 @@ export function createRuntimeContext(
 		overlayManager,
 		usageLedger,
 		workerPanes: new WorkerPanes(),
-		bashBackends: opts.bashBackends ?? {},
+		bashBackends,
+		isolationBackends: {
+			lightweight: lightweightIsolation,
+			strong: strongIsolation,
+		},
+		isolationNoneSession: false,
 		viewState: { viewPaneId: undefined },
 		listeners: new Set(),
 
@@ -281,6 +315,17 @@ export function createRuntimeContext(
 		},
 
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {
+			// Auto/Hack are an authorization boundary: invalidate the private
+			// research epoch synchronously and finish cleanup in the background.
+			if (
+				(mode === "auto" || mode === "hack") &&
+				(rt.state.mode === "recon" || rt.state.mode === "plan")
+			) {
+				void Promise.allSettled([
+					rt.isolationBackends.lightweight.destroy(),
+					rt.isolationBackends.strong.destroy(),
+				]);
+			}
 			// Entering plan mode without an active plan auto-opens a draft so the
 			// planning tools work immediately — no need for an explicit /plan.
 			// Recon gets the same invisible draft: it keys the research scratch

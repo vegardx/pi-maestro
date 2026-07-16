@@ -778,10 +778,12 @@ function unknownRoute(
 
 function isolationRoute(
 	policy: ExecutionPolicySettings,
-): "lightweight" | "strong" | "deny" {
+): "lightweight" | "strong" | "confirm" {
 	if (policy.isolation === "strong") return "strong";
 	if (policy.isolation === "lightweight") return "lightweight";
-	return "deny";
+	// None is explicit but still requires a mode-aware confirmation at the
+	// execution boundary; it is never an invisible fallback.
+	return "confirm";
 }
 
 function deliveryReason(command: string): string {

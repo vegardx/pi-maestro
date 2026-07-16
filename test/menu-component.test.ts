@@ -18,6 +18,11 @@ import {
 } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	EXECUTION_POLICY_SETTINGS,
+	WORKER_POLICY_SETTINGS,
+	WORKTREE_SETTINGS,
+} from "../packages/modes/src/setting-declarations.js";
+import {
 	childExtensionCandidates,
 	createMaestroSettingsList,
 	modelOptions,
@@ -30,6 +35,7 @@ import {
 	writeRoleLeaf,
 } from "../packages/settings/src/model.js";
 import { readLayeredExtensionConfig } from "../packages/settings/src/reader.js";
+import { settingsRegistry } from "../packages/settings/src/registry.js";
 
 let root: string;
 let prevAgentDir: string | undefined;
@@ -108,17 +114,45 @@ beforeEach(() => {
 	});
 	resetSessionRoleOverrides();
 	resetSessionSettingOverrides();
+	settingsRegistry.set("modes", [
+		...EXECUTION_POLICY_SETTINGS,
+		...WORKER_POLICY_SETTINGS,
+	]);
+	settingsRegistry.set("maestro", [...WORKTREE_SETTINGS]);
 });
 
 afterEach(() => {
 	resetSessionRoleOverrides();
 	resetSessionSettingOverrides();
+	settingsRegistry.clear();
 	if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
 	rmSync(root, { recursive: true, force: true });
 });
 
 describe("hierarchical Maestro settings", () => {
+	it("shows first-class execution policy and worker worktree screens", () => {
+		const list = createMaestroSettingsList(fakeCtx(), () => {});
+		let rendered = list.render(140).join("\n");
+		expect(rendered).toContain("Execution policy");
+		expect(rendered).toContain("Guided");
+		expect(rendered).toContain("Worker worktrees");
+		list.handleInput("Execution policy");
+		list.handleInput("\r");
+		rendered = list.render(160).join("\n");
+		expect(rendered).toContain("Policy preset");
+		expect(rendered).toContain("Isolation tier");
+		expect(rendered).toContain("Unavailable isolation");
+		const worktrees = createMaestroSettingsList(fakeCtx(), () => {});
+		worktrees.handleInput("Worker worktrees");
+		worktrees.handleInput("\r");
+		rendered = worktrees.render(160).join("\n");
+		expect(rendered).toContain("Dependency strategy");
+		expect(rendered).toContain("Post-setup command");
+		expect(rendered).toContain("Ignored assets to copy");
+		expect(rendered).toContain("Provisioning report");
+	});
+
 	it("uses core SettingsList with search and standard cancellation", () => {
 		let cancelled = false;
 		const list = createMaestroSettingsList(fakeCtx(), () => {

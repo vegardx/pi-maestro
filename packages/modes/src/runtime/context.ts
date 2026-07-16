@@ -34,10 +34,8 @@ import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
 import { auditPlan, renderAudit } from "../exec/recovery.js";
-import {
-	type IsolationBackend,
-	ReservedStrongIsolationBackend,
-} from "../isolation/backend.js";
+import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
+import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { panelTopologyGaps } from "../personas.js";
@@ -95,7 +93,7 @@ export interface ModesRuntimeOptions {
 		readonly lightweight?: (cwd: string) => BashOperations | undefined;
 		readonly strong?: (cwd: string) => BashOperations | undefined;
 	};
-	/** Stateful isolation providers. Defaults install Lightweight and reserved Strong. */
+	/** Stateful isolation providers. Defaults install Lightweight and Apple container Strong. */
 	readonly isolationBackends?: {
 		readonly lightweight?: IsolationBackend;
 		readonly strong?: IsolationBackend;
@@ -225,7 +223,7 @@ export function createRuntimeContext(
 	const lightweightIsolation =
 		opts.isolationBackends?.lightweight ?? new LightweightSeatbeltBackend();
 	const strongIsolation =
-		opts.isolationBackends?.strong ?? new ReservedStrongIsolationBackend();
+		opts.isolationBackends?.strong ?? new AppleContainerStrongBackend();
 	const bashBackends = {
 		...opts.bashBackends,
 		// Protected reads use the same private-workspace policy rather than an

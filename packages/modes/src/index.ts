@@ -122,6 +122,21 @@ export {
 	installFooter,
 } from "./install-footer.js";
 export {
+	APPLE_CONTAINER_OWNER_LABEL,
+	APPLE_CONTAINER_RESEARCH_IMAGE,
+	type AppleContainerCommandOptions,
+	type AppleContainerCommandResult,
+	type AppleContainerCommandRunner,
+	type AppleContainerProbe,
+	AppleContainerStrongBackend,
+	type AppleContainerStrongOptions,
+	createArgs as createAppleContainerArgs,
+	createControllerEnvironment,
+	createStrongGuestEnvironment,
+	ownedContainerNames,
+	SpawnAppleContainerRunner,
+} from "./isolation/apple-container.js";
+export {
 	type IsolationBackend,
 	type IsolationBackendState,
 	type IsolationBackendStatus,

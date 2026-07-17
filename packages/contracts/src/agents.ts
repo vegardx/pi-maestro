@@ -32,6 +32,7 @@ export const AGENT_KINDS = [
 	"test-review",
 	"simplification-review",
 	"verifier",
+	"delivery-verifier",
 ] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
@@ -114,6 +115,12 @@ export interface AgentKindCommand {
 	readonly description: string;
 	/** How the maestro drives it, including bare-invocation behavior. */
 	readonly instruction: string;
+	/**
+	 * What the command runs against: `"changes"` reviews the repo's current
+	 * changes in one spawn (default); `"deliverables"` fans out over the plan's
+	 * started deliverables (each against its real diff), like `/verify`.
+	 */
+	readonly target?: "changes" | "deliverables";
 }
 
 /** Descriptor stored by the kind registry. Prompts are full authored policy. */

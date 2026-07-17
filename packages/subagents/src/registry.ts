@@ -296,6 +296,31 @@ export const BUILTIN_AGENT_KINDS: readonly AgentKindDefinition[] = [
 		},
 		reducer: "verification",
 	},
+	{
+		id: "delivery-verifier",
+		routingSummary:
+			"Deep-verify a started deliverable's diff against its claimed tasks.",
+		prompt:
+			"You are a read-only delivery verifier. Read the deliverable's actual diff and judge, task by task, whether the claimed work was genuinely accomplished. Report each task as verified or still-open with evidence, then end with VERDICT: PASS or VERDICT: FAIL.",
+		runtimePolicy: "read-only",
+		modelRole: "verifier",
+		contracts: [VERIFY_CONTRACT],
+		watchdog: DEFAULT_WATCHDOG,
+		sequencing: {
+			mode: "parallel",
+			guidance: "Verify independent started deliverables in parallel.",
+		},
+		reducer: "verification",
+		// Maestro-invocable as `/verify` — fans out over started deliverables.
+		command: {
+			name: "verify",
+			description:
+				"Deep-verify started deliverables: read-only agents read each deliverable's real diff and judge whether its tasks were genuinely done.",
+			instruction:
+				"Verify started deliverables against their real diffs. If the user did not name a deliverable, verify all started ones; otherwise verify only the named deliverable.",
+			target: "deliverables",
+		},
+	},
 ];
 
 export function createBuiltinAgentRegistries(): AgentRegistries {

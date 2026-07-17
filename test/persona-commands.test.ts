@@ -54,6 +54,12 @@ describe("persona-command registration", () => {
 				description: "Review code changes for correctness.",
 				instruction: "…",
 			}),
+			kind("delivery-verifier", {
+				name: "verify",
+				description: "Deep-verify started deliverables.",
+				instruction: "…",
+				target: "deliverables",
+			}),
 			kind("worker"), // no command
 			kind("general"), // no command
 		]);
@@ -63,6 +69,7 @@ describe("persona-command registration", () => {
 				name: "code-review",
 				description: "Review code changes for correctness.",
 			},
+			{ name: "verify", description: "Deep-verify started deliverables." },
 		]);
 	});
 

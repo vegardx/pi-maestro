@@ -89,11 +89,12 @@ branch stacking across repos.
 
 ## Execution
 
-`/implement` starts the active plan. The executor activates deliverables
-whose dependencies are met, creates a worktree per deliverable, and spawns
-a worker in each — a full pi session on tmux, seeded with upstream
-summaries and its tasks. Workers implement, commit locally (never push),
-toggle tasks, and run their own review panel before completing.
+Shift+Tab from Plan runs the plan-review transition gate, enters Auto/Hack on
+approval, and activates ready work. `/start [deliverable]` is the explicit
+entry for ready `planned` work only. The executor creates a worktree per
+deliverable and spawns a worker in each — a full pi session on tmux, seeded
+with upstream summaries and its tasks. Workers implement, commit locally
+(never push), toggle tasks, and run their own review panel before completing.
 
 While the fleet runs, the maestro session stays yours:
 
@@ -134,7 +135,8 @@ keys, and the input text below dims: up/down move the selection, Tab (or
 `[`/`]`) switches tabs, left/right/space fold/unfold, **Enter** is the
 context action (Agents: attach a read-only tmux split; Plan:
 expand/collapse; Questions: answer), `s` prefills an addressed `/steer`,
-`i` interrupts after a confirm.
+`I` interrupts after a confirm, while `K` bounded-shuts down the selected
+worker's owning delivery and marks it failed for audited recovery.
 
 After Tab moves through Agents → Plan → Questions and returns to Input, the
 panel fully collapses. **Esc** from any panel tab likewise focuses Input and
@@ -205,10 +207,16 @@ question only on repeat blocks. The full design is in
   **Revise draft** / **Cancel**. Revisions take a conditional free-text
   instruction and may repeat without a cap because each iteration is
   user-driven. Cancel/defer posts nothing and deletes transient state.
-- `/retry <deliverable-id>` — clear a blocked deliverable and re-attempt it.
-- `/recover` — after an interruption: audit the plan against reality
-  (worktrees, branches, PRs) and resume interrupted workers from their
-  saved sessions.
+- `/start [deliverable-id]` — activate ready planned work only. A target starts
+  only that delivery and never activates unrelated planned work.
+- `/stop` — intentionally park the active fleet behind a bounded shutdown.
+- `/restart [deliverable-id]` — fast validated resume of a clean `/stop`; it
+  never activates planned deliveries.
+- `/kill <deliverable-id>` — bounded-shutdown and fail the owning delivery.
+- `/recover [deliverable-id]` — audit failed/crashed/stale/inconsistent state
+  against worktrees, branches, sessions, and PRs before a scoped resume. Global
+  recovery presents selectable candidates and never blindly clears review or
+  dependency holds.
 
 ### Debug recovery and issue review
 
@@ -325,7 +333,11 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 |---|---|
 | `/plan [title-or-slug]` | Open or create a plan; enter plan mode |
 | `/ready` | Unlock plan structuring (skip the readiness gate) |
-| `/implement` | Start executing the active plan |
+| `/start [deliverable-id]` | Activate ready planned work only |
+| `/stop` | Intentionally park all active workers behind bounded shutdown |
+| `/restart [deliverable-id]` | Resume clean stops without activating planned work |
+| `/recover [deliverable-id]` | Audit and recover selected failed or uncertain work |
+| `/kill <deliverable-id>` | Bounded-shutdown and fail an owning delivery |
 | `/agents` | Expand + focus the HUD on the Agents tab (text overview when headless) |
 | `/watch` | Toggle stacked tmux panes for all active workers |
 | `/view <target>` | View any tmux-backed worker/run read-only; exact opaque IDs win |
@@ -335,8 +347,6 @@ goal). Both thresholds are tunable — see [models.md](models.md#distill).
 | `/recap` | Summary of completed agent work |
 | `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |
 | `/debug [symptom]` | Diagnose, run one explicitly selected recovery, then review/revise/cancel an exact GitHub issue draft |
-| `/retry <deliverable-id>` | Clear a blocked deliverable and re-attempt |
-| `/recover` | Audit plan vs reality; resume interrupted workers |
 | `/ship` | Ship the next shippable deliverable (push + PR) |
 | `/sync` | Retarget stacked PRs whose base merged |
 | `/park` | Create GitHub tracking issues for the active plan |

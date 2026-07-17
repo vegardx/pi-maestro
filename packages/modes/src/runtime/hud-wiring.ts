@@ -104,8 +104,8 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 			interrupt: (targetId) => {
 				void (async () => {
 					const yes = await ctx.ui.confirm(
-						"Interrupt agent",
-						`Interrupt ${targetId}? The session survives; only the current turn/run is aborted.`,
+						"Interrupt current turn",
+						`Interrupt ${targetId}? The persistent session survives; only the current turn/run is aborted.`,
 					);
 					if (!yes) return;
 					if (targetId.startsWith("worker:")) {
@@ -136,6 +136,55 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 							"info",
 						);
 					}
+					rt.hud?.refresh();
+				})();
+			},
+			// K on any worker-owned row fails the owning delivery after the same
+			// bounded shutdown barrier used by recovery. It is deliberately not a
+			// stronger spelling of interrupt.
+			kill: (targetId) => {
+				void (async () => {
+					const deliveryId = owningDeliverableId(rt, targetId);
+					if (!deliveryId) {
+						ctx.ui.notify(
+							`${targetId} has no owning delivery to fail.`,
+							"warning",
+						);
+						return;
+					}
+					const yes = await ctx.ui.confirm(
+						"Fail owning delivery",
+						`Bounded-shutdown ${deliveryId} and mark it failed? Resume later only through /recover ${deliveryId}.`,
+					);
+					if (!yes) return;
+					const stopped = await rt.execution?.forceFailWorker?.(
+						deliveryId,
+						"user pressed HUD K",
+					);
+					const delivery = rt.engine
+						?.get()
+						.deliverables.find((item) => item.id === deliveryId);
+					if (!stopped || !delivery || delivery.status !== "active") {
+						ctx.ui.notify(
+							`Could not prove ${deliveryId} stopped; it was not marked failed.`,
+							"warning",
+						);
+						return;
+					}
+					rt.engine?.setDeliverableStatus(deliveryId, "failed", {
+						code: "user-killed",
+						message:
+							"Owning delivery was failed from the HUD after bounded shutdown",
+						failedAt: rt.now(),
+						recoverable: true,
+						attempt: (delivery.failure?.attempt ?? 0) + 1,
+						agentId: `${deliveryId}/worker`,
+					});
+					rt.emitPlanChanged();
+					ctx.ui.notify(
+						`${deliveryId} failed and parked. Use /recover ${deliveryId} after inspection.`,
+						"warning",
+					);
 					rt.hud?.refresh();
 				})();
 			},
@@ -235,6 +284,25 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 
 	uiTrace("hud.mount");
 	refresh();
+}
+
+function owningDeliverableId(
+	rt: RuntimeContext,
+	targetId: string,
+): string | undefined {
+	if (targetId.startsWith("worker:")) {
+		return targetId.slice("worker:".length).split("/")[0] || undefined;
+	}
+	if (!targetId.startsWith("run:")) return undefined;
+	const runId = targetId.slice("run:".length);
+	const runs = [
+		...(rt.maestro.capabilities.get(CAPABILITIES.subagents)?.list() ?? []),
+		...(rt.execution?.projectedRuns?.() ?? []),
+	];
+	const run = runs.find((item) => item.id === runId);
+	const ownerId = (run?.profile.meta as { ownerId?: string } | undefined)
+		?.ownerId;
+	return ownerId?.split("/")[0] || undefined;
 }
 
 /** Whether any execution agent or subagent run is still moving. */

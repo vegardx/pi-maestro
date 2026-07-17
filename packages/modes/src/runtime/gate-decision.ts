@@ -142,7 +142,7 @@ export function buildGateQuestion(
 			label: GATE_OPTION_PARK,
 			description:
 				"Decide later. The deliverable stays blocked and visible; a new " +
-				"review verdict or /retry re-opens the question.",
+				"review verdict or an explicit send-back re-opens the question.",
 		},
 		{
 			label: GATE_OPTION_DISCUSS,
@@ -234,7 +234,7 @@ export async function presentGateDecision(
 		if (answer.value !== GATE_OPTION_OVERRIDE || note) break;
 		if (attempt === MAX_ASKS) {
 			deps.notify(
-				`Override without a reason — leaving ${deliverableId} parked. Answer again with a note, or /retry.`,
+				`Override without a reason — leaving ${deliverableId} parked. Answer again with a note.`,
 				"warning",
 			);
 			return;
@@ -316,5 +316,5 @@ export async function presentGateDecision(
 		}
 		return;
 	}
-	// Leave parked — the blocked card and /retry remain.
+	// Leave parked — review or dependency guidance remains authoritative.
 }

@@ -41,11 +41,14 @@ import { OverlayManager } from "../overlay-manager.js";
 import { computeActiveTools } from "../policy.js";
 import type { ResearchRunView } from "../research.js";
 import {
+	blockedReason,
 	type Deliverable,
 	deliverableWorkspace,
 	derivePlanName,
+	findDeliverable,
 	planPhase,
 	planRepoMismatch,
+	readyDeliverables,
 	repoFor,
 	repoNameFromPath,
 	slugify,
@@ -53,11 +56,9 @@ import {
 import { appendModesState } from "../session.js";
 import {
 	getImplementOverrides,
-	type ImplementOverrides,
 	readChildExtensions,
 	readExecutionLifecycleSettings,
 	readWorktreeSetupSettings,
-	setImplementOverrides,
 } from "../settings.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
 import {
@@ -71,16 +72,16 @@ import {
 } from "../state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "../storage.js";
 import {
+	createDefaultTransitionGates,
+	TransitionGateCoordinator,
+} from "../transition-gates.js";
+import {
 	accumulate,
 	incrementTurns,
 	type UsageDelta,
 	UsageLedger,
 } from "../usage-ledger.js";
 import { WorkerPanes } from "../worker-panes.js";
-import {
-	createDefaultTransitionGates,
-	TransitionGateCoordinator,
-} from "../transition-gates.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
@@ -179,11 +180,24 @@ export interface RuntimeContext {
 	assertDeliverableRepo(ctx: ExtensionContext, d: Deliverable): boolean;
 	recordMaestroUsage(usage: unknown): void;
 	incrementMaestroTurn(): void;
-	runImplement(args: string, ctx: ExtensionContext): Promise<void>;
+	runStart(
+		deliverableId: string | undefined,
+		ctx: ExtensionContext,
+	): Promise<void>;
+	/** Intentionally park every active worker behind the bounded stop barrier. */
+	runStop(ctx: ExtensionContext): Promise<void>;
+	/** Resume one or all cleanly parked deliveries without starting planned work. */
+	runRestart(
+		deliverableId: string | undefined,
+		ctx: ExtensionContext,
+	): Promise<void>;
 	/** Build the execution adapter for the active plan if absent (idempotent). */
 	ensureExecution(ctx: ExtensionContext): Promise<void>;
-	/** Audit the plan against reality and resume interrupted deliverables. */
-	runRecover(ctx: ExtensionContext): Promise<void>;
+	/** Audit failed or uncertain state, then recover only explicitly selected deliveries. */
+	runRecover(
+		deliverableId: string | undefined,
+		ctx: ExtensionContext,
+	): Promise<void>;
 }
 
 /**
@@ -364,20 +378,14 @@ export function createRuntimeContext(
 		},
 
 		async requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean> {
-			if (
-				rt.state.mode === "plan" &&
-				(mode === "auto" || mode === "hack")
-			) {
+			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
 				rt.finalizeDraftPlan(ctx);
 			}
 			return transitionGates.request(mode, ctx);
 		},
 
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {
-			if (
-				rt.state.mode === "plan" &&
-				(mode === "auto" || mode === "hack")
-			) {
+			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
 				throw new Error("Plan execution transitions must use requestMode()");
 			}
 			commitMode(mode, ctx);
@@ -487,9 +495,11 @@ export function createRuntimeContext(
 					"hack — fully autonomous, all tools",
 				]);
 				if (choice?.startsWith("auto")) {
-					await rt.runImplement("", ctx);
+					if (await rt.requestMode("auto", ctx))
+						await rt.runStart(undefined, ctx);
 				} else if (choice?.startsWith("hack")) {
-					await rt.runImplement("--hack", ctx);
+					if (await rt.requestMode("hack", ctx))
+						await rt.runStart(undefined, ctx);
 				}
 				return;
 			}
@@ -548,93 +558,218 @@ export function createRuntimeContext(
 			}
 		},
 
-		async runImplement(args: string, ctx: ExtensionContext): Promise<void> {
-			// Parse flags
-			const overrides = parseImplementFlags(args);
-			setImplementOverrides(overrides);
-
-			if (!rt.engine) rt.openPlan(undefined, ctx);
-			if (!rt.engine) return;
+		async runStart(
+			deliverableId: string | undefined,
+			ctx: ExtensionContext,
+		): Promise<void> {
+			if (!rt.engine) {
+				ctx.ui.notify("No active plan — run /plan first.", "warning");
+				return;
+			}
 			rt.finalizeDraftPlan(ctx);
 			const activeEngine = rt.engine;
+			const plan = activeEngine.get();
+			const targetId = deliverableId?.trim() || undefined;
+			const target = targetId ? findDeliverable(plan, targetId) : undefined;
+			if (targetId && !target) {
+				ctx.ui.notify(`Unknown deliverable: ${targetId}`, "warning");
+				return;
+			}
+			if (target) {
+				const reason = blockedReason(plan, target);
+				if (reason) {
+					ctx.ui.notify(`Cannot start ${target.id}: ${reason}.`, "warning");
+					return;
+				}
+			}
+			const ready = readyDeliverables(plan);
+			if (ready.length === 0) {
+				ctx.ui.notify(
+					"No ready planned deliverables. Use /restart for a clean stop or /recover for failed or uncertain state.",
+					"info",
+				);
+				return;
+			}
 
-			// Gate: agents fork from the plan's knowledge session — refuse to
-			// start without it and ask the model to author it now.
+			// The knowledge snapshot is part of readiness, not a hidden command retry.
 			const knowledgePath = join(
 				plansRoot(),
-				activeEngine.get().slug,
+				plan.slug,
 				"base-knowledge.jsonl",
 			);
 			let knowledgeProblem: string | undefined;
 			if (!isAgentMode()) {
-				if (!existsSync(knowledgePath)) {
-					knowledgeProblem = "missing";
-				} else {
+				if (!existsSync(knowledgePath)) knowledgeProblem = "missing";
+				else {
 					try {
 						readKnowledgeSession(knowledgePath);
-					} catch (e) {
-						knowledgeProblem = e instanceof Error ? e.message : String(e);
+					} catch (error) {
+						knowledgeProblem =
+							error instanceof Error ? error.message : String(error);
 					}
 				}
 			}
 			if (knowledgeProblem) {
 				ctx.ui.notify(
 					knowledgeProblem === "missing"
-						? "No knowledge base yet — asking the model to write it; run /implement again after."
+						? "No knowledge base yet — asking the model to write it; then Shift+Tab again or run /start."
 						: `Knowledge base failed validation (${knowledgeProblem}) — asking the model to rewrite it.`,
 					"warning",
 				);
 				pi.sendUserMessage(
-					"Before implementation can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use the persisted research reports in the plan directory's research/ folder as source material if your own exploration has been compacted away.",
+					"Before execution can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use persisted research reports in the plan directory as source material.",
 					{ deliverAs: "followUp" },
 				);
 				return;
 			}
 
-			const mode = args.includes("--hack") ? "hack" : "auto";
-			if (!(await rt.requestMode(mode, ctx))) return;
-
-			// Deliverable execution via the execution seam
-			if (!isAgentMode()) {
-				await rt.ensureExecution(ctx);
-				if (!rt.execution) return;
-				const activated = await rt.execution.tick();
-				rt.hud?.refresh();
-				if (activated > 0) {
-					ctx.ui.notify(`Activated ${activated} deliverable(s).`, "info");
-					rt.setExecutionStage(
-						{ stage: "executing", deliverableId: "maestro" },
-						ctx,
-					);
-					// Auto-open worker panes
-					const sessions = rt.execution.getWorkerSessions();
-					if (sessions.length > 0) {
-						await rt.workerPanes.open(sessions);
-					}
-				} else {
-					const plan = activeEngine.get();
-					const active = plan.deliverables.filter((g) => g.status === "active");
-					if (active.length > 0) {
-						ctx.ui.notify(
-							`${active.length} deliverable(s) already executing.`,
-							"info",
-						);
-					} else {
-						ctx.ui.notify("No deliverables ready to start.", "warning");
-					}
-				}
+			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
+				if (!(await rt.requestMode("auto", ctx))) return;
+			}
+			if (isAgentMode()) {
+				ctx.ui.notify(
+					"tmux is required for execution. Install tmux and try again.",
+					"warning",
+				);
 				return;
 			}
-
-			// tmux is required for agent execution
+			await rt.ensureExecution(ctx);
+			if (!rt.execution) return;
+			const activated = await rt.execution.tick(
+				target ? [target.id] : undefined,
+			);
+			rt.hud?.refresh();
+			if (activated === 0) {
+				ctx.ui.notify(
+					"No ready planned deliverables were activated.",
+					"warning",
+				);
+				return;
+			}
+			rt.setExecutionStage(
+				{ stage: "executing", deliverableId: "maestro" },
+				ctx,
+			);
+			const sessions = rt.execution.getWorkerSessions();
+			if (sessions.length > 0) await rt.workerPanes.open(sessions);
 			ctx.ui.notify(
-				"tmux is required for /implement. Install tmux and try again.",
-				"warning",
+				target
+					? `Started ${target.id}.`
+					: `Activated ${activated} ready deliverable(s).`,
+				"info",
 			);
 		},
 
+		async runStop(ctx: ExtensionContext): Promise<void> {
+			if (!rt.execution) {
+				ctx.ui.notify("No active workers to stop.", "info");
+				return;
+			}
+			rt.setExecutionStage(
+				{ stage: "stopping", deliverableId: "maestro" },
+				ctx,
+			);
+			const result = await rt.execution.prepareStop?.("user ran /stop");
+			if (!result) {
+				ctx.ui.notify("Execution does not support bounded stop.", "warning");
+				return;
+			}
+			rt.setExecutionStage(
+				{
+					stage: "stopped",
+					completedAt: result.stop.completedAt,
+					stop: result.stop,
+				},
+				ctx,
+			);
+			await rt.workerPanes.close();
+			rt.hud?.refresh();
+			const uncertain = result.agents.filter(
+				(agent) => agent.outcome === "not-proven",
+			);
+			ctx.ui.notify(
+				uncertain.length
+					? `Stop completed with ${uncertain.length} uncertain worker(s). Use /recover to audit them.`
+					: `Parked ${result.agents.length} worker(s). Resume with /restart [delivery].`,
+				uncertain.length ? "warning" : "info",
+			);
+		},
+
+		async runRestart(
+			deliverableId: string | undefined,
+			ctx: ExtensionContext,
+		): Promise<void> {
+			if (
+				!rt.engine ||
+				rt.state.execution.stage !== "stopped" ||
+				!rt.state.execution.stop
+			) {
+				ctx.ui.notify(
+					"Nothing is cleanly stopped. Use /start for planned work or /recover for failed or uncertain state.",
+					"warning",
+				);
+				return;
+			}
+			if (
+				rt.state.execution.stop.kind === "failed" ||
+				rt.state.execution.stop.outcome === "timed-out"
+			) {
+				ctx.ui.notify(
+					"The last stop was not cleanly proven; use /recover for an audited resume.",
+					"warning",
+				);
+				return;
+			}
+			const plan = rt.engine.get();
+			const requested = deliverableId?.trim() || undefined;
+			const candidates = plan.deliverables.filter(
+				(item) => item.status === "active",
+			);
+			const targets = requested
+				? candidates.filter((item) => item.id === requested)
+				: candidates;
+			if (targets.length === 0) {
+				ctx.ui.notify(
+					requested
+						? `No clean stop recorded for ${requested}.`
+						: "No cleanly stopped deliveries to restart.",
+					"warning",
+				);
+				return;
+			}
+			if (rt.state.mode !== "auto" && rt.state.mode !== "hack")
+				rt.setMode("auto", ctx);
+			// A stopped adapter is terminal. Rebuild it, then use the validated
+			// resume primitive only for selected active deliveries.
+			await rt.execution?.destroy();
+			rt.execution = undefined;
+			await rt.ensureExecution(ctx);
+			const execution = rt.execution as ExecutionHandle | undefined;
+			if (!execution?.restartWorkerResume) return;
+			const results = [];
+			for (const target of targets)
+				results.push(await execution.restartWorkerResume(target.id));
+			const failed = results.filter((result) => !result.ok);
+			if (failed.length === 0) {
+				rt.setExecutionStage(
+					{ stage: "executing", deliverableId: "maestro" },
+					ctx,
+				);
+				ctx.ui.notify(
+					`Restarted ${targets.map((item) => item.id).join(", ")}.`,
+					"info",
+				);
+			} else {
+				ctx.ui.notify(
+					`Restart failed: ${failed.map((result) => `${result.deliverableId}: ${result.error ?? "validation failed"}`).join("; ")}. Use /recover.`,
+					"warning",
+				);
+			}
+			rt.hud?.refresh();
+		},
+
 		// Build (once) the execution adapter for the active plan. Shared by
-		// /implement and /recover — a restarted session has mode/plan hydrated
+		// start, restart, and recover; a restarted session has mode/plan hydrated
 		// but no adapter until one of them runs.
 		async ensureExecution(ctx: ExtensionContext): Promise<void> {
 			if (rt.execution || !rt.engine || isAgentMode()) return;
@@ -744,44 +879,112 @@ export function createRuntimeContext(
 			await rt.execution.start();
 		},
 
-		// /recover: audit the plan against reality (worktrees, branches, PRs),
-		// then resume every deliverable interrupted by the restart — workers
-		// respawn RESUMED from their persisted session files.
-		async runRecover(ctx: ExtensionContext): Promise<void> {
+		// /recover is the audited path for failed, crashed, stale, or inconsistent
+		// execution. It never clears arbitrary blocks: review and dependency holds
+		// remain owned by their respective workflows.
+		async runRecover(
+			deliverableId: string | undefined,
+			ctx: ExtensionContext,
+		): Promise<void> {
 			if (!rt.engine) {
 				ctx.ui.notify("No active plan — /plan <slug> first.", "warning");
 				return;
 			}
 			const plan = rt.engine.get();
-			const started = plan.deliverables.some((g) => g.status !== "planned");
-			if (!started) {
-				ctx.ui.notify("Nothing to recover — the plan never started.", "info");
+			const requested = deliverableId?.trim() || undefined;
+			const requestedDelivery = requested
+				? findDeliverable(plan, requested)
+				: undefined;
+			if (requested && !requestedDelivery) {
+				ctx.ui.notify(`Unknown deliverable: ${requested}`, "warning");
+				return;
+			}
+			const recoverable = plan.deliverables.filter((delivery) => {
+				if (delivery.status === "failed")
+					return delivery.failure?.recoverable === true;
+				if (delivery.status !== "active") return false;
+				if (rt.state.execution.stage === "stopped")
+					return (
+						rt.state.execution.stop?.outcome === "timed-out" ||
+						rt.state.execution.stop?.kind === "failed"
+					);
+				return true;
+			});
+			let selectedIds = requested
+				? recoverable
+						.filter((item) => item.id === requested)
+						.map((item) => item.id)
+				: recoverable.map((item) => item.id);
+			if (!requested && selectedIds.length > 1) {
+				const ask = maestro.capabilities.get(CAPABILITIES.ask);
+				if (!ask) {
+					ctx.ui.notify(
+						`Recovery candidates: ${selectedIds.join(", ")}. Run /recover <delivery> to choose one.`,
+						"warning",
+					);
+					return;
+				}
+				const questionId = `recover:${plan.slug}:${Date.now()}`;
+				const answers = await ask.ask([
+					{
+						id: questionId,
+						header: "Recovery",
+						question: "Which deliveries should the audited recovery resume?",
+						multiple: true,
+						blocking: true,
+						whyBlocking:
+							"Recovery may replace processes and must be explicitly scoped.",
+						options: selectedIds.map((id) => ({
+							label: id,
+							value: id,
+							description:
+								"Audit this delivery and resume only if its state is recoverable.",
+						})),
+					},
+				]);
+				selectedIds = answers
+					.filter((answer) => answer.questionId === questionId)
+					.map((answer) => answer.value);
+			}
+			if (selectedIds.length === 0) {
+				ctx.ui.notify(
+					requested
+						? `${requested} is not in recoverable failed or uncertain state.`
+						: "No failed or uncertain deliveries need recovery.",
+					"info",
+				);
 				return;
 			}
 
-			// 1. Reality check: verify claimed statuses against disk/git/GitHub.
-			const audit = await auditPlan(plan);
+			// 1. Reality check: verify only the explicitly selected deliveries.
+			const audit = await auditPlan(plan, {}, selectedIds);
 			ctx.ui.notify(
 				renderAudit(audit),
 				audit.problems > 0 ? "warning" : "info",
 			);
 
-			// 2. Resume interrupted execution.
-			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
-				if (!(await rt.requestMode("auto", ctx))) return;
-			}
+			// 2. Recovery is operational, not a fresh Plan→Auto authorization. It
+			// restores previously authorized active/failed work only.
+			if (rt.state.mode !== "auto" && rt.state.mode !== "hack")
+				rt.setMode("auto", ctx);
 			await rt.ensureExecution(ctx);
 			if (!rt.execution) {
 				ctx.ui.notify("tmux is required to resume workers.", "warning");
 				return;
 			}
 
-			// 3. Stuck-live preflight: workers still (nominally) running are
-			// invisible to recoverInterrupted, and force-exiting one by hand just
-			// triggers the crash-respawn loop. Offer to force-fail them into the
-			// recoverable shape so this run picks them up too.
+			for (const delivery of plan.deliverables) {
+				if (!selectedIds.includes(delivery.id)) continue;
+				if (delivery.status === "failed" && delivery.failure?.recoverable) {
+					rt.engine.setDeliverableStatus(delivery.id, "active");
+				}
+			}
+
+			// 3. Live selected workers are first bounded-shutdown into the same
+			// recoverable pending shape. Nothing outside the selection is touched.
 			const liveWorkers: string[] = [];
 			for (const [id, state] of rt.execution.getExecutor().getStates()) {
+				if (!selectedIds.includes(id)) continue;
 				const worker = state.agents.get("worker");
 				if (!worker) continue;
 				if (
@@ -794,32 +997,35 @@ export function createRuntimeContext(
 			}
 			if (liveWorkers.length > 0) {
 				const proceed = await ctx.ui.confirm(
-					"Recover running workers",
-					`${liveWorkers.length} worker(s) are still running:\n` +
+					"Recover selected workers",
+					`${liveWorkers.length} selected worker(s) are still live:\n` +
 						`${liveWorkers.map((id) => `  • ${id}`).join("\n")}\n` +
-						"Force-fail them so recovery can re-provision and respawn? " +
-						"(No leaves them running and recovers only parked deliverables.)",
+						"Bounded-shutdown and audit-respawn them?",
 				);
-				if (proceed) {
-					for (const id of liveWorkers) {
-						const ok = await rt.execution.forceFailWorker?.(
-							id,
-							"user ran /recover",
+				if (!proceed) {
+					ctx.ui.notify(
+						"Recovery canceled; no worker state was unblocked.",
+						"info",
+					);
+					return;
+				}
+				for (const id of liveWorkers) {
+					const ok = await rt.execution.forceFailWorker?.(
+						id,
+						"selected by /recover",
+					);
+					if (!ok)
+						ctx.ui.notify(
+							`Could not prove ${id} stopped; it remains failed for a later /recover.`,
+							"warning",
 						);
-						if (!ok) {
-							ctx.ui.notify(
-								`Could not force-fail ${id} — its session refused to die; try again or kill it manually.`,
-								"warning",
-							);
-						}
-					}
 				}
 			}
 
 			const { recovered, failed } = await rt.execution
 				.getExecutor()
-				.recoverInterrupted();
-			await rt.execution.tick();
+				.recoverInterrupted(selectedIds);
+			await rt.execution.tick([]);
 			rt.hud?.refresh();
 			if (recovered.length > 0) {
 				rt.setExecutionStage(
@@ -904,39 +1110,6 @@ function firstUserMessageText(
 		}
 	}
 	return undefined;
-}
-
-export function parseImplementFlags(
-	args: string,
-): ImplementOverrides | undefined {
-	const parts = args.split(/\s+/);
-	let agentModel: string | undefined;
-	let agentThinking: string | undefined;
-
-	for (let i = 0; i < parts.length; i++) {
-		const p = parts[i];
-		if (p.startsWith("--model=")) {
-			agentModel = p.slice("--model=".length);
-		} else if (p === "--model" && parts[i + 1]) {
-			agentModel = parts[++i];
-		} else if (p.startsWith("--thinking=")) {
-			agentThinking = p.slice("--thinking=".length);
-		} else if (p === "--thinking" && parts[i + 1]) {
-			agentThinking = parts[++i];
-		}
-	}
-
-	const VALID_THINKING = new Set(["off", "minimal", "low", "medium", "high"]);
-	const wt =
-		agentThinking && VALID_THINKING.has(agentThinking)
-			? (agentThinking as ImplementOverrides["agentThinking"])
-			: undefined;
-
-	if (!agentModel && !wt) return undefined;
-	return {
-		agentModel,
-		agentThinking: wt,
-	};
 }
 
 /**

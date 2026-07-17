@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { existsSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentMessage, HelloMessage, MaestroMessage } from "./protocol.js";
 
 export interface AgentConnection {
@@ -120,9 +121,12 @@ export class MaestroRpcServer extends EventEmitter<MaestroRpcServerEvents> {
 	private handleConnection(socket: Socket): void {
 		this.pending.add(socket);
 		let buffer = "";
+		// Decode across chunk boundaries: a multibyte UTF-8 char split between two
+		// 'data' events must not corrupt into replacement chars before reassembly.
+		const decoder = new StringDecoder("utf8");
 
 		socket.on("data", (chunk) => {
-			buffer += chunk.toString();
+			buffer += decoder.write(chunk);
 			let newlineIdx = buffer.indexOf("\n");
 			while (newlineIdx !== -1) {
 				const line = buffer.slice(0, newlineIdx);

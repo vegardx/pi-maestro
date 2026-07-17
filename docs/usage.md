@@ -68,7 +68,6 @@ Maestro owns remote effects:
 
 - `/ship` pushes and creates/updates the next shippable PR;
 - `/sync` retargets stacked PRs after predecessor merges;
-- `/park` creates tracking issues;
 - `/commit` creates a local conventional commit.
 
 Generated PR evidence is marker-bounded: user text outside Maestro markers is preserved. Canonical findings are never silently dropped to meet a size budget; optional detail truncates first. Secrets and raw transcripts are not projected.
@@ -93,7 +92,7 @@ Generated PR evidence is marker-bounded: user text outside Maestro markers is pr
 | `/interrupt [target] [scope]` | Abort current turn/run |
 | `/answer`, `/recap` | Handle questions and summaries |
 | `/verify [id]`, `/debug [symptom]` | Verify or diagnose/recover |
-| `/ship`, `/sync`, `/park`, `/commit` | Delivery/GitHub operations |
+| `/ship`, `/sync`, `/commit` | Delivery/GitHub operations |
 | `/distill`, `/handoff` | Session continuity |
 | `/maestro` | Exact models, runtime policies, gates, scalar settings |
 | `/modes-status` | Current mode, plan, and execution state |

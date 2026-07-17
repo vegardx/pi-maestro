@@ -177,6 +177,7 @@ describe("execution adapter observability", () => {
 				output: 56,
 				cacheRead: 0,
 				cacheWrite: 0,
+				promptTokens: 1234,
 				totalTokens: 1290,
 				cost: 0.02,
 				turns: 7,

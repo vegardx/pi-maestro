@@ -204,6 +204,7 @@ describe("execution adapter — onEvent emission", () => {
 				output: 900,
 				cacheRead: 6000,
 				cacheWrite: 0,
+				promptTokens: 10_000,
 				totalTokens: 10_900,
 				cost: 0.05,
 				turns: 5,

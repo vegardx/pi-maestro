@@ -26,7 +26,7 @@ import {
 } from "../exec/verify.js";
 import { themeRollup, writeVerificationReport } from "../exec/verify-report.js";
 import { buildForwardSummaryPrompt } from "../forward-summary.js";
-import { planPhase } from "../schema.js";
+import type { Deliverable } from "../schema.js";
 import { resolveShipSummaryInput } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
@@ -42,14 +42,6 @@ import { beginDistill, beginHandoff } from "./carry-commands.js";
 import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview } from "./dashboard.js";
 import { runDebugCommand, runWorkerDebugCommand } from "./debug-command.js";
-import {
-	type Deliverable,
-	type DeliverableId,
-	findDeliverable,
-	nextShippableDeliverable,
-	renderPlanSummary,
-	shipDeliverableFromPlan,
-} from "./stubs.js";
 
 export function registerRuntimeCommands(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
@@ -65,21 +57,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					: `Plan ${opened.get().slug} active.`,
 				"info",
 			);
-			// Never send an empty custom message: convertToLlm turns it into a
-			// user message with an empty text block, which the gateway's
-			// Responses-dialect translation rejects on every subsequent request —
-			// permanently poisoning the session history.
-			const planDocument = renderPlanSummary(opened.get());
-			if (planDocument.trim().length > 0) {
-				pi.sendMessage(
-					{
-						customType: "maestro.plan.document",
-						content: planDocument,
-						display: true,
-					},
-					{ triggerTurn: false },
-				);
-			}
 		},
 	});
 
@@ -113,32 +90,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
-	// Manual escape hatch for the readiness gate: flip the plan to structuring
-	// without waiting for the model to call `readiness`.
-	pi.registerCommand("ready", {
-		description:
-			"Unlock plan structuring (skip the exploring phase's readiness gate).",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			const engine = rt.engine;
-			if (!engine) {
-				ctx.ui.notify("No plan active — run /plan first.", "warning");
-				return;
-			}
-			if (planPhase(engine.get()) === "structuring") {
-				ctx.ui.notify("Plan is already structuring.", "info");
-				return;
-			}
-			engine.setPhase("structuring");
-			rt.applyTools();
-			rt.notifyMode(ctx);
-			ctx.ui.notify("Structure tools unlocked — plan away.", "info");
-			pi.sendUserMessage(
-				"The user unlocked plan structuring (/ready). Form the plan now: create deliverables and tasks from what you know, then the knowledge doc.",
-				{ deliverAs: "followUp" },
-			);
-		},
-	});
-
 	pi.registerCommand("start", {
 		description: "Activate ready planned work. /start [deliverable-id]",
 		handler: (args, ctx) => rt.runStart(args.trim() || undefined, ctx),
@@ -153,62 +104,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		description:
 			"Resume a clean stop without starting unrelated planned work. /restart [deliverable-id]",
 		handler: (args, ctx) => rt.runRestart(args.trim() || undefined, ctx),
-	});
-
-	pi.registerCommand("ship", {
-		description: "Ship the next shippable deliverable via commit.v1.",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			if (!rt.engine) {
-				ctx.ui.notify("No active plan.", "warning");
-				return;
-			}
-			rt.finalizeDraftPlan(ctx);
-			const activeEngine = rt.engine;
-			const commit = maestro.capabilities.get(CAPABILITIES.commit);
-			if (!commit) {
-				ctx.ui.notify("commit.v1 unavailable.", "warning");
-				return;
-			}
-			const id = args.trim() || nextShippableDeliverable(rt.engine.get())?.id;
-			if (!id) {
-				ctx.ui.notify("No shippable deliverable.", "warning");
-				return;
-			}
-			const target = findDeliverable(rt.engine.get(), id);
-			if (target && !rt.assertDeliverableRepo(ctx, target)) return;
-			const shipped = await shipDeliverableFromPlan(rt.engine, id, {
-				commit,
-				confirm: ({ message }: { message: string }) =>
-					ctx.ui.confirm("Ship deliverable", message),
-				summarise: (deliverable: Deliverable) =>
-					buildShipSummary(
-						deliverable,
-						activeEngine,
-						ctx,
-						readModesCompactionSettings,
-					),
-			});
-			if (shipped.kind !== "shipped") {
-				ctx.ui.notify(
-					shipped.kind === "canceled" ? "Ship canceled." : shipped.reason,
-					"warning",
-				);
-				return;
-			}
-			rt.emitPlanChanged();
-			if (rt.state.execution.deliverableId === shipped.deliverable.id)
-				rt.setExecutionStage({ stage: "idle" }, ctx);
-			maestro.events.emit(EVENTS.shipCompleted, {
-				deliverableId: shipped.deliverable.id as DeliverableId,
-				pr: shipped.result.pr,
-			});
-			ctx.ui.notify(
-				shipped.result.pr
-					? `Shipped ${id} → PR #${shipped.result.pr}.`
-					: `Shipped ${id}.`,
-				"info",
-			);
-		},
 	});
 
 	pi.registerCommand("sync", {
@@ -242,20 +137,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				report.errors.length > 0 || report.needsRebase.length > 0
 					? "warning"
 					: "info",
-			);
-		},
-	});
-
-	pi.registerCommand("park", {
-		description: "Create GitHub tracking issues for the active plan.",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (!rt.engine) {
-				ctx.ui.notify("No active plan.", "warning");
-				return;
-			}
-			ctx.ui.notify(
-				"/park is not yet implemented in the deliverable model — the plan stays in maestro/plans/ and can be resumed with /plan.",
-				"warning",
 			);
 		},
 	});

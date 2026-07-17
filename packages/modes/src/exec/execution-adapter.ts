@@ -1028,21 +1028,6 @@ export class ExecutionAdapter {
 		}
 	}
 
-	/** Latest panel round's verdicts + clipped findings (human decision context). */
-	reviewerFindings(deliverableId: string): ReadonlyArray<{
-		readonly name: string;
-		readonly verdict: string;
-		readonly required: boolean;
-		readonly report?: string;
-	}> {
-		return (this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => ({
-			name: v.name,
-			verdict: v.verdict,
-			required: v.required,
-			...(v.report ? { report: v.report } : {}),
-		}));
-	}
-
 	/**
 	 * Who is holding the gate. With a ledger: the distinct reviewers (incl.
 	 * verifier regressions) owning open blocking findings, plus required
@@ -1073,85 +1058,6 @@ export class ExecutionAdapter {
 			]),
 		);
 		return required.filter((n) => byName.get(n) !== "approve");
-	}
-
-	/**
-	 * Record a HUMAN override as a reviewer's latest verdict. The gate opens
-	 * through its own rules (latest verdict per required reviewer) — the human
-	 * simply becomes the author of a verdict, with provenance that surfaces in
-	 * the PR body. Only reachable from the gate-decision answer flow, never
-	 * from a model-facing tool.
-	 */
-	overrideReviewerVerdict(
-		deliverableId: string,
-		reviewer: string,
-		reason: string,
-	): void {
-		const current = this.panelVerdicts.get(deliverableId);
-		const verdicts = [...(current?.verdicts ?? [])];
-		const idx = verdicts.findIndex((v) => v.name === reviewer);
-		const entry =
-			idx >= 0
-				? {
-						...verdicts[idx],
-						verdict: "approve" as const,
-						humanOverride: reason,
-					}
-				: {
-						name: reviewer,
-						persona: reviewer,
-						required: true,
-						ok: true,
-						verdict: "approve" as const,
-						humanOverride: reason,
-					};
-		if (idx >= 0) verdicts[idx] = entry;
-		else verdicts.push(entry);
-		const baseMsg: PanelVerdictMessage = current ?? {
-			type: "panelVerdict",
-			deliverableId,
-			round: 0,
-			verdicts: [],
-		};
-		this.panelVerdicts.set(deliverableId, { ...baseMsg, verdicts });
-		this.logEvent("human-override", { deliverableId, reviewer, reason });
-		// Persist the waiver on the plan — the in-memory verdict dies with this
-		// process, but /verify must keep honoring the human's acceptance. With
-		// a ledger, the override waives this reviewer's OPEN BLOCKING findings
-		// individually (id + claim + file — the claim is the durable identity
-		// that crosses into /verify), which is what actually opens the gate.
-		try {
-			this.opts.onPlanChanged();
-		} catch {
-			// The override still applies for this session even if the plan write
-			// failed; the event log above keeps the audit trail.
-		}
-	}
-
-	/**
-	 * Reopen a gate-blocked deliverable and respawn its worker with the review
-	 * findings (the gate-decision "send back" route). The executor resumes the
-	 * worker's own session file when it has one — cache-hot, full context of
-	 * its earlier pass. Re-arms the gate question: a fresh block after the
-	 * rework round asks the human again.
-	 */
-	async sendBackToWorker(
-		deliverableId: string,
-		kickoff: string,
-	): Promise<boolean> {
-		const ok = await this.executor.sendBackToWorker(deliverableId, kickoff);
-		if (ok) {
-			// Rework epoch: the respawned worker must not inherit exhausted or
-			// stale review state — a stale failing round used to re-complete it
-			// within seconds of the respawn (sdk-foundation, 16s death loop).
-			// The ledger (the work list) stays; the cycle budget and steer
-			// bookkeeping reset so the fix loop actually runs.
-			this.gateBlockSurfaced.delete(deliverableId);
-			this.fixSteer.delete(deliverableId);
-			this.reviewInFlight.delete(deliverableId);
-			this.logEvent("send-back", { deliverableId });
-		}
-		return ok;
 	}
 
 	private deliverableGateDetail(deliverableId: string): string {

@@ -166,158 +166,6 @@ export interface SummaryMessage {
 	readonly content: string;
 }
 
-/**
- * One reviewer in a deliverable's review panel. Structural mirror of modes'
- * `SubAgentSpec` (rpc must not depend on the modes package); the field types
- * come from pi-contracts so the two are assignment-compatible.
- */
-export interface PanelReviewerSpec {
-	readonly name: string;
-	readonly persona: string;
-	readonly focus?: string;
-	readonly model?: string;
-	readonly modelJustification?: string;
-	readonly effort?: ThinkingLevel;
-	readonly kind?: "review" | "helper";
-	readonly required?: boolean;
-}
-
-/** Agent requests its deliverable's review panel (the subAgents to run). */
-export interface PanelReadMessage {
-	readonly type: "panelRead";
-	readonly id: string;
-	readonly deliverableId: string;
-}
-
-/** Maestro returns the deliverable's live panel. */
-export interface PanelReadResponseMessage {
-	readonly type: "panelReadResponse";
-	readonly id: string;
-	readonly panel: readonly PanelReviewerSpec[];
-	/**
-	 * The persisted review ledger, when one exists — a respawned worker
-	 * rehydrates its review episode from this instead of starting blind.
-	 */
-	readonly ledger?: ReviewLedgerWire;
-	/**
-	 * Canonical finding ids the human has waived — the worker and verifier
-	 * must not re-litigate these; they no longer hold the gate.
-	 */
-	readonly waivedFindingIds?: readonly string[];
-}
-
-// ─── Review ledger (wire mirror of modes' exec/findings.ts) ─────────────────
-// Structural duplicate on purpose: rpc is a library package that modes depends
-// on, so the canonical types (which live with the ledger logic in modes)
-// cannot be imported here. Same pattern as PanelReviewerSpec ↔ SubAgentSpec.
-
-export type LedgerSeverity = StructuredFinding["severity"];
-export type LedgerFindingWire = StructuredFinding;
-
-export interface LedgerEntryWire {
-	readonly finding: LedgerFindingWire;
-	readonly reviewer: string;
-	readonly resolution?: {
-		readonly id: string;
-		readonly status:
-			| "fixed"
-			| "unchanged"
-			| "wont-fix"
-			| "disputed"
-			| "needs-user"
-			| "duplicateOf";
-		readonly note: string;
-		readonly evidence?: readonly string[];
-		readonly fixCommit?: string;
-		readonly canonical?: string;
-		readonly at: string;
-	};
-	readonly check?: {
-		readonly id: string;
-		readonly result: "verified" | "still-open";
-		readonly note?: string;
-		readonly at: string;
-	};
-	readonly duplicates?: readonly string[];
-	readonly disputes?: number;
-}
-
-export interface ReviewLedgerWire {
-	readonly round: number;
-	readonly cycle: number;
-	readonly entries: readonly LedgerEntryWire[];
-	readonly participants?: ReadonlyArray<{
-		readonly name: string;
-		readonly ok: boolean;
-	}>;
-	/**
-	 * The round currently settling behind the worker's review tool — the
-	 * crash marker. Persisted at round START (roundKind "round-started") so a
-	 * respawned worker reattaches to the recorded runs instead of spawning a
-	 * duplicate round; the settled round's report clears it.
-	 */
-	readonly pendingRound?: {
-		readonly kind: "panel" | "repair" | "verification";
-		readonly runs: ReadonlyArray<{
-			readonly name: string;
-			readonly runId: string;
-		}>;
-		readonly startedAt: string;
-	};
-	readonly updatedAt: string;
-}
-
-/** Verdict of one reviewer in a completed panel round. */
-export type PanelVerdict = "approve" | "request-changes" | "none";
-
-export interface PanelVerdictEntry {
-	readonly name: string;
-	readonly persona: string;
-	readonly required: boolean;
-	readonly verdict: PanelVerdict;
-	/** False when the reviewer failed to run / produced no verdict. */
-	readonly ok: boolean;
-	readonly model?: string;
-	readonly effort?: ThinkingLevel;
-	/**
-	 * The reviewer's findings report (clipped at the sender). Carried so the
-	 * maestro can show the HUMAN what is holding the gate — without it, the
-	 * gate-decision question asks for an override/send-back blind.
-	 */
-	readonly report?: string;
-	/**
-	 * Set when a HUMAN overrode this verdict (gate-decision flow): the
-	 * human's reason. Surfaces in the PR body and recap for provenance.
-	 */
-	readonly humanOverride?: string;
-}
-
-/**
- * Agent reports a completed panel round's verdicts. Fire-and-forget: it drives
- * the executor's ship gate, which reads the latest round per deliverable. The
- * executor gates independently of the worker's own "done" claim.
- */
-export interface PanelVerdictMessage {
-	readonly type: "panelVerdict";
-	readonly deliverableId: string;
-	readonly round: number;
-	readonly verdicts: readonly PanelVerdictEntry[];
-	readonly findings?: readonly StructuredFinding[];
-	readonly gate?: TransitionGate;
-	/**
-	 * What kind of run this reports: a full persona panel round, or a scoped
-	 * verification of claimed fixes. Absent on messages from older workers
-	 * (treated as "panel"). "round-started" is the crash marker: NO verdicts
-	 * yet — it only carries the ledger with `pendingRound` set, so the
-	 * executor persists the in-flight round (and arms its completion
-	 * deferral) before any reviewer settles. It never touches the verdict
-	 * cache of the last real round.
-	 */
-	readonly roundKind?: "panel" | "verification" | "round-started";
-	/** The review ledger after this run — the executor persists it on the plan. */
-	readonly ledger?: ReviewLedgerWire;
-}
-
 export interface DebugRecoveryProposalWire {
 	readonly kind:
 		| "steer"
@@ -369,8 +217,6 @@ export type AgentMessage =
 	| UsageCheckpointMessage
 	| PlanReadMessage
 	| PlanMutateMessage
-	| PanelReadMessage
-	| PanelVerdictMessage
 	| DebugProposalMessage
 	| QuestionsMessage
 	| DoneMessage
@@ -515,7 +361,6 @@ export type MaestroMessage =
 	| ChildRunControlRequestMessage
 	| AnswersMessage
 	| PlanReadResponseMessage
-	| PanelReadResponseMessage
 	| PlanMutateResultMessage
 	| DebugResultMessage
 	| DoneAckMessage
@@ -536,7 +381,6 @@ interface ResponseByRequestType {
 	readonly childRunSync: ChildRunSyncAckMessage;
 	readonly childRunControl: ChildRunControlResultMessage;
 	readonly planRead: PlanReadResponseMessage;
-	readonly panelRead: PanelReadResponseMessage;
 	readonly planMutate: PlanMutateResultMessage;
 	readonly questions: AnswersMessage;
 	readonly done: DoneAckMessage;

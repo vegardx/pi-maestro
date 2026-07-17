@@ -225,7 +225,6 @@ export {
 	applyWorkflowAnalyticsEvent,
 	assignmentAnalytics,
 	type CanonicalFindingAnalytics,
-	canonicalFromReviewLedger,
 	createWorkflowAnalyticsLedger,
 	type FinalVerificationAnalytics,
 	type RawFindingAnalytics,

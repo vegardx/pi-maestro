@@ -227,12 +227,12 @@ export function createModesRuntime(
 					void pi.sendUserMessage(text, { deliverAs: "followUp" });
 				},
 				resolveModel: async (ctx, spec) => {
-					const resolved = await roleSelection(
-						ctx,
-						"reviewer",
-						spec ? { model: spec.model, effort: spec.effort } : undefined,
-					);
-					return { model: resolved.model, effort: resolved.effort };
+					const resolved = await resolveSpawnModelSafe(ctx, {
+						role: "correctness-review",
+						model: spec?.model,
+						effort: spec?.effort,
+					});
+					return { model: resolved.modelId, effort: resolved.effort };
 				},
 				report: (roundKind, results, ledger) => {
 					const bridge = rt.agentBridge;

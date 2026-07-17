@@ -1,7 +1,11 @@
 // Scripted /maestro surface for scalar settings and exact agent-domain config.
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";import {
+import {
+	type ExtensionContext,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
+import {
 	type DomainRegistryInput,
 	domainImpact,
 	explainModelSelection,
@@ -118,7 +122,9 @@ export function handleSettingsCommand(
 	if (sub === "set") return setValue(tail, ctx, registry);
 	if (sub === "reset") return resetValue(tail, ctx);
 	if (sub === "explain") {
-		void explainModelSelection(ctx, tail).then((text) => notify(ctx, text));
+		const role = MODEL_ROLES.includes(tail as ModelRole) ? (tail as ModelRole) : undefined;
+		if (!role) return notify(ctx, `Unknown model role: ${tail}`, true);
+		void explainModelSelection(ctx, role).then((text) => notify(ctx, text));
 		return;
 	}
 	if (sub === "validate") {

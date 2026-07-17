@@ -113,11 +113,43 @@ function parseExecution(value: unknown): ExecutionState {
 			`Invalid Maestro execution state: unsupported stage ${String(stage)}`,
 		);
 	}
+	const completedAt =
+		typeof value.completedAt === "number" && Number.isFinite(value.completedAt)
+			? value.completedAt
+			: undefined;
+	const stop = parseStopRecord(value.stop);
+	if (stage === "stopped" && (completedAt === undefined || !stop)) {
+		throw new Error(
+			"Invalid Maestro execution state: stopped requires completedAt and stop record",
+		);
+	}
+	if (stage !== "stopped" && (completedAt !== undefined || stop !== undefined)) {
+		throw new Error(
+			"Invalid Maestro execution state: completion metadata requires stopped",
+		);
+	}
 	return {
 		stage: stage as ExecutionState["stage"],
 		deliverableId:
 			typeof value.deliverableId === "string" ? value.deliverableId : undefined,
+		...(completedAt !== undefined ? { completedAt } : {}),
+		...(stop ? { stop } : {}),
 	};
+}
+
+function parseStopRecord(value: unknown): ExecutionState["stop"] | undefined {
+	if (!isObject(value)) return undefined;
+	if (
+		!["completed", "failed", "canceled", "interrupted", "timed-out"].includes(
+			String(value.kind),
+		) ||
+		typeof value.completedAt !== "number" ||
+		!Number.isFinite(value.completedAt) ||
+		typeof value.recoverable !== "boolean"
+	) {
+		return undefined;
+	}
+	return value as unknown as NonNullable<ExecutionState["stop"]>;
 }
 
 /** True when a stable execution seed for `deliverableId` is already in session. */

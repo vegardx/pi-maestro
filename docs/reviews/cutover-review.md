@@ -95,15 +95,14 @@ invariant. Under the actual model they are not correctness bugs:
   and `applyWorkflowAnalyticsEvent` are an unused alternative path, not the live
   one. (If PR-provenance rendering is meant to be populated, that's a separate,
   smaller question — it currently always renders "not recorded".)
-- **`deliverableGateSatisfied` "deadlock" — reframed to CLEANUP (author-confirmed: remove).**
-  `packages/modes/src/exec/execution-adapter.ts:877`. It reads
+- **`deliverableGateSatisfied` "deadlock" — REMOVED (cleanup done).** It read
   `workflow.assignments` (set only by the `workflow` planning tool) while
-  reviewers are attached as `deliverable.agents`, so in the normal flow it is a
-  **no-op** (always satisfied); it would only block if the `workflow` tool
-  assigned reviewers. **Action:** remove the dead gate — `panelGate` wiring in
-  the executor, `deliverableGateSatisfied` / `requiredReviewerNames` /
-  `failingRequiredReviewers` / `deliverableGateDetail`, the `"ship gate:"`
-  blocked reason + `onShipGateBlocked`, and the old-model doc comments.
+  reviewers are attached as `deliverable.agents`, so it was a no-op in the normal
+  flow and only ever blocked if the `workflow` tool assigned reviewers. The whole
+  dead gate is gone: `panelGate`/`panelGateDetail` wiring, `deliverableGateSatisfied`
+  / `requiredReviewerNames` / `failingRequiredReviewers` / `deliverableGateDetail`,
+  `surfaceGateBlocks`, the `"ship gate:"` blocked reason, and `onShipGateBlocked`.
+  A `complete` deliverable now ships; the worker owns its findings.
 
 
 ## High findings

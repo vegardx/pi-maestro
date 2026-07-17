@@ -21,7 +21,7 @@ Prototype: [`test/e2e/lifecycle.e2e.test.ts`](../test/e2e/lifecycle.e2e.test.ts)
 | --- | --- |
 | `PlanEngine`, `DeliverableExecutor`, `ExecutionAdapter` | **real** — the actual orchestration code |
 | RPC (`MaestroRpcServer`/`MaestroRpcClient`, protocol v6) | **real** — a worker connects over a real unix socket |
-| The completion + ship gate (`checkCompletionGate`, `workerMayComplete`, `deliverableGateSatisfied`) | **real** |
+| The completion gate (`checkCompletionGate`, `workerMayComplete`) | **real** |
 | tmux | **stub** (`stubTmux`) — records the spawn; sessions never "alive", so kill is a no-op |
 | the worker `pi` process | **scripted** — a real `MaestroRpcClient` plays the agent side of the wire |
 | git worktree / gh ship | **skipped** — the deliverable is pre-provisioned `active` with a `worktreePath`; see limitations |
@@ -63,8 +63,6 @@ provisioning.
 4. **Assert** against real adapter/engine state:
    - `adapter.isWorkerDone(id)` — the worker completed.
    - `engine.get().deliverables[0].tasks.every(t => t.done)` — plan mutated.
-   - `adapter.deliverableGateSatisfied(id)` / `failingRequiredReviewers(id)` —
-     the ship gate.
    - `adapter.snapshot()` — tokens, sessions, timings.
 
 The prototype has two scenarios: the happy path (worker completes, gate
@@ -100,8 +98,8 @@ worker lifecycle, the RPC protocol, or the gate.
   gate on unresolved findings). The prototype drives the worker's task/idle wire
   but does not yet drive a `review()` round; a higher-fidelity scenario would
   script the worker running its panel and escalating a finding to the maestro.
-  (The scenario tagged `[stale gate, to be removed]` characterizes the leftover
-  `deliverableGateSatisfied` code and should be deleted with that gate.)
+  (The maestro-side ship gate has been removed — a `complete` deliverable ships;
+  the worker owns its findings.)
 - **Crash/recovery, parallel deliverables, stacked dependencies** are all
   reachable with the same harness (crash the worker mid-work; add a second
   deliverable with `dependsOn`).

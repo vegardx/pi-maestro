@@ -124,13 +124,6 @@ export interface ExecutorDeps {
 	 */
 	defaultBranchFor?: (repoPath: string) => string | null;
 	/**
-	 * Ship gate: returns false while a deliverable's required review verdicts
-	 * are not all PASS. Blocks ship (stays retryable). Absent → always ships.
-	 */
-	panelGate?: (deliverableId: string) => boolean;
-	/** Human-readable reason the gate is blocking (which reviewers, why). */
-	panelGateDetail?: (deliverableId: string) => string;
-	/**
 	 * New-deliverable activation gate: false defers phase-1 activation (running
 	 * deliverables still advance and ship). Absent → always allowed.
 	 */
@@ -961,22 +954,8 @@ export class DeliverableExecutor {
 		const state = this.deliverableStates.get(g.id);
 		if (!state) return null;
 
-		// Ship gate: hold until every required reviewer's latest verdict is PASS.
-		// We only reach here for a `complete` deliverable — the worker is already
-		// done — so a blocking gate is a genuine deadlock, not mid-iteration: the
-		// worker finished without clearing its required reviewers. Surface it
-		// (state.blocked → a blocked card the maestro/human acts on) instead of
-		// silently retrying forever. Stays retryable: a later PASS verdict opens
-		// the gate and ships. No verdict at all (worker never ran review) blocks
-		// the same way — which is correct, an unreviewed required deliverable
-		// must not ship.
-		if (this.deps.panelGate && !this.deps.panelGate(g.id)) {
-			const reason = `ship gate: ${this.deps.panelGateDetail?.(g.id) ?? "required review verdicts not satisfied"}`;
-			if (state.blocked !== reason) state.blocked = reason;
-			return null;
-		}
-		// Gate satisfied — clear any stale gate-block note before shipping.
-		if (state.blocked?.startsWith("ship gate:")) state.blocked = undefined;
+		// No maestro ship gate: reviewers run worker-side and the worker owns its
+		// findings (trust-the-worker model). A `complete` deliverable ships.
 
 		// Scratch deliverables have nothing to push and no PR: shipping is the
 		// gate above plus the recorded summary. Terminal status stays `shipped`

@@ -103,8 +103,6 @@ export interface ExecutionHandle {
 		agentName?: string,
 		reason?: string,
 	): Promise<boolean>;
-	/** Required reviewers currently holding a deliverable's ship gate. */
-	failingRequiredReviewers(deliverableId: string): string[];
 	/** Preview read-only validation for explicit worker replacement. */
 	previewWorkerRestart?(
 		deliverableId: string,

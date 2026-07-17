@@ -19,57 +19,10 @@ import {
 	ExecutionAdapter,
 	type TmuxApi,
 } from "../../packages/modes/src/exec/execution-adapter.js";
-import type {
-	AgentWorkflow,
-	Plan,
-	ResolvedAgentAssignment,
-} from "../../packages/modes/src/schema.js";
+import type { Plan } from "../../packages/modes/src/schema.js";
 import type { PlanStore } from "../../packages/modes/src/storage.js";
 
 const TOKEN = "e2e-token";
-
-/** A minimal, validation-passing review assignment for gate tests. */
-function reviewAssignment(agentId: string): ResolvedAgentAssignment {
-	return {
-		agentId,
-		kind: "plan-review",
-		presetId: "preset-review",
-		modelSetId: "set-review",
-		optionId: "opt-1",
-		modelId: "test/reviewer",
-		runtime: { transport: "headless" },
-		focus: "review the deliverable",
-		rationale: "gate test",
-		inputContracts: [],
-		outputContracts: ["review"],
-		provenance: {
-			source: "explicit",
-			presetId: "preset-review",
-			modelSetId: "set-review",
-			optionId: "opt-1",
-			resolvedAt: "2026-01-01T00:00:00.000Z",
-		},
-		resolvedAt: "2026-01-01T00:00:00.000Z",
-		source: "explicit",
-	} as unknown as ResolvedAgentAssignment;
-}
-
-/** A one-stage workflow that requires `agentId` to review before shipping. */
-function reviewWorkflow(agentId: string): AgentWorkflow {
-	return {
-		assignments: [reviewAssignment(agentId)],
-		stages: [
-			{
-				id: "review",
-				after: [],
-				assignmentIds: [agentId],
-				inputRevision: "HEAD",
-				inputContracts: [],
-				barrier: "all",
-			},
-		],
-	};
-}
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -228,7 +181,7 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("spawns a worker, completes when all tasks toggle done, and the gate is satisfied with no reviewers", async () => {
+	it("spawns a worker and completes when all tasks toggle done", async () => {
 		// The real adapter built a spawn spec and asked tmux to launch exactly one
 		// worker session (tmux session names are generated display names; RPC
 		// identity is the agentId the worker authenticates with below).
@@ -259,46 +212,7 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 			.get()
 			.deliverables[0].tasks.filter((t) => t.kind === "task");
 		expect(tasks.every((t) => t.done)).toBe(true);
-		// ...and with no required reviewers the ship gate is satisfied.
-		expect(adapter.deliverableGateSatisfied("ship-the-widget")).toBe(true);
-		expect(adapter.failingRequiredReviewers("ship-the-widget")).toEqual([]);
-	});
-
-	// CHARACTERIZATION TEST (documents dead code slated for removal).
-	// The intended model retired the maestro-side "block ship until findings
-	// resolved" gate: reviewers run worker-side via review() and the worker owns
-	// its findings. The leftover `deliverableGateSatisfied` reads
-	// workflow.assignments (a separate reviewer system) while real reviewers live
-	// in deliverable.agents, so in the normal flow it is a no-op — it only blocks
-	// if the `workflow` tool assigns reviewers, as forced here. This test pins
-	// that stale behavior until the gate is removed; delete it with the gate.
-	it("[stale gate, to be removed] deliverableGateSatisfied blocks when workflow.assignments carries a reviewer", async () => {
-		// Force the vestigial gate by assigning a reviewer via the workflow tool.
-		engine.setWorkflow(reviewWorkflow("reviewer"));
-		expect(adapter.deliverableGateSatisfied("ship-the-widget")).toBe(false);
-		expect(adapter.failingRequiredReviewers("ship-the-widget")).toContain(
-			"reviewer",
-		);
-
-		// The worker still completes its tasks and finishes...
-		const taskIds = engine
-			.get()
-			.deliverables[0].tasks.filter((t) => t.kind === "task")
-			.map((t) => t.id);
-		const worker = scriptedWorker(socketPath, "ship-the-widget/worker");
-		workers.push(worker);
-		await worker.ready;
-		worker.working();
-		for (const id of taskIds) worker.toggleTask(id);
-		worker.idle();
-		await until(() => adapter.isWorkerDone("ship-the-widget"));
-
-		// ...yet the vestigial gate stays "unsatisfied" purely because a reviewer
-		// is present in workflow.assignments — it never consults verdicts/findings
-		// and nothing clears it. This is the dead-code behavior to delete.
-		expect(adapter.deliverableGateSatisfied("ship-the-widget")).toBe(false);
-		expect(adapter.failingRequiredReviewers("ship-the-widget")).toContain(
-			"reviewer",
-		);
+		// No maestro ship gate: the worker owns its findings and the deliverable
+		// is free to ship once complete (trust-the-worker model).
 	});
 });

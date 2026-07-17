@@ -1,8 +1,8 @@
 import type { ResolvedAgentAssignment } from "@vegardx/pi-contracts";
-import type { ReviewLedger } from "./findings.js";
-import { openBlocking } from "./findings.js";
 import type { CommitTarget } from "./commit-target.js";
 import { renderCommitTarget } from "./commit-target.js";
+import type { ReviewLedger } from "./findings.js";
+import { openBlocking } from "./findings.js";
 
 export interface VerificationScope {
 	readonly findingId: string;
@@ -51,7 +51,8 @@ export function assessDelivery(input: {
 	if (input.assignedReviews.length > 0 && !input.ledger) {
 		blockers.push("assigned reviews produced no canonical report");
 	}
-	if (input.ledger?.pendingRound) blockers.push("review stage is still settling");
+	if (input.ledger?.pendingRound)
+		blockers.push("review stage is still settling");
 	const participants = new Map(
 		(input.ledger?.participants ?? []).map((participant) => [
 			participant.name,
@@ -61,7 +62,9 @@ export function assessDelivery(input: {
 	for (const assignment of input.assignedReviews) {
 		const participant = participants.get(assignment.agentId);
 		if (!participant?.ok) {
-			blockers.push(`assigned review ${assignment.agentId} has no valid report`);
+			blockers.push(
+				`assigned review ${assignment.agentId} has no valid report`,
+			);
 		}
 	}
 	for (const entry of input.ledger

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assessDelivery, renderVerificationScope } from "../packages/modes/src/exec/assessment.js";
+import {
+	assessDelivery,
+	renderVerificationScope,
+} from "../packages/modes/src/exec/assessment.js";
 import { buildLedger } from "../packages/modes/src/exec/findings.js";
 
 const SHA = "a".repeat(40);
@@ -80,6 +83,8 @@ describe("final delivery assessment", () => {
 			assessedAt: NOW,
 		});
 		expect(assessment.complete).toBe(false);
-		expect(assessment.blockers).toContain("assigned reviews produced no canonical report");
+		expect(assessment.blockers).toContain(
+			"assigned reviews produced no canonical report",
+		);
 	});
 });

@@ -117,7 +117,9 @@ const ResolutionParam = Type.Object({
 	}),
 	evidence: Type.Optional(Type.Array(Type.String())),
 	fixCommit: Type.Optional(
-		Type.String({ description: "fixed only: immutable commit containing the fix" }),
+		Type.String({
+			description: "fixed only: immutable commit containing the fix",
+		}),
 	),
 	canonical: Type.Optional(
 		Type.String({ description: "duplicateOf only: the id it merges into" }),

@@ -278,8 +278,14 @@ export function normalizeFindingAssertions(
 	const participants: NonNullable<ReviewLedger["participants"]> = [];
 	let ordinal = 0;
 	for (const assertion of assertions) {
-		if (assertion.findings.some((finding) => validateStructuredFinding(finding).length > 0)) {
-			throw new Error(`invalid structured finding report from ${assertion.reviewer}`);
+		if (
+			assertion.findings.some(
+				(finding) => validateStructuredFinding(finding).length > 0,
+			)
+		) {
+			throw new Error(
+				`invalid structured finding report from ${assertion.reviewer}`,
+			);
 		}
 		participants.push({
 			name: assertion.reviewer,
@@ -322,17 +328,16 @@ export function normalizeFindingAssertions(
 						...(finding.evidence ?? []),
 					]),
 				],
-				provenance: [
-					...(canonical.finding.provenance ?? []),
-					provenance,
-				],
+				provenance: [...(canonical.finding.provenance ?? []), provenance],
 			};
 			canonical.duplicates = [...(canonical.duplicates ?? []), id];
 		}
 	}
 	const updatedAt =
-		assertions.map((assertion) => assertion.reportedAt).sort().at(-1) ??
-		new Date(0).toISOString();
+		assertions
+			.map((assertion) => assertion.reportedAt)
+			.sort()
+			.at(-1) ?? new Date(0).toISOString();
 	return { round: 1, cycle: 0, entries, participants, updatedAt };
 }
 

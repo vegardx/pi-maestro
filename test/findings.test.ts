@@ -416,7 +416,6 @@ describe("gate math", () => {
 	});
 });
 
-
 describe("structured finding normalization", () => {
 	it("mints stable ids and conservatively merges exact duplicate assertions", async () => {
 		const { normalizeFindingAssertions } = await import(
@@ -488,7 +487,6 @@ describe("structured finding normalization", () => {
 		expect(ledger.entries).toHaveLength(2);
 	});
 });
-
 
 describe("new-path resolution barriers", () => {
 	const committedLedger = (): ReviewLedger => {

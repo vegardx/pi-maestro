@@ -105,31 +105,6 @@ export interface ExecutionHandle {
 	): Promise<boolean>;
 	/** Required reviewers currently holding a deliverable's ship gate. */
 	failingRequiredReviewers(deliverableId: string): string[];
-	/**
-	 * Latest panel round's verdicts with their (clipped) findings reports —
-	 * what the human reads before deciding an override/send-back.
-	 */
-	reviewerFindings(deliverableId: string): ReadonlyArray<{
-		readonly name: string;
-		readonly verdict: string;
-		readonly required: boolean;
-		readonly report?: string;
-	}>;
-	/**
-	 * Record a HUMAN override as a reviewer's latest verdict (gate-decision
-	 * answer flow only — deliberately not reachable from any model tool).
-	 */
-	overrideReviewerVerdict(
-		deliverableId: string,
-		reviewer: string,
-		reason: string,
-	): void;
-	/**
-	 * Reopen a gate-blocked deliverable and respawn its worker with the
-	 * review findings (the gate-decision "send back" route). Resumes the
-	 * worker's own session when possible. False when nothing to send back to.
-	 */
-	sendBackToWorker(deliverableId: string, kickoff: string): Promise<boolean>;
 	/** Preview read-only validation for explicit worker replacement. */
 	previewWorkerRestart?(
 		deliverableId: string,

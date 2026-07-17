@@ -157,7 +157,6 @@ export async function beginHandoff(
 				// Dead executors must not block the handoff.
 			}
 			rt.execution = undefined;
-			rt.gateTriage = undefined;
 		}
 		// The seed is NOT sent from here: this sink runs mid-turn, and a
 		// message sent across the session switch gets orphaned in the old

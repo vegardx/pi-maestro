@@ -18,6 +18,8 @@ import type {
 	RunId,
 	StopRecord,
 	ThinkingLevel,
+	TokenSnapshot,
+	UsageCheckpoint,
 } from "@vegardx/pi-contracts";
 import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
@@ -31,7 +33,6 @@ import {
 	type PlanMutateMessage,
 	type PlanReadMessage,
 	type QuestionsMessage,
-	type TokenSnapshot,
 } from "@vegardx/pi-rpc";
 import * as realTmux from "@vegardx/pi-tmux";
 import { agentName } from "../agent-names.js";
@@ -142,7 +143,7 @@ export type ExecutionEvent =
 			deliverableTitle: string;
 			durationMs: number;
 			tokens: { input: number; output: number; turns: number };
-			cacheRatio?: number;
+			prefixCacheHitRate?: number;
 			model?: string;
 			effort?: string;
 			adaptive?: boolean;
@@ -229,6 +230,8 @@ export interface ExecutionAdapterOpts {
 		id: string,
 		state: {
 			status: string;
+			generation: number;
+			revision: number;
 			tokens: TokenSnapshot;
 		},
 	) => void;
@@ -237,6 +240,8 @@ export interface ExecutionAdapterOpts {
 		ownerGeneration: number,
 		projection: import("@vegardx/pi-contracts").ChildRunProjection,
 	) => void;
+	/** Durable cumulative usage forwarded by a worker-owned child. */
+	onUsageCheckpoint?: (checkpoint: UsageCheckpoint) => void;
 	onQuestionsReceived?: (id: string, count: number) => void;
 	onAllSettled?: () => void;
 	/** Rich lifecycle events for the chat progress cards. */
@@ -316,7 +321,8 @@ export class ExecutionAdapter {
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
 	private settledAnnounced = false;
 	private tokenSnapshots = new Map<string, TokenSnapshot>(); // agentKey → latest tokens
-	private firstTurnCacheRatio = new Map<string, number>(); // agentKey → first-turn cacheRead ratio
+	private connectionGenerations = new Map<string, number>();
+	private firstTurnPrefixCacheHitRate = new Map<string, number>();
 	// agentKey → resolved display model + adaptive flag (telemetry)
 	private agentModelMeta = new Map<
 		string,
@@ -417,12 +423,28 @@ export class ExecutionAdapter {
 					this.handleDone(deliverableId, agentNamePart);
 				},
 				tokens: (agentId, msg) => {
-					this.recordFirstTurnCache(agentId, msg.snapshot);
+					const generation = this.connectionGenerations.get(agentId);
+					if (generation === undefined) return;
+					this.recordFirstTurnPrefixCache(agentId, msg.snapshot);
 					this.tokenSnapshots.set(agentId, msg.snapshot);
 					this.opts.onAgentStateChanged?.(agentId, {
 						status: "working",
+						generation,
+						revision: msg.revision,
 						tokens: msg.snapshot,
 					});
+				},
+				usageCheckpoint: (agentId, msg) => {
+					const generation = this.connectionGenerations.get(agentId);
+					if (generation === undefined) return;
+					const source = msg.checkpoint.source;
+					if (
+						source.kind !== "run" ||
+						source.ownerId !== agentId ||
+						source.ownerGeneration !== generation
+					)
+						return;
+					this.opts.onUsageCheckpoint?.(msg.checkpoint);
 				},
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
 				planRead: (agentId, msg) => this.handlePlanRead(agentId, msg),
@@ -497,7 +519,17 @@ export class ExecutionAdapter {
 					this.handleQuestions(agentId, deliverableId, agentNamePart, msg);
 				},
 			}),
+			onConnect: (agentId, hello) => {
+				const [deliverableId, agentName] = agentId.split("/");
+				const current =
+					deliverableId && agentName
+						? this.executor.getAgentState(deliverableId, agentName)?.generation
+						: undefined;
+				if (current !== undefined && hello.generation !== current) return;
+				this.connectionGenerations.set(agentId, hello.generation);
+			},
 			onDisconnect: (agentId) => {
+				this.connectionGenerations.delete(agentId);
 				this.idleCount.delete(agentId);
 				// A respawned worker starts a fresh review episode — a stale steer
 				// stamp must not let it complete through the grace period.
@@ -763,13 +795,21 @@ export class ExecutionAdapter {
 					resumed: Boolean(spawnOpts.resumeSessionFile),
 					deliverableTitle: this.deliverableTitle(spawnOpts.deliverableId),
 				});
+				const generation =
+					this.executor.getAgentState(
+						spawnOpts.deliverableId,
+						spawnOpts.agentName,
+					)?.generation ?? 0;
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
+					generation,
+					revision: 1,
 					tokens: {
 						input: 0,
 						output: 0,
 						cacheRead: 0,
 						cacheWrite: 0,
+						promptTokens: 0,
 						totalTokens: 0,
 						cost: 0,
 						turns: 0,
@@ -2191,7 +2231,7 @@ export class ExecutionAdapter {
 		// Capture live bookkeeping now — markAgentDone kills the session, which
 		// prunes tokenSnapshots (see killSession) before the event is emitted.
 		const tokens = this.tokenSnapshots.get(agentKey);
-		const cacheRatio = this.firstTurnCacheRatio.get(agentKey);
+		const prefixCacheHitRate = this.firstTurnPrefixCacheHitRate.get(agentKey);
 		const spawnedAt = this.spawnTimes.get(agentKey);
 		if (firstCompletion) {
 			this.logEvent("done", { agent: agentKey });
@@ -2216,7 +2256,7 @@ export class ExecutionAdapter {
 				tokens: tokens
 					? { input: tokens.input, output: tokens.output, turns: tokens.turns }
 					: { input: 0, output: 0, turns: 0 },
-				...(cacheRatio !== undefined ? { cacheRatio } : {}),
+				...(prefixCacheHitRate !== undefined ? { prefixCacheHitRate } : {}),
 				...(doneMeta
 					? { model: doneMeta.model, adaptive: doneMeta.adaptive }
 					: {}),
@@ -2486,8 +2526,8 @@ export class ExecutionAdapter {
 			{
 				status: string;
 				startedAt: number;
-				tokens: { input: number; output: number; turns: number };
-				cacheRatio?: number;
+				tokens: TokenSnapshot;
+				prefixCacheHitRate?: number;
 				model?: string;
 				effort?: string;
 				adaptive?: boolean;
@@ -2500,8 +2540,8 @@ export class ExecutionAdapter {
 			{
 				status: string;
 				startedAt: number;
-				tokens: { input: number; output: number; turns: number };
-				cacheRatio?: number;
+				tokens: TokenSnapshot;
+				prefixCacheHitRate?: number;
 				model?: string;
 				effort?: string;
 				adaptive?: boolean;
@@ -2519,7 +2559,7 @@ export class ExecutionAdapter {
 			for (const [name, agentState] of deliverableState.agents) {
 				const key = `${deliverableId}/${name}`;
 				const tokens = this.tokenSnapshots.get(key);
-				const cacheRatio = this.firstTurnCacheRatio.get(key);
+				const prefixCacheHitRate = this.firstTurnPrefixCacheHitRate.get(key);
 				const meta = this.agentModelMeta.get(key);
 				agents.set(key, {
 					status: agentState.status,
@@ -2528,14 +2568,17 @@ export class ExecutionAdapter {
 						(agentState.startedAt
 							? Date.parse(agentState.startedAt)
 							: Date.now()),
-					tokens: tokens
-						? {
-								input: tokens.input,
-								output: tokens.output,
-								turns: tokens.turns,
-							}
-						: { input: 0, output: 0, turns: 0 },
-					...(cacheRatio !== undefined ? { cacheRatio } : {}),
+					tokens: tokens ?? {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						promptTokens: 0,
+						totalTokens: 0,
+						cost: 0,
+						turns: 0,
+					},
+					...(prefixCacheHitRate !== undefined ? { prefixCacheHitRate } : {}),
 					...(meta ? { model: meta.model, adaptive: meta.adaptive } : {}),
 					...(agentState.effort ? { effort: agentState.effort } : {}),
 				});
@@ -2885,7 +2928,10 @@ export class ExecutionAdapter {
 	 * within {@link CACHE_WARM_WINDOW_MS} — log a `cache-miss` event.
 	 * Observability only: never throws.
 	 */
-	private recordFirstTurnCache(agentKey: string, snap: TokenSnapshot): void {
+	private recordFirstTurnPrefixCache(
+		agentKey: string,
+		snap: TokenSnapshot,
+	): void {
 		try {
 			if (this.tokenSnapshots.has(agentKey)) return;
 			const toolClass = this.agentToolClass(agentKey);
@@ -2905,7 +2951,7 @@ export class ExecutionAdapter {
 			const denominator = snap.cacheRead + snap.input;
 			if (denominator <= 0) return;
 			const ratio = snap.cacheRead / denominator;
-			this.firstTurnCacheRatio.set(agentKey, ratio);
+			this.firstTurnPrefixCacheHitRate.set(agentKey, ratio);
 
 			if (ratio < CACHE_MISS_RATIO_THRESHOLD && warmPeer) {
 				this.logEvent("cache-miss", {

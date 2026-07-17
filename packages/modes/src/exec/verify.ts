@@ -106,7 +106,7 @@ export interface VerifyRunView {
 	readonly startedAt: number;
 	tokensIn?: number;
 	tokensOut?: number;
-	cacheRatio?: number;
+	prefixCacheHitRate?: number;
 	model?: string;
 	effort?: string;
 	adaptive?: boolean;

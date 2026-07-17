@@ -281,8 +281,8 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 				parts.push("no usage reported");
 			} else {
 				parts.push(`${k(t.input)}/${k(t.output)} tok`);
-				if (event.cacheRatio !== undefined)
-					parts.push(`cache ${Math.round(event.cacheRatio * 100)}%`);
+				if (event.prefixCacheHitRate !== undefined)
+					parts.push(`prefix ${Math.round(event.prefixCacheHitRate * 100)}%`);
 			}
 			parts.push(`${t.turns} turns`);
 			return `↳ ${parts.join(" · ")}`;

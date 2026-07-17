@@ -170,6 +170,15 @@ export {
 	toolBlockedInPlanMode,
 } from "./policy.js";
 export {
+	DEFAULT_MAESTRO_SECTION_BYTES,
+	GITHUB_PR_BODY_BYTES,
+	MAESTRO_PR_BEGIN,
+	MAESTRO_PR_END,
+	type PrProvenanceRenderOptions,
+	renderMaestroPrSection,
+	updateMaestroPrBody,
+} from "./pr-provenance.js";
+export {
 	createModesRuntime,
 	type ModesRuntime,
 	type ModesRuntimeOptions,
@@ -215,6 +224,21 @@ export {
 	createTaskTool,
 } from "./tools.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
+export {
+	type AssignmentAnalytics,
+	applyWorkflowAnalyticsEvent,
+	assignmentAnalytics,
+	type CanonicalFindingAnalytics,
+	canonicalFromReviewLedger,
+	createWorkflowAnalyticsLedger,
+	type FinalVerificationAnalytics,
+	type RawFindingAnalytics,
+	WORKFLOW_ANALYTICS_VERSION,
+	type WorkflowAnalyticsEvent,
+	type WorkflowAnalyticsLedger,
+	type WorkflowStageAnalytics,
+	workflowAnalyticsTotals,
+} from "./workflow-analytics.js";
 
 export default defineExtension(
 	{

@@ -102,6 +102,8 @@ export interface CommitCapabilityV1 {
 		readonly paths?: readonly string[];
 		readonly message?: string;
 		readonly cwd?: string;
+		/** Optional compact workflow boundary id, emitted as Maestro-Stage. */
+		readonly maestroStage?: string;
 	}): Promise<{
 		readonly committed: boolean;
 		readonly sha?: string;

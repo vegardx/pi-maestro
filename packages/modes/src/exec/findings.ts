@@ -106,6 +106,14 @@ function normalizeFinding(
 		...(Number.isFinite(line) && line > 0 ? { line } : {}),
 		...(typeof f.task === "string" && f.task ? { task: f.task } : {}),
 		...(typeof f.claim === "string" && f.claim ? { claim: f.claim } : {}),
+		...(Array.isArray(f.evidence)
+			? {
+					evidence: f.evidence
+						.filter((item): item is string => typeof item === "string")
+						.map((item) => item.trim())
+						.filter(Boolean),
+				}
+			: {}),
 		actual,
 	};
 }
@@ -127,17 +135,23 @@ export function renderFinding(f: StructuredFinding): string {
  */
 export const RESOLUTION_STATUSES = [
 	"fixed",
-	"wont-fix",
+	"unchanged",
 	"disputed",
+	"needs-user",
 	"duplicateOf",
+	// Legacy spelling accepted only for advisory findings.
+	"wont-fix",
 ] as const;
 export type ResolutionStatus = (typeof RESOLUTION_STATUSES)[number];
 
 export interface FindingResolution {
 	readonly id: string;
 	readonly status: ResolutionStatus;
-	/** Mandatory rationale: commit for fixed, reason for wont-fix/disputed. */
+	/** Mandatory rationale: fix commit, unchanged evidence, or escalation case. */
 	readonly note: string;
+	/** Immutable fix commit for fixed; evidence refs for escalations. */
+	readonly evidence?: readonly string[];
+	readonly fixCommit?: string;
 	/** duplicateOf only: the canonical id this finding merges into. */
 	readonly canonical?: string;
 }
@@ -152,7 +166,7 @@ export interface ClaimCheck {
 
 export interface LedgerEntry {
 	/** finding.id is the MINTED canonical id (`<reviewer>.<n>`). */
-	readonly finding: StructuredFinding;
+	finding: StructuredFinding;
 	/** Panel entry that raised it (provenance; part of the minted id). */
 	readonly reviewer: string;
 	/** Latest worker resolution (re-filed each fix cycle until terminal). */
@@ -225,6 +239,103 @@ export interface ReviewLedger {
 	updatedAt: string;
 }
 
+export interface FindingAssertion {
+	readonly reviewer: string;
+	readonly stageId: string;
+	readonly modelId: string;
+	readonly commit: string;
+	readonly reportedAt: string;
+	readonly runId?: string;
+	readonly findings: readonly StructuredFinding[];
+}
+
+/**
+ * Canonicalize one atom for conservative duplicate matching. A merge requires
+ * the same category, source address, and normalized claim/actual text. Similar
+ * prose alone is intentionally not enough: disagreements remain independent
+ * findings with separate provenance and severities.
+ */
+function duplicateKey(finding: StructuredFinding): string {
+	const text = (finding.claim ?? finding.actual)
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim();
+	return [
+		finding.category.toLowerCase(),
+		finding.file ?? "",
+		finding.line ?? "",
+		finding.task ?? "",
+		text,
+	].join("\u0000");
+}
+
+/** Ingest valid reports atomically, mint stable ids, and merge exact duplicates. */
+export function normalizeFindingAssertions(
+	assertions: readonly FindingAssertion[],
+): ReviewLedger {
+	const entries: LedgerEntry[] = [];
+	const canonicalByKey = new Map<string, LedgerEntry>();
+	const participants: NonNullable<ReviewLedger["participants"]> = [];
+	let ordinal = 0;
+	for (const assertion of assertions) {
+		if (assertion.findings.some((finding) => validateStructuredFinding(finding).length > 0)) {
+			throw new Error(`invalid structured finding report from ${assertion.reviewer}`);
+		}
+		participants.push({
+			name: assertion.reviewer,
+			ok: true,
+			status: "reported",
+			attempt: 1,
+			...(assertion.runId ? { runId: assertion.runId } : {}),
+		});
+		for (const source of assertion.findings) {
+			ordinal += 1;
+			const id = `finding-${String(ordinal).padStart(4, "0")}`;
+			const provenance = {
+				agentId: assertion.reviewer,
+				stageId: assertion.stageId,
+				modelId: assertion.modelId,
+				commit: assertion.commit,
+				reportedAt: assertion.reportedAt,
+				...(assertion.runId ? { runId: assertion.runId } : {}),
+			};
+			const finding: StructuredFinding = {
+				...source,
+				id,
+				evidence: [...new Set(source.evidence ?? [])],
+				provenance: [provenance],
+			};
+			const key = duplicateKey(finding);
+			const canonical = canonicalByKey.get(key);
+			if (!canonical) {
+				const entry: LedgerEntry = { finding, reviewer: assertion.reviewer };
+				entries.push(entry);
+				canonicalByKey.set(key, entry);
+				continue;
+			}
+			canonical.finding = {
+				...canonical.finding,
+				severity: maxSeverity(canonical.finding.severity, finding.severity),
+				evidence: [
+					...new Set([
+						...(canonical.finding.evidence ?? []),
+						...(finding.evidence ?? []),
+					]),
+				],
+				provenance: [
+					...(canonical.finding.provenance ?? []),
+					provenance,
+				],
+			};
+			canonical.duplicates = [...(canonical.duplicates ?? []), id];
+		}
+	}
+	const updatedAt =
+		assertions.map((assertion) => assertion.reportedAt).sort().at(-1) ??
+		new Date(0).toISOString();
+	return { round: 1, cycle: 0, entries, participants, updatedAt };
+}
+
 /**
  * Mint canonical ids for one reviewer's findings: `<reviewer>.<n>` in report
  * order. Whatever id the model wrote is discarded — uniqueness comes from
@@ -274,7 +385,12 @@ export function isTerminal(
 ): boolean {
 	if (waived.has(e.finding.id)) return true;
 	if (isDuplicate(e)) return true;
-	if (e.resolution?.status === "wont-fix") return true; // minors only (enforced on apply)
+	if (e.resolution?.status === "wont-fix") return true; // legacy minors only
+	if (
+		e.resolution?.status === "unchanged" &&
+		!isBlockingSeverity(e.finding.severity)
+	)
+		return true;
 	if (e.resolution?.status === "fixed" && e.check?.result === "verified")
 		return true;
 	return false;
@@ -296,7 +412,9 @@ export function openDisputed(
 	waived: ReadonlySet<string> = new Set(),
 ): LedgerEntry[] {
 	return openBlocking(ledger, waived).filter(
-		(e) => e.resolution?.status === "disputed",
+		(e) =>
+			e.resolution?.status === "disputed" ||
+			e.resolution?.status === "needs-user",
 	);
 }
 
@@ -337,12 +455,24 @@ export function applyResolutions(
 			errors.push(`${r.id}: already settled (${describeState(entry)})`);
 			continue;
 		}
+		if (r.evidence?.some((item) => !item.trim())) {
+			errors.push(`${r.id}: evidence must not contain empty entries`);
+			continue;
+		}
 		switch (r.status) {
 			case "wont-fix":
+			case "unchanged":
 				if (isBlockingSeverity(entry.finding.severity)) {
 					errors.push(
-						`${r.id}: wont-fix is only legal for minor findings — ${entry.finding.severity} findings must be fixed or disputed`,
+						`${r.id}: ${r.status} is only legal for minor findings — ${entry.finding.severity} findings must be fixed or escalated`,
 					);
+				}
+				break;
+			case "needs-user":
+				if (!isBlockingSeverity(entry.finding.severity)) {
+					errors.push(`${r.id}: needs-user is reserved for blocking findings`);
+				} else if (!r.evidence?.length) {
+					errors.push(`${r.id}: needs-user requires evidence`);
 				}
 				break;
 			case "disputed":
@@ -370,6 +500,14 @@ export function applyResolutions(
 				break;
 			}
 			case "fixed":
+				if (
+					entry.finding.provenance?.length &&
+					(!r.fixCommit || !/^[0-9a-f]{40}$/i.test(r.fixCommit))
+				) {
+					errors.push(
+						`${r.id}: fixed requires an immutable 40-character fixCommit`,
+					);
+				}
 				break;
 		}
 	}
@@ -464,8 +602,8 @@ function describeState(e: LedgerEntry): string {
 		return `duplicate of ${e.resolution.canonical}`;
 	if (e.resolution.status === "fixed")
 		return e.check
-			? `fixed, ${e.check.result}`
-			: "fixed, awaiting verification";
+			? `fixed at ${e.resolution.fixCommit ?? "unknown commit"}, ${e.check.result}`
+			: `fixed at ${e.resolution.fixCommit ?? "unknown commit"}, awaiting verification`;
 	return e.resolution.status;
 }
 

@@ -415,3 +415,140 @@ describe("gate math", () => {
 		expect(text).toContain("WAIVED");
 	});
 });
+
+
+describe("structured finding normalization", () => {
+	it("mints stable ids and conservatively merges exact duplicate assertions", async () => {
+		const { normalizeFindingAssertions } = await import(
+			"../packages/modes/src/exec/findings.js"
+		);
+		const ledger = normalizeFindingAssertions([
+			{
+				reviewer: "correctness",
+				stageId: "review",
+				modelId: "model/a",
+				commit: "a".repeat(40),
+				reportedAt: NOW,
+				findings: [
+					finding({
+						file: "src/a.ts",
+						line: 4,
+						actual: "Null input crashes",
+						evidence: ["src/a.ts:4 dereferences value"],
+					}),
+				],
+			},
+			{
+				reviewer: "adversarial",
+				stageId: "review",
+				modelId: "model/b",
+				commit: "a".repeat(40),
+				reportedAt: NOW,
+				findings: [
+					finding({
+						severity: "critical",
+						file: "src/a.ts",
+						line: 4,
+						actual: "  null input CRASHES ",
+						evidence: ["test reproduces"],
+					}),
+				],
+			},
+		]);
+		expect(ledger.entries).toHaveLength(1);
+		expect(ledger.entries[0]?.finding.id).toBe("finding-0001");
+		expect(ledger.entries[0]?.finding.severity).toBe("critical");
+		expect(ledger.entries[0]?.finding.provenance).toHaveLength(2);
+		expect(ledger.entries[0]?.duplicates).toEqual(["finding-0002"]);
+	});
+
+	it("preserves disagreements at the same source address", async () => {
+		const { normalizeFindingAssertions } = await import(
+			"../packages/modes/src/exec/findings.js"
+		);
+		const base = {
+			stageId: "review",
+			commit: "a".repeat(40),
+			reportedAt: NOW,
+		};
+		const ledger = normalizeFindingAssertions([
+			{
+				...base,
+				reviewer: "a",
+				modelId: "one",
+				findings: [finding({ file: "x.ts", line: 1, actual: "should reject" })],
+			},
+			{
+				...base,
+				reviewer: "b",
+				modelId: "two",
+				findings: [finding({ file: "x.ts", line: 1, actual: "should accept" })],
+			},
+		]);
+		expect(ledger.entries).toHaveLength(2);
+	});
+});
+
+
+describe("new-path resolution barriers", () => {
+	const committedLedger = (): ReviewLedger => {
+		const ledger = twoReviewerLedger();
+		ledger.entries = ledger.entries.map((entry) => ({
+			...entry,
+			finding: {
+				...entry.finding,
+				provenance: [
+					{
+						agentId: entry.reviewer,
+						stageId: "review",
+						modelId: "model/a",
+						commit: "a".repeat(40),
+						reportedAt: NOW,
+					},
+				],
+			},
+		}));
+		return ledger;
+	};
+
+	it("requires meaningful immutable fix commits", () => {
+		const result = applyResolutions(
+			committedLedger(),
+			[
+				{ id: "correctness.1", status: "fixed", note: "fixed" },
+				{
+					id: "security-alt.1",
+					status: "fixed",
+					note: "fixed",
+					fixCommit: "b".repeat(40),
+				},
+			],
+			NOW,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.errors.join(" ")).toContain("fixCommit");
+	});
+
+	it("keeps evidence-bearing disputes and user escalations blocking", () => {
+		const result = applyResolutions(
+			committedLedger(),
+			[
+				{
+					id: "correctness.1",
+					status: "needs-user",
+					note: "API behavior is ambiguous",
+					evidence: ["spec section 4 conflicts with test x"],
+				},
+				{
+					id: "security-alt.1",
+					status: "disputed",
+					note: "branch is unreachable",
+					evidence: ["src/a.ts:8 guards the branch"],
+				},
+			],
+			NOW,
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(openBlocking(result.ledger)).toHaveLength(2);
+	});
+});

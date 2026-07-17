@@ -11,11 +11,14 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type {
+	AgentAssignmentRequest,
 	AgentKind,
 	AgentKindDefinition,
+	AgentPlanningOptions,
 	AgentRun,
 	AgentRunRequest,
 	AgentsCapabilityV1,
+	ExactModelCandidateFact,
 	ResolvedAgentAssignment,
 	RunHandle,
 	RunId,
@@ -35,6 +38,7 @@ export interface ExactAgentSelection {
 	readonly modelId: string;
 	readonly effort: ThinkingLevel;
 	readonly source: ResolvedAgentAssignment["source"];
+	readonly candidates?: readonly ExactModelCandidateFact[];
 }
 
 export interface UnifiedAgentDeps {
@@ -94,23 +98,30 @@ export function createAgentsCapability(
 	const handles = new Map<RunId, RunHandle>();
 	const assignments = new Map<RunId, ResolvedAgentAssignment>();
 
-	const run = async (request: AgentRunRequest): Promise<AgentRun> => {
-		const transport = deps.subagents();
-		if (!transport) throw new Error("Subagents are not available.");
+	const resolve = async (
+		request: AgentAssignmentRequest,
+	): Promise<ResolvedAgentAssignment> => {
 		if (request.kind === "host")
 			throw new Error(
-				"The host kind represents the current session and cannot run.",
+				"The host kind represents the current session and cannot be assigned.",
 			);
 		const kind = deps.registries.kinds.require(request.kind);
+		const outputContracts =
+			request.outputContracts ?? kind.contracts.map((c) => c.id);
+		const supported = new Set(kind.contracts.map((contract) => contract.id));
+		for (const contract of outputContracts) {
+			if (!supported.has(contract))
+				throw new Error(
+					`Agent kind ${kind.id} does not publish output contract ${contract}`,
+				);
+		}
 		const selected = await deps.resolveModel(kind, {
 			model: request.model,
 			effort: request.effort,
 		});
-		// The run id is transport-owned, so use an immutable pre-spawn assignment
-		// id and retain the exact assignment keyed by the resulting run id.
-		const agentId = `assignment:${crypto.randomUUID()}`;
-		const assignment: ResolvedAgentAssignment = {
-			agentId,
+		const resolvedAt = (deps.now?.() ?? new Date()).toISOString();
+		return {
+			agentId: request.agentId,
 			kind: request.kind,
 			presetId: selected.presetId,
 			modelSetId: selected.modelSetId,
@@ -121,9 +132,45 @@ export function createAgentsCapability(
 				deps.registries.runtime,
 				kind.runtimePolicy,
 			),
-			resolvedAt: (deps.now?.() ?? new Date()).toISOString(),
+			focus: request.focus,
+			rationale: request.rationale,
+			inputContracts: [...request.inputContracts],
+			outputContracts: [...outputContracts],
+			provenance: {
+				source: selected.source,
+				presetId: selected.presetId,
+				modelSetId: selected.modelSetId,
+				optionId: selected.optionId,
+				resolvedAt,
+			},
+			resolvedAt,
 			source: selected.source,
 		};
+	};
+
+	const options = async (kindId: AgentKind): Promise<AgentPlanningOptions> => {
+		const kind = deps.registries.kinds.require(kindId);
+		const selected = await deps.resolveModel(kind, {});
+		return { kind, candidates: selected.candidates ?? [] };
+	};
+
+	const run = async (request: AgentRunRequest): Promise<AgentRun> => {
+		const transport = deps.subagents();
+		if (!transport) throw new Error("Subagents are not available.");
+		if (request.kind === "host")
+			throw new Error(
+				"The host kind represents the current session and cannot run.",
+			);
+		const assignment = await resolve({
+			agentId: `assignment:${crypto.randomUUID()}`,
+			kind: request.kind,
+			focus: request.prompt,
+			rationale: "Resolved for an immediate agents.v1 run.",
+			inputContracts: [],
+			model: request.model,
+			effort: request.effort,
+		});
+		const kind = deps.registries.kinds.require(request.kind);
 		const handle = transport.spawn(
 			request.prompt,
 			profileFor(kind, request, assignment, deps),
@@ -134,6 +181,8 @@ export function createAgentsCapability(
 	};
 
 	return {
+		resolve,
+		options,
 		run,
 		batch: (requests) => Promise.all(requests.map(run)),
 		list: () => deps.subagents()?.list() ?? [],

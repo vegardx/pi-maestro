@@ -483,6 +483,19 @@ export default defineExtension(
 						modelId: legacy.model,
 						effort: legacy.effort ?? "medium",
 						source: choice.model || choice.effort ? "explicit" : "preset",
+						candidates: [
+							{
+								optionId: `${legacy.model}@${legacy.effort ?? "medium"}`,
+								authoredModel: legacy.model,
+								modelId: legacy.model,
+								effort: legacy.effort ?? "medium",
+								summary: `${role} legacy role-pool option`,
+								registered: true,
+								authenticated: true,
+								effortSupported: true,
+								available: true,
+							},
+						],
 					};
 				}
 				if (!choice.model && !choice.effort) return initial.selected;

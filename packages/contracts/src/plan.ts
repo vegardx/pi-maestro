@@ -66,6 +66,16 @@ export type AgentMode = "full" | "read-only";
 export const FINDING_SEVERITIES = ["critical", "major", "minor"] as const;
 export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
 
+/** Immutable source of one finding assertion. */
+export interface FindingProvenance {
+	readonly agentId: string;
+	readonly stageId: string;
+	readonly modelId: string;
+	readonly commit: string;
+	readonly reportedAt: string;
+	readonly runId?: string;
+}
+
 /** A decidable, source-addressable problem. Empty prose is never a finding. */
 export interface StructuredFinding {
 	readonly id: string;
@@ -77,6 +87,7 @@ export interface StructuredFinding {
 	readonly task?: string;
 	readonly claim?: string;
 	readonly evidence?: readonly string[];
+	readonly provenance?: readonly FindingProvenance[];
 }
 
 export const TRANSITION_GATE_KINDS = [
@@ -129,6 +140,21 @@ export function validateStructuredFinding(value: unknown): string[] {
 		(!Array.isArray(value.evidence) || value.evidence.some((v) => !nonEmpty(v)))
 	)
 		errors.push("finding.evidence must contain non-empty strings");
+	if (
+		value.provenance !== undefined &&
+		(!Array.isArray(value.provenance) ||
+			value.provenance.length === 0 ||
+			value.provenance.some(
+				(item) =>
+					!isRecord(item) ||
+					!nonEmpty(item.agentId) ||
+					!nonEmpty(item.stageId) ||
+					!nonEmpty(item.modelId) ||
+					!nonEmpty(item.commit) ||
+					!validTimestamp(item.reportedAt),
+			))
+	)
+		errors.push("finding.provenance must contain complete source records");
 	return errors;
 }
 

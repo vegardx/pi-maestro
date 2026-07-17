@@ -106,15 +106,19 @@ const ResolutionParam = Type.Object({
 	id: Type.String({ description: "Canonical finding id from the ledger" }),
 	status: Type.Union([
 		Type.Literal("fixed"),
-		Type.Literal("wont-fix"),
+		Type.Literal("unchanged"),
 		Type.Literal("disputed"),
+		Type.Literal("needs-user"),
 		Type.Literal("duplicateOf"),
 	]),
 	note: Type.String({
 		description:
-			"fixed: the commit. wont-fix (minors only): why. disputed (blocking " +
-			"only, once): your code-referencing rationale. duplicateOf: why same.",
+			"fixed: why the fix commit resolves it. unchanged: why an advisory finding remains. disputed/needs-user: evidence-bearing escalation. duplicateOf: why same.",
 	}),
+	evidence: Type.Optional(Type.Array(Type.String())),
+	fixCommit: Type.Optional(
+		Type.String({ description: "fixed only: immutable commit containing the fix" }),
+	),
 	canonical: Type.Optional(
 		Type.String({ description: "duplicateOf only: the id it merges into" }),
 	),
@@ -167,8 +171,8 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			"idle. Never poll for it (no sleep loops, no status commands): " +
 			"polling burns tokens and delays delivery, since a busy turn queues " +
 			"the report instead of receiving it. Then resolve every " +
-			"blocking finding (fix+commit / wont-fix minors / dispute with " +
-			"rationale / duplicateOf) and call again with `resolutions` — a " +
+			"blocking finding (fix+commit / unchanged for minors / dispute or " +
+			"needs-user with evidence / duplicateOf) and call again with `resolutions` — a " +
 			"scope-locked verifier checks exactly your claims, reporting the " +
 			"same way. Ship is blocked until no blocking finding is open. " +
 			"Disputes go to the maestro, not another review round.",
@@ -176,7 +180,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			"review — start your review panel once, then END YOUR TURN (the " +
 			"report arrives as a message that wakes you; never sleep-poll for " +
 			"it), then verify your fixes (resolutions: " +
-			"fixed/wont-fix/disputed/duplicateOf per finding id).",
+			"fixed/unchanged/disputed/needs-user/duplicateOf per finding id).",
 		parameters: ReviewParams,
 		// Panel rounds concatenate full reviewer reports — the WORKER model
 		// needs them; the human watching the pane gets a preview + expand.
@@ -549,7 +553,13 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			cwd: d.cwd(),
 			model: resolvedVerifier?.model,
 		});
-		const prompt = buildVerifierPrompt(claims.map((e) => e));
+		const prompt = buildVerifierPrompt(
+			claims.map((e) => e),
+			{
+				base: claims[0]?.finding.provenance?.[0]?.commit,
+				head: claims[0]?.resolution?.fixCommit,
+			},
+		);
 		const timeoutMs = d.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
 
 		// One attempt — a failed/empty verifier is reported back to the worker,
@@ -933,8 +943,9 @@ function renderVerificationReport(
 export function buildVerifierPrompt(
 	claims: ReadonlyArray<{
 		finding: StructuredFinding;
-		resolution?: { note: string };
+		resolution?: { note: string; fixCommit?: string };
 	}>,
+	range?: { base?: string; head?: string },
 ): string {
 	const list = claims
 		.map(
@@ -942,7 +953,11 @@ export function buildVerifierPrompt(
 				`- ${c.finding.id} [${c.finding.severity}] ${renderFinding(c.finding)}\n  worker's fix note: ${c.resolution?.note ?? "(none)"}`,
 		)
 		.join("\n");
-	return `Verify these claimed fixes in the current worktree (git diff against the base, read the code, cite evidence per claim):\n\n${list}\n\nEvery id above must appear in your "checks" array exactly once.`;
+	const scope =
+		range?.base && range.head
+			? `\nOriginal review commit: ${range.base}\nFix commit: ${range.head}\nFix range: ${range.base}..${range.head}\n`
+			: "";
+	return `Verify these claimed fixes in the current worktree. Inspect the original evidence and ONLY the explicit fix range; do not issue an open-ended reviewer verdict.${scope}\n${list}\n\nEvery id above must appear in your "checks" array exactly once.`;
 }
 
 /** Parse the verifier's JSON block; tolerate a missing block by failing every claim open. */

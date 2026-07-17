@@ -20,6 +20,48 @@ import {
 	validatePlanShape,
 } from "../packages/modes/src/schema.js";
 
+it("validates parallel stage membership, references, cycles, and contracts", () => {
+	const valid = makePlan([makeDeliverable()]);
+	valid.workflow = {
+		assignments: [assignment("review-a"), assignment("review-b")],
+		stages: [
+			{
+				id: "implement",
+				after: [],
+				assignmentIds: [],
+				inputRevision: "sha256:base",
+				inputContracts: ["implementation"],
+				barrier: "all",
+			},
+			{
+				id: "review",
+				after: ["implement"],
+				assignmentIds: ["review-a", "review-b"],
+				inputRevision: "sha256:implementation",
+				inputContracts: ["implementation"],
+				barrier: "all",
+			},
+		],
+	};
+	const validProblems = validatePlanShape(valid);
+	expect(validProblems).toEqual([
+		"workflow stage `implement` has no assignments",
+	]);
+
+	valid.workflow.stages[0].assignmentIds = ["review-a"];
+	valid.workflow.stages[1].assignmentIds = ["review-b"];
+	expect(validatePlanShape(valid)).toEqual([]);
+
+	valid.workflow.stages[1].assignmentIds = ["review-a", "ghost"];
+	valid.workflow.stages[1].after = ["review"];
+	valid.workflow.stages[1].inputContracts = ["missing-contract"];
+	const problems = validatePlanShape(valid).join("\n");
+	expect(problems).toContain("appears in stages");
+	expect(problems).toContain("unknown assignment `ghost`");
+	expect(problems).toContain("dependency cycle");
+	expect(problems).toContain("does not provide contract `implementation`");
+});
+
 it("validates reviewer identity and cross-model policy", () => {
 	const duplicate = makeDeliverable({
 		subAgents: [
@@ -53,6 +95,45 @@ it("validates reviewer identity and cross-model policy", () => {
 		"requires modelJustification",
 	);
 });
+
+function assignment(
+	id: string,
+	overrides: Partial<
+		import("@vegardx/pi-contracts").ResolvedAgentAssignment
+	> = {},
+): import("@vegardx/pi-contracts").ResolvedAgentAssignment {
+	const resolvedAt = "2026-01-01T00:00:00.000Z";
+	return {
+		agentId: id,
+		kind: "correctness-review",
+		presetId: "main",
+		modelSetId: "reviews",
+		optionId: "deep",
+		modelId: "provider/model",
+		effort: "high",
+		runtime: {
+			mode: "read-only",
+			transport: "headless",
+			tools: {},
+			session: "ephemeral",
+			isolation: "strong",
+		},
+		focus: `Focus ${id}`,
+		rationale: `Rationale ${id}`,
+		inputContracts: ["implementation"],
+		outputContracts: ["structured-review"],
+		provenance: {
+			source: "explicit",
+			presetId: "main",
+			modelSetId: "reviews",
+			optionId: "deep",
+			resolvedAt,
+		},
+		resolvedAt,
+		source: "explicit",
+		...overrides,
+	};
+}
 
 function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 	return {

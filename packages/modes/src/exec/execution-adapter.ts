@@ -29,7 +29,6 @@ import {
 	type DebugProposalMessage,
 	type DebugResultMessage,
 	MaestroRpcServer,
-	type PanelVerdictMessage,
 	type PlanMutateMessage,
 	type PlanReadMessage,
 	type QuestionsMessage,
@@ -59,7 +58,6 @@ import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
 } from "./commit-policy.js";
-import { openBlocking, type ReviewLedger } from "./findings.js";
 import { readKnowledgeSession } from "./knowledge.js";
 import {
 	buildAgentSessionFile,
@@ -96,16 +94,6 @@ const IDLE_DONE_THRESHOLD = 2;
  *  result plumbing and cleanup. A guard shorter than a legitimate round
  *  reopens the kill-mid-review hole; the old retry-sized guard (2× cap)
  *  hung dead rounds for ~25 minutes. */
-const REVIEW_IN_FLIGHT_TIMEOUT_MS = 15 * 60_000;
-/** After steering "run review now", how long completion stays deferred. A
- *  worker that still never reviews then completes into the ship gate, which
- *  blocks visibly — better than hanging the deliverable forever. */
-const REVIEW_STEER_GRACE_MS = 10 * 60_000;
-/** Fix+verify cycle budget when the deliverable doesn't set maxFixRounds. */
-const DEFAULT_MAX_FIX_ROUNDS = 3;
-/** Protected fixing window after each fix-cycle steer. The worker re-arms
- *  stronger protection the moment it re-enters review (reviewInFlight). */
-const FIX_CYCLE_GRACE_MS = 15 * 60_000;
 
 /**
  * Window within which a same-tool-class agent's first tokens message makes a
@@ -238,8 +226,6 @@ export interface ExecutionAdapterOpts {
 	onAllSettled?: () => void;
 	/** Rich lifecycle events for the chat progress cards. */
 	onEvent?: (event: ExecutionEvent) => void;
-	/** A worker reported a completed review-panel round (drives the gate). */
-	onPanelVerdict?: (msg: PanelVerdictMessage) => void;
 	/**
 	 * A deliverable just transitioned into a ship-gate block (worker done,
 	 * required verdicts unsatisfied). Fired once per distinct reason — the
@@ -325,31 +311,6 @@ export class ExecutionAdapter {
 		{ at: number; toolClass: "full" | "read-only" }
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
-	private panelVerdicts = new Map<string, PanelVerdictMessage>(); // deliverableId → latest round
-	/**
-	 * deliverableId → epoch ms a worker began a review round (panelRead with a
-	 * non-empty panel). Cleared by panelVerdict. While fresh, worker completion
-	 * is deferred — summarize/kill during an in-flight round is how verdicts
-	 * silently vanished (review tool call with no result, gate blocked
-	 * "not yet reviewed", human overrode blind).
-	 */
-	private reviewInFlight = new Map<string, number>();
-	/** agentKey → epoch ms of the run-your-review steer (sent once). */
-	private reviewSteerAt = new Map<string, number>();
-	/**
-	 * deliverableId → epoch ms of the targeted repair steer: when the gate is
-	 * held ONLY by required reviewers that never reported (no open findings),
-	 * the worker is steered once to review({action:"repair"}) — never sent
-	 * back for rework it doesn't have. After the grace window it completes
-	 * into the visible gate, where triage/human own it.
-	 */
-	private repairSteerAt = new Map<string, number>();
-	/**
-	 * deliverableId → the fix-cycle steer sent for a failing gate: one steer
-	 * per ledger cycle, then a grace window, then the visible ship gate.
-	 * Cleared on send-back (fresh rework episode).
-	 */
-	private fixSteer = new Map<string, { cycle: number; at: number }>();
 	/** Last ship-gate block reason surfaced per deliverable (dedupe). */
 	private gateBlockSurfaced = new Map<string, string>();
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
@@ -440,35 +401,6 @@ export class ExecutionAdapter {
 				},
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
 				planRead: (agentId, msg) => this.handlePlanRead(agentId, msg),
-				panelRead: (agentId, msg) => {
-					this.router.send(agentId, {
-						type: "panelReadResponse",
-						id: msg.id,
-						panel: [],
-					});
-				},
-				panelVerdict: (_agentId, msg) => {
-					// A round-STARTED marker: no verdicts exist yet — the worker is
-					// persisting its in-flight round (ledger.pendingRound) so a
-					// respawn reattaches instead of duplicating the round. Arm the
-					// completion-deferral window here too (panelRead arming stays —
-					// it also covers workers that never send this) and persist the
-					// marker WITHOUT touching the last real round's verdict cache.
-					if (msg.roundKind === "round-started") {
-						this.reviewInFlight.set(msg.deliverableId, Date.now());
-						this.persistReportedLedger(msg.deliverableId, msg.ledger);
-						return;
-					}
-					// Latest round per deliverable drives the executor ship gate.
-					this.reviewInFlight.delete(msg.deliverableId);
-					// Verification runs carry no per-reviewer verdicts — keep the
-					// last panel round's reports for the human-facing surfaces.
-					if (msg.roundKind !== "verification" || msg.verdicts.length > 0) {
-						this.panelVerdicts.set(msg.deliverableId, msg);
-					}
-					this.persistReportedLedger(msg.deliverableId, msg.ledger);
-					this.opts.onPanelVerdict?.(msg);
-				},
 				debugProposal: async (agentId, msg) => {
 					let result: DebugResultMessage;
 					if (!this.debugProposalHandler) {
@@ -503,9 +435,6 @@ export class ExecutionAdapter {
 			onDisconnect: (agentId) => {
 				this.connectionGenerations.delete(agentId);
 				this.idleCount.delete(agentId);
-				// A respawned worker starts a fresh review episode — a stale steer
-				// stamp must not let it complete through the grace period.
-				this.reviewSteerAt.delete(agentId);
 				// A dead agent can never consume answers — drop its pending
 				// question so /answer doesn't offer a phantom entry.
 				this.questionQueue.drop(agentId);
@@ -876,22 +805,6 @@ export class ExecutionAdapter {
 									`### ${a.displayName ?? a.name} (${a.name})\n${a.summary}`,
 							)
 					: [];
-				// Human review overrides are part of the record: name them in the PR.
-				const overridden = (
-					this.panelVerdicts.get(shipOpts.deliverableId)?.verdicts ?? []
-				).filter(
-					(v) => (v as { humanOverride?: string }).humanOverride !== undefined,
-				);
-				if (overridden.length > 0) {
-					agentReports.push(
-						`### Review overrides\n${overridden
-							.map(
-								(v) =>
-									`- **${v.name}**: approved by human override — ${(v as { humanOverride?: string }).humanOverride}`,
-							)
-							.join("\n")}`,
-					);
-				}
 				const result = await shipDeliverableReal({
 					plan,
 					deliverable,
@@ -955,25 +868,7 @@ export class ExecutionAdapter {
 	 * satisfied; no round at all blocks (stays retryable).
 	 */
 	deliverableGateSatisfied(deliverableId: string): boolean {
-		const required = this.requiredReviewerNames(deliverableId);
-		if (required.length === 0) return true;
-		const { ledger, waived } = this.ledgerState(deliverableId);
-		if (ledger) {
-			// A round is still settling — its verdicts are not in yet. The
-			// marker ledger may be an empty round-start stub, which must never
-			// read as a clear gate.
-			if (ledger.pendingRound) return false;
-			const participated = ledger.participants
-				? required.every((n) =>
-						ledger.participants?.some((p) => p.name === n && p.ok),
-					)
-				: true;
-			return participated && openBlocking(ledger, waived).length === 0;
-		}
-		// New workflow assignments never fall back to verdict strings: every
-		// assigned review must publish a valid canonical report.
-		if (this.engine.get().workflow) return false;
-		return false;
+		return this.requiredReviewerNames(deliverableId).length === 0;
 	}
 
 	/**
@@ -981,29 +876,6 @@ export class ExecutionAdapter {
 	 * truth; it must survive worker respawns and maestro restarts. Shared by
 	 * settled rounds and the round-started crash marker.
 	 */
-	private persistReportedLedger(
-		_deliverableId: string,
-		_ledger: PanelVerdictMessage["ledger"],
-	): void {}
-
-	/** Epoch ms a persisted pending round started (parseable marker only) —
-	 *  the review-in-flight signal that survives a maestro restart. */
-	private pendingRoundStartMs(deliverableId: string): number | undefined {
-		const marker = this.ledgerState(deliverableId).ledger?.pendingRound;
-		if (!marker) return undefined;
-		const at = Date.parse(marker.startedAt);
-		return Number.isFinite(at) ? at : undefined;
-	}
-
-	/** The persisted ledger + waived finding ids + cycle budget for a deliverable. */
-	private ledgerState(_deliverableId: string): {
-		ledger?: ReviewLedger;
-		waived: Set<string>;
-		maxCycles: number;
-	} {
-		return { waived: new Set(), maxCycles: DEFAULT_MAX_FIX_ROUNDS };
-	}
-
 	private requiredReviewerNames(deliverableId: string): string[] {
 		const deliverable = this.engine
 			.get()
@@ -1043,66 +915,14 @@ export class ExecutionAdapter {
 	 * verdict isn't approve. These names are what a human override waives.
 	 */
 	failingRequiredReviewers(deliverableId: string): string[] {
-		const required = this.requiredReviewerNames(deliverableId);
-		const { ledger, waived } = this.ledgerState(deliverableId);
-		if (ledger) {
-			const holders = new Set(
-				openBlocking(ledger, waived).map((e) => e.reviewer),
-			);
-			for (const n of required) {
-				if (
-					ledger.participants &&
-					!ledger.participants.some((p) => p.name === n && p.ok)
-				) {
-					holders.add(n);
-				}
-			}
-			return [...holders];
-		}
-		const byName = new Map(
-			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
-				v.name,
-				v.verdict,
-			]),
-		);
-		return required.filter((n) => byName.get(n) !== "approve");
+		return this.requiredReviewerNames(deliverableId);
 	}
 
 	private deliverableGateDetail(deliverableId: string): string {
 		const required = this.requiredReviewerNames(deliverableId);
-		const { ledger, waived, maxCycles } = this.ledgerState(deliverableId);
-		if (ledger) {
-			const open = openBlocking(ledger, waived);
-			const parts: string[] = [`${open.length} canonical blocking finding(s)`];
-			if (open.length > 0) {
-				parts.push(`open: ${open.map((e) => e.finding.id).join(", ")}`);
-			}
-			const missing = ledger.participants
-				? required.filter(
-						(n) => !ledger.participants?.some((p) => p.name === n && p.ok),
-					)
-				: [];
-			if (missing.length > 0) {
-				parts.push(`${missing.join(", ")} never reported`);
-			}
-			return parts.join(" — ");
-		}
-		const byName = new Map(
-			(this.panelVerdicts.get(deliverableId)?.verdicts ?? []).map((v) => [
-				v.name,
-				v.verdict,
-			]),
-		);
-		const missing = required.filter((n) => !byName.has(n));
-		const failing = required.filter(
-			(n) => byName.has(n) && byName.get(n) !== "approve",
-		);
-		const parts: string[] = [];
-		if (failing.length) parts.push(`${failing.join(", ")} requested changes`);
-		if (missing.length) parts.push(`${missing.join(", ")} not yet reviewed`);
-		return parts.length
-			? parts.join("; ")
-			: "required review verdicts not satisfied";
+		return required.length
+			? `canonical workflow reports pending: ${required.join(", ")}`
+			: "canonical workflow gate satisfied";
 	}
 
 	/**

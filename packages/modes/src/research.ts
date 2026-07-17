@@ -57,12 +57,7 @@ export interface ResearchRunView {
 	readonly kind: ResearchDisplayKind;
 	status: "running" | "succeeded" | "failed" | "stopped";
 	readonly startedAt: number;
-	/** Last-turn token usage, fed from run progress events. */
-	tokensIn?: number;
-	tokensOut?: number;
-	/** First-turn prefix warmth, separate from cumulative cache hit rate. */
-	prefixCacheHitRate?: number;
-	/** Resolved display metadata (Phase 2), for telemetry. */
+	/** Resolved display metadata, for telemetry. */
 	model?: string;
 	effort?: string;
 	adaptive?: boolean;

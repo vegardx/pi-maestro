@@ -1,6 +1,4 @@
-import type { ResolvedAgentAssignment } from "@vegardx/pi-contracts";
-import type { ReviewLedger } from "./findings.js";
-import { openBlocking } from "./findings.js";
+import type { ResolvedAgentAssignment, StructuredFinding } from "@vegardx/pi-contracts";
 import type { CommitTarget } from "./commit-target.js";
 import { renderCommitTarget } from "./commit-target.js";
 
@@ -29,45 +27,26 @@ export function renderVerificationScope(scope: VerificationScope): string {
 	].join("\n");
 }
 
-/**
- * Mechanical final authority for the new workflow path. Model verdict prose is
- * deliberately absent: completion derives from reports, canonical findings,
- * scoped checks, and immutable revision identity.
- */
+/** Mechanical final authority over canonical workflow reports and findings. */
 export function assessDelivery(input: {
 	readonly head: string;
 	readonly expectedHead: string;
 	readonly assignedReviews: readonly ResolvedAgentAssignment[];
-	readonly ledger?: ReviewLedger;
-	readonly waived?: ReadonlySet<string>;
+	readonly reportedAssignmentIds: ReadonlySet<string>;
+	readonly findings: readonly StructuredFinding[];
+	readonly resolvedFindingIds: ReadonlySet<string>;
 	readonly assessedAt: string;
 }): FinalDeliveryAssessment {
 	const blockers: string[] = [];
-	if (input.head !== input.expectedHead) {
-		blockers.push(
-			`assessment head ${input.head} differs from frozen stage head ${input.expectedHead}`,
-		);
-	}
-	if (input.assignedReviews.length > 0 && !input.ledger) {
-		blockers.push("assigned reviews produced no canonical report");
-	}
-	if (input.ledger?.pendingRound) blockers.push("review stage is still settling");
-	const participants = new Map(
-		(input.ledger?.participants ?? []).map((participant) => [
-			participant.name,
-			participant,
-		]),
-	);
+	if (input.head !== input.expectedHead)
+		blockers.push(`assessment head ${input.head} differs from frozen stage head ${input.expectedHead}`);
 	for (const assignment of input.assignedReviews) {
-		const participant = participants.get(assignment.agentId);
-		if (!participant?.ok) {
+		if (!input.reportedAssignmentIds.has(assignment.agentId))
 			blockers.push(`assigned review ${assignment.agentId} has no valid report`);
-		}
 	}
-	for (const entry of input.ledger
-		? openBlocking(input.ledger, input.waived ?? new Set())
-		: []) {
-		blockers.push(`blocking finding ${entry.finding.id} is unresolved`);
+	for (const finding of input.findings) {
+		if (finding.severity !== "minor" && !input.resolvedFindingIds.has(finding.id))
+			blockers.push(`blocking finding ${finding.id} is unresolved`);
 	}
 	return {
 		complete: blockers.length === 0,

@@ -10,6 +10,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
+	AGENT_KINDS,
+	type AgentAssignmentRequest,
+	type AgentKind,
+	type AgentsCapabilityV1,
 	DELIVERABLE_STATUSES,
 	type DeliveryFailure,
 	WORK_ITEM_KINDS,
@@ -44,6 +48,7 @@ import { plansRoot } from "./storage.js";
 
 export interface PlanToolDeps {
 	readonly engine: () => PlanEngine | undefined;
+	readonly agents?: () => AgentsCapabilityV1 | undefined;
 	readonly onPlanChanged?: (plan: Plan) => void;
 	readonly mode?: () => string;
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
@@ -61,6 +66,8 @@ interface ToolDetails {
 	readonly workItem?: WorkItem;
 	readonly workItems?: readonly WorkItem[];
 	readonly agent?: AgentSpec;
+	readonly workflow?: Plan["workflow"];
+	readonly kinds?: unknown;
 	readonly subAgent?: SubAgentSpec;
 	readonly done?: boolean;
 }
@@ -312,6 +319,60 @@ const AgentParams = Type.Object({
 	),
 });
 
+const WorkflowParams = Type.Object({
+	action: Type.Union([
+		Type.Literal("set"),
+		Type.Literal("update-stage"),
+		Type.Literal("list"),
+		Type.Literal("options"),
+	]),
+	kind: Type.Optional(
+		Type.Union(AGENT_KINDS.map((kind) => Type.Literal(kind))),
+	),
+	stageId: Type.Optional(Type.String()),
+	after: Type.Optional(Type.Array(Type.String())),
+	assignmentIds: Type.Optional(Type.Array(Type.String())),
+	inputRevision: Type.Optional(Type.String()),
+	inputContracts: Type.Optional(Type.Array(Type.String())),
+	barrier: Type.Optional(
+		Type.Union([Type.Literal("all"), Type.Literal("workers")]),
+	),
+	assignments: Type.Optional(
+		Type.Array(
+			Type.Object({
+				agentId: Type.String(),
+				kind: Type.Union(AGENT_KINDS.map((kind) => Type.Literal(kind))),
+				focus: Type.String(),
+				rationale: Type.String(),
+				inputContracts: Type.Array(Type.String()),
+				outputContracts: Type.Optional(Type.Array(Type.String())),
+				model: Type.Optional(Type.String()),
+				effort: Type.Optional(
+					Type.Union([
+						Type.Literal("off"),
+						Type.Literal("minimal"),
+						Type.Literal("low"),
+						Type.Literal("medium"),
+						Type.Literal("high"),
+						Type.Literal("xhigh"),
+					]),
+				),
+			}),
+		),
+	),
+	stages: Type.Optional(
+		Type.Array(
+			Type.Object({
+				id: Type.String(),
+				after: Type.Array(Type.String()),
+				assignmentIds: Type.Array(Type.String()),
+				inputRevision: Type.String(),
+				inputContracts: Type.Array(Type.String()),
+				barrier: Type.Union([Type.Literal("all"), Type.Literal("workers")]),
+			}),
+		),
+	),
+});
 const RepoParams = Type.Object({
 	action: Type.Union([
 		Type.Literal("add"),
@@ -365,6 +426,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
 		createDeliverableTool(deps),
 		createTaskTool(deps),
+		createWorkflowTool(deps),
 		createAgentTool(deps),
 		createPanelTool(deps),
 		createPlanTool(deps),
@@ -875,6 +937,76 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 	}) as ToolDefinition;
 }
 
+export function createWorkflowTool(deps: PlanToolDeps): ToolDefinition {
+	return defineTool({
+		name: "workflow",
+		label: "Workflow",
+		description:
+			"Compose fully resolved assignments and explicit parallel stage DAGs atomically, inspect kinds/options, or update ordering.",
+		promptSnippet:
+			"workflow — inspect exact options and atomically set resolved assignments plus stages.",
+		parameters: WorkflowParams,
+		async execute(_id, params): Promise<Result> {
+			const engine = deps.engine();
+			if (!engine) return error("no plan active — run /plan first");
+			const capability = deps.agents?.();
+			switch (params.action) {
+				case "list":
+					return ok(
+						engine.get().workflow
+							? JSON.stringify(engine.get().workflow, null, 2)
+							: "No workflow configured.",
+						{ workflow: engine.get().workflow },
+					);
+				case "options": {
+					if (!capability) return error("agents.v1 is unavailable");
+					if (params.kind) {
+						const options = await capability.options(params.kind as AgentKind);
+						return ok(JSON.stringify(options, null, 2), { kinds: options });
+					}
+					const kinds = await Promise.all(
+						capability
+							.kinds()
+							.filter((kind) => kind.id !== "host")
+							.map(async (kind) => capability.options(kind.id)),
+					);
+					return ok(JSON.stringify(kinds, null, 2), { kinds });
+				}
+				case "set": {
+					if (!capability) return error("agents.v1 is unavailable");
+					if (!params.assignments || !params.stages)
+						return error("set requires assignments and stages");
+					const requests = params.assignments as AgentAssignmentRequest[];
+					const assignments = await Promise.all(
+						requests.map((request) => capability.resolve(request)),
+					);
+					engine.setWorkflow({ assignments, stages: params.stages });
+					notify(deps, engine);
+					return ok(
+						`Configured ${assignments.length} resolved assignments in ${params.stages.length} stages.`,
+						{ workflow: engine.get().workflow, plan: engine.get() },
+					);
+				}
+				case "update-stage": {
+					if (!params.stageId) return error("update-stage requires stageId");
+					engine.updateWorkflowStage(params.stageId, {
+						after: params.after,
+						assignmentIds: params.assignmentIds,
+						inputRevision: params.inputRevision,
+						inputContracts: params.inputContracts,
+						barrier: params.barrier,
+					});
+					notify(deps, engine);
+					return ok(`Updated workflow stage ${params.stageId}.`, {
+						workflow: engine.get().workflow,
+						plan: engine.get(),
+					});
+				}
+			}
+		},
+	}) as ToolDefinition;
+}
+
 export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "agent",
@@ -1107,7 +1239,22 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 						.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
 						.join("\n")
 				: "No deliverables.";
-			return ok(text, { plan });
+			const workflow = plan.workflow;
+			const workflowText = workflow
+				? [
+						"",
+						"## Workflow",
+						...workflow.stages.map(
+							(stage) =>
+								`- ${stage.id} after [${stage.after.join(", ") || "root"}] @ ${stage.inputRevision}: ${stage.assignmentIds.join(", ")} (${stage.barrier} barrier)`,
+						),
+						...workflow.assignments.map(
+							(assignment) =>
+								`  - ${assignment.agentId}: ${assignment.kind} · ${assignment.modelId}@${assignment.effort ?? "default"} — ${assignment.focus}`,
+						),
+					].join("\n")
+				: "";
+			return ok(`${text}${workflowText}`, { plan });
 		},
 	}) as ToolDefinition;
 }

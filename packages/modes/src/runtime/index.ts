@@ -92,6 +92,7 @@ export function createModesRuntime(
 
 	for (const tool of createPlanTools({
 		engine: () => rt.engine,
+		agents: () => maestro.capabilities.get(CAPABILITIES.agents),
 		onPlanChanged: () => rt.emitPlanChanged(),
 		mode: () => rt.state.mode,
 		steerAgent: (deliverableId, guidance) => {

@@ -126,7 +126,7 @@ function buildStructuringPreamble(
 		: "";
 	return `${header} Phase: STRUCTURING — readiness confirmed.
 ${understandingBlock}
-**You MUST use the \`deliverable\` and \`task\` tools to structure work. Do NOT just
+**You MUST use the \`deliverable\`, \`task\`, and \`workflow\` tools to structure work. Do NOT just
 write a plan as text — call the tools to create it in the system.**
 
 Produce tasks so detailed that a simpler model could implement them
@@ -150,15 +150,26 @@ is still available for gaps that surface while structuring.
 2. **Detail** — Call \`task(action="add", deliverableId="...", items=[{title, body}, …])\`
    ONCE per deliverable to add ALL its tasks in a single batched call (not one
    \`add\` per task). Tasks describe WHAT to implement.
-3. **Agents** (optional) — Call \`agent(action="add", ...)\` for reviews.
-   Give reviewers \`after: ["worker"]\` explicitly so ordering is visible in
-   the plan, not just enforced by the scheduler.
-4. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
+3. **Workflow** — Use \`workflow(action="options")\` to inspect semantic kind
+   summaries, sequencing hints, output contracts, and every exact available
+   model/effort option. Then call \`workflow(action="set", assignments=[…],
+   stages=[…])\` ONCE. Every assignment needs a stable kebab-case id, focused
+   brief, rationale, explicit input/output contracts, and an exact model/effort
+   chosen from the listed options (never invent or silently substitute one).
+   Put independent assignments in the same stage: all members run in parallel
+   against that stage's one immutable \`inputRevision\`. Use \`after\` only
+   between stages; downstream input contracts must be produced by ancestors.
+   Choose \`barrier="workers"\` only for stages containing worker assignments;
+   otherwise use \`barrier="all"\`. Follow each kind's sequencing guidance.
+4. **Legacy support agents** (optional) — Call \`agent(action="add", ...)\` only
+   where execution still needs deliverable-local support agents. Give reviewers
+   \`after: ["worker"]\` explicitly so ordering remains visible.
+5. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
    document (Project Structure / Key Patterns / Conventions / Key Interfaces).
    Every agent forks from it; \`/implement\` refuses to start without it.
    Distill it from the research reports in the plan directory's research/
    folder plus your confirmed understanding — reference material, not tasks.
-5. **Summary** — Write a brief text summary. End with "Ready to implement."
+6. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ${ASKING}
 

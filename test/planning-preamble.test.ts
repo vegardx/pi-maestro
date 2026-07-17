@@ -108,6 +108,21 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("research/");
 	});
 
+	it("guides exact assignment and stage graph composition", () => {
+		const engine = PlanEngine.create(memStore(), {
+			slug: "workflow",
+			title: "Workflow",
+			repoPath: "/tmp",
+		});
+		engine.setPhase("structuring");
+		const preamble = buildPlanModePreamble(engine);
+		expect(preamble).toContain('workflow(action="options")');
+		expect(preamble).toContain('workflow(action="set"');
+		expect(preamble).toContain("sequencing hints");
+		expect(preamble).toContain("immutable `inputRevision`");
+		expect(preamble).toContain("exact model/effort");
+	});
+
 	it("plans with deliverables but no phase field hydrate as structuring", () => {
 		const engine = PlanEngine.create(memStore(), {
 			slug: "legacy",

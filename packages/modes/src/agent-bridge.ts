@@ -661,7 +661,13 @@ export class AgentBridge {
 				output: this.totalOutput,
 				cacheRead: this.totalCacheRead,
 				cacheWrite: this.totalCacheWrite,
-				totalTokens: this.totalInput + this.totalOutput,
+				promptTokens:
+					this.totalInput + this.totalCacheRead + this.totalCacheWrite,
+				totalTokens:
+					this.totalInput +
+					this.totalCacheRead +
+					this.totalCacheWrite +
+					this.totalOutput,
 				cost: this.totalCost,
 				turns: this.turnCount,
 			},

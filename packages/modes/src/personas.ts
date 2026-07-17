@@ -231,6 +231,7 @@ export function buildPersonaProfile(
 		isolateExtensions: true,
 		watchdog: REVIEW_WATCHDOG,
 		appendSystemPrompt: `${identity}\n\n${persona.preamble}${focusBlock}`,
+		meta: { kind: persona.id },
 		...(opts.model ? { model: opts.model } : {}),
 	};
 }
@@ -267,6 +268,7 @@ Every claim id from the prompt must appear in "checks" exactly once. Do not inve
 		isolateExtensions: true,
 		watchdog: REVIEW_WATCHDOG,
 		appendSystemPrompt: contract,
+		meta: { kind: "verifier" },
 		...(opts.model ? { model: opts.model } : {}),
 	};
 }

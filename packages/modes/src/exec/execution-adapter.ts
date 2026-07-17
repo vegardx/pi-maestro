@@ -5,10 +5,17 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	InterruptResult,
+	RunId,
+	ThinkingLevel,
+} from "@vegardx/pi-contracts";
 import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
+	type ChildRunControlResultMessage,
+	type ChildRunSyncMessage,
 	type DebugProposalMessage,
 	type DebugResultMessage,
 	MaestroRpcServer,
@@ -39,6 +46,7 @@ import {
 	workerSessionGeneration,
 } from "../schema.js";
 import { resolveSpawnModelSafe } from "../spawn-model.js";
+import { ChildProjectionStore } from "./child-projections.js";
 import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
@@ -172,6 +180,7 @@ export interface TmuxApi {
 	): Promise<void>;
 	hasSession(name: string): Promise<boolean>;
 	kill(name: string): Promise<void>;
+	capturePane?(name: string, lines?: number): Promise<string>;
 }
 
 export interface ExecutionAdapterOpts {
@@ -210,8 +219,13 @@ export interface ExecutionAdapterOpts {
 		id: string,
 		state: {
 			status: string;
-			tokens: { input: number; output: number; turns: number };
+			tokens: TokenSnapshot;
 		},
+	) => void;
+	onChildProjection?: (
+		ownerId: string,
+		ownerGeneration: number,
+		projection: import("@vegardx/pi-contracts").ChildRunProjection,
 	) => void;
 	onQuestionsReceived?: (id: string, count: number) => void;
 	onAllSettled?: () => void;
@@ -311,6 +325,14 @@ export class ExecutionAdapter {
 	/** All spawn/kill/poll/completion/restart/shutdown transitions serialize here. */
 	private lifecycleTail: Promise<void> = Promise.resolve();
 	private restarting = new Set<string>();
+	private childProjections: ChildProjectionStore;
+	private childControls = new Map<
+		string,
+		{
+			readonly resolve: (result: ChildRunControlResultMessage) => void;
+			readonly timer: ReturnType<typeof setTimeout>;
+		}
+	>();
 	private debugProposalHandler?: (
 		agentId: string,
 		proposal: DebugProposalMessage,
@@ -329,11 +351,22 @@ export class ExecutionAdapter {
 				"/tmp",
 				`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
 			);
+		this.childProjections = new ChildProjectionStore(
+			join(opts.planDir, "child-projections.json"),
+		);
 		this.rpcServer = new MaestroRpcServer();
 		this.router = createRpcRouter({
 			server: this.rpcServer,
 			token: this.token,
 			handlers: this.ignoreRestartingWorkers({
+				childRunSync: (agentId, msg) => this.handleChildRunSync(agentId, msg),
+				childRunControlResult: (_agentId, msg) => {
+					const pending = this.childControls.get(msg.id);
+					if (!pending) return;
+					this.childControls.delete(msg.id);
+					clearTimeout(pending.timer);
+					pending.resolve(msg);
+				},
 				status: (agentId, msg) => {
 					const [deliverableId, agentNamePart] = agentId.split("/");
 					if (!deliverableId || !agentNamePart) return;
@@ -350,11 +383,7 @@ export class ExecutionAdapter {
 					this.tokenSnapshots.set(agentId, msg.snapshot);
 					this.opts.onAgentStateChanged?.(agentId, {
 						status: "working",
-						tokens: {
-							input: msg.snapshot.input,
-							output: msg.snapshot.output,
-							turns: msg.snapshot.turns,
-						},
+						tokens: msg.snapshot,
 					});
 				},
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
@@ -438,6 +467,19 @@ export class ExecutionAdapter {
 				// A dead agent can never consume answers — drop its pending
 				// question so /answer doesn't offer a phantom entry.
 				this.questionQueue.drop(agentId);
+				for (const [id, pending] of this.childControls) {
+					this.childControls.delete(id);
+					clearTimeout(pending.timer);
+					pending.resolve({
+						type: "childRunControlResult",
+						id,
+						ownerGeneration: -1,
+						runId: "",
+						action: "interrupt",
+						ok: false,
+						error: "owner disconnected",
+					});
+				}
 			},
 		});
 
@@ -685,7 +727,15 @@ export class ExecutionAdapter {
 				});
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
-					tokens: { input: 0, output: 0, turns: 0 },
+					tokens: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						totalTokens: 0,
+						cost: 0,
+						turns: 0,
+					},
 				});
 
 				return { sessionId: sessionName, sessionFile };
@@ -1672,6 +1722,119 @@ export class ExecutionAdapter {
 		return Math.max(0, newlyActivated + shipped.length);
 	}
 
+	private handleChildRunSync(agentId: string, msg: ChildRunSyncMessage): void {
+		const [deliverableId, name] = agentId.split("/");
+		if (!deliverableId || name !== "worker") return;
+		const deliverable = findDeliverable(this.engine.get(), deliverableId);
+		const expectedGeneration =
+			this.executor.getAgentState(deliverableId, "worker")?.generation ??
+			(deliverable ? workerSessionGeneration(deliverable) : -1);
+		const accepted = this.childProjections.apply({
+			ownerId: agentId,
+			expectedGeneration,
+			ownerGeneration: msg.ownerGeneration,
+			reconcile: msg.reconcile,
+			runs: msg.runs,
+		});
+		for (const projection of msg.runs) {
+			if (!accepted.some((item) => item.runId === projection.runId)) continue;
+			this.opts.onChildProjection?.(agentId, msg.ownerGeneration, projection);
+		}
+		this.router.send(agentId, {
+			type: "childRunSyncAck",
+			id: msg.id,
+			ownerGeneration: msg.ownerGeneration,
+			accepted,
+		});
+	}
+
+	projectedRuns() {
+		return this.childProjections.asRunRecords();
+	}
+
+	steerProjectedRun(runId: RunId, guidance: string): boolean {
+		void this.controlProjectedRun(runId, "steer", { guidance });
+		return Boolean(this.childProjections.get(runId as string));
+	}
+
+	async interruptProjectedRun(
+		runId: RunId,
+		reason?: string,
+	): Promise<InterruptResult> {
+		const result = await this.controlProjectedRun(runId, "interrupt", {
+			reason,
+		});
+		return {
+			outcome: result?.outcome ?? "disconnected",
+			targetId: `run:${runId}`,
+			...(result?.error ? { detail: result.error } : {}),
+		};
+	}
+
+	async captureProjectedRun(
+		runId: RunId,
+		lines?: number,
+	): Promise<string | undefined> {
+		return (await this.controlProjectedRun(runId, "capture", { lines }))
+			?.content;
+	}
+
+	stopProjectedRun(runId: RunId, reason?: string): boolean {
+		void this.controlProjectedRun(runId, "stop", { reason });
+		return Boolean(this.childProjections.get(runId as string));
+	}
+
+	private async controlProjectedRun(
+		runId: RunId,
+		action: "steer" | "interrupt" | "capture" | "stop",
+		input: { guidance?: string; reason?: string; lines?: number },
+	): Promise<ChildRunControlResultMessage | undefined> {
+		const record = this.childProjections.get(runId as string);
+		if (!record?.confirmed) return undefined;
+		const id = randomUUID();
+		const response = new Promise<ChildRunControlResultMessage>((resolve) => {
+			const timer = setTimeout(() => {
+				this.childControls.delete(id);
+				resolve({
+					type: "childRunControlResult",
+					id,
+					ownerGeneration: record.ownerGeneration,
+					runId: runId as string,
+					action,
+					ok: false,
+					error: "child control timed out",
+				});
+			}, 30_000);
+			timer.unref?.();
+			this.childControls.set(id, { resolve, timer });
+		});
+		const sent = this.router.send(record.ownerId, {
+			type: "childRunControl",
+			id,
+			ownerGeneration: record.ownerGeneration,
+			runId: runId as string,
+			action,
+			...input,
+		});
+		if (!sent) {
+			const pending = this.childControls.get(id);
+			if (pending) {
+				this.childControls.delete(id);
+				clearTimeout(pending.timer);
+				pending.resolve({
+					type: "childRunControlResult",
+					id,
+					ownerGeneration: record.ownerGeneration,
+					runId: runId as string,
+					action,
+					ok: false,
+					error: "owner disconnected",
+				});
+			}
+		}
+		return response;
+	}
+
 	// --- RPC handlers (dispatched by the router; see constructor table) ---
 
 	private handleStatus(
@@ -2210,6 +2373,24 @@ export class ExecutionAdapter {
 		}
 	}
 
+	async capture(
+		deliverableId: string,
+		agentName = "worker",
+		lines = 200,
+	): Promise<string | undefined> {
+		const session = this.resolveSessionName(`${deliverableId}/${agentName}`);
+		if (!session) return undefined;
+		return this.tmux.capturePane?.(session, lines).catch(() => undefined);
+	}
+
+	async stop(
+		deliverableId: string,
+		agentName = "worker",
+		reason = "user stop",
+	): Promise<boolean> {
+		return this.forceFailWorker(deliverableId, `${reason} (${agentName})`);
+	}
+
 	/**
 	 * Resolve to a tmux session name. Accepts a full
 	 * agent key (`deliverable/agent`), a deliverable id (→ its worker), a bare agent
@@ -2328,6 +2509,10 @@ export class ExecutionAdapter {
 				}
 			}
 			this.sessionNames.clear();
+			for (const pending of this.childControls.values()) {
+				clearTimeout(pending.timer);
+			}
+			this.childControls.clear();
 			this.router.dispose();
 			this.rpcServer.close();
 		});

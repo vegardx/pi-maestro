@@ -124,10 +124,13 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 						const subagents = rt.maestro.capabilities.get(
 							CAPABILITIES.subagents,
 						);
-						const result = await subagents?.interrupt?.(
-							runId as never,
-							"user interrupt",
-						);
+						const local = subagents?.list().find((run) => run.id === runId);
+						const result = local
+							? await subagents?.interrupt?.(local.id, "user interrupt")
+							: await rt.execution?.interruptProjectedRun?.(
+									runId as never,
+									"user interrupt",
+								);
 						ctx.ui.notify(
 							`${targetId}: ${result?.outcome ?? "disconnected"}`,
 							"info",
@@ -244,7 +247,10 @@ function hasLiveAgents(rt: RuntimeContext): boolean {
 	}
 	if (rt.researchRuns.size > 0) return true;
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
-	for (const run of subagents?.list() ?? []) {
+	for (const run of [
+		...(subagents?.list() ?? []),
+		...(rt.execution?.projectedRuns?.() ?? []),
+	]) {
 		if (["queued", "starting", "running", "blocked"].includes(run.status)) {
 			return true;
 		}
@@ -256,8 +262,13 @@ function hasLiveAgents(rt: RuntimeContext): boolean {
 export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
 	const snap = rt.execution?.snapshot();
+	const projectedRuns = rt.execution?.projectedRuns?.() ?? [];
 	return {
-		agents: buildAgentNodes(snap, subagents?.list() ?? [], Date.now()),
+		agents: buildAgentNodes(
+			snap,
+			[...(subagents?.list() ?? []), ...projectedRuns],
+			Date.now(),
+		),
 		plan: buildPlanView(rt.engine?.get(), snap),
 		questions: buildQuestionRows(
 			rt.maestro.capabilities.get(CAPABILITIES.ask)?.pending() ?? [],
@@ -479,7 +490,12 @@ export function buildAgentNodes(
 			list.push(leaf);
 			runChildren.set(run.parent as string, list);
 		} else {
-			rootRuns.push({ node: leaf, children: [] });
+			const ownerId = (run.profile.meta as { ownerId?: string } | undefined)
+				?.ownerId;
+			const worker = ownerId?.split("/")[0];
+			const parent = worker ? workers.get(worker) : undefined;
+			if (parent) parent.children.push(leaf);
+			else rootRuns.push({ node: leaf, children: [] });
 		}
 	}
 	for (const root of rootRuns) {

@@ -57,19 +57,34 @@ export function listAgentTargets(input: {
 			},
 		});
 	}
-	for (const run of input.subagents?.list() ?? []) {
+	const projected = input.execution?.projectedRuns?.() ?? [];
+	const localRuns = input.subagents?.list() ?? [];
+	const localIds = new Set(localRuns.map((run) => run.id));
+	for (const run of [
+		...localRuns,
+		...projected.filter((run) => !localIds.has(run.id)),
+	]) {
 		const metadata = run.metadata;
 		const role = metadata?.role ?? run.profile.role ?? run.profile.profile;
 		const displayName =
 			metadata?.displayName ?? run.profile.displayName ?? `${role}-${run.id}`;
+		const projection = run.profile.meta as
+			| { ownerId?: string; confirmed?: boolean; kind?: string }
+			| undefined;
+		const projectedOwner = projection?.ownerId;
 		targets.push({
 			id: `run:${run.id}`,
 			kind: "run",
+			agentKind: projection?.kind as AgentTarget["agentKind"],
 			displayName,
 			role,
 			status: run.status,
 			transport: metadata?.transport ?? run.profile.transport ?? "headless",
-			...(run.parent ? { parentId: `run:${run.parent}` } : {}),
+			...(projectedOwner
+				? { parentId: `worker:${projectedOwner}` }
+				: run.parent
+					? { parentId: `run:${run.parent}` }
+					: {}),
 			rootTurnId: metadata?.rootTurnId ?? run.profile.rootTurnId,
 			pid: metadata?.pid,
 			processGroup: metadata?.processGroup,
@@ -82,14 +97,60 @@ export function listAgentTargets(input: {
 			updatedAt: run.lastEventAt ?? run.updatedAt,
 			capabilities: {
 				view: Boolean(metadata?.tmuxSession),
-				capture: Boolean(metadata?.tmuxSession),
-				steer: ["queued", "running", "blocked"].includes(run.status),
-				interrupt: ["queued", "running", "blocked"].includes(run.status),
-				shutdown: true,
+				capture: projection?.confirmed !== false,
+				steer:
+					projection?.confirmed !== false &&
+					["queued", "starting", "running", "blocked"].includes(run.status),
+				interrupt:
+					projection?.confirmed !== false &&
+					["queued", "starting", "running", "blocked"].includes(run.status),
+				shutdown: projection?.confirmed !== false,
 			},
 		});
 	}
 	return targets;
+}
+
+export async function captureAgentTarget(
+	target: AgentTarget,
+	execution: ExecutionHandle | undefined,
+	subagents: SubagentsCapabilityV1 | undefined,
+	lines = 200,
+): Promise<string | undefined> {
+	if (target.kind === "worker") {
+		const [deliverableId, name] = target.id.slice("worker:".length).split("/");
+		return deliverableId
+			? execution?.capture?.(deliverableId, name, lines)
+			: undefined;
+	}
+	if (target.kind !== "run") return undefined;
+	const runId = target.id.slice("run:".length) as never;
+	const local = subagents?.list().find((run) => run.id === runId);
+	return local
+		? subagents?.capture?.(local.id, lines)
+		: execution?.captureProjectedRun?.(runId, lines);
+}
+
+export async function stopAgentTarget(
+	target: AgentTarget,
+	execution: ExecutionHandle | undefined,
+	subagents: SubagentsCapabilityV1 | undefined,
+	reason = "user stop",
+): Promise<boolean> {
+	if (target.kind === "worker") {
+		const [deliverableId, name] = target.id.slice("worker:".length).split("/");
+		return deliverableId
+			? ((await execution?.stop?.(deliverableId, name, reason)) ?? false)
+			: false;
+	}
+	if (target.kind !== "run") return false;
+	const runId = target.id.slice("run:".length) as never;
+	const local = subagents?.list().find((run) => run.id === runId);
+	if (local) {
+		subagents?.stop(local.id, reason);
+		return true;
+	}
+	return execution?.stopProjectedRun?.(runId, reason) ?? false;
 }
 
 export { descendantsOf, resolveAgentTarget };

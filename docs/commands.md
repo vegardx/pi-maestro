@@ -23,7 +23,6 @@
 | `/debug [symptom]` | Bounded diagnosis, one selected recovery, issue review |
 | `/ship` | Push and create/update the next shippable PR |
 | `/sync` | Reconcile stacked PR bases |
-| `/park` | Create plan tracking issues |
 | `/commit` | Local conventional commit |
 | `/distill` | Curated in-place compaction |
 | `/handoff` | End the arc and seed a fresh planning session |

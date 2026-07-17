@@ -690,6 +690,13 @@ export function createRuntimeContext(
 				ctx,
 			);
 			await rt.workerPanes.close();
+			// A stopped adapter is terminal (mirrors /restart): tear it down and
+			// clear the handle. Otherwise rt.execution stays truthy at stage
+			// "stopped", and the next transition — session_shutdown or a second
+			// /stop — attempts the illegal stopped -> stopping edge and throws,
+			// leaking teardown. /start rebuilds via ensureExecution.
+			await rt.execution.destroy();
+			rt.execution = undefined;
 			rt.hud?.refresh();
 			const uncertain = result.agents.filter(
 				(agent) => agent.outcome === "not-proven",

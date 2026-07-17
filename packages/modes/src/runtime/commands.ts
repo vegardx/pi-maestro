@@ -78,6 +78,13 @@ async function runPersonaCommand(
 ): Promise<void> {
 	const command = kind.command;
 	if (!command) return;
+	// Deliverable-targeted personas (e.g. /verify) fan out over the plan's
+	// started deliverables with per-deliverable evidence — a different flow from
+	// the single-spawn repo-changes review below.
+	if (command.target === "deliverables") {
+		await runDeliveryVerification(rt, args, ctx);
+		return;
+	}
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
 	if (!subagents) {
 		ctx.ui.notify(
@@ -129,6 +136,115 @@ async function runPersonaCommand(
 			"error",
 		);
 	}
+}
+
+/**
+ * `/verify` — deep-verify started deliverables against their real diffs.
+ * Read-only and report-only: fans out one verifier per started deliverable,
+ * persists the round, and surfaces the findings; the worker owns what to do.
+ * Registered via the persona loop (delivery-verifier kind, target "deliverables").
+ */
+async function runDeliveryVerification(
+	rt: RuntimeContext,
+	args: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const { pi, maestro } = rt;
+	if (!rt.engine) {
+		ctx.ui.notify("No active plan.", "warning");
+		return;
+	}
+	const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
+	if (!subagents) {
+		ctx.ui.notify(
+			"Verify unavailable: the subagents extension is not loaded.",
+			"warning",
+		);
+		return;
+	}
+	const plan = rt.engine.get();
+	const id = args.trim() || undefined;
+	const targets = verifyTargets(plan, id);
+	if (targets.length === 0) {
+		ctx.ui.notify(
+			id
+				? `Nothing to verify for "${id}" — unknown id or not started yet.`
+				: "Nothing to verify — no deliverable has started work.",
+			"info",
+		);
+		return;
+	}
+	const verifierResolution = await resolveExactModelSelection(ctx, {
+		role: "verifier",
+		requireApiKey: true,
+	});
+	const verifier = verifierResolution.selected;
+	if (!verifier) {
+		ctx.ui.notify(
+			`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
+			"error",
+		);
+		return;
+	}
+	const meta = getModelMeta(ctx, verifier.modelId);
+	ctx.ui.notify(
+		`Verifying ${targets.length} deliverable(s) — read-only agents are checking the actual diffs…`,
+		"info",
+	);
+	const entries = await runVerification(plan, targets, {
+		spawn: (prompt, profile) =>
+			subagents.spawn(prompt, {
+				...profile,
+				model: verifier.modelId,
+				...(verifier.effort ? { thinking: verifier.effort } : {}),
+			}),
+		display: {
+			model: meta.shortName,
+			adaptive: meta.adaptive,
+			effort: verifier.effort,
+		},
+		onStarted: (view) => {
+			rt.researchRuns.set(view.id, view);
+			sendAgentEvent(pi, {
+				kind: "research-spawn",
+				question: view.question,
+				research: "verify",
+			});
+			rt.hud?.refresh();
+		},
+		onSettled: (view, entry) => {
+			rt.researchRuns.delete(view.id);
+			sendAgentEvent(pi, {
+				kind: "research-done",
+				question: view.question,
+				research: "verify",
+				ok: entry.verdict === "pass",
+				durationMs: Date.now() - view.startedAt,
+				...(entry.report ? { report: clipReport(entry.report) } : {}),
+				...(entry.error ? { error: entry.error } : {}),
+			});
+			rt.hud?.refresh();
+		},
+	});
+	const problems = entries.some(
+		(e) => e.verdict === "fail" || e.verdict === "error",
+	);
+	// Persist the round on disk (the markdown is the triage surface).
+	let reportNote = "";
+	try {
+		const paths = writeVerificationReport(
+			join(plansRoot(), plan.slug),
+			entries,
+		);
+		reportNote = `\nFull report: ${paths.mdPath}`;
+	} catch {
+		// Report persistence is best-effort — the notify still carries findings.
+	}
+	// Report-only: surface the findings; the worker owns them, a human decides.
+	ctx.ui.notify(
+		`${renderVerification(entries)}${reportNote}`,
+		problems ? "warning" : "info",
+	);
 }
 
 export function registerRuntimeCommands(rt: RuntimeContext): void {
@@ -302,114 +418,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				return;
 			}
 			await beginHandoff(rt, ctx);
-		},
-	});
-
-	pi.registerCommand("verify", {
-		description:
-			"Deep-verify started deliverables: read-only subagents read each " +
-			"deliverable's actual diff and judge whether its tasks were genuinely " +
-			"accomplished. /verify [deliverable-id]",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			if (!rt.engine) {
-				ctx.ui.notify("No active plan.", "warning");
-				return;
-			}
-			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-			if (!subagents) {
-				ctx.ui.notify(
-					"Verify unavailable: the subagents extension is not loaded.",
-					"warning",
-				);
-				return;
-			}
-			const plan = rt.engine.get();
-			const id = args.trim() || undefined;
-			const targets = verifyTargets(plan, id);
-			if (targets.length === 0) {
-				ctx.ui.notify(
-					id
-						? `Nothing to verify for "${id}" — unknown id or not started yet.`
-						: "Nothing to verify — no deliverable has started work.",
-					"info",
-				);
-				return;
-			}
-			const verifierResolution = await resolveExactModelSelection(ctx, {
-				role: "verifier",
-				requireApiKey: true,
-			});
-			const verifier = verifierResolution.selected;
-			if (!verifier) {
-				ctx.ui.notify(
-					`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
-					"error",
-				);
-				return;
-			}
-			const meta = getModelMeta(ctx, verifier.modelId);
-			ctx.ui.notify(
-				`Verifying ${targets.length} deliverable(s) — read-only agents are checking the actual diffs…`,
-				"info",
-			);
-			const entries = await runVerification(plan, targets, {
-				spawn: (prompt, profile) =>
-					subagents.spawn(prompt, {
-						...profile,
-						model: verifier.modelId,
-						...(verifier.effort ? { thinking: verifier.effort } : {}),
-					}),
-				display: {
-					model: meta.shortName,
-					adaptive: meta.adaptive,
-					effort: verifier.effort,
-				},
-				onStarted: (view) => {
-					rt.researchRuns.set(view.id, view);
-					sendAgentEvent(pi, {
-						kind: "research-spawn",
-						question: view.question,
-						research: "verify",
-					});
-					rt.hud?.refresh();
-				},
-				onSettled: (view, entry) => {
-					rt.researchRuns.delete(view.id);
-					sendAgentEvent(pi, {
-						kind: "research-done",
-						question: view.question,
-						research: "verify",
-						ok: entry.verdict === "pass",
-						durationMs: Date.now() - view.startedAt,
-						// Clipped: the round file under verification/ has the full text.
-						...(entry.report ? { report: clipReport(entry.report) } : {}),
-						...(entry.error ? { error: entry.error } : {}),
-					});
-					rt.hud?.refresh();
-				},
-			});
-			const problems = entries.some(
-				(e) => e.verdict === "fail" || e.verdict === "error",
-			);
-			// Persist the round on disk (the markdown is the triage surface).
-			let reportNote = "";
-			try {
-				const paths = writeVerificationReport(
-					join(plansRoot(), plan.slug),
-					entries,
-				);
-				reportNote = `\nFull report: ${paths.mdPath}`;
-			} catch {
-				// Report persistence is best-effort — the notify still carries
-				// the findings.
-			}
-			// Report-only: /verify surfaces the findings and persists the round;
-			// the worker owns its findings and a human decides what to do. No
-			// maestro auto-remediation (removed with the ledger-gate model).
-			ctx.ui.notify(
-				`${renderVerification(entries)}${reportNote}`,
-				problems ? "warning" : "info",
-			);
 		},
 	});
 

@@ -96,12 +96,16 @@ custom/plugin personas bringing their own commands. That is a capability surface
 to gate (who may register, permissions) — treat it as a follow-up, not part of
 the first cut.
 
-## Migration steps
+## Status (implemented)
 
-1. Add the `command` field to `AgentKindDefinition` and the generic registration
-   loop.
-2. Give the `verifier` kind a `command`, and delete the bespoke `/verify`
-   command handler, `verifyTargets`/`gatherEvidence` glue that the generic
-   handler replaces, and the `applyRemediation` auto-reopen path (report-only).
-3. Add a `code-review` command to a review kind as the second example.
-4. Update `docs/commands.md` / `docs/usage.md`.
+1. **Done.** `command` field on `AgentKindDefinition` + the generic registration
+   loop; `correctness-review` exposes `/code-review`.
+2. **Done.** `/verify` is report-only (the `applyRemediation` auto-reopen path
+   was removed) and is now registered via the loop: a `delivery-verifier` kind
+   (`modelRole: "verifier"`, `command.target: "deliverables"`) fans out over
+   started deliverables through `runDeliveryVerification`; the bespoke
+   `pi.registerCommand("verify")` is gone.
+
+The `command.target` field (`"changes"` | `"deliverables"`) routes the generic
+handler: single-spawn over the repo's current changes (default, e.g.
+`/code-review`) vs. per-deliverable fan-out (`/verify`).

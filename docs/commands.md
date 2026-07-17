@@ -20,6 +20,7 @@
 | `/answer` | Open pending questionnaires |
 | `/recap` | Summarize completed agent work |
 | `/verify [delivery]` | Deep read-only verification against actual diffs |
+| `/code-review [target]` | Maestro-side read-only correctness review (persona command) |
 | `/debug [symptom]` | Bounded diagnosis, one selected recovery, issue review |
 | `/ship` | Push and create/update the next shippable PR |
 | `/sync` | Reconcile stacked PR bases |

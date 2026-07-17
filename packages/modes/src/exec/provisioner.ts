@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { EXECUTION_STATE_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { addWorktree, worktreePathFor } from "@vegardx/pi-git";
 import { deliverableBranch } from "../agent-lifecycle.js";
 import {
@@ -252,7 +253,7 @@ export function buildAgentSessionFile(
 	}
 
 	const modesState: PersistedModesState = {
-		version: 2,
+		version: EXECUTION_STATE_SCHEMA_VERSION,
 		mode: "agent",
 		execution: { stage: "executing" },
 		updatedAt: new Date().toISOString(),

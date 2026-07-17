@@ -339,6 +339,7 @@ describe("restart workspace validation", () => {
 		});
 		return {
 			plan: {
+				schemaVersion: 5,
 				slug: "p",
 				title: "p",
 				repoPath: root,

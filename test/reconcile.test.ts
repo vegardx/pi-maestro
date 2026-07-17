@@ -38,6 +38,7 @@ describe("orphan reconciler", () => {
 		over: Partial<RunRecord> = {},
 	): void {
 		store.create({
+			schemaVersion: 2,
 			id: id(runId),
 			profile: { profile: "deliverable-agent" },
 			status,

@@ -4,7 +4,11 @@ import type {
 	SessionEntry,
 	SessionMessageEntry,
 } from "@earendil-works/pi-coding-agent";
-import type { ModeName } from "@vegardx/pi-contracts";
+import {
+	EXECUTION_STAGES,
+	EXECUTION_STATE_SCHEMA_VERSION,
+	type ModeName,
+} from "@vegardx/pi-contracts";
 import { type ExecutionState, isModeName, type ModesState } from "./state.js";
 
 export const MODES_STATE_ENTRY = "maestro.modes.state";
@@ -16,7 +20,7 @@ export const EXECUTION_SEED_ENTRY = "maestro.execution.seed";
 export const AGENT_CONTEXT_ENTRY = "maestro.agent.context";
 
 export interface PersistedModesState {
-	readonly version: 2;
+	readonly version: typeof EXECUTION_STATE_SCHEMA_VERSION;
 	readonly mode: ModeName;
 	readonly activePlanSlug?: string;
 	readonly execution: ExecutionState;
@@ -28,9 +32,19 @@ export interface SessionStateSink {
 	appendEntry<T = unknown>(customType: string, data?: T): void;
 }
 
+export class UnsupportedExecutionStateError extends Error {
+	constructor(found: unknown) {
+		super(
+			`Unsupported Maestro execution state schema ${String(found)} (expected ${EXECUTION_STATE_SCHEMA_VERSION}). ` +
+				"This release is a full cutover; archive or reset the old Maestro session state and retry.",
+		);
+		this.name = "UnsupportedExecutionStateError";
+	}
+}
+
 export function toPersistedState(state: ModesState): PersistedModesState {
 	return {
-		version: 2,
+		version: EXECUTION_STATE_SCHEMA_VERSION,
 		mode: state.mode,
 		activePlanSlug: state.activePlanSlug,
 		execution: state.execution,
@@ -54,6 +68,10 @@ export function hydrateModesState(
 		if (entry.type !== "custom" || entry.customType !== MODES_STATE_ENTRY) {
 			continue;
 		}
+		const data = entry.data;
+		if (isObject(data) && data.version !== EXECUTION_STATE_SCHEMA_VERSION) {
+			throw new UnsupportedExecutionStateError(data.version ?? "missing");
+		}
 		return parseStateEntry(entry);
 	}
 	return null;
@@ -62,7 +80,9 @@ export function hydrateModesState(
 function parseStateEntry(entry: CustomEntry): ModesState | null {
 	const data = entry.data;
 	if (!isObject(data)) return null;
-	if (data.version !== 1 && data.version !== 2) return null;
+	if (data.version !== EXECUTION_STATE_SCHEMA_VERSION) {
+		throw new UnsupportedExecutionStateError(data.version ?? "missing");
+	}
 	if (typeof data.mode !== "string" || !isModeName(data.mode)) return null;
 	if (typeof data.updatedAt !== "string") return null;
 	const activePlanSlug =
@@ -79,12 +99,22 @@ function parseStateEntry(entry: CustomEntry): ModesState | null {
 }
 
 function parseExecution(value: unknown): ExecutionState {
-	if (!isObject(value)) return { stage: "idle" };
+	if (!isObject(value)) {
+		throw new Error(
+			"Invalid Maestro execution state: execution must be an object",
+		);
+	}
 	const stage = value.stage;
-	const valid =
-		stage === "idle" || stage === "executing" || stage === "exec-complete";
+	if (
+		typeof stage !== "string" ||
+		!EXECUTION_STAGES.includes(stage as (typeof EXECUTION_STAGES)[number])
+	) {
+		throw new Error(
+			`Invalid Maestro execution state: unsupported stage ${String(stage)}`,
+		);
+	}
 	return {
-		stage: valid ? stage : "idle",
+		stage: stage as ExecutionState["stage"],
 		deliverableId:
 			typeof value.deliverableId === "string" ? value.deliverableId : undefined,
 	};

@@ -117,7 +117,11 @@ export {
 	isActive,
 	isTerminal,
 } from "./state-machine.js";
-export { createRunStore, type RunStore } from "./store.js";
+export {
+	createRunStore,
+	type RunStore,
+	UnsupportedRunStateError,
+} from "./store.js";
 export {
 	attachSupervisor,
 	createSupervisorTool,

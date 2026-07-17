@@ -1,5 +1,6 @@
 import {
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -56,6 +57,7 @@ function id(s: string): RunId {
 function record(over: Partial<RunRecord> = {}): RunRecord {
 	const now = Date.now();
 	return {
+		schemaVersion: 2,
 		id: id("r1"),
 		profile: PROFILE,
 		status: "queued",
@@ -105,6 +107,18 @@ describe("RunStore", () => {
 		expect(() => store.setStatus(id("r1"), "queued")).toThrow(/illegal/);
 	});
 
+	it("rejects unversioned run records with reset guidance", () => {
+		const runDir = join(root, "legacy");
+		mkdirSync(runDir, { recursive: true });
+		writeFileSync(
+			join(runDir, "status.json"),
+			JSON.stringify({ id: "legacy" }),
+		);
+		expect(() => store.readRecord(id("legacy"))).toThrow(
+			/archive or reset the old Maestro run state/,
+		);
+	});
+
 	it("appends and replays events, skipping torn lines", () => {
 		const msg: RunBusMessage = {
 			type: "progress",
@@ -121,12 +135,16 @@ describe("RunStore", () => {
 		expect(store.readEvents(id("r1"))).toHaveLength(2);
 	});
 
-	it("stores a result and result markdown", () => {
+	it("stores a result, completion timestamp, stop record, and result markdown", () => {
 		store.create(record({ status: "queued" }));
-		store.setStatus(id("r1"), "running");
-		store.setResult(id("r1"), { status: "succeeded", summary: "done" });
+		store.setStatus(id("r1"), "running", 10);
+		store.setResult(id("r1"), { status: "succeeded", summary: "done" }, 20);
 		store.writeResult(id("r1"), "# done");
-		expect(store.readRecord(id("r1"))?.status).toBe("succeeded");
+		expect(store.readRecord(id("r1"))).toMatchObject({
+			status: "succeeded",
+			completedAt: 20,
+			stop: { kind: "completed", completedAt: 20, recoverable: false },
+		});
 		expect(store.readResult(id("r1"))).toBe("# done");
 	});
 

@@ -39,6 +39,30 @@ describe("execution lifecycle state", () => {
 			deliverableId: "d1",
 		});
 	});
+
+	it("supports stopping and stopped transitions", () => {
+		const working = setExecution(
+			initialModesState(now),
+			{ stage: "executing", deliverableId: "d1" },
+			now,
+		);
+		const stopping = setExecution(
+			working,
+			{ stage: "stopping", deliverableId: "d1" },
+			now,
+		);
+		expect(setExecution(stopping, { stage: "stopped" }, now).execution).toEqual(
+			{
+				stage: "stopped",
+			},
+		);
+	});
+
+	it("rejects illegal execution stage jumps", () => {
+		expect(() =>
+			setExecution(initialModesState(now), { stage: "stopping" }, now),
+		).toThrow(/illegal execution transition/);
+	});
 });
 
 describe("execution lifecycle persistence", () => {
@@ -67,17 +91,17 @@ describe("execution lifecycle persistence", () => {
 		expect(hydrated?.mode).toBe("auto");
 	});
 
-	it("defaults execution to idle for legacy v1 state entries", () => {
-		const hydrated = hydrateModesState([
-			stateEntry({
-				version: 1,
-				mode: "auto",
-				activePlanSlug: "p1",
-				updatedAt: now(),
-			}),
-		]);
-		expect(hydrated?.execution).toEqual({ stage: "idle" });
-		expect(hydrated?.mode).toBe("auto");
+	it("rejects legacy execution entries with reset guidance", () => {
+		expect(() =>
+			hydrateModesState([
+				stateEntry({
+					version: 1,
+					mode: "auto",
+					activePlanSlug: "p1",
+					updatedAt: now(),
+				}),
+			]),
+		).toThrow(/archive or reset the old Maestro session state/);
 	});
 });
 

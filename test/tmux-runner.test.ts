@@ -311,6 +311,7 @@ describe("tmux transport hardening", () => {
 		const now = Date.now();
 		const mkRun = (id: string, session?: string) => {
 			store.create({
+				schemaVersion: 2,
 				id: id as RunId,
 				profile: { profile: "research" },
 				status: "queued",

@@ -4,6 +4,7 @@
 // disk, so the in-memory plan and the file never diverge.
 
 import { createHash, randomUUID } from "node:crypto";
+import type { ModeTransitionGate, ModeTransitionSuggestion } from "@vegardx/pi-contracts";
 import type { ReviewLedger } from "./exec/findings.js";
 import {
 	type AgentMode,
@@ -117,6 +118,7 @@ export interface PlanRepairInput {
 export function planFingerprint(plan: Plan): string {
 	const value = structuredClone(plan) as Plan;
 	delete value.repairAudit;
+	delete value.transitionGates;
 	value.updatedAt = "";
 	for (const g of value.deliverables) {
 		delete g.sessionPath;
@@ -202,7 +204,8 @@ export class PlanEngine {
 		patch: Partial<
 			Pick<
 				Plan,
-				"title" | "parentIssueNumber" | "planSessionPath" | "lastSyncedAt"
+		"title" | "parentIssueNumber" | "planSessionPath" | "lastSyncedAt"
+				| "transitionGates"
 			>
 		>,
 	): void {
@@ -220,6 +223,56 @@ export class PlanEngine {
 		this.mutate((plan) => {
 			plan.phase = phase;
 			if (understanding !== undefined) plan.understanding = understanding;
+		});
+	}
+
+	setTransitionGate(gate: ModeTransitionGate): void {
+		this.mutate((plan) => {
+			const gates = plan.transitionGates ?? [];
+			const index = gates.findIndex((candidate) => candidate.id === gate.id);
+			plan.transitionGates =
+				index < 0
+					? [...gates, gate]
+					: gates.map((candidate, at) => (at === index ? gate : candidate));
+		});
+	}
+
+	/** Apply a reviewed transition mutation batch in one validated plan write. */
+	applyTransitionSuggestions(
+		baseFingerprint: string,
+		suggestions: readonly ModeTransitionSuggestion[],
+	): void {
+		if (planFingerprint(this.plan) !== baseFingerprint)
+			throw new Error("plan changed since the transition ruling was prepared");
+		this.mutate((plan) => {
+			for (const suggestion of suggestions) {
+				const deliverable = findDeliverable(plan, suggestion.deliverableId);
+				if (!deliverable)
+					throw new Error(`unknown deliverable: ${suggestion.deliverableId}`);
+				if (suggestion.kind === "require-reviewer") {
+					const reviewer = (deliverable.subAgents ?? []).find(
+						(item) => item.name === suggestion.reviewerName,
+					);
+					if (!reviewer)
+						throw new Error(`unknown sub-agent: ${suggestion.reviewerName}`);
+					reviewer.required = true;
+				} else if (
+					!(deliverable.subAgents ?? []).some(
+						(item) => item.name === suggestion.reviewerName,
+					)
+				) {
+					deliverable.subAgents = [
+						...(deliverable.subAgents ?? []),
+						{
+							name: suggestion.reviewerName,
+							persona: suggestion.persona,
+							kind: "review",
+							required: true,
+						},
+					];
+				}
+				deliverable.updatedAt = this.now();
+			}
 		});
 	}
 

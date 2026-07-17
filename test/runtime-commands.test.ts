@@ -81,6 +81,35 @@ afterEach(() => {
 	}
 });
 
+describe("mode transition commands", () => {
+	it("routes Plan /auto and /hack through runImplement", async () => {
+		const runImplement = vi.fn(async () => {});
+		const requestMode = vi.fn(async () => true);
+		const { commands } = makeRuntime({
+			state: { mode: "plan", execution: { stage: "idle" } },
+			runImplement,
+			requestMode,
+		});
+		const { ctx } = makeCmdCtx();
+		await commands.get("auto")?.("", ctx);
+		await commands.get("hack")?.("", ctx);
+		expect(runImplement).toHaveBeenNthCalledWith(1, "", ctx);
+		expect(runImplement).toHaveBeenNthCalledWith(2, "--hack", ctx);
+		expect(requestMode).not.toHaveBeenCalled();
+	});
+
+	it("routes non-Plan mode requests through the coordinator entry", async () => {
+		const requestMode = vi.fn(async () => true);
+		const { commands } = makeRuntime({
+			state: { mode: "recon", execution: { stage: "idle" } },
+			requestMode,
+		});
+		const { ctx } = makeCmdCtx();
+		await commands.get("auto")?.("", ctx);
+		expect(requestMode).toHaveBeenCalledWith("auto", ctx);
+	});
+});
+
 describe("/debug", () => {
 	type AskQuestion = {
 		id: string;

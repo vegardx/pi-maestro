@@ -357,6 +357,17 @@ export default defineExtension(
 		};
 
 		const registries = createBuiltinAgentRegistries();
+		maestro.capabilities
+			.get(CAPABILITIES.settings)
+			?.registerAgentConfiguration?.({
+				kinds: registries.kinds.list(),
+				runtime: {
+					policies: registries.runtime.policies.list(),
+					permissions: registries.runtime.permissions.list(),
+					sessions: registries.runtime.sessions.list(),
+					transports: registries.runtime.transports.list(),
+				},
+			});
 
 		maestro.capabilities.register(CAPABILITIES.subagents, {
 			spawn: (prompt, profile) => requireService().spawn(prompt, profile),

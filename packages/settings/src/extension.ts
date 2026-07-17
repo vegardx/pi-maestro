@@ -10,6 +10,7 @@ import {
 import { defineExtension } from "@vegardx/pi-core";
 import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
+import type { DomainRegistryInput } from "./domain.js";
 import { showConfigMenu } from "./menu.js";
 import { settingsRegistry } from "./registry.js";
 
@@ -22,10 +23,14 @@ export default defineExtension(
 		doc: "Settings viewer/editor: /maestro interactive menu + subcommands.",
 	},
 	(pi, maestro) => {
+		let domainRegistry: DomainRegistryInput = {};
 		// Provide settings.v1 capability for extensions to declare settings
 		maestro.capabilities.register(CAPABILITIES.settings, {
 			declare(extension: string, settings: SettingDeclaration[]) {
 				settingsRegistry.set(extension, settings);
+			},
+			registerAgentConfiguration(input) {
+				domainRegistry = input;
 			},
 		});
 
@@ -50,10 +55,10 @@ export default defineExtension(
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					showConfigMenu(ctx);
+					showConfigMenu(ctx, domainRegistry);
 				} else {
 					// Text-based subcommands for scripting
-					handleSettingsCommand(args, ctx);
+					handleSettingsCommand(args, ctx, domainRegistry);
 				}
 			},
 			getArgumentCompletions: (prefix) => {

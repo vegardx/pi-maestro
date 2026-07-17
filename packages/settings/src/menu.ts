@@ -2,7 +2,19 @@
 // compact menu exposes its summary and directs edits through scripted keys.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	getSessionSettingOverride,
+	setSessionSettingOverride,
+} from "@vegardx/pi-contracts";
 import { readDomainSnapshot, type DomainRegistryInput } from "./domain.js";
+
+export function getSessionSetting(extension: string, key: string) {
+	return getSessionSettingOverride(extension, key);
+}
+
+export function setSessionSetting(extension: string, key: string, value: boolean | string | number | readonly string[] | undefined): void {
+	setSessionSettingOverride(extension, key, value);
+}
 
 export function showConfigMenu(
 	ctx: ExtensionContext,

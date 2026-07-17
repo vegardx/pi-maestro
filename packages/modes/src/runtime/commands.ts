@@ -610,6 +610,12 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 						"blank line, then body explaining what changed and why. " +
 						"Example: feat(math): implement multiply\\n\\nAdd multiply(a,b) with overflow guard.",
 				}),
+				maestroStage: Type.Optional(
+					Type.String({
+						description:
+							"Optional compact workflow boundary id (for example implementation or verification). Adds a Maestro-Stage trailer; omit for ordinary incremental commits.",
+					}),
+				),
 				paths: Type.Array(Type.String(), {
 					description:
 						"Files to stage (explicit paths only, never use . or -A).",
@@ -632,6 +638,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					message: params.message,
 					paths: params.paths,
 					cwd: active.cwd,
+					...(params.maestroStage ? { maestroStage: params.maestroStage } : {}),
 				});
 				const text = result.committed
 					? `Committed ${result.sha ?? "changes"}.`

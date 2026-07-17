@@ -21,10 +21,29 @@ import { parseChangedPaths } from "./paths.js";
 export { buildCommitMessagePrompt, extractCommitMessage } from "./message.js";
 export { parseChangedPaths } from "./paths.js";
 
+export function appendMaestroStageTrailer(
+	message: string,
+	stage: string | undefined,
+): string {
+	const normalized = stage?.trim();
+	if (!normalized) return message;
+	if (!/^[a-z0-9][a-z0-9._/-]{0,79}$/i.test(normalized)) {
+		throw new Error("Maestro stage must be a compact identifier");
+	}
+	const withoutExisting = message
+		.trimEnd()
+		.split("\n")
+		.filter((line) => !/^Maestro-Stage:/i.test(line))
+		.join("\n")
+		.trimEnd();
+	return `${withoutExisting}\n\nMaestro-Stage: ${normalized}`;
+}
+
 export interface CommitInput {
 	readonly paths?: readonly string[];
 	readonly message?: string;
 	readonly cwd?: string;
+	readonly maestroStage?: string;
 }
 
 export interface CommitResult {
@@ -94,6 +113,15 @@ export default defineExtension(
 						error: "failed to generate commit message",
 					};
 				}
+			}
+
+			try {
+				message = appendMaestroStageTrailer(message, input.maestroStage);
+			} catch (cause) {
+				return {
+					committed: false,
+					error: cause instanceof Error ? cause.message : String(cause),
+				};
 			}
 
 			const result = stageAndCommit(cwd, paths, message);

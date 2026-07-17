@@ -4,11 +4,16 @@ import {
 	type ExecutionStage,
 	MODE_NAMES,
 	type ModeName,
+	type StopRecord,
 } from "@vegardx/pi-contracts";
 
 export interface ExecutionState {
 	readonly stage: ExecutionStage;
 	readonly deliverableId?: string;
+	/** Set exactly once when execution first reaches stopped. */
+	readonly completedAt?: number;
+	/** Compact durable provenance for the bounded stop. */
+	readonly stop?: StopRecord;
 }
 
 export interface ModesState {
@@ -72,6 +77,22 @@ export function setExecution(
 		throw new Error(
 			`illegal execution transition: ${state.execution.stage} → ${execution.stage}`,
 		);
+	}
+	if (
+		state.execution.completedAt !== undefined &&
+		execution.completedAt !== state.execution.completedAt
+	) {
+		throw new Error("execution completion timestamp is immutable");
+	}
+	if (execution.stage === "stopped") {
+		if (execution.completedAt === undefined || execution.stop === undefined) {
+			throw new Error("stopped execution requires completedAt and stop record");
+		}
+		if (execution.stop.completedAt !== execution.completedAt) {
+			throw new Error("execution stop timestamp must match completedAt");
+		}
+	} else if (execution.completedAt !== undefined || execution.stop !== undefined) {
+		throw new Error("only stopped execution may carry completion metadata");
 	}
 	return { ...state, execution, updatedAt: now() };
 }

@@ -463,8 +463,17 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				return;
 			}
 			const state = executor.getStates().get(id);
-			if (!state) {
+			const deliverable = rt.engine?.get().deliverables.find((g) => g.id === id);
+			if (!state || !deliverable) {
 				ctx.ui.notify(`Unknown deliverable: ${id}`, "warning");
+				return;
+			}
+			if (deliverable.status === "failed") {
+				rt.engine?.setDeliverableStatus(id, "active");
+				executor.unblockDeliverable(id);
+				await rt.execution.restartWorkerResume?.(id);
+				ctx.ui.notify(`Recovered failed deliverable ${id}; retrying.`, "info");
+				await rt.execution.tick();
 				return;
 			}
 			if (!state.blocked) {

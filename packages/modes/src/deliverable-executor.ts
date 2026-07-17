@@ -957,7 +957,20 @@ export class DeliverableExecutor {
 			(a) => a.status === "failed",
 		);
 		if (anyFailed) {
-			// Leave as active — requires manual intervention
+			const failedAgent = [...state.agents.values()].find(
+				(agent) => agent.status === "failed",
+			);
+			const current = findDeliverable(this.engine.get(), deliverableId);
+			if (current?.status === "active") {
+				this.engine.setDeliverableStatus(deliverableId, "failed", {
+					code: "agent-failed",
+					message: failedAgent?.error ?? "an execution agent failed",
+					failedAt: failedAgent?.completedAt ?? this.deps.now(),
+					recoverable: true,
+					attempt: (current.failure?.attempt ?? 0) + 1,
+					...(failedAgent ? { agentId: failedAgent.name } : {}),
+				});
+			}
 			return;
 		}
 

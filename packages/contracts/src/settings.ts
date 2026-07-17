@@ -57,4 +57,14 @@ export interface SettingDeclaration {
 export interface SettingsCapabilityV1 {
 	/** Register configurable settings for an extension. */
 	declare(extension: string, settings: SettingDeclaration[]): void;
+	/** Optional read-only registries used by /maestro's domain detail pages. */
+	registerAgentConfiguration?(input: {
+		readonly kinds: readonly import("./agents.js").AgentKindDefinition[];
+		readonly runtime: {
+			readonly policies: readonly import("./agents.js").AgentRuntimePolicyDefinition[];
+			readonly permissions: readonly import("./agents.js").AgentPermissionPolicy[];
+			readonly sessions: readonly import("./agents.js").AgentSessionPolicy[];
+			readonly transports: readonly import("./agents.js").AgentTransportPolicy[];
+		};
+	}): void;
 }

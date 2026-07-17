@@ -5,6 +5,18 @@ export {
 	getSettingsCompletions,
 	handleSettingsCommand,
 } from "./command.js";
+export {
+	DEFAULT_TRANSITION_GATES,
+	DOMAIN_EXTENSION,
+	type DomainRegistryInput,
+	type DomainSnapshot,
+	domainImpact,
+	explainModelSelection,
+	readDomainSnapshot,
+	validateDomainEdit,
+	validateDomainValue,
+	writeDomainValue,
+} from "./domain.js";
 export { default as settingsExtension } from "./extension.js";
 export {
 	__resetSettingsLayer,

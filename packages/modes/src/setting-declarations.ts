@@ -195,7 +195,7 @@ export const EXECUTION_POLICY_SETTINGS = [
 		label: "Stop grace (ms)",
 		type: "number",
 		default: 5000,
-		group: "execution-policy",
+		group: "agent-lifecycle",
 		description:
 			"Fleet-wide deadline for cooperative worker shutdown before tmux escalation (0–60000).",
 	},

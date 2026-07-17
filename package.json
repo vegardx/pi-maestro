@@ -33,6 +33,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest watch",
+		"test:e2e": "vitest run --config vitest.e2e.config.ts",
 		"boundaries": "node scripts/check-boundaries.mjs",
 		"smoke": "node scripts/smoke.mjs",
 		"prepare": "husky"

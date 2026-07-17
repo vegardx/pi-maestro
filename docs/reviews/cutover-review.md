@@ -120,7 +120,11 @@ invariant. Under the actual model they are not correctness bugs:
 
 ### 5. The verification verdict is taken only from the prose `VERDICT:` line and never forced to fail by a blocking structured finding, so a report that says pass while carrying a critical/major finding is treated as a clean pass and the finding is silently discarded.
 - **Where:** `packages/modes/src/exec/verify.ts:400` · dimension: findings/gate · category: gate-bypass · verdict: CONFIRMED
-- **Contingent on `/verify`'s fate (open design question).** `/verify` is a *manually-invoked* maestro command (`commands.ts:209`) — a read-only deep-check that reads a deliverable's diff and judges whether its tasks were genuinely done; a `fail` verdict feeds `applyRemediation` (`commands.ts:688`), which keys on `verdict === "pass"`. So this prose-vs-structured mismatch only bites if `/verify` stays *with* automated remediation. If `/verify` becomes human-triage-only, is folded into a `verifier` persona spawn, or is dropped, #5 is moot. See the discussion below.
+- **RESOLVED — `/verify` is now report-only.** The auto-remediation
+  (`presentRemediationTriage` → `applyRemediation`, which acted on the possibly-wrong
+  verdict) has been removed and `exec/remediate.ts` deleted; `/verify` surfaces the
+  report and a human decides. The prose-vs-structured mismatch no longer drives any
+  action, so this finding is closed. (Original analysis kept below for the record.)
 - **Failure scenario:** A /verify verifier ends its report with `VERDICT: pass` (or omits/garbles the verdict word so parseVerdict yields approve) but its ```json block lists {"severity":"critical", ...}. runVerification sets entry.verdict="pass" from parseVerdict(report) at lines 399-406 and stores the critical finding in entry.structured, but does not cross-check severity. applyRemediation (remediate.ts:168) does `if (entry.verdict === "pass") continue;`, so the deliverable is never reopened and the critical finding never becomes a gating WorkItem. The already complete/shipped deliverable stays shipped with an open blocking finding — exactly the invariant the gate is supposed to prevent. computedVerdict()/isBlockingSeverity() in findings.ts:18-24 exist to reconcile verdict against blocking findings but have no callers.
 - **Suggested fix:** In runVerification, after parsing, override verdict to fail when structured.some(isBlockingSeverity) (or use computedVerdict on the parsed findings) even if the prose verdict says approve, so the two channels can never silently disagree.
 

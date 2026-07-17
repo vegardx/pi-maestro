@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { connect, type Socket } from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import {
 	type AgentMessage,
 	type HelloMessage,
@@ -36,6 +37,8 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 	private socketPath: string | undefined;
 	private identity: HelloIdentity | undefined;
 	private buffer = "";
+	// Decodes UTF-8 across chunk boundaries; reset per connection in connect().
+	private decoder = new StringDecoder("utf8");
 	private closed = false;
 	private retryTimer: ReturnType<typeof setTimeout> | undefined;
 	private retryDelay: number;
@@ -102,6 +105,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 		socket.on("connect", () => {
 			this.retryDelay = this.initialRetryDelay;
 			this.buffer = "";
+			this.decoder = new StringDecoder("utf8");
 			// Send hello immediately
 			const hello: HelloMessage = {
 				type: "hello",
@@ -117,7 +121,7 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 		});
 
 		socket.on("data", (chunk) => {
-			this.buffer += chunk.toString();
+			this.buffer += this.decoder.write(chunk);
 			let newlineIdx = this.buffer.indexOf("\n");
 			while (newlineIdx !== -1) {
 				const line = this.buffer.slice(0, newlineIdx);

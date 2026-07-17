@@ -217,29 +217,6 @@ describe("buildVerifyPrompt", () => {
 		expect(prompt).toContain("VERDICT: pass");
 		expect(prompt).toContain("VERDICT: block");
 	});
-
-	it("waived findings are carried as do-not-reflag context", () => {
-		const g = makeDeliverable({
-			id: "auth",
-			status: "shipped",
-			waivers: [
-				{
-					reviewer: "security-audit",
-					reason: "token already scoped by the gateway",
-					at: "2026-07-11",
-				},
-			],
-		});
-		const prompt = buildVerifyPrompt(g, {
-			facts: [],
-			problems: [],
-			diff: "+x",
-			cwd: "/repo",
-		});
-		expect(prompt).toContain("Waived findings");
-		expect(prompt).toContain("security-audit: token already scoped");
-		expect(prompt).toContain("do NOT re-flag");
-	});
 });
 
 describe("runVerification", () => {

@@ -1013,10 +1013,14 @@ export class DeliverableExecutor {
 				body,
 				worktreePath: state.worktreePath!,
 			});
-		} catch {
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			state.blocked = `shipping failed: ${detail}`;
 			return null;
 		}
 
+		if (state.blocked?.startsWith("shipping failed:"))
+			state.blocked = undefined;
 		this.engine.setDeliverableStatus(g.id, "shipped");
 		this.engine.updateDeliverable(g.id, { prUrl });
 

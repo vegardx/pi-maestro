@@ -546,23 +546,25 @@ describe("first-turn cache ratio surfacing", () => {
 			until(() => tokenReports.filter((r) => r === id).length > baseline);
 	}
 
-	it("sets cacheRatio from the FIRST tokens message and never re-computes it", async () => {
+	it("sets prefixCacheHitRate from the FIRST tokens message and never re-computes it", async () => {
 		const { client, ready } = connect("deliverable-one/worker");
 		await ready;
 
 		client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 2000, cacheRead: 8000 }),
 		});
 		await until(
 			() =>
-				adapter.snapshot().agents.get("deliverable-one/worker")?.cacheRatio ===
-				0.8,
+				adapter.snapshot().agents.get("deliverable-one/worker")
+					?.prefixCacheHitRate === 0.8,
 		);
 
 		// A later, colder tokens message must not move the first-turn ratio.
 		client.send({
 			type: "tokens",
+			revision: 2,
 			snapshot: snapshotOf({ input: 9000, cacheRead: 1000, turns: 2 }),
 		});
 		await until(
@@ -571,7 +573,8 @@ describe("first-turn cache ratio surfacing", () => {
 					.input === 9000,
 		);
 		expect(
-			adapter.snapshot().agents.get("deliverable-one/worker")?.cacheRatio,
+			adapter.snapshot().agents.get("deliverable-one/worker")
+				?.prefixCacheHitRate,
 		).toBe(0.8);
 	});
 
@@ -582,13 +585,14 @@ describe("first-turn cache ratio surfacing", () => {
 		const reported = nextReport("deliverable-one/worker");
 		client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 0, cacheRead: 0 }),
 		});
 		await reported();
 
 		const worker = adapter.snapshot().agents.get("deliverable-one/worker");
 		expect(worker).toBeDefined();
-		expect(worker?.cacheRatio).toBeUndefined();
+		expect(worker?.prefixCacheHitRate).toBeUndefined();
 		expect(cacheMissEvents()).toHaveLength(0);
 	});
 
@@ -603,6 +607,7 @@ describe("first-turn cache ratio surfacing", () => {
 		const oneReported = nextReport("deliverable-one/worker");
 		one.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
 		});
 		await oneReported();
@@ -611,6 +616,7 @@ describe("first-turn cache ratio surfacing", () => {
 		// Second same-class agent, cold within the warm window → cache-miss.
 		two.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 1000, cacheRead: 100 }),
 		});
 		await until(() => cacheMissEvents().length === 1);
@@ -639,18 +645,20 @@ describe("first-turn cache ratio surfacing", () => {
 		const oneReported = nextReport("deliverable-one/worker");
 		one.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
 		});
 		await oneReported();
 
 		two.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 500, cacheRead: 9500 }),
 		});
 		await until(
 			() =>
-				adapter.snapshot().agents.get("deliverable-two/worker")?.cacheRatio ===
-				0.95,
+				adapter.snapshot().agents.get("deliverable-two/worker")
+					?.prefixCacheHitRate === 0.95,
 		);
 		expect(cacheMissEvents()).toHaveLength(0);
 	});
@@ -665,6 +673,7 @@ describe("first-turn cache ratio surfacing", () => {
 		const workerReported = nextReport("deliverable-one/worker");
 		worker.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 10_000, cacheRead: 0 }),
 		});
 		await workerReported();
@@ -672,6 +681,7 @@ describe("first-turn cache ratio surfacing", () => {
 		const reviewerReported = nextReport("deliverable-one/reviewer-x");
 		reviewer.client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: snapshotOf({ input: 1000, cacheRead: 0 }),
 		});
 		await reviewerReported();
@@ -729,14 +739,14 @@ describe("renderAgentsOverview cache suffix", () => {
 						status: "working",
 						startedAt: Date.now(),
 						tokens: { input: 5000, output: 120, turns: 9 },
-						cacheRatio: 0.874,
+						prefixCacheHitRate: 0.874,
 					},
 				],
 			]),
 		);
 		const out = renderAgentsOverview(engine.get(), handle);
 		expect(out).toContain(
-			"worker (full) — working · 5000in/120out · 9 turns · cache 87%",
+			"worker (full) — working · 5000in/120out · 9 turns · prefix 87%",
 		);
 	});
 

@@ -49,7 +49,7 @@ export function buildPrBody(
 	}
 
 	const base = sections.join("\n\n");
-	if (!deliverable.workflowAnalytics && !deliverable.reviewLedger) return base;
+	if (!deliverable.workflowAnalytics) return base;
 	return updateMaestroPrBody(base, renderMaestroPrSection(deliverable));
 }
 

@@ -4,8 +4,7 @@
 // disk, so the in-memory plan and the file never diverge.
 
 import { createHash, randomUUID } from "node:crypto";
-import type { ModeTransitionGate, ModeTransitionSuggestion } from "@vegardx/pi-contracts";
-import type { ReviewLedger } from "./exec/findings.js";
+import type { ModeTransitionGate } from "@vegardx/pi-contracts";
 import {
 	type AgentMode,
 	type AgentSpec,
@@ -23,7 +22,6 @@ import {
 	type Plan,
 	type PlanPhase,
 	type PlanRepo,
-	type SubAgentSpec,
 	slugify,
 	type ThinkingLevel,
 	validatePlanShape,
@@ -240,45 +238,6 @@ export class PlanEngine {
 		});
 	}
 
-	/** Apply a reviewed transition mutation batch in one validated plan write. */
-	applyTransitionSuggestions(
-		baseFingerprint: string,
-		suggestions: readonly ModeTransitionSuggestion[],
-	): void {
-		if (planFingerprint(this.plan) !== baseFingerprint)
-			throw new Error("plan changed since the transition ruling was prepared");
-		this.mutate((plan) => {
-			for (const suggestion of suggestions) {
-				const deliverable = findDeliverable(plan, suggestion.deliverableId);
-				if (!deliverable)
-					throw new Error(`unknown deliverable: ${suggestion.deliverableId}`);
-				if (suggestion.kind === "require-reviewer") {
-					const reviewer = (deliverable.subAgents ?? []).find(
-						(item) => item.name === suggestion.reviewerName,
-					);
-					if (!reviewer)
-						throw new Error(`unknown sub-agent: ${suggestion.reviewerName}`);
-					reviewer.required = true;
-				} else if (
-					!(deliverable.subAgents ?? []).some(
-						(item) => item.name === suggestion.reviewerName,
-					)
-				) {
-					deliverable.subAgents = [
-						...(deliverable.subAgents ?? []),
-						{
-							name: suggestion.reviewerName,
-							persona: suggestion.persona,
-							kind: "review",
-							required: true,
-						},
-					];
-				}
-				deliverable.updatedAt = this.now();
-			}
-		});
-	}
-
 	// ── Repo registry ──────────────────────────────────────────────────────
 
 	registerRepo(repo: PlanRepo): void {
@@ -391,7 +350,6 @@ export class PlanEngine {
 				| "summary"
 				| "prUrl"
 				| "prNumber"
-				| "maxFixRounds"
 			>
 		> & {
 			workerMode?: AgentMode;
@@ -530,60 +488,6 @@ export class PlanEngine {
 		});
 	}
 
-	// ── Sub-agent panel (persona reviewers) ──────────────────────────────────
-
-	addSubAgent(deliverableId: string, spec: SubAgentSpec): SubAgentSpec {
-		this.mutate((plan) => {
-			const g = findDeliverable(plan, deliverableId);
-			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
-			if ((g.subAgents ?? []).some((s) => s.name === spec.name))
-				throw new Error(`sub-agent already exists: ${spec.name}`);
-			g.subAgents = [...(g.subAgents ?? []), spec];
-			g.updatedAt = this.now();
-		});
-		const g = findDeliverable(this.plan, deliverableId) as Deliverable;
-		return (g.subAgents ?? []).find(
-			(s) => s.name === spec.name,
-		) as SubAgentSpec;
-	}
-
-	/** Record a human gate override permanently (see ReviewWaiver). */
-	addWaiver(
-		deliverableId: string,
-		waiver: {
-			reviewer: string;
-			reason: string;
-			findingId?: string;
-			claim?: string;
-			file?: string;
-		},
-	): void {
-		this.mutate((plan) => {
-			const g = findDeliverable(plan, deliverableId);
-			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
-			g.waivers = [...(g.waivers ?? []), { ...waiver, at: this.now() }];
-			g.updatedAt = this.now();
-		});
-	}
-
-	/**
-	 * Persist the panel review ledger (source of truth for the ship gate —
-	 * survives worker respawns and maestro restarts). Undefined clears it
-	 * (fresh review episode after a structural reopen).
-	 */
-	setReviewLedger(
-		deliverableId: string,
-		ledger: ReviewLedger | undefined,
-	): void {
-		this.mutate((plan) => {
-			const g = findDeliverable(plan, deliverableId);
-			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
-			if (ledger) g.reviewLedger = ledger;
-			else delete g.reviewLedger;
-			g.updatedAt = this.now();
-		});
-	}
-
 	setWorkflowAnalytics(
 		deliverableId: string,
 		ledger: WorkflowAnalyticsLedger | undefined,
@@ -593,19 +497,6 @@ export class PlanEngine {
 			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			if (ledger) g.workflowAnalytics = structuredClone(ledger);
 			else delete g.workflowAnalytics;
-			g.updatedAt = this.now();
-		});
-	}
-
-	removeSubAgent(deliverableId: string, name: string): void {
-		this.mutate((plan) => {
-			const g = findDeliverable(plan, deliverableId);
-			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
-			const list = g.subAgents ?? [];
-			const idx = list.findIndex((s) => s.name === name);
-			if (idx < 0) throw new Error(`unknown sub-agent: ${name}`);
-			list.splice(idx, 1);
-			g.subAgents = list;
 			g.updatedAt = this.now();
 		});
 	}

@@ -61,9 +61,6 @@ export function buildPlanAwareCompactionMarker(opts: {
 	remainingTasks: Array<{ title: string; body?: string }>;
 	completedTasks: Array<{ title: string }>;
 	depSummaryIds: string[];
-	/** Open review-ledger findings ("id [severity] — state") — the fix duties
-	 *  a compacted worker must not forget mid-cycle. */
-	reviewLedgerLines?: string[];
 }): string {
 	const remaining = opts.remainingTasks
 		.map((t) => `- ${t.title}${t.body ? `: ${t.body}` : ""}`)
@@ -76,10 +73,6 @@ export function buildPlanAwareCompactionMarker(opts: {
 			? opts.depSummaryIds.map((id) => `- ${id}: available in plan`).join("\n")
 			: "(none)";
 
-	const ledger = opts.reviewLedgerLines?.length
-		? `\nOpen review findings (MUST preserve — resolve via review({resolutions: [...]})):\n${opts.reviewLedgerLines.join("\n")}\n`
-		: "";
-
 	return `Compacting agent session for deliverable: ${opts.deliverableId} — ${opts.deliverableTitle}
 
 Remaining tasks (MUST preserve context for):
@@ -87,7 +80,7 @@ ${remaining || "(all done)"}
 
 Completed tasks (can drop raw details, keep outcomes):
 ${completed || "(none yet)"}
-${ledger}
+
 Dependency context (already in seed, don't duplicate):
 ${deps}
 

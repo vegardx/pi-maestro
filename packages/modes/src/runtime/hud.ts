@@ -58,10 +58,26 @@ export interface HudAgentLeaf {
 	readonly label: string;
 	readonly status: HudStatus;
 	readonly startedAt: number;
+	/** Required for terminal rows under the full-cutover schema. */
+	readonly completedAt?: number;
+	readonly input?: number;
+	readonly output?: number;
+	readonly cacheRead?: number;
+	readonly cacheWrite?: number;
+	readonly model?: string;
+	readonly effort?: string;
 	/** Model short-name or context note (e.g. "gate: review"). */
 	readonly note?: string;
 	/** Attach/steer/interrupt target id (agent-targets opaque id). */
 	readonly targetId?: string;
+	readonly capabilities?: HudAgentCapabilities;
+}
+
+export interface HudAgentCapabilities {
+	readonly view: boolean;
+	readonly steer: boolean;
+	readonly interrupt: boolean;
+	readonly kill: boolean;
 }
 
 export interface HudAgentNode extends HudAgentLeaf {
@@ -77,7 +93,7 @@ export interface HudPlanTask {
 export interface HudPlanRow {
 	readonly id: string;
 	readonly title: string;
-	readonly state: "shipped" | "complete" | "active" | "queued";
+	readonly state: "shipped" | "complete" | "active" | "failed" | "queued";
 	/** Assigned worker note shown on active rows (e.g. "worker running"). */
 	readonly worker?: string;
 	readonly tasks: readonly HudPlanTask[];
@@ -153,10 +169,12 @@ interface HudRow {
 	readonly key?: string;
 	readonly left: string;
 	readonly right?: string;
+	readonly rightCandidates?: readonly string[];
 	/** Row-level accent (blocking questions, failed agents). */
 	readonly tone?: "accent" | "error" | "dim";
 	/** Enter/steer/interrupt payloads. */
 	readonly targetId?: string;
+	readonly capabilities?: HudAgentCapabilities;
 	readonly question?: HudQuestionRow;
 	/** Fold toggling: the key whose fold state left/right/space flips. */
 	readonly foldKey?: string;
@@ -236,7 +254,11 @@ export class HudComponent {
 		if (data === KEY_ENTER) {
 			if (this.#tab === "questions" && current?.question) {
 				this.deps.actions.answer(current.question);
-			} else if (this.#tab === "agents" && current?.targetId) {
+			} else if (
+				this.#tab === "agents" &&
+				current?.targetId &&
+				current.capabilities?.view
+			) {
 				this.deps.actions.attach(current.targetId);
 			} else if (this.#tab === "plan" && current?.foldKey) {
 				this.#folds.set(current.foldKey, !(current.foldExpanded ?? false));
@@ -246,7 +268,8 @@ export class HudComponent {
 		if (
 			this.#tab === "agents" &&
 			data.toLowerCase() === "s" &&
-			current?.targetId
+			current?.targetId &&
+			current.capabilities?.steer
 		) {
 			this.deps.actions.steer(current.targetId);
 			return;
@@ -254,7 +277,8 @@ export class HudComponent {
 		if (
 			this.#tab === "agents" &&
 			data.toLowerCase() === "i" &&
-			current?.targetId
+			current?.targetId &&
+			current.capabilities?.interrupt
 		) {
 			this.deps.actions.interrupt(current.targetId);
 			return;
@@ -262,7 +286,8 @@ export class HudComponent {
 		if (
 			this.#tab === "agents" &&
 			data.toLowerCase() === "k" &&
-			current?.targetId
+			current?.targetId &&
+			current.capabilities?.kill
 		) {
 			this.deps.actions.kill(current.targetId);
 			return;
@@ -319,8 +344,9 @@ export class HudComponent {
 			rows.push({
 				key: node.key,
 				left: `${INDENT}${marker}${node.label}${suffix}`,
-				right: agentRight(node, now),
+				rightCandidates: agentRightCandidates(node, now),
 				targetId: node.targetId,
+				capabilities: node.capabilities,
 				...(hasChildren ? { foldKey: node.key, foldExpanded: expanded } : {}),
 				...(node.status === "failed" ? { tone: "error" as const } : {}),
 			});
@@ -330,8 +356,9 @@ export class HudComponent {
 					rows.push({
 						key: leaf.key,
 						left: `${INDENT}${connector} ${leaf.label}`,
-						right: agentRight(leaf, now),
+						rightCandidates: agentRightCandidates(leaf, now),
 						targetId: leaf.targetId,
+						capabilities: leaf.capabilities,
 						...(leaf.status === "failed" ? { tone: "error" as const } : {}),
 					});
 				});
@@ -369,7 +396,9 @@ export class HudComponent {
 					? "[x]"
 					: row.state === "active"
 						? "[~]"
-						: "[ ]";
+						: row.state === "failed"
+							? "[!]"
+							: "[ ]";
 			const marker = row.tasks.length > 0 && !expanded ? "▸ " : "";
 			const worker =
 				row.state === "active" && row.worker ? ` · ${row.worker}` : "";
@@ -379,6 +408,7 @@ export class HudComponent {
 				foldExpanded: expanded,
 				left: `${INDENT}${box} ${marker}${row.title}${worker}`,
 				...(row.state === "active" ? { tone: "accent" as const } : {}),
+				...(row.state === "failed" ? { tone: "error" as const } : {}),
 			});
 			if (expanded) {
 				for (const task of row.tasks) {
@@ -461,7 +491,10 @@ export class HudComponent {
 		}
 		if (this.#focused) {
 			lines.push({
-				text: truncateToWidth(`${INDENT}${this.#hint()}`, width),
+				text: truncateToWidth(
+					`${INDENT}${this.#hint(selectable[this.#selected], width)}`,
+					width,
+				),
 				kind: "hint",
 			});
 		}
@@ -479,14 +512,21 @@ export class HudComponent {
 		};
 	}
 
-	#hint(): string {
+	#hint(selected: HudRow | undefined, width: number): string {
+		const navigation = width >= 56 ? "↑↓ select · [/] tab" : "↑↓ · [/]";
 		if (this.#tab === "agents") {
-			return "tab switch · ←→ fold · enter attach · S steer · I interrupt · K fail";
+			const actions: string[] = [];
+			if (selected?.foldKey) actions.push("←→ fold");
+			if (selected?.capabilities?.view) actions.push("↵ view");
+			if (selected?.capabilities?.steer) actions.push("S steer");
+			if (selected?.capabilities?.interrupt) actions.push("I stop");
+			if (selected?.capabilities?.kill) actions.push("K fail");
+			return [navigation, ...actions, "Esc"].join(" · ");
 		}
 		if (this.#tab === "plan") {
-			return "↑↓ move · tab switch · enter expand/collapse · esc";
+			return `${navigation} · Enter toggle · Esc`;
 		}
-		return "↑↓ move · tab switch · enter answer · esc";
+		return `${navigation} · Enter answer · Esc`;
 	}
 
 	// ── styling ───────────────────────────────────────────────────────────────
@@ -529,17 +569,61 @@ interface PlainLine {
 	readonly selected?: boolean;
 }
 
-function agentRight(agent: HudAgentLeaf, now: number): string {
-	const parts = [agent.status, hudElapsed(now - agent.startedAt)];
-	if (agent.note) parts.push(agent.note);
-	return parts.join(" · ");
+function compactCount(n: number): string {
+	if (n < 1_000) return String(n);
+	if (n < 1_000_000) return `${Math.round(n / 1_000)}k`;
+	return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}m`;
 }
 
-/** `left …gap… right` fitted to width; right drops first, left truncates. */
+function modelEffort(agent: HudAgentLeaf): string | undefined {
+	if (!agent.model) return agent.note;
+	const model = agent.model
+		.split("/")
+		.pop()
+		?.replace(/^claude-/, "")
+		.replace(/-\d{8}$/, "");
+	return agent.effort && agent.effort !== "off"
+		? `${model} (${agent.effort})`
+		: model;
+}
+
+/** Richest-to-sparsest right telemetry candidates. */
+function agentRightCandidates(agent: HudAgentLeaf, now: number): string[] {
+	const endpoint = agent.completedAt ?? now;
+	const base = `${agent.status} · ${hudElapsed(endpoint - agent.startedAt)}`;
+	const promptOutput =
+		agent.input !== undefined && agent.output !== undefined
+			? `↑${compactCount(agent.input)} ↓${compactCount(agent.output)}`
+			: undefined;
+	const denominator =
+		(agent.input ?? 0) > 0
+			? (agent.input ?? 0)
+			: (agent.cacheRead ?? 0) + (agent.cacheWrite ?? 0);
+	const cache =
+		denominator > 0
+			? `CH ${Math.round(((agent.cacheRead ?? 0) / denominator) * 100)}%`
+			: undefined;
+	const model = modelEffort(agent);
+	const segments = [base, promptOutput, cache, model].filter(
+		(value): value is string => Boolean(value),
+	);
+	const candidates: string[] = [];
+	for (let length = segments.length; length >= 1; length--) {
+		candidates.push(segments.slice(0, length).join(" · "));
+	}
+	return candidates;
+}
+
+/** `left …gap… right` fitted to width; telemetry drops progressively. */
 function composeRow(row: HudRow, width: number): string {
-	const right = row.right ?? "";
-	const rightWidth = visibleWidth(right);
-	if (right && rightWidth + 6 <= width) {
+	const candidates = row.rightCandidates ?? (row.right ? [row.right] : []);
+	for (const right of candidates) {
+		const rightWidth = visibleWidth(right);
+		const minimumLeft = Math.min(
+			visibleWidth(row.left),
+			Math.max(10, Math.floor(width * 0.4)),
+		);
+		if (rightWidth + minimumLeft + 2 > width) continue;
 		const left = truncateToWidth(row.left, width - rightWidth - 2);
 		const gap = width - visibleWidth(left) - rightWidth;
 		return `${left}${" ".repeat(gap)}${right}`;

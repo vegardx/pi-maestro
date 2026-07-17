@@ -47,7 +47,10 @@ export function listAgentTargets(input: {
 			...(session ? { tmuxSession: session } : {}),
 			model: agent.model,
 			createdAt: agent.startedAt,
-			updatedAt: Date.now(),
+			updatedAt: agent.completedAt ?? Date.now(),
+			...(agent.completedAt !== undefined
+				? { completedAt: agent.completedAt }
+				: {}),
 			capabilities: {
 				view: Boolean(session),
 				capture: Boolean(session),
@@ -95,6 +98,9 @@ export function listAgentTargets(input: {
 			model: run.profile.model,
 			createdAt: run.createdAt,
 			updatedAt: run.lastEventAt ?? run.updatedAt,
+			...(run.completedAt !== undefined
+				? { completedAt: run.completedAt }
+				: {}),
 			capabilities: {
 				view: Boolean(metadata?.tmuxSession),
 				capture: projection?.confirmed !== false,

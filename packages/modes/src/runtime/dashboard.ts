@@ -7,6 +7,7 @@ import { ledgerSummary, openBlocking } from "../exec/findings.js";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { Plan } from "../schema.js";
+import { hudElapsed } from "./hud.js";
 import type { RuntimeContext } from "./context.js";
 
 /** Install the maestro footer and remember its invalidate handle. */
@@ -89,12 +90,18 @@ export function renderAgentsOverview(
 		if (g.prUrl) {
 			lines.push(`  PR: ${g.prUrl}`);
 		}
-		const workerLive = liveSuffix(snap?.agents.get(`${g.id}/worker`));
+		const workerLive = liveSuffix(
+			snap?.agents.get(`${g.id}/worker`),
+			Date.now(),
+		);
 		if (workerLive) {
 			lines.push(`  └─ worker (${g.worker.mode})${workerLive}`);
 		}
 		for (const a of g.agents) {
-			const live = liveSuffix(snap?.agents.get(`${g.id}/${a.name}`));
+			const live = liveSuffix(
+				snap?.agents.get(`${g.id}/${a.name}`),
+				Date.now(),
+			);
 			lines.push(
 				`  └─ ${a.name} (${a.mode}${a.after.length ? `, after: ${a.after.join(", ")}` : ""})${live}`,
 			);
@@ -103,13 +110,20 @@ export function renderAgentsOverview(
 	return lines.join("\n");
 }
 
-/** " — status · Nin/Nout · N turns · cache NN%" for a live agent, or "". */
-function liveSuffix(agent: ExecutionAgentSnapshot | undefined): string {
+/** " — status · elapsed · Nin/Nout · N turns · cache NN%" or "". */
+function liveSuffix(
+	agent: ExecutionAgentSnapshot | undefined,
+	now: number,
+): string {
 	if (!agent) return "";
 	const t = agent.tokens;
+	const prompt =
+		t.promptTokens ??
+		t.input + (t.cacheRead ?? 0) + (t.cacheWrite ?? 0);
 	const cache =
-		agent.prefixCacheHitRate !== undefined
-			? ` · prefix ${Math.round(agent.prefixCacheHitRate * 100)}%`
+		(t.cacheRead ?? 0) > 0 && prompt > 0
+			? ` · cache ${Math.round(((t.cacheRead ?? 0) / prompt) * 100)}%`
 			: "";
-	return ` — ${agent.status} · ${t.input}in/${t.output}out · ${t.turns} turns${cache}`;
+	const elapsed = hudElapsed((agent.completedAt ?? now) - agent.startedAt);
+	return ` — ${agent.status} · ${elapsed} · ${prompt}in/${t.output}out · ${t.turns} turns${cache}`;
 }

@@ -288,7 +288,9 @@ describe("renderAgentsOverview", () => {
 			}),
 		});
 		const out = renderAgentsOverview(engine.get(), handle);
-		expect(out).toContain("worker (full) — working · 5000in/120out · 9 turns");
+		expect(out).toContain(
+			"worker (full) — working · 0s · 5000in/120out · 9 turns",
+		);
 		expect(out).toContain(
 			"Blocked: ship gate: security-audit requested changes",
 		);

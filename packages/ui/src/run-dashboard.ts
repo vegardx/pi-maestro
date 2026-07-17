@@ -52,7 +52,10 @@ export function renderRunDashboard(
 			truncate(run.profile.profile, profileWidth),
 			profileWidth,
 		);
-		const elapsed = padRight(formatElapsed(now - run.createdAt), 6);
+		const elapsed = padRight(
+			formatElapsed((run.completedAt ?? now) - run.createdAt),
+			6,
+		);
 		const status = padRight(run.status, 10);
 		const detail = progress?.text ? palette.dim(progress.text) : "";
 		const head = `${glyph} ${palette.accent(profile)} ${palette.muted(status)} ${palette.muted(elapsed)}`;

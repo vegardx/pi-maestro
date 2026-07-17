@@ -66,8 +66,11 @@ function agentsSnap(): HudSnapshot {
 				label: "worker · auth-api",
 				status: "running",
 				startedAt: NOW - 252_000,
+				model: "fable-5",
+				effort: "high",
 				note: "fable-5",
 				targetId: "worker:auth-api/worker",
+				capabilities: { view: true, steer: true, interrupt: true, kill: true },
 				children: [
 					{
 						key: "run:r1",
@@ -76,6 +79,12 @@ function agentsSnap(): HudSnapshot {
 						startedAt: NOW - 30_000,
 						note: "gate: review",
 						targetId: "run:r1",
+						capabilities: {
+							view: true,
+							steer: true,
+							interrupt: true,
+							kill: true,
+						},
 					},
 					{
 						key: "run:r2",
@@ -83,6 +92,12 @@ function agentsSnap(): HudSnapshot {
 						status: "done",
 						startedAt: NOW - 90_000,
 						targetId: "run:r2",
+						capabilities: {
+							view: true,
+							steer: false,
+							interrupt: false,
+							kill: true,
+						},
 					},
 				],
 			},
@@ -91,6 +106,7 @@ function agentsSnap(): HudSnapshot {
 				label: "worker · billing",
 				status: "done",
 				startedAt: NOW - 600_000,
+				completedAt: NOW - 300_000,
 				note: "fable-5",
 				targetId: "worker:billing/worker",
 				children: [
@@ -99,6 +115,7 @@ function agentsSnap(): HudSnapshot {
 						label: "review/style · billing",
 						status: "done",
 						startedAt: NOW - 500_000,
+						completedAt: NOW - 400_000,
 						targetId: "run:r3",
 					},
 				],
@@ -146,10 +163,10 @@ describe("HUD expanded + focused", () => {
 		const lines = c.render(W);
 		// First line: the stratum's own top edge — a full-width plain rule.
 		expect(lines[0]).toBe("─".repeat(W));
-		// Last line: the action hints for the focused tab.
-		expect(lines[lines.length - 1]).toContain("enter attach");
+		// Last line: selected-row capabilities drive contextual hints.
+		expect(lines[lines.length - 1]).toContain("↵ view");
 		expect(lines[lines.length - 1]).toContain("S steer");
-		expect(lines[lines.length - 1]).toContain("I interrupt");
+		expect(lines[lines.length - 1]).toContain("I stop");
 		expect(lines[lines.length - 1]).toContain("K fail");
 	});
 
@@ -158,7 +175,7 @@ describe("HUD expanded + focused", () => {
 		const lines = c.render(W);
 		expect(lines[0]).toBe("─".repeat(W));
 		expect(lines[1]).toContain("no agents");
-		expect(lines[lines.length - 1]).toContain("tab switch");
+		expect(lines[lines.length - 1]).toContain("[/] tab");
 	});
 });
 
@@ -175,12 +192,12 @@ describe("HUD pinned (passive) state", () => {
 		// Focused first: hint present, selection inverse band on a row.
 		let lines = c.render(W);
 		expect(lines.some((l) => l.includes("\u001b[7m"))).toBe(true);
-		expect(lines[lines.length - 1]).toContain("tab switch");
+		expect(lines[lines.length - 1]).toContain("[/] tab");
 		// Pin: focus back on the input, panel stays expanded.
 		state.focus = "input";
 		lines = c.render(W);
 		// No hint row, no selection highlight.
-		expect(lines.join("\n")).not.toContain("tab switch");
+		expect(lines.join("\n")).not.toContain("[/] tab");
 		expect(lines.some((l) => l.includes("\u001b[7m"))).toBe(false);
 		// Rules dim; every content line muted; tone accents suppressed.
 		expect(lines[0]).toBe(`<dim>${"─".repeat(W)}</dim>`);
@@ -206,6 +223,56 @@ describe("HUD agents tab", () => {
 		expect(lines[5]).toContain("research · caching-strategy");
 		// No bottom rule when nothing scrolls (hint is the last line).
 		expect(lines[lines.length - 2]).not.toMatch(/^─+$/);
+	});
+
+	it("freezes terminal elapsed while live rows continue ticking", () => {
+		let now = NOW;
+		const snap = agentsSnap();
+		const state: HudFocusState = { focus: "agents", expanded: true };
+		const c = new HudComponent({
+			state,
+			data: () => snap,
+			actions: actions(),
+			now: () => now,
+		});
+		c.handleInput("\u001b[D"); // collapse auth so billing is visible
+		const first = c.render(W).join("\n");
+		expect(first).toContain("worker · billing · 1 subagents");
+		expect(first).toContain("done · 5m00s");
+		expect(first).toContain("running · 4m12s");
+		now += 60_000;
+		const second = c.render(W).join("\n");
+		expect(second).toContain("done · 5m00s");
+		expect(second).toContain("running · 5m12s");
+	});
+
+	it("drops telemetry progressively as width narrows", () => {
+		const snap = agentsSnap();
+		const worker = snap.agents[0] as (typeof snap.agents)[number];
+		const rich: HudSnapshot = {
+			...snap,
+			agents: [
+				{
+					...worker,
+					input: 125_000,
+					output: 8_000,
+					cacheRead: 100_000,
+					cacheWrite: 5_000,
+				},
+			],
+		};
+		const { c } = hud(rich);
+		const wide = c.render(100)[1];
+		expect(wide).toContain("↑125k ↓8k");
+		expect(wide).toContain("CH 80%");
+		expect(wide).toContain("fable-5 (high)");
+		const medium = c.render(58)[1];
+		expect(medium).toContain("running · 4m12s");
+		expect(medium).not.toContain("fable-5 (high)");
+		const narrow = c.render(34)[1];
+		expect(narrow).toContain("worker · a");
+		expect(narrow).toContain("running · 4m12s");
+		expect(narrow).not.toContain("↑125k");
 	});
 
 	it("manual folds are sticky and beat the auto rule", () => {

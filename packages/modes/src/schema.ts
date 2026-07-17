@@ -199,6 +199,10 @@ export interface Deliverable {
 	// ── Runtime state ──
 	/** Git branch (typically feat/<id>). */
 	branch?: string;
+	/** Immutable commit the delivery branch was created from. */
+	baseSha?: string;
+	/** Last clean committed revision inspected by a completed code stage. */
+	lastReviewedHead?: string;
 	/** Worktree path while active; cleared on completion. */
 	worktreePath?: string;
 	/**
@@ -945,13 +949,22 @@ export function validatePlanShape(
 				`deliverable \`${g.id}\`: only failed status may carry failure detail`,
 			);
 		}
-		if (
-			g.completedAt !== undefined &&
+		if (g.completedAt !== undefined &&
 			!Number.isFinite(Date.parse(g.completedAt))
 		) {
 			problems.push(
 				`deliverable \`${g.id}\`: completedAt must be an ISO timestamp`,
 			);
+		}
+		for (const [field, sha] of [
+			["baseSha", g.baseSha],
+			["lastReviewedHead", g.lastReviewedHead],
+		] as const) {
+			if (sha !== undefined && !/^[0-9a-f]{40}$/i.test(sha)) {
+				problems.push(
+					`deliverable \`${g.id}\`: ${field} must be an immutable 40-character commit SHA`,
+				);
+			}
 		}
 		for (const [index, finding] of (g.findings ?? []).entries()) {
 			for (const problem of validateStructuredFinding(finding)) {

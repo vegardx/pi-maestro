@@ -378,6 +378,8 @@ export class PlanEngine {
 				| "workspace"
 				| "repo"
 				| "branch"
+				| "baseSha"
+				| "lastReviewedHead"
 				| "worktreePath"
 				| "sessionPath"
 				| "sessionName"

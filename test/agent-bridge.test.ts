@@ -61,13 +61,19 @@ describe("AgentBridge", () => {
 
 	function createBridge(
 		agentId = "test-agent",
-		opts?: { requestTimeoutMs?: number },
+		opts?: {
+			requestTimeoutMs?: number;
+			persistStopNotice?: ConstructorParameters<typeof AgentBridge>[0]["persistStopNotice"];
+			childRuns?: ConstructorParameters<typeof AgentBridge>[0]["childRuns"];
+		},
 	): AgentBridge {
 		bridge = new AgentBridge({
 			pi: mockPi as any,
 			socketPath,
 			agentId,
 			requestTimeoutMs: opts?.requestTimeoutMs,
+			persistStopNotice: opts?.persistStopNotice,
+			childRuns: opts?.childRuns,
 		});
 		return bridge;
 	}
@@ -416,6 +422,72 @@ describe("AgentBridge", () => {
 			{ outcome: string },
 		];
 		expect(duplicateMessage.outcome).toBe("already-interrupting");
+	});
+
+	it("cooperatively prepares stop before runtime shutdown", async () => {
+		const notices: unknown[] = [];
+		const stop = vi.fn();
+		const childRuns = {
+			list: () => [
+				{
+					runId: "child-1",
+					status: "running",
+				} as never,
+			],
+			subscribe: () => () => {},
+			steer: vi.fn(),
+			interrupt: vi.fn(),
+			capture: vi.fn(),
+			stop,
+		};
+		const b = createBridge("agent-1", {
+			persistStopNotice: (notice) => notices.push(notice),
+			childRuns: () => childRuns,
+		});
+		const connected = waitForEvent(server, "connected");
+		b.start(mockCtx as any);
+		await connected;
+		b.onTurnStart();
+		b.recordUsage({ input: 10, output: 2 });
+		await wait(10);
+
+		const messages: any[] = [];
+		server.on("message", (_id, msg) => messages.push(msg));
+		server.send("agent-1", {
+			type: "prepareStop",
+			id: "stop-1",
+			requestedAt: 100,
+			deadlineAt: 200,
+			reason: "host exit",
+		});
+		await wait(50);
+
+		expect(notices).toEqual([
+			expect.objectContaining({
+				version: 1,
+				requestedAt: 100,
+				deadlineAt: 200,
+				children: ["child-1"],
+				usageRevision: 1,
+				activeTurn: true,
+			}),
+		]);
+		expect(mockCtx.abort).toHaveBeenCalledOnce();
+		expect(stop).toHaveBeenCalledWith("child-1", "host exit");
+		expect(messages).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ type: "tokens", snapshot: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: 0, turns: 0 } }),
+				expect.objectContaining({ type: "status", status: "stopping" }),
+				expect.objectContaining({
+					type: "prepareStopAck",
+					id: "stop-1",
+					children: 1,
+					usageRevision: 1,
+					outcome: "cooperative",
+				}),
+			]),
+		);
+		expect(mockCtx.shutdown).toHaveBeenCalledOnce();
 	});
 
 	it("calls ctx.shutdown on shutdown message", async () => {

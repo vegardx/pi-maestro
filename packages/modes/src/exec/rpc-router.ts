@@ -11,6 +11,7 @@ import type {
 	MaestroMessage,
 	MaestroRpcServer,
 	PingMessage,
+	PrepareStopMessage,
 	ResponseFor,
 	SummarizeMessage,
 } from "@vegardx/pi-rpc";
@@ -36,6 +37,7 @@ export type MaestroRequestMessage =
 	| SummarizeMessage
 	| InterruptMessage
 	| ChildRunControlMessage
+	| PrepareStopMessage
 	| PingMessage;
 
 /** Response `type` expected for each outbound request `type`. */
@@ -43,6 +45,7 @@ const RESPONSE_TYPE = {
 	summarize: "summary",
 	interrupt: "interruptAck",
 	childRunControl: "childRunControlResult",
+	prepareStop: "prepareStopAck",
 	ping: "pong",
 } as const satisfies Record<MaestroRequestMessage["type"], string>;
 

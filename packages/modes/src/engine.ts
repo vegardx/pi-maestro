@@ -6,6 +6,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ModeTransitionGate, ModeTransitionSuggestion } from "@vegardx/pi-contracts";
 import type { ReviewLedger } from "./exec/findings.js";
+import type { WorkflowAnalyticsLedger } from "./workflow-analytics.js";
 import {
 	type AgentMode,
 	type AgentSpec,
@@ -579,6 +580,19 @@ export class PlanEngine {
 			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
 			if (ledger) g.reviewLedger = ledger;
 			else delete g.reviewLedger;
+			g.updatedAt = this.now();
+		});
+	}
+
+	setWorkflowAnalytics(
+		deliverableId: string,
+		ledger: WorkflowAnalyticsLedger | undefined,
+	): void {
+		this.mutate((plan) => {
+			const g = findDeliverable(plan, deliverableId);
+			if (!g) throw new Error(`unknown deliverable: ${deliverableId}`);
+			if (ledger) g.workflowAnalytics = structuredClone(ledger);
+			else delete g.workflowAnalytics;
 			g.updatedAt = this.now();
 		});
 	}

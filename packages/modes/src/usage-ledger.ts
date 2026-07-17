@@ -119,8 +119,10 @@ export class UsageLedger implements UsageLedgerV1 {
 			...checkpoint,
 			snapshot: normalizeSnapshot(checkpoint.snapshot),
 		};
-		this.entries.set(key, { checkpoint: normalized, ownerGeneration });
+		// Persistence is authoritative: write before publishing the in-memory
+		// projection so a failed atomic checkpoint cannot be acknowledged.
 		this.onAccepted?.(normalized);
+		this.entries.set(key, { checkpoint: normalized, ownerGeneration });
 		return true;
 	}
 
@@ -128,7 +130,6 @@ export class UsageLedger implements UsageLedgerV1 {
 	restore(checkpoints: readonly UsageCheckpoint[]): number {
 		let restored = 0;
 		for (const checkpoint of checkpoints) {
-			const onAccepted = this.onAccepted;
 			// Inline acceptance avoids replaying restored checkpoints to disk.
 			const key = usageSourceKey(checkpoint.source);
 			const current = this.entries.get(key);
@@ -142,7 +143,6 @@ export class UsageLedger implements UsageLedgerV1 {
 				(current && checkpoint.revision <= current.checkpoint.revision)
 			)
 				continue;
-			void onAccepted;
 			this.entries.set(key, {
 				checkpoint: {
 					...checkpoint,

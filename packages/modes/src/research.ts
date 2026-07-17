@@ -1,6 +1,5 @@
-// The recon/plan research loop: the `research` tool fans out headless
-// subagents (codebase / web / advisor / consult) through the subagents.v1
-// capability. Each agent writes a full report to `<planDir>/research/` —
+// The recon/plan research loop fans out typed codebase or web assignments
+// through agents.v1. Each agent writes a full report to `<planDir>/research/`;
 // the durable, curated location every downstream consumer (knowledge doc,
 // carry-forward harvest, execution workers) reads — and the tool delivers
 // only a bounded digest per question; `dig(ref)` returns a report's full
@@ -31,26 +30,18 @@ import { Type } from "@sinclair/typebox";
 import type {
 	AgentsCapabilityV1,
 	AskCapabilityV1,
-	ModelRole,
 	RunResult,
-	SubagentsCapabilityV1,
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngine } from "./engine.js";
-import { panelTopologyGaps } from "./personas.js";
 import { type Plan, slugify } from "./schema.js";
 import type { ResearchWatchdogSettings } from "./settings.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
-export const RESEARCH_KINDS = [
-	"codebase",
-	"web",
-	"advisor",
-	"consult",
-] as const;
+export const RESEARCH_KINDS = ["codebase", "web"] as const;
 export type ResearchKind = (typeof RESEARCH_KINDS)[number];
 
 /** Kinds a run VIEW can carry — research kinds plus /verify's verifiers,
@@ -81,24 +72,9 @@ export interface ResearchRunView {
 
 export interface ResearchDeps {
 	readonly engine: () => PlanEngine | undefined;
-	/** Agent API used for ordinary research assignments. */
-	readonly agents?: () => AgentsCapabilityV1 | undefined;
-	/** @deprecated Test/compatibility seam; wrapped as ordinary assignments. */
-	readonly subagents?: () => SubagentsCapabilityV1 | undefined;
+	/** Agent API used for research assignments. */
+	readonly agents: () => AgentsCapabilityV1 | undefined;
 	readonly ask: () => AskCapabilityV1 | undefined;
-	/** @deprecated Kinds own extension composition in agents.v1. */
-	readonly researchToolsPath?: () => string;
-	/** @deprecated Exact model resolution is owned by agents.v1. */
-	readonly resolveRoleModel?: (
-		ctx: ExtensionContext,
-		role: Extract<ModelRole, "research" | "advisor">,
-		choice?: { model?: string; effort?: ThinkingLevel },
-	) => Promise<{
-		model: string;
-		effort?: ThinkingLevel;
-		allowedModels?: readonly string[];
-		allowedEfforts?: readonly ThinkingLevel[];
-	}>;
 	/** Materialize a draft plan (force) and return its plan directory. */
 	readonly ensurePlanDir: (ctx: ExtensionContext) => string;
 	/** Run lifecycle callbacks (widget rows + chat cards). */
@@ -146,144 +122,6 @@ export function createResearchTools(deps: ResearchDeps): ToolDefinition[] {
 	];
 }
 
-function compatibilityAgents(
-	deps: ResearchDeps,
-	ctx: ExtensionContext,
-): AgentsCapabilityV1 | undefined {
-	const subagents = deps.subagents?.();
-	if (!subagents) return undefined;
-	return {
-		resolve: async (request) => ({
-			agentId: request.agentId,
-			kind: request.kind,
-			presetId: "compatibility",
-			modelSetId: "compatibility",
-			optionId: "compatibility",
-			modelId: request.model ?? "session",
-			effort: request.effort ?? "medium",
-			runtime: {
-				mode: "read-only",
-				transport: "tmux",
-				tools: {},
-				session: "ephemeral",
-				isolation: "strong",
-			},
-			focus: request.focus,
-			rationale: request.rationale,
-			inputContracts: request.inputContracts,
-			outputContracts: request.outputContracts ?? [],
-			provenance: {
-				source: request.model || request.effort ? "explicit" : "session",
-				presetId: "compatibility",
-				modelSetId: "compatibility",
-				optionId: "compatibility",
-				resolvedAt: new Date().toISOString(),
-			},
-			resolvedAt: new Date().toISOString(),
-			source: request.model || request.effort ? "explicit" : "session",
-		}),
-		options: async () => {
-			throw new Error(
-				"planning options unavailable through compatibility transport",
-			);
-		},
-		run: async (request) => {
-			const researchKind = String(
-				request.meta?.researchKind ?? "codebase",
-			) as ResearchKind;
-			const role =
-				researchKind === "advisor" || researchKind === "consult"
-					? "advisor"
-					: "research";
-			const resolved = await deps.resolveRoleModel?.(ctx, role, {
-				model: request.model,
-				effort: request.effort,
-			});
-			const tools =
-				researchKind === "web"
-					? ["read", "grep", "find", "ls", "websearch", "webfetch", "context7"]
-					: ["read", "grep", "find", "ls"];
-			const watchdog = deps.watchdog?.(ctx) ?? {
-				stallMs: 120_000,
-				softMs: 240_000,
-				hardMs: 600_000,
-			};
-			const handle = subagents.spawn(request.prompt, {
-				profile: "research",
-				cwd: request.cwd,
-				model: resolved?.model ?? request.model,
-				thinking:
-					resolved?.effort ??
-					request.effort ??
-					(role === "advisor" ? "high" : "low"),
-				role,
-				displayName: request.displayName,
-				tools: { allow: tools },
-				watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
-				...(deps.researchToolsPath
-					? { extraExtensions: [deps.researchToolsPath()] }
-					: {}),
-				appendSystemPrompt:
-					researchKind === "consult"
-						? "The maestro deliberately WITHHELD its preference. Make an unbiased recommendation."
-						: "Return a factual research report ending with a ## Digest block.",
-				meta: request.meta,
-			});
-			return {
-				runId: handle.id,
-				handle,
-				assignment: {
-					agentId: handle.id,
-					kind: request.kind,
-					presetId: "compatibility",
-					modelSetId: "compatibility",
-					optionId: "compatibility",
-					modelId: resolved?.model ?? request.model ?? "session",
-					effort:
-						resolved?.effort ??
-						request.effort ??
-						(role === "advisor" ? "high" : "low"),
-					runtime: {
-						mode: "read-only",
-						transport: "tmux",
-						tools: {},
-						session: "ephemeral",
-						isolation: "strong",
-					},
-					focus: request.prompt,
-					rationale: "Compatibility research assignment.",
-					inputContracts: [],
-					outputContracts: [],
-					provenance: {
-						source: "session",
-						presetId: "compatibility",
-						modelSetId: "compatibility",
-						optionId: "compatibility",
-						resolvedAt: new Date().toISOString(),
-					},
-					resolvedAt: new Date().toISOString(),
-					source: "session",
-				},
-			};
-		},
-		batch: async (requests) => {
-			const agent = compatibilityAgents(deps, ctx);
-			if (!agent) return [];
-			return Promise.all(requests.map((request) => agent.run(request)));
-		},
-		list: () => subagents.list(),
-		status: (runId) => subagents.get(runId),
-		steer: (runId, guidance) => subagents.steer(runId, guidance),
-		interrupt: async (runId, reason) => {
-			if (subagents.interrupt) await subagents.interrupt(runId, reason);
-			else subagents.stop(runId, reason);
-		},
-		capture: async (runId, lines) => subagents.capture?.(runId, lines),
-		result: async (runId) => subagents.get(runId)?.result,
-		kinds: () => [],
-	};
-}
-
 const ResearchParams = Type.Object({
 	questions: Type.Array(
 		Type.Object({
@@ -293,23 +131,15 @@ const ResearchParams = Type.Object({
 					"several narrow questions rather than one sweeping one.",
 			}),
 			kind: Type.Optional(
-				Type.Union(
-					RESEARCH_KINDS.map((k) => Type.Literal(k)),
-					{
-						description:
-							"codebase (default): read/grep this repo. web: internet " +
-							"research (Exa search, page fetch, Context7 library docs). " +
-							"advisor: a different model reviews the draft plan. consult: " +
-							"a different model makes an unbiased call on a specific fork — " +
-							"put the options in the question and WITHHOLD your own " +
-							"preference (use this for an escalated decision).",
-					},
-				),
+				Type.Union(RESEARCH_KINDS.map((kind) => Type.Literal(kind)), {
+					description:
+						"codebase (default): repository research. web: public sources and library docs.",
+				}),
 			),
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Exact provider/model id from the active research/advisor pool. Omit for the first available default.",
+						"Exact provider/model id from the selected research kind's exact model set.",
 				}),
 			),
 			effort: Type.Optional(
@@ -342,23 +172,15 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 		name: "research",
 		label: "Research",
 		description:
-			"Fan out parallel research agents and get their reports back. Batch " +
-			"ALL questions for this round into ONE call — they run concurrently. " +
-			"codebase/web choices are constrained by the active research role pool; " +
-			"advisor/consult use the advisor pool. Omit model/effort for the first " +
-			"available defaults; explicit exact choices are rejected unless allowed, " +
-			"available, and mutually compatible. Prefer effort before a costlier " +
-			"alternate. Each agent is read-only; web agents can search (Exa), fetch " +
-			"pages, and pull library docs (Context7). You get back a bounded digest " +
-			"per question; call `dig(ref)` for a report's full analysis if needed.",
+			"Fan out parallel typed research agents. Batch all questions for a round into one call. Codebase and web are distinct registered kinds with exact model options. Each agent is read-only and produces a bounded digest; call dig(ref) for the full persisted report.",
 		promptSnippet:
-			"research — fan out parallel research agents (codebase/web/advisor); batch questions into one call.",
+			"research — fan out parallel codebase/web research assignments; batch questions into one call.",
 		parameters: ResearchParams,
 		renderResult: renderCollapsedResult,
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) return error("no plan active — run /plan first");
-			const capability = deps.agents?.() ?? compatibilityAgents(deps, ctx);
+			const capability = deps.agents();
 			if (!capability) {
 				return error("research unavailable: agents.v1 is not loaded");
 			}
@@ -655,17 +477,8 @@ export function createDigTool(deps: ResearchDeps): ToolDefinition {
 
 function assignmentKind(
 	kind: ResearchKind,
-): "codebase-research" | "web-research" | "plan-review" | "consult" {
-	switch (kind) {
-		case "codebase":
-			return "codebase-research";
-		case "web":
-			return "web-research";
-		case "advisor":
-			return "plan-review";
-		case "consult":
-			return "consult";
-	}
+): "codebase-research" | "web-research" {
+	return kind === "web" ? "web-research" : "codebase-research";
 }
 
 function buildResearchPrompt(
@@ -676,22 +489,6 @@ function buildResearchPrompt(
 ): string {
 	const lines: string[] = ["# Research Brief", "", question];
 	if (context) lines.push("", "## Context", context);
-	if (kind === "advisor") {
-		lines.push("", "## Draft Plan Under Review", renderPlanOutline(plan));
-		const gaps = panelTopologyGaps(plan.deliverables);
-		if (gaps.length) {
-			lines.push(
-				"",
-				"## Automated Panel-Topology Gaps",
-				"These were found mechanically — confirm them and look for what the check can't judge (sensitivity, missing multi-model escalation):",
-				...gaps.map((g) => `- ${g}`),
-			);
-		}
-	} else if (kind === "consult") {
-		// The advisor decides a specific fork; the whole-plan view is the context
-		// the maestro holds and is consulting on its behalf.
-		lines.push("", "## Plan Context", renderPlanOutline(plan));
-	}
 	return lines.join("\n");
 }
 
@@ -867,12 +664,3 @@ export function extractDigest(report: string): string {
 }
 
 // ─── Settle helpers ──────────────────────────────────────────────────────────
-
-/**
- * The one steer a slow-but-productive child gets at the soft deadline. A fresh
- * user message also tends to break tool loops, which liveness can't detect.
- */
-const WRAP_UP_STEER =
-	"Time budget nearly exhausted. Stop researching NOW and write your final " +
-	"report from what you already have: full findings with evidence, then the " +
-	"`## Digest` block. State explicitly what you did not get to.";

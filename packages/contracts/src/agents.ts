@@ -24,7 +24,6 @@ export const AGENT_KINDS = [
 	"general",
 	"codebase-research",
 	"web-research",
-	"consult",
 	"plan-review",
 	"practical-review",
 	"adversarial-review",

@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES, isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
 import { defineExtension, redactSecrets } from "@vegardx/pi-core";
-import { resolveRolePoolWithin } from "@vegardx/pi-models";
+import { resolveExactModelSelection } from "@vegardx/pi-models";
 import { assembleSummary, buildFileSections, buildPrompt } from "./prompt.js";
 import { readSmartCompactSettings } from "./settings.js";
 
@@ -105,11 +105,10 @@ export default defineExtension(
 
 			const settings = readSmartCompactSettings(ctx.cwd);
 
-			const resolution = await resolveRolePoolWithin(
-				ctx,
-				{ role: "compact-summarizer", requireApiKey: true },
-				settings.timeoutMs,
-			);
+			const resolution = await resolveExactModelSelection(ctx, {
+				role: "compact-summarizer",
+				requireApiKey: true,
+			});
 			const resolved = resolution.selected;
 			if (!resolved?.apiKey) {
 				notifyOnce(

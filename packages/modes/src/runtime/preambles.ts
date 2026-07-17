@@ -30,7 +30,6 @@ structure, or start. Nothing is being built here.
    the round into ONE call; they run as parallel agents:
    - \`codebase\` — what exists in this repo: files, patterns, seams, tests.
    - \`web\` — internet research: search, page fetches, library docs.
-   - \`advisor\` — a different model challenges your current thinking.
    Research is **non-blocking**: the tool returns immediately and the whole
    round's reports arrive later as ONE follow-up message. Fire a round, then
    either do independent work or end the turn — the reports will wake you.

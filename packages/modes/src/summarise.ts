@@ -11,7 +11,7 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { resolveRolePoolWithin } from "@vegardx/pi-models";
+import { resolveExactModelSelection } from "@vegardx/pi-models";
 import type { SummariseFn } from "./compaction.js";
 
 /** Abort the call when pi's signal fires OR our own timeout elapses. */
@@ -43,11 +43,10 @@ export function createModesSummariser(
 	timeoutMs: number,
 ): SummariseFn {
 	return async ({ messages, preamble, maxTokens, signal }) => {
-		const resolution = await resolveRolePoolWithin(
-			ctx,
-			{ role: "plan-summarizer", requireApiKey: true },
-			timeoutMs,
-		);
+		const resolution = await resolveExactModelSelection(ctx, {
+			role: "plan-summarizer",
+			requireApiKey: true,
+		});
 		const resolved = resolution.selected;
 		if (!resolved?.apiKey) return null;
 		if (messages.length === 0) return null;

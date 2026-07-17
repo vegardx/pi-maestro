@@ -23,7 +23,6 @@ import {
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
-import type { ReviewLedger } from "./exec/findings.js";
 import type { WorkflowAnalyticsLedger } from "./workflow-analytics.js";
 
 export {
@@ -100,32 +99,6 @@ export interface AgentSpec {
 	after: string[];
 }
 
-// ─── Sub-agent specification (persona panel) ─────────────────────────────────
-
-/**
- * One entry in a deliverable's up-front sub-agent plan (Phase 7). The worker
- * runs these as headless one-shot subagents. Reviewers resolve the active
- * `reviewer` role pool; exact optional model/effort choices persist in the spec.
- */
-export interface SubAgentSpec {
-	/** Unique name within the deliverable. */
-	name: string;
-	/** Persona id from the registry (PERSONAS). */
-	persona: string;
-	/** Optional per-deliverable specialization of the persona's focus. */
-	focus?: string;
-	/** Optional exact reviewer-pool model choice. */
-	model?: string;
-	/** Required rationale when this persona is intentionally run on another model. */
-	modelJustification?: string;
-	/** Effort override; defaults through reviewer policy/persona behavior. */
-	effort?: ThinkingLevel;
-	/** "review" = verdict-gated; "helper" = info scout. Default "review". */
-	kind?: "review" | "helper";
-	/** Required reviews must reach SHIPPED before the deliverable ships. */
-	required?: boolean;
-}
-
 // ─── Worker specification ────────────────────────────────────────────────────
 
 export interface WorkerSpec {
@@ -187,16 +160,8 @@ export interface Deliverable {
 	worker: WorkerSpec;
 	/** Support agents with an internal dependency graph. */
 	agents: AgentSpec[];
-	/**
-	 * The worker's up-front review/helper panel (Phase 7). Composed from the
-	 * persona registry at plan time; the worker runs it. Optional/absent on
-	 * older plans, which use `agents` instead.
-	 */
-	subAgents?: SubAgentSpec[];
 	/** Gating work items the worker must complete. */
 	tasks: WorkItem[];
-	/** Fix+verify cycle cap before the deliverable blocks. Default 3. */
-	maxFixRounds?: number;
 	// ── Runtime state ──
 	/** Git branch (typically feat/<id>). */
 	branch?: string;
@@ -229,19 +194,6 @@ export interface Deliverable {
 	/** PR URL once shipped. */
 	prUrl?: string;
 	prNumber?: number;
-	/**
-	 * Human gate overrides, recorded permanently. A waiver is the durable
-	 * counterpart of overrideReviewerVerdict's in-memory verdict: /verify
-	 * treats waived findings as acknowledged instead of re-flagging them.
-	 */
-	waivers?: ReviewWaiver[];
-	/**
-	 * The panel review ledger (minted findings + resolution state across fix
-	 * cycles). Persisted so the gate survives worker respawns and maestro
-	 * restarts — the in-memory verdict maps are a cache of this, never the
-	 * source of truth.
-	 */
-	reviewLedger?: ReviewLedger;
 	/** Canonical workflow provenance and aggregate run analytics for PR projection. */
 	workflowAnalytics?: WorkflowAnalyticsLedger;
 	/** Recoverable or terminal failure detail when status is `failed`. */
@@ -254,24 +206,6 @@ export interface Deliverable {
 	completedAt?: string;
 	createdAt: string;
 	updatedAt: string;
-}
-
-/** A human's recorded acceptance of a blocking review verdict (gate override). */
-export interface ReviewWaiver {
-	/** Reviewer whose verdict the human overrode. */
-	reviewer: string;
-	/** The mandatory override note — why the findings don't block. */
-	reason: string;
-	/**
-	 * Canonical ledger id of the waived finding (when the waiver targets one
-	 * finding rather than a whole verdict). claim/file carry the durable
-	 * identity across systems — panel ids and /verify ids never match, so
-	 * cross-loop matching is semantic (claim text), not by id.
-	 */
-	findingId?: string;
-	claim?: string;
-	file?: string;
-	at: string;
 }
 
 // ─── Plan ────────────────────────────────────────────────────────────────────
@@ -1120,39 +1054,6 @@ export function validatePlanShape(
 						`deliverable \`${g.id}\`: agent \`${agent.name}\` after references unknown \`${ref}\``,
 					);
 				}
-			}
-		}
-
-		// Review panel identity/model policy.
-		const reviewerNames = new Set<string>();
-		const personaModels = new Map<string, Set<string>>();
-		for (const reviewer of g.subAgents ?? []) {
-			if (reviewerNames.has(reviewer.name)) {
-				problems.push(
-					`deliverable \`${g.id}\`: duplicate reviewer name \`${reviewer.name}\``,
-				);
-			}
-			reviewerNames.add(reviewer.name);
-			if (!reviewer.model) continue;
-			const models = personaModels.get(reviewer.persona) ?? new Set<string>();
-			models.add(reviewer.model);
-			personaModels.set(reviewer.persona, models);
-		}
-		for (const [persona, models] of personaModels) {
-			if (models.size > 2) {
-				problems.push(
-					`deliverable \`${g.id}\`: persona \`${persona}\` uses more than two distinct models`,
-				);
-			}
-			if (
-				models.size > 1 &&
-				!(g.subAgents ?? []).some(
-					(item) => item.persona === persona && item.modelJustification?.trim(),
-				)
-			) {
-				problems.push(
-					`deliverable \`${g.id}\`: cross-model persona \`${persona}\` requires modelJustification`,
-				);
 			}
 		}
 

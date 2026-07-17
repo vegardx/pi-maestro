@@ -2,11 +2,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type ModeName,
 	type ModeTransitionGate,
-	type ModeTransitionSuggestion,
 	type ModeTransitionValidation,
 } from "@vegardx/pi-contracts";
 import { planFingerprint, type PlanEngine } from "./engine.js";
-import { panelTopologyGaps } from "./personas.js";
 import { renderPlanOutline } from "./research.js";
 import { planPhase, validatePlanShape, type Plan } from "./schema.js";
 
@@ -23,7 +21,7 @@ export interface TransitionGateDefinition {
 	readonly edges: readonly TransitionEdge[];
 	validate(plan: Plan): readonly ModeTransitionValidation[];
 	prompt(plan: Plan, validations: readonly ModeTransitionValidation[]): string;
-	suggestions(plan: Plan): readonly ModeTransitionSuggestion[];
+	suggestions(_plan: Plan): readonly never[];
 }
 
 export interface TransitionGateCoordinatorDeps {
@@ -137,20 +135,12 @@ export class TransitionGateCoordinator {
 			return false;
 		}
 
-		const suggestions = [...definition.suggestions(engine.get())];
-		const autoResolved = suggestions.filter((suggestion) =>
-			isAlreadyApplied(engine.get(), suggestion),
-		);
-		const remaining = suggestions.filter(
-			(suggestion) => !autoResolved.some((item) => item.id === suggestion.id),
-		);
+		const remaining: never[] = [];
 		state = {
 			...state,
 			status: "awaiting-ruling",
 			updatedAt: now(),
 			reviewSummary,
-			suggestions: remaining,
-			autoResolvedSuggestionIds: autoResolved.map((item) => item.id),
 		};
 		engine.setTransitionGate(state);
 
@@ -161,40 +151,21 @@ export class TransitionGateCoordinator {
 			return false;
 		}
 		const answers = await ask.ask([
-			...(remaining.length
-				? [
-						{
-							id: `${id}:changes`,
-							header: "Changes",
-							question: "Which compatible plan changes should Maestro apply?",
-							context: summarizeReview(reviewSummary, validations),
-							multiple: true,
-							options: remaining.map((suggestion) => ({
-								label: suggestion.title,
-								value: suggestion.id,
-								description: suggestion.description,
-							})),
-						},
-					] as const
-				: []),
 			{
 				id: `${id}:ruling`,
 				header: "Ruling",
 				question: `Final ruling for Plan → ${to}?`,
 				context: summarizeReview(reviewSummary, validations),
 				options: [
-					{ label: "Apply selected and enter", value: "apply-and-enter", description: "Apply selected compatible changes, revalidate, then enter." },
-					{ label: "Enter without changes", value: "enter-without", description: "Accept the reviewed plan as-is, then enter." },
+					{ label: "Enter execution", value: "enter-without", description: "Accept the reviewed plan and enter." },
 					{ label: "Stay in plan", value: "stay-in-plan", description: "Do not change mode." },
 				],
-				recommendation: remaining.length ? "apply-and-enter" : "enter-without",
+				recommendation: "enter-without",
 				blocking: true,
 				whyBlocking: "Maestro cannot cross the execution boundary without one final user ruling.",
 			},
 		]);
-		const selectedIds = answers
-			.filter((answer) => answer.questionId === `${id}:changes`)
-			.map((answer) => answer.value);
+		const selectedIds: string[] = [];
 		const decision = answers.find((answer) => answer.questionId === `${id}:ruling`)?.value;
 		const ruledAt = now();
 		state = {
@@ -219,12 +190,6 @@ export class TransitionGateCoordinator {
 			this.block(engine, state, "plan changed before the ruling could be applied", now());
 			ctx.ui.notify("Plan changed before settlement — staying in plan.", "warning");
 			return false;
-		}
-		if (ruling.decision === "apply-and-enter") {
-			engine.applyTransitionSuggestions(
-				fingerprint,
-				remaining.filter((suggestion) => selectedIds.includes(suggestion.id)),
-			);
 		}
 		validations = [...definition.validate(engine.get())];
 		const errors = validations.filter((validation) => validation.level === "error");
@@ -262,7 +227,7 @@ export function createExecutionReadinessGate(): TransitionGateDefinition {
 			"## Canonical structured plan",
 			renderPlanOutline(plan),
 		].join("\n"),
-		suggestions: executionReadinessSuggestions,
+		suggestions: () => [],
 	};
 }
 
@@ -280,50 +245,7 @@ export function executionReadinessValidations(plan: Plan): readonly ModeTransiti
 		if (deliverable.worker.mode === "full" && deliverable.tasks.filter((task) => (task.kind ?? "task") !== "followup").length === 0)
 			result.push({ id: `tasks:${deliverable.id}`, level: "error", message: `${deliverable.id} has no gating work items` });
 	}
-	for (const [index, message] of panelTopologyGaps(plan.deliverables).entries())
-		result.push({ id: `review-topology-${index}`, level: "warning", message });
 	return result;
-}
-
-function executionReadinessSuggestions(plan: Plan): readonly ModeTransitionSuggestion[] {
-	const suggestions: ModeTransitionSuggestion[] = [];
-	for (const deliverable of plan.deliverables) {
-		if (deliverable.worker.mode !== "full") continue;
-		const reviews = (deliverable.subAgents ?? []).filter((item) => (item.kind ?? "review") === "review");
-		if (!reviews.length) {
-			suggestions.push({
-				id: `add-required-reviewer:${deliverable.id}`,
-				kind: "add-required-reviewer",
-				title: `Add required correctness review to ${deliverable.id}`,
-				description: "Ensures code-changing work cannot ship without a blocking review.",
-				deliverableId: deliverable.id,
-				reviewerName: "execution-readiness-review",
-				persona: "correctness-review",
-			});
-			continue;
-		}
-		if (!reviews.some((item) => item.required)) {
-			const reviewer = reviews[0]!;
-			suggestions.push({
-				id: `require-reviewer:${deliverable.id}:${reviewer.name}`,
-				kind: "require-reviewer",
-				title: `Require ${reviewer.name} on ${deliverable.id}`,
-				description: "Turns the existing review into a shipping gate.",
-				deliverableId: deliverable.id,
-				reviewerName: reviewer.name,
-			});
-		}
-	}
-	return suggestions;
-}
-
-function isAlreadyApplied(plan: Plan, suggestion: ModeTransitionSuggestion): boolean {
-	const deliverable = plan.deliverables.find((item) => item.id === suggestion.deliverableId);
-	if (!deliverable) return false;
-	const reviewer = (deliverable.subAgents ?? []).find((item) => item.name === suggestion.reviewerName);
-	return suggestion.kind === "require-reviewer"
-		? reviewer?.required === true
-		: reviewer?.required === true && reviewer.persona === suggestion.persona;
 }
 
 function summarizeReview(review: string, validations: readonly ModeTransitionValidation[]): string {

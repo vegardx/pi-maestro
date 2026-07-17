@@ -216,24 +216,7 @@ export interface ModeTransitionValidation {
 }
 
 /** A narrow plan mutation that a transition review may offer to the user. */
-export type ModeTransitionSuggestion =
-	| {
-			readonly id: string;
-			readonly kind: "add-required-reviewer";
-			readonly title: string;
-			readonly description: string;
-			readonly deliverableId: string;
-			readonly reviewerName: string;
-			readonly persona: string;
-	  }
-	| {
-			readonly id: string;
-			readonly kind: "require-reviewer";
-			readonly title: string;
-			readonly description: string;
-			readonly deliverableId: string;
-			readonly reviewerName: string;
-	  };
+export type ModeTransitionSuggestion = never;
 
 export interface ModeTransitionRuling {
 	readonly decision: "apply-and-enter" | "enter-without" | "stay-in-plan";

@@ -3,7 +3,6 @@
 
 import type { AgentBridge } from "../agent-bridge.js";
 import type { PlanEngine } from "../engine.js";
-import { openBlocking, type ReviewLedger } from "../exec/findings.js";
 import type { ExecutionHandle } from "../exec/index.js";
 import { buildPlanAwareCompactionMarker } from "../forward-summary.js";
 import { buildExecutionPreamble } from "../planning-preamble.js";
@@ -207,32 +206,12 @@ export async function buildAgentCompactionGuidance(
 			if (titleMatch) deliverableTitle = titleMatch[1];
 		}
 
-		// The open ledger findings are fix DUTIES — a compacted worker that
-		// forgets them idles into a fix-cycle steer it no longer understands.
-		let reviewLedgerLines: string[] = [];
-		try {
-			const state = await bridge.panelRead(deliverableId);
-			if (state.ledger) {
-				const waived = new Set(state.waivedFindingIds ?? []);
-				reviewLedgerLines = openBlocking(
-					structuredClone(state.ledger) as unknown as ReviewLedger,
-					waived,
-				).map(
-					(e) =>
-						`- ${e.finding.id} [${e.finding.severity}] ${e.finding.actual}${e.resolution ? ` — ${e.resolution.status}` : " — unresolved"}`,
-				);
-			}
-		} catch {
-			// No ledger available — task state alone still helps.
-		}
-
 		return buildPlanAwareCompactionMarker({
 			deliverableId,
 			deliverableTitle,
 			remainingTasks: remaining,
 			completedTasks: completed,
 			depSummaryIds: [],
-			reviewLedgerLines,
 		});
 	} catch {
 		return undefined;

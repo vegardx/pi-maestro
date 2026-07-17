@@ -259,15 +259,6 @@ export function buildVerifyPrompt(g: Deliverable, evidence: Evidence): string {
 		...evidence.facts.map((f) => `- ${f}`),
 		...evidence.problems.map((p) => `- PROBLEM: ${p}`),
 	];
-	if (g.waivers?.length) {
-		lines.push(
-			"",
-			"## Waived findings",
-			"A human explicitly accepted these review findings at the ship gate — " +
-				"do NOT re-flag them or count them against the verdict:",
-			...g.waivers.map((w) => `- ${w.reviewer}: ${w.reason} (${w.at})`),
-		);
-	}
 	if (evidence.diff !== undefined) {
 		lines.push(
 			"",

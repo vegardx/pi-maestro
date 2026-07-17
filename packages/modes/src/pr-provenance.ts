@@ -18,31 +18,19 @@ export interface PrProvenanceRenderOptions {
 
 /** Render the visible canonical review state followed by bounded audit details. */
 export function renderMaestroPrSection(
-	deliverable: Pick<
-		Deliverable,
-		"id" | "reviewLedger" | "workflowAnalytics" | "waivers"
-	>,
+	deliverable: Pick<Deliverable, "id" | "workflowAnalytics">,
 	options: PrProvenanceRenderOptions = {},
 ): string {
 	const maxBytes = options.maxBytes ?? DEFAULT_MAESTRO_SECTION_BYTES;
-	const ledger = effectiveAnalytics(deliverable);
-	const waived = new Set(
-		(deliverable.waivers ?? []).flatMap((waiver) =>
-			waiver.findingId ? [waiver.findingId] : [],
-		),
-	);
+	const ledger = deliverable.workflowAnalytics;
 	const findings = ledger?.canonicalFindings ?? [];
 	const blocking = findings.filter(
-		(entry) =>
-			entry.finding.severity !== "minor" &&
-			!findingSettled(entry, waived.has(entry.finding.id)),
+		(entry) => entry.finding.severity !== "minor" && !findingSettled(entry, false),
 	);
 	const state = ledger
 		? blocking.length > 0
 			? `Changes requested — ${blocking.length} blocking finding${blocking.length === 1 ? "" : "s"} open`
-			: waived.size > 0
-				? "Approved with recorded waivers"
-				: ledger.finalVerification?.status === "failed"
+			: ledger.finalVerification?.status === "failed"
 					? "Verification failed"
 					: "Approved — no blocking findings open"
 		: "Review provenance not recorded";
@@ -63,9 +51,7 @@ export function renderMaestroPrSection(
 			? []
 			: [
 					"| --- | --- | --- | --- | --- |",
-					...findings.map((entry) =>
-						renderFindingRow(entry, waived.has(entry.finding.id)),
-					),
+					...findings.map((entry) => renderFindingRow(entry, false)),
 				]),
 	].join("\n");
 	const ending = `\n${MAESTRO_PR_END}`;
@@ -123,36 +109,6 @@ export function updateMaestroPrBody(
 		);
 	}
 	return updated;
-}
-
-function effectiveAnalytics(
-	deliverable: Pick<Deliverable, "id" | "reviewLedger" | "workflowAnalytics">,
-): WorkflowAnalyticsLedger | undefined {
-	const analytics = deliverable.workflowAnalytics;
-	if (!analytics && !deliverable.reviewLedger) return undefined;
-	if (!deliverable.reviewLedger) return analytics;
-	const canonicalFindings = deliverable.reviewLedger.entries.map((entry) => ({
-		finding: structuredClone(entry.finding),
-		reviewer: entry.reviewer,
-		duplicateIds: [...(entry.duplicates ?? [])],
-		...(entry.resolution
-			? { resolution: structuredClone(entry.resolution) }
-			: {}),
-		...(entry.check ? { verification: structuredClone(entry.check) } : {}),
-	}));
-	return analytics
-		? { ...analytics, canonicalFindings }
-		: {
-				version: 1,
-				deliverableId: deliverable.id,
-				revision: 0,
-				stages: [],
-				assignments: [],
-				rawFindings: [],
-				canonicalFindings,
-				createdAt: deliverable.reviewLedger.updatedAt,
-				updatedAt: deliverable.reviewLedger.updatedAt,
-			};
 }
 
 function renderTotals(ledger: WorkflowAnalyticsLedger | undefined): string[] {

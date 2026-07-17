@@ -215,7 +215,7 @@ export async function shipDeliverable(
 	if (existing.error) return shipError("pr-failed", existing.error);
 	if (existing.pr) {
 		let body = generatedBody;
-		if (deliverable.workflowAnalytics || deliverable.reviewLedger) {
+		if (deliverable.workflowAnalytics) {
 			try {
 				body = updateMaestroPrBody(
 					existing.pr.body,

@@ -19,7 +19,7 @@ import type {
 } from "./runs.js";
 import type { SettingsCapabilityV1 } from "./settings.js";
 import type { ShipResult } from "./ship.js";
-import type { TokenSnapshot, UsageSource } from "./usage.js";
+import type { TokenSnapshot, UsageCheckpoint, UsageSource } from "./usage.js";
 
 export const CAPABILITIES = {
 	subagents: "subagents.v1",
@@ -86,8 +86,10 @@ export interface AskTransportV1 {
  * and tokens are real and attributable. Registered by modes.
  */
 export interface UsageLedgerV1 {
-	/** Upsert the cumulative snapshot for a source. */
+	/** Upsert a local cumulative snapshot for a source. */
 	record(source: UsageSource, snapshot: TokenSnapshot): void;
+	/** Accept a durable cumulative checkpoint iff its revision is newer. */
+	recordCheckpoint(checkpoint: UsageCheckpoint): boolean;
 	/** Per-source snapshots plus an aggregate total. */
 	snapshot(): {
 		bySource: ReadonlyMap<string, TokenSnapshot>;

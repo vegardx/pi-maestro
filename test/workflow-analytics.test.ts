@@ -45,6 +45,7 @@ const usage = {
 	output: 5,
 	cacheRead: 20,
 	cacheWrite: 2,
+	promptTokens: 32,
 	totalTokens: 37,
 	cost: 0.25,
 	turns: 1,

@@ -1,8 +1,9 @@
-import type {
-	AgentKind,
-	ResolvedAgentAssignment,
-	StructuredFinding,
-	TokenSnapshot,
+import {
+	canonicalTokenSnapshot,
+	type AgentKind,
+	type ResolvedAgentAssignment,
+	type StructuredFinding,
+	type TokenSnapshot,
 } from "@vegardx/pi-contracts";
 import type {
 	ClaimCheck,
@@ -256,15 +257,14 @@ export function workflowAnalyticsTotals(ledger: WorkflowAnalyticsLedger): {
 		durationMs += elapsed(verification.startedAt, verification.completedAt);
 	}
 	return {
-		usage: {
+		usage: canonicalTokenSnapshot({
 			input,
 			output,
 			cacheRead,
 			cacheWrite,
-			totalTokens: input + output + cacheRead + cacheWrite,
 			cost,
 			turns,
-		},
+		}),
 		durationMs,
 	};
 }

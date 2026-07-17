@@ -10,6 +10,7 @@ import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.
 import {
 	authorizeBashDecision,
 	isolationFailureAction,
+	isolationFailureActionForActor,
 	resolveBashOperations,
 } from "../packages/modes/src/runtime/bash-router.js";
 import type { ExecutionPolicySettings } from "../packages/modes/src/settings.js";
@@ -412,6 +413,7 @@ describe("bash coaching and routing policy", () => {
 		await authorizeBashDecision(
 			{
 				...directDecision,
+				actor: "maestro",
 				route: "confirm",
 				reason: "remote mutation",
 			},
@@ -463,6 +465,74 @@ describe("bash coaching and routing policy", () => {
 			"Cancel (policy is fail-closed)",
 		]);
 	});
+
+	it.each([
+		["worker", "fail-closed"],
+		["worker", "confirm"],
+		["reviewer", "fail-closed"],
+		["reviewer", "confirm"],
+	] as const)(
+		"never prompts for %s isolation failures with fallback=%s",
+		async (actor, fallback) => {
+			const select = vi.fn();
+			const confirm = vi.fn();
+			await expect(
+				isolationFailureActionForActor(
+					actor,
+					"lightweight",
+					"sandbox collision",
+					fallback,
+					{ ui: { select, confirm } as never },
+				),
+			).rejects.toMatchObject({
+				name: "BashRoutingError",
+				code: "isolation-unavailable",
+				actor,
+				retryGuidance: expect.stringContaining("safe primitives"),
+			});
+			expect(select).not.toHaveBeenCalled();
+			expect(confirm).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps host isolation failure approval interactive", async () => {
+		const select = vi.fn(async () => "Run direct once");
+		const confirm = vi.fn(async () => true);
+		await expect(
+			isolationFailureActionForActor(
+				"maestro",
+				"lightweight",
+				"sandbox collision",
+				"confirm",
+				{ ui: { select, confirm } as never },
+			),
+		).resolves.toBe("direct-once");
+		expect(select).toHaveBeenCalledOnce();
+		expect(confirm).toHaveBeenCalledOnce();
+	});
+
+	it.each(["worker", "reviewer"] as const)(
+		"never confirms approval routes for %s",
+		async (actor) => {
+			const confirm = vi.fn();
+			await expect(
+				authorizeBashDecision(
+					{
+						...decideBashPolicy({
+							command: "fixture-command --opaque",
+							mode: "agent",
+							actor,
+							policy: guided,
+						}),
+						route: "confirm",
+					},
+					{ ui: { confirm } as never },
+					"fixture-command --opaque",
+				),
+			).rejects.toMatchObject({ code: "approval-required", actor });
+			expect(confirm).not.toHaveBeenCalled();
+		},
+	);
 
 	it("shadow replay reports zero protected host-write routes", () => {
 		const commands = [

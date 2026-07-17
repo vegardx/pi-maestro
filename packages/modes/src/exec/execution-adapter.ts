@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Answers, ThinkingLevel } from "@vegardx/pi-contracts";
-import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
+import { detectDefaultBranch, headSha, runCommand } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
 	type DebugProposalMessage,
@@ -729,6 +729,12 @@ export class ExecutionAdapter {
 			},
 
 			createWorktree: async (worktreeOpts) => {
+				const baseSha = headSha(worktreeOpts.repoPath);
+				if (!baseSha) {
+					throw new Error(
+						`cannot capture delivery base before provisioning ${worktreeOpts.deliverableId}`,
+					);
+				}
 				const path = provisionWorktree({
 					repoPath: worktreeOpts.repoPath,
 					deliverableId: worktreeOpts.deliverableId,
@@ -742,6 +748,7 @@ export class ExecutionAdapter {
 					);
 					this.provisionedWorktrees.add(path);
 				}
+				this.engine.updateDeliverable(worktreeOpts.deliverableId, { baseSha });
 				return path;
 			},
 

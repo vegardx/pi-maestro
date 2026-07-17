@@ -167,6 +167,8 @@ export interface ExecutionHandle {
 	isWorkerDone(deliverableId: string): boolean;
 	/** Tmux session names for worker agents (for /watch panes). */
 	getWorkerSessions(): string[];
+	/** Freeze scheduling and cooperatively stop the fleet behind one deadline. */
+	prepareStop?(reason?: string): Promise<import("./execution-adapter.js").ExecutionStopResult>;
 	/** Tear down agents, tmux sessions, and the RPC server. */
 	destroy(): Promise<void>;
 }

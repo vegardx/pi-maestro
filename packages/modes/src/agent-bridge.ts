@@ -5,11 +5,17 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type {
 	Answers,
+	ChildRunProjection,
+	ChildRunProjectionSourceV1,
 	Questionnaire,
 	ResolvedAgentAssignment,
+	RunId,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
+import { CAPABILITIES } from "@vegardx/pi-contracts";
+import type { MaestroContext } from "@vegardx/pi-core";
 import {
+	type ChildRunControlRequestMessage,
 	type DebugProposalMessage,
 	type DebugRecoveryProposalWire,
 	type DebugResultMessage,
@@ -48,6 +54,8 @@ export interface AgentBridgeDeps {
 	readonly agentId: string;
 	readonly assignment?: ResolvedAgentAssignment;
 	readonly generation?: number;
+	/** Worker-local authoritative run projection/control source. */
+	readonly childRuns?: () => ChildRunProjectionSourceV1 | undefined;
 	/** Timeout for planRead/planMutate requests. Default: 30s. */
 	readonly requestTimeoutMs?: number;
 }
@@ -137,6 +145,17 @@ export class AgentBridge {
 	private interruptingTurnId: string | undefined;
 	private queuedSteers: string[] = [];
 	private lastAssistantText = "";
+	private childUnsubscribe: (() => void) | undefined;
+	private childSource: ChildRunProjectionSourceV1 | undefined;
+	private childGeneration = 0;
+	private childSyncIds = new Map<
+		string,
+		{
+			readonly runs: readonly ChildRunProjection[];
+			readonly timer: ReturnType<typeof setTimeout>;
+		}
+	>();
+	private dirtyChildren = new Map<RunId, ChildRunProjection>();
 
 	constructor(private readonly deps: AgentBridgeDeps) {
 		this.client = new MaestroRpcClient({ reconnect: true });
@@ -145,14 +164,16 @@ export class AgentBridge {
 	/** Initialize the bridge. Call during session_start. */
 	start(ctx: ExtensionContext): void {
 		this.ctx = ctx;
+		this.childGeneration =
+			this.deps.generation ??
+			Number.parseInt(process.env.PI_MAESTRO_GENERATION ?? "0", 10);
 		this.client.on("message", (msg) => this.handleMessage(msg));
+		this.installChildSource();
 		this.client.connect(this.deps.socketPath, {
 			agentId: this.deps.agentId,
 			role: "agent",
 			kind: this.deps.assignment?.kind ?? "worker",
-			generation:
-				this.deps.generation ??
-				Number.parseInt(process.env.PI_MAESTRO_GENERATION ?? "0", 10),
+			generation: this.childGeneration,
 			assignment: this.deps.assignment ?? defaultAssignment(this.deps.agentId),
 			token: process.env.PI_MAESTRO_TOKEN ?? "",
 			pid: process.pid,
@@ -161,6 +182,7 @@ export class AgentBridge {
 
 	/** Signal turn started — agent is working. */
 	onTurnStart(): void {
+		if (!this.childSource) this.reconcileChildren();
 		this.activeTurnId = randomUUID();
 		this.interruptingTurnId = undefined;
 		// Arm the summarize capture: the first turn to start after the prompt
@@ -433,6 +455,12 @@ export class AgentBridge {
 
 	/** Clean up — settle any pending ask, then disconnect. */
 	destroy(): void {
+		this.childUnsubscribe?.();
+		this.childUnsubscribe = undefined;
+		this.childSource = undefined;
+		for (const pending of this.childSyncIds.values())
+			clearTimeout(pending.timer);
+		this.childSyncIds.clear();
 		this.settlePending();
 		this.client.close();
 	}
@@ -497,10 +525,120 @@ export class AgentBridge {
 		pending.resolve(result);
 	}
 
+	private installChildSource(): ChildRunProjectionSourceV1 | undefined {
+		const source = this.deps.childRuns?.();
+		if (!source || source === this.childSource) return source;
+		this.childUnsubscribe?.();
+		this.childSource = source;
+		this.childUnsubscribe = source.subscribe((projection) => {
+			this.dirtyChildren.set(projection.runId, projection);
+			this.flushChildUpdates(false);
+		});
+		return source;
+	}
+
+	private reconcileChildren(): void {
+		const source = this.installChildSource();
+		if (!source) return;
+		for (const projection of source.list()) {
+			this.dirtyChildren.set(projection.runId, projection);
+		}
+		this.flushChildUpdates(true);
+	}
+
+	private flushChildUpdates(reconcile: boolean): void {
+		const runs = reconcile
+			? (this.installChildSource()?.list() ?? [])
+			: [...this.dirtyChildren.values()];
+		if (!reconcile && runs.length === 0) return;
+		const id = randomUUID();
+		if (
+			!this.client.send({
+				type: "childRunSync",
+				id,
+				ownerGeneration: this.childGeneration,
+				reconcile,
+				runs,
+			})
+		)
+			return;
+		const timer = setTimeout(() => {
+			const pending = this.childSyncIds.get(id);
+			if (!pending) return;
+			this.childSyncIds.delete(id);
+			for (const projection of pending.runs) {
+				const current = this.dirtyChildren.get(projection.runId);
+				if (!current || current.revision < projection.revision) {
+					this.dirtyChildren.set(projection.runId, projection);
+				}
+			}
+			this.flushChildUpdates(false);
+		}, this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+		timer.unref?.();
+		this.childSyncIds.set(id, { runs, timer });
+	}
+
+	private async handleChildControl(
+		msg: ChildRunControlRequestMessage,
+	): Promise<void> {
+		const source = this.installChildSource();
+		const base = {
+			type: "childRunControlResult" as const,
+			id: msg.id,
+			ownerGeneration: this.childGeneration,
+			runId: msg.runId,
+			action: msg.action,
+		};
+		if (!source || msg.ownerGeneration !== this.childGeneration) {
+			this.client.send({
+				...base,
+				ok: false,
+				error: "stale or unavailable owner",
+			});
+			return;
+		}
+		try {
+			const runId = msg.runId as RunId;
+			switch (msg.action) {
+				case "steer":
+					source.steer(runId, msg.guidance ?? "");
+					this.client.send({ ...base, ok: true });
+					break;
+				case "interrupt": {
+					const result = await source.interrupt(runId, msg.reason);
+					this.client.send({ ...base, ok: true, outcome: result.outcome });
+					break;
+				}
+				case "capture": {
+					const content = await source.capture(runId, msg.lines);
+					this.client.send({
+						...base,
+						ok: true,
+						...(content ? { content } : {}),
+					});
+					break;
+				}
+				case "stop":
+					source.stop(runId, msg.reason);
+					this.client.send({ ...base, ok: true });
+					break;
+			}
+		} catch (error) {
+			this.client.send({
+				...base,
+				ok: false,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	private handleMessage(msg: MaestroMessage): void {
 		switch (msg.type) {
 			case "helloAck": {
-				if (msg.ok) break;
+				if (msg.ok) {
+					setTimeout(() => this.reconcileChildren(), 0).unref?.();
+					break;
+				}
 				// A rejected agent must not keep working: settle everything,
 				// stop reconnecting, and shut the session down.
 				this.ctx?.ui.notify(
@@ -510,6 +648,31 @@ export class AgentBridge {
 				this.settlePending();
 				this.client.close();
 				this.ctx?.shutdown();
+				break;
+			}
+			case "childRunSyncAck": {
+				if (msg.ownerGeneration !== this.childGeneration) break;
+				const pending = this.childSyncIds.get(msg.id);
+				this.childSyncIds.delete(msg.id);
+				if (!pending) break;
+				clearTimeout(pending.timer);
+				const sent = pending.runs;
+				const accepted = new Map(
+					msg.accepted.map((item) => [item.runId, item.revision]),
+				);
+				for (const projection of sent) {
+					const current = this.dirtyChildren.get(projection.runId);
+					if (
+						current &&
+						current.revision <= (accepted.get(projection.runId as string) ?? -1)
+					) {
+						this.dirtyChildren.delete(projection.runId);
+					}
+				}
+				break;
+			}
+			case "childRunControl": {
+				void this.handleChildControl(msg);
 				break;
 			}
 			case "interrupt": {
@@ -680,9 +843,18 @@ export function isAgentMode(): boolean {
  * Initialize the agent bridge if running in agent mode.
  * Returns the bridge instance (for wiring into event hooks) or undefined.
  */
-export function initAgentBridge(pi: ExtensionAPI): AgentBridge | undefined {
+export function initAgentBridge(
+	pi: ExtensionAPI,
+	maestro?: MaestroContext,
+): AgentBridge | undefined {
 	const socketPath = process.env.PI_MAESTRO_SOCK;
 	const agentId = process.env.PI_MAESTRO_AGENT_ID;
 	if (!socketPath || !agentId) return undefined;
-	return new AgentBridge({ pi, socketPath, agentId });
+	return new AgentBridge({
+		pi,
+		socketPath,
+		agentId,
+		childRuns: () =>
+			maestro?.capabilities.get(CAPABILITIES.childRunProjections),
+	});
 }

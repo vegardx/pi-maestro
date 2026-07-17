@@ -679,6 +679,21 @@ export function createRuntimeContext(
 							.catch(() => {});
 					}
 				},
+				onChildProjection: (ownerId, _ownerGeneration, projection) => {
+					usageLedger.record(
+						{ kind: "run", id: projection.runId, ownerId },
+						projection.usage,
+					);
+					maestro.events.emit(EVENTS.runStatus, {
+						runId: projection.runId,
+						status: projection.status,
+						...(projection.completedAt !== undefined
+							? { completedAt: projection.completedAt }
+							: {}),
+					});
+					rt.invalidateFooter?.();
+					rt.hud?.refresh();
+				},
 				// The settled card (onEvent) is the recap now; onAllSettled
 				// refreshes the footer and clears the agent widget. Research
 				// reports are NOT wiped — they live in the plan dir and stay

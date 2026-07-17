@@ -2,7 +2,12 @@
 // the concrete adapter — so the execution internals (provisioner, supervisor,
 // rpc-router) can be completed behind this interface.
 
-import type { Answers, InterruptResult } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	InterruptResult,
+	RunId,
+	RunRecord,
+} from "@vegardx/pi-contracts";
 import type { DeliverableExecutor } from "../deliverable-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
@@ -78,6 +83,18 @@ export interface ExecutionHandle {
 		deliverableId: string,
 		agentName?: string,
 	): Promise<InterruptResult>;
+	/** Capture a worker tmux pane when available. */
+	capture?(
+		deliverableId: string,
+		agentName?: string,
+		lines?: number,
+	): Promise<string | undefined>;
+	/** Stop a worker process/session. */
+	stop?(
+		deliverableId: string,
+		agentName?: string,
+		reason?: string,
+	): Promise<boolean>;
 	/** Required reviewers currently holding a deliverable's ship gate. */
 	failingRequiredReviewers(deliverableId: string): string[];
 	/**
@@ -128,6 +145,18 @@ export interface ExecutionHandle {
 		agents: Map<string, ExecutionAgentSnapshot>;
 		deliverables: Map<string, ExecutionDeliverableSnapshot>;
 	};
+	/** Worker-owned child runs projected durably into the host. */
+	projectedRuns?(): readonly RunRecord[];
+	steerProjectedRun?(runId: RunId, guidance: string): boolean;
+	interruptProjectedRun?(
+		runId: RunId,
+		reason?: string,
+	): Promise<InterruptResult>;
+	captureProjectedRun?(
+		runId: RunId,
+		lines?: number,
+	): Promise<string | undefined>;
+	stopProjectedRun?(runId: RunId, reason?: string): boolean;
 	/** Resolve an agent key, deliverable id, agent or session name to a tmux session. */
 	resolveSessionName(target: string): string | undefined;
 	/** The underlying executor (for recap/state rendering). */

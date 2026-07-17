@@ -75,6 +75,22 @@ const AGENT_FIXTURES = {
 	},
 	status: { type: "status", status: "working" },
 	tokens: { type: "tokens", snapshot },
+	childRunSync: {
+		type: "childRunSync",
+		id: "crs-1",
+		ownerGeneration: 0,
+		reconcile: true,
+		runs: [],
+	},
+	childRunControlResult: {
+		type: "childRunControlResult",
+		id: "crc-1",
+		ownerGeneration: 0,
+		runId: "run-1",
+		action: "capture",
+		ok: true,
+		content: "screen",
+	},
 	planRead: { type: "planRead", id: "pr-1" },
 	planMutate: {
 		type: "planMutate",
@@ -153,6 +169,8 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 	return {
 		status: ack,
 		tokens: ack,
+		childRunSync: ack,
+		childRunControlResult: ack,
 		planRead: ack,
 		planMutate: ack,
 		questions: ack,

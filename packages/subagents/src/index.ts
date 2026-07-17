@@ -42,6 +42,7 @@ import { resolveDelegateSelection } from "./catalog.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
+import { createChildRunProjectionSource } from "./projections.js";
 import {
 	killAndVerifyTmuxSession,
 	reconcileOrphanedRuns,
@@ -94,6 +95,7 @@ export {
 	type ResolvedProfile,
 	resolveProfile,
 } from "./profiles.js";
+export { createChildRunProjectionSource } from "./projections.js";
 export {
 	killAndVerifyTmuxSession,
 	type ReconcileOptions,
@@ -253,7 +255,15 @@ export default defineExtension(
 			cliPath: resolveCliPath(),
 		});
 		let service: SubagentService | undefined;
+		let projectionSource:
+			| ReturnType<typeof createChildRunProjectionSource>
+			| undefined;
+		let projectionSourceDispose: (() => void) | undefined;
+		const projectionListeners = new Set<
+			(listener: import("@vegardx/pi-contracts").ChildRunProjection) => void
+		>();
 		let ctx: ExtensionContext | undefined;
+		let projectionCapabilityRegistered = false;
 
 		const rebuild = (next: ExtensionContext) => {
 			ctx = next;
@@ -285,6 +295,39 @@ export default defineExtension(
 				// the explicit PI_MAESTRO_TRANSPORT=headless escape hatch only.
 				defaultTransport: resolveDefaultTransport(),
 			});
+			projectionSourceDispose?.();
+			projectionSource = createChildRunProjectionSource({
+				bus,
+				store,
+				service,
+			});
+			projectionSourceDispose = projectionSource.subscribe((projection) => {
+				for (const listener of projectionListeners) listener(projection);
+			});
+			if (!projectionCapabilityRegistered) {
+				projectionCapabilityRegistered = true;
+				maestro.capabilities.register(CAPABILITIES.childRunProjections, {
+					list: () => projectionSource?.list() ?? [],
+					subscribe: (listener) => {
+						projectionListeners.add(listener);
+						return () => projectionListeners.delete(listener);
+					},
+					steer: (runId, guidance) => projectionSource?.steer(runId, guidance),
+					interrupt: (runId, reason) => {
+						const source = projectionSource;
+						return source
+							? source.interrupt(runId, reason)
+							: Promise.resolve({
+									outcome: "disconnected" as const,
+									targetId: `run:${runId}`,
+								});
+					},
+					capture: (runId, lines) =>
+						projectionSource?.capture(runId, lines) ??
+						Promise.resolve(undefined),
+					stop: (runId, reason) => projectionSource?.stop(runId, reason),
+				});
+			}
 			// Reap cross-process orphans BEFORE retention: retention never prunes
 			// active records, so a run whose supervising process died would
 			// otherwise sit non-terminal (with a live tmux session) forever.

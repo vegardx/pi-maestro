@@ -2526,6 +2526,7 @@ export class ExecutionAdapter {
 			{
 				status: string;
 				startedAt: number;
+				completedAt?: number;
 				tokens: TokenSnapshot;
 				prefixCacheHitRate?: number;
 				model?: string;
@@ -2540,6 +2541,7 @@ export class ExecutionAdapter {
 			{
 				status: string;
 				startedAt: number;
+				completedAt?: number;
 				tokens: TokenSnapshot;
 				prefixCacheHitRate?: number;
 				model?: string;
@@ -2568,6 +2570,9 @@ export class ExecutionAdapter {
 						(agentState.startedAt
 							? Date.parse(agentState.startedAt)
 							: Date.now()),
+					...(agentState.completedAt
+						? { completedAt: Date.parse(agentState.completedAt) }
+						: {}),
 					tokens: tokens ?? {
 						input: 0,
 						output: 0,

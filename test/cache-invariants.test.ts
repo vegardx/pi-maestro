@@ -729,7 +729,7 @@ describe("renderAgentsOverview cache suffix", () => {
 		return engine;
 	}
 
-	it("appends cache NN% when the ratio is known", () => {
+	it("appends cumulative cache rate when cache usage is known", () => {
 		const engine = planWithDeliverable();
 		const handle = makeHandle(
 			new Map([
@@ -738,7 +738,16 @@ describe("renderAgentsOverview cache suffix", () => {
 					{
 						status: "working",
 						startedAt: Date.now(),
-						tokens: { input: 5000, output: 120, turns: 9 },
+						tokens: {
+							input: 5000,
+							output: 120,
+							cacheRead: 35_000,
+							cacheWrite: 0,
+							promptTokens: 40_000,
+							totalTokens: 40_120,
+							cost: 0,
+							turns: 9,
+						},
 						prefixCacheHitRate: 0.874,
 					},
 				],
@@ -746,7 +755,7 @@ describe("renderAgentsOverview cache suffix", () => {
 		);
 		const out = renderAgentsOverview(engine.get(), handle);
 		expect(out).toContain(
-			"worker (full) — working · 5000in/120out · 9 turns · prefix 87%",
+			"worker (full) — working · 0s · 40000in/120out · 9 turns · cache 88%",
 		);
 	});
 
@@ -765,7 +774,9 @@ describe("renderAgentsOverview cache suffix", () => {
 			]),
 		);
 		const out = renderAgentsOverview(engine.get(), handle);
-		expect(out).toContain("worker (full) — working · 5000in/120out · 9 turns");
+		expect(out).toContain(
+			"worker (full) — working · 0s · 5000in/120out · 9 turns",
+		);
 		expect(out).not.toContain("cache");
 	});
 });

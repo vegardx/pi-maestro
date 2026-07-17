@@ -78,6 +78,46 @@ describe("buildAgentNodes", () => {
 		expect(nodes[0].status).toBe("blocked");
 	});
 
+	it("propagates immutable completion and cumulative telemetry", () => {
+		const nodes = buildAgentNodes(
+			{
+				agents: new Map([
+					[
+						"auth/worker",
+						execAgent("done", {
+							startedAt: NOW - 300_000,
+							completedAt: NOW - 120_000,
+							tokens: {
+								input: 5_000,
+								output: 400,
+								cacheRead: 20_000,
+								cacheWrite: 1_000,
+								promptTokens: 26_000,
+								totalTokens: 26_400,
+								cost: 1,
+								turns: 4,
+							},
+							model: "provider/claude-sonnet-4-20260101",
+							effort: "high",
+						}),
+					],
+				]),
+				deliverables: new Map(),
+			},
+			[],
+			NOW,
+		);
+		expect(nodes[0]).toMatchObject({
+			completedAt: NOW - 120_000,
+			input: 26_000,
+			output: 400,
+			cacheRead: 20_000,
+			cacheWrite: 1_000,
+			model: "provider/claude-sonnet-4-20260101",
+			effort: "high",
+		});
+	});
+
 	it("nests runs under their parent run and keeps orphans at root", () => {
 		const nodes = buildAgentNodes(
 			undefined,
@@ -95,6 +135,67 @@ describe("buildAgentNodes", () => {
 		expect(nodes[0].key).toBe("run:r-parent");
 		expect(nodes[0].children.map((c) => c.key)).toEqual(["run:r-child"]);
 		expect(nodes[1].key).toBe("run:r-solo");
+	});
+
+	it("keeps projected usage and completion in confirmed child rows", () => {
+		const projected = run("r-child", "succeeded", {
+			completedAt: NOW - 5_000,
+			profile: {
+				profile: "research",
+				model: "provider/reviewer",
+				thinking: "medium",
+				meta: {
+					ownerId: "auth/worker",
+					confirmed: true,
+					usage: {
+						input: 1_000,
+						output: 200,
+						cacheRead: 9_000,
+						cacheWrite: 0,
+						promptTokens: 10_000,
+						totalTokens: 10_200,
+						cost: 0.2,
+						turns: 2,
+					},
+				},
+			},
+		});
+		const nodes = buildAgentNodes(
+			{
+				agents: new Map([["auth/worker", execAgent("working")]]),
+				deliverables: new Map(),
+			},
+			[projected],
+			NOW,
+		);
+		expect(nodes[0].children[0]).toMatchObject({
+			key: "run:r-child",
+			completedAt: NOW - 5_000,
+			input: 10_000,
+			output: 200,
+			cacheRead: 9_000,
+			model: "provider/reviewer",
+			effort: "medium",
+		});
+	});
+
+	it("omits unconfirmed projected children", () => {
+		const nodes = buildAgentNodes(
+			{
+				agents: new Map([["auth/worker", execAgent("working")]]),
+				deliverables: new Map(),
+			},
+			[
+				run("stale", "running", {
+					profile: {
+						profile: "research",
+						meta: { ownerId: "auth/worker", confirmed: false },
+					},
+				}),
+			],
+			NOW,
+		);
+		expect(nodes[0].children).toEqual([]);
 	});
 
 	it("ages out terminal runs but keeps recent ones with word statuses", () => {
@@ -128,18 +229,20 @@ describe("buildPlanView", () => {
 					{ id: "q1", title: "a question", done: false, kind: "question" },
 				]),
 				deliverable("d4", "planned"),
+				deliverable("d5", "failed"),
 			],
 		};
 		const view = buildPlanView(plan as never, {
 			agents: new Map([["d3/worker", execAgent("working")]]),
 		});
 		expect(view?.done).toBe(2);
-		expect(view?.total).toBe(4);
+		expect(view?.total).toBe(5);
 		expect(view?.rows.map((r) => r.state)).toEqual([
 			"shipped",
 			"complete",
 			"active",
 			"queued",
+			"failed",
 		]);
 		// Worker named (with live status) only on the active row.
 		expect(view?.rows[2].worker).toBe("worker running");

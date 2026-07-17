@@ -1,7 +1,9 @@
 // Shared plan and delivery vocabulary. The full persisted plan tree and engine
 // live in modes; this module owns every cross-package state-machine value.
 
-import type { DeliverableId, WorkItemId } from "./ids.js";
+import type { ResolvedAgentAssignment } from "./agents.js";
+import type { DeliverableId, RunId, WorkItemId } from "./ids.js";
+import type { ModeName } from "./modes.js";
 
 /** Current on-disk plan schema. Older plans are intentionally unsupported. */
 export const PLAN_SCHEMA_VERSION = 5 as const;
@@ -166,6 +168,73 @@ export function validateTransitionGate(value: unknown): string[] {
 	)
 		errors.push("findings gate requires findingIds");
 	return errors;
+}
+
+
+// ─── Mode transition gates ─────────────────────────────────────────────────
+
+export const MODE_TRANSITION_GATE_STATUSES = [
+	"checking",
+	"awaiting-ruling",
+	"blocked",
+	"settled",
+	"cancelled",
+] as const;
+export type ModeTransitionGateStatus =
+	(typeof MODE_TRANSITION_GATE_STATUSES)[number];
+
+export interface ModeTransitionValidation {
+	readonly id: string;
+	readonly level: "error" | "warning";
+	readonly message: string;
+}
+
+/** A narrow plan mutation that a transition review may offer to the user. */
+export type ModeTransitionSuggestion =
+	| {
+			readonly id: string;
+			readonly kind: "add-required-reviewer";
+			readonly title: string;
+			readonly description: string;
+			readonly deliverableId: string;
+			readonly reviewerName: string;
+			readonly persona: string;
+	  }
+	| {
+			readonly id: string;
+			readonly kind: "require-reviewer";
+			readonly title: string;
+			readonly description: string;
+			readonly deliverableId: string;
+			readonly reviewerName: string;
+	  };
+
+export interface ModeTransitionRuling {
+	readonly decision: "apply-and-enter" | "enter-without" | "stay-in-plan";
+	readonly selectedSuggestionIds: readonly string[];
+	readonly planFingerprint: string;
+	readonly ruledAt: string;
+}
+
+/** Restart-safe state for one requested mode edge. */
+export interface ModeTransitionGate {
+	readonly id: string;
+	readonly gate: string;
+	readonly from: ModeName;
+	readonly to: ModeName;
+	readonly status: ModeTransitionGateStatus;
+	readonly requestedAt: string;
+	readonly updatedAt: string;
+	readonly planFingerprint: string;
+	readonly validations: readonly ModeTransitionValidation[];
+	readonly assignment?: ResolvedAgentAssignment;
+	readonly runId?: RunId;
+	/** Bounded reviewer output; raw transcripts stay in the run store. */
+	readonly reviewSummary?: string;
+	readonly suggestions?: readonly ModeTransitionSuggestion[];
+	readonly autoResolvedSuggestionIds?: readonly string[];
+	readonly ruling?: ModeTransitionRuling;
+	readonly reason?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

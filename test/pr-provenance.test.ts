@@ -47,6 +47,7 @@ function analytics(
 					output: 5,
 					cacheRead: 20,
 					cacheWrite: 1,
+					promptTokens: 31,
 					totalTokens: 36,
 					cost: 0.125,
 					turns: 1,

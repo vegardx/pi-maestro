@@ -2,8 +2,7 @@
 // plan tools, commands, event hooks, and capability registrations. All
 // behavior lives in the sibling modules; this file only assembles them.
 
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -109,16 +108,10 @@ export function createModesRuntime(
 		pi.registerTool(tool);
 	}
 
-	// The research loop: fan-out research agents + the readiness phase gate.
-	// Children spawn isolated (-ne) with the research-tools extension so their
-	// tool namespace is deterministic (websearch/webfetch/context7 + builtins).
-	const repoRoot = resolve(
-		dirname(fileURLToPath(import.meta.url)),
-		"../../../..",
-	);
+	// The research loop is orchestration over ordinary agents.v1 assignments.
 	for (const tool of createResearchTools({
 		engine: () => rt.engine,
-		subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
+		agents: () => maestro.capabilities.get(CAPABILITIES.agents),
 		ask: () => maestro.capabilities.get(CAPABILITIES.ask),
 		ensurePlanDir: (ctx) => {
 			rt.finalizeDraftPlan(ctx, { force: true });
@@ -126,9 +119,6 @@ export function createModesRuntime(
 			if (!engine) throw new Error("no plan active");
 			return join(plansRoot(), engine.get().slug);
 		},
-		researchToolsPath: () =>
-			join(repoRoot, "packages/research-tools/src/index.ts"),
-		resolveRoleModel: (ctx, role, choice) => roleSelection(ctx, role, choice),
 		watchdog: (ctx) => readResearchWatchdogSettings(ctx.cwd),
 		onRunStarted: (run, ctx) => {
 			rt.researchRuns.set(run.id, run);

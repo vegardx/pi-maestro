@@ -1,16 +1,34 @@
-// Canonical identities and immutable execution assignments for every agent.
-// Human aliases are presentation only; exact opaque target ids always win.
+// Typed semantic agent kinds, immutable assignments, and runtime-policy
+// composition. Semantic kinds describe WHAT an agent does; runtime policies
+// describe HOW it is allowed to run. The two registries are intentionally
+// independent so permissions/session/transport policy can be reused without
+// duplicating prompts or routing guidance.
 
+import type { RunId } from "./ids.js";
 import type { ModelRole } from "./models.js";
-import type { ThinkingLevel, ToolPolicy } from "./runs.js";
+import type {
+	RunHandle,
+	RunRecord,
+	RunResult,
+	RunWatchdogConfig,
+	ThinkingLevel,
+	ToolPolicy,
+} from "./runs.js";
 
 export const AGENT_KINDS = [
 	"host",
 	"worker",
-	"delegate",
-	"reviewer",
-	"researcher",
-	"advisor",
+	"general",
+	"codebase-research",
+	"web-research",
+	"consult",
+	"plan-review",
+	"practical-review",
+	"adversarial-review",
+	"correctness-review",
+	"security-review",
+	"test-review",
+	"simplification-review",
 	"verifier",
 ] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
@@ -18,7 +36,7 @@ export type AgentKind = (typeof AGENT_KINDS)[number];
 export type AgentTargetKind = "host" | "worker" | "run";
 export type AgentTransport = "host" | "tmux" | "headless";
 
-/** Runtime constraints are resolved before spawn, never inferred by a child. */
+/** Runtime constraints resolved before spawn, never inferred by a child. */
 export interface AgentRuntimePolicy {
 	readonly mode: "full" | "read-only";
 	readonly transport: AgentTransport;
@@ -27,6 +45,68 @@ export interface AgentRuntimePolicy {
 	readonly isolation: "host" | "lightweight" | "strong";
 	readonly maxTurns?: number;
 	readonly timeoutMs?: number;
+}
+
+/** Independently registered permission policy. */
+export interface AgentPermissionPolicy {
+	readonly id: string;
+	readonly mode: AgentRuntimePolicy["mode"];
+	readonly tools: ToolPolicy;
+	readonly isolation: AgentRuntimePolicy["isolation"];
+	readonly extraExtensions?: readonly "research-tools"[];
+}
+
+/** Independently registered session policy. */
+export interface AgentSessionPolicy {
+	readonly id: string;
+	readonly session: AgentRuntimePolicy["session"];
+	readonly maxTurns?: number;
+}
+
+/** Independently registered transport policy. */
+export interface AgentTransportPolicy {
+	readonly id: string;
+	readonly transport: AgentTransport;
+	readonly timeoutMs?: number;
+}
+
+/** A runtime policy composes the three orthogonal policy registries. */
+export interface AgentRuntimePolicyDefinition {
+	readonly id: string;
+	readonly permissions: string;
+	readonly session: string;
+	readonly transport: string;
+}
+
+export type AgentReducerId =
+	| "identity"
+	| "research-digest"
+	| "review-findings"
+	| "verification";
+
+export interface AgentOutputContract {
+	readonly id: string;
+	readonly description: string;
+	readonly requiredMarkers?: readonly string[];
+	readonly maxWords?: number;
+}
+
+export interface AgentSequencingGuidance {
+	readonly mode: "parallel" | "serial";
+	readonly guidance: string;
+}
+
+/** Descriptor stored by the kind registry. Prompts are full authored policy. */
+export interface AgentKindDefinition {
+	readonly id: AgentKind;
+	readonly routingSummary: string;
+	readonly prompt: string;
+	readonly runtimePolicy: string;
+	readonly modelRole: ModelRole;
+	readonly contracts: readonly AgentOutputContract[];
+	readonly watchdog: RunWatchdogConfig;
+	readonly sequencing: AgentSequencingGuidance;
+	readonly reducer: AgentReducerId;
 }
 
 /** One authored exact choice in a named model set. */
@@ -67,6 +147,38 @@ export interface ResolvedAgentAssignment {
 	readonly source: "preset" | "explicit" | "session";
 }
 
+/** Request accepted by agents.v1. Defaults still resolve to an exact pair. */
+export interface AgentRunRequest {
+	readonly kind: AgentKind;
+	readonly prompt: string;
+	readonly model?: string;
+	readonly effort?: ThinkingLevel;
+	readonly cwd?: string;
+	readonly displayName?: string;
+	readonly parent?: RunId;
+	readonly rootTurnId?: string;
+	readonly meta?: Readonly<Record<string, unknown>>;
+}
+
+export interface AgentRun {
+	readonly runId: RunId;
+	readonly assignment: ResolvedAgentAssignment;
+	readonly handle: RunHandle;
+}
+
+/** Unified programmatic API. Model-facing tooling is a projection of this. */
+export interface AgentsCapabilityV1 {
+	run(request: AgentRunRequest): Promise<AgentRun>;
+	batch(requests: readonly AgentRunRequest[]): Promise<readonly AgentRun[]>;
+	list(): readonly RunRecord[];
+	status(runId: RunId): RunRecord | undefined;
+	steer(runId: RunId, guidance: string): void;
+	interrupt(runId: RunId, reason?: string): Promise<void>;
+	capture(runId: RunId, lines?: number): Promise<string | undefined>;
+	result(runId: RunId): Promise<RunResult | undefined>;
+	kinds(): readonly AgentKindDefinition[];
+}
+
 export function validateResolvedAgentAssignment(value: unknown): string[] {
 	if (!isRecord(value)) return ["assignment must be an object"];
 	const errors: string[] = [];
@@ -83,6 +195,8 @@ export function validateResolvedAgentAssignment(value: unknown): string[] {
 	if (!AGENT_KINDS.includes(value.kind as AgentKind))
 		errors.push("assignment.kind is unsupported");
 	if (!isRecord(value.runtime)) errors.push("assignment.runtime is required");
+	if (value.effort !== undefined && !nonEmpty(value.effort))
+		errors.push("assignment.effort must be non-empty when present");
 	if (
 		!nonEmpty(value.resolvedAt) ||
 		!Number.isFinite(Date.parse(String(value.resolvedAt)))

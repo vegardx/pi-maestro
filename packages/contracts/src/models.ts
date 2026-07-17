@@ -13,6 +13,17 @@ export const MODEL_ROLES = [
 	"compact-summarizer",
 	"verifier",
 	"delegate",
+	"general",
+	"codebase-research",
+	"web-research",
+	"consult",
+	"plan-review",
+	"practical-review",
+	"adversarial-review",
+	"correctness-review",
+	"security-review",
+	"test-review",
+	"simplification-review",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 

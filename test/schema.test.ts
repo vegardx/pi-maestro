@@ -87,6 +87,7 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 
 function makePlan(deliverables: Deliverable[]): Plan {
 	return {
+		schemaVersion: 5,
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/tmp/repo",
@@ -117,6 +118,12 @@ describe("DeliverableStatus transitions", () => {
 
 	it("allows complete → superseded", () => {
 		expect(canTransition("complete", "superseded")).toBe(true);
+	});
+
+	it("allows recoverable delivery failure and retry", () => {
+		expect(canTransition("active", "failed")).toBe(true);
+		expect(canTransition("failed", "planned")).toBe(true);
+		expect(canTransition("failed", "active")).toBe(true);
 	});
 
 	it("does not allow planned → shipped", () => {

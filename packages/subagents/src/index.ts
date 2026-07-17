@@ -26,7 +26,6 @@ import {
 	CAPABILITIES,
 	canonicalTokenSnapshot,
 	EVENTS,
-	type ModelRole,
 	type RunId,
 	type RunProgress,
 	type SupervisorDecision,
@@ -42,7 +41,6 @@ import {
 } from "@vegardx/pi-settings";
 import { createAgentsCapability, createAgentTool } from "./agent-tool.js";
 import { createRunBus } from "./bus.js";
-import { resolveDelegateSelection } from "./catalog.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
@@ -71,13 +69,6 @@ export {
 	type UnifiedAgentDeps,
 } from "./agent-tool.js";
 
-export {
-	type AgentDefinition,
-	BUILTIN_AGENTS,
-	discoverAgents,
-	parseAgentDefinition,
-	parseFrontmatter,
-} from "./agents.js";
 export {
 	createRunBus,
 	msgRunId,
@@ -159,7 +150,6 @@ export {
 	createTmuxAgentRunner,
 	type TmuxRunnerOptions,
 } from "./tmux-runner.js";
-export { createSubagentTool, type SubagentToolDeps } from "./tool.js";
 
 // Relay a supervisor request to the human: ask.v1 when present, else the bare
 // UI confirm/select. Returns the chosen answer string.
@@ -464,50 +454,14 @@ export default defineExtension(
 			registries,
 			resolveModel: async (kind, choice) => {
 				if (!ctx) throw new Error("Agent model policy is unavailable.");
-				const role: ModelRole = kind.modelRole;
 				const initial = await resolveExactModelSelection(ctx, {
-					role,
+					role: kind.modelRole,
 				});
 				if (!initial.selected) {
-					const fallbackRole: ModelRole =
-						role === "worker" || role === "verifier"
-							? role
-							: role === "codebase-research" || role === "web-research"
-								? "research"
-								: role === "consult" || role === "plan-review"
-									? "advisor"
-									: role.endsWith("-review")
-										? "reviewer"
-										: "delegate";
-					const fallback = await resolveExactModelSelection(ctx, {
-						role: fallbackRole,
-					});
-					if (fallback.selected) return fallback.selected;
-					// Unconfigured installations still route through the established
-					// authenticated role pools. This fallback is exact and never silently
-					// substitutes an explicit request.
-					const legacy = await resolveDelegateSelection(ctx, choice);
-					return {
-						presetId: "legacy-role-pool",
-						modelSetId: role,
-						optionId: `${legacy.model}@${legacy.effort ?? "medium"}`,
-						modelId: legacy.model,
-						effort: legacy.effort ?? "medium",
-						source: choice.model || choice.effort ? "explicit" : "preset",
-						candidates: [
-							{
-								optionId: `${legacy.model}@${legacy.effort ?? "medium"}`,
-								authoredModel: legacy.model,
-								modelId: legacy.model,
-								effort: legacy.effort ?? "medium",
-								summary: `${role} legacy role-pool option`,
-								registered: true,
-								authenticated: true,
-								effortSupported: true,
-								available: true,
-							},
-						],
-					};
+					throw new Error(
+						initial.errors.map((error) => error.message).join("; ") ||
+							`No exact model option is configured for ${kind.modelRole}`,
+					);
 				}
 				if (!choice.model && !choice.effort) return initial.selected;
 				const candidate = initial.candidates.find(

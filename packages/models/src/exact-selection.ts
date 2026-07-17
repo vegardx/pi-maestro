@@ -20,7 +20,7 @@ import {
 	readModelsConfig,
 	SESSION_MODEL_SENTINEL,
 } from "./profiles.js";
-import { supportedEfforts } from "./role-resolver.js";
+import { supportedEfforts } from "./efforts.js";
 
 export interface PersistedExactAssignment {
 	readonly presetId: string;

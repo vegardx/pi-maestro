@@ -1,927 +1,140 @@
-// Scripting surface for /maestro. It shares normalized role/source helpers with
-// the interactive hierarchy; output stays intentionally plain and stable.
+// Scripted /maestro surface for scalar settings and exact agent-domain config.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SettingDeclaration } from "@vegardx/pi-contracts";
-import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
-import {
-	activeProfile,
-	readModelsConfig,
-	SESSION_MODEL_SENTINEL,
-} from "@vegardx/pi-models";
-import {
+import { SettingsManager } from "@earendil-works/pi-coding-agent";import {
 	type DomainRegistryInput,
 	domainImpact,
 	explainModelSelection,
 	readDomainSnapshot,
 	validateDomainEdit,
-	validateDomainValue,
 	writeDomainValue,
 } from "./domain.js";
-import {
-	activeProfileName,
-	formatSettingValue,
-	isModelRole,
-	type MaestroScope,
-	modelOptions,
-	modelProfileKeys,
-	parseSettingValue,
-	parseStringList,
-	readAdvancedValue,
-	readDeclaredValue,
-	readProfileTargets,
-	readRoleLeaf,
-	resolveModelName,
-	sessionFallbackLabel,
-	sessionModelId,
-	supportedEfforts,
-	THINKING_LEVELS,
-	validateDeclaredValue,
-	writeAdvancedValue,
-	writeProfileTargets,
-	writeRoleLeaf,
-} from "./model.js";
-import { readLayeredExtensionConfig } from "./reader.js";
-import {
-	declaredSetting,
-	declaredSettingKeys,
-	settingsRegistry,
-} from "./registry.js";
+import { formatSettingValue, parseSettingValue, readAdvancedValue, writeAdvancedValue } from "./model.js";
+import { declaredSettingKeys } from "./registry.js";
 
-interface ProfileKey {
-	readonly profile: string;
-	readonly kind: "targets" | "role";
-	readonly role?: ModelRole;
-	readonly leaf?: "models" | "efforts";
-}
+const SCOPES = ["--session", "--project", "--global"] as const;
+type Scope = "session" | "project" | "global";
 
-function parseProfileKey(key: string): ProfileKey | undefined {
-	const parts = key.split(".");
-	if (parts[0] !== "models" || parts[1] !== "profiles" || !parts[2])
-		return undefined;
-	if (parts.length === 4 && parts[3] === "targets")
-		return { profile: parts[2], kind: "targets" };
-	if (
-		(parts.length === 6 || (parts.length === 7 && parts[6] === "")) &&
-		parts[3] === "roles" &&
-		isModelRole(parts[4]) &&
-		(parts[5] === "models" || parts[5] === "efforts")
-	)
-		return { profile: parts[2], kind: "role", role: parts[4], leaf: parts[5] };
-	return undefined;
-}
-
-function parseScope(args: string): { scope: MaestroScope; rest: string } {
-	let scope: MaestroScope = "project";
-	let rest = args.trim();
-	for (const candidate of ["global", "project", "session"] as const) {
-		const flag = `--${candidate}`;
-		if (rest === flag || rest.startsWith(`${flag} `)) {
-			scope = candidate;
-			rest = rest.slice(flag.length).trim();
-			break;
-		}
+function parseScoped(args: string): { scope: Scope; key: string; raw: string } {
+	const parts = args.trim().split(/\s+/);
+	let scope: Scope = "session";
+	if (SCOPES.includes(parts[0] as (typeof SCOPES)[number])) {
+		scope = parts.shift()!.slice(2) as Scope;
 	}
-	return { scope, rest };
+	return { scope, key: parts.shift() ?? "", raw: parts.join(" ") };
 }
 
-function splitKeyValue(
-	input: string,
-): { key: string; raw: string } | undefined {
-	const match = input.match(/^(\S+)\s+([\s\S]+)$/);
-	return match ? { key: match[1], raw: match[2] } : undefined;
+function notify(ctx: ExtensionContext, text: string, warning = false): void {
+	ctx.ui.notify(text, warning ? "warning" : "info");
 }
 
-function profileKeySuggestions(ctx: ExtensionContext): string[] {
-	const suggestions: string[] = [];
-	for (const profile of modelProfileKeys(ctx)) {
-		suggestions.push(`models.profiles.${profile}.targets`);
-		for (const role of MODEL_ROLES) {
-			suggestions.push(`models.profiles.${profile}.roles.${role}.models`);
-			suggestions.push(`models.profiles.${profile}.roles.${role}.efforts`);
-		}
-	}
-	return suggestions;
-}
-
-function declarationDefault(
-	ctx: ExtensionContext,
-	extension: string,
-	declaration: SettingDeclaration,
-) {
-	if (!declaration.presetDefaults) return declaration.default;
-	const preset = settingsRegistry
-		.get(extension)
-		?.find((candidate) => candidate.key === "execution.preset");
-	const selected = preset
-		? readDeclaredValue(ctx.cwd, extension, preset).effective
-		: undefined;
-	return typeof selected === "string"
-		? (declaration.presetDefaults[selected] ?? declaration.default)
-		: declaration.default;
-}
-
-function declaredLayered(ctx: ExtensionContext, key: string) {
-	const declared = declaredSetting(key);
-	if (!declared) return undefined;
-	return {
-		...declared,
-		layered: readDeclaredValue(
-			ctx.cwd,
-			declared.extension,
-			declared.declaration,
-			declarationDefault(ctx, declared.extension, declared.declaration),
-		),
-	};
-}
-
-function extensionKeySuggestions(ctx: ExtensionContext): string[] {
-	const { merged } = readLayeredExtensionConfig(ctx.cwd);
-	const out: string[] = [];
-	const walk = (value: unknown, prefix: string): void => {
-		if (typeof value !== "object" || value === null || Array.isArray(value)) {
-			out.push(prefix);
-			return;
-		}
-		for (const [name, child] of Object.entries(value))
-			walk(child, prefix ? `${prefix}.${name}` : name);
-	};
-	for (const [extension, config] of Object.entries(merged))
-		walk(config, extension);
-	return [...new Set([...out, ...declaredSettingKeys()])];
-}
-
-function handleShow(
-	ctx: ExtensionContext,
-	registry: DomainRegistryInput = {},
-): void {
-	const config = readModelsConfig(ctx.cwd);
-	const active = activeProfile(config, sessionModelId(ctx));
+function show(ctx: ExtensionContext, registry: DomainRegistryInput): void {
+	const snapshot = readDomainSnapshot(ctx, registry);
 	const lines = [
 		"Maestro Configuration",
-		`Session model: ${sessionModelId(ctx) ?? "none"}`,
-		`Active profile: ${active?.name ?? "none (all roles follow session)"}`,
+		`Active preset: ${snapshot.activePreset ?? "session fallback"}`,
+		`Model sets: ${snapshot.modelSets.length}`,
+		`Agent kinds: ${snapshot.kinds.length}`,
+		`Runtime policies: ${snapshot.runtimePolicies.length}`,
+		`Transition gates: ${snapshot.gates.length}`,
 		"",
-		"Model profiles:",
+		"Use /maestro explain <kind>, /maestro validate, or get/set/reset exact keys.",
 	];
-	for (const profile of modelProfileKeys(ctx)) {
-		const targets = readProfileTargets(ctx, profile);
-		lines.push(`  ${profile}${profile === active?.name ? " (active)" : ""}`);
-		lines.push(
-			`    targets = ${formatSettingValue(targets.effective)} [${targets.source ?? "unset"}]`,
-		);
-		for (const role of MODEL_ROLES) {
-			const models = readRoleLeaf(ctx, profile, role, "models");
-			const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-			if (!models.effective?.length && !efforts.effective?.length) continue;
-			lines.push(
-				`    ${role}.models = ${models.effective?.length ? formatSettingValue(models.effective) : sessionFallbackLabel(ctx)} [${models.source ?? "unset"}]`,
-			);
-			lines.push(
-				`    ${role}.efforts = ${efforts.effective?.length ? formatSettingValue(efforts.effective) : "auto"} [${efforts.source ?? "unset"}]`,
-			);
-		}
-	}
-	const snapshot = readDomainSnapshot(ctx, registry);
-	lines.push(
-		"",
-		"Exact model configuration:",
-		`  Main model: ${snapshot.mainModel ?? "none"}`,
-		`  Active preset: ${snapshot.activePreset ?? "none"}${snapshot.matchedTarget ? ` · target ${snapshot.matchedTarget}` : ""}`,
-		`  Context: cwd=${snapshot.contextFacts.cwd} · provider=${snapshot.contextFacts.provider ?? "none"} · window=${snapshot.contextFacts.contextWindow ?? "unknown"}`,
-	);
-	for (const preset of snapshot.presets)
-		lines.push(
-			`  preset ${preset.id} [${preset.source}] targets=${preset.targets.join(", ") || "none"} sets=${
-				Object.entries(preset.modelSets)
-					.map(([role, set]) => `${role}:${set}`)
-					.join(", ") || "none"
-			}`,
-		);
-	for (const set of snapshot.modelSets)
-		lines.push(
-			`  set ${set.id}: ${set.options.map((option) => `${option.id}=${option.model}@${option.effort}`).join(" → ")} · used by ${set.usedBy.join(", ") || "none"}`,
-		);
-	lines.push("", "Agent kinds and runtime policies:");
-	for (const kind of snapshot.kinds)
-		lines.push(
-			`  ${kind.kind}: set=${kind.modelSet ?? "role default"}${kind.option ? ` option=${kind.option}` : ""} runtime=${kind.runtimePolicy} [${kind.source}]`,
-		);
-	for (const policy of snapshot.runtimePolicies) {
-		const used = snapshot.kinds
-			.filter((kind) => kind.runtimePolicy === policy.id)
-			.map((kind) => kind.kind);
-		lines.push(
-			`  policy ${policy.id}: ${policy.permissions}/${policy.session}/${policy.transport} · used by ${used.join(", ") || "none"}`,
-		);
-	}
-	lines.push("", "Transition gates:");
-	for (const gate of snapshot.gates)
-		lines.push(
-			`  ${gate.id}: ${gate.enabled ? "enabled" : "disabled"} · ${gate.edges.join(", ")} · ${gate.agentKind}/${gate.contract}`,
-		);
-	const keys = extensionKeySuggestions(ctx);
-	if (keys.length > 0) {
-		lines.push("", "Extension settings:");
-		let previousExtension = "";
-		for (const key of keys) {
-			const dot = key.indexOf(".");
-			if (dot < 1) continue;
-			const extension = key.slice(0, dot);
-			if (extension !== previousExtension) {
-				lines.push(`Extension: ${extension}`);
-				previousExtension = extension;
-			}
-			const declared = declaredLayered(ctx, key);
-			const layered =
-				declared?.layered ??
-				readAdvancedValue(ctx.cwd, extension, key.slice(dot + 1));
-			lines.push(
-				`  ${key} = ${formatSettingValue(layered.effective)} [${layered.source}]`,
-			);
-		}
-	}
-	ctx.ui.notify(lines.join("\n"), "info");
+	notify(ctx, lines.join("\n"));
 }
 
-function handleGet(args: string, ctx: ExtensionContext) {
-	const key = args.trim();
-	if (!key) return ctx.ui.notify("Usage: /maestro get <key>", "warning");
-	const profileKey = parseProfileKey(key);
-	if (profileKey?.kind === "targets") {
-		const value = readProfileTargets(ctx, profileKey.profile);
-		ctx.ui.notify(
-			`${key} = ${formatSettingValue(value.effective)} [${value.source ?? "unset"}]`,
-			"info",
-		);
-		return;
-	}
-	if (profileKey?.kind === "role" && profileKey.role && profileKey.leaf) {
-		const value = readRoleLeaf(
-			ctx,
-			profileKey.profile,
-			profileKey.role,
-			profileKey.leaf,
-		);
-		ctx.ui.notify(
-			`${key} = ${formatSettingValue(value.effective)} [${value.source ?? "fallback"}]`,
-			"info",
-		);
-		return;
-	}
-	const declared = declaredLayered(ctx, key);
-	if (declared) {
-		ctx.ui.notify(
-			`${key} = ${formatSettingValue(declared.layered.effective)} [${declared.layered.source}]`,
-			"info",
-		);
-		return;
-	}
-	const dot = key.indexOf(".");
-	if (dot < 1)
-		return ctx.ui.notify(
-			"Key must be an extension path or models.profiles.<name> path.",
-			"warning",
-		);
-	const value = readAdvancedValue(
-		ctx.cwd,
-		key.slice(0, dot),
-		key.slice(dot + 1),
-	);
-	if (value.effective === undefined)
-		return ctx.ui.notify(`Key "${key}" not found.`, "warning");
-	ctx.ui.notify(
-		`${key} = ${formatSettingValue(value.effective)} [${value.source}]`,
-		"info",
-	);
-}
-
-function stringArray(raw: string): readonly string[] | undefined {
-	const value = parseSettingValue(raw);
-	return Array.isArray(value) &&
-		value.length > 0 &&
-		value.every((entry) => typeof entry === "string")
-		? value
-		: undefined;
-}
-
-function validateDeclaredEdit(
-	declaration: SettingDeclaration,
-	value: unknown,
-): string | undefined {
-	const validated = validateDeclaredValue(declaration, value);
-	if (validated === undefined) return `Invalid value for ${declaration.label}.`;
-	if (declaration.type === "number") {
-		const key = declaration.key;
-		const number = validated as number;
-		if (number < 0) return `${declaration.label} cannot be negative.`;
-		if (key === "execution.stopGraceMs" && number > 60_000)
-			return "Stop grace must be between 0 and 60000 ms.";
-		if (
-			key.endsWith("stallMs") ||
-			key.endsWith("softMs") ||
-			key.endsWith("hardMs")
-		) {
-			if (number === 0) return `${declaration.label} must be positive.`;
-		}
-	}
-	return undefined;
-}
-
-function handleSet(
+function setValue(
 	args: string,
 	ctx: ExtensionContext,
-	registry: DomainRegistryInput = {},
-) {
-	const { scope, rest } = parseScope(args);
-	const parsed = splitKeyValue(rest);
-	if (!parsed)
-		return ctx.ui.notify(
-			"Usage: /maestro set [--session|--project|--global] <key> <value>",
-			"warning",
-		);
-	const profileKey = parseProfileKey(parsed.key);
-	if (
-		parsed.key.startsWith("models.modelSets.") ||
-		parsed.key.startsWith("models.presets.") ||
-		parsed.key.startsWith("agents.") ||
-		parsed.key.startsWith("transitionGates.")
-	) {
-		let value: unknown;
-		try {
-			value = JSON.parse(parsed.raw);
-		} catch {
-			value = parsed.raw;
+	registry: DomainRegistryInput,
+): void {
+	const { scope, key, raw } = parseScoped(args);
+	if (!key || !raw) return notify(ctx, "set requires a key and JSON value", true);
+	const domain = key.startsWith("models.") || key.startsWith("agents.") || key.startsWith("transitionGates.");
+	try {
+		if (domain) {
+			const value = parseSettingValue(raw);
+			const errors = validateDomainEdit(ctx, key, scope, value, registry);
+			if (errors.length) return notify(ctx, errors.map((error) => `- ${error}`).join("\n"), true);
+			const impact = domainImpact(readDomainSnapshot(ctx, registry), key, value);
+			const written = writeDomainValue(ctx, key, scope, raw, registry);
+			if (written.length) return notify(ctx, written.map((error) => `- ${error}`).join("\n"), true);
+			notify(ctx, `✓ ${key} updated [${scope}]\n${impact.join("\n")}`);
+			return;
 		}
-		const errors = validateDomainValue(parsed.key, value);
-		if (errors.length)
-			return ctx.ui.notify(
-				`Invalid configuration:\n${errors.map((error) => `- ${error}`).join("\n")}`,
-				"warning",
-			);
-		const effective =
-			typeof value === "object" && value !== null
-				? JSON.stringify(value)
-				: String(value);
-		const graphErrors = validateDomainEdit(
-			ctx,
-			parsed.key,
-			scope,
-			effective,
-			registry,
-		);
-		if (graphErrors.length)
-			return ctx.ui.notify(
-				`Invalid configuration:\n${graphErrors.map((error) => `- ${error}`).join("\n")}`,
-				"warning",
-			);
-		const impact = domainImpact(
-			readDomainSnapshot(ctx, registry),
-			parsed.key,
-			value,
-		);
-		const writeErrors = writeDomainValue(
-			ctx,
-			parsed.key,
-			scope,
-			parsed.raw,
-			registry,
-		);
-		if (writeErrors.length)
-			return ctx.ui.notify(
-				`Invalid configuration:\n${writeErrors.map((error) => `- ${error}`).join("\n")}`,
-				"warning",
-			);
-		ctx.ui.notify(
-			`Impact preview:\n${impact.map((line) => `- ${line}`).join("\n") || "- future resolutions"}\n✓ Set ${parsed.key} [${scope}]`,
-			"info",
-		);
-		return;
+		const dot = key.indexOf(".");
+		if (dot < 1) return notify(ctx, "Key must be an extension or agent-domain path.", true);
+		writeAdvancedValue(ctx.cwd, key.slice(0, dot), key.slice(dot + 1), scope, parseSettingValue(raw));
+		notify(ctx, `✓ ${key} updated [${scope}]`);
+	} catch (cause) {
+		notify(ctx, cause instanceof Error ? cause.message : String(cause), true);
 	}
-	if (profileKey) {
-		const values = stringArray(parsed.raw);
-		if (!values)
-			return ctx.ui.notify(
-				"Profile targets/models/efforts require a non-empty JSON string array.",
-				"warning",
-			);
-		if (profileKey.kind === "targets") {
-			if (scope === "session")
-				return ctx.ui.notify(
-					"Profile targets support only project or global scope.",
-					"warning",
-				);
-			writeProfileTargets(ctx, profileKey.profile, scope, values);
-		} else if (profileKey.role && profileKey.leaf) {
-			writeRoleLeaf(
-				ctx,
-				profileKey.profile,
-				profileKey.role,
-				profileKey.leaf,
-				scope,
-				values,
-			);
-		}
-		ctx.ui.notify(
-			`✓ Set ${parsed.key} = ${formatSettingValue(values)} [${scope}]`,
-			"info",
-		);
-		return;
-	}
-	const declared = declaredSetting(parsed.key);
-	if (declared) {
-		const parsedValue =
-			declared.declaration.type === "string-list"
-				? parseStringList(parsed.raw)
-				: parseSettingValue(parsed.raw);
-		if (parsedValue === undefined)
-			return ctx.ui.notify(
-				"String-list values require JSON or newline-separated strings.",
-				"warning",
-			);
-		if (
-			declared.declaration.type === "choice" &&
-			!declared.declaration.options?.some(
-				(option) => option.value === parsedValue,
-			)
-		)
-			return ctx.ui.notify(
-				`Invalid value. Choose: ${declared.declaration.options?.map((option) => option.value).join(", ")}`,
-				"warning",
-			);
-		const validation = validateDeclaredEdit(declared.declaration, parsedValue);
-		if (validation) return ctx.ui.notify(validation, "warning");
-		writeAdvancedValue(
-			ctx.cwd,
-			declared.extension,
-			declared.declaration.key,
-			scope,
-			parsedValue,
-		);
-		ctx.ui.notify(
-			`✓ Set ${parsed.key} = ${formatSettingValue(parsedValue)} [${scope}]`,
-			"info",
-		);
-		return;
-	}
-	const dot = parsed.key.indexOf(".");
-	if (dot < 1)
-		return ctx.ui.notify(
-			"Key must be an extension path or models.profiles.<name> path.",
-			"warning",
-		);
-	const value = parseSettingValue(parsed.raw);
-	writeAdvancedValue(
-		ctx.cwd,
-		parsed.key.slice(0, dot),
-		parsed.key.slice(dot + 1),
-		scope,
-		value,
-	);
-	ctx.ui.notify(
-		`✓ Set ${parsed.key} = ${formatSettingValue(value)} [${scope}]`,
-		"info",
-	);
 }
 
-function handleReset(args: string, ctx: ExtensionContext) {
-	const { scope, rest } = parseScope(args);
-	const key = rest.trim();
-	if (!key)
-		return ctx.ui.notify(
-			"Usage: /maestro reset [--session|--project|--global] <key>",
-			"warning",
-		);
-	const profileKey = parseProfileKey(key);
-	if (profileKey) {
-		if (profileKey.kind === "targets") {
-			if (scope === "session")
-				return ctx.ui.notify(
-					"Profile targets support only project or global scope.",
-					"warning",
-				);
-			writeProfileTargets(ctx, profileKey.profile, scope, undefined);
-		} else if (profileKey.role && profileKey.leaf) {
-			writeRoleLeaf(
-				ctx,
-				profileKey.profile,
-				profileKey.role,
-				profileKey.leaf,
-				scope,
-				undefined,
-			);
-		}
-		ctx.ui.notify(`✓ Reset ${key} [${scope}]`, "info");
+function resetValue(args: string, ctx: ExtensionContext): void {
+	const { scope, key } = parseScoped(args);
+	if (!key) return notify(ctx, "reset requires a key", true);
+	const domain = key.startsWith("models.") || key.startsWith("agents.") || key.startsWith("transitionGates.");
+	if (domain) {
+		writeDomainValue(ctx, key, scope, "null");
+		notify(ctx, `✓ ${key} reset [${scope}]`);
 		return;
 	}
 	const dot = key.indexOf(".");
-	if (dot < 1)
-		return ctx.ui.notify(
-			"Key must be an extension path or models.profiles.<name> path.",
-			"warning",
-		);
-	const before = readAdvancedValue(
-		ctx.cwd,
-		key.slice(0, dot),
-		key.slice(dot + 1),
-	)[scope];
-	writeAdvancedValue(
-		ctx.cwd,
-		key.slice(0, dot),
-		key.slice(dot + 1),
-		scope,
-		undefined,
+	if (dot < 1) return notify(ctx, "Key must be an extension or agent-domain path.", true);
+	writeAdvancedValue(ctx.cwd, key.slice(0, dot), key.slice(dot + 1), scope, undefined);
+	notify(ctx, `✓ ${key} reset [${scope}]`);
+}
+
+function getValue(args: string, ctx: ExtensionContext): void {
+	const { key } = parseScoped(args);
+	if (!key) return notify(ctx, "get requires a key", true);
+	const manager = SettingsManager.create(ctx.cwd);
+	const readPath = (raw: unknown): unknown => key.split(".").reduce<unknown>((value, part) =>
+		typeof value === "object" && value !== null ? (value as Record<string, unknown>)[part] : undefined,
+		raw,
 	);
-	ctx.ui.notify(
-		before === undefined
-			? `Key "${key}" was not set in ${scope} settings.`
-			: `✓ Reset ${key} (was: ${formatSettingValue(before)}) [${scope}]`,
-		"info",
-	);
-}
-
-function handleProfiles(ctx: ExtensionContext) {
-	const config = readModelsConfig(ctx.cwd);
-	if (!config)
-		return ctx.ui.notify(
-			"No model profiles configured. Open /maestro to create one.",
-			"info",
-		);
-	const active = activeProfileName(ctx);
-	const lines = [
-		`Active profile: ${active ?? "none — all roles follow session"}`,
-		"",
-	];
-	for (const profile of modelProfileKeys(ctx)) {
-		lines.push(`${profile}${profile === active ? " (active)" : ""}`);
-		lines.push(
-			`  targets: ${formatSettingValue(readProfileTargets(ctx, profile).effective)}`,
-		);
-		for (const role of MODEL_ROLES) {
-			const models = readRoleLeaf(ctx, profile, role, "models");
-			const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-			if (models.effective?.length)
-				lines.push(
-					`  ${role}.models: ${formatSettingValue(models.effective)} [${models.source}]`,
-				);
-			if (efforts.effective?.length)
-				lines.push(
-					`  ${role}.efforts: ${formatSettingValue(efforts.effective)} [${efforts.source}]`,
-				);
-		}
+	const project = readPath(manager.getProjectSettings());
+	const global = readPath(manager.getGlobalSettings());
+	if (key.startsWith("models.") || key.startsWith("agents.") || key.startsWith("transitionGates.")) {
+		notify(ctx, `${key} = ${formatSettingValue(project ?? global)} [${project !== undefined ? "project" : global !== undefined ? "global" : "unset"}]`);
+		return;
 	}
-	lines.push("", "Switch profiles with /model; activation is target-derived.");
-	ctx.ui.notify(lines.join("\n"), "info");
-}
-
-const ROLE_VERBS = ["list", "add", "remove", "default", "effort"] as const;
-
-/**
- * One-liners edit the pool the user currently sees: the models leaf's
- * effective source, falling back to global for leaves not yet authored.
- */
-function roleWriteScope(
-	ctx: ExtensionContext,
-	profile: string,
-	role: ModelRole,
-): MaestroScope {
-	const source = readRoleLeaf(ctx, profile, role, "models").source;
-	return source === undefined || source === "default" ? "global" : source;
-}
-
-/** True when every character of `needle` appears in `haystack`, in order. */
-function isSubsequence(needle: string, haystack: string): boolean {
-	let matched = 0;
-	for (const char of haystack) if (char === needle[matched]) matched += 1;
-	return matched === needle.length;
-}
-
-/** Registry ids resembling `query`, for "did you mean" on unknown models. */
-function modelSuggestions(ctx: ExtensionContext, query: string): string[] {
-	const fragment = (query.split("/").pop() ?? query).toLowerCase();
-	return ctx.modelRegistry
-		.getAll()
-		.map((model) => `${model.provider}/${model.id}`)
-		.filter((id) => {
-			const name = id.split("/")[1]?.toLowerCase() ?? id.toLowerCase();
-			// Subsequence in either direction absorbs missing/extra characters
-			// (gemni → gemini); substring covers partial ids (sonnet → …sonnet…).
-			return (
-				name.includes(fragment) ||
-				fragment.includes(name) ||
-				isSubsequence(fragment, name) ||
-				isSubsequence(name, fragment)
-			);
-		})
-		.slice(0, 3);
-}
-
-function defaultEffortModel(
-	ctx: ExtensionContext,
-	pool: readonly string[],
-): { supported: readonly string[]; model: string } | undefined {
-	const model = pool[0];
-	if (!model) return undefined;
-	// The sentinel default narrows to the live session model's support.
-	if (model === SESSION_MODEL_SENTINEL)
-		return {
-			supported: ctx.model ? supportedEfforts(ctx.model) : THINKING_LEVELS,
-			model: sessionModelId(ctx) ?? model,
-		};
-	// Ids the registry does not know cannot be narrowed; allow every level.
-	const supported =
-		modelOptions(ctx).find((option) => option.id === model)?.supported ??
-		THINKING_LEVELS;
-	return { supported, model };
-}
-
-function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
-	const profile = activeProfileName(ctx);
-	if (!profile)
-		return ctx.ui.notify(
-			"No active profile — select a model owned by a profile's targets with /model first.",
-			"warning",
-		);
-	const [verb = "list", ...rest] = args.trim().split(/\s+/).filter(Boolean);
-	const argument = rest.join(" ").trim();
-	const scope = roleWriteScope(ctx, profile, role);
-	const layered = readRoleLeaf(ctx, profile, role, "models");
-	const pool = [...(layered[scope] ?? layered.effective ?? [])];
-
-	if (verb === "list") {
-		const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-		const lines = [
-			`${role} · ${profile} · scope: ${layered.source ?? "unset (writes global)"}`,
-		];
-		if (pool.length === 0)
-			lines.push(`  (empty — ${sessionFallbackLabel(ctx)})`);
-		for (const [index, id] of pool.entries())
-			lines.push(
-				`  ${index + 1}. ${id === SESSION_MODEL_SENTINEL ? sessionFallbackLabel(ctx) : resolveModelName(ctx, id)} — ${id}${index === 0 ? " (default)" : ""}`,
-			);
-		lines.push(`default effort: ${efforts.effective?.[0] ?? "auto"}`);
-		return ctx.ui.notify(lines.join("\n"), "info");
-	}
-	if (verb === "add" || verb === "default") {
-		if (!argument)
-			return ctx.ui.notify(
-				`Usage: /maestro ${role} ${verb} <provider/model>`,
-				"warning",
-			);
-		if (
-			argument !== SESSION_MODEL_SENTINEL &&
-			!modelOptions(ctx).some((option) => option.id === argument)
-		) {
-			const suggestions = modelSuggestions(ctx, argument);
-			return ctx.ui.notify(
-				`Unknown model "${argument}".${suggestions.length ? ` Did you mean: ${suggestions.join(", ")}?` : ""}`,
-				"warning",
-			);
-		}
-		if (verb === "add" && pool.includes(argument))
-			return ctx.ui.notify(
-				`${argument} is already in the ${role} pool.`,
-				"info",
-			);
-		const next =
-			verb === "add"
-				? [...pool, argument]
-				: [argument, ...pool.filter((id) => id !== argument)];
-		writeRoleLeaf(ctx, profile, role, "models", scope, next);
-		return ctx.ui.notify(
-			`✓ ${role}.models = ${next.join(" → ")} [${scope}]`,
-			"info",
-		);
-	}
-	if (verb === "remove") {
-		if (!argument)
-			return ctx.ui.notify(
-				`Usage: /maestro ${role} remove <provider/model>`,
-				"warning",
-			);
-		if (!pool.includes(argument))
-			return ctx.ui.notify(
-				`${argument} is not in the ${role} pool.`,
-				"warning",
-			);
-		const next = pool.filter((id) => id !== argument);
-		// Empty pools are stored as a reset scope, never an empty array.
-		writeRoleLeaf(
-			ctx,
-			profile,
-			role,
-			"models",
-			scope,
-			next.length ? next : undefined,
-		);
-		return ctx.ui.notify(
-			next.length
-				? `✓ ${role}.models = ${next.join(" → ")} [${scope}]`
-				: `✓ ${role}.models reset [${scope}] — role follows ${sessionFallbackLabel(ctx)}`,
-			"info",
-		);
-	}
-	if (verb === "effort") {
-		if (!argument)
-			return ctx.ui.notify(
-				`Usage: /maestro ${role} effort <level|auto>`,
-				"warning",
-			);
-		// "auto" clears the leaf: the spawner picks the effort per task (the
-		// provider default applies if it stays silent). No default model needed.
-		if (argument === "auto") {
-			writeRoleLeaf(ctx, profile, role, "efforts", scope, undefined);
-			return ctx.ui.notify(
-				`✓ ${role}.efforts = auto [${scope}] — spawner picks per task`,
-				"info",
-			);
-		}
-		const target = defaultEffortModel(ctx, pool);
-		if (!target)
-			return ctx.ui.notify(
-				`${role} has no default model — add one before setting effort.`,
-				"warning",
-			);
-		if (!target.supported.includes(argument))
-			return ctx.ui.notify(
-				`"${argument}" is not supported by ${target.model}. Supported: ${target.supported.join(", ")}, or auto.`,
-				"warning",
-			);
-		const efforts = readRoleLeaf(ctx, profile, role, "efforts");
-		const configured = [...(efforts[scope] ?? efforts.effective ?? [])];
-		// The chosen level leads; other configured levels stay as alternates.
-		const next = [
-			argument,
-			...configured.filter((level) => level !== argument),
-		];
-		writeRoleLeaf(ctx, profile, role, "efforts", scope, next);
-		return ctx.ui.notify(
-			`✓ ${role}.efforts = ${next.join(" → ")} [${scope}]`,
-			"info",
-		);
-	}
-	ctx.ui.notify(
-		`Unknown verb "${verb}". Use: ${ROLE_VERBS.join(", ")}`,
-		"warning",
-	);
-}
-
-async function handleExplain(args: string, ctx: ExtensionContext) {
-	const role = args.trim();
-	if (!isModelRole(role))
-		return ctx.ui.notify(
-			`Usage: /maestro explain <role> (${MODEL_ROLES.join(", ")})`,
-			"warning",
-		);
-	ctx.ui.notify(await explainModelSelection(ctx, role), "info");
-}
-
-function handleValidate(ctx: ExtensionContext, registry: DomainRegistryInput) {
-	const snapshot = readDomainSnapshot(ctx, registry);
-	const errors: string[] = [];
-	for (const preset of snapshot.presets)
-		for (const [role, set] of Object.entries(preset.modelSets))
-			if (!snapshot.modelSets.some((entry) => entry.id === set))
-				errors.push(
-					`preset ${preset.id}.${role} references unknown model set ${set}`,
-				);
-	for (const kind of snapshot.kinds) {
-		if (
-			kind.modelSet &&
-			!snapshot.modelSets.some((set) => set.id === kind.modelSet)
-		)
-			errors.push(
-				`kind ${kind.kind} references unknown model set ${kind.modelSet}`,
-			);
-		if (
-			!snapshot.runtimePolicies.some(
-				(policy) => policy.id === kind.runtimePolicy,
-			)
-		)
-			errors.push(
-				`kind ${kind.kind} references unknown runtime policy ${kind.runtimePolicy}`,
-			);
-	}
-	for (const gate of snapshot.gates)
-		errors.push(
-			...validateDomainEdit(
-				ctx,
-				`transitionGates.${gate.id}`,
-				"session",
-				JSON.stringify(gate),
-				registry,
-			),
-		);
-	ctx.ui.notify(
-		errors.length
-			? `Configuration invalid:\n${errors.map((error) => `- ${error}`).join("\n")}`
-			: "✓ Maestro configuration is valid.",
-		errors.length ? "warning" : "info",
-	);
+	const dot = key.indexOf(".");
+	if (dot < 1) return notify(ctx, "Key must be an extension or agent-domain path.", true);
+	const value = readAdvancedValue(ctx.cwd, key.slice(0, dot), key.slice(dot + 1));
+	notify(ctx, `${key} = ${formatSettingValue(value.effective)} [${value.source ?? "unset"}]`);
 }
 
 export function handleSettingsCommand(
 	args: string,
 	ctx: ExtensionContext,
 	registry: DomainRegistryInput = {},
-) {
-	const trimmed = args.trim();
-	const [sub = "show", ...rest] = trimmed.split(/\s+/);
-	const subArgs = rest.join(" ");
-	if (sub === "show") return handleShow(ctx, registry);
-	if (sub === "explain") return handleExplain(subArgs, ctx);
-	if (sub === "validate") return handleValidate(ctx, registry);
-	if (sub === "get") return handleGet(subArgs, ctx);
-	if (sub === "set") return handleSet(subArgs, ctx, registry);
-	if (sub === "reset") return handleReset(subArgs, ctx);
-	if (sub === "profiles") return handleProfiles(ctx);
-	if (isModelRole(sub)) return handleRole(sub, subArgs, ctx);
-	ctx.ui.notify(
-		`Unknown subcommand "${sub}". Use: show, get, set, reset, profiles, or a role name (${MODEL_ROLES.join(", ")})`,
-		"warning",
-	);
-}
-
-const SUBCOMMANDS = [
-	"show",
-	"get",
-	"set",
-	"reset",
-	"profiles",
-	"explain",
-	"validate",
-] as const;
-
-function roleCompletions(
-	role: ModelRole,
-	parts: string[],
-	trailing: boolean,
-	ctx: ExtensionContext,
-): string[] {
-	if (parts.length === 1 && trailing) return [...ROLE_VERBS];
-	if (parts.length === 2 && !trailing)
-		return ROLE_VERBS.filter((verb) => verb.startsWith(parts[1] ?? ""));
-	// Role verbs take exactly one argument.
-	if (parts.length > 3 || (parts.length === 3 && trailing)) return [];
-	const verb = parts[1];
-	const prefix = trailing ? "" : (parts[2] ?? "");
-	if (verb === "add" || verb === "remove" || verb === "default")
-		return [
-			SESSION_MODEL_SENTINEL,
-			...modelOptions(ctx).map((option) => option.id),
-		].filter((id) => id.startsWith(prefix));
-	if (verb === "effort") {
-		const profile = activeProfileName(ctx);
-		const pool = profile
-			? (readRoleLeaf(ctx, profile, role, "models").effective ?? [])
-			: [];
-		const supported =
-			defaultEffortModel(ctx, pool)?.supported ?? THINKING_LEVELS;
-		return [...supported, "auto"].filter((level) => level.startsWith(prefix));
+): void {
+	const [sub = "show", ...rest] = args.trim().split(/\s+/);
+	const tail = rest.join(" ");
+	if (sub === "show" || sub === "") return show(ctx, registry);
+	if (sub === "get") return getValue(tail, ctx);
+	if (sub === "set") return setValue(tail, ctx, registry);
+	if (sub === "reset") return resetValue(tail, ctx);
+	if (sub === "explain") {
+		void explainModelSelection(ctx, tail).then((text) => notify(ctx, text));
+		return;
 	}
-	return [];
+	if (sub === "validate") {
+		const errors = validateDomainEdit(ctx, "transitionGates.execution-readiness", "session", JSON.stringify(readDomainSnapshot(ctx, registry).gates[0] ?? {}), registry);
+		notify(ctx, errors.length ? errors.map((error) => `- ${error}`).join("\n") : "✓ Maestro configuration is valid.", errors.length > 0);
+		return;
+	}
+	notify(ctx, `Unknown subcommand "${sub}". Use show, get, set, reset, explain, or validate.`, true);
 }
 
-export function getSettingsCompletions(
-	args: string,
-	ctx: ExtensionContext,
-): string[] {
-	const trailing = args.endsWith(" ");
+export function getSettingsCompletions(args: string, _ctx: ExtensionContext): string[] {
 	const parts = args.trim().split(/\s+/);
-	if (parts.length <= 1 && !trailing)
-		return [...SUBCOMMANDS, ...MODEL_ROLES].filter((item) =>
-			item.startsWith(parts[0] ?? ""),
-		);
+	if (parts.length <= 1 && !args.endsWith(" "))
+		return ["show", "get", "set", "reset", "explain", "validate"].filter((item) => item.startsWith(parts[0] ?? ""));
 	const sub = parts[0];
-	if (isModelRole(sub)) return roleCompletions(sub, parts, trailing, ctx);
-	if (sub !== "get" && sub !== "set" && sub !== "reset") return [];
-	const flags = ["--session", "--project", "--global"];
-	const offset = flags.includes(parts[1]) ? 2 : 1;
-	const key = parts[offset] ?? "";
-	const valuePosition =
-		parts.length > offset + 1 || (trailing && parts.length > offset);
-	if (sub === "set" && valuePosition) {
-		const declared = declaredSetting(key);
-		const valuePrefix = trailing ? "" : (parts.at(-1) ?? "");
-		if (declared?.declaration.type === "choice")
-			return (declared.declaration.options ?? [])
-				.map((option) => option.value)
-				.filter((value) => value.startsWith(valuePrefix));
-		if (declared?.declaration.type === "string-list") return ['["path"]'];
-		if (key.endsWith(".efforts"))
-			return [`["${THINKING_LEVELS[0]}"]`, ...THINKING_LEVELS];
-		if (key.endsWith(".models") || key.endsWith(".targets"))
-			return ['["provider/model"]'];
-		if (key.endsWith("thinking") || key.endsWith("effort"))
-			return [...THINKING_LEVELS];
-		return [];
-	}
-	const prefix = trailing ? "" : key;
-	const suggestions = [
-		...profileKeySuggestions(ctx),
-		...extensionKeySuggestions(ctx),
-	].filter((item) => item.startsWith(prefix));
-	if ((sub === "set" || sub === "reset") && offset === 1 && parts.length <= 2)
-		suggestions.push(...flags.filter((flag) => flag.startsWith(prefix)));
-	return [...new Set(suggestions)];
+	if (!["get", "set", "reset"].includes(sub)) return [];
+	const key = parts.find((part) => !part.startsWith("--") && part !== sub) ?? "";
+	return [...declaredSettingKeys(), "models.modelSets.", "models.presets.", "agents.kinds.", "agents.runtimePolicies.", "transitionGates."].filter((item) => item.startsWith(key));
 }

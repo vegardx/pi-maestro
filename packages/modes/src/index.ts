@@ -196,12 +196,8 @@ export {
 } from "./session.js";
 export {
 	type ExecutionPolicySettings,
-	getImplementOverrides,
-	type ImplementOverrides,
 	readExecutionPolicySettings,
 	readModesCompactionSettings,
-	resolveInternalRoleModel,
-	setImplementOverrides,
 } from "./settings.js";
 export {
 	buildPrBody,

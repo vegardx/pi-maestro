@@ -2,13 +2,9 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
-import {
-	CAPABILITIES,
-	resetSessionRoleOverrides,
-	resetSessionSettingOverrides,
-} from "@vegardx/pi-contracts";
+import { CAPABILITIES, resetSessionSettingOverrides } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
-import { activeProfile, readModelsConfig } from "@vegardx/pi-models";
+import { activePreset, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
 import type { DomainRegistryInput } from "./domain.js";
 import { showConfigMenu } from "./menu.js";
@@ -36,12 +32,10 @@ export default defineExtension(
 
 		let lastCtx: ExtensionContext | undefined;
 		pi.on("session_start", (_e, ctx) => {
-			resetSessionRoleOverrides();
 			resetSessionSettingOverrides();
 			lastCtx = ctx;
 		});
 		pi.on("session_shutdown", () => {
-			resetSessionRoleOverrides();
 			resetSessionSettingOverrides();
 			lastCtx = undefined;
 		});
@@ -68,15 +62,14 @@ export default defineExtension(
 			},
 		});
 
-		// The session model selects the active profile (derived from target
-		// membership \u2014 no stored `active`). Notify which profile /model activated.
+		// The session model selects the active preset from exact target membership.
 		pi.on("model_select", (event, ctx) => {
 			if (event.source === "restore") return;
 			const config = readModelsConfig(ctx.cwd);
 			if (!config) return;
 			const modelId = `${event.model.provider}/${event.model.id}`;
-			const active = activeProfile(config, modelId);
-			if (active) ctx.ui.notify(`Profile \u2192 ${active.name}`, "info");
+			const active = activePreset(config, modelId);
+			if (active) ctx.ui.notify(`Preset → ${active.id}`, "info");
 		});
 	},
 );

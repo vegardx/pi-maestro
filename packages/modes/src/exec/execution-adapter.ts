@@ -231,12 +231,6 @@ export interface ExecutionAdapterOpts {
 	onAllSettled?: () => void;
 	/** Rich lifecycle events for the chat progress cards. */
 	onEvent?: (event: ExecutionEvent) => void;
-	/**
-	 * A deliverable just transitioned into a ship-gate block (worker done,
-	 * required verdicts unsatisfied). Fired once per distinct reason — the
-	 * runtime turns it into a decision question for the human.
-	 */
-	onShipGateBlocked?: (deliverableId: string, reason: string) => void;
 }
 
 export interface ExecutionStopOutcome {
@@ -318,8 +312,6 @@ export class ExecutionAdapter {
 		{ at: number; toolClass: "full" | "read-only" }
 	>(); // agentKey → first tokens arrival
 	private spawnTimes = new Map<string, number>(); // agentKey → spawn epoch ms
-	/** Last ship-gate block reason surfaced per deliverable (dedupe). */
-	private gateBlockSurfaced = new Map<string, string>();
 	private blockedLogged = new Set<string>(); // deliverableIds with a logged blocked event
 	private tickChain: Promise<void> = Promise.resolve(); // tick mutex
 	private pollInFlight = false; // skip overlapping pollSessions runs
@@ -864,80 +856,12 @@ export class ExecutionAdapter {
 
 			defaultBranch: this.opts.defaultBranch,
 
-			panelGate: (deliverableId) =>
-				this.deliverableGateSatisfied(deliverableId),
-			panelGateDetail: (deliverableId) =>
-				this.deliverableGateDetail(deliverableId),
-
 			canActivate: () => !this.stopping && (this.opts.canActivate?.() ?? true),
 
 			now: () => new Date().toISOString(),
 		};
 
 		this.executor = new DeliverableExecutor(this.engine, deps);
-	}
-
-	/**
-	 * The ship gate for a deliverable. With a review ledger (the redesigned
-	 * loop): every required reviewer participated in the panel round AND no
-	 * blocking finding is open (unwaived critical/major without a verified
-	 * fix). Without one (legacy round): every required reviewer's latest
-	 * verdict approves. A deliverable with no required reviewers is always
-	 * satisfied; no round at all blocks (stays retryable).
-	 */
-	deliverableGateSatisfied(deliverableId: string): boolean {
-		return this.requiredReviewerNames(deliverableId).length === 0;
-	}
-
-	/**
-	 * Persist a reported review ledger on the plan — the gate's source of
-	 * truth; it must survive worker respawns and maestro restarts. Shared by
-	 * settled rounds and the round-started crash marker.
-	 */
-	private requiredReviewerNames(_deliverableId: string): string[] {
-		const workflow = this.engine.get().workflow;
-		const assigned =
-			workflow?.assignments
-				.filter((assignment) => assignment.kind.endsWith("-review"))
-				.map((assignment) => assignment.agentId) ?? [];
-		return assigned;
-	}
-
-	/**
-	 * Why the gate is blocking: which required reviewers have no verdict yet
-	 * (never ran, or still running) vs. which returned changes. Drives the
-	 * blocked card the maestro/human sees when a completed worker didn't clear
-	 * its panel.
-	 */
-	/** Fire onShipGateBlocked once per new ship-gate reason; re-arm on clear. */
-	private surfaceGateBlocks(): void {
-		for (const [id, state] of this.executor.getStates()) {
-			const reason = state.blocked;
-			if (!reason?.startsWith("ship gate:")) {
-				this.gateBlockSurfaced.delete(id);
-				continue;
-			}
-			if (this.gateBlockSurfaced.get(id) === reason) continue;
-			this.gateBlockSurfaced.set(id, reason);
-			this.opts.onShipGateBlocked?.(id, reason);
-		}
-	}
-
-	/**
-	 * Who is holding the gate. With a ledger: the distinct reviewers (incl.
-	 * verifier regressions) owning open blocking findings, plus required
-	 * reviewers that never reported. Legacy: required reviewers whose latest
-	 * verdict isn't approve. These names are what a human override waives.
-	 */
-	failingRequiredReviewers(deliverableId: string): string[] {
-		return this.requiredReviewerNames(deliverableId);
-	}
-
-	private deliverableGateDetail(deliverableId: string): string {
-		const required = this.requiredReviewerNames(deliverableId);
-		return required.length
-			? `canonical workflow reports pending: ${required.join(", ")}`
-			: "canonical workflow gate satisfied";
 	}
 
 	/**
@@ -1438,7 +1362,6 @@ export class ExecutionAdapter {
 
 		const shipped = await this.executor.tick(deliverableIds);
 		this.recordDeliverableTransitions();
-		this.surfaceGateBlocks();
 
 		const afterActive = this.engine
 			.get()

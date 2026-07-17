@@ -8,7 +8,12 @@ import {
 	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { type Answer, CAPABILITIES } from "@vegardx/pi-contracts";
+import {
+	type AgentKindDefinition,
+	type Answer,
+	CAPABILITIES,
+} from "@vegardx/pi-contracts";
+import { runCommand } from "@vegardx/pi-git";
 import { getModelMeta, resolveExactModelSelection } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { buildRecap } from "../deliverable-recap.js";
@@ -34,8 +39,104 @@ import type { RuntimeContext } from "./context.js";
 import { renderAgentsOverview } from "./dashboard.js";
 import { runDebugCommand, runWorkerDebugCommand } from "./debug-command.js";
 
+/**
+ * Register a maestro slash command for every agent kind that declares one
+ * (docs/design/persona-commands.md). The command spawns that persona against a
+ * target and surfaces its report — report-only, no auto-remediation. Reading
+ * `command` is confined to this loop; the spawn/execution path never consults
+ * it, so the same persona keeps working unchanged inside a worker's review().
+ */
+export function registerPersonaCommands(rt: RuntimeContext): void {
+	const { pi, maestro } = rt;
+	const agents = maestro.capabilities.get(CAPABILITIES.agents);
+	if (!agents) return;
+	for (const kind of agents.kinds()) {
+		const command = kind.command;
+		if (!command) continue;
+		pi.registerCommand(command.name, {
+			description: command.description,
+			handler: (args: string, ctx: ExtensionCommandContext) =>
+				runPersonaCommand(rt, kind, args, ctx),
+		});
+	}
+}
+
+/** Current changes in the repo: staged + unstaged vs HEAD (empty if none/not a repo). */
+function repoChanges(cwd: string): string {
+	const diff = runCommand("git", ["diff", "HEAD"], { cwd });
+	return diff.ok ? diff.stdout.trim() : "";
+}
+
+/**
+ * Generic persona-command handler: resolve the kind's model, gather the target
+ * (the repo's current changes), spawn the read-only persona, and surface its
+ * report. No remediation — a human reads the report and decides.
+ */
+async function runPersonaCommand(
+	rt: RuntimeContext,
+	kind: AgentKindDefinition,
+	args: string,
+	ctx: ExtensionCommandContext,
+): Promise<void> {
+	const command = kind.command;
+	if (!command) return;
+	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
+	if (!subagents) {
+		ctx.ui.notify(
+			`/${command.name} unavailable: the subagents extension is not loaded.`,
+			"warning",
+		);
+		return;
+	}
+	const resolution = await resolveExactModelSelection(ctx, {
+		role: kind.modelRole,
+		requireApiKey: true,
+	});
+	const selected = resolution.selected;
+	if (!selected) {
+		ctx.ui.notify(
+			`/${command.name} unavailable: ${resolution.errors.map((e) => e.message).join("; ")}`,
+			"error",
+		);
+		return;
+	}
+	const cwd = process.cwd();
+	const changes = repoChanges(cwd);
+	const prompt = [
+		kind.prompt,
+		"",
+		command.instruction,
+		args.trim() ? `\nUser request: ${args.trim()}` : "",
+		changes
+			? `\n\nChanges under review (git diff HEAD):\n${changes}`
+			: "\n\nNo uncommitted changes; review the working tree at HEAD.",
+	].join("\n");
+	const meta = getModelMeta(ctx, selected.modelId);
+	ctx.ui.notify(`/${command.name}: ${meta.shortName} reviewing…`, "info");
+	try {
+		const handle = subagents.spawn(prompt, {
+			profile: "general",
+			role: kind.id,
+			displayName: command.name,
+			cwd,
+			model: selected.modelId,
+			...(selected.effort ? { thinking: selected.effort } : {}),
+		});
+		const result = await handle.result();
+		const report = result.summary?.trim() || result.error || "(no report)";
+		ctx.ui.notify(report, result.status === "succeeded" ? "info" : "warning");
+	} catch (err) {
+		ctx.ui.notify(
+			`/${command.name} failed: ${err instanceof Error ? err.message : String(err)}`,
+			"error",
+		);
+	}
+}
+
 export function registerRuntimeCommands(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
+
+	registerPersonaCommands(rt);
 
 	pi.registerCommand("plan", {
 		description: "Open or create a Maestro plan for this repo.",

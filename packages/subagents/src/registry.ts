@@ -248,11 +248,23 @@ export const BUILTIN_AGENT_KINDS: readonly AgentKindDefinition[] = [
 		"Attack assumptions and boundary conditions.",
 		"Adversarial inputs, races, stale state, retries, partial failure, and abuse cases.",
 	),
-	reviewKind(
-		"correctness-review",
-		"Prove invariants and identify silently wrong behavior.",
-		"State transitions, data invariants, ordering, concurrency, and exact contract compliance.",
-	),
+	{
+		...reviewKind(
+			"correctness-review",
+			"Prove invariants and identify silently wrong behavior.",
+			"State transitions, data invariants, ordering, concurrency, and exact contract compliance.",
+		),
+		// Also maestro-invocable as `/code-review` (report-only) — see
+		// docs/design/persona-commands.md. The same persona still runs inside a
+		// worker's review() panel; the command is an additional door.
+		command: {
+			name: "code-review",
+			description:
+				"Review code changes for correctness (invariants, ordering, concurrency, contracts).",
+			instruction:
+				"Review code for correctness. If the user did not name a target, review the current uncommitted changes; if there are none, review the working tree at HEAD. Report findings as file:line with severity and a concrete fix.",
+		},
+	},
 	reviewKind(
 		"security-review",
 		"Inspect trust boundaries and exploitability.",

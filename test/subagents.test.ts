@@ -1034,6 +1034,35 @@ describe("RpcClient-backed runner", () => {
 		]);
 	});
 
+	it("publishes cache-only and cost-only usage deltas", async () => {
+		const deltas: unknown[] = [];
+		bus.subscribe((m) => {
+			if (m.type === "progress" && m.delta.cacheRead !== undefined)
+				deltas.push(m.delta);
+		});
+		const { factory } = fakeClient({
+			text: "done",
+			emit: [
+				{
+					type: "turn_end",
+					message: {
+						usage: { cacheRead: 25, cost: { total: 0.01 } },
+					},
+				},
+			],
+		});
+		await launch(factory).result();
+		expect(deltas).toEqual([
+			{
+				tokensIn: undefined,
+				tokensOut: undefined,
+				cacheRead: 25,
+				cacheWrite: undefined,
+				cost: 0.01,
+			},
+		]);
+	});
+
 	it("merges baseEnv under the invocation's explicit maestro env", async () => {
 		let captured: Record<string, string> | undefined;
 		const { factory } = fakeClient({

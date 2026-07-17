@@ -108,8 +108,8 @@ function liveSuffix(agent: ExecutionAgentSnapshot | undefined): string {
 	if (!agent) return "";
 	const t = agent.tokens;
 	const cache =
-		agent.cacheRatio !== undefined
-			? ` · cache ${Math.round(agent.cacheRatio * 100)}%`
+		agent.prefixCacheHitRate !== undefined
+			? ` · prefix ${Math.round(agent.prefixCacheHitRate * 100)}%`
 			: "";
 	return ` — ${agent.status} · ${t.input}in/${t.output}out · ${t.turns} turns${cache}`;
 }

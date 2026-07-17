@@ -71,6 +71,7 @@ import {
 	transitionMode,
 } from "../state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "../storage.js";
+import { UsageCheckpointStore } from "../usage-checkpoints.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -264,8 +265,16 @@ export function createRuntimeContext(
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
-	// Central usage ledger (usage.v1). Records maestro + agent usage.
-	const usageLedger = new UsageLedger();
+	// Central usage ledger (usage.v1). Checkpoints move to the active plan's
+	// execution directory when that plan opens; the session fallback covers
+	// pre-plan maestro and generic run usage.
+	let usageStore = new UsageCheckpointStore(
+		join(store.root, "_session", "execution", "usage.json"),
+	);
+	const usageLedger = new UsageLedger({
+		onAccepted: (checkpoint) => usageStore.accept(checkpoint),
+	});
+	usageLedger.restore(usageStore.load());
 	let maestroUsage: TokenSnapshot | undefined;
 	let baselineTools: string[] | undefined;
 	let rt: RuntimeContext;
@@ -400,6 +409,12 @@ export function createRuntimeContext(
 		loadEngine(slug: string): PlanEngine | undefined {
 			const plan = store.load(slug);
 			if (!plan) return undefined;
+			usageStore = new UsageCheckpointStore(
+				join(store.root, slug, "execution", "usage.json"),
+			);
+			const existing = usageLedger.checkpoints();
+			usageLedger.restore(usageStore.load());
+			for (const checkpoint of existing) usageStore.accept(checkpoint);
 			return new PlanEngine(plan, store, now);
 		},
 
@@ -459,6 +474,12 @@ export function createRuntimeContext(
 			let slug = base;
 			for (let n = 2; store.exists(slug); n++) slug = `${base}-${n}`;
 			rt.engine.materialize(slug, title);
+			usageStore = new UsageCheckpointStore(
+				join(store.root, slug, "execution", "usage.json"),
+			);
+			usageLedger.restore(usageStore.load());
+			for (const checkpoint of usageLedger.checkpoints())
+				usageStore.accept(checkpoint);
 			rt.state = setActivePlan(rt.state, slug, now);
 			rt.persist();
 			maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
@@ -817,7 +838,12 @@ export function createRuntimeContext(
 				canActivate: () => rt.state.mode === "auto" || rt.state.mode === "hack",
 				onPlanChanged: () => rt.emitPlanChanged(),
 				onAgentStateChanged: (id, state) => {
-					usageLedger.record({ kind: "agent", id }, state.tokens);
+					usageLedger.recordCheckpoint({
+						source: { kind: "agent", id, generation: state.generation },
+						revision: state.revision,
+						snapshot: state.tokens,
+						updatedAt: Date.now(),
+					});
 					rt.invalidateFooter?.();
 					rt.hud?.refresh();
 					// Sync worker panes when agents complete
@@ -828,10 +854,6 @@ export function createRuntimeContext(
 					}
 				},
 				onChildProjection: (ownerId, _ownerGeneration, projection) => {
-					usageLedger.record(
-						{ kind: "run", id: projection.runId, ownerId },
-						projection.usage,
-					);
 					maestro.events.emit(EVENTS.runStatus, {
 						runId: projection.runId,
 						status: projection.status,
@@ -839,8 +861,11 @@ export function createRuntimeContext(
 							? { completedAt: projection.completedAt }
 							: {}),
 					});
-					rt.invalidateFooter?.();
 					rt.hud?.refresh();
+				},
+				onUsageCheckpoint: (checkpoint) => {
+					usageLedger.recordCheckpoint(checkpoint);
+					rt.invalidateFooter?.();
 				},
 				// The settled card (onEvent) is the recap now; onAllSettled
 				// refreshes the footer and clears the agent widget. Research

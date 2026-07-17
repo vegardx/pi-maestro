@@ -506,7 +506,14 @@ function mapEvent(bus: RunBus, runId: RunId, event: AgentSessionEvent): void {
 			runId,
 			event: { type: "turn_end", ...(usage ? { message: { usage } } : {}) },
 		});
-		if (usage && (usage.input !== undefined || usage.output !== undefined)) {
+		if (
+			usage &&
+			(usage.input !== undefined ||
+				usage.output !== undefined ||
+				usage.cacheRead !== undefined ||
+				usage.cacheWrite !== undefined ||
+				usage.cost?.total !== undefined)
+		) {
 			bus.publish({
 				type: "progress",
 				runId,

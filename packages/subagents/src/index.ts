@@ -24,11 +24,15 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
 import {
 	CAPABILITIES,
+	canonicalTokenSnapshot,
 	EVENTS,
 	type ModelRole,
 	type RunId,
+	type RunProgress,
 	type SupervisorDecision,
 	type SupervisorDecisionRequest,
+	type TokenSnapshot,
+	type UsageCheckpoint,
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
 import { resolveExactModelSelection } from "@vegardx/pi-models";
@@ -264,6 +268,39 @@ export default defineExtension(
 		>();
 		let ctx: ExtensionContext | undefined;
 		let projectionCapabilityRegistered = false;
+		const usageByRun = new Map<RunId, TokenSnapshot>();
+		const usageRevisions = new Map<RunId, number>();
+
+		const publishUsage = (runId: RunId, delta: RunProgress): void => {
+			const previous = usageByRun.get(runId) ?? canonicalTokenSnapshot({});
+			const snapshot = canonicalTokenSnapshot({
+				input: previous.input + (delta.tokensIn ?? 0),
+				output: previous.output + (delta.tokensOut ?? 0),
+				cacheRead: previous.cacheRead + (delta.cacheRead ?? 0),
+				cacheWrite: previous.cacheWrite + (delta.cacheWrite ?? 0),
+				cost: previous.cost + (delta.cost ?? 0),
+				turns: previous.turns + 1,
+			});
+			usageByRun.set(runId, snapshot);
+			const revision = (usageRevisions.get(runId) ?? 0) + 1;
+			usageRevisions.set(runId, revision);
+			const ownerId = process.env.PI_MAESTRO_AGENT_ID;
+			const ownerGeneration = Number.parseInt(
+				process.env.PI_MAESTRO_GENERATION ?? "0",
+				10,
+			);
+			const checkpoint: UsageCheckpoint = {
+				source: {
+					kind: "run",
+					id: runId,
+					...(ownerId ? { ownerId, ownerGeneration } : {}),
+				},
+				revision,
+				snapshot,
+				updatedAt: Date.now(),
+			};
+			maestro.events.emit(EVENTS.usageCheckpoint, checkpoint);
+		};
 
 		const rebuild = (next: ExtensionContext) => {
 			ctx = next;
@@ -381,6 +418,15 @@ export default defineExtension(
 					runId: message.runId,
 					progress: message.delta,
 				});
+				if (
+					message.delta.tokensIn !== undefined ||
+					message.delta.tokensOut !== undefined ||
+					message.delta.cacheRead !== undefined ||
+					message.delta.cacheWrite !== undefined ||
+					message.delta.cost !== undefined
+				) {
+					publishUsage(message.runId, message.delta);
+				}
 			} else if (message.type === "needDecision") {
 				maestro.events.emit(EVENTS.supervisorNeedDecision, {
 					runId: message.runId,

@@ -289,35 +289,41 @@ export function createModesRuntime(
 		);
 	}
 
-	// Feed live research telemetry (current tool, token deltas) from the
-	// bridged run-bus into the tracked views; the widget's 5s tick renders it.
+	// Generic accounting is deliberately independent of researchRuns. The
+	// subagents owner emits one revisioned cumulative checkpoint per run.
+	maestro.events.on(EVENTS.usageCheckpoint, (checkpoint) => {
+		if (isAgentMode()) {
+			rt.agentBridge?.sendUsageCheckpoint(checkpoint);
+			return;
+		}
+		rt.usageLedger.recordCheckpoint(checkpoint);
+		rt.invalidateFooter?.();
+	});
+
+	// Feed live research telemetry into tracked presentation rows only.
 	maestro.events.on(EVENTS.runProgress, ({ runId, progress }) => {
 		const run: ResearchRunView | undefined = rt.researchRuns.get(runId);
 		if (!run) return;
 		if (progress.text) run.activity = progress.text;
 		// Token fields are per-turn deltas: accumulate for the table row and
 		// fold into the session ledger so footer totals include research runs.
-		if (progress.tokensIn !== undefined || progress.tokensOut !== undefined) {
+		if (
+			progress.tokensIn !== undefined ||
+			progress.tokensOut !== undefined ||
+			progress.cacheRead !== undefined ||
+			progress.cacheWrite !== undefined ||
+			progress.cost !== undefined
+		) {
 			run.tokensIn = (run.tokensIn ?? 0) + (progress.tokensIn ?? 0);
 			run.tokensOut = (run.tokensOut ?? 0) + (progress.tokensOut ?? 0);
-			// First-turn cache-prefix hit ratio (frozen after the first delta
-			// that carries cache data), matching the execution agents' metric.
-			if (run.cacheRatio === undefined && progress.cacheRead !== undefined) {
+			// First-turn prefix warmth is a diagnostic, not cumulative cache hit.
+			if (
+				run.prefixCacheHitRate === undefined &&
+				progress.cacheRead !== undefined
+			) {
 				const denom = progress.cacheRead + (progress.tokensIn ?? 0);
-				if (denom > 0) run.cacheRatio = progress.cacheRead / denom;
+				if (denom > 0) run.prefixCacheHitRate = progress.cacheRead / denom;
 			}
-			rt.usageLedger.add(
-				{ kind: "agent", id: runId },
-				{
-					input: progress.tokensIn,
-					output: progress.tokensOut,
-					cacheRead: progress.cacheRead,
-					cacheWrite: progress.cacheWrite,
-					cost:
-						progress.cost !== undefined ? { total: progress.cost } : undefined,
-				},
-			);
-			rt.invalidateFooter?.();
 		}
 	});
 

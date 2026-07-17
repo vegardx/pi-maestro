@@ -1,4 +1,4 @@
-// ─── RPC protocol v5 ─────────────────────────────────────────────────────────
+// ─── RPC protocol v6 ─────────────────────────────────────────────────────────
 //
 // Requests carry `id: string`; responses echo it. Fire-and-forget messages
 // omit `id`. Every inbound type must have a handler; unknown types answer
@@ -16,6 +16,7 @@ import type {
 	ThinkingLevel,
 	TokenSnapshot,
 	TransitionGate,
+	UsageCheckpoint,
 	WorkflowStage,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
@@ -65,6 +66,8 @@ export interface StatusMessage {
 
 export interface TokensMessage {
 	readonly type: "tokens";
+	/** Monotonic revision of this process-generation cumulative checkpoint. */
+	readonly revision: number;
 	readonly snapshot: TokenSnapshot;
 }
 
@@ -113,6 +116,12 @@ export interface ChildRunControlResultMessage {
 	readonly outcome?: InterruptOutcome;
 	readonly content?: string;
 	readonly error?: string;
+}
+
+/** Cumulative usage for a worker-owned child run. */
+export interface UsageCheckpointMessage {
+	readonly type: "usageCheckpoint";
+	readonly checkpoint: UsageCheckpoint;
 }
 
 /** Agent requests current plan state from maestro. */
@@ -349,6 +358,7 @@ export type AgentMessage =
 	| TokensMessage
 	| ChildRunSyncMessage
 	| ChildRunControlResultMessage
+	| UsageCheckpointMessage
 	| PlanReadMessage
 	| PlanMutateMessage
 	| PanelReadMessage

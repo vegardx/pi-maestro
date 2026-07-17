@@ -75,7 +75,7 @@ const AGENT_FIXTURES = {
 		pid: 123,
 	},
 	status: { type: "status", status: "working" },
-	tokens: { type: "tokens", snapshot },
+	tokens: { type: "tokens", revision: 1, snapshot },
 	childRunSync: {
 		type: "childRunSync",
 		id: "crs-1",
@@ -91,6 +91,20 @@ const AGENT_FIXTURES = {
 		action: "capture",
 		ok: true,
 		content: "screen",
+	},
+	usageCheckpoint: {
+		type: "usageCheckpoint",
+		checkpoint: {
+			source: {
+				kind: "run",
+				id: "review-1",
+				ownerId: "g1/worker",
+				ownerGeneration: 0,
+			},
+			revision: 1,
+			snapshot,
+			updatedAt: 1,
+		},
 	},
 	planRead: { type: "planRead", id: "pr-1" },
 	planMutate: {
@@ -180,6 +194,7 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 		tokens: ack,
 		childRunSync: ack,
 		childRunControlResult: ack,
+		usageCheckpoint: ack,
 		planRead: ack,
 		planMutate: ack,
 		questions: ack,

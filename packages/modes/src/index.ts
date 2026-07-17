@@ -176,6 +176,21 @@ export {
 } from "./runtime/index.js";
 export * from "./schema.js";
 export {
+	applyWorkflowAnalyticsEvent,
+	assignmentAnalytics,
+	canonicalFromReviewLedger,
+	createWorkflowAnalyticsLedger,
+	type AssignmentAnalytics,
+	type CanonicalFindingAnalytics,
+	type FinalVerificationAnalytics,
+	type RawFindingAnalytics,
+	type WorkflowAnalyticsEvent,
+	type WorkflowAnalyticsLedger,
+	type WorkflowStageAnalytics,
+	workflowAnalyticsTotals,
+	WORKFLOW_ANALYTICS_VERSION,
+} from "./workflow-analytics.js";
+export {
 	appendModesState,
 	collectCarryForwardInput,
 	EXECUTION_SEED_ENTRY,

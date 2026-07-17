@@ -24,6 +24,7 @@ import {
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { ReviewLedger } from "./exec/findings.js";
+import type { WorkflowAnalyticsLedger } from "./workflow-analytics.js";
 
 export {
 	type AgentMode,
@@ -240,6 +241,8 @@ export interface Deliverable {
 	 * source of truth.
 	 */
 	reviewLedger?: ReviewLedger;
+	/** Canonical workflow provenance and aggregate run analytics for PR projection. */
+	workflowAnalytics?: WorkflowAnalyticsLedger;
 	/** Recoverable or terminal failure detail when status is `failed`. */
 	failure?: DeliveryFailure;
 	/** Durable transition evidence; malformed gates fail plan validation. */
@@ -967,6 +970,21 @@ export function validatePlanShape(
 			for (const problem of validateStructuredFinding(finding)) {
 				problems.push(`deliverable \`${g.id}\` finding ${index}: ${problem}`);
 			}
+		}
+		if (g.workflowAnalytics) {
+			const analytics = g.workflowAnalytics;
+			if (analytics.version !== 1)
+				problems.push(
+					`deliverable \`${g.id}\`: unsupported workflow analytics version ${analytics.version}`,
+				);
+			if (analytics.deliverableId !== g.id)
+				problems.push(
+					`deliverable \`${g.id}\`: workflow analytics belongs to \`${analytics.deliverableId}\``,
+				);
+			if (!Number.isSafeInteger(analytics.revision) || analytics.revision < 0)
+				problems.push(
+					`deliverable \`${g.id}\`: workflow analytics revision must be non-negative`,
+				);
 		}
 		const findingIds = new Set((g.findings ?? []).map((finding) => finding.id));
 		for (const [index, gate] of (g.gates ?? []).entries()) {

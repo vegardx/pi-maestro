@@ -51,11 +51,32 @@ describe("execution lifecycle state", () => {
 			{ stage: "stopping", deliverableId: "d1" },
 			now,
 		);
-		expect(setExecution(stopping, { stage: "stopped" }, now).execution).toEqual(
-			{
-				stage: "stopped",
-			},
+		const completedAt = 1_782_432_000_000;
+		const stop = {
+			kind: "interrupted" as const,
+			requestedAt: completedAt - 10,
+			completedAt,
+			reason: "session shutdown",
+			outcome: "accepted" as const,
+			recoverable: true,
+		};
+		const stopped = setExecution(
+			stopping,
+			{ stage: "stopped", completedAt, stop },
+			now,
 		);
+		expect(stopped.execution).toEqual({ stage: "stopped", completedAt, stop });
+		expect(() =>
+			setExecution(
+				stopped,
+				{
+					stage: "idle",
+					completedAt: completedAt + 1,
+					stop: { ...stop, completedAt: completedAt + 1 },
+				},
+				now,
+			),
+		).toThrow(/completion timestamp is immutable/);
 	});
 
 	it("rejects illegal execution stage jumps", () => {

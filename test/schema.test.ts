@@ -80,6 +80,8 @@ function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
 			},
 		],
 		branch: overrides.branch,
+		failure: overrides.failure,
+		completedAt: overrides.completedAt,
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
 	};
@@ -191,6 +193,24 @@ describe("isDeliverableReady", () => {
 		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
 		const plan = makePlan([a, b]);
 		expect(isDeliverableReady(plan, b)).toBe(true);
+	});
+
+	it("failed dependencies stay blocked until explicitly recovered", () => {
+		const a = makeDeliverable({
+			id: "a",
+			status: "failed",
+			failure: {
+				code: "worker-crash",
+				message: "worker exited",
+				failedAt: "2026-01-01T00:00:00.000Z",
+				recoverable: true,
+				attempt: 1,
+			},
+		});
+		const b = makeDeliverable({ id: "b", dependsOn: ["a"] });
+		const plan = makePlan([a, b]);
+		expect(isDeliverableReady(plan, b)).toBe(false);
+		expect(blockedReason(plan, b)).toContain("`a` (failed)");
 	});
 
 	it("already-active deliverable is not ready", () => {

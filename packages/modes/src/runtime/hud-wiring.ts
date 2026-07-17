@@ -511,7 +511,8 @@ export function buildAgentNodes(
 			interrupt: target.capabilities.interrupt,
 			kill:
 				target.kind === "worker" ||
-				(target.kind === "run" && target.parentId?.startsWith("worker:") === true),
+				(target.kind === "run" &&
+					target.parentId?.startsWith("worker:") === true),
 		});
 	}
 	const workers = new Map<
@@ -531,7 +532,8 @@ export function buildAgentNodes(
 			...(agent.completedAt !== undefined
 				? { completedAt: agent.completedAt }
 				: {}),
-			input: agent.tokens.promptTokens ??
+			input:
+				agent.tokens.promptTokens ??
 				agent.tokens.input +
 					(agent.tokens.cacheRead ?? 0) +
 					(agent.tokens.cacheWrite ?? 0),
@@ -576,7 +578,7 @@ export function buildAgentNodes(
 					ownerId?: string;
 					confirmed?: boolean;
 					usage?: import("@vegardx/pi-contracts").TokenSnapshot;
-				  }
+			  }
 			| undefined;
 		if (projection?.confirmed === false) continue;
 		const usage = projection?.usage;

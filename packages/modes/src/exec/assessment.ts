@@ -1,4 +1,7 @@
-import type { ResolvedAgentAssignment, StructuredFinding } from "@vegardx/pi-contracts";
+import type {
+	ResolvedAgentAssignment,
+	StructuredFinding,
+} from "@vegardx/pi-contracts";
 import type { CommitTarget } from "./commit-target.js";
 import { renderCommitTarget } from "./commit-target.js";
 
@@ -39,13 +42,20 @@ export function assessDelivery(input: {
 }): FinalDeliveryAssessment {
 	const blockers: string[] = [];
 	if (input.head !== input.expectedHead)
-		blockers.push(`assessment head ${input.head} differs from frozen stage head ${input.expectedHead}`);
+		blockers.push(
+			`assessment head ${input.head} differs from frozen stage head ${input.expectedHead}`,
+		);
 	for (const assignment of input.assignedReviews) {
 		if (!input.reportedAssignmentIds.has(assignment.agentId))
-			blockers.push(`assigned review ${assignment.agentId} has no valid report`);
+			blockers.push(
+				`assigned review ${assignment.agentId} has no valid report`,
+			);
 	}
 	for (const finding of input.findings) {
-		if (finding.severity !== "minor" && !input.resolvedFindingIds.has(finding.id))
+		if (
+			finding.severity !== "minor" &&
+			!input.resolvedFindingIds.has(finding.id)
+		)
 			blockers.push(`blocking finding ${finding.id} is unresolved`);
 	}
 	return {

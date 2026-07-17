@@ -60,15 +60,7 @@ for (const name of [...commandNames].sort()) {
 // ── 2. Plan-facing tools must be documented ──────────────────────────────────
 // Kept as an explicit list: tool `name:` fields are too generic to extract
 // reliably. Update when a user-facing tool is added or renamed.
-const TOOLS = [
-	"deliverable",
-	"task",
-	"agent",
-	"plan",
-	"research",
-	"dig",
-	"review",
-];
+const TOOLS = ["deliverable", "task", "workflow", "plan", "research", "dig"];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);
 	if (!re.test(corpusText)) {
@@ -85,7 +77,7 @@ const BANNED = [
 	[/\bwork groups\b/i, '"work groups" (now deliverables)'],
 	[/\balternate slot\b/i, "model slots (replaced by tiers/profiles)"],
 	[/\bslot="/, "slot= param (replaced by tiers/profiles)"],
-	[/"presets"/, '"presets" config key (replaced by "profiles")'],
+	[/"profiles"/, '"profiles" config key (replaced by exact "presets")'],
 	[/\bask mode\b/i, "ask mode (removed; modes are hack/plan/auto)"],
 	[/\bdelegates\b/i, "delegates (replaced by subagents/research)"],
 ];

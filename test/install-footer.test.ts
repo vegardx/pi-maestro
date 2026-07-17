@@ -19,7 +19,7 @@ function installedFooter() {
 				tui: TUI,
 				theme: Theme,
 				data: ReadonlyFooterDataProvider,
-			) => { render(width: number): string[] })
+		  ) => { render(width: number): string[] })
 		| undefined;
 	const setFooter = vi.fn((next: typeof factory) => {
 		factory = next;

@@ -196,7 +196,6 @@ export function validateTransitionGate(value: unknown): string[] {
 	return errors;
 }
 
-
 // ─── Mode transition gates ─────────────────────────────────────────────────
 
 export const MODE_TRANSITION_GATE_STATUSES = [

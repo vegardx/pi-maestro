@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
 import type { AgentsCapabilityV1 } from "@vegardx/pi-contracts";
+import { expect, it, vi } from "vitest";
 import { executeWorkflowStage } from "../packages/modes/src/exec/stage-runtime.js";
 
 const SHA = "a".repeat(40);
@@ -38,7 +38,9 @@ it("starts a parallel stage at one revision and delivers once after the barrier"
 	const agents = {
 		batch: vi.fn(async (requests: readonly { prompt: string }[]) => {
 			calls.push("batch");
-			expect(requests.every((request) => request.prompt.includes(SHA))).toBe(true);
+			expect(requests.every((request) => request.prompt.includes(SHA))).toBe(
+				true,
+			);
 			return assignments.map((item) => ({
 				runId: item.agentId,
 				assignment: item,
@@ -67,7 +69,8 @@ it("starts a parallel stage at one revision and delivers once after the barrier"
 		cwd: "/repo",
 		base: SHA,
 		validate: (_assignment, result) => ({ valid: Boolean(result?.summary) }),
-		reduce: (_stage, _target, members) => members.map((m) => m.result?.summary).join("\n"),
+		reduce: (_stage, _target, members) =>
+			members.map((m) => m.result?.summary).join("\n"),
 		deliver,
 		checkpoint: { clean: () => true, head: () => SHA },
 	});

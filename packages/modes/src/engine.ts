@@ -205,7 +205,10 @@ export class PlanEngine {
 		patch: Partial<
 			Pick<
 				Plan,
-		"title" | "parentIssueNumber" | "planSessionPath" | "lastSyncedAt"
+				| "title"
+				| "parentIssueNumber"
+				| "planSessionPath"
+				| "lastSyncedAt"
 				| "transitionGates"
 			>
 		>,

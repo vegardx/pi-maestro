@@ -880,6 +880,9 @@ export class ExecutionAdapter {
 				: true;
 			return participated && openBlocking(ledger, waived).length === 0;
 		}
+		// New workflow assignments never fall back to verdict strings: every
+		// assigned review must publish a valid canonical report.
+		if (this.engine.get().workflow) return false;
 		return requiredGateSatisfied(
 			required,
 			this.panelVerdicts.get(deliverableId)?.verdicts,
@@ -942,8 +945,14 @@ export class ExecutionAdapter {
 		const deliverable = this.engine
 			.get()
 			.deliverables.find((d) => d.id === deliverableId);
+		const workflow = this.engine.get().workflow;
+		const assigned =
+			workflow?.assignments
+				.filter((assignment) => assignment.kind.endsWith("-review"))
+				.map((assignment) => assignment.agentId) ?? [];
+		if (assigned.length > 0) return assigned;
 		return (deliverable?.subAgents ?? [])
-			.filter((s) => s.required && (s.kind ?? "review") === "review")
+			.filter((s) => (s.kind ?? "review") === "review")
 			.map((s) => s.name);
 	}
 

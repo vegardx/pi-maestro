@@ -553,7 +553,13 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			cwd: d.cwd(),
 			model: resolvedVerifier?.model,
 		});
-		const prompt = buildVerifierPrompt(claims.map((e) => e));
+		const prompt = buildVerifierPrompt(
+			claims.map((e) => e),
+			{
+				base: claims[0]?.finding.provenance?.[0]?.commit,
+				head: claims[0]?.resolution?.fixCommit,
+			},
+		);
 		const timeoutMs = d.timeoutMs?.() ?? DEFAULT_TIMEOUT_MS;
 
 		// One attempt — a failed/empty verifier is reported back to the worker,
@@ -937,8 +943,9 @@ function renderVerificationReport(
 export function buildVerifierPrompt(
 	claims: ReadonlyArray<{
 		finding: StructuredFinding;
-		resolution?: { note: string };
+		resolution?: { note: string; fixCommit?: string };
 	}>,
+	range?: { base?: string; head?: string },
 ): string {
 	const list = claims
 		.map(
@@ -946,7 +953,11 @@ export function buildVerifierPrompt(
 				`- ${c.finding.id} [${c.finding.severity}] ${renderFinding(c.finding)}\n  worker's fix note: ${c.resolution?.note ?? "(none)"}`,
 		)
 		.join("\n");
-	return `Verify these claimed fixes in the current worktree (git diff against the base, read the code, cite evidence per claim):\n\n${list}\n\nEvery id above must appear in your "checks" array exactly once.`;
+	const scope =
+		range?.base && range.head
+			? `\nOriginal review commit: ${range.base}\nFix commit: ${range.head}\nFix range: ${range.base}..${range.head}\n`
+			: "";
+	return `Verify these claimed fixes in the current worktree. Inspect the original evidence and ONLY the explicit fix range; do not issue an open-ended reviewer verdict.${scope}\n${list}\n\nEvery id above must appear in your "checks" array exactly once.`;
 }
 
 /** Parse the verifier's JSON block; tolerate a missing block by failing every claim open. */

@@ -47,6 +47,7 @@ function makeDeliverable(overrides: Partial<Deliverable>): Deliverable {
 
 function makePlan(deliverables: Deliverable[]): Plan {
 	return {
+		schemaVersion: 5,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",

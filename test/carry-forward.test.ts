@@ -24,6 +24,7 @@ const NOW = "2026-07-12T12:00:00.000Z";
 
 function planFixture(): Plan {
 	return {
+		schemaVersion: 5,
 		slug: "arc-one",
 		title: "Arc One",
 		repoPath: "/repo",

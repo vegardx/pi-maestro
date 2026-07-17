@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import type { Plan } from "./schema.js";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
@@ -33,6 +34,7 @@ export interface PlanSummary {
 export interface PlanStore {
 	root: string;
 	exists(slug: string): boolean;
+	/** Throws UnsupportedMaestroStateError for an existing unsupported payload. */
 	load(slug: string): Plan | null;
 	save(plan: Plan): void;
 	remove(slug: string): void;
@@ -41,6 +43,20 @@ export interface PlanStore {
 
 export function plansRoot(agentDir: string = getAgentDir()): string {
 	return join(agentDir, "maestro", "plans");
+}
+
+export class UnsupportedMaestroStateError extends Error {
+	constructor(
+		kind: "plan" | "run" | "execution",
+		found: unknown,
+		expected: number,
+	) {
+		super(
+			`Unsupported Maestro ${kind} state schema ${String(found)} (expected ${expected}). ` +
+				"This release is a full cutover; archive or reset the old Maestro state and retry.",
+		);
+		this.name = "UnsupportedMaestroStateError";
+	}
 }
 
 export function createPlanStore(root: string): PlanStore {
@@ -86,11 +102,26 @@ export function createPlanStore(root: string): PlanStore {
 			if (!SLUG_RE.test(slug)) return null;
 			const path = file(slug);
 			if (!existsSync(path)) return null;
+			let value: unknown;
 			try {
-				return JSON.parse(readFileSync(path, "utf8")) as Plan;
+				value = JSON.parse(readFileSync(path, "utf8"));
 			} catch {
 				return null;
 			}
+			if (
+				typeof value !== "object" ||
+				value === null ||
+				(value as { schemaVersion?: unknown }).schemaVersion !==
+					PLAN_SCHEMA_VERSION
+			) {
+				throw new UnsupportedMaestroStateError(
+					"plan",
+					(value as { schemaVersion?: unknown } | null)?.schemaVersion ??
+						"missing",
+					PLAN_SCHEMA_VERSION,
+				);
+			}
+			return value as Plan;
 		},
 
 		save(plan) {

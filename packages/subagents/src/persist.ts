@@ -2,7 +2,12 @@
 // and status/result/spawn messages keep the RunRecord in sync. Returns a
 // disposer that detaches the mirror.
 
-import type { RunBusMessage, RunId, RunRecord } from "@vegardx/pi-contracts";
+import {
+	RUN_RECORD_SCHEMA_VERSION,
+	type RunBusMessage,
+	type RunId,
+	type RunRecord,
+} from "@vegardx/pi-contracts";
 import type { RunBus } from "./bus.js";
 import { msgRunId } from "./bus.js";
 import type { RunStore } from "./store.js";
@@ -22,6 +27,7 @@ export function persistRunBus(bus: RunBus, store: RunStore): () => void {
 			case "spawn": {
 				const now = Date.now();
 				const record: RunRecord = {
+					schemaVersion: RUN_RECORD_SCHEMA_VERSION,
 					id: message.run.id,
 					parent: message.run.parent,
 					profile: message.run.profile,

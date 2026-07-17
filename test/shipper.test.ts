@@ -61,6 +61,7 @@ function makePlan(
 	overrides: Partial<Plan> = {},
 ): Plan {
 	return {
+		schemaVersion: 5,
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/repos/app",

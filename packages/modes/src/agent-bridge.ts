@@ -174,7 +174,6 @@ export class AgentBridge {
 	>();
 	private dirtyChildren = new Map<RunId, ChildRunProjection>();
 	private stopping = false;
-	private usageRevision = 0;
 
 	constructor(private readonly deps: AgentBridgeDeps) {
 		this.client = new MaestroRpcClient({ reconnect: true });
@@ -248,7 +247,6 @@ export class AgentBridge {
 	 * from the message_end handler when the message role is "assistant".
 	 */
 	recordUsage(usage: AssistantUsage): void {
-		this.usageRevision++;
 		this.totalInput += usage.input ?? 0;
 		this.totalOutput += usage.output ?? 0;
 		this.totalCacheRead += usage.cacheRead ?? 0;

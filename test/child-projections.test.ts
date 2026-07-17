@@ -26,6 +26,7 @@ function projection(
 			output: revision,
 			cacheRead: 0,
 			cacheWrite: 0,
+			promptTokens: revision * 10,
 			totalTokens: revision * 11,
 			cost: revision / 100,
 			turns: revision,

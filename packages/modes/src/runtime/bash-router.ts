@@ -80,7 +80,7 @@ export function registerBashRouter(rt: RuntimeContext): void {
 				);
 				if (action === "cancel") throw error;
 				if (action === "hack") {
-					rt.setMode("hack", ctx);
+					if (!(await rt.requestMode("hack", ctx))) throw error;
 					return execute({ ...decision, route: "direct" });
 				}
 				if (action === "lightweight")

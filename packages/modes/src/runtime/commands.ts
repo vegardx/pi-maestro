@@ -85,9 +85,13 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	for (const mode of ["hack", "auto"] as const) {
 		pi.registerCommand(mode, {
-			description: `Switch to Maestro ${mode} mode.`,
+			description: `Switch to Maestro ${mode} mode through execution readiness.`,
 			handler: async (_args: string, ctx: ExtensionCommandContext) => {
-				rt.setMode(mode, ctx);
+				if (rt.state.mode === "plan") {
+					await rt.runImplement(mode === "hack" ? "--hack" : "", ctx);
+					return;
+				}
+				await rt.requestMode(mode, ctx);
 			},
 		});
 	}
@@ -903,7 +907,7 @@ async function presentRemediationTriage(
 	// Reopened deliverables sit in `planned` — run the ordinary execution
 	// loop: wave 1 activates now, wave 2 follows its leaders through the DAG.
 	if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
-		rt.setMode("auto", ctx);
+		if (!(await rt.requestMode("auto", ctx))) return;
 	}
 	await rt.ensureExecution(ctx);
 	if (!rt.execution) return;

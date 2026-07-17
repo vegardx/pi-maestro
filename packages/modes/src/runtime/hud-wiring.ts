@@ -22,8 +22,10 @@ import type { ExecutionAgentSnapshot } from "../exec/index.js";
 import type { PendingQuestion } from "../question-queue.js";
 import { effectiveWorkItemKind, type Plan } from "../schema.js";
 import { handleViewCommand } from "./agent-commands.js";
+import { listAgentTargets } from "./agent-targets.js";
 import type { RuntimeContext } from "./context.js";
 import {
+	type HudAgentCapabilities,
 	type HudAgentLeaf,
 	type HudAgentNode,
 	HudComponent,
@@ -331,12 +333,10 @@ export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
 	const snap = rt.execution?.snapshot();
 	const projectedRuns = rt.execution?.projectedRuns?.() ?? [];
+	const allRuns = [...(subagents?.list() ?? []), ...projectedRuns];
+	const targets = listAgentTargets({ execution: rt.execution, subagents });
 	return {
-		agents: buildAgentNodes(
-			snap,
-			[...(subagents?.list() ?? []), ...projectedRuns],
-			Date.now(),
-		),
+		agents: buildAgentNodes(snap, allRuns, Date.now(), targets),
 		plan: buildPlanView(rt.engine?.get(), snap),
 		questions: buildQuestionRows(
 			rt.maestro.capabilities.get(CAPABILITIES.ask)?.pending() ?? [],
@@ -402,7 +402,9 @@ export function buildPlanView(
 					? "complete"
 					: d.status === "active"
 						? "active"
-						: "queued";
+						: d.status === "failed"
+							? "failed"
+							: "queued";
 		if (state === "shipped" || state === "complete") done++;
 		const workerAgent = execution?.agents.get(`${d.id}/worker`);
 		const worker = workerAgent
@@ -499,7 +501,19 @@ export function buildAgentNodes(
 		| undefined,
 	runs: readonly RunRecord[],
 	now: number,
+	targets: readonly import("@vegardx/pi-contracts").AgentTarget[] = [],
 ): HudAgentNode[] {
+	const targetCapabilities = new Map<string, HudAgentCapabilities>();
+	for (const target of targets) {
+		targetCapabilities.set(target.id, {
+			view: target.capabilities.view,
+			steer: target.capabilities.steer,
+			interrupt: target.capabilities.interrupt,
+			kill:
+				target.kind === "worker" ||
+				(target.kind === "run" && target.parentId?.startsWith("worker:") === true),
+		});
+	}
 	const workers = new Map<
 		string,
 		{ node: HudAgentLeaf; children: HudAgentLeaf[] }
@@ -514,8 +528,20 @@ export function buildAgentNodes(
 			label: `${name} · ${deliverableId}`,
 			status: execStatus(agent, name === "worker" ? blocked : undefined),
 			startedAt: agent.startedAt,
-			...(agent.model ? { note: agent.model } : {}),
+			...(agent.completedAt !== undefined
+				? { completedAt: agent.completedAt }
+				: {}),
+			input: agent.tokens.promptTokens ??
+				agent.tokens.input +
+					(agent.tokens.cacheRead ?? 0) +
+					(agent.tokens.cacheWrite ?? 0),
+			output: agent.tokens.output,
+			cacheRead: agent.tokens.cacheRead ?? 0,
+			cacheWrite: agent.tokens.cacheWrite ?? 0,
+			...(agent.model ? { model: agent.model, note: agent.model } : {}),
+			...(agent.effort ? { effort: agent.effort } : {}),
 			targetId: `worker:${key}`,
+			capabilities: targetCapabilities.get(`worker:${key}`),
 		};
 		if (name === "worker") {
 			const existing = workers.get(deliverableId);
@@ -545,21 +571,44 @@ export function buildAgentNodes(
 	const rootRuns: { node: HudAgentLeaf; children: HudAgentLeaf[] }[] = [];
 	const runChildren = new Map<string, HudAgentLeaf[]>();
 	for (const run of visibleRuns) {
+		const projection = run.profile.meta as
+			| {
+					ownerId?: string;
+					confirmed?: boolean;
+					usage?: import("@vegardx/pi-contracts").TokenSnapshot;
+				  }
+			| undefined;
+		if (projection?.confirmed === false) continue;
+		const usage = projection?.usage;
 		const leaf: HudAgentLeaf = {
 			key: `run:${run.id}`,
 			label: runLabel(run),
 			status: runStatus(run.status),
 			startedAt: run.createdAt,
-			...(run.profile.model ? { note: run.profile.model } : {}),
+			...(run.completedAt !== undefined
+				? { completedAt: run.completedAt }
+				: {}),
+			...(usage
+				? {
+						input: usage.promptTokens,
+						output: usage.output,
+						cacheRead: usage.cacheRead,
+						cacheWrite: usage.cacheWrite,
+					}
+				: {}),
+			...(run.profile.model
+				? { model: run.profile.model, note: run.profile.model }
+				: {}),
+			...(run.profile.thinking ? { effort: run.profile.thinking } : {}),
 			targetId: `run:${run.id}`,
+			capabilities: targetCapabilities.get(`run:${run.id}`),
 		};
 		if (run.parent && visibleIds.has(run.parent as string)) {
 			const list = runChildren.get(run.parent as string) ?? [];
 			list.push(leaf);
 			runChildren.set(run.parent as string, list);
 		} else {
-			const ownerId = (run.profile.meta as { ownerId?: string } | undefined)
-				?.ownerId;
+			const ownerId = projection?.ownerId;
 			const worker = ownerId?.split("/")[0];
 			const parent = worker ? workers.get(worker) : undefined;
 			if (parent) parent.children.push(leaf);

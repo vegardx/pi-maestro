@@ -160,6 +160,7 @@ export class ChildProjectionStore {
 						ownerGeneration,
 						confirmed,
 						kind: projection.kind,
+						usage: projection.usage,
 						...(projection.assignment
 							? { assignment: projection.assignment }
 							: {}),

@@ -283,7 +283,10 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			const runLines = targets
 				.filter((target) => target.kind === "run")
 				.map((target) => {
-					const elapsed = Math.max(0, Date.now() - target.createdAt);
+					const elapsed = Math.max(
+						0,
+						(target.completedAt ?? Date.now()) - target.createdAt,
+					);
 					const age = Math.max(0, Date.now() - target.updatedAt);
 					return `${target.id} · ${target.role} · ${target.status} · ${Math.round(elapsed / 1000)}s elapsed · event ${Math.round(age / 1000)}s ago · ${target.model ?? "default model"}`;
 				});

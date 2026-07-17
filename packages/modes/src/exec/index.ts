@@ -42,6 +42,8 @@ export interface ExecutionAgentTokens {
 export interface ExecutionAgentSnapshot {
 	readonly status: string;
 	readonly startedAt: number;
+	/** Immutable terminal timestamp for done/failed agents. */
+	readonly completedAt?: number;
 	readonly tokens: ExecutionAgentTokens;
 	/** First-turn prefix warmth; distinct from cumulative cache hit rate. */
 	readonly prefixCacheHitRate?: number;

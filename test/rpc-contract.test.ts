@@ -54,6 +54,17 @@ const assignment = {
 		session: "persistent",
 		isolation: "host",
 	},
+	focus: "Execute delivery g1.",
+	rationale: "Primary worker.",
+	inputContracts: [],
+	outputContracts: [],
+	provenance: {
+		source: "session",
+		presetId: "worker",
+		modelSetId: "session",
+		optionId: "session",
+		resolvedAt: "2026-01-01T00:00:00.000Z",
+	},
 	resolvedAt: "2026-01-01T00:00:00.000Z",
 	source: "session",
 } as const;

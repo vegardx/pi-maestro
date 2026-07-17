@@ -69,6 +69,17 @@ function defaultAssignment(agentId: string): ResolvedAgentAssignment {
 			session: "persistent",
 			isolation: "host",
 		},
+		focus: "Execute the assigned deliverable.",
+		rationale: "Runtime compatibility assignment.",
+		inputContracts: [],
+		outputContracts: [],
+		provenance: {
+			source: "session",
+			presetId: "worker",
+			modelSetId: "session",
+			optionId: "session",
+			resolvedAt: new Date().toISOString(),
+		},
 		resolvedAt: new Date().toISOString(),
 		source: "session",
 	};

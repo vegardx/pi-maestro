@@ -153,6 +153,40 @@ function compatibilityAgents(
 	const subagents = deps.subagents?.();
 	if (!subagents) return undefined;
 	return {
+		resolve: async (request) => ({
+			agentId: request.agentId,
+			kind: request.kind,
+			presetId: "compatibility",
+			modelSetId: "compatibility",
+			optionId: "compatibility",
+			modelId: request.model ?? "session",
+			effort: request.effort ?? "medium",
+			runtime: {
+				mode: "read-only",
+				transport: "tmux",
+				tools: {},
+				session: "ephemeral",
+				isolation: "strong",
+			},
+			focus: request.focus,
+			rationale: request.rationale,
+			inputContracts: request.inputContracts,
+			outputContracts: request.outputContracts ?? [],
+			provenance: {
+				source: request.model || request.effort ? "explicit" : "session",
+				presetId: "compatibility",
+				modelSetId: "compatibility",
+				optionId: "compatibility",
+				resolvedAt: new Date().toISOString(),
+			},
+			resolvedAt: new Date().toISOString(),
+			source: request.model || request.effort ? "explicit" : "session",
+		}),
+		options: async () => {
+			throw new Error(
+				"planning options unavailable through compatibility transport",
+			);
+		},
 		run: async (request) => {
 			const researchKind = String(
 				request.meta?.researchKind ?? "codebase",
@@ -215,6 +249,17 @@ function compatibilityAgents(
 						tools: {},
 						session: "ephemeral",
 						isolation: "strong",
+					},
+					focus: request.prompt,
+					rationale: "Compatibility research assignment.",
+					inputContracts: [],
+					outputContracts: [],
+					provenance: {
+						source: "session",
+						presetId: "compatibility",
+						modelSetId: "compatibility",
+						optionId: "compatibility",
+						resolvedAt: new Date().toISOString(),
 					},
 					resolvedAt: new Date().toISOString(),
 					source: "session",

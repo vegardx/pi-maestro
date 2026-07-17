@@ -25,7 +25,7 @@ const k = (n: number): string => {
 export function formatSessionUsage(ledger: UsageLedger): string | null {
 	const { totals } = ledger.snapshot();
 	if (totals.totalTokens === 0) return null;
-	return `↑${k(totals.input)} ↓${k(totals.output)}`;
+	return `↑${k(totals.promptTokens)} ↓${k(totals.output)}`;
 }
 
 /**
@@ -105,9 +105,6 @@ export interface FooterDeps {
 	readonly ctx: ExtensionContext;
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
-	readonly getAgentStatus: () =>
-		| { done: number; total: number; failed: number }
-		| undefined;
 	readonly getPendingQuestions: () => number;
 }
 
@@ -116,8 +113,7 @@ export interface FooterDeps {
  * handle the caller can invoke when mode/usage/plan state changes.
  */
 export function installFooter(deps: FooterDeps): (() => void) | undefined {
-	const { pi, ctx, getMode, getLedger, getAgentStatus, getPendingQuestions } =
-		deps;
+	const { pi, ctx, getMode, getLedger, getPendingQuestions } = deps;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 
 	const home = homedir();
@@ -137,28 +133,18 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const mode = getMode();
 					const branch = footerData.getGitBranch();
 					const statuses = footerData.getExtensionStatuses();
-					const agents = getAgentStatus();
 					const questions = getPendingQuestions();
 
 					// ── Left side ──────────────────────────────────────────
 					const leftParts: string[] = [];
+					if (questions > 0) {
+						leftParts.push(theme.fg("accent", `Questions: ${questions}`));
+					}
 					const shortPath = cwd.startsWith(home)
 						? `~${cwd.slice(home.length)}`
 						: cwd;
 					const location = branch ? `${shortPath} (${branch})` : shortPath;
 					leftParts.push(theme.fg("muted", location));
-
-					if (agents && agents.total > 0) {
-						let agentLabel = `Agents: ${agents.done}/${agents.total}`;
-						if (agents.failed > 0) {
-							agentLabel += ` (${agents.failed} failed)`;
-						}
-						const color = agents.failed > 0 ? "error" : "muted";
-						leftParts.push(theme.fg(color, agentLabel));
-					}
-					if (questions > 0) {
-						leftParts.push(theme.fg("accent", `Questions: ${questions}`));
-					}
 
 					for (const [, val] of statuses) leftParts.push(val);
 

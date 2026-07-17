@@ -30,9 +30,13 @@ export function composeFooterLine(
 	];
 
 	let chosen = candidates[candidates.length - 1] as FooterRightCandidate;
+	const leftWidthWanted = Math.min(
+		visibleWidth(leftText),
+		Math.max(1, Math.floor(width * 0.4)),
+	);
 	for (const cand of candidates) {
 		const cw = visibleWidth(cand.visible);
-		if (cw === 0 || cw + 1 <= width) {
+		if (cw === 0 || cw + leftWidthWanted + 1 <= width) {
 			chosen = cand;
 			break;
 		}

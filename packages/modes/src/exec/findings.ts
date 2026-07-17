@@ -106,6 +106,14 @@ function normalizeFinding(
 		...(Number.isFinite(line) && line > 0 ? { line } : {}),
 		...(typeof f.task === "string" && f.task ? { task: f.task } : {}),
 		...(typeof f.claim === "string" && f.claim ? { claim: f.claim } : {}),
+		...(Array.isArray(f.evidence)
+			? {
+					evidence: f.evidence
+						.filter((item): item is string => typeof item === "string")
+						.map((item) => item.trim())
+						.filter(Boolean),
+				}
+			: {}),
 		actual,
 	};
 }
@@ -152,7 +160,7 @@ export interface ClaimCheck {
 
 export interface LedgerEntry {
 	/** finding.id is the MINTED canonical id (`<reviewer>.<n>`). */
-	readonly finding: StructuredFinding;
+	finding: StructuredFinding;
 	/** Panel entry that raised it (provenance; part of the minted id). */
 	readonly reviewer: string;
 	/** Latest worker resolution (re-filed each fix cycle until terminal). */
@@ -223,6 +231,103 @@ export interface ReviewLedger {
 	/** The round currently settling behind the review tool, if any. */
 	pendingRound?: PendingReviewRound;
 	updatedAt: string;
+}
+
+export interface FindingAssertion {
+	readonly reviewer: string;
+	readonly stageId: string;
+	readonly modelId: string;
+	readonly commit: string;
+	readonly reportedAt: string;
+	readonly runId?: string;
+	readonly findings: readonly StructuredFinding[];
+}
+
+/**
+ * Canonicalize one atom for conservative duplicate matching. A merge requires
+ * the same category, source address, and normalized claim/actual text. Similar
+ * prose alone is intentionally not enough: disagreements remain independent
+ * findings with separate provenance and severities.
+ */
+function duplicateKey(finding: StructuredFinding): string {
+	const text = (finding.claim ?? finding.actual)
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim();
+	return [
+		finding.category.toLowerCase(),
+		finding.file ?? "",
+		finding.line ?? "",
+		finding.task ?? "",
+		text,
+	].join("\u0000");
+}
+
+/** Ingest valid reports atomically, mint stable ids, and merge exact duplicates. */
+export function normalizeFindingAssertions(
+	assertions: readonly FindingAssertion[],
+): ReviewLedger {
+	const entries: LedgerEntry[] = [];
+	const canonicalByKey = new Map<string, LedgerEntry>();
+	const participants: NonNullable<ReviewLedger["participants"]> = [];
+	let ordinal = 0;
+	for (const assertion of assertions) {
+		if (assertion.findings.some((finding) => validateStructuredFinding(finding).length > 0)) {
+			throw new Error(`invalid structured finding report from ${assertion.reviewer}`);
+		}
+		participants.push({
+			name: assertion.reviewer,
+			ok: true,
+			status: "reported",
+			attempt: 1,
+			...(assertion.runId ? { runId: assertion.runId } : {}),
+		});
+		for (const source of assertion.findings) {
+			ordinal += 1;
+			const id = `finding-${String(ordinal).padStart(4, "0")}`;
+			const provenance = {
+				agentId: assertion.reviewer,
+				stageId: assertion.stageId,
+				modelId: assertion.modelId,
+				commit: assertion.commit,
+				reportedAt: assertion.reportedAt,
+				...(assertion.runId ? { runId: assertion.runId } : {}),
+			};
+			const finding: StructuredFinding = {
+				...source,
+				id,
+				evidence: [...new Set(source.evidence ?? [])],
+				provenance: [provenance],
+			};
+			const key = duplicateKey(finding);
+			const canonical = canonicalByKey.get(key);
+			if (!canonical) {
+				const entry: LedgerEntry = { finding, reviewer: assertion.reviewer };
+				entries.push(entry);
+				canonicalByKey.set(key, entry);
+				continue;
+			}
+			canonical.finding = {
+				...canonical.finding,
+				severity: maxSeverity(canonical.finding.severity, finding.severity),
+				evidence: [
+					...new Set([
+						...(canonical.finding.evidence ?? []),
+						...(finding.evidence ?? []),
+					]),
+				],
+				provenance: [
+					...(canonical.finding.provenance ?? []),
+					provenance,
+				],
+			};
+			canonical.duplicates = [...(canonical.duplicates ?? []), id];
+		}
+	}
+	const updatedAt =
+		assertions.map((assertion) => assertion.reportedAt).sort().at(-1) ??
+		new Date(0).toISOString();
+	return { round: 1, cycle: 0, entries, participants, updatedAt };
 }
 
 /**

@@ -1,10 +1,16 @@
 # Pull-request checks. The main-branch run lives in release.yml, which runs
 # the same check before tagging a release.
+#
+# Runs on PRs to ANY base (not just main) so stacked PRs are checked, and on
+# push to feat/** so a branch is checked even before its PR exists. Previously
+# this only triggered on PRs into main, so an entire stacked cutover shipped
+# with only its root PR ever running `npm run check`.
 name: CI
 
 on:
   pull_request:
-    branches: [main]
+  push:
+    branches: ["main", "feat/**"]
 
 permissions:
   contents: read

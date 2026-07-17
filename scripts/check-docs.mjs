@@ -60,7 +60,15 @@ for (const name of [...commandNames].sort()) {
 // ── 2. Plan-facing tools must be documented ──────────────────────────────────
 // Kept as an explicit list: tool `name:` fields are too generic to extract
 // reliably. Update when a user-facing tool is added or renamed.
-const TOOLS = ["deliverable", "task", "workflow", "plan", "research", "dig"];
+const TOOLS = [
+	"deliverable",
+	"task",
+	"workflow",
+	"plan",
+	"research",
+	"readiness",
+	"dig",
+];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);
 	if (!re.test(corpusText)) {

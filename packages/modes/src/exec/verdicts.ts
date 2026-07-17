@@ -1,6 +1,6 @@
-// Reviewer verdict protocol. A persona reviewer ends its report with a
-// structured verdict line; it's parsed mechanically (no LLM in the decision)
-// to feed the worker's review panel and the executor's ship gate.
+// Reviewer verdict protocol. A typed reviewer ends its report with a
+// structured verdict line; it is parsed mechanically (no LLM in the decision)
+// for verification compatibility.
 
 export type Verdict = "approve" | "request-changes" | "none";
 
@@ -38,8 +38,7 @@ export function parseVerdict(summary: string): ParsedVerdict {
 		.replace(/^\s*verdict\s*:\s*/i, "")
 		.trim()
 		.toLowerCase();
-	// Accept both the exec vocabulary (approve / request-changes) and the
-	// persona vocabulary (PASS / BLOCK). PASS≈approve, BLOCK≈request-changes.
+	// Accept approve/request-changes and the historical PASS/BLOCK wire words.
 	let verdict: Verdict = "none";
 	if (/request[\s_-]*changes/.test(value) || value.startsWith("block"))
 		verdict = "request-changes";

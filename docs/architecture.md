@@ -1,232 +1,68 @@
 # Architecture
 
-pi-maestro is a lockstep pi extension stack. The repo root is the pi bundle
-manifest; packages under `packages/*` are either **libraries** (importable
-by anyone) or **extensions** (loaded by the manifest, forbidden from value-
-importing each other — `scripts/check-boundaries.mjs` enforces it).
-Extensions talk only through versioned capabilities and typed events.
+pi-maestro is a TypeScript workspace and pi extension bundle. The host session is the **maestro**. It owns plan mutation, transition rulings, delivery scheduling, recovery, aggregate accounting, and shipping. Workers own implementation turns in dedicated worktrees. One-shot agents own research or typed workflow assignments. The HUD and PR body are projections, never authorities.
 
-## Packages
+## Boundaries
 
-The manifest loads seven extension entries:
+The root manifest loads `ask`, `prompt-assist`, `settings`, `subagents`, `commit`, `smart-compact`, and `modes`. Shared libraries are `contracts`, `core`, `models`, `ui`, `git`, `github`, `rpc`, and `tmux`.
 
-- `@vegardx/pi-ask` — questionnaire capability and `ask` tool.
-- `@vegardx/pi-prompt-assist` — ghost prompt suggestions and input assists.
-- `@vegardx/pi-settings` — layered settings (also a library), the
-  `/maestro` menu.
-- `@vegardx/pi-subagents` — persistent inspectable agents (research, review,
-  verify, and focused subagent runs) through a common run service. Long-running runs use detached
-  tmux sessions with explicit session JSONL; explicitly short/internal work may
-  opt into the legacy headless transport. Exposes `subagents.v1`.
-- `@vegardx/pi-commit` — conventional commits + `ship.v1`.
-- `@vegardx/pi-smart-compact` — work-continuity compaction: replaces pi's
-  default compaction summary with a work-focused one, with safe fallback.
-- `@vegardx/pi-modes` — the maestro: permission modes, plan engine and
-  tools, deliverable execution, review gate, shipping, carry-forward, UI.
+Dependencies cross package boundaries through:
 
-Libraries:
+- versioned capabilities such as `agents.v1`, `subagents.v1`, `settings.v1`, and `usage.v1`;
+- typed `maestro.*` events; and
+- the exhaustive Maestro RPC protocol.
 
-- `@vegardx/pi-contracts` — shared ids, events, capability interfaces, plan
-  and model vocabulary. Depends on nothing.
-- `@vegardx/pi-core` — extension wrapper, capability registry, typed
-  events, feature flags.
-- `@vegardx/pi-models` — profile/role-pool model resolution (see
-  [models.md](models.md)).
-- `@vegardx/pi-ui` — pure renderers and thin TUI component wrappers.
-- `@vegardx/pi-git` / `@vegardx/pi-github` — typed git/worktree and
-  `gh` seams.
-- `@vegardx/pi-rpc` — the maestro⇄agent RPC protocol (wire types mirror
-  modes' domain types so rpc stays dependency-light).
-- `@vegardx/pi-tmux` — typed tmux client.
-- `@vegardx/pi-research-tools` — websearch (Exa), webfetch, context7 tools.
-  Deliberately **not** in the manifest: the maestro session must not load
-  it; it's passed via `-e` to spawned research children so they get a
-  deterministic tool namespace.
+`scripts/check-boundaries.mjs` prevents extension implementation imports. `packages/contracts` remains dependency-light.
 
-```mermaid
-graph TD
-	contracts[pi-contracts]
-	core[pi-core]
-	settings[pi-settings]
-	models[pi-models]
-	ui[pi-ui]
-	git[pi-git]
-	github[pi-github]
-	rpc[pi-rpc]
-	tmux[pi-tmux]
-	ask[pi-ask]
-	prompt[prompt-assist]
-	commit[pi-commit]
-	subagents[pi-subagents]
-	smart[smart-compact]
-	modes[pi-modes]
+## Authoritative state
 
-	contracts --> core
-	contracts --> git
-	git --> github
-	contracts --> rpc
-	contracts --> ui
-	contracts --> models
-	settings <--> models
-	core --> settings
-	core --> ask
-	ui --> ask
-	core --> prompt
-	core --> commit
-	git --> commit
-	github --> commit
-	core --> subagents
-	git --> subagents
-	models --> subagents
-	core --> smart
-	models --> smart
-	core --> modes
-	git --> modes
-	github --> modes
-	models --> modes
-	rpc --> modes
-	tmux --> modes
-	ui --> modes
+| State | Authority | Durable location |
+|---|---|---|
+| Plan, assignments, stage DAG, gates | `PlanEngine` | `<agentDir>/maestro/plans/<slug>/plan.json` |
+| Worker process generation/session | `ExecutionAdapter` + plan | plan fields and worker JSONL |
+| One-shot run lifecycle | owning `RunStore` | `<runsRoot>/<runId>/status.json`, `events.jsonl`, `result.md` |
+| Worker-owned child view | worker `RunStore`; host is a projection | `<planDir>/child-projections.json` |
+| Usage aggregation | revisioned cumulative checkpoints | `<planDir>/execution/usage.json` |
+| Review provenance | workflow analytics on the delivery | `plan.json`; bounded PR projection |
+
+Writes that cross a process boundary are generation-fenced and persisted before acknowledgement. Worker replacement increments `sessionGeneration`; stale completion, child sync, usage, and controls cannot mutate the new generation. Child reconnect sends cumulative projections, not retry-sensitive deltas.
+
+Unsupported plan, run, and execution schema versions fail with archive/reset guidance. There is no compatibility hydration path in the active runtime.
+
+## Planning and execution
+
+A plan progresses through `exploring` and `structuring`. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. `readiness` records the understanding and unlocks structural tools. The `deliverable`, `task`, `workflow`, and `plan` tools define the contract.
+
+`workflow` resolves each semantic agent assignment to an immutable model/effort pair and stores an explicit stage DAG. Members of a stage run against one `inputRevision`; stages expose declared input/output contracts and barriers. Duplicate semantic kinds are valid when identities, rationale, and exact model choices are explicit.
+
+Plan → Auto/Hack is a separate execution-readiness gate. A `plan-review` assignment inspects the exact plan, the user rules **Enter execution** or **Stay in plan**, and the host revalidates the same plan fingerprint before changing mode. The session remains in Plan while review and ruling are pending.
+
+A repo-backed delivery is one branch, worktree, and PR. `dependsOn` forms a flat DAG; stacked work defaults to the predecessor tip. The executor activates only ready `planned` deliveries. `/start` activates planned work; `/restart` only replaces/resumes an already-started worker; `/recover` audits failed or uncertain work before resumption.
+
+## Process and RPC model
+
+Workers are persistent pi sessions in tmux with retained JSONL. The Maestro RPC socket authenticates identity and carries status, plan reads/mutations, questions, cumulative usage, child reconciliation, stop preparation, interrupt, and debug proposals. The adapter serializes lifecycle mutations and fences them by generation.
+
+One-shot agents use the common run service. Tmux is the default inspectable transport; headless is reserved for explicitly short internal calls. A worker's child run store remains authoritative. The host persists a read-only projection so rows and totals survive host restart, then marks live rows unconfirmed until the current generation reconciles.
+
+Stop is bounded: first request cooperative preparation, then escalate the remaining tmux sessions at one fleet deadline. `K`/`/kill` requires a proved stop before recording a recoverable delivery failure. Interrupt aborts a turn or one-shot run without implying worker shutdown.
+
+## Accounting and presentation
+
+Token categories are disjoint:
+
+```text
+promptTokens = input + cacheRead + cacheWrite
+totalTokens  = promptTokens + output
+cacheHitRate = cacheRead / promptTokens
 ```
 
-(`settings ⇄ models` is a deliberate type-level coupling: settings persists
-profile role pools and process-local typed overrides live in contracts; models
-reads layered settings and consumes those overrides.)
+Every cumulative counter lifetime has a stable source key and monotonic revision. Worker generations are separate sources; a reconnected child keeps its logical run source while only the current owner generation may update it. The ledger restores checkpoints before rendering.
 
-## Capabilities and events
+The HUD reads execution and run projections. Terminal elapsed time ends at `completedAt`; live rows use the current clock. Width reduction drops model and token details before truncating identity/status. User-facing controls resolve opaque `worker:*` and `run:*` ids before aliases.
 
-Capabilities (versioned, registered at load, looked up at use):
+PR generation replaces only `<!-- maestro:provenance:start/end -->`. It includes canonical findings, resolutions, exact SHAs, bounded assignment evidence, token/cost totals, and final verification. Text outside markers is preserved; secrets, prompts, reasoning, and transcripts are excluded or redacted.
 
-- `subagents.v1` — spawn, inspect, steer, interrupt, capture, and retain agent runs
-- `ask.v1` / `ask-transport.v1` — questionnaire presentation and transport
-- `commit.v1` / `ship.v1` — local conventional commits; push + PR
-- `modes.v1` — mode state + execution status
-- `prompt-assist.v1` — ghost text suggestions
-- `usage.v1` — unified token/cost ledger
-- `overlays.v1`, `settings.v1` — TUI overlays; settings menu integration
+## Validation
 
-Events (bus, namespaced `maestro.*`): `mode.changed`, `plan.updated`,
-`run.status`, `run.progress`, `run.agentEvent`, `supervisor.needDecision`,
-`ship.completed`.
-
-## Runtime flow
-
-```mermaid
-sequenceDiagram
-	participant User
-	participant Maestro as pi-modes (maestro)
-	participant Sub as Subagents (headless RPC)
-	participant Executor as DeliverableExecutor
-	participant Worker as Workers (tmux+RPC)
-	participant Commit as commit.v1
-
-	User->>Maestro: /plan
-	Maestro->>Sub: research (codebase, web)
-	Sub-->>Maestro: digests (dig to expand)
-	User->>Maestro: deliverable/task/agent tools
-	User->>Maestro: Shift+Tab or /start
-	Maestro->>Maestro: plan-review transition gate
-	Maestro->>Executor: activate ready planned work
-	Executor->>Executor: activate deliverables (deps met), worktrees
-	Executor->>Worker: spawn worker (tmux+RPC)
-	Worker->>Commit: commit locally
-	Worker->>Sub: review() — panel runs once
-	Sub-->>Worker: findings → ledger (minted ids)
-	Worker->>Sub: review({resolutions}) — scoped verifier
-	Executor->>Executor: gate: no open blocking findings
-	Executor->>Maestro: block? → triage → (repeat) human question
-	Executor->>Executor: deliverable complete → ship
-	Executor->>Maestro: push + PR
-```
-
-Workers are full pi sessions in per-deliverable worktrees — observable,
-steerable, resumable. Reviewers, fix verifiers, researchers, `/verify`, support,
-and delegate runs use the same subagents service and are tmux-backed by default.
-Every run has an opaque `run:<id>`, explicit session JSONL, process/tmux metadata,
-and durable events. Tmux is the live inspection surface; run/session files are
-historical truth. Headless transport is reserved for callers that explicitly
-mark short internal work.
-
-A unified target registry normalizes `host:current`, `worker:<deliverable/agent>`,
-and `run:<id>`. Commands resolve exact opaque IDs before display aliases and
-reject ambiguous aliases. `/interrupt` is distinct from steer and shutdown:
-workers acknowledge an RPC abort of only the current turn while preserving the
-process/session/worktree; one-shot runs salvage partial assistant text, settle
-`stopped`, and clean up their process group. Propagation is explicit (`--children`,
-`--tree`, `--all`) and never defaults to all.
-
-The review gate itself is documented in
-[review-loop.md](review-loop.md).
-
-Persistent state lives under the pi agent directory:
-
-- `<agentDir>/maestro/plans/<slug>/plan.json` — the deliverable-based plan
-  (never garbage-collected automatically)
-- `<agentDir>/maestro/plans/<slug>/handoffs/` — numbered `/distill` and
-  `/handoff` carry documents
-- Worker sessions managed via tmux (ephemeral); usage recorded in the
-  unified ledger
-- `<agentDir>/maestro/plans/<slug>/debug/active.json` — active structured,
-  redacted debug recovery/issue-review state only; deleted on cancel, defer,
-  successful post, or failed post
-
-## Debug episode architecture
-
-`/debug` is an episode-scoped state machine owned by `pi-modes`, not a generic
-model conversation. Mechanical collectors freeze role/mode/session/plan,
-worker generation, runtime versions, bounded failures, and the selected
-recovery outcome. Model-authored summary/cause/fix fields are kept in a
-separate structured object so a reviser cannot rewrite observed facts.
-
-The phases are ordered and non-reentrant:
-
-1. collect bounded facts and diagnose;
-2. ask one mutually exclusive recovery question;
-3. execute the selected action once through `ExecutionHandle`/`PlanEngine`;
-4. mechanically record success or failure;
-5. enter the issue review loop; and
-6. freeze the final redacted title/body, display it, and optionally call the
-   typed `@vegardx/pi-github` issue seam.
-
-The active artifact persists outside the conversational tail, so compaction
-rehydrates phase 5 without dispatching phase 3 again. Revision calls receive
-only the current structured draft, frozen bounded evidence, recovery result,
-and the user's instruction. They must return a complete replacement with
-byte-identical mechanical provenance. Invalid or failed revisions retain the
-prior draft. Revision history is bounded even though user-driven iterations
-are unlimited.
-
-The final external privacy boundary assembles all Markdown, applies
-`redactSecrets()`, displays that exact value, and passes the same bytes on
-stdin to `gh issue create --body-file - -R github.com/vegardx/pi-maestro`.
-Recovery and posting are independent best effort: neither failure undoes the
-other, and uncertain GitHub mutations are not retried silently.
-
-Worker authority is intentionally narrower. A worker can submit a proposal
-bound to its authenticated composite identity, plan fingerprint, and session
-generation. The maestro validates it and exclusively owns consent, plan
-repair, steering, retry/restart, workspace validation, and issue posting.
-Fresh restart creates a new JSONL but reuses the one validated worktree and
-branch; prior transcript paths remain history.
-
-## Key design decisions
-
-- **A deliverable is one branch, one PR** — the atomic unit of work,
-  ordered by a `dependsOn` DAG; stacked PRs by default.
-- **Maestro owns shipping** — workers only commit, never push or open PRs.
-- **Workers on tmux, everything else headless** — workers need observation
-  and steering; reviewers/researchers are one-shot verdict producers.
-- **Flat plan tools** — `deliverable`, `task`, `agent` (no nested JSON).
-- **The gate is a ledger, not a verdict** — completion requires no open
-  blocking findings, with a bounded fix-cycle budget and an escalation
-  ladder (worker → maestro → human).
-- **Plans out-detail the executor** — tasks carry file paths and
-  signatures; workers follow instructions, they don't design.
-- **Direct role pools** — model-consuming paths resolve curated roles; ordered
-  exact models and efforts are layered session → project → global, with the
-  live session model as the final fallback. No runtime tier graph remains.
-- **Core settings presentation** — `/maestro` composes pi's pinned
-  `SettingsList`, `SelectList`, and `DynamicBorder`; domain-specific components
-  are limited to focused target/extension multi-selects.
-
-<!-- verified against eb4ef95ff0cf -->
+Deterministic scenario tests provide scripted models, temporary git repositories, fake GitHub/tmux/clock/usage, full event JSONL, and final-state artifacts. Real-process tests use test-owned RPC sockets and forked fake agents. Provider and GitHub dogfood are opt-in host activities; normal worker tests never contact either.

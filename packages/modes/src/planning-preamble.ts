@@ -181,10 +181,10 @@ ${CONVERGENCE}
 - Deliverables with \`dependsOn\` create stacked PRs (B branches from A's tip).
 - Do NOT implement code yourself.
 - Worker mode is always "full" (read+write+bash). Support agents are "read-only".
-- Reviewers resolve the active \`reviewer\` role pool. Omit model/effort for
-  its first compatible defaults. Exact authored values must remain allowed;
-  raise effort before using another model. Cross-model duplicate personas are
-  exceptional (at most two models), need unique names and explicit justification.`;
+- Reviewers use their exact configured model-set options. Omit model/effort for
+  the first compatible default; explicit authored values must remain allowed.
+  Raise effort before selecting another model. Duplicate semantic kinds require
+  unique assignment ids and explicit rationale.`;
 }
 
 /**

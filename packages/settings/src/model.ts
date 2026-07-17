@@ -51,6 +51,10 @@ export function formatSettingValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
+export function sessionModelId(ctx: import("@earendil-works/pi-coding-agent").ExtensionContext): string | undefined {
+	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+}
+
 export function validateDeclaredValue(
 	declaration: SettingDeclaration,
 	value: SessionSettingValue | undefined,
@@ -71,9 +75,9 @@ export function readDeclaredValue(
 ): LayeredValue<SessionSettingValue> {
 	const manager = SettingsManager.create(cwd);
 	const path = ["extensionConfig", extension, ...declaration.key.split(".")];
-	const global = readPath(manager.getGlobalSettings(), path) as SessionSettingValue | undefined;
-	const project = readPath(manager.getProjectSettings(), path) as SessionSettingValue | undefined;
-	const session = getSessionSettingOverride(`${extension}.${declaration.key}`);
+	const global = readPath(manager.getGlobalSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const project = readPath(manager.getProjectSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const session = getSessionSettingOverride(extension, declaration.key);
 	return {
 		global,
 		project,
@@ -90,9 +94,9 @@ export function readAdvancedValue(
 ): LayeredValue<SessionSettingValue> {
 	const manager = SettingsManager.create(cwd);
 	const path = ["extensionConfig", extension, ...key.split(".")];
-	const global = readPath(manager.getGlobalSettings(), path) as SessionSettingValue | undefined;
-	const project = readPath(manager.getProjectSettings(), path) as SessionSettingValue | undefined;
-	const session = getSessionSettingOverride(`${extension}.${key}`);
+	const global = readPath(manager.getGlobalSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const project = readPath(manager.getProjectSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const session = getSessionSettingOverride(extension, key);
 	return {
 		global,
 		project,
@@ -110,10 +114,10 @@ export function writeAdvancedValue(
 	value: SessionSettingValue | undefined,
 ): void {
 	if (scope === "session") {
-		setSessionSettingOverride(`${extension}.${key}`, value);
+		setSessionSettingOverride(extension, key, value);
 		return;
 	}
-	writeExtensionConfigKey(scope, cwd, extension, key, value);
+	writeExtensionConfigKey(scope, cwd, extension, key, value ?? null);
 }
 
 export function writeDomainPath(

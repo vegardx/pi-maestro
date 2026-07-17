@@ -272,7 +272,7 @@ describe("unconfigured model fallback", () => {
 	it("resolves every built-in role to one sensible session option", async () => {
 		const result = await resolveExactModelSelection(
 			fakeCtx({ session: "anthropic/sonnet" }),
-			{ role: "reviewer" },
+			{ role: "correctness-review" },
 		);
 		expect(result.selected).toMatchObject({
 			presetId: "session",

@@ -202,7 +202,7 @@ export function createModesRuntime(
 	maestro.capabilities.register(CAPABILITIES.overlays, rt.overlayManager);
 
 	// Declare non-model runtime knobs for /maestro Advanced settings. Direct
-	// model and effort policy lives exclusively in profile role pools.
+	// exact model and effort policy lives in model-set presets.
 	const settings = maestro.capabilities.get(CAPABILITIES.settings);
 	settings?.declare("modes", [
 		...EXECUTION_POLICY_SETTINGS,

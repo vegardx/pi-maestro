@@ -1,388 +1,111 @@
 # Usage
 
-The lifecycle of a maestro session: plan → implement → watch/steer/answer →
-review gate → ship → distill or handoff. This page follows that arc; the
-[command reference](#command-reference) at the end lists everything.
-
 ## Install
 
 ```bash
 pi install git:github.com/vegardx/pi-maestro
 ```
 
-The root package is the pi bundle manifest; pi loads the TypeScript entries
-directly through jiti — no build step. Requirements beyond pi itself:
-`tmux` (workers run in tmux sessions) and the `gh` CLI (shipping opens PRs).
+Pi loads the workspace TypeScript directly. Worker observation requires `tmux`; shipping requires `gh`.
 
-## Modes
+## Modes and entry gates
 
-- `recon` — the default on session start: a read-only research posture with
-  the `research`/`dig` loop and no plan surface at all. Shift+Tab exits it
-  one-way into plan (the first plan turn orients: summary + open questions);
-  `/recon` re-enters it later. It is never part of the Shift+Tab cycle.
-- `hack` — unrestricted pi default behaviour. `/hack` only — also outside
-  the cycle; Shift+Tab from hack exits back to plan.
-- `plan` — read-only shell policy; planning tools and `ask` active. `/plan`
-- `auto` — autonomous implementation; execution tools unlocked. `/auto`
+- **Recon** is the initial read-only research posture. `/recon` re-enters it.
+- **Plan** owns research, questions, and plan structure. `/plan [slug]` opens it.
+- **Auto** runs the structured plan. `/auto` or Shift+Tab requests entry.
+- **Hack** is explicit unrestricted work. `/hack` requests entry.
+- **Agent** is internal to workers.
 
-Shift+Tab cycles plan ⇄ auto (from plan it asks auto vs hack). A fifth mode,
-`agent`, is internal: workers run in it with a dedicated tool policy and
-preamble. You never switch to it yourself.
+Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. Plan → Auto/Hack never changes mode immediately: Maestro runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint. **Stay in plan** records a cancelled ruling and starts nothing.
 
-## Planning
+## Plan
 
-`/plan [title-or-slug]` opens (or creates) a plan and enters plan mode. A new
-plan starts in an **exploring** phase: the maestro researches until it can
-write tasks with file paths and signatures — the plan *is* the research
-output. Structuring unlocks when the readiness gate passes (or `/ready`
-skips it).
+A new plan begins in **exploring**. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report. When understanding is sufficient, `readiness` asks whether to form the plan and records the summary. Structural tools then become available:
 
-Research runs through two tools:
+- `deliverable` defines atomic deliveries and their dependency DAG;
+- `task` defines gating work, follow-ups, questions, and manual checkpoints;
+- `workflow` lists exact model options and atomically stores immutable assignments plus explicit stages;
+- `plan` renders markdown, a worker seed, or JSON.
 
-- `research` — fans out parallel read-only subagents (codebase and web;
-  web agents can search, fetch pages, and pull library docs). All questions
-  for a round go in one call; you get a bounded digest per question. Full
-  reports persist to the plan directory's `research/` folder.
-- `dig` — expands a digest to its full report via the `[ref: …]` printed
-  beside it. Execution agents have it too: the knowledge base ends with an
-  auto-appended **Research Index** of every report, and reports that land
-  after the base froze ride each later worker's seed — so agents pull a
-  deep-dive on demand instead of every fork carrying every report.
+Each workflow stage names its predecessor stages, assignment ids, immutable `inputRevision`, contracts, and barrier. Independent members share a stage and run concurrently. Every assignment stores semantic kind, exact model/effort, runtime policy, focus, rationale, contracts, and provenance. Maestro never silently substitutes a persisted exact choice.
 
-The plan is shaped with three flat tools (plus `plan` to render the active
-plan as markdown, seed text, or JSON):
+A repo delivery maps to one branch, worktree, and PR. `dependsOn` controls activation; dependencies stack by default. Scratch deliveries use a plain directory and no PR. Multi-repo plans register exact repo paths; cross-repo dependencies order work but do not stack branches.
 
-- `deliverable` — create/update/remove deliverables, manage the repo
-  registry, and wire dependencies. Add many at once with
-  `items: [{id, title, dependsOn}, …]` (one batched call; sibling `dependsOn`
-  refs resolve to the minted ids).
-- `task` — work items within a deliverable: file paths, signatures, edge
-  cases. Tasks are the worker's instructions. Add many at once with
-  `items: [{title, body}, …]` (one batched call per deliverable).
-- `agent` — support agents within a deliverable: reviewers (a `persona`
-  from the [palette](review-loop.md#the-panel), an exact optional `model` from
-  the reviewer role pool, an `effort` allowlist choice, a `focus`
-  specialization) and helpers, ordered by an `after` graph. Prefer raising
-  effort before adding a second model; cross-model duplicate personas require
-  unique names and explicit justification.
+## Execute
 
-### Deliverables
+`/start [deliverable-id]` activates only ready `planned` work. Omitting the id starts all ready planned deliveries. It does not restart failed or stopped work.
 
-A deliverable is the atomic unit of work — one branch, one PR. It carries
-tasks, a worker, and its review panel. States:
+Workers run in persistent tmux sessions, commit locally, and toggle tasks. Typed workflow review assignments inspect immutable revisions and report structured findings. Critical and major findings must have a recorded resolution; fixed claims receive scope-locked verification. Final assessment checks exact SHAs and complete reports mechanically.
 
-```
-planned → active → complete → shipped | superseded | abandoned
-```
+### Observe and control
 
-Deliverables order themselves with `dependsOn`. Dependent deliverables
-create **stacked PRs** by default (branch from the predecessor's tip);
-`stacked: false` branches from the default branch instead.
+The editor HUD has Agents, Plan, and Questions tabs. Tab enters it only from an empty prompt. Rows show status words and elapsed time; wider terminals add model, effort, tokens, and cache hit rate. Terminal duration freezes. Worker-owned child agents reconnect into their owner row through durable generation-fenced projections.
 
-### Multi-repo plans
+- `/agents` focuses Agents (or prints a headless summary).
+- `/watch` toggles worker panes.
+- `/view <target>` opens a read-only tmux split.
+- `/steer <target> <guidance>` continues a worker with guidance.
+- `/interrupt [target] [--children|--tree|--all]` aborts a turn/run; propagation is explicit.
+- `/answer` opens pending questions; `/recap` summarizes completed agents.
 
-A plan lives in one repo by default, but can register more: the
-`deliverable` tool manages a repo registry (key → path), and each
-deliverable may target a registry key. Worktrees, branches, and PRs route
-to the deliverable's repo. Cross-repo `dependsOn` is ordering-only — no
-branch stacking across repos.
+Use exact `worker:<deliverable/agent>` or `run:<id>` targets when aliases could collide. `I` in the HUD interrupts. `K` performs a bounded shutdown of the owning delivery and records a recoverable failure only after the process is proved gone.
 
-## Execution
+### Stop, restart, recover
 
-Shift+Tab from Plan runs the plan-review transition gate, enters Auto/Hack on
-approval, and activates ready work. `/start [deliverable]` is the explicit
-entry for ready `planned` work only. The executor creates a worktree per
-deliverable and spawns a worker in each — a full pi session on tmux, seeded
-with upstream summaries and its tasks. Workers implement, commit locally
-(never push), toggle tasks, and run their own review panel before completing.
+- `/stop` freezes scheduling, requests cooperative preparation, and escalates remaining sessions at one bounded fleet deadline.
+- `/restart [deliverable-id]` resumes a clean stop or replaces an already-started worker. It never activates unrelated planned work.
+- `/kill <deliverable-id>` proves shutdown and marks that delivery failed/recoverable.
+- `/recover [deliverable-id]` audits worktree, branch, session, and PR reality. A target recovers only that delivery; global recovery presents candidates instead of clearing every hold.
+- `/debug [symptom]` collects bounded facts, asks for one recovery action, records the exact result, then offers a redacted issue draft.
 
-While the fleet runs, the maestro session stays yours:
+Resume keeps the JSONL. Fresh restart creates a new JSONL, retains bounded prior-session paths, and reuses the validated worktree/branch. Stale process generations cannot complete tasks, reconcile children, update usage, or control a replacement.
 
-### The HUD
+## Review and ship
 
-The HUD lives in the input box itself: the input's top border is a tab
-bar —
-`──[ Input ]─── Agents 4 ─── Plan 5/9 ─── Questions 2 · 1 blocking ── tab ──`
-— so the box always reads tab bar / input text / bottom border. The
-bracketed member is the one holding the keys; counts are live (omitted at
-zero) and a blocking ask accents the Questions label. Collapsed — the
-default, with **Input** focused — the HUD costs zero extra lines.
+Reviews are workflow assignments, not an independent panel configuration. See [Review workflows](review-loop.md). The delivery stores canonical findings, duplicate membership, resolution, verification, assignment usage, and reviewed SHAs.
 
-**Tab** walks the ring. On an empty input it enters the panel at Agents;
-each further Tab moves Agents → Plan → Questions; one more wraps focus back
-to **Input** while *pinning* the panel open on the last tab. A draft keeps
-Tab for autocomplete (the trailing `tab` hint dims to say so) — the ring is
-only ever entered from an empty input.
+Maestro owns remote effects:
 
-The panel expands *above* the tab bar (at most 10 lines, capped by its own
-plain rule; rows beyond the cap scroll behind an overflow rule with
-`↑/↓ N more` counts). Its tabs:
+- `/ship` pushes and creates/updates the next shippable PR;
+- `/sync` retargets stacked PRs after predecessor merges;
+- `/park` creates tracking issues;
+- `/commit` creates a local conventional commit.
 
-- **Agents** — workers at root with their one-shot review/verify/research
-  runs nested under tree connectors; maestro-direct spawns at root. Each row
-  shows `name · slug`, a status word (starting/running/done/blocked/
-  stopped/failed), elapsed time, and the model or a context note. A worker
-  auto-expands only while a child is running; done/blocked workers collapse
-  to one line with an `N subagents` suffix; manual folds are sticky.
-- **Plan** — deliverables as checkboxes (`[x]` shipped/complete, `[~]`
-  active, `[ ]` queued) with the assigned worker named on active rows; the
-  active deliverable auto-expands its tasks.
-- **Questions** — every pending ask: blocking first (accented), asker
-  (`maestro` or `worker · slug`) plus the question text.
+Generated PR evidence is marker-bounded: user text outside Maestro markers is preserved. Canonical findings are never silently dropped to meet a size budget; optional detail truncates first. Secrets and raw transcripts are not projected.
 
-While a panel tab is focused the panel is bright, its last row lists the
-keys, and the input text below dims: up/down move the selection, Tab (or
-`[`/`]`) switches tabs, left/right/space fold/unfold, **Enter** is the
-context action (Agents: attach a read-only tmux split; Plan:
-expand/collapse; Questions: answer), `s` prefills an addressed `/steer`,
-`I` interrupts after a confirm, while `K` bounded-shuts down the selected
-worker's owning delivery and marks it failed for audited recovery.
+## Continuity
 
-After Tab moves through Agents → Plan → Questions and returns to Input, the
-panel fully collapses. **Esc** from any panel tab likewise focuses Input and
-collapses the panel; with no panel open it keeps its usual editor meaning.
-
-### Questions and answer mode
-
-Worker questions pend quietly — they surface only as the Questions tab and
-its count. A blocking maestro ask badges the tab bar (`1 blocking`) and the
-footer ("maestro waiting on you"); if the editor is empty it opens **answer
-mode** immediately, and if you have a draft it never steals the input.
-Answer mode replaces the input with the full questionnaire: digits 1–9 or
-arrow keys choose options, rich option pages and comparisons remain available,
-and free text is entered in the questionnaire's custom-answer row. Enter
-commits each question, then every set — including one simple choice — opens a
-boxed **Review answers** screen. Send is selected by default; left/right or Tab
-switches between Edit and Send, Enter confirms, and Esc returns to editing.
-There is no "accept recommended" review action: recommendations are already
-preselected on their question pages. Esc from a blocking question defers it
-(the maestro unblocks and carries on); Esc from a pending question closes it.
-A prompt draft is preserved exactly when answer mode is opened from Questions.
-Shorthand replies (`2`, `1a 2b`, `rec`) at the normal prompt still settle
-pending questions directly, and a normal prompt sent while the maestro is
-blocked simply queues (you are told once).
-
-### Fleet commands
-
-- `/agents` — expand and focus the HUD on the Agents tab (headless sessions
-  get a text overview instead).
-- `/watch` — toggle stacked tmux panes showing all active workers (large review
-  panels are intentionally not tiled automatically).
-- `/view <target>` — read-only split for any tmux-backed worker or run. Exact
-  IDs (`worker:<deliverable/agent>`, `run:<id>`) are preferred; ambiguous
-  display names are rejected.
-- `/steer <name> <guidance>` — inject guidance into a running worker. Steering
-  continues the turn and is not interruption or shutdown.
-- `/interrupt [target] [--children|--tree|--all]` — abort the selected current
-  turn. With no target it affects only the current host turn. Workers preserve
-  their process, transcript, and worktree after acknowledged RPC abort;
-  one-shot runs salvage partial text, settle stopped, and clean up. Descendant,
-  tree, and all-agent propagation are explicit only.
-- `/answer` — answer questions workers have raised.
-- `/recap` — summary of completed agent work.
-
-Workers that hit something outside their deliverable escalate to the
-maestro over the supervisor channel; the maestro decides, consults, or
-raises a question to you.
-
-## The review gate
-
-A worker cannot complete while its ledger has open blocking findings. The
-short version: the panel runs **once**, findings get canonical ids, the
-worker resolves each one (fix / wont-fix for minors / dispute with
-rationale), and a scope-locked verifier checks exactly those claims — with
-a bounded fix-cycle budget, maestro triage on the first block, and a human
-question only on repeat blocks. The full design is in
-[review-loop.md](review-loop.md).
-
-## Verification and recovery
-
-- `/verify [deliverable-id]` — deep verification of started deliverables:
-  read-only subagents read each deliverable's actual diff and judge whether
-  its tasks were genuinely accomplished.
-- `/debug [symptom]` — collect bounded current-session diagnostics and present
-  one mutually exclusive recovery decision. A recommendation is preselected,
-  but no steering, retry, restart, or repair runs until you submit it. Recovery
-  runs at most once; afterward, the issue review offers **Create issue** /
-  **Revise draft** / **Cancel**. Revisions take a conditional free-text
-  instruction and may repeat without a cap because each iteration is
-  user-driven. Cancel/defer posts nothing and deletes transient state.
-- `/start [deliverable-id]` — activate ready planned work only. A target starts
-  only that delivery and never activates unrelated planned work.
-- `/stop` — intentionally park the active fleet behind a bounded shutdown.
-- `/restart [deliverable-id]` — fast validated resume of a clean `/stop`; it
-  never activates planned deliveries.
-- `/kill <deliverable-id>` — bounded-shutdown and fail the owning delivery.
-- `/recover [deliverable-id]` — audit failed/crashed/stale/inconsistent state
-  against worktrees, branches, sessions, and PRs before a scoped resume. Global
-  recovery presents selectable candidates and never blindly clears review or
-  dependency holds.
-
-### Debug recovery and issue review
-
-Recovery labels describe their exact effect:
-
-- **Steer current worker** preserves process, JSONL session, and workspace.
-- **Retry activation** clears only a retryable activation block and ticks the
-  scheduler; it does not promise a process restart.
-- **Restart and resume** replaces the process after a lifecycle barrier and
-  appends to the same JSONL.
-- **Restart fresh** replaces the process and JSONL, preserves the validated
-  existing worktree/branch, and retains the old session path as history. It
-  never creates a second worktree merely to get fresh model context.
-- **Plan repair** is atomic and fingerprint-pinned. It may add a corrective
-  task, clarify untouched task text, add a manual checkpoint, or idempotently
-  reopen an erroneously completed task, and only for a stopped affected
-  deliverable. Dependencies/lifecycle, agents, panels, review ledger and
-  waivers, repository/workspace/branch/session/PR metadata remain manual.
-
-A worker may inspect its own bounded transcript/workspace and propose a
-fingerprint- and generation-bound diagnosis. The maestro alone validates the
-proposal, asks for consent, mutates plans/workers/workspaces, and posts issues.
-A stale or mismatched proposal fails closed.
-
-Example recovery question:
-
-```text
-Recovery (recommended option is preselected; submission is consent)
-  Steer current worker       process preserved · session preserved
-  Restart and resume session process replaced  · same JSONL
-  Restart with fresh session process replaced  · new JSONL · workspace reused
-  No recovery                no mutation
-```
-
-Recovery success or failure does not block issue review. Its attempted action,
-timestamp, exact outcome, and error are inserted mechanically, so the changed
-issue is displayed for a separate final confirmation. Issue Markdown always
-contains Summary, Steps to reproduce, Expected behavior, Actual behavior,
-Observed facts, optional Likely cause, Recovery/workaround, mechanically sourced
-Runtime context, and Suggested fix. For example:
-
-```markdown
-# Debug: worker process exited unexpectedly
-
-## Summary
-Worker process exited unexpectedly.
-
-## Observed facts
-- deliverable=docs, generation=4
-
-## Recovery / workaround
-- Attempted action: `restart-fresh`
-- Exact outcome: **failed** — worker shutdown timed out
-
-## Runtime context
-- Mode: `auto` _(source: runtime)_
-- Worker generation: `4` _(source: executor)_
-```
-
-Only bounded structured evidence is accepted—never raw transcript,
-environment, source-tree, or log attachments. The complete title/body is
-redacted at final assembly, displayed, frozen, and sent byte-for-byte via
-stdin to `github.com/vegardx/pi-maestro` only after **Create issue** is
-submitted. Posting failure never rolls back recovery and is never silently
-retried when the external result may be uncertain. Active review state and
-bounded revision history survive compaction; recovery is not repeated after
-rehydration.
-
-## Shipping
-
-The maestro owns shipping; workers only commit locally.
-
-- During execution, the executor ships deliverables automatically once they
-  complete and the gate is satisfied.
-- `/ship` ships the next shippable deliverable (push + open/update PR). The
-  PR body is assembled from the deliverable body, task checklist, and agent
-  summaries.
-- `/sync` reconciles shipped deliverables' PRs — retargets stacked PRs
-  whose base has merged.
-- `/park` creates GitHub tracking issues for the active plan.
-- `/commit` stages and commits with a conventional-commit message (works in
-  any mode, plan or no plan).
-
-When every deliverable is delivered, the maestro returns to plan mode —
-the arc is over, and the natural next step is one of the two commands
-below.
-
-## Session continuity
-
-Long sessions rot: context fills, attention degrades, threads get dropped.
-Two commands, one curation flow:
-
-- `/distill` — curated in-place compaction. The maestro inventories the
-  session (plan state, open questions, live threads), proposes topics, and
-  asks you (multi-select) what carries forward. The curated document
-  *replaces* the compaction summary — same plan, same session, keep
-  working.
-- `/handoff` — close the arc. A transcript archaeologist hunts unanswered
-  questions, unimplemented promises, and orphaned threads; you curate; the
-  session ends and a **new planning session** opens — no active plan. You
-  arrive to a card ("continuing from a handoff · N threads carried") and a
-  one-paragraph orientation; the full seed document rides the model's
-  context invisibly until a real plan is formed, and stays on disk under
-  the old plan's `handoffs/`. Refuses while workers are mid-flight.
-
-A threshold ladder watches context fill: at 30% you're nudged to `/distill`;
-at 50% a self-curated distill runs automatically (with a divergence check
-that suggests `/handoff` when the session has drifted from its original
-goal). Both thresholds are tunable — see [models.md](models.md#distill).
+`/distill` curates in-place compaction. `/handoff` closes the arc and seeds a new planning session; it refuses while workers are live. `/verify [deliverable-id]` performs deep read-only verification of started work.
 
 ## Command reference
 
-| Command | What it does |
+| Command | Effect |
 |---|---|
-| `/plan [title-or-slug]` | Open or create a plan; enter plan mode |
-| `/ready` | Unlock plan structuring (skip the readiness gate) |
-| `/start [deliverable-id]` | Activate ready planned work only |
-| `/stop` | Intentionally park all active workers behind bounded shutdown |
-| `/restart [deliverable-id]` | Resume clean stops without activating planned work |
-| `/recover [deliverable-id]` | Audit and recover selected failed or uncertain work |
-| `/kill <deliverable-id>` | Bounded-shutdown and fail an owning delivery |
-| `/agents` | Expand + focus the HUD on the Agents tab (text overview when headless) |
-| `/watch` | Toggle stacked tmux panes for all active workers |
-| `/view <target>` | View any tmux-backed worker/run read-only; exact opaque IDs win |
-| `/steer <name> <guidance>` | Steer a running worker without aborting it |
-| `/interrupt [target] [--children\|--tree\|--all]` | Abort current turn/run; preserve persistent sessions, settle one-shots |
-| `/answer` | Answer pending agent questions |
-| `/recap` | Summary of completed agent work |
-| `/verify [deliverable-id]` | Deep-verify started deliverables against their diffs |
-| `/debug [symptom]` | Diagnose, run one explicitly selected recovery, then review/revise/cancel an exact GitHub issue draft |
-| `/ship` | Ship the next shippable deliverable (push + PR) |
-| `/sync` | Retarget stacked PRs whose base merged |
-| `/park` | Create GitHub tracking issues for the active plan |
-| `/commit` | Conventional commit of current changes |
-| `/distill` | Curated in-place compaction; keep working |
-| `/handoff` | End the arc; seed a new planning session |
-| `/recon`, `/hack`, `/auto` | Switch mode |
-| `/maestro` | Hierarchical settings: profiles, ordered role pools, child extensions, advanced scopes |
-| `/modes-status` | Show mode and active plan status |
+| `/plan [slug]` | Open/create a plan and enter Plan |
+| `/recon`, `/auto`, `/hack` | Request a mode transition |
+| `/start [id]` | Activate ready planned deliveries |
+| `/stop` | Bounded fleet stop |
+| `/restart [id]` | Resume/replace started work only |
+| `/recover [id]` | Audit and recover targeted or selected work |
+| `/kill <id>` | Prove shutdown, then fail recoverably |
+| `/agents`, `/watch`, `/view <target>` | Inspect agents |
+| `/steer <target> <text>` | Guide a worker without interruption |
+| `/interrupt [target] [scope]` | Abort current turn/run |
+| `/answer`, `/recap` | Handle questions and summaries |
+| `/verify [id]`, `/debug [symptom]` | Verify or diagnose/recover |
+| `/ship`, `/sync`, `/park`, `/commit` | Delivery/GitHub operations |
+| `/distill`, `/handoff` | Session continuity |
+| `/maestro` | Exact models, runtime policies, gates, scalar settings |
+| `/modes-status` | Current mode, plan, and execution state |
 
-`/maestro` uses standard searchable pi settings lists. Profile activation is
-derived from `/model`; role model/effort arrays are ordered (first item is the
-default) and layer session → project → global. An unset efforts leaf shows as
-`auto` — the spawner picks an effort per task. Selecting a role opens a
-one-screen ordered pool editor (space toggles, `+`/`-` reorder, `g` scope,
-`e` default effort, cycling past the last level back to `auto`). Role
-one-liners edit the active profile directly:
-`/maestro <role> [list|add|remove|default|effort]` — `effort auto` clears the
-leaf. Use
-`/maestro show|get|set|reset|profiles` for scripts; JSON arrays are required
-for role leaves. See [Models & settings](models.md) for exact paths, session
-lifetime, and migration from legacy tier keys.
-
-## Feature flags
-
-Disable a whole extension:
+## Development and dogfood
 
 ```bash
-PI_EXT_MODES=off pi
+npm test
+npm run typecheck
+npm run boundaries
+npm run docs
+npm run check
 ```
 
-Disable or force a specific feature path (kill switch wins):
-
-```bash
-PI_DISABLE="modes.plan-tools" pi
-PI_ENABLE="modes.some-flag" pi
-```
-
-<!-- verified against eb4ef95ff0cf -->
+Deterministic scenario tests are normal Vitest files and write complete artifacts inside test-owned temporary directories. Real-process validation likewise owns its temporary repository, socket, and child processes. Real-provider and disposable-GitHub validation are opt-in host/Maestro activities; workers do not invoke providers, create remote repositories, or answer approval prompts.

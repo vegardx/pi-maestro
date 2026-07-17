@@ -24,8 +24,9 @@
 		"skills": []
 	},
 	"scripts": {
-		"check": "biome check . && tsc --noEmit && node scripts/check-boundaries.mjs && node scripts/check-feature-flags.mjs && node scripts/check-docs.mjs && vitest run && node scripts/smoke.mjs",
-		"docs": "node scripts/check-docs.mjs",
+		"check": "biome check . && tsc --noEmit && node scripts/check-boundaries.mjs && node scripts/check-feature-flags.mjs && node scripts/check-docs.mjs && node scripts/check-cutover.mjs && vitest run && node scripts/smoke.mjs",
+		"docs": "node scripts/check-docs.mjs && node scripts/check-cutover.mjs",
+		"audit:cutover": "node scripts/check-cutover.mjs",
 		"lint": "biome check .",
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",

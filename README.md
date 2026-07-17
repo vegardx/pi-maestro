@@ -3,9 +3,9 @@
 A [pi](https://github.com/badlogic/pi-mono) extension stack that turns one
 coding-agent session into an orchestra: the main session (the **maestro**)
 plans and coordinates, **workers** implement deliverables in parallel git
-worktrees on tmux, and one-shot **subagents** research, review, and verify.
-Nothing ships until the review panel's blocking findings are resolved and
-verified.
+worktrees on tmux, and typed one-shot agents research, review, and verify.
+Nothing ships until the canonical workflow's blocking findings are resolved
+and verified.
 
 This is primarily how I run my own coding agent. It's public because the
 design might be useful to anyone curious about structuring agentic work —
@@ -19,13 +19,14 @@ the docs explain the ideas, not just the knobs.
   implement them. Workers follow instructions; they don't design.
 - **A deliverable is one branch, one PR.** Deliverables form a dependency
   DAG with stacked PRs by default. Plans can span multiple repos.
-- **Workers own iteration; the maestro owns the gate.** Every deliverable
-  gets a worker on tmux — observable (`/watch`), steerable (`/steer`),
-  answerable (`/answer`). The worker runs its own review panel and fixes
-  findings, but cannot complete while a blocking finding is open.
-- **Reviews converge by construction.** One panel round, harness-minted
-  finding ids, a resolution ledger, one scope-locked verification — instead
-  of open-ended re-review loops. See [the review loop](docs/review-loop.md).
+- **Workers implement; Maestro owns orchestration.** Every active deliverable
+  gets a worker on tmux — observable (`/watch`), steerable (`/steer`), and
+  answerable (`/answer`). Exact workflow assignments review immutable SHAs;
+  Maestro owns transition rulings, recovery, accounting, and shipping.
+- **Reviews converge by construction.** Typed review assignments produce
+  canonical finding ids and explicit resolutions; scope-locked verification
+  checks fixed claims instead of starting an open-ended rerun. See
+  [review workflows](docs/review-loop.md).
 - **Sessions have a lifecycle.** As context fills, `/distill` compacts in
   place with user-curated carry-forward; `/handoff` closes an arc and seeds
   a fresh planning session with the unfinished threads.
@@ -43,27 +44,27 @@ needs the `gh` CLI.
 ## A session in 60 seconds
 
 ```
-/plan payments-retry        # planning session: research, then structure
-  research(...)             # parallel codebase/web subagents report back
-  deliverable/task/agent    # tools shape the plan: branches, tasks, reviewers
-/implement                  # workers spawn in worktrees, panes open
-/agents                     # focus the HUD: live agents, plan, questions
-  ...worker finishes, runs its review panel, fixes findings, verifies...
-  ...gate blocks? maestro triages; only repeats reach you as a question...
-/ship                       # push + PR for the next shippable deliverable
-/distill                    # context filling: curate what carries forward
+/plan payments-retry        # explore, establish readiness, then structure
+  research(...)             # parallel persisted codebase/web reports
+  deliverable/task/workflow # deliveries, work items, exact assignments/stages
+/auto                        # plan-review gate + user ruling, then execution
+/agents                      # live workers, child runs, plan, and questions
+  ...typed reviewers inspect immutable SHAs; findings resolve and verify...
+/ship                        # push + PR for the next shippable delivery
+/distill                     # context filling: curate what carries forward
 ```
 
 ## Docs
 
 - [Usage](docs/usage.md) — the full lifecycle: modes, planning, execution,
   review, shipping, carry-forward, and every command.
-- [The review loop](docs/review-loop.md) — findings, the ledger,
-  resolutions, verification, and the escalation ladder.
-- [Models & settings](docs/models.md) — ordered role pools, profiles, scopes,
-  exact choices, and the hierarchical settings surface.
-- [Architecture](docs/architecture.md) — packages, boundaries, capabilities,
-  and the runtime flow.
+- [Review workflows](docs/review-loop.md) — immutable targets, canonical
+  findings, resolutions, and verification.
+- [Models and exact presets](docs/models.md) — session fallback, exact sets,
+  preset activation, and no-substitution persistence.
+- [Settings](docs/settings.md) — scopes, runtime policies, isolation, and cutover.
+- [Commands and tools](docs/commands.md) — exact command contracts and reset/archive.
+- [Architecture](docs/architecture.md) — authority, persistence, RPC, and accounting.
 
 ## Development
 

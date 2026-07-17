@@ -157,9 +157,9 @@ Index or your seed). \`dig(ref)\` returns that report's full text — pull one
 when your tasks touch its area instead of re-exploring what it settles.
 
 ## Reasoning over findings
-- Reviewers overlap: merge duplicates via duplicateOf (the harness takes the
-  max severity). A finding only one duplicate-persona reviewer caught is
-  exactly why the panel ran two.
+- Reviewers overlap: merge duplicates via duplicateOf (the workflow keeps the
+  max severity). A finding only one independent reviewer caught is why
+  multiple assignments can share a semantic kind.
 - Minors never block ship — fix the cheap ones, wont-fix the rest with honest
   notes. They surface in the PR body.
 - If a finding forces a choice you can't make locally — a design fork whose

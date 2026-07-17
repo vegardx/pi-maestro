@@ -302,7 +302,7 @@ async function execute(
 		if (tripped) {
 			// Salvage BEFORE aborting — abort kills the child process. The
 			// partial text is diagnostic material for the caller; consumers
-			// (e.g. the review panel) must never read it as a valid report.
+			// (for example a typed review stage) must never accept it as a valid report.
 			const partial = (
 				await deadline(client.getLastAssistantText(), rpcMs, "salvage").catch(
 					() => null,

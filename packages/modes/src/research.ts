@@ -29,10 +29,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type {
+	AgentsCapabilityV1,
 	AskCapabilityV1,
 	ModelRole,
 	RunResult,
-	SpawnProfile,
 	SubagentsCapabilityV1,
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
@@ -56,9 +56,6 @@ export type ResearchKind = (typeof RESEARCH_KINDS)[number];
 /** Kinds a run VIEW can carry — research kinds plus /verify's verifiers,
  *  which reuse the research widget rows and chat cards. */
 export type ResearchDisplayKind = ResearchKind | "verify";
-
-/** Kinds that use the advisor pool (cross-model second opinion). */
-const ADVISOR_MODEL_KINDS = new Set<ResearchKind>(["advisor", "consult"]);
 
 /** Live view of one research run — feeds the agent table and cards. */
 export interface ResearchRunView {
@@ -84,13 +81,14 @@ export interface ResearchRunView {
 
 export interface ResearchDeps {
 	readonly engine: () => PlanEngine | undefined;
-	readonly subagents: () => SubagentsCapabilityV1 | undefined;
+	/** Agent API used for ordinary research assignments. */
+	readonly agents?: () => AgentsCapabilityV1 | undefined;
+	/** @deprecated Test/compatibility seam; wrapped as ordinary assignments. */
+	readonly subagents?: () => SubagentsCapabilityV1 | undefined;
 	readonly ask: () => AskCapabilityV1 | undefined;
-	/** Materialize a draft plan (force) and return its plan directory. */
-	readonly ensurePlanDir: (ctx: ExtensionContext) => string;
-	/** Absolute path to the research-tools extension entry (-e for children). */
-	readonly researchToolsPath: () => string;
-	/** Resolve and validate one exact/default selection inside a role pool. */
+	/** @deprecated Kinds own extension composition in agents.v1. */
+	readonly researchToolsPath?: () => string;
+	/** @deprecated Exact model resolution is owned by agents.v1. */
 	readonly resolveRoleModel?: (
 		ctx: ExtensionContext,
 		role: Extract<ModelRole, "research" | "advisor">,
@@ -101,6 +99,8 @@ export interface ResearchDeps {
 		allowedModels?: readonly string[];
 		allowedEfforts?: readonly ThinkingLevel[];
 	}>;
+	/** Materialize a draft plan (force) and return its plan directory. */
+	readonly ensurePlanDir: (ctx: ExtensionContext) => string;
 	/** Run lifecycle callbacks (widget rows + chat cards). */
 	readonly onRunStarted?: (run: ResearchRunView, ctx: ExtensionContext) => void;
 	readonly onRunSettled?: (
@@ -123,14 +123,6 @@ export interface ResearchDeps {
 	readonly deliver?: (text: string) => void;
 }
 
-const DEFAULT_WATCHDOG: ResearchWatchdogSettings = {
-	stallMs: 120_000,
-	softMs: 240_000,
-	hardMs: 600_000,
-};
-const READ_TOOLS = ["read", "grep", "find", "ls"] as const;
-const WEB_TOOLS = ["websearch", "webfetch", "context7"] as const;
-
 // ─── Tool constructors ───────────────────────────────────────────────────────
 
 type Result = AgentToolResult<{ error?: string }>;
@@ -152,6 +144,99 @@ export function createResearchTools(deps: ResearchDeps): ToolDefinition[] {
 		createReadinessTool(deps),
 		createDigTool(deps),
 	];
+}
+
+function compatibilityAgents(
+	deps: ResearchDeps,
+	ctx: ExtensionContext,
+): AgentsCapabilityV1 | undefined {
+	const subagents = deps.subagents?.();
+	if (!subagents) return undefined;
+	return {
+		run: async (request) => {
+			const researchKind = String(
+				request.meta?.researchKind ?? "codebase",
+			) as ResearchKind;
+			const role =
+				researchKind === "advisor" || researchKind === "consult"
+					? "advisor"
+					: "research";
+			const resolved = await deps.resolveRoleModel?.(ctx, role, {
+				model: request.model,
+				effort: request.effort,
+			});
+			const tools =
+				researchKind === "web"
+					? ["read", "grep", "find", "ls", "websearch", "webfetch", "context7"]
+					: ["read", "grep", "find", "ls"];
+			const watchdog = deps.watchdog?.(ctx) ?? {
+				stallMs: 120_000,
+				softMs: 240_000,
+				hardMs: 600_000,
+			};
+			const handle = subagents.spawn(request.prompt, {
+				profile: "research",
+				cwd: request.cwd,
+				model: resolved?.model ?? request.model,
+				thinking:
+					resolved?.effort ??
+					request.effort ??
+					(role === "advisor" ? "high" : "low"),
+				role,
+				displayName: request.displayName,
+				tools: { allow: tools },
+				watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
+				...(deps.researchToolsPath
+					? { extraExtensions: [deps.researchToolsPath()] }
+					: {}),
+				appendSystemPrompt:
+					researchKind === "consult"
+						? "The maestro deliberately WITHHELD its preference. Make an unbiased recommendation."
+						: "Return a factual research report ending with a ## Digest block.",
+				meta: request.meta,
+			});
+			return {
+				runId: handle.id,
+				handle,
+				assignment: {
+					agentId: handle.id,
+					kind: request.kind,
+					presetId: "compatibility",
+					modelSetId: "compatibility",
+					optionId: "compatibility",
+					modelId: resolved?.model ?? request.model ?? "session",
+					effort:
+						resolved?.effort ??
+						request.effort ??
+						(role === "advisor" ? "high" : "low"),
+					runtime: {
+						mode: "read-only",
+						transport: "tmux",
+						tools: {},
+						session: "ephemeral",
+						isolation: "strong",
+					},
+					resolvedAt: new Date().toISOString(),
+					source: "session",
+				},
+			};
+		},
+		batch: async (requests) => {
+			const agent = compatibilityAgents(deps, ctx);
+			if (!agent) return [];
+			return Promise.all(requests.map((request) => agent.run(request)));
+		},
+		list: () => subagents.list(),
+		status: (runId) => subagents.get(runId),
+		steer: (runId, guidance) => subagents.steer(runId, guidance),
+		interrupt: async (runId, reason) => {
+			if (subagents.interrupt) await subagents.interrupt(runId, reason);
+			else subagents.stop(runId, reason);
+		},
+		capture: async (runId, lines) => subagents.capture?.(runId, lines),
+		result: async (runId) => subagents.get(runId)?.result,
+		kinds: () => [],
+	};
 }
 
 const ResearchParams = Type.Object({
@@ -228,11 +313,9 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
 			const engine = deps.engine();
 			if (!engine) return error("no plan active — run /plan first");
-			const capability = deps.subagents();
+			const capability = deps.agents?.() ?? compatibilityAgents(deps, ctx);
 			if (!capability) {
-				return error(
-					"research unavailable: the subagents extension is not loaded",
-				);
+				return error("research unavailable: agents.v1 is not loaded");
 			}
 			if (roundActive) {
 				return ok(
@@ -248,58 +331,52 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 			const researchDir = researchReportsDir(deps.ensurePlanDir(ctx));
 			mkdirSync(researchDir, { recursive: true });
 
-			const watchdog = deps.watchdog?.(ctx) ?? DEFAULT_WATCHDOG;
 			const plan = engine.get();
 
-			const spawned = await Promise.all(
-				params.questions.map(async (q) => {
-					const kind = (q.kind ?? "codebase") as ResearchKind;
-					try {
-						const profile = {
-							...(await buildResearchProfile(deps, ctx, plan, kind, {
-								model: q.model,
-								effort: q.effort as ThinkingLevel | undefined,
-							})),
-							// Liveness policy is enforced by the subagents runner.
-							watchdog: { ...watchdog, wrapUpSteer: WRAP_UP_STEER },
+			const spawned = await capability
+				.batch(
+					params.questions.map((q) => {
+						const kind = (q.kind ?? "codebase") as ResearchKind;
+						return {
+							kind: assignmentKind(kind),
+							prompt: buildResearchPrompt(plan, kind, q.question, q.context),
+							...(q.model ? { model: q.model } : {}),
+							...(q.effort ? { effort: q.effort as ThinkingLevel } : {}),
+							cwd: plan.repoPath,
+							displayName: `${kind}-research`,
+							meta: {
+								question: q.question,
+								researchKind: kind,
+							},
 						};
-						const prompt = buildResearchPrompt(
-							plan,
-							kind,
-							q.question,
-							q.context,
-						);
-						const handle = capability.spawn(prompt, profile);
-						// Display metadata: the child's effective model is the profile's
-						// (advisor's alternate) or, when unset, the session model.
-						const sessionModel = ctx.model
-							? `${ctx.model.provider}/${ctx.model.id}`
-							: undefined;
-						const modelId = profile.model ?? sessionModel;
-						const meta = modelId ? getModelMeta(ctx, modelId) : undefined;
+					}),
+				)
+				.then((runs) =>
+					runs.map((run, index) => {
+						const q = params.questions[index];
+						const kind = (q.kind ?? "codebase") as ResearchKind;
+						const meta = getModelMeta(ctx, run.assignment.modelId);
 						const view: ResearchRunView = {
-							id: handle.id,
+							id: run.runId,
 							question: q.question,
 							label: researchLabel(q.question),
 							kind,
 							status: "running",
 							startedAt: Date.now(),
-							...(meta
-								? { model: meta.shortName, adaptive: meta.adaptive }
-								: {}),
-							...(profile.thinking ? { effort: profile.thinking } : {}),
+							model: meta.shortName,
+							adaptive: meta.adaptive,
+							effort: run.assignment.effort,
 						};
 						deps.onRunStarted?.(view, ctx);
-						return { view, handle };
-					} catch (err) {
-						const message = err instanceof Error ? err.message : String(err);
-						return {
-							spawnError: `spawn failed: ${message}`,
-							question: q.question,
-						};
-					}
-				}),
-			);
+						return { view, handle: run.handle };
+					}),
+				)
+				.catch((cause) =>
+					params.questions.map((q) => ({
+						spawnError: `spawn failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+						question: q.question,
+					})),
+				);
 
 			// Settle the whole round, then compose ONE combined report. Each
 			// agent's card/widget row still updates per-agent (onRunSettled),
@@ -531,88 +608,18 @@ export function createDigTool(deps: ResearchDeps): ToolDefinition {
 
 // ─── Spawn assembly ──────────────────────────────────────────────────────────
 
-async function buildResearchProfile(
-	deps: ResearchDeps,
-	ctx: ExtensionContext,
-	plan: Plan,
+function assignmentKind(
 	kind: ResearchKind,
-	choice?: { model?: string; effort?: ThinkingLevel },
-): Promise<SpawnProfile> {
-	const tools =
-		kind === "web" ? [...READ_TOOLS, ...WEB_TOOLS] : [...READ_TOOLS];
-	const role = ADVISOR_MODEL_KINDS.has(kind) ? "advisor" : "research";
-	const resolved = await deps.resolveRoleModel?.(ctx, role, choice);
-	const allowed = resolved
-		? `\n\nModel policy: role=${role}; selected=${resolved.model}${resolved.effort ? ` @ ${resolved.effort}` : ""}; allowed models=${resolved.allowedModels?.join(", ") || resolved.model}; allowed efforts=${resolved.allowedEfforts?.join(", ") || "model-supported defaults"}. Prefer more effort before another model.`
-		: "";
-	return {
-		profile: "research",
-		role,
-		displayName: `${kind}-research`,
-		cwd: plan.repoPath,
-		tools: { allow: tools },
-		thinking:
-			resolved?.effort ?? (ADVISOR_MODEL_KINDS.has(kind) ? "high" : "low"),
-		...(resolved?.model ? { model: resolved.model } : {}),
-		extraExtensions: [deps.researchToolsPath()],
-		appendSystemPrompt: `${researcherPreamble(kind)}${allowed}`,
-	};
-}
-
-function researcherPreamble(kind: ResearchKind): string {
-	const shared =
-		"You are a research agent working for a planning maestro. Answer the " +
-		"research brief you are given — nothing else. You are read-only: never " +
-		"modify files. Your ENTIRE final message is the report; it is consumed " +
-		"programmatically.\n\n" +
-		"Report format: write your full findings first — supporting detail, " +
-		"evidence (file:line for code claims, URLs for web claims), and what you " +
-		"could NOT determine. THEN end with a `## Digest` block: at most 6 lines " +
-		"/ 500 characters, dense and self-sufficient — the answer plus the two " +
-		"or three load-bearing facts and any caveat, enough that the reader " +
-		"rarely needs the detail above it. Be factual; no preamble, no offers to " +
-		"help further.\n\n" +
-		"LENGTH BUDGET — hard limits, not suggestions: findings ≤ 700 words. " +
-		"Evidence is a REFERENCE (file:line, URL, doc section), never a quoted " +
-		"wall — cite where it lives, state what it shows in one sentence. Depth " +
-		"comes from precision, not volume; a reader who wants the raw source " +
-		"follows your reference. Cut anything that does not change what the " +
-		"maestro would decide.";
+): "codebase-research" | "web-research" | "plan-review" | "consult" {
 	switch (kind) {
 		case "codebase":
-			return `${shared}\n\nScope: THIS repository. Use read/grep/find/ls to establish facts (existing patterns, types, seams, tests).`;
+			return "codebase-research";
 		case "web":
-			return (
-				`${shared}\n\nScope: the public internet plus this repository. ` +
-				"Use websearch (pick the tier: fast/auto for lookups, deep tiers " +
-				"for hard questions), webfetch to read sources, and context7 for " +
-				"library documentation. Prefer primary sources; include dates for " +
-				"time-sensitive facts."
-			);
+			return "web-research";
 		case "advisor":
-			return (
-				`${shared}\n\nRole: second-opinion advisor. You are a DIFFERENT ` +
-				"model reviewing the maestro's draft plan. Challenge assumptions, " +
-				"find gaps and risks, and say what you would change — concretely. " +
-				"Verify claims against the repository where possible.\n\n" +
-				"Also sanity-check the review-panel topology (each deliverable's " +
-				"`panel:` line): does every code-changing deliverable have a " +
-				"required reviewer that gates ship? Do security- or data-sensitive " +
-				"deliverables carry a security persona AND a second-pair-of-eyes " +
-				"pass on a different model (a same-persona instance with an explicit " +
-				"model)? Flag deliverables whose risk the panel under-covers."
-			);
+			return "plan-review";
 		case "consult":
-			return (
-				`${shared}\n\nRole: unbiased advisor deciding a specific question. ` +
-				"You are a DIFFERENT model; the maestro has DELIBERATELY WITHHELD " +
-				"its own preference so your recommendation is unbiased — do not try " +
-				"to guess what it wants. Weigh the options given (and propose a " +
-				"better one if you see it) against the goal and constraints, verify " +
-				"the relevant facts in the repository, and commit to a single clear " +
-				"recommendation with your reasoning and the key trade-off you're " +
-				"accepting. End with a line `RECOMMENDATION: <the option>`."
-			);
+			return "consult";
 	}
 }
 

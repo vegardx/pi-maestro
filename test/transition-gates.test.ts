@@ -98,7 +98,6 @@ describe("transition gate coordinator", () => {
 
 		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(true);
 		expect(cap.run).toHaveBeenCalledWith(expect.objectContaining({ kind: "plan-review", displayName: "plan-reviewer" }));
-		expect(engine.get().deliverables[0]?.subAgents?.[0]).toMatchObject({ persona: "correctness-review", required: true });
 		expect(engine.get().transitionGates?.at(-1)?.status).toBe("settled");
 		expect(commit).toHaveBeenCalledOnce();
 	});

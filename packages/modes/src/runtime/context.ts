@@ -19,11 +19,9 @@ import {
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import {
-	addWorktree,
 	checkoutOrCreateBranch,
 	detectDefaultBranch,
 	gitToplevel,
-	removeWorktree,
 } from "@vegardx/pi-git";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
@@ -85,8 +83,6 @@ import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
-import { GateTriage } from "./gate-triage.js";
-import { cleanupInactiveWorktrees, recordPlanSession } from "./stubs.js";
 
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
@@ -132,8 +128,6 @@ export interface RuntimeContext {
 	engine: PlanEngine | undefined;
 	agentBridge: AgentBridge | undefined;
 	execution: ExecutionHandle | undefined;
-	/** Ship-gate triage controller (maestro-first escalation); with execution. */
-	gateTriage: GateTriage | undefined;
 	/** Active, persisted diagnosis/recovery episode. */
 	readonly debug: DebugController;
 	/** Carry-forward episode controller (/distill and /handoff). */
@@ -223,7 +217,6 @@ export function createRuntimeContext(
 	const store = opts.store ?? createPlanStore(plansRoot());
 	const now = opts.now ?? (() => new Date().toISOString());
 	const askQueue = new ModesAskQueue();
-	const worktreeDeps = { addWorktree, removeWorktree };
 	const _branchDeps = {
 		checkoutOrCreateBranch: (
 			repoPath: string,
@@ -338,7 +331,6 @@ export function createRuntimeContext(
 		engine: undefined,
 		agentBridge: undefined,
 		execution: undefined,
-		gateTriage: undefined,
 		debug: new DebugController(),
 		carryForward: new CarryForwardController(() => rt.applyTools()),
 		researchRuns: new Map(),
@@ -430,8 +422,6 @@ export function createRuntimeContext(
 				rt.engine = rt.loadEngine(slug);
 				if (!rt.engine) throw new Error(`plan ${slug} not found on disk`);
 				rt.state = setActivePlan(rt.state, slug, now);
-				const sessionPath = ctx.sessionManager.getSessionFile();
-				if (sessionPath) recordPlanSession(rt.engine, sessionPath);
 				rt.persist();
 				maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
 				return rt.engine;
@@ -450,8 +440,6 @@ export function createRuntimeContext(
 			);
 			draftExplicitName = explicit;
 			draftStartEntries = ctx.sessionManager.getEntries().length;
-			const sessionPath = ctx.sessionManager.getSessionFile();
-			if (sessionPath) recordPlanSession(rt.engine, sessionPath);
 			return rt.engine;
 		},
 
@@ -529,7 +517,6 @@ export function createRuntimeContext(
 
 		emitPlanChanged(): void {
 			if (!rt.engine) return;
-			cleanupInactiveWorktrees(rt.engine, worktreeDeps);
 			maestro.events.emit(EVENTS.planUpdated, {
 				planId: rt.engine.get().slug as PlanId,
 			});
@@ -873,9 +860,6 @@ export function createRuntimeContext(
 				// send-back with guidance, or escalate with a recommendation);
 				// the human decides genuine disagreements. Override still
 				// executes extension-side on the human's answer only.
-				onShipGateBlocked: (deliverableId, reason) => {
-					rt.gateTriage?.handleBlock(deliverableId, reason);
-				},
 				onAllSettled: () => {
 					rt.invalidateFooter?.();
 					rt.hud?.refresh();
@@ -891,12 +875,6 @@ export function createRuntimeContext(
 					}
 				},
 				onEvent: (event) => sendAgentEvent(pi, event),
-			});
-			rt.gateTriage = new GateTriage({
-				ask: () => maestro.capabilities.get(CAPABILITIES.ask),
-				execution: () => rt.execution,
-				pi,
-				notify: (m, level) => ctx.ui.notify(m, level),
 			});
 			installDebugProposalHandler(rt, ctx);
 			await rt.execution.start();

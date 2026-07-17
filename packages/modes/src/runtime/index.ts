@@ -38,7 +38,6 @@ import {
 	createRuntimeContext,
 	type ModesRuntimeOptions,
 } from "./context.js";
-import { createGateTool } from "./gate-triage.js";
 import { registerRuntimeHooks } from "./hooks.js";
 
 export type { ModesRuntimeOptions } from "./context.js";
@@ -139,8 +138,6 @@ export function createModesRuntime(
 	// escalate to the human with a mandatory recommendation. No override
 	// action exists; only the human's gate answer opens a gate.
 	if (!isAgentMode()) {
-		pi.registerTool(createGateTool(() => rt.gateTriage));
-
 		// The carry-forward episode tool (/distill and /handoff). Registered
 		// once, VISIBLE only while an episode is active (applyTools flag).
 		pi.registerTool(

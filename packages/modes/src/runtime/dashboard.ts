@@ -20,20 +20,6 @@ export function installMaestroFooter(
 		ctx,
 		getMode: () => rt.state.mode,
 		getLedger: () => rt.usageLedger,
-		getAgentStatus: () => {
-			if (!rt.execution || !rt.engine) return undefined;
-			// Done and total must count the same population: agents.
-			const agents = rt.execution.snapshot().agents;
-			const total = agents.size;
-			if (total === 0) return undefined;
-			let done = 0;
-			let failed = 0;
-			for (const a of agents.values()) {
-				if (a.status === "done") done++;
-				else if (a.status === "failed") failed++;
-			}
-			return { done: done + failed, total, failed };
-		},
 		getPendingQuestions: () => {
 			if (!rt.execution) return 0;
 			return rt.execution.questionQueue?.all()?.length ?? 0;

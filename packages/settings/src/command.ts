@@ -10,6 +10,15 @@ import {
 	SESSION_MODEL_SENTINEL,
 } from "@vegardx/pi-models";
 import {
+	type DomainRegistryInput,
+	domainImpact,
+	explainModelSelection,
+	readDomainSnapshot,
+	validateDomainEdit,
+	validateDomainValue,
+	writeDomainValue,
+} from "./domain.js";
+import {
 	activeProfileName,
 	formatSettingValue,
 	isModelRole,
@@ -27,6 +36,7 @@ import {
 	sessionModelId,
 	supportedEfforts,
 	THINKING_LEVELS,
+	validateDeclaredValue,
 	writeAdvancedValue,
 	writeProfileTargets,
 	writeRoleLeaf,
@@ -141,7 +151,10 @@ function extensionKeySuggestions(ctx: ExtensionContext): string[] {
 	return [...new Set([...out, ...declaredSettingKeys()])];
 }
 
-function handleShow(ctx: ExtensionContext): void {
+function handleShow(
+	ctx: ExtensionContext,
+	registry: DomainRegistryInput = {},
+): void {
 	const config = readModelsConfig(ctx.cwd);
 	const active = activeProfile(config, sessionModelId(ctx));
 	const lines = [
@@ -169,6 +182,44 @@ function handleShow(ctx: ExtensionContext): void {
 			);
 		}
 	}
+	const snapshot = readDomainSnapshot(ctx, registry);
+	lines.push(
+		"",
+		"Exact model configuration:",
+		`  Main model: ${snapshot.mainModel ?? "none"}`,
+		`  Active preset: ${snapshot.activePreset ?? "none"}${snapshot.matchedTarget ? ` · target ${snapshot.matchedTarget}` : ""}`,
+		`  Context: cwd=${snapshot.contextFacts.cwd} · provider=${snapshot.contextFacts.provider ?? "none"} · window=${snapshot.contextFacts.contextWindow ?? "unknown"}`,
+	);
+	for (const preset of snapshot.presets)
+		lines.push(
+			`  preset ${preset.id} [${preset.source}] targets=${preset.targets.join(", ") || "none"} sets=${
+				Object.entries(preset.modelSets)
+					.map(([role, set]) => `${role}:${set}`)
+					.join(", ") || "none"
+			}`,
+		);
+	for (const set of snapshot.modelSets)
+		lines.push(
+			`  set ${set.id}: ${set.options.map((option) => `${option.id}=${option.model}@${option.effort}`).join(" → ")} · used by ${set.usedBy.join(", ") || "none"}`,
+		);
+	lines.push("", "Agent kinds and runtime policies:");
+	for (const kind of snapshot.kinds)
+		lines.push(
+			`  ${kind.kind}: set=${kind.modelSet ?? "role default"}${kind.option ? ` option=${kind.option}` : ""} runtime=${kind.runtimePolicy} [${kind.source}]`,
+		);
+	for (const policy of snapshot.runtimePolicies) {
+		const used = snapshot.kinds
+			.filter((kind) => kind.runtimePolicy === policy.id)
+			.map((kind) => kind.kind);
+		lines.push(
+			`  policy ${policy.id}: ${policy.permissions}/${policy.session}/${policy.transport} · used by ${used.join(", ") || "none"}`,
+		);
+	}
+	lines.push("", "Transition gates:");
+	for (const gate of snapshot.gates)
+		lines.push(
+			`  ${gate.id}: ${gate.enabled ? "enabled" : "disabled"} · ${gate.edges.join(", ")} · ${gate.agentKind}/${gate.contract}`,
+		);
 	const keys = extensionKeySuggestions(ctx);
 	if (keys.length > 0) {
 		lines.push("", "Extension settings:");
@@ -254,7 +305,34 @@ function stringArray(raw: string): readonly string[] | undefined {
 		: undefined;
 }
 
-function handleSet(args: string, ctx: ExtensionContext) {
+function validateDeclaredEdit(
+	declaration: SettingDeclaration,
+	value: unknown,
+): string | undefined {
+	const validated = validateDeclaredValue(declaration, value);
+	if (validated === undefined) return `Invalid value for ${declaration.label}.`;
+	if (declaration.type === "number") {
+		const key = declaration.key;
+		const number = validated as number;
+		if (number < 0) return `${declaration.label} cannot be negative.`;
+		if (key === "execution.stopGraceMs" && number > 60_000)
+			return "Stop grace must be between 0 and 60000 ms.";
+		if (
+			key.endsWith("stallMs") ||
+			key.endsWith("softMs") ||
+			key.endsWith("hardMs")
+		) {
+			if (number === 0) return `${declaration.label} must be positive.`;
+		}
+	}
+	return undefined;
+}
+
+function handleSet(
+	args: string,
+	ctx: ExtensionContext,
+	registry: DomainRegistryInput = {},
+) {
 	const { scope, rest } = parseScope(args);
 	const parsed = splitKeyValue(rest);
 	if (!parsed)
@@ -263,6 +341,63 @@ function handleSet(args: string, ctx: ExtensionContext) {
 			"warning",
 		);
 	const profileKey = parseProfileKey(parsed.key);
+	if (
+		parsed.key.startsWith("models.modelSets.") ||
+		parsed.key.startsWith("models.presets.") ||
+		parsed.key.startsWith("agents.") ||
+		parsed.key.startsWith("transitionGates.")
+	) {
+		let value: unknown;
+		try {
+			value = JSON.parse(parsed.raw);
+		} catch {
+			value = parsed.raw;
+		}
+		const errors = validateDomainValue(parsed.key, value);
+		if (errors.length)
+			return ctx.ui.notify(
+				`Invalid configuration:\n${errors.map((error) => `- ${error}`).join("\n")}`,
+				"warning",
+			);
+		const effective =
+			typeof value === "object" && value !== null
+				? JSON.stringify(value)
+				: String(value);
+		const graphErrors = validateDomainEdit(
+			ctx,
+			parsed.key,
+			scope,
+			effective,
+			registry,
+		);
+		if (graphErrors.length)
+			return ctx.ui.notify(
+				`Invalid configuration:\n${graphErrors.map((error) => `- ${error}`).join("\n")}`,
+				"warning",
+			);
+		const impact = domainImpact(
+			readDomainSnapshot(ctx, registry),
+			parsed.key,
+			value,
+		);
+		const writeErrors = writeDomainValue(
+			ctx,
+			parsed.key,
+			scope,
+			parsed.raw,
+			registry,
+		);
+		if (writeErrors.length)
+			return ctx.ui.notify(
+				`Invalid configuration:\n${writeErrors.map((error) => `- ${error}`).join("\n")}`,
+				"warning",
+			);
+		ctx.ui.notify(
+			`Impact preview:\n${impact.map((line) => `- ${line}`).join("\n") || "- future resolutions"}\n✓ Set ${parsed.key} [${scope}]`,
+			"info",
+		);
+		return;
+	}
 	if (profileKey) {
 		const values = stringArray(parsed.raw);
 		if (!values)
@@ -314,6 +449,8 @@ function handleSet(args: string, ctx: ExtensionContext) {
 				`Invalid value. Choose: ${declared.declaration.options?.map((option) => option.value).join(", ")}`,
 				"warning",
 			);
+		const validation = validateDeclaredEdit(declared.declaration, parsedValue);
+		if (validation) return ctx.ui.notify(validation, "warning");
 		writeAdvancedValue(
 			ctx.cwd,
 			declared.extension,
@@ -629,13 +766,73 @@ function handleRole(role: ModelRole, args: string, ctx: ExtensionContext) {
 	);
 }
 
-export function handleSettingsCommand(args: string, ctx: ExtensionContext) {
+async function handleExplain(args: string, ctx: ExtensionContext) {
+	const role = args.trim();
+	if (!isModelRole(role))
+		return ctx.ui.notify(
+			`Usage: /maestro explain <role> (${MODEL_ROLES.join(", ")})`,
+			"warning",
+		);
+	ctx.ui.notify(await explainModelSelection(ctx, role), "info");
+}
+
+function handleValidate(ctx: ExtensionContext, registry: DomainRegistryInput) {
+	const snapshot = readDomainSnapshot(ctx, registry);
+	const errors: string[] = [];
+	for (const preset of snapshot.presets)
+		for (const [role, set] of Object.entries(preset.modelSets))
+			if (!snapshot.modelSets.some((entry) => entry.id === set))
+				errors.push(
+					`preset ${preset.id}.${role} references unknown model set ${set}`,
+				);
+	for (const kind of snapshot.kinds) {
+		if (
+			kind.modelSet &&
+			!snapshot.modelSets.some((set) => set.id === kind.modelSet)
+		)
+			errors.push(
+				`kind ${kind.kind} references unknown model set ${kind.modelSet}`,
+			);
+		if (
+			!snapshot.runtimePolicies.some(
+				(policy) => policy.id === kind.runtimePolicy,
+			)
+		)
+			errors.push(
+				`kind ${kind.kind} references unknown runtime policy ${kind.runtimePolicy}`,
+			);
+	}
+	for (const gate of snapshot.gates)
+		errors.push(
+			...validateDomainEdit(
+				ctx,
+				`transitionGates.${gate.id}`,
+				"session",
+				JSON.stringify(gate),
+				registry,
+			),
+		);
+	ctx.ui.notify(
+		errors.length
+			? `Configuration invalid:\n${errors.map((error) => `- ${error}`).join("\n")}`
+			: "✓ Maestro configuration is valid.",
+		errors.length ? "warning" : "info",
+	);
+}
+
+export function handleSettingsCommand(
+	args: string,
+	ctx: ExtensionContext,
+	registry: DomainRegistryInput = {},
+) {
 	const trimmed = args.trim();
 	const [sub = "show", ...rest] = trimmed.split(/\s+/);
 	const subArgs = rest.join(" ");
-	if (sub === "show") return handleShow(ctx);
+	if (sub === "show") return handleShow(ctx, registry);
+	if (sub === "explain") return handleExplain(subArgs, ctx);
+	if (sub === "validate") return handleValidate(ctx, registry);
 	if (sub === "get") return handleGet(subArgs, ctx);
-	if (sub === "set") return handleSet(subArgs, ctx);
+	if (sub === "set") return handleSet(subArgs, ctx, registry);
 	if (sub === "reset") return handleReset(subArgs, ctx);
 	if (sub === "profiles") return handleProfiles(ctx);
 	if (isModelRole(sub)) return handleRole(sub, subArgs, ctx);
@@ -645,7 +842,15 @@ export function handleSettingsCommand(args: string, ctx: ExtensionContext) {
 	);
 }
 
-const SUBCOMMANDS = ["show", "get", "set", "reset", "profiles"] as const;
+const SUBCOMMANDS = [
+	"show",
+	"get",
+	"set",
+	"reset",
+	"profiles",
+	"explain",
+	"validate",
+] as const;
 
 function roleCompletions(
 	role: ModelRole,

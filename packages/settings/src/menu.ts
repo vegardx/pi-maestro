@@ -40,6 +40,12 @@ import {
 	SESSION_MODEL_SENTINEL,
 } from "@vegardx/pi-models";
 import {
+	type DomainRegistryInput,
+	domainImpact,
+	readDomainSnapshot,
+	writeDomainValue,
+} from "./domain.js";
+import {
 	createProfile,
 	deleteProfile,
 	formatSettingValue,
@@ -962,12 +968,194 @@ function advancedMenu(
 	);
 }
 
+function domainDetailsMenu(
+	ctx: ExtensionContext,
+	registry: DomainRegistryInput,
+	done: (value?: string) => void,
+): Component {
+	const snapshot = readDomainSnapshot(ctx, registry);
+	const items: SettingItem[] = [];
+	for (const preset of snapshot.presets)
+		items.push({
+			id: `preset:${preset.id}`,
+			label: `Preset · ${preset.id}`,
+			currentValue: `${preset.targets.length} target(s) · ${preset.source}`,
+			description: `Maps ${
+				Object.entries(preset.modelSets)
+					.map(([role, set]) => `${role}→${set}`)
+					.join(", ") || "no roles"
+			}. Editing targets changes /model activation.`,
+		});
+	for (const set of snapshot.modelSets)
+		items.push({
+			id: `set:${set.id}`,
+			label: `Model set · ${set.id}`,
+			currentValue: `${set.options.length} option(s)`,
+			description: `Used by ${set.usedBy.join(", ") || "none"}. Enter shows exact availability-oriented options.`,
+			submenu: (_value, close) =>
+				makeInput(JSON.stringify({ options: set.options }, null, 2), (raw) => {
+					if (raw !== undefined) {
+						const impact = domainImpact(
+							snapshot,
+							`models.modelSets.${set.id}`,
+							raw,
+						);
+						const errors = writeDomainValue(
+							ctx,
+							`models.modelSets.${set.id}`,
+							"project",
+							raw,
+							registry,
+						);
+						ctx.ui.notify(
+							errors.length ? errors.join("\n") : `Saved. ${impact.join(" ")}`,
+							errors.length ? "warning" : "info",
+						);
+					}
+					close();
+				}),
+		});
+	for (const kind of snapshot.kinds)
+		items.push({
+			id: `kind:${kind.kind}`,
+			label: `Agent kind · ${kind.kind}`,
+			currentValue: `${kind.modelSet ?? "role default"}${kind.option ? `/${kind.option}` : ""} · ${kind.runtimePolicy}`,
+			description: `Future ${kind.kind} assignments. Runtime source: ${kind.source}.`,
+			submenu: (_value, close) => {
+				const initial = JSON.stringify(
+					{
+						modelSet: kind.modelSet,
+						option: kind.option,
+						runtimePolicy: kind.runtimePolicy,
+					},
+					null,
+					2,
+				);
+				return makeInput(initial, (raw) => {
+					if (raw !== undefined) {
+						try {
+							const parsed = JSON.parse(raw) as {
+								modelSet?: string;
+								option?: string;
+								runtimePolicy?: string;
+							};
+							const errors = [
+								...(parsed.modelSet
+									? writeDomainValue(
+											ctx,
+											`agents.kinds.${kind.kind}.modelSet`,
+											"project",
+											JSON.stringify(parsed.modelSet),
+											registry,
+										)
+									: []),
+								...(parsed.option
+									? writeDomainValue(
+											ctx,
+											`agents.kinds.${kind.kind}.option`,
+											"project",
+											JSON.stringify(parsed.option),
+											registry,
+										)
+									: []),
+								...(parsed.runtimePolicy
+									? writeDomainValue(
+											ctx,
+											`agents.kinds.${kind.kind}.runtimePolicy`,
+											"project",
+											JSON.stringify(parsed.runtimePolicy),
+											registry,
+										)
+									: []),
+							];
+							ctx.ui.notify(
+								errors.length
+									? errors.join("\n")
+									: `Saved. ${domainImpact(snapshot, `agents.kinds.${kind.kind}.runtimePolicy`, parsed.runtimePolicy).join(" ")}`,
+								errors.length ? "warning" : "info",
+							);
+						} catch (cause) {
+							ctx.ui.notify(
+								cause instanceof Error ? cause.message : String(cause),
+								"warning",
+							);
+						}
+					}
+					close();
+				});
+			},
+		});
+	for (const policy of snapshot.runtimePolicies) {
+		const used = snapshot.kinds
+			.filter((kind) => kind.runtimePolicy === policy.id)
+			.map((kind) => kind.kind);
+		items.push({
+			id: `policy:${policy.id}`,
+			label: `Runtime · ${policy.id}`,
+			currentValue: `${policy.permissions}/${policy.session}/${policy.transport}`,
+			description: `Used by ${used.join(", ") || "none"}. Edits affect future runs only.`,
+			submenu: (_value, close) =>
+				makeInput(JSON.stringify(policy, null, 2), (raw) => {
+					if (raw !== undefined) {
+						const errors = writeDomainValue(
+							ctx,
+							`agents.runtimePolicies.${policy.id}`,
+							"project",
+							raw,
+							registry,
+						);
+						ctx.ui.notify(
+							errors.length
+								? errors.join("\n")
+								: `Saved. ${domainImpact(snapshot, `agents.runtimePolicies.${policy.id}`, raw).join(" ")}`,
+							errors.length ? "warning" : "info",
+						);
+					}
+					close();
+				}),
+		});
+	}
+	for (const gate of snapshot.gates)
+		items.push({
+			id: `gate:${gate.id}`,
+			label: `Gate · ${gate.id}`,
+			currentValue: `${gate.enabled ? "enabled" : "disabled"} · ${gate.edges.join(", ")}`,
+			description: `${gate.agentKind} must provide ${gate.contract}. Used by ${gate.edges.join(", ")}.`,
+			submenu: (_value, close) =>
+				makeInput(JSON.stringify(gate, null, 2), (raw) => {
+					if (raw !== undefined) {
+						const errors = writeDomainValue(
+							ctx,
+							`transitionGates.${gate.id}`,
+							"project",
+							raw,
+							registry,
+						);
+						ctx.ui.notify(
+							errors.length
+								? errors.join("\n")
+								: `Saved. ${domainImpact(snapshot, `transitionGates.${gate.id}`, raw).join(" ")}`,
+							errors.length ? "warning" : "info",
+						);
+					}
+					close();
+				}),
+		});
+	return settingsComponent(
+		items,
+		() => {},
+		() => done(`${items.length}`),
+	);
+}
+
 export function createMaestroSettingsList(
 	ctx: ExtensionContext,
 	done: () => void,
+	registry: DomainRegistryInput = {},
 ): SettingsList {
 	const config = readModelsConfig(ctx.cwd);
 	const active = activeProfile(config, sessionModelId(ctx));
+	const domain = readDomainSnapshot(ctx, registry);
 	const items: SettingItem[] = [
 		{
 			id: "session",
@@ -1005,6 +1193,58 @@ export function createMaestroSettingsList(
 			});
 	}
 	items.push(
+		{
+			id: "agent-lifecycle",
+			label: "Agent lifecycle",
+			currentValue: groupSummary(ctx, "agent-lifecycle"),
+			description:
+				"Advanced recoverable-state and bounded fleet shutdown settings.",
+			submenu: (_value, lifecycleDone) =>
+				groupedSettingsMenu(ctx, "agent-lifecycle", lifecycleDone),
+		},
+		{
+			id: "effective-models",
+			label: "Effective model selection",
+			currentValue: `${domain.activePreset ?? "session"} · ${domain.modelSets.length} set(s)`,
+			description:
+				"Current main model, matched target, exact options, provenance, availability, context facts, and fallback behavior.",
+			submenu: (_value, close) => {
+				const available = new Map(
+					modelOptions(ctx).map((option) => [option.id, option]),
+				);
+				const report = [
+					`Main model: ${domain.mainModel ?? "none"}`,
+					`Active preset: ${domain.activePreset ?? "none"}${domain.matchedTarget ? ` · matched ${domain.matchedTarget}` : ""}`,
+					"",
+					...domain.modelSets.flatMap((set) => [
+						`${set.id} · used by ${set.usedBy.join(", ") || "none"}`,
+						...set.options.map((option) => {
+							const resolved =
+								option.model === "session" ? domain.mainModel : option.model;
+							const fact = resolved ? available.get(resolved) : undefined;
+							const status = !resolved
+								? "no live session model"
+								: fact
+									? `${fact.description}; effort ${fact.supported.includes(option.effort as ThinkingLevel) ? "supported" : "unsupported"}`
+									: "not registered/authenticated";
+							return `  ${option.id}: ${resolved ?? option.model} @ ${option.effort} — ${status} — ${option.summary}`;
+						}),
+					]),
+					"",
+					"Fallback: configured sets use authored order without implicit session substitution; unconfigured roles use the exact live /model option.",
+				].join("\n");
+				return makeInput(report, () => close());
+			},
+		},
+		{
+			id: "agent-configuration",
+			label: "Agents, policies & gates",
+			currentValue: `${domain.kinds.length} kinds · ${domain.runtimePolicies.length} policies · ${domain.gates.length} gates`,
+			description:
+				"Detail pages include exact bindings, reverse used-by relationships, and edit impact.",
+			submenu: (_value, domainDone) =>
+				domainDetailsMenu(ctx, registry, domainDone),
+		},
 		{
 			id: "execution-policy",
 			label: "Execution policy",
@@ -1059,10 +1299,17 @@ export function ensureDefaultProfile(ctx: ExtensionContext): void {
 	writeProfileTargets(ctx, name, "global", [modelId]);
 }
 
-export function showConfigMenu(ctx: ExtensionContext): void {
+export function showConfigMenu(
+	ctx: ExtensionContext,
+	registry: DomainRegistryInput = {},
+): void {
 	ensureDefaultProfile(ctx);
 	ctx.ui.custom((tui, _theme, _keybindings, done) => {
-		const list = createMaestroSettingsList(ctx, () => done(undefined));
+		const list = createMaestroSettingsList(
+			ctx,
+			() => done(undefined),
+			registry,
+		);
 		const component = framed(ctx, list, "Maestro settings");
 		return {
 			render: (width: number) => component.render(width),

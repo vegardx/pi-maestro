@@ -5,7 +5,6 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { ReviewLedger } from "./exec/findings.js";
-import type { WorkflowAnalyticsLedger } from "./workflow-analytics.js";
 import {
 	type AgentMode,
 	type AgentSpec,
@@ -34,6 +33,7 @@ import {
 	type WorkItemKind,
 } from "./schema.js";
 import type { PlanStore } from "./storage.js";
+import type { WorkflowAnalyticsLedger } from "./workflow-analytics.js";
 
 /**
  * Object.assign that skips undefined values. Tool handlers forward EVERY

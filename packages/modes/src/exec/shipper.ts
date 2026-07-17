@@ -26,6 +26,10 @@ import {
 	viewPr,
 } from "@vegardx/pi-github";
 import {
+	renderMaestroPrSection,
+	updateMaestroPrBody,
+} from "../pr-provenance.js";
+import {
 	type Deliverable,
 	defaultBranchForDeliverable,
 	deliverableRepoKey,
@@ -205,11 +209,25 @@ export async function shipDeliverable(
 
 	const reports =
 		opts.agentReports ?? (deliverable.summary ? [deliverable.summary] : []);
-	const body = buildPrBody(deliverable, reports);
+	const generatedBody = buildPrBody(deliverable, reports);
 
 	const existing = await prClient.findOpenPr(worktreePath, branch);
 	if (existing.error) return shipError("pr-failed", existing.error);
 	if (existing.pr) {
+		let body = generatedBody;
+		if (deliverable.workflowAnalytics || deliverable.reviewLedger) {
+			try {
+				body = updateMaestroPrBody(
+					existing.pr.body,
+					renderMaestroPrSection(deliverable),
+				);
+			} catch (cause) {
+				return shipError(
+					"pr-failed",
+					cause instanceof Error ? cause.message : String(cause),
+				);
+			}
+		}
 		const edit = await prClient.editPr(worktreePath, existing.pr.number, {
 			body,
 		});
@@ -227,7 +245,7 @@ export async function shipDeliverable(
 
 	const created = await prClient.createPr(worktreePath, {
 		title: deliverable.title,
-		body,
+		body: generatedBody,
 		base,
 	});
 	if (!created.url) {

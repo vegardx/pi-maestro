@@ -40,6 +40,24 @@ const snapshot: TokenSnapshot = {
 	turns: 2,
 };
 
+const assignment = {
+	agentId: "g1/worker",
+	kind: "worker",
+	presetId: "worker",
+	modelSetId: "session",
+	optionId: "session",
+	modelId: "session",
+	runtime: {
+		mode: "full",
+		transport: "tmux",
+		tools: {},
+		session: "persistent",
+		isolation: "host",
+	},
+	resolvedAt: "2026-01-01T00:00:00.000Z",
+	source: "session",
+} as const;
+
 // One representative wire message per AgentMessage type. `satisfies` makes
 // this table exhaustive: a new union member fails compilation here.
 const AGENT_FIXTURES = {
@@ -49,6 +67,9 @@ const AGENT_FIXTURES = {
 		v: PROTOCOL_VERSION,
 		agentId: "g1/worker",
 		role: "agent",
+		kind: "worker",
+		generation: 0,
+		assignment,
 		token: TOKEN,
 		pid: 123,
 	},

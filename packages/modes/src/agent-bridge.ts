@@ -27,6 +27,19 @@ import {
 	type ReviewLedgerWire,
 } from "@vegardx/pi-rpc";
 
+export const AGENT_STOP_NOTICE_ENTRY = "maestro.agent.stop";
+
+export interface AgentStopNotice {
+	readonly version: 1;
+	readonly requestedAt: number;
+	readonly deadlineAt: number;
+	readonly reason?: string;
+	readonly generation: number;
+	readonly activeTurn: boolean;
+	readonly children: readonly string[];
+	readonly usageRevision: number;
+}
+
 /** What panelRead returns: the live panel + the persisted review ledger. */
 export interface PanelReadResult {
 	readonly panel: readonly PanelReviewerSpec[];
@@ -56,6 +69,8 @@ export interface AgentBridgeDeps {
 	readonly generation?: number;
 	/** Worker-local authoritative run projection/control source. */
 	readonly childRuns?: () => ChildRunProjectionSourceV1 | undefined;
+	/** Optional durable sink for stop notices (defaults to sessionManager). */
+	readonly persistStopNotice?: (notice: AgentStopNotice) => void;
 	/** Timeout for planRead/planMutate requests. Default: 30s. */
 	readonly requestTimeoutMs?: number;
 }
@@ -156,6 +171,8 @@ export class AgentBridge {
 		}
 	>();
 	private dirtyChildren = new Map<RunId, ChildRunProjection>();
+	private stopping = false;
+	private usageRevision = 0;
 
 	constructor(private readonly deps: AgentBridgeDeps) {
 		this.client = new MaestroRpcClient({ reconnect: true });
@@ -229,6 +246,7 @@ export class AgentBridge {
 	 * from the message_end handler when the message role is "assistant".
 	 */
 	recordUsage(usage: AssistantUsage): void {
+		this.usageRevision++;
 		this.totalInput += usage.input ?? 0;
 		this.totalOutput += usage.output ?? 0;
 		this.totalCacheRead += usage.cacheRead ?? 0;
@@ -632,6 +650,61 @@ export class AgentBridge {
 		}
 	}
 
+	private persistStopNotice(notice: AgentStopNotice): void {
+		if (this.deps.persistStopNotice) {
+			this.deps.persistStopNotice(notice);
+			return;
+		}
+		const manager = this.ctx?.sessionManager as unknown as
+			| { appendCustomEntry?: (type: string, data: unknown) => void }
+			| undefined;
+		manager?.appendCustomEntry?.(AGENT_STOP_NOTICE_ENTRY, notice);
+	}
+
+	private async prepareStop(msg: import("@vegardx/pi-rpc").PrepareStopMessage): Promise<void> {
+		if (this.stopping) return;
+		this.stopping = true;
+		const source = this.installChildSource();
+		const liveChildren = (source?.list() ?? []).filter(
+			(child) =>
+				!["succeeded", "failed", "stopped", "canceled", "timed-out"].includes(
+					child.status,
+				),
+		);
+		this.persistStopNotice({
+			version: 1,
+			requestedAt: msg.requestedAt,
+			deadlineAt: msg.deadlineAt,
+			...(msg.reason ? { reason: msg.reason } : {}),
+			generation: this.childGeneration,
+			activeTurn: Boolean(this.activeTurnId),
+			children: liveChildren.map((child) => child.runId as string),
+			usageRevision: this.usageRevision,
+		});
+		if (this.activeTurnId && !this.ctx?.isIdle()) this.ctx?.abort();
+		for (const child of liveChildren) {
+			source?.stop(child.runId, msg.reason ?? "worker stopping");
+		}
+		this.reconcileChildren();
+		this.reportTokens();
+		this.settlePending();
+		this.client.send({
+			type: "status",
+			status: "stopping",
+			detail: msg.reason,
+		});
+		this.client.send({
+			type: "prepareStopAck",
+			id: msg.id,
+			completedAt: Date.now(),
+			children: liveChildren.length,
+			usageRevision: this.usageRevision,
+			outcome: "cooperative",
+		});
+		this.client.close();
+		this.ctx?.shutdown();
+	}
+
 	private handleMessage(msg: MaestroMessage): void {
 		switch (msg.type) {
 			case "helloAck": {
@@ -805,6 +878,9 @@ export class AgentBridge {
 				}
 				break;
 			}
+			case "prepareStop":
+				void this.prepareStop(msg);
+				break;
 			case "shutdown":
 				this.settlePending();
 				this.client.close();

@@ -47,6 +47,8 @@ export type {
 	PlanReadMessage,
 	PlanReadResponseMessage,
 	PongMessage,
+	PrepareStopAckMessage,
+	PrepareStopMessage,
 	QuestionsMessage,
 	RequestMessage,
 	ResponseFor,

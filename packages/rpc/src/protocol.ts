@@ -358,6 +358,7 @@ export type AgentMessage =
 	| DoneMessage
 	| SummaryMessage
 	| InterruptAckMessage
+	| PrepareStopAckMessage
 	| PongMessage;
 
 // ─── Maestro → Agent ─────────────────────────────────────────────────────────
@@ -451,6 +452,24 @@ export interface DebugResultMessage {
 	readonly error?: string;
 }
 
+export interface PrepareStopMessage {
+	readonly type: "prepareStop";
+	readonly id: string;
+	readonly requestedAt: number;
+	readonly deadlineAt: number;
+	readonly reason?: string;
+}
+
+/** Acknowledges only after the worker has persisted/flushed and requested shutdown. */
+export interface PrepareStopAckMessage {
+	readonly type: "prepareStopAck";
+	readonly id: string;
+	readonly completedAt: number;
+	readonly children: number;
+	readonly usageRevision: number;
+	readonly outcome: "cooperative";
+}
+
 export interface ShutdownMessage {
 	readonly type: "shutdown";
 	readonly reason?: string;
@@ -482,6 +501,7 @@ export type MaestroMessage =
 	| PlanMutateResultMessage
 	| DebugResultMessage
 	| DoneAckMessage
+	| PrepareStopMessage
 	| ShutdownMessage
 	| PingMessage
 	| ErrorMessage;
@@ -505,6 +525,7 @@ interface ResponseByRequestType {
 	readonly debugProposal: DebugResultMessage;
 	readonly summarize: SummaryMessage;
 	readonly interrupt: InterruptAckMessage;
+	readonly prepareStop: PrepareStopAckMessage;
 	readonly ping: PongMessage;
 }
 

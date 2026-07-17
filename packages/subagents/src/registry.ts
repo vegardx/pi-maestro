@@ -224,20 +224,6 @@ export const BUILTIN_AGENT_KINDS: readonly AgentKindDefinition[] = [
 		reducer: "research-digest",
 	},
 	{
-		id: "consult",
-		routingSummary: "Make an unbiased recommendation on a specific fork.",
-		prompt: `${RESEARCH_BASE}\n\nAct as an unbiased advisor. The caller deliberately withheld its preference. Weigh the options against stated goals, verify relevant facts, commit to one recommendation, and end with RECOMMENDATION: <option>.`,
-		runtimePolicy: "research-codebase",
-		modelRole: "consult",
-		contracts: [REPORT_CONTRACT, DIGEST_CONTRACT],
-		watchdog: DEFAULT_WATCHDOG,
-		sequencing: {
-			mode: "serial",
-			guidance: "Consult only after the options and constraints are known.",
-		},
-		reducer: "research-digest",
-	},
-	{
 		id: "plan-review",
 		routingSummary:
 			"Challenge a draft plan's assumptions, gaps, and sequencing.",

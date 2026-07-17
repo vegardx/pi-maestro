@@ -1,35 +1,25 @@
-// Spawn-time model resolution for model-consuming runtimes.
-// Authenticates exact choices against the active ordered role pool.
+// Spawn-time exact model selection for non-workflow internal operations.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ModelRole, ThinkingLevel } from "@vegardx/pi-contracts";
 import {
-	type ResolvedRoleModelFull,
-	resolveRolePool,
+	type AuthenticatedExactModelSelection,
+	resolveExactModelSelection,
 } from "@vegardx/pi-models";
 
 export interface SpawnModelRequest {
-	/** Curated policy role whose ordered pool constrains this spawn. */
 	role: ModelRole;
-	/** Optional exact authored model choice (must be in and available from the pool). */
 	model?: string;
-	/** Optional exact authored effort choice. */
 	effort?: ThinkingLevel;
-	/** Exclude candidates without an API key. */
 	requireApiKey?: boolean;
 }
 
 export interface ResolvedSpawnModel {
-	/** Provider/model-id string (e.g. "anthropic/claude-sonnet-4-20250514"). */
 	modelId: string;
-	/** Thinking effort to apply. */
 	effort?: ThinkingLevel;
-	/** API key for the resolved model. */
 	apiKey?: string;
-	/** Extra headers for the resolved model. */
 	headers?: Record<string, string>;
-	/** Resolution metadata retained for telemetry and diagnostics. */
-	resolved: ResolvedRoleModelFull;
+	resolved: AuthenticatedExactModelSelection;
 }
 
 export class SpawnModelResolutionError extends Error {
@@ -37,40 +27,59 @@ export class SpawnModelResolutionError extends Error {
 		readonly request: SpawnModelRequest,
 		readonly reasons: readonly string[],
 	) {
-		super(
-			`No policy-compatible ${request.role} model resolved: ${reasons.join("; ") || "no model available"}`,
-		);
+		super(`No exact ${request.role} model resolved: ${reasons.join("; ") || "no model available"}`);
 		this.name = "SpawnModelResolutionError";
 	}
 }
 
-/** Resolve an authenticated exact/default selection from a direct role pool. */
 export async function resolveSpawnModel(
 	ctx: ExtensionContext,
 	request: SpawnModelRequest,
 ): Promise<ResolvedSpawnModel> {
-	const resolution = await resolveRolePool(ctx, {
+	const initial = await resolveExactModelSelection(ctx, {
 		role: request.role,
-		choice:
-			request.model || request.effort
-				? { model: request.model, effort: request.effort }
-				: undefined,
 		requireApiKey: request.requireApiKey,
 	});
-	const result = resolution.selected;
-	if (!result) {
+	let selected = initial.selected;
+	if (selected && (request.model || request.effort)) {
+		const candidate = initial.candidates.find(
+			(fact) =>
+				fact.available &&
+				(!request.model || fact.modelId === request.model) &&
+				(!request.effort || fact.effort === request.effort),
+		);
+		if (!candidate?.modelId) selected = null;
+		else {
+			const exact = await resolveExactModelSelection(ctx, {
+				role: request.role,
+				requireApiKey: request.requireApiKey,
+				assignment: {
+					presetId: initial.presetId ?? "session",
+					modelSetId: initial.modelSetId ?? "session",
+					optionId: candidate.optionId,
+					modelId: candidate.modelId,
+					effort: candidate.effort,
+				},
+			});
+			selected = exact.selected;
+		}
+	}
+	if (!selected) {
 		throw new SpawnModelResolutionError(
 			request,
-			resolution.errors.map((item) => item.message),
+			initial.errors.map((error) => error.message).concat(
+				request.model || request.effort
+					? [`No configured option matches ${request.model ?? "default model"} @ ${request.effort ?? "default effort"}`]
+					: [],
+			),
 		);
 	}
-
 	return {
-		modelId: result.modelId,
-		effort: result.effort,
-		apiKey: result.apiKey,
-		headers: result.headers,
-		resolved: result,
+		modelId: selected.modelId,
+		effort: selected.effort,
+		apiKey: selected.apiKey,
+		headers: selected.headers,
+		resolved: selected,
 	};
 }
 
@@ -82,12 +91,7 @@ export async function resolveSpawnModelSafe(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_resolve, reject) => {
 		timer = setTimeout(
-			() =>
-				reject(
-					new SpawnModelResolutionError(request, [
-						"resolution timed out after 5s",
-					]),
-				),
+			() => reject(new SpawnModelResolutionError(request, ["resolution timed out after 5s"])),
 			5_000,
 		);
 		timer.unref?.();
@@ -98,5 +102,3 @@ export async function resolveSpawnModelSafe(
 		if (timer) clearTimeout(timer);
 	}
 }
-
-export type { ResolvedRoleModelFull };

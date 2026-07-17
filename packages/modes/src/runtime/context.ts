@@ -55,7 +55,6 @@ import {
 } from "../schema.js";
 import { appendModesState } from "../session.js";
 import {
-	getImplementOverrides,
 	readChildExtensions,
 	readExecutionLifecycleSettings,
 	readWorktreeSetupSettings,
@@ -823,11 +822,10 @@ export function createRuntimeContext(
 				worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
 				stopGraceMs: readExecutionLifecycleSettings(ctx.cwd).stopGraceMs,
 				resolveWorkerModel: async (choice) => {
-					const authored = getImplementOverrides();
 					const resolved = await resolveSpawnModelSafe(ctx, {
 						role: "worker",
-						model: choice.model ?? authored?.agentModel,
-						effort: choice.effort ?? authored?.agentThinking,
+						model: choice.model,
+						effort: choice.effort,
 					});
 					return { modelId: resolved.modelId, effort: resolved.effort };
 				},

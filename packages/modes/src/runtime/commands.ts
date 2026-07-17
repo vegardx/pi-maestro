@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
-import { getModelMeta, resolveRolePoolWithin } from "@vegardx/pi-models";
+import { getModelMeta, resolveExactModelSelection } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
@@ -364,11 +364,10 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				);
 				return;
 			}
-			const verifierResolution = await resolveRolePoolWithin(
-				ctx,
-				{ role: "verifier", requireApiKey: true },
-				30_000,
-			);
+			const verifierResolution = await resolveExactModelSelection(ctx, {
+				role: "verifier",
+				requireApiKey: true,
+			});
 			const verifier = verifierResolution.selected;
 			if (!verifier) {
 				ctx.ui.notify(
@@ -811,11 +810,10 @@ function _createForwardSummaryGenerator(
 	ctx: ExtensionContext,
 ): (input: ForwardSummaryInput) => Promise<string> {
 	return async (input) => {
-		const resolution = await resolveRolePoolWithin(
-			ctx,
-			{ role: "plan-summarizer", requireApiKey: true },
-			30_000,
-		);
+		const resolution = await resolveExactModelSelection(ctx, {
+			role: "plan-summarizer",
+			requireApiKey: true,
+		});
 		const resolved = resolution.selected;
 		if (!resolved?.apiKey) {
 			throw new Error("No model available for summary generation");

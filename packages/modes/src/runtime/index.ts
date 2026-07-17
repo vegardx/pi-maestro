@@ -10,12 +10,10 @@ import type {
 import {
 	CAPABILITIES,
 	EVENTS,
-	type ModelRole,
 	type ModeName,
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
-import { resolveSentinelPool } from "@vegardx/pi-models";
 import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
@@ -53,25 +51,6 @@ export type { ModesRuntimeOptions } from "./context.js";
 const PLAN_CONTAINER = "plan" as const;
 
 export { PLAN_CONTAINER };
-
-/** Resolve one authenticated role-pool selection for child spawning. */
-async function roleSelection(
-	ctx: ExtensionContext,
-	role: ModelRole,
-	choice?: {
-		model?: string;
-		effort?: import("@vegardx/pi-contracts").ThinkingLevel;
-	},
-) {
-	const resolved = await resolveSpawnModelSafe(ctx, { role, ...choice });
-	return {
-		model: resolved.modelId,
-		effort: resolved.effort,
-		// Spawners choose exact ids; the "session" sentinel renders resolved.
-		allowedModels: resolveSentinelPool(ctx, resolved.resolved.configuredModels),
-		allowedEfforts: resolved.resolved.allowedEfforts,
-	};
-}
 
 export interface ModesRuntime {
 	readonly askQueue: ModesAskQueue;

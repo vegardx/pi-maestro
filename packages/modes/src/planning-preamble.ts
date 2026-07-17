@@ -80,7 +80,6 @@ and gather the facts a good plan needs — through conversation and research.
    - \`codebase\` — what exists in this repo: files, patterns, seams, tests.
    - \`web\` — internet research: Exa search (fast lookups through deep
      research tiers), page fetches, Context7 library docs.
-   - \`advisor\` — a different model challenges your current thinking.
    Research is **non-blocking**: the tool returns immediately and the whole
    round's reports arrive later as ONE follow-up message. Do NOT wait or
    re-run; only one round runs at a time. Fire a round, then either do

@@ -5,11 +5,7 @@
 
 import { existsSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ModelRole, ThinkingLevel } from "@vegardx/pi-contracts";
-import {
-	type ResolvedRoleModelFull,
-	resolveRolePool,
-} from "@vegardx/pi-models";
+import type { ThinkingLevel } from "@vegardx/pi-contracts";
 import {
 	getConfigNumber,
 	getConfigString,
@@ -308,41 +304,4 @@ export function readWorktreeSetupSettings(
 		...(setup.trim() !== "" ? { setupCommand: setup } : {}),
 		...(link.length > 0 ? { linkPaths: [...link] } : {}),
 	};
-}
-
-export interface ImplementOverrides {
-	agentModel?: string;
-	agentThinking?: ThinkingLevel;
-}
-
-let implementOverrides: ImplementOverrides | undefined;
-
-export function setImplementOverrides(
-	value: ImplementOverrides | undefined,
-): void {
-	implementOverrides = value;
-}
-
-export function getImplementOverrides(): ImplementOverrides | undefined {
-	return implementOverrides;
-}
-
-// ---- Internal role resolver ------------------------------------------------
-
-/** Internal operations never self-select alternates; policy defaults only. */
-export async function resolveInternalRoleModel(
-	ctx: ExtensionContext,
-	role: Extract<ModelRole, "classifier" | "plan-summarizer" | "verifier">,
-	options?: { requireApiKey?: boolean },
-): Promise<ResolvedRoleModelFull> {
-	const resolution = await resolveRolePool(ctx, {
-		role,
-		requireApiKey: options?.requireApiKey,
-	});
-	if (!resolution.selected) {
-		throw new Error(
-			`No policy-compatible ${role} model resolved: ${resolution.errors.map((item) => item.message).join("; ") || "no model available"}`,
-		);
-	}
-	return resolution.selected;
 }

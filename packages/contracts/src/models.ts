@@ -5,18 +5,13 @@ import type { ThinkingLevel } from "./runs.js";
 /** Stable policy keys used by model-consuming runtimes. */
 export const MODEL_ROLES = [
 	"worker",
-	"reviewer",
-	"research",
-	"advisor",
 	"classifier",
 	"plan-summarizer",
 	"compact-summarizer",
 	"verifier",
-	"delegate",
 	"general",
 	"codebase-research",
 	"web-research",
-	"consult",
 	"plan-review",
 	"practical-review",
 	"adversarial-review",
@@ -49,8 +44,6 @@ export interface ModelPresetConfig {
 export interface ModelsConfig {
 	readonly modelSets: Readonly<Record<string, ModelSetConfig>>;
 	readonly presets: Readonly<Record<string, ModelPresetConfig>>;
-	/** @deprecated Derived compatibility view for the current settings UI. */
-	readonly profiles: Readonly<Record<string, ProfileConfig>>;
 }
 
 export type ModelConfigScope = "global" | "project" | "session";
@@ -109,60 +102,4 @@ export interface ModelSelectionError {
 	readonly presetId?: string;
 	readonly modelSetId?: string;
 	readonly optionId?: string;
-}
-
-// Deprecated role-pool shapes remain exported for settings source compatibility
-// while all runtime resolution is implemented through exact model sets.
-export interface ProfileRoleConfig {
-	readonly models?: readonly string[];
-	readonly efforts?: readonly ThinkingLevel[];
-}
-export type ProfileRoleMap = Readonly<
-	Partial<Record<ModelRole, ProfileRoleConfig>>
->;
-export interface ProfileConfig {
-	readonly targets: readonly string[];
-	readonly roles: ProfileRoleMap;
-}
-export interface SessionProfileRoleOverride {
-	readonly models?: readonly string[];
-	readonly efforts?: readonly ThinkingLevel[];
-}
-export interface RolePoolLeafSource {
-	readonly scope: ModelConfigScope;
-	readonly profile: string;
-	readonly role: ModelRole;
-}
-export interface RolePoolSource {
-	readonly models?: RolePoolLeafSource;
-	readonly efforts?: RolePoolLeafSource;
-}
-export type RoleResolutionErrorCode =
-	| "explicit-model-not-allowed"
-	| "explicit-model-unavailable"
-	| "explicit-effort-not-allowed"
-	| "explicit-effort-unsupported"
-	| "no-model-available";
-export interface RoleResolutionError {
-	readonly code: RoleResolutionErrorCode;
-	readonly message: string;
-	readonly modelId?: string;
-	readonly effort?: ThinkingLevel;
-}
-export interface ResolvedRoleCandidate {
-	readonly modelId: string;
-	readonly supportedEfforts: readonly ThinkingLevel[];
-}
-export type ResolutionSource = "profile" | "session";
-export interface ResolvedRoleModel {
-	readonly role: ModelRole;
-	readonly modelId: string;
-	readonly effort?: ThinkingLevel;
-	readonly source: ResolutionSource;
-	readonly profile?: string;
-	readonly configuredModels: readonly string[];
-	readonly candidates: readonly ResolvedRoleCandidate[];
-	readonly allowedEfforts: readonly ThinkingLevel[];
-	readonly provenance: RolePoolSource;
-	readonly validationErrors: readonly RoleResolutionError[];
 }

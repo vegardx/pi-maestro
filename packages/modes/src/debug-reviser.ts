@@ -1,6 +1,6 @@
 import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveRolePoolWithin } from "@vegardx/pi-models";
+import { resolveExactModelSelection } from "@vegardx/pi-models";
 import type {
 	DebugIssueReviser,
 	DebugIssueReviserInput,
@@ -39,11 +39,10 @@ export function createDebugIssueReviser(
 ): DebugIssueReviser {
 	return {
 		async revise(input) {
-			const resolution = await resolveRolePoolWithin(
-				ctx,
-				{ role: "plan-summarizer", requireApiKey: true },
-				30_000,
-			);
+			const resolution = await resolveExactModelSelection(ctx, {
+				role: "plan-summarizer",
+				requireApiKey: true,
+			});
 			const resolved = resolution.selected;
 			if (!resolved?.apiKey)
 				throw new Error("No model is available for issue revision");

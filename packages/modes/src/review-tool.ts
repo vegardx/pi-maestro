@@ -106,15 +106,19 @@ const ResolutionParam = Type.Object({
 	id: Type.String({ description: "Canonical finding id from the ledger" }),
 	status: Type.Union([
 		Type.Literal("fixed"),
-		Type.Literal("wont-fix"),
+		Type.Literal("unchanged"),
 		Type.Literal("disputed"),
+		Type.Literal("needs-user"),
 		Type.Literal("duplicateOf"),
 	]),
 	note: Type.String({
 		description:
-			"fixed: the commit. wont-fix (minors only): why. disputed (blocking " +
-			"only, once): your code-referencing rationale. duplicateOf: why same.",
+			"fixed: why the fix commit resolves it. unchanged: why an advisory finding remains. disputed/needs-user: evidence-bearing escalation. duplicateOf: why same.",
 	}),
+	evidence: Type.Optional(Type.Array(Type.String())),
+	fixCommit: Type.Optional(
+		Type.String({ description: "fixed only: immutable commit containing the fix" }),
+	),
 	canonical: Type.Optional(
 		Type.String({ description: "duplicateOf only: the id it merges into" }),
 	),
@@ -167,8 +171,8 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			"idle. Never poll for it (no sleep loops, no status commands): " +
 			"polling burns tokens and delays delivery, since a busy turn queues " +
 			"the report instead of receiving it. Then resolve every " +
-			"blocking finding (fix+commit / wont-fix minors / dispute with " +
-			"rationale / duplicateOf) and call again with `resolutions` — a " +
+			"blocking finding (fix+commit / unchanged for minors / dispute or " +
+			"needs-user with evidence / duplicateOf) and call again with `resolutions` — a " +
 			"scope-locked verifier checks exactly your claims, reporting the " +
 			"same way. Ship is blocked until no blocking finding is open. " +
 			"Disputes go to the maestro, not another review round.",
@@ -176,7 +180,7 @@ export function createReviewTool(deps: ReviewToolDeps): ToolDefinition {
 			"review — start your review panel once, then END YOUR TURN (the " +
 			"report arrives as a message that wakes you; never sleep-poll for " +
 			"it), then verify your fixes (resolutions: " +
-			"fixed/wont-fix/disputed/duplicateOf per finding id).",
+			"fixed/unchanged/disputed/needs-user/duplicateOf per finding id).",
 		parameters: ReviewParams,
 		// Panel rounds concatenate full reviewer reports — the WORKER model
 		// needs them; the human watching the pane gets a preview + expand.

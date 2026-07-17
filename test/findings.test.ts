@@ -488,3 +488,67 @@ describe("structured finding normalization", () => {
 		expect(ledger.entries).toHaveLength(2);
 	});
 });
+
+
+describe("new-path resolution barriers", () => {
+	const committedLedger = (): ReviewLedger => {
+		const ledger = twoReviewerLedger();
+		ledger.entries = ledger.entries.map((entry) => ({
+			...entry,
+			finding: {
+				...entry.finding,
+				provenance: [
+					{
+						agentId: entry.reviewer,
+						stageId: "review",
+						modelId: "model/a",
+						commit: "a".repeat(40),
+						reportedAt: NOW,
+					},
+				],
+			},
+		}));
+		return ledger;
+	};
+
+	it("requires meaningful immutable fix commits", () => {
+		const result = applyResolutions(
+			committedLedger(),
+			[
+				{ id: "correctness.1", status: "fixed", note: "fixed" },
+				{
+					id: "security-alt.1",
+					status: "fixed",
+					note: "fixed",
+					fixCommit: "b".repeat(40),
+				},
+			],
+			NOW,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.errors.join(" ")).toContain("fixCommit");
+	});
+
+	it("keeps evidence-bearing disputes and user escalations blocking", () => {
+		const result = applyResolutions(
+			committedLedger(),
+			[
+				{
+					id: "correctness.1",
+					status: "needs-user",
+					note: "API behavior is ambiguous",
+					evidence: ["spec section 4 conflicts with test x"],
+				},
+				{
+					id: "security-alt.1",
+					status: "disputed",
+					note: "branch is unreachable",
+					evidence: ["src/a.ts:8 guards the branch"],
+				},
+			],
+			NOW,
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(openBlocking(result.ledger)).toHaveLength(2);
+	});
+});

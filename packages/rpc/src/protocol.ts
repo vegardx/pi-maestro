@@ -219,8 +219,16 @@ export interface LedgerEntryWire {
 	readonly reviewer: string;
 	readonly resolution?: {
 		readonly id: string;
-		readonly status: "fixed" | "wont-fix" | "disputed" | "duplicateOf";
+		readonly status:
+			| "fixed"
+			| "unchanged"
+			| "wont-fix"
+			| "disputed"
+			| "needs-user"
+			| "duplicateOf";
 		readonly note: string;
+		readonly evidence?: readonly string[];
+		readonly fixCommit?: string;
 		readonly canonical?: string;
 		readonly at: string;
 	};

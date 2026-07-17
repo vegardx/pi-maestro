@@ -238,6 +238,47 @@ describe("shipDeliverable (real push)", () => {
 		expect(calls.created[0].body).toContain("Did the g1 work.");
 	});
 
+	it("preserves user-authored text when updating an existing PR", async () => {
+		git(["checkout", "-b", "feat/g-existing"]);
+		writeFileSync(join(repo, "existing.txt"), "work\n");
+		git(["add", "existing.txt"]);
+		git(["commit", "-m", "feat: existing"]);
+		const deliverable = makeDeliverable({
+			id: "g-existing",
+			workflowAnalytics: {
+				version: 1,
+				deliverableId: "g-existing",
+				revision: 1,
+				stages: [],
+				assignments: [],
+				rawFindings: [],
+				canonicalFindings: [],
+				createdAt: NOW,
+				updatedAt: NOW,
+			},
+		});
+		const plan = makePlan([deliverable], { repoPath: repo });
+		const { client, calls } = recordingPrClient({
+			open: {
+				"feat/g-existing": makePr({
+					number: 7,
+					body: "User-maintained introduction\n\nUser-maintained footer",
+					headRefName: "feat/g-existing",
+				}),
+			},
+		});
+		const result = await shipDeliverable({
+			plan,
+			deliverable,
+			worktreePath: repo,
+			prClient: client,
+		});
+		expect(result).toMatchObject({ ok: true, created: false, prNumber: 7 });
+		expect(calls.edited[0]?.body).toContain("User-maintained introduction");
+		expect(calls.edited[0]?.body).toContain("User-maintained footer");
+		expect(calls.edited[0]?.body).toContain("maestro:provenance:start");
+	});
+
 	it("blocks non-conventional commits in a semantic-release repo — no push", async () => {
 		// Regression: a worker pushed "Add RadicalAI production and SIT provider
 		// configs" to a semantic-release repo; the release ran green and

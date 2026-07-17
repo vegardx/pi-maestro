@@ -952,7 +952,8 @@ export function validatePlanShape(
 				`deliverable \`${g.id}\`: only failed status may carry failure detail`,
 			);
 		}
-		if (g.completedAt !== undefined &&
+		if (
+			g.completedAt !== undefined &&
 			!Number.isFinite(Date.parse(g.completedAt))
 		) {
 			problems.push(

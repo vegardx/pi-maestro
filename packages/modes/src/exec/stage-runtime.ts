@@ -9,10 +9,10 @@ import type {
 } from "@vegardx/pi-contracts";
 import type { WorkflowStageSpec } from "../schema.js";
 import {
-	captureCommitCheckpoint,
-	renderCommitTarget,
 	type CommitCheckpointDeps,
 	type CommitTarget,
+	captureCommitCheckpoint,
+	renderCommitTarget,
 } from "./commit-target.js";
 
 export interface StageMemberResult {

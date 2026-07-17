@@ -1,12 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	type ModeName,
-	type ModeTransitionGate,
-	type ModeTransitionValidation,
+import type {
+	ModeName,
+	ModeTransitionGate,
+	ModeTransitionValidation,
 } from "@vegardx/pi-contracts";
-import { planFingerprint, type PlanEngine } from "./engine.js";
+import { type PlanEngine, planFingerprint } from "./engine.js";
 import { renderPlanOutline } from "./research.js";
-import { planPhase, validatePlanShape, type Plan } from "./schema.js";
+import { type Plan, planPhase, validatePlanShape } from "./schema.js";
 
 export type TransitionEdge = `${ModeName}->${ModeName}`;
 
@@ -104,7 +104,10 @@ export class TransitionGateCoordinator {
 		const agents = this.deps.agents();
 		if (!agents) {
 			state = this.block(engine, state, "agents.v1 is unavailable", now());
-			ctx.ui.notify("Execution readiness needs the plan-review agent; staying in plan.", "warning");
+			ctx.ui.notify(
+				"Execution readiness needs the plan-review agent; staying in plan.",
+				"warning",
+			);
 			return false;
 		}
 
@@ -117,25 +120,45 @@ export class TransitionGateCoordinator {
 				displayName: "plan-reviewer",
 				meta: { gateId: id, edge: `${from}->${to}` },
 			});
-			state = { ...state, assignment: run.assignment, runId: run.runId, updatedAt: now() };
+			state = {
+				...state,
+				assignment: run.assignment,
+				runId: run.runId,
+				updatedAt: now(),
+			};
 			engine.setTransitionGate(state);
 			const result = await run.handle.result();
 			if (result.status !== "succeeded")
 				throw new Error(result.error ?? `plan reviewer ${result.status}`);
 			reviewSummary = (result.summary ?? "").slice(0, 12_000);
 		} catch (error) {
-			state = this.block(engine, state, error instanceof Error ? error.message : String(error), now());
-			ctx.ui.notify(`Plan review failed: ${state.reason}. Staying in plan.`, "warning");
+			state = this.block(
+				engine,
+				state,
+				error instanceof Error ? error.message : String(error),
+				now(),
+			);
+			ctx.ui.notify(
+				`Plan review failed: ${state.reason}. Staying in plan.`,
+				"warning",
+			);
 			return false;
 		}
 
 		if (planFingerprint(engine.get()) !== fingerprint) {
-			this.block(engine, state, "plan changed while the reviewer was running", now());
-			ctx.ui.notify("Plan changed during review — request the transition again.", "warning");
+			this.block(
+				engine,
+				state,
+				"plan changed while the reviewer was running",
+				now(),
+			);
+			ctx.ui.notify(
+				"Plan changed during review — request the transition again.",
+				"warning",
+			);
 			return false;
 		}
 
-		const remaining: never[] = [];
 		state = {
 			...state,
 			status: "awaiting-ruling",
@@ -147,7 +170,10 @@ export class TransitionGateCoordinator {
 		const ask = this.deps.ask();
 		if (!ask) {
 			this.block(engine, state, "ask.v1 is unavailable", now());
-			ctx.ui.notify("No ruling surface is available; staying in plan.", "warning");
+			ctx.ui.notify(
+				"No ruling surface is available; staying in plan.",
+				"warning",
+			);
 			return false;
 		}
 		const answers = await ask.ask([
@@ -157,20 +183,32 @@ export class TransitionGateCoordinator {
 				question: `Final ruling for Plan → ${to}?`,
 				context: summarizeReview(reviewSummary, validations),
 				options: [
-					{ label: "Enter execution", value: "enter-without", description: "Accept the reviewed plan and enter." },
-					{ label: "Stay in plan", value: "stay-in-plan", description: "Do not change mode." },
+					{
+						label: "Enter execution",
+						value: "enter-without",
+						description: "Accept the reviewed plan and enter.",
+					},
+					{
+						label: "Stay in plan",
+						value: "stay-in-plan",
+						description: "Do not change mode.",
+					},
 				],
 				recommendation: "enter-without",
 				blocking: true,
-				whyBlocking: "Maestro cannot cross the execution boundary without one final user ruling.",
+				whyBlocking:
+					"Maestro cannot cross the execution boundary without one final user ruling.",
 			},
 		]);
 		const selectedIds: string[] = [];
-		const decision = answers.find((answer) => answer.questionId === `${id}:ruling`)?.value;
+		const decision = answers.find(
+			(answer) => answer.questionId === `${id}:ruling`,
+		)?.value;
 		const ruledAt = now();
 		state = {
 			...state,
-			status: decision === "stay-in-plan" || !decision ? "cancelled" : state.status,
+			status:
+				decision === "stay-in-plan" || !decision ? "cancelled" : state.status,
 			updatedAt: ruledAt,
 			ruling: {
 				decision:
@@ -187,15 +225,33 @@ export class TransitionGateCoordinator {
 		if (!ruling || ruling.decision === "stay-in-plan") return false;
 
 		if (planFingerprint(engine.get()) !== fingerprint) {
-			this.block(engine, state, "plan changed before the ruling could be applied", now());
-			ctx.ui.notify("Plan changed before settlement — staying in plan.", "warning");
+			this.block(
+				engine,
+				state,
+				"plan changed before the ruling could be applied",
+				now(),
+			);
+			ctx.ui.notify(
+				"Plan changed before settlement — staying in plan.",
+				"warning",
+			);
 			return false;
 		}
 		validations = [...definition.validate(engine.get())];
-		const errors = validations.filter((validation) => validation.level === "error");
+		const errors = validations.filter(
+			(validation) => validation.level === "error",
+		);
 		if (errors.length) {
-			this.block(engine, { ...state, validations }, errors.map((error) => error.message).join("; "), now());
-			ctx.ui.notify(`Mechanical revalidation failed: ${errors.map((error) => error.message).join("; ")}`, "warning");
+			this.block(
+				engine,
+				{ ...state, validations },
+				errors.map((error) => error.message).join("; "),
+				now(),
+			);
+			ctx.ui.notify(
+				`Mechanical revalidation failed: ${errors.map((error) => error.message).join("; ")}`,
+				"warning",
+			);
 			return false;
 		}
 		state = { ...state, status: "settled", validations, updatedAt: now() };
@@ -204,8 +260,18 @@ export class TransitionGateCoordinator {
 		return true;
 	}
 
-	private block(engine: PlanEngine, state: ModeTransitionGate, reason: string, at: string): ModeTransitionGate {
-		const blocked = { ...state, status: "blocked" as const, reason, updatedAt: at };
+	private block(
+		engine: PlanEngine,
+		state: ModeTransitionGate,
+		reason: string,
+		at: string,
+	): ModeTransitionGate {
+		const blocked = {
+			...state,
+			status: "blocked" as const,
+			reason,
+			updatedAt: at,
+		};
 		engine.setTransitionGate(blocked);
 		return blocked;
 	}
@@ -216,43 +282,72 @@ export function createExecutionReadinessGate(): TransitionGateDefinition {
 		id: "execution-readiness",
 		edges: ["plan->auto", "plan->hack"],
 		validate: executionReadinessValidations,
-		prompt: (plan, validations) => [
-			"Review this canonical structured plan immediately before execution.",
-			"Challenge missing work, sequencing, acceptance criteria, and review coverage.",
-			"Do not mutate anything. Give concrete compatible suggestions to the host.",
-			"",
-			"## Mechanical validation",
-			...(validations.length ? validations.map((item) => `- ${item.level}: ${item.message}`) : ["- clean"]),
-			"",
-			"## Canonical structured plan",
-			renderPlanOutline(plan),
-		].join("\n"),
+		prompt: (plan, validations) =>
+			[
+				"Review this canonical structured plan immediately before execution.",
+				"Challenge missing work, sequencing, acceptance criteria, and review coverage.",
+				"Do not mutate anything. Give concrete compatible suggestions to the host.",
+				"",
+				"## Mechanical validation",
+				...(validations.length
+					? validations.map((item) => `- ${item.level}: ${item.message}`)
+					: ["- clean"]),
+				"",
+				"## Canonical structured plan",
+				renderPlanOutline(plan),
+			].join("\n"),
 		suggestions: () => [],
 	};
 }
 
-export function executionReadinessValidations(plan: Plan): readonly ModeTransitionValidation[] {
-	const result: ModeTransitionValidation[] = validatePlanShape(plan).map((message, index) => ({
-		id: `shape-${index}`,
-		level: "error",
-		message,
-	}));
+export function executionReadinessValidations(
+	plan: Plan,
+): readonly ModeTransitionValidation[] {
+	const result: ModeTransitionValidation[] = validatePlanShape(plan).map(
+		(message, index) => ({
+			id: `shape-${index}`,
+			level: "error",
+			message,
+		}),
+	);
 	if (planPhase(plan) !== "structuring")
-		result.push({ id: "phase", level: "error", message: "plan has not reached structuring" });
+		result.push({
+			id: "phase",
+			level: "error",
+			message: "plan has not reached structuring",
+		});
 	if (!plan.deliverables.length)
-		result.push({ id: "deliverables", level: "error", message: "plan has no deliverables" });
+		result.push({
+			id: "deliverables",
+			level: "error",
+			message: "plan has no deliverables",
+		});
 	for (const deliverable of plan.deliverables) {
-		if (deliverable.worker.mode === "full" && deliverable.tasks.filter((task) => (task.kind ?? "task") !== "followup").length === 0)
-			result.push({ id: `tasks:${deliverable.id}`, level: "error", message: `${deliverable.id} has no gating work items` });
+		if (
+			deliverable.worker.mode === "full" &&
+			deliverable.tasks.filter((task) => (task.kind ?? "task") !== "followup")
+				.length === 0
+		)
+			result.push({
+				id: `tasks:${deliverable.id}`,
+				level: "error",
+				message: `${deliverable.id} has no gating work items`,
+			});
 	}
 	return result;
 }
 
-function summarizeReview(review: string, validations: readonly ModeTransitionValidation[]): string {
+function summarizeReview(
+	review: string,
+	validations: readonly ModeTransitionValidation[],
+): string {
 	const mechanical = validations.length
 		? validations.map((item) => `- ${item.level}: ${item.message}`).join("\n")
 		: "- clean";
-	return `## Mechanical checks\n${mechanical}\n\n## Plan reviewer\n${review || "No textual suggestions."}`.slice(0, 14_000);
+	return `## Mechanical checks\n${mechanical}\n\n## Plan reviewer\n${review || "No textual suggestions."}`.slice(
+		0,
+		14_000,
+	);
 }
 
 export function createDefaultTransitionGates(): TransitionGateRegistry {

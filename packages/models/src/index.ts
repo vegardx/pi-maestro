@@ -1,5 +1,6 @@
 // @vegardx/pi-models — authenticated exact model selection.
 
+export { supportedEfforts } from "./efforts.js";
 export {
 	type AssignmentSelectionOptions,
 	type AuthenticatedExactModelSelection,
@@ -22,4 +23,3 @@ export {
 	SESSION_MODEL_SENTINEL,
 	validatePresetTargets,
 } from "./profiles.js";
-export { supportedEfforts } from "./efforts.js";

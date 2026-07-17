@@ -25,14 +25,15 @@ export function renderMaestroPrSection(
 	const ledger = deliverable.workflowAnalytics;
 	const findings = ledger?.canonicalFindings ?? [];
 	const blocking = findings.filter(
-		(entry) => entry.finding.severity !== "minor" && !findingSettled(entry, false),
+		(entry) =>
+			entry.finding.severity !== "minor" && !findingSettled(entry, false),
 	);
 	const state = ledger
 		? blocking.length > 0
 			? `Changes requested — ${blocking.length} blocking finding${blocking.length === 1 ? "" : "s"} open`
 			: ledger.finalVerification?.status === "failed"
-					? "Verification failed"
-					: "Approved — no blocking findings open"
+				? "Verification failed"
+				: "Approved — no blocking findings open"
 		: "Review provenance not recorded";
 
 	const canonical = [

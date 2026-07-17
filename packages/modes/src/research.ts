@@ -126,10 +126,13 @@ const ResearchParams = Type.Object({
 					"several narrow questions rather than one sweeping one.",
 			}),
 			kind: Type.Optional(
-				Type.Union(RESEARCH_KINDS.map((kind) => Type.Literal(kind)), {
-					description:
-						"codebase (default): repository research. web: public sources and library docs.",
-				}),
+				Type.Union(
+					RESEARCH_KINDS.map((kind) => Type.Literal(kind)),
+					{
+						description:
+							"codebase (default): repository research. web: public sources and library docs.",
+					},
+				),
 			),
 			model: Type.Optional(
 				Type.String({

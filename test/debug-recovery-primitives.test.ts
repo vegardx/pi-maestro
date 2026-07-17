@@ -240,7 +240,9 @@ describe("safe worker restart primitives", () => {
 			pendingStages: ["working"],
 		});
 		expect(tmux.live.size).toBe(0);
-		expect(JSON.parse(readFileSync(join(root, "plan/execution-stop.json"), "utf8"))).toMatchObject({
+		expect(
+			JSON.parse(readFileSync(join(root, "plan/execution-stop.json"), "utf8")),
+		).toMatchObject({
 			version: 1,
 			stop: {
 				reason: "test shutdown",

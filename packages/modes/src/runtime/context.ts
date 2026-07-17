@@ -68,11 +68,11 @@ import {
 	transitionMode,
 } from "../state.js";
 import { createPlanStore, type PlanStore, plansRoot } from "../storage.js";
-import { UsageCheckpointStore } from "../usage-checkpoints.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
 } from "../transition-gates.js";
+import { UsageCheckpointStore } from "../usage-checkpoints.js";
 import {
 	accumulate,
 	incrementTurns,

@@ -4,8 +4,6 @@
 // of pi's native `compaction.*` and of `extensionConfig.smart-compact.*`.
 
 import { existsSync } from "node:fs";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevel } from "@vegardx/pi-contracts";
 import {
 	getConfigNumber,
 	getConfigString,
@@ -269,8 +267,7 @@ export function readExecutionLifecycleSettings(
 	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
 	const raw = getConfigNumber(merged, NAME, "execution.stopGraceMs", 5000);
 	return {
-		stopGraceMs:
-			Number.isFinite(raw) && raw >= 0 && raw <= 60_000 ? raw : 5000,
+		stopGraceMs: Number.isFinite(raw) && raw >= 0 && raw <= 60_000 ? raw : 5000,
 	};
 }
 

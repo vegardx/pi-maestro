@@ -876,10 +876,7 @@ export class ExecutionAdapter {
 	 * truth; it must survive worker respawns and maestro restarts. Shared by
 	 * settled rounds and the round-started crash marker.
 	 */
-	private requiredReviewerNames(deliverableId: string): string[] {
-		const deliverable = this.engine
-			.get()
-			.deliverables.find((d) => d.id === deliverableId);
+	private requiredReviewerNames(_deliverableId: string): string[] {
 		const workflow = this.engine.get().workflow;
 		const assigned =
 			workflow?.assignments

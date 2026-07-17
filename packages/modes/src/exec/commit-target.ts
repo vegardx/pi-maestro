@@ -46,7 +46,9 @@ export function captureCommitCheckpoint(
 ): CommitTarget {
 	const deps = { ...defaults, ...overrides };
 	if (!isImmutableCommit(input.base)) {
-		throw new Error(`delivery base is not an immutable commit SHA: ${input.base}`);
+		throw new Error(
+			`delivery base is not an immutable commit SHA: ${input.base}`,
+		);
 	}
 	if (input.previousHead && !isImmutableCommit(input.previousHead)) {
 		throw new Error(

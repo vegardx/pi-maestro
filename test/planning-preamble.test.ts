@@ -52,7 +52,6 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("`research`");
 		expect(preamble).toContain("codebase");
 		expect(preamble).toContain("web");
-		expect(preamble).toContain("advisor");
 		expect(preamble).toContain("`readiness`");
 		// Structure tools are locked — no structuring workflow yet.
 		expect(preamble).not.toContain("deliverable(action");

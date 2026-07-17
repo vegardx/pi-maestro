@@ -104,9 +104,6 @@ export interface VerifyRunView {
 	readonly kind: "verify";
 	status: "running" | "succeeded" | "failed" | "stopped";
 	readonly startedAt: number;
-	tokensIn?: number;
-	tokensOut?: number;
-	prefixCacheHitRate?: number;
 	model?: string;
 	effort?: string;
 	adaptive?: boolean;

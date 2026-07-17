@@ -606,7 +606,9 @@ export class AgentBridge {
 		manager?.appendCustomEntry?.(AGENT_STOP_NOTICE_ENTRY, notice);
 	}
 
-	private async prepareStop(msg: import("@vegardx/pi-rpc").PrepareStopMessage): Promise<void> {
+	private async prepareStop(
+		msg: import("@vegardx/pi-rpc").PrepareStopMessage,
+	): Promise<void> {
 		if (this.stopping) return;
 		this.stopping = true;
 		const source = this.installChildSource();

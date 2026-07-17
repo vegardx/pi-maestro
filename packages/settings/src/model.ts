@@ -25,9 +25,16 @@ export function parseStringList(raw: string): readonly string[] | undefined {
 	if (!trimmed) return [];
 	try {
 		const parsed: unknown = JSON.parse(trimmed);
-		if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) return parsed;
+		if (
+			Array.isArray(parsed) &&
+			parsed.every((value) => typeof value === "string")
+		)
+			return parsed;
 	} catch {}
-	const values = raw.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+	const values = raw
+		.split(/\r?\n/)
+		.map((value) => value.trim())
+		.filter(Boolean);
 	return values.length ? values : undefined;
 }
 
@@ -38,8 +45,10 @@ export function parseSettingValue(raw: string): SessionSettingValue {
 			typeof parsed === "boolean" ||
 			typeof parsed === "number" ||
 			typeof parsed === "string" ||
-			(Array.isArray(parsed) && parsed.every((value) => typeof value === "string"))
-		) return parsed;
+			(Array.isArray(parsed) &&
+				parsed.every((value) => typeof value === "string"))
+		)
+			return parsed;
 	} catch {}
 	return raw;
 }
@@ -51,7 +60,9 @@ export function formatSettingValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-export function sessionModelId(ctx: import("@earendil-works/pi-coding-agent").ExtensionContext): string | undefined {
+export function sessionModelId(
+	ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
+): string | undefined {
 	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 }
 
@@ -60,11 +71,22 @@ export function validateDeclaredValue(
 	value: SessionSettingValue | undefined,
 ): string | undefined {
 	if (value === undefined) return undefined;
-	if (declaration.type === "boolean" && typeof value !== "boolean") return "must be boolean";
-	if (declaration.type === "number" && typeof value !== "number") return "must be number";
-	if (declaration.type === "string" && typeof value !== "string") return "must be string";
-	if (declaration.type === "string-list" && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) return "must be a string list";
-	if (declaration.type === "choice" && !declaration.options?.some((option) => option.value === value)) return "must be one declared choice";
+	if (declaration.type === "boolean" && typeof value !== "boolean")
+		return "must be boolean";
+	if (declaration.type === "number" && typeof value !== "number")
+		return "must be number";
+	if (declaration.type === "string" && typeof value !== "string")
+		return "must be string";
+	if (
+		declaration.type === "string-list" &&
+		(!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+	)
+		return "must be a string list";
+	if (
+		declaration.type === "choice" &&
+		!declaration.options?.some((option) => option.value === value)
+	)
+		return "must be one declared choice";
 	return undefined;
 }
 
@@ -75,15 +97,28 @@ export function readDeclaredValue(
 ): LayeredValue<SessionSettingValue> {
 	const manager = SettingsManager.create(cwd);
 	const path = ["extensionConfig", extension, ...declaration.key.split(".")];
-	const global = readPath(manager.getGlobalSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
-	const project = readPath(manager.getProjectSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const global = readPath(
+		manager.getGlobalSettings() as unknown as Record<string, unknown>,
+		path.join("."),
+	) as SessionSettingValue | undefined;
+	const project = readPath(
+		manager.getProjectSettings() as unknown as Record<string, unknown>,
+		path.join("."),
+	) as SessionSettingValue | undefined;
 	const session = getSessionSettingOverride(extension, declaration.key);
 	return {
 		global,
 		project,
 		session,
 		effective: session ?? project ?? global ?? declaration.default,
-		source: session !== undefined ? "session" : project !== undefined ? "project" : global !== undefined ? "global" : "default",
+		source:
+			session !== undefined
+				? "session"
+				: project !== undefined
+					? "project"
+					: global !== undefined
+						? "global"
+						: "default",
 	};
 }
 
@@ -94,15 +129,28 @@ export function readAdvancedValue(
 ): LayeredValue<SessionSettingValue> {
 	const manager = SettingsManager.create(cwd);
 	const path = ["extensionConfig", extension, ...key.split(".")];
-	const global = readPath(manager.getGlobalSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
-	const project = readPath(manager.getProjectSettings() as unknown as Record<string, unknown>, path.join(".")) as SessionSettingValue | undefined;
+	const global = readPath(
+		manager.getGlobalSettings() as unknown as Record<string, unknown>,
+		path.join("."),
+	) as SessionSettingValue | undefined;
+	const project = readPath(
+		manager.getProjectSettings() as unknown as Record<string, unknown>,
+		path.join("."),
+	) as SessionSettingValue | undefined;
 	const session = getSessionSettingOverride(extension, key);
 	return {
 		global,
 		project,
 		session,
 		effective: session ?? project ?? global,
-		source: session !== undefined ? "session" : project !== undefined ? "project" : global !== undefined ? "global" : undefined,
+		source:
+			session !== undefined
+				? "session"
+				: project !== undefined
+					? "project"
+					: global !== undefined
+						? "global"
+						: undefined,
 	};
 }
 

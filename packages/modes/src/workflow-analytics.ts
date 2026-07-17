@@ -1,6 +1,6 @@
 import {
-	canonicalTokenSnapshot,
 	type AgentKind,
+	canonicalTokenSnapshot,
 	type ResolvedAgentAssignment,
 	type StructuredFinding,
 	type TokenSnapshot,

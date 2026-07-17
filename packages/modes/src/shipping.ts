@@ -2,6 +2,10 @@
 // push or create PRs. This module provides the concrete implementation of
 // the `shipDeliverable` dependency that the DeliverableExecutor calls.
 
+import {
+	renderMaestroPrSection,
+	updateMaestroPrBody,
+} from "./pr-provenance.js";
 import type { Deliverable } from "./schema.js";
 import { gatingTasks } from "./schema.js";
 
@@ -44,7 +48,9 @@ export function buildPrBody(
 		sections.push(`## Agent Reports\n\n${agentReports.join("\n\n")}`);
 	}
 
-	return sections.join("\n\n");
+	const base = sections.join("\n\n");
+	if (!deliverable.workflowAnalytics && !deliverable.reviewLedger) return base;
+	return updateMaestroPrBody(base, renderMaestroPrSection(deliverable));
 }
 
 /**

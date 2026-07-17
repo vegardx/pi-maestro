@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { buildLedger } from "../packages/modes/src/exec/findings.js";
 import {
 	applyWorkflowAnalyticsEvent,
 	assignmentAnalytics,
 	createWorkflowAnalyticsLedger,
 	workflowAnalyticsTotals,
 } from "../packages/modes/src/workflow-analytics.js";
-import { buildLedger } from "../packages/modes/src/exec/findings.js";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const LATER = "2026-01-01T00:00:02.000Z";

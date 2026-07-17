@@ -75,6 +75,22 @@ const AGENT_FIXTURES = {
 	},
 	status: { type: "status", status: "working" },
 	tokens: { type: "tokens", snapshot },
+	childRunSync: {
+		type: "childRunSync",
+		id: "crs-1",
+		ownerGeneration: 0,
+		reconcile: true,
+		runs: [],
+	},
+	childRunControlResult: {
+		type: "childRunControlResult",
+		id: "crc-1",
+		ownerGeneration: 0,
+		runId: "run-1",
+		action: "capture",
+		ok: true,
+		content: "screen",
+	},
 	planRead: { type: "planRead", id: "pr-1" },
 	planMutate: {
 		type: "planMutate",
@@ -129,6 +145,14 @@ const AGENT_FIXTURES = {
 		turnId: "turn-1",
 		outcome: "accepted",
 	},
+	prepareStopAck: {
+		type: "prepareStopAck",
+		id: "stop-1",
+		completedAt: 123,
+		children: 1,
+		usageRevision: 2,
+		outcome: "cooperative",
+	},
 	pong: { type: "pong", id: "po-1" },
 } as const satisfies {
 	[T in AgentMessage["type"]]: Extract<AgentMessage, { type: T }>;
@@ -153,6 +177,8 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 	return {
 		status: ack,
 		tokens: ack,
+		childRunSync: ack,
+		childRunControlResult: ack,
 		planRead: ack,
 		planMutate: ack,
 		questions: ack,
@@ -162,6 +188,7 @@ function fullHandlers(server: MaestroRpcServer): Required<RpcRouterHandlers> {
 		panelVerdict: ack,
 		debugProposal: ack,
 		interruptAck: ack,
+		prepareStopAck: ack,
 		pong: ack,
 	};
 }

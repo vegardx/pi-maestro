@@ -216,6 +216,40 @@ describe("safe worker restart primitives", () => {
 		expect(seed).toContain("Preserve all valid dirty/uncommitted changes");
 	});
 
+	it("uses one bounded fleet deadline, escalates, persists, and is idempotent", async () => {
+		const { root, tmux } = await started(false, {
+			restartKillTimeoutMs: 20,
+			restartPollMs: 1,
+		});
+		const first = await adapter!.prepareStop("test shutdown");
+		const second = await adapter!.prepareStop("ignored duplicate");
+		expect(second).toBe(first);
+		expect(first.agents).toHaveLength(1);
+		expect(first.agents[0]).toMatchObject({
+			agentKey: "auth/worker",
+			generation: 0,
+			outcome: "forced",
+		});
+		expect(first.hints[0]).toMatchObject({
+			agentKey: "auth/worker",
+			generation: 0,
+			workspace: expect.stringContaining("worktree"),
+			branch: "feat/auth",
+			usageRevision: 0,
+			children: [],
+			pendingStages: ["working"],
+		});
+		expect(tmux.live.size).toBe(0);
+		expect(JSON.parse(readFileSync(join(root, "plan/execution-stop.json"), "utf8"))).toMatchObject({
+			version: 1,
+			stop: {
+				reason: "test shutdown",
+				outcome: "escalated-kill",
+				recoverable: true,
+			},
+		});
+	});
+
 	it("blocks without spawning when the old tmux session cannot be proven absent", async () => {
 		const { engine, tmux } = await started(true);
 		const spawnCount = tmux.spawned.length;

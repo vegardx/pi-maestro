@@ -190,6 +190,15 @@ export const EXECUTION_POLICY_SETTINGS = [
 			},
 		],
 	},
+	{
+		key: "execution.stopGraceMs",
+		label: "Stop grace (ms)",
+		type: "number",
+		default: 5000,
+		group: "execution-policy",
+		description:
+			"Fleet-wide deadline for cooperative worker shutdown before tmux escalation (0–60000).",
+	},
 ] as const satisfies readonly SettingDeclaration[];
 
 export const WORKTREE_SETTINGS = [

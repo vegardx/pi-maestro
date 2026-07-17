@@ -4,6 +4,10 @@
 // importing the sibling extension. The CapabilityMap gives the registry its
 // typed require<K>(id): CapabilityMap[K] signature (defined in core).
 
+import type {
+	AgentsCapabilityV1,
+	ChildRunProjectionSourceV1,
+} from "./agents.js";
 import type { Answers, PendingAsk, Questionnaire } from "./ask.js";
 import type { RunId } from "./ids.js";
 import type { ModeName, ModesExecutionStatus } from "./modes.js";
@@ -19,6 +23,8 @@ import type { TokenSnapshot, UsageSource } from "./usage.js";
 
 export const CAPABILITIES = {
 	subagents: "subagents.v1",
+	agents: "agents.v1",
+	childRunProjections: "child-run-projections.v1",
 	ask: "ask.v1",
 	askTransport: "ask-transport.v1",
 	usage: "usage.v1",
@@ -148,6 +154,8 @@ export interface OverlaysCapabilityV1 {
 
 export interface CapabilityMap {
 	[CAPABILITIES.subagents]: SubagentsCapabilityV1;
+	[CAPABILITIES.agents]: AgentsCapabilityV1;
+	[CAPABILITIES.childRunProjections]: ChildRunProjectionSourceV1;
 	[CAPABILITIES.ask]: AskCapabilityV1;
 	[CAPABILITIES.askTransport]: AskTransportV1;
 	[CAPABILITIES.usage]: UsageLedgerV1;

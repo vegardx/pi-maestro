@@ -16,6 +16,7 @@ import {
 	type StructuredFinding,
 	type ThinkingLevel,
 	type TransitionGate,
+	type ModeTransitionGate,
 	validateStructuredFinding,
 	validateTransitionGate,
 	WORK_ITEM_KINDS,
@@ -32,6 +33,7 @@ export {
 	type StructuredFinding,
 	type ThinkingLevel,
 	type TransitionGate,
+	type ModeTransitionGate,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 };
@@ -297,6 +299,8 @@ export interface Plan {
 	lastSyncedAt?: string;
 	/** Immutable audit trail for narrow, fingerprinted debug repairs. */
 	repairAudit?: PlanRepairAuditEvent[];
+	/** Restart-safe requests and rulings for mode transition gates. */
+	transitionGates?: ModeTransitionGate[];
 	createdAt: string;
 	updatedAt: string;
 }

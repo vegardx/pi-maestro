@@ -25,25 +25,29 @@ import { RpcClient } from "@earendil-works/pi-coding-agent";
 import {
 	CAPABILITIES,
 	EVENTS,
+	type ModelRole,
 	type RunId,
 	type SupervisorDecision,
 	type SupervisorDecisionRequest,
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
+import { resolveExactModelSelection } from "@vegardx/pi-models";
 import {
 	getConfigStringArray,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
-import { type AgentDefinition, discoverAgents } from "./agents.js";
+import { createAgentsCapability, createAgentTool } from "./agent-tool.js";
 import { createRunBus } from "./bus.js";
 import { resolveDelegateSelection } from "./catalog.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
+import { createChildRunProjectionSource } from "./projections.js";
 import {
 	killAndVerifyTmuxSession,
 	reconcileOrphanedRuns,
 } from "./reconcile.js";
+import { createBuiltinAgentRegistries } from "./registry.js";
 import { DEFAULT_RETENTION, pruneRuns } from "./retention.js";
 import { createAgentRunner } from "./runners.js";
 import { createSemaphore } from "./semaphore.js";
@@ -55,7 +59,13 @@ import {
 	RUN_ID_ENV,
 } from "./supervisor.js";
 import { createTmuxAgentRunner } from "./tmux-runner.js";
-import { createSubagentTool } from "./tool.js";
+
+export {
+	createAgentsCapability,
+	createAgentTool,
+	type ExactAgentSelection,
+	type UnifiedAgentDeps,
+} from "./agent-tool.js";
 
 export {
 	type AgentDefinition,
@@ -85,12 +95,23 @@ export {
 	type ResolvedProfile,
 	resolveProfile,
 } from "./profiles.js";
+export { createChildRunProjectionSource } from "./projections.js";
 export {
 	killAndVerifyTmuxSession,
 	type ReconcileOptions,
 	type ReconcileResult,
 	reconcileOrphanedRuns,
 } from "./reconcile.js";
+export {
+	type AgentRegistries,
+	AgentRegistry,
+	type AgentRuntimeRegistries,
+	BUILTIN_AGENT_KINDS,
+	createBuiltinAgentRegistries,
+	DuplicateRegistryEntryError,
+	resolveRuntimePolicy,
+	validateKindRegistry,
+} from "./registry.js";
 export {
 	DEFAULT_RETENTION,
 	type PruneResult,
@@ -201,21 +222,6 @@ function resolveCliPath(): string | undefined {
 const DEFAULT_CONCURRENCY = 50;
 
 /**
- * Liveness watchdog for delegate spawns (the subagent tool): kill wedged
- * children fast, steer slow ones to wrap up, hard-cap unbounded runs. Same
- * defaults as the research watchdog.
- */
-const DELEGATE_WATCHDOG = {
-	stallMs: 120_000,
-	softMs: 240_000,
-	hardMs: 600_000,
-	wrapUpSteer:
-		"Time budget nearly exhausted. Stop and write your final deliverable " +
-		"NOW from what you already have; state explicitly what you did not " +
-		"get to.",
-} as const;
-
-/**
  * The childExtensions passthrough set (extensionConfig.modes.childExtensions,
  * toggled in /maestro). Vanished paths are dropped — a missing -e path would
  * kill every child at startup.
@@ -249,12 +255,18 @@ export default defineExtension(
 			cliPath: resolveCliPath(),
 		});
 		let service: SubagentService | undefined;
+		let projectionSource:
+			| ReturnType<typeof createChildRunProjectionSource>
+			| undefined;
+		let projectionSourceDispose: (() => void) | undefined;
+		const projectionListeners = new Set<
+			(listener: import("@vegardx/pi-contracts").ChildRunProjection) => void
+		>();
 		let ctx: ExtensionContext | undefined;
-		let agents: Record<string, AgentDefinition> = {};
+		let projectionCapabilityRegistered = false;
 
 		const rebuild = (next: ExtensionContext) => {
 			ctx = next;
-			agents = discoverAgents(`${next.cwd}/.pi/agents`);
 			const store = createRunStore(runsRoot(next.cwd));
 			persistRunBus(bus, store);
 			const tmuxRunner = createTmuxAgentRunner({
@@ -283,6 +295,39 @@ export default defineExtension(
 				// the explicit PI_MAESTRO_TRANSPORT=headless escape hatch only.
 				defaultTransport: resolveDefaultTransport(),
 			});
+			projectionSourceDispose?.();
+			projectionSource = createChildRunProjectionSource({
+				bus,
+				store,
+				service,
+			});
+			projectionSourceDispose = projectionSource.subscribe((projection) => {
+				for (const listener of projectionListeners) listener(projection);
+			});
+			if (!projectionCapabilityRegistered) {
+				projectionCapabilityRegistered = true;
+				maestro.capabilities.register(CAPABILITIES.childRunProjections, {
+					list: () => projectionSource?.list() ?? [],
+					subscribe: (listener) => {
+						projectionListeners.add(listener);
+						return () => projectionListeners.delete(listener);
+					},
+					steer: (runId, guidance) => projectionSource?.steer(runId, guidance),
+					interrupt: (runId, reason) => {
+						const source = projectionSource;
+						return source
+							? source.interrupt(runId, reason)
+							: Promise.resolve({
+									outcome: "disconnected" as const,
+									targetId: `run:${runId}`,
+								});
+					},
+					capture: (runId, lines) =>
+						projectionSource?.capture(runId, lines) ??
+						Promise.resolve(undefined),
+					stop: (runId, reason) => projectionSource?.stop(runId, reason),
+				});
+			}
 			// Reap cross-process orphans BEFORE retention: retention never prunes
 			// active records, so a run whose supervising process died would
 			// otherwise sit non-terminal (with a live tmux session) forever.
@@ -310,6 +355,8 @@ export default defineExtension(
 			if (!service) throw new Error("subagents: no active session");
 			return service;
 		};
+
+		const registries = createBuiltinAgentRegistries();
 
 		maestro.capabilities.register(CAPABILITIES.subagents, {
 			spawn: (prompt, profile) => requireService().spawn(prompt, profile),
@@ -355,22 +402,81 @@ export default defineExtension(
 			steer: (runId, guidance) => requireService().steer(runId, guidance),
 		});
 
-		// The main agent's delegate surface.
+		const agentsCapability = createAgentsCapability({
+			subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
+			registries,
+			resolveModel: async (kind, choice) => {
+				if (!ctx) throw new Error("Agent model policy is unavailable.");
+				const role: ModelRole = kind.modelRole;
+				const initial = await resolveExactModelSelection(ctx, {
+					role,
+				});
+				if (!initial.selected) {
+					const fallbackRole: ModelRole =
+						role === "worker" || role === "verifier"
+							? role
+							: role === "codebase-research" || role === "web-research"
+								? "research"
+								: role === "consult" || role === "plan-review"
+									? "advisor"
+									: role.endsWith("-review")
+										? "reviewer"
+										: "delegate";
+					const fallback = await resolveExactModelSelection(ctx, {
+						role: fallbackRole,
+					});
+					if (fallback.selected) return fallback.selected;
+					// Unconfigured installations still route through the established
+					// authenticated role pools. This fallback is exact and never silently
+					// substitutes an explicit request.
+					const legacy = await resolveDelegateSelection(ctx, choice);
+					return {
+						presetId: "legacy-role-pool",
+						modelSetId: role,
+						optionId: `${legacy.model}@${legacy.effort ?? "medium"}`,
+						modelId: legacy.model,
+						effort: legacy.effort ?? "medium",
+						source: choice.model || choice.effort ? "explicit" : "preset",
+					};
+				}
+				if (!choice.model && !choice.effort) return initial.selected;
+				const candidate = initial.candidates.find(
+					(fact) =>
+						fact.available &&
+						(!choice.model || fact.modelId === choice.model) &&
+						(!choice.effort || fact.effort === choice.effort),
+				);
+				if (!candidate?.modelId)
+					throw new Error(
+						`No exact ${kind.modelRole} option matches ${choice.model ?? "default model"} @ ${choice.effort ?? "default effort"}`,
+					);
+				const exact = await resolveExactModelSelection(ctx, {
+					role: kind.modelRole,
+					assignment: {
+						presetId: initial.presetId ?? "session",
+						modelSetId: initial.modelSetId ?? "session",
+						optionId: candidate.optionId,
+						modelId: candidate.modelId,
+						effort: candidate.effort,
+					},
+				});
+				if (!exact.selected)
+					throw new Error(
+						exact.errors.map((error) => error.message).join("; "),
+					);
+				return { ...exact.selected, source: "explicit" as const };
+			},
+			researchToolsPath: () =>
+				resolve(
+					dirname(fileURLToPath(import.meta.url)),
+					"../../research-tools/src/index.ts",
+				),
+		});
+		maestro.capabilities.register(CAPABILITIES.agents, agentsCapability);
+
+		// One model-facing spawn/control surface for every semantic agent kind.
 		pi.registerTool(
-			createSubagentTool({
-				capability: () => maestro.capabilities.get(CAPABILITIES.subagents),
-				agents: () => agents,
-				resolveDelegate: (choice) => {
-					if (!ctx) throw new Error("Delegate role policy is unavailable.");
-					return resolveDelegateSelection(ctx, choice);
-				},
-				researchToolsPath: () =>
-					resolve(
-						dirname(fileURLToPath(import.meta.url)),
-						"../../research-tools/src/index.ts",
-					),
-				watchdog: () => DELEGATE_WATCHDOG,
-			}),
+			createAgentTool(() => maestro.capabilities.get(CAPABILITIES.agents)),
 		);
 
 		// The child-side supervisor tool. Harmless in a top-level session (it

@@ -6,7 +6,10 @@ import {
 	MODES_STATE_ENTRY,
 	toPersistedState,
 } from "../packages/modes/src/session.js";
-import { readModesCompactionSettings } from "../packages/modes/src/settings.js";
+import {
+	readExecutionLifecycleSettings,
+	readModesCompactionSettings,
+} from "../packages/modes/src/settings.js";
 import {
 	initialModesState,
 	setExecution,
@@ -20,6 +23,14 @@ describe("modes compaction settings", () => {
 		const s = readModesCompactionSettings("/no/such/project");
 		expect(s.phaseTokens).toBe(10000);
 		expect(s.timeoutMs).toBe(90000);
+	});
+});
+
+describe("execution lifecycle settings", () => {
+	it("defaults stop grace to five seconds", () => {
+		expect(readExecutionLifecycleSettings("/no/such/project").stopGraceMs).toBe(
+			5000,
+		);
 	});
 });
 
@@ -51,11 +62,32 @@ describe("execution lifecycle state", () => {
 			{ stage: "stopping", deliverableId: "d1" },
 			now,
 		);
-		expect(setExecution(stopping, { stage: "stopped" }, now).execution).toEqual(
-			{
-				stage: "stopped",
-			},
+		const completedAt = 1_782_432_000_000;
+		const stop = {
+			kind: "interrupted" as const,
+			requestedAt: completedAt - 10,
+			completedAt,
+			reason: "session shutdown",
+			outcome: "accepted" as const,
+			recoverable: true,
+		};
+		const stopped = setExecution(
+			stopping,
+			{ stage: "stopped", completedAt, stop },
+			now,
 		);
+		expect(stopped.execution).toEqual({ stage: "stopped", completedAt, stop });
+		expect(() =>
+			setExecution(
+				stopped,
+				{
+					stage: "idle",
+					completedAt: completedAt + 1,
+					stop: { ...stop, completedAt: completedAt + 1 },
+				},
+				now,
+			),
+		).toThrow(/completion timestamp is immutable/);
 	});
 
 	it("rejects illegal execution stage jumps", () => {

@@ -139,11 +139,14 @@ export function handleSteerCommand(
 			selector,
 		);
 		if (guidance && resolution.ok && resolution.target.kind === "run") {
-			const run = subagents
-				?.list()
-				.find((candidate) => `run:${candidate.id}` === resolution.target.id);
+			const runId = resolution.target.id.slice("run:".length) as never;
+			const run = subagents?.list().find((candidate) => candidate.id === runId);
 			if (run) {
 				subagents?.steer(run.id, guidance);
+				ctx.ui.notify(`Steered ${resolution.target.id}.`, "info");
+				return;
+			}
+			if (execution.steerProjectedRun?.(runId, guidance)) {
 				ctx.ui.notify(`Steered ${resolution.target.id}.`, "info");
 				return;
 			}
@@ -242,12 +245,11 @@ export async function handleInterruptCommand(
 				`${target.id}: ${result?.outcome ?? "disconnected"} (session preserved)`,
 			);
 		} else {
-			const runId = target.id.slice("run:".length);
+			const runId = target.id.slice("run:".length) as never;
 			const run = subagents?.list().find((candidate) => candidate.id === runId);
-			const result =
-				run && subagents?.interrupt
-					? await subagents.interrupt(run.id, "user interrupt")
-					: undefined;
+			const result = run
+				? await subagents?.interrupt?.(run.id, "user interrupt")
+				: await execution?.interruptProjectedRun?.(runId, "user interrupt");
 			results.push(
 				`${target.id}: ${result?.outcome ?? "disconnected"} (run settles)`,
 			);

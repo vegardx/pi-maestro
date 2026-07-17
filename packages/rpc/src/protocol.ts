@@ -7,6 +7,8 @@
 import type {
 	AgentKind,
 	Answers,
+	ChildRunProjection,
+	InterruptOutcome,
 	Questionnaire,
 	ResolvedAgentAssignment,
 	StopRecord,
@@ -20,7 +22,7 @@ import type {
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const RPC_SCHEMA_VERSION = PROTOCOL_VERSION;
 
 export type AgentRole = "agent" | "delegate";
@@ -64,6 +66,53 @@ export interface StatusMessage {
 export interface TokensMessage {
 	readonly type: "tokens";
 	readonly snapshot: TokenSnapshot;
+}
+
+/**
+ * Retry-safe cumulative child state. `reconcile` replaces the owner's known
+ * set for this generation; ordinary updates only upsert newer revisions.
+ */
+export interface ChildRunSyncMessage {
+	readonly type: "childRunSync";
+	readonly id: string;
+	readonly ownerGeneration: number;
+	readonly reconcile: boolean;
+	readonly runs: readonly ChildRunProjection[];
+}
+
+export interface ChildRunSyncAckMessage {
+	readonly type: "childRunSyncAck";
+	readonly id: string;
+	readonly ownerGeneration: number;
+	readonly accepted: ReadonlyArray<{
+		readonly runId: string;
+		readonly revision: number;
+	}>;
+}
+
+export type ChildRunControlAction = "steer" | "interrupt" | "capture" | "stop";
+
+export interface ChildRunControlMessage {
+	readonly type: "childRunControl";
+	readonly id: string;
+	readonly ownerGeneration: number;
+	readonly runId: string;
+	readonly action: ChildRunControlAction;
+	readonly guidance?: string;
+	readonly reason?: string;
+	readonly lines?: number;
+}
+
+export interface ChildRunControlResultMessage {
+	readonly type: "childRunControlResult";
+	readonly id: string;
+	readonly ownerGeneration: number;
+	readonly runId: string;
+	readonly action: ChildRunControlAction;
+	readonly ok: boolean;
+	readonly outcome?: InterruptOutcome;
+	readonly content?: string;
+	readonly error?: string;
 }
 
 /** Agent requests current plan state from maestro. */
@@ -298,6 +347,8 @@ export type AgentMessage =
 	| HelloMessage
 	| StatusMessage
 	| TokensMessage
+	| ChildRunSyncMessage
+	| ChildRunControlResultMessage
 	| PlanReadMessage
 	| PlanMutateMessage
 	| PanelReadMessage
@@ -307,6 +358,7 @@ export type AgentMessage =
 	| DoneMessage
 	| SummaryMessage
 	| InterruptAckMessage
+	| PrepareStopAckMessage
 	| PongMessage;
 
 // ─── Maestro → Agent ─────────────────────────────────────────────────────────
@@ -354,6 +406,9 @@ export interface SteerMessage {
 	readonly content: string;
 }
 
+/** Maestro routes control to a child owned by this authenticated worker. */
+export type ChildRunControlRequestMessage = ChildRunControlMessage;
+
 /** Maestro returns answers to a prior QuestionsMessage. */
 export interface AnswersMessage {
 	readonly type: "answers";
@@ -397,6 +452,24 @@ export interface DebugResultMessage {
 	readonly error?: string;
 }
 
+export interface PrepareStopMessage {
+	readonly type: "prepareStop";
+	readonly id: string;
+	readonly requestedAt: number;
+	readonly deadlineAt: number;
+	readonly reason?: string;
+}
+
+/** Acknowledges only after the worker has persisted/flushed and requested shutdown. */
+export interface PrepareStopAckMessage {
+	readonly type: "prepareStopAck";
+	readonly id: string;
+	readonly completedAt: number;
+	readonly children: number;
+	readonly usageRevision: number;
+	readonly outcome: "cooperative";
+}
+
 export interface ShutdownMessage {
 	readonly type: "shutdown";
 	readonly reason?: string;
@@ -420,12 +493,15 @@ export type MaestroMessage =
 	| SummarizeMessage
 	| InterruptMessage
 	| SteerMessage
+	| ChildRunSyncAckMessage
+	| ChildRunControlRequestMessage
 	| AnswersMessage
 	| PlanReadResponseMessage
 	| PanelReadResponseMessage
 	| PlanMutateResultMessage
 	| DebugResultMessage
 	| DoneAckMessage
+	| PrepareStopMessage
 	| ShutdownMessage
 	| PingMessage
 	| ErrorMessage;
@@ -439,6 +515,8 @@ export type RpcMessage = AgentMessage | MaestroMessage;
 /** Maps each request type to its response type. */
 interface ResponseByRequestType {
 	readonly hello: HelloAckMessage;
+	readonly childRunSync: ChildRunSyncAckMessage;
+	readonly childRunControl: ChildRunControlResultMessage;
 	readonly planRead: PlanReadResponseMessage;
 	readonly panelRead: PanelReadResponseMessage;
 	readonly planMutate: PlanMutateResultMessage;
@@ -447,6 +525,7 @@ interface ResponseByRequestType {
 	readonly debugProposal: DebugResultMessage;
 	readonly summarize: SummaryMessage;
 	readonly interrupt: InterruptAckMessage;
+	readonly prepareStop: PrepareStopAckMessage;
 	readonly ping: PongMessage;
 }
 

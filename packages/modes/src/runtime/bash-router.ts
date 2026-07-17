@@ -72,7 +72,8 @@ export function registerBashRouter(rt: RuntimeContext): void {
 				return await execute(decision);
 			} catch (error) {
 				if (!(error instanceof IsolationUnavailableError)) throw error;
-				const action = await isolationFailureAction(
+				const action = await isolationFailureActionForActor(
+					actor,
 					error.tier,
 					error.message,
 					policy.fallback,
@@ -80,7 +81,7 @@ export function registerBashRouter(rt: RuntimeContext): void {
 				);
 				if (action === "cancel") throw error;
 				if (action === "hack") {
-					rt.setMode("hack", ctx);
+					if (!(await rt.requestMode("hack", ctx))) throw error;
 					return execute({ ...decision, route: "direct" });
 				}
 				if (action === "lightweight")
@@ -93,6 +94,41 @@ export function registerBashRouter(rt: RuntimeContext): void {
 	rt.pi.registerTool(routed);
 }
 
+export class BashRoutingError extends Error {
+	readonly code: "approval-required" | "isolation-unavailable";
+	readonly actor: BashActor;
+	readonly retryGuidance: string;
+
+	constructor(options: {
+		readonly code: "approval-required" | "isolation-unavailable";
+		readonly actor: BashActor;
+		readonly message: string;
+		readonly retryGuidance: string;
+	}) {
+		super(options.message);
+		this.name = "BashRoutingError";
+		this.code = options.code;
+		this.actor = options.actor;
+		this.retryGuidance = options.retryGuidance;
+	}
+}
+
+const WORKER_RETRY_GUIDANCE =
+	"Retry with dedicated safe primitives (read/grep/find/edit), or report the blocked command to Maestro for host-side approval.";
+
+export function nonInteractiveIsolationError(
+	actor: Exclude<BashActor, "maestro">,
+	tier: IsolationBackendTier,
+	detail: string,
+): BashRoutingError {
+	return new BashRoutingError({
+		code: "isolation-unavailable",
+		actor,
+		message: `${tier} isolation is unavailable for ${actor}; interactive approval is disabled inside agents. ${detail}`,
+		retryGuidance: WORKER_RETRY_GUIDANCE,
+	});
+}
+
 export async function authorizeBashDecision(
 	decision: BashPolicyDecision,
 	ctx: Pick<ExtensionContext, "ui">,
@@ -100,6 +136,14 @@ export async function authorizeBashDecision(
 ): Promise<void> {
 	if (decision.route === "deny") throw new Error(decision.reason);
 	if (decision.route !== "confirm") return;
+	if (decision.actor !== "maestro") {
+		throw new BashRoutingError({
+			code: "approval-required",
+			actor: decision.actor,
+			message: `Bash approval is required by policy, but interactive approval is disabled for ${decision.actor}.`,
+			retryGuidance: WORKER_RETRY_GUIDANCE,
+		});
+	}
 	const title =
 		decision.mode === "recon" || decision.mode === "plan"
 			? "Run without research isolation?"
@@ -117,6 +161,19 @@ export type IsolationFailureAction =
 	| "direct-once"
 	| "none-session"
 	| "hack";
+
+export async function isolationFailureActionForActor(
+	actor: BashActor,
+	tier: IsolationBackendTier,
+	detail: string,
+	fallback: "fail-closed" | "confirm",
+	ctx: Pick<ExtensionContext, "ui">,
+): Promise<IsolationFailureAction> {
+	if (actor !== "maestro") {
+		throw nonInteractiveIsolationError(actor, tier, detail);
+	}
+	return isolationFailureAction(tier, detail, fallback, ctx);
+}
 
 export async function isolationFailureAction(
 	tier: IsolationBackendTier,

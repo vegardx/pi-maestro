@@ -286,7 +286,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			}
 		}
 		// Agent-side RPC bridge: connect to maestro if running as agent
-		rt.agentBridge = initAgentBridge(pi);
+		rt.agentBridge = initAgentBridge(pi, maestro);
 		if (rt.agentBridge) {
 			const bridge = rt.agentBridge;
 			bridge.start(ctx);
@@ -337,6 +337,42 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			await rt.workerPanes.close();
 		}
 		if (rt.execution) {
+			const requestedAt = Date.now();
+			rt.setExecutionStage(
+				{
+					stage: "stopping",
+					deliverableId: rt.state.execution.deliverableId,
+				},
+				ctx,
+			);
+			const result = await rt.execution.prepareStop?.("host session shutdown");
+			if (result) {
+				rt.setExecutionStage(
+					{
+						stage: "stopped",
+						completedAt: result.stop.completedAt,
+						stop: result.stop,
+					},
+					ctx,
+				);
+			} else {
+				const completedAt = Date.now();
+				rt.setExecutionStage(
+					{
+						stage: "stopped",
+						completedAt,
+						stop: {
+							kind: "interrupted",
+							requestedAt,
+							completedAt,
+							reason: "host session shutdown",
+							outcome: "accepted",
+							recoverable: true,
+						},
+					},
+					ctx,
+				);
+			}
 			await rt.execution.destroy();
 			rt.execution = undefined;
 		}

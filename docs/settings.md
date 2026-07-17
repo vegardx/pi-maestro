@@ -1,42 +1,76 @@
 # Maestro settings
 
-`/maestro` provides first-class **Execution policy** and **Worker worktrees** screens. Only settings consumed by the current runtime are exposed. Every setting follows the same precedence: session, project, global, then the declared default. Higher-scope arrays replace lower arrays rather than merging.
+`/maestro` combines exact agent-domain configuration with extension-declared scalar settings. Interactive and scripted surfaces read the same normalized values and write through atomic file replacement.
+
+## Scopes
+
+Precedence is **session → project → global → declared default**.
+
+- Session overrides are process-local and reset at `session_start`/`session_shutdown`.
+- Project values live in `.pi/settings.json`.
+- Global values live in the pi agent settings file.
+- Arrays replace lower-scope arrays; they do not merge.
+
+Scripted commands default to session scope:
+
+```text
+/maestro show
+/maestro get modes.execution.isolation
+/maestro set --project modes.execution.preset strict
+/maestro reset --project modes.execution.isolation
+/maestro explain correctness-review
+/maestro validate
+```
+
+## Agent-domain configuration
+
+The current `/model` activates an exact preset. Configure:
+
+- `models.modelSets.<id>` — ordered exact model/effort options;
+- `models.presets.<id>.targets` — exact `/model` ids, unique across presets;
+- `models.presets.<id>.modelSets` — model-role → set id;
+- `agents.kinds.<kind>.modelSet|option|runtimePolicy` — optional kind binding;
+- `agents.runtimePolicies.<id>` — permission/session/transport composition;
+- `transitionGates.<id>` — exact edges, agent kind, output contract, enabled flag.
+
+Domain writes require valid JSON and validate references before persistence. Unsafe runtime combinations, unknown model sets/options/contracts, overlapping targets, and invalid transition edges fail closed. See [Models and exact presets](models.md).
 
 ## Execution policy
 
-The default **Guided** preset uses mode-aware tool guidance, Lightweight isolation, confirmation for consequential actions, dedicated delivery tools, broad apparent GitHub reads, isolated unknown commands, and fail-closed fallback. **Strict** protects Recon/Plan with Strong isolation and confirms more mutations. **Permissive** reduces advisory friction. Setting any individual policy row makes the presentation **Custom** while retaining the preset for unspecified rows.
+The Execution policy screen exposes:
 
-Isolation choices describe outcomes:
+- preset: Guided, Strict, or Permissive;
+- mode-aware tool guidance and mode routes;
+- Lightweight, Strong, or None isolation;
+- dedicated delivery actions;
+- consequential-action confirmation;
+- privileged remote and GitHub-read behavior;
+- unknown-command routing;
+- unavailable-isolation fallback; and
+- the fleet-wide cooperative stop grace (`modes.execution.stopGraceMs`, default 5000 ms).
 
-- **Lightweight**: native process-policy isolation when a backend is installed.
-- **Strong**: a VM/container route when a backend is installed.
-- **None**: no isolation boundary; Hack remains the explicit direct-execution mode.
+Setting an individual row makes the effective presentation Custom while preserving preset defaults for unspecified rows. Invalid persisted choices never broaden access.
 
-Invalid persisted choices never broaden policy; readers use the selected preset's validated default instead.
+Isolation outcome:
 
-## Worker worktrees
+- **Lightweight** uses an installed process-policy backend and private research workspace.
+- **Strong** uses the installed VM/container backend.
+- **None** has no sandbox boundary; Hack remains the explicit direct posture.
 
-The Worker worktrees screen exposes the currently implemented provisioning controls: post-setup and explicit copy/link paths.
+A protected Bash route never silently falls back. For the maestro, a configured `confirm` fallback can present a downgrade decision. Workers/reviewers are non-interactive: backend or approval failure returns a bounded `BashRoutingError` with retry guidance and never calls `ui.select` or `ui.confirm`.
 
-Existing keys remain compatible:
+## Worktrees and lifecycle
 
-- `maestro.worktree.copy` — exact ignored paths copied into a worker checkout.
-- `maestro.worktree.setup` — executable and arguments run after provisioning (not shell syntax).
-- `maestro.worktree.link` — explicit shared paths; links create shared mutable state.
+`maestro.worktree.*` controls provisioning:
 
-Defaults do not copy all ignored files or implicitly link dependency trees.
+- `copy` — exact ignored relative paths copied into a worker checkout;
+- `link` — explicit shared paths (shared mutable state);
+- `setup` — executable plus arguments after provisioning, not shell syntax.
 
-## Scripting
+No setting implicitly copies every ignored file or links dependency directories.
 
-The same values are available to `get`, `set`, `reset`, and `show`:
+Other scalar groups include distill thresholds, compaction timeout, and research stall/soft/hard watchdog deadlines. Use `/maestro show` and the interactive group list for current declarations.
 
-```text
-/maestro get modes.execution.isolation
-/maestro set --project modes.execution.preset strict
-/maestro set --project maestro.worktree.copy [".env.local","fixtures/cache"]
-/maestro reset --project modes.execution.isolation
-```
+## Cutover
 
-Choice values are completed from declarations. String lists round-trip as JSON arrays and display as ordered values.
-
-Until a selected isolation backend is available, protected Bash routes fail closed with an actionable diagnostic; they never silently execute on the host.
+Only current keys are accepted. `models.profiles`, broad role configuration, and removed runtime review configuration are not migrated. Archive the old settings file, remove unsupported keys, and author exact model sets/presets. Plan/run/session schemas likewise require explicit archive or reset; see [Reset and archive](commands.md#reset-and-archive).

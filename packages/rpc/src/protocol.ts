@@ -23,7 +23,7 @@ export type { TokenSnapshot } from "@vegardx/pi-contracts";
 export const PROTOCOL_VERSION = 6;
 export const RPC_SCHEMA_VERSION = PROTOCOL_VERSION;
 
-export type AgentRole = "agent" | "delegate";
+export type AgentRole = "agent";
 
 export type RpcErrorCode =
 	| "unsupported"

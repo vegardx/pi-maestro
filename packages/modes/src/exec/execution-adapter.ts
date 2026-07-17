@@ -1920,8 +1920,8 @@ export class ExecutionAdapter {
 		const state = this.executor.getAgentState(deliverableId, agentNamePart);
 		if (state && (state.status === "summarizing" || state.status === "done"))
 			return;
-		// Tasks done is not enough: the required review panel must have
-		// reported (and no round may be in flight) before the worker is killed.
+		// Tasks done is not enough: required workflow reviews must have
+		// reported before the worker is killed.
 		if (!this.workerMayComplete(agentId, deliverableId)) return;
 		this.completeAgent(deliverableId, agentNamePart);
 	}

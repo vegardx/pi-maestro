@@ -29,23 +29,14 @@ export function formatSessionUsage(ledger: UsageLedger): string | null {
 }
 
 /**
- * Average cache hit rate across all sources with traffic.
- * Per-source rate: cacheRead / (input + cacheRead), then averaged.
+ * Token-weighted fleet cache hit rate: ΣcacheRead / ΣpromptTokens.
+ * Cache writes are prompt misses and therefore remain in the denominator.
  * Format: "CH 78%"
  */
 export function formatCacheHitRate(ledger: UsageLedger): string | null {
-	const { bySource } = ledger.snapshot();
-	let sum = 0;
-	let count = 0;
-	for (const snap of bySource.values()) {
-		const denominator = snap.input + snap.cacheRead;
-		if (denominator === 0) continue;
-		sum += snap.cacheRead / denominator;
-		count++;
-	}
-	if (count === 0) return null;
-	const avg = Math.round((sum / count) * 100);
-	return `CH ${avg}%`;
+	const { totals } = ledger.snapshot();
+	if (totals.promptTokens === 0) return null;
+	return `CH ${Math.round((totals.cacheRead / totals.promptTokens) * 100)}%`;
 }
 
 /**

@@ -168,7 +168,7 @@ describe("formatCacheHitRate", () => {
 		expect(formatCacheHitRate(ledger)).toBe("CH 80%");
 	});
 
-	it("averages across multiple sources", () => {
+	it("uses a token-weighted fleet rate across differently sized sources", () => {
 		const ledger = new UsageLedger();
 		// Source 1: 50% cache hit
 		ledger.record(
@@ -196,11 +196,28 @@ describe("formatCacheHitRate", () => {
 				turns: 1,
 			},
 		);
-		// Average: (0.5 + 0.8) / 2 = 0.65 → 65%
+		// Weighted: (10000 + 16000) / (20000 + 20000) = 65%.
 		expect(formatCacheHitRate(ledger)).toBe("CH 65%");
 	});
 
-	it("skips sources with zero denominator in average", () => {
+	it("counts cache writes as prompt misses", () => {
+		const ledger = new UsageLedger();
+		ledger.record(
+			{ kind: "maestro" },
+			{
+				input: 10,
+				output: 0,
+				cacheRead: 80,
+				cacheWrite: 10,
+				totalTokens: 1,
+				cost: 0,
+				turns: 1,
+			},
+		);
+		expect(formatCacheHitRate(ledger)).toBe("CH 80%");
+	});
+
+	it("ignores output-only sources in the prompt denominator", () => {
 		const ledger = new UsageLedger();
 		// Source 1: has input, 75% cache hit
 		ledger.record(
@@ -228,7 +245,7 @@ describe("formatCacheHitRate", () => {
 				turns: 1,
 			},
 		);
-		// Only source 1 counts: 15000 / (5000 + 15000) = 0.75 → 75%
+		// Output-only source does not change 15000 / 20000 = 75%.
 		expect(formatCacheHitRate(ledger)).toBe("CH 75%");
 	});
 });

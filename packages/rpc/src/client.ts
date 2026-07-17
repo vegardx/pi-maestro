@@ -177,6 +177,17 @@ function defaultAssignment(agentId: string): HelloMessage["assignment"] {
 			session: "persistent",
 			isolation: "host",
 		},
+		focus: "Execute the assigned deliverable.",
+		rationale: "RPC compatibility assignment.",
+		inputContracts: [],
+		outputContracts: [],
+		provenance: {
+			source: "session",
+			presetId: "worker",
+			modelSetId: "session",
+			optionId: "session",
+			resolvedAt: new Date().toISOString(),
+		},
 		resolvedAt: new Date().toISOString(),
 		source: "session",
 	};

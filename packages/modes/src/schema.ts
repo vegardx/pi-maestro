@@ -13,10 +13,11 @@ import {
 	type DeliverableStatus,
 	type DeliveryFailure,
 	PLAN_SCHEMA_VERSION,
+	type ResolvedAgentAssignment,
 	type StructuredFinding,
 	type ThinkingLevel,
 	type TransitionGate,
-	type ModeTransitionGate,
+	validateResolvedAgentAssignment,
 	validateStructuredFinding,
 	validateTransitionGate,
 	WORK_ITEM_KINDS,
@@ -30,6 +31,7 @@ export {
 	type DeliverableStatus,
 	type DeliveryFailure,
 	PLAN_SCHEMA_VERSION,
+	type ResolvedAgentAssignment,
 	type StructuredFinding,
 	type ThinkingLevel,
 	type TransitionGate,
@@ -60,7 +62,28 @@ export function effectiveWorkItemKind(
 	return item.kind ?? "task";
 }
 
-// ─── Agent specification ─────────────────────────────────────────────────────
+// ─── Resolved assignment workflow ───────────────────────────────────────────
+
+/** A stage runs every member concurrently against this one immutable revision. */
+export interface WorkflowStageSpec {
+	/** Stable plan-scoped stage id. */
+	id: string;
+	/** Stage ids that must satisfy their barrier before this stage starts. */
+	after: string[];
+	/** Every assignment appears in exactly one stage and runs once. */
+	assignmentIds: string[];
+	/** Immutable SHA/revision/digest shared by every member of this stage. */
+	inputRevision: string;
+	/** Contracts made available to every member at inputRevision. */
+	inputContracts: string[];
+	/** A worker barrier waits for worker assignments; all waits for every member. */
+	barrier: "all" | "workers";
+}
+
+export interface AgentWorkflow {
+	assignments: ResolvedAgentAssignment[];
+	stages: WorkflowStageSpec[];
+}
 
 export interface AgentSpec {
 	/** Unique name within the deliverable (also used in `after` references). */
@@ -290,6 +313,8 @@ export interface Plan {
 	understanding?: string;
 	/** Extra repos beyond the default; absent ⇒ single-repo plan. */
 	repos?: PlanRepo[];
+	/** Fully resolved immutable assignments and their explicit stage DAG. */
+	workflow?: AgentWorkflow;
 	/** All work deliverables in the plan. Flat list — graph structure via dependsOn. */
 	deliverables: Deliverable[];
 	/** GitHub plan-tracking issue (parent of deliverable issues) after park. */
@@ -713,11 +738,141 @@ export function boundedPreviousSessionPaths(
 
 // ─── Validation ──────────────────────────────────────────────────────────────
 
+export function validateWorkflowGraph(workflow: AgentWorkflow): string[] {
+	const problems: string[] = [];
+	const idPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+	const assignments = new Map<string, ResolvedAgentAssignment>();
+	for (const assignment of workflow.assignments) {
+		if (!idPattern.test(assignment.agentId))
+			problems.push(
+				`workflow assignment id \`${assignment.agentId}\` is invalid`,
+			);
+		if (assignments.has(assignment.agentId))
+			problems.push(
+				`duplicate workflow assignment id \`${assignment.agentId}\``,
+			);
+		assignments.set(assignment.agentId, assignment);
+		for (const problem of validateResolvedAgentAssignment(assignment))
+			problems.push(
+				`workflow assignment \`${assignment.agentId}\`: ${problem}`,
+			);
+	}
+
+	const stages = new Map<string, WorkflowStageSpec>();
+	for (const stage of workflow.stages) {
+		if (!idPattern.test(stage.id))
+			problems.push(`workflow stage id \`${stage.id}\` is invalid`);
+		if (stages.has(stage.id))
+			problems.push(`duplicate workflow stage id \`${stage.id}\``);
+		stages.set(stage.id, stage);
+		if (!stage.inputRevision.trim())
+			problems.push(`workflow stage \`${stage.id}\` inputRevision is empty`);
+		if (stage.assignmentIds.length === 0)
+			problems.push(`workflow stage \`${stage.id}\` has no assignments`);
+		if (new Set(stage.assignmentIds).size !== stage.assignmentIds.length)
+			problems.push(`workflow stage \`${stage.id}\` repeats an assignment`);
+		if (new Set(stage.after).size !== stage.after.length)
+			problems.push(
+				`workflow stage \`${stage.id}\` repeats an after dependency`,
+			);
+		if (new Set(stage.inputContracts).size !== stage.inputContracts.length)
+			problems.push(`workflow stage \`${stage.id}\` repeats an input contract`);
+	}
+
+	const membership = new Map<string, string>();
+	for (const stage of workflow.stages) {
+		for (const assignmentId of stage.assignmentIds) {
+			if (!assignments.has(assignmentId))
+				problems.push(
+					`workflow stage \`${stage.id}\` references unknown assignment \`${assignmentId}\``,
+				);
+			const previous = membership.get(assignmentId);
+			if (previous)
+				problems.push(
+					`workflow assignment \`${assignmentId}\` appears in stages \`${previous}\` and \`${stage.id}\``,
+				);
+			else membership.set(assignmentId, stage.id);
+			const assignment = assignments.get(assignmentId);
+			if (assignment) {
+				for (const contract of assignment.inputContracts) {
+					if (!stage.inputContracts.includes(contract))
+						problems.push(
+							`workflow stage \`${stage.id}\` does not provide contract \`${contract}\` required by \`${assignmentId}\``,
+						);
+				}
+			}
+		}
+		if (
+			stage.barrier === "workers" &&
+			!stage.assignmentIds.some((id) => assignments.get(id)?.kind === "worker")
+		)
+			problems.push(
+				`workflow stage \`${stage.id}\` has a worker barrier but no worker assignment`,
+			);
+		for (const dependency of stage.after) {
+			if (!stages.has(dependency))
+				problems.push(
+					`workflow stage \`${stage.id}\` after references unknown stage \`${dependency}\``,
+				);
+		}
+	}
+	for (const assignmentId of assignments.keys()) {
+		if (!membership.has(assignmentId))
+			problems.push(
+				`workflow assignment \`${assignmentId}\` is not in a stage`,
+			);
+	}
+
+	const ancestors = (
+		stageId: string,
+		visiting = new Set<string>(),
+	): Set<string> => {
+		if (visiting.has(stageId)) {
+			problems.push(`workflow stage dependency cycle includes \`${stageId}\``);
+			return new Set();
+		}
+		visiting.add(stageId);
+		const result = new Set<string>();
+		for (const dependency of stages.get(stageId)?.after ?? []) {
+			if (!stages.has(dependency)) continue;
+			result.add(dependency);
+			for (const ancestor of ancestors(dependency, new Set(visiting)))
+				result.add(ancestor);
+		}
+		return result;
+	};
+	for (const stage of workflow.stages) {
+		const available = new Set<string>();
+		for (const ancestorId of ancestors(stage.id)) {
+			const ancestor = stages.get(ancestorId);
+			for (const contract of ancestor?.inputContracts ?? [])
+				available.add(contract);
+			for (const assignmentId of ancestor?.assignmentIds ?? []) {
+				for (const contract of assignments.get(assignmentId)?.outputContracts ??
+					[])
+					available.add(contract);
+			}
+		}
+		if (stage.after.length > 0) {
+			for (const contract of stage.inputContracts) {
+				if (!available.has(contract))
+					problems.push(
+						`workflow stage \`${stage.id}\` input contract \`${contract}\` is not produced by an ancestor`,
+					);
+			}
+		}
+	}
+	return [...new Set(problems)];
+}
+
 /** Structural invariants enforced before saving. Empty array = valid. */
 export function validatePlanShape(
-	plan: Pick<Plan, "schemaVersion" | "deliverables" | "repos">,
+	plan: Pick<Plan, "schemaVersion" | "deliverables" | "repos" | "workflow">,
 ): string[] {
 	const problems: string[] = [];
+	if ("workflow" in plan && plan.workflow) {
+		problems.push(...validateWorkflowGraph(plan.workflow));
+	}
 	if (plan.schemaVersion !== PLAN_SCHEMA_VERSION) {
 		problems.push(`schemaVersion must be ${PLAN_SCHEMA_VERSION}`);
 	}

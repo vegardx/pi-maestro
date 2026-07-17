@@ -9,6 +9,7 @@ import type { ReviewLedger } from "./exec/findings.js";
 import {
 	type AgentMode,
 	type AgentSpec,
+	type AgentWorkflow,
 	boundedPreviousSessionPaths,
 	canTransition,
 	DEFAULT_REPO_KEY,
@@ -28,6 +29,7 @@ import {
 	validatePlanShape,
 	type WorkerRestartMode,
 	type WorkerRestartState,
+	type WorkflowStageSpec,
 	type WorkItem,
 	type WorkItemKind,
 } from "./schema.js";
@@ -293,6 +295,37 @@ export class PlanEngine {
 				throw new Error(`unknown repo: ${key}`);
 			}
 			plan.repos = (plan.repos ?? []).filter((r) => r.key !== key);
+		});
+	}
+
+	// ── Resolved workflow ──────────────────────────────────────────────────
+
+	/** Replace the whole workflow in one validated, atomic plan mutation. */
+	setWorkflow(workflow: AgentWorkflow): void {
+		this.mutate((plan) => {
+			plan.workflow = structuredClone(workflow);
+		});
+	}
+
+	updateWorkflowStage(
+		id: string,
+		patch: Partial<
+			Pick<
+				WorkflowStageSpec,
+				| "after"
+				| "assignmentIds"
+				| "inputRevision"
+				| "inputContracts"
+				| "barrier"
+			>
+		>,
+	): void {
+		this.mutate((plan) => {
+			const workflow = plan.workflow;
+			if (!workflow) throw new Error("workflow is not configured");
+			const stage = workflow.stages.find((candidate) => candidate.id === id);
+			if (!stage) throw new Error(`unknown workflow stage: ${id}`);
+			assignDefined(stage, patch);
 		});
 	}
 

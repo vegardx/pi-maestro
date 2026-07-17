@@ -194,6 +194,40 @@ describe("unified agent capability and tool", () => {
 		expect(await capability.result(id("run-1"))).toEqual(terminal);
 	});
 
+	it("resolves planning assignments without spawning and exposes exact options", async () => {
+		const { capability, profiles } = setup();
+		const options = await capability.options("correctness-review");
+		expect(options.kind.sequencing.mode).toBe("parallel");
+		const resolved = await capability.resolve({
+			agentId: "review-correctness",
+			kind: "correctness-review",
+			focus: "Review correctness",
+			rationale: "Independent correctness gate",
+			inputContracts: ["implementation"],
+			outputContracts: ["structured-review"],
+			model: "provider/model",
+			effort: "high",
+		});
+		expect(profiles).toHaveLength(0);
+		expect(resolved).toMatchObject({
+			agentId: "review-correctness",
+			modelId: "provider/model",
+			focus: "Review correctness",
+			outputContracts: ["structured-review"],
+			provenance: { source: "explicit" },
+		});
+		await expect(
+			capability.resolve({
+				agentId: "bad",
+				kind: "correctness-review",
+				focus: "bad",
+				rationale: "bad",
+				inputContracts: [],
+				outputContracts: ["unknown-contract"],
+			}),
+		).rejects.toThrow(/does not publish/);
+	});
+
 	it("offers one model-facing tool for run/batch/list/status/control/output", async () => {
 		const { capability } = setup();
 		const tool = executable(createAgentTool(() => capability));

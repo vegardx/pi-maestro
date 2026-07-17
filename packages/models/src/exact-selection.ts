@@ -335,6 +335,10 @@ export interface AssignmentSelectionOptions extends ExactSelectionOptions {
 	readonly agentId: string;
 	readonly kind: AgentKind;
 	readonly runtime: AgentRuntimePolicy;
+	readonly focus: string;
+	readonly rationale: string;
+	readonly inputContracts: readonly string[];
+	readonly outputContracts: readonly string[];
 	readonly now?: () => Date;
 }
 
@@ -356,6 +360,7 @@ export async function resolveAgentAssignment(
 	if (!resolution.selected)
 		return { assignment: null, errors: resolution.errors };
 	const selected = resolution.selected;
+	const resolvedAt = (opts.now?.() ?? new Date()).toISOString();
 	return {
 		assignment: {
 			agentId: opts.agentId,
@@ -366,7 +371,18 @@ export async function resolveAgentAssignment(
 			modelId: selected.modelId,
 			effort: selected.effort,
 			runtime: opts.runtime,
-			resolvedAt: (opts.now?.() ?? new Date()).toISOString(),
+			focus: opts.focus,
+			rationale: opts.rationale,
+			inputContracts: opts.inputContracts,
+			outputContracts: opts.outputContracts,
+			provenance: {
+				source: selected.source,
+				presetId: selected.presetId,
+				modelSetId: selected.modelSetId,
+				optionId: selected.optionId,
+				resolvedAt,
+			},
+			resolvedAt,
 			source: selected.source,
 		},
 		selection: selected,

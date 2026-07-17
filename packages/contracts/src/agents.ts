@@ -5,7 +5,7 @@
 // duplicating prompts or routing guidance.
 
 import type { RunId } from "./ids.js";
-import type { ModelRole } from "./models.js";
+import type { ExactModelCandidateFact, ModelRole } from "./models.js";
 import type {
 	RunHandle,
 	RunProcessMetadata,
@@ -136,8 +136,18 @@ export interface AgentModelPreset {
 	readonly defaultEffort?: ThinkingLevel;
 }
 
+/** Immutable explanation of how an exact assignment was selected. */
+export interface AgentAssignmentProvenance {
+	readonly source: "preset" | "explicit" | "session";
+	readonly presetId: string;
+	readonly modelSetId: string;
+	readonly optionId: string;
+	readonly resolvedAt: string;
+}
+
 /** Concrete, validated assignment persisted before an agent can start. */
 export interface ResolvedAgentAssignment {
+	/** Stable plan-scoped identity. It must not be regenerated when execution resumes. */
 	readonly agentId: string;
 	readonly kind: AgentKind;
 	readonly presetId: string;
@@ -146,8 +156,34 @@ export interface ResolvedAgentAssignment {
 	readonly modelId: string;
 	readonly effort?: ThinkingLevel;
 	readonly runtime: AgentRuntimePolicy;
+	/** Specific work this assignment performs. */
+	readonly focus: string;
+	/** Why this kind/model belongs in the workflow. */
+	readonly rationale: string;
+	/** Contracts consumed from the immutable stage input. */
+	readonly inputContracts: readonly string[];
+	/** Contracts published after the assignment completes. */
+	readonly outputContracts: readonly string[];
+	readonly provenance: AgentAssignmentProvenance;
 	readonly resolvedAt: string;
 	readonly source: "preset" | "explicit" | "session";
+}
+
+/** Planning request: resolves policy and an exact model without starting a run. */
+export interface AgentAssignmentRequest {
+	readonly agentId: string;
+	readonly kind: AgentKind;
+	readonly focus: string;
+	readonly rationale: string;
+	readonly inputContracts: readonly string[];
+	readonly outputContracts?: readonly string[];
+	readonly model?: string;
+	readonly effort?: ThinkingLevel;
+}
+
+export interface AgentPlanningOptions {
+	readonly kind: AgentKindDefinition;
+	readonly candidates: readonly ExactModelCandidateFact[];
 }
 
 /** Request accepted by agents.v1. Defaults still resolve to an exact pair. */
@@ -211,6 +247,10 @@ export interface ChildRunProjectionSourceV1 {
 
 /** Unified programmatic API. Model-facing tooling is a projection of this. */
 export interface AgentsCapabilityV1 {
+	/** Resolve one persistable assignment without spawning it. */
+	resolve(request: AgentAssignmentRequest): Promise<ResolvedAgentAssignment>;
+	/** Inspect authored exact choices and availability for a semantic kind. */
+	options(kind: AgentKind): Promise<AgentPlanningOptions>;
 	run(request: AgentRunRequest): Promise<AgentRun>;
 	batch(requests: readonly AgentRunRequest[]): Promise<readonly AgentRun[]>;
 	list(): readonly RunRecord[];
@@ -238,6 +278,37 @@ export function validateResolvedAgentAssignment(value: unknown): string[] {
 	if (!AGENT_KINDS.includes(value.kind as AgentKind))
 		errors.push("assignment.kind is unsupported");
 	if (!isRecord(value.runtime)) errors.push("assignment.runtime is required");
+	for (const key of ["focus", "rationale"] as const) {
+		if (!nonEmpty(value[key]))
+			errors.push(`assignment.${key} must be non-empty`);
+	}
+	for (const key of ["inputContracts", "outputContracts"] as const) {
+		if (!Array.isArray(value[key])) {
+			errors.push(`assignment.${key} must be an array`);
+			continue;
+		}
+		const contracts = value[key] as unknown[];
+		if (contracts.some((contract) => !nonEmpty(contract)))
+			errors.push(`assignment.${key} must contain non-empty contract ids`);
+		if (new Set(contracts).size !== contracts.length)
+			errors.push(`assignment.${key} must not contain duplicates`);
+	}
+	if (!isRecord(value.provenance)) {
+		errors.push("assignment.provenance is required");
+	} else {
+		for (const key of [
+			"presetId",
+			"modelSetId",
+			"optionId",
+			"resolvedAt",
+			"source",
+		] as const) {
+			if (value.provenance[key] !== value[key])
+				errors.push(
+					`assignment.provenance.${key} must match assignment.${key}`,
+				);
+		}
+	}
 	if (value.effort !== undefined && !nonEmpty(value.effort))
 		errors.push("assignment.effort must be non-empty when present");
 	if (

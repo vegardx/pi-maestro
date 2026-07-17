@@ -251,6 +251,10 @@ describe("exact model-set selection", () => {
 					session: "persistent",
 					isolation: "strong",
 				},
+				focus: "Implement the delivery.",
+				rationale: "Primary delivery worker.",
+				inputContracts: [],
+				outputContracts: ["bounded-report"],
 				now: () => new Date("2026-01-01T00:00:00.000Z"),
 			},
 		);

@@ -78,6 +78,7 @@ export interface ModesRuntime {
 	currentMode(): ModeName;
 	currentEngine(): PlanEngine | undefined;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
+	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
 	openPlan(titleOrSlug: string | undefined, ctx: ExtensionContext): PlanEngine;
 	cycle(ctx: ExtensionContext): Promise<void>;
 }
@@ -403,6 +404,7 @@ export function createModesRuntime(
 		currentMode: rt.currentMode,
 		currentEngine: rt.currentEngine,
 		setMode: rt.setMode,
+		requestMode: rt.requestMode,
 		openPlan: rt.openPlan,
 		cycle: rt.cycle,
 	};

@@ -38,7 +38,6 @@ import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
 import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
-import { panelTopologyGaps } from "../personas.js";
 import { computeActiveTools } from "../policy.js";
 import type { ResearchRunView } from "../research.js";
 import {
@@ -78,6 +77,10 @@ import {
 	UsageLedger,
 } from "../usage-ledger.js";
 import { WorkerPanes } from "../worker-panes.js";
+import {
+	createDefaultTransitionGates,
+	TransitionGateCoordinator,
+} from "../transition-gates.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
@@ -164,6 +167,8 @@ export interface RuntimeContext {
 	persist(): void;
 	notifyMode(ctx: ExtensionContext): void;
 	applyTools(): void;
+	/** All requested mode changes; Plan→Auto/Hack settle through transition gates. */
+	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
 	loadEngine(slug: string): PlanEngine | undefined;
@@ -249,8 +254,47 @@ export function createRuntimeContext(
 	const usageLedger = new UsageLedger();
 	let maestroUsage: TokenSnapshot | undefined;
 	let baselineTools: string[] | undefined;
+	let rt: RuntimeContext;
 
-	const rt: RuntimeContext = {
+	function commitMode(mode: ModeName, ctx?: ExtensionContext): void {
+		// Auto/Hack are an authorization boundary: invalidate the private
+		// research epoch synchronously and finish cleanup in the background.
+		if (
+			(mode === "auto" || mode === "hack") &&
+			(rt.state.mode === "recon" || rt.state.mode === "plan")
+		) {
+			void Promise.allSettled([
+				lightweightIsolation.destroy(),
+				strongIsolation.destroy(),
+			]);
+		}
+		if ((mode === "plan" || mode === "recon") && !rt.engine && ctx) {
+			rt.openPlan(undefined, ctx);
+		}
+		const changed = transitionMode(rt.state, mode, now);
+		rt.state = changed.state;
+		rt.persist();
+		rt.applyTools();
+		if (ctx) {
+			rt.notifyMode(ctx);
+			ctx.ui.notify(`Maestro ${mode} mode`, "info");
+		}
+		emitMode(changed.previous);
+	}
+
+	const transitionGates = new TransitionGateCoordinator(
+		createDefaultTransitionGates(),
+		{
+			engine: () => rt.engine,
+			currentMode: () => rt.state.mode,
+			commit: commitMode,
+			agents: () => maestro.capabilities.get(CAPABILITIES.agents),
+			ask: () => maestro.capabilities.get(CAPABILITIES.ask),
+			now,
+		},
+	);
+
+	rt = {
 		pi,
 		maestro,
 		store,
@@ -319,34 +363,24 @@ export function createRuntimeContext(
 			);
 		},
 
-		setMode(mode: ModeName, ctx?: ExtensionContext): void {
-			// Auto/Hack are an authorization boundary: invalidate the private
-			// research epoch synchronously and finish cleanup in the background.
+		async requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean> {
 			if (
-				(mode === "auto" || mode === "hack") &&
-				(rt.state.mode === "recon" || rt.state.mode === "plan")
+				rt.state.mode === "plan" &&
+				(mode === "auto" || mode === "hack")
 			) {
-				void Promise.allSettled([
-					rt.isolationBackends.lightweight.destroy(),
-					rt.isolationBackends.strong.destroy(),
-				]);
+				rt.finalizeDraftPlan(ctx);
 			}
-			// Entering plan mode without an active plan auto-opens a draft so the
-			// planning tools work immediately — no need for an explicit /plan.
-			// Recon gets the same invisible draft: it keys the research scratch
-			// dir so research/dig work, but no plan tool ever surfaces it.
-			if ((mode === "plan" || mode === "recon") && !rt.engine && ctx) {
-				rt.openPlan(undefined, ctx);
+			return transitionGates.request(mode, ctx);
+		},
+
+		setMode(mode: ModeName, ctx?: ExtensionContext): void {
+			if (
+				rt.state.mode === "plan" &&
+				(mode === "auto" || mode === "hack")
+			) {
+				throw new Error("Plan execution transitions must use requestMode()");
 			}
-			const changed = transitionMode(rt.state, mode, now);
-			rt.state = changed.state;
-			rt.persist();
-			rt.applyTools();
-			if (ctx) {
-				rt.notifyMode(ctx);
-				ctx.ui.notify(`Maestro ${mode} mode`, "info");
-			}
-			emitMode(changed.previous);
+			commitMode(mode, ctx);
 		},
 
 		setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void {
@@ -455,7 +489,7 @@ export function createRuntimeContext(
 				if (choice?.startsWith("auto")) {
 					await rt.runImplement("", ctx);
 				} else if (choice?.startsWith("hack")) {
-					rt.setMode("hack", ctx);
+					await rt.runImplement("--hack", ctx);
 				}
 				return;
 			}
@@ -557,31 +591,8 @@ export function createRuntimeContext(
 				return;
 			}
 
-			// Panel topology preflight: a code-changing deliverable without a
-			// required reviewer ships ungated (the orchestra-baseline hole).
-			// Surface the gaps BEFORE any worker spawns; proceeding is a
-			// deliberate human choice, not a silent default.
-			if (!isAgentMode()) {
-				const gaps = panelTopologyGaps(activeEngine.get().deliverables);
-				if (gaps.length > 0) {
-					const proceed = await ctx.ui.confirm(
-						"Review panel gaps",
-						`${gaps.length} gap(s) mean work could ship without a gating review:\n` +
-							`${gaps.map((g) => `  • ${g}`).join("\n")}\n` +
-							"Start implementation anyway?",
-					);
-					if (!proceed) {
-						ctx.ui.notify(
-							"Implementation not started — fix the panel via the subagent tool (add required reviewers), then /implement again.",
-							"info",
-						);
-						return;
-					}
-				}
-			}
-
 			const mode = args.includes("--hack") ? "hack" : "auto";
-			rt.setMode(mode as ModeName, ctx);
+			if (!(await rt.requestMode(mode, ctx))) return;
 
 			// Deliverable execution via the execution seam
 			if (!isAgentMode()) {
@@ -757,7 +768,7 @@ export function createRuntimeContext(
 
 			// 2. Resume interrupted execution.
 			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
-				rt.setMode("auto", ctx);
+				if (!(await rt.requestMode("auto", ctx))) return;
 			}
 			await rt.ensureExecution(ctx);
 			if (!rt.execution) {

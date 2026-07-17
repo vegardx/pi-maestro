@@ -43,7 +43,6 @@ import {
 } from "../deliverable-executor.js";
 import type { PlanEngine } from "../engine.js";
 import { planFingerprint } from "../engine.js";
-import { PANEL_HARD_TIMEOUT_MS, requiredGateSatisfied } from "../panel.js";
 import { QuestionQueue } from "../question-queue.js";
 import { reportsNotInText, researchReportsDir } from "../research.js";
 import {
@@ -60,12 +59,7 @@ import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
 } from "./commit-policy.js";
-import {
-	ledgerSummary,
-	openBlocking,
-	openDisputed,
-	type ReviewLedger,
-} from "./findings.js";
+import { openBlocking, type ReviewLedger } from "./findings.js";
 import { readKnowledgeSession } from "./knowledge.js";
 import {
 	buildAgentSessionFile,
@@ -102,9 +96,7 @@ const IDLE_DONE_THRESHOLD = 2;
  *  result plumbing and cleanup. A guard shorter than a legitimate round
  *  reopens the kill-mid-review hole; the old retry-sized guard (2× cap)
  *  hung dead rounds for ~25 minutes. */
-const REVIEW_CLEANUP_MARGIN_MS = 2 * 60_000;
-const REVIEW_IN_FLIGHT_TIMEOUT_MS =
-	PANEL_HARD_TIMEOUT_MS + REVIEW_CLEANUP_MARGIN_MS;
+const REVIEW_IN_FLIGHT_TIMEOUT_MS = 15 * 60_000;
 /** After steering "run review now", how long completion stays deferred. A
  *  worker that still never reviews then completes into the ship gate, which
  *  blocks visibly — better than hanging the deliverable forever. */
@@ -449,30 +441,10 @@ export class ExecutionAdapter {
 				planMutate: (agentId, msg) => this.handlePlanMutate(agentId, msg),
 				planRead: (agentId, msg) => this.handlePlanRead(agentId, msg),
 				panelRead: (agentId, msg) => {
-					// The worker's review panel = its deliverable's subAgents, live
-					// from the plan (edits mid-flight take effect on the next read).
-					const deliverable = this.engine
-						.get()
-						.deliverables.find((d) => d.id === msg.deliverableId);
-					const panel = deliverable?.subAgents ?? [];
-					// Reading a non-empty panel is how a review round starts — hold
-					// worker completion until the round reports (panelVerdict).
-					if (panel.length > 0) {
-						this.reviewInFlight.set(msg.deliverableId, Date.now());
-					}
-					// A respawned worker rehydrates its episode from the persisted
-					// ledger; waived finding ids are excluded from its gate math.
-					const waived = (deliverable?.waivers ?? []).flatMap((w) =>
-						w.findingId ? [w.findingId] : [],
-					);
 					this.router.send(agentId, {
 						type: "panelReadResponse",
 						id: msg.id,
-						panel,
-						...(deliverable?.reviewLedger
-							? { ledger: deliverable.reviewLedger }
-							: {}),
-						...(waived.length > 0 ? { waivedFindingIds: waived } : {}),
+						panel: [],
 					});
 				},
 				panelVerdict: (_agentId, msg) => {
@@ -1001,10 +973,7 @@ export class ExecutionAdapter {
 		// New workflow assignments never fall back to verdict strings: every
 		// assigned review must publish a valid canonical report.
 		if (this.engine.get().workflow) return false;
-		return requiredGateSatisfied(
-			required,
-			this.panelVerdicts.get(deliverableId)?.verdicts,
-		);
+		return false;
 	}
 
 	/**
@@ -1013,20 +982,9 @@ export class ExecutionAdapter {
 	 * settled rounds and the round-started crash marker.
 	 */
 	private persistReportedLedger(
-		deliverableId: string,
-		ledger: PanelVerdictMessage["ledger"],
-	): void {
-		if (!ledger) return;
-		try {
-			this.engine.setReviewLedger(
-				deliverableId,
-				structuredClone(ledger) as ReviewLedger,
-			);
-			this.opts.onPlanChanged();
-		} catch {
-			// Unknown deliverable — the verdict cache still applies.
-		}
-	}
+		_deliverableId: string,
+		_ledger: PanelVerdictMessage["ledger"],
+	): void {}
 
 	/** Epoch ms a persisted pending round started (parseable marker only) —
 	 *  the review-in-flight signal that survives a maestro restart. */
@@ -1038,25 +996,12 @@ export class ExecutionAdapter {
 	}
 
 	/** The persisted ledger + waived finding ids + cycle budget for a deliverable. */
-	private ledgerState(deliverableId: string): {
+	private ledgerState(_deliverableId: string): {
 		ledger?: ReviewLedger;
 		waived: Set<string>;
 		maxCycles: number;
 	} {
-		const deliverable = this.engine
-			.get()
-			.deliverables.find((d) => d.id === deliverableId);
-		return {
-			...(deliverable?.reviewLedger
-				? { ledger: deliverable.reviewLedger }
-				: {}),
-			waived: new Set(
-				(deliverable?.waivers ?? []).flatMap((w) =>
-					w.findingId ? [w.findingId] : [],
-				),
-			),
-			maxCycles: deliverable?.maxFixRounds ?? DEFAULT_MAX_FIX_ROUNDS,
-		};
+		return { waived: new Set(), maxCycles: DEFAULT_MAX_FIX_ROUNDS };
 	}
 
 	private requiredReviewerNames(deliverableId: string): string[] {
@@ -1068,10 +1013,7 @@ export class ExecutionAdapter {
 			workflow?.assignments
 				.filter((assignment) => assignment.kind.endsWith("-review"))
 				.map((assignment) => assignment.agentId) ?? [];
-		if (assigned.length > 0) return assigned;
-		return (deliverable?.subAgents ?? [])
-			.filter((s) => (s.kind ?? "review") === "review")
-			.map((s) => s.name);
+		return assigned;
 	}
 
 	/**
@@ -1187,23 +1129,6 @@ export class ExecutionAdapter {
 		// individually (id + claim + file — the claim is the durable identity
 		// that crosses into /verify), which is what actually opens the gate.
 		try {
-			const { ledger, waived } = this.ledgerState(deliverableId);
-			const mine = ledger
-				? openBlocking(ledger, waived).filter((e) => e.reviewer === reviewer)
-				: [];
-			if (mine.length > 0) {
-				for (const e of mine) {
-					this.engine.addWaiver(deliverableId, {
-						reviewer,
-						reason,
-						findingId: e.finding.id,
-						claim: e.finding.claim ?? e.finding.actual,
-						...(e.finding.file ? { file: e.finding.file } : {}),
-					});
-				}
-			} else {
-				this.engine.addWaiver(deliverableId, { reviewer, reason });
-			}
 			this.opts.onPlanChanged();
 		} catch {
 			// The override still applies for this session even if the plan write
@@ -1232,21 +1157,6 @@ export class ExecutionAdapter {
 			this.gateBlockSurfaced.delete(deliverableId);
 			this.fixSteer.delete(deliverableId);
 			this.reviewInFlight.delete(deliverableId);
-			const deliverable = this.engine
-				.get()
-				.deliverables.find((d) => d.id === deliverableId);
-			if (deliverable?.reviewLedger && deliverable.reviewLedger.cycle > 0) {
-				try {
-					this.engine.setReviewLedger(deliverableId, {
-						...deliverable.reviewLedger,
-						cycle: 0,
-						updatedAt: new Date().toISOString(),
-					});
-					this.opts.onPlanChanged();
-				} catch {
-					// Plan write failure — the in-memory resets still apply.
-				}
-			}
 			this.logEvent("send-back", { deliverableId });
 		}
 		return ok;
@@ -1257,7 +1167,7 @@ export class ExecutionAdapter {
 		const { ledger, waived, maxCycles } = this.ledgerState(deliverableId);
 		if (ledger) {
 			const open = openBlocking(ledger, waived);
-			const parts: string[] = [ledgerSummary(ledger, maxCycles, waived)];
+			const parts: string[] = [`${open.length} canonical blocking finding(s)`];
 			if (open.length > 0) {
 				parts.push(`open: ${open.map((e) => e.finding.id).join(", ")}`);
 			}
@@ -1668,16 +1578,7 @@ export class ExecutionAdapter {
 		const done = g.tasks.filter((task) => task.done);
 		const remaining = g.tasks.filter((task) => !task.done);
 		const commits = this.commitsFor(workspace);
-		const open = g.reviewLedger
-			? openBlocking(
-					g.reviewLedger,
-					new Set(
-						(g.waivers ?? []).flatMap((waiver) =>
-							waiver.findingId ? [waiver.findingId] : [],
-						),
-					),
-				).map((entry) => `${entry.finding.id}: ${entry.finding.claim}`)
-			: [];
+		const open: string[] = [];
 		const agentFacts = state
 			? [...state.agents.values()]
 					.filter((agent) => agent.summary || agent.error)
@@ -1725,13 +1626,8 @@ export class ExecutionAdapter {
 				? commits.map((commit) => `- ${commit}`)
 				: ["- None recorded"]),
 			"",
-			"## Review ledger and open findings",
-			...(g.reviewLedger
-				? [`- cycle ${g.reviewLedger.cycle}, round ${g.reviewLedger.round}`]
-				: ["- No review ledger"]),
-			...(open.length
-				? open.map((finding) => `- ${finding}`)
-				: ["- No open blocking findings"]),
+			"## Canonical workflow findings",
+			...(open.length ? open.map((finding) => `- ${finding}`) : ["- None"]),
 			"",
 			"## Artifacts",
 			...(g.prUrl ? [`- PR: ${g.prUrl}`] : []),
@@ -1740,7 +1636,7 @@ export class ExecutionAdapter {
 			),
 			...(g.sessionPath ? [`- Replaced session: ${g.sessionPath}`] : []),
 			"",
-			"Continue only in the assigned workspace. Inspect and preserve existing changes; do not reset, clean, checkout, or create worktrees. Commit as you go, update tasks normally, and satisfy the existing review ledger without rewriting it.",
+			"Continue only in the assigned workspace. Inspect and preserve existing changes; do not reset, clean, checkout, or create worktrees. Commit as you go and update tasks normally.",
 		].join("\n");
 	}
 
@@ -2096,118 +1992,7 @@ export class ExecutionAdapter {
 	 *      — that rule turned every request-changes into a dead worker and a
 	 *      human question (orchestra run, 2026-07-11).
 	 */
-	private workerMayComplete(agentId: string, deliverableId: string): boolean {
-		// The in-memory window dies with a maestro restart; the persisted
-		// pendingRound marker carries the same in-flight signal across it,
-		// bounded by the round's OWN start time (elapsed time counts).
-		const startedAt =
-			this.reviewInFlight.get(deliverableId) ??
-			this.pendingRoundStartMs(deliverableId);
-		if (startedAt !== undefined) {
-			if (Date.now() - startedAt <= REVIEW_IN_FLIGHT_TIMEOUT_MS) return false;
-			this.reviewInFlight.delete(deliverableId);
-		}
-		const deliverable = this.engine
-			.get()
-			.deliverables.find((g) => g.id === deliverableId);
-		const requiredReviews = (deliverable?.subAgents ?? []).filter(
-			(s) => (s.kind ?? "review") === "review" && s.required,
-		);
-		if (requiredReviews.length === 0) return true;
-
-		const { ledger, waived, maxCycles } = this.ledgerState(deliverableId);
-		const hasRound = Boolean(ledger) || this.panelVerdicts.has(deliverableId);
-		if (!hasRound) {
-			const steeredAt = this.reviewSteerAt.get(agentId);
-			if (steeredAt === undefined) {
-				this.reviewSteerAt.set(agentId, Date.now());
-				this.router.send(agentId, {
-					type: "steer",
-					content:
-						"All tasks are toggled, but this deliverable's REQUIRED review " +
-						"panel has not reported a round. Call the `review` tool now, " +
-						"resolve any blocking findings, and verify your fixes. Do not " +
-						"stop before the panel has reported.",
-				});
-				this.logEvent("review-steer", { agent: agentId });
-				return false;
-			}
-			return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
-		}
-
-		if (this.deliverableGateSatisfied(deliverableId)) return true;
-
-		// Gate failing. What can the worker still act on?
-		let cycle = this.panelVerdicts.get(deliverableId)?.round ?? 1;
-		let actionable: string[] | undefined;
-		if (ledger) {
-			cycle = ledger.cycle;
-			const open = openBlocking(ledger, waived);
-			const disputed = new Set(
-				openDisputed(ledger, waived).map((e) => e.finding.id),
-			);
-			actionable = open
-				.map((e) => e.finding.id)
-				.filter((id) => !disputed.has(id));
-			if (actionable.length === 0) {
-				// No open findings — the gate is held by required reviewers that
-				// never reported. That is a review-run failure, not rework:
-				// completing here parked the deliverable at triage, whose
-				// send-back respawned a worker with nothing to fix, which
-				// completed straight back into the same gate (infinite loop).
-				// One targeted steer to review({action:"repair"}), a grace
-				// window, then the VISIBLE gate — a second failure is a human's
-				// call, never an automatic respawn.
-				const missing = requiredReviews
-					.map((s) => s.name)
-					.filter(
-						(n) => !ledger.participants?.some((p) => p.name === n && p.ok),
-					);
-				if (ledger.participants && missing.length > 0) {
-					const steeredAt = this.repairSteerAt.get(deliverableId);
-					if (steeredAt === undefined) {
-						this.repairSteerAt.set(deliverableId, Date.now());
-						this.router.send(agentId, {
-							type: "steer",
-							content:
-								`Required reviewer(s) never reported a valid review: ` +
-								`${missing.join(", ")}. Do NOT rework the deliverable — ` +
-								`run review({action: "repair"}) once to re-run just them. ` +
-								`If the repair fails too, stop; the gate escalates to a human.`,
-						});
-						this.logEvent("repair-steer", {
-							agent: agentId,
-							missing: missing.join(", "),
-						});
-						return false;
-					}
-					return Date.now() - steeredAt > REVIEW_STEER_GRACE_MS;
-				}
-				// Only disputes remain — nothing left for the worker; the gate
-				// surfaces it to triage/human.
-				return true;
-			}
-		}
-		if (cycle >= maxCycles) return true;
-
-		const steer = this.fixSteer.get(deliverableId);
-		if (!steer || steer.cycle !== cycle) {
-			this.fixSteer.set(deliverableId, { cycle, at: Date.now() });
-			const what = actionable?.length
-				? `Open blocking findings: ${actionable.join(", ")}.`
-				: `Holding reviewers: ${this.failingRequiredReviewers(deliverableId).join(", ")}.`;
-			this.router.send(agentId, {
-				type: "steer",
-				content:
-					`The review gate is holding this deliverable. ${what} ` +
-					`Fix them, commit, and run review({resolutions: [...]}) to verify ` +
-					`— fix cycle ${cycle + 1}/${maxCycles}. Dispute a finding only ` +
-					`with a code-referencing rationale; wont-fix is for minors only.`,
-			});
-			this.logEvent("fix-steer", { agent: agentId, cycle: cycle + 1 });
-			return false;
-		}
-		if (Date.now() - steer.at <= FIX_CYCLE_GRACE_MS) return false;
+	private workerMayComplete(_agentId: string, _deliverableId: string): boolean {
 		return true;
 	}
 
@@ -2743,7 +2528,6 @@ export class ExecutionAdapter {
 		const pendingStages: string[] = [
 			...(state?.blocked ? [`blocked:${state.blocked}`] : []),
 			...(agentStatus ? [agentStatus] : []),
-			...(deliverable?.reviewLedger?.pendingRound ? ["review-pending"] : []),
 		];
 		return {
 			agentKey,

@@ -23,7 +23,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { AskCapabilityV1 } from "@vegardx/pi-contracts";
-import { ledgerSummary } from "./exec/findings.js";
 import type { Plan } from "./schema.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
@@ -129,12 +128,6 @@ export function harvestInventory(deps: InventoryDeps): string {
 			const done = tasks.filter((t) => t.done).length;
 			const parts = [`- ${d.id} [${d.status}]`];
 			if (tasks.length > 0) parts.push(`tasks ${done}/${tasks.length}`);
-			if (d.reviewLedger) {
-				const waived = new Set(
-					(d.waivers ?? []).flatMap((w) => (w.findingId ? [w.findingId] : [])),
-				);
-				parts.push(ledgerSummary(d.reviewLedger, d.maxFixRounds ?? 3, waived));
-			}
 			const blocked = deps.blocked?.find((b) => b.id === d.id);
 			if (blocked) parts.push(`BLOCKED: ${blocked.reason}`);
 			if (d.prUrl) parts.push(d.prUrl);

@@ -508,19 +508,6 @@ export function renderPlanOutline(plan: Plan): string {
 				`- [${t.done ? "x" : " "}] ${t.title}${t.body ? ` — ${t.body}` : ""}`,
 			);
 		}
-		if (g.subAgents?.length) {
-			const panel = g.subAgents
-				.map((s) => {
-					const flags = [
-						s.required ? "required" : "advisory",
-						(s.kind ?? "review") === "helper" ? "helper" : "review",
-						s.effort ?? null,
-					].filter(Boolean);
-					return `${s.persona} (${flags.join(", ")})`;
-				})
-				.join("; ");
-			lines.push(`  panel: ${panel}`);
-		}
 	}
 	if (plan.deliverables.length === 0) lines.push("", "(no deliverables yet)");
 	return lines.join("\n");

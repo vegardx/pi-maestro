@@ -14,21 +14,16 @@ import {
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
-import type { ReviewLedgerWire } from "@vegardx/pi-rpc";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
 import { createCarryForwardTool, harvestInventory } from "../carry-forward.js";
 import type { PlanEngine } from "../engine.js";
-import type { ReviewLedger } from "../exec/findings.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
-import { createReviewTool } from "../review-tool.js";
-import type { SubAgentSpec } from "../schema.js";
 import {
 	EXECUTION_POLICY_SETTINGS,
 	WORKTREE_SETTINGS,
 } from "../setting-declarations.js";
 import { readResearchWatchdogSettings } from "../settings.js";
-import { resolveSpawnModelSafe } from "../spawn-model.js";
 import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
 import {
@@ -179,92 +174,6 @@ export function createModesRuntime(
 					return plan ? join(plansRoot(), plan.slug) : undefined;
 				},
 				planSlug: () => rt.engine?.get().slug,
-			}),
-		);
-	}
-
-	// Worker-side review tool — registered only in a worker (agent mode). It
-	// runs the deliverable's persona panel ONCE over the subagents transport,
-	// then scope-locked verification runs; each run reports its verdicts AND
-	// the review ledger over panelVerdict so the executor's ship gate reads
-	// "blocking ledger empty" (and persists the ledger on the plan). The
-	// maestro never sees this tool (it has no single deliverable to review).
-	if (isAgentMode()) {
-		const deliverableId = () =>
-			process.env.PI_MAESTRO_AGENT_ID?.split("/")[0] || undefined;
-		let reviewRound = 0;
-		pi.registerTool(
-			createReviewTool({
-				subagents: () => maestro.capabilities.get(CAPABILITIES.subagents),
-				panelState: async () => {
-					const bridge = rt.agentBridge;
-					const id = deliverableId();
-					if (!bridge || !id) return { panel: [] };
-					const result = await bridge.panelRead(id);
-					return {
-						panel: result.panel as SubAgentSpec[],
-						// Wire ledger and the canonical one are structurally
-						// identical (see ReviewLedgerWire); clone out of readonly.
-						...(result.ledger
-							? {
-									ledger: structuredClone(
-										result.ledger,
-									) as unknown as ReviewLedger,
-								}
-							: {}),
-						...(result.waivedFindingIds
-							? { waived: result.waivedFindingIds }
-							: {}),
-					};
-				},
-				cwd: () => process.cwd(),
-				// Non-blocking rounds: the settled report is injected as a
-				// follow-up user message (queued to turn end while streaming;
-				// triggers a turn when idle) — the same channel maestro steers
-				// arrive on (agent-bridge) — so the worker stays steerable and
-				// interruptible while reviewers run.
-				deliver: (text) => {
-					void pi.sendUserMessage(text, { deliverAs: "followUp" });
-				},
-				resolveModel: async (ctx, spec) => {
-					const resolved = await resolveSpawnModelSafe(ctx, {
-						role: "correctness-review",
-						model: spec?.model,
-						effort: spec?.effort,
-					});
-					return { model: resolved.modelId, effort: resolved.effort };
-				},
-				report: (roundKind, results, ledger) => {
-					const bridge = rt.agentBridge;
-					const id = deliverableId();
-					if (!bridge || !id) return;
-					// Round-started markers announce the round the NEXT settle will
-					// report; only settled rounds consume a round number (the
-					// executor never caches markers as verdicts).
-					if (roundKind !== "round-started") reviewRound += 1;
-					bridge.reportPanelVerdict(
-						id,
-						roundKind === "round-started" ? reviewRound + 1 : reviewRound,
-						results
-							.filter((r) => r.kind === "review")
-							.map((r) => ({
-								name: r.name,
-								persona: r.persona,
-								required: r.required,
-								verdict: r.verdict,
-								ok: r.ok,
-								model: r.model,
-								effort: r.effort,
-								// The findings travel with the verdict so the maestro
-								// can show the human WHAT holds the gate.
-								report: clipReport(r.report),
-							})),
-						{
-							roundKind,
-							ledger: structuredClone(ledger) as ReviewLedgerWire,
-						},
-					);
-				},
 			}),
 		);
 	}

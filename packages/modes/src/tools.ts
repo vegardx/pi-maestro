@@ -27,14 +27,12 @@ import type {
 	PlanEngine,
 } from "./engine.js";
 import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
-import { getPersona, PERSONA_IDS } from "./personas.js";
 import { renderResearchIndex, researchReportsDir } from "./research.js";
 import type {
 	AgentMode,
 	AgentSpec,
 	Deliverable,
 	Plan,
-	SubAgentSpec,
 	ThinkingLevel,
 	WorkItem,
 } from "./schema.js";
@@ -68,7 +66,6 @@ interface ToolDetails {
 	readonly agent?: AgentSpec;
 	readonly workflow?: Plan["workflow"];
 	readonly kinds?: unknown;
-	readonly subAgent?: SubAgentSpec;
 	readonly done?: boolean;
 }
 
@@ -427,176 +424,10 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createDeliverableTool(deps),
 		createTaskTool(deps),
 		createWorkflowTool(deps),
-		createAgentTool(deps),
-		createPanelTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
 		createKnowledgeTool(deps),
 	];
-}
-
-const SubAgentParams = Type.Object({
-	action: Type.Union([
-		Type.Literal("add"),
-		Type.Literal("remove"),
-		Type.Literal("list"),
-	]),
-	deliverableId: Type.Optional(Type.String()),
-	/** Persona id from the registry (required for add). */
-	persona: Type.Optional(
-		Type.String({
-			description: `Review lens: one of ${PERSONA_IDS.join(", ")}.`,
-		}),
-	),
-	/** Unique instance name; defaults to the persona id. */
-	name: Type.Optional(Type.String()),
-	focus: Type.Optional(
-		Type.String({
-			description: "Specialize the persona for this deliverable.",
-		}),
-	),
-	model: Type.Optional(
-		Type.String({
-			description:
-				"Exact provider/model id from the active reviewer pool. Omit for its default; normally raise effort before adding a second model.",
-		}),
-	),
-	modelJustification: Type.Optional(
-		Type.String({
-			description:
-				"Required when the same persona is duplicated across distinct models: explain why the extra spend/independent perspective is warranted.",
-		}),
-	),
-	effort: Type.Optional(
-		Type.String({
-			description: "How hard to look: low (quick sanity) … xhigh (deep audit).",
-		}),
-	),
-	required: Type.Optional(
-		Type.Boolean({
-			description:
-				"Gating: a review persona whose latest verdict must be SHIPPED " +
-				"before the deliverable ships.",
-		}),
-	),
-});
-
-export function createPanelTool(deps: PlanToolDeps): ToolDefinition {
-	return defineTool({
-		name: "panel",
-		label: "Panel",
-		description:
-			"Compose a deliverable's review/helper panel from the persona palette " +
-			`(${PERSONA_IDS.join(", ")}): add, remove, list. Reviewers default to ` +
-			"the reviewer pool's first available model. Prefer raising effort before " +
-			"a second model; at most two distinct models may run one persona, and a " +
-			"cross-model duplicate requires unique names plus modelJustification. " +
-			"Set required to gate ship. The worker runs the panel.",
-		promptSnippet:
-			"panel — compose a deliverable's persona review panel (add/remove/list).",
-		parameters: SubAgentParams,
-		async execute(_id, params): Promise<Result> {
-			if (!deps.engine() && deps.agentBridge?.()) {
-				return error("agents cannot modify plan structure");
-			}
-			return withEngine(deps, (engine) => {
-				const plan = engine.get();
-				const deliverableId = params.deliverableId;
-				if (!deliverableId) return error("deliverableId is required");
-				if (hasExecutionStarted(plan)) {
-					const g = findDeliverable(plan, deliverableId);
-					if (g && g.status !== "planned") {
-						return error("cannot modify sub-agents in an active deliverable");
-					}
-				}
-				switch (params.action) {
-					case "add": {
-						if (!params.persona) return error("add requires persona");
-						if (!getPersona(params.persona)) {
-							return error(
-								`unknown persona "${params.persona}" (have: ${PERSONA_IDS.join(", ")})`,
-							);
-						}
-						const g = findDeliverable(plan, deliverableId);
-						const existing = g?.subAgents ?? [];
-						const name =
-							params.name ??
-							uniqueName(
-								params.persona,
-								existing.map((s) => s.name),
-							);
-						const samePersona = existing.filter(
-							(item) => item.persona === params.persona,
-						);
-						const distinctModels = new Set(
-							samePersona
-								.map((item) => item.model)
-								.filter((item): item is string => Boolean(item)),
-						);
-						if (params.model) distinctModels.add(params.model);
-						if (distinctModels.size > 2) {
-							return error(
-								`persona ${params.persona} may use at most two distinct models`,
-							);
-						}
-						if (
-							samePersona.length > 0 &&
-							params.model &&
-							!params.modelJustification?.trim()
-						) {
-							return error(
-								"duplicating a persona with an explicit model requires modelJustification",
-							);
-						}
-						const spec: SubAgentSpec = {
-							name,
-							persona: params.persona,
-							...(params.focus ? { focus: params.focus } : {}),
-							...(params.model ? { model: params.model } : {}),
-							...(params.modelJustification
-								? { modelJustification: params.modelJustification }
-								: {}),
-							...(params.effort
-								? { effort: params.effort as ThinkingLevel }
-								: {}),
-							...(params.required ? { required: true } : {}),
-						};
-						const added = engine.addSubAgent(deliverableId, spec);
-						notify(deps, engine);
-						return ok(
-							`✓ ${deliverableId} panel: ${added.name} (${added.persona})`,
-							{ subAgent: added, plan: engine.get() },
-						);
-					}
-					case "remove": {
-						if (!params.name) return error("remove requires name");
-						engine.removeSubAgent(deliverableId, params.name);
-						notify(deps, engine);
-						return ok(`Removed ${params.name}.`, { plan: engine.get() });
-					}
-					default: {
-						const g = findDeliverable(plan, deliverableId);
-						const list = (g?.subAgents ?? [])
-							.map(
-								(s) =>
-									`${s.name} (${s.persona}${s.required ? ", required" : ""})`,
-							)
-							.join(", ");
-						return ok(list || "(no sub-agents)", { plan });
-					}
-				}
-			});
-		},
-	}) as ToolDefinition;
-}
-
-/** persona → persona, persona-2, … avoiding taken names. */
-function uniqueName(persona: string, taken: string[]): string {
-	if (!taken.includes(persona)) return persona;
-	for (let n = 2; ; n++) {
-		const candidate = `${persona}-${n}`;
-		if (!taken.includes(candidate)) return candidate;
-	}
 }
 
 export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {

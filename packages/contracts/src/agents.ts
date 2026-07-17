@@ -98,6 +98,24 @@ export interface AgentSequencingGuidance {
 	readonly guidance: string;
 }
 
+/**
+ * An optional maestro slash command a persona exposes. The generic handler
+ * spawns this kind against a target and surfaces its report (report-only — no
+ * auto-remediation). `instruction` is prose the maestro follows to drive the
+ * command, INCLUDING what a bare (no-argument) invocation does: offer options,
+ * pick a default, or ask for a free-text brief. Only kinds meant to be invoked
+ * maestro-side over a target should set this; worker-panel review lenses leave
+ * it unset.
+ */
+export interface AgentKindCommand {
+	/** Slash command name, e.g. "verify" or "code-review". */
+	readonly name: string;
+	/** Shown in /help. */
+	readonly description: string;
+	/** How the maestro drives it, including bare-invocation behavior. */
+	readonly instruction: string;
+}
+
 /** Descriptor stored by the kind registry. Prompts are full authored policy. */
 export interface AgentKindDefinition {
 	readonly id: AgentKind;
@@ -109,6 +127,8 @@ export interface AgentKindDefinition {
 	readonly watchdog: RunWatchdogConfig;
 	readonly sequencing: AgentSequencingGuidance;
 	readonly reducer: AgentReducerId;
+	/** Optional maestro slash command this persona exposes. */
+	readonly command?: AgentKindCommand;
 }
 
 /** One authored exact choice in a named model set. */

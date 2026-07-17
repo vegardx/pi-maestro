@@ -29,12 +29,12 @@ export interface AgentRuntimePolicy {
 	readonly timeoutMs?: number;
 }
 
-/** One allowed concrete choice in a named model set. */
+/** One authored exact choice in a named model set. */
 export interface AgentModelOption {
 	readonly id: string;
-	readonly modelId: string;
-	readonly efforts: readonly ThinkingLevel[];
-	readonly authenticated: boolean;
+	readonly model: string;
+	readonly effort: ThinkingLevel;
+	readonly summary: string;
 }
 
 /** Ordered options; order is policy and the first compatible option is default. */

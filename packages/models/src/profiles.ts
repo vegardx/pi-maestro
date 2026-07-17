@@ -1,11 +1,13 @@
-// Layered `/model`-selected direct role pools.
+// Layered `/model`-activated presets and reusable exact model sets.
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
+	type ExactModelOption,
 	getSessionRoleOverride,
 	MODEL_ROLES,
-	type ModelConfigScope,
+	type ModelPresetConfig,
 	type ModelRole,
+	type ModelSetConfig,
 	type ModelsConfig,
 	type ProfileConfig,
 	type ProfileRoleConfig,
@@ -28,14 +30,26 @@ type MutableSource = Partial<
 >;
 const PROFILE_SOURCES = new WeakMap<ProfileConfig, MutableSource>();
 
-interface ParsedProfile {
+interface ParsedPreset {
 	readonly targets: readonly string[];
 	readonly targetsPresent: boolean;
-	readonly direct: Partial<Record<ModelRole, ProfileRoleConfig>>;
+	readonly modelSets: Partial<Record<ModelRole, string>>;
+	readonly legacyRoles: Partial<Record<ModelRole, ProfileRoleConfig>>;
+}
+
+interface ParsedModels {
+	readonly modelSets: Readonly<Record<string, ModelSetConfig>>;
+	readonly presets: Readonly<Record<string, ParsedPreset>>;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function nonEmpty(value: unknown): value is string {
+	return (
+		typeof value === "string" && value.trim() === value && value.length > 0
+	);
 }
 
 export function isModelId(value: unknown): value is string {
@@ -44,13 +58,10 @@ export function isModelId(value: unknown): value is string {
 	return slash > 0 && slash < value.length - 1;
 }
 
-/**
- * First-class pool entry that resolves to the live `/model` selection at its
- * pool position. Valid in role `models` arrays only, never in targets.
- */
+/** Resolves to the live `/model` model at selection time. */
 export const SESSION_MODEL_SENTINEL = "session";
 
-function isPoolEntry(value: unknown): value is string {
+function isModelReference(value: unknown): value is string {
 	return isModelId(value) || value === SESSION_MODEL_SENTINEL;
 }
 
@@ -64,7 +75,7 @@ function validArray<T>(
 }
 
 function modelArray(raw: unknown): readonly string[] | undefined {
-	return validArray(raw, isPoolEntry);
+	return validArray(raw, isModelReference);
 }
 
 function effortArray(raw: unknown): readonly ThinkingLevel[] | undefined {
@@ -75,7 +86,7 @@ function effortArray(raw: unknown): readonly ThinkingLevel[] | undefined {
 	);
 }
 
-function extractRole(raw: unknown): ProfileRoleConfig | undefined {
+function extractLegacyRole(raw: unknown): ProfileRoleConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	const models = modelArray(raw.models);
 	const efforts = effortArray(raw.efforts);
@@ -84,79 +95,181 @@ function extractRole(raw: unknown): ProfileRoleConfig | undefined {
 		: undefined;
 }
 
-function extractProfile(raw: unknown): ParsedProfile | undefined {
+function extractOption(raw: unknown): ExactModelOption | undefined {
 	if (!isPlainObject(raw)) return undefined;
-	const direct: Partial<Record<ModelRole, ProfileRoleConfig>> = {};
+	if (
+		!nonEmpty(raw.id) ||
+		!isModelReference(raw.model) ||
+		!nonEmpty(raw.summary) ||
+		typeof raw.effort !== "string" ||
+		!EFFORT_SET.has(raw.effort)
+	)
+		return undefined;
+	return {
+		id: raw.id,
+		model: raw.model,
+		effort: raw.effort as ThinkingLevel,
+		summary: raw.summary,
+	};
+}
+
+function extractModelSet(raw: unknown): ModelSetConfig | undefined {
+	const values = Array.isArray(raw)
+		? raw
+		: isPlainObject(raw) && Array.isArray(raw.options)
+			? raw.options
+			: undefined;
+	if (!values || values.length === 0) return undefined;
+	const options = values.map(extractOption);
+	if (options.some((option) => !option)) return undefined;
+	const concrete = options as ExactModelOption[];
+	if (new Set(concrete.map((option) => option.id)).size !== concrete.length)
+		return undefined;
+	return { options: concrete };
+}
+
+function extractPreset(raw: unknown): ParsedPreset | undefined {
+	if (!isPlainObject(raw)) return undefined;
+	const modelSets: Partial<Record<ModelRole, string>> = {};
+	const rawSets = isPlainObject(raw.modelSets)
+		? raw.modelSets
+		: isPlainObject(raw.sets)
+			? raw.sets
+			: undefined;
+	if (rawSets) {
+		for (const [role, setId] of Object.entries(rawSets)) {
+			if (ROLE_SET.has(role) && nonEmpty(setId))
+				modelSets[role as ModelRole] = setId;
+		}
+	}
+	const legacyRoles: Partial<Record<ModelRole, ProfileRoleConfig>> = {};
 	if (isPlainObject(raw.roles)) {
-		for (const [name, value] of Object.entries(raw.roles)) {
-			if (!ROLE_SET.has(name)) continue;
-			const role = extractRole(value);
-			if (role) direct[name as ModelRole] = role;
+		for (const [role, value] of Object.entries(raw.roles)) {
+			if (!ROLE_SET.has(role)) continue;
+			const legacy = extractLegacyRole(value);
+			if (legacy) legacyRoles[role as ModelRole] = legacy;
 		}
 	}
 	return {
 		targets: validArray(raw.targets, isModelId) ?? [],
 		targetsPresent: Object.hasOwn(raw, "targets"),
-		direct,
+		modelSets,
+		legacyRoles,
 	};
 }
 
-function extractModels(
-	raw: unknown,
-): Record<string, ParsedProfile> | undefined {
-	if (
-		!isPlainObject(raw) ||
-		!isPlainObject(raw.models) ||
-		!isPlainObject(raw.models.profiles)
-	)
-		return undefined;
-	const profiles: Record<string, ParsedProfile> = {};
-	for (const [name, value] of Object.entries(raw.models.profiles)) {
-		const profile = extractProfile(value);
-		if (profile) profiles[name] = profile;
+function extractModels(raw: unknown): ParsedModels | undefined {
+	if (!isPlainObject(raw) || !isPlainObject(raw.models)) return undefined;
+	const root = raw.models;
+	const modelSets: Record<string, ModelSetConfig> = {};
+	if (isPlainObject(root.modelSets)) {
+		for (const [name, value] of Object.entries(root.modelSets)) {
+			const set = extractModelSet(value);
+			if (set) modelSets[name] = set;
+		}
 	}
-	return Object.keys(profiles).length ? profiles : undefined;
+	const presetRoot = isPlainObject(root.presets)
+		? root.presets
+		: isPlainObject(root.profiles)
+			? root.profiles
+			: undefined;
+	const presets: Record<string, ParsedPreset> = {};
+	if (presetRoot) {
+		for (const [name, value] of Object.entries(presetRoot)) {
+			const preset = extractPreset(value);
+			if (preset) presets[name] = preset;
+		}
+	}
+	return Object.keys(modelSets).length || Object.keys(presets).length
+		? { modelSets, presets }
+		: undefined;
 }
 
-function source(scope: ModelConfigScope, profile: string, role: ModelRole) {
-	return { scope, profile, role };
-}
-
-function materializeProfile(
-	name: string,
-	global?: ParsedProfile,
-	project?: ParsedProfile,
-): ProfileConfig {
-	const roles: Partial<Record<ModelRole, ProfileRoleConfig>> = {};
-	const sources: MutableSource = {};
-	for (const role of MODEL_ROLES) {
-		const g = global?.direct[role];
-		const p = project?.direct[role];
-		const models = p?.models ?? g?.models;
-		const efforts = p?.efforts ?? g?.efforts;
-		if (!models && !efforts) continue;
-		roles[role] = {
-			...(models ? { models } : {}),
-			...(efforts ? { efforts } : {}),
-		};
-		sources[role] = {
-			...(models
-				? { models: source(p?.models ? "project" : "global", name, role) }
-				: {}),
-			...(efforts
-				? { efforts: source(p?.efforts ? "project" : "global", name, role) }
-				: {}),
-		};
-	}
-	const profile: ProfileConfig = {
+function mergePreset(
+	global: ParsedPreset | undefined,
+	project: ParsedPreset | undefined,
+): ParsedPreset {
+	return {
 		targets:
 			project?.targetsPresent && project.targets.length
 				? project.targets
 				: (global?.targets ?? project?.targets ?? []),
-		roles,
+		targetsPresent: project?.targetsPresent ?? global?.targetsPresent ?? false,
+		modelSets: { ...global?.modelSets, ...project?.modelSets },
+		legacyRoles: Object.fromEntries(
+			MODEL_ROLES.flatMap((role) => {
+				const g = global?.legacyRoles[role];
+				const p = project?.legacyRoles[role];
+				const models = p?.models ?? g?.models;
+				const efforts = p?.efforts ?? g?.efforts;
+				return models || efforts
+					? [
+							[
+								role,
+								{
+									...(models ? { models } : {}),
+									...(efforts ? { efforts } : {}),
+								},
+							],
+						]
+					: [];
+			}),
+		),
 	};
+}
+
+function compatibilityProfile(
+	name: string,
+	preset: ParsedPreset,
+	global?: ParsedPreset,
+	project?: ParsedPreset,
+): ProfileConfig {
+	const profile: ProfileConfig = {
+		targets: preset.targets,
+		roles: preset.legacyRoles,
+	};
+	const sources: MutableSource = {};
+	for (const role of MODEL_ROLES) {
+		const g = global?.legacyRoles[role];
+		const p = project?.legacyRoles[role];
+		sources[role] = {
+			...(p?.models || g?.models
+				? {
+						models: {
+							scope: p?.models ? "project" : "global",
+							profile: name,
+							role,
+						},
+					}
+				: {}),
+			...(p?.efforts || g?.efforts
+				? {
+						efforts: {
+							scope: p?.efforts ? "project" : "global",
+							profile: name,
+							role,
+						},
+					}
+				: {}),
+		};
+	}
 	PROFILE_SOURCES.set(profile, sources);
 	return profile;
+}
+
+export function validatePresetTargets(cfg: ModelsConfig): void {
+	const owner = new Map<string, string>();
+	for (const [presetId, preset] of Object.entries(cfg.presets)) {
+		for (const target of preset.targets) {
+			const previous = owner.get(target);
+			if (previous && previous !== presetId) {
+				throw new Error(
+					`Model preset target ${target} overlaps between ${previous} and ${presetId}`,
+				);
+			}
+			owner.set(target, presetId);
+		}
+	}
 }
 
 export function readModelsConfig(
@@ -167,29 +280,64 @@ export function readModelsConfig(
 	const global = extractModels(manager.getGlobalSettings() as unknown);
 	const project = extractModels(manager.getProjectSettings() as unknown);
 	if (!global && !project) return undefined;
+	const modelSets = { ...global?.modelSets, ...project?.modelSets };
 	const names = new Set([
-		...Object.keys(global ?? {}),
-		...Object.keys(project ?? {}),
+		...Object.keys(global?.presets ?? {}),
+		...Object.keys(project?.presets ?? {}),
 	]);
-	return {
-		profiles: Object.fromEntries(
-			[...names].map((name) => [
+	const merged = Object.fromEntries(
+		[...names].map((name) => [
+			name,
+			mergePreset(global?.presets[name], project?.presets[name]),
+		]),
+	) as Record<string, ParsedPreset>;
+	const presets: Record<string, ModelPresetConfig> = Object.fromEntries(
+		Object.entries(merged).map(([name, preset]) => [
+			name,
+			{ targets: preset.targets, modelSets: preset.modelSets },
+		]),
+	);
+	const profiles = Object.fromEntries(
+		Object.entries(merged).map(([name, preset]) => [
+			name,
+			compatibilityProfile(
 				name,
-				materializeProfile(name, global?.[name], project?.[name]),
-			]),
-		),
-	};
+				preset,
+				global?.presets[name],
+				project?.presets[name],
+			),
+		]),
+	);
+	const config: ModelsConfig = { modelSets, presets, profiles };
+	validatePresetTargets(config);
+	return config;
 }
 
+export function activePreset(
+	cfg: ModelsConfig | undefined,
+	sessionModelId: string | undefined,
+): { id: string; preset: ModelPresetConfig } | undefined {
+	if (!cfg || !sessionModelId) return undefined;
+	const matches = Object.entries(cfg.presets).filter(([, preset]) =>
+		preset.targets.includes(sessionModelId),
+	);
+	if (matches.length > 1)
+		throw new Error(
+			`Model preset target ${sessionModelId} has multiple owners`,
+		);
+	const match = matches[0];
+	return match ? { id: match[0], preset: match[1] } : undefined;
+}
+
+/** @deprecated Compatibility alias used by the existing settings surface. */
 export function activeProfile(
 	cfg: ModelsConfig | undefined,
 	sessionModelId: string | undefined,
 ): { name: string; profile: ProfileConfig } | undefined {
-	if (!cfg || !sessionModelId) return undefined;
-	for (const [name, profile] of Object.entries(cfg.profiles)) {
-		if (profile.targets.includes(sessionModelId)) return { name, profile };
-	}
-	return undefined;
+	const active = activePreset(cfg, sessionModelId);
+	return active && cfg
+		? { name: active.id, profile: cfg.profiles[active.id] }
+		: undefined;
 }
 
 export interface EffectiveRolePool {
@@ -200,6 +348,7 @@ export interface EffectiveRolePool {
 	readonly provenance: RolePoolSource;
 }
 
+/** @deprecated Compatibility projection for the settings editor. */
 export function effectiveRolePool(
 	cfg: ModelsConfig | undefined,
 	role: ModelRole,
@@ -219,10 +368,10 @@ export function effectiveRolePool(
 		efforts: patchEfforts ?? persistent?.efforts ?? [],
 		provenance: {
 			models: patchModels
-				? source("session", active.name, role)
+				? { scope: "session", profile: active.name, role }
 				: persistentSource.models,
 			efforts: patchEfforts
-				? source("session", active.name, role)
+				? { scope: "session", profile: active.name, role }
 				: persistentSource.efforts,
 		},
 	};

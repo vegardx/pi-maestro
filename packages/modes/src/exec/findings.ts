@@ -135,17 +135,23 @@ export function renderFinding(f: StructuredFinding): string {
  */
 export const RESOLUTION_STATUSES = [
 	"fixed",
-	"wont-fix",
+	"unchanged",
 	"disputed",
+	"needs-user",
 	"duplicateOf",
+	// Legacy spelling accepted only for advisory findings.
+	"wont-fix",
 ] as const;
 export type ResolutionStatus = (typeof RESOLUTION_STATUSES)[number];
 
 export interface FindingResolution {
 	readonly id: string;
 	readonly status: ResolutionStatus;
-	/** Mandatory rationale: commit for fixed, reason for wont-fix/disputed. */
+	/** Mandatory rationale: fix commit, unchanged evidence, or escalation case. */
 	readonly note: string;
+	/** Immutable fix commit for fixed; evidence refs for escalations. */
+	readonly evidence?: readonly string[];
+	readonly fixCommit?: string;
 	/** duplicateOf only: the canonical id this finding merges into. */
 	readonly canonical?: string;
 }
@@ -379,7 +385,12 @@ export function isTerminal(
 ): boolean {
 	if (waived.has(e.finding.id)) return true;
 	if (isDuplicate(e)) return true;
-	if (e.resolution?.status === "wont-fix") return true; // minors only (enforced on apply)
+	if (e.resolution?.status === "wont-fix") return true; // legacy minors only
+	if (
+		e.resolution?.status === "unchanged" &&
+		!isBlockingSeverity(e.finding.severity)
+	)
+		return true;
 	if (e.resolution?.status === "fixed" && e.check?.result === "verified")
 		return true;
 	return false;
@@ -401,7 +412,9 @@ export function openDisputed(
 	waived: ReadonlySet<string> = new Set(),
 ): LedgerEntry[] {
 	return openBlocking(ledger, waived).filter(
-		(e) => e.resolution?.status === "disputed",
+		(e) =>
+			e.resolution?.status === "disputed" ||
+			e.resolution?.status === "needs-user",
 	);
 }
 
@@ -442,12 +455,24 @@ export function applyResolutions(
 			errors.push(`${r.id}: already settled (${describeState(entry)})`);
 			continue;
 		}
+		if (r.evidence?.some((item) => !item.trim())) {
+			errors.push(`${r.id}: evidence must not contain empty entries`);
+			continue;
+		}
 		switch (r.status) {
 			case "wont-fix":
+			case "unchanged":
 				if (isBlockingSeverity(entry.finding.severity)) {
 					errors.push(
-						`${r.id}: wont-fix is only legal for minor findings — ${entry.finding.severity} findings must be fixed or disputed`,
+						`${r.id}: ${r.status} is only legal for minor findings — ${entry.finding.severity} findings must be fixed or escalated`,
 					);
+				}
+				break;
+			case "needs-user":
+				if (!isBlockingSeverity(entry.finding.severity)) {
+					errors.push(`${r.id}: needs-user is reserved for blocking findings`);
+				} else if (!r.evidence?.length) {
+					errors.push(`${r.id}: needs-user requires evidence`);
 				}
 				break;
 			case "disputed":
@@ -475,6 +500,14 @@ export function applyResolutions(
 				break;
 			}
 			case "fixed":
+				if (
+					entry.finding.provenance?.length &&
+					(!r.fixCommit || !/^[0-9a-f]{40}$/i.test(r.fixCommit))
+				) {
+					errors.push(
+						`${r.id}: fixed requires an immutable 40-character fixCommit`,
+					);
+				}
 				break;
 		}
 	}
@@ -569,8 +602,8 @@ function describeState(e: LedgerEntry): string {
 		return `duplicate of ${e.resolution.canonical}`;
 	if (e.resolution.status === "fixed")
 		return e.check
-			? `fixed, ${e.check.result}`
-			: "fixed, awaiting verification";
+			? `fixed at ${e.resolution.fixCommit ?? "unknown commit"}, ${e.check.result}`
+			: `fixed at ${e.resolution.fixCommit ?? "unknown commit"}, awaiting verification`;
 	return e.resolution.status;
 }
 

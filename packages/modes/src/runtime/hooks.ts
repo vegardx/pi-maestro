@@ -337,6 +337,42 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			await rt.workerPanes.close();
 		}
 		if (rt.execution) {
+			const requestedAt = Date.now();
+			rt.setExecutionStage(
+				{
+					stage: "stopping",
+					deliverableId: rt.state.execution.deliverableId,
+				},
+				ctx,
+			);
+			const result = await rt.execution.prepareStop?.("host session shutdown");
+			if (result) {
+				rt.setExecutionStage(
+					{
+						stage: "stopped",
+						completedAt: result.stop.completedAt,
+						stop: result.stop,
+					},
+					ctx,
+				);
+			} else {
+				const completedAt = Date.now();
+				rt.setExecutionStage(
+					{
+						stage: "stopped",
+						completedAt,
+						stop: {
+							kind: "interrupted",
+							requestedAt,
+							completedAt,
+							reason: "host session shutdown",
+							outcome: "accepted",
+							recoverable: true,
+						},
+					},
+					ctx,
+				);
+			}
 			await rt.execution.destroy();
 			rt.execution = undefined;
 		}

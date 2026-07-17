@@ -2,13 +2,21 @@
 // Creates tmux sessions running `pi` for each agent, connected via RPC.
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	Answers,
 	InterruptResult,
 	RunId,
+	StopRecord,
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
@@ -206,6 +214,8 @@ export interface ExecutionAdapterOpts {
 	}) => Promise<{ modelId: string; effort?: ThinkingLevel }>;
 	/** Injectable read-only git/filesystem facts for restart validation. */
 	workspaceValidation?: Partial<WorkspaceValidationDeps>;
+	/** Fleet-wide stop grace; bounded by settings to 0–60000ms. */
+	stopGraceMs?: number;
 	/** Restart kill barrier timing (shortened in tests). */
 	restartKillTimeoutMs?: number;
 	restartPollMs?: number;
@@ -239,6 +249,31 @@ export interface ExecutionAdapterOpts {
 	 * runtime turns it into a decision question for the human.
 	 */
 	onShipGateBlocked?: (deliverableId: string, reason: string) => void;
+}
+
+export interface ExecutionStopOutcome {
+	readonly agentKey: string;
+	readonly generation: number;
+	readonly session: string;
+	readonly outcome: "cooperative" | "forced" | "not-proven";
+}
+
+export interface ExecutionStopHint {
+	readonly agentKey: string;
+	readonly generation: number;
+	readonly session?: string;
+	readonly workspace?: string;
+	readonly branch?: string;
+	readonly head?: string;
+	readonly usageRevision: number;
+	readonly children: readonly string[];
+	readonly pendingStages: readonly string[];
+}
+
+export interface ExecutionStopResult {
+	readonly stop: StopRecord;
+	readonly agents: readonly ExecutionStopOutcome[];
+	readonly hints: readonly ExecutionStopHint[];
 }
 
 export interface WorkerRestartResult {
@@ -324,6 +359,9 @@ export class ExecutionAdapter {
 	private pollInFlight = false; // skip overlapping pollSessions runs
 	/** All spawn/kill/poll/completion/restart/shutdown transitions serialize here. */
 	private lifecycleTail: Promise<void> = Promise.resolve();
+	private stopping = false;
+	private stopResult: ExecutionStopResult | undefined;
+	private stopPromise: Promise<ExecutionStopResult> | undefined;
 	private restarting = new Set<string>();
 	private childProjections: ChildProjectionStore;
 	private childControls = new Map<
@@ -742,27 +780,19 @@ export class ExecutionAdapter {
 			},
 
 			killSession: async (sessionId) => {
-				// Graceful first: shutdown over RPC, short grace, then tmux kill.
 				const agentKey = this.agentKeyForSession(sessionId);
 				if (agentKey) {
-					this.router.send(agentKey, {
-						type: "shutdown",
-						reason: "work complete",
-					});
-					const deadline = Date.now() + 5000;
-					while (
-						Date.now() < deadline &&
-						(await this.tmux.hasSession(sessionId))
-					) {
-						await new Promise((r) => setTimeout(r, 250));
-					}
-				}
-				if (await this.tmux.hasSession(sessionId)) {
-					try {
-						await this.tmux.kill(sessionId);
-					} catch {
-						// Session vanished between hasSession and kill — already dead.
-					}
+					await this.stopAndProveGone(
+						agentKey,
+						sessionId,
+						"work complete",
+						Date.now() +
+							(this.opts.stopGraceMs ??
+								this.opts.restartKillTimeoutMs ??
+								5000),
+					);
+				} else if (await this.tmux.hasSession(sessionId)) {
+					await this.tmux.kill(sessionId).catch(() => {});
 				}
 				this.takenNames.delete(sessionId);
 				// Prune live-session bookkeeping so getWorkerSessions() only
@@ -891,7 +921,8 @@ export class ExecutionAdapter {
 			panelGateDetail: (deliverableId) =>
 				this.deliverableGateDetail(deliverableId),
 
-			canActivate: this.opts.canActivate,
+			canActivate: () =>
+				!this.stopping && (this.opts.canActivate?.() ?? true),
 
 			now: () => new Date().toISOString(),
 		};
@@ -1337,12 +1368,12 @@ export class ExecutionAdapter {
 			const oldPath = deliverable.sessionPath ?? worker.sessionFile;
 			try {
 				if (oldSession) {
-					const gone = await this.stopAndProveGone(
+					const stopResult = await this.stopAndProveGone(
 						`${deliverableId}/worker`,
 						oldSession,
 						"worker restart",
 					);
-					if (!gone) {
+					if (!stopResult.gone) {
 						return this.failWorkerRestart(
 							preview,
 							`old tmux session ${oldSession} did not exit before timeout`,
@@ -1468,8 +1499,12 @@ export class ExecutionAdapter {
 				this.sessionNames.delete(agentKey);
 				this.respawnCount.delete(agentKey);
 				if (session) {
-					const gone = await this.stopAndProveGone(agentKey, session, reason);
-					if (!gone) {
+					const stopResult = await this.stopAndProveGone(
+						agentKey,
+						session,
+						reason,
+					);
+					if (!stopResult.gone) {
 						// Session survived the kill barrier: keep watching it and
 						// report failure instead of marking a live process pending.
 						this.sessionNames.set(agentKey, session);
@@ -1499,32 +1534,72 @@ export class ExecutionAdapter {
 		agentKey: string,
 		sessionId: string,
 		reason: string,
-	): Promise<boolean> {
-		this.router.send(agentKey, { type: "shutdown", reason });
-		const gracefulUntil =
-			Date.now() + Math.min(1000, this.opts.restartKillTimeoutMs ?? 5000);
-		while (Date.now() < gracefulUntil) {
+		deadlineAt = Date.now() + (this.opts.restartKillTimeoutMs ?? 5000),
+	): Promise<{ gone: boolean; cooperative: boolean }> {
+		const generation = this.currentGeneration(agentKey);
+		let cooperative = false;
+		try {
+			await this.router.request(
+				agentKey,
+				{
+					type: "prepareStop",
+					id: randomUUID(),
+					requestedAt: Date.now(),
+					deadlineAt,
+					reason,
+				},
+				Math.max(0, deadlineAt - Date.now()),
+			);
+			cooperative = true;
+		} catch {
+			// Deadline/disconnect falls through to the one forced escalation path.
+		}
+		if (!this.generationMatches(agentKey, generation, sessionId)) {
+			return { gone: true, cooperative };
+		}
+		while (Date.now() < deadlineAt) {
 			if (!(await this.tmux.hasSession(sessionId))) break;
 			await new Promise((resolve) =>
 				setTimeout(resolve, this.opts.restartPollMs ?? 50),
 			);
 		}
-		if (await this.tmux.hasSession(sessionId)) {
+		if (
+			this.generationMatches(agentKey, generation, sessionId) &&
+			(await this.tmux.hasSession(sessionId))
+		) {
 			await this.tmux.kill(sessionId).catch(() => {});
 		}
-		const deadline = Date.now() + (this.opts.restartKillTimeoutMs ?? 5000);
-		while (Date.now() < deadline) {
-			if (!(await this.tmux.hasSession(sessionId))) {
-				if (this.sessionNames.get(agentKey) === sessionId) {
-					this.sessionNames.delete(agentKey);
-				}
-				return true;
-			}
+		while (Date.now() < deadlineAt) {
+			if (!(await this.tmux.hasSession(sessionId))) break;
 			await new Promise((resolve) =>
 				setTimeout(resolve, this.opts.restartPollMs ?? 50),
 			);
 		}
-		return !(await this.tmux.hasSession(sessionId));
+		const gone = !(await this.tmux.hasSession(sessionId));
+		if (gone && this.sessionNames.get(agentKey) === sessionId) {
+			this.sessionNames.delete(agentKey);
+		}
+		return { gone, cooperative };
+	}
+
+	private currentGeneration(agentKey: string): number {
+		const [deliverableId, name] = agentKey.split("/");
+		return (
+			(deliverableId && name
+				? this.executor.getAgentState(deliverableId, name)?.generation
+				: undefined) ?? 0
+		);
+	}
+
+	private generationMatches(
+		agentKey: string,
+		generation: number,
+		sessionId: string,
+	): boolean {
+		return (
+			this.currentGeneration(agentKey) === generation &&
+			this.sessionNames.get(agentKey) === sessionId
+		);
 	}
 
 	private buildFreshRecoverySeed(
@@ -2495,26 +2570,148 @@ export class ExecutionAdapter {
 		return result;
 	}
 
-	async destroy(): Promise<void> {
-		return this.withLifecycle(async () => {
+	async prepareStop(reason = "execution shutdown"): Promise<ExecutionStopResult> {
+		if (this.stopResult) return this.stopResult;
+		if (this.stopPromise) return this.stopPromise;
+		this.stopping = true;
+		this.stopPromise = this.withLifecycle(async () => {
 			this._started = false;
 			if (this.pollTimer) {
 				clearInterval(this.pollTimer);
 				this.pollTimer = undefined;
 			}
-			// Kill all tmux sessions
-			for (const sessionName of this.sessionNames.values()) {
-				if (await this.tmux.hasSession(sessionName)) {
-					await this.tmux.kill(sessionName).catch(() => {});
-				}
-			}
-			this.sessionNames.clear();
+			const requestedAt = Date.now();
+			const grace = Math.min(
+				60_000,
+				Math.max(
+					0,
+					this.opts.stopGraceMs ?? this.opts.restartKillTimeoutMs ?? 5000,
+				),
+			);
+			const deadlineAt = requestedAt + grace;
+			const fleet = [...this.sessionNames.entries()].map(
+				([agentKey, session]) => ({
+					agentKey,
+					session,
+					generation: this.currentGeneration(agentKey),
+				}),
+			);
+			const settled = await Promise.all(
+				fleet.map(async ({ agentKey, session, generation }) => {
+					const result = await this.stopAndProveGone(
+						agentKey,
+						session,
+						reason,
+						deadlineAt,
+					);
+					return {
+						agentKey,
+						generation,
+						session,
+						outcome: result.gone
+							? result.cooperative
+								? ("cooperative" as const)
+								: ("forced" as const)
+							: ("not-proven" as const),
+					};
+				}),
+			);
+			const completedAt = Date.now();
+			const stop: StopRecord = {
+				kind: settled.some((item) => item.outcome === "not-proven")
+					? "failed"
+					: "interrupted",
+				requestedAt,
+				completedAt,
+				requestedBy: "maestro",
+				reason,
+				outcome: settled.some((item) => item.outcome === "forced")
+					? "escalated-kill"
+					: settled.some((item) => item.outcome === "not-proven")
+						? "timed-out"
+						: "accepted",
+				recoverable: true,
+			};
+			const hints = fleet.map(({ agentKey, session, generation }) =>
+				this.buildStopHint(agentKey, session, generation),
+			);
+			const result = {
+				stop,
+				agents: settled,
+				hints,
+			} satisfies ExecutionStopResult;
+			this.persistStopResult(result);
+			this.stopResult = result;
+			return result;
+		});
+		return this.stopPromise;
+	}
+
+	private buildStopHint(
+		agentKey: string,
+		session: string,
+		generation: number,
+	): ExecutionStopHint {
+		const [deliverableId, agentNamePart] = agentKey.split("/");
+		const deliverable = deliverableId
+			? findDeliverable(this.engine.get(), deliverableId)
+			: null;
+		const workspace = deliverable?.worktreePath;
+		const head = workspace
+			? runCommand("git", ["rev-parse", "HEAD"], { cwd: workspace })
+			: undefined;
+		const children = this.childProjections
+			.list()
+			.filter(
+				(record) =>
+					record.ownerId === agentKey &&
+					record.ownerGeneration === generation &&
+					!["succeeded", "failed", "stopped", "canceled", "timed-out"].includes(
+						record.projection.status,
+					),
+			)
+			.map((record) => record.projection.runId as string);
+		const state = deliverableId
+			? this.executor.getStates().get(deliverableId)
+			: undefined;
+		const agentStatus = agentNamePart
+			? state?.agents.get(agentNamePart)?.status
+			: undefined;
+		const pendingStages: string[] = [
+			...(state?.blocked ? [`blocked:${state.blocked}`] : []),
+			...(agentStatus ? [agentStatus] : []),
+			...(deliverable?.reviewLedger?.pendingRound ? ["review-pending"] : []),
+		];
+		return {
+			agentKey,
+			generation,
+			session,
+			...(workspace ? { workspace } : {}),
+			...(deliverable?.branch ? { branch: deliverable.branch } : {}),
+			...(head?.ok && head.stdout.trim() ? { head: head.stdout.trim() } : {}),
+			usageRevision: this.tokenSnapshots.get(agentKey)?.turns ?? 0,
+			children,
+			pendingStages,
+		};
+	}
+
+	private persistStopResult(result: ExecutionStopResult): void {
+		const path = join(this.opts.planDir, "execution-stop.json");
+		mkdirSync(this.opts.planDir, { recursive: true });
+		const tmp = `${path}.${process.pid}.tmp`;
+		writeFileSync(tmp, JSON.stringify({ version: 1, ...result }, null, 2));
+		renameSync(tmp, path);
+	}
+
+	async destroy(): Promise<void> {
+		await this.prepareStop("execution adapter destroyed");
+		return this.withLifecycle(async () => {
 			for (const pending of this.childControls.values()) {
 				clearTimeout(pending.timer);
 			}
 			this.childControls.clear();
 			this.router.dispose();
-			this.rpcServer.close();
+			await this.rpcServer.close();
 		});
 	}
 

@@ -102,4 +102,34 @@ describe("ChildProjectionStore", () => {
 		});
 		expect(restored.get("child-1")?.confirmed).toBe(true);
 	});
+
+	it("markLiveUnconfirmed(ownerId) unconfirms only that owner's live records", () => {
+		const { store: s } = store();
+		const projFor = (id: string): ChildRunProjection => ({
+			...projection(1),
+			runId: runId(id),
+		});
+		s.apply({
+			ownerId: "ga/worker",
+			expectedGeneration: 1,
+			ownerGeneration: 1,
+			reconcile: false,
+			runs: [projFor("child-a")],
+		});
+		s.apply({
+			ownerId: "gb/worker",
+			expectedGeneration: 1,
+			ownerGeneration: 1,
+			reconcile: false,
+			runs: [projFor("child-b")],
+		});
+		expect(s.get("child-a")?.confirmed).toBe(true);
+		expect(s.get("child-b")?.confirmed).toBe(true);
+
+		// One owner disconnects: only its records degrade to unconfirmed.
+		s.markLiveUnconfirmed("ga/worker");
+
+		expect(s.get("child-a")?.confirmed).toBe(false);
+		expect(s.get("child-b")?.confirmed).toBe(true);
+	});
 });

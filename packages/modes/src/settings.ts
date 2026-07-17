@@ -261,6 +261,23 @@ export function readExecutionPolicySettings(
 	return { preset: custom ? "custom" : preset, ...resolved };
 }
 
+export interface ExecutionLifecycleSettings {
+	stopGraceMs: number;
+}
+
+/** Fleet-wide cooperative shutdown grace, bounded to avoid infinite teardown. */
+export function readExecutionLifecycleSettings(
+	cwd: string,
+	agentDir?: string,
+): ExecutionLifecycleSettings {
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const raw = getConfigNumber(merged, NAME, "execution.stopGraceMs", 5000);
+	return {
+		stopGraceMs:
+			Number.isFinite(raw) && raw >= 0 && raw <= 60_000 ? raw : 5000,
+	};
+}
+
 // ---- Worktree provisioning settings -----------------------------------------
 
 /** Environment setup for freshly provisioned worktrees (provisioner shape). */

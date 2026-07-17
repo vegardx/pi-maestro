@@ -56,6 +56,7 @@ import {
 	getImplementOverrides,
 	type ImplementOverrides,
 	readChildExtensions,
+	readExecutionLifecycleSettings,
 	readWorktreeSetupSettings,
 	setImplementOverrides,
 } from "../settings.js";
@@ -653,6 +654,7 @@ export function createRuntimeContext(
 				planDir: join(plansRoot(), activeEngine.get().slug),
 				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
 				worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
+				stopGraceMs: readExecutionLifecycleSettings(ctx.cwd).stopGraceMs,
 				resolveWorkerModel: async (choice) => {
 					const authored = getImplementOverrides();
 					const resolved = await resolveSpawnModelSafe(ctx, {

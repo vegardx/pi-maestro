@@ -6,7 +6,10 @@ import {
 	MODES_STATE_ENTRY,
 	toPersistedState,
 } from "../packages/modes/src/session.js";
-import { readModesCompactionSettings } from "../packages/modes/src/settings.js";
+import {
+	readExecutionLifecycleSettings,
+	readModesCompactionSettings,
+} from "../packages/modes/src/settings.js";
 import {
 	initialModesState,
 	setExecution,
@@ -20,6 +23,14 @@ describe("modes compaction settings", () => {
 		const s = readModesCompactionSettings("/no/such/project");
 		expect(s.phaseTokens).toBe(10000);
 		expect(s.timeoutMs).toBe(90000);
+	});
+});
+
+describe("execution lifecycle settings", () => {
+	it("defaults stop grace to five seconds", () => {
+		expect(readExecutionLifecycleSettings("/no/such/project").stopGraceMs).toBe(
+			5000,
+		);
 	});
 });
 

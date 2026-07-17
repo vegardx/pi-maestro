@@ -333,6 +333,7 @@ export class ExecutionAdapter {
 	private childControls = new Map<
 		string,
 		{
+			readonly ownerId: string;
 			readonly resolve: (result: ChildRunControlResultMessage) => void;
 			readonly timer: ReturnType<typeof setTimeout>;
 		}
@@ -445,7 +446,14 @@ export class ExecutionAdapter {
 				// A dead agent can never consume answers — drop its pending
 				// question so /answer doesn't offer a phantom entry.
 				this.questionQueue.drop(agentId);
+				// Its projected child runs can no longer be confirmed live — degrade
+				// them to unconfirmed so the view stops advertising them as
+				// controllable until the owner reconnects and reconciles.
+				this.childProjections.markLiveUnconfirmed(agentId);
+				// Cancel ONLY this owner's pending controls; other owners' in-flight
+				// requests must not be resolved out from under them.
 				for (const [id, pending] of this.childControls) {
+					if (pending.ownerId !== agentId) continue;
 					this.childControls.delete(id);
 					clearTimeout(pending.timer);
 					pending.resolve({
@@ -711,7 +719,10 @@ export class ExecutionAdapter {
 				this.opts.onAgentStateChanged?.(agentKey, {
 					status: "working",
 					generation,
-					revision: 1,
+					// Seed at revision 0 (zero snapshot): the worker's first real
+					// cumulative report is revision 1, which recordCheckpoint accepts
+					// (1 > 0). Seeding at 1 would tie and reject that first report.
+					revision: 0,
 					tokens: {
 						input: 0,
 						output: 0,
@@ -1186,10 +1197,12 @@ export class ExecutionAdapter {
 				// the dying process must not land as fresh state.
 				this.rpcServer.disconnect(agentKey);
 				const session = worker.sessionId ?? this.sessionNames.get(agentKey);
-				// Dropping the poll mapping and the crash budget is what breaks
-				// the force-exit → auto-respawn loop: pollSessionsLocked iterates
-				// sessionNames, and a later /recover gets fresh respawn attempts.
-				this.sessionNames.delete(agentKey);
+				// Drop the crash budget so a later /recover gets fresh respawn
+				// attempts. Do NOT drop the sessionNames mapping yet:
+				// stopAndProveGone's generation guard needs it to actually poll and
+				// kill the tmux session, and it removes the mapping itself once the
+				// process is proven gone — a premature delete short-circuits the
+				// guard to {gone:true} and the real kill never runs.
 				this.respawnCount.delete(agentKey);
 				if (session) {
 					const stopResult = await this.stopAndProveGone(
@@ -1560,7 +1573,7 @@ export class ExecutionAdapter {
 				});
 			}, 30_000);
 			timer.unref?.();
-			this.childControls.set(id, { resolve, timer });
+			this.childControls.set(id, { ownerId: record.ownerId, resolve, timer });
 		});
 		const sent = this.router.send(record.ownerId, {
 			type: "childRunControl",

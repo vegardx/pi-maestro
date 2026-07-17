@@ -71,11 +71,16 @@ export class ChildProjectionStore {
 		return this.records.get(runId);
 	}
 
-	/** Restore is pessimistic: previously-live records await owner reconciliation. */
-	markLiveUnconfirmed(): void {
+	/**
+	 * Mark live records unconfirmed — they await owner reconciliation. Restore
+	 * is pessimistic and unconfirms every owner's live records; passing
+	 * `ownerId` scopes it to one owner (e.g. when that owner disconnects).
+	 */
+	markLiveUnconfirmed(ownerId?: string): void {
 		let changed = false;
 		for (const [id, record] of this.records) {
 			if (terminal(record.projection.status) || !record.confirmed) continue;
+			if (ownerId !== undefined && record.ownerId !== ownerId) continue;
 			this.records.set(id, { ...record, confirmed: false });
 			changed = true;
 		}

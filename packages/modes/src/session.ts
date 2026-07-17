@@ -123,7 +123,10 @@ function parseExecution(value: unknown): ExecutionState {
 			"Invalid Maestro execution state: stopped requires completedAt and stop record",
 		);
 	}
-	if (stage !== "stopped" && (completedAt !== undefined || stop !== undefined)) {
+	if (
+		stage !== "stopped" &&
+		(completedAt !== undefined || stop !== undefined)
+	) {
 		throw new Error(
 			"Invalid Maestro execution state: completion metadata requires stopped",
 		);

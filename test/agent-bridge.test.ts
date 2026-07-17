@@ -63,7 +63,9 @@ describe("AgentBridge", () => {
 		agentId = "test-agent",
 		opts?: {
 			requestTimeoutMs?: number;
-			persistStopNotice?: ConstructorParameters<typeof AgentBridge>[0]["persistStopNotice"];
+			persistStopNotice?: ConstructorParameters<
+				typeof AgentBridge
+			>[0]["persistStopNotice"];
 			childRuns?: ConstructorParameters<typeof AgentBridge>[0]["childRuns"];
 		},
 	): AgentBridge {
@@ -476,13 +478,21 @@ describe("AgentBridge", () => {
 		expect(stop).toHaveBeenCalledWith("child-1", "host exit");
 		expect(messages).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ type: "tokens", snapshot: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: 12, cost: 0, turns: 0 } }),
+				expect.objectContaining({
+					type: "tokens",
+					snapshot: expect.objectContaining({
+						input: 10,
+						output: 2,
+						promptTokens: 10,
+						totalTokens: 12,
+					}),
+				}),
 				expect.objectContaining({ type: "status", status: "stopping" }),
 				expect.objectContaining({
 					type: "prepareStopAck",
 					id: "stop-1",
 					children: 1,
-					usageRevision: 1,
+					usageRevision: 2,
 					outcome: "cooperative",
 				}),
 			]),

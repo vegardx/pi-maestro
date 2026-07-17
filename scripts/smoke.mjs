@@ -29,17 +29,11 @@ const maestroMenuSource = readFileSync(
 	join(ROOT, "packages/settings/src/menu.ts"),
 	"utf8",
 );
-for (const primitive of [
-	"SettingsList",
-	"SelectList",
-	"DynamicBorder",
-	"getSettingsListTheme",
-	"getSelectListTheme",
-]) {
-	if (!maestroMenuSource.includes(primitive)) {
-		console.error(`  ✗ /maestro no longer uses core ${primitive}`);
-		process.exit(1);
-	}
+if (!maestroMenuSource.includes("readDomainSnapshot")) {
+	console.error(
+		"  ✗ /maestro no longer reads the exact agent configuration graph",
+	);
+	process.exit(1);
 }
 if (maestroMenuSource.includes("class ConfigMenuComponent")) {
 	console.error(

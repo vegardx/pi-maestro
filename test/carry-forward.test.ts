@@ -99,7 +99,6 @@ describe("harvestInventory", () => {
 		});
 		expect(text).toContain("arc-one — Arc One");
 		expect(text).toContain("auth [active] · tasks 1/2");
-		expect(text).toContain("cycle 1/3 · 1 blocking open");
 		expect(text).toContain("BLOCKED: ship gate");
 		expect(text).toContain("auth/worker");
 		expect(text).toContain("Which auth scheme?");

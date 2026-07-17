@@ -14,13 +14,13 @@ import type {
 	ResolvedAgentAssignment,
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
+import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec } from "./model-spec.js";
 import {
 	activePreset,
 	readModelsConfig,
 	SESSION_MODEL_SENTINEL,
 } from "./profiles.js";
-import { supportedEfforts } from "./efforts.js";
 
 export interface PersistedExactAssignment {
 	readonly presetId: string;

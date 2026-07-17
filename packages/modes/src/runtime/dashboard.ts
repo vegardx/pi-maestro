@@ -6,8 +6,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { Plan } from "../schema.js";
-import { hudElapsed } from "./hud.js";
 import type { RuntimeContext } from "./context.js";
+import { hudElapsed } from "./hud.js";
 
 /** Install the maestro footer and remember its invalidate handle. */
 export function installMaestroFooter(
@@ -90,8 +90,7 @@ function liveSuffix(
 	if (!agent) return "";
 	const t = agent.tokens;
 	const prompt =
-		t.promptTokens ??
-		t.input + (t.cacheRead ?? 0) + (t.cacheWrite ?? 0);
+		t.promptTokens ?? t.input + (t.cacheRead ?? 0) + (t.cacheWrite ?? 0);
 	const cache =
 		(t.cacheRead ?? 0) > 0 && prompt > 0
 			? ` · cache ${Math.round(((t.cacheRead ?? 0) / prompt) * 100)}%`

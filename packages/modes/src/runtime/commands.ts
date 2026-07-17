@@ -3,19 +3,15 @@
 // RuntimeContext; heavy lifting stays in context.ts / the execution seam.
 
 import { join } from "node:path";
-import { complete } from "@earendil-works/pi-ai/compat";
 import {
 	defineTool,
 	type ExtensionCommandContext,
-	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { type Answer, CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
+import { type Answer, CAPABILITIES } from "@vegardx/pi-contracts";
 import { getModelMeta, resolveExactModelSelection } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
-import { buildCarryForwardSummary } from "../compaction.js";
 import { buildRecap } from "../deliverable-recap.js";
-import type { PlanEngine } from "../engine.js";
 import { applyRemediation, renderRemediation } from "../exec/remediate.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
 import {
@@ -25,12 +21,7 @@ import {
 	verifyTargets,
 } from "../exec/verify.js";
 import { themeRollup, writeVerificationReport } from "../exec/verify-report.js";
-import { buildForwardSummaryPrompt } from "../forward-summary.js";
-import type { Deliverable } from "../schema.js";
-import { resolveShipSummaryInput } from "../session.js";
-import { readModesCompactionSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
-import { createModesSummariser } from "../summarise.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import {
 	handleInterruptCommand,
@@ -622,112 +613,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			"Cycle Maestro mode: plan ⇄ auto (recon and hack exit into plan).",
 		handler: (ctx) => rt.cycle(ctx),
 	});
-}
-
-/**
- * Build a deliverable's forward-looking carry-forward summary at ship time.
- * Reads the deliverable's OWN session (soft-fails if /ship runs elsewhere),
- * distils rolling summary + raw tail once, and returns undefined on any
- * soft-failure so shipping always proceeds.
- */
-async function buildShipSummary(
-	deliverable: Deliverable,
-	engine: PlanEngine,
-	ctx: ExtensionContext,
-	readSettings: typeof readModesCompactionSettings,
-): Promise<string | undefined> {
-	const settings = readSettings(ctx.cwd);
-	const currentSessionFile = ctx.sessionManager.getSessionFile?.();
-
-	// If the deliverable was worked in a different session (e.g. by an agent
-	// subagent), load that session's entries from disk so the carry-forward
-	// summary reflects the actual implementation work.
-	let entries = ctx.sessionManager.getEntries();
-	let sessionFile = currentSessionFile;
-	if (
-		deliverable.sessionPath &&
-		currentSessionFile &&
-		deliverable.sessionPath !== currentSessionFile
-	) {
-		try {
-			const { readFileSync } = await import("node:fs");
-			const raw = readFileSync(deliverable.sessionPath, "utf8");
-			entries = raw
-				.split("\n")
-				.filter(Boolean)
-				.map((line) => JSON.parse(line));
-			sessionFile = deliverable.sessionPath;
-		} catch {
-			// Worker session file missing or unreadable; fall through to
-			// resolveShipSummaryInput which will soft-fail gracefully.
-		}
-	}
-
-	const resolved = resolveShipSummaryInput(entries, deliverable, sessionFile);
-	if (!resolved.ok) return undefined;
-	const summarise = createModesSummariser(ctx, settings.timeoutMs);
-	const text = await buildCarryForwardSummary({
-		plan: engine.get(),
-		deliverable,
-		rollingSummary: resolved.input.rollingSummary,
-		rawTail: resolved.input.rawTail,
-		summarise,
-		maxTokens: settings.phaseTokens,
-	});
-	return text ?? undefined;
-}
-
-type ForwardSummaryInput = {
-	completed: { title: string; body: string };
-	agentOutput: string;
-	consumers: { title: string; body: string; tasks: string[] }[];
-};
-
-/**
- * Create a forward-looking summary generator bound to the extension context.
- * Uses the plan-summarizer role policy default for the LLM call.
- */
-function _createForwardSummaryGenerator(
-	ctx: ExtensionContext,
-): (input: ForwardSummaryInput) => Promise<string> {
-	return async (input) => {
-		const resolution = await resolveExactModelSelection(ctx, {
-			role: "plan-summarizer",
-			requireApiKey: true,
-		});
-		const resolved = resolution.selected;
-		if (!resolved?.apiKey) {
-			throw new Error("No model available for summary generation");
-		}
-
-		const promptText = buildForwardSummaryPrompt(input);
-		const response = await complete(
-			resolved.model,
-			{
-				messages: [
-					{
-						role: "user",
-						content: [{ type: "text", text: promptText }],
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{
-				apiKey: resolved.apiKey,
-				headers: resolved.headers,
-				maxTokens: 512,
-			},
-		);
-
-		const text = response.content
-			.filter((c): c is { type: "text"; text: string } => c.type === "text")
-			.map((c) => c.text)
-			.join("\n")
-			.trim();
-
-		if (!text) throw new Error("Empty summary response");
-		return text;
-	};
 }
 
 // ─── /verify remediation triage ──────────────────────────────────────────────

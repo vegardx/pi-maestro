@@ -27,7 +27,9 @@ export class SpawnModelResolutionError extends Error {
 		readonly request: SpawnModelRequest,
 		readonly reasons: readonly string[],
 	) {
-		super(`No exact ${request.role} model resolved: ${reasons.join("; ") || "no model available"}`);
+		super(
+			`No exact ${request.role} model resolved: ${reasons.join("; ") || "no model available"}`,
+		);
 		this.name = "SpawnModelResolutionError";
 	}
 }
@@ -67,11 +69,15 @@ export async function resolveSpawnModel(
 	if (!selected) {
 		throw new SpawnModelResolutionError(
 			request,
-			initial.errors.map((error) => error.message).concat(
-				request.model || request.effort
-					? [`No configured option matches ${request.model ?? "default model"} @ ${request.effort ?? "default effort"}`]
-					: [],
-			),
+			initial.errors
+				.map((error) => error.message)
+				.concat(
+					request.model || request.effort
+						? [
+								`No configured option matches ${request.model ?? "default model"} @ ${request.effort ?? "default effort"}`,
+							]
+						: [],
+				),
 		);
 	}
 	return {
@@ -91,7 +97,12 @@ export async function resolveSpawnModelSafe(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<never>((_resolve, reject) => {
 		timer = setTimeout(
-			() => reject(new SpawnModelResolutionError(request, ["resolution timed out after 5s"])),
+			() =>
+				reject(
+					new SpawnModelResolutionError(request, [
+						"resolution timed out after 5s",
+					]),
+				),
 			5_000,
 		);
 		timer.unref?.();

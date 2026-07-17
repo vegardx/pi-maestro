@@ -63,7 +63,7 @@ export default defineExtension(
 		doc: "Replaces default compaction with a work-focused summary optimised for continuing the active task.",
 	},
 	(pi, maestro) => {
-		// Model/effort selection belongs to the compact-summarizer role pool;
+		// Model and effort selection belongs to the exact compact-summarizer set;
 		// only ordinary compaction knobs are declared under Advanced.
 
 		// In-flight guard for the proactive compactAt trigger (see turn_end).

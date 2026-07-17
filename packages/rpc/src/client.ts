@@ -16,7 +16,11 @@ export interface MaestroRpcClientEvents {
 }
 
 /** Identity fields for the hello sent on (re)connect. */
-export type HelloIdentity = Omit<HelloMessage, "type" | "id" | "v">;
+export type HelloIdentity = Omit<
+	HelloMessage,
+	"type" | "id" | "v" | "kind" | "generation" | "assignment"
+> &
+	Partial<Pick<HelloMessage, "kind" | "generation" | "assignment">>;
 
 export interface MaestroRpcClientOptions {
 	/** Retry connection on failure. Default: true */
@@ -103,6 +107,9 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 				type: "hello",
 				id: randomUUID(),
 				v: PROTOCOL_VERSION,
+				kind: identity.kind ?? "worker",
+				generation: identity.generation ?? 0,
+				assignment: identity.assignment ?? defaultAssignment(identity.agentId),
 				...identity,
 			};
 			socket.write(`${JSON.stringify(hello)}\n`);
@@ -153,4 +160,24 @@ export class MaestroRpcClient extends EventEmitter<MaestroRpcClientEvents> {
 			// Ignore malformed lines
 		}
 	}
+}
+
+function defaultAssignment(agentId: string): HelloMessage["assignment"] {
+	return {
+		agentId,
+		kind: "worker",
+		presetId: "worker",
+		modelSetId: "session",
+		optionId: "session",
+		modelId: "session",
+		runtime: {
+			mode: "full",
+			transport: "tmux",
+			tools: {},
+			session: "persistent",
+			isolation: "host",
+		},
+		resolvedAt: new Date().toISOString(),
+		source: "session",
+	};
 }

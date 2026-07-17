@@ -11,6 +11,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import {
 	DELIVERABLE_STATUSES,
+	type DeliveryFailure,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
@@ -90,6 +91,20 @@ const DeliverableParams = Type.Object({
 	status: Type.Optional(
 		Type.Union(DELIVERABLE_STATUSES.map((s) => Type.Literal(s))),
 	),
+	failure: Type.Optional(
+		Type.Object(
+			{
+				code: Type.String({ minLength: 1 }),
+				message: Type.String({ minLength: 1 }),
+				failedAt: Type.String({ minLength: 1 }),
+				recoverable: Type.Boolean(),
+				attempt: Type.Integer({ minimum: 1 }),
+				agentId: Type.Optional(Type.String({ minLength: 1 })),
+				cause: Type.Optional(Type.String({ minLength: 1 })),
+			},
+			{ additionalProperties: false },
+		),
+	),
 	dependsOn: Type.Optional(
 		Type.Array(Type.String(), {
 			description: "Deliverable ids this one waits on.",
@@ -132,6 +147,7 @@ const DeliverableParams = Type.Object({
 			Type.Literal("low"),
 			Type.Literal("medium"),
 			Type.Literal("high"),
+			Type.Literal("xhigh"),
 		]),
 	),
 	items: Type.Optional(
@@ -187,6 +203,7 @@ const DeliverableParams = Type.Object({
 						Type.Literal("low"),
 						Type.Literal("medium"),
 						Type.Literal("high"),
+						Type.Literal("xhigh"),
 					]),
 				),
 			}),
@@ -282,6 +299,7 @@ const AgentParams = Type.Object({
 			Type.Literal("low"),
 			Type.Literal("medium"),
 			Type.Literal("high"),
+			Type.Literal("xhigh"),
 		]),
 	),
 	focus: Type.Optional(
@@ -640,7 +658,11 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							workerEffort: params.workerEffort as ThinkingLevel | undefined,
 						});
 						if (params.status) {
-							engine.setDeliverableStatus(params.id, params.status);
+							engine.setDeliverableStatus(
+								params.id,
+								params.status,
+								params.failure as DeliveryFailure | undefined,
+							);
 						}
 						notify(deps, engine);
 						return ok(`Updated deliverable ${params.id}.`, {

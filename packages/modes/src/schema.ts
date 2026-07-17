@@ -8,9 +8,16 @@
 import { basename, resolve } from "node:path";
 import {
 	type AgentMode,
+	DELIVERABLE_TRANSITIONS as CONTRACT_DELIVERABLE_TRANSITIONS,
 	DELIVERABLE_STATUSES,
 	type DeliverableStatus,
+	type DeliveryFailure,
+	PLAN_SCHEMA_VERSION,
+	type StructuredFinding,
 	type ThinkingLevel,
+	type TransitionGate,
+	validateStructuredFinding,
+	validateTransitionGate,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
@@ -20,7 +27,11 @@ export {
 	type AgentMode,
 	DELIVERABLE_STATUSES,
 	type DeliverableStatus,
+	type DeliveryFailure,
+	PLAN_SCHEMA_VERSION,
+	type StructuredFinding,
 	type ThinkingLevel,
+	type TransitionGate,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 };
@@ -201,6 +212,14 @@ export interface Deliverable {
 	 * source of truth.
 	 */
 	reviewLedger?: ReviewLedger;
+	/** Recoverable or terminal failure detail when status is `failed`. */
+	failure?: DeliveryFailure;
+	/** Durable transition evidence; malformed gates fail plan validation. */
+	gates?: TransitionGate[];
+	/** Canonical cross-workflow findings. */
+	findings?: StructuredFinding[];
+	/** First completion timestamp; retained if review reopens the delivery. */
+	completedAt?: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -256,6 +275,7 @@ export interface PlanRepo {
 export const DEFAULT_REPO_KEY = "default";
 
 export interface Plan {
+	schemaVersion: typeof PLAN_SCHEMA_VERSION;
 	slug: string;
 	title: string;
 	repoPath: string;
@@ -369,19 +389,7 @@ export function findAgent(
 export const DELIVERABLE_TRANSITIONS: Record<
 	DeliverableStatus,
 	readonly DeliverableStatus[]
-> = {
-	planned: ["active", "abandoned"],
-	active: ["complete", "abandoned"],
-	// complete → active: reopened for rework (a human sent the worker back to
-	// address review findings at the ship gate). complete/shipped → planned:
-	// reopened by /verify remediation — the deliverable re-enters the DAG
-	// queue (its branch/worktree/PR are reused) and normal activation
-	// re-provisions and respawns a worker when its dependencies allow.
-	complete: ["active", "planned", "shipped", "superseded", "abandoned"],
-	shipped: ["planned"],
-	superseded: [],
-	abandoned: [],
-};
+> = CONTRACT_DELIVERABLE_TRANSITIONS;
 
 /** Terminal statuses — the deliverable will not transition again. */
 export const TERMINAL_STATUSES: readonly DeliverableStatus[] = [
@@ -703,9 +711,12 @@ export function boundedPreviousSessionPaths(
 
 /** Structural invariants enforced before saving. Empty array = valid. */
 export function validatePlanShape(
-	plan: Pick<Plan, "deliverables" | "repos">,
+	plan: Pick<Plan, "schemaVersion" | "deliverables" | "repos">,
 ): string[] {
 	const problems: string[] = [];
+	if (plan.schemaVersion !== PLAN_SCHEMA_VERSION) {
+		problems.push(`schemaVersion must be ${PLAN_SCHEMA_VERSION}`);
+	}
 	const deliverableIds = new Set(plan.deliverables.map((g) => g.id));
 
 	// Repo key validation
@@ -743,6 +754,64 @@ export function validatePlanShape(
 	};
 
 	for (const g of plan.deliverables) {
+		if (!DELIVERABLE_STATUSES.includes(g.status)) {
+			problems.push(
+				`deliverable \`${g.id}\`: unsupported status \`${String(g.status)}\``,
+			);
+		}
+		if (g.status === "failed" && !g.failure) {
+			problems.push(
+				`deliverable \`${g.id}\`: failed status requires failure detail`,
+			);
+		}
+		if (g.failure) {
+			if (!g.failure.code.trim() || !g.failure.message.trim()) {
+				problems.push(
+					`deliverable \`${g.id}\`: failure code and message must be non-empty`,
+				);
+			}
+			if (!Number.isFinite(Date.parse(g.failure.failedAt))) {
+				problems.push(
+					`deliverable \`${g.id}\`: failure.failedAt must be an ISO timestamp`,
+				);
+			}
+			if (!Number.isSafeInteger(g.failure.attempt) || g.failure.attempt < 1) {
+				problems.push(
+					`deliverable \`${g.id}\`: failure.attempt must be a positive safe integer`,
+				);
+			}
+		}
+		if (g.status !== "failed" && g.failure) {
+			problems.push(
+				`deliverable \`${g.id}\`: only failed status may carry failure detail`,
+			);
+		}
+		if (
+			g.completedAt !== undefined &&
+			!Number.isFinite(Date.parse(g.completedAt))
+		) {
+			problems.push(
+				`deliverable \`${g.id}\`: completedAt must be an ISO timestamp`,
+			);
+		}
+		for (const [index, finding] of (g.findings ?? []).entries()) {
+			for (const problem of validateStructuredFinding(finding)) {
+				problems.push(`deliverable \`${g.id}\` finding ${index}: ${problem}`);
+			}
+		}
+		const findingIds = new Set((g.findings ?? []).map((finding) => finding.id));
+		for (const [index, gate] of (g.gates ?? []).entries()) {
+			for (const problem of validateTransitionGate(gate)) {
+				problems.push(`deliverable \`${g.id}\` gate ${index}: ${problem}`);
+			}
+			for (const findingId of gate.findingIds ?? []) {
+				if (!findingIds.has(findingId)) {
+					problems.push(
+						`deliverable \`${g.id}\` gate ${index}: unknown finding \`${findingId}\``,
+					);
+				}
+			}
+		}
 		if (
 			g.sessionGeneration !== undefined &&
 			(!Number.isSafeInteger(g.sessionGeneration) || g.sessionGeneration < 0)

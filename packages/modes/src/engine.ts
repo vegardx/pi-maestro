@@ -13,9 +13,11 @@ import {
 	DEFAULT_REPO_KEY,
 	type Deliverable,
 	type DeliverableStatus,
+	type DeliveryFailure,
 	defaultBranchForDeliverable,
 	findDeliverable,
 	findTask,
+	PLAN_SCHEMA_VERSION,
 	type Plan,
 	type PlanPhase,
 	type PlanRepo,
@@ -148,6 +150,7 @@ export class PlanEngine {
 	): PlanEngine {
 		const ts = now();
 		const plan: Plan = {
+			schemaVersion: PLAN_SCHEMA_VERSION,
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
@@ -167,6 +170,7 @@ export class PlanEngine {
 	): PlanEngine {
 		const ts = now();
 		const plan: Plan = {
+			schemaVersion: PLAN_SCHEMA_VERSION,
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
@@ -350,14 +354,32 @@ export class PlanEngine {
 		});
 	}
 
-	setDeliverableStatus(id: string, status: DeliverableStatus): void {
+	setDeliverableStatus(
+		id: string,
+		status: DeliverableStatus,
+		failure?: DeliveryFailure,
+	): void {
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, id);
 			if (!g) throw new Error(`unknown deliverable: ${id}`);
 			if (g.status !== status && !canTransition(g.status, status)) {
 				throw new Error(`illegal status transition: ${g.status} → ${status}`);
 			}
+			if (status === "failed" && !failure) {
+				throw new Error("failed delivery requires failure detail");
+			}
 			g.status = status;
+			g.failure = status === "failed" ? failure : undefined;
+			if (
+				(status === "complete" ||
+					status === "failed" ||
+					status === "shipped" ||
+					status === "superseded" ||
+					status === "abandoned") &&
+				!g.completedAt
+			) {
+				g.completedAt = this.now();
+			}
 			g.updatedAt = this.now();
 		});
 	}

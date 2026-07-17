@@ -1,5 +1,6 @@
 import {
 	ALL_MODES,
+	canTransitionExecutionStage,
 	type ExecutionStage,
 	MODE_NAMES,
 	type ModeName,
@@ -64,6 +65,14 @@ export function setExecution(
 	execution: ExecutionState,
 	now: () => string = isoNow,
 ): ModesState {
+	if (
+		state.execution.stage !== execution.stage &&
+		!canTransitionExecutionStage(state.execution.stage, execution.stage)
+	) {
+		throw new Error(
+			`illegal execution transition: ${state.execution.stage} → ${execution.stage}`,
+		);
+	}
 	return { ...state, execution, updatedAt: now() };
 }
 

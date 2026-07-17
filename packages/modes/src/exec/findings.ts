@@ -5,28 +5,16 @@
 // judgment (severity, sameness, disputes) while the machine owns bookkeeping
 // (uniqueness, completeness, termination).
 
+import {
+	FINDING_SEVERITIES,
+	type FindingSeverity,
+	type StructuredFinding,
+	validateStructuredFinding,
+} from "@vegardx/pi-contracts";
 import { parseVerdict } from "./verdicts.js";
 
-/** Severity buckets — "critical" is un-ship-this, "minor" is note-for-later. */
-export const FINDING_SEVERITIES = ["critical", "major", "minor"] as const;
-export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
-
-/**
- * One structured finding. The claim/actual pair is what makes a finding
- * decidable without reading the full report; `category` groups cross-cutting
- * themes across deliverables; `task` links back to the WorkItem whose claimed
- * completion it contradicts.
- */
-export interface StructuredFinding {
-	readonly id: string;
-	readonly severity: FindingSeverity;
-	readonly category: string;
-	readonly file?: string;
-	readonly line?: number;
-	readonly task?: string;
-	readonly claim?: string;
-	readonly actual: string;
-}
+export type { FindingSeverity, StructuredFinding };
+export { FINDING_SEVERITIES };
 
 /** critical/major hold the gate; minor is advisory (worker's discretion). */
 export function isBlockingSeverity(s: FindingSeverity): boolean {
@@ -61,9 +49,14 @@ export function parseJsonFindings(report: string): StructuredFinding[] | null {
 			findings?: Array<Record<string, unknown>>;
 		};
 		if (Array.isArray(parsed.findings)) {
-			return parsed.findings
+			const findings = parsed.findings
 				.map((f, i) => normalizeFinding(f, i))
 				.filter((f): f is StructuredFinding => f !== null);
+			return findings.every(
+				(finding) => validateStructuredFinding(finding).length === 0,
+			)
+				? findings
+				: null;
 		}
 	} catch {
 		// fall through to the bullet fallback

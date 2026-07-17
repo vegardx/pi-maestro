@@ -1678,7 +1678,7 @@ export class ExecutionAdapter {
 		agentId: string,
 		deliverableId: string,
 		agentNamePart: string,
-		status: "working" | "idle" | "error",
+		status: "working" | "idle" | "stopping" | "stopped" | "error",
 	): void {
 		if (this.restarting.has(deliverableId)) return;
 		const mapped = this.sessionNames.get(agentId);

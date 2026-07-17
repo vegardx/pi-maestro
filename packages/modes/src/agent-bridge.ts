@@ -6,6 +6,7 @@ import type {
 import type {
 	Answers,
 	Questionnaire,
+	ResolvedAgentAssignment,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
 import {
@@ -45,11 +46,33 @@ export interface AgentBridgeDeps {
 	readonly pi: ExtensionAPI;
 	readonly socketPath: string;
 	readonly agentId: string;
+	readonly assignment?: ResolvedAgentAssignment;
+	readonly generation?: number;
 	/** Timeout for planRead/planMutate requests. Default: 30s. */
 	readonly requestTimeoutMs?: number;
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+function defaultAssignment(agentId: string): ResolvedAgentAssignment {
+	return {
+		agentId,
+		kind: "worker",
+		presetId: "worker",
+		modelSetId: "session",
+		optionId: "session",
+		modelId: "session",
+		runtime: {
+			mode: "full",
+			transport: "tmux",
+			tools: {},
+			session: "persistent",
+			isolation: "host",
+		},
+		resolvedAt: new Date().toISOString(),
+		source: "session",
+	};
+}
 
 /** Minimal shape of pi-ai Usage the bridge consumes (avoids a hard dep). */
 export interface AssistantUsage {
@@ -126,6 +149,11 @@ export class AgentBridge {
 		this.client.connect(this.deps.socketPath, {
 			agentId: this.deps.agentId,
 			role: "agent",
+			kind: this.deps.assignment?.kind ?? "worker",
+			generation:
+				this.deps.generation ??
+				Number.parseInt(process.env.PI_MAESTRO_GENERATION ?? "0", 10),
+			assignment: this.deps.assignment ?? defaultAssignment(this.deps.agentId),
 			token: process.env.PI_MAESTRO_TOKEN ?? "",
 			pid: process.pid,
 		});

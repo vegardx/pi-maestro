@@ -7,6 +7,9 @@ import type { FeatureFlagOverrides } from "./flags.js";
 import type { RunId } from "./ids.js";
 import type { ModeName } from "./modes.js";
 
+/** Current status.json payload schema. There is no legacy hydration path. */
+export const RUN_RECORD_SCHEMA_VERSION = 2 as const;
+
 export const RUN_STATUSES = [
 	"queued",
 	"starting",
@@ -183,6 +186,27 @@ export interface RunResult {
 	 */
 	readonly summary?: string;
 	readonly error?: string;
+	readonly stop?: StopRecord;
+}
+
+export const STOP_KINDS = [
+	"completed",
+	"failed",
+	"canceled",
+	"interrupted",
+	"timed-out",
+] as const;
+export type StopKind = (typeof STOP_KINDS)[number];
+
+/** Durable terminal provenance, recorded once at the first terminal transition. */
+export interface StopRecord {
+	readonly kind: StopKind;
+	readonly requestedAt?: number;
+	readonly completedAt: number;
+	readonly requestedBy?: string;
+	readonly reason?: string;
+	readonly outcome?: InterruptOutcome;
+	readonly recoverable: boolean;
 }
 
 /** A run asking the maestro to decide (the contact_supervisor path). */
@@ -256,12 +280,16 @@ export type RunBusMessageType = RunBusMessage["type"];
 
 /** Persisted record of a run. */
 export interface RunRecord {
+	readonly schemaVersion: typeof RUN_RECORD_SCHEMA_VERSION;
 	readonly id: RunId;
 	readonly parent?: RunId;
 	readonly profile: SpawnProfile;
 	readonly status: RunStatus;
 	readonly createdAt: number;
 	readonly updatedAt: number;
+	/** Set once on the first accepted terminal transition. */
+	readonly completedAt?: number;
+	readonly stop?: StopRecord;
 	readonly result?: RunResult;
 	readonly metadata?: RunProcessMetadata;
 	readonly lastEventAt?: number;

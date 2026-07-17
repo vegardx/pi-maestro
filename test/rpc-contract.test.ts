@@ -35,6 +35,7 @@ const snapshot: TokenSnapshot = {
 	output: 5,
 	cacheRead: 0,
 	cacheWrite: 0,
+	promptTokens: 10,
 	totalTokens: 15,
 	cost: 0.01,
 	turns: 2,

@@ -427,6 +427,7 @@ function snapshotOf(over: Partial<TokenSnapshot>): TokenSnapshot {
 		output: 0,
 		cacheRead: 0,
 		cacheWrite: 0,
+		promptTokens: 0,
 		totalTokens: 0,
 		cost: 0,
 		turns: 1,

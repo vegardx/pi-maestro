@@ -142,8 +142,8 @@ describe("execution adapter — onEvent emission", () => {
 		engine.updateDeliverable(deliverableId, { worktreePath: tmpDir });
 		const a = makeAdapter();
 		await a.start();
-		// Hydrated active deliverables come up blocked (restart safety); unblock as
-		// a user's /retry would so ticks may spawn agents.
+		// Hydrated active deliverables come up blocked (restart safety); audited
+		// recovery clears this before ticks may spawn agents.
 		a.getExecutor().unblockDeliverable(deliverableId);
 		await a.tick();
 		return a;

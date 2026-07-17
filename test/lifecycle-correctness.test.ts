@@ -140,8 +140,8 @@ describe("execution adapter — lifecycle correctness", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
-		// Hydrated active deliverables come up blocked (restart safety); unblock as
-		// a user's /retry would so ticks may spawn agents.
+		// Hydrated active deliverables come up blocked (restart safety); audited
+		// recovery clears this before ticks may spawn agents.
 		adapter.getExecutor().unblockDeliverable(deliverableId);
 		await adapter.tick();
 		return adapter;

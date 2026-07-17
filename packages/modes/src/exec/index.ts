@@ -75,7 +75,7 @@ export interface ExecutionHandle {
 	/** Start the RPC server and prepare the plan dir. */
 	start(): Promise<void>;
 	/** Advance the executor; returns the number of newly activated deliverables. */
-	tick(): Promise<number>;
+	tick(deliverableIds?: readonly string[]): Promise<number>;
 	/** Send guidance to a deliverable agent (default: the worker). False if absent. */
 	steer(deliverableId: string, guidance: string, agentName?: string): boolean;
 	/** Abort only the current turn; the worker process/session/worktree survive. */
@@ -168,7 +168,9 @@ export interface ExecutionHandle {
 	/** Tmux session names for worker agents (for /watch panes). */
 	getWorkerSessions(): string[];
 	/** Freeze scheduling and cooperatively stop the fleet behind one deadline. */
-	prepareStop?(reason?: string): Promise<import("./execution-adapter.js").ExecutionStopResult>;
+	prepareStop?(
+		reason?: string,
+	): Promise<import("./execution-adapter.js").ExecutionStopResult>;
 	/** Tear down agents, tmux sessions, and the RPC server. */
 	destroy(): Promise<void>;
 }

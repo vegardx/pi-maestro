@@ -110,6 +110,7 @@ export interface HudActions {
 	attach(targetId: string): void;
 	steer(targetId: string): void;
 	interrupt(targetId: string): void;
+	kill(targetId: string): void;
 	answer(question: HudQuestionRow): void;
 }
 
@@ -242,12 +243,28 @@ export class HudComponent {
 			}
 			return;
 		}
-		if (this.#tab === "agents" && data === "s" && current?.targetId) {
+		if (
+			this.#tab === "agents" &&
+			data.toLowerCase() === "s" &&
+			current?.targetId
+		) {
 			this.deps.actions.steer(current.targetId);
 			return;
 		}
-		if (this.#tab === "agents" && data === "i" && current?.targetId) {
+		if (
+			this.#tab === "agents" &&
+			data.toLowerCase() === "i" &&
+			current?.targetId
+		) {
 			this.deps.actions.interrupt(current.targetId);
+			return;
+		}
+		if (
+			this.#tab === "agents" &&
+			data.toLowerCase() === "k" &&
+			current?.targetId
+		) {
+			this.deps.actions.kill(current.targetId);
 			return;
 		}
 	}
@@ -464,7 +481,7 @@ export class HudComponent {
 
 	#hint(): string {
 		if (this.#tab === "agents") {
-			return "tab switch · ←→ fold · enter attach · s steer · i interrupt";
+			return "tab switch · ←→ fold · enter attach · S steer · I interrupt · K fail";
 		}
 		if (this.#tab === "plan") {
 			return "↑↓ move · tab switch · enter expand/collapse · esc";

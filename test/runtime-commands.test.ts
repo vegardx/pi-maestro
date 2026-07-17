@@ -59,6 +59,7 @@ function makeRuntime(overrides: Record<string, unknown> = {}) {
 		maestro,
 		engine: null,
 		execution: undefined,
+		state: { mode: "plan", execution: { stage: "idle" } },
 		...overrides,
 	} as unknown as RuntimeContext;
 	registerRuntimeCommands(rt);
@@ -82,20 +83,21 @@ afterEach(() => {
 });
 
 describe("mode transition commands", () => {
-	it("routes Plan /auto and /hack through runImplement", async () => {
-		const runImplement = vi.fn(async () => {});
+	it("routes Plan /auto and /hack through the gate, then starts ready work", async () => {
+		const runStart = vi.fn(async () => {});
 		const requestMode = vi.fn(async () => true);
 		const { commands } = makeRuntime({
 			state: { mode: "plan", execution: { stage: "idle" } },
-			runImplement,
+			runStart,
 			requestMode,
 		});
 		const { ctx } = makeCmdCtx();
 		await commands.get("auto")?.("", ctx);
 		await commands.get("hack")?.("", ctx);
-		expect(runImplement).toHaveBeenNthCalledWith(1, "", ctx);
-		expect(runImplement).toHaveBeenNthCalledWith(2, "--hack", ctx);
-		expect(requestMode).not.toHaveBeenCalled();
+		expect(requestMode).toHaveBeenNthCalledWith(1, "auto", ctx);
+		expect(requestMode).toHaveBeenNthCalledWith(2, "hack", ctx);
+		expect(runStart).toHaveBeenNthCalledWith(1, undefined, ctx);
+		expect(runStart).toHaveBeenNthCalledWith(2, undefined, ctx);
 	});
 
 	it("routes non-Plan mode requests through the coordinator entry", async () => {
@@ -107,6 +109,31 @@ describe("mode transition commands", () => {
 		const { ctx } = makeCmdCtx();
 		await commands.get("auto")?.("", ctx);
 		expect(requestMode).toHaveBeenCalledWith("auto", ctx);
+	});
+});
+
+describe("execution lifecycle commands", () => {
+	it("registers start/stop/restart/recover/kill and removes implement/retry", () => {
+		const { commands } = makeRuntime({});
+		for (const name of ["start", "stop", "restart", "recover", "kill"]) {
+			expect(commands.has(name)).toBe(true);
+		}
+		expect(commands.has("implement")).toBe(false);
+		expect(commands.has("retry")).toBe(false);
+	});
+
+	it("passes optional delivery targets to start, restart, and recover", async () => {
+		const runStart = vi.fn(async () => {});
+		const runRestart = vi.fn(async () => {});
+		const runRecover = vi.fn(async () => {});
+		const { commands } = makeRuntime({ runStart, runRestart, runRecover });
+		const { ctx } = makeCmdCtx();
+		await commands.get("start")?.("auth", ctx);
+		await commands.get("restart")?.("", ctx);
+		await commands.get("recover")?.("api", ctx);
+		expect(runStart).toHaveBeenCalledWith("auth", ctx);
+		expect(runRestart).toHaveBeenCalledWith(undefined, ctx);
+		expect(runRecover).toHaveBeenCalledWith("api", ctx);
 	});
 });
 
@@ -136,6 +163,7 @@ describe("/debug", () => {
 	}
 
 	beforeEach(() => {
+		delete process.env.PI_MAESTRO_AGENT_ID;
 		createIssueMock.mockReset();
 	});
 

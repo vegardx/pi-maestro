@@ -119,7 +119,7 @@ export class GateTriage {
 			return {
 				ok: false,
 				error:
-					"nothing to respawn into — escalate to the human, who can /retry",
+					"nothing to respawn into — escalate to the human for review or audited recovery",
 			};
 		}
 		this.clearPending(rec);
@@ -254,7 +254,7 @@ export function createGateTool(
 			const t = triage();
 			if (!t) {
 				return textResult(
-					"gate unavailable: no execution is running (start with /implement)",
+					"gate unavailable: no execution is running (start ready work with /start)",
 				);
 			}
 			if (params.action === "sendback") {

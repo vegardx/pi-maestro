@@ -288,7 +288,7 @@ export function buildStatsTrailer(event: AgentCardEvent): string {
 			return `↳ ${parts.join(" · ")}`;
 		}
 		case "blocked":
-			return "↳ /retry after inspecting";
+			return "↳ resolve review/dependency hold, or /recover failed state";
 		case "failed":
 			return `↳ ${plural(event.respawns, "respawn")}`;
 		case "shipped":

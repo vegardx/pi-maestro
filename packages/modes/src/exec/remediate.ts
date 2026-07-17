@@ -182,7 +182,7 @@ export async function applyRemediation(
 		if (g.status !== "shipped" && g.status !== "complete") {
 			skipped.push({
 				id: entry.id,
-				reason: `status ${g.status} — /retry or /recover handles in-flight work`,
+				reason: `status ${g.status} — /recover handles failed or uncertain work; review/dependency holds stay parked`,
 			});
 			continue;
 		}

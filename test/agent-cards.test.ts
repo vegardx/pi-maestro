@@ -168,7 +168,7 @@ describe("agent card builders", () => {
 		]);
 	});
 
-	it("builds blocked with the reason as body and a /retry trailer", () => {
+	it("builds blocked with the reason and resolution guidance", () => {
 		const blocked: ExecutionEvent = {
 			kind: "blocked",
 			deliverableId: "auth",
@@ -179,7 +179,9 @@ describe("agent card builders", () => {
 		expect(buildCardBody(blocked, false)).toEqual([
 			"ship gate: security-audit requested changes",
 		]);
-		expect(buildStatsTrailer(blocked)).toBe("↳ /retry after inspecting");
+		expect(buildStatsTrailer(blocked)).toBe(
+			"↳ resolve review/dependency hold, or /recover failed state",
+		);
 	});
 
 	it("builds failed with a respawn-count trailer", () => {

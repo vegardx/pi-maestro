@@ -713,7 +713,7 @@ function persistReport(
 
 /**
  * The durable home of a plan's full research reports: `<planDir>/research/`.
- * This is the location the structuring preamble, /implement guidance, and
+ * This is the location the structuring preamble, execution-entry guidance, and
  * carry-forward harvest have always pointed at; reports live and die with
  * the plan directory (no separate wipe).
  */

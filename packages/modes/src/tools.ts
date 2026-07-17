@@ -971,7 +971,7 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 			"Write the plan's base-knowledge document — the frozen codebase " +
 			"reference every agent forks from. Call this once, at the end of " +
 			"planning, distilling your codebase understanding into the template " +
-			"sections. Frozen after /implement (rewrites would invalidate every " +
+			"sections. Frozen after execution starts (rewrites would invalidate every " +
 			"agent's cache prefix).",
 		promptSnippet:
 			"knowledge — write the shared codebase reference agents fork from.",
@@ -1007,7 +1007,7 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 			return ok(
 				`Knowledge base written to ${outPath}${
 					researchIndex ? " (research index auto-appended)" : ""
-				}. All agents will fork from it; it freezes when /implement runs.`,
+				}. All agents will fork from it; it freezes when execution starts.`,
 				{},
 			);
 		},

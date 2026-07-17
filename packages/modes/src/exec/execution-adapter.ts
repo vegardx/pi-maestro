@@ -787,9 +787,7 @@ export class ExecutionAdapter {
 						sessionId,
 						"work complete",
 						Date.now() +
-							(this.opts.stopGraceMs ??
-								this.opts.restartKillTimeoutMs ??
-								5000),
+							(this.opts.stopGraceMs ?? this.opts.restartKillTimeoutMs ?? 5000),
 					);
 				} else if (await this.tmux.hasSession(sessionId)) {
 					await this.tmux.kill(sessionId).catch(() => {});
@@ -921,8 +919,7 @@ export class ExecutionAdapter {
 			panelGateDetail: (deliverableId) =>
 				this.deliverableGateDetail(deliverableId),
 
-			canActivate: () =>
-				!this.stopping && (this.opts.canActivate?.() ?? true),
+			canActivate: () => !this.stopping && (this.opts.canActivate?.() ?? true),
 
 			now: () => new Date().toISOString(),
 		};
@@ -1513,7 +1510,7 @@ export class ExecutionAdapter {
 				}
 				this.executor.failWorkerReplacement(
 					deliverableId,
-					`${RESTART_BLOCK_PREFIX} — force-failed (${reason}); /recover respawns it (or /retry ${deliverableId})`,
+					`${RESTART_BLOCK_PREFIX} — force-failed (${reason}); /recover ${deliverableId} audits and respawns it`,
 				);
 				this.logEvent("force-fail", { agent: agentKey, reason });
 				this.emitEvent({
@@ -1722,13 +1719,13 @@ export class ExecutionAdapter {
 	}
 
 	/**
-	 * Serialized tick: every entry point (/implement, plan changes, completion
+	 * Serialized tick: every entry point (start, plan changes, completion
 	 * chains, the poll timer) funnels through a promise-chain mutex so the
 	 * executor never runs two ticks concurrently.
 	 */
-	async tick(): Promise<number> {
+	async tick(deliverableIds?: readonly string[]): Promise<number> {
 		const run = this.tickChain.then(() =>
-			this.withLifecycle(() => this.tickOnce()),
+			this.withLifecycle(() => this.tickOnce(deliverableIds)),
 		);
 		this.tickChain = run.then(
 			() => undefined,
@@ -1737,14 +1734,14 @@ export class ExecutionAdapter {
 		return run;
 	}
 
-	private async tickOnce(): Promise<number> {
+	private async tickOnce(deliverableIds?: readonly string[]): Promise<number> {
 		if (!this._started) return 0;
 
 		const beforeActive = this.engine
 			.get()
 			.deliverables.filter((g) => g.status === "active").length;
 
-		const shipped = await this.executor.tick();
+		const shipped = await this.executor.tick(deliverableIds);
 		this.recordDeliverableTransitions();
 		this.surfaceGateBlocks();
 
@@ -2570,7 +2567,9 @@ export class ExecutionAdapter {
 		return result;
 	}
 
-	async prepareStop(reason = "execution shutdown"): Promise<ExecutionStopResult> {
+	async prepareStop(
+		reason = "execution shutdown",
+	): Promise<ExecutionStopResult> {
 		if (this.stopResult) return this.stopResult;
 		if (this.stopPromise) return this.stopPromise;
 		this.stopping = true;
@@ -2829,7 +2828,7 @@ export class ExecutionAdapter {
 						);
 						this.executor.blockDeliverable(
 							deliverableId,
-							`agent ${agentNamePart} crashed repeatedly — see ${this.crashFileFor(sessionName)}, then /retry`,
+							`agent ${agentNamePart} crashed repeatedly — see ${this.crashFileFor(sessionName)}, then /recover ${deliverableId}`,
 						);
 						this.logEvent("failed", {
 							agent: agentKey,

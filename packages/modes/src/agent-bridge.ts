@@ -22,10 +22,7 @@ import {
 	type DebugResultMessage,
 	type MaestroMessage,
 	MaestroRpcClient,
-	type PanelReviewerSpec,
-	type PanelVerdictEntry,
 	type PlanMutateResultMessage,
-	type ReviewLedgerWire,
 } from "@vegardx/pi-rpc";
 
 export const AGENT_STOP_NOTICE_ENTRY = "maestro.agent.stop";
@@ -39,14 +36,6 @@ export interface AgentStopNotice {
 	readonly activeTurn: boolean;
 	readonly children: readonly string[];
 	readonly usageRevision: number;
-}
-
-/** What panelRead returns: the live panel + the persisted review ledger. */
-export interface PanelReadResult {
-	readonly panel: readonly PanelReviewerSpec[];
-	readonly ledger?: ReviewLedgerWire;
-	/** Canonical finding ids the human has waived (never re-litigated). */
-	readonly waivedFindingIds?: readonly string[];
 }
 
 /**
@@ -154,13 +143,6 @@ export class AgentBridge {
 		| undefined;
 	/** Serializes planMutate calls — one in flight, the rest queue behind it. */
 	private mutateChain: Promise<unknown> = Promise.resolve();
-	private pendingPanelRead:
-		| {
-				id: string;
-				resolve: (result: PanelReadResult) => void;
-				timer: ReturnType<typeof setTimeout>;
-		  }
-		| undefined;
 	/**
 	 * Summarize capture state. `armed` flips true on the first turn_start
 	 * after the summarization prompt is injected: pi delivers the followUp as
@@ -294,50 +276,6 @@ export class AgentBridge {
 			action: "toggleTask",
 			deliverableId,
 			params: { taskId },
-		});
-	}
-
-	/**
-	 * Report a completed review-panel round's verdicts to the maestro. Fire-
-	 * and-forget: the executor reads the latest round to gate ship, independent
-	 * of the worker's own "done" claim.
-	 */
-	reportPanelVerdict(
-		deliverableId: string,
-		round: number,
-		verdicts: readonly PanelVerdictEntry[],
-		opts?: {
-			roundKind?: "panel" | "verification" | "round-started";
-			ledger?: ReviewLedgerWire;
-		},
-	): void {
-		this.client.send({
-			type: "panelVerdict",
-			deliverableId,
-			round,
-			verdicts,
-			...(opts?.roundKind ? { roundKind: opts.roundKind } : {}),
-			...(opts?.ledger ? { ledger: opts.ledger } : {}),
-		});
-	}
-
-	/**
-	 * Request this deliverable's live review panel plus the persisted review
-	 * ledger (a respawned worker rehydrates its review episode from it).
-	 */
-	panelRead(deliverableId: string): Promise<PanelReadResult> {
-		if (this.pendingPanelRead) return Promise.resolve({ panel: [] });
-		const id = randomUUID();
-		const timeoutMs = this.deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-		this.client.send({ type: "panelRead", id, deliverableId });
-		return new Promise<PanelReadResult>((resolve) => {
-			const timer = setTimeout(() => {
-				if (this.pendingPanelRead?.id !== id) return;
-				this.pendingPanelRead = undefined;
-				resolve({ panel: [] });
-			}, timeoutMs);
-			timer.unref?.();
-			this.pendingPanelRead = { id, resolve, timer };
 		});
 	}
 
@@ -502,7 +440,6 @@ export class AgentBridge {
 	private settlePending(): void {
 		this.settleAsk([]);
 		this.settlePlanRead("");
-		this.settlePanelRead({ panel: [] });
 		this.settleDebug({
 			type: "debugResult",
 			id: this.pendingDebug?.id ?? "",
@@ -540,14 +477,6 @@ export class AgentBridge {
 		if (!pending) return;
 		clearTimeout(pending.timer);
 		this.pendingPlanMutate = undefined;
-		pending.resolve(result);
-	}
-
-	private settlePanelRead(result: PanelReadResult): void {
-		const pending = this.pendingPanelRead;
-		if (!pending) return;
-		clearTimeout(pending.timer);
-		this.pendingPanelRead = undefined;
 		pending.resolve(result);
 	}
 
@@ -822,17 +751,6 @@ export class AgentBridge {
 				this.settlePlanRead(msg.content);
 				break;
 			}
-			case "panelReadResponse": {
-				if (this.pendingPanelRead?.id !== msg.id) break;
-				this.settlePanelRead({
-					panel: msg.panel,
-					...(msg.ledger ? { ledger: msg.ledger } : {}),
-					...(msg.waivedFindingIds
-						? { waivedFindingIds: msg.waivedFindingIds }
-						: {}),
-				});
-				break;
-			}
 			case "planMutateResult": {
 				if (this.pendingPlanMutate?.id !== msg.id) break;
 				this.settlePlanMutate(msg);
@@ -874,8 +792,6 @@ export class AgentBridge {
 					this.settleAsk([]);
 				} else if (this.pendingPlanRead?.id === msg.id) {
 					this.settlePlanRead(`Error: ${msg.message}`);
-				} else if (this.pendingPanelRead?.id === msg.id) {
-					this.settlePanelRead({ panel: [] });
 				} else if (this.pendingDebug?.id === msg.id) {
 					this.settleDebug({
 						type: "debugResult",

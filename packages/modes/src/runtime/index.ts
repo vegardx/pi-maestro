@@ -191,26 +191,6 @@ export function createModesRuntime(
 		const run: ResearchRunView | undefined = rt.researchRuns.get(runId);
 		if (!run) return;
 		if (progress.text) run.activity = progress.text;
-		// Token fields are per-turn deltas: accumulate for the table row and
-		// fold into the session ledger so footer totals include research runs.
-		if (
-			progress.tokensIn !== undefined ||
-			progress.tokensOut !== undefined ||
-			progress.cacheRead !== undefined ||
-			progress.cacheWrite !== undefined ||
-			progress.cost !== undefined
-		) {
-			run.tokensIn = (run.tokensIn ?? 0) + (progress.tokensIn ?? 0);
-			run.tokensOut = (run.tokensOut ?? 0) + (progress.tokensOut ?? 0);
-			// First-turn prefix warmth is a diagnostic, not cumulative cache hit.
-			if (
-				run.prefixCacheHitRate === undefined &&
-				progress.cacheRead !== undefined
-			) {
-				const denom = progress.cacheRead + (progress.tokensIn ?? 0);
-				if (denom > 0) run.prefixCacheHitRate = progress.cacheRead / denom;
-			}
-		}
 	});
 
 	registerRuntimeCommands(rt);

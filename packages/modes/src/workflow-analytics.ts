@@ -5,11 +5,6 @@ import {
 	type StructuredFinding,
 	type TokenSnapshot,
 } from "@vegardx/pi-contracts";
-import type {
-	ClaimCheck,
-	FindingResolution,
-	ReviewLedger,
-} from "./exec/findings.js";
 
 /** Durable schema for PR provenance. Bump on incompatible changes. */
 export const WORKFLOW_ANALYTICS_VERSION = 1 as const;
@@ -58,8 +53,20 @@ export interface CanonicalFindingAnalytics {
 	readonly finding: StructuredFinding;
 	readonly reviewer: string;
 	readonly duplicateIds: readonly string[];
-	readonly resolution?: FindingResolution & { readonly at: string };
-	readonly verification?: ClaimCheck & { readonly at: string };
+	readonly resolution?: {
+		readonly id?: string;
+		readonly status: "fixed" | "wont-fix" | "disputed" | "duplicateOf";
+		readonly note: string;
+		readonly fixCommit?: string;
+		readonly canonical?: string;
+		readonly at: string;
+	};
+	readonly verification?: {
+		readonly id?: string;
+		readonly result: "verified" | "still-open";
+		readonly note?: string;
+		readonly at: string;
+	};
 }
 
 export interface FinalVerificationAnalytics {
@@ -113,7 +120,6 @@ export type WorkflowAnalyticsEvent =
 			readonly assignment: AssignmentAnalytics;
 	  }
 	| { readonly type: "raw-finding"; readonly finding: RawFindingAnalytics }
-	| { readonly type: "review-ledger"; readonly ledger: ReviewLedger }
 	| {
 			readonly type: "final-verification";
 			readonly verification: FinalVerificationAnalytics;
@@ -162,14 +168,6 @@ export function applyWorkflowAnalyticsEvent(
 				},
 				now,
 			);
-		case "review-ledger":
-			return bump(
-				{
-					...next,
-					canonicalFindings: canonicalFromReviewLedger(event.ledger),
-				},
-				now,
-			);
 		case "final-verification":
 			return bump(
 				{ ...next, finalVerification: structuredClone(event.verification) },
@@ -205,20 +203,6 @@ export function assignmentAnalytics(input: {
 		...(input.evidence ? { evidence: [...input.evidence] } : {}),
 		...(input.usage ? { usage: { ...input.usage } } : {}),
 	};
-}
-
-export function canonicalFromReviewLedger(
-	ledger: ReviewLedger,
-): readonly CanonicalFindingAnalytics[] {
-	return ledger.entries.map((entry) => ({
-		finding: structuredClone(entry.finding),
-		reviewer: entry.reviewer,
-		duplicateIds: [...(entry.duplicates ?? [])],
-		...(entry.resolution
-			? { resolution: structuredClone(entry.resolution) }
-			: {}),
-		...(entry.check ? { verification: structuredClone(entry.check) } : {}),
-	}));
 }
 
 /** Aggregate disjoint token buckets, provider cost, and wall-clock duration. */

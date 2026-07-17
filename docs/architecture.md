@@ -124,8 +124,9 @@ sequenceDiagram
 	Maestro->>Sub: research (codebase, web)
 	Sub-->>Maestro: digests (dig to expand)
 	User->>Maestro: deliverable/task/agent tools
-	User->>Maestro: /implement
-	Maestro->>Executor: start execution
+	User->>Maestro: Shift+Tab or /start
+	Maestro->>Maestro: plan-review transition gate
+	Maestro->>Executor: activate ready planned work
 	Executor->>Executor: activate deliverables (deps met), worktrees
 	Executor->>Worker: spawn worker (tmux+RPC)
 	Worker->>Commit: commit locally

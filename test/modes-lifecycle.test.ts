@@ -77,11 +77,20 @@ describe("execution lifecycle state", () => {
 			now,
 		);
 		expect(stopped.execution).toEqual({ stage: "stopped", completedAt, stop });
+		const restarted = setExecution(
+			stopped,
+			{ stage: "executing", deliverableId: "d1" },
+			now,
+		);
+		expect(restarted.execution).toEqual({
+			stage: "executing",
+			deliverableId: "d1",
+		});
 		expect(() =>
 			setExecution(
 				stopped,
 				{
-					stage: "idle",
+					stage: "stopped",
 					completedAt: completedAt + 1,
 					stop: { ...stop, completedAt: completedAt + 1 },
 				},

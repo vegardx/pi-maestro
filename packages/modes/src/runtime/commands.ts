@@ -88,7 +88,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			description: `Switch to Maestro ${mode} mode through execution readiness.`,
 			handler: async (_args: string, ctx: ExtensionCommandContext) => {
 				if (rt.state.mode === "plan") {
-					await rt.runImplement(mode === "hack" ? "--hack" : "", ctx);
+					if (await rt.requestMode(mode, ctx))
+						await rt.runStart(undefined, ctx);
 					return;
 				}
 				await rt.requestMode(mode, ctx);
@@ -138,10 +139,20 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
-	pi.registerCommand("implement", {
+	pi.registerCommand("start", {
+		description: "Activate ready planned work. /start [deliverable-id]",
+		handler: (args, ctx) => rt.runStart(args.trim() || undefined, ctx),
+	});
+
+	pi.registerCommand("stop", {
+		description: "Intentionally park all active workers behind a bounded stop.",
+		handler: (_args, ctx) => rt.runStop(ctx),
+	});
+
+	pi.registerCommand("restart", {
 		description:
-			"Start executing the active plan. Agents auto-spawn when subagents are available.",
-		handler: (args, ctx) => rt.runImplement(args, ctx),
+			"Resume a clean stop without starting unrelated planned work. /restart [deliverable-id]",
+		handler: (args, ctx) => rt.runRestart(args.trim() || undefined, ctx),
 	});
 
 	pi.registerCommand("ship", {
@@ -288,9 +299,9 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	pi.registerCommand("recover", {
 		description:
-			"Recover an interrupted execution: audit the plan against reality (worktrees, branches, PRs) and resume interrupted workers from their saved sessions.",
-		handler: (_args: string, ctx: ExtensionCommandContext) =>
-			rt.runRecover(ctx),
+			"Audit and recover failed, crashed, stale, or inconsistent execution state. /recover [deliverable-id]",
+		handler: (args: string, ctx: ExtensionCommandContext) =>
+			rt.runRecover(args.trim() || undefined, ctx),
 	});
 
 	pi.registerCommand("distill", {
@@ -442,58 +453,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
-	pi.registerCommand("retry", {
-		description:
-			"Clear a blocked deliverable and re-attempt it. /retry <deliverable-id>",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			if (!rt.execution) {
-				ctx.ui.notify("No execution running — /implement first.", "info");
-				return;
-			}
-			const executor = rt.execution.getExecutor();
-			const blocked = [...executor.getStates().entries()].filter(
-				([, s]) => s.blocked,
-			);
-			const id = args.trim();
-			if (!id) {
-				ctx.ui.notify(
-					blocked.length
-						? `Blocked deliverables:\n${blocked
-								.map(([bid, s]) => `  ${bid} — ${s.blocked}`)
-								.join("\n")}\nRun /retry <deliverable-id>.`
-						: "Nothing is blocked.",
-					"info",
-				);
-				return;
-			}
-			const state = executor.getStates().get(id);
-			const deliverable = rt.engine?.get().deliverables.find((g) => g.id === id);
-			if (!state || !deliverable) {
-				ctx.ui.notify(`Unknown deliverable: ${id}`, "warning");
-				return;
-			}
-			if (deliverable.status === "failed") {
-				rt.engine?.setDeliverableStatus(id, "active");
-				executor.unblockDeliverable(id);
-				await rt.execution.restartWorkerResume?.(id);
-				ctx.ui.notify(`Recovered failed deliverable ${id}; retrying.`, "info");
-				await rt.execution.tick();
-				return;
-			}
-			if (!state.blocked) {
-				ctx.ui.notify(`${id} is not blocked.`, "info");
-				return;
-			}
-			const reason = state.blocked;
-			executor.unblockDeliverable(id);
-			ctx.ui.notify(
-				`Cleared block on ${id} (was: ${reason}) — retrying.`,
-				"info",
-			);
-			await rt.execution.tick();
-		},
-	});
-
 	pi.registerCommand("view", {
 		description:
 			"View any tmux-backed agent session in a split pane. /view <opaque-id> or /view for dialog.",
@@ -553,6 +512,54 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				ctx,
 				rt.execution,
 				maestro.capabilities.get(CAPABILITIES.subagents),
+			);
+		},
+	});
+
+	pi.registerCommand("kill", {
+		description:
+			"Bounded-shutdown and fail an owning delivery. /kill <deliverable-id>",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const id = args.trim();
+			const delivery = id
+				? rt.engine?.get().deliverables.find((item) => item.id === id)
+				: undefined;
+			if (!id || !delivery) {
+				ctx.ui.notify(
+					id ? `Unknown deliverable: ${id}` : "Usage: /kill <deliverable-id>",
+					"warning",
+				);
+				return;
+			}
+			if (delivery.status !== "active" || !rt.execution?.forceFailWorker) {
+				ctx.ui.notify(`${id} is not an active delivery.`, "warning");
+				return;
+			}
+			const yes = await ctx.ui.confirm(
+				"Fail delivery",
+				`Bounded-shutdown ${id} and mark it failed?`,
+			);
+			if (!yes) return;
+			if (!(await rt.execution.forceFailWorker(id, "user ran /kill"))) {
+				ctx.ui.notify(
+					`Could not prove ${id} stopped; it was not marked failed.`,
+					"warning",
+				);
+				return;
+			}
+			rt.engine?.setDeliverableStatus(id, "failed", {
+				code: "user-killed",
+				message: "Delivery was failed by the user after bounded shutdown",
+				failedAt: rt.now(),
+				recoverable: true,
+				attempt: (delivery.failure?.attempt ?? 0) + 1,
+				agentId: `${id}/worker`,
+			});
+			rt.emitPlanChanged();
+			rt.hud?.refresh();
+			ctx.ui.notify(
+				`${id} failed and parked. Use /recover ${id} after inspection.`,
+				"warning",
 			);
 		},
 	});

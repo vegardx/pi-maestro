@@ -81,13 +81,13 @@ describe("DeliverableExecutor — activation", () => {
 		const state = executor.getStates().get("auth");
 		expect(state?.blocked).toContain("activation failed");
 		expect(state?.blocked).toContain('base branch "dev" not found');
-		expect(state?.blocked).toContain("/retry auth");
+		expect(state?.blocked).toContain("/start auth");
 
 		// Still blocked on later ticks: no activation retry storm.
 		await executor.tick();
 		expect(deps.createWorktree).toHaveBeenCalledTimes(1);
 
-		// /retry clears the block; the next tick re-attempts activation.
+		// Explicit start clears the activation failure; the next tick re-attempts.
 		deps.createWorktree = vi.fn().mockResolvedValue("/tmp/worktree");
 		executor.unblockDeliverable("auth");
 		await executor.tick();
@@ -1021,7 +1021,9 @@ describe("DeliverableExecutor — restart recovery", () => {
 		expect(executor.getStates().get("auth")?.blocked).toContain(
 			"recovery failed: repo gone",
 		);
-		expect(executor.getStates().get("auth")?.blocked).toContain("/retry auth");
+		expect(executor.getStates().get("auth")?.blocked).toContain(
+			"/recover auth",
+		);
 	});
 
 	it("does not touch deliverables blocked for other reasons", async () => {

@@ -66,6 +66,7 @@ async function defaultPrState(
 export async function auditPlan(
 	plan: Plan,
 	deps: AuditDeps = {},
+	deliverableIds?: readonly string[],
 ): Promise<PlanAuditResult> {
 	const pathExists = deps.pathExists ?? existsSync;
 	const refExists = deps.refExists ?? defaultRefExists;
@@ -73,7 +74,9 @@ export async function auditPlan(
 	const prState = deps.prState ?? defaultPrState;
 
 	const entries: AuditEntry[] = [];
+	const selected = deliverableIds ? new Set(deliverableIds) : undefined;
 	for (const g of plan.deliverables) {
+		if (selected && !selected.has(g.id)) continue;
 		if (
 			g.status === "planned" ||
 			g.status === "abandoned" ||
@@ -87,8 +90,12 @@ export async function auditPlan(
 		const repo = repoFor(plan, g);
 		const branch = g.branch ?? defaultBranchForDeliverable(g);
 
-		// Workspace (active/complete keep it; shipped may have cleaned it up).
-		if (g.status === "active" || g.status === "complete") {
+		// Workspace (active/failed/complete keep it; shipped may have cleaned it up).
+		if (
+			g.status === "active" ||
+			g.status === "failed" ||
+			g.status === "complete"
+		) {
 			if (g.worktreePath && pathExists(g.worktreePath)) {
 				notes.push(`✓ ${scratch ? "workspace" : "worktree"} present`);
 				if (!scratch && !treeClean(g.worktreePath)) {
@@ -98,13 +105,13 @@ export async function auditPlan(
 				}
 			} else {
 				notes.push(`✗ ${scratch ? "workspace" : "worktree"} missing`);
-				if (g.status === "active") {
+				if (g.status === "active" || g.status === "failed") {
 					notes.push("  (recovery re-provisions it)");
 				} else {
 					problems.push("workspace gone — its work exists only if pushed");
 				}
 			}
-			if (g.status === "active") {
+			if (g.status === "active" || g.status === "failed") {
 				notes.push(
 					g.sessionPath && pathExists(g.sessionPath)
 						? "✓ worker session file — resumable"

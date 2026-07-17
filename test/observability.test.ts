@@ -128,8 +128,8 @@ describe("execution adapter observability", () => {
 			onPlanChanged: () => {},
 		});
 		await adapter.start();
-		// Hydrated active deliverables come up blocked (restart safety); unblock as
-		// a user's /retry would so the tick spawns the worker.
+		// Hydrated active deliverables come up blocked (restart safety); audited
+		// recovery clears this before the tick spawns the worker.
 		adapter.getExecutor().unblockDeliverable("deliverable-one");
 		await adapter.tick();
 	});

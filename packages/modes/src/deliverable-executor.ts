@@ -210,7 +210,7 @@ export class DeliverableExecutor {
 				deliverableWorkspace(g) === "scratch"
 					? undefined
 					: (g.branch ?? defaultBranchForDeliverable(g)),
-			blocked: `${RESTART_BLOCK_PREFIX} — /recover resumes the interrupted workers (or /retry ${g.id} for just this one)`,
+			blocked: `${RESTART_BLOCK_PREFIX} — /recover resumes the interrupted workers`,
 		};
 		deliverableState.agents.set("worker", {
 			name: "worker",
@@ -251,16 +251,17 @@ export class DeliverableExecutor {
 	 * Call periodically or on state-change events.
 	 * Returns names of deliverables that were shipped this tick.
 	 */
-	async tick(): Promise<string[]> {
+	async tick(deliverableIds?: readonly string[]): Promise<string[]> {
 		const plan = this.engine.get();
 		const shipped: string[] = [];
+		const selected = deliverableIds ? new Set(deliverableIds) : undefined;
 
 		// 1. Activate ready deliverables — gated so plan edits outside an
-		// autonomous mode never start new work (ticks reach here from every
-		// plan mutation and the poll timer, not just /implement).
+		// autonomous mode never start new work. An explicit selection is used by
+		// targeted /start and never broadens into unrelated planned work.
 		if (this.deps.canActivate?.() !== false) {
 			for (const g of readyDeliverables(plan)) {
-				await this.activateDeliverable(g);
+				if (!selected || selected.has(g.id)) await this.activateDeliverable(g);
 			}
 		}
 
@@ -417,15 +418,17 @@ export class DeliverableExecutor {
 	 * Recover every deliverable parked by restart hydration: re-provision the
 	 * workspace when it vanished (idempotent), clear the block, and respawn
 	 * pending agents — the worker resumes from its persisted session file.
-	 * Failures re-park the deliverable with the cause (per-deliverable /retry).
+	 * Failures re-park the deliverable with the cause for audited /recover.
 	 */
-	async recoverInterrupted(): Promise<{
+	async recoverInterrupted(deliverableIds?: readonly string[]): Promise<{
 		recovered: string[];
 		failed: Array<{ id: string; error: string }>;
 	}> {
 		const recovered: string[] = [];
 		const failed: Array<{ id: string; error: string }> = [];
+		const selected = deliverableIds ? new Set(deliverableIds) : undefined;
 		for (const [id, state] of this.deliverableStates) {
+			if (selected && !selected.has(id)) continue;
 			if (!state.blocked?.startsWith(RESTART_BLOCK_PREFIX)) continue;
 			const g = findDeliverable(this.engine.get(), id);
 			if (g?.status !== "active") continue;
@@ -441,7 +444,7 @@ export class DeliverableExecutor {
 				recovered.push(id);
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				state.blocked = `recovery failed: ${message} — fix the cause, then /retry ${id}`;
+				state.blocked = `recovery failed: ${message} — fix the cause, then run /recover ${id}`;
 				failed.push({ id, error: message });
 			}
 		}
@@ -563,7 +566,7 @@ export class DeliverableExecutor {
 		const existing = this.deliverableStates.get(g.id);
 		if (existing) {
 			// Re-attempt only an activation-failure placeholder whose blocked
-			// reason the user cleared (/retry); anything else is already live.
+			// reason an explicit /start cleared; anything else is already live.
 			const retryableFailure =
 				existing.worktreePath === undefined &&
 				existing.agents.size === 0 &&
@@ -577,13 +580,13 @@ export class DeliverableExecutor {
 			// NEVER let provisioning failures (missing base branch, dirty
 			// worktree dir, …) escape the tick — that crashed the whole
 			// maestro. Park the deliverable blocked with the reason; the user
-			// fixes the cause and /retry re-attempts activation.
+			// fixes the cause and explicitly starts that delivery again.
 			const message = err instanceof Error ? err.message : String(err);
 			this.deliverableStates.set(g.id, {
 				deliverableId: g.id,
 				agents: new Map(),
 				completed: new Set(),
-				blocked: `activation failed: ${message} — fix the cause, then /retry ${g.id}`,
+				blocked: `activation failed: ${message} — fix the cause, then /start ${g.id}`,
 			});
 		} finally {
 			this.activating.delete(g.id);

@@ -277,7 +277,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 							"Recover execution",
 							`Resume ${actives.length} interrupted deliverable(s)? Workers respawn from their saved sessions; /recover also works later.`,
 						);
-						if (yes) await rt.runRecover(ctx);
+						if (yes) await rt.runRecover(undefined, ctx);
 					} catch {
 						// Confirm surface unavailable this early — the notify above
 						// already points at /recover.

@@ -79,6 +79,7 @@ export function setExecution(
 		);
 	}
 	if (
+		execution.stage === "stopped" &&
 		state.execution.completedAt !== undefined &&
 		execution.completedAt !== state.execution.completedAt
 	) {
@@ -91,7 +92,10 @@ export function setExecution(
 		if (execution.stop.completedAt !== execution.completedAt) {
 			throw new Error("execution stop timestamp must match completedAt");
 		}
-	} else if (execution.completedAt !== undefined || execution.stop !== undefined) {
+	} else if (
+		execution.completedAt !== undefined ||
+		execution.stop !== undefined
+	) {
 		throw new Error("only stopped execution may carry completion metadata");
 	}
 	return { ...state, execution, updatedAt: now() };

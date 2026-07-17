@@ -24,6 +24,7 @@ function actions() {
 		attach: vi.fn<(targetId: string) => void>(),
 		steer: vi.fn<(targetId: string) => void>(),
 		interrupt: vi.fn<(targetId: string) => void>(),
+		kill: vi.fn<(targetId: string) => void>(),
 		answer: vi.fn(),
 	} satisfies HudActions;
 }
@@ -147,8 +148,9 @@ describe("HUD expanded + focused", () => {
 		expect(lines[0]).toBe("─".repeat(W));
 		// Last line: the action hints for the focused tab.
 		expect(lines[lines.length - 1]).toContain("enter attach");
-		expect(lines[lines.length - 1]).toContain("s steer");
-		expect(lines[lines.length - 1]).toContain("i interrupt");
+		expect(lines[lines.length - 1]).toContain("S steer");
+		expect(lines[lines.length - 1]).toContain("I interrupt");
+		expect(lines[lines.length - 1]).toContain("K fail");
 	});
 
 	it("shows placeholder rows on an empty snapshot (never idle-collapses)", () => {
@@ -224,17 +226,19 @@ describe("HUD agents tab", () => {
 		expect(lines[3]).toContain("└─ review/style · billing");
 	});
 
-	it("enter attaches, s steers, i interrupts the selected row", () => {
+	it("enter attaches, S steers, I interrupts, and K fails the selected owner", () => {
 		const acts = actions();
 		const { c } = hud(agentsSnap(), { acts });
 		c.render(W);
 		c.handleInput("\r");
 		expect(acts.attach).toHaveBeenCalledWith("worker:auth-api/worker");
 		c.handleInput("\u001b[B"); // first child
-		c.handleInput("s");
+		c.handleInput("S");
 		expect(acts.steer).toHaveBeenCalledWith("run:r1");
-		c.handleInput("i");
+		c.handleInput("I");
 		expect(acts.interrupt).toHaveBeenCalledWith("run:r1");
+		c.handleInput("K");
+		expect(acts.kill).toHaveBeenCalledWith("run:r1");
 	});
 });
 

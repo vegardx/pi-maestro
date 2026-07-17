@@ -8,12 +8,15 @@ import type { RunId } from "./ids.js";
 import type { ModelRole } from "./models.js";
 import type {
 	RunHandle,
+	RunProcessMetadata,
 	RunRecord,
 	RunResult,
+	RunStatus,
 	RunWatchdogConfig,
 	ThinkingLevel,
 	ToolPolicy,
 } from "./runs.js";
+import type { TokenSnapshot } from "./usage.js";
 
 export const AGENT_KINDS = [
 	"host",
@@ -164,6 +167,46 @@ export interface AgentRun {
 	readonly runId: RunId;
 	readonly assignment: ResolvedAgentAssignment;
 	readonly handle: RunHandle;
+}
+
+/**
+ * Durable, cumulative view of a run owned by another process. The owner keeps
+ * the RunStore authoritative; maestros persist and render this projection.
+ */
+export interface ChildRunProjection {
+	readonly runId: RunId;
+	readonly revision: number;
+	readonly parent?: RunId;
+	readonly kind: AgentKind;
+	readonly model: string;
+	readonly effort: ThinkingLevel;
+	readonly assignment?: ResolvedAgentAssignment;
+	readonly status: RunStatus;
+	readonly createdAt: number;
+	readonly updatedAt: number;
+	readonly completedAt?: number;
+	readonly lastEventAt?: number;
+	readonly activity?: string;
+	readonly metadata?: RunProcessMetadata;
+	readonly profile: Pick<
+		import("./runs.js").SpawnProfile,
+		"profile" | "role" | "displayName" | "cwd" | "transport" | "rootTurnId"
+	>;
+	readonly usage: TokenSnapshot;
+	readonly result?: RunResult;
+}
+
+/** Worker-local source consumed by the worker RPC bridge. */
+export interface ChildRunProjectionSourceV1 {
+	list(): readonly ChildRunProjection[];
+	subscribe(listener: (projection: ChildRunProjection) => void): () => void;
+	steer(runId: RunId, guidance: string): void;
+	interrupt(
+		runId: RunId,
+		reason?: string,
+	): Promise<import("./runs.js").InterruptResult>;
+	capture(runId: RunId, lines?: number): Promise<string | undefined>;
+	stop(runId: RunId, reason?: string): void;
 }
 
 /** Unified programmatic API. Model-facing tooling is a projection of this. */

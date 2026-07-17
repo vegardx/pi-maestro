@@ -286,7 +286,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			}
 		}
 		// Agent-side RPC bridge: connect to maestro if running as agent
-		rt.agentBridge = initAgentBridge(pi);
+		rt.agentBridge = initAgentBridge(pi, maestro);
 		if (rt.agentBridge) {
 			const bridge = rt.agentBridge;
 			bridge.start(ctx);

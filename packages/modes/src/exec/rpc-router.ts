@@ -5,6 +5,7 @@
 
 import type {
 	AgentMessage,
+	ChildRunControlMessage,
 	HelloMessage,
 	InterruptMessage,
 	MaestroMessage,
@@ -34,12 +35,14 @@ export type RpcRouterHandlers = {
 export type MaestroRequestMessage =
 	| SummarizeMessage
 	| InterruptMessage
+	| ChildRunControlMessage
 	| PingMessage;
 
 /** Response `type` expected for each outbound request `type`. */
 const RESPONSE_TYPE = {
 	summarize: "summary",
 	interrupt: "interruptAck",
+	childRunControl: "childRunControlResult",
 	ping: "pong",
 } as const satisfies Record<MaestroRequestMessage["type"], string>;
 

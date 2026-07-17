@@ -21,7 +21,12 @@ import type {
 	TokenSnapshot,
 	UsageCheckpoint,
 } from "@vegardx/pi-contracts";
-import { detectDefaultBranch, headSha, runCommand } from "@vegardx/pi-git";
+import {
+	detectDefaultBranch,
+	headSha,
+	runCommand,
+	workingTreeClean,
+} from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
 	type ChildRunControlResultMessage,
@@ -294,6 +299,8 @@ export class ExecutionAdapter {
 	private idleCount = new Map<string, number>(); // agentKey → consecutive idle count
 	private lastRpcStatus = new Map<string, string>(); // agentKey → last status report
 	private stuckSteerSent = new Set<string>(); // agentKeys that received a stuck steer
+	/** Workers already told to clean/commit before completion (dedupe). */
+	private completionCleanupSteerSent = new Set<string>();
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -1715,7 +1722,26 @@ export class ExecutionAdapter {
 	 *      — that rule turned every request-changes into a dead worker and a
 	 *      human question (orchestra run, 2026-07-11).
 	 */
-	private workerMayComplete(_agentId: string, _deliverableId: string): boolean {
+	private workerMayComplete(agentId: string, deliverableId: string): boolean {
+		const deliverable = findDeliverable(this.engine.get(), deliverableId);
+		const state = this.executor.getStates().get(deliverableId);
+		if (
+			deliverable &&
+			deliverableWorkspace(deliverable) !== "scratch" &&
+			state?.worktreePath &&
+			!workingTreeClean(state.worktreePath)
+		) {
+			if (!this.completionCleanupSteerSent.has(agentId)) {
+				this.completionCleanupSteerSent.add(agentId);
+				this.router.send(agentId, {
+					type: "steer",
+					content:
+						"All planned tasks are marked done, but the worktree still has uncommitted changes. Finish validation, commit every intended change, verify `git status --short` is empty, then end your turn. Maestro will not complete or ship a dirty delivery.",
+				});
+			}
+			return false;
+		}
+		this.completionCleanupSteerSent.delete(agentId);
 		return true;
 	}
 
@@ -1820,7 +1846,9 @@ export class ExecutionAdapter {
 						success: true,
 						taskId,
 					});
-					this.checkCompletionGate(agentId, deliverableId);
+					// Toggling the final task only arms completion. The worker may
+					// still be running validation/formatting in this turn; completion is
+					// evaluated after the turn reports idle (or an explicit done claim).
 					break;
 				}
 				case "addTask": {

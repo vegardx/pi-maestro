@@ -1,20 +1,27 @@
-// ─── RPC protocol v4 ─────────────────────────────────────────────────────────
+// ─── RPC protocol v5 ─────────────────────────────────────────────────────────
 //
 // Requests carry `id: string`; responses echo it. Fire-and-forget messages
 // omit `id`. Every inbound type must have a handler; unknown types answer
 // `error{code:"unsupported"}` — never a silent drop.
 
 import type {
+	AgentKind,
 	Answers,
 	Questionnaire,
+	ResolvedAgentAssignment,
+	StopRecord,
+	StructuredFinding,
 	ThinkingLevel,
 	TokenSnapshot,
+	TransitionGate,
+	WorkflowStage,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
 
 export type { TokenSnapshot } from "@vegardx/pi-contracts";
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
+export const RPC_SCHEMA_VERSION = PROTOCOL_VERSION;
 
 export type AgentRole = "agent" | "delegate";
 
@@ -35,6 +42,9 @@ export interface HelloMessage {
 	readonly v: number;
 	readonly agentId: string;
 	readonly role: AgentRole;
+	readonly kind: AgentKind;
+	readonly generation: number;
+	readonly assignment: ResolvedAgentAssignment;
 	/** Run token (PI_MAESTRO_TOKEN); prevents wire-crossing between maestros. */
 	readonly token: string;
 	readonly pid: number;
@@ -44,7 +54,10 @@ export interface HelloMessage {
 
 export interface StatusMessage {
 	readonly type: "status";
-	readonly status: "working" | "idle" | "error";
+	readonly status: "working" | "idle" | "stopping" | "stopped" | "error";
+	readonly workflowStage?: WorkflowStage;
+	readonly completedAt?: number;
+	readonly stop?: StopRecord;
 	readonly detail?: string;
 }
 
@@ -140,18 +153,8 @@ export interface PanelReadResponseMessage {
 // on, so the canonical types (which live with the ledger logic in modes)
 // cannot be imported here. Same pattern as PanelReviewerSpec ↔ SubAgentSpec.
 
-export type LedgerSeverity = "critical" | "major" | "minor";
-
-export interface LedgerFindingWire {
-	readonly id: string;
-	readonly severity: LedgerSeverity;
-	readonly category: string;
-	readonly file?: string;
-	readonly line?: number;
-	readonly task?: string;
-	readonly claim?: string;
-	readonly actual: string;
-}
+export type LedgerSeverity = StructuredFinding["severity"];
+export type LedgerFindingWire = StructuredFinding;
 
 export interface LedgerEntryWire {
 	readonly finding: LedgerFindingWire;
@@ -233,6 +236,8 @@ export interface PanelVerdictMessage {
 	readonly deliverableId: string;
 	readonly round: number;
 	readonly verdicts: readonly PanelVerdictEntry[];
+	readonly findings?: readonly StructuredFinding[];
+	readonly gate?: TransitionGate;
 	/**
 	 * What kind of run this reports: a full persona panel round, or a scoped
 	 * verification of claimed fixes. Absent on messages from older workers

@@ -1,7 +1,4 @@
-// Token/cost accounting vocabulary. A TokenSnapshot is a cumulative usage
-// reading for one source; the usage.v1 ledger (see capabilities.ts) aggregates
-// snapshots by source (maestro, agent) so accounting is real and
-// attributable. Cost is pre-computed upstream (pi-ai Usage.cost.total).
+// Token/cost accounting vocabulary. Snapshots are cumulative per source.
 
 export interface TokenSnapshot {
 	readonly input: number;
@@ -13,17 +10,35 @@ export interface TokenSnapshot {
 	readonly turns: number;
 }
 
-/** Who produced a usage reading. Keyed for the ledger's per-source map. */
+/** A cumulative counter lifetime. Generation prevents restart overwrites. */
 export type UsageSource =
 	| { readonly kind: "maestro" }
-	| { readonly kind: "agent"; readonly id: string };
+	| {
+			readonly kind: "agent";
+			readonly id: string;
+			readonly generation?: number;
+	  }
+	| { readonly kind: "run"; readonly id: string; readonly ownerId?: string };
 
-/** Stable string key for a UsageSource (ledger map key). */
 export function usageSourceKey(source: UsageSource): string {
 	switch (source.kind) {
 		case "maestro":
 			return "maestro";
 		case "agent":
-			return `agent:${source.id}`;
+			return source.generation === undefined
+				? `agent:${source.id}`
+				: `agent:${source.id}:generation:${source.generation}`;
+		case "run":
+			return source.ownerId
+				? `run:${source.ownerId}:${source.id}`
+				: `run:${source.id}`;
 	}
+}
+
+/** Durable, retry-safe usage checkpoint for one producer. */
+export interface UsageCheckpoint {
+	readonly source: UsageSource;
+	readonly revision: number;
+	readonly snapshot: TokenSnapshot;
+	readonly updatedAt: number;
 }

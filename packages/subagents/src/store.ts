@@ -19,18 +19,56 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import type {
-	RunBusMessage,
-	RunId,
-	RunRecord,
-	RunResult,
-	RunStatus,
+import {
+	RUN_RECORD_SCHEMA_VERSION,
+	type RunBusMessage,
+	type RunId,
+	type RunRecord,
+	type RunResult,
+	type RunStatus,
+	type StopRecord,
 } from "@vegardx/pi-contracts";
-import { assertTransition } from "./state-machine.js";
+import { assertTransition, isTerminal } from "./state-machine.js";
 
 const STATUS = "status.json";
 const EVENTS = "events.jsonl";
 const RESULT = "result.md";
+
+export class UnsupportedRunStateError extends Error {
+	constructor(found: unknown) {
+		super(
+			`Unsupported Maestro run state schema ${String(found)} (expected ${RUN_RECORD_SCHEMA_VERSION}). ` +
+				"This release is a full cutover; archive or reset the old Maestro run state and retry.",
+		);
+		this.name = "UnsupportedRunStateError";
+	}
+}
+
+function stopFor(
+	status: RunStatus,
+	at: number,
+	result?: RunResult,
+): StopRecord | undefined {
+	if (!isTerminal(status)) return undefined;
+	const kind =
+		status === "succeeded"
+			? "completed"
+			: status === "failed"
+				? "failed"
+				: status === "canceled"
+					? "canceled"
+					: status === "timed-out"
+						? "timed-out"
+						: "interrupted";
+	return (
+		result?.stop ?? {
+			kind,
+			completedAt: at,
+			reason: result?.error,
+			recoverable: status === "failed",
+		}
+	);
+}
 
 export interface RunStore {
 	readonly root: string;
@@ -78,11 +116,24 @@ export function createRunStore(root: string): RunStore {
 	function read(runId: RunId): RunRecord | undefined {
 		const path = join(dir(runId), STATUS);
 		if (!existsSync(path)) return undefined;
+		let value: unknown;
 		try {
-			return JSON.parse(readFileSync(path, "utf8")) as RunRecord;
+			value = JSON.parse(readFileSync(path, "utf8"));
 		} catch {
 			return undefined;
 		}
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			(value as { schemaVersion?: unknown }).schemaVersion !==
+				RUN_RECORD_SCHEMA_VERSION
+		) {
+			throw new UnsupportedRunStateError(
+				(value as { schemaVersion?: unknown } | null)?.schemaVersion ??
+					"missing",
+			);
+		}
+		return value as RunRecord;
 	}
 
 	function mutate(
@@ -100,24 +151,38 @@ export function createRunStore(root: string): RunStore {
 		root,
 
 		create(record) {
+			if (record.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) {
+				throw new UnsupportedRunStateError(record.schemaVersion);
+			}
 			writeRecord(record);
 		},
 
 		setStatus(runId, status, at = Date.now()) {
 			return mutate(runId, (record) => {
 				assertTransition(record.status, status);
-				return { ...record, status, updatedAt: at };
+				const stop = stopFor(status, at);
+				return {
+					...record,
+					status,
+					updatedAt: at,
+					...(stop && record.completedAt === undefined
+						? { completedAt: at, stop }
+						: {}),
+				};
 			});
 		},
 
 		setResult(runId, result, at = Date.now()) {
 			return mutate(runId, (record) => {
 				assertTransition(record.status, result.status);
+				const stop = stopFor(result.status, at, result);
 				return {
 					...record,
 					status: result.status,
 					result,
 					updatedAt: at,
+					completedAt: record.completedAt ?? at,
+					stop: record.stop ?? stop,
 				};
 			});
 		},

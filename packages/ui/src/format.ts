@@ -52,6 +52,7 @@ const DELIVERABLE_GLYPHS: Record<DeliverableStatus, string> = {
 	planned: "○",
 	active: "◐",
 	complete: "◎",
+	failed: "✗",
 	shipped: "✓",
 	superseded: "⤳",
 	abandoned: "⊘",

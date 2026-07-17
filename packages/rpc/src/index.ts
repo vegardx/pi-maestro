@@ -55,7 +55,7 @@ export type {
 	TokenSnapshot,
 	TokensMessage,
 } from "./protocol.js";
-export { PROTOCOL_VERSION } from "./protocol.js";
+export { PROTOCOL_VERSION, RPC_SCHEMA_VERSION } from "./protocol.js";
 export type {
 	AgentConnection,
 	MaestroRpcServerEvents,

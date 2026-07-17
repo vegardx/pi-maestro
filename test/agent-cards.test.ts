@@ -38,7 +38,7 @@ const doneEvent = {
 	deliverableTitle: "Auth",
 	durationMs: 245_000,
 	tokens: { input: 52_000, output: 8_400, turns: 12 },
-	cacheRatio: 0.82,
+	prefixCacheHitRate: 0.82,
 	summary:
 		"## Summary\nImplemented the login endpoint.\n\nAdded tests covering refresh and expiry.",
 	commits: ["feat: add login", "test: cover refresh"],
@@ -119,12 +119,16 @@ describe("agent card builders", () => {
 
 	it("demotes done stats to a dim trailer", () => {
 		expect(buildStatsTrailer(doneEvent)).toBe(
-			"↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+			"↳ 2 commits · 52.0k/8.4k tok · prefix 82% · 12 turns",
 		);
 	});
 
 	it("omits absent commit and cache stats from the trailer", () => {
-		const { cacheRatio: _cache, commits: _commits, ...rest } = doneEvent;
+		const {
+			prefixCacheHitRate: _cache,
+			commits: _commits,
+			...rest
+		} = doneEvent;
 		expect(buildStatsTrailer(rest as ExecutionEvent)).toBe(
 			"↳ 52.0k/8.4k tok · 12 turns",
 		);
@@ -238,7 +242,7 @@ describe("agent card builders", () => {
 				"",
 				"Implemented the login endpoint.",
 				"",
-				"  ↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+				"  ↳ 2 commits · 52.0k/8.4k tok · prefix 82% · 12 turns",
 			].join("\n"),
 		);
 	});
@@ -306,7 +310,7 @@ describe("registerAgentCardRenderer", () => {
 		expect(lines[1]).toBe(" ✓ Auth · worker · finished in 4m05s");
 		expect(text).toContain("Implemented the login endpoint.");
 		expect(text).toContain(
-			"↳ 2 commits · 52.0k/8.4k tok · cache 82% · 12 turns",
+			"↳ 2 commits · 52.0k/8.4k tok · prefix 82% · 12 turns",
 		);
 		// Summary-first: collapsed hides everything past the first paragraph.
 		expect(text).not.toContain("Added tests covering refresh and expiry.");

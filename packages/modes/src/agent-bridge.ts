@@ -7,6 +7,7 @@ import type {
 	Answers,
 	Questionnaire,
 	ResolvedAgentAssignment,
+	UsageCheckpoint,
 	WorkItemKind,
 } from "@vegardx/pi-contracts";
 import {
@@ -87,6 +88,7 @@ export class AgentBridge {
 	private client: MaestroRpcClient;
 	private ctx: ExtensionContext | undefined;
 	private turnCount = 0;
+	private usageRevision = 0;
 	private totalInput = 0;
 	private totalOutput = 0;
 	private totalCacheRead = 0;
@@ -213,6 +215,11 @@ export class AgentBridge {
 		this.totalCacheWrite += usage.cacheWrite ?? 0;
 		this.totalCost += usage.cost?.total ?? 0;
 		this.reportTokens();
+	}
+
+	/** Forward a worker-owned child run's cumulative checkpoint. */
+	sendUsageCheckpoint(checkpoint: UsageCheckpoint): void {
+		this.client.send({ type: "usageCheckpoint", checkpoint });
 	}
 
 	/** Signal an error occurred. */
@@ -654,8 +661,10 @@ export class AgentBridge {
 	}
 
 	private reportTokens(): void {
+		this.usageRevision++;
 		this.client.send({
 			type: "tokens",
+			revision: this.usageRevision,
 			snapshot: {
 				input: this.totalInput,
 				output: this.totalOutput,

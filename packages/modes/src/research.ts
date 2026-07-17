@@ -72,8 +72,8 @@ export interface ResearchRunView {
 	/** Last-turn token usage, fed from run progress events. */
 	tokensIn?: number;
 	tokensOut?: number;
-	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
-	cacheRatio?: number;
+	/** First-turn prefix warmth, separate from cumulative cache hit rate. */
+	prefixCacheHitRate?: number;
 	/** Resolved display metadata (Phase 2), for telemetry. */
 	model?: string;
 	effort?: string;

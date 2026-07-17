@@ -199,6 +199,7 @@ describe("execution adapter — onEvent emission", () => {
 		await ready;
 		client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: {
 				input: 4000,
 				output: 900,
@@ -224,7 +225,7 @@ describe("execution adapter — onEvent emission", () => {
 		expect(done.summary).toContain("shipped the login flow");
 		expect(done.durationMs).toBeGreaterThanOrEqual(0);
 		expect(done.tokens).toEqual({ input: 4000, output: 900, turns: 5 });
-		expect(done.cacheRatio).toBeCloseTo(0.6);
+		expect(done.prefixCacheHitRate).toBeCloseTo(0.6);
 
 		// Session bookkeeping pruned: /watch panes for this agent auto-close.
 		expect(adapter.getWorkerSessions()).toEqual([]);

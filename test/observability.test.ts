@@ -172,6 +172,7 @@ describe("execution adapter observability", () => {
 
 		client.send({
 			type: "tokens",
+			revision: 1,
 			snapshot: {
 				input: 1234,
 				output: 56,
@@ -190,7 +191,16 @@ describe("execution adapter observability", () => {
 
 		const snap = adapter.snapshot();
 		const worker = snap.agents.get("deliverable-one/worker");
-		expect(worker?.tokens).toEqual({ input: 1234, output: 56, turns: 7 });
+		expect(worker?.tokens).toMatchObject({
+			input: 1234,
+			output: 56,
+			cacheRead: 0,
+			cacheWrite: 0,
+			promptTokens: 1234,
+			totalTokens: 1290,
+			cost: 0.02,
+			turns: 7,
+		});
 		expect(worker?.status).toBe("working");
 		expect(worker?.startedAt).toBeGreaterThanOrEqual(suiteStart);
 		expect(worker?.startedAt).toBeLessThanOrEqual(Date.now());

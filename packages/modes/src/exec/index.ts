@@ -2,7 +2,11 @@
 // the concrete adapter — so the execution internals (provisioner, supervisor,
 // rpc-router) can be completed behind this interface.
 
-import type { Answers, InterruptResult } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	InterruptResult,
+	UsageCheckpoint,
+} from "@vegardx/pi-contracts";
 import type { DeliverableExecutor } from "../deliverable-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 import {
@@ -26,14 +30,19 @@ export interface ExecutionAgentTokens {
 	readonly input: number;
 	readonly output: number;
 	readonly turns: number;
+	readonly cacheRead?: number;
+	readonly cacheWrite?: number;
+	readonly promptTokens?: number;
+	readonly totalTokens?: number;
+	readonly cost?: number;
 }
 
 export interface ExecutionAgentSnapshot {
 	readonly status: string;
 	readonly startedAt: number;
 	readonly tokens: ExecutionAgentTokens;
-	/** First-turn cacheRead/(cacheRead+input) — cache-prefix hit efficiency. */
-	readonly cacheRatio?: number;
+	/** First-turn prefix warmth; distinct from cumulative cache hit rate. */
+	readonly prefixCacheHitRate?: number;
 	/** Short model name for telemetry (e.g. "fable-5"). */
 	readonly model?: string;
 	/** Thinking effort level. */
@@ -143,6 +152,12 @@ export interface ExecutionHandle {
 }
 
 export type CreateExecutionOptions = ExecutionAdapterOpts;
+
+export interface AgentUsageCheckpoint {
+	readonly agentId: string;
+	readonly generation: number;
+	readonly checkpoint: UsageCheckpoint;
+}
 
 /** Composition root: build the execution seam for a plan run. */
 export function createExecution(opts: CreateExecutionOptions): ExecutionHandle {

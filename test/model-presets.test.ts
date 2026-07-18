@@ -268,6 +268,82 @@ describe("exact model-set selection", () => {
 	});
 });
 
+describe("session is the fallback within a set", () => {
+	function reviewPool(options: unknown[]) {
+		return {
+			models: {
+				modelSets: { reviewers: { options } },
+				presets: {
+					main: {
+						targets: ["anthropic/sonnet"],
+						modelSets: { "correctness-review": "reviewers" },
+					},
+				},
+			},
+		};
+	}
+
+	it("prefers a concrete option over the session sentinel authored ahead of it", async () => {
+		projectSettings(
+			reviewPool([
+				{ id: "own", model: "session", effort: "medium", summary: "Session" },
+				{ id: "other", model: "openai/o3", effort: "high", summary: "Other" },
+			]),
+		);
+		const result = await resolveExactModelSelection(
+			fakeCtx({ session: "anthropic/sonnet" }),
+			{ role: "correctness-review" },
+		);
+		// `own` is authored first, but session sorts to the back of the default pick.
+		expect(result.selected).toMatchObject({
+			optionId: "other",
+			modelId: "openai/o3",
+		});
+		// Reported candidates keep authored order for /maestro explain.
+		expect(result.candidates.map((c) => c.optionId)).toEqual(["own", "other"]);
+	});
+
+	it("lands on session only when no concrete option is available", async () => {
+		projectSettings(
+			reviewPool([
+				{ id: "own", model: "session", effort: "medium", summary: "Session" },
+				{ id: "other", model: "openai/o3", effort: "high", summary: "Other" },
+			]),
+		);
+		const result = await resolveExactModelSelection(
+			fakeCtx({ session: "anthropic/sonnet", unavailable: ["openai/o3"] }),
+			{ role: "correctness-review" },
+		);
+		expect(result.selected).toMatchObject({
+			optionId: "own",
+			modelId: "anthropic/sonnet",
+		});
+	});
+
+	it("keeps first-available among concretes, session untouched at the back", async () => {
+		projectSettings(
+			reviewPool([
+				{ id: "own", model: "session", effort: "medium", summary: "Session" },
+				{
+					id: "fast",
+					model: "anthropic/haiku",
+					effort: "low",
+					summary: "Fast",
+				},
+				{ id: "deep", model: "openai/o3", effort: "high", summary: "Deep" },
+			]),
+		);
+		const result = await resolveExactModelSelection(
+			fakeCtx({
+				session: "anthropic/sonnet",
+				unavailable: ["anthropic/haiku"],
+			}),
+			{ role: "correctness-review" },
+		);
+		expect(result.selected).toMatchObject({ optionId: "deep" });
+	});
+});
+
 describe("unconfigured model fallback", () => {
 	it("resolves every built-in role to one sensible session option", async () => {
 		const result = await resolveExactModelSelection(

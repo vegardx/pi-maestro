@@ -121,10 +121,22 @@ export interface LiveEnvOptions {
 	 * for a self-contained provider like a local ollama endpoint.
 	 */
 	readonly agentModelsJson?: string;
+	/**
+	 * models.json *content* to install into the isolated agent dir (same effect as
+	 * `agentModelsJson` but inline; takes precedence). Used by the built-in
+	 * multi-model profile, which generates its catalog rather than shipping a file.
+	 */
+	readonly modelsJsonContent?: string;
 	/** Default provider written to the isolated settings.json. */
 	readonly defaultProvider?: string;
 	/** Default model written to the isolated settings.json (and every worker). */
 	readonly defaultModel?: string;
+	/**
+	 * A `models` settings block (presets + modelSets) written top-level into the
+	 * isolated settings.json — the maestro and every worker read it, so real
+	 * role→model routing is exercised. See `MULTI_MODEL_OLLAMA`.
+	 */
+	readonly models?: Record<string, unknown>;
 	/** Keep the disposable repo + dirs after teardown (for debugging). */
 	readonly keep?: boolean;
 }
@@ -137,11 +149,20 @@ export interface LiveEnvOptions {
 export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	const piHome = isolatedHome();
 	copyRealCredentials(piHome);
-	if (opts.agentModelsJson) {
+	if (opts.modelsJsonContent) {
+		writeFileSync(
+			join(agentDir(piHome), "models.json"),
+			opts.modelsJsonContent,
+		);
+	} else if (opts.agentModelsJson) {
 		copyFileSync(opts.agentModelsJson, join(agentDir(piHome), "models.json"));
 	}
-	if (opts.defaultProvider || opts.defaultModel) {
-		writeAgentSettings(piHome, opts.defaultProvider, opts.defaultModel);
+	if (opts.defaultProvider || opts.defaultModel || opts.models) {
+		writeAgentSettings(piHome, {
+			defaultProvider: opts.defaultProvider,
+			defaultModel: opts.defaultModel,
+			models: opts.models,
+		});
 	}
 	const transport = opts.transport ?? "headless";
 
@@ -199,14 +220,19 @@ function copyRealCredentials(piHome: string): void {
 /** Write a minimal isolated settings.json pinning the default provider/model. */
 function writeAgentSettings(
 	piHome: string,
-	defaultProvider?: string,
-	defaultModel?: string,
+	opts: {
+		defaultProvider?: string;
+		defaultModel?: string;
+		/** Top-level `models` block (presets + modelSets) for real role routing. */
+		models?: Record<string, unknown>;
+	},
 ): void {
 	const settings: Record<string, unknown> = {
 		extensionConfig: { modes: { enabled: true } },
 	};
-	if (defaultProvider) settings.defaultProvider = defaultProvider;
-	if (defaultModel) settings.defaultModel = defaultModel;
+	if (opts.defaultProvider) settings.defaultProvider = opts.defaultProvider;
+	if (opts.defaultModel) settings.defaultModel = opts.defaultModel;
+	if (opts.models) settings.models = opts.models;
 	writeFileSync(
 		join(agentDir(piHome), "settings.json"),
 		`${JSON.stringify(settings, null, 2)}\n`,

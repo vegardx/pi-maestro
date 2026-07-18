@@ -26,7 +26,7 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 
 | Subcommand | What it does |
 | --- | --- |
-| `start [--live \| --ci] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt`. |
+| `start [--live \| --ci] [--multi-model] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt`. |
 | `state` | The maestro's pi state (`isStreaming`, model) + the plan's deliverables and their statuses. |
 | `poll` | New events since the last poll **and** `pending[]` — questions parked waiting for your answer. |
 | `prompt "<text>" [--steer \| --follow-up]` | Send a prompt/command. Auto-queues as a follow-up if the agent is mid-stream. |
@@ -63,6 +63,34 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 
 6. **Stop.** Always finish with `stop`, even on failure, so the disposable repo
    and temp dirs are cleaned up.
+
+## Multi-model drive (`--multi-model`)
+
+`start --live --multi-model` boots against a **local ollama** profile that routes
+maestro roles across distinct models instead of one session default — the real
+test of the model-set machinery:
+
+- **planner / session** → `gpt-oss:20b` · **normal** (worker/verify/research) →
+  `qwen3:14b` → `gemma4:26b` · **fast** (classify/summarize/general) → `qwen3:8b`
+  → `gemma4:latest` · **reviewers** → a described pool
+  `qwen3:14b → gpt-oss:20b → gemma4:31b → session`.
+- Requires `ollama serve` running with those models pulled (`ollama list`). Only
+  the chosen option per set loads, so steady state is ~28 GB.
+
+Two extra checks worth running in this mode:
+
+1. **Per-role routing.** After the plan spawns work, `prompt "/maestro explain
+   <role>"` (e.g. `worker`, `classifier`, `correctness-review`) and confirm each
+   resolves to the intended model above — proof that role→model routing lands on
+   different providers, not just the session default.
+2. **Availability fallback.** With work idle, `ollama stop qwen3:8b`, then
+   `prompt "/maestro explain classifier"` — it should now resolve to
+   `gemma4:latest` (the next option in the `fast` set). Re-`ollama run qwen3:8b`
+   after. This exercises the live version of the availability path.
+
+The routing correctness itself is pinned deterministically (no ollama) in
+`test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really
+serves it end to end.
 
 ## Notes
 

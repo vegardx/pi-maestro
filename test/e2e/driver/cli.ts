@@ -25,6 +25,7 @@ import { ForwardingAnswerer } from "./answerer.js";
 import { assertScenario, readPlan } from "./assertions.js";
 import { type EnvProfile, setupCiEnv, setupLiveEnv } from "./env-profile.js";
 import { type LaunchedSut, launchSut } from "./launch.js";
+import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
 
@@ -114,6 +115,20 @@ function buildProfile(argv: string[]): EnvProfile {
 			mockBaseUrl,
 			ghShimDir,
 			keep: argv.includes("--keep"),
+		});
+	}
+	// `--multi-model` installs the built-in ollama multi-model profile (real
+	// role→model routing across gpt-oss/qwen3/gemma4). It supplies the provider
+	// catalog, the presets/modelSets block, and the planner-seat default; other
+	// live flags (--model/--agent-models/…) are ignored in this mode.
+	if (argv.includes("--multi-model")) {
+		return setupLiveEnv({
+			localRemote: argv.includes("--local-remote"),
+			keep: argv.includes("--keep"),
+			defaultProvider: MULTI_MODEL_OLLAMA.defaultProvider,
+			defaultModel: MULTI_MODEL_OLLAMA.defaultModel,
+			modelsJsonContent: MULTI_MODEL_OLLAMA.modelsJsonContent,
+			models: MULTI_MODEL_OLLAMA.models,
 		});
 	}
 	const providerExt = flagValue(argv, "--provider-ext");

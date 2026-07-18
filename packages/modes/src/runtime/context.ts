@@ -36,7 +36,7 @@ import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
 import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
-import { computeActiveTools } from "../policy.js";
+import { computeActiveTools, orchestrationActive } from "../policy.js";
 import type { ResearchRunView } from "../research.js";
 import {
 	blockedReason,
@@ -751,8 +751,9 @@ export function createRuntimeContext(
 				);
 				return;
 			}
-			if (rt.state.mode !== "auto" && rt.state.mode !== "hack")
-				rt.setMode("auto", ctx);
+			// Restart is an orchestration command: it runs in auto. Invoking it
+			// from hack (or plan/recon) is an explicit request to conduct again.
+			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
 			// A stopped adapter is terminal. Rebuild it, then use the validated
 			// resume primitive only for selected active deliveries.
 			await rt.execution?.destroy();
@@ -823,11 +824,13 @@ export function createRuntimeContext(
 					});
 					return { modelId: resolved.modelId, effort: resolved.effort };
 				},
-				// New deliverables activate only while autonomous. The adapter
-				// outlives mode switches (running workers must finish and ship),
-				// and every plan mutation ticks it — without this gate a `task
-				// add` in plan/recon mode spawns workers.
-				canActivate: () => rt.state.mode === "auto" || rt.state.mode === "hack",
+				// New deliverables activate only while autonomous (auto — NOT
+				// hack: there the maestro is the sequential worker and must not
+				// fan out). The adapter outlives mode switches (running workers
+				// must finish and ship), and every plan mutation ticks it —
+				// without this gate a `task add` in plan/recon mode spawns
+				// workers.
+				canActivate: () => orchestrationActive(rt.state.mode),
 				onPlanChanged: () => rt.emitPlanChanged(),
 				// Worker questions: TUI surfaces them via the HUD (which polls the
 				// queue), but RPC has no HUD — so present each as an
@@ -988,9 +991,10 @@ export function createRuntimeContext(
 			);
 
 			// 2. Recovery is operational, not a fresh Plan→Auto authorization. It
-			// restores previously authorized active/failed work only.
-			if (rt.state.mode !== "auto" && rt.state.mode !== "hack")
-				rt.setMode("auto", ctx);
+			// restores previously authorized active/failed work only — and it is
+			// an orchestration command, so it runs in auto (hack included: the
+			// human explicitly asked to conduct again).
+			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
 			await rt.ensureExecution(ctx);
 			if (!rt.execution) {
 				ctx.ui.notify("tmux is required to resume workers.", "warning");

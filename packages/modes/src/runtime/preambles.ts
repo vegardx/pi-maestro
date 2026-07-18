@@ -62,9 +62,11 @@ export function buildMaestroPreamble(
 }
 
 export function buildHackModePreamble(): string {
-	return `You are in HACK MODE. Full tool access. Implement directly when asked.
-Agents continue running in the background independently.
-You can still add deliverables/tasks if needed.
+	return `You are in HACK MODE. Full tool access. You ARE the worker now:
+implement directly, sequentially, yourself. No orchestration — new
+deliverables do NOT activate and no workers spawn in hack mode. Agents
+already running keep draining in the background independently.
+You can still add deliverables/tasks; they activate when you return to /auto.
 Switch back to /auto when done with direct work.
 
 ## Review discipline (hack mode)

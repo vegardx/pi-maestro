@@ -52,7 +52,7 @@ export default defineExtension(
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
-					showConfigMenu(ctx, domainRegistry);
+					await showConfigMenu(ctx, domainRegistry);
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx, domainRegistry);

@@ -71,6 +71,18 @@ export const AGENT_TOOL_NAMES = [
 
 const STRUCTURE_TOOLS = new Set<string>(STRUCTURE_TOOL_NAMES);
 
+/**
+ * Whether NEW deliverables may activate (workers fan out) in this mode. Only
+ * auto orchestrates. Hack is the escape hatch where the maestro BECOMES the
+ * sequential worker — it implements directly and must not fan out; workers
+ * already running when the mode flips keep draining (the adapter outlives
+ * mode switches), but nothing new spawns. See docs/modes-architecture.md
+ * § The four modes (backlog #3).
+ */
+export function orchestrationActive(mode: ModeName): boolean {
+	return mode === "auto";
+}
+
 export interface ToolPolicyInput {
 	readonly mode: ModeName;
 	readonly availableTools: readonly string[];

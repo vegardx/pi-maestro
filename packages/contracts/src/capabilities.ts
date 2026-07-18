@@ -70,14 +70,24 @@ export interface AskCapabilityV1 {
 	open?(questionId: string): void;
 }
 
+export interface AskPresentOptions {
+	/**
+	 * The maestro's own turn awaits this answer (a blocking / promoted ask).
+	 * Absent/false ⇒ non-blocking: the transport surfaces the questions but the
+	 * caller does not wait, and answers arrive later as a follow-up.
+	 */
+	readonly blocking?: boolean;
+}
+
 /**
- * A remote sink for questions. When present, the ask engine routes blocking
- * `ask()` calls here instead of rendering a local dialog — this is how an
- * agent's `ask` tool reaches the maestro over RPC. Registered by
- * modes only in agent mode; absent otherwise (engine falls back to local UI).
+ * A remote sink for questions. When present, the ask engine routes questions
+ * here instead of rendering a local dialog. Two registrations use it: an agent
+ * routes its `ask` tool up to the parent maestro over RPC; and the top maestro
+ * in rpc mode routes questions out to the driver as extension_ui_request
+ * dialogs. Absent otherwise (the engine falls back to local UI).
  */
 export interface AskTransportV1 {
-	present(questions: Questionnaire): Promise<Answers>;
+	present(questions: Questionnaire, opts?: AskPresentOptions): Promise<Answers>;
 }
 
 /**

@@ -135,6 +135,17 @@ export class AskEngine {
 		}
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return;
+		// RPC mode has no TUI HUD/overlays. Render each question as an
+		// extension_ui_request dialog; non-blocking, so fire it and deliver the
+		// answers as a follow-up when they come back (the request stays
+		// outstanding meanwhile — the agent keeps working).
+		if (ctx.mode === "rpc") {
+			void this.#presentRpc(questions).then((answers) => {
+				const entries = this.#toEntries(answers);
+				if (entries.length > 0) this.#deliver?.(formatDelivery(entries));
+			});
+			return;
+		}
 		if (!this.overlays) {
 			// Legacy dialog cannot pend; run it and deliver the answers.
 			void runQuestionnaire(ctx, questions).then((answers) => {
@@ -171,9 +182,12 @@ export class AskEngine {
 		// maestro over RPC. Checked before the local-UI fallback so a
 		// headless agent (no ctx.hasUI) still reaches the user.
 		const transport = getCapability(CAPABILITIES.askTransport);
-		if (transport) return transport.present(questions);
+		if (transport) return transport.present(questions, { blocking: true });
 		const ctx = this.#ctx;
 		if (!ctx?.hasUI) return [];
+
+		// RPC mode: render the dialogs directly; the caller awaits (blocking).
+		if (ctx.mode === "rpc") return this.#presentRpc(questions);
 
 		if (!this.overlays) {
 			// Fallback: legacy blocking dialog
@@ -299,6 +313,55 @@ export class AskEngine {
 			waiter.resolve([...waiter.collected.values()]);
 			return false;
 		});
+	}
+
+	/**
+	 * Render a questionnaire over RPC as `extension_ui_request` dialogs, one at a
+	 * time, and collect the answers. Choice questions become `ctx.ui.select`,
+	 * free-text become `ctx.ui.input`; a cancelled dialog is recorded as a
+	 * deferred (parked) answer. Non-blocking callers fire this and don't await;
+	 * blocking callers await it — the difference is entirely on the caller side.
+	 */
+	async #presentRpc(questions: Questionnaire): Promise<Answers> {
+		const ctx = this.#ctx;
+		if (!ctx?.hasUI) return [];
+		const answers: Answer[] = [];
+		for (const question of questions) {
+			const options = question.options ?? [];
+			const title = question.header
+				? `${question.header}: ${question.question}`
+				: question.question;
+			if (options.length > 0) {
+				const picked = await ctx.ui.select(
+					title,
+					options.map((o) => o.label),
+				);
+				if (picked === undefined) {
+					answers.push({ questionId: question.id, value: "", deferred: true });
+					continue;
+				}
+				const chosen = options.find((o) => o.label === picked);
+				answers.push({
+					questionId: question.id,
+					value: chosen?.value ?? chosen?.label ?? picked,
+					custom: false,
+					source: "human",
+				});
+			} else {
+				const typed = await ctx.ui.input(title);
+				if (typed === undefined || typed === "") {
+					answers.push({ questionId: question.id, value: "", deferred: true });
+					continue;
+				}
+				answers.push({
+					questionId: question.id,
+					value: typed,
+					custom: true,
+					source: "human",
+				});
+			}
+		}
+		return answers;
 	}
 
 	#toEntries(answers: Answers): OutboxEntry[] {

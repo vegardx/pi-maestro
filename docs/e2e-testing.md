@@ -182,9 +182,10 @@ default — the real exercise of the presets / modelSets machinery:
 
 Needs `ollama serve` with those models pulled (`ollama list`); only the chosen
 option per set loads (~28 GB steady state). Two checks this mode enables:
-`/maestro explain <role>` confirms per-role routing lands on the intended model,
-and `ollama stop <first-model>` then re-explaining confirms the live
-availability fall-through. Routing correctness is pinned deterministically (no
+`/models` (and `/models <role>` for candidate detail) confirms per-role routing
+lands on the intended model, and `ollama stop <first-model>` then re-running
+`/models <role>` confirms the live availability fall-through. Routing
+correctness is pinned deterministically (no
 ollama) in [`driver/multi-model-profile.test.ts`](../test/e2e/driver/multi-model-profile.test.ts);
 this drive confirms ollama serves it end to end.
 

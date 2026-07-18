@@ -79,14 +79,15 @@ test of the model-set machinery:
 
 Two extra checks worth running in this mode:
 
-1. **Per-role routing.** After the plan spawns work, `prompt "/maestro explain
-   <role>"` (e.g. `worker`, `classifier`, `correctness-review`) and confirm each
-   resolves to the intended model above — proof that role→model routing lands on
-   different providers, not just the session default.
+1. **Per-role routing.** `prompt "/models"` prints the full role→model table;
+   `prompt "/models <role>"` (e.g. `worker`, `classifier`, `correctness-review`)
+   details that role's candidate options and which was picked — confirm each
+   resolves to the intended model above, proof that routing lands on different
+   providers, not just the session default.
 2. **Availability fallback.** With work idle, `ollama stop qwen3:8b`, then
-   `prompt "/maestro explain classifier"` — it should now resolve to
-   `gemma4:latest` (the next option in the `fast` set). Re-`ollama run qwen3:8b`
-   after. This exercises the live version of the availability path.
+   `prompt "/models classifier"` — it should now resolve to `gemma4:latest` (the
+   next option in the `fast` set, the first marked unavailable). Re-`ollama run
+   qwen3:8b` after. This exercises the live version of the availability path.
 
 The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really

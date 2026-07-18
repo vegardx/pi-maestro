@@ -829,6 +829,22 @@ export function createRuntimeContext(
 				// add` in plan/recon mode spawns workers.
 				canActivate: () => rt.state.mode === "auto" || rt.state.mode === "hack",
 				onPlanChanged: () => rt.emitPlanChanged(),
+				// Worker questions: TUI surfaces them via the HUD (which polls the
+				// queue), but RPC has no HUD — so present each as an
+				// extension_ui_request dialog and route the answers back to the
+				// waiting worker. The worker blocks on its own ask; the maestro's
+				// loop never does (this runs off an inbound RPC event, not a turn).
+				onQuestionsReceived: (agentId) => {
+					if (ctx.mode !== "rpc") return;
+					const entry = rt.execution?.questionQueue
+						.all()
+						.find((e) => e.agentId === agentId);
+					const ask = maestro.capabilities.get(CAPABILITIES.ask);
+					if (!entry || !ask) return;
+					void ask.ask(entry.questions).then((answers) => {
+						rt.execution?.questionQueue.answer(agentId, answers);
+					});
+				},
 				onAgentStateChanged: (id, state) => {
 					usageLedger.recordCheckpoint({
 						source: { kind: "agent", id, generation: state.generation },

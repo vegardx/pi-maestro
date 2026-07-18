@@ -77,6 +77,10 @@ export interface Answer {
 	readonly skipped?: boolean;
 	/** True when the user deferred a blocking question (value is ""). */
 	readonly deferred?: boolean;
+	/** Who produced this answer. "maestro-auto" = the idle autopilot, not a human. */
+	readonly source?: "human" | "maestro-auto";
+	/** Self-assessed confidence (0..1) for a "maestro-auto" answer. */
+	readonly confidence?: number;
 }
 
 /** A pending (posted, unanswered) question — the preamble's context line. */

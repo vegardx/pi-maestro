@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+// A `gh` shim for the CI full-stack profile: implements the subset of the GitHub
+// CLI the maestro ship path invokes (see packages/github/src/*.ts), backed by
+// the local bare remote instead of github.com. Installed on PATH ahead of the
+// real gh by setupCiEnv. State (PR records) lives in PI_E2E_GH_STATE.
+//
+// Supported: auth status | api user | pr create | pr list | pr view | pr edit |
+// pr merge | pr diff. Unknown `api` calls succeed as no-ops so branch-protection
+// probes don't abort a run. Anything else exits non-zero so gaps are visible.
+
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const argv = process.argv.slice(2);
+const stateDir = process.env.PI_E2E_GH_STATE || "/tmp/pi-e2e-gh";
+mkdirSync(stateDir, { recursive: true });
+const statePath = join(stateDir, "prs.json");
+
+function loadState() {
+	if (!existsSync(statePath)) return { seq: 0, prs: [] };
+	return JSON.parse(readFileSync(statePath, "utf8"));
+}
+function saveState(s) {
+	writeFileSync(statePath, JSON.stringify(s, null, 2));
+}
+function flag(name) {
+	const i = argv.indexOf(name);
+	return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
+}
+function readStdin() {
+	try {
+		return readFileSync(0, "utf8");
+	} catch {
+		return "";
+	}
+}
+function bareRemote() {
+	return execFileSync("git", ["remote", "get-url", "origin"], {
+		encoding: "utf8",
+	}).trim();
+}
+function out(s) {
+	process.stdout.write(typeof s === "string" ? s : JSON.stringify(s));
+	process.stdout.write("\n");
+}
+function fail(msg) {
+	process.stderr.write(`gh-shim: ${msg}\n`);
+	process.exit(1);
+}
+
+const [group, sub] = argv;
+
+if (group === "auth" && sub === "status") process.exit(0);
+
+if (group === "api") {
+	// `gh api user -q .login` and misc probes.
+	if (argv[1] === "user") out("pi-maestro-e2e");
+	else out("{}"); // no-op for branch protection etc.
+	process.exit(0);
+}
+
+if (group === "pr") {
+	const state = loadState();
+	if (sub === "create") {
+		const head = currentBranch();
+		const number = ++state.seq;
+		const pr = {
+			number,
+			url: `https://local.test/pr/${number}`,
+			title: flag("--title") || `PR #${number}`,
+			body: argv.includes("--body-file") ? readStdin() : flag("--body") || "",
+			headRefName: head,
+			baseRefName: flag("--base") || "main",
+			state: "OPEN",
+			isDraft: false,
+			mergedAt: null,
+		};
+		state.prs.push(pr);
+		saveState(state);
+		out(pr.url);
+		process.exit(0);
+	}
+	if (sub === "list") {
+		const head = flag("--head");
+		const matches = state.prs.filter(
+			(p) => (!head || p.headRefName === head) && p.state === "OPEN",
+		);
+		out(matches.map(projectPr));
+		process.exit(0);
+	}
+	if (sub === "view") {
+		const n = Number(argv[2]);
+		const pr = state.prs.find((p) => p.number === n);
+		if (!pr) fail(`no PR ${n}`);
+		out(projectPr(pr));
+		process.exit(0);
+	}
+	if (sub === "edit") {
+		const n = Number(argv[2]);
+		const pr = state.prs.find((p) => p.number === n);
+		if (!pr) fail(`no PR ${n}`);
+		if (flag("--title")) pr.title = flag("--title");
+		if (flag("--base")) pr.baseRefName = flag("--base");
+		if (argv.includes("--body-file")) pr.body = readStdin();
+		saveState(state);
+		process.exit(0);
+	}
+	if (sub === "merge") {
+		const n = Number(argv[2]);
+		const pr = state.prs.find((p) => p.number === n);
+		if (!pr) fail(`no PR ${n}`);
+		// Simulate merge in the bare remote: point the base ref at the head tip.
+		const bare = bareRemote();
+		try {
+			const headSha = execFileSync(
+				"git",
+				["--git-dir", bare, "rev-parse", pr.headRefName],
+				{ encoding: "utf8" },
+			).trim();
+			execFileSync("git", [
+				"--git-dir",
+				bare,
+				"update-ref",
+				`refs/heads/${pr.baseRefName}`,
+				headSha,
+			]);
+		} catch {
+			// Best-effort; the assertion checks history reachability, not FF-ness.
+		}
+		pr.state = "MERGED";
+		pr.mergedAt = "2020-01-01T00:00:00Z";
+		saveState(state);
+		process.exit(0);
+	}
+	if (sub === "diff") {
+		const n = Number(argv[2]);
+		const pr = state.prs.find((p) => p.number === n);
+		if (!pr) fail(`no PR ${n}`);
+		const diff = execFileSync(
+			"git",
+			["diff", `${pr.baseRefName}...${pr.headRefName}`],
+			{ encoding: "utf8" },
+		);
+		out(diff);
+		process.exit(0);
+	}
+	fail(`unsupported: pr ${sub}`);
+}
+
+fail(`unsupported: ${argv.join(" ")}`);
+
+function currentBranch() {
+	return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+		encoding: "utf8",
+	}).trim();
+}
+
+function projectPr(pr) {
+	return {
+		number: pr.number,
+		url: pr.url,
+		title: pr.title,
+		body: pr.body,
+		state: pr.state,
+		isDraft: pr.isDraft,
+		headRefName: pr.headRefName,
+		baseRefName: pr.baseRefName,
+		mergedAt: pr.mergedAt,
+	};
+}

@@ -106,13 +106,13 @@ function scriptedWorker(socketPath: string, agentId: string) {
 		ready,
 		working: () => client.send({ type: "status", status: "working" }),
 		idle: () => client.send({ type: "status", status: "idle" }),
-		toggleTask(taskId: string) {
+		toggleTask(taskId: string, summary?: string) {
 			client.send({
 				type: "planMutate",
 				id: `m${nextId++}`,
 				action: "toggleTask",
 				deliverableId,
-				params: { taskId },
+				params: { taskId, ...(summary ? { summary } : {}) },
 			});
 		},
 		close: () => client.close(),
@@ -192,6 +192,15 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 			.deliverables[0].tasks.filter((t) => t.kind === "task")
 			.map((t) => t.id);
 		expect(taskIds).toEqual(["build-it", "test-it"]);
+		// Activation injected the postflight lifecycle task (no preflight: this
+		// deliverable has no dependencies). It gates completion like a real task.
+		const postflight = engine
+			.get()
+			.deliverables[0].tasks.find((t) => t.kind === "postflight");
+		expect(postflight?.id).toBe("lifecycle-postflight");
+		expect(
+			engine.get().deliverables[0].tasks.some((t) => t.kind === "preflight"),
+		).toBe(false);
 
 		const worker = scriptedWorker(socketPath, "ship-the-widget/worker");
 		workers.push(worker);
@@ -199,6 +208,12 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 
 		worker.working();
 		for (const id of taskIds) worker.toggleTask(id);
+		// The postflight toggle carries the downstream handoff — the worker's
+		// summary for dependent deliverables — and completes the gating set.
+		worker.toggleTask(
+			"lifecycle-postflight",
+			"## Handoff\nWidget built; API `ship()`; watch the retry edge case.",
+		);
 		// Toggling the final task only arms completion; the worker signals its
 		// turn ended by reporting idle.
 		worker.idle();
@@ -208,10 +223,11 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 		await until(() => adapter.isWorkerDone("ship-the-widget"));
 
 		// Every gating task is done on the real plan...
-		const tasks = engine
-			.get()
-			.deliverables[0].tasks.filter((t) => t.kind === "task");
+		const deliverable = engine.get().deliverables[0];
+		const tasks = deliverable.tasks.filter((t) => t.kind === "task");
 		expect(tasks.every((t) => t.done)).toBe(true);
+		// ...and the postflight toggle persisted the downstream handoff.
+		expect(deliverable.handoff).toContain("retry edge case");
 		// No maestro ship gate: the worker owns its findings and the deliverable
 		// is free to ship once complete (trust-the-worker model).
 	});

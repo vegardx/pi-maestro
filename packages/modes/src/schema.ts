@@ -192,6 +192,13 @@ export interface Deliverable {
 	restartState?: WorkerRestartState;
 	/** Combined summary of all agent outputs (produced at deliverable completion). */
 	summary?: string;
+	/**
+	 * Downstream handoff: the worker's own concise summary for dependent
+	 * deliverables (interfaces, decisions, invariants, gotchas), written when it
+	 * toggles the injected `postflight` task. Dependents' seeds prefer this over
+	 * `summary`. See docs/modes-architecture.md § Deliverable handoff.
+	 */
+	handoff?: string;
 	/** PR URL once shipped. */
 	prUrl?: string;
 	prNumber?: number;
@@ -334,9 +341,27 @@ export function deliverableTasks(g: Pick<Deliverable, "tasks">): WorkItem[] {
 	return g.tasks;
 }
 
-/** Gating tasks (kind = "task") that must be completed. */
+/** Kinds that gate worker completion: real tasks plus the lifecycle pair. */
+const GATING_KINDS = new Set<WorkItemKind>(["task", "preflight", "postflight"]);
+
+/** Harness-managed lifecycle kinds — reserved; not authorable by planner/agents. */
+export const LIFECYCLE_KINDS = new Set<WorkItemKind>([
+	"preflight",
+	"postflight",
+]);
+
+/** Reserved work-item ids for the injected lifecycle pair. */
+export const PREFLIGHT_TASK_ID = "lifecycle-preflight";
+export const POSTFLIGHT_TASK_ID = "lifecycle-postflight";
+
+/** Gating tasks (task/preflight/postflight) that must be completed. */
 export function gatingTasks(g: Pick<Deliverable, "tasks">): WorkItem[] {
-	return g.tasks.filter((t) => effectiveWorkItemKind(t) === "task");
+	return g.tasks.filter((t) => GATING_KINDS.has(effectiveWorkItemKind(t)));
+}
+
+/** The deliverable's injected postflight task, when present. */
+export function postflightTask(g: Pick<Deliverable, "tasks">): WorkItem | null {
+	return g.tasks.find((t) => effectiveWorkItemKind(t) === "postflight") ?? null;
 }
 
 /** Find a task by ID within a deliverable. */

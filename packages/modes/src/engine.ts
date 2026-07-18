@@ -22,6 +22,8 @@ import {
 	type Plan,
 	type PlanPhase,
 	type PlanRepo,
+	POSTFLIGHT_TASK_ID,
+	PREFLIGHT_TASK_ID,
 	slugify,
 	type ThinkingLevel,
 	validatePlanShape,
@@ -419,6 +421,11 @@ export class PlanEngine {
 				throw new Error("failed delivery requires failure detail");
 			}
 			g.status = status;
+			// Activation injects the harness-managed lifecycle pair exactly once:
+			// preflight first (only with dependencies), postflight last. Injected
+			// here — not at author time — so every planner-authored task is already
+			// in place and array order (the task ordering) stays first/…/last.
+			if (status === "active") this.injectLifecycleTasks(g);
 			g.failure = status === "failed" ? failure : undefined;
 			if (
 				(status === "complete" ||
@@ -557,7 +564,11 @@ export class PlanEngine {
 		});
 	}
 
-	toggleWorkItem(deliverableId: string, taskId: string): boolean {
+	toggleWorkItem(
+		deliverableId: string,
+		taskId: string,
+		opts?: { readonly summary?: string },
+	): boolean {
 		let done = false;
 		this.mutate((plan) => {
 			const g = findDeliverable(plan, deliverableId);
@@ -565,11 +576,60 @@ export class PlanEngine {
 			const item = findTask(g, taskId);
 			if (!item) throw new Error(`unknown task: ${taskId}`);
 			item.done = !item.done;
+			// Toggling the postflight task done with a summary records the
+			// deliverable's downstream handoff (the seed for dependents).
+			if (item.kind === "postflight" && item.done && opts?.summary?.trim()) {
+				g.handoff = opts.summary.trim();
+			}
 			item.updatedAt = this.now();
 			g.updatedAt = this.now();
 			done = item.done;
 		});
 		return done;
+	}
+
+	/**
+	 * Inject the harness-managed lifecycle pair (idempotent; runs inside a
+	 * mutate). Preflight — review upstream handoffs — only when the deliverable
+	 * has dependencies; postflight — write the downstream handoff — always.
+	 * Reserved ids/kinds keep them off the planner's editable surface.
+	 */
+	private injectLifecycleTasks(g: Deliverable): void {
+		const ts = this.now();
+		const has = (kind: WorkItemKind) => g.tasks.some((t) => t.kind === kind);
+		if ((g.dependsOn?.length ?? 0) > 0 && !has("preflight")) {
+			g.tasks.unshift({
+				type: "work-item",
+				id: PREFLIGHT_TASK_ID,
+				title: "Preflight: review upstream handoffs",
+				body:
+					"Your seed's Prior Work section carries the handoff summaries from " +
+					"the deliverables this one depends on — decisions, interfaces, and " +
+					"gotchas you must build on. Read them first; toggle this task once " +
+					"absorbed.",
+				done: false,
+				kind: "preflight",
+				createdAt: ts,
+				updatedAt: ts,
+			});
+		}
+		if (!has("postflight")) {
+			g.tasks.push({
+				type: "work-item",
+				id: POSTFLIGHT_TASK_ID,
+				title: "Postflight: write the downstream handoff",
+				body:
+					"Final step: toggle this task passing `summary` — a concise handoff " +
+					"(under 500 words) for deliverables that build on this one. Cover " +
+					"what you built, public interfaces, key decisions, invariants, and " +
+					"gotchas. Keep it short and dense; only what a downstream worker " +
+					"genuinely needs.",
+				done: false,
+				kind: "postflight",
+				createdAt: ts,
+				updatedAt: ts,
+			});
+		}
 	}
 
 	removeWorkItem(deliverableId: string, taskId: string): void {

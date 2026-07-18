@@ -248,6 +248,14 @@ const TaskParams = Type.Object({
 	answer: Type.Optional(
 		Type.String({ description: "Decision answer for question items." }),
 	),
+	summary: Type.Optional(
+		Type.String({
+			description:
+				"Toggle of the postflight task only: the deliverable's downstream " +
+				"handoff — concise (under 500 words), covering what was built, public " +
+				"interfaces, key decisions, invariants, and gotchas for dependents.",
+		}),
+	),
 	position: Type.Optional(
 		Type.Number({ description: "0-based insertion position." }),
 	),
@@ -597,6 +605,20 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 			"task — manage work items within a deliverable (add/update/toggle/remove).",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
+			// Lifecycle kinds are harness-injected at activation; authoring or
+			// re-kinding them by hand would corrupt the handoff protocol.
+			const authoredKinds = [
+				params.kind,
+				...(params.items ?? []).map((i) => i.kind),
+			];
+			if (
+				(params.action === "add" || params.action === "update") &&
+				authoredKinds.some((k) => k === "preflight" || k === "postflight")
+			) {
+				return error(
+					"preflight/postflight are harness-managed lifecycle tasks and cannot be authored",
+				);
+			}
 			// Agent mode: forward mutations over RPC and await the result —
 			// a fire-and-forget toggle here once reported success for task ids
 			// that did not exist, wedging the completion gate.
@@ -658,6 +680,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 							if (!params.taskId) return error("toggle requires taskId");
 							const res = await bridge.planMutate("toggleTask", gId, {
 								taskId: params.taskId,
+								summary: params.summary,
 							});
 							if (!res.success) return error(res.error ?? "mutation failed");
 							return ok(`${params.taskId} marked done.`, { done: true });
@@ -746,7 +769,9 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "toggle": {
 						if (!params.taskId) return error("toggle requires taskId");
-						const done = engine.toggleWorkItem(deliverableId, params.taskId);
+						const done = engine.toggleWorkItem(deliverableId, params.taskId, {
+							summary: params.summary,
+						});
 						notify(deps, engine);
 						return ok(
 							`${params.taskId} is now ${done ? "done" : "not done"}.`,

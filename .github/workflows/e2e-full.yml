@@ -1,0 +1,65 @@
+# Full-stack e2e: boots a REAL pi maestro and drives the canned scenario end to
+# end. Two jobs:
+#   • ci-profile  — on PRs, deterministic + offline (mock model provider via
+#     recorded cassettes, local bare remote, gh shim). No secrets, no cost.
+#     Self-skips if no cassette has been recorded yet (see docs/e2e-testing.md).
+#   • live-profile — manual dispatch only; real models + a disposable GitHub
+#     repo. Needs ANTHROPIC_API_KEY + a gh token with repo + delete_repo.
+name: e2e-full
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "which profile to run"
+        default: "live"
+        type: choice
+        options: ["live"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-full-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-profile:
+    # Deterministic offline run on every PR.
+    if: github.event_name == 'pull_request'
+    name: ci-profile (mock provider)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # tmux is not needed: the CI profile uses PI_MAESTRO_TRANSPORT=headless.
+      - name: full-stack e2e (replay)
+        env:
+          PI_E2E_FULL: "1"
+        run: npm run test:e2e:full
+
+  live-profile:
+    # Real models + a disposable GitHub repo. Manual only (has a cost).
+    if: github.event_name == 'workflow_dispatch'
+    name: live-profile (real models)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: full-stack e2e (live)
+        env:
+          PI_E2E_FULL: "1"
+          PI_E2E_LIVE: "1"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
+        run: npm run test:e2e:full

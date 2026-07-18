@@ -34,6 +34,8 @@
 		"test": "vitest run",
 		"test:watch": "vitest watch",
 		"test:e2e": "vitest run --config vitest.e2e.config.ts",
+		"test:e2e:full": "vitest run --config vitest.e2e-full.config.ts",
+		"e2e:driver": "jiti test/e2e/driver/cli.ts",
 		"boundaries": "node scripts/check-boundaries.mjs",
 		"smoke": "node scripts/smoke.mjs",
 		"prepare": "husky"

@@ -46,6 +46,29 @@ const READ_ONLY_TOOLS = new Set([
 
 const ALWAYS_ALLOWED_TOOLS = new Set(["ask", "suggest_next_prompt"]);
 
+/**
+ * Worker / support-agent tool set: a focused implementer — read, run, commit,
+ * toggle its own tasks, review, and escalate. Research and plan-navigation are
+ * upstream (the planner's job) and the deliverable's preflight seed hands over
+ * the context a worker needs, so `plan`, `dig`, and the web tools are
+ * deliberately out. (`suggest_next_prompt` full-cleanup is deferred; it lingers
+ * here until then.) See docs/modes-architecture.md § Worker tool set.
+ */
+export const AGENT_TOOL_NAMES = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"bash",
+	"edit",
+	"write",
+	"commit",
+	"task", // toggle own tasks (+ optional handoff summary)
+	"review", // worker-side review surface
+	"ask", // escalate a question to the maestro/human
+	"suggest_next_prompt", // TODO: remove in the suggest_next_prompt cleanup pass
+] as const;
+
 const STRUCTURE_TOOLS = new Set<string>(STRUCTURE_TOOL_NAMES);
 
 export interface ToolPolicyInput {
@@ -97,19 +120,11 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		);
 	}
 
-	// Agent mode: full implementation tools, no plan-structure tools
+	// Agent mode: a focused implementer set (AGENT_TOOL_NAMES) — no plan-structure,
+	// research, or web tools. Research/review subagents spawn via a different path
+	// (--tools + research-tools, isolateExtensions) and are unaffected by this gate.
 	if (input.isAgent) {
-		const agentAllowed = new Set([
-			...READ_ONLY_TOOLS,
-			...ALWAYS_ALLOWED_TOOLS,
-			"bash",
-			"edit",
-			"write",
-			"commit",
-			"task", // agents can toggle tasks
-			"review", // worker review compatibility surface
-			"dig", // pull a full research report by ref (plan-dir via env)
-		]);
+		const agentAllowed = new Set<string>(AGENT_TOOL_NAMES);
 		return input.availableTools.filter((name) => agentAllowed.has(name));
 	}
 

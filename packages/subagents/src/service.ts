@@ -93,6 +93,24 @@ export interface SubagentServiceOptions {
 
 const DEFAULT_MAX_DEPTH = 3;
 
+/**
+ * Spawn-transport precedence: the operator's PI_MAESTRO_TRANSPORT override
+ * beats a per-spawn profile/runtime-policy transport, which beats the service
+ * default. The escape hatch exists for harness/sandbox runs where no usable
+ * tmux server matches the maestro's environment; a policy that pins tmux there
+ * spawns children into the wrong world (the e2e's plan reviewer did exactly
+ * that and died on the host's model catalog).
+ */
+export function resolveSpawnTransport(
+	profileTransport: RunTransport | undefined,
+	defaultTransport: RunTransport | undefined,
+	env: NodeJS.ProcessEnv = process.env,
+): RunTransport {
+	const forced = env.PI_MAESTRO_TRANSPORT;
+	if (forced === "headless" || forced === "tmux") return forced;
+	return profileTransport ?? defaultTransport ?? "tmux";
+}
+
 export class SubagentService implements SubagentsCapabilityV1 {
 	private readonly bus: RunBus;
 	private readonly store: RunStore;
@@ -151,7 +169,10 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		// (workers have always lived in it) and the transport-failure battery
 		// covers the bridge. Headless is an explicit choice: per profile, per
 		// service, or PI_MAESTRO_TRANSPORT=headless (see index.ts).
-		const transport = profile.transport ?? this.defaultTransport ?? "tmux";
+		const transport = resolveSpawnTransport(
+			profile.transport,
+			this.defaultTransport,
+		);
 		// Lineage is populated at the spawn boundary: a run spawning children
 		// carries its own id in PI_MAESTRO_RUN_ID, so parent linkage (and with
 		// it --children/--tree) works without every caller threading it.

@@ -136,54 +136,55 @@ describe("multi-model ollama profile", () => {
 	});
 
 	it("routes each role to its intended local model", async () => {
-		// normal tier
-		expect(await modelFor("worker")).toBe("ollama/qwen3:14b");
-		expect(await modelFor("verifier")).toBe("ollama/qwen3:14b");
-		expect(await modelFor("codebase-research")).toBe("ollama/qwen3:14b");
+		// normal tier — the coding model is the default worker
+		expect(await modelFor("worker")).toBe("ollama/qwen3.6:27b-coding-mxfp8");
+		expect(await modelFor("verifier")).toBe("ollama/qwen3.6:27b-coding-mxfp8");
+		expect(await modelFor("codebase-research")).toBe(
+			"ollama/qwen3.6:27b-coding-mxfp8",
+		);
 		// fast tier
-		expect(await modelFor("classifier")).toBe("ollama/qwen3:8b");
-		expect(await modelFor("plan-summarizer")).toBe("ollama/qwen3:8b");
-		expect(await modelFor("general")).toBe("ollama/qwen3:8b");
-		// review pool — first concrete option
-		expect(await modelFor("correctness-review")).toBe("ollama/qwen3:14b");
-		expect(await modelFor("adversarial-review")).toBe("ollama/qwen3:14b");
+		expect(await modelFor("classifier")).toBe("ollama/gemma4:e4b-mlx");
+		expect(await modelFor("plan-summarizer")).toBe("ollama/gemma4:e4b-mlx");
+		expect(await modelFor("general")).toBe("ollama/gemma4:e4b-mlx");
+		// review pool — first concrete option: a DIFFERENT family from workers
+		expect(await modelFor("correctness-review")).toBe("ollama/gpt-oss:20b");
+		expect(await modelFor("adversarial-review")).toBe("ollama/gpt-oss:20b");
 	});
 
 	it("falls through to the next option when the first is not served", async () => {
-		// The live availability-fallback (ollama stop qwen3:8b), deterministically:
-		// fast → qwen3:8b → gemma4:latest, and normal → qwen3:14b → gemma4:26b.
+		// The live availability-fallback (ollama stop <model>), deterministically:
+		// fast → gemma4:e4b-mlx → qwen3:8b; normal → qwen3.6-coding → qwen3:14b.
 		expect(
 			await modelFor(
 				"classifier",
-				fakeCtx({ unavailable: ["ollama/qwen3:8b"] }),
+				fakeCtx({ unavailable: ["ollama/gemma4:e4b-mlx"] }),
 			),
-		).toBe("ollama/gemma4:latest");
+		).toBe("ollama/qwen3:8b");
 		expect(
-			await modelFor("worker", fakeCtx({ unavailable: ["ollama/qwen3:14b"] })),
-		).toBe("ollama/gemma4:26b");
+			await modelFor(
+				"worker",
+				fakeCtx({ unavailable: ["ollama/qwen3.6:27b-coding-mxfp8"] }),
+			),
+		).toBe("ollama/qwen3:14b");
 	});
 
-	it("walks the review pool by availability, then reports nothing when all are unserved", async () => {
-		// qwen3:14b unserved → the pool's deep reasoner (gpt-oss:20b) takes over.
+	it("walks the review pool by availability, then falls back to the session model", async () => {
+		// gpt-oss unserved → gemma4:31b takes over.
 		expect(
 			await modelFor(
 				"correctness-review",
-				fakeCtx({ unavailable: ["ollama/qwen3:14b"] }),
+				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
 			),
-		).toBe("ollama/gpt-oss:20b");
-		// Every pool model unserved (gpt-oss:20b is also the session seat, so the
-		// `session` fallback resolves to it too) → no compatible option.
-		const none = await resolveExactModelSelection(
-			fakeCtx({
-				unavailable: [
-					"ollama/qwen3:14b",
-					"ollama/gpt-oss:20b",
-					"ollama/gemma4:31b",
-				],
-			}),
-			{ role: "correctness-review" },
-		);
-		expect(none.selected).toBeNull();
-		expect(none.errors[0]?.code).toBe("no-model-available");
+		).toBe("ollama/gemma4:31b");
+		// Every concrete pool model unserved → the session sentinel (sorted to
+		// the back) resolves to the planner seat — the last resort.
+		expect(
+			await modelFor(
+				"correctness-review",
+				fakeCtx({
+					unavailable: ["ollama/gpt-oss:20b", "ollama/gemma4:31b"],
+				}),
+			),
+		).toBe("ollama/qwen3.5:27b");
 	});
 });

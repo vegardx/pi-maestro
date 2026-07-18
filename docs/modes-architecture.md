@@ -137,6 +137,31 @@ worker session is a DIY pattern inside a custom tool via `createAgentSession`.
 
 ---
 
+## Task & plan persistence
+
+pi.dev has **no native cross-session task/plan store** — every platform
+persistence primitive (`custom` entries via `pi.appendEntry`, `custom_message`,
+labels, the shipped `todo.ts` tool-result pattern) is scoped to a *single
+session's* JSONL file and is lost on `newSession()`/fork. There is no KV store,
+project-state file, or workspace DB (SDK research 2026-07-18).
+
+Therefore the maestro's own on-disk plan store (`plan.json` per slug under the
+plans root, via `PlanEngine`) is the **sanctioned and only** way to keep
+deliverables/tasks/statuses alive across sessions and forks — and it is correct
+as built. This yields a clean **two-channel** persistence model that the
+transition backbone depends on:
+
+- **Plan structure** (deliverables/tasks/statuses/reviewers) → the maestro's
+  plan store. Survives every session boundary; loaded on `session_start` and
+  re-seeded into a forked session *from the store*, not from the session file.
+- **Stage context** (understanding, research, decisions) → the session file;
+  must be **distilled and re-seeded** into a fresh session on each forward
+  transition (see [transitions](#mode-transitions--the-contract)).
+
+The platform provides the *hooks* (`session_start`, `session_shutdown`,
+`session_tree`, `before_agent_start`) to know when to load/save; durable state
+itself is the extension's responsibility.
+
 ## The e2e oracle
 
 The externally-driven test asserts on **program state**, tolerates the **model's

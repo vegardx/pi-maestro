@@ -155,6 +155,28 @@ function dedupeConcretePairs(
 	});
 }
 
+/**
+ * The default (unassigned) pick prefers a concrete option over the `session`
+ * sentinel: within a set the session model is the *fallback*, not a front-runner,
+ * so a review pool can list `session` among real alternatives and only land on it
+ * when nothing else is available. Authored order is preserved within each group,
+ * so among concretes the first available still wins.
+ */
+function firstAvailableOption(
+	checked: readonly CheckedOption[],
+): CheckedOption | undefined {
+	const isSession = (candidate: CheckedOption) =>
+		candidate.fact.authoredModel === SESSION_MODEL_SENTINEL;
+	return (
+		checked.find(
+			(candidate) => candidate.fact.available && !isSession(candidate),
+		) ??
+		checked.find(
+			(candidate) => candidate.fact.available && isSession(candidate),
+		)
+	);
+}
+
 function builtInSessionOption(role: ModelRole): ExactModelOption {
 	return {
 		id: "session",
@@ -283,7 +305,7 @@ export async function resolveExactModelSelection(
 			};
 		}
 	} else {
-		chosen = checked.find((candidate) => candidate.fact.available);
+		chosen = firstAvailableOption(checked);
 	}
 
 	if (!chosen?.fact.available || !chosen.model || !chosen.fact.modelId) {

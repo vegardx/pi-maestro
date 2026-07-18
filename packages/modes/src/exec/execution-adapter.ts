@@ -92,6 +92,15 @@ import {
  * is the only completion signal these agents produce.
  */
 const IDLE_DONE_THRESHOLD = 2;
+/**
+ * Dirty-worktree completion hold: a worker with all gating tasks done but
+ * uncommitted changes is reminded to commit at most this many times, spaced
+ * by the resteer interval, before the hold escalates to a visible failure.
+ * One-shot steering wedged silently when the model ignored it (drive 2,
+ * 2026-07-18: both workers held for hours with zero surfaced signal).
+ */
+const DIRTY_HOLD_MAX_STEERS = 3;
+const DIRTY_HOLD_RESTEER_MS = 2 * 60_000;
 /** How long an in-flight review round may defer worker completion before we
  *  assume the round died with its reviewers. DERIVED from the ONE panel
  *  deadline: reviewers run concurrently and exactly once (no retries), so a
@@ -205,6 +214,9 @@ export interface ExecutionAdapterOpts {
 	/** Restart kill barrier timing (shortened in tests). */
 	restartKillTimeoutMs?: number;
 	restartPollMs?: number;
+	/** Dirty-worktree completion hold timing (shortened in tests). */
+	dirtyHoldResteerMs?: number;
+	dirtyHoldMaxSteers?: number;
 	/**
 	 * New-deliverable activation gate, threaded to the executor. False defers
 	 * activation (running work still advances/ships). Absent → always allowed.
@@ -294,7 +306,11 @@ export class ExecutionAdapter {
 	private lastRpcStatus = new Map<string, string>(); // agentKey → last status report
 	private stuckSteerSent = new Set<string>(); // agentKeys that received a stuck steer
 	/** Workers already told to clean/commit before completion (dedupe). */
-	private completionCleanupSteerSent = new Set<string>();
+	/** Dirty-worktree completion holds: agentKey → steer bookkeeping. */
+	private completionHolds = new Map<
+		string,
+		{ steers: number; lastSteerAt: number; escalated: boolean }
+	>();
 	private respawnCount = new Map<string, number>(); // agentKey → respawn attempts
 	private provisionedWorktrees = new Set<string>(); // env setup ran already
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -1638,47 +1654,68 @@ export class ExecutionAdapter {
 	}
 
 	/**
-	 * Whether the worker may complete now, review-wise. The rules, in order:
-	 *   1. an in-flight review/verification run defers completion until it
-	 *      reports (window derived from the reviewer timeout);
-	 *   2. required reviewers + no round this episode → steer "run review
-	 *      now" once, then a grace period;
-	 *   3. the gate is SATISFIED (blocking ledger empty / verdicts approve)
-	 *      → complete;
-	 *   4. the gate is failing → the worker gets protected fix cycles: one
-	 *      steer per ledger cycle listing the open finding ids, a grace
-	 *      window per steer, budget deliverable.maxFixRounds (default 3);
-	 *   5. the gate is held ONLY by required reviewers that never reported →
-	 *      one steer to review({action:"repair"}) (a missing reviewer is not
-	 *      rework — send-back respawned workers with nothing to fix), then
-	 *      the visible gate;
-	 *   6. only disputes remain, the budget is exhausted, or a steer's grace
-	 *      expired → complete into the VISIBLE ship gate (triage/human own
-	 *      it from there). A failing round is never a kill signal by itself
-	 *      — that rule turned every request-changes into a dead worker and a
-	 *      human question (orchestra run, 2026-07-11).
+	 * Whether the worker may complete now, workspace-wise: a non-scratch
+	 * deliverable must leave a CLEAN worktree — the shipper refuses dirty
+	 * trees far too late to fix. While dirty, the worker is steered to
+	 * commit on a cadence (dirtyHoldResteerMs, dirtyHoldMaxSteers); every
+	 * hold/steer/release is logged to events.jsonl. When the reminder
+	 * budget is exhausted the hold ESCALATES — agent failed + deliverable
+	 * blocked with a /recover hint — because a silent hold wedged the
+	 * whole post-completion pipeline for hours (drive 2, 2026-07-18).
 	 */
 	private workerMayComplete(agentId: string, deliverableId: string): boolean {
 		const deliverable = findDeliverable(this.engine.get(), deliverableId);
 		const state = this.executor.getStates().get(deliverableId);
-		if (
+		const dirty =
 			deliverable &&
 			deliverableWorkspace(deliverable) !== "scratch" &&
 			state?.worktreePath &&
-			!workingTreeClean(state.worktreePath)
-		) {
-			if (!this.completionCleanupSteerSent.has(agentId)) {
-				this.completionCleanupSteerSent.add(agentId);
-				this.router.send(agentId, {
-					type: "steer",
-					content:
-						"All planned tasks are marked done, but the worktree still has uncommitted changes. Finish validation, commit every intended change, verify `git status --short` is empty, then end your turn. Maestro will not complete or ship a dirty delivery.",
-				});
+			!workingTreeClean(state.worktreePath);
+		if (!dirty) {
+			if (this.completionHolds.delete(agentId)) {
+				this.logEvent("completion-hold-released", { agent: agentId });
 			}
+			return true;
+		}
+		const maxSteers = this.opts.dirtyHoldMaxSteers ?? DIRTY_HOLD_MAX_STEERS;
+		const resteerMs = this.opts.dirtyHoldResteerMs ?? DIRTY_HOLD_RESTEER_MS;
+		const hold = this.completionHolds.get(agentId) ?? {
+			steers: 0,
+			lastSteerAt: 0,
+			escalated: false,
+		};
+		this.completionHolds.set(agentId, hold);
+		if (hold.escalated) return false;
+		const now = Date.now();
+		// Idle observations re-feed this every ~5s; act only on the cadence.
+		if (hold.steers > 0 && now - hold.lastSteerAt < resteerMs) return false;
+		if (hold.steers < maxSteers) {
+			hold.steers += 1;
+			hold.lastSteerAt = now;
+			this.logEvent("completion-held", {
+				agent: agentId,
+				reason: "dirty-worktree",
+				steer: hold.steers,
+				of: maxSteers,
+				worktree: state?.worktreePath,
+			});
+			this.router.send(agentId, {
+				type: "steer",
+				content: `All planned tasks are marked done, but the worktree still has uncommitted changes (reminder ${hold.steers}/${maxSteers}). Run \`git add -A && git commit\` with a meaningful message now, verify \`git status --short\` is empty, then end your turn. Maestro will not complete or ship a dirty delivery.`,
+			});
 			return false;
 		}
-		this.completionCleanupSteerSent.delete(agentId);
-		return true;
+		// Reminder budget exhausted one full cadence ago — escalate to a
+		// visible, /recover-able state instead of holding silently forever.
+		hold.escalated = true;
+		const agentNamePart = agentId.split("/")[1] ?? "worker";
+		const reason = `worker finished all tasks but left uncommitted changes after ${maxSteers} commit reminders — commit manually in ${state?.worktreePath ?? "its worktree"}, then /recover ${deliverableId}`;
+		this.logEvent("completion-hold-escalated", { agent: agentId, reason });
+		this.executor.markAgentFailed(deliverableId, agentNamePart, reason);
+		this.executor.blockDeliverable(deliverableId, reason);
+		this.recordDeliverableTransitions();
+		this.opts.onPlanChanged();
+		return false;
 	}
 
 	/**

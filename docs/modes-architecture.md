@@ -114,6 +114,41 @@ sources under `node_modules/@earendil-works/pi-coding-agent/`.
 | Distill | `session.compact(customInstructions?)` or `serializeConversation(convertToLlm(messages))` — reuse pi's structured summary format (`compaction.md`). |
 | Per-turn mode guidance | `before_agent_start` → return modified `systemPrompt` (`extensions.md` §before_agent_start). **Per-turn only** — not the mechanism for stage identity. |
 
+### Backbone implementation design (backlog #1/#2/#4)
+
+The concrete shape of the transition backbone, decided against the existing
+carry-forward machinery (`/distill`/`/handoff` in `runtime/carry-commands.ts` +
+`carry-forward.ts`):
+
+**One new primitive — `stageTransition(rt, ctx, {to, kickoff})`:**
+
+1. **Distill, single-shot.** Forward transitions use a *self-curated,
+   non-interactive* distillation (the forced-distill posture: the model curates
+   its own threads, no human selection round) — a transition must be one gate,
+   not a multi-turn episode. The interactive curation UX stays exclusive to
+   `/distill` and `/handoff`.
+2. **Fork + seed, pi.dev-correct.** `ctx.newSession({ parentSession, setup,
+   withSession })`: the distilled doc is seeded in `setup(sm)` via
+   `sm.appendCustomMessageEntry("maestro.stage-handoff", doc, true)` — real
+   in-context material in the fresh session. This **replaces** the
+   `pendingHandoffSeedPath` + per-turn preamble seed block + idle-polled
+   arrival-delivery dance (which exists to work around sending a message across
+   a session switch — seeding in `setup` makes that whole problem vanish).
+3. **Kickoff per edge.** `withSession → ctx.sendUserMessage(kickoff)`:
+   recon→plan orients ("summarize intent, list open questions, wait");
+   plan→auto instructs the fresh session to *form the full plan*
+   (deliverables/tasks/reviewers) from the seed, then plan review runs and
+   execution starts.
+4. **Backward = restore.** auto→plan / plan→recon walk the `parentSession`
+   lineage and `ctx.switchSession(priorPath)`; if the prior session is >5 min
+   old, ask resume-or-fresh first.
+5. **Readiness removal rides the same arc** (backlog #4): the structure-tool
+   lock and `readiness` tool go; the fresh planning session's prompt carries
+   converge-before-authoring.
+
+`/handoff` remains a *distinct* command (arc-closing, interactive curation,
+archaeologist) but is refactored onto the same fork+seed core.
+
 ### The one unavoidable shim
 
 pi has **no native "compact the current session *into* a fresh session"** —
@@ -271,6 +306,8 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 | 8 | — | **Weak models can't author plans unaided** (didn't self-initiate readiness; hallucinated authoring). | Separate hardening thread: strengthen the planning preamble / tool discoverability. Tracked, not blocking. |
 | 9 | P1 | **Deliverable handoff is an injected `summarize` turn outside the plan**; no downstream handoff field; dependents reuse the maestro summary. | Auto-injected preflight-seed / postflight-summarize tasks; `task` gains an optional bounded `summary`; handoff field in the plan store; input via `seeds.ts`. See [Deliverable handoff](#deliverable-handoff). |
 | 10 | P2 | **Worker allowlist is broader than a focused implementer needs** (`plan`/`dig`/`websearch`/`webfetch`/`suggest_next_prompt`). | Trim the `isAgent` branch to `read, grep, find, ls, bash, edit, write, commit, task, review, ask` (`suggest_next_prompt` full-cleanup deferred). See [Worker tool set](#worker-tool-set). |
+| 11 | P1 | **Completion accepts a dirty worktree; ship fails late.** Workers are briefed to commit (and have a commit tool) but a worker that skips it completes anyway — the shipper then refuses ("uncommitted changes") at ship time. Seen live 2026-07-18. | Completion gate checks worktree cleanliness when all tasks toggle; steer the worker to commit in-loop instead of failing at ship. |
+| 12 | **P1** | **Post-completion sequence never fires in the live headless drive** — both workers finished all tasks (incl. postflight, handoffs recorded) and went idle, GPU free, yet 35+ min later: no summarize turn ran (`summary` unset), no support/review agent spawned, no `complete`/ship. The hermetic e2e passes this exact wire, so the break is specific to the live headless adapter path (idle-report → checkCompletionGate → summarize → agent barrier). Evidence preserved (drive-2 sandbox copy). | Debug against the preserved evidence: worker session files show whether `status:idle` was sent and whether `summarize` arrived; suspect the completion evaluation or the summarize request path in the headless transport. |
 
 Fix order follows the backbone: **1 → 2 → 4** (transition/session core), then
 **7** (unblock the e2e), with **3**, **9**, **10** alongside. **5/6 done (#223).**

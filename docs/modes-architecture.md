@@ -24,7 +24,7 @@ maestro. The active tool set is computed by `computeActiveTools`
 | Mode | Posture | Maestro's role | Tools |
 | --- | --- | --- | --- |
 | **recon** | Read-only research. Vague idea in, understanding out. | Researcher — fans out research, no plan surface. | read-only + research loop + bash (classifier-gated read-only). No `plan`/structure tools. |
-| **plan** | Formalize a plan *in context* (as discussion/text), surface open questions. | Planner — converges on what to build; **does not** author formal structure until the plan→auto gate. | read-only + `plan` (read) + research + bash (gated) + `readiness`. Structure tools (`deliverable`/`task`) **locked** until `structuring` (see [Plan lifecycle](#the-plan-lifecycle)). |
+| **plan** | Formalize a plan *in context*, surface open questions, author structure as it converges. | Planner — converges on what to build, then authors deliverables/tasks. *Converge-before-authoring* is enforced by the planning **system prompt**, not a tool lock. | read-only + `plan` (read) + `deliverable`/`task` (available throughout) + research + bash (gated). No readiness gate (see [Plan lifecycle](#the-plan-lifecycle)). |
 | **auto** | Orchestrated execution. | **Conductor** — spawns workers per deliverable (worktrees, parallel per deps), runs reviews, ships, then sits idle when all deliverables are done. | full plan/structure + orchestration; workers get implementation tools. |
 | **hack** | Escape hatch for everything. | **The maestro *becomes* the worker** — does the work itself, sequentially, in-session. No orchestration fan-out. | full baseline implementation tools (edit/write/bash/commit), **no** plan-structure/orchestration tools. |
 
@@ -36,34 +36,38 @@ time, in its own session. Fan-out to workers is exactly what hack turns *off*.
 
 ## The plan lifecycle
 
-Plan mode has an internal phase (`planPhase`, derived from plan state) with a
-gate. Verified live 2026-07-18.
+Plan mode formalizes a plan *in context*, then authors structure as it
+converges. There is **no gate locking the structure tools** —
+`deliverable`/`task` are available throughout plan mode. Premature authoring
+(creating deliverables while the model's own open questions are still
+unanswered) is prevented by the planning **system prompt**, not by confiscating
+tools.
 
 ```
-/plan ──▶ exploring ──[readiness gate: human confirms]──▶ structuring ──▶ author
-              │  structure tools LOCKED                        │  deliverable/task UNLOCKED
-              │  (only read/research/readiness)                ▼
-              │                                            plan → auto transition
-              ▼                                            (2nd gate; distill+fork;
-        research, discuss, open questions                  plan review runs)
+/plan ──▶ (fresh planning session, primed) ──▶ converge ──────▶ author ──────▶ plan → auto
+             base prompt establishes the        surface open    deliverable/     distill + fork to
+             "converge before authoring"        questions,      task as the      auto session; plan
+             planning posture                    get answers     plan firms up    review; execute
 ```
 
-1. **exploring** — read/research/discuss. `deliverable`/`task` are *locked*
-   (calling one returns "not found" because it isn't in the active set). The
-   human drives convergence; the model should **nudge** when there are no open
-   questions but must not self-decide the plan is done.
-2. **readiness gate** — the transition toward forming/executing the plan
-   presents a confirm ("Ready to form the plan?"). On confirm, phase flips
-   `exploring → structuring` and structure tools unlock.
-3. **structuring** — author deliverables/tasks/reviewers.
-4. **plan → auto** — the human moves to auto. This is where the **plan review**
-   runs and can flag a missing piece; the human deals with findings (or ack's
-   none). Then execution auto-starts deliverable #1.
+- The planning **system prompt** is the control: surface open questions and
+  resolve them with the human *first*; author deliverables/tasks only once
+  converged; nudge the human when nothing is open. This behavioral contract
+  replaces the old `readiness` tool.
+- **plan → auto** is the single gate. The mode change distills the session,
+  forks a fresh auto session, runs **plan review** on the authored plan (which
+  can flag a missing piece — the human deals with findings or ack's none), and
+  auto-starts deliverable #1.
 
-**Open design point (see backlog #4):** today there is *both* a `readiness` tool
-and a separate `requestMode` transition gate. The intent is that the
-**mode-change attempt itself is the readiness signal** — attempting plan→auto
-*is* "I'm ready" — collapsing the two into one gate.
+**Why no hard gate.** The old `readiness` tool locked the structure tools during
+an `exploring` phase because, in the *current* shared-session/preamble-only
+setup, the planner has no coherent "converge before authoring" identity and
+authors prematurely even while its own open questions sit unanswered. A fresh
+session with a proper planning system prompt (the [transition
+backbone](#mode-transitions--the-contract)) removes that root cause — so the
+lock is unnecessary and is being removed (backlog #4). A weak *local* model may
+still jump the gun on a soft prompt; that is the separate "help weak models
+plan" hardening thread (#8), not a reason to hard-gate capable session models.
 
 ---
 
@@ -195,7 +199,7 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 | 1 | P0 | **Mode transitions flip state in place** (`commitMode`); no distill, no fresh session, no context handoff. Each stage drags the full raw prior conversation forward. | Wire forward transitions to distill + `ctx.newSession({setup})`; backward to `switchSession` + age prompt. |
 | 2 | P0 | **Preamble carries stage identity** (`before_agent_start` append) instead of a seeded fresh session. | Once #1 lands, reduce the preamble to genuinely per-turn mode guidance; stage context rides the seed. |
 | 3 | P1 | **hack mode half-honors execution** — `hooks.ts:152` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
-| 4 | P1 | **Two gates for one intent** — separate `readiness` tool and `requestMode` transition gate. | Make the plan→auto attempt *be* the readiness gate (distill+fork+author on confirm). |
+| 4 | P1 | **`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring — a blunt fix for premature authoring in the muddled shared session. | Remove the `readiness` tool and the structure-tool lock; `deliverable`/`task` available throughout plan mode; enforce converge-before-authoring via the planning system prompt (relies on the fresh-session backbone #1). Validate with a capable model (Opus 4.8 / Fable 5). |
 | 5 | P2 | **No routing-inspection surface** — no command shows role→model resolution (`/maestro explain` was documented but never existed). | Add a read-only routing/model-inspection command; also surfaces the planner's model reasoning for the oracle. |
 | 6 | P2 | **Driver skill omits the readiness handshake** and references the non-existent `/maestro explain`. | Fix `.agents/skills/drive-maestro-e2e/` + the #221 doc references. |
 | 7 | P1 | **e2e can't reach execution** — a weak planner can't author the plan. | Add a `--seed-plan` capability: write a valid `plan.json` into the isolated plan store; open by slug. |

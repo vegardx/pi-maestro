@@ -152,7 +152,7 @@ drive it directly:
 ```bash
 # start the daemon in the background; it prints a `ready` line + the plan prompt
 node_modules/.bin/jiti test/e2e/driver/cli.ts start --live      # real models + disposable GitHub repo
-#   ...or --live --local-remote (no GitHub), or --ci (mock provider)
+#   ...or --live --local-remote (no GitHub), --live --multi-model (ollama role routing), or --ci (mock provider)
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/plan"
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "<the plan prompt>"
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/start"
@@ -165,6 +165,28 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts stop     # tears down the sandbox 
 Because the driver is itself an agent, answering the maestro's mid-run questions
 is just the driver doing its job — the reason MCP is *not* the right tool here
 (MCP feeds tools *into* an agent; it is not a control plane *over* one).
+
+#### Multi-model routing (`--multi-model`)
+
+`start --live --multi-model` boots against a **local ollama** profile
+([`driver/multi-model-profile.ts`](../test/e2e/driver/multi-model-profile.ts))
+that routes maestro roles across *distinct* models instead of one session
+default — the real exercise of the presets / modelSets machinery:
+
+| Tier | Models (first-available order) | Roles |
+| --- | --- | --- |
+| planner / session | `gpt-oss:20b` | the preset target — the maestro plans here |
+| normal | `qwen3:14b` → `gemma4:26b` | worker, verifier, codebase-research |
+| fast | `qwen3:8b` → `gemma4:latest` | classifier, summarizers, general, web-research |
+| review pool | `qwen3:14b` → `gpt-oss:20b` → `gemma4:31b` → `session` | the four `*-review` roles (planner picks by summary; `session` sorts to the back) |
+
+Needs `ollama serve` with those models pulled (`ollama list`); only the chosen
+option per set loads (~28 GB steady state). Two checks this mode enables:
+`/maestro explain <role>` confirms per-role routing lands on the intended model,
+and `ollama stop <first-model>` then re-explaining confirms the live
+availability fall-through. Routing correctness is pinned deterministically (no
+ollama) in [`driver/multi-model-profile.test.ts`](../test/e2e/driver/multi-model-profile.test.ts);
+this drive confirms ollama serves it end to end.
 
 ### Scripted driver — CI (deterministic, offline)
 

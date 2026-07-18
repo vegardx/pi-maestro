@@ -166,6 +166,71 @@ The platform provides the *hooks* (`session_start`, `session_shutdown`,
 `session_tree`, `before_agent_start`) to know when to load/save; durable state
 itself is the extension's responsibility.
 
+## Deliverable handoff
+
+Dependent deliverables pass context through **data in the plan store** — not
+session forks, not a messaging bus, not an out-of-band summarize turn. The
+mechanism is two **auto-injected lifecycle tasks** the harness bakes into every
+deliverable's task DAG (the planner never authors them):
+
+- **Preflight** (first task, no dependencies): the harness **deterministically
+  seeds** the worker with its direct dependencies' handoff summaries — this is
+  what `exec/seeds.ts` "Prior Work" already does, repointed at the handoff field.
+  The worker starts with upstream context *in hand*; it does not fetch it.
+- **Postflight** (last task, depends on everything else): the worker writes its
+  handoff summary and toggles the task done. **No new tool** — the existing
+  `task` toggle gains an optional `summary` field; that text becomes the
+  deliverable's downstream handoff, stored in the plan.
+
+Design decisions (all settled 2026-07-18):
+
+- **No `type: pre|post` on tasks.** The task DAG already encodes first/last
+  (preflight has no deps; postflight depends on all others). A lightweight
+  *reserved id/flag* marks the injected pair so the harness can inject them,
+  route the postflight `summary` to the handoff field, and keep them off the
+  planner's editable surface — but that is an identity marker, not a type system.
+- **Bounded by instruction, not enforcement.** The postflight prompt asks for a
+  short, concise summary (≤ ~500 words). We accept mild overrun rather than build
+  a validate-and-reshorten loop.
+- **One summary, not two.** The postflight `summary` is the downstream handoff;
+  the maestro derives status from the completed task DAG + review results, so no
+  separate maestro-facing report (split later only if the maestro is under-served).
+- **Transitive context is the plan's job.** There is *no* on-demand pull of an
+  ancestor's handoff. If a deliverable needs a grandparent's context, the DAG must
+  make the dependency explicit or the intermediate handoff must forward the
+  relevant bit — "the planner's job is to be precise." (This is why the worker
+  `dig` tool is removed.)
+
+This supersedes the injected `summarize` RPC turn (`agent-lifecycle.ts`), and the
+earlier `submit-handoff`-tool and worker-session-fork ideas. `/handoff` (=`/fork`
++ compaction) stays a *maestro-transition* mechanism only; worker handoff is plain
+plan data.
+
+## Worker tool set
+
+Workers run in **agent mode** with a deliberately tight allowlist — *implement,
+run, commit, toggle tasks, review, escalate.* Research and plan-navigation are
+**upstream** (the planner's job) and the preflight seed hands over everything a
+worker needs, so those aren't worker tools.
+
+Target set (11): `read, grep, find, ls, bash, edit, write, commit, task, review,
+ask`.
+
+Removed from the prior 16-tool `isAgent` allowlist:
+
+- `plan` (read) — the preflight seed provides plan context; a worker focuses on
+  its deliverable, not the whole plan.
+- `dig` — no worker-initiated research or ancestor-handoff pull (see above).
+- `websearch` / `webfetch` — research is upstream.
+- `suggest_next_prompt` — interactive-UX assist; **full cleanup deferred** to a
+  separate pass, so it lingers in the allowlist until then (12 in the interim).
+
+Scope: this trims the modes **`isAgent`** branch (`policy.ts`), which gates
+workers and deliverable support/review agents. **Research/review subagents are
+unaffected** — they spawn via the subagents path (`--tools` allowlist + the
+research-tools extension, `isolateExtensions: true`), so they never hit this
+branch and keep their web/research tools.
+
 ## The e2e oracle
 
 The externally-driven test asserts on **program state**, tolerates the **model's
@@ -200,10 +265,12 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 | 2 | P0 | **Preamble carries stage identity** (`before_agent_start` append) instead of a seeded fresh session. | Once #1 lands, reduce the preamble to genuinely per-turn mode guidance; stage context rides the seed. |
 | 3 | P1 | **hack mode half-honors execution** — `hooks.ts:152` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
 | 4 | P1 | **`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring — a blunt fix for premature authoring in the muddled shared session. | Remove the `readiness` tool and the structure-tool lock; `deliverable`/`task` available throughout plan mode; enforce converge-before-authoring via the planning system prompt (relies on the fresh-session backbone #1). Validate with a capable model (Opus 4.8 / Fable 5). |
-| 5 | P2 | **No routing-inspection surface** — no command shows role→model resolution (`/maestro explain` was documented but never existed). | Add a read-only routing/model-inspection command; also surfaces the planner's model reasoning for the oracle. |
-| 6 | P2 | **Driver skill omits the readiness handshake** and references the non-existent `/maestro explain`. | Fix `.agents/skills/drive-maestro-e2e/` + the #221 doc references. |
+| 5 | P2 | ~~No routing-inspection surface (`/maestro explain` never existed).~~ **DONE (#223)** — `/models` + `/models <role>`. | — |
+| 6 | P2 | ~~Driver skill referenced the non-existent `/maestro explain`.~~ **DONE (#223).** | — |
 | 7 | P1 | **e2e can't reach execution** — a weak planner can't author the plan. | Add a `--seed-plan` capability: write a valid `plan.json` into the isolated plan store; open by slug. |
 | 8 | — | **Weak models can't author plans unaided** (didn't self-initiate readiness; hallucinated authoring). | Separate hardening thread: strengthen the planning preamble / tool discoverability. Tracked, not blocking. |
+| 9 | P1 | **Deliverable handoff is an injected `summarize` turn outside the plan**; no downstream handoff field; dependents reuse the maestro summary. | Auto-injected preflight-seed / postflight-summarize tasks; `task` gains an optional bounded `summary`; handoff field in the plan store; input via `seeds.ts`. See [Deliverable handoff](#deliverable-handoff). |
+| 10 | P2 | **Worker allowlist is broader than a focused implementer needs** (`plan`/`dig`/`websearch`/`webfetch`/`suggest_next_prompt`). | Trim the `isAgent` branch to `read, grep, find, ls, bash, edit, write, commit, task, review, ask` (`suggest_next_prompt` full-cleanup deferred). See [Worker tool set](#worker-tool-set). |
 
 Fix order follows the backbone: **1 → 2 → 4** (transition/session core), then
-**7 → 5/6** (unblock + observe the e2e), with **3** and **8** alongside.
+**7** (unblock the e2e), with **3**, **9**, **10** alongside. **5/6 done (#223).**

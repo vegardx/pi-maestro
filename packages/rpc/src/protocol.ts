@@ -138,6 +138,8 @@ export interface PlanMutateMessage {
 		readonly title?: string;
 		readonly body?: string;
 		readonly kind?: WorkItemKind;
+		/** Toggle of the postflight task: the deliverable's downstream handoff. */
+		readonly summary?: string;
 	};
 }
 

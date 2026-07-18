@@ -36,6 +36,8 @@ const KIND_TAG: Record<WorkItemSummary["kind"], string> = {
 	followup: "↪",
 	question: "?",
 	manual: "☐",
+	preflight: "⇤",
+	postflight: "⇥",
 };
 
 function countTasks(items: readonly WorkItemSummary[]): {

@@ -331,6 +331,7 @@ export class AgentBridge {
 			title?: string;
 			body?: string;
 			kind?: WorkItemKind;
+			summary?: string;
 		},
 	): Promise<PlanMutateResultMessage> {
 		const run = this.mutateChain.then(() =>
@@ -351,6 +352,7 @@ export class AgentBridge {
 			title?: string;
 			body?: string;
 			kind?: WorkItemKind;
+			summary?: string;
 		},
 	): Promise<PlanMutateResultMessage> {
 		const id = randomUUID();

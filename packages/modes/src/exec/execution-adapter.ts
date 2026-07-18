@@ -1774,7 +1774,9 @@ export class ExecutionAdapter {
 				case "toggleTask": {
 					const taskId = params.taskId;
 					if (!taskId) throw new Error("taskId required");
-					this.engine.toggleWorkItem(deliverableId, taskId);
+					this.engine.toggleWorkItem(deliverableId, taskId, {
+						summary: params.summary,
+					});
 					this.opts.onPlanChanged();
 					this.router.send(agentId, {
 						type: "planMutateResult",
@@ -2539,7 +2541,10 @@ export class ExecutionAdapter {
 		const deliverables = new Map<string, string>();
 		for (const depId of deliverable?.dependsOn ?? []) {
 			const dep = plan.deliverables.find((g) => g.id === depId);
-			if (dep?.summary) deliverables.set(depId, dep.summary);
+			// The worker-authored downstream handoff is the intended seed; the
+			// combined agent summary remains the fallback for pre-handoff plans.
+			const handoff = dep?.handoff ?? dep?.summary;
+			if (handoff) deliverables.set(depId, handoff);
 		}
 
 		const agents = new Map<string, string>();

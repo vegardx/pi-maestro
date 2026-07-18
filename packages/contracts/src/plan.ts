@@ -57,6 +57,15 @@ export const WORK_ITEM_KINDS = [
 	"followup",
 	"question",
 	"manual",
+	/**
+	 * Harness-injected lifecycle tasks (docs/modes-architecture.md § Deliverable
+	 * handoff). Reserved: the planner and agents cannot author these kinds.
+	 * `preflight` = review upstream handoffs (first, injected only when the
+	 * deliverable has dependencies); `postflight` = write the downstream handoff
+	 * summary (last). Both gate completion like ordinary tasks.
+	 */
+	"preflight",
+	"postflight",
 ] as const;
 export type WorkItemKind = (typeof WORK_ITEM_KINDS)[number];
 export type AgentMode = "full" | "read-only";

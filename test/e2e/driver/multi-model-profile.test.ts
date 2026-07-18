@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ModelRole } from "@vegardx/pi-contracts";
+import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
 import { resolveExactModelSelection } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -122,6 +122,17 @@ describe("multi-model ollama profile", () => {
 			thinkingLevelMap: {},
 		};
 		expect(await modelFor("worker", other)).toBe("ollama/qwen3:14b");
+	});
+
+	it("maps every MODEL_ROLE — a new role must not silently fall through to session", () => {
+		const preset = (
+			MULTI_MODEL_OLLAMA.models as {
+				presets: Record<string, { modelSets: Record<string, string> }>;
+			}
+		).presets["ollama-multi"];
+		for (const role of MODEL_ROLES) {
+			expect(preset.modelSets[role], `role ${role} unmapped`).toBeDefined();
+		}
 	});
 
 	it("routes each role to its intended local model", async () => {

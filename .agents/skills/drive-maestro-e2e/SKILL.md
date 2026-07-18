@@ -26,7 +26,7 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 
 | Subcommand | What it does |
 | --- | --- |
-| `start [--live \| --ci] [--multi-model] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt`. |
+| `start [--live \| --ci] [--multi-model] [--seed-plan] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt` (plus `seededPlan` when seeded). |
 | `state` | The maestro's pi state (`isStreaming`, model) + the plan's deliverables and their statuses. |
 | `poll` | New events since the last poll **and** `pending[]` — questions parked waiting for your answer. |
 | `prompt "<text>" [--steer \| --follow-up]` | Send a prompt/command. Auto-queues as a follow-up if the agent is mid-stream. |
@@ -45,6 +45,13 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 2. **Enter plan mode, then describe the plan.** Send `prompt "/plan"`, then
    `prompt "<the planPrompt from the ready line>"`. (The planPrompt is the canned
    `sandbox-features` plan.)
+
+   **Or skip authoring entirely with `--seed-plan`** (recommended for
+   execution-focused drives, and required with weak local models — plan
+   authoring is the most model-sensitive step): the daemon pre-writes the
+   canned plan into the isolated store; send `prompt "/plan sandbox-features"`
+   to open it ready-made, then go straight to step 3. Do NOT re-describe the
+   plan or author deliverables in this mode.
 
 3. **Drive to execution.** Send `prompt "/start"` to leave plan mode. The maestro
    will spawn workers.

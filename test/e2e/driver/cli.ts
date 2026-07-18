@@ -28,6 +28,7 @@ import { type LaunchedSut, launchSut } from "./launch.js";
 import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
+import { seedScenarioPlan } from "./seed-plan.js";
 
 const DEFAULT_SOCK = join(tmpdir(), "pi-e2e-driver.sock");
 
@@ -58,6 +59,13 @@ async function startDaemon(argv: string[]): Promise<void> {
 	const answerer = new ForwardingAnswerer();
 	const profile = buildProfile(argv);
 
+	// --seed-plan: write the canned sandbox-features plan straight into the
+	// isolated plan store, so the drive opens it with `/plan sandbox-features`
+	// and goes directly at execution — no model-dependent plan authoring.
+	const seededPlan = argv.includes("--seed-plan")
+		? seedScenarioPlan(profile.piHome, profile.repoDir)
+		: undefined;
+
 	const sut = launchSut({
 		maestroRoot,
 		repoDir: profile.repoDir,
@@ -87,6 +95,12 @@ async function startDaemon(argv: string[]): Promise<void> {
 				piHome: profile.piHome,
 				plan: SANDBOX_FEATURES.name,
 				planPrompt: SANDBOX_FEATURES.planPrompt,
+				...(seededPlan
+					? {
+							seededPlan,
+							seededHint: `Plan pre-seeded — open it with "/plan ${seededPlan}", then drive to execution. Do NOT author deliverables.`,
+						}
+					: {}),
 			})}\n`,
 		);
 	});

@@ -153,6 +153,9 @@ drive it directly:
 # start the daemon in the background; it prints a `ready` line + the plan prompt
 node_modules/.bin/jiti test/e2e/driver/cli.ts start --live      # real models + disposable GitHub repo
 #   ...or --live --local-remote (no GitHub), --live --multi-model (ollama role routing), or --ci (mock provider)
+#   add --seed-plan to pre-write the canned plan into the store (driver/seed-plan.ts):
+#   open with `prompt "/plan sandbox-features"` and go straight to execution —
+#   no model-dependent plan authoring (docs/modes-architecture.md backlog #7)
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/plan"
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "<the plan prompt>"
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/start"

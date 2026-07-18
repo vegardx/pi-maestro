@@ -77,10 +77,10 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 maestro roles across distinct models instead of one session default — the real
 test of the model-set machinery:
 
-- **planner / session** → `gpt-oss:20b` · **normal** (worker/verify/research) →
-  `qwen3:14b` → `gemma4:26b` · **fast** (classify/summarize/general) → `qwen3:8b`
-  → `gemma4:latest` · **reviewers** → a described pool
-  `qwen3:14b → gpt-oss:20b → gemma4:31b → session`.
+- **planner / session** → `qwen3.5:27b` · **normal** (worker/verify/research) →
+  `qwen3.6:27b-coding-mxfp8` → `qwen3:14b` · **fast** (classify/summarize/
+  general) → `gemma4:e4b-mlx` → `qwen3:8b` · **reviewers** → a described pool
+  of different families: `gpt-oss:20b → gemma4:31b → session`.
 - Requires `ollama serve` running with those models pulled (`ollama list`). Only
   the chosen option per set loads, so steady state is ~28 GB.
 
@@ -91,10 +91,10 @@ Two extra checks worth running in this mode:
    details that role's candidate options and which was picked — confirm each
    resolves to the intended model above, proof that routing lands on different
    providers, not just the session default.
-2. **Availability fallback.** With work idle, `ollama stop qwen3:8b`, then
-   `prompt "/models classifier"` — it should now resolve to `gemma4:latest` (the
-   next option in the `fast` set, the first marked unavailable). Re-`ollama run
-   qwen3:8b` after. This exercises the live version of the availability path.
+2. **Availability fallback.** With work idle, `ollama stop gemma4:e4b-mlx`,
+   then `prompt "/models classifier"` — it should now resolve to `qwen3:8b`
+   (the next option in the `fast` set, the first marked unavailable). Re-run
+   the model after. This exercises the live version of the availability path.
 
 The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really

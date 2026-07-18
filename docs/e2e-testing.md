@@ -178,10 +178,10 @@ default — the real exercise of the presets / modelSets machinery:
 
 | Tier | Models (first-available order) | Roles |
 | --- | --- | --- |
-| planner / session | `gpt-oss:20b` | the preset target — the maestro plans here |
-| normal | `qwen3:14b` → `gemma4:26b` | worker, verifier, codebase-research |
-| fast | `qwen3:8b` → `gemma4:latest` | classifier, summarizers, general, web-research |
-| review pool | `qwen3:14b` → `gpt-oss:20b` → `gemma4:31b` → `session` | the four `*-review` roles (planner picks by summary; `session` sorts to the back) |
+| planner / session | `qwen3.5:27b` | the preset target — the maestro plans here |
+| normal | `qwen3.6:27b-coding-mxfp8` → `qwen3:14b` | worker, verifier, codebase-research |
+| fast | `gemma4:e4b-mlx` → `qwen3:8b` | classifier, summarizers, general, web-research |
+| review pool | `gpt-oss:20b` → `gemma4:31b` → `session` (different families from the qwen workers) | the four `*-review` roles (planner picks by summary; `session` sorts to the back) |
 
 Needs `ollama serve` with those models pulled (`ollama list`); only the chosen
 option per set loads (~28 GB steady state). Two checks this mode enables:

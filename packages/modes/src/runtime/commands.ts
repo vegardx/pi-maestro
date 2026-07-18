@@ -12,6 +12,8 @@ import {
 	type AgentKindDefinition,
 	type Answer,
 	CAPABILITIES,
+	MODEL_ROLES,
+	type ModelRole,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import { getModelMeta, resolveExactModelSelection } from "@vegardx/pi-models";
@@ -706,6 +708,80 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				`mode=${rt.state.mode} plan=${plan?.slug ?? "none"} deliverables=${
 					plan?.deliverables.length ?? 0
 				}`,
+				"info",
+			);
+		},
+	});
+
+	pi.registerCommand("models", {
+		description:
+			"Show how each maestro role resolves to a model (routing inspection). " +
+			"`/models <role>` details one role's candidate options and why each was picked or skipped.",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const roleArg = args.trim();
+			if (roleArg) {
+				if (!(MODEL_ROLES as readonly string[]).includes(roleArg)) {
+					ctx.ui.notify(
+						`Unknown role "${roleArg}". Roles: ${MODEL_ROLES.join(", ")}`,
+						"warning",
+					);
+					return;
+				}
+				const res = await resolveExactModelSelection(ctx, {
+					role: roleArg as ModelRole,
+					requireApiKey: true,
+				});
+				const lines = [
+					`${roleArg} — preset ${res.presetId ?? "session"} / set ${res.modelSetId ?? "session"}`,
+				];
+				// One line per candidate option: ▶ selected, · available, ✗ ruled out
+				// (with the reason). This is the "why this model" surface the oracle
+				// wants — a human can judge whether the pick was sensible.
+				for (const candidate of res.candidates) {
+					const mark =
+						candidate.optionId === res.selected?.optionId
+							? "▶"
+							: candidate.available
+								? "·"
+								: "✗";
+					const model = candidate.modelId ?? candidate.authoredModel;
+					const why = candidate.available
+						? ""
+						: ` — ${candidate.reason ?? "unavailable"}`;
+					const summary = candidate.summary ? `  (${candidate.summary})` : "";
+					lines.push(
+						`  ${mark} ${candidate.optionId}: ${model} @${candidate.effort}${why}${summary}`,
+					);
+				}
+				if (!res.selected) {
+					lines.push(
+						`  (no selection: ${res.errors.map((e) => e.message).join("; ")})`,
+					);
+				}
+				ctx.ui.notify(lines.join("\n"), res.selected ? "info" : "warning");
+				return;
+			}
+			// Table over every role: what a spawn would actually resolve to now.
+			const resolutions = await Promise.all(
+				MODEL_ROLES.map((role) =>
+					resolveExactModelSelection(ctx, { role, requireApiKey: true }).then(
+						(res) => ({ role, res }),
+					),
+				),
+			);
+			const preset = resolutions[0]?.res.presetId ?? "session";
+			const width = Math.max(...MODEL_ROLES.map((role) => role.length));
+			const rows = resolutions.map(({ role, res }) => {
+				const selected = res.selected;
+				return selected
+					? `  ${role.padEnd(width)} → ${selected.modelId} @${selected.effort} [${selected.source}]`
+					: `  ${role.padEnd(width)} → (none: ${res.errors[0]?.code ?? "unresolved"})`;
+			});
+			ctx.ui.notify(
+				[
+					`Model routing — preset: ${preset}  (\`/models <role>\` for candidate detail)`,
+					...rows,
+				].join("\n"),
 				"info",
 			);
 		},

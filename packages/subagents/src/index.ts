@@ -18,7 +18,7 @@
 //     UI observe status/progress/needDecision without importing this package.
 
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
@@ -374,6 +374,76 @@ export default defineExtension(
 					// Retention is best-effort; never block startup on it.
 				}
 			}
+			offerLegacyCleanup(store, next);
+		};
+
+		// Legacy (pre-cutover) run records: list() skips them so nothing
+		// crashes, and ONCE per store we offer an interactive cleanup —
+		// archive the records to <runsRoot>/_legacy and kill any tmux
+		// sessions they left running. Worktrees referenced by legacy records
+		// are only REPORTED: a reviewer run's cwd is a worktree it merely
+		// inspected, so deleting it here could destroy live work.
+		const legacyPrompted = new Set<string>();
+		const offerLegacyCleanup = (
+			store: ReturnType<typeof createRunStore>,
+			next: ExtensionContext,
+		): void => {
+			if (legacyPrompted.has(store.root)) return;
+			legacyPrompted.add(store.root);
+			const legacy = store.legacy();
+			if (legacy.length === 0) return;
+			if (!next.hasUI || !next.ui.confirm) {
+				next.ui.notify(
+					`Ignoring ${legacy.length} incompatible Maestro run record(s) from an older release (run pi interactively to clean them up).`,
+					"warning",
+				);
+				return;
+			}
+			void (async () => {
+				const yes = await next.ui.confirm(
+					"Old Maestro run state",
+					`Found ${legacy.length} run record(s) from an older, incompatible Maestro release under ${store.root}. Archive them now? (Records move to _legacy/; leftover tmux sessions are killed.)`,
+				);
+				if (!yes) {
+					next.ui.notify(
+						`Keeping ${legacy.length} legacy run record(s) — they are ignored, not loaded.`,
+						"info",
+					);
+					return;
+				}
+				for (const entry of legacy) {
+					try {
+						await killAndVerifyTmuxSession(`maestro-run-${entry.id}`);
+					} catch {
+						// Best-effort: the session may be long gone.
+					}
+				}
+				const archived = store.archiveLegacy();
+				const worktrees = [
+					...new Set(
+						legacy
+							.map((entry) => entry.cwd)
+							.filter(
+								(cwd): cwd is string =>
+									typeof cwd === "string" &&
+									cwd.includes("/worktrees/") &&
+									existsSync(cwd),
+							),
+					),
+				];
+				next.ui.notify(
+					[
+						`Archived ${archived} legacy run record(s) to ${join(store.root, "_legacy")}.`,
+						...(worktrees.length
+							? [
+									"These worktrees were referenced by old runs and still exist (left untouched — remove with `git worktree remove` if orphaned):",
+									...worktrees.map((path) => `  ${path}`),
+								]
+							: []),
+					].join("\n"),
+					"info",
+				);
+			})();
 		};
 
 		pi.on("session_start", (_e, next: ExtensionContext) => rebuild(next));

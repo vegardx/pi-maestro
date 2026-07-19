@@ -70,8 +70,21 @@ function stopFor(
 	);
 }
 
+/** A run recorded by an older, incompatible Maestro release. */
+export interface LegacyRunState {
+	readonly id: string;
+	readonly path: string;
+	readonly schemaVersion: unknown;
+	/** The cwd the run operated in, when the old record exposes one. */
+	readonly cwd?: string;
+}
+
 export interface RunStore {
 	readonly root: string;
+	/** Runs whose records predate the current schema (skipped by list()). */
+	legacy(): LegacyRunState[];
+	/** Move every legacy run dir aside into <root>/_legacy; returns the count. */
+	archiveLegacy(): number;
 	create(record: RunRecord): void;
 	setStatus(runId: RunId, status: RunStatus, at?: number): RunRecord;
 	setResult(runId: RunId, result: RunResult, at?: number): RunRecord;
@@ -239,11 +252,66 @@ export function createRunStore(root: string): RunStore {
 			if (!existsSync(root)) return [];
 			const out: RunRecord[] = [];
 			for (const name of readdirSync(root)) {
+				if (name.startsWith("_")) continue;
 				if (!statSync(join(root, name)).isDirectory()) continue;
-				const record = read(name as RunId);
+				let record: RunRecord | undefined;
+				try {
+					record = read(name as RunId);
+				} catch (cause) {
+					// A legacy record must never take down a whole-store sweep —
+					// the HUD renders through here. legacy() reports them; the
+					// extension offers a cleanup. (Anything else still throws.)
+					if (cause instanceof UnsupportedRunStateError) continue;
+					throw cause;
+				}
 				if (record) out.push(record);
 			}
 			return out;
+		},
+
+		legacy() {
+			if (!existsSync(root)) return [];
+			const out: LegacyRunState[] = [];
+			for (const name of readdirSync(root)) {
+				if (name.startsWith("_")) continue;
+				const path = join(root, name);
+				if (!statSync(path).isDirectory()) continue;
+				const statusPath = join(path, STATUS);
+				if (!existsSync(statusPath)) continue;
+				let value: unknown;
+				try {
+					value = JSON.parse(readFileSync(statusPath, "utf8"));
+				} catch {
+					continue;
+				}
+				if (!value || typeof value !== "object") continue;
+				const record = value as {
+					schemaVersion?: unknown;
+					profile?: { cwd?: unknown };
+					cwd?: unknown;
+				};
+				if (record.schemaVersion === RUN_RECORD_SCHEMA_VERSION) continue;
+				const cwd = record.profile?.cwd ?? record.cwd;
+				out.push({
+					id: name,
+					path,
+					schemaVersion: record.schemaVersion ?? "missing",
+					...(typeof cwd === "string" ? { cwd } : {}),
+				});
+			}
+			return out;
+		},
+
+		archiveLegacy() {
+			const entries = this.legacy();
+			if (entries.length === 0) return 0;
+			const archiveDir = join(root, "_legacy");
+			mkdirSync(archiveDir, { recursive: true });
+			for (const entry of entries) {
+				dirsEnsured.delete(entry.id as RunId);
+				renameSync(entry.path, join(archiveDir, entry.id));
+			}
+			return entries.length;
 		},
 
 		remove(runId) {

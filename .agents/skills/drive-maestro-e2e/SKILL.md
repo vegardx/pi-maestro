@@ -77,13 +77,12 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 maestro roles across distinct models instead of one session default — the real
 test of the model-set machinery:
 
-- **planner / session** → `qwen3.5:27b-mlx` · **normal** (worker/verify/
+- **planner / session** → `gemma4:31b-mlx` · **normal** (worker/verify/
   research) → `qwen3.6:35b-a3b-coding-mxfp8` (MoE, fast decode) → `session` ·
-  **fast** (classify/summarize/general) →
-  `gemma4:e4b-mlx` → `session` · **reviewers** → a described pool of different
-  families: `gpt-oss:20b → gemma4:31b-mlx → session`.
-- Requires `ollama serve` running with those models pulled (`ollama list`).
-  Pin the primaries resident (keep-alive Forever, ≈ 96 GB) for a full drive.
+  **fast** (classify/summarize/general) → `gpt-oss:20b` → `session` ·
+  **reviewers** → `gpt-oss:20b → session` (both non-qwen vs the qwen workers).
+- Requires the ollama service with those three models pulled (`ollama list`);
+  models load on demand (5-min keepalive). All three ≈ 68 GB together.
 
 Two extra checks worth running in this mode:
 
@@ -94,8 +93,8 @@ Two extra checks worth running in this mode:
    providers, not just the session default.
 2. **Availability fallback.** With work idle, `ollama stop gpt-oss:20b`,
    then `prompt "/models correctness-review"` — it should now resolve to
-   `gemma4:31b-mlx` (the next option in the review pool). Restart the model
-   after. This exercises the live version of the availability path.
+   `gemma4:31b-mlx` (the session sentinel at the back of the pool). Restart
+   the model after. This exercises the live version of the availability path.
 
 The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really

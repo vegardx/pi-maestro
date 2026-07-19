@@ -111,17 +111,17 @@ describe("multi-model ollama profile", () => {
 	});
 
 	it("activates only for the planner-seat session model", async () => {
-		// The preset targets gpt-oss:20b; a different session model → no preset,
-		// so a role falls back to the session model itself (unconfigured behavior).
+		// The preset targets the planner seat; a different session model → no
+		// preset, so a role falls back to the session model itself.
 		const other = { ...fakeCtx() } as ExtensionContext & { model?: unknown };
 		(other as { model: unknown }).model = {
 			provider: "ollama",
-			id: "qwen3:14b",
-			name: "ollama/qwen3:14b",
+			id: "gpt-oss:20b",
+			name: "ollama/gpt-oss:20b",
 			reasoning: true,
 			thinkingLevelMap: {},
 		};
-		expect(await modelFor("worker", other)).toBe("ollama/qwen3:14b");
+		expect(await modelFor("worker", other)).toBe("ollama/gpt-oss:20b");
 	});
 
 	it("maps every MODEL_ROLE — a new role must not silently fall through to session", () => {
@@ -136,11 +136,15 @@ describe("multi-model ollama profile", () => {
 	});
 
 	it("routes each role to its intended local model", async () => {
-		// normal tier — the coding model is the default worker
-		expect(await modelFor("worker")).toBe("ollama/qwen3.6:27b-coding-mxfp8");
-		expect(await modelFor("verifier")).toBe("ollama/qwen3.6:27b-coding-mxfp8");
+		// normal tier — the MoE coder is the default worker
+		expect(await modelFor("worker")).toBe(
+			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
+		);
+		expect(await modelFor("verifier")).toBe(
+			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
+		);
 		expect(await modelFor("codebase-research")).toBe(
-			"ollama/qwen3.6:27b-coding-mxfp8",
+			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
 		);
 		// fast tier
 		expect(await modelFor("classifier")).toBe("ollama/gemma4:e4b-mlx");
@@ -153,38 +157,38 @@ describe("multi-model ollama profile", () => {
 
 	it("falls through to the next option when the first is not served", async () => {
 		// The live availability-fallback (ollama stop <model>), deterministically:
-		// fast → gemma4:e4b-mlx → qwen3:8b; normal → qwen3.6-coding → qwen3:14b.
+		// normal → MoE coder → session; fast → gemma4:e4b-mlx → session.
+		expect(
+			await modelFor(
+				"worker",
+				fakeCtx({ unavailable: ["ollama/qwen3.6:35b-a3b-coding-mxfp8"] }),
+			),
+		).toBe("ollama/qwen3.5:27b-mlx");
 		expect(
 			await modelFor(
 				"classifier",
 				fakeCtx({ unavailable: ["ollama/gemma4:e4b-mlx"] }),
 			),
-		).toBe("ollama/qwen3:8b");
-		expect(
-			await modelFor(
-				"worker",
-				fakeCtx({ unavailable: ["ollama/qwen3.6:27b-coding-mxfp8"] }),
-			),
-		).toBe("ollama/qwen3:14b");
+		).toBe("ollama/qwen3.5:27b-mlx");
 	});
 
 	it("walks the review pool by availability, then falls back to the session model", async () => {
-		// gpt-oss unserved → gemma4:31b takes over.
+		// gpt-oss unserved → gemma4:31b-mlx takes over.
 		expect(
 			await modelFor(
 				"correctness-review",
 				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
 			),
-		).toBe("ollama/gemma4:31b");
+		).toBe("ollama/gemma4:31b-mlx");
 		// Every concrete pool model unserved → the session sentinel (sorted to
 		// the back) resolves to the planner seat — the last resort.
 		expect(
 			await modelFor(
 				"correctness-review",
 				fakeCtx({
-					unavailable: ["ollama/gpt-oss:20b", "ollama/gemma4:31b"],
+					unavailable: ["ollama/gpt-oss:20b", "ollama/gemma4:31b-mlx"],
 				}),
 			),
-		).toBe("ollama/qwen3.5:27b");
+		).toBe("ollama/qwen3.5:27b-mlx");
 	});
 });

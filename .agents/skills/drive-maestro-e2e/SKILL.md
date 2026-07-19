@@ -77,12 +77,13 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 maestro roles across distinct models instead of one session default — the real
 test of the model-set machinery:
 
-- **planner / session** → `qwen3.5:27b` · **normal** (worker/verify/research) →
-  `qwen3.6:27b-coding-mxfp8` → `qwen3:14b` · **fast** (classify/summarize/
-  general) → `gemma4:e4b-mlx` → `qwen3:8b` · **reviewers** → a described pool
-  of different families: `gpt-oss:20b → gemma4:31b → session`.
-- Requires `ollama serve` running with those models pulled (`ollama list`). Only
-  the chosen option per set loads, so steady state is ~28 GB.
+- **planner / session** → `qwen3.5:27b-mlx` · **normal** (worker/verify/
+  research) → `qwen3.6:35b-a3b-coding-mxfp8` (MoE, fast decode) → `session` ·
+  **fast** (classify/summarize/general) →
+  `gemma4:e4b-mlx` → `session` · **reviewers** → a described pool of different
+  families: `gpt-oss:20b → gemma4:31b-mlx → session`.
+- Requires `ollama serve` running with those models pulled (`ollama list`).
+  Pin the primaries resident (keep-alive Forever, ≈ 96 GB) for a full drive.
 
 Two extra checks worth running in this mode:
 
@@ -91,10 +92,10 @@ Two extra checks worth running in this mode:
    details that role's candidate options and which was picked — confirm each
    resolves to the intended model above, proof that routing lands on different
    providers, not just the session default.
-2. **Availability fallback.** With work idle, `ollama stop gemma4:e4b-mlx`,
-   then `prompt "/models classifier"` — it should now resolve to `qwen3:8b`
-   (the next option in the `fast` set, the first marked unavailable). Re-run
-   the model after. This exercises the live version of the availability path.
+2. **Availability fallback.** With work idle, `ollama stop gpt-oss:20b`,
+   then `prompt "/models correctness-review"` — it should now resolve to
+   `gemma4:31b-mlx` (the next option in the review pool). Restart the model
+   after. This exercises the live version of the availability path.
 
 The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really

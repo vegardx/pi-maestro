@@ -6,13 +6,16 @@
 // machinery (presets / modelSets / availability / session-as-fallback) actually
 // lands different roles on different providers end to end.
 //
-// v2 lineup (2026-07-18, multi-model resident serving — models pinned with
-// keep-alive Forever, so no swap thrash):
-//   • session / planner  → qwen3.5:27b            (newest-gen reasoning seat)
-//   • normal  (workers)  → qwen3.6:27b-coding-mxfp8 → qwen3:14b
-//         a real coding model with 262k context as the default worker
-//   • fast    (utility)  → gemma4:e4b-mlx → qwen3:8b (classify, summarize, …)
-//   • reviewpool         → gpt-oss:20b → gemma4:31b → session
+// v3 lineup (2026-07-19, MoE-coder refresh; multi-model resident serving —
+// pin all primaries with keep-alive Forever; resident set ≈ 96GB on the
+// 128GB box):
+//   • session / planner  → qwen3.5:27b-mlx        (newest-gen reasoning seat)
+//   • normal  (workers)  → qwen3.6:35b-a3b-coding-mxfp8 → session
+//         MoE coder (~3B active params) — much faster decode on this
+//         hardware than the dense 27B (dropped: model+KV alongside the MoE
+//         and gemma4:31b would not fit; session is the free fallback)
+//   • fast    (utility)  → gemma4:e4b-mlx → session (classify, summarize, …)
+//   • reviewpool         → gpt-oss:20b → gemma4:31b-mlx → session
 //         deliberately DIFFERENT families from the qwen workers — review
 //         diversity; `session` sorts to the back (session-model fallback).
 
@@ -24,14 +27,15 @@ const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 /** Every ollama model the profile references, with the summary the planner reads. */
 const CATALOG = [
 	{
-		id: "qwen3.5:27b",
-		context: 131072,
+		id: "qwen3.5:27b-mlx",
+		context: 262144,
 		summary: "Newest-gen reasoning generalist — the planner seat.",
 	},
 	{
-		id: "qwen3.6:27b-coding-mxfp8",
+		id: "qwen3.6:35b-a3b-coding-mxfp8",
 		context: 262144,
-		summary: "Strong coding model, 262k context — the worker seat.",
+		summary:
+			"MoE coding model (~3B active) — fast decode, 262k context — the worker seat.",
 	},
 	{
 		id: "gemma4:e4b-mlx",
@@ -45,20 +49,10 @@ const CATALOG = [
 			"Deep reasoning, different family — adversarial / correctness review.",
 	},
 	{
-		id: "gemma4:31b",
-		context: 131072,
+		id: "gemma4:31b-mlx",
+		context: 262144,
 		summary:
 			"Broad knowledge, strong prose, different family — practical / plan review.",
-	},
-	{
-		id: "qwen3:14b",
-		context: 131072,
-		summary: "Solid generalist — normal-tier fallback.",
-	},
-	{
-		id: "qwen3:8b",
-		context: 131072,
-		summary: "Cheap utility — fast-tier fallback.",
 	},
 ] as const;
 
@@ -78,17 +72,27 @@ const MODELS_BLOCK = {
 		fast: {
 			options: [
 				option("gemma-e4b", "gemma4:e4b-mlx", "Small and fast — utility."),
-				option("qwen8", "qwen3:8b", "Utility fallback."),
+				{
+					id: "own",
+					model: "session",
+					effort: EFFORT,
+					summary: "Your own model — last-resort fallback.",
+				},
 			],
 		},
 		normal: {
 			options: [
 				option(
-					"qwen-coding",
-					"qwen3.6:27b-coding-mxfp8",
-					"Strong coding model, 262k context — default worker.",
+					"qwen-moe",
+					"qwen3.6:35b-a3b-coding-mxfp8",
+					"MoE coding model — fast decode, 262k context — default worker.",
 				),
-				option("qwen14", "qwen3:14b", "Generalist fallback."),
+				{
+					id: "own",
+					model: "session",
+					effort: EFFORT,
+					summary: "Your own model — last-resort fallback.",
+				},
 			],
 		},
 		reviewpool: {
@@ -100,7 +104,7 @@ const MODELS_BLOCK = {
 				),
 				option(
 					"gemma31",
-					"gemma4:31b",
+					"gemma4:31b-mlx",
 					"Broad knowledge, strong prose, different family — practical / plan.",
 				),
 				{
@@ -115,7 +119,7 @@ const MODELS_BLOCK = {
 	presets: {
 		"ollama-multi": {
 			// Active only when the live /model session model is the planner seat.
-			targets: [ref("qwen3.5:27b")],
+			targets: [ref("qwen3.5:27b-mlx")],
 			modelSets: {
 				worker: "normal",
 				verifier: "normal",
@@ -173,7 +177,7 @@ export interface MultiModelProfile {
 /** The ready-made ollama multi-model profile the `--multi-model` live drive uses. */
 export const MULTI_MODEL_OLLAMA: MultiModelProfile = {
 	defaultProvider: PROVIDER,
-	defaultModel: "qwen3.5:27b",
+	defaultModel: "qwen3.5:27b-mlx",
 	modelsJsonContent: buildModelsJson(),
 	models: MODELS_BLOCK as unknown as Record<string, unknown>,
 };

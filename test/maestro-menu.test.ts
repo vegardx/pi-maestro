@@ -221,6 +221,57 @@ describe("/maestro interactive editor", () => {
 		]);
 	});
 
+	it("add-all pulls a whole provider into the list at once", async () => {
+		const { ctx } = menuCtx([
+			"EEA — 1 model(s)",
+			"Edit models by provider…",
+			"prov — 1 of 2 in list",
+			"+ Add all 2 prov model(s)",
+			undefined, // Esc model toggles
+			undefined, // Esc provider picker
+			undefined, // Esc list editor
+			undefined, // Esc residency page
+		]);
+		await browseResidency(ctx);
+		const written = agentSettings() as {
+			models?: { residency?: { lists?: Record<string, string[]> } };
+		};
+		expect(written.models?.residency?.lists?.EEA).toEqual([
+			"prov/fast-model",
+			"prov/main-model",
+		]);
+	});
+
+	it("provider browser lists only configured providers", async () => {
+		const { ctx, selects } = menuCtx([
+			"EEA — 1 model(s)",
+			"Edit models by provider…",
+			undefined, // Esc provider picker
+			undefined, // Esc list editor
+			undefined, // Esc residency page
+		]);
+		// "other" fails the auth probe → not a configured provider.
+		(
+			ctx as unknown as {
+				modelRegistry: {
+					getApiKeyAndHeaders: (model: {
+						provider: string;
+					}) => Promise<{ ok: boolean }>;
+				};
+			}
+		).modelRegistry.getApiKeyAndHeaders = async (model) => ({
+			ok: model.provider === "prov",
+		});
+		await browseResidency(ctx);
+		const providerPage = selects.find((s) =>
+			s.title.includes("which provider?"),
+		);
+		expect(providerPage?.options).toContain("prov — 1 of 2 in list");
+		expect(providerPage?.options.some((o) => o.startsWith("other"))).toBe(
+			false,
+		);
+	});
+
 	it("stale models.profiles config notifies instead of throwing", async () => {
 		writeFileSync(
 			join(cwd, ".pi", "settings.json"),

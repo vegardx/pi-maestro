@@ -219,7 +219,7 @@ async function pickModelRef(
 ): Promise<string | undefined> {
 	const SESSION_ENTRY = "session — the live session model";
 	const MANUAL_ENTRY = "Type a ref manually… (provider/model)";
-	const providers = modelsByProvider(ctx);
+	const providers = await modelsByProvider(ctx);
 	while (true) {
 		const picked = await ui.select("Model for this option", [
 			SESSION_ENTRY,
@@ -539,18 +539,47 @@ const EDIT_MODELS = "Edit models by provider…";
 const RENAME_LIST = "Rename…";
 
 /** All registry models grouped by provider (the same catalog /model shows). */
-function modelsByProvider(ctx: ExtensionContext): Map<string, string[]> {
+async function modelsByProvider(
+	ctx: ExtensionContext,
+): Promise<Map<string, string[]>> {
+	const registry = ctx.modelRegistry as unknown as {
+		getAll?: () => { provider: string; id: string }[];
+		getApiKeyAndHeaders?: (model: {
+			provider: string;
+			id: string;
+		}) => Promise<{ ok: boolean }>;
+	};
 	const grouped = new Map<string, string[]>();
-	const all =
-		(
-			ctx.modelRegistry as unknown as {
-				getAll?: () => { provider: string; id: string }[];
-			}
-		).getAll?.() ?? [];
-	for (const model of all) {
+	const firstModel = new Map<string, { provider: string; id: string }>();
+	for (const model of registry.getAll?.() ?? []) {
 		const bucket = grouped.get(model.provider) ?? [];
 		bucket.push(model.id);
 		grouped.set(model.provider, bucket);
+		if (!firstModel.has(model.provider)) firstModel.set(model.provider, model);
+	}
+	// Only CONFIGURED providers: probe one model per provider through the
+	// registry's auth check and drop the ones that don't resolve — pi's
+	// built-in catalog knows about far more providers than this install
+	// uses. If the probe filters everything (odd surface without an auth
+	// path), fall back to showing all rather than none.
+	if (registry.getApiKeyAndHeaders) {
+		const probes = await Promise.all(
+			[...firstModel.entries()].map(async ([provider, model]) => {
+				try {
+					const auth = await registry.getApiKeyAndHeaders?.(model);
+					return { provider, ok: auth?.ok ?? false };
+				} catch {
+					return { provider, ok: false };
+				}
+			}),
+		);
+		const configured = new Set(
+			probes.filter((probe) => probe.ok).map((probe) => probe.provider),
+		);
+		if (configured.size > 0) {
+			for (const provider of [...grouped.keys()])
+				if (!configured.has(provider)) grouped.delete(provider);
+		}
 	}
 	for (const bucket of grouped.values()) bucket.sort();
 	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));
@@ -672,7 +701,7 @@ async function editResidencyMembers(
 	ui: Dialogs,
 	name: string,
 ): Promise<void> {
-	const providers = modelsByProvider(ctx);
+	const providers = await modelsByProvider(ctx);
 	if (providers.size === 0) {
 		ctx.ui.notify(
 			'No models in the registry to pick from — add them via /maestro set models.residency.lists.<name> ["provider/model", …].',
@@ -699,18 +728,32 @@ async function editResidencyMembers(
 			const current = new Set(
 				safeModelsConfig(ctx)?.residency?.lists?.[name] ?? [],
 			);
+			const inList = ids.filter((id) =>
+				current.has(`${provider}/${id}`),
+			).length;
+			const ADD_ALL = `+ Add all ${ids.length} ${provider} model(s)`;
+			const REMOVE_ALL = `− Remove all ${provider} model(s) from ${name}`;
 			const picked = await ui.select(
 				`${name} · ${provider} — pick to toggle, Esc when done`,
-				ids.map(
-					(id) => `${current.has(`${provider}/${id}`) ? "✓" : "✗"} ${id}`,
-				),
+				[
+					...(inList < ids.length ? [ADD_ALL] : []),
+					...(inList > 0 ? [REMOVE_ALL] : []),
+					...ids.map(
+						(id) => `${current.has(`${provider}/${id}`) ? "✓" : "✗"} ${id}`,
+					),
+				],
 			);
 			if (!picked) break;
-			const id = picked.slice(2);
-			const ref = `${provider}/${id}`;
 			const next = new Set(current);
-			if (next.has(ref)) next.delete(ref);
-			else next.add(ref);
+			if (picked === ADD_ALL) {
+				for (const id of ids) next.add(`${provider}/${id}`);
+			} else if (picked === REMOVE_ALL) {
+				for (const id of ids) next.delete(`${provider}/${id}`);
+			} else {
+				const ref = `${provider}/${picked.slice(2)}`;
+				if (next.has(ref)) next.delete(ref);
+				else next.add(ref);
+			}
 			if (next.size === 0) {
 				ctx.ui.notify(
 					"A residency list cannot be empty — delete the list instead.",

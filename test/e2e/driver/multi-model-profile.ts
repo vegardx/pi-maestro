@@ -7,8 +7,10 @@
 // lands different roles on different providers end to end.
 //
 // v3 lineup (2026-07-19, three-model MoE refresh; ollama runs as a service
-// with a 5-min keepalive and loads models on demand — all three together
-// ≈ 68GB on the 128GB box, leaving real KV headroom):
+// with a 5-min keepalive, OLLAMA_CONTEXT_LENGTH=65536, and loads models on
+// demand. context below MUST match the ollama cap: if pi believes the
+// window is larger than ollama allocates, prompts get silently truncated
+// mid-context; matched, pi compacts before the edge instead):
 //   • session / planner  → gemma4:31b-mlx (strong generalist, cross-family)
 //   • normal  (workers)  → qwen3.6:35b-a3b-coding-mxfp8 → session
 //         MoE coder (~3B active params) — fast decode on this hardware
@@ -27,19 +29,18 @@ const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const CATALOG = [
 	{
 		id: "gemma4:31b-mlx",
-		context: 262144,
+		context: 65536,
 		summary:
 			"Broad knowledge, strong prose generalist — the planner seat; also the cross-family review fallback.",
 	},
 	{
 		id: "qwen3.6:35b-a3b-coding-mxfp8",
-		context: 262144,
-		summary:
-			"MoE coding model (~3B active) — fast decode, 262k context — the worker seat.",
+		context: 65536,
+		summary: "MoE coding model (~3B active) — fast decode — the worker seat.",
 	},
 	{
 		id: "gpt-oss:20b",
-		context: 131072,
+		context: 65536,
 		summary:
 			"Deep reasoning, different family — utility and adversarial / correctness review.",
 	},
@@ -78,7 +79,7 @@ const MODELS_BLOCK = {
 				option(
 					"qwen-moe",
 					"qwen3.6:35b-a3b-coding-mxfp8",
-					"MoE coding model — fast decode, 262k context — default worker.",
+					"MoE coding model — fast decode — default worker.",
 				),
 				{
 					id: "own",

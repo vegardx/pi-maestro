@@ -222,24 +222,31 @@ async function pickEffortLimits(
 }
 
 /**
- * Pick a model ref via the registry: session → provider → model, with a
- * manual-entry escape hatch for models pi has not cached yet.
+ * Pick a model ref via the registry: [session →] provider → model, with a
+ * manual-entry escape hatch for models pi has not cached yet. Preset
+ * targets pass allowSession:false — a target is the concrete model the
+ * live /model choice is matched against.
  */
 async function pickModelRef(
 	ctx: ExtensionContext,
 	ui: Dialogs,
+	opts: { allowSession?: boolean } = {},
 ): Promise<string | undefined> {
 	const SESSION_ENTRY = "session — the live session model";
 	const MANUAL_ENTRY = "Type a ref manually… (provider/model)";
+	const allowSession = opts.allowSession ?? true;
 	const providers = await modelsByProvider(ctx);
 	while (true) {
-		const picked = await ui.select("Model for this option", [
-			SESSION_ENTRY,
-			...[...providers.entries()].map(
-				([provider, ids]) => `${provider} — ${ids.length} model(s)`,
-			),
-			MANUAL_ENTRY,
-		]);
+		const picked = await ui.select(
+			allowSession ? "Model for this option" : "Model — which provider?",
+			[
+				...(allowSession ? [SESSION_ENTRY] : []),
+				...[...providers.entries()].map(
+					([provider, ids]) => `${provider} — ${ids.length} model(s)`,
+				),
+				MANUAL_ENTRY,
+			],
+		);
 		if (!picked) return undefined;
 		if (picked === SESSION_ENTRY) return "session";
 		if (picked === MANUAL_ENTRY) {
@@ -435,9 +442,7 @@ async function browsePresets(
 			if (!ui.input) continue;
 			const id = (await ui.input("New preset name"))?.trim();
 			if (!id) continue;
-			const target = (
-				await ui.input("First model target (provider/model)")
-			)?.trim();
+			const target = await pickModelRef(ctx, ui, { allowSession: false });
 			if (!target) continue;
 			write(ctx, `models.presets.${id}`, { targets: [target], modelSets: {} });
 			continue;
@@ -490,8 +495,9 @@ async function editTargets(
 		]);
 		if (!picked) return;
 		if (picked === ADD_TARGET) {
-			if (!ui.input) continue;
-			const target = (await ui.input("Model (provider/model)"))?.trim();
+			// Same provider → model selector as options/residency. No session
+			// entry: a target is the concrete model /model is matched against.
+			const target = await pickModelRef(ctx, ui, { allowSession: false });
 			if (target)
 				write(ctx, `models.presets.${presetId}.targets`, [
 					...preset.targets,

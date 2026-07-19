@@ -181,6 +181,36 @@ describe("/maestro interactive editor", () => {
 		expect(written.models?.presets?.main?.modelSets?.verifier).toBe("impl");
 	});
 
+	it("adds a preset target through the provider selector, without session", async () => {
+		const { ctx, selects } = menuCtx([
+			"Presets (1)",
+			"main (active) — 1 model(s), 1 role mapping(s)",
+			"Models (1) — session models that activate this preset",
+			"+ Add model…",
+			"other — 1 model(s)",
+			"big-model",
+			undefined, // Esc targets page
+			undefined, // Esc preset page
+			undefined, // Esc presets
+			undefined, // Esc top
+		]);
+		await showConfigMenu(ctx);
+		const providerPick = selects.find(
+			(s) => s.title === "Model — which provider?",
+		);
+		expect(providerPick).toBeDefined();
+		expect(providerPick?.options.some((o) => o.startsWith("session"))).toBe(
+			false,
+		);
+		const written = agentSettings() as {
+			models?: { presets?: { main?: { targets?: string[] } } };
+		};
+		expect(written.models?.presets?.main?.targets).toEqual([
+			"prov/main-model",
+			"other/big-model",
+		]);
+	});
+
 	it("switches the active residency to off", async () => {
 		const { ctx, notes } = menuCtx([
 			"Active: EEA — change…",

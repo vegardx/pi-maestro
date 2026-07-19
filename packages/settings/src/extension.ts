@@ -50,16 +50,25 @@ export default defineExtension(
 			description:
 				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, residency.",
 			handler: async (args, ctx) => {
-				const trimmed = args.trim();
-				if (!trimmed || trimmed === "show") {
-					await showConfigMenu(ctx, domainRegistry);
-				} else if (trimmed === "residency") {
-					await browseResidency(ctx);
-				} else if (trimmed.startsWith("residency ")) {
-					setResidency(ctx, trimmed.slice("residency ".length).trim());
-				} else {
-					// Text-based subcommands for scripting
-					handleSettingsCommand(args, ctx, domainRegistry);
+				try {
+					const trimmed = args.trim();
+					if (!trimmed || trimmed === "show") {
+						await showConfigMenu(ctx, domainRegistry);
+					} else if (trimmed === "residency") {
+						await browseResidency(ctx);
+					} else if (trimmed.startsWith("residency ")) {
+						setResidency(ctx, trimmed.slice("residency ".length).trim());
+					} else {
+						// Text-based subcommands for scripting
+						handleSettingsCommand(args, ctx, domainRegistry);
+					}
+				} catch (cause) {
+					// A malformed/stale models config must read as guidance, not
+					// as an extension stack trace.
+					ctx.ui.notify(
+						`Maestro settings could not be read: ${cause instanceof Error ? cause.message : String(cause)}\nFix the models block in settings.json (see docs/modes-architecture.md).`,
+						"warning",
+					);
 				}
 			},
 			getArgumentCompletions: (prefix) => {
@@ -70,9 +79,24 @@ export default defineExtension(
 		});
 
 		// The session model selects the active preset from exact target membership.
+		// A stale/malformed models config notifies ONCE — never an extension
+		// error on every model switch (2026-07-19: pre-cutover models format).
+		let configErrorNotified = false;
 		pi.on("model_select", (event, ctx) => {
 			if (event.source === "restore") return;
-			const config = readModelsConfig(ctx.cwd);
+			let config: ReturnType<typeof readModelsConfig>;
+			try {
+				config = readModelsConfig(ctx.cwd);
+			} catch (cause) {
+				if (!configErrorNotified) {
+					configErrorNotified = true;
+					ctx.ui.notify(
+						`Maestro model settings ignored: ${cause instanceof Error ? cause.message : String(cause)}`,
+						"warning",
+					);
+				}
+				return;
+			}
 			if (!config) return;
 			const modelId = `${event.model.provider}/${event.model.id}`;
 			const active = activePreset(config, modelId);

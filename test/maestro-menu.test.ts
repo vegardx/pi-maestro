@@ -250,17 +250,17 @@ describe("/maestro interactive editor", () => {
 			undefined, // Esc list editor
 			undefined, // Esc residency page
 		]);
-		// "other" fails the auth probe → not a configured provider.
+		// "other" is known to pi but has no credential configured.
 		(
 			ctx as unknown as {
 				modelRegistry: {
-					getApiKeyAndHeaders: (model: {
-						provider: string;
-					}) => Promise<{ ok: boolean }>;
+					getProviderAuthStatus: (provider: string) => {
+						configured: boolean;
+					};
 				};
 			}
-		).modelRegistry.getApiKeyAndHeaders = async (model) => ({
-			ok: model.provider === "prov",
+		).modelRegistry.getProviderAuthStatus = (provider) => ({
+			configured: provider === "prov",
 		});
 		await browseResidency(ctx);
 		const providerPage = selects.find((s) =>

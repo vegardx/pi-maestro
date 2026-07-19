@@ -21,6 +21,7 @@ import {
 	readModelsConfig,
 	SESSION_MODEL_SENTINEL,
 } from "./profiles.js";
+import { activeResidency, modelAllowedByResidency } from "./residency.js";
 
 export interface PersistedExactAssignment {
 	readonly presetId: string;
@@ -77,12 +78,38 @@ async function checkOption(
 	ctx: ExtensionContext,
 	option: ExactModelOption,
 	requireApiKey: boolean,
+	config?: ModelsConfig,
 ): Promise<CheckedOption> {
 	const authoredModel = option.model;
 	const modelId =
 		authoredModel === SESSION_MODEL_SENTINEL
 			? sessionModelId(ctx)
 			: authoredModel;
+	// Residency filter: concrete options must pass the active whitelist.
+	// The session sentinel is exempt — the session model is the user's own
+	// explicit choice; the filter governs the FLEET.
+	const residency = activeResidency(config);
+	const residencyOk =
+		authoredModel === SESSION_MODEL_SENTINEL ||
+		!modelId ||
+		modelAllowedByResidency(config, modelId);
+	if (!residencyOk) {
+		return {
+			option,
+			fact: {
+				optionId: option.id,
+				authoredModel,
+				...(modelId ? { modelId } : {}),
+				effort: option.effort,
+				summary: option.summary,
+				registered: false,
+				authenticated: false,
+				effortSupported: false,
+				available: false,
+				reason: `outside residency ${residency}`,
+			},
+		};
+	}
 	let model: Model<Api> | undefined;
 	if (authoredModel === SESSION_MODEL_SENTINEL) {
 		model = ctx.model as Model<Api> | undefined;
@@ -260,7 +287,7 @@ export async function resolveExactModelSelection(
 	const checked = dedupeConcretePairs(
 		await Promise.all(
 			options.map((option) =>
-				checkOption(ctx, option, opts.requireApiKey ?? false),
+				checkOption(ctx, option, opts.requireApiKey ?? false, config),
 			),
 		),
 	);

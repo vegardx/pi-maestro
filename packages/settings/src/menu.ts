@@ -6,7 +6,17 @@ import {
 	getSessionSettingOverride,
 	setSessionSettingOverride,
 } from "@vegardx/pi-contracts";
-import { type DomainRegistryInput, readDomainSnapshot } from "./domain.js";
+import {
+	activeResidency,
+	readModelsConfig,
+	residencyError,
+	residencyNames,
+} from "@vegardx/pi-models";
+import {
+	type DomainRegistryInput,
+	readDomainSnapshot,
+	writeDomainValue,
+} from "./domain.js";
 
 export function getSessionSetting(extension: string, key: string) {
 	return getSessionSettingOverride(extension, key);
@@ -35,11 +45,13 @@ export async function showConfigMenu(
 	}
 	// Esc/cancel anywhere exits the menu (select resolves undefined).
 	while (true) {
+		const config = readModelsConfig(ctx.cwd);
 		const choice = await select(
 			`Maestro configuration — preset: ${snapshot.activePreset ?? "session fallback"}`,
 			[
 				`Model sets (${snapshot.modelSets.length})`,
 				`Presets (${snapshot.presets.length})`,
+				`Residency (${config?.residency ? activeResidency(config) : "not configured"})`,
 				`Agent kinds (${snapshot.kinds.length})`,
 				`Runtime policies (${snapshot.runtimePolicies.length})`,
 				`Transition gates (${snapshot.gates.length})`,
@@ -49,6 +61,7 @@ export async function showConfigMenu(
 		if (!choice) return;
 		if (choice.startsWith("Model sets")) await browseModelSets(ctx, snapshot);
 		else if (choice.startsWith("Presets")) await browsePresets(ctx, snapshot);
+		else if (choice.startsWith("Residency")) await browseResidency(ctx);
 		else if (choice.startsWith("Agent kinds")) await browseKinds(ctx, snapshot);
 		else if (choice.startsWith("Runtime policies"))
 			notifyPolicies(ctx, snapshot);
@@ -138,6 +151,68 @@ async function browsePresets(
 			"info",
 		);
 	}
+}
+
+/**
+ * Residency browser: pick the active whitelist. "global" matches every
+ * model (filter off); other lists are user-curated `provider/model` globs.
+ * The choice persists to global settings (`models.residency.active`).
+ */
+export async function browseResidency(ctx: ExtensionContext): Promise<void> {
+	const select = ctx.ui.select?.bind(ctx.ui) as SelectFn;
+	const config = readModelsConfig(ctx.cwd);
+	const names = residencyNames(config);
+	if (names.length <= 1) {
+		ctx.ui.notify(
+			'No residency lists configured. Define models.residency.lists in settings, e.g.\n  "residency": { "lists": { "EEA": ["ollama/*", "radicalai/eu-*"] } }',
+			"info",
+		);
+		return;
+	}
+	const active = activeResidency(config);
+	const problem = residencyError(config);
+	const picked = await select(
+		`Residency — active: ${active}${problem ? ` (⚠ ${problem})` : ""}`,
+		names.map((name) => {
+			const patterns = config?.residency?.lists?.[name];
+			const detail =
+				name.toLowerCase() === "global"
+					? "all models (filter off)"
+					: `${patterns?.length ?? 0} pattern(s): ${(patterns ?? []).join(", ")}`;
+			return `${name}${name === active ? " (active)" : ""} — ${detail}`;
+		}),
+	);
+	if (!picked) return;
+	const chosen = names.find((name) => picked.startsWith(name));
+	if (!chosen || chosen === active) return;
+	setResidency(ctx, chosen);
+}
+
+/** Persist the active residency to global settings and confirm. */
+export function setResidency(ctx: ExtensionContext, name: string): void {
+	const config = readModelsConfig(ctx.cwd);
+	const names = residencyNames(config);
+	if (!names.some((candidate) => candidate === name)) {
+		ctx.ui.notify(
+			`Unknown residency "${name}". Configured: ${names.join(", ")}`,
+			"warning",
+		);
+		return;
+	}
+	const errors = writeDomainValue(
+		ctx,
+		"models.residency.active",
+		"global",
+		JSON.stringify(name),
+	);
+	if (errors.length) {
+		ctx.ui.notify(errors.map((error) => `- ${error}`).join("\n"), "warning");
+		return;
+	}
+	ctx.ui.notify(
+		`Residency → ${name}${name.toLowerCase() === "global" ? " (all models)" : ""}. Fleet roles now resolve within it; /models shows the effect.`,
+		"info",
+	);
 }
 
 async function browseKinds(

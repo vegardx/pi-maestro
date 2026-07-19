@@ -213,7 +213,7 @@ export function handleSettingsCommand(
 	}
 	notify(
 		ctx,
-		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, or validate.`,
+		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, validate, or residency.`,
 		true,
 	);
 }
@@ -224,9 +224,15 @@ export function getSettingsCompletions(
 ): string[] {
 	const parts = args.trim().split(/\s+/);
 	if (parts.length <= 1 && !args.endsWith(" "))
-		return ["show", "get", "set", "reset", "explain", "validate"].filter(
-			(item) => item.startsWith(parts[0] ?? ""),
-		);
+		return [
+			"show",
+			"get",
+			"set",
+			"reset",
+			"explain",
+			"validate",
+			"residency",
+		].filter((item) => item.startsWith(parts[0] ?? ""));
 	const sub = parts[0];
 	if (!["get", "set", "reset"].includes(sub)) return [];
 	const key =
@@ -235,6 +241,7 @@ export function getSettingsCompletions(
 		...declaredSettingKeys(),
 		"models.modelSets.",
 		"models.presets.",
+		"models.residency.",
 		"agents.kinds.",
 		"agents.runtimePolicies.",
 		"transitionGates.",

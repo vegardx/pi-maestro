@@ -106,6 +106,8 @@ export interface FooterDeps {
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
 	readonly getPendingQuestions: () => number;
+	/** Active residency name, or undefined to omit the segment entirely. */
+	readonly getResidency?: () => string | undefined;
 }
 
 /**
@@ -113,7 +115,8 @@ export interface FooterDeps {
  * handle the caller can invoke when mode/usage/plan state changes.
  */
 export function installFooter(deps: FooterDeps): (() => void) | undefined {
-	const { pi, ctx, getMode, getLedger, getPendingQuestions } = deps;
+	const { pi, ctx, getMode, getLedger, getPendingQuestions, getResidency } =
+		deps;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 
 	const home = homedir();
@@ -156,6 +159,10 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const cacheLabel = formatCacheHitRate(ledger);
 					const ctxUsage = formatContextUsage(ctx);
 					const modelLabel = formatModelLabel(ctx, pi);
+					const residencyName = getResidency?.();
+					const residencyLabel = residencyName
+						? `Residency: ${residencyName}`
+						: null;
 					const modeLabel = theme.bold(
 						theme.fg(MODE_COLOR[mode] ?? "muted", mode),
 					);
@@ -179,6 +186,19 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const modelSeg: Segment | undefined = modelLabel
 						? [theme.fg("muted", modelLabel), modelLabel]
 						: undefined;
+					// Residency reads as a warning unless it is the unfiltered
+					// "global" — a restricted fleet should be visibly restricted.
+					const resSeg: Segment | undefined = residencyLabel
+						? [
+								theme.fg(
+									residencyName?.toLowerCase() === "global"
+										? "muted"
+										: "warning",
+									residencyLabel,
+								),
+								residencyLabel,
+							]
+						: undefined;
 					const modeSeg: Segment = [modeLabel, modeLabelVisible];
 
 					const candidates: FooterRightCandidate[] = [];
@@ -190,15 +210,25 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 						});
 					};
 
-					// Full: "↑124k ↓45k | CH 78% | 84k/200k | Opus 4.8 (high) | plan"
-					pushCandidate([usageSeg, cacheSeg, ctxSeg, modelSeg, modeSeg]);
+					// Full: "↑124k ↓45k | CH 78% | 84k/200k | Opus 4.8 (high) | Residency: EEA | plan"
+					pushCandidate([
+						usageSeg,
+						cacheSeg,
+						ctxSeg,
+						modelSeg,
+						resSeg,
+						modeSeg,
+					]);
 					// Drop fleet ↑/↓ totals first — ctx fill predicts compaction and
 					// outranks them.
-					if (usageSeg) pushCandidate([cacheSeg, ctxSeg, modelSeg, modeSeg]);
+					if (usageSeg)
+						pushCandidate([cacheSeg, ctxSeg, modelSeg, resSeg, modeSeg]);
 					// Then cache hit rate
-					if (cacheSeg) pushCandidate([ctxSeg, modelSeg, modeSeg]);
+					if (cacheSeg) pushCandidate([ctxSeg, modelSeg, resSeg, modeSeg]);
 					// Then the context fill
-					if (ctxSeg) pushCandidate([modelSeg, modeSeg]);
+					if (ctxSeg) pushCandidate([modelSeg, resSeg, modeSeg]);
+					// Then residency — the model outranks it at narrow widths
+					if (resSeg) pushCandidate([modelSeg, modeSeg]);
 					// Slim: just mode
 					pushCandidate([modeSeg]);
 

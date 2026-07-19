@@ -16,7 +16,13 @@ import {
 	type ModelRole,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
-import { getModelMeta, resolveExactModelSelection } from "@vegardx/pi-models";
+import {
+	activeResidency,
+	getModelMeta,
+	readModelsConfig,
+	residencyError,
+	resolveExactModelSelection,
+} from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { buildRecap } from "../deliverable-recap.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
@@ -770,6 +776,11 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				),
 			);
 			const preset = resolutions[0]?.res.presetId ?? "session";
+			const modelsConfig = readModelsConfig(ctx.cwd);
+			const residency = modelsConfig?.residency
+				? activeResidency(modelsConfig)
+				: undefined;
+			const residencyProblem = residencyError(modelsConfig);
 			const width = Math.max(...MODEL_ROLES.map((role) => role.length));
 			const rows = resolutions.map(({ role, res }) => {
 				const selected = res.selected;
@@ -779,7 +790,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			});
 			ctx.ui.notify(
 				[
-					`Model routing — preset: ${preset}  (\`/models <role>\` for candidate detail)`,
+					`Model routing — preset: ${preset}${residency ? ` · residency: ${residency}` : ""}  (\`/models <role>\` for candidate detail)`,
+					...(residencyProblem ? [`  ⚠ ${residencyProblem}`] : []),
 					...rows,
 				].join("\n"),
 				"info",

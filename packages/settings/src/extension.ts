@@ -10,7 +10,7 @@ import { defineExtension } from "@vegardx/pi-core";
 import { activePreset, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
 import type { DomainRegistryInput } from "./domain.js";
-import { showConfigMenu } from "./menu.js";
+import { browseResidency, setResidency, showConfigMenu } from "./menu.js";
 import { settingsRegistry } from "./registry.js";
 
 export { settingsRegistry } from "./registry.js";
@@ -48,11 +48,15 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate.",
+				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, residency.",
 			handler: async (args, ctx) => {
 				const trimmed = args.trim();
 				if (!trimmed || trimmed === "show") {
 					await showConfigMenu(ctx, domainRegistry);
+				} else if (trimmed === "residency") {
+					await browseResidency(ctx);
+				} else if (trimmed.startsWith("residency ")) {
+					setResidency(ctx, trimmed.slice("residency ".length).trim());
 				} else {
 					// Text-based subcommands for scripting
 					handleSettingsCommand(args, ctx, domainRegistry);

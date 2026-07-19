@@ -129,6 +129,36 @@ describe("/maestro interactive editor", () => {
 		expect(editor?.options).toContain("+ Add option…");
 	});
 
+	it("adds an option through the model selector, not free text", async () => {
+		const { ctx, selects } = menuCtx(
+			[
+				"Model sets (1)",
+				"impl — 1 option(s) · used by main (1 role)",
+				"+ Add option…",
+				"other — 1 model(s)",
+				"big-model",
+				"medium",
+				undefined, // Esc set editor
+				undefined, // Esc set list
+				undefined, // Esc top level
+			],
+			["Big cross-family reviewer."], // summary input
+		);
+		await showConfigMenu(ctx);
+		const modelPick = selects.find((s) => s.title === "Model for this option");
+		expect(modelPick?.options).toContain("session — the live session model");
+		expect(modelPick?.options).toContain("other — 1 model(s)");
+		const written = agentSettings() as {
+			models?: {
+				modelSets?: { impl?: { options?: { id: string; model: string }[] } };
+			};
+		};
+		const option = written.models?.modelSets?.impl?.options?.find(
+			(o) => o.id === "big-model",
+		);
+		expect(option?.model).toBe("other/big-model");
+	});
+
 	it("maps a preset role to a set and persists through the domain writer", async () => {
 		const { ctx, selects } = menuCtx([
 			"Presets (1)",

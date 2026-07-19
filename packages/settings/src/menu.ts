@@ -210,6 +210,43 @@ async function pickEffortLimits(ui: Dialogs): Promise<string[] | undefined> {
 }
 
 /**
+ * Pick a model ref via the registry: session → provider → model, with a
+ * manual-entry escape hatch for models pi has not cached yet.
+ */
+async function pickModelRef(
+	ctx: ExtensionContext,
+	ui: Dialogs,
+): Promise<string | undefined> {
+	const SESSION_ENTRY = "session — the live session model";
+	const MANUAL_ENTRY = "Type a ref manually… (provider/model)";
+	const providers = modelsByProvider(ctx);
+	while (true) {
+		const picked = await ui.select("Model for this option", [
+			SESSION_ENTRY,
+			...[...providers.entries()].map(
+				([provider, ids]) => `${provider} — ${ids.length} model(s)`,
+			),
+			MANUAL_ENTRY,
+		]);
+		if (!picked) return undefined;
+		if (picked === SESSION_ENTRY) return "session";
+		if (picked === MANUAL_ENTRY) {
+			if (!ui.input) return undefined;
+			const typed = (
+				await ui.input("Model ref (provider/model)", "provider/model")
+			)?.trim();
+			if (typed) return typed;
+			continue;
+		}
+		const provider = picked.split(" ")[0];
+		const ids = providers.get(provider) ?? [];
+		const id = await ui.select(`${provider} — which model?`, ids);
+		if (id) return `${provider}/${id}`;
+		// Esc from the model list returns to the provider picker.
+	}
+}
+
+/**
  * Prompt the fields of one model-set option. The option id is auto-derived
  * from the model name — the stable handle /models rows, assignments, and
  * agent-kind pins refer to — and only prompted on a collision within the
@@ -236,9 +273,7 @@ async function buildOption(
 		);
 		return undefined;
 	}
-	const model = (
-		await ui.input('Model ref (provider/model, or "session")', "ollama/…")
-	)?.trim();
+	const model = await pickModelRef(ctx, ui);
 	if (!model) return undefined;
 	const effortPick = await ui.select("Effort", EFFORTS);
 	if (!effortPick) return undefined;

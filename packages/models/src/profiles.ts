@@ -143,9 +143,13 @@ function extractModels(raw: unknown): ParsedModels | undefined {
 			"Unsupported model configuration: models.profiles was removed; use models.presets and models.modelSets",
 		);
 	}
+	// null entries are deletion markers (older writers stored null instead
+	// of removing the key) — skip them so one deleted entry can never make
+	// the WHOLE config unreadable. Invalid non-null shapes still throw.
 	const modelSets: Record<string, ModelSetConfig> = {};
 	if (isPlainObject(root.modelSets)) {
 		for (const [name, value] of Object.entries(root.modelSets)) {
+			if (value === null || value === undefined) continue;
 			const set = extractModelSet(value);
 			if (!set) throw new Error(`Invalid exact model set: ${name}`);
 			modelSets[name] = set;
@@ -154,6 +158,7 @@ function extractModels(raw: unknown): ParsedModels | undefined {
 	const presets: Record<string, ParsedPreset> = {};
 	if (isPlainObject(root.presets)) {
 		for (const [name, value] of Object.entries(root.presets)) {
+			if (value === null || value === undefined) continue;
 			const preset = extractPreset(value);
 			if (!preset) throw new Error(`Invalid model preset: ${name}`);
 			presets[name] = preset;
@@ -172,6 +177,7 @@ function extractResidency(raw: unknown): ResidencyConfig | undefined {
 	const lists: Record<string, readonly string[]> = {};
 	if (isPlainObject(raw.lists)) {
 		for (const [name, value] of Object.entries(raw.lists)) {
+			if (value === null || value === undefined) continue;
 			const patterns = validArray(value, nonEmpty);
 			if (!patterns || !nonEmpty(name))
 				throw new Error(`Invalid residency list: ${name}`);

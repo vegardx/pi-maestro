@@ -704,12 +704,33 @@ function setObjectPath(
 	parts: readonly string[],
 	value: unknown,
 ): void {
+	// null means DELETE. Storing a literal null poisoned the whole models
+	// config: extractModels threw on the null entry and every preset/set
+	// disappeared from view at once (2026-07-19).
+	if (value === null || value === undefined) {
+		let current: Record<string, unknown> = root;
+		const chain: Record<string, unknown>[] = [root];
+		for (const part of parts.slice(0, -1)) {
+			const next = current[part];
+			if (!isPlainObject(next)) return; // nothing to delete
+			current = next;
+			chain.push(current);
+		}
+		delete current[parts.at(-1) as string];
+		// Prune now-empty parents so deletes leave no husk objects behind.
+		for (let i = chain.length - 1; i > 0; i--) {
+			if (Object.keys(chain[i]).length === 0)
+				delete chain[i - 1][parts[i - 1] as string];
+			else break;
+		}
+		return;
+	}
 	let current = root;
 	for (const part of parts.slice(0, -1)) {
 		if (!isPlainObject(current[part])) current[part] = {};
 		current = current[part] as Record<string, unknown>;
 	}
-	current[parts.at(-1)!] = value;
+	current[parts.at(-1) as string] = value;
 }
 
 export function writeDomainValue(

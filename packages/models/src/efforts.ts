@@ -8,6 +8,7 @@ const EFFORTS: readonly ThinkingLevel[] = [
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ];
 
 /** Pi's null map entries are explicitly unsupported; missing entries default. */

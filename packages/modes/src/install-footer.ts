@@ -191,7 +191,7 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const resSeg: Segment | undefined = residencyLabel
 						? [
 								theme.fg(
-									residencyName?.toLowerCase() === "global"
+									["off", "none"].includes(residencyName?.toLowerCase() ?? "")
 										? "muted"
 										: "warning",
 									residencyLabel,

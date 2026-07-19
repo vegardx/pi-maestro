@@ -1,6 +1,8 @@
-// Data-residency filtering: one active whitelist of provider/model globs
-// constrains every model-set walk. Global (reserved, case-insensitive)
-// matches everything; the session sentinel is exempt (the session model is
+// Data-residency filtering: one active whitelist of provider/model refs
+// constrains every model-set walk. "off" (alias "none") is the reserved
+// no-filter state — residency has no opinion until a named list is active;
+// "Global" is an ORDINARY curated list (catalogs use Global as a real
+// residency category). The session sentinel is exempt (the session model is
 // the user's explicit choice — the filter governs the fleet); an active
 // name with no list fails CLOSED (nothing concrete passes) and is surfaced
 // via residencyError.
@@ -135,16 +137,35 @@ describe("model residency", () => {
 		expect(res.selected?.optionId).toBe("own");
 	});
 
-	it("global (any case) and absent residency filter nothing", async () => {
+	it("off (and alias None, any case) filters nothing", async () => {
+		for (const active of ["off", "None", "OFF"]) {
+			writeSettings({
+				...MODELS,
+				residency: { active, lists: { EEA: ["ollama/*"] } },
+			});
+			const res = await resolveExactModelSelection(fakeCtx(), {
+				role: "worker",
+			});
+			expect(res.selected?.modelId).toBe("radicalai-sit/kimi-k3");
+			expect(res.candidates.every((c) => c.available)).toBe(true);
+		}
+	});
+
+	it("Global is an ordinary curated list, not a match-all", async () => {
 		writeSettings({
 			...MODELS,
-			residency: { active: "Global", lists: { EEA: ["ollama/*"] } },
+			residency: {
+				active: "Global",
+				lists: { Global: ["radicalai-sit/kimi-k3"] },
+			},
 		});
 		const res = await resolveExactModelSelection(fakeCtx(), {
 			role: "worker",
 		});
 		expect(res.selected?.modelId).toBe("radicalai-sit/kimi-k3");
-		expect(res.candidates.every((c) => c.available)).toBe(true);
+		const struck = res.candidates.find((c) => c.optionId === "eu");
+		expect(struck?.available).toBe(false);
+		expect(struck?.reason).toBe("outside residency Global");
 	});
 
 	it("fails closed on an active name with no configured list", async () => {
@@ -172,7 +193,7 @@ describe("model residency", () => {
 			residency: { active: "EEA", lists: { EEA: ["ollama/*"] } },
 		});
 		const config = readModelsConfig(cwd);
-		expect(residencyNames(config)).toEqual(["global", "EEA"]);
+		expect(residencyNames(config)).toEqual(["off", "EEA"]);
 		expect(activeResidency(config)).toBe("EEA");
 		expect(modelAllowedByResidency(config, "ollama/gemma4:31b-mlx")).toBe(true);
 		expect(modelAllowedByResidency(config, "radicalai-sit/kimi-k3")).toBe(

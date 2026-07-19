@@ -1,7 +1,7 @@
-// The restored interactive /maestro menu: select-driven browsing wherever a
-// select dialog exists (TUI overlay or extension_ui_request over RPC), with
-// the plain notify summary as the no-UI fallback. Scripted subcommands are
-// untouched — this pins the interactive layer deterministically.
+// The /maestro interactive EDITOR: select-driven pages over every config
+// domain, with edits flowing through the validated domain writer (global
+// scope → the isolated agent dir here). Scripted select/input sequences pin
+// the flows deterministically; the notify summary stays the no-UI fallback.
 
 import {
 	mkdirSync,
@@ -31,7 +31,7 @@ beforeEach(() => {
 			models: {
 				residency: {
 					active: "EEA",
-					lists: { EEA: ["prov/*"] },
+					lists: { EEA: ["prov/fast-model"] },
 				},
 				modelSets: {
 					impl: {
@@ -62,22 +62,47 @@ afterEach(() => {
 	rmSync(cwd, { recursive: true, force: true });
 });
 
-function menuCtx(script: Array<string | undefined>): {
+function agentSettings(): Record<string, unknown> {
+	try {
+		return JSON.parse(
+			readFileSync(join(cwd, ".agent", "settings.json"), "utf-8"),
+		);
+	} catch {
+		return {};
+	}
+}
+
+/** Script select answers; record every select's title and options. */
+function menuCtx(
+	script: Array<string | undefined>,
+	inputs: Array<string | undefined> = [],
+): {
 	ctx: ExtensionContext;
 	notes: string[];
-	selects: string[];
+	selects: { title: string; options: string[] }[];
 } {
 	const notes: string[] = [];
-	const selects: string[] = [];
+	const selects: { title: string; options: string[] }[] = [];
+	const registryModels = [
+		{ provider: "prov", id: "fast-model" },
+		{ provider: "prov", id: "main-model" },
+		{ provider: "other", id: "big-model" },
+	];
 	const ctx = {
 		cwd,
 		hasUI: true,
 		model: { provider: "prov", id: "main-model" },
+		modelRegistry: {
+			getAll: () => registryModels,
+			find: () => undefined,
+		},
 		ui: {
-			select: async (title: string, _options: string[]) => {
-				selects.push(title);
+			select: async (title: string, options: string[]) => {
+				selects.push({ title, options });
 				return script.shift();
 			},
+			input: async () => inputs.shift(),
+			confirm: async () => true,
 			notify: (text: string) => {
 				notes.push(text);
 			},
@@ -86,44 +111,84 @@ function menuCtx(script: Array<string | undefined>): {
 	return { ctx, notes, selects };
 }
 
-describe("/maestro interactive menu", () => {
-	it("browses model sets down to option detail, Esc backs out", async () => {
-		const { ctx, notes } = menuCtx([
+describe("/maestro interactive editor", () => {
+	it("opens a model set as an editable page listing its options", async () => {
+		const { ctx, selects } = menuCtx([
 			"Model sets (1)",
-			"impl — 1 option(s)",
+			"impl — 1 option(s) · used by preset main · worker",
+			undefined, // Esc out of the set editor
 			undefined, // Esc out of the set list
 			undefined, // Esc out of the top level
 		]);
 		await showConfigMenu(ctx);
-		const detail = notes.find((n) => n.includes("Model set impl"));
-		expect(detail).toContain(
+		const editor = selects.find((s) => s.title.startsWith("Model set impl"));
+		expect(editor).toBeDefined();
+		expect(editor?.options).toContain(
 			"fast: prov/fast-model @low — Fast implementation",
 		);
+		expect(editor?.options).toContain("+ Add option…");
 	});
 
-	it("shows preset detail with role mappings", async () => {
-		const { ctx, notes } = menuCtx([
+	it("maps a preset role to a set and persists through the domain writer", async () => {
+		const { ctx, selects } = menuCtx([
 			"Presets (1)",
-			"main (active) — targets: prov/main-model",
-			undefined,
-			undefined,
+			"main (active) — 1 model(s), 1 role mapping(s)",
+			"Role mappings (1) — role → model set",
+			"verifier → none (session model)",
+			"impl",
+			undefined, // Esc role list
+			undefined, // Esc preset page
+			undefined, // Esc presets
+			undefined, // Esc top
 		]);
 		await showConfigMenu(ctx);
-		const detail = notes.find((n) => n.includes("Preset main"));
-		expect(detail).toContain("worker → impl");
+		const roles = selects.find((s) => s.title.includes("role → model set"));
+		expect(roles?.options).toContain("worker → impl");
+		expect(roles?.options).toContain("verifier → none (session model)");
+		const written = agentSettings() as {
+			models?: { presets?: { main?: { modelSets?: Record<string, string> } } };
+		};
+		expect(written.models?.presets?.main?.modelSets?.verifier).toBe("impl");
 	});
 
-	it("lists residency with the active list and switches via select", async () => {
-		const { ctx, notes, selects } = menuCtx([
-			"global — all models (filter off)",
+	it("switches the active residency to off", async () => {
+		const { ctx, notes } = menuCtx([
+			"Active: EEA — change…",
+			"off — no filter",
+			undefined, // Esc residency page
 		]);
 		await browseResidency(ctx);
-		expect(selects[0]).toContain("Residency — active: EEA");
-		const written = JSON.parse(
-			readFileSync(join(cwd, ".agent", "settings.json"), "utf-8"),
+		const written = agentSettings() as {
+			models?: { residency?: { active?: string } };
+		};
+		expect(written.models?.residency?.active).toBe("off");
+		expect(notes.some((n) => n.includes("Residency → off"))).toBe(true);
+	});
+
+	it("curates residency membership per model through the provider browser", async () => {
+		const { ctx, selects } = menuCtx([
+			"EEA — 1 model(s)",
+			"Edit models by provider…",
+			"prov — 1 of 2 in list",
+			"✗ main-model", // toggle ON
+			undefined, // Esc model toggles
+			undefined, // Esc provider picker
+			undefined, // Esc list editor
+			undefined, // Esc residency page
+		]);
+		await browseResidency(ctx);
+		const providerPage = selects.find((s) =>
+			s.title.includes("which provider?"),
 		);
-		expect(written.models.residency.active).toBe("global");
-		expect(notes.some((n) => n.includes("Residency → global"))).toBe(true);
+		expect(providerPage?.options).toContain("prov — 1 of 2 in list");
+		expect(providerPage?.options).toContain("other — 0 of 1 in list");
+		const written = agentSettings() as {
+			models?: { residency?: { lists?: Record<string, string[]> } };
+		};
+		expect(written.models?.residency?.lists?.EEA).toEqual([
+			"prov/fast-model",
+			"prov/main-model",
+		]);
 	});
 
 	it("stale models.profiles config notifies instead of throwing", async () => {
@@ -159,7 +224,6 @@ describe("/maestro interactive menu", () => {
 				select: async () => undefined,
 			},
 		};
-		// Must not throw — the wrapper converts the cutover error to guidance.
 		await maestroHandler("show", ctx);
 		expect(
 			notes.some((note) => note.includes("models.profiles was removed")),

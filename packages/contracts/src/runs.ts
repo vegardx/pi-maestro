@@ -43,7 +43,8 @@ export type ThinkingLevel =
 	| "low"
 	| "medium"
 	| "high"
-	| "xhigh";
+	| "xhigh"
+	| "max";
 
 export type RunTransport = "headless" | "tmux";
 

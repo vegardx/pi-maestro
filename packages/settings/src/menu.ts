@@ -570,29 +570,48 @@ async function modelsByProvider(
 		grouped.set(model.provider, bucket);
 		if (!firstModel.has(model.provider)) firstModel.set(model.provider, model);
 	}
-	// Only CONFIGURED providers: probe one model per provider through the
-	// registry's auth check and drop the ones that don't resolve — pi's
-	// built-in catalog knows about far more providers than this install
-	// uses. If the probe filters everything (odd surface without an auth
-	// path), fall back to showing all rather than none.
-	if (registry.getApiKeyAndHeaders) {
+	// Only CONFIGURED providers — pi's built-in catalog knows about far
+	// more providers than this install uses. getProviderAuthStatus is the
+	// authoritative signal (getApiKeyAndHeaders answers ok:true for KNOWN
+	// providers even with no credential, which is why an ok-probe filtered
+	// nothing). Async credential probe is the fallback for older surfaces;
+	// if everything filters out, show all rather than none.
+	const authStatus = (
+		ctx.modelRegistry as unknown as {
+			getProviderAuthStatus?: (provider: string) => { configured: boolean };
+		}
+	).getProviderAuthStatus;
+	const configured = new Set<string>();
+	if (authStatus) {
+		for (const provider of grouped.keys()) {
+			try {
+				if (authStatus.call(ctx.modelRegistry, provider).configured)
+					configured.add(provider);
+			} catch {
+				// unknown to the status surface — treated as unconfigured
+			}
+		}
+	} else if (registry.getApiKeyAndHeaders) {
 		const probes = await Promise.all(
 			[...firstModel.entries()].map(async ([provider, model]) => {
 				try {
-					const auth = await registry.getApiKeyAndHeaders?.(model);
-					return { provider, ok: auth?.ok ?? false };
+					const auth = (await registry.getApiKeyAndHeaders?.(model)) as
+						| { ok: boolean; apiKey?: string; headers?: Record<string, string> }
+						| undefined;
+					const hasCredential = Boolean(
+						auth?.ok && (auth.apiKey || Object.keys(auth.headers ?? {}).length),
+					);
+					return { provider, ok: hasCredential };
 				} catch {
 					return { provider, ok: false };
 				}
 			}),
 		);
-		const configured = new Set(
-			probes.filter((probe) => probe.ok).map((probe) => probe.provider),
-		);
-		if (configured.size > 0) {
-			for (const provider of [...grouped.keys()])
-				if (!configured.has(provider)) grouped.delete(provider);
-		}
+		for (const probe of probes) if (probe.ok) configured.add(probe.provider);
+	}
+	if (configured.size > 0) {
+		for (const provider of [...grouped.keys()])
+			if (!configured.has(provider)) grouped.delete(provider);
 	}
 	for (const bucket of grouped.values()) bucket.sort();
 	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));

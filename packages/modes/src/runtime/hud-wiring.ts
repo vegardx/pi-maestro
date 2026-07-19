@@ -333,7 +333,15 @@ export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 	const subagents = rt.maestro.capabilities.get(CAPABILITIES.subagents);
 	const snap = rt.execution?.snapshot();
 	const projectedRuns = rt.execution?.projectedRuns?.() ?? [];
-	const allRuns = [...(subagents?.list() ?? []), ...projectedRuns];
+	// The HUD renders inside the TUI render loop — a store/list failure here
+	// (e.g. unreadable run state) must degrade to "no runs", never crash pi.
+	let storedRuns: ReturnType<NonNullable<typeof subagents>["list"]> = [];
+	try {
+		storedRuns = subagents?.list() ?? [];
+	} catch {
+		storedRuns = [];
+	}
+	const allRuns = [...storedRuns, ...projectedRuns];
 	const targets = listAgentTargets({ execution: rt.execution, subagents });
 	return {
 		agents: buildAgentNodes(snap, allRuns, Date.now(), targets),

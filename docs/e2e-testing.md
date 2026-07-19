@@ -178,13 +178,14 @@ default — the real exercise of the presets / modelSets machinery:
 
 | Tier | Models (first-available order) | Roles |
 | --- | --- | --- |
-| planner / session | `qwen3.5:27b` | the preset target — the maestro plans here |
-| normal | `qwen3.6:27b-coding-mxfp8` → `qwen3:14b` | worker, verifier, codebase-research |
-| fast | `gemma4:e4b-mlx` → `qwen3:8b` | classifier, summarizers, general, web-research |
-| review pool | `gpt-oss:20b` → `gemma4:31b` → `session` (different families from the qwen workers) | the four `*-review` roles (planner picks by summary; `session` sorts to the back) |
+| planner / session | `qwen3.5:27b-mlx` | the preset target — the maestro plans here |
+| normal | `qwen3.6:35b-a3b-coding-mxfp8` (MoE, fast decode) → `session` | worker, verifier, codebase-research |
+| fast | `gemma4:e4b-mlx` → `session` | classifier, summarizers, general, web-research |
+| review pool | `gpt-oss:20b` → `gemma4:31b-mlx` → `session` (different families from the qwen workers) | the four `*-review` roles (planner picks by summary; `session` sorts to the back) |
 
-Needs `ollama serve` with those models pulled (`ollama list`); only the chosen
-option per set loads (~28 GB steady state). Two checks this mode enables:
+Needs `ollama serve` with those models pulled (`ollama list`). For a full
+drive, pin the primaries resident (keep-alive Forever: planner + MoE worker +
+fast + both reviewers ≈ 96 GB on a 128 GB box) so role swaps don't thrash. Two checks this mode enables:
 `/models` (and `/models <role>` for candidate detail) confirms per-role routing
 lands on the intended model, and `ollama stop <first-model>` then re-running
 `/models <role>` confirms the live availability fall-through. Routing

@@ -43,6 +43,7 @@ const THINKING = new Set<string>([
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ]);
 const MODES = new Set<string>(ALL_MODES);
 
@@ -171,8 +172,25 @@ function validateOption(value: unknown, path: string): string[] {
 		(value.model !== "session" && !String(value.model).includes("/"))
 	)
 		errors.push(`${path}.model must be session or provider/model`);
-	if (!nonEmpty(value.effort) || !THINKING.has(value.effort))
+	if (
+		!nonEmpty(value.effort) ||
+		(value.effort !== "auto" && !THINKING.has(value.effort))
+	)
 		errors.push(`${path}.effort is unsupported`);
+	if (value.efforts !== undefined) {
+		if (
+			!strings(value.efforts) ||
+			value.efforts.length === 0 ||
+			value.efforts.some((level) => !THINKING.has(level))
+		)
+			errors.push(`${path}.efforts must be a non-empty thinking-level array`);
+		else if (
+			value.effort !== "auto" &&
+			nonEmpty(value.effort) &&
+			!value.efforts.includes(value.effort)
+		)
+			errors.push(`${path}.effort must be inside its own efforts allowlist`);
+	}
 	if (!nonEmpty(value.summary))
 		errors.push(`${path}.summary must be non-empty`);
 	return errors;
@@ -186,6 +204,31 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 		parts[0] !== "transitionGates"
 	)
 		return [];
+	// null deletes the key (reset / remove-from-menu); always structurally valid.
+	if (value === null || value === "null") return [];
+	// Whole-preset writes let the editor create/replace a preset in one step.
+	if (parts[0] === "models" && parts[1] === "presets" && parts.length === 3) {
+		if (!isPlainObject(value)) return ["preset must be an object"];
+		const errors: string[] = [];
+		if (value.targets !== undefined) {
+			if (!strings(value.targets))
+				errors.push("preset targets must be a string array");
+			else if (value.targets.some((entry) => !entry.includes("/")))
+				errors.push("preset targets must be exact provider/model ids");
+		}
+		if (value.modelSets !== undefined) {
+			if (!isPlainObject(value.modelSets))
+				errors.push("preset modelSets must be an object");
+			else
+				for (const [role, set] of Object.entries(value.modelSets)) {
+					if (!MODEL_ROLES.includes(role as ModelRole))
+						errors.push(`unknown model role ${role}`);
+					if (!nonEmpty(set))
+						errors.push(`modelSets.${role} must name a model set`);
+				}
+		}
+		return errors;
+	}
 	if (parts[0] === "models" && parts[1] === "modelSets") {
 		if (parts.length === 3) {
 			const options = Array.isArray(value)
@@ -232,8 +275,8 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 				: ["residency active must be a non-empty name"];
 		}
 		if (parts.length === 4 && parts[2] === "lists") {
-			if (parts[3].toLowerCase() === "global")
-				return ['"global" is reserved (matches all models)'];
+			if (["off", "none"].includes(parts[3].toLowerCase()))
+				return ['"off"/"none" are reserved (the no-filter state)'];
 			return strings(value) && value.length > 0
 				? []
 				: ["residency list requires a non-empty pattern array"];
@@ -313,10 +356,14 @@ export function validateDomainEdit(
 	registry: DomainRegistryInput = {},
 ): string[] {
 	const parsed =
-		typeof value === "string" &&
-		(value.startsWith("{") || value.startsWith("[") || value.startsWith('"'))
-			? parseJson(value)
-			: value;
+		value === "null"
+			? null
+			: typeof value === "string" &&
+					(value.startsWith("{") ||
+						value.startsWith("[") ||
+						value.startsWith('"'))
+				? parseJson(value)
+				: value;
 	const errors = validateDomainValue(key, parsed);
 	const config = readModelsConfig(ctx.cwd);
 	if (

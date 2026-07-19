@@ -551,7 +551,8 @@ export default defineExtension(
 						modelSetId: initial.modelSetId ?? "session",
 						optionId: candidate.optionId,
 						modelId: candidate.modelId,
-						effort: candidate.effort,
+						// "auto" options carry no fixed effort — resolution picks it.
+						effort: candidate.effort === "auto" ? undefined : candidate.effort,
 					},
 				});
 				if (!exact.selected)

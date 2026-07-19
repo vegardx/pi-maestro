@@ -22,12 +22,26 @@ export const MODEL_ROLES = [
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
+/**
+ * The authored effort of a model-set option: a concrete thinking level, or
+ * "auto" — the effort is decided at assignment time (the planner picks it
+ * per task, bounded by `efforts` ∩ the model's supported levels; mechanical
+ * default picks fall back to the session thinking level).
+ */
+export type OptionEffort = ThinkingLevel | "auto";
+
 /** An authored option is one exact model/effort pair, not a broad pool. */
 export interface ExactModelOption {
 	readonly id: string;
 	readonly model: string;
-	readonly effort: ThinkingLevel;
+	readonly effort: OptionEffort;
 	readonly summary: string;
+	/**
+	 * Optional allowlist bounding this option's usable thinking levels —
+	 * both the planner's "auto" choice and any fixed effort must fall
+	 * within it (∩ what the model itself supports).
+	 */
+	readonly efforts?: readonly ThinkingLevel[];
 }
 
 /** Reusable ordered exact options. Order determines the unassigned default. */
@@ -43,10 +57,13 @@ export interface ModelPresetConfig {
 
 /**
  * Data-residency filter. `lists` are named whitelists of `provider/model`
- * glob patterns (`*` wildcard); `active` selects one, or the reserved name
- * "global" (case-insensitive) which matches every model (no filtering).
- * The `session` sentinel always passes — the session model is the user's
- * own explicit choice and stays outside the fleet filter.
+ * refs (exact, or `*` glob for hand-authored configs); `active` selects
+ * one, or the reserved state "off" (alias "none", case-insensitive) which
+ * matches every model — residency has no opinion until a named filter is
+ * added on top. Every named list, including one called "Global", is
+ * explicit and user-curated. The `session` sentinel always passes — the
+ * session model is the user's own explicit choice, outside the fleet
+ * filter.
  */
 export interface ResidencyConfig {
 	readonly active?: string;
@@ -75,7 +92,7 @@ export interface ExactModelCandidateFact {
 	readonly optionId: string;
 	readonly authoredModel: string;
 	readonly modelId?: string;
-	readonly effort: ThinkingLevel;
+	readonly effort: OptionEffort;
 	readonly summary: string;
 	readonly registered: boolean;
 	readonly authenticated: boolean;
@@ -92,6 +109,9 @@ export interface ExactModelSelection {
 	readonly modelSetId: string;
 	readonly optionId: string;
 	readonly modelId: string;
+	/** Always concrete: an "auto" option resolves to the assignment's effort
+	 *  when one is persisted, else the session thinking level clamped into
+	 *  the option's allowed set. */
 	readonly effort: ThinkingLevel;
 	readonly summary: string;
 	readonly source: ModelSelectionSource;

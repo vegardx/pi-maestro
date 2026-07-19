@@ -25,9 +25,9 @@ export {
 } from "./profiles.js";
 export {
 	activeResidency,
-	GLOBAL_RESIDENCY,
-	isGlobalResidency,
+	isResidencyOff,
 	modelAllowedByResidency,
+	RESIDENCY_OFF,
 	residencyError,
 	residencyNames,
 } from "./residency.js";

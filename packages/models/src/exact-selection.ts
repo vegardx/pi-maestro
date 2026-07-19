@@ -74,6 +74,50 @@ function selectionError(
 	return { code, message, ...ids };
 }
 
+/** Ascending thinking-level order for auto-effort clamping. */
+const EFFORT_ORDER: readonly ThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
+/** The levels an option may actually run at: allowlist ∩ model support. */
+function allowedEfforts(
+	option: ExactModelOption,
+	model: Model<Api> | undefined,
+): ThinkingLevel[] {
+	const supported = model ? supportedEfforts(model) : [];
+	return option.efforts
+		? supported.filter((level) => option.efforts?.includes(level))
+		: [...supported];
+}
+
+/**
+ * Concretize an "auto" effort mechanically: the session thinking level when
+ * allowed, else the nearest allowed level below it, else the lowest above.
+ * (The planner path overrides this via the persisted assignment's effort.)
+ */
+function autoEffort(
+	ctx: ExtensionContext,
+	allowed: readonly ThinkingLevel[],
+): ThinkingLevel | undefined {
+	if (allowed.length === 0) return undefined;
+	const session =
+		(ctx as { getThinkingLevel?: () => ThinkingLevel }).getThinkingLevel?.() ??
+		"medium";
+	if (allowed.includes(session)) return session;
+	const at = EFFORT_ORDER.indexOf(session);
+	for (let i = at - 1; i >= 0; i--)
+		if (allowed.includes(EFFORT_ORDER[i])) return EFFORT_ORDER[i];
+	for (let i = at + 1; i < EFFORT_ORDER.length; i++)
+		if (allowed.includes(EFFORT_ORDER[i])) return EFFORT_ORDER[i];
+	return allowed[0];
+}
+
 async function checkOption(
 	ctx: ExtensionContext,
 	option: ExactModelOption,
@@ -132,8 +176,12 @@ async function checkOption(
 			}
 		}
 	}
+	const allowed = allowedEfforts(option, model);
 	const effortSupported = Boolean(
-		model && supportedEfforts(model).includes(option.effort),
+		model &&
+			(option.effort === "auto"
+				? allowed.length > 0
+				: allowed.includes(option.effort)),
 	);
 	const registered = Boolean(model);
 	const available = Boolean(
@@ -312,10 +360,16 @@ export async function resolveExactModelSelection(
 				],
 			};
 		}
+		const assignmentEffortOk =
+			opts.assignment.effort === undefined ||
+			(chosen.option.effort === "auto"
+				? allowedEfforts(chosen.option, chosen.model).includes(
+						opts.assignment.effort,
+					)
+				: chosen.option.effort === opts.assignment.effort);
 		if (
 			chosen.fact.modelId !== opts.assignment.modelId ||
-			(opts.assignment.effort !== undefined &&
-				chosen.option.effort !== opts.assignment.effort)
+			!assignmentEffortOk
 		) {
 			return {
 				presetId,
@@ -359,6 +413,26 @@ export async function resolveExactModelSelection(
 		};
 	}
 
+	const resolvedEffort =
+		chosen.option.effort === "auto"
+			? (opts.assignment?.effort ??
+				autoEffort(ctx, allowedEfforts(chosen.option, chosen.model)))
+			: chosen.option.effort;
+	if (!resolvedEffort) {
+		return {
+			presetId,
+			modelSetId,
+			candidates,
+			selected: null,
+			errors: [
+				selectionError(
+					"no-model-available",
+					`Option ${chosen.option.id} has no usable thinking level`,
+					{ presetId, modelSetId, optionId: chosen.option.id },
+				),
+			],
+		};
+	}
 	return {
 		presetId,
 		modelSetId,
@@ -368,7 +442,7 @@ export async function resolveExactModelSelection(
 			modelSetId,
 			optionId: chosen.option.id,
 			modelId: chosen.fact.modelId,
-			effort: chosen.option.effort,
+			effort: resolvedEffort,
 			summary: chosen.option.summary,
 			source: opts.assignment ? "explicit" : fallback ? "session" : "preset",
 			candidates,

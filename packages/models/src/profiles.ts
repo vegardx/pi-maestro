@@ -8,6 +8,7 @@ import {
 	type ModelRole,
 	type ModelSetConfig,
 	type ModelsConfig,
+	type OptionEffort,
 	type ResidencyConfig,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
@@ -19,7 +20,10 @@ const EFFORT_SET = new Set([
 	"medium",
 	"high",
 	"xhigh",
+	"max",
 ]);
+/** Option efforts: a concrete level, or "auto" (assignment-time choice). */
+const OPTION_EFFORT_SET = new Set([...EFFORT_SET, "auto"]);
 const ROLE_SET = new Set<string>(MODEL_ROLES);
 
 interface ParsedPreset {
@@ -73,14 +77,28 @@ function extractOption(raw: unknown): ExactModelOption | undefined {
 		!isModelReference(raw.model) ||
 		!nonEmpty(raw.summary) ||
 		typeof raw.effort !== "string" ||
-		!EFFORT_SET.has(raw.effort)
+		!OPTION_EFFORT_SET.has(raw.effort)
 	)
 		return undefined;
+	let efforts: readonly ThinkingLevel[] | undefined;
+	if (raw.efforts !== undefined) {
+		const parsed = validArray(
+			raw.efforts,
+			(value): value is ThinkingLevel =>
+				typeof value === "string" && EFFORT_SET.has(value),
+		);
+		if (!parsed) return undefined;
+		// A fixed effort must live inside its own allowlist.
+		if (raw.effort !== "auto" && !parsed.includes(raw.effort as ThinkingLevel))
+			return undefined;
+		efforts = parsed;
+	}
 	return {
 		id: raw.id,
 		model: raw.model,
-		effort: raw.effort as ThinkingLevel,
+		effort: raw.effort as OptionEffort,
 		summary: raw.summary,
+		...(efforts ? { efforts } : {}),
 	};
 }
 

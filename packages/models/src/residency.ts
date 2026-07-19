@@ -1,26 +1,30 @@
 // Data-residency filtering over `provider/model` refs.
 //
-// One named whitelist ("EEA", …) is active at a time; the reserved name
-// "global" (case-insensitive) matches everything. The user curates the
-// lists — maestro applies them mechanically and never reasons about them.
+// One named whitelist ("EEA", "Global", …) is active at a time; the
+// reserved state "off" (alias "none", case-insensitive) matches everything
+// — residency has no opinion until a named filter is added on top. The
+// user curates the lists — maestro applies them mechanically and never
+// reasons about them. "Global" is deliberately NOT special: catalogs use
+// Global as a real residency category, so it must be explicit.
 
 import type { ModelsConfig } from "@vegardx/pi-contracts";
 
-/** Reserved residency name: matches all models — the filter is off. */
-export const GLOBAL_RESIDENCY = "global";
+/** Reserved residency state: matches all models — the filter is off. */
+export const RESIDENCY_OFF = "off";
 
-export function isGlobalResidency(name: string): boolean {
-	return name.toLowerCase() === GLOBAL_RESIDENCY;
+export function isResidencyOff(name: string): boolean {
+	const lower = name.toLowerCase();
+	return lower === RESIDENCY_OFF || lower === "none";
 }
 
-/** The active residency name; "global" when unset. */
+/** The active residency name; "off" when unset. */
 export function activeResidency(config: ModelsConfig | undefined): string {
-	return config?.residency?.active ?? GLOBAL_RESIDENCY;
+	return config?.residency?.active ?? RESIDENCY_OFF;
 }
 
-/** All selectable residency names: "global" plus every configured list. */
+/** All selectable residency names: "off" plus every configured list. */
 export function residencyNames(config: ModelsConfig | undefined): string[] {
-	return [GLOBAL_RESIDENCY, ...Object.keys(config?.residency?.lists ?? {})];
+	return [RESIDENCY_OFF, ...Object.keys(config?.residency?.lists ?? {})];
 }
 
 /** `*`-wildcard glob over a full `provider/model` ref. */
@@ -47,7 +51,7 @@ export function modelAllowedByResidency(
 	modelId: string,
 ): boolean {
 	const active = activeResidency(config);
-	if (isGlobalResidency(active)) return true;
+	if (isResidencyOff(active)) return true;
 	const list = config?.residency?.lists?.[active] ?? [];
 	return list.some((pattern) => globMatch(pattern, modelId));
 }
@@ -57,7 +61,7 @@ export function residencyError(
 	config: ModelsConfig | undefined,
 ): string | undefined {
 	const active = config?.residency?.active;
-	if (!active || isGlobalResidency(active)) return undefined;
+	if (!active || isResidencyOff(active)) return undefined;
 	if (!config?.residency?.lists?.[active])
 		return `active residency "${active}" has no configured list — all concrete models are excluded until it exists`;
 	return undefined;

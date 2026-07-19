@@ -115,7 +115,7 @@ describe("/maestro interactive editor", () => {
 	it("opens a model set as an editable page listing its options", async () => {
 		const { ctx, selects } = menuCtx([
 			"Model sets (1)",
-			"impl — 1 option(s) · used by preset main · worker",
+			"impl — 1 option(s) · used by main (1 role)",
 			undefined, // Esc out of the set editor
 			undefined, // Esc out of the set list
 			undefined, // Esc out of the top level

@@ -151,6 +151,38 @@ function safeModelsConfig(ctx: ExtensionContext) {
 // ─── Model sets ──────────────────────────────────────────────────────────────
 
 const ADD_OPTION = "+ Add option…";
+const USAGE_DETAIL = "Where is this set used?";
+
+/** "preset X · role" entries → "X (3 roles), Y (1 role)". */
+function formatUsedBy(usedBy: readonly string[]): string {
+	const byPreset = new Map<string, number>();
+	for (const entry of usedBy) {
+		const match = /^preset (.+) · /.exec(entry);
+		const preset = match?.[1] ?? entry;
+		byPreset.set(preset, (byPreset.get(preset) ?? 0) + 1);
+	}
+	return [...byPreset.entries()]
+		.map(
+			([preset, count]) => `${preset} (${count} role${count === 1 ? "" : "s"})`,
+		)
+		.join(", ");
+}
+
+/** Grouped multi-line usage breakdown for the detail notify. */
+function usedByDetail(usedBy: readonly string[]): string[] {
+	const byPreset = new Map<string, string[]>();
+	for (const entry of usedBy) {
+		const match = /^preset (.+) · (.+)$/.exec(entry);
+		const preset = match?.[1] ?? entry;
+		const role = match?.[2] ?? "";
+		const bucket = byPreset.get(preset) ?? [];
+		if (role) bucket.push(role);
+		byPreset.set(preset, bucket);
+	}
+	return [...byPreset.entries()].map(
+		([preset, roles]) => `  ${preset}: ${roles.join(", ")}`,
+	);
+}
 const REMOVE_OPTION = "− Remove option…";
 const NEW_SET = "+ New model set…";
 const DELETE_MARK = "✕ Delete";
@@ -239,7 +271,7 @@ async function browseModelSets(
 		const picked = await ui.select("Model sets (Esc to go back)", [
 			...snapshot.modelSets.map(
 				(s) =>
-					`${s.id} — ${s.options.length} option(s)${s.usedBy.length ? ` · used by ${s.usedBy.join(", ")}` : ""}`,
+					`${s.id} — ${s.options.length} option(s)${s.usedBy.length ? ` · used by ${formatUsedBy(s.usedBy)}` : " · unused"}`,
 			),
 			NEW_SET,
 		]);
@@ -274,12 +306,22 @@ async function editModelSet(
 				...set.options.map(
 					(o) => `${o.id}: ${o.model} @${o.effort} — ${o.summary}`,
 				),
+				...(set.usedBy.length ? [USAGE_DETAIL] : []),
 				ADD_OPTION,
 				REMOVE_OPTION,
 				`${DELETE_MARK} set ${setId}…`,
 			],
 		);
 		if (!picked) return;
+		if (picked === USAGE_DETAIL) {
+			ctx.ui.notify(
+				[`Model set ${setId} is used by:`, ...usedByDetail(set.usedBy)].join(
+					"\n",
+				),
+				"info",
+			);
+			continue;
+		}
 		if (picked === ADD_OPTION) {
 			const option = await buildOption(
 				ctx,
@@ -309,7 +351,7 @@ async function editModelSet(
 		} else if (picked.startsWith(DELETE_MARK)) {
 			if (set.usedBy.length) {
 				ctx.ui.notify(
-					`Still referenced: ${set.usedBy.join(", ")}. Unmap those first.`,
+					`Still referenced by ${formatUsedBy(set.usedBy)}. Unmap those roles first.`,
 					"warning",
 				);
 				continue;

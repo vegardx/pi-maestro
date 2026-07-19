@@ -3,6 +3,7 @@
 // Presentation only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { activeResidency, readModelsConfig } from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
 import type { Plan } from "../schema.js";
@@ -14,6 +15,24 @@ export function installMaestroFooter(
 	rt: RuntimeContext,
 	ctx: ExtensionContext,
 ): void {
+	// Residency for the footer: settings reads are file I/O, and render runs
+	// per keystroke — cache with a short TTL so toggles show up promptly
+	// without hammering the disk.
+	let residencyCache: { at: number; value: string | undefined } | undefined;
+	const getResidency = (): string | undefined => {
+		const now = Date.now();
+		if (!residencyCache || now - residencyCache.at > 3000) {
+			let value: string | undefined;
+			try {
+				const config = readModelsConfig(ctx.cwd);
+				value = config?.residency ? activeResidency(config) : undefined;
+			} catch {
+				value = undefined;
+			}
+			residencyCache = { at: now, value };
+		}
+		return residencyCache.value;
+	};
 	rt.invalidateFooter = installFooter({
 		pi: rt.pi,
 		ctx,
@@ -23,6 +42,7 @@ export function installMaestroFooter(
 			if (!rt.execution) return 0;
 			return rt.execution.questionQueue?.all()?.length ?? 0;
 		},
+		getResidency,
 	});
 }
 

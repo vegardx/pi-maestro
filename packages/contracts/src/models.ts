@@ -41,9 +41,22 @@ export interface ModelPresetConfig {
 	readonly modelSets: Readonly<Partial<Record<ModelRole, string>>>;
 }
 
+/**
+ * Data-residency filter. `lists` are named whitelists of `provider/model`
+ * glob patterns (`*` wildcard); `active` selects one, or the reserved name
+ * "global" (case-insensitive) which matches every model (no filtering).
+ * The `session` sentinel always passes — the session model is the user's
+ * own explicit choice and stays outside the fleet filter.
+ */
+export interface ResidencyConfig {
+	readonly active?: string;
+	readonly lists?: Readonly<Record<string, readonly string[]>>;
+}
+
 export interface ModelsConfig {
 	readonly modelSets: Readonly<Record<string, ModelSetConfig>>;
 	readonly presets: Readonly<Record<string, ModelPresetConfig>>;
+	readonly residency?: ResidencyConfig;
 }
 
 export type ModelConfigScope = "global" | "project" | "session";

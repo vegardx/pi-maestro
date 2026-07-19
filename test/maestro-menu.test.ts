@@ -3,12 +3,21 @@
 // the plain notify summary as the no-UI fallback. Scripted subcommands are
 // untouched — this pins the interactive layer deterministically.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { showConfigMenu } from "../packages/settings/src/menu.js";
+import {
+	browseResidency,
+	showConfigMenu,
+} from "../packages/settings/src/menu.js";
 
 let cwd: string;
 let prevAgentDir: string | undefined;
@@ -20,6 +29,10 @@ beforeEach(() => {
 		join(cwd, ".pi", "settings.json"),
 		JSON.stringify({
 			models: {
+				residency: {
+					active: "EEA",
+					lists: { EEA: ["prov/*"] },
+				},
 				modelSets: {
 					impl: {
 						options: [
@@ -98,6 +111,19 @@ describe("/maestro interactive menu", () => {
 		await showConfigMenu(ctx);
 		const detail = notes.find((n) => n.includes("Preset main"));
 		expect(detail).toContain("worker → impl");
+	});
+
+	it("lists residency with the active list and switches via select", async () => {
+		const { ctx, notes, selects } = menuCtx([
+			"global — all models (filter off)",
+		]);
+		await browseResidency(ctx);
+		expect(selects[0]).toContain("Residency — active: EEA");
+		const written = JSON.parse(
+			readFileSync(join(cwd, ".agent", "settings.json"), "utf-8"),
+		);
+		expect(written.models.residency.active).toBe("global");
+		expect(notes.some((n) => n.includes("Residency → global"))).toBe(true);
 	});
 
 	it("falls back to the notify summary without a select UI", async () => {

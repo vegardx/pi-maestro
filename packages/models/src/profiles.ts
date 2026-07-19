@@ -8,6 +8,7 @@ import {
 	type ModelRole,
 	type ModelSetConfig,
 	type ModelsConfig,
+	type ResidencyConfig,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 
@@ -30,6 +31,7 @@ interface ParsedPreset {
 interface ParsedModels {
 	readonly modelSets: Readonly<Record<string, ModelSetConfig>>;
 	readonly presets: Readonly<Record<string, ParsedPreset>>;
+	readonly residency?: ResidencyConfig;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -139,8 +141,28 @@ function extractModels(raw: unknown): ParsedModels | undefined {
 			presets[name] = preset;
 		}
 	}
-	return Object.keys(modelSets).length || Object.keys(presets).length
-		? { modelSets, presets }
+	const residency = extractResidency(root.residency);
+	return Object.keys(modelSets).length ||
+		Object.keys(presets).length ||
+		residency
+		? { modelSets, presets, ...(residency ? { residency } : {}) }
+		: undefined;
+}
+
+function extractResidency(raw: unknown): ResidencyConfig | undefined {
+	if (!isPlainObject(raw)) return undefined;
+	const lists: Record<string, readonly string[]> = {};
+	if (isPlainObject(raw.lists)) {
+		for (const [name, value] of Object.entries(raw.lists)) {
+			const patterns = validArray(value, nonEmpty);
+			if (!patterns || !nonEmpty(name))
+				throw new Error(`Invalid residency list: ${name}`);
+			lists[name] = patterns;
+		}
+	}
+	const active = nonEmpty(raw.active) ? raw.active : undefined;
+	return active || Object.keys(lists).length
+		? { ...(active ? { active } : {}), lists }
 		: undefined;
 }
 
@@ -197,7 +219,25 @@ export function readModelsConfig(
 			];
 		}),
 	);
-	const config: ModelsConfig = { modelSets, presets };
+	// Residency: project active wins; lists merge with project overriding.
+	const residencyLists = {
+		...global?.residency?.lists,
+		...project?.residency?.lists,
+	};
+	const residencyActive =
+		project?.residency?.active ?? global?.residency?.active;
+	const residency =
+		residencyActive || Object.keys(residencyLists).length
+			? {
+					...(residencyActive ? { active: residencyActive } : {}),
+					lists: residencyLists,
+				}
+			: undefined;
+	const config: ModelsConfig = {
+		modelSets,
+		presets,
+		...(residency ? { residency } : {}),
+	};
 	validatePresetTargets(config);
 	return config;
 }

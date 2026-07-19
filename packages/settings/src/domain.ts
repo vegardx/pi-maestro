@@ -225,6 +225,20 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 			]);
 		}
 	}
+	if (parts[0] === "models" && parts[1] === "residency") {
+		if (parts.length === 3 && parts[2] === "active") {
+			return nonEmpty(value)
+				? []
+				: ["residency active must be a non-empty name"];
+		}
+		if (parts.length === 4 && parts[2] === "lists") {
+			if (parts[3].toLowerCase() === "global")
+				return ['"global" is reserved (matches all models)'];
+			return strings(value) && value.length > 0
+				? []
+				: ["residency list requires a non-empty pattern array"];
+		}
+	}
 	if (parts[0] === "agents" && parts[1] === "kinds" && parts.length === 4) {
 		if (!AGENT_KINDS.includes(parts[2] as AgentKind))
 			return [`unknown agent kind ${parts[2]}`];

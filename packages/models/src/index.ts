@@ -23,3 +23,11 @@ export {
 	SESSION_MODEL_SENTINEL,
 	validatePresetTargets,
 } from "./profiles.js";
+export {
+	activeResidency,
+	GLOBAL_RESIDENCY,
+	isGlobalResidency,
+	modelAllowedByResidency,
+	residencyError,
+	residencyNames,
+} from "./residency.js";

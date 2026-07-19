@@ -126,6 +126,46 @@ describe("/maestro interactive menu", () => {
 		expect(notes.some((n) => n.includes("Residency → global"))).toBe(true);
 	});
 
+	it("stale models.profiles config notifies instead of throwing", async () => {
+		writeFileSync(
+			join(cwd, ".pi", "settings.json"),
+			JSON.stringify({ models: { profiles: { Old: {} } } }),
+		);
+		const { default: extensionFactory } = await import(
+			"../packages/settings/src/extension.js"
+		);
+		const handlers = new Map<
+			string,
+			(args: string, ctx: unknown) => Promise<void>
+		>();
+		const pi = {
+			registerCommand: (
+				name: string,
+				spec: { handler: (args: string, ctx: unknown) => Promise<void> },
+			) => handlers.set(name, spec.handler),
+			on: () => {},
+			events: { on: () => {}, emit: () => {} },
+		};
+		extensionFactory(pi as never);
+		const maestroHandler = handlers.get("maestro");
+		if (!maestroHandler) throw new Error("maestro command not registered");
+		const notes: string[] = [];
+		const ctx = {
+			cwd,
+			hasUI: true,
+			model: { provider: "prov", id: "main-model" },
+			ui: {
+				notify: (text: string) => notes.push(text),
+				select: async () => undefined,
+			},
+		};
+		// Must not throw — the wrapper converts the cutover error to guidance.
+		await maestroHandler("show", ctx);
+		expect(
+			notes.some((note) => note.includes("models.profiles was removed")),
+		).toBe(true);
+	});
+
 	it("falls back to the notify summary without a select UI", async () => {
 		const notes: string[] = [];
 		const ctx = {

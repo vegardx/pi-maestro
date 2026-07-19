@@ -122,6 +122,7 @@ describe("multi-model ollama profile", () => {
 			thinkingLevelMap: {},
 		};
 		expect(await modelFor("worker", other)).toBe("ollama/gpt-oss:20b");
+		// (the preset target is the gemma planner seat, not gpt-oss)
 	});
 
 	it("maps every MODEL_ROLE — a new role must not silently fall through to session", () => {
@@ -147,9 +148,9 @@ describe("multi-model ollama profile", () => {
 			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
 		);
 		// fast tier
-		expect(await modelFor("classifier")).toBe("ollama/gemma4:e4b-mlx");
-		expect(await modelFor("plan-summarizer")).toBe("ollama/gemma4:e4b-mlx");
-		expect(await modelFor("general")).toBe("ollama/gemma4:e4b-mlx");
+		expect(await modelFor("classifier")).toBe("ollama/gpt-oss:20b");
+		expect(await modelFor("plan-summarizer")).toBe("ollama/gpt-oss:20b");
+		expect(await modelFor("general")).toBe("ollama/gpt-oss:20b");
 		// review pool — first concrete option: a DIFFERENT family from workers
 		expect(await modelFor("correctness-review")).toBe("ollama/gpt-oss:20b");
 		expect(await modelFor("adversarial-review")).toBe("ollama/gpt-oss:20b");
@@ -157,38 +158,29 @@ describe("multi-model ollama profile", () => {
 
 	it("falls through to the next option when the first is not served", async () => {
 		// The live availability-fallback (ollama stop <model>), deterministically:
-		// normal → MoE coder → session; fast → gemma4:e4b-mlx → session.
+		// normal → MoE coder → session; fast → gpt-oss → session.
 		expect(
 			await modelFor(
 				"worker",
 				fakeCtx({ unavailable: ["ollama/qwen3.6:35b-a3b-coding-mxfp8"] }),
 			),
-		).toBe("ollama/qwen3.5:27b-mlx");
+		).toBe("ollama/gemma4:31b-mlx");
 		expect(
 			await modelFor(
 				"classifier",
-				fakeCtx({ unavailable: ["ollama/gemma4:e4b-mlx"] }),
+				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
 			),
-		).toBe("ollama/qwen3.5:27b-mlx");
+		).toBe("ollama/gemma4:31b-mlx");
 	});
 
 	it("walks the review pool by availability, then falls back to the session model", async () => {
-		// gpt-oss unserved → gemma4:31b-mlx takes over.
+		// gpt-oss unserved → the session sentinel (sorted to the back)
+		// resolves to the gemma planner seat — the cross-family last resort.
 		expect(
 			await modelFor(
 				"correctness-review",
 				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
 			),
 		).toBe("ollama/gemma4:31b-mlx");
-		// Every concrete pool model unserved → the session sentinel (sorted to
-		// the back) resolves to the planner seat — the last resort.
-		expect(
-			await modelFor(
-				"correctness-review",
-				fakeCtx({
-					unavailable: ["ollama/gpt-oss:20b", "ollama/gemma4:31b-mlx"],
-				}),
-			),
-		).toBe("ollama/qwen3.5:27b-mlx");
 	});
 });

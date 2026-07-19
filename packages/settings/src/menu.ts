@@ -24,6 +24,7 @@ import {
 	readDomainSnapshot,
 	writeDomainValue,
 } from "./domain.js";
+import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 
 export function getSessionSetting(extension: string, key: string) {
 	return getSessionSettingOverride(extension, key);
@@ -188,13 +189,24 @@ const NEW_SET = "+ New model set…";
 const DELETE_MARK = "✕ Delete";
 
 /** Toggle-select a subset of thinking levels; undefined = no limit. */
-async function pickEffortLimits(ui: Dialogs): Promise<string[] | undefined> {
+async function pickEffortLimits(
+	ctx: ExtensionContext,
+	ui: Dialogs,
+): Promise<string[] | undefined> {
 	const scope = await ui.select("Limit the allowed levels for this option?", [
 		"All the model supports",
 		"Pick levels…",
 	]);
 	if (!scope || scope.startsWith("All")) return undefined;
 	const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+	if (supportsMultiSelect(ctx)) {
+		const chosen = await multiSelect(
+			ctx,
+			"Allowed levels for this option",
+			levels.map((level) => ({ id: level, label: level, checked: false })),
+		);
+		return chosen?.length ? chosen : undefined;
+	}
 	const chosen = new Set<string>();
 	while (true) {
 		const picked = await ui.select(
@@ -278,7 +290,8 @@ async function buildOption(
 	const effortPick = await ui.select("Effort", EFFORTS);
 	if (!effortPick) return undefined;
 	const effort = effortPick === AUTO_EFFORT ? "auto" : effortPick;
-	const efforts = effort === "auto" ? await pickEffortLimits(ui) : undefined;
+	const efforts =
+		effort === "auto" ? await pickEffortLimits(ctx, ui) : undefined;
 	const summary = (
 		await ui.input("Summary — what should the planner know about this option?")
 	)?.trim();
@@ -724,6 +737,33 @@ async function editResidencyMembers(
 		if (!providerPick) return;
 		const provider = providerPick.split(" ")[0];
 		const ids = providers.get(provider) ?? [];
+		// Preferred surface: the checkbox overlay — space toggles, enter
+		// applies the whole provider selection as ONE write, cursor stays put.
+		if (supportsMultiSelect(ctx)) {
+			const chosen = await multiSelect(
+				ctx,
+				`${name} · ${provider}`,
+				ids.map((id) => ({
+					id: `${provider}/${id}`,
+					label: id,
+					checked: members.has(`${provider}/${id}`),
+				})),
+			);
+			if (chosen === undefined) continue; // cancelled — back to providers
+			const next = new Set(
+				[...members].filter((ref) => !ref.startsWith(`${provider}/`)),
+			);
+			for (const ref of chosen) next.add(ref);
+			if (next.size === 0) {
+				ctx.ui.notify(
+					"A residency list cannot be empty — delete the list instead.",
+					"warning",
+				);
+				continue;
+			}
+			write(ctx, `models.residency.lists.${name}`, [...next].sort());
+			continue;
+		}
 		while (true) {
 			const current = new Set(
 				safeModelsConfig(ctx)?.residency?.lists?.[name] ?? [],

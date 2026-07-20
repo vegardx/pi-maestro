@@ -72,11 +72,51 @@ Three spawnable types; callers are harness-owned.
   command-auditor, watcher. Their prompts ship with releases, are tested with
   the harness suite, and are tuned only through policy rows (tier, enabled,
   scope). They are not spawnable from plans — `agent: caller` is
-  unrepresentable. Watcher is today's watchdogs made configurable and needs a
-  lifetime field (one-shot vs until-condition).
+  unrepresentable.
 - The **seat is the root agent**: a worker running the session model, its
   toolset set by the mode. The tree is uniform from the top; "depth" is just
   distance from the root.
+
+### The watcher (settled 2026-07-20)
+
+A **tool** (`watch`) any agent can invoke with a prose goal — "watch PR
+#271's CI; raise when it completes or fails" — not supervision OF agents.
+The watcher is goal-driven eyes on anything external; the caller keeps
+working and the event comes to it.
+
+- **Loop**: compile once (LLM, skills-guided) → a read-only **probe**
+  command + a deterministic **canonicalizer** (a small TypeScript transform
+  of probe output → canonical state string). The harness ticks the probe on
+  the cadence with NO model involved; a canonical-state change or probe
+  error wakes the watcher to judge: goal-relevant → **raise**; noise →
+  **refine the canonicalizer**; probe broken → repair it (or raise the
+  failure). The LLM pays at setup and per state change, never per tick, and
+  its involvement trends toward zero as the filter improves.
+- **Self-refinement guards**: every refinement is logged with its rationale
+  on the watch record; refinements are capped (a repeatedly-confused watcher
+  raises instead of narrowing further); refinements are replay-checked
+  against recorded prior outputs (old states must canonicalize identically);
+  expiry raises include the refinement history so a wrongly-ignored signal
+  is discoverable, never lost. Silence is never success: probe failure and
+  expiry always raise.
+- **TypeScript + CLIs** (caller-prompt discipline): prefer real CLIs with
+  structured output (`--json`) projected by typed TS canonicalizers; shell
+  pipelines as a last resort. Refinements stay testable and auditable.
+- **Skills carry the competence**: `watch-github` etc. ship known-good probe
+  recipes plus the domain's known noise (flapping fields, timestamps).
+  Adding a watchable domain is writing a skill, not harness code.
+- **Privileges: read-only, hard line.** Probes pass the bash policy at the
+  reviewer posture; "fix" always means the watcher's own probe/canonicalizer,
+  never the watched system.
+- **Lifetime**: `one-shot` (raise on first condition-met and end — also the
+  degenerate "check this once now" with no loop) vs `until-condition` (raise
+  on each state change until the condition closes it). Deterministic caps
+  regardless: max duration, poll-interval floor, max raises, max
+  refinements.
+- **Raises go to the creator** (v1); watches are process-local to their
+  owning session (a worker's watch raises into the worker's own session).
+  Watches are runs: HUD-visible, cancellable, auto-reaped when the owner
+  settles. Tuned via the `tool:watch` policy row (tier fast).
 
 ### Personas
 

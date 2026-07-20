@@ -23,6 +23,7 @@ export {
 	originUrl,
 	refExists,
 	repoNameFromPath,
+	revParse,
 	statusPorcelain,
 	workingTreeClean,
 } from "./repo.js";
@@ -51,6 +52,7 @@ export {
 	type WorktreeAddResult,
 	type WorktreeEntry,
 	type WorktreeRemoveResult,
+	worktreeBaseSha,
 	worktreePathFor,
 	worktreesRoot,
 } from "./worktree.js";

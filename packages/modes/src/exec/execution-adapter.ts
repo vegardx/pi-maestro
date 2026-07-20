@@ -26,6 +26,7 @@ import {
 	headSha,
 	runCommand,
 	workingTreeClean,
+	worktreeBaseSha,
 } from "@vegardx/pi-git";
 import { getModelMeta } from "@vegardx/pi-models";
 import {
@@ -39,6 +40,7 @@ import {
 	type QuestionsMessage,
 } from "@vegardx/pi-rpc";
 import * as realTmux from "@vegardx/pi-tmux";
+import { deliverableBranch } from "../agent-lifecycle.js";
 import { agentName } from "../agent-names.js";
 import {
 	DeliverableExecutor,
@@ -774,7 +776,24 @@ export class ExecutionAdapter {
 			},
 
 			createWorktree: async (worktreeOpts) => {
-				const baseSha = headSha(worktreeOpts.repoPath);
+				// The delivery base is the tip of the branch the worktree is created
+				// FROM — resolved like provisioning resolves it. The main checkout's
+				// HEAD is only correct when it happens to sit on that base: stacked
+				// deliverables base on a sibling's feat branch, and the user's
+				// checkout moves freely. Re-provisioning (maestro restart) must also
+				// never overwrite the immutable base recorded at creation.
+				const recorded = findDeliverable(
+					this.engine.get(),
+					worktreeOpts.deliverableId,
+				)?.baseSha;
+				const baseSha =
+					recorded ??
+					worktreeBaseSha(
+						worktreeOpts.repoPath,
+						deliverableBranch(worktreeOpts.deliverableId),
+						worktreeOpts.baseBranch,
+					) ??
+					headSha(worktreeOpts.repoPath);
 				if (!baseSha) {
 					throw new Error(
 						`cannot capture delivery base before provisioning ${worktreeOpts.deliverableId}`,
@@ -793,7 +812,11 @@ export class ExecutionAdapter {
 					);
 					this.provisionedWorktrees.add(path);
 				}
-				this.engine.updateDeliverable(worktreeOpts.deliverableId, { baseSha });
+				if (recorded !== baseSha) {
+					this.engine.updateDeliverable(worktreeOpts.deliverableId, {
+						baseSha,
+					});
+				}
 				return path;
 			},
 

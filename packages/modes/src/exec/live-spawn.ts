@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PersonasCapabilityV1 } from "@vegardx/pi-contracts";
+import { type BashActor, renderBashRuleset } from "../bash-policy.js";
 import { AGENT_OPERATIONS_BRIEF } from "../plan/agent-operations.js";
 import type { PlanEngineV2 } from "../plan/engine.js";
 import type { NodeExecutorDeps, SpawnNodeOpts } from "../plan/node-executor.js";
@@ -148,12 +149,14 @@ export function createLiveSpawnAgent(
 					? "# Research Since the Knowledge Base Froze\n" +
 						researchRefs.map((r) => `- ${r.ref}: ${r.question}`).join("\n")
 					: undefined;
-			// Persona head → harness operations brief → the assignment. The
-			// brief is unconditional: protocol mechanics (task ids, lifecycle
-			// toggles, handoff) are pushed, never left to inference.
+			// Persona head → harness operations brief → the enforced shell
+			// ruleset (same rows the bash fastpath enforces — one source of
+			// truth) → the assignment. All pushed, never left to inference.
+			const bashActor: BashActor =
+				spawn.agent === "worker" ? "worker" : "reviewer";
 			const seed = [
 				personaSeedHead(persona, spawn.skills) +
-					`${AGENT_OPERATIONS_BRIEF}\n\n---\n\n` +
+					`${AGENT_OPERATIONS_BRIEF}\n\n${renderBashRuleset(bashActor)}\n\n---\n\n` +
 					spawn.seed,
 				commitNote,
 				setupNote,

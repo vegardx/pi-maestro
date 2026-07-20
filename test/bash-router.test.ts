@@ -2,9 +2,11 @@ import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { BashCorpusCall } from "../packages/modes/src/bash-corpus.js";
 import {
+	BASH_RULESET,
 	classifyBashEffects,
 	decideBashPolicy,
 	dedicatedToolSuggestion,
+	renderBashRuleset,
 } from "../packages/modes/src/bash-policy.js";
 import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.js";
 import {
@@ -560,5 +562,103 @@ describe("bash coaching and routing policy", () => {
 		const report = auditBashShadowCorpus(calls, guided);
 		expect(report.unexplainedProtectedHostWrites).toEqual([]);
 		expect(report.unknown).toContain("plan-bypass");
+	});
+});
+
+describe("host git-config protection (Phase 4 rule 1)", () => {
+	it("classifies global/system/file git config as host-config-write", () => {
+		for (const command of [
+			'git config --global user.name "X"',
+			"git config --system core.editor vim",
+			"git config --file /Users/dev/.gitconfig user.email x@y",
+			"git config --file=~/.config/git/config user.name X",
+		]) {
+			expect(
+				classifyBashEffects(analyzeShellProgram(command)).has(
+					"host-config-write",
+				),
+				command,
+			).toBe(true);
+		}
+	});
+
+	it("repo-local git config stays ordinary worktree state", () => {
+		const effects = classifyBashEffects(
+			analyzeShellProgram('git config user.name "Worker"'),
+		);
+		expect(effects.has("host-config-write")).toBe(false);
+		expect(effects.has("local-git")).toBe(true);
+	});
+
+	it("non-git writes addressing the global config files are caught", () => {
+		for (const command of [
+			"echo '[user]' > ~/.gitconfig",
+			"sed -i '' 's/x/y/' /Users/dev/.config/git/config",
+		]) {
+			expect(
+				classifyBashEffects(analyzeShellProgram(command)).has(
+					"host-config-write",
+				),
+				command,
+			).toBe(true);
+		}
+		// Pure reads stay reads.
+		expect(
+			classifyBashEffects(analyzeShellProgram("cat ~/.gitconfig")).has(
+				"host-config-write",
+			),
+		).toBe(false);
+	});
+
+	it("denies agents and confirms the maestro (invariant host-config)", () => {
+		for (const actor of ["worker", "reviewer"] as const) {
+			const decision = decideBashPolicy({
+				command: 'git config --global user.name "Maestro Agent"',
+				mode: "auto",
+				actor,
+				policy: guided,
+			});
+			expect(decision.route, actor).toBe("deny");
+			expect(decision.invariant).toBe("host-config");
+			expect(decision.reason).toContain("REPO-LOCALLY");
+		}
+		const maestro = decideBashPolicy({
+			command: 'git config --global user.name "Me"',
+			mode: "auto",
+			actor: "maestro",
+			policy: guided,
+		});
+		expect(maestro.route).toBe("confirm");
+		expect(maestro.invariant).toBe("host-config");
+	});
+});
+
+describe("the visible bash ruleset (one source of truth)", () => {
+	it("every row's id names an enforced invariant or guidance mechanism", () => {
+		const enforced = new Set([
+			"delivery",
+			"host-config",
+			"read-only",
+			"worker-escalation",
+			"tool-redirect",
+		]);
+		for (const row of BASH_RULESET) {
+			expect(enforced.has(row.id), row.id).toBe(true);
+			expect(row.applies.length).toBeGreaterThan(0);
+			expect(row.rule.length).toBeGreaterThan(20);
+			expect(row.why.length).toBeGreaterThan(10);
+		}
+	});
+
+	it("renders actor-scoped rules for seeds", () => {
+		const worker = renderBashRuleset("worker");
+		expect(worker).toContain("Shell rules (enforced by the harness)");
+		expect(worker).toContain("REPO-LOCALLY");
+		expect(worker).toContain("remote-write, privileged, or destructive");
+		expect(worker).not.toContain("You are read-only");
+
+		const reviewer = renderBashRuleset("reviewer");
+		expect(reviewer).toContain("You are read-only");
+		expect(reviewer).not.toContain("remote-write, privileged, or destructive");
 	});
 });

@@ -18,6 +18,7 @@ export type BashEffect =
 	| "remote-write"
 	| "privileged"
 	| "destructive"
+	| "host-config-write"
 	| "unknown";
 export type BashRoute =
 	| "direct"
@@ -45,7 +46,11 @@ export interface BashPolicyDecision {
 	readonly confidence: "low" | "medium" | "high";
 	readonly guidance: BashGuidance;
 	readonly suggestedTool?: string;
-	readonly invariant?: "delivery" | "worker-escalation" | "read-only";
+	readonly invariant?:
+		| "delivery"
+		| "worker-escalation"
+		| "read-only"
+		| "host-config";
 }
 
 const HOST_READ = new Set([
@@ -307,6 +312,17 @@ export function classifyBashEffects(
 			effects.add("privileged");
 			effects.add("remote-write");
 		} else effects.add("unknown");
+
+		// Cross-cutting: any non-git touch of ~/.gitconfig or ~/.config/git
+		// with write-ish effects is a host-config write — the developer's
+		// REAL machine config (agents share HOME). `git config --global` is
+		// classified inside classifyGit; this catches echo/sed/tee paths.
+		if (
+			referencesHostGitConfig(command.args) &&
+			hasAny(effects, ["workspace-write", "destructive", "unknown"])
+		) {
+			effects.add("host-config-write");
+		}
 	}
 	return effects;
 }
@@ -371,6 +387,29 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 				"Read-only reviewer cannot run commands with writes, repository code, or uncertain effects",
 			confidence: "high",
 			invariant: "read-only",
+		};
+	}
+	if (effects.has("host-config-write")) {
+		if (input.actor !== "maestro") {
+			return {
+				...base,
+				route: "deny",
+				reason:
+					"Global git-config writes land in the developer's real HOME " +
+					"(agents share it). Set identity or options REPO-LOCALLY " +
+					"(`git config user.name ...` in your worktree) or ask.",
+				confidence: "high",
+				invariant: "host-config",
+			};
+		}
+		return {
+			...base,
+			route: "confirm",
+			reason:
+				"This writes the machine-global git config; confirm it is an " +
+				"explicit operator request",
+			confidence: "high",
+			invariant: "host-config",
 		};
 	}
 	if (
@@ -540,6 +579,27 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 		effects.add("unknown");
 		return;
 	}
+	if (subcommand === "config") {
+		// Global/system/file-addressed config writes land in the DEVELOPER'S
+		// real HOME (spawned agents share it) — the incident that motivated
+		// this rule overwrote the machine-global git identity. Repo-local
+		// config is ordinary worktree state.
+		if (
+			args.some(
+				(arg) =>
+					arg === "--global" ||
+					arg === "--system" ||
+					arg === "--file" ||
+					arg.startsWith("--file="),
+			)
+		) {
+			effects.add("host-config-write");
+		} else {
+			effects.add("local-git");
+			effects.add("workspace-write");
+		}
+		return;
+	}
 	if (GIT_DELIVERY.has(subcommand)) effects.add("delivery");
 	else if (GIT_READ.has(subcommand)) {
 		effects.add("workspace-read");
@@ -554,6 +614,19 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 		)
 			effects.add("destructive");
 	} else effects.add("unknown");
+}
+
+/** Args that address the developer's real git config (shared HOME). */
+function referencesHostGitConfig(args: readonly string[]): boolean {
+	return args.some((arg) => {
+		const value = arg.replace(/^['"]|['"]$/g, "");
+		return (
+			value.endsWith("/.gitconfig") ||
+			value === "~/.gitconfig" ||
+			value.includes("/.config/git/") ||
+			value.endsWith("/.config/git")
+		);
+	});
 }
 
 function gitSubcommand(args: readonly string[]): string | undefined {
@@ -811,4 +884,83 @@ function only(
 ): boolean {
 	const set = new Set(allowed);
 	return effects.size > 0 && [...effects].every((effect) => set.has(effect));
+}
+
+// ─── The visible ruleset (one source of truth, rendered into seeds) ──────────
+//
+// Vegard's Phase-4 rule (2026-07-20): the deny/allow table is DATA — the same
+// rows the deterministic fastpath enforces are rendered into every agent's
+// seed as its guiding ruleset, so agents self-avoid instead of discovering
+// walls by collision. Each row's `id` names the enforcement invariant (or
+// guidance mechanism) that backs it; a row without an enforcer is a lie and
+// the ruleset test rejects it.
+
+export interface BashRulesetRow {
+	/** Names the enforcing invariant/mechanism in decideBashPolicy. */
+	readonly id:
+		| "delivery"
+		| "host-config"
+		| "read-only"
+		| "worker-escalation"
+		| "tool-redirect";
+	readonly applies: readonly BashActor[];
+	/** Imperative guidance, agent-facing. */
+	readonly rule: string;
+	/** One-line rationale (why the wall exists). */
+	readonly why: string;
+}
+
+export const BASH_RULESET: readonly BashRulesetRow[] = [
+	{
+		id: "delivery",
+		applies: ["worker", "reviewer"],
+		rule:
+			"Never run `git commit`, `git push`, or `gh pr ...` from bash — " +
+			"commit through the `commit` tool; pushing and PRs are the " +
+			"maestro's lifecycle.",
+		why: "Delivery is harness-owned so every shipped change is audited.",
+	},
+	{
+		id: "host-config",
+		applies: ["maestro", "worker", "reviewer"],
+		rule:
+			"Never write machine-global git config: no `git config --global` " +
+			"or `--system` or `--file`, no edits to `~/.gitconfig` or " +
+			"`~/.config/git/*`. Need an identity or option? Set it " +
+			"REPO-LOCALLY (`git config user.name ...` inside your worktree).",
+		why: "Agents share the developer's real HOME; a global write pollutes their machine.",
+	},
+	{
+		id: "read-only",
+		applies: ["reviewer"],
+		rule:
+			"You are read-only: no file writes, no repository-code execution, " +
+			"no git mutations. Report findings instead of fixing.",
+		why: "Review evidence must come from the work as-is.",
+	},
+	{
+		id: "worker-escalation",
+		applies: ["worker"],
+		rule:
+			"No remote-write, privileged, or destructive commands (installs " +
+			"outside the worktree, sudo, rm -rf outside your tree, network " +
+			"mutations). Ask your supervisor instead.",
+		why: "Consequential effects need an accountable approver.",
+	},
+	{
+		id: "tool-redirect",
+		applies: ["maestro", "worker", "reviewer"],
+		rule:
+			"Prefer the dedicated tool when one exists (read/grep/find/task/" +
+			"commit); trivially-equivalent bash may be denied with a pointer.",
+		why: "Dedicated tools carry policy and observability bash cannot.",
+	},
+];
+
+/** Render the enforced shell ruleset for one actor (seed material). */
+export function renderBashRuleset(actor: BashActor): string {
+	const rows = BASH_RULESET.filter((row) => row.applies.includes(actor));
+	if (rows.length === 0) return "";
+	const lines = rows.map((row) => `- ${row.rule}\n  (${row.why})`);
+	return `## Shell rules (enforced by the harness)\n\n${lines.join("\n")}`;
 }

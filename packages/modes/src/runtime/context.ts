@@ -142,6 +142,9 @@ export interface RuntimeContext {
 	invalidateFooter: (() => void) | undefined;
 	/** The live HUD handle (mounted at session_start in TUI sessions). */
 	hud: import("./hud-wiring.js").HudHandle | undefined;
+	/** The session's WatchManager (runtime/index.ts wires it) — watches are
+	 *  runs: HUD-visible and cancellable, list + cancel only. */
+	watches: import("../watcher.js").WatchManager | undefined;
 	// Transient: a post-handoff arrival delivery is idle-polling (dedupes the
 	// sink's schedule against session_start's).
 	handoffArrivalScheduled?: boolean;
@@ -374,6 +377,7 @@ export function createRuntimeContext(
 		agentSeedContent: undefined,
 		invalidateFooter: undefined,
 		hud: undefined,
+		watches: undefined,
 		compactionInFlight: false,
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,

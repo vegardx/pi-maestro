@@ -91,4 +91,6 @@ Stable model policy keys include worker, classifier, plan/compact summarizer, ve
 /maestro validate
 ```
 
-`explain` reports the active preset/set, candidates, and exact selected option. Domain edits are JSON and are validated before atomic settings replacement. The old `models.profiles` key and broad role-pool configuration are unsupported; load fails with a cutover error rather than translating them.
+`explain` reports the active preset/set, candidates, and exact selected option. Domain edits are JSON and are validated before atomic settings replacement. The pre-cutover `models.profiles` format and broad role-pool configuration are unsupported; load fails with a cutover error rather than translating them. (`models.profiles` is reclaimed by v2 as the seat→catalog profile binding.)
+
+Interactive editing of these v1 keys is retired: the `/maestro` menu edits the v2 vocabulary (`models.catalogs`, `models.profiles`, `models.agents`, `modes.policies`, residency) and the v1→v2 migration derives catalogs/profiles from presets/model-sets automatically. The v1 keys stay scriptable here because fallback resolution still reads them.

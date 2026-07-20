@@ -17,6 +17,7 @@ import {
 	planViewTasks,
 	projectPlanView,
 	type RunRecord,
+	type WatchRecord,
 } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
 import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
@@ -24,7 +25,7 @@ import type { ExecutionAgentSnapshot } from "../exec/index.js";
 import { findNodeV2 } from "../plan/schema.js";
 import type { PendingQuestion } from "../question-queue.js";
 import { handleViewCommand } from "./agent-commands.js";
-import { listAgentTargets } from "./agent-targets.js";
+import { clipWatchGoal, listAgentTargets } from "./agent-targets.js";
 import type { RuntimeContext } from "./context.js";
 import {
 	type HudAgentCapabilities,
@@ -104,9 +105,27 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 				returnToInput();
 				ctx.ui.setEditorText(prefix);
 			},
-			// i on an agent row: confirm, then abort that agent's turn/run.
+			// i on an agent row: confirm, then abort that agent's turn/run. On a
+			// watch row it cancels the watch (WatchManager.cancel) — a watch has
+			// no turn to abort, only a loop to end.
 			interrupt: (targetId) => {
 				void (async () => {
+					if (targetId.startsWith("watch:")) {
+						const watchId = targetId.slice("watch:".length);
+						const sure = await ctx.ui.confirm(
+							"Cancel watch",
+							`Cancel watch ${watchId}? Its probe stops; the watched system is untouched.`,
+						);
+						if (!sure) return;
+						const cancelled =
+							rt.watches?.cancel(watchId, "cancelled from the HUD") ?? false;
+						ctx.ui.notify(
+							`${targetId}: ${cancelled ? "cancelled" : "already settled"}`,
+							"info",
+						);
+						rt.hud?.refresh();
+						return;
+					}
 					const yes = await ctx.ui.confirm(
 						"Interrupt current turn",
 						`Interrupt ${targetId}? The persistent session survives; only the current turn/run is aborted.`,
@@ -343,9 +362,16 @@ export function buildHudSnapshot(rt: RuntimeContext): HudSnapshot {
 		storedRuns = [];
 	}
 	const allRuns = [...storedRuns, ...projectedRuns];
-	const targets = listAgentTargets({ execution: rt.execution, subagents });
+	const targets = listAgentTargets({
+		execution: rt.execution,
+		subagents,
+		watches: rt.watches,
+	});
 	return {
-		agents: buildAgentNodes(snap, allRuns, Date.now(), targets),
+		agents: [
+			...buildAgentNodes(snap, allRuns, Date.now(), targets),
+			...buildWatchNodes(rt.watches?.list() ?? [], Date.now()),
+		],
 		plan: buildPlanView(rt.engine?.get(), snap),
 		questions: buildQuestionRows(
 			rt.maestro.capabilities.get(CAPABILITIES.ask)?.pending() ?? [],
@@ -650,6 +676,54 @@ export function buildAgentNodes(
 		nodes.push({ ...node, children });
 	}
 	return nodes;
+}
+
+// ─── Watch rows ──────────────────────────────────────────────────────────────
+
+/** Terminal watches stay visible as long as terminal runs do. */
+const WATCH_STATUS: Record<WatchRecord["status"], HudStatus> = {
+	active: "running",
+	triggered: "done",
+	expired: "stopped",
+	failed: "failed",
+	cancelled: "stopped",
+};
+
+/**
+ * Watches on the Agents tab: rows "watch:<id>" with the status word, the
+ * goal (clipped), the probe interval, and the refinement count. List +
+ * cancel only — no attach, no steer; `i` cancels via WatchManager.cancel.
+ * Terminal watches age out on the same clock as terminal runs.
+ */
+export function buildWatchNodes(
+	watches: readonly WatchRecord[],
+	now: number,
+): HudAgentNode[] {
+	return watches
+		.filter((record) => {
+			if (record.status === "active") return true;
+			const endedAt = Date.parse(record.endedAt ?? record.updatedAt);
+			return now - endedAt <= RECENT_TERMINAL_MS;
+		})
+		.map((record) => {
+			const refinements = record.refinements.length;
+			return {
+				key: `watch:${record.id}`,
+				label: `watch · ${clipWatchGoal(record.goal)}`,
+				status: WATCH_STATUS[record.status],
+				startedAt: Date.parse(record.createdAt),
+				...(record.endedAt ? { completedAt: Date.parse(record.endedAt) } : {}),
+				note: `${record.status} · probe ${Math.round(record.probe.intervalMs / 1000)}s · ${refinements} refinement${refinements === 1 ? "" : "s"}`,
+				targetId: `watch:${record.id}`,
+				capabilities: {
+					view: false,
+					steer: false,
+					interrupt: record.status === "active",
+					kill: false,
+				},
+				children: [],
+			};
+		});
 }
 
 /**

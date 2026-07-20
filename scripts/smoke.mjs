@@ -29,9 +29,11 @@ const maestroMenuSource = readFileSync(
 	join(ROOT, "packages/settings/src/menu.ts"),
 	"utf8",
 );
-if (!maestroMenuSource.includes("readDomainSnapshot")) {
+// The v1 preset/model-set screens are retired; the menu's remaining writes
+// must still flow through the validated domain path, never raw file pokes.
+if (!maestroMenuSource.includes("writeDomainValue")) {
 	console.error(
-		"  ✗ /maestro no longer reads the exact agent configuration graph",
+		"  ✗ /maestro no longer writes through the validated domain path",
 	);
 	process.exit(1);
 }

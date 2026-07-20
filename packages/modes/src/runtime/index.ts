@@ -153,6 +153,9 @@ export function createModesRuntime(
 		},
 	});
 	pi.registerTool(createWatchTool(() => watchManager));
+	// Watches are runs: expose the manager to the HUD wiring / agent target
+	// registry (list + cancel only — no attach, no steer).
+	rt.watches = watchManager;
 	pi.on("session_shutdown", () => {
 		watchManager.destroy();
 	});

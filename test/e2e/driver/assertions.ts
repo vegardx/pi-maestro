@@ -105,7 +105,12 @@ function checkDeliverable(
 	const match = nodes.find((node) =>
 		node.title.toLowerCase().includes(exp.titleMatch.toLowerCase()),
 	);
-	const missingFiles = exp.files.filter((f) => !tracked.has(f));
+	// A file spec may list explicit alternates ("src/x.ts|src/x.js") — the
+	// scenario cares that the MODULE shipped, not which extension the agents
+	// judged right for the sandbox repo's conventions.
+	const missingFiles = exp.files.filter(
+		(f) => !f.split("|").some((alternative) => tracked.has(alternative)),
+	);
 	return {
 		titleMatch: exp.titleMatch,
 		matched: match !== undefined,

@@ -166,7 +166,7 @@ function profileJson(profile: {
 
 // ─── Read helpers ────────────────────────────────────────────────────────────
 
-function safeV2(ctx: ExtensionContext): V2ModelsConfig | undefined {
+export function safeV2(ctx: ExtensionContext): V2ModelsConfig | undefined {
 	try {
 		return readV2Config(ctx.cwd);
 	} catch (cause) {
@@ -185,11 +185,11 @@ function catalogEntryCount(
 }
 
 /** The availability word for one entry fact — plain words, never glyphs. */
-function availabilityWord(fact: V2CandidateFact): string {
+export function availabilityWord(fact: V2CandidateFact): string {
 	return fact.available ? "available" : (fact.reason ?? "unavailable");
 }
 
-async function tierFacts(
+export async function tierFacts(
 	ctx: ExtensionContext,
 	entries: readonly CatalogEntry[],
 ): Promise<V2CandidateFact[]> {

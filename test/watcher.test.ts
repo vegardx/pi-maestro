@@ -283,6 +283,7 @@ describe("verdict parsing", () => {
 
 describe("the real canonicalizer child (node --experimental-strip-types)", () => {
 	it("runs an LLM-shaped TS program: stdin in, canonical state out", async () => {
+		// biome-ignore-start lint/suspicious/noTemplateCurlyInString: the template literal belongs to the CHILD program under test
 		const source = [
 			"const chunks: Buffer[] = [];",
 			"process.stdin.on('data', (c: Buffer) => chunks.push(c));",
@@ -291,6 +292,7 @@ describe("the real canonicalizer child (node --experimental-strip-types)", () =>
 			"  console.log(`${parsed.status}:${parsed.conclusion ?? 'none'}`);",
 			"});",
 		].join("\n");
+		// biome-ignore-end lint/suspicious/noTemplateCurlyInString: child program ends
 		const result = await defaultCanonicalizerRunner(
 			source,
 			'{"status":"completed","conclusion":"success","updatedAt":"2026-07-20T20:00:00Z"}',

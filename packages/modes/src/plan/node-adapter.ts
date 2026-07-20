@@ -54,6 +54,7 @@ export interface NodeAdapterOptions {
 	readonly defaultBranch?: string;
 	readonly dirtyHoldMaxSteers?: number;
 	readonly dirtyHoldResteerMs?: number;
+	readonly pollIntervalMs?: number;
 	/** Injectable spawn seam — tests/live wiring override the tmux default. */
 	readonly spawnAgent?: NodeExecutorDeps["spawnAgent"];
 	readonly createWorktree?: NodeExecutorDeps["createWorktree"];
@@ -67,6 +68,7 @@ export class NodeExecutionAdapter {
 	private readonly router: RpcRouter;
 	private started = false;
 	private tickChain: Promise<unknown> = Promise.resolve();
+	private pollTimer: ReturnType<typeof setInterval> | undefined;
 
 	private readonly idleCount = new Map<string, number>();
 	private readonly stuckSteerSent = new Set<string>();
@@ -140,13 +142,51 @@ export class NodeExecutionAdapter {
 	async start(): Promise<void> {
 		mkdirSync(this.opts.planDir, { recursive: true });
 		await this.rpcServer.listen(this.opts.socketPath);
+		// The 5s poll (verbatim): re-feeds idle observations — a finished agent
+		// reports idle exactly once, so sustained-idle gates (reviewer
+		// completion, zero-task workers, the dirty-hold cadence) are re-fed
+		// here — and checks tmux liveness: a vanished session while "working"
+		// is a crashed agent, failed visibly rather than waited on forever.
+		// Never let a rejection escape the interval — it would crash the maestro.
+		this.pollTimer = setInterval(() => {
+			this.pollSessions().catch((err) => {
+				this.logEvent("error", {
+					scope: "pollSessions",
+					message: err instanceof Error ? err.message : String(err),
+				});
+			});
+		}, this.opts.pollIntervalMs ?? 5000);
 		this.started = true;
 	}
 
 	async destroy(): Promise<void> {
+		if (this.pollTimer) clearInterval(this.pollTimer);
 		this.router.dispose();
 		await this.rpcServer.close().catch(() => {});
 		this.started = false;
+	}
+
+	private async pollSessions(): Promise<void> {
+		if (!this.started) return;
+		for (const [nodeId, run] of this.executor.getStates()) {
+			if (run.status !== "working" || !run.sessionId) continue;
+			if (this.lastRpcStatus.get(nodeId) === "idle") {
+				this.evaluateIdle(nodeId);
+				continue;
+			}
+			const alive = await this.opts.tmux
+				.hasSession(run.sessionId)
+				.catch(() => true); // a tmux hiccup must not fail agents
+			if (!alive && this.connectionGenerations.get(nodeId) === undefined) {
+				// Session gone AND no live RPC connection: the process crashed.
+				this.executor.markAgentFailed(
+					nodeId,
+					"agent session vanished (process crashed or was killed externally)",
+				);
+				this.logEvent("agent-vanished", { agent: nodeId });
+				this.opts.onPlanChanged();
+			}
+		}
 	}
 
 	/** Serialized tick (verbatim mutex shape): never two ticks concurrently. */

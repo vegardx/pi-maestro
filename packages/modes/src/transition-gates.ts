@@ -148,13 +148,15 @@ export class TransitionGateCoordinator {
 						.catch(() => undefined)
 				: undefined;
 			try {
-				const run = await agents.run({
-					kind: "plan-review",
+				const request = (withOverride: boolean) => ({
+					kind: "plan-review" as const,
 					prompt: definition.prompt(engine.get(), validations),
 					cwd: engine.get().repoPath,
 					displayName: "plan-reviewer",
-					...(override?.model ? { model: override.model } : {}),
-					...(override?.effort ? { effort: override.effort } : {}),
+					...(withOverride && override?.model ? { model: override.model } : {}),
+					...(withOverride && override?.effort
+						? { effort: override.effort }
+						: {}),
 					meta: {
 						gateId: id,
 						edge: `${from}->${to}`,
@@ -169,6 +171,22 @@ export class TransitionGateCoordinator {
 							: {}),
 					},
 				});
+				// The row's tier override must never make the gate UNRUNNABLE:
+				// the agent runner validates explicit models against its own
+				// authored options and may reject the resolved tier model
+				// (seen live: "No exact plan-review option matches ..."). Retry
+				// once without the override — visibly degraded, never skipped.
+				let run: Awaited<ReturnType<typeof agents.run>>;
+				try {
+					run = await agents.run(request(true));
+				} catch (overrideError) {
+					if (!override?.model) throw overrideError;
+					ctx.ui.notify(
+						`Plan-review tier override (${override.model}) was rejected by the agent runner; running with its own selection instead.`,
+						"warning",
+					);
+					run = await agents.run(request(false));
+				}
 				state = {
 					...state,
 					assignment: run.assignment,

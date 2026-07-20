@@ -245,7 +245,7 @@ export function treeDepth(plan: Pick<PlanV2, "nodes">): number {
  *  the HUD, cherry-picked by the parent, and reaped — a candidate must NEVER
  *  ship its own PR (ensemble invariant: zero candidate PRs, one parent PR). */
 export function isCandidateBranch(branch: string | undefined): boolean {
-	return branch !== undefined && branch.startsWith("cand/");
+	return branch?.startsWith("cand/") ?? false;
 }
 
 export function isBranchOwner(node: Pick<PlanNode, "branch">): boolean {

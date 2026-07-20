@@ -197,3 +197,21 @@ describe("the v1→v2 models migration", () => {
 		expect(readGlobal().settingsMigrations).toEqual([MODELS_V2_MIGRATION.id]);
 	});
 });
+
+describe("explainModelSelectionV2 rendering", () => {
+	it("explains inheritance-only when no v2 config exists", async () => {
+		const { explainModelSelectionV2 } = await import("@vegardx/pi-settings");
+		const text = await explainModelSelectionV2(
+			{
+				cwd,
+				model: { provider: "sit-anthropic", id: "claude-opus-4-8" },
+			} as never,
+			"worker",
+		);
+		expect(text).toContain(
+			"Seat (session model): sit-anthropic/claude-opus-4-8",
+		);
+		expect(text).toContain("INHERITS");
+		expect(text).toContain("No v2 catalogs/profiles configured");
+	});
+});

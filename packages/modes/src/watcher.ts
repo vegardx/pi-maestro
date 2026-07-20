@@ -428,6 +428,7 @@ export class WatchManager {
 
 	cancel(id: string, reason = "cancelled by owner"): boolean {
 		const internal = this.watches.get(id);
+		// biome-ignore lint/complexity/useOptionalChain: internal is dereferenced below — the "fix" would pass undefined onward
 		if (!internal || internal.record.status !== "active") return false;
 		this.end(internal, "cancelled", reason);
 		return true;
@@ -444,6 +445,7 @@ export class WatchManager {
 	/** One probe tick. Public for tests (manualTicks) and prompt observation. */
 	async tick(ctx: ExtensionContext, id: string): Promise<void> {
 		const internal = this.watches.get(id);
+		// biome-ignore lint/complexity/useOptionalChain: internal is dereferenced below — the "fix" would pass undefined onward
 		if (!internal || internal.record.status !== "active") return;
 		if (internal.judging) return; // one judgment in flight per watch
 		const probe = internal.record.probe;
@@ -660,6 +662,7 @@ export class WatchManager {
 
 	private async expire(id: string): Promise<void> {
 		const internal = this.watches.get(id);
+		// biome-ignore lint/complexity/useOptionalChain: internal is dereferenced below — the "fix" would pass undefined onward
 		if (!internal || internal.record.status !== "active") return;
 		this.raise(internal, {
 			kind: "expired",

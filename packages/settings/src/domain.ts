@@ -24,7 +24,10 @@ import {
 } from "@vegardx/pi-contracts";
 import {
 	activePreset,
+	activeV2Profile,
+	explainTier,
 	readModelsConfig,
+	readV2Config,
 	resolveExactModelSelection,
 } from "@vegardx/pi-models";
 import {
@@ -724,6 +727,71 @@ export async function explainModelSelection(
 		lines.push(
 			"Fallback: configured model sets do not gain an implicit session fallback; options are tried in authored order.",
 		);
+	return lines.join("\n");
+}
+
+/**
+ * The v2 explanation: inheritance-first. The seat's model is the universal
+ * default every spawned agent inherits; tiers exist only for deliberate
+ * variation (persona instructions, policy rows), filtered by residency and
+ * the agent's tier allowlist. One screen answers "what would this agent
+ * actually run on, and why".
+ */
+export async function explainModelSelectionV2(
+	ctx: ExtensionContext,
+	agent: SpawnableAgentType,
+): Promise<string> {
+	const sessionModel = ctx.model
+		? `${ctx.model.provider}/${ctx.model.id}`
+		: undefined;
+	const config = readV2Config(ctx.cwd);
+	const lines: string[] = [
+		`Seat (session model): ${sessionModel ?? "none"} — every spawned agent INHERITS this unless a tier is deliberately requested.`,
+	];
+	if (!config) {
+		lines.push(
+			"No v2 catalogs/profiles configured: everything inherits the seat.",
+			"(v1 presets are auto-migrated at boot when present; or author catalogs and profiles under the models settings key.)",
+		);
+		return lines.join("\n");
+	}
+	const active = activeV2Profile(config, sessionModel);
+	lines.push(
+		active
+			? `Profile: ${active.id}${active.profile.targets?.length ? ` (target ${sessionModel})` : " (default profile)"} → catalog ${active.profile.catalog}`
+			: "Profile: none matches this seat — tier requests fall back to the seat with a visible notice.",
+	);
+	const allowed = config.agents[agent]?.models ?? [];
+	lines.push(
+		`Agent ${agent}: allowed tiers ${allowed.length ? allowed.join(", ") : "none"}`,
+	);
+	for (const tier of TIER_IDS) {
+		const explained = await explainTier(ctx, agent, tier);
+		const marker = allowed.includes(tier)
+			? ""
+			: " (not allowed for this agent)";
+		if (explained.candidates.length === 0) {
+			lines.push(
+				`  ${tier}${marker}: empty — a ${tier} request falls back to the seat (deduped notice).`,
+			);
+			continue;
+		}
+		lines.push(`  ${tier}${marker}:`);
+		for (const fact of explained.candidates) {
+			const detail = [
+				fact.effort ? `@ ${fact.effort}` : undefined,
+				fact.family ? `family ${fact.family}` : undefined,
+				fact.available ? "available" : (fact.reason ?? "unavailable"),
+				fact.notes,
+			]
+				.filter(Boolean)
+				.join(" — ");
+			lines.push(`    - ${fact.model} ${detail}`);
+		}
+	}
+	lines.push(
+		"Resolution order: inherit the caller's model unless a tier is named (persona instruction or policy row); residency strikes non-members before any reasoning; an unresolvable tier falls back to the seat, visibly.",
+	);
 	return lines.join("\n");
 }
 

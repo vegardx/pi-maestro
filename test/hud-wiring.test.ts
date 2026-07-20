@@ -1,13 +1,19 @@
 // HUD data builders: the agents tree (execution workers + subagent runs
-// with parent nesting and terminal aging) and the /steer prefill.
+// with parent nesting and terminal aging), the watch rows (list + cancel
+// only), and the /steer prefill.
 
-import type { RunRecord } from "@vegardx/pi-contracts";
+import type { RunRecord, WatchRecord } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import type { ExecutionAgentSnapshot } from "../packages/modes/src/exec/index.js";
+import {
+	listAgentTargets,
+	stopAgentTarget,
+} from "../packages/modes/src/runtime/agent-targets.js";
 import {
 	buildAgentNodes,
 	buildPlanView,
 	buildQuestionRows,
+	buildWatchNodes,
 	steerPrefix,
 } from "../packages/modes/src/runtime/hud-wiring.js";
 
@@ -301,6 +307,107 @@ describe("buildQuestionRows", () => {
 		]);
 		expect(rows[0].blocking).toBe(true);
 		expect(rows[2].asker).toBe("worker · auth");
+	});
+});
+
+function watch(
+	id: string,
+	status: WatchRecord["status"],
+	overrides: Partial<WatchRecord> = {},
+): WatchRecord {
+	return {
+		id,
+		goal: "watch PR #271's CI; raise when it completes or fails",
+		lifetime: "one-shot",
+		caps: {
+			maxDurationMs: 3_600_000,
+			minIntervalMs: 15_000,
+			maxRaises: 10,
+			maxRefinements: 5,
+		},
+		probe: {
+			command: "gh pr checks 271",
+			intervalMs: 30_000,
+			canonicalizer: "",
+		},
+		status,
+		refinements: [],
+		raises: 0,
+		createdAt: new Date(NOW - 120_000).toISOString(),
+		updatedAt: new Date(NOW - 1_000).toISOString(),
+		...overrides,
+	};
+}
+
+describe("watch rows", () => {
+	it("projects watches into the agents tab with status word, goal, probe, refinements", () => {
+		const nodes = buildWatchNodes(
+			[
+				watch("w1", "active", {
+					refinements: [
+						{
+							at: "t",
+							rationale: "ignore timestamps",
+							previousCanonicalizer: "",
+						},
+					],
+				}),
+			],
+			NOW,
+		);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].key).toBe("watch:w1");
+		expect(nodes[0].label).toBe(
+			"watch · watch PR #271's CI; raise when it completes or …",
+		);
+		expect(nodes[0].status).toBe("running");
+		expect(nodes[0].note).toBe("active · probe 30s · 1 refinement");
+		// List + cancel only: no attach, no steer, no kill.
+		expect(nodes[0].capabilities).toEqual({
+			view: false,
+			steer: false,
+			interrupt: true,
+			kill: false,
+		});
+	});
+
+	it("ages out settled watches on the terminal-run clock", () => {
+		const fresh = watch("w1", "cancelled", {
+			endedAt: new Date(NOW - 30_000).toISOString(),
+		});
+		const stale = watch("w2", "triggered", {
+			endedAt: new Date(NOW - 600_000).toISOString(),
+		});
+		const nodes = buildWatchNodes([fresh, stale], NOW);
+		expect(nodes.map((n) => n.key)).toEqual(["watch:w1"]);
+		expect(nodes[0].status).toBe("stopped");
+		expect(nodes[0].capabilities?.interrupt).toBe(false);
+	});
+
+	it("rides the agent target registry as watch:<id> and cancels via the manager", async () => {
+		const cancelled: string[] = [];
+		const watches = {
+			list: () => [watch("w1", "active")],
+			cancel: (id: string) => {
+				cancelled.push(id);
+				return true;
+			},
+		};
+		const targets = listAgentTargets({ watches });
+		expect(targets).toHaveLength(1);
+		expect(targets[0].id).toBe("watch:w1");
+		expect(targets[0].kind).toBe("watch");
+		expect(targets[0].status).toBe("active");
+		expect(targets[0].capabilities).toMatchObject({
+			view: false,
+			steer: false,
+			interrupt: false,
+			shutdown: true,
+		});
+		await expect(
+			stopAgentTarget(targets[0], undefined, undefined, "done", watches),
+		).resolves.toBe(true);
+		expect(cancelled).toEqual(["w1"]);
 	});
 });
 

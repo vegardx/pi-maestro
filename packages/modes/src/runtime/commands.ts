@@ -383,7 +383,11 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				return;
 			}
 			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
-			const targets = listAgentTargets({ execution: rt.execution, subagents });
+			const targets = listAgentTargets({
+				execution: rt.execution,
+				subagents,
+				watches: rt.watches,
+			});
 			const runLines = targets
 				.filter((target) => target.kind === "run")
 				.map((target) => {
@@ -394,13 +398,21 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					const age = Math.max(0, Date.now() - target.updatedAt);
 					return `${target.id} · ${target.role} · ${target.status} · ${Math.round(elapsed / 1000)}s elapsed · event ${Math.round(age / 1000)}s ago · ${target.model ?? "default model"}`;
 				});
+			// Watches are runs too: goal (clipped) + status word, cancellable.
+			const watchLines = targets
+				.filter((target) => target.kind === "watch")
+				.map(
+					(target) => `${target.id} · ${target.status} · ${target.displayName}`,
+				);
 			const overview = renderAgentsOverview(plan, rt.execution);
-			cmdCtx.ui.notify(
-				runLines.length
-					? `${overview}\n\nInspectable runs:\n${runLines.join("\n")}`
-					: overview,
-				"info",
-			);
+			const sections = [
+				overview,
+				...(runLines.length
+					? [`Inspectable runs:\n${runLines.join("\n")}`]
+					: []),
+				...(watchLines.length ? [`Watches:\n${watchLines.join("\n")}`] : []),
+			];
+			cmdCtx.ui.notify(sections.join("\n\n"), "info");
 		},
 	});
 

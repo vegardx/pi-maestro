@@ -2,6 +2,8 @@
 
 `/maestro` combines exact agent-domain configuration with extension-declared scalar settings. Interactive and scripted surfaces read the same normalized values and write through atomic file replacement.
 
+The interactive menu shows the v2 sections only: profiles and catalogs, agent tiers, the policy table, and residency. The v1 preset/model-set screens are removed — the v1→v2 migration derives catalogs/profiles automatically, and a one-line pointer says so when legacy keys are still present. The v1 keys themselves stay readable and scriptable (`/maestro get|set|reset models.presets.… models.modelSets.…`) because fallback resolution still reads them.
+
 ## Scopes
 
 Precedence is **session → project → global → declared default**.

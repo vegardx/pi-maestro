@@ -4,14 +4,29 @@ import {
 	descendantsOf,
 	resolveAgentTarget,
 	type SubagentsCapabilityV1,
+	type WatchRecord,
 } from "@vegardx/pi-contracts";
 import type { ExecutionHandle } from "../exec/index.js";
+
+/** The watch projection the target registry needs: list + cancel only —
+ *  watches are subagents in the HUD sense, never attach/steer targets. */
+export interface WatchTargetSource {
+	list(): readonly WatchRecord[];
+	cancel(id: string, reason?: string): boolean;
+}
+
+/** Clip a watch goal for one-line displays. */
+export function clipWatchGoal(goal: string, max = 48): string {
+	const flat = goal.replace(/\s+/g, " ").trim();
+	return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
 
 /** Build the single normalized control registry used by agent commands. */
 export function listAgentTargets(input: {
 	readonly execution?: ExecutionHandle;
 	readonly subagents?: SubagentsCapabilityV1;
 	readonly host?: ExtensionContext;
+	readonly watches?: WatchTargetSource;
 }): AgentTarget[] {
 	const targets: AgentTarget[] = [];
 	if (input.host) {
@@ -114,6 +129,29 @@ export function listAgentTargets(input: {
 			},
 		});
 	}
+	// Watches ride the same registry as rows "watch:<id>": status word, goal
+	// (clipped), probe interval, refinement count. List + cancel only — no
+	// attach, no steer; cancel maps to WatchManager.cancel via shutdown.
+	for (const record of input.watches?.list() ?? []) {
+		targets.push({
+			id: `watch:${record.id}`,
+			kind: "watch",
+			displayName: clipWatchGoal(record.goal),
+			role: "watch",
+			status: record.status,
+			transport: "headless",
+			createdAt: Date.parse(record.createdAt),
+			updatedAt: Date.parse(record.updatedAt),
+			...(record.endedAt ? { completedAt: Date.parse(record.endedAt) } : {}),
+			capabilities: {
+				view: false,
+				capture: false,
+				steer: false,
+				interrupt: false,
+				shutdown: record.status === "active",
+			},
+		});
+	}
 	return targets;
 }
 
@@ -142,7 +180,11 @@ export async function stopAgentTarget(
 	execution: ExecutionHandle | undefined,
 	subagents: SubagentsCapabilityV1 | undefined,
 	reason = "user stop",
+	watches?: WatchTargetSource,
 ): Promise<boolean> {
+	if (target.kind === "watch") {
+		return watches?.cancel(target.id.slice("watch:".length), reason) ?? false;
+	}
 	if (target.kind === "worker") {
 		const [deliverableId, name] = target.id.slice("worker:".length).split("/");
 		return deliverableId

@@ -36,7 +36,7 @@ export const AGENT_KINDS = [
 ] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
-export type AgentTargetKind = "host" | "worker" | "run";
+export type AgentTargetKind = "host" | "worker" | "run" | "watch";
 export type AgentTransport = "host" | "tmux" | "headless";
 
 /** Runtime constraints resolved before spawn, never inferred by a child. */

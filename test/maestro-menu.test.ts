@@ -125,105 +125,6 @@ function menuCtx(
 }
 
 describe("/maestro interactive editor", () => {
-	it("opens a model set as an editable page listing its options", async () => {
-		const { ctx, selects } = menuCtx([
-			"Model sets (1)",
-			"impl — 1 option(s) · used by main (1 role)",
-			undefined, // Esc out of the set editor
-			undefined, // Esc out of the set list
-			undefined, // Esc out of the top level
-		]);
-		await showConfigMenu(ctx);
-		const editor = selects.find((s) => s.title.startsWith("Model set impl"));
-		expect(editor).toBeDefined();
-		expect(editor?.options).toContain(
-			"fast: prov/fast-model @low — Fast implementation",
-		);
-		expect(editor?.options).toContain("+ Add option…");
-	});
-
-	it("adds an option through the model selector, not free text", async () => {
-		const { ctx, selects } = menuCtx(
-			[
-				"Model sets (1)",
-				"impl — 1 option(s) · used by main (1 role)",
-				"+ Add option…",
-				"other — 1 model(s)",
-				"big-model",
-				"medium",
-				undefined, // Esc set editor
-				undefined, // Esc set list
-				undefined, // Esc top level
-			],
-			["Big cross-family reviewer."], // summary input
-		);
-		await showConfigMenu(ctx);
-		const modelPick = selects.find((s) => s.title === "Model for this option");
-		expect(modelPick?.options).toContain("session — the live session model");
-		expect(modelPick?.options).toContain("other — 1 model(s)");
-		const written = agentSettings() as {
-			models?: {
-				modelSets?: { impl?: { options?: { id: string; model: string }[] } };
-			};
-		};
-		const option = written.models?.modelSets?.impl?.options?.find(
-			(o) => o.id === "big-model",
-		);
-		expect(option?.model).toBe("other/big-model");
-	});
-
-	it("maps a preset role to a set and persists through the domain writer", async () => {
-		const { ctx, selects } = menuCtx([
-			"Presets (1)",
-			"main (active) — 1 model(s), 1 role mapping(s)",
-			"Role mappings (1) — role → model set",
-			"verifier → none (session model)",
-			"impl",
-			undefined, // Esc role list
-			undefined, // Esc preset page
-			undefined, // Esc presets
-			undefined, // Esc top
-		]);
-		await showConfigMenu(ctx);
-		const roles = selects.find((s) => s.title.includes("role → model set"));
-		expect(roles?.options).toContain("worker → impl");
-		expect(roles?.options).toContain("verifier → none (session model)");
-		const written = agentSettings() as {
-			models?: { presets?: { main?: { modelSets?: Record<string, string> } } };
-		};
-		expect(written.models?.presets?.main?.modelSets?.verifier).toBe("impl");
-	});
-
-	it("adds a preset target through the provider selector, without session", async () => {
-		const { ctx, selects } = menuCtx([
-			"Presets (1)",
-			"main (active) — 1 model(s), 1 role mapping(s)",
-			"Models (1) — session models that activate this preset",
-			"+ Add model…",
-			"other — 1 model(s)",
-			"big-model",
-			undefined, // Esc targets page
-			undefined, // Esc preset page
-			undefined, // Esc presets
-			undefined, // Esc top
-		]);
-		await showConfigMenu(ctx);
-		const providerPick = selects.find(
-			(s) => s.title === "Model — which provider?",
-		);
-		expect(providerPick).toBeDefined();
-		expect(providerPick?.options.some((o) => o.startsWith("session"))).toBe(
-			false,
-		);
-		const written = agentSettings() as {
-			models?: { presets?: { main?: { targets?: string[] } } };
-		};
-		expect(written.models?.presets?.main?.targets).toEqual([
-			"prov/main-model",
-			"other/big-model",
-		]);
-	});
-
 	it("switches the active residency to off", async () => {
 		const { ctx, notes } = menuCtx([
 			"Active: EEA — change…",
@@ -702,6 +603,30 @@ describe("/maestro interactive editor", () => {
 		expect(agentSettings()).toEqual({});
 	});
 
+	it("shows v2 sections only, with a one-line pointer for legacy v1 keys", async () => {
+		// The beforeEach fixture still authors models.presets/models.modelSets.
+		const { ctx, selects, notes } = menuCtx([
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		expect(
+			notes.some(
+				(note) =>
+					note ===
+					"legacy presets detected — migrated automatically; v1 screens removed",
+			),
+		).toBe(true);
+		const top = selects[0];
+		expect(top?.title).toContain("Maestro configuration — profile:");
+		expect(top?.options).toEqual([
+			"Profiles and catalogs (0 profile(s), 0 catalog(s))",
+			"Agent tiers (worker, explorer, reviewer)",
+			"Policies (6 rows)",
+			"Residency (EEA)",
+			"Summary",
+		]);
+	});
+
 	it("falls back to the notify summary without a select UI", async () => {
 		const notes: string[] = [];
 		const ctx = {
@@ -711,7 +636,12 @@ describe("/maestro interactive editor", () => {
 			ui: { notify: (text: string) => notes.push(text) },
 		} as unknown as ExtensionContext;
 		await showConfigMenu(ctx);
-		expect(notes[0]).toContain("Maestro configuration");
-		expect(notes[0]).toContain("Exact model sets: 1");
+		// The legacy pointer precedes the summary (the fixture has v1 keys).
+		expect(notes[0]).toBe(
+			"legacy presets detected — migrated automatically; v1 screens removed",
+		);
+		expect(notes[1]).toContain("Maestro configuration");
+		expect(notes[1]).toContain("Policy rows: 6");
+		expect(notes[1]).toContain("Residency: EEA");
 	});
 });

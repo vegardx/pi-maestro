@@ -9,7 +9,6 @@ import {
 	contractRetrySteer,
 	extractContractBlock,
 	type FindingsPayload,
-	findingsVerdict,
 	type PlanGateReportPayload,
 	parseContractEnvelope,
 	planGateVerdict,
@@ -33,15 +32,16 @@ const VALID_FINDINGS: FindingsPayload = {
 	findings: [
 		{
 			id: "F1",
-			severity: "major",
-			category: "security",
 			file: "src/rotate.ts",
 			line: 88,
-			actual: "old refresh token stays valid until TTL",
+			actual:
+				"rotate() persists the new token before revoking the old one; the revoke result is unchecked",
+			consequence: "the old refresh token stays valid until TTL",
+			evidence: ["rotate.ts:88 fire-and-forget revoke()"],
 		},
 	],
 	scope: { reviewed: "feat/auth 9f31c2e..4b7d0aa" },
-	summary: "One real gap in revocation ordering.",
+	summary: "One observation in revocation ordering.",
 };
 
 describe("fence extraction", () => {
@@ -126,17 +126,28 @@ describe("payload validators", () => {
 		expect(errors.join(" ")).toContain("blockedReason");
 	});
 
-	it("validates findings through the shared StructuredFinding validator", () => {
+	it("validates neutral findings and REJECTS reviewer-authored severity", () => {
 		expect(
 			validateContractEnvelope(envelope("findings", VALID_FINDINGS), "raw"),
 		).toEqual([]);
-		const bad = {
+		const missingActual = {
 			...VALID_FINDINGS,
-			findings: [{ id: "F1", severity: "sev-high", actual: "x" }],
+			findings: [{ id: "F1" }],
 		};
 		expect(
-			validateContractEnvelope(envelope("findings", bad), "raw").join(" "),
-		).toContain("findings[0]");
+			validateContractEnvelope(envelope("findings", missingActual), "raw").join(
+				" ",
+			),
+		).toContain("actual");
+		// A reviewer that rates severity is pre-judging the consumer's
+		// interpretation — rejected, not silently ignored.
+		const rated = {
+			...VALID_FINDINGS,
+			findings: [{ id: "F1", actual: "x", severity: "major" }],
+		};
+		expect(
+			validateContractEnvelope(envelope("findings", rated), "raw").join(" "),
+		).toContain("not a reviewer's call");
 	});
 
 	it("enforces the plan-gate rewrite rule and word bounds", () => {
@@ -195,19 +206,6 @@ describe("payload validators", () => {
 });
 
 describe("verdict projections", () => {
-	it("computes the reviewer verdict from severities — never agent-asserted", () => {
-		expect(findingsVerdict(VALID_FINDINGS)).toBe("request-changes");
-		expect(findingsVerdict({ ...VALID_FINDINGS, findings: [] })).toBe(
-			"approve",
-		);
-		expect(
-			findingsVerdict({
-				...VALID_FINDINGS,
-				findings: [{ ...VALID_FINDINGS.findings[0], severity: "minor" }],
-			}),
-		).toBe("approve");
-	});
-
 	it("recomputes verdicts from checks; recomputation wins", () => {
 		const payload: VerdictPayload = {
 			verdict: "pass", // the agent says pass…
@@ -259,17 +257,19 @@ describe("salvage tiers (v1 parsers re-homed)", () => {
 		expect(def.salvage("no verdict anywhere")).toBeNull();
 	});
 
-	it("salvages findings from bullets, but never reads silence as clean", () => {
+	it("salvages findings from bullets, STRIPPING legacy ratings", () => {
 		const def = CONTRACT_DEFINITIONS.findings;
 		const salvaged = def.salvage(
 			"VERDICT: request-changes\n- `src/a.ts:12` — off-by-one in loop",
 		) as FindingsPayload;
 		expect(salvaged.findings).toHaveLength(1);
 		expect(salvaged.findings[0]).toMatchObject({
-			severity: "major",
 			file: "src/a.ts",
 			line: 12,
 		});
+		// Neutrality holds even for salvaged legacy output: no ratings survive.
+		expect(salvaged.findings[0]).not.toHaveProperty("severity");
+		expect(salvaged.findings[0]).not.toHaveProperty("category");
 		expect(def.salvage("VERDICT: approve")).toMatchObject({ findings: [] });
 		expect(def.salvage("rambling with no verdict")).toBeNull();
 	});

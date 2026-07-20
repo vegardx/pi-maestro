@@ -61,6 +61,13 @@ Three spawnable types; callers are harness-owned.
 
 - Explorer and reviewer differ by **contract and stance**, not toolset:
   "how does X work" report vs "what's wrong with this work" findings.
+- **Findings are neutral observations** (settled in the #254 review,
+  2026-07-20): what the code actually does, where, with what consequence and
+  evidence — no severity, no category, no verdict language. Interpretation
+  belongs to the consumer: the agent that requested the review judges what
+  blocks. Reviewer-authored ratings are rejected by the contract validator,
+  not merely discouraged. (The plan gate keeps blocking/advisory — it is
+  consumed mechanically at a mode edge, not interpreted by a parent agent.)
 - **Callers are harness components**: classifier, summarizer,
   command-auditor, watcher. Their prompts ship with releases, are tested with
   the harness suite, and are tuned only through policy rows (tier, enabled,

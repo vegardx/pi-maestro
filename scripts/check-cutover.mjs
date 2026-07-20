@@ -37,6 +37,7 @@ const banned = [
 			"docs/commands.md",
 			"packages/models/src/profiles.ts",
 			"packages/models/src/catalog.ts",
+			"packages/models/src/v2-migration.ts",
 			"packages/contracts/src/catalog.ts",
 		]),
 	],

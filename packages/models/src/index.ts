@@ -41,6 +41,7 @@ export {
 	residencyError,
 	residencyNames,
 } from "./residency.js";
+export { buildV2FromV1, MODELS_V2_MIGRATION } from "./v2-migration.js";
 export {
 	clampEffort,
 	explainTier,

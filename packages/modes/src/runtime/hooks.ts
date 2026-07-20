@@ -7,6 +7,8 @@ import type {
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { MODELS_V2_MIGRATION } from "@vegardx/pi-models";
+import { runSettingsMigrations } from "@vegardx/pi-settings";
 import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import {
@@ -191,6 +193,32 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 				}
 			} catch {
 				// Archive is best-effort; a failure surfaces on plan load instead.
+			}
+			// Settings migrations (fail-visible, backed up per file). Currently:
+			// v1 presets/modelSets → v2 catalogs/profiles (additive).
+			try {
+				const report = runSettingsMigrations(ctx.cwd, undefined, [
+					MODELS_V2_MIGRATION,
+				]);
+				const changed = report.applied.filter((item) => item.changed);
+				if (changed.length > 0) {
+					ctx.ui.notify(
+						`Settings migrated: ${changed
+							.map((item) => `${item.id} (${item.scope})`)
+							.join(", ")}. Backups: ${report.backups
+							.map((backup) => backup.backupPath)
+							.join(", ")}`,
+						"info",
+					);
+				}
+				for (const failure of report.failures) {
+					ctx.ui.notify(
+						`Settings migration ${failure.id} failed (${failure.scope}): ${failure.error}. The file was not changed; it will retry next session.`,
+						"warning",
+					);
+				}
+			} catch {
+				// Migration is best-effort at boot; a failure must not block start.
 			}
 		}
 		await Promise.allSettled([

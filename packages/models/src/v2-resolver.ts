@@ -134,6 +134,19 @@ async function checkCatalogEntry(
 	return { fact: { ...base, available: true }, model };
 }
 
+/**
+ * One entry's availability fact (residency, registry, auth) without
+ * resolving anything — the /maestro catalog editor's live availability
+ * word for entries in ANY catalog, active or not.
+ */
+export async function explainCatalogEntry(
+	ctx: ExtensionContext,
+	entry: CatalogEntry,
+): Promise<V2CandidateFact> {
+	const { fact } = await checkCatalogEntry(ctx, entry, false);
+	return fact;
+}
+
 function safeV1Config(ctx: ExtensionContext) {
 	try {
 		return readModelsConfig(ctx.cwd);

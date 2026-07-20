@@ -146,6 +146,45 @@ describe("v2 catalog config", () => {
 		expect(activeV2Profile(config, undefined)?.id).toBe("fallback");
 	});
 
+	it("reads canonical models.catalogs / models.agents keys (migration + editor)", () => {
+		writeSettings({
+			catalogs: { daily: DAILY },
+			profiles: { fable: { catalog: "daily" } },
+			agents: { worker: { models: ["heavy"] } },
+		});
+		const config = readV2Config(cwd);
+		expect(Object.keys(config?.catalogs ?? {})).toEqual(["daily"]);
+		expect(config?.agents.worker.models).toEqual(["heavy"]);
+		// Legacy root-level agents.<type>.models is still read; models.agents wins.
+		writeSettings(
+			{
+				catalogs: { daily: DAILY },
+				profiles: { fable: { catalog: "daily" } },
+				agents: { worker: { models: ["heavy"] } },
+			},
+			{ worker: { models: ["normal"] }, explorer: { models: ["fast"] } },
+		);
+		const merged = readV2Config(cwd);
+		expect(merged?.agents.worker.models).toEqual(["heavy"]);
+		expect(merged?.agents.explorer.models).toEqual(["fast"]);
+	});
+
+	it("merges legacy models.catalog with canonical models.catalogs, plural winning", () => {
+		writeSettings({
+			catalog: { legacy: DAILY, both: DAILY },
+			catalogs: {
+				both: { fast: [{ model: "p/canonical" }] },
+			},
+			profiles: { fable: { catalog: "legacy" } },
+		});
+		const config = readV2Config(cwd);
+		expect(Object.keys(config?.catalogs ?? {}).sort()).toEqual([
+			"both",
+			"legacy",
+		]);
+		expect(config?.catalogs.both.fast).toEqual([{ model: "p/canonical" }]);
+	});
+
 	it("skips null entries (deletion markers) without failing the config", () => {
 		writeSettings({
 			catalog: { daily: DAILY, dead: null },

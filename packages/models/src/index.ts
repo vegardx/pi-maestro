@@ -3,6 +3,7 @@
 export {
 	activeV2Profile,
 	isV2ProfileShape,
+	parseV2Settings,
 	readV2Config,
 	validateV2Config,
 } from "./catalog.js";
@@ -44,6 +45,7 @@ export {
 export { buildV2FromV1, MODELS_V2_MIGRATION } from "./v2-migration.js";
 export {
 	clampEffort,
+	explainCatalogEntry,
 	explainTier,
 	fallbackNotice,
 	type InheritedModel,

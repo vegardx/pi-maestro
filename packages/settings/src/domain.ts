@@ -276,7 +276,13 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 		}
 	}
 	// v2: whole-catalog writes ({ fast?: [...], normal?: [...], heavy?: [...] }).
-	if (parts[0] === "models" && parts[1] === "catalog" && parts.length === 3) {
+	// `models.catalogs` is canonical (migration + menu); `models.catalog` is
+	// the legacy spelling the reader still honors.
+	if (
+		parts[0] === "models" &&
+		(parts[1] === "catalog" || parts[1] === "catalogs") &&
+		parts.length === 3
+	) {
 		if (!isPlainObject(value)) return ["catalog must be an object"];
 		const errors: string[] = [];
 		for (const [tier, entries] of Object.entries(value)) {

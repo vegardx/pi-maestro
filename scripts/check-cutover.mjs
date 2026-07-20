@@ -39,6 +39,9 @@ const banned = [
 			"packages/models/src/catalog.ts",
 			"packages/models/src/v2-migration.ts",
 			"packages/contracts/src/catalog.ts",
+			// The v2 editor + scripted completions own the reclaimed key.
+			"packages/settings/src/menu-catalogs.ts",
+			"packages/settings/src/command.ts",
 		]),
 	],
 	[/\breview panel\b/gi, "removed review-panel architecture", new Set()],

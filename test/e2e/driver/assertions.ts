@@ -4,7 +4,7 @@
 // plan.json (deliverable statuses, PR URLs) and the git history (shipped files),
 // independent of how the run was driven.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -174,4 +174,97 @@ function renderSummary(checks: DeliverableCheck[]): string {
 			return `${ok ? "✓" : "✗"} ${c.titleMatch}: ${parts.join("; ")}`;
 		})
 		.join("\n");
+}
+
+// ─── Ensemble acceptance (task #27) ──────────────────────────────────────────
+
+export interface EnsembleAssertion {
+	readonly ok: boolean;
+	readonly base: AssertionResult;
+	/** cand/<parent>/<id> branches found in the repo. */
+	readonly candBranches: string[];
+	/** Every cand branch carries a DONE: commit. */
+	readonly candidatesDone: boolean;
+	/** PRs whose head is a cand/ branch — MUST be zero. */
+	readonly candidatePrCount: number;
+	/** PRs whose head is the parent branch — MUST be exactly one. */
+	readonly parentPrCount: number;
+	readonly summary: string;
+}
+
+/**
+ * The ensemble invariant on top of the base scenario assertions: N candidate
+ * branches with finished work, ZERO candidate PRs, exactly ONE parent PR.
+ * `ghStateDir` is the gh shim's state dir (PI_E2E_GH_STATE).
+ */
+export function assertEnsemble(
+	piHome: string,
+	repoDir: string,
+	scenario: Scenario,
+	opts: { parentBranch: string; minCandidates: number; ghStateDir?: string },
+): EnsembleAssertion {
+	const base = assertScenario(piHome, repoDir, scenario);
+	let candBranches: string[] = [];
+	let candidatesDone = false;
+	try {
+		candBranches = execSync(
+			"git branch --list 'cand/*/*' --format='%(refname:short)'",
+			{
+				cwd: repoDir,
+				encoding: "utf8",
+			},
+		)
+			.split("\n")
+			.map((line) => line.trim())
+			.filter(Boolean);
+		candidatesDone =
+			candBranches.length > 0 &&
+			candBranches.every((branch) =>
+				execSync(`git log --format=%s ${JSON.stringify(branch)}`, {
+					cwd: repoDir,
+					encoding: "utf8",
+				})
+					.split("\n")
+					.some((subject) => subject.startsWith("DONE:")),
+			);
+	} catch {
+		candBranches = [];
+	}
+	let candidatePrCount = 0;
+	let parentPrCount = 0;
+	if (opts.ghStateDir) {
+		try {
+			const state = JSON.parse(
+				readFileSync(join(opts.ghStateDir, "prs.json"), "utf8"),
+			) as { prs?: { headRefName?: string }[] };
+			for (const pr of state.prs ?? []) {
+				if (pr.headRefName?.startsWith("cand/")) candidatePrCount += 1;
+				if (pr.headRefName === opts.parentBranch) parentPrCount += 1;
+			}
+		} catch {
+			// Missing shim state reads as zero PRs — the parent check fails.
+		}
+	}
+	const ok =
+		base.ok &&
+		candBranches.length >= opts.minCandidates &&
+		candidatesDone &&
+		candidatePrCount === 0 &&
+		parentPrCount === 1;
+	const parts = [
+		base.summary,
+		`cand branches: ${candBranches.length ? candBranches.join(", ") : "none"}`,
+		`candidates done: ${candidatesDone ? "yes" : "no"}`,
+		`candidate PRs: ${candidatePrCount} (must be 0)`,
+		`parent PRs (${opts.parentBranch}): ${parentPrCount} (must be 1)`,
+	];
+	return {
+		ok,
+		base,
+		candBranches,
+		candidatesDone,
+		candidatePrCount,
+		parentPrCount,
+		summary: parts.join("\n"),
+	};
 }

@@ -11,6 +11,7 @@ import {
 	findNodeV2,
 	gatingNodeTasks,
 	isBranchOwner,
+	isCandidateBranch,
 	nodeBlockedReason,
 	nodeReady,
 	type PlanNode,
@@ -401,5 +402,38 @@ describe("slugify", () => {
 
 	it("trims leading/trailing dashes", () => {
 		expect(slugify("--hello--")).toBe("hello");
+	});
+});
+
+describe("candidate branches never ship (ensemble invariant)", () => {
+	it("excludes cand/ branch owners from shippableNodes even when complete", () => {
+		const node = (id: string, branch: string | undefined, status: string) =>
+			({
+				type: "node",
+				id,
+				agent: "worker",
+				persona: "coder",
+				tasks: [],
+				...(branch ? { branch } : {}),
+				status,
+				authoredBy: "plan",
+				createdAt: "t",
+				updatedAt: "t",
+			}) as never;
+		const plan = {
+			nodes: [
+				{
+					...(node("parent", "feat/parent", "complete") as object),
+					children: [
+						node("cand-a", "cand/parent/cand-a", "complete"),
+						node("cand-b", "cand/parent/cand-b", "complete"),
+					],
+				} as never,
+			],
+		};
+		expect(shippableNodes(plan as never).map((n) => n.id)).toEqual(["parent"]);
+		expect(isCandidateBranch("cand/parent/cand-a")).toBe(true);
+		expect(isCandidateBranch("feat/parent")).toBe(false);
+		expect(isCandidateBranch(undefined)).toBe(false);
 	});
 });

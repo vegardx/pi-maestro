@@ -113,3 +113,88 @@ export function seedScenarioPlan(piHome: string, repoDir: string): string {
 
 	return SANDBOX_FEATURES.name;
 }
+
+/**
+ * Seed the ensemble acceptance plan (task #27): parent `build-metrics` on
+ * feat/build-metrics with two BRANCHLESS worker children — the executor
+ * provisions those as candidates on cand/build-metrics/<id> from the
+ * parent's branch point, and candidates never ship (shippableNodes skips
+ * cand/ branches). The parent integrates and ships the one PR.
+ */
+export function seedEnsemblePlan(piHome: string, repoDir: string): string {
+	const store = createPlanStoreV2(seededPlansRoot(piHome));
+	const engine = PlanEngineV2.create(store, {
+		slug: "ensemble-metrics",
+		title: "Ensemble metrics module",
+		repoPath: repoDir,
+	});
+
+	engine.addNode(null, {
+		id: "build-metrics",
+		agent: "worker",
+		persona: "coder",
+		title: "Build the metrics module from two candidates",
+		body:
+			"Two candidate agents are implementing `src/metrics.ts` RIGHT NOW on " +
+			"the branches `cand/build-metrics/cand-a` and " +
+			"`cand/build-metrics/cand-b` (they share your repo's object store — " +
+			"`git log cand/build-metrics/cand-a` works from your worktree). " +
+			"Each ends with a commit whose subject starts with `DONE:`. " +
+			"FIRST: wait for BOTH candidates — poll " +
+			"`git log --oneline cand/build-metrics/cand-a cand/build-metrics/cand-b` " +
+			"every ~30 seconds (sleep between polls) until both branches show a " +
+			"DONE: commit. While waiting you may sketch `tests/metrics.test.ts` " +
+			"expectations, nothing else. THEN: review both diffs " +
+			"(`git diff main...cand/build-metrics/cand-a` etc.), pick the " +
+			"stronger implementation, integrate it into YOUR branch " +
+			"(cherry-pick or copy + reconcile — your call), keep " +
+			"`tests/metrics.test.ts` meaningful, and make `npm test` pass. " +
+			"Do NOT push or open PRs for the candidate branches — their diffs " +
+			"are inputs; your branch is the only deliverable.",
+		branch: "feat/build-metrics",
+	});
+	engine.addTask("build-metrics", {
+		title:
+			"Wait for both candidates, review both diffs, integrate the stronger",
+		body: "Poll the two cand/ branches for DONE: commits before integrating.",
+	});
+	engine.addTask("build-metrics", {
+		title: "tests/metrics.test.ts passes via npm test",
+	});
+
+	const candidate = (id: string, approach: string) => {
+		engine.addNode("build-metrics", {
+			id,
+			agent: "worker",
+			persona: "coder",
+			title: `Candidate ${id}: metrics module (${approach})`,
+			body:
+				"You are ONE OF TWO candidate implementations — your committed " +
+				"diff is the deliverable; a parent agent integrates the stronger " +
+				"one. Implement `src/metrics.ts` exporting " +
+				"`mean(numbers: number[]): number` (throw on empty), " +
+				"`max(numbers: number[]): number` (throw on empty), and " +
+				"`range(numbers: number[]): number` (max minus min). " +
+				`Approach for YOUR candidate: ${approach}. ` +
+				"Add `tests/metrics.test.ts` and make `npm test` pass locally. " +
+				"Commit everything. Your FINAL commit subject must start with " +
+				"`DONE:`. Never push and never open a PR.",
+		});
+		engine.addTask(id, {
+			title: "Implement src/metrics.ts (mean, max, range) and tests",
+		});
+		engine.addTask(id, {
+			title: "Final commit with subject starting DONE:",
+		});
+	};
+	candidate(
+		"cand-a",
+		"single-pass iteration — compute mean, max, and min in one loop, no sorting, no intermediate arrays",
+	);
+	candidate(
+		"cand-b",
+		"simple and direct — reduce/Math.max/Math.min over the array, favor readability over cleverness",
+	);
+
+	return "ensemble-metrics";
+}

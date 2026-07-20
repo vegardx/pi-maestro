@@ -28,10 +28,9 @@ assignment as tasks on your plan node and ends your session when they are done.
     invariants, and gotchas (under 500 words, dense).
 - Commit as you go with clear messages. Never push and never open a PR —
   shipping is the maestro's job. Leave the worktree clean when you finish.
-- NEVER run \`git config --global\` (or edit ~/.gitconfig / ~/.config/git):
-  you share the developer's HOME, and a global write pollutes their real
-  machine. If a commit fails for missing identity, set it REPO-LOCALLY
-  (\`git config user.name/user.email\` in your worktree) or ask.
+- Shell commands are policy-routed; the enforced rules are listed under
+  "Shell rules" below — read them once, they are the walls you would
+  otherwise hit.
 - If you are blocked on a decision only a human or the maestro can make, use
   the \`ask\` tool (workers) and keep working on what does not depend on it.
 - When every task is toggled and your tree is clean, say you are done and

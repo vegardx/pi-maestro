@@ -26,6 +26,7 @@ import {
 	readDomainSnapshot,
 	writeDomainValue,
 } from "./domain.js";
+import { browseAgentTiers } from "./menu-agents.js";
 import { browseProfilesCatalogs } from "./menu-catalogs.js";
 import {
 	DELETE_MARK,
@@ -106,6 +107,7 @@ export async function showConfigMenu(
 			`Maestro configuration — preset: ${snapshot.activePreset ?? "session fallback"}`,
 			[
 				`Profiles and catalogs (${Object.keys(v2?.profiles ?? {}).length} profile(s), ${Object.keys(v2?.catalogs ?? {}).length} catalog(s))`,
+				"Agent tiers (worker, explorer, reviewer)",
 				`Model sets (${snapshot.modelSets.length})`,
 				`Presets (${snapshot.presets.length})`,
 				`Residency (${config?.residency ? activeResidency(config) : "not configured"})`,
@@ -118,6 +120,7 @@ export async function showConfigMenu(
 		if (!choice) return;
 		if (choice.startsWith("Profiles and catalogs"))
 			await browseProfilesCatalogs(ctx, ui);
+		else if (choice.startsWith("Agent tiers")) await browseAgentTiers(ctx, ui);
 		else if (choice.startsWith("Model sets")) await browseModelSets(ctx, ui);
 		else if (choice.startsWith("Presets")) await browsePresets(ctx, ui);
 		else if (choice.startsWith("Residency")) await browseResidency(ctx);

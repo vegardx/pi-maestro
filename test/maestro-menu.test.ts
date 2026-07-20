@@ -499,6 +499,71 @@ describe("/maestro interactive editor", () => {
 		});
 	});
 
+	it("toggles an agent tier allowlist and resets it back to the defaults", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		const { ctx, selects } = menuCtx([
+			"Agent tiers (worker, explorer, reviewer)",
+			"worker — normal, heavy (default)",
+			"Toggle tiers…",
+			"✗ fast", // toggle ON → override written
+			undefined, // Esc toggle loop
+			"Reset to defaults (normal, heavy) — remove the override",
+			undefined, // Esc agent page
+			undefined, // Esc agent tiers screen
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		const screen = selects.find((s) => s.title.startsWith("Agent tiers"));
+		expect(screen?.options).toContain("worker — normal, heavy (default)");
+		expect(screen?.options).toContain("explorer — fast, normal (default)");
+		// After the toggle the agent page shows the override…
+		const overridePage = selects.find((s) =>
+			s.title.startsWith("Agent worker — allowed tiers: fast, normal, heavy"),
+		);
+		expect(overridePage?.title).toContain("(override)");
+		// …and the reset removes it again, restoring the shipped default.
+		const written = agentSettings() as {
+			models?: { agents?: Record<string, unknown> };
+		};
+		expect(written.models?.agents).toBeUndefined();
+	});
+
+	it("warns in plain words when an allowed tier lacks catalog coverage", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				models: {
+					catalogs: {
+						daily: {
+							normal: [
+								{ model: "prov/fast-model" },
+								{ model: "other/big-model" },
+							],
+						},
+					},
+					profiles: { main: { catalog: "daily" } },
+				},
+			}),
+		);
+		const { ctx, selects } = menuCtx([
+			"Agent tiers (worker, explorer, reviewer)",
+			undefined, // Esc agent tiers screen
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		const screen = selects.find((s) => s.title.startsWith("Agent tiers"));
+		const worker = screen?.options.find((o) => o.startsWith("worker "));
+		expect(worker).toContain("heavy is empty — requests fall back to the seat");
+		expect(worker).toContain(
+			"normal has 1 unavailable entry (other/big-model: not in registry)",
+		);
+		const explorer = screen?.options.find((o) => o.startsWith("explorer "));
+		expect(explorer).toContain(
+			"fast is empty — requests fall back to the seat",
+		);
+	});
+
 	it("an invalid v2 state is unwriteable and shows the validator message", async () => {
 		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
 		writeFileSync(

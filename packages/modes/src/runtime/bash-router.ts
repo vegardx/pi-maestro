@@ -12,9 +12,14 @@ import {
 	decideBashPolicy,
 } from "../bash-policy.js";
 import {
+	type CommandAuditor,
+	createCommandAuditor,
+} from "../command-auditor.js";
+import {
 	type IsolationBackendTier,
 	IsolationUnavailableError,
 } from "../isolation/backend.js";
+import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import { readExecutionPolicySettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -37,6 +42,8 @@ export interface BashRouterBackends {
  */
 export function registerBashRouter(rt: RuntimeContext): void {
 	const definition = createBashToolDefinition(process.cwd());
+	// Rung-2 auditor, built lazily from the tool:bash policy row (per session).
+	let auditor: CommandAuditor | null | undefined;
 	const routed: typeof definition = {
 		...definition,
 		async execute(id, params, signal, onUpdate, ctx) {
@@ -57,6 +64,35 @@ export function registerBashRouter(rt: RuntimeContext): void {
 					route: "confirm",
 					reason: `${decision.reason}. Isolation is disabled for this session; direct host execution requires confirmation`,
 				};
+			}
+			// Rung 2 (LLM verdict): child agents' UNKNOWN commands only, and it
+			// can only TIGHTEN to deny — allow/escalate defer to the
+			// deterministic route, so a hallucinated blessing grants nothing.
+			if (
+				actor !== "maestro" &&
+				decision.route !== "deny" &&
+				decision.effects.has("unknown")
+			) {
+				if (auditor === undefined) {
+					const row = policyRowFor(readPolicyTable(ctx.cwd), "tool:bash");
+					auditor =
+						row && row.run.enabled !== false
+							? createCommandAuditor(ctx, row)
+							: null;
+				}
+				const verdict = await auditor?.({
+					command: params.command,
+					actor,
+					mode: rt.state.mode,
+					effects: [...decision.effects],
+				});
+				if (verdict?.verdict === "deny") {
+					decision = {
+						...decision,
+						route: "deny",
+						reason: `command-auditor: ${verdict.reason}`,
+					};
+				}
 			}
 			await authorizeBashDecision(decision, ctx, params.command);
 			const execute = (selected: BashPolicyDecision) => {

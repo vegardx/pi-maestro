@@ -17,6 +17,10 @@ export {
 	resolveExactModelSelection,
 } from "./exact-selection.js";
 export {
+	type ResolvedModelAuth,
+	resolveModelAuth,
+} from "./model-auth.js";
+export {
 	getModelMeta,
 	type ModelMeta,
 	shortModelName,

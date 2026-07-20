@@ -34,10 +34,8 @@ import {
 	findNodeV2,
 	gatingNodeTasks,
 	isBranchOwner,
-	nodeReady,
 	PARENT_AFTER_TOKEN,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
 	readyChildren,
 	shippableNodes,
@@ -526,6 +524,11 @@ export class NodeExecutor {
 	private async advanceNode(node: PlanNode): Promise<void> {
 		const run = this.runStates.get(node.id);
 		if (run?.blocked) return;
+
+		// Hydration resume (v1 parity): an active node whose agent is still
+		// pending after an unblock respawns here — the poll/tick path, not
+		// only recoverInterrupted, brings it back.
+		if (run && run.status === "pending") await this.spawnNode(node, run);
 
 		// Spawn ready children: sibling deps + the parent-gating token, bounded
 		// by envelope.maxConcurrent (backpressure — later ticks retry).

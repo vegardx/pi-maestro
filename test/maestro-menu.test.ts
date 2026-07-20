@@ -18,6 +18,7 @@ import {
 	browseResidency,
 	showConfigMenu,
 } from "../packages/settings/src/menu.js";
+import { upsertUserPolicyRow } from "../packages/settings/src/menu-policies.js";
 
 let cwd: string;
 let prevAgentDir: string | undefined;
@@ -595,6 +596,110 @@ describe("/maestro interactive editor", () => {
 			models?: { catalogs?: Record<string, unknown> };
 		};
 		expect(written.models?.catalogs?.daily).toBeDefined();
+	});
+
+	it("authors a policy row within the closed vocabularies", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		const { ctx, selects, notes } = menuCtx([
+			"Policies (6 rows)",
+			"+ New row…",
+			"duty:<name> — a harness duty",
+			"classify",
+			"fast",
+			"Agent: not set — change…",
+			"explorer",
+			undefined, // Esc row editor
+			undefined, // Esc table
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		// The effective table shows the shipped defaults with full run fields.
+		const table = selects.find((s) => s.title.startsWith("Policies —"));
+		expect(table?.options).toContain(
+			"mode:plan->auto — models heavy · agent reviewer · persona plan-review · contract plan-gate-report (default)",
+		);
+		expect(table?.options).toContain(
+			"tool:bash — models fast · contract verdict · scope depth >=1 (default)",
+		);
+		// Closed vocabularies: duties, tiers, agent types.
+		expect(selects.find((s) => s.title === "Which duty?")?.options).toEqual([
+			"classify",
+			"plan-summarize",
+			"compact-summarize",
+			"verify-findings",
+			"verify-delivery",
+		]);
+		expect(
+			selects.find((s) => s.title.includes("a tier is required"))?.options,
+		).toEqual(["fast", "normal", "heavy"]);
+		expect(
+			selects.find((s) => s.title === "duty:classify → agent")?.options,
+		).toEqual(["not set", "worker", "explorer", "reviewer"]);
+		// duty:classify has no consumer yet — the inert warning is spoken.
+		expect(
+			notes.some((note) =>
+				note.includes(
+					"duty:classify: no consumer reads this trigger yet — the row is inert",
+				),
+			),
+		).toBe(true);
+		const written = agentSettings() as {
+			extensionConfig?: { modes?: { policies?: unknown[] } };
+		};
+		expect(written.extensionConfig?.modes?.policies).toEqual([
+			{ on: "duty:classify", run: { models: "fast", agent: "explorer" } },
+		]);
+	});
+
+	it("deleting a user policy row restores the shipped default", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				extensionConfig: {
+					modes: {
+						policies: [
+							{
+								on: "tool:bash",
+								scope: { depth: ">=1" },
+								run: { models: "normal", contract: "verdict" },
+							},
+						],
+					},
+				},
+			}),
+		);
+		const { ctx, selects } = menuCtx([
+			"Policies (6 rows)",
+			"tool:bash — models normal · contract verdict · scope depth >=1 (user)",
+			"✕ Delete user row — restore the shipped default…",
+			undefined, // Esc row editor (now showing the default again)
+			undefined, // Esc table
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		const restored = selects.filter((s) =>
+			s.title.startsWith("Policy tool:bash"),
+		);
+		expect(restored[0]?.title).toBe("Policy tool:bash (user)");
+		expect(restored[1]?.title).toBe("Policy tool:bash (default)");
+		expect(restored[1]?.options).toContain("Models (tier): fast — change…");
+		const written = agentSettings() as {
+			extensionConfig?: unknown;
+		};
+		expect(written.extensionConfig).toBeUndefined();
+	});
+
+	it("an invalid policy row is rejected with the validator's message", () => {
+		const { ctx } = menuCtx([]);
+		const problems = upsertUserPolicyRow(ctx, {
+			on: "duty:classify",
+			run: { models: "turbo" },
+		} as never);
+		expect(problems.join(" ")).toContain(
+			"a tier is required on every row (fast, normal, heavy)",
+		);
+		expect(agentSettings()).toEqual({});
 	});
 
 	it("falls back to the notify summary without a select UI", async () => {

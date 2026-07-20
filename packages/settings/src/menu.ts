@@ -28,6 +28,7 @@ import {
 } from "./domain.js";
 import { browseAgentTiers } from "./menu-agents.js";
 import { browseProfilesCatalogs } from "./menu-catalogs.js";
+import { browsePolicyTable, readSettingsPolicyTable } from "./menu-policies.js";
 import {
 	DELETE_MARK,
 	type Dialogs,
@@ -108,6 +109,7 @@ export async function showConfigMenu(
 			[
 				`Profiles and catalogs (${Object.keys(v2?.profiles ?? {}).length} profile(s), ${Object.keys(v2?.catalogs ?? {}).length} catalog(s))`,
 				"Agent tiers (worker, explorer, reviewer)",
+				`Policies (${readSettingsPolicyTable(ctx.cwd).rows.length} rows)`,
 				`Model sets (${snapshot.modelSets.length})`,
 				`Presets (${snapshot.presets.length})`,
 				`Residency (${config?.residency ? activeResidency(config) : "not configured"})`,
@@ -121,6 +123,8 @@ export async function showConfigMenu(
 		if (choice.startsWith("Profiles and catalogs"))
 			await browseProfilesCatalogs(ctx, ui);
 		else if (choice.startsWith("Agent tiers")) await browseAgentTiers(ctx, ui);
+		else if (choice.startsWith("Policies"))
+			await browsePolicyTable(ctx, ui, registry);
 		else if (choice.startsWith("Model sets")) await browseModelSets(ctx, ui);
 		else if (choice.startsWith("Presets")) await browsePresets(ctx, ui);
 		else if (choice.startsWith("Residency")) await browseResidency(ctx);

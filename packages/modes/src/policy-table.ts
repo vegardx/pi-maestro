@@ -6,6 +6,7 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	DEFAULT_POLICY_ROWS,
 	type PolicyDuty,
 	type PolicyRow,
 	type ThinkingLevel,
@@ -14,45 +15,10 @@ import {
 import { resolveV2Model } from "@vegardx/pi-models";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 
-/**
- * Shipped defaults — only rows with live consumers: the plan→execution
- * boundary reviews (the transition gate reads tier/persona/contract and the
- * kill-switch) and `tool:bash` (the command-auditor's LLM rung on child
- * agents' unknown commands; deny-only, fail-open). Duty rows land WITH
- * their consumers.
- */
-export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
-	{
-		on: "mode:plan->auto",
-		run: {
-			agent: "reviewer",
-			persona: "plan-review",
-			models: "heavy",
-			contract: "plan-gate-report",
-		},
-	},
-	{
-		on: "mode:plan->hack",
-		run: {
-			agent: "reviewer",
-			persona: "plan-review",
-			models: "heavy",
-			contract: "plan-gate-report",
-		},
-	},
-	{
-		on: "tool:bash",
-		scope: { depth: ">=1" },
-		run: { models: "fast", contract: "verdict" },
-	},
-	// Live duties: the compaction summariser and the /verify read agents
-	// resolve their tier here (v1 role bindings are the fallback when a row
-	// is absent, disabled, or unresolvable).
-	{ on: "duty:compact-summarize", run: { models: "fast" } },
-	{ on: "duty:verify-delivery", run: { models: "normal" } },
-	// The watcher's compile/judge calls (design §The watcher).
-	{ on: "tool:watch", run: { models: "fast" } },
-];
+// The shipped default rows moved to @vegardx/pi-contracts (the settings
+// editor merges against the same table without a cross-extension import);
+// re-exported here for existing modes-side consumers.
+export { DEFAULT_POLICY_ROWS } from "@vegardx/pi-contracts";
 
 export interface PolicyTable {
 	readonly rows: readonly PolicyRow[];

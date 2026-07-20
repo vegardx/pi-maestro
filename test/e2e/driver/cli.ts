@@ -23,13 +23,17 @@ import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ForwardingAnswerer } from "./answerer.js";
-import { assertScenario, readPlan } from "./assertions.js";
+import { assertEnsemble, assertScenario, readPlan } from "./assertions.js";
 import { type EnvProfile, setupCiEnv, setupLiveEnv } from "./env-profile.js";
 import { type LaunchedSut, launchSut } from "./launch.js";
 import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
-import { SANDBOX_FEATURES } from "./scenario.js";
-import { seedScenarioPlan } from "./seed-plan.js";
+import {
+	ENSEMBLE_METRICS,
+	SANDBOX_FEATURES,
+	type Scenario,
+} from "./scenario.js";
+import { seedEnsemblePlan, seedScenarioPlan } from "./seed-plan.js";
 import { buildSitProfile } from "./sit-profile.js";
 
 const DEFAULT_SOCK = join(tmpdir(), "pi-e2e-driver.sock");
@@ -42,6 +46,7 @@ interface ControlRequest {
 // --- daemon ----------------------------------------------------------------
 
 interface DaemonState {
+	scenario: Scenario;
 	profile: EnvProfile;
 	sut: LaunchedSut;
 	answerer: ForwardingAnswerer;
@@ -64,9 +69,14 @@ async function startDaemon(argv: string[]): Promise<void> {
 	// --seed-plan: write the canned sandbox-features plan straight into the
 	// isolated plan store, so the drive opens it with `/plan sandbox-features`
 	// and goes directly at execution — no model-dependent plan authoring.
-	const seededPlan = argv.includes("--seed-plan")
-		? seedScenarioPlan(profile.piHome, profile.repoDir)
-		: undefined;
+	const seededPlan = argv.includes("--seed-ensemble")
+		? seedEnsemblePlan(profile.piHome, profile.repoDir)
+		: argv.includes("--seed-plan")
+			? seedScenarioPlan(profile.piHome, profile.repoDir)
+			: undefined;
+	const scenario = argv.includes("--seed-ensemble")
+		? ENSEMBLE_METRICS
+		: SANDBOX_FEATURES;
 
 	const sut = launchSut({
 		maestroRoot,
@@ -83,6 +93,7 @@ async function startDaemon(argv: string[]): Promise<void> {
 		profile,
 		sut,
 		answerer,
+		scenario,
 		cursor: 0,
 		server: createServer(),
 	};
@@ -95,8 +106,8 @@ async function startDaemon(argv: string[]): Promise<void> {
 				sock,
 				repoDir: profile.repoDir,
 				piHome: profile.piHome,
-				plan: SANDBOX_FEATURES.name,
-				planPrompt: SANDBOX_FEATURES.planPrompt,
+				plan: scenario.name,
+				planPrompt: scenario.planPrompt,
 				...(seededPlan
 					? {
 							seededPlan,
@@ -242,10 +253,25 @@ async function dispatch(
 			return { ok: true, pi, plan: planSummary(state) };
 		}
 		case "assert": {
+			if (state.scenario.name === ENSEMBLE_METRICS.name) {
+				const result = assertEnsemble(
+					state.profile.piHome,
+					state.profile.repoDir,
+					state.scenario,
+					{
+						parentBranch: "feat/build-metrics",
+						minCandidates: 2,
+						...(state.profile.env.PI_E2E_GH_STATE
+							? { ghStateDir: state.profile.env.PI_E2E_GH_STATE }
+							: {}),
+					},
+				);
+				return { ok: result.ok, result };
+			}
 			const result = assertScenario(
 				state.profile.piHome,
 				state.profile.repoDir,
-				SANDBOX_FEATURES,
+				state.scenario,
 			);
 			return { ok: result.ok, result };
 		}

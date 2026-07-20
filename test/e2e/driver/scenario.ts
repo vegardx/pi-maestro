@@ -87,3 +87,25 @@ export function resolveSteps(scenario: Scenario): ScenarioStep[] {
 		s.prompt === "__PLAN_PROMPT__" ? { ...s, prompt: scenario.planPrompt } : s,
 	);
 }
+
+/**
+ * The v2 acceptance scenario (task #27): an ensemble — one parent worker
+ * whose two authored candidate children implement the same module on
+ * cand/<parent>/<id> branches; the parent integrates the stronger diff and
+ * ships ONE PR. The invariant under test: N cand branches with commits,
+ * ZERO candidate PRs, one parent PR.
+ */
+export const ENSEMBLE_METRICS: Scenario = {
+	name: "ensemble-metrics",
+	planPrompt: "(seeded plan — never authored via prompt in this scenario)",
+	steps: [
+		{ label: "open plan", prompt: "/plan ensemble-metrics" },
+		{ label: "enter execution", prompt: "/start" },
+	],
+	expected: [
+		{
+			titleMatch: "metrics",
+			files: ["src/metrics.ts", "tests/metrics.test.ts"],
+		},
+	],
+};

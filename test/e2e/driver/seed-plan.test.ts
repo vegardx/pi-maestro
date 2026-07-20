@@ -94,3 +94,26 @@ describe("seedScenarioPlan", () => {
 		}
 	});
 });
+
+describe("seedEnsemblePlan", () => {
+	it("seeds the ensemble: branch-owning parent, two branchless candidates", async () => {
+		const { seedEnsemblePlan } = await import("./seed-plan.js");
+		const slug = seedEnsemblePlan(piHome, "/tmp/ensemble-repo");
+		const plan = createPlanStoreV2(seededPlansRoot(piHome)).load(slug);
+		expect(plan?.nodes).toHaveLength(1);
+		const parent = plan?.nodes[0];
+		expect(parent?.id).toBe("build-metrics");
+		expect(parent?.branch).toBe("feat/build-metrics");
+		expect(parent?.children?.map((child) => child.id)).toEqual([
+			"cand-a",
+			"cand-b",
+		]);
+		// Candidates are BRANCHLESS at authoring time: the executor mints
+		// cand/build-metrics/<id> at activation, and cand/ branches never ship.
+		for (const child of parent?.children ?? []) {
+			expect(child.branch).toBeUndefined();
+			expect(child.agent).toBe("worker");
+			expect(child.body).toContain("DONE:");
+		}
+	});
+});

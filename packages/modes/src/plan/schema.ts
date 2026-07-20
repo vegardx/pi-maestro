@@ -240,6 +240,14 @@ export function treeDepth(plan: Pick<PlanV2, "nodes">): number {
 	return max;
 }
 
+/** Candidate branches are transport, never deliverables: they are minted at
+ *  activation (cand/<parent>/<id>), recorded on the ledger for recovery and
+ *  the HUD, cherry-picked by the parent, and reaped — a candidate must NEVER
+ *  ship its own PR (ensemble invariant: zero candidate PRs, one parent PR). */
+export function isCandidateBranch(branch: string | undefined): boolean {
+	return branch !== undefined && branch.startsWith("cand/");
+}
+
 export function isBranchOwner(node: Pick<PlanNode, "branch">): boolean {
 	return typeof node.branch === "string" && node.branch.length > 0;
 }
@@ -338,6 +346,9 @@ export function shippableNodes(plan: Pick<PlanV2, "nodes">): PlanNode[] {
 	const result: PlanNode[] = [];
 	for (const { node, parent } of walkNodes(plan)) {
 		if (!isBranchOwner(node) || node.status !== "complete") continue;
+		// The runtime records minted candidate branches on the ledger, which
+		// makes candidates look like branch owners — they still never ship.
+		if (isCandidateBranch(node.branch)) continue;
 		const siblings = parent ? (parent.children ?? []) : plan.nodes;
 		const depsTerminal = (node.after ?? []).every((ref) => {
 			if (ref === PARENT_AFTER_TOKEN) return true; // parent gating ≠ ship order

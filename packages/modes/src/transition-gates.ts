@@ -44,6 +44,19 @@ export interface TransitionGateCoordinatorDeps {
 		| import("@vegardx/pi-contracts").AskCapabilityV1
 		| undefined;
 	readonly now?: () => string;
+	/** The gate's policy row (mode:<edge>), when a table is wired. */
+	readonly policyRow?: (
+		on: string,
+		ctx: ExtensionContext,
+	) => import("@vegardx/pi-contracts").PolicyRow | undefined;
+	/** Resolve a row's tier to a launch model via the v2 resolver. */
+	readonly resolveTierModel?: (
+		tier: import("@vegardx/pi-contracts").TierId,
+		ctx: ExtensionContext,
+	) => Promise<
+		| { model: string; effort?: import("@vegardx/pi-contracts").ThinkingLevel }
+		| undefined
+	>;
 }
 
 /** Definitions are selected by exact directed edge; duplicate ownership fails. */
@@ -110,48 +123,76 @@ export class TransitionGateCoordinator {
 		};
 		persistGate(engine, state);
 
-		const agents = this.deps.agents();
-		if (!agents) {
-			state = this.block(engine, state, "agents.v1 is unavailable", now());
-			ctx.ui.notify(
-				"Execution readiness needs the plan-review agent; staying in plan.",
-				"warning",
-			);
-			return false;
-		}
-
+		// The policy row tunes this boundary: tier → resolved model override,
+		// persona/contract recorded, enabled:false skips the LLM review while
+		// keeping mechanical validations and the human ruling.
+		const row = this.deps.policyRow?.(`mode:${from}->${to}`, ctx);
 		let reviewSummary = "";
-		try {
-			const run = await agents.run({
-				kind: "plan-review",
-				prompt: definition.prompt(engine.get(), validations),
-				cwd: engine.get().repoPath,
-				displayName: "plan-reviewer",
-				meta: { gateId: id, edge: `${from}->${to}` },
-			});
-			state = {
-				...state,
-				assignment: run.assignment,
-				runId: run.runId,
-				updatedAt: now(),
-			};
-			persistGate(engine, state);
-			const result = await run.handle.result();
-			if (result.status !== "succeeded")
-				throw new Error(result.error ?? `plan reviewer ${result.status}`);
-			reviewSummary = (result.summary ?? "").slice(0, 12_000);
-		} catch (error) {
-			state = this.block(
-				engine,
-				state,
-				error instanceof Error ? error.message : String(error),
-				now(),
-			);
-			ctx.ui.notify(
-				`Plan review failed: ${state.reason}. Staying in plan.`,
-				"warning",
-			);
-			return false;
+		if (row?.run.enabled === false) {
+			reviewSummary =
+				"(plan review disabled by policy row — mechanical checks only)";
+		} else {
+			const agents = this.deps.agents();
+			if (!agents) {
+				state = this.block(engine, state, "agents.v1 is unavailable", now());
+				ctx.ui.notify(
+					"Execution readiness needs the plan-review agent; staying in plan.",
+					"warning",
+				);
+				return false;
+			}
+
+			const override = row
+				? await this.deps
+						.resolveTierModel?.(row.run.models, ctx)
+						.catch(() => undefined)
+				: undefined;
+			try {
+				const run = await agents.run({
+					kind: "plan-review",
+					prompt: definition.prompt(engine.get(), validations),
+					cwd: engine.get().repoPath,
+					displayName: "plan-reviewer",
+					...(override?.model ? { model: override.model } : {}),
+					...(override?.effort ? { effort: override.effort } : {}),
+					meta: {
+						gateId: id,
+						edge: `${from}->${to}`,
+						...(row
+							? {
+									policy: {
+										models: row.run.models,
+										...(row.run.persona ? { persona: row.run.persona } : {}),
+										...(row.run.contract ? { contract: row.run.contract } : {}),
+									},
+								}
+							: {}),
+					},
+				});
+				state = {
+					...state,
+					assignment: run.assignment,
+					runId: run.runId,
+					updatedAt: now(),
+				};
+				persistGate(engine, state);
+				const result = await run.handle.result();
+				if (result.status !== "succeeded")
+					throw new Error(result.error ?? `plan reviewer ${result.status}`);
+				reviewSummary = (result.summary ?? "").slice(0, 12_000);
+			} catch (error) {
+				state = this.block(
+					engine,
+					state,
+					error instanceof Error ? error.message : String(error),
+					now(),
+				);
+				ctx.ui.notify(
+					`Plan review failed: ${state.reason}. Staying in plan.`,
+					"warning",
+				);
+				return false;
+			}
 		}
 
 		if (planFingerprintV2(engine.get()) !== fingerprint) {

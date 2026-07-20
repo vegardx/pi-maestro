@@ -159,3 +159,100 @@ describe("transition gate coordinator", () => {
 		expect(commit).not.toHaveBeenCalled();
 	});
 });
+
+describe("policy-row wiring (Phase 4)", () => {
+	it("resolves the row tier and passes the model override to the reviewer", async () => {
+		const { engine, now } = fixture();
+		let mode: "plan" | "auto" = "plan";
+		const commit = vi.fn((next: "auto") => {
+			mode = next;
+		});
+		const cap = agents();
+		const ask = {
+			ask: vi.fn(async (questions) => [
+				{ questionId: questions[0]!.id, value: "enter-without" },
+			]),
+		} as unknown as AskCapabilityV1;
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => mode,
+				commit: commit as never,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+				policyRow: (on) =>
+					on === "mode:plan->auto"
+						? {
+								on,
+								run: {
+									agent: "reviewer",
+									persona: "plan-review",
+									models: "heavy",
+									contract: "plan-gate-report",
+								},
+							}
+						: undefined,
+				resolveTierModel: async (tier) => {
+					expect(tier).toBe("heavy");
+					return { model: "sit-anthropic/claude-opus-4-8", effort: "high" };
+				},
+			},
+		);
+
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(true);
+		expect(cap.run).toHaveBeenCalledWith(
+			expect.objectContaining({
+				kind: "plan-review",
+				model: "sit-anthropic/claude-opus-4-8",
+				effort: "high",
+				meta: expect.objectContaining({
+					policy: expect.objectContaining({
+						models: "heavy",
+						persona: "plan-review",
+						contract: "plan-gate-report",
+					}),
+				}),
+			}),
+		);
+		expect(commit).toHaveBeenCalledOnce();
+	});
+
+	it("enabled:false skips the LLM review but keeps checks and the ruling", async () => {
+		const { engine, now } = fixture();
+		let mode: "plan" | "auto" = "plan";
+		const commit = vi.fn((next: "auto") => {
+			mode = next;
+		});
+		const cap = agents();
+		let rulingContext = "";
+		const ask = {
+			ask: vi.fn(async (questions) => {
+				rulingContext = questions[0]!.context ?? "";
+				return [{ questionId: questions[0]!.id, value: "enter-without" }];
+			}),
+		} as unknown as AskCapabilityV1;
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => mode,
+				commit: commit as never,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+				policyRow: (on) => ({
+					on,
+					run: { models: "heavy", enabled: false },
+				}),
+			},
+		);
+
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(true);
+		expect(cap.run).not.toHaveBeenCalled();
+		expect(rulingContext).toContain("disabled by policy row");
+		expect(engine.get().transitionGates?.at(-1)?.status).toBe("settled");
+		expect(commit).toHaveBeenCalledOnce();
+	});
+});

@@ -24,6 +24,7 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
+import { resolveV2Model } from "@vegardx/pi-models";
 import * as realTmux from "@vegardx/pi-tmux";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
@@ -57,6 +58,7 @@ import {
 import { createPlanStoreV2, type PlanStoreV2 } from "../plan/storage.js";
 import { planPhaseV2 } from "../planning-preamble.js";
 import { computeActiveTools, orchestrationActive } from "../policy.js";
+import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import type { ResearchRunView } from "../research.js";
 import { appendModesState } from "../session.js";
 import { readChildExtensions } from "../settings.js";
@@ -302,6 +304,8 @@ export function createRuntimeContext(
 		emitMode(changed.previous);
 	}
 
+	// Policy-table errors surface once per session, never crash a gate.
+	const policyErrorsNotified = new Set<string>();
 	const transitionGates = new TransitionGateCoordinator(
 		createDefaultTransitionGates(),
 		{
@@ -311,6 +315,34 @@ export function createRuntimeContext(
 			agents: () => maestro.capabilities.get(CAPABILITIES.agents),
 			ask: () => maestro.capabilities.get(CAPABILITIES.ask),
 			now,
+			policyRow: (on, ctx) => {
+				const table = readPolicyTable(ctx.cwd);
+				for (const error of table.errors) {
+					if (policyErrorsNotified.has(error)) continue;
+					policyErrorsNotified.add(error);
+					ctx.ui.notify(
+						`Policy table: invalid row ignored (default stands) — ${error}`,
+						"warning",
+					);
+				}
+				return policyRowFor(table, on);
+			},
+			resolveTierModel: async (tier, ctx) => {
+				try {
+					const resolved = await resolveV2Model(ctx, {
+						agent: "reviewer",
+						tier,
+					});
+					return {
+						model: resolved.modelId,
+						...(resolved.effort ? { effort: resolved.effort } : {}),
+					};
+				} catch {
+					// Fail-open to the v1 kind-based selection — the gate still
+					// runs; the row's tier simply could not be honored.
+					return undefined;
+				}
+			},
 		},
 	);
 

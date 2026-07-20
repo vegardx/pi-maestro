@@ -17,6 +17,7 @@ export * from "./modes.js";
 export * from "./plan.js";
 export * from "./plan-v2.js";
 export * from "./plan-view.js";
+export * from "./policy.js";
 export * from "./review.js";
 export * from "./runs.js";
 export * from "./session-setting-overrides.js";

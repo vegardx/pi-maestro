@@ -27,6 +27,7 @@ import {
 	stageFiles,
 	UnsafeStageError,
 	workingTreeClean,
+	worktreeBaseSha,
 	worktreesRoot,
 } from "@vegardx/pi-git";
 
@@ -203,5 +204,48 @@ describe("worktree mechanics", () => {
 		expect(dirty.ok).toBe(false);
 		if (!dirty.ok) expect(dirty.reason).toBe("dirty");
 		expect(removeWorktree(repo, target, { force: true }).ok).toBe(true);
+	});
+});
+
+describe("worktreeBaseSha", () => {
+	/** Commit on the current branch and return its SHA. */
+	function commitOn(file: string, message: string): string {
+		writeFileSync(join(repo, file), `${message}\n`);
+		stageFiles(repo, [file]);
+		commit(repo, message);
+		const sha = headSha(repo);
+		if (!sha) throw new Error("no HEAD after commit");
+		return sha;
+	}
+
+	it("resolves a stacked base to the base branch tip, not the checkout HEAD", () => {
+		const mainSha = headSha(repo);
+		git(["checkout", "-b", "feat/d1"]);
+		const d1Sha = commitOn("d1.txt", "feat: d1 work");
+		git(["checkout", "main"]); // the user's checkout sits on main again
+		expect(d1Sha).not.toBe(mainSha);
+		// A stacked deliverable d2 based on d1's branch: its delivery base is
+		// d1's tip — the old headSha(repo) capture would have recorded mainSha.
+		expect(worktreeBaseSha(repo, "feat/d2", "feat/d1")).toBe(d1Sha);
+		expect(headSha(repo)).toBe(mainSha);
+	});
+
+	it("resolves an existing branch to its fork point off the base", () => {
+		git(["checkout", "-b", "feat/d1"]);
+		const forkPoint = commitOn("d1.txt", "feat: d1 work");
+		git(["checkout", "-b", "feat/d2"]);
+		commitOn("d2.txt", "feat: d2 work");
+		git(["checkout", "feat/d1"]);
+		commitOn("d1b.txt", "feat: d1 advanced past the fork");
+		git(["checkout", "main"]);
+		// feat/d2 already exists; its base branch tip moved on. The recorded
+		// base must be the fork point, not the advanced tip.
+		expect(worktreeBaseSha(repo, "feat/d2", "feat/d1")).toBe(forkPoint);
+	});
+
+	it("resolves a remote-only base and returns null for a missing one", () => {
+		git(["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+		expect(worktreeBaseSha(repo, "feat/dx", "dev")).toBe(headSha(repo));
+		expect(worktreeBaseSha(repo, "feat/dy", "nope")).toBeNull();
 	});
 });

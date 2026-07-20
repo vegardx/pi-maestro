@@ -69,6 +69,14 @@ export function headSha(cwd: string): string | null {
 	return r.ok ? r.stdout.trim() || null : null;
 }
 
+/** SHA a ref resolves to, or null when it doesn't resolve. */
+export function revParse(cwd: string, ref: string): string | null {
+	const r = runCommand("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
+		cwd,
+	});
+	return r.ok ? r.stdout.trim() || null : null;
+}
+
 export function originUrl(cwd: string): string | null {
 	const r = runCommand("git", ["remote", "get-url", "origin"], { cwd });
 	if (!r.ok) return null;

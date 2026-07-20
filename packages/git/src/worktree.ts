@@ -7,7 +7,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { RunId } from "@vegardx/pi-contracts";
 import { branchExists } from "./branch.js";
-import { repoNameFromPath } from "./repo.js";
+import { mergeBase, repoNameFromPath, revParse } from "./repo.js";
 import { runCommand } from "./shell.js";
 
 /**
@@ -138,6 +138,31 @@ export function addWorktree(
 		};
 	}
 	return { ok: true, path: target, created: true };
+}
+
+/**
+ * The commit a delivery branch's worktree is (or would be) based on — the
+ * counterpart of {@link addWorktree}'s branch-creation rule, NOT the main
+ * checkout's HEAD (which may sit on an unrelated branch: stacked deliverables
+ * base on a sibling's feat branch, and the user's checkout moves freely).
+ *
+ * - Branch doesn't exist yet: the resolved base ref's tip — exactly what
+ *   `git worktree add -b <branch> <target> <base>` will branch from.
+ * - Branch already exists (reuse): the fork point, `merge-base(base, branch)`
+ *   — its recorded tip may have advanced past the true base.
+ * - Null when neither resolves; callers fall back or fail loudly.
+ */
+export function worktreeBaseSha(
+	repoPath: string,
+	branch: string,
+	baseBranch: string,
+): string | null {
+	const repo = resolve(repoPath);
+	const base = resolveBaseRef(repo, baseBranch);
+	if (branchExists(repo, branch)) {
+		return base ? mergeBase(repo, base, branch) : null;
+	}
+	return base ? revParse(repo, base) : null;
 }
 
 /**

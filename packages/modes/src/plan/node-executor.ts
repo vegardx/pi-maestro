@@ -92,6 +92,9 @@ export interface SpawnNodeOpts {
 	skills: readonly string[];
 	worktreePath: string;
 	seed: string;
+	/** Resolved launch model (deps.resolveModel); absent = inherit. */
+	model?: string;
+	effort?: string;
 	freshRecovery?: boolean;
 	resumeSessionFile?: string;
 	kickoffMessage?: string;
@@ -124,6 +127,20 @@ export interface NodeExecutorDeps {
 		consumer: string,
 		preamble: string,
 	) => Promise<string>;
+	/**
+	 * Collect the node's typed contract result while the agent is still
+	 * alive (between summary and kill). Implementations record it on the
+	 * ledger; failures must not block completion (fail-visible, never wedge).
+	 */
+	collectResult?: (nodeId: string, sessionId: string) => Promise<void>;
+	/**
+	 * Spawn-time model resolution: returns the ledger record to persist and
+	 * the model/effort to launch with. Absent → inherit silently (the v1
+	 * seam's behavior).
+	 */
+	resolveModel?: (
+		node: PlanNode,
+	) => Promise<{ model: string; effort?: string } | undefined>;
 	defaultBranch?: string;
 	defaultBranchFor?: (repoPath: string) => string | null;
 	canActivate?: () => boolean;
@@ -266,6 +283,15 @@ export class NodeExecutor {
 				);
 			} catch {
 				// Summary extraction failed — continue without it.
+			}
+			// Contract collection runs while the agent is still ALIVE (the retry
+			// steers need someone to answer); its failure never blocks completion.
+			if (this.deps.collectResult) {
+				try {
+					await this.deps.collectResult(nodeId, sessionId);
+				} catch {
+					// Fail-visible downstream (the ledger shows no result record).
+				}
 			}
 			await this.deps.killSession(sessionId);
 		}
@@ -587,6 +613,21 @@ export class NodeExecutor {
 			? ""
 			: (seedOverride ?? this.buildSeed(node));
 
+		// Spawn-time model resolution: the implementation records the
+		// NodeResolution on the ledger and hands back the launch choice.
+		let resolved: { model: string; effort?: string } | undefined;
+		if (this.deps.resolveModel) {
+			try {
+				resolved = await this.deps.resolveModel(node);
+			} catch (err) {
+				// Fail-visible: an authored mistake (unknown catalog, bad tier)
+				// parks the node blocked instead of spawning on a mystery model.
+				run.status = "pending";
+				run.blocked = `model resolution failed: ${err instanceof Error ? err.message : String(err)}`;
+				return;
+			}
+		}
+
 		const spawned = await this.deps.spawnAgent({
 			nodeId: node.id,
 			agent: node.agent,
@@ -596,6 +637,8 @@ export class NodeExecutor {
 			skills: node.skills ?? [],
 			worktreePath: run.worktreePath ?? this.engine.get().repoPath,
 			seed,
+			...(resolved ? { model: resolved.model } : {}),
+			...(resolved?.effort ? { effort: resolved.effort } : {}),
 			...(seedOverride !== undefined ? { freshRecovery: true } : {}),
 			...(resumeSessionFile
 				? {

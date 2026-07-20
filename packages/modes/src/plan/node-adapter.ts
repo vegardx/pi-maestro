@@ -19,8 +19,10 @@
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { ContractId, NodeResolution } from "@vegardx/pi-contracts";
 import { workingTreeClean } from "@vegardx/pi-git";
 import { MaestroRpcServer, type PlanMutateMessage } from "@vegardx/pi-rpc";
+import { provisionBranchWorktree } from "../exec/provisioner.js";
 import { createRpcRouter, type RpcRouter } from "../exec/rpc-router.js";
 import { SUMMARY_TOKEN_BUDGET } from "../schema.js";
 import type { PlanEngineV2 } from "./engine.js";
@@ -29,7 +31,8 @@ import {
 	type NodeExecutorDeps,
 	type SpawnNodeOpts,
 } from "./node-executor.js";
-import { findNodeV2, gatingNodeTasks } from "./schema.js";
+import { collectContract } from "./node-periphery.js";
+import { findNodeV2, gatingNodeTasks, type PlanNode } from "./schema.js";
 
 const IDLE_DONE_THRESHOLD = 2;
 const DIRTY_HOLD_MAX_STEERS = 3;
@@ -57,6 +60,10 @@ export interface NodeAdapterOptions {
 	readonly pollIntervalMs?: number;
 	/** Injectable spawn seam — tests/live wiring override the tmux default. */
 	readonly spawnAgent?: NodeExecutorDeps["spawnAgent"];
+	/** Spawn-time resolution: shapes the NodeResolution the adapter records. */
+	readonly resolveModel?: (
+		node: PlanNode,
+	) => Promise<{ resolution: NodeResolution } | undefined>;
 	readonly createWorktree?: NodeExecutorDeps["createWorktree"];
 	readonly shipNode?: NodeExecutorDeps["shipNode"];
 }
@@ -79,6 +86,7 @@ export class NodeExecutionAdapter {
 		{ steers: number; lastSteerAt: number; escalated: boolean }
 	>();
 	private requestSeq = 0;
+	private readonly fallbackNotified = new Set<string>();
 
 	constructor(private readonly opts: NodeAdapterOptions) {
 		this.engine = opts.engine;
@@ -113,13 +121,20 @@ export class NodeExecutionAdapter {
 			killSession: async (sessionId) => {
 				await opts.tmux.kill(sessionId).catch(() => {});
 			},
+			// Real-git provisioning by default (PR-6b): branch owners under
+			// <worktrees>/<nodeId>, candidates under _candidates/<parent>/<id> —
+			// the ensemble spike's layout, idempotent via addWorktree.
 			createWorktree:
 				opts.createWorktree ??
-				(async (wt) => {
-					throw new Error(
-						`worktree provisioning is not wired in this runtime (node ${wt.nodeId})`,
-					);
-				}),
+				(async (wt) =>
+					provisionBranchWorktree({
+						repoPath: wt.repoPath,
+						branch: wt.branch,
+						baseBranch: wt.baseBranch,
+						pathSegments: wt.branch.startsWith("cand/")
+							? ["_candidates", ...wt.branch.split("/").slice(1)]
+							: [wt.nodeId],
+					})),
 			shipNode:
 				opts.shipNode ??
 				(async (ship) => {
@@ -129,9 +144,101 @@ export class NodeExecutionAdapter {
 				}),
 			requestSummary: (sessionId, consumer, preamble) =>
 				this.requestSummary(sessionId, consumer, preamble),
+			// Contract collection between summary and kill: the agent is alive
+			// to answer retry steers; the result lands on the LEDGER whatever
+			// tier it extracted at. Failures never block completion.
+			collectResult: (nodeId, sessionId) =>
+				this.collectNodeResult(nodeId, sessionId),
+			...(opts.resolveModel
+				? {
+						resolveModel: async (node: PlanNode) => {
+							const outcome = await opts.resolveModel?.(node);
+							if (!outcome) return undefined;
+							this.engine.recordResolution(node.id, outcome.resolution);
+							if (outcome.resolution.source === "session-fallback") {
+								this.notifyFallbackOnce(node.id, outcome.resolution);
+							}
+							return {
+								model: outcome.resolution.model,
+								...(outcome.resolution.effort
+									? { effort: outcome.resolution.effort }
+									: {}),
+							};
+						},
+					}
+				: {}),
 			defaultBranch: opts.defaultBranch,
 			canActivate: opts.canActivate,
 			now: () => new Date().toISOString(),
+		});
+	}
+
+	/** One deduped fallback notice per node (the design's degraded-mode rule). */
+	private notifyFallbackOnce(nodeId: string, resolution: NodeResolution): void {
+		if (this.fallbackNotified.has(nodeId)) return;
+		this.fallbackNotified.add(nodeId);
+		this.logEvent("model-fallback", {
+			node: nodeId,
+			model: resolution.model,
+			reason: resolution.fallbackReason,
+		});
+	}
+
+	/** The node's contract by agent type (persona declarations refine later). */
+	private contractFor(agent: PlanNode["agent"]): ContractId {
+		return agent === "worker"
+			? "summary-and-diff"
+			: agent === "explorer"
+				? "report"
+				: "findings";
+	}
+
+	private async collectNodeResult(
+		nodeId: string,
+		_sessionId: string,
+	): Promise<void> {
+		const node = findNodeV2(this.engine.get(), nodeId);
+		if (!node) return;
+		const contract = this.contractFor(node.agent);
+		const run = this.executor.getRunState(nodeId);
+		const result = await collectContract({
+			contract,
+			nodeId,
+			runId: `${nodeId}#${run?.generation ?? 0}`,
+			model: node.resolutions?.at(-1)?.model ?? "session",
+			transport: {
+				request: async (instruction) => {
+					const response = await this.router.request(
+						nodeId,
+						{
+							type: "summarize",
+							id: `contract-${++this.requestSeq}`,
+							consumer: "the maestro's typed result collector",
+							preamble: instruction,
+							budget: SUMMARY_TOKEN_BUDGET,
+						},
+						SUMMARY_TIMEOUT_MS,
+					);
+					return response.content ?? "";
+				},
+				steer: (content) => {
+					this.router.send(nodeId, { type: "steer", content });
+				},
+			},
+		});
+		this.engine.recordResult(nodeId, {
+			contract,
+			payload: result.envelope?.payload ?? null,
+			recordedAt: result.completedAt,
+		});
+		this.logEvent("contract-collected", {
+			node: nodeId,
+			contract,
+			extraction: result.extraction,
+			attempts: result.attempts,
+			...(result.diagnostics?.length
+				? { diagnostics: result.diagnostics }
+				: {}),
 		});
 	}
 

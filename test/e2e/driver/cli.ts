@@ -4,7 +4,8 @@
 // starts a run, observes it, ANSWERS the agent's questions, and asserts on
 // outcomes, over pi's own control surface, with no MCP.
 //
-//   e2e-driver start [--live|--ci] [--local-remote] [--keep] [--sock PATH]
+//   e2e-driver start [--live|--ci] [--multi-model|--sit-models]
+//                    [--local-remote] [--keep] [--sock PATH]
 //   e2e-driver prompt "<text>" [--steer|--follow-up]
 //   e2e-driver poll                # new events + parked questions
 //   e2e-driver answer <id> "<value>"
@@ -29,6 +30,7 @@ import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
 import { seedScenarioPlan } from "./seed-plan.js";
+import { buildSitProfile } from "./sit-profile.js";
 
 const DEFAULT_SOCK = join(tmpdir(), "pi-e2e-driver.sock");
 
@@ -143,6 +145,21 @@ function buildProfile(argv: string[]): EnvProfile {
 			defaultModel: MULTI_MODEL_OLLAMA.defaultModel,
 			modelsJsonContent: MULTI_MODEL_OLLAMA.modelsJsonContent,
 			models: MULTI_MODEL_OLLAMA.models,
+		});
+	}
+	// `--sit-models` is the hosted twin: real radicalai-sit gateway models
+	// (opus planner/reviews, sol workers) via a generated models.json — no
+	// provider extension. Reads the developer's live token; throws when it is
+	// missing or about to expire.
+	if (argv.includes("--sit-models")) {
+		const sit = buildSitProfile();
+		return setupLiveEnv({
+			localRemote: argv.includes("--local-remote"),
+			keep: argv.includes("--keep"),
+			defaultProvider: sit.defaultProvider,
+			defaultModel: sit.defaultModel,
+			modelsJsonContent: sit.modelsJsonContent,
+			models: sit.models,
 		});
 	}
 	const providerExt = flagValue(argv, "--provider-ext");

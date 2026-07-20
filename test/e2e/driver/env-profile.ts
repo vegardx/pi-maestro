@@ -23,7 +23,13 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** The bundled `gh` shim (CI Phase 4 artifact) — generic over any bare origin. */
+function ghShimDir(): string {
+	return join(dirname(fileURLToPath(import.meta.url)), "ci", "gh-shim");
+}
 
 export interface EnvProfile {
 	/** Working directory for the maestro (the repo under test). */
@@ -169,10 +175,18 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	let repoDir: string;
 	let deleteRepo: (() => void) | undefined;
 	let bareRemote: string | undefined;
+	let ghState: string | undefined;
+	const env: Record<string, string> = { PI_MAESTRO_TRANSPORT: transport };
 	if (opts.localRemote) {
 		repoDir = mkdtempSync(join(tmpdir(), "pi-e2e-repo-"));
 		seedRepo(repoDir);
 		bareRemote = attachLocalBareRemote(repoDir);
+		// The ship path shells out to `gh` (pr create/view/…). Offline, that
+		// must hit the bundled shim, backed by the bare remote — without it
+		// every live --local-remote drive ends `pr-failed` (drive 4's finding).
+		ghState = mkdtempSync(join(tmpdir(), "pi-e2e-gh-"));
+		env.PI_E2E_GH_STATE = ghState;
+		env.PATH = `${ghShimDir()}:${process.env.PATH ?? ""}`;
 	} else {
 		const created = createDisposableGithubRepo();
 		repoDir = created.repoDir;
@@ -183,12 +197,12 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 		repoDir,
 		piHome,
 		extraExtensions: opts.providerExtensions ?? [],
-		env: { PI_MAESTRO_TRANSPORT: transport },
+		env,
 		model: opts.model,
 		teardown: () => {
 			if (opts.keep) return;
 			deleteRepo?.();
-			for (const dir of [piHome, repoDir, bareRemote]) {
+			for (const dir of [piHome, repoDir, bareRemote, ghState]) {
 				if (dir) rmSync(dir, { recursive: true, force: true });
 			}
 		},

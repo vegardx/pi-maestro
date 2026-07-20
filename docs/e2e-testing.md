@@ -193,6 +193,21 @@ correctness is pinned deterministically (no
 ollama) in [`driver/multi-model-profile.test.ts`](../test/e2e/driver/multi-model-profile.test.ts);
 this drive confirms ollama serves it end to end.
 
+#### Hosted multi-model routing (`--sit-models`)
+
+`start --live --sit-models` is the hosted twin
+([`driver/sit-profile.ts`](../test/e2e/driver/sit-profile.ts)): real
+radicalai-sit gateway models via a *generated* `models.json` (the bundled
+provider extension needs a newer host pi than the CLI carries, so the profile
+talks to the gateway directly). Opus 4.8 is the planner seat and the review
+family; GPT 5.6 Sol is the worker family — cross-family review by
+construction. Auth is the developer's live `radicalai-sit` OAuth token copied
+in as a static key; the profile refuses to start with less than 45 minutes of
+token life (open pi on a radicalai model once to refresh). Burns real tokens.
+Combine with `--local-remote` for offline ship: the live profile now puts the
+CI `gh` shim on PATH so the ship path completes against the bare remote
+instead of ending `pr-failed`.
+
 ### Scripted driver — CI (deterministic, offline)
 
 `npm run test:e2e:full` runs [`test/e2e/real.e2e.test.ts`](../test/e2e/real.e2e.test.ts):

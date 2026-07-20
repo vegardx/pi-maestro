@@ -305,6 +305,10 @@ export class NodeExecutor {
 
 		run.status = "done";
 		run.completedAt = this.deps.now();
+		// Prune the dead tmux session id (v1 behavior): getWorkerSessions/
+		// resolveSessionName must not surface a killed session, or /watch
+		// panes never auto-close. sessionFile stays — resurrection needs it.
+		run.sessionId = undefined;
 		if (run.summary)
 			this.engine.setNodeRuntime(nodeId, { summary: run.summary });
 
@@ -695,16 +699,20 @@ export class NodeExecutor {
 				parts.push("\n## Tasks\n");
 				for (const task of tasks) {
 					const check = task.done ? "x" : " ";
-					parts.push(`- [${check}] **${task.title}**`);
+					// The id is the toggle key — workers that had only titles
+					// guessed ids and wedged on the lifecycle pair.
+					parts.push(`- [${check}] **${task.title}** (taskId: \`${task.id}\`)`);
 					if (task.body) parts.push(`  ${task.body}`);
 				}
 			}
 			parts.push(
 				isBranchOwner(node)
-					? "\n---\nDo your work. Commit as you go. Toggle tasks when done. " +
+					? "\n---\nDo your work. Commit as you go. Toggle tasks when done " +
+							"using the EXACT taskId shown above. " +
 							"Exit when complete. The maestro handles pushing and opening the PR."
 					: "\n---\nDo your work in this worktree. Commit as you go. Toggle " +
-							"tasks when done. Exit when complete. Your committed diff is " +
+							"tasks when done using the EXACT taskId shown above. Exit when " +
+							"complete. Your committed diff is " +
 							"your deliverable — the parent integrates it; nothing here " +
 							"ships directly.",
 			);

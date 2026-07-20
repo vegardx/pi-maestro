@@ -13,11 +13,22 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Answer, AskCapabilityV1, Question } from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
-import type { PlanRepairOperation } from "./engine.js";
-import { type PlanEngine, planFingerprint } from "./engine.js";
 import type { ExecutionHandle } from "./exec/index.js";
-import type { Plan } from "./schema.js";
-import { findDeliverable, workerSessionGeneration } from "./schema.js";
+import type { PlanEngineV2, PlanRepairOperation } from "./plan/engine.js";
+import {
+	findNodeV2,
+	type PlanNode,
+	type PlanV2,
+	planFingerprintV2,
+	walkNodes,
+} from "./plan/schema.js";
+
+/** v1 workerSessionGeneration, per node (absent hydrates as generation 0). */
+function nodeSessionGeneration(
+	node: Pick<PlanNode, "sessionGeneration">,
+): number {
+	return node.sessionGeneration ?? 0;
+}
 
 export type DebugFactSource =
 	| "session-manager"
@@ -142,13 +153,20 @@ export interface DebugSnapshotInput {
 	readonly activeDeliverableId?: string;
 	readonly sessionPath?: string;
 	readonly entries: readonly SessionEntry[];
-	readonly engine?: PlanEngine;
+	readonly engine?: PlanEngineV2;
 	readonly execution?: ExecutionHandle;
 	readonly planRoot?: string;
 	readonly agentId?: string;
 	/** Worker-local generation binding (from the spawn environment). */
 	readonly workerGeneration?: number;
 	readonly maestroRevision?: string;
+}
+
+/** First active node in tree order, if any. */
+function firstActiveNodeId(plan: Pick<PlanV2, "nodes">): string | undefined {
+	for (const { node } of walkNodes(plan))
+		if (node.status === "active") return node.id;
+	return undefined;
 }
 
 export function normalizeDebugPath(value: string): string {
@@ -195,22 +213,22 @@ function boundedFailures(entries: readonly SessionEntry[]): DebugFailureFact[] {
 
 export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 	const plan = input.engine?.get();
-	const requestedDeliverableId =
-		input.activeDeliverableId ?? input.agentId?.split("/")[0];
+	// v2: the authenticated agent key IS the node id (no "<id>/<agent>" split).
+	const requestedDeliverableId = input.activeDeliverableId ?? input.agentId;
 	const deliverableId =
 		(plan && requestedDeliverableId
-			? findDeliverable(plan, requestedDeliverableId)?.id
+			? findNodeV2(plan, requestedDeliverableId)?.id
 			: undefined) ??
-		plan?.deliverables.find((item) => item.status === "active")?.id ??
-		// Worker-local snapshots have no plan to verify against; the deliverable
+		(plan ? firstActiveNodeId(plan) : undefined) ??
+		// Worker-local snapshots have no plan to verify against; the node
 		// identity comes from the authenticated agent id, never from model input.
-		input.agentId?.split("/")[0];
+		input.agentId;
 	const deliverable =
-		plan && deliverableId ? findDeliverable(plan, deliverableId) : undefined;
-	const executorState = deliverableId
-		? input.execution?.getExecutor().getStates().get(deliverableId)
+		plan && deliverableId ? findNodeV2(plan, deliverableId) : undefined;
+	// v2: one run state per node (the v1 per-deliverable agents map is gone).
+	const worker = deliverableId
+		? input.execution?.getExecutor().getRunState(deliverableId)
 		: undefined;
-	const worker = executorState?.agents.get("worker");
 	const snapshot = input.execution?.snapshot();
 	const role = input.agentId ? "worker" : plan ? "maestro" : "standalone";
 	return {
@@ -233,16 +251,14 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 						path: normalizeDebugPath(
 							join(input.planRoot ?? "", plan.slug, "plan.json"),
 						),
-						fingerprint: planFingerprint(plan),
+						fingerprint: planFingerprintV2(plan),
 					},
 				}
 			: {}),
 		execution: {
 			stage: input.executionStage,
 			...(deliverableId ? { activeDeliverableId: deliverableId } : {}),
-			...(executorState?.blocked
-				? { blocked: redactSecrets(executorState.blocked) }
-				: {}),
+			...(worker?.blocked ? { blocked: redactSecrets(worker.blocked) } : {}),
 			pendingQuestions: input.execution?.questionQueue.all().length ?? 0,
 		},
 		...(deliverable
@@ -250,7 +266,7 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 					worker: {
 						...(input.agentId ? { agentId: input.agentId } : {}),
 						generation:
-							worker?.generation ?? workerSessionGeneration(deliverable),
+							worker?.generation ?? nodeSessionGeneration(deliverable),
 						...(deliverable.sessionPath
 							? { sessionPath: normalizeDebugPath(deliverable.sessionPath) }
 							: {}),
@@ -332,7 +348,8 @@ export function diagnoseDebugSnapshot(
 	} else if (
 		target &&
 		snapshot.worker?.status &&
-		["working", "idle"].includes(snapshot.worker.status)
+		// v2 NodeAgentStatus has no "idle" — "working" is the live state.
+		["working", "summarizing"].includes(snapshot.worker.status)
 	) {
 		recoveries.push(
 			proposal({
@@ -592,7 +609,7 @@ export class DebugController {
 }
 
 export interface ExecuteDebugRecoveryDeps {
-	readonly engine?: PlanEngine;
+	readonly engine?: PlanEngineV2;
 	readonly execution?: ExecutionHandle;
 	readonly now?: () => string;
 }
@@ -604,25 +621,19 @@ function assertBinding(
 	if (
 		recovery.basePlanFingerprint &&
 		(!deps.engine ||
-			planFingerprint(deps.engine.get()) !== recovery.basePlanFingerprint)
+			planFingerprintV2(deps.engine.get()) !== recovery.basePlanFingerprint)
 	)
 		throw new Error("plan fingerprint changed since diagnosis");
 	if (
 		recovery.targetDeliverableId &&
 		recovery.expectedGeneration !== undefined
 	) {
+		const node = deps.engine
+			? findNodeV2(deps.engine.get(), recovery.targetDeliverableId)
+			: null;
 		const current =
-			deps.execution
-				?.getExecutor()
-				.getAgentState(recovery.targetDeliverableId, "worker")?.generation ??
-			(deps.engine
-				? workerSessionGeneration(
-						findDeliverable(
-							deps.engine.get(),
-							recovery.targetDeliverableId,
-						) ?? { sessionGeneration: -1 },
-					)
-				: -1);
+			deps.execution?.getExecutor().getRunState(recovery.targetDeliverableId)
+				?.generation ?? (node ? nodeSessionGeneration(node) : -1);
 		if (current !== recovery.expectedGeneration)
 			throw new Error(
 				`worker generation changed: expected ${recovery.expectedGeneration}, found ${current}`,
@@ -662,16 +673,16 @@ export async function executeDebugRecovery(
 			case "retry-activation": {
 				if (!execution || !target)
 					throw new Error("activation target is unavailable");
-				const state = execution.getExecutor().getStates().get(target);
+				const state = execution.getExecutor().getRunState(target);
 				if (
 					!state?.blocked?.startsWith("activation failed:") ||
 					state.worktreePath !== undefined ||
-					state.agents.size !== 0
+					state.status !== "pending"
 				)
 					throw new Error(
 						"deliverable is not in a retryable activation-failure state",
 					);
-				execution.getExecutor().unblockDeliverable(target);
+				execution.getExecutor().unblockNode(target);
 				await execution.tick();
 				return {
 					action: recovery.kind,
@@ -707,9 +718,13 @@ export async function executeDebugRecovery(
 					!recovery.repairOperations?.length
 				)
 					throw new Error("repair proposal is incomplete");
-				const state = execution?.getExecutor().getStates().get(target);
-				const worker = state?.agents.get("worker");
-				if (worker && ["working", "idle", "restarting"].includes(worker.status))
+				const worker = execution?.getExecutor().getRunState(target);
+				if (
+					worker &&
+					["spawning", "working", "summarizing", "restarting"].includes(
+						worker.status,
+					)
+				)
 					throw new Error("affected deliverable is not stopped");
 				const applied = deps.engine.applyTaskRepair({
 					baseFingerprint: recovery.basePlanFingerprint,
@@ -775,7 +790,7 @@ function isRepairOperation(value: unknown): value is PlanRepairOperation {
 export function validateWorkerDebugProposal(input: {
 	message: DebugProposalMessage;
 	authenticatedAgentId: string;
-	engine?: PlanEngine;
+	engine?: PlanEngineV2;
 	execution?: ExecutionHandle;
 }):
 	| { ok: true; recovery?: Omit<DebugRecoveryProposal, "id"> }
@@ -783,20 +798,22 @@ export function validateWorkerDebugProposal(input: {
 	const { message, authenticatedAgentId, engine, execution } = input;
 	if (message.agentId !== authenticatedAgentId)
 		return { ok: false, error: "debug proposal agent identity mismatch" };
-	const [deliverableId, agentName] = authenticatedAgentId.split("/");
-	if (!deliverableId || agentName !== "worker")
-		return {
-			ok: false,
-			error: "only a deliverable worker may propose debug recovery",
-		};
 	if (!engine || !execution)
 		return { ok: false, error: "maestro execution is unavailable" };
-	if (planFingerprint(engine.get()) !== message.planFingerprint)
+	// v2: the authenticated agent key IS the node id; only worker nodes may
+	// propose recovery (read agents have no workspace to repair).
+	const deliverableId = authenticatedAgentId;
+	const deliverable = findNodeV2(engine.get(), deliverableId);
+	if (!deliverableId || deliverable?.agent !== "worker")
+		return {
+			ok: false,
+			error: "only a worker node may propose debug recovery",
+		};
+	if (planFingerprintV2(engine.get()) !== message.planFingerprint)
 		return { ok: false, error: "debug proposal plan fingerprint is stale" };
-	const deliverable = findDeliverable(engine.get(), deliverableId);
 	const generation =
-		execution.getExecutor().getAgentState(deliverableId, "worker")
-			?.generation ?? (deliverable ? workerSessionGeneration(deliverable) : -1);
+		execution.getExecutor().getRunState(deliverableId)?.generation ??
+		nodeSessionGeneration(deliverable);
 	if (generation !== message.generation)
 		return {
 			ok: false,
@@ -875,6 +892,6 @@ export function debugEpisodePath(planDir: string): string {
 	return join(planDir, "debug", "active.json");
 }
 
-export function planForSnapshot(engine?: PlanEngine): Plan | undefined {
+export function planForSnapshot(engine?: PlanEngineV2): PlanV2 | undefined {
 	return engine?.get();
 }

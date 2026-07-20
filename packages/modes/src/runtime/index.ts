@@ -17,7 +17,7 @@ import type { MaestroContext } from "@vegardx/pi-core";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
 import { createCarryForwardTool, harvestInventory } from "../carry-forward.js";
-import type { PlanEngine } from "../engine.js";
+import type { PlanEngineV2 } from "../plan/engine.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
 import {
 	EXECUTION_POLICY_SETTINGS,
@@ -49,10 +49,13 @@ export { PLAN_CONTAINER };
 export interface ModesRuntime {
 	readonly askQueue: ModesAskQueue;
 	currentMode(): ModeName;
-	currentEngine(): PlanEngine | undefined;
+	currentEngine(): PlanEngineV2 | undefined;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
 	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
-	openPlan(titleOrSlug: string | undefined, ctx: ExtensionContext): PlanEngine;
+	openPlan(
+		titleOrSlug: string | undefined,
+		ctx: ExtensionContext,
+	): PlanEngineV2;
 	cycle(ctx: ExtensionContext): Promise<void>;
 }
 

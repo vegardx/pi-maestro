@@ -1,5 +1,5 @@
 // Deep plan verification (/verify): beyond the mechanical /recover audit,
-// actually check the WORK. For each started deliverable the orchestrator
+// actually check the WORK. For each started node the orchestrator
 // gathers hard evidence (commits ahead of base, the real diff, PR diff for
 // shipped work), then spawns a read-only `general` subagent whose job is to
 // read that diff plus the surrounding code and judge — task by task — whether
@@ -8,19 +8,23 @@
 import { existsSync } from "node:fs";
 import type { RunResult, SpawnProfile } from "@vegardx/pi-contracts";
 import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
-import type { Deliverable, Plan } from "../schema.js";
 import {
-	defaultBranchForDeliverable,
-	deliverableWorkspace,
-	gatingTasks,
-	pickBaseBranch,
-	repoFor,
-} from "../schema.js";
+	defaultBranchForNode,
+	deriveBase,
+	findNodeV2,
+	gatingNodeTasks,
+	isBranchOwner,
+	type PlanNode,
+	type PlanV2,
+	parentOfNode,
+	walkNodes,
+} from "../plan/schema.js";
 import {
 	parseStructuredFindings,
 	renderFinding,
 	type StructuredFinding,
 } from "./findings.js";
+import { repoForNode } from "./shipper.js";
 import { parseVerdict } from "./verdicts.js";
 
 // The structured-finding vocabulary moved to the shared findings module (the
@@ -60,7 +64,7 @@ export interface VerifyEntry {
 	readonly error?: string;
 }
 
-/** Evidence gathered per deliverable before spawning its verifier. */
+/** Evidence gathered per node before spawning its verifier. */
 export interface Evidence {
 	readonly facts: string[];
 	readonly problems: string[];
@@ -125,24 +129,27 @@ function defaultPrDiff(cwd: string, number: number): string | undefined {
 	return r.ok ? r.stdout : undefined;
 }
 
-/** The deliverables /verify targets: everything started, or one by id. */
-export function verifyTargets(plan: Plan, id?: string): Deliverable[] {
+/** The nodes /verify targets: everything started, or one by id. */
+export function verifyTargets(plan: PlanV2, id?: string): PlanNode[] {
 	if (id) {
-		const g = plan.deliverables.find((d) => d.id === id);
+		const g = findNodeV2(plan, id);
 		return g && STARTED.has(g.status) ? [g] : [];
 	}
-	return plan.deliverables.filter((g) => STARTED.has(g.status));
+	const targets: PlanNode[] = [];
+	for (const { node } of walkNodes(plan))
+		if (STARTED.has(node.status)) targets.push(node);
+	return targets;
 }
 
 /**
- * Gather mechanical evidence for one deliverable: does the claimed work exist
+ * Gather mechanical evidence for one node: does the claimed work exist
  * in git/GitHub, and what is its actual diff? Problems recorded here are
  * Tier-2 findings in their own right (zero commits on a "complete" branch,
  * branch gone, workspace missing) — the agent pass builds on top of them.
  */
 export function gatherEvidence(
-	plan: Plan,
-	g: Deliverable,
+	plan: PlanV2,
+	g: PlanNode,
 	deps: VerifyDeps,
 ): Evidence {
 	const pathExists = deps.pathExists ?? existsSync;
@@ -151,7 +158,7 @@ export function gatherEvidence(
 	const facts: string[] = [];
 	const problems: string[] = [];
 
-	if (deliverableWorkspace(g) === "scratch") {
+	if (!isBranchOwner(g)) {
 		const cwd =
 			g.worktreePath && pathExists(g.worktreePath) ? g.worktreePath : undefined;
 		if (cwd) facts.push(`scratch workspace: ${cwd}`);
@@ -159,19 +166,21 @@ export function gatherEvidence(
 		return { facts, problems, ...(cwd ? { cwd } : {}) };
 	}
 
-	const repo = repoFor(plan, g);
+	const repo = repoForNode(plan, g);
 	if (!pathExists(repo.path)) {
 		problems.push(`repo path missing: ${repo.path}`);
 		return { facts, problems };
 	}
 	const cwd =
 		g.worktreePath && pathExists(g.worktreePath) ? g.worktreePath : repo.path;
-	const branch = g.branch ?? defaultBranchForDeliverable(g);
+	const branch = g.branch ?? defaultBranchForNode(g);
 	const defaultBranch =
 		deps.defaultBranchFor?.(repo.path) ??
 		detectDefaultBranch(repo.path) ??
 		"main";
-	const base = pickBaseBranch(plan, g, defaultBranch);
+	const parent = parentOfNode(plan, g.id);
+	const siblings = parent ? (parent.children ?? []) : plan.nodes;
+	const base = deriveBase(g, siblings, defaultBranch);
 	facts.push(`branch ${branch}, base ${base}`);
 
 	// Shipped with a PR: the PR diff is authoritative — it is what actually
@@ -230,9 +239,9 @@ const clipDiff = (diff: string): string =>
 		? `${diff.slice(0, DIFF_CLIP)}\n[…diff clipped — read the files for the rest]`
 		: diff;
 
-/** The verifier's prompt: deliverable contract + evidence + verdict protocol. */
-export function buildVerifyPrompt(g: Deliverable, evidence: Evidence): string {
-	const tasks = gatingTasks(g)
+/** The verifier's prompt: node contract + evidence + verdict protocol. */
+export function buildVerifyPrompt(g: PlanNode, evidence: Evidence): string {
+	const tasks = gatingNodeTasks(g)
 		.map(
 			(t) =>
 				`- [${t.done ? "x" : " "}] ${t.title}${t.body ? ` — ${t.body}` : ""}`,
@@ -243,8 +252,8 @@ export function buildVerifyPrompt(g: Deliverable, evidence: Evidence): string {
 			`"${g.status}". Your job is to check whether the work GENUINELY exists ` +
 			"and accomplishes its tasks — not whether files merely changed.",
 		"",
-		`# Deliverable: ${g.title} (${g.id}, status: ${g.status})`,
-		g.body,
+		`# Deliverable: ${g.title ?? g.id} (${g.id}, status: ${g.status})`,
+		g.body ?? "",
 		"",
 		"## Tasks",
 		"Tasks marked [x] must be genuinely accomplished by the work. Unmarked " +
@@ -303,8 +312,8 @@ export function buildVerifyPrompt(g: Deliverable, evidence: Evidence): string {
  * skip the agent — there is nothing for it to read.
  */
 export async function runVerification(
-	plan: Plan,
-	targets: readonly Deliverable[],
+	plan: PlanV2,
+	targets: readonly PlanNode[],
 	deps: VerifyDeps,
 ): Promise<VerifyEntry[]> {
 	return Promise.all(
@@ -312,7 +321,7 @@ export async function runVerification(
 			const evidence = gatherEvidence(plan, g, deps);
 			const base = {
 				id: g.id,
-				title: g.title,
+				title: g.title ?? g.id,
 				status: g.status,
 				problems: evidence.problems,
 				facts: evidence.facts,

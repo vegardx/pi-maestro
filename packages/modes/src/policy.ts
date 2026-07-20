@@ -1,5 +1,5 @@
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { PlanPhase } from "./schema.js";
+import type { PlanPhase } from "./plan/schema.js";
 
 export const PLAN_TOOL_NAMES = [
 	"deliverable",

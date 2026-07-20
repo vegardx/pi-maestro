@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import {
 	buildExecutionPreamble,
 	buildPlanModePreamble,
 } from "../packages/modes/src/planning-preamble.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp/plans",
-		save(plan: Plan) {
+		save(plan: PlanV2) {
 			saved = plan;
 		},
-		load(_slug: string): Plan | null {
+		load(_slug: string): PlanV2 | null {
 			return saved;
 		},
 		exists(_slug: string): boolean {
@@ -38,7 +38,7 @@ describe("buildPlanModePreamble", () => {
 	});
 
 	it("shows update message for existing plan", () => {
-		const engine = PlanEngine.create(memStore(), {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "my-plan",
 			title: "My Plan",
 			repoPath: "/tmp",
@@ -54,11 +54,12 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("web");
 		expect(preamble).toContain("`readiness`");
 		// Structure tools are locked — no structuring workflow yet.
-		expect(preamble).not.toContain("deliverable(action");
+		expect(preamble).toContain("are locked");
+		expect(preamble).not.toContain("You MUST use the `node` and `task` tools");
 	});
 
 	it("teaches the ask ladder and decision-block format in both phases", () => {
-		const engine = PlanEngine.create(memStore(), {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "ladder",
 			title: "Ladder",
 			repoPath: "/tmp",
@@ -76,7 +77,7 @@ describe("buildPlanModePreamble", () => {
 	});
 
 	it("includes convergence criteria in both phases", () => {
-		const engine = PlanEngine.create(memStore(), {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "conv",
 			title: "Conv",
 			repoPath: "/tmp",
@@ -91,8 +92,8 @@ describe("buildPlanModePreamble", () => {
 		}
 	});
 
-	it("structuring mentions deliverable/task/agent tools and the understanding", () => {
-		const engine = PlanEngine.create(memStore(), {
+	it("structuring mentions node/task/knowledge tools and the understanding", () => {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "structured",
 			title: "Structured",
 			repoPath: "/tmp",
@@ -100,72 +101,71 @@ describe("buildPlanModePreamble", () => {
 		engine.setPhase("structuring", "We will build a clamp helper.");
 		const preamble = buildPlanModePreamble(engine);
 		expect(preamble).toContain("STRUCTURING");
-		expect(preamble).toContain("deliverable(action");
-		expect(preamble).toContain("task(action");
-		expect(preamble).toContain("agent(action");
+		expect(preamble).toContain("`node`");
+		expect(preamble).toContain("`task`");
+		expect(preamble).toContain("knowledge(content=");
 		expect(preamble).toContain("We will build a clamp helper.");
 		expect(preamble).toContain("research/");
 	});
 
-	it("guides exact assignment and stage graph composition", () => {
-		const engine = PlanEngine.create(memStore(), {
+	it("guides child-node review coverage and inheritance", () => {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "workflow",
 			title: "Workflow",
 			repoPath: "/tmp",
 		});
 		engine.setPhase("structuring");
 		const preamble = buildPlanModePreamble(engine);
-		expect(preamble).toContain('workflow(action="options")');
-		expect(preamble).toContain('workflow(action="set"');
-		expect(preamble).toContain("sequencing hints");
-		expect(preamble).toContain("immutable `inputRevision`");
-		expect(preamble).toContain("exact model/effort");
+		expect(preamble).toContain("CHILD NODES");
+		expect(preamble).toContain('`after: ["parent"]`');
+		expect(preamble).toContain("resolve by inheritance");
+		expect(preamble).toContain("Never author models or efforts");
 	});
 
-	it("plans with deliverables but no phase field hydrate as structuring", () => {
-		const engine = PlanEngine.create(memStore(), {
+	it("plans with nodes but no phase field hydrate as structuring", () => {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "legacy",
 			title: "Legacy",
 			repoPath: "/tmp",
 		});
-		engine.addDeliverable({ title: "Auth", workerMode: "full" });
-		engine.addWorkItem("auth", { title: "t1" });
+		engine.addNode(null, { agent: "worker", persona: "coder", title: "Auth" });
+		engine.addTask("auth", { title: "t1" });
 		const preamble = buildPlanModePreamble(engine);
 		expect(preamble).toContain("STRUCTURING");
 	});
 });
 
 describe("buildExecutionPreamble", () => {
-	it("shows deliverable status overview", () => {
-		const engine = PlanEngine.create(memStore(), {
+	it("shows node status overview", () => {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "exec-plan",
 			title: "Exec",
 			repoPath: "/tmp",
 		});
-		engine.addDeliverable({ title: "Auth", workerMode: "full" });
-		engine.addWorkItem("auth", { title: "t1" });
-		engine.setDeliverableStatus("auth", "active");
+		engine.addNode(null, { agent: "worker", persona: "coder", title: "Auth" });
+		engine.addTask("auth", { title: "t1" });
+		engine.setNodeStatus("auth", "active");
 
 		const preamble = buildExecutionPreamble(engine);
 		expect(preamble).toContain("EXECUTION MODE");
-		expect(preamble).toContain("deliverable:auth");
+		expect(preamble).toContain("node:auth");
 		expect(preamble).toContain("active");
 	});
 
 	it("shows all status categories", () => {
-		const engine = PlanEngine.create(memStore(), {
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "multi",
 			title: "Multi",
 			repoPath: "/tmp",
 		});
-		engine.addDeliverable({ title: "A", workerMode: "full", dependsOn: [] });
-		engine.addWorkItem("a", { title: "t1" });
-		engine.addDeliverable({ title: "B", workerMode: "full", dependsOn: [] });
-		engine.addWorkItem("b", { title: "t2" });
-		engine.setDeliverableStatus("a", "active");
+		engine.addNode(null, { agent: "worker", persona: "coder", title: "A" });
+		engine.addTask("a", { title: "t1" });
+		engine.addNode(null, { agent: "worker", persona: "coder", title: "B" });
+		engine.addTask("b", { title: "t2" });
+		engine.setNodeStatus("a", "active");
 
 		const preamble = buildExecutionPreamble(engine);
-		expect(preamble).toContain("deliverable:a — active");
-		expect(preamble).toContain("deliverable:b — planned");
+		expect(preamble).toContain("node:a — active");
+		expect(preamble).toContain("node:b — planned");
 	});
 });

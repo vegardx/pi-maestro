@@ -1,11 +1,18 @@
+// Scenario-level lifecycle + observability over the v2 stack: PlanEngineV2
+// ledger transitions (start/restart orthogonality, recoverable K-failure),
+// child-projection/usage reconciliation, HUD + PR-provenance projection, and
+// fleet-stop capture. Ported from the v1 suite; agent keys are bare node ids
+// (the v1 `<deliverable>/<agent>` compound vocabulary died with the flip).
+
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildRunProjection, RunId } from "@vegardx/pi-contracts";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
 import { ChildProjectionStore } from "../packages/modes/src/exec/child-projections.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
 import {
 	renderMaestroPrSection,
 	updateMaestroPrBody,
@@ -14,7 +21,6 @@ import {
 	HudComponent,
 	type HudSnapshot,
 } from "../packages/modes/src/runtime/hud.js";
-import type { Deliverable } from "../packages/modes/src/schema.js";
 import { UsageCheckpointStore } from "../packages/modes/src/usage-checkpoints.js";
 import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 import type { WorkflowAnalyticsLedger } from "../packages/modes/src/workflow-analytics.js";
@@ -48,22 +54,6 @@ function child(
 		...(status === "succeeded" ? { completedAt: 100 + revision } : {}),
 		profile: { profile: "review", displayName: "security-review" },
 		usage: canonicalTokenSnapshot({ input: revision * 10, output: revision }),
-	};
-}
-
-function makeDelivery(analytics?: WorkflowAnalyticsLedger): Deliverable {
-	return {
-		type: "deliverable",
-		id: "runtime",
-		title: "Runtime",
-		body: "Lifecycle hardening",
-		status: "complete",
-		worker: { mode: "full" },
-		agents: [],
-		tasks: [],
-		...(analytics ? { workflowAnalytics: analytics } : {}),
-		createdAt: "2026-01-01T00:00:00.000Z",
-		updatedAt: "2026-01-01T00:00:00.000Z",
 	};
 }
 
@@ -127,18 +117,18 @@ describe("lifecycle and observability scenarios", () => {
 			name: "start restart kill recover",
 			steps: [
 				{
-					name: "create active and planned deliveries",
+					name: "create active and planned nodes",
 					run: (scenario) => {
 						const store = {
 							root: join(scenario.root, "plans"),
 							exists: () => false,
 							load: () => null,
-							save: (plan: unknown) =>
+							save: (plan: PlanV2) =>
 								scenario.state.set("plan", structuredClone(plan)),
 							remove: () => {},
 							list: () => [],
 						};
-						const engine = PlanEngine.create(
+						const engine = PlanEngineV2.create(
 							store,
 							{
 								slug: "lifecycle",
@@ -148,20 +138,22 @@ describe("lifecycle and observability scenarios", () => {
 							scenario.clock.iso,
 						);
 						engine.setPhase("structuring");
-						engine.addDeliverable({
+						engine.addNode(null, {
 							id: "active",
+							agent: "worker",
+							persona: "coder",
 							title: "Active",
-							workerMode: "full",
 						});
-						engine.addWorkItem("active", { title: "Run" });
-						engine.addDeliverable({
+						engine.addTask("active", { title: "Run" });
+						engine.addNode(null, {
 							id: "queued",
+							agent: "worker",
+							persona: "coder",
 							title: "Queued",
-							workerMode: "full",
 						});
-						engine.addWorkItem("queued", { title: "Wait" });
-						engine.setDeliverableStatus("active", "active");
-						engine.updateWorkerSession("active", {
+						engine.addTask("queued", { title: "Wait" });
+						engine.setNodeStatus("active", "active");
+						engine.setNodeRuntime("active", {
 							sessionGeneration: 1,
 							sessionPath: join(scenario.root, "active.jsonl"),
 							sessionName: "active-worker",
@@ -172,7 +164,7 @@ describe("lifecycle and observability scenarios", () => {
 							activated: ["active"],
 							untouched: ["queued"],
 						});
-						engine.updateWorkerSession("active", {
+						engine.setNodeRuntime("active", {
 							sessionGeneration: 2,
 							restartMode: "resume",
 							restartState: "running",
@@ -181,25 +173,25 @@ describe("lifecycle and observability scenarios", () => {
 							id: "active",
 							generation: 2,
 						});
-						engine.setDeliverableStatus("active", "failed", {
+						engine.setNodeStatus("active", "failed", {
 							code: "operator-k",
 							message: "bounded shutdown requested",
 							failedAt: scenario.clock.iso(),
 							recoverable: true,
 							attempt: 1,
-							agentId: "active/worker",
+							agentId: "active",
 						});
 						scenario.emit("lifecycle.k-failed", {
 							id: "active",
 							recoverable: true,
 						});
-						engine.setDeliverableStatus("active", "active");
+						engine.setNodeStatus("active", "active");
 						scenario.emit("lifecycle.recovered", {
 							scope: "targeted",
 							ids: ["active"],
 						});
 						expect(
-							engine.get().deliverables.find((item) => item.id === "queued")
+							engine.get().nodes.find((item: PlanNode) => item.id === "queued")
 								?.status,
 						).toBe("planned");
 					},
@@ -216,14 +208,12 @@ describe("lifecycle and observability scenarios", () => {
 			]),
 		);
 		const plan = (
-			result.finalState as { state: { plan: { deliverables: Deliverable[] } } }
+			result.finalState as { state: { plan: { nodes: PlanNode[] } } }
 		).state.plan;
-		expect(plan.deliverables.map(({ id, status }) => ({ id, status }))).toEqual(
-			[
-				{ id: "active", status: "active" },
-				{ id: "queued", status: "planned" },
-			],
-		);
+		expect(plan.nodes.map(({ id, status }) => ({ id, status }))).toEqual([
+			{ id: "active", status: "active" },
+			{ id: "queued", status: "planned" },
+		]);
 	});
 
 	it("reconciles children by generation and restores accounting without replay double counts", async () => {
@@ -232,7 +222,7 @@ describe("lifecycle and observability scenarios", () => {
 		const projectionsPath = join(dir, "children.json");
 		const store = new ChildProjectionStore(projectionsPath);
 		store.apply({
-			ownerId: "runtime/worker",
+			ownerId: "runtime",
 			expectedGeneration: 2,
 			ownerGeneration: 2,
 			reconcile: true,
@@ -240,7 +230,7 @@ describe("lifecycle and observability scenarios", () => {
 		});
 		expect(
 			store.apply({
-				ownerId: "runtime/worker",
+				ownerId: "runtime",
 				expectedGeneration: 3,
 				ownerGeneration: 2,
 				reconcile: false,
@@ -250,7 +240,7 @@ describe("lifecycle and observability scenarios", () => {
 		const restored = new ChildProjectionStore(projectionsPath);
 		expect(restored.get("review-child")?.confirmed).toBe(false);
 		restored.apply({
-			ownerId: "runtime/worker",
+			ownerId: "runtime",
 			expectedGeneration: 3,
 			ownerGeneration: 3,
 			reconcile: true,
@@ -265,13 +255,13 @@ describe("lifecycle and observability scenarios", () => {
 		const usagePath = join(dir, "usage.json");
 		const checkpoints = new UsageCheckpointStore(usagePath);
 		checkpoints.accept({
-			source: { kind: "agent", id: "runtime/worker", generation: 1 },
+			source: { kind: "agent", id: "runtime", generation: 1 },
 			revision: 2,
 			snapshot: canonicalTokenSnapshot({ input: 50, output: 5 }),
 			updatedAt: 1,
 		});
 		checkpoints.accept({
-			source: { kind: "agent", id: "runtime/worker", generation: 2 },
+			source: { kind: "agent", id: "runtime", generation: 2 },
 			revision: 1,
 			snapshot: canonicalTokenSnapshot({ input: 20, output: 2 }),
 			updatedAt: 2,
@@ -290,7 +280,7 @@ describe("lifecycle and observability scenarios", () => {
 		const snap: HudSnapshot = {
 			agents: [
 				{
-					key: "runtime/worker",
+					key: "runtime",
 					label: "worker · runtime",
 					status: "running",
 					startedAt: 1_000,
@@ -300,7 +290,7 @@ describe("lifecycle and observability scenarios", () => {
 					cacheWrite: 5_000,
 					model: "review-model",
 					effort: "high",
-					targetId: "worker:runtime/worker",
+					targetId: "worker:runtime",
 					children: [],
 				},
 			],
@@ -323,8 +313,12 @@ describe("lifecycle and observability scenarios", () => {
 		expect(hud.render(58)[1]).not.toContain("review-model (high)");
 		expect(hud.render(34)[1]).not.toContain("↑125k");
 
-		const delivery = makeDelivery(analytics());
-		const section = renderMaestroPrSection(delivery);
+		// pr-provenance consumes the v2 node vocabulary: id + analytics ledger.
+		const node: Pick<PlanNode, "id" | "workflowAnalytics"> = {
+			id: "runtime",
+			workflowAnalytics: analytics(),
+		};
+		const section = renderMaestroPrSection(node);
 		const body = updateMaestroPrBody("User-authored intro", section);
 		expect(body).toContain("User-authored intro");
 		expect(body).toContain("run-security");
@@ -342,11 +336,11 @@ describe("lifecycle and observability scenarios", () => {
 					run: (scenario) => {
 						const agents = [
 							{
-								agentKey: "cooperative/worker",
+								agentKey: "cooperative",
 								generation: 1,
 								outcome: "cooperative",
 							},
-							{ agentKey: "forced/worker", generation: 4, outcome: "forced" },
+							{ agentKey: "forced", generation: 4, outcome: "forced" },
 						] as const;
 						scenario.state.set("stop", {
 							requestedAt: scenario.clock.now(),

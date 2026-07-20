@@ -1,19 +1,21 @@
 // /recover's reality check: the plan's claimed statuses are verified against
 // worktrees, branches, remote branches, and PRs before anything resumes.
 
+import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import { auditPlan, renderAudit } from "../packages/modes/src/exec/recovery.js";
-import type { Deliverable, Plan } from "../packages/modes/src/schema.js";
+import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
 
-function makeDeliverable(overrides: Partial<Deliverable>): Deliverable {
+function makeNode(overrides: Partial<PlanNode>): PlanNode {
 	return {
-		type: "deliverable",
+		type: "node",
 		id: "d",
+		agent: "worker",
+		persona: "coder",
 		title: "D",
 		body: "",
 		status: "planned",
-		worker: { mode: "full" },
-		agents: [],
+		authoredBy: "plan",
 		tasks: [],
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
@@ -21,13 +23,13 @@ function makeDeliverable(overrides: Partial<Deliverable>): Deliverable {
 	};
 }
 
-function makePlan(deliverables: Deliverable[]): Plan {
+function makePlan(nodes: PlanNode[]): PlanV2 {
 	return {
-		schemaVersion: 5,
+		schemaVersion: PLAN_SCHEMA_VERSION_V2,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",
-		deliverables,
+		nodes,
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
 	};
@@ -43,8 +45,8 @@ const allGood = {
 describe("auditPlan", () => {
 	it("skips planned/abandoned/superseded — nothing on disk to verify", async () => {
 		const plan = makePlan([
-			makeDeliverable({ id: "a", status: "planned" }),
-			makeDeliverable({ id: "b", status: "abandoned" }),
+			makeNode({ id: "a", status: "planned" }),
+			makeNode({ id: "b", status: "abandoned" }),
 		]);
 		const audit = await auditPlan(plan, allGood);
 		expect(audit.entries).toEqual([]);
@@ -53,7 +55,7 @@ describe("auditPlan", () => {
 
 	it("active: verifies workspace + resumable session file", async () => {
 		const plan = makePlan([
-			makeDeliverable({
+			makeNode({
 				id: "auth",
 				status: "active",
 				branch: "feat/auth",
@@ -71,7 +73,7 @@ describe("auditPlan", () => {
 
 	it("complete with a dirty tree or missing branch is a problem", async () => {
 		const plan = makePlan([
-			makeDeliverable({
+			makeNode({
 				id: "auth",
 				status: "complete",
 				branch: "feat/auth",
@@ -90,14 +92,14 @@ describe("auditPlan", () => {
 
 	it("shipped: a CLOSED (unmerged) PR is a problem; MERGED is fine", async () => {
 		const plan = makePlan([
-			makeDeliverable({
+			makeNode({
 				id: "auth",
 				status: "shipped",
 				branch: "feat/auth",
 				prNumber: 12,
 				prUrl: "https://github.com/o/r/pull/12",
 			}),
-			makeDeliverable({
+			makeNode({
 				id: "api",
 				status: "shipped",
 				branch: "feat/api",
@@ -116,12 +118,11 @@ describe("auditPlan", () => {
 		expect(audit.entries[1].notes).toContain("✓ PR #13 merged");
 	});
 
-	it("shipped scratch deliverables have no PR/branch to verify", async () => {
+	it("shipped branchless (scratch) nodes have no PR/branch to verify", async () => {
 		const plan = makePlan([
-			makeDeliverable({
+			makeNode({
 				id: "bootstrap",
 				status: "shipped",
-				workspace: "scratch",
 			}),
 		]);
 		const audit = await auditPlan(plan, {
@@ -135,7 +136,7 @@ describe("auditPlan", () => {
 
 	it("renderAudit summarizes problems for the human", async () => {
 		const plan = makePlan([
-			makeDeliverable({
+			makeNode({
 				id: "auth",
 				status: "shipped",
 				branch: "feat/auth",

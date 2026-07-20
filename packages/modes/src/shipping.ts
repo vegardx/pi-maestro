@@ -1,43 +1,39 @@
-// Shipping for the deliverable model. The maestro owns shipping — agents never
-// push or create PRs. This module provides the concrete implementation of
-// the `shipDeliverable` dependency that the DeliverableExecutor calls.
+// Shipping for the node model. The maestro owns shipping — agents never
+// push or create PRs. This module provides the PR-body assembly the
+// executor's shipNode dependency uses for branch-owning nodes.
 
+import { gatingNodeTasks, type PlanNode } from "./plan/schema.js";
 import {
 	renderMaestroPrSection,
 	updateMaestroPrBody,
 } from "./pr-provenance.js";
-import type { Deliverable } from "./schema.js";
-import { gatingTasks } from "./schema.js";
 
-export interface ShipDeliverableInput {
-	deliverable: Deliverable;
+export interface ShipNodeInput {
+	node: PlanNode;
 	branch: string;
 	worktreePath: string;
 	/** Agent summaries assembled into PR body sections. */
 	agentReports: string[];
 }
 
-export interface ShipDeliverableResult {
+export interface ShipNodeResult {
 	prUrl: string;
 	prNumber: number;
 }
 
 /**
- * Build the PR body for a shipped deliverable.
+ * Build the PR body for a shipped branch-owning node.
  */
-export function buildPrBody(
-	deliverable: Deliverable,
-	agentReports: string[],
-): string {
+export function buildPrBody(node: PlanNode, agentReports: string[]): string {
 	const sections: string[] = [];
 
-	// Deliverable description
-	if (deliverable.body) {
-		sections.push(deliverable.body);
+	// Node description
+	if (node.body) {
+		sections.push(node.body);
 	}
 
 	// Task checklist
-	const tasks = gatingTasks(deliverable);
+	const tasks = gatingNodeTasks(node);
 	if (tasks.length > 0) {
 		const list = tasks.map((t) => `- [x] ${t.title}`).join("\n");
 		sections.push(`## Tasks\n\n${list}`);
@@ -49,17 +45,18 @@ export function buildPrBody(
 	}
 
 	const base = sections.join("\n\n");
-	if (!deliverable.workflowAnalytics) return base;
-	return updateMaestroPrBody(base, renderMaestroPrSection(deliverable));
+	if (!node.workflowAnalytics) return base;
+	return updateMaestroPrBody(base, renderMaestroPrSection(node));
 }
 
 /**
- * Determine if a deliverable needs shipping (complete + terminal).
- * Used by the executor — external callers use shippableDeliverables() from schema.
+ * Determine if a node needs shipping (complete + terminal).
+ * Used by the executor — external callers use shippableNodes() from
+ * plan/schema.
  */
 export function shouldShip(
-	deliverable: Deliverable,
+	node: PlanNode,
 	hasDownstreamDeps: boolean,
 ): boolean {
-	return deliverable.status === "complete" && !hasDownstreamDeps;
+	return node.status === "complete" && !hasDownstreamDeps;
 }

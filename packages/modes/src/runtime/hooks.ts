@@ -17,10 +17,13 @@ import {
 	readModesCompactionDetails,
 	summaryHash,
 } from "../compaction.js";
+import { walkNodes } from "../plan/schema.js";
+import { archiveLegacyPlans } from "../plan/storage.js";
+import { planPhaseV2 } from "../planning-preamble.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
-import { planPhase } from "../schema.js";
 import { hydrateModesState } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
+import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import { tmuxRequirementIssues } from "../tmux-check.js";
 import {
@@ -29,7 +32,7 @@ import {
 	handoffSeedPromptBlock,
 	scheduleHandoffArrival,
 } from "./carry-commands.js";
-import { activeDeliverable, type RuntimeContext } from "./context.js";
+import type { RuntimeContext } from "./context.js";
 import { installMaestroFooter } from "./dashboard.js";
 import { hydrateDebugEpisode } from "./debug-command.js";
 import { installHud } from "./hud-wiring.js";
@@ -174,6 +177,22 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		rt.isolationNoneSession = false;
+		// v2 flip: pre-v6 plan dirs are archived WHOLESALE into _legacy/ with
+		// one visible notice, never a crash (#238/#239 argued auto-archive
+		// over a hard error). Host sessions only — workers have no plan store.
+		if (!isAgentMode()) {
+			try {
+				const { archived } = archiveLegacyPlans(plansRoot());
+				if (archived.length > 0) {
+					ctx.ui.notify(
+						`Archived ${archived.length} pre-v2 plan(s) to _legacy/: ${archived.join(", ")}. They are read-only history; start a fresh plan.`,
+						"warning",
+					);
+				}
+			} catch {
+				// Archive is best-effort; a failure surfaces on plan load instead.
+			}
+		}
 		await Promise.allSettled([
 			rt.isolationBackends.lightweight.reset(),
 			rt.isolationBackends.strong.reset(),
@@ -262,12 +281,15 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			(rt.state.mode === "auto" || rt.state.mode === "hack") &&
 			!rt.execution
 		) {
-			const actives = rt.engine
-				.get()
-				.deliverables.filter((g) => g.status === "active");
+			const activePlan = rt.engine?.get();
+			const actives = activePlan
+				? [...walkNodes(activePlan)]
+						.map((visit) => visit.node)
+						.filter((node) => node.status === "active")
+				: [];
 			if (actives.length > 0) {
 				ctx.ui.notify(
-					`${actives.length} deliverable(s) were mid-execution when the last session ended: ` +
+					`${actives.length} node(s) were mid-execution when the last session ended: ` +
 						`${actives.map((g) => g.id).join(", ")} — /recover audits the plan and resumes them.`,
 					"warning",
 				);
@@ -275,7 +297,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 					try {
 						const yes = await ctx.ui.confirm(
 							"Recover execution",
-							`Resume ${actives.length} interrupted deliverable(s)? Workers respawn from their saved sessions; /recover also works later.`,
+							`Resume ${actives.length} interrupted node(s)? Workers respawn from their saved sessions; /recover also works later.`,
 						);
 						if (yes) await rt.runRecover(undefined, ctx);
 					} catch {
@@ -345,34 +367,28 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 				},
 				ctx,
 			);
+			// v2 prepareStop reports which sessions stopped/were unresponsive;
+			// the durable StopRecord is assembled here (the adapter no longer
+			// returns one).
 			const result = await rt.execution.prepareStop?.("host session shutdown");
-			if (result) {
-				rt.setExecutionStage(
-					{
-						stage: "stopped",
-						completedAt: result.stop.completedAt,
-						stop: result.stop,
-					},
-					ctx,
-				);
-			} else {
-				const completedAt = Date.now();
-				rt.setExecutionStage(
-					{
-						stage: "stopped",
+			const completedAt = Date.now();
+			rt.setExecutionStage(
+				{
+					stage: "stopped",
+					completedAt,
+					stop: {
+						kind: "interrupted",
+						requestedAt,
 						completedAt,
-						stop: {
-							kind: "interrupted",
-							requestedAt,
-							completedAt,
-							reason: "host session shutdown",
-							outcome: "accepted",
-							recoverable: true,
-						},
+						reason: result
+							? `host session shutdown (stopped: ${result.stopped.length}, unresponsive: ${result.unresponsive.length})`
+							: "host session shutdown",
+						outcome: "accepted",
+						recoverable: true,
 					},
-					ctx,
-				);
-			}
+				},
+				ctx,
+			);
 			await rt.execution.destroy();
 			rt.execution = undefined;
 		}
@@ -399,9 +415,10 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (reason) return { block: true, reason };
 		}
 		if (rt.state.mode === "plan") {
+			const engine = rt.engine;
 			const reason = toolBlockedInPlanMode(
 				event.toolName,
-				rt.engine ? planPhase(rt.engine.get()) : "exploring",
+				engine ? planPhaseV2(engine.get()) : "exploring",
 			);
 			if (reason) return { block: true, reason };
 		}
@@ -469,7 +486,8 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 		// Marker present but no matching pending claim → never let the marker text
 		// fall through into pi's default "Additional focus" prompt.
-		if (decision.kind === "leak-guard" || !rt.engine) {
+		const engine = rt.engine;
+		if (decision.kind === "leak-guard" || !engine) {
 			rt.pendingCompaction = undefined;
 			ctx.ui.notify(
 				"Maestro could not own this compaction; cancelled to avoid a stale marker.",
@@ -494,7 +512,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 					details: {
 						schemaVersion: COMPACTION_SCHEMA_VERSION,
 						modesKind: "maestro-distill",
-						planSlug: rt.engine.get().slug,
+						planSlug: engine.get().slug,
 						deliverableId: pending.deliverableId,
 						sliceNumber: 0,
 						nonce: pending.nonce,
@@ -515,7 +533,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		try {
 			const result = await buildDeliverableSliceCompactionResult({
 				entries: ctx.sessionManager.getEntries(),
-				plan: rt.engine.get(),
+				plan: engine.get(),
 				deliverableId: pending.deliverableId,
 				summarise,
 				rawMessages,
@@ -558,7 +576,8 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 	// recovery value is in the transcript, not in re-alarming the human.
 	const snapshotSeen = new Set<string>();
 	pi.on("tool_execution_end", (event, ctx) => {
-		if (!event.isError || !rt.engine) return;
+		const engine = rt.engine;
+		if (!event.isError || !engine) return;
 		// Benign tool misses during recon/planning/hacking are not crashes —
 		// snapshots exist to capture execution failures for recovery.
 		if (
@@ -567,12 +586,16 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			rt.state.mode === "hack"
 		)
 			return;
+		const plan = engine.get();
+		const activeNodeId = [...walkNodes(plan)].find(
+			(visit) => visit.node.status === "active",
+		)?.node.id;
 		const snapshot = createCrashSnapshot(
 			{
 				error: event.result,
 				mode: rt.state.mode,
-				plan: rt.engine.get(),
-				activeDeliverableId: activeDeliverable(rt.engine.get())?.id,
+				plan,
+				...(activeNodeId ? { activeDeliverableId: activeNodeId } : {}),
 				cwd: ctx.cwd,
 			},
 			rt.now,

@@ -1,47 +1,25 @@
-// Observability seam: real token snapshots in ExecutionAdapter.snapshot(),
+// Observability seam: real token snapshots in NodeExecutionAdapter.snapshot(),
+// per-agent state reports (onAgentStateChanged with incrementing revisions),
 // the events.jsonl lifecycle log, steer targeting, and session-name
 // resolution — driven over a real RPC socket with a stub tmux.
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
 import {
-	ExecutionAdapter,
-	type TmuxApi,
-} from "../packages/modes/src/exec/execution-adapter.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+	type AgentStateSnapshot,
+	NodeExecutionAdapter,
+	type TmuxLikeApi,
+} from "../packages/modes/src/plan/node-adapter.js";
+import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "obs-test-token";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
-	return {
-		root: "/tmp/plans",
-		save(plan: Plan) {
-			saved = plan;
-		},
-		load(): Plan | null {
-			return saved;
-		},
-		exists(): boolean {
-			return saved !== null;
-		},
-		remove() {
-			saved = null;
-		},
-		list() {
-			return [];
-		},
-	};
-}
-
 /** Stub tmux: records spawns; sessions are never "alive" (skips kill waits). */
-function stubTmux(): TmuxApi & { spawned: string[] } {
+function stubTmux(): TmuxLikeApi & { spawned: string[] } {
 	const spawned: string[] = [];
 	return {
 		spawned,
@@ -79,69 +57,62 @@ function readEvents(
 		.map((line) => JSON.parse(line));
 }
 
-describe("execution adapter observability", () => {
+describe("node execution adapter observability", () => {
 	let tmpDir: string;
 	let planDir: string;
-	let adapter: ExecutionAdapter;
-	let engine: PlanEngine;
+	let adapter: NodeExecutionAdapter;
+	let engine: PlanEngineV2;
 	let tmux: ReturnType<typeof stubTmux>;
+	let stateReports: { nodeId: string; state: AgentStateSnapshot }[];
 	const clients: MaestroRpcClient[] = [];
 	let suiteStart = 0;
-	let prevSessionDir: string | undefined;
 
 	beforeEach(async () => {
 		suiteStart = Date.now();
 		tmpDir = mkdtempSync(join(tmpdir(), "obs-test-"));
 		planDir = join(tmpDir, "plan");
-		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
-		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
 
-		engine = PlanEngine.create(memStore(), {
+		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
 			slug: "obs",
 			title: "Obs Plan",
 			repoPath: tmpDir,
 		});
-		engine.addDeliverable({ title: "Deliverable One", workerMode: "full" });
-		engine.addWorkItem("deliverable-one", {
-			title: "do the thing",
-			kind: "task",
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Deliverable One",
+			branch: "feat/one",
+			tasks: ["do the thing"],
 		});
-		// Pre-provisioned active deliverable: the executor hydrates it and spawns the
+		// Pre-provisioned active node: the executor hydrates it and spawns the
 		// worker without touching git worktree provisioning.
-		engine.setDeliverableStatus("deliverable-one", "active");
-		engine.updateDeliverable("deliverable-one", { worktreePath: tmpDir });
+		engine.setNodeStatus("deliverable-one", "active");
+		engine.setNodeRuntime("deliverable-one", { worktreePath: tmpDir });
 
 		tmux = stubTmux();
-		adapter = new ExecutionAdapter({
+		stateReports = [];
+		adapter = new NodeExecutionAdapter({
 			engine,
-			ctx: { cwd: tmpDir } as ExtensionContext,
-			extensionPath: "/nonexistent/ext",
-			defaultBranch: "main",
 			planDir,
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
-			resolveWorkerModel: async (choice) => ({
-				modelId: choice.model ?? "test/worker",
-				effort: choice.effort ?? "low",
-			}),
+			defaultBranch: "main",
 			onPlanChanged: () => {},
+			onAgentStateChanged: (nodeId, state) => {
+				stateReports.push({ nodeId, state });
+			},
 		});
 		await adapter.start();
-		// Hydrated active deliverables come up blocked (restart safety); audited
+		// Hydrated active nodes come up blocked (restart safety); audited
 		// recovery clears this before the tick spawns the worker.
-		adapter.getExecutor().unblockDeliverable("deliverable-one");
+		adapter.getExecutor().unblockNode("deliverable-one");
 		await adapter.tick();
 	});
 
 	afterEach(async () => {
 		for (const c of clients.splice(0)) c.close();
 		await adapter.destroy();
-		if (prevSessionDir === undefined) {
-			delete process.env.PI_CODING_AGENT_SESSION_DIR;
-		} else {
-			process.env.PI_CODING_AGENT_SESSION_DIR = prevSessionDir;
-		}
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -167,7 +138,7 @@ describe("execution adapter observability", () => {
 	}
 
 	it("snapshot() returns real tokens after a tokens message and real spawn time", async () => {
-		const { client, ready } = connect("deliverable-one/worker");
+		const { client, ready } = connect("deliverable-one");
 		await ready;
 
 		client.send({
@@ -185,20 +156,17 @@ describe("execution adapter observability", () => {
 			},
 		});
 		await until(() => {
-			const agent = adapter.snapshot().agents.get("deliverable-one/worker");
+			const agent = adapter.snapshot().agents.get("deliverable-one");
 			return agent?.tokens.input === 1234;
 		});
 
 		const snap = adapter.snapshot();
-		const worker = snap.agents.get("deliverable-one/worker");
-		expect(worker?.tokens).toMatchObject({
+		const worker = snap.agents.get("deliverable-one");
+		expect(worker?.tokens).toEqual({
 			input: 1234,
 			output: 56,
 			cacheRead: 0,
 			cacheWrite: 0,
-			promptTokens: 1234,
-			totalTokens: 1290,
-			cost: 0.02,
 			turns: 7,
 		});
 		expect(worker?.status).toBe("working");
@@ -207,11 +175,45 @@ describe("execution adapter observability", () => {
 		expect(snap.deliverables.get("deliverable-one")).toEqual({});
 	});
 
-	it("steer targets the worker by default and named agents by prefix", async () => {
-		const worker = connect("deliverable-one/worker");
-		const reviewer = connect("deliverable-one/reviewer-x");
+	it("reports per-agent state with incrementing revisions (0 at spawn, then 1, 2, …)", async () => {
+		// The spawn seeded revision 0 with a zero snapshot — the agent's first
+		// real cumulative report must be revision 1 (a tie at 1 would be
+		// rejected by checkpoint recording downstream).
+		expect(stateReports[0]).toMatchObject({
+			nodeId: "deliverable-one",
+			state: { status: "working", revision: 0 },
+		});
+		expect(stateReports[0].state.tokens.input).toBe(0);
+
+		const { client, ready } = connect("deliverable-one");
+		await ready;
+		const snapshot = {
+			input: 100,
+			output: 10,
+			cacheRead: 0,
+			cacheWrite: 0,
+			promptTokens: 100,
+			totalTokens: 110,
+			cost: 0.01,
+			turns: 1,
+		};
+		client.send({ type: "tokens", revision: 1, snapshot });
+		client.send({
+			type: "tokens",
+			revision: 2,
+			snapshot: { ...snapshot, input: 200, turns: 2 },
+		});
+		await until(() => stateReports.length >= 3);
+
+		expect(stateReports[1].state.revision).toBe(1);
+		expect(stateReports[1].state.tokens.input).toBe(100);
+		expect(stateReports[2].state.revision).toBe(2);
+		expect(stateReports[2].state.tokens.input).toBe(200);
+	});
+
+	it("steer targets the node's connected agent; unconnected targets return false", async () => {
+		const worker = connect("deliverable-one");
 		await worker.ready;
-		await reviewer.ready;
 
 		expect(adapter.steer("deliverable-one", "focus on the tests")).toBe(true);
 		await until(() =>
@@ -219,47 +221,38 @@ describe("execution adapter observability", () => {
 				(m) => m.type === "steer" && m.content === "focus on the tests",
 			),
 		);
-		expect(reviewer.received.some((m) => m.type === "steer")).toBe(false);
 
-		expect(
-			adapter.steer("deliverable-one", "check the tests", "reviewer-x"),
-		).toBe(true);
-		await until(() =>
-			reviewer.received.some(
-				(m) => m.type === "steer" && m.content === "check the tests",
-			),
-		);
-
-		expect(adapter.steer("deliverable-one", "hello?", "nobody")).toBe(false);
+		expect(adapter.steer("nobody", "hello?")).toBe(false);
 	});
 
-	it("resolves deliverable ids, agent keys, agent names, and session names", () => {
+	it("resolves node ids, tmux session ids, and display names", () => {
 		const sessionName = tmux.spawned[0];
 		expect(sessionName).toBeTruthy();
+		const displayName = adapter
+			.getExecutor()
+			.getRunState("deliverable-one")?.displayName;
+		expect(displayName).toBeTruthy();
 		expect(adapter.resolveSessionName("deliverable-one")).toBe(sessionName);
-		expect(adapter.resolveSessionName("deliverable-one/worker")).toBe(
-			sessionName,
-		);
-		expect(adapter.resolveSessionName("worker")).toBe(sessionName);
 		expect(adapter.resolveSessionName(sessionName)).toBe(sessionName);
+		expect(adapter.resolveSessionName(displayName as string)).toBe(sessionName);
 		expect(adapter.resolveSessionName("nope")).toBeUndefined();
 	});
 
-	it("appends spawn and done events to events.jsonl", async () => {
-		const afterSpawn = readEvents(planDir);
-		const spawn = afterSpawn.find((e) => e.event === "spawn");
-		expect(spawn).toMatchObject({
-			agent: "deliverable-one/worker",
-			session: tmux.spawned[0],
-			resumed: false,
-		});
-		expect(typeof spawn?.ts).toBe("string");
+	it("appends lifecycle events to events.jsonl (agent-stopped vocabulary)", async () => {
+		const stopped = await adapter.stop(
+			"deliverable-one",
+			undefined,
+			"stopping for the test",
+		);
+		expect(stopped).toBe(true);
 
-		await adapter.markAgentDone("deliverable-one", "worker");
-		const events = readEvents(planDir).map((e) => e.event);
-		expect(events).toContain("done");
-		const done = readEvents(planDir).find((e) => e.event === "done");
-		expect(done?.agent).toBe("deliverable-one/worker");
+		const events = readEvents(planDir);
+		const entry = events.find((e) => e.event === "agent-stopped");
+		expect(entry).toMatchObject({
+			agent: "deliverable-one",
+			reason: "stopping for the test",
+		});
+		expect(typeof entry?.ts).toBe("string");
 	});
 });
 

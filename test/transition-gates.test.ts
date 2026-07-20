@@ -3,8 +3,8 @@ import type {
 	AskCapabilityV1,
 } from "@vegardx/pi-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -13,7 +13,7 @@ import {
 
 function fixture() {
 	let saved: unknown;
-	const store: PlanStore = {
+	const store: PlanStoreV2 = {
 		root: "/plans",
 		exists: () => true,
 		load: () => null,
@@ -25,7 +25,7 @@ function fixture() {
 	};
 	let tick = 0;
 	const now = () => `2026-01-01T00:00:0${tick++}.000Z`;
-	const engine = PlanEngine.create(
+	const engine = PlanEngineV2.create(
 		store,
 		{
 			slug: "gate",
@@ -35,8 +35,8 @@ function fixture() {
 		now,
 	);
 	engine.setPhase("structuring");
-	engine.addDeliverable({ title: "Runtime", workerMode: "full" });
-	engine.addWorkItem("runtime", { title: "Implement runtime" });
+	engine.addNode(null, { agent: "worker", persona: "coder", title: "Runtime" });
+	engine.addTask("runtime", { title: "Implement runtime" });
 	return { engine, saved: () => saved, now };
 }
 
@@ -132,7 +132,7 @@ describe("transition gate coordinator", () => {
 		const { engine, now } = fixture();
 		const ask = {
 			ask: vi.fn(async (questions) => {
-				engine.updateWorkItem("runtime", "implement-runtime", {
+				engine.updateTask("runtime", "implement-runtime", {
 					body: "changed during ruling",
 				});
 				return [{ questionId: questions.at(-1)!.id, value: "enter-without" }];

@@ -8,37 +8,38 @@ import {
 	validateTransitionGate,
 } from "../packages/contracts/src/plan.js";
 import {
-	type Deliverable,
-	type Plan,
-	validatePlanShape,
-} from "../packages/modes/src/schema.js";
-import { createPlanStore } from "../packages/modes/src/storage.js";
+	type PlanNode,
+	type PlanV2,
+	validatePlanShapeV2,
+} from "../packages/modes/src/plan/schema.js";
+import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
-function delivery(overrides: Partial<Deliverable> = {}): Deliverable {
+function node(overrides: Partial<PlanNode> = {}): PlanNode {
 	return {
-		type: "deliverable",
+		type: "node",
 		id: "delivery",
+		agent: "worker",
+		persona: "coder",
 		title: "Delivery",
 		body: "body",
 		status: "planned",
-		worker: { mode: "full" },
-		agents: [],
 		tasks: [],
+		authoredBy: "plan",
 		createdAt: NOW,
 		updatedAt: NOW,
 		...overrides,
 	};
 }
 
-function plan(deliverables: Deliverable[]): Plan {
+function plan(nodes: PlanNode[]): PlanV2 {
 	return {
-		schemaVersion: 5,
+		schemaVersion: 6,
 		slug: "plan",
 		title: "Plan",
 		repoPath: "/repo",
-		deliverables,
+		nodes,
 		createdAt: NOW,
 		updatedAt: NOW,
 	};
@@ -103,11 +104,16 @@ describe("full-cutover contract validation", () => {
 		);
 	});
 
-	it("fails unsupported delivery status and malformed gate references", () => {
-		const problems = validatePlanShape(
+	// v1's validatePlanShape also cross-checked per-deliverable gate rulings
+	// against finding ids ("unknown finding `missing`"). That referential check
+	// died with v1: validatePlanShapeV2 validates the node TREE (ids, agents,
+	// personas, depth, after-scoping, branch ownership, cycles); gate payloads
+	// are validated at the contract layer (validateTransitionGate above).
+	it("fails unsupported node statuses", () => {
+		const problems = validatePlanShapeV2(
 			plan([
-				delivery({
-					status: "unknown" as Deliverable["status"],
+				node({
+					status: "unknown" as PlanNode["status"],
 					findings: [
 						{
 							id: "sec.1",
@@ -116,23 +122,10 @@ describe("full-cutover contract validation", () => {
 							actual: "token leak",
 						},
 					],
-					gates: [
-						{
-							id: "review",
-							kind: "findings",
-							status: "blocked",
-							from: "reviewing",
-							to: "shipping",
-							checkedAt: NOW,
-							reason: "open finding",
-							findingIds: ["missing"],
-						},
-					],
 				}),
 			]),
 		).join("\n");
-		expect(problems).toContain("unsupported status");
-		expect(problems).toContain("unknown finding `missing`");
+		expect(problems).toContain("unknown status");
 	});
 });
 
@@ -148,9 +141,10 @@ describe("plan store schema cutover", () => {
 		mkdirSync(dir);
 		writeFileSync(
 			join(dir, "plan.json"),
-			JSON.stringify({ slug: "legacy", schemaVersion: 4 }),
+			// schemaVersion 5 was the last v1 plan schema; the v2 store speaks 6.
+			JSON.stringify({ slug: "legacy", schemaVersion: 5 }),
 		);
-		expect(() => createPlanStore(root).load("legacy")).toThrow(
+		expect(() => createPlanStoreV2(root).load("legacy")).toThrow(
 			/archive or reset the old Maestro state/,
 		);
 	});

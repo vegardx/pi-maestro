@@ -2,20 +2,20 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
 import { KNOWLEDGE_TEMPLATE } from "../packages/modes/src/exec/knowledge.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import { createKnowledgeTool } from "../packages/modes/src/tools.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp/plans",
-		save(plan: Plan) {
+		save(plan: PlanV2) {
 			saved = plan;
 		},
-		load(): Plan | null {
+		load(): PlanV2 | null {
 			return saved;
 		},
 		exists(): boolean {
@@ -76,8 +76,8 @@ describe("knowledge tool", () => {
 		rmSync(tmpAgentDir, { recursive: true, force: true });
 	});
 
-	function makeEngine(): PlanEngine {
-		return PlanEngine.create(memStore(), {
+	function makeEngine(): PlanEngineV2 {
+		return PlanEngineV2.create(memStore(), {
 			slug: "know-test",
 			title: "Knowledge Test",
 			repoPath: "/tmp/repo",
@@ -117,10 +117,10 @@ describe("knowledge tool", () => {
 
 	it("refuses once execution has started (frozen)", async () => {
 		const engine = makeEngine();
-		engine.addDeliverable({ title: "g1", body: "", workerMode: "full" });
-		const deliverableId = engine.get().deliverables[0].id;
-		engine.addWorkItem(deliverableId, { title: "do the thing", kind: "task" });
-		engine.setDeliverableStatus(deliverableId, "active");
+		engine.addNode(null, { agent: "worker", persona: "coder", title: "g1" });
+		const nodeId = engine.get().nodes[0].id;
+		engine.addTask(nodeId, { title: "do the thing", kind: "task" });
+		engine.setNodeStatus(nodeId, "active");
 		const tool = createKnowledgeTool({ engine: () => engine });
 
 		const result = await run(tool, { content: VALID_DOC });

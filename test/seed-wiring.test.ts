@@ -1,34 +1,38 @@
-// Seed + knowledge wiring in the execution adapter's spawn path: a spawned
-// agent's session file must fork the plan's frozen knowledge session (when
-// present) and carry the deterministic framed seed (Prior Work from dep-deliverable
-// summaries, Your Tasks) — not the legacy unframed seed.
+// Live spawn wiring (v2): createLiveSpawnAgent is the production spawnAgent
+// the runtime injects into the executor. A spawned agent's session file must
+// fork the plan's frozen knowledge session (when present) and carry the
+// persona seed head plus the executor's seed; resumes skip seeding entirely;
+// the pi command omits --model only for cache-warm fresh spawns; stale tmux
+// sessions are reaped before launch; and the PI_MAESTRO_* env is wired.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { PersonaSummaryV1 } from "@vegardx/pi-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import {
-	ExecutionAdapter,
-	type TmuxApi,
-} from "../packages/modes/src/exec/execution-adapter.js";
 import {
 	buildKnowledgeSession,
 	KNOWLEDGE_CUSTOM_TYPE,
 	KNOWLEDGE_FRAME,
 } from "../packages/modes/src/exec/knowledge.js";
 import {
-	PRIOR_WORK_FRAME,
-	PRIOR_WORK_HEADER,
-	TASKS_FRAME,
-	TASKS_HEADER,
-} from "../packages/modes/src/exec/seeds.js";
-import type { Plan } from "../packages/modes/src/schema.js";
+	createLiveSpawnAgent,
+	type LiveSpawnTmux,
+} from "../packages/modes/src/exec/live-spawn.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { SpawnNodeOpts } from "../packages/modes/src/plan/node-executor.js";
+import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import { EXECUTION_SEED_ENTRY } from "../packages/modes/src/session.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
 
-const TOKEN = "seed-wiring-token";
+const TOKEN = "live-spawn-token";
 
 const KNOWLEDGE_DOC = `${KNOWLEDGE_FRAME}
 
@@ -45,41 +49,47 @@ Tabs, biome.
 ExecutorDeps, ExecutionHandle.
 `;
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
-	return {
-		root: "/tmp/plans",
-		save(plan: Plan) {
-			saved = plan;
-		},
-		load(): Plan | null {
-			return saved;
-		},
-		exists(): boolean {
-			return saved !== null;
-		},
-		remove() {
-			saved = null;
-		},
-		list() {
-			return [];
-		},
-	};
+const PERSONA: PersonaSummaryV1 = {
+	name: "coder",
+	agents: ["worker"],
+	contract: "summary-and-diff",
+	skills: ["persona-skill"],
+	prompt: "You are the coder persona. Build exactly what the seed asks.",
+};
+
+/** personas.v1 capability stub (the boundary live-spawn consumes). */
+function stubPersonas(): { get(name: string): PersonaSummaryV1 | undefined } {
+	return { get: (name) => (name === PERSONA.name ? PERSONA : undefined) };
 }
 
-/** Stub tmux: records spawns; sessions are never "alive". */
-function stubTmux(): TmuxApi & { spawned: string[] } {
-	const spawned: string[] = [];
-	return {
-		spawned,
-		async spawn(name: string) {
-			spawned.push(name);
+interface TmuxCall {
+	op: "spawn" | "hasSession" | "kill";
+	name: string;
+	cwd?: string;
+	command?: string | string[];
+	env?: Record<string, string>;
+}
+
+/** Ordered fake tmux; `alive` names report hasSession true until killed. */
+function fakeTmux(alive: Set<string> = new Set()): {
+	tmux: LiveSpawnTmux;
+	calls: TmuxCall[];
+} {
+	const calls: TmuxCall[] = [];
+	const tmux: LiveSpawnTmux = {
+		async spawn(name, cwd, command, opts) {
+			calls.push({ op: "spawn", name, cwd, command, env: opts?.env });
 		},
-		async hasSession() {
-			return false;
+		async hasSession(name) {
+			calls.push({ op: "hasSession", name });
+			return alive.has(name);
 		},
-		async kill() {},
+		async kill(name) {
+			calls.push({ op: "kill", name });
+			alive.delete(name);
+		},
 	};
+	return { tmux, calls };
 }
 
 type SessionLine = Record<string, unknown>;
@@ -91,54 +101,47 @@ function readSessionLines(path: string): SessionLine[] {
 		.map((line) => JSON.parse(line) as SessionLine);
 }
 
-describe("execution adapter seed wiring", () => {
+function seedContent(lines: SessionLine[]): string {
+	const seedEntry = lines.find((l) => l.customType === EXECUTION_SEED_ENTRY) as
+		| { content?: string }
+		| undefined;
+	expect(seedEntry).toBeDefined();
+	return seedEntry?.content ?? "";
+}
+
+const EXECUTOR_SEED =
+	"## Deliverable: Implement Auth\n\n- [ ] **Create login endpoint**";
+
+describe("live spawn wiring (createLiveSpawnAgent)", () => {
 	let tmpDir: string;
 	let planDir: string;
-	let engine: PlanEngine;
-	let tmux: ReturnType<typeof stubTmux>;
-	let adapter: ExecutionAdapter | undefined;
+	let worktree: string;
+	let engine: PlanEngineV2;
 	let prevSessionDir: string | undefined;
 
 	beforeEach(() => {
-		tmpDir = mkdtempSync(join(tmpdir(), "seed-wiring-"));
+		tmpDir = mkdtempSync(join(tmpdir(), "live-spawn-"));
 		planDir = join(tmpDir, "plan");
+		worktree = join(tmpDir, "wt");
+		mkdirSync(worktree, { recursive: true });
 		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
 
-		engine = PlanEngine.create(memStore(), {
-			slug: "seed-wiring",
-			title: "Seed Wiring Plan",
+		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+			slug: "live-spawn",
+			title: "Live Spawn Plan",
 			repoPath: tmpDir,
 		});
-		// Shipped dependency with a stored deliverable summary → # Prior Work.
-		engine.addDeliverable({ title: "Setup DB", workerMode: "full" });
-		engine.addWorkItem("setup-db", { title: "Create tables", kind: "task" });
-		engine.toggleWorkItem("setup-db", "create-tables");
-		engine.updateDeliverable("setup-db", {
-			summary: "Database tables created: users, sessions.",
-		});
-		engine.setDeliverableStatus("setup-db", "active");
-		engine.setDeliverableStatus("setup-db", "complete");
-		engine.setDeliverableStatus("setup-db", "shipped");
-		// Active deliverable whose worker we spawn (pre-provisioned worktree).
-		engine.addDeliverable({
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
 			title: "Implement Auth",
-			workerMode: "full",
-			dependsOn: ["setup-db"],
+			branch: "feat/implement-auth",
+			tasks: ["Create login endpoint"],
 		});
-		engine.addWorkItem("implement-auth", {
-			title: "Create login endpoint",
-			kind: "task",
-		});
-		engine.setDeliverableStatus("implement-auth", "active");
-		engine.updateDeliverable("implement-auth", { worktreePath: tmpDir });
-
-		tmux = stubTmux();
 	});
 
-	afterEach(async () => {
-		await adapter?.destroy();
-		adapter = undefined;
+	afterEach(() => {
 		if (prevSessionDir === undefined) {
 			delete process.env.PI_CODING_AGENT_SESSION_DIR;
 		} else {
@@ -147,62 +150,60 @@ describe("execution adapter seed wiring", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	async function spawnWorker(): Promise<SessionLine[]> {
-		adapter = new ExecutionAdapter({
+	function makeSpawnAgent(opts?: {
+		tmux?: LiveSpawnTmux;
+		model?: { provider: string; id: string };
+	}) {
+		return createLiveSpawnAgent({
 			engine,
-			ctx: { cwd: tmpDir } as ExtensionContext,
-			extensionPath: "/nonexistent/ext",
-			defaultBranch: "main",
+			ctx: {
+				cwd: tmpDir,
+				model: opts?.model ?? { provider: "test", id: "worker" },
+			} as unknown as ExtensionContext,
+			tmux: opts?.tmux ?? fakeTmux().tmux,
 			planDir,
-			tmux,
-			token: TOKEN,
+			extensionPaths: ["/ext/maestro"],
 			socketPath: join(tmpDir, "maestro.sock"),
-			resolveWorkerModel: async (choice) => ({
-				modelId: choice.model ?? "test/worker",
-				effort: choice.effort ?? "low",
-			}),
-			onPlanChanged: () => {},
+			token: TOKEN,
+			personas: stubPersonas(),
 		});
-		await adapter.start();
-		adapter.getExecutor().unblockDeliverable("implement-auth");
-		await adapter.tick();
-
-		const sessionName = tmux.spawned[0];
-		expect(sessionName).toBeTruthy();
-		return readSessionLines(
-			join(
-				tmpDir,
-				"sessions",
-				"agents",
-				sessionName,
-				"implement-auth-worker.jsonl",
-			),
-		);
 	}
 
-	function seedContent(lines: SessionLine[]): string {
-		const seedEntry = lines.find(
-			(l) => l.customType === EXECUTION_SEED_ENTRY,
-		) as { content?: string } | undefined;
-		expect(seedEntry).toBeDefined();
-		return seedEntry?.content ?? "";
+	function spawnOpts(overrides: Partial<SpawnNodeOpts> = {}): SpawnNodeOpts {
+		return {
+			nodeId: "implement-auth",
+			agent: "worker",
+			persona: "coder",
+			displayName: "auth-worker",
+			mode: "full",
+			skills: ["node-skill"],
+			worktreePath: worktree,
+			seed: EXECUTOR_SEED,
+			model: "test/worker",
+			...overrides,
+		};
 	}
 
-	it("forks the knowledge session and seeds framed sections", async () => {
+	it("forks the knowledge session and seeds the persona head + executor seed", async () => {
 		const knowledge = buildKnowledgeSession({
 			content: KNOWLEDGE_DOC,
 			repoPath: tmpDir,
 			outPath: join(planDir, "base-knowledge.jsonl"),
 		});
+		const { tmux, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ tmux });
 
-		const lines = await spawnWorker();
+		const spawned = await spawnAgent(spawnOpts());
+		expect(spawned.sessionId).toBe("auth-worker");
+
+		const lines = readSessionLines(spawned.sessionFile);
 
 		// Header: fresh id, agent cwd, lineage back to the knowledge session
 		// (pi convention: parentSession is the source file's path).
 		const header = lines[0];
 		expect(header.parentSession).toBe(knowledge.path);
 		expect(header.id).not.toBe(knowledge.id);
-		expect(header.cwd).toBe(tmpDir);
+		expect(header.cwd).toBe(worktree);
 
 		// Knowledge entry precedes the seed entry (shared cache prefix first).
 		const knowledgeIdx = lines.findIndex(
@@ -214,22 +215,54 @@ describe("execution adapter seed wiring", () => {
 		expect(knowledgeIdx).toBeGreaterThan(0);
 		expect(seedIdx).toBeGreaterThan(knowledgeIdx);
 
-		// Framed seed: Prior Work (dep-deliverable summary) then Your Tasks.
+		// Persona head first (prompt + unioned skills + separator), then the
+		// executor's seed.
 		const seed = seedContent(lines);
-		expect(seed).toContain(PRIOR_WORK_HEADER);
-		expect(seed).toContain(PRIOR_WORK_FRAME);
-		expect(seed).toContain("Database tables created: users, sessions.");
-		expect(seed).toContain(TASKS_HEADER);
-		expect(seed).toContain(TASKS_FRAME);
-		expect(seed).toContain("Create login endpoint");
-		expect(seed.indexOf(PRIOR_WORK_HEADER)).toBeLessThan(
-			seed.indexOf(TASKS_HEADER),
+		expect(seed.startsWith(PERSONA.prompt)).toBe(true);
+		expect(seed).toContain("## Loaded skills");
+		expect(seed).toContain("- persona-skill");
+		expect(seed).toContain("- node-skill");
+		expect(seed).toContain("---");
+		expect(seed).toContain(EXECUTOR_SEED);
+		expect(seed.indexOf(PERSONA.prompt)).toBeLessThan(
+			seed.indexOf(EXECUTOR_SEED),
 		);
+
+		// The tmux launch: crash-capture wrapper (a shell string capturing the
+		// pane into <planDir>/crashes/<session>.log), the -e extension list, the
+		// assembled session file, and the fresh-worker kickoff.
+		const spawn = calls.find((c) => c.op === "spawn");
+		expect(spawn).toBeDefined();
+		expect(spawn?.name).toBe("auth-worker");
+		expect(spawn?.cwd).toBe(worktree);
+		const command = spawn?.command;
+		expect(typeof command).toBe("string");
+		const cmd = command as string;
+		expect(cmd).toContain("capture-pane");
+		expect(cmd).toContain(join(planDir, "crashes", "auth-worker.log"));
+		expect(cmd).toContain("/ext/maestro");
+		expect(cmd).toContain(spawned.sessionFile);
+		expect(cmd).toContain("Implement the tasks described in your seed.");
+		// Cache-warm omission: the resolved model equals the maestro session's
+		// (test/worker), so a FRESH spawn passes no --model and inherits it.
+		expect(cmd).not.toContain("--model");
+
+		// PI_MAESTRO_* env: socket, agent identity (the NODE id), mode, run
+		// token, and the plan dir.
+		expect(spawn?.env).toMatchObject({
+			PI_MAESTRO_SOCK: join(tmpDir, "maestro.sock"),
+			PI_MAESTRO_AGENT_ID: "implement-auth",
+			PI_MAESTRO_AGENT_MODE: "full",
+			PI_MAESTRO_TOKEN: TOKEN,
+			PI_MAESTRO_PLAN_DIR: planDir,
+		});
 	});
 
-	it("seeds framed sections without a knowledge fork when no base file exists", async () => {
-		const lines = await spawnWorker();
+	it("seeds without a knowledge fork when no base file exists", async () => {
+		const spawnAgent = makeSpawnAgent();
+		const spawned = await spawnAgent(spawnOpts());
 
+		const lines = readSessionLines(spawned.sessionFile);
 		const header = lines[0];
 		expect(header.parentSession).toBeUndefined();
 		expect(lines.some((l) => l.customType === KNOWLEDGE_CUSTOM_TYPE)).toBe(
@@ -237,7 +270,71 @@ describe("execution adapter seed wiring", () => {
 		);
 
 		const seed = seedContent(lines);
-		expect(seed).toContain(PRIOR_WORK_HEADER);
-		expect(seed).toContain(TASKS_HEADER);
+		expect(seed.startsWith(PERSONA.prompt)).toBe(true);
+		expect(seed).toContain(EXECUTOR_SEED);
+	});
+
+	it("passes --model on a fresh spawn when it differs from the session model", async () => {
+		const { tmux, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ tmux });
+
+		await spawnAgent(spawnOpts({ model: "sit-openai/gpt-5.6-sol" }));
+
+		const cmd = calls.find((c) => c.op === "spawn")?.command as string;
+		expect(cmd).toContain("--model");
+		expect(cmd).toContain("sit-openai/gpt-5.6-sol");
+	});
+
+	it("resume: reuses the session file, skips seeding, and ALWAYS passes the model", async () => {
+		const resumeFile = join(tmpDir, "prior-session.jsonl");
+		writeFileSync(resumeFile, "{}\n");
+		const { tmux, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ tmux });
+
+		// The resolved model EQUALS the maestro session model — a fresh spawn
+		// would omit it, but a resume must pass it: pi otherwise restores a
+		// possibly-stale model from the session file (the v1 #250 fix).
+		const spawned = await spawnAgent(
+			spawnOpts({ resumeSessionFile: resumeFile, model: "test/worker" }),
+		);
+
+		expect(spawned.sessionFile).toBe(resumeFile);
+		// No fresh session assembly: the deterministic agent-key file was never
+		// written.
+		const assembled = join(
+			tmpDir,
+			"sessions",
+			"agents",
+			"auth-worker",
+			"implement-auth.jsonl",
+		);
+		expect(existsSync(assembled)).toBe(false);
+
+		const cmd = calls.find((c) => c.op === "spawn")?.command as string;
+		expect(cmd).toContain("--model");
+		expect(cmd).toContain("test/worker");
+		expect(cmd).toContain(resumeFile);
+		expect(cmd).toContain("Your session was resumed.");
+	});
+
+	it("kills stale tmux sessions (persisted + current name) before spawning", async () => {
+		// A prior maestro epoch persisted a different session name on the
+		// ledger; a crash orphan may also hold the CURRENT name.
+		engine.setNodeRuntime("implement-auth", { sessionName: "stale-old" });
+		const { tmux, calls } = fakeTmux(new Set(["stale-old", "auth-worker"]));
+		const spawnAgent = makeSpawnAgent({ tmux });
+
+		await spawnAgent(spawnOpts());
+
+		const killed = calls
+			.filter((c) => c.op === "kill")
+			.map((c) => c.name)
+			.sort();
+		expect(killed).toEqual(["auth-worker", "stale-old"]);
+		// Every kill happened BEFORE the spawn — the replacement never races a
+		// zombie writer.
+		const spawnIdx = calls.findIndex((c) => c.op === "spawn");
+		const lastKillIdx = calls.map((c) => c.op).lastIndexOf("kill");
+		expect(spawnIdx).toBeGreaterThan(lastKillIdx);
 	});
 });

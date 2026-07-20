@@ -21,8 +21,8 @@ import {
 import { uiTrace } from "@vegardx/pi-core";
 import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
+import { findNodeV2 } from "../plan/schema.js";
 import type { PendingQuestion } from "../question-queue.js";
-import type { Plan } from "../schema.js";
 import { handleViewCommand } from "./agent-commands.js";
 import { listAgentTargets } from "./agent-targets.js";
 import type { RuntimeContext } from "./context.js";
@@ -120,7 +120,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 								? await rt.execution.interrupt(deliverableId, name)
 								: undefined;
 						ctx.ui.notify(
-							`${targetId}: ${result?.outcome ?? "disconnected"}`,
+							`${targetId}: ${result ? (result.ok ? "accepted" : (result.error ?? "failed")) : "disconnected"}`,
 							"info",
 						);
 					} else if (targetId.startsWith("run:")) {
@@ -165,9 +165,8 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 						deliveryId,
 						"user pressed HUD K",
 					);
-					const delivery = rt.engine
-						?.get()
-						.deliverables.find((item) => item.id === deliveryId);
+					const plan = rt.engine?.get();
+					const delivery = plan ? findNodeV2(plan, deliveryId) : undefined;
 					if (!stopped || !delivery || delivery.status !== "active") {
 						ctx.ui.notify(
 							`Could not prove ${deliveryId} stopped; it was not marked failed.`,
@@ -175,14 +174,14 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 						);
 						return;
 					}
-					rt.engine?.setDeliverableStatus(deliveryId, "failed", {
+					rt.engine?.setNodeStatus(deliveryId, "failed", {
 						code: "user-killed",
 						message:
 							"Owning delivery was failed from the HUD after bounded shutdown",
 						failedAt: rt.now(),
 						recoverable: true,
 						attempt: (delivery.failure?.attempt ?? 0) + 1,
-						agentId: `${deliveryId}/worker`,
+						agentId: deliveryId,
 					});
 					rt.emitPlanChanged();
 					ctx.ui.notify(
@@ -403,7 +402,7 @@ export function buildQuestionRows(
  * keeps working, with row depth ready for tree indentation.
  */
 export function buildPlanView(
-	plan: Pick<Plan, "deliverables"> | undefined,
+	plan: unknown,
 	execution?: { agents: ReadonlyMap<string, ExecutionAgentSnapshot> },
 ): HudPlanView | undefined {
 	const view = projectPlanView(plan);
@@ -421,7 +420,7 @@ export function buildPlanView(
 							? "failed"
 							: "queued";
 		if (state === "shipped" || state === "complete") done++;
-		const workerAgent = execution?.agents.get(`${node.id}/worker`);
+		const workerAgent = execution?.agents.get(node.id);
 		const worker = workerAgent
 			? `worker ${execStatus(workerAgent, undefined)}`
 			: `worker (${node.workerMode ?? "full"})`;

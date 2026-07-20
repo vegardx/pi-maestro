@@ -10,6 +10,7 @@
 // nothing imports this module except its tests and the v2 engine.
 
 import { createHash } from "node:crypto";
+import { basename, resolve } from "node:path";
 import type {
 	DeliveryFailure,
 	DiversityRecord,
@@ -25,6 +26,7 @@ import type {
 import {
 	DEFAULT_MAX_DEPTH,
 	DELIVERABLE_STATUSES,
+	DELIVERABLE_TRANSITIONS,
 	NODE_AGENT_TYPES,
 	PLAN_SCHEMA_VERSION_V2,
 	validateNodeEnvelope,
@@ -71,6 +73,9 @@ export interface PlanNode {
 	/** Persona name; registration validated against the layered registry. */
 	persona: string;
 	title?: string;
+	/** Assignment prose (v1 Deliverable.body / AgentSpec.focus texture) —
+	 *  seeds quote it; tasks carry the itemized work. */
+	body?: string;
 	tasks: NodeTask[];
 	/** Knowledge skills loaded at start (persona frontmatter unioned on top). */
 	skills?: string[];
@@ -124,6 +129,8 @@ export interface PlanNode {
 	handoff?: string;
 	prUrl?: string;
 	prNumber?: number;
+	/** Per-PR provenance ledger (pr-provenance reads it; the shipper writes). */
+	workflowAnalytics?: unknown;
 	failure?: DeliveryFailure;
 	findings?: StructuredFinding[];
 	gates?: TransitionGate[];
@@ -148,13 +155,38 @@ export interface PlanV2 {
 	/** The seat is depth 0; authored trees may nest ≤ maxDepth (default 3). */
 	maxDepth?: number;
 	defaultEnvelope?: NodeEnvelope;
+	/** Planning UX phase (v1 PLAN_PHASES carries over; orthogonal to nodes). */
+	phase?: "exploring" | "structuring";
 	understanding?: string;
 	repos?: PlanRepoV2[];
 	/** The tree. Roots are v1's top-level deliverables. */
 	nodes: PlanNode[];
 	planSessionPath?: string;
+	parentIssueNumber?: number;
+	lastSyncedAt?: string;
+	/** Gate RULINGS persist here (policy rows decide when gates RUN). */
+	transitionGates?: TransitionGateRuling[];
+	/** Fingerprint-pinned debug repairs — the only sanctioned post-start edit
+	 *  channel beyond the append-only operations. */
+	repairAudit?: PlanRepairAuditV2[];
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** A mode-edge gate ruling (v1 ModeTransitionGate texture, engine-agnostic). */
+export interface TransitionGateRuling {
+	id: string;
+	ruling: string;
+	decidedAt: string;
+	[key: string]: unknown;
+}
+
+export interface PlanRepairAuditV2 {
+	id: string;
+	reason: string;
+	baseFingerprint: string;
+	appliedAt: string;
+	operations: readonly unknown[];
 }
 
 // ─── Traversal ───────────────────────────────────────────────────────────────
@@ -234,7 +266,9 @@ const SATISFIED_STATUSES: readonly NodeStatus[] = [
 	"abandoned",
 ];
 
-const TERMINAL_STATUSES: readonly NodeStatus[] = [
+/** Statuses that end a dep for CHAIN purposes (failed included so a chain
+ *  doesn't wedge behind a failed sibling; base derivation skips them). */
+const DEP_TERMINAL_STATUSES: readonly NodeStatus[] = [
 	"shipped",
 	"failed",
 	"abandoned",
@@ -308,7 +342,7 @@ export function shippableNodes(plan: Pick<PlanV2, "nodes">): PlanNode[] {
 		const depsTerminal = (node.after ?? []).every((ref) => {
 			if (ref === PARENT_AFTER_TOKEN) return true; // parent gating ≠ ship order
 			const dep = siblings.find((sibling) => sibling.id === ref);
-			return dep !== undefined && TERMINAL_STATUSES.includes(dep.status);
+			return dep !== undefined && DEP_TERMINAL_STATUSES.includes(dep.status);
 		});
 		if (depsTerminal) result.push(node);
 	}
@@ -488,6 +522,10 @@ export function validatePlanShapeV2(
  */
 export function planFingerprintV2(plan: PlanV2): string {
 	const value = structuredClone(plan) as PlanV2;
+	// Audit/gate ledgers are bookkeeping, not plan semantics (v1 verbatim):
+	// persisting a gate row must not invalidate the fingerprint it pinned.
+	value.repairAudit = undefined;
+	value.transitionGates = undefined;
 	value.updatedAt = "";
 	for (const { node } of walkNodes(value)) {
 		node.sessionPath = undefined;
@@ -500,4 +538,98 @@ export function planFingerprintV2(plan: PlanV2): string {
 		for (const task of node.tasks) task.updatedAt = "";
 	}
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+// ─── v1 survivors (moved here at the flip; verbatim) ─────────────────────────
+
+/** Terminal statuses — the node will not transition again (v1 semantics:
+ *  failed is RECOVERABLE and therefore not terminal for retention/compaction
+ *  consumers). */
+export const TERMINAL_STATUSES: readonly NodeStatus[] = [
+	"shipped",
+	"superseded",
+	"abandoned",
+];
+
+export function canTransition(from: NodeStatus, to: NodeStatus): boolean {
+	return (DELIVERABLE_TRANSITIONS[from] as readonly NodeStatus[]).includes(to);
+}
+
+/** Planning UX phases (recon → plan structure unlock). */
+export const PLAN_PHASES = ["exploring", "structuring"] as const;
+export type PlanPhase = (typeof PLAN_PHASES)[number];
+
+/** Reserved task ids for the injected lifecycle pair. */
+export const PREFLIGHT_TASK_ID = "lifecycle-preflight";
+export const POSTFLIGHT_TASK_ID = "lifecycle-postflight";
+
+/** Default token budget for cross-node summaries before compression kicks in. */
+export const SUMMARY_TOKEN_BUDGET = 5000;
+
+export const MAX_PREVIOUS_WORKER_SESSIONS = 5;
+
+export function boundedPreviousSessionPaths(
+	paths: readonly string[],
+): string[] {
+	return [...new Set(paths.filter((path) => path.trim().length > 0))].slice(
+		-MAX_PREVIOUS_WORKER_SESSIONS,
+	);
+}
+
+// ─── IDs ─────────────────────────────────────────────────────────────────────
+
+export function slugify(input: string): string {
+	return input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 60)
+		.replace(/-+$/, "");
+}
+
+/**
+ * Derive a plan slug + title from seed text (typically the first planning
+ * message), falling back to `fallback` (typically the repo name) when the seed
+ * is empty or slugifies to nothing.
+ */
+export function derivePlanName(
+	seed: string | undefined,
+	fallback: string,
+): { slug: string; title: string } {
+	const source = ((seed ?? "").trim() || fallback).trim();
+	const firstLine = source.split(/\r?\n/)[0]?.trim() ?? "";
+	const words = firstLine.split(/\s+/).filter(Boolean);
+	const title = words.slice(0, 8).join(" ") || fallback;
+	const slug =
+		slugify(words.slice(0, 6).join(" ")) || slugify(fallback) || "plan";
+	return { slug, title };
+}
+
+export function repoNameFromPath(path: string): string {
+	const name = basename(resolve(path));
+	return name === "" ? "repo" : name;
+}
+
+/**
+ * Guard against acting on the wrong repo.
+ */
+export function planRepoMismatch(
+	planTop: string | null,
+	sessionTop: string | null,
+	planRepoPath: string,
+	sessionCwd: string,
+): string | null {
+	if (sessionTop === null) {
+		return `session cwd is not inside a git repo: ${sessionCwd}`;
+	}
+	if (planTop === null) {
+		return `plan repo is not a git repo: ${planRepoPath}`;
+	}
+	if (resolve(sessionTop) !== resolve(planTop)) {
+		return (
+			`session repo (${sessionTop}) is not the plan's repo (${planTop}); ` +
+			"refusing to act on the wrong repo — re-run from the plan's checkout"
+		);
+	}
+	return null;
 }

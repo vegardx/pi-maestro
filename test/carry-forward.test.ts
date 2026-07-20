@@ -18,71 +18,52 @@ import {
 	harvestInventory,
 	writeCarryDocument,
 } from "../packages/modes/src/carry-forward.js";
-import type { Plan } from "../packages/modes/src/schema.js";
+import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
 
 const NOW = "2026-07-12T12:00:00.000Z";
 
-function planFixture(): Plan {
+function planFixture(): PlanV2 {
 	return {
-		schemaVersion: 5,
+		schemaVersion: 6,
 		slug: "arc-one",
 		title: "Arc One",
 		repoPath: "/repo",
 		phase: "structuring",
-		deliverables: [
+		nodes: [
 			{
-				type: "deliverable",
+				type: "node",
 				id: "auth",
+				agent: "worker",
+				persona: "coder",
 				title: "Auth",
-				body: "",
 				status: "active",
-				worker: { mode: "full" },
-				agents: [],
+				branch: "feat/auth",
+				authoredBy: "plan",
 				tasks: [
 					{
-						type: "workItem",
 						id: "t1",
 						title: "impl",
 						body: "",
-						kind: "task",
 						done: true,
 						createdAt: NOW,
 						updatedAt: NOW,
 					},
 					{
-						type: "workItem",
 						id: "t2",
 						title: "test",
 						body: "",
-						kind: "task",
 						done: false,
 						createdAt: NOW,
 						updatedAt: NOW,
 					},
 				],
-				reviewLedger: {
-					round: 1,
-					cycle: 1,
-					entries: [
-						{
-							finding: {
-								id: "sec.1",
-								severity: "major",
-								category: "security",
-								actual: "hole",
-							},
-							reviewer: "sec",
-						},
-					],
-					updatedAt: NOW,
-				},
 				createdAt: NOW,
 				updatedAt: NOW,
 			},
 		],
 		createdAt: NOW,
 		updatedAt: NOW,
-	} as unknown as Plan;
+	};
 }
 
 describe("harvestInventory", () => {
@@ -90,7 +71,7 @@ describe("harvestInventory", () => {
 		const text = harvestInventory({
 			plan: planFixture(),
 			mode: "auto",
-			workers: [{ agent: "auth/worker", status: "working" }],
+			workers: [{ agent: "auth", status: "working" }],
 			blocked: [{ id: "auth", reason: "ship gate: 1 blocking finding open" }],
 			pendingAsks: [{ question: "Which auth scheme?" }],
 			planDir: "/plans/arc-one",
@@ -100,7 +81,7 @@ describe("harvestInventory", () => {
 		expect(text).toContain("arc-one — Arc One");
 		expect(text).toContain("auth [active] · tasks 1/2");
 		expect(text).toContain("BLOCKED: ship gate");
-		expect(text).toContain("auth/worker");
+		expect(text).toContain("Live workers: auth");
 		expect(text).toContain("Which auth scheme?");
 		expect(text).toContain("01-oauth, 02-sessions");
 	});

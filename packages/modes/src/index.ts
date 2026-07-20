@@ -1,4 +1,4 @@
-// @vegardx/pi-modes — permission modes, plan/deliverable engine, execution,
+// @vegardx/pi-modes — permission modes, plan/node engine, execution,
 // shipping, and compaction. This child wires the mode runtime, plan tools,
 // commands, Shift+Tab cycle, policy gates, session hydration, and modes.v1
 // capability. Execution/worktrees/shipping/compaction land in later children.
@@ -97,12 +97,6 @@ export {
 	summaryHash,
 	transitiveDependencies,
 } from "./compaction.js";
-export {
-	type AgentState,
-	DeliverableExecutor,
-	type DeliverableRunState,
-	type ExecutorDeps,
-} from "./deliverable-executor.js";
 export { buildRecap } from "./deliverable-recap.js";
 export {
 	createExecution,
@@ -165,6 +159,17 @@ export {
 	OverlayManager,
 } from "./overlay-manager.js";
 export {
+	NodeExecutor,
+	type NodeExecutorDeps,
+	type NodeRunState,
+} from "./plan/node-executor.js";
+export * from "./plan/schema.js";
+export {
+	archiveLegacyPlans,
+	createPlanStoreV2,
+	type PlanStoreV2,
+} from "./plan/storage.js";
+export {
 	computeActiveTools,
 	PLAN_TOOL_NAMES,
 	toolBlockedInPlanMode,
@@ -183,7 +188,6 @@ export {
 	type ModesRuntime,
 	type ModesRuntimeOptions,
 } from "./runtime/index.js";
-export * from "./schema.js";
 export {
 	appendModesState,
 	collectCarryForwardInput,
@@ -211,7 +215,7 @@ export {
 	setExecution,
 	transitionMode,
 } from "./state.js";
-export { createPlanStore, plansRoot } from "./storage.js";
+export { plansRoot, UnsupportedMaestroStateError } from "./storage.js";
 export { createModesSummariser } from "./summarise.js";
 export {
 	createAgentTool,

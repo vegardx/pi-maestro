@@ -1,4 +1,4 @@
-// Plan recovery audit: recheck every deliverable's claimed status against
+// Plan recovery audit: recheck every node's claimed status against
 // reality — local worktrees, branches, remote branches, and PRs — so a
 // recovered session starts from verified state instead of trusting whatever
 // the plan file says happened before the restart.
@@ -6,12 +6,13 @@
 import { existsSync } from "node:fs";
 import { runCommand } from "@vegardx/pi-git";
 import { viewPr } from "@vegardx/pi-github";
-import type { Plan } from "../schema.js";
 import {
-	defaultBranchForDeliverable,
-	deliverableWorkspace,
-	repoFor,
-} from "../schema.js";
+	defaultBranchForNode,
+	isBranchOwner,
+	type PlanV2,
+	walkNodes,
+} from "../plan/schema.js";
+import { repoForNode } from "./shipper.js";
 
 export interface AuditEntry {
 	readonly id: string;
@@ -64,7 +65,7 @@ async function defaultPrState(
  * finds; the caller (/recover) decides what to resume and what to surface.
  */
 export async function auditPlan(
-	plan: Plan,
+	plan: PlanV2,
 	deps: AuditDeps = {},
 	deliverableIds?: readonly string[],
 ): Promise<PlanAuditResult> {
@@ -75,7 +76,7 @@ export async function auditPlan(
 
 	const entries: AuditEntry[] = [];
 	const selected = deliverableIds ? new Set(deliverableIds) : undefined;
-	for (const g of plan.deliverables) {
+	for (const { node: g } of walkNodes(plan)) {
 		if (selected && !selected.has(g.id)) continue;
 		if (
 			g.status === "planned" ||
@@ -86,9 +87,9 @@ export async function auditPlan(
 		}
 		const notes: string[] = [];
 		const problems: string[] = [];
-		const scratch = deliverableWorkspace(g) === "scratch";
-		const repo = repoFor(plan, g);
-		const branch = g.branch ?? defaultBranchForDeliverable(g);
+		const scratch = !isBranchOwner(g);
+		const repo = repoForNode(plan, g);
+		const branch = g.branch ?? defaultBranchForNode(g);
 
 		// Workspace (active/failed/complete keep it; shipped may have cleaned it up).
 		if (

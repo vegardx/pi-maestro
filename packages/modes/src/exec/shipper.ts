@@ -1,10 +1,11 @@
-// Shipper — the maestro's push + PR seam for completed deliverables. Owns:
-//   - shipDeliverable: preflight (clean tree) → push → find/create/edit PR
+// Shipper — the maestro's push + PR seam for completed branch-owning nodes.
+// Owns:
+//   - shipNode: preflight (clean tree) → push → find/create/edit PR
 //   - shipBaseBranch: stacked bases within a repo; cross-repo deps are
-//     ordering-only (base falls back to the deliverable's own repo default branch)
+//     ordering-only (base falls back to the node's own repo default branch)
 //   - reconcileShippedDeliverables: retarget open PRs whose stacked base merged;
 //     conflicts are flagged needs-rebase, never auto-resolved
-//   - cleanupWorktrees: DAG-driven retention — a terminal deliverable's worktree is
+//   - cleanupWorktrees: DAG-driven retention — a terminal node's worktree is
 //     removable only once no dependent is unshipped
 //
 // Self-contained: no plan mutation, no engine access. Callers persist results
@@ -25,29 +26,52 @@ import {
 	type PrResult,
 	viewPr,
 } from "@vegardx/pi-github";
+// S8: TERMINAL_STATUSES has no v2 home yet — moves out of the v1 schema in S8.
+import {
+	defaultBranchForNode,
+	deriveBase,
+	isBranchOwner,
+	PARENT_AFTER_TOKEN,
+	type PlanNode,
+	type PlanV2,
+	parentOfNode,
+	TERMINAL_STATUSES,
+	walkNodes,
+} from "../plan/schema.js";
 import {
 	renderMaestroPrSection,
 	updateMaestroPrBody,
 } from "../pr-provenance.js";
-import {
-	type Deliverable,
-	defaultBranchForDeliverable,
-	deliverableRepoKey,
-	deliverableWorkspace,
-	findDeliverable,
-	type Plan,
-	pickBaseBranch,
-	repoFor,
-	TERMINAL_STATUSES,
-} from "../schema.js";
 import { buildPrBody } from "../shipping.js";
 import { auditBranchCommits, detectCommitPolicy } from "./commit-policy.js";
 
 // ─── Repo resolution ─────────────────────────────────────────────────────────
 
-// Canonical implementations live in the schema (Deliverable.repo landed);
-// re-exported here because ship-path callers historically import from shipper.
-export { deliverableRepoKey, repoFor } from "../schema.js";
+/**
+ * Resolve the repo a node targets: its registry entry when it names one, else
+ * the plan's default repo. Callers must not assume the path exists on disk —
+ * a late-bound entry (`createdBy`) materializes during execution.
+ */
+export function repoForNode(
+	plan: PlanV2,
+	node: Pick<PlanNode, "repo">,
+): { key: string; path: string } {
+	if (node.repo) {
+		return (
+			plan.repos?.find((r) => r.key === node.repo) ?? {
+				key: "default",
+				path: plan.repoPath,
+			}
+		);
+	}
+	return { key: "default", path: plan.repoPath };
+}
+
+/** The node's sibling group — its parent's children, or the roots. */
+function siblingsOf(plan: PlanV2, node: PlanNode): readonly PlanNode[] {
+	const parent = parentOfNode(plan, node.id);
+	return parent ? (parent.children ?? []) : plan.nodes;
+}
 
 // ─── Injectable seams ────────────────────────────────────────────────────────
 
@@ -92,26 +116,29 @@ export const defaultShipGit: ShipGit = {
 // ─── Base resolution ─────────────────────────────────────────────────────────
 
 /**
- * Base branch for a deliverable's PR. Stacked deliverables base off their first
+ * Base branch for a node's PR. Stacked nodes base off their first sibling
  * dependency's branch — but only when that dependency lives in the same repo;
- * cross-repo dependsOn is ordering-only, so the base falls back to the
- * deliverable's own repo default branch.
+ * cross-repo `after` is ordering-only, so the base falls back to the node's
+ * own repo default branch.
  */
 export function shipBaseBranch(
-	plan: Pick<Plan, "deliverables" | "repoPath" | "repos">,
-	deliverable: Deliverable,
+	plan: PlanV2,
+	node: PlanNode,
 	defaultBranch: string,
 ): string {
-	const deps = deliverable.dependsOn ?? [];
-	if (deps.length === 0 || deliverable.stacked === false) return defaultBranch;
-	const parent = findDeliverable(plan, deps[0]);
+	if (node.base === "default-branch") return defaultBranch;
+	if (node.base) return node.base;
+	const deps = (node.after ?? []).filter((ref) => ref !== PARENT_AFTER_TOKEN);
+	if (deps.length === 0) return defaultBranch;
+	const siblings = siblingsOf(plan, node);
+	const parent = siblings.find((sibling) => sibling.id === deps[0]) ?? null;
 	if (!parent) return defaultBranch;
-	if (deliverableRepoKey(parent) !== deliverableRepoKey(deliverable))
+	if ((parent.repo ?? "default") !== (node.repo ?? "default"))
 		return defaultBranch;
-	return pickBaseBranch(plan, deliverable, defaultBranch);
+	return deriveBase(node, siblings, defaultBranch);
 }
 
-// ─── shipDeliverable ───────────────────────────────────────────────────────────────
+// ─── shipNode ────────────────────────────────────────────────────────────────
 
 export type ShipErrorCode =
 	| "dirty-worktree"
@@ -131,11 +158,11 @@ export type ShipResult =
 	  }
 	| { ok: false; code: ShipErrorCode; message: string; retryable: boolean };
 
-export interface ShipDeliverableOpts {
-	plan: Plan;
-	deliverable: Deliverable;
+export interface ShipNodeOpts {
+	plan: PlanV2;
+	node: PlanNode;
 	worktreePath: string;
-	/** PR-body agent reports; defaults to the deliverable summary when present. */
+	/** PR-body agent reports; defaults to the node summary when present. */
 	agentReports?: string[];
 	prClient?: PrClient;
 	git?: ShipGit;
@@ -152,14 +179,12 @@ function shipError(code: ShipErrorCode, message: string): ShipResult {
 }
 
 /**
- * Push a completed deliverable's branch and create (or update) its PR. Never ships
+ * Push a completed node's branch and create (or update) its PR. Never ships
  * a dirty tree; every failure is a typed, retryable result — callers decide
  * whether and when to retry, and persist prUrl/prNumber on success.
  */
-export async function shipDeliverable(
-	opts: ShipDeliverableOpts,
-): Promise<ShipResult> {
-	const { plan, deliverable, worktreePath } = opts;
+export async function shipNode(opts: ShipNodeOpts): Promise<ShipResult> {
+	const { plan, node, worktreePath } = opts;
 	const prClient = opts.prClient ?? defaultPrClient;
 	const git = opts.git ?? defaultShipGit;
 
@@ -170,18 +195,17 @@ export async function shipDeliverable(
 		);
 	}
 
-	const branch = deliverable.branch ?? defaultBranchForDeliverable(deliverable);
+	const branch = node.branch ?? defaultBranchForNode(node);
 
-	const repo = repoFor(plan, deliverable);
-	const defaultBranch =
-		repo.defaultBranch ?? git.detectDefaultBranch(repo.path);
+	const repo = repoForNode(plan, node);
+	const defaultBranch = git.detectDefaultBranch(repo.path);
 	if (!defaultBranch) {
 		return shipError(
 			"no-default-branch",
 			`cannot detect the default branch of ${repo.path}`,
 		);
 	}
-	const base = shipBaseBranch(plan, deliverable, defaultBranch);
+	const base = shipBaseBranch(plan, node, defaultBranch);
 
 	// Commit-policy audit BEFORE anything leaves the machine: in a
 	// conventional-commit repo a bare "Add …" subject makes semantic-release
@@ -207,19 +231,18 @@ export async function shipDeliverable(
 		);
 	}
 
-	const reports =
-		opts.agentReports ?? (deliverable.summary ? [deliverable.summary] : []);
-	const generatedBody = buildPrBody(deliverable, reports);
+	const reports = opts.agentReports ?? (node.summary ? [node.summary] : []);
+	const generatedBody = buildPrBody(node, reports);
 
 	const existing = await prClient.findOpenPr(worktreePath, branch);
 	if (existing.error) return shipError("pr-failed", existing.error);
 	if (existing.pr) {
 		let body = generatedBody;
-		if (deliverable.workflowAnalytics) {
+		if (node.workflowAnalytics) {
 			try {
 				body = updateMaestroPrBody(
 					existing.pr.body,
-					renderMaestroPrSection(deliverable),
+					renderMaestroPrSection(node),
 				);
 			} catch (cause) {
 				return shipError(
@@ -236,7 +259,7 @@ export async function shipDeliverable(
 		}
 		return {
 			ok: true,
-			prUrl: existing.pr.url || deliverable.prUrl || "",
+			prUrl: existing.pr.url || node.prUrl || "",
 			prNumber: existing.pr.number,
 			base: existing.pr.baseRefName || base,
 			created: false,
@@ -244,7 +267,7 @@ export async function shipDeliverable(
 	}
 
 	const created = await prClient.createPr(worktreePath, {
-		title: deliverable.title,
+		title: node.title ?? node.id,
 		body: generatedBody,
 		base,
 	});
@@ -285,30 +308,30 @@ export interface ReconcileReport {
 }
 
 export interface ReconcileOpts {
-	plan: Plan;
+	plan: PlanV2;
 	prClient?: PrClient;
 	git?: ShipGit;
 }
 
-/** Deliverable whose branch is `branch` in the same repo as `deliverable`, or null. */
+/** Sibling node whose branch is `branch` in the same repo as `node`, or null. */
 function stackedParentByBranch(
-	plan: Plan,
-	deliverable: Deliverable,
+	siblings: readonly PlanNode[],
+	node: PlanNode,
 	branch: string,
-): Deliverable | null {
+): PlanNode | null {
 	return (
-		plan.deliverables.find(
+		siblings.find(
 			(g) =>
-				g.id !== deliverable.id &&
-				deliverableWorkspace(g) === "repo" &&
-				(g.branch ?? defaultBranchForDeliverable(g)) === branch &&
-				deliverableRepoKey(g) === deliverableRepoKey(deliverable),
+				g.id !== node.id &&
+				isBranchOwner(g) &&
+				(g.branch ?? defaultBranchForNode(g)) === branch &&
+				(g.repo ?? "default") === (node.repo ?? "default"),
 		) ?? null
 	);
 }
 
 /**
- * For every shipped deliverable with an open PR based on a sibling deliverable's branch:
+ * For every shipped node with an open PR based on a sibling node's branch:
  * once that sibling's PR has merged, retarget the PR to the repo default
  * branch. Conflicts after retarget are reported as needs-rebase. Pure report
  * out — plan mutation happens in the caller.
@@ -325,74 +348,73 @@ export async function reconcileShippedDeliverables(
 		errors: [],
 	};
 
-	for (const deliverable of plan.deliverables) {
-		if (deliverable.status !== "shipped" || deliverable.prNumber === undefined)
-			continue;
-		const repo = repoFor(plan, deliverable);
-		const cwd = deliverable.worktreePath ?? repo.path;
+	for (const { node, parent } of walkNodes(plan)) {
+		if (node.status !== "shipped" || node.prNumber === undefined) continue;
+		const repo = repoForNode(plan, node);
+		const cwd = node.worktreePath ?? repo.path;
 
-		const view = await prClient.viewPr(cwd, deliverable.prNumber);
+		const view = await prClient.viewPr(cwd, node.prNumber);
 		if (!view.pr) {
 			if (view.error)
 				report.errors.push({
-					deliverableId: deliverable.id,
+					deliverableId: node.id,
 					message: view.error,
 				});
 			continue;
 		}
 		if (view.pr.state !== "OPEN") continue;
 
-		const parent = stackedParentByBranch(
-			plan,
-			deliverable,
+		const siblings = parent ? (parent.children ?? []) : plan.nodes;
+		const stackedParent = stackedParentByBranch(
+			siblings,
+			node,
 			view.pr.baseRefName,
 		);
-		if (!parent || parent.prNumber === undefined) continue;
-		const parentView = await prClient.viewPr(cwd, parent.prNumber);
+		if (!stackedParent || stackedParent.prNumber === undefined) continue;
+		const parentView = await prClient.viewPr(cwd, stackedParent.prNumber);
 		if (!parentView.pr) {
 			if (parentView.error)
 				report.errors.push({
-					deliverableId: deliverable.id,
+					deliverableId: node.id,
 					message: parentView.error,
 				});
 			continue;
 		}
 		if (parentView.pr.state !== "MERGED") continue;
 
-		const defaultBranch =
-			repo.defaultBranch ?? git.detectDefaultBranch(repo.path);
+		const defaultBranch = git.detectDefaultBranch(repo.path);
 		if (!defaultBranch) {
 			report.errors.push({
-				deliverableId: deliverable.id,
+				deliverableId: node.id,
 				message: `cannot detect the default branch of ${repo.path}`,
 			});
 			continue;
 		}
 
-		const edit = await prClient.editPr(cwd, deliverable.prNumber, {
+		const edit = await prClient.editPr(cwd, node.prNumber, {
 			base: defaultBranch,
 		});
 		if (!edit.ok) {
 			report.errors.push({
-				deliverableId: deliverable.id,
-				message: edit.error ?? `retargeting PR #${deliverable.prNumber} failed`,
+				deliverableId: node.id,
+				message: edit.error ?? `retargeting PR #${node.prNumber} failed`,
 			});
 			continue;
 		}
 		report.retargeted.push({
-			deliverableId: deliverable.id,
-			prNumber: deliverable.prNumber,
+			deliverableId: node.id,
+			prNumber: node.prNumber,
 			from: view.pr.baseRefName,
 			to: defaultBranch,
 		});
 
-		const after = await prClient.viewPr(cwd, deliverable.prNumber);
+		const after = await prClient.viewPr(cwd, node.prNumber);
 		if (after.pr?.mergeable === "CONFLICTING") {
 			report.needsRebase.push({
-				deliverableId: deliverable.id,
-				prNumber: deliverable.prNumber,
+				deliverableId: node.id,
+				prNumber: node.prNumber,
 				base: defaultBranch,
-				message: `PR #${deliverable.prNumber} conflicts with ${defaultBranch} after retarget — rebase required`,
+				message: `PR #${node.prNumber} conflicts with ${defaultBranch} after retarget — rebase required`,
 			});
 		}
 	}
@@ -408,13 +430,13 @@ export interface CleanupReport {
 }
 
 export interface CleanupOpts {
-	plan: Plan;
+	plan: PlanV2;
 	git?: ShipGit;
 }
 
 /**
  * Remove worktrees the DAG no longer needs: a terminal (shipped/superseded/
- * abandoned) deliverable's worktree is removable only when no dependent deliverable is
+ * abandoned) node's worktree is removable only when no dependent node is
  * unshipped — unshipped dependents may still need it for stacking or rebase.
  * Active worktrees are not candidates. Never forces removal, so a dirty
  * worktree is retained with its reason. Pure report out — callers clear
@@ -425,35 +447,36 @@ export function cleanupWorktrees(opts: CleanupOpts): CleanupReport {
 	const git = opts.git ?? defaultShipGit;
 	const report: CleanupReport = { removed: [], retained: [] };
 
-	for (const deliverable of plan.deliverables) {
-		const path = deliverable.worktreePath;
+	for (const { node, parent } of walkNodes(plan)) {
+		const path = node.worktreePath;
 		if (!path) continue;
-		if (!TERMINAL_STATUSES.includes(deliverable.status)) continue;
+		if (!TERMINAL_STATUSES.includes(node.status)) continue;
 		// Scratch workspaces are plain dirs under the plan dir, not git
 		// worktrees — they persist (artifacts may be read later).
-		if (deliverableWorkspace(deliverable) === "scratch") continue;
+		if (!isBranchOwner(node)) continue;
 
-		const blocker = plan.deliverables.find(
+		const siblings = parent ? (parent.children ?? []) : plan.nodes;
+		const blocker = siblings.find(
 			(g) =>
-				(g.dependsOn ?? []).includes(deliverable.id) &&
+				(g.after ?? []).includes(node.id) &&
 				!TERMINAL_STATUSES.includes(g.status),
 		);
 		if (blocker) {
 			report.retained.push({
-				deliverableId: deliverable.id,
+				deliverableId: node.id,
 				path,
 				reason: `dependent \`${blocker.id}\` is ${blocker.status} and may need it for stacking/rebase`,
 			});
 			continue;
 		}
 
-		const repo = repoFor(plan, deliverable);
+		const repo = repoForNode(plan, node);
 		const removed = git.removeWorktree(repo.path, path);
 		if (removed.ok) {
-			report.removed.push({ deliverableId: deliverable.id, path });
+			report.removed.push({ deliverableId: node.id, path });
 		} else {
 			report.retained.push({
-				deliverableId: deliverable.id,
+				deliverableId: node.id,
 				path,
 				reason: removed.error,
 			});

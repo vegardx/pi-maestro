@@ -4,9 +4,15 @@ import type {
 	ModeTransitionGate,
 	ModeTransitionValidation,
 } from "@vegardx/pi-contracts";
-import { type PlanEngine, planFingerprint } from "./engine.js";
+import type { PlanEngineV2 } from "./plan/engine.js";
+import {
+	type PlanV2,
+	planFingerprintV2,
+	validatePlanShapeV2,
+	walkNodes,
+} from "./plan/schema.js";
+import { planPhaseV2 } from "./planning-preamble.js";
 import { renderPlanOutline } from "./research.js";
-import { type Plan, planPhase, validatePlanShape } from "./schema.js";
 
 export type TransitionEdge = `${ModeName}->${ModeName}`;
 
@@ -19,13 +25,16 @@ export interface TransitionGateRequest {
 export interface TransitionGateDefinition {
 	readonly id: string;
 	readonly edges: readonly TransitionEdge[];
-	validate(plan: Plan): readonly ModeTransitionValidation[];
-	prompt(plan: Plan, validations: readonly ModeTransitionValidation[]): string;
-	suggestions(_plan: Plan): readonly never[];
+	validate(plan: PlanV2): readonly ModeTransitionValidation[];
+	prompt(
+		plan: PlanV2,
+		validations: readonly ModeTransitionValidation[],
+	): string;
+	suggestions(_plan: PlanV2): readonly never[];
 }
 
 export interface TransitionGateCoordinatorDeps {
-	readonly engine: () => PlanEngine | undefined;
+	readonly engine: () => PlanEngineV2 | undefined;
 	readonly currentMode: () => ModeName;
 	readonly commit: (mode: ModeName, ctx: ExtensionContext) => void;
 	readonly agents: () =>
@@ -85,7 +94,7 @@ export class TransitionGateCoordinator {
 		}
 		const now = this.deps.now ?? (() => new Date().toISOString());
 		const requestedAt = now();
-		const fingerprint = planFingerprint(engine.get());
+		const fingerprint = planFingerprintV2(engine.get());
 		const id = `mode-transition:${from}:${to}:${requestedAt}`;
 		let validations = [...definition.validate(engine.get())];
 		let state: ModeTransitionGate = {
@@ -99,7 +108,7 @@ export class TransitionGateCoordinator {
 			planFingerprint: fingerprint,
 			validations,
 		};
-		engine.setTransitionGate(state);
+		persistGate(engine, state);
 
 		const agents = this.deps.agents();
 		if (!agents) {
@@ -126,7 +135,7 @@ export class TransitionGateCoordinator {
 				runId: run.runId,
 				updatedAt: now(),
 			};
-			engine.setTransitionGate(state);
+			persistGate(engine, state);
 			const result = await run.handle.result();
 			if (result.status !== "succeeded")
 				throw new Error(result.error ?? `plan reviewer ${result.status}`);
@@ -145,7 +154,7 @@ export class TransitionGateCoordinator {
 			return false;
 		}
 
-		if (planFingerprint(engine.get()) !== fingerprint) {
+		if (planFingerprintV2(engine.get()) !== fingerprint) {
 			this.block(
 				engine,
 				state,
@@ -165,7 +174,7 @@ export class TransitionGateCoordinator {
 			updatedAt: now(),
 			reviewSummary,
 		};
-		engine.setTransitionGate(state);
+		persistGate(engine, state);
 
 		const ask = this.deps.ask();
 		if (!ask) {
@@ -220,11 +229,11 @@ export class TransitionGateCoordinator {
 				ruledAt,
 			},
 		};
-		engine.setTransitionGate(state);
+		persistGate(engine, state);
 		const ruling = state.ruling;
 		if (!ruling || ruling.decision === "stay-in-plan") return false;
 
-		if (planFingerprint(engine.get()) !== fingerprint) {
+		if (planFingerprintV2(engine.get()) !== fingerprint) {
 			this.block(
 				engine,
 				state,
@@ -255,13 +264,13 @@ export class TransitionGateCoordinator {
 			return false;
 		}
 		state = { ...state, status: "settled", validations, updatedAt: now() };
-		engine.setTransitionGate(state);
+		persistGate(engine, state);
 		this.deps.commit(to, ctx);
 		return true;
 	}
 
 	private block(
-		engine: PlanEngine,
+		engine: PlanEngineV2,
 		state: ModeTransitionGate,
 		reason: string,
 		at: string,
@@ -272,9 +281,26 @@ export class TransitionGateCoordinator {
 			reason,
 			updatedAt: at,
 		};
-		engine.setTransitionGate(blocked);
+		persistGate(engine, blocked);
 		return blocked;
 	}
+}
+
+/**
+ * Persist a gate row on the v2 plan. The in-memory state machine keeps the
+ * full v1 ModeTransitionGate texture; the ledger stores the looser
+ * TransitionGateRuling — `ruling` collapses to the decision (or the
+ * lifecycle status while undecided), `decidedAt` is the ruling/update
+ * timestamp, and the complete evidence rides along via the index signature.
+ */
+function persistGate(engine: PlanEngineV2, state: ModeTransitionGate): void {
+	engine.setTransitionGate({
+		...state,
+		id: state.id,
+		ruling: state.ruling?.decision ?? state.status,
+		decidedAt: state.ruling?.ruledAt ?? state.updatedAt,
+		rulingDetail: state.ruling,
+	});
 }
 
 export function createExecutionReadinessGate(): TransitionGateDefinition {
@@ -301,37 +327,39 @@ export function createExecutionReadinessGate(): TransitionGateDefinition {
 }
 
 export function executionReadinessValidations(
-	plan: Plan,
+	plan: PlanV2,
 ): readonly ModeTransitionValidation[] {
-	const result: ModeTransitionValidation[] = validatePlanShape(plan).map(
+	const result: ModeTransitionValidation[] = validatePlanShapeV2(plan).map(
 		(message, index) => ({
 			id: `shape-${index}`,
 			level: "error",
 			message,
 		}),
 	);
-	if (planPhase(plan) !== "structuring")
+	if (planPhaseV2(plan) !== "structuring")
 		result.push({
 			id: "phase",
 			level: "error",
 			message: "plan has not reached structuring",
 		});
-	if (!plan.deliverables.length)
+	if (!plan.nodes.length)
 		result.push({
-			id: "deliverables",
+			id: "nodes",
 			level: "error",
-			message: "plan has no deliverables",
+			message: "plan has no nodes",
 		});
-	for (const deliverable of plan.deliverables) {
+	// Worker nodes write (v1's full-mode check); read agents are idle-done and
+	// legitimately taskless.
+	for (const { node } of walkNodes(plan)) {
 		if (
-			deliverable.worker.mode === "full" &&
-			deliverable.tasks.filter((task) => (task.kind ?? "task") !== "followup")
+			node.agent === "worker" &&
+			node.tasks.filter((task) => (task.kind ?? "task") !== "followup")
 				.length === 0
 		)
 			result.push({
-				id: `tasks:${deliverable.id}`,
+				id: `tasks:${node.id}`,
 				level: "error",
-				message: `${deliverable.id} has no gating work items`,
+				message: `${node.id} has no gating work items`,
 			});
 	}
 	return result;

@@ -242,7 +242,7 @@ export async function handleInterruptCommand(
 					? await execution.interrupt(deliverable, name)
 					: undefined;
 			results.push(
-				`${target.id}: ${result?.outcome ?? "disconnected"} (session preserved)`,
+				`${target.id}: ${result ? (result.ok ? "accepted" : (result.error ?? "failed")) : "disconnected"} (session preserved)`,
 			);
 		} else {
 			const runId = target.id.slice("run:".length) as never;

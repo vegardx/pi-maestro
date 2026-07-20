@@ -88,6 +88,16 @@ function projectNode(raw: unknown, depth: number): PlanViewNode | undefined {
 	const title = str(raw.title);
 	if (!id || !title) return undefined;
 	const worker = isRecord(raw.worker) ? raw.worker : undefined;
+	// v2 nodes carry model resolution HISTORY, not authored worker.model —
+	// the newest resolution is what "the pinned model" means post-flip.
+	const resolutions = Array.isArray(raw.resolutions) ? raw.resolutions : [];
+	const lastResolution = resolutions.at(-1);
+	const resolvedModel = isRecord(lastResolution)
+		? str(lastResolution.model)
+		: undefined;
+	const resolvedEffort = isRecord(lastResolution)
+		? str(lastResolution.effort)
+		: undefined;
 	return {
 		id,
 		title,
@@ -105,8 +115,12 @@ function projectNode(raw: unknown, depth: number): PlanViewNode | undefined {
 		...(str(raw.baseSha) ? { baseSha: str(raw.baseSha) } : {}),
 		...(str(raw.prUrl) ? { prUrl: str(raw.prUrl) } : {}),
 		...(str(worker?.mode) ? { workerMode: str(worker?.mode) } : {}),
-		...(str(worker?.model) ? { workerModel: str(worker?.model) } : {}),
-		...(str(worker?.effort) ? { workerEffort: str(worker?.effort) } : {}),
+		...((str(worker?.model) ?? resolvedModel)
+			? { workerModel: str(worker?.model) ?? resolvedModel }
+			: {}),
+		...((str(worker?.effort) ?? resolvedEffort)
+			? { workerEffort: str(worker?.effort) ?? resolvedEffort }
+			: {}),
 		authoredBy: str(raw.authoredBy) ?? "plan",
 	};
 }
@@ -114,16 +128,32 @@ function projectNode(raw: unknown, depth: number): PlanViewNode | undefined {
 /**
  * Project a plan — the live engine object or parsed plan.json — into the
  * view every consumer renders from. Returns undefined when the value has no
- * recognizable plan shape.
+ * recognizable plan shape. This is THE function that changed at the v2 flip:
+ * a v2 plan's recursive `nodes` tree walks depth-first with real depth; a v1
+ * `deliverables` list projects flat at depth 0. Every consumer is agnostic.
  */
 export function projectPlanView(planLike: unknown): PlanView | undefined {
 	if (!isRecord(planLike)) return undefined;
-	// v1: a flat deliverables list, every node at depth 0. (v2 will walk the
-	// recursive nodes tree here — the only place that changes.)
-	if (!Array.isArray(planLike.deliverables)) return undefined;
-	const nodes = planLike.deliverables
-		.map((raw) => projectNode(raw, 0))
-		.filter((node): node is PlanViewNode => node !== undefined);
+	const nodes: PlanViewNode[] = [];
+	if (Array.isArray(planLike.nodes)) {
+		// v2: recursive tree — parents before children, sibling order kept.
+		const walk = (raw: unknown, depth: number): void => {
+			const node = projectNode(raw, depth);
+			if (!node) return;
+			nodes.push(node);
+			const children =
+				isRecord(raw) && Array.isArray(raw.children) ? raw.children : [];
+			for (const child of children) walk(child, depth + 1);
+		};
+		for (const root of planLike.nodes) walk(root, 0);
+	} else if (Array.isArray(planLike.deliverables)) {
+		for (const raw of planLike.deliverables) {
+			const node = projectNode(raw, 0);
+			if (node) nodes.push(node);
+		}
+	} else {
+		return undefined;
+	}
 	return {
 		...(str(planLike.slug) ? { slug: str(planLike.slug) } : {}),
 		...(str(planLike.title) ? { title: str(planLike.title) } : {}),

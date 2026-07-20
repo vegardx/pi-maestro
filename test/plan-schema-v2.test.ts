@@ -5,6 +5,7 @@
 import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import {
+	canTransition,
 	deriveBase,
 	effectiveMaxChildren,
 	findNodeV2,
@@ -18,6 +19,7 @@ import {
 	planFingerprintV2,
 	readyChildren,
 	shippableNodes,
+	slugify,
 	treeDepth,
 	validatePlanShapeV2,
 	walkNodes,
@@ -316,6 +318,17 @@ describe("tasks and fingerprint", () => {
 		expect(gatingNodeTasks(n).map((t) => t.id)).toEqual(["t", "post"]);
 	});
 
+	it("blocked reasons name unknown deps and non-planned statuses", () => {
+		// Ported from schema.test.ts (v1 blockedReason): the two branches the
+		// scheduler tests above don't reach.
+		const ghost = node({ id: "x", after: ["ghost"] });
+		expect(nodeBlockedReason([ghost], ghost)).toContain("unknown dependency");
+		const active = node({ id: "y", status: "active" });
+		expect(nodeBlockedReason([active], active)).toContain(
+			"is active, not planned",
+		);
+	});
+
 	it("fingerprint ignores session/process churn, sees semantic edits", () => {
 		const a = authPlan();
 		const b = authPlan();
@@ -334,5 +347,59 @@ describe("tasks and fingerprint", () => {
 		const target = findNodeV2(d, "build-auth");
 		if (target) target.tasks[0].title = "implement rotation DIFFERENTLY";
 		expect(planFingerprintV2(d)).not.toBe(planFingerprintV2(a));
+	});
+});
+
+// ─── v1 survivors (schema.test.ts pins, moved here at the flip) ──────────────
+
+describe("status transitions (canTransition)", () => {
+	it("allows the forward lifecycle", () => {
+		expect(canTransition("planned", "active")).toBe(true);
+		expect(canTransition("planned", "abandoned")).toBe(true);
+		expect(canTransition("active", "complete")).toBe(true);
+		expect(canTransition("complete", "shipped")).toBe(true);
+		expect(canTransition("complete", "superseded")).toBe(true);
+	});
+
+	it("allows recoverable delivery failure and retry", () => {
+		expect(canTransition("active", "failed")).toBe(true);
+		expect(canTransition("failed", "planned")).toBe(true);
+		expect(canTransition("failed", "active")).toBe(true);
+	});
+
+	it("does not allow planned → shipped", () => {
+		expect(canTransition("planned", "shipped")).toBe(false);
+	});
+
+	it("shipped can only reopen to planned (verify remediation)", () => {
+		expect(canTransition("shipped", "planned")).toBe(true);
+		expect(canTransition("shipped", "active")).toBe(false);
+		expect(canTransition("shipped", "abandoned")).toBe(false);
+	});
+
+	it("does not allow superseded → anything", () => {
+		expect(canTransition("superseded", "planned")).toBe(false);
+		expect(canTransition("superseded", "active")).toBe(false);
+	});
+});
+
+describe("slugify", () => {
+	it("lowercases and replaces spaces", () => {
+		expect(slugify("Implement JWT Auth")).toBe("implement-jwt-auth");
+	});
+
+	it("strips special chars", () => {
+		expect(slugify("feat: add /login endpoint!")).toBe(
+			"feat-add-login-endpoint",
+		);
+	});
+
+	it("truncates at 60 chars", () => {
+		const long = "a".repeat(100);
+		expect(slugify(long).length).toBeLessThanOrEqual(60);
+	});
+
+	it("trims leading/trailing dashes", () => {
+		expect(slugify("--hello--")).toBe("hello");
 	});
 });

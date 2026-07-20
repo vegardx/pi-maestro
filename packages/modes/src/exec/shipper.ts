@@ -26,7 +26,6 @@ import {
 	type PrResult,
 	viewPr,
 } from "@vegardx/pi-github";
-// S8: TERMINAL_STATUSES has no v2 home yet — moves out of the v1 schema in S8.
 import {
 	defaultBranchForNode,
 	deriveBase,

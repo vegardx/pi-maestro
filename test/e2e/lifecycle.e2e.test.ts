@@ -128,6 +128,7 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 	let tmux: ReturnType<typeof stubTmux>;
 	let prevSessionDir: string | undefined;
 	const workers: { close: () => void }[] = [];
+	const resolveCalls: { model?: string; effort?: string }[] = [];
 
 	beforeEach(async () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "e2e-lifecycle-"));
@@ -159,12 +160,16 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 			tmux,
 			token: TOKEN,
 			socketPath,
-			resolveWorkerModel: async (choice) => ({
-				modelId: choice.model ?? "test/worker",
-				effort: choice.effort ?? "low",
-			}),
+			resolveWorkerModel: async (choice) => {
+				resolveCalls.push(choice);
+				return {
+					modelId: choice.model ?? "test/worker",
+					effort: choice.effort ?? "low",
+				};
+			},
 			onPlanChanged: () => {},
 		});
+		resolveCalls.length = 0;
 		await adapter.start();
 		// Hydrated active deliverables come up blocked (restart safety); clear it
 		// so the tick spawns the worker.
@@ -179,6 +184,19 @@ describe("e2e: deliverable lifecycle over the real orchestrator", () => {
 			delete process.env.PI_CODING_AGENT_SESSION_DIR;
 		else process.env.PI_CODING_AGENT_SESSION_DIR = prevSessionDir;
 		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("pins the first model resolution onto the plan spec", () => {
+		// The deliverable authored no worker model, so the spawn resolved
+		// first-available (the stub saw an empty choice) — and the resolution
+		// must now be pinned on the spec. A respawn/resume revalidates this
+		// exact choice instead of re-rolling against whatever the config says
+		// by then; if the pinned model has become unavailable it fails
+		// visibly, never silently substituting.
+		expect(resolveCalls[0]).toEqual({ model: undefined, effort: undefined });
+		const worker = engine.get().deliverables[0].worker;
+		expect(worker.model).toBe("test/worker");
+		expect(worker.effort).toBe("low");
 	});
 
 	it("spawns a worker and completes when all tasks toggle done", async () => {

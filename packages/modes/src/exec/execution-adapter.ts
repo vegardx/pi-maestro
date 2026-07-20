@@ -598,9 +598,10 @@ export class ExecutionAdapter {
 				// Worker and support agents share the worker role policy. Authored exact
 				// choices are persisted on their plan specs and revalidated on every fresh
 				// spawn/resume, so unavailable or out-of-pool choices fail visibly.
-				const authored = isWorker
-					? deliverable.worker
+				const authoredAgent = isWorker
+					? undefined
 					: deliverable.agents.find((a) => a.name === spawnOpts.agentName);
+				const authored = isWorker ? deliverable.worker : authoredAgent;
 				const resolvedWork = await (this.opts.resolveWorkerModel
 					? this.opts.resolveWorkerModel({
 							model: authored?.model ?? spawnOpts.model,
@@ -615,6 +616,34 @@ export class ExecutionAdapter {
 								| ThinkingLevel
 								| undefined,
 						}));
+				// Pin the resolution onto the plan spec the first time it is made.
+				// Without this, an agent spec with no authored model re-resolves
+				// first-available on every respawn/resume — a mid-run config edit
+				// silently re-rolls the model under a running deliverable. Pinned,
+				// the resume path revalidates this exact choice like any authored
+				// one: still available → same model; gone → a visible spawn error,
+				// never a silent substitute.
+				if (!authored?.model) {
+					if (isWorker) {
+						this.engine.updateDeliverable(spawnOpts.deliverableId, {
+							workerModel: resolvedWork.modelId,
+							...(authored?.effort === undefined && resolvedWork.effort
+								? { workerEffort: resolvedWork.effort }
+								: {}),
+						});
+					} else if (authoredAgent) {
+						this.engine.updateAgent(
+							spawnOpts.deliverableId,
+							authoredAgent.name,
+							{
+								model: resolvedWork.modelId,
+								...(authoredAgent.effort === undefined && resolvedWork.effort
+									? { effort: resolvedWork.effort }
+									: {}),
+							},
+						);
+					}
+				}
 				const sessionModelId = this.opts.ctx.model
 					? `${this.opts.ctx.model.provider}/${this.opts.ctx.model.id}`
 					: undefined;

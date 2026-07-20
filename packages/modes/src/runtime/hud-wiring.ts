@@ -14,13 +14,15 @@ import {
 	CAPABILITIES,
 	EVENTS,
 	type PendingAsk,
+	planViewTasks,
+	projectPlanView,
 	type RunRecord,
 } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
 import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
 import type { PendingQuestion } from "../question-queue.js";
-import { effectiveWorkItemKind, type Plan } from "../schema.js";
+import type { Plan } from "../schema.js";
 import { handleViewCommand } from "./agent-commands.js";
 import { listAgentTargets } from "./agent-targets.js";
 import type { RuntimeContext } from "./context.js";
@@ -395,37 +397,44 @@ export function buildQuestionRows(
  * Plan tab rows: deliverables as checkboxes ([x] shipped/complete, [~]
  * active, [ ] queued) with the assigned worker's live status named on active
  * rows. Tasks travel along; the component auto-expands the active row's.
+ *
+ * Renders from the shared PlanView projection (plan-schema spike PR-1): when
+ * the v2 recursive schema lands, only projectPlanView changes — this builder
+ * keeps working, with row depth ready for tree indentation.
  */
 export function buildPlanView(
 	plan: Pick<Plan, "deliverables"> | undefined,
 	execution?: { agents: ReadonlyMap<string, ExecutionAgentSnapshot> },
 ): HudPlanView | undefined {
-	if (!plan) return undefined;
+	const view = projectPlanView(plan);
+	if (!view) return undefined;
 	let done = 0;
-	const rows: HudPlanRow[] = plan.deliverables.map((d) => {
+	const rows: HudPlanRow[] = view.nodes.map((node) => {
 		const state =
-			d.status === "shipped"
+			node.status === "shipped"
 				? "shipped"
-				: d.status === "complete"
+				: node.status === "complete"
 					? "complete"
-					: d.status === "active"
+					: node.status === "active"
 						? "active"
-						: d.status === "failed"
+						: node.status === "failed"
 							? "failed"
 							: "queued";
 		if (state === "shipped" || state === "complete") done++;
-		const workerAgent = execution?.agents.get(`${d.id}/worker`);
+		const workerAgent = execution?.agents.get(`${node.id}/worker`);
 		const worker = workerAgent
 			? `worker ${execStatus(workerAgent, undefined)}`
-			: `worker (${d.worker.mode})`;
+			: `worker (${node.workerMode ?? "full"})`;
 		return {
-			id: d.id,
-			title: d.title,
+			id: node.id,
+			title: node.title,
 			state,
 			...(state === "active" ? { worker } : {}),
-			tasks: d.tasks
-				.filter((t) => effectiveWorkItemKind(t) === "task")
-				.map((t) => ({ id: t.id, title: t.title, done: t.done })),
+			tasks: planViewTasks(node).map((t) => ({
+				id: t.id,
+				title: t.title,
+				done: t.done,
+			})),
 		};
 	});
 	return { rows, done, total: rows.length };

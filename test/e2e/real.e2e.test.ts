@@ -107,10 +107,9 @@ function waitForShipped(piHome: string, timeoutMs: number): Promise<void> {
 	return new Promise((resolve) => {
 		const tick = () => {
 			const plan = readPlan(piHome, SANDBOX_FEATURES.name);
-			const deliverables = plan?.deliverables ?? [];
+			const nodes = plan?.nodes ?? [];
 			const settled =
-				deliverables.length > 0 &&
-				deliverables.every((d) => terminal.has(d.status));
+				nodes.length > 0 && nodes.every((node) => terminal.has(node.status));
 			if (settled || Date.now() - start > timeoutMs) {
 				resolve();
 				return;

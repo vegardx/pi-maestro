@@ -85,3 +85,16 @@ describe("the shipped default table", () => {
 		}
 	});
 });
+
+describe("duty rows", () => {
+	it("ships live-duty defaults with tier-allowlist-compatible tiers", () => {
+		const table = { rows: DEFAULT_POLICY_ROWS, errors: [] as string[] };
+		expect(policyRowFor(table, "duty:compact-summarize")?.run.models).toBe(
+			"fast",
+		);
+		expect(policyRowFor(table, "duty:verify-delivery")?.run.models).toBe(
+			"normal",
+		);
+		expect(policyRowFor(table, "tool:bash")?.run.models).toBe("fast");
+	});
+});

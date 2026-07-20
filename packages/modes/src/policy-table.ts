@@ -4,7 +4,14 @@
 // stands). Only rows with real consumers ship as defaults — a row nothing
 // reads is a lie the linter should catch, not configuration.
 
-import { type PolicyRow, validatePolicyRows } from "@vegardx/pi-contracts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type PolicyDuty,
+	type PolicyRow,
+	type ThinkingLevel,
+	validatePolicyRows,
+} from "@vegardx/pi-contracts";
+import { resolveV2Model } from "@vegardx/pi-models";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 
 /**
@@ -38,6 +45,11 @@ export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 		scope: { depth: ">=1" },
 		run: { models: "fast", contract: "verdict" },
 	},
+	// Live duties: the compaction summariser and the /verify read agents
+	// resolve their tier here (v1 role bindings are the fallback when a row
+	// is absent, disabled, or unresolvable).
+	{ on: "duty:compact-summarize", run: { models: "fast" } },
+	{ on: "duty:verify-delivery", run: { models: "normal" } },
 ];
 
 export interface PolicyTable {
@@ -66,4 +78,38 @@ export function policyRowFor(
 	on: string,
 ): PolicyRow | undefined {
 	return table.rows.find((row) => row.on === on);
+}
+
+/** Agent-type lens a duty resolves through (tier allowlist validation). */
+const DUTY_AGENT: Readonly<Record<PolicyDuty, "explorer" | "reviewer">> = {
+	classify: "explorer",
+	"plan-summarize": "explorer",
+	"compact-summarize": "explorer",
+	"verify-findings": "reviewer",
+	"verify-delivery": "reviewer",
+};
+
+/**
+ * Resolve a duty's policy row to a concrete model via the v2 resolver
+ * (residency-filtered). Null when the row is absent, disabled, or fails to
+ * resolve — the caller falls back to its pre-table behavior, fail-open.
+ */
+export async function resolveDutyModel(
+	ctx: ExtensionContext,
+	duty: PolicyDuty,
+): Promise<{ modelId: string; effort?: ThinkingLevel } | null> {
+	const row = policyRowFor(readPolicyTable(ctx.cwd), `duty:${duty}`);
+	if (!row || row.run.enabled === false) return null;
+	try {
+		const resolved = await resolveV2Model(ctx, {
+			agent: DUTY_AGENT[duty],
+			tier: row.run.models,
+		});
+		return {
+			modelId: resolved.modelId,
+			...(resolved.effort ? { effort: resolved.effort } : {}),
+		};
+	} catch {
+		return null;
+	}
 }

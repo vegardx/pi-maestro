@@ -14,6 +14,7 @@ import {
 	CAPABILITIES,
 	MODEL_ROLES,
 	type ModelRole,
+	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../exec/verify.js";
 import { writeVerificationReport } from "../exec/verify-report.js";
 import { findNodeV2 } from "../plan/schema.js";
+import { resolveDutyModel } from "../policy-table.js";
 import { plansRoot } from "../storage.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import {
@@ -183,17 +185,23 @@ async function runDeliveryVerification(
 		);
 		return;
 	}
-	const verifierResolution = await resolveExactModelSelection(ctx, {
-		role: "verifier",
-		requireApiKey: true,
-	});
-	const verifier = verifierResolution.selected;
+	// duty:verify-delivery row first (v2 tier via the resolver); v1 verifier
+	// role is the fallback so verification never regresses on a bad table.
+	let verifier: { modelId: string; effort?: ThinkingLevel } | null =
+		await resolveDutyModel(ctx, "verify-delivery");
 	if (!verifier) {
-		ctx.ui.notify(
-			`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
-			"error",
-		);
-		return;
+		const verifierResolution = await resolveExactModelSelection(ctx, {
+			role: "verifier",
+			requireApiKey: true,
+		});
+		verifier = verifierResolution.selected;
+		if (!verifier) {
+			ctx.ui.notify(
+				`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
+				"error",
+			);
+			return;
+		}
 	}
 	const meta = getModelMeta(ctx, verifier.modelId);
 	ctx.ui.notify(

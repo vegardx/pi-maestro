@@ -60,6 +60,41 @@ export function provisionWorktree(opts: ProvisionWorktreeOpts): string {
 	return result.path;
 }
 
+export interface ProvisionBranchWorktreeOpts {
+	/** Main checkout of the repo. */
+	repoPath: string;
+	/** Exact branch to create/check out — v2 nodes author arbitrary branches
+	 *  (feat/<id>) and candidates get cand/<parent>/<id> (ensemble spike). */
+	branch: string;
+	/** Base to create `branch` from when it doesn't exist yet. */
+	baseBranch: string;
+	/** Path segments under the worktrees root (e.g. ["_candidates","p","c"]). */
+	pathSegments: readonly string[];
+}
+
+/**
+ * v2 provisioning: branch and path are the caller's, not derived from a
+ * deliverable id — the parameterization the ensemble mechanics need.
+ * Idempotent like {@link provisionWorktree}.
+ */
+export function provisionBranchWorktree(
+	opts: ProvisionBranchWorktreeOpts,
+): string {
+	const target = worktreePathFor(opts.repoPath, ...opts.pathSegments);
+	const result = addWorktree(
+		opts.repoPath,
+		target,
+		opts.branch,
+		opts.baseBranch,
+	);
+	if (!result.ok) {
+		throw new Error(
+			`worktree provisioning for ${opts.branch} failed: ${result.error}`,
+		);
+	}
+	return result.path;
+}
+
 // ─── Environment setup ───────────────────────────────────────────────────────
 
 export interface ProvisionEnvironmentOpts {

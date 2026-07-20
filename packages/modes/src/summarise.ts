@@ -11,8 +11,12 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { resolveExactModelSelection } from "@vegardx/pi-models";
+import {
+	resolveExactModelSelection,
+	resolveModelAuth,
+} from "@vegardx/pi-models";
 import type { SummariseFn } from "./compaction.js";
+import { resolveDutyModel } from "./policy-table.js";
 
 /** Abort the call when pi's signal fires OR our own timeout elapses. */
 function withTimeout(
@@ -43,13 +47,28 @@ export function createModesSummariser(
 	timeoutMs: number,
 ): SummariseFn {
 	return async ({ messages, preamble, maxTokens, signal }) => {
-		const resolution = await resolveExactModelSelection(ctx, {
-			role: "plan-summarizer",
-			requireApiKey: true,
-		});
-		const resolved = resolution.selected;
-		if (!resolved?.apiKey) return null;
 		if (messages.length === 0) return null;
+		// duty:compact-summarize row first (v2 tier through the resolver);
+		// the v1 plan-summarizer role is the fallback, fail-open.
+		let resolved: {
+			model: Parameters<typeof complete>[0];
+			apiKey?: string;
+			headers?: Record<string, string>;
+		} | null = null;
+		const duty = await resolveDutyModel(ctx, "compact-summarize");
+		if (duty) {
+			const auth = await resolveModelAuth(ctx, duty.modelId);
+			if (auth?.apiKey) resolved = auth;
+		}
+		if (!resolved) {
+			const resolution = await resolveExactModelSelection(ctx, {
+				role: "plan-summarizer",
+				requireApiKey: true,
+			});
+			const selected = resolution.selected;
+			if (!selected?.apiKey) return null;
+			resolved = selected;
+		}
 
 		const conversationText = serializeConversation(convertToLlm(messages));
 		const promptText = `${preamble}\n\n<conversation>\n${conversationText}\n</conversation>`;

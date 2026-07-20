@@ -26,6 +26,9 @@ const files = [
 const failures = [];
 const banned = [
 	[
+		// The PRE-CUTOVER models.profiles format is removed; v2 deliberately
+		// reclaims the key for seat→catalog bindings ({ catalog, targets? }) —
+		// the v2 modules below own the shape distinction.
 		/\bmodels\.profiles\b/g,
 		"removed models.profiles key",
 		new Set([
@@ -33,6 +36,8 @@ const banned = [
 			"docs/settings.md",
 			"docs/commands.md",
 			"packages/models/src/profiles.ts",
+			"packages/models/src/catalog.ts",
+			"packages/contracts/src/catalog.ts",
 		]),
 	],
 	[/\breview panel\b/gi, "removed review-panel architecture", new Set()],

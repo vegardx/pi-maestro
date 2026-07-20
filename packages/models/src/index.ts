@@ -1,5 +1,11 @@
 // @vegardx/pi-models — authenticated exact model selection.
 
+export {
+	activeV2Profile,
+	isV2ProfileShape,
+	readV2Config,
+	validateV2Config,
+} from "./catalog.js";
 export { supportedEfforts } from "./efforts.js";
 export {
 	type AssignmentSelectionOptions,

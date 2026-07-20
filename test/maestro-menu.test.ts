@@ -337,7 +337,7 @@ describe("/maestro interactive editor", () => {
 		};
 		await maestroHandler("show", ctx);
 		expect(
-			notes.some((note) => note.includes("models.profiles was removed")),
+			notes.some((note) => note.includes("pre-cutover models.profiles")),
 		).toBe(true);
 	});
 

@@ -96,5 +96,6 @@ describe("duty rows", () => {
 			"normal",
 		);
 		expect(policyRowFor(table, "tool:bash")?.run.models).toBe("fast");
+		expect(policyRowFor(table, "tool:watch")?.run.models).toBe("fast");
 	});
 });

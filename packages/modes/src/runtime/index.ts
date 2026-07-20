@@ -26,6 +26,8 @@ import {
 import { readResearchWatchdogSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
+import { createWatchTool } from "../watch-tool.js";
+import { WatchManager } from "../watcher.js";
 import {
 	clipReport,
 	registerAgentCardRenderer,
@@ -135,6 +137,25 @@ export function createModesRuntime(
 	})) {
 		pi.registerTool(tool);
 	}
+
+	// The watcher: goal-driven eyes on external state (design §The watcher).
+	// Process-local — raises land in THIS session as follow-up messages, for
+	// the seat and for worker sessions alike.
+	const watchManager = new WatchManager({
+		raise: (raise) => {
+			const history = raise.refinementHistory?.length
+				? `\n(along the way the watcher chose to ignore: ${raise.refinementHistory.join("; ")})`
+				: "";
+			void pi.sendUserMessage(
+				`[watch ${raise.watchId}] ${raise.kind}: ${raise.summary}${history}`,
+				{ deliverAs: "followUp" },
+			);
+		},
+	});
+	pi.registerTool(createWatchTool(() => watchManager));
+	pi.on("session_shutdown", () => {
+		watchManager.destroy();
+	});
 
 	// Maestro-side ship-gate triage tool: when a gate blocks, the maestro is
 	// the first responder — one send-back with guidance per deliverable, or

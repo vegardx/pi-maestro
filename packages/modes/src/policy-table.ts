@@ -50,6 +50,8 @@ export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 	// is absent, disabled, or unresolvable).
 	{ on: "duty:compact-summarize", run: { models: "fast" } },
 	{ on: "duty:verify-delivery", run: { models: "normal" } },
+	// The watcher's compile/judge calls (design §The watcher).
+	{ on: "tool:watch", run: { models: "fast" } },
 ];
 
 export interface PolicyTable {

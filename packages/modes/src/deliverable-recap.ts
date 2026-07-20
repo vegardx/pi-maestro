@@ -1,14 +1,18 @@
-// Recap for the deliverable model. Produces a concise text summary of plan
-// progress — useful when the maestro session resumes or a compaction
+// Recap for the node-tree plan model. Produces a concise text summary of
+// plan progress — useful when the maestro session resumes or a compaction
 // boundary is hit.
 
-import type { DeliverableExecutor } from "./deliverable-executor.js";
-import type { PlanEngine } from "./engine.js";
-import type { Deliverable } from "./schema.js";
-import { gatingTasks } from "./schema.js";
+import type { PlanEngineV2 } from "./plan/engine.js";
+import type { NodeExecutor } from "./plan/node-executor.js";
+import {
+	gatingNodeTasks,
+	PARENT_AFTER_TOKEN,
+	type PlanNode,
+	walkNodes,
+} from "./plan/schema.js";
 
 export interface RecapOptions {
-	/** Include agent summaries for complete deliverables. */
+	/** Include agent summaries for complete nodes. */
 	includeSummaries?: boolean;
 }
 
@@ -17,61 +21,61 @@ export interface RecapOptions {
  * for injection into a new maestro turn or compaction seed.
  */
 export function buildRecap(
-	engine: PlanEngine,
-	executor: DeliverableExecutor,
+	engine: PlanEngineV2,
+	executor: NodeExecutor,
 	opts: RecapOptions = {},
 ): string {
 	const plan = engine.get();
 	const sections: string[] = [];
 
+	const visits = [...walkNodes(plan)];
 	sections.push(`# Plan: ${plan.title}`);
-	sections.push(
-		`Slug: \`${plan.slug}\` · ${plan.deliverables.length} deliverables`,
-	);
+	sections.push(`Slug: \`${plan.slug}\` · ${visits.length} node(s)`);
 
 	// Status summary
-	const counts = countStatuses(plan.deliverables);
+	const counts = countStatuses(visits.map((visit) => visit.node));
 	const statusLine = Object.entries(counts)
 		.filter(([_, n]) => n > 0)
 		.map(([s, n]) => `${s}: ${n}`)
 		.join(" · ");
 	sections.push(statusLine);
 
-	// Per-deliverable detail
-	for (const deliverable of plan.deliverables) {
-		sections.push(renderDeliverableRecap(deliverable, executor, opts));
+	// Per-node detail (tree order; heading depth mirrors tree depth)
+	for (const { node, depth } of visits) {
+		sections.push(renderNodeRecap(node, depth, executor, opts));
 	}
 
 	return sections.join("\n\n");
 }
 
-function countStatuses(
-	deliverables: readonly Deliverable[],
-): Record<string, number> {
+function countStatuses(nodes: readonly PlanNode[]): Record<string, number> {
 	const counts: Record<string, number> = {};
-	for (const g of deliverables) {
-		counts[g.status] = (counts[g.status] ?? 0) + 1;
+	for (const node of nodes) {
+		counts[node.status] = (counts[node.status] ?? 0) + 1;
 	}
 	return counts;
 }
 
-function renderDeliverableRecap(
-	deliverable: Deliverable,
-	executor: DeliverableExecutor,
+function renderNodeRecap(
+	node: PlanNode,
+	depth: number,
+	executor: NodeExecutor,
 	opts: RecapOptions,
 ): string {
 	const lines: string[] = [];
-	const tasks = gatingTasks(deliverable);
+	const tasks = gatingNodeTasks(node);
 	const done = tasks.filter((t) => t.done).length;
 
-	lines.push(`## ${deliverable.title} [${deliverable.status}]`);
+	const heading = "#".repeat(Math.min(depth + 1, 6));
+	lines.push(`${heading} ${node.title ?? node.id} [${node.status}]`);
 
-	if (deliverable.dependsOn?.length) {
-		lines.push(`Depends on: ${deliverable.dependsOn.join(", ")}`);
+	const after = (node.after ?? []).filter((ref) => ref !== PARENT_AFTER_TOKEN);
+	if (after.length) {
+		lines.push(`After: ${after.join(", ")}`);
 	}
 
-	if (deliverable.prUrl) {
-		lines.push(`PR: ${deliverable.prUrl}`);
+	if (node.prUrl) {
+		lines.push(`PR: ${node.prUrl}`);
 	}
 
 	if (tasks.length > 0) {
@@ -81,25 +85,18 @@ function renderDeliverableRecap(
 		}
 	}
 
-	// Agent status from executor
-	const state = executor.getStates().get(deliverable.id);
+	// Live run state from the executor
+	const state = executor.getStates().get(node.id);
 	if (state) {
 		if (state.blocked) {
 			lines.push(`Blocked: ${state.blocked}`);
 		}
-		const agentLines: string[] = [];
-		for (const [name, a] of state.agents) {
-			const display = a.displayName ?? name;
-			agentLines.push(`  ${display}: ${a.status}`);
-		}
-		if (agentLines.length > 0) {
-			lines.push(`Agents:\n${agentLines.join("\n")}`);
-		}
+		lines.push(`Agent: ${state.displayName ?? node.id} — ${state.status}`);
 	}
 
-	// Summaries for complete deliverables
-	if (opts.includeSummaries && deliverable.summary) {
-		lines.push(`Summary:\n${deliverable.summary}`);
+	// Summaries for complete nodes
+	if (opts.includeSummaries && node.summary) {
+		lines.push(`Summary:\n${node.summary}`);
 	}
 
 	return lines.join("\n");

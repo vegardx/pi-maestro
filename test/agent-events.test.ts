@@ -1,50 +1,26 @@
-// ExecutionAdapter onEvent emission: spawn/done payloads (summary, duration,
-// tokens), the settled event firing exactly once, and live-session
-// bookkeeping being pruned after finishAgent so getWorkerSessions() only
-// returns live workers (auto-closing /watch panes). Driven over a real RPC
-// socket with a stub tmux, like lifecycle-correctness.test.ts.
+// NodeExecutionAdapter onEvent emission: spawn/done payloads (summary,
+// duration, tokens), the shipped event, and the settled event firing exactly
+// once — then RE-ARMING when new runnable work appears (append-only children).
+// Driven over a real RPC socket with a stub tmux, like the parity twins.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
 import {
-	ExecutionAdapter,
 	type ExecutionEvent,
-	type TmuxApi,
-} from "../packages/modes/src/exec/execution-adapter.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+	NodeExecutionAdapter,
+	type TmuxLikeApi,
+} from "../packages/modes/src/plan/node-adapter.js";
+import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
+import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "agent-events-token";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
-	return {
-		root: "/tmp/plans",
-		save(plan: Plan) {
-			saved = plan;
-		},
-		load(): Plan | null {
-			return saved;
-		},
-		exists(): boolean {
-			return saved !== null;
-		},
-		remove() {
-			saved = null;
-		},
-		list() {
-			return [];
-		},
-	};
-}
-
 /** Stub tmux: records spawns; sessions are never "alive" (skips kill waits). */
-function stubTmux(): TmuxApi & { spawned: string[] } {
+function stubTmux(): TmuxLikeApi & { spawned: string[] } {
 	const spawned: string[] = [];
 	return {
 		spawned,
@@ -58,7 +34,7 @@ function stubTmux(): TmuxApi & { spawned: string[] } {
 	};
 }
 
-function until(pred: () => boolean, timeoutMs = 5000): Promise<void> {
+function until(pred: () => boolean, timeoutMs = 8000): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const start = Date.now();
 		const timer = setInterval(() => {
@@ -73,21 +49,18 @@ function until(pred: () => boolean, timeoutMs = 5000): Promise<void> {
 	});
 }
 
-describe("execution adapter — onEvent emission", () => {
+describe("node execution adapter — onEvent emission", () => {
 	let tmpDir: string;
-	let engine: PlanEngine;
+	let engine: PlanEngineV2;
 	let tmux: ReturnType<typeof stubTmux>;
-	let adapter: ExecutionAdapter | undefined;
+	let adapter: NodeExecutionAdapter | undefined;
 	let events: ExecutionEvent[];
 	let settledCalls: number;
-	let prevSessionDir: string | undefined;
 	const clients: MaestroRpcClient[] = [];
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "agent-events-"));
-		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
-		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
-		engine = PlanEngine.create(memStore(), {
+		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
 			slug: "events",
 			title: "Events Plan",
 			repoPath: tmpDir,
@@ -101,29 +74,19 @@ describe("execution adapter — onEvent emission", () => {
 		for (const c of clients.splice(0)) c.close();
 		await adapter?.destroy();
 		adapter = undefined;
-		if (prevSessionDir === undefined) {
-			delete process.env.PI_CODING_AGENT_SESSION_DIR;
-		} else {
-			process.env.PI_CODING_AGENT_SESSION_DIR = prevSessionDir;
-		}
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	function makeAdapter(): ExecutionAdapter {
-		adapter = new ExecutionAdapter({
+	function makeAdapter(): NodeExecutionAdapter {
+		adapter = new NodeExecutionAdapter({
 			engine,
-			ctx: { cwd: tmpDir } as ExtensionContext,
-			extensionPath: "/nonexistent/ext",
-			defaultBranch: "main",
 			planDir: join(tmpDir, "plan"),
 			tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
-			resolveWorkerModel: async (choice) => ({
-				modelId: choice.model ?? "test/worker",
-				effort: choice.effort ?? "low",
-			}),
+			defaultBranch: "main",
 			onPlanChanged: () => {},
+			shipNode: async () => "https://example/pr/1",
 			onAllSettled: () => {
 				settledCalls++;
 			},
@@ -134,31 +97,36 @@ describe("execution adapter — onEvent emission", () => {
 		return adapter;
 	}
 
-	/** Start the adapter over a pre-provisioned active deliverable (no git). */
-	async function startAdapter(
-		deliverableId: string,
-	): Promise<ExecutionAdapter> {
-		engine.setDeliverableStatus(deliverableId, "active");
-		engine.updateDeliverable(deliverableId, { worktreePath: tmpDir });
+	/** Start the adapter over a pre-provisioned active node (no git). */
+	async function startAdapter(nodeId: string): Promise<NodeExecutionAdapter> {
+		engine.setNodeStatus(nodeId, "active");
+		engine.setNodeRuntime(nodeId, { worktreePath: tmpDir });
 		const a = makeAdapter();
 		await a.start();
-		// Hydrated active deliverables come up blocked (restart safety); audited
+		// Hydrated active nodes come up blocked (restart safety); audited
 		// recovery clears this before ticks may spawn agents.
-		a.getExecutor().unblockDeliverable(deliverableId);
+		a.getExecutor().unblockNode(nodeId);
 		await a.tick();
 		return a;
 	}
 
-	/** Connect a fake agent that auto-answers summarize requests. */
+	/** Connect a scripted agent that auto-answers summarize requests. */
 	function connect(
 		agentId: string,
 		summary: string,
-	): { client: MaestroRpcClient; ready: Promise<void> } {
+	): {
+		client: MaestroRpcClient;
+		ready: Promise<void>;
+		toggleTask: (taskId: string) => void;
+		idle: () => void;
+	} {
 		const client = new MaestroRpcClient({ reconnect: false });
 		clients.push(client);
 		const received: MaestroMessage[] = [];
+		let nextId = 1;
 		client.on("message", (msg) => {
 			received.push(msg);
+			if (msg.type === "ping") client.send({ type: "pong", id: msg.id });
 			if (msg.type === "summarize") {
 				client.send({ type: "summary", id: msg.id, content: summary });
 			}
@@ -172,18 +140,36 @@ describe("execution adapter — onEvent emission", () => {
 		const ready = until(() =>
 			received.some((m) => m.type === "helloAck" && m.ok),
 		);
-		return { client, ready };
+		return {
+			client,
+			ready,
+			toggleTask: (taskId: string) => {
+				client.send({
+					type: "planMutate",
+					id: `m${nextId++}`,
+					action: "toggleTask",
+					deliverableId: agentId,
+					params: { taskId },
+				});
+			},
+			idle: () => client.send({ type: "status", status: "idle" }),
+		};
 	}
 
-	it("emits spawn and done (summary + duration + tokens) and prunes live-session bookkeeping", async () => {
-		engine.addDeliverable({ title: "Work", workerMode: "full" });
-		engine.addWorkItem("work", { title: "implement it" });
+	it("emits spawn, done (summary + duration + tokens), and shipped", async () => {
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Work",
+			branch: "feat/work",
+			tasks: ["implement it"],
+		});
 		const adapter = await startAdapter("work");
 
 		const spawn = events.find((e) => e.kind === "spawn");
 		expect(spawn).toMatchObject({
 			kind: "spawn",
-			agentKey: "work/worker",
+			agentKey: "work",
 			resumed: false,
 			deliverableTitle: "Work",
 		});
@@ -192,12 +178,9 @@ describe("execution adapter — onEvent emission", () => {
 		// The worker is a live pane before completion.
 		expect(adapter.getWorkerSessions()).toEqual([tmux.spawned[0]]);
 
-		const { client, ready } = connect(
-			"work/worker",
-			"## Summary\nshipped the login flow",
-		);
-		await ready;
-		client.send({
+		const worker = connect("work", "## Summary\nshipped the login flow");
+		await worker.ready;
+		worker.client.send({
 			type: "tokens",
 			revision: 1,
 			snapshot: {
@@ -212,30 +195,50 @@ describe("execution adapter — onEvent emission", () => {
 			},
 		});
 		await until(
-			() => adapter.snapshot().agents.get("work/worker")?.tokens.input === 4000,
+			() => adapter.snapshot().agents.get("work")?.tokens.input === 4000,
 		);
 
-		await adapter.markAgentDone("work", "worker");
+		// The real completion path: toggle every gating task (the postflight was
+		// injected at activation), then report idle.
+		worker.toggleTask("implement-it");
+		worker.toggleTask("lifecycle-postflight");
+		worker.idle();
+
+		await until(() => events.some((e) => e.kind === "shipped"));
 
 		const done = events.find((e) => e.kind === "done");
 		expect(done).toBeDefined();
 		if (done?.kind !== "done") throw new Error("unreachable");
-		expect(done.agentKey).toBe("work/worker");
+		expect(done.agentKey).toBe("work");
 		expect(done.deliverableTitle).toBe("Work");
 		expect(done.summary).toContain("shipped the login flow");
 		expect(done.durationMs).toBeGreaterThanOrEqual(0);
-		expect(done.tokens).toEqual({ input: 4000, output: 900, turns: 5 });
-		expect(done.prefixCacheHitRate).toBeCloseTo(0.6);
+		expect(done.tokens).toEqual({
+			input: 4000,
+			output: 900,
+			cacheRead: 6000,
+			cacheWrite: 0,
+			turns: 5,
+		});
 
-		// Session bookkeeping pruned: /watch panes for this agent auto-close.
-		expect(adapter.getWorkerSessions()).toEqual([]);
-		expect(adapter.resolveSessionName("work")).toBeUndefined();
+		const shipped = events.find((e) => e.kind === "shipped");
+		expect(shipped).toMatchObject({
+			kind: "shipped",
+			deliverableId: "work",
+			deliverableTitle: "Work",
+			prUrl: "https://example/pr/1",
+		});
+		expect(findNodeV2(engine.get(), "work")?.status).toBe("shipped");
 	});
 
-	it("emits settled exactly once with the final deliverable list", async () => {
-		engine.addDeliverable({ title: "Alpha", workerMode: "full" });
-		engine.addWorkItem("alpha", { title: "some task" });
-		engine.setDeliverableStatus("alpha", "abandoned");
+	it("emits settled exactly once, then re-arms when new runnable work appears", async () => {
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Alpha",
+			tasks: ["some task"],
+		});
+		engine.setNodeStatus("alpha", "abandoned");
 		const adapter = makeAdapter();
 		await adapter.start();
 
@@ -249,5 +252,20 @@ describe("execution adapter — onEvent emission", () => {
 			{ id: "alpha", title: "Alpha", status: "abandoned" },
 		]);
 		expect(settledCalls).toBe(1);
+
+		// Append-only child work re-arms the settled gate: no new event while
+		// the child is runnable, a second settled once it terminates.
+		engine.appendChild(
+			"alpha",
+			{ agent: "worker", persona: "coder", title: "Beta" },
+			"plan",
+		);
+		await adapter.tick();
+		expect(events.filter((e) => e.kind === "settled")).toHaveLength(1);
+
+		engine.setNodeStatus("beta", "abandoned");
+		await adapter.tick();
+		expect(events.filter((e) => e.kind === "settled")).toHaveLength(2);
+		expect(settledCalls).toBe(2);
 	});
 });

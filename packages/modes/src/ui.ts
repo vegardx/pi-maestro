@@ -1,7 +1,12 @@
-// Simple UI rendering utilities for the deliverable-based plan model.
+// Simple UI rendering utilities for the v2 node-tree plan model.
 
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { Plan } from "./schema.js";
+import {
+	effectiveNodeTaskKind,
+	PARENT_AFTER_TOKEN,
+	type PlanV2,
+	walkNodes,
+} from "./plan/schema.js";
 
 export interface ModeFooterInput {
 	readonly mode: ModeName;
@@ -22,37 +27,42 @@ export function renderModeFooter(input: ModeFooterInput): string {
 	return parts.join("  ");
 }
 
-export function renderPlanPanel(plan: Plan, maxLines = 30): string[] {
+export function renderPlanPanel(plan: PlanV2, maxLines = 30): string[] {
 	const lines = renderPlanText(plan).split("\n");
 	if (lines.length <= maxLines) return lines;
 	const head = lines.slice(0, Math.max(0, maxLines - 2));
 	return [...head, "…", `${lines.length - head.length} more line(s)`];
 }
 
-export function renderPlanSidebar(plan: Plan): string[] {
+export function renderPlanSidebar(plan: PlanV2): string[] {
 	const counts = new Map<string, number>();
-	for (const g of plan.deliverables)
-		counts.set(g.status, (counts.get(g.status) ?? 0) + 1);
+	let total = 0;
+	for (const { node } of walkNodes(plan)) {
+		total += 1;
+		counts.set(node.status, (counts.get(node.status) ?? 0) + 1);
+	}
 	return [
 		`Plan: ${plan.title}`,
 		`Slug: ${plan.slug}`,
-		`Deliverables: ${plan.deliverables.length}`,
+		`Nodes: ${total}`,
 		...[...counts].map(([status, count]) => `${status}: ${count}`),
 	];
 }
 
-function renderPlanText(plan: Plan): string {
+function renderPlanText(plan: PlanV2): string {
 	const lines: string[] = [`# ${plan.title}`, ""];
-	for (const g of plan.deliverables) {
+	for (const { node, depth } of walkNodes(plan)) {
+		const indent = "  ".repeat(depth - 1);
 		const icon =
-			g.status === "shipped" ? "🚀" : g.status === "active" ? "●" : "○";
-		const deps = g.dependsOn?.length
-			? ` (after ${g.dependsOn.join(", ")})`
-			: "";
-		lines.push(`${icon} ${g.title} [${g.status}]${deps}`);
-		for (const item of g.tasks ?? []) {
-			if (item.kind === "task") {
-				lines.push(`  ${item.done ? "[x]" : "[ ]"} ${item.title}`);
+			node.status === "shipped" ? "🚀" : node.status === "active" ? "●" : "○";
+		const deps = (node.after ?? []).filter((ref) => ref !== PARENT_AFTER_TOKEN);
+		const after = deps.length ? ` (after ${deps.join(", ")})` : "";
+		lines.push(
+			`${indent}${icon} ${node.title ?? node.id} [${node.status}]${after}`,
+		);
+		for (const item of node.tasks ?? []) {
+			if (effectiveNodeTaskKind(item) === "task") {
+				lines.push(`${indent}  ${item.done ? "[x]" : "[ ]"} ${item.title}`);
 			}
 		}
 	}

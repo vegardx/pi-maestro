@@ -31,12 +31,38 @@ export const CAPABILITIES = {
 	commit: "commit.v1",
 	ship: "ship.v1",
 	modes: "modes.v1",
+	personas: "personas.v1",
 	promptAssist: "prompt-assist.v1",
 	overlays: "overlays.v1",
 	settings: "settings.v1",
 } as const;
 
 export type CapabilityId = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
+
+/**
+ * A persona as seen across the extension boundary (personas.v1). The
+ * subagents extension owns the layered skill.md registry; consumers (modes'
+ * live spawn, plan validation) look personas up here instead of importing
+ * the loader — extensions talk via capabilities, never value imports.
+ */
+export interface PersonaSummaryV1 {
+	readonly name: string;
+	/** Agent types this persona may run on. */
+	readonly agents: readonly string[];
+	/** The return contract its runs fulfill. */
+	readonly contract: string;
+	/** Skills always loaded with this persona. */
+	readonly skills: readonly string[];
+	/** The system prompt (markdown body, frontmatter stripped). */
+	readonly prompt: string;
+}
+
+export interface PersonasCapabilityV1 {
+	get(name: string): PersonaSummaryV1 | undefined;
+	list(): readonly PersonaSummaryV1[];
+	/** Load-time failures (bad frontmatter, unknown ids) — fail-visible. */
+	errors(): readonly string[];
+}
 
 export interface SubagentsCapabilityV1 {
 	spawn(prompt: string, profile: SpawnProfile): RunHandle;
@@ -176,6 +202,7 @@ export interface CapabilityMap {
 	[CAPABILITIES.commit]: CommitCapabilityV1;
 	[CAPABILITIES.ship]: ShipCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;
+	[CAPABILITIES.personas]: PersonasCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;
 	[CAPABILITIES.overlays]: OverlaysCapabilityV1;
 	[CAPABILITIES.settings]: SettingsCapabilityV1;

@@ -7,40 +7,40 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import type { PrMetadata } from "@vegardx/pi-github";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	cleanupWorktrees,
 	defaultShipGit,
-	deliverableRepoKey,
 	type PrClient,
 	prNumberFromUrl,
 	reconcileShippedDeliverables,
-	repoFor,
+	repoForNode,
 	type ShipGit,
 	shipBaseBranch,
-	shipDeliverable,
+	shipNode,
 } from "../packages/modes/src/exec/shipper.js";
-import type { Deliverable, Plan } from "../packages/modes/src/schema.js";
+import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
 
 // ─── Builders ────────────────────────────────────────────────────────────────
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
-function makeDeliverable(
-	overrides: Partial<Deliverable> & { id: string; repo?: string },
-): Deliverable {
+function makeNode(
+	overrides: Partial<PlanNode> & { id: string; repo?: string },
+): PlanNode {
 	return {
-		type: "deliverable",
+		type: "node",
+		agent: "worker",
+		persona: "coder",
 		title: `Deliverable ${overrides.id}`,
 		body: `Ships ${overrides.id}.`,
 		status: "complete",
-		worker: { mode: "full" },
-		agents: [],
+		authoredBy: "plan",
 		tasks: [
 			{
-				type: "work-item",
 				id: `${overrides.id}-t1`,
 				title: `Task for ${overrides.id}`,
 				body: "",
@@ -56,16 +56,13 @@ function makeDeliverable(
 	};
 }
 
-function makePlan(
-	deliverables: Deliverable[],
-	overrides: Partial<Plan> = {},
-): Plan {
+function makePlan(nodes: PlanNode[], overrides: Partial<PlanV2> = {}): PlanV2 {
 	return {
-		schemaVersion: 5,
+		schemaVersion: PLAN_SCHEMA_VERSION_V2,
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/repos/app",
-		deliverables,
+		nodes,
 		createdAt: NOW,
 		updatedAt: NOW,
 		...overrides,
@@ -193,9 +190,9 @@ function remoteHasBranch(branch: string): boolean {
 	return git(["ls-remote", "origin", `refs/heads/${branch}`]).trim().length > 0;
 }
 
-// ─── shipDeliverable against a real remote ─────────────────────────────────────────
+// ─── shipNode against a real remote ──────────────────────────────────────────
 
-describe("shipDeliverable (real push)", () => {
+describe("shipNode (real push)", () => {
 	beforeEach(initRemoteAndClone);
 	afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -205,16 +202,13 @@ describe("shipDeliverable (real push)", () => {
 		git(["add", "g1.txt"]);
 		git(["commit", "-m", "feat: g1"]);
 
-		const deliverable = makeDeliverable({
-			id: "g1",
-			summary: "Did the g1 work.",
-		});
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g1", summary: "Did the g1 work." });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -243,7 +237,7 @@ describe("shipDeliverable (real push)", () => {
 		writeFileSync(join(repo, "existing.txt"), "work\n");
 		git(["add", "existing.txt"]);
 		git(["commit", "-m", "feat: existing"]);
-		const deliverable = makeDeliverable({
+		const node = makeNode({
 			id: "g-existing",
 			workflowAnalytics: {
 				version: 1,
@@ -257,7 +251,7 @@ describe("shipDeliverable (real push)", () => {
 				updatedAt: NOW,
 			},
 		});
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient({
 			open: {
 				"feat/g-existing": makePr({
@@ -267,9 +261,9 @@ describe("shipDeliverable (real push)", () => {
 				}),
 			},
 		});
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -293,13 +287,13 @@ describe("shipDeliverable (real push)", () => {
 		git(["add", "provider.ts"]);
 		git(["commit", "-m", "Add RadicalAI production and SIT provider configs"]);
 
-		const deliverable = makeDeliverable({ id: "g1" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g1" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -326,13 +320,13 @@ describe("shipDeliverable (real push)", () => {
 		git(["add", "provider.ts"]);
 		git(["commit", "-m", "chore(radicalai): add provider configs"]);
 
-		const deliverable = makeDeliverable({ id: "g1" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g1" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -354,13 +348,13 @@ describe("shipDeliverable (real push)", () => {
 			"feat(radicalai): support production and SIT providers",
 		]);
 
-		const deliverable = makeDeliverable({ id: "g1" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g1" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -372,13 +366,13 @@ describe("shipDeliverable (real push)", () => {
 		git(["checkout", "-b", "feat/g2"]);
 		writeFileSync(join(repo, "uncommitted.txt"), "wip\n");
 
-		const deliverable = makeDeliverable({ id: "g2" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g2" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -399,17 +393,17 @@ describe("shipDeliverable (real push)", () => {
 		git(["add", "g3.txt"]);
 		git(["commit", "-m", "feat: g3"]);
 
-		const deliverable = makeDeliverable({ id: "g3" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g3" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient({
 			open: {
 				"feat/g3": makePr({ number: 7, baseRefName: "main" }),
 			},
 		});
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -433,13 +427,13 @@ describe("shipDeliverable (real push)", () => {
 		git(["commit", "-m", "feat: g4"]);
 		git(["remote", "set-url", "origin", join(dir, "nowhere.git")]);
 
-		const deliverable = makeDeliverable({ id: "g4" });
-		const plan = makePlan([deliverable], { repoPath: repo });
+		const node = makeNode({ id: "g4" });
+		const plan = makePlan([node], { repoPath: repo });
 		const { client, calls } = recordingPrClient();
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: repo,
 			prClient: client,
 		});
@@ -457,18 +451,18 @@ describe("shipDeliverable (real push)", () => {
 
 describe("stacked bases", () => {
 	it("ships an A←B←C chain with each PR based on its predecessor", async () => {
-		const a = makeDeliverable({ id: "a", status: "shipped" });
-		const b = makeDeliverable({ id: "b", dependsOn: ["a"], status: "shipped" });
-		const c = makeDeliverable({ id: "c", dependsOn: ["b"] });
+		const a = makeNode({ id: "a", status: "shipped" });
+		const b = makeNode({ id: "b", after: ["a"], status: "shipped" });
+		const c = makeNode({ id: "c", after: ["b"] });
 		const plan = makePlan([a, b, c]);
 		const { client, calls } = recordingPrClient();
 		const { git, pushes } = fakeGit();
 
-		for (const deliverable of [a, b, c]) {
-			const result = await shipDeliverable({
+		for (const node of [a, b, c]) {
+			const result = await shipNode({
 				plan,
-				deliverable,
-				worktreePath: `/wt/${deliverable.id}`,
+				node,
+				worktreePath: `/wt/${node.id}`,
 				prClient: client,
 				git,
 			});
@@ -483,35 +477,37 @@ describe("stacked bases", () => {
 		]);
 	});
 
-	it("bases an unstacked dependent on the default branch", () => {
-		const a = makeDeliverable({ id: "a" });
-		const b = makeDeliverable({ id: "b", dependsOn: ["a"], stacked: false });
+	it('bases a dependent with base "default-branch" (v1 stacked:false) on the default branch', () => {
+		const a = makeNode({ id: "a" });
+		const b = makeNode({ id: "b", after: ["a"], base: "default-branch" });
 		const plan = makePlan([a, b]);
 		expect(shipBaseBranch(plan, b, "main")).toBe("main");
 	});
 
-	it("treats cross-repo dependsOn as ordering-only", async () => {
-		const lib = makeDeliverable({ id: "lib-x", repo: "lib" });
-		const app = makeDeliverable({ id: "app-y", dependsOn: ["lib-x"] });
+	it("treats cross-repo after as ordering-only, detecting each repo's default branch", async () => {
+		const lib = makeNode({ id: "lib-x", repo: "lib" });
+		const app = makeNode({ id: "app-y", after: ["lib-x"] });
 		const plan = makePlan([lib, app], {
 			repoPath: "/repos/app",
-			repos: [{ key: "lib", path: "/repos/lib", defaultBranch: "trunk" }],
+			repos: [{ key: "lib", path: "/repos/lib" }],
 		});
 		const { client, calls } = recordingPrClient();
+		// PlanRepoV2 carries no defaultBranch — the shipper must ask git for the
+		// TARGET repo's default branch (detectDefaultBranch(repo.path)).
 		const { git } = fakeGit({
 			detectDefaultBranch: (cwd) => (cwd === "/repos/lib" ? "trunk" : "main"),
 		});
 
-		const shippedLib = await shipDeliverable({
+		const shippedLib = await shipNode({
 			plan,
-			deliverable: lib,
+			node: lib,
 			worktreePath: "/wt/lib-x",
 			prClient: client,
 			git,
 		});
-		const shippedApp = await shipDeliverable({
+		const shippedApp = await shipNode({
 			plan,
-			deliverable: app,
+			node: app,
 			worktreePath: "/wt/app-y",
 			prClient: client,
 			git,
@@ -524,14 +520,14 @@ describe("stacked bases", () => {
 	});
 
 	it("errors when the default branch cannot be detected", async () => {
-		const deliverable = makeDeliverable({ id: "g" });
-		const plan = makePlan([deliverable]);
+		const node = makeNode({ id: "g" });
+		const plan = makePlan([node]);
 		const { client } = recordingPrClient();
 		const { git } = fakeGit({ detectDefaultBranch: () => null });
 
-		const result = await shipDeliverable({
+		const result = await shipNode({
 			plan,
-			deliverable,
+			node,
 			worktreePath: "/wt/g",
 			prClient: client,
 			git,
@@ -542,14 +538,16 @@ describe("stacked bases", () => {
 
 describe("repo resolution", () => {
 	it("resolves the plan default repo and registry entries", () => {
-		const app = makeDeliverable({ id: "a" });
-		const lib = makeDeliverable({ id: "b", repo: "lib" });
+		const app = makeNode({ id: "a" });
+		const lib = makeNode({ id: "b", repo: "lib" });
 		const plan = makePlan([app, lib], {
 			repos: [{ key: "lib", path: "/repos/lib" }],
 		});
-		expect(deliverableRepoKey(app)).toBe("default");
-		expect(repoFor(plan, app)).toMatchObject({ path: "/repos/app" });
-		expect(repoFor(plan, lib)).toMatchObject({
+		expect(repoForNode(plan, app)).toMatchObject({
+			key: "default",
+			path: "/repos/app",
+		});
+		expect(repoForNode(plan, lib)).toMatchObject({
 			key: "lib",
 			path: "/repos/lib",
 		});
@@ -564,13 +562,13 @@ describe("repo resolution", () => {
 // ─── Retarget / reconcile ────────────────────────────────────────────────────
 
 describe("reconcileShippedDeliverables", () => {
-	function stackedPlan(): { a: Deliverable; b: Deliverable; plan: Plan } {
-		const a = makeDeliverable({ id: "a", status: "shipped", prNumber: 1 });
-		const b = makeDeliverable({
+	function stackedPlan(): { a: PlanNode; b: PlanNode; plan: PlanV2 } {
+		const a = makeNode({ id: "a", status: "shipped", prNumber: 1 });
+		const b = makeNode({
 			id: "b",
 			status: "shipped",
 			prNumber: 2,
-			dependsOn: ["a"],
+			after: ["a"],
 		});
 		return { a, b, plan: makePlan([a, b]) };
 	}
@@ -669,9 +667,9 @@ describe("reconcileShippedDeliverables", () => {
 		expect(calls.edited).toHaveLength(1);
 	});
 
-	it("skips deliverables that are not shipped or have no PR", async () => {
-		const a = makeDeliverable({ id: "a", status: "complete", prNumber: 1 });
-		const b = makeDeliverable({ id: "b", status: "shipped" });
+	it("skips nodes that are not shipped or have no PR", async () => {
+		const a = makeNode({ id: "a", status: "complete", prNumber: 1 });
+		const b = makeNode({ id: "b", status: "shipped" });
 		const plan = makePlan([a, b]);
 		const { client, calls } = recordingPrClient();
 
@@ -688,16 +686,16 @@ describe("reconcileShippedDeliverables", () => {
 // ─── DAG-driven worktree cleanup ─────────────────────────────────────────────
 
 describe("cleanupWorktrees", () => {
-	it("retains a shipped deliverable's worktree while a dependent is unshipped", () => {
-		const a = makeDeliverable({
+	it("retains a shipped node's worktree while a dependent is unshipped", () => {
+		const a = makeNode({
 			id: "a",
 			status: "shipped",
 			worktreePath: "/wt/a",
 		});
-		const b = makeDeliverable({
+		const b = makeNode({
 			id: "b",
 			status: "active",
-			dependsOn: ["a"],
+			after: ["a"],
 			worktreePath: "/wt/b",
 		});
 		const plan = makePlan([a, b]);
@@ -718,21 +716,21 @@ describe("cleanupWorktrees", () => {
 	});
 
 	it("removes worktrees once the DAG has no unshipped dependents", () => {
-		const a = makeDeliverable({
+		const a = makeNode({
 			id: "a",
 			status: "shipped",
 			worktreePath: "/wt/a",
 		});
-		const b = makeDeliverable({
+		const b = makeNode({
 			id: "b",
 			status: "shipped",
-			dependsOn: ["a"],
+			after: ["a"],
 			worktreePath: "/wt/b",
 		});
-		const c = makeDeliverable({
+		const c = makeNode({
 			id: "c",
 			status: "abandoned",
-			dependsOn: ["b"],
+			after: ["b"],
 			worktreePath: "/wt/c",
 		});
 		const plan = makePlan([a, b, c]);
@@ -750,7 +748,7 @@ describe("cleanupWorktrees", () => {
 	});
 
 	it("retains a worktree the removal refuses (dirty) with the reason", () => {
-		const a = makeDeliverable({
+		const a = makeNode({
 			id: "a",
 			status: "shipped",
 			worktreePath: "/wt/a",
@@ -782,12 +780,12 @@ describe("cleanupWorktrees", () => {
 			git(["worktree", "add", "-b", "feat/g1", wt, "main"]);
 			expect(existsSync(wt)).toBe(true);
 
-			const deliverable = makeDeliverable({
+			const node = makeNode({
 				id: "g1",
 				status: "shipped",
 				worktreePath: wt,
 			});
-			const plan = makePlan([deliverable], { repoPath: repo });
+			const plan = makePlan([node], { repoPath: repo });
 
 			const report = cleanupWorktrees({ plan, git: defaultShipGit });
 			expect(report.removed).toEqual([{ deliverableId: "g1", path: wt }]);

@@ -1,3 +1,25 @@
+// Debug/recovery primitives over the v2 stack: the atomic plan repair
+// (PlanEngineV2.applyTaskRepair, v1 semantics — fingerprint-pinned via
+// planFingerprintV2, stopped-assertion, terminal/restarting guards, the
+// narrow four-operation vocabulary, repairAudit provenance), safe worker
+// restart through NodeExecutionAdapter.restartWorker, the cooperative fleet
+// stop, and read-only restart workspace validation over the v2 tree.
+//
+// Ported from the v1 restart-primitives suite. Behavior that died with v1's
+// ExecutionAdapter (dropped here, not weakened):
+// - the deterministic "# Fresh-session recovery" fact assembly and the
+//   previousSessionPaths history write on fresh restarts: v2's replaceWorker
+//   takes a caller-supplied recoverySeed and writes no session history.
+// - the execution-stop.json artifact with per-agent recovery hints and the
+//   idempotent bounded-deadline escalation: v2 prepareStop is a cooperative
+//   RPC barrier that freezes ticks and parks agents /recover-able.
+// - the proof-of-death gate ("old tmux session did not exit" blocking the
+//   respawn) and the restart-window RPC barrier (stale-connection detach +
+//   stale-mutation gating): v2 defers restart barriers to periphery
+//   (packages/modes/src/plan/node-adapter.ts header).
+// - stale-generation completion guarding survives in NodeExecutor and is
+//   pinned in test/node-executor.test.ts; not duplicated here.
+
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -6,21 +28,23 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MaestroRpcClient } from "@vegardx/pi-rpc";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import {
-	ExecutionAdapter,
-	type TmuxApi,
-} from "../packages/modes/src/exec/execution-adapter.js";
 import { validateRestartWorkspace } from "../packages/modes/src/exec/workspace-validation.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { NodeExecutionAdapter } from "../packages/modes/src/plan/node-adapter.js";
+import type { SpawnNodeOpts } from "../packages/modes/src/plan/node-executor.js";
+import {
+	findNodeV2,
+	gatingNodeTasks,
+	type PlanNode,
+	type PlanV2,
+	planFingerprintV2,
+} from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp/plans",
 		save(plan) {
@@ -28,338 +52,436 @@ function memStore(): PlanStore {
 		},
 		load: () => saved,
 		exists: () => saved !== null,
-		remove: () => {
+		remove() {
 			saved = null;
 		},
 		list: () => [],
 	};
 }
 
-class RestartTmux implements TmuxApi {
-	readonly spawned: Array<{
-		name: string;
-		cwd: string;
-		command: string | string[];
-	}> = [];
-	readonly live = new Set<string>();
-	sticky = false;
-
-	async spawn(
-		name: string,
-		cwd: string,
-		command: string | string[],
-	): Promise<void> {
-		this.spawned.push({ name, cwd, command });
-		this.live.add(name);
+describe("atomic plan repair (applyTaskRepair)", () => {
+	function repairEngine(): PlanEngineV2 {
+		const engine = PlanEngineV2.create(memStore(), {
+			slug: "repair",
+			title: "Repair",
+			repoPath: "/tmp/repo",
+		});
+		engine.addNode(null, {
+			id: "auth",
+			agent: "worker",
+			persona: "coder",
+			title: "Auth",
+			tasks: ["done task", "remaining task"],
+		});
+		engine.toggleTask("auth", "done-task");
+		engine.setNodeStatus("auth", "active");
+		return engine;
 	}
-	async hasSession(name: string): Promise<boolean> {
-		return this.live.has(name);
-	}
-	async kill(name: string): Promise<void> {
-		if (!this.sticky) this.live.delete(name);
-	}
-}
 
-async function until(
-	condition: () => boolean,
-	what: string,
-	timeoutMs = 2000,
-): Promise<void> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (condition()) return;
-		await new Promise((resolve) => setTimeout(resolve, 10));
-	}
-	throw new Error(`timed out waiting for ${what}`);
-}
+	it("applies the full operation vocabulary in one write and appends the audit", () => {
+		const engine = repairEngine();
+		const base = planFingerprintV2(engine.get());
+		const result = engine.applyTaskRepair({
+			baseFingerprint: base,
+			reason: "clarify remaining work after a wedged worker",
+			operations: [
+				{
+					type: "addCorrectiveTask",
+					deliverableId: "auth",
+					task: { id: "fix-timeout", title: "Fix the timeout" },
+				},
+				{
+					type: "addManualCheckpoint",
+					deliverableId: "auth",
+					task: { id: "verify-manually", title: "Verify by hand" },
+				},
+				{
+					type: "clarifyTask",
+					deliverableId: "auth",
+					taskId: "remaining-task",
+					body: "use the retry helper",
+				},
+				{ type: "reopenTask", deliverableId: "auth", taskId: "done-task" },
+			],
+			stoppedDeliverableIds: ["auth"],
+		});
 
-function sessionSeed(path: string): string {
-	return readFileSync(path, "utf8")
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as Record<string, unknown>)
-		.find((line) => line.customType === "maestro.execution.seed")
-		?.content as string;
-}
+		const node = findNodeV2(engine.get(), "auth");
+		// Corrective tasks gate completion; manual checkpoints do not.
+		const gatingIds = gatingNodeTasks(node ?? { tasks: [] }).map((t) => t.id);
+		expect(gatingIds).toContain("fix-timeout");
+		expect(gatingIds).not.toContain("verify-manually");
+		expect(node?.tasks.find((t) => t.id === "verify-manually")?.kind).toBe(
+			"manual",
+		);
+		expect(node?.tasks.find((t) => t.id === "remaining-task")?.body).toBe(
+			"use the retry helper",
+		);
+		expect(node?.tasks.find((t) => t.id === "done-task")?.done).toBe(false);
 
-describe("safe worker restart primitives", () => {
+		expect(engine.get().repairAudit).toHaveLength(1);
+		expect(engine.get().repairAudit?.[0]).toMatchObject({
+			id: result.auditId,
+			reason: "clarify remaining work after a wedged worker",
+			baseFingerprint: base,
+			appliedAt: expect.any(String),
+			operations: [
+				"addCorrectiveTask",
+				"addManualCheckpoint",
+				"clarifyTask",
+				"reopenTask",
+			],
+		});
+		expect(result.fingerprint).not.toBe(base);
+		expect(result.fingerprint).toBe(planFingerprintV2(engine.get()));
+	});
+
+	it("rejects fingerprint drift, unstopped targets, terminal and restarting nodes", () => {
+		const engine = PlanEngineV2.create(memStore(), {
+			slug: "repair-guards",
+			title: "Repair Guards",
+			repoPath: "/tmp/repo",
+		});
+		engine.addNode(null, {
+			id: "auth",
+			agent: "worker",
+			persona: "coder",
+			title: "Auth",
+			tasks: ["done task", "remaining task"],
+		});
+		engine.addNode(null, {
+			id: "old",
+			agent: "worker",
+			persona: "coder",
+			title: "Old",
+		});
+		engine.toggleTask("auth", "done-task");
+		engine.setNodeStatus("auth", "active");
+		engine.setNodeStatus("old", "active");
+		engine.setNodeStatus("old", "complete");
+		engine.setNodeStatus("old", "shipped");
+
+		const op = (deliverableId: string) =>
+			({
+				type: "reopenTask",
+				deliverableId,
+				taskId: "done-task",
+			}) as const;
+
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: "stale",
+				reason: "r",
+				operations: [op("auth")],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/fingerprint drift/);
+
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprintV2(engine.get()),
+				reason: "r",
+				operations: [op("auth")],
+				stoppedDeliverableIds: [],
+			}),
+		).toThrow(/not confirmed stopped/);
+
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprintV2(engine.get()),
+				reason: "r",
+				operations: [op("old")],
+				stoppedDeliverableIds: ["old"],
+			}),
+		).toThrow(/terminal \(shipped\)/);
+
+		engine.setNodeRuntime("auth", { restartState: "restarting" });
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: planFingerprintV2(engine.get()),
+				reason: "r",
+				operations: [op("auth")],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/is restarting/);
+	});
+
+	it("cannot reopen decided or clarify acted-upon tasks; a failing op aborts atomically", () => {
+		const engine = repairEngine();
+		engine.updateTask("auth", "remaining-task", { answer: "chose option b" });
+		const fingerprint = () => planFingerprintV2(engine.get());
+
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: fingerprint(),
+				reason: "r",
+				operations: [
+					{
+						type: "reopenTask",
+						deliverableId: "auth",
+						taskId: "remaining-task",
+					},
+				],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/cannot reopen decided/);
+
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: fingerprint(),
+				reason: "r",
+				operations: [
+					{
+						type: "clarifyTask",
+						deliverableId: "auth",
+						taskId: "done-task",
+						body: "clearer",
+					},
+				],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/already acted upon/);
+
+		// Atomicity: the valid first operation must not land when a later one fails.
+		const before = fingerprint();
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: before,
+				reason: "r",
+				operations: [
+					{
+						type: "addCorrectiveTask",
+						deliverableId: "auth",
+						task: { id: "half-applied", title: "Half applied" },
+					},
+					{
+						type: "clarifyTask",
+						deliverableId: "auth",
+						taskId: "no-such-task",
+						body: "x",
+					},
+				],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/unknown task/);
+		expect(
+			findNodeV2(engine.get(), "auth")?.tasks.some(
+				(t) => t.id === "half-applied",
+			),
+		).toBe(false);
+		expect(engine.get().repairAudit).toBeUndefined();
+		expect(fingerprint()).toBe(before);
+
+		// Degenerate inputs fail closed.
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: fingerprint(),
+				reason: "  ",
+				operations: [
+					{ type: "reopenTask", deliverableId: "auth", taskId: "done-task" },
+				],
+				stoppedDeliverableIds: ["auth"],
+			}),
+		).toThrow(/reason required/);
+		expect(() =>
+			engine.applyTaskRepair({
+				baseFingerprint: fingerprint(),
+				reason: "r",
+				operations: [],
+				stoppedDeliverableIds: [],
+			}),
+		).toThrow(/no operations/);
+	});
+});
+
+describe("safe worker restart primitives (v2 adapter)", () => {
 	const cleanups: string[] = [];
-	const clients: MaestroRpcClient[] = [];
-	let adapter: ExecutionAdapter | undefined;
+	let adapter: NodeExecutionAdapter | undefined;
 
 	afterEach(async () => {
-		for (const client of clients.splice(0)) client.close();
 		await adapter?.destroy();
 		adapter = undefined;
 		for (const dir of cleanups.splice(0))
 			rmSync(dir, { recursive: true, force: true });
 	});
 
-	async function connectWorker(socketPath: string): Promise<MaestroRpcClient> {
-		const client = new MaestroRpcClient({ reconnect: false });
-		clients.push(client);
-		const ack = new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error("no helloAck")), 2000);
-			client.once("message", (msg) => {
-				clearTimeout(timer);
-				if (msg.type === "helloAck" && msg.ok) resolve();
-				else reject(new Error(`hello rejected: ${JSON.stringify(msg)}`));
-			});
-		});
-		client.connect(socketPath, {
-			agentId: "auth/worker",
-			role: "agent",
-			token: "test-token",
-			pid: process.pid,
-		});
-		await ack;
-		return client;
-	}
-
-	function activePlan() {
+	async function started() {
 		const root = mkdtempSync(join(tmpdir(), "restart-worker-"));
 		cleanups.push(root);
 		const workspace = join(root, "worktree");
 		mkdirSync(workspace);
 		writeFileSync(join(workspace, "dirty.txt"), "keep me");
-		const engine = PlanEngine.create(memStore(), {
+
+		const engine = PlanEngineV2.create(memStore(), {
 			slug: "restart",
 			title: "Restart",
 			repoPath: root,
 		});
-		engine.addDeliverable({ title: "Auth", workerMode: "full" });
-		engine.addWorkItem("auth", { title: "Done task", body: "already done" });
-		engine.addWorkItem("auth", {
-			title: "Remaining task",
-			body: "continue it",
-		});
-		engine.toggleWorkItem("auth", "done-task");
-		engine.setDeliverableStatus("auth", "active");
-		engine.updateDeliverable("auth", {
-			worktreePath: workspace,
+		engine.addNode(null, {
+			id: "auth",
+			agent: "worker",
+			persona: "coder",
+			title: "Auth",
 			branch: "feat/auth",
-			summary: "Previous summary",
+			tasks: [
+				{ title: "Done task", body: "already done" },
+				{ title: "Remaining task", body: "continue it" },
+			],
 		});
-		return { root, workspace, engine };
-	}
+		engine.toggleTask("auth", "done-task");
 
-	async function started(
-		sticky = false,
-		timing: { restartKillTimeoutMs?: number; restartPollMs?: number } = {},
-	) {
-		const { root, workspace, engine } = activePlan();
-		const tmux = new RestartTmux();
-		tmux.sticky = sticky;
-		process.env.PI_CODING_AGENT_SESSION_DIR = join(root, "sessions");
-		adapter = new ExecutionAdapter({
+		const live = new Set<string>();
+		const spawns: SpawnNodeOpts[] = [];
+		let sessionSeq = 0;
+		let failNextSpawn = false;
+		const tmux = {
+			live,
+			async spawn(name: string) {
+				live.add(name);
+			},
+			async hasSession(name: string) {
+				return live.has(name);
+			},
+			async kill(name: string) {
+				live.delete(name);
+			},
+		};
+		adapter = new NodeExecutionAdapter({
 			engine,
-			ctx: { cwd: root } as ExtensionContext,
-			extensionPath: "/missing/ext",
-			defaultBranch: "main",
 			planDir: join(root, "plan"),
 			tmux,
 			token: "test-token",
 			socketPath: join(root, "rpc.sock"),
-			restartKillTimeoutMs: timing.restartKillTimeoutMs ?? 15,
-			restartPollMs: timing.restartPollMs ?? 1,
-			workspaceValidation: {
-				pathExists: () => true,
-				realpath: (path) => resolve(path),
-				gitToplevel: () => resolve(workspace),
-				currentBranch: () => "feat/auth",
-				worktrees: () => [{ path: workspace, branch: "feat/auth" }],
-			},
-			resolveWorkerModel: async () => ({
-				modelId: "test/worker",
-				effort: "low",
-			}),
+			defaultBranch: "main",
+			pollIntervalMs: 60_000,
 			onPlanChanged: () => {},
+			spawnAgent: async (opts) => {
+				if (failNextSpawn) throw new Error("spawn backend down");
+				spawns.push(opts);
+				sessionSeq++;
+				const sessionId = `sess-auth-${sessionSeq}`;
+				live.add(sessionId);
+				return {
+					sessionId,
+					sessionFile:
+						opts.resumeSessionFile ?? join(root, `sess-${sessionSeq}.jsonl`),
+				};
+			},
+			createWorktree: async () => workspace,
+			shipNode: async () => "https://example/pr/1",
 		});
 		await adapter.start();
-		adapter.getExecutor().unblockDeliverable("auth");
-		await adapter.tick();
-		return { root, workspace, engine, tmux };
+		await adapter.tick(); // activates auth: workspace pinned, worker spawned
+		return {
+			root,
+			workspace,
+			engine,
+			tmux,
+			spawns,
+			setFailSpawn: (value: boolean) => {
+				failNextSpawn = value;
+			},
+		};
 	}
 
-	it("resume replaces the process but retains JSONL and dirty work", async () => {
-		const { workspace, engine, tmux } = await started();
-		const before = engine.get().deliverables[0].sessionPath;
-		const oldName = engine.get().deliverables[0].sessionName!;
-		expect(tmux.live.has(oldName)).toBe(true);
+	it("resume replaces the process but retains the JSONL and dirty work", async () => {
+		const { workspace, engine, tmux, spawns } = await started();
+		const node = () => findNodeV2(engine.get(), "auth");
+		const before = node()?.sessionPath;
+		const oldSession = node()?.sessionName as string;
+		expect(before).toBeDefined();
+		expect(tmux.live.has(oldSession)).toBe(true);
 
-		const result = await adapter!.restartWorkerResume("auth");
-		expect(result.ok).toBe(true);
+		const result = await adapter!.restartWorker("auth", "resume");
+		expect(result.ok, result.error).toBe(true);
 		expect(result.generation).toBe(1);
-		expect(engine.get().deliverables[0].sessionPath).toBe(before);
-		expect(engine.get().deliverables[0].previousSessionPaths).toBeUndefined();
-		expect(tmux.live.has(oldName)).toBe(false);
+		expect(node()?.sessionGeneration).toBe(1);
+		// Same JSONL: the replacement resumed the persisted transcript.
+		expect(spawns.at(-1)).toMatchObject({
+			nodeId: "auth",
+			resumeSessionFile: before,
+		});
+		expect(node()?.sessionPath).toBe(before);
+		// The old process is gone; dirty uncommitted work is untouched.
+		expect(tmux.live.has(oldSession)).toBe(false);
 		expect(readFileSync(join(workspace, "dirty.txt"), "utf8")).toBe("keep me");
 	});
 
-	it("fresh allocates a new JSONL, records history, and writes deterministic recovery facts", async () => {
-		const { workspace, engine } = await started();
-		const before = engine.get().deliverables[0].sessionPath!;
-		const result = await adapter!.restartWorkerFresh("auth");
-		const current = engine.get().deliverables[0];
-		expect(result.ok, result.error).toBe(true);
-		expect(current.sessionPath).not.toBe(before);
-		expect(current.previousSessionPaths).toContain(before);
-		expect(readFileSync(join(workspace, "dirty.txt"), "utf8")).toBe("keep me");
-		const seed = sessionSeed(current.sessionPath!);
-		expect(seed).toContain("# Fresh-session recovery");
-		expect(seed).toContain("Worker generation: 1");
-		expect(seed).toContain(`Workspace: ${workspace}`);
-		expect(seed).toContain("Done task");
-		expect(seed).toContain("Remaining task");
-		expect(seed).toContain("Previous summary");
-		expect(seed).toContain("Do not create another worktree");
-		expect(seed).toContain("Preserve all valid dirty/uncommitted changes");
-	});
+	it("fresh spawns a new JSONL from the caller-supplied recovery seed", async () => {
+		const { workspace, engine, spawns } = await started();
+		const before = findNodeV2(engine.get(), "auth")?.sessionPath as string;
 
-	it("uses one bounded fleet deadline, escalates, persists, and is idempotent", async () => {
-		const { root, tmux } = await started(false, {
-			restartKillTimeoutMs: 20,
-			restartPollMs: 1,
-		});
-		const first = await adapter!.prepareStop("test shutdown");
-		const second = await adapter!.prepareStop("ignored duplicate");
-		expect(second).toBe(first);
-		expect(first.agents).toHaveLength(1);
-		expect(first.agents[0]).toMatchObject({
-			agentKey: "auth/worker",
-			generation: 0,
-			outcome: "forced",
-		});
-		expect(first.hints[0]).toMatchObject({
-			agentKey: "auth/worker",
-			generation: 0,
-			workspace: expect.stringContaining("worktree"),
-			branch: "feat/auth",
-			usageRevision: 0,
-			children: [],
-			pendingStages: ["working"],
-		});
-		expect(tmux.live.size).toBe(0);
-		expect(
-			JSON.parse(readFileSync(join(root, "plan/execution-stop.json"), "utf8")),
-		).toMatchObject({
-			version: 1,
-			stop: {
-				reason: "test shutdown",
-				outcome: "escalated-kill",
-				recoverable: true,
-			},
-		});
-	});
-
-	it("blocks without spawning when the old tmux session cannot be proven absent", async () => {
-		const { engine, tmux } = await started(true);
-		const spawnCount = tmux.spawned.length;
-		const result = await adapter!.restartWorkerFresh("auth");
-		expect(result.ok).toBe(false);
-		expect(result.error).toMatch(/did not exit/);
-		expect(tmux.spawned).toHaveLength(spawnCount);
-		expect(engine.get().deliverables[0].restartState).toBe("blocked");
-	});
-
-	it("leaves a failed restart retryable instead of wedged in restarting", async () => {
-		const { tmux } = await started(true);
-		const failed = await adapter!.restartWorkerFresh("auth");
-		expect(failed.ok).toBe(false);
-		const executor = adapter!.getExecutor();
-		const worker = executor.getAgentState("auth", "worker")!;
-		expect(worker.status).toBe("pending");
-		expect(worker.sessionId).toBeUndefined();
-		expect(worker.error).toMatch(/did not exit/);
-		expect(executor.getStates().get("auth")?.blocked).toMatch(/did not exit/);
-
-		// The wedge test: once the cause is fixed, the SAME deliverable restarts.
-		tmux.sticky = false;
-		const retried = await adapter!.restartWorkerFresh("auth");
-		expect(retried.ok, retried.error).toBe(true);
-		expect(executor.getAgentState("auth", "worker")?.status).toBe("working");
-		expect(executor.getStates().get("auth")?.blocked).toBeUndefined();
-	});
-
-	it("detaches the old connection and ignores stale worker rpc during restart", async () => {
-		const { root, engine } = await started(false, {
-			restartKillTimeoutMs: 1500,
-			restartPollMs: 10,
-		});
-		const stale = await connectWorker(join(root, "rpc.sock"));
-		expect(stale.connected).toBe(true);
-
-		// Parked in the graceful-shutdown window while the tmux session lives.
-		const restart = adapter!.restartWorkerResume("auth");
-		await until(() => !stale.connected, "old connection detach");
-
-		// A reconnecting old generation passes hello but must not mutate state.
-		const reconnected = await connectWorker(join(root, "rpc.sock"));
-		reconnected.send({
-			type: "planMutate",
-			id: "m1",
-			action: "toggleTask",
-			deliverableId: "auth",
-			params: { taskId: "remaining-task" },
-		});
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		const task = () =>
-			engine.get().deliverables[0].tasks.find((t) => t.id === "remaining-task");
-		expect(task()?.done).toBe(false);
-
-		const result = await restart;
-		expect(result.ok, result.error).toBe(true);
-		// The gate is the restart barrier, not a permanent lockout.
-		reconnected.send({
-			type: "planMutate",
-			id: "m2",
-			action: "toggleTask",
-			deliverableId: "auth",
-			params: { taskId: "remaining-task" },
-		});
-		await until(() => task()?.done === true, "post-restart mutate");
-	});
-
-	it("ignores stale generation completion after replacement", async () => {
-		const { engine } = await started();
-		const worker = adapter!.getExecutor().getAgentState("auth", "worker")!;
-		const stale = {
-			generation: worker.generation ?? 0,
-			sessionId: worker.sessionId,
-		};
-		await adapter!.restartWorkerResume("auth");
-		await adapter!.getExecutor().markAgentDone("auth", "worker", stale);
-		expect(adapter!.getExecutor().getAgentState("auth", "worker")?.status).toBe(
-			"working",
+		const result = await adapter!.restartWorker(
+			"auth",
+			"fresh",
+			"# Recovery seed\nWorkspace facts assembled by the caller.",
 		);
-		expect(engine.get().deliverables[0].status).toBe("active");
+		expect(result.ok, result.error).toBe(true);
+		const spawn = spawns.at(-1);
+		expect(spawn?.resumeSessionFile).toBeUndefined();
+		expect(spawn?.freshRecovery).toBe(true);
+		expect(spawn?.seed).toBe(
+			"# Recovery seed\nWorkspace facts assembled by the caller.",
+		);
+		expect(spawn?.kickoffMessage).toContain("fresh-session recovery seed");
+		expect(findNodeV2(engine.get(), "auth")?.sessionPath).not.toBe(before);
+		expect(readFileSync(join(workspace, "dirty.txt"), "utf8")).toBe("keep me");
+	});
+
+	it("leaves a failed restart retryable instead of wedged", async () => {
+		const { engine, setFailSpawn } = await started();
+		setFailSpawn(true);
+		const failed = await adapter!.restartWorker("auth", "resume");
+		expect(failed.ok).toBe(false);
+		expect(failed.error).toContain("spawn backend down");
+		expect(failed.generation).toBe(1);
+
+		// The wedge test: once the cause is fixed, the SAME node restarts.
+		setFailSpawn(false);
+		const retried = await adapter!.restartWorker("auth", "resume");
+		expect(retried.ok, retried.error).toBe(true);
+		expect(retried.generation).toBe(2);
+		expect(adapter!.getExecutor().getRunState("auth")?.status).toBe("working");
+		expect(findNodeV2(engine.get(), "auth")?.sessionGeneration).toBe(2);
+	});
+
+	it("prepareStop freezes scheduling and parks live agents /recover-able", async () => {
+		const { root, tmux } = await started();
+		const result = await adapter!.prepareStop("test shutdown");
+		// No live RPC connection: the cooperative ask fails over to a kill.
+		expect(result.stopped).toEqual([]);
+		expect(result.unresponsive).toEqual(["auth"]);
+		expect(tmux.live.size).toBe(0);
+		const run = adapter!.getExecutor().getRunState("auth");
+		expect(run?.status).toBe("pending");
+		expect(run?.blocked).toContain("/recover");
+		expect(readFileSync(join(root, "plan", "events.jsonl"), "utf8")).toContain(
+			"prepare-stop",
+		);
+		// Scheduling is frozen after the barrier: ticks are no-ops.
+		expect(await adapter!.tick()).toEqual([]);
 	});
 });
 
 describe("restart workspace validation", () => {
 	function planWithTwoClaims(alias = false): {
-		plan: Plan;
+		plan: PlanV2;
 		paths: Record<string, string>;
 	} {
 		const root = "/repo";
 		const first = "/wt/one";
 		const second = alias ? "/wt/alias" : "/wt/two";
 		const now = "2026-01-01T00:00:00Z";
-		const deliverable = (
-			id: string,
-			path: string,
-			branch: string,
-		): Plan["deliverables"][number] => ({
-			type: "deliverable",
+		const node = (id: string, path: string, branch: string): PlanNode => ({
+			type: "node",
 			id,
+			agent: "worker",
+			persona: "coder",
 			title: id,
 			body: "",
 			status: "active",
-			worker: { mode: "full" },
-			agents: [],
 			tasks: [
 				{
-					type: "work-item",
 					id: "t",
 					title: "t",
 					body: "",
@@ -370,18 +492,19 @@ describe("restart workspace validation", () => {
 			],
 			branch,
 			worktreePath: path,
+			authoredBy: "plan",
 			createdAt: now,
 			updatedAt: now,
 		});
 		return {
 			plan: {
-				schemaVersion: 5,
+				schemaVersion: 6,
 				slug: "p",
 				title: "p",
 				repoPath: root,
-				deliverables: [
-					deliverable("one", first, "feat/one"),
-					deliverable("two", second, "feat/two"),
+				nodes: [
+					node("one", first, "feat/one"),
+					node("two", second, "feat/two"),
 				],
 				createdAt: now,
 				updatedAt: now,
@@ -392,7 +515,7 @@ describe("restart workspace validation", () => {
 
 	it("reports a missing workspace as the only reprovisionable case", () => {
 		const { plan } = planWithTwoClaims();
-		const result = validateRestartWorkspace(plan, plan.deliverables[0], {
+		const result = validateRestartWorkspace(plan, plan.nodes[0], {
 			pathExists: () => false,
 		});
 		expect(result).toMatchObject({
@@ -402,9 +525,9 @@ describe("restart workspace validation", () => {
 		});
 	});
 
-	it("rejects realpath aliases claimed by another active deliverable", () => {
+	it("rejects realpath aliases claimed by another active node", () => {
 		const { plan, paths } = planWithTwoClaims(true);
-		const result = validateRestartWorkspace(plan, plan.deliverables[0], {
+		const result = validateRestartWorkspace(plan, plan.nodes[0], {
 			pathExists: () => true,
 			realpath: (path) => (path === paths.second ? paths.first : path),
 		});
@@ -413,8 +536,8 @@ describe("restart workspace validation", () => {
 
 	it("rejects duplicate active branch claims before touching Git", () => {
 		const { plan, paths } = planWithTwoClaims();
-		plan.deliverables[1].branch = "feat/one";
-		const result = validateRestartWorkspace(plan, plan.deliverables[0], {
+		plan.nodes[1].branch = "feat/one";
+		const result = validateRestartWorkspace(plan, plan.nodes[0], {
 			pathExists: () => true,
 			realpath: (path) => path,
 			gitToplevel: () => paths.first,
@@ -426,8 +549,9 @@ describe("restart workspace validation", () => {
 
 	it("pins scratch workspaces to the authoritative plan directory", () => {
 		const { plan } = planWithTwoClaims();
-		const scratch = plan.deliverables[0];
-		scratch.workspace = "scratch";
+		const scratch = plan.nodes[0];
+		// v2 scratch marker: a branchless node has no repo/branch ownership proof.
+		scratch.branch = undefined;
 		scratch.worktreePath = "/plans/p/workspaces/one";
 		const deps = {
 			pathExists: () => true,
@@ -449,7 +573,7 @@ describe("restart workspace validation", () => {
 
 	it("rejects repository and branch mismatches with previewable errors", () => {
 		const { plan, paths } = planWithTwoClaims();
-		const mismatch = validateRestartWorkspace(plan, plan.deliverables[0], {
+		const mismatch = validateRestartWorkspace(plan, plan.nodes[0], {
 			pathExists: () => true,
 			realpath: (path) => path,
 			gitToplevel: () => paths.first,

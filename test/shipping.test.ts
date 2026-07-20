@@ -1,82 +1,74 @@
 import { describe, expect, it } from "vitest";
-import type { Deliverable } from "../packages/modes/src/schema.js";
+import type { PlanNode } from "../packages/modes/src/plan/schema.js";
 import { buildPrBody, shouldShip } from "../packages/modes/src/shipping.js";
 
-function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
+function makeNode(overrides: Partial<PlanNode> = {}): PlanNode {
 	return {
-		type: "deliverable" as const,
+		type: "node" as const,
 		createdAt: "t",
 		updatedAt: "t",
-		id: "test-deliverable" as never,
+		id: "test-deliverable",
+		agent: "worker",
+		persona: "coder",
 		title: "Test Deliverable",
 		body: "Deliverable description",
 		status: "complete",
-		dependsOn: [],
-		stacked: true,
+		branch: "feat/test-deliverable",
+		authoredBy: "plan",
 		tasks: [
 			{
-				id: "t1" as never,
+				id: "t1",
 				title: "Task one",
 				body: "",
-				kind: "task",
 				done: true,
-				type: "work-item" as const,
 				createdAt: "t",
 				updatedAt: "t",
 			},
 			{
-				id: "t2" as never,
+				id: "t2",
 				title: "Task two",
 				body: "",
-				kind: "task",
 				done: true,
-				type: "work-item" as const,
 				createdAt: "t",
 				updatedAt: "t",
 			},
 		],
-		worker: { mode: "full" },
-		agents: [],
 		...overrides,
 	};
 }
 
 describe("shouldShip", () => {
-	it("returns true for complete terminal deliverable", () => {
-		expect(shouldShip(makeDeliverable(), false)).toBe(true);
+	it("returns true for complete terminal node", () => {
+		expect(shouldShip(makeNode(), false)).toBe(true);
 	});
 
-	it("returns false for complete non-terminal deliverable", () => {
-		expect(shouldShip(makeDeliverable(), true)).toBe(false);
+	it("returns false for complete non-terminal node", () => {
+		expect(shouldShip(makeNode(), true)).toBe(false);
 	});
 
-	it("returns false for non-complete deliverable", () => {
-		expect(shouldShip(makeDeliverable({ status: "active" }), false)).toBe(
-			false,
-		);
+	it("returns false for non-complete node", () => {
+		expect(shouldShip(makeNode({ status: "active" }), false)).toBe(false);
 	});
 
-	it("returns false for already-shipped deliverable", () => {
-		expect(shouldShip(makeDeliverable({ status: "shipped" }), false)).toBe(
-			false,
-		);
+	it("returns false for already-shipped node", () => {
+		expect(shouldShip(makeNode({ status: "shipped" }), false)).toBe(false);
 	});
 });
 
 describe("buildPrBody", () => {
-	it("includes deliverable body", () => {
-		const body = buildPrBody(makeDeliverable(), []);
+	it("includes node body", () => {
+		const body = buildPrBody(makeNode(), []);
 		expect(body).toContain("Deliverable description");
 	});
 
 	it("renders task checklist", () => {
-		const body = buildPrBody(makeDeliverable(), []);
+		const body = buildPrBody(makeNode(), []);
 		expect(body).toContain("- [x] Task one");
 		expect(body).toContain("- [x] Task two");
 	});
 
 	it("includes agent reports", () => {
-		const body = buildPrBody(makeDeliverable(), [
+		const body = buildPrBody(makeNode(), [
 			"### Worker\nDid stuff.",
 			"### Review\nLooks good.",
 		]);
@@ -87,12 +79,12 @@ describe("buildPrBody", () => {
 	});
 
 	it("omits sections when empty", () => {
-		const body = buildPrBody(makeDeliverable({ body: "", tasks: [] }), []);
+		const body = buildPrBody(makeNode({ body: "", tasks: [] }), []);
 		expect(body).toBe("");
 	});
 
-	it("omits tasks section for deliverables with no tasks", () => {
-		const body = buildPrBody(makeDeliverable({ tasks: [] }), ["Report"]);
+	it("omits tasks section for nodes with no tasks", () => {
+		const body = buildPrBody(makeNode({ tasks: [] }), ["Report"]);
 		expect(body).not.toContain("## Tasks");
 		expect(body).toContain("Report");
 	});

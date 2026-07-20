@@ -20,7 +20,7 @@ import {
 	reviewAndPostDiagnosticIssue,
 } from "../debug-issue.js";
 import { createDebugIssueReviser } from "../debug-reviser.js";
-import { planFingerprint } from "../engine.js";
+import { planFingerprintV2 } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -219,9 +219,9 @@ async function handleWorkerDebugProposal(
 	});
 	if (!checked.ok) return debugResultForError(message, checked.error);
 	configureStore(rt);
-	// Pin the episode to the proposing worker's deliverable (authenticated id),
-	// not whatever deliverable the maestro UI happens to focus.
-	const snap = snapshot(rt, ctx, agentId.split("/")[0]);
+	// Pin the episode to the proposing worker's node (authenticated id — the
+	// agent key IS the node id), not whatever node the maestro UI focuses.
+	const snap = snapshot(rt, ctx, agentId);
 	const diagnosis = diagnoseDebugSnapshot(
 		snap,
 		message.likelyCause,
@@ -278,7 +278,8 @@ export async function runWorkerDebugCommand(
 		cwd: ctx.cwd,
 		mode: rt.state.mode,
 		executionStage: rt.state.execution.stage,
-		activeDeliverableId: agentId.split("/")[0],
+		// The agent key IS the node id — no `${id}/worker` compound to strip.
+		activeDeliverableId: agentId,
 		sessionPath: ctx.sessionManager.getSessionFile(),
 		entries: ctx.sessionManager.getEntries(),
 		agentId,
@@ -305,5 +306,5 @@ export async function runWorkerDebugCommand(
 }
 
 export function currentPlanFingerprint(rt: RuntimeContext): string | undefined {
-	return rt.engine ? planFingerprint(rt.engine.get()) : undefined;
+	return rt.engine ? planFingerprintV2(rt.engine.get()) : undefined;
 }

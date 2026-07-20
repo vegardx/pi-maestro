@@ -44,6 +44,7 @@ import { createRunBus } from "./bus.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
+import { loadPersonas } from "./personas.js";
 import { createChildRunProjectionSource } from "./projections.js";
 import {
 	killAndVerifyTmuxSession,
@@ -579,6 +580,16 @@ export default defineExtension(
 				),
 		});
 		maestro.capabilities.register(CAPABILITIES.agents, agentsCapability);
+
+		// personas.v1: the layered skill.md registry, exposed for the modes
+		// extension's spawn seeding + plan validation (no value imports across
+		// the extension boundary).
+		const personaRegistry = loadPersonas({ cwd: process.cwd() });
+		maestro.capabilities.register(CAPABILITIES.personas, {
+			get: (name: string) => personaRegistry.personas.get(name),
+			list: () => [...personaRegistry.personas.values()],
+			errors: () => personaRegistry.errors,
+		});
 
 		// One model-facing spawn/control surface for every semantic agent kind.
 		pi.registerTool(

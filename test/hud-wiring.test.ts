@@ -233,7 +233,7 @@ describe("buildPlanView", () => {
 			],
 		};
 		const view = buildPlanView(plan as never, {
-			agents: new Map([["d3/worker", execAgent("working")]]),
+			agents: new Map([["d3", execAgent("working")]]),
 		});
 		expect(view?.done).toBe(2);
 		expect(view?.total).toBe(5);

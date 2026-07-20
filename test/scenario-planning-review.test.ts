@@ -5,9 +5,8 @@ import type {
 } from "@vegardx/pi-contracts";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import { validateWorkflowGraph } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -19,7 +18,6 @@ import {
 import {
 	runScenario,
 	type ScenarioResult,
-	scenarioAssertions,
 } from "./fixtures/scenario-harness.js";
 
 const SHA = "a".repeat(40);
@@ -66,8 +64,8 @@ function assignment(
 	};
 }
 
-function inMemoryEngine(now: () => string): PlanEngine {
-	const store: PlanStore = {
+function inMemoryEngine(now: () => string): PlanEngineV2 {
+	const store: PlanStoreV2 = {
 		root: "/scenario/plans",
 		exists: () => false,
 		load: () => null,
@@ -75,14 +73,14 @@ function inMemoryEngine(now: () => string): PlanEngine {
 		remove: () => {},
 		list: () => [],
 	};
-	const engine = PlanEngine.create(
+	const engine = PlanEngineV2.create(
 		store,
 		{ slug: "release", title: "Release", repoPath: "/scenario/repo" },
 		now,
 	);
 	engine.setPhase("structuring");
-	engine.addDeliverable({ title: "Runtime", workerMode: "full" });
-	engine.addWorkItem("runtime", { title: "Implement runtime" });
+	engine.addNode(null, { agent: "worker", persona: "coder", title: "Runtime" });
+	engine.addTask("runtime", { title: "Implement runtime" });
 	return engine;
 }
 
@@ -101,110 +99,6 @@ function planReviewer(summary: string): AgentsCapabilityV1 {
 }
 
 describe("planning and review scenarios", () => {
-	it("persists exact preset assignments and explicit stages, including duplicate semantic kinds", async () => {
-		const result = await runScenario({
-			name: "assignment graph and duplicate kinds",
-			models: {
-				"provider/planner": [
-					{
-						match: "compose workflow",
-						response: JSON.stringify({ workers: 1, reviewers: 2 }),
-					},
-				],
-			},
-			steps: [
-				{
-					name: "resolve immutable assignment graph",
-					run: async (scenario) => {
-						await scenario.models.complete(
-							"provider/planner",
-							"compose workflow",
-						);
-						const worker = assignment("runtime-worker", "worker");
-						const correctnessA = assignment(
-							"correctness-primary",
-							"correctness-review",
-						);
-						const correctnessB = assignment(
-							"correctness-independent",
-							"correctness-review",
-							{
-								modelId: "provider/second-reviewer",
-								optionId: "independent",
-								provenance: {
-									source: "explicit",
-									presetId: "release",
-									modelSetId: "reviewers",
-									optionId: "independent",
-									resolvedAt: "2026-01-01T00:00:00.000Z",
-								},
-								source: "explicit",
-							},
-						);
-						const workflow = {
-							assignments: [worker, correctnessA, correctnessB],
-							stages: [
-								{
-									id: "implementation",
-									after: [],
-									assignmentIds: [worker.agentId],
-									inputRevision: SHA,
-									inputContracts: [],
-									barrier: "workers" as const,
-								},
-								{
-									id: "review",
-									after: ["implementation"],
-									assignmentIds: [correctnessA.agentId, correctnessB.agentId],
-									inputRevision: SHA,
-									inputContracts: ["implementation"],
-									barrier: "all" as const,
-								},
-							],
-						};
-						expect(validateWorkflowGraph(workflow)).toEqual([]);
-						scenario.state.set("workflow", workflow);
-						scenario.emit("workflow.persisted", workflow);
-					},
-				},
-			],
-		});
-		results.push(result);
-		const workflow = (
-			result.finalState as {
-				state: { workflow: { assignments: ResolvedAgentAssignment[] } };
-			}
-		).state.workflow;
-		expect(
-			workflow.assignments.map(({ agentId, kind, modelId, optionId }) => ({
-				agentId,
-				kind,
-				modelId,
-				optionId,
-			})),
-		).toEqual([
-			{
-				agentId: "runtime-worker",
-				kind: "worker",
-				modelId: "provider/worker",
-				optionId: "implement",
-			},
-			{
-				agentId: "correctness-primary",
-				kind: "correctness-review",
-				modelId: "provider/reviewer",
-				optionId: "inspect",
-			},
-			{
-				agentId: "correctness-independent",
-				kind: "correctness-review",
-				modelId: "provider/second-reviewer",
-				optionId: "independent",
-			},
-		]);
-		scenarioAssertions.hasEvent(result, "workflow.persisted");
-	});
-
 	it.each([
 		["enter-without", true, "settled", "auto"],
 		["stay-in-plan", false, "cancelled", "plan"],
@@ -215,17 +109,13 @@ describe("planning and review scenarios", () => {
 			const clock = { value: 0 };
 			const now = () => `2026-01-01T00:00:0${clock.value++}.000Z`;
 			const engine = inMemoryEngine(now);
+			// The real capability receives the generated id; capture it rather than using a matcher value.
 			const ask = {
-				ask: vi.fn(async () => {
+				ask: vi.fn(async (questions) => {
 					expect(mode).toBe("plan");
-					return [{ questionId: expect.any(String), value: decision }];
+					return [{ questionId: questions[0]!.id, value: decision }];
 				}),
 			} as unknown as AskCapabilityV1;
-			// The real capability receives the generated id; capture it rather than using a matcher value.
-			ask.ask = vi.fn(async (questions) => {
-				expect(mode).toBe("plan");
-				return [{ questionId: questions[0]!.id, value: decision }];
-			});
 			const coordinator = new TransitionGateCoordinator(
 				createDefaultTransitionGates(),
 				{
@@ -235,7 +125,7 @@ describe("planning and review scenarios", () => {
 						mode = next as "auto";
 					},
 					agents: () =>
-						planReviewer("Plan review inspected exact stages and SHA targets."),
+						planReviewer("Plan review inspected the canonical node tree."),
 					ask: () => ask,
 					now,
 				},
@@ -247,7 +137,8 @@ describe("planning and review scenarios", () => {
 			expect(mode).toBe(finalMode);
 			expect(engine.get().transitionGates?.at(-1)).toMatchObject({
 				status,
-				ruling: { decision },
+				ruling: decision,
+				rulingDetail: { decision },
 			});
 		},
 	);

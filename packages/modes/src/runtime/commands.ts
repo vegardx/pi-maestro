@@ -32,6 +32,7 @@ import {
 	verifyTargets,
 } from "../exec/verify.js";
 import { writeVerificationReport } from "../exec/verify-report.js";
+import { findNodeV2 } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import {
@@ -369,7 +370,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				return;
 			}
 			const plan = rt.engine.get();
-			if (plan.deliverables.length === 0) {
+			if (plan.nodes.length === 0) {
 				cmdCtx.ui.notify("No deliverables in plan.", "info");
 				return;
 			}
@@ -506,9 +507,10 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			"Bounded-shutdown and fail an owning delivery. /kill <deliverable-id>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const id = args.trim();
-			const delivery = id
-				? rt.engine?.get().deliverables.find((item) => item.id === id)
-				: undefined;
+			// Node ids are plan-unique, so /kill reaches any depth — the agent
+			// key IS the node id (no `${id}/worker` compound key).
+			const delivery =
+				id && rt.engine ? findNodeV2(rt.engine.get(), id) : undefined;
 			if (!id || !delivery) {
 				ctx.ui.notify(
 					id ? `Unknown deliverable: ${id}` : "Usage: /kill <deliverable-id>",
@@ -532,13 +534,13 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				);
 				return;
 			}
-			rt.engine?.setDeliverableStatus(id, "failed", {
+			rt.engine?.setNodeStatus(id, "failed", {
 				code: "user-killed",
 				message: "Delivery was failed by the user after bounded shutdown",
 				failedAt: rt.now(),
 				recoverable: true,
 				attempt: (delivery.failure?.attempt ?? 0) + 1,
-				agentId: `${id}/worker`,
+				agentId: id,
 			});
 			rt.emitPlanChanged();
 			rt.hud?.refresh();
@@ -712,7 +714,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			const plan = rt.engine?.get();
 			ctx.ui.notify(
 				`mode=${rt.state.mode} plan=${plan?.slug ?? "none"} deliverables=${
-					plan?.deliverables.length ?? 0
+					plan?.nodes.length ?? 0
 				}`,
 				"info",
 			);

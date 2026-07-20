@@ -1,6 +1,10 @@
 // Plan tools: deliverable, task, agent — flat-parameter tools for the deliverable-based
-// execution model. The session/mode layer owns which plan is active; these
-// tools perform mutations/reads and return readable markdown.
+// execution model, ported onto PlanEngineV2 (v1→v2 flip, S3). The tool names and
+// external parameter names are UNCHANGED for wire compat: "deliverable" manages
+// ROOT NODES of the v2 tree, "task" manages a node's tasks, "agent" manages
+// CHILD NODES (v1 support agents became first-class nodes). The session/mode
+// layer owns which plan is active; these tools perform mutations/reads and
+// return readable markdown.
 
 import { join } from "node:path";
 import {
@@ -10,44 +14,39 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import {
-	AGENT_KINDS,
-	type AgentAssignmentRequest,
-	type AgentKind,
 	type AgentsCapabilityV1,
 	DELIVERABLE_STATUSES,
 	type DeliveryFailure,
+	type NodeAgentType,
+	type NodeTaskKind,
 	WORK_ITEM_KINDS,
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
-import type {
-	AddAgentInput,
-	AddDeliverableInput,
-	AddWorkItemInput,
-	PlanEngine,
-} from "./engine.js";
 import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
-import { renderResearchIndex, researchReportsDir } from "./research.js";
-import type {
-	AgentMode,
-	AgentSpec,
-	Deliverable,
-	Plan,
-	ThinkingLevel,
-	WorkItem,
-} from "./schema.js";
+import type { NodeInput, PlanEngineV2 } from "./plan/engine.js";
+// slugify still lives in the v1 schema module; it moves to plan/schema.ts in S8.
 import {
-	deliverables,
-	findDeliverable,
-	hasExecutionStarted,
+	defaultBranchForNode,
+	findNodeV2,
+	isBranchOwner,
+	type NodeTask,
+	PARENT_AFTER_TOKEN,
+	type PlanNode,
+	type PlanV2,
 	slugify,
-} from "./schema.js";
+	walkNodes,
+} from "./plan/schema.js";
+import { renderResearchIndex, researchReportsDir } from "./research.js";
 import { plansRoot } from "./storage.js";
 
 export interface PlanToolDeps {
-	readonly engine: () => PlanEngine | undefined;
+	readonly engine: () => PlanEngineV2 | undefined;
+	/** Legacy workflow capability — unused since the workflow tool retired
+	 *  with v1's AgentWorkflow; kept so existing wiring keeps compiling until
+	 *  the runtime sweep drops it. */
 	readonly agents?: () => AgentsCapabilityV1 | undefined;
-	readonly onPlanChanged?: (plan: Plan) => void;
+	readonly onPlanChanged?: (plan: PlanV2) => void;
 	readonly mode?: () => string;
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
 	readonly onTaskToggle?: (deliverableId: string, taskId: string) => void;
@@ -58,14 +57,12 @@ export interface PlanToolDeps {
 
 interface ToolDetails {
 	readonly error?: string;
-	readonly plan?: Plan;
-	readonly deliverable?: Deliverable;
-	readonly deliverables?: readonly Deliverable[];
-	readonly workItem?: WorkItem;
-	readonly workItems?: readonly WorkItem[];
-	readonly agent?: AgentSpec;
-	readonly workflow?: Plan["workflow"];
-	readonly kinds?: unknown;
+	readonly plan?: PlanV2;
+	readonly deliverable?: PlanNode;
+	readonly deliverables?: readonly PlanNode[];
+	readonly workItem?: NodeTask;
+	readonly workItems?: readonly NodeTask[];
+	readonly agent?: PlanNode;
 	readonly done?: boolean;
 }
 
@@ -324,60 +321,6 @@ const AgentParams = Type.Object({
 	),
 });
 
-const WorkflowParams = Type.Object({
-	action: Type.Union([
-		Type.Literal("set"),
-		Type.Literal("update-stage"),
-		Type.Literal("list"),
-		Type.Literal("options"),
-	]),
-	kind: Type.Optional(
-		Type.Union(AGENT_KINDS.map((kind) => Type.Literal(kind))),
-	),
-	stageId: Type.Optional(Type.String()),
-	after: Type.Optional(Type.Array(Type.String())),
-	assignmentIds: Type.Optional(Type.Array(Type.String())),
-	inputRevision: Type.Optional(Type.String()),
-	inputContracts: Type.Optional(Type.Array(Type.String())),
-	barrier: Type.Optional(
-		Type.Union([Type.Literal("all"), Type.Literal("workers")]),
-	),
-	assignments: Type.Optional(
-		Type.Array(
-			Type.Object({
-				agentId: Type.String(),
-				kind: Type.Union(AGENT_KINDS.map((kind) => Type.Literal(kind))),
-				focus: Type.String(),
-				rationale: Type.String(),
-				inputContracts: Type.Array(Type.String()),
-				outputContracts: Type.Optional(Type.Array(Type.String())),
-				model: Type.Optional(Type.String()),
-				effort: Type.Optional(
-					Type.Union([
-						Type.Literal("off"),
-						Type.Literal("minimal"),
-						Type.Literal("low"),
-						Type.Literal("medium"),
-						Type.Literal("high"),
-						Type.Literal("xhigh"),
-					]),
-				),
-			}),
-		),
-	),
-	stages: Type.Optional(
-		Type.Array(
-			Type.Object({
-				id: Type.String(),
-				after: Type.Array(Type.String()),
-				assignmentIds: Type.Array(Type.String()),
-				inputRevision: Type.String(),
-				inputContracts: Type.Array(Type.String()),
-				barrier: Type.Union([Type.Literal("all"), Type.Literal("workers")]),
-			}),
-		),
-	),
-});
 const RepoParams = Type.Object({
 	action: Type.Union([
 		Type.Literal("add"),
@@ -431,11 +374,58 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
 		createDeliverableTool(deps),
 		createTaskTool(deps),
-		createWorkflowTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
 		createKnowledgeTool(deps),
 	];
+}
+
+/** Root-node creation shared by single and batch add: mint the node, then
+ *  give repo-workspace nodes their branch (+ base for stacked:false) in a
+ *  second patch — the branch name derives from the MINTED id. `after` is
+ *  applied by the caller (batch resolves sibling handles in a second pass). */
+function addRootNode(
+	engine: PlanEngineV2,
+	input: {
+		id?: string;
+		title: string;
+		body?: string;
+		workspace?: "repo" | "scratch";
+		stacked?: boolean;
+		repo?: string;
+	},
+): PlanNode {
+	const preferred = preferredNodeId(engine.get(), input.id);
+	const node = engine.addNode(null, {
+		...(preferred ? { id: preferred } : {}),
+		agent: "worker",
+		persona: "coder",
+		title: input.title,
+		...(input.body ? { body: input.body } : {}),
+		...(input.repo ? { repo: input.repo } : {}),
+	});
+	if (input.workspace !== "scratch") {
+		// v1 workspace=repo: the node owns a branch and ships one PR from it.
+		// stacked:false → base "default-branch" (fork from main, not the chain).
+		engine.updateNode(node.id, {
+			branch: defaultBranchForNode(node),
+			...(input.stacked === false ? { base: "default-branch" } : {}),
+		});
+	}
+	return findNodeV2(engine.get(), node.id) ?? node;
+}
+
+/** v1 addDeliverable slugified + de-duped a preferred id; v2 addNode takes
+ *  ids verbatim. Slugify here, and fall back to engine minting (from the
+ *  title) when the slug is empty or already taken. */
+function preferredNodeId(
+	plan: PlanV2,
+	raw: string | undefined,
+): string | undefined {
+	const id = raw ? slugify(raw) : "";
+	if (!id) return undefined;
+	for (const { node } of walkNodes(plan)) if (node.id === id) return undefined;
+	return id;
 }
 
 export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
@@ -459,24 +449,6 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 				return error("agents cannot modify plan structure");
 			}
 			return withEngine(deps, (engine) => {
-				const plan = engine.get();
-
-				if (hasExecutionStarted(plan)) {
-					if (params.id) {
-						const target = findDeliverable(plan, params.id);
-						if (target && target.status !== "planned") {
-							if (params.action === "remove") {
-								return error("cannot remove an active deliverable");
-							}
-							if (params.action === "update" && (params.title || params.body)) {
-								return error(
-									"cannot update title/body of an active deliverable",
-								);
-							}
-						}
-					}
-				}
-
 				switch (params.action) {
 					case "add": {
 						// Batch: create many deliverables in one call, all-or-nothing.
@@ -490,16 +462,13 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							}
 							const idMap = new Map<string, string>();
 							const created = params.items.map((i) => {
-								const d = engine.addDeliverable({
-									...(i.id ? { id: i.id } : {}),
+								const d = addRootNode(engine, {
+									...(i.id?.trim() ? { id: i.id } : {}),
 									title: i.title,
 									body: i.body,
 									stacked: i.stacked,
 									workspace: i.workspace,
 									repo: i.repo,
-									workerMode: i.workerMode ?? "full",
-									workerModel: i.workerModel,
-									workerEffort: i.workerEffort as ThinkingLevel | undefined,
 								});
 								// Map both the written handle and its slug form to the
 								// minted id, so a dependsOn ref written either way resolves.
@@ -510,14 +479,14 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							});
 							params.items.forEach((i, n) => {
 								if (i.dependsOn && i.dependsOn.length > 0) {
-									engine.updateDeliverable(created[n].id, {
-										dependsOn: i.dependsOn.map((d) => idMap.get(d) ?? d),
+									engine.updateNode(created[n].id, {
+										after: i.dependsOn.map((d) => idMap.get(d) ?? d),
 									});
 								}
 							});
 							notify(deps, engine);
 							const fresh = created.map(
-								(d) => findDeliverable(engine.get(), d.id) ?? d,
+								(d) => findNodeV2(engine.get(), d.id) ?? d,
 							);
 							return ok(
 								`✓ ${created.length} deliverables: ${created.map((d) => d.id).join(", ")}`,
@@ -525,41 +494,44 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							);
 						}
 						if (!params.title) return error("add requires title or items");
-						if (!params.workerMode) return error("add requires workerMode");
-						const input: AddDeliverableInput = {
+						const node = addRootNode(engine, {
 							...(params.id ? { id: params.id } : {}),
 							title: params.title,
 							body: params.body,
-							dependsOn: params.dependsOn,
 							stacked: params.stacked,
 							workspace: params.workspace,
 							repo: params.repo,
-							workerMode: params.workerMode,
-							workerModel: params.workerModel,
-							workerEffort: params.workerEffort as ThinkingLevel | undefined,
-						};
-						const deliverable = engine.addDeliverable(input);
+						});
+						if (params.dependsOn && params.dependsOn.length > 0) {
+							engine.updateNode(node.id, { after: [...params.dependsOn] });
+						}
 						notify(deps, engine);
-						return ok(`✓ ${deliverable.id}`, {
-							deliverable,
+						return ok(`✓ ${node.id}`, {
+							deliverable: findNodeV2(engine.get(), node.id) ?? node,
 							plan: engine.get(),
 						});
 					}
 					case "update": {
 						if (!params.id) return error("update requires id");
-						engine.updateDeliverable(params.id, {
+						const current = findNodeV2(engine.get(), params.id);
+						if (!current) return error(`unknown deliverable: ${params.id}`);
+						if (params.workspace === "scratch" && isBranchOwner(current)) {
+							return error(
+								"cannot change workspace after add — remove and re-add the deliverable",
+							);
+						}
+						engine.updateNode(params.id, {
 							title: params.title,
 							body: params.body,
-							dependsOn: params.dependsOn,
-							stacked: params.stacked,
-							workspace: params.workspace,
+							after: params.dependsOn,
 							repo: params.repo,
-							workerMode: params.workerMode as AgentMode | undefined,
-							workerModel: params.workerModel,
-							workerEffort: params.workerEffort as ThinkingLevel | undefined,
+							...(params.stacked === false ? { base: "default-branch" } : {}),
+							...(params.workspace === "repo" && !isBranchOwner(current)
+								? { branch: defaultBranchForNode(current) }
+								: {}),
 						});
 						if (params.status) {
-							engine.setDeliverableStatus(
+							engine.setNodeStatus(
 								params.id,
 								params.status,
 								params.failure as DeliveryFailure | undefined,
@@ -567,27 +539,22 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						notify(deps, engine);
 						return ok(`Updated deliverable ${params.id}.`, {
-							deliverable:
-								findDeliverable(engine.get(), params.id) ?? undefined,
+							deliverable: findNodeV2(engine.get(), params.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "remove": {
 						if (!params.id) return error("remove requires id");
-						engine.removeDeliverable(params.id);
+						engine.removeNode(params.id);
 						notify(deps, engine);
 						return ok(`Removed deliverable ${params.id}.`, {
 							plan: engine.get(),
 						});
 					}
 					case "list": {
-						const rows = deliverables(engine.get());
-						const text = rows.length
-							? rows
-									.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
-									.join("\n")
-							: "No deliverables.";
-						return ok(text, { deliverables: rows, plan: engine.get() });
+						const plan = engine.get();
+						const text = renderNodeTree(plan);
+						return ok(text, { deliverables: plan.nodes, plan });
 					}
 				}
 			});
@@ -695,14 +662,6 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 				const deliverableId = params.deliverableId;
 				if (!deliverableId) return error("deliverableId is required");
 
-				const plan = engine.get();
-				if (hasExecutionStarted(plan)) {
-					const g = findDeliverable(plan, deliverableId);
-					if (g && g.status !== "planned" && params.action === "remove") {
-						return error("cannot remove tasks from an active deliverable");
-					}
-				}
-
 				switch (params.action) {
 					case "add": {
 						// Batch: create many items in one call, all-or-nothing.
@@ -710,15 +669,11 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 							if (params.items.some((i) => !i.title?.trim())) {
 								return error("every batch item requires a title");
 							}
-							const created = params.items.map((i, n) =>
-								engine.addWorkItem(deliverableId, {
+							const created = params.items.map((i) =>
+								engine.addTask(deliverableId, {
 									title: i.title,
-									body: i.body,
-									kind: i.kind as WorkItemKind | undefined,
-									position:
-										params.position !== undefined
-											? params.position + n
-											: undefined,
+									...(i.body !== undefined ? { body: i.body } : {}),
+									...(i.kind ? { kind: i.kind as NodeTaskKind } : {}),
 								}),
 							);
 							notify(deps, engine);
@@ -734,13 +689,11 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 							);
 						}
 						if (!params.title) return error("add requires title or items");
-						const input: AddWorkItemInput = {
+						const item = engine.addTask(deliverableId, {
 							title: params.title,
-							body: params.body,
-							kind: params.kind as WorkItemKind | undefined,
-							position: params.position,
-						};
-						const item = engine.addWorkItem(deliverableId, input);
+							...(params.body !== undefined ? { body: params.body } : {}),
+							...(params.kind ? { kind: params.kind as NodeTaskKind } : {}),
+						});
 						notify(deps, engine);
 						deps.steerAgent?.(
 							deliverableId,
@@ -750,29 +703,33 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "update": {
 						if (!params.taskId) return error("update requires taskId");
-						engine.updateWorkItem(deliverableId, params.taskId, {
+						engine.updateTask(deliverableId, params.taskId, {
 							title: params.title,
 							body: params.body,
-							kind: params.kind as WorkItemKind | undefined,
 							answer: params.answer,
 						});
 						notify(deps, engine);
-						const g = findDeliverable(engine.get(), deliverableId);
 						return ok(`Updated task ${params.taskId}.`, {
-							workItem: g
-								? (findDeliverable(engine.get(), deliverableId)?.tasks.find(
-										(t) => t.id === params.taskId,
-									) ?? undefined)
-								: undefined,
+							workItem:
+								findNodeV2(engine.get(), deliverableId)?.tasks.find(
+									(t) => t.id === params.taskId,
+								) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "toggle": {
 						if (!params.taskId) return error("toggle requires taskId");
-						const done = engine.toggleWorkItem(deliverableId, params.taskId, {
-							summary: params.summary,
-						});
+						engine.toggleTask(
+							deliverableId,
+							params.taskId,
+							params.summary,
+							params.answer,
+						);
 						notify(deps, engine);
+						const done =
+							findNodeV2(engine.get(), deliverableId)?.tasks.find(
+								(t) => t.id === params.taskId,
+							)?.done ?? false;
 						return ok(
 							`${params.taskId} is now ${done ? "done" : "not done"}.`,
 							{
@@ -783,7 +740,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 					}
 					case "remove": {
 						if (!params.taskId) return error("remove requires taskId");
-						engine.removeWorkItem(deliverableId, params.taskId);
+						engine.removeTask(deliverableId, params.taskId);
 						notify(deps, engine);
 						return ok(`Removed task ${params.taskId}.`, { plan: engine.get() });
 					}
@@ -793,74 +750,35 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 	}) as ToolDefinition;
 }
 
-export function createWorkflowTool(deps: PlanToolDeps): ToolDefinition {
-	return defineTool({
-		name: "workflow",
-		label: "Workflow",
-		description:
-			"Compose fully resolved assignments and explicit parallel stage DAGs atomically, inspect kinds/options, or update ordering.",
-		promptSnippet:
-			"workflow — inspect exact options and atomically set resolved assignments plus stages.",
-		parameters: WorkflowParams,
-		async execute(_id, params): Promise<Result> {
-			const engine = deps.engine();
-			if (!engine) return error("no plan active — run /plan first");
-			const capability = deps.agents?.();
-			switch (params.action) {
-				case "list":
-					return ok(
-						engine.get().workflow
-							? JSON.stringify(engine.get().workflow, null, 2)
-							: "No workflow configured.",
-						{ workflow: engine.get().workflow },
-					);
-				case "options": {
-					if (!capability) return error("agents.v1 is unavailable");
-					if (params.kind) {
-						const options = await capability.options(params.kind as AgentKind);
-						return ok(JSON.stringify(options, null, 2), { kinds: options });
-					}
-					const kinds = await Promise.all(
-						capability
-							.kinds()
-							.filter((kind) => kind.id !== "host")
-							.map(async (kind) => capability.options(kind.id)),
-					);
-					return ok(JSON.stringify(kinds, null, 2), { kinds });
-				}
-				case "set": {
-					if (!capability) return error("agents.v1 is unavailable");
-					if (!params.assignments || !params.stages)
-						return error("set requires assignments and stages");
-					const requests = params.assignments as AgentAssignmentRequest[];
-					const assignments = await Promise.all(
-						requests.map((request) => capability.resolve(request)),
-					);
-					engine.setWorkflow({ assignments, stages: params.stages });
-					notify(deps, engine);
-					return ok(
-						`Configured ${assignments.length} resolved assignments in ${params.stages.length} stages.`,
-						{ workflow: engine.get().workflow, plan: engine.get() },
-					);
-				}
-				case "update-stage": {
-					if (!params.stageId) return error("update-stage requires stageId");
-					engine.updateWorkflowStage(params.stageId, {
-						after: params.after,
-						assignmentIds: params.assignmentIds,
-						inputRevision: params.inputRevision,
-						inputContracts: params.inputContracts,
-						barrier: params.barrier,
-					});
-					notify(deps, engine);
-					return ok(`Updated workflow stage ${params.stageId}.`, {
-						workflow: engine.get().workflow,
-						plan: engine.get(),
-					});
-				}
-			}
-		},
-	}) as ToolDefinition;
+/** Focus text that reads as research → explorer; anything review-ish (the
+ *  default) → reviewer. Both are read agents, matching v1 mode:read-only. */
+function inferSupportAgentType(name: string, focus: string): NodeAgentType {
+	const text = `${name} ${focus}`;
+	return /\b(research|explor\w*|investigat\w*|survey|spike|benchmark|map out|understand)\b/i.test(
+		text,
+	)
+		? "explorer"
+		: "reviewer";
+}
+
+/** Resolve a v1-style agent name to a child node: minted id, slug of the
+ *  name, or title match (add uses the name as the child's title). */
+function findSupportAgent(parent: PlanNode, name: string): PlanNode | null {
+	return (
+		(parent.children ?? []).find(
+			(c) => c.id === name || c.id === slugify(name) || c.title === name,
+		) ?? null
+	);
+}
+
+/** v1 agent `after` referenced "worker" (the deliverable's own worker) or
+ *  sibling agent names; v2 children order on siblings + the "parent" token. */
+function mapAgentAfter(parent: PlanNode, after: readonly string[]): string[] {
+	return after.map((ref) => {
+		if (ref === "worker") return PARENT_AFTER_TOKEN;
+		const sibling = findSupportAgent(parent, ref);
+		return sibling ? sibling.id : ref;
+	});
 }
 
 export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
@@ -877,57 +795,70 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 				return error("agents cannot modify plan structure");
 			}
 			return withEngine(deps, (engine) => {
-				const plan = engine.get();
 				const deliverableId = params.deliverableId;
 				if (!deliverableId) return error("deliverableId is required");
-
-				if (hasExecutionStarted(plan)) {
-					const g = findDeliverable(plan, deliverableId);
-					if (g && g.status !== "planned") {
-						return error("cannot modify agents in an active deliverable");
-					}
-				}
+				const parent = findNodeV2(engine.get(), deliverableId);
+				if (!parent) return error(`unknown deliverable: ${deliverableId}`);
 
 				switch (params.action) {
 					case "add": {
 						if (!params.name) return error("add requires name");
-						if (!params.mode) return error("add requires mode");
-						if (!params.effort) return error("add requires effort");
 						if (!params.focus) return error("add requires focus");
-						const input: AddAgentInput = {
-							name: params.name,
-							mode: params.mode,
-							model: params.model,
-							effort: params.effort as ThinkingLevel | undefined,
-							focus: params.focus,
-							after: params.after ?? [],
-						};
-						const agent = engine.addAgent(deliverableId, input);
-						notify(deps, engine);
-						return ok(`✓ ${deliverableId}/${agent.name}`, {
+						const agent = inferSupportAgentType(params.name, params.focus);
+						const input: NodeInput = {
 							agent,
+							persona: agent === "explorer" ? "researcher" : "reviewer",
+							title: params.name,
+							tasks: [params.focus],
+							...(params.after && params.after.length > 0
+								? { after: mapAgentAfter(parent, params.after) }
+								: {}),
+						};
+						// Pre-start: normal authoring. Post-start: the ONE dynamic
+						// structure operation (write-ahead append).
+						const child = engine.hasExecutionStarted()
+							? engine.appendChild(deliverableId, input, "plan")
+							: engine.addNode(deliverableId, input);
+						notify(deps, engine);
+						return ok(`✓ ${deliverableId}/${child.id}`, {
+							agent: child,
 							plan: engine.get(),
 						});
 					}
 					case "update": {
 						if (!params.name) return error("update requires name");
-						engine.updateAgent(deliverableId, params.name, {
-							mode: params.mode as AgentMode | undefined,
-							model: params.model,
-							effort: params.effort as ThinkingLevel | undefined,
-							focus: params.focus,
-							after: params.after,
-						});
+						const child = findSupportAgent(parent, params.name);
+						if (!child) {
+							return error(`unknown agent: ${deliverableId}/${params.name}`);
+						}
+						if (params.after) {
+							engine.updateNode(child.id, {
+								after: mapAgentAfter(parent, params.after),
+							});
+						}
+						if (params.focus) {
+							const first = child.tasks[0];
+							if (first) {
+								engine.updateTask(child.id, first.id, {
+									title: params.focus,
+								});
+							} else {
+								engine.addTask(child.id, { title: params.focus });
+							}
+						}
 						notify(deps, engine);
-						const g = findDeliverable(engine.get(), deliverableId);
 						return ok(`Updated agent ${params.name}.`, {
-							agent: g?.agents.find((a) => a.name === params.name) ?? undefined,
+							agent: findNodeV2(engine.get(), child.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
 					case "remove": {
 						if (!params.name) return error("remove requires name");
-						engine.removeAgent(deliverableId, params.name);
+						const child = findSupportAgent(parent, params.name);
+						if (!child) {
+							return error(`unknown agent: ${deliverableId}/${params.name}`);
+						}
+						engine.removeNode(child.id);
 						notify(deps, engine);
 						return ok(`Removed agent ${params.name}.`, { plan: engine.get() });
 					}
@@ -968,7 +899,7 @@ export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
 			const engine = deps.engine();
 			if (!engine) return error("no plan active — run /plan first");
 			const plan = engine.get();
-			if (hasExecutionStarted(plan)) {
+			if (engine.hasExecutionStarted()) {
 				return error(
 					"execution has started — the knowledge base is frozen (rewriting it would invalidate every agent's cache prefix)",
 				);
@@ -1024,12 +955,12 @@ export function createRepoTool(deps: PlanToolDeps): ToolDefinition {
 						if (!params.key || !params.path) {
 							return error("add requires key and path");
 						}
+						// v2 PlanRepoV2 has no defaultBranch field — the default branch
+						// is detected from the repo at derivation time. The param is
+						// accepted for wire compat and ignored.
 						engine.registerRepo({
 							key: params.key,
 							path: params.path,
-							...(params.defaultBranch
-								? { defaultBranch: params.defaultBranch }
-								: {}),
 							...(params.createdBy ? { createdBy: params.createdBy } : {}),
 						});
 						notify(deps, engine);
@@ -1049,7 +980,7 @@ export function createRepoTool(deps: PlanToolDeps): ToolDefinition {
 							`- default: ${plan.repoPath}`,
 							...(plan.repos ?? []).map(
 								(r) =>
-									`- ${r.key}: ${r.path}${r.defaultBranch ? ` (${r.defaultBranch})` : ""}${r.createdBy ? ` — created by \`${r.createdBy}\`` : ""}`,
+									`- ${r.key}: ${r.path}${r.createdBy ? ` — created by \`${r.createdBy}\`` : ""}`,
 							),
 						];
 						return ok(rows.join("\n"), { plan });
@@ -1089,37 +1020,26 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 					plan,
 				});
 			}
-			// TODO: implement renderPlanMarkdown / renderPlanSeed for deliverable model
-			const text = deliverables(plan).length
-				? deliverables(plan)
-						.map((g) => `- ${g.id}: ${g.status} — ${g.title}`)
-						.join("\n")
-				: "No deliverables.";
-			const workflow = plan.workflow;
-			const workflowText = workflow
-				? [
-						"",
-						"## Workflow",
-						...workflow.stages.map(
-							(stage) =>
-								`- ${stage.id} after [${stage.after.join(", ") || "root"}] @ ${stage.inputRevision}: ${stage.assignmentIds.join(", ")} (${stage.barrier} barrier)`,
-						),
-						...workflow.assignments.map(
-							(assignment) =>
-								`  - ${assignment.agentId}: ${assignment.kind} · ${assignment.modelId}@${assignment.effort ?? "default"} — ${assignment.focus}`,
-						),
-					].join("\n")
-				: "";
-			return ok(`${text}${workflowText}`, { plan });
+			// TODO: implement renderPlanMarkdown / renderPlanSeed for the node tree
+			return ok(renderNodeTree(plan), { plan });
 		},
 	}) as ToolDefinition;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Depth-indented tree listing; roots are v1's deliverables. */
+function renderNodeTree(plan: PlanV2): string {
+	const rows = [...walkNodes(plan)].map(
+		({ node, depth }) =>
+			`${"  ".repeat(depth - 1)}- ${node.id}: ${node.status} — ${node.title ?? node.persona}`,
+	);
+	return rows.length ? rows.join("\n") : "No deliverables.";
+}
+
 function withEngine(
 	deps: PlanToolDeps,
-	fn: (engine: PlanEngine) => Result,
+	fn: (engine: PlanEngineV2) => Result,
 ): Result {
 	const engine = deps.engine();
 	if (!engine) return error("no plan active — run /plan first to start one");
@@ -1142,6 +1062,6 @@ function error(message: string): Result {
 	};
 }
 
-function notify(deps: PlanToolDeps, engine: PlanEngine): void {
+function notify(deps: PlanToolDeps, engine: PlanEngineV2): void {
 	deps.onPlanChanged?.(engine.get());
 }

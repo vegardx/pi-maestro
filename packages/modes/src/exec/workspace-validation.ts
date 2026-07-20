@@ -1,12 +1,14 @@
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { currentBranch, gitToplevel, listWorktrees } from "@vegardx/pi-git";
-import type { Deliverable, Plan } from "../schema.js";
 import {
-	defaultBranchForDeliverable,
-	deliverableWorkspace,
-	repoFor,
-} from "../schema.js";
+	defaultBranchForNode,
+	isBranchOwner,
+	type PlanNode,
+	type PlanV2,
+	walkNodes,
+} from "../plan/schema.js";
+import { repoForNode } from "./shipper.js";
 
 export interface WorkspaceValidationDeps {
 	pathExists(path: string): boolean;
@@ -39,20 +41,19 @@ function canonical(path: string, deps: WorkspaceValidationDeps): string {
 
 /**
  * Read-only proof that a persisted workspace is the unique workspace owned by
- * this active deliverable. This never checks out a branch or edits Git state.
+ * this active node. This never checks out a branch or edits Git state.
  */
 export function validateRestartWorkspace(
-	plan: Plan,
-	deliverable: Deliverable,
+	plan: PlanV2,
+	node: PlanNode,
 	overrides: Partial<WorkspaceValidationDeps> = {},
 	planDir?: string,
 ): WorkspaceValidationResult {
 	const deps = { ...defaults, ...overrides };
-	const path = deliverable.worktreePath;
-	const expectedBranch =
-		deliverableWorkspace(deliverable) === "scratch"
-			? undefined
-			: (deliverable.branch ?? defaultBranchForDeliverable(deliverable));
+	const path = node.worktreePath;
+	const expectedBranch = !isBranchOwner(node)
+		? undefined
+		: (node.branch ?? defaultBranchForNode(node));
 	if (!path || !deps.pathExists(path)) {
 		return {
 			ok: true,
@@ -73,8 +74,8 @@ export function validateRestartWorkspace(
 		};
 	}
 
-	for (const other of plan.deliverables) {
-		if (other.id === deliverable.id || other.status !== "active") continue;
+	for (const { node: other } of walkNodes(plan)) {
+		if (other.id === node.id || other.status !== "active") continue;
 		if (other.worktreePath && deps.pathExists(other.worktreePath)) {
 			try {
 				if (canonical(other.worktreePath, deps) === actualPath) {
@@ -92,9 +93,9 @@ export function validateRestartWorkspace(
 		}
 		if (
 			expectedBranch &&
-			deliverableWorkspace(other) !== "scratch" &&
-			repoFor(plan, other).path === repoFor(plan, deliverable).path &&
-			(other.branch ?? defaultBranchForDeliverable(other)) === expectedBranch
+			isBranchOwner(other) &&
+			repoForNode(plan, other).path === repoForNode(plan, node).path &&
+			(other.branch ?? defaultBranchForNode(other)) === expectedBranch
 		) {
 			return {
 				ok: false,
@@ -103,7 +104,7 @@ export function validateRestartWorkspace(
 		}
 	}
 
-	if (deliverableWorkspace(deliverable) === "scratch") {
+	if (!isBranchOwner(node)) {
 		// Scratch dirs have no repo/branch proof, so the only ownership claim is
 		// the authoritative provisioning path under the plan directory.
 		if (!planDir) {
@@ -113,7 +114,7 @@ export function validateRestartWorkspace(
 					"scratch workspace validation requires the authoritative plan directory",
 			};
 		}
-		const expected = resolve(planDir, "workspaces", deliverable.id);
+		const expected = resolve(planDir, "workspaces", node.id);
 		let expectedPath: string;
 		try {
 			expectedPath = canonical(expected, deps);
@@ -132,7 +133,7 @@ export function validateRestartWorkspace(
 		return { ok: true, path: actualPath };
 	}
 
-	const repo = repoFor(plan, deliverable);
+	const repo = repoForNode(plan, node);
 	const top = deps.gitToplevel(actualPath);
 	if (!top || resolve(top) !== actualPath) {
 		return { ok: false, error: `${path} is not the root of a git worktree` };

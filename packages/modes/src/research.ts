@@ -34,8 +34,13 @@ import type {
 	ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
-import type { PlanEngine } from "./engine.js";
-import { type Plan, slugify } from "./schema.js";
+import type { PlanEngineV2 } from "./plan/engine.js";
+import {
+	PARENT_AFTER_TOKEN,
+	type PlanV2,
+	slugify,
+	walkNodes,
+} from "./plan/schema.js";
 import type { ResearchWatchdogSettings } from "./settings.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
@@ -66,7 +71,7 @@ export interface ResearchRunView {
 }
 
 export interface ResearchDeps {
-	readonly engine: () => PlanEngine | undefined;
+	readonly engine: () => PlanEngineV2 | undefined;
 	/** Agent API used for research assignments. */
 	readonly agents: () => AgentsCapabilityV1 | undefined;
 	readonly ask: () => AskCapabilityV1 | undefined;
@@ -359,7 +364,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 		description:
 			"Declare you have enough information to form the plan. Presents your " +
 			"understanding to the user for confirmation; approval unlocks the " +
-			"structure tools (deliverable/task/agent/knowledge). Call this as soon as " +
+			"structure tools (node/task/knowledge). Call this as soon as " +
 			"the convergence criteria are met — or immediately for trivial " +
 			"requests.",
 		promptSnippet:
@@ -410,7 +415,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 				deps.onPhaseChanged?.(ctx);
 				return ok(
 					`Readiness confirmed — structure tools unlocked.${note} ` +
-						"Create deliverables and tasks now, then the knowledge doc " +
+						"Create nodes and tasks now, then the knowledge doc " +
 						"(distill it from the research reports in the plan directory).",
 				);
 			}
@@ -480,7 +485,7 @@ function assignmentKind(
 }
 
 function buildResearchPrompt(
-	plan: Plan,
+	plan: PlanV2,
 	kind: ResearchKind,
 	question: string,
 	context?: string,
@@ -490,24 +495,28 @@ function buildResearchPrompt(
 	return lines.join("\n");
 }
 
-/** Compact plan outline for the advisor — title, phase, deliverables, tasks. */
-export function renderPlanOutline(plan: Plan): string {
+/** Compact plan outline for the advisor — title, phase, node tree, tasks. */
+export function renderPlanOutline(plan: PlanV2): string {
 	const lines = [`Plan: ${plan.title} (${plan.slug})`];
 	if (plan.understanding) lines.push("", plan.understanding);
-	for (const g of plan.deliverables) {
+	for (const { node, depth } of walkNodes(plan)) {
+		const heading = "#".repeat(Math.min(depth + 1, 6));
+		const after = (node.after ?? []).filter(
+			(ref) => ref !== PARENT_AFTER_TOKEN,
+		);
 		lines.push(
 			"",
-			`## deliverable ${g.id} [${g.status}]${g.dependsOn?.length ? ` dependsOn: ${g.dependsOn.join(", ")}` : ""}`,
-			g.title,
+			`${heading} node ${node.id} [${node.status}]${after.length ? ` after: ${after.join(", ")}` : ""}`,
+			node.title ?? node.id,
 		);
-		if (g.body) lines.push(g.body);
-		for (const t of g.tasks) {
+		if (node.body) lines.push(node.body);
+		for (const t of node.tasks) {
 			lines.push(
 				`- [${t.done ? "x" : " "}] ${t.title}${t.body ? ` — ${t.body}` : ""}`,
 			);
 		}
 	}
-	if (plan.deliverables.length === 0) lines.push("", "(no deliverables yet)");
+	if (plan.nodes.length === 0) lines.push("", "(no nodes yet)");
 	return lines.join("\n");
 }
 

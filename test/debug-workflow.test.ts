@@ -12,12 +12,15 @@ import {
 	renderRecoveryQuestion,
 	validateWorkerDebugProposal,
 } from "../packages/modes/src/debug.js";
-import { PlanEngine, planFingerprint } from "../packages/modes/src/engine.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import {
+	type PlanV2,
+	planFingerprintV2,
+} from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp",
 		save: (p) => {
@@ -33,47 +36,35 @@ function memStore(): PlanStore {
 }
 
 function fixture() {
-	const engine = PlanEngine.create(
+	const engine = PlanEngineV2.create(
 		memStore(),
 		{ slug: "debug", title: "Debug", repoPath: "/repo" },
 		() => "2026-01-01T00:00:00Z",
 	);
-	engine.addDeliverable({ title: "Worker", workerMode: "full" });
-	engine.addWorkItem("worker", { title: "Implement fix" });
-	engine.setDeliverableStatus("worker", "active");
-	engine.updateWorkerSession("worker", {
+	engine.addNode(null, { agent: "worker", persona: "coder", title: "Worker" });
+	engine.addTask("worker", { title: "Implement fix" });
+	engine.setNodeStatus("worker", "active");
+	engine.setNodeRuntime("worker", {
 		sessionPath: "/home/test/current.jsonl",
 		sessionName: "tmux-worker",
 		sessionGeneration: 3,
 		restartState: "running",
 	});
-	const state = {
-		deliverableId: "worker",
-		agents: new Map([
-			[
-				"worker",
-				{
-					name: "worker",
-					deliverableId: "worker",
-					status: "working",
-					generation: 3,
-				},
-			],
-		]),
-		completed: new Set<string>(),
-		blocked: undefined,
+	const runState = {
+		nodeId: "worker",
+		status: "working",
+		generation: 3,
 	};
 	const execution = {
 		questionQueue: { all: () => [] },
 		getExecutor: () => ({
-			getStates: () => new Map([["worker", state]]),
-			getAgentState: () => state.agents.get("worker"),
-			unblockDeliverable: vi.fn(),
+			getRunState: (id: string) => (id === "worker" ? runState : undefined),
+			unblockNode: vi.fn(),
 		}),
 		snapshot: () => ({
 			agents: new Map([
 				[
-					"worker/worker",
+					"worker",
 					{
 						status: "working",
 						startedAt: 1,
@@ -85,7 +76,7 @@ function fixture() {
 		}),
 		steer: vi.fn(() => true),
 	};
-	return { engine, execution, state };
+	return { engine, execution, runState };
 }
 
 describe("debug diagnosis and recovery", () => {
@@ -138,7 +129,7 @@ describe("debug diagnosis and recovery", () => {
 			engine,
 			execution: execution as never,
 			planRoot: join(home, "plans"),
-			agentId: "worker/worker",
+			agentId: "worker",
 			now: () => "now",
 		});
 		expect(snapshot.cwd.value).toBe("~/src/repo");
@@ -224,7 +215,7 @@ describe("debug diagnosis and recovery", () => {
 				kind: "steer",
 				targetDeliverableId: "worker",
 				expectedGeneration: 2,
-				basePlanFingerprint: planFingerprint(engine.get()),
+				basePlanFingerprint: planFingerprintV2(engine.get()),
 				guidance: "x",
 				confidence: 1,
 				rationale: "x",
@@ -255,9 +246,9 @@ describe("debug diagnosis and recovery", () => {
 			type: "debugProposal",
 			id: "rpc",
 			proposalId: "p",
-			agentId: "worker/worker",
+			agentId: "worker",
 			generation: 3,
-			planFingerprint: planFingerprint(engine.get()),
+			planFingerprint: planFingerprintV2(engine.get()),
 			observed: [],
 			likelyCause: "x",
 			recovery: { kind: "restart-resume", confidence: 0.8, rationale: "x" },
@@ -265,7 +256,7 @@ describe("debug diagnosis and recovery", () => {
 		expect(
 			validateWorkerDebugProposal({
 				message,
-				authenticatedAgentId: "worker/worker",
+				authenticatedAgentId: "worker",
 				engine,
 				execution: execution as never,
 			}).ok,
@@ -273,7 +264,7 @@ describe("debug diagnosis and recovery", () => {
 		expect(
 			validateWorkerDebugProposal({
 				message,
-				authenticatedAgentId: "other/worker",
+				authenticatedAgentId: "other",
 				engine,
 				execution: execution as never,
 			}).ok,
@@ -282,10 +273,10 @@ describe("debug diagnosis and recovery", () => {
 
 	it("accepts proposals pinned before session bookkeeping and timestamp churn", () => {
 		const { engine, execution } = fixture();
-		const pinned = planFingerprint(engine.get());
+		const pinned = planFingerprintV2(engine.get());
 		// The spawn path persists session facts AFTER the env fingerprint is
 		// minted — bookkeeping churn must not reject the worker's proposals.
-		engine.updateWorkerSession("worker", {
+		engine.setNodeRuntime("worker", {
 			sessionName: "tmux-respawned",
 			sessionPath: "/home/test/respawned.jsonl",
 			restartState: "running",
@@ -295,32 +286,32 @@ describe("debug diagnosis and recovery", () => {
 				type: "debugProposal",
 				id: "rpc",
 				proposalId: "p2",
-				agentId: "worker/worker",
+				agentId: "worker",
 				generation: 3,
 				planFingerprint: pinned,
 				observed: [],
 				likelyCause: "x",
 			},
-			authenticatedAgentId: "worker/worker",
+			authenticatedAgentId: "worker",
 			engine,
 			execution: execution as never,
 		});
 		expect(result.ok).toBe(true);
 		// Semantic drift still rejects: the plan the proposal reasoned about is gone.
-		engine.addWorkItem("worker", { title: "New scope" });
+		engine.addTask("worker", { title: "New scope" });
 		expect(
 			validateWorkerDebugProposal({
 				message: {
 					type: "debugProposal",
 					id: "rpc2",
 					proposalId: "p3",
-					agentId: "worker/worker",
+					agentId: "worker",
 					generation: 3,
 					planFingerprint: pinned,
 					observed: [],
 					likelyCause: "x",
 				},
-				authenticatedAgentId: "worker/worker",
+				authenticatedAgentId: "worker",
 				engine,
 				execution: execution as never,
 			}).ok,
@@ -334,12 +325,12 @@ describe("debug diagnosis and recovery", () => {
 			executionStage: "executing",
 			entries: [],
 			sessionPath: "/sessions/auth-worker.jsonl",
-			agentId: "auth/worker",
+			agentId: "auth",
 			workerGeneration: 2,
 			now: () => "now",
 		});
 		expect(snapshot.execution.activeDeliverableId).toBe("auth");
-		expect(snapshot.worker?.agentId).toBe("auth/worker");
+		expect(snapshot.worker?.agentId).toBe("auth");
 		expect(snapshot.worker?.generation).toBe(2);
 		const diagnosis = diagnoseDebugSnapshot(snapshot, "worker is stuck");
 		const kinds = diagnosis.recoveries.map((r) => r.kind);

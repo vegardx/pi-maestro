@@ -15,6 +15,7 @@
 //
 // Unwired until the flip: only tests and the future NodeExecutor import it.
 
+import { randomUUID } from "node:crypto";
 import type {
 	DeliveryFailure,
 	DiversityRecord,
@@ -31,11 +32,6 @@ import {
 import {
 	boundedPreviousSessionPaths,
 	canTransition,
-	POSTFLIGHT_TASK_ID,
-	PREFLIGHT_TASK_ID,
-	slugify,
-} from "../schema.js";
-import {
 	effectiveMaxChildren,
 	effectiveNodeTaskKind,
 	findNodeV2,
@@ -44,17 +40,50 @@ import {
 	PARENT_AFTER_TOKEN,
 	type PlanNode,
 	type PlanV2,
+	POSTFLIGHT_TASK_ID,
+	PREFLIGHT_TASK_ID,
 	parentOfNode,
+	planFingerprintV2,
+	slugify,
 	validatePlanShapeV2,
 	walkNodes,
 } from "./schema.js";
 import type { PlanStoreV2 } from "./storage.js";
+
+/** Debug-repair operations (v1 vocabulary; deliverableId carries node ids). */
+export type PlanRepairOperation =
+	| {
+			type: "addCorrectiveTask" | "addManualCheckpoint";
+			deliverableId: string;
+			task: { id: string; title: string; body?: string };
+	  }
+	| {
+			type: "clarifyTask";
+			deliverableId: string;
+			taskId: string;
+			title?: string;
+			body?: string;
+	  }
+	| {
+			type: "reopenTask";
+			deliverableId: string;
+			taskId: string;
+	  };
+
+export interface PlanRepairInput {
+	baseFingerprint: string;
+	reason: string;
+	operations: readonly PlanRepairOperation[];
+	/** Execution-aware caller assertion: each affected node is stopped. */
+	stoppedDeliverableIds: readonly string[];
+}
 
 export interface NodeInput {
 	readonly id?: string;
 	readonly agent: NodeAgentType;
 	readonly persona: string;
 	readonly title?: string;
+	readonly body?: string;
 	readonly tasks?: readonly (string | { title: string; body?: string })[];
 	readonly skills?: readonly string[];
 	readonly after?: readonly string[];
@@ -70,6 +99,7 @@ const POST_START_TASK_KINDS = new Set<NodeTaskKind>(["followup", "manual"]);
 
 export class PlanEngineV2 {
 	private plan: PlanV2;
+	private draft = false;
 
 	constructor(
 		plan: PlanV2,
@@ -111,6 +141,99 @@ export class PlanEngineV2 {
 		return engine;
 	}
 
+	/** Draft: held in memory until materialize() names and saves it (v1). */
+	static createDraft(
+		store: PlanStoreV2,
+		input: { slug: string; title: string; repoPath: string },
+		now: () => string = () => new Date().toISOString(),
+	): PlanEngineV2 {
+		const ts = now();
+		const engine = new PlanEngineV2(
+			{
+				schemaVersion: PLAN_SCHEMA_VERSION_V2,
+				slug: input.slug,
+				title: input.title,
+				repoPath: input.repoPath,
+				nodes: [],
+				createdAt: ts,
+				updatedAt: ts,
+			},
+			store,
+			now,
+		);
+		engine.draft = true;
+		return engine;
+	}
+
+	isDraft(): boolean {
+		return this.draft;
+	}
+
+	materialize(slug: string, title: string): void {
+		if (!this.draft) return;
+		this.plan = { ...this.plan, slug, title, updatedAt: this.now() };
+		this.draft = false;
+		this.store.save(this.plan);
+	}
+
+	updatePlan(
+		patch: Partial<
+			Pick<
+				PlanV2,
+				| "title"
+				| "profile"
+				| "parentIssueNumber"
+				| "planSessionPath"
+				| "lastSyncedAt"
+				| "understanding"
+			>
+		>,
+	): void {
+		this.mutate((plan) => {
+			for (const [key, value] of Object.entries(patch)) {
+				if (value !== undefined)
+					(plan as unknown as Record<string, unknown>)[key] = value;
+			}
+		});
+	}
+
+	setPhase(phase: "exploring" | "structuring", understanding?: string): void {
+		this.mutate((plan) => {
+			plan.phase = phase;
+			if (understanding !== undefined) plan.understanding = understanding;
+		});
+	}
+
+	setTransitionGate(gate: import("./schema.js").TransitionGateRuling): void {
+		this.mutate((plan) => {
+			const gates = plan.transitionGates ?? [];
+			const index = gates.findIndex((candidate) => candidate.id === gate.id);
+			plan.transitionGates =
+				index < 0
+					? [...gates, gate]
+					: gates.map((candidate, at) => (at === index ? gate : candidate));
+		});
+	}
+
+	registerRepo(repo: import("./schema.js").PlanRepoV2): void {
+		this.mutate((plan) => {
+			if ((plan.repos ?? []).some((existing) => existing.key === repo.key))
+				throw new Error(`repo key \`${repo.key}\` is already registered`);
+			plan.repos = [...(plan.repos ?? []), repo];
+		});
+	}
+
+	unregisterRepo(key: string): void {
+		this.mutate((plan) => {
+			const repos = plan.repos ?? [];
+			if (!repos.some((repo) => repo.key === key))
+				throw new Error(`unknown repo: ${key}`);
+			if ([...walkNodes(plan)].some((visit) => visit.node.repo === key))
+				throw new Error(`repo ${key} is referenced by nodes`);
+			plan.repos = repos.filter((repo) => repo.key !== key);
+		});
+	}
+
 	get(): PlanV2 {
 		return this.plan;
 	}
@@ -130,6 +253,191 @@ export class PlanEngineV2 {
 				"execution has started — the plan is append-only (use appendChild)",
 			);
 		return this.insertNode(parentId, input, "plan");
+	}
+
+	/**
+	 * Update a node's authored fields. Structural fields (after/branch/base/
+	 * agent/persona) are pre-start only; title/body edits stay legal (they do
+	 * not change execution semantics for a running agent's plan view).
+	 */
+	updateNode(
+		id: string,
+		patch: Partial<
+			Pick<
+				PlanNode,
+				| "title"
+				| "body"
+				| "after"
+				| "branch"
+				| "base"
+				| "repo"
+				| "skills"
+				| "envelope"
+				| "diversityWaiver"
+			>
+		>,
+	): void {
+		const structural = ["after", "branch", "base", "repo", "envelope"] as const;
+		if (
+			this.hasExecutionStarted() &&
+			structural.some((key) => patch[key] !== undefined)
+		)
+			throw new Error(
+				"execution has started — structural node fields are frozen (append children or abandon instead)",
+			);
+		this.mutateNode(id, (node) => {
+			for (const [key, value] of Object.entries(patch)) {
+				if (value !== undefined)
+					(node as unknown as Record<string, unknown>)[key] = value;
+			}
+		});
+	}
+
+	updateTask(
+		nodeId: string,
+		taskId: string,
+		patch: Partial<Pick<NodeTask, "title" | "body" | "answer">>,
+	): void {
+		this.mutateNode(nodeId, (node) => {
+			const task = node.tasks.find((candidate) => candidate.id === taskId);
+			if (!task) throw new Error(`unknown task: ${nodeId}/${taskId}`);
+			if (patch.title !== undefined) task.title = patch.title;
+			if (patch.body !== undefined) task.body = patch.body;
+			if (patch.answer !== undefined) {
+				task.answer = patch.answer;
+				task.decidedAt = this.now();
+				task.done = true;
+			}
+			task.updatedAt = this.now();
+		});
+	}
+
+	/**
+	 * Apply the complete, narrow debug repair to one clone/save (v1 verbatim,
+	 * node-keyed: `deliverableId` fields carry node ids — the debug channel's
+	 * wire vocabulary is unchanged). The operation vocabulary cannot express
+	 * topology, lifecycle, review, or runtime edits.
+	 */
+	applyTaskRepair(input: PlanRepairInput): {
+		fingerprint: string;
+		auditId: string;
+	} {
+		if (!input.reason.trim()) throw new Error("repair reason required");
+		if (input.operations.length === 0)
+			throw new Error("repair has no operations");
+		const actual = planFingerprintV2(this.plan);
+		if (actual !== input.baseFingerprint) {
+			throw new Error(
+				`plan fingerprint drift: expected ${input.baseFingerprint}, found ${actual}`,
+			);
+		}
+		const stopped = new Set(input.stoppedDeliverableIds);
+		const touched = new Set(input.operations.map((op) => op.deliverableId));
+		for (const id of touched) {
+			const node = findNodeV2(this.plan, id);
+			if (!node) throw new Error(`unknown deliverable: ${id}`);
+			if (!stopped.has(id)) {
+				throw new Error(`deliverable ${id} is not confirmed stopped`);
+			}
+			if (["shipped", "abandoned", "superseded"].includes(node.status)) {
+				throw new Error(`deliverable ${id} is terminal (${node.status})`);
+			}
+			if (node.restartState === "restarting") {
+				throw new Error(`deliverable ${id} is restarting`);
+			}
+		}
+		const ts = this.now();
+		const auditId = randomUUID();
+		this.mutate((plan) => {
+			const findTask = (node: PlanNode, taskId: string): NodeTask | undefined =>
+				node.tasks.find((candidate) => candidate.id === taskId);
+			for (const op of input.operations) {
+				const node = findNodeV2(plan, op.deliverableId);
+				if (!node) throw new Error(`unknown deliverable: ${op.deliverableId}`);
+				switch (op.type) {
+					case "addCorrectiveTask":
+					case "addManualCheckpoint": {
+						if (!op.task.id.trim() || !op.task.title.trim()) {
+							throw new Error(`${op.type} requires task id and title`);
+						}
+						if (findTask(node, op.task.id)) {
+							throw new Error(`task already exists: ${op.task.id}`);
+						}
+						// Corrective tasks must gate completion (kind "task"): a
+						// repair the worker can finish without doing is no repair.
+						node.tasks.push({
+							id: op.task.id,
+							title: op.task.title,
+							body: op.task.body ?? "",
+							done: false,
+							...(op.type === "addManualCheckpoint"
+								? { kind: "manual" as const }
+								: {}),
+							createdAt: ts,
+							updatedAt: ts,
+						});
+						break;
+					}
+					case "clarifyTask": {
+						const task = findTask(node, op.taskId);
+						if (!task) throw new Error(`unknown task: ${op.taskId}`);
+						if (task.done || task.answer !== undefined) {
+							throw new Error(`task ${op.taskId} was already acted upon`);
+						}
+						if (op.title === undefined && op.body === undefined) {
+							throw new Error(`clarifyTask ${op.taskId} has no text change`);
+						}
+						if (op.title !== undefined) task.title = op.title;
+						if (op.body !== undefined) task.body = op.body;
+						task.updatedAt = ts;
+						break;
+					}
+					case "reopenTask": {
+						const task = findTask(node, op.taskId);
+						if (!task) throw new Error(`unknown task: ${op.taskId}`);
+						if (task.answer !== undefined || task.decidedAt !== undefined) {
+							throw new Error(`cannot reopen decided task ${op.taskId}`);
+						}
+						// Idempotent: retries leave an already-open task open.
+						task.done = false;
+						task.updatedAt = ts;
+						break;
+					}
+				}
+				node.updatedAt = ts;
+			}
+			plan.repairAudit = [
+				...(plan.repairAudit ?? []),
+				{
+					id: auditId,
+					reason: input.reason,
+					baseFingerprint: input.baseFingerprint,
+					appliedAt: ts,
+					operations: input.operations.map((op) => op.type),
+				},
+			];
+		});
+		return { fingerprint: planFingerprintV2(this.plan), auditId };
+	}
+
+	removeTask(nodeId: string, taskId: string): void {
+		if (this.hasExecutionStarted())
+			throw new Error(
+				"execution has started — tasks are toggled or answered, never removed",
+			);
+		this.mutateNode(nodeId, (node) => {
+			const index = node.tasks.findIndex(
+				(candidate) => candidate.id === taskId,
+			);
+			if (index < 0) throw new Error(`unknown task: ${nodeId}/${taskId}`);
+			node.tasks.splice(index, 1);
+		});
+	}
+
+	setWorkflowAnalytics(nodeId: string, ledger: unknown): void {
+		this.mutateNode(nodeId, (node) => {
+			node.workflowAnalytics = ledger;
+		});
 	}
 
 	removeNode(id: string): void {
@@ -210,10 +518,16 @@ export class PlanEngineV2 {
 	}
 
 	/**
-	 * Toggle a task. The postflight toggle carries the downstream handoff:
-	 * its summary is persisted onto the node (v1 behavior, unchanged).
+	 * Toggle a task. The postflight toggle carries the downstream handoff
+	 * (summary → node.handoff); a question toggle carries the answer, which
+	 * stamps decidedAt (v1 behavior, unchanged).
 	 */
-	toggleTask(nodeId: string, taskId: string, summary?: string): void {
+	toggleTask(
+		nodeId: string,
+		taskId: string,
+		summary?: string,
+		answer?: string,
+	): void {
 		this.mutate((plan) => {
 			const node = findNodeV2(plan, nodeId);
 			if (!node) throw new Error(`unknown node: ${nodeId}`);
@@ -227,6 +541,10 @@ export class PlanEngineV2 {
 				summary
 			) {
 				node.handoff = summary;
+			}
+			if (task.done && answer !== undefined) {
+				task.answer = answer;
+				task.decidedAt = this.now();
 			}
 			node.updatedAt = this.now();
 		});
@@ -335,6 +653,7 @@ export class PlanEngineV2 {
 			agent: input.agent,
 			persona: input.persona,
 			...(input.title ? { title: input.title } : {}),
+			...(input.body ? { body: input.body } : {}),
 			tasks: (input.tasks ?? []).map((task, index) => {
 				const title = typeof task === "string" ? task : task.title;
 				const body = typeof task === "string" ? "" : (task.body ?? "");
@@ -438,7 +757,8 @@ export class PlanEngineV2 {
 		});
 	}
 
-	/** v1's mutate discipline verbatim: clone → apply → validate → save. */
+	/** v1's mutate discipline verbatim: clone → apply → validate → save.
+	 *  Drafts mutate in memory only — materialize() names and persists. */
 	private mutate(fn: (plan: PlanV2) => void): void {
 		const next = structuredClone(this.plan) as PlanV2;
 		fn(next);
@@ -446,7 +766,7 @@ export class PlanEngineV2 {
 		if (problems.length > 0)
 			throw new Error(`invalid plan:\n- ${problems.join("\n- ")}`);
 		next.updatedAt = this.now();
-		this.store.save(next);
+		if (!this.draft) this.store.save(next);
 		this.plan = next;
 	}
 

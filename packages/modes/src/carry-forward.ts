@@ -23,7 +23,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { AskCapabilityV1 } from "@vegardx/pi-contracts";
-import type { Plan } from "./schema.js";
+import {
+	effectiveNodeTaskKind,
+	type PlanV2,
+	walkNodes,
+} from "./plan/schema.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Episode state ───────────────────────────────────────────────────────────
@@ -91,7 +95,7 @@ export class CarryForwardController {
 // ─── Mechanical inventory ────────────────────────────────────────────────────
 
 export interface InventoryDeps {
-	readonly plan?: Plan;
+	readonly plan?: PlanV2;
 	readonly mode: string;
 	/** Adapter snapshot slices (live workers + blocked reasons). */
 	readonly workers?: ReadonlyArray<{ agent: string; status: string }>;
@@ -123,10 +127,10 @@ export function harvestInventory(deps: InventoryDeps): string {
 		lines.push(
 			`Plan: ${p.slug} — ${p.title} (mode: ${deps.mode}${p.phase ? `, phase: ${p.phase}` : ""})`,
 		);
-		for (const d of p.deliverables) {
-			const tasks = d.tasks.filter((t) => t.kind === "task");
+		for (const { node: d, depth } of walkNodes(p)) {
+			const tasks = d.tasks.filter((t) => effectiveNodeTaskKind(t) === "task");
 			const done = tasks.filter((t) => t.done).length;
-			const parts = [`- ${d.id} [${d.status}]`];
+			const parts = [`- ${"  ".repeat(depth - 1)}${d.id} [${d.status}]`];
 			if (tasks.length > 0) parts.push(`tasks ${done}/${tasks.length}`);
 			const blocked = deps.blocked?.find((b) => b.id === d.id);
 			if (blocked) parts.push(`BLOCKED: ${blocked.reason}`);

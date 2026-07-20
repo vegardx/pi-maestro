@@ -1,69 +1,51 @@
 import { describe, expect, it } from "vitest";
 import {
-	buildAgentSeed,
 	buildSummarizeInstruction,
 	buildWorkerSeed,
 	deliverableBranch,
 	isWorkerComplete,
-	nextUnblockedAgents,
-	resolveBaseBranch,
 	workerSummaryConsumer,
 } from "../packages/modes/src/agent-lifecycle.js";
-import type { AgentSpec, Deliverable } from "../packages/modes/src/schema.js";
+import type { PlanNode } from "../packages/modes/src/plan/schema.js";
 
-function makeDeliverable(overrides: Partial<Deliverable> = {}): Deliverable {
+function makeNode(overrides: Partial<PlanNode> = {}): PlanNode {
 	return {
-		type: "deliverable" as const,
+		type: "node" as const,
 		createdAt: "t",
 		updatedAt: "t",
-		id: "auth" as never,
+		id: "auth",
+		agent: "worker",
+		persona: "coder",
 		title: "Auth System",
 		body: "Implement authentication",
 		status: "active",
-		dependsOn: [],
-		stacked: true,
+		branch: "feat/auth",
+		authoredBy: "plan",
 		tasks: [
 			{
-				id: "t1" as never,
+				id: "t1",
 				title: "Login endpoint",
 				body: "POST /login in src/auth.ts",
-				kind: "task",
 				done: false,
-				type: "work-item" as const,
 				createdAt: "t",
 				updatedAt: "t",
 			},
 			{
-				id: "t2" as never,
+				id: "t2",
 				title: "Refresh endpoint",
 				body: "",
-				kind: "task",
 				done: false,
-				type: "work-item" as const,
 				createdAt: "t",
 				updatedAt: "t",
 			},
 		],
-		worker: { mode: "full" },
-		agents: [],
-		...overrides,
-	};
-}
-
-function makeAgent(overrides: Partial<AgentSpec> = {}): AgentSpec {
-	return {
-		name: "security",
-		mode: "read-only",
-		effort: "high",
-		focus: "Check for auth vulnerabilities",
-		after: ["worker"],
 		...overrides,
 	};
 }
 
 describe("buildWorkerSeed", () => {
-	it("includes deliverable title and body", () => {
-		const seed = buildWorkerSeed(makeDeliverable(), {
+	it("includes node title and body", () => {
+		const seed = buildWorkerSeed(makeNode(), {
 			depSummaries: [],
 			siblingeSummaries: [],
 		});
@@ -72,7 +54,7 @@ describe("buildWorkerSeed", () => {
 	});
 
 	it("includes tasks with bodies", () => {
-		const seed = buildWorkerSeed(makeDeliverable(), {
+		const seed = buildWorkerSeed(makeNode(), {
 			depSummaries: [],
 			siblingeSummaries: [],
 		});
@@ -81,93 +63,23 @@ describe("buildWorkerSeed", () => {
 		expect(seed).toContain("Refresh endpoint");
 	});
 
-	it("includes dep summaries before deliverable content", () => {
-		const seed = buildWorkerSeed(makeDeliverable(), {
+	it("includes dep summaries before node content", () => {
+		const seed = buildWorkerSeed(makeNode(), {
 			depSummaries: ["## From: core\nBuilt shared types."],
 			siblingeSummaries: [],
 		});
 		const depIdx = seed.indexOf("From: core");
-		const deliverableIdx = seed.indexOf("Auth System");
-		expect(depIdx).toBeLessThan(deliverableIdx);
+		const nodeIdx = seed.indexOf("Auth System");
+		expect(depIdx).toBeLessThan(nodeIdx);
 	});
 
 	it("includes worker instructions", () => {
-		const seed = buildWorkerSeed(makeDeliverable(), {
+		const seed = buildWorkerSeed(makeNode(), {
 			depSummaries: [],
 			siblingeSummaries: [],
 		});
 		expect(seed).toContain("Toggle each task");
 		expect(seed).toContain("maestro handles pushing");
-	});
-});
-
-describe("buildAgentSeed", () => {
-	it("includes agent focus", () => {
-		const agent = makeAgent();
-		const seed = buildAgentSeed(makeDeliverable(), agent, {
-			depSummaries: [],
-			siblingeSummaries: [],
-		});
-		expect(seed).toContain("Check for auth vulnerabilities");
-		expect(seed).toContain("security");
-	});
-
-	it("includes sibling summaries", () => {
-		const agent = makeAgent();
-		const seed = buildAgentSeed(makeDeliverable(), agent, {
-			depSummaries: [],
-			siblingeSummaries: ["### worker\nImplemented login."],
-		});
-		expect(seed).toContain("Prior agent results");
-		expect(seed).toContain("Implemented login");
-	});
-
-	it("read-only agent gets reviewer instructions", () => {
-		const agent = makeAgent({ mode: "read-only" });
-		const seed = buildAgentSeed(makeDeliverable(), agent, {
-			depSummaries: [],
-			siblingeSummaries: [],
-		});
-		expect(seed).toContain("read-only reviewer");
-		expect(seed).toContain("cannot edit files");
-	});
-
-	it("full-mode agent gets fix instructions", () => {
-		const agent = makeAgent({ mode: "full" });
-		const seed = buildAgentSeed(makeDeliverable(), agent, {
-			depSummaries: [],
-			siblingeSummaries: [],
-		});
-		expect(seed).toContain("fix issues");
-	});
-});
-
-describe("resolveBaseBranch", () => {
-	const deliverables: Deliverable[] = [
-		makeDeliverable({ id: "core" as never, dependsOn: [] }),
-		makeDeliverable({ id: "auth" as never, dependsOn: ["core"] }),
-	];
-
-	it("returns default branch for root deliverable", () => {
-		expect(resolveBaseBranch(deliverables[0], deliverables, "main")).toBe(
-			"main",
-		);
-	});
-
-	it("returns predecessor branch for stacked deliverable", () => {
-		expect(resolveBaseBranch(deliverables[1], deliverables, "main")).toBe(
-			"feat/core",
-		);
-	});
-
-	it("returns default branch when stacked=false", () => {
-		const g = { ...deliverables[1], stacked: false };
-		expect(resolveBaseBranch(g, deliverables, "main")).toBe("main");
-	});
-
-	it("returns default branch when dep not found", () => {
-		const g = makeDeliverable({ dependsOn: ["nonexistent"] });
-		expect(resolveBaseBranch(g, deliverables, "main")).toBe("main");
 	});
 });
 
@@ -180,71 +92,35 @@ describe("deliverableBranch", () => {
 
 describe("isWorkerComplete", () => {
 	it("returns false when tasks remain", () => {
-		expect(isWorkerComplete(makeDeliverable())).toBe(false);
+		expect(isWorkerComplete(makeNode())).toBe(false);
 	});
 
 	it("returns true when all tasks done", () => {
-		const g = makeDeliverable({
+		const node = makeNode({
 			tasks: [
 				{
-					id: "t1" as never,
+					id: "t1",
 					title: "T1",
 					body: "",
-					kind: "task",
 					done: true,
-					type: "work-item" as const,
 					createdAt: "t",
 					updatedAt: "t",
 				},
 				{
-					id: "t2" as never,
+					id: "t2",
 					title: "T2",
 					body: "",
-					kind: "task",
 					done: true,
-					type: "work-item" as const,
 					createdAt: "t",
 					updatedAt: "t",
 				},
 			],
 		});
-		expect(isWorkerComplete(g)).toBe(true);
+		expect(isWorkerComplete(node)).toBe(true);
 	});
 
 	it("returns false for empty tasks", () => {
-		expect(isWorkerComplete(makeDeliverable({ tasks: [] }))).toBe(false);
-	});
-});
-
-describe("nextUnblockedAgents", () => {
-	it("returns agents whose deps are all completed", () => {
-		const deliverable = makeDeliverable({
-			agents: [
-				makeAgent({ name: "review", after: ["worker"] }),
-				makeAgent({ name: "fix", after: ["review"] }),
-			],
-		});
-		const unblocked = nextUnblockedAgents(deliverable, new Set(["worker"]));
-		expect(unblocked.map((a) => a.name)).toEqual(["review"]);
-	});
-
-	it("returns multiple agents when parallel", () => {
-		const deliverable = makeDeliverable({
-			agents: [
-				makeAgent({ name: "security", after: ["worker"] }),
-				makeAgent({ name: "perf", after: ["worker"] }),
-			],
-		});
-		const unblocked = nextUnblockedAgents(deliverable, new Set(["worker"]));
-		expect(unblocked.map((a) => a.name)).toEqual(["security", "perf"]);
-	});
-
-	it("returns nothing when deps not met", () => {
-		const deliverable = makeDeliverable({
-			agents: [makeAgent({ name: "fix", after: ["review"] })],
-		});
-		const unblocked = nextUnblockedAgents(deliverable, new Set(["worker"]));
-		expect(unblocked).toEqual([]);
+		expect(isWorkerComplete(makeNode({ tasks: [] }))).toBe(false);
 	});
 });
 
@@ -258,15 +134,24 @@ describe("buildSummarizeInstruction", () => {
 });
 
 describe("workerSummaryConsumer", () => {
-	it("mentions next agents when present", () => {
-		const agents = [makeAgent({ name: "security", focus: "auth vulns" })];
-		const consumer = workerSummaryConsumer(makeDeliverable(), agents);
+	it("mentions next nodes when present", () => {
+		const next = [
+			makeNode({
+				id: "security",
+				agent: "reviewer",
+				persona: "reviewer",
+				title: "Security review",
+				branch: undefined,
+				tasks: [],
+			}),
+		];
+		const consumer = workerSummaryConsumer(makeNode(), next);
 		expect(consumer).toContain("security");
-		expect(consumer).toContain("auth vulns");
+		expect(consumer).toContain("Security review");
 	});
 
-	it("mentions downstream deliverables when no next agents", () => {
-		const consumer = workerSummaryConsumer(makeDeliverable(), []);
+	it("mentions downstream deliverables when no next nodes", () => {
+		const consumer = workerSummaryConsumer(makeNode(), []);
 		expect(consumer).toContain("Downstream deliverables");
 	});
 });

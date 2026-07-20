@@ -2,6 +2,7 @@
 // command handlers, event hooks, and dashboard glue all operate on.
 // createRuntimeContext constructs it; runtime/index.ts wires the pieces.
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,41 +24,42 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
+import * as realTmux from "@vegardx/pi-tmux";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
 import { DebugController } from "../debug.js";
-import { PlanEngine } from "../engine.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { readKnowledgeSession } from "../exec/knowledge.js";
-import { auditPlan, renderAudit } from "../exec/recovery.js";
+import { createLiveSpawnAgent } from "../exec/live-spawn.js";
+import { shipNode as shipNodeReal } from "../exec/shipper.js";
 import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
 import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
-import { computeActiveTools, orchestrationActive } from "../policy.js";
-import type { ResearchRunView } from "../research.js";
+import { PlanEngineV2 } from "../plan/engine.js";
+import { resolveNodeModel } from "../plan/node-periphery.js";
 import {
-	blockedReason,
-	type Deliverable,
-	deliverableWorkspace,
 	derivePlanName,
-	findDeliverable,
-	planPhase,
+	findNodeV2,
+	isBranchOwner,
+	nodeBlockedReason,
+	type PlanNode,
+	type PlanV2,
+	parentOfNode,
 	planRepoMismatch,
-	readyDeliverables,
-	repoFor,
+	readyChildren,
 	repoNameFromPath,
 	slugify,
-} from "../schema.js";
+	walkNodes,
+} from "../plan/schema.js";
+import { createPlanStoreV2, type PlanStoreV2 } from "../plan/storage.js";
+import { planPhaseV2 } from "../planning-preamble.js";
+import { computeActiveTools, orchestrationActive } from "../policy.js";
+import type { ResearchRunView } from "../research.js";
 import { appendModesState } from "../session.js";
-import {
-	readChildExtensions,
-	readExecutionLifecycleSettings,
-	readWorktreeSetupSettings,
-} from "../settings.js";
-import { resolveSpawnModelSafe } from "../spawn-model.js";
+import { readChildExtensions } from "../settings.js";
 import {
 	type ExecutionState,
 	initialModesState,
@@ -67,7 +69,7 @@ import {
 	setExecution,
 	transitionMode,
 } from "../state.js";
-import { createPlanStore, type PlanStore, plansRoot } from "../storage.js";
+import { plansRoot } from "../storage.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -85,7 +87,7 @@ import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
 
 export interface ModesRuntimeOptions {
-	readonly store?: PlanStore;
+	readonly store?: PlanStoreV2;
 	readonly now?: () => string;
 	/** Injectable execution providers; missing isolation tiers fail closed. */
 	readonly bashBackends?: {
@@ -108,7 +110,7 @@ export interface ModesRuntimeOptions {
 export interface RuntimeContext {
 	readonly pi: ExtensionAPI;
 	readonly maestro: MaestroContext;
-	readonly store: PlanStore;
+	readonly store: PlanStoreV2;
 	readonly now: () => string;
 	readonly askQueue: ModesAskQueue;
 	readonly overlayManager: OverlayManager;
@@ -125,7 +127,7 @@ export interface RuntimeContext {
 	readonly listeners: Set<(mode: ModeName, previous: ModeName) => void>;
 
 	state: ModesState;
-	engine: PlanEngine | undefined;
+	engine: PlanEngineV2 | undefined;
 	agentBridge: AgentBridge | undefined;
 	execution: ExecutionHandle | undefined;
 	/** Active, persisted diagnosis/recovery episode. */
@@ -158,7 +160,7 @@ export interface RuntimeContext {
 	contextWarnedAt: number;
 
 	currentMode(): ModeName;
-	currentEngine(): PlanEngine | undefined;
+	currentEngine(): PlanEngineV2 | undefined;
 	persist(): void;
 	notifyMode(ctx: ExtensionContext): void;
 	applyTools(): void;
@@ -166,12 +168,15 @@ export interface RuntimeContext {
 	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
-	loadEngine(slug: string): PlanEngine | undefined;
-	openPlan(titleOrSlug: string | undefined, ctx: ExtensionContext): PlanEngine;
+	loadEngine(slug: string): PlanEngineV2 | undefined;
+	openPlan(
+		titleOrSlug: string | undefined,
+		ctx: ExtensionContext,
+	): PlanEngineV2;
 	finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void;
 	cycle(ctx: ExtensionContext): Promise<void>;
 	emitPlanChanged(): void;
-	assertDeliverableRepo(ctx: ExtensionContext, d: Deliverable): boolean;
+	assertDeliverableRepo(ctx: ExtensionContext, d: PlanNode): boolean;
 	recordMaestroUsage(usage: unknown): void;
 	incrementMaestroTurn(): void;
 	runStart(
@@ -214,7 +219,7 @@ export function createRuntimeContext(
 	maestro: MaestroContext,
 	opts: ModesRuntimeOptions = {},
 ): RuntimeContext {
-	const store = opts.store ?? createPlanStore(plansRoot());
+	const store = opts.store ?? createPlanStoreV2(plansRoot());
 	const now = opts.now ?? (() => new Date().toISOString());
 	const askQueue = new ModesAskQueue();
 	const _branchDeps = {
@@ -346,7 +351,7 @@ export function createRuntimeContext(
 			return rt.state.mode;
 		},
 
-		currentEngine(): PlanEngine | undefined {
+		currentEngine(): PlanEngineV2 | undefined {
 			return rt.engine;
 		},
 
@@ -371,7 +376,7 @@ export function createRuntimeContext(
 					availableTools: pi.getAllTools().map((t) => t.name),
 					baselineTools,
 					isAgent: isAgentMode(),
-					phase: rt.engine ? planPhase(rt.engine.get()) : undefined,
+					phase: rt.engine ? planPhaseV2(rt.engine.get()) : undefined,
 					carryForwardActive: Boolean(rt.carryForward.get()),
 				}),
 			);
@@ -397,7 +402,7 @@ export function createRuntimeContext(
 			if (ctx) rt.notifyMode(ctx);
 		},
 
-		loadEngine(slug: string): PlanEngine | undefined {
+		loadEngine(slug: string): PlanEngineV2 | undefined {
 			const plan = store.load(slug);
 			if (!plan) return undefined;
 			usageStore = new UsageCheckpointStore(
@@ -406,13 +411,13 @@ export function createRuntimeContext(
 			const existing = usageLedger.checkpoints();
 			usageLedger.restore(usageStore.load());
 			for (const checkpoint of existing) usageStore.accept(checkpoint);
-			return new PlanEngine(plan, store, now);
+			return new PlanEngineV2(plan, store, now);
 		},
 
 		openPlan(
 			titleOrSlug: string | undefined,
 			ctx: ExtensionContext,
-		): PlanEngine {
+		): PlanEngineV2 {
 			const explicit = titleOrSlug?.trim() || undefined;
 			const slug = explicit ? slugify(explicit) || "plan" : undefined;
 			// No explicit name and there's already an active plan -> keep it.
@@ -429,7 +434,7 @@ export function createRuntimeContext(
 			// A new plan starts as an in-memory draft. It's named and persisted
 			// lazily on the first turn that adds content (see finalizeDraftPlan),
 			// so an exploratory /plan that adds nothing never hits disk.
-			rt.engine = PlanEngine.createDraft(
+			rt.engine = PlanEngineV2.createDraft(
 				store,
 				{
 					slug: "draft",
@@ -449,7 +454,7 @@ export function createRuntimeContext(
 		// plan directory on disk before any deliverable exists (report persistence).
 		finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void {
 			if (!rt.engine?.isDraft()) return;
-			if (!opts?.force && rt.engine.get().deliverables.length === 0) return;
+			if (!opts?.force && rt.engine.get().nodes.length === 0) return;
 			const firstMessage = firstUserMessageText(
 				ctx.sessionManager.getEntries() as readonly Entryish[],
 				draftStartEntries,
@@ -534,11 +539,15 @@ export function createRuntimeContext(
 		// implement/ship would silently hit the wrong tree. Returns true when
 		// it's safe to proceed (and when there's no plan to guard). Fanout uses
 		// per-deliverable worktrees and is not guarded.
-		assertDeliverableRepo(ctx: ExtensionContext, d: Deliverable): boolean {
+		assertDeliverableRepo(ctx: ExtensionContext, d: PlanNode): boolean {
 			if (!rt.engine) return true;
-			// Scratch deliverables have no repo to mismatch.
-			if (deliverableWorkspace(d) === "scratch") return true;
-			const repoPath = repoFor(rt.engine.get(), d).path;
+			// Scratch (branchless) nodes have no repo to mismatch.
+			if (!isBranchOwner(d)) return true;
+			const plan = rt.engine.get();
+			const repoPath = d.repo
+				? (plan.repos?.find((repo) => repo.key === d.repo)?.path ??
+					plan.repoPath)
+				: plan.repoPath;
 			const problem = planRepoMismatch(
 				gitToplevel(repoPath),
 				gitToplevel(ctx.cwd),
@@ -577,19 +586,22 @@ export function createRuntimeContext(
 			const activeEngine = rt.engine;
 			const plan = activeEngine.get();
 			const targetId = deliverableId?.trim() || undefined;
-			const target = targetId ? findDeliverable(plan, targetId) : undefined;
+			const target = targetId ? findNodeV2(plan, targetId) : undefined;
 			if (targetId && !target) {
 				ctx.ui.notify(`Unknown deliverable: ${targetId}`, "warning");
 				return;
 			}
 			if (target) {
-				const reason = blockedReason(plan, target);
+				const parent = parentOfNode(plan, target.id);
+				const siblings = parent ? (parent.children ?? []) : plan.nodes;
+				const reason = nodeBlockedReason(siblings, target);
 				if (reason) {
 					ctx.ui.notify(`Cannot start ${target.id}: ${reason}.`, "warning");
 					return;
 				}
 			}
-			const ready = readyDeliverables(plan);
+			// Root readiness: activation recurses into children via the executor.
+			const ready = readyChildren(plan.nodes);
 			if (ready.length === 0) {
 				ctx.ui.notify(
 					"No ready planned deliverables. Use /restart for a clean stop or /recover for failed or uncertain state.",
@@ -676,16 +688,30 @@ export function createRuntimeContext(
 				{ stage: "stopping", deliverableId: "maestro" },
 				ctx,
 			);
+			const requestedAt = Date.now();
 			const result = await rt.execution.prepareStop?.("user ran /stop");
 			if (!result) {
 				ctx.ui.notify("Execution does not support bounded stop.", "warning");
 				return;
 			}
+			// v2 prepareStop reports which sessions stopped/were unresponsive;
+			// the durable StopRecord is assembled here (the adapter no longer
+			// returns one). Unresponsive workers taint the stop: /restart
+			// refuses and routes to the audited /recover path.
+			const completedAt = Date.now();
 			rt.setExecutionStage(
 				{
 					stage: "stopped",
-					completedAt: result.stop.completedAt,
-					stop: result.stop,
+					completedAt,
+					stop: {
+						kind: "canceled",
+						requestedAt,
+						completedAt,
+						requestedBy: "user",
+						reason: "user ran /stop",
+						outcome: result.unresponsive.length > 0 ? "timed-out" : "accepted",
+						recoverable: true,
+					},
 				},
 				ctx,
 			);
@@ -698,14 +724,11 @@ export function createRuntimeContext(
 			await rt.execution.destroy();
 			rt.execution = undefined;
 			rt.hud?.refresh();
-			const uncertain = result.agents.filter(
-				(agent) => agent.outcome === "not-proven",
-			);
 			ctx.ui.notify(
-				uncertain.length
-					? `Stop completed with ${uncertain.length} uncertain worker(s). Use /recover to audit them.`
-					: `Parked ${result.agents.length} worker(s). Resume with /restart [delivery].`,
-				uncertain.length ? "warning" : "info",
+				result.unresponsive.length
+					? `Stop completed with ${result.unresponsive.length} uncertain worker(s). Use /recover to audit them.`
+					: `Parked ${result.stopped.length} worker(s). Resume with /restart [delivery].`,
+				result.unresponsive.length ? "warning" : "info",
 			);
 		},
 
@@ -736,9 +759,9 @@ export function createRuntimeContext(
 			}
 			const plan = rt.engine.get();
 			const requested = deliverableId?.trim() || undefined;
-			const candidates = plan.deliverables.filter(
-				(item) => item.status === "active",
-			);
+			const candidates = [...walkNodes(plan)]
+				.map((visit) => visit.node)
+				.filter((item) => item.status === "active");
 			const targets = requested
 				? candidates.filter((item) => item.id === requested)
 				: candidates;
@@ -776,7 +799,7 @@ export function createRuntimeContext(
 				);
 			} else {
 				ctx.ui.notify(
-					`Restart failed: ${failed.map((result) => `${result.deliverableId}: ${result.error ?? "validation failed"}`).join("; ")}. Use /recover.`,
+					`Restart failed: ${failed.map((result) => `${result.nodeId}: ${result.error ?? "validation failed"}`).join("; ")}. Use /recover.`,
 					"warning",
 				);
 			}
@@ -793,40 +816,90 @@ export function createRuntimeContext(
 				dirname(fileURLToPath(import.meta.url)),
 				"../../../..",
 			);
+			const planDir = join(plansRoot(), activeEngine.get().slug);
+			const token = randomUUID();
+			const socketPath = join(
+				"/tmp",
+				`maestro-${activeEngine.get().slug.slice(0, 20)}-${process.pid}.sock`,
+			);
+			// Workers MUST load the maestro package itself (agent bridge, task
+			// tool, RPC idle reports) — argv discovery alone finds nothing when
+			// the maestro is loaded via pi's `packages` mechanism instead of -e,
+			// which left workers as vanilla pi: they finished their work but
+			// could never report back, so the run hung forever. Then any extra
+			// -e extensions the maestro was launched with, then the
+			// childExtensions passthrough (custom model providers etc).
+			const extensionPaths = [
+				...new Set([
+					maestroRoot,
+					...discoverExtensionPaths().map((p) => resolve(p)),
+					...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
+				]),
+			];
 			rt.execution = createExecution({
 				engine: activeEngine,
-				ctx,
-				extensionPath: maestroRoot,
-				// Workers MUST load the maestro package itself (agent bridge,
-				// task tool, RPC idle reports) — argv discovery alone finds
-				// nothing when the maestro is loaded via pi's `packages`
-				// mechanism instead of -e, which left workers as vanilla pi:
-				// they finished their work but could never report back, so
-				// the run hung forever. Then any extra -e extensions the
-				// maestro was launched with, then the childExtensions
-				// passthrough (custom model providers etc).
-				extensionPaths: [
-					...new Set([
-						maestroRoot,
-						...discoverExtensionPaths().map((p) => resolve(p)),
-						...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
-					]),
-				],
-				planDir: join(plansRoot(), activeEngine.get().slug),
+				planDir,
+				token,
+				socketPath,
 				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
-				worktreeSetup: readWorktreeSetupSettings(ctx.cwd),
-				stopGraceMs: readExecutionLifecycleSettings(ctx.cwd).stopGraceMs,
-				resolveWorkerModel: async (choice) => {
-					const resolved = await resolveSpawnModelSafe(ctx, {
-						role: "worker",
-						model: choice.model,
-						effort: choice.effort,
+				// The production spawn: real pi under tmux with persona seed
+				// head, knowledge-forked session file, and crash capture. It
+				// shares the adapter's socket/token so agents dial home.
+				spawnAgent: createLiveSpawnAgent({
+					engine: activeEngine,
+					ctx,
+					tmux: realTmux,
+					planDir,
+					extensionPaths,
+					socketPath,
+					token,
+					...(maestro.capabilities.get(CAPABILITIES.personas)
+						? { personas: maestro.capabilities.get(CAPABILITIES.personas) }
+						: {}),
+				}),
+				// The real ship pipeline: clean-tree preflight → commit-policy
+				// audit → push → PR create/update, with typed failures parking
+				// the node blocked ("shipping failed: …"). The executor
+				// persists prUrl; prNumber lands here.
+				shipNode: async (ship) => {
+					const plan = activeEngine.get();
+					const node = findNodeV2(plan, ship.nodeId);
+					if (!node) throw new Error(`node ${ship.nodeId} not found`);
+					const agentReports = (node.children ?? [])
+						.filter((child) => child.summary)
+						.map((child) => `### ${child.title ?? child.id}\n${child.summary}`);
+					const result = await shipNodeReal({
+						plan,
+						node,
+						worktreePath: ship.worktreePath,
+						...(agentReports.length > 0 ? { agentReports } : {}),
 					});
-					return { modelId: resolved.modelId, effort: resolved.effort };
+					if (!result.ok) {
+						throw new Error(`ship failed (${result.code}): ${result.message}`);
+					}
+					activeEngine.setNodeRuntime(ship.nodeId, {
+						prNumber: result.prNumber,
+					});
+					return result.prUrl;
 				},
-				// New deliverables activate only while autonomous (auto — NOT
-				// hack: there the maestro is the sequential worker and must not
-				// fan out). The adapter outlives mode switches (running workers
+				// Spawn-time model resolution via the inheritance-first
+				// resolver: nodes inherit the maestro session model unless a
+				// tier/policy says otherwise (Phase 4 adds tier routing). The
+				// adapter records the NodeResolution on the ledger.
+				resolveModel: async (node) =>
+					resolveNodeModel(ctx, {
+						node,
+						...(ctx.model
+							? {
+									inherit: {
+										modelId: `${ctx.model.provider}/${ctx.model.id}`,
+									},
+								}
+							: {}),
+					}),
+				// New nodes activate only while autonomous (auto — NOT hack:
+				// there the maestro is the sequential worker and must not fan
+				// out). The adapter outlives mode switches (running workers
 				// must finish and ship), and every plan mutation ticks it —
 				// without this gate a `task add` in plan/recon mode spawns
 				// workers.
@@ -864,34 +937,16 @@ export function createRuntimeContext(
 							.catch(() => {});
 					}
 				},
-				onChildProjection: (ownerId, _ownerGeneration, projection) => {
-					maestro.events.emit(EVENTS.runStatus, {
-						runId: projection.runId,
-						status: projection.status,
-						...(projection.completedAt !== undefined
-							? { completedAt: projection.completedAt }
-							: {}),
-					});
-					rt.hud?.refresh();
-				},
-				onUsageCheckpoint: (checkpoint) => {
-					usageLedger.recordCheckpoint(checkpoint);
-					rt.invalidateFooter?.();
-				},
 				// The settled card (onEvent) is the recap now; onAllSettled
 				// refreshes the footer and clears the agent widget. Research
 				// reports are NOT wiped — they live in the plan dir and stay
 				// dig()-able across arcs (carry-forward advertises exactly that).
-				// Gate disagreements go to the MAESTRO first (triage: one
-				// send-back with guidance, or escalate with a recommendation);
-				// the human decides genuine disagreements. Override still
-				// executes extension-side on the human's answer only.
 				onAllSettled: () => {
 					rt.invalidateFooter?.();
 					rt.hud?.refresh();
-					// The arc is over: every deliverable is terminal. Return to
-					// PLAN mode — the maestro ends the arc standing at the
-					// /handoff doorway (or ready to extend the plan).
+					// The arc is over: every node is terminal. Return to PLAN
+					// mode — the maestro ends the arc standing at the /handoff
+					// doorway (or ready to extend the plan).
 					if (rt.state.mode !== "plan") {
 						rt.setMode("plan", ctx);
 						ctx.ui.notify(
@@ -920,13 +975,14 @@ export function createRuntimeContext(
 			const plan = rt.engine.get();
 			const requested = deliverableId?.trim() || undefined;
 			const requestedDelivery = requested
-				? findDeliverable(plan, requested)
+				? findNodeV2(plan, requested)
 				: undefined;
 			if (requested && !requestedDelivery) {
 				ctx.ui.notify(`Unknown deliverable: ${requested}`, "warning");
 				return;
 			}
-			const recoverable = plan.deliverables.filter((delivery) => {
+			const allNodes = [...walkNodes(plan)].map((visit) => visit.node);
+			const recoverable = allNodes.filter((delivery) => {
 				if (delivery.status === "failed")
 					return delivery.failure?.recoverable === true;
 				if (delivery.status !== "active") return false;
@@ -983,11 +1039,13 @@ export function createRuntimeContext(
 				return;
 			}
 
-			// 1. Reality check: verify only the explicitly selected deliveries.
-			const audit = await auditPlan(plan, {}, selectedIds);
+			// 1. Reality check: recoverInterrupted below revalidates each
+			// selected node's persisted session state before respawn (the v2
+			// executor's audited path); a full workspace audit rides S6's
+			// recovery port.
 			ctx.ui.notify(
-				renderAudit(audit),
-				audit.problems > 0 ? "warning" : "info",
+				`Auditing ${selectedIds.length} deliverable(s): ${selectedIds.join(", ")}`,
+				"info",
 			);
 
 			// 2. Recovery is operational, not a fresh Plan→Auto authorization. It
@@ -1001,10 +1059,10 @@ export function createRuntimeContext(
 				return;
 			}
 
-			for (const delivery of plan.deliverables) {
+			for (const delivery of allNodes) {
 				if (!selectedIds.includes(delivery.id)) continue;
 				if (delivery.status === "failed" && delivery.failure?.recoverable) {
-					rt.engine.setDeliverableStatus(delivery.id, "active");
+					rt.engine.setNodeStatus(delivery.id, "active");
 				}
 			}
 
@@ -1013,12 +1071,12 @@ export function createRuntimeContext(
 			const liveWorkers: string[] = [];
 			for (const [id, state] of rt.execution.getExecutor().getStates()) {
 				if (!selectedIds.includes(id)) continue;
-				const worker = state.agents.get("worker");
-				if (!worker) continue;
+				if (findNodeV2(plan, id)?.agent !== "worker") continue;
 				if (
-					worker.status === "working" ||
-					worker.status === "spawning" ||
-					worker.status === "restarting"
+					state.status === "working" ||
+					state.status === "spawning" ||
+					state.status === "summarizing" ||
+					state.status === "restarting"
 				) {
 					liveWorkers.push(id);
 				}
@@ -1081,28 +1139,14 @@ export function createRuntimeContext(
 		for (const listener of rt.listeners) listener(rt.state.mode, previous);
 	}
 
-	// Resolve the default branch for a deliverable's repo: prefer the
-	// registry's cached value (set at register-repo time), fall back to git
-	// detection, then "main". This avoids the failure when origin/HEAD isn't
-	// configured and the repo's default branch isn't main/master.
-	function _defaultBranchFor(d: Deliverable | null | undefined): string {
-		if (!rt.engine) return "main";
-		const plan = rt.engine.get();
-		const repo = d ? repoFor(plan, d) : undefined;
-		const fromRegistry = repo?.defaultBranch;
-		const result =
-			(fromRegistry || detectDefaultBranch(repo?.path ?? plan.repoPath)) ??
-			"main";
-		// Guard: DEFAULT_REPO_KEY ("default") is a registry key, never a branch.
-		if (result === "default") return "main";
-		return result;
-	}
-
 	return rt;
 }
 
-export function activeDeliverable(plan: { deliverables: Deliverable[] }) {
-	return plan.deliverables.find((g) => g.status === "active");
+export function activeDeliverable(plan: PlanV2): PlanNode | undefined {
+	for (const visit of walkNodes(plan)) {
+		if (visit.node.status === "active") return visit.node;
+	}
+	return undefined;
 }
 
 type Entryish = {

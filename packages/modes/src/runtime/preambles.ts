@@ -2,9 +2,9 @@
 // hack mode, agent workers, and agent compaction guidance.
 
 import type { AgentBridge } from "../agent-bridge.js";
-import type { PlanEngine } from "../engine.js";
 import type { ExecutionHandle } from "../exec/index.js";
 import { buildPlanAwareCompactionMarker } from "../forward-summary.js";
+import type { PlanEngineV2 } from "../plan/engine.js";
 import { buildExecutionPreamble } from "../planning-preamble.js";
 
 export { buildPlanModePreamble } from "../planning-preamble.js";
@@ -54,7 +54,7 @@ structure, or start. Nothing is being built here.
 }
 
 export function buildMaestroPreamble(
-	_engine: PlanEngine | undefined,
+	_engine: PlanEngineV2 | undefined,
 	_execution: ExecutionHandle,
 ): string {
 	if (!_engine) return "";

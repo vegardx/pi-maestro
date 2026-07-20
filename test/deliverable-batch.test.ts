@@ -1,18 +1,18 @@
 // Batched deliverable creation: `deliverable(add, items:[…])` creates many
-// deliverables in ONE tool call, all-or-nothing, with sibling `dependsOn`
+// root nodes in ONE tool call, all-or-nothing, with sibling `dependsOn`
 // refs resolved to the minted ids (two-pass, order-independent).
 
 import { describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import { createDeliverableTool } from "../packages/modes/src/tools.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp/plans",
-		save: (p: Plan) => {
+		save: (p: PlanV2) => {
 			saved = p;
 		},
 		load: () => saved,
@@ -24,8 +24,8 @@ function memStore(): PlanStore {
 	};
 }
 
-function makeEngine(): PlanEngine {
-	return PlanEngine.create(memStore(), {
+function makeEngine(): PlanEngineV2 {
+	return PlanEngineV2.create(memStore(), {
 		slug: "batch-test",
 		title: "Batch Test",
 		repoPath: "/tmp/repo",
@@ -39,7 +39,7 @@ type Res = {
 	};
 };
 
-function run(engine: PlanEngine, params: unknown): Promise<Res> {
+function run(engine: PlanEngineV2, params: unknown): Promise<Res> {
 	const tool = createDeliverableTool({ engine: () => engine });
 	return tool.execute(
 		"t",
@@ -63,15 +63,21 @@ describe("deliverable batch add", () => {
 		});
 		expect(res.details?.error).toBeUndefined();
 		expect(res.details?.deliverables).toHaveLength(3);
-		const ds = engine.get().deliverables;
-		expect(ds.map((d) => d.id)).toEqual(["first", "second", "third-thing"]);
-		expect(ds.map((d) => d.title)).toEqual(["First", "Second", "Third Thing"]);
+		const nodes = engine.get().nodes;
+		expect(nodes.map((n) => n.id)).toEqual(["first", "second", "third-thing"]);
+		expect(nodes.map((n) => n.title)).toEqual([
+			"First",
+			"Second",
+			"Third Thing",
+		]);
 	});
 
-	it("defaults workerMode to full when omitted", async () => {
+	it("defaults to a branch-owning worker node", async () => {
 		const engine = makeEngine();
 		await run(engine, { action: "add", items: [{ id: "a", title: "A" }] });
-		expect(engine.get().deliverables[0].worker.mode).toBe("full");
+		const node = engine.get().nodes[0];
+		expect(node.agent).toBe("worker");
+		expect(node.branch).toBe("feat/a");
 	});
 
 	it("resolves a sibling dependsOn ref to the minted id", async () => {
@@ -83,18 +89,20 @@ describe("deliverable batch add", () => {
 				{ id: "ui", title: "UI", dependsOn: ["api"] },
 			],
 		});
-		const ui = engine.get().deliverables.find((d) => d.id === "ui");
-		expect(ui?.dependsOn).toEqual(["api"]);
+		const ui = engine.get().nodes.find((n) => n.id === "ui");
+		expect(ui?.after).toEqual(["api"]);
 	});
 
-	it("resolves a sibling ref even when the id got a dedup suffix", async () => {
+	it("resolves a sibling ref even when the preferred id was taken", async () => {
 		const engine = makeEngine();
-		engine.addDeliverable({
+		engine.addNode(null, {
 			id: "shared",
+			agent: "worker",
+			persona: "coder",
 			title: "Pre-existing",
-			workerMode: "full",
 		});
-		// Item A reuses the handle "shared" → minted "shared-2"; B depends on it.
+		// Item A reuses the handle "shared" → the engine mints from the title
+		// instead ("new-shared"); B's ref must resolve to that minted id.
 		await run(engine, {
 			action: "add",
 			items: [
@@ -102,23 +110,26 @@ describe("deliverable batch add", () => {
 				{ id: "consumer", title: "Consumer", dependsOn: ["shared"] },
 			],
 		});
-		const minted = engine
-			.get()
-			.deliverables.find((d) => d.title === "New Shared");
-		expect(minted?.id).toBe("shared-2"); // deduped
-		const consumer = engine.get().deliverables.find((d) => d.id === "consumer");
-		expect(consumer?.dependsOn).toEqual(["shared-2"]); // resolved to the sibling
+		const minted = engine.get().nodes.find((n) => n.title === "New Shared");
+		expect(minted?.id).toBe("new-shared"); // deduped via the title
+		const consumer = engine.get().nodes.find((n) => n.id === "consumer");
+		expect(consumer?.after).toEqual(["new-shared"]); // resolved to the sibling
 	});
 
-	it("passes through a ref to a pre-existing (non-batch) deliverable", async () => {
+	it("passes through a ref to a pre-existing (non-batch) node", async () => {
 		const engine = makeEngine();
-		engine.addDeliverable({ id: "base", title: "Base", workerMode: "full" });
+		engine.addNode(null, {
+			id: "base",
+			agent: "worker",
+			persona: "coder",
+			title: "Base",
+		});
 		await run(engine, {
 			action: "add",
 			items: [{ id: "next", title: "Next", dependsOn: ["base"] }],
 		});
-		const next = engine.get().deliverables.find((d) => d.id === "next");
-		expect(next?.dependsOn).toEqual(["base"]); // untouched pass-through
+		const next = engine.get().nodes.find((n) => n.id === "next");
+		expect(next?.after).toEqual(["base"]); // untouched pass-through
 	});
 
 	it("resolves a dependsOn ref to a later sibling (order-independent)", async () => {
@@ -131,8 +142,8 @@ describe("deliverable batch add", () => {
 				{ id: "a", title: "A" },
 			],
 		});
-		const b = engine.get().deliverables.find((d) => d.id === "b");
-		expect(b?.dependsOn).toEqual(["a"]);
+		const b = engine.get().nodes.find((n) => n.id === "b");
+		expect(b?.after).toEqual(["a"]);
 	});
 
 	it("rejects the whole batch when any item lacks a title (all-or-nothing)", async () => {
@@ -145,7 +156,7 @@ describe("deliverable batch add", () => {
 			],
 		});
 		expect(res.details?.error).toContain("title");
-		expect(engine.get().deliverables).toHaveLength(0); // nothing applied
+		expect(engine.get().nodes).toHaveLength(0); // nothing applied
 	});
 
 	it("single-item add still works (no items array)", async () => {
@@ -153,9 +164,8 @@ describe("deliverable batch add", () => {
 		const res = await run(engine, {
 			action: "add",
 			title: "Solo",
-			workerMode: "full",
 		});
 		expect(res.details?.error).toBeUndefined();
-		expect(engine.get().deliverables.map((d) => d.title)).toEqual(["Solo"]);
+		expect(engine.get().nodes.map((n) => n.title)).toEqual(["Solo"]);
 	});
 });

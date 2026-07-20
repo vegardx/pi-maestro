@@ -222,7 +222,7 @@ export async function resolveNodeModel(
  * this at the flip if the pi CLI grows the flag; content is identical.
  */
 export function personaSeedHead(
-	persona: Persona | undefined,
+	persona: Pick<Persona, "prompt" | "skills"> | undefined,
 	nodeSkills: readonly string[],
 ): string {
 	if (!persona) return "";

@@ -1,5 +1,5 @@
 import { redactSecrets } from "@vegardx/pi-core";
-import type { Deliverable } from "./schema.js";
+import type { PlanNode } from "./plan/schema.js";
 import type {
 	AssignmentAnalytics,
 	CanonicalFindingAnalytics,
@@ -18,11 +18,13 @@ export interface PrProvenanceRenderOptions {
 
 /** Render the visible canonical review state followed by bounded audit details. */
 export function renderMaestroPrSection(
-	deliverable: Pick<Deliverable, "id" | "workflowAnalytics">,
+	node: Pick<PlanNode, "id" | "workflowAnalytics">,
 	options: PrProvenanceRenderOptions = {},
 ): string {
 	const maxBytes = options.maxBytes ?? DEFAULT_MAESTRO_SECTION_BYTES;
-	const ledger = deliverable.workflowAnalytics;
+	// PlanNode.workflowAnalytics is `unknown` on the ledger; this module is
+	// the typed boundary (the shipper writes WorkflowAnalyticsLedger here).
+	const ledger = node.workflowAnalytics as WorkflowAnalyticsLedger | undefined;
 	const findings = ledger?.canonicalFindings ?? [];
 	const blocking = findings.filter(
 		(entry) =>

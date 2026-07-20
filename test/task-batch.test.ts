@@ -1,17 +1,17 @@
-// Batched task creation: `task(add, items:[…])` creates many work items in
+// Batched task creation: `task(add, items:[…])` creates many tasks in
 // ONE tool call, all-or-nothing — instead of one add per task.
 
 import { describe, expect, it } from "vitest";
-import { PlanEngine } from "../packages/modes/src/engine.js";
-import type { Plan } from "../packages/modes/src/schema.js";
-import type { PlanStore } from "../packages/modes/src/storage.js";
+import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import { createTaskTool } from "../packages/modes/src/tools.js";
 
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
+function memStore(): PlanStoreV2 {
+	let saved: PlanV2 | null = null;
 	return {
 		root: "/tmp/plans",
-		save: (p: Plan) => {
+		save: (p: PlanV2) => {
 			saved = p;
 		},
 		load: () => saved,
@@ -23,17 +23,17 @@ function memStore(): PlanStore {
 	};
 }
 
-function makeEngine(): PlanEngine {
-	const engine = PlanEngine.create(memStore(), {
+function makeEngine(): PlanEngineV2 {
+	const engine = PlanEngineV2.create(memStore(), {
 		slug: "batch-test",
 		title: "Batch Test",
 		repoPath: "/tmp/repo",
 	});
-	engine.addDeliverable({
+	engine.addNode(null, {
 		id: "d1",
+		agent: "worker",
+		persona: "coder",
 		title: "D1",
-		body: "",
-		workerMode: "full",
 	});
 	return engine;
 }
@@ -45,7 +45,7 @@ type Res = {
 	};
 };
 
-function run(engine: PlanEngine, params: unknown): Promise<Res> {
+function run(engine: PlanEngineV2, params: unknown): Promise<Res> {
 	const tool = createTaskTool({ engine: () => engine });
 	return tool.execute(
 		"t",
@@ -70,7 +70,7 @@ describe("task batch add", () => {
 		});
 		expect(res.details?.error).toBeUndefined();
 		expect(res.details?.workItems).toHaveLength(3);
-		const tasks = engine.get().deliverables[0].tasks;
+		const tasks = engine.get().nodes[0].tasks;
 		expect(tasks.map((t) => t.title)).toEqual(["First", "Second", "Third"]);
 		expect(tasks[0].body).toBe("do a");
 		expect(new Set(tasks.map((t) => t.id)).size).toBe(3); // ids are unique
@@ -84,7 +84,7 @@ describe("task batch add", () => {
 			items: [{ title: "Good" }, { title: "  " }],
 		});
 		expect(res.details?.error).toContain("title");
-		expect(engine.get().deliverables[0].tasks).toHaveLength(0); // nothing applied
+		expect(engine.get().nodes[0].tasks).toHaveLength(0); // nothing applied
 	});
 
 	it("single-item add still works (no items array)", async () => {
@@ -96,9 +96,7 @@ describe("task batch add", () => {
 			body: "just one",
 		});
 		expect(res.details?.error).toBeUndefined();
-		expect(engine.get().deliverables[0].tasks.map((t) => t.title)).toEqual([
-			"Solo",
-		]);
+		expect(engine.get().nodes[0].tasks.map((t) => t.title)).toEqual(["Solo"]);
 	});
 });
 
@@ -159,7 +157,7 @@ describe("task batch add (agent/RPC path)", () => {
 	});
 });
 
-// Models fill optional params with "" or a slug guessed from the deliverable
+// Models fill optional params with "" or a slug guessed from the node
 // title; the authenticated identity must win or every mutation is rejected
 // with "agent may only mutate its own deliverable" and the worker wedges.
 describe("task deliverableId routing (agent/RPC path)", () => {
@@ -189,19 +187,19 @@ describe("task deliverableId routing (agent/RPC path)", () => {
 		).then((res) => ({ res, gIds }));
 	}
 
-	it("routes an empty-string deliverableId to the agent's own deliverable", async () => {
+	it("routes an empty-string deliverableId to the agent's own node", async () => {
 		const { res, gIds } = await toggleWith("");
 		expect(res.details?.error).toBeUndefined();
 		expect(gIds).toEqual(["d1"]);
 	});
 
-	it("routes a guessed wrong slug to the agent's own deliverable", async () => {
+	it("routes a guessed wrong slug to the agent's own node", async () => {
 		const { res, gIds } = await toggleWith("guessed-title-slug");
 		expect(res.details?.error).toBeUndefined();
 		expect(gIds).toEqual(["d1"]);
 	});
 
-	it("routes an omitted deliverableId to the agent's own deliverable", async () => {
+	it("routes an omitted deliverableId to the agent's own node", async () => {
 		const { res, gIds } = await toggleWith(undefined);
 		expect(res.details?.error).toBeUndefined();
 		expect(gIds).toEqual(["d1"]);

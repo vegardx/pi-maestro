@@ -1,17 +1,31 @@
 // Planning preamble for the maestro's plan mode, split by planning phase:
 // EXPLORING (research + clarify until convergence; structure tools locked)
-// and STRUCTURING (form deliverables/tasks/knowledge from what was learned).
+// and STRUCTURING (form the node tree/tasks/knowledge from what was learned).
 
-import type { PlanEngine } from "./engine.js";
-import { planPhase } from "./schema.js";
+import type { PlanEngineV2 } from "./plan/engine.js";
+import type { PlanPhase } from "./plan/schema.js";
+import { type PlanV2, walkNodes } from "./plan/schema.js";
+
+/**
+ * Effective planning phase for a v2 plan. Plans persisted before phases
+ * existed carry no `phase`: treat them as `structuring` when they already
+ * have nodes and `exploring` when empty (v1 planPhase, over the tree).
+ * TODO(v2-flip S8): move to plan/schema.ts when v1 schema.ts is deleted.
+ */
+export function planPhaseV2(plan: Pick<PlanV2, "phase" | "nodes">): PlanPhase {
+	if (plan.phase) return plan.phase;
+	return plan.nodes.length > 0 ? "structuring" : "exploring";
+}
 
 /**
  * Build the plan-mode system preamble for the maestro. Injected on every
  * plan-mode turn; the text tracks the plan's current phase.
  */
-export function buildPlanModePreamble(engine: PlanEngine | undefined): string {
+export function buildPlanModePreamble(
+	engine: PlanEngineV2 | undefined,
+): string {
 	const isNew = !engine || engine.isDraft();
-	const phase = engine ? planPhase(engine.get()) : "exploring";
+	const phase = engine ? planPhaseV2(engine.get()) : "exploring";
 	const header = isNew
 		? "You are in PLAN MODE."
 		: `You are in PLAN MODE updating plan \`${engine.get().slug}\`.`;
@@ -64,7 +78,7 @@ If you can't write that level of detail → you need more research.`;
 function buildExploringPreamble(header: string): string {
 	return `${header} Phase: EXPLORING.
 
-**Do NOT form a plan yet.** The structure tools (deliverable/task/agent/knowledge)
+**Do NOT form a plan yet.** The structure tools (node/task/knowledge)
 are locked. Your job right now is to understand what the user actually wants
 and gather the facts a good plan needs — through conversation and research.
 
@@ -112,12 +126,12 @@ research. Never try to write the plan as text to dodge the gate.
   \`subagent\` with the \`general\` agent — pick model + effort per call
   (\`action: "models"\` lists the ordered delegate pool, availability,
   supported efforts, and spend guidance; omitted choices use its default).
-- Do NOT implement code. Do NOT create deliverables or tasks yet.`;
+- Do NOT implement code. Do NOT create nodes or tasks yet.`;
 }
 
 function buildStructuringPreamble(
 	header: string,
-	engine: PlanEngine | undefined,
+	engine: PlanEngineV2 | undefined,
 ): string {
 	const understanding = engine?.get().understanding;
 	const understandingBlock = understanding
@@ -125,7 +139,7 @@ function buildStructuringPreamble(
 		: "";
 	return `${header} Phase: STRUCTURING — readiness confirmed.
 ${understandingBlock}
-**You MUST use the \`deliverable\`, \`task\`, and \`workflow\` tools to structure work. Do NOT just
+**You MUST use the \`node\` and \`task\` tools to structure work. Do NOT just
 write a plan as text — call the tools to create it in the system.**
 
 Produce tasks so detailed that a simpler model could implement them
@@ -134,41 +148,29 @@ is still available for gaps that surface while structuring.
 
 ## Workflow
 
-1. **Structure** — Call \`deliverable(action="add", items=[{id, title, body, dependsOn}, …])\`
-   ONCE to create ALL deliverables in a single batched call (not one \`add\` per
-   deliverable). Each deliverable = one branch + one PR. Give each an explicit
-   \`id\` and reference those ids in \`dependsOn\` for ordering — sibling refs
-   resolve to the minted ids. List them dependencies-first.
+1. **Structure** — Create ALL top-level nodes in a single batched \`node\` call
+   (not one call per node). A branch-owning worker node = one branch + one PR.
+   Give each an explicit \`id\`, an \`agent\` type + \`persona\`, and reference
+   sibling ids in \`after\` for ordering — list them dependencies-first.
    Work not tied to any repo (creating repos, provisioning infra, ops) is a
-   \`workspace="scratch"\` deliverable: it runs in a plain directory, has no
-   branch or PR, and ships when its review gate passes. If a scratch
-   deliverable creates a repo that later deliverables work in, register it
-   with \`repo(action="add", key="...", path="...", createdBy="<that deliverable>")\`
-   and give the later deliverables \`repo: "<key>"\` plus a \`dependsOn\` on the
-   creator — the DAG then guarantees the repo exists before they start.
-2. **Detail** — Call \`task(action="add", deliverableId="...", items=[{title, body}, …])\`
-   ONCE per deliverable to add ALL its tasks in a single batched call (not one
-   \`add\` per task). Tasks describe WHAT to implement.
-3. **Workflow** — Use \`workflow(action="options")\` to inspect semantic kind
-   summaries, sequencing hints, output contracts, and every exact available
-   model/effort option. Then call \`workflow(action="set", assignments=[…],
-   stages=[…])\` ONCE. Every assignment needs a stable kebab-case id, focused
-   brief, rationale, explicit input/output contracts, and an exact model/effort
-   chosen from the listed options (never invent or silently substitute one).
-   Put independent assignments in the same stage: all members run in parallel
-   against that stage's one immutable \`inputRevision\`. Use \`after\` only
-   between stages; downstream input contracts must be produced by ancestors.
-   Choose \`barrier="workers"\` only for stages containing worker assignments;
-   otherwise use \`barrier="all"\`. Follow each kind's sequencing guidance.
-4. **Legacy support agents** (optional) — Call \`agent(action="add", ...)\` only
-   where execution still needs deliverable-local support agents. Give reviewers
-   \`after: ["worker"]\` explicitly so ordering remains visible.
-5. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
+   BRANCHLESS worker node: it runs in a plain workspace, has no branch or PR,
+   and completes when its tasks are done. If such a node creates a repo that
+   later nodes work in, register it with
+   \`repo(action="add", key="...", path="...", createdBy="<that node>")\`
+   and give the later nodes \`repo: "<key>"\` plus an \`after\` on the
+   creator — the ordering then guarantees the repo exists before they start.
+2. **Detail** — Add ALL of a node's tasks in a single batched \`task\` call
+   (not one call per task). Tasks describe WHAT to implement.
+3. **Review coverage** — Reviewer/explorer work is CHILD NODES: nest them
+   under the worker node they support and give reviewers \`after: ["parent"]\`
+   so ordering remains visible. Model and effort are never authored — they
+   resolve by inheritance at spawn.
+4. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
    document (Project Structure / Key Patterns / Conventions / Key Interfaces).
    Every agent forks from it; execution entry refuses to start without it.
    Distill it from the research reports in the plan directory's research/
    folder plus your confirmed understanding — reference material, not tasks.
-6. **Summary** — Write a brief text summary. End with "Ready to implement."
+5. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ${ASKING}
 
@@ -177,50 +179,49 @@ ${CONVERGENCE}
 ## Rules
 
 - Be concise. No narration, no thinking out loud between tool calls.
-- Each deliverable = one PR. Keep them small and focused.
-- Deliverables with \`dependsOn\` create stacked PRs (B branches from A's tip).
+- Each branch-owning node = one PR. Keep them small and focused.
+- A node whose \`after\` names a branch-owning sibling stacks on it (its
+  branch forks from the dependency's tip); \`base: "default-branch"\` opts out.
 - Do NOT implement code yourself.
-- Worker mode is always "full" (read+write+bash). Support agents are "read-only".
-- Reviewers use their exact configured model-set options. Omit model/effort for
-  the first compatible default; explicit authored values must remain allowed.
-  Raise effort before selecting another model. Duplicate semantic kinds require
-  unique assignment ids and explicit rationale.`;
+- Write access is derived from agent type: worker nodes write,
+  explorer/reviewer nodes are read-only. Never author models or efforts —
+  they inherit.`;
 }
 
 /**
- * Build the execution-mode preamble for the maestro while deliverables are running.
+ * Build the execution-mode preamble for the maestro while nodes are running.
  * Injected when the maestro enters auto mode with an active plan.
  */
-export function buildExecutionPreamble(engine: PlanEngine): string {
+export function buildExecutionPreamble(engine: PlanEngineV2): string {
 	const plan = engine.get();
-	const active = plan.deliverables.filter((g) => g.status === "active");
-	const complete = plan.deliverables.filter((g) => g.status === "complete");
-	const planned = plan.deliverables.filter((g) => g.status === "planned");
+	const byStatus = (status: string) =>
+		[...walkNodes(plan)]
+			.filter((visit) => visit.node.status === status)
+			.map((visit) => visit.node);
+	const active = byStatus("active");
+	const complete = byStatus("complete");
+	const planned = byStatus("planned");
 
-	const deliverableLines = active.map(
-		(g) => `  deliverable:${g.id} — active (worker running)`,
-	);
-	const completeLines = complete.map(
-		(g) => `  deliverable:${g.id} — complete (awaiting ship)`,
-	);
-	const plannedLines = planned.map((g) => `  deliverable:${g.id} — planned`);
+	const allLines = [
+		...active.map((node) => `  node:${node.id} — active (agent running)`),
+		...complete.map((node) => `  node:${node.id} — complete (awaiting ship)`),
+		...planned.map((node) => `  node:${node.id} — planned`),
+	];
 
-	const allLines = [...deliverableLines, ...completeLines, ...plannedLines];
+	return `You are in EXECUTION MODE. The executor is running the plan's nodes.
 
-	return `You are in EXECUTION MODE. The executor is running deliverables.
-
-Deliverables:
+Nodes:
 ${allLines.join("\n") || "  (none)"}
 
 The executor manages agent lifecycle automatically:
-- Activates deliverables when dependencies are met
-- Spawns worker + support agents per the internal DAG
-- Extracts summaries and ships terminal deliverables
+- Activates nodes when their \`after\` dependencies are met
+- Spawns each active node's ready children
+- Extracts summaries and ships branch-owning complete nodes
 
 You can intervene when needed:
 - If a worker is stuck: check its tasks, provide guidance
-- If the user discusses new ideas: propose as a new deliverable with dependencies
-- If scope changes: update planned deliverables (not active ones)
+- If the user discusses new ideas: propose as a new node with \`after\` deps
+- If scope changes: update planned nodes (not active ones)
 
-When all deliverables ship, the plan is complete.`;
+When all nodes ship, the plan is complete.`;
 }

@@ -7,7 +7,7 @@ import { planViewTasks, projectPlanView } from "@vegardx/pi-contracts";
 import { activeResidency, readModelsConfig } from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
-import type { Plan } from "../schema.js";
+import type { PlanV2 } from "../plan/schema.js";
 import type { RuntimeContext } from "./context.js";
 import { hudElapsed } from "./hud.js";
 
@@ -56,7 +56,7 @@ export function installMaestroFooter(
  * depth indents once the v2 tree lands; a flat v1 plan renders identically.
  */
 export function renderAgentsOverview(
-	plan: Plan,
+	plan: PlanV2,
 	execution?: ExecutionHandle,
 ): string {
 	const view = projectPlanView(plan);
@@ -88,10 +88,7 @@ export function renderAgentsOverview(
 		if (node.prUrl) {
 			lines.push(`${indent}  PR: ${node.prUrl}`);
 		}
-		const workerLive = liveSuffix(
-			snap?.agents.get(`${node.id}/worker`),
-			Date.now(),
-		);
+		const workerLive = liveSuffix(snap?.agents.get(node.id), Date.now());
 		if (workerLive) {
 			lines.push(
 				`${indent}  └─ worker (${node.workerMode ?? "full"})${workerLive}`,

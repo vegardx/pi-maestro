@@ -93,4 +93,47 @@ describe("projectPlanView", () => {
 		expect(view?.nodes).toHaveLength(1);
 		expect(view?.nodes[0]).toMatchObject({ id: "ok", tasks: [] });
 	});
+
+	it("projects a v2 recursive tree depth-first with real depth (the flip)", () => {
+		const view = projectPlanView({
+			slug: "v2",
+			nodes: [
+				{
+					id: "build",
+					title: "Build",
+					status: "active",
+					branch: "feat/build",
+					authoredBy: "plan",
+					tasks: [{ id: "t1", title: "impl", done: false }],
+					children: [
+						{
+							id: "cand",
+							title: "Candidate",
+							status: "planned",
+							authoredBy: "build",
+							tasks: [],
+							children: [
+								{
+									id: "probe",
+									title: "Probe",
+									status: "planned",
+									authoredBy: "cand",
+									tasks: [],
+								},
+							],
+						},
+					],
+				},
+				{ id: "docs", title: "Docs", status: "planned", tasks: [] },
+			],
+		});
+		expect(
+			view?.nodes.map((n) => ({ id: n.id, depth: n.depth, by: n.authoredBy })),
+		).toEqual([
+			{ id: "build", depth: 0, by: "plan" },
+			{ id: "cand", depth: 1, by: "build" },
+			{ id: "probe", depth: 2, by: "cand" },
+			{ id: "docs", depth: 0, by: "plan" },
+		]);
+	});
 });

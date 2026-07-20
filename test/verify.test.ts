@@ -1,7 +1,8 @@
 // /verify's deep check: mechanical evidence (commits, diffs, PR diffs) is
-// gathered per started deliverable, a read-only subagent judges the work
+// gathered per started node, a read-only subagent judges the work
 // task by task, and its VERDICT line folds back into a rendered report.
 
+import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import {
 	buildVerifyPrompt,
@@ -11,14 +12,13 @@ import {
 	verifyTargets,
 } from "../packages/modes/src/exec/verify.js";
 import type {
-	Deliverable,
-	Plan,
-	WorkItem,
-} from "../packages/modes/src/schema.js";
+	NodeTask,
+	PlanNode,
+	PlanV2,
+} from "../packages/modes/src/plan/schema.js";
 
-function makeTask(overrides: Partial<WorkItem>): WorkItem {
+function makeTask(overrides: Partial<NodeTask>): NodeTask {
 	return {
-		type: "work-item",
 		id: "t",
 		title: "T",
 		body: "",
@@ -29,15 +29,16 @@ function makeTask(overrides: Partial<WorkItem>): WorkItem {
 	};
 }
 
-function makeDeliverable(overrides: Partial<Deliverable>): Deliverable {
+function makeNode(overrides: Partial<PlanNode>): PlanNode {
 	return {
-		type: "deliverable",
+		type: "node",
 		id: "d",
+		agent: "worker",
+		persona: "coder",
 		title: "D",
 		body: "",
 		status: "planned",
-		worker: { mode: "full" },
-		agents: [],
+		authoredBy: "plan",
 		tasks: [],
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
@@ -45,13 +46,13 @@ function makeDeliverable(overrides: Partial<Deliverable>): Deliverable {
 	};
 }
 
-function makePlan(deliverables: Deliverable[]): Plan {
+function makePlan(nodes: PlanNode[]): PlanV2 {
 	return {
-		schemaVersion: 5,
+		schemaVersion: PLAN_SCHEMA_VERSION_V2,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",
-		deliverables,
+		nodes,
 		createdAt: "2026-01-01",
 		updatedAt: "2026-01-01",
 	};
@@ -90,11 +91,11 @@ const baseDeps = {
 };
 
 describe("verifyTargets", () => {
-	it("selects started deliverables; planned/abandoned are skipped", () => {
+	it("selects started nodes; planned/abandoned are skipped", () => {
 		const plan = makePlan([
-			makeDeliverable({ id: "a", status: "planned" }),
-			makeDeliverable({ id: "b", status: "active" }),
-			makeDeliverable({ id: "c", status: "shipped" }),
+			makeNode({ id: "a", status: "planned" }),
+			makeNode({ id: "b", status: "active" }),
+			makeNode({ id: "c", status: "shipped" }),
 		]);
 		expect(verifyTargets(plan).map((g) => g.id)).toEqual(["b", "c"]);
 		expect(verifyTargets(plan, "c").map((g) => g.id)).toEqual(["c"]);
@@ -105,7 +106,7 @@ describe("verifyTargets", () => {
 
 describe("gatherEvidence", () => {
 	it("complete with zero commits ahead of base is a problem", () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			status: "complete",
 			branch: "feat/auth",
@@ -119,7 +120,7 @@ describe("gatherEvidence", () => {
 	});
 
 	it("shipped prefers the PR diff and flags an empty one", () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			status: "shipped",
 			branch: "feat/auth",
@@ -134,8 +135,8 @@ describe("gatherEvidence", () => {
 		expect(evidence.problems.join(";")).toContain("empty diff");
 	});
 
-	it("missing branch on a complete deliverable means the work does not exist", () => {
-		const g = makeDeliverable({
+	it("missing branch on a complete node means the work does not exist", () => {
+		const g = makeNode({
 			id: "auth",
 			status: "complete",
 			branch: "feat/auth",
@@ -150,11 +151,10 @@ describe("gatherEvidence", () => {
 		expect(evidence.diff).toBeUndefined();
 	});
 
-	it("scratch deliverables inspect the workspace directory, no git", () => {
-		const g = makeDeliverable({
+	it("branchless (scratch) nodes inspect the workspace directory, no git", () => {
+		const g = makeNode({
 			id: "bootstrap",
 			status: "shipped",
-			workspace: "scratch",
 			worktreePath: "/plan/workspaces/bootstrap",
 		});
 		const evidence = gatherEvidence(makePlan([g]), g, {
@@ -167,17 +167,17 @@ describe("gatherEvidence", () => {
 		expect(evidence.problems).toEqual([]);
 	});
 
-	it("stacked deliverables diff against the parent branch, not main", () => {
-		const parent = makeDeliverable({
+	it("stacked nodes diff against the parent branch, not main", () => {
+		const parent = makeNode({
 			id: "base",
 			status: "complete",
 			branch: "feat/base",
 		});
-		const child = makeDeliverable({
+		const child = makeNode({
 			id: "child",
 			status: "complete",
 			branch: "feat/child",
-			dependsOn: ["base"],
+			after: ["base"],
 		});
 		const seen: string[][] = [];
 		gatherEvidence(makePlan([parent, child]), child, {
@@ -195,7 +195,7 @@ describe("gatherEvidence", () => {
 
 describe("buildVerifyPrompt", () => {
 	it("carries tasks, evidence, the diff, and the verdict protocol", () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			title: "Auth",
 			status: "complete",
@@ -221,13 +221,13 @@ describe("buildVerifyPrompt", () => {
 
 describe("runVerification", () => {
 	it("parses pass and block verdicts into entries with findings", async () => {
-		const pass = makeDeliverable({
+		const pass = makeNode({
 			id: "good",
 			status: "shipped",
 			branch: "feat/good",
 			prNumber: 1,
 		});
-		const fail = makeDeliverable({
+		const fail = makeNode({
 			id: "bad",
 			status: "complete",
 			branch: "feat/bad",
@@ -256,7 +256,7 @@ describe("runVerification", () => {
 	});
 
 	it("mechanical dead ends (nothing to inspect) fail without spawning", async () => {
-		const g = makeDeliverable({ id: "gone", status: "complete" });
+		const g = makeNode({ id: "gone", status: "complete", branch: "feat/gone" });
 		const plan = makePlan([g]);
 		const entries = await runVerification(plan, [g], {
 			...baseDeps,
@@ -270,7 +270,7 @@ describe("runVerification", () => {
 	});
 
 	it("a verifier with no report is an error entry, not a silent pass", async () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			status: "complete",
 			branch: "feat/auth",
@@ -288,7 +288,7 @@ describe("runVerification", () => {
 	});
 
 	it("retries once when a verifier succeeds with no final text", async () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			status: "complete",
 			branch: "feat/auth",
@@ -314,7 +314,7 @@ describe("runVerification", () => {
 	});
 
 	it("no verdict line renders as inconclusive", async () => {
-		const g = makeDeliverable({
+		const g = makeNode({
 			id: "auth",
 			status: "complete",
 			branch: "feat/auth",

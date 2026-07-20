@@ -1,26 +1,25 @@
-// Execution seam. Runtime code depends on ExecutionHandle only — never on
-// the concrete adapter — so the execution internals (provisioner, supervisor,
-// rpc-router) can be completed behind this interface.
+// Execution seam (v2, post-flip). Runtime code depends on ExecutionHandle
+// only — never on the concrete adapter — and the flip swapped the
+// implementation to NodeExecutionAdapter over the recursive plan. Agent keys
+// ARE node ids: the v1 `${deliverableId}/${agentName}` compound keys are
+// gone; handle methods keep an ignored agentName parameter so v1 call sites
+// port mechanically.
 
-import type {
-	Answers,
-	InterruptResult,
-	RunId,
-	RunRecord,
-	UsageCheckpoint,
-} from "@vegardx/pi-contracts";
-import type { DeliverableExecutor } from "../deliverable-executor.js";
-import type { PendingQuestion } from "../question-queue.js";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import type { Answers, RunId, RunRecord } from "@vegardx/pi-contracts";
+import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
+import * as realTmux from "@vegardx/pi-tmux";
+import type { PlanEngineV2 } from "../plan/engine.js";
 import {
-	ExecutionAdapter,
-	type ExecutionAdapterOpts,
-} from "./execution-adapter.js";
+	type NodeAdapterOptions,
+	NodeExecutionAdapter,
+} from "../plan/node-adapter.js";
+import type { NodeExecutor } from "../plan/node-executor.js";
+import type { PendingQuestion } from "../question-queue.js";
 
-export {
-	ExecutionAdapter,
-	type ExecutionAdapterOpts,
-	type ExecutionEvent,
-} from "./execution-adapter.js";
+// The v1 event vocabulary lives on the v2 adapter now (verbatim shape).
+export type { ExecutionEvent } from "../plan/node-adapter.js";
 export {
 	type ParsedVerdict,
 	parseVerdict,
@@ -42,129 +41,143 @@ export interface ExecutionAgentTokens {
 export interface ExecutionAgentSnapshot {
 	readonly status: string;
 	readonly startedAt: number;
-	/** Immutable terminal timestamp for done/failed agents. */
 	readonly completedAt?: number;
 	readonly tokens: ExecutionAgentTokens;
-	/** First-turn prefix warmth; distinct from cumulative cache hit rate. */
 	readonly prefixCacheHitRate?: number;
-	/** Short model name for telemetry (e.g. "fable-5"). */
 	readonly model?: string;
-	/** Thinking effort level. */
 	readonly effort?: string;
-	/** True when the model uses adaptive thinking → renders "A/<level>". */
 	readonly adaptive?: boolean;
 }
 
 export interface ExecutionDeliverableSnapshot {
-	/** Set when the deliverable can't proceed (e.g. a blocked ship gate). */
 	readonly blocked?: string;
 }
 
-/**
- * What the runtime needs from execution. Derived from how runtime code uses
- * the adapter today; later phases extend the implementation, not the callers.
- */
+/** What the runtime needs from execution (v1 surface, node-keyed). */
 export interface ExecutionHandle {
-	/** Install the maestro-owned worker debug proposal receiver. */
 	setDebugProposalHandler?(
 		handler: (
 			agentId: string,
-			proposal: import("@vegardx/pi-rpc").DebugProposalMessage,
-		) => Promise<import("@vegardx/pi-rpc").DebugResultMessage>,
+			proposal: DebugProposalMessage,
+		) => Promise<DebugResultMessage>,
 	): void;
-	/** Pending agent questions awaiting a user /answer. */
 	readonly questionQueue: {
 		all(): readonly PendingQuestion[];
-		/** Preserve partial questionnaire progress without resolving the agent. */
 		saveDraft(agentId: string, draft: Answers): void;
-		/** Resolve an agent's entry and dequeue it (never resolve() directly). */
 		answer(agentId: string, answers: Answers): void;
 	};
-	/** Start the RPC server and prepare the plan dir. */
 	start(): Promise<void>;
-	/** Advance the executor; returns the number of newly activated deliverables. */
-	tick(deliverableIds?: readonly string[]): Promise<number>;
-	/** Send guidance to a deliverable agent (default: the worker). False if absent. */
-	steer(deliverableId: string, guidance: string, agentName?: string): boolean;
-	/** Abort only the current turn; the worker process/session/worktree survive. */
+	tick(nodeIds?: readonly string[]): Promise<number>;
+	steer(nodeId: string, guidance: string, agentName?: string): boolean;
 	interrupt?(
-		deliverableId: string,
+		nodeId: string,
 		agentName?: string,
-	): Promise<InterruptResult>;
-	/** Capture a worker tmux pane when available. */
+	): Promise<{ ok: boolean; error?: string }>;
 	capture?(
-		deliverableId: string,
+		nodeId: string,
 		agentName?: string,
 		lines?: number,
 	): Promise<string | undefined>;
-	/** Stop a worker process/session. */
-	stop?(
-		deliverableId: string,
-		agentName?: string,
-		reason?: string,
-	): Promise<boolean>;
-	/** Preview read-only validation for explicit worker replacement. */
+	stop?(nodeId: string, agentName?: string, reason?: string): Promise<boolean>;
 	previewWorkerRestart?(
-		deliverableId: string,
+		nodeId: string,
 		mode: "resume" | "fresh",
-	): import("./execution-adapter.js").WorkerRestartPreview;
-	/** Replace the worker process while retaining its current JSONL. */
+	): ReturnType<NodeExecutionAdapter["previewWorkerRestart"]>;
 	restartWorkerResume?(
-		deliverableId: string,
-	): Promise<import("./execution-adapter.js").WorkerRestartResult>;
-	/** Replace worker process and JSONL while preserving the validated workspace. */
+		nodeId: string,
+	): ReturnType<NodeExecutionAdapter["restartWorker"]>;
 	restartWorkerFresh?(
-		deliverableId: string,
-	): Promise<import("./execution-adapter.js").WorkerRestartResult>;
-	/**
-	 * Kill a worker and park its deliverable in the /recover-able restart
-	 * shape, suppressing the crash-respawn loop. False when nothing to fail.
-	 */
-	forceFailWorker?(deliverableId: string, reason: string): Promise<boolean>;
-	/** Current per-agent status/tokens and per-deliverable round/blocked view. */
+		nodeId: string,
+	): ReturnType<NodeExecutionAdapter["restartWorker"]>;
+	forceFailWorker?(nodeId: string, reason: string): Promise<boolean>;
 	snapshot(): {
 		agents: Map<string, ExecutionAgentSnapshot>;
 		deliverables: Map<string, ExecutionDeliverableSnapshot>;
 	};
-	/** Worker-owned child runs projected durably into the host. */
+	// Projected child runs are deferred post-flip (S5a): the optional
+	// methods keep v1 call sites compiling; absent implementations fall
+	// into their "disconnected" branches at runtime.
 	projectedRuns?(): readonly RunRecord[];
 	steerProjectedRun?(runId: RunId, guidance: string): boolean;
 	interruptProjectedRun?(
 		runId: RunId,
 		reason?: string,
-	): Promise<InterruptResult>;
+	): Promise<{ outcome: string } | undefined>;
 	captureProjectedRun?(
 		runId: RunId,
 		lines?: number,
 	): Promise<string | undefined>;
-	stopProjectedRun?(runId: RunId, reason?: string): boolean;
-	/** Resolve an agent key, deliverable id, agent or session name to a tmux session. */
+	stopProjectedRun?(runId: RunId, reason?: string): Promise<boolean>;
 	resolveSessionName(target: string): string | undefined;
-	/** The underlying executor (for recap/state rendering). */
-	getExecutor(): DeliverableExecutor;
-	/** Mark an agent finished and re-evaluate the deliverable. */
-	markAgentDone(deliverableId: string, name: string): Promise<void>;
-	/** Whether a deliverable's worker has completed all gating tasks. */
-	isWorkerDone(deliverableId: string): boolean;
-	/** Tmux session names for worker agents (for /watch panes). */
+	getExecutor(): NodeExecutor;
+	markAgentDone(nodeId: string, name?: string): Promise<void>;
+	isWorkerDone(nodeId: string): boolean;
 	getWorkerSessions(): string[];
-	/** Freeze scheduling and cooperatively stop the fleet behind one deadline. */
 	prepareStop?(
 		reason?: string,
-	): Promise<import("./execution-adapter.js").ExecutionStopResult>;
-	/** Tear down agents, tmux sessions, and the RPC server. */
+	): Promise<{ stopped: string[]; unresponsive: string[] }>;
 	destroy(): Promise<void>;
 }
 
-export type CreateExecutionOptions = ExecutionAdapterOpts;
-
-export interface AgentUsageCheckpoint {
-	readonly agentId: string;
-	readonly generation: number;
-	readonly checkpoint: UsageCheckpoint;
+export interface CreateExecutionOptions
+	extends Omit<NodeAdapterOptions, "tmux" | "token" | "socketPath"> {
+	readonly tmux?: NodeAdapterOptions["tmux"];
+	readonly token?: string;
+	readonly socketPath?: string;
+	readonly engine: PlanEngineV2;
 }
 
-/** Composition root: build the execution seam for a plan run. */
+/** Composition root: the v2 execution seam for a plan run. */
 export function createExecution(opts: CreateExecutionOptions): ExecutionHandle {
-	return new ExecutionAdapter(opts);
+	const adapter = new NodeExecutionAdapter({
+		...opts,
+		tmux:
+			opts.tmux ??
+			({
+				spawn: async (name: string) => {
+					// The default tmux path spawns a bare shell session; the real
+					// pi-launch command is supplied by the adapter's spawnAgent seam
+					// (session assembly is wired per drive/runtime, not here).
+					await realTmux.spawn(name, process.cwd(), []);
+				},
+				hasSession: (name: string) => realTmux.hasSession(name),
+				kill: (name: string) => realTmux.kill(name),
+				capture: (name: string, lines?: number) =>
+					realTmux.capturePane(name, lines),
+			} as NodeAdapterOptions["tmux"]),
+		token: opts.token ?? randomUUID(),
+		socketPath:
+			opts.socketPath ??
+			join(
+				"/tmp",
+				`maestro-${opts.engine.get().slug.slice(0, 20)}-${process.pid}.sock`,
+			),
+	});
+	const handle: ExecutionHandle = {
+		questionQueue: adapter.questionQueue,
+		start: () => adapter.start(),
+		tick: async (nodeIds) => (await adapter.tick(nodeIds)).length,
+		steer: (nodeId, guidance, agentName) =>
+			adapter.steer(nodeId, guidance, agentName),
+		interrupt: (nodeId, agentName) => adapter.interrupt(nodeId, agentName),
+		capture: (nodeId, agentName, lines) =>
+			adapter.capture(nodeId, agentName, lines),
+		stop: (nodeId, agentName, reason) =>
+			adapter.stop(nodeId, agentName, reason),
+		previewWorkerRestart: (nodeId, mode) =>
+			adapter.previewWorkerRestart(nodeId, mode),
+		restartWorkerResume: (nodeId) => adapter.restartWorker(nodeId, "resume"),
+		restartWorkerFresh: (nodeId) => adapter.restartWorker(nodeId, "fresh"),
+		forceFailWorker: (nodeId, reason) =>
+			adapter.forceFailWorker(nodeId, reason),
+		snapshot: () => adapter.snapshot(),
+		resolveSessionName: (target) => adapter.resolveSessionName(target),
+		getExecutor: () => adapter.getExecutor(),
+		markAgentDone: (nodeId, name) => adapter.markAgentDone(nodeId, name),
+		isWorkerDone: (nodeId) => adapter.isWorkerDone(nodeId),
+		getWorkerSessions: () => adapter.getWorkerSessions(),
+		prepareStop: (reason) => adapter.prepareStop(reason),
+		destroy: () => adapter.destroy(),
+	};
+	return handle;
 }

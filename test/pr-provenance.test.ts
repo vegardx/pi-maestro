@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { PlanNode } from "../packages/modes/src/plan/schema.js";
 import {
 	MAESTRO_PR_BEGIN,
 	MAESTRO_PR_END,
 	renderMaestroPrSection,
 	updateMaestroPrBody,
 } from "../packages/modes/src/pr-provenance.js";
-import type { Deliverable } from "../packages/modes/src/schema.js";
 import type { WorkflowAnalyticsLedger } from "../packages/modes/src/workflow-analytics.js";
 
 const NOW = "2026-01-01T00:00:00.000Z";
@@ -99,26 +99,21 @@ function analytics(
 	};
 }
 
-function deliverable(overrides: Partial<Deliverable> = {}): Deliverable {
+// pr-provenance consumes only the node's id + analytics ledger (v2 vocabulary:
+// Pick<PlanNode, "id" | "workflowAnalytics">).
+function node(
+	overrides: Partial<Pick<PlanNode, "id" | "workflowAnalytics">> = {},
+): Pick<PlanNode, "id" | "workflowAnalytics"> {
 	return {
-		type: "deliverable",
 		id: "delivery",
-		title: "Delivery",
-		body: "Body",
-		status: "complete",
-		worker: { mode: "full" },
-		agents: [],
-		tasks: [],
 		workflowAnalytics: analytics(),
-		createdAt: NOW,
-		updatedAt: NOW,
 		...overrides,
 	};
 }
 
 describe("PR provenance rendering", () => {
 	it("renders canonical table and collapsible assignment/verification evidence", () => {
-		const section = renderMaestroPrSection(deliverable());
+		const section = renderMaestroPrSection(node());
 		expect(section).toContain("**Overall review state:** Approved");
 		expect(section).toContain("| finding-0001 | major |");
 		expect(section).toContain("fixed: remove secret from log");
@@ -139,7 +134,7 @@ describe("PR provenance rendering", () => {
 			evidence: ["x".repeat(500)],
 		}));
 		const section = renderMaestroPrSection(
-			deliverable({
+			node({
 				workflowAnalytics: analytics({ assignments: manyAssignments }),
 			}),
 			{ maxBytes: 2_000 },
@@ -156,7 +151,7 @@ describe("PR provenance rendering", () => {
 		}));
 		expect(() =>
 			renderMaestroPrSection(
-				deliverable({
+				node({
 					workflowAnalytics: analytics({ canonicalFindings: huge }),
 				}),
 				{ maxBytes: 300 },
@@ -167,7 +162,7 @@ describe("PR provenance rendering", () => {
 
 describe("marker-bounded PR updates", () => {
 	it("preserves user text and replaces the owned section idempotently", () => {
-		const first = renderMaestroPrSection(deliverable());
+		const first = renderMaestroPrSection(node());
 		const old = `${MAESTRO_PR_BEGIN}\nold generated content\n${MAESTRO_PR_END}`;
 		const body = `User intro\n\n${old}\n\nUser footer`;
 		const updated = updateMaestroPrBody(body, first);
@@ -178,7 +173,7 @@ describe("marker-bounded PR updates", () => {
 	});
 
 	it("rejects malformed markers and oversized complete bodies", () => {
-		const section = renderMaestroPrSection(deliverable());
+		const section = renderMaestroPrSection(node());
 		expect(() =>
 			updateMaestroPrBody(`${MAESTRO_PR_BEGIN}\nbroken`, section),
 		).toThrow("malformed");

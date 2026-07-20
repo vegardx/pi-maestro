@@ -8,10 +8,11 @@ import { type PolicyRow, validatePolicyRows } from "@vegardx/pi-contracts";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 
 /**
- * Shipped defaults. Currently: the plan→execution boundary reviews (the
- * transition gate reads its row for tier/persona/contract and the
- * kill-switch). Duty and tool rows land WITH their consumers — the
- * command-auditor's LLM rung will bring `tool:bash`.
+ * Shipped defaults — only rows with live consumers: the plan→execution
+ * boundary reviews (the transition gate reads tier/persona/contract and the
+ * kill-switch) and `tool:bash` (the command-auditor's LLM rung on child
+ * agents' unknown commands; deny-only, fail-open). Duty rows land WITH
+ * their consumers.
  */
 export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 	{
@@ -31,6 +32,11 @@ export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 			models: "heavy",
 			contract: "plan-gate-report",
 		},
+	},
+	{
+		on: "tool:bash",
+		scope: { depth: ">=1" },
+		run: { models: "fast", contract: "verdict" },
 	},
 ];
 

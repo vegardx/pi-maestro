@@ -37,3 +37,15 @@ export {
 	residencyError,
 	residencyNames,
 } from "./residency.js";
+export {
+	clampEffort,
+	explainTier,
+	fallbackNotice,
+	type InheritedModel,
+	resolveV2Model,
+	type V2CandidateFact,
+	type V2Resolution,
+	V2ResolutionError,
+	type V2ResolutionRequest,
+	type V2ResolutionSource,
+} from "./v2-resolver.js";

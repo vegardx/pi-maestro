@@ -121,6 +121,8 @@ export interface DomainRegistryInput {
 		readonly sessions?: readonly AgentSessionPolicy[];
 		readonly transports?: readonly AgentTransportPolicy[];
 	};
+	/** Live personas.v1 roster (persona pickers); undefined = unavailable. */
+	readonly personas?: () => readonly { readonly name: string }[] | undefined;
 }
 
 export const DEFAULT_TRANSITION_GATES: readonly TransitionGateConfig[] = [

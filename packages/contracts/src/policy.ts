@@ -52,6 +52,57 @@ export interface PolicyRow {
 	readonly run: PolicyRun;
 }
 
+/** The tool triggers with live consumers on the supervisor bus. */
+export const POLICY_TOOL_TRIGGERS = ["bash", "watch"] as const;
+
+/**
+ * Shipped default rows — only rows with live consumers: the plan→execution
+ * boundary reviews (the transition gate reads tier/persona/contract and the
+ * kill-switch), `tool:bash` (the command-auditor's LLM rung on child agents'
+ * unknown commands; deny-only, fail-open), the live duties (compaction
+ * summariser, /verify read agents), and the watcher's compile/judge calls.
+ * Duty rows land WITH their consumers. Lives in contracts so both the modes
+ * runtime (readPolicyTable) and the settings editor merge against the same
+ * table without a cross-extension import.
+ */
+export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
+	{
+		on: "mode:plan->auto",
+		run: {
+			agent: "reviewer",
+			persona: "plan-review",
+			models: "heavy",
+			contract: "plan-gate-report",
+		},
+	},
+	{
+		on: "mode:plan->hack",
+		run: {
+			agent: "reviewer",
+			persona: "plan-review",
+			models: "heavy",
+			contract: "plan-gate-report",
+		},
+	},
+	{
+		on: "tool:bash",
+		scope: { depth: ">=1" },
+		run: { models: "fast", contract: "verdict" },
+	},
+	{ on: "duty:compact-summarize", run: { models: "fast" } },
+	{ on: "duty:verify-delivery", run: { models: "normal" } },
+	{ on: "tool:watch", run: { models: "fast" } },
+];
+
+/**
+ * The triggers something in the harness actually reads today — exactly the
+ * shipped defaults' triggers. A user row on any other trigger is valid but
+ * inert, and editors say so in plain words.
+ */
+export const CONSUMED_POLICY_TRIGGERS: ReadonlySet<string> = new Set(
+	DEFAULT_POLICY_ROWS.map((row) => row.on),
+);
+
 const RUN_KEYS = new Set([
 	"models",
 	"agent",

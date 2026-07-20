@@ -22,14 +22,26 @@ export default defineExtension(
 		doc: "Settings viewer/editor: /maestro interactive menu + subcommands.",
 	},
 	(pi, maestro) => {
-		let domainRegistry: DomainRegistryInput = {};
+		let registered: DomainRegistryInput = {};
+		// The personas.v1 roster is resolved lazily at menu time — the
+		// subagents extension registers it after boot, and persona pickers
+		// degrade to free text (with a warning) when it is absent.
+		const domainRegistry: DomainRegistryInput = {
+			get kinds() {
+				return registered.kinds;
+			},
+			get runtime() {
+				return registered.runtime;
+			},
+			personas: () => maestro.capabilities.get(CAPABILITIES.personas)?.list(),
+		};
 		// Provide settings.v1 capability for extensions to declare settings
 		maestro.capabilities.register(CAPABILITIES.settings, {
 			declare(extension: string, settings: SettingDeclaration[]) {
 				settingsRegistry.set(extension, settings);
 			},
 			registerAgentConfiguration(input) {
-				domainRegistry = input;
+				registered = input;
 			},
 		});
 

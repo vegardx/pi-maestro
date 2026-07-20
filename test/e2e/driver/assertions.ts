@@ -15,6 +15,9 @@ interface PersistedDeliverable {
 	readonly status: string;
 	readonly prUrl?: string;
 	readonly branch?: string;
+	readonly baseSha?: string;
+	readonly stacked?: boolean;
+	readonly worker?: { readonly model?: string };
 }
 
 interface PersistedPlan {
@@ -45,6 +48,19 @@ export interface DeliverableCheck {
 	readonly shipped: boolean;
 	readonly hasPr: boolean;
 	readonly missingFiles: string[];
+	/**
+	 * Worker model resolution persisted on the plan (fix #250): even a
+	 * deliverable authored without a model must carry the pinned resolution
+	 * after its worker spawned — never re-rolled in memory only.
+	 */
+	readonly modelPinned: boolean;
+	/**
+	 * Stacked-base integrity (fix #249): a stacked deliverable's recorded
+	 * baseSha must NOT lie on the seed main branch — its base is a sibling's
+	 * feat branch tip. The old bug recorded the main checkout's HEAD, which
+	 * always sat on main. True for non-stacked deliverables vacuously.
+	 */
+	readonly baseOk: boolean;
 }
 
 export interface AssertionResult {
@@ -76,10 +92,16 @@ export function assertScenario(
 	const deliverables = plan.deliverables ?? [];
 	const tracked = new Set(gitTrackedFilesAllBranches(repoDir));
 	const checks = scenario.expected.map((exp) =>
-		checkDeliverable(exp, deliverables, tracked),
+		checkDeliverable(exp, deliverables, tracked, repoDir),
 	);
 	const ok = checks.every(
-		(c) => c.matched && c.shipped && c.hasPr && c.missingFiles.length === 0,
+		(c) =>
+			c.matched &&
+			c.shipped &&
+			c.hasPr &&
+			c.missingFiles.length === 0 &&
+			c.modelPinned &&
+			c.baseOk,
 	);
 	return { ok, planFound: true, checks, summary: renderSummary(checks) };
 }
@@ -88,6 +110,7 @@ function checkDeliverable(
 	exp: ExpectedDeliverable,
 	deliverables: PersistedDeliverable[],
 	tracked: Set<string>,
+	repoDir: string,
 ): DeliverableCheck {
 	const match = deliverables.find((d) =>
 		d.title.toLowerCase().includes(exp.titleMatch.toLowerCase()),
@@ -100,7 +123,29 @@ function checkDeliverable(
 		shipped: match ? SHIPPED_STATUSES.has(match.status) : false,
 		hasPr: Boolean(match?.prUrl),
 		missingFiles,
+		modelPinned: Boolean(match?.worker?.model),
+		baseOk: match ? stackedBaseOk(match, repoDir) : false,
 	};
+}
+
+/**
+ * Fix #249's live check: a stacked deliverable's base is the tip of the
+ * branch it stacks on, which contains commits beyond main — so its recorded
+ * baseSha must NOT be reachable from the seed `main`. (PRs are never merged
+ * into the local main during a drive, so main still points at the seed.)
+ */
+function stackedBaseOk(d: PersistedDeliverable, repoDir: string): boolean {
+	if (!d.stacked) return true;
+	if (!d.baseSha) return false;
+	try {
+		execFileSync("git", ["merge-base", "--is-ancestor", d.baseSha, "main"], {
+			cwd: repoDir,
+			stdio: "ignore",
+		});
+		return false; // on main = the old checkout-HEAD bug
+	} catch {
+		return true; // not on main → based on a sibling's branch, as designed
+	}
 }
 
 /** Every path that appears anywhere in the repo's reachable history. */
@@ -128,9 +173,15 @@ function renderSummary(checks: DeliverableCheck[]): string {
 			if (!c.hasPr) parts.push("no PR");
 			if (c.missingFiles.length)
 				parts.push(`missing ${c.missingFiles.join(", ")}`);
-			const mark =
-				c.shipped && c.hasPr && c.missingFiles.length === 0 ? "✓" : "✗";
-			return `${mark} ${c.titleMatch}: ${parts.join("; ")}`;
+			if (!c.modelPinned) parts.push("worker model not pinned on plan");
+			if (!c.baseOk) parts.push("stacked baseSha sits on main (stale base)");
+			const ok =
+				c.shipped &&
+				c.hasPr &&
+				c.missingFiles.length === 0 &&
+				c.modelPinned &&
+				c.baseOk;
+			return `${ok ? "✓" : "✗"} ${c.titleMatch}: ${parts.join("; ")}`;
 		})
 		.join("\n");
 }

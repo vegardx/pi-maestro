@@ -100,6 +100,17 @@ The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really
 serves it end to end.
 
+## Hosted multi-model drive (`--sit-models`)
+
+`start --live --sit-models` is the hosted twin: real radicalai-sit gateway
+models via a generated `models.json` (no provider extension). **Opus 4.8** =
+planner seat + reviews; **GPT 5.6 Sol** = workers + fast tier — cross-family
+review by construction. Uses the developer's live `radicalai-sit` OAuth token
+(refuses to start under 45 min of token life — open pi on a radicalai model
+once to refresh). Burns real tokens; combine with `--local-remote` (the live
+profile now puts the CI `gh` shim on PATH, so ship completes offline against
+the bare remote). Routing is pinned in `test/e2e/driver/sit-profile.test.ts`.
+
 ## Notes
 
 - **Never edit the harness to make the test pass.** The whole point is to run the

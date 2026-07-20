@@ -280,10 +280,10 @@ function planSummary(state: DaemonState): unknown {
 	if (!plan) return { found: false };
 	return {
 		found: true,
-		deliverables: (plan.deliverables ?? []).map((d) => ({
-			title: d.title,
-			status: d.status,
-			prUrl: d.prUrl,
+		deliverables: plan.nodes.map((node) => ({
+			title: node.title,
+			status: node.status,
+			prUrl: node.prUrl,
 		})),
 	};
 }

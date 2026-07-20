@@ -7,22 +7,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+	type PlanView,
+	type PlanViewNode,
+	projectPlanView,
+} from "@vegardx/pi-contracts";
 import type { ExpectedDeliverable, Scenario } from "./scenario.js";
-
-/** A deliverable as persisted in plan.json (only the fields we assert on). */
-interface PersistedDeliverable {
-	readonly title: string;
-	readonly status: string;
-	readonly prUrl?: string;
-	readonly branch?: string;
-	readonly baseSha?: string;
-	readonly stacked?: boolean;
-	readonly worker?: { readonly model?: string };
-}
-
-interface PersistedPlan {
-	readonly deliverables?: PersistedDeliverable[];
-}
 
 /** Statuses that count as "the deliverable landed". */
 const SHIPPED_STATUSES = new Set(["shipped"]);
@@ -31,11 +21,12 @@ export function planJsonPath(piHome: string, slug: string): string {
 	return join(piHome, ".pi", "agent", "maestro", "plans", slug, "plan.json");
 }
 
-export function readPlan(piHome: string, slug: string): PersistedPlan | null {
+/** The plan file IS the state API — read and project it (schema-agnostic). */
+export function readPlan(piHome: string, slug: string): PlanView | null {
 	const path = planJsonPath(piHome, slug);
 	if (!existsSync(path)) return null;
 	try {
-		return JSON.parse(readFileSync(path, "utf8")) as PersistedPlan;
+		return projectPlanView(JSON.parse(readFileSync(path, "utf8"))) ?? null;
 	} catch {
 		return null;
 	}
@@ -89,10 +80,9 @@ export function assertScenario(
 			summary: `plan.json not found for "${scenario.name}" under ${piHome}`,
 		};
 	}
-	const deliverables = plan.deliverables ?? [];
 	const tracked = new Set(gitTrackedFilesAllBranches(repoDir));
 	const checks = scenario.expected.map((exp) =>
-		checkDeliverable(exp, deliverables, tracked, repoDir),
+		checkDeliverable(exp, plan.nodes, tracked, repoDir),
 	);
 	const ok = checks.every(
 		(c) =>
@@ -108,12 +98,12 @@ export function assertScenario(
 
 function checkDeliverable(
 	exp: ExpectedDeliverable,
-	deliverables: PersistedDeliverable[],
+	nodes: readonly PlanViewNode[],
 	tracked: Set<string>,
 	repoDir: string,
 ): DeliverableCheck {
-	const match = deliverables.find((d) =>
-		d.title.toLowerCase().includes(exp.titleMatch.toLowerCase()),
+	const match = nodes.find((node) =>
+		node.title.toLowerCase().includes(exp.titleMatch.toLowerCase()),
 	);
 	const missingFiles = exp.files.filter((f) => !tracked.has(f));
 	return {
@@ -123,7 +113,7 @@ function checkDeliverable(
 		shipped: match ? SHIPPED_STATUSES.has(match.status) : false,
 		hasPr: Boolean(match?.prUrl),
 		missingFiles,
-		modelPinned: Boolean(match?.worker?.model),
+		modelPinned: Boolean(match?.workerModel),
 		baseOk: match ? stackedBaseOk(match, repoDir) : false,
 	};
 }
@@ -134,7 +124,7 @@ function checkDeliverable(
  * baseSha must NOT be reachable from the seed `main`. (PRs are never merged
  * into the local main during a drive, so main still points at the seed.)
  */
-function stackedBaseOk(d: PersistedDeliverable, repoDir: string): boolean {
+function stackedBaseOk(d: PlanViewNode, repoDir: string): boolean {
 	if (!d.stacked) return true;
 	if (!d.baseSha) return false;
 	try {

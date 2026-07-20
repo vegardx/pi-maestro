@@ -3,6 +3,7 @@
 // Presentation only — state lives on the RuntimeContext.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { planViewTasks, projectPlanView } from "@vegardx/pi-contracts";
 import { activeResidency, readModelsConfig } from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter } from "../install-footer.js";
@@ -50,52 +51,59 @@ export function installMaestroFooter(
  * Render the /agents overview: deliverables, task progress, and agent specs. With
  * an execution handle, includes live status/tokens/turns per agent plus the
  * deliverable's fix round and blocked reason.
+ *
+ * Renders from the shared PlanView projection (plan-schema spike PR-1): row
+ * depth indents once the v2 tree lands; a flat v1 plan renders identically.
  */
 export function renderAgentsOverview(
 	plan: Plan,
 	execution?: ExecutionHandle,
 ): string {
+	const view = projectPlanView(plan);
 	const snap = execution?.snapshot();
 	const lines: string[] = [`Plan: ${plan.title} (${plan.slug})`, ""];
-	for (const g of plan.deliverables) {
+	for (const node of view?.nodes ?? []) {
+		const indent = "  ".repeat(node.depth);
 		const icon =
-			g.status === "shipped"
+			node.status === "shipped"
 				? "🚀"
-				: g.status === "active"
+				: node.status === "active"
 					? "●"
-					: g.status === "complete"
+					: node.status === "complete"
 						? "✓"
 						: "○";
-		const deps = g.dependsOn?.length
-			? ` [after: ${g.dependsOn.join(", ")}]`
+		const deps = node.dependsOn.length
+			? ` [after: ${node.dependsOn.join(", ")}]`
 			: "";
-		lines.push(`${icon} ${g.title} (${g.status})${deps}`);
-		const tasks = g.tasks.filter((t) => t.kind === "task");
+		lines.push(`${indent}${icon} ${node.title} (${node.status})${deps}`);
+		const tasks = planViewTasks(node);
 		const done = tasks.filter((t) => t.done).length;
 		if (tasks.length > 0) {
-			lines.push(`  Tasks: ${done}/${tasks.length}`);
+			lines.push(`${indent}  Tasks: ${done}/${tasks.length}`);
 		}
-		const deliverableState = snap?.deliverables.get(g.id);
+		const deliverableState = snap?.deliverables.get(node.id);
 		if (deliverableState?.blocked) {
-			lines.push(`  ⚠ Blocked: ${deliverableState.blocked}`);
+			lines.push(`${indent}  ⚠ Blocked: ${deliverableState.blocked}`);
 		}
-		if (g.prUrl) {
-			lines.push(`  PR: ${g.prUrl}`);
+		if (node.prUrl) {
+			lines.push(`${indent}  PR: ${node.prUrl}`);
 		}
 		const workerLive = liveSuffix(
-			snap?.agents.get(`${g.id}/worker`),
+			snap?.agents.get(`${node.id}/worker`),
 			Date.now(),
 		);
 		if (workerLive) {
-			lines.push(`  └─ worker (${g.worker.mode})${workerLive}`);
+			lines.push(
+				`${indent}  └─ worker (${node.workerMode ?? "full"})${workerLive}`,
+			);
 		}
-		for (const a of g.agents) {
+		for (const agent of node.agents) {
 			const live = liveSuffix(
-				snap?.agents.get(`${g.id}/${a.name}`),
+				snap?.agents.get(`${node.id}/${agent.name}`),
 				Date.now(),
 			);
 			lines.push(
-				`  └─ ${a.name} (${a.mode}${a.after.length ? `, after: ${a.after.join(", ")}` : ""})${live}`,
+				`${indent}  └─ ${agent.name} (${agent.mode ?? "read-only"}${agent.after.length ? `, after: ${agent.after.join(", ")}` : ""})${live}`,
 			);
 		}
 	}

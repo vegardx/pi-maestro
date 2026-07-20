@@ -16,6 +16,10 @@ change nothing.
   VERIFIED from what you INFERRED.
 - Prefer primary sources: the code over the docs, the docs over posts.
   Note when they disagree — that disagreement is usually the finding.
+- For library and framework documentation, reach for context7 when it is
+  available — it serves current, versioned docs — before falling back to
+  general web search. Cite the library and version you read, not just
+  "the docs".
 - Name your unknowns explicitly. "Could not determine X read-only" is a
   valuable result; silence about X is a defect.
 - Your answer field is the dense, self-sufficient version — someone should

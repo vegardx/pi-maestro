@@ -14,12 +14,7 @@
 // ./review.js), and the migrate-on-read helper. The steer-and-retry loop and
 // transport wiring live with the executor (they need RPC machinery).
 
-import { type StructuredFinding, validateStructuredFinding } from "./plan.js";
-import {
-	computedVerdict,
-	parseStructuredFindings,
-	parseVerdict,
-} from "./review.js";
+import { parseStructuredFindings, parseVerdict } from "./review.js";
 
 // ─── Contract ids ────────────────────────────────────────────────────────────
 
@@ -126,9 +121,56 @@ export interface DiffFact {
 
 // ─── findings (reviewer) ─────────────────────────────────────────────────────
 
+/**
+ * A review finding is a NEUTRAL observation: what the code actually does,
+ * where, with what consequence — no severity, no category, no verdict
+ * language. Interpretation belongs to the consumer: the requesting agent
+ * (usually the worker whose diff was reviewed) judges what blocks and what
+ * doesn't. Ratings authored by the reviewer would poison that judgment
+ * (settled in the #254 review, 2026-07-20 — deviates from the contracts
+ * spike, which carried v1's severity field forward).
+ */
+export interface ReviewFinding {
+	readonly id: string;
+	/** What the code actually does — observed, not judged. */
+	readonly actual: string;
+	/** What happens as a consequence — factual mechanism, not a rating. */
+	readonly consequence?: string;
+	readonly file?: string;
+	readonly line?: number;
+	/** The claim under review, when verifying one. */
+	readonly claim?: string;
+	readonly evidence?: readonly string[];
+}
+
+export function validateReviewFinding(value: unknown): string[] {
+	if (typeof value !== "object" || value === null || Array.isArray(value))
+		return ["finding must be an object"];
+	const finding = value as Record<string, unknown>;
+	const errors: string[] = [];
+	if (typeof finding.id !== "string" || finding.id.trim().length === 0)
+		errors.push("finding id is required");
+	if (typeof finding.actual !== "string" || finding.actual.trim().length === 0)
+		errors.push("finding actual (what the code does) is required");
+	if (
+		finding.line !== undefined &&
+		(!Number.isInteger(finding.line) || (finding.line as number) < 1)
+	)
+		errors.push("finding line must be a positive integer");
+	if (
+		finding.evidence !== undefined &&
+		(!Array.isArray(finding.evidence) ||
+			!finding.evidence.every(
+				(item) => typeof item === "string" && item.trim().length > 0,
+			))
+	)
+		errors.push("finding evidence must be an array of non-empty strings");
+	return errors;
+}
+
 export interface FindingsPayload {
-	/** Empty array = clean review. Reuses the shared StructuredFinding. */
-	readonly findings: readonly StructuredFinding[];
+	/** Empty array = clean review (a real result, not an omission). */
+	readonly findings: readonly ReviewFinding[];
 	/** What was actually examined — scope honesty, feeds the verifier. */
 	readonly scope: {
 		readonly reviewed: string;
@@ -136,17 +178,6 @@ export interface FindingsPayload {
 	};
 	/** Short prose wrap-up; the long form lives in `raw`. */
 	readonly summary: string;
-}
-
-/**
- * The reviewer verdict is a PROJECTION of finding severities, never an
- * agent-asserted field — removes the "VERDICT: PASS above a major finding"
- * disagreement class by construction.
- */
-export function findingsVerdict(
-	payload: FindingsPayload,
-): "approve" | "request-changes" {
-	return computedVerdict(payload.findings);
 }
 
 // ─── report (explorer) ───────────────────────────────────────────────────────
@@ -405,8 +436,14 @@ export function validateFindingsPayload(value: unknown): string[] {
 	if (!Array.isArray(value.findings)) errors.push("findings must be an array");
 	else
 		value.findings.forEach((finding, i) => {
-			for (const err of validateStructuredFinding(finding))
+			for (const err of validateReviewFinding(finding))
 				errors.push(`findings[${i}]: ${err}`);
+			// Ratings are rejected, not ignored: a reviewer that writes severity
+			// is trying to pre-judge the consumer's interpretation.
+			if (isRecord(finding) && finding.severity !== undefined)
+				errors.push(
+					`findings[${i}]: severity is not a reviewer's call — report what the code does; the consumer judges`,
+				);
 		});
 	if (!isRecord(value.scope) || !nonEmptyString(value.scope.reviewed))
 		errors.push("scope.reviewed is required");
@@ -519,11 +556,21 @@ function salvageSummaryAndDiff(raw: string): SummaryAndDiffPayload | null {
 }
 
 function salvageFindings(raw: string): FindingsPayload | null {
-	const findings = parseStructuredFindings(raw);
+	const structured = parseStructuredFindings(raw);
 	const verdict = parseVerdict(raw);
 	// A clean approve salvages to an empty findings list; pure silence does not
 	// (a reviewer that said nothing recognizable must not read as "clean").
-	if (findings.length === 0 && verdict.verdict !== "approve") return null;
+	if (structured.length === 0 && verdict.verdict !== "approve") return null;
+	// Legacy output carries severity/category ratings — STRIP them: findings
+	// are neutral observations; interpretation belongs to the consumer.
+	const findings: ReviewFinding[] = structured.map((finding) => ({
+		id: finding.id,
+		actual: finding.actual,
+		...(finding.file ? { file: finding.file } : {}),
+		...(finding.line ? { line: finding.line } : {}),
+		...(finding.claim ? { claim: finding.claim } : {}),
+		...(finding.evidence ? { evidence: finding.evidence } : {}),
+	}));
 	return {
 		findings,
 		scope: { reviewed: "unknown (salvaged from free text)" },
@@ -598,10 +645,11 @@ export const CONTRACT_DEFINITIONS: {
 		instruction:
 			"End your final message with a ```pi-contract fenced JSON block: " +
 			'{ "contract": "findings", "v": 1, "status": "complete", "payload": ' +
-			"{ findings: [{ id, severity: critical|major|minor, category, actual, " +
+			"{ findings: [{ id, actual (what the code does), consequence?, " +
 			"file?, line?, claim?, evidence? }], scope: { reviewed, notReviewed? }, " +
 			"summary } }. An empty findings array means a clean review. Do NOT " +
-			"write a verdict — it is computed from your severities.",
+			"rate severity, categorize, or write verdict language — report what " +
+			"the code does with evidence; interpretation belongs to the consumer.",
 		validate: (value) => validateFindingsPayload(value),
 		salvage: salvageFindings,
 		migrations: [],

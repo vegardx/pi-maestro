@@ -105,7 +105,10 @@ export const ENSEMBLE_METRICS: Scenario = {
 	expected: [
 		{
 			titleMatch: "metrics",
-			files: ["src/metrics.ts", "tests/metrics.test.ts"],
+			files: [
+				"src/metrics.ts|src/metrics.js",
+				"tests/metrics.test.ts|tests/metrics.test.js",
+			],
 		},
 	],
 };

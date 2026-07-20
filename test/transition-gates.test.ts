@@ -255,4 +255,50 @@ describe("policy-row wiring (Phase 4)", () => {
 		expect(engine.get().transitionGates?.at(-1)?.status).toBe("settled");
 		expect(commit).toHaveBeenCalledOnce();
 	});
+
+	it("falls back to the runner's own selection when the tier override is rejected", async () => {
+		const { engine, now } = fixture();
+		let mode: "plan" | "auto" = "plan";
+		const commit = vi.fn((next: "auto") => {
+			mode = next;
+		});
+		const cap = agents();
+		const originalRun = cap.run as unknown as (
+			request: unknown,
+		) => Promise<unknown>;
+		let calls = 0;
+		(cap as { run: unknown }).run = vi.fn(
+			async (request: { model?: string }) => {
+				calls += 1;
+				if (calls === 1 && request.model)
+					throw new Error("No exact plan-review option matches the override");
+				return originalRun(request);
+			},
+		);
+		const ask = {
+			ask: vi.fn(async (questions) => [
+				{ questionId: questions[0]!.id, value: "enter-without" },
+			]),
+		} as unknown as AskCapabilityV1;
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => mode,
+				commit: commit as never,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+				policyRow: (on) => ({ on, run: { models: "heavy" } }),
+				resolveTierModel: async () => ({ model: "sit-openai/gpt-5.6-sol" }),
+			},
+		);
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(true);
+		expect(calls).toBe(2);
+		// Second call carried no override — the runner's own selection ran.
+		expect(
+			(cap.run as ReturnType<typeof vi.fn>).mock.calls[1]?.[0]?.model,
+		).toBeUndefined();
+		expect(commit).toHaveBeenCalledOnce();
+	});
 });

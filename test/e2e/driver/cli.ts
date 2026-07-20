@@ -302,7 +302,7 @@ async function pickBehavior(
 }
 
 function planSummary(state: DaemonState): unknown {
-	const plan = readPlan(state.profile.piHome, SANDBOX_FEATURES.name);
+	const plan = readPlan(state.profile.piHome, state.scenario.name);
 	if (!plan) return { found: false };
 	return {
 		found: true,

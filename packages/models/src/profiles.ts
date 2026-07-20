@@ -137,11 +137,20 @@ function extractPreset(raw: unknown): ParsedPreset | undefined {
 function extractModels(raw: unknown): ParsedModels | undefined {
 	if (!isPlainObject(raw) || !isPlainObject(raw.models)) return undefined;
 	const root = raw.models;
-	// Full cutover: old `models.profiles` and role-pool leaves are unsupported.
-	if (Object.hasOwn(root, "profiles")) {
-		throw new Error(
-			"Unsupported model configuration: models.profiles was removed; use models.presets and models.modelSets",
-		);
+	// `models.profiles` now hosts v2 seat→catalog bindings ({ catalog, targets? }
+	// — parsed by catalog.ts, invisible here). The PRE-CUTOVER profile format
+	// (role-pool leaves) is still unsupported: any entry without a catalog
+	// binding gets the guidance error, so ancient configs stay loud instead of
+	// parsing as garbage.
+	if (isPlainObject(root.profiles)) {
+		for (const value of Object.values(root.profiles)) {
+			if (value === null || value === undefined) continue;
+			if (!isPlainObject(value) || !nonEmpty(value.catalog)) {
+				throw new Error(
+					"Unsupported model configuration: pre-cutover models.profiles entries were removed; use models.presets and models.modelSets (v2 profiles carry a catalog reference)",
+				);
+			}
+		}
 	}
 	// null entries are deletion markers (older writers stored null instead
 	// of removing the key) — skip them so one deleted entry can never make

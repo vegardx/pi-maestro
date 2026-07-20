@@ -10,12 +10,15 @@ import {
 	getSessionSettingOverride,
 	MODEL_ROLES,
 	setSessionSettingOverride,
+	TIER_IDS,
+	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
 	activeResidency,
 	isResidencyOff,
 	RESIDENCY_OFF,
 	readModelsConfig,
+	readV2Config,
 	residencyError,
 	residencyNames,
 } from "@vegardx/pi-models";
@@ -115,6 +118,7 @@ export async function showConfigMenu(
 	while (true) {
 		const snapshot = readDomainSnapshot(ctx, registry);
 		const config = safeModelsConfig(ctx);
+		const v2 = safeV2Config(ctx);
 		const choice = await ui.select(
 			`Maestro configuration — preset: ${snapshot.activePreset ?? "session fallback"}`,
 			[
@@ -124,6 +128,11 @@ export async function showConfigMenu(
 				`Agent kinds (${snapshot.kinds.length})`,
 				`Runtime policies (${snapshot.runtimePolicies.length})`,
 				`Transition gates (${snapshot.gates.length})`,
+				...(v2
+					? [
+							`v2 catalogs (${Object.keys(v2.catalogs).length}) — preview, read-only`,
+						]
+					: []),
 				"Summary",
 			],
 		);
@@ -137,8 +146,62 @@ export async function showConfigMenu(
 			await browsePolicies(ctx, ui, registry);
 		else if (choice.startsWith("Transition gates"))
 			await browseGates(ctx, ui, registry);
+		else if (choice.startsWith("v2 catalogs")) notifyV2Preview(ctx, v2);
 		else notifySummary(ctx, readDomainSnapshot(ctx, registry));
 	}
+}
+
+function safeV2Config(ctx: ExtensionContext): V2ModelsConfig | undefined {
+	try {
+		return readV2Config(ctx.cwd);
+	} catch (cause) {
+		ctx.ui.notify(
+			`v2 model config could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+			"warning",
+		);
+		return undefined;
+	}
+}
+
+/** Read-only render of the v2 slice: catalogs, profiles, agent tiers.
+ *  Editing flows arrive with the v2 resolver; scripted writes work today
+ *  (/maestro set models.catalog.<name> …). */
+function notifyV2Preview(
+	ctx: ExtensionContext,
+	v2: V2ModelsConfig | undefined,
+): void {
+	if (!v2) return;
+	const lines: string[] = ["v2 model configuration (preview — read-only)"];
+	for (const [name, tiers] of Object.entries(v2.catalogs)) {
+		lines.push(`catalog ${name}:`);
+		for (const tier of TIER_IDS) {
+			const entries = tiers[tier];
+			if (entries.length === 0) continue;
+			lines.push(
+				`  ${tier}: ${entries
+					.map(
+						(entry) =>
+							`${entry.model}${entry.effort ? `@${entry.effort}` : ""}${entry.family ? ` (${entry.family})` : ""}`,
+					)
+					.join(" · ")}`,
+			);
+		}
+	}
+	for (const [name, profile] of Object.entries(v2.profiles)) {
+		lines.push(
+			`profile ${name}: → ${profile.catalog}${
+				profile.targets?.length
+					? ` (targets: ${profile.targets.join(", ")})`
+					: " (default — no targets)"
+			}`,
+		);
+	}
+	lines.push(
+		`agent tiers: ${Object.entries(v2.agents)
+			.map(([agent, tiers]) => `${agent} → ${tiers.models.join("/")}`)
+			.join(" · ")}`,
+	);
+	ctx.ui.notify(lines.join("\n"), "info");
 }
 
 function safeModelsConfig(ctx: ExtensionContext) {

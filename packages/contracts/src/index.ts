@@ -6,6 +6,7 @@
 export * from "./agents.js";
 export * from "./ask.js";
 export * from "./capabilities.js";
+export * from "./catalog.js";
 export * from "./compaction.js";
 export * from "./contracts.js";
 export * from "./events.js";

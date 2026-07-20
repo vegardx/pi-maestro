@@ -17,6 +17,10 @@ import {
 	MODEL_ROLES,
 	type ModelRole,
 	type SessionSettingValue,
+	SPAWNABLE_AGENT_TYPES,
+	type SpawnableAgentType,
+	TIER_IDS,
+	type TierId,
 } from "@vegardx/pi-contracts";
 import {
 	activePreset,
@@ -268,6 +272,51 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 			]);
 		}
 	}
+	// v2: whole-catalog writes ({ fast?: [...], normal?: [...], heavy?: [...] }).
+	if (parts[0] === "models" && parts[1] === "catalog" && parts.length === 3) {
+		if (!isPlainObject(value)) return ["catalog must be an object"];
+		const errors: string[] = [];
+		for (const [tier, entries] of Object.entries(value)) {
+			if (!TIER_IDS.includes(tier as TierId)) {
+				errors.push(`unknown tier ${tier} (tiers are ${TIER_IDS.join(", ")})`);
+				continue;
+			}
+			if (entries === null) continue; // tier deletion marker
+			if (!Array.isArray(entries)) {
+				errors.push(`${tier} must be an array`);
+				continue;
+			}
+			entries.forEach((entry, index) => {
+				if (!isPlainObject(entry) || !nonEmpty(entry.model))
+					errors.push(`${tier}[${index}].model is required`);
+				else if (!String(entry.model).includes("/"))
+					errors.push(
+						`${tier}[${index}].model must be a concrete provider/model ref`,
+					);
+				if (
+					isPlainObject(entry) &&
+					entry.effort !== undefined &&
+					!THINKING.has(entry.effort as string)
+				)
+					errors.push(`${tier}[${index}].effort is unsupported`);
+			});
+		}
+		return errors;
+	}
+	// v2: whole-profile writes ({ catalog, targets? }).
+	if (parts[0] === "models" && parts[1] === "profiles" && parts.length === 3) {
+		if (!isPlainObject(value)) return ["profile must be an object"];
+		const errors: string[] = [];
+		if (!nonEmpty(value.catalog))
+			errors.push("profile catalog reference is required");
+		if (value.targets !== undefined) {
+			if (!strings(value.targets))
+				errors.push("profile targets must be a string array");
+			else if (value.targets.some((entry) => !entry.includes("/")))
+				errors.push("profile targets must be exact provider/model ids");
+		}
+		return errors;
+	}
 	if (parts[0] === "models" && parts[1] === "residency") {
 		if (parts.length === 3 && parts[2] === "active") {
 			return nonEmpty(value)
@@ -281,6 +330,25 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 				? []
 				: ["residency list requires a non-empty pattern array"];
 		}
+	}
+	// v2: per-agent-type tier allowlists (agents.worker.models = ["normal","heavy"]).
+	if (
+		parts[0] === "agents" &&
+		SPAWNABLE_AGENT_TYPES.includes(parts[1] as SpawnableAgentType) &&
+		parts.length === 3 &&
+		parts[2] === "models"
+	) {
+		if (
+			!strings(value) ||
+			value.length === 0 ||
+			value.some((tier) => !TIER_IDS.includes(tier as TierId))
+		)
+			return [
+				`agent tier allowlist must be a non-empty array of ${TIER_IDS.join("|")}`,
+			];
+		if (new Set(value).size !== value.length)
+			return ["agent tier allowlist entries must be unique"];
+		return [];
 	}
 	if (parts[0] === "agents" && parts[1] === "kinds" && parts.length === 4) {
 		if (!AGENT_KINDS.includes(parts[2] as AgentKind))
@@ -750,7 +818,13 @@ export function writeDomainValue(
 			: JSON.stringify(parsed);
 	const errors = validateDomainEdit(ctx, key, scope, serialized, registry);
 	if (errors.length) return errors;
-	if (key.startsWith("models.") && scope !== "session") {
+	// v2 agent tier allowlists live in the raw settings root (next to
+	// models.*) so readV2Config sees them — unlike kind bindings, which stay
+	// in the maestro extension config.
+	const rawSettingsKey =
+		key.startsWith("models.") ||
+		/^agents\.(worker|explorer|reviewer)\.models$/.test(key);
+	if (rawSettingsKey && scope !== "session") {
 		updateSettingsFile(scope, ctx.cwd, undefined, (root) =>
 			setObjectPath(root, key.split("."), parsed),
 		);

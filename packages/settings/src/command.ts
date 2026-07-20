@@ -262,6 +262,8 @@ export function getSettingsCompletions(
 		parts.find((part) => !part.startsWith("--") && part !== sub) ?? "";
 	return [
 		...declaredSettingKeys(),
+		"models.catalogs.",
+		"models.profiles.",
 		"models.modelSets.",
 		"models.presets.",
 		"models.residency.",

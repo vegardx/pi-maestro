@@ -174,8 +174,13 @@ function extractV2(raw: unknown): ParsedV2 | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	const models = isPlainObject(raw.models) ? raw.models : undefined;
 	const catalogs: Record<string, CatalogTiers> = {};
-	if (models && isPlainObject(models.catalog)) {
-		for (const [name, value] of Object.entries(models.catalog)) {
+	// Canonical key is `models.catalogs` (what the v1→v2 migration writes and
+	// the editor edits); `models.catalog` is the legacy spelling from the
+	// first config-slice PR — still read, with `catalogs` winning per name.
+	for (const key of ["catalog", "catalogs"] as const) {
+		const container = models?.[key];
+		if (!isPlainObject(container)) continue;
+		for (const [name, value] of Object.entries(container)) {
 			if (value === null || value === undefined) continue;
 			catalogs[name] = extractCatalog(value, name);
 		}
@@ -191,8 +196,13 @@ function extractV2(raw: unknown): ParsedV2 | undefined {
 		}
 	}
 	const agents: Partial<Record<SpawnableAgentType, AgentTierConfig>> = {};
-	if (isPlainObject(raw.agents)) {
-		for (const [name, value] of Object.entries(raw.agents)) {
+	// Canonical key is `models.agents.<type>.models`; the root-level
+	// `agents.<type>.models` spelling is legacy — still read, models.agents
+	// winning per type.
+	const agentContainers = [raw.agents, models?.agents];
+	for (const container of agentContainers) {
+		if (!isPlainObject(container)) continue;
+		for (const [name, value] of Object.entries(container)) {
 			if (!AGENT_SET.has(name)) continue; // kinds/runtimePolicies live here too
 			if (value === null || value === undefined) continue;
 			const tiers = extractAgentTiers(value, name);
@@ -235,16 +245,18 @@ export function validateV2Config(config: V2ModelsConfig): void {
 }
 
 /**
- * Read the merged v2 slice. Returns undefined when nothing v2 is configured
- * — v1 keeps driving resolution either way until the v2 resolver lands.
+ * Parse + merge + validate the v2 slice from two raw settings objects
+ * (global, project — project winning per key). Exported so the /maestro
+ * editor can validate a CANDIDATE global settings object before any byte is
+ * written: an invalid v2 state is unwriteable, never write-then-warn.
+ * Throws with the offending name; returns undefined when nothing v2 exists.
  */
-export function readV2Config(
-	cwd: string,
-	agentDir?: string,
+export function parseV2Settings(
+	globalRaw: unknown,
+	projectRaw: unknown,
 ): V2ModelsConfig | undefined {
-	const manager = SettingsManager.create(cwd, agentDir);
-	const global = extractV2(manager.getGlobalSettings() as unknown);
-	const project = extractV2(manager.getProjectSettings() as unknown);
+	const global = extractV2(globalRaw);
+	const project = extractV2(projectRaw);
 	if (!global && !project) return undefined;
 	const config: V2ModelsConfig = {
 		catalogs: { ...global?.catalogs, ...project?.catalogs },
@@ -257,6 +269,21 @@ export function readV2Config(
 	};
 	validateV2Config(config);
 	return config;
+}
+
+/**
+ * Read the merged v2 slice. Returns undefined when nothing v2 is configured
+ * — v1 keeps driving resolution either way until the v2 resolver lands.
+ */
+export function readV2Config(
+	cwd: string,
+	agentDir?: string,
+): V2ModelsConfig | undefined {
+	const manager = SettingsManager.create(cwd, agentDir);
+	return parseV2Settings(
+		manager.getGlobalSettings() as unknown,
+		manager.getProjectSettings() as unknown,
+	);
 }
 
 /**

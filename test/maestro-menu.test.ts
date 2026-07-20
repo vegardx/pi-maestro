@@ -94,7 +94,19 @@ function menuCtx(
 		model: { provider: "prov", id: "main-model" },
 		modelRegistry: {
 			getAll: () => registryModels,
-			find: () => undefined,
+			// Only prov/* models are "in the registry" for availability facts;
+			// other/big-model exercises the "not in registry" word.
+			find: (provider: string, id: string) =>
+				provider === "prov"
+					? registryModels.find(
+							(model) => model.provider === provider && model.id === id,
+						)
+					: undefined,
+			getApiKeyAndHeaders: async () => ({
+				ok: true,
+				apiKey: "key",
+				headers: {},
+			}),
 		},
 		ui: {
 			select: async (title: string, options: string[]) => {
@@ -339,6 +351,185 @@ describe("/maestro interactive editor", () => {
 		expect(
 			notes.some((note) => note.includes("pre-cutover models.profiles")),
 		).toBe(true);
+	});
+
+	it("lists profiles and catalogs with the active marker and availability words", async () => {
+		// v2 config lives in GLOBAL settings (where the menu writes); the
+		// project file keeps no residency so both entries pass the filter.
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				models: {
+					catalogs: {
+						daily: {
+							fast: [
+								{ model: "prov/fast-model" },
+								{ model: "other/big-model" },
+							],
+						},
+					},
+					profiles: {
+						main: { targets: ["prov/main-model"], catalog: "daily" },
+					},
+				},
+			}),
+		);
+		const { ctx, selects } = menuCtx([
+			"Profiles and catalogs (1 profile(s), 1 catalog(s))",
+			"catalog daily — 2 entries",
+			"fast — 2 entries: 1 available, 1 not in registry",
+			undefined, // Esc tier page
+			undefined, // Esc catalog page
+			undefined, // Esc profiles/catalogs page
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		const top = selects.find((s) =>
+			s.title.startsWith("Profiles and catalogs"),
+		);
+		expect(top?.title).toContain("active profile: main");
+		expect(top?.options).toContain(
+			"profile main (active) → daily · targets: prov/main-model",
+		);
+		expect(top?.options).toContain("catalog daily — 2 entries");
+		const catalogPage = selects.find((s) =>
+			s.title.startsWith("Catalog daily"),
+		);
+		expect(catalogPage?.title).toContain("bound by main");
+		expect(catalogPage?.options).toContain(
+			"fast — 2 entries: 1 available, 1 not in registry",
+		);
+		expect(catalogPage?.options).toContain("normal — empty");
+		const tierPage = selects.find((s) =>
+			s.title.startsWith("Catalog daily · fast"),
+		);
+		expect(tierPage?.options).toContain("prov/fast-model — available");
+		expect(tierPage?.options).toContain("other/big-model — not in registry");
+	});
+
+	it("adds catalog entries through the residency- and auth-filtered browser", async () => {
+		writeFileSync(
+			join(cwd, ".pi", "settings.json"),
+			JSON.stringify({
+				models: {
+					residency: {
+						active: "EEA",
+						lists: { EEA: ["prov/fast-model", "prov/main-model"] },
+					},
+				},
+			}),
+		);
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				models: {
+					catalogs: { daily: { fast: [{ model: "prov/fast-model" }] } },
+				},
+			}),
+		);
+		const { ctx, selects } = menuCtx([
+			"Profiles and catalogs (0 profile(s), 1 catalog(s))",
+			"catalog daily — 1 entry",
+			"fast — 1 entry: 1 available",
+			"+ Add models…",
+			"prov — 1 of 2 in fast",
+			"✗ main-model", // toggle ON — one validated write
+			undefined, // Esc model toggles
+			undefined, // Esc provider picker
+			undefined, // Esc tier page
+			undefined, // Esc catalog page
+			undefined, // Esc profiles/catalogs page
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		// other/* is outside the residency list — its provider is not offered.
+		const providerPage = selects.find((s) =>
+			s.title.includes("which provider?"),
+		);
+		expect(providerPage?.options).toEqual(["prov — 1 of 2 in fast"]);
+		const written = agentSettings() as {
+			models?: {
+				catalogs?: { daily?: { fast?: { model: string }[] } };
+			};
+		};
+		expect(written.models?.catalogs?.daily?.fast).toEqual([
+			{ model: "prov/fast-model" },
+			{ model: "prov/main-model" },
+		]);
+	});
+
+	it("sets effort, family, and notes on a catalog entry", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				models: {
+					catalogs: { daily: { fast: [{ model: "prov/fast-model" }] } },
+				},
+			}),
+		);
+		const { ctx } = menuCtx(
+			[
+				"Profiles and catalogs (0 profile(s), 1 catalog(s))",
+				"catalog daily — 1 entry",
+				"fast — 1 entry: 1 available",
+				"prov/fast-model — available",
+				"Effort: model default — change…",
+				"low",
+				"Family: not set — change…",
+				"Notes: not set — change…",
+				undefined, // Esc entry page
+				undefined, // Esc tier page
+				undefined, // Esc catalog page
+				undefined, // Esc profiles/catalogs page
+				undefined, // Esc top level
+			],
+			["anthropic", "fast sweeps"],
+		);
+		await showConfigMenu(ctx);
+		const written = agentSettings() as {
+			models?: { catalogs?: { daily?: { fast?: unknown[] } } };
+		};
+		expect(written.models?.catalogs?.daily?.fast?.[0]).toEqual({
+			model: "prov/fast-model",
+			effort: "low",
+			family: "anthropic",
+			notes: "fast sweeps",
+		});
+	});
+
+	it("an invalid v2 state is unwriteable and shows the validator message", async () => {
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
+		writeFileSync(
+			join(cwd, ".agent", "settings.json"),
+			JSON.stringify({
+				models: {
+					catalogs: { daily: { fast: [{ model: "prov/fast-model" }] } },
+					profiles: { main: { catalog: "daily" } },
+				},
+			}),
+		);
+		const { ctx, notes } = menuCtx([
+			"Profiles and catalogs (1 profile(s), 1 catalog(s))",
+			"catalog daily — 1 entry",
+			"✕ Delete catalog daily…", // confirm answers true
+			undefined, // Esc catalog page
+			undefined, // Esc profiles/catalogs page
+			undefined, // Esc top level
+		]);
+		await showConfigMenu(ctx);
+		expect(
+			notes.some((note) =>
+				note.includes(
+					"Not written: Profile main references unknown catalog daily",
+				),
+			),
+		).toBe(true);
+		const written = agentSettings() as {
+			models?: { catalogs?: Record<string, unknown> };
+		};
+		expect(written.models?.catalogs?.daily).toBeDefined();
 	});
 
 	it("falls back to the notify summary without a select UI", async () => {

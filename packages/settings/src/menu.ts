@@ -10,7 +10,6 @@ import {
 	getSessionSettingOverride,
 	MODEL_ROLES,
 	setSessionSettingOverride,
-	TIER_IDS,
 	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
@@ -27,6 +26,14 @@ import {
 	readDomainSnapshot,
 	writeDomainValue,
 } from "./domain.js";
+import { browseProfilesCatalogs } from "./menu-catalogs.js";
+import {
+	DELETE_MARK,
+	type Dialogs,
+	dialogs,
+	modelsByProvider,
+	pickModelRef,
+} from "./menu-shared.js";
 import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 
 export function getSessionSetting(extension: string, key: string) {
@@ -42,30 +49,6 @@ export function setSessionSetting(
 }
 
 type Snapshot = ReturnType<typeof readDomainSnapshot>;
-type SelectFn = (
-	title: string,
-	options: string[],
-) => Promise<string | undefined>;
-type InputFn = (
-	title: string,
-	placeholder?: string,
-) => Promise<string | undefined>;
-type ConfirmFn = (title: string, message: string) => Promise<boolean>;
-
-interface Dialogs {
-	readonly select: SelectFn;
-	readonly input?: InputFn;
-	readonly confirm?: ConfirmFn;
-}
-
-function dialogs(ctx: ExtensionContext): Dialogs | undefined {
-	if (!ctx.hasUI || !ctx.ui.select) return undefined;
-	return {
-		select: ctx.ui.select.bind(ctx.ui) as SelectFn,
-		input: ctx.ui.input?.bind(ctx.ui) as InputFn | undefined,
-		confirm: ctx.ui.confirm?.bind(ctx.ui) as ConfirmFn | undefined,
-	};
-}
 
 const AUTO_EFFORT = "auto — the planner chooses";
 const EFFORTS = [
@@ -122,22 +105,20 @@ export async function showConfigMenu(
 		const choice = await ui.select(
 			`Maestro configuration — preset: ${snapshot.activePreset ?? "session fallback"}`,
 			[
+				`Profiles and catalogs (${Object.keys(v2?.profiles ?? {}).length} profile(s), ${Object.keys(v2?.catalogs ?? {}).length} catalog(s))`,
 				`Model sets (${snapshot.modelSets.length})`,
 				`Presets (${snapshot.presets.length})`,
 				`Residency (${config?.residency ? activeResidency(config) : "not configured"})`,
 				`Agent kinds (${snapshot.kinds.length})`,
 				`Runtime policies (${snapshot.runtimePolicies.length})`,
 				`Transition gates (${snapshot.gates.length})`,
-				...(v2
-					? [
-							`v2 catalogs (${Object.keys(v2.catalogs).length}) — preview, read-only`,
-						]
-					: []),
 				"Summary",
 			],
 		);
 		if (!choice) return;
-		if (choice.startsWith("Model sets")) await browseModelSets(ctx, ui);
+		if (choice.startsWith("Profiles and catalogs"))
+			await browseProfilesCatalogs(ctx, ui);
+		else if (choice.startsWith("Model sets")) await browseModelSets(ctx, ui);
 		else if (choice.startsWith("Presets")) await browsePresets(ctx, ui);
 		else if (choice.startsWith("Residency")) await browseResidency(ctx);
 		else if (choice.startsWith("Agent kinds"))
@@ -146,7 +127,6 @@ export async function showConfigMenu(
 			await browsePolicies(ctx, ui, registry);
 		else if (choice.startsWith("Transition gates"))
 			await browseGates(ctx, ui, registry);
-		else if (choice.startsWith("v2 catalogs")) notifyV2Preview(ctx, v2);
 		else notifySummary(ctx, readDomainSnapshot(ctx, registry));
 	}
 }
@@ -161,47 +141,6 @@ function safeV2Config(ctx: ExtensionContext): V2ModelsConfig | undefined {
 		);
 		return undefined;
 	}
-}
-
-/** Read-only render of the v2 slice: catalogs, profiles, agent tiers.
- *  Editing flows arrive with the v2 resolver; scripted writes work today
- *  (/maestro set models.catalog.<name> …). */
-function notifyV2Preview(
-	ctx: ExtensionContext,
-	v2: V2ModelsConfig | undefined,
-): void {
-	if (!v2) return;
-	const lines: string[] = ["v2 model configuration (preview — read-only)"];
-	for (const [name, tiers] of Object.entries(v2.catalogs)) {
-		lines.push(`catalog ${name}:`);
-		for (const tier of TIER_IDS) {
-			const entries = tiers[tier];
-			if (entries.length === 0) continue;
-			lines.push(
-				`  ${tier}: ${entries
-					.map(
-						(entry) =>
-							`${entry.model}${entry.effort ? `@${entry.effort}` : ""}${entry.family ? ` (${entry.family})` : ""}`,
-					)
-					.join(" · ")}`,
-			);
-		}
-	}
-	for (const [name, profile] of Object.entries(v2.profiles)) {
-		lines.push(
-			`profile ${name}: → ${profile.catalog}${
-				profile.targets?.length
-					? ` (targets: ${profile.targets.join(", ")})`
-					: " (default — no targets)"
-			}`,
-		);
-	}
-	lines.push(
-		`agent tiers: ${Object.entries(v2.agents)
-			.map(([agent, tiers]) => `${agent} → ${tiers.models.join("/")}`)
-			.join(" · ")}`,
-	);
-	ctx.ui.notify(lines.join("\n"), "info");
 }
 
 function safeModelsConfig(ctx: ExtensionContext) {
@@ -249,7 +188,6 @@ function usedByDetail(usedBy: readonly string[]): string[] {
 }
 const REMOVE_OPTION = "− Remove option…";
 const NEW_SET = "+ New model set…";
-const DELETE_MARK = "✕ Delete";
 
 /** Toggle-select a subset of thinking levels; undefined = no limit. */
 async function pickEffortLimits(
@@ -282,50 +220,6 @@ async function pickEffortLimits(
 		else chosen.add(level);
 	}
 	return chosen.size ? levels.filter((level) => chosen.has(level)) : undefined;
-}
-
-/**
- * Pick a model ref via the registry: [session →] provider → model, with a
- * manual-entry escape hatch for models pi has not cached yet. Preset
- * targets pass allowSession:false — a target is the concrete model the
- * live /model choice is matched against.
- */
-async function pickModelRef(
-	ctx: ExtensionContext,
-	ui: Dialogs,
-	opts: { allowSession?: boolean } = {},
-): Promise<string | undefined> {
-	const SESSION_ENTRY = "session — the live session model";
-	const MANUAL_ENTRY = "Type a ref manually… (provider/model)";
-	const allowSession = opts.allowSession ?? true;
-	const providers = await modelsByProvider(ctx);
-	while (true) {
-		const picked = await ui.select(
-			allowSession ? "Model for this option" : "Model — which provider?",
-			[
-				...(allowSession ? [SESSION_ENTRY] : []),
-				...[...providers.entries()].map(
-					([provider, ids]) => `${provider} — ${ids.length} model(s)`,
-				),
-				MANUAL_ENTRY,
-			],
-		);
-		if (!picked) return undefined;
-		if (picked === SESSION_ENTRY) return "session";
-		if (picked === MANUAL_ENTRY) {
-			if (!ui.input) return undefined;
-			const typed = (
-				await ui.input("Model ref (provider/model)", "provider/model")
-			)?.trim();
-			if (typed) return typed;
-			continue;
-		}
-		const provider = picked.split(" ")[0];
-		const ids = providers.get(provider) ?? [];
-		const id = await ui.select(`${provider} — which model?`, ids);
-		if (id) return `${provider}/${id}`;
-		// Esc from the model list returns to the provider picker.
-	}
 }
 
 /**
@@ -619,72 +513,6 @@ async function editRoleMappings(
 const NEW_LIST = "+ New list…";
 const EDIT_MODELS = "Edit models by provider…";
 const RENAME_LIST = "Rename…";
-
-/** All registry models grouped by provider (the same catalog /model shows). */
-async function modelsByProvider(
-	ctx: ExtensionContext,
-): Promise<Map<string, string[]>> {
-	const registry = ctx.modelRegistry as unknown as {
-		getAll?: () => { provider: string; id: string }[];
-		getApiKeyAndHeaders?: (model: {
-			provider: string;
-			id: string;
-		}) => Promise<{ ok: boolean }>;
-	};
-	const grouped = new Map<string, string[]>();
-	const firstModel = new Map<string, { provider: string; id: string }>();
-	for (const model of registry.getAll?.() ?? []) {
-		const bucket = grouped.get(model.provider) ?? [];
-		bucket.push(model.id);
-		grouped.set(model.provider, bucket);
-		if (!firstModel.has(model.provider)) firstModel.set(model.provider, model);
-	}
-	// Only CONFIGURED providers — pi's built-in catalog knows about far
-	// more providers than this install uses. getProviderAuthStatus is the
-	// authoritative signal (getApiKeyAndHeaders answers ok:true for KNOWN
-	// providers even with no credential, which is why an ok-probe filtered
-	// nothing). Async credential probe is the fallback for older surfaces;
-	// if everything filters out, show all rather than none.
-	const authStatus = (
-		ctx.modelRegistry as unknown as {
-			getProviderAuthStatus?: (provider: string) => { configured: boolean };
-		}
-	).getProviderAuthStatus;
-	const configured = new Set<string>();
-	if (authStatus) {
-		for (const provider of grouped.keys()) {
-			try {
-				if (authStatus.call(ctx.modelRegistry, provider).configured)
-					configured.add(provider);
-			} catch {
-				// unknown to the status surface — treated as unconfigured
-			}
-		}
-	} else if (registry.getApiKeyAndHeaders) {
-		const probes = await Promise.all(
-			[...firstModel.entries()].map(async ([provider, model]) => {
-				try {
-					const auth = (await registry.getApiKeyAndHeaders?.(model)) as
-						| { ok: boolean; apiKey?: string; headers?: Record<string, string> }
-						| undefined;
-					const hasCredential = Boolean(
-						auth?.ok && (auth.apiKey || Object.keys(auth.headers ?? {}).length),
-					);
-					return { provider, ok: hasCredential };
-				} catch {
-					return { provider, ok: false };
-				}
-			}),
-		);
-		for (const probe of probes) if (probe.ok) configured.add(probe.provider);
-	}
-	if (configured.size > 0) {
-		for (const provider of [...grouped.keys()])
-			if (!configured.has(provider)) grouped.delete(provider);
-	}
-	for (const bucket of grouped.values()) bucket.sort();
-	return new Map([...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)));
-}
 
 /**
  * Residency editor: pick the active list, and curate the lists themselves —

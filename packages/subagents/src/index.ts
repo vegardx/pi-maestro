@@ -85,6 +85,17 @@ export {
 export { runsRoot } from "./paths.js";
 export { persistRunBus } from "./persist.js";
 export {
+	bundledPersonasDir,
+	CONTRACTS_BY_AGENT,
+	type LoadPersonasOptions,
+	loadPersonas,
+	type Persona,
+	type PersonaRegistry,
+	type PersonaSource,
+	parsePersonaFrontmatter,
+	personasForAgent,
+} from "./personas.js";
+export {
 	BUILTIN_PROFILES,
 	type ProfileDefaults,
 	type ResolvedProfile,

@@ -488,7 +488,16 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		if (rt.state.mode === "plan" || rt.state.mode === "recon") {
 			// Recon drafts never gain deliverables, so finalize is a no-op there
 			// unless research force-materialized the plan dir.
-			if (rt.state.mode === "plan") rt.finalizeDraftPlan(ctx);
+			//
+			// Name BEFORE finalize: this hook is where a draft materializes, and
+			// once it has, naming would mean renaming a directory the store, the
+			// usage ledger and the active-plan pointer all key off. Both are
+			// no-ops until deliverables exist, so this fires exactly once — on
+			// the turn the plan first gains nodes.
+			if (rt.state.mode === "plan") {
+				await rt.nameDraftFromModel(ctx);
+				rt.finalizeDraftPlan(ctx);
+			}
 			rt.askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;
 		}

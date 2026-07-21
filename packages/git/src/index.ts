@@ -12,6 +12,12 @@ export {
 	rebaseOnto,
 } from "./branch.js";
 export {
+	type GitIdentity,
+	gitIdentityEnv,
+	missingIdentityMessage,
+	resolveGitIdentity,
+} from "./identity.js";
+export {
 	currentBranch,
 	detectDefaultBranch,
 	gitToplevel,

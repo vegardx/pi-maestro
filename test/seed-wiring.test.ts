@@ -5,6 +5,7 @@
 // the pi command omits --model only for cache-warm fresh spawns; stale tmux
 // sessions are reaped before launch; and the PI_MAESTRO_* env is wired.
 
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -124,6 +125,15 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 		planDir = join(tmpDir, "plan");
 		worktree = join(tmpDir, "wt");
 		mkdirSync(worktree, { recursive: true });
+		// A configured developer: writing agents refuse to spawn without an
+		// identity to commit as, rather than inventing one (see git-identity).
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: tmpDir });
+		execFileSync("git", ["config", "user.name", "Fixture Dev"], {
+			cwd: tmpDir,
+		});
+		execFileSync("git", ["config", "user.email", "dev@fixture.test"], {
+			cwd: tmpDir,
+		});
 		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
 

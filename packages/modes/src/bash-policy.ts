@@ -19,6 +19,7 @@ export type BashEffect =
 	| "privileged"
 	| "destructive"
 	| "host-config-write"
+	| "git-identity-write"
 	| "unknown";
 export type BashRoute =
 	| "direct"
@@ -50,7 +51,8 @@ export interface BashPolicyDecision {
 		| "delivery"
 		| "worker-escalation"
 		| "read-only"
-		| "host-config";
+		| "host-config"
+		| "git-identity";
 }
 
 const HOST_READ = new Set([
@@ -389,6 +391,19 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 			invariant: "read-only",
 		};
 	}
+	if (effects.has("git-identity-write") && input.actor !== "maestro") {
+		return {
+			...base,
+			route: "deny",
+			reason:
+				"Your commit identity is already provided by the harness " +
+				"(GIT_AUTHOR_*/GIT_COMMITTER_* in your environment) — commit " +
+				"without setting it. A worktree has no config of its own, so " +
+				"this would rewrite the developer's shared repository config.",
+			confidence: "high",
+			invariant: "git-identity",
+		};
+	}
 	if (effects.has("host-config-write")) {
 		if (input.actor !== "maestro") {
 			return {
@@ -396,8 +411,8 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 				route: "deny",
 				reason:
 					"Global git-config writes land in the developer's real HOME " +
-					"(agents share it). Set identity or options REPO-LOCALLY " +
-					"(`git config user.name ...` in your worktree) or ask.",
+					"(agents share it). Identity is already in your environment; " +
+					"for anything else, ask.",
 				confidence: "high",
 				invariant: "host-config",
 			};
@@ -582,8 +597,7 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 	if (subcommand === "config") {
 		// Global/system/file-addressed config writes land in the DEVELOPER'S
 		// real HOME (spawned agents share it) — the incident that motivated
-		// this rule overwrote the machine-global git identity. Repo-local
-		// config is ordinary worktree state.
+		// this rule overwrote the machine-global git identity.
 		if (
 			args.some(
 				(arg) =>
@@ -594,6 +608,11 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 			)
 		) {
 			effects.add("host-config-write");
+		} else if (writesIdentityKey(args)) {
+			// A linked worktree has no config of its own: this write lands in
+			// the SHARED <repo>/.git/config and re-authors the developer's own
+			// checkout. Not worktree-local state, whatever the cwd suggests.
+			effects.add("git-identity-write");
 		} else {
 			effects.add("local-git");
 			effects.add("workspace-write");
@@ -614,6 +633,36 @@ function classifyGit(args: readonly string[], effects: Set<BashEffect>): void {
 		)
 			effects.add("destructive");
 	} else effects.add("unknown");
+}
+
+/** Read forms of `git config` — these inspect, they don't set. */
+const GIT_CONFIG_READ_FLAGS = new Set([
+	"--get",
+	"--get-all",
+	"--get-regexp",
+	"--get-urlmatch",
+	"--list",
+	"-l",
+	"--edit",
+	"-e",
+]);
+
+/**
+ * True when `git config` SETS or UNSETS a `user.*` key: an identity write.
+ * A set is the key plus a value; `--unset`/`--replace-all` count regardless.
+ */
+function writesIdentityKey(args: readonly string[]): boolean {
+	if (args.some((arg) => GIT_CONFIG_READ_FLAGS.has(arg))) return false;
+	const positional = args
+		.slice(args.indexOf("config") + 1)
+		.filter((arg) => !arg.startsWith("-"))
+		.map((arg) => arg.replace(/^['"]|['"]$/g, ""));
+	const key = positional[0];
+	if (!key || !/^user\./i.test(key)) return false;
+	const unsetting = args.some(
+		(arg) => arg === "--unset" || arg === "--unset-all",
+	);
+	return unsetting || positional.length >= 2;
 }
 
 /** Args that address the developer's real git config (shared HOME). */
@@ -900,6 +949,7 @@ export interface BashRulesetRow {
 	readonly id:
 		| "delivery"
 		| "host-config"
+		| "git-identity"
 		| "read-only"
 		| "worker-escalation"
 		| "tool-redirect";
@@ -926,9 +976,20 @@ export const BASH_RULESET: readonly BashRulesetRow[] = [
 		rule:
 			"Never write machine-global git config: no `git config --global` " +
 			"or `--system` or `--file`, no edits to `~/.gitconfig` or " +
-			"`~/.config/git/*`. Need an identity or option? Set it " +
-			"REPO-LOCALLY (`git config user.name ...` inside your worktree).",
+			"`~/.config/git/*`.",
 		why: "Agents share the developer's real HOME; a global write pollutes their machine.",
+	},
+	{
+		id: "git-identity",
+		applies: ["worker", "reviewer"],
+		rule:
+			"Never set `user.name` or `user.email` anywhere — not globally, and " +
+			"not in your worktree. Your commit identity is already in your " +
+			"environment (GIT_AUTHOR_*/GIT_COMMITTER_*); just commit. If git " +
+			"still asks who you are, say so instead of configuring it.",
+		why:
+			"A linked worktree has no config of its own — a write there lands " +
+			"in the developer's shared repository config and re-authors their checkout.",
 	},
 	{
 		id: "read-only",

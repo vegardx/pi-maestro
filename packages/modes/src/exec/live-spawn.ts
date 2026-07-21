@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PersonasCapabilityV1 } from "@vegardx/pi-contracts";
+import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { type BashActor, renderBashRuleset } from "../bash-policy.js";
 import { AGENT_OPERATIONS_BRIEF } from "../plan/agent-operations.js";
 import type { PlanEngineV2 } from "../plan/engine.js";
@@ -189,6 +190,17 @@ export function createLiveSpawnAgent(
 				? undefined
 				: spawn.model;
 
+		// Identity preflight: resolve what the DEVELOPER configured and carry it
+		// as env. Workers may not set it themselves — a worktree shares the
+		// repo config, so an agent "fixing" this would re-author the developer's
+		// checkout (which is exactly how `Test <test@example.com>` got in).
+		// Writing agents fail loudly here rather than committing as a guess.
+		const identityRepo = plan.repoPath ?? cwd;
+		const gitIdentity = resolveGitIdentity(identityRepo) ?? undefined;
+		if (!gitIdentity && spawn.mode === "full") {
+			throw new Error(missingIdentityMessage(identityRepo));
+		}
+
 		try {
 			mkdirSync(join(wiring.planDir, "crashes"), { recursive: true });
 		} catch {}
@@ -209,6 +221,7 @@ export function createLiveSpawnAgent(
 				sessionDir: agentSessionDir,
 				token: wiring.token,
 				planDir: wiring.planDir,
+				...(gitIdentity ? { gitIdentity } : {}),
 			},
 			kickoffMessage,
 			crashFile: join(wiring.planDir, "crashes", `${sessionName}.log`),

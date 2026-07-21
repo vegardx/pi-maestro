@@ -19,7 +19,7 @@ describe("auditor prompt", () => {
 			effects: ["unknown"],
 		});
 		expect(prompt).toContain("Shell rules (enforced by the harness)");
-		expect(prompt).toContain("REPO-LOCALLY");
+		expect(prompt).toContain("GIT_AUTHOR_");
 		expect(prompt).toContain("./mystery-script.sh --now");
 		expect(prompt).toContain('"verdict":"allow"|"deny"|"escalate"');
 	});

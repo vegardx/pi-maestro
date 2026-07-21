@@ -582,12 +582,59 @@ describe("host git-config protection (Phase 4 rule 1)", () => {
 		}
 	});
 
-	it("repo-local git config stays ordinary worktree state", () => {
+	it("non-identity repo-local git config stays ordinary worktree state", () => {
 		const effects = classifyBashEffects(
-			analyzeShellProgram('git config user.name "Worker"'),
+			analyzeShellProgram("git config core.editor vim"),
 		);
 		expect(effects.has("host-config-write")).toBe(false);
+		expect(effects.has("git-identity-write")).toBe(false);
 		expect(effects.has("local-git")).toBe(true);
+	});
+
+	// A linked worktree has NO config of its own: `git config user.email x`
+	// run inside one writes the shared <repo>/.git/config. The old rule called
+	// this "ordinary worktree state" and the ruleset told agents to do it —
+	// which is how `Test <test@example.com>` ended up authoring this repo.
+	it("identity writes are their own effect, wherever they run", () => {
+		for (const command of [
+			'git config user.name "Maestro Agent"',
+			"git config user.email agent@invented",
+			"git config --unset user.email",
+			'git config --replace-all user.name "X"',
+		]) {
+			expect(
+				classifyBashEffects(analyzeShellProgram(command)).has(
+					"git-identity-write",
+				),
+				command,
+			).toBe(true);
+		}
+		// Reading identity is not writing it.
+		for (const command of [
+			"git config --get user.email",
+			"git config --list",
+		]) {
+			expect(
+				classifyBashEffects(analyzeShellProgram(command)).has(
+					"git-identity-write",
+				),
+				command,
+			).toBe(false);
+		}
+	});
+
+	it("denies agent identity writes and points at the provided env", () => {
+		for (const actor of ["worker", "reviewer"] as const) {
+			const decision = decideBashPolicy({
+				command: 'git config user.email "agent@invented"',
+				mode: "auto",
+				actor,
+				policy: guided,
+			});
+			expect(decision.route, actor).toBe("deny");
+			expect(decision.invariant).toBe("git-identity");
+			expect(decision.reason).toContain("GIT_AUTHOR_");
+		}
 	});
 
 	it("non-git writes addressing the global config files are caught", () => {
@@ -620,7 +667,8 @@ describe("host git-config protection (Phase 4 rule 1)", () => {
 			});
 			expect(decision.route, actor).toBe("deny");
 			expect(decision.invariant).toBe("host-config");
-			expect(decision.reason).toContain("REPO-LOCALLY");
+			// The deny must NOT redirect them to a repo-local identity write.
+			expect(decision.reason).not.toContain("REPO-LOCALLY");
 		}
 		const maestro = decideBashPolicy({
 			command: 'git config --global user.name "Me"',
@@ -638,6 +686,7 @@ describe("the visible bash ruleset (one source of truth)", () => {
 		const enforced = new Set([
 			"delivery",
 			"host-config",
+			"git-identity",
 			"read-only",
 			"worker-escalation",
 			"tool-redirect",
@@ -653,7 +702,7 @@ describe("the visible bash ruleset (one source of truth)", () => {
 	it("renders actor-scoped rules for seeds", () => {
 		const worker = renderBashRuleset("worker");
 		expect(worker).toContain("Shell rules (enforced by the harness)");
-		expect(worker).toContain("REPO-LOCALLY");
+		expect(worker).toContain("GIT_AUTHOR_");
 		expect(worker).toContain("remote-write, privileged, or destructive");
 		expect(worker).not.toContain("You are read-only");
 

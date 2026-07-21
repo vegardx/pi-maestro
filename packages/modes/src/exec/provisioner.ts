@@ -17,7 +17,12 @@ import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { EXECUTION_STATE_SCHEMA_VERSION } from "@vegardx/pi-contracts";
-import { addWorktree, worktreePathFor } from "@vegardx/pi-git";
+import {
+	addWorktree,
+	type GitIdentity,
+	gitIdentityEnv,
+	worktreePathFor,
+} from "@vegardx/pi-git";
 import { deliverableBranch } from "../agent-lifecycle.js";
 import {
 	AGENT_CONTEXT_ENTRY,
@@ -337,6 +342,14 @@ export interface SpawnEnv {
 	 * the `dig` tool's report source (they have no plan engine of their own).
 	 */
 	planDir: string;
+	/**
+	 * The developer's own committer identity, resolved by the maestro. Passed
+	 * as environment rather than written as config: a linked worktree shares
+	 * `<repo>/.git/config`, so "setting it locally" would re-author the
+	 * developer's checkout. Absent only where the caller has already surfaced
+	 * that no identity is configured.
+	 */
+	gitIdentity?: GitIdentity;
 }
 
 export interface BuildSpawnSpecOpts {
@@ -427,6 +440,7 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 			: {}),
 		PI_CODING_AGENT_DIR: opts.env.agentDir ?? defaultAgentDir(),
 		PI_CODING_AGENT_SESSION_DIR: opts.env.sessionDir,
+		...(opts.env.gitIdentity ? gitIdentityEnv(opts.env.gitIdentity) : {}),
 	};
 	if (process.env.PATH) env.PATH = process.env.PATH;
 	if (process.env.HOME) env.HOME = process.env.HOME;

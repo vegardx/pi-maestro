@@ -611,6 +611,7 @@ export class PlanEngineV2 {
 				| "baseSha"
 				| "baseBranch"
 				| "stacked"
+				| "blocked"
 				| "lastReviewedHead"
 				| "worktreePath"
 				| "worktreeReapedAt"

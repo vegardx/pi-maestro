@@ -379,6 +379,66 @@ describe("shipping", () => {
 		});
 	});
 
+	// A live drive sat dead for twenty minutes on this: the identity preflight
+	// threw inside spawnAgent, activation caught it into IN-MEMORY run state
+	// only, and the ledger still said `active`. No session, no crash file, no
+	// notice — `/plan` looked perfectly healthy while nothing was running.
+	it("persists and announces why a node could not activate", async () => {
+		const engine = makeEngine();
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Build",
+			branch: "feat/build",
+			tasks: ["implement"],
+		});
+		const blocked: Array<{ nodeId: string; reason: string }> = [];
+		const failing = deps();
+		failing.spawnAgent = async () => {
+			throw new Error("no git identity is configured");
+		};
+		failing.onNodeBlocked = (nodeId, reason) =>
+			blocked.push({ nodeId, reason });
+
+		await new NodeExecutor(engine, failing).tick();
+
+		const node = findNodeV2(engine.get(), "build");
+		expect(node?.blocked).toContain("no git identity is configured");
+		expect(node?.blocked).toContain("/start build");
+		expect(blocked).toEqual([
+			{ nodeId: "build", reason: expect.stringContaining("activation failed") },
+		]);
+	});
+
+	it("parks a blocked node instead of respawning it every tick", async () => {
+		const engine = makeEngine();
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Build",
+			branch: "feat/build",
+			tasks: ["implement"],
+		});
+		let attempts = 0;
+		const failing = deps();
+		failing.spawnAgent = async () => {
+			attempts += 1;
+			throw new Error("no git identity is configured");
+		};
+		const executor = new NodeExecutor(engine, failing);
+
+		await executor.tick();
+		await executor.tick();
+		await executor.tick();
+
+		// One attempt, not one per tick: a node whose cause needs operator
+		// action must not burn a spawn (and real money) on every poll.
+		expect(attempts).toBe(1);
+		expect(findNodeV2(engine.get(), "build")?.blocked).toContain(
+			"no git identity",
+		);
+	});
+
 	it("provisions without a stamp when the base sha cannot be resolved", async () => {
 		const engine = makeEngine();
 		engine.addNode(null, {

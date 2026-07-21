@@ -130,6 +130,7 @@ export interface NodeAdapterOptions {
 	readonly onPlanChanged: () => void;
 	readonly onQuestionsReceived?: (nodeId: string) => void;
 	readonly canActivate?: () => boolean;
+	readonly onNodeBlocked?: NodeExecutorDeps["onNodeBlocked"];
 	readonly defaultBranch?: string;
 	readonly dirtyHoldMaxSteers?: number;
 	readonly dirtyHoldResteerMs?: number;
@@ -348,6 +349,7 @@ export class NodeExecutionAdapter {
 				: {}),
 			defaultBranch: opts.defaultBranch,
 			canActivate: opts.canActivate,
+			...(opts.onNodeBlocked ? { onNodeBlocked: opts.onNodeBlocked } : {}),
 			now: () => new Date().toISOString(),
 		});
 	}

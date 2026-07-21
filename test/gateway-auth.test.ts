@@ -46,7 +46,8 @@ function stubTokenEndpoint(
 
 describe("the driver's credential store", () => {
 	it("lives beside the driver, not in the developer's pi agent dir", () => {
-		expect(credentialPath()).toContain(join("e2e", "driver", ".auth"));
+		// Redirected by vitest.setup.ts — these helpers delete real files.
+		expect(credentialPath()).toContain(process.env.PI_E2E_AUTH_DIR as string);
 		expect(credentialPath()).not.toContain(join(".config", "pi"));
 	});
 

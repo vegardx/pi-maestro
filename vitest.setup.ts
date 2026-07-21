@@ -28,3 +28,10 @@ const gitConfigSandbox = mkdtempSync(join(tmpdir(), "maestro-gitconfig-"));
 process.env.GIT_CONFIG_GLOBAL = join(gitConfigSandbox, "gitconfig");
 process.env.GIT_CONFIG_SYSTEM = join(gitConfigSandbox, "gitconfig-system");
 process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+// Same shape of hazard, same shape of fix: the e2e driver's credential helpers
+// write and DELETE real files. A suite that exercised them against the default
+// path wiped the developer's live Copilot login in the middle of a drive
+// (2026-07-21). Redirect the store so no test can reach the real one, whether
+// or not the test remembers to.
+process.env.PI_E2E_AUTH_DIR = mkdtempSync(join(tmpdir(), "maestro-e2e-auth-"));

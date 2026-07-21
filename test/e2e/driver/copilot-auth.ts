@@ -186,6 +186,49 @@ export interface CopilotToken {
 }
 
 /**
+ * Accept the per-model policy Copilot gates Anthropic/Gemini/Grok models
+ * behind — the programmatic equivalent of enabling a model in Copilot
+ * settings. pi's own login does this; skipping it is invisible on an account
+ * that already accepted them (via an editor or an earlier login) and fails a
+ * fresh one at the first model call, with an error about policy rather than
+ * anything naming enablement.
+ *
+ * Best-effort per model, exactly as pi treats it: a failure here must not
+ * fail a login that otherwise succeeded.
+ */
+export async function enableCopilotModels(
+	minted: CopilotToken,
+	modelIds: readonly string[],
+): Promise<string[]> {
+	const enabled: string[] = [];
+	await Promise.all(
+		modelIds.map(async (id) => {
+			try {
+				const response = await fetch(
+					`${minted.apiBaseUrl}/models/${id}/policy`,
+					{
+						method: "POST",
+						headers: {
+							"content-type": "application/json",
+							authorization: `Bearer ${minted.token}`,
+							...COPILOT_HEADERS,
+							"openai-intent": "chat-policy",
+							"x-interaction-type": "chat-policy",
+						},
+						body: JSON.stringify({ state: "enabled" }),
+						signal: AbortSignal.timeout(15_000),
+					},
+				);
+				if (response.ok) enabled.push(id);
+			} catch {
+				// Network hiccup or an unknown model id — not fatal.
+			}
+		}),
+	);
+	return enabled;
+}
+
+/**
  * Exchange the durable `ghu_` token for a short-lived Copilot API token. This
  * does NOT rotate the `ghu_` token — the property that makes reusing a Copilot
  * credential safe where reusing a gateway one is not.

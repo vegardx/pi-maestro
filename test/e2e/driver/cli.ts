@@ -20,7 +20,8 @@
 // Run via: `node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>`
 // (or the `npm run e2e:driver -- <subcommand>` script).
 
-import { existsSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,12 +31,18 @@ import {
 	awaitDeviceApproval,
 	copilotAuthEntry,
 	copilotCredentialPath,
+	enableCopilotModels,
 	mintCopilotToken,
 	readCopilotCredential,
 	startDeviceLogin,
 } from "./copilot-auth.js";
-import { COPILOT_PROFILE } from "./copilot-profile.js";
-import { type EnvProfile, setupCiEnv, setupLiveEnv } from "./env-profile.js";
+import { COPILOT_PROFILE, COPILOT_REQUIRED_MODELS } from "./copilot-profile.js";
+import {
+	checkoutRoot,
+	type EnvProfile,
+	setupCiEnv,
+	setupLiveEnv,
+} from "./env-profile.js";
 import {
 	clearCredential,
 	credentialPath,
@@ -477,9 +484,14 @@ async function runAuth(argv: string[]): Promise<void> {
 		);
 		const credential = await awaitDeviceApproval(domain, deviceCode, prompt);
 		const minted = await mintCopilotToken(credential);
+		// Copilot gates Anthropic/Gemini/Grok models behind a per-model policy
+		// acceptance. pi's own login does this; without it a fresh account fails
+		// at the first model call with an error about policy, not enablement.
+		const enabled = await enableCopilotModels(minted, COPILOT_REQUIRED_MODELS);
 		process.stdout.write(
 			`signed in to ${credential.domain}` +
 				`${minted.sku ? ` (${minted.sku})` : ""}\n` +
+				`models enabled: ${enabled.length ? enabled.join(", ") : "none needed"}\n` +
 				`stored at ${copilotCredentialPath()}\n`,
 		);
 		return;
@@ -506,6 +518,99 @@ async function runAuth(argv: string[]): Promise<void> {
 	}
 }
 
+/**
+ * `clean` — remove artifacts a drive left behind.
+ *
+ * Teardown only cleans the run that owns it, so every abnormal exit leaks a
+ * full set: an isolated home, a clone, a bare remote, a gh-shim state dir,
+ * worktrees, and (live) a private GitHub repo. Before SIGHUP was handled,
+ * closing a terminal did exactly that. Recovery should be one command, not
+ * archaeology.
+ *
+ * Dry by default: it lists what it would remove and removes nothing unless
+ * --yes is passed, because it deletes repositories.
+ */
+async function runClean(argv: string[]): Promise<void> {
+	const apply = argv.includes("--yes");
+	const tmp = tmpdir();
+	const localDirs = readdirSync(tmp)
+		.filter((name) => name.startsWith("pi-e2e-"))
+		.map((name) => join(tmp, name));
+	const worktreesRoot = join(tmp, "worktrees");
+	if (existsSync(worktreesRoot)) localDirs.push(worktreesRoot);
+
+	let repos: string[] = [];
+	let clones: string[] = [];
+	try {
+		const owner = execFileSync("gh", ["api", "user", "-q", ".login"], {
+			encoding: "utf8",
+		}).trim();
+		repos = execFileSync(
+			"gh",
+			[
+				"repo",
+				"list",
+				owner,
+				"--limit",
+				"100",
+				"--json",
+				"name",
+				"-q",
+				".[].name",
+			],
+			{ encoding: "utf8" },
+		)
+			.split("\n")
+			.map((n) => n.trim())
+			.filter((n) => n.startsWith("pi-maestro-e2e-"))
+			.map((n) => `${owner}/${n}`);
+		const root = checkoutRoot(owner);
+		if (existsSync(root)) {
+			clones = readdirSync(root)
+				.filter((n) => n.startsWith("pi-maestro-e2e-"))
+				.map((n) => join(root, n));
+			const wt = join(root, "worktrees");
+			if (existsSync(wt)) {
+				for (const n of readdirSync(wt)) {
+					if (n.startsWith("pi-maestro-e2e-")) clones.push(join(wt, n));
+				}
+			}
+		}
+	} catch {
+		// No gh, or not logged in — local cleanup still works.
+	}
+
+	const lines = [
+		...localDirs.map((d) => `  local  ${d}`),
+		...clones.map((d) => `  clone  ${d}`),
+		...repos.map((r) => `  REPO   ${r}`),
+	];
+	if (lines.length === 0) {
+		process.stdout.write("nothing to clean\n");
+		return;
+	}
+	process.stdout.write(`${lines.join("\n")}\n`);
+	if (!apply) {
+		process.stdout.write(
+			`\n${lines.length} item(s). Re-run with --yes to remove them.\n`,
+		);
+		return;
+	}
+	for (const dir of [...localDirs, ...clones]) {
+		rmSync(dir, { recursive: true, force: true });
+	}
+	for (const repo of repos) {
+		try {
+			execFileSync("gh", ["repo", "delete", repo, "--yes"], {
+				stdio: "ignore",
+			});
+		} catch {
+			process.stdout.write(`  (could not delete ${repo})\n`);
+		}
+	}
+	process.stdout.write(`removed ${lines.length} item(s)\n`);
+}
+
 function reply(socket: Socket, payload: Record<string, unknown>): void {
 	socket.write(`${JSON.stringify(payload)}\n`);
 	socket.end();
@@ -514,7 +619,9 @@ function reply(socket: Socket, payload: Record<string, unknown>): void {
 // --- entry -----------------------------------------------------------------
 
 const [, , sub, ...rest] = process.argv;
-if (sub === "auth") {
+if (sub === "clean") {
+	void runClean(rest);
+} else if (sub === "auth") {
 	void runAuth(rest);
 } else if (sub === "start") {
 	void startDaemon(rest);
@@ -526,7 +633,7 @@ if (sub === "auth") {
 	runClient(sub, rest);
 } else {
 	process.stderr.write(
-		"usage: e2e-driver <auth|start|prompt|poll|answer|state|assert|stop> [...]\n",
+		"usage: e2e-driver <auth|clean|start|prompt|poll|answer|state|assert|stop> [...]\n",
 	);
 	process.exit(1);
 }

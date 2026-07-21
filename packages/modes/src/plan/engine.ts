@@ -609,6 +609,8 @@ export class PlanEngineV2 {
 			Pick<
 				PlanNode,
 				| "baseSha"
+				| "baseBranch"
+				| "stacked"
 				| "lastReviewedHead"
 				| "worktreePath"
 				| "worktreeReapedAt"

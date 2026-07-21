@@ -47,6 +47,9 @@ function deps(): NodeExecutorDeps {
 			});
 			return `/wt/${opts.nodeId}`;
 		},
+		// Stand-in for `git rev-parse <base>`: a distinct sha per base branch,
+		// so a test can tell "cut from main" from "cut from a sibling".
+		resolveBaseSha: (_repo, _branch, baseBranch) => `sha-of-${baseBranch}`,
 		shipNode: async (opts) => {
 			if (shipFails.has(opts.nodeId)) throw new Error("remote rejected");
 			ships.push(opts.nodeId);
@@ -332,6 +335,69 @@ describe("shipping", () => {
 		shipped = await executor.tick();
 		expect(shipped).toEqual(["b"]); // chain order: same-tick re-evaluation
 		expect(findNodeV2(engine.get(), "b")?.prUrl).toContain("/pr/");
+
+		// The base facts must reach the LEDGER, not just the worktree call.
+		// `base` is absent on both nodes (derived), so these stamps are the
+		// only record of which one actually stacked — fix #249's guard reads
+		// them, and read vacuously true for the whole v2 era without them.
+		const a = findNodeV2(engine.get(), "a");
+		const b = findNodeV2(engine.get(), "b");
+		expect(a).toMatchObject({
+			baseBranch: "main",
+			baseSha: "sha-of-main",
+			stacked: false,
+		});
+		expect(b).toMatchObject({
+			baseBranch: "feat/a",
+			baseSha: "sha-of-feat/a",
+			stacked: true,
+		});
+	});
+
+	it("stamps the base on candidates too, off the parent's branch", async () => {
+		const engine = makeEngine();
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Build",
+			branch: "feat/build",
+			tasks: ["implement"],
+		});
+		const executor = new NodeExecutor(engine, deps());
+		await executor.tick();
+		engine.appendChild(
+			"build",
+			{ agent: "worker", persona: "coder", title: "Candidate A" },
+			"build",
+		);
+		await executor.tick();
+
+		expect(findNodeV2(engine.get(), "candidate-a")).toMatchObject({
+			baseBranch: "feat/build",
+			baseSha: "sha-of-feat/build",
+			stacked: true,
+		});
+	});
+
+	it("provisions without a stamp when the base sha cannot be resolved", async () => {
+		const engine = makeEngine();
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Build",
+			branch: "feat/build",
+			tasks: ["implement"],
+		});
+		const noSha = deps();
+		noSha.resolveBaseSha = () => undefined;
+		await new NodeExecutor(engine, noSha).tick();
+
+		// Unresolvable base: the node still activates, and records no sha
+		// rather than a placeholder the guard would read as real.
+		const node = findNodeV2(engine.get(), "build");
+		expect(node?.status).toBe("active");
+		expect(node?.baseSha).toBeUndefined();
+		expect(node?.stacked).toBe(false);
 	});
 
 	it("a ship failure blocks the node and stays retryable", async () => {

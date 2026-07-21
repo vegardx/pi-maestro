@@ -24,7 +24,7 @@ import type {
 	NodeResolution,
 	TokenSnapshot,
 } from "@vegardx/pi-contracts";
-import { workingTreeClean } from "@vegardx/pi-git";
+import { workingTreeClean, worktreeBaseSha } from "@vegardx/pi-git";
 import { MaestroRpcServer, type PlanMutateMessage } from "@vegardx/pi-rpc";
 import { provisionBranchWorktree } from "../exec/provisioner.js";
 import { createRpcRouter, type RpcRouter } from "../exec/rpc-router.js";
@@ -141,6 +141,7 @@ export interface NodeAdapterOptions {
 		node: PlanNode,
 	) => Promise<{ resolution: NodeResolution } | undefined>;
 	readonly createWorktree?: NodeExecutorDeps["createWorktree"];
+	readonly resolveBaseSha?: NodeExecutorDeps["resolveBaseSha"];
 	readonly shipNode?: NodeExecutorDeps["shipNode"];
 	/** Lifecycle events for agent cards (v1 vocabulary, node-keyed). */
 	readonly onEvent?: (event: ExecutionEvent) => void;
@@ -298,6 +299,10 @@ export class NodeExecutionAdapter {
 			// Real-git provisioning by default (PR-6b): branch owners under
 			// <worktrees>/<nodeId>, candidates under _candidates/<parent>/<id> —
 			// the ensemble spike's layout, idempotent via addWorktree.
+			resolveBaseSha:
+				opts.resolveBaseSha ??
+				((repoPath, branch, baseBranch) =>
+					worktreeBaseSha(repoPath, branch, baseBranch) ?? undefined),
 			createWorktree:
 				opts.createWorktree ??
 				(async (wt) =>

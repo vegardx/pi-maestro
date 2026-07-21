@@ -292,6 +292,9 @@ async function dispatch(
 				events: events.map(summarizeEvent),
 				pending: state.answerer.pending(),
 				cursor,
+				// A dead SUT is the single most important thing a poller can
+				// learn, and it used to be invisible.
+				...(state.sut.died() ? { sutDied: state.sut.died() } : {}),
 			};
 		}
 		case "answer": {
@@ -302,6 +305,13 @@ async function dispatch(
 			return { ok: resolved, resolved };
 		}
 		case "state": {
+			// Report death FIRST and do not ask a corpse for its state: the RPC
+			// call would hang or answer from cache, which is exactly how a dead
+			// drive kept reporting `isStreaming: true`.
+			const died = state.sut.died();
+			if (died) {
+				return { ok: false, sutDied: died, plan: planSummary(state) };
+			}
 			const pi = await state.sut.client.getState();
 			return { ok: true, pi, plan: planSummary(state) };
 		}

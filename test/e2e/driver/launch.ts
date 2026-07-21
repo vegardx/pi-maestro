@@ -38,9 +38,25 @@ export interface LaunchOptions {
 	readonly onEvent?: (event: { type: string }) => void;
 }
 
+export interface SutDeath {
+	readonly code: number | null;
+	readonly signal: NodeJS.Signals | null;
+	readonly at: string;
+	/** Tail of the SUT's stderr, when it wrote any. */
+	readonly stderr?: string;
+}
+
 export interface LaunchedSut {
 	readonly client: RpcClient;
 	readonly child: ChildProcessWithoutNullStreams;
+	/**
+	 * Set once the SUT process exits. Nothing watched for this before, so a
+	 * dead maestro was indistinguishable from a busy one: the driver kept
+	 * answering `get_state` from cached state and reported `isStreaming: true`
+	 * for forty minutes after the process was gone. A drive that dies must not
+	 * look like a drive that is working.
+	 */
+	died(): SutDeath | undefined;
 }
 
 /** Absolute paths of the maestro extensions, from package.json `pi.extensions`. */
@@ -137,10 +153,36 @@ export function launchSut(opts: LaunchOptions): LaunchedSut {
 		});
 	}
 
+	let death: SutDeath | undefined;
+	const recordDeath = (
+		code: number | null,
+		signal: NodeJS.Signals | null,
+	): void => {
+		if (death) return;
+		let stderr: string | undefined;
+		if (opts.transcriptPath) {
+			try {
+				stderr = readFileSync(`${opts.transcriptPath}.stderr`, "utf8")
+					.trim()
+					.slice(-2000);
+			} catch {
+				// none written
+			}
+		}
+		death = {
+			code,
+			signal,
+			at: new Date().toISOString(),
+			...(stderr ? { stderr } : {}),
+		};
+	};
+	child.on("exit", recordDeath);
+	child.on("error", () => recordDeath(null, null));
+
 	const client = new RpcClient(child, {
 		answerer: opts.answerer,
 		transcriptPath: opts.transcriptPath,
 		onEvent: opts.onEvent,
 	});
-	return { client, child };
+	return { client, child, died: () => death };
 }

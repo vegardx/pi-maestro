@@ -468,19 +468,23 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 		input.mode === "plan" ||
 		input.actor === "reviewer"
 	) {
-		if (only(effects, ["host-read", "workspace-read", "remote-read"]))
-			return {
-				...base,
-				route: "host-read",
-				reason: "Narrow read command is eligible for protected host execution",
-				confidence: "high",
-			};
+		// The configured direct route is checked FIRST. It used to sit behind the
+		// pure-read branch, which meant `modeRoutes: "direct"` could never apply
+		// to the very commands it exists for — every read was routed to
+		// host-read regardless of the setting, and the escape hatch was dead.
 		if (input.policy.modeRoutes === "direct" && !effects.has("unknown"))
 			return {
 				...base,
 				route: "direct",
 				reason: "Configured direct research route",
 				confidence: "medium",
+			};
+		if (only(effects, ["host-read", "workspace-read", "remote-read"]))
+			return {
+				...base,
+				route: "host-read",
+				reason: "Narrow read command is eligible for protected host execution",
+				confidence: "high",
 			};
 		if (hasAny(effects, ["repository-code", "workspace-write", "local-git"]))
 			return {

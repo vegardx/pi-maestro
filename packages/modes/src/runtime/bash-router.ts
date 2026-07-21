@@ -256,8 +256,13 @@ export function resolveBashOperations(
 		case "direct":
 		case "confirm":
 			return direct;
+		// Reads see the real tree. An injected backend still wins, but absence
+		// falls through to direct execution rather than failing: the route is
+		// only reached for exclusively-read effect sets, so the write guard is
+		// the classification itself. Failing closed here would deny an agent
+		// `git status`; isolating here would lie to it about the filesystem.
 		case "host-read":
-			return requiredBackend("host-read", backends.hostRead?.(cwd));
+			return backends.hostRead?.(cwd) ?? direct;
 		case "lightweight":
 			return requiredBackend("lightweight", backends.lightweight?.(cwd));
 		case "strong":

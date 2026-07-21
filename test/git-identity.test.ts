@@ -134,3 +134,52 @@ describe("identity reaches agents as environment", () => {
 		);
 	});
 });
+
+describe("the environment is a first-class source", () => {
+	// A live drive died here: the e2e driver runs the maestro with an isolated
+	// HOME, so `~/.gitconfig` and any `includeIf "gitdir:~/…"` are invisible —
+	// `~` expands via HOME too. Every worker refused to spawn. Worse, the check
+	// disagreed with its own remedy: this module HANDS agents identity as env,
+	// then refused to accept identity supplied that way.
+	const clearEnv = () => {
+		for (const key of [
+			"GIT_AUTHOR_NAME",
+			"GIT_AUTHOR_EMAIL",
+			"GIT_COMMITTER_NAME",
+			"GIT_COMMITTER_EMAIL",
+		]) {
+			delete process.env[key];
+		}
+	};
+
+	afterEach(clearEnv);
+
+	it("accepts an identity supplied as env when config has none", () => {
+		expect(resolveGitIdentity(repo)).toBeNull();
+		process.env.GIT_AUTHOR_NAME = "Outer Harness";
+		process.env.GIT_AUTHOR_EMAIL = "outer@example.com";
+		expect(resolveGitIdentity(repo)).toEqual({
+			name: "Outer Harness",
+			email: "outer@example.com",
+		});
+	});
+
+	it("accepts COMMITTER variables too", () => {
+		process.env.GIT_COMMITTER_NAME = "Committer Only";
+		process.env.GIT_COMMITTER_EMAIL = "committer@example.com";
+		expect(resolveGitIdentity(repo)?.email).toBe("committer@example.com");
+	});
+
+	it("still needs both halves", () => {
+		process.env.GIT_AUTHOR_NAME = "Only A Name";
+		expect(resolveGitIdentity(repo)).toBeNull();
+	});
+
+	it("prefers env over config, matching git's own precedence", () => {
+		git(["config", "user.name", "Config Identity"]);
+		git(["config", "user.email", "config@example.com"]);
+		process.env.GIT_AUTHOR_NAME = "Env Identity";
+		process.env.GIT_AUTHOR_EMAIL = "env@example.com";
+		expect(resolveGitIdentity(repo)?.email).toBe("env@example.com");
+	});
+});

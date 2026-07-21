@@ -5,7 +5,11 @@
 // The extension list is read from the pi-maestro `package.json` `pi.extensions`
 // so the driver always loads exactly what production loads — no drift.
 
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import {
+	type ChildProcessWithoutNullStreams,
+	execFileSync,
+	spawn,
+} from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Answerer } from "./answerer.js";
@@ -48,6 +52,35 @@ export function maestroExtensionPaths(maestroRoot: string): string[] {
 	return extensions.map((rel) => resolve(maestroRoot, rel));
 }
 
+/**
+ * The developer's committer identity, read in the REAL environment and handed
+ * to the sandboxed SUT as env. Empty when none resolves — the maestro's own
+ * preflight then reports it, which is the correct outcome rather than a
+ * fabricated identity.
+ */
+function developerGitIdentityEnv(repoDir: string): Record<string, string> {
+	const read = (key: string): string | undefined => {
+		try {
+			const value = execFileSync("git", ["config", "--get", key], {
+				cwd: repoDir,
+				encoding: "utf8",
+			}).trim();
+			return value || undefined;
+		} catch {
+			return undefined;
+		}
+	};
+	const name = read("user.name");
+	const email = read("user.email");
+	if (!name || !email) return {};
+	return {
+		GIT_AUTHOR_NAME: name,
+		GIT_AUTHOR_EMAIL: email,
+		GIT_COMMITTER_NAME: name,
+		GIT_COMMITTER_EMAIL: email,
+	};
+}
+
 export function launchSut(opts: LaunchOptions): LaunchedSut {
 	const sessionDir = opts.sessionDir ?? join(opts.piHome, "sessions");
 	const piBin = join(opts.maestroRoot, "node_modules", ".bin", "pi");
@@ -79,6 +112,13 @@ export function launchSut(opts: LaunchOptions): LaunchedSut {
 			// so the SUT is truly isolated, and pin the session dir too.
 			PI_CODING_AGENT_DIR: join(opts.piHome, ".pi", "agent"),
 			PI_CODING_AGENT_SESSION_DIR: sessionDir,
+			// Isolating HOME also isolates GIT config: git looks for
+			// `$HOME/.gitconfig`, and an `includeIf "gitdir:~/…"` expands `~`
+			// via HOME too. So the developer's identity vanishes inside the
+			// sandbox and every worker refuses to spawn. Resolve it out here,
+			// where HOME is still real, and pass it in the way the harness
+			// passes identity to agents anyway.
+			...developerGitIdentityEnv(opts.repoDir),
 			...opts.env,
 		},
 		stdio: ["pipe", "pipe", "pipe"],

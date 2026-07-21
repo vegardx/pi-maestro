@@ -4,6 +4,8 @@
 // starts a run, observes it, ANSWERS the agent's questions, and asserts on
 // outcomes, over pi's own control surface, with no MCP.
 //
+//   e2e-driver auth login          # one browser login; refreshes itself after
+//   e2e-driver auth status|logout
 //   e2e-driver start [--live|--ci] [--multi-model|--sit-models]
 //                    [--local-remote] [--keep] [--sock PATH]
 //   e2e-driver prompt "<text>" [--steer|--follow-up]
@@ -25,6 +27,13 @@ import { join } from "node:path";
 import { ForwardingAnswerer } from "./answerer.js";
 import { assertEnsemble, assertScenario, readPlan } from "./assertions.js";
 import { type EnvProfile, setupCiEnv, setupLiveEnv } from "./env-profile.js";
+import {
+	clearCredential,
+	credentialPath,
+	describeCredential,
+	loginToGateway,
+	readCredential,
+} from "./gateway-auth.js";
 import { type LaunchedSut, launchSut } from "./launch.js";
 import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
@@ -34,7 +43,7 @@ import {
 	type Scenario,
 } from "./scenario.js";
 import { seedEnsemblePlan, seedScenarioPlan } from "./seed-plan.js";
-import { buildSitProfile } from "./sit-profile.js";
+import { buildSitProfile, SIT_GATEWAY } from "./sit-profile.js";
 
 const DEFAULT_SOCK = join(tmpdir(), "pi-e2e-driver.sock");
 
@@ -64,7 +73,7 @@ async function startDaemon(argv: string[]): Promise<void> {
 	}
 	const maestroRoot = process.cwd();
 	const answerer = new ForwardingAnswerer();
-	const profile = buildProfile(argv);
+	const profile = await buildProfile(argv);
 
 	// --seed-plan: write the canned sandbox-features plan straight into the
 	// isolated plan store, so the drive opens it with `/plan sandbox-features`
@@ -132,7 +141,7 @@ async function startDaemon(argv: string[]): Promise<void> {
 	process.on("SIGTERM", shutdown);
 }
 
-function buildProfile(argv: string[]): EnvProfile {
+async function buildProfile(argv: string[]): Promise<EnvProfile> {
 	if (argv.includes("--ci")) {
 		const mockProviderExtension = required(argv, "--mock-provider");
 		const mockBaseUrl = required(argv, "--mock-url");
@@ -160,10 +169,11 @@ function buildProfile(argv: string[]): EnvProfile {
 	}
 	// `--sit-models` is the hosted twin: real radicalai-sit gateway models
 	// (opus planner/reviews, sol workers) via a generated models.json — no
-	// provider extension. Reads the developer's live token; throws when it is
-	// missing or about to expire.
+	// provider extension. Uses the driver's OWN gateway credential and
+	// refreshes it here, so a stale token is not a human's problem
+	// (`e2e-driver auth login` once, then never again).
 	if (argv.includes("--sit-models")) {
-		const sit = buildSitProfile();
+		const sit = await buildSitProfile();
 		return setupLiveEnv({
 			localRemote: argv.includes("--local-remote"),
 			keep: argv.includes("--keep"),
@@ -401,6 +411,44 @@ function positional(argv: string[]): string {
 	return out.join(" ");
 }
 
+/**
+ * `auth login|status|logout` — the driver's own gateway credential. Login is
+ * the one step that needs a human at the browser; everything after it (refresh
+ * before each drive) is automatic.
+ */
+async function runAuth(argv: string[]): Promise<void> {
+	const action = argv[0] ?? "status";
+	if (action === "status") {
+		process.stdout.write(
+			`${credentialPath()}\n${describeCredential(readCredential())}\n`,
+		);
+		return;
+	}
+	if (action === "logout") {
+		clearCredential();
+		process.stdout.write("driver gateway credential removed\n");
+		return;
+	}
+	if (action !== "login") {
+		process.stderr.write("usage: e2e-driver auth <login|status|logout>\n");
+		process.exit(1);
+	}
+	try {
+		const credential = await loginToGateway(
+			SIT_GATEWAY,
+			!argv.includes("--no-open"),
+		);
+		process.stdout.write(
+			`signed in — ${describeCredential(credential)}\nstored at ${credentialPath()}\n`,
+		);
+	} catch (err) {
+		process.stderr.write(
+			`${err instanceof Error ? err.message : String(err)}\n`,
+		);
+		process.exit(1);
+	}
+}
+
 function reply(socket: Socket, payload: Record<string, unknown>): void {
 	socket.write(`${JSON.stringify(payload)}\n`);
 	socket.end();
@@ -409,7 +457,9 @@ function reply(socket: Socket, payload: Record<string, unknown>): void {
 // --- entry -----------------------------------------------------------------
 
 const [, , sub, ...rest] = process.argv;
-if (sub === "start") {
+if (sub === "auth") {
+	void runAuth(rest);
+} else if (sub === "start") {
 	void startDaemon(rest);
 } else if (
 	["prompt", "poll", "answer", "state", "assert", "stop", "ping"].includes(
@@ -419,7 +469,7 @@ if (sub === "start") {
 	runClient(sub, rest);
 } else {
 	process.stderr.write(
-		"usage: e2e-driver <start|prompt|poll|answer|state|assert|stop> [...]\n",
+		"usage: e2e-driver <auth|start|prompt|poll|answer|state|assert|stop> [...]\n",
 	);
 	process.exit(1);
 }

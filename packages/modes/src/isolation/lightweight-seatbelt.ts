@@ -304,15 +304,28 @@ export function seatbeltConfig(
 			allowLocalBinding: false,
 		},
 		filesystem: {
-			// Lightweight intentionally keeps broad reads for developer-tool
-			// compatibility. Known credentials and control state are unreadable.
+			// Reads are open; only named secrets are withheld.
+			//
+			// `hostHome` used to head this list, which denied reading the entire
+			// home directory — where every developer's source lives. That is why
+			// the private workspace copy exists at all: commands could not read
+			// the real tree. The copy is built from `git ls-files`, so it has no
+			// `.git`, so every git command reported "not a git repository" while
+			// the unsandboxed `ls` tool showed `.git` present. A live planner saw
+			// the contradiction and designed work to `git init` an existing clone.
+			//
+			// The steering this sandbox exists for is about MUTATION, not
+			// reading. Withhold private keys and live tokens by name; let an
+			// agent read the filesystem it is working in.
+			// NOT denied: the gpg home (`~/.config/gnupg` on macOS, NOT the
+			// `~/.gnupg` this list used to name — a path that does not exist
+			// here, so the entry only ever worked via the blanket home deny).
+			// A repo with `commit.gpgsign=true` requires the keyring AND the
+			// agent socket to commit at all, so withholding them does not
+			// restrict an agent, it stops it working.
 			denyRead: [
-				// Broad host reads are useful, but the home/config hierarchy is the
-				// credential boundary. Commands use the private workspace.home instead.
-				hostHome,
 				resolve(hostHome, ".ssh"),
 				resolve(hostHome, ".aws"),
-				resolve(hostHome, ".gnupg"),
 				resolve(hostHome, ".config", "gcloud"),
 				resolve(hostHome, ".kube"),
 				resolve(hostHome, ".docker"),

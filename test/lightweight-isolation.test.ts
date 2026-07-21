@@ -105,14 +105,33 @@ describe("Lightweight policy", () => {
 		createdAt: "now",
 	};
 
-	it("confines writes and denies host home, network, and control sockets", () => {
+	it("confines writes, withholds named secrets, and denies network", () => {
 		const config = seatbeltConfig(workspace, "/repo");
 		expect(config.filesystem.allowWrite).toEqual(
 			expect.arrayContaining([workspace.root, workspace.home, workspace.tmp]),
 		);
 		expect(config.filesystem.denyWrite).toContain("/repo");
+		// Private keys and live tokens stay unreadable, by name.
 		expect(config.filesystem.denyRead).toContain(resolve(getAgentDir()));
-		expect(config.filesystem.denyRead).toContain(
+		for (const secret of [".ssh", ".aws", ".kube", ".docker"]) {
+			expect(
+				config.filesystem.denyRead.some((p) => p.endsWith(secret)),
+				secret,
+			).toBe(true);
+		}
+		// But NOT the gpg home: a repo with commit.gpgsign=true needs the
+		// keyring and the agent socket to commit at all, so withholding them
+		// does not restrict an agent, it stops it working. (The old list named
+		// `~/.gnupg`, which does not exist on macOS — gpg uses ~/.config/gnupg,
+		// so that entry only ever worked via the blanket home deny.)
+		expect(config.filesystem.denyRead.some((p) => p.includes("gnupg"))).toBe(
+			false,
+		);
+		// And NOT the whole home directory. Denying it is what forced the
+		// private ls-files copy to exist — which has no `.git`, so every git
+		// command reported "not a git repository" while the ls tool showed it
+		// present. This sandbox steers MUTATION; reading is not the threat.
+		expect(config.filesystem.denyRead).not.toContain(
 			resolve(process.env.HOME ?? ""),
 		);
 		expect(config.network.allowedDomains).toEqual([]);

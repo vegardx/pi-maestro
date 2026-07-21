@@ -18,7 +18,7 @@ import {
 	type PlanId,
 	type TokenSnapshot,
 } from "@vegardx/pi-contracts";
-import type { MaestroContext } from "@vegardx/pi-core";
+import { type MaestroContext, runAgentTurn } from "@vegardx/pi-core";
 import {
 	checkoutOrCreateBranch,
 	detectDefaultBranch,
@@ -361,6 +361,49 @@ export function createRuntimeContext(
 		},
 	);
 
+	/**
+	 * Ask the session model to name the plan from what it actually contains.
+	 *
+	 * The mechanical fallback slugs the FIRST MESSAGE, so
+	 * `Create a plan called "sandbox-features" for this repo` became
+	 * `create-a-plan-called-sandbox-features-for` — prose, not a name. The
+	 * maestro has the deliverables in front of it and names them in one short
+	 * turn on its own seat (v2's rule: nothing asked for → the caller's model).
+	 *
+	 * Sets the draft's explicit name; derivePlanName slugifies it as usual and
+	 * the existing collision loop still applies. Fail-quiet by design: naming
+	 * must never be why a plan cannot be created.
+	 */
+	async function nameDraftFromModel(ctx: ExtensionContext): Promise<void> {
+		if (draftExplicitName) return; // the human already named it
+		const engine = rt.engine;
+		if (!engine?.isDraft()) return;
+		const nodes = engine.get().nodes;
+		if (nodes.length === 0) return;
+		const titles = nodes
+			.slice(0, 12)
+			.map((node) => `- ${node.title ?? node.id}`)
+			.join("\n");
+		try {
+			const reply = await runAgentTurn(
+				pi,
+				ctx,
+				"Name this plan. Reply with ONLY a short kebab-case slug: two to " +
+					"four words, lowercase, hyphen-separated, no quotes, no prose. " +
+					"It names the body of work, not the request — never start it " +
+					`with a verb like create/add/build.\n\nDeliverables:\n${titles}`,
+			);
+			const candidate = slugify(
+				reply.trim().split(/\s+/).slice(0, 6).join(" "),
+			);
+			// Junk in, mechanical name out: a model that ignored the format, or
+			// answered with a paragraph, must not become a directory name.
+			if (candidate && candidate.length <= 60) draftExplicitName = candidate;
+		} catch {
+			// Unavailable model, refusal, timeout — keep the mechanical name.
+		}
+	}
+
 	rt = {
 		pi,
 		maestro,
@@ -432,6 +475,10 @@ export function createRuntimeContext(
 
 		async requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean> {
 			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
+				// Name it BEFORE materializing, so naming never means renaming a
+				// directory that the store, the usage ledger and the active-plan
+				// pointer all key off. The draft is still in memory here.
+				await nameDraftFromModel(ctx);
 				rt.finalizeDraftPlan(ctx);
 			}
 			return transitionGates.request(mode, ctx);

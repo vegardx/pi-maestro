@@ -347,3 +347,19 @@ export async function explainTier(
 		candidates: checked.map((entry) => entry.fact),
 	};
 }
+
+/**
+ * Which v2 agent type a v1 subagent role runs as.
+ *
+ * The v2 vocabulary has three agent types; `agents.run` still speaks the
+ * fifteen v1 roles. Reviews judge (`reviewer`), implementation and delivery
+ * verification act (`worker`), and the classify/summarize/research roles only
+ * read (`explorer`). Mirrors the DUTY_AGENT lens the policy table uses.
+ */
+export function agentTypeForRole(
+	role: string,
+): "worker" | "explorer" | "reviewer" {
+	if (role.endsWith("-review")) return "reviewer";
+	if (role === "worker" || role === "verifier") return "worker";
+	return "explorer";
+}

@@ -34,12 +34,23 @@ import {
 	type UsageCheckpoint,
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
-import { resolveExactModelSelection } from "@vegardx/pi-models";
+import {
+	activeV2Profile,
+	agentTypeForRole,
+	readV2Config,
+	resolveExactModelSelection,
+	resolveModelAuth,
+	resolveV2Model,
+} from "@vegardx/pi-models";
 import {
 	getConfigStringArray,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
-import { createAgentsCapability, createAgentTool } from "./agent-tool.js";
+import {
+	createAgentsCapability,
+	createAgentTool,
+	type ExactAgentSelection,
+} from "./agent-tool.js";
 import { createRunBus } from "./bus.js";
 import { currentDepth } from "./invocation.js";
 import { runsRoot } from "./paths.js";
@@ -241,6 +252,76 @@ function readChildExtensionPaths(cwd: string): string[] {
 	} catch {
 		return [];
 	}
+}
+
+/**
+ * Resolve a subagent's model through the v2 catalog when one is configured.
+ * Returns null when there is no v2 config, so v1 setups keep their exact
+ * authored-option behaviour untouched.
+ *
+ * An explicit request is validated against the tiers the agent type is allowed
+ * to reach, NOT against v1 authored options — a v2-only config has none, which
+ * is why every tier override was rejected before this existed. With no explicit
+ * request, v2's own rule applies: inherit the caller's model.
+ */
+export async function resolveViaV2(
+	ctx: ExtensionContext,
+	role: string,
+	choice: { model?: string; effort?: string },
+): Promise<ExactAgentSelection | null> {
+	const config = readV2Config(ctx.cwd);
+	if (!config) return null;
+	const agent = agentTypeForRole(role);
+
+	let modelId: string | undefined;
+	let effort: string | undefined = choice.effort;
+
+	if (choice.model) {
+		const active = activeV2Profile(config, sessionModelId(ctx));
+		const catalog = active
+			? config.catalogs[active.profile.catalog]
+			: undefined;
+		const allowed = config.agents[agent]?.models ?? [];
+		const hit = allowed
+			.flatMap((tier) => catalog?.[tier] ?? [])
+			.find((entry) => entry.model === choice.model);
+		if (!hit) {
+			throw new Error(
+				`${choice.model} is not in any tier ${agent} may use (${allowed.join(", ") || "none"}). ` +
+					"Add it to the catalog or widen the agent's tiers in /maestro.",
+			);
+		}
+		modelId = hit.model;
+		effort ??= hit.effort;
+	} else {
+		const resolved = await resolveV2Model(ctx, { agent });
+		modelId = resolved.modelId;
+		effort ??= resolved.effort;
+	}
+
+	// Allowed by the catalog but unusable: say so. Returning null here would
+	// fall through to the v1 path and report "no exact option configured",
+	// which points at the wrong thing entirely.
+	const auth = modelId ? await resolveModelAuth(ctx, modelId) : null;
+	if (!auth) {
+		throw new Error(
+			`${modelId ?? "the resolved model"} is in ${agent}'s catalog but has no usable credential — check the provider's auth.`,
+		);
+	}
+	return {
+		presetId: "v2",
+		modelSetId: agent,
+		optionId: modelId as string,
+		modelId: modelId as string,
+		effort: (effort ?? "medium") as ExactAgentSelection["effort"],
+		source: "explicit" as const,
+		candidates: [],
+	};
+}
+
+function sessionModelId(ctx: ExtensionContext): string | undefined {
+	const model = (ctx as { model?: { provider: string; id: string } }).model;
+	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
 export default defineExtension(
@@ -536,6 +617,13 @@ export default defineExtension(
 			registries,
 			resolveModel: async (kind, choice) => {
 				if (!ctx) throw new Error("Agent model policy is unavailable.");
+				// v2 first when a v2 catalog is configured. Otherwise a v2-only
+				// config has no authored v1 options to match, so every explicit
+				// request was rejected — seen live as "No exact plan-review
+				// option matches …", which silently downgraded the plan gate to
+				// the runner's own pick and made the tier row decide nothing.
+				const v2 = await resolveViaV2(ctx, kind.modelRole, choice);
+				if (v2) return v2;
 				const initial = await resolveExactModelSelection(ctx, {
 					role: kind.modelRole,
 				});

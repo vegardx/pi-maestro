@@ -179,6 +179,8 @@ export interface RuntimeContext {
 		ctx: ExtensionContext,
 	): PlanEngineV2;
 	finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void;
+	/** Name the draft from its deliverables, before it materializes. */
+	nameDraftFromModel(ctx: ExtensionContext): Promise<void>;
 	cycle(ctx: ExtensionContext): Promise<void>;
 	emitPlanChanged(): void;
 	assertDeliverableRepo(ctx: ExtensionContext, d: PlanNode): boolean;
@@ -279,6 +281,9 @@ export function createRuntimeContext(
 	// first planning message) and an explicit name from `/plan <name>`.
 	let draftStartEntries = 0;
 	let draftExplicitName: string | undefined;
+	// Naming runs a turn of its own; without this the turn_end it fires would
+	// re-enter naming forever.
+	let namingDraft = false;
 	// Central usage ledger (usage.v1). Checkpoints move to the active plan's
 	// execution directory when that plan opens; the session fallback covers
 	// pre-plan maestro and generic run usage.
@@ -375,6 +380,7 @@ export function createRuntimeContext(
 	 * must never be why a plan cannot be created.
 	 */
 	async function nameDraftFromModel(ctx: ExtensionContext): Promise<void> {
+		if (namingDraft) return;
 		if (draftExplicitName) return; // the human already named it
 		const engine = rt.engine;
 		if (!engine?.isDraft()) return;
@@ -384,6 +390,7 @@ export function createRuntimeContext(
 			.slice(0, 12)
 			.map((node) => `- ${node.title ?? node.id}`)
 			.join("\n");
+		namingDraft = true;
 		try {
 			const reply = await runAgentTurn(
 				pi,
@@ -401,6 +408,8 @@ export function createRuntimeContext(
 			if (candidate && candidate.length <= 60) draftExplicitName = candidate;
 		} catch {
 			// Unavailable model, refusal, timeout — keep the mechanical name.
+		} finally {
+			namingDraft = false;
 		}
 	}
 
@@ -475,10 +484,6 @@ export function createRuntimeContext(
 
 		async requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean> {
 			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
-				// Name it BEFORE materializing, so naming never means renaming a
-				// directory that the store, the usage ledger and the active-plan
-				// pointer all key off. The draft is still in memory here.
-				await nameDraftFromModel(ctx);
 				rt.finalizeDraftPlan(ctx);
 			}
 			return transitionGates.request(mode, ctx);
@@ -547,6 +552,8 @@ export function createRuntimeContext(
 		// while planning and before implement/ship so the plan survives.
 		// `force` materializes even an empty plan — the research tool needs the
 		// plan directory on disk before any deliverable exists (report persistence).
+		nameDraftFromModel,
+
 		finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void {
 			if (!rt.engine?.isDraft()) return;
 			if (!opts?.force && rt.engine.get().nodes.length === 0) return;

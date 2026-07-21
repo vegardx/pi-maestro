@@ -105,3 +105,36 @@ describe("the driver finds the plan regardless of its slug", () => {
 		expect(readPlan(piHome, "sandbox-features")).toBeNull();
 	});
 });
+
+describe("where naming fires", () => {
+	// The first version of this hooked requestMode (the plan → auto gate) and
+	// checked isDraft(). By then the turn_end hook has already materialized the
+	// plan, so it never fired: dead code for the case it was written for. A live
+	// drive still produced `create-a-plan-called-sandbox-features-for`, and only
+	// the driver's discovery fallback kept the run assertable.
+	it("names on the turn_end hook, before finalizeDraftPlan materializes", async () => {
+		const { readFileSync } = await import("node:fs");
+		const hooks = readFileSync("packages/modes/src/runtime/hooks.ts", "utf8");
+		const nameAt = hooks.indexOf("nameDraftFromModel");
+		const finalizeAt = hooks.indexOf("finalizeDraftPlan");
+		expect(nameAt).toBeGreaterThan(-1);
+		// Ordering IS the contract: naming after materialization would mean
+		// renaming a directory the store, usage ledger and active-plan pointer
+		// all key off.
+		expect(nameAt).toBeLessThan(finalizeAt);
+		expect(hooks.slice(nameAt - 40, nameAt)).toContain("await");
+	});
+
+	it("is no longer called from the gate, where it could never fire", async () => {
+		const { readFileSync } = await import("node:fs");
+		const context = readFileSync(
+			"packages/modes/src/runtime/context.ts",
+			"utf8",
+		);
+		const requestMode = context.slice(
+			context.indexOf("async requestMode("),
+			context.indexOf("setMode(mode: ModeName"),
+		);
+		expect(requestMode).not.toContain("nameDraftFromModel");
+	});
+});

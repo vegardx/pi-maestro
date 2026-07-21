@@ -35,3 +35,13 @@ process.env.GIT_CONFIG_NOSYSTEM = "1";
 // (2026-07-21). Redirect the store so no test can reach the real one, whether
 // or not the test remembers to.
 process.env.PI_E2E_AUTH_DIR = mkdtempSync(join(tmpdir(), "maestro-e2e-auth-"));
+
+// And the pi agent dir. Model resolution reads settings from here, so without
+// this a test asserting "no v2 config exists" is really asserting something
+// about the DEVELOPER'S machine — it passes or fails depending on whether they
+// ran the models-v2 migration, and on whether an earlier test happened to
+// leave PI_CODING_AGENT_DIR redirected. Tests that want their own agent dir
+// still override this; they simply no longer inherit a real one by default.
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(
+	join(tmpdir(), "maestro-agent-dir-"),
+);

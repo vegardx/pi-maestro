@@ -5,7 +5,7 @@
 // independent of how the run was driven.
 
 import { execFileSync, execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	type PlanView,
@@ -21,9 +21,33 @@ export function planJsonPath(piHome: string, slug: string): string {
 	return join(piHome, ".pi", "agent", "maestro", "plans", slug, "plan.json");
 }
 
-/** The plan file IS the state API — read and project it (schema-agnostic). */
+/**
+ * The plan file IS the state API — read and project it (schema-agnostic).
+ *
+ * The slug is a HINT, not an address. A plan authored from prose is slugged
+ * from what the maestro named it, which need not equal the scenario's name:
+ * `'Create a plan called "sandbox-features"'` produced
+ * `create-a-plan-called-sandbox-features-for`, so every assertion reported
+ * `planFound: false` on a perfectly healthy drive. Seeded drives never hit it
+ * because seeding writes the expected slug directly.
+ *
+ * So: exact match first, then the only real plan in the store. A drive creates
+ * one plan; if it somehow made several, refuse to guess.
+ */
 export function readPlan(piHome: string, slug: string): PlanView | null {
-	const path = planJsonPath(piHome, slug);
+	const exact = readPlanAt(planJsonPath(piHome, slug));
+	if (exact) return exact;
+	const root = join(piHome, ".pi", "agent", "maestro", "plans");
+	if (!existsSync(root)) return null;
+	const candidates = readdirSync(root, { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && !entry.name.startsWith("_"))
+		.map((entry) => join(root, entry.name, "plan.json"))
+		.filter((path) => existsSync(path));
+	if (candidates.length !== 1) return null;
+	return readPlanAt(candidates[0] as string);
+}
+
+function readPlanAt(path: string): PlanView | null {
 	if (!existsSync(path)) return null;
 	try {
 		return projectPlanView(JSON.parse(readFileSync(path, "utf8"))) ?? null;

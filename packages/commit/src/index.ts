@@ -1,8 +1,12 @@
 // @vegardx/pi-commit — conventional-commit workflow.
-// Agents get: commitLocal (stage + commit).
-// Maestro/interactive gets: commitLocal + /ship (push + PR).
+// Agents get: commitLocal (stage + commit) — a worker's own work product.
+// Shipping (push + PR) is NOT a command here: it is maestro lifecycle, driven
+// by the executor when a deliverable completes (modes/exec/shipper.ts), which
+// resolves a stacked node's base to its sibling via shipBaseBranch().
 //
-// The executor calls shipping programmatically for automatic deliverable shipping.
+// The `ship` capability registered below exists for the guarded `ship` TOOL in
+// modes, which refuses when PI_MAESTRO_AGENT_ID is set. There is deliberately
+// no slash-command path: it bypassed both the base resolution and that guard.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
@@ -200,17 +204,13 @@ export default defineExtension(
 			},
 		});
 
-		pi.registerCommand("ship", {
-			description: "Push current branch and open/update a PR.",
-			handler: async (_args: string, active: ExtensionContext) => {
-				const result = await ship({ cwd: active.cwd });
-				const msg = result.pushed
-					? result.pr
-						? `Shipped ${result.branch} → PR #${result.pr}.`
-						: `Pushed ${result.branch}.`
-					: `Ship failed: ${result.error}`;
-				active.ui.notify(msg, result.pushed ? "info" : "warning");
-			},
-		});
+		// No `/ship` command. Shipping is maestro lifecycle: the executor pushes
+		// and opens the PR when a deliverable completes (exec/shipper.ts), using
+		// shipBaseBranch() to target a stacked node's sibling rather than the
+		// default branch. The removed command called ship() directly, so it had
+		// neither that base resolution nor the agent guard the `ship` TOOL
+		// carries — it was registered in every session, workers included.
+		//
+		// The capability below remains: it is what the guarded tool consumes.
 	},
 );

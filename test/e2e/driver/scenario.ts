@@ -12,6 +12,13 @@ export interface ExpectedDeliverable {
 	readonly titleMatch: string;
 	/** Files the shipped diff must contain (repo-relative). */
 	readonly files: string[];
+	/**
+	 * Expect this deliverable to have stacked on a sibling's branch. Declared
+	 * rather than inferred: the stacked-base check (#249) is vacuously true for
+	 * an unstacked node, so without a scenario asserting that stacking HAPPENED,
+	 * a harness that stopped stacking entirely would still report green.
+	 */
+	readonly stacked?: boolean;
 }
 
 export interface Scenario {
@@ -77,6 +84,8 @@ export const SANDBOX_FEATURES: Scenario = {
 		{
 			titleMatch: "advanced",
 			files: ["src/advanced.ts", "tests/advanced.test.ts"],
+			// The dependent module: the scenario exists to exercise stacking.
+			stacked: true,
 		},
 	],
 };

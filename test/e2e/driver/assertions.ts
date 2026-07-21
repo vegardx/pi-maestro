@@ -52,6 +52,13 @@ export interface DeliverableCheck {
 	 * always sat on main. True for non-stacked deliverables vacuously.
 	 */
 	readonly baseOk: boolean;
+	/**
+	 * The node actually stacked, when the scenario said it should. Separate
+	 * from `baseOk` because that check passes vacuously for an unstacked node:
+	 * between the v2 flip and 2026-07-21 nothing stamped `stacked`/`baseSha` at
+	 * all, so `baseOk` was green on every run while verifying nothing.
+	 */
+	readonly stackedAsExpected: boolean;
 }
 
 export interface AssertionResult {
@@ -91,7 +98,8 @@ export function assertScenario(
 			c.hasPr &&
 			c.missingFiles.length === 0 &&
 			c.modelPinned &&
-			c.baseOk,
+			c.baseOk &&
+			c.stackedAsExpected,
 	);
 	return { ok, planFound: true, checks, summary: renderSummary(checks) };
 }
@@ -120,6 +128,7 @@ function checkDeliverable(
 		missingFiles,
 		modelPinned: Boolean(match?.workerModel),
 		baseOk: match ? stackedBaseOk(match, repoDir) : false,
+		stackedAsExpected: exp.stacked ? Boolean(match?.stacked) : true,
 	};
 }
 
@@ -170,12 +179,15 @@ function renderSummary(checks: DeliverableCheck[]): string {
 				parts.push(`missing ${c.missingFiles.join(", ")}`);
 			if (!c.modelPinned) parts.push("worker model not pinned on plan");
 			if (!c.baseOk) parts.push("stacked baseSha sits on main (stale base)");
+			if (!c.stackedAsExpected)
+				parts.push("expected to stack on a sibling, but did not");
 			const ok =
 				c.shipped &&
 				c.hasPr &&
 				c.missingFiles.length === 0 &&
 				c.modelPinned &&
-				c.baseOk;
+				c.baseOk &&
+				c.stackedAsExpected;
 			return `${ok ? "✓" : "✗"} ${c.titleMatch}: ${parts.join("; ")}`;
 		})
 		.join("\n");

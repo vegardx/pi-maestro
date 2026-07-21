@@ -115,10 +115,28 @@ export interface ShipNodeOpts {
 	worktreePath: string;
 }
 
+/** What provisioning resolved: the workspace plus the base facts it stamped. */
+export interface ProvisionedWorkspace {
+	worktreePath: string;
+	branch?: string;
+	baseBranch?: string;
+	baseSha?: string;
+	stacked?: boolean;
+}
+
 export interface NodeExecutorDeps {
 	spawnAgent: (opts: SpawnNodeOpts) => Promise<SpawnedNodeAgent>;
 	killSession: (sessionId: string) => Promise<void>;
 	createWorktree: (opts: CreateNodeWorktreeOpts) => Promise<string>;
+	/**
+	 * The commit `branch` was cut from, for the provisioning stamp. Injected so
+	 * the executor stays git-free; the adapter wires the real implementation.
+	 */
+	resolveBaseSha?: (
+		repoPath: string,
+		branch: string,
+		baseBranch: string,
+	) => string | undefined;
 	/** Plain dir for repo-less plans (v1 scratch provisioning path). */
 	createScratchWorkspace?: (nodeId: string) => Promise<string>;
 	shipNode: (opts: ShipNodeOpts) => Promise<string>;
@@ -481,15 +499,13 @@ export class NodeExecutor {
 			generation: node.sessionGeneration ?? 0,
 		};
 		if (this.needsWorkspace(node)) {
-			const { worktreePath, branch } = await this.provisionWorkspace(node);
+			const provisioned = await this.provisionWorkspace(node);
+			const { worktreePath, branch } = provisioned;
 			run.worktreePath = worktreePath;
 			run.branch = branch;
 			this.runStates.set(node.id, run);
 			this.engine.setNodeStatus(node.id, "active");
-			this.engine.setNodeRuntime(node.id, {
-				worktreePath,
-				...(branch ? { branch } : {}),
-			});
+			this.engine.setNodeRuntime(node.id, provisioned);
 		} else {
 			// Read agents borrow the parent's workspace (parent's cwd stance).
 			const parent = parentOfNode(this.engine.get(), node.id);
@@ -510,7 +526,7 @@ export class NodeExecutor {
 	 */
 	private async provisionWorkspace(
 		node: PlanNode,
-	): Promise<{ worktreePath: string; branch?: string }> {
+	): Promise<ProvisionedWorkspace> {
 		const plan = this.engine.get();
 		if (!plan.repoPath) {
 			if (!this.deps.createScratchWorkspace)
@@ -534,7 +550,11 @@ export class NodeExecutor {
 				baseBranch,
 				repoPath: plan.repoPath,
 			});
-			return { worktreePath, branch };
+			return {
+				worktreePath,
+				branch,
+				...this.stampBase(plan.repoPath, branch, baseBranch, defaultBranch),
+			};
 		}
 		// Branchless worker (ensemble candidate / prep node): its own worktree
 		// on a candidate branch from the parent's branch point. Its diff is
@@ -548,7 +568,32 @@ export class NodeExecutor {
 			baseBranch,
 			repoPath: plan.repoPath,
 		});
-		return { worktreePath, branch };
+		return {
+			worktreePath,
+			branch,
+			...this.stampBase(plan.repoPath, branch, baseBranch, defaultBranch),
+		};
+	}
+
+	/**
+	 * Resolve what the base actually became on disk. Recorded because `base` is
+	 * authored intent and usually absent: without this, nothing downstream can
+	 * tell a correctly-stacked node from one that silently cut from the default
+	 * branch — which is exactly the #249 bug, and the reason its live guard
+	 * passed vacuously once v2 stopped stamping these.
+	 */
+	private stampBase(
+		repoPath: string,
+		branch: string,
+		baseBranch: string,
+		defaultBranch: string,
+	): { baseBranch: string; stacked: boolean; baseSha?: string } {
+		const baseSha = this.deps.resolveBaseSha?.(repoPath, branch, baseBranch);
+		return {
+			baseBranch,
+			stacked: baseBranch !== defaultBranch,
+			...(baseSha ? { baseSha } : {}),
+		};
 	}
 
 	private async advanceNode(node: PlanNode): Promise<void> {

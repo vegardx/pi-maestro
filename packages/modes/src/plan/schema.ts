@@ -112,7 +112,22 @@ export interface PlanNode {
 	/** Resolution history, newest last — one entry per session generation. */
 	resolutions?: NodeResolution[];
 	diversity?: DiversityRecord;
+	/**
+	 * The commit this node's branch was actually cut from, stamped at
+	 * provisioning. `base` is the AUTHORED intent (often absent, meaning
+	 * "derive it"); this is what the derivation resolved to on disk, and the
+	 * only thing that can catch a stale or wrong base after the fact.
+	 */
 	baseSha?: string;
+	/** Effective base branch at provisioning — the resolved counterpart to `base`. */
+	baseBranch?: string;
+	/**
+	 * True when the effective base was NOT the repo's default branch, i.e. this
+	 * node stacks on a sibling's branch. Derived at provisioning because `base`
+	 * alone cannot say: an absent `base` means "derive", which may land either
+	 * way. This is v1's `stacked` flag, now a resolved fact rather than authored.
+	 */
+	stacked?: boolean;
 	lastReviewedHead?: string;
 	worktreePath?: string;
 	worktreeReapedAt?: string;

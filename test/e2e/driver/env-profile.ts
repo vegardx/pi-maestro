@@ -71,8 +71,16 @@ function git(cwd: string, args: string[]): string {
 	});
 }
 
-/** A minimal npm repo the workers can actually build/test against. */
-function seedRepo(repoDir: string): void {
+/**
+ * The scaffolding every drive starts from: a runner the agents can actually
+ * invoke, and the directories the scenario expects. Node 24 strips TypeScript
+ * natively, so `node --test` runs the scenario's `.ts` test files directly.
+ *
+ * Without this the planner finds a bare repo, correctly concludes there is no
+ * toolchain, and adds a bootstrap deliverable — so the scenario's three
+ * expected deliverables no longer describe what gets built.
+ */
+function writeSeedFiles(repoDir: string): void {
 	writeFileSync(
 		join(repoDir, "README.md"),
 		"# pi-maestro e2e sandbox\n\nDisposable repo driven end to end by the maestro.\n",
@@ -93,9 +101,29 @@ function seedRepo(repoDir: string): void {
 	);
 	mkdirSync(join(repoDir, "src"), { recursive: true });
 	mkdirSync(join(repoDir, "tests"), { recursive: true });
+}
+
+/** Seed a repo that does not exist yet (local-remote and CI paths). */
+function seedRepo(repoDir: string): void {
+	writeSeedFiles(repoDir);
 	git(repoDir, ["init", "-q", "-b", "main"]);
 	git(repoDir, ["add", "."]);
 	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
+}
+
+/**
+ * Seed a repo that already exists as a clone (the real-GitHub path).
+ *
+ * Deliberately NOT {@link seedRepo}: that one runs `git init`, which would
+ * re-init an existing clone, and it never pushes — so agents would see the
+ * scaffolding locally while `origin` still held only the README, and the first
+ * PR's diff would contain the seed.
+ */
+function seedClonedRepo(repoDir: string): void {
+	writeSeedFiles(repoDir);
+	git(repoDir, ["add", "."]);
+	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
+	git(repoDir, ["push", "-q", "origin", "HEAD"]);
 }
 
 function isolatedHome(): string {
@@ -217,6 +245,9 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 		const created = createDisposableGithubRepo();
 		repoDir = created.repoDir;
 		deleteRepo = created.deleteRepo;
+		// Same starting point as the local-remote path, pushed so `origin`
+		// matches the working tree — otherwise the first PR diff carries it.
+		seedClonedRepo(repoDir);
 	}
 
 	return {
@@ -405,3 +436,9 @@ export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 		},
 	};
 }
+
+/**
+ * Internals exposed for tests. The two seeds differ in ways that fail
+ * differently and silently — see seed-repo.test.ts.
+ */
+export const __testing = { seedRepo, seedClonedRepo, writeSeedFiles };

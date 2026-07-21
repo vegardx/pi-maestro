@@ -26,6 +26,17 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/**
+ * Where the developer really keeps checkouts for a GitHub owner. Override with
+ * PI_E2E_CHECKOUT_ROOT; defaults to the layout this repo itself lives in.
+ */
+function checkoutRoot(owner: string): string {
+	return (
+		process.env.PI_E2E_CHECKOUT_ROOT ??
+		join(homedir(), "src", "github.com", owner)
+	);
+}
+
 /** The bundled `gh` shim (CI Phase 4 artifact) — generic over any bare origin. */
 function ghShimDir(): string {
 	return join(dirname(fileURLToPath(import.meta.url)), "ci", "gh-shim");
@@ -122,6 +133,13 @@ export interface LiveEnvOptions {
 	 */
 	readonly providerExtensions?: string[];
 	/**
+	 * Provider credentials to write into the isolated auth.json INSTEAD of
+	 * copying the developer's. With this set the drive runs on a credential the
+	 * driver owns and nothing of the developer's reaches the sandbox — the
+	 * point of the Copilot path.
+	 */
+	readonly isolatedAuth?: Record<string, unknown>;
+	/**
 	 * A models.json to install into the isolated agent dir (defines providers for
 	 * the maestro AND every worker, since they share the pinned agent dir). Use
 	 * for a self-contained provider like a local ollama endpoint.
@@ -154,7 +172,15 @@ export interface LiveEnvOptions {
  */
 export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	const piHome = isolatedHome();
-	copyRealCredentials(piHome);
+	if (opts.isolatedAuth) {
+		writeFileSync(
+			join(agentDir(piHome), "auth.json"),
+			`${JSON.stringify(opts.isolatedAuth, null, 2)}\n`,
+			{ mode: 0o600 },
+		);
+	} else {
+		copyRealCredentials(piHome);
+	}
 	if (opts.modelsJsonContent) {
 		writeFileSync(
 			join(agentDir(piHome), "models.json"),
@@ -253,7 +279,20 @@ function writeAgentSettings(
 	);
 }
 
-/** Create a private disposable repo under the logged-in gh user and clone it. */
+/**
+ * Create a private disposable repo under the logged-in gh user and clone it
+ * into the developer's NORMAL checkout location (`~/src/github.com/<owner>/`),
+ * not a temp dir.
+ *
+ * This is the point, not a convenience: git config is path-scoped. A developer
+ * whose identity comes from `includeIf "gitdir:~/src/github.com/"` resolves NO
+ * identity for a clone in /var/folders, so every worker spawn fails the
+ * identity preflight — which is exactly how a drive stalled with three
+ * deliverables stuck `active` and no processes running. Cloning where the repo
+ * would really live makes the sandbox a faithful replica: the same includeIf,
+ * the same credential helpers, the same everything. Only the pi agent dir and
+ * plan store are temporary.
+ */
 function createDisposableGithubRepo(): {
 	repoDir: string;
 	deleteRepo: () => void;
@@ -265,7 +304,8 @@ function createDisposableGithubRepo(): {
 	// the short git sha of the current HEAD plus the pid.
 	const suffix = `${process.pid.toString(36)}${execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim()}`;
 	const slug = `pi-maestro-e2e-${suffix}`;
-	const parent = mkdtempSync(join(tmpdir(), "pi-e2e-clone-"));
+	const parent = checkoutRoot(owner);
+	mkdirSync(parent, { recursive: true });
 	const repoDir = join(parent, slug);
 	// `--clone` takes no path arg; it clones into <cwd>/<repo>. Run from parent.
 	execFileSync(
@@ -290,7 +330,14 @@ function createDisposableGithubRepo(): {
 			} catch {
 				// Best-effort; a leaked private repo is preferable to a crashed teardown.
 			}
-			rmSync(parent, { recursive: true, force: true });
+			// The clone now lives in the developer's real checkout root, so remove
+			// exactly what we created — the clone and its sibling worktrees dir —
+			// and NEVER the parent, which holds their actual work.
+			rmSync(repoDir, { recursive: true, force: true });
+			rmSync(join(parent, "worktrees", slug), {
+				recursive: true,
+				force: true,
+			});
 		},
 	};
 }

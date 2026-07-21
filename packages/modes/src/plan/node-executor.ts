@@ -139,6 +139,8 @@ export interface NodeExecutorDeps {
 	) => string | undefined;
 	/** Plain dir for repo-less plans (v1 scratch provisioning path). */
 	createScratchWorkspace?: (nodeId: string) => Promise<string>;
+	/** Activation failed and the node is parked — surface it to the operator. */
+	onNodeBlocked?: (nodeId: string, reason: string) => void;
 	shipNode: (opts: ShipNodeOpts) => Promise<string>;
 	requestSummary: (
 		sessionId: string,
@@ -481,12 +483,24 @@ export class NodeExecutor {
 			// NEVER let provisioning failures escape the tick (verbatim — that
 			// crashed the whole maestro once). Park blocked with the cause.
 			const message = err instanceof Error ? err.message : String(err);
+			const reason = `activation failed: ${message} — fix the cause, then /start ${node.id}`;
 			this.runStates.set(node.id, {
 				nodeId: node.id,
 				status: "pending",
 				generation: 0,
-				blocked: `activation failed: ${message} — fix the cause, then /start ${node.id}`,
+				blocked: reason,
 			});
+			// …and persist it. doActivateNode marks the node `active` BEFORE
+			// spawning, so a spawn that throws used to leave the ledger saying
+			// `active` with the reason only in memory: `/plan` looked healthy
+			// while nothing ran, and a live drive sat dead for 20 minutes with
+			// no session, no crash file, and nothing to read.
+			try {
+				this.engine.setNodeRuntime(node.id, { blocked: reason });
+			} catch {
+				// A ledger write failure must not mask the original cause.
+			}
+			this.deps.onNodeBlocked?.(node.id, reason);
 		} finally {
 			this.activating.delete(node.id);
 		}
@@ -505,7 +519,11 @@ export class NodeExecutor {
 			run.branch = branch;
 			this.runStates.set(node.id, run);
 			this.engine.setNodeStatus(node.id, "active");
-			this.engine.setNodeRuntime(node.id, provisioned);
+			this.engine.setNodeRuntime(node.id, {
+				...provisioned,
+				// A retry that gets further must not inherit the old reason.
+				blocked: undefined,
+			});
 		} else {
 			// Read agents borrow the parent's workspace (parent's cwd stance).
 			const parent = parentOfNode(this.engine.get(), node.id);

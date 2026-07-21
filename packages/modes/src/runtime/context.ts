@@ -940,6 +940,11 @@ export function createRuntimeContext(
 				// without this gate a `task add` in plan/recon mode spawns
 				// workers.
 				canActivate: () => orchestrationActive(rt.state.mode),
+				// A node that cannot activate is dead work: say so immediately
+				// rather than leaving the operator to notice nothing is running.
+				onNodeBlocked: (nodeId, reason) => {
+					ctx.ui?.notify?.(`${nodeId} could not start — ${reason}`, "error");
+				},
 				onPlanChanged: () => rt.emitPlanChanged(),
 				// Worker questions: TUI surfaces them via the HUD (which polls the
 				// queue), but RPC has no HUD — so present each as an

@@ -26,6 +26,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ForwardingAnswerer } from "./answerer.js";
 import { assertEnsemble, assertScenario, readPlan } from "./assertions.js";
+import {
+	awaitDeviceApproval,
+	copilotAuthEntry,
+	copilotCredentialPath,
+	mintCopilotToken,
+	readCopilotCredential,
+	startDeviceLogin,
+} from "./copilot-auth.js";
+import { COPILOT_PROFILE } from "./copilot-profile.js";
 import { type EnvProfile, setupCiEnv, setupLiveEnv } from "./env-profile.js";
 import {
 	clearCredential,
@@ -139,6 +148,10 @@ async function startDaemon(argv: string[]): Promise<void> {
 	};
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
+	// SIGHUP too: a closed terminal or a killed tmux pane sends only this, and
+	// without it the drive leaks its disposable GitHub repo, the clone, and the
+	// isolated home (it did).
+	process.on("SIGHUP", shutdown);
 }
 
 async function buildProfile(argv: string[]): Promise<EnvProfile> {
@@ -165,6 +178,29 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 			defaultModel: MULTI_MODEL_OLLAMA.defaultModel,
 			modelsJsonContent: MULTI_MODEL_OLLAMA.modelsJsonContent,
 			models: MULTI_MODEL_OLLAMA.models,
+		});
+	}
+	// `--copilot-models` runs the drive on GitHub Copilot with the DRIVER'S own
+	// device-code credential: opus plans and reviews, GPT implements. pi
+	// resolves the provider natively, so it refreshes the Copilot token during
+	// the run — no bearer frozen into models.json, no mid-drive expiry.
+	if (argv.includes("--copilot-models")) {
+		const credential = readCopilotCredential();
+		if (!credential) {
+			throw new Error(
+				"no Copilot credential — run `npm run e2e:driver -- auth copilot`",
+			);
+		}
+		const minted = await mintCopilotToken(credential);
+		return setupLiveEnv({
+			localRemote: argv.includes("--local-remote"),
+			keep: argv.includes("--keep"),
+			defaultProvider: COPILOT_PROFILE.defaultProvider,
+			defaultModel: COPILOT_PROFILE.defaultModel,
+			models: COPILOT_PROFILE.models,
+			isolatedAuth: {
+				"github-copilot": copilotAuthEntry(credential, minted),
+			},
 		});
 	}
 	// `--sit-models` is the hosted twin: real radicalai-sit gateway models
@@ -429,8 +465,29 @@ async function runAuth(argv: string[]): Promise<void> {
 		process.stdout.write("driver gateway credential removed\n");
 		return;
 	}
+	if (action === "copilot") {
+		const domain = flagValue(argv, "--domain") ?? "dnb.ghe.com";
+		const { prompt, deviceCode } = await startDeviceLogin(domain);
+		process.stdout.write(
+			`Open ${prompt.verificationUri} and enter the code:\n\n` +
+				`    ${prompt.userCode}\n\n` +
+				`Waiting for approval (expires in ${Math.round(
+					prompt.expiresInSeconds / 60,
+				)} minutes)…\n`,
+		);
+		const credential = await awaitDeviceApproval(domain, deviceCode, prompt);
+		const minted = await mintCopilotToken(credential);
+		process.stdout.write(
+			`signed in to ${credential.domain}` +
+				`${minted.sku ? ` (${minted.sku})` : ""}\n` +
+				`stored at ${copilotCredentialPath()}\n`,
+		);
+		return;
+	}
 	if (action !== "login") {
-		process.stderr.write("usage: e2e-driver auth <login|status|logout>\n");
+		process.stderr.write(
+			"usage: e2e-driver auth <login|copilot|status|logout>\n",
+		);
 		process.exit(1);
 	}
 	try {

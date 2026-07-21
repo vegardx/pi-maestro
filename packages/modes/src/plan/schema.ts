@@ -122,6 +122,13 @@ export interface PlanNode {
 	/** Effective base branch at provisioning — the resolved counterpart to `base`. */
 	baseBranch?: string;
 	/**
+	 * Why activation failed, persisted. Without this the reason lived only in
+	 * the executor's in-memory run state: a node whose spawn threw stayed
+	 * `active` on the ledger forever, `state` looked healthy, and a drive could
+	 * sit dead indefinitely with nothing to read. Cleared on a successful spawn.
+	 */
+	blocked?: string;
+	/**
 	 * True when the effective base was NOT the repo's default branch, i.e. this
 	 * node stacks on a sibling's branch. Derived at provisioning because `base`
 	 * alone cannot say: an absent `base` means "derive", which may land either

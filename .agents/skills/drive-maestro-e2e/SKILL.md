@@ -26,7 +26,9 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
 
 | Subcommand | What it does |
 | --- | --- |
-| `start [--live \| --ci] [--multi-model] [--seed-plan] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt` (plus `seededPlan` when seeded). |
+| `auth copilot [--domain <host>]` | One-time device-code login for the Copilot drive (default `dnb.ghe.com`). Prints a URL + code for a **human** to approve; stores the credential beside the driver. |
+| `auth login \| status \| logout` | The same for the radicalai-sit gateway (browser PKCE). |
+| `start [--live \| --ci] [--copilot-models \| --multi-model \| --sit-models] [--seed-plan] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt` (plus `seededPlan` when seeded). |
 | `state` | The maestro's pi state (`isStreaming`, model) + the plan's deliverables and their statuses. |
 | `poll` | New events since the last poll **and** `pending[]` — questions parked waiting for your answer. |
 | `prompt "<text>" [--steer \| --follow-up]` | Send a prompt/command. Auto-queues as a follow-up if the agent is mid-stream. |
@@ -100,21 +102,118 @@ The routing correctness itself is pinned deterministically (no ollama) in
 `test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really
 serves it end to end.
 
+## Copilot drive (`--copilot-models`) — the preferred live profile
+
+`start --copilot-models` runs on **GitHub Copilot** with a credential the driver
+owns. Prefer this over `--sit-models`: pi resolves `github-copilot` natively, so
+it refreshes the token **during** the run — nothing is frozen into a
+`models.json`, and a long drive cannot outlive its credential.
+
+**Login once** (needs a human at a browser — there is no way around it for the
+authorization-code/device grants; the gateway advertises `client_credentials`,
+which would be zero-touch, but needs a confidential client somebody with gateway
+admin must provision):
+
+```
+npm run e2e:driver -- auth copilot        # prints a URL + code, waits, stores
+```
+
+The code lives ~15 minutes. **Do not mint codes on a timer while nobody is
+there** — two lapsed in one session that way. Mint one when the human says they
+are ready, and hand it over immediately.
+
+Model layout, in **v2 shape** (catalogs / profiles / agent tier allowlists —
+NOT the retired v1 `presets`+`modelSets`):
+
+- seat `claude-opus-4.8` · `fast` `mai-code-1-flash-picker` ·
+  `normal` `gpt-5.5` · `heavy` `claude-opus-4.8`
+- allowlists: worker `[fast, normal, heavy]`, explorer `[fast, normal]`,
+  reviewer `[normal, heavy]`
+
+Traps this profile has already hit, all confirmed by experiment:
+
+- **`404` from `dnb.ghe.com/login/device/code` means a missing content-type.**
+  Node's `fetch` sends `text/plain` for a *string* body and GitHub Enterprise
+  answers **404, not 415** — indistinguishable from a wrong URL. Pass
+  `URLSearchParams` directly. The Copilot editor headers are NOT the cause
+  (they were blamed first and are harmless).
+- **The endpoint shown in `state` is a lie.** `pi.model.baseUrl` reports the
+  static catalog default (`api.individual.githubcopilot.com`); real routing is
+  derived per request by `toAuth` from the credential's `enterpriseUrl`. To
+  check which seat is really in use, mint a token and `GET /models` against
+  both hosts — the DNB seat returns 200 from `copilot-api.dnb.ghe.com` and is
+  **rejected** by the individual endpoint (`unknown stamp`).
+- pi's own login calls `enableAllGitHubCopilotModels`; Claude/Grok models must
+  be enabled on the account before use. A fresh account may need that.
+
 ## Hosted multi-model drive (`--sit-models`)
 
 `start --live --sit-models` is the hosted twin: real radicalai-sit gateway
-models via a generated `models.json` (no provider extension). **Opus 4.8** =
-planner seat + reviews; **GPT 5.6 Sol** = workers + fast tier — cross-family
-review by construction. Uses the developer's live `radicalai-sit` OAuth token
-(refuses to start under 45 min of token life — open pi on a radicalai model
-once to refresh). Burns real tokens; combine with `--local-remote` (the live
-profile now puts the CI `gh` shim on PATH, so ship completes offline against
-the bare remote). Routing is pinned in `test/e2e/driver/sit-profile.test.ts`.
+models via a generated `models.json` (no provider extension). Uses the
+**driver's own** gateway credential (`auth login`), refreshed automatically
+before each drive. Burns real tokens; combine with `--local-remote` to ship
+offline against a bare remote via the CI `gh` shim.
+
+Caveat this profile has and Copilot does not: the access token is baked into
+`models.json` at launch and lives ~1h, so a drive outliving it loses auth
+mid-flight. Never refresh using the developer's pi credential — the gateway
+**rotates** the refresh token, so that silently invalidates pi's copy (it
+already happened once).
+
+## Narrate the drive as it happens
+
+A drive is not a pass/fail check — the point is to watch the machine think. Tell
+the human what is happening at each **pivotal** beat, in your own words, not a
+transcript dump:
+
+- **Plan formed** — how many deliverables, what shape, and any decision the
+  planner made that was not in the prompt (e.g. it discovered the sandbox has no
+  scaffolding and folded a TS+vitest bootstrap into deliverable #1).
+- **Plan review** — what the reviewer objected to and what changed as a result.
+- **The gate ruling** and what you answered.
+- **Each deliverable starting**, and on what branch/base.
+- **Reviewers running** — their verdict and whether the worker acted on it.
+- **What the parent agent decided** in ensemble runs.
+- **Anywhere it got confused** — this is the most valuable output of the whole
+  exercise. Record the confusion, do not paper over it.
+
+Read reasoning from `<piHome>/events.jsonl` (thinking + tool_use blocks); `poll`
+only carries UI requests and coarse events.
+
+## What a drive is expected to exercise
+
+Keep this list honest — if a drive stops covering one of these, say so:
+
+1. **Plan authoring** from prose (the most model-sensitive step) → the gate.
+2. **Model routing**: seat inheritance for plan nodes; tiers for duty rows and
+   subagents. NOTE: plan nodes currently **inherit the session model** —
+   `resolveModel` passes no tier, so there is no per-node routing yet, despite
+   the call-site comment promising "Phase 4 adds tier routing".
+3. **Parallel + dependent deliverables**, with the dependent one **stacking** on
+   a sibling's branch (`stacked` + `baseSha` are stamped at provisioning; the
+   scenario declares `stacked: true` so the check cannot pass vacuously).
+4. **A review agent** running against a worker's diff.
+5. **Real ship**: branch → PR via real `gh` (drop `--local-remote`).
+6. **Teardown**: disposable repo deleted, isolated home and worktrees removed.
+
+Known gaps a drive keeps surfacing (report if they recur, do not "fix" mid-run):
+
+- A **v2-only config cannot drive subagent model selection**: `agents.run`
+  validates a requested model against *authored options* from the v1 model-set
+  vocabulary, so a v2 tier override is rejected and the review runs on the
+  runner's own pick. Visible as the notice "tier override … was rejected by the
+  agent runner; running with its own selection instead."
+- The **real-GitHub path does not seed the sandbox repo** — `--add-readme` only,
+  no `package.json`, unlike the `--local-remote` path which calls `seedRepo()`.
+  The planner has to invent scaffolding, so the two live paths are not
+  comparable runs.
 
 ## Notes
 
 - **Never edit the harness to make the test pass.** The whole point is to run the
   real code unmodified and see whether it works.
+- **Never commit with `--no-gpg-sign`.** Signing is on via `config-github`; if
+  the key is locked, ask the human rather than bypassing it.
 - If `state` shows `plan.found: false` after you sent the plan, the plan wasn't
   created — re-read the events from `poll` to see what the maestro said.
 - The scripted, deterministic version of this same flow is

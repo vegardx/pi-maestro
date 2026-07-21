@@ -40,11 +40,10 @@ export interface GatewayCredential {
  * deliberately NOT in the developer's pi agent dir.
  */
 export function credentialPath(): string {
-	return join(
-		dirname(fileURLToPath(import.meta.url)),
-		".auth",
-		"gateway-sit.json",
-	);
+	const dir =
+		process.env.PI_E2E_AUTH_DIR ??
+		join(dirname(fileURLToPath(import.meta.url)), ".auth");
+	return join(dir, "gateway-sit.json");
 }
 
 export function readCredential(): GatewayCredential | null {

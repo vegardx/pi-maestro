@@ -4,11 +4,17 @@
 // The bundled radicalai provider extension needs a newer host pi than the CLI
 // carries (readStoredCredential, pi >=0.80.8), so this profile does what the
 // ollama profile does: generate a self-contained models.json against the
-// gateway. Auth is the developer's live radicalai-sit OAuth access token,
-// copied into the isolated home as a static provider key — the gateway
-// accepts it on both `x-api-key` (anthropic-messages) and `Authorization:
-// Bearer` (openai-responses). Tokens live ~1h; buildSitProfile() refuses to
-// start a drive on one about to expire.
+// gateway. Auth is the DRIVER'S OWN gateway credential (see gateway-auth.ts) —
+// its own OAuth login, its own store, its own refresh cycle, never the
+// developer's pi credential. The access token is written into the isolated
+// home as a static provider key; the gateway accepts it on both `x-api-key`
+// (anthropic-messages) and `Authorization: Bearer` (openai-responses).
+//
+// Tokens live ~1h and the key is baked into models.json at launch, so a drive
+// running longer than the token's remaining life will still lose auth
+// mid-flight. buildSitProfile() refreshes immediately before launch, which
+// buys a full hour; a drive that needs more wants a refreshing local proxy
+// (models.json has no key indirection to hook).
 //
 // Role layout (per the review-diversity principle — reviewer ≠ author family):
 //   • session / planner  → claude-opus-4-8  (careful judge: plans + reviews)
@@ -17,9 +23,7 @@
 //         opus reviews sol's work — cross-family by construction
 //   • fast    (utility)  → gpt-5.6-sol @low → session
 
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { liveAccessToken } from "./gateway-auth.js";
 import type { MultiModelProfile } from "./multi-model-profile.js";
 
 const GATEWAY = "https://gateway.sit.raicode.no";
@@ -30,37 +34,6 @@ const P_OPENAI = "sit-openai";
 
 const OPUS = `${P_ANTHROPIC}/claude-opus-4-8`;
 const SOL = `${P_OPENAI}/gpt-5.6-sol`;
-
-/** Minimum token life for a drive: model pulls + a full plan lifecycle. */
-const MIN_TOKEN_LIFE_MS = 45 * 60_000;
-
-interface StoredOauth {
-	readonly access?: string;
-	readonly expires?: number;
-}
-
-function liveSitToken(): string {
-	const authPath = join(homedir(), ".config", "pi", "agent", "auth.json");
-	let auth: Record<string, StoredOauth>;
-	try {
-		auth = JSON.parse(readFileSync(authPath, "utf8"));
-	} catch (err) {
-		throw new Error(
-			`cannot read ${authPath} for the radicalai-sit token: ${err instanceof Error ? err.message : String(err)}`,
-		);
-	}
-	const entry = auth["radicalai-sit"];
-	if (!entry?.access)
-		throw new Error("no radicalai-sit credential in auth.json — log in via pi");
-	if (entry.expires && entry.expires < Date.now() + MIN_TOKEN_LIFE_MS) {
-		throw new Error(
-			`radicalai-sit token expires ${new Date(entry.expires).toISOString()} — ` +
-				`less than ${MIN_TOKEN_LIFE_MS / 60000}m of life for a full drive. ` +
-				"Open pi on a radicalai model once to refresh, then re-run.",
-		);
-	}
-	return entry.access;
-}
 
 function buildModelsJson(token: string): string {
 	return `${JSON.stringify(
@@ -190,12 +163,20 @@ export function sitProfileFromToken(token: string): MultiModelProfile {
 }
 
 /**
- * Build the SIT live profile. Reads the developer's live radicalai-sit token
- * (throws when missing or expiring) — call at drive start, not import time.
+ * Build the SIT live profile against the DRIVER'S OWN gateway credential,
+ * refreshing it if needed. Call at drive start, not import time.
+ *
+ * Previously this read the developer's pi credential and threw when it had
+ * under 45m of life ("open pi on a radicalai model once to refresh"). That
+ * guard existed only because the driver could not refresh; worse, refreshing
+ * with pi's credential would have rotated its refresh token out from under it.
  */
-export function buildSitProfile(): MultiModelProfile {
-	return sitProfileFromToken(liveSitToken());
+export async function buildSitProfile(): Promise<MultiModelProfile> {
+	return sitProfileFromToken(await liveAccessToken(GATEWAY));
 }
+
+/** The gateway this profile authenticates against (for the auth command). */
+export const SIT_GATEWAY = GATEWAY;
 
 /** Referenced model refs (for docs / catalog checks). */
 export const SIT_CATALOG: readonly string[] = [OPUS, SOL];

@@ -30,7 +30,7 @@ import { fileURLToPath } from "node:url";
  * Where the developer really keeps checkouts for a GitHub owner. Override with
  * PI_E2E_CHECKOUT_ROOT; defaults to the layout this repo itself lives in.
  */
-function checkoutRoot(owner: string): string {
+export function checkoutRoot(owner: string): string {
 	return (
 		process.env.PI_E2E_CHECKOUT_ROOT ??
 		join(homedir(), "src", "github.com", owner)

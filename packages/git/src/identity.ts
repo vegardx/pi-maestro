@@ -25,12 +25,27 @@ function configValue(repoPath: string, key: string): string | undefined {
 }
 
 /**
- * The identity git itself would use for a commit in `repoPath`, resolved
- * through git's own precedence chain (system, global, repo-local, includeIf).
- * Null when the developer has configured none — the caller must surface that
+ * The identity git itself would use for a commit in `repoPath`.
+ *
+ * Environment first, then git's own precedence chain (system, global,
+ * repo-local, includeIf) — because that is git's real order, and because
+ * the GIT_AUTHOR and GIT_COMMITTER variables are the mechanism THIS MODULE
+ * hands to agents.
+ * Checking only `git config` made the check disagree with its own remedy: an
+ * outer harness that had already supplied the identity as env was told none
+ * was configured. A live drive died on exactly that — the e2e driver runs the
+ * maestro with an isolated HOME, so `~/.gitconfig` and any `includeIf` are
+ * invisible, and every worker refused to spawn.
+ *
+ * Null when neither source has both halves — the caller must surface that
  * rather than invent one.
  */
 export function resolveGitIdentity(repoPath: string): GitIdentity | null {
+	const envName = process.env.GIT_AUTHOR_NAME ?? process.env.GIT_COMMITTER_NAME;
+	const envEmail =
+		process.env.GIT_AUTHOR_EMAIL ?? process.env.GIT_COMMITTER_EMAIL;
+	if (envName && envEmail) return { name: envName, email: envEmail };
+
 	const name = configValue(repoPath, "user.name");
 	const email = configValue(repoPath, "user.email");
 	return name && email ? { name, email } : null;

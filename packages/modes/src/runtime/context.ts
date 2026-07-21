@@ -249,12 +249,24 @@ export function createRuntimeContext(
 		opts.isolationBackends?.strong ?? new AppleContainerStrongBackend();
 	const bashBackends = {
 		...opts.bashBackends,
-		// Protected reads use the same private-workspace policy rather than an
-		// unrestricted local shell. This also avoids a separate writable host-read
-		// implementation accidentally broadening the policy.
-		hostRead:
-			opts.bashBackends?.hostRead ??
-			((cwd: string) => lightweightIsolation.operations(cwd)),
+		// Protected reads run on the REAL filesystem.
+		//
+		// This used to alias the lightweight tier, which serves reads from a
+		// private workspace COPY (and denies reads under $HOME outright). The
+		// copy has no `.git`, so every git command an agent ran reported "not a
+		// git repository" — while the `ls` tool, which is not sandboxed, showed
+		// `.git` present. A planner correctly observed the contradiction, could
+		// not resolve it, and designed work to `git init` an existing clone.
+		//
+		// A read guard may restrict what a command can CHANGE; it must never
+		// change what a command can SEE. A denied read tells an agent "you may
+		// not know this"; an invisible `.git` tells it "there is no repository",
+		// and it plans on the lie. The write restriction here is enforced by
+		// classification, not by the backend: `host-read` is only routed to when
+		// the effect set is exclusively reads (no workspace-write, no unknown),
+		// so there is nothing for isolation to contain. Deployments wanting
+		// belt-and-braces can inject a read-only backend via bashBackends.
+		hostRead: opts.bashBackends?.hostRead,
 		lightweight:
 			opts.bashBackends?.lightweight ??
 			((cwd: string) => lightweightIsolation.operations(cwd)),

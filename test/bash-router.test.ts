@@ -391,15 +391,32 @@ describe("bash coaching and routing policy", () => {
 			resolveBashOperations(directDecision, { direct: () => direct }, "/w"),
 		).toBe(direct);
 
+		// host-read runs on the REAL filesystem. It used to fail closed here, and
+		// was wired to the lightweight tier — which serves reads from a private
+		// workspace copy with no `.git`, so `git status` in plan mode reported
+		// "not a git repository" while the ls tool showed `.git` present. A read
+		// guard may restrict what a command CHANGES, never what it SEES: the
+		// route is only reached for exclusively-read effect sets, so there is
+		// nothing to contain, and lying about the tree is the larger harm.
 		const protectedRead = decideBashPolicy({
 			command: "git status",
 			mode: "plan",
 			actor: "maestro",
 			policy: guided,
 		});
-		expect(() => resolveBashOperations(protectedRead, {}, "/w")).toThrow(
-			/no write-restricted host-read backend is available/u,
-		);
+		expect(protectedRead.route).toBe("host-read");
+		expect(
+			resolveBashOperations(protectedRead, { direct: () => direct }, "/w"),
+		).toBe(direct);
+		// An injected backend still wins, for deployments that want one.
+		const readBackend = { exec: async () => ({ exitCode: 0 }) };
+		expect(
+			resolveBashOperations(
+				protectedRead,
+				{ direct: () => direct, hostRead: () => readBackend },
+				"/w",
+			),
+		).toBe(readBackend);
 
 		const isolated = decideBashPolicy({
 			command: "npm test",

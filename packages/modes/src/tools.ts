@@ -285,9 +285,25 @@ const AgentParams = Type.Object({
 		Type.Literal("add"),
 		Type.Literal("update"),
 		Type.Literal("remove"),
+		Type.Literal("ensemble"),
 	]),
 	deliverableId: Type.Optional(
 		Type.String({ description: "Parent deliverable id." }),
+	),
+	candidates: Type.Optional(
+		Type.Array(
+			Type.Object({
+				name: Type.String({ description: "Candidate title." }),
+				focus: Type.String({
+					description: "What this candidate should implement.",
+				}),
+			}),
+			{
+				minItems: 2,
+				description:
+					"ensemble only: the competing candidate implementations (≥2).",
+			},
+		),
 	),
 	name: Type.Optional(
 		Type.String({ description: "Agent name (unique within deliverable)." }),
@@ -786,9 +802,9 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 		name: "agent",
 		label: "Agent",
 		description:
-			"Manage support agents within a deliverable: add, update, remove.",
+			"Manage support agents within a deliverable: add, update, remove. ensemble authors N competing worker candidates under a branch-owning deliverable (a bake-off) and makes the parent their integrator.",
 		promptSnippet:
-			"agent — manage support agents in a deliverable (add/update/remove).",
+			"agent — manage support agents (add/update/remove) or ensemble (author competing worker candidates) in a deliverable.",
 		parameters: AgentParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {
@@ -861,6 +877,43 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						engine.removeNode(child.id);
 						notify(deps, engine);
 						return ok(`Removed agent ${params.name}.`, { plan: engine.get() });
+					}
+					case "ensemble": {
+						// A competitive bake-off: N branchless worker children under a
+						// branch-owning worker deliverable. The executor provisions each
+						// as a candidate (cand/<parent>/<id>) forked from the parent's
+						// branch tip; candidates NEVER ship (isCandidateBranch). The
+						// parent becomes the INTEGRATOR — it waits for the candidate
+						// diffs, cherry-picks the strongest, and ships the one PR.
+						// (docs/design/multi-model-agents.md §5.)
+						if (engine.hasExecutionStarted())
+							return error(
+								"ensemble candidates must be authored before execution starts",
+							);
+						if (parent.agent !== "worker" || !isBranchOwner(parent))
+							return error(
+								`ensemble parent ${deliverableId} must be a branch-owning worker deliverable — it integrates the candidates and ships the one PR`,
+							);
+						const candidates = params.candidates ?? [];
+						if (candidates.length < 2)
+							return error("ensemble requires at least two candidates");
+						// The parent integrates the candidates rather than implementing.
+						engine.updateNode(deliverableId, { persona: "integrator" });
+						const created = candidates.map((candidate) =>
+							engine.addNode(deliverableId, {
+								agent: "worker",
+								persona: "coder",
+								title: candidate.name,
+								tasks: [candidate.focus],
+							}),
+						);
+						notify(deps, engine);
+						return ok(
+							`✓ ensemble under ${deliverableId}: ${created.length} candidates (${created
+								.map((child) => child.id)
+								.join(", ")}); parent is the integrator.`,
+							{ plan: engine.get() },
+						);
 					}
 				}
 			});

@@ -136,6 +136,7 @@ describe("bundled playbooks", () => {
 			"coder",
 			"debugger",
 			"generalist",
+			"integrator",
 			"plan-review",
 			"researcher",
 			"reviewer",
@@ -144,6 +145,7 @@ describe("bundled playbooks", () => {
 			"coder",
 			"debugger",
 			"generalist",
+			"integrator",
 		]);
 		expect(personasForAgent(registry, "explorer").map((p) => p.name)).toEqual([
 			"researcher",

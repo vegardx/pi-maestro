@@ -37,6 +37,7 @@ import {
 	startDeviceLogin,
 } from "./copilot-auth.js";
 import { COPILOT_PROFILE, COPILOT_REQUIRED_MODELS } from "./copilot-profile.js";
+import { detectStall, keepSystemAwake, STALL_MS } from "./daemon-health.js";
 import {
 	checkoutRoot,
 	type EnvProfile,
@@ -77,6 +78,7 @@ interface DaemonState {
 	answerer: ForwardingAnswerer;
 	cursor: number;
 	server: Server;
+	releaseWakeLock: () => void;
 }
 
 async function startDaemon(argv: string[]): Promise<void> {
@@ -89,6 +91,9 @@ async function startDaemon(argv: string[]): Promise<void> {
 	}
 	const maestroRoot = process.cwd();
 	const answerer = new ForwardingAnswerer();
+	// Hold the no-idle-sleep assertion for the whole drive. Scoped to this pid,
+	// so it releases no matter how the daemon exits.
+	const releaseWakeLock = keepSystemAwake();
 	const profile = await buildProfile(argv);
 
 	// --seed-plan: write the canned sandbox-features plan straight into the
@@ -121,6 +126,7 @@ async function startDaemon(argv: string[]): Promise<void> {
 		scenario,
 		cursor: 0,
 		server: createServer(),
+		releaseWakeLock,
 	};
 
 	state.server.on("connection", (socket) => handleConnection(socket, state));
@@ -145,6 +151,7 @@ async function startDaemon(argv: string[]): Promise<void> {
 
 	const shutdown = () => {
 		try {
+			releaseWakeLock();
 			state.sut.client.close();
 			state.sut.child.kill("SIGKILL");
 			state.profile.teardown();
@@ -287,14 +294,18 @@ async function dispatch(
 		case "poll": {
 			const { events, cursor } = state.sut.client.eventsSince(state.cursor);
 			state.cursor = cursor;
+			const died = state.sut.died();
+			// Death and stall are the two silent failures a poller most needs to
+			// learn — both used to be invisible. Death dominates; only probe for a
+			// stall when the SUT is still alive.
+			const stalled = died ? undefined : await detectStall(state.sut);
 			return {
 				ok: true,
 				events: events.map(summarizeEvent),
 				pending: state.answerer.pending(),
 				cursor,
-				// A dead SUT is the single most important thing a poller can
-				// learn, and it used to be invisible.
-				...(state.sut.died() ? { sutDied: state.sut.died() } : {}),
+				...(died ? { sutDied: died } : {}),
+				...(stalled ? { sutStalled: stalled } : {}),
 			};
 		}
 		case "answer": {
@@ -313,7 +324,19 @@ async function dispatch(
 				return { ok: false, sutDied: died, plan: planSummary(state) };
 			}
 			const pi = await state.sut.client.getState();
-			return { ok: true, pi, plan: planSummary(state) };
+			// Alive and streaming but no events for STALL_MS = a hung turn. We
+			// already hold `pi`, so judge from it rather than re-querying.
+			const sinceMs = state.sut.sinceLastActivityMs();
+			const stalled =
+				pi.isStreaming && sinceMs >= STALL_MS
+					? { sinceMs, thresholdMs: STALL_MS }
+					: undefined;
+			return {
+				ok: true,
+				pi,
+				plan: planSummary(state),
+				...(stalled ? { sutStalled: stalled } : {}),
+			};
 		}
 		case "assert": {
 			if (state.scenario.name === ENSEMBLE_METRICS.name) {
@@ -341,6 +364,7 @@ async function dispatch(
 		case "stop": {
 			reply(socket, { ok: true, stopping: true });
 			setTimeout(() => {
+				state.releaseWakeLock();
 				state.sut.client.close();
 				state.sut.child.kill("SIGKILL");
 				state.profile.teardown();

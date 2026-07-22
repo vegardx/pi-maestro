@@ -93,6 +93,9 @@ export interface SubagentServiceOptions {
 	readonly tmuxSendKeys?: (session: string, keys: string) => void;
 }
 
+// Depth 3 = seat(0) → worker(1) → aggregator/advisor(2) → sub-reader(3, leaf).
+// Covers the intended fan-out trees; a depth-3 agent is a leaf (cannot spawn).
+// Raise only if a depth-3 agent must itself fan out (docs/design/multi-model-agents.md §7).
 const DEFAULT_MAX_DEPTH = 3;
 
 /**

@@ -454,9 +454,30 @@ async function executeStandby(
 		// Standby loop: park idle (0 tokens) until the next ask, then run one
 		// follow-up turn and hand its text back to that ask's caller.
 		while (!signal.aborted) {
+			// Slot-yield (docs/design/multi-model-agents.md §7): a standby run
+			// blocked waiting for its next ask must NOT count against concurrency,
+			// or idle parents starve the leaves. Release the permit while parked
+			// (→ blocked) and re-acquire on resume (→ running).
+			if (release) {
+				release();
+				release = undefined;
+				bus.publish({
+					type: "status",
+					runId,
+					status: "blocked",
+					at: Date.now(),
+				});
+			}
 			const req = await raceAsk(channel, session, signal);
 			if (!req) break; // aborted, stopped, or the child process died
 			try {
+				release = await opts.semaphore.acquire(signal);
+				bus.publish({
+					type: "status",
+					runId,
+					status: "running",
+					at: Date.now(),
+				});
 				await runTurn(session, () => followUp(req.message), rpcMs, signal);
 				if (signal.aborted) {
 					req.reject(new Error("run interrupted"));
@@ -472,6 +493,8 @@ async function executeStandby(
 					)?.trim() ?? "";
 				req.resolve(capText(text, cap));
 			} catch (err) {
+				// A failed re-acquire (aborted) or turn error rejects this ask; the
+				// loop guard then exits on the aborted signal.
 				req.reject(err instanceof Error ? err : new Error(String(err)));
 				if ((session as { exitError?: Error | null }).exitError) break;
 			}

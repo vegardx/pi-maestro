@@ -11,7 +11,10 @@ import {
 	createAgentRunner,
 	type RpcLike,
 } from "../packages/subagents/src/runners.js";
-import { createSemaphore } from "../packages/subagents/src/semaphore.js";
+import {
+	createSemaphore,
+	type Semaphore,
+} from "../packages/subagents/src/semaphore.js";
 import type { LaunchRequest } from "../packages/subagents/src/service.js";
 
 /**
@@ -63,11 +66,12 @@ class FakeStandbyClient implements RpcLike {
 	}
 }
 
-function launch(client: RpcLike, profile: SpawnProfile) {
-	const runner = createAgentRunner({
-		factory: () => client,
-		semaphore: createSemaphore(4),
-	});
+function launch(
+	client: RpcLike,
+	profile: SpawnProfile,
+	semaphore: Semaphore = createSemaphore(4),
+) {
+	const runner = createAgentRunner({ factory: () => client, semaphore });
 	const request: LaunchRequest = {
 		runId: "run-standby" as RunId,
 		prompt: "boot",
@@ -75,6 +79,15 @@ function launch(client: RpcLike, profile: SpawnProfile) {
 		invocation: { cwd: "/tmp", args: [], env: {}, depth: 1 },
 	};
 	return runner.launch(request, createRunBus());
+}
+
+/** Poll a predicate to a deadline (the runner settles turns on microtasks). */
+async function waitFor(predicate: () => boolean, ms = 1000): Promise<void> {
+	const deadline = Date.now() + ms;
+	while (!predicate()) {
+		if (Date.now() > deadline) throw new Error("waitFor timed out");
+		await new Promise((r) => setTimeout(r, 5));
+	}
 }
 
 describe("persistent standby ask", () => {
@@ -112,5 +125,30 @@ describe("persistent standby ask", () => {
 		const client = new FakeStandbyClient(["done"]);
 		const controller = launch(client, { profile: "general" });
 		expect(controller.ask).toBeUndefined();
+	});
+
+	it("yields its semaphore slot while parked idle, re-acquiring to answer", async () => {
+		const semaphore = createSemaphore(1); // one slot — a held slot would wedge
+		const client = new FakeStandbyClient(["ready", "answer-1"]);
+		const controller = launch(
+			client,
+			{ profile: "advisor", standby: true },
+			semaphore,
+		);
+
+		// After the initial prompt the run parks; a parked standby holds no slot.
+		await waitFor(() => semaphore.active === 0);
+
+		// Proof it truly yielded: the sole slot is free to acquire elsewhere.
+		const borrowed = await semaphore.acquire();
+		expect(semaphore.active).toBe(1);
+		borrowed();
+
+		// It re-acquires to answer, then yields again.
+		expect(await controller.ask?.("q")).toBe("answer-1");
+		await waitFor(() => semaphore.active === 0);
+
+		controller.stop();
+		await controller.result();
 	});
 });

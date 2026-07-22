@@ -195,6 +195,12 @@ export function createAgentsCapability(
 			if (!cap) throw new Error("Subagents are not available.");
 			cap.steer(runId, guidance);
 		},
+		ask: async (runId, message) => {
+			const cap = deps.subagents();
+			if (!cap) throw new Error("Subagents are not available.");
+			if (!cap.ask) return undefined;
+			return cap.ask(runId, message);
+		},
 		interrupt: async (runId, reason) => {
 			const cap = deps.subagents();
 			if (!cap) throw new Error("Subagents are not available.");
@@ -244,13 +250,14 @@ const Params = Type.Object({
 			Type.Literal("list"),
 			Type.Literal("status"),
 			Type.Literal("steer"),
+			Type.Literal("ask"),
 			Type.Literal("interrupt"),
 			Type.Literal("capture"),
 			Type.Literal("result"),
 		],
 		{
 			description:
-				"run/batch start assignments; list/status inspect; steer/interrupt control; capture/result retrieve output.",
+				"run/batch start assignments; list/status inspect; steer/ask/interrupt control; capture/result retrieve output. ask drives a persistent (standby) child and blocks for its reply.",
 		},
 	),
 	kind: Type.Optional(Type.String()),
@@ -317,9 +324,9 @@ export function createAgentTool(
 		name: "agent",
 		label: "Agent",
 		description:
-			"Run and control ordinary typed agents. Use run for one assignment or batch for independent parallel assignments. Every run resolves and persists one exact model/effort pair. list/status inspect durable runs; steer and interrupt control live runs; capture and result retrieve output. Available kinds are included by list.",
+			"Run and control ordinary typed agents. Use run for one assignment or batch for independent parallel assignments. Every run resolves and persists one exact model/effort pair. list/status inspect durable runs; steer and interrupt control live runs; ask drives a persistent standby child and blocks for its reply; capture and result retrieve output. Available kinds are included by list.",
 		promptSnippet:
-			"agent — run/batch typed agents and list/status/steer/interrupt/capture/result them.",
+			"agent — run/batch typed agents and list/status/steer/ask/interrupt/capture/result them.",
 		parameters: Params,
 		renderResult: collapsed,
 		async execute(_id, params): Promise<AgentToolResult<Details>> {
@@ -386,6 +393,16 @@ export function createAgentTool(
 							return response("steer requires runId and guidance.");
 						cap.steer(params.runId as RunId, params.guidance);
 						return response(`Steered ${params.runId}.`);
+					case "ask": {
+						if (!params.runId || !params.prompt)
+							return response("ask requires runId and prompt.");
+						const reply = await cap.ask(params.runId as RunId, params.prompt);
+						if (reply === undefined)
+							return response(
+								`${params.runId} cannot be asked (not a persistent standby run).`,
+							);
+						return response(reply, { runId: params.runId as RunId });
+					}
 					case "interrupt":
 						if (!params.runId) return response("interrupt requires runId.");
 						await cap.interrupt(params.runId as RunId, params.reason);

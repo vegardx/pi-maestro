@@ -33,6 +33,9 @@ export interface RpcLike {
 	start(): Promise<void>;
 	prompt(message: string): Promise<void>;
 	steer?(message: string): Promise<void>;
+	/** Queue a message processed after the current turn — the `ask` transport
+	 *  for persistent standby children. */
+	followUp?(message: string): Promise<void>;
 	abort(): Promise<void>;
 	stop(): Promise<void>;
 	onEvent(listener: (event: AgentSessionEvent) => void): () => void;
@@ -85,6 +88,8 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 
 	return {
 		launch(request: LaunchRequest, bus: RunBus): RunnerController {
+			if (request.profile.standby)
+				return launchStandby(request, bus, opts, cap);
 			const abort = new AbortController();
 			const rpcMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
 			let client: RpcLike | undefined;
@@ -120,56 +125,14 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 						// Steering a finished run is a no-op.
 					}
 				},
-				async interrupt(reason?: string): Promise<InterruptResult> {
-					const targetId = `run:${request.runId}`;
-					// Interrupt settles once: after settlement it is a no-op report,
-					// and a second interrupt while one is in flight is acknowledged,
-					// not repeated. The `interrupting` status is published before the
-					// transport abort so watchers see the transition.
-					if (lifecycle.settled) return { outcome: "already-idle", targetId };
-					if (lifecycle.interruptPublished)
-						return { outcome: "already-interrupting", targetId };
-					lifecycle.interruptPublished = true;
-					bus.publish({
-						type: "status",
-						runId: request.runId,
-						status: "interrupting",
-						at: Date.now(),
-					});
-					// Salvage BEFORE aborting — abort kills the child. Bounded: a
-					// wedged transport must not turn the interrupt itself into a hang.
-					let partialText: string | undefined;
-					if (client) {
-						try {
-							partialText =
-								(
-									await deadline(
-										client.getLastAssistantText(),
-										rpcMs,
-										"salvage",
-									)
-								)?.trim() || undefined;
-						} catch {
-							// best-effort salvage
-						}
-					}
-					abort.abort(reason);
-					try {
-						await deadline(
-							client?.abort() ?? Promise.resolve(),
-							rpcMs,
-							"abort",
-						);
-					} catch {
-						// The process may have settled between observation and abort.
-					}
-					return {
-						outcome: "accepted",
-						targetId,
-						...(reason ? { detail: reason } : {}),
-						...(partialText ? { partialText } : {}),
-					};
-				},
+				interrupt: makeInterrupt(
+					request,
+					bus,
+					abort,
+					lifecycle,
+					() => client,
+					rpcMs,
+				),
 				stop(reason?: string) {
 					// Fire-and-forget interrupt. Never throws out of a timer callback
 					// (the RPC client throws synchronously once its transport is gone;
@@ -189,6 +152,377 @@ export function createAgentRunner(opts: RunnerOptions): AgentRunner {
 			};
 		},
 	};
+}
+
+/**
+ * Shared interrupt: settle-once, publish `interrupting`, salvage the last text
+ * BEFORE aborting (abort kills the child), then abort. Used by both the
+ * one-shot and standby controllers so their interrupt semantics are identical.
+ */
+function makeInterrupt(
+	request: LaunchRequest,
+	bus: RunBus,
+	abort: AbortController,
+	lifecycle: Lifecycle,
+	getClient: () => RpcLike | undefined,
+	rpcMs: number,
+): (reason?: string) => Promise<InterruptResult> {
+	return async (reason?: string): Promise<InterruptResult> => {
+		const targetId = `run:${request.runId}`;
+		// Interrupt settles once: after settlement it is a no-op report, and a
+		// second interrupt while one is in flight is acknowledged, not repeated.
+		if (lifecycle.settled) return { outcome: "already-idle", targetId };
+		if (lifecycle.interruptPublished)
+			return { outcome: "already-interrupting", targetId };
+		lifecycle.interruptPublished = true;
+		bus.publish({
+			type: "status",
+			runId: request.runId,
+			status: "interrupting",
+			at: Date.now(),
+		});
+		let partialText: string | undefined;
+		const client = getClient();
+		if (client) {
+			try {
+				partialText =
+					(
+						await deadline(client.getLastAssistantText(), rpcMs, "salvage")
+					)?.trim() || undefined;
+			} catch {
+				// best-effort salvage
+			}
+		}
+		abort.abort(reason);
+		try {
+			await deadline(getClient()?.abort() ?? Promise.resolve(), rpcMs, "abort");
+		} catch {
+			// The process may have settled between observation and abort.
+		}
+		return {
+			outcome: "accepted",
+			targetId,
+			...(reason ? { detail: reason } : {}),
+			...(partialText ? { partialText } : {}),
+		};
+	};
+}
+
+/** One pending `ask`: a message and the promise settlers for its reply turn. */
+interface AskRequest {
+	readonly message: string;
+	resolve(text: string): void;
+	reject(err: unknown): void;
+}
+
+/**
+ * A single-consumer FIFO channel between the standby controller's `ask` and the
+ * standby run loop. Idle between asks (no busy-wait); `close()` drains pending
+ * asks with a rejection so no caller hangs after the run settles.
+ */
+class AskChannel {
+	private readonly queue: AskRequest[] = [];
+	private waiter?: (req: AskRequest | undefined) => void;
+	private closed = false;
+
+	push(req: AskRequest): void {
+		if (this.closed) {
+			req.reject(new Error("run has settled — cannot ask"));
+			return;
+		}
+		if (this.waiter) {
+			const waiter = this.waiter;
+			this.waiter = undefined;
+			waiter(req);
+			return;
+		}
+		this.queue.push(req);
+	}
+
+	/** Resolves with the next ask, or `undefined` once the channel closes. */
+	next(): Promise<AskRequest | undefined> {
+		const queued = this.queue.shift();
+		if (queued) return Promise.resolve(queued);
+		if (this.closed) return Promise.resolve(undefined);
+		return new Promise((resolve) => {
+			this.waiter = resolve;
+		});
+	}
+
+	close(): void {
+		if (this.closed) return;
+		this.closed = true;
+		if (this.waiter) {
+			const waiter = this.waiter;
+			this.waiter = undefined;
+			waiter(undefined);
+		}
+		for (const req of this.queue.splice(0))
+			req.reject(new Error("run has settled — cannot ask"));
+	}
+}
+
+/**
+ * Persistent standby controller. The child is launched, given its initial
+ * prompt, then KEPT ALIVE: each `ask` delivers a follow-up, waits for the child
+ * to go idle, and resolves with that turn's assistant text. The slot is held
+ * for the whole standby lifetime (slot-yield lands in a later phase); the run
+ * settles when interrupted/stopped or its parent ends. See
+ * docs/design/multi-model-agents.md §4.
+ */
+function launchStandby(
+	request: LaunchRequest,
+	bus: RunBus,
+	opts: RunnerOptions,
+	cap: number,
+): RunnerController {
+	const abort = new AbortController();
+	const rpcMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+	let client: RpcLike | undefined;
+	const activity = { at: Date.now() };
+	const lifecycle: Lifecycle = { settled: false, interruptPublished: false };
+	const channel = new AskChannel();
+
+	const done = executeStandby(
+		request,
+		bus,
+		abort.signal,
+		opts,
+		cap,
+		(c) => {
+			client = c;
+		},
+		activity,
+		lifecycle,
+		channel,
+	).then((result) => {
+		opts.onSettled?.(request.runId, result);
+		return result;
+	});
+
+	return {
+		steer(guidance: string) {
+			try {
+				asFireAndForget(client?.steer?.(guidance));
+			} catch {
+				// Steering a finished run is a no-op.
+			}
+		},
+		ask(message: string): Promise<string> {
+			if (lifecycle.settled || abort.signal.aborted)
+				return Promise.reject(new Error("run has settled — cannot ask"));
+			return new Promise<string>((resolve, reject) =>
+				channel.push({ message, resolve, reject }),
+			);
+		},
+		interrupt: makeInterrupt(
+			request,
+			bus,
+			abort,
+			lifecycle,
+			() => client,
+			rpcMs,
+		),
+		stop(reason?: string) {
+			this.interrupt?.(reason)?.catch(() => {});
+		},
+		result: () => done,
+		lastEventAt: () => activity.at,
+		async partialText() {
+			if (!client) return undefined;
+			try {
+				return (await client.getLastAssistantText()) ?? undefined;
+			} catch {
+				return undefined;
+			}
+		},
+	};
+}
+
+/** Deliver one turn: subscribe to idle BEFORE sending, send, await idle. */
+async function runTurn(
+	client: RpcLike,
+	send: () => Promise<void>,
+	rpcMs: number,
+	signal: AbortSignal,
+): Promise<void> {
+	const idle = waitUntilIdle(client);
+	idle.catch(() => {}); // abort may win the race first
+	await deadline(send(), rpcMs, "prompt request");
+	await raceAbort(idle, signal);
+}
+
+/** Next ask, or `undefined` when the run aborts or the child process dies. */
+function raceAsk(
+	channel: AskChannel,
+	client: RpcLike,
+	signal: AbortSignal,
+): Promise<AskRequest | undefined> {
+	if (signal.aborted) return Promise.resolve(undefined);
+	return new Promise((resolve) => {
+		let settled = false;
+		const cleanup = (): void => {
+			signal.removeEventListener("abort", onAbort);
+			if (timer) clearInterval(timer);
+		};
+		const finish = (v: AskRequest | undefined): void => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(v);
+		};
+		const onAbort = (): void => finish(undefined);
+		signal.addEventListener("abort", onAbort, { once: true });
+		const timer = setInterval(() => {
+			if ((client as { exitError?: Error | null }).exitError) finish(undefined);
+		}, DEAD_POLL_MS);
+		timer.unref?.();
+		void channel.next().then(finish);
+	});
+}
+
+async function executeStandby(
+	request: LaunchRequest,
+	bus: RunBus,
+	signal: AbortSignal,
+	opts: RunnerOptions,
+	cap: number,
+	bindClient: (client: RpcLike) => void,
+	activity: { at: number },
+	lifecycle: Lifecycle,
+	channel: AskChannel,
+): Promise<RunResult> {
+	const { runId, prompt, invocation } = request;
+	const done = (result: RunResult): RunResult => {
+		lifecycle.settled = true;
+		return settle(bus, runId, result);
+	};
+	if (signal.aborted) return done(stopped("aborted before start"));
+
+	let release: (() => void) | undefined;
+	let client: RpcLike | undefined;
+	let unsubscribe: (() => void) | undefined;
+	const rpcMs = opts.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+
+	try {
+		release = await opts.semaphore.acquire(signal);
+
+		const options: RpcClientOptions = {
+			cliPath: opts.cliPath,
+			cwd: invocation.cwd,
+			model: invocation.model,
+			args: invocation.args,
+			env: { ...opts.baseEnv, ...invocation.env, [RUN_ID_ENV]: runId },
+		};
+		client = opts.factory(options);
+		bindClient(client);
+		if (!client.followUp)
+			throw new Error(
+				"transport does not support follow-up (standby ask requires a persistent RPC child)",
+			);
+		// Bind follow-up off the narrowed `client`, then alias to a const so the
+		// mutable `client` narrows inside the turn closures; the outer `client`
+		// stays for the catch/finally undefined-tolerant paths.
+		const followUp = client.followUp.bind(client);
+		const session = client;
+
+		unsubscribe = session.onEvent((event) => {
+			activity.at = Date.now();
+			mapEvent(bus, runId, event);
+		});
+		bus.publish({ type: "status", runId, status: "starting", at: Date.now() });
+
+		// Startup + initial prompt, bounded by the startup deadline and abort.
+		await raceAbort(
+			(async () => {
+				await deadline(
+					session.start(),
+					opts.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS,
+					"startup",
+				);
+				bus.publish({
+					type: "status",
+					runId,
+					status: "running",
+					at: Date.now(),
+				});
+				await runTurn(session, () => session.prompt(prompt), rpcMs, signal);
+			})(),
+			signal,
+		);
+
+		// Standby loop: park idle (0 tokens) until the next ask, then run one
+		// follow-up turn and hand its text back to that ask's caller.
+		while (!signal.aborted) {
+			const req = await raceAsk(channel, session, signal);
+			if (!req) break; // aborted, stopped, or the child process died
+			try {
+				await runTurn(session, () => followUp(req.message), rpcMs, signal);
+				if (signal.aborted) {
+					req.reject(new Error("run interrupted"));
+					break;
+				}
+				const text =
+					(
+						await deadline(
+							session.getLastAssistantText(),
+							rpcMs,
+							"result request",
+						).catch(() => null)
+					)?.trim() ?? "";
+				req.resolve(capText(text, cap));
+			} catch (err) {
+				req.reject(err instanceof Error ? err : new Error(String(err)));
+				if ((session as { exitError?: Error | null }).exitError) break;
+			}
+		}
+
+		const text = (
+			await deadline(
+				session.getLastAssistantText(),
+				rpcMs,
+				"result request",
+			).catch(() => null)
+		)?.trim();
+		if (signal.aborted)
+			return done({
+				status: "stopped",
+				error: abortReason(signal),
+				...(text ? { summary: capText(text, cap) } : {}),
+			});
+		return done({
+			status: "succeeded",
+			...(text ? { summary: capText(text, cap) } : {}),
+		});
+	} catch (err) {
+		if (signal.aborted) {
+			const partial = client
+				? (
+						await deadline(
+							client.getLastAssistantText(),
+							rpcMs,
+							"salvage",
+						).catch(() => null)
+					)?.trim()
+				: undefined;
+			return done({
+				status: "stopped",
+				error: abortReason(signal),
+				...(partial ? { summary: capText(partial, cap) } : {}),
+			});
+		}
+		if (err instanceof DeadlineError)
+			return done({ status: "timed-out", error: err.message });
+		return done({
+			status: "failed",
+			error: err instanceof Error ? err.message : String(err),
+		});
+	} finally {
+		channel.close();
+		unsubscribe?.();
+		await client?.stop().catch(() => {});
+		release?.();
+	}
 }
 
 async function execute(

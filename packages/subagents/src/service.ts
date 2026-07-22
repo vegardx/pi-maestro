@@ -31,6 +31,8 @@ import { RUN_ID_ENV } from "./supervisor.js";
 /** Live control over one launched child. Implemented by the runners. */
 export interface RunnerController {
 	steer(guidance: string): void;
+	/** Request→response follow-up on a persistent standby child. */
+	ask?(message: string): Promise<string>;
 	interrupt?(reason?: string): Promise<InterruptResult>;
 	stop(reason?: string): void;
 	/** Resolves when the child settles. */
@@ -238,6 +240,9 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			id: runId,
 			status: () => this.store.readRecord(runId)?.status ?? "queued",
 			steer: (guidance) => this.steer(runId, guidance),
+			...(controller.ask
+				? { ask: (message: string) => this.ask(runId, message) }
+				: {}),
 			interrupt: (reason) => this.interrupt(runId, reason),
 			stop: (reason) => this.stop(runId, reason),
 			result: () => controller.result(),
@@ -266,6 +271,20 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			return;
 		}
 		this.steerViaTransport(runId, guidance);
+	}
+
+	/**
+	 * Drive a persistent standby child and wait for its reply. Only in-process
+	 * standby runs can be asked; a one-shot or another process's run has no live
+	 * `ask` controller here.
+	 */
+	async ask(runId: RunId, message: string): Promise<string> {
+		const controller = this.controllers.get(runId);
+		if (!controller?.ask)
+			throw new Error(`run ${runId} cannot be asked (not a live standby run)`);
+		// No bus message: the follow-up turn's own events flow via the runner's
+		// onEvent → mapEvent; a synthetic "steer" here would mislabel the turn.
+		return controller.ask(message);
 	}
 
 	async interrupt(runId: RunId, reason?: string): Promise<InterruptResult> {

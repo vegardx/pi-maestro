@@ -165,6 +165,14 @@ is still available for gaps that surface while structuring.
    under the worker node they support and give reviewers \`after: ["parent"]\`
    so ordering remains visible. Model and effort are never authored — they
    resolve by inheritance at spawn.
+   **Bake-offs** — when a deliverable is genuinely contested (several credible
+   approaches worth trying), make it a competitive ensemble:
+   \`agent(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
+   branch-owning worker deliverable. Each candidate implements the task on its
+   own \`cand/\` branch; the deliverable's worker becomes the INTEGRATOR — it
+   judges the candidate diffs, distills the strongest, and ships the one PR.
+   Candidates never ship their own PR. Reach for this only when the comparison
+   is worth the extra cost, not by default.
 4. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
    document (Project Structure / Key Patterns / Conventions / Key Interfaces).
    Every agent forks from it; execution entry refuses to start without it.

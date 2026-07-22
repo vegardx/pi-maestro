@@ -267,6 +267,7 @@ export class PlanEngineV2 {
 				PlanNode,
 				| "title"
 				| "body"
+				| "persona"
 				| "after"
 				| "branch"
 				| "base"
@@ -277,6 +278,8 @@ export class PlanEngineV2 {
 			>
 		>,
 	): void {
+		// `persona` is authored metadata, not structural — freely updatable
+		// (e.g. an ensemble makes its parent the integrator before execution).
 		const structural = ["after", "branch", "base", "repo", "envelope"] as const;
 		if (
 			this.hasExecutionStarted() &&

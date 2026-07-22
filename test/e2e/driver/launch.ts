@@ -57,6 +57,17 @@ export interface LaunchedSut {
 	 * look like a drive that is working.
 	 */
 	died(): SutDeath | undefined;
+	/**
+	 * Wall-clock ms since the last SUT-origin event. Death is one silent
+	 * failure; a HUNG STREAM is the other — the process stays alive but blocks
+	 * on a dead socket (a sleep-dropped connection), `isStreaming` stuck true,
+	 * transcript frozen. One drive spent 87 minutes that way. This is the
+	 * signal that catches it: command replies (`type:"response"`) never reach
+	 * the event stream, so the driver's own `get_state` polling cannot refresh
+	 * it — only real model/tool activity does. Large value while still
+	 * streaming = wedged.
+	 */
+	sinceLastActivityMs(): number;
 }
 
 /** Absolute paths of the maestro extensions, from package.json `pi.extensions`. */
@@ -179,10 +190,21 @@ export function launchSut(opts: LaunchOptions): LaunchedSut {
 	child.on("exit", recordDeath);
 	child.on("error", () => recordDeath(null, null));
 
+	// Seed with launch time so a SUT that dies before its first event still
+	// registers as inactive rather than eternally-fresh.
+	let lastActivityAt = Date.now();
 	const client = new RpcClient(child, {
 		answerer: opts.answerer,
 		transcriptPath: opts.transcriptPath,
-		onEvent: opts.onEvent,
+		onEvent: (event) => {
+			lastActivityAt = Date.now();
+			opts.onEvent?.(event);
+		},
 	});
-	return { client, child, died: () => death };
+	return {
+		client,
+		child,
+		died: () => death,
+		sinceLastActivityMs: () => Date.now() - lastActivityAt,
+	};
 }

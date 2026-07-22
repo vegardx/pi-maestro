@@ -241,6 +241,32 @@ export interface AgentRun {
 }
 
 /**
+ * How a read-only reader fan-out sees the filesystem (see
+ * docs/design/multi-model-agents.md §5):
+ * - `shared-ro`: read the caller's working tree (reviewers, explorers).
+ * - `none`: no shared workspace (pure-reasoning advisors).
+ */
+export type ReaderWorkspace = "shared-ro" | "none";
+
+/** One reader in a blocking `spawn` fan-out. */
+export interface ReaderSpawnRequest {
+	readonly kind: AgentKind;
+	readonly prompt: string;
+	readonly model?: string;
+	readonly tier?: string;
+	readonly effort?: ThinkingLevel;
+	readonly displayName?: string;
+}
+
+/** One reader's settled outcome, returned by a blocking `spawn`. */
+export interface ReaderResult {
+	readonly runId: RunId;
+	readonly kind: AgentKind;
+	readonly modelId: string;
+	readonly result: RunResult;
+}
+
+/**
  * Durable, cumulative view of a run owned by another process. The owner keeps
  * the RunStore authoritative; maestros persist and render this projection.
  */
@@ -288,6 +314,17 @@ export interface AgentsCapabilityV1 {
 	options(kind: AgentKind): Promise<AgentPlanningOptions>;
 	run(request: AgentRunRequest): Promise<AgentRun>;
 	batch(requests: readonly AgentRunRequest[]): Promise<readonly AgentRun[]>;
+	/**
+	 * Blocking read-only fan-out: spawn N readers, wait for all to settle, and
+	 * return their results together (the caller's model idles while blocked).
+	 * Readers only — a full-mode (writer) kind is rejected; writers take the
+	 * ensemble node path. Workspaces are reaped when this resolves. See
+	 * docs/design/multi-model-agents.md §5.
+	 */
+	spawnReaders(
+		requests: readonly ReaderSpawnRequest[],
+		opts: { workspace: ReaderWorkspace },
+	): Promise<readonly ReaderResult[]>;
 	list(): readonly RunRecord[];
 	status(runId: RunId): RunRecord | undefined;
 	steer(runId: RunId, guidance: string): void;

@@ -194,6 +194,37 @@ describe("unified agent capability and tool", () => {
 		expect(await capability.result(id("run-1"))).toEqual(terminal);
 	});
 
+	it("spawn blocks on a read-only reader fan-out and returns all results", async () => {
+		const { capability, profiles } = setup();
+		const results = await capability.spawnReaders(
+			[
+				{ kind: "correctness-review", prompt: "review A" },
+				{ kind: "security-review", prompt: "review B" },
+			],
+			{ workspace: "shared-ro" },
+		);
+		expect(results.map((reader) => reader.kind)).toEqual([
+			"correctness-review",
+			"security-review",
+		]);
+		expect(results.every((reader) => reader.result === terminal)).toBe(true);
+		// Read-only readers (plan mode), tagged with the requested workspace.
+		expect(profiles).toHaveLength(2);
+		expect(profiles.every((profile) => profile.mode === "plan")).toBe(true);
+		expect(profiles[0].meta?.workspace).toBe("shared-ro");
+	});
+
+	it("spawn rejects a writer kind — writers take the ensemble node path", async () => {
+		const { capability, profiles } = setup();
+		await expect(
+			capability.spawnReaders([{ kind: "worker", prompt: "do work" }], {
+				workspace: "shared-ro",
+			}),
+		).rejects.toThrow(/writer/);
+		// The writer was never spawned.
+		expect(profiles).toHaveLength(0);
+	});
+
 	it("resolves planning assignments without spawning and exposes exact options", async () => {
 		const { capability, profiles } = setup();
 		const options = await capability.options("correctness-review");

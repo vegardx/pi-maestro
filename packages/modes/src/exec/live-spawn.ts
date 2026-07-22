@@ -53,6 +53,9 @@ export interface LiveSpawnWiring {
 	readonly engine: PlanEngineV2;
 	readonly ctx: ExtensionContext;
 	readonly tmux: LiveSpawnTmux;
+	/** Launch transport: `headless` (detached child process) or `tmux`
+	 *  (default). Governs whether buildSpawnSpec emits the tmux crash wrapper. */
+	readonly transport?: "tmux" | "headless";
 	readonly planDir: string;
 	/** Repeated `-e` extension paths for the child pi. */
 	readonly extensionPaths: readonly string[];
@@ -225,6 +228,7 @@ export function createLiveSpawnAgent(
 			},
 			kickoffMessage,
 			crashFile: join(wiring.planDir, "crashes", `${sessionName}.log`),
+			...(wiring.transport ? { transport: wiring.transport } : {}),
 			...(modelOverride ? { model: modelOverride } : {}),
 			...(spawn.effort ? { thinking: spawn.effort } : {}),
 		});

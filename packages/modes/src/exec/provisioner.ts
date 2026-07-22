@@ -372,12 +372,19 @@ export interface BuildSpawnSpecOpts {
 	/** Explicit thinking/effort level. Omitted inherits the session default. */
 	thinking?: string;
 	/**
-	 * When set, pi runs inside a shell wrapper that — after pi exits for ANY
-	 * reason — captures the final pane content plus exit code to this file
-	 * before the tmux session dies. Without it a crashing worker takes its
-	 * stack trace to the grave: the poll only ever sees "session gone".
+	 * When set (tmux transport), pi runs inside a shell wrapper that — after pi
+	 * exits for ANY reason — captures the final pane content plus exit code to
+	 * this file before the tmux session dies. Without it a crashing worker takes
+	 * its stack trace to the grave: the poll only ever sees "session gone".
+	 * Ignored for headless, where the launcher redirects the child's stdio.
 	 */
 	crashFile?: string;
+	/**
+	 * Launch transport. `tmux` (default) wraps the command in the crash-capture
+	 * shell; `headless` returns the raw argv so a detached child process can run
+	 * pi directly (no tmux server, no shell wrapper). See headless-spawn.ts.
+	 */
+	transport?: "tmux" | "headless";
 }
 
 export interface SpawnSpec {
@@ -445,15 +452,19 @@ export function buildSpawnSpec(opts: BuildSpawnSpecOpts): SpawnSpec {
 	if (process.env.PATH) env.PATH = process.env.PATH;
 	if (process.env.HOME) env.HOME = process.env.HOME;
 
-	// Crash capture: run pi under a wrapper so its dying screen (stack trace,
-	// provider error, OOM message) survives the session. capture-pane runs
-	// while the shell still owns the pane — the last window before tmux
-	// reaps it.
-	const wrapped = opts.crashFile
-		? `${command.map(shellEscape).join(" ")}; ec=$?; ` +
-			`tmux capture-pane -p -S -120 -t "$TMUX_PANE" > ${shellEscape(opts.crashFile)} 2>/dev/null; ` +
-			`echo "[pi exited code=$ec]" >> ${shellEscape(opts.crashFile)}; exit $ec`
-		: undefined;
+	// Crash capture: run pi under a shell wrapper so its dying screen (stack
+	// trace, provider error, OOM message) survives. Headless redirects the
+	// child's stdout+stderr straight to the crash file (no tmux, no TTY);
+	// tmux runs capture-pane after pi exits while the shell still owns the pane.
+	// Running under a shell also resolves `pi` from PATH the same way both do.
+	const escaped = command.map(shellEscape).join(" ");
+	const wrapped = !opts.crashFile
+		? undefined
+		: opts.transport === "headless"
+			? `exec ${escaped} > ${shellEscape(opts.crashFile)} 2>&1`
+			: `${escaped}; ec=$?; ` +
+				`tmux capture-pane -p -S -120 -t "$TMUX_PANE" > ${shellEscape(opts.crashFile)} 2>/dev/null; ` +
+				`echo "[pi exited code=$ec]" >> ${shellEscape(opts.crashFile)}; exit $ec`;
 
 	return {
 		sessionName: opts.sessionName,

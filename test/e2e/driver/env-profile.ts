@@ -184,6 +184,12 @@ export interface LiveEnvOptions {
 	/** Default model written to the isolated settings.json (and every worker). */
 	readonly defaultModel?: string;
 	/**
+	 * Seat thinking level (`defaultThinkingLevel`). The seat effort every
+	 * inherited node runs at — set it when the drive wants the maestro reasoning
+	 * harder (or cheaper) than pi's built-in default.
+	 */
+	readonly defaultThinkingLevel?: string;
+	/**
 	 * A `models` settings block (presets + modelSets) written top-level into the
 	 * isolated settings.json — the maestro and every worker read it, so real
 	 * role→model routing is exercised. See `MULTI_MODEL_OLLAMA`.
@@ -217,10 +223,16 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	} else if (opts.agentModelsJson) {
 		copyFileSync(opts.agentModelsJson, join(agentDir(piHome), "models.json"));
 	}
-	if (opts.defaultProvider || opts.defaultModel || opts.models) {
+	if (
+		opts.defaultProvider ||
+		opts.defaultModel ||
+		opts.models ||
+		opts.defaultThinkingLevel
+	) {
 		writeAgentSettings(piHome, {
 			defaultProvider: opts.defaultProvider,
 			defaultModel: opts.defaultModel,
+			defaultThinkingLevel: opts.defaultThinkingLevel,
 			models: opts.models,
 		});
 	}
@@ -294,6 +306,7 @@ function writeAgentSettings(
 	opts: {
 		defaultProvider?: string;
 		defaultModel?: string;
+		defaultThinkingLevel?: string;
 		/** Top-level `models` block (presets + modelSets) for real role routing. */
 		models?: Record<string, unknown>;
 	},
@@ -303,6 +316,8 @@ function writeAgentSettings(
 	};
 	if (opts.defaultProvider) settings.defaultProvider = opts.defaultProvider;
 	if (opts.defaultModel) settings.defaultModel = opts.defaultModel;
+	if (opts.defaultThinkingLevel)
+		settings.defaultThinkingLevel = opts.defaultThinkingLevel;
 	if (opts.models) settings.models = opts.models;
 	writeFileSync(
 		join(agentDir(piHome), "settings.json"),

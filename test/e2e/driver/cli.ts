@@ -211,7 +211,11 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 			keep: argv.includes("--keep"),
 			defaultProvider: COPILOT_PROFILE.defaultProvider,
 			defaultModel: COPILOT_PROFILE.defaultModel,
+			defaultThinkingLevel: COPILOT_PROFILE.defaultThinkingLevel,
 			models: COPILOT_PROFILE.models,
+			// Correct the Copilot context windows down to the seat's real input
+			// caps (only modelOverrides — native oauth is untouched).
+			modelsJsonContent: COPILOT_PROFILE.modelsJsonContent,
 			isolatedAuth: {
 				"github-copilot": copilotAuthEntry(credential, minted),
 			},

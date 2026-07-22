@@ -30,6 +30,7 @@ import {
 	type RunProgress,
 	type SupervisorDecision,
 	type SupervisorDecisionRequest,
+	type TierId,
 	type TokenSnapshot,
 	type UsageCheckpoint,
 } from "@vegardx/pi-contracts";
@@ -259,15 +260,19 @@ function readChildExtensionPaths(cwd: string): string[] {
  * Returns null when there is no v2 config, so v1 setups keep their exact
  * authored-option behaviour untouched.
  *
- * An explicit request is validated against the tiers the agent type is allowed
- * to reach, NOT against v1 authored options — a v2-only config has none, which
- * is why every tier override was rejected before this existed. With no explicit
- * request, v2's own rule applies: inherit the caller's model.
+ * Three ways to choose, most specific first:
+ *  - `model`: pin one exact id — validated against the tiers the agent type is
+ *    allowed to reach, NOT against v1 authored options (a v2-only config has
+ *    none, which is why every override was rejected before this existed).
+ *  - `tier`: a deliberate tier reference — resolves to a concrete model from
+ *    the agent's allowlist. The discoverable middle ground, so callers name a
+ *    tier instead of guessing an exact id (or silently inheriting the seat).
+ *  - neither: v2's own rule — inherit the caller's model.
  */
 export async function resolveViaV2(
 	ctx: ExtensionContext,
 	role: string,
-	choice: { model?: string; effort?: string },
+	choice: { model?: string; tier?: string; effort?: string },
 ): Promise<ExactAgentSelection | null> {
 	const config = readV2Config(ctx.cwd);
 	if (!config) return null;
@@ -282,19 +287,26 @@ export async function resolveViaV2(
 			? config.catalogs[active.profile.catalog]
 			: undefined;
 		const allowed = config.agents[agent]?.models ?? [];
-		const hit = allowed
-			.flatMap((tier) => catalog?.[tier] ?? [])
-			.find((entry) => entry.model === choice.model);
+		const eligible = allowed.flatMap((tier) => catalog?.[tier] ?? []);
+		const hit = eligible.find((entry) => entry.model === choice.model);
 		if (!hit) {
+			// Name the concrete ids, not just the tiers: turn the dead end into a
+			// menu so the caller can pick a real answer instead of guessing again.
+			const ids = eligible.map((entry) => entry.model);
 			throw new Error(
 				`${choice.model} is not in any tier ${agent} may use (${allowed.join(", ") || "none"}). ` +
-					"Add it to the catalog or widen the agent's tiers in /maestro.",
+					(ids.length
+						? `Eligible models: ${ids.join(", ")}. Or omit \`model\` and pass \`tier\` to auto-pick.`
+						: "Add it to the catalog or widen the agent's tiers in /maestro."),
 			);
 		}
 		modelId = hit.model;
 		effort ??= hit.effort;
 	} else {
-		const resolved = await resolveV2Model(ctx, { agent });
+		const resolved = await resolveV2Model(ctx, {
+			agent,
+			...(choice.tier ? { tier: choice.tier as TierId } : {}),
+		});
 		modelId = resolved.modelId;
 		effort ??= resolved.effort;
 	}

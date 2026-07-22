@@ -204,6 +204,13 @@ export interface AgentAssignmentRequest {
 	readonly inputContracts: readonly string[];
 	readonly outputContracts?: readonly string[];
 	readonly model?: string;
+	/**
+	 * Deliberate tier reference (a catalog tier id, e.g. `fast`/`normal`/`heavy`).
+	 * The discoverable middle ground between inheriting the session model (omit
+	 * everything) and pinning one exact `model`: resolves to a concrete model
+	 * from the agent type's tier allowlist. `model` wins if both are given.
+	 */
+	readonly tier?: string;
 	readonly effort?: ThinkingLevel;
 }
 
@@ -217,6 +224,8 @@ export interface AgentRunRequest {
 	readonly kind: AgentKind;
 	readonly prompt: string;
 	readonly model?: string;
+	/** Deliberate tier id — see {@link AgentAssignmentRequest.tier}. */
+	readonly tier?: string;
 	readonly effort?: ThinkingLevel;
 	readonly cwd?: string;
 	readonly displayName?: string;

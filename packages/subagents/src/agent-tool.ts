@@ -10,23 +10,24 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import type {
-	AgentAssignmentRequest,
-	AgentKind,
-	AgentKindDefinition,
-	AgentPlanningOptions,
-	AgentRun,
-	AgentRunRequest,
-	AgentsCapabilityV1,
-	ExactModelCandidateFact,
-	ResolvedAgentAssignment,
-	RunHandle,
-	RunId,
-	RunRecord,
-	RunResult,
-	SpawnProfile,
-	SubagentsCapabilityV1,
-	ThinkingLevel,
+import {
+	type AgentAssignmentRequest,
+	type AgentKind,
+	type AgentKindDefinition,
+	type AgentPlanningOptions,
+	type AgentRun,
+	type AgentRunRequest,
+	type AgentsCapabilityV1,
+	type ExactModelCandidateFact,
+	type ResolvedAgentAssignment,
+	type RunHandle,
+	type RunId,
+	type RunRecord,
+	type RunResult,
+	type SpawnProfile,
+	type SubagentsCapabilityV1,
+	type ThinkingLevel,
+	TIER_IDS,
 } from "@vegardx/pi-contracts";
 import type { AgentRegistries } from "./registry.js";
 import { resolveRuntimePolicy } from "./registry.js";
@@ -46,7 +47,7 @@ export interface UnifiedAgentDeps {
 	readonly registries: AgentRegistries;
 	readonly resolveModel: (
 		kind: AgentKindDefinition,
-		choice: { model?: string; effort?: ThinkingLevel },
+		choice: { model?: string; tier?: string; effort?: ThinkingLevel },
 	) => Promise<ExactAgentSelection>;
 	readonly researchToolsPath?: () => string;
 	readonly now?: () => Date;
@@ -117,6 +118,7 @@ export function createAgentsCapability(
 		}
 		const selected = await deps.resolveModel(kind, {
 			model: request.model,
+			tier: request.tier,
 			effort: request.effort,
 		});
 		const resolvedAt = (deps.now?.() ?? new Date()).toISOString();
@@ -168,6 +170,7 @@ export function createAgentsCapability(
 			rationale: "Resolved for an immediate agents.v1 run.",
 			inputContracts: [],
 			model: request.model,
+			tier: request.tier,
 			effort: request.effort,
 		});
 		const kind = deps.registries.kinds.require(request.kind);
@@ -212,7 +215,21 @@ const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const Request = Type.Object({
 	kind: Type.String({ description: "Registered semantic agent kind." }),
 	prompt: Type.String({ description: "Focused assignment for the agent." }),
-	model: Type.Optional(Type.String({ description: "Exact allowed model id." })),
+	tier: Type.Optional(
+		Type.Union(
+			TIER_IDS.map((id) => Type.Literal(id)),
+			{
+				description:
+					"Deliberate tier — resolves to a concrete model from this agent's allowlist. Prefer this over `model`: omit both to inherit the session model (right when this agent will itself drive subagents), set a tier for a leaf task on a cheaper model.",
+			},
+		),
+	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Pin one exact model id (must be in the agent's tier allowlist). Rarely needed — prefer `tier`. Wins over `tier` if both are set.",
+		}),
+	),
 	effort: Type.Optional(
 		Type.Union(EFFORTS.map((effort) => Type.Literal(effort))),
 	),
@@ -238,6 +255,15 @@ const Params = Type.Object({
 	),
 	kind: Type.Optional(Type.String()),
 	prompt: Type.Optional(Type.String()),
+	tier: Type.Optional(
+		Type.Union(
+			TIER_IDS.map((id) => Type.Literal(id)),
+			{
+				description:
+					"Deliberate tier — resolves to a concrete model from the agent's allowlist. Prefer over `model`; omit both to inherit the session model.",
+			},
+		),
+	),
 	model: Type.Optional(Type.String()),
 	effort: Type.Optional(
 		Type.Union(EFFORTS.map((effort) => Type.Literal(effort))),
@@ -308,6 +334,7 @@ export function createAgentTool(
 							kind: params.kind as AgentKind,
 							prompt: params.prompt,
 							model: params.model,
+							tier: params.tier,
 							effort: params.effort as ThinkingLevel | undefined,
 							cwd: params.cwd,
 							displayName: params.displayName,

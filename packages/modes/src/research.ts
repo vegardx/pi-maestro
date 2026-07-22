@@ -27,11 +27,12 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import type {
-	AgentsCapabilityV1,
-	AskCapabilityV1,
-	RunResult,
-	ThinkingLevel,
+import {
+	type AgentsCapabilityV1,
+	type AskCapabilityV1,
+	type RunResult,
+	type ThinkingLevel,
+	TIER_IDS,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
 import type { PlanEngineV2 } from "./plan/engine.js";
@@ -139,10 +140,19 @@ const ResearchParams = Type.Object({
 					},
 				),
 			),
+			tier: Type.Optional(
+				Type.Union(
+					TIER_IDS.map((id) => Type.Literal(id)),
+					{
+						description:
+							"Which tier of model runs this research — resolves to a concrete model from the research kind's allowlist. The way to pick a cheaper/stronger researcher without knowing exact ids. Omit to inherit the session model.",
+					},
+				),
+			),
 			model: Type.Optional(
 				Type.String({
 					description:
-						"Exact provider/model id from the selected research kind's exact model set.",
+						"Pin one exact provider/model id from the research kind's model set. Rarely needed — prefer `tier`. Wins over `tier` if both are set.",
 				}),
 			),
 			effort: Type.Optional(
@@ -211,6 +221,7 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 							kind: assignmentKind(kind),
 							prompt: buildResearchPrompt(plan, kind, q.question, q.context),
 							...(q.model ? { model: q.model } : {}),
+							...(q.tier ? { tier: q.tier } : {}),
 							...(q.effort ? { effort: q.effort as ThinkingLevel } : {}),
 							cwd: plan.repoPath,
 							displayName: `${kind}-research`,

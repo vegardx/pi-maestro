@@ -111,6 +111,45 @@ describe("resolveViaV2", () => {
 		).rejects.toThrow(/not in any tier reviewer may use \(heavy\)/);
 	});
 
+	it("names the eligible model ids in the rejection, not just the tiers", async () => {
+		writeSettings(V2);
+		// The dead-end error becomes a menu: a reviewer reaches only `heavy`,
+		// whose one entry is acme/large — so say so instead of leaving the
+		// caller to guess again (which is how gpt-5.4 got picked live).
+		await expect(
+			resolveViaV2(fakeCtx() as never, "plan-review", { model: "acme/small" }),
+		).rejects.toThrow(/Eligible models: acme\/large/);
+	});
+
+	it("resolves a deliberate tier to a concrete model from the allowlist", async () => {
+		writeSettings(V2);
+		// A worker may reach normal|heavy; `normal` holds acme/medium.
+		const selection = await resolveViaV2(fakeCtx() as never, "worker", {
+			tier: "normal",
+		});
+		expect(selection).toMatchObject({
+			modelId: "acme/medium",
+			modelSetId: "worker",
+		});
+		expect(selection?.effort).toBe("medium");
+	});
+
+	it("inherits the session model when neither model nor tier is given", async () => {
+		writeSettings(V2);
+		// The orchestrating case: a worker that will itself drive subagents runs
+		// on the seat, not a tier pick. Omission is the inheritance signal.
+		const selection = await resolveViaV2(fakeCtx() as never, "worker", {});
+		expect(selection?.modelId).toBe("acme/seat");
+	});
+
+	it("rejects a tier outside the agent's allowlist", async () => {
+		writeSettings(V2);
+		// An explorer may reach only `fast`; asking for `heavy` is out of bounds.
+		await expect(
+			resolveViaV2(fakeCtx() as never, "web-research", { tier: "heavy" }),
+		).rejects.toThrow(/heavy.*outside agent explorer's allowlist/);
+	});
+
 	it("lets the caller pin an effort over the catalog's", async () => {
 		writeSettings(V2);
 		const selection = await resolveViaV2(fakeCtx() as never, "plan-review", {

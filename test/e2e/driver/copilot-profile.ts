@@ -17,13 +17,15 @@
 //   • `agents.<type>.models` is the allowlist bounding which tiers each agent
 //     type may reach — the menu an agent sees, not an assignment.
 //   • Within a tier, resolution walks entries in authored order and takes the
-//     first AVAILABLE one — a priority chain.
+//     first AVAILABLE one — a priority chain. The session seat is never a tier
+//     entry: it is appended last as the known-good fallback (seat-to-end), so a
+//     tier prefers a real alternative and lands on the seat only if all are down.
 //
-// Seat and tiers:
+// Seat and tiers (seat = gpt-5.5, the implicit last fallback of every tier):
 //   • session seat  → gpt-5.5 @ xhigh                    plans, and every node
 //   • fast          → mai-code-1-flash-picker @ low      classify / summarize
-//   • normal        → gpt-5.5 → gpt-5.4 → gpt-5.3-codex @ medium   subagent work
-//   • heavy         → gpt-5.5 → claude-opus-4.8 @ xhigh  reviews and verdicts
+//   • normal        → gpt-5.4 → gpt-5.3-codex @ medium   subagent work
+//   • heavy         → claude-opus-4.8 @ xhigh            reviews and verdicts
 //
 // Why the seat is GPT, not Opus: the maestro wedged mid-structuring on the
 // Copilot completion following a tool result, on claude-opus-4.8. Moving the
@@ -44,10 +46,12 @@ const PROVIDER = "github-copilot";
 
 export const COPILOT_SEAT = "gpt-5.5";
 export const COPILOT_FAST = "mai-code-1-flash-picker";
-/** normal tier, priority order — first available wins. */
-export const COPILOT_NORMAL = ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex"] as const;
-/** heavy tier — gpt-5.5 primary, Opus retained as a fallback judge. */
-export const COPILOT_HEAVY = ["gpt-5.5", "claude-opus-4.8"] as const;
+/** normal tier, priority order — first available wins; seat (gpt-5.5) is the
+ *  seat-to-end fallback, so it is NOT listed here. */
+export const COPILOT_NORMAL = ["gpt-5.4", "gpt-5.3-codex"] as const;
+/** heavy tier — Opus is the deliberate non-seat judge; the seat (gpt-5.5) is
+ *  the seat-to-end fallback if Opus is unavailable. */
+export const COPILOT_HEAVY = ["claude-opus-4.8"] as const;
 /** Seat thinking level (`defaultThinkingLevel`) — every inherited node's effort. */
 export const COPILOT_SEAT_EFFORT = "xhigh";
 

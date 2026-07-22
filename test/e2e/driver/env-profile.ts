@@ -103,10 +103,23 @@ function writeSeedFiles(repoDir: string): void {
 	mkdirSync(join(repoDir, "tests"), { recursive: true });
 }
 
+/**
+ * Persist the committer identity into the repo config. The inline `-c` GIT_IDENT
+ * only covers the harness's OWN git calls; a spawned worker's
+ * `resolveGitIdentity()` reads the repo config (or GIT_AUTHOR env), finds none,
+ * and its full-mode identity preflight throws BEFORE spawn — so workers never
+ * run. Persisting it here makes drives self-contained (no GIT_AUTHOR gymnastics).
+ */
+function persistGitIdentity(repoDir: string): void {
+	git(repoDir, ["config", "user.email", "e2e@pi-maestro.test"]);
+	git(repoDir, ["config", "user.name", "pi-maestro e2e"]);
+}
+
 /** Seed a repo that does not exist yet (local-remote and CI paths). */
 function seedRepo(repoDir: string): void {
 	writeSeedFiles(repoDir);
 	git(repoDir, ["init", "-q", "-b", "main"]);
+	persistGitIdentity(repoDir);
 	git(repoDir, ["add", "."]);
 	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
 }
@@ -121,6 +134,7 @@ function seedRepo(repoDir: string): void {
  */
 function seedClonedRepo(repoDir: string): void {
 	writeSeedFiles(repoDir);
+	persistGitIdentity(repoDir);
 	git(repoDir, ["add", "."]);
 	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
 	git(repoDir, ["push", "-q", "origin", "HEAD"]);

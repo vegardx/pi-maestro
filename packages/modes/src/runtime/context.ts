@@ -30,6 +30,7 @@ import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
 import { DebugController } from "../debug.js";
+import { createHeadlessSpawner } from "../exec/headless-spawn.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { createLiveSpawnAgent } from "../exec/live-spawn.js";
 import { shipNode as shipNodeReal } from "../exec/shipper.js";
@@ -38,6 +39,7 @@ import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { PlanEngineV2 } from "../plan/engine.js";
+import type { NodeAdapterOptions } from "../plan/node-adapter.js";
 import { resolveNodeModel } from "../plan/node-periphery.js";
 import {
 	derivePlanName,
@@ -921,19 +923,42 @@ export function createRuntimeContext(
 					...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
 				]),
 			];
+			// Worker launch transport. Headless (detached child processes, no tmux
+			// server) is honored here just as the subagents path honors it — the
+			// production default stays tmux for live pane inspection. One launcher
+			// instance is shared so the executor's liveness/capture see the same
+			// processes live-spawn started.
+			const workerTransport: "tmux" | "headless" =
+				process.env.PI_MAESTRO_TRANSPORT === "headless" ? "headless" : "tmux";
+			const headlessLauncher =
+				workerTransport === "headless" ? createHeadlessSpawner() : undefined;
 			rt.execution = createExecution({
 				engine: activeEngine,
 				planDir,
 				token,
 				socketPath,
 				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
-				// The production spawn: real pi under tmux with persona seed
-				// head, knowledge-forked session file, and crash capture. It
-				// shares the adapter's socket/token so agents dial home.
+				...(headlessLauncher
+					? {
+							// The real spawn is spawnAgent/live-spawn; here the adapter
+							// only needs liveness/reap/capture over the same registry.
+							tmux: {
+								spawn: async () => {},
+								hasSession: (name: string) => headlessLauncher.hasSession(name),
+								kill: (name: string) => headlessLauncher.kill(name),
+								capture: (name: string, lines?: number) =>
+									headlessLauncher.capture(name, lines),
+							} as NodeAdapterOptions["tmux"],
+						}
+					: {}),
+				// The production spawn: real pi (tmux pane or detached child) with
+				// persona seed head, session file, and crash capture. It shares the
+				// adapter's socket/token so agents dial home.
 				spawnAgent: createLiveSpawnAgent({
 					engine: activeEngine,
 					ctx,
-					tmux: realTmux,
+					tmux: headlessLauncher ?? realTmux,
+					transport: workerTransport,
 					planDir,
 					extensionPaths,
 					socketPath,

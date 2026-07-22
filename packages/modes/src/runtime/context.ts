@@ -3,7 +3,6 @@
 // createRuntimeContext constructs it; runtime/index.ts wires the pieces.
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -32,7 +31,6 @@ import { CarryForwardController } from "../carry-forward.js";
 import type { PendingModesCompaction } from "../compaction.js";
 import { DebugController } from "../debug.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
-import { readKnowledgeSession } from "../exec/knowledge.js";
 import { createLiveSpawnAgent } from "../exec/live-spawn.js";
 import { shipNode as shipNodeReal } from "../exec/shipper.js";
 import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
@@ -726,38 +724,9 @@ export function createRuntimeContext(
 				return;
 			}
 
-			// The knowledge snapshot is part of readiness, not a hidden command retry.
-			const knowledgePath = join(
-				plansRoot(),
-				plan.slug,
-				"base-knowledge.jsonl",
-			);
-			let knowledgeProblem: string | undefined;
-			if (!isAgentMode()) {
-				if (!existsSync(knowledgePath)) knowledgeProblem = "missing";
-				else {
-					try {
-						readKnowledgeSession(knowledgePath);
-					} catch (error) {
-						knowledgeProblem =
-							error instanceof Error ? error.message : String(error);
-					}
-				}
-			}
-			if (knowledgeProblem) {
-				ctx.ui.notify(
-					knowledgeProblem === "missing"
-						? "No knowledge base yet — asking the model to write it; then Shift+Tab again or run /start."
-						: `Knowledge base failed validation (${knowledgeProblem}) — asking the model to rewrite it.`,
-					"warning",
-				);
-				pi.sendUserMessage(
-					"Before execution can start, distill your codebase understanding into the shared knowledge base: call the `knowledge` tool with the codebase reference document (Project Structure / Key Patterns / Conventions / Key Interfaces — reference material only, framed as CONTEXT ONLY). Use persisted research reports in the plan directory as source material.",
-					{ deliverAs: "followUp" },
-				);
-				return;
-			}
-
+			// Knowledge base removed: agents provision from a header-only session
+			// (provisioner's no-knowledge path) and pick up research reports as
+			// per-agent refs — no mid-planning knowledge doc, no gate here.
 			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
 				if (!(await rt.requestMode("auto", ctx))) return;
 			}

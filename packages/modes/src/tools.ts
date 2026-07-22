@@ -6,7 +6,6 @@
 // layer owns which plan is active; these tools perform mutations/reads and
 // return readable markdown.
 
-import { join } from "node:path";
 import {
 	type AgentToolResult,
 	defineTool,
@@ -23,7 +22,6 @@ import {
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
-import { buildKnowledgeSession, KNOWLEDGE_TEMPLATE } from "./exec/knowledge.js";
 import type { NodeInput, PlanEngineV2 } from "./plan/engine.js";
 // slugify still lives in the v1 schema module; it moves to plan/schema.ts in S8.
 import {
@@ -37,8 +35,6 @@ import {
 	slugify,
 	walkNodes,
 } from "./plan/schema.js";
-import { renderResearchIndex, researchReportsDir } from "./research.js";
-import { plansRoot } from "./storage.js";
 
 export interface PlanToolDeps {
 	readonly engine: () => PlanEngineV2 | undefined;
@@ -392,7 +388,6 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 		createTaskTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
-		createKnowledgeTool(deps),
 	];
 }
 
@@ -917,71 +912,6 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 					}
 				}
 			});
-		},
-	}) as ToolDefinition;
-}
-
-const KnowledgeParams = Type.Object({
-	content: Type.String({
-		description:
-			"The complete codebase reference document. It MUST follow this exact " +
-			"skeleton — the leading `# Codebase Reference` header, the " +
-			"`> CONTEXT ONLY` framing line, and every `## ` section — or it is " +
-			"rejected:\n\n" +
-			`${KNOWLEDGE_TEMPLATE}\n\n` +
-			"Fill each section with reference material only — where things are and " +
-			"how they connect, not full file contents. Keep the section headings " +
-			"verbatim.",
-	}),
-});
-
-export function createKnowledgeTool(deps: PlanToolDeps): ToolDefinition {
-	return defineTool({
-		name: "knowledge",
-		label: "Knowledge",
-		description:
-			"Write the plan's base-knowledge document — the frozen codebase " +
-			"reference every agent forks from. Call this once, at the end of " +
-			"planning, distilling your codebase understanding into the template " +
-			"sections. Frozen after execution starts (rewrites would invalidate every " +
-			"agent's cache prefix).",
-		promptSnippet:
-			"knowledge — write the shared codebase reference agents fork from.",
-		parameters: KnowledgeParams,
-		async execute(_id, params): Promise<Result> {
-			const engine = deps.engine();
-			if (!engine) return error("no plan active — run /plan first");
-			const plan = engine.get();
-			if (engine.hasExecutionStarted()) {
-				return error(
-					"execution has started — the knowledge base is frozen (rewriting it would invalidate every agent's cache prefix)",
-				);
-			}
-			const planDir = join(plansRoot(), plan.slug);
-			const outPath = join(planDir, "base-knowledge.jsonl");
-			// Mechanical: the ref index of on-disk research reports is appended
-			// by the system, not authored — agents dig(ref) full reports on
-			// demand instead of the doc carrying every deep-dive.
-			const researchIndex = renderResearchIndex(researchReportsDir(planDir));
-			try {
-				buildKnowledgeSession({
-					content: params.content,
-					repoPath: plan.repoPath,
-					outPath,
-					...(researchIndex ? { researchIndex } : {}),
-				});
-			} catch (e) {
-				const message = e instanceof Error ? e.message : String(e);
-				return error(
-					`knowledge document rejected: ${message}\n\nTemplate:\n${KNOWLEDGE_TEMPLATE}`,
-				);
-			}
-			return ok(
-				`Knowledge base written to ${outPath}${
-					researchIndex ? " (research index auto-appended)" : ""
-				}. All agents will fork from it; it freezes when execution starts.`,
-				{},
-			);
 		},
 	}) as ToolDefinition;
 }

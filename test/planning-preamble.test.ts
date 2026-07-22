@@ -92,7 +92,7 @@ describe("buildPlanModePreamble", () => {
 		}
 	});
 
-	it("structuring mentions node/task/knowledge tools and the understanding", () => {
+	it("structuring mentions node/task tools and the understanding", () => {
 		const engine = PlanEngineV2.create(memStore(), {
 			slug: "structured",
 			title: "Structured",
@@ -103,9 +103,7 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("STRUCTURING");
 		expect(preamble).toContain("`node`");
 		expect(preamble).toContain("`task`");
-		expect(preamble).toContain("knowledge(content=");
 		expect(preamble).toContain("We will build a clamp helper.");
-		expect(preamble).toContain("research/");
 	});
 
 	it("guides child-node review coverage and inheritance", () => {

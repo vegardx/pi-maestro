@@ -173,12 +173,7 @@ is still available for gaps that surface while structuring.
    judges the candidate diffs, distills the strongest, and ships the one PR.
    Candidates never ship their own PR. Reach for this only when the comparison
    is worth the extra cost, not by default.
-4. **Knowledge** — Call \`knowledge(content="...")\` with the codebase reference
-   document (Project Structure / Key Patterns / Conventions / Key Interfaces).
-   Every agent forks from it; execution entry refuses to start without it.
-   Distill it from the research reports in the plan directory's research/
-   folder plus your confirmed understanding — reference material, not tasks.
-5. **Summary** — Write a brief text summary. End with "Ready to implement."
+4. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ${ASKING}
 

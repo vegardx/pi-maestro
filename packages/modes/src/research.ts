@@ -375,7 +375,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 		description:
 			"Declare you have enough information to form the plan. Presents your " +
 			"understanding to the user for confirmation; approval unlocks the " +
-			"structure tools (node/task/knowledge). Call this as soon as " +
+			"structure tools (deliverable/task). Call this as soon as " +
 			"the convergence criteria are met — or immediately for trivial " +
 			"requests.",
 		promptSnippet:
@@ -426,8 +426,7 @@ export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
 				deps.onPhaseChanged?.(ctx);
 				return ok(
 					`Readiness confirmed — structure tools unlocked.${note} ` +
-						"Create nodes and tasks now, then the knowledge doc " +
-						"(distill it from the research reports in the plan directory).",
+						"Create the deliverables and their tasks now.",
 				);
 			}
 			return ok(

@@ -10,7 +10,7 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@anthropic-ai/sandbox-runtime": "^0.0.26",
+		"@anthropic-ai/sandbox-runtime": "^0.0.66",
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-core": "*",
 		"@vegardx/pi-git": "*",

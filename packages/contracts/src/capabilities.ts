@@ -69,6 +69,12 @@ export interface SubagentsCapabilityV1 {
 	get(runId: RunId): RunRecord | undefined;
 	list(): readonly RunRecord[];
 	steer(runId: RunId, guidance: string): void;
+	/**
+	 * Drive a persistent (standby) child: deliver `message` as a follow-up, wait
+	 * for it to go idle, and resolve with that turn's assistant text. Only
+	 * meaningful for standby spawns; throws for a settled/one-shot run.
+	 */
+	ask?(runId: RunId, message: string): Promise<string>;
 	interrupt?(runId: RunId, reason?: string): Promise<InterruptResult>;
 	/** Compatibility alias for interrupting one-shot work. */
 	stop(runId: RunId, reason?: string): void;

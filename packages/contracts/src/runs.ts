@@ -143,6 +143,15 @@ export interface SpawnProfile {
 	readonly parent?: RunId;
 	readonly rootTurnId?: string;
 	readonly retainUntil?: number;
+	/**
+	 * Persistent standby: after the initial prompt settles the child is kept
+	 * ALIVE, holding its context, so the caller can drive it with `ask`
+	 * follow-ups until the run is stopped/interrupted (reaped when the parent
+	 * ends). Absent/false ⇒ the one-shot lifecycle (prompt → settle → gone).
+	 * The lifecycle property behind the persistent agent types (worker driving
+	 * subagents, advisor) — see docs/design/multi-model-agents.md §4.
+	 */
+	readonly standby?: boolean;
 	/** Opaque metadata for the maestro. */
 	readonly meta?: Readonly<Record<string, unknown>>;
 }
@@ -301,6 +310,13 @@ export interface RunHandle {
 	readonly id: RunId;
 	status(): RunStatus;
 	steer(guidance: string): void;
+	/**
+	 * Request→response on a PERSISTENT (standby) child: deliver `message` as a
+	 * follow-up, wait for the child to go idle, and resolve with that turn's
+	 * final assistant text. Only present for standby spawns; a one-shot run has
+	 * no live context to re-enter. See docs/design/multi-model-agents.md §4.
+	 */
+	ask?(message: string): Promise<string>;
 	interrupt?(reason?: string): Promise<InterruptResult>;
 	/** Compatibility alias for terminal one-shot interruption. */
 	stop(reason?: string): void;

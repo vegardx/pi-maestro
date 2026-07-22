@@ -291,6 +291,13 @@ export interface AgentsCapabilityV1 {
 	list(): readonly RunRecord[];
 	status(runId: RunId): RunRecord | undefined;
 	steer(runId: RunId, guidance: string): void;
+	/**
+	 * Drive a persistent (standby) child and wait for its reply: deliver the
+	 * message as a follow-up, block until the child goes idle, and resolve with
+	 * that turn's assistant text. Undefined when the run cannot be asked (not
+	 * standby, unknown, or already settled).
+	 */
+	ask(runId: RunId, message: string): Promise<string | undefined>;
 	interrupt(runId: RunId, reason?: string): Promise<void>;
 	capture(runId: RunId, lines?: number): Promise<string | undefined>;
 	result(runId: RunId): Promise<RunResult | undefined>;

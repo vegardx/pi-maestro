@@ -111,7 +111,7 @@ export async function showConfigMenu(
 			`Maestro configuration — profile: ${active?.id ?? "none (everything inherits the seat)"}`,
 			[
 				`Profiles and catalogs (${Object.keys(v2?.profiles ?? {}).length} profile(s), ${Object.keys(v2?.catalogs ?? {}).length} catalog(s))`,
-				"Agent tiers (worker, explorer, reviewer)",
+				"Agent tiers (worker, explorer, reviewer, advisor)",
 				`Policies (${readSettingsPolicyTable(ctx.cwd).rows.length} rows)`,
 				`Residency (${config?.residency ? activeResidency(config) : "not configured"})`,
 				"Summary",

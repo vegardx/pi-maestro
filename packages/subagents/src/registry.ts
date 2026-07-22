@@ -120,6 +120,12 @@ const RESEARCH_BASE = `You are a research agent working for a planning maestro. 
 
 Write precise findings with evidence (file:line for repository claims and URLs for web claims), plus what you could not determine. End with a \`## Digest\` block of at most 6 lines / 500 characters containing the answer, load-bearing facts, and any caveat. Findings must be at most 700 words. Cite sources instead of quoting walls of text.`;
 
+const ADVISOR_BASE = `You are a technical advisor consulted by an agent that is doing the actual work. Propose an approach, argue the trade-offs, and recommend a concrete direction — but you NEVER modify files: you advise, the caller decides and acts.
+
+You are persistent: the caller consults you repeatedly over one problem, so build on what you have already said instead of restarting. To ground advice in fact, you may spawn your own read-only research (explorers) and synthesize their findings — the caller sees only your synthesized guidance, not the raw research.
+
+Each reply is a focused recommendation: the approach, the key trade-offs, the risks, and what you would do. Cite evidence (file:line, sources) for load-bearing claims and state what you could not determine. Distinct from an explorer, whose job is to establish facts: your job is judgment.`;
+
 const REVIEW_BASE = `You are a read-only reviewer. Inspect the requested change and surrounding code. Report numbered findings with file:line, severity, failing scenario, and a concrete fix. critical means data loss, security hole, crash, or silently wrong results; major means a real user-visible defect; minor is advisory and never blocks. End with VERDICT: PASS or VERDICT: BLOCK; block if and only if a critical or major finding remains. Your entire final message is the report.`;
 
 function reviewKind(
@@ -321,6 +327,25 @@ export const BUILTIN_AGENT_KINDS: readonly AgentKindDefinition[] = [
 			target: "deliverables",
 		},
 	},
+	{
+		id: "advisor",
+		routingSummary:
+			"Consult on approach and trade-offs; read-only, persistent, never writes code.",
+		prompt: ADVISOR_BASE,
+		runtimePolicy: "advisor",
+		modelRole: "advisor",
+		contracts: [REPORT_CONTRACT],
+		watchdog: DEFAULT_WATCHDOG,
+		// Persistent standby: spawned once, driven by the caller via `ask` over
+		// the caller's lifetime (docs/design/multi-model-agents.md §6).
+		standby: true,
+		sequencing: {
+			mode: "serial",
+			guidance:
+				"Consult an advisor while you implement; you remain the single author.",
+		},
+		reducer: "identity",
+	},
 ];
 
 export function createBuiltinAgentRegistries(): AgentRegistries {
@@ -350,10 +375,21 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			isolation: "strong",
 			extraExtensions: ["research-tools"],
 		},
+		{
+			// Read-only, but holds the `agent` tool so it can spawn its own
+			// read-only research (explorers) to ground its advice, and the web
+			// tools to consult sources. Never writes.
+			id: "advisor",
+			mode: "read-only",
+			tools: { allow: [...READ_TOOLS, ...WEB_TOOLS, "agent"] },
+			isolation: "strong",
+			extraExtensions: ["research-tools"],
+		},
 	]);
 	const sessions = new AgentRegistry<AgentSessionPolicy>([
 		{ id: "host", session: "persistent" },
 		{ id: "worker", session: "persistent" },
+		{ id: "advisor", session: "persistent" },
 		{ id: "one-shot", session: "ephemeral", maxTurns: 24 },
 	]);
 	const transports = new AgentRegistry<AgentTransportPolicy>([
@@ -391,6 +427,12 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			id: "review",
 			permissions: "read-only",
 			session: "one-shot",
+			transport: "tmux",
+		},
+		{
+			id: "advisor",
+			permissions: "advisor",
+			session: "advisor",
 			transport: "tmux",
 		},
 	]);

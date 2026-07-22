@@ -52,6 +52,7 @@ export const CONTRACTS_BY_AGENT: Readonly<
 	worker: ["summary-and-diff"],
 	explorer: ["report"],
 	reviewer: ["findings", "plan-gate-report"],
+	advisor: ["report"],
 };
 
 const AGENT_SET = new Set<string>(SPAWNABLE_AGENT_TYPES);

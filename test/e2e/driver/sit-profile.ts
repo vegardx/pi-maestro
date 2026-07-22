@@ -147,6 +147,7 @@ const MODELS_BLOCK = {
 				"security-review": "reviewpool",
 				"test-review": "reviewpool",
 				"simplification-review": "reviewpool",
+				advisor: "reviewpool",
 			},
 		},
 	},

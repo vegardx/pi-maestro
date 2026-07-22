@@ -33,6 +33,7 @@ export const AGENT_KINDS = [
 	"simplification-review",
 	"verifier",
 	"delivery-verifier",
+	"advisor",
 ] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
@@ -134,6 +135,12 @@ export interface AgentKindDefinition {
 	readonly watchdog: RunWatchdogConfig;
 	readonly sequencing: AgentSequencingGuidance;
 	readonly reducer: AgentReducerId;
+	/**
+	 * Persistent standby lifecycle: spawn the child in standby and drive it with
+	 * `ask` over the caller's lifetime (the advisor type). Absent ⇒ one-shot.
+	 * See docs/design/multi-model-agents.md §4.
+	 */
+	readonly standby?: boolean;
 	/** Optional maestro slash command this persona exposes. */
 	readonly command?: AgentKindCommand;
 }

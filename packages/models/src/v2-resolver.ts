@@ -372,8 +372,9 @@ export async function explainTier(
  */
 export function agentTypeForRole(
 	role: string,
-): "worker" | "explorer" | "reviewer" {
+): "worker" | "explorer" | "reviewer" | "advisor" {
 	if (role.endsWith("-review")) return "reviewer";
 	if (role === "worker" || role === "verifier") return "worker";
+	if (role === "advisor") return "advisor";
 	return "explorer";
 }

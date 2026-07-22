@@ -404,7 +404,7 @@ describe("/maestro interactive editor", () => {
 	it("toggles an agent tier allowlist and resets it back to the defaults", async () => {
 		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({}));
 		const { ctx, selects } = menuCtx([
-			"Agent tiers (worker, explorer, reviewer)",
+			"Agent tiers (worker, explorer, reviewer, advisor)",
 			"worker — normal, heavy (default)",
 			"Toggle tiers…",
 			"✗ fast", // toggle ON → override written
@@ -449,7 +449,7 @@ describe("/maestro interactive editor", () => {
 			}),
 		);
 		const { ctx, selects } = menuCtx([
-			"Agent tiers (worker, explorer, reviewer)",
+			"Agent tiers (worker, explorer, reviewer, advisor)",
 			undefined, // Esc agent tiers screen
 			undefined, // Esc top level
 		]);
@@ -620,7 +620,7 @@ describe("/maestro interactive editor", () => {
 		expect(top?.title).toContain("Maestro configuration — profile:");
 		expect(top?.options).toEqual([
 			"Profiles and catalogs (0 profile(s), 0 catalog(s))",
-			"Agent tiers (worker, explorer, reviewer)",
+			"Agent tiers (worker, explorer, reviewer, advisor)",
 			"Policies (6 rows)",
 			"Residency (EEA)",
 			"Summary",

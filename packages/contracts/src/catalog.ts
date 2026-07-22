@@ -59,6 +59,10 @@ export const SPAWNABLE_AGENT_TYPES = [
 	"worker",
 	"explorer",
 	"reviewer",
+	// A read-only, persistent consultant spawned at RUNTIME (the reader path),
+	// never authored as a plan node — so it is spawnable (has a tier allowlist)
+	// but NOT a NODE_AGENT_TYPE. See docs/design/multi-model-agents.md §6.
+	"advisor",
 ] as const;
 export type SpawnableAgentType = (typeof SPAWNABLE_AGENT_TYPES)[number];
 
@@ -78,6 +82,9 @@ export const DEFAULT_AGENT_TIERS: Readonly<
 	worker: { models: ["normal", "heavy"] },
 	explorer: { models: ["fast", "normal"] },
 	reviewer: { models: ["normal", "heavy"] },
+	// Advice draws on strong reasoning; overflow into normal when a fan-out
+	// wants more models than heavy holds.
+	advisor: { models: ["heavy", "normal"] },
 };
 
 /** The parsed v2 configuration slice (settings `models.catalog`,

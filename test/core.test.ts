@@ -271,4 +271,22 @@ describe("runAgentTurn", () => {
 		const ctx = fakeCtx({ idle: true });
 		await expect(runAgentTurn(pi.api, ctx, "noop")).resolves.toBe("");
 	});
+
+	it("rejects when the nested turn never settles within the timeout", async () => {
+		const pi = fakePi();
+		const ctx = fakeCtx({ idle: false, assistantText: "unused" });
+		// agent_settled is never fired — a hung nested turn. Without a bound this
+		// would await forever (the wedge that blocked turn_end); with one it rejects.
+		await expect(
+			runAgentTurn(pi.api, ctx, "name this", { timeoutMs: 20 }),
+		).rejects.toThrow(/no settlement within/);
+	});
+
+	it("still resolves if the turn settles before the timeout", async () => {
+		const pi = fakePi();
+		const ctx = fakeCtx({ idle: false, assistantText: "my-plan" });
+		const promise = runAgentTurn(pi.api, ctx, "name this", { timeoutMs: 1000 });
+		pi.fire("agent_settled");
+		await expect(promise).resolves.toBe("my-plan");
+	});
 });

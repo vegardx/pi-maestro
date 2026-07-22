@@ -173,6 +173,81 @@ describe("tier resolution", () => {
 	});
 });
 
+describe("seat-to-end", () => {
+	// The seat is the session model (prov/seat — fakeCtx's `model`). A tier that
+	// lists it must still prefer a real alternative and reach the seat last.
+	const seatFirst = {
+		models: {
+			...SETTINGS.models,
+			catalog: {
+				daily: {
+					...SETTINGS.models.catalog.daily,
+					// seat authored FIRST, ahead of a real alternative.
+					heavy: [
+						{ model: "prov/seat", family: "openai" },
+						{ model: "prov/opus", family: "anthropic", effort: "high" },
+					],
+				},
+			},
+		},
+	};
+
+	it("a tier that lists the seat resolves to the non-seat model first", async () => {
+		writeSettings(seatFirst);
+		const resolution = await resolveV2Model(fakeCtx(), {
+			agent: "worker",
+			tier: "heavy",
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "prov/opus",
+			family: "anthropic",
+		});
+		// The seat never enters tier contention — it is not a candidate here.
+		expect(
+			resolution.candidates?.some((fact) => fact.model === "prov/seat"),
+		).toBe(false);
+	});
+
+	it("lands on the seat last, as a visible fallback, when alternatives are down", async () => {
+		writeSettings(seatFirst);
+		const resolution = await resolveV2Model(
+			fakeCtx({ unavailable: ["prov/opus"] }),
+			{ agent: "worker", tier: "heavy", inherit: { modelId: "prov/seat" } },
+		);
+		expect(resolution).toMatchObject({
+			source: "fallback",
+			modelId: "prov/seat",
+			tier: "heavy",
+		});
+		expect(resolution.fallbackReason).toContain("unavailable");
+		expect(fallbackNotice(resolution)).toContain("running on the session");
+	});
+
+	it("a tier holding only the seat falls back with an accurate reason", async () => {
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				catalog: {
+					daily: {
+						...SETTINGS.models.catalog.daily,
+						heavy: [{ model: "prov/seat", family: "openai" }],
+					},
+				},
+			},
+		});
+		const resolution = await resolveV2Model(fakeCtx(), {
+			agent: "worker",
+			tier: "heavy",
+		});
+		expect(resolution).toMatchObject({
+			source: "fallback",
+			modelId: "prov/seat",
+		});
+		expect(resolution.fallbackReason).toContain("only the session model");
+	});
+});
+
 describe("session fallback", () => {
 	it("an exhausted tier degrades to the seat with a visible reason", async () => {
 		const resolution = await resolveV2Model(

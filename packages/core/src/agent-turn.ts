@@ -32,16 +32,38 @@ function ensureIdleListener(pi: ExtensionAPI): void {
 	});
 }
 
-function waitForIdle(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
+function waitForIdle(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	timeoutMs?: number,
+): Promise<void> {
 	ensureIdleListener(pi);
 	if (ctx.isIdle()) return Promise.resolve();
-	return new Promise<void>((resolve) => {
+	return new Promise<void>((resolve, reject) => {
 		const list = idleResolvers.get(pi);
 		if (!list) {
 			resolve();
 			return;
 		}
-		list.push(resolve);
+		// A bounded wait rejects if the nested turn never settles — a hung stream
+		// (or a nested turn that cannot start) must not block the caller forever.
+		// The resolver is removed from the queue on timeout so a late settlement
+		// does not fire it. See nameDraftFromModel (turn_end) for why this matters.
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const settle = (): void => {
+			if (timer) clearTimeout(timer);
+			resolve();
+		};
+		list.push(settle);
+		if (timeoutMs && timeoutMs > 0) {
+			timer = setTimeout(() => {
+				const current = idleResolvers.get(pi);
+				const index = current?.indexOf(settle) ?? -1;
+				if (index >= 0) current?.splice(index, 1);
+				reject(new Error(`runAgentTurn: no settlement within ${timeoutMs}ms`));
+			}, timeoutMs);
+			timer.unref?.();
+		}
 	});
 }
 
@@ -83,6 +105,7 @@ export async function runAgentTurn(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	message: string,
+	opts?: { readonly timeoutMs?: number },
 ): Promise<string> {
 	ensureIdleListener(pi);
 	pi.sendMessage(
@@ -94,6 +117,6 @@ export async function runAgentTurn(
 		},
 		{ triggerTurn: true },
 	);
-	await waitForIdle(pi, ctx);
+	await waitForIdle(pi, ctx, opts?.timeoutMs);
 	return lastAssistantText(ctx);
 }

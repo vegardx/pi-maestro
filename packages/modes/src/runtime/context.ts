@@ -88,6 +88,14 @@ import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
 
+/**
+ * Bound on the draft-naming nested turn (runs inside the plan-mode turn_end
+ * hook). Generous enough for a slow-but-working model, well under the drive's
+ * 180s stall threshold, so a naming turn that never settles falls back to the
+ * mechanical plan name instead of wedging the whole session.
+ */
+const DRAFT_NAMING_TIMEOUT_MS = 45_000;
+
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStoreV2;
 	readonly now?: () => string;
@@ -399,6 +407,12 @@ export function createRuntimeContext(
 					"four words, lowercase, hyphen-separated, no quotes, no prose. " +
 					"It names the body of work, not the request — never start it " +
 					`with a verb like create/add/build.\n\nDeliverables:\n${titles}`,
+				// Bounded: this runs inside the turn_end hook on the turn the plan
+				// first gains nodes. A nested naming turn that never settles (a hung
+				// provider stream, or one that cannot start while this hook is in
+				// flight) would otherwise block turn_end — and pi's whole loop —
+				// forever. On timeout the catch below keeps the mechanical name.
+				{ timeoutMs: DRAFT_NAMING_TIMEOUT_MS },
 			);
 			const candidate = slugify(
 				reply.trim().split(/\s+/).slice(0, 6).join(" "),

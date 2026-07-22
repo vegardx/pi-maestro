@@ -81,6 +81,16 @@ interface DaemonState {
 	releaseWakeLock: () => void;
 }
 
+/** Inject the provider-trace diagnostic extension when PI_TRACE_LOG is set. */
+function traceExtensions(): { providerExtensions?: string[] } {
+	if (!process.env.PI_TRACE_LOG) return {};
+	return {
+		providerExtensions: [
+			join(process.cwd(), "test", "e2e", "driver", "provider-trace.ext.ts"),
+		],
+	};
+}
+
 async function startDaemon(argv: string[]): Promise<void> {
 	const sock = flagValue(argv, "--sock") ?? DEFAULT_SOCK;
 	if (existsSync(sock)) {
@@ -216,6 +226,7 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 			// Correct the Copilot context windows down to the seat's real input
 			// caps (only modelOverrides — native oauth is untouched).
 			modelsJsonContent: COPILOT_PROFILE.modelsJsonContent,
+			...traceExtensions(),
 			isolatedAuth: {
 				"github-copilot": copilotAuthEntry(credential, minted),
 			},
@@ -235,6 +246,7 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 			defaultModel: sit.defaultModel,
 			modelsJsonContent: sit.modelsJsonContent,
 			models: sit.models,
+			...traceExtensions(),
 		});
 	}
 	const providerExt = flagValue(argv, "--provider-ext");

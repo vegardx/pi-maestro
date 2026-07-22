@@ -19,6 +19,9 @@ import {
 	type AgentRunRequest,
 	type AgentsCapabilityV1,
 	type ExactModelCandidateFact,
+	type ReaderResult,
+	type ReaderSpawnRequest,
+	type ReaderWorkspace,
 	type ResolvedAgentAssignment,
 	type RunHandle,
 	type RunId,
@@ -183,11 +186,80 @@ export function createAgentsCapability(
 		return { runId: handle.id, assignment, handle };
 	};
 
+	const spawnReaders = async (
+		requests: readonly ReaderSpawnRequest[],
+		opts: { workspace: ReaderWorkspace },
+	): Promise<readonly ReaderResult[]> => {
+		const transport = deps.subagents();
+		if (!transport) throw new Error("Subagents are not available.");
+		// Validate + resolve every request BEFORE spawning any, so one writer in
+		// the batch rejects the whole call without leaving readers half-spawned.
+		const prepared = await Promise.all(
+			requests.map(async (request) => {
+				if (request.kind === "host")
+					throw new Error("The host kind cannot be spawned as a reader.");
+				const kind = deps.registries.kinds.require(request.kind);
+				const runtime = resolveRuntimePolicy(
+					deps.registries.runtime,
+					kind.runtimePolicy,
+				);
+				if (runtime.mode !== "read-only")
+					throw new Error(
+						`spawn is read-only fan-out; ${request.kind} is a writer — use the ensemble node path instead.`,
+					);
+				const assignment = await resolve({
+					agentId: `assignment:${crypto.randomUUID()}`,
+					kind: request.kind,
+					focus: request.prompt,
+					rationale: "Resolved for a blocking reader spawn.",
+					inputContracts: [],
+					model: request.model,
+					tier: request.tier,
+					effort: request.effort,
+				});
+				const base = profileFor(
+					kind,
+					{
+						kind: request.kind,
+						prompt: request.prompt,
+						displayName: request.displayName,
+					},
+					assignment,
+					deps,
+				);
+				const profile: SpawnProfile = {
+					...base,
+					meta: { ...base.meta, workspace: opts.workspace },
+				};
+				return { request, assignment, profile, kind: request.kind };
+			}),
+		);
+		// Spawn all so they run concurrently; the caller's model idles while
+		// blocked on the joined results below.
+		const spawned = prepared.map((entry) => {
+			const handle = transport.spawn(entry.request.prompt, entry.profile);
+			handles.set(handle.id, handle);
+			assignments.set(handle.id, entry.assignment);
+			return { handle, assignment: entry.assignment, kind: entry.kind };
+		});
+		// Block until every reader settles, then hand back all results together.
+		const results = await Promise.all(
+			spawned.map((entry) => entry.handle.result()),
+		);
+		return spawned.map((entry, index) => ({
+			runId: entry.handle.id,
+			kind: entry.kind,
+			modelId: entry.assignment.modelId,
+			result: results[index],
+		}));
+	};
+
 	return {
 		resolve,
 		options,
 		run,
 		batch: (requests) => Promise.all(requests.map(run)),
+		spawnReaders,
 		list: () => deps.subagents()?.list() ?? [],
 		status: (runId) => deps.subagents()?.get(runId),
 		steer: (runId, guidance) => {
@@ -247,6 +319,7 @@ const Params = Type.Object({
 		[
 			Type.Literal("run"),
 			Type.Literal("batch"),
+			Type.Literal("spawn"),
 			Type.Literal("list"),
 			Type.Literal("status"),
 			Type.Literal("steer"),
@@ -257,7 +330,7 @@ const Params = Type.Object({
 		],
 		{
 			description:
-				"run/batch start assignments; list/status inspect; steer/ask/interrupt control; capture/result retrieve output. ask drives a persistent (standby) child and blocks for its reply.",
+				"run/batch start assignments; spawn blocks on a read-only reader fan-out and returns all findings; list/status inspect; steer/ask/interrupt control; capture/result retrieve output. ask drives a persistent (standby) child and blocks for its reply.",
 		},
 	),
 	kind: Type.Optional(Type.String()),
@@ -278,6 +351,12 @@ const Params = Type.Object({
 	cwd: Type.Optional(Type.String()),
 	displayName: Type.Optional(Type.String()),
 	assignments: Type.Optional(Type.Array(Request, { minItems: 1 })),
+	workspace: Type.Optional(
+		Type.Union([Type.Literal("shared-ro"), Type.Literal("none")], {
+			description:
+				"spawn only: read-only fan-out workspace — shared-ro reads the caller's tree (default), none is pure-reasoning.",
+		}),
+	),
 	runId: Type.Optional(Type.String()),
 	guidance: Type.Optional(Type.String()),
 	reason: Type.Optional(Type.String()),
@@ -369,6 +448,22 @@ export function createAgentTool(
 							{ runIds: spawned.map((run) => run.runId) },
 						);
 					}
+					case "spawn": {
+						if (!params.assignments?.length)
+							return response("spawn requires assignments.");
+						const workspace: ReaderWorkspace = params.workspace ?? "shared-ro";
+						const readers: ReaderSpawnRequest[] = params.assignments.map(
+							(request) => ({
+								...request,
+								kind: request.kind as AgentKind,
+								effort: request.effort as ThinkingLevel | undefined,
+							}),
+						);
+						const results = await cap.spawnReaders(readers, { workspace });
+						return response(results.map(formatReader).join("\n\n"), {
+							runIds: results.map((reader) => reader.runId),
+						});
+					}
 					case "list": {
 						const runs = cap.list();
 						const kinds = cap
@@ -434,4 +529,9 @@ export function createAgentTool(
 
 function formatRun(run: RunRecord): string {
 	return `- ${run.id}: ${run.status} (${String(run.profile.meta?.kind ?? run.profile.profile)})`;
+}
+
+function formatReader(reader: ReaderResult): string {
+	const body = reader.result.summary ?? reader.result.error ?? "(no output)";
+	return `## ${reader.kind} — ${reader.runId} (${reader.result.status})\n${body}`;
 }

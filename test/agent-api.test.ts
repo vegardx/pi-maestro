@@ -214,6 +214,22 @@ describe("unified agent capability and tool", () => {
 		expect(profiles[0].meta?.workspace).toBe("shared-ro");
 	});
 
+	it("the advisor spawns as a read-only standby reader that holds the agent tool", async () => {
+		const { capability, profiles } = setup();
+		const spawned = await capability.run({
+			kind: "advisor",
+			prompt: "How should I structure this?",
+		});
+		expect(spawned.assignment.kind).toBe("advisor");
+		const profile = profiles[0];
+		// Persistent standby lifecycle, read-only, and able to spawn its own
+		// read-only research (holds the `agent` tool) — never a writer.
+		expect(profile.standby).toBe(true);
+		expect(profile.mode).toBe("plan");
+		expect(profile.tools?.allow).toContain("agent");
+		expect(profile.tools?.allow).toContain("read");
+	});
+
 	it("spawn rejects a writer kind — writers take the ensemble node path", async () => {
 		const { capability, profiles } = setup();
 		await expect(

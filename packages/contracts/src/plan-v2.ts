@@ -11,11 +11,15 @@ import type { DeliverableStatus, WorkItemKind } from "./plan.js";
 export const PLAN_SCHEMA_VERSION_V2 = 6 as const;
 
 /**
- * Spawnable node agent types — the same list the catalog's allowlists and
- * the persona registry use. `caller` is deliberately unrepresentable: a
- * plan node cannot be a harness component.
+ * Agent types authorable as PLAN NODES — the writers/readers the plan DAG is
+ * built from. A strict subset of {@link SpawnableAgentType}: `advisor` is
+ * spawnable (it has a tier allowlist) but is a RUNTIME reader, never a plan
+ * node, so it is excluded here. `caller` is likewise unrepresentable: a plan
+ * node cannot be a harness component. See docs/design/multi-model-agents.md §6.
  */
-export const NODE_AGENT_TYPES = SPAWNABLE_AGENT_TYPES;
+export const NODE_AGENT_TYPES = SPAWNABLE_AGENT_TYPES.filter(
+	(type): type is "worker" | "explorer" | "reviewer" => type !== "advisor",
+);
 export type NodeAgentType = (typeof NODE_AGENT_TYPES)[number];
 
 /**

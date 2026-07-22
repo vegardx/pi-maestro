@@ -132,6 +132,7 @@ describe("bundled playbooks", () => {
 		});
 		expect(registry.errors).toEqual([]);
 		expect([...registry.personas.keys()].sort()).toEqual([
+			"advisor",
 			"coder",
 			"debugger",
 			"generalist",

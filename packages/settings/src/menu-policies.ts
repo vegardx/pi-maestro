@@ -5,7 +5,8 @@
 // trigger — and every editable field is constrained to its closed
 // vocabulary: triggers from known mode edges / POLICY_DUTIES /
 // POLICY_TOOL_TRIGGERS, models from TIER_IDS, agent and scope.agent from
-// SPAWNABLE_AGENT_TYPES, contract from CONTRACT_IDS, persona from the
+// NODE_AGENT_TYPES (policy scope is plan-node types — the runtime-only advisor
+// is not policy-scopable), contract from CONTRACT_IDS, persona from the
 // personas.v1 roster when available (free text with a warning otherwise),
 // scope.depth from a small preset list.
 //
@@ -19,12 +20,12 @@ import {
 	CONSUMED_POLICY_TRIGGERS,
 	CONTRACT_IDS,
 	DEFAULT_POLICY_ROWS,
+	NODE_AGENT_TYPES,
 	POLICY_DUTIES,
 	POLICY_TOOL_TRIGGERS,
 	type PolicyRow,
 	type PolicyRun,
 	type PolicyScope,
-	SPAWNABLE_AGENT_TYPES,
 	TIER_IDS,
 	validatePolicyRow,
 	validatePolicyRows,
@@ -331,7 +332,7 @@ async function editPolicyRow(
 		} else if (picked.startsWith("Agent:")) {
 			const agent = await ui.select(`${on} → agent`, [
 				NOT_SET,
-				...SPAWNABLE_AGENT_TYPES,
+				...NODE_AGENT_TYPES,
 			]);
 			if (!agent) continue;
 			setRun({ agent: agent === NOT_SET ? undefined : agent });
@@ -381,7 +382,7 @@ async function editPolicyRow(
 		} else if (picked.startsWith("Scope agent")) {
 			const agent = await ui.select(`${on} → scope agent`, [
 				`${ANY} — every agent type`,
-				...SPAWNABLE_AGENT_TYPES,
+				...NODE_AGENT_TYPES,
 			]);
 			if (!agent) continue;
 			write(

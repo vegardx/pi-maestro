@@ -78,6 +78,7 @@ function profileFor(
 		mode: runtime.mode === "full" ? "auto" : "plan",
 		tools: runtime.tools,
 		session: runtime.session === "persistent",
+		...(kind.standby ? { standby: true } : {}),
 		transport: runtime.transport === "host" ? "tmux" : runtime.transport,
 		isolateExtensions: runtime.mode === "read-only",
 		...(extension ? { extraExtensions: [extension] } : {}),

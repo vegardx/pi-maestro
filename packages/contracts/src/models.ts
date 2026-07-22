@@ -19,6 +19,7 @@ export const MODEL_ROLES = [
 	"security-review",
 	"test-review",
 	"simplification-review",
+	"advisor",
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 

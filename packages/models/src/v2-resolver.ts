@@ -5,9 +5,12 @@
 //      carry no model fields; root spawns run the session model because the
 //      root's model IS the session model.
 //   2. A tier requested (persona fan-out instructions, policy rows) →
-//      resolve through the active profile's catalog: that tier's entries,
-//      residency-filtered, availability-checked, first-available in authored
-//      order — bounded by the agent type's tier allowlist.
+//      resolve through the active profile's catalog: that tier's NON-SEAT
+//      entries, residency-filtered, availability-checked, first-available in
+//      authored order — bounded by the agent type's tier allowlist. The
+//      session model is excluded here and reached only via (3): seat-to-end,
+//      so a deliberate tier choice prefers a real alternative to the seat and
+//      never fails because of that choice.
 //   3. Nothing available (empty tier, fully struck, unknown catalog) →
 //      SESSION-MODEL FALLBACK with a notice: the judgment still happens, on
 //      the seat, visibly. Never fail-open, never wedge.
@@ -253,8 +256,16 @@ export async function resolveV2Model(
 		);
 
 	// 2. Walk the tier: residency-filtered, availability-checked, authored order.
+	//    Seat-to-end (docs/design/multi-model-agents.md §1): the session model
+	//    never competes as a tier choice — it is the known-good fallback, tried
+	//    only after every non-seat entry (step 3). So a tier that lists the seat
+	//    still prefers a real alternative and lands on the seat last.
+	const seat = sessionModelId(ctx);
+	const tierEntries = catalog[request.tier].filter(
+		(entry) => entry.model !== seat,
+	);
 	const checked = await Promise.all(
-		catalog[request.tier].map((entry) =>
+		tierEntries.map((entry) =>
 			checkCatalogEntry(ctx, entry, request.requireApiKey ?? false),
 		),
 	);
@@ -262,7 +273,7 @@ export async function resolveV2Model(
 	const winnerIndex = checked.findIndex((entry) => entry.fact.available);
 	if (winnerIndex >= 0) {
 		const winner = checked[winnerIndex];
-		const entry = catalog[request.tier][winnerIndex];
+		const entry = tierEntries[winnerIndex];
 		const effort = clampEffort(request.inherit?.effort, entry, winner.model);
 		return {
 			source: "tier",
@@ -276,8 +287,9 @@ export async function resolveV2Model(
 		};
 	}
 
-	// 3. Session-model fallback: the judgment still happens, on the seat, visibly.
-	const seat = sessionModelId(ctx);
+	// 3. Session-model fallback: every non-seat entry was unavailable (or the
+	//    tier held nothing but the seat), so the judgment still happens — on the
+	//    seat, the known-good end of the seat-to-end order — visibly.
 	if (!seat)
 		throw new V2ResolutionError(
 			`tier ${request.tier} has no available model and there is no session model to fall back to`,
@@ -292,9 +304,11 @@ export async function resolveV2Model(
 		catalogId: active.profile.catalog,
 		candidates,
 		fallbackReason:
-			candidates.length === 0
+			catalog[request.tier].length === 0
 				? `tier ${request.tier} is empty in catalog ${active.profile.catalog}`
-				: `all ${struck} ${request.tier} entr${struck === 1 ? "y is" : "ies are"} unavailable`,
+				: candidates.length === 0
+					? `tier ${request.tier} lists only the session model in catalog ${active.profile.catalog}`
+					: `all ${struck} ${request.tier} entr${struck === 1 ? "y is" : "ies are"} unavailable`,
 	};
 }
 

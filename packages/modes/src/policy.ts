@@ -8,7 +8,6 @@ export const PLAN_TOOL_NAMES = [
 	"panel",
 	"plan",
 	"repo",
-	"knowledge",
 ] as const;
 
 /**
@@ -21,7 +20,6 @@ export const STRUCTURE_TOOL_NAMES = [
 	"agent",
 	"panel",
 	"repo",
-	"knowledge",
 ] as const;
 
 /** Research-loop tools available throughout plan mode. */

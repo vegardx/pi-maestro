@@ -49,13 +49,7 @@ describe("phase-gated tool policy", () => {
 			availableTools: ALL_TOOLS,
 			phase: "structuring",
 		});
-		for (const tool of [
-			"deliverable",
-			"task",
-			"agent",
-			"knowledge",
-			"research",
-		]) {
+		for (const tool of ["deliverable", "task", "agent", "research"]) {
 			expect(active).toContain(tool);
 		}
 	});
@@ -82,9 +76,7 @@ describe("phase-gated tool policy", () => {
 		expect(toolBlockedInPlanMode("deliverable", "exploring")).toMatch(
 			/readiness/,
 		);
-		expect(toolBlockedInPlanMode("knowledge", "exploring")).toMatch(
-			/exploring/,
-		);
+		expect(toolBlockedInPlanMode("task", "exploring")).toMatch(/exploring/);
 		expect(toolBlockedInPlanMode("research", "exploring")).toBeNull();
 		expect(toolBlockedInPlanMode("readiness", "exploring")).toBeNull();
 		expect(toolBlockedInPlanMode("deliverable", "structuring")).toBeNull();

@@ -2,23 +2,21 @@
 //
 // The point is to exercise *real* role→model routing across distinct local
 // models, not just the single session default: workers, utility roles, and
-// reviewers each resolve to a different ollama model, proving the model-set
-// machinery (presets / modelSets / availability / session-as-fallback) actually
-// lands different roles on different providers end to end.
+// reviewers each resolve to a different ollama model, proving the v2 resolver
+// (families / rosters / bindings / allowances / seat-as-fallback) actually lands
+// different agent types on different models end to end.
 //
 // v3 lineup (2026-07-19, three-model MoE refresh; ollama runs as a service
 // with a 5-min keepalive, OLLAMA_CONTEXT_LENGTH=65536, and loads models on
 // demand. context below MUST match the ollama cap: if pi believes the
 // window is larger than ollama allocates, prompts get silently truncated
-// mid-context; matched, pi compacts before the edge instead):
-//   • session / planner  → gemma4:31b-mlx (strong generalist, cross-family)
-//   • normal  (workers)  → qwen3.6:35b-a3b-coding-mxfp8 → session
-//         MoE coder (~3B active params) — fast decode on this hardware
-//   • fast    (utility)  → gpt-oss:20b → session (classify, summarize, …)
-//   • reviewpool         → gpt-oss:20b → session
-//         both review options are NON-qwen families (gpt-oss + the gemma
-//         session seat) — review diversity against the qwen workers;
-//         `session` sorts to the back (session-model fallback).
+// mid-context; matched, pi compacts before the edge instead). v2 layout — three
+// ranked families, one roster, a default binding, per-agent tier allowances:
+//   • session / planner  → Gemma/Gemma4 31B (strong generalist — the seat)
+//   • standard (workers) → Qwen/Qwen3.6 Coder → seat  (MoE coder, ~3B active)
+//   • light  (utility)   → GptOss/GPT-OSS 20B → seat  (classify, summarize, …)
+//   • heavy  (reviewers) → GptOss/GPT-OSS 20B → seat  (non-qwen — cross-family;
+//         the gemma seat is the last-resort fallback the resolver appends)
 
 import type { ThinkingLevel } from "@vegardx/pi-contracts";
 
@@ -52,83 +50,63 @@ function ref(id: string): string {
 	return `${PROVIDER}/${id}`;
 }
 
-function option(optionId: string, modelId: string, summary: string) {
-	return { id: optionId, model: ref(modelId), effort: EFFORT, summary };
-}
-
-/** The `models` settings block: pooled sets + a preset targeting the session model. */
+/** The `models` settings block: v2 families → roster → binding → allowances. */
 const MODELS_BLOCK = {
-	modelSets: {
-		fast: {
-			options: [
-				option(
-					"gptoss-fast",
-					"gpt-oss:20b",
-					"Fast utility — classify / summarize.",
-				),
-				{
-					id: "own",
-					model: "session",
+	// Ranked diversity axis: the qwen coder first (workers), gpt-oss second
+	// (utility + the cross-family reviewer), gemma last (the planner seat's
+	// family). Each alias carries the shared effort.
+	families: {
+		Qwen: {
+			aliases: {
+				"Qwen3.6 Coder": {
+					attach: [ref("qwen3.6:35b-a3b-coding-mxfp8")],
 					effort: EFFORT,
-					summary: "Your own model — last-resort fallback.",
+					notes: "MoE coding model (~3B active) — fast decode — worker seat.",
 				},
-			],
-		},
-		normal: {
-			options: [
-				option(
-					"qwen-moe",
-					"qwen3.6:35b-a3b-coding-mxfp8",
-					"MoE coding model — fast decode — default worker.",
-				),
-				{
-					id: "own",
-					model: "session",
-					effort: EFFORT,
-					summary: "Your own model — last-resort fallback.",
-				},
-			],
-		},
-		reviewpool: {
-			options: [
-				option(
-					"gptoss",
-					"gpt-oss:20b",
-					"Deep reasoning, different family — adversarial / correctness.",
-				),
-				{
-					id: "own",
-					model: "session",
-					effort: EFFORT,
-					summary:
-						"Your own (gemma) model — broad knowledge, strong prose — practical / plan.",
-				},
-			],
-		},
-	},
-	presets: {
-		"ollama-multi": {
-			// Active only when the live /model session model is the planner seat.
-			targets: [ref("gemma4:31b-mlx")],
-			modelSets: {
-				worker: "normal",
-				verifier: "normal",
-				"codebase-research": "normal",
-				classifier: "fast",
-				"plan-summarizer": "fast",
-				"compact-summarizer": "fast",
-				general: "fast",
-				"web-research": "fast",
-				"plan-review": "reviewpool",
-				"practical-review": "reviewpool",
-				"adversarial-review": "reviewpool",
-				"correctness-review": "reviewpool",
-				"security-review": "reviewpool",
-				"test-review": "reviewpool",
-				"simplification-review": "reviewpool",
-				advisor: "reviewpool",
 			},
 		},
+		GptOss: {
+			aliases: {
+				"GPT-OSS 20B": {
+					attach: [ref("gpt-oss:20b")],
+					effort: EFFORT,
+					notes: "Deep reasoning, a different family — utility and review.",
+				},
+			},
+		},
+		Gemma: {
+			aliases: {
+				"Gemma4 31B": {
+					attach: [ref("gemma4:31b-mlx")],
+					effort: EFFORT,
+					notes: "Broad knowledge, strong prose — the planner seat.",
+				},
+			},
+		},
+	},
+	// One roster; its three fixed-meaning tiers hold ordered alias refs. The
+	// session seat (gemma) is the resolver's implicit last-resort fallback of
+	// every tier, so it is never listed here.
+	rosters: {
+		ollama: {
+			light: ["GptOss/GPT-OSS 20B"],
+			standard: ["Qwen/Qwen3.6 Coder"],
+			heavy: ["GptOss/GPT-OSS 20B"],
+		},
+	},
+	// A single default binding (no targets) → active for the gemma seat (and any
+	// seat), selecting the `ollama` roster.
+	bindings: {
+		ollama: { roster: "ollama" },
+	},
+	// Per-agent tier allowances; the FIRST tier is the default a plan node of
+	// that type spawns at. reviewer overrides the shipped default to heavy-first
+	// so a review lands on gpt-oss — a different family than the qwen workers.
+	allowances: {
+		worker: { tiers: ["standard", "heavy"] },
+		explorer: { tiers: ["light", "standard"] },
+		reviewer: { tiers: ["heavy", "standard"] },
+		advisor: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 
@@ -161,7 +139,7 @@ export interface MultiModelProfile {
 	readonly defaultModel: string;
 	/** models.json content installed into the isolated agent dir. */
 	readonly modelsJsonContent: string;
-	/** The `models` settings block (presets + modelSets) for settings.json. */
+	/** The `models` settings block (v2 families/rosters/bindings/allowances). */
 	readonly models: Record<string, unknown>;
 }
 

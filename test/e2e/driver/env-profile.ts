@@ -226,9 +226,9 @@ export interface LiveEnvOptions {
 	 */
 	readonly defaultThinkingLevel?: string;
 	/**
-	 * A `models` settings block (presets + modelSets) written top-level into the
-	 * isolated settings.json — the maestro and every worker read it, so real
-	 * role→model routing is exercised. See `MULTI_MODEL_OLLAMA`.
+	 * A `models` settings block (v2 families/rosters/bindings/allowances) written
+	 * top-level into the isolated settings.json — the maestro and every worker
+	 * read it, so real role→model routing is exercised. See `MULTI_MODEL_OLLAMA`.
 	 */
 	readonly models?: Record<string, unknown>;
 	/** Keep the disposable repo + dirs after teardown (for debugging). */
@@ -346,7 +346,7 @@ function writeAgentSettings(
 		defaultProvider?: string;
 		defaultModel?: string;
 		defaultThinkingLevel?: string;
-		/** Top-level `models` block (presets + modelSets) for real role routing. */
+		/** Top-level v2 `models` block (families/rosters/…) for real role routing. */
 		models?: Record<string, unknown>;
 	},
 ): void {

@@ -1,19 +1,32 @@
 // The radicalai-sit gateway profile, validated deterministically — no gateway,
 // no credentials (the pure builder takes an injected token). Owns the routing
-// correctness: opus is the planner seat and the review family, sol is the
-// worker family — cross-family review by construction.
+// correctness under the v2 resolver: opus is the planner seat and the review
+// family (heavy tier), sol is the worker/utility family (standard/light) — so a
+// review lands on a different family than the sol workers, cross-family by
+// construction, before the diversity walk is even wired.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
-import { resolveExactModelSelection } from "@vegardx/pi-models";
+import {
+	MODEL_ROLES,
+	type ModelRole,
+	SPAWNABLE_AGENT_TYPES,
+} from "@vegardx/pi-contracts";
+import {
+	agentTypeForRole,
+	defaultTierForAgent,
+	resolveV2Model,
+} from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SIT_CATALOG, sitProfileFromToken } from "./sit-profile.js";
 
 const PROFILE = sitProfileFromToken("test-token");
 const SESSION = `${PROFILE.defaultProvider}/${PROFILE.defaultModel}`;
+
+const OPUS = "sit-anthropic/claude-opus-4-8";
+const SOL = "sit-openai/gpt-5.6-sol";
 
 let cwd: string;
 let previousAgentDir: string | undefined;
@@ -53,12 +66,24 @@ function fakeCtx(
 	} as unknown as ExtensionContext;
 }
 
+/**
+ * Resolve a v1 role exactly the way a plan node does (context.ts resolveModel):
+ * map the role to a v2 agent type, take that type's default tier, and resolve
+ * through the active binding's roster — the real routing path, not the retired
+ * v1 exact-selection one.
+ */
 async function modelFor(
 	role: ModelRole,
 	ctx: ExtensionContext = fakeCtx(),
 ): Promise<string | undefined> {
-	const result = await resolveExactModelSelection(ctx, { role });
-	return result.selected?.modelId;
+	const agent = agentTypeForRole(role);
+	const tier = defaultTierForAgent(ctx, agent);
+	const resolved = await resolveV2Model(ctx, {
+		agent,
+		...(tier ? { tier } : {}),
+		inherit: { modelId: SESSION },
+	});
+	return resolved.modelId;
 }
 
 beforeEach(() => {
@@ -86,33 +111,32 @@ describe("radicalai-sit profile", () => {
 		expect(JSON.stringify(PROFILE.models)).not.toContain("test-token");
 	});
 
-	it("maps every MODEL_ROLE — a new role must not silently fall through", () => {
-		const preset = (
-			PROFILE.models as {
-				presets: Record<string, { modelSets: Record<string, string> }>;
-			}
-		).presets["sit-multi"];
+	it("maps every MODEL_ROLE to a spawnable agent type — no role falls through", () => {
 		for (const role of MODEL_ROLES) {
-			expect(preset.modelSets[role], `role ${role} unmapped`).toBeDefined();
+			expect(
+				SPAWNABLE_AGENT_TYPES as readonly string[],
+				`role ${role} maps to an unknown agent type`,
+			).toContain(agentTypeForRole(role));
 		}
 	});
 
 	it("routes workers to sol and reviews to opus — cross-family by construction", async () => {
-		expect(await modelFor("worker")).toBe("sit-openai/gpt-5.6-sol");
-		expect(await modelFor("verifier")).toBe("sit-openai/gpt-5.6-sol");
-		expect(await modelFor("classifier")).toBe("sit-openai/gpt-5.6-sol");
-		expect(await modelFor("security-review")).toBe(
-			"sit-anthropic/claude-opus-4-8",
-		);
-		expect(await modelFor("plan-review")).toBe("sit-anthropic/claude-opus-4-8");
+		// worker/verifier → worker → standard → sol
+		expect(await modelFor("worker")).toBe(SOL);
+		expect(await modelFor("verifier")).toBe(SOL);
+		// classify/summarize/research → explorer → light → sol
+		expect(await modelFor("classifier")).toBe(SOL);
+		expect(await modelFor("codebase-research")).toBe(SOL);
+		// *-review → reviewer → heavy → opus (a different family from the workers)
+		expect(await modelFor("security-review")).toBe(OPUS);
+		expect(await modelFor("plan-review")).toBe(OPUS);
+		// advisor → advisor → heavy → opus
+		expect(await modelFor("advisor")).toBe(OPUS);
 	});
 
 	it("falls back to the opus session seat when sol is unavailable", async () => {
-		expect(
-			await modelFor(
-				"worker",
-				fakeCtx({ unavailable: ["sit-openai/gpt-5.6-sol"] }),
-			),
-		).toBe("sit-anthropic/claude-opus-4-8");
+		expect(await modelFor("worker", fakeCtx({ unavailable: [SOL] }))).toBe(
+			OPUS,
+		);
 	});
 });

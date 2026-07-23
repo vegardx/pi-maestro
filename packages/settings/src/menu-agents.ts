@@ -30,6 +30,7 @@ import {
 } from "./menu-catalogs.js";
 import type { Dialogs } from "./menu-shared.js";
 import { sessionModelId } from "./model.js";
+import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 import { isPlainObject } from "./reader.js";
 
 // ─── Write helpers ───────────────────────────────────────────────────────────
@@ -193,27 +194,46 @@ async function editAgentTiers(
 		);
 		if (!picked) return;
 		if (picked === "Toggle tiers…") {
-			await toggleTiers(ctx, ui, agent);
+			await toggleTiers(ctx, ui, agent, allowed);
 		} else {
 			writeV2Settings(ctx, (raw) => setAgentTiers(raw, agent, null));
 		}
 	}
 }
 
-/** Select-loop tier toggler: pick a tier to flip, Esc when done. Each toggle
- *  lands as ONE validated write in tier order. */
+/** Checkbox picker when the surface supports ui.custom; select-loop toggles
+ *  otherwise. Either way the override lands as ONE validated write in tier order. */
 async function toggleTiers(
 	ctx: ExtensionContext,
 	ui: Dialogs,
 	agent: SpawnableAgentType,
+	allowed: readonly TierId[],
 ): Promise<void> {
+	if (supportsMultiSelect(ctx)) {
+		const chosen = await multiSelect(
+			ctx,
+			`Agent ${agent} — allowed tiers`,
+			TIER_IDS.map((tier) => ({
+				id: tier,
+				label: tier,
+				checked: allowed.includes(tier),
+			})),
+		);
+		if (chosen === undefined) return; // cancelled
+		// An empty allowlist is invalid — the validator's message is shown
+		// and nothing is written.
+		writeV2Settings(ctx, (raw) => setAgentTiers(raw, agent, chosen));
+		return;
+	}
 	while (true) {
 		const v2 = safeV2(ctx);
 		const current =
 			v2?.agents[agent]?.models ?? DEFAULT_AGENT_TIERS[agent].models;
 		const picked = await ui.select(
 			`Agent ${agent} — pick to toggle, Esc when done`,
-			TIER_IDS.map((tier) => `${current.includes(tier) ? "✓" : "✗"} ${tier}`),
+			TIER_IDS.map(
+				(tier) => `${current.includes(tier) ? "[x]" : "[ ]"} ${tier}`,
+			),
 		);
 		if (!picked) return;
 		const tier = picked.slice(2) as TierId;

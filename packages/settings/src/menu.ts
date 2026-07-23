@@ -40,6 +40,7 @@ import {
 	modelsByProvider,
 } from "./menu-shared.js";
 import { sessionModelId } from "./model.js";
+import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 
 export function getSessionSetting(extension: string, key: string) {
 	return getSessionSettingOverride(extension, key);
@@ -263,7 +264,7 @@ async function editResidencyList(
 	}
 }
 
-/** Provider picker → per-model ✓/✗ toggles. Each toggle writes the list. */
+/** Provider picker → per-model [x]/[ ] toggles. Each toggle writes the list. */
 async function editResidencyMembers(
 	ctx: ExtensionContext,
 	ui: Dialogs,
@@ -292,6 +293,33 @@ async function editResidencyMembers(
 		if (!providerPick) return;
 		const provider = providerPick.split(" ")[0];
 		const ids = providers.get(provider) ?? [];
+		// Preferred surface: the checkbox picker — space toggles, enter applies
+		// the whole provider selection as ONE write, cursor stays put.
+		if (supportsMultiSelect(ctx)) {
+			const chosen = await multiSelect(
+				ctx,
+				`${name} · ${provider}`,
+				ids.map((id) => ({
+					id: `${provider}/${id}`,
+					label: id,
+					checked: members.has(`${provider}/${id}`),
+				})),
+			);
+			if (chosen === undefined) continue; // cancelled — back to providers
+			const next = new Set(
+				[...members].filter((ref) => !ref.startsWith(`${provider}/`)),
+			);
+			for (const ref of chosen) next.add(ref);
+			if (next.size === 0) {
+				ctx.ui.notify(
+					"A residency list cannot be empty — delete the list instead.",
+					"warning",
+				);
+				continue;
+			}
+			write(ctx, `models.residency.lists.${name}`, [...next].sort());
+			continue;
+		}
 		while (true) {
 			const current = new Set(
 				safeModelsConfig(ctx)?.residency?.lists?.[name] ?? [],
@@ -307,7 +335,7 @@ async function editResidencyMembers(
 					...(inList < ids.length ? [ADD_ALL] : []),
 					...(inList > 0 ? [REMOVE_ALL] : []),
 					...ids.map(
-						(id) => `${current.has(`${provider}/${id}`) ? "✓" : "✗"} ${id}`,
+						(id) => `${current.has(`${provider}/${id}`) ? "[x]" : "[ ]"} ${id}`,
 					),
 				],
 			);

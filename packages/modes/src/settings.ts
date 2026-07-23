@@ -255,6 +255,29 @@ export function readExecutionPolicySettings(
 	return { preset: custom ? "custom" : preset, ...resolved };
 }
 
+/**
+ * How the EFFECTIVE execution policy differs from the shipped default (the
+ * `guided` preset), key by key, plus whether write-enforcement is disabled via
+ * MAESTRO_SANDBOX. Empty = the default is in force. Surfaced at session start so
+ * a loosened policy is visible every session instead of silently permanent
+ * (capability-policy step 8).
+ */
+export function describePolicyDeviations(
+	cwd: string,
+	agentDir?: string,
+): string[] {
+	const effective = readExecutionPolicySettings(cwd, agentDir);
+	const base = POLICY_PRESETS.guided;
+	const out: string[] = [];
+	if (process.env.MAESTRO_SANDBOX === "off")
+		out.push("sandbox: OFF — bash write-enforcement is disabled");
+	for (const key of Object.keys(base) as (keyof typeof base)[]) {
+		if (effective[key] !== base[key])
+			out.push(`${key}: ${effective[key]} (default ${base[key]})`);
+	}
+	return out;
+}
+
 export interface ExecutionLifecycleSettings {
 	stopGraceMs: number;
 }

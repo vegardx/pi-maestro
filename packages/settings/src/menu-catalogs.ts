@@ -41,7 +41,6 @@ import {
 	THINKING_LEVELS,
 } from "./menu-shared.js";
 import { sessionModelId } from "./model.js";
-import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 import { isPlainObject } from "./reader.js";
 import { settingsPath, updateSettingsFile } from "./writer.js";
 
@@ -635,9 +634,9 @@ function writeEntryUpdate(
 /**
  * Add entries via the configured-provider model browser: auth-filtered
  * (#237) and residency-filtered — a model residency would strike is not
- * offered. Checkbox overlay when the surface supports it; select-loop
- * toggles otherwise. Existing entries keep their authored order and
- * metadata; newly picked models append as bare `{ model }` entries.
+ * offered. A select-loop toggles each model (pick to flip, Esc when done).
+ * Existing entries keep their authored order and metadata; newly picked
+ * models append as bare `{ model }` entries.
  */
 async function addTierEntries(
 	ctx: ExtensionContext,
@@ -675,20 +674,6 @@ async function addTierEntries(
 		if (!providerPick) return;
 		const provider = providerPick.split(" ")[0];
 		const ids = providers.get(provider) ?? [];
-		if (supportsMultiSelect(ctx)) {
-			const chosen = await multiSelect(
-				ctx,
-				`${name} · ${tier} · ${provider}`,
-				ids.map((id) => ({
-					id: `${provider}/${id}`,
-					label: id,
-					checked: members.has(`${provider}/${id}`),
-				})),
-			);
-			if (chosen === undefined) continue; // cancelled — back to providers
-			applyProviderSelection(ctx, name, tier, provider, new Set(chosen));
-			continue;
-		}
 		while (true) {
 			const current = safeV2(ctx)?.catalogs[name]?.[tier] ?? [];
 			const inTier = new Set(current.map((entry) => entry.model));

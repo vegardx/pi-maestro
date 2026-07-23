@@ -53,6 +53,35 @@ describe("multi-select checkbox", () => {
 		expect(second.results[0]).toEqual([]);
 	});
 
+	it("matches arrows/enter/esc via the keybindings manager (like ui.select)", () => {
+		// The terminal's actual arrow bytes may differ from the hard-coded CSI
+		// forms; the KeyMatcher (pi's KeybindingsManager) is the ground truth.
+		const results: Array<string[] | undefined> = [];
+		const matcher = {
+			matches: (data: string, action: string) =>
+				(data === "KDOWN" && action === "tui.select.down") ||
+				(data === "KUP" && action === "tui.select.up") ||
+				(data === "KENTER" && action === "tui.select.confirm") ||
+				(data === "KESC" && action === "tui.select.cancel"),
+		};
+		const c = new MultiSelectComponent(
+			"Pick",
+			[
+				{ id: "a", label: "alpha", checked: false },
+				{ id: "b", label: "beta", checked: false },
+			],
+			(r) => results.push(r),
+			undefined,
+			matcher,
+		);
+		c.handleInput("KDOWN"); // cursor → b (via keybinding, not a raw arrow byte)
+		c.handleInput(" "); // toggle b
+		c.handleInput("KUP"); // cursor → a
+		c.handleInput(" "); // toggle a
+		c.handleInput("KENTER"); // apply via keybinding
+		expect(results).toEqual([["a", "b"]]);
+	});
+
 	it("satisfies the Component/Focusable contract ui.custom requires", () => {
 		const { c } = component();
 		expect(typeof c.invalidate).toBe("function");

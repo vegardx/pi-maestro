@@ -18,6 +18,7 @@ import {
 	readModesCompactionDetails,
 	summaryHash,
 } from "../compaction.js";
+import { resetRealTreeSandbox } from "../isolation/realtree-sandbox.js";
 import { walkNodes } from "../plan/schema.js";
 import { archiveLegacyPlans } from "../plan/storage.js";
 import { planPhaseV2 } from "../planning-preamble.js";
@@ -238,6 +239,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			}
 		}
 		await Promise.allSettled([
+			resetRealTreeSandbox(),
 			rt.isolationBackends.lightweight.reset(),
 			rt.isolationBackends.strong.reset(),
 		]);
@@ -379,6 +381,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		await Promise.allSettled([
+			resetRealTreeSandbox(),
 			rt.isolationBackends.lightweight.destroy(),
 			rt.isolationBackends.strong.destroy(),
 		]);

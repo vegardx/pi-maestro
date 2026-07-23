@@ -138,9 +138,7 @@ export function updateSettingsFile(
 	scope: SettingsScope,
 	cwd: string,
 	agentDir: string | undefined,
-	// biome-ignore lint/suspicious/noConfusingVoidType: void must stay in the
-	// union so existing void-returning mutators remain assignable; a returned
-	// `false` opts out of the write.
+	// biome-ignore lint/suspicious/noConfusingVoidType: void stays in the union so the many existing void-returning mutators remain assignable; a returned `false` opts out of the write.
 	mutate: (raw: Record<string, unknown>) => void | boolean,
 ): { path: string } {
 	const path = settingsPath(scope, cwd, agentDir);

@@ -100,14 +100,24 @@ const MODE_COLOR: Record<ModeName, ThemeColor> = {
 	agent: "muted",
 };
 
+/** The seat's resolved identity for the footer (all optional; segments omit). */
+export interface ResolvedIdentity {
+	/** The alias the seat model maps to (families lookup), else undefined. */
+	readonly alias?: string;
+	/** The seat's gateway provider (the prefix of provider/model). */
+	readonly provider?: string;
+	/** The active region name, else undefined to omit the segment. */
+	readonly region?: string;
+}
+
 export interface FooterDeps {
 	readonly pi: ExtensionAPI;
 	readonly ctx: ExtensionContext;
 	readonly getMode: () => ModeName;
 	readonly getLedger: () => UsageLedger;
 	readonly getPendingQuestions: () => number;
-	/** Active residency name, or undefined to omit the segment entirely. */
-	readonly getResidency?: () => string | undefined;
+	/** Resolved seat identity (alias / gateway / region), or undefined to omit. */
+	readonly getResolvedIdentity?: () => ResolvedIdentity | undefined;
 }
 
 /**
@@ -115,8 +125,14 @@ export interface FooterDeps {
  * handle the caller can invoke when mode/usage/plan state changes.
  */
 export function installFooter(deps: FooterDeps): (() => void) | undefined {
-	const { pi, ctx, getMode, getLedger, getPendingQuestions, getResidency } =
-		deps;
+	const {
+		pi,
+		ctx,
+		getMode,
+		getLedger,
+		getPendingQuestions,
+		getResolvedIdentity,
+	} = deps;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 
 	const home = homedir();
@@ -159,10 +175,16 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const cacheLabel = formatCacheHitRate(ledger);
 					const ctxUsage = formatContextUsage(ctx);
 					const modelLabel = formatModelLabel(ctx, pi);
-					const residencyName = getResidency?.();
-					const residencyLabel = residencyName
-						? `Residency: ${residencyName}`
+					// Resolved identity: the alias the seat maps to (else the raw
+					// model label), the gateway in use, and the active region.
+					const identity = getResolvedIdentity?.();
+					const modelText = identity?.alias ?? modelLabel;
+					const modelValue = modelText ? `Model ${modelText}` : null;
+					const providerValue = identity?.provider
+						? `Provider ${identity.provider}`
 						: null;
+					const regionName = identity?.region;
+					const regionValue = regionName ? `Region ${regionName}` : null;
 					const modeLabel = theme.bold(
 						theme.fg(MODE_COLOR[mode] ?? "muted", mode),
 					);
@@ -183,20 +205,23 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 					const ctxSeg: Segment | undefined = ctxUsage
 						? [theme.fg(ctxUsage.color, ctxUsage.visible), ctxUsage.visible]
 						: undefined;
-					const modelSeg: Segment | undefined = modelLabel
-						? [theme.fg("muted", modelLabel), modelLabel]
+					const modelSeg: Segment | undefined = modelValue
+						? [theme.fg("muted", modelValue), modelValue]
 						: undefined;
-					// Residency reads as a warning unless it is the unfiltered
-					// "global" — a restricted fleet should be visibly restricted.
-					const resSeg: Segment | undefined = residencyLabel
+					const providerSeg: Segment | undefined = providerValue
+						? [theme.fg("muted", providerValue), providerValue]
+						: undefined;
+					// Region reads as a warning unless it is the unfiltered "off" —
+					// a restricted fleet should be visibly restricted.
+					const regionSeg: Segment | undefined = regionValue
 						? [
 								theme.fg(
-									["off", "none"].includes(residencyName?.toLowerCase() ?? "")
+									["off", "none"].includes(regionName?.toLowerCase() ?? "")
 										? "muted"
 										: "warning",
-									residencyLabel,
+									regionValue,
 								),
-								residencyLabel,
+								regionValue,
 							]
 						: undefined;
 					const modeSeg: Segment = [modeLabel, modeLabelVisible];
@@ -210,25 +235,36 @@ export function installFooter(deps: FooterDeps): (() => void) | undefined {
 						});
 					};
 
-					// Full: "↑124k ↓45k | CH 78% | 84k/200k | Opus 4.8 (high) | Residency: EEA | plan"
+					// Full: "↑124k ↓45k | CH 78% | 84k/200k | Model Opus 4.8 | Provider github-copilot | Region EEA | plan"
 					pushCandidate([
 						usageSeg,
 						cacheSeg,
 						ctxSeg,
 						modelSeg,
-						resSeg,
+						providerSeg,
+						regionSeg,
 						modeSeg,
 					]);
 					// Drop fleet ↑/↓ totals first — ctx fill predicts compaction and
 					// outranks them.
 					if (usageSeg)
-						pushCandidate([cacheSeg, ctxSeg, modelSeg, resSeg, modeSeg]);
+						pushCandidate([
+							cacheSeg,
+							ctxSeg,
+							modelSeg,
+							providerSeg,
+							regionSeg,
+							modeSeg,
+						]);
 					// Then cache hit rate
-					if (cacheSeg) pushCandidate([ctxSeg, modelSeg, resSeg, modeSeg]);
+					if (cacheSeg)
+						pushCandidate([ctxSeg, modelSeg, providerSeg, regionSeg, modeSeg]);
 					// Then the context fill
-					if (ctxSeg) pushCandidate([modelSeg, resSeg, modeSeg]);
-					// Then residency — the model outranks it at narrow widths
-					if (resSeg) pushCandidate([modelSeg, modeSeg]);
+					if (ctxSeg)
+						pushCandidate([modelSeg, providerSeg, regionSeg, modeSeg]);
+					// Then region, then provider — the model identity outranks both.
+					if (regionSeg) pushCandidate([modelSeg, providerSeg, modeSeg]);
+					if (providerSeg) pushCandidate([modelSeg, modeSeg]);
 					// Slim: just mode
 					pushCandidate([modeSeg]);
 

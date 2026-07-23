@@ -12,6 +12,7 @@ import type {
 	ContractResult,
 	ExtractionTier,
 	NodeResolution,
+	TierId,
 } from "@vegardx/pi-contracts";
 import {
 	CONTRACT_DEFINITIONS,
@@ -161,7 +162,7 @@ export interface ResolveNodeModelOptions {
 	/** The caller's model — the inheritance default (parent node or seat). */
 	readonly inherit?: { modelId: string; effort?: string };
 	/** A tier requested by persona instruction/policy row, when any. */
-	readonly tier?: "fast" | "normal" | "heavy";
+	readonly tier?: TierId;
 	readonly now?: () => string;
 }
 

@@ -36,8 +36,9 @@ import {
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
 import {
-	activeV2Profile,
+	activeV2Binding,
 	agentTypeForRole,
+	parseAliasRef,
 	readV2Config,
 	resolveExactModelSelection,
 	resolveModelAuth,
@@ -260,26 +261,36 @@ export async function resolveViaV2(
 	let effort: string | undefined = choice.effort;
 
 	if (choice.model) {
-		const active = activeV2Profile(config, sessionModelId(ctx));
-		const catalog = active
-			? config.catalogs[active.profile.catalog]
-			: undefined;
-		const allowed = config.agents[agent]?.models ?? [];
-		const eligible = allowed.flatMap((tier) => catalog?.[tier] ?? []);
-		const hit = eligible.find((entry) => entry.model === choice.model);
-		if (!hit) {
+		const active = activeV2Binding(config, sessionModelId(ctx));
+		const roster = active ? config.rosters[active.binding.roster] : undefined;
+		const allowed = config.allowances[agent]?.tiers ?? [];
+		// Every concrete attachment reachable through the agent's allowed tiers,
+		// with the alias's effort (the first alias wins if a model repeats).
+		const effortByModel = new Map<string, string | undefined>();
+		for (const tier of allowed) {
+			for (const ref of roster?.[tier] ?? []) {
+				const parsed = parseAliasRef(ref);
+				const aliasCfg = parsed
+					? config.families[parsed.family]?.aliases[parsed.alias]
+					: undefined;
+				for (const spec of aliasCfg?.attach ?? [])
+					if (!effortByModel.has(spec))
+						effortByModel.set(spec, aliasCfg?.effort);
+			}
+		}
+		if (!effortByModel.has(choice.model)) {
 			// Name the concrete ids, not just the tiers: turn the dead end into a
 			// menu so the caller can pick a real answer instead of guessing again.
-			const ids = eligible.map((entry) => entry.model);
+			const ids = [...effortByModel.keys()];
 			throw new Error(
-				`${choice.model} is not in any tier ${agent} may use (${allowed.join(", ") || "none"}). ` +
+				`${choice.model} is not attached to any alias ${agent} may use (${allowed.join(", ") || "none"}). ` +
 					(ids.length
 						? `Eligible models: ${ids.join(", ")}. Or omit \`model\` and pass \`tier\` to auto-pick.`
-						: "Add it to the catalog or widen the agent's tiers in /maestro."),
+						: "Attach it to an alias or widen the agent's allowances in /maestro."),
 			);
 		}
-		modelId = hit.model;
-		effort ??= hit.effort;
+		modelId = choice.model;
+		effort ??= effortByModel.get(choice.model);
 	} else {
 		const resolved = await resolveV2Model(ctx, {
 			agent,
@@ -295,7 +306,7 @@ export async function resolveViaV2(
 	const auth = modelId ? await resolveModelAuth(ctx, modelId) : null;
 	if (!auth) {
 		throw new Error(
-			`${modelId ?? "the resolved model"} is in ${agent}'s catalog but has no usable credential — check the provider's auth.`,
+			`${modelId ?? "the resolved model"} is in ${agent}'s roster but has no usable credential — check the provider's auth.`,
 		);
 	}
 	return {

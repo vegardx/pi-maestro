@@ -228,7 +228,7 @@ describe("status + records", () => {
 		eng.recordResolution("a", {
 			model: "prov/sol",
 			family: "openai",
-			tier: "normal",
+			tier: "standard",
 			source: "persona-tier",
 			resolvedAt: "t",
 			generation: 0,

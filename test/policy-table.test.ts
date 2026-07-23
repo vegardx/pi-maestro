@@ -23,28 +23,28 @@ describe("policy row validation", () => {
 			}),
 		).toEqual([]);
 		expect(
-			validatePolicyRow({ on: "duty:classify", run: { models: "fast" } }),
+			validatePolicyRow({ on: "duty:classify", run: { models: "light" } }),
 		).toEqual([]);
 		expect(
 			validatePolicyRow({
 				on: "tool:bash",
 				scope: { depth: ">=1" },
-				run: { models: "fast", contract: "verdict" },
+				run: { models: "light", contract: "verdict" },
 			}),
 		).toEqual([]);
 	});
 
 	it("rejects unknown triggers, duties, and run keys fail-visibly", () => {
 		expect(
-			validatePolicyRow({ on: "cron:daily", run: { models: "fast" } })[0],
+			validatePolicyRow({ on: "cron:daily", run: { models: "light" } })[0],
 		).toMatch(/trigger must be/);
 		expect(
-			validatePolicyRow({ on: "duty:vibes", run: { models: "fast" } })[0],
+			validatePolicyRow({ on: "duty:vibes", run: { models: "light" } })[0],
 		).toMatch(/unknown duty/);
 		expect(
 			validatePolicyRow({
 				on: "duty:classify",
-				run: { models: "fast", modle: "typo" },
+				run: { models: "light", modle: "typo" },
 			})[0],
 		).toMatch(/unknown key/);
 		expect(validatePolicyRow({ on: "duty:classify", run: {} })[0]).toMatch(
@@ -54,15 +54,15 @@ describe("policy row validation", () => {
 			validatePolicyRow({
 				on: "tool:bash",
 				scope: { depth: "deep" },
-				run: { models: "fast" },
+				run: { models: "light" },
 			})[0],
 		).toMatch(/scope.depth/);
 	});
 
 	it("drops invalid rows with per-row errors, keeps valid ones", () => {
 		const { rows, errors } = validatePolicyRows([
-			{ on: "duty:classify", run: { models: "fast" } },
-			{ on: "duty:nope", run: { models: "fast" } },
+			{ on: "duty:classify", run: { models: "light" } },
+			{ on: "duty:nope", run: { models: "light" } },
 		]);
 		expect(rows).toHaveLength(1);
 		expect(errors).toHaveLength(1);
@@ -90,12 +90,12 @@ describe("duty rows", () => {
 	it("ships live-duty defaults with tier-allowlist-compatible tiers", () => {
 		const table = { rows: DEFAULT_POLICY_ROWS, errors: [] as string[] };
 		expect(policyRowFor(table, "duty:compact-summarize")?.run.models).toBe(
-			"fast",
+			"light",
 		);
 		expect(policyRowFor(table, "duty:verify-delivery")?.run.models).toBe(
-			"normal",
+			"standard",
 		);
-		expect(policyRowFor(table, "tool:bash")?.run.models).toBe("fast");
-		expect(policyRowFor(table, "tool:watch")?.run.models).toBe("fast");
+		expect(policyRowFor(table, "tool:bash")?.run.models).toBe("light");
+		expect(policyRowFor(table, "tool:watch")?.run.models).toBe("light");
 	});
 });

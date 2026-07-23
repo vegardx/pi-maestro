@@ -7,8 +7,8 @@ import type {
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
-import { MODELS_V2_MIGRATION } from "@vegardx/pi-models";
-import { runSettingsMigrations } from "@vegardx/pi-settings";
+import { readV2Config } from "@vegardx/pi-models";
+import { updateSettingsFile } from "@vegardx/pi-settings";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import {
 	buildDeliverableSliceCompactionResult,
@@ -192,31 +192,49 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			} catch {
 				// Archive is best-effort; a failure surfaces on plan load instead.
 			}
-			// Settings migrations (fail-visible, backed up per file). Currently:
-			// v1 presets/modelSets → v2 catalogs/profiles (additive).
+			// Model config is parse-or-ASK: no backwards compatibility, no
+			// migration, but clearing is DESTRUCTIVE so it is never automatic — a
+			// transient/harness parse error must not silently wipe hand-authored
+			// config. If the `models` block does not parse we ask before clearing;
+			// declining keeps it (the fleet inherits the seat until it is fixed or
+			// reset via /maestro). Non-interactive surfaces never wipe — they leave
+			// it untouched and just surface the problem.
 			try {
-				const report = runSettingsMigrations(ctx.cwd, undefined, [
-					MODELS_V2_MIGRATION,
-				]);
-				const changed = report.applied.filter((item) => item.changed);
-				if (changed.length > 0) {
+				readV2Config(ctx.cwd);
+			} catch (error) {
+				const detail = error instanceof Error ? error.message : String(error);
+				const confirm = ctx.hasUI ? ctx.ui.confirm?.bind(ctx.ui) : undefined;
+				if (!confirm) {
 					ctx.ui.notify(
-						`Settings migrated: ${changed
-							.map((item) => `${item.id} (${item.scope})`)
-							.join(", ")}. Backups: ${report.backups
-							.map((backup) => backup.backupPath)
-							.join(", ")}`,
-						"info",
-					);
-				}
-				for (const failure of report.failures) {
-					ctx.ui.notify(
-						`Settings migration ${failure.id} failed (${failure.scope}): ${failure.error}. The file was not changed; it will retry next session.`,
+						`Model config is incompatible and was left unchanged:\n${detail}\nThe fleet inherits the seat model. Fix the models block, or run /maestro to reset it.`,
 						"warning",
 					);
+				} else {
+					// Fire-and-forget so startup is never gated on the answer.
+					void confirm(
+						"Incompatible model settings",
+						`The maestro model config did not parse:\n${detail}\n\nClear it and start fresh (inherit-all)? Choose No to keep it — the fleet inherits the seat model until you fix the models block or run /maestro.`,
+					).then((wipe) => {
+						if (!wipe) {
+							ctx.ui.notify(
+								"Kept the incompatible model config — running on inherited models. Fix it, or run /maestro to reset.",
+								"warning",
+							);
+							return;
+						}
+						for (const scope of ["global", "project"] as const) {
+							updateSettingsFile(scope, ctx.cwd, undefined, (raw) => {
+								if (raw.models === undefined) return false;
+								delete raw.models;
+								return true;
+							});
+						}
+						ctx.ui.notify(
+							"Model settings cleared — Maestro is running on inherited models. Reconfigure with /maestro.",
+							"warning",
+						);
+					});
 				}
-			} catch {
-				// Migration is best-effort at boot; a failure must not block start.
 			}
 		}
 		await Promise.allSettled([

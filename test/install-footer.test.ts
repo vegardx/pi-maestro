@@ -13,7 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 import { installFooter } from "../packages/modes/src/install-footer.js";
 import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 
-function installedFooter() {
+function installedFooter(identity?: {
+	alias?: string;
+	provider?: string;
+	region?: string;
+}) {
 	let factory:
 		| ((
 				tui: TUI,
@@ -52,6 +56,7 @@ function installedFooter() {
 		getMode: () => "plan",
 		getLedger: () => ledger,
 		getPendingQuestions: () => 2,
+		...(identity ? { getResolvedIdentity: () => identity } : {}),
 	});
 	const theme = {
 		fg: (_color: string, text: string) => text,
@@ -72,13 +77,15 @@ function installedFooter() {
 
 describe("installFooter", () => {
 	it("omits Agents while preserving questions and extension status", () => {
-		const line = installedFooter().render(100)[0];
+		const line = installedFooter().render(120)[0];
 		expect(line).toContain("Questions: 2");
 		expect(line).toContain("/work/project (feature)");
 		expect(line).toContain("SYNC");
 		expect(line).not.toContain("Agents:");
 		expect(line).toContain("↑50k ↓2k");
 		expect(line).toContain("CH 80%");
+		// The seat with no v2 alias falls back to the raw model label.
+		expect(line).toContain("Model Sonnet 4");
 		expect(line).toContain("plan");
 	});
 
@@ -88,5 +95,17 @@ describe("installFooter", () => {
 		expect(line).toContain("plan");
 		expect(line).not.toContain("Agents:");
 		expect(visibleWidth(line)).toBeLessThanOrEqual(42);
+	});
+
+	it("shows resolved identity: alias, gateway, and region", () => {
+		const line = installedFooter({
+			alias: "GPT 5.6 Sol",
+			provider: "github-copilot",
+			region: "EEA",
+		}).render(140)[0];
+		// The alias replaces the raw model label; gateway and region follow.
+		expect(line).toContain("Model GPT 5.6 Sol");
+		expect(line).toContain("Provider github-copilot");
+		expect(line).toContain("Region EEA");
 	});
 });

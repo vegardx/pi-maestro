@@ -87,11 +87,11 @@ export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 	{
 		on: "tool:bash",
 		scope: { depth: ">=1" },
-		run: { models: "fast", contract: "verdict" },
+		run: { models: "light", contract: "verdict" },
 	},
-	{ on: "duty:compact-summarize", run: { models: "fast" } },
-	{ on: "duty:verify-delivery", run: { models: "normal" } },
-	{ on: "tool:watch", run: { models: "fast" } },
+	{ on: "duty:compact-summarize", run: { models: "light" } },
+	{ on: "duty:verify-delivery", run: { models: "standard" } },
+	{ on: "tool:watch", run: { models: "light" } },
 ];
 
 /**

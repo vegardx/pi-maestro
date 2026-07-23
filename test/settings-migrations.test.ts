@@ -1,7 +1,8 @@
-// The reusable settings-migration component (#238/#239 follow-up) + the
-// v1→v2 models migration. Pins: per-file ledger (applied once, ever), backup
-// before first change, failures stop the chain WITHOUT ledger entries (retry
-// next run), additive v2 derivation that never touches hand-authored v2.
+// The reusable settings-migration component (#238/#239 follow-up). Pins:
+// per-file ledger (applied once, ever), backup before first change, failures
+// stop the chain WITHOUT ledger entries (retry next run), and no-op migrations
+// never litter a repo with a ledger-only file. (The v1→v2 models migration is
+// retired — model config is now parse-or-wipe at boot, no migration.)
 
 import {
 	existsSync,
@@ -12,7 +13,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildV2FromV1, MODELS_V2_MIGRATION } from "@vegardx/pi-models";
 import {
 	runSettingsMigrations,
 	type SettingsMigration,
@@ -45,6 +45,17 @@ const bump: SettingsMigration = {
 	description: "test bump",
 	apply: (raw) => {
 		raw.bumped = ((raw.bumped as number) ?? 0) + 1;
+		return true;
+	},
+};
+
+/** Only touches a file that already has a `models` block (like a real one). */
+const modelsOnly: SettingsMigration = {
+	id: "2026-01-04-models-only",
+	description: "models-only",
+	apply: (raw) => {
+		if (raw.models === undefined) return false;
+		raw.touched = true;
 		return true;
 	},
 };
@@ -98,7 +109,7 @@ describe("runSettingsMigrations", () => {
 	it("booting in a repo with nothing to migrate leaves it untouched", () => {
 		// The regression: the project scope is <cwd>/.pi/settings.json. A no-op
 		// migration must not litter every repo with a ledger-only file.
-		const report = runSettingsMigrations(cwd, home, [MODELS_V2_MIGRATION]);
+		const report = runSettingsMigrations(cwd, home, [modelsOnly]);
 		expect(report.failures).toEqual([]);
 		expect(report.applied).toEqual([]);
 		expect(existsSync(join(cwd, ".pi", "settings.json"))).toBe(false);
@@ -126,93 +137,6 @@ describe("runSettingsMigrations", () => {
 	});
 });
 
-const V1_MODELS = {
-	presets: {
-		"radicalai-sit": {
-			targets: ["sit-anthropic/claude-opus-4-8"],
-			modelSets: {
-				worker: "workers",
-				classifier: "fast-pool",
-				"plan-summarizer": "fast-pool",
-				verifier: "review-pool",
-				"security-review": "review-pool",
-			},
-		},
-	},
-	modelSets: {
-		workers: {
-			options: [
-				{ id: "sol", model: "sit-openai/gpt-5.6-sol", effort: "medium" },
-				{ id: "session", model: "session", effort: "auto" },
-			],
-		},
-		"fast-pool": {
-			options: [
-				{ id: "luna", model: "sit-openai/gpt-5.6-luna", effort: "low" },
-			],
-		},
-		"review-pool": {
-			options: [
-				{ id: "opus", model: "sit-anthropic/claude-opus-4-8", effort: "high" },
-				{ id: "sol2", model: "sit-openai/gpt-5.6-sol", effort: "auto" },
-			],
-		},
-	},
-};
-
-describe("the v1→v2 models migration", () => {
-	it("derives catalogs/profiles: role→tier mapping, sentinel and auto dropped", () => {
-		const built = buildV2FromV1(structuredClone(V1_MODELS) as never);
-		expect(built).not.toBeNull();
-		expect(built?.profiles).toEqual({
-			"radicalai-sit": {
-				targets: ["sit-anthropic/claude-opus-4-8"],
-				catalog: "radicalai-sit",
-			},
-		});
-		const tiers = built?.catalogs["radicalai-sit"];
-		expect(tiers?.fast).toEqual([
-			{ model: "sit-openai/gpt-5.6-luna", effort: "low" },
-		]);
-		// The session sentinel is dropped; sol keeps its concrete effort.
-		expect(tiers?.normal).toEqual([
-			{ model: "sit-openai/gpt-5.6-sol", effort: "medium" },
-		]);
-		// Dedup within a tier; "auto" effort dropped.
-		expect(tiers?.heavy).toEqual([
-			{ model: "sit-anthropic/claude-opus-4-8", effort: "high" },
-			{ model: "sit-openai/gpt-5.6-sol" },
-		]);
-	});
-
-	it("never touches hand-authored v2 and skips all-sentinel presets", () => {
-		expect(
-			buildV2FromV1({
-				...structuredClone(V1_MODELS),
-				catalogs: { mine: {} },
-			} as never),
-		).toBeNull();
-		const built = buildV2FromV1({
-			presets: {
-				sessionOnly: { targets: [], modelSets: { worker: "s" } },
-			},
-			modelSets: { s: { options: [{ model: "session" }] } },
-		} as never);
-		expect(built).toBeNull();
-	});
-
-	it("end to end through the runner: additive, v1 kept, ledgered", () => {
-		writeGlobal({ models: structuredClone(V1_MODELS) });
-		const report = runSettingsMigrations(cwd, home, [MODELS_V2_MIGRATION]);
-		expect(report.failures).toEqual([]);
-		const models = readGlobal().models as Record<string, unknown>;
-		expect(models.presets).toBeDefined(); // v1 kept for fallback paths
-		expect(models.catalogs).toBeDefined();
-		expect(models.profiles).toBeDefined();
-		expect(readGlobal().settingsMigrations).toEqual([MODELS_V2_MIGRATION.id]);
-	});
-});
-
 describe("explainModelSelectionV2 rendering", () => {
 	it("explains inheritance-only when no v2 config exists", async () => {
 		const { explainModelSelectionV2 } = await import("@vegardx/pi-settings");
@@ -227,6 +151,6 @@ describe("explainModelSelectionV2 rendering", () => {
 			"Seat (session model): sit-anthropic/claude-opus-4-8",
 		);
 		expect(text).toContain("INHERITS");
-		expect(text).toContain("No v2 catalogs/profiles configured");
+		expect(text).toContain("No v2 families/rosters configured");
 	});
 });

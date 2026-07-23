@@ -42,12 +42,15 @@ const INERT_NOTE = "no consumer reads this trigger yet — the row is inert";
 
 /** Mode edges offered for `mode:` triggers — seat modes only. */
 const EDGE_MODES = ["recon", "plan", "auto", "hack"] as const;
-const MODE_EDGES: readonly string[] = EDGE_MODES.flatMap((from) =>
+export const MODE_EDGES: readonly string[] = EDGE_MODES.flatMap((from) =>
 	EDGE_MODES.filter((to) => to !== from).map((to) => `${from}->${to}`),
 );
 
 /** Preset depth constraints (seat is depth 0). */
-const DEPTH_PRESETS = ["=0", ">=1", ">=2", "<=1", "<=2"] as const;
+export const DEPTH_PRESETS = ["=0", ">=1", ">=2", "<=1", "<=2"] as const;
+
+/** Plain-words note for a trigger no consumer reads yet. */
+export const POLICY_INERT_NOTE = INERT_NOTE;
 
 // ─── Effective table ─────────────────────────────────────────────────────────
 
@@ -164,7 +167,7 @@ function scopeSummary(scope: PolicyScope | undefined): string | undefined {
 	return parts.length ? `scope ${parts.join(" ")}` : undefined;
 }
 
-function rowLabel(effective: EffectivePolicyRow): string {
+export function rowLabel(effective: EffectivePolicyRow): string {
 	const { row, source } = effective;
 	const run = row.run;
 	const detail = [

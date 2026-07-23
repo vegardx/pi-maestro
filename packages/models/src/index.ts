@@ -1,8 +1,9 @@
 // @vegardx/pi-models — authenticated exact model selection.
 
 export {
-	activeV2Profile,
-	isV2ProfileShape,
+	activeV2Binding,
+	familyOfModel,
+	parseAliasRef,
 	parseV2Settings,
 	readV2Config,
 	validateV2Config,
@@ -35,6 +36,14 @@ export {
 	validatePresetTargets,
 } from "./profiles.js";
 export {
+	activeRegion,
+	isRegionOff,
+	modelAllowedByRegion,
+	REGION_OFF,
+	regionError,
+	regionNames,
+} from "./region.js";
+export {
 	activeResidency,
 	isResidencyOff,
 	modelAllowedByResidency,
@@ -42,11 +51,11 @@ export {
 	residencyError,
 	residencyNames,
 } from "./residency.js";
-export { buildV2FromV1, MODELS_V2_MIGRATION } from "./v2-migration.js";
 export {
 	agentTypeForRole,
 	clampEffort,
-	explainCatalogEntry,
+	defaultTierForAgent,
+	explainAttachment,
 	explainTier,
 	fallbackNotice,
 	type InheritedModel,

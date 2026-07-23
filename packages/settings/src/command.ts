@@ -236,7 +236,7 @@ export function handleSettingsCommand(
 	}
 	notify(
 		ctx,
-		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, validate, or residency.`,
+		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, validate, or region.`,
 		true,
 	);
 }
@@ -254,7 +254,7 @@ export function getSettingsCompletions(
 			"reset",
 			"explain",
 			"validate",
-			"residency",
+			"region",
 		].filter((item) => item.startsWith(parts[0] ?? ""));
 	const sub = parts[0];
 	if (!["get", "set", "reset"].includes(sub)) return [];
@@ -262,11 +262,11 @@ export function getSettingsCompletions(
 		parts.find((part) => !part.startsWith("--") && part !== sub) ?? "";
 	return [
 		...declaredSettingKeys(),
-		"models.catalogs.",
-		"models.profiles.",
-		"models.modelSets.",
-		"models.presets.",
-		"models.residency.",
+		"models.families.",
+		"models.rosters.",
+		"models.bindings.",
+		"models.region.",
+		"models.allowances.",
 		"agents.kinds.",
 		"agents.runtimePolicies.",
 		"transitionGates.",

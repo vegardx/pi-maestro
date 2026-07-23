@@ -9,7 +9,6 @@ import type {
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { MODELS_V2_MIGRATION } from "@vegardx/pi-models";
 import { runSettingsMigrations } from "@vegardx/pi-settings";
-import { isTmuxAvailable } from "@vegardx/pi-tmux";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import {
 	buildDeliverableSliceCompactionResult,
@@ -27,7 +26,6 @@ import { hydrateModesState } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
 import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
-import { tmuxRequirementIssues } from "../tmux-check.js";
 import {
 	contextFillLadder,
 	firePendingForcedDistill,
@@ -278,20 +276,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			}
 		}
 		rt.notifyMode(ctx);
-
-		// tmux is a REQUIREMENT (workers and subagent runs live in tmux
-		// sessions): catch a missing binary or a maestro started outside tmux
-		// loudly at startup, instead of discovering it later as mysteriously
-		// wedged spawns and dead panes. Children skip it — their transport is
-		// the maestro's problem, and they may legitimately run headless.
-		if (!isAgentMode()) {
-			for (const issue of tmuxRequirementIssues({
-				tmuxAvailable: isTmuxAvailable(),
-				env: process.env,
-			})) {
-				ctx.ui.notify(issue.message, issue.severity);
-			}
-		}
 
 		// Post-handoff arrival: render the card and fire the orientation turn
 		// once the agent is idle. Covers both the in-process session switch

@@ -77,8 +77,9 @@ export interface SubagentServiceOptions {
 	 */
 	readonly extraExtensions?: () => readonly string[];
 	/**
-	 * Transport for profiles that don't select one. Defaults to "tmux" —
-	 * inspectable runs are the norm; headless is an explicit choice.
+	 * Transport for profiles that don't select one. Defaults to "headless" —
+	 * runs are inspected by tailing their session file (/view), so headless
+	 * (no tmux server) is the norm; tmux is an explicit opt-in.
 	 */
 	readonly defaultTransport?: RunTransport;
 	/**
@@ -113,7 +114,7 @@ export function resolveSpawnTransport(
 ): RunTransport {
 	const forced = env.PI_MAESTRO_TRANSPORT;
 	if (forced === "headless" || forced === "tmux") return forced;
-	return profileTransport ?? defaultTransport ?? "tmux";
+	return profileTransport ?? defaultTransport ?? "headless";
 }
 
 export class SubagentService implements SubagentsCapabilityV1 {
@@ -190,14 +191,11 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			role: profile.role ?? profile.profile,
 			displayName:
 				profile.displayName ?? `${profile.role ?? profile.profile}-${runId}`,
-			...(transport === "tmux"
-				? {
-						session: true,
-						sessionFile:
-							profile.sessionFile ??
-							join(this.store.root, runId, "session.jsonl"),
-					}
-				: {}),
+			// Always persist a session file: it is what /view tails to show a run's
+			// work live, regardless of transport. (tmux additionally opens a pane.)
+			sessionFile:
+				profile.sessionFile ?? join(this.store.root, runId, "session.jsonl"),
+			...(transport === "tmux" ? { session: true } : {}),
 		};
 		const ctx: SpawnContext = {
 			spawnerCwd: this.spawnerCwd,

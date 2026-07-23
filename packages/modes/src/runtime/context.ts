@@ -734,7 +734,7 @@ export function createRuntimeContext(
 			}
 			if (isAgentMode()) {
 				ctx.ui.notify(
-					"tmux is required for execution. Install tmux and try again.",
+					"Execution can't be launched from within a subagent session.",
 					"warning",
 				);
 				return;
@@ -924,12 +924,12 @@ export function createRuntimeContext(
 				]),
 			];
 			// Worker launch transport. Headless (detached child processes, no tmux
-			// server) is honored here just as the subagents path honors it — the
-			// production default stays tmux for live pane inspection. One launcher
-			// instance is shared so the executor's liveness/capture see the same
-			// processes live-spawn started.
+			// server) is the default: workers are inspected by tailing their session
+			// file (/view), so tmux buys nothing here and is an explicit opt-in. One
+			// launcher instance is shared so the executor's liveness/capture see the
+			// same processes live-spawn started.
 			const workerTransport: "tmux" | "headless" =
-				process.env.PI_MAESTRO_TRANSPORT === "headless" ? "headless" : "tmux";
+				process.env.PI_MAESTRO_TRANSPORT === "tmux" ? "tmux" : "headless";
 			const headlessLauncher =
 				workerTransport === "headless" ? createHeadlessSpawner() : undefined;
 			rt.execution = createExecution({
@@ -1170,7 +1170,7 @@ export function createRuntimeContext(
 			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
 			await rt.ensureExecution(ctx);
 			if (!rt.execution) {
-				ctx.ui.notify("tmux is required to resume workers.", "warning");
+				ctx.ui.notify("Could not start the execution runtime.", "warning");
 				return;
 			}
 

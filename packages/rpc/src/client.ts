@@ -176,7 +176,7 @@ function defaultAssignment(agentId: string): HelloMessage["assignment"] {
 		modelId: "session",
 		runtime: {
 			mode: "full",
-			transport: "tmux",
+			transport: "headless",
 			tools: {},
 			session: "persistent",
 			isolation: "host",

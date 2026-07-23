@@ -109,6 +109,7 @@ export interface ExecutionHandle {
 	): Promise<string | undefined>;
 	stopProjectedRun?(runId: RunId, reason?: string): Promise<boolean>;
 	resolveSessionName(target: string): string | undefined;
+	resolveSessionFile(target: string): string | undefined;
 	getExecutor(): NodeExecutor;
 	markAgentDone(nodeId: string, name?: string): Promise<void>;
 	isWorkerDone(nodeId: string): boolean;
@@ -172,6 +173,7 @@ export function createExecution(opts: CreateExecutionOptions): ExecutionHandle {
 			adapter.forceFailWorker(nodeId, reason),
 		snapshot: () => adapter.snapshot(),
 		resolveSessionName: (target) => adapter.resolveSessionName(target),
+		resolveSessionFile: (target) => adapter.resolveSessionFile(target),
 		getExecutor: () => adapter.getExecutor(),
 		markAgentDone: (nodeId, name) => adapter.markAgentDone(nodeId, name),
 		isWorkerDone: (nodeId) => adapter.isWorkerDone(nodeId),

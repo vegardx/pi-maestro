@@ -24,7 +24,7 @@ import {
 } from "@vegardx/pi-contracts";
 import {
 	activePreset,
-	activeV2Profile,
+	activeV2Binding,
 	explainTier,
 	readModelsConfig,
 	readV2Config,
@@ -172,6 +172,118 @@ function strings(value: unknown): value is readonly string[] {
 	return Array.isArray(value) && value.every(nonEmpty);
 }
 
+/** A `"Family/Alias"` roster ref: a string with an interior slash. */
+function isAliasRef(value: unknown): value is string {
+	if (typeof value !== "string") return false;
+	const slash = value.indexOf("/");
+	return slash > 0 && slash < value.length - 1;
+}
+
+/** Validate one alias value ({ attach, effort?, efforts?, notes? }). */
+function validateAliasValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["alias must be an object"];
+	const errors: string[] = [];
+	if (
+		!Array.isArray(value.attach) ||
+		value.attach.length === 0 ||
+		!value.attach.every((m) => typeof m === "string" && m.includes("/"))
+	)
+		errors.push(
+			"alias attach must be a non-empty array of provider/model refs",
+		);
+	if (value.effort !== undefined && !THINKING.has(value.effort as string))
+		errors.push("alias effort is unsupported");
+	if (
+		value.efforts !== undefined &&
+		(!strings(value.efforts) ||
+			value.efforts.some((level) => !THINKING.has(level)))
+	)
+		errors.push("alias efforts must be an array of thinking levels");
+	if (value.notes !== undefined && !nonEmpty(value.notes))
+		errors.push("alias notes must be a non-empty string");
+	return errors;
+}
+
+/** Validate one family value ({ aliases: { <Alias>: {…} } }). */
+function validateFamilyValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["family must be an object"];
+	if (!isPlainObject(value.aliases))
+		return ["family requires an aliases object"];
+	return Object.entries(value.aliases).flatMap(([name, alias]) =>
+		validateAliasValue(alias).map((error) => `aliases.${name}: ${error}`),
+	);
+}
+
+/** Validate one roster value ({ light?: [refs], standard?, heavy? }). */
+function validateRosterValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["roster must be an object"];
+	const errors: string[] = [];
+	for (const [tier, refs] of Object.entries(value)) {
+		if (!TIER_IDS.includes(tier as TierId)) {
+			errors.push(`unknown tier ${tier} (tiers are ${TIER_IDS.join(", ")})`);
+			continue;
+		}
+		if (refs === null) continue; // tier deletion marker
+		if (!Array.isArray(refs) || !refs.every(isAliasRef))
+			errors.push(`${tier} must be an array of "Family/Alias" refs`);
+	}
+	return errors;
+}
+
+/** Validate one binding value ({ roster, targets? }). */
+function validateBindingValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["binding must be an object"];
+	const errors: string[] = [];
+	if (!nonEmpty(value.roster))
+		errors.push("binding roster reference is required");
+	if (value.targets !== undefined) {
+		if (!strings(value.targets))
+			errors.push("binding targets must be a string array");
+		else if (value.targets.some((entry) => !entry.includes("/")))
+			errors.push("binding targets must be exact provider/model ids");
+	}
+	return errors;
+}
+
+/** Validate a whole region value ({ active?, lists: { <name>: [patterns] } }). */
+function validateRegionValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["region must be an object"];
+	const errors: string[] = [];
+	if (value.active !== undefined && !nonEmpty(value.active))
+		errors.push("region active must be a non-empty name");
+	if (value.lists !== undefined) {
+		if (!isPlainObject(value.lists))
+			errors.push("region lists must be an object");
+		else
+			for (const [name, list] of Object.entries(value.lists)) {
+				if (["off", "none"].includes(name.toLowerCase()))
+					errors.push(`region list "${name}": "off"/"none" are reserved`);
+				else if (!strings(list) || list.length === 0)
+					errors.push(
+						`region list "${name}" requires a non-empty pattern array`,
+					);
+			}
+	}
+	return errors;
+}
+
+/** Validate one allowance value ({ tiers: [TierId…] }). */
+function validateAllowanceValue(value: unknown): string[] {
+	if (!isPlainObject(value)) return ["allowance must be an object"];
+	const tiers = value.tiers;
+	if (
+		!strings(tiers) ||
+		tiers.length === 0 ||
+		tiers.some((tier) => !TIER_IDS.includes(tier as TierId))
+	)
+		return [
+			`allowance tiers must be a non-empty array of ${TIER_IDS.join("|")}`,
+		];
+	if (new Set(tiers).size !== tiers.length)
+		return ["allowance tiers must be unique"];
+	return [];
+}
+
 function validateOption(value: unknown, path: string): string[] {
 	if (!isPlainObject(value)) return [`${path} must be an object`];
 	const errors: string[] = [];
@@ -277,89 +389,76 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 			]);
 		}
 	}
-	// v2: whole-catalog writes ({ fast?: [...], normal?: [...], heavy?: [...] }).
-	// `models.catalogs` is canonical (migration + menu); `models.catalog` is
-	// the legacy spelling the reader still honors.
-	if (
-		parts[0] === "models" &&
-		(parts[1] === "catalog" || parts[1] === "catalogs") &&
-		parts.length === 3
-	) {
-		if (!isPlainObject(value)) return ["catalog must be an object"];
-		const errors: string[] = [];
-		for (const [tier, entries] of Object.entries(value)) {
-			if (!TIER_IDS.includes(tier as TierId)) {
-				errors.push(`unknown tier ${tier} (tiers are ${TIER_IDS.join(", ")})`);
-				continue;
-			}
-			if (entries === null) continue; // tier deletion marker
-			if (!Array.isArray(entries)) {
-				errors.push(`${tier} must be an array`);
-				continue;
-			}
-			entries.forEach((entry, index) => {
-				if (!isPlainObject(entry) || !nonEmpty(entry.model))
-					errors.push(`${tier}[${index}].model is required`);
-				else if (!String(entry.model).includes("/"))
-					errors.push(
-						`${tier}[${index}].model must be a concrete provider/model ref`,
-					);
-				if (
-					isPlainObject(entry) &&
-					entry.effort !== undefined &&
-					!THINKING.has(entry.effort as string)
-				)
-					errors.push(`${tier}[${index}].effort is unsupported`);
-			});
+	// v2 families: whole-map (rank reorder), whole-family, single-alias.
+	if (parts[0] === "models" && parts[1] === "families") {
+		if (parts.length === 2) {
+			if (!isPlainObject(value)) return ["families must be an object"];
+			return Object.entries(value).flatMap(([name, family]) =>
+				validateFamilyValue(family).map((error) => `${name}: ${error}`),
+			);
 		}
-		return errors;
+		if (parts.length === 3) return validateFamilyValue(value);
+		if (parts[3] === "aliases" && parts.length === 5)
+			return validateAliasValue(value);
 	}
-	// v2: whole-profile writes ({ catalog, targets? }).
-	if (parts[0] === "models" && parts[1] === "profiles" && parts.length === 3) {
-		if (!isPlainObject(value)) return ["profile must be an object"];
-		const errors: string[] = [];
-		if (!nonEmpty(value.catalog))
-			errors.push("profile catalog reference is required");
-		if (value.targets !== undefined) {
-			if (!strings(value.targets))
-				errors.push("profile targets must be a string array");
-			else if (value.targets.some((entry) => !entry.includes("/")))
-				errors.push("profile targets must be exact provider/model ids");
+	// v2 rosters: whole-map, whole-roster, single-tier ref list.
+	if (parts[0] === "models" && parts[1] === "rosters") {
+		if (parts.length === 2) {
+			if (!isPlainObject(value)) return ["rosters must be an object"];
+			return Object.entries(value).flatMap(([name, roster]) =>
+				validateRosterValue(roster).map((error) => `${name}: ${error}`),
+			);
 		}
-		return errors;
-	}
-	if (parts[0] === "models" && parts[1] === "residency") {
-		if (parts.length === 3 && parts[2] === "active") {
-			return nonEmpty(value)
+		if (parts.length === 3) return validateRosterValue(value);
+		if (parts.length === 4) {
+			if (!TIER_IDS.includes(parts[3] as TierId))
+				return [`unknown tier ${parts[3]} (tiers are ${TIER_IDS.join(", ")})`];
+			return Array.isArray(value) && value.every(isAliasRef)
 				? []
-				: ["residency active must be a non-empty name"];
+				: ['tier must be an array of "Family/Alias" refs'];
+		}
+	}
+	// v2 bindings: whole-map and whole-binding.
+	if (parts[0] === "models" && parts[1] === "bindings") {
+		if (parts.length === 2) {
+			if (!isPlainObject(value)) return ["bindings must be an object"];
+			return Object.entries(value).flatMap(([name, binding]) =>
+				validateBindingValue(binding).map((error) => `${name}: ${error}`),
+			);
+		}
+		if (parts.length === 3) return validateBindingValue(value);
+	}
+	if (parts[0] === "models" && parts[1] === "region") {
+		// Whole-region write ({ active?, lists }) — the editor uses this so region
+		// list NAMES (which may contain dots) never become dotted key segments.
+		if (parts.length === 2) return validateRegionValue(value);
+		if (parts.length === 3 && parts[2] === "active") {
+			return nonEmpty(value) ? [] : ["region active must be a non-empty name"];
 		}
 		if (parts.length === 4 && parts[2] === "lists") {
 			if (["off", "none"].includes(parts[3].toLowerCase()))
 				return ['"off"/"none" are reserved (the no-filter state)'];
 			return strings(value) && value.length > 0
 				? []
-				: ["residency list requires a non-empty pattern array"];
+				: ["region list requires a non-empty pattern array"];
 		}
 	}
-	// v2: per-agent-type tier allowlists (agents.worker.models = ["normal","heavy"]).
-	if (
-		parts[0] === "agents" &&
-		SPAWNABLE_AGENT_TYPES.includes(parts[1] as SpawnableAgentType) &&
-		parts.length === 3 &&
-		parts[2] === "models"
-	) {
-		if (
-			!strings(value) ||
-			value.length === 0 ||
-			value.some((tier) => !TIER_IDS.includes(tier as TierId))
-		)
-			return [
-				`agent tier allowlist must be a non-empty array of ${TIER_IDS.join("|")}`,
-			];
-		if (new Set(value).size !== value.length)
-			return ["agent tier allowlist entries must be unique"];
-		return [];
+	// v2 allowances: whole-map and per-agent (models.allowances.worker = { tiers }).
+	if (parts[0] === "models" && parts[1] === "allowances") {
+		if (parts.length === 2) {
+			if (!isPlainObject(value)) return ["allowances must be an object"];
+			return Object.entries(value).flatMap(([agent, allowance]) =>
+				(SPAWNABLE_AGENT_TYPES.includes(agent as SpawnableAgentType)
+					? validateAllowanceValue(allowance)
+					: [`unknown agent ${agent}`]
+				).map((error) => `${agent}: ${error}`),
+			);
+		}
+		if (parts.length === 3) {
+			if (!SPAWNABLE_AGENT_TYPES.includes(parts[2] as SpawnableAgentType))
+				return [`unknown agent ${parts[2]}`];
+			return validateAllowanceValue(value);
+		}
 	}
 	if (parts[0] === "agents" && parts[1] === "kinds" && parts.length === 4) {
 		if (!AGENT_KINDS.includes(parts[2] as AgentKind))
@@ -758,18 +857,18 @@ export async function explainModelSelectionV2(
 	];
 	if (!config) {
 		lines.push(
-			"No v2 catalogs/profiles configured: everything inherits the seat.",
-			"(v1 presets are auto-migrated at boot when present; or author catalogs and profiles under the models settings key.)",
+			"No v2 families/rosters configured: everything inherits the seat.",
+			"(Configure families, rosters, and bindings with /maestro.)",
 		);
 		return lines.join("\n");
 	}
-	const active = activeV2Profile(config, sessionModel);
+	const active = activeV2Binding(config, sessionModel);
 	lines.push(
 		active
-			? `Profile: ${active.id}${active.profile.targets?.length ? ` (target ${sessionModel})` : " (default profile)"} → catalog ${active.profile.catalog}`
-			: "Profile: none matches this seat — tier requests fall back to the seat with a visible notice.",
+			? `Binding: ${active.id}${active.binding.targets?.length ? ` (target ${sessionModel})` : " (default binding)"} → roster ${active.binding.roster}`
+			: "Binding: none matches this seat — tier requests fall back to the seat with a visible notice.",
 	);
-	const allowed = config.agents[agent]?.models ?? [];
+	const allowed = config.allowances[agent]?.tiers ?? [];
 	lines.push(
 		`Agent ${agent}: allowed tiers ${allowed.length ? allowed.join(", ") : "none"}`,
 	);
@@ -788,17 +887,18 @@ export async function explainModelSelectionV2(
 		for (const fact of explained.candidates) {
 			const detail = [
 				fact.effort ? `@ ${fact.effort}` : undefined,
-				fact.family ? `family ${fact.family}` : undefined,
-				fact.available ? "available" : (fact.reason ?? "unavailable"),
+				fact.available
+					? `${fact.model} via ${fact.provider}`
+					: (fact.reason ?? "unavailable"),
 				fact.notes,
 			]
 				.filter(Boolean)
 				.join(" — ");
-			lines.push(`    - ${fact.model} ${detail}`);
+			lines.push(`    - ${fact.ref} (family ${fact.family}) ${detail}`);
 		}
 	}
 	lines.push(
-		"Resolution order: inherit the caller's model unless a tier is named (persona instruction or policy row); residency strikes non-members before any reasoning; an unresolvable tier falls back to the seat, visibly.",
+		"Resolution order: inherit the caller's model unless a tier is named (persona instruction or policy row); an alias prefers the agent's own gateway, else its first available attachment; region strikes non-members before any reasoning; an unresolvable tier falls back to the seat, visibly.",
 	);
 	return lines.join("\n");
 }
@@ -894,12 +994,10 @@ export function writeDomainValue(
 			: JSON.stringify(parsed);
 	const errors = validateDomainEdit(ctx, key, scope, serialized, registry);
 	if (errors.length) return errors;
-	// v2 agent tier allowlists live in the raw settings root (next to
-	// models.*) so readV2Config sees them — unlike kind bindings, which stay
-	// in the maestro extension config.
-	const rawSettingsKey =
-		key.startsWith("models.") ||
-		/^agents\.(worker|explorer|reviewer)\.models$/.test(key);
+	// The whole v2 slice lives under the raw settings `models.*` root so
+	// readV2Config sees it (families, rosters, bindings, region, allowances) —
+	// unlike kind bindings, which stay in the maestro extension config.
+	const rawSettingsKey = key.startsWith("models.");
 	if (rawSettingsKey && scope !== "session") {
 		updateSettingsFile(scope, ctx.cwd, undefined, (root) =>
 			setObjectPath(root, key.split("."), parsed),

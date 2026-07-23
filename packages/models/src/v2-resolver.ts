@@ -4,36 +4,35 @@
 //   1. No tier requested → INHERIT: the child runs its caller's model. Plans
 //      carry no model fields; root spawns run the session model because the
 //      root's model IS the session model.
-//   2. A tier requested (persona fan-out instructions, policy rows) →
-//      resolve through the active profile's catalog: that tier's NON-SEAT
-//      entries, residency-filtered, availability-checked, first-available in
-//      authored order — bounded by the agent type's tier allowlist. The
-//      session model is excluded here and reached only via (3): seat-to-end,
-//      so a deliberate tier choice prefers a real alternative to the seat and
-//      never fails because of that choice.
-//   3. Nothing available (empty tier, fully struck, unknown catalog) →
-//      SESSION-MODEL FALLBACK with a notice: the judgment still happens, on
+//   2. A tier requested (persona fan-out instructions, policy rows) → resolve
+//      through the active binding's roster: that tier's ordered alias refs,
+//      each resolved to a concrete attachment. An alias prefers the resolving
+//      agent's OWN gateway provider (keep traffic on one gateway), else the
+//      first available attachment in the alias's order. The first alias that
+//      yields an available attachment wins — bounded by the agent type's tier
+//      allowance.
+//   3. Nothing available (empty tier, every attachment struck, unknown roster)
+//      → SESSION-MODEL FALLBACK with a notice: the judgment still happens, on
 //      the seat, visibly. Never fail-open, never wedge.
 //
-// `inherit` and the fallback are exempt from tier allowlists but labeled in
-// the resolution record — the constraint bounds deliberate tier references,
-// and nothing is ever silently laundered. Library only for now: spawn wiring
-// lands with the plan cutover; v1 role resolution keeps driving until then.
+// `inherit` and the fallback are exempt from tier allowances but labeled in the
+// resolution record — the constraint bounds deliberate tier references, and
+// nothing is ever silently laundered.
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
-	CatalogEntry,
+	AliasConfig,
+	RegionConfig,
 	SpawnableAgentType,
 	ThinkingLevel,
 	TierId,
 	V2ModelsConfig,
 } from "@vegardx/pi-contracts";
-import { activeV2Profile, readV2Config } from "./catalog.js";
+import { activeV2Binding, parseAliasRef, readV2Config } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec } from "./model-spec.js";
-import { readModelsConfig } from "./profiles.js";
-import { activeResidency, modelAllowedByResidency } from "./residency.js";
+import { activeRegion, modelAllowedByRegion } from "./region.js";
 
 /** What the caller passes down: its own model — the inheritance default. */
 export interface InheritedModel {
@@ -51,10 +50,16 @@ export interface V2ResolutionRequest {
 	readonly requireApiKey?: boolean;
 }
 
-/** Why each catalog entry was or wasn't usable — the explain output's rows. */
+/** Why each roster alias ref was or wasn't usable — the explain output's rows. */
 export interface V2CandidateFact {
-	readonly model: string;
-	readonly family?: string;
+	/** The `"Family/Alias"` roster ref. */
+	readonly ref: string;
+	readonly family: string;
+	readonly alias: string;
+	/** The chosen attachment `provider/model`, when one was available. */
+	readonly model?: string;
+	/** Gateway prefix of the chosen attachment. */
+	readonly provider?: string;
 	readonly notes?: string;
 	readonly effort?: ThinkingLevel;
 	readonly available: boolean;
@@ -64,21 +69,24 @@ export interface V2CandidateFact {
 export type V2ResolutionSource = "inherit" | "tier" | "fallback";
 
 /**
- * Serializable resolution record — the shape the plan ledger persists per
- * node (NodeResolution) once the cutover lands, and what explain output
- * renders. Never re-rolled silently: persisted records are revalidated, and
- * a vanished model fails visibly.
+ * Serializable resolution record — the shape the plan ledger persists per node
+ * (NodeResolution) and what explain output renders. Never re-rolled silently:
+ * persisted records are revalidated, and a vanished model fails visibly.
  */
 export interface V2Resolution {
 	readonly source: V2ResolutionSource;
 	readonly modelId: string;
 	readonly effort?: ThinkingLevel;
-	/** Authored family from the catalog entry (diversity checks compare these). */
+	/** Resolved family (the diversity axis; checks compare these). */
 	readonly family?: string;
+	/** Resolved alias name. */
+	readonly alias?: string;
+	/** Gateway prefix of the chosen attachment. */
+	readonly attachmentProvider?: string;
 	readonly tier?: TierId;
-	readonly profileId?: string;
-	readonly catalogId?: string;
-	/** Per-entry facts when a tier was walked (explain output). */
+	readonly bindingId?: string;
+	readonly rosterId?: string;
+	/** Per-ref facts when a tier was walked (explain output). */
 	readonly candidates?: readonly V2CandidateFact[];
 	/** Present iff source === "fallback": why the tier produced nothing. */
 	readonly fallbackReason?: string;
@@ -91,71 +99,123 @@ export class V2ResolutionError extends Error {
 	}
 }
 
-interface CheckedEntry {
-	readonly fact: V2CandidateFact;
+interface AttachmentCheck {
+	/** The concrete `provider/model` ref. */
+	readonly spec: string;
+	readonly available: boolean;
+	readonly reason?: string;
+	/** The registry model when available. */
 	readonly model?: Model<Api>;
 }
 
-async function checkCatalogEntry(
+async function checkAttachment(
 	ctx: ExtensionContext,
-	entry: CatalogEntry,
+	spec: string,
+	region: RegionConfig | undefined,
 	requireApiKey: boolean,
-): Promise<CheckedEntry> {
-	const base: Omit<V2CandidateFact, "available" | "reason"> = {
-		model: entry.model,
-		...(entry.family ? { family: entry.family } : {}),
-		...(entry.notes ? { notes: entry.notes } : {}),
-		...(entry.effort ? { effort: entry.effort } : {}),
+): Promise<AttachmentCheck> {
+	// Region: the only hard filter — strikes before anything reasons.
+	if (!modelAllowedByRegion(region, spec))
+		return {
+			spec,
+			available: false,
+			reason: `outside region ${activeRegion(region)}`,
+		};
+	const parsed = parseModelSpec(spec);
+	const model = parsed
+		? (ctx.modelRegistry.find(parsed.provider, parsed.modelId) as
+				| Model<Api>
+				| undefined)
+		: undefined;
+	if (!model) return { spec, available: false, reason: "not in registry" };
+	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+	const authenticated = auth.ok && (!requireApiKey || Boolean(auth.apiKey));
+	if (!authenticated)
+		return { spec, available: false, reason: "not authenticated" };
+	return { spec, available: true, model };
+}
+
+interface ResolvedAlias {
+	readonly fact: V2CandidateFact;
+	readonly config: AliasConfig;
+	/** The chosen registry model when the alias resolved. */
+	readonly model?: Model<Api>;
+}
+
+/**
+ * Resolve one alias to a concrete attachment: prefer an available attachment
+ * on the resolving agent's own gateway (keep traffic on one gateway), else the
+ * first available attachment in the alias's authored order. When none is
+ * available, the fact carries why.
+ */
+async function resolveAlias(
+	ctx: ExtensionContext,
+	ref: string,
+	family: string,
+	alias: string,
+	config: AliasConfig,
+	agentProvider: string | undefined,
+	region: RegionConfig | undefined,
+	requireApiKey: boolean,
+): Promise<ResolvedAlias> {
+	const checks = await Promise.all(
+		config.attach.map((spec) =>
+			checkAttachment(ctx, spec, region, requireApiKey),
+		),
+	);
+	const available = checks.filter((check) => check.available);
+	const preferred =
+		(agentProvider &&
+			available.find(
+				(check) => parseModelSpec(check.spec)?.provider === agentProvider,
+			)) ||
+		available[0];
+	const base = {
+		ref,
+		family,
+		alias,
+		...(config.notes ? { notes: config.notes } : {}),
+		...(config.effort ? { effort: config.effort } : {}),
 	};
-	// Residency: the only hard filter — strikes before anything reasons.
-	const v1Config = safeV1Config(ctx);
-	if (!modelAllowedByResidency(v1Config, entry.model)) {
+	if (!preferred) {
+		const reasons = checks.map((check) => `${check.spec} (${check.reason})`);
 		return {
 			fact: {
 				...base,
 				available: false,
-				reason: `outside residency ${activeResidency(v1Config)}`,
+				reason:
+					checks.length === 0
+						? "alias has no attachments"
+						: `no attachment available: ${reasons.join(", ")}`,
 			},
+			config,
 		};
 	}
-	const spec = parseModelSpec(entry.model);
-	const model = spec
-		? (ctx.modelRegistry.find(spec.provider, spec.modelId) as
-				| Model<Api>
-				| undefined)
-		: undefined;
-	if (!model) {
-		return { fact: { ...base, available: false, reason: "not in registry" } };
-	}
-	const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-	const authenticated = auth.ok && (!requireApiKey || Boolean(auth.apiKey));
-	if (!authenticated) {
-		return {
-			fact: { ...base, available: false, reason: "not authenticated" },
-		};
-	}
-	return { fact: { ...base, available: true }, model };
+	return {
+		fact: {
+			...base,
+			available: true,
+			model: preferred.spec,
+			...(parseModelSpec(preferred.spec)?.provider
+				? { provider: parseModelSpec(preferred.spec)?.provider }
+				: {}),
+		},
+		config,
+		model: preferred.model,
+	};
 }
 
-/**
- * One entry's availability fact (residency, registry, auth) without
- * resolving anything — the /maestro catalog editor's live availability
- * word for entries in ANY catalog, active or not.
- */
-export async function explainCatalogEntry(
+/** One attachment's availability fact (region, registry, auth) — the editor's live word. */
+export async function explainAttachment(
 	ctx: ExtensionContext,
-	entry: CatalogEntry,
-): Promise<V2CandidateFact> {
-	const { fact } = await checkCatalogEntry(ctx, entry, false);
-	return fact;
-}
-
-function safeV1Config(ctx: ExtensionContext) {
-	try {
-		return readModelsConfig(ctx.cwd);
-	} catch {
-		return undefined;
-	}
+	spec: string,
+): Promise<{ available: boolean; reason?: string }> {
+	const region = readV2ConfigSafe(ctx)?.region;
+	const check = await checkAttachment(ctx, spec, region, false);
+	return {
+		available: check.available,
+		...(check.reason ? { reason: check.reason } : {}),
+	};
 }
 
 function sessionModelId(ctx: ExtensionContext): string | undefined {
@@ -166,16 +226,16 @@ function sessionModelId(ctx: ExtensionContext): string | undefined {
 }
 
 /**
- * Clamp an inherited/preferred effort into an entry's allowlist ∩ the
- * model's supported levels: exact when allowed, else nearest below, else
- * lowest above (the same rule v1's auto-effort uses).
+ * Clamp an inherited/preferred effort into an alias's allowlist ∩ the model's
+ * supported levels: exact when allowed, else nearest below, else lowest above
+ * (the same rule v1's auto-effort uses).
  */
 export function clampEffort(
 	preferred: ThinkingLevel | undefined,
-	entry: CatalogEntry,
+	alias: Pick<AliasConfig, "effort" | "efforts">,
 	model: Model<Api> | undefined,
 ): ThinkingLevel | undefined {
-	if (entry.effort && !entry.efforts) return entry.effort;
+	if (alias.effort && !alias.efforts) return alias.effort;
 	const order: readonly ThinkingLevel[] = [
 		"off",
 		"minimal",
@@ -189,10 +249,10 @@ export function clampEffort(
 	const allowed = order.filter(
 		(level) =>
 			supported.includes(level) &&
-			(!entry.efforts || entry.efforts.includes(level)),
+			(!alias.efforts || alias.efforts.includes(level)),
 	);
-	if (allowed.length === 0) return entry.effort;
-	const wanted = entry.effort ?? preferred;
+	if (allowed.length === 0) return alias.effort;
+	const wanted = alias.effort ?? preferred;
 	if (!wanted) return allowed[0];
 	if (allowed.includes(wanted)) return wanted;
 	const at = order.indexOf(wanted);
@@ -204,11 +264,11 @@ export function clampEffort(
 }
 
 /**
- * Resolve a spawn's model. Fail-visible, never fail-open: an unknown
- * catalog, an out-of-allowlist tier, or a missing session model at the
- * fallback throw {@link V2ResolutionError}; an empty/struck tier degrades
- * to the session model with `fallbackReason` set (the caller surfaces the
- * notice, deduped per agent — see {@link fallbackNotice}).
+ * Resolve a spawn's model. Fail-visible, never fail-open: an unknown roster,
+ * an out-of-allowance tier, or a missing session model at the fallback throw
+ * {@link V2ResolutionError}; an empty/struck tier degrades to the session
+ * model with `fallbackReason` set (the caller surfaces the notice, deduped per
+ * agent — see {@link fallbackNotice}).
  */
 export async function resolveV2Model(
 	ctx: ExtensionContext,
@@ -236,60 +296,90 @@ export async function resolveV2Model(
 	const config = readV2ConfigSafe(ctx);
 	if (!config)
 		throw new V2ResolutionError(
-			`tier ${request.tier} requested but no v2 catalog is configured`,
+			`tier ${request.tier} requested but no v2 roster is configured`,
 		);
-	// Deliberate tier references are bounded by the agent's allowlist.
-	const allowed = config.agents[request.agent]?.models ?? [];
+	// Deliberate tier references are bounded by the agent's allowance.
+	const allowed = config.allowances[request.agent]?.tiers ?? [];
 	if (!allowed.includes(request.tier))
 		throw new V2ResolutionError(
-			`tier ${request.tier} is outside agent ${request.agent}'s allowlist (${allowed.join(", ")})`,
+			`tier ${request.tier} is outside agent ${request.agent}'s allowance (${allowed.join(", ")})`,
 		);
-	const active = activeV2Profile(config, sessionModelId(ctx));
+	const active = activeV2Binding(config, sessionModelId(ctx));
 	if (!active)
 		throw new V2ResolutionError(
-			`tier ${request.tier} requested but no profile is active (no target match, no default profile)`,
+			`tier ${request.tier} requested but no binding is active (no target match, no default binding)`,
 		);
-	const catalog = config.catalogs[active.profile.catalog];
-	if (!catalog)
+	const roster = config.rosters[active.binding.roster];
+	if (!roster)
 		throw new V2ResolutionError(
-			`profile ${active.id} references unknown catalog ${active.profile.catalog}`,
+			`binding ${active.id} references unknown roster ${active.binding.roster}`,
 		);
 
-	// 2. Walk the tier: residency-filtered, availability-checked, authored order.
-	//    Seat-to-end (docs/design/multi-model-agents.md §1): the session model
-	//    never competes as a tier choice — it is the known-good fallback, tried
-	//    only after every non-seat entry (step 3). So a tier that lists the seat
-	//    still prefers a real alternative and lands on the seat last.
+	// 2. Walk the tier's ordered alias refs; each resolves to a concrete
+	//    attachment (own-gateway preference, else first available). The first
+	//    alias that yields an available attachment wins.
 	const seat = sessionModelId(ctx);
-	const tierEntries = catalog[request.tier].filter(
-		(entry) => entry.model !== seat,
+	const agentProvider = parseModelSpec(
+		request.inherit?.modelId ?? seat ?? "",
+	)?.provider;
+	const refs = roster[request.tier];
+	const resolved = await Promise.all(
+		refs.map((ref) => {
+			const parsed = parseAliasRef(ref);
+			// validateV2Config guarantees the ref resolves; guard defensively.
+			const aliasConfig = parsed
+				? config.families[parsed.family]?.aliases[parsed.alias]
+				: undefined;
+			if (!parsed || !aliasConfig)
+				return Promise.resolve<ResolvedAlias>({
+					fact: {
+						ref,
+						family: parsed?.family ?? "",
+						alias: parsed?.alias ?? "",
+						available: false,
+						reason: "unknown alias ref",
+					},
+					config: { attach: [] },
+				});
+			return resolveAlias(
+				ctx,
+				ref,
+				parsed.family,
+				parsed.alias,
+				aliasConfig,
+				agentProvider,
+				config.region,
+				request.requireApiKey ?? false,
+			);
+		}),
 	);
-	const checked = await Promise.all(
-		tierEntries.map((entry) =>
-			checkCatalogEntry(ctx, entry, request.requireApiKey ?? false),
-		),
-	);
-	const candidates = checked.map((entry) => entry.fact);
-	const winnerIndex = checked.findIndex((entry) => entry.fact.available);
+	const candidates = resolved.map((entry) => entry.fact);
+	const winnerIndex = resolved.findIndex((entry) => entry.fact.available);
 	if (winnerIndex >= 0) {
-		const winner = checked[winnerIndex];
-		const entry = tierEntries[winnerIndex];
-		const effort = clampEffort(request.inherit?.effort, entry, winner.model);
+		const winner = resolved[winnerIndex];
+		const effort = clampEffort(
+			request.inherit?.effort,
+			winner.config,
+			winner.model,
+		);
 		return {
 			source: "tier",
-			modelId: entry.model,
+			modelId: winner.fact.model as string,
 			...(effort ? { effort } : {}),
-			...(entry.family ? { family: entry.family } : {}),
+			family: winner.fact.family,
+			alias: winner.fact.alias,
+			...(winner.fact.provider
+				? { attachmentProvider: winner.fact.provider }
+				: {}),
 			tier: request.tier,
-			profileId: active.id,
-			catalogId: active.profile.catalog,
+			bindingId: active.id,
+			rosterId: active.binding.roster,
 			candidates,
 		};
 	}
 
-	// 3. Session-model fallback: every non-seat entry was unavailable (or the
-	//    tier held nothing but the seat), so the judgment still happens — on the
-	//    seat, the known-good end of the seat-to-end order — visibly.
+	// 3. Session-model fallback: every alias was unavailable (or the tier is
+	//    empty), so the judgment still happens — on the seat — visibly.
 	if (!seat)
 		throw new V2ResolutionError(
 			`tier ${request.tier} has no available model and there is no session model to fall back to`,
@@ -300,16 +390,27 @@ export async function resolveV2Model(
 		modelId: seat,
 		...(request.inherit?.effort ? { effort: request.inherit.effort } : {}),
 		tier: request.tier,
-		profileId: active.id,
-		catalogId: active.profile.catalog,
+		bindingId: active.id,
+		rosterId: active.binding.roster,
 		candidates,
 		fallbackReason:
-			catalog[request.tier].length === 0
-				? `tier ${request.tier} is empty in catalog ${active.profile.catalog}`
-				: candidates.length === 0
-					? `tier ${request.tier} lists only the session model in catalog ${active.profile.catalog}`
-					: `all ${struck} ${request.tier} entr${struck === 1 ? "y is" : "ies are"} unavailable`,
+			refs.length === 0
+				? `tier ${request.tier} is empty in roster ${active.binding.roster}`
+				: `all ${struck} ${request.tier} alias${struck === 1 ? "" : "es"} unavailable`,
 	};
+}
+
+/**
+ * The default tier a plan node of this agent type spawns at: the first tier in
+ * the agent's allowance (its preference order). Undefined when no v2 config
+ * exists — the caller then falls through to pure inheritance (the seat), so
+ * routing stays dormant until a roster is configured.
+ */
+export function defaultTierForAgent(
+	ctx: ExtensionContext,
+	agent: SpawnableAgentType,
+): TierId | undefined {
+	return readV2ConfigSafe(ctx)?.allowances[agent]?.tiers[0];
 }
 
 function readV2ConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
@@ -323,9 +424,9 @@ function readV2ConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
 }
 
 /**
- * The one deduped notice per agent for fallback resolutions. Callers keep
- * the set (keyed however their agent identity works) and notify only when
- * add() returns true.
+ * The one deduped notice per agent for fallback resolutions. Callers keep the
+ * set (keyed however their agent identity works) and notify only when add()
+ * returns true.
  */
 export function fallbackNotice(resolution: V2Resolution): string {
 	return (
@@ -334,30 +435,58 @@ export function fallbackNotice(resolution: V2Resolution): string {
 	);
 }
 
-/** Explain a tier without resolving: every entry's fact, for /models-style output. */
+/** Explain a tier without resolving: every ref's fact, for /models-style output. */
 export async function explainTier(
 	ctx: ExtensionContext,
 	agent: SpawnableAgentType,
 	tier: TierId,
 ): Promise<{
-	profileId?: string;
-	catalogId?: string;
+	bindingId?: string;
+	rosterId?: string;
 	allowed: boolean;
 	candidates: readonly V2CandidateFact[];
 }> {
 	const config = readV2ConfigSafe(ctx);
 	if (!config) return { allowed: false, candidates: [] };
-	const active = activeV2Profile(config, sessionModelId(ctx));
-	const catalog = active ? config.catalogs[active.profile.catalog] : undefined;
-	const checked = catalog
+	const active = activeV2Binding(config, sessionModelId(ctx));
+	const roster = active ? config.rosters[active.binding.roster] : undefined;
+	const seat = sessionModelId(ctx);
+	const agentProvider = parseModelSpec(seat ?? "")?.provider;
+	const checked = roster
 		? await Promise.all(
-				catalog[tier].map((entry) => checkCatalogEntry(ctx, entry, false)),
+				roster[tier].map((ref) => {
+					const parsed = parseAliasRef(ref);
+					const aliasConfig = parsed
+						? config.families[parsed.family]?.aliases[parsed.alias]
+						: undefined;
+					if (!parsed || !aliasConfig)
+						return Promise.resolve<ResolvedAlias>({
+							fact: {
+								ref,
+								family: parsed?.family ?? "",
+								alias: parsed?.alias ?? "",
+								available: false,
+								reason: "unknown alias ref",
+							},
+							config: { attach: [] },
+						});
+					return resolveAlias(
+						ctx,
+						ref,
+						parsed.family,
+						parsed.alias,
+						aliasConfig,
+						agentProvider,
+						config.region,
+						false,
+					);
+				}),
 			)
 		: [];
 	return {
-		...(active ? { profileId: active.id } : {}),
-		...(active ? { catalogId: active.profile.catalog } : {}),
-		allowed: (config.agents[agent]?.models ?? []).includes(tier),
+		...(active ? { bindingId: active.id } : {}),
+		...(active ? { rosterId: active.binding.roster } : {}),
+		allowed: (config.allowances[agent]?.tiers ?? []).includes(tier),
 		candidates: checked.map((entry) => entry.fact),
 	};
 }
@@ -365,10 +494,10 @@ export async function explainTier(
 /**
  * Which v2 agent type a v1 subagent role runs as.
  *
- * The v2 vocabulary has three agent types; `agents.run` still speaks the
- * fifteen v1 roles. Reviews judge (`reviewer`), implementation and delivery
- * verification act (`worker`), and the classify/summarize/research roles only
- * read (`explorer`). Mirrors the DUTY_AGENT lens the policy table uses.
+ * Reviews judge (`reviewer`), implementation and delivery verification act
+ * (`worker`), advice consults (`advisor`), and the classify/summarize/research
+ * roles only read (`explorer`). Mirrors the DUTY_AGENT lens the policy table
+ * uses.
  */
 export function agentTypeForRole(
 	role: string,

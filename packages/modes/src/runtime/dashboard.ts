@@ -4,9 +4,14 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { planViewTasks, projectPlanView } from "@vegardx/pi-contracts";
-import { activeResidency, readModelsConfig } from "@vegardx/pi-models";
+import {
+	activeRegion,
+	familyOfModel,
+	parseModelSpec,
+	readV2Config,
+} from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
-import { installFooter } from "../install-footer.js";
+import { installFooter, type ResolvedIdentity } from "../install-footer.js";
 import type { PlanV2 } from "../plan/schema.js";
 import type { RuntimeContext } from "./context.js";
 import { hudElapsed } from "./hud.js";
@@ -16,23 +21,33 @@ export function installMaestroFooter(
 	rt: RuntimeContext,
 	ctx: ExtensionContext,
 ): void {
-	// Residency for the footer: settings reads are file I/O, and render runs
-	// per keystroke — cache with a short TTL so toggles show up promptly
-	// without hammering the disk.
-	let residencyCache: { at: number; value: string | undefined } | undefined;
-	const getResidency = (): string | undefined => {
+	// Resolved identity for the footer: settings reads are file I/O, and render
+	// runs per keystroke — cache with a short TTL so /model switches and config
+	// edits show up promptly without hammering the disk.
+	let identityCache:
+		| { at: number; value: ResolvedIdentity | undefined }
+		| undefined;
+	const getResolvedIdentity = (): ResolvedIdentity | undefined => {
 		const now = Date.now();
-		if (!residencyCache || now - residencyCache.at > 3000) {
-			let value: string | undefined;
+		if (!identityCache || now - identityCache.at > 3000) {
+			let value: ResolvedIdentity | undefined;
+			const seat = ctx.model
+				? `${ctx.model.provider}/${ctx.model.id}`
+				: undefined;
 			try {
-				const config = readModelsConfig(ctx.cwd);
-				value = config?.residency ? activeResidency(config) : undefined;
+				const config = readV2Config(ctx.cwd);
+				value = {
+					...(seat ? { alias: familyOfModel(config, seat)?.alias } : {}),
+					...(seat ? { provider: parseModelSpec(seat)?.provider } : {}),
+					...(config?.region ? { region: activeRegion(config.region) } : {}),
+				};
 			} catch {
-				value = undefined;
+				// Incompatible config (wiped at boot) — show the raw provider only.
+				value = seat ? { provider: parseModelSpec(seat)?.provider } : undefined;
 			}
-			residencyCache = { at: now, value };
+			identityCache = { at: now, value };
 		}
-		return residencyCache.value;
+		return identityCache.value;
 	};
 	rt.invalidateFooter = installFooter({
 		pi: rt.pi,
@@ -43,7 +58,7 @@ export function installMaestroFooter(
 			if (!rt.execution) return 0;
 			return rt.execution.questionQueue?.all()?.length ?? 0;
 		},
-		getResidency,
+		getResolvedIdentity,
 	});
 }
 

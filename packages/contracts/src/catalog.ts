@@ -1,58 +1,79 @@
-// v2 model configuration vocabulary: catalogs (three fixed-meaning tiers),
-// profiles (thin seat→catalog bindings), and per-agent-type tier allowlists.
-// See docs/design/v2-primitives.md. Config-side only — v1 presets/modelSets
-// keep driving resolution until the v2 resolver lands; this vocabulary is
-// parsed, validated, and editable ahead of that flip.
+// v2 model configuration vocabulary: families (ranked; each holds free-text
+// aliases with ordered per-provider attachments), rosters (three fixed-meaning
+// tiers holding ordered alias refs), bindings (thin seat→roster bindings),
+// region (the active model allowlist), and per-agent tier allowances.
+// See docs/design/v2-primitives.md and memory/project-model-families-design.
 
 import type { ThinkingLevel } from "./runs.js";
 
 /**
- * The three tiers with fixed meanings. The structure IS the routing: no
- * pins, no N named sets — `fast` serves sweeps/gates/classification,
- * `normal` the daily drivers and candidate pools, `heavy` judging and deep
- * review. Personas and policy rows reference tiers by these names.
+ * The three tiers with fixed meanings. The structure IS the routing: `light`
+ * serves sweeps/gates/classification, `standard` the daily drivers and
+ * candidate pools, `heavy` judging and deep review. Personas and rules
+ * reference tiers by these names.
  */
-export const TIER_IDS = ["fast", "normal", "heavy"] as const;
+export const TIER_IDS = ["light", "standard", "heavy"] as const;
 export type TierId = (typeof TIER_IDS)[number];
 
-/** One catalog entry: a concrete fleet model with notes agents reason with. */
-export interface CatalogEntry {
-	/** Concrete `provider/model` ref — never the session sentinel: the seat
-	 *  is reached via inheritance, not through the catalog. */
-	readonly model: string;
-	/**
-	 * Model family, AUTHORED, never inferred — one provider can serve several
-	 * families (Copilot serves anthropic and openai models). The diversity
-	 * rule ("reviewer ≠ author's family") compares these values.
-	 */
-	readonly family?: string;
+/**
+ * One alias: a free-text logical model within a family, backed by concrete
+ * provider/model attachments. `attach` is ORDERED — the per-alias
+ * cross-provider fallback order at resolve time (the resolving agent's own
+ * gateway provider jumps the queue). effort/notes live here, shared everywhere
+ * the alias is used.
+ */
+export interface AliasConfig {
+	/** Ordered concrete `provider/model` refs that ARE this logical model. */
+	readonly attach: readonly string[];
+	/** Default thinking level; clamped to the resolved model's supported set. */
+	readonly effort?: ThinkingLevel;
+	/** Allowlist bounding usable levels (∩ what the resolved model supports). */
+	readonly efforts?: readonly ThinkingLevel[];
 	/** Capability notes written for agents to reason with, not spec sheets. */
 	readonly notes?: string;
-	/** Default thinking level when this entry is picked. */
-	readonly effort?: ThinkingLevel;
-	/** Allowlist bounding usable levels (∩ what the model supports). */
-	readonly efforts?: readonly ThinkingLevel[];
 }
 
-/** A named catalog: the same three tiers, always. Swap = one profile edit. */
-export type CatalogTiers = Readonly<Record<TierId, readonly CatalogEntry[]>>;
+/**
+ * A family: the diversity axis and a bag of aliases. Families are RANKED — the
+ * insertion order of `models.families` IS the diversity preference (a diverse
+ * pick walks onward from the author's family).
+ */
+export interface FamilyConfig {
+	readonly aliases: Readonly<Record<string, AliasConfig>>;
+}
 
 /**
- * A profile is a thin binding: the session models that activate it (targets;
- * a profile WITHOUT targets is the default profile, active when no targeted
- * profile matches) → a catalog by name. Principles prose migrated into
- * personas; profiles carry routing only.
+ * A roster tier is an ORDERED list of alias refs. A ref is `"Family/Alias"`
+ * (family-scoped, so qualified). Order = preference: a single agent takes #1,
+ * a candidate pool the top-N.
  */
-export interface V2ProfileConfig {
-	/** Concrete session models; unique across profiles (the activation key). */
+export type RosterTiers = Readonly<Record<TierId, readonly string[]>>;
+
+/**
+ * A binding is a thin routing rule: the session models that activate it
+ * (`targets` — the "when"; a binding WITHOUT targets is the default, active
+ * when no targeted binding matches) → a roster by name.
+ */
+export interface V2BindingConfig {
+	/** Concrete session models; unique across bindings (the activation key). */
 	readonly targets?: readonly string[];
-	/** Name of the catalog this profile binds. */
-	readonly catalog: string;
+	/** Name of the roster this binding selects. */
+	readonly roster: string;
+}
+
+/**
+ * The active region filter and its named allowlists (was "residency"). A hard
+ * filter over which models are usable at all; `active` names a list, or is
+ * "off"/"none" (the reserved no-filter state).
+ */
+export interface RegionConfig {
+	readonly active?: string;
+	readonly lists: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
  * The spawnable agent types. Callers (classifier, summarizer,
- * command-auditor, watcher) are harness components tuned via policy rows —
+ * command-auditor, watcher) are harness components tuned via rules —
  * deliberately absent: `agent: caller` in a plan is unrepresentable.
  */
 export const SPAWNABLE_AGENT_TYPES = [
@@ -60,37 +81,43 @@ export const SPAWNABLE_AGENT_TYPES = [
 	"explorer",
 	"reviewer",
 	// A read-only, persistent consultant spawned at RUNTIME (the reader path),
-	// never authored as a plan node — so it is spawnable (has a tier allowlist)
+	// never authored as a plan node — so it is spawnable (has a tier allowance)
 	// but NOT a NODE_AGENT_TYPE. See docs/design/multi-model-agents.md §6.
 	"advisor",
 ] as const;
 export type SpawnableAgentType = (typeof SPAWNABLE_AGENT_TYPES)[number];
 
-/** Per-agent-type tier allowlist: which tiers its assignments may draw from. */
-export interface AgentTierConfig {
-	readonly models: readonly TierId[];
+/** Per-agent-type tier allowance: which tiers its assignments may draw from. */
+export interface AgentAllowanceConfig {
+	readonly tiers: readonly TierId[];
 }
 
 /**
  * Defaults applied when settings say nothing. `inherit` and the
- * session-model fallback are exempt from these allowlists (labeled in
- * explain output) — the lists bound deliberate tier references only.
+ * session-model fallback are exempt from these allowances (labeled in explain
+ * output) — the lists bound deliberate tier references only.
  */
-export const DEFAULT_AGENT_TIERS: Readonly<
-	Record<SpawnableAgentType, AgentTierConfig>
+export const DEFAULT_AGENT_ALLOWANCES: Readonly<
+	Record<SpawnableAgentType, AgentAllowanceConfig>
 > = {
-	worker: { models: ["normal", "heavy"] },
-	explorer: { models: ["fast", "normal"] },
-	reviewer: { models: ["normal", "heavy"] },
-	// Advice draws on strong reasoning; overflow into normal when a fan-out
+	worker: { tiers: ["standard", "heavy"] },
+	explorer: { tiers: ["light", "standard"] },
+	reviewer: { tiers: ["standard", "heavy"] },
+	// Advice draws on strong reasoning; overflow into standard when a fan-out
 	// wants more models than heavy holds.
-	advisor: { models: ["heavy", "normal"] },
+	advisor: { tiers: ["heavy", "standard"] },
 };
 
-/** The parsed v2 configuration slice (settings `models.catalog`,
- *  `models.profiles`, `agents.<type>.models`). */
+/**
+ * The parsed v2 configuration slice (settings `models.families`,
+ * `models.rosters`, `models.bindings`, `models.region`, `models.allowances`).
+ */
 export interface V2ModelsConfig {
-	readonly catalogs: Readonly<Record<string, CatalogTiers>>;
-	readonly profiles: Readonly<Record<string, V2ProfileConfig>>;
-	readonly agents: Readonly<Record<SpawnableAgentType, AgentTierConfig>>;
+	readonly families: Readonly<Record<string, FamilyConfig>>;
+	readonly rosters: Readonly<Record<string, RosterTiers>>;
+	readonly bindings: Readonly<Record<string, V2BindingConfig>>;
+	readonly region: RegionConfig;
+	readonly allowances: Readonly<
+		Record<SpawnableAgentType, AgentAllowanceConfig>
+	>;
 }

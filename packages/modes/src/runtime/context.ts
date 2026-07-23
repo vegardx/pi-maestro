@@ -23,7 +23,7 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
-import { resolveV2Model } from "@vegardx/pi-models";
+import { defaultTierForAgent, resolveV2Model } from "@vegardx/pi-models";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
@@ -979,9 +979,11 @@ export function createRuntimeContext(
 				// resolver: nodes inherit the maestro session model unless a
 				// tier/policy says otherwise (Phase 4 adds tier routing). The
 				// adapter records the NodeResolution on the ledger.
-				resolveModel: async (node) =>
-					resolveNodeModel(ctx, {
+				resolveModel: async (node) => {
+					const tier = defaultTierForAgent(ctx, node.agent);
+					return resolveNodeModel(ctx, {
 						node,
+						...(tier ? { tier } : {}),
 						...(ctx.model
 							? {
 									inherit: {
@@ -989,7 +991,8 @@ export function createRuntimeContext(
 									},
 								}
 							: {}),
-					}),
+					});
+				},
 				// New nodes activate only while autonomous (auto — NOT hack:
 				// there the maestro is the sequential worker and must not fan
 				// out). The adapter outlives mode switches (running workers

@@ -113,14 +113,19 @@ describe("resolveNodeModel → ledger record", () => {
 			join(cwd, ".pi", "settings.json"),
 			JSON.stringify({
 				models: {
-					catalog: {
-						daily: {
-							fast: [],
-							normal: [{ model: "prov/sol", family: "openai", effort: "high" }],
-							heavy: [],
+					families: {
+						OpenAI: {
+							aliases: {
+								Sol: {
+									attach: ["prov/sol"],
+									effort: "high",
+									efforts: ["medium", "high"],
+								},
+							},
 						},
 					},
-					profiles: { main: { targets: ["prov/seat"], catalog: "daily" } },
+					rosters: { daily: { standard: ["OpenAI/Sol"] } },
+					bindings: { main: { targets: ["prov/seat"], roster: "daily" } },
 				},
 			}),
 		);
@@ -171,13 +176,13 @@ describe("resolveNodeModel → ledger record", () => {
 	it("tier → source persona-tier with catalog family on the record", async () => {
 		const { resolution } = await resolveNodeModel(ctx(), {
 			node: { id: "n", agent: "worker" },
-			tier: "normal",
+			tier: "standard",
 			now: () => "t",
 		});
 		expect(resolution).toMatchObject({
 			model: "prov/sol",
-			family: "openai",
-			tier: "normal",
+			family: "OpenAI",
+			tier: "standard",
 			source: "persona-tier",
 			effort: "high",
 			generation: 0,

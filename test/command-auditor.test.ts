@@ -56,7 +56,7 @@ describe("createCommandAuditor end to end (injected seams)", () => {
 	const row = {
 		on: "tool:bash",
 		scope: { depth: ">=1" },
-		run: { models: "fast", contract: "verdict" },
+		run: { models: "light", contract: "verdict" },
 	} as const;
 	const auth = async () =>
 		({ model: { id: "fast-model" }, apiKey: "k" }) as never;

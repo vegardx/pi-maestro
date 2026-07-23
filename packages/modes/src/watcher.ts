@@ -718,7 +718,7 @@ export class WatchManager {
 			if (row?.run.enabled === false) return null;
 			const resolved = await resolveV2Model(ctx, {
 				agent: "explorer",
-				tier: row?.run.models ?? "fast",
+				tier: row?.run.models ?? "light",
 			});
 			const auth = await resolveModelAuth(ctx, resolved.modelId);
 			if (!auth) return null;

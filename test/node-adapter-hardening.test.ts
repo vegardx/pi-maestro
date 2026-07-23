@@ -360,7 +360,7 @@ describe("children + contracts + resolution over RPC", () => {
 				resolution: {
 					model: "sit-openai/gpt-5.6-sol",
 					family: "openai",
-					tier: "normal",
+					tier: "standard",
 					source: "persona-tier",
 					effort: "high",
 					resolvedAt: "t",
@@ -384,7 +384,7 @@ describe("children + contracts + resolution over RPC", () => {
 		expect(node?.resolutions?.[0]).toMatchObject({
 			model: "sit-openai/gpt-5.6-sol",
 			family: "openai",
-			tier: "normal",
+			tier: "standard",
 			source: "persona-tier",
 		});
 	});

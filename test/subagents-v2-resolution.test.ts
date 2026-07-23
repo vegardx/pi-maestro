@@ -20,18 +20,27 @@ let cwd: string;
 
 const V2 = {
 	models: {
-		catalogs: {
-			main: {
-				fast: [{ model: "acme/small", effort: "low" }],
-				normal: [{ model: "acme/medium", effort: "medium" }],
-				heavy: [{ model: "acme/large", effort: "high" }],
+		families: {
+			Acme: {
+				aliases: {
+					Small: { attach: ["acme/small"], effort: "low" },
+					Medium: { attach: ["acme/medium"], effort: "medium" },
+					Large: { attach: ["acme/large"], effort: "high" },
+				},
 			},
 		},
-		profiles: { main: { targets: [], catalog: "main" } },
-		agents: {
-			worker: { models: ["normal", "heavy"] },
-			explorer: { models: ["fast"] },
-			reviewer: { models: ["heavy"] },
+		rosters: {
+			main: {
+				light: ["Acme/Small"],
+				standard: ["Acme/Medium"],
+				heavy: ["Acme/Large"],
+			},
+		},
+		bindings: { main: { roster: "main" } },
+		allowances: {
+			worker: { tiers: ["standard", "heavy"] },
+			explorer: { tiers: ["light"] },
+			reviewer: { tiers: ["heavy"] },
 		},
 	},
 };
@@ -108,7 +117,7 @@ describe("resolveViaV2", () => {
 		// `fast` holds acme/small, but a reviewer may only reach `heavy`.
 		await expect(
 			resolveViaV2(fakeCtx() as never, "plan-review", { model: "acme/small" }),
-		).rejects.toThrow(/not in any tier reviewer may use \(heavy\)/);
+		).rejects.toThrow(/not attached to any alias reviewer may use \(heavy\)/);
 	});
 
 	it("names the eligible model ids in the rejection, not just the tiers", async () => {
@@ -123,9 +132,9 @@ describe("resolveViaV2", () => {
 
 	it("resolves a deliberate tier to a concrete model from the allowlist", async () => {
 		writeSettings(V2);
-		// A worker may reach normal|heavy; `normal` holds acme/medium.
+		// A worker may reach standard|heavy; `standard` holds acme/medium.
 		const selection = await resolveViaV2(fakeCtx() as never, "worker", {
-			tier: "normal",
+			tier: "standard",
 		});
 		expect(selection).toMatchObject({
 			modelId: "acme/medium",
@@ -147,7 +156,7 @@ describe("resolveViaV2", () => {
 		// An explorer may reach only `fast`; asking for `heavy` is out of bounds.
 		await expect(
 			resolveViaV2(fakeCtx() as never, "web-research", { tier: "heavy" }),
-		).rejects.toThrow(/heavy.*outside agent explorer's allowlist/);
+		).rejects.toThrow(/heavy.*outside agent explorer's allowance/);
 	});
 
 	it("lets the caller pin an effort over the catalog's", async () => {

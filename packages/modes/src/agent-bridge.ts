@@ -77,7 +77,7 @@ function defaultAssignment(agentId: string): ResolvedAgentAssignment {
 		modelId: "session",
 		runtime: {
 			mode: "full",
-			transport: "tmux",
+			transport: "headless",
 			tools: {},
 			session: "persistent",
 			isolation: "host",

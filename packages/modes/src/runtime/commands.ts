@@ -461,7 +461,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	pi.registerCommand("view", {
 		description:
-			"View any tmux-backed agent session in a split pane. /view <opaque-id> or /view for dialog.",
+			"Open a live read-only view of an agent's work. /view <opaque-id> or /view for dialog.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const subagents = maestro.capabilities.get(CAPABILITIES.subagents);
 			await handleViewCommand(args, ctx, rt.execution, rt.viewState, subagents);

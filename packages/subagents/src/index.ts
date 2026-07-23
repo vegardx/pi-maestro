@@ -217,16 +217,16 @@ function makeDecider(
 // path pi itself was launched from. undefined in a bundled binary — the runner
 // then relies on RpcClient's own default discovery.
 /**
- * The process-wide spawn transport default. pi-maestro REQUIRES tmux (workers
- * have always lived in tmux sessions), so inspectable tmux runs are the
- * default with no silent degradation — a missing tmux is surfaced loudly at
- * startup, not papered over with headless spawns. PI_MAESTRO_TRANSPORT is the
- * explicit escape hatch (debugging, harness runs).
+ * The process-wide spawn transport default. Headless (detached child processes,
+ * no tmux server) is the default: runs are inspected by tailing their session
+ * file (the /view live view), so there is nothing tmux buys us that headless
+ * lacks, and headless has no cross-session fencing and needs no tmux binary.
+ * PI_MAESTRO_TRANSPORT=tmux opts back into the legacy pane transport.
  */
 function resolveDefaultTransport(): "tmux" | "headless" {
 	const forced = process.env.PI_MAESTRO_TRANSPORT;
 	if (forced === "headless" || forced === "tmux") return forced;
-	return "tmux";
+	return "headless";
 }
 
 function resolveCliPath(): string | undefined {
@@ -422,9 +422,9 @@ export default defineExtension(
 				// Children run -ne; pass configured infra extensions (custom model
 				// providers etc) back through for EVERY caller at this one seam.
 				extraExtensions: () => readChildExtensionPaths(next.cwd),
-				// Inspectable tmux runs are the default from day one — workers
-				// already live in tmux and pi-maestro requires it. Headless is
-				// the explicit PI_MAESTRO_TRANSPORT=headless escape hatch only.
+				// Headless (detached child processes) is the default; runs are
+				// inspected via session-file tailing (/view). PI_MAESTRO_TRANSPORT=tmux
+				// opts back into the legacy pane transport.
 				defaultTransport: resolveDefaultTransport(),
 			});
 			projectionSourceDispose?.();

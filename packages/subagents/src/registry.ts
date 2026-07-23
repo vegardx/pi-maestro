@@ -403,37 +403,37 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			id: "worker",
 			permissions: "worker",
 			session: "worker",
-			transport: "tmux",
+			transport: "headless",
 		},
 		{
 			id: "read-only",
 			permissions: "read-only",
 			session: "one-shot",
-			transport: "tmux",
+			transport: "headless",
 		},
 		{
 			id: "research-codebase",
 			permissions: "read-only",
 			session: "one-shot",
-			transport: "tmux",
+			transport: "headless",
 		},
 		{
 			id: "research-web",
 			permissions: "web-read-only",
 			session: "one-shot",
-			transport: "tmux",
+			transport: "headless",
 		},
 		{
 			id: "review",
 			permissions: "read-only",
 			session: "one-shot",
-			transport: "tmux",
+			transport: "headless",
 		},
 		{
 			id: "advisor",
 			permissions: "advisor",
 			session: "advisor",
-			transport: "tmux",
+			transport: "headless",
 		},
 	]);
 	const registries = {

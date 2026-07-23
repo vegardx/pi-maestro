@@ -1058,6 +1058,17 @@ export class NodeExecutionAdapter {
 		return undefined;
 	}
 
+	/** nodeId, session id, or display name → the run's session file (for /view). */
+	resolveSessionFile(target: string): string | undefined {
+		const direct = this.executor.getRunState(target);
+		if (direct?.sessionFile) return direct.sessionFile;
+		for (const [, run] of this.executor.getStates()) {
+			if (run.sessionId === target || run.displayName === target)
+				return run.sessionFile;
+		}
+		return undefined;
+	}
+
 	getWorkerSessions(): string[] {
 		const sessions: string[] = [];
 		for (const [nodeId, run] of this.executor.getStates()) {

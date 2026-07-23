@@ -56,10 +56,10 @@ describe("spawn transport precedence", () => {
 		).toBe("tmux");
 	});
 
-	it("without an override: profile, then service default, then tmux", () => {
-		expect(resolveSpawnTransport("headless", "tmux", {})).toBe("headless");
-		expect(resolveSpawnTransport(undefined, "headless", {})).toBe("headless");
-		expect(resolveSpawnTransport(undefined, undefined, {})).toBe("tmux");
+	it("without an override: profile, then service default, then headless", () => {
+		expect(resolveSpawnTransport("tmux", "headless", {})).toBe("tmux");
+		expect(resolveSpawnTransport(undefined, "tmux", {})).toBe("tmux");
+		expect(resolveSpawnTransport(undefined, undefined, {})).toBe("headless");
 	});
 
 	it("ignores a malformed override", () => {

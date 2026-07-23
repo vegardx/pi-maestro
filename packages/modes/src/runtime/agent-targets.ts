@@ -52,14 +52,16 @@ export function listAgentTargets(input: {
 	}
 	for (const [key, agent] of input.execution?.snapshot().agents ?? []) {
 		const session = input.execution?.resolveSessionName(key);
+		const sessionFile = input.execution?.resolveSessionFile(key);
 		targets.push({
 			id: `worker:${key}`,
 			kind: "worker",
 			displayName: key,
 			role: key.split("/")[1] ?? "worker",
 			status: agent.status,
-			transport: "tmux",
+			transport: "headless",
 			...(session ? { tmuxSession: session } : {}),
+			...(sessionFile ? { sessionFile } : {}),
 			model: agent.model,
 			createdAt: agent.startedAt,
 			updatedAt: agent.completedAt ?? Date.now(),
@@ -67,7 +69,8 @@ export function listAgentTargets(input: {
 				? { completedAt: agent.completedAt }
 				: {}),
 			capabilities: {
-				view: Boolean(session),
+				// /view tails the session file; capture still needs a live pane.
+				view: Boolean(sessionFile),
 				capture: Boolean(session),
 				steer: true,
 				interrupt: true,
@@ -117,7 +120,7 @@ export function listAgentTargets(input: {
 				? { completedAt: run.completedAt }
 				: {}),
 			capabilities: {
-				view: Boolean(metadata?.tmuxSession),
+				view: Boolean(metadata?.sessionFile),
 				capture: projection?.confirmed !== false,
 				steer:
 					projection?.confirmed !== false &&

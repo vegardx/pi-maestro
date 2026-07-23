@@ -79,7 +79,7 @@ function profileFor(
 		tools: runtime.tools,
 		session: runtime.session === "persistent",
 		...(kind.standby ? { standby: true } : {}),
-		transport: runtime.transport === "host" ? "tmux" : runtime.transport,
+		transport: runtime.transport === "host" ? "headless" : runtime.transport,
 		isolateExtensions: runtime.mode === "read-only",
 		...(extension ? { extraExtensions: [extension] } : {}),
 		appendSystemPrompt: kind.prompt,

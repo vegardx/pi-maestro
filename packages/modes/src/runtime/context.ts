@@ -492,6 +492,9 @@ export function createRuntimeContext(
 		},
 
 		async requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean> {
+			// Defense in depth: mode is operator authority. An agent process must
+			// never widen its posture, even if some internal path reached here.
+			if (isAgentMode()) return false;
 			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
 				rt.finalizeDraftPlan(ctx);
 			}

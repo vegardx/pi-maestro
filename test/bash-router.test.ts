@@ -418,15 +418,20 @@ describe("bash coaching and routing policy", () => {
 			),
 		).toBe(readBackend);
 
+		// The old lightweight COPY tier is retired (B1): recon/plan writes run
+		// in-place on the real tree through the same direct ops (profiled per
+		// actor by the router), so the route no longer needs a separate backend
+		// and no longer fails closed.
 		const isolated = decideBashPolicy({
 			command: "npm test",
 			mode: "plan",
 			actor: "maestro",
 			policy: guided,
 		});
-		expect(() => resolveBashOperations(isolated, {}, "/w")).toThrow(
-			/no lightweight backend is available/u,
-		);
+		expect(isolated.route).toBe("lightweight");
+		expect(
+			resolveBashOperations(isolated, { direct: () => direct }, "/w"),
+		).toBe(direct);
 
 		const confirm = vi.fn(async () => true);
 		await authorizeBashDecision(

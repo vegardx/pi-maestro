@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import type {
 	BashOperations,
 	ExtensionContext,
@@ -19,6 +20,11 @@ import {
 	type IsolationBackendTier,
 	IsolationUnavailableError,
 } from "../isolation/backend.js";
+import {
+	createEnforcingBashOperations,
+	createShadowBashOperations,
+	defaultSandboxWrap,
+} from "../isolation/realtree-sandbox.js";
 import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import { readExecutionPolicySettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";
@@ -47,7 +53,7 @@ export function registerBashRouter(rt: RuntimeContext): void {
 	const routed: typeof definition = {
 		...definition,
 		async execute(id, params, signal, onUpdate, ctx) {
-			const actor = currentActor(rt);
+			const actor = currentActor();
 			const policy = readExecutionPolicySettings(ctx.cwd);
 			let decision = decideBashPolicy({
 				command: params.command,
@@ -246,6 +252,43 @@ export async function isolationFailureAction(
 	return "hack";
 }
 
+/**
+ * Apply the per-actor real-tree write profile to a route's ops. Three states,
+ * so the validated mechanism ships without flipping a kernel write-boundary on
+ * before real workflows (worker git, builds) have baked:
+ * - MAESTRO_SANDBOX_SHADOW=<file> → report-only: LOG the profile, run unchanged.
+ * - MAESTRO_SANDBOX=enforce → confine writes to the profile via the OS on the
+ *   real tree (a bash-classifier miss stops being an escape; hack runs
+ *   unwrapped). Reads stay open, so `git status`/builds see the real tree.
+ * - default → unchanged (current behavior) until the default is flipped after
+ *   a bake. The forcing-bug close is one env flag away, deliberately.
+ */
+function realtreeOps(
+	ops: BashOperations,
+	decision: BashPolicyDecision,
+): BashOperations {
+	const logPath = process.env.MAESTRO_SANDBOX_SHADOW;
+	if (logPath)
+		return createShadowBashOperations(ops, {
+			actor: decision.actor,
+			mode: decision.mode,
+			log: (line) => {
+				try {
+					appendFileSync(logPath, `${line}\n`);
+				} catch {
+					// A shadow-log write must never affect execution.
+				}
+			},
+		});
+	if (process.env.MAESTRO_SANDBOX === "enforce")
+		return createEnforcingBashOperations(ops, {
+			actor: decision.actor,
+			mode: decision.mode,
+			wrap: defaultSandboxWrap,
+		});
+	return ops;
+}
+
 export function resolveBashOperations(
 	decision: BashPolicyDecision,
 	backends: BashRouterBackends,
@@ -255,16 +298,16 @@ export function resolveBashOperations(
 	switch (decision.route) {
 		case "direct":
 		case "confirm":
-			return direct;
-		// Reads see the real tree. An injected backend still wins, but absence
-		// falls through to direct execution rather than failing: the route is
-		// only reached for exclusively-read effect sets, so the write guard is
-		// the classification itself. Failing closed here would deny an agent
-		// `git status`; isolating here would lie to it about the filesystem.
+			return realtreeOps(direct, decision);
+		// Reads see the real tree (reads stay open in the profile). The write
+		// guard is the kernel now, so even a misclassified "read" that writes is
+		// contained to the actor's scope rather than escaping unsandboxed.
 		case "host-read":
-			return backends.hostRead?.(cwd) ?? direct;
+			return realtreeOps(backends.hostRead?.(cwd) ?? direct, decision);
+		// The old lightweight COPY tier is retired: recon/plan writes run
+		// in-place on the real tree, confined by the same per-actor profile.
 		case "lightweight":
-			return requiredBackend("lightweight", backends.lightweight?.(cwd));
+			return realtreeOps(direct, decision);
 		case "strong":
 			return requiredBackend("strong", backends.strong?.(cwd));
 		case "deny":
@@ -287,8 +330,15 @@ function requiredBackend(
 	);
 }
 
-function currentActor(rt: RuntimeContext): BashActor {
-	if (rt.state.mode !== "agent") return "maestro";
+/**
+ * The actor is PROCESS IDENTITY, not mutable session mode. Only a spawned agent
+ * carries `PI_MAESTRO_AGENT_ID` (the spawner sets it before the child's first
+ * token; a nested standalone pi has it deleted). The maestro process never has
+ * it. Deriving from the env — not `rt.state.mode` — means privilege can't hang
+ * off state an agent's own turn could move.
+ */
+function currentActor(): BashActor {
+	if (!process.env.PI_MAESTRO_AGENT_ID) return "maestro";
 	return process.env.PI_MAESTRO_AGENT_MODE === "read-only"
 		? "reviewer"
 		: "worker";

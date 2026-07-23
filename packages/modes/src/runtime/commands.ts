@@ -287,6 +287,16 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		pi.registerCommand(mode, {
 			description: `Switch to Maestro ${mode} mode through execution readiness.`,
 			handler: async (_args: string, ctx: ExtensionCommandContext) => {
+				// Only a human operator changes mode. A spawned agent must not be
+				// able to widen its own posture (hack lifts every restriction) — the
+				// escalation guard `/distill` and `/handoff` already carry.
+				if (isAgentMode()) {
+					ctx.ui.notify(
+						`/${mode} is operator-only — an agent cannot change mode.`,
+						"warning",
+					);
+					return;
+				}
 				if (rt.state.mode === "plan") {
 					if (await rt.requestMode(mode, ctx))
 						await rt.runStart(undefined, ctx);

@@ -181,7 +181,7 @@ export class NodeExecutor {
 		private readonly deps: NodeExecutorDeps,
 	) {
 		// Hydrate already-active nodes (resumed session). A maestro restart
-		// ends the run: orphaned pi processes may still live in tmux, so
+		// ends the run: orphaned pi processes may still be running, so
 		// hydrated nodes come up BLOCKED instead of auto-respawning (verbatim).
 		for (const { node } of walkNodes(engine.get())) {
 			if (node.status === "active" && !this.runStates.has(node.id))
@@ -325,9 +325,9 @@ export class NodeExecutor {
 
 		run.status = "done";
 		run.completedAt = this.deps.now();
-		// Prune the dead tmux session id (v1 behavior): getWorkerSessions/
-		// resolveSessionName must not surface a killed session, or /watch
-		// panes never auto-close. sessionFile stays — resurrection needs it.
+		// Prune the dead session id: getWorkerSessions/resolveSessionName must
+		// not surface a finished session. sessionFile stays — resurrection
+		// needs it.
 		run.sessionId = undefined;
 		if (run.summary)
 			this.engine.setNodeRuntime(nodeId, { summary: run.summary });

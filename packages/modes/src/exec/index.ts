@@ -9,7 +9,6 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Answers, RunId, RunRecord } from "@vegardx/pi-contracts";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
-import * as realTmux from "@vegardx/pi-tmux";
 import type { PlanEngineV2 } from "../plan/engine.js";
 import {
 	type NodeAdapterOptions,
@@ -121,8 +120,8 @@ export interface ExecutionHandle {
 }
 
 export interface CreateExecutionOptions
-	extends Omit<NodeAdapterOptions, "tmux" | "token" | "socketPath"> {
-	readonly tmux?: NodeAdapterOptions["tmux"];
+	extends Omit<NodeAdapterOptions, "launcher" | "token" | "socketPath"> {
+	readonly launcher?: NodeAdapterOptions["launcher"];
 	readonly token?: string;
 	readonly socketPath?: string;
 	readonly engine: PlanEngineV2;
@@ -132,20 +131,15 @@ export interface CreateExecutionOptions
 export function createExecution(opts: CreateExecutionOptions): ExecutionHandle {
 	const adapter = new NodeExecutionAdapter({
 		...opts,
-		tmux:
-			opts.tmux ??
-			({
-				spawn: async (name: string) => {
-					// The default tmux path spawns a bare shell session; the real
-					// pi-launch command is supplied by the adapter's spawnAgent seam
-					// (session assembly is wired per drive/runtime, not here).
-					await realTmux.spawn(name, process.cwd(), []);
-				},
-				hasSession: (name: string) => realTmux.hasSession(name),
-				kill: (name: string) => realTmux.kill(name),
-				capture: (name: string, lines?: number) =>
-					realTmux.capturePane(name, lines),
-			} as NodeAdapterOptions["tmux"]),
+		// The real pi-launch command is supplied by the adapter's spawnAgent
+		// seam; this launcher only provides liveness/reap/capture. Real callers
+		// pass a shared headless spawner so it and spawnAgent see the same
+		// processes; the stub default keeps test/embedded callers compiling.
+		launcher: opts.launcher ?? {
+			spawn: async () => {},
+			hasSession: async () => false,
+			kill: async () => {},
+		},
 		token: opts.token ?? randomUUID(),
 		socketPath:
 			opts.socketPath ??

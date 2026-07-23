@@ -51,7 +51,6 @@ export function listAgentTargets(input: {
 		});
 	}
 	for (const [key, agent] of input.execution?.snapshot().agents ?? []) {
-		const session = input.execution?.resolveSessionName(key);
 		const sessionFile = input.execution?.resolveSessionFile(key);
 		targets.push({
 			id: `worker:${key}`,
@@ -60,7 +59,6 @@ export function listAgentTargets(input: {
 			role: key.split("/")[1] ?? "worker",
 			status: agent.status,
 			transport: "headless",
-			...(session ? { tmuxSession: session } : {}),
 			...(sessionFile ? { sessionFile } : {}),
 			model: agent.model,
 			createdAt: agent.startedAt,
@@ -69,9 +67,9 @@ export function listAgentTargets(input: {
 				? { completedAt: agent.completedAt }
 				: {}),
 			capabilities: {
-				// /view tails the session file; capture still needs a live pane.
+				// /view tails the session file.
 				view: Boolean(sessionFile),
-				capture: Boolean(session),
+				capture: Boolean(sessionFile),
 				steer: true,
 				interrupt: true,
 				shutdown: true,
@@ -109,8 +107,6 @@ export function listAgentTargets(input: {
 			rootTurnId: metadata?.rootTurnId ?? run.profile.rootTurnId,
 			pid: metadata?.pid,
 			processGroup: metadata?.processGroup,
-			tmuxSession: metadata?.tmuxSession,
-			tmuxPane: metadata?.tmuxPane,
 			sessionFile: metadata?.sessionFile,
 			cwd: metadata?.cwd ?? run.profile.cwd,
 			model: run.profile.model,

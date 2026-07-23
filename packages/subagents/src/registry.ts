@@ -394,7 +394,6 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 	]);
 	const transports = new AgentRegistry<AgentTransportPolicy>([
 		{ id: "host", transport: "host" },
-		{ id: "tmux", transport: "tmux", timeoutMs: 600_000 },
 		{ id: "headless", transport: "headless", timeoutMs: 600_000 },
 	]);
 	const policies = new AgentRegistry<AgentRuntimePolicyDefinition>([

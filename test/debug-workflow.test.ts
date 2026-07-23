@@ -112,7 +112,7 @@ describe("debug diagnosis and recovery", () => {
 		});
 		expect(snapshot.sessionPath?.source).toBe("session-manager");
 		expect(snapshot.worker?.generation).toBe(3);
-		expect(snapshot.worker?.tmuxSession).toBe("tmux-worker");
+		expect(snapshot.worker?.sessionName).toBe("tmux-worker");
 		expect(snapshot.recentFailures[0]?.error).toContain("[redacted]");
 		expect(JSON.stringify(snapshot)).not.toContain("secret-value");
 	});

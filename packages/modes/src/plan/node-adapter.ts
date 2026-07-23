@@ -50,11 +50,11 @@ const DIRTY_HOLD_RESTEER_MS = 2 * 60_000;
 const SUMMARY_TIMEOUT_MS = 120_000;
 const NO_SUMMARY_PLACEHOLDER = "## Summary\n(agent produced no summary)";
 
-export interface TmuxLikeApi {
+export interface LauncherApi {
 	spawn(name: string, opts?: unknown): Promise<void>;
 	hasSession(name: string): Promise<boolean>;
 	kill(name: string): Promise<void>;
-	/** Pane capture for /view + crash tails; absent on stub backends. */
+	/** stdout capture for crash tails; absent on stub backends. */
 	capture?(name: string, lines?: number): Promise<string>;
 }
 
@@ -124,7 +124,7 @@ export interface AgentStateSnapshot {
 export interface NodeAdapterOptions {
 	readonly engine: PlanEngineV2;
 	readonly planDir: string;
-	readonly tmux: TmuxLikeApi;
+	readonly launcher: LauncherApi;
 	readonly token: string;
 	readonly socketPath: string;
 	readonly onPlanChanged: () => void;
@@ -135,7 +135,7 @@ export interface NodeAdapterOptions {
 	readonly dirtyHoldMaxSteers?: number;
 	readonly dirtyHoldResteerMs?: number;
 	readonly pollIntervalMs?: number;
-	/** Injectable spawn seam — tests/live wiring override the tmux default. */
+	/** Injectable spawn seam — tests/live wiring override the launcher default. */
 	readonly spawnAgent?: NodeExecutorDeps["spawnAgent"];
 	/** Spawn-time resolution: shapes the NodeResolution the adapter records. */
 	readonly resolveModel?: (
@@ -295,7 +295,7 @@ export class NodeExecutionAdapter {
 				return spawned;
 			},
 			killSession: async (sessionId) => {
-				await opts.tmux.kill(sessionId).catch(() => {});
+				await opts.launcher.kill(sessionId).catch(() => {});
 			},
 			// Real-git provisioning by default (PR-6b): branch owners under
 			// <worktrees>/<nodeId>, candidates under _candidates/<parent>/<id> —
@@ -462,7 +462,7 @@ export class NodeExecutionAdapter {
 				this.evaluateIdle(nodeId);
 				continue;
 			}
-			const alive = await this.opts.tmux
+			const alive = await this.opts.launcher
 				.hasSession(run.sessionId)
 				.catch(() => true); // a tmux hiccup must not fail agents
 			if (!alive && this.connectionGenerations.get(nodeId) === undefined) {
@@ -815,7 +815,7 @@ export class NodeExecutionAdapter {
 		}
 	}
 
-	/** Capture a node's tmux pane when the transport supports it. */
+	/** Capture a node's recent output when the launcher supports it. */
 	async capture(
 		nodeId: string,
 		_agentName?: string,
@@ -823,7 +823,7 @@ export class NodeExecutionAdapter {
 	): Promise<string | undefined> {
 		const run = this.executor.getRunState(nodeId);
 		if (!run?.sessionId) return undefined;
-		const capturer = this.opts.tmux.capture?.bind(this.opts.tmux);
+		const capturer = this.opts.launcher.capture?.bind(this.opts.launcher);
 		return capturer ? capturer(run.sessionId, lines) : undefined;
 	}
 
@@ -839,12 +839,12 @@ export class NodeExecutionAdapter {
 		const run = this.executor.getRunState(nodeId);
 		if (!run?.sessionId) return false;
 		const sessionId = run.sessionId;
-		await this.opts.tmux.kill(sessionId).catch(() => {});
+		await this.opts.launcher.kill(sessionId).catch(() => {});
 		for (let attempt = 0; attempt < 3; attempt++) {
-			if (!(await this.opts.tmux.hasSession(sessionId).catch(() => false)))
+			if (!(await this.opts.launcher.hasSession(sessionId).catch(() => false)))
 				break;
 			await new Promise((resolve) => setTimeout(resolve, 200));
-			await this.opts.tmux.kill(sessionId).catch(() => {});
+			await this.opts.launcher.kill(sessionId).catch(() => {});
 		}
 		run.sessionId = undefined;
 		run.status = "pending";
@@ -974,7 +974,7 @@ export class NodeExecutionAdapter {
 					unresponsive.push(nodeId);
 				}
 				if (run.sessionId)
-					await this.opts.tmux.kill(run.sessionId).catch(() => {});
+					await this.opts.launcher.kill(run.sessionId).catch(() => {});
 				run.sessionId = undefined;
 				run.status = "pending";
 				this.executor.blockNode(
@@ -1047,7 +1047,7 @@ export class NodeExecutionAdapter {
 		return { agents, deliverables };
 	}
 
-	/** nodeId, tmux session id, or display name → the tmux session. */
+	/** nodeId, session id, or display name → the session id. */
 	resolveSessionName(target: string): string | undefined {
 		const direct = this.executor.getRunState(target)?.sessionId;
 		if (direct) return direct;
@@ -1093,7 +1093,7 @@ export class NodeExecutionAdapter {
 		spawn: SpawnNodeOpts,
 	): Promise<{ sessionId: string; sessionFile: string }> {
 		const sessionId = `${spawn.nodeId}-${spawn.displayName}`;
-		await this.opts.tmux.spawn(sessionId);
+		await this.opts.launcher.spawn(sessionId);
 		return {
 			sessionId,
 			sessionFile: join(this.opts.planDir, "sessions", `${spawn.nodeId}.jsonl`),

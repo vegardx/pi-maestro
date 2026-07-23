@@ -1,5 +1,6 @@
-// /view and /steer command handlers: read-only tmux splits onto agent
-// sessions and targeted guidance routed through the execution seam.
+// /view and /steer command handlers: a read-only live view of an agent's
+// session (via openAgentLiveView) and targeted guidance routed through the
+// execution seam.
 
 import type {
 	ExtensionCommandContext,

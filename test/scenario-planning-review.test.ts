@@ -42,7 +42,7 @@ function assignment(
 		effort: "high",
 		runtime: {
 			mode: kind === "worker" ? "full" : "read-only",
-			transport: kind === "worker" ? "tmux" : "headless",
+			transport: "headless",
 			tools: {},
 			session: kind === "worker" ? "persistent" : "ephemeral",
 			isolation: "strong",

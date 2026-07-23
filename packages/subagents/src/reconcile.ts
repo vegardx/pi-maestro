@@ -2,10 +2,9 @@
 //
 // Supervision is process-local: the spawning process owns the watchdogs and
 // pending RPC maps. When an intermediate agent dies, its child runs keep
-// running with records stuck non-terminal and live tmux sessions — and
-// retention never prunes active runs, so nobody ever reaps them. This runs at
-// extension startup, before the retention prune, and settles provably
-// orphaned runs failed.
+// running with records stuck non-terminal — and retention never prunes active
+// runs, so nobody ever reaps them. This runs at extension startup, before the
+// retention prune, and settles provably orphaned runs failed.
 //
 // Conservative by design: a run whose recorded process group is ALIVE is
 // never an orphan — not even under a terminal parent — because the owning
@@ -13,7 +12,6 @@
 // only once its record has gone stale, so a supervisor that announced a run
 // but has not yet published pid/session metadata keeps it.
 
-import { spawnSync } from "node:child_process";
 import type { RunId, RunRecord } from "@vegardx/pi-contracts";
 import { isTerminal } from "./state-machine.js";
 import type { RunStore } from "./store.js";
@@ -27,14 +25,12 @@ export interface ReconcileOptions {
 	readonly staleMs?: number;
 	/** Signal-0 liveness probe. EPERM (alive, not ours) must report true. */
 	readonly isProcessAlive?: (processGroup: number) => boolean;
-	/** Kill a session and VERIFY it gone; true only on verified absence. */
-	readonly killTmuxSession?: (session: string) => boolean;
 }
 
 export interface ReconcileResult {
-	/** Settled failed ("orphaned: <reason>") after verified session death. */
+	/** Settled failed ("orphaned: <reason>"). */
 	readonly reaped: RunId[];
-	/** Non-terminal runs left alone (live, recent, or unverifiable session). */
+	/** Non-terminal runs left alone (live process group, or recent). */
 	readonly skipped: RunId[];
 }
 
@@ -45,7 +41,6 @@ export function reconcileOrphanedRuns(
 	const now = opts.now ?? Date.now();
 	const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
 	const isAlive = opts.isProcessAlive ?? isProcessGroupAlive;
-	const killSession = opts.killTmuxSession ?? killAndVerifyTmuxSession;
 
 	const reaped: RunId[] = [];
 	const skipped: RunId[] = [];
@@ -65,15 +60,6 @@ export function reconcileOrphanedRuns(
 
 		const reason = orphanReason(store, record, processGroup, now, staleMs);
 		if (!reason) {
-			skipped.push(record.id);
-			continue;
-		}
-
-		// GC order matters: session first, record second. The record's
-		// tmuxSession field is the only pointer to the session, so settling the
-		// record before verified session death would leak the session forever.
-		const session = metadata?.tmuxSession;
-		if (session && !killSession(session)) {
 			skipped.push(record.id);
 			continue;
 		}
@@ -141,21 +127,4 @@ function isProcessGroupAlive(processGroup: number): boolean {
 		}
 	}
 	return false;
-}
-
-/**
- * Kill a run's tmux session and verify it is gone. Returns true only on
- * verified absence — retention and the reconciler keep the run record
- * otherwise, so the session pointer is never lost while the session might
- * still exist.
- */
-export function killAndVerifyTmuxSession(session: string): boolean {
-	const tmux = (args: string[]) =>
-		spawnSync("tmux", args, { stdio: "ignore", timeout: 5_000 });
-	const probe = tmux(["has-session", "-t", session]);
-	// tmux not installed / server not running / session gone: verified absent.
-	if (probe.error || probe.status !== 0) return true;
-	tmux(["kill-session", "-t", session]);
-	const after = tmux(["has-session", "-t", session]);
-	return Boolean(after.error) || after.status !== 0;
 }

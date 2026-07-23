@@ -86,7 +86,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 		data: () => buildHudSnapshot(rt),
 		theme: () => ctx.ui.theme,
 		actions: {
-			// Enter on an agent row: the /view tmux split (read-only attach).
+			// Enter on an agent row: open the /view read-only live view.
 			attach: (targetId) => {
 				returnToInput();
 				void handleViewCommand(

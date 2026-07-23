@@ -246,7 +246,7 @@ describe("exact model-set selection", () => {
 				role: "worker",
 				runtime: {
 					mode: "full",
-					transport: "tmux",
+					transport: "headless",
 					tools: {},
 					session: "persistent",
 					isolation: "strong",

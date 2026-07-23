@@ -38,7 +38,7 @@ export const AGENT_KINDS = [
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
 export type AgentTargetKind = "host" | "worker" | "run" | "watch";
-export type AgentTransport = "host" | "tmux" | "headless";
+export type AgentTransport = "host" | "headless";
 
 /** Runtime constraints resolved before spawn, never inferred by a child. */
 export interface AgentRuntimePolicy {
@@ -419,8 +419,6 @@ export interface AgentTarget {
 	readonly rootTurnId?: string;
 	readonly pid?: number;
 	readonly processGroup?: number;
-	readonly tmuxSession?: string;
-	readonly tmuxPane?: string;
 	readonly sessionFile?: string;
 	readonly cwd?: string;
 	readonly model?: string;

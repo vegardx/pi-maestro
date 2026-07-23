@@ -11,8 +11,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
 import {
 	type ExecutionEvent,
+	type LauncherApi,
 	NodeExecutionAdapter,
-	type TmuxLikeApi,
 } from "../packages/modes/src/plan/node-adapter.js";
 import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
 import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
@@ -20,7 +20,7 @@ import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 const TOKEN = "agent-events-token";
 
 /** Stub tmux: records spawns; sessions are never "alive" (skips kill waits). */
-function stubTmux(): TmuxLikeApi & { spawned: string[] } {
+function stubTmux(): LauncherApi & { spawned: string[] } {
 	const spawned: string[] = [];
 	return {
 		spawned,
@@ -81,7 +81,7 @@ describe("node execution adapter — onEvent emission", () => {
 		adapter = new NodeExecutionAdapter({
 			engine,
 			planDir: join(tmpDir, "plan"),
-			tmux,
+			launcher: tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
 			defaultBranch: "main",

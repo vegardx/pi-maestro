@@ -1,13 +1,11 @@
 // Headless execution launcher: spawn deliverable workers as detached CHILD
-// PROCESSES instead of tmux panes. It satisfies the same surface the executor
-// and live-spawn use (spawn / hasSession / kill / capture), so nothing else in
-// the execution path changes. Workers still dial home over the RPC socket
-// (PI_MAESTRO_SOCK) exactly as under tmux — tmux was only ever the launcher +
-// live-inspection surface, and this replaces both without a shared tmux server
-// (no cross-session fencing, works in CI, honors PI_MAESTRO_TRANSPORT=headless).
+// PROCESSES. It satisfies the launcher surface the executor and live-spawn use
+// (spawn / hasSession / kill / capture). Workers dial home over the RPC socket
+// (PI_MAESTRO_SOCK); there is no shared server to fence against, so it works in
+// CI and across concurrent sessions.
 //
-// Inspection: tmux gave live panes; headless keeps a per-agent ring of the
-// child's stdout+stderr, surfaced via capture() (crash screens land here too).
+// Inspection: a per-agent ring of the child's stdout+stderr, surfaced via
+// capture() (crash screens land here too); /view tails the session file.
 
 import { type ChildProcess, spawn as nodeSpawn } from "node:child_process";
 
@@ -20,7 +18,7 @@ interface Tracked {
 	exited: boolean;
 }
 
-/** The launcher surface — a superset of LiveSpawnTmux plus `capture`. */
+/** The launcher surface — a superset of LiveSpawnLauncher plus `capture`. */
 export interface HeadlessSpawner {
 	spawn(
 		name: string,

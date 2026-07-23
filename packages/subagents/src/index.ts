@@ -58,10 +58,7 @@ import { runsRoot } from "./paths.js";
 import { persistRunBus } from "./persist.js";
 import { loadPersonas } from "./personas.js";
 import { createChildRunProjectionSource } from "./projections.js";
-import {
-	killAndVerifyTmuxSession,
-	reconcileOrphanedRuns,
-} from "./reconcile.js";
+import { reconcileOrphanedRuns } from "./reconcile.js";
 import { createBuiltinAgentRegistries } from "./registry.js";
 import { DEFAULT_RETENTION, pruneRuns } from "./retention.js";
 import { createAgentRunner } from "./runners.js";
@@ -73,7 +70,6 @@ import {
 	createSupervisorTool,
 	RUN_ID_ENV,
 } from "./supervisor.js";
-import { createTmuxAgentRunner } from "./tmux-runner.js";
 
 export {
 	createAgentsCapability,
@@ -116,7 +112,6 @@ export {
 } from "./profiles.js";
 export { createChildRunProjectionSource } from "./projections.js";
 export {
-	killAndVerifyTmuxSession,
 	type ReconcileOptions,
 	type ReconcileResult,
 	reconcileOrphanedRuns,
@@ -170,10 +165,6 @@ export {
 	type SupervisorProjectorDeps,
 	type SupervisorToolOptions,
 } from "./supervisor.js";
-export {
-	createTmuxAgentRunner,
-	type TmuxRunnerOptions,
-} from "./tmux-runner.js";
 
 // Relay a supervisor request to the human: ask.v1 when present, else the bare
 // UI confirm/select. Returns the chosen answer string.
@@ -216,19 +207,6 @@ function makeDecider(
 // CLI entry point for spawned children, mirroring pi's subagent example: the
 // path pi itself was launched from. undefined in a bundled binary — the runner
 // then relies on RpcClient's own default discovery.
-/**
- * The process-wide spawn transport default. Headless (detached child processes,
- * no tmux server) is the default: runs are inspected by tailing their session
- * file (the /view live view), so there is nothing tmux buys us that headless
- * lacks, and headless has no cross-session fencing and needs no tmux binary.
- * PI_MAESTRO_TRANSPORT=tmux opts back into the legacy pane transport.
- */
-function resolveDefaultTransport(): "tmux" | "headless" {
-	const forced = process.env.PI_MAESTRO_TRANSPORT;
-	if (forced === "headless" || forced === "tmux") return forced;
-	return "headless";
-}
-
 function resolveCliPath(): string | undefined {
 	const entry = process.argv[1];
 	if (!entry || entry.startsWith("/$bunfs/")) return undefined;
@@ -401,31 +379,16 @@ export default defineExtension(
 			ctx = next;
 			const store = createRunStore(runsRoot(next.cwd));
 			persistRunBus(bus, store);
-			const tmuxRunner = createTmuxAgentRunner({
-				semaphore,
-				cliPath: resolveCliPath(),
-				runsRoot: store.root,
-			});
-			const transportRunner: AgentRunner = {
-				launch: (request, targetBus) =>
-					request.profile.transport === "headless"
-						? runner.launch(request, targetBus)
-						: tmuxRunner.launch(request, targetBus),
-			};
 			service = new SubagentService({
 				bus,
 				store,
-				runner: transportRunner,
+				runner,
 				repoRoot: next.cwd,
 				spawnerCwd: next.cwd,
 				ownDepth: currentDepth(),
 				// Children run -ne; pass configured infra extensions (custom model
 				// providers etc) back through for EVERY caller at this one seam.
 				extraExtensions: () => readChildExtensionPaths(next.cwd),
-				// Headless (detached child processes) is the default; runs are
-				// inspected via session-file tailing (/view). PI_MAESTRO_TRANSPORT=tmux
-				// opts back into the legacy pane transport.
-				defaultTransport: resolveDefaultTransport(),
 			});
 			projectionSourceDispose?.();
 			projectionSource = createChildRunProjectionSource({
@@ -462,19 +425,15 @@ export default defineExtension(
 			}
 			// Reap cross-process orphans BEFORE retention: retention never prunes
 			// active records, so a run whose supervising process died would
-			// otherwise sit non-terminal (with a live tmux session) forever.
+			// otherwise sit non-terminal forever.
 			try {
-				reconcileOrphanedRuns(store, {
-					killTmuxSession: killAndVerifyTmuxSession,
-				});
+				reconcileOrphanedRuns(store);
 			} catch {
 				// Best-effort, like retention; never block startup on it.
 			}
 			if (maestro.flags.enabled("retention")) {
 				try {
-					pruneRuns(store, DEFAULT_RETENTION, Date.now(), {
-						killTmuxSession: killAndVerifyTmuxSession,
-					});
+					pruneRuns(store, DEFAULT_RETENTION, Date.now());
 				} catch {
 					// Retention is best-effort; never block startup on it.
 				}
@@ -484,9 +443,8 @@ export default defineExtension(
 
 		// Legacy (pre-cutover) run records: list() skips them so nothing
 		// crashes, and ONCE per store we offer an interactive cleanup —
-		// archive the records to <runsRoot>/_legacy and kill any tmux
-		// sessions they left running. Worktrees referenced by legacy records
-		// are only REPORTED: a reviewer run's cwd is a worktree it merely
+		// archive the records to <runsRoot>/_legacy. Worktrees referenced by
+		// legacy records are only REPORTED: a reviewer run's cwd is a worktree it merely
 		// inspected, so deleting it here could destroy live work.
 		const legacyPrompted = new Set<string>();
 		const offerLegacyCleanup = (
@@ -507,7 +465,7 @@ export default defineExtension(
 			void (async () => {
 				const yes = await next.ui.confirm(
 					"Old Maestro run state",
-					`Found ${legacy.length} run record(s) from an older, incompatible Maestro release under ${store.root}. Archive them now? (Records move to _legacy/; leftover tmux sessions are killed.)`,
+					`Found ${legacy.length} run record(s) from an older, incompatible Maestro release under ${store.root}. Archive them now? (Records move to _legacy/.)`,
 				);
 				if (!yes) {
 					next.ui.notify(
@@ -515,13 +473,6 @@ export default defineExtension(
 						"info",
 					);
 					return;
-				}
-				for (const entry of legacy) {
-					try {
-						await killAndVerifyTmuxSession(`maestro-run-${entry.id}`);
-					} catch {
-						// Best-effort: the session may be long gone.
-					}
 				}
 				const archived = store.archiveLegacy();
 				const worktrees = [

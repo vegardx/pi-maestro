@@ -46,7 +46,7 @@ export type ThinkingLevel =
 	| "xhigh"
 	| "max";
 
-export type RunTransport = "headless" | "tmux";
+export type RunTransport = "headless";
 
 export interface RunProcessMetadata {
 	readonly transport: RunTransport;
@@ -54,8 +54,6 @@ export interface RunProcessMetadata {
 	readonly rootTurnId?: string;
 	readonly pid?: number;
 	readonly processGroup?: number;
-	readonly tmuxSession?: string;
-	readonly tmuxPane?: string;
 	readonly sessionFile?: string;
 	readonly cwd?: string;
 	/**
@@ -135,7 +133,7 @@ export interface SpawnProfile {
 	 * their policy).
 	 */
 	readonly watchdog?: RunWatchdogConfig;
-	/** Execution transport. Long-running work should select tmux explicitly. */
+	/** Execution transport (headless detached child processes). */
 	readonly transport?: RunTransport;
 	/** Human-facing identity and lineage for the unified target registry. */
 	readonly role?: string;

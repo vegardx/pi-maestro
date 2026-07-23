@@ -4,8 +4,6 @@
 // service tests as pure orchestration (the real RpcClient / foreground runners
 // land in the runners+concurrency child deliverable).
 
-import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	InterruptResult,
@@ -77,45 +75,20 @@ export interface SubagentServiceOptions {
 	 */
 	readonly extraExtensions?: () => readonly string[];
 	/**
-	 * Transport for profiles that don't select one. Defaults to "headless" —
-	 * runs are inspected by tailing their session file (/view), so headless
-	 * (no tmux server) is the norm; tmux is an explicit opt-in.
-	 */
-	readonly defaultTransport?: RunTransport;
-	/**
-	 * Cross-process control seams for the steer/interrupt transport fallbacks
-	 * (runs owned by another process have no in-process controller here).
-	 * Tests fake them; the defaults hit the real OS/tmux.
+	 * Cross-process interrupt seam: a run owned by another process has no
+	 * in-process controller, so interrupt signals its recorded process group
+	 * directly. Tests fake it; the default hits the real OS.
 	 */
 	readonly killProcessGroup?: (
 		processGroup: number,
 		signal: NodeJS.Signals,
 	) => void;
-	readonly tmuxSendKeys?: (session: string, keys: string) => void;
 }
 
 // Depth 3 = seat(0) → worker(1) → aggregator/advisor(2) → sub-reader(3, leaf).
 // Covers the intended fan-out trees; a depth-3 agent is a leaf (cannot spawn).
 // Raise only if a depth-3 agent must itself fan out (docs/design/multi-model-agents.md §7).
 const DEFAULT_MAX_DEPTH = 3;
-
-/**
- * Spawn-transport precedence: the operator's PI_MAESTRO_TRANSPORT override
- * beats a per-spawn profile/runtime-policy transport, which beats the service
- * default. The escape hatch exists for harness/sandbox runs where no usable
- * tmux server matches the maestro's environment; a policy that pins tmux there
- * spawns children into the wrong world (the e2e's plan reviewer did exactly
- * that and died on the host's model catalog).
- */
-export function resolveSpawnTransport(
-	profileTransport: RunTransport | undefined,
-	defaultTransport: RunTransport | undefined,
-	env: NodeJS.ProcessEnv = process.env,
-): RunTransport {
-	const forced = env.PI_MAESTRO_TRANSPORT;
-	if (forced === "headless" || forced === "tmux") return forced;
-	return profileTransport ?? defaultTransport ?? "headless";
-}
 
 export class SubagentService implements SubagentsCapabilityV1 {
 	private readonly bus: RunBus;
@@ -129,12 +102,10 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	private readonly controllers = new Map<RunId, RunnerController>();
 
 	private readonly extraExtensions?: () => readonly string[];
-	private readonly defaultTransport?: RunTransport;
 	private readonly killProcessGroup: (
 		processGroup: number,
 		signal: NodeJS.Signals,
 	) => void;
-	private readonly tmuxSendKeys: (session: string, keys: string) => void;
 
 	constructor(opts: SubagentServiceOptions) {
 		this.bus = opts.bus;
@@ -146,9 +117,7 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		this.maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
 		this.ownDepth = opts.ownDepth ?? currentDepth();
 		this.extraExtensions = opts.extraExtensions;
-		this.defaultTransport = opts.defaultTransport;
 		this.killProcessGroup = opts.killProcessGroup ?? defaultKillProcessGroup;
-		this.tmuxSendKeys = opts.tmuxSendKeys ?? defaultTmuxSendKeys;
 	}
 
 	spawn(prompt: string, profile: SpawnProfile): RunHandle {
@@ -171,14 +140,9 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		}
 
 		const runId = this.mintId();
-		// Inspectable tmux runs are the default — pi-maestro requires tmux
-		// (workers have always lived in it) and the transport-failure battery
-		// covers the bridge. Headless is an explicit choice: per profile, per
-		// service, or PI_MAESTRO_TRANSPORT=headless (see index.ts).
-		const transport = resolveSpawnTransport(
-			profile.transport,
-			this.defaultTransport,
-		);
+		// Runs launch headless (detached child processes) and are inspected by
+		// tailing their session file (/view).
+		const transport: RunTransport = "headless";
 		// Lineage is populated at the spawn boundary: a run spawning children
 		// carries its own id in PI_MAESTRO_RUN_ID, so parent linkage (and with
 		// it --children/--tree) works without every caller threading it.
@@ -192,10 +156,9 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			displayName:
 				profile.displayName ?? `${profile.role ?? profile.profile}-${runId}`,
 			// Always persist a session file: it is what /view tails to show a run's
-			// work live, regardless of transport. (tmux additionally opens a pane.)
+			// work live.
 			sessionFile:
 				profile.sessionFile ?? join(this.store.root, runId, "session.jsonl"),
-			...(transport === "tmux" ? { session: true } : {}),
 		};
 		const ctx: SpawnContext = {
 			spawnerCwd: this.spawnerCwd,
@@ -269,9 +232,9 @@ export class SubagentService implements SubagentsCapabilityV1 {
 		if (controller) {
 			controller.steer(guidance);
 			this.bus.publish({ type: "steer", runId, guidance });
-			return;
 		}
-		this.steerViaTransport(runId, guidance);
+		// A run owned by another process has no in-process controller and no
+		// cross-process steer channel — steering it is a no-op.
 	}
 
 	/**
@@ -333,39 +296,10 @@ export class SubagentService implements SubagentsCapabilityV1 {
 	}
 
 	/**
-	 * Transport-level steer for a run owned by another process. The tmux file
-	 * bridge is append-only and the child's tail reads it regardless of which
-	 * process appends — so a well-formed steer line reaches the child without
-	 * an in-process controller. No-op for terminal/unknown runs.
-	 */
-	private steerViaTransport(runId: RunId, guidance: string): void {
-		const record = this.store.readRecord(runId);
-		if (!record || isTerminal(record.status)) return;
-		if (record.metadata?.transport !== "tmux") return;
-		// Host-minted id, disjoint from the owning supervisor's r<N> counter —
-		// its pending map ignores response ids it never issued.
-		const line = JSON.stringify({
-			id: `xsteer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-			type: "steer",
-			message: guidance,
-		});
-		try {
-			appendFileSync(
-				join(this.store.root, runId, "rpc-input.jsonl"),
-				`${line}\n`,
-			);
-		} catch {
-			return; // Bridge file unwritable — nothing reachable to steer.
-		}
-		this.bus.publish({ type: "steer", runId, guidance });
-	}
-
-	/**
 	 * Transport-level interrupt for a run owned by another process, derived
-	 * from the persisted record: signal the recorded process group directly,
-	 * falling back to C-c into the tmux session when only the session is
-	 * known. Terminal runs are never signalled — their process facts are stale
-	 * (pids recycle), so a signal could hit an unrelated process.
+	 * from the persisted record: signal the recorded process group directly.
+	 * Terminal runs are never signalled — their process facts are stale (pids
+	 * recycle), so a signal could hit an unrelated process.
 	 */
 	private async interruptViaTransport(runId: RunId): Promise<InterruptResult> {
 		const targetId = `run:${runId}`;
@@ -398,24 +332,6 @@ export class SubagentService implements SubagentsCapabilityV1 {
 			});
 			return { outcome: "accepted", targetId, detail };
 		}
-		if (metadata?.tmuxSession) {
-			try {
-				this.tmuxSendKeys(metadata.tmuxSession, "C-c");
-			} catch (error) {
-				return {
-					outcome: "disconnected",
-					targetId,
-					detail: error instanceof Error ? error.message : String(error),
-				};
-			}
-			this.bus.publish({
-				type: "status",
-				runId,
-				status: "interrupting",
-				at: Date.now(),
-			});
-			return { outcome: "accepted", targetId, detail };
-		}
 		return { outcome: "disconnected", targetId };
 	}
 }
@@ -425,17 +341,6 @@ function defaultKillProcessGroup(
 	signal: NodeJS.Signals,
 ): void {
 	process.kill(-processGroup, signal);
-}
-
-function defaultTmuxSendKeys(session: string, keys: string): void {
-	const result = spawnSync("tmux", ["send-keys", "-t", session, keys], {
-		stdio: "ignore",
-		timeout: 5_000,
-	});
-	if (result.error) throw result.error;
-	if (result.status !== 0) {
-		throw new Error(`tmux send-keys exited ${result.status}`);
-	}
 }
 
 function defaultMintId(): RunId {

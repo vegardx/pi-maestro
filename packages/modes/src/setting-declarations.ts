@@ -197,7 +197,7 @@ export const EXECUTION_POLICY_SETTINGS = [
 		default: 5000,
 		group: "agent-lifecycle",
 		description:
-			"Fleet-wide deadline for cooperative worker shutdown before tmux escalation (0–60000).",
+			"Fleet-wide deadline for cooperative worker shutdown before force-termination (0–60000).",
 	},
 ] as const satisfies readonly SettingDeclaration[];
 

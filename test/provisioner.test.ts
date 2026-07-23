@@ -442,20 +442,18 @@ describe("buildSpawnSpec crash capture", () => {
 		kickoffMessage: "Implement the tasks in your seed.",
 	};
 
-	it("wraps pi in a pane-capture shell when crashFile is set", () => {
+	it("wraps pi in a stdio-redirect shell when crashFile is set", () => {
 		const spec = buildSpawnSpec({
 			...baseOpts,
 			crashFile: "/plans/slug/crashes/maestro-g1-worker.log",
 		});
 		expect(typeof spec.command).toBe("string");
 		const cmd = spec.command as string;
-		// pi argv is single-quoted; the wrapper captures the pane and preserves
-		// pi's exit code so hasSession-based crash detection still works.
-		expect(cmd).toContain("'pi' '-ne'");
-		expect(cmd).toContain('tmux capture-pane -p -S -120 -t "$TMUX_PANE"');
+		// pi argv is single-quoted; the wrapper redirects the child's stdout and
+		// stderr to the crash file so a dying worker's screen survives.
+		expect(cmd).toContain("exec 'pi' '-ne'");
 		expect(cmd).toContain("'/plans/slug/crashes/maestro-g1-worker.log'");
-		expect(cmd).toContain("[pi exited code=$ec]");
-		expect(cmd.trim().endsWith("exit $ec")).toBe(true);
+		expect(cmd.trim().endsWith("2>&1")).toBe(true);
 	});
 
 	it("quotes hazardous kickoff text inside the wrapper", () => {

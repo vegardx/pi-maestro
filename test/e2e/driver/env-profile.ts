@@ -9,9 +9,8 @@
 //            passed in here; this module wires them.)
 //
 // Both use an isolated pi HOME so plan state never touches the developer's
-// `~/.pi`, and both default the worker transport to `headless` — headless spawns
-// workers as child processes that inherit this env directly, so the mock
-// provider / PATH shim reach every worker without any tmux env-propagation.
+// `~/.pi`. Workers spawn as detached child processes that inherit this env
+// directly, so the mock provider / PATH shim reach every worker.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -187,8 +186,6 @@ function writeSettings(piHome: string, extensionConfig: object): void {
 // --- Live profile ----------------------------------------------------------
 
 export interface LiveEnvOptions {
-	/** Worker transport; defaults to "headless" (works without a tmux server). */
-	readonly transport?: "tmux" | "headless";
 	/** Model pattern (--model); omit to use the copied profile's default. */
 	readonly model?: string;
 	/** Skip creating a GitHub repo; use a local bare remote instead (offline live). */
@@ -275,13 +272,11 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 			models: opts.models,
 		});
 	}
-	const transport = opts.transport ?? "headless";
-
 	let repoDir: string;
 	let deleteRepo: (() => void) | undefined;
 	let bareRemote: string | undefined;
 	let ghState: string | undefined;
-	const env: Record<string, string> = { PI_MAESTRO_TRANSPORT: transport };
+	const env: Record<string, string> = {};
 	if (opts.localRemote) {
 		// Under ~/src/github.com/ so workers inherit the developer's real git
 		// identity via includeIf — a temp-dir clone resolves none and every
@@ -485,7 +480,6 @@ export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 		piHome,
 		extraExtensions: [opts.mockProviderExtension],
 		env: {
-			PI_MAESTRO_TRANSPORT: "headless",
 			PI_E2E_MOCK_URL: opts.mockBaseUrl,
 			PI_E2E_GH_STATE: ghState,
 			PATH: `${opts.ghShimDir}:${process.env.PATH ?? ""}`,

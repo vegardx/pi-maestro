@@ -141,7 +141,7 @@ async function boot(
 	adapter = new NodeExecutionAdapter({
 		engine,
 		planDir,
-		tmux: stubTmux(),
+		launcher: stubTmux(),
 		token: TOKEN,
 		socketPath,
 		defaultBranch: "main",
@@ -351,7 +351,7 @@ describe("children + contracts + resolution over RPC", () => {
 		adapter = new NodeExecutionAdapter({
 			engine,
 			planDir,
-			tmux: stubTmux(),
+			launcher: stubTmux(),
 			token: TOKEN,
 			socketPath,
 			defaultBranch: "main",

@@ -827,7 +827,7 @@ function mapEvent(bus: RunBus, runId: RunId, event: AgentSessionEvent): void {
 	// the maestro's event loop drowned (221MB of delta logs, laggy TUI,
 	// 2026-07-15 dogfood). Nothing consumes them: watchdog liveness is
 	// tracked in the runner's own onEvent (before this filter), salvage uses
-	// getLastAssistantText, and live inspection watches the tmux pane.
+	// getLastAssistantText, and live inspection tails the session file.
 	if (event.type === "tool_execution_start") {
 		bus.publish({ type: "agentEvent", runId, event });
 		// Keep the progress shortcut for the widget.

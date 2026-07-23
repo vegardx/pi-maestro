@@ -78,8 +78,7 @@ export function mapProfileToInvocation(
 	for (const ext of resolved.disableExtensions) env[envVarFor(ext)] = "off";
 	// Deliberate propagation, not accidental inheritance: a child must resolve
 	// the SAME config dir (model catalog, auth) as its maestro. pi has no CLI
-	// flag for the agent dir, so env is the only channel — and a tmux child
-	// gets the tmux SERVER's environment, not the maestro's, so without this a
+	// flag for the agent dir, so env is the only channel — without this a
 	// sandboxed maestro (isolated HOME/PI_CODING_AGENT_DIR) spawns children
 	// that read the host's config and can't see its models.
 	if (process.env.PI_CODING_AGENT_DIR) {

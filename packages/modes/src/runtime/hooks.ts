@@ -367,9 +367,6 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		rt.isolationNoneSession = false;
 		rt.invalidateFooter = undefined;
 		rt.hud?.dispose();
-		if (rt.workerPanes.isOpen()) {
-			await rt.workerPanes.close();
-		}
 		if (rt.execution) {
 			const requestedAt = Date.now();
 			rt.setExecutionStage(

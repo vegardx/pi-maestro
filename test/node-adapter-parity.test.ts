@@ -148,7 +148,7 @@ async function boot(opts?: {
 	adapter = new NodeExecutionAdapter({
 		engine,
 		planDir,
-		tmux: stubTmux(),
+		launcher: stubTmux(),
 		token: TOKEN,
 		socketPath,
 		defaultBranch: "main",
@@ -191,7 +191,7 @@ describe("parity twin: lifecycle over the real RPC protocol", () => {
 		adapter = new NodeExecutionAdapter({
 			engine,
 			planDir,
-			tmux: stubTmux(),
+			launcher: stubTmux(),
 			token: TOKEN,
 			socketPath,
 			defaultBranch: "main",

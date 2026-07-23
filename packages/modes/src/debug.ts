@@ -71,7 +71,7 @@ export interface DebugSnapshot {
 		readonly generation: number;
 		readonly sessionPath?: string;
 		readonly previousSessionPaths: readonly string[];
-		readonly tmuxSession?: string;
+		readonly sessionName?: string;
 		readonly status?: string;
 		readonly worktreePath?: string;
 		readonly branch?: string;
@@ -274,7 +274,7 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 							normalizeDebugPath,
 						),
 						...(deliverable.sessionName
-							? { tmuxSession: deliverable.sessionName }
+							? { sessionName: deliverable.sessionName }
 							: {}),
 						...(worker?.status ? { status: worker.status } : {}),
 						...(deliverable.worktreePath

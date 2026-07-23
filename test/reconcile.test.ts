@@ -1,8 +1,6 @@
 // Orphan reconciler battery. The invariants under test: reap only with proof
 // of orphanhood (dead process group, terminal parent, or stale ownerless
-// record), never reap anything a live process may still supervise, and always
-// verify the tmux session dead BEFORE settling the record (the record is the
-// only pointer to the session).
+// record), and never reap anything a live process may still supervise.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -48,31 +46,18 @@ describe("orphan reconciler", () => {
 		});
 	}
 
-	it("reaps an orphan (terminal parent, dead pgid): session killed BEFORE the record settles", () => {
+	it("reaps an orphan (terminal parent, dead pgid), settling the record failed", () => {
 		seed("parent", "succeeded");
 		seed("child", "running", {
 			parent: id("parent"),
-			metadata: {
-				transport: "tmux",
-				processGroup: 4242,
-				tmuxSession: "maestro-run-child",
-			},
+			metadata: { transport: "headless", processGroup: 4242 },
 		});
 
-		const killed: string[] = [];
 		const { reaped, skipped } = reconcileOrphanedRuns(store, {
 			now: NOW,
 			isProcessAlive: () => false,
-			killTmuxSession: (session) => {
-				// Ordering proof: at kill time the record must still be active —
-				// settling first would erase the only pointer to the session.
-				expect(store.readRecord(id("child"))?.status).toBe("running");
-				killed.push(session);
-				return true;
-			},
 		});
 
-		expect(killed).toEqual(["maestro-run-child"]);
 		expect(reaped).toEqual([id("child")]);
 		expect(skipped).toEqual([]);
 		const record = store.readRecord(id("child"));
@@ -84,15 +69,12 @@ describe("orphan reconciler", () => {
 		seed("parent", "failed");
 		seed("child", "running", {
 			parent: id("parent"),
-			metadata: { transport: "tmux", processGroup: 4242 },
+			metadata: { transport: "headless", processGroup: 4242 },
 		});
 
 		const { reaped, skipped } = reconcileOrphanedRuns(store, {
 			now: NOW,
 			isProcessAlive: () => true,
-			killTmuxSession: () => {
-				throw new Error("must not touch the session of a live run");
-			},
 		});
 
 		expect(reaped).toEqual([]);
@@ -129,28 +111,6 @@ describe("orphan reconciler", () => {
 		expect(record?.result?.error).toMatch(/^orphaned: no owning process/);
 	});
 
-	it("skips an orphan whose session kill cannot be verified, record untouched", () => {
-		seed("wedged", "running", {
-			metadata: {
-				transport: "tmux",
-				processGroup: 4242,
-				tmuxSession: "maestro-run-wedged",
-			},
-		});
-
-		const { reaped, skipped } = reconcileOrphanedRuns(store, {
-			now: NOW,
-			isProcessAlive: () => false,
-			killTmuxSession: () => false,
-		});
-
-		expect(reaped).toEqual([]);
-		expect(skipped).toEqual([id("wedged")]);
-		const record = store.readRecord(id("wedged"));
-		expect(record?.status).toBe("running");
-		expect(record?.metadata?.tmuxSession).toBe("maestro-run-wedged");
-	});
-
 	it("ignores terminal runs entirely", () => {
 		seed("done", "succeeded");
 		seed("dead", "failed");
@@ -184,7 +144,7 @@ describe("orphan reconciler", () => {
 
 	it("a live parent keeps a recent ownerless child", () => {
 		seed("parent", "running", {
-			metadata: { transport: "tmux", processGroup: 1111 },
+			metadata: { transport: "headless", processGroup: 1111 },
 		});
 		seed("child", "running", {
 			parent: id("parent"),

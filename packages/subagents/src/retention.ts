@@ -24,25 +24,12 @@ export const DEFAULT_RETENTION: RetentionPolicy = {
 export interface PruneResult {
 	readonly pruned: RunId[];
 	readonly truncated: RunId[];
-	/** Runs kept because their tmux session could not be verified gone. */
-	readonly retained: RunId[];
-}
-
-export interface PruneHooks {
-	/**
-	 * Kill a run's retained tmux session and VERIFY it is gone; return true
-	 * only on verified absence. Called BEFORE the run record is removed — the
-	 * record's tmuxSession field is the only pointer to the session, so
-	 * deleting metadata first would leak dead sessions forever.
-	 */
-	readonly killTmuxSession?: (session: string) => boolean;
 }
 
 export function pruneRuns(
 	store: RunStore,
 	policy: RetentionPolicy = DEFAULT_RETENTION,
 	now: number = Date.now(),
-	hooks: PruneHooks = {},
 ): PruneResult {
 	const records = store.list();
 	const prunable = records.filter((r) => !isActive(r.status));
@@ -51,20 +38,12 @@ export function pruneRuns(
 
 	const cutoff = now - policy.maxAgeDays * 24 * 60 * 60 * 1000;
 	const pruned: RunId[] = [];
-	const retained: RunId[] = [];
 
 	for (let i = 0; i < prunable.length; i++) {
 		const record = prunable[i];
 		const overCap = i >= policy.maxRuns;
 		const tooOld = record.updatedAt < cutoff;
 		if (!overCap && !tooOld) continue;
-		// GC order matters: session first, metadata second. A run record with
-		// a tmux session is removed only after the session is verified gone.
-		const session = record.metadata?.tmuxSession;
-		if (session && hooks.killTmuxSession && !hooks.killTmuxSession(session)) {
-			retained.push(record.id);
-			continue;
-		}
 		store.remove(record.id);
 		pruned.push(record.id);
 	}
@@ -77,7 +56,7 @@ export function pruneRuns(
 		}
 	}
 
-	return { pruned, truncated, retained };
+	return { pruned, truncated };
 }
 
 /**

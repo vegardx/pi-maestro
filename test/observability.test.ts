@@ -11,15 +11,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
 import {
 	type AgentStateSnapshot,
+	type LauncherApi,
 	NodeExecutionAdapter,
-	type TmuxLikeApi,
 } from "../packages/modes/src/plan/node-adapter.js";
 import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "obs-test-token";
 
 /** Stub tmux: records spawns; sessions are never "alive" (skips kill waits). */
-function stubTmux(): TmuxLikeApi & { spawned: string[] } {
+function stubTmux(): LauncherApi & { spawned: string[] } {
 	const spawned: string[] = [];
 	return {
 		spawned,
@@ -94,7 +94,7 @@ describe("node execution adapter observability", () => {
 		adapter = new NodeExecutionAdapter({
 			engine,
 			planDir,
-			tmux,
+			launcher: tmux,
 			token: TOKEN,
 			socketPath: join(tmpDir, "maestro.sock"),
 			defaultBranch: "main",

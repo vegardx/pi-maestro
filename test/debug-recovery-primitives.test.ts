@@ -349,7 +349,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 		adapter = new NodeExecutionAdapter({
 			engine,
 			planDir: join(root, "plan"),
-			tmux,
+			launcher: tmux,
 			token: "test-token",
 			socketPath: join(root, "rpc.sock"),
 			defaultBranch: "main",

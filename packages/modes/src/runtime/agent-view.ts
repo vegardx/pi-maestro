@@ -5,8 +5,7 @@
 // session file the maestro already knows the path of (agent-targets sessionFile).
 //
 // Granularity is per-message (session files write on message boundaries), not
-// per-token — each step lands as it completes. This is a prototype behind /view;
-// worker-panes + the @vegardx/pi-tmux package are a separate removal follow-up.
+// per-token — each step lands as it completes.
 
 import { readFileSync, statSync } from "node:fs";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";

@@ -24,7 +24,6 @@ import {
 	gitToplevel,
 } from "@vegardx/pi-git";
 import { resolveV2Model } from "@vegardx/pi-models";
-import * as realTmux from "@vegardx/pi-tmux";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
@@ -39,7 +38,6 @@ import type { IsolationBackend } from "../isolation/backend.js";
 import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { PlanEngineV2 } from "../plan/engine.js";
-import type { NodeAdapterOptions } from "../plan/node-adapter.js";
 import { resolveNodeModel } from "../plan/node-periphery.js";
 import {
 	derivePlanName,
@@ -83,7 +81,6 @@ import {
 	type UsageDelta,
 	UsageLedger,
 } from "../usage-ledger.js";
-import { WorkerPanes } from "../worker-panes.js";
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
@@ -125,7 +122,6 @@ export interface RuntimeContext {
 	readonly askQueue: ModesAskQueue;
 	readonly overlayManager: OverlayManager;
 	readonly usageLedger: UsageLedger;
-	readonly workerPanes: WorkerPanes;
 	readonly bashBackends: NonNullable<ModesRuntimeOptions["bashBackends"]>;
 	readonly isolationBackends: {
 		readonly lightweight: IsolationBackend;
@@ -435,7 +431,6 @@ export function createRuntimeContext(
 		askQueue,
 		overlayManager,
 		usageLedger,
-		workerPanes: new WorkerPanes(),
 		bashBackends,
 		isolationBackends: {
 			lightweight: lightweightIsolation,
@@ -756,8 +751,6 @@ export function createRuntimeContext(
 				{ stage: "executing", deliverableId: "maestro" },
 				ctx,
 			);
-			const sessions = rt.execution.getWorkerSessions();
-			if (sessions.length > 0) await rt.workerPanes.open(sessions);
 			ctx.ui.notify(
 				target
 					? `Started ${target.id}.`
@@ -802,7 +795,6 @@ export function createRuntimeContext(
 				},
 				ctx,
 			);
-			await rt.workerPanes.close();
 			// A stopped adapter is terminal (mirrors /restart): tear it down and
 			// clear the handle. Otherwise rt.execution stays truthy at stage
 			// "stopped", and the next transition — session_shutdown or a second
@@ -923,42 +915,33 @@ export function createRuntimeContext(
 					...readChildExtensions(ctx.cwd).map((p) => resolve(p)),
 				]),
 			];
-			// Worker launch transport. Headless (detached child processes, no tmux
-			// server) is the default: workers are inspected by tailing their session
-			// file (/view), so tmux buys nothing here and is an explicit opt-in. One
-			// launcher instance is shared so the executor's liveness/capture see the
-			// same processes live-spawn started.
-			const workerTransport: "tmux" | "headless" =
-				process.env.PI_MAESTRO_TRANSPORT === "tmux" ? "tmux" : "headless";
-			const headlessLauncher =
-				workerTransport === "headless" ? createHeadlessSpawner() : undefined;
+			// Workers launch headless (detached child processes) and are inspected
+			// by tailing their session file (/view). One launcher instance is
+			// shared so the executor's liveness/reap/capture see the same
+			// processes live-spawn started.
+			const headlessLauncher = createHeadlessSpawner();
 			rt.execution = createExecution({
 				engine: activeEngine,
 				planDir,
 				token,
 				socketPath,
 				defaultBranch: detectDefaultBranch(ctx.cwd) ?? "main",
-				...(headlessLauncher
-					? {
-							// The real spawn is spawnAgent/live-spawn; here the adapter
-							// only needs liveness/reap/capture over the same registry.
-							tmux: {
-								spawn: async () => {},
-								hasSession: (name: string) => headlessLauncher.hasSession(name),
-								kill: (name: string) => headlessLauncher.kill(name),
-								capture: (name: string, lines?: number) =>
-									headlessLauncher.capture(name, lines),
-							} as NodeAdapterOptions["tmux"],
-						}
-					: {}),
-				// The production spawn: real pi (tmux pane or detached child) with
-				// persona seed head, session file, and crash capture. It shares the
-				// adapter's socket/token so agents dial home.
+				// The real spawn is spawnAgent/live-spawn; here the launcher only
+				// needs liveness/reap/capture over the same registry.
+				launcher: {
+					spawn: async () => {},
+					hasSession: (name: string) => headlessLauncher.hasSession(name),
+					kill: (name: string) => headlessLauncher.kill(name),
+					capture: (name: string, lines?: number) =>
+						headlessLauncher.capture(name, lines),
+				},
+				// The production spawn: real pi (detached child) with persona seed
+				// head, session file, and crash capture. It shares the adapter's
+				// socket/token so agents dial home.
 				spawnAgent: createLiveSpawnAgent({
 					engine: activeEngine,
 					ctx,
-					tmux: headlessLauncher ?? realTmux,
-					transport: workerTransport,
+					launcher: headlessLauncher,
 					planDir,
 					extensionPaths,
 					socketPath,
@@ -1045,12 +1028,6 @@ export function createRuntimeContext(
 					});
 					rt.invalidateFooter?.();
 					rt.hud?.refresh();
-					// Sync worker panes when agents complete
-					if (rt.execution && rt.workerPanes.isOpen()) {
-						rt.workerPanes
-							.sync(rt.execution.getWorkerSessions())
-							.catch(() => {});
-					}
 				},
 				// The settled card (onEvent) is the recap now; onAllSettled
 				// refreshes the footer and clears the agent widget. Research
@@ -1233,8 +1210,6 @@ export function createRuntimeContext(
 					{ stage: "executing", deliverableId: "maestro" },
 					ctx,
 				);
-				const sessions = rt.execution.getWorkerSessions();
-				if (sessions.length > 0) await rt.workerPanes.open(sessions);
 			}
 			const parts = [
 				recovered.length > 0

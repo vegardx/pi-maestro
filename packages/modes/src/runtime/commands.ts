@@ -468,31 +468,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
-	pi.registerCommand("watch", {
-		description:
-			"Toggle stacked tmux panes showing all active agents on the right side.",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (!rt.execution) {
-				ctx.ui.notify("No agents active (tmux required).", "info");
-				return;
-			}
-			if (rt.workerPanes.isOpen() || rt.workerPanes.isEnabled()) {
-				await rt.workerPanes.close();
-				ctx.ui.notify("Worker panes closed.", "info");
-			} else {
-				await rt.workerPanes.open(rt.execution.getWorkerSessions());
-				if (rt.workerPanes.terminalTooSmall()) {
-					ctx.ui.notify(
-						"Worker panes enabled — will appear when terminal is larger (≥160×40).",
-						"info",
-					);
-				} else {
-					ctx.ui.notify("Worker panes opened.", "info");
-				}
-			}
-		},
-	});
-
 	pi.registerCommand("steer", {
 		description: "Steer an agent. /steer <name> <guidance>",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -504,7 +479,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					maestro.capabilities.get(CAPABILITIES.subagents),
 				);
 			} else {
-				ctx.ui.notify("No agents active (tmux required).", "info");
+				ctx.ui.notify("No agents active.", "info");
 			}
 		},
 	});

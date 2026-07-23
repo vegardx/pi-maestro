@@ -2,10 +2,10 @@
 // createExecution. Ports the v1 execution-adapter spawn closure verbatim onto
 // the node seam: session naming, persona seed head, session-file assembly
 // (knowledge fork), commit-policy/install notes, post-freeze research refs,
-// crash capture, stale-session reaping, and the real tmux launch. Model and
-// effort arrive ALREADY RESOLVED on SpawnNodeOpts (the adapter's resolveModel
-// seam records the NodeResolution before spawn) — this module only decides
-// whether to pass --model (cache-warm omission when it matches the session).
+// crash capture, stale-session reaping, and the real detached-child launch.
+// Model and effort arrive ALREADY RESOLVED on SpawnNodeOpts (the adapter's
+// resolveModel seam records the NodeResolution before spawn) — this module only
+// decides whether to pass --model (cache-warm omission when it matches).
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -33,8 +33,8 @@ import {
 	defaultAgentDir,
 } from "./provisioner.js";
 
-/** The tmux surface live spawning needs (realTmux satisfies it). */
-export interface LiveSpawnTmux {
+/** The launcher surface live spawning needs (the headless spawner satisfies it). */
+export interface LiveSpawnLauncher {
 	spawn(
 		name: string,
 		cwd: string,
@@ -52,10 +52,7 @@ export interface LiveSpawnTmux {
 export interface LiveSpawnWiring {
 	readonly engine: PlanEngineV2;
 	readonly ctx: ExtensionContext;
-	readonly tmux: LiveSpawnTmux;
-	/** Launch transport: `headless` (detached child process) or `tmux`
-	 *  (default). Governs whether buildSpawnSpec emits the tmux crash wrapper. */
-	readonly transport?: "tmux" | "headless";
+	readonly launcher: LiveSpawnLauncher;
 	readonly planDir: string;
 	/** Repeated `-e` extension paths for the child pi. */
 	readonly extensionPaths: readonly string[];
@@ -91,7 +88,7 @@ export function createLiveSpawnAgent(
 		const plan = wiring.engine.get();
 		const node = findNodeV2(plan, spawn.nodeId);
 		if (!node) throw new Error(`node ${spawn.nodeId} not found in plan`);
-		// Node ids are agent keys AND tmux-name seeds; the executor dedupes
+		// Node ids are agent keys AND session-name seeds; the executor dedupes
 		// display names across live run states, so the display name is the
 		// session name (v1's agentName picks, same generator).
 		const sessionName = spawn.displayName;
@@ -228,7 +225,6 @@ export function createLiveSpawnAgent(
 			},
 			kickoffMessage,
 			crashFile: join(wiring.planDir, "crashes", `${sessionName}.log`),
-			...(wiring.transport ? { transport: wiring.transport } : {}),
 			...(modelOverride ? { model: modelOverride } : {}),
 			...(spawn.effort ? { thinking: spawn.effort } : {}),
 		});
@@ -242,14 +238,14 @@ export function createLiveSpawnAgent(
 				(name): name is string => typeof name === "string",
 			),
 		)) {
-			if (await wiring.tmux.hasSession(stale)) {
-				await wiring.tmux.kill(stale).catch(() => {});
+			if (await wiring.launcher.hasSession(stale)) {
+				await wiring.launcher.kill(stale).catch(() => {});
 			}
 		}
 
 		const cols = process.stdout.columns || 200;
 		const rows = process.stdout.rows || 50;
-		await wiring.tmux.spawn(spec.sessionName, spec.cwd, spec.command, {
+		await wiring.launcher.spawn(spec.sessionName, spec.cwd, spec.command, {
 			width: cols,
 			height: rows,
 			env: spec.env,

@@ -26,7 +26,7 @@ import {
 } from "../packages/modes/src/exec/knowledge.js";
 import {
 	createLiveSpawnAgent,
-	type LiveSpawnTmux,
+	type LiveSpawnLauncher,
 } from "../packages/modes/src/exec/live-spawn.js";
 import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
 import type { SpawnNodeOpts } from "../packages/modes/src/plan/node-executor.js";
@@ -73,11 +73,11 @@ interface TmuxCall {
 
 /** Ordered fake tmux; `alive` names report hasSession true until killed. */
 function fakeTmux(alive: Set<string> = new Set()): {
-	tmux: LiveSpawnTmux;
+	launcher: LiveSpawnLauncher;
 	calls: TmuxCall[];
 } {
 	const calls: TmuxCall[] = [];
-	const tmux: LiveSpawnTmux = {
+	const tmux: LiveSpawnLauncher = {
 		async spawn(name, cwd, command, opts) {
 			calls.push({ op: "spawn", name, cwd, command, env: opts?.env });
 		},
@@ -90,7 +90,7 @@ function fakeTmux(alive: Set<string> = new Set()): {
 			alive.delete(name);
 		},
 	};
-	return { tmux, calls };
+	return { launcher: tmux, calls };
 }
 
 type SessionLine = Record<string, unknown>;
@@ -161,7 +161,7 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 	});
 
 	function makeSpawnAgent(opts?: {
-		tmux?: LiveSpawnTmux;
+		launcher?: LiveSpawnLauncher;
 		model?: { provider: string; id: string };
 	}) {
 		return createLiveSpawnAgent({
@@ -170,7 +170,7 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 				cwd: tmpDir,
 				model: opts?.model ?? { provider: "test", id: "worker" },
 			} as unknown as ExtensionContext,
-			tmux: opts?.tmux ?? fakeTmux().tmux,
+			launcher: opts?.launcher ?? fakeTmux().launcher,
 			planDir,
 			extensionPaths: ["/ext/maestro"],
 			socketPath: join(tmpDir, "maestro.sock"),
@@ -200,8 +200,8 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 			repoPath: tmpDir,
 			outPath: join(planDir, "base-knowledge.jsonl"),
 		});
-		const { tmux, calls } = fakeTmux();
-		const spawnAgent = makeSpawnAgent({ tmux });
+		const { launcher, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ launcher });
 
 		const spawned = await spawnAgent(spawnOpts());
 		expect(spawned.sessionId).toBe("auth-worker");
@@ -238,9 +238,9 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 			seed.indexOf(EXECUTOR_SEED),
 		);
 
-		// The tmux launch: crash-capture wrapper (a shell string capturing the
-		// pane into <planDir>/crashes/<session>.log), the -e extension list, the
-		// assembled session file, and the fresh-worker kickoff.
+		// The launch: crash-capture wrapper (a shell string redirecting the
+		// child's stdio into <planDir>/crashes/<session>.log), the -e extension
+		// list, the assembled session file, and the fresh-worker kickoff.
 		const spawn = calls.find((c) => c.op === "spawn");
 		expect(spawn).toBeDefined();
 		expect(spawn?.name).toBe("auth-worker");
@@ -248,7 +248,8 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 		const command = spawn?.command;
 		expect(typeof command).toBe("string");
 		const cmd = command as string;
-		expect(cmd).toContain("capture-pane");
+		expect(cmd).toContain("exec ");
+		expect(cmd).toContain("2>&1");
 		expect(cmd).toContain(join(planDir, "crashes", "auth-worker.log"));
 		expect(cmd).toContain("/ext/maestro");
 		expect(cmd).toContain(spawned.sessionFile);
@@ -285,8 +286,8 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 	});
 
 	it("passes --model on a fresh spawn when it differs from the session model", async () => {
-		const { tmux, calls } = fakeTmux();
-		const spawnAgent = makeSpawnAgent({ tmux });
+		const { launcher, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ launcher });
 
 		await spawnAgent(spawnOpts({ model: "sit-openai/gpt-5.6-sol" }));
 
@@ -298,8 +299,8 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 	it("resume: reuses the session file, skips seeding, and ALWAYS passes the model", async () => {
 		const resumeFile = join(tmpDir, "prior-session.jsonl");
 		writeFileSync(resumeFile, "{}\n");
-		const { tmux, calls } = fakeTmux();
-		const spawnAgent = makeSpawnAgent({ tmux });
+		const { launcher, calls } = fakeTmux();
+		const spawnAgent = makeSpawnAgent({ launcher });
 
 		// The resolved model EQUALS the maestro session model — a fresh spawn
 		// would omit it, but a resume must pass it: pi otherwise restores a
@@ -331,8 +332,8 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 		// A prior maestro epoch persisted a different session name on the
 		// ledger; a crash orphan may also hold the CURRENT name.
 		engine.setNodeRuntime("implement-auth", { sessionName: "stale-old" });
-		const { tmux, calls } = fakeTmux(new Set(["stale-old", "auth-worker"]));
-		const spawnAgent = makeSpawnAgent({ tmux });
+		const { launcher, calls } = fakeTmux(new Set(["stale-old", "auth-worker"]));
+		const spawnAgent = makeSpawnAgent({ launcher });
 
 		await spawnAgent(spawnOpts());
 

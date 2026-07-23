@@ -1,7 +1,7 @@
-// Self-tests for the fake-agent harness (test/fixtures/fake-agent.ts +
-// fake-tmux.ts): each role is run against a real MaestroRpcServer with a
-// minimal hand-rolled maestro stub, asserting the scripted message sequences.
-// Wave 3 supervisor tests build on these fixtures.
+// Self-tests for the fake-agent harness (test/fixtures/fake-agent.ts): each
+// role is run against a real MaestroRpcServer with a minimal hand-rolled
+// maestro stub, asserting the scripted message sequences. Wave 3 supervisor
+// tests build on these fixtures.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,18 +13,12 @@ import {
 	MaestroRpcServer,
 	PROTOCOL_VERSION,
 } from "@vegardx/pi-rpc";
-import * as tmux from "@vegardx/pi-tmux";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type FakeAgentHandle,
 	type FakeAgentScript,
 	runFakeAgent,
 } from "./fixtures/fake-agent.js";
-import {
-	FakeTmux,
-	parseEnvAssignments,
-	type TmuxLike,
-} from "./fixtures/fake-tmux.js";
 
 const TOKEN = "run-token-1";
 
@@ -153,7 +147,6 @@ describe("fake-agent harness", () => {
 	let server: MaestroRpcServer;
 	let stub: MaestroStub;
 	const handles: FakeAgentHandle[] = [];
-	const fakeTmuxes: FakeTmux[] = [];
 
 	beforeEach(async () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "fake-agent-test-"));
@@ -165,7 +158,6 @@ describe("fake-agent harness", () => {
 
 	afterEach(async () => {
 		for (const handle of handles.splice(0)) handle.close();
-		for (const ft of fakeTmuxes.splice(0)) await ft.destroy();
 		await server.close();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
@@ -174,12 +166,6 @@ describe("fake-agent harness", () => {
 		const handle = runFakeAgent({ socketPath, agentId, token: TOKEN, script });
 		handles.push(handle);
 		return handle;
-	}
-
-	function createFakeTmux(): FakeTmux {
-		const ft = new FakeTmux();
-		fakeTmuxes.push(ft);
-		return ft;
 	}
 
 	describe("happyWorker", () => {
@@ -337,126 +323,6 @@ describe("fake-agent harness", () => {
 			server.send("g1/worker", { type: "shutdown" });
 			await handle.waitFor("exited");
 			await expect(handle.finished).resolves.toBeUndefined();
-		});
-	});
-
-	describe("FakeTmux", () => {
-		it("real tmux module satisfies TmuxLike", () => {
-			const real: TmuxLike = tmux;
-			expect(typeof real.spawn).toBe("function");
-			expect(typeof real.hasSession).toBe("function");
-			expect(typeof real.kill).toBe("function");
-		});
-
-		it("parses leading env assignments from adapter-style commands", () => {
-			expect(
-				parseEnvAssignments(
-					"PI_MAESTRO_SOCK=/tmp/m.sock PI_MAESTRO_AGENT_ID=g1/worker pi --session x",
-				),
-			).toEqual({
-				PI_MAESTRO_SOCK: "/tmp/m.sock",
-				PI_MAESTRO_AGENT_ID: "g1/worker",
-			});
-			expect(parseEnvAssignments("pi --session x")).toEqual({});
-		});
-
-		it("spawn runs the fake-agent CLI out of process: alive → kill → dead", async () => {
-			const ft = createFakeTmux();
-			const script = JSON.stringify({
-				kind: "happyWorker",
-				taskIds: ["t1"],
-			} satisfies FakeAgentScript);
-			const command = [
-				`FAKE_AGENT_SOCK=${socketPath}`,
-				"FAKE_AGENT_ID=g1/worker",
-				`FAKE_AGENT_TOKEN=${TOKEN}`,
-				`FAKE_AGENT_SCRIPT=${script}`,
-				"pi --session /dev/null",
-			].join(" ");
-
-			await ft.spawn("agent-g1-worker", process.cwd(), command);
-			expect(await ft.hasSession("agent-g1-worker")).toBe(true);
-
-			// The child connects over the real socket from its own process.
-			await stub.until(() => stub.hellos.length === 1, 20_000);
-			expect(stub.hellos[0].pid).not.toBe(process.pid);
-			expect(stub.hellos[0].pid).toBe(ft.getSession("agent-g1-worker")?.pid);
-			await stub.until(() => stub.toggled.includes("t1"), 10_000);
-
-			await ft.kill("agent-g1-worker");
-			expect(await ft.hasSession("agent-g1-worker")).toBe(false);
-			await ft.waitForExit("agent-g1-worker");
-			await stub.until(() => stub.disconnected.includes("g1/worker"));
-		});
-
-		it("shutdown lets the forked child exit cleanly (code 0)", async () => {
-			const ft = createFakeTmux();
-			const script = JSON.stringify({
-				kind: "happyWorker",
-				taskIds: [],
-			} satisfies FakeAgentScript);
-			const command = [
-				`FAKE_AGENT_SOCK=${socketPath}`,
-				"FAKE_AGENT_ID=g1/worker",
-				`FAKE_AGENT_TOKEN=${TOKEN}`,
-				`FAKE_AGENT_SCRIPT=${script}`,
-				"pi",
-			].join(" ");
-
-			await ft.spawn("agent-g1-worker", process.cwd(), command);
-			await stub.until(
-				() =>
-					stub
-						.messagesFrom("g1/worker")
-						.some((m) => m.type === "status" && m.status === "idle"),
-				20_000,
-			);
-
-			server.send("g1/worker", { type: "shutdown", reason: "complete" });
-			const exit = await ft.waitForExit("agent-g1-worker");
-			expect(exit.code).toBe(0);
-			expect(await ft.hasSession("agent-g1-worker")).toBe(false);
-		});
-
-		it("simulateCrash SIGKILLs the child without cleanup", async () => {
-			const ft = createFakeTmux();
-			const script = JSON.stringify({
-				kind: "happyWorker",
-				taskIds: [],
-			} satisfies FakeAgentScript);
-			const command = [
-				`FAKE_AGENT_SOCK=${socketPath}`,
-				"FAKE_AGENT_ID=g1/worker",
-				`FAKE_AGENT_TOKEN=${TOKEN}`,
-				`FAKE_AGENT_SCRIPT=${script}`,
-				"pi",
-			].join(" ");
-
-			await ft.spawn("agent-g1-worker", process.cwd(), command);
-			await stub.until(() => stub.hellos.length === 1, 20_000);
-			expect(await ft.hasSession("agent-g1-worker")).toBe(true);
-
-			ft.simulateCrash("agent-g1-worker");
-			const exit = await ft.waitForExit("agent-g1-worker");
-			expect(exit.signal).toBe("SIGKILL");
-			expect(await ft.hasSession("agent-g1-worker")).toBe(false);
-			// The maestro observes the drop, like a crashed pi.
-			await stub.until(() => stub.disconnected.includes("g1/worker"));
-		});
-
-		it("rejects duplicate spawns and kills of unknown sessions", async () => {
-			const ft = createFakeTmux();
-			const command = `FAKE_AGENT_SOCK=${socketPath} FAKE_AGENT_ID=x FAKE_AGENT_TOKEN=${TOKEN} FAKE_AGENT_SCRIPT={"kind":"silent"} pi`;
-
-			await expect(ft.kill("nope")).rejects.toThrow(/no such session/);
-			expect(() => ft.simulateCrash("nope")).toThrow(/no such session/);
-			expect(await ft.hasSession("nope")).toBe(false);
-
-			await ft.spawn("dup", process.cwd(), command);
-			await expect(ft.spawn("dup", process.cwd(), command)).rejects.toThrow(
-				/duplicate session/,
-			);
-			expect(ft.list()).toEqual(["dup"]);
 		});
 	});
 });

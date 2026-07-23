@@ -253,20 +253,18 @@ export async function isolationFailureAction(
 }
 
 /**
- * Apply the per-actor real-tree write profile to a route's ops. Three states,
- * so the validated mechanism ships without flipping a kernel write-boundary on
- * before real workflows (worker git, builds) have baked:
+ * Apply the per-actor real-tree write profile to a route's ops. Three states:
+ * - MAESTRO_SANDBOX=off → disable (run unchanged — the escape hatch).
  * - MAESTRO_SANDBOX_SHADOW=<file> → report-only: LOG the profile, run unchanged.
- * - MAESTRO_SANDBOX=enforce → confine writes to the profile via the OS on the
- *   real tree (a bash-classifier miss stops being an escape; hack runs
- *   unwrapped). Reads stay open, so `git status`/builds see the real tree.
- * - default → unchanged (current behavior) until the default is flipped after
- *   a bake. The forcing-bug close is one env flag away, deliberately.
+ * - default → ENFORCE: confine writes to the profile via the OS on the real
+ *   tree (a bash-classifier miss stops being an escape; hack runs unwrapped).
+ *   Reads stay open, so `git status`/builds see the real tree.
  */
 function realtreeOps(
 	ops: BashOperations,
 	decision: BashPolicyDecision,
 ): BashOperations {
+	if (process.env.MAESTRO_SANDBOX === "off") return ops;
 	const logPath = process.env.MAESTRO_SANDBOX_SHADOW;
 	if (logPath)
 		return createShadowBashOperations(ops, {
@@ -280,13 +278,11 @@ function realtreeOps(
 				}
 			},
 		});
-	if (process.env.MAESTRO_SANDBOX === "enforce")
-		return createEnforcingBashOperations(ops, {
-			actor: decision.actor,
-			mode: decision.mode,
-			wrap: defaultSandboxWrap,
-		});
-	return ops;
+	return createEnforcingBashOperations(ops, {
+		actor: decision.actor,
+		mode: decision.mode,
+		wrap: defaultSandboxWrap,
+	});
 }
 
 export function resolveBashOperations(

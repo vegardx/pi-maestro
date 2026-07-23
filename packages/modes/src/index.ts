@@ -137,15 +137,9 @@ export {
 	type IsolationBackendTier,
 	IsolationUnavailableError,
 	ReservedStrongIsolationBackend,
+	RetiredLightweightIsolationBackend,
 } from "./isolation/backend.js";
-export {
-	createResearchEnvironment,
-	LightweightSeatbeltBackend,
-	type LightweightSeatbeltOptions,
-	networkDestinationAllowed,
-	type SandboxRuntimeAdapter,
-	seatbeltConfig,
-} from "./isolation/lightweight-seatbelt.js";
+export { createResearchEnvironment } from "./isolation/research-environment.js";
 export {
 	enumerateWorkspace,
 	type ResearchWorkspace,

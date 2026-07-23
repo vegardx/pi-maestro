@@ -23,7 +23,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -104,11 +104,38 @@ function writeSeedFiles(repoDir: string): void {
 }
 
 /**
- * Persist the committer identity into the repo config. The inline `-c` GIT_IDENT
- * only covers the harness's OWN git calls; a spawned worker's
- * `resolveGitIdentity()` reads the repo config (or GIT_AUTHOR env), finds none,
- * and its full-mode identity preflight throws BEFORE spawn — so workers never
- * run. Persisting it here makes drives self-contained (no GIT_AUTHOR gymnastics).
+ * A disposable repo under the developer's real checkout root
+ * (`~/src/github.com/`, or PI_E2E_CHECKOUT_ROOT). The point is git's
+ * path-scoped identity: the `includeIf "gitdir:~/src/github.com/"` gives a
+ * clone here the developer's real name/email, so a worker's
+ * `resolveGitIdentity()` finds it and its full-mode preflight passes. A clone in
+ * /var/folders resolves NO identity → every worker spawn throws before it starts
+ * (drives stall with deliverables `active` and no processes). Mirrors
+ * createDisposableGithubRepo's placement; worktrees land in the sibling
+ * `worktrees/` dir and are reaped with the repo.
+ */
+function disposableCheckoutRepo(): { repoDir: string; cleanup: () => void } {
+	const root =
+		process.env.PI_E2E_CHECKOUT_ROOT ?? join(homedir(), "src", "github.com");
+	mkdirSync(root, { recursive: true });
+	const repoDir = mkdtempSync(join(root, "pi-e2e-repo-"));
+	return {
+		repoDir,
+		cleanup: () => {
+			rmSync(repoDir, { recursive: true, force: true });
+			rmSync(join(root, "worktrees", basename(repoDir)), {
+				recursive: true,
+				force: true,
+			});
+		},
+	};
+}
+
+/**
+ * Persist an explicit committer identity — ONLY for repos that git's
+ * path-scoped `includeIf` cannot reach (the CI mock profile clones to a temp
+ * dir). Local/live drives clone under ~/src/github.com/ instead and inherit the
+ * developer's real identity, so this must NOT run there (it would override it).
  */
 function persistGitIdentity(repoDir: string): void {
 	git(repoDir, ["config", "user.email", "e2e@pi-maestro.test"]);
@@ -119,7 +146,6 @@ function persistGitIdentity(repoDir: string): void {
 function seedRepo(repoDir: string): void {
 	writeSeedFiles(repoDir);
 	git(repoDir, ["init", "-q", "-b", "main"]);
-	persistGitIdentity(repoDir);
 	git(repoDir, ["add", "."]);
 	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
 }
@@ -134,7 +160,6 @@ function seedRepo(repoDir: string): void {
  */
 function seedClonedRepo(repoDir: string): void {
 	writeSeedFiles(repoDir);
-	persistGitIdentity(repoDir);
 	git(repoDir, ["add", "."]);
 	git(repoDir, ["commit", "-qm", "chore: bootstrap e2e sandbox"]);
 	git(repoDir, ["push", "-q", "origin", "HEAD"]);
@@ -258,7 +283,12 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	let ghState: string | undefined;
 	const env: Record<string, string> = { PI_MAESTRO_TRANSPORT: transport };
 	if (opts.localRemote) {
-		repoDir = mkdtempSync(join(tmpdir(), "pi-e2e-repo-"));
+		// Under ~/src/github.com/ so workers inherit the developer's real git
+		// identity via includeIf — a temp-dir clone resolves none and every
+		// worker spawn fails the identity preflight.
+		const checkout = disposableCheckoutRepo();
+		repoDir = checkout.repoDir;
+		deleteRepo = checkout.cleanup;
 		seedRepo(repoDir);
 		bareRemote = attachLocalBareRemote(repoDir);
 		// The ship path shells out to `gh` (pr create/view/…). Offline, that
@@ -442,8 +472,11 @@ export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 		modes: { childExtensions: [opts.mockProviderExtension] },
 	});
 
+	// CI clones to a temp dir the developer's includeIf can't reach, so it needs
+	// an explicit committer identity (local/live drives inherit the real one).
 	const repoDir = mkdtempSync(join(tmpdir(), "pi-e2e-repo-"));
 	seedRepo(repoDir);
+	persistGitIdentity(repoDir);
 	const bareRemote = attachLocalBareRemote(repoDir);
 	const ghState = mkdtempSync(join(tmpdir(), "pi-e2e-gh-"));
 

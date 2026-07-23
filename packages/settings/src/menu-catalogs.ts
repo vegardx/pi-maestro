@@ -41,6 +41,7 @@ import {
 	THINKING_LEVELS,
 } from "./menu-shared.js";
 import { sessionModelId } from "./model.js";
+import { multiSelect, supportsMultiSelect } from "./multi-select.js";
 import { isPlainObject } from "./reader.js";
 import { settingsPath, updateSettingsFile } from "./writer.js";
 
@@ -674,12 +675,30 @@ async function addTierEntries(
 		if (!providerPick) return;
 		const provider = providerPick.split(" ")[0];
 		const ids = providers.get(provider) ?? [];
+		// Preferred surface: the checkbox picker — space toggles, enter applies
+		// the whole provider selection as ONE write.
+		if (supportsMultiSelect(ctx)) {
+			const chosen = await multiSelect(
+				ctx,
+				`${name} · ${tier} · ${provider}`,
+				ids.map((id) => ({
+					id: `${provider}/${id}`,
+					label: id,
+					checked: members.has(`${provider}/${id}`),
+				})),
+			);
+			if (chosen === undefined) continue; // cancelled — back to providers
+			applyProviderSelection(ctx, name, tier, provider, new Set(chosen));
+			continue;
+		}
 		while (true) {
 			const current = safeV2(ctx)?.catalogs[name]?.[tier] ?? [];
 			const inTier = new Set(current.map((entry) => entry.model));
 			const picked = await ui.select(
 				`${name} · ${tier} · ${provider} — pick to toggle, Esc when done`,
-				ids.map((id) => `${inTier.has(`${provider}/${id}`) ? "✓" : "✗"} ${id}`),
+				ids.map(
+					(id) => `${inTier.has(`${provider}/${id}`) ? "[x]" : "[ ]"} ${id}`,
+				),
 			);
 			if (!picked) break;
 			const ref = `${provider}/${picked.slice(2)}`;

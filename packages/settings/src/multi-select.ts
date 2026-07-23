@@ -6,6 +6,7 @@
 // their select-loop fallback, which the e2e driver can navigate.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Component, Focusable } from "@earendil-works/pi-tui";
 
 export interface MultiSelectItem {
 	readonly id: string;
@@ -43,8 +44,10 @@ const DOWN = new Set(["\u001b[B", "\u001bOB"]);
 const WINDOW = 14;
 
 /** Exported for tests: drive handleInput directly and observe done(). */
-export class MultiSelectComponent {
-	focused = true;
+export class MultiSelectComponent implements Component, Focusable {
+	// Set by the TUI on focus (Focusable). The overlay factory also flips it
+	// true after construction, mirroring runQuestionnaire.
+	focused = false;
 	private cursor = 0;
 	private readonly checked: Set<string>;
 
@@ -58,6 +61,11 @@ export class MultiSelectComponent {
 			items.filter((item) => item.checked).map((item) => item.id),
 		);
 	}
+
+	/** Required by Component; the TUI calls it when priming the overlay and on
+	 *  theme changes. Its absence left the overlay unfocused (input never
+	 *  routed to it) — the bug this fixes. Nothing is cached, so it is a no-op. */
+	invalidate(): void {}
 
 	render(width: number): string[] {
 		const p = this.palette;
@@ -152,8 +160,16 @@ export function multiSelect(
 		}
 	).custom;
 	return custom<string[] | undefined>(
-		(_tui, theme, _keybindings, done) =>
-			new MultiSelectComponent(title, items, done, paletteFromTheme(theme)),
+		(_tui, theme, _keybindings, done) => {
+			const component = new MultiSelectComponent(
+				title,
+				items,
+				done,
+				paletteFromTheme(theme),
+			);
+			component.focused = true;
+			return component;
+		},
 		{
 			overlay: true,
 			overlayOptions: {

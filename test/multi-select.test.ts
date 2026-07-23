@@ -53,6 +53,18 @@ describe("multi-select overlay", () => {
 		expect(second.results[0]).toEqual([]);
 	});
 
+	it("satisfies the Component/Focusable contract the overlay requires", () => {
+		// A missing invalidate() (or not being Focusable) leaves the overlay
+		// unfocused: it renders at the bottom but no keys route to it. This
+		// guards the interface the TUI's showOverlay/setFocus path depends on.
+		const { c } = component();
+		expect(typeof c.invalidate).toBe("function");
+		expect(() => c.invalidate()).not.toThrow();
+		expect(typeof c.render).toBe("function");
+		expect(typeof c.handleInput).toBe("function");
+		expect("focused" in c).toBe(true);
+	});
+
 	it("renders cursor, check marks, and the key hint", () => {
 		const { c } = component();
 		const lines = c.render(80);

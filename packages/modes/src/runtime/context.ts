@@ -34,8 +34,10 @@ import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { createLiveSpawnAgent } from "../exec/live-spawn.js";
 import { shipNode as shipNodeReal } from "../exec/shipper.js";
 import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
-import type { IsolationBackend } from "../isolation/backend.js";
-import { LightweightSeatbeltBackend } from "../isolation/lightweight-seatbelt.js";
+import {
+	type IsolationBackend,
+	RetiredLightweightIsolationBackend,
+} from "../isolation/backend.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { PlanEngineV2 } from "../plan/engine.js";
 import { resolveNodeModel } from "../plan/node-periphery.js";
@@ -250,7 +252,8 @@ export function createRuntimeContext(
 	};
 	const overlayManager = new OverlayManager();
 	const lightweightIsolation =
-		opts.isolationBackends?.lightweight ?? new LightweightSeatbeltBackend();
+		opts.isolationBackends?.lightweight ??
+		new RetiredLightweightIsolationBackend();
 	const strongIsolation =
 		opts.isolationBackends?.strong ?? new AppleContainerStrongBackend();
 	const bashBackends = {

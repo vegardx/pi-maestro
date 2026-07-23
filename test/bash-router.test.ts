@@ -375,6 +375,9 @@ describe("bash coaching and routing policy", () => {
 	});
 
 	it("routes through injected operations and fails closed without isolation", async () => {
+		// This asserts WHICH base ops a route selects; the real-tree sandbox
+		// wrapper (default-on) is orthogonal and covered in realtree-sandbox.test.
+		process.env.MAESTRO_SANDBOX = "off";
 		const direct: BashOperations = {
 			exec: vi.fn(async (_command, _cwd, { onData }) => {
 				onData(Buffer.from("streamed"));
@@ -488,6 +491,7 @@ describe("bash coaching and routing policy", () => {
 		expect(failClosedSelect.mock.calls[0]?.[1]).toEqual([
 			"Cancel (policy is fail-closed)",
 		]);
+		delete process.env.MAESTRO_SANDBOX;
 	});
 
 	it.each([

@@ -6,25 +6,27 @@
 // overrides compose on top of that native provider, correcting metadata without
 // freezing a bearer.
 //
-// How v2 resolution works (this profile is written to it, not the retired v1
-// preset/modelSet vocabulary):
-//   • Plan nodes INHERIT the session model. resolveModel passes no tier, so a
-//     worker/explorer/reviewer node runs on the maestro's own seat. `normal` is
-//     NOT "the worker model".
-//   • Tiers are for DELIBERATE requests: policy-table duty rows (classify,
-//     compact-summarize, verify-delivery, the bash auditor, the watcher) and
-//     subagents an agent spawns itself.
-//   • `agents.<type>.models` is the allowlist bounding which tiers each agent
-//     type may reach — the menu an agent sees, not an assignment.
-//   • Within a tier, resolution walks entries in authored order and takes the
-//     first AVAILABLE one — a priority chain. The session seat is never a tier
-//     entry: it is appended last as the known-good fallback (seat-to-end), so a
-//     tier prefers a real alternative and lands on the seat only if all are down.
+// How v2 resolution works (this profile is written to the families vocabulary —
+// families/rosters/bindings/allowances — not the retired v1 preset/modelSet one,
+// nor the interim catalogs/profiles/agents one):
+//   • Plan nodes INHERIT the session model. resolveModel passes no tier only
+//     when the agent has no default tier, so an inherited node runs on the
+//     maestro's own seat. `standard` is NOT "the worker model" by itself.
+//   • Tiers are DELIBERATE: a plan node spawns at its agent type's default tier
+//     (defaultTierForAgent), and policy-table duty rows / self-spawned subagents
+//     name a tier explicitly.
+//   • `allowances.<type>.tiers` bounds which tiers each agent type may reach
+//     (first = its default) — the menu an agent sees.
+//   • Within a tier, resolution walks alias refs in authored order and takes the
+//     first AVAILABLE attachment — a priority chain. The session seat is never a
+//     tier entry: it is appended last as the known-good fallback (seat-to-end),
+//     so a tier prefers a real alternative and lands on the seat only if all are
+//     down.
 //
 // Seat and tiers (seat = gpt-5.5, the implicit last fallback of every tier):
 //   • session seat  → gpt-5.5 @ xhigh                    plans, and every node
-//   • fast          → mai-code-1-flash-picker @ low      classify / summarize
-//   • normal        → gpt-5.4 → gpt-5.3-codex @ medium   subagent work
+//   • light         → mai-code-1-flash-picker @ low      classify / summarize
+//   • standard      → gpt-5.4 → gpt-5.3-codex @ medium   subagent work
 //   • heavy         → claude-opus-4.8 @ xhigh            reviews and verdicts
 //
 // Why the seat is GPT, not Opus: the maestro wedged mid-structuring on the
@@ -77,28 +79,60 @@ export const COPILOT_REQUIRED_MODELS: readonly string[] = [
 ];
 
 const MODELS_BLOCK = {
-	catalogs: {
-		copilot: {
-			fast: [{ model: ref(COPILOT_FAST), effort: "low" }],
-			normal: COPILOT_NORMAL.map((model) => ({
-				model: ref(model),
-				effort: "medium",
-			})),
-			heavy: COPILOT_HEAVY.map((model) => ({
-				model: ref(model),
-				effort: "xhigh",
-			})),
+	// Families are the diversity axis. GPT holds the seat and the standard-tier
+	// implementers; MAI the flash picker; Anthropic the heavy judge (a different
+	// family than the GPT workers — cross-family review by construction).
+	families: {
+		GPT: {
+			aliases: {
+				// The seat's own alias — not a tier entry, but gives the seat a
+				// family (footer / diversity resolve through it).
+				[COPILOT_SEAT]: { attach: [SEAT], effort: COPILOT_SEAT_EFFORT },
+				...Object.fromEntries(
+					COPILOT_NORMAL.map((model) => [
+						model,
+						{ attach: [ref(model)], effort: "medium" },
+					]),
+				),
+			},
+		},
+		MAI: {
+			aliases: {
+				[COPILOT_FAST]: { attach: [ref(COPILOT_FAST)], effort: "low" },
+			},
+		},
+		Anthropic: {
+			aliases: Object.fromEntries(
+				COPILOT_HEAVY.map((model) => [
+					model,
+					{ attach: [ref(model)], effort: "xhigh" },
+				]),
+			),
 		},
 	},
-	profiles: {
-		copilot: { targets: [SEAT], catalog: "copilot" },
+	// One roster; a tier's ordered alias refs are a priority chain (first
+	// available wins). The seat (gpt-5.5) is the resolver's implicit last-resort
+	// fallback of every tier, so it is never a tier entry.
+	rosters: {
+		copilot: {
+			light: [`MAI/${COPILOT_FAST}`],
+			standard: COPILOT_NORMAL.map((model) => `GPT/${model}`),
+			heavy: COPILOT_HEAVY.map((model) => `Anthropic/${model}`),
+		},
 	},
-	// Tier allowlists per agent type. Reviewers may reach `heavy` so a review
-	// verdict is never cheaper than the work it judges; explorers stay off it.
-	agents: {
-		worker: { models: ["fast", "normal", "heavy"] },
-		explorer: { models: ["fast", "normal"] },
-		reviewer: { models: ["normal", "heavy"] },
+	// A single default binding (no targets) selects the roster for the gpt-5.5
+	// seat the drive runs on.
+	bindings: {
+		copilot: { roster: "copilot" },
+	},
+	// Per-agent tier allowances; the FIRST tier is the default a plan node of
+	// that type spawns at. reviewer defaults to heavy so a verdict is never
+	// cheaper than — nor the same family as — the work it judges.
+	allowances: {
+		worker: { tiers: ["standard", "heavy"] },
+		explorer: { tiers: ["light", "standard"] },
+		reviewer: { tiers: ["heavy", "standard"] },
+		advisor: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 

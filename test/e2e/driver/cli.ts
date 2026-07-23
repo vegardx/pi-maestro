@@ -192,8 +192,9 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 	}
 	// `--multi-model` installs the built-in ollama multi-model profile (real
 	// role→model routing across gpt-oss/qwen3/gemma4). It supplies the provider
-	// catalog, the presets/modelSets block, and the planner-seat default; other
-	// live flags (--model/--agent-models/…) are ignored in this mode.
+	// catalog, the v2 families/rosters/bindings/allowances block, and the
+	// planner-seat default; other live flags (--model/--agent-models/…) are
+	// ignored in this mode.
 	if (argv.includes("--multi-model")) {
 		return setupLiveEnv({
 			localRemote: argv.includes("--local-remote"),

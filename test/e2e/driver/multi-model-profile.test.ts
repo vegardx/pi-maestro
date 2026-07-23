@@ -1,7 +1,8 @@
 // The multi-model ollama profile, validated deterministically — no ollama, no pi
-// boot. It proves the generated presets/modelSets block is *valid* and that each
-// maestro role resolves to the intended local model, so a regression in the
-// profile is caught in CI rather than only surfacing during a manual live drive.
+// boot. It proves the generated v2 block (families/rosters/bindings/allowances)
+// is *valid* and that each maestro agent type resolves to the intended local
+// model, so a regression in the profile is caught in CI rather than only
+// surfacing during a manual live drive.
 //
 // The live drive (docs/e2e-testing.md, drive-maestro-e2e skill) then confirms
 // ollama actually serves those models; this test owns the routing correctness.
@@ -10,8 +11,16 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
-import { resolveExactModelSelection } from "@vegardx/pi-models";
+import {
+	MODEL_ROLES,
+	type ModelRole,
+	SPAWNABLE_AGENT_TYPES,
+} from "@vegardx/pi-contracts";
+import {
+	agentTypeForRole,
+	defaultTierForAgent,
+	resolveV2Model,
+} from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	MULTI_MODEL_CATALOG,
@@ -23,6 +32,9 @@ let agentDir: string;
 let previousAgentDir: string | undefined;
 
 const SESSION = `${MULTI_MODEL_OLLAMA.defaultProvider}/${MULTI_MODEL_OLLAMA.defaultModel}`;
+const QWEN = "ollama/qwen3.6:35b-a3b-coding-mxfp8";
+const GPTOSS = "ollama/gpt-oss:20b";
+const GEMMA = "ollama/gemma4:31b-mlx";
 
 /** A registry entry for one ollama model; all efforts supported (reasoning true). */
 function ollamaModel(id: string) {
@@ -37,7 +49,7 @@ function ollamaModel(id: string) {
 }
 
 function fakeCtx(
-	options: { unavailable?: readonly string[] } = {},
+	options: { unavailable?: readonly string[]; seat?: string } = {},
 ): ExtensionContext {
 	const entries = new Map(
 		MULTI_MODEL_CATALOG.map(ollamaModel).map((entry) => [
@@ -48,7 +60,7 @@ function fakeCtx(
 	const unavailable = new Set(options.unavailable ?? []);
 	return {
 		cwd,
-		model: entries.get(SESSION),
+		model: entries.get(options.seat ?? SESSION),
 		modelRegistry: {
 			find: (provider: string, id: string) => entries.get(`${provider}/${id}`),
 			getApiKeyAndHeaders: async (entry: { provider: string; id: string }) => {
@@ -60,12 +72,23 @@ function fakeCtx(
 	} as unknown as ExtensionContext;
 }
 
+/**
+ * Resolve a v1 role the way a plan node does (context.ts resolveModel): map it
+ * to a v2 agent type, take that type's default tier, resolve through the active
+ * binding's roster. The real routing path, not the retired v1 exact selection.
+ */
 async function modelFor(
 	role: ModelRole,
 	ctx: ExtensionContext = fakeCtx(),
 ): Promise<string | undefined> {
-	const result = await resolveExactModelSelection(ctx, { role });
-	return result.selected?.modelId;
+	const agent = agentTypeForRole(role);
+	const tier = defaultTierForAgent(ctx, agent);
+	const resolved = await resolveV2Model(ctx, {
+		agent,
+		...(tier ? { tier } : {}),
+		inherit: { modelId: SESSION },
+	});
+	return resolved.modelId;
 }
 
 beforeEach(() => {
@@ -79,7 +102,7 @@ beforeEach(() => {
 	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	// The profile writes `models` to the isolated agent dir in production; here we
-	// place it in project settings — readModelsConfig merges both the same way.
+	// place it in project settings — readV2Config merges both the same way.
 	writeFileSync(
 		join(cwd, ".pi", "settings.json"),
 		JSON.stringify({ models: MULTI_MODEL_OLLAMA.models }),
@@ -93,94 +116,83 @@ afterEach(() => {
 });
 
 describe("multi-model ollama profile", () => {
-	it("references only models the profile catalog defines", () => {
+	it("attaches only models the profile catalog defines", () => {
 		const referenced = new Set<string>();
-		const sets = (
+		const families = (
 			MULTI_MODEL_OLLAMA.models as {
-				modelSets: Record<string, { options: { model: string }[] }>;
+				families: Record<
+					string,
+					{ aliases: Record<string, { attach: string[] }> }
+				>;
 			}
-		).modelSets;
-		for (const set of Object.values(sets)) {
-			for (const opt of set.options) {
-				if (opt.model !== "session") {
-					referenced.add(opt.model.slice(opt.model.indexOf("/") + 1));
+		).families;
+		for (const family of Object.values(families)) {
+			for (const alias of Object.values(family.aliases)) {
+				for (const spec of alias.attach) {
+					referenced.add(spec.slice(spec.indexOf("/") + 1));
 				}
 			}
 		}
 		for (const id of referenced) expect(MULTI_MODEL_CATALOG).toContain(id);
 	});
 
-	it("activates only for the planner-seat session model", async () => {
-		// The preset targets the planner seat; a different session model → no
-		// preset, so a role falls back to the session model itself.
-		const other = { ...fakeCtx() } as ExtensionContext & { model?: unknown };
-		(other as { model: unknown }).model = {
-			provider: "ollama",
-			id: "gpt-oss:20b",
-			name: "ollama/gpt-oss:20b",
-			reasoning: true,
-			thinkingLevelMap: {},
-		};
-		expect(await modelFor("worker", other)).toBe("ollama/gpt-oss:20b");
-		// (the preset target is the gemma planner seat, not gpt-oss)
+	it("inherits the seat with no tier; routes through the roster with one", async () => {
+		const ctx = fakeCtx();
+		// No tier requested → inherit the caller's model (the seat), not the roster.
+		const inherited = await resolveV2Model(ctx, {
+			agent: "worker",
+			inherit: { modelId: SESSION },
+		});
+		expect(inherited.source).toBe("inherit");
+		expect(inherited.modelId).toBe(GEMMA);
+		// A deliberate tier → the roster's standard tier (the qwen coder).
+		const routed = await resolveV2Model(ctx, {
+			agent: "worker",
+			tier: "standard",
+			inherit: { modelId: SESSION },
+		});
+		expect(routed.source).toBe("tier");
+		expect(routed.modelId).toBe(QWEN);
 	});
 
-	it("maps every MODEL_ROLE — a new role must not silently fall through to session", () => {
-		const preset = (
-			MULTI_MODEL_OLLAMA.models as {
-				presets: Record<string, { modelSets: Record<string, string> }>;
-			}
-		).presets["ollama-multi"];
+	it("maps every MODEL_ROLE to a spawnable agent type — no role falls through", () => {
 		for (const role of MODEL_ROLES) {
-			expect(preset.modelSets[role], `role ${role} unmapped`).toBeDefined();
+			expect(
+				SPAWNABLE_AGENT_TYPES as readonly string[],
+				`role ${role} maps to an unknown agent type`,
+			).toContain(agentTypeForRole(role));
 		}
 	});
 
-	it("routes each role to its intended local model", async () => {
-		// normal tier — the MoE coder is the default worker
-		expect(await modelFor("worker")).toBe(
-			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
-		);
-		expect(await modelFor("verifier")).toBe(
-			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
-		);
-		expect(await modelFor("codebase-research")).toBe(
-			"ollama/qwen3.6:35b-a3b-coding-mxfp8",
-		);
-		// fast tier
-		expect(await modelFor("classifier")).toBe("ollama/gpt-oss:20b");
-		expect(await modelFor("plan-summarizer")).toBe("ollama/gpt-oss:20b");
-		expect(await modelFor("general")).toBe("ollama/gpt-oss:20b");
-		// review pool — first concrete option: a DIFFERENT family from workers
-		expect(await modelFor("correctness-review")).toBe("ollama/gpt-oss:20b");
-		expect(await modelFor("adversarial-review")).toBe("ollama/gpt-oss:20b");
+	it("routes each agent type to its intended local model", async () => {
+		// worker / verifier → worker → standard → the MoE coder
+		expect(await modelFor("worker")).toBe(QWEN);
+		expect(await modelFor("verifier")).toBe(QWEN);
+		// classify / summarize / research → explorer → light → gpt-oss
+		expect(await modelFor("codebase-research")).toBe(GPTOSS);
+		expect(await modelFor("classifier")).toBe(GPTOSS);
+		expect(await modelFor("plan-summarizer")).toBe(GPTOSS);
+		expect(await modelFor("general")).toBe(GPTOSS);
+		// *-review → reviewer → heavy → gpt-oss (a DIFFERENT family from workers)
+		expect(await modelFor("correctness-review")).toBe(GPTOSS);
+		expect(await modelFor("adversarial-review")).toBe(GPTOSS);
 	});
 
-	it("falls through to the next option when the first is not served", async () => {
-		// The live availability-fallback (ollama stop <model>), deterministically:
-		// normal → MoE coder → session; fast → gpt-oss → session.
+	it("falls back to the session seat when a tier's model is not served", async () => {
+		// standard → MoE coder struck → the gemma seat (the resolver's fallback).
+		expect(await modelFor("worker", fakeCtx({ unavailable: [QWEN] }))).toBe(
+			GEMMA,
+		);
+		// light → gpt-oss struck → the gemma seat.
 		expect(
-			await modelFor(
-				"worker",
-				fakeCtx({ unavailable: ["ollama/qwen3.6:35b-a3b-coding-mxfp8"] }),
-			),
-		).toBe("ollama/gemma4:31b-mlx");
-		expect(
-			await modelFor(
-				"classifier",
-				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
-			),
-		).toBe("ollama/gemma4:31b-mlx");
+			await modelFor("classifier", fakeCtx({ unavailable: [GPTOSS] })),
+		).toBe(GEMMA);
 	});
 
-	it("walks the review pool by availability, then falls back to the session model", async () => {
-		// gpt-oss unserved → the session sentinel (sorted to the back)
-		// resolves to the gemma planner seat — the cross-family last resort.
+	it("falls the review tier back to the cross-family session seat", async () => {
+		// heavy → gpt-oss unserved → the gemma seat (the cross-family last resort).
 		expect(
-			await modelFor(
-				"correctness-review",
-				fakeCtx({ unavailable: ["ollama/gpt-oss:20b"] }),
-			),
-		).toBe("ollama/gemma4:31b-mlx");
+			await modelFor("correctness-review", fakeCtx({ unavailable: [GPTOSS] })),
+		).toBe(GEMMA);
 	});
 });

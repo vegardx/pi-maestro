@@ -16,12 +16,16 @@
 // buys a full hour; a drive that needs more wants a refreshing local proxy
 // (models.json has no key indirection to hook).
 //
-// Role layout (per the review-diversity principle — reviewer ≠ author family):
-//   • session / planner  → claude-opus-4-8  (careful judge: plans + reviews)
-//   • normal  (workers)  → gpt-5.6-sol → session   (strongest implementer)
-//   • reviewpool         → claude-opus-4-8 → session
-//         opus reviews sol's work — cross-family by construction
-//   • fast    (utility)  → gpt-5.6-sol @low → session
+// v2 layout (families → rosters → bindings → allowances). Two ranked families
+// are the diversity axis; a roster's three tiers hold the alias refs; a single
+// default binding activates the roster for the opus seat; per-agent allowances
+// route each agent type to a tier — reviewer defaults to `heavy` so a review
+// lands on a DIFFERENT family than the sol workers (cross-family by
+// construction, without leaning on the still-deferred diversity walk):
+//   • session / planner  → claude-opus-4-8   (careful judge: the seat)
+//   • standard (workers) → OpenAI/GPT 5.6 Sol → seat   (strongest implementer)
+//   • light  (utility)   → OpenAI/GPT 5.6 Sol → seat   (explorer/classify)
+//   • heavy  (reviewers) → Anthropic/Opus 4.8 → seat   (cross-family judge)
 
 import { liveAccessToken } from "./gateway-auth.js";
 import type { MultiModelProfile } from "./multi-model-profile.js";
@@ -77,79 +81,53 @@ function buildModelsJson(token: string): string {
 }
 
 const MODELS_BLOCK = {
-	modelSets: {
-		fast: {
-			options: [
-				{
-					id: "sol-fast",
-					model: SOL,
-					effort: "low",
-					summary: "Sol at low effort — classify / summarize.",
-				},
-				{
-					id: "own",
-					model: "session",
-					effort: "low",
-					summary: "Your own (opus) model — last-resort fallback.",
-				},
-			],
-		},
-		normal: {
-			options: [
-				{
-					id: "sol",
-					model: SOL,
+	// Ranked diversity axis: OpenAI first (the implementer family), Anthropic
+	// second (the diverse reviewer family). The alias effort lives on the alias
+	// and is shared everywhere it is used.
+	families: {
+		OpenAI: {
+			aliases: {
+				"GPT 5.6 Sol": {
+					attach: [SOL],
 					effort: "medium",
-					summary: "GPT 5.6 Sol — strongest implementer — the worker seat.",
+					notes: "Strongest implementer — the worker and utility seat.",
 				},
-				{
-					id: "own",
-					model: "session",
-					effort: "medium",
-					summary: "Your own (opus) model — last-resort fallback.",
-				},
-			],
-		},
-		reviewpool: {
-			options: [
-				{
-					id: "opus",
-					model: OPUS,
-					effort: "medium",
-					summary:
-						"Opus 4.8 — careful judge, different family from the sol workers.",
-				},
-				{
-					id: "own",
-					model: "session",
-					effort: "medium",
-					summary: "Session seat fallback.",
-				},
-			],
-		},
-	},
-	presets: {
-		"sit-multi": {
-			targets: [OPUS],
-			modelSets: {
-				worker: "normal",
-				verifier: "normal",
-				"codebase-research": "normal",
-				classifier: "fast",
-				"plan-summarizer": "fast",
-				"compact-summarizer": "fast",
-				general: "fast",
-				"web-research": "fast",
-				"plan-review": "reviewpool",
-				"practical-review": "reviewpool",
-				"adversarial-review": "reviewpool",
-				"correctness-review": "reviewpool",
-				"security-review": "reviewpool",
-				"test-review": "reviewpool",
-				"simplification-review": "reviewpool",
-				advisor: "reviewpool",
 			},
 		},
+		Anthropic: {
+			aliases: {
+				"Opus 4.8": {
+					attach: [OPUS],
+					effort: "medium",
+					notes: "Careful judge — reviews sol's work, a different family.",
+				},
+			},
+		},
+	},
+	// One roster; its three fixed-meaning tiers hold ordered alias refs. The
+	// session seat is the implicit last-resort fallback of every tier (the v2
+	// resolver appends it), so it is never listed here.
+	rosters: {
+		sit: {
+			light: ["OpenAI/GPT 5.6 Sol"],
+			standard: ["OpenAI/GPT 5.6 Sol"],
+			heavy: ["Anthropic/Opus 4.8"],
+		},
+	},
+	// A single default binding (no targets) → active for the opus seat the drive
+	// runs on (and any seat), selecting the `sit` roster.
+	bindings: {
+		sit: { roster: "sit" },
+	},
+	// Per-agent tier allowances; the FIRST tier is the default a plan node of
+	// that type spawns at (defaultTierForAgent). reviewer overrides the shipped
+	// default (standard-first) to heavy-first so reviews are cross-family from
+	// the sol workers even before diversity is wired.
+	allowances: {
+		worker: { tiers: ["standard", "heavy"] },
+		explorer: { tiers: ["light", "standard"] },
+		reviewer: { tiers: ["heavy", "standard"] },
+		advisor: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 

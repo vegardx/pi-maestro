@@ -9,7 +9,12 @@
 
 import { readFileSync, statSync } from "node:fs";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+
+/** The slice of pi's KeybindingsManager we use — the ground truth for key bytes. */
+interface KeyMatcher {
+	matches(data: string, action: string): boolean;
+}
 
 // ─── Rendering a transcript entry to display lines ───────────────────────────
 
@@ -191,7 +196,11 @@ export class SessionTail {
 const ESC = "";
 
 /** A scroll-follow pager over an agent's transcript. Read-only. */
-class LiveSessionView implements Component {
+class LiveSessionView implements Component, Focusable {
+	// Set by the TUI on focus (Focusable); the takeover factory also flips it true
+	// so the component receives keys — an overlay would sit unfocused under the
+	// HUD and never see Esc. See reference-ui-custom-overlay-focus.
+	focused = false;
 	private lines: string[] = [];
 	private scrollTop = 0;
 	private follow = true;
@@ -204,7 +213,13 @@ class LiveSessionView implements Component {
 			readonly status: () => string;
 			readonly close: () => void;
 		},
+		private readonly keys?: KeyMatcher,
 	) {}
+
+	/** Does this input match a pi keybinding action? No manager → false. */
+	private is(data: string, action: string): boolean {
+		return this.keys?.matches(data, action) ?? false;
+	}
 
 	/** Nothing is cached across renders, so there is nothing to invalidate. */
 	invalidate(): void {}
@@ -242,15 +257,15 @@ class LiveSessionView implements Component {
 	handleInput(data: string): void {
 		const vh = this.viewportHeight();
 		const maxTop = Math.max(0, this.lines.length - vh);
-		if (data === ESC || data === "q") {
+		if (data === ESC || data === "q" || this.is(data, "tui.select.cancel")) {
 			this.opts.close();
 			return;
 		}
 		if (data === "f") this.follow = !this.follow;
-		else if (data === `${ESC}[A`) {
+		else if (data === `${ESC}[A` || this.is(data, "tui.select.up")) {
 			this.follow = false;
 			this.scrollTop = Math.max(0, this.currentTop(maxTop) - 1);
-		} else if (data === `${ESC}[B`) {
+		} else if (data === `${ESC}[B` || this.is(data, "tui.select.down")) {
 			this.scrollTop = this.currentTop(maxTop) + 1;
 			if (this.scrollTop >= maxTop) this.follow = true;
 		} else if (data === `${ESC}[5~`) {
@@ -281,9 +296,11 @@ export interface AgentViewTarget {
 }
 
 /**
- * Open a live read-only view of an agent's transcript as an overlay modal.
- * Resolves when the user closes it (Esc/q). No-op with a notice if the agent
- * has no session file yet.
+ * Open a live read-only view of an agent's transcript. Rendered as an editor
+ * TAKEOVER (not overlay:true) so the component grabs focus and actually receives
+ * keys — an overlay sits unfocused under the HUD and never sees Esc, so it could
+ * never be closed. See reference-ui-custom-overlay-focus. Resolves when the user
+ * closes it (Esc/q). No-op with a notice if the agent has no session file yet.
  */
 export async function openAgentLiveView(
 	ctx: ExtensionContext,
@@ -294,26 +311,32 @@ export async function openAgentLiveView(
 		return;
 	}
 	const dimOf = (theme: Theme) => (t: string) => theme.fg("dim", t);
-	await ctx.ui.custom<void>(
-		(tui, theme, _keybindings, done) => {
-			const view = new LiveSessionView(tui, theme, {
+	await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+		const matcher =
+			typeof (keybindings as Partial<KeyMatcher> | undefined)?.matches ===
+			"function"
+				? (keybindings as KeyMatcher)
+				: undefined;
+		const view = new LiveSessionView(
+			tui,
+			theme,
+			{
 				title: target.id,
 				status: target.status,
 				close: () => done(),
-			});
-			const width = (process.stdout.columns ?? 80) - 4;
-			const tail = new SessionTail(target.sessionFile as string, (entries) => {
-				for (const entry of entries)
-					view.append(renderSessionEntry(entry, { width, dim: dimOf(theme) }));
-			});
-			tail.start();
-			// Attach dispose without spreading (spread would drop the prototype
-			// render/handleInput methods the TUI calls).
-			return Object.assign(view, { dispose: () => tail.stop() });
-		},
-		{
-			overlay: true,
-			overlayOptions: () => ({ width: "90%", maxHeight: "80%" }),
-		},
-	);
+			},
+			matcher,
+		);
+		// Take focus so handleInput fires (the takeover path does not auto-focus).
+		view.focused = true;
+		const width = (process.stdout.columns ?? 80) - 4;
+		const tail = new SessionTail(target.sessionFile as string, (entries) => {
+			for (const entry of entries)
+				view.append(renderSessionEntry(entry, { width, dim: dimOf(theme) }));
+		});
+		tail.start();
+		// Attach dispose without spreading (spread would drop the prototype
+		// render/handleInput methods the TUI calls).
+		return Object.assign(view, { dispose: () => tail.stop() });
+	});
 }

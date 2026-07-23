@@ -6,10 +6,11 @@
 // the component directly — the SAME mechanism ui.select uses, which works there.
 // See reference-ui-custom-overlay-focus.
 //
-// SPACE toggles at a stable cursor, ↑/↓ move, ENTER applies the whole selection
-// at once, Esc cancels, 'a' selects all, 'n' none. Surfaces without ui.custom
-// (RPC extension_ui_request, headless) don't get this — callers keep their
-// select-loop fallback, which the e2e driver can navigate.
+// SPACE toggles at a stable cursor, ↑/↓ (or k/j) move, ENTER applies the whole
+// selection at once, Esc cancels, 'a' selects all, 'n' none. Arrow/enter/esc go
+// through pi's KeybindingsManager (like ui.select) so the terminal's actual key
+// bytes are recognized. Surfaces without ui.custom (RPC, headless) don't get
+// this — callers keep their select-loop fallback, which the e2e driver drives.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable } from "@earendil-works/pi-tui";
@@ -45,9 +46,19 @@ function paletteFromTheme(theme: unknown): Palette {
 	};
 }
 
+// Hard-coded fallback byte forms for tests / no-keybindings surfaces. The real
+// arrow/enter/esc matching goes through pi's KeybindingsManager (kb.matches),
+// exactly like pi's own ui.select selector — that is what recognizes the
+// terminal's ACTUAL arrow bytes, which these CSI/SS3 forms alone were missing.
+const ESC = "\u001b";
 const UP = new Set(["\u001b[A", "\u001bOA"]);
 const DOWN = new Set(["\u001b[B", "\u001bOB"]);
 const WINDOW = 14;
+
+/** The slice of pi's KeybindingsManager we use to match keys to actions. */
+export interface KeyMatcher {
+	matches(data: string, action: string): boolean;
+}
 
 /** Exported for tests: drive handleInput directly and observe done(). */
 export class MultiSelectComponent implements Component, Focusable {
@@ -61,10 +72,16 @@ export class MultiSelectComponent implements Component, Focusable {
 		private readonly items: readonly MultiSelectItem[],
 		private readonly done: (result: string[] | undefined) => void,
 		private readonly palette: Palette = PLAIN,
+		private readonly keys?: KeyMatcher,
 	) {
 		this.checked = new Set(
 			items.filter((item) => item.checked).map((item) => item.id),
 		);
+	}
+
+	/** Does this input match a pi keybinding action? No manager → false. */
+	private is(data: string, action: string): boolean {
+		return this.keys?.matches(data, action) ?? false;
 	}
 
 	/** Required by Component (theme changes / re-render priming). No cache. */
@@ -98,21 +115,21 @@ export class MultiSelectComponent implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		if (data === "\u001b") {
+		if (data === ESC || this.is(data, "tui.select.cancel")) {
 			this.done(undefined);
 			return;
 		}
-		if (data === "\r" || data === "\n") {
+		if (data === "\r" || data === "\n" || this.is(data, "tui.select.confirm")) {
 			this.done(
 				this.items.map((item) => item.id).filter((id) => this.checked.has(id)),
 			);
 			return;
 		}
-		if (UP.has(data)) {
+		if (data === "k" || UP.has(data) || this.is(data, "tui.select.up")) {
 			this.cursor = Math.max(0, this.cursor - 1);
 			return;
 		}
-		if (DOWN.has(data)) {
+		if (data === "j" || DOWN.has(data) || this.is(data, "tui.select.down")) {
 			this.cursor = Math.min(this.items.length - 1, this.cursor + 1);
 			return;
 		}
@@ -142,8 +159,9 @@ export function supportsMultiSelect(ctx: ExtensionContext): boolean {
 /**
  * Show the checkbox picker and resolve the chosen ids (authored order), or
  * undefined on cancel. Rendered as an editor takeover (NOT overlay:true) so it
- * reliably receives focus in the /maestro menu. Callers must check
- * supportsMultiSelect first and keep a select-loop fallback for RPC/headless.
+ * reliably receives focus in the /maestro menu, and matches arrow/enter/esc via
+ * pi's KeybindingsManager. Callers must check supportsMultiSelect first and keep
+ * a select-loop fallback for RPC/headless.
  */
 export function multiSelect(
 	ctx: ExtensionContext,
@@ -165,12 +183,17 @@ export function multiSelect(
 	).custom;
 	// No `overlay: true`: the editor-takeover path setFocus()es the component
 	// directly, unlike overlays which don't take focus under the HUD editor.
-	return custom<string[] | undefined>((_tui, theme, _keybindings, done) => {
+	return custom<string[] | undefined>((_tui, theme, keybindings, done) => {
+		const matcher =
+			keybindings && typeof (keybindings as KeyMatcher).matches === "function"
+				? (keybindings as KeyMatcher)
+				: undefined;
 		const component = new MultiSelectComponent(
 			title,
 			items,
 			done,
 			paletteFromTheme(theme),
+			matcher,
 		);
 		component.focused = true;
 		return component;

@@ -77,17 +77,32 @@ describe("runSettingsMigrations", () => {
 		expect(readGlobal().bumped).toBe(1);
 	});
 
-	it("a no-op migration is still recorded so it never reruns", () => {
+	it("a no-op migration is neither recorded nor materializes a file", () => {
 		const noop: SettingsMigration = {
 			id: "2026-01-02-noop",
 			description: "nothing to do",
 			apply: () => false,
 		};
 		const report = runSettingsMigrations(cwd, home, [noop]);
-		expect(report.applied).toContainEqual(
-			expect.objectContaining({ id: noop.id, changed: false }),
-		);
+		// Not reported as applied, and no ledger-only settings file created…
+		expect(report.applied).toEqual([]);
+		expect(existsSync(join(home, "settings.json"))).toBe(false);
+		expect(existsSync(join(cwd, ".pi", "settings.json"))).toBe(false);
+		// …so it stays armed: a later run that DOES have work applies it.
+		writeGlobal({ existing: true });
+		const bumpNoop: SettingsMigration = { ...noop, apply: () => true };
+		runSettingsMigrations(cwd, home, [bumpNoop]);
 		expect(readGlobal().settingsMigrations).toEqual([noop.id]);
+	});
+
+	it("booting in a repo with nothing to migrate leaves it untouched", () => {
+		// The regression: the project scope is <cwd>/.pi/settings.json. A no-op
+		// migration must not litter every repo with a ledger-only file.
+		const report = runSettingsMigrations(cwd, home, [MODELS_V2_MIGRATION]);
+		expect(report.failures).toEqual([]);
+		expect(report.applied).toEqual([]);
+		expect(existsSync(join(cwd, ".pi", "settings.json"))).toBe(false);
+		expect(existsSync(join(home, "settings.json"))).toBe(false);
 	});
 
 	it("a throwing migration stops the file's chain without a ledger entry", () => {

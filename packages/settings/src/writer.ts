@@ -129,16 +129,20 @@ export interface WriteResult {
  * primitive — `writeExtensionConfigKey` and @vegardx/pi-models'
  * background-model writer both route through it, so there is exactly one
  * crash-safe write path. Returns the resolved file path.
+ *
+ * A mutate that returns `false` signals "nothing to persist" and the write is
+ * skipped entirely — so a no-op never creates a file that did not already
+ * exist, nor rewrites an unchanged one. Returning `void`/`true` writes.
  */
 export function updateSettingsFile(
 	scope: SettingsScope,
 	cwd: string,
 	agentDir: string | undefined,
-	mutate: (raw: Record<string, unknown>) => void,
+	mutate: (raw: Record<string, unknown>) => void | boolean,
 ): { path: string } {
 	const path = settingsPath(scope, cwd, agentDir);
 	const raw = readRawObject(path);
-	mutate(raw);
+	if (mutate(raw) === false) return { path };
 	writeAtomic(path, `${JSON.stringify(raw, null, 2)}\n`);
 	return { path };
 }

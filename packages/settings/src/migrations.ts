@@ -5,6 +5,12 @@
 // applied ids in a per-file ledger (`settingsMigrations`), and reports
 // everything fail-visible. A migration that throws stops that file's chain
 // (order is a contract) and never touches the ledger, so it reruns next boot.
+//
+// A no-op (apply returned false) is NOT recorded and NOT persisted: recording
+// it would both litter every repo with a ledger-only `.pi/settings.json` and,
+// worse, permanently disarm a migration that becomes applicable later (e.g. a
+// repo that gains model config after first boot). A no-op simply reruns each
+// boot until it has real work — the transforms are pure and cheap.
 
 import { copyFileSync, existsSync } from "node:fs";
 import { settingsPath, updateSettingsFile } from "./writer.js";
@@ -70,27 +76,22 @@ export function runSettingsMigrations(
 
 	for (const scope of ["global", "project"] as const) {
 		const path = settingsPath(scope, cwd, agentDir);
-		let backedUp = false;
 		for (const migration of migrations) {
 			try {
-				let changed = false;
-				let skip = false;
+				let recorded = false;
 				updateSettingsFile(scope, cwd, agentDir, (raw) => {
 					const ledger = ledgerOf(raw);
-					if (ledger.includes(migration.id)) {
-						skip = true;
-						return;
-					}
-					if (!backedUp && existsSync(path)) {
+					if (ledger.includes(migration.id)) return false; // already applied
+					if (!migration.apply(raw, scope)) return false; // no-op: don't persist
+					if (existsSync(path)) {
 						const backupPath = `${path}.bak-${migration.id}`;
 						copyFileSync(path, backupPath);
 						backups.push({ path, backupPath });
-						backedUp = true;
 					}
-					changed = migration.apply(raw, scope);
 					raw[LEDGER_KEY] = [...ledger, migration.id];
+					recorded = true;
 				});
-				if (!skip) applied.push({ id: migration.id, scope, changed });
+				if (recorded) applied.push({ id: migration.id, scope, changed: true });
 			} catch (error) {
 				failures.push({
 					id: migration.id,

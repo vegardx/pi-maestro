@@ -6,7 +6,6 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { SubagentsCapabilityV1 } from "@vegardx/pi-contracts";
-import { killPane, splitWindow } from "@vegardx/pi-tmux";
 import type { ExecutionHandle } from "../exec/index.js";
 import {
 	descendantsOf,
@@ -14,40 +13,28 @@ import {
 	renderTargetResolutionError,
 	resolveAgentTarget,
 } from "./agent-targets.js";
+import { openAgentLiveView } from "./agent-view.js";
 
 /** Tracks the single /view split pane so a second /view replaces it. */
 export interface ViewState {
 	viewPaneId: string | undefined;
 }
 
-/** Read-only attach that escapes the maestro's own tmux context. */
-function readOnlyAttachCommand(sessionName: string): string {
-	return `env -u TMUX -u TMUX_PANE tmux attach-session -r -t ${sessionName} 2>/dev/null || echo "[session ended: ${sessionName}]"`;
-}
-
 /**
- * `/view <agent-or-deliverable>` — open a read-only tmux split attached to that
- * agent's session. No argument: pick from active agents; with an open pane
- * and no argument, close it (toggle). Takes the base ExtensionContext so the
- * HUD's Enter action (no command context) can reuse it.
+ * `/view <agent-or-deliverable>` — open a read-only live view of that agent's
+ * transcript (its session file, tailed) in an overlay modal. No argument: pick
+ * from active agents. Takes the base ExtensionContext so the HUD's Enter action
+ * (no command context) can reuse it. `viewState` is retained for signature
+ * compatibility with callers; the modal owns its own lifecycle now.
  */
 export async function handleViewCommand(
 	args: string,
 	ctx: ExtensionContext,
 	execution: ExecutionHandle | undefined,
-	viewState: ViewState,
+	_viewState: ViewState,
 	subagents?: SubagentsCapabilityV1,
 ): Promise<void> {
 	let target = args.trim();
-
-	if (viewState.viewPaneId) {
-		await killPane(viewState.viewPaneId).catch(() => {});
-		viewState.viewPaneId = undefined;
-		if (!target) {
-			ctx.ui.notify("View pane closed.", "info");
-			return;
-		}
-	}
 
 	if (!target) {
 		const keys = listAgentTargets({ execution, subagents })
@@ -68,31 +55,11 @@ export async function handleViewCommand(
 		ctx.ui.notify(renderTargetResolutionError(resolution), "warning");
 		return;
 	}
-	const sessionName = resolution.target.tmuxSession;
-	if (!sessionName) {
-		ctx.ui.notify(
-			`Target ${resolution.target.id} has no tmux session.`,
-			"warning",
-		);
-		return;
-	}
-
-	try {
-		viewState.viewPaneId = await splitWindow({
-			horizontal: true,
-			percent: 40,
-			command: readOnlyAttachCommand(sessionName),
-		});
-		ctx.ui.notify(
-			`Viewing ${sessionName} (read-only). /view to close.`,
-			"info",
-		);
-	} catch (err) {
-		ctx.ui.notify(
-			`Could not open view pane: ${err instanceof Error ? err.message : String(err)}`,
-			"warning",
-		);
-	}
+	await openAgentLiveView(ctx, {
+		id: resolution.target.id,
+		sessionFile: resolution.target.sessionFile,
+		status: () => resolution.target.status,
+	});
 }
 
 export interface SteerTarget {

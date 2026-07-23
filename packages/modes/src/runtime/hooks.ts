@@ -24,7 +24,10 @@ import { archiveLegacyPlans } from "../plan/storage.js";
 import { planPhaseV2 } from "../planning-preamble.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { hydrateModesState } from "../session.js";
-import { readModesCompactionSettings } from "../settings.js";
+import {
+	describePolicyDeviations,
+	readModesCompactionSettings,
+} from "../settings.js";
 import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import {
@@ -52,12 +55,13 @@ import {
 // prefix, so the lists are fixed constants and the set arithmetic is a pure
 // exported function (pinned by test/cache-invariants.test.ts).
 
-/** Tools stripped from read-only agents (write/commit/ship/ask surface). */
+/** Tools stripped from read-only agents (write/commit/ship/delete/ask surface). */
 export const READ_ONLY_STRIPPED_TOOLS = [
 	"commit",
 	"ship",
 	"edit",
 	"write",
+	"delete",
 	"ask",
 ] as const;
 
@@ -192,6 +196,22 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 				}
 			} catch {
 				// Archive is best-effort; a failure surfaces on plan load instead.
+			}
+			// Deviation warning: a loosened execution policy (or disabled bash
+			// write-enforcement) must be visible EVERY session, never silently
+			// permanent (capability-policy step 8).
+			try {
+				const deviations = describePolicyDeviations(ctx.cwd);
+				if (deviations.length > 0) {
+					ctx.ui.notify(
+						`Execution policy deviates from the shipped default:\n${deviations
+							.map((line) => `- ${line}`)
+							.join("\n")}\nReset with /maestro, or keep these knowingly.`,
+						"warning",
+					);
+				}
+			} catch {
+				// Best-effort surfacing; a read failure must not block start.
 			}
 			// Model config is parse-or-ASK: no backwards compatibility, no
 			// migration, but clearing is DESTRUCTIVE so it is never automatic — a

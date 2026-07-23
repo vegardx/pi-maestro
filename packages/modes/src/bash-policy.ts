@@ -228,6 +228,11 @@ export function dedicatedToolSuggestion(
 	)
 		return "webfetch";
 	if (command.executable === "ls" && noFlags(command.args)) return "ls";
+	// Deletion redirects to the delete tool (always-trash, recoverable) — with
+	// or without flags, so `rm -rf dist` is caught too. `shred` is left alone:
+	// redirecting a secure-erase to a recoverable trash would defeat its intent.
+	if (command.executable === "rm" || command.executable === "rmdir")
+		return "delete";
 	return undefined;
 }
 

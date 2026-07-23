@@ -25,6 +25,7 @@ import {
 	resolveExactModelSelection,
 } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
+import { createDeleteTool } from "../delete-tool.js";
 import { buildRecap } from "../deliverable-recap.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
 import {
@@ -712,6 +713,8 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			},
 		}),
 	);
+
+	pi.registerTool(createDeleteTool());
 
 	pi.registerCommand("modes-status", {
 		description: "Show Maestro mode and active plan status.",

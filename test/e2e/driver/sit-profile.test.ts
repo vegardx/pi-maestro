@@ -139,4 +139,20 @@ describe("radicalai-sit profile", () => {
 			OPUS,
 		);
 	});
+
+	it("EEA strikes the US-data-share Fable tripwire — heavy resolves to opus", async () => {
+		// heavy leads with Fable (non-EEA); the active EEA region strikes it before
+		// availability, so reviews land on Opus (EEA-legal) — the live region proof.
+		const resolved = await resolveV2Model(fakeCtx(), {
+			agent: "reviewer",
+			tier: "heavy",
+			inherit: { modelId: SESSION },
+		});
+		expect(resolved.modelId).toBe(OPUS);
+		const fable = resolved.candidates?.find(
+			(f) => f.ref === "Anthropic/Fable 5",
+		);
+		expect(fable?.available).toBe(false);
+		expect(fable?.reason).toContain("outside region");
+	});
 });

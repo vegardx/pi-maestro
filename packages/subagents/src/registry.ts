@@ -60,7 +60,6 @@ export function resolveRuntimePolicy(
 	return {
 		mode: permissions.mode,
 		tools: permissions.tools,
-		isolation: permissions.isolation,
 		session: session.session,
 		transport: transport.transport,
 		...(session.maxTurns !== undefined ? { maxTurns: session.maxTurns } : {}),
@@ -354,25 +353,21 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			id: "host",
 			mode: "full",
 			tools: {},
-			isolation: "host",
 		},
 		{
 			id: "worker",
 			mode: "full",
 			tools: {},
-			isolation: "lightweight",
 		},
 		{
 			id: "read-only",
 			mode: "read-only",
 			tools: { allow: READ_TOOLS },
-			isolation: "strong",
 		},
 		{
 			id: "web-read-only",
 			mode: "read-only",
 			tools: { allow: [...READ_TOOLS, ...WEB_TOOLS] },
-			isolation: "strong",
 			extraExtensions: ["research-tools"],
 		},
 		{
@@ -382,7 +377,6 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			id: "advisor",
 			mode: "read-only",
 			tools: { allow: [...READ_TOOLS, ...WEB_TOOLS, "agent"] },
-			isolation: "strong",
 			extraExtensions: ["research-tools"],
 		},
 	]);

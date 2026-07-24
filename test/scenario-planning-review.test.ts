@@ -45,7 +45,6 @@ function assignment(
 			transport: "headless",
 			tools: {},
 			session: kind === "worker" ? "persistent" : "ephemeral",
-			isolation: "strong",
 		},
 		focus: `${kind} focus`,
 		rationale: `${kind} belongs in this scenario`,

@@ -97,7 +97,6 @@ describe("typed agent registries", () => {
 				id: "p",
 				mode: "read-only",
 				tools: { allow: ["read"] },
-				isolation: "strong",
 			},
 		]);
 		const sessions = new AgentRegistry<AgentSessionPolicy>([
@@ -117,7 +116,6 @@ describe("typed agent registries", () => {
 		).toEqual({
 			mode: "read-only",
 			tools: { allow: ["read"] },
-			isolation: "strong",
 			session: "ephemeral",
 			maxTurns: 3,
 			transport: "headless",

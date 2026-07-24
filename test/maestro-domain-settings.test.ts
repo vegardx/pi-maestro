@@ -238,7 +238,7 @@ describe("Maestro domain configuration", () => {
 				registry(),
 			),
 		).toContain(
-			"unsafe runtime policy: ephemeral full-access host agents are not allowed",
+			"unsafe runtime policy: ephemeral full-access agents are not allowed",
 		);
 		expect(
 			validateDomainEdit(

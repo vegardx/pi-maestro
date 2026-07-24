@@ -249,7 +249,6 @@ describe("exact model-set selection", () => {
 					transport: "headless",
 					tools: {},
 					session: "persistent",
-					isolation: "strong",
 				},
 				focus: "Implement the delivery.",
 				rationale: "Primary delivery worker.",

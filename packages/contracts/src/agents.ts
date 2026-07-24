@@ -46,7 +46,6 @@ export interface AgentRuntimePolicy {
 	readonly transport: AgentTransport;
 	readonly tools: ToolPolicy;
 	readonly session: "persistent" | "ephemeral";
-	readonly isolation: "host" | "lightweight" | "strong";
 	readonly maxTurns?: number;
 	readonly timeoutMs?: number;
 }
@@ -56,7 +55,6 @@ export interface AgentPermissionPolicy {
 	readonly id: string;
 	readonly mode: AgentRuntimePolicy["mode"];
 	readonly tools: ToolPolicy;
-	readonly isolation: AgentRuntimePolicy["isolation"];
 	readonly extraExtensions?: readonly "research-tools"[];
 }
 

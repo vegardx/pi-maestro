@@ -1,120 +1,106 @@
 // The scripted full-stack driver: boots a REAL `pi --mode rpc` with the whole
-// maestro stack in the deterministic CI profile (mock model provider + local
-// bare remote + gh shim), plays the canned scenario with rule-based answers, and
-// asserts on real shipped outcomes.
+// maestro stack in the deterministic CI profile (a scripted mock model + local
+// bare remote + gh shim), seeds the canned plan, drives it to shipped over the
+// real RPC protocol, and asserts on real outcomes (plan.json statuses + git
+// history). No tmux, no API key, no cassette — the scripted model (ci/
+// scripted-model.ts) synthesizes the tool-call turns deterministically, so this
+// runs on every PR.
 //
-// It shares the driver core with the LLM-driver (test/e2e/driver/cli.ts); the
-// only difference is *who decides* the prompts and answers — here a fixed
-// sequence + ScriptedAnswerer instead of a live agent.
-//
-// GATED. It runs only when PI_E2E_FULL=1 AND a recorded cassette exists (or
-// PI_E2E_RECORD=1 is set to record one against a real upstream). Without a
-// cassette the mock provider has nothing to serve, so the test skips rather than
-// fail — see docs/e2e-testing.md for the one-time recording procedure.
+// Gated only by PI_E2E_FULL=1 (it boots a real pi process and spawns real
+// worker processes, so it is heavier than the unit suite and excluded from the
+// default `vitest run`). test:e2e:full sets it.
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { ScriptedAnswerer } from "./driver/answerer.js";
-import { assertScenario, readPlan } from "./driver/assertions.js";
-import { startCassetteServer } from "./driver/ci/cassette-server.js";
-import { setupCiEnv } from "./driver/env-profile.js";
+import { assertScenario } from "./driver/assertions.js";
+import {
+	type RunningScriptedModel,
+	startScriptedModel,
+} from "./driver/ci/scripted-model.js";
+import { type EnvProfile, setupCiEnv } from "./driver/env-profile.js";
 import { type LaunchedSut, launchSut } from "./driver/launch.js";
-import { resolveSteps, SANDBOX_FEATURES } from "./driver/scenario.js";
+import { SANDBOX_FEATURES } from "./driver/scenario.js";
+import { seedScenarioPlan } from "./driver/seed-plan.js";
 
 const REPO_ROOT = process.cwd();
 const CI_DIR = join(REPO_ROOT, "test", "e2e", "driver", "ci");
-const CASSETTE_DIR =
-	process.env.PI_E2E_CASSETTE_DIR ?? join(CI_DIR, "cassettes");
-const RECORD = process.env.PI_E2E_RECORD === "1";
-
-const hasCassettes =
-	existsSync(CASSETTE_DIR) &&
-	readdirSync(CASSETTE_DIR).some((f) => f.endsWith(".json"));
-const RUN = process.env.PI_E2E_FULL === "1" && (hasCassettes || RECORD);
+const RUN = process.env.PI_E2E_FULL === "1";
 
 describe.skipIf(!RUN)("scripted full-stack e2e", () => {
-	let teardown: (() => void) | undefined;
-	let closeCassette: (() => Promise<void>) | undefined;
+	let model: RunningScriptedModel | undefined;
+	let profile: EnvProfile | undefined;
 	let sut: LaunchedSut | undefined;
 
 	afterAll(async () => {
 		sut?.client.close();
 		sut?.child.kill("SIGKILL");
-		teardown?.();
-		await closeCassette?.();
+		profile?.teardown();
+		await model?.close();
 	});
 
 	it(
-		"drives the sandbox-features plan to shipped",
+		"drives the seeded sandbox-features plan to shipped",
 		async () => {
-			const cassette = await startCassetteServer({
-				dir: CASSETTE_DIR,
-				mode: RECORD ? "record" : "replay",
-				upstreamBaseUrl:
-					process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com",
-				onMiss: (key, method, path) =>
-					process.stderr.write(`cassette miss ${method} ${path} (${key})\n`),
-			});
-			closeCassette = cassette.close;
-
-			const profile = setupCiEnv({
-				mockProviderExtension: join(CI_DIR, "mock-provider.ts"),
-				mockBaseUrl: cassette.url,
+			model = await startScriptedModel();
+			const p = setupCiEnv({
+				mockBaseUrl: model.url,
 				ghShimDir: join(CI_DIR, "gh-shim"),
 			});
-			teardown = profile.teardown;
+			profile = p;
+			const slug = seedScenarioPlan(p.piHome, p.repoDir);
 
 			sut = launchSut({
 				maestroRoot: REPO_ROOT,
-				repoDir: profile.repoDir,
-				piHome: profile.piHome,
+				repoDir: p.repoDir,
+				piHome: p.piHome,
 				answerer: new ScriptedAnswerer(),
-				env: profile.env,
-				extraExtensions: profile.extraExtensions,
-				transcriptPath: join(profile.piHome, "events.jsonl"),
+				env: p.env,
+				extraExtensions: p.extraExtensions,
+				transcriptPath: join(p.piHome, "events.jsonl"),
 			});
 
-			// Play the fixed prompt sequence.
-			for (const step of resolveSteps(SANDBOX_FEATURES)) {
+			// Seeded: open the plan and go straight at execution — no model-sensitive
+			// authoring (docs/modes-architecture.md backlog #7).
+			for (const prompt of [`/plan ${slug}`, "/start"]) {
 				const state = (await sut.client.getState()) as {
 					isStreaming?: boolean;
 				};
 				await sut.client.prompt(
-					step.prompt,
+					prompt,
 					state.isStreaming ? "followUp" : undefined,
 				);
 			}
 
-			// Poll plan state until every deliverable is terminal or we time out.
-			await waitForShipped(profile.piHome, 5 * 60 * 1000);
-
-			const result = assertScenario(
-				profile.piHome,
-				profile.repoDir,
-				SANDBOX_FEATURES,
+			// Poll until the real assertion passes (or the SUT dies / we time out) —
+			// robust against reviewer nodes ending at `complete` rather than `shipped`.
+			await waitForAssertion(
+				() => assertScenario(p.piHome, p.repoDir, SANDBOX_FEATURES).ok,
+				4 * 60 * 1000,
+				() => sut?.died(),
 			);
+
+			const result = assertScenario(p.piHome, p.repoDir, SANDBOX_FEATURES);
 			expect(result.ok, result.summary).toBe(true);
 		},
-		6 * 60 * 1000,
+		5 * 60 * 1000,
 	);
 });
 
-/** Resolve once every deliverable reaches a terminal status (or times out). */
-function waitForShipped(piHome: string, timeoutMs: number): Promise<void> {
-	const terminal = new Set(["shipped", "failed", "abandoned", "superseded"]);
+/** Resolve once `pass()` is true (assertion satisfied), the SUT dies, or timeout. */
+function waitForAssertion(
+	pass: () => boolean,
+	timeoutMs: number,
+	died: () => unknown,
+): Promise<void> {
 	const start = Date.now();
 	return new Promise((resolve) => {
 		const tick = () => {
-			const plan = readPlan(piHome, SANDBOX_FEATURES.name);
-			const nodes = plan?.nodes ?? [];
-			const settled =
-				nodes.length > 0 && nodes.every((node) => terminal.has(node.status));
-			if (settled || Date.now() - start > timeoutMs) {
+			if (died() || pass() || Date.now() - start > timeoutMs) {
 				resolve();
 				return;
 			}
-			setTimeout(tick, 3000);
+			setTimeout(tick, 2000);
 		};
 		tick();
 	});

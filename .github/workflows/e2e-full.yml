@@ -1,8 +1,8 @@
 # Full-stack e2e: boots a REAL pi maestro and drives the canned scenario end to
 # end. Two jobs:
-#   • ci-profile  — on PRs, deterministic + offline (mock model provider via
-#     recorded cassettes, local bare remote, gh shim). No secrets, no cost.
-#     Self-skips if no cassette has been recorded yet (see docs/e2e-testing.md).
+#   • ci-profile  — on PRs, deterministic + offline (a scripted mock model that
+#     synthesizes the tool-call turns, local bare remote, gh shim). No secrets,
+#     no cost, no API key. Always runs (see docs/e2e-testing.md).
 #   • live-profile — manual dispatch only; real models + a disposable GitHub
 #     repo. Needs ANTHROPIC_API_KEY + a gh token with repo + delete_repo.
 name: e2e-full
@@ -37,8 +37,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # tmux is not needed: the CI profile uses PI_MAESTRO_TRANSPORT=headless.
-      - name: full-stack e2e (replay)
+      # tmux is not needed: the CI profile uses headless worker transport.
+      - name: full-stack e2e (scripted mock)
         env:
           PI_E2E_FULL: "1"
         run: npm run test:e2e:full

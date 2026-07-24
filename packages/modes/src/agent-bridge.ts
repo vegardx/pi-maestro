@@ -80,7 +80,6 @@ function defaultAssignment(agentId: string): ResolvedAgentAssignment {
 			transport: "headless",
 			tools: {},
 			session: "persistent",
-			isolation: "host",
 		},
 		focus: "Execute the assigned deliverable.",
 		rationale: "Runtime compatibility assignment.",

@@ -613,13 +613,9 @@ export function validateDomainEdit(
 		const transport = (registry.runtime?.transports ?? []).find(
 			(item) => item.id === parsed.transport,
 		);
-		if (
-			permission?.mode === "full" &&
-			permission.isolation === "host" &&
-			session?.session === "ephemeral"
-		)
+		if (permission?.mode === "full" && session?.session === "ephemeral")
 			errors.push(
-				"unsafe runtime policy: ephemeral full-access host agents are not allowed",
+				"unsafe runtime policy: ephemeral full-access agents are not allowed",
 			);
 		if (transport?.transport === "host" && permission?.mode !== "full")
 			errors.push(

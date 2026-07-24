@@ -179,7 +179,6 @@ function defaultAssignment(agentId: string): HelloMessage["assignment"] {
 			transport: "headless",
 			tools: {},
 			session: "persistent",
-			isolation: "host",
 		},
 		focus: "Execute the assigned deliverable.",
 		rationale: "RPC compatibility assignment.",

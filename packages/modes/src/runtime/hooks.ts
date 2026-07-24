@@ -48,6 +48,7 @@ import {
 	buildPlanModePreamble,
 	buildReconPreamble,
 } from "./preambles.js";
+import { executionSeedPromptBlock } from "./transition-seed.js";
 
 // ─── Agent tool classes ──────────────────────────────────────────────────────
 // Exactly TWO tool sets exist across execution agents (the two prompt-cache
@@ -208,14 +209,22 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 		}
 		if (rt.state.mode === "hack" && rt.execution) {
 			const preamble = buildHackModePreamble();
+			const seed = executionSeedPromptBlock(rt);
 			return {
-				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${
+					seed ? `\n\n${seed}` : ""
+				}${pendingBlock}`,
 			};
 		}
 		if (rt.execution) {
 			const preamble = buildMaestroPreamble(rt.engine, rt.execution);
+			// The forward-transition seed (decisions/rationale) rides the conductor's
+			// system prompt for the arc — this session was forked clean of planning.
+			const seed = executionSeedPromptBlock(rt);
 			return {
-				systemPrompt: `${event.systemPrompt}\n\n${preamble}${pendingBlock}`,
+				systemPrompt: `${event.systemPrompt}\n\n${preamble}${
+					seed ? `\n\n${seed}` : ""
+				}${pendingBlock}`,
 			};
 		}
 		if (rt.agentBridge) {

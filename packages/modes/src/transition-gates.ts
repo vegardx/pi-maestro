@@ -35,7 +35,10 @@ export interface TransitionGateDefinition {
 export interface TransitionGateCoordinatorDeps {
 	readonly engine: () => PlanEngineV2 | undefined;
 	readonly currentMode: () => ModeName;
-	readonly commit: (mode: ModeName, ctx: ExtensionContext) => void;
+	readonly commit: (
+		mode: ModeName,
+		ctx: ExtensionContext,
+	) => void | Promise<void>;
 	/**
 	 * The gate's first step for a gated edge (plan→auto/hack): form the plan
 	 * from the converged conversation. "formed" → a populated plan; continue.
@@ -106,7 +109,7 @@ export class TransitionGateCoordinator {
 		if (from === to) return true;
 		const definition = this.registry.get(from, to);
 		if (!definition) {
-			this.deps.commit(to, ctx);
+			await this.deps.commit(to, ctx);
 			return true;
 		}
 		// Step 0: form the plan from the conversation. Plan mode is
@@ -370,7 +373,7 @@ export class TransitionGateCoordinator {
 		}
 		state = { ...state, status: "settled", validations, updatedAt: now() };
 		persistGate(engine, state);
-		this.deps.commit(to, ctx);
+		await this.deps.commit(to, ctx);
 		return true;
 	}
 

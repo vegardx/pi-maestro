@@ -21,52 +21,66 @@ Each mode is a **posture**: a tool set, a permission stance, and a role for the
 maestro. The active tool set is computed by `computeActiveTools`
 (`packages/modes/src/policy.ts`).
 
+The normal workflow is a two-mode cycle — **`plan ↔ auto`** (Shift+Tab) — with
+`hack` and `recon` as deliberate off-ramps entered by command. **`plan` is the
+boot/default mode.**
+
 | Mode | Posture | Maestro's role | Tools |
 | --- | --- | --- | --- |
-| **recon** | Read-only research. Vague idea in, understanding out. | Researcher — fans out research, no plan surface. | read-only + research loop + bash (classifier-gated read-only). No `plan`/structure tools. |
-| **plan** | Formalize a plan *in context*, surface open questions, author structure as it converges. | Planner — converges on what to build, then authors deliverables/tasks. *Converge-before-authoring* is enforced by the planning **system prompt**, not a tool lock. | read-only + `plan` (read) + `deliverable`/`task` (available throughout) + research + bash (gated). No readiness gate (see [Plan lifecycle](#the-plan-lifecycle)). |
+| **plan** *(boot default)* | Converge on WHAT to build and WHY — approach, trade-offs, open questions. **Conversation-only:** the plan's structure is NOT authored here. | Planner — a dialogue partner. The deliverables/tasks are authored in one step at the transition into execution (see [Plan lifecycle](#the-plan-lifecycle)). | read-only + `plan` (read) + research + bash (gated). **No structure tools** (`deliverable`/`task`/`agent`/`repo`) — they open only in the forming step. |
 | **auto** | Orchestrated execution. | **Conductor** — spawns workers per deliverable (worktrees, parallel per deps), runs reviews, ships, then sits idle when all deliverables are done. | full plan/structure + orchestration; workers get implementation tools. |
-| **hack** | Escape hatch for everything. | **The maestro *becomes* the worker** — does the work itself, sequentially, in-session. No orchestration fan-out. | full baseline implementation tools (edit/write/bash/commit), **no** plan-structure/orchestration tools. |
+| **hack** *(off-ramp)* | Escape hatch for everything. | **The maestro *becomes* the worker** — does the work itself, sequentially, in-session. No orchestration fan-out. | full baseline implementation tools (edit/write/bash/commit), **no** plan-structure/orchestration tools. |
+| **recon** *(off-ramp)* | Read-only research. Vague idea in, understanding out. | Researcher — fans out research, no plan surface. Runs in its **own isolated session**; leaving restores the session it came from. | read-only + research loop + bash (classifier-gated read-only). No `plan`/structure tools. |
 
 **hack is the important nuance:** it is not "auto without a plan." It is the
 maestro dropping the conductor role and doing the work directly, one thing at a
 time, in its own session. Fan-out to workers is exactly what hack turns *off*.
 
+**recon is decoupled:** it is no longer in the Shift+Tab cycle and no longer the
+boot mode. `/recon` is a deliberate side-trip into a fresh isolated session;
+leaving it (Shift+Tab) restores the session you came from. It carries nothing
+forward — deeper recon→plan integration is deferred.
+
 ---
 
 ## The plan lifecycle
 
-Plan mode formalizes a plan *in context*, then authors structure as it
-converges. There is **no gate locking the structure tools** —
-`deliverable`/`task` are available throughout plan mode. Premature authoring
-(creating deliverables while the model's own open questions are still
-unanswered) is prevented by the planning **system prompt**, not by confiscating
-tools.
+Plan mode is a **conversation**: the maestro and the user converge on what to
+build and why. It does **not** author the plan — the structure tools are out of
+the plan-mode set entirely. The deliverables and tasks are authored in **one
+forming step** when the user gestures into execution (Shift+Tab / `/auto`), from
+the full context of the planning conversation. Premature authoring is designed
+out, not prompted against.
 
 ```
-/plan ──▶ (fresh planning session, primed) ──▶ converge ──────▶ author ──────▶ plan → auto
-             base prompt establishes the        surface open    deliverable/     distill + fork to
-             "converge before authoring"        questions,      task as the      auto session; plan
-             planning posture                    get answers     plan firms up    review; execute
+/plan ──▶ converge ────────────▶ [Shift+Tab] ──▶ form ──────▶ review ──▶ rule ──▶ auto
+  boot     surface open           the user       author the   plan-      human    fork a fresh
+  default  questions, research,    gestures into  deliverable/ review     ruling   execution session,
+           discuss trade-offs      execution      task tree    agent      on plan  seeded; execute
 ```
 
-- The planning **system prompt** is the control: surface open questions and
-  resolve them with the human *first*; author deliverables/tasks only once
-  converged; nudge the human when nothing is open. This behavioral contract
-  replaces the old `readiness` tool.
-- **plan → auto** is the single gate. The mode change distills the session,
-  forks a fresh auto session, runs **plan review** on the authored plan (which
-  can flag a missing piece — the human deals with findings or ack's none), and
-  auto-starts deliverable #1.
+**The forming step** is the first stage of the `plan→auto`/`plan→hack` transition
+gate. The model:
 
-**Why no hard gate.** The old `readiness` tool locked the structure tools during
-an `exploring` phase — a blunt fix for a planner that authored prematurely even
-while its own open questions sat unanswered. Converge-before-authoring is now a
-behavioral contract in the planning system prompt: the structure tools are
-available throughout plan mode and the lock/tool are removed (backlog #4, done).
-A weak *local* model may still jump the gun on a soft prompt; that is the
-separate "help weak models plan" hardening thread (#8), not a reason to
-hard-gate capable session models.
+1. **Self-assesses open questions.** If a real, user-only question would
+   materially change the plan's structure, it calls `ask` and **stops** — the
+   transition bounces back to plan; the user answers and re-gestures (answering
+   is not auto-commit).
+2. Otherwise **authors** the full deliverable/task tree — the structure tools are
+   available in this one window (the `forming` flag) and nowhere else in plan
+   mode.
+
+Then the existing gate runs: the mechanical fail-fast check (a taskless worker
+deliverable can never cross), the **plan-review** agent, and one final human
+ruling before any worker runs.
+
+**Why conversation-only.** The old `readiness` tool locked the structure tools
+during an `exploring` phase — a blunt fix for a planner that authored
+prematurely. That whole apparatus (readiness tool, phase lock) is gone (backlog
+#4). Instead of relying on a soft prompt to hold a capable model back from
+authoring too early, the structure tools simply are not present until the
+transition — so there is nothing to jump the gun with. A weak *local* model that
+still needs authoring help is the separate hardening thread (#8).
 
 ---
 
@@ -75,30 +89,44 @@ hard-gate capable session models.
 A transition is not a flag flip. Forward transitions **distill and open a fresh,
 primed session**; backward transitions **restore the prior session**.
 
-### Forward (recon→plan, plan→auto)
+### Forward (plan→auto/hack) — as built
 
-Each forward step should:
+The forward transition is the gate pipeline (form → fail-fast → review → ruling),
+and on commit it **forks a fresh execution session**:
 
-1. **Distill** the current session into a compact structured context (Goal /
-   Progress / Key decisions / Next steps / Critical context + links to the
-   deeper research markdown docs on disk).
-2. **Open a fresh session** seeded with that distilled context. The new
-   session's base prompt (global prompt + `AGENTS.md` + `SYSTEM.md`) is rebuilt
-   automatically by pi — we do not compose it ourselves.
-3. For **plan→auto** specifically, the kickoff instructs the fresh auto session
-   to *form the full plan* (deliverables/tasks/reviewers) from the distilled
-   context, then run plan review.
+1. **Build the seed.** A bounded self-curated turn in the plan session produces
+   the handoff — *decisions, rationale, and what we're building* — with a
+   mechanical fallback (plan title + understanding) if the turn is unavailable.
+   The plan's deliverables/tasks are **not** in the seed: `plan.json` is
+   harness-owned and loaded live.
+2. **Fork a clean session.** `ctx.newSession()` (a bare call — RPC's signature
+   takes only `parentSession`, the TUI's an options object; zero args satisfies
+   both). The fresh session is clean of the planning conversation.
+3. **Seed rides the system prompt.** The seed is written to
+   `<planDir>/transitions/NN-execution.md`; its path is stashed in modes state
+   and `executionSeedPromptBlock` injects it into the execution preamble for the
+   arc. This is the same RPC-safe mechanism the `/handoff` seed uses — it never
+   depends on `newSession`'s `setup`/`withSession` callbacks (absent over RPC).
 
-### Backward (auto→plan, plan→recon)
+The fork is **TUI-only**: a fresh session is a UX win for a human conductor, but
+over RPC/headless it would switch the session the controller is attached to
+mid-run. Without a fork the same session keeps the full planning context, so the
+seed (which exists to replace lost context) is correctly skipped there too.
 
-Going back should **restore the prior-stage session**, not drag execution state
-backward:
+### Backward (auto/hack→plan) — as built
 
-1. Walk the `parentSession` lineage to the prior-stage session.
-2. **Age check:** if that session is older than **5 minutes** (its provider
-   cache is likely cold), ask the human: *resume it (cache-cold, may re-cost) or
-   start fresh?*
-3. Resume via session switch, or open fresh per the answer.
+The Shift+Tab backward gesture guards live work, then restores the planning
+session:
+
+1. **Worker-alive guard.** If any worker is still working/summarizing, `ask`
+   **stop-or-stay**: stay keeps conducting; stop parks the workers (resumable via
+   `/restart`) and proceeds. (This replaces the speculative 5-minute age check.)
+2. **Restore.** `ctx.switchSession(planSessionPath)` back to the plan session the
+   execution session forked from, with a "what executed since" note. `plan.json`
+   persists throughout. In-place fallback when no forked session exists.
+
+Natural completion (`onAllSettled`) returns to plan **in place** — the arc is
+done and the conductor stands at the `/handoff` doorway, no restore.
 
 ### pi.dev primitives (grounded in the SDK)
 
@@ -108,57 +136,68 @@ sources under `node_modules/@earendil-works/pi-coding-agent/`.
 | Need | pi.dev-correct primitive |
 | --- | --- |
 | Base prompt = global + AGENTS.md + SYSTEM.md | Automatic via `ResourceLoader` for *any* fresh session (`usage.md` §Context Files; `sdk.md` §System Prompt). **Do not re-implement.** |
-| Open a fresh primed session (extension/RPC) | `ctx.newSession({ parentSession, setup, withSession })` — seed distilled context in `setup(sm)` via `sm.appendCustomMessageEntry("stage-handoff", summary, true)` (in-context); kick with `withSession → ctx.sendUserMessage(kickoff)` (`extensions.md` §ctx.newSession; `types.d.ts` `ExtensionCommandContext.newSession`). |
-| Restore prior session (backward) | `ctx.switchSession(priorPath, {...})`; lineage from the `parentSession` header pi records on every forward `newSession` (`session-format.md` §header). |
+| Open a fresh session (extension) | `ctx.newSession()` — bare call, **TUI-only**. The `setup`/`withSession` callbacks exist only on the TUI signature; the RPC `newSession(parentSession?)` has neither, so we seed via a path-in-state + preamble block rather than `setup(sm)`. |
+| Restore prior session (backward) | `ctx.switchSession(priorPath, {...})` (feature-detected; the plan session path is captured at fork time and stashed in modes state). |
 | Distill | `session.compact(customInstructions?)` or `serializeConversation(convertToLlm(messages))` — reuse pi's structured summary format (`compaction.md`). |
 | Per-turn mode guidance | `before_agent_start` → return modified `systemPrompt` (`extensions.md` §before_agent_start). **Per-turn only** — not the mechanism for stage identity. |
 
-### Backbone implementation design (backlog #1/#2/#4)
+### Backbone implementation (as built)
 
-The concrete shape of the transition backbone, decided against the existing
-carry-forward machinery (`/distill`/`/handoff` in `runtime/carry-commands.ts` +
-`carry-forward.ts`):
+The transition backbone lives across `transition-gates.ts` (the gate pipeline)
+and `runtime/context.ts` + `runtime/transition-seed.ts` (the session mechanics):
 
-**One new primitive — `stageTransition(rt, ctx, {to, kickoff})`:**
-
-1. **Distill, single-shot.** Forward transitions use a *self-curated,
-   non-interactive* distillation (the forced-distill posture: the model curates
-   its own threads, no human selection round) — a transition must be one gate,
-   not a multi-turn episode. The interactive curation UX stays exclusive to
-   `/distill` and `/handoff`.
-2. **Fork + seed, pi.dev-correct.** `ctx.newSession({ parentSession, setup,
-   withSession })`: the distilled doc is seeded in `setup(sm)` via
-   `sm.appendCustomMessageEntry("maestro.stage-handoff", doc, true)` — real
-   in-context material in the fresh session. This **replaces** the
-   `pendingHandoffSeedPath` + per-turn preamble seed block + idle-polled
-   arrival-delivery dance (which exists to work around sending a message across
-   a session switch — seeding in `setup` makes that whole problem vanish).
-3. **Kickoff per edge.** `withSession → ctx.sendUserMessage(kickoff)`:
-   recon→plan orients ("summarize intent, list open questions, wait");
-   plan→auto instructs the fresh session to *form the full plan*
-   (deliverables/tasks/reviewers) from the seed, then plan review runs and
-   execution starts.
-4. **Backward = restore.** auto→plan / plan→recon walk the `parentSession`
-   lineage and `ctx.switchSession(priorPath)`; if the prior session is >5 min
-   old, ask resume-or-fresh first.
-5. **Readiness removal** (backlog #4, done): the structure-tool lock and
-   `readiness` tool are removed; the planning system prompt carries
-   converge-before-authoring. (Landed ahead of the session backbone.)
+- **Forming** is the gate's first `form` step: a nested `runAgentTurn` in the
+  plan session under the `forming` flag (structure tools scoped to it), returning
+  `formed` / `bounced` / `no-plan`. An already-authored plan (reopened or seeded)
+  skips it.
+- **Forward fork-and-seed** rides the gate's `commit`: `stageForwardTransition`
+  builds the seed, forks via a bare `ctx.newSession()` (TUI-only), and stashes
+  the seed path so the execution preamble injects it. **Seeding is a system-prompt
+  block, not `setup(sm).appendCustomMessageEntry`** — the RPC `newSession`
+  signature has no `setup`/`withSession` callbacks, so the `/handoff`-style
+  path-in-state + preamble-block mechanism is the portable one.
+- **Backward restore** is `returnToPlan`: worker-alive stop-or-stay `ask`, then
+  `ctx.switchSession(planSessionPath)` (feature-detected).
+- **Readiness removal** (backlog #4): the structure-tool lock and `readiness`
+  tool are gone; plan mode is conversation-only and authoring is the forming step.
 
 `/handoff` remains a *distinct* command (arc-closing, interactive curation,
-archaeologist) but is refactored onto the same fork+seed core.
+archaeologist); it shares the path-in-state + preamble-block seed mechanism.
 
 ### The one unavoidable shim
 
 pi has **no native "compact the current session *into* a fresh session"** —
 compaction and `/tree` summaries are strictly *in-place* (same file/id). So
-"distill → cross a session boundary → seed" must be composed by us (distill,
-then `newSession({setup})`). That composition is the only place a shim is
-justified; everything else uses a documented primitive.
+"distill → cross a session boundary → seed" is composed by us (build the seed,
+then `newSession()` + a preamble-block seed). That composition is the only place
+a shim is justified; everything else uses a documented primitive.
 
 There is also **no first-class sub-agent-session primitive** — spawning a primed
 worker session is a DIY pattern inside a custom tool via `createAgentSession`.
 (Separate concern from mode transitions.)
+
+---
+
+## Evolve-in-place (mid-execution plan growth)
+
+You grow and revise the plan without leaving auto/hack. The structural freeze is
+**per-node**, not global (`PlanEngineV2`, `packages/modes/src/plan/engine.ts`):
+
+- A **`planned`** node stays fully editable and removable — even while a sibling
+  runs. You can flesh out its tasks, retarget its `after`, or drop it.
+- An **`active`/`complete`/`shipped`/`failed`** node is **frozen**: its structure
+  and tasks are locked (append children or abandon instead).
+- **New nodes are always appendable** — a fresh node starts `planned` and the
+  executor's `readyChildren` tick activates it when its deps clear.
+- **Edges freeze with their dependent**: `node.after` is editable iff that node
+  is still `planned`.
+- `addTask` is statused off the target node: a planned node takes gating `task`s;
+  a running node takes only `followup`/`manual` (a new gate would un-complete a
+  node already executing).
+
+Additions are trusted (no re-gate); the per-node has-tasks check fires at
+activation. `hasExecutionStarted()` survives only as plan-phase routing for the
+authoring tools (append-vs-add, ensemble authoring), not as the CRUD freeze.
 
 ---
 
@@ -295,10 +334,10 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 
 | # | Sev | Defect | Fix |
 | --- | --- | --- | --- |
-| 1 | P0 | **Mode transitions flip state in place** (`commitMode`); no distill, no fresh session, no context handoff. Each stage drags the full raw prior conversation forward. | Wire forward transitions to distill + `ctx.newSession({setup})`; backward to `switchSession` + age prompt. |
-| 2 | P0 | **Preamble carries stage identity** (`before_agent_start` append) instead of a seeded fresh session. | Once #1 lands, reduce the preamble to genuinely per-turn mode guidance; stage context rides the seed. |
-| 3 | P1 | **hack mode half-honors execution** — `hooks.ts:152` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
-| 4 | ✓ | ~~**`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring.~~ **DONE** — removed; `deliverable`/`task` available throughout plan mode; converge-before-authoring is a planning-system-prompt contract; the fail-fast execution gate catches a half-baked plan at plan→auto. | — |
+| 1 | ✓ | ~~**Mode transitions flip state in place**; no distill, no fresh session, no context handoff.~~ **DONE** — forward `plan→auto/hack` forks a fresh execution session seeded with decisions/rationale (TUI); backward restores the plan session via `switchSession` after a worker-alive stop-or-stay guard. | — |
+| 2 | ✓ | ~~**Preamble carries stage identity** instead of a seeded fresh session.~~ **DONE** — the fork gives the fresh session; the seed rides the execution preamble as a path-in-state block (RPC-safe). Plan/recon/hack preambles are per-turn mode guidance. | — |
+| 3 | P1 | **hack mode half-honors execution** — `hooks.ts` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
+| 4 | ✓ | ~~**`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring.~~ **DONE** — removed; plan mode is conversation-only and authoring is the transition's forming step; the fail-fast execution gate catches a half-baked plan at plan→auto. | — |
 | 5 | P2 | ~~No routing-inspection surface (`/maestro explain` never existed).~~ **DONE (#223)** — `/models` + `/models <role>`. | — |
 | 6 | P2 | ~~Driver skill referenced the non-existent `/maestro explain`.~~ **DONE (#223).** | — |
 | 7 | P1 | **e2e can't reach execution** — a weak planner can't author the plan. | Add a `--seed-plan` capability: write a valid `plan.json` into the isolated plan store; open by slug. |

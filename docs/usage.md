@@ -10,17 +10,17 @@ Pi loads the workspace TypeScript directly. Worker observation requires `tmux`; 
 
 ## Modes and entry gates
 
-- **Recon** is the initial read-only research posture. `/recon` re-enters it.
-- **Plan** owns research, questions, and plan structure. `/plan [slug]` opens it.
+- **Plan** is the boot/default mode: research, questions, and converging on what to build. Conversation-only — the structure tools are not here. `/plan [slug]` opens or reopens it.
 - **Auto** runs the structured plan. `/auto` or Shift+Tab requests entry.
 - **Hack** is explicit unrestricted work. `/hack` requests entry.
+- **Recon** is a deliberate read-only research off-ramp in its own isolated session. `/recon` enters it; leaving restores the session you came from.
 - **Agent** is internal to workers.
 
-Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. Plan → Auto/Hack never changes mode immediately: Maestro runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint. **Stay in plan** records a cancelled ruling and starts nothing.
+Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. Plan → Auto/Hack never changes mode immediately: Maestro **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks), then runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint. **Stay in plan** records a cancelled ruling and starts nothing. In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
 
 ## Plan
 
-Plan mode converges first, then authors. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. Once converged, author the plan with the structure tools (available throughout — the convergence discipline is in the system prompt, not a lock):
+Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. When you gesture into execution (Shift+Tab / `/auto`), the plan is authored in one forming step with these tools:
 
 - `deliverable` defines atomic deliveries and their dependency DAG;
 - `task` defines gating work, follow-ups, questions, and manual checkpoints;

@@ -91,6 +91,16 @@ This is already how `coder.md` and `reviewer.md` are written (prompt-conditional
   single findings set — the caller never sees N raw reviews. This is the reason
   nested subagents (reviewer → sub-reviewers, advisor → research) is worth
   allowing: it keeps the caller's window clean.
+- **The plan stays flat — only the host authors writers.** A subagent fans out
+  only to **read-only leaves** (explorers, reviewers, an advisor's own
+  explorers). It never spawns a *writer*: a worker does not spawn a worker.
+  Parallelism and ordering across writer deliverables are the plan DAG's job
+  (`after` edges + branch/base stacking), authored by the host; runtime
+  decomposition is a worker reporting back so the host can amend the plan
+  (evolve-in-place), not a worker minting sub-workers. This is enforced, not
+  merely conventional: `run`/`batch` reject a writer kind (`runtime.mode ===
+  "full"`) unless the caller is the host at depth 0, symmetric with `spawn`'s
+  read-only gate (§5).
 
 Cost of broad subagent use: nesting returns (see §7).
 
@@ -197,7 +207,11 @@ decides it: **candidate implementations must survive a maestro restart** →
 writers stay on nodes.
 
 Dropped as redundant: a "fork + draft" runtime *writer* primitive. The node path
-already does it, with recovery the tool path can't match.
+already does it, with recovery the tool path can't match. This is now enforced
+rather than left to convention: `run`/`batch` reject a writer kind unless the
+caller is the host (depth 0), so a subagent physically cannot author a writer at
+runtime — it fans out to read-only readers or reports back for the host to
+amend the plan.
 
 ---
 
@@ -234,9 +248,11 @@ two things stop being optional:
   state; it just doesn't release the permit. **Blocking spawn-and-wait and
   slot-yield ship together.**
 - **Depth cap.** `DEFAULT_MAX_DEPTH = 3` (`service.ts:94`) = seat(0) → worker(1) →
-  child(2) → grandchild(3), i.e. 4 levels, and depth-3 agents can't spawn. Confirm
-  this covers the intended trees (worker → aggregator → sub-agents = depth 3), and
-  raise it only if a depth-3 agent must itself fan out.
+  child(2) → grandchild(3), i.e. 4 levels, and depth-3 agents can't spawn. Under
+  the flat model the common tree is only depth 2 — host(0) → worker(1) →
+  read-only reader/advisor(2, leaf) — because workers never spawn workers; the
+  extra headroom covers an aggregator layer (a reader that fans out to its own
+  sub-readers). Raise it only if a depth-3 agent must itself fan out.
 
 ---
 
@@ -339,6 +355,10 @@ Ordered so foundational primitives land first and the largest, node-touching wor
 
 - `docs/design/v2-primitives.md` — the catalog/tier/profile model this builds on.
 - `docs/design/persona-commands.md` — persona invocation.
-- Personas: `packages/subagents/personas/{coder,reviewer,researcher,…}.md`.
+- Personas: `packages/subagents/personas/{coder,reviewer,researcher,…}.md`. The
+  worker fan-out orchestrators are `deep-research.md` (research as a committed
+  deliverable, commissioning read-only explorers) and `review-lead.md` (owns a
+  review effort, commissioning read-only reviewers) — both workers, so both stay
+  the single author of their worktree and never spawn writers.
 - The ensemble e2e: `test/e2e/driver/seed-plan.ts` (`seedEnsemblePlan`),
   `assertions.ts` (`assertEnsemble`) — the concrete shape and its invariant.

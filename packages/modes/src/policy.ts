@@ -9,6 +9,22 @@ export const PLAN_TOOL_NAMES = [
 	"repo",
 ] as const;
 
+/**
+ * The plan-AUTHORING tools — the subset of PLAN_TOOL_NAMES that mutate the node
+ * tree. Plan mode is CONVERSATION-ONLY: these are out of the standing plan-mode
+ * set and appear only in two windows — the form-at-transition step (the model
+ * authors the plan as it crosses into execution; `forming` flag) and auto/hack
+ * (evolve-in-place). `plan` itself is navigation/read, so it stays available
+ * throughout. See docs/design/mode-sessions.md § form-at-transition.
+ */
+export const STRUCTURE_TOOL_NAMES = [
+	"deliverable",
+	"task",
+	"agent",
+	"panel",
+	"repo",
+] as const;
+
 /** Research-loop tools available throughout plan mode. */
 export const RESEARCH_TOOL_NAMES = ["research", "dig"] as const;
 
@@ -73,6 +89,12 @@ export interface ToolPolicyInput {
 	/** True when running as a worker/support agent under a maestro. */
 	readonly isAgent?: boolean;
 	/**
+	 * The plan→auto/hack transition is running its forming turn — the model is
+	 * authoring the plan from the conversation. Structure tools become visible
+	 * in plan mode ONLY in this window (plan mode is otherwise conversation-only).
+	 */
+	readonly forming?: boolean;
+	/**
 	 * A carry-forward episode (/distill or /handoff) is running: the
 	 * episode-scoped `carryforward` tool becomes visible. Outside an episode
 	 * it stays out of the set entirely — no standing prompt clutter, no
@@ -120,18 +142,26 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		return input.availableTools.filter((name) => agentAllowed.has(name));
 	}
 
-	// plan + auto: read-only + plan tools + research loop + bash (gated by
-	// classifier) + always-allowed. `gate` is the maestro's ship-gate triage
-	// tool (send back with guidance / escalate with a recommendation) — auto
-	// mode only in practice; plan mode blocks it via toolBlockedInPlanMode.
+	// plan + auto: read-only + research loop + bash (gated by classifier) +
+	// always-allowed + `plan` (navigation). `gate` is the maestro's ship-gate
+	// triage tool (send back with guidance / escalate with a recommendation) —
+	// auto mode only in practice; plan mode blocks it via toolBlockedInPlanMode.
+	//
+	// The plan-AUTHORING tools (STRUCTURE_TOOL_NAMES) are added only when the
+	// model may mutate the tree: auto/hack (evolve-in-place) always, and plan
+	// mode ONLY during the form-at-transition step. Plan-mode CONVERSATION is
+	// otherwise tool-limited to research + read + navigation.
 	const allowed = new Set([
 		...READ_ONLY_TOOLS,
-		...PLAN_TOOL_NAMES,
 		...RESEARCH_TOOL_NAMES,
 		...ALWAYS_ALLOWED_TOOLS,
+		"plan",
 		"bash",
 		"gate",
 	]);
+	if (input.mode === "auto" || input.forming) {
+		for (const name of STRUCTURE_TOOL_NAMES) allowed.add(name);
+	}
 	return withEpisode(input.availableTools.filter((name) => allowed.has(name)));
 }
 
@@ -165,14 +195,27 @@ export function toolBlockedInReconMode(toolName: string): string | null {
 	);
 }
 
-export function toolBlockedInPlanMode(toolName: string): string | null {
+export function toolBlockedInPlanMode(
+	toolName: string,
+	forming = false,
+): string | null {
 	if (toolName === "bash") return null;
 	if (
 		READ_ONLY_TOOLS.has(toolName) ||
-		PLAN_TOOL_NAMES.includes(toolName as never) ||
 		RESEARCH_TOOL_NAMES.includes(toolName as never)
 	) {
 		return null;
+	}
+	// Plan-authoring tools are conversation-blocked: plan mode is for converging,
+	// not structuring. They open only in the form-at-transition window, when the
+	// user gestures into execution (Shift+Tab) and the model authors the plan.
+	if (STRUCTURE_TOOL_NAMES.includes(toolName as never)) {
+		return forming
+			? null
+			: `tool \`${toolName}\` is unavailable in plan-mode conversation — ` +
+					"the plan's deliverables and tasks are authored when you cross " +
+					"into execution (Shift+Tab), from full conversation context. " +
+					"Converge first; the structure comes at the transition.";
 	}
 	if (ALWAYS_ALLOWED_TOOLS.has(toolName)) return null;
 	// Episode-scoped: visibility is governed by computeActiveTools; when it IS

@@ -42,6 +42,7 @@ import { installHud } from "./hud-wiring.js";
 import {
 	buildAgentCompactionGuidance,
 	buildAgentWorkerPreamble,
+	buildFormingPreamble,
 	buildHackModePreamble,
 	buildMaestroPreamble,
 	buildPlanModePreamble,
@@ -189,7 +190,12 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			};
 		}
 		if (rt.state.mode === "plan") {
-			const preamble = buildPlanModePreamble(rt.engine);
+			// The forming turn (plan crossing into execution) authors the tree —
+			// swap in the forming preamble, which carries the structure-tool
+			// instructions. Plan CONVERSATION otherwise never sees them.
+			const preamble = rt.forming
+				? buildFormingPreamble(rt.engine)
+				: buildPlanModePreamble(rt.engine);
 			// Post-handoff: the seed doc rides the system prompt (context-only —
 			// option B) until a plan exists. The user surface is the arrival
 			// card + orientation paragraph, never the raw document.
@@ -508,7 +514,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (reason) return { block: true, reason };
 		}
 		if (rt.state.mode === "plan") {
-			const reason = toolBlockedInPlanMode(event.toolName);
+			const reason = toolBlockedInPlanMode(event.toolName, rt.forming);
 			if (reason) return { block: true, reason };
 		}
 	});

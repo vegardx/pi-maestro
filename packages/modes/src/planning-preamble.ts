@@ -1,15 +1,18 @@
-// Planning preamble for the maestro's plan mode: one preamble covering the two
-// movements of a planning session — converge (research + clarify) then author
-// the node tree/tasks — plus the execution-mode preamble. There is no phase
-// lock: the structure tools are always available and the converge-before-author
-// discipline is behavioral (the old `readiness`/`exploring`-lock is retired).
+// Planning preamble for the maestro's plan mode. Plan mode is CONVERSATION-ONLY:
+// the session converges (research + clarify) and never authors structure — the
+// deliverable/task tools are out of the standing set. The node tree is authored
+// in ONE forming turn when the user gestures into execution (Shift+Tab); that
+// window has its own preamble (buildFormingPreamble). Plus the execution
+// preamble. See docs/design/mode-sessions.md § form-at-transition.
 
 import type { PlanEngineV2 } from "./plan/engine.js";
-import { type PlanV2, walkNodes } from "./plan/schema.js";
+import { walkNodes } from "./plan/schema.js";
 
 /**
  * Build the plan-mode system preamble for the maestro. Injected on every
- * plan-mode turn. One preamble: converge first, then author — no phase branch.
+ * plan-mode CONVERSATION turn. Plan mode converges only — the plan's structure
+ * is authored at the transition into execution, not here (that turn swaps in
+ * buildFormingPreamble). No structure tools are available in this window.
  */
 export function buildPlanModePreamble(
 	engine: PlanEngineV2 | undefined,
@@ -20,10 +23,12 @@ export function buildPlanModePreamble(
 		: `You are in PLAN MODE updating plan \`${engine.get().slug}\`.`;
 	return `${header}
 
-Plan mode has two movements in one session: **converge**, then **author**. The
-structure tools (\`deliverable\`/\`task\`) are available throughout — the
-discipline is behavioral, not enforced: **do not author deliverables while your
-own open questions are still unanswered.** Converge first.
+Plan mode is a **conversation**: you and the user converge on WHAT to build and
+WHY — the approach, the trade-offs, the open questions. You do NOT author the
+plan here. The deliverables and tasks are formed in a single step when the user
+is ready and gestures into execution (Shift+Tab) — from the full context of
+this conversation. There are no structure tools in this window; reaching for
+\`deliverable\`/\`task\` now is a mistake. **Converge; don't structure.**
 
 ## Converge
 
@@ -51,18 +56,67 @@ ${ASKING}
 
 ${CONVERGENCE}
 
+## Crossing into execution
+
+When you and the user agree on the shape, THEY gesture into execution
+(Shift+Tab, or \`/auto\`). That gesture forms the plan: you get one turn to
+author the full deliverable/task tree from everything decided here, a reviewer
+checks it, and the user gives one final ruling before any worker runs. So:
+
+- Keep the conversation decision-complete — the forming turn authors from it.
+- Do NOT pre-empt the transition by trying to structure now.
+- If real open questions remain, name them and keep converging; the user
+  decides when it's ready to form.
+
+## Rules
+
+- Read files directly only for quick orientation; delegate real digging to
+  \`research\` — it runs in parallel and its reports persist for later phases.
+- Prefer several focused research questions over one broad one.
+- For a one-off read-only task that fits neither research nor a worker
+  (summarize, transform, analyze something specific), delegate to \`subagent\`
+  with the \`general\` agent — pick model + effort per call (\`action: "models"\`
+  lists the ordered delegate pool, availability, supported efforts, and spend
+  guidance; omitted choices use its default).
+- Be concise. No narration, no thinking out loud between tool calls.
+- Do NOT implement code yourself.`;
+}
+
+/**
+ * The forming-turn preamble: injected for the ONE turn where plan crosses into
+ * execution and the model authors the plan tree from the converged
+ * conversation. This is where the structure tools live — nowhere else in plan
+ * mode. The turn either authors the full tree OR, if a real question only the
+ * user can settle still blocks the structure, surfaces it via \`ask\` and stops
+ * (the transition bounces back to plan; the user answers, then re-gestures).
+ */
+export function buildFormingPreamble(engine: PlanEngineV2 | undefined): string {
+	const slug =
+		engine && !engine.isDraft() ? ` for plan \`${engine.get().slug}\`` : "";
+	return `You are FORMING THE PLAN${slug} — the user has gestured into execution.
+This one turn turns the converged conversation into the concrete plan. The
+structure tools (\`deliverable\`/\`task\`/\`agent\`/\`repo\`) are available now
+and ONLY now.
+
+## First: self-assess
+
+Is there a real, unanswered question that ONLY the user can settle and that
+would materially change the plan's STRUCTURE (not a detail you can pick a
+sensible default for)?
+- **If yes:** do NOT author. Call \`ask\` with those questions (blocking), then
+  stop. The transition returns to plan; the user answers and re-gestures. Do
+  not structure a plan around a fork you haven't resolved.
+- **If no** (the common case — you converged in the conversation): author the
+  full plan now, in this turn.
+
 ## Author
 
-Once converged (a trivial, unambiguous request converges immediately — don't
-manufacture research), form the plan with the tools. **You MUST use the
-\`deliverable\` and \`task\` tools — do NOT write a plan as text.**
-
-**Authoring is not done when the deliverables exist — it is done when every
-worker deliverable also has its tasks.** Create the deliverables, then in the
-SAME turn add each one's tasks; a worker deliverable with no tasks cannot enter
-execution (the execution gate rejects it). Do not stop after the \`deliverable\`
-call — go straight to the \`task\` calls. Produce tasks so detailed that a
-simpler model could implement them mechanically.
+**You MUST use the \`deliverable\` and \`task\` tools — do NOT write a plan as
+text.** Authoring is not done when the deliverables exist — it is done when
+every worker deliverable also has its tasks. Create the deliverables, then in
+the SAME turn add each one's tasks; a worker deliverable with no tasks cannot
+enter execution (the execution gate rejects it). Produce tasks so detailed that
+a simpler model could implement them mechanically.
 
 1. **Structure** — Create ALL top-level nodes in a single batched \`deliverable\`
    call (not one call per node). A branch-owning worker node = one branch + one PR.
@@ -94,15 +148,6 @@ simpler model could implement them mechanically.
 
 ## Rules
 
-- Read files directly only for quick orientation; delegate real digging to
-  \`research\` — it runs in parallel and its reports persist for later phases.
-- Prefer several focused research questions over one broad one.
-- For a one-off read-only task that fits neither research nor a worker
-  (summarize, transform, analyze something specific), delegate to \`subagent\`
-  with the \`general\` agent — pick model + effort per call (\`action: "models"\`
-  lists the ordered delegate pool, availability, supported efforts, and spend
-  guidance; omitted choices use its default).
-- Be concise. No narration, no thinking out loud between tool calls.
 - Each branch-owning node = one PR. Keep them small and focused.
 - A node whose \`after\` names a branch-owning sibling stacks on it (its
   branch forks from the dependency's tip); \`base: "default-branch"\` opts out.

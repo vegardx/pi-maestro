@@ -4,6 +4,7 @@ import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
 import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
 import {
 	buildExecutionPreamble,
+	buildFormingPreamble,
 	buildPlanModePreamble,
 } from "../packages/modes/src/planning-preamble.js";
 
@@ -30,11 +31,17 @@ function memStore(): PlanStoreV2 {
 }
 
 describe("buildPlanModePreamble", () => {
-	it("gives new plans the plan-mode preamble — converge then author", () => {
+	it("is conversation-only — converge, no author section, no structure tools", () => {
 		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("PLAN MODE");
 		expect(preamble).toContain("## Converge");
-		expect(preamble).toContain("## Author");
+		// Authoring moved to the forming turn — plan conversation must not
+		// instruct or expose it.
+		expect(preamble).not.toContain("## Author");
+		expect(preamble).not.toContain("You MUST use");
+		expect(preamble).toContain("Converge; don't structure");
+		expect(preamble).toContain("## Crossing into execution");
+		expect(preamble).toContain("Shift+Tab");
 	});
 
 	it("shows update message for an existing plan", () => {
@@ -69,21 +76,41 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("file paths");
 		expect(preamble).toContain("signatures");
 	});
+});
+
+describe("buildFormingPreamble", () => {
+	it("self-assess gate: ask + stop on open questions, else author", () => {
+		const preamble = buildFormingPreamble(undefined);
+		expect(preamble).toContain("FORMING THE PLAN");
+		expect(preamble).toContain("## First: self-assess");
+		expect(preamble).toContain("`ask`");
+		expect(preamble).toContain("re-gesture");
+	});
 
 	it("guides authoring with the structure tools, tasks required", () => {
-		const preamble = buildPlanModePreamble(undefined);
+		const preamble = buildFormingPreamble(undefined);
+		expect(preamble).toContain("## Author");
 		expect(preamble).toContain("`deliverable`");
 		expect(preamble).toContain("`task`");
 		expect(preamble).toContain("You MUST use");
-		expect(preamble).toContain("no tasks cannot enter");
+		expect(preamble).toContain("enter execution");
 	});
 
 	it("guides child-node review coverage and inheritance", () => {
-		const preamble = buildPlanModePreamble(undefined);
+		const preamble = buildFormingPreamble(undefined);
 		expect(preamble).toContain("CHILD NODES");
 		expect(preamble).toContain('`after: ["parent"]`');
 		expect(preamble).toContain("resolve by inheritance");
 		expect(preamble).toContain("Never author models or efforts");
+	});
+
+	it("names the plan slug for an existing plan", () => {
+		const engine = PlanEngineV2.create(memStore(), {
+			slug: "my-plan",
+			title: "My Plan",
+			repoPath: "/tmp",
+		});
+		expect(buildFormingPreamble(engine)).toContain("plan `my-plan`");
 	});
 });
 

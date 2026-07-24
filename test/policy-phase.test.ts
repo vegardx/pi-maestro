@@ -1,7 +1,8 @@
-// Plan-mode tool policy: the structure tools (deliverable/task/agent) and the
-// research loop are available throughout plan mode — there is no exploring-phase
-// lock (the old `readiness` gate is retired). Non-plan implementer tools stay
-// blocked in plan mode; auto mode exposes the same plan/structure set.
+// Plan-mode tool policy: plan mode is CONVERSATION-ONLY — the research loop and
+// read/navigation tools are available, but the plan-AUTHORING tools
+// (deliverable/task/agent/repo) are NOT. They open in exactly two windows: the
+// form-at-transition step (the `forming` flag) and auto mode (evolve-in-place).
+// Non-plan implementer tools stay blocked in plan mode throughout.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -28,25 +29,32 @@ const ALL_TOOLS = [
 ];
 
 describe("plan-mode tool policy", () => {
-	it("plan mode exposes the structure tools and the research loop", () => {
+	it("plan conversation exposes research + navigation, NOT the structure tools", () => {
 		const active = computeActiveTools({
 			mode: "plan",
 			availableTools: ALL_TOOLS,
 		});
-		for (const tool of [
-			"deliverable",
-			"task",
-			"agent",
-			"research",
-			"ask",
-			"plan",
-			"read",
-		]) {
+		for (const tool of ["research", "ask", "plan", "read"]) {
 			expect(active).toContain(tool);
+		}
+		// Authoring tools are conversation-blocked.
+		for (const tool of ["deliverable", "task", "agent"]) {
+			expect(active).not.toContain(tool);
 		}
 	});
 
-	it("auto mode exposes the same structure tools", () => {
+	it("the forming turn opens the structure tools in plan mode", () => {
+		const active = computeActiveTools({
+			mode: "plan",
+			availableTools: ALL_TOOLS,
+			forming: true,
+		});
+		expect(active).toContain("deliverable");
+		expect(active).toContain("task");
+		expect(active).toContain("agent");
+	});
+
+	it("auto mode exposes the structure tools (evolve-in-place)", () => {
 		const active = computeActiveTools({
 			mode: "auto",
 			availableTools: ALL_TOOLS,
@@ -55,12 +63,19 @@ describe("plan-mode tool policy", () => {
 		expect(active).toContain("task");
 	});
 
-	it("toolBlockedInPlanMode allows plan/research tools, blocks implementer tools", () => {
-		expect(toolBlockedInPlanMode("deliverable")).toBeNull();
-		expect(toolBlockedInPlanMode("task")).toBeNull();
+	it("toolBlockedInPlanMode blocks structure tools in conversation, allows them while forming", () => {
+		// Conversation: research allowed, authoring blocked.
 		expect(toolBlockedInPlanMode("research")).toBeNull();
-		// Non-plan implementer tools stay disabled in plan mode.
+		expect(toolBlockedInPlanMode("plan")).toBeNull();
+		expect(toolBlockedInPlanMode("deliverable")).toMatch(
+			/cross into execution/,
+		);
+		expect(toolBlockedInPlanMode("task")).toMatch(/cross into execution/);
+		// Forming window: authoring allowed.
+		expect(toolBlockedInPlanMode("deliverable", true)).toBeNull();
+		expect(toolBlockedInPlanMode("task", true)).toBeNull();
+		// Non-plan implementer tools stay disabled in plan mode regardless.
 		expect(toolBlockedInPlanMode("edit")).toMatch(/disabled/);
-		expect(toolBlockedInPlanMode("write")).toMatch(/disabled/);
+		expect(toolBlockedInPlanMode("write", true)).toMatch(/disabled/);
 	});
 });

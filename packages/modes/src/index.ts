@@ -166,6 +166,7 @@ export {
 export {
 	computeActiveTools,
 	PLAN_TOOL_NAMES,
+	STRUCTURE_TOOL_NAMES,
 	toolBlockedInPlanMode,
 } from "./policy.js";
 export {

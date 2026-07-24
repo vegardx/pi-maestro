@@ -7,7 +7,10 @@ import { buildPlanAwareCompactionMarker } from "../forward-summary.js";
 import type { PlanEngineV2 } from "../plan/engine.js";
 import { buildExecutionPreamble } from "../planning-preamble.js";
 
-export { buildPlanModePreamble } from "../planning-preamble.js";
+export {
+	buildFormingPreamble,
+	buildPlanModePreamble,
+} from "../planning-preamble.js";
 
 /**
  * Recon-mode preamble. Deliberately contains ZERO plan-formation language:

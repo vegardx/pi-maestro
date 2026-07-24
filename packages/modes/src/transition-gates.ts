@@ -36,6 +36,16 @@ export interface TransitionGateCoordinatorDeps {
 	readonly engine: () => PlanEngineV2 | undefined;
 	readonly currentMode: () => ModeName;
 	readonly commit: (mode: ModeName, ctx: ExtensionContext) => void;
+	/**
+	 * The gate's first step for a gated edge (plan→auto/hack): form the plan
+	 * from the converged conversation. "formed" → a populated plan; continue.
+	 * "bounced" → the model surfaced open questions and stopped; abort to plan.
+	 * "no-plan" → no engine at all. Absent → skip forming (the plan is assumed
+	 * already authored — the path tests and reopened/seeded plans take).
+	 */
+	readonly form?: (
+		ctx: ExtensionContext,
+	) => Promise<"formed" | "bounced" | "no-plan">;
 	readonly agents: () =>
 		| import("@vegardx/pi-contracts").AgentsCapabilityV1
 		| undefined;
@@ -98,6 +108,23 @@ export class TransitionGateCoordinator {
 		if (!definition) {
 			this.deps.commit(to, ctx);
 			return true;
+		}
+		// Step 0: form the plan from the conversation. Plan mode is
+		// conversation-only, so the plan is usually an empty draft here — this
+		// authoring turn populates it (or bounces back if open questions remain).
+		if (this.deps.form) {
+			const outcome = await this.deps.form(ctx);
+			if (outcome === "no-plan") {
+				ctx.ui.notify("No active plan — run /plan first.", "warning");
+				return false;
+			}
+			if (outcome === "bounced") {
+				ctx.ui.notify(
+					"Open questions surfaced while forming the plan — answer them, then Shift+Tab again to enter execution.",
+					"info",
+				);
+				return false;
+			}
 		}
 		const engine = this.deps.engine();
 		if (!engine) {

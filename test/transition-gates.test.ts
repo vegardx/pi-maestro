@@ -192,6 +192,102 @@ describe("transition gate coordinator", () => {
 	});
 });
 
+describe("form-at-transition step (Phase 2)", () => {
+	it("bounces: form surfaces open questions — no reviewer, ruling, or commit", async () => {
+		const { engine, now } = fixture();
+		const commit = vi.fn();
+		const cap = agents();
+		const ask = { ask: vi.fn(async () => []) } as unknown as AskCapabilityV1;
+		const form = vi.fn(async () => "bounced" as const);
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => "plan" as const,
+				commit: commit as never,
+				form,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+			},
+		);
+
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(false);
+		expect(form).toHaveBeenCalledOnce();
+		expect(cap.run).not.toHaveBeenCalled();
+		expect(ask.ask).not.toHaveBeenCalled();
+		expect(commit).not.toHaveBeenCalled();
+	});
+
+	it("formed: forming runs first, then the normal review→ruling→settle pipeline", async () => {
+		const { engine, now } = fixture();
+		let mode: "plan" | "auto" = "plan";
+		const commit = vi.fn((next: "auto") => {
+			mode = next;
+		});
+		const cap = agents();
+		const ask = {
+			ask: vi.fn(async (questions) => [
+				{ questionId: questions[0]!.id, value: "enter-without" },
+			]),
+		} as unknown as AskCapabilityV1;
+		const order: string[] = [];
+		const form = vi.fn(async () => {
+			order.push("form");
+			return "formed" as const;
+		});
+		(cap.run as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+			order.push("review");
+			return {
+				runId: "run-1",
+				assignment: { agentId: "a" },
+				handle: {
+					id: "run-1",
+					status: () => "running",
+					result: async () => ({ status: "succeeded", summary: "sound" }),
+				},
+			};
+		});
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => mode,
+				commit: commit as never,
+				form,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+			},
+		);
+
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(true);
+		// Forming precedes the reviewer.
+		expect(order).toEqual(["form", "review"]);
+		expect(commit).toHaveBeenCalledOnce();
+	});
+
+	it("no-plan: form reports no engine — warns and stays", async () => {
+		const { engine, now } = fixture();
+		const commit = vi.fn();
+		const form = vi.fn(async () => "no-plan" as const);
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => "plan" as const,
+				commit: commit as never,
+				form,
+				agents: () => agents(),
+				ask: () => ({ ask: vi.fn(async () => []) }) as never,
+				now,
+			},
+		);
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(false);
+		expect(commit).not.toHaveBeenCalled();
+	});
+});
+
 describe("policy-row wiring (Phase 4)", () => {
 	it("resolves the row tier and passes the model override to the reviewer", async () => {
 		const { engine, now } = fixture();

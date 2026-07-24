@@ -94,6 +94,27 @@ import { installDebugProposalHandler } from "./debug-command.js";
  */
 const DRAFT_NAMING_TIMEOUT_MS = 45_000;
 
+/**
+ * Bound on the form-at-transition turn: the model authors the whole plan tree
+ * (or self-assesses open questions and stops). Generous — authoring is the real
+ * work of the transition and runs several batched tool calls — but bounded so a
+ * wedged provider stream can't hold the gate (and pi's loop) open forever. On
+ * timeout the forming step treats an empty plan as "bounced" back to plan.
+ */
+const FORMING_TURN_TIMEOUT_MS = 240_000;
+
+/**
+ * The forming turn's trigger. The authoring instructions live in the forming
+ * preamble (swapped in for this turn); this message just kicks it off. Silent
+ * (runAgentTurn sends display:false) — the user sees the authoring itself, not
+ * this nudge.
+ */
+const FORMING_TRIGGER =
+	"[Forming the plan — the user has gestured into execution. Follow your " +
+	"forming instructions: self-assess open questions first (ask + stop if any " +
+	"only-the-user-can-answer structural question remains), otherwise author the " +
+	"complete deliverable/task tree now from everything we converged on.]";
+
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStoreV2;
 	readonly now?: () => string;
@@ -168,6 +189,10 @@ export interface RuntimeContext {
 	compactionCooldownUntil: number;
 	// Highest context-fill warning step already fired (70/90); 0 = armed.
 	contextWarnedAt: number;
+	// Transient (not persisted): the plan→auto/hack forming turn is running.
+	// While set, plan mode exposes the structure tools and swaps in the forming
+	// preamble — the ONE window where a plan-mode conversation may author.
+	forming: boolean;
 
 	currentMode(): ModeName;
 	currentEngine(): PlanEngineV2 | undefined;
@@ -338,6 +363,7 @@ export function createRuntimeContext(
 			engine: () => rt.engine,
 			currentMode: () => rt.state.mode,
 			commit: commitMode,
+			form: (ctx) => formTransitionPlan(ctx),
 			agents: () => maestro.capabilities.get(CAPABILITIES.agents),
 			ask: () => maestro.capabilities.get(CAPABILITIES.ask),
 			now,
@@ -425,6 +451,45 @@ export function createRuntimeContext(
 		}
 	}
 
+	/**
+	 * The gate's first step: form the plan from the converged conversation. Plan
+	 * mode is conversation-only, so at the transition the plan is usually an
+	 * empty draft — this runs ONE authoring turn (structure tools + forming
+	 * preamble scoped to it via rt.forming) that either authors the full tree or,
+	 * if a real user-only structural question remains, surfaces it via `ask` and
+	 * stops. Signals:
+	 *   "formed"   — the plan now has nodes; materialize and continue the gate.
+	 *   "bounced"  — no nodes authored (open questions surfaced); abort to plan.
+	 *   "no-plan"  — no engine at all (defensive; plan mode auto-opens a draft).
+	 * An already-authored plan (reopened, or seeded) skips the forming turn.
+	 */
+	async function formTransitionPlan(
+		ctx: ExtensionContext,
+	): Promise<"formed" | "bounced" | "no-plan"> {
+		const engine = rt.engine;
+		if (!engine) return "no-plan";
+		// Already authored (a reopened plan, or one seeded for a drive): the
+		// structure exists, so there is nothing to form — proceed straight to the
+		// mechanical gate.
+		if (engine.get().nodes.length > 0) return "formed";
+		rt.forming = true;
+		rt.applyTools();
+		try {
+			await runAgentTurn(pi, ctx, FORMING_TRIGGER, {
+				timeoutMs: FORMING_TURN_TIMEOUT_MS,
+			});
+		} catch {
+			// A wedged/failed forming turn leaves the plan empty → bounce.
+		} finally {
+			rt.forming = false;
+			rt.applyTools();
+		}
+		// The turn either authored (nodes now exist) or chose to ask + stop.
+		if ((rt.engine?.get().nodes.length ?? 0) === 0) return "bounced";
+		rt.finalizeDraftPlan(ctx);
+		return "formed";
+	}
+
 	rt = {
 		pi,
 		maestro,
@@ -457,6 +522,7 @@ export function createRuntimeContext(
 		pendingCompaction: undefined,
 		compactionCooldownUntil: 0,
 		contextWarnedAt: 0,
+		forming: false,
 
 		currentMode(): ModeName {
 			return rt.state.mode;
@@ -488,6 +554,7 @@ export function createRuntimeContext(
 					baselineTools,
 					isAgent: isAgentMode(),
 					carryForwardActive: Boolean(rt.carryForward.get()),
+					forming: rt.forming,
 				}),
 			);
 		},
@@ -496,9 +563,9 @@ export function createRuntimeContext(
 			// Defense in depth: mode is operator authority. An agent process must
 			// never widen its posture, even if some internal path reached here.
 			if (isAgentMode()) return false;
-			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
-				rt.finalizeDraftPlan(ctx);
-			}
+			// Plan→auto/hack forms the plan INSIDE the gate (form dep): the draft
+			// is authored, then materialized by formTransitionPlan. No finalize
+			// here — an empty draft must not hit disk before forming runs.
 			return transitionGates.request(mode, ctx);
 		},
 

@@ -12,17 +12,18 @@ import {
 	type AgentKindDefinition,
 	type Answer,
 	CAPABILITIES,
-	MODEL_ROLES,
-	type ModelRole,
+	SPAWNABLE_AGENT_TYPES,
+	type SpawnableAgentType,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import {
-	activeResidency,
+	defaultTierForAgent,
+	explainTier,
 	getModelMeta,
-	readModelsConfig,
-	residencyError,
+	readV2Config,
 	resolveExactModelSelection,
+	resolveV2Model,
 } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { createDeleteTool } from "../delete-tool.js";
@@ -724,77 +725,110 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	pi.registerCommand("models", {
 		description:
-			"Show how each maestro role resolves to a model (routing inspection). " +
-			"`/models <role>` details one role's candidate options and why each was picked or skipped.",
+			"Show how each maestro agent type resolves to a model (v2 routing). " +
+			"`/models <agent>` details one agent's tier candidates and why each was picked or skipped.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const roleArg = args.trim();
-			if (roleArg) {
-				if (!(MODEL_ROLES as readonly string[]).includes(roleArg)) {
+			const agentArg = args.trim();
+			let config: ReturnType<typeof readV2Config> | undefined;
+			try {
+				config = readV2Config(ctx.cwd);
+			} catch (error) {
+				ctx.ui.notify(
+					`Model config did not parse: ${error instanceof Error ? error.message : String(error)}`,
+					"warning",
+				);
+				return;
+			}
+
+			// `/models <agent>`: the candidate walk for one agent type's tiers.
+			if (agentArg) {
+				if (!(SPAWNABLE_AGENT_TYPES as readonly string[]).includes(agentArg)) {
 					ctx.ui.notify(
-						`Unknown role "${roleArg}". Roles: ${MODEL_ROLES.join(", ")}`,
+						`Unknown agent "${agentArg}". Agents: ${SPAWNABLE_AGENT_TYPES.join(", ")}`,
 						"warning",
 					);
 					return;
 				}
-				const res = await resolveExactModelSelection(ctx, {
-					role: roleArg as ModelRole,
-					requireApiKey: true,
-				});
+				const agent = agentArg as SpawnableAgentType;
+				const tiers = config?.allowances[agent]?.tiers ?? [];
+				if (tiers.length === 0) {
+					// No tier allowance → inherits the session model (e.g. worker).
+					try {
+						const res = await resolveV2Model(ctx, { agent });
+						ctx.ui.notify(
+							`${agent} — no tier allowance → inherits the session model: ${res.modelId}${res.effort ? ` @${res.effort}` : ""} [${res.source}]`,
+							"info",
+						);
+					} catch (error) {
+						ctx.ui.notify(
+							`${agent} — inherit failed: ${error instanceof Error ? error.message : String(error)}`,
+							"warning",
+						);
+					}
+					return;
+				}
+				const defaultTier = tiers[0];
 				const lines = [
-					`${roleArg} — preset ${res.presetId ?? "session"} / set ${res.modelSetId ?? "session"}`,
+					`${agent} — allowed tiers: ${tiers.join(", ")} (default: ${defaultTier})`,
 				];
-				// One line per candidate option: ▶ selected, · available, ✗ ruled out
-				// (with the reason). This is the "why this model" surface the oracle
-				// wants — a human can judge whether the pick was sensible.
-				for (const candidate of res.candidates) {
-					const mark =
-						candidate.optionId === res.selected?.optionId
-							? "▶"
-							: candidate.available
-								? "·"
-								: "✗";
-					const model = candidate.modelId ?? candidate.authoredModel;
-					const why = candidate.available
-						? ""
-						: ` — ${candidate.reason ?? "unavailable"}`;
-					const summary = candidate.summary ? `  (${candidate.summary})` : "";
+				for (const tier of tiers) {
+					const ex = await explainTier(ctx, agent, tier);
 					lines.push(
-						`  ${mark} ${candidate.optionId}: ${model} @${candidate.effort}${why}${summary}`,
+						`  tier ${tier}${tier === defaultTier ? " (default)" : ""} — binding ${ex.bindingId ?? "none"} / roster ${ex.rosterId ?? "none"}:`,
 					);
+					// The resolver takes the first AVAILABLE ref; mark it in the default tier.
+					let picked = false;
+					for (const candidate of ex.candidates) {
+						const isPick =
+							tier === defaultTier && !picked && candidate.available;
+						if (isPick) picked = true;
+						const mark = isPick ? "▶" : candidate.available ? "·" : "✗";
+						const model = candidate.model ?? "(no attachment)";
+						const why = candidate.available
+							? ""
+							: ` — ${candidate.reason ?? "unavailable"}`;
+						lines.push(
+							`    ${mark} ${candidate.ref}: ${model}${candidate.effort ? ` @${candidate.effort}` : ""}${why}`,
+						);
+					}
+					if (ex.candidates.length === 0) lines.push("    (roster tier empty)");
 				}
-				if (!res.selected) {
-					lines.push(
-						`  (no selection: ${res.errors.map((e) => e.message).join("; ")})`,
-					);
-				}
-				ctx.ui.notify(lines.join("\n"), res.selected ? "info" : "warning");
+				ctx.ui.notify(lines.join("\n"), "info");
 				return;
 			}
-			// Table over every role: what a spawn would actually resolve to now.
+
+			// Table: what each spawnable agent type resolves to right now. Workers
+			// with no tier inherit the session model; the rest resolve through the
+			// active binding→roster→tier. Source is inherit | tier | fallback.
 			const resolutions = await Promise.all(
-				MODEL_ROLES.map((role) =>
-					resolveExactModelSelection(ctx, { role, requireApiKey: true }).then(
-						(res) => ({ role, res }),
-					),
-				),
+				SPAWNABLE_AGENT_TYPES.map(async (agent) => {
+					const tier = defaultTierForAgent(ctx, agent);
+					try {
+						const res = await resolveV2Model(ctx, {
+							agent,
+							...(tier ? { tier } : {}),
+						});
+						return { agent, tier, res };
+					} catch (error) {
+						return {
+							agent,
+							tier,
+							err: error instanceof Error ? error.message : String(error),
+						};
+					}
+				}),
 			);
-			const preset = resolutions[0]?.res.presetId ?? "session";
-			const modelsConfig = readModelsConfig(ctx.cwd);
-			const residency = modelsConfig?.residency
-				? activeResidency(modelsConfig)
-				: undefined;
-			const residencyProblem = residencyError(modelsConfig);
-			const width = Math.max(...MODEL_ROLES.map((role) => role.length));
-			const rows = resolutions.map(({ role, res }) => {
-				const selected = res.selected;
-				return selected
-					? `  ${role.padEnd(width)} → ${selected.modelId} @${selected.effort} [${selected.source}]`
-					: `  ${role.padEnd(width)} → (none: ${res.errors[0]?.code ?? "unresolved"})`;
-			});
+			const roster = resolutions.find((r) => r.res?.rosterId)?.res;
+			const region = config?.region?.active;
+			const width = Math.max(...SPAWNABLE_AGENT_TYPES.map((a) => a.length));
+			const rows = resolutions.map(({ agent, tier, res, err }) =>
+				res
+					? `  ${agent.padEnd(width)} → ${res.modelId}${res.effort ? ` @${res.effort}` : ""} [${res.source}]${tier ? ` (tier ${tier})` : " (inherit)"}`
+					: `  ${agent.padEnd(width)} → (unresolved: ${err})`,
+			);
 			ctx.ui.notify(
 				[
-					`Model routing — preset: ${preset}${residency ? ` · residency: ${residency}` : ""}  (\`/models <role>\` for candidate detail)`,
-					...(residencyProblem ? [`  ⚠ ${residencyProblem}`] : []),
+					`Model routing (v2)${roster ? ` — binding ${roster.bindingId} / roster ${roster.rosterId}` : ""}${region ? ` · region ${region}` : ""}  (\`/models <agent>\` for candidate detail)`,
 					...rows,
 				].join("\n"),
 				"info",

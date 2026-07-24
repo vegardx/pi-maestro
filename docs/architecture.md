@@ -31,7 +31,7 @@ Unsupported plan, run, and execution schema versions fail with archive/reset gui
 
 ## Planning and execution
 
-A plan progresses through `exploring` and `structuring`. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. `readiness` records the understanding and unlocks structural tools. The `deliverable`, `task`, `workflow`, and `plan` tools define the contract.
+Plan mode is one session with two movements — converge, then author. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. The structure tools (`deliverable`, `task`, `workflow`, `plan`) are available throughout; converge-before-authoring is a behavioral contract in the planning system prompt, not a tool lock.
 
 `workflow` resolves each semantic agent assignment to an immutable model/effort pair and stores an explicit stage DAG. Members of a stage run against one `inputRevision`; stages expose declared input/output contracts and barriers. Duplicate semantic kinds are valid when identities, rationale, and exact model choices are explicit.
 

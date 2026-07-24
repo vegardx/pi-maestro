@@ -1,5 +1,4 @@
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { PlanPhase } from "./plan/schema.js";
 
 export const PLAN_TOOL_NAMES = [
 	"deliverable",
@@ -10,25 +9,12 @@ export const PLAN_TOOL_NAMES = [
 	"repo",
 ] as const;
 
-/**
- * Structure-mutating plan tools — blocked while the plan is `exploring` so
- * the maestro must converge (research + readiness) before forming the plan.
- */
-export const STRUCTURE_TOOL_NAMES = [
-	"deliverable",
-	"task",
-	"agent",
-	"panel",
-	"repo",
-] as const;
-
 /** Research-loop tools available throughout plan mode. */
-export const RESEARCH_TOOL_NAMES = ["research", "readiness", "dig"] as const;
+export const RESEARCH_TOOL_NAMES = ["research", "dig"] as const;
 
 /**
- * Research tools available in recon mode. Deliberately NOT `readiness` — the
- * user leaving recon (Shift+Tab) is the readiness signal there; the mode has
- * no plan surface at all.
+ * Research tools available in recon mode — the read-only research posture, no
+ * plan surface at all (recon has no `deliverable`/`task`/`plan`).
  */
 export const RECON_TOOL_NAMES = ["research", "dig"] as const;
 
@@ -67,8 +53,6 @@ export const AGENT_TOOL_NAMES = [
 	"suggest_next_prompt", // TODO: remove in the suggest_next_prompt cleanup pass
 ] as const;
 
-const STRUCTURE_TOOLS = new Set<string>(STRUCTURE_TOOL_NAMES);
-
 /**
  * Whether NEW deliverables may activate (workers fan out) in this mode. Only
  * auto orchestrates. Hack is the escape hatch where the maestro BECOMES the
@@ -88,8 +72,6 @@ export interface ToolPolicyInput {
 	readonly baselineTools?: readonly string[];
 	/** True when running as a worker/support agent under a maestro. */
 	readonly isAgent?: boolean;
-	/** Planning phase; only narrows the tool set in plan mode. */
-	readonly phase?: PlanPhase;
 	/**
 	 * A carry-forward episode (/distill or /handoff) is running: the
 	 * episode-scoped `carryforward` tool becomes visible. Outside an episode
@@ -115,7 +97,7 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 	if (input.mode === "hack") return withEpisode([...baseline]);
 
 	// Recon: pure research posture — read-only tools + the research loop.
-	// No plan surface (`plan`/`readiness`/structure tools stay out entirely);
+	// No plan surface (`plan`/structure tools stay out entirely);
 	// bash is allowed but gated read-only by the classifier, like plan mode.
 	if (input.mode === "recon") {
 		const reconAllowed = new Set([
@@ -150,11 +132,6 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 		"bash",
 		"gate",
 	]);
-	// Exploring phase: the readiness gate — structure tools stay locked until
-	// the model declares readiness and the user confirms.
-	if (input.mode === "plan" && input.phase === "exploring") {
-		for (const name of STRUCTURE_TOOL_NAMES) allowed.delete(name);
-	}
 	return withEpisode(input.availableTools.filter((name) => allowed.has(name)));
 }
 
@@ -188,18 +165,8 @@ export function toolBlockedInReconMode(toolName: string): string | null {
 	);
 }
 
-export function toolBlockedInPlanMode(
-	toolName: string,
-	phase?: PlanPhase,
-): string | null {
+export function toolBlockedInPlanMode(toolName: string): string | null {
 	if (toolName === "bash") return null;
-	if (phase === "exploring" && STRUCTURE_TOOLS.has(toolName)) {
-		return (
-			`tool \`${toolName}\` is locked — the plan is still exploring. ` +
-			"Research and clarify until you meet the convergence criteria, then " +
-			"call `readiness` to propose forming the plan."
-		);
-	}
 	if (
 		READ_ONLY_TOOLS.has(toolName) ||
 		PLAN_TOOL_NAMES.includes(toolName as never) ||

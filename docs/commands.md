@@ -36,7 +36,6 @@ Exact opaque control targets (`worker:<delivery/agent>`, `run:<id>`) win over al
 
 - `research` sends a batched set of codebase/web questions and persists reports.
 - `dig(ref)` retrieves one full report.
-- `readiness` records the understanding and asks to enter structuring.
 - `deliverable` atomically adds/updates/removes deliveries and dependency/repo mapping.
 - `task` manages work items; batch add is all-or-nothing.
 - `workflow` lists kind options, resolves exact assignments, stores the stage DAG, or updates a stage.

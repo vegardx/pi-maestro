@@ -34,7 +34,6 @@ function fixture() {
 		},
 		now,
 	);
-	engine.setPhase("structuring");
 	engine.addNode(null, { agent: "worker", persona: "coder", title: "Runtime" });
 	engine.addTask("runtime", { title: "Implement runtime" });
 	return { engine, saved: () => saved, now };

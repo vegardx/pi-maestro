@@ -10,7 +10,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deriveBase } from "../../../packages/modes/src/plan/schema.js";
 import { createPlanStoreV2 } from "../../../packages/modes/src/plan/storage.js";
-import { planPhaseV2 } from "../../../packages/modes/src/planning-preamble.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
 import { seededPlansRoot, seedScenarioPlan } from "./seed-plan.js";
 
@@ -36,8 +35,8 @@ describe("seedScenarioPlan", () => {
 		const plan = store.load(slug);
 		expect(plan).not.toBeNull();
 		expect(plan?.repoPath).toBe("/tmp/sandbox-repo");
-		// Has nodes → hydrates as structuring (ready to execute, not exploring).
-		expect(planPhaseV2(plan as never)).toBe("structuring");
+		// A seeded plan is authored (has nodes), ready to execute.
+		expect((plan?.nodes.length ?? 0) > 0).toBe(true);
 	});
 
 	it("matches the scenario: parallel pair, review child, stacked dependent", () => {

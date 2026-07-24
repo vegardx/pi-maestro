@@ -313,14 +313,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	pi.registerCommand("recon", {
 		description: "Switch to Maestro recon mode (read-only research posture).",
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			if (rt.execution) {
-				ctx.ui.notify(
-					"Execution is running — recon is unavailable until it settles.",
-					"warning",
-				);
-				return;
-			}
-			rt.setMode("recon", ctx);
+			await rt.enterRecon(ctx);
 		},
 	});
 

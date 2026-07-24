@@ -49,8 +49,8 @@ describe("recon in the mode contract", () => {
 		expect(MODE_NAMES).toEqual(["plan", "auto"]);
 	});
 
-	it("is the default mode on session start", () => {
-		expect(initialModesState(now).mode).toBe("recon");
+	it("is NOT the default mode — plan is the boot posture; recon is a deliberate off-ramp", () => {
+		expect(initialModesState(now).mode).toBe("plan");
 	});
 
 	it("cycle is plan ⇄ auto; off-cycle modes exit into plan", () => {

@@ -28,6 +28,7 @@ export interface PersistedModesState {
 	readonly pendingHandoffSeedPath?: string;
 	readonly executionSeedPath?: string;
 	readonly planSessionPath?: string;
+	readonly reconReturnSessionPath?: string;
 }
 
 export interface SessionStateSink {
@@ -54,6 +55,7 @@ export function toPersistedState(state: ModesState): PersistedModesState {
 		pendingHandoffSeedPath: state.pendingHandoffSeedPath,
 		executionSeedPath: state.executionSeedPath,
 		planSessionPath: state.planSessionPath,
+		reconReturnSessionPath: state.reconReturnSessionPath,
 	};
 }
 
@@ -104,6 +106,9 @@ function parseStateEntry(entry: CustomEntry): ModesState | null {
 			: {}),
 		...(typeof data.planSessionPath === "string"
 			? { planSessionPath: data.planSessionPath }
+			: {}),
+		...(typeof data.reconReturnSessionPath === "string"
+			? { reconReturnSessionPath: data.reconReturnSessionPath }
 			: {}),
 	};
 }

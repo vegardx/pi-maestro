@@ -49,8 +49,8 @@ beforeEach(() => {
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-describe("authoring vs append-only", () => {
-	it("full CRUD before execution; add/remove refuse after it starts", () => {
+describe("authoring vs per-node freeze (evolve-in-place)", () => {
+	it("full CRUD before execution; the FROZEN node's own mutations refuse after it starts", () => {
 		const eng = engine();
 		eng.addNode(null, { agent: "worker", persona: "coder", title: "Build" });
 		eng.addNode(null, { agent: "worker", persona: "coder", title: "Docs" });
@@ -58,10 +58,46 @@ describe("authoring vs append-only", () => {
 		expect(eng.get().nodes.map((n) => n.id)).toEqual(["build"]);
 
 		eng.setNodeStatus("build", "active");
-		expect(() =>
-			eng.addNode(null, { agent: "worker", persona: "coder", title: "X" }),
-		).toThrow("append-only");
-		expect(() => eng.removeNode("build")).toThrow("abandoned, never removed");
+		// New nodes are ALWAYS appendable (evolve-in-place) — no longer refused.
+		eng.addNode(null, { agent: "worker", persona: "coder", title: "X" });
+		expect(eng.get().nodes.map((n) => n.id)).toContain("x");
+		// But the running node itself is frozen: not removable, structure locked.
+		expect(() => eng.removeNode("build")).toThrow("build is active");
+		expect(() => eng.updateNode("build", { after: ["x"] })).toThrow(
+			"build is active",
+		);
+	});
+
+	it("a still-planned node stays fully editable while a sibling runs", () => {
+		const eng = engine();
+		eng.addNode(null, { agent: "worker", persona: "coder", title: "Build" });
+		eng.addNode(null, { agent: "worker", persona: "coder", title: "Docs" });
+		eng.setNodeStatus("build", "active");
+		// Per-node, not global: `docs` is planned, so its structure + tasks + a
+		// gating task are all still legal even though `build` is active.
+		eng.updateNode("docs", { after: ["build"] });
+		expect(eng.get().nodes.find((n) => n.id === "docs")?.after).toEqual([
+			"build",
+		]);
+		const task = eng.addTask("docs", { title: "write the guide" });
+		expect(task.kind ?? "task").toBe("task");
+		eng.removeTask("docs", task.id);
+		eng.removeNode("docs");
+		expect(eng.get().nodes.map((n) => n.id)).toEqual(["build"]);
+	});
+
+	it("a running node still accepts followup/manual tasks, not gating tasks", () => {
+		const eng = engine();
+		eng.addNode(null, { agent: "worker", persona: "coder", title: "Build" });
+		eng.setNodeStatus("build", "active");
+		const followup = eng.addTask("build", { title: "note", kind: "followup" });
+		expect(followup.kind).toBe("followup");
+		// A defaulted (gating) task, or an explicit gate, is refused on a live node.
+		const defaulted = eng.addTask("build", { title: "auto-followup" });
+		expect(defaulted.kind).toBe("followup");
+		expect(() => eng.addTask("build", { title: "gate", kind: "task" })).toThrow(
+			"build is active",
+		);
 	});
 
 	it("appendChild is write-ahead and stamps provenance", () => {

@@ -28,6 +28,20 @@ export interface ModesState {
 	 * arrival card + fire the orientation turn exactly once.
 	 */
 	pendingHandoffSeedPath?: string;
+	/**
+	 * Path of the plan→execution seed written at the forward transition. This
+	 * fresh execution session was forked clean of the planning conversation; the
+	 * seed (decisions + rationale + what we're building) rides the execution
+	 * system prompt so the maestro conducts with that context. Cleared on the
+	 * backward return to plan. See docs/design/mode-sessions.md § fork-and-seed.
+	 */
+	executionSeedPath?: string;
+	/**
+	 * Path of the plan session this execution session was forked from. The
+	 * backward auto/hack→plan gesture switches back to it (restoring the
+	 * planning context) rather than staying in the execution session.
+	 */
+	planSessionPath?: string;
 }
 
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;

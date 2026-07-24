@@ -85,6 +85,11 @@ import {
 import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
+import {
+	backToPlanNote,
+	buildTransitionSeed,
+	writeTransitionSeed,
+} from "./transition-seed.js";
 
 /**
  * Bound on the draft-naming nested turn (runs inside the plan-mode turn_end
@@ -344,6 +349,19 @@ export function createRuntimeContext(
 		if ((mode === "plan" || mode === "recon") && !rt.engine && ctx) {
 			rt.openPlan(undefined, ctx);
 		}
+		// Returning to plan/recon retires the forward-transition seed: the
+		// execution arc is behind us (whether via the backward gesture or natural
+		// completion), so the seed must not ride the next planning turns.
+		if (
+			(mode === "plan" || mode === "recon") &&
+			(rt.state.executionSeedPath || rt.state.planSessionPath)
+		) {
+			rt.state = {
+				...rt.state,
+				executionSeedPath: undefined,
+				planSessionPath: undefined,
+			};
+		}
 		const changed = transitionMode(rt.state, mode, now);
 		rt.state = changed.state;
 		rt.persist();
@@ -362,7 +380,14 @@ export function createRuntimeContext(
 		{
 			engine: () => rt.engine,
 			currentMode: () => rt.state.mode,
-			commit: commitMode,
+			// Forward fork-and-seed rides the commit: on plan→auto/hack, fork a
+			// fresh execution session (seeded with decisions/rationale) BEFORE the
+			// mode flip. Non-gated edges reach here too, but stageForwardTransition
+			// no-ops on anything but plan→auto/hack.
+			commit: async (mode, ctx) => {
+				await stageForwardTransition(mode, ctx);
+				commitMode(mode, ctx);
+			},
 			form: (ctx) => formTransitionPlan(ctx),
 			agents: () => maestro.capabilities.get(CAPABILITIES.agents),
 			ask: () => maestro.capabilities.get(CAPABILITIES.ask),
@@ -488,6 +513,140 @@ export function createRuntimeContext(
 		if ((rt.engine?.get().nodes.length ?? 0) === 0) return "bounced";
 		rt.finalizeDraftPlan(ctx);
 		return "formed";
+	}
+
+	/**
+	 * Phase 3 forward fork-and-seed: as the gate commits plan→auto/hack, fork a
+	 * FRESH execution session (clean of the planning conversation) and carry the
+	 * decisions/rationale forward via a plan-dir seed the execution preamble
+	 * injects. plan.json is harness state and survives in memory — never seeded.
+	 * Best-effort: without a session-capable ctx (some non-command paths) or on a
+	 * cancelled fork, the transition proceeds in place with the seed still set.
+	 * Runs BEFORE commitMode flips the mode (so the seed turn has plan context).
+	 */
+	async function stageForwardTransition(
+		to: ModeName,
+		ctx: ExtensionContext,
+	): Promise<void> {
+		if (rt.state.mode !== "plan" || (to !== "auto" && to !== "hack")) return;
+		const engine = rt.engine;
+		if (!engine || engine.isDraft()) return;
+		const newSession = sessionForker(ctx);
+		if (!newSession) return; // headless/non-command ctx: enter in place
+		const planDir = join(plansRoot(), engine.get().slug);
+		const seed = await buildTransitionSeed(pi, ctx, engine.get());
+		const seedPath = writeTransitionSeed(planDir, seed);
+		const planSessionPath = ctx.sessionManager.getSessionFile();
+		// Bare call: RPC's newSession takes only an optional parentSession string
+		// while the TUI's takes an options object — zero args satisfies both. The
+		// clean context is the point; lineage is nice-to-have, not worth the
+		// transport-shape mismatch.
+		const result = await newSession().catch(() => ({ cancelled: true }));
+		if (result.cancelled) {
+			ctx.ui.notify(
+				"Kept the current session — entering execution here (no fresh session).",
+				"info",
+			);
+			rt.state = { ...rt.state, executionSeedPath: seedPath };
+			return;
+		}
+		// The fresh session is active now; rt.engine/rt.state survive in memory.
+		// Stash the seed (for the execution preamble) and the plan session (to
+		// restore on the backward gesture); commitMode persists both.
+		rt.state = {
+			...rt.state,
+			executionSeedPath: seedPath,
+			...(planSessionPath ? { planSessionPath } : {}),
+		};
+	}
+
+	/**
+	 * Phase 3 backward gesture: auto/hack→plan. Guard live workers first — a
+	 * return that abandons running implementation asks stop-or-stay. When it
+	 * proceeds, restore the plan session forked from (if any) with a "what
+	 * executed since" note; otherwise flip in place. commitMode retires the seed.
+	 */
+	async function returnToPlan(ctx: ExtensionContext): Promise<void> {
+		const from = rt.state.mode;
+		const alive = liveWorkerKeys();
+		if (alive.length > 0) {
+			const ask = maestro.capabilities.get(CAPABILITIES.ask);
+			if (!ask) {
+				ctx.ui.notify(
+					`${alive.length} worker(s) are running — /stop them first, then return to plan.`,
+					"warning",
+				);
+				return;
+			}
+			const questionId = `back-to-plan:${now()}`;
+			const answers = await ask.ask([
+				{
+					id: questionId,
+					header: "Return to plan",
+					question: `${alive.length} worker(s) are still running. Stop them and return to plan, or stay in ${from}?`,
+					options: [
+						{
+							label: `Stay in ${from}`,
+							value: "stay",
+							description: "Keep conducting; the workers continue.",
+						},
+						{
+							label: "Stop and return to plan",
+							value: "stop",
+							description:
+								"Park the workers (resumable via /restart), then return to plan.",
+						},
+					],
+					recommendation: "stay",
+					blocking: true,
+					whyBlocking:
+						"Returning to plan with live workers would abandon their implementation.",
+				},
+			]);
+			const decision = answers.find(
+				(answer) => answer.questionId === questionId,
+			)?.value;
+			if (decision !== "stop") {
+				ctx.ui.notify(`Staying in ${from} mode.`, "info");
+				return;
+			}
+			await rt.runStop(ctx);
+		}
+		const planPath = rt.state.planSessionPath;
+		const switchSession = sessionSwitcher(ctx);
+		if (planPath && switchSession) {
+			const note = backToPlanNote(rt.engine?.get());
+			const result = await switchSession(planPath, {
+				withSession: async (sctx) => {
+					await sctx.sendUserMessage(note, { deliverAs: "followUp" });
+				},
+			}).catch(() => ({ cancelled: true }));
+			if (result.cancelled) {
+				ctx.ui.notify(
+					"Could not restore the planning session — returning to plan in place.",
+					"warning",
+				);
+				rt.setMode("plan", ctx);
+				return;
+			}
+			// In the plan session now (session_start rehydrated its plan state).
+			// commitMode below clears the transient forward-fork paths.
+			rt.setMode("plan", ctx);
+			return;
+		}
+		rt.setMode("plan", ctx);
+	}
+
+	/** Worker keys still working/summarizing — a backward return would abandon them. */
+	function liveWorkerKeys(): string[] {
+		const snap = rt.execution?.snapshot();
+		if (!snap) return [];
+		return [...snap.agents.entries()]
+			.filter(
+				([, agent]) =>
+					agent.status === "working" || agent.status === "summarizing",
+			)
+			.map(([key]) => key);
 	}
 
 	rt = {
@@ -699,6 +858,12 @@ export function createRuntimeContext(
 				return;
 			}
 			// auto → plan; hack (off-cycle) also exits to plan — see nextMode.
+			// The backward gesture guards live workers and restores the plan
+			// session forked from (Phase 3 returnToPlan).
+			if (rt.state.mode === "auto" || rt.state.mode === "hack") {
+				await returnToPlan(ctx);
+				return;
+			}
 			rt.setMode(nextMode(rt.state.mode), ctx);
 		},
 
@@ -1304,6 +1469,42 @@ export function createRuntimeContext(
 	}
 
 	return rt;
+}
+
+/** Extract a bare, transport-safe `newSession()` if the ctx supports one. */
+function sessionForker(
+	ctx: ExtensionContext,
+): (() => Promise<{ cancelled: boolean }>) | undefined {
+	const fn = (ctx as unknown as { newSession?: unknown }).newSession;
+	if (typeof fn !== "function") return undefined;
+	// Called with zero args: satisfies both the TUI (options object) and RPC
+	// (parentSession string) signatures. Bound so `this` stays the ctx.
+	return () =>
+		(fn as (...a: unknown[]) => Promise<{ cancelled: boolean }>).call(ctx);
+}
+
+/** Extract `switchSession(path, {withSession})` if the ctx supports one. */
+function sessionSwitcher(ctx: ExtensionContext):
+	| ((
+			path: string,
+			opts: {
+				withSession: (sctx: {
+					sendUserMessage: (
+						content: string,
+						options?: { deliverAs?: "steer" | "followUp" },
+					) => Promise<void>;
+				}) => Promise<void>;
+			},
+	  ) => Promise<{ cancelled: boolean }>)
+	| undefined {
+	const fn = (ctx as unknown as { switchSession?: unknown }).switchSession;
+	if (typeof fn !== "function") return undefined;
+	return (path, opts) =>
+		(fn as (p: string, o: unknown) => Promise<{ cancelled: boolean }>).call(
+			ctx,
+			path,
+			opts,
+		);
 }
 
 export function activeDeliverable(plan: PlanV2): PlanNode | undefined {

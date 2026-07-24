@@ -132,6 +132,21 @@ describe("execution lifecycle persistence", () => {
 		expect(hydrated?.mode).toBe("auto");
 	});
 
+	it("round-trips the forward-transition seed + plan-session paths", () => {
+		const state = {
+			...initialModesState(now),
+			mode: "auto" as const,
+			activePlanSlug: "p1",
+			executionSeedPath: "/plans/p1/transitions/01-execution.md",
+			planSessionPath: "/sessions/plan-abc.jsonl",
+		};
+		const hydrated = hydrateModesState([stateEntry(toPersistedState(state))]);
+		expect(hydrated?.executionSeedPath).toBe(
+			"/plans/p1/transitions/01-execution.md",
+		);
+		expect(hydrated?.planSessionPath).toBe("/sessions/plan-abc.jsonl");
+	});
+
 	it("rejects legacy execution entries with reset guidance", () => {
 		expect(() =>
 			hydrateModesState([

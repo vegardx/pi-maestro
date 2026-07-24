@@ -26,6 +26,8 @@ export interface PersistedModesState {
 	readonly execution: ExecutionState;
 	readonly updatedAt: string;
 	readonly pendingHandoffSeedPath?: string;
+	readonly executionSeedPath?: string;
+	readonly planSessionPath?: string;
 }
 
 export interface SessionStateSink {
@@ -50,6 +52,8 @@ export function toPersistedState(state: ModesState): PersistedModesState {
 		execution: state.execution,
 		updatedAt: state.updatedAt,
 		pendingHandoffSeedPath: state.pendingHandoffSeedPath,
+		executionSeedPath: state.executionSeedPath,
+		planSessionPath: state.planSessionPath,
 	};
 }
 
@@ -94,6 +98,12 @@ function parseStateEntry(entry: CustomEntry): ModesState | null {
 		updatedAt: data.updatedAt,
 		...(typeof data.pendingHandoffSeedPath === "string"
 			? { pendingHandoffSeedPath: data.pendingHandoffSeedPath }
+			: {}),
+		...(typeof data.executionSeedPath === "string"
+			? { executionSeedPath: data.executionSeedPath }
+			: {}),
+		...(typeof data.planSessionPath === "string"
+			? { planSessionPath: data.planSessionPath }
 			: {}),
 	};
 }

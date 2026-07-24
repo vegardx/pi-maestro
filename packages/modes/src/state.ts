@@ -42,12 +42,22 @@ export interface ModesState {
 	 * planning context) rather than staying in the execution session.
 	 */
 	planSessionPath?: string;
+	/**
+	 * Path of the session `/recon` forked away from. Recon runs in its own
+	 * isolated session (read-only research posture); leaving it (Shift+Tab)
+	 * restores this session rather than carrying the recon conversation forward.
+	 * See docs/design/mode-sessions.md § recon decoupled.
+	 */
+	reconReturnSessionPath?: string;
 }
 
 export const MODE_CYCLE: readonly ModeName[] = MODE_NAMES;
 
 export function initialModesState(now: () => string = isoNow): ModesState {
-	return { mode: "recon", execution: { stage: "idle" }, updatedAt: now() };
+	// Plan is the boot/default mode (Phase 5): the normal workflow opens straight
+	// into planning conversation. Recon is a deliberate off-ramp (`/recon`), not
+	// the entry posture — see docs/design/mode-sessions.md § recon decoupled.
+	return { mode: "plan", execution: { stage: "idle" }, updatedAt: now() };
 }
 
 /**

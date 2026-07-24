@@ -207,6 +207,8 @@ export interface RuntimeContext {
 	/** All requested mode changes; Plan→Auto/Hack settle through transition gates. */
 	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
+	/** `/recon`: enter the read-only research posture in its own isolated session. */
+	enterRecon(ctx: ExtensionContext): Promise<void>;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
 	loadEngine(slug: string): PlanEngineV2 | undefined;
 	openPlan(
@@ -240,21 +242,6 @@ export interface RuntimeContext {
 		ctx: ExtensionContext,
 	): Promise<void>;
 }
-
-/**
- * One-shot orientation instruction fired on the recon → plan toggle. This
- * message (and the model's reply to it) IS the recon handoff: generated
- * in-band from full context, visible to the user, cached as part of the
- * message prefix — no seed document.
- */
-const RECON_TO_PLAN_ORIENTATION =
-	"[Mode switch: recon → plan. Orient before planning: review the " +
-	"conversation and research so far, then reply with (1) a short summary " +
-	"of what we intend to build or do, and (2) a bullet list of the open " +
-	"questions that must be answered before a solid plan can form — noting " +
-	"for each whether research or only the user can answer it. If nothing " +
-	"is open, say so. Do not call readiness or fire research yet — wait for " +
-	"the user's reaction.]";
 
 export function createRuntimeContext(
 	pi: ExtensionAPI,
@@ -643,6 +630,66 @@ export function createRuntimeContext(
 		rt.setMode("plan", ctx);
 	}
 
+	/**
+	 * Phase 5: `/recon` enters the read-only research posture in its OWN isolated
+	 * session (clean context, decoupled from planning). In the TUI it forks a
+	 * fresh session and remembers the one to restore on the way out; over
+	 * RPC/headless (no session action) it flips in place. Recon carries nothing
+	 * forward — leaving simply reloads the session it came from (exitRecon).
+	 */
+	async function enterRecon(ctx: ExtensionContext): Promise<void> {
+		if (rt.state.mode === "recon") return;
+		if (rt.execution) {
+			ctx.ui.notify(
+				"Execution is running — recon is unavailable until it settles.",
+				"warning",
+			);
+			return;
+		}
+		const newSession =
+			ctx.mode === "tui" && ctx.hasUI ? sessionForker(ctx) : undefined;
+		if (!newSession) {
+			rt.setMode("recon", ctx); // in-place: no isolated session available
+			return;
+		}
+		const returnPath = ctx.sessionManager.getSessionFile();
+		const result = await newSession().catch(() => ({ cancelled: true }));
+		if (result.cancelled) {
+			rt.setMode("recon", ctx);
+			return;
+		}
+		// In the fresh recon session now. Stash the return path AFTER the fork so
+		// it lands in THIS session's state, never the one we left.
+		if (returnPath) {
+			rt.state = { ...rt.state, reconReturnSessionPath: returnPath };
+		}
+		rt.setMode("recon", ctx);
+	}
+
+	/**
+	 * Leave recon (the Shift+Tab exit): restore the session recon forked from,
+	 * dropping back where the user was. In-place fallback flips to plan. Recon's
+	 * conversation is not carried — deeper recon→plan integration is deferred.
+	 */
+	async function exitRecon(ctx: ExtensionContext): Promise<void> {
+		const returnPath = rt.state.reconReturnSessionPath;
+		const switchSession = sessionSwitcher(ctx);
+		if (returnPath && switchSession) {
+			const result = await switchSession(returnPath, {
+				withSession: async () => {},
+			}).catch(() => ({ cancelled: true }));
+			if (!result.cancelled) {
+				// Restored the prior session (recon is entered from plan). Affirm
+				// plan mode + tool policy in case the switch didn't re-hydrate.
+				rt.state = { ...rt.state, reconReturnSessionPath: undefined };
+				rt.setMode("plan", ctx);
+				return;
+			}
+		}
+		rt.state = { ...rt.state, reconReturnSessionPath: undefined };
+		rt.setMode("plan", ctx);
+	}
+
 	/** Worker keys still working/summarizing — a backward return would abandon them. */
 	function liveWorkerKeys(): string[] {
 		const snap = rt.execution?.snapshot();
@@ -741,6 +788,10 @@ export function createRuntimeContext(
 			commitMode(mode, ctx);
 		},
 
+		enterRecon(ctx: ExtensionContext): Promise<void> {
+			return enterRecon(ctx);
+		},
+
 		setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void {
 			rt.state = setExecution(rt.state, execution, now);
 			rt.persist();
@@ -828,24 +879,10 @@ export function createRuntimeContext(
 
 		async cycle(ctx: ExtensionContext): Promise<void> {
 			if (rt.state.mode === "recon") {
-				// One-way exit: recon → plan. The toggle IS the readiness signal.
-				// The first plan-mode turn orients — summary + open questions —
-				// generated from the full recon conversation; that in-band message
-				// is the handoff (no seed document, no re-research).
-				rt.setMode("plan", ctx);
-				const hasConversation = ctx.sessionManager
-					.getEntries()
-					.some(
-						(entry) =>
-							(entry as { type?: string }).type === "message" &&
-							(entry as { message?: { role?: string } }).message?.role ===
-								"user",
-					);
-				if (hasConversation) {
-					pi.sendUserMessage(RECON_TO_PLAN_ORIENTATION, {
-						deliverAs: "followUp",
-					});
-				}
+				// Recon is a decoupled side-trip in its own isolated session:
+				// leaving restores the session it forked from (Phase 5). No
+				// orientation handoff — recon carries nothing forward.
+				await exitRecon(ctx);
 				return;
 			}
 			if (rt.state.mode === "plan") {

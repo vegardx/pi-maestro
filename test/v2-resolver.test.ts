@@ -255,6 +255,67 @@ describe("region", () => {
 		expect(resolution.source).toBe("fallback");
 		expect(resolution.modelId).toBe("gw2/seat");
 	});
+
+	// Mirrors the real SIT tripwire (see reference-gateway-region-models): a
+	// functional but NON-EEA model (US-data-share Fable, here gw2/fable) leads the
+	// heavy tier; under EEA it is struck and resolution lands on the EEA-legal
+	// model (gw1/opus); flip the active region to Global and it resolves the gated
+	// model itself — a real positive and a true negative in one config.
+	describe("the tripwire", () => {
+		const TRIPWIRE = {
+			models: {
+				families: {
+					Anthropic: {
+						aliases: {
+							Fable: { attach: ["gw2/fable"] },
+							Opus: { attach: ["gw1/opus"] },
+						},
+					},
+				},
+				rosters: {
+					daily: {
+						light: ["Anthropic/Opus"],
+						standard: ["Anthropic/Opus"],
+						heavy: ["Anthropic/Fable", "Anthropic/Opus"],
+					},
+				},
+				bindings: { main: { roster: "daily" } },
+				allowances: { reviewer: { tiers: ["heavy"] } },
+				region: {
+					active: "EEA",
+					lists: { Global: ["gw1/*", "gw2/*"], EEA: ["gw1/*"] },
+				},
+			},
+		};
+
+		it("EEA skips the non-EEA model and lands on the EEA-legal one", async () => {
+			writeSettings(TRIPWIRE);
+			const resolution = await resolveV2Model(fakeCtx({ seat: "gw1/seat" }), {
+				agent: "reviewer",
+				tier: "heavy",
+			});
+			expect(resolution.modelId).toBe("gw1/opus");
+			const fable = resolution.candidates?.find(
+				(fact) => fact.ref === "Anthropic/Fable",
+			);
+			expect(fable?.available).toBe(false);
+			expect(fable?.reason).toContain("outside region EEA");
+		});
+
+		it("Global resolves the gated model itself (it is functional)", async () => {
+			writeSettings({
+				models: {
+					...TRIPWIRE.models,
+					region: { ...TRIPWIRE.models.region, active: "Global" },
+				},
+			});
+			const resolution = await resolveV2Model(fakeCtx({ seat: "gw1/seat" }), {
+				agent: "reviewer",
+				tier: "heavy",
+			});
+			expect(resolution.modelId).toBe("gw2/fable");
+		});
+	});
 });
 
 describe("session fallback", () => {

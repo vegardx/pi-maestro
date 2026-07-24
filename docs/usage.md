@@ -16,7 +16,7 @@ Pi loads the workspace TypeScript directly. Worker observation requires `tmux`; 
 - **Recon** is a deliberate read-only research off-ramp in its own isolated session. `/recon` enters it; leaving restores the session you came from.
 - **Agent** is internal to workers.
 
-Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. Plan → Auto/Hack never changes mode immediately: Maestro **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks), then runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint. **Stay in plan** records a cancelled ruling and starts nothing. In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
+Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the gesture is **two steps**: the FIRST Shift+Tab (no plan formed yet) **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks) and shows a summary of what it will do, then **stays in plan** for review. The SECOND Shift+Tab (plan now formed) asks **auto or hack**, runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint before entering execution. **Stay in plan** records a cancelled ruling and starts nothing. `/start` executes in one shot (form + gate). In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
 
 ## Plan
 

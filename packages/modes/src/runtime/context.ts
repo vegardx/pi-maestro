@@ -464,30 +464,23 @@ export function createRuntimeContext(
 	}
 
 	/**
-	 * The gate's first step: form the plan from the converged conversation. Plan
-	 * mode is conversation-only, so at the transition the plan is usually an
-	 * empty draft — this runs ONE authoring turn (structure tools + forming
-	 * preamble scoped to it via rt.forming) that either authors the full tree or,
-	 * if a real user-only structural question remains, surfaces it via `ask` and
-	 * stops. Signals:
-	 *   "formed"   — the plan now has nodes; materialize and continue the gate.
-	 *   "bounced"  — no nodes authored (open questions surfaced); abort to plan.
-	 *   "no-plan"  — no engine at all (defensive; plan mode auto-opens a draft).
-	 * An already-authored plan (reopened, or seeded) skips the forming turn.
+	 * Run the forming turn: author the deliverable/task tree from the converged
+	 * conversation (or, if a real user-only structural question remains, surface
+	 * it via `ask` and stop). Returns the outcome plus the model's own closing
+	 * summary (the last assistant text — used as the preview). An already-authored
+	 * plan (reopened, or seeded) skips the turn entirely.
 	 */
-	async function formTransitionPlan(
+	async function runFormingTurn(
 		ctx: ExtensionContext,
-	): Promise<"formed" | "bounced" | "no-plan"> {
+	): Promise<{ status: "formed" | "bounced" | "no-plan"; summary: string }> {
 		const engine = rt.engine;
-		if (!engine) return "no-plan";
-		// Already authored (a reopened plan, or one seeded for a drive): the
-		// structure exists, so there is nothing to form — proceed straight to the
-		// mechanical gate.
-		if (engine.get().nodes.length > 0) return "formed";
+		if (!engine) return { status: "no-plan", summary: "" };
+		if (engine.get().nodes.length > 0) return { status: "formed", summary: "" };
 		rt.forming = true;
 		rt.applyTools();
+		let summary = "";
 		try {
-			await runAgentTurn(pi, ctx, FORMING_TRIGGER, {
+			summary = await runAgentTurn(pi, ctx, FORMING_TRIGGER, {
 				timeoutMs: FORMING_TURN_TIMEOUT_MS,
 			});
 		} catch {
@@ -497,9 +490,53 @@ export function createRuntimeContext(
 			rt.applyTools();
 		}
 		// The turn either authored (nodes now exist) or chose to ask + stop.
-		if ((rt.engine?.get().nodes.length ?? 0) === 0) return "bounced";
+		if ((rt.engine?.get().nodes.length ?? 0) === 0)
+			return { status: "bounced", summary };
 		rt.finalizeDraftPlan(ctx);
-		return "formed";
+		return { status: "formed", summary };
+	}
+
+	/**
+	 * The gate's first step (plan→auto/hack): form the plan from the converged
+	 * conversation. Thin wrapper over runFormingTurn — the gate only needs the
+	 * outcome. Plan mode is conversation-only, so at the transition the plan is
+	 * usually an empty draft this authors. Signals: "formed" (continue the gate),
+	 * "bounced" (open questions surfaced; abort to plan), "no-plan" (no engine).
+	 */
+	async function formTransitionPlan(
+		ctx: ExtensionContext,
+	): Promise<"formed" | "bounced" | "no-plan"> {
+		return (await runFormingTurn(ctx)).status;
+	}
+
+	/**
+	 * First Shift+Tab from plan mode: form the plan and PREVIEW it, staying in
+	 * plan. The user signalled "go", so we author the deliverables/tasks and show
+	 * the model's own summary of what we'll do — but we do NOT enter execution.
+	 * A second Shift+Tab (with the plan now formed) picks auto/hack and runs the
+	 * gate. See docs/design/mode-sessions.md § form-at-transition.
+	 */
+	async function formPlanPreview(ctx: ExtensionContext): Promise<void> {
+		const { status, summary } = await runFormingTurn(ctx);
+		if (status === "no-plan") {
+			ctx.ui.notify("No active plan — run /plan first.", "warning");
+			return;
+		}
+		if (status === "bounced") {
+			// The forming turn surfaced open questions via `ask`; stay in plan.
+			ctx.ui.notify(
+				"Open questions came up while forming — answer them, then Shift+Tab to form the plan.",
+				"info",
+			);
+			return;
+		}
+		const plan = rt.engine?.get();
+		const nodeCount = plan?.nodes.length ?? 0;
+		const preview = summary.trim() || `Formed ${nodeCount} deliverable(s).`;
+		ctx.ui.notify(
+			`Plan \`${plan?.slug ?? "draft"}\` formed — here's the shape:\n\n${preview.slice(0, 1400)}\n\nReview it, then Shift+Tab again to execute (you'll pick auto or hack).`,
+			"info",
+		);
 	}
 
 	/**
@@ -886,7 +923,15 @@ export function createRuntimeContext(
 				return;
 			}
 			if (rt.state.mode === "plan") {
-				// Prompt which mode to enter from plan
+				// First gesture (no plan formed yet): the user signalled "go", so
+				// FORM the plan and preview it — but stay in plan. No auto/hack
+				// question; that comes on the second gesture, once a plan exists.
+				if ((rt.engine?.get().nodes.length ?? 0) === 0) {
+					await formPlanPreview(ctx);
+					return;
+				}
+				// Plan already formed: pick how to run it, then the gate (review +
+				// ruling) settles before execution.
 				const choice = await ctx.ui.select("Switch to", [
 					"auto — fully autonomous",
 					"hack — fully autonomous, all tools",

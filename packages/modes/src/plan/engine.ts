@@ -238,13 +238,36 @@ export class PlanEngineV2 {
 		return false;
 	}
 
+	/**
+	 * Evolve-in-place freeze is PER-NODE, not global (Phase 4): a `planned` node
+	 * is editable/removable; an `active`/`complete`/`shipped`/`failed` node is
+	 * frozen (its structure and tasks are locked — append new work instead). New
+	 * nodes are always appendable. This throws with the offending status when a
+	 * caller tries to mutate a non-planned node's structure. `require` names the
+	 * disallowed action for the message; `remedy` says what to do instead.
+	 */
+	private assertNodePlanned(
+		id: string,
+		require: string,
+		remedy: string,
+	): PlanNode {
+		const node = findNodeV2(this.plan, id);
+		if (!node) throw new Error(`unknown node: ${id}`);
+		if (node.status !== "planned")
+			throw new Error(
+				`${id} is ${node.status} — ${require} is only allowed while a node is planned (${remedy}).`,
+			);
+		return node;
+	}
+
 	// ── Authoring (pre-execution CRUD) ─────────────────────────────────────
 
 	addNode(parentId: string | null, input: NodeInput): PlanNode {
-		if (this.hasExecutionStarted())
-			throw new Error(
-				"execution has started — the plan is append-only (use appendChild)",
-			);
+		// New nodes are always appendable (Phase 4 evolve-in-place): a fresh node
+		// starts `planned` and readyChildren activates it when its deps clear. The
+		// per-node freeze governs mutating EXISTING nodes, not adding new ones. A
+		// child appended under a running parent uses appendChild (depth/envelope
+		// caps + write-ahead); this authoring path serves top-level and pre-start.
 		return this.insertNode(parentId, input, "plan");
 	}
 
@@ -273,13 +296,14 @@ export class PlanEngineV2 {
 	): void {
 		// `persona` is authored metadata, not structural — freely updatable
 		// (e.g. an ensemble makes its parent the integrator before execution).
+		// Structural fields (incl. `after`, the edges INTO this node) freeze PER
+		// NODE: an edge is mutable iff its dependent (this node) is still planned.
 		const structural = ["after", "branch", "base", "repo", "envelope"] as const;
-		if (
-			this.hasExecutionStarted() &&
-			structural.some((key) => patch[key] !== undefined)
-		)
-			throw new Error(
-				"execution has started — structural node fields are frozen (append children or abandon instead)",
+		if (structural.some((key) => patch[key] !== undefined))
+			this.assertNodePlanned(
+				id,
+				"editing structural fields",
+				"append children or abandon a running node instead",
 			);
 		this.mutateNode(id, (node) => {
 			for (const [key, value] of Object.entries(patch)) {
@@ -417,10 +441,11 @@ export class PlanEngineV2 {
 	}
 
 	removeTask(nodeId: string, taskId: string): void {
-		if (this.hasExecutionStarted())
-			throw new Error(
-				"execution has started — tasks are toggled or answered, never removed",
-			);
+		this.assertNodePlanned(
+			nodeId,
+			"removing a task",
+			"a running node's tasks are toggled or answered, never removed",
+		);
 		this.mutateNode(nodeId, (node) => {
 			const index = node.tasks.findIndex(
 				(candidate) => candidate.id === taskId,
@@ -437,10 +462,11 @@ export class PlanEngineV2 {
 	}
 
 	removeNode(id: string): void {
-		if (this.hasExecutionStarted())
-			throw new Error(
-				"execution has started — nodes are abandoned, never removed",
-			);
+		this.assertNodePlanned(
+			id,
+			"removing a node",
+			"a running or shipped node is abandoned, never removed",
+		);
 		this.mutate((plan) => {
 			const parent = parentOfNode(plan, id);
 			const siblings = parent ? (parent.children ?? []) : plan.nodes;
@@ -488,11 +514,17 @@ export class PlanEngineV2 {
 		nodeId: string,
 		input: { title: string; body?: string; kind?: NodeTaskKind },
 	): NodeTask {
-		const kind =
-			input.kind ?? (this.hasExecutionStarted() ? "followup" : "task");
-		if (this.hasExecutionStarted() && !POST_START_TASK_KINDS.has(kind))
+		// Per-node (Phase 4): a planned node takes gating `task`s freely; a running
+		// node takes only followup/manual (a new gate on a node already executing
+		// would silently un-complete it). Statused off the TARGET node, not the
+		// whole plan — you can still flesh out planned deliverables mid-arc.
+		const target = findNodeV2(this.plan, nodeId);
+		if (!target) throw new Error(`unknown node: ${nodeId}`);
+		const started = target.status !== "planned";
+		const kind = input.kind ?? (started ? "followup" : "task");
+		if (started && !POST_START_TASK_KINDS.has(kind))
 			throw new Error(
-				`execution has started — only ${[...POST_START_TASK_KINDS].join("/")} tasks may be appended`,
+				`${nodeId} is ${target.status} — only ${[...POST_START_TASK_KINDS].join("/")} tasks may be appended to a running node`,
 			);
 		const ts = this.now();
 		const task: NodeTask = {

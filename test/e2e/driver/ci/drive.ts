@@ -9,15 +9,16 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedAnswerer } from "../answerer.js";
-import { assertScenario, readPlan } from "../assertions.js";
+import { assertEnsemble, assertScenario, readPlan } from "../assertions.js";
 import { setupCiEnv } from "../env-profile.js";
 import { launchSut } from "../launch.js";
-import { SANDBOX_FEATURES } from "../scenario.js";
-import { seedScenarioPlan } from "../seed-plan.js";
+import { ENSEMBLE_METRICS, SANDBOX_FEATURES } from "../scenario.js";
+import { seedEnsemblePlan, seedScenarioPlan } from "../seed-plan.js";
 import { startScriptedModel } from "./scripted-model.js";
 
 const CI_DIR = join(process.cwd(), "test", "e2e", "driver", "ci");
-const MAX_MS = 150_000;
+const MAX_MS = 200_000;
+const ENSEMBLE = process.argv.includes("ensemble");
 
 async function main(): Promise<void> {
 	const logDir = mkdtempSync(join(tmpdir(), "pi-e2e-drive-"));
@@ -32,7 +33,9 @@ async function main(): Promise<void> {
 		ghShimDir: join(CI_DIR, "gh-shim"),
 	});
 
-	const slug = seedScenarioPlan(profile.piHome, profile.repoDir);
+	const slug = ENSEMBLE
+		? seedEnsemblePlan(profile.piHome, profile.repoDir)
+		: seedScenarioPlan(profile.piHome, profile.repoDir);
 	const sut = launchSut({
 		maestroRoot: process.cwd(),
 		repoDir: profile.repoDir,
@@ -50,6 +53,17 @@ async function main(): Promise<void> {
 	}
 
 	const start = Date.now();
+	const check = () =>
+		ENSEMBLE
+			? assertEnsemble(profile.piHome, profile.repoDir, ENSEMBLE_METRICS, {
+					parentBranch: "feat/build-metrics",
+					minCandidates: 2,
+					...(profile.env.PI_E2E_GH_STATE
+						? { ghStateDir: profile.env.PI_E2E_GH_STATE }
+						: {}),
+				})
+			: assertScenario(profile.piHome, profile.repoDir, SANDBOX_FEATURES);
+
 	let lastLine = "";
 	while (Date.now() - start < MAX_MS) {
 		await sleep(2000);
@@ -71,7 +85,7 @@ async function main(): Promise<void> {
 		}
 		// Done when the real assertion passes (reviewer nodes end at `complete`,
 		// not `shipped`, so poll the assertion rather than a status set).
-		if (assertScenario(profile.piHome, profile.repoDir, SANDBOX_FEATURES).ok) {
+		if (check().ok) {
 			process.stdout.write("assertion satisfied\n");
 			break;
 		}
@@ -104,13 +118,9 @@ async function main(): Promise<void> {
 		`\n\nmodel calls: ${model.seq()}\nlogs kept: ${logDir}\npiHome kept: ${profile.piHome}\n`,
 	);
 
-	const result = assertScenario(
-		profile.piHome,
-		profile.repoDir,
-		SANDBOX_FEATURES,
-	);
+	const result = check();
 	process.stdout.write(
-		`\n=== assertScenario: ${result.ok ? "OK ✓" : "FAIL ✗"} ===\n${result.summary}\n`,
+		`\n=== assert${ENSEMBLE ? "Ensemble" : "Scenario"}: ${result.ok ? "OK ✓" : "FAIL ✗"} ===\n${result.summary}\n`,
 	);
 
 	sut.client.close();

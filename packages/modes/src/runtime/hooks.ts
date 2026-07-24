@@ -121,6 +121,50 @@ export function registerForcedDistillSettlementHook(
 export function registerRuntimeHooks(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
 
+	// The set of taskless worker deliverables we last steered the model to fix
+	// (see the structuring continuation in turn_end). Keyed so we nudge once per
+	// DISTINCT taskless set — progress (some got tasks) re-nudges for the rest;
+	// no progress on the same set does NOT re-nudge, so we never loop.
+	let structuringTaskNudgeKey: string | undefined;
+
+	/**
+	 * Structuring continuation. A worker deliverable with no gating tasks cannot
+	 * enter execution (executionReadinessValidations), yet a model often ends its
+	 * turn right after the `deliverable` batch, before adding tasks — leaving the
+	 * plan un-startable. When a plan-mode turn ends with taskless worker
+	 * deliverables, steer ONE follow-up naming them so the model finishes the job
+	 * in the next turn. Loop-safe via structuringTaskNudgeKey: a stalled set is
+	 * left to the /start gate (which now fails fast with the same reason) rather
+	 * than re-nudged forever. Mirrors the gate's worker/followup rule exactly.
+	 */
+	function steerStructuringTasks(): void {
+		const plan = rt.engine?.get();
+		if (!plan || plan.nodes.length === 0) return;
+		const taskless = [...walkNodes(plan)]
+			.map(({ node }) => node)
+			.filter(
+				(node) =>
+					node.agent === "worker" &&
+					node.tasks.filter((task) => (task.kind ?? "task") !== "followup")
+						.length === 0,
+			)
+			.map((node) => node.id);
+		if (taskless.length === 0) {
+			structuringTaskNudgeKey = undefined;
+			return;
+		}
+		const key = taskless.join(",");
+		if (key === structuringTaskNudgeKey) return; // already nudged this set
+		structuringTaskNudgeKey = key;
+		const label = taskless.join(", ");
+		pi.sendUserMessage(
+			`Structuring is incomplete: ${label} ${taskless.length === 1 ? "has" : "have"} no tasks. ` +
+				"A worker deliverable with no tasks cannot enter execution. Add each " +
+				"one's work items with the `task` tool now, then summarize.",
+			{ deliverAs: "followUp" },
+		);
+	}
+
 	pi.on("before_agent_start", (event) => {
 		// Posted-but-unanswered ask questions, so the model never re-asks and
 		// knows answers arrive as user messages when the user commits them.
@@ -519,6 +563,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (rt.state.mode === "plan") {
 				await rt.nameDraftFromModel(ctx);
 				rt.finalizeDraftPlan(ctx);
+				steerStructuringTasks();
 			}
 			rt.askQueue.flushTo(maestro.capabilities.get(CAPABILITIES.ask));
 			return;

@@ -123,6 +123,26 @@ export class TransitionGateCoordinator {
 		};
 		persistGate(engine, state);
 
+		// Fail fast on hard structural errors. A plan that cannot pass the
+		// mechanical gate (a worker deliverable with no work items, wrong phase,
+		// an invalid shape) can never cross the boundary — so block NOW, before
+		// spending a plan-review agent and a human ruling on a plan that is
+		// guaranteed to be rejected at settlement. Without this the failure only
+		// surfaced AFTER the ruling (revalidation at the end of run()), which over
+		// the headless driver looked like a silent re-loop: every /start re-ran
+		// the whole gate and blocked at the last step. The post-ruling
+		// revalidation below stays as the safety net for a plan mutated mid-gate.
+		const blockingErrors = validations.filter((v) => v.level === "error");
+		if (blockingErrors.length) {
+			const reason = blockingErrors.map((error) => error.message).join("; ");
+			this.block(engine, state, reason, now());
+			ctx.ui.notify(
+				`Can't enter execution — the plan isn't ready: ${reason}. Fix these, then run /start again.`,
+				"warning",
+			);
+			return false;
+		}
+
 		// The policy row tunes this boundary: tier → resolved model override,
 		// persona/contract recorded, enabled:false skips the LLM review while
 		// keeping mechanical validations and the human ruling.

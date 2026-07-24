@@ -128,6 +128,39 @@ describe("transition gate coordinator", () => {
 		expect(commit).toHaveBeenCalledOnce();
 	});
 
+	it("fails fast on a taskless worker deliverable — no reviewer, no ruling", async () => {
+		const { engine, now } = fixture();
+		// A second worker deliverable with NO tasks: the gate can never settle.
+		engine.addNode(null, {
+			agent: "worker",
+			persona: "coder",
+			title: "Taskless",
+		});
+		const commit = vi.fn();
+		const cap = agents();
+		const ask = { ask: vi.fn(async () => []) } as unknown as AskCapabilityV1;
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => "plan" as const,
+				commit: commit as never,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+			},
+		);
+
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(false);
+		// Blocked BEFORE spending a reviewer or a human ruling.
+		expect(cap.run).not.toHaveBeenCalled();
+		expect(ask.ask).not.toHaveBeenCalled();
+		expect(commit).not.toHaveBeenCalled();
+		const gate = engine.get().transitionGates?.at(-1);
+		expect(gate?.status).toBe("blocked");
+		expect(gate?.reason).toContain("has no gating work items");
+	});
+
 	it("binds settlement to the reviewed plan fingerprint", async () => {
 		const { engine, now } = fixture();
 		const ask = {

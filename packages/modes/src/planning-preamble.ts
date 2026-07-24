@@ -78,7 +78,7 @@ If you can't write that level of detail → you need more research.`;
 function buildExploringPreamble(header: string): string {
 	return `${header} Phase: EXPLORING.
 
-**Do NOT form a plan yet.** The structure tools (node/task/knowledge)
+**Do NOT form a plan yet.** The structure tools (deliverable/task/knowledge)
 are locked. Your job right now is to understand what the user actually wants
 and gather the facts a good plan needs — through conversation and research.
 
@@ -139,8 +139,14 @@ function buildStructuringPreamble(
 		: "";
 	return `${header} Phase: STRUCTURING — readiness confirmed.
 ${understandingBlock}
-**You MUST use the \`node\` and \`task\` tools to structure work. Do NOT just
-write a plan as text — call the tools to create it in the system.**
+**You MUST use the \`deliverable\` and \`task\` tools to structure work. Do NOT
+just write a plan as text — call the tools to create it in the system.**
+
+**Structuring is not done when the deliverables exist — it is done when every
+worker deliverable also has its tasks.** Create the deliverables, then in the
+SAME turn add each one's tasks; a worker deliverable with no tasks cannot enter
+execution (the readiness gate rejects it). Do not stop or end the turn after the
+\`deliverable\` call — go straight on to the \`task\` calls.
 
 Produce tasks so detailed that a simpler model could implement them
 mechanically. Ground every task in what exploration established; \`research\`
@@ -148,8 +154,8 @@ is still available for gaps that surface while structuring.
 
 ## Workflow
 
-1. **Structure** — Create ALL top-level nodes in a single batched \`node\` call
-   (not one call per node). A branch-owning worker node = one branch + one PR.
+1. **Structure** — Create ALL top-level nodes in a single batched \`deliverable\`
+   call (not one call per node). A branch-owning worker node = one branch + one PR.
    Give each an explicit \`id\`, an \`agent\` type + \`persona\`, and reference
    sibling ids in \`after\` for ordering — list them dependencies-first.
    Work not tied to any repo (creating repos, provisioning infra, ops) is a
@@ -159,8 +165,10 @@ is still available for gaps that surface while structuring.
    \`repo(action="add", key="...", path="...", createdBy="<that node>")\`
    and give the later nodes \`repo: "<key>"\` plus an \`after\` on the
    creator — the ordering then guarantees the repo exists before they start.
-2. **Detail** — Add ALL of a node's tasks in a single batched \`task\` call
-   (not one call per task). Tasks describe WHAT to implement.
+2. **Detail** — For EVERY worker deliverable, add ALL of its tasks in a single
+   batched \`task\` call (not one call per task). Tasks describe WHAT to
+   implement. Do this for each worker deliverable before you summarize — a
+   worker deliverable left with no tasks blocks execution.
 3. **Review coverage** — Reviewer/explorer work is CHILD NODES: nest them
    under the worker node they support and give reviewers \`after: ["parent"]\`
    so ordering remains visible. Model and effort are never authored — they

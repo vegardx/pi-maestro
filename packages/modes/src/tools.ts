@@ -499,8 +499,18 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							const fresh = created.map(
 								(d) => findNodeV2(engine.get(), d.id) ?? d,
 							);
+							// Nudge toward step 2 of structuring: a freshly-created worker
+							// deliverable has no tasks yet, and one with no tasks cannot
+							// enter execution (the readiness gate rejects it). Reinforce it
+							// here — the exact point a model tends to stop after the batch.
+							const needTasks = fresh.filter((d) => d.agent === "worker");
+							const nudge = needTasks.length
+								? ` — now add each worker deliverable's tasks with the \`task\` tool (${needTasks
+										.map((d) => d.id)
+										.join(", ")}) before /start`
+								: "";
 							return ok(
-								`✓ ${created.length} deliverables: ${created.map((d) => d.id).join(", ")}`,
+								`✓ ${created.length} deliverables: ${created.map((d) => d.id).join(", ")}${nudge}`,
 								{ deliverables: fresh, plan: engine.get() },
 							);
 						}

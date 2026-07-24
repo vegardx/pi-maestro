@@ -101,7 +101,7 @@ describe("buildPlanModePreamble", () => {
 		engine.setPhase("structuring", "We will build a clamp helper.");
 		const preamble = buildPlanModePreamble(engine);
 		expect(preamble).toContain("STRUCTURING");
-		expect(preamble).toContain("`node`");
+		expect(preamble).toContain("`deliverable`");
 		expect(preamble).toContain("`task`");
 		expect(preamble).toContain("We will build a clamp helper.");
 	});

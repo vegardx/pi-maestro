@@ -531,8 +531,14 @@ export function createRuntimeContext(
 		if (rt.state.mode !== "plan" || (to !== "auto" && to !== "hack")) return;
 		const engine = rt.engine;
 		if (!engine || engine.isDraft()) return;
+		// Fork only in the interactive TUI: a fresh session is a UX win for a
+		// human conductor, but over RPC/headless it would switch the session the
+		// controller is attached to mid-run — risky and pointless. The seed block
+		// still rides the execution preamble in every transport; only the session
+		// swap is TUI-only.
+		if (ctx.mode !== "tui" || !ctx.hasUI) return;
 		const newSession = sessionForker(ctx);
-		if (!newSession) return; // headless/non-command ctx: enter in place
+		if (!newSession) return; // no session action on this ctx: enter in place
 		const planDir = join(plansRoot(), engine.get().slug);
 		const seed = await buildTransitionSeed(pi, ctx, engine.get());
 		const seedPath = writeTransitionSeed(planDir, seed);
@@ -929,6 +935,22 @@ export function createRuntimeContext(
 				ctx.ui.notify("No active plan — run /plan first.", "warning");
 				return;
 			}
+			if (isAgentMode()) {
+				ctx.ui.notify(
+					"Execution can't be launched from within a subagent session.",
+					"warning",
+				);
+				return;
+			}
+			// Cross the execution boundary FIRST. Plan mode is conversation-only, so
+			// at /start the plan may still be an unformed draft — the transition
+			// gate's forming step authors it (Phase 2). The readiness check below
+			// therefore has to run AFTER the transition, or it would bail on the
+			// empty pre-forming plan. A bounce (open questions) or a blocked gate
+			// returns false — stay put.
+			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
+				if (!(await rt.requestMode("auto", ctx))) return;
+			}
 			rt.finalizeDraftPlan(ctx);
 			const activeEngine = rt.engine;
 			const plan = activeEngine.get();
@@ -960,16 +982,6 @@ export function createRuntimeContext(
 			// Knowledge base removed: agents provision from a header-only session
 			// (provisioner's no-knowledge path) and pick up research reports as
 			// per-agent refs — no mid-planning knowledge doc, no gate here.
-			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
-				if (!(await rt.requestMode("auto", ctx))) return;
-			}
-			if (isAgentMode()) {
-				ctx.ui.notify(
-					"Execution can't be launched from within a subagent session.",
-					"warning",
-				);
-				return;
-			}
 			await rt.ensureExecution(ctx);
 			if (!rt.execution) return;
 			const activated = await rt.execution.tick(

@@ -44,7 +44,7 @@ needs the `gh` CLI.
 ## A session in 60 seconds
 
 ```
-/plan payments-retry        # explore, establish readiness, then structure
+/plan payments-retry        # converge (research + clarify), then author the plan
   research(...)             # parallel persisted codebase/web reports
   deliverable/task/workflow # deliveries, work items, exact assignments/stages
 /auto                        # plan-review gate + user ruling, then execution

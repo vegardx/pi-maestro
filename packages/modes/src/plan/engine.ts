@@ -197,13 +197,6 @@ export class PlanEngineV2 {
 		});
 	}
 
-	setPhase(phase: "exploring" | "structuring", understanding?: string): void {
-		this.mutate((plan) => {
-			plan.phase = phase;
-			if (understanding !== undefined) plan.understanding = understanding;
-		});
-	}
-
 	setTransitionGate(gate: import("./schema.js").TransitionGateRuling): void {
 		this.mutate((plan) => {
 			const gates = plan.transitionGates ?? [];

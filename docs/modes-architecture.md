@@ -60,14 +60,13 @@ tools.
   auto-starts deliverable #1.
 
 **Why no hard gate.** The old `readiness` tool locked the structure tools during
-an `exploring` phase because, in the *current* shared-session/preamble-only
-setup, the planner has no coherent "converge before authoring" identity and
-authors prematurely even while its own open questions sit unanswered. A fresh
-session with a proper planning system prompt (the [transition
-backbone](#mode-transitions--the-contract)) removes that root cause — so the
-lock is unnecessary and is being removed (backlog #4). A weak *local* model may
-still jump the gun on a soft prompt; that is the separate "help weak models
-plan" hardening thread (#8), not a reason to hard-gate capable session models.
+an `exploring` phase — a blunt fix for a planner that authored prematurely even
+while its own open questions sat unanswered. Converge-before-authoring is now a
+behavioral contract in the planning system prompt: the structure tools are
+available throughout plan mode and the lock/tool are removed (backlog #4, done).
+A weak *local* model may still jump the gun on a soft prompt; that is the
+separate "help weak models plan" hardening thread (#8), not a reason to
+hard-gate capable session models.
 
 ---
 
@@ -142,9 +141,9 @@ carry-forward machinery (`/distill`/`/handoff` in `runtime/carry-commands.ts` +
 4. **Backward = restore.** auto→plan / plan→recon walk the `parentSession`
    lineage and `ctx.switchSession(priorPath)`; if the prior session is >5 min
    old, ask resume-or-fresh first.
-5. **Readiness removal rides the same arc** (backlog #4): the structure-tool
-   lock and `readiness` tool go; the fresh planning session's prompt carries
-   converge-before-authoring.
+5. **Readiness removal** (backlog #4, done): the structure-tool lock and
+   `readiness` tool are removed; the planning system prompt carries
+   converge-before-authoring. (Landed ahead of the session backbone.)
 
 `/handoff` remains a *distinct* command (arc-closing, interactive curation,
 archaeologist) but is refactored onto the same fork+seed core.
@@ -299,7 +298,7 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 | 1 | P0 | **Mode transitions flip state in place** (`commitMode`); no distill, no fresh session, no context handoff. Each stage drags the full raw prior conversation forward. | Wire forward transitions to distill + `ctx.newSession({setup})`; backward to `switchSession` + age prompt. |
 | 2 | P0 | **Preamble carries stage identity** (`before_agent_start` append) instead of a seeded fresh session. | Once #1 lands, reduce the preamble to genuinely per-turn mode guidance; stage context rides the seed. |
 | 3 | P1 | **hack mode half-honors execution** — `hooks.ts:152` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
-| 4 | P1 | **`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring — a blunt fix for premature authoring in the muddled shared session. | Remove the `readiness` tool and the structure-tool lock; `deliverable`/`task` available throughout plan mode; enforce converge-before-authoring via the planning system prompt (relies on the fresh-session backbone #1). Validate with a capable model (Opus 4.8 / Fable 5). |
+| 4 | ✓ | ~~**`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring.~~ **DONE** — removed; `deliverable`/`task` available throughout plan mode; converge-before-authoring is a planning-system-prompt contract; the fail-fast execution gate catches a half-baked plan at plan→auto. | — |
 | 5 | P2 | ~~No routing-inspection surface (`/maestro explain` never existed).~~ **DONE (#223)** — `/models` + `/models <role>`. | — |
 | 6 | P2 | ~~Driver skill referenced the non-existent `/maestro explain`.~~ **DONE (#223).** | — |
 | 7 | P1 | **e2e can't reach execution** — a weak planner can't author the plan. | Add a `--seed-plan` capability: write a valid `plan.json` into the isolated plan store; open by slug. |

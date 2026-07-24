@@ -30,14 +30,14 @@ function memStore(): PlanStoreV2 {
 }
 
 describe("buildPlanModePreamble", () => {
-	it("starts new plans in the exploring phase", () => {
+	it("gives new plans the plan-mode preamble — converge then author", () => {
 		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("PLAN MODE");
-		expect(preamble).toContain("EXPLORING");
-		expect(preamble).toContain("Do NOT form a plan yet");
+		expect(preamble).toContain("## Converge");
+		expect(preamble).toContain("## Author");
 	});
 
-	it("shows update message for existing plan", () => {
+	it("shows update message for an existing plan", () => {
 		const engine = PlanEngineV2.create(memStore(), {
 			slug: "my-plan",
 			title: "My Plan",
@@ -47,89 +47,43 @@ describe("buildPlanModePreamble", () => {
 		expect(preamble).toContain("PLAN MODE updating plan `my-plan`");
 	});
 
-	it("exploring guides the research loop and the readiness gate", () => {
+	it("guides the research loop with no phase lock or readiness gate", () => {
 		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("`research`");
 		expect(preamble).toContain("codebase");
 		expect(preamble).toContain("web");
-		expect(preamble).toContain("`readiness`");
-		// Structure tools are locked — no structuring workflow yet.
-		expect(preamble).toContain("are locked");
-		expect(preamble).not.toContain("You MUST use the `node` and `task` tools");
+		expect(preamble).not.toContain("readiness");
+		expect(preamble).not.toContain("are locked");
 	});
 
-	it("teaches the ask ladder and decision-block format in both phases", () => {
-		const engine = PlanEngineV2.create(memStore(), {
-			slug: "ladder",
-			title: "Ladder",
-			repoPath: "/tmp",
-		});
-		engine.setPhase("structuring");
-		for (const preamble of [
-			buildPlanModePreamble(undefined),
-			buildPlanModePreamble(engine),
-		]) {
-			expect(preamble).toContain("blocking: true");
-			expect(preamble).toContain("whyBlocking");
-			expect(preamble).toContain("◆ Where I need your direction");
-			expect(preamble).toContain("don't ask");
-		}
+	it("teaches the ask ladder and decision-block format", () => {
+		const preamble = buildPlanModePreamble(undefined);
+		expect(preamble).toContain("blocking: true");
+		expect(preamble).toContain("whyBlocking");
+		expect(preamble).toContain("◆ Where I need your direction");
+		expect(preamble).toContain("don't ask");
 	});
 
-	it("includes convergence criteria in both phases", () => {
-		const engine = PlanEngineV2.create(memStore(), {
-			slug: "conv",
-			title: "Conv",
-			repoPath: "/tmp",
-		});
-		engine.setPhase("structuring");
-		for (const preamble of [
-			buildPlanModePreamble(undefined),
-			buildPlanModePreamble(engine),
-		]) {
-			expect(preamble).toContain("file paths");
-			expect(preamble).toContain("signatures");
-		}
+	it("includes the convergence criteria", () => {
+		const preamble = buildPlanModePreamble(undefined);
+		expect(preamble).toContain("file paths");
+		expect(preamble).toContain("signatures");
 	});
 
-	it("structuring mentions node/task tools and the understanding", () => {
-		const engine = PlanEngineV2.create(memStore(), {
-			slug: "structured",
-			title: "Structured",
-			repoPath: "/tmp",
-		});
-		engine.setPhase("structuring", "We will build a clamp helper.");
-		const preamble = buildPlanModePreamble(engine);
-		expect(preamble).toContain("STRUCTURING");
+	it("guides authoring with the structure tools, tasks required", () => {
+		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("`deliverable`");
 		expect(preamble).toContain("`task`");
-		expect(preamble).toContain("We will build a clamp helper.");
+		expect(preamble).toContain("You MUST use");
+		expect(preamble).toContain("no tasks cannot enter");
 	});
 
 	it("guides child-node review coverage and inheritance", () => {
-		const engine = PlanEngineV2.create(memStore(), {
-			slug: "workflow",
-			title: "Workflow",
-			repoPath: "/tmp",
-		});
-		engine.setPhase("structuring");
-		const preamble = buildPlanModePreamble(engine);
+		const preamble = buildPlanModePreamble(undefined);
 		expect(preamble).toContain("CHILD NODES");
 		expect(preamble).toContain('`after: ["parent"]`');
 		expect(preamble).toContain("resolve by inheritance");
 		expect(preamble).toContain("Never author models or efforts");
-	});
-
-	it("plans with nodes but no phase field hydrate as structuring", () => {
-		const engine = PlanEngineV2.create(memStore(), {
-			slug: "legacy",
-			title: "Legacy",
-			repoPath: "/tmp",
-		});
-		engine.addNode(null, { agent: "worker", persona: "coder", title: "Auth" });
-		engine.addTask("auth", { title: "t1" });
-		const preamble = buildPlanModePreamble(engine);
-		expect(preamble).toContain("STRUCTURING");
 	});
 });
 

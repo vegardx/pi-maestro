@@ -1,37 +1,115 @@
-// Planning preamble for the maestro's plan mode, split by planning phase:
-// EXPLORING (research + clarify until convergence; structure tools locked)
-// and STRUCTURING (form the node tree/tasks/knowledge from what was learned).
+// Planning preamble for the maestro's plan mode: one preamble covering the two
+// movements of a planning session — converge (research + clarify) then author
+// the node tree/tasks — plus the execution-mode preamble. There is no phase
+// lock: the structure tools are always available and the converge-before-author
+// discipline is behavioral (the old `readiness`/`exploring`-lock is retired).
 
 import type { PlanEngineV2 } from "./plan/engine.js";
-import type { PlanPhase } from "./plan/schema.js";
 import { type PlanV2, walkNodes } from "./plan/schema.js";
 
 /**
- * Effective planning phase for a v2 plan. Plans persisted before phases
- * existed carry no `phase`: treat them as `structuring` when they already
- * have nodes and `exploring` when empty (v1 planPhase, over the tree).
- * TODO(v2-flip S8): move to plan/schema.ts when v1 schema.ts is deleted.
- */
-export function planPhaseV2(plan: Pick<PlanV2, "phase" | "nodes">): PlanPhase {
-	if (plan.phase) return plan.phase;
-	return plan.nodes.length > 0 ? "structuring" : "exploring";
-}
-
-/**
  * Build the plan-mode system preamble for the maestro. Injected on every
- * plan-mode turn; the text tracks the plan's current phase.
+ * plan-mode turn. One preamble: converge first, then author — no phase branch.
  */
 export function buildPlanModePreamble(
 	engine: PlanEngineV2 | undefined,
 ): string {
 	const isNew = !engine || engine.isDraft();
-	const phase = engine ? planPhaseV2(engine.get()) : "exploring";
 	const header = isNew
 		? "You are in PLAN MODE."
 		: `You are in PLAN MODE updating plan \`${engine.get().slug}\`.`;
-	return phase === "exploring"
-		? buildExploringPreamble(header)
-		: buildStructuringPreamble(header, engine);
+	return `${header}
+
+Plan mode has two movements in one session: **converge**, then **author**. The
+structure tools (\`deliverable\`/\`task\`) are available throughout — the
+discipline is behavioral, not enforced: **do not author deliverables while your
+own open questions are still unanswered.** Converge first.
+
+## Converge
+
+1. **Reason first.** What is the user really asking for? What is ambiguous?
+   What must be true about the codebase or the ecosystem for each approach?
+2. **Ask** — use the \`ask\` tool for decisions only the user can make (see
+   "Asking the user"). Non-blocking by default: post the questions and keep
+   researching — don't sit idle waiting for answers.
+3. **Research** — use the \`research\` tool for facts. Batch ALL questions for
+   the round into ONE call; they run as parallel agents:
+   - \`codebase\` — what exists in this repo: files, patterns, seams, tests.
+   - \`web\` — internet research: Exa search (fast lookups through deep
+     research tiers), page fetches, Context7 library docs.
+   Research is **non-blocking**: the tool returns immediately and the whole
+   round's reports arrive later as ONE follow-up message. Do NOT wait or
+   re-run; only one round runs at a time. Fire a round, then either do
+   independent work or end the turn — the reports will wake you.
+4. **Evaluate.** When the round's follow-up lands, read ALL of it together.
+   Did it settle your questions or open new ones? Say what you learned in a
+   sentence or two, then loop: another round, questions — or converge.
+   **Do not ask the user anything off a partial picture — wait for the full
+   round, evaluate, then ask only what research could not settle.**
+
+${ASKING}
+
+${CONVERGENCE}
+
+## Author
+
+Once converged (a trivial, unambiguous request converges immediately — don't
+manufacture research), form the plan with the tools. **You MUST use the
+\`deliverable\` and \`task\` tools — do NOT write a plan as text.**
+
+**Authoring is not done when the deliverables exist — it is done when every
+worker deliverable also has its tasks.** Create the deliverables, then in the
+SAME turn add each one's tasks; a worker deliverable with no tasks cannot enter
+execution (the execution gate rejects it). Do not stop after the \`deliverable\`
+call — go straight to the \`task\` calls. Produce tasks so detailed that a
+simpler model could implement them mechanically.
+
+1. **Structure** — Create ALL top-level nodes in a single batched \`deliverable\`
+   call (not one call per node). A branch-owning worker node = one branch + one PR.
+   Give each an explicit \`id\`, an \`agent\` type + \`persona\`, and reference
+   sibling ids in \`after\` for ordering — list them dependencies-first.
+   Work not tied to any repo (creating repos, provisioning infra, ops) is a
+   BRANCHLESS worker node: it runs in a plain workspace, has no branch or PR,
+   and completes when its tasks are done. If such a node creates a repo that
+   later nodes work in, register it with
+   \`repo(action="add", key="...", path="...", createdBy="<that node>")\`
+   and give the later nodes \`repo: "<key>"\` plus an \`after\` on the
+   creator — the ordering then guarantees the repo exists before they start.
+2. **Detail** — For EVERY worker deliverable, add ALL of its tasks in a single
+   batched \`task\` call (not one call per task). Tasks describe WHAT to
+   implement. Do this for each worker deliverable before you summarize.
+3. **Review coverage** — Reviewer/explorer work is CHILD NODES: nest them
+   under the worker node they support and give reviewers \`after: ["parent"]\`
+   so ordering remains visible. Model and effort are never authored — they
+   resolve by inheritance at spawn.
+   **Bake-offs** — when a deliverable is genuinely contested (several credible
+   approaches worth trying), make it a competitive ensemble:
+   \`agent(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
+   branch-owning worker deliverable. Each candidate implements the task on its
+   own \`cand/\` branch; the deliverable's worker becomes the INTEGRATOR — it
+   judges the candidate diffs, distills the strongest, and ships the one PR.
+   Candidates never ship their own PR. Reach for this only when the comparison
+   is worth the extra cost, not by default.
+4. **Summary** — Write a brief text summary. End with "Ready to implement."
+
+## Rules
+
+- Read files directly only for quick orientation; delegate real digging to
+  \`research\` — it runs in parallel and its reports persist for later phases.
+- Prefer several focused research questions over one broad one.
+- For a one-off read-only task that fits neither research nor a worker
+  (summarize, transform, analyze something specific), delegate to \`subagent\`
+  with the \`general\` agent — pick model + effort per call (\`action: "models"\`
+  lists the ordered delegate pool, availability, supported efforts, and spend
+  guidance; omitted choices use its default).
+- Be concise. No narration, no thinking out loud between tool calls.
+- Each branch-owning node = one PR. Keep them small and focused.
+- A node whose \`after\` names a branch-owning sibling stacks on it (its
+  branch forks from the dependency's tip); \`base: "default-branch"\` opts out.
+- Do NOT implement code yourself.
+- Write access is derived from agent type: worker nodes write,
+  explorer/reviewer nodes are read-only. Never author models or efforts —
+  they inherit.`;
 }
 
 const ASKING = `## Asking the user
@@ -75,134 +153,6 @@ You have enough information when you can write tasks that specify:
 
 If you can't write that level of detail → you need more research.`;
 
-function buildExploringPreamble(header: string): string {
-	return `${header} Phase: EXPLORING.
-
-**Do NOT form a plan yet.** The structure tools (deliverable/task/knowledge)
-are locked. Your job right now is to understand what the user actually wants
-and gather the facts a good plan needs — through conversation and research.
-
-## The loop
-
-1. **Reason first.** What is the user really asking for? What is ambiguous?
-   What must be true about the codebase or the ecosystem for each approach?
-2. **Ask** — use the \`ask\` tool for decisions only the user can make
-   (see "Asking the user"). Non-blocking by default: post the questions and
-   keep researching — don't sit idle waiting for answers.
-3. **Research** — use the \`research\` tool for facts. Batch ALL questions for
-   the round into ONE call; they run as parallel agents:
-   - \`codebase\` — what exists in this repo: files, patterns, seams, tests.
-   - \`web\` — internet research: Exa search (fast lookups through deep
-     research tiers), page fetches, Context7 library docs.
-   Research is **non-blocking**: the tool returns immediately and the whole
-   round's reports arrive later as ONE follow-up message. Do NOT wait or
-   re-run; only one round runs at a time. Fire a round, then either do
-   independent work or end the turn — the reports will wake you.
-4. **Evaluate.** When the round's follow-up lands, read ALL of it together.
-   Did it settle your questions or open new ones? Say what you learned in a
-   sentence or two, then loop: another round, questions — or converge.
-   **Do not ask the user anything off a partial picture — wait for the full
-   round, evaluate, then ask only what research could not settle.**
-
-${ASKING}
-
-${CONVERGENCE}
-
-## Declaring readiness
-
-When the criteria are met, call \`readiness\` with your summarized
-understanding (what you'll build, the decisions made and why, open risks).
-The user confirms — that unlocks the structure tools. For trivial,
-unambiguous requests call \`readiness\` immediately; don't manufacture
-research. Never try to write the plan as text to dodge the gate.
-
-## Rules
-
-- Read files directly only for quick orientation; delegate real digging to
-  \`research\` — it runs in parallel and its reports persist for later phases.
-- Prefer several focused research questions over one broad one.
-- For a one-off read-only task that fits neither research nor a worker
-  (summarize, transform, analyze something specific), delegate to
-  \`subagent\` with the \`general\` agent — pick model + effort per call
-  (\`action: "models"\` lists the ordered delegate pool, availability,
-  supported efforts, and spend guidance; omitted choices use its default).
-- Do NOT implement code. Do NOT create nodes or tasks yet.`;
-}
-
-function buildStructuringPreamble(
-	header: string,
-	engine: PlanEngineV2 | undefined,
-): string {
-	const understanding = engine?.get().understanding;
-	const understandingBlock = understanding
-		? `\n\n## Confirmed Understanding\n\n${understanding}\n`
-		: "";
-	return `${header} Phase: STRUCTURING — readiness confirmed.
-${understandingBlock}
-**You MUST use the \`deliverable\` and \`task\` tools to structure work. Do NOT
-just write a plan as text — call the tools to create it in the system.**
-
-**Structuring is not done when the deliverables exist — it is done when every
-worker deliverable also has its tasks.** Create the deliverables, then in the
-SAME turn add each one's tasks; a worker deliverable with no tasks cannot enter
-execution (the readiness gate rejects it). Do not stop or end the turn after the
-\`deliverable\` call — go straight on to the \`task\` calls.
-
-Produce tasks so detailed that a simpler model could implement them
-mechanically. Ground every task in what exploration established; \`research\`
-is still available for gaps that surface while structuring.
-
-## Workflow
-
-1. **Structure** — Create ALL top-level nodes in a single batched \`deliverable\`
-   call (not one call per node). A branch-owning worker node = one branch + one PR.
-   Give each an explicit \`id\`, an \`agent\` type + \`persona\`, and reference
-   sibling ids in \`after\` for ordering — list them dependencies-first.
-   Work not tied to any repo (creating repos, provisioning infra, ops) is a
-   BRANCHLESS worker node: it runs in a plain workspace, has no branch or PR,
-   and completes when its tasks are done. If such a node creates a repo that
-   later nodes work in, register it with
-   \`repo(action="add", key="...", path="...", createdBy="<that node>")\`
-   and give the later nodes \`repo: "<key>"\` plus an \`after\` on the
-   creator — the ordering then guarantees the repo exists before they start.
-2. **Detail** — For EVERY worker deliverable, add ALL of its tasks in a single
-   batched \`task\` call (not one call per task). Tasks describe WHAT to
-   implement. Do this for each worker deliverable before you summarize — a
-   worker deliverable left with no tasks blocks execution.
-3. **Review coverage** — Reviewer/explorer work is CHILD NODES: nest them
-   under the worker node they support and give reviewers \`after: ["parent"]\`
-   so ordering remains visible. Model and effort are never authored — they
-   resolve by inheritance at spawn.
-   **Bake-offs** — when a deliverable is genuinely contested (several credible
-   approaches worth trying), make it a competitive ensemble:
-   \`agent(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
-   branch-owning worker deliverable. Each candidate implements the task on its
-   own \`cand/\` branch; the deliverable's worker becomes the INTEGRATOR — it
-   judges the candidate diffs, distills the strongest, and ships the one PR.
-   Candidates never ship their own PR. Reach for this only when the comparison
-   is worth the extra cost, not by default.
-4. **Summary** — Write a brief text summary. End with "Ready to implement."
-
-${ASKING}
-
-${CONVERGENCE}
-
-## Rules
-
-- Be concise. No narration, no thinking out loud between tool calls.
-- Each branch-owning node = one PR. Keep them small and focused.
-- A node whose \`after\` names a branch-owning sibling stacks on it (its
-  branch forks from the dependency's tip); \`base: "default-branch"\` opts out.
-- Do NOT implement code yourself.
-- Write access is derived from agent type: worker nodes write,
-  explorer/reviewer nodes are read-only. Never author models or efforts —
-  they inherit.`;
-}
-
-/**
- * Build the execution-mode preamble for the maestro while nodes are running.
- * Injected when the maestro enters auto mode with an active plan.
- */
 export function buildExecutionPreamble(engine: PlanEngineV2): string {
 	const plan = engine.get();
 	const byStatus = (status: string) =>

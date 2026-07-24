@@ -11,7 +11,6 @@ import {
 	validatePlanShapeV2,
 	walkNodes,
 } from "./plan/schema.js";
-import { planPhaseV2 } from "./planning-preamble.js";
 import { renderPlanOutline } from "./research.js";
 
 export type TransitionEdge = `${ModeName}->${ModeName}`;
@@ -415,12 +414,6 @@ export function executionReadinessValidations(
 			message,
 		}),
 	);
-	if (planPhaseV2(plan) !== "structuring")
-		result.push({
-			id: "phase",
-			level: "error",
-			message: "plan has not reached structuring",
-		});
 	if (!plan.nodes.length)
 		result.push({
 			id: "nodes",

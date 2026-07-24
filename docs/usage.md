@@ -20,7 +20,7 @@ Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. Plan → Auto/Hac
 
 ## Plan
 
-A new plan begins in **exploring**. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report. When understanding is sufficient, `readiness` asks whether to form the plan and records the summary. Structural tools then become available:
+Plan mode converges first, then authors. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. Once converged, author the plan with the structure tools (available throughout — the convergence discipline is in the system prompt, not a lock):
 
 - `deliverable` defines atomic deliveries and their dependency DAG;
 - `task` defines gating work, follow-ups, questions, and manual checkpoints;

@@ -21,7 +21,6 @@ import {
 import { resetRealTreeSandbox } from "../isolation/realtree-sandbox.js";
 import { walkNodes } from "../plan/schema.js";
 import { archiveLegacyPlans } from "../plan/storage.js";
-import { planPhaseV2 } from "../planning-preamble.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { hydrateModesState } from "../session.js";
 import {
@@ -509,11 +508,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (reason) return { block: true, reason };
 		}
 		if (rt.state.mode === "plan") {
-			const engine = rt.engine;
-			const reason = toolBlockedInPlanMode(
-				event.toolName,
-				engine ? planPhaseV2(engine.get()) : "exploring",
-			);
+			const reason = toolBlockedInPlanMode(event.toolName);
 			if (reason) return { block: true, reason };
 		}
 	});

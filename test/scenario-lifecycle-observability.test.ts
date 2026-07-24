@@ -137,7 +137,6 @@ describe("lifecycle and observability scenarios", () => {
 							},
 							scenario.clock.iso,
 						);
-						engine.setPhase("structuring");
 						engine.addNode(null, {
 							id: "active",
 							agent: "worker",

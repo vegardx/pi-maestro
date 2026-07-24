@@ -4,9 +4,7 @@
 // carry-forward harvest, execution workers) reads — and the tool delivers
 // only a bounded digest per question; `dig(ref)` returns a report's full
 // text on demand, in the maestro AND in worker agents (via
-// PI_MAESTRO_PLAN_DIR). The `readiness` tool is the phase gate — it presents
-// the maestro's summarized understanding and, on user confirmation, flips
-// the plan from `exploring` to `structuring`.
+// PI_MAESTRO_PLAN_DIR).
 //
 // Parallelism note: one `research` call takes a BATCH of questions and runs
 // them concurrently (bounded by the subagents semaphore). Batching inside one
@@ -85,8 +83,6 @@ export interface ResearchDeps {
 		report: { text: string; path: string } | undefined,
 		ctx: ExtensionContext,
 	) => void;
-	/** Side effects after a phase flip (applyTools + footer refresh). */
-	readonly onPhaseChanged?: (ctx: ExtensionContext) => void;
 	/**
 	 * Watchdog thresholds (stall/soft-steer/hard-cap) for research children,
 	 * enforced by the subagents runner. Defaults: 120s/240s/600s.
@@ -116,11 +112,7 @@ function error(message: string): Result {
 }
 
 export function createResearchTools(deps: ResearchDeps): ToolDefinition[] {
-	return [
-		createResearchTool(deps),
-		createReadinessTool(deps),
-		createDigTool(deps),
-	];
+	return [createResearchTool(deps), createDigTool(deps)];
 }
 
 const ResearchParams = Type.Object({
@@ -304,8 +296,9 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 					`${sections.join("\n\n")}\n\n` +
 					'Each entry is a self-sufficient digest; call `dig("<ref>")` for a ' +
 					"report's full analysis if you need more. Evaluate: do these settle " +
-					"your open questions, or open new ones? Research further, or call " +
-					"`readiness` when the convergence criteria are met."
+					"your open questions, or open new ones? Research further, or — once " +
+					"converged — resolve any remaining open questions with the user and " +
+					"start forming the plan."
 				);
 			};
 
@@ -335,103 +328,6 @@ export function createResearchTool(deps: ResearchDeps): ToolDefinition {
 					"message when every agent settles. Do NOT wait or re-run — continue " +
 					"with independent work or end the turn. When the round lands, " +
 					"evaluate ALL of it before asking the user anything.",
-			);
-		},
-	}) as ToolDefinition;
-}
-
-const ReadinessParams = Type.Object({
-	understanding: Type.String({
-		description:
-			"Your summarized understanding, ALWAYS in this exact structure (it is " +
-			"rendered with headings and bullets for the user to scan — never one " +
-			"long paragraph):\n\n" +
-			"A one- or two-sentence summary of what will be built.\n\n" +
-			"**Key decisions**\n" +
-			"- <the decision> — <why it's the choice / what research or answer " +
-			"backs it>\n" +
-			"- <the decision> — <why>\n\n" +
-			"Write it FORWARD-ONLY: state what WILL be done and why. Do NOT " +
-			"enumerate rejected alternatives or 'we could have'. Lead each bullet " +
-			"with the decision, not the rationale; keep it to one line's idea. " +
-			"Scale the number of bullets to the work — a trivial request may have " +
-			"one.",
-	}),
-	open_risks: Type.Optional(
-		Type.String({
-			description:
-				"Risks or open questions you propose to ACCEPT (not resolve), as " +
-				"`- ` bullets, one per risk. Omit entirely if there are none — the " +
-				"tool then records 'Open risks: none'. Always shown as its own " +
-				"section so the user sees what is being waived.",
-		}),
-	),
-});
-
-export function createReadinessTool(deps: ResearchDeps): ToolDefinition {
-	return defineTool({
-		name: "readiness",
-		label: "Readiness",
-		description:
-			"Declare you have enough information to form the plan. Presents your " +
-			"understanding to the user for confirmation; approval unlocks the " +
-			"structure tools (deliverable/task). Call this as soon as " +
-			"the convergence criteria are met — or immediately for trivial " +
-			"requests.",
-		promptSnippet:
-			"readiness — propose forming the plan (user confirms; unlocks structure tools).",
-		parameters: ReadinessParams,
-		async execute(_id, params, _signal, _onUpdate, ctx): Promise<Result> {
-			const engine = deps.engine();
-			if (!engine) return error("no plan active — run /plan first");
-			const ask = deps.ask();
-			if (!ask) {
-				// No dialog surface — treat the declaration itself as the gate.
-				engine.setPhase("structuring", params.understanding);
-				deps.onPhaseChanged?.(ctx);
-				return ok("Readiness accepted (no ask surface) — structure the plan.");
-			}
-
-			// The template is fixed: understanding + Key decisions, then an Open
-			// risks section that is ALWAYS present ("none" when there are none) so
-			// the user always sees what is being waived.
-			const risks = params.open_risks?.trim() || "- none";
-			const context = `${params.understanding}\n\n**Open risks:**\n${risks}`;
-			const answers = await ask.ask([
-				{
-					id: "readiness",
-					header: "Readiness",
-					question: "Ready to form the plan?",
-					context,
-					options: [
-						{
-							label: "Form the plan",
-							value: "form",
-							description: "Understanding looks right — structure it now.",
-						},
-						{
-							label: "Keep exploring",
-							value: "explore",
-							description: "Not converged — give guidance on what's missing.",
-						},
-					],
-					recommendation: "form",
-					allowFreeText: true,
-				},
-			]);
-			const answer = answers[0];
-			const note = answer?.note ? ` Note: ${answer.note}` : "";
-			if (answer?.value === "form") {
-				engine.setPhase("structuring", params.understanding);
-				deps.onPhaseChanged?.(ctx);
-				return ok(
-					`Readiness confirmed — structure tools unlocked.${note} ` +
-						"Create the deliverables and their tasks now.",
-				);
-			}
-			return ok(
-				`User chose to keep exploring: "${answer?.value ?? ""}".${note} ` +
-					"Address this, then call readiness again.",
 			);
 		},
 	}) as ToolDefinition;

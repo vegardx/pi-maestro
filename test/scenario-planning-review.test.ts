@@ -78,7 +78,6 @@ function inMemoryEngine(now: () => string): PlanEngineV2 {
 		{ slug: "release", title: "Release", repoPath: "/scenario/repo" },
 		now,
 	);
-	engine.setPhase("structuring");
 	engine.addNode(null, { agent: "worker", persona: "coder", title: "Runtime" });
 	engine.addTask("runtime", { title: "Implement runtime" });
 	return engine;

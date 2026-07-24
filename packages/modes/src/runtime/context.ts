@@ -56,7 +56,6 @@ import {
 	walkNodes,
 } from "../plan/schema.js";
 import { createPlanStoreV2, type PlanStoreV2 } from "../plan/storage.js";
-import { planPhaseV2 } from "../planning-preamble.js";
 import { computeActiveTools, orchestrationActive } from "../policy.js";
 import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import type { ResearchRunView } from "../research.js";
@@ -488,7 +487,6 @@ export function createRuntimeContext(
 					availableTools: pi.getAllTools().map((t) => t.name),
 					baselineTools,
 					isAgent: isAgentMode(),
-					phase: rt.engine ? planPhaseV2(rt.engine.get()) : undefined,
 					carryForwardActive: Boolean(rt.carryForward.get()),
 				}),
 			);

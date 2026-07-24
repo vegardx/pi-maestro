@@ -100,7 +100,14 @@ export interface AgentAllowanceConfig {
 export const DEFAULT_AGENT_ALLOWANCES: Readonly<
 	Record<SpawnableAgentType, AgentAllowanceConfig>
 > = {
-	worker: { tiers: ["standard", "heavy"] },
+	// The worker is the deliverable's implementer — the maestro's direct hand.
+	// With no explicit allowance it INHERITS the session model (empty tiers →
+	// defaultTierForAgent returns undefined → the resolver's inherit path), so an
+	// unconfigured worker runs on the seat, not a roster tier. The rosters govern
+	// the support agents a worker fans out to (explorer/reviewer/advisor) and any
+	// worker that IS given an explicit allowance. (Note: user-authored allowances
+	// require a non-empty tiers list; only this built-in default may be empty.)
+	worker: { tiers: [] },
 	explorer: { tiers: ["light", "standard"] },
 	reviewer: { tiers: ["standard", "heavy"] },
 	// Advice draws on strong reasoning; overflow into standard when a fan-out

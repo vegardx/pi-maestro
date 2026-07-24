@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	defaultTierForAgent,
 	explainTier,
 	fallbackNotice,
 	resolveV2Model,
@@ -46,6 +47,10 @@ const SETTINGS = {
 			},
 		},
 		bindings: { main: { roster: "daily" } },
+		// The built-in worker default is now empty (inherit the session model), so
+		// these tier-mechanics tests configure worker explicitly. The default is
+		// covered separately in "default worker allowance".
+		allowances: { worker: { tiers: ["standard", "heavy"] } },
 	},
 };
 
@@ -187,7 +192,7 @@ describe("alias resolution", () => {
 
 describe("allowances", () => {
 	it("bounds deliberate tier references to the agent's allowance", async () => {
-		// worker defaults to {standard, heavy} — light is out.
+		// worker is configured here as {standard, heavy} — light is out.
 		await expect(
 			resolveV2Model(fakeCtx(), { agent: "worker", tier: "light" }),
 		).rejects.toThrow(V2ResolutionError);
@@ -197,6 +202,26 @@ describe("allowances", () => {
 			tier: "light",
 		});
 		expect(resolution.modelId).toBe("gw1/quick");
+	});
+});
+
+describe("default worker allowance", () => {
+	it("an unconfigured worker has no default tier and inherits the session model", async () => {
+		// No allowances block → every agent falls to the built-in defaults. The
+		// worker default is empty (inherit), the support types keep their tiers.
+		writeSettings({ models: { ...SETTINGS.models, allowances: {} } });
+		expect(defaultTierForAgent(fakeCtx(), "worker")).toBeUndefined();
+		expect(defaultTierForAgent(fakeCtx(), "explorer")).toBe("light");
+		expect(defaultTierForAgent(fakeCtx(), "reviewer")).toBe("standard");
+		expect(defaultTierForAgent(fakeCtx(), "advisor")).toBe("heavy");
+		// With no tier, the worker resolves to the seat (source: inherit).
+		const resolution = await resolveV2Model(fakeCtx({ seat: "gw2/seat" }), {
+			agent: "worker",
+		});
+		expect(resolution).toMatchObject({
+			source: "inherit",
+			modelId: "gw2/seat",
+		});
 	});
 });
 
@@ -277,6 +302,8 @@ describe("failure semantics", () => {
 				families: SETTINGS.models.families,
 				rosters: SETTINGS.models.rosters,
 				bindings: { main: { targets: ["gw9/other"], roster: "daily" } },
+				// worker must allow standard to reach the binding check under test.
+				allowances: { worker: { tiers: ["standard"] } },
 			},
 		});
 		await expect(

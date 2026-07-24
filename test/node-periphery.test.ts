@@ -126,6 +126,9 @@ describe("resolveNodeModel → ledger record", () => {
 					},
 					rosters: { daily: { standard: ["OpenAI/Sol"] } },
 					bindings: { main: { targets: ["prov/seat"], roster: "daily" } },
+					// worker default is now empty (inherit); configure it so the
+					// tier-resolution path under test can request `standard`.
+					allowances: { worker: { tiers: ["standard"] } },
 				},
 			}),
 		);

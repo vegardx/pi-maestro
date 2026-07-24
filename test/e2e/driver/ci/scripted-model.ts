@@ -143,6 +143,42 @@ test("clampToRange", () => {
 	},
 ];
 
+// The ensemble deliverable (seedEnsemblePlan): the parent integrator and both
+// candidates all implement src/metrics.ts. Keyed by the file (not a node id),
+// since the parent node is `build-metrics` and the candidates are `cand-a`/
+// `cand-b`. Candidates commit a `DONE:`-prefixed subject and never ship; the
+// parent integrates and ships one PR (see decide()).
+const METRICS: Deliverable = {
+	id: "metrics",
+	src: "src/metrics.ts",
+	srcBody: `export function mean(numbers: number[]): number {
+	if (numbers.length === 0) throw new Error("mean: empty input");
+	return numbers.reduce((a, b) => a + b, 0) / numbers.length;
+}
+
+export function max(numbers: number[]): number {
+	if (numbers.length === 0) throw new Error("max: empty input");
+	return numbers.reduce((a, b) => (b > a ? b : a));
+}
+
+export function range(numbers: number[]): number {
+	if (numbers.length === 0) throw new Error("range: empty input");
+	return max(numbers) - numbers.reduce((a, b) => (b < a ? b : a));
+}
+`,
+	test: "tests/metrics.test.ts",
+	testBody: `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mean, max, range } from "../src/metrics.ts";
+
+test("mean", () => assert.equal(mean([1, 2, 3]), 2));
+test("max", () => assert.equal(max([1, 3, 2]), 3));
+test("range", () => assert.equal(range([1, 3, 2]), 2));
+test("throws on empty", () => assert.throws(() => mean([])));
+`,
+	commit: "feat(metrics): add mean, max, range",
+};
+
 // ─── request parsing ──────────────────────────────────────────────────────────
 
 function flatten(content: unknown): string {
@@ -199,8 +235,21 @@ function taskIds(text: string): string[] {
 	return ids;
 }
 
-function deliverableFor(id: string): Deliverable | undefined {
-	return DELIVERABLES.find((d) => d.id === id);
+function deliverableFor(id: string, text: string): Deliverable | undefined {
+	// Sandbox deliverables key off the cwd node id (the seed can mention other
+	// files via upstream handoffs). The ensemble's parent + candidates share one
+	// file but their seeds differ (the integrator's tasks never name src/
+	// metrics.ts — only "metrics module" / tests/metrics.test.ts), so fall
+	// through to the deliverable keyword. Sandbox seeds never say "metrics".
+	return (
+		DELIVERABLES.find((d) => d.id === id) ??
+		(/\bmetrics\b/.test(text) ? METRICS : undefined)
+	);
+}
+
+/** Ensemble candidates carry node ids `cand-a`/`cand-b` and never ship. */
+function isCandidate(id: string): boolean {
+	return id.startsWith("cand");
 }
 
 // ─── the decision ──────────────────────────────────────────────────────────────
@@ -221,7 +270,7 @@ function decide(
 		const turns = assistantToolTurns(messages);
 		if (turns >= 2) return { text: "All tasks complete; worktree clean." };
 		const id = deliverableId(text) ?? "";
-		const deliverable = deliverableFor(id);
+		const deliverable = deliverableFor(id, text);
 		if (!deliverable || !id) return { text: "ok" };
 		if (turns === 0)
 			return {
@@ -236,12 +285,18 @@ function decide(
 					},
 				],
 			};
-		// turns === 1: files exist now; commit them and toggle the tasks.
+		// turns === 1: files exist now; commit them and toggle the tasks. Ensemble
+		// candidates MUST commit a `DONE:`-prefixed subject (their branch is the
+		// input the integrator polls for) and never ship — the executor keeps
+		// cand/ branches out of the shipper.
+		const message = isCandidate(id)
+			? `DONE: ${deliverable.commit}`
+			: deliverable.commit;
 		const calls: ToolCall[] = [
 			{
 				name: "commit",
 				input: {
-					message: deliverable.commit,
+					message,
 					paths: [deliverable.src, deliverable.test],
 				},
 			},

@@ -384,7 +384,7 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 		{ id: "host", session: "persistent" },
 		{ id: "worker", session: "persistent" },
 		{ id: "advisor", session: "persistent" },
-		{ id: "one-shot", session: "ephemeral", maxTurns: 24 },
+		{ id: "one-shot", session: "ephemeral", maxTurns: 100 },
 	]);
 	const transports = new AgentRegistry<AgentTransportPolicy>([
 		{ id: "host", transport: "host" },

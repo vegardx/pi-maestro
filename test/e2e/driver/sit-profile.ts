@@ -38,6 +38,11 @@ const P_OPENAI = "sit-openai";
 
 const OPUS = `${P_ANTHROPIC}/claude-opus-4-8`;
 const SOL = `${P_OPENAI}/gpt-5.6-sol`;
+// The region tripwire: the ONLY functional SIT Fable, but US-data-share, so
+// NON-EEA (reference-gateway-region-models). It leads the heavy tier; under the
+// active EEA region it is struck and reviews fall to Opus (EEA-legal) — a live
+// proof of the region hard-filter. Under Global it would resolve and serve.
+const FABLE = `${P_ANTHROPIC}/us-n-virginia-data-share/anthropic.claude-fable-5`;
 
 function buildModelsJson(token: string): string {
 	return `${JSON.stringify(
@@ -51,6 +56,15 @@ function buildModelsJson(token: string): string {
 						{
 							id: "claude-opus-4-8",
 							name: "Claude Opus 4.8 (EU)",
+							contextWindow: 1_000_000,
+							maxTokens: 128_000,
+							input: ["text", "image"],
+							reasoning: true,
+						},
+						{
+							// The region tripwire — functional but US-data-share (non-EEA).
+							id: "us-n-virginia-data-share/anthropic.claude-fable-5",
+							name: "Claude Fable 5 (US data-share)",
 							contextWindow: 1_000_000,
 							maxTokens: 128_000,
 							input: ["text", "image"],
@@ -101,6 +115,11 @@ const MODELS_BLOCK = {
 					effort: "medium",
 					notes: "Careful judge — reviews sol's work, a different family.",
 				},
+				"Fable 5": {
+					attach: [FABLE],
+					effort: "medium",
+					notes: "Region tripwire — functional but US-data-share (non-EEA).",
+				},
 			},
 		},
 	},
@@ -111,7 +130,9 @@ const MODELS_BLOCK = {
 		sit: {
 			light: ["OpenAI/GPT 5.6 Sol"],
 			standard: ["OpenAI/GPT 5.6 Sol"],
-			heavy: ["Anthropic/Opus 4.8"],
+			// Fable leads heavy as the region tripwire: EEA strikes it (US-data-share)
+			// so reviews resolve to Opus (EEA-legal); Global would resolve Fable.
+			heavy: ["Anthropic/Fable 5", "Anthropic/Opus 4.8"],
 		},
 	},
 	// A single default binding (no targets) → active for the opus seat the drive
@@ -128,6 +149,17 @@ const MODELS_BLOCK = {
 		explorer: { tiers: ["light", "standard"] },
 		reviewer: { tiers: ["heavy", "standard"] },
 		advisor: { tiers: ["heavy", "standard"] },
+	},
+	// The active region is the only hard filter. EEA is the real posture and the
+	// SIT-only observable one (copilot/prod are all-EEA): it lists the EEA-legal
+	// models and OMITS the US-data-share Fable, so the heavy tripwire is struck.
+	// Global lists everything, so flipping active there resolves Fable instead.
+	region: {
+		active: "EEA",
+		lists: {
+			Global: [`${P_ANTHROPIC}/*`, `${P_OPENAI}/*`],
+			EEA: [OPUS, SOL],
+		},
 	},
 } as const;
 
@@ -158,4 +190,4 @@ export async function buildSitProfile(): Promise<MultiModelProfile> {
 export const SIT_GATEWAY = GATEWAY;
 
 /** Referenced model refs (for docs / catalog checks). */
-export const SIT_CATALOG: readonly string[] = [OPUS, SOL];
+export const SIT_CATALOG: readonly string[] = [OPUS, SOL, FABLE];

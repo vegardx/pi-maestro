@@ -468,7 +468,9 @@ function buildClientRequest(cmd: string, argv: string[]): ControlRequest {
 			return { cmd, text, ...(behavior ? { behavior } : {}) };
 		}
 		case "answer": {
-			const [id, ...rest] = argv.filter((a) => !a.startsWith("--"));
+			// Skip flags AND their values (e.g. `--sock <path>`), else the sock path
+			// leaks into the answer value — a real drive gotcha.
+			const [id, ...rest] = positionals(argv);
 			return { cmd, id, value: rest.join(" ") };
 		}
 		default:
@@ -492,8 +494,8 @@ function required(argv: string[], flag: string): string {
 	return v;
 }
 
-/** First non-flag argument (and not a flag's value). */
-function positional(argv: string[]): string {
+/** Positional args, skipping flags and their values (`--flag value`). */
+function positionals(argv: string[]): string[] {
 	const out: string[] = [];
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i].startsWith("--")) {
@@ -502,7 +504,12 @@ function positional(argv: string[]): string {
 		}
 		out.push(argv[i]);
 	}
-	return out.join(" ");
+	return out;
+}
+
+/** First non-flag argument (and not a flag's value). */
+function positional(argv: string[]): string {
+	return positionals(argv).join(" ");
 }
 
 /**

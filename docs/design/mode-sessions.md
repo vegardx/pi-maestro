@@ -1,9 +1,13 @@
 # Mode sessions — form-at-transition, session-per-mode, evolve-in-place
 
-**Status:** settled design (2026-07-24). This is the authoritative spec for the
-mode/session model. It **revises** `../modes-architecture.md` (§The plan
-lifecycle, §Mode transitions, §The four modes) — the deltas are listed in
-[What this revises](#what-this-revises) and reconciled by Phase 6 of the plan.
+**Status:** IMPLEMENTED (2026-07-24). All six phases landed; `../modes-architecture.md`
+is reconciled to the as-built model. This doc remains the design record — where
+the build diverged from the speculative plan below, `modes-architecture.md` is
+authoritative (notably: the forward seed rides a system-prompt block, not
+`newSession`'s `setup` callback, because the RPC `newSession` signature has no
+callbacks; and the session fork is TUI-only). It **revises**
+`../modes-architecture.md` (§The plan lifecycle, §Mode transitions, §The four
+modes) — deltas in [What this revises](#what-this-revises).
 
 ## The shape
 

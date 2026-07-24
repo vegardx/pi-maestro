@@ -1857,15 +1857,28 @@ function sessionSeat(ctx: ExtensionContext): string | undefined {
 		: undefined;
 }
 
-/** Every registry ref whose provider is authenticated (region applied later). */
+/** Every registry ref the account can actually use (region applied later). */
 async function authenticatedRefs(ctx: ExtensionContext): Promise<Set<string>> {
 	const registry = ctx.modelRegistry as unknown as {
+		getAvailable?: () => { provider: string; id: string }[];
 		getAll?: () => { provider: string; id: string }[];
 		getApiKeyAndHeaders?: (model: {
 			provider: string;
 			id: string;
 		}) => Promise<{ ok: boolean }>;
 	};
+	// The provider-filtered "available" set already excludes unauthenticated
+	// providers AND per-account-disabled models (Copilot's availableModelIds /
+	// model_picker_enabled), so it IS the authenticated+usable set — use it
+	// directly. Selecting a disabled model here is exactly what produced the
+	// empty-completion worker.
+	const available = registry.getAvailable?.() ?? [];
+	if (available.length > 0) {
+		return new Set(available.map((model) => `${model.provider}/${model.id}`));
+	}
+	// Fallback for a cold snapshot / older registry: probe auth over the raw
+	// catalog. This is provider-level (Copilot answers ok for any known model),
+	// so it cannot see per-model disablement — hence the getAvailable path above.
 	const set = new Set<string>();
 	const all = registry.getAll?.() ?? [];
 	await Promise.all(

@@ -43,24 +43,43 @@ export const THINKING_LEVELS = [
 ] as const;
 
 /** All registry models grouped by provider (the same catalog /model shows). */
+/**
+ * The models this account can actually SELECT — the registry's provider-filtered
+ * "available" snapshot, which already drops unauthenticated providers AND
+ * per-account-disabled models (e.g. GitHub Copilot's `model_picker_enabled` /
+ * `policy.state` / `availableModelIds` — the API lists the whole catalog and
+ * flags what your plan can't use). Falls back to the raw catalog (`getAll`) when
+ * the availability snapshot is empty (not yet warmed, or an older registry
+ * without `getAvailable`) so the picker never shows nothing.
+ */
+export function selectableModels(
+	registry: unknown,
+): { provider: string; id: string }[] {
+	const r = registry as {
+		getAvailable?: () => { provider: string; id: string }[];
+		getAll?: () => { provider: string; id: string }[];
+	};
+	const available = r.getAvailable?.() ?? [];
+	return available.length > 0 ? available : (r.getAll?.() ?? []);
+}
+
 export async function modelsByProvider(
 	ctx: ExtensionContext,
 ): Promise<Map<string, string[]>> {
-	const registry = ctx.modelRegistry as unknown as {
-		getAll?: () => { provider: string; id: string }[];
-		getApiKeyAndHeaders?: (model: {
-			provider: string;
-			id: string;
-		}) => Promise<{ ok: boolean }>;
-	};
 	const grouped = new Map<string, string[]>();
 	const firstModel = new Map<string, { provider: string; id: string }>();
-	for (const model of registry.getAll?.() ?? []) {
+	for (const model of selectableModels(ctx.modelRegistry)) {
 		const bucket = grouped.get(model.provider) ?? [];
 		bucket.push(model.id);
 		grouped.set(model.provider, bucket);
 		if (!firstModel.has(model.provider)) firstModel.set(model.provider, model);
 	}
+	const registry = ctx.modelRegistry as unknown as {
+		getApiKeyAndHeaders?: (model: {
+			provider: string;
+			id: string;
+		}) => Promise<{ ok: boolean }>;
+	};
 	// Only CONFIGURED providers — pi's built-in catalog knows about far
 	// more providers than this install uses. getProviderAuthStatus is the
 	// authoritative signal (getApiKeyAndHeaders answers ok:true for KNOWN

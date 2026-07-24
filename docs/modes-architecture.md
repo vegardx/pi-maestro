@@ -304,6 +304,17 @@ unaffected** — they spawn via the subagents path (`--tools` allowlist + the
 research-tools extension, `isolateExtensions: true`), so they never hit this
 branch and keep their web/research tools.
 
+**The plan is flat: the conductor owns every worker.** In auto, the maestro
+(the host) is the only author of worker deliverables — a worker never spawns a
+worker. A worker fans out only to **read-only leaves**: explorers and reviewers
+for `shared-ro` perspective on its own tree, an advisor (`none`, pure-reasoning)
+for a second opinion. Those leaves hold no `agent`-authoring power to write; the
+`run`/`batch` path enforces it by rejecting any writer kind spawned below the
+host. When a worker discovers work beyond its deliverable, it reports back and
+the conductor grows the plan (evolve-in-place) — parallel and sequential
+deliverables are the plan DAG's `after` edges, not runtime worker nesting. See
+`docs/design/multi-model-agents.md` §3, §5 for the subagent model.
+
 ## The e2e oracle
 
 The externally-driven test asserts on **program state**, tolerates the **model's

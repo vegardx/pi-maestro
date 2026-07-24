@@ -47,20 +47,21 @@ forward — deeper recon→plan integration is deferred.
 
 Plan mode is a **conversation**: the maestro and the user converge on what to
 build and why. It does **not** author the plan — the structure tools are out of
-the plan-mode set entirely. The deliverables and tasks are authored in **one
-forming step** when the user gestures into execution (Shift+Tab / `/auto`), from
-the full context of the planning conversation. Premature authoring is designed
-out, not prompted against.
+the plan-mode set entirely. The deliverables and tasks are authored in a
+**forming step** when the user gestures into execution, from the full context of
+the planning conversation. Premature authoring is designed out, not prompted
+against.
+
+Via **Shift+Tab** the gesture is two steps — form-then-preview, then execute:
 
 ```
-/plan ──▶ converge ────────────▶ [Shift+Tab] ──▶ form ──────▶ review ──▶ rule ──▶ auto
-  boot     surface open           the user       author the   plan-      human    fork a fresh
-  default  questions, research,    gestures into  deliverable/ review     ruling   execution session,
-           discuss trade-offs      execution      task tree    agent      on plan  seeded; execute
+/plan ─▶ converge ─▶ [Shift+Tab #1] ─▶ form + preview ─▶ (stay in plan) ─▶ [Shift+Tab #2] ─▶ auto/hack? ─▶ review ─▶ rule ─▶ exec
+ boot    open Qs,     no plan yet →     author tree +      review the        plan formed →      pick mode    plan-    human   fork+seed
+ default research     just go           show summary                          run it            (or hack)    review   ruling  the session
 ```
 
-**The forming step** is the first stage of the `plan→auto`/`plan→hack` transition
-gate. The model:
+`/start` collapses this to one shot (form + gate + execute). The **forming step**
+is the first stage of the `plan→auto`/`plan→hack` transition gate. The model:
 
 1. **Self-assesses open questions.** If a real, user-only question would
    materially change the plan's structure, it calls `ask` and **stops** — the

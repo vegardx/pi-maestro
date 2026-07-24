@@ -211,28 +211,32 @@ instead of ending `pr-failed`.
 ### Scripted driver — CI (deterministic, offline)
 
 `npm run test:e2e:full` runs [`test/e2e/real.e2e.test.ts`](../test/e2e/real.e2e.test.ts):
-the same core, but a fixed prompt sequence + `ScriptedAnswerer`, in the **CI
-profile** — a mock model provider, a local bare git remote, and a `gh` shim, all
-reaching the workers via `PI_MAESTRO_TRANSPORT=headless` (headless spawns workers
-as child processes that inherit the env, so no tmux is needed). Deterministic and
-free; runs on every PR via [`.github/workflows/e2e-full.yml`](../.github/workflows/e2e-full.yml).
+the same core, but with the **seeded** `sandbox-features` plan (opened with `/plan
+<slug>` then `/start`, so no model-sensitive authoring) driven in the **CI
+profile** — a scripted mock model, a local bare git remote, and a `gh` shim, all
+reaching the workers via headless transport (workers spawn as child processes
+that inherit the env, so no tmux is needed). Deterministic, free, no API key;
+runs on every PR via [`.github/workflows/e2e-full.yml`](../.github/workflows/e2e-full.yml).
+Gated only by `PI_E2E_FULL=1` (it boots a real pi process, heavier than the unit
+suite).
 
-The mock provider replays a **cassette** (`driver/ci/cassette-server.ts`, a
-VCR-style record/replay proxy keyed on the request body). The test **self-skips**
-until a cassette is recorded, so CI stays green out of the box.
+The **scripted model** ([`driver/ci/scripted-model.ts`](../test/e2e/driver/ci/scripted-model.ts))
+is an HTTP server speaking the Anthropic Messages SSE API that *synthesizes* the
+tool-call turns to drive each actor deterministically: it classifies the caller
+from structure — the tool set (read-only reviewer vs full-tool worker) and the
+deliverable id in the worker's cwd — and emits the writes → commit → task-toggles
+that complete each deliverable, a passing plan-review, and benign reviewer
+findings. Because it keys on structure, not a request-body hash, it survives
+prompt/persona wording changes (unlike a cassette). The seat is a pi-config
+concern: `setupCiEnv` defines a self-contained `mock` provider in `models.json`
+whose baseUrl is the scripted model, and a minimal one-model roster so every role
+resolves (workers inherit the seat; reviewers resolve through the v2 path).
 
-**One-time recording** (needs a real API key; the recorded run must complete):
-
-```bash
-PI_E2E_FULL=1 PI_E2E_RECORD=1 ANTHROPIC_API_KEY=… npm run test:e2e:full
-```
-
-This proxies model calls to the real upstream and saves each request→response
-under `driver/ci/cassettes/`; commit those fixtures. Any prompt change that alters
-a request body invalidates the affected entry — re-record the same way. (Getting
-*every* worker role to resolve to the cassette-backed provider is the remaining
-wiring to make the first recording complete end to end; see the CI profile in
-`driver/env-profile.ts`.)
+To watch a drive interactively, [`driver/ci/drive.ts`](../test/e2e/driver/ci/drive.ts)
+runs the same flow and prints per-node statuses; [`driver/ci/logging-stub.ts`](../test/e2e/driver/ci/logging-stub.ts)
++ [`driver/ci/enumerate.ts`](../test/e2e/driver/ci/enumerate.ts) are the
+key-free enumeration tools (log every model request without driving) for when the
+protocol changes and the mock needs re-teaching.
 
 ### Rule
 

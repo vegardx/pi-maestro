@@ -197,14 +197,6 @@ function agentDir(piHome: string): string {
 	return join(piHome, ".pi", "agent");
 }
 
-/** Write `<piHome>/.pi/agent/settings.json` merging in the given slices. */
-function writeSettings(piHome: string, extensionConfig: object): void {
-	writeFileSync(
-		join(agentDir(piHome), "settings.json"),
-		`${JSON.stringify({ extensionConfig }, null, 2)}\n`,
-	);
-}
-
 // --- Live profile ----------------------------------------------------------
 
 export interface LiveEnvOptions {
@@ -460,34 +452,102 @@ function attachLocalBareRemote(repoDir: string): string {
 
 // --- CI profile ------------------------------------------------------------
 
+/** The mock provider + model the CI seat resolves to (served by the scripted model). */
+export const CI_MOCK_PROVIDER = "mock";
+export const CI_MOCK_MODEL = "mock-1";
+
 export interface CiEnvOptions {
-	/** Absolute path to the mock-provider extension (Phase 4 artifact). */
-	readonly mockProviderExtension: string;
-	/** Base URL of the running cassette server (Phase 4 artifact). */
+	/**
+	 * Base URL of a server speaking the Anthropic Messages API (the scripted
+	 * model, `ci/scripted-model.ts`). It becomes the mock provider's baseUrl in
+	 * the isolated `models.json`, so pi's session seat — and every worker that
+	 * inherits it — resolves here. No provider extension needed: the seat is a
+	 * pi-config concern, defined self-contained like the live SIT profile.
+	 */
 	readonly mockBaseUrl: string;
-	/** Directory containing the `gh` shim executable (Phase 4 artifact). */
+	/** Directory containing the `gh` shim executable. */
 	readonly ghShimDir: string;
 	/** Keep dirs after teardown (for debugging). */
 	readonly keep?: boolean;
 }
 
 /**
- * Deterministic offline profile: a mock model provider (registered in both the
- * maestro and, via childExtensions, every worker), a local bare remote, and a
- * `gh` shim on PATH. Uses headless transport so all of this env reaches workers.
+ * Deterministic offline profile: a self-contained mock provider whose baseUrl is
+ * the scripted model, a minimal one-model roster so every role (workers inherit
+ * the seat; reviewers resolve through the v2 path), a local bare remote, and a
+ * `gh` shim on PATH. Headless transport carries all of this to every worker.
  */
 export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 	const piHome = isolatedHome();
-	// The mock provider needs a (dummy) key so the provider resolves at all.
+	// The seat is pi's session model: define the provider self-contained (like
+	// the live SIT profile) so `defaultModel` resolves to a real provider/model
+	// whose baseUrl is the scripted model. Workers share this agent dir, so they
+	// hit it too. (A baseUrl override over the built-in catalog left the seat
+	// "unknown" — the seat must be a concrete, resolvable provider/model.)
 	writeFileSync(
-		join(agentDir(piHome), "auth.json"),
-		`${JSON.stringify({ anthropic: { key: "e2e-mock-key" } }, null, 2)}\n`,
+		join(agentDir(piHome), "models.json"),
+		`${JSON.stringify(
+			{
+				providers: {
+					[CI_MOCK_PROVIDER]: {
+						api: "anthropic-messages",
+						apiKey: "e2e-mock-key",
+						baseUrl: opts.mockBaseUrl,
+						models: [
+							{
+								id: CI_MOCK_MODEL,
+								name: "Mock",
+								contextWindow: 200_000,
+								maxTokens: 8192,
+								input: ["text"],
+								reasoning: true,
+							},
+						],
+					},
+				},
+			},
+			null,
+			2,
+		)}\n`,
 	);
-	// Workers run `-ne`; childExtensions is the one seam that re-injects the mock
-	// provider into every spawned worker.
-	writeSettings(piHome, {
-		modes: { childExtensions: [opts.mockProviderExtension] },
-	});
+	writeFileSync(
+		join(agentDir(piHome), "settings.json"),
+		`${JSON.stringify(
+			{
+				defaultProvider: CI_MOCK_PROVIDER,
+				defaultModel: CI_MOCK_MODEL,
+				defaultThinkingLevel: "medium",
+				extensionConfig: { modes: { enabled: true } },
+				// Minimal one-model roster: every tier resolves to the mock seat, so
+				// reviewers resolve through the real v2 path while workers inherit the
+				// seat. Region/diversity are exercised by the live drives, not here.
+				models: {
+					families: {
+						Mock: {
+							aliases: {
+								Seat: { attach: [`${CI_MOCK_PROVIDER}/${CI_MOCK_MODEL}`] },
+							},
+						},
+					},
+					rosters: {
+						Primary: {
+							light: ["Mock/Seat"],
+							standard: ["Mock/Seat"],
+							heavy: ["Mock/Seat"],
+						},
+					},
+					bindings: {
+						Mock: {
+							roster: "Primary",
+							targets: [`${CI_MOCK_PROVIDER}/${CI_MOCK_MODEL}`],
+						},
+					},
+				},
+			},
+			null,
+			2,
+		)}\n`,
+	);
 
 	// CI clones to a temp dir the developer's includeIf can't reach, so it needs
 	// an explicit committer identity (local/live drives inherit the real one).
@@ -500,10 +560,9 @@ export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 	return {
 		repoDir,
 		piHome,
-		extraExtensions: [opts.mockProviderExtension],
+		extraExtensions: [],
 		env: {
 			...GIT_NO_SIGN_ENV,
-			PI_E2E_MOCK_URL: opts.mockBaseUrl,
 			PI_E2E_GH_STATE: ghState,
 			PATH: `${opts.ghShimDir}:${process.env.PATH ?? ""}`,
 		},

@@ -24,9 +24,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ForwardingAnswerer } from "./answerer.js";
 import { assertEnsemble, assertScenario, readPlan } from "./assertions.js";
+import { startScriptedModel } from "./ci/scripted-model.js";
 import {
 	awaitDeviceApproval,
 	copilotAuthEntry,
@@ -180,15 +182,24 @@ async function startDaemon(argv: string[]): Promise<void> {
 
 async function buildProfile(argv: string[]): Promise<EnvProfile> {
 	if (argv.includes("--ci")) {
-		const mockProviderExtension = required(argv, "--mock-provider");
-		const mockBaseUrl = required(argv, "--mock-url");
-		const ghShimDir = required(argv, "--gh-shim");
-		return setupCiEnv({
-			mockProviderExtension,
-			mockBaseUrl,
+		// Deterministic offline drive: start the scripted mock model in-process and
+		// point the CI profile's seat at it. No cassette, no API key.
+		const ghShimDir =
+			flagValue(argv, "--gh-shim") ??
+			join(dirname(fileURLToPath(import.meta.url)), "ci", "gh-shim");
+		const model = await startScriptedModel();
+		const profile = setupCiEnv({
+			mockBaseUrl: model.url,
 			ghShimDir,
 			keep: argv.includes("--keep"),
 		});
+		return {
+			...profile,
+			teardown: () => {
+				profile.teardown();
+				void model.close();
+			},
+		};
 	}
 	// `--multi-model` installs the built-in ollama multi-model profile (real
 	// role→model routing across gpt-oss/qwen3/gemma4). It supplies the provider
@@ -481,15 +492,6 @@ function buildClientRequest(cmd: string, argv: string[]): ControlRequest {
 function flagValue(argv: string[], flag: string): string | undefined {
 	const i = argv.indexOf(flag);
 	return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
-}
-
-function required(argv: string[], flag: string): string {
-	const v = flagValue(argv, flag);
-	if (!v) {
-		process.stderr.write(`missing required ${flag}\n`);
-		process.exit(1);
-	}
-	return v;
 }
 
 /** First non-flag argument (and not a flag's value). */

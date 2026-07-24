@@ -61,7 +61,29 @@ const GIT_IDENT = [
 	"user.email=e2e@pi-maestro.test",
 	"-c",
 	"user.name=pi-maestro e2e",
+	// These are throwaway commits under a synthetic identity in a disposable
+	// sandbox — never sign them. A developer with commit.gpgsign (or a signing
+	// SSH key) set globally would otherwise make every seed commit trip pinentry
+	// and fail headlessly (no key matches the synthetic identity anyway).
+	"-c",
+	"commit.gpgsign=false",
+	"-c",
+	"tag.gpgsign=false",
 ];
+
+/**
+ * Env that disables commit/tag signing for EVERY git subprocess in the drive —
+ * the seed above uses `-c` flags, but the maestro's own workers commit through
+ * their own git invocations and inherit this env instead. Same rationale: a
+ * disposable e2e commit must never depend on the developer's gpg/ssh signing.
+ */
+const GIT_NO_SIGN_ENV: Record<string, string> = {
+	GIT_CONFIG_COUNT: "2",
+	GIT_CONFIG_KEY_0: "commit.gpgsign",
+	GIT_CONFIG_VALUE_0: "false",
+	GIT_CONFIG_KEY_1: "tag.gpgsign",
+	GIT_CONFIG_VALUE_1: "false",
+};
 
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", [...GIT_IDENT, ...args], {
@@ -276,7 +298,7 @@ export function setupLiveEnv(opts: LiveEnvOptions = {}): EnvProfile {
 	let deleteRepo: (() => void) | undefined;
 	let bareRemote: string | undefined;
 	let ghState: string | undefined;
-	const env: Record<string, string> = {};
+	const env: Record<string, string> = { ...GIT_NO_SIGN_ENV };
 	if (opts.localRemote) {
 		// Under ~/src/github.com/ so workers inherit the developer's real git
 		// identity via includeIf — a temp-dir clone resolves none and every
@@ -480,6 +502,7 @@ export function setupCiEnv(opts: CiEnvOptions): EnvProfile {
 		piHome,
 		extraExtensions: [opts.mockProviderExtension],
 		env: {
+			...GIT_NO_SIGN_ENV,
 			PI_E2E_MOCK_URL: opts.mockBaseUrl,
 			PI_E2E_GH_STATE: ghState,
 			PATH: `${opts.ghShimDir}:${process.env.PATH ?? ""}`,

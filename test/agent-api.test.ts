@@ -137,11 +137,14 @@ describe("typed agent registries", () => {
 });
 
 describe("unified agent capability and tool", () => {
-	function setup() {
+	function setup(opts: { depth?: number } = {}) {
 		const runTransport = transport();
 		const capability = createAgentsCapability({
 			subagents: () => runTransport.capability,
 			registries: createBuiltinAgentRegistries(),
+			...(opts.depth !== undefined
+				? { depth: () => opts.depth as number }
+				: {}),
 			resolveModel: async (kind, choice) => ({
 				presetId: "preset",
 				modelSetId: kind.modelRole,
@@ -239,6 +242,34 @@ describe("unified agent capability and tool", () => {
 		).rejects.toThrow(/writer/);
 		// The writer was never spawned.
 		expect(profiles).toHaveLength(0);
+	});
+
+	it("a subagent cannot run a writer — the plan stays flat, host owns workers", async () => {
+		const { capability, profiles } = setup({ depth: 1 });
+		await expect(
+			capability.run({ kind: "worker", prompt: "do work" }),
+		).rejects.toThrow(/writer/);
+		// batch delegates to run, so the same gate applies there.
+		await expect(
+			capability.batch([{ kind: "worker", prompt: "do work" }]),
+		).rejects.toThrow(/writer/);
+		expect(profiles).toHaveLength(0);
+	});
+
+	it("a subagent may still run read-only kinds — only writers are host-only", async () => {
+		const { capability, profiles } = setup({ depth: 1 });
+		const spawned = await capability.run({
+			kind: "web-research",
+			prompt: "Find the primary source",
+		});
+		expect(spawned.assignment.kind).toBe("web-research");
+		expect(profiles[0].mode).toBe("plan");
+	});
+
+	it("the host may run a writer worker (depth 0)", async () => {
+		const { capability } = setup({ depth: 0 });
+		const spawned = await capability.run({ kind: "worker", prompt: "ship it" });
+		expect(spawned.assignment.kind).toBe("worker");
 	});
 
 	it("resolves planning assignments without spawning and exposes exact options", async () => {

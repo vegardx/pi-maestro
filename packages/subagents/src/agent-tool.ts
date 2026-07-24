@@ -32,6 +32,7 @@ import {
 	type ThinkingLevel,
 	TIER_IDS,
 } from "@vegardx/pi-contracts";
+import { currentDepth } from "./invocation.js";
 import type { AgentRegistries } from "./registry.js";
 import { resolveRuntimePolicy } from "./registry.js";
 
@@ -54,6 +55,12 @@ export interface UnifiedAgentDeps {
 	) => Promise<ExactAgentSelection>;
 	readonly researchToolsPath?: () => string;
 	readonly now?: () => Date;
+	/**
+	 * This caller's own nesting depth. Host is 0; any spawned subagent is >= 1.
+	 * Defaults to reading PI_MAESTRO_DEPTH. Used to keep the plan flat: only the
+	 * host authors writer deliverables (see `run`).
+	 */
+	readonly depth?: () => number;
 }
 
 function profileFor(
@@ -102,6 +109,7 @@ export function createAgentsCapability(
 ): AgentsCapabilityV1 {
 	const handles = new Map<RunId, RunHandle>();
 	const assignments = new Map<RunId, ResolvedAgentAssignment>();
+	const depth = deps.depth ?? currentDepth;
 
 	const resolve = async (
 		request: AgentAssignmentRequest,
@@ -167,6 +175,19 @@ export function createAgentsCapability(
 			throw new Error(
 				"The host kind represents the current session and cannot run.",
 			);
+		const kind = deps.registries.kinds.require(request.kind);
+		// Keep the plan flat: writer deliverables (mode "full") are authored by
+		// the host plan, never spawned from a subagent. Subagents fan out only to
+		// read-only readers (`spawn`) — a worker cannot spawn a worker. Depth 0 is
+		// the host; anything deeper is a subagent.
+		const runtime = resolveRuntimePolicy(
+			deps.registries.runtime,
+			kind.runtimePolicy,
+		);
+		if (runtime.mode === "full" && depth() >= 1)
+			throw new Error(
+				`${request.kind} is a writer; writer deliverables are authored by the host plan, not spawned from a subagent. Fan out to read-only readers with spawn, or add a node to the plan.`,
+			);
 		const assignment = await resolve({
 			agentId: `assignment:${crypto.randomUUID()}`,
 			kind: request.kind,
@@ -177,7 +198,6 @@ export function createAgentsCapability(
 			tier: request.tier,
 			effort: request.effort,
 		});
-		const kind = deps.registries.kinds.require(request.kind);
 		const handle = transport.spawn(
 			request.prompt,
 			profileFor(kind, request, assignment, deps),

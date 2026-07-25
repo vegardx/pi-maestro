@@ -5,9 +5,6 @@ import type { ResolvedAgentAssignment } from "./agents.js";
 import type { DeliverableId, RunId, WorkItemId } from "./ids.js";
 import type { ModeName } from "./modes.js";
 
-/** Current on-disk plan schema. Older plans are intentionally unsupported. */
-export const PLAN_SCHEMA_VERSION = 5 as const;
-
 // ─── Deliverable lifecycle ──────────────────────────────────────────────────
 
 export const DELIVERABLE_STATUSES = [

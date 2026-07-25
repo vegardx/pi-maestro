@@ -15,6 +15,7 @@ import {
 	type BindingConfig,
 	DEFAULT_AGENT_ALLOWANCES,
 	type FamilyConfig,
+	type ModelsConfig,
 	type RegionConfig,
 	type RosterTiers,
 	SPAWNABLE_AGENT_TYPES,
@@ -22,9 +23,8 @@ import {
 	type ThinkingLevel,
 	TIER_IDS,
 	type TierId,
-	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
-import { isModelId } from "./profiles.js";
+import { isModelId } from "./model-spec.js";
 import { isRegionOff } from "./region.js";
 
 const EFFORT_SET = new Set([
@@ -296,7 +296,7 @@ function extractModelsConfig(raw: unknown): ParsedModelsConfig | undefined {
 }
 
 /** Cross-object rules that only make sense on the merged config. */
-export function validateModelsConfig(config: V2ModelsConfig): void {
+export function validateModelsConfig(config: ModelsConfig): void {
 	// Every roster ref must name an existing Family/Alias.
 	for (const [rosterName, tiers] of Object.entries(config.rosters)) {
 		for (const tier of TIER_IDS) {
@@ -352,7 +352,7 @@ export function validateModelsConfig(config: V2ModelsConfig): void {
 export function parseModelsSettings(
 	globalRaw: unknown,
 	projectRaw: unknown,
-): V2ModelsConfig | undefined {
+): ModelsConfig | undefined {
 	const global = extractModelsConfig(globalRaw);
 	const project = extractModelsConfig(projectRaw);
 	if (!global && !project) return undefined;
@@ -361,7 +361,7 @@ export function parseModelsSettings(
 		...(activeRegionName ? { active: activeRegionName } : {}),
 		lists: { ...global?.region?.lists, ...project?.region?.lists },
 	};
-	const config: V2ModelsConfig = {
+	const config: ModelsConfig = {
 		families: { ...global?.families, ...project?.families },
 		rosters: { ...global?.rosters, ...project?.rosters },
 		bindings: { ...global?.bindings, ...project?.bindings },
@@ -380,10 +380,10 @@ export function parseModelsSettings(
  * Read the merged v2 slice. Returns undefined when nothing v2 is configured
  * (an empty models block = inherit-all).
  */
-export function readV2Config(
+export function readModelsConfig(
 	cwd: string,
 	agentDir?: string,
-): V2ModelsConfig | undefined {
+): ModelsConfig | undefined {
 	const manager = SettingsManager.create(cwd, agentDir);
 	return parseModelsSettings(
 		manager.getGlobalSettings() as unknown,
@@ -398,7 +398,7 @@ export function readV2Config(
  * attached to no alias (no diversity edge, footer shows the raw model).
  */
 export function familyOfModel(
-	config: V2ModelsConfig | undefined,
+	config: ModelsConfig | undefined,
 	modelId: string | undefined,
 ): { family: string; alias: string } | undefined {
 	if (!config || !modelId) return undefined;
@@ -415,7 +415,7 @@ export function familyOfModel(
  * it, else the default (targetless) binding, else undefined.
  */
 export function activeBinding(
-	config: V2ModelsConfig | undefined,
+	config: ModelsConfig | undefined,
 	sessionModelId: string | undefined,
 ): { id: string; binding: BindingConfig } | undefined {
 	if (!config) return undefined;

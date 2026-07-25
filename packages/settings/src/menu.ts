@@ -8,15 +8,15 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	getSessionSettingOverride,
+	type ModelsConfig,
 	setSessionSettingOverride,
-	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
 	activeBinding,
 	activeRegion,
 	isRegionOff,
 	REGION_OFF,
-	readV2Config,
+	readModelsConfig,
 	regionNames,
 } from "@vegardx/pi-models";
 import { type DomainRegistryInput, writeDomainValue } from "./domain.js";
@@ -37,9 +37,9 @@ export function setSessionSetting(
 	setSessionSettingOverride(extension, key, value);
 }
 
-function safeModelsConfig(ctx: ExtensionContext): V2ModelsConfig | undefined {
+function safeModelsConfig(ctx: ExtensionContext): ModelsConfig | undefined {
 	try {
-		return readV2Config(ctx.cwd);
+		return readModelsConfig(ctx.cwd);
 	} catch (cause) {
 		ctx.ui.notify(
 			`Model config could not be read: ${cause instanceof Error ? cause.message : String(cause)}. Fix or clear the models block (an incompatible one is wiped at boot).`,

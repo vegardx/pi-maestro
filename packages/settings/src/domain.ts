@@ -25,13 +25,10 @@ import {
 } from "@vegardx/pi-contracts";
 import {
 	activeBinding,
-	activePreset,
 	explainTier,
 	readModelsConfig,
-	readV2Config,
 } from "@vegardx/pi-models";
 import {
-	formatSettingValue,
 	type LayeredValue,
 	type MaestroScope,
 	readAdvancedValue,
@@ -51,17 +48,6 @@ export interface ModelOptionConfig {
 	readonly model: string;
 	readonly effort: string;
 	readonly summary: string;
-}
-export interface ModelSetDetail {
-	readonly id: string;
-	readonly options: readonly ModelOptionConfig[];
-	readonly usedBy: readonly string[];
-}
-export interface PresetDetail {
-	readonly id: string;
-	readonly targets: readonly string[];
-	readonly modelSets: Readonly<Record<string, string>>;
-	readonly source: "global" | "project" | "mixed" | "unset";
 }
 export interface AgentKindBinding {
 	readonly kind: AgentKind;
@@ -92,10 +78,6 @@ export interface DomainSnapshot {
 		readonly contextWindow?: number;
 		readonly maxTokens?: number;
 	};
-	readonly activePreset?: string;
-	readonly matchedTarget?: string;
-	readonly presets: readonly PresetDetail[];
-	readonly modelSets: readonly ModelSetDetail[];
 	readonly kinds: readonly AgentKindBinding[];
 	readonly kindDefinitions: readonly AgentKindDefinition[];
 	readonly runtimePolicies: readonly RuntimePolicyConfig[];
@@ -137,13 +119,6 @@ function objectAt(
 		value = value[part];
 	}
 	return isPlainObject(value) ? value : {};
-}
-
-function sourceFor(global: unknown, project: unknown): PresetDetail["source"] {
-	if (global !== undefined && project !== undefined) return "mixed";
-	if (project !== undefined) return "project";
-	if (global !== undefined) return "global";
-	return "unset";
 }
 
 function parseJson(raw: string): unknown {
@@ -535,44 +510,8 @@ export function validateDomainEdit(
 				? parseJson(value)
 				: value;
 	const errors = validateDomainValue(key, parsed);
-	const config = readModelsConfig(ctx.cwd);
-	if (
-		key.startsWith("models.presets.") &&
-		key.endsWith(".targets") &&
-		Array.isArray(parsed)
-	) {
-		const presetId = key.split(".")[2] ?? "";
-		for (const [other, preset] of Object.entries(config?.presets ?? {})) {
-			if (other === presetId) continue;
-			for (const target of parsed)
-				if (preset.targets.includes(String(target)))
-					errors.push(`target ${target} is already owned by preset ${other}`);
-		}
-	}
-	if (
-		key.startsWith("models.presets.") &&
-		key.endsWith(".modelSets") &&
-		isPlainObject(parsed)
-	) {
-		for (const setId of Object.values(parsed))
-			if (nonEmpty(setId) && !config?.modelSets[setId])
-				errors.push(`unknown model set ${setId}`);
-	}
 	if (key.startsWith("agents.kinds.")) {
-		const [, , kindId, leaf] = key.split(".");
-		if (leaf === "modelSet" && nonEmpty(parsed) && !config?.modelSets[parsed])
-			errors.push(`unknown model set ${parsed}`);
-		if (leaf === "option" && nonEmpty(parsed)) {
-			const binding = readAdvancedValue(
-				ctx.cwd,
-				DOMAIN_EXTENSION,
-				`agents.kinds.${kindId}.modelSet`,
-			).effective;
-			const set =
-				typeof binding === "string" ? config?.modelSets[binding] : undefined;
-			if (!set?.options.some((option) => option.id === parsed))
-				errors.push(`option ${parsed} is not in the bound model set`);
-		}
+		const leaf = key.split(".")[3];
 		if (leaf === "runtimePolicy" && nonEmpty(parsed)) {
 			const ids = new Set([
 				...(registry.runtime?.policies ?? []).map((item) => item.id),
@@ -667,44 +606,7 @@ export function readDomainSnapshot(
 	ctx: ExtensionContext,
 	registry: DomainRegistryInput = {},
 ): DomainSnapshot {
-	let config: ReturnType<typeof readModelsConfig>;
-	try {
-		config = readModelsConfig(ctx.cwd);
-	} catch {
-		config = undefined;
-	}
-	const manager = SettingsManager.create(ctx.cwd);
-	const globalPresets = objectAt(manager.getGlobalSettings(), [
-		"models",
-		"presets",
-	]);
-	const projectPresets = objectAt(manager.getProjectSettings(), [
-		"models",
-		"presets",
-	]);
 	const mainModel = sessionModelId(ctx);
-	const active = activePreset(config, mainModel);
-	const presets = Object.entries(config?.presets ?? {}).map(([id, preset]) => ({
-		id,
-		targets: preset.targets,
-		modelSets: Object.fromEntries(
-			Object.entries(preset.modelSets).filter(
-				(entry): entry is [string, string] => typeof entry[1] === "string",
-			),
-		),
-		source: sourceFor(globalPresets[id], projectPresets[id]),
-	}));
-	const modelSets = Object.entries(config?.modelSets ?? {}).map(
-		([id, set]) => ({
-			id,
-			options: set.options,
-			usedBy: presets.flatMap((preset) =>
-				Object.entries(preset.modelSets)
-					.filter(([, setId]) => setId === id)
-					.map(([role]) => `preset ${preset.id} · ${role}`),
-			),
-		}),
-	);
 	const builtins = new Map(
 		(registry.kinds ?? []).map((kind) => [kind.id, kind]),
 	);
@@ -774,13 +676,6 @@ export function readDomainSnapshot(
 				?.contextWindow,
 			maxTokens: (ctx.model as { maxTokens?: number } | undefined)?.maxTokens,
 		},
-		activePreset: active?.id,
-		matchedTarget:
-			active && mainModel && active.preset.targets.includes(mainModel)
-				? mainModel
-				: undefined,
-		presets,
-		modelSets,
 		kinds,
 		kindDefinitions: registry.kinds ?? [],
 		runtimePolicies,
@@ -805,7 +700,7 @@ export async function explainModelSelection(
 	const sessionModel = ctx.model
 		? `${ctx.model.provider}/${ctx.model.id}`
 		: undefined;
-	const config = readV2Config(ctx.cwd);
+	const config = readModelsConfig(ctx.cwd);
 	const lines: string[] = [
 		`Seat (session model): ${sessionModel ?? "none"} — every spawned agent INHERITS this unless a tier is deliberately requested.`,
 	];
@@ -863,15 +758,6 @@ export function domainImpact(
 	value: unknown,
 ): string[] {
 	const parts = key.split(".");
-	if (parts[0] === "models" && parts[1] === "modelSets") {
-		const setId = parts[2] ?? "";
-		const used =
-			snapshot.modelSets.find((set) => set.id === setId)?.usedBy ?? [];
-		return [
-			`Changes exact options for ${used.length ? used.join(", ") : "no current bindings"}.`,
-			`New value: ${formatSettingValue(value)}`,
-		];
-	}
 	if (parts[0] === "agents" && parts[1] === "runtimePolicies") {
 		const id = parts[2];
 		const used = snapshot.kinds
@@ -949,7 +835,7 @@ export function writeDomainValue(
 	const errors = validateDomainEdit(ctx, key, scope, serialized, registry);
 	if (errors.length) return errors;
 	// The whole v2 slice lives under the raw settings `models.*` root so
-	// readV2Config sees it (families, rosters, bindings, region, allowances) —
+	// readModelsConfig sees it (families, rosters, bindings, region, allowances) —
 	// unlike kind bindings, which stay in the maestro extension config.
 	const rawSettingsKey = key.startsWith("models.");
 	if (rawSettingsKey && scope !== "session") {

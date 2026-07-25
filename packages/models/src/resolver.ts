@@ -23,14 +23,14 @@ import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	AliasConfig,
+	ModelsConfig,
 	RegionConfig,
 	SpawnableAgentType,
 	ThinkingLevel,
 	TierId,
-	V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import { THINKING_LEVELS } from "@vegardx/pi-contracts";
-import { activeBinding, parseAliasRef, readV2Config } from "./catalog.js";
+import { activeBinding, parseAliasRef, readModelsConfig } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec } from "./model-spec.js";
 import { activeRegion, modelAllowedByRegion } from "./region.js";
@@ -406,11 +406,11 @@ export function defaultTierForAgent(
 	return readConfigSafe(ctx)?.allowances[agent]?.tiers[0];
 }
 
-function readConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
+function readConfigSafe(ctx: ExtensionContext): ModelsConfig | undefined {
 	// Config errors are fail-visible at read time elsewhere; here they mean
 	// "no usable v2 config", which the caller surfaces via ModelResolutionError.
 	try {
-		return readV2Config(ctx.cwd);
+		return readModelsConfig(ctx.cwd);
 	} catch {
 		return undefined;
 	}

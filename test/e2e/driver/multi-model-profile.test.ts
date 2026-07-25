@@ -102,7 +102,7 @@ beforeEach(() => {
 	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	// The profile writes `models` to the isolated agent dir in production; here we
-	// place it in project settings — readV2Config merges both the same way.
+	// place it in project settings — readModelsConfig merges both the same way.
 	writeFileSync(
 		join(cwd, ".pi", "settings.json"),
 		JSON.stringify({ models: MULTI_MODEL_OLLAMA.models }),

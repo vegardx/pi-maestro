@@ -44,8 +44,6 @@ function show(ctx: ExtensionContext, registry: DomainRegistryInput): void {
 	const snapshot = readDomainSnapshot(ctx, registry);
 	const lines = [
 		"Maestro Configuration",
-		`Active preset: ${snapshot.activePreset ?? "session fallback"}`,
-		`Model sets: ${snapshot.modelSets.length}`,
 		`Agent kinds: ${snapshot.kinds.length}`,
 		`Runtime policies: ${snapshot.runtimePolicies.length}`,
 		`Transition gates: ${snapshot.gates.length}`,

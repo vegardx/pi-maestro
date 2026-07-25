@@ -120,9 +120,6 @@ describe("Maestro domain configuration", () => {
 			},
 		});
 		const snapshot = readDomainSnapshot(ctx(), registry());
-		expect(snapshot.activePreset).toBe("main");
-		expect(snapshot.matchedTarget).toBe("anthropic/sonnet");
-		expect(snapshot.modelSets[0]?.usedBy).toEqual(["preset main · worker"]);
 		expect(snapshot.kinds.find((kind) => kind.kind === "worker")).toMatchObject(
 			{ modelSet: "workers", runtimePolicy: "worker" },
 		);
@@ -136,56 +133,8 @@ describe("Maestro domain configuration", () => {
 	});
 
 	it("validates ambiguous targets, broken references, unsafe policy, and gate contracts", () => {
-		settings({
-			models: {
-				modelSets: {
-					workers: {
-						options: [
-							{
-								id: "fast",
-								model: "openai/o3",
-								effort: "high",
-								summary: "Fast",
-							},
-						],
-					},
-				},
-				presets: {
-					main: {
-						targets: ["anthropic/sonnet"],
-						modelSets: { worker: "workers" },
-					},
-				},
-			},
-		});
+		settings({});
 		const context = ctx();
-		expect(
-			validateDomainEdit(
-				context,
-				"models.presets.other.targets",
-				"project",
-				'["anthropic/sonnet"]',
-				registry(),
-			),
-		).toContain("target anthropic/sonnet is already owned by preset main");
-		expect(
-			validateDomainEdit(
-				context,
-				"models.presets.main.modelSets",
-				"project",
-				'{"worker":"missing"}',
-				registry(),
-			),
-		).toContain("unknown model set missing");
-		expect(
-			validateDomainEdit(
-				context,
-				"agents.kinds.worker.option",
-				"project",
-				"missing",
-				registry(),
-			),
-		).toContain("option missing is not in the bound model set");
 		expect(
 			validateDomainEdit(
 				context,

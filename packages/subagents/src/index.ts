@@ -39,7 +39,7 @@ import {
 	activeBinding,
 	agentTypeForRole,
 	parseAliasRef,
-	readV2Config,
+	readModelsConfig,
 	resolveModel,
 	resolveModelAuth,
 } from "@vegardx/pi-models";
@@ -252,7 +252,7 @@ export async function resolveAgentModel(
 	role: string,
 	choice: { model?: string; tier?: string; effort?: string },
 ): Promise<ExactAgentSelection | null> {
-	const config = readV2Config(ctx.cwd);
+	const config = readModelsConfig(ctx.cwd);
 	if (!config) return null;
 	const agent = agentTypeForRole(role);
 

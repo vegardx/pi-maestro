@@ -76,13 +76,14 @@ describe("the shipped default table", () => {
 		expect(errors).toEqual([]);
 	});
 
-	it("covers both execution boundary edges with the heavy plan reviewer", () => {
-		for (const edge of ["mode:plan->auto", "mode:plan->hack"]) {
-			const row = policyRowFor({ rows: DEFAULT_POLICY_ROWS, errors: [] }, edge);
-			expect(row?.run.models).toBe("heavy");
-			expect(row?.run.persona).toBe("plan-review");
-			expect(row?.run.contract).toBe("plan-gate-report");
-		}
+	it("gates plan->auto with the heavy plan reviewer; plan->hack is not gated", () => {
+		const table = { rows: DEFAULT_POLICY_ROWS, errors: [] };
+		const auto = policyRowFor(table, "mode:plan->auto");
+		expect(auto?.run.models).toBe("heavy");
+		expect(auto?.run.persona).toBe("plan-review");
+		expect(auto?.run.contract).toBe("plan-gate-report");
+		// hack is a direct posture switch — no readiness gate, so no policy row.
+		expect(policyRowFor(table, "mode:plan->hack")).toBeUndefined();
 	});
 });
 

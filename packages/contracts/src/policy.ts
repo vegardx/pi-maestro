@@ -76,15 +76,6 @@ export const DEFAULT_POLICY_ROWS: readonly PolicyRow[] = [
 		},
 	},
 	{
-		on: "mode:plan->hack",
-		run: {
-			agent: "reviewer",
-			persona: "plan-review",
-			models: "heavy",
-			contract: "plan-gate-report",
-		},
-	},
-	{
 		on: "tool:bash",
 		scope: { depth: ">=1" },
 		run: { models: "light", contract: "verdict" },

@@ -159,7 +159,6 @@ export {
 } from "./plan/node-executor.js";
 export * from "./plan/schema.js";
 export {
-	archiveLegacyPlans,
 	createPlanStore,
 	type PlanStore,
 } from "./plan/storage.js";

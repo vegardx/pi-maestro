@@ -20,14 +20,12 @@ import {
 } from "../compaction.js";
 import { resetRealTreeSandbox } from "../isolation/realtree-sandbox.js";
 import { walkNodes } from "../plan/schema.js";
-import { archiveLegacyPlans } from "../plan/storage.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { hydrateModesState } from "../session.js";
 import {
 	describePolicyDeviations,
 	readModesCompactionSettings,
 } from "../settings.js";
-import { plansRoot } from "../storage.js";
 import { createModesSummariser } from "../summarise.js";
 import {
 	contextFillLadder,
@@ -196,21 +194,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 
 	pi.on("session_start", async (_event, ctx) => {
 		rt.isolationNoneSession = false;
-		// v2 flip: pre-v6 plan dirs are archived WHOLESALE into _legacy/ with
-		// one visible notice, never a crash (#238/#239 argued auto-archive
-		// over a hard error). Host sessions only — workers have no plan store.
 		if (!isAgentMode()) {
-			try {
-				const { archived } = archiveLegacyPlans(plansRoot());
-				if (archived.length > 0) {
-					ctx.ui.notify(
-						`Archived ${archived.length} pre-v2 plan(s) to _legacy/: ${archived.join(", ")}. They are read-only history; start a fresh plan.`,
-						"warning",
-					);
-				}
-			} catch {
-				// Archive is best-effort; a failure surfaces on plan load instead.
-			}
 			// Deviation warning: a loosened execution policy (or disabled bash
 			// write-enforcement) must be visible EVERY session, never silently
 			// permanent (capability-policy step 8).

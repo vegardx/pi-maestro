@@ -411,7 +411,12 @@ function persistGate(engine: PlanEngine, state: ModeTransitionGate): void {
 export function createExecutionReadinessGate(): TransitionGateDefinition {
 	return {
 		id: "execution-readiness",
-		edges: ["plan->auto", "plan->hack"],
+		// Only plan→AUTO is gated: auto orchestrates, so it forms the plan and
+		// runs the readiness review before spawning workers. plan→HACK is a
+		// direct posture switch — hack is a manual worker seat that neither
+		// activates deliverables nor needs a formed plan, so it must NOT form or
+		// gate (an operator with a draft plan can drop into hack instantly).
+		edges: ["plan->auto"],
 		validate: executionReadinessValidations,
 		prompt: (plan, validations) =>
 			[

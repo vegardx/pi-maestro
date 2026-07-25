@@ -284,8 +284,12 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 					return;
 				}
 				if (rt.state.mode === "plan") {
-					if (await rt.requestMode(mode, ctx))
-						await rt.runStart(undefined, ctx);
+					// auto forms + activates the plan through the readiness gate; hack
+					// is a direct posture switch — no gate, no plan forming, no worker
+					// activation (requestMode is a pass-through commit for hack).
+					if (await rt.requestMode(mode, ctx)) {
+						if (mode === "auto") await rt.runStart(undefined, ctx);
+					}
 					return;
 				}
 				await rt.requestMode(mode, ctx);

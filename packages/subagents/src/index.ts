@@ -42,6 +42,7 @@ import {
 	readModelsConfig,
 	resolveModel,
 	resolveModelAuth,
+	sessionModelId,
 } from "@vegardx/pi-models";
 import {
 	getConfigStringArray,
@@ -317,11 +318,6 @@ export async function resolveAgentModel(
 		source: "explicit" as const,
 		candidates: [],
 	};
-}
-
-function sessionModelId(ctx: ExtensionContext): string | undefined {
-	const model = (ctx as { model?: { provider: string; id: string } }).model;
-	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
 export default defineExtension(

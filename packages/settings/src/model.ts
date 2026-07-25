@@ -60,11 +60,7 @@ export function formatSettingValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-export function sessionModelId(
-	ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
-): string | undefined {
-	return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-}
+export { sessionModelId } from "@vegardx/pi-models";
 
 export function validateDeclaredValue(
 	declaration: SettingDeclaration,

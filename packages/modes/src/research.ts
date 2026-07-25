@@ -33,10 +33,10 @@ import {
 	TIER_IDS,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
-import type { PlanEngineV2 } from "./plan/engine.js";
+import type { PlanEngine } from "./plan/engine.js";
 import {
 	PARENT_AFTER_TOKEN,
-	type PlanV2,
+	type Plan,
 	slugify,
 	walkNodes,
 } from "./plan/schema.js";
@@ -70,7 +70,7 @@ export interface ResearchRunView {
 }
 
 export interface ResearchDeps {
-	readonly engine: () => PlanEngineV2 | undefined;
+	readonly engine: () => PlanEngine | undefined;
 	/** Agent API used for research assignments. */
 	readonly agents: () => AgentsCapabilityV1 | undefined;
 	readonly ask: () => AskCapabilityV1 | undefined;
@@ -391,7 +391,7 @@ function assignmentKind(
 }
 
 function buildResearchPrompt(
-	plan: PlanV2,
+	plan: Plan,
 	kind: ResearchKind,
 	question: string,
 	context?: string,
@@ -402,7 +402,7 @@ function buildResearchPrompt(
 }
 
 /** Compact plan outline for the advisor — title, phase, node tree, tasks. */
-export function renderPlanOutline(plan: PlanV2): string {
+export function renderPlanOutline(plan: Plan): string {
 	const lines = [`Plan: ${plan.title} (${plan.slug})`];
 	if (plan.understanding) lines.push("", plan.understanding);
 	for (const { node, depth } of walkNodes(plan)) {

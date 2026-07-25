@@ -31,8 +31,8 @@ import {
 	deriveBase,
 	isBranchOwner,
 	PARENT_AFTER_TOKEN,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
 	TERMINAL_STATUSES,
 	walkNodes,
@@ -52,7 +52,7 @@ import { auditBranchCommits, detectCommitPolicy } from "./commit-policy.js";
  * a late-bound entry (`createdBy`) materializes during execution.
  */
 export function repoForNode(
-	plan: PlanV2,
+	plan: Plan,
 	node: Pick<PlanNode, "repo">,
 ): { key: string; path: string } {
 	if (node.repo) {
@@ -67,7 +67,7 @@ export function repoForNode(
 }
 
 /** The node's sibling group — its parent's children, or the roots. */
-function siblingsOf(plan: PlanV2, node: PlanNode): readonly PlanNode[] {
+function siblingsOf(plan: Plan, node: PlanNode): readonly PlanNode[] {
 	const parent = parentOfNode(plan, node.id);
 	return parent ? (parent.children ?? []) : plan.nodes;
 }
@@ -121,7 +121,7 @@ export const defaultShipGit: ShipGit = {
  * own repo default branch.
  */
 export function shipBaseBranch(
-	plan: PlanV2,
+	plan: Plan,
 	node: PlanNode,
 	defaultBranch: string,
 ): string {
@@ -158,7 +158,7 @@ export type ShipResult =
 	| { ok: false; code: ShipErrorCode; message: string; retryable: boolean };
 
 export interface ShipNodeOpts {
-	plan: PlanV2;
+	plan: Plan;
 	node: PlanNode;
 	worktreePath: string;
 	/** PR-body agent reports; defaults to the node summary when present. */
@@ -307,7 +307,7 @@ export interface ReconcileReport {
 }
 
 export interface ReconcileOpts {
-	plan: PlanV2;
+	plan: Plan;
 	prClient?: PrClient;
 	git?: ShipGit;
 }
@@ -429,7 +429,7 @@ export interface CleanupReport {
 }
 
 export interface CleanupOpts {
-	plan: PlanV2;
+	plan: Plan;
 	git?: ShipGit;
 }
 

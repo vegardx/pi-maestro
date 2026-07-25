@@ -2,27 +2,27 @@
 // scheduler, ship ordering, base derivation, authoring-time validation, and
 // the fingerprint's exclusion discipline. Successor to schema.test.ts.
 
-import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import {
 	canTransition,
 	deriveBase,
 	effectiveMaxChildren,
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
 	isBranchOwner,
 	isCandidateBranch,
 	nodeBlockedReason,
 	nodeReady,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
-	planFingerprintV2,
+	planFingerprint,
 	readyChildren,
 	shippableNodes,
 	slugify,
 	treeDepth,
-	validatePlanShapeV2,
+	validatePlanShape,
 	walkNodes,
 } from "../packages/modes/src/plan/schema.js";
 
@@ -42,9 +42,9 @@ function node(partial: Partial<PlanNode> & { id: string }): PlanNode {
 	};
 }
 
-function plan(nodes: PlanNode[], partial: Partial<PlanV2> = {}): PlanV2 {
+function plan(nodes: PlanNode[], partial: Partial<Plan> = {}): Plan {
 	return {
-		schemaVersion: PLAN_SCHEMA_VERSION_V2,
+		schemaVersion: PLAN_SCHEMA_VERSION,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",
@@ -56,7 +56,7 @@ function plan(nodes: PlanNode[], partial: Partial<PlanV2> = {}): PlanV2 {
 }
 
 /** The design doc's worked example: build-auth with candidates + reviews. */
-function authPlan(): PlanV2 {
+function authPlan(): Plan {
 	return plan([
 		node({ id: "prep-repos", persona: "generalist" }),
 		node({
@@ -116,7 +116,7 @@ describe("traversal", () => {
 			{ id: "docs-pass", depth: 1, parent: null },
 		]);
 		expect(treeDepth(authPlan())).toBe(3);
-		expect(findNodeV2(authPlan(), "sub-review")?.agent).toBe("reviewer");
+		expect(findNode(authPlan(), "sub-review")?.agent).toBe("reviewer");
 		expect(parentOfNode(authPlan(), "candidate-a")?.id).toBe("build-auth");
 	});
 });
@@ -201,11 +201,11 @@ describe("base derivation (v1 pickBaseBranch over siblings)", () => {
 
 describe("authoring-time validation", () => {
 	it("accepts the worked example", () => {
-		expect(validatePlanShapeV2(authPlan())).toEqual([]);
+		expect(validatePlanShape(authPlan())).toEqual([]);
 	});
 
 	it("rejects duplicate ids, unknown agents, missing personas", () => {
-		const errors = validatePlanShapeV2(
+		const errors = validatePlanShape(
 			plan([
 				node({ id: "dup" }),
 				node({ id: "dup", agent: "caller" as never, persona: "" }),
@@ -231,7 +231,7 @@ describe("authoring-time validation", () => {
 			],
 			{ maxDepth: 3 },
 		);
-		expect(validatePlanShapeV2(deep).join(" ")).toContain(
+		expect(validatePlanShape(deep).join(" ")).toContain(
 			"depth 4 exceeds maxDepth 3",
 		);
 
@@ -239,14 +239,14 @@ describe("authoring-time validation", () => {
 			[node({ id: "p", children: [node({ id: "c1" }), node({ id: "c2" })] })],
 			{ defaultEnvelope: { maxChildren: 1 } },
 		);
-		expect(validatePlanShapeV2(over).join(" ")).toContain(
+		expect(validatePlanShape(over).join(" ")).toContain(
 			"exceed the envelope cap 1",
 		);
 		expect(effectiveMaxChildren(over, over.nodes[0])).toBe(1);
 	});
 
 	it("scopes after to siblings, forbids parent-token at roots, finds cycles", () => {
-		const errors = validatePlanShapeV2(
+		const errors = validatePlanShape(
 			plan([
 				node({ id: "a", after: ["parent"] }),
 				node({ id: "b", after: ["nested-child"] }),
@@ -261,7 +261,7 @@ describe("authoring-time validation", () => {
 	});
 
 	it("enforces branch uniqueness and base-on-owners-only", () => {
-		const errors = validatePlanShapeV2(
+		const errors = validatePlanShape(
 			plan([
 				node({ id: "a", branch: "feat/x" }),
 				node({ id: "b", branch: "feat/x" }),
@@ -273,7 +273,7 @@ describe("authoring-time validation", () => {
 	});
 
 	it("checks persona registration when a registry is provided", () => {
-		const errors = validatePlanShapeV2(authPlan(), {
+		const errors = validatePlanShape(authPlan(), {
 			personaRegistered: (agent, persona) =>
 				!(agent === "worker" && persona === "generalist"),
 		});
@@ -333,21 +333,21 @@ describe("tasks and fingerprint", () => {
 	it("fingerprint ignores session/process churn, sees semantic edits", () => {
 		const a = authPlan();
 		const b = authPlan();
-		expect(planFingerprintV2(a)).toBe(planFingerprintV2(b));
+		expect(planFingerprint(a)).toBe(planFingerprint(b));
 		// Session bookkeeping churns on every spawn — excluded.
 		const c = authPlan();
-		const buildAuth = findNodeV2(c, "build-auth");
+		const buildAuth = findNode(c, "build-auth");
 		if (buildAuth) {
 			buildAuth.sessionPath = "/tmp/s.jsonl";
 			buildAuth.sessionGeneration = 3;
 			buildAuth.updatedAt = "2027-01-01T00:00:00Z";
 		}
-		expect(planFingerprintV2(c)).toBe(planFingerprintV2(a));
+		expect(planFingerprint(c)).toBe(planFingerprint(a));
 		// A semantic change (task text) drifts it.
 		const d = authPlan();
-		const target = findNodeV2(d, "build-auth");
+		const target = findNode(d, "build-auth");
 		if (target) target.tasks[0].title = "implement rotation DIFFERENTLY";
-		expect(planFingerprintV2(d)).not.toBe(planFingerprintV2(a));
+		expect(planFingerprint(d)).not.toBe(planFingerprint(a));
 	});
 });
 

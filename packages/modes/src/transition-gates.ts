@@ -4,11 +4,11 @@ import type {
 	ModeTransitionGate,
 	ModeTransitionValidation,
 } from "@vegardx/pi-contracts";
-import type { PlanEngineV2 } from "./plan/engine.js";
+import type { PlanEngine } from "./plan/engine.js";
 import {
-	type PlanV2,
-	planFingerprintV2,
-	validatePlanShapeV2,
+	type Plan,
+	planFingerprint,
+	validatePlanShape,
 	walkNodes,
 } from "./plan/schema.js";
 import { renderPlanOutline } from "./research.js";
@@ -24,16 +24,13 @@ export interface TransitionGateRequest {
 export interface TransitionGateDefinition {
 	readonly id: string;
 	readonly edges: readonly TransitionEdge[];
-	validate(plan: PlanV2): readonly ModeTransitionValidation[];
-	prompt(
-		plan: PlanV2,
-		validations: readonly ModeTransitionValidation[],
-	): string;
-	suggestions(_plan: PlanV2): readonly never[];
+	validate(plan: Plan): readonly ModeTransitionValidation[];
+	prompt(plan: Plan, validations: readonly ModeTransitionValidation[]): string;
+	suggestions(_plan: Plan): readonly never[];
 }
 
 export interface TransitionGateCoordinatorDeps {
-	readonly engine: () => PlanEngineV2 | undefined;
+	readonly engine: () => PlanEngine | undefined;
 	readonly currentMode: () => ModeName;
 	readonly commit: (
 		mode: ModeName,
@@ -136,7 +133,7 @@ export class TransitionGateCoordinator {
 		}
 		const now = this.deps.now ?? (() => new Date().toISOString());
 		const requestedAt = now();
-		const fingerprint = planFingerprintV2(engine.get());
+		const fingerprint = planFingerprint(engine.get());
 		const id = `mode-transition:${from}:${to}:${requestedAt}`;
 		let validations = [...definition.validate(engine.get())];
 		let state: ModeTransitionGate = {
@@ -262,7 +259,7 @@ export class TransitionGateCoordinator {
 			}
 		}
 
-		if (planFingerprintV2(engine.get()) !== fingerprint) {
+		if (planFingerprint(engine.get()) !== fingerprint) {
 			this.block(
 				engine,
 				state,
@@ -341,7 +338,7 @@ export class TransitionGateCoordinator {
 		const ruling = state.ruling;
 		if (!ruling || ruling.decision === "stay-in-plan") return false;
 
-		if (planFingerprintV2(engine.get()) !== fingerprint) {
+		if (planFingerprint(engine.get()) !== fingerprint) {
 			this.block(
 				engine,
 				state,
@@ -378,7 +375,7 @@ export class TransitionGateCoordinator {
 	}
 
 	private block(
-		engine: PlanEngineV2,
+		engine: PlanEngine,
 		state: ModeTransitionGate,
 		reason: string,
 		at: string,
@@ -401,7 +398,7 @@ export class TransitionGateCoordinator {
  * lifecycle status while undecided), `decidedAt` is the ruling/update
  * timestamp, and the complete evidence rides along via the index signature.
  */
-function persistGate(engine: PlanEngineV2, state: ModeTransitionGate): void {
+function persistGate(engine: PlanEngine, state: ModeTransitionGate): void {
 	engine.setTransitionGate({
 		...state,
 		id: state.id,
@@ -435,9 +432,9 @@ export function createExecutionReadinessGate(): TransitionGateDefinition {
 }
 
 export function executionReadinessValidations(
-	plan: PlanV2,
+	plan: Plan,
 ): readonly ModeTransitionValidation[] {
-	const result: ModeTransitionValidation[] = validatePlanShapeV2(plan).map(
+	const result: ModeTransitionValidation[] = validatePlanShape(plan).map(
 		(message, index) => ({
 			id: `shape-${index}`,
 			level: "error",

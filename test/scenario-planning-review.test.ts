@@ -5,8 +5,8 @@ import type {
 } from "@vegardx/pi-contracts";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -63,8 +63,8 @@ function assignment(
 	};
 }
 
-function inMemoryEngine(now: () => string): PlanEngineV2 {
-	const store: PlanStoreV2 = {
+function inMemoryEngine(now: () => string): PlanEngine {
+	const store: PlanStore = {
 		root: "/scenario/plans",
 		exists: () => false,
 		load: () => null,
@@ -72,7 +72,7 @@ function inMemoryEngine(now: () => string): PlanEngineV2 {
 		remove: () => {},
 		list: () => [],
 	};
-	const engine = PlanEngineV2.create(
+	const engine = PlanEngine.create(
 		store,
 		{ slug: "release", title: "Release", repoPath: "/scenario/repo" },
 		now,

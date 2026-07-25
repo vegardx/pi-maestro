@@ -54,7 +54,7 @@ export type RosterTiers = Readonly<Record<TierId, readonly string[]>>;
  * (`targets` — the "when"; a binding WITHOUT targets is the default, active
  * when no targeted binding matches) → a roster by name.
  */
-export interface V2BindingConfig {
+export interface BindingConfig {
 	/** Concrete session models; unique across bindings (the activation key). */
 	readonly targets?: readonly string[];
 	/** Name of the roster this binding selects. */
@@ -122,7 +122,7 @@ export const DEFAULT_AGENT_ALLOWANCES: Readonly<
 export interface V2ModelsConfig {
 	readonly families: Readonly<Record<string, FamilyConfig>>;
 	readonly rosters: Readonly<Record<string, RosterTiers>>;
-	readonly bindings: Readonly<Record<string, V2BindingConfig>>;
+	readonly bindings: Readonly<Record<string, BindingConfig>>;
 	readonly region: RegionConfig;
 	readonly allowances: Readonly<
 		Record<SpawnableAgentType, AgentAllowanceConfig>

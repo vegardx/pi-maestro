@@ -137,10 +137,10 @@ describe("runSettingsMigrations", () => {
 	});
 });
 
-describe("explainModelSelectionV2 rendering", () => {
+describe("explainModelSelection rendering", () => {
 	it("explains inheritance-only when no v2 config exists", async () => {
-		const { explainModelSelectionV2 } = await import("@vegardx/pi-settings");
-		const text = await explainModelSelectionV2(
+		const { explainModelSelection } = await import("@vegardx/pi-settings");
+		const text = await explainModelSelection(
 			{
 				cwd,
 				model: { provider: "sit-anthropic", id: "claude-opus-4-8" },

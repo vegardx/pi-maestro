@@ -28,9 +28,9 @@ import {
 	createLiveSpawnAgent,
 	type LiveSpawnLauncher,
 } from "../packages/modes/src/exec/live-spawn.js";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import type { SpawnNodeOpts } from "../packages/modes/src/plan/node-executor.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 import { EXECUTION_SEED_ENTRY } from "../packages/modes/src/session.js";
 
 const TOKEN = "live-spawn-token";
@@ -117,7 +117,7 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 	let tmpDir: string;
 	let planDir: string;
 	let worktree: string;
-	let engine: PlanEngineV2;
+	let engine: PlanEngine;
 	let prevSessionDir: string | undefined;
 
 	beforeEach(() => {
@@ -137,7 +137,7 @@ describe("live spawn wiring (createLiveSpawnAgent)", () => {
 		prevSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
 		process.env.PI_CODING_AGENT_SESSION_DIR = join(tmpDir, "sessions");
 
-		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+		engine = PlanEngine.create(createPlanStore(join(tmpDir, "plans")), {
 			slug: "live-spawn",
 			title: "Live Spawn Plan",
 			repoPath: tmpDir,

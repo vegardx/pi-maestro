@@ -4,7 +4,7 @@ import type { ModeName } from "@vegardx/pi-contracts";
 import {
 	effectiveNodeTaskKind,
 	PARENT_AFTER_TOKEN,
-	type PlanV2,
+	type Plan,
 	walkNodes,
 } from "./plan/schema.js";
 
@@ -27,14 +27,14 @@ export function renderModeFooter(input: ModeFooterInput): string {
 	return parts.join("  ");
 }
 
-export function renderPlanPanel(plan: PlanV2, maxLines = 30): string[] {
+export function renderPlanPanel(plan: Plan, maxLines = 30): string[] {
 	const lines = renderPlanText(plan).split("\n");
 	if (lines.length <= maxLines) return lines;
 	const head = lines.slice(0, Math.max(0, maxLines - 2));
 	return [...head, "…", `${lines.length - head.length} more line(s)`];
 }
 
-export function renderPlanSidebar(plan: PlanV2): string[] {
+export function renderPlanSidebar(plan: Plan): string[] {
 	const counts = new Map<string, number>();
 	let total = 0;
 	for (const { node } of walkNodes(plan)) {
@@ -49,7 +49,7 @@ export function renderPlanSidebar(plan: PlanV2): string[] {
 	];
 }
 
-function renderPlanText(plan: PlanV2): string {
+function renderPlanText(plan: Plan): string {
 	const lines: string[] = [`# ${plan.title}`, ""];
 	for (const { node, depth } of walkNodes(plan)) {
 		const indent = "  ".repeat(depth - 1);

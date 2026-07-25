@@ -11,11 +11,11 @@ import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
 import {
 	defaultBranchForNode,
 	deriveBase,
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
 	isBranchOwner,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
 	walkNodes,
 } from "../plan/schema.js";
@@ -130,9 +130,9 @@ function defaultPrDiff(cwd: string, number: number): string | undefined {
 }
 
 /** The nodes /verify targets: everything started, or one by id. */
-export function verifyTargets(plan: PlanV2, id?: string): PlanNode[] {
+export function verifyTargets(plan: Plan, id?: string): PlanNode[] {
 	if (id) {
-		const g = findNodeV2(plan, id);
+		const g = findNode(plan, id);
 		return g && STARTED.has(g.status) ? [g] : [];
 	}
 	const targets: PlanNode[] = [];
@@ -148,7 +148,7 @@ export function verifyTargets(plan: PlanV2, id?: string): PlanNode[] {
  * branch gone, workspace missing) — the agent pass builds on top of them.
  */
 export function gatherEvidence(
-	plan: PlanV2,
+	plan: Plan,
 	g: PlanNode,
 	deps: VerifyDeps,
 ): Evidence {
@@ -312,7 +312,7 @@ export function buildVerifyPrompt(g: PlanNode, evidence: Evidence): string {
  * skip the agent — there is nothing for it to read.
  */
 export async function runVerification(
-	plan: PlanV2,
+	plan: Plan,
 	targets: readonly PlanNode[],
 	deps: VerifyDeps,
 ): Promise<VerifyEntry[]> {

@@ -14,12 +14,12 @@ import type { Answer, AskCapabilityV1, Question } from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
 import type { ExecutionHandle } from "./exec/index.js";
-import type { PlanEngineV2, PlanRepairOperation } from "./plan/engine.js";
+import type { PlanEngine, PlanRepairOperation } from "./plan/engine.js";
 import {
-	findNodeV2,
+	findNode,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
-	planFingerprintV2,
+	planFingerprint,
 	walkNodes,
 } from "./plan/schema.js";
 
@@ -153,7 +153,7 @@ export interface DebugSnapshotInput {
 	readonly activeDeliverableId?: string;
 	readonly sessionPath?: string;
 	readonly entries: readonly SessionEntry[];
-	readonly engine?: PlanEngineV2;
+	readonly engine?: PlanEngine;
 	readonly execution?: ExecutionHandle;
 	readonly planRoot?: string;
 	readonly agentId?: string;
@@ -163,7 +163,7 @@ export interface DebugSnapshotInput {
 }
 
 /** First active node in tree order, if any. */
-function firstActiveNodeId(plan: Pick<PlanV2, "nodes">): string | undefined {
+function firstActiveNodeId(plan: Pick<Plan, "nodes">): string | undefined {
 	for (const { node } of walkNodes(plan))
 		if (node.status === "active") return node.id;
 	return undefined;
@@ -217,14 +217,14 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 	const requestedDeliverableId = input.activeDeliverableId ?? input.agentId;
 	const deliverableId =
 		(plan && requestedDeliverableId
-			? findNodeV2(plan, requestedDeliverableId)?.id
+			? findNode(plan, requestedDeliverableId)?.id
 			: undefined) ??
 		(plan ? firstActiveNodeId(plan) : undefined) ??
 		// Worker-local snapshots have no plan to verify against; the node
 		// identity comes from the authenticated agent id, never from model input.
 		input.agentId;
 	const deliverable =
-		plan && deliverableId ? findNodeV2(plan, deliverableId) : undefined;
+		plan && deliverableId ? findNode(plan, deliverableId) : undefined;
 	// v2: one run state per node (the v1 per-deliverable agents map is gone).
 	const worker = deliverableId
 		? input.execution?.getExecutor().getRunState(deliverableId)
@@ -251,7 +251,7 @@ export function collectDebugSnapshot(input: DebugSnapshotInput): DebugSnapshot {
 						path: normalizeDebugPath(
 							join(input.planRoot ?? "", plan.slug, "plan.json"),
 						),
-						fingerprint: planFingerprintV2(plan),
+						fingerprint: planFingerprint(plan),
 					},
 				}
 			: {}),
@@ -609,7 +609,7 @@ export class DebugController {
 }
 
 export interface ExecuteDebugRecoveryDeps {
-	readonly engine?: PlanEngineV2;
+	readonly engine?: PlanEngine;
 	readonly execution?: ExecutionHandle;
 	readonly now?: () => string;
 }
@@ -621,7 +621,7 @@ function assertBinding(
 	if (
 		recovery.basePlanFingerprint &&
 		(!deps.engine ||
-			planFingerprintV2(deps.engine.get()) !== recovery.basePlanFingerprint)
+			planFingerprint(deps.engine.get()) !== recovery.basePlanFingerprint)
 	)
 		throw new Error("plan fingerprint changed since diagnosis");
 	if (
@@ -629,7 +629,7 @@ function assertBinding(
 		recovery.expectedGeneration !== undefined
 	) {
 		const node = deps.engine
-			? findNodeV2(deps.engine.get(), recovery.targetDeliverableId)
+			? findNode(deps.engine.get(), recovery.targetDeliverableId)
 			: null;
 		const current =
 			deps.execution?.getExecutor().getRunState(recovery.targetDeliverableId)
@@ -790,7 +790,7 @@ function isRepairOperation(value: unknown): value is PlanRepairOperation {
 export function validateWorkerDebugProposal(input: {
 	message: DebugProposalMessage;
 	authenticatedAgentId: string;
-	engine?: PlanEngineV2;
+	engine?: PlanEngine;
 	execution?: ExecutionHandle;
 }):
 	| { ok: true; recovery?: Omit<DebugRecoveryProposal, "id"> }
@@ -803,13 +803,13 @@ export function validateWorkerDebugProposal(input: {
 	// v2: the authenticated agent key IS the node id; only worker nodes may
 	// propose recovery (read agents have no workspace to repair).
 	const deliverableId = authenticatedAgentId;
-	const deliverable = findNodeV2(engine.get(), deliverableId);
+	const deliverable = findNode(engine.get(), deliverableId);
 	if (!deliverableId || deliverable?.agent !== "worker")
 		return {
 			ok: false,
 			error: "only a worker node may propose debug recovery",
 		};
-	if (planFingerprintV2(engine.get()) !== message.planFingerprint)
+	if (planFingerprint(engine.get()) !== message.planFingerprint)
 		return { ok: false, error: "debug proposal plan fingerprint is stale" };
 	const generation =
 		execution.getExecutor().getRunState(deliverableId)?.generation ??
@@ -892,6 +892,6 @@ export function debugEpisodePath(planDir: string): string {
 	return join(planDir, "debug", "active.json");
 }
 
-export function planForSnapshot(engine?: PlanEngineV2): PlanV2 | undefined {
+export function planForSnapshot(engine?: PlanEngine): Plan | undefined {
 	return engine?.get();
 }

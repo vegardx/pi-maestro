@@ -23,8 +23,8 @@ import {
 	type TierId,
 } from "@vegardx/pi-contracts";
 import {
+	activeBinding,
 	activePreset,
-	activeV2Binding,
 	explainTier,
 	readModelsConfig,
 	readV2Config,
@@ -805,7 +805,7 @@ export function readDomainSnapshot(
  * the agent's tier allowlist. One screen answers "what would this agent
  * actually run on, and why".
  */
-export async function explainModelSelectionV2(
+export async function explainModelSelection(
 	ctx: ExtensionContext,
 	agent: SpawnableAgentType,
 ): Promise<string> {
@@ -823,7 +823,7 @@ export async function explainModelSelectionV2(
 		);
 		return lines.join("\n");
 	}
-	const active = activeV2Binding(config, sessionModel);
+	const active = activeBinding(config, sessionModel);
 	lines.push(
 		active
 			? `Binding: ${active.id}${active.binding.targets?.length ? ` (target ${sessionModel})` : " (default binding)"} → roster ${active.binding.roster}`

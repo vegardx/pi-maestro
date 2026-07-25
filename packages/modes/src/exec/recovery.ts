@@ -9,7 +9,7 @@ import { viewPr } from "@vegardx/pi-github";
 import {
 	defaultBranchForNode,
 	isBranchOwner,
-	type PlanV2,
+	type Plan,
 	walkNodes,
 } from "../plan/schema.js";
 import { repoForNode } from "./shipper.js";
@@ -65,7 +65,7 @@ async function defaultPrState(
  * finds; the caller (/recover) decides what to resume and what to surface.
  */
 export async function auditPlan(
-	plan: PlanV2,
+	plan: Plan,
 	deps: AuditDeps = {},
 	deliverableIds?: readonly string[],
 ): Promise<PlanAuditResult> {

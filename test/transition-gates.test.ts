@@ -3,8 +3,8 @@ import type {
 	AskCapabilityV1,
 } from "@vegardx/pi-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import {
 	createDefaultTransitionGates,
 	TransitionGateCoordinator,
@@ -13,7 +13,7 @@ import {
 
 function fixture() {
 	let saved: unknown;
-	const store: PlanStoreV2 = {
+	const store: PlanStore = {
 		root: "/plans",
 		exists: () => true,
 		load: () => null,
@@ -25,7 +25,7 @@ function fixture() {
 	};
 	let tick = 0;
 	const now = () => `2026-01-01T00:00:0${tick++}.000Z`;
-	const engine = PlanEngineV2.create(
+	const engine = PlanEngine.create(
 		store,
 		{
 			slug: "gate",

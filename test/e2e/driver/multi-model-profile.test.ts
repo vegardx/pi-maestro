@@ -19,7 +19,7 @@ import {
 import {
 	agentTypeForRole,
 	defaultTierForAgent,
-	resolveV2Model,
+	resolveModel,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -83,7 +83,7 @@ async function modelFor(
 ): Promise<string | undefined> {
 	const agent = agentTypeForRole(role);
 	const tier = defaultTierForAgent(ctx, agent);
-	const resolved = await resolveV2Model(ctx, {
+	const resolved = await resolveModel(ctx, {
 		agent,
 		...(tier ? { tier } : {}),
 		inherit: { modelId: SESSION },
@@ -139,14 +139,14 @@ describe("multi-model ollama profile", () => {
 	it("inherits the seat with no tier; routes through the roster with one", async () => {
 		const ctx = fakeCtx();
 		// No tier requested → inherit the caller's model (the seat), not the roster.
-		const inherited = await resolveV2Model(ctx, {
+		const inherited = await resolveModel(ctx, {
 			agent: "worker",
 			inherit: { modelId: SESSION },
 		});
 		expect(inherited.source).toBe("inherit");
 		expect(inherited.modelId).toBe(GEMMA);
 		// A deliberate tier → the roster's standard tier (the qwen coder).
-		const routed = await resolveV2Model(ctx, {
+		const routed = await resolveModel(ctx, {
 			agent: "worker",
 			tier: "standard",
 			inherit: { modelId: SESSION },

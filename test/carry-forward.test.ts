@@ -18,11 +18,11 @@ import {
 	harvestInventory,
 	writeCarryDocument,
 } from "../packages/modes/src/carry-forward.js";
-import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { Plan } from "../packages/modes/src/plan/schema.js";
 
 const NOW = "2026-07-12T12:00:00.000Z";
 
-function planFixture(): PlanV2 {
+function planFixture(): Plan {
 	return {
 		schemaVersion: 6,
 		slug: "arc-one",

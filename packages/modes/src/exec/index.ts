@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Answers, RunId, RunRecord } from "@vegardx/pi-contracts";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
-import type { PlanEngineV2 } from "../plan/engine.js";
+import type { PlanEngine } from "../plan/engine.js";
 import {
 	type NodeAdapterOptions,
 	NodeExecutionAdapter,
@@ -124,7 +124,7 @@ export interface CreateExecutionOptions
 	readonly launcher?: NodeAdapterOptions["launcher"];
 	readonly token?: string;
 	readonly socketPath?: string;
-	readonly engine: PlanEngineV2;
+	readonly engine: PlanEngine;
 }
 
 /** Composition root: the v2 execution seam for a plan run. */

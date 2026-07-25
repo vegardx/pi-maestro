@@ -12,7 +12,7 @@ import {
 	type ThinkingLevel,
 	validatePolicyRows,
 } from "@vegardx/pi-contracts";
-import { resolveV2Model } from "@vegardx/pi-models";
+import { resolveModel } from "@vegardx/pi-models";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 
 // The shipped default rows moved to @vegardx/pi-contracts (the settings
@@ -69,7 +69,7 @@ export async function resolveDutyModel(
 	const row = policyRowFor(readPolicyTable(ctx.cwd), `duty:${duty}`);
 	if (!row || row.run.enabled === false) return null;
 	try {
-		const resolved = await resolveV2Model(ctx, {
+		const resolved = await resolveModel(ctx, {
 			agent: DUTY_AGENT[duty],
 			tier: row.run.models,
 		});

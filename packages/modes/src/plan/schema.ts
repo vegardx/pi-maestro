@@ -28,7 +28,7 @@ import {
 	DELIVERABLE_STATUSES,
 	DELIVERABLE_TRANSITIONS,
 	NODE_AGENT_TYPES,
-	PLAN_SCHEMA_VERSION_V2,
+	PLAN_SCHEMA_VERSION,
 	validateNodeEnvelope,
 } from "@vegardx/pi-contracts";
 
@@ -161,14 +161,14 @@ export interface PlanNode {
 	updatedAt: string;
 }
 
-export interface PlanRepoV2 {
+export interface PlanRepo {
 	key: string;
 	path: string;
 	createdBy?: string;
 }
 
-export interface PlanV2 {
-	schemaVersion: typeof PLAN_SCHEMA_VERSION_V2;
+export interface Plan {
+	schemaVersion: typeof PLAN_SCHEMA_VERSION;
 	slug: string;
 	title: string;
 	repoPath: string;
@@ -180,7 +180,7 @@ export interface PlanV2 {
 	/** Planning UX phase (v1 PLAN_PHASES carries over; orthogonal to nodes). */
 	phase?: "exploring" | "structuring";
 	understanding?: string;
-	repos?: PlanRepoV2[];
+	repos?: PlanRepo[];
 	/** The tree. Roots are v1's top-level deliverables. */
 	nodes: PlanNode[];
 	planSessionPath?: string;
@@ -190,7 +190,7 @@ export interface PlanV2 {
 	transitionGates?: TransitionGateRuling[];
 	/** Fingerprint-pinned debug repairs — the only sanctioned post-start edit
 	 *  channel beyond the append-only operations. */
-	repairAudit?: PlanRepairAuditV2[];
+	repairAudit?: PlanRepairAudit[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -203,7 +203,7 @@ export interface TransitionGateRuling {
 	[key: string]: unknown;
 }
 
-export interface PlanRepairAuditV2 {
+export interface PlanRepairAudit {
 	id: string;
 	reason: string;
 	baseFingerprint: string;
@@ -223,7 +223,7 @@ export interface NodeVisit {
 }
 
 /** Depth-first, parents before children, sibling order preserved. */
-export function* walkNodes(plan: Pick<PlanV2, "nodes">): Generator<NodeVisit> {
+export function* walkNodes(plan: Pick<Plan, "nodes">): Generator<NodeVisit> {
 	function* visit(
 		node: PlanNode,
 		parent: PlanNode | null,
@@ -238,8 +238,8 @@ export function* walkNodes(plan: Pick<PlanV2, "nodes">): Generator<NodeVisit> {
 	for (const root of plan.nodes) yield* visit(root, null, 1, []);
 }
 
-export function findNodeV2(
-	plan: Pick<PlanV2, "nodes">,
+export function findNode(
+	plan: Pick<Plan, "nodes">,
 	id: string,
 ): PlanNode | null {
 	for (const { node } of walkNodes(plan)) if (node.id === id) return node;
@@ -247,7 +247,7 @@ export function findNodeV2(
 }
 
 export function parentOfNode(
-	plan: Pick<PlanV2, "nodes">,
+	plan: Pick<Plan, "nodes">,
 	id: string,
 ): PlanNode | null {
 	for (const { node, parent } of walkNodes(plan))
@@ -256,7 +256,7 @@ export function parentOfNode(
 }
 
 /** Max seat-relative depth of the authored tree (0 for an empty plan). */
-export function treeDepth(plan: Pick<PlanV2, "nodes">): number {
+export function treeDepth(plan: Pick<Plan, "nodes">): number {
 	let max = 0;
 	for (const { depth } of walkNodes(plan)) if (depth > max) max = depth;
 	return max;
@@ -276,7 +276,7 @@ export function isBranchOwner(node: Pick<PlanNode, "branch">): boolean {
 
 /** Effective per-node child cap: node envelope, else plan default. */
 export function effectiveMaxChildren(
-	plan: Pick<PlanV2, "defaultEnvelope">,
+	plan: Pick<Plan, "defaultEnvelope">,
 	node: Pick<PlanNode, "envelope">,
 ): number | undefined {
 	return node.envelope?.maxChildren ?? plan.defaultEnvelope?.maxChildren;
@@ -364,7 +364,7 @@ export function nodeBlockedReason(
  * dep terminal — shipping follows the chain (v1 shippableDeliverables, now
  * at any depth within the node's own sibling group).
  */
-export function shippableNodes(plan: Pick<PlanV2, "nodes">): PlanNode[] {
+export function shippableNodes(plan: Pick<Plan, "nodes">): PlanNode[] {
 	const result: PlanNode[] = [];
 	for (const { node, parent } of walkNodes(plan)) {
 		if (!isBranchOwner(node) || node.status !== "complete") continue;
@@ -434,14 +434,14 @@ const STATUS_SET = new Set<string>(DELIVERABLE_STATUSES);
  * violations (depth/envelope from a live agent) are steered, never thrown;
  * those sites re-use the same predicates.
  */
-export function validatePlanShapeV2(
-	plan: PlanV2,
+export function validatePlanShape(
+	plan: Plan,
 	options: ValidatePlanOptions = {},
 ): string[] {
 	const errors: string[] = [];
-	if (plan.schemaVersion !== PLAN_SCHEMA_VERSION_V2)
+	if (plan.schemaVersion !== PLAN_SCHEMA_VERSION)
 		errors.push(
-			`schemaVersion must be ${PLAN_SCHEMA_VERSION_V2} (got ${String(plan.schemaVersion)})`,
+			`schemaVersion must be ${PLAN_SCHEMA_VERSION} (got ${String(plan.schemaVersion)})`,
 		);
 	const maxDepth = plan.maxDepth ?? DEFAULT_MAX_DEPTH;
 	const seenIds = new Set<string>();
@@ -553,8 +553,8 @@ export function validatePlanShapeV2(
  * and are excluded so a fingerprint minted at spawn isn't stale before the
  * agent's first turn.
  */
-export function planFingerprintV2(plan: PlanV2): string {
-	const value = structuredClone(plan) as PlanV2;
+export function planFingerprint(plan: Plan): string {
+	const value = structuredClone(plan) as Plan;
 	// Audit/gate ledgers are bookkeeping, not plan semantics (v1 verbatim):
 	// persisting a gate row must not invalidate the fingerprint it pinned.
 	value.repairAudit = undefined;

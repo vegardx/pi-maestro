@@ -1,5 +1,5 @@
 // PARITY TWINS (cutover PR-5b): lifecycle.e2e + dirty-completion.e2e replayed
-// against the v2 stack — NodeExecutionAdapter + NodeExecutor + PlanEngineV2 —
+// against the v2 stack — NodeExecutionAdapter + NodeExecutor + PlanEngine —
 // with a scripted worker speaking the REAL RPC protocol over a real socket and
 // a stub tmux, exactly the v1 hermetic texture. This is the risk-R1 gate: the
 // flip PR may not open unless these pass.
@@ -13,10 +13,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import { NodeExecutionAdapter } from "../packages/modes/src/plan/node-adapter.js";
-import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { findNode } from "../packages/modes/src/plan/schema.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "e2e-token";
 
@@ -110,7 +110,7 @@ let tmpDir: string;
 let repoDir: string;
 let planDir: string;
 let socketPath: string;
-let engine: PlanEngineV2;
+let engine: PlanEngine;
 let adapter: NodeExecutionAdapter;
 const workers: { close: () => void }[] = [];
 
@@ -127,7 +127,7 @@ async function boot(opts?: {
 	dirtyHoldMaxSteers?: number;
 	tasks?: string[];
 }): Promise<void> {
-	engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+	engine = PlanEngine.create(createPlanStore(join(tmpDir, "plans")), {
 		slug: "e2e",
 		title: "E2E Plan",
 		repoPath: repoDir,
@@ -206,7 +206,7 @@ describe("parity twin: lifecycle over the real RPC protocol", () => {
 		await adapter.tick();
 
 		// The node's worker spawned (stub tmux) with its ledger fields set.
-		const node = findNodeV2(engine.get(), "ship-the-widget");
+		const node = findNode(engine.get(), "ship-the-widget");
 		expect(node?.status).toBe("active");
 		// Lifecycle injection: postflight present (branch owner), no preflight
 		// (no sibling deps) — the v1 rule generalized.
@@ -230,9 +230,9 @@ describe("parity twin: lifecycle over the real RPC protocol", () => {
 		worker.idle();
 
 		await until(
-			() => findNodeV2(engine.get(), "ship-the-widget")?.status === "shipped",
+			() => findNode(engine.get(), "ship-the-widget")?.status === "shipped",
 		);
-		const shipped = findNodeV2(engine.get(), "ship-the-widget");
+		const shipped = findNode(engine.get(), "ship-the-widget");
 		// The postflight handoff persisted onto the LEDGER (v2's upgrade).
 		expect(shipped?.handoff).toContain("Widget built");
 		expect(shipped?.summary).toContain("done.");
@@ -261,7 +261,7 @@ describe("parity twin: lifecycle over the real RPC protocol", () => {
 					(m.error ?? "").includes("their own node"),
 			),
 		);
-		expect(findNodeV2(engine.get(), "ship-the-widget")?.tasks[0].done).toBe(
+		expect(findNode(engine.get(), "ship-the-widget")?.tasks[0].done).toBe(
 			false,
 		);
 	});

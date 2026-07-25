@@ -29,7 +29,7 @@ import {
 	type WatchRefinement,
 	type WatchStatus,
 } from "@vegardx/pi-contracts";
-import { resolveModelAuth, resolveV2Model } from "@vegardx/pi-models";
+import { resolveModel, resolveModelAuth } from "@vegardx/pi-models";
 import { decideBashPolicy } from "./bash-policy.js";
 import { policyRowFor, readPolicyTable } from "./policy-table.js";
 import { readExecutionPolicySettings } from "./settings.js";
@@ -716,7 +716,7 @@ export class WatchManager {
 		try {
 			const row = policyRowFor(readPolicyTable(ctx.cwd), "tool:watch");
 			if (row?.run.enabled === false) return null;
-			const resolved = await resolveV2Model(ctx, {
+			const resolved = await resolveModel(ctx, {
 				agent: "explorer",
 				tier: row?.run.models ?? "light",
 			});

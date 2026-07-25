@@ -160,8 +160,8 @@ export {
 export * from "./plan/schema.js";
 export {
 	archiveLegacyPlans,
-	createPlanStoreV2,
-	type PlanStoreV2,
+	createPlanStore,
+	type PlanStore,
 } from "./plan/storage.js";
 export {
 	computeActiveTools,

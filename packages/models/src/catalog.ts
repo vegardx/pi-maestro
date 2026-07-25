@@ -5,13 +5,14 @@
 // null entries are deletion markers (skipped), invalid non-null shapes throw
 // with the offending name, global+project merge with project winning per key.
 //
-// parseV2Settings is the single validator both boot and the /maestro editor
+// parseModelsSettings is the single validator both boot and the /maestro editor
 // use: an invalid v2 state is unwriteable (editor) and triggers the boot wipe.
 
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentAllowanceConfig,
 	type AliasConfig,
+	type BindingConfig,
 	DEFAULT_AGENT_ALLOWANCES,
 	type FamilyConfig,
 	type RegionConfig,
@@ -21,7 +22,6 @@ import {
 	type ThinkingLevel,
 	TIER_IDS,
 	type TierId,
-	type V2BindingConfig,
 	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import { isModelId } from "./profiles.js";
@@ -163,7 +163,7 @@ function extractRoster(raw: unknown, name: string): RosterTiers {
 	return tiers;
 }
 
-function extractBinding(raw: unknown, name: string): V2BindingConfig {
+function extractBinding(raw: unknown, name: string): BindingConfig {
 	if (!isPlainObject(raw) || !nonEmpty(raw.roster))
 		throw new Error(`Invalid binding ${name}: a roster reference is required`);
 	let targets: readonly string[] | undefined;
@@ -229,17 +229,17 @@ function extractAllowance(
 	return { tiers: [...raw.tiers] as TierId[] };
 }
 
-interface ParsedV2 {
+interface ParsedModelsConfig {
 	readonly families: Record<string, FamilyConfig>;
 	readonly rosters: Record<string, RosterTiers>;
-	readonly bindings: Record<string, V2BindingConfig>;
+	readonly bindings: Record<string, BindingConfig>;
 	readonly region?: RegionConfig;
 	readonly allowances: Partial<
 		Record<SpawnableAgentType, AgentAllowanceConfig>
 	>;
 }
 
-function extractV2(raw: unknown): ParsedV2 | undefined {
+function extractModelsConfig(raw: unknown): ParsedModelsConfig | undefined {
 	if (!isPlainObject(raw)) return undefined;
 	const models = isPlainObject(raw.models) ? raw.models : undefined;
 	if (!models) return undefined;
@@ -264,7 +264,7 @@ function extractV2(raw: unknown): ParsedV2 | undefined {
 		}
 	}
 
-	const bindings: Record<string, V2BindingConfig> = {};
+	const bindings: Record<string, BindingConfig> = {};
 	if (isPlainObject(models.bindings)) {
 		for (const [name, value] of Object.entries(models.bindings)) {
 			if (value === null || value === undefined) continue;
@@ -296,7 +296,7 @@ function extractV2(raw: unknown): ParsedV2 | undefined {
 }
 
 /** Cross-object rules that only make sense on the merged config. */
-export function validateV2Config(config: V2ModelsConfig): void {
+export function validateModelsConfig(config: V2ModelsConfig): void {
 	// Every roster ref must name an existing Family/Alias.
 	for (const [rosterName, tiers] of Object.entries(config.rosters)) {
 		for (const tier of TIER_IDS) {
@@ -349,12 +349,12 @@ export function validateV2Config(config: V2ModelsConfig): void {
  * written: an invalid v2 state is unwriteable, never write-then-warn. Throws
  * with the offending name; returns undefined when nothing v2 exists.
  */
-export function parseV2Settings(
+export function parseModelsSettings(
 	globalRaw: unknown,
 	projectRaw: unknown,
 ): V2ModelsConfig | undefined {
-	const global = extractV2(globalRaw);
-	const project = extractV2(projectRaw);
+	const global = extractModelsConfig(globalRaw);
+	const project = extractModelsConfig(projectRaw);
 	if (!global && !project) return undefined;
 	const activeRegionName = project?.region?.active ?? global?.region?.active;
 	const region: RegionConfig = {
@@ -372,7 +372,7 @@ export function parseV2Settings(
 			...project?.allowances,
 		},
 	};
-	validateV2Config(config);
+	validateModelsConfig(config);
 	return config;
 }
 
@@ -385,7 +385,7 @@ export function readV2Config(
 	agentDir?: string,
 ): V2ModelsConfig | undefined {
 	const manager = SettingsManager.create(cwd, agentDir);
-	return parseV2Settings(
+	return parseModelsSettings(
 		manager.getGlobalSettings() as unknown,
 		manager.getProjectSettings() as unknown,
 	);
@@ -414,10 +414,10 @@ export function familyOfModel(
  * The active binding for a session model: the binding whose targets contain
  * it, else the default (targetless) binding, else undefined.
  */
-export function activeV2Binding(
+export function activeBinding(
 	config: V2ModelsConfig | undefined,
 	sessionModelId: string | undefined,
-): { id: string; binding: V2BindingConfig } | undefined {
+): { id: string; binding: BindingConfig } | undefined {
 	if (!config) return undefined;
 	if (sessionModelId) {
 		for (const [id, binding] of Object.entries(config.bindings)) {

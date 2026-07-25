@@ -8,7 +8,7 @@
 // default row stands.
 
 import { TIER_IDS, type TierId } from "./catalog.js";
-import { NODE_AGENT_TYPES } from "./plan-v2.js";
+import { NODE_AGENT_TYPES } from "./plan-schema.js";
 
 /** The closed harness duty enum. Retiring a duty deletes a row, not a role. */
 export const POLICY_DUTIES = [

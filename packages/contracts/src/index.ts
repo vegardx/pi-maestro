@@ -15,7 +15,7 @@ export * from "./ids.js";
 export * from "./models.js";
 export * from "./modes.js";
 export * from "./plan.js";
-export * from "./plan-v2.js";
+export * from "./plan-schema.js";
 export * from "./plan-view.js";
 export * from "./policy.js";
 export * from "./review.js";

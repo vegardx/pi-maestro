@@ -5,15 +5,15 @@
 // hallucinates authoring; see docs/modes-architecture.md backlog #7/#8), so the
 // execution-focused drive must not depend on it.
 //
-// Built with the real PlanEngineV2 + createPlanStoreV2, so the seeded plan is
-// schema-correct by construction (every mutation runs validatePlanShapeV2) and
+// Built with the real PlanEngine + createPlanStore, so the seeded plan is
+// schema-correct by construction (every mutation runs validatePlanShape) and
 // stays correct as the schema evolves. The SUT opens it with
 // `/plan sandbox-features` (openPlan reopens an existing slug from the store).
 
 import { join } from "node:path";
-import { PlanEngineV2 } from "../../../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../../../packages/modes/src/plan/engine.js";
 import { PARENT_AFTER_TOKEN } from "../../../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../../../packages/modes/src/plan/storage.js";
+import { createPlanStore } from "../../../packages/modes/src/plan/storage.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
 
 /** The plans root inside an isolated pi home (mirrors plansRoot(agentDir)). */
@@ -31,8 +31,8 @@ export function seededPlansRoot(piHome: string): string {
  * sibling `after` deps (deriveBase picks the first dep's branch).
  */
 export function seedScenarioPlan(piHome: string, repoDir: string): string {
-	const store = createPlanStoreV2(seededPlansRoot(piHome));
-	const engine = PlanEngineV2.create(store, {
+	const store = createPlanStore(seededPlansRoot(piHome));
+	const engine = PlanEngine.create(store, {
 		slug: SANDBOX_FEATURES.name,
 		title: "Sandbox features",
 		repoPath: repoDir,
@@ -122,8 +122,8 @@ export function seedScenarioPlan(piHome: string, repoDir: string): string {
  * cand/ branches). The parent integrates and ships the one PR.
  */
 export function seedEnsemblePlan(piHome: string, repoDir: string): string {
-	const store = createPlanStoreV2(seededPlansRoot(piHome));
-	const engine = PlanEngineV2.create(store, {
+	const store = createPlanStore(seededPlansRoot(piHome));
+	const engine = PlanEngine.create(store, {
 		slug: "ensemble-metrics",
 		title: "Ensemble metrics module",
 		repoPath: repoDir,

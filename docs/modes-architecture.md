@@ -181,7 +181,7 @@ worker session is a DIY pattern inside a custom tool via `createAgentSession`.
 ## Evolve-in-place (mid-execution plan growth)
 
 You grow and revise the plan without leaving auto/hack. The structural freeze is
-**per-node**, not global (`PlanEngineV2`, `packages/modes/src/plan/engine.ts`):
+**per-node**, not global (`PlanEngine`, `packages/modes/src/plan/engine.ts`):
 
 - A **`planned`** node stays fully editable and removable — even while a sibling
   runs. You can flesh out its tasks, retarget its `after`, or drop it.

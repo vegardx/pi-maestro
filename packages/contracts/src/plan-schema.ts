@@ -1,5 +1,5 @@
 // v2 plan vocabulary (plan-schema cutover PR-2). The recursive PlanNode/
-// PlanV2 types themselves live with the plan module (packages/modes/src/plan)
+// Plan types themselves live with the plan module (packages/modes/src/plan)
 // — this module is the SHARED vocabulary: schema version, node agent types,
 // the persisted resolution record, the diversity record, envelope and watch
 // config, plus their validators. Statuses and task kinds are v1's, reused
@@ -8,7 +8,7 @@
 import { SPAWNABLE_AGENT_TYPES, type TierId } from "./catalog.js";
 import type { DeliverableStatus, WorkItemKind } from "./plan.js";
 
-export const PLAN_SCHEMA_VERSION_V2 = 6 as const;
+export const PLAN_SCHEMA_VERSION = 6 as const;
 
 /**
  * Agent types authorable as PLAN NODES — the writers/readers the plan DAG is

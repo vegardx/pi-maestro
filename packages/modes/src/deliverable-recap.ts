@@ -2,7 +2,7 @@
 // plan progress — useful when the maestro session resumes or a compaction
 // boundary is hit.
 
-import type { PlanEngineV2 } from "./plan/engine.js";
+import type { PlanEngine } from "./plan/engine.js";
 import type { NodeExecutor } from "./plan/node-executor.js";
 import {
 	gatingNodeTasks,
@@ -21,7 +21,7 @@ export interface RecapOptions {
  * for injection into a new maestro turn or compaction seed.
  */
 export function buildRecap(
-	engine: PlanEngineV2,
+	engine: PlanEngine,
 	executor: NodeExecutor,
 	opts: RecapOptions = {},
 ): string {

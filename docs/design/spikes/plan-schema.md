@@ -17,9 +17,9 @@ Model fields are gone from authored input (invariant 2: inheritance) but a **per
 ### 1.2 TypeScript schema (proposed, `packages/modes/src/plan/schema.ts` — new module)
 
 ```ts
-// ─── Vocabulary (moves to packages/contracts/src/plan-v2.ts) ────────────────
+// ─── Vocabulary (moves to packages/contracts/src/plan-schema.ts) ────────────────
 
-export const PLAN_SCHEMA_VERSION_V2 = 6 as const;
+export const PLAN_SCHEMA_VERSION = 6 as const;
 
 /** Spawnable agent types. `caller` is deliberately unrepresentable. */
 export const NODE_AGENT_TYPES = ["worker", "explorer", "reviewer"] as const;
@@ -203,8 +203,8 @@ export interface PlanNode {
 
 // ─── The plan ───────────────────────────────────────────────────────────────
 
-export interface PlanV2 {
-  schemaVersion: typeof PLAN_SCHEMA_VERSION_V2;   // 6
+export interface Plan {
+  schemaVersion: typeof PLAN_SCHEMA_VERSION;   // 6
   slug: string;
   title: string;
   repoPath: string;
@@ -300,7 +300,7 @@ Every file that touches the current schema, with what changes. All paths under `
 
 | File | What changes |
 | --- | --- |
-| `packages/contracts/src/plan.ts` | Gains v2 vocabulary (or sibling `plan-v2.ts`): `PLAN_SCHEMA_VERSION_V2 = 6`, `NODE_AGENT_TYPES`. `DELIVERABLE_STATUSES` + `DELIVERABLE_TRANSITIONS` + `WORK_ITEM_KINDS` + `DeliveryFailure` + findings/gates survive verbatim (rename-alias to Node* at cleanup). `DeliverableSummary`/`WorkItemSummary` cross-boundary summaries gain a node path. |
+| `packages/contracts/src/plan.ts` | Gains v2 vocabulary (or sibling `plan-schema.ts`): `PLAN_SCHEMA_VERSION = 6`, `NODE_AGENT_TYPES`. `DELIVERABLE_STATUSES` + `DELIVERABLE_TRANSITIONS` + `WORK_ITEM_KINDS` + `DeliveryFailure` + findings/gates survive verbatim (rename-alias to Node* at cleanup). `DeliverableSummary`/`WorkItemSummary` cross-boundary summaries gain a node path. |
 | `packages/contracts/src/agents.ts` | `ResolvedAgentAssignment` retires with the workflow layer (replaced by `NodeResolution` on the ledger). |
 
 ### Persistence
@@ -367,7 +367,7 @@ Every file that touches the current schema, with what changes. All paths under `
 | `test/schema.test.ts` (1000 lines) | **Rewritten** as `test/plan-schema-v2.test.ts` alongside (PR-2), old file deleted at the flip. Workflow-graph suites die with the layer. |
 | `test/engine.test.ts` | Already `describe.skip` — replace with real v2 engine suite (append-only rules deserve direct tests). |
 | `test/execution-adapter.test.ts` | `renderPlanForAgent` projection tests rewritten for subtree scope. |
-| `test/e2e/lifecycle.e2e.test.ts` | Rewritten: same scripted-worker-over-real-RPC pattern, plan built via `PlanEngineV2` (`addNode` + child reviewer instead of `addAgent`); agentId assertion `"ship-the-widget/worker"` → node id; keeps postflight/handoff assertions. |
+| `test/e2e/lifecycle.e2e.test.ts` | Rewritten: same scripted-worker-over-real-RPC pattern, plan built via `PlanEngine` (`addNode` + child reviewer instead of `addAgent`); agentId assertion `"ship-the-widget/worker"` → node id; keeps postflight/handoff assertions. |
 | `test/e2e/dirty-completion.e2e.test.ts` | Same treatment; dirty-hold semantics unchanged. |
 | `test/e2e/driver/seed-plan.ts` + `seed-plan.test.ts` | Scenario seeded as a node tree (`security-audit` AgentSpec → child reviewer node with `after:["parent"]`; `dependsOn/stacked` → root `after` + derived base). |
 | `test/e2e/driver/assertions.ts`, `cli.ts` | `plan.deliverables[].{title,status,prUrl,branch}` projections → recursive `walk(nodes)` flatten; everything else (rpc-client, launch, env-profile, cassette, gh-shim) is plan-shape-free and survives. |
@@ -381,9 +381,9 @@ Every file that touches the current schema, with what changes. All paths under `
 Ordered PR list (each = one branch + rebase-merge, per repo convention):
 
 1. **PR-1 — projection prep (optional but recommended).** Introduce a `PlanView` projection type (rows with id/depth/state/tasks) and port `hud-wiring.buildPlanView`, `dashboard.renderAgentsOverview`, `ui.ts` renders, and the driver's `assertions.ts`/`cli.ts` plan reads onto it, built from v1 (`depth` always 0). Pure refactor, green, shrinks the flip PR by four consumer files.
-2. **PR-2 — contracts vocabulary.** `contracts/src/plan-v2.ts`: `PLAN_SCHEMA_VERSION_V2 = 6`, `NODE_AGENT_TYPES`, `NodeResolution`, `DiversityRecord`, reuse/alias of statuses+kinds. No consumers → green.
-3. **PR-3 — `packages/modes/src/plan/` module.** `PlanNode`/`PlanV2` schema, traversal (`walkNodes`, `findNode`, `nodeDepth`, `siblingReady`, `shippableNodes`, base derivation), `validatePlanShapeV2` implementing §2 rows A. Full unit suite (`test/plan-schema-v2.test.ts`, the successor to the 1000-line `schema.test.ts`). Unwired → green.
-4. **PR-4 — `PlanEngineV2` + storage.** Mutation surface, append-only enforcement, lifecycle-pair injection, tree fingerprint; `storage.ts` grows version-keyed load + `legacyPlans()`/`archiveLegacyPlans()` (v5 gate untouched — the default store still speaks 5). Unwired → green.
+2. **PR-2 — contracts vocabulary.** `contracts/src/plan-schema.ts`: `PLAN_SCHEMA_VERSION = 6`, `NODE_AGENT_TYPES`, `NodeResolution`, `DiversityRecord`, reuse/alias of statuses+kinds. No consumers → green.
+3. **PR-3 — `packages/modes/src/plan/` module.** `PlanNode`/`Plan` schema, traversal (`walkNodes`, `findNode`, `nodeDepth`, `siblingReady`, `shippableNodes`, base derivation), `validatePlanShape` implementing §2 rows A. Full unit suite (`test/plan-schema-v2.test.ts`, the successor to the 1000-line `schema.test.ts`). Unwired → green.
+4. **PR-4 — `PlanEngine` + storage.** Mutation surface, append-only enforcement, lifecycle-pair injection, tree fingerprint; `storage.ts` grows version-keyed load + `legacyPlans()`/`archiveLegacyPlans()` (v5 gate untouched — the default store still speaks 5). Unwired → green.
 5. **PR-5 — `NodeExecutor` + adapter port, unwired.** New executor over the tree; a v2-keyed copy of the adapter spawn/completion/restart path (the adapter takes the engine as a constructor arg, so the v2 variant can be instantiated only by tests). Port lifecycle/dirty-completion e2e **as unit-level twins first** (scripted worker over real RPC + FakeTmux against the v2 stack) — this is the parity gate before anything flips. Green.
 6. **PR-6 — exec periphery.** seeds/shipper/recovery/verify/workspace-validation v2 variants + their tests. Green, unwired.
 7. **PR-7 — THE FLIP.** `runtime/context.ts`, `commands.ts`, `hud-wiring`, `dashboard`, `tools.ts`, RPC protocol v7, `renderPlanForAgent`, e2e lifecycle/dirty/driver rewrites; **delete** `schema.ts`, `engine.ts`, `deliverable-executor.ts`, `stage-runtime.ts`, workflow validation, old tests; flip the storage default to v6 and add boot-time legacy handling (below). Big but mechanical: every semantic piece was pre-tested in PR-3…6.

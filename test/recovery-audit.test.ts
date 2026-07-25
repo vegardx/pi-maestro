@@ -1,10 +1,10 @@
 // /recover's reality check: the plan's claimed statuses are verified against
 // worktrees, branches, remote branches, and PRs before anything resumes.
 
-import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import { auditPlan, renderAudit } from "../packages/modes/src/exec/recovery.js";
-import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { Plan, PlanNode } from "../packages/modes/src/plan/schema.js";
 
 function makeNode(overrides: Partial<PlanNode>): PlanNode {
 	return {
@@ -23,9 +23,9 @@ function makeNode(overrides: Partial<PlanNode>): PlanNode {
 	};
 }
 
-function makePlan(nodes: PlanNode[]): PlanV2 {
+function makePlan(nodes: PlanNode[]): Plan {
 	return {
-		schemaVersion: PLAN_SCHEMA_VERSION_V2,
+		schemaVersion: PLAN_SCHEMA_VERSION,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",

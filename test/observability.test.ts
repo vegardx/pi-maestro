@@ -8,13 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	type AgentStateSnapshot,
 	type LauncherApi,
 	NodeExecutionAdapter,
 } from "../packages/modes/src/plan/node-adapter.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "obs-test-token";
 
@@ -61,7 +61,7 @@ describe("node execution adapter observability", () => {
 	let tmpDir: string;
 	let planDir: string;
 	let adapter: NodeExecutionAdapter;
-	let engine: PlanEngineV2;
+	let engine: PlanEngine;
 	let tmux: ReturnType<typeof stubTmux>;
 	let stateReports: { nodeId: string; state: AgentStateSnapshot }[];
 	const clients: MaestroRpcClient[] = [];
@@ -72,7 +72,7 @@ describe("node execution adapter observability", () => {
 		tmpDir = mkdtempSync(join(tmpdir(), "obs-test-"));
 		planDir = join(tmpDir, "plan");
 
-		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+		engine = PlanEngine.create(createPlanStore(join(tmpDir, "plans")), {
 			slug: "obs",
 			title: "Obs Plan",
 			repoPath: tmpDir,

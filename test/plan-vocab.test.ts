@@ -5,7 +5,7 @@ import {
 	DEFAULT_MAX_DEPTH,
 	diversityRecordFor,
 	NODE_AGENT_TYPES,
-	PLAN_SCHEMA_VERSION_V2,
+	PLAN_SCHEMA_VERSION,
 	validateDiversityRecord,
 	validateNodeEnvelope,
 	validateNodeResolution,
@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 
 describe("vocabulary constants", () => {
 	it("pins the version, the spawnable types, and the depth default", () => {
-		expect(PLAN_SCHEMA_VERSION_V2).toBe(6);
+		expect(PLAN_SCHEMA_VERSION).toBe(6);
 		expect(NODE_AGENT_TYPES).toEqual(["worker", "explorer", "reviewer"]);
 		expect(DEFAULT_MAX_DEPTH).toBe(3);
 	});

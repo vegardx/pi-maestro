@@ -8,15 +8,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	NodeExecutor,
 	type NodeExecutorDeps,
 	RESTART_BLOCK_PREFIX,
 	type SpawnNodeOpts,
 } from "../packages/modes/src/plan/node-executor.js";
-import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { findNode } from "../packages/modes/src/plan/schema.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 let root: string;
 let spawns: SpawnNodeOpts[];
@@ -61,8 +61,8 @@ function deps(): NodeExecutorDeps {
 	};
 }
 
-function makeEngine(): PlanEngineV2 {
-	return PlanEngineV2.create(createPlanStoreV2(root), {
+function makeEngine(): PlanEngine {
+	return PlanEngine.create(createPlanStore(root), {
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",
@@ -106,7 +106,7 @@ describe("activation + workspaces", () => {
 			baseBranch: "main",
 		});
 		// Session fields persist to the LEDGER (what v1 lost for support agents).
-		const node = findNodeV2(engine.get(), "build");
+		const node = findNode(engine.get(), "build");
 		expect(node?.sessionName).toContain("sess-build");
 		expect(node?.sessionPath).toBe("/tmp/build.jsonl");
 
@@ -210,7 +210,7 @@ describe("activation + workspaces", () => {
 		expect(executor.getRunState("build")?.blocked).toContain(
 			"activation failed: base branch missing",
 		);
-		expect(findNodeV2(engine.get(), "build")?.status).toBe("planned");
+		expect(findNode(engine.get(), "build")?.status).toBe("planned");
 	});
 });
 
@@ -235,20 +235,20 @@ describe("completion lattice", () => {
 
 		// Worker reports done — but tasks aren't toggled: no completion.
 		await executor.markAgentDone("build");
-		expect(findNodeV2(engine.get(), "build")?.status).toBe("active");
+		expect(findNode(engine.get(), "build")?.status).toBe("active");
 
 		engine.toggleTask("build", "implement");
 		engine.toggleTask("build", "lifecycle-postflight", "handoff");
 		// Child still active: no completion either.
 		await executor.tick();
-		expect(findNodeV2(engine.get(), "build")?.status).toBe("active");
+		expect(findNode(engine.get(), "build")?.status).toBe("active");
 
 		// Child completes → folds into the parent; parent completes on next check.
 		await executor.markAgentDone("rev");
-		expect(findNodeV2(engine.get(), "rev")?.status).toBe("complete");
+		expect(findNode(engine.get(), "rev")?.status).toBe("complete");
 		await executor.tick();
-		expect(findNodeV2(engine.get(), "build")?.status).toBe("shipped");
-		expect(findNodeV2(engine.get(), "build")?.summary).toContain("done.");
+		expect(findNode(engine.get(), "build")?.status).toBe("shipped");
+		expect(findNode(engine.get(), "build")?.summary).toContain("done.");
 	});
 
 	it("generation guards drop stale completions (verbatim staleness rule)", async () => {
@@ -295,7 +295,7 @@ describe("completion lattice", () => {
 			attempt: 1,
 		});
 		await executor.tick();
-		const parent = findNodeV2(engine.get(), "build");
+		const parent = findNode(engine.get(), "build");
 		expect(parent?.status).toBe("failed");
 		expect(parent?.failure?.message).toContain("failed");
 	});
@@ -334,14 +334,14 @@ describe("shipping", () => {
 		await executor.markAgentDone("b");
 		shipped = await executor.tick();
 		expect(shipped).toEqual(["b"]); // chain order: same-tick re-evaluation
-		expect(findNodeV2(engine.get(), "b")?.prUrl).toContain("/pr/");
+		expect(findNode(engine.get(), "b")?.prUrl).toContain("/pr/");
 
 		// The base facts must reach the LEDGER, not just the worktree call.
 		// `base` is absent on both nodes (derived), so these stamps are the
 		// only record of which one actually stacked — fix #249's guard reads
 		// them, and read vacuously true for the whole v2 era without them.
-		const a = findNodeV2(engine.get(), "a");
-		const b = findNodeV2(engine.get(), "b");
+		const a = findNode(engine.get(), "a");
+		const b = findNode(engine.get(), "b");
 		expect(a).toMatchObject({
 			baseBranch: "main",
 			baseSha: "sha-of-main",
@@ -372,7 +372,7 @@ describe("shipping", () => {
 		);
 		await executor.tick();
 
-		expect(findNodeV2(engine.get(), "candidate-a")).toMatchObject({
+		expect(findNode(engine.get(), "candidate-a")).toMatchObject({
 			baseBranch: "feat/build",
 			baseSha: "sha-of-feat/build",
 			stacked: true,
@@ -402,7 +402,7 @@ describe("shipping", () => {
 
 		await new NodeExecutor(engine, failing).tick();
 
-		const node = findNodeV2(engine.get(), "build");
+		const node = findNode(engine.get(), "build");
 		expect(node?.blocked).toContain("no git identity is configured");
 		expect(node?.blocked).toContain("/start build");
 		expect(blocked).toEqual([
@@ -434,7 +434,7 @@ describe("shipping", () => {
 		// One attempt, not one per tick: a node whose cause needs operator
 		// action must not burn a spawn (and real money) on every poll.
 		expect(attempts).toBe(1);
-		expect(findNodeV2(engine.get(), "build")?.blocked).toContain(
+		expect(findNode(engine.get(), "build")?.blocked).toContain(
 			"no git identity",
 		);
 	});
@@ -454,7 +454,7 @@ describe("shipping", () => {
 
 		// Unresolvable base: the node still activates, and records no sha
 		// rather than a placeholder the guard would read as real.
-		const node = findNodeV2(engine.get(), "build");
+		const node = findNode(engine.get(), "build");
 		expect(node?.status).toBe("active");
 		expect(node?.baseSha).toBeUndefined();
 		expect(node?.stacked).toBe(false);
@@ -477,7 +477,7 @@ describe("shipping", () => {
 		await executor.markAgentDone("a");
 		expect(await executor.tick()).toEqual([]);
 		expect(executor.getRunState("a")?.blocked).toContain("shipping failed");
-		expect(findNodeV2(engine.get(), "a")?.status).toBe("complete");
+		expect(findNode(engine.get(), "a")?.status).toBe("complete");
 		// The cause fixed, the next tick ships (v1 retryability).
 		shipFails.delete("a");
 		executor.unblockNode("a");
@@ -527,7 +527,7 @@ describe("restart hydration + recovery", () => {
 		await executor.tick();
 		const replaced = await executor.replaceWorker("build", "resume", 3);
 		expect(replaced.generation).toBe(3);
-		expect(findNodeV2(engine.get(), "build")?.sessionGeneration).toBe(3);
+		expect(findNode(engine.get(), "build")?.sessionGeneration).toBe(3);
 		expect(executor.getRunState("build")?.status).toBe("working");
 	});
 });

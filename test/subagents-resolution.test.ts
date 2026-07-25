@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentTypeForRole } from "@vegardx/pi-models";
-import { resolveViaV2 } from "@vegardx/pi-subagents";
+import { resolveAgentModel } from "@vegardx/pi-subagents";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 let cwd: string;
@@ -90,19 +90,23 @@ describe("agentTypeForRole", () => {
 	});
 });
 
-describe("resolveViaV2", () => {
+describe("resolveAgentModel", () => {
 	it("returns null without a v2 config, leaving v1 setups untouched", async () => {
 		writeSettings({ models: { presets: {}, modelSets: {} } });
 		expect(
-			await resolveViaV2(fakeCtx() as never, "plan-review", {}),
+			await resolveAgentModel(fakeCtx() as never, "plan-review", {}),
 		).toBeNull();
 	});
 
 	it("accepts an explicit model that the agent's tiers allow", async () => {
 		writeSettings(V2);
-		const selection = await resolveViaV2(fakeCtx() as never, "plan-review", {
-			model: "acme/large",
-		});
+		const selection = await resolveAgentModel(
+			fakeCtx() as never,
+			"plan-review",
+			{
+				model: "acme/large",
+			},
+		);
 		expect(selection).toMatchObject({
 			modelId: "acme/large",
 			modelSetId: "reviewer",
@@ -116,7 +120,9 @@ describe("resolveViaV2", () => {
 		writeSettings(V2);
 		// `fast` holds acme/small, but a reviewer may only reach `heavy`.
 		await expect(
-			resolveViaV2(fakeCtx() as never, "plan-review", { model: "acme/small" }),
+			resolveAgentModel(fakeCtx() as never, "plan-review", {
+				model: "acme/small",
+			}),
 		).rejects.toThrow(/not attached to any alias reviewer may use \(heavy\)/);
 	});
 
@@ -126,14 +132,16 @@ describe("resolveViaV2", () => {
 		// whose one entry is acme/large — so say so instead of leaving the
 		// caller to guess again (which is how gpt-5.4 got picked live).
 		await expect(
-			resolveViaV2(fakeCtx() as never, "plan-review", { model: "acme/small" }),
+			resolveAgentModel(fakeCtx() as never, "plan-review", {
+				model: "acme/small",
+			}),
 		).rejects.toThrow(/Eligible models: acme\/large/);
 	});
 
 	it("resolves a deliberate tier to a concrete model from the allowlist", async () => {
 		writeSettings(V2);
 		// A worker may reach standard|heavy; `standard` holds acme/medium.
-		const selection = await resolveViaV2(fakeCtx() as never, "worker", {
+		const selection = await resolveAgentModel(fakeCtx() as never, "worker", {
 			tier: "standard",
 		});
 		expect(selection).toMatchObject({
@@ -147,7 +155,7 @@ describe("resolveViaV2", () => {
 		writeSettings(V2);
 		// The orchestrating case: a worker that will itself drive subagents runs
 		// on the seat, not a tier pick. Omission is the inheritance signal.
-		const selection = await resolveViaV2(fakeCtx() as never, "worker", {});
+		const selection = await resolveAgentModel(fakeCtx() as never, "worker", {});
 		expect(selection?.modelId).toBe("acme/seat");
 	});
 
@@ -155,16 +163,20 @@ describe("resolveViaV2", () => {
 		writeSettings(V2);
 		// An explorer may reach only `fast`; asking for `heavy` is out of bounds.
 		await expect(
-			resolveViaV2(fakeCtx() as never, "web-research", { tier: "heavy" }),
+			resolveAgentModel(fakeCtx() as never, "web-research", { tier: "heavy" }),
 		).rejects.toThrow(/heavy.*outside agent explorer's allowance/);
 	});
 
 	it("lets the caller pin an effort over the catalog's", async () => {
 		writeSettings(V2);
-		const selection = await resolveViaV2(fakeCtx() as never, "plan-review", {
-			model: "acme/large",
-			effort: "low",
-		});
+		const selection = await resolveAgentModel(
+			fakeCtx() as never,
+			"plan-review",
+			{
+				model: "acme/large",
+				effort: "low",
+			},
+		);
 		expect(selection?.effort).toBe("low");
 	});
 
@@ -180,7 +192,7 @@ describe("resolveViaV2", () => {
 		// Falling through would surface "no exact option configured", which
 		// points at the catalog rather than at the missing credential.
 		await expect(
-			resolveViaV2(ctx as never, "plan-review", { model: "acme/large" }),
+			resolveAgentModel(ctx as never, "plan-review", { model: "acme/large" }),
 		).rejects.toThrow(/no usable credential/);
 	});
 });

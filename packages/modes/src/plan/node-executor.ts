@@ -17,7 +17,7 @@
 // tree concurrently, and fan-out is bounded by envelope.maxConcurrent.
 //
 // Durable state lives on the LEDGER (sessionPath/sessionName/generation/
-// summary/handoff/worktreePath via PlanEngineV2) — what v1 kept in-memory
+// summary/handoff/worktreePath via PlanEngine) — what v1 kept in-memory
 // for support agents and lost on crash. The in-memory map here holds only
 // live-process bookkeeping (status, sessionId, display name, in-flight
 // guards).
@@ -27,11 +27,11 @@ import {
 	commitPolicyInstruction,
 	detectCommitPolicy,
 } from "../exec/commit-policy.js";
-import type { PlanEngineV2 } from "./engine.js";
+import type { PlanEngine } from "./engine.js";
 import {
 	defaultBranchForNode,
 	deriveBase,
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
 	isBranchOwner,
 	PARENT_AFTER_TOKEN,
@@ -177,7 +177,7 @@ export class NodeExecutor {
 	private readonly activating = new Set<string>();
 
 	constructor(
-		private readonly engine: PlanEngineV2,
+		private readonly engine: PlanEngine,
 		private readonly deps: NodeExecutorDeps,
 	) {
 		// Hydrate already-active nodes (resumed session). A maestro restart
@@ -291,7 +291,7 @@ export class NodeExecutor {
 		const generation = run.generation;
 
 		if (sessionId) {
-			const node = findNodeV2(this.engine.get(), nodeId);
+			const node = findNode(this.engine.get(), nodeId);
 			const consumer = this.nextConsumer(node);
 			const preamble = `${run.displayName ?? nodeId} — ${node?.title ?? nodeId}`;
 			try {
@@ -355,7 +355,7 @@ export class NodeExecutor {
 
 	/** All gating tasks toggled (worker nodes' own-work completion test). */
 	isNodeWorkDone(nodeId: string): boolean {
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		if (!node) return false;
 		return gatingNodeTasks(node).every((task) => task.done);
 	}
@@ -375,7 +375,7 @@ export class NodeExecutor {
 		for (const [id, run] of this.runStates) {
 			if (selected && !selected.has(id)) continue;
 			if (!run.blocked?.startsWith(RESTART_BLOCK_PREFIX)) continue;
-			const node = findNodeV2(this.engine.get(), id);
+			const node = findNode(this.engine.get(), id);
 			if (node?.status !== "active") continue;
 			try {
 				if (
@@ -402,7 +402,7 @@ export class NodeExecutor {
 
 	/** Respawn a failed/stopped agent, resuming its own transcript. */
 	async respawnAgent(nodeId: string): Promise<void> {
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		const run = this.runStates.get(nodeId);
 		if (!node || !run) throw new Error(`no run state for node ${nodeId}`);
 		run.status = "pending";
@@ -428,7 +428,7 @@ export class NodeExecutor {
 		generation: number,
 		recoverySeed?: string,
 	): Promise<NodeRunState> {
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		const run = this.runStates.get(nodeId);
 		if (!node || !run) throw new Error(`no active worker state for ${nodeId}`);
 		if (!run.worktreePath) throw new Error(`no workspace for ${nodeId}`);
@@ -532,7 +532,7 @@ export class NodeExecutor {
 			this.runStates.set(node.id, run);
 			this.engine.setNodeStatus(node.id, "active");
 		}
-		const fresh = findNodeV2(this.engine.get(), node.id);
+		const fresh = findNode(this.engine.get(), node.id);
 		if (fresh) await this.spawnNode(fresh, run);
 	}
 
@@ -810,7 +810,7 @@ export class NodeExecutor {
 	 * AND every child terminal. Failures propagate with the v1 failure record.
 	 */
 	private async checkNodeCompletion(nodeId: string): Promise<void> {
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		const run = this.runStates.get(nodeId);
 		if (!node || !run || node.status !== "active") return;
 
@@ -830,7 +830,7 @@ export class NodeExecutor {
 		if (!ownDone && !failedChild) return;
 
 		if (run.status === "failed" || failedChild) {
-			const current = findNodeV2(this.engine.get(), nodeId);
+			const current = findNode(this.engine.get(), nodeId);
 			if (current?.status === "active") {
 				this.engine.setNodeStatus(nodeId, "failed", {
 					code: "agent-failed",

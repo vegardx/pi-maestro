@@ -36,12 +36,12 @@ import {
 } from "@vegardx/pi-contracts";
 import { defineExtension, type MaestroContext } from "@vegardx/pi-core";
 import {
-	activeV2Binding,
+	activeBinding,
 	agentTypeForRole,
 	parseAliasRef,
 	readV2Config,
+	resolveModel,
 	resolveModelAuth,
-	resolveV2Model,
 } from "@vegardx/pi-models";
 import {
 	getConfigStringArray,
@@ -247,7 +247,7 @@ function readChildExtensionPaths(cwd: string): string[] {
  *    tier instead of guessing an exact id (or silently inheriting the seat).
  *  - neither: v2's own rule — inherit the caller's model.
  */
-export async function resolveViaV2(
+export async function resolveAgentModel(
 	ctx: ExtensionContext,
 	role: string,
 	choice: { model?: string; tier?: string; effort?: string },
@@ -260,7 +260,7 @@ export async function resolveViaV2(
 	let effort: string | undefined = choice.effort;
 
 	if (choice.model) {
-		const active = activeV2Binding(config, sessionModelId(ctx));
+		const active = activeBinding(config, sessionModelId(ctx));
 		const roster = active ? config.rosters[active.binding.roster] : undefined;
 		const allowed = config.allowances[agent]?.tiers ?? [];
 		// Every concrete attachment reachable through the agent's allowed tiers,
@@ -291,7 +291,7 @@ export async function resolveViaV2(
 		modelId = choice.model;
 		effort ??= effortByModel.get(choice.model);
 	} else {
-		const resolved = await resolveV2Model(ctx, {
+		const resolved = await resolveModel(ctx, {
 			agent,
 			...(choice.tier ? { tier: choice.tier as TierId } : {}),
 		});
@@ -592,8 +592,8 @@ export default defineExtension(
 				if (!ctx) throw new Error("Agent model policy is unavailable.");
 				// v2 resolution: role -> agent type -> active roster/tier (seat as
 				// the last-resort fallback). An explicit model/effort is validated
-				// against the tiers the agent may reach; resolveViaV2 throws a menu.
-				const v2 = await resolveViaV2(ctx, kind.modelRole, choice);
+				// against the tiers the agent may reach; resolveAgentModel throws a menu.
+				const v2 = await resolveAgentModel(ctx, kind.modelRole, choice);
 				if (!v2)
 					throw new Error(
 						`No model resolved for ${kind.modelRole}. Configure a v2 roster/binding for its agent type in /maestro.`,

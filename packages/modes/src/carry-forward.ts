@@ -23,11 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { AskCapabilityV1 } from "@vegardx/pi-contracts";
-import {
-	effectiveNodeTaskKind,
-	type PlanV2,
-	walkNodes,
-} from "./plan/schema.js";
+import { effectiveNodeTaskKind, type Plan, walkNodes } from "./plan/schema.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Episode state ───────────────────────────────────────────────────────────
@@ -95,7 +91,7 @@ export class CarryForwardController {
 // ─── Mechanical inventory ────────────────────────────────────────────────────
 
 export interface InventoryDeps {
-	readonly plan?: PlanV2;
+	readonly plan?: Plan;
 	readonly mode: string;
 	/** Adapter snapshot slices (live workers + blocked reasons). */
 	readonly workers?: ReadonlyArray<{ agent: string; status: string }>;

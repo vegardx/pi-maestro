@@ -2,7 +2,7 @@
 // gathered per started node, a read-only subagent judges the work
 // task by task, and its VERDICT line folds back into a rendered report.
 
-import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
 import {
 	buildVerifyPrompt,
@@ -13,8 +13,8 @@ import {
 } from "../packages/modes/src/exec/verify.js";
 import type {
 	NodeTask,
+	Plan,
 	PlanNode,
-	PlanV2,
 } from "../packages/modes/src/plan/schema.js";
 
 function makeTask(overrides: Partial<NodeTask>): NodeTask {
@@ -46,9 +46,9 @@ function makeNode(overrides: Partial<PlanNode>): PlanNode {
 	};
 }
 
-function makePlan(nodes: PlanNode[]): PlanV2 {
+function makePlan(nodes: PlanNode[]): Plan {
 	return {
-		schemaVersion: PLAN_SCHEMA_VERSION_V2,
+		schemaVersion: PLAN_SCHEMA_VERSION,
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",

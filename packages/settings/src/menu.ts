@@ -12,8 +12,8 @@ import {
 	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
+	activeBinding,
 	activeRegion,
-	activeV2Binding,
 	isRegionOff,
 	REGION_OFF,
 	readV2Config,
@@ -37,7 +37,7 @@ export function setSessionSetting(
 	setSessionSettingOverride(extension, key, value);
 }
 
-function safeV2Config(ctx: ExtensionContext): V2ModelsConfig | undefined {
+function safeModelsConfig(ctx: ExtensionContext): V2ModelsConfig | undefined {
 	try {
 		return readV2Config(ctx.cwd);
 	} catch (cause) {
@@ -87,7 +87,7 @@ export async function showConfigMenu(
 
 /** Persist the active region to global settings and confirm (scripted path). */
 export function setRegionActive(ctx: ExtensionContext, name: string): void {
-	const config = safeV2Config(ctx);
+	const config = safeModelsConfig(ctx);
 	const normalized = isRegionOff(name) ? REGION_OFF : name;
 	const names = regionNames(config?.region);
 	if (!names.some((candidate) => candidate === normalized)) {
@@ -114,8 +114,8 @@ export function setRegionActive(ctx: ExtensionContext, name: string): void {
 }
 
 function notifySummary(ctx: ExtensionContext): void {
-	const config = safeV2Config(ctx);
-	const active = activeV2Binding(config, sessionModelId(ctx));
+	const config = safeModelsConfig(ctx);
+	const active = activeBinding(config, sessionModelId(ctx));
 	const table = readSettingsPolicyTable(ctx.cwd);
 	ctx.ui.notify(
 		[

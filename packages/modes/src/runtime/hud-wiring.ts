@@ -22,7 +22,7 @@ import {
 import { uiTrace } from "@vegardx/pi-core";
 import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
-import { findNodeV2 } from "../plan/schema.js";
+import { findNode } from "../plan/schema.js";
 import type { PendingQuestion } from "../question-queue.js";
 import { handleViewCommand } from "./agent-commands.js";
 import { clipWatchGoal, listAgentTargets } from "./agent-targets.js";
@@ -185,7 +185,7 @@ export function installHud(rt: RuntimeContext, ctx: ExtensionContext): void {
 						"user pressed HUD K",
 					);
 					const plan = rt.engine?.get();
-					const delivery = plan ? findNodeV2(plan, deliveryId) : undefined;
+					const delivery = plan ? findNode(plan, deliveryId) : undefined;
 					if (!stopped || !delivery || delivery.status !== "active") {
 						ctx.ui.notify(
 							`Could not prove ${deliveryId} stopped; it was not marked failed.`,

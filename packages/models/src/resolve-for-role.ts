@@ -2,7 +2,7 @@
 //
 // The single replacement for the retired v1 `resolveExactModelSelection`: map
 // the role to its v2 agent type, resolve through the active roster/tier
-// (resolveV2Model — which appends the session seat as the known-good last
+// (resolveModel — which appends the session seat as the known-good last
 // resort), then authenticate. For harness callers that `complete()` in-process
 // (summariser, debug reviser, compaction) rather than spawning a pi child.
 //
@@ -17,8 +17,8 @@ import { resolveModelAuth } from "./model-auth.js";
 import {
 	agentTypeForRole,
 	defaultTierForAgent,
-	resolveV2Model,
-} from "./v2-resolver.js";
+	resolveModel,
+} from "./resolver.js";
 
 export interface RoleModel {
 	readonly modelId: string;
@@ -42,7 +42,7 @@ export async function resolveModelForRole(
 	let modelId: string | undefined;
 	let effort: ThinkingLevel | undefined;
 	try {
-		const resolved = await resolveV2Model(ctx, {
+		const resolved = await resolveModel(ctx, {
 			agent,
 			...(tier ? { tier } : {}),
 			...(seat ? { inherit: { modelId: seat } } : {}),

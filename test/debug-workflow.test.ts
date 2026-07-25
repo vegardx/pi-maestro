@@ -12,15 +12,15 @@ import {
 	renderRecoveryQuestion,
 	validateWorkerDebugProposal,
 } from "../packages/modes/src/debug.js";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
-	type PlanV2,
-	planFingerprintV2,
+	type Plan,
+	planFingerprint,
 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp",
 		save: (p) => {
@@ -36,7 +36,7 @@ function memStore(): PlanStoreV2 {
 }
 
 function fixture() {
-	const engine = PlanEngineV2.create(
+	const engine = PlanEngine.create(
 		memStore(),
 		{ slug: "debug", title: "Debug", repoPath: "/repo" },
 		() => "2026-01-01T00:00:00Z",
@@ -215,7 +215,7 @@ describe("debug diagnosis and recovery", () => {
 				kind: "steer",
 				targetDeliverableId: "worker",
 				expectedGeneration: 2,
-				basePlanFingerprint: planFingerprintV2(engine.get()),
+				basePlanFingerprint: planFingerprint(engine.get()),
 				guidance: "x",
 				confidence: 1,
 				rationale: "x",
@@ -248,7 +248,7 @@ describe("debug diagnosis and recovery", () => {
 			proposalId: "p",
 			agentId: "worker",
 			generation: 3,
-			planFingerprint: planFingerprintV2(engine.get()),
+			planFingerprint: planFingerprint(engine.get()),
 			observed: [],
 			likelyCause: "x",
 			recovery: { kind: "restart-resume", confidence: 0.8, rationale: "x" },
@@ -273,7 +273,7 @@ describe("debug diagnosis and recovery", () => {
 
 	it("accepts proposals pinned before session bookkeeping and timestamp churn", () => {
 		const { engine, execution } = fixture();
-		const pinned = planFingerprintV2(engine.get());
+		const pinned = planFingerprint(engine.get());
 		// The spawn path persists session facts AFTER the env fingerprint is
 		// minted — bookkeeping churn must not reject the worker's proposals.
 		engine.setNodeRuntime("worker", {

@@ -1,5 +1,5 @@
 // Storage roots + cutover error. The v1 PlanStore died at the v2 flip —
-// plan persistence lives in plan/storage.ts (createPlanStoreV2, gated on
+// plan persistence lives in plan/storage.ts (createPlanStore, gated on
 // schemaVersion 6, with wholesale legacy archiving into _legacy/). What
 // survives here is the shared root resolution and the unsupported-state
 // error both stores' consumers throw/catch.

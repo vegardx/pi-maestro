@@ -5,20 +5,20 @@
 // ships the one PR. See docs/design/multi-model-agents.md §5.
 
 import { describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	isBranchOwner,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import { createAgentTool } from "../packages/modes/src/tools.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
-		save: (p: PlanV2) => {
+		save: (p: Plan) => {
 			saved = p;
 		},
 		load: () => saved,
@@ -30,8 +30,8 @@ function memStore(): PlanStoreV2 {
 	};
 }
 
-function makeEngine(): PlanEngineV2 {
-	return PlanEngineV2.create(memStore(), {
+function makeEngine(): PlanEngine {
+	return PlanEngine.create(memStore(), {
 		slug: "ensemble-test",
 		title: "Ensemble Test",
 		repoPath: "/tmp/repo",
@@ -40,7 +40,7 @@ function makeEngine(): PlanEngineV2 {
 
 type Res = { details?: { error?: string } };
 
-function runAgent(engine: PlanEngineV2, params: unknown): Promise<Res> {
+function runAgent(engine: PlanEngine, params: unknown): Promise<Res> {
 	const tool = createAgentTool({ engine: () => engine });
 	return tool.execute(
 		"t",
@@ -52,7 +52,7 @@ function runAgent(engine: PlanEngineV2, params: unknown): Promise<Res> {
 }
 
 /** A branch-owning worker deliverable — the integrator-to-be. */
-function seedDeliverable(engine: PlanEngineV2, id: string): PlanNode {
+function seedDeliverable(engine: PlanEngine, id: string): PlanNode {
 	const node = engine.addNode(null, {
 		id,
 		agent: "worker",
@@ -63,7 +63,7 @@ function seedDeliverable(engine: PlanEngineV2, id: string): PlanNode {
 	return node;
 }
 
-function findNode(plan: PlanV2, id: string): PlanNode | undefined {
+function findNode(plan: Plan, id: string): PlanNode | undefined {
 	const stack = [...plan.nodes];
 	while (stack.length) {
 		const node = stack.pop();

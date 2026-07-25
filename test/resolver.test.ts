@@ -12,8 +12,8 @@ import {
 	defaultTierForAgent,
 	explainTier,
 	fallbackNotice,
-	resolveV2Model,
-	V2ResolutionError,
+	ModelResolutionError,
+	resolveModel,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -107,7 +107,7 @@ afterEach(() => {
 
 describe("inheritance", () => {
 	it("no tier → the caller's model, verbatim", async () => {
-		const resolution = await resolveV2Model(fakeCtx(), {
+		const resolution = await resolveModel(fakeCtx(), {
 			agent: "worker",
 			inherit: { modelId: "gw1/parent", effort: "high" },
 		});
@@ -119,7 +119,7 @@ describe("inheritance", () => {
 	});
 
 	it("no tier, no caller → the session model (the root's caller is the seat)", async () => {
-		const resolution = await resolveV2Model(fakeCtx(), { agent: "worker" });
+		const resolution = await resolveModel(fakeCtx(), { agent: "worker" });
 		expect(resolution).toMatchObject({
 			source: "inherit",
 			modelId: "gw2/seat",
@@ -131,7 +131,7 @@ describe("inheritance", () => {
 describe("alias resolution", () => {
 	it("prefers an attachment on the resolving agent's own gateway", async () => {
 		// Seat is gw2; Sol lists gw1/sol FIRST, but gw2 is the agent's gateway.
-		const resolution = await resolveV2Model(fakeCtx({ seat: "gw2/seat" }), {
+		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
 			agent: "worker",
 			tier: "standard",
 			inherit: { modelId: "gw2/seat", effort: "medium" },
@@ -151,7 +151,7 @@ describe("alias resolution", () => {
 	});
 
 	it("falls to the first available attachment when the own gateway is down", async () => {
-		const resolution = await resolveV2Model(
+		const resolution = await resolveModel(
 			fakeCtx({ seat: "gw2/seat", unavailable: ["gw2/sol"] }),
 			{ agent: "worker", tier: "standard" },
 		);
@@ -164,7 +164,7 @@ describe("alias resolution", () => {
 	});
 
 	it("walks to the next alias when the first alias has no attachment available", async () => {
-		const resolution = await resolveV2Model(
+		const resolution = await resolveModel(
 			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol"] }),
 			{ agent: "worker", tier: "standard" },
 		);
@@ -181,7 +181,7 @@ describe("alias resolution", () => {
 	});
 
 	it("returns effort verbatim for an alias with a fixed effort and no allowlist", async () => {
-		const resolution = await resolveV2Model(fakeCtx(), {
+		const resolution = await resolveModel(fakeCtx(), {
 			agent: "explorer",
 			tier: "light",
 		});
@@ -194,10 +194,10 @@ describe("allowances", () => {
 	it("bounds deliberate tier references to the agent's allowance", async () => {
 		// worker is configured here as {standard, heavy} — light is out.
 		await expect(
-			resolveV2Model(fakeCtx(), { agent: "worker", tier: "light" }),
-		).rejects.toThrow(V2ResolutionError);
+			resolveModel(fakeCtx(), { agent: "worker", tier: "light" }),
+		).rejects.toThrow(ModelResolutionError);
 		// explorer's allowance includes light.
-		const resolution = await resolveV2Model(fakeCtx(), {
+		const resolution = await resolveModel(fakeCtx(), {
 			agent: "explorer",
 			tier: "light",
 		});
@@ -215,7 +215,7 @@ describe("default worker allowance", () => {
 		expect(defaultTierForAgent(fakeCtx(), "reviewer")).toBe("standard");
 		expect(defaultTierForAgent(fakeCtx(), "advisor")).toBe("heavy");
 		// With no tier, the worker resolves to the seat (source: inherit).
-		const resolution = await resolveV2Model(fakeCtx({ seat: "gw2/seat" }), {
+		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
 			agent: "worker",
 		});
 		expect(resolution).toMatchObject({
@@ -234,7 +234,7 @@ describe("region", () => {
 			},
 		});
 		// Seat gw2 would prefer gw2/sol, but region allows only gw1/* → gw1/sol.
-		const resolution = await resolveV2Model(fakeCtx({ seat: "gw2/seat" }), {
+		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
 			agent: "worker",
 			tier: "standard",
 		});
@@ -248,7 +248,7 @@ describe("region", () => {
 				region: { active: "EEA", lists: { EEA: ["gw9/*"] } },
 			},
 		});
-		const resolution = await resolveV2Model(fakeCtx(), {
+		const resolution = await resolveModel(fakeCtx(), {
 			agent: "worker",
 			tier: "standard",
 		});
@@ -290,7 +290,7 @@ describe("region", () => {
 
 		it("EEA skips the non-EEA model and lands on the EEA-legal one", async () => {
 			writeSettings(TRIPWIRE);
-			const resolution = await resolveV2Model(fakeCtx({ seat: "gw1/seat" }), {
+			const resolution = await resolveModel(fakeCtx({ seat: "gw1/seat" }), {
 				agent: "reviewer",
 				tier: "heavy",
 			});
@@ -309,7 +309,7 @@ describe("region", () => {
 					region: { ...TRIPWIRE.models.region, active: "Global" },
 				},
 			});
-			const resolution = await resolveV2Model(fakeCtx({ seat: "gw1/seat" }), {
+			const resolution = await resolveModel(fakeCtx({ seat: "gw1/seat" }), {
 				agent: "reviewer",
 				tier: "heavy",
 			});
@@ -320,7 +320,7 @@ describe("region", () => {
 
 describe("session fallback", () => {
 	it("an exhausted tier degrades to the seat with a visible reason", async () => {
-		const resolution = await resolveV2Model(
+		const resolution = await resolveModel(
 			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"] }),
 			{ agent: "worker", tier: "standard", inherit: { modelId: "gw2/seat" } },
 		);
@@ -342,7 +342,7 @@ describe("session fallback", () => {
 				},
 			},
 		});
-		const resolution = await resolveV2Model(fakeCtx(), {
+		const resolution = await resolveModel(fakeCtx(), {
 			agent: "worker",
 			tier: "heavy",
 		});
@@ -355,7 +355,7 @@ describe("failure semantics", () => {
 	it("throws visibly when a tier is requested with no config or no binding", async () => {
 		writeSettings({});
 		await expect(
-			resolveV2Model(fakeCtx(), { agent: "worker", tier: "standard" }),
+			resolveModel(fakeCtx(), { agent: "worker", tier: "standard" }),
 		).rejects.toThrow("no v2 roster");
 
 		writeSettings({
@@ -368,7 +368,7 @@ describe("failure semantics", () => {
 			},
 		});
 		await expect(
-			resolveV2Model(fakeCtx(), { agent: "worker", tier: "standard" }),
+			resolveModel(fakeCtx(), { agent: "worker", tier: "standard" }),
 		).rejects.toThrow("no binding is active");
 	});
 });

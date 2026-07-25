@@ -38,6 +38,27 @@ interface ToolCall {
 	readonly input: Record<string, unknown>;
 }
 
+// The recovery-scenario node (seedRecoverPlan). On its FIRST session the mock
+// HOLDS the response open (headers + message_start, then stall — pi has no
+// stream-idle timeout, so the worker sits `working` and never ships), giving the
+// driver a deterministic window to /stop it into the restart-recoverable shape.
+// On /recover the session resumes with the "…has been resumed" kickoff, the mock
+// sees that marker and drives the normal write→commit→ship path.
+const RECOVER_NODE_ID = "recover-me";
+
+/** Fallback: end a HELD stream benignly if the driver never /stops the worker. */
+const HOLD_MS = 120_000;
+
+/**
+ * True once the worker's session has been resumed after an interrupt — the
+ * kickoff message the executor appends. Covers both resume paths: /recover
+ * (recoverInterrupted, "…has been resumed") and /restart (replaceWorker resume,
+ * "…was safely replaced"). Either way the held worker now does the real work.
+ */
+function isResumedSession(text: string): boolean {
+	return /has been resumed|was safely replaced/i.test(text);
+}
+
 // ─── deliverable file contents (keyed on the src file named in the seed) ──────
 
 interface Deliverable {
@@ -140,6 +161,30 @@ test("clampToRange", () => {
 });
 `,
 		commit: "feat(advanced): add standardDeviation and clampToRange",
+	},
+	{
+		// The recovery-scenario deliverable (seedRecoverPlan). Its worker is
+		// stalled on the first session and only ships after /stop → /recover
+		// resumes it — see RECOVER_NODE_ID and the hold path in the handler.
+		id: RECOVER_NODE_ID,
+		src: "src/recover.ts",
+		srcBody: `export function increment(n: number): number {
+	return n + 1;
+}
+
+export function decrement(n: number): number {
+	return n - 1;
+}
+`,
+		test: "tests/recover.test.ts",
+		testBody: `import { test } from "node:test";
+import assert from "node:assert/strict";
+import { increment, decrement } from "../src/recover.ts";
+
+test("increment", () => assert.equal(increment(1), 2));
+test("decrement", () => assert.equal(decrement(1), 0));
+`,
+		commit: "feat(recover): add increment and decrement",
 	},
 ];
 
@@ -258,7 +303,7 @@ function decide(
 	tools: Set<string>,
 	system: unknown,
 	messages: unknown[],
-): { text?: string; toolCalls?: ToolCall[] } {
+): { text?: string; toolCalls?: ToolCall[]; hold?: boolean } {
 	const text = allText(system, messages);
 	const isWriter = tools.has("write") || tools.has("commit");
 
@@ -272,6 +317,12 @@ function decide(
 		const id = deliverableId(text) ?? "";
 		const deliverable = deliverableFor(id, text);
 		if (!deliverable || !id) return { text: "ok" };
+		// Recovery: on its first session the recover-me worker is HELD open (never
+		// ships) so the driver can /stop it into the restart-recoverable shape;
+		// once /recover resumes the session (the kickoff marker appears) it falls
+		// through to the normal write→commit→ship path below.
+		if (id === RECOVER_NODE_ID && !isResumedSession(text))
+			return { hold: true };
 		if (turns === 0)
 			return {
 				toolCalls: [
@@ -329,26 +380,29 @@ function sse(event: string, data: unknown): string {
 	return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+/** The opening `message_start` event — sent alone when HOLDING a stream open. */
+function messageStartSse(model: string): string {
+	return sse("message_start", {
+		type: "message_start",
+		message: {
+			id: "msg_mock",
+			type: "message",
+			role: "assistant",
+			model,
+			content: [],
+			stop_reason: null,
+			stop_sequence: null,
+			usage: { input_tokens: 1, output_tokens: 1 },
+		},
+	});
+}
+
 function render(
 	model: string,
 	decision: { text?: string; toolCalls?: ToolCall[] },
 ): string {
 	const parts: string[] = [];
-	parts.push(
-		sse("message_start", {
-			type: "message_start",
-			message: {
-				id: "msg_mock",
-				type: "message",
-				role: "assistant",
-				model,
-				content: [],
-				stop_reason: null,
-				stop_sequence: null,
-				usage: { input_tokens: 1, output_tokens: 1 },
-			},
-		}),
-	);
+	parts.push(messageStartSse(model));
 	if (decision.toolCalls?.length) {
 		decision.toolCalls.forEach((call, i) => {
 			parts.push(
@@ -434,7 +488,8 @@ export function startScriptedModel(
 				}
 			}
 			let model = "mock-1";
-			let decision: { text?: string; toolCalls?: ToolCall[] } = { text: "ok" };
+			let decision: { text?: string; toolCalls?: ToolCall[]; hold?: boolean } =
+				{ text: "ok" };
 			try {
 				const parsed = JSON.parse(body.toString("utf8")) as {
 					model?: string;
@@ -452,7 +507,7 @@ export function startScriptedModel(
 				try {
 					appendFileSync(
 						opts.logPath,
-						`${JSON.stringify({ seq: thisSeq, model, kind: decision.toolCalls ? decision.toolCalls.map((c) => c.name).join("+") : "text" })}\n`,
+						`${JSON.stringify({ seq: thisSeq, model, kind: decision.hold ? "hold" : decision.toolCalls ? decision.toolCalls.map((c) => c.name).join("+") : "text" })}\n`,
 					);
 				} catch {
 					// best-effort
@@ -462,6 +517,21 @@ export function startScriptedModel(
 				"content-type": "text/event-stream",
 				"cache-control": "no-cache",
 			});
+			// HOLD: open the stream (message_start) but stall the rest. pi has no
+			// stream-idle timeout, so the worker stays `working` — the deterministic
+			// window for the driver to /stop it into the restart-recoverable shape.
+			// When the worker is stopped/killed the socket closes; clear the fallback
+			// and drop the request. If /stop never comes, HOLD_MS ends it benignly.
+			if (decision.hold) {
+				res.write(messageStartSse(model));
+				const timer = setTimeout(() => {
+					res.end(render(model, { text: "Standing by." }));
+				}, HOLD_MS);
+				const cancel = () => clearTimeout(timer);
+				req.on("close", cancel);
+				res.on("close", cancel);
+				return;
+			}
 			res.end(render(model, decision));
 		});
 	});

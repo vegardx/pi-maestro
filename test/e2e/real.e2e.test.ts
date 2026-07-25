@@ -13,15 +13,27 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ScriptedAnswerer } from "./driver/answerer.js";
-import { assertEnsemble, assertScenario } from "./driver/assertions.js";
+import {
+	assertEnsemble,
+	assertScenario,
+	readPlan,
+} from "./driver/assertions.js";
 import {
 	type RunningScriptedModel,
 	startScriptedModel,
 } from "./driver/ci/scripted-model.js";
 import { type EnvProfile, setupCiEnv } from "./driver/env-profile.js";
 import { type LaunchedSut, launchSut } from "./driver/launch.js";
-import { ENSEMBLE_METRICS, SANDBOX_FEATURES } from "./driver/scenario.js";
-import { seedEnsemblePlan, seedScenarioPlan } from "./driver/seed-plan.js";
+import {
+	ENSEMBLE_METRICS,
+	RECOVER_ONCE,
+	SANDBOX_FEATURES,
+} from "./driver/scenario.js";
+import {
+	seedEnsemblePlan,
+	seedRecoverPlan,
+	seedScenarioPlan,
+} from "./driver/seed-plan.js";
 
 const REPO_ROOT = process.cwd();
 const CI_DIR = join(REPO_ROOT, "test", "e2e", "driver", "ci");
@@ -87,6 +99,15 @@ function waitForAssertion(
 	});
 }
 
+/** Current status of one plan node (undefined until the plan/node materializes). */
+function nodeStatus(
+	piHome: string,
+	slug: string,
+	nodeId: string,
+): string | undefined {
+	return readPlan(piHome, slug)?.nodes.find((n) => n.id === nodeId)?.status;
+}
+
 describe.skipIf(!RUN)("scripted full-stack e2e", () => {
 	it(
 		"drives the seeded sandbox-features plan to shipped",
@@ -138,5 +159,88 @@ describe.skipIf(!RUN)("scripted full-stack e2e", () => {
 			}
 		},
 		5 * 60 * 1000,
+	);
+
+	it(
+		"recovers after a maestro restart: /recover resumes the interrupted worker and ships",
+		async () => {
+			const model = await startScriptedModel();
+			const profile = setupCiEnv({
+				mockBaseUrl: model.url,
+				ghShimDir: join(CI_DIR, "gh-shim"),
+			});
+			const slug = seedRecoverPlan(profile.piHome, profile.repoDir);
+			const events = join(profile.piHome, "events.jsonl");
+			const launch = (): LaunchedSut =>
+				launchSut({
+					maestroRoot: REPO_ROOT,
+					repoDir: profile.repoDir,
+					piHome: profile.piHome,
+					answerer: new ScriptedAnswerer(),
+					env: profile.env,
+					extraExtensions: profile.extraExtensions,
+					transcriptPath: events,
+				});
+			const status = () => nodeStatus(profile.piHome, slug, "recover-me");
+			const drive = async (prompts: string[]): Promise<void> => {
+				for (const prompt of prompts) {
+					const st = (await (sut as LaunchedSut).client.getState()) as {
+						isStreaming?: boolean;
+					};
+					await (sut as LaunchedSut).client.prompt(
+						prompt,
+						st.isStreaming ? "followUp" : undefined,
+					);
+				}
+			};
+			let sut: LaunchedSut | undefined;
+			try {
+				// Boot #1: drive to execution. The scripted mock HOLDS recover-me's
+				// first session open, so the worker reaches `active` and stays there
+				// (never ships) — a deterministic mid-flight worker to interrupt.
+				sut = launch();
+				await drive([`/plan ${slug}`, "/start"]);
+				await waitForAssertion(
+					() => status() === "active",
+					90 * 1000,
+					() => sut?.died(),
+				);
+				expect(status(), "worker should be active before the crash").toBe(
+					"active",
+				);
+
+				// Crash the maestro. The plan store (recover-me still `active`, its
+				// sessionPath persisted) and the worker's session file survive on disk;
+				// the held worker is orphaned when its parent dies.
+				sut.client.close();
+				sut.child.kill("SIGKILL");
+				await new Promise((r) => setTimeout(r, 3000));
+
+				// Boot #2: fresh maestro. Re-open the plan from the store (recover-me is
+				// still `active`), re-enter execution (the plan→auto gate — building the
+				// executor hydrates the orphaned active node into the restart-recoverable
+				// shape: RESTART_BLOCK_PREFIX + its session file, NOT a fresh respawn),
+				// then /recover — recoverInterrupted resumes that session, the mock sees
+				// the "…has been resumed" kickoff and drives write→commit→ship.
+				sut = launch();
+				await drive([`/plan ${slug}`, "/start", "/recover recover-me"]);
+
+				const check = () =>
+					assertScenario(profile.piHome, profile.repoDir, RECOVER_ONCE);
+				await waitForAssertion(
+					() => check().ok,
+					3 * 60 * 1000,
+					() => sut?.died(),
+				);
+				const result = check();
+				expect(result.ok, result.summary).toBe(true);
+			} finally {
+				sut?.client.close();
+				sut?.child.kill("SIGKILL");
+				profile.teardown();
+				void model.close();
+			}
+		},
+		6 * 60 * 1000,
 	);
 });

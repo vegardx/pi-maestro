@@ -198,3 +198,39 @@ export function seedEnsemblePlan(piHome: string, repoDir: string): string {
 
 	return "ensemble-metrics";
 }
+
+/**
+ * Seed the recovery plan: ONE worker deliverable `recover-me` on
+ * feat/recover-me. The scripted mock stalls its first session (holds the model
+ * stream open) so the driver can /stop it — prepareStop parks it with the
+ * RESTART_BLOCK_PREFIX and preserves its session file — then /recover resumes
+ * that session and it ships. The deterministic twin of an interrupted worker.
+ */
+export function seedRecoverPlan(piHome: string, repoDir: string): string {
+	const store = createPlanStore(seededPlansRoot(piHome));
+	const engine = PlanEngine.create(store, {
+		slug: "recover-once",
+		title: "Recover once",
+		repoPath: repoDir,
+	});
+
+	engine.addNode(null, {
+		id: "recover-me",
+		agent: "worker",
+		persona: "coder",
+		title: "Add a recoverable module",
+		body:
+			"Create `src/recover.ts` exporting `increment(n: number): number` and " +
+			"`decrement(n: number): number`. Add `tests/recover.test.ts` covering " +
+			"both. Run `npm test` to verify.",
+		branch: "feat/recover-me",
+	});
+	engine.addTask("recover-me", {
+		title: "Implement src/recover.ts (increment, decrement)",
+	});
+	engine.addTask("recover-me", {
+		title: "Add tests/recover.test.ts and make npm test pass",
+	});
+
+	return "recover-once";
+}

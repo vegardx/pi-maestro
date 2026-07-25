@@ -98,6 +98,30 @@ export function resolveSteps(scenario: Scenario): ScenarioStep[] {
 }
 
 /**
+ * The recovery scenario: a single worker deliverable whose first session is
+ * stalled (the scripted mock HOLDS it) so the driver can /stop it into the
+ * restart-recoverable shape, then /recover resumes it from its session file and
+ * it ships. Exercises prepareStop → RESTART_BLOCK_PREFIX → recoverInterrupted —
+ * the crashed/interrupted-worker path, deterministically, with no live model.
+ */
+export const RECOVER_ONCE: Scenario = {
+	name: "recover-once",
+	planPrompt: "(seeded plan — recovery is driven via /stop then /recover)",
+	steps: [
+		{ label: "open plan", prompt: "/plan recover-once" },
+		{ label: "enter execution", prompt: "/start" },
+		{ label: "interrupt the fleet", prompt: "/stop" },
+		{ label: "resume from session", prompt: "/recover recover-me" },
+	],
+	expected: [
+		{
+			titleMatch: "recover",
+			files: ["src/recover.ts", "tests/recover.test.ts"],
+		},
+	],
+};
+
+/**
  * The v2 acceptance scenario (task #27): an ensemble — one parent worker
  * whose two authored candidate children implement the same module on
  * cand/<parent>/<id> branches; the parent integrates the stronger diff and

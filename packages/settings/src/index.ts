@@ -11,7 +11,6 @@ export {
 	type DomainRegistryInput,
 	type DomainSnapshot,
 	domainImpact,
-	explainModelSelection,
 	explainModelSelectionV2,
 	readDomainSnapshot,
 	validateDomainEdit,

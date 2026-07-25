@@ -5,15 +5,12 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
-	MODEL_ROLES,
-	type ModelRole,
 	SPAWNABLE_AGENT_TYPES,
 	type SpawnableAgentType,
 } from "@vegardx/pi-contracts";
 import {
 	type DomainRegistryInput,
 	domainImpact,
-	explainModelSelection,
 	explainModelSelectionV2,
 	readDomainSnapshot,
 	validateDomainEdit,
@@ -193,28 +190,19 @@ export function handleSettingsCommand(
 	if (sub === "set") return setValue(tail, ctx, registry);
 	if (sub === "reset") return resetValue(tail, ctx);
 	if (sub === "explain") {
-		// v2 first: explain the inheritance-first story per agent type
-		// (worker default). Legacy v1 roles keep working for the fallback
-		// paths that still read them.
+		// Explain the inheritance-first story per agent type (worker default).
 		const agent = SPAWNABLE_AGENT_TYPES.includes(tail as SpawnableAgentType)
 			? (tail as SpawnableAgentType)
 			: undefined;
-		if (agent || tail === "") {
-			void explainModelSelectionV2(ctx, agent ?? "worker").then((text) =>
-				notify(ctx, text),
-			);
-			return;
-		}
-		const role = MODEL_ROLES.includes(tail as ModelRole)
-			? (tail as ModelRole)
-			: undefined;
-		if (!role)
+		if (!agent && tail !== "")
 			return notify(
 				ctx,
-				`Unknown target: ${tail}. Use an agent type (${SPAWNABLE_AGENT_TYPES.join(", ")}) or a legacy v1 role.`,
+				`Unknown target: ${tail}. Use an agent type (${SPAWNABLE_AGENT_TYPES.join(", ")}).`,
 				true,
 			);
-		void explainModelSelection(ctx, role).then((text) => notify(ctx, text));
+		void explainModelSelectionV2(ctx, agent ?? "worker").then((text) =>
+			notify(ctx, text),
+		);
 		return;
 	}
 	if (sub === "validate") {

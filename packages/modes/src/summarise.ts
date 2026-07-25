@@ -11,10 +11,7 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import {
-	resolveExactModelSelection,
-	resolveModelAuth,
-} from "@vegardx/pi-models";
+import { resolveModelAuth, resolveModelForRole } from "@vegardx/pi-models";
 import type { SummariseFn } from "./compaction.js";
 import { resolveDutyModel } from "./policy-table.js";
 
@@ -61,13 +58,9 @@ export function createModesSummariser(
 			if (auth?.apiKey) resolved = auth;
 		}
 		if (!resolved) {
-			const resolution = await resolveExactModelSelection(ctx, {
-				role: "plan-summarizer",
-				requireApiKey: true,
-			});
-			const selected = resolution.selected;
-			if (!selected?.apiKey) return null;
-			resolved = selected;
+			const roleModel = await resolveModelForRole(ctx, "plan-summarizer");
+			if (!roleModel?.apiKey) return null;
+			resolved = roleModel;
 		}
 
 		const conversationText = serializeConversation(convertToLlm(messages));

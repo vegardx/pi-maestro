@@ -28,7 +28,6 @@ import {
 	explainTier,
 	readModelsConfig,
 	readV2Config,
-	resolveExactModelSelection,
 } from "@vegardx/pi-models";
 import {
 	formatSettingValue,
@@ -797,40 +796,6 @@ export function readDomainSnapshot(
 		transports: registry.runtime?.transports ?? [],
 		gates,
 	};
-}
-
-export async function explainModelSelection(
-	ctx: ExtensionContext,
-	role: ModelRole,
-): Promise<string> {
-	const snapshot = readDomainSnapshot(ctx);
-	const result = await resolveExactModelSelection(ctx, { role });
-	const lines = [
-		`Main model: ${snapshot.mainModel ?? "none"}`,
-		`Active preset: ${snapshot.activePreset ?? "none"}${snapshot.matchedTarget ? ` (matched target ${snapshot.matchedTarget})` : ""}`,
-		`Context facts: cwd=${snapshot.contextFacts.cwd} · provider=${snapshot.contextFacts.provider ?? "none"} · context=${snapshot.contextFacts.contextWindow ?? "unknown"} · max output=${snapshot.contextFacts.maxTokens ?? "unknown"}`,
-		`Assignment: ${result.selected ? `${result.selected.modelId} @ ${result.selected.effort} (${result.selected.optionId})` : "unavailable"}`,
-		`Source/provenance: ${result.selected?.source ?? "none"} · preset ${result.presetId ?? "none"} · set ${result.modelSetId ?? "none"}`,
-		"Options:",
-		...result.candidates.map(
-			(fact, index) =>
-				`  ${index + 1}. ${fact.optionId}: ${fact.modelId ?? fact.authoredModel} @ ${fact.effort} — ${fact.available ? "available" : (fact.reason ?? "unavailable")} — ${fact.summary}`,
-		),
-	];
-	if (result.errors.length)
-		lines.push(
-			"Errors:",
-			...result.errors.map((error) => `  - ${error.code}: ${error.message}`),
-		);
-	if (result.selected?.source === "session")
-		lines.push(
-			"Fallback: no configured active assignment; the exact live /model option is used.",
-		);
-	else
-		lines.push(
-			"Fallback: configured model sets do not gain an implicit session fallback; options are tried in authored order.",
-		);
-	return lines.join("\n");
 }
 
 /**

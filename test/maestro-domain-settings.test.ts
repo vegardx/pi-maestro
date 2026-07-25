@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	type DomainRegistryInput,
 	domainImpact,
-	explainModelSelection,
 	readDomainSnapshot,
 	validateDomainEdit,
 	writeDomainValue,
@@ -134,48 +133,6 @@ describe("Maestro domain configuration", () => {
 		expect(
 			domainImpact(snapshot, "agents.runtimePolicies.worker", {}),
 		).toContain("Used by: worker.");
-	});
-
-	it("explains exact availability, provenance, context, and fallback", async () => {
-		settings({
-			models: {
-				modelSets: {
-					workers: {
-						options: [
-							{
-								id: "bad",
-								model: "openai/o3",
-								effort: "low",
-								summary: "Unsupported",
-							},
-							{
-								id: "good",
-								model: "anthropic/sonnet",
-								effort: "high",
-								summary: "Available",
-							},
-						],
-					},
-				},
-				presets: {
-					main: {
-						targets: ["anthropic/sonnet"],
-						modelSets: { worker: "workers" },
-					},
-				},
-			},
-		});
-		const report = await explainModelSelection(ctx(), "worker");
-		expect(report).toContain("Main model: anthropic/sonnet");
-		expect(report).toContain(
-			"Active preset: main (matched target anthropic/sonnet)",
-		);
-		expect(report).toContain(
-			"bad: openai/o3 @ low — effort low is unsupported",
-		);
-		expect(report).toContain("Assignment: anthropic/sonnet @ high (good)");
-		expect(report).toContain("Source/provenance: preset");
-		expect(report).toContain("do not gain an implicit session fallback");
 	});
 
 	it("validates ambiguous targets, broken references, unsafe policy, and gate contracts", () => {

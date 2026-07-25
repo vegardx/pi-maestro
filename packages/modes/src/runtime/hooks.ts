@@ -7,7 +7,7 @@ import type {
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
-import { readV2Config } from "@vegardx/pi-models";
+import { readModelsConfig } from "@vegardx/pi-models";
 import { updateSettingsFile } from "@vegardx/pi-settings";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import {
@@ -235,7 +235,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			// reset via /maestro). Non-interactive surfaces never wipe — they leave
 			// it untouched and just surface the problem.
 			try {
-				readV2Config(ctx.cwd);
+				readModelsConfig(ctx.cwd);
 			} catch (error) {
 				const detail = error instanceof Error ? error.message : String(error);
 				const confirm = ctx.hasUI ? ctx.ui.confirm?.bind(ctx.ui) : undefined;

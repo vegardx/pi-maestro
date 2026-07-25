@@ -7,7 +7,6 @@ import {
 	resetSessionSettingOverrides,
 } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
-import { activePreset, readModelsConfig } from "@vegardx/pi-models";
 import { getSettingsCompletions, handleSettingsCommand } from "./command.js";
 import type { DomainRegistryInput } from "./domain.js";
 import { setRegionActive, showConfigMenu } from "./menu.js";
@@ -86,31 +85,6 @@ export default defineExtension(
 				const items = getSettingsCompletions(prefix, lastCtx);
 				return items.map((value) => ({ value, label: value }));
 			},
-		});
-
-		// The session model selects the active preset from exact target membership.
-		// A stale/malformed models config notifies ONCE — never an extension
-		// error on every model switch (2026-07-19: pre-cutover models format).
-		let configErrorNotified = false;
-		pi.on("model_select", (event, ctx) => {
-			if (event.source === "restore") return;
-			let config: ReturnType<typeof readModelsConfig>;
-			try {
-				config = readModelsConfig(ctx.cwd);
-			} catch (cause) {
-				if (!configErrorNotified) {
-					configErrorNotified = true;
-					ctx.ui.notify(
-						`Maestro model settings ignored: ${cause instanceof Error ? cause.message : String(cause)}`,
-						"warning",
-					);
-				}
-				return;
-			}
-			if (!config) return;
-			const modelId = `${event.model.provider}/${event.model.id}`;
-			const active = activePreset(config, modelId);
-			if (active) ctx.ui.notify(`Preset → ${active.id}`, "info");
 		});
 	},
 );

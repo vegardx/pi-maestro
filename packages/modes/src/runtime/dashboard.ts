@@ -8,7 +8,7 @@ import {
 	activeRegion,
 	familyOfModel,
 	parseModelSpec,
-	readV2Config,
+	readModelsConfig,
 } from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter, type ResolvedIdentity } from "../install-footer.js";
@@ -35,7 +35,7 @@ export function installMaestroFooter(
 				? `${ctx.model.provider}/${ctx.model.id}`
 				: undefined;
 			try {
-				const config = readV2Config(ctx.cwd);
+				const config = readModelsConfig(ctx.cwd);
 				value = {
 					...(seat ? { alias: familyOfModel(config, seat)?.alias } : {}),
 					...(seat ? { provider: parseModelSpec(seat)?.provider } : {}),

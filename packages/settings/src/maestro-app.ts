@@ -18,6 +18,7 @@ import type { Component, Focusable } from "@earendil-works/pi-tui";
 import {
 	CONSUMED_POLICY_TRIGGERS,
 	CONTRACT_IDS,
+	type ModelsConfig,
 	NODE_AGENT_TYPES,
 	POLICY_DUTIES,
 	POLICY_TOOL_TRIGGERS,
@@ -28,7 +29,6 @@ import {
 	type SpawnableAgentType,
 	TIER_IDS,
 	type TierId,
-	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
 	activeBinding,
@@ -39,7 +39,7 @@ import {
 	parseModelSpec,
 	parseModelsSettings,
 	REGION_OFF,
-	readV2Config,
+	readModelsConfig,
 	regionNames,
 } from "@vegardx/pi-models";
 import { type DomainRegistryInput, writeDomainValue } from "./domain.js";
@@ -1637,7 +1637,7 @@ class SummaryScreen implements Screen {
 class MaestroApp implements Component, Focusable {
 	focused = false;
 	private readonly stack: Screen[] = [];
-	config: V2ModelsConfig | undefined;
+	config: ModelsConfig | undefined;
 
 	constructor(
 		private readonly ctx: ExtensionContext,
@@ -1731,7 +1731,7 @@ class MaestroApp implements Component, Focusable {
 	// as an object key INSIDE the value. Mutating the WHOLE models block (not one
 	// collection) also lets a single change span collections atomically — a rename
 	// updates families AND the roster refs that point at the old name in one write,
-	// so readV2Config never transiently sees a dangling ref. The candidate is
+	// so readModelsConfig never transiently sees a dangling ref. The candidate is
 	// validated with parseModelsSettings (the same check boot uses) before it lands.
 	writeModels(apply: (models: Record<string, unknown>) => void): boolean {
 		const manager = SettingsManager.create(this.ctx.cwd, undefined);
@@ -1825,7 +1825,7 @@ class MaestroApp implements Component, Focusable {
 
 	private reload(): void {
 		try {
-			this.config = readV2Config(this.ctx.cwd);
+			this.config = readModelsConfig(this.ctx.cwd);
 		} catch (cause) {
 			this.config = undefined;
 			this.notify(

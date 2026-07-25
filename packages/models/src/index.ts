@@ -5,7 +5,7 @@ export {
 	familyOfModel,
 	parseAliasRef,
 	parseModelsSettings,
-	readV2Config,
+	readModelsConfig,
 	validateModelsConfig,
 } from "./catalog.js";
 export { supportedEfforts } from "./efforts.js";
@@ -18,14 +18,11 @@ export {
 	type ModelMeta,
 	shortModelName,
 } from "./model-meta.js";
-export { type ParsedModelSpec, parseModelSpec } from "./model-spec.js";
 export {
-	activePreset,
 	isModelId,
-	readModelsConfig,
-	SESSION_MODEL_SENTINEL,
-	validatePresetTargets,
-} from "./profiles.js";
+	type ParsedModelSpec,
+	parseModelSpec,
+} from "./model-spec.js";
 export {
 	activeRegion,
 	isRegionOff,

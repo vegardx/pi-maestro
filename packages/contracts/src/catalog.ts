@@ -119,7 +119,7 @@ export const DEFAULT_AGENT_ALLOWANCES: Readonly<
  * The parsed v2 configuration slice (settings `models.families`,
  * `models.rosters`, `models.bindings`, `models.region`, `models.allowances`).
  */
-export interface V2ModelsConfig {
+export interface ModelsConfig {
 	readonly families: Readonly<Record<string, FamilyConfig>>;
 	readonly rosters: Readonly<Record<string, RosterTiers>>;
 	readonly bindings: Readonly<Record<string, BindingConfig>>;

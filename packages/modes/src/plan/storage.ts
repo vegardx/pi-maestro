@@ -22,7 +22,6 @@ import { UnsupportedMaestroStateError } from "../storage.js";
 import type { Plan } from "./schema.js";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
-const LEGACY_DIR = "_legacy";
 
 export interface PlanSummary {
 	readonly slug: string;
@@ -141,55 +140,4 @@ export function createPlanStore(root: string): PlanStore {
 			return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 		},
 	};
-}
-
-/** Plan dirs whose plan.json parses but is NOT the given version. */
-export function legacyPlanSlugs(
-	root: string,
-	currentVersion: number = PLAN_SCHEMA_VERSION,
-): string[] {
-	if (!existsSync(root)) return [];
-	const out: string[] = [];
-	for (const entry of readdirSync(root, { withFileTypes: true })) {
-		if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
-		const path = join(root, entry.name, "plan.json");
-		if (!existsSync(path)) continue;
-		try {
-			const value = JSON.parse(readFileSync(path, "utf8")) as {
-				schemaVersion?: unknown;
-			};
-			if (value.schemaVersion !== currentVersion) out.push(entry.name);
-		} catch {
-			out.push(entry.name); // unreadable = legacy: archive, don't crash
-		}
-	}
-	return out.sort();
-}
-
-export interface ArchiveLegacyResult {
-	readonly archived: readonly string[];
-}
-
-/**
- * Move every legacy plan dir WHOLESALE to `<root>/_legacy/<slug>` (suffixed
- * on collision). Worktrees a legacy plan references are NOT touched —
- * recovery-style cleanup only ever acts on the live plan.
- */
-export function archiveLegacyPlans(
-	root: string,
-	currentVersion: number = PLAN_SCHEMA_VERSION,
-): ArchiveLegacyResult {
-	const slugs = legacyPlanSlugs(root, currentVersion);
-	if (slugs.length === 0) return { archived: [] };
-	const legacyRoot = join(root, LEGACY_DIR);
-	mkdirSync(legacyRoot, { recursive: true });
-	const archived: string[] = [];
-	for (const slug of slugs) {
-		let target = join(legacyRoot, slug);
-		for (let n = 2; existsSync(target); n++)
-			target = join(legacyRoot, `${slug}-${n}`);
-		renameSync(join(root, slug), target);
-		archived.push(slug);
-	}
-	return { archived };
 }

@@ -30,13 +30,6 @@ export {
 	showConfigMenu,
 } from "./menu.js";
 export {
-	type MigrationFailure,
-	type MigrationOutcome,
-	type MigrationReport,
-	runSettingsMigrations,
-	type SettingsMigration,
-} from "./migrations.js";
-export {
 	type ExtensionConfig,
 	type ExtensionConfigMap,
 	getConfigBoolean,

@@ -15,9 +15,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import { findNode } from "../packages/modes/src/plan/schema.js";
 import {
-	archiveLegacyPlans,
 	createPlanStore,
-	legacyPlanSlugs,
 	type PlanStore,
 } from "../packages/modes/src/plan/storage.js";
 
@@ -304,36 +302,5 @@ describe("v2 storage + legacy archive", () => {
 		expect(() => s.load("old-plan")).toThrow("Unsupported Maestro plan state");
 		// list() skips legacy dirs rather than crashing (the #238 lesson).
 		expect(s.list().map((p) => p.slug)).toEqual(["p"]);
-	});
-
-	it("archives legacy dirs wholesale into _legacy, keeping v6 plans", () => {
-		engine();
-		mkdirSync(join(root, "old-plan", "crashes"), { recursive: true });
-		writeFileSync(
-			join(root, "old-plan", "plan.json"),
-			JSON.stringify({ schemaVersion: 5, slug: "old-plan" }),
-		);
-		writeFileSync(join(root, "old-plan", "events.jsonl"), "{}\n");
-		writeFileSync(
-			join(root, "broken", "plan.json").replace("/plan.json", ""),
-			"",
-		);
-		// ^ not a dir — ignored. Also an unreadable plan.json counts as legacy:
-		mkdirSync(join(root, "corrupt"), { recursive: true });
-		writeFileSync(join(root, "corrupt", "plan.json"), "not json");
-
-		expect(legacyPlanSlugs(root)).toEqual(["corrupt", "old-plan"]);
-		const result = archiveLegacyPlans(root);
-		expect(result.archived).toEqual(["corrupt", "old-plan"]);
-		// Moved wholesale — events.jsonl and crashes/ travel along.
-		expect(
-			readFileSync(join(root, "_legacy", "old-plan", "events.jsonl"), "utf8"),
-		).toBe("{}\n");
-		expect(legacyPlanSlugs(root)).toEqual([]);
-		expect(
-			createPlanStore(root)
-				.list()
-				.map((p) => p.slug),
-		).toEqual(["p"]);
 	});
 });

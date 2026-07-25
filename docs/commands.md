@@ -6,7 +6,8 @@
 |---|---|
 | `/plan [slug]` | Open/create the repo plan and enter Plan |
 | `/recon` | Enter read-only research posture |
-| `/auto`, `/hack` | Request gated execution entry from Plan |
+| `/auto` | Request gated execution entry from Plan (forms + reviews the plan) |
+| `/hack` | Drop straight into hack — direct posture switch, no gate or forming |
 | `/start [delivery]` | Activate ready `planned` work only |
 | `/stop` | Freeze scheduling and bounded-stop the fleet |
 | `/restart [delivery]` | Resume/replace already-started work; never start queued work |

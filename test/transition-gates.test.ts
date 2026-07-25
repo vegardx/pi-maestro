@@ -183,7 +183,7 @@ describe("transition gate coordinator", () => {
 			},
 		);
 
-		await expect(coordinator.request("hack", fakeCtx())).resolves.toBe(false);
+		await expect(coordinator.request("auto", fakeCtx())).resolves.toBe(false);
 		expect(engine.get().transitionGates?.at(-1)).toMatchObject({
 			status: "blocked",
 			reason: "plan changed before the ruling could be applied",
@@ -193,6 +193,34 @@ describe("transition gate coordinator", () => {
 });
 
 describe("form-at-transition step (Phase 2)", () => {
+	it("plan->hack is a direct posture switch — no form, reviewer, ruling, or gate", async () => {
+		const { engine, now } = fixture();
+		const commit = vi.fn();
+		const cap = agents();
+		const ask = { ask: vi.fn(async () => []) } as unknown as AskCapabilityV1;
+		const form = vi.fn(async () => "formed" as const);
+		const coordinator = new TransitionGateCoordinator(
+			createDefaultTransitionGates(),
+			{
+				engine: () => engine,
+				currentMode: () => "plan" as const,
+				commit: commit as never,
+				form,
+				agents: () => cap,
+				ask: () => ask,
+				now,
+			},
+		);
+
+		// hack has no gated edge: commit straight through, touching nothing.
+		await expect(coordinator.request("hack", fakeCtx())).resolves.toBe(true);
+		expect(form).not.toHaveBeenCalled();
+		expect(cap.run).not.toHaveBeenCalled();
+		expect(ask.ask).not.toHaveBeenCalled();
+		expect(commit).toHaveBeenCalledWith("hack", expect.anything());
+		expect(engine.get().transitionGates ?? []).toHaveLength(0);
+	});
+
 	it("bounces: form surfaces open questions — no reviewer, ruling, or commit", async () => {
 		const { engine, now } = fixture();
 		const commit = vi.fn();

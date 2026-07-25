@@ -512,7 +512,7 @@ export function createRuntimeContext(
 		to: ModeName,
 		ctx: ExtensionContext,
 	): Promise<void> {
-		if (rt.state.mode !== "plan" || (to !== "auto" && to !== "hack")) return;
+		if (rt.state.mode !== "plan" || to !== "auto") return;
 		const engine = rt.engine;
 		if (!engine || engine.isDraft()) return;
 		// Fork only in the interactive TUI: a fresh session is a UX win for a
@@ -779,7 +779,9 @@ export function createRuntimeContext(
 		},
 
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {
-			if (rt.state.mode === "plan" && (mode === "auto" || mode === "hack")) {
+			// Only plan→auto forms/gates and so must route through requestMode.
+			// plan→hack is a direct posture switch (no gate) and commits here.
+			if (rt.state.mode === "plan" && mode === "auto") {
 				throw new Error("Plan execution transitions must use requestMode()");
 			}
 			commitMode(mode, ctx);
@@ -892,8 +894,9 @@ export function createRuntimeContext(
 					if (await rt.requestMode("auto", ctx))
 						await rt.runStart(undefined, ctx);
 				} else if (choice?.startsWith("hack")) {
-					if (await rt.requestMode("hack", ctx))
-						await rt.runStart(undefined, ctx);
+					// hack is a direct posture switch — no gate, no forming, no
+					// worker activation (requestMode pass-through commits for hack).
+					await rt.requestMode("hack", ctx);
 				}
 				return;
 			}

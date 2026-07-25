@@ -35,6 +35,10 @@ boot/default mode.**
 **hack is the important nuance:** it is not "auto without a plan." It is the
 maestro dropping the conductor role and doing the work directly, one thing at a
 time, in its own session. Fan-out to workers is exactly what hack turns *off*.
+Entering hack is **immediate** — `/hack` (or the Shift+Tab choice) is a direct
+posture switch with **no gate**: no forming, no plan-review, no readiness ruling,
+no worker activation. You can drop into hack from plan with a half-built draft and
+it is left untouched. Only `plan→auto` runs the readiness gate.
 
 **recon is decoupled:** it is no longer in the Shift+Tab cycle and no longer the
 boot mode. `/recon` is a deliberate side-trip into a fresh isolated session;
@@ -59,8 +63,8 @@ out, not prompted against.
            discuss trade-offs      execution      task tree    agent      on plan  seeded; execute
 ```
 
-**The forming step** is the first stage of the `plan→auto`/`plan→hack` transition
-gate. The model:
+**The forming step** is the first stage of the `plan→auto` transition
+gate (hack is *not* gated — see below). The model:
 
 1. **Self-assesses open questions.** If a real, user-only question would
    materially change the plan's structure, it calls `ask` and **stops** — the
@@ -89,9 +93,13 @@ still needs authoring help is the separate hardening thread (#8).
 A transition is not a flag flip. Forward transitions **distill and open a fresh,
 primed session**; backward transitions **restore the prior session**.
 
-### Forward (plan→auto/hack) — as built
+### Forward (plan→auto) — as built
 
-The forward transition is the gate pipeline (form → fail-fast → review → ruling),
+Only `plan→auto` is a gated forward transition. `plan→hack` is a **direct posture
+switch**: no gate, no forming, no fork/seed — `commitMode` flips straight to hack
+and the draft plan is left as-is (hack is a manual worker seat, not orchestration).
+
+The `plan→auto` forward transition is the gate pipeline (form → fail-fast → review → ruling),
 and on commit it **forks a fresh execution session**:
 
 1. **Build the seed.** A bounded self-curated turn in the plan session produces
@@ -345,7 +353,7 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 
 | # | Sev | Defect | Fix |
 | --- | --- | --- | --- |
-| 1 | ✓ | ~~**Mode transitions flip state in place**; no distill, no fresh session, no context handoff.~~ **DONE** — forward `plan→auto/hack` forks a fresh execution session seeded with decisions/rationale (TUI); backward restores the plan session via `switchSession` after a worker-alive stop-or-stay guard. | — |
+| 1 | ✓ | ~~**Mode transitions flip state in place**; no distill, no fresh session, no context handoff.~~ **DONE** — forward `plan→auto` forks a fresh execution session seeded with decisions/rationale (TUI); backward restores the plan session via `switchSession` after a worker-alive stop-or-stay guard. (`plan→hack` is a direct posture switch — no gate, no fork.) | — |
 | 2 | ✓ | ~~**Preamble carries stage identity** instead of a seeded fresh session.~~ **DONE** — the fork gives the fresh session; the seed rides the execution preamble as a path-in-state block (RPC-safe). Plan/recon/hack preambles are per-turn mode guidance. | — |
 | 3 | P1 | **hack mode half-honors execution** — `hooks.ts` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
 | 4 | ✓ | ~~**`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring.~~ **DONE** — removed; plan mode is conversation-only and authoring is the transition's forming step; the fail-fast execution gate catches a half-baked plan at plan→auto. | — |

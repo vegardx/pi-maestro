@@ -32,15 +32,7 @@ export function dialogs(ctx: ExtensionContext): Dialogs | undefined {
 
 export const DELETE_MARK = "✕ Delete";
 
-export const THINKING_LEVELS = [
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-] as const;
+export { THINKING_LEVELS } from "@vegardx/pi-contracts";
 
 /** All registry models grouped by provider (the same catalog /model shows). */
 /**

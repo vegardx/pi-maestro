@@ -29,6 +29,7 @@ import type {
 	TierId,
 	V2ModelsConfig,
 } from "@vegardx/pi-contracts";
+import { THINKING_LEVELS } from "@vegardx/pi-contracts";
 import { activeBinding, parseAliasRef, readV2Config } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec } from "./model-spec.js";
@@ -236,15 +237,7 @@ export function clampEffort(
 	model: Model<Api> | undefined,
 ): ThinkingLevel | undefined {
 	if (alias.effort && !alias.efforts) return alias.effort;
-	const order: readonly ThinkingLevel[] = [
-		"off",
-		"minimal",
-		"low",
-		"medium",
-		"high",
-		"xhigh",
-		"max",
-	];
+	const order = THINKING_LEVELS;
 	const supported = model ? supportedEfforts(model) : order;
 	const allowed = order.filter(
 		(level) =>

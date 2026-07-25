@@ -29,6 +29,7 @@ import {
 	type RunResult,
 	type SpawnProfile,
 	type SubagentsCapabilityV1,
+	THINKING_LEVELS,
 	type ThinkingLevel,
 	TIER_IDS,
 } from "@vegardx/pi-contracts";
@@ -310,7 +311,7 @@ export function createAgentsCapability(
 	};
 }
 
-const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const EFFORTS = THINKING_LEVELS;
 const Request = Type.Object({
 	kind: Type.String({ description: "Registered semantic agent kind." }),
 	prompt: Type.String({ description: "Focused assignment for the agent." }),

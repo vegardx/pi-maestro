@@ -14,14 +14,10 @@ import type { PersonasCapabilityV1 } from "@vegardx/pi-contracts";
 import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { type BashActor, renderBashRuleset } from "../bash-policy.js";
 import { AGENT_OPERATIONS_BRIEF } from "../plan/agent-operations.js";
-import type { PlanEngineV2 } from "../plan/engine.js";
+import type { PlanEngine } from "../plan/engine.js";
 import type { NodeExecutorDeps, SpawnNodeOpts } from "../plan/node-executor.js";
 import { personaSeedHead } from "../plan/node-periphery.js";
-import {
-	findNodeV2,
-	isBranchOwner,
-	planFingerprintV2,
-} from "../plan/schema.js";
+import { findNode, isBranchOwner, planFingerprint } from "../plan/schema.js";
 import { reportsNotInText, researchReportsDir } from "../research.js";
 import {
 	commitPolicyInstruction,
@@ -50,7 +46,7 @@ export interface LiveSpawnLauncher {
 }
 
 export interface LiveSpawnWiring {
-	readonly engine: PlanEngineV2;
+	readonly engine: PlanEngine;
 	readonly ctx: ExtensionContext;
 	readonly launcher: LiveSpawnLauncher;
 	readonly planDir: string;
@@ -86,7 +82,7 @@ export function createLiveSpawnAgent(
 ): NodeExecutorDeps["spawnAgent"] {
 	return async (spawn) => {
 		const plan = wiring.engine.get();
-		const node = findNodeV2(plan, spawn.nodeId);
+		const node = findNode(plan, spawn.nodeId);
 		if (!node) throw new Error(`node ${spawn.nodeId} not found in plan`);
 		// Node ids are agent keys AND session-name seeds; the executor dedupes
 		// display names across live run states, so the display name is the
@@ -216,7 +212,7 @@ export function createLiveSpawnAgent(
 				...(node.sessionGeneration !== undefined
 					? { generation: node.sessionGeneration }
 					: {}),
-				planFingerprint: planFingerprintV2Safe(plan),
+				planFingerprint: planFingerprintSafe(plan),
 				agentDir,
 				sessionDir: agentSessionDir,
 				token: wiring.token,
@@ -256,11 +252,11 @@ export function createLiveSpawnAgent(
 }
 
 /** The plan fingerprint env var; failures never block a spawn. */
-function planFingerprintV2Safe(
-	plan: Parameters<typeof planFingerprintV2>[0],
+function planFingerprintSafe(
+	plan: Parameters<typeof planFingerprint>[0],
 ): string {
 	try {
-		return planFingerprintV2(plan);
+		return planFingerprint(plan);
 	} catch {
 		return "";
 	}

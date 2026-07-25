@@ -20,7 +20,7 @@ import {
 	reviewAndPostDiagnosticIssue,
 } from "../debug-issue.js";
 import { createDebugIssueReviser } from "../debug-reviser.js";
-import { planFingerprintV2 } from "../plan/schema.js";
+import { planFingerprint } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -306,5 +306,5 @@ export async function runWorkerDebugCommand(
 }
 
 export function currentPlanFingerprint(rt: RuntimeContext): string | undefined {
-	return rt.engine ? planFingerprintV2(rt.engine.get()) : undefined;
+	return rt.engine ? planFingerprint(rt.engine.get()) : undefined;
 }

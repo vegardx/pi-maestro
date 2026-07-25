@@ -26,7 +26,7 @@ import {
 	verifyTargets,
 } from "../exec/verify.js";
 import { writeVerificationReport } from "../exec/verify-report.js";
-import { findNodeV2 } from "../plan/schema.js";
+import { findNode } from "../plan/schema.js";
 import { resolveDutyModel } from "../policy-table.js";
 import { plansRoot } from "../storage.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
@@ -494,7 +494,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 			// Node ids are plan-unique, so /kill reaches any depth — the agent
 			// key IS the node id (no `${id}/worker` compound key).
 			const delivery =
-				id && rt.engine ? findNodeV2(rt.engine.get(), id) : undefined;
+				id && rt.engine ? findNode(rt.engine.get(), id) : undefined;
 			if (!id || !delivery) {
 				ctx.ui.notify(
 					id ? `Unknown deliverable: ${id}` : "Usage: /kill <deliverable-id>",

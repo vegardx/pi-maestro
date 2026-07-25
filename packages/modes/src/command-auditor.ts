@@ -16,8 +16,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PolicyRow } from "@vegardx/pi-contracts";
 import {
 	type ResolvedModelAuth,
+	resolveModel,
 	resolveModelAuth,
-	resolveV2Model,
 } from "@vegardx/pi-models";
 import {
 	type BashActor,
@@ -120,7 +120,7 @@ export function createCommandAuditor(
 	const resolveAuth =
 		deps.resolveAuth ??
 		(async () => {
-			const resolved = await resolveV2Model(ctx, {
+			const resolved = await resolveModel(ctx, {
 				agent: "explorer",
 				tier: row.run.models,
 			});

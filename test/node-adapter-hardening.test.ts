@@ -11,10 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import { NodeExecutionAdapter } from "../packages/modes/src/plan/node-adapter.js";
-import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { findNode } from "../packages/modes/src/plan/schema.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "e2e-token";
 
@@ -107,7 +107,7 @@ let tmpDir: string;
 let repoDir: string;
 let planDir: string;
 let socketPath: string;
-let engine: PlanEngineV2;
+let engine: PlanEngine;
 let adapter: NodeExecutionAdapter;
 const agents: { close: () => void }[] = [];
 
@@ -122,7 +122,7 @@ beforeEach(() => {
 	writeFileSync(join(repoDir, "README.md"), "seed\n");
 	git(repoDir, "add", "-A");
 	git(repoDir, "commit", "-q", "-m", "seed");
-	engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+	engine = PlanEngine.create(createPlanStore(join(tmpDir, "plans")), {
 		slug: "hard",
 		title: "Hardening",
 		repoPath: repoDir,
@@ -197,7 +197,7 @@ describe("real-git provisioning through full activation", () => {
 		a.toggleTask("a1");
 		a.toggleTask("lifecycle-postflight", "## Handoff\nA is built.");
 		a.idle();
-		await until(() => findNodeV2(engine.get(), "a")?.status === "shipped");
+		await until(() => findNode(engine.get(), "a")?.status === "shipped");
 		expect(ships).toEqual([{ nodeId: "a", branch: "feat/a" }]);
 
 		// b activates on the satisfied dep, STACKED: its worktree is based on
@@ -227,11 +227,11 @@ describe("real-git provisioning through full activation", () => {
 		b.toggleTask("lifecycle-preflight");
 		b.toggleTask("lifecycle-postflight", "## Handoff\nB is built.");
 		b.idle();
-		await until(() => findNodeV2(engine.get(), "b")?.status === "shipped");
+		await until(() => findNode(engine.get(), "b")?.status === "shipped");
 		expect(ships.map((s) => s.nodeId)).toEqual(["a", "b"]);
 
 		// The contract result landed on the LEDGER at extraction tier "block".
-		const aNode = findNodeV2(engine.get(), "a");
+		const aNode = findNode(engine.get(), "a");
 		expect(aNode?.result).toMatchObject({ contract: "summary-and-diff" });
 		expect(aNode?.result?.payload).toMatchObject({ outcome: "done" });
 	});
@@ -314,7 +314,7 @@ describe("children + contracts + resolution over RPC", () => {
 		// Toggles are async RPC mutations — wait for the ledger before ticking.
 		await until(
 			() =>
-				findNodeV2(engine.get(), "build")?.tasks.every((t) => t.done) === true,
+				findNode(engine.get(), "build")?.tasks.every((t) => t.done) === true,
 		);
 		await adapter.tick(); // parent gating done → reviewer spawns
 
@@ -325,10 +325,10 @@ describe("children + contracts + resolution over RPC", () => {
 		reviewer.working();
 		reviewer.idle();
 		reviewer.idle(); // sustained idle completes a read agent
-		await until(() => findNodeV2(engine.get(), "rev")?.status === "complete");
+		await until(() => findNode(engine.get(), "rev")?.status === "complete");
 
 		// The reviewer's neutral findings landed on the ledger.
-		const rev = findNodeV2(engine.get(), "rev");
+		const rev = findNode(engine.get(), "rev");
 		expect(rev?.result).toMatchObject({ contract: "findings" });
 		expect(rev?.result?.payload).toMatchObject({
 			summary: "checked and sound",
@@ -336,8 +336,8 @@ describe("children + contracts + resolution over RPC", () => {
 
 		// Worker completes; the child summary folds into the parent's rollup.
 		worker.idle();
-		await until(() => findNodeV2(engine.get(), "build")?.status === "shipped");
-		expect(findNodeV2(engine.get(), "build")?.summary).toContain("rev done");
+		await until(() => findNode(engine.get(), "build")?.status === "shipped");
+		expect(findNode(engine.get(), "build")?.summary).toContain("rev done");
 	});
 
 	it("spawn-time resolution lands on the ledger and reaches the spawn", async () => {
@@ -379,7 +379,7 @@ describe("children + contracts + resolution over RPC", () => {
 		await adapter.tick();
 
 		expect(spawnedModels).toEqual(["sit-openai/gpt-5.6-sol"]);
-		const node = findNodeV2(engine.get(), "r");
+		const node = findNode(engine.get(), "r");
 		expect(node?.resolutions).toHaveLength(1);
 		expect(node?.resolutions?.[0]).toMatchObject({
 			model: "sit-openai/gpt-5.6-sol",

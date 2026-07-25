@@ -1,21 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { Plan } from "../packages/modes/src/plan/schema.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import {
 	buildExecutionPreamble,
 	buildFormingPreamble,
 	buildPlanModePreamble,
 } from "../packages/modes/src/planning-preamble.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
-		save(plan: PlanV2) {
+		save(plan: Plan) {
 			saved = plan;
 		},
-		load(_slug: string): PlanV2 | null {
+		load(_slug: string): Plan | null {
 			return saved;
 		},
 		exists(_slug: string): boolean {
@@ -45,7 +45,7 @@ describe("buildPlanModePreamble", () => {
 	});
 
 	it("shows update message for an existing plan", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "my-plan",
 			title: "My Plan",
 			repoPath: "/tmp",
@@ -105,7 +105,7 @@ describe("buildFormingPreamble", () => {
 	});
 
 	it("names the plan slug for an existing plan", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "my-plan",
 			title: "My Plan",
 			repoPath: "/tmp",
@@ -116,7 +116,7 @@ describe("buildFormingPreamble", () => {
 
 describe("buildExecutionPreamble", () => {
 	it("shows node status overview", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "exec-plan",
 			title: "Exec",
 			repoPath: "/tmp",
@@ -132,7 +132,7 @@ describe("buildExecutionPreamble", () => {
 	});
 
 	it("shows all status categories", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "multi",
 			title: "Multi",
 			repoPath: "/tmp",

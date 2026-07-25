@@ -17,31 +17,31 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { UnsupportedMaestroStateError } from "../storage.js";
-import type { PlanV2 } from "./schema.js";
+import type { Plan } from "./schema.js";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 const LEGACY_DIR = "_legacy";
 
-export interface PlanSummaryV2 {
+export interface PlanSummary {
 	readonly slug: string;
 	readonly title: string;
 	readonly repoPath: string;
 	readonly updatedAt: string;
 }
 
-export interface PlanStoreV2 {
+export interface PlanStore {
 	root: string;
 	exists(slug: string): boolean;
 	/** Throws UnsupportedMaestroStateError for an existing non-v6 payload. */
-	load(slug: string): PlanV2 | null;
-	save(plan: PlanV2): void;
+	load(slug: string): Plan | null;
+	save(plan: Plan): void;
 	remove(slug: string): void;
-	list(): PlanSummaryV2[];
+	list(): PlanSummary[];
 }
 
-export function createPlanStoreV2(root: string): PlanStoreV2 {
+export function createPlanStore(root: string): PlanStore {
 	function assertValidSlug(slug: string): void {
 		if (!SLUG_RE.test(slug))
 			throw new Error(`invalid plan slug: ${JSON.stringify(slug)}`);
@@ -91,16 +91,16 @@ export function createPlanStoreV2(root: string): PlanStoreV2 {
 				typeof value !== "object" ||
 				value === null ||
 				(value as { schemaVersion?: unknown }).schemaVersion !==
-					PLAN_SCHEMA_VERSION_V2
+					PLAN_SCHEMA_VERSION
 			) {
 				throw new UnsupportedMaestroStateError(
 					"plan",
 					(value as { schemaVersion?: unknown } | null)?.schemaVersion ??
 						"missing",
-					PLAN_SCHEMA_VERSION_V2,
+					PLAN_SCHEMA_VERSION,
 				);
 			}
-			return value as PlanV2;
+			return value as Plan;
 		},
 
 		save(plan) {
@@ -118,13 +118,13 @@ export function createPlanStoreV2(root: string): PlanStoreV2 {
 
 		list() {
 			if (!existsSync(root)) return [];
-			const out: PlanSummaryV2[] = [];
+			const out: PlanSummary[] = [];
 			for (const entry of readdirSync(root, { withFileTypes: true })) {
 				if (!entry.isDirectory()) continue;
 				// `_`-prefixed dirs are harness-internal (`_legacy/`) — skipped,
 				// same convention as RunStore.
 				if (entry.name.startsWith("_")) continue;
-				let plan: PlanV2 | null = null;
+				let plan: Plan | null = null;
 				try {
 					plan = this.load(entry.name);
 				} catch {
@@ -146,7 +146,7 @@ export function createPlanStoreV2(root: string): PlanStoreV2 {
 /** Plan dirs whose plan.json parses but is NOT the given version. */
 export function legacyPlanSlugs(
 	root: string,
-	currentVersion: number = PLAN_SCHEMA_VERSION_V2,
+	currentVersion: number = PLAN_SCHEMA_VERSION,
 ): string[] {
 	if (!existsSync(root)) return [];
 	const out: string[] = [];
@@ -177,7 +177,7 @@ export interface ArchiveLegacyResult {
  */
 export function archiveLegacyPlans(
 	root: string,
-	currentVersion: number = PLAN_SCHEMA_VERSION_V2,
+	currentVersion: number = PLAN_SCHEMA_VERSION,
 ): ArchiveLegacyResult {
 	const slugs = legacyPlanSlugs(root, currentVersion);
 	if (slugs.length === 0) return { archived: [] };

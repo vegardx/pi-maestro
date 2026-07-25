@@ -10,10 +10,10 @@ import {
 } from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
 import {
-	findNodeV2,
+	findNode,
 	PARENT_AFTER_TOKEN,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
 	TERMINAL_STATUSES,
 } from "./plan/schema.js";
@@ -152,7 +152,7 @@ export function summaryHash(text: string): string {
 
 /** The sibling group `id` schedules within (its `after` scope). */
 function siblingGroup(
-	plan: Pick<PlanV2, "nodes">,
+	plan: Pick<Plan, "nodes">,
 	id: string,
 ): readonly PlanNode[] {
 	const parent = parentOfNode(plan, id);
@@ -165,7 +165,7 @@ function siblingGroup(
  * sibling group; the "parent" ordering token is not a dependency.
  */
 export function transitiveDependencies(
-	plan: Pick<PlanV2, "nodes">,
+	plan: Pick<Plan, "nodes">,
 	id: string,
 ): PlanNode[] {
 	const byId = new Map(siblingGroup(plan, id).map((d) => [d.id, d]));
@@ -191,7 +191,7 @@ export function transitiveDependencies(
  * These are the future readers the summary should retain detail for.
  */
 export function downstreamDependents(
-	plan: Pick<PlanV2, "nodes">,
+	plan: Pick<Plan, "nodes">,
 	id: string,
 ): PlanNode[] {
 	const all = siblingGroup(plan, id);
@@ -234,7 +234,7 @@ export type SummariseFn = (args: {
  * and the non-terminal dependents whose needs the limited output must serve.
  */
 export function buildSummariserPreamble(args: {
-	plan: PlanV2;
+	plan: Plan;
 	deliverable: PlanNode;
 	maxTokens: number;
 	partN: number;
@@ -356,7 +356,7 @@ export function countDeliverableSlicesOnBranch(
 
 export interface BuildDeliverableSliceOptions {
 	readonly entries: SessionEntry[];
-	readonly plan: PlanV2;
+	readonly plan: Plan;
 	/** The node whose session is compacting (v6 keeps the v1 field name). */
 	readonly deliverableId: string;
 	readonly summarise: SummariseFn;
@@ -393,7 +393,7 @@ export interface DeliverableSliceResult {
 export async function buildDeliverableSliceCompactionResult(
 	opts: BuildDeliverableSliceOptions,
 ): Promise<DeliverableSliceResult | null> {
-	const deliverable = findNodeV2(opts.plan, opts.deliverableId);
+	const deliverable = findNode(opts.plan, opts.deliverableId);
 	if (!deliverable) {
 		throw new Error(
 			`buildDeliverableSliceCompactionResult: node ${opts.deliverableId} not found in plan ${opts.plan.slug}`,
@@ -477,7 +477,7 @@ export interface DependencySummary {
  * are never included — only this deliverable's dependency closure.
  */
 export function collectDependencySummaries(
-	plan: Pick<PlanV2, "nodes">,
+	plan: Pick<Plan, "nodes">,
 	deliverableId: string,
 ): DependencySummary[] {
 	const out: DependencySummary[] = [];
@@ -494,7 +494,7 @@ export function collectDependencySummaries(
  * need but the plan does not make obvious — not a chronological work log.
  */
 export function buildEndSummaryPreamble(args: {
-	plan: PlanV2;
+	plan: Plan;
 	deliverable: PlanNode;
 	maxTokens: number;
 }): string {
@@ -551,7 +551,7 @@ export function buildEndSummaryPreamble(args: {
 }
 
 export interface BuildCarryForwardOptions {
-	readonly plan: PlanV2;
+	readonly plan: Plan;
 	readonly deliverable: PlanNode;
 	/** Latest rolling compaction summary in the deliverable's own session. */
 	readonly rollingSummary?: string;
@@ -607,7 +607,7 @@ export async function buildCarryForwardSummary(
 export interface CrashSnapshotInput {
 	readonly error: unknown;
 	readonly mode: ModeName;
-	readonly plan?: PlanV2;
+	readonly plan?: Plan;
 	readonly activeDeliverableId?: string;
 	readonly cwd?: string;
 }

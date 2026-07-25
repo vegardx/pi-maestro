@@ -1,5 +1,5 @@
 // Plan tools: deliverable, task, agent — flat-parameter tools for the deliverable-based
-// execution model, ported onto PlanEngineV2 (v1→v2 flip, S3). The tool names and
+// execution model, ported onto PlanEngine (v1→v2 flip, S3). The tool names and
 // external parameter names are UNCHANGED for wire compat: "deliverable" manages
 // ROOT NODES of the v2 tree, "task" manages a node's tasks, "agent" manages
 // CHILD NODES (v1 support agents became first-class nodes). The session/mode
@@ -22,27 +22,27 @@ import {
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
-import type { NodeInput, PlanEngineV2 } from "./plan/engine.js";
+import type { NodeInput, PlanEngine } from "./plan/engine.js";
 // slugify still lives in the v1 schema module; it moves to plan/schema.ts in S8.
 import {
 	defaultBranchForNode,
-	findNodeV2,
+	findNode,
 	isBranchOwner,
 	type NodeTask,
 	PARENT_AFTER_TOKEN,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	slugify,
 	walkNodes,
 } from "./plan/schema.js";
 
 export interface PlanToolDeps {
-	readonly engine: () => PlanEngineV2 | undefined;
+	readonly engine: () => PlanEngine | undefined;
 	/** Legacy workflow capability — unused since the workflow tool retired
 	 *  with v1's AgentWorkflow; kept so existing wiring keeps compiling until
 	 *  the runtime sweep drops it. */
 	readonly agents?: () => AgentsCapabilityV1 | undefined;
-	readonly onPlanChanged?: (plan: PlanV2) => void;
+	readonly onPlanChanged?: (plan: Plan) => void;
 	readonly mode?: () => string;
 	readonly steerAgent?: (deliverableId: string, guidance: string) => void;
 	readonly onTaskToggle?: (deliverableId: string, taskId: string) => void;
@@ -53,7 +53,7 @@ export interface PlanToolDeps {
 
 interface ToolDetails {
 	readonly error?: string;
-	readonly plan?: PlanV2;
+	readonly plan?: Plan;
 	readonly deliverable?: PlanNode;
 	readonly deliverables?: readonly PlanNode[];
 	readonly workItem?: NodeTask;
@@ -396,7 +396,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
  *  second patch — the branch name derives from the MINTED id. `after` is
  *  applied by the caller (batch resolves sibling handles in a second pass). */
 function addRootNode(
-	engine: PlanEngineV2,
+	engine: PlanEngine,
 	input: {
 		id?: string;
 		title: string;
@@ -423,14 +423,14 @@ function addRootNode(
 			...(input.stacked === false ? { base: "default-branch" } : {}),
 		});
 	}
-	return findNodeV2(engine.get(), node.id) ?? node;
+	return findNode(engine.get(), node.id) ?? node;
 }
 
 /** v1 addDeliverable slugified + de-duped a preferred id; v2 addNode takes
  *  ids verbatim. Slugify here, and fall back to engine minting (from the
  *  title) when the slug is empty or already taken. */
 function preferredNodeId(
-	plan: PlanV2,
+	plan: Plan,
 	raw: string | undefined,
 ): string | undefined {
 	const id = raw ? slugify(raw) : "";
@@ -497,7 +497,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							});
 							notify(deps, engine);
 							const fresh = created.map(
-								(d) => findNodeV2(engine.get(), d.id) ?? d,
+								(d) => findNode(engine.get(), d.id) ?? d,
 							);
 							// Nudge toward step 2 of structuring: a freshly-created worker
 							// deliverable has no tasks yet, and one with no tasks cannot
@@ -528,13 +528,13 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						notify(deps, engine);
 						return ok(`✓ ${node.id}`, {
-							deliverable: findNodeV2(engine.get(), node.id) ?? node,
+							deliverable: findNode(engine.get(), node.id) ?? node,
 							plan: engine.get(),
 						});
 					}
 					case "update": {
 						if (!params.id) return error("update requires id");
-						const current = findNodeV2(engine.get(), params.id);
+						const current = findNode(engine.get(), params.id);
 						if (!current) return error(`unknown deliverable: ${params.id}`);
 						if (params.workspace === "scratch" && isBranchOwner(current)) {
 							return error(
@@ -560,7 +560,7 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						notify(deps, engine);
 						return ok(`Updated deliverable ${params.id}.`, {
-							deliverable: findNodeV2(engine.get(), params.id) ?? undefined,
+							deliverable: findNode(engine.get(), params.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
@@ -732,7 +732,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						notify(deps, engine);
 						return ok(`Updated task ${params.taskId}.`, {
 							workItem:
-								findNodeV2(engine.get(), deliverableId)?.tasks.find(
+								findNode(engine.get(), deliverableId)?.tasks.find(
 									(t) => t.id === params.taskId,
 								) ?? undefined,
 							plan: engine.get(),
@@ -748,7 +748,7 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 						);
 						notify(deps, engine);
 						const done =
-							findNodeV2(engine.get(), deliverableId)?.tasks.find(
+							findNode(engine.get(), deliverableId)?.tasks.find(
 								(t) => t.id === params.taskId,
 							)?.done ?? false;
 						return ok(
@@ -818,7 +818,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 			return withEngine(deps, (engine) => {
 				const deliverableId = params.deliverableId;
 				if (!deliverableId) return error("deliverableId is required");
-				const parent = findNodeV2(engine.get(), deliverableId);
+				const parent = findNode(engine.get(), deliverableId);
 				if (!parent) return error(`unknown deliverable: ${deliverableId}`);
 
 				switch (params.action) {
@@ -869,7 +869,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						}
 						notify(deps, engine);
 						return ok(`Updated agent ${params.name}.`, {
-							agent: findNodeV2(engine.get(), child.id) ?? undefined,
+							agent: findNode(engine.get(), child.id) ?? undefined,
 							plan: engine.get(),
 						});
 					}
@@ -948,7 +948,7 @@ export function createRepoTool(deps: PlanToolDeps): ToolDefinition {
 						if (!params.key || !params.path) {
 							return error("add requires key and path");
 						}
-						// v2 PlanRepoV2 has no defaultBranch field — the default branch
+						// v2 PlanRepo has no defaultBranch field — the default branch
 						// is detected from the repo at derivation time. The param is
 						// accepted for wire compat and ignored.
 						engine.registerRepo({
@@ -1022,7 +1022,7 @@ export function createPlanTool(deps: PlanToolDeps): ToolDefinition {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Depth-indented tree listing; roots are v1's deliverables. */
-function renderNodeTree(plan: PlanV2): string {
+function renderNodeTree(plan: Plan): string {
 	const rows = [...walkNodes(plan)].map(
 		({ node, depth }) =>
 			`${"  ".repeat(depth - 1)}- ${node.id}: ${node.status} — ${node.title ?? node.persona}`,
@@ -1032,7 +1032,7 @@ function renderNodeTree(plan: PlanV2): string {
 
 function withEngine(
 	deps: PlanToolDeps,
-	fn: (engine: PlanEngineV2) => Result,
+	fn: (engine: PlanEngine) => Result,
 ): Result {
 	const engine = deps.engine();
 	if (!engine) return error("no plan active — run /plan first to start one");
@@ -1055,6 +1055,6 @@ function error(message: string): Result {
 	};
 }
 
-function notify(deps: PlanToolDeps, engine: PlanEngineV2): void {
+function notify(deps: PlanToolDeps, engine: PlanEngine): void {
 	deps.onPlanChanged?.(engine.get());
 }

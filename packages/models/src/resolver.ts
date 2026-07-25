@@ -29,7 +29,7 @@ import type {
 	TierId,
 	V2ModelsConfig,
 } from "@vegardx/pi-contracts";
-import { activeV2Binding, parseAliasRef, readV2Config } from "./catalog.js";
+import { activeBinding, parseAliasRef, readV2Config } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec } from "./model-spec.js";
 import { activeRegion, modelAllowedByRegion } from "./region.js";
@@ -40,7 +40,7 @@ export interface InheritedModel {
 	readonly effort?: ThinkingLevel;
 }
 
-export interface V2ResolutionRequest {
+export interface ModelResolutionRequest {
 	readonly agent: SpawnableAgentType;
 	/** Explicit tier reference (persona instruction or policy row). Absent = inherit. */
 	readonly tier?: TierId;
@@ -51,7 +51,7 @@ export interface V2ResolutionRequest {
 }
 
 /** Why each roster alias ref was or wasn't usable — the explain output's rows. */
-export interface V2CandidateFact {
+export interface ModelCandidateFact {
 	/** The `"Family/Alias"` roster ref. */
 	readonly ref: string;
 	readonly family: string;
@@ -66,15 +66,15 @@ export interface V2CandidateFact {
 	readonly reason?: string;
 }
 
-export type V2ResolutionSource = "inherit" | "tier" | "fallback";
+export type ModelResolutionSource = "inherit" | "tier" | "fallback";
 
 /**
  * Serializable resolution record — the shape the plan ledger persists per node
  * (NodeResolution) and what explain output renders. Never re-rolled silently:
  * persisted records are revalidated, and a vanished model fails visibly.
  */
-export interface V2Resolution {
-	readonly source: V2ResolutionSource;
+export interface ModelResolution {
+	readonly source: ModelResolutionSource;
 	readonly modelId: string;
 	readonly effort?: ThinkingLevel;
 	/** Resolved family (the diversity axis; checks compare these). */
@@ -87,15 +87,15 @@ export interface V2Resolution {
 	readonly bindingId?: string;
 	readonly rosterId?: string;
 	/** Per-ref facts when a tier was walked (explain output). */
-	readonly candidates?: readonly V2CandidateFact[];
+	readonly candidates?: readonly ModelCandidateFact[];
 	/** Present iff source === "fallback": why the tier produced nothing. */
 	readonly fallbackReason?: string;
 }
 
-export class V2ResolutionError extends Error {
+export class ModelResolutionError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "V2ResolutionError";
+		this.name = "ModelResolutionError";
 	}
 }
 
@@ -136,7 +136,7 @@ async function checkAttachment(
 }
 
 interface ResolvedAlias {
-	readonly fact: V2CandidateFact;
+	readonly fact: ModelCandidateFact;
 	readonly config: AliasConfig;
 	/** The chosen registry model when the alias resolved. */
 	readonly model?: Model<Api>;
@@ -210,7 +210,7 @@ export async function explainAttachment(
 	ctx: ExtensionContext,
 	spec: string,
 ): Promise<{ available: boolean; reason?: string }> {
-	const region = readV2ConfigSafe(ctx)?.region;
+	const region = readConfigSafe(ctx)?.region;
 	const check = await checkAttachment(ctx, spec, region, false);
 	return {
 		available: check.available,
@@ -266,14 +266,14 @@ export function clampEffort(
 /**
  * Resolve a spawn's model. Fail-visible, never fail-open: an unknown roster,
  * an out-of-allowance tier, or a missing session model at the fallback throw
- * {@link V2ResolutionError}; an empty/struck tier degrades to the session
+ * {@link ModelResolutionError}; an empty/struck tier degrades to the session
  * model with `fallbackReason` set (the caller surfaces the notice, deduped per
  * agent — see {@link fallbackNotice}).
  */
-export async function resolveV2Model(
+export async function resolveModel(
 	ctx: ExtensionContext,
-	request: V2ResolutionRequest,
-): Promise<V2Resolution> {
+	request: ModelResolutionRequest,
+): Promise<ModelResolution> {
 	// 1. Inheritance is the rule: nothing asked for → the caller's model.
 	if (!request.tier) {
 		const inherited = request.inherit ?? {
@@ -283,7 +283,7 @@ export async function resolveV2Model(
 			).getThinkingLevel?.(),
 		};
 		if (!inherited.modelId)
-			throw new V2ResolutionError(
+			throw new ModelResolutionError(
 				"nothing to inherit: no caller model and no live session model",
 			);
 		return {
@@ -293,25 +293,25 @@ export async function resolveV2Model(
 		};
 	}
 
-	const config = readV2ConfigSafe(ctx);
+	const config = readConfigSafe(ctx);
 	if (!config)
-		throw new V2ResolutionError(
+		throw new ModelResolutionError(
 			`tier ${request.tier} requested but no v2 roster is configured`,
 		);
 	// Deliberate tier references are bounded by the agent's allowance.
 	const allowed = config.allowances[request.agent]?.tiers ?? [];
 	if (!allowed.includes(request.tier))
-		throw new V2ResolutionError(
+		throw new ModelResolutionError(
 			`tier ${request.tier} is outside agent ${request.agent}'s allowance (${allowed.join(", ")})`,
 		);
-	const active = activeV2Binding(config, sessionModelId(ctx));
+	const active = activeBinding(config, sessionModelId(ctx));
 	if (!active)
-		throw new V2ResolutionError(
+		throw new ModelResolutionError(
 			`tier ${request.tier} requested but no binding is active (no target match, no default binding)`,
 		);
 	const roster = config.rosters[active.binding.roster];
 	if (!roster)
-		throw new V2ResolutionError(
+		throw new ModelResolutionError(
 			`binding ${active.id} references unknown roster ${active.binding.roster}`,
 		);
 
@@ -326,7 +326,7 @@ export async function resolveV2Model(
 	const resolved = await Promise.all(
 		refs.map((ref) => {
 			const parsed = parseAliasRef(ref);
-			// validateV2Config guarantees the ref resolves; guard defensively.
+			// validateModelsConfig guarantees the ref resolves; guard defensively.
 			const aliasConfig = parsed
 				? config.families[parsed.family]?.aliases[parsed.alias]
 				: undefined;
@@ -381,7 +381,7 @@ export async function resolveV2Model(
 	// 3. Session-model fallback: every alias was unavailable (or the tier is
 	//    empty), so the judgment still happens — on the seat — visibly.
 	if (!seat)
-		throw new V2ResolutionError(
+		throw new ModelResolutionError(
 			`tier ${request.tier} has no available model and there is no session model to fall back to`,
 		);
 	const struck = candidates.filter((fact) => !fact.available).length;
@@ -410,12 +410,12 @@ export function defaultTierForAgent(
 	ctx: ExtensionContext,
 	agent: SpawnableAgentType,
 ): TierId | undefined {
-	return readV2ConfigSafe(ctx)?.allowances[agent]?.tiers[0];
+	return readConfigSafe(ctx)?.allowances[agent]?.tiers[0];
 }
 
-function readV2ConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
+function readConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
 	// Config errors are fail-visible at read time elsewhere; here they mean
-	// "no usable v2 config", which the caller surfaces via V2ResolutionError.
+	// "no usable v2 config", which the caller surfaces via ModelResolutionError.
 	try {
 		return readV2Config(ctx.cwd);
 	} catch {
@@ -428,7 +428,7 @@ function readV2ConfigSafe(ctx: ExtensionContext): V2ModelsConfig | undefined {
  * set (keyed however their agent identity works) and notify only when add()
  * returns true.
  */
-export function fallbackNotice(resolution: V2Resolution): string {
+export function fallbackNotice(resolution: ModelResolution): string {
 	return (
 		`configured tier ${resolution.tier} unavailable — running on the session ` +
 		`model (${resolution.modelId}). ${resolution.fallbackReason ?? ""}`.trim()
@@ -444,11 +444,11 @@ export async function explainTier(
 	bindingId?: string;
 	rosterId?: string;
 	allowed: boolean;
-	candidates: readonly V2CandidateFact[];
+	candidates: readonly ModelCandidateFact[];
 }> {
-	const config = readV2ConfigSafe(ctx);
+	const config = readConfigSafe(ctx);
 	if (!config) return { allowed: false, candidates: [] };
-	const active = activeV2Binding(config, sessionModelId(ctx));
+	const active = activeBinding(config, sessionModelId(ctx));
 	const roster = active ? config.rosters[active.binding.roster] : undefined;
 	const seat = sessionModelId(ctx);
 	const agentProvider = parseModelSpec(seat ?? "")?.provider;

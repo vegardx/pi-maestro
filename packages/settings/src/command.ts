@@ -11,7 +11,7 @@ import {
 import {
 	type DomainRegistryInput,
 	domainImpact,
-	explainModelSelectionV2,
+	explainModelSelection,
 	readDomainSnapshot,
 	validateDomainEdit,
 	writeDomainValue,
@@ -200,7 +200,7 @@ export function handleSettingsCommand(
 				`Unknown target: ${tail}. Use an agent type (${SPAWNABLE_AGENT_TYPES.join(", ")}).`,
 				true,
 			);
-		void explainModelSelectionV2(ctx, agent ?? "worker").then((text) =>
+		void explainModelSelection(ctx, agent ?? "worker").then((text) =>
 			notify(ctx, text),
 		);
 		return;

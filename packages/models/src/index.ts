@@ -1,12 +1,12 @@
 // @vegardx/pi-models — authenticated exact model selection.
 
 export {
-	activeV2Binding,
+	activeBinding,
 	familyOfModel,
 	parseAliasRef,
-	parseV2Settings,
+	parseModelsSettings,
 	readV2Config,
-	validateV2Config,
+	validateModelsConfig,
 } from "./catalog.js";
 export { supportedEfforts } from "./efforts.js";
 export {
@@ -43,10 +43,10 @@ export {
 	explainTier,
 	fallbackNotice,
 	type InheritedModel,
-	resolveV2Model,
-	type V2CandidateFact,
-	type V2Resolution,
-	V2ResolutionError,
-	type V2ResolutionRequest,
-	type V2ResolutionSource,
-} from "./v2-resolver.js";
+	type ModelCandidateFact,
+	type ModelResolution,
+	ModelResolutionError,
+	type ModelResolutionRequest,
+	type ModelResolutionSource,
+	resolveModel,
+} from "./resolver.js";

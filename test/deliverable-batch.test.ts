@@ -3,16 +3,16 @@
 // refs resolved to the minted ids (two-pass, order-independent).
 
 import { describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { Plan } from "../packages/modes/src/plan/schema.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import { createDeliverableTool } from "../packages/modes/src/tools.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
-		save: (p: PlanV2) => {
+		save: (p: Plan) => {
 			saved = p;
 		},
 		load: () => saved,
@@ -24,8 +24,8 @@ function memStore(): PlanStoreV2 {
 	};
 }
 
-function makeEngine(): PlanEngineV2 {
-	return PlanEngineV2.create(memStore(), {
+function makeEngine(): PlanEngine {
+	return PlanEngine.create(memStore(), {
 		slug: "batch-test",
 		title: "Batch Test",
 		repoPath: "/tmp/repo",
@@ -39,7 +39,7 @@ type Res = {
 	};
 };
 
-function run(engine: PlanEngineV2, params: unknown): Promise<Res> {
+function run(engine: PlanEngine, params: unknown): Promise<Res> {
 	const tool = createDeliverableTool({ engine: () => engine });
 	return tool.execute(
 		"t",

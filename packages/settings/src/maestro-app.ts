@@ -31,13 +31,13 @@ import {
 	type V2ModelsConfig,
 } from "@vegardx/pi-contracts";
 import {
+	activeBinding,
 	activeRegion,
-	activeV2Binding,
 	isRegionOff,
 	modelAllowedByRegion,
 	parseAliasRef,
 	parseModelSpec,
-	parseV2Settings,
+	parseModelsSettings,
 	REGION_OFF,
 	readV2Config,
 	regionNames,
@@ -454,7 +454,7 @@ class ModelPickScreen extends ListScreen {
 class HomeScreen extends ListScreen {
 	title(): string {
 		const config = this.app.config;
-		const active = activeV2Binding(config, this.app.seat);
+		const active = activeBinding(config, this.app.seat);
 		return `Maestro model configuration — binding: ${active?.id ?? "none (inherit the seat)"}`;
 	}
 	hint(): string {
@@ -1614,7 +1614,7 @@ class SummaryScreen implements Screen {
 	constructor(private readonly app: MaestroApp) {}
 	render(width: number, p: Palette): string[] {
 		const c = this.app.config;
-		const active = activeV2Binding(c, this.app.seat);
+		const active = activeBinding(c, this.app.seat);
 		const table = readSettingsPolicyTable(this.app.cwd);
 		return [
 			p.bold("Summary"),
@@ -1732,7 +1732,7 @@ class MaestroApp implements Component, Focusable {
 	// collection) also lets a single change span collections atomically — a rename
 	// updates families AND the roster refs that point at the old name in one write,
 	// so readV2Config never transiently sees a dangling ref. The candidate is
-	// validated with parseV2Settings (the same check boot uses) before it lands.
+	// validated with parseModelsSettings (the same check boot uses) before it lands.
 	writeModels(apply: (models: Record<string, unknown>) => void): boolean {
 		const manager = SettingsManager.create(this.ctx.cwd, undefined);
 		const globalRaw = manager.getGlobalSettings() as Record<string, unknown>;
@@ -1745,7 +1745,7 @@ class MaestroApp implements Component, Focusable {
 			: {};
 		try {
 			apply(candidate);
-			parseV2Settings({ ...globalRaw, models: candidate }, projectRaw);
+			parseModelsSettings({ ...globalRaw, models: candidate }, projectRaw);
 		} catch (cause) {
 			this.notify(
 				`Cannot apply the change:\n${cause instanceof Error ? cause.message : String(cause)}`,

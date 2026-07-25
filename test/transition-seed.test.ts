@@ -6,9 +6,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanV2 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { Plan } from "../packages/modes/src/plan/schema.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import {
 	backToPlanNote,
 	formatTransitionSeedDoc,
@@ -16,8 +16,8 @@ import {
 	writeTransitionSeed,
 } from "../packages/modes/src/runtime/transition-seed.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
 		save(plan) {
@@ -38,8 +38,8 @@ function memStore(): PlanStoreV2 {
 	};
 }
 
-function planWith(nodes: Array<{ id: string; status: string }>): PlanV2 {
-	const engine = PlanEngineV2.create(memStore(), {
+function planWith(nodes: Array<{ id: string; status: string }>): Plan {
+	const engine = PlanEngine.create(memStore(), {
 		slug: "auth-revamp",
 		title: "Auth revamp",
 		repoPath: "/tmp",
@@ -53,7 +53,7 @@ function planWith(nodes: Array<{ id: string; status: string }>): PlanV2 {
 		...plan,
 		nodes: plan.nodes.map((node, i) => ({
 			...node,
-			status: nodes[i]!.status as PlanV2["nodes"][number]["status"],
+			status: nodes[i]!.status as Plan["nodes"][number]["status"],
 		})),
 	};
 }

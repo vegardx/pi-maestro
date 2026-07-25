@@ -8,11 +8,11 @@ import {
 	validateTransitionGate,
 } from "../packages/contracts/src/plan.js";
 import {
+	type Plan,
 	type PlanNode,
-	type PlanV2,
-	validatePlanShapeV2,
+	validatePlanShape,
 } from "../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 
@@ -33,7 +33,7 @@ function node(overrides: Partial<PlanNode> = {}): PlanNode {
 	};
 }
 
-function plan(nodes: PlanNode[]): PlanV2 {
+function plan(nodes: PlanNode[]): Plan {
 	return {
 		schemaVersion: 6,
 		slug: "plan",
@@ -106,11 +106,11 @@ describe("full-cutover contract validation", () => {
 
 	// v1's validatePlanShape also cross-checked per-deliverable gate rulings
 	// against finding ids ("unknown finding `missing`"). That referential check
-	// died with v1: validatePlanShapeV2 validates the node TREE (ids, agents,
+	// died with v1: validatePlanShape validates the node TREE (ids, agents,
 	// personas, depth, after-scoping, branch ownership, cycles); gate payloads
 	// are validated at the contract layer (validateTransitionGate above).
 	it("fails unsupported node statuses", () => {
-		const problems = validatePlanShapeV2(
+		const problems = validatePlanShape(
 			plan([
 				node({
 					status: "unknown" as PlanNode["status"],
@@ -144,7 +144,7 @@ describe("plan store schema cutover", () => {
 			// schemaVersion 5 was the last v1 plan schema; the v2 store speaks 6.
 			JSON.stringify({ slug: "legacy", schemaVersion: 5 }),
 		);
-		expect(() => createPlanStoreV2(root).load("legacy")).toThrow(
+		expect(() => createPlanStore(root).load("legacy")).toThrow(
 			/archive or reset the old Maestro state/,
 		);
 	});

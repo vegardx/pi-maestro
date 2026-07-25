@@ -8,14 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	type ExecutionEvent,
 	type LauncherApi,
 	NodeExecutionAdapter,
 } from "../packages/modes/src/plan/node-adapter.js";
-import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import { findNode } from "../packages/modes/src/plan/schema.js";
+import { createPlanStore } from "../packages/modes/src/plan/storage.js";
 
 const TOKEN = "agent-events-token";
 
@@ -51,7 +51,7 @@ function until(pred: () => boolean, timeoutMs = 8000): Promise<void> {
 
 describe("node execution adapter — onEvent emission", () => {
 	let tmpDir: string;
-	let engine: PlanEngineV2;
+	let engine: PlanEngine;
 	let tmux: ReturnType<typeof stubTmux>;
 	let adapter: NodeExecutionAdapter | undefined;
 	let events: ExecutionEvent[];
@@ -60,7 +60,7 @@ describe("node execution adapter — onEvent emission", () => {
 
 	beforeEach(() => {
 		tmpDir = mkdtempSync(join(tmpdir(), "agent-events-"));
-		engine = PlanEngineV2.create(createPlanStoreV2(join(tmpDir, "plans")), {
+		engine = PlanEngine.create(createPlanStore(join(tmpDir, "plans")), {
 			slug: "events",
 			title: "Events Plan",
 			repoPath: tmpDir,
@@ -228,7 +228,7 @@ describe("node execution adapter — onEvent emission", () => {
 			deliverableTitle: "Work",
 			prUrl: "https://example/pr/1",
 		});
-		expect(findNodeV2(engine.get(), "work")?.status).toBe("shipped");
+		expect(findNode(engine.get(), "work")?.status).toBe("shipped");
 	});
 
 	it("emits settled exactly once, then re-arms when new runnable work appears", async () => {

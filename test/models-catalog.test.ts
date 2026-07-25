@@ -11,11 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	activeV2Binding,
-	familyOfModel,
-	readV2Config,
-} from "@vegardx/pi-models";
+import { activeBinding, familyOfModel, readV2Config } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeDomainValue } from "../packages/settings/src/domain.js";
 
@@ -182,9 +178,9 @@ describe("v2 model config", () => {
 			},
 		});
 		const config = readV2Config(cwd);
-		expect(activeV2Binding(config, "prov/fable")?.id).toBe("pinned");
-		expect(activeV2Binding(config, "prov/other")?.id).toBe("fallback");
-		expect(activeV2Binding(config, undefined)?.id).toBe("fallback");
+		expect(activeBinding(config, "prov/fable")?.id).toBe("pinned");
+		expect(activeBinding(config, "prov/other")?.id).toBe("fallback");
+		expect(activeBinding(config, undefined)?.id).toBe("fallback");
 	});
 
 	it("looks a model up to its family/alias (author-family, footer identity)", () => {

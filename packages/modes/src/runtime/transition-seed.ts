@@ -23,7 +23,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { runAgentTurn } from "@vegardx/pi-core";
-import { type PlanV2, walkNodes } from "../plan/schema.js";
+import { type Plan, walkNodes } from "../plan/schema.js";
 import type { RuntimeContext } from "./context.js";
 
 /**
@@ -50,7 +50,7 @@ const SEED_PROMPT =
  * out, or returns nothing. It cannot recover the conversational rationale, so
  * it points at what IS durable: the plan and its understanding.
  */
-export function mechanicalTransitionSeed(plan: PlanV2): string {
+export function mechanicalTransitionSeed(plan: Plan): string {
 	const lines = [`We are executing plan \`${plan.slug}\` — ${plan.title}.`];
 	if (plan.understanding) lines.push("", plan.understanding);
 	lines.push(
@@ -63,7 +63,7 @@ export function mechanicalTransitionSeed(plan: PlanV2): string {
 }
 
 /** Wrap the seed body as the execution-seed document. */
-export function formatTransitionSeedDoc(plan: PlanV2, body: string): string {
+export function formatTransitionSeedDoc(plan: Plan, body: string): string {
 	return (
 		`# Execution seed — plan \`${plan.slug}\`\n\n` +
 		"Forked into a fresh execution session from the planning conversation. " +
@@ -81,7 +81,7 @@ export function formatTransitionSeedDoc(plan: PlanV2, body: string): string {
 export async function buildTransitionSeed(
 	pi: ExtensionAPI,
 	ctx: ExtensionContext,
-	plan: PlanV2,
+	plan: Plan,
 ): Promise<string> {
 	try {
 		const reply = await runAgentTurn(pi, ctx, SEED_PROMPT, {
@@ -116,7 +116,7 @@ export function writeTransitionSeed(planDir: string, content: string): string {
  * auto/hack→plan return: what executed while the user was in execution, so the
  * planning context reorients rather than resuming cold. Pure/testable.
  */
-export function backToPlanNote(plan: PlanV2 | undefined): string {
+export function backToPlanNote(plan: Plan | undefined): string {
 	if (!plan) {
 		return "[Returned to plan mode. Continue planning, or /handoff to close the arc.]";
 	}

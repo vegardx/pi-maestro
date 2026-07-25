@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLAN_SCHEMA_VERSION_V2 } from "@vegardx/pi-contracts";
+import { PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import type { PrMetadata } from "@vegardx/pi-github";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,7 +22,7 @@ import {
 	shipBaseBranch,
 	shipNode,
 } from "../packages/modes/src/exec/shipper.js";
-import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
+import type { Plan, PlanNode } from "../packages/modes/src/plan/schema.js";
 
 // ─── Builders ────────────────────────────────────────────────────────────────
 
@@ -56,9 +56,9 @@ function makeNode(
 	};
 }
 
-function makePlan(nodes: PlanNode[], overrides: Partial<PlanV2> = {}): PlanV2 {
+function makePlan(nodes: PlanNode[], overrides: Partial<Plan> = {}): Plan {
 	return {
-		schemaVersion: PLAN_SCHEMA_VERSION_V2,
+		schemaVersion: PLAN_SCHEMA_VERSION,
 		slug: "test-plan",
 		title: "Test Plan",
 		repoPath: "/repos/app",
@@ -492,7 +492,7 @@ describe("stacked bases", () => {
 			repos: [{ key: "lib", path: "/repos/lib" }],
 		});
 		const { client, calls } = recordingPrClient();
-		// PlanRepoV2 carries no defaultBranch — the shipper must ask git for the
+		// PlanRepo carries no defaultBranch — the shipper must ask git for the
 		// TARGET repo's default branch (detectDefaultBranch(repo.path)).
 		const { git } = fakeGit({
 			detectDefaultBranch: (cwd) => (cwd === "/repos/lib" ? "trunk" : "main"),
@@ -562,7 +562,7 @@ describe("repo resolution", () => {
 // ─── Retarget / reconcile ────────────────────────────────────────────────────
 
 describe("reconcileShippedDeliverables", () => {
-	function stackedPlan(): { a: PlanNode; b: PlanNode; plan: PlanV2 } {
+	function stackedPlan(): { a: PlanNode; b: PlanNode; plan: Plan } {
 		const a = makeNode({ id: "a", status: "shipped", prNumber: 1 });
 		const b = makeNode({
 			id: "b",

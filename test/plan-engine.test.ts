@@ -1,4 +1,4 @@
-// PlanEngineV2 + v2 storage (cutover PR-4): the append-only discipline,
+// PlanEngine + v2 storage (cutover PR-4): the append-only discipline,
 // write-ahead child appends, generalized lifecycle injection, the unchanged
 // transition table, record operations, and the legacy-archive machinery.
 
@@ -12,21 +12,21 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import { findNodeV2 } from "../packages/modes/src/plan/schema.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import { findNode } from "../packages/modes/src/plan/schema.js";
 import {
 	archiveLegacyPlans,
-	createPlanStoreV2,
+	createPlanStore,
 	legacyPlanSlugs,
-	type PlanStoreV2,
+	type PlanStore,
 } from "../packages/modes/src/plan/storage.js";
 
 let root: string;
-let store: PlanStoreV2;
+let store: PlanStore;
 let saves: number;
 
-function engine(): PlanEngineV2 {
-	const inner = createPlanStoreV2(root);
+function engine(): PlanEngine {
+	const inner = createPlanStore(root);
 	saves = 0;
 	store = {
 		...inner,
@@ -35,7 +35,7 @@ function engine(): PlanEngineV2 {
 			inner.save(plan);
 		},
 	};
-	return PlanEngineV2.create(store, {
+	return PlanEngine.create(store, {
 		slug: "p",
 		title: "P",
 		repoPath: "/repo",
@@ -197,13 +197,13 @@ describe("lifecycle injection (generalized)", () => {
 			branch: "feat/b",
 		});
 		eng.setNodeStatus("a", "active");
-		const a = findNodeV2(eng.get(), "a");
+		const a = findNode(eng.get(), "a");
 		// No sibling deps → no preflight; branch owner → postflight.
 		expect(a?.tasks.map((t) => t.kind)).toEqual(["postflight"]);
 
 		eng.setNodeStatus("a", "complete");
 		eng.setNodeStatus("b", "active");
-		const b = findNodeV2(eng.get(), "b");
+		const b = findNode(eng.get(), "b");
 		expect(b?.tasks.map((t) => t.kind)).toEqual(["preflight", "postflight"]);
 	});
 
@@ -227,7 +227,7 @@ describe("lifecycle injection (generalized)", () => {
 			"p",
 		);
 		eng.setNodeStatus("rev", "active");
-		expect(findNodeV2(eng.get(), "rev")?.tasks).toEqual([]);
+		expect(findNode(eng.get(), "rev")?.tasks).toEqual([]);
 	});
 
 	it("the postflight toggle persists the handoff (v1 behavior)", () => {
@@ -240,7 +240,7 @@ describe("lifecycle injection (generalized)", () => {
 		});
 		eng.setNodeStatus("a", "active");
 		eng.toggleTask("a", "lifecycle-postflight", "## Handoff\nBuilt the thing.");
-		expect(findNodeV2(eng.get(), "a")?.handoff).toContain("Built the thing");
+		expect(findNode(eng.get(), "a")?.handoff).toContain("Built the thing");
 	});
 });
 
@@ -277,7 +277,7 @@ describe("status + records", () => {
 			resolvedAt: "t2",
 			generation: 1,
 		});
-		const node = findNodeV2(eng.get(), "a");
+		const node = findNode(eng.get(), "a");
 		expect(node?.resolutions?.map((r) => r.source)).toEqual([
 			"persona-tier",
 			"session-fallback",
@@ -286,14 +286,14 @@ describe("status + records", () => {
 			sessionPath: "/tmp/s.jsonl",
 			previousSessionPaths: ["1", "2", "3", "4", "5", "6", "7"],
 		});
-		expect(findNodeV2(eng.get(), "a")?.previousSessionPaths?.length).toBe(5);
+		expect(findNode(eng.get(), "a")?.previousSessionPaths?.length).toBe(5);
 	});
 });
 
 describe("v2 storage + legacy archive", () => {
 	it("gates on schemaVersion 6 and skips _legacy in list()", () => {
 		engine(); // writes p/plan.json at v6
-		const s = createPlanStoreV2(root);
+		const s = createPlanStore(root);
 		expect(s.list().map((p) => p.slug)).toEqual(["p"]);
 
 		mkdirSync(join(root, "old-plan"), { recursive: true });
@@ -331,7 +331,7 @@ describe("v2 storage + legacy archive", () => {
 		).toBe("{}\n");
 		expect(legacyPlanSlugs(root)).toEqual([]);
 		expect(
-			createPlanStoreV2(root)
+			createPlanStore(root)
 				.list()
 				.map((p) => p.slug),
 		).toEqual(["p"]);

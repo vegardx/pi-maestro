@@ -5,7 +5,7 @@
 // window has its own preamble (buildFormingPreamble). Plus the execution
 // preamble. See docs/design/mode-sessions.md § form-at-transition.
 
-import type { PlanEngineV2 } from "./plan/engine.js";
+import type { PlanEngine } from "./plan/engine.js";
 import { walkNodes } from "./plan/schema.js";
 
 /**
@@ -14,9 +14,7 @@ import { walkNodes } from "./plan/schema.js";
  * is authored at the transition into execution, not here (that turn swaps in
  * buildFormingPreamble). No structure tools are available in this window.
  */
-export function buildPlanModePreamble(
-	engine: PlanEngineV2 | undefined,
-): string {
+export function buildPlanModePreamble(engine: PlanEngine | undefined): string {
 	const isNew = !engine || engine.isDraft();
 	const header = isNew
 		? "You are in PLAN MODE."
@@ -90,7 +88,7 @@ checks it, and the user gives one final ruling before any worker runs. So:
  * user can settle still blocks the structure, surfaces it via \`ask\` and stops
  * (the transition bounces back to plan; the user answers, then re-gestures).
  */
-export function buildFormingPreamble(engine: PlanEngineV2 | undefined): string {
+export function buildFormingPreamble(engine: PlanEngine | undefined): string {
 	const slug =
 		engine && !engine.isDraft() ? ` for plan \`${engine.get().slug}\`` : "";
 	return `You are FORMING THE PLAN${slug} — the user has gestured into execution.
@@ -198,7 +196,7 @@ You have enough information when you can write tasks that specify:
 
 If you can't write that level of detail → you need more research.`;
 
-export function buildExecutionPreamble(engine: PlanEngineV2): string {
+export function buildExecutionPreamble(engine: PlanEngine): string {
 	const plan = engine.get();
 	const byStatus = (status: string) =>
 		[...walkNodes(plan)]

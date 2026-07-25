@@ -23,7 +23,7 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
-import { defaultTierForAgent, resolveV2Model } from "@vegardx/pi-models";
+import { defaultTierForAgent, resolveModel } from "@vegardx/pi-models";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
@@ -39,15 +39,15 @@ import {
 	RetiredLightweightIsolationBackend,
 } from "../isolation/backend.js";
 import { OverlayManager } from "../overlay-manager.js";
-import { PlanEngineV2 } from "../plan/engine.js";
+import { PlanEngine } from "../plan/engine.js";
 import { resolveNodeModel } from "../plan/node-periphery.js";
 import {
 	derivePlanName,
-	findNodeV2,
+	findNode,
 	isBranchOwner,
 	nodeBlockedReason,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	parentOfNode,
 	planRepoMismatch,
 	readyChildren,
@@ -55,7 +55,7 @@ import {
 	slugify,
 	walkNodes,
 } from "../plan/schema.js";
-import { createPlanStoreV2, type PlanStoreV2 } from "../plan/storage.js";
+import { createPlanStore, type PlanStore } from "../plan/storage.js";
 import { computeActiveTools, orchestrationActive } from "../policy.js";
 import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import type { ResearchRunView } from "../research.js";
@@ -121,7 +121,7 @@ const FORMING_TRIGGER =
 	"complete deliverable/task tree now from everything we converged on.]";
 
 export interface ModesRuntimeOptions {
-	readonly store?: PlanStoreV2;
+	readonly store?: PlanStore;
 	readonly now?: () => string;
 	/** Injectable execution providers; missing isolation tiers fail closed. */
 	readonly bashBackends?: {
@@ -144,7 +144,7 @@ export interface ModesRuntimeOptions {
 export interface RuntimeContext {
 	readonly pi: ExtensionAPI;
 	readonly maestro: MaestroContext;
-	readonly store: PlanStoreV2;
+	readonly store: PlanStore;
 	readonly now: () => string;
 	readonly askQueue: ModesAskQueue;
 	readonly overlayManager: OverlayManager;
@@ -160,7 +160,7 @@ export interface RuntimeContext {
 	readonly listeners: Set<(mode: ModeName, previous: ModeName) => void>;
 
 	state: ModesState;
-	engine: PlanEngineV2 | undefined;
+	engine: PlanEngine | undefined;
 	agentBridge: AgentBridge | undefined;
 	execution: ExecutionHandle | undefined;
 	/** Active, persisted diagnosis/recovery episode. */
@@ -200,7 +200,7 @@ export interface RuntimeContext {
 	forming: boolean;
 
 	currentMode(): ModeName;
-	currentEngine(): PlanEngineV2 | undefined;
+	currentEngine(): PlanEngine | undefined;
 	persist(): void;
 	notifyMode(ctx: ExtensionContext): void;
 	applyTools(): void;
@@ -210,11 +210,8 @@ export interface RuntimeContext {
 	/** `/recon`: enter the read-only research posture in its own isolated session. */
 	enterRecon(ctx: ExtensionContext): Promise<void>;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
-	loadEngine(slug: string): PlanEngineV2 | undefined;
-	openPlan(
-		titleOrSlug: string | undefined,
-		ctx: ExtensionContext,
-	): PlanEngineV2;
+	loadEngine(slug: string): PlanEngine | undefined;
+	openPlan(titleOrSlug: string | undefined, ctx: ExtensionContext): PlanEngine;
 	finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void;
 	/** Name the draft from its deliverables, before it materializes. */
 	nameDraftFromModel(ctx: ExtensionContext): Promise<void>;
@@ -248,7 +245,7 @@ export function createRuntimeContext(
 	maestro: MaestroContext,
 	opts: ModesRuntimeOptions = {},
 ): RuntimeContext {
-	const store = opts.store ?? createPlanStoreV2(plansRoot());
+	const store = opts.store ?? createPlanStore(plansRoot());
 	const now = opts.now ?? (() => new Date().toISOString());
 	const askQueue = new ModesAskQueue();
 	const _branchDeps = {
@@ -393,7 +390,7 @@ export function createRuntimeContext(
 			},
 			resolveTierModel: async (tier, ctx) => {
 				try {
-					const resolved = await resolveV2Model(ctx, {
+					const resolved = await resolveModel(ctx, {
 						agent: "reviewer",
 						tier,
 					});
@@ -740,7 +737,7 @@ export function createRuntimeContext(
 			return rt.state.mode;
 		},
 
-		currentEngine(): PlanEngineV2 | undefined {
+		currentEngine(): PlanEngine | undefined {
 			return rt.engine;
 		},
 
@@ -798,7 +795,7 @@ export function createRuntimeContext(
 			if (ctx) rt.notifyMode(ctx);
 		},
 
-		loadEngine(slug: string): PlanEngineV2 | undefined {
+		loadEngine(slug: string): PlanEngine | undefined {
 			const plan = store.load(slug);
 			if (!plan) return undefined;
 			usageStore = new UsageCheckpointStore(
@@ -807,13 +804,13 @@ export function createRuntimeContext(
 			const existing = usageLedger.checkpoints();
 			usageLedger.restore(usageStore.load());
 			for (const checkpoint of existing) usageStore.accept(checkpoint);
-			return new PlanEngineV2(plan, store, now);
+			return new PlanEngine(plan, store, now);
 		},
 
 		openPlan(
 			titleOrSlug: string | undefined,
 			ctx: ExtensionContext,
-		): PlanEngineV2 {
+		): PlanEngine {
 			const explicit = titleOrSlug?.trim() || undefined;
 			const slug = explicit ? slugify(explicit) || "plan" : undefined;
 			// No explicit name and there's already an active plan -> keep it.
@@ -830,7 +827,7 @@ export function createRuntimeContext(
 			// A new plan starts as an in-memory draft. It's named and persisted
 			// lazily on the first turn that adds content (see finalizeDraftPlan),
 			// so an exploratory /plan that adds nothing never hits disk.
-			rt.engine = PlanEngineV2.createDraft(
+			rt.engine = PlanEngine.createDraft(
 				store,
 				{
 					slug: "draft",
@@ -992,7 +989,7 @@ export function createRuntimeContext(
 			const activeEngine = rt.engine;
 			const plan = activeEngine.get();
 			const targetId = deliverableId?.trim() || undefined;
-			const target = targetId ? findNodeV2(plan, targetId) : undefined;
+			const target = targetId ? findNode(plan, targetId) : undefined;
 			if (targetId && !target) {
 				ctx.ui.notify(`Unknown deliverable: ${targetId}`, "warning");
 				return;
@@ -1241,7 +1238,7 @@ export function createRuntimeContext(
 				// persists prUrl; prNumber lands here.
 				shipNode: async (ship) => {
 					const plan = activeEngine.get();
-					const node = findNodeV2(plan, ship.nodeId);
+					const node = findNode(plan, ship.nodeId);
 					if (!node) throw new Error(`node ${ship.nodeId} not found`);
 					const agentReports = (node.children ?? [])
 						.filter((child) => child.summary)
@@ -1355,7 +1352,7 @@ export function createRuntimeContext(
 			const plan = rt.engine.get();
 			const requested = deliverableId?.trim() || undefined;
 			const requestedDelivery = requested
-				? findNodeV2(plan, requested)
+				? findNode(plan, requested)
 				: undefined;
 			if (requested && !requestedDelivery) {
 				ctx.ui.notify(`Unknown deliverable: ${requested}`, "warning");
@@ -1451,7 +1448,7 @@ export function createRuntimeContext(
 			const liveWorkers: string[] = [];
 			for (const [id, state] of rt.execution.getExecutor().getStates()) {
 				if (!selectedIds.includes(id)) continue;
-				if (findNodeV2(plan, id)?.agent !== "worker") continue;
+				if (findNode(plan, id)?.agent !== "worker") continue;
 				if (
 					state.status === "working" ||
 					state.status === "spawning" ||
@@ -1556,7 +1553,7 @@ function sessionSwitcher(ctx: ExtensionContext):
 		);
 }
 
-export function activeDeliverable(plan: PlanV2): PlanNode | undefined {
+export function activeDeliverable(plan: Plan): PlanNode | undefined {
 	for (const visit of walkNodes(plan)) {
 		if (visit.node.status === "active") return visit.node;
 	}

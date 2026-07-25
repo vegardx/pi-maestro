@@ -4,7 +4,7 @@
 import type { AgentBridge } from "../agent-bridge.js";
 import type { ExecutionHandle } from "../exec/index.js";
 import { buildPlanAwareCompactionMarker } from "../forward-summary.js";
-import type { PlanEngineV2 } from "../plan/engine.js";
+import type { PlanEngine } from "../plan/engine.js";
 import { buildExecutionPreamble } from "../planning-preamble.js";
 
 export {
@@ -57,7 +57,7 @@ structure, or start. Nothing is being built here.
 }
 
 export function buildMaestroPreamble(
-	_engine: PlanEngineV2 | undefined,
+	_engine: PlanEngine | undefined,
 	_execution: ExecutionHandle,
 ): string {
 	if (!_engine) return "";

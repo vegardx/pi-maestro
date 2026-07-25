@@ -20,7 +20,7 @@ import {
 	parseContractEnvelope,
 	validateContractEnvelope,
 } from "@vegardx/pi-contracts";
-import { resolveV2Model, type V2Resolution } from "@vegardx/pi-models";
+import { type ModelResolution, resolveModel } from "@vegardx/pi-models";
 import type { Persona } from "@vegardx/pi-subagents";
 import type { PlanNode } from "./schema.js";
 
@@ -174,8 +174,8 @@ export interface ResolveNodeModelOptions {
 export async function resolveNodeModel(
 	ctx: ExtensionContext,
 	opts: ResolveNodeModelOptions,
-): Promise<{ resolution: NodeResolution; resolved: V2Resolution }> {
-	const resolved = await resolveV2Model(ctx, {
+): Promise<{ resolution: NodeResolution; resolved: ModelResolution }> {
+	const resolved = await resolveModel(ctx, {
 		agent: opts.node.agent,
 		...(opts.tier ? { tier: opts.tier } : {}),
 		...(opts.inherit

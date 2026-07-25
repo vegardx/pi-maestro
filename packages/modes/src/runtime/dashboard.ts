@@ -12,7 +12,7 @@ import {
 } from "@vegardx/pi-models";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter, type ResolvedIdentity } from "../install-footer.js";
-import type { PlanV2 } from "../plan/schema.js";
+import type { Plan } from "../plan/schema.js";
 import type { RuntimeContext } from "./context.js";
 import { hudElapsed } from "./hud.js";
 
@@ -71,7 +71,7 @@ export function installMaestroFooter(
  * depth indents once the v2 tree lands; a flat v1 plan renders identically.
  */
 export function renderAgentsOverview(
-	plan: PlanV2,
+	plan: Plan,
 	execution?: ExecutionHandle,
 ): string {
 	const view = projectPlanView(plan);

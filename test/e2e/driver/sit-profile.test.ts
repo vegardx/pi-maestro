@@ -17,7 +17,7 @@ import {
 import {
 	agentTypeForRole,
 	defaultTierForAgent,
-	resolveV2Model,
+	resolveModel,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SIT_CATALOG, sitProfileFromToken } from "./sit-profile.js";
@@ -78,7 +78,7 @@ async function modelFor(
 ): Promise<string | undefined> {
 	const agent = agentTypeForRole(role);
 	const tier = defaultTierForAgent(ctx, agent);
-	const resolved = await resolveV2Model(ctx, {
+	const resolved = await resolveModel(ctx, {
 		agent,
 		...(tier ? { tier } : {}),
 		inherit: { modelId: SESSION },
@@ -143,7 +143,7 @@ describe("radicalai-sit profile", () => {
 	it("EEA strikes the US-data-share Fable tripwire — heavy resolves to opus", async () => {
 		// heavy leads with Fable (non-EEA); the active EEA region strikes it before
 		// availability, so reviews land on Opus (EEA-legal) — the live region proof.
-		const resolved = await resolveV2Model(fakeCtx(), {
+		const resolved = await resolveModel(fakeCtx(), {
 			agent: "reviewer",
 			tier: "heavy",
 			inherit: { modelId: SESSION },

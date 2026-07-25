@@ -1,6 +1,6 @@
 // Debug/recovery primitives over the v2 stack: the atomic plan repair
-// (PlanEngineV2.applyTaskRepair, v1 semantics — fingerprint-pinned via
-// planFingerprintV2, stopped-assertion, terminal/restarting guards, the
+// (PlanEngine.applyTaskRepair, v1 semantics — fingerprint-pinned via
+// planFingerprint, stopped-assertion, terminal/restarting guards, the
 // narrow four-operation vocabulary, repairAudit provenance), safe worker
 // restart through NodeExecutionAdapter.restartWorker, the cooperative fleet
 // stop, and read-only restart workspace validation over the v2 tree.
@@ -31,20 +31,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateRestartWorkspace } from "../packages/modes/src/exec/workspace-validation.js";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import { NodeExecutionAdapter } from "../packages/modes/src/plan/node-adapter.js";
 import type { SpawnNodeOpts } from "../packages/modes/src/plan/node-executor.js";
 import {
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
-	planFingerprintV2,
+	planFingerprint,
 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
 		save(plan) {
@@ -60,8 +60,8 @@ function memStore(): PlanStoreV2 {
 }
 
 describe("atomic plan repair (applyTaskRepair)", () => {
-	function repairEngine(): PlanEngineV2 {
-		const engine = PlanEngineV2.create(memStore(), {
+	function repairEngine(): PlanEngine {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "repair",
 			title: "Repair",
 			repoPath: "/tmp/repo",
@@ -80,7 +80,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 
 	it("applies the full operation vocabulary in one write and appends the audit", () => {
 		const engine = repairEngine();
-		const base = planFingerprintV2(engine.get());
+		const base = planFingerprint(engine.get());
 		const result = engine.applyTaskRepair({
 			baseFingerprint: base,
 			reason: "clarify remaining work after a wedged worker",
@@ -106,7 +106,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 			stoppedDeliverableIds: ["auth"],
 		});
 
-		const node = findNodeV2(engine.get(), "auth");
+		const node = findNode(engine.get(), "auth");
 		// Corrective tasks gate completion; manual checkpoints do not.
 		const gatingIds = gatingNodeTasks(node ?? { tasks: [] }).map((t) => t.id);
 		expect(gatingIds).toContain("fix-timeout");
@@ -133,11 +133,11 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 			],
 		});
 		expect(result.fingerprint).not.toBe(base);
-		expect(result.fingerprint).toBe(planFingerprintV2(engine.get()));
+		expect(result.fingerprint).toBe(planFingerprint(engine.get()));
 	});
 
 	it("rejects fingerprint drift, unstopped targets, terminal and restarting nodes", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "repair-guards",
 			title: "Repair Guards",
 			repoPath: "/tmp/repo",
@@ -179,7 +179,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 
 		expect(() =>
 			engine.applyTaskRepair({
-				baseFingerprint: planFingerprintV2(engine.get()),
+				baseFingerprint: planFingerprint(engine.get()),
 				reason: "r",
 				operations: [op("auth")],
 				stoppedDeliverableIds: [],
@@ -188,7 +188,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 
 		expect(() =>
 			engine.applyTaskRepair({
-				baseFingerprint: planFingerprintV2(engine.get()),
+				baseFingerprint: planFingerprint(engine.get()),
 				reason: "r",
 				operations: [op("old")],
 				stoppedDeliverableIds: ["old"],
@@ -198,7 +198,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 		engine.setNodeRuntime("auth", { restartState: "restarting" });
 		expect(() =>
 			engine.applyTaskRepair({
-				baseFingerprint: planFingerprintV2(engine.get()),
+				baseFingerprint: planFingerprint(engine.get()),
 				reason: "r",
 				operations: [op("auth")],
 				stoppedDeliverableIds: ["auth"],
@@ -209,7 +209,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 	it("cannot reopen decided or clarify acted-upon tasks; a failing op aborts atomically", () => {
 		const engine = repairEngine();
 		engine.updateTask("auth", "remaining-task", { answer: "chose option b" });
-		const fingerprint = () => planFingerprintV2(engine.get());
+		const fingerprint = () => planFingerprint(engine.get());
 
 		expect(() =>
 			engine.applyTaskRepair({
@@ -265,7 +265,7 @@ describe("atomic plan repair (applyTaskRepair)", () => {
 			}),
 		).toThrow(/unknown task/);
 		expect(
-			findNodeV2(engine.get(), "auth")?.tasks.some(
+			findNode(engine.get(), "auth")?.tasks.some(
 				(t) => t.id === "half-applied",
 			),
 		).toBe(false);
@@ -312,7 +312,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 		mkdirSync(workspace);
 		writeFileSync(join(workspace, "dirty.txt"), "keep me");
 
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "restart",
 			title: "Restart",
 			repoPath: root,
@@ -386,7 +386,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 
 	it("resume replaces the process but retains the JSONL and dirty work", async () => {
 		const { workspace, engine, tmux, spawns } = await started();
-		const node = () => findNodeV2(engine.get(), "auth");
+		const node = () => findNode(engine.get(), "auth");
 		const before = node()?.sessionPath;
 		const oldSession = node()?.sessionName as string;
 		expect(before).toBeDefined();
@@ -409,7 +409,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 
 	it("fresh spawns a new JSONL from the caller-supplied recovery seed", async () => {
 		const { workspace, engine, spawns } = await started();
-		const before = findNodeV2(engine.get(), "auth")?.sessionPath as string;
+		const before = findNode(engine.get(), "auth")?.sessionPath as string;
 
 		const result = await adapter!.restartWorker(
 			"auth",
@@ -424,7 +424,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 			"# Recovery seed\nWorkspace facts assembled by the caller.",
 		);
 		expect(spawn?.kickoffMessage).toContain("fresh-session recovery seed");
-		expect(findNodeV2(engine.get(), "auth")?.sessionPath).not.toBe(before);
+		expect(findNode(engine.get(), "auth")?.sessionPath).not.toBe(before);
 		expect(readFileSync(join(workspace, "dirty.txt"), "utf8")).toBe("keep me");
 	});
 
@@ -442,7 +442,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 		expect(retried.ok, retried.error).toBe(true);
 		expect(retried.generation).toBe(2);
 		expect(adapter!.getExecutor().getRunState("auth")?.status).toBe("working");
-		expect(findNodeV2(engine.get(), "auth")?.sessionGeneration).toBe(2);
+		expect(findNode(engine.get(), "auth")?.sessionGeneration).toBe(2);
 	});
 
 	it("prepareStop freezes scheduling and parks live agents /recover-able", async () => {
@@ -465,7 +465,7 @@ describe("safe worker restart primitives (v2 adapter)", () => {
 
 describe("restart workspace validation", () => {
 	function planWithTwoClaims(alias = false): {
-		plan: PlanV2;
+		plan: Plan;
 		paths: Record<string, string>;
 	} {
 		const root = "/repo";

@@ -1,4 +1,4 @@
-// Scenario-level lifecycle + observability over the v2 stack: PlanEngineV2
+// Scenario-level lifecycle + observability over the v2 stack: PlanEngine
 // ledger transitions (start/restart orthogonality, recoverable K-failure),
 // child-projection/usage reconciliation, HUD + PR-provenance projection, and
 // fleet-stop capture. Ported from the v1 suite; agent keys are bare node ids
@@ -11,8 +11,8 @@ import type { ChildRunProjection, RunId } from "@vegardx/pi-contracts";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChildProjectionStore } from "../packages/modes/src/exec/child-projections.js";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
-import type { PlanNode, PlanV2 } from "../packages/modes/src/plan/schema.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
+import type { Plan, PlanNode } from "../packages/modes/src/plan/schema.js";
 import {
 	renderMaestroPrSection,
 	updateMaestroPrBody,
@@ -123,12 +123,12 @@ describe("lifecycle and observability scenarios", () => {
 							root: join(scenario.root, "plans"),
 							exists: () => false,
 							load: () => null,
-							save: (plan: PlanV2) =>
+							save: (plan: Plan) =>
 								scenario.state.set("plan", structuredClone(plan)),
 							remove: () => {},
 							list: () => [],
 						};
-						const engine = PlanEngineV2.create(
+						const engine = PlanEngine.create(
 							store,
 							{
 								slug: "lifecycle",

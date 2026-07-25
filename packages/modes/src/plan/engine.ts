@@ -1,4 +1,4 @@
-// PlanEngineV2 (plan-schema cutover PR-4): the mutation surface over the
+// PlanEngine (plan-schema cutover PR-4): the mutation surface over the
 // recursive tree, with v1's mutate() discipline verbatim — clone → apply →
 // validate → save, one validated write path. What changes is WHICH mutations
 // are legal WHEN:
@@ -25,30 +25,27 @@ import type {
 	NodeStatus,
 	NodeTaskKind,
 } from "@vegardx/pi-contracts";
-import {
-	DEFAULT_MAX_DEPTH,
-	PLAN_SCHEMA_VERSION_V2,
-} from "@vegardx/pi-contracts";
+import { DEFAULT_MAX_DEPTH, PLAN_SCHEMA_VERSION } from "@vegardx/pi-contracts";
 import {
 	boundedPreviousSessionPaths,
 	canTransition,
 	effectiveMaxChildren,
 	effectiveNodeTaskKind,
-	findNodeV2,
+	findNode,
 	isBranchOwner,
 	type NodeTask,
 	PARENT_AFTER_TOKEN,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	POSTFLIGHT_TASK_ID,
 	PREFLIGHT_TASK_ID,
 	parentOfNode,
-	planFingerprintV2,
+	planFingerprint,
 	slugify,
-	validatePlanShapeV2,
+	validatePlanShape,
 	walkNodes,
 } from "./schema.js";
-import type { PlanStoreV2 } from "./storage.js";
+import type { PlanStore } from "./storage.js";
 
 /** Debug-repair operations (v1 vocabulary; deliverableId carries node ids). */
 export type PlanRepairOperation =
@@ -97,20 +94,20 @@ export interface NodeInput {
 /** Task kinds an agent may append once execution started (RPC addTask rule). */
 const POST_START_TASK_KINDS = new Set<NodeTaskKind>(["followup", "manual"]);
 
-export class PlanEngineV2 {
-	private plan: PlanV2;
+export class PlanEngine {
+	private plan: Plan;
 	private draft = false;
 
 	constructor(
-		plan: PlanV2,
-		private readonly store: PlanStoreV2,
+		plan: Plan,
+		private readonly store: PlanStore,
 		private readonly now: () => string = () => new Date().toISOString(),
 	) {
 		this.plan = plan;
 	}
 
 	static create(
-		store: PlanStoreV2,
+		store: PlanStore,
 		input: {
 			slug: string;
 			title: string;
@@ -120,10 +117,10 @@ export class PlanEngineV2 {
 			defaultEnvelope?: NodeEnvelope;
 		},
 		now: () => string = () => new Date().toISOString(),
-	): PlanEngineV2 {
+	): PlanEngine {
 		const ts = now();
-		const plan: PlanV2 = {
-			schemaVersion: PLAN_SCHEMA_VERSION_V2,
+		const plan: Plan = {
+			schemaVersion: PLAN_SCHEMA_VERSION,
 			slug: input.slug,
 			title: input.title,
 			repoPath: input.repoPath,
@@ -136,21 +133,21 @@ export class PlanEngineV2 {
 			createdAt: ts,
 			updatedAt: ts,
 		};
-		const engine = new PlanEngineV2(plan, store, now);
+		const engine = new PlanEngine(plan, store, now);
 		store.save(plan);
 		return engine;
 	}
 
 	/** Draft: held in memory until materialize() names and saves it (v1). */
 	static createDraft(
-		store: PlanStoreV2,
+		store: PlanStore,
 		input: { slug: string; title: string; repoPath: string },
 		now: () => string = () => new Date().toISOString(),
-	): PlanEngineV2 {
+	): PlanEngine {
 		const ts = now();
-		const engine = new PlanEngineV2(
+		const engine = new PlanEngine(
 			{
-				schemaVersion: PLAN_SCHEMA_VERSION_V2,
+				schemaVersion: PLAN_SCHEMA_VERSION,
 				slug: input.slug,
 				title: input.title,
 				repoPath: input.repoPath,
@@ -179,7 +176,7 @@ export class PlanEngineV2 {
 	updatePlan(
 		patch: Partial<
 			Pick<
-				PlanV2,
+				Plan,
 				| "title"
 				| "profile"
 				| "parentIssueNumber"
@@ -208,7 +205,7 @@ export class PlanEngineV2 {
 		});
 	}
 
-	registerRepo(repo: import("./schema.js").PlanRepoV2): void {
+	registerRepo(repo: import("./schema.js").PlanRepo): void {
 		this.mutate((plan) => {
 			if ((plan.repos ?? []).some((existing) => existing.key === repo.key))
 				throw new Error(`repo key \`${repo.key}\` is already registered`);
@@ -227,7 +224,7 @@ export class PlanEngineV2 {
 		});
 	}
 
-	get(): PlanV2 {
+	get(): Plan {
 		return this.plan;
 	}
 
@@ -251,7 +248,7 @@ export class PlanEngineV2 {
 		require: string,
 		remedy: string,
 	): PlanNode {
-		const node = findNodeV2(this.plan, id);
+		const node = findNode(this.plan, id);
 		if (!node) throw new Error(`unknown node: ${id}`);
 		if (node.status !== "planned")
 			throw new Error(
@@ -345,7 +342,7 @@ export class PlanEngineV2 {
 		if (!input.reason.trim()) throw new Error("repair reason required");
 		if (input.operations.length === 0)
 			throw new Error("repair has no operations");
-		const actual = planFingerprintV2(this.plan);
+		const actual = planFingerprint(this.plan);
 		if (actual !== input.baseFingerprint) {
 			throw new Error(
 				`plan fingerprint drift: expected ${input.baseFingerprint}, found ${actual}`,
@@ -354,7 +351,7 @@ export class PlanEngineV2 {
 		const stopped = new Set(input.stoppedDeliverableIds);
 		const touched = new Set(input.operations.map((op) => op.deliverableId));
 		for (const id of touched) {
-			const node = findNodeV2(this.plan, id);
+			const node = findNode(this.plan, id);
 			if (!node) throw new Error(`unknown deliverable: ${id}`);
 			if (!stopped.has(id)) {
 				throw new Error(`deliverable ${id} is not confirmed stopped`);
@@ -372,7 +369,7 @@ export class PlanEngineV2 {
 			const findTask = (node: PlanNode, taskId: string): NodeTask | undefined =>
 				node.tasks.find((candidate) => candidate.id === taskId);
 			for (const op of input.operations) {
-				const node = findNodeV2(plan, op.deliverableId);
+				const node = findNode(plan, op.deliverableId);
 				if (!node) throw new Error(`unknown deliverable: ${op.deliverableId}`);
 				switch (op.type) {
 					case "addCorrectiveTask":
@@ -437,7 +434,7 @@ export class PlanEngineV2 {
 				},
 			];
 		});
-		return { fingerprint: planFingerprintV2(this.plan), auditId };
+		return { fingerprint: planFingerprint(this.plan), auditId };
 	}
 
 	removeTask(nodeId: string, taskId: string): void {
@@ -518,7 +515,7 @@ export class PlanEngineV2 {
 		// node takes only followup/manual (a new gate on a node already executing
 		// would silently un-complete it). Statused off the TARGET node, not the
 		// whole plan — you can still flesh out planned deliverables mid-arc.
-		const target = findNodeV2(this.plan, nodeId);
+		const target = findNode(this.plan, nodeId);
 		if (!target) throw new Error(`unknown node: ${nodeId}`);
 		const started = target.status !== "planned";
 		const kind = input.kind ?? (started ? "followup" : "task");
@@ -537,7 +534,7 @@ export class PlanEngineV2 {
 			updatedAt: ts,
 		};
 		this.mutate((plan) => {
-			const node = findNodeV2(plan, nodeId);
+			const node = findNode(plan, nodeId);
 			if (!node) throw new Error(`unknown node: ${nodeId}`);
 			node.tasks.push(task);
 			node.updatedAt = ts;
@@ -557,7 +554,7 @@ export class PlanEngineV2 {
 		answer?: string,
 	): void {
 		this.mutate((plan) => {
-			const node = findNodeV2(plan, nodeId);
+			const node = findNode(plan, nodeId);
 			if (!node) throw new Error(`unknown node: ${nodeId}`);
 			const task = node.tasks.find((candidate) => candidate.id === taskId);
 			if (!task) throw new Error(`unknown task: ${nodeId}/${taskId}`);
@@ -586,7 +583,7 @@ export class PlanEngineV2 {
 		failure?: DeliveryFailure,
 	): void {
 		this.mutate((plan) => {
-			const node = findNodeV2(plan, id);
+			const node = findNode(plan, id);
 			if (!node) throw new Error(`unknown node: ${id}`);
 			if (node.status !== status && !canTransition(node.status, status))
 				throw new Error(
@@ -717,12 +714,12 @@ export class PlanEngineV2 {
 				plan.nodes.push(node);
 				return;
 			}
-			const parent = findNodeV2(plan, parentId);
+			const parent = findNode(plan, parentId);
 			if (!parent) throw new Error(`unknown node: ${parentId}`);
 			parent.children = [...(parent.children ?? []), node];
 		});
 		// Return the node as persisted (mutate deep-clones).
-		return findNodeV2(this.plan, node.id) ?? node;
+		return findNode(this.plan, node.id) ?? node;
 	}
 
 	/**
@@ -733,7 +730,7 @@ export class PlanEngineV2 {
 	 * its handoff). Explorer/reviewer nodes get neither — their contract
 	 * output IS the handoff.
 	 */
-	private injectLifecycleTasks(plan: PlanV2, node: PlanNode): void {
+	private injectLifecycleTasks(plan: Plan, node: PlanNode): void {
 		if (node.agent !== "worker") return;
 		const ts = this.now();
 		const has = (kind: NodeTaskKind) =>
@@ -781,7 +778,7 @@ export class PlanEngineV2 {
 
 	private mutateNode(id: string, fn: (node: PlanNode) => void): void {
 		this.mutate((plan) => {
-			const node = findNodeV2(plan, id);
+			const node = findNode(plan, id);
 			if (!node) throw new Error(`unknown node: ${id}`);
 			fn(node);
 			node.updatedAt = this.now();
@@ -790,10 +787,10 @@ export class PlanEngineV2 {
 
 	/** v1's mutate discipline verbatim: clone → apply → validate → save.
 	 *  Drafts mutate in memory only — materialize() names and persists. */
-	private mutate(fn: (plan: PlanV2) => void): void {
-		const next = structuredClone(this.plan) as PlanV2;
+	private mutate(fn: (plan: Plan) => void): void {
+		const next = structuredClone(this.plan) as Plan;
 		fn(next);
-		const problems = validatePlanShapeV2(next);
+		const problems = validatePlanShape(next);
 		if (problems.length > 0)
 			throw new Error(`invalid plan:\n- ${problems.join("\n- ")}`);
 		next.updatedAt = this.now();
@@ -815,7 +812,7 @@ export class PlanEngineV2 {
 
 	private uniqueTaskId(nodeId: string, base: string): string {
 		const root = slugify(base) || "task";
-		const node = findNodeV2(this.plan, nodeId);
+		const node = findNode(this.plan, nodeId);
 		const taken = new Set(node?.tasks.map((task) => task.id) ?? []);
 		if (!taken.has(root)) return root;
 		for (let n = 2; ; n++) {

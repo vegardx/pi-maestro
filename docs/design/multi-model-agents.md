@@ -24,7 +24,7 @@ The rule, in one line: **inheritance is the floor, the tier menu is the ceiling,
 and the persona decides how much of the menu to spend.**
 
 - An agent runs on its **own session model** (inherited) unless it is set to a
-  tier. Nothing asked for → the caller's model. (`v2-resolver.ts:214`, the
+  tier. Nothing asked for → the caller's model. (`resolver.ts:214`, the
   `!request.tier` branch.)
 - Set to a tier → resolve an **ordered list** of that tier's models, **with the
   session model appended last**. The seat-last position is a *known-good
@@ -38,11 +38,11 @@ and the persona decides how much of the menu to spend.**
 - `notes` on a catalog entry are **descriptive** — they help an agent or a human
   understand what a model is good at. They are **not** the selector. Selection is
   a deterministic ordered list plus seat-to-end, never free-text reasoning over
-  prose. (`notes` is stored and editable — `v2-resolver.ts:55`,
+  prose. (`notes` is stored and editable — `resolver.ts:55`,
   `menu-catalogs.ts` — but nothing consumes it for selection today, correctly.)
 
 Current gap: the tier walk is strict first-available in authored order
-(`v2-resolver.ts:255-277`, `winnerIndex = findIndex(available)`) with **no
+(`resolver.ts:255-277`, `winnerIndex = findIndex(available)`) with **no
 seat-to-end step**. That is the one change here.
 
 ---
@@ -283,7 +283,7 @@ Ordered so foundational primitives land first and the largest, node-touching wor
 (ensemble on-ramp) comes once the reader path is proven.
 
 ### Phase 1 — Seat-to-end tier ordering
-- `v2-resolver.ts`: when walking a tier, append the session model to the end of
+- `resolver.ts`: when walking a tier, append the session model to the end of
   the candidate list (dedup if already present), so first-available prefers
   non-seat models and falls back to the seat.
 - Verify: a tier with the seat in it resolves to a non-seat model first, the seat

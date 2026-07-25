@@ -29,7 +29,7 @@ import { MaestroRpcServer, type PlanMutateMessage } from "@vegardx/pi-rpc";
 import { provisionBranchWorktree } from "../exec/provisioner.js";
 import { createRpcRouter, type RpcRouter } from "../exec/rpc-router.js";
 import { QuestionQueue } from "../question-queue.js";
-import type { PlanEngineV2 } from "./engine.js";
+import type { PlanEngine } from "./engine.js";
 import {
 	NodeExecutor,
 	type NodeExecutorDeps,
@@ -37,7 +37,7 @@ import {
 } from "./node-executor.js";
 import { collectContract } from "./node-periphery.js";
 import {
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
 	type PlanNode,
 	SUMMARY_TOKEN_BUDGET,
@@ -122,7 +122,7 @@ export interface AgentStateSnapshot {
 }
 
 export interface NodeAdapterOptions {
-	readonly engine: PlanEngineV2;
+	readonly engine: PlanEngine;
 	readonly planDir: string;
 	readonly launcher: LauncherApi;
 	readonly token: string;
@@ -156,7 +156,7 @@ export interface NodeAdapterOptions {
 }
 
 export class NodeExecutionAdapter {
-	private readonly engine: PlanEngineV2;
+	private readonly engine: PlanEngine;
 	private readonly executor: NodeExecutor;
 	private readonly rpcServer: MaestroRpcServer;
 	private readonly router: RpcRouter;
@@ -229,7 +229,7 @@ export class NodeExecutionAdapter {
 				questions: (agentId, msg) => {
 					const run = this.executor.getRunState(agentId);
 					if (!run) return;
-					const node = findNodeV2(this.engine.get(), agentId);
+					const node = findNode(this.engine.get(), agentId);
 					this.questionQueue.enqueue({
 						agentId,
 						agentName: run.displayName ?? agentId,
@@ -378,7 +378,7 @@ export class NodeExecutionAdapter {
 		nodeId: string,
 		_sessionId: string,
 	): Promise<void> {
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		if (!node) return;
 		const contract = this.contractFor(node.agent);
 		const run = this.executor.getRunState(nodeId);
@@ -491,7 +491,7 @@ export class NodeExecutionAdapter {
 		if (!this.started || !this.acceptTicks) return [];
 		const shipped = await this.executor.tick(nodeIds);
 		for (const nodeId of shipped) {
-			const node = findNodeV2(this.engine.get(), nodeId);
+			const node = findNode(this.engine.get(), nodeId);
 			this.logEvent("shipped", { node: nodeId, prUrl: node?.prUrl });
 			this.opts.onEvent?.({
 				kind: "shipped",
@@ -560,7 +560,7 @@ export class NodeExecutionAdapter {
 		const count = (this.idleCount.get(agentId) ?? 0) + 1;
 		this.idleCount.set(agentId, count);
 		const run = this.executor.getRunState(agentId);
-		const node = findNodeV2(this.engine.get(), agentId);
+		const node = findNode(this.engine.get(), agentId);
 		if (!run || !node) return;
 
 		if (node.agent === "worker") {
@@ -599,7 +599,7 @@ export class NodeExecutionAdapter {
 	private handleDone(agentId: string): void {
 		const run = this.executor.getRunState(agentId);
 		if (!run) return;
-		const node = findNodeV2(this.engine.get(), agentId);
+		const node = findNode(this.engine.get(), agentId);
 		if (node?.agent === "worker" && !this.workerMayComplete(agentId)) return;
 		this.completeAgent(agentId);
 	}
@@ -610,7 +610,7 @@ export class NodeExecutionAdapter {
 	 * visible failed+blocked state when the reminder budget is exhausted.
 	 */
 	private workerMayComplete(agentId: string): boolean {
-		const node = findNodeV2(this.engine.get(), agentId);
+		const node = findNode(this.engine.get(), agentId);
 		const run = this.executor.getRunState(agentId);
 		const dirty =
 			node?.agent === "worker" &&
@@ -664,7 +664,7 @@ export class NodeExecutionAdapter {
 			.markAgentDone(agentId)
 			.then(() => {
 				const run = this.executor.getRunState(agentId);
-				const node = findNodeV2(this.engine.get(), agentId);
+				const node = findNode(this.engine.get(), agentId);
 				const resolution = node?.resolutions?.at(-1);
 				const spawnedAt = this.spawnTimes.get(agentId);
 				this.opts.onEvent?.({
@@ -699,7 +699,7 @@ export class NodeExecutionAdapter {
 
 	/** Display title for events; the node id when the node is gone. */
 	private nodeTitle(nodeId: string): string {
-		return findNodeV2(this.engine.get(), nodeId)?.title ?? nodeId;
+		return findNode(this.engine.get(), nodeId)?.title ?? nodeId;
 	}
 
 	// ─── Plan mutations from agents (nodeId-keyed) ─────────────────────────
@@ -876,7 +876,7 @@ export class NodeExecutionAdapter {
 		problems: string[];
 	} {
 		const run = this.executor.getRunState(nodeId);
-		const node = findNodeV2(this.engine.get(), nodeId);
+		const node = findNode(this.engine.get(), nodeId);
 		const problems: string[] = [];
 		if (!run || !node) problems.push(`no active node ${nodeId}`);
 		if (run && !run.worktreePath) problems.push("no workspace");
@@ -1028,7 +1028,7 @@ export class NodeExecutionAdapter {
 		const deliverables = new Map<string, { blocked?: string }>();
 		for (const [nodeId, run] of this.executor.getStates()) {
 			const tokens = this.tokenSnapshots.get(nodeId);
-			const node = findNodeV2(this.engine.get(), nodeId);
+			const node = findNode(this.engine.get(), nodeId);
 			const resolution = node?.resolutions?.at(-1);
 			agents.set(nodeId, {
 				status: run.status,
@@ -1072,7 +1072,7 @@ export class NodeExecutionAdapter {
 	getWorkerSessions(): string[] {
 		const sessions: string[] = [];
 		for (const [nodeId, run] of this.executor.getStates()) {
-			const node = findNodeV2(this.engine.get(), nodeId);
+			const node = findNode(this.engine.get(), nodeId);
 			if (node?.agent === "worker" && run.sessionId)
 				sessions.push(run.sessionId);
 		}

@@ -4,8 +4,8 @@ import { currentBranch, gitToplevel, listWorktrees } from "@vegardx/pi-git";
 import {
 	defaultBranchForNode,
 	isBranchOwner,
+	type Plan,
 	type PlanNode,
-	type PlanV2,
 	walkNodes,
 } from "../plan/schema.js";
 import { repoForNode } from "./shipper.js";
@@ -44,7 +44,7 @@ function canonical(path: string, deps: WorkspaceValidationDeps): string {
  * this active node. This never checks out a branch or edits Git state.
  */
 export function validateRestartWorkspace(
-	plan: PlanV2,
+	plan: Plan,
 	node: PlanNode,
 	overrides: Partial<WorkspaceValidationDeps> = {},
 	planDir?: string,

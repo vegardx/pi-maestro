@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deriveBase } from "../../../packages/modes/src/plan/schema.js";
-import { createPlanStoreV2 } from "../../../packages/modes/src/plan/storage.js";
+import { createPlanStore } from "../../../packages/modes/src/plan/storage.js";
 import { SANDBOX_FEATURES } from "./scenario.js";
 import { seededPlansRoot, seedScenarioPlan } from "./seed-plan.js";
 
@@ -31,7 +31,7 @@ describe("seedScenarioPlan", () => {
 			true,
 		);
 
-		const store = createPlanStoreV2(seededPlansRoot(piHome));
+		const store = createPlanStore(seededPlansRoot(piHome));
 		const plan = store.load(slug);
 		expect(plan).not.toBeNull();
 		expect(plan?.repoPath).toBe("/tmp/sandbox-repo");
@@ -41,7 +41,7 @@ describe("seedScenarioPlan", () => {
 
 	it("matches the scenario: parallel pair, review child, stacked dependent", () => {
 		seedScenarioPlan(piHome, "/tmp/sandbox-repo");
-		const plan = createPlanStoreV2(seededPlansRoot(piHome)).load(
+		const plan = createPlanStore(seededPlansRoot(piHome)).load(
 			SANDBOX_FEATURES.name,
 		);
 		const byId = new Map(plan?.nodes.map((node) => [node.id, node]) ?? []);
@@ -98,7 +98,7 @@ describe("seedEnsemblePlan", () => {
 	it("seeds the ensemble: branch-owning parent, two branchless candidates", async () => {
 		const { seedEnsemblePlan } = await import("./seed-plan.js");
 		const slug = seedEnsemblePlan(piHome, "/tmp/ensemble-repo");
-		const plan = createPlanStoreV2(seededPlansRoot(piHome)).load(slug);
+		const plan = createPlanStore(seededPlansRoot(piHome)).load(slug);
 		expect(plan?.nodes).toHaveLength(1);
 		const parent = plan?.nodes[0];
 		expect(parent?.id).toBe("build-metrics");

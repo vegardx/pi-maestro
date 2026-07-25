@@ -9,29 +9,29 @@
 // - postflight was injected unconditionally; v2 injects it only for consumed
 //   worker nodes (explorers/reviewers get neither — their contract output IS
 //   the handoff).
-// - the handoff summary was whitespace-trimmed; PlanEngineV2 stores it
+// - the handoff summary was whitespace-trimmed; PlanEngine stores it
 //   verbatim.
 // - toggleWorkItem returned the resulting done state; toggleTask is void, so
 //   completion is asserted through the ledger.
 
 import { describe, expect, it } from "vitest";
-import { PlanEngineV2 } from "../packages/modes/src/plan/engine.js";
+import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	NodeExecutor,
 	type NodeExecutorDeps,
 	type SpawnNodeOpts,
 } from "../packages/modes/src/plan/node-executor.js";
 import {
-	findNodeV2,
+	findNode,
 	gatingNodeTasks,
-	type PlanV2,
+	type Plan,
 	POSTFLIGHT_TASK_ID,
 	PREFLIGHT_TASK_ID,
 } from "../packages/modes/src/plan/schema.js";
-import type { PlanStoreV2 } from "../packages/modes/src/plan/storage.js";
+import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 
-function memStore(): PlanStoreV2 {
-	let saved: PlanV2 | null = null;
+function memStore(): PlanStore {
+	let saved: Plan | null = null;
 	return {
 		root: "/tmp/plans",
 		save(plan) {
@@ -46,8 +46,8 @@ function memStore(): PlanStoreV2 {
 	};
 }
 
-function makeEngine(): PlanEngineV2 {
-	const engine = PlanEngineV2.create(memStore(), {
+function makeEngine(): PlanEngine {
+	const engine = PlanEngine.create(memStore(), {
 		slug: "handoff",
 		title: "Handoff Plan",
 		repoPath: "/tmp/repo",
@@ -76,7 +76,7 @@ describe("lifecycle task injection", () => {
 		const engine = makeEngine();
 		// `base` has a dependent sibling (its handoff is consumed) but no deps.
 		engine.setNodeStatus("base", "active");
-		const base = findNodeV2(engine.get(), "base");
+		const base = findNode(engine.get(), "base");
 		expect(base?.tasks.map((t) => t.kind ?? "task")).toEqual([
 			"task",
 			"postflight",
@@ -85,7 +85,7 @@ describe("lifecycle task injection", () => {
 
 		// The dependent branch owner gets both: preflight first, postflight last.
 		engine.setNodeStatus("consumer", "active");
-		const consumer = findNodeV2(engine.get(), "consumer");
+		const consumer = findNode(engine.get(), "consumer");
 		expect(consumer?.tasks.map((t) => t.kind ?? "task")).toEqual([
 			"preflight",
 			"task",
@@ -95,7 +95,7 @@ describe("lifecycle task injection", () => {
 	});
 
 	it("unconsumed workers and read agents get no lifecycle tasks (v2 generalization)", () => {
-		const engine = PlanEngineV2.create(memStore(), {
+		const engine = PlanEngine.create(memStore(), {
 			slug: "leafy",
 			title: "Leafy",
 			repoPath: "/tmp/repo",
@@ -117,9 +117,9 @@ describe("lifecycle task injection", () => {
 		engine.setNodeStatus("leaf", "active");
 		engine.setNodeStatus("rev", "active");
 		expect(
-			findNodeV2(engine.get(), "leaf")?.tasks.map((t) => t.kind ?? "task"),
+			findNode(engine.get(), "leaf")?.tasks.map((t) => t.kind ?? "task"),
 		).toEqual(["task"]);
-		expect(findNodeV2(engine.get(), "rev")?.tasks).toEqual([]);
+		expect(findNode(engine.get(), "rev")?.tasks).toEqual([]);
 	});
 
 	it("is idempotent across re-activation", () => {
@@ -127,14 +127,14 @@ describe("lifecycle task injection", () => {
 		engine.setNodeStatus("base", "active");
 		// Re-assert active (recovery paths re-set status).
 		engine.setNodeStatus("base", "active");
-		const base = findNodeV2(engine.get(), "base");
+		const base = findNode(engine.get(), "base");
 		expect(base?.tasks.filter((t) => t.kind === "postflight")).toHaveLength(1);
 	});
 
 	it("lifecycle tasks gate completion alongside real tasks", () => {
 		const engine = makeEngine();
 		engine.setNodeStatus("consumer", "active");
-		const consumer = findNodeV2(engine.get(), "consumer");
+		const consumer = findNode(engine.get(), "consumer");
 		const gating = gatingNodeTasks(consumer ?? { tasks: [] });
 		expect(gating.map((t) => t.kind ?? "task")).toEqual([
 			"preflight",
@@ -153,7 +153,7 @@ describe("postflight toggle records the handoff", () => {
 			POSTFLIGHT_TASK_ID,
 			"Built libbase. API: init()/run(). Gotcha: init is async.",
 		);
-		expect(findNodeV2(engine.get(), "base")?.handoff).toBe(
+		expect(findNode(engine.get(), "base")?.handoff).toBe(
 			"Built libbase. API: init()/run(). Gotcha: init is async.",
 		);
 	});
@@ -162,7 +162,7 @@ describe("postflight toggle records the handoff", () => {
 		const engine = makeEngine();
 		engine.setNodeStatus("base", "active");
 		engine.toggleTask("base", "build-it", "not a handoff");
-		const base = findNodeV2(engine.get(), "base");
+		const base = findNode(engine.get(), "base");
 		expect(base?.tasks.find((t) => t.id === "build-it")?.done).toBe(true);
 		expect(base?.handoff).toBeUndefined();
 	});
@@ -171,7 +171,7 @@ describe("postflight toggle records the handoff", () => {
 		const engine = makeEngine();
 		engine.setNodeStatus("base", "active");
 		engine.toggleTask("base", POSTFLIGHT_TASK_ID);
-		const base = findNodeV2(engine.get(), "base");
+		const base = findNode(engine.get(), "base");
 		expect(base?.tasks.find((t) => t.id === POSTFLIGHT_TASK_ID)?.done).toBe(
 			true,
 		);

@@ -58,10 +58,15 @@ import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
 import {
 	ENSEMBLE_METRICS,
+	RECOVER_ONCE,
 	SANDBOX_FEATURES,
 	type Scenario,
 } from "./scenario.js";
-import { seedEnsemblePlan, seedScenarioPlan } from "./seed-plan.js";
+import {
+	seedEnsemblePlan,
+	seedRecoverPlan,
+	seedScenarioPlan,
+} from "./seed-plan.js";
 import { buildSitProfile, SIT_GATEWAY } from "./sit-profile.js";
 
 const DEFAULT_SOCK = join(tmpdir(), "pi-e2e-driver.sock");
@@ -113,12 +118,16 @@ async function startDaemon(argv: string[]): Promise<void> {
 	// and goes directly at execution — no model-dependent plan authoring.
 	const seededPlan = argv.includes("--seed-ensemble")
 		? seedEnsemblePlan(profile.piHome, profile.repoDir)
-		: argv.includes("--seed-plan")
-			? seedScenarioPlan(profile.piHome, profile.repoDir)
-			: undefined;
+		: argv.includes("--seed-recover")
+			? seedRecoverPlan(profile.piHome, profile.repoDir)
+			: argv.includes("--seed-plan")
+				? seedScenarioPlan(profile.piHome, profile.repoDir)
+				: undefined;
 	const scenario = argv.includes("--seed-ensemble")
 		? ENSEMBLE_METRICS
-		: SANDBOX_FEATURES;
+		: argv.includes("--seed-recover")
+			? RECOVER_ONCE
+			: SANDBOX_FEATURES;
 
 	const sut = launchSut({
 		maestroRoot,

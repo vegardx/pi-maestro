@@ -16,3 +16,13 @@ export function isModelId(value: unknown): value is string {
 		? parseModelSpec(value) !== null
 		: false;
 }
+
+/** The live session model as a `provider/id` ref, or undefined if none. */
+export function sessionModelId(
+	ctx: import("@earendil-works/pi-coding-agent").ExtensionContext,
+): string | undefined {
+	const model = ctx.model as { provider?: string; id?: string } | undefined;
+	return model?.provider && model.id
+		? `${model.provider}/${model.id}`
+		: undefined;
+}

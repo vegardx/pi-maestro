@@ -32,7 +32,7 @@ import type {
 import { THINKING_LEVELS } from "@vegardx/pi-contracts";
 import { activeBinding, parseAliasRef, readModelsConfig } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
-import { parseModelSpec } from "./model-spec.js";
+import { parseModelSpec, sessionModelId } from "./model-spec.js";
 import { activeRegion, modelAllowedByRegion } from "./region.js";
 
 /** What the caller passes down: its own model — the inheritance default. */
@@ -217,13 +217,6 @@ export async function explainAttachment(
 		available: check.available,
 		...(check.reason ? { reason: check.reason } : {}),
 	};
-}
-
-function sessionModelId(ctx: ExtensionContext): string | undefined {
-	const model = ctx.model as { provider?: string; id?: string } | undefined;
-	return model?.provider && model.id
-		? `${model.provider}/${model.id}`
-		: undefined;
 }
 
 /**

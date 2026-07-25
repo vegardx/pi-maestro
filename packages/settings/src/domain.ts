@@ -26,6 +26,7 @@ import {
 import {
 	activeBinding,
 	explainTier,
+	isModelId,
 	readModelsConfig,
 } from "@vegardx/pi-models";
 import {
@@ -141,9 +142,7 @@ function strings(value: unknown): value is readonly string[] {
 
 /** A `"Family/Alias"` roster ref: a string with an interior slash. */
 function isAliasRef(value: unknown): value is string {
-	if (typeof value !== "string") return false;
-	const slash = value.indexOf("/");
-	return slash > 0 && slash < value.length - 1;
+	return isModelId(value);
 }
 
 /** Validate one alias value ({ attach, effort?, efforts?, notes? }). */

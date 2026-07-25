@@ -24,7 +24,7 @@ import {
 	TIER_IDS,
 	type TierId,
 } from "@vegardx/pi-contracts";
-import { isModelId } from "./model-spec.js";
+import { isModelId, parseModelSpec } from "./model-spec.js";
 import { isRegionOff } from "./region.js";
 
 const EFFORT_SET = new Set([
@@ -58,9 +58,10 @@ export function parseAliasRef(
 	ref: string,
 ): { family: string; alias: string } | undefined {
 	if (typeof ref !== "string") return undefined;
-	const slash = ref.indexOf("/");
-	if (slash <= 0 || slash === ref.length - 1) return undefined;
-	return { family: ref.slice(0, slash), alias: ref.slice(slash + 1) };
+	const parsed = parseModelSpec(ref);
+	return parsed
+		? { family: parsed.provider, alias: parsed.modelId }
+		: undefined;
 }
 
 function extractAlias(raw: unknown, where: string): AliasConfig {

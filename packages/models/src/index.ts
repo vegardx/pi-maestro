@@ -22,6 +22,7 @@ export {
 	isModelId,
 	type ParsedModelSpec,
 	parseModelSpec,
+	sessionModelId,
 } from "./model-spec.js";
 export {
 	activeRegion,

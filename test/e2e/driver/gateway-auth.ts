@@ -17,6 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +28,51 @@ const LOOPBACK_HOST = "127.0.0.1";
 const REFRESH_MARGIN_MS = 10 * 60_000;
 const CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const TOKEN_TIMEOUT_MS = 30_000;
+
+/**
+ * Read a live access token from the DEVELOPER'S OWN pi credential store
+ * (`<agentDir>/auth.json`), READ-ONLY. This is the "use my global config"
+ * path: the drive borrows the token pi already holds for a gateway provider
+ * (e.g. `radicalai`) instead of maintaining a separate driver login.
+ *
+ * It NEVER refreshes or writes: refreshing rotates the gateway's refresh token
+ * and would invalidate pi's own login (the incident that spawned the driver's
+ * private credential). So the token must be FRESH — pi refreshes it in place
+ * during normal use; if it is stale, open pi and hit a `<provider>` model once.
+ * A short drive (≈5-10 min) fits comfortably inside a ~1h token.
+ */
+export function readHostProviderToken(
+	provider: string,
+	minLifeMs = 15 * 60_000,
+): string {
+	const agentDir =
+		process.env.PI_CODING_AGENT_DIR ??
+		join(homedir(), ".config", "pi", "agent");
+	const authPath = join(agentDir, "auth.json");
+	let auth: Record<string, { access?: string; expires?: number }>;
+	try {
+		auth = JSON.parse(readFileSync(authPath, "utf8"));
+	} catch (err) {
+		throw new Error(
+			`could not read ${authPath}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	const entry = auth[provider];
+	if (!entry?.access) {
+		throw new Error(
+			`no \`${provider}\` credential in ${authPath} — log in to ${provider} in pi once.`,
+		);
+	}
+	const lifeMs = (entry.expires ?? 0) - Date.now();
+	if (lifeMs < minLifeMs) {
+		throw new Error(
+			`your \`${provider}\` token has ${Math.round(lifeMs / 60_000)} min left. ` +
+				`The e2e reads it READ-ONLY and never refreshes it (refreshing would rotate ` +
+				`your pi login out). Open pi and hit a ${provider} model once to refresh, then re-run.`,
+		);
+	}
+	return entry.access;
+}
 
 export interface GatewayCredential {
 	readonly access: string;

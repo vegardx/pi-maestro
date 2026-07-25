@@ -55,6 +55,7 @@ import {
 } from "./gateway-auth.js";
 import { type LaunchedSut, launchSut } from "./launch.js";
 import { MULTI_MODEL_OLLAMA } from "./multi-model-profile.js";
+import { buildProdProfile } from "./prod-profile.js";
 import type { RpcEvent } from "./rpc-client.js";
 import {
 	ENSEMBLE_METRICS,
@@ -267,6 +268,23 @@ async function buildProfile(argv: string[]): Promise<EnvProfile> {
 			defaultModel: sit.defaultModel,
 			modelsJsonContent: sit.modelsJsonContent,
 			models: sit.models,
+			...traceExtensions(),
+		});
+	}
+	// `--prod-models` is the PROD twin of --sit-models against gateway.raicode.no.
+	// It reuses the developer's OWN global `radicalai` token (read-only — the
+	// "use my global config" path); no driver login, no token refresh. Prod is
+	// all-EEA, so there is no region tripwire. A stale token throws with "open pi
+	// and hit a radicalai model once to refresh".
+	if (argv.includes("--prod-models")) {
+		const prod = buildProdProfile();
+		return setupLiveEnv({
+			localRemote: argv.includes("--local-remote"),
+			keep: argv.includes("--keep"),
+			defaultProvider: prod.defaultProvider,
+			defaultModel: prod.defaultModel,
+			modelsJsonContent: prod.modelsJsonContent,
+			models: prod.models,
 			...traceExtensions(),
 		});
 	}

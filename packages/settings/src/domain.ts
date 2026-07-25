@@ -19,6 +19,7 @@ import {
 	type SessionSettingValue,
 	SPAWNABLE_AGENT_TYPES,
 	type SpawnableAgentType,
+	THINKING_LEVELS,
 	TIER_IDS,
 	type TierId,
 } from "@vegardx/pi-contracts";
@@ -42,15 +43,7 @@ import { isPlainObject } from "./reader.js";
 import { updateSettingsFile } from "./writer.js";
 
 export const DOMAIN_EXTENSION = "maestro";
-const THINKING = new Set<string>([
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-]);
+const THINKING = new Set<string>(THINKING_LEVELS);
 const MODES = new Set<string>(ALL_MODES);
 
 export interface ModelOptionConfig {

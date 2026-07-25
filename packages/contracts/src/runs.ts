@@ -46,6 +46,18 @@ export type ThinkingLevel =
 	| "xhigh"
 	| "max";
 
+/** Thinking levels in ascending order — the canonical list for clamping,
+ *  menus, and nearest-allowed effort selection. */
+export const THINKING_LEVELS: readonly ThinkingLevel[] = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+];
+
 export type RunTransport = "headless";
 
 export interface RunProcessMetadata {

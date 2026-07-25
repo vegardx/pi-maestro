@@ -349,7 +349,7 @@ backbone / **P1** correctness / **P2** ergonomics-or-observability.
 | 2 | ✓ | ~~**Preamble carries stage identity** instead of a seeded fresh session.~~ **DONE** — the fork gives the fresh session; the seed rides the execution preamble as a path-in-state block (RPC-safe). Plan/recon/hack preambles are per-turn mode guidance. | — |
 | 3 | P1 | **hack mode half-honors execution** — `hooks.ts` and the executor `canActivate` treat `hack` like `auto`, so orchestration can activate in hack. | Make hack the sequential in-session worker: no fan-out/execution adapter. |
 | 4 | ✓ | ~~**`readiness` tool + `exploring`-phase structure-tool lock** hard-gate authoring.~~ **DONE** — removed; plan mode is conversation-only and authoring is the transition's forming step; the fail-fast execution gate catches a half-baked plan at plan→auto. | — |
-| 5 | P2 | ~~No routing-inspection surface (`/maestro explain` never existed).~~ **DONE (#223)** — `/models` + `/models <role>`. | — |
+| 5 | P2 | ~~No routing-inspection surface (`/maestro explain` never existed).~~ **DONE (#223)** — routing inspection via `/maestro explain <agent-type>`. (The interim `/models` command was retired with the v1 resolver; `/maestro explain` is the v2 surface.) | — |
 | 6 | P2 | ~~Driver skill referenced the non-existent `/maestro explain`.~~ **DONE (#223).** | — |
 | 7 | P1 | **e2e can't reach execution** — a weak planner can't author the plan. | Add a `--seed-plan` capability: write a valid `plan.json` into the isolated plan store; open by slug. |
 | 8 | — | **Weak models can't author plans unaided** (didn't self-initiate readiness; hallucinated authoring). | Separate hardening thread: strengthen the planning preamble / tool discoverability. Tracked, not blocking. |

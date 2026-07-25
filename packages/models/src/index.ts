@@ -10,15 +10,6 @@ export {
 } from "./catalog.js";
 export { supportedEfforts } from "./efforts.js";
 export {
-	type AssignmentSelectionOptions,
-	type AuthenticatedExactModelSelection,
-	type ExactSelectionOptions,
-	type ExactSelectionResolution,
-	type PersistedExactAssignment,
-	resolveAgentAssignment,
-	resolveExactModelSelection,
-} from "./exact-selection.js";
-export {
 	type ResolvedModelAuth,
 	resolveModelAuth,
 } from "./model-auth.js";
@@ -43,14 +34,7 @@ export {
 	regionError,
 	regionNames,
 } from "./region.js";
-export {
-	activeResidency,
-	isResidencyOff,
-	modelAllowedByResidency,
-	RESIDENCY_OFF,
-	residencyError,
-	residencyNames,
-} from "./residency.js";
+export { type RoleModel, resolveModelForRole } from "./resolve-for-role.js";
 export {
 	agentTypeForRole,
 	clampEffort,

@@ -40,7 +40,6 @@ import {
 	agentTypeForRole,
 	parseAliasRef,
 	readV2Config,
-	resolveExactModelSelection,
 	resolveModelAuth,
 	resolveV2Model,
 } from "@vegardx/pi-models";
@@ -591,49 +590,15 @@ export default defineExtension(
 			registries,
 			resolveModel: async (kind, choice) => {
 				if (!ctx) throw new Error("Agent model policy is unavailable.");
-				// v2 first when a v2 catalog is configured. Otherwise a v2-only
-				// config has no authored v1 options to match, so every explicit
-				// request was rejected — seen live as "No exact plan-review
-				// option matches …", which silently downgraded the plan gate to
-				// the runner's own pick and made the tier row decide nothing.
+				// v2 resolution: role -> agent type -> active roster/tier (seat as
+				// the last-resort fallback). An explicit model/effort is validated
+				// against the tiers the agent may reach; resolveViaV2 throws a menu.
 				const v2 = await resolveViaV2(ctx, kind.modelRole, choice);
-				if (v2) return v2;
-				const initial = await resolveExactModelSelection(ctx, {
-					role: kind.modelRole,
-				});
-				if (!initial.selected) {
+				if (!v2)
 					throw new Error(
-						initial.errors.map((error) => error.message).join("; ") ||
-							`No exact model option is configured for ${kind.modelRole}`,
+						`No model resolved for ${kind.modelRole}. Configure a v2 roster/binding for its agent type in /maestro.`,
 					);
-				}
-				if (!choice.model && !choice.effort) return initial.selected;
-				const candidate = initial.candidates.find(
-					(fact) =>
-						fact.available &&
-						(!choice.model || fact.modelId === choice.model) &&
-						(!choice.effort || fact.effort === choice.effort),
-				);
-				if (!candidate?.modelId)
-					throw new Error(
-						`No exact ${kind.modelRole} option matches ${choice.model ?? "default model"} @ ${choice.effort ?? "default effort"}`,
-					);
-				const exact = await resolveExactModelSelection(ctx, {
-					role: kind.modelRole,
-					assignment: {
-						presetId: initial.presetId ?? "session",
-						modelSetId: initial.modelSetId ?? "session",
-						optionId: candidate.optionId,
-						modelId: candidate.modelId,
-						// "auto" options carry no fixed effort — resolution picks it.
-						effort: candidate.effort === "auto" ? undefined : candidate.effort,
-					},
-				});
-				if (!exact.selected)
-					throw new Error(
-						exact.errors.map((error) => error.message).join("; "),
-					);
-				return { ...exact.selected, source: "explicit" as const };
+				return v2;
 			},
 			researchToolsPath: () =>
 				resolve(

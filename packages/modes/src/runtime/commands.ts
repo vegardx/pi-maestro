@@ -12,18 +12,10 @@ import {
 	type AgentKindDefinition,
 	type Answer,
 	CAPABILITIES,
-	MODEL_ROLES,
-	type ModelRole,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
-import {
-	activeResidency,
-	getModelMeta,
-	readModelsConfig,
-	residencyError,
-	resolveExactModelSelection,
-} from "@vegardx/pi-models";
+import { getModelMeta, resolveModelForRole } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { createDeleteTool } from "../delete-tool.js";
 import { buildRecap } from "../deliverable-recap.js";
@@ -105,14 +97,10 @@ async function runPersonaCommand(
 		);
 		return;
 	}
-	const resolution = await resolveExactModelSelection(ctx, {
-		role: kind.modelRole,
-		requireApiKey: true,
-	});
-	const selected = resolution.selected;
+	const selected = await resolveModelForRole(ctx, kind.modelRole);
 	if (!selected) {
 		ctx.ui.notify(
-			`/${command.name} unavailable: ${resolution.errors.map((e) => e.message).join("; ")}`,
+			`/${command.name} unavailable: no model resolved for ${kind.modelRole}.`,
 			"error",
 		);
 		return;
@@ -186,23 +174,20 @@ async function runDeliveryVerification(
 		);
 		return;
 	}
-	// duty:verify-delivery row first (v2 tier via the resolver); v1 verifier
+	// duty:verify-delivery row first (v2 tier via the resolver); the verifier
 	// role is the fallback so verification never regresses on a bad table.
 	let verifier: { modelId: string; effort?: ThinkingLevel } | null =
 		await resolveDutyModel(ctx, "verify-delivery");
 	if (!verifier) {
-		const verifierResolution = await resolveExactModelSelection(ctx, {
-			role: "verifier",
-			requireApiKey: true,
-		});
-		verifier = verifierResolution.selected;
-		if (!verifier) {
+		const resolved = await resolveModelForRole(ctx, "verifier");
+		if (!resolved) {
 			ctx.ui.notify(
-				`Verification unavailable: ${verifierResolution.errors.map((item) => item.message).join("; ")}`,
+				"Verification unavailable: no model resolved for the verifier role.",
 				"error",
 			);
 			return;
 		}
+		verifier = { modelId: resolved.modelId, effort: resolved.effort };
 	}
 	const meta = getModelMeta(ctx, verifier.modelId);
 	ctx.ui.notify(
@@ -717,86 +702,6 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 				`mode=${rt.state.mode} plan=${plan?.slug ?? "none"} deliverables=${
 					plan?.nodes.length ?? 0
 				}`,
-				"info",
-			);
-		},
-	});
-
-	pi.registerCommand("models", {
-		description:
-			"Show how each maestro role resolves to a model (routing inspection). " +
-			"`/models <role>` details one role's candidate options and why each was picked or skipped.",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const roleArg = args.trim();
-			if (roleArg) {
-				if (!(MODEL_ROLES as readonly string[]).includes(roleArg)) {
-					ctx.ui.notify(
-						`Unknown role "${roleArg}". Roles: ${MODEL_ROLES.join(", ")}`,
-						"warning",
-					);
-					return;
-				}
-				const res = await resolveExactModelSelection(ctx, {
-					role: roleArg as ModelRole,
-					requireApiKey: true,
-				});
-				const lines = [
-					`${roleArg} — preset ${res.presetId ?? "session"} / set ${res.modelSetId ?? "session"}`,
-				];
-				// One line per candidate option: ▶ selected, · available, ✗ ruled out
-				// (with the reason). This is the "why this model" surface the oracle
-				// wants — a human can judge whether the pick was sensible.
-				for (const candidate of res.candidates) {
-					const mark =
-						candidate.optionId === res.selected?.optionId
-							? "▶"
-							: candidate.available
-								? "·"
-								: "✗";
-					const model = candidate.modelId ?? candidate.authoredModel;
-					const why = candidate.available
-						? ""
-						: ` — ${candidate.reason ?? "unavailable"}`;
-					const summary = candidate.summary ? `  (${candidate.summary})` : "";
-					lines.push(
-						`  ${mark} ${candidate.optionId}: ${model} @${candidate.effort}${why}${summary}`,
-					);
-				}
-				if (!res.selected) {
-					lines.push(
-						`  (no selection: ${res.errors.map((e) => e.message).join("; ")})`,
-					);
-				}
-				ctx.ui.notify(lines.join("\n"), res.selected ? "info" : "warning");
-				return;
-			}
-			// Table over every role: what a spawn would actually resolve to now.
-			const resolutions = await Promise.all(
-				MODEL_ROLES.map((role) =>
-					resolveExactModelSelection(ctx, { role, requireApiKey: true }).then(
-						(res) => ({ role, res }),
-					),
-				),
-			);
-			const preset = resolutions[0]?.res.presetId ?? "session";
-			const modelsConfig = readModelsConfig(ctx.cwd);
-			const residency = modelsConfig?.residency
-				? activeResidency(modelsConfig)
-				: undefined;
-			const residencyProblem = residencyError(modelsConfig);
-			const width = Math.max(...MODEL_ROLES.map((role) => role.length));
-			const rows = resolutions.map(({ role, res }) => {
-				const selected = res.selected;
-				return selected
-					? `  ${role.padEnd(width)} → ${selected.modelId} @${selected.effort} [${selected.source}]`
-					: `  ${role.padEnd(width)} → (none: ${res.errors[0]?.code ?? "unresolved"})`;
-			});
-			ctx.ui.notify(
-				[
-					`Model routing — preset: ${preset}${residency ? ` · residency: ${residency}` : ""}  (\`/models <role>\` for candidate detail)`,
-					...(residencyProblem ? [`  ⚠ ${residencyProblem}`] : []),
-					...rows,
-				].join("\n"),
 				"info",
 			);
 		},

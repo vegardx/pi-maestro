@@ -186,9 +186,9 @@ default — the real exercise of the presets / modelSets machinery:
 Needs the ollama service running with those three models pulled
 (`ollama list`); it loads them on demand (5-min keepalive). All three
 together ≈ 68 GB on a 128 GB box, leaving KV headroom. Two checks this mode enables:
-`/models` (and `/models <role>` for candidate detail) confirms per-role routing
-lands on the intended model, and `ollama stop <first-model>` then re-running
-`/models <role>` confirms the live availability fall-through. Routing
+`/maestro explain <agent-type>` confirms per-role routing lands on the intended
+model, and `ollama stop <first-model>` then re-running it confirms the live
+availability fall-through. Routing
 correctness is pinned deterministically (no
 ollama) in [`driver/multi-model-profile.test.ts`](../test/e2e/driver/multi-model-profile.test.ts);
 this drive confirms ollama serves it end to end.

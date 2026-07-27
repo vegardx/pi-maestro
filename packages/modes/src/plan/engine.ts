@@ -89,6 +89,7 @@ export interface NodeInput {
 	readonly repo?: string;
 	readonly envelope?: NodeEnvelope;
 	readonly diversityWaiver?: string;
+	readonly multiModal?: boolean;
 }
 
 /** Task kinds an agent may append once execution started (RPC addTask rule). */
@@ -288,6 +289,7 @@ export class PlanEngine {
 				| "skills"
 				| "envelope"
 				| "diversityWaiver"
+				| "multiModal"
 			>
 		>,
 	): void {
@@ -305,7 +307,12 @@ export class PlanEngine {
 		// diversity exemption. Changing them on a started node silently alters a
 		// worker that has already read its brief — invisible until it behaves
 		// unexpectedly. Freeze them with the rest.
-		const shaping = ["persona", "skills", "diversityWaiver"] as const;
+		const shaping = [
+			"persona",
+			"skills",
+			"diversityWaiver",
+			"multiModal",
+		] as const;
 		if (shaping.some((key) => patch[key] !== undefined))
 			this.assertNodePlanned(
 				id,
@@ -747,6 +754,7 @@ export class PlanEngine {
 			...(input.diversityWaiver
 				? { diversityWaiver: input.diversityWaiver }
 				: {}),
+			...(input.multiModal ? { multiModal: true } : {}),
 			authoredBy,
 			...(appendedAt ? { appendedAt } : {}),
 			status: "planned",

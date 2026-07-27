@@ -177,3 +177,48 @@ describe("a repaired worker restarts fresh", () => {
 		expect(engine.get().nodes[0].restartMode).toBeUndefined();
 	});
 });
+
+describe("multiModal is authored intent, frozen once started", () => {
+	it("is authorable and persisted", () => {
+		const root = mkdtempSync(join(tmpdir(), "multimodal-"));
+		roots.push(root);
+		const engine = PlanEngine.create(
+			createPlanStore(root),
+			{ slug: "demo", title: "Demo", repoPath: root },
+			now,
+		);
+		const node = engine.addNode(null, {
+			agent: "reviewer",
+			persona: "reviewer",
+			title: "Security review",
+			multiModal: true,
+		});
+		expect(engine.get().nodes[0].multiModal).toBe(true);
+		expect(node.id).toBeTruthy();
+	});
+
+	it("is absent — not false — when not asked for", () => {
+		// A plan that never mentions multi-modal should not carry the key at all;
+		// it keeps plan.json honest about what the author actually said.
+		const { engine } = planWith("planned");
+		expect(engine.get().nodes[0].multiModal).toBeUndefined();
+	});
+
+	it("counts as a plan change for the review-drift check", () => {
+		// It is authored content that changes what runs, so flipping it must NOT
+		// look identical to the plan a reviewer already approved.
+		const { engine, node } = planWith("planned");
+		const before = planFingerprint(engine.get());
+		engine.updateNode(node.id, { multiModal: true });
+		expect(planFingerprint(engine.get())).not.toBe(before);
+	});
+
+	it("freezes once the node starts", () => {
+		// It decides what the next spawn IS — one reviewer or several — so it
+		// belongs with persona/skills, not with the freely-editable title/body.
+		const { engine, node } = planWith("active");
+		expect(() => engine.updateNode(node.id, { multiModal: true })).toThrow(
+			/how a node runs/,
+		);
+	});
+});

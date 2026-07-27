@@ -1409,6 +1409,16 @@ export function createRuntimeContext(
 				await rt.execution?.destroy();
 				rt.execution = undefined;
 			}
+			// What was already running before we touched anything. Building the
+			// adapter starts its own poll, which can activate the ready work before
+			// our tick does — so tick()'s count alone cannot answer "did anything
+			// start?". This does. (Parked nodes are `active` too, so they land here
+			// and are correctly not counted as newly started.)
+			const activeBefore = new Set(
+				[...walkNodes(rt.engine.get())]
+					.filter((visit) => visit.node.status === "active")
+					.map((visit) => visit.node.id),
+			);
 			await rt.ensureExecution(ctx);
 			const execution = rt.execution;
 			if (!execution) return;
@@ -1434,10 +1444,21 @@ export function createRuntimeContext(
 				} else
 					failures.push(`${node.id}: ${result?.error ?? "validation failed"}`);
 			}
-			const activated =
+			const ticked =
 				ready.length > 0
 					? await execution.tick(target ? [target.id] : undefined)
 					: 0;
+			// Seen on a live drive: the adapter's own poll activated both ready
+			// deliverables before this tick ran, so tick() truthfully returned 0
+			// and /resume reported "nothing activated" while the fleet was already
+			// working. Trust the plan over the return value.
+			const started = [...walkNodes(rt.engine.get())]
+				.filter(
+					(visit) =>
+						visit.node.status === "active" && !activeBefore.has(visit.node.id),
+				)
+				.map((visit) => visit.node.id);
+			const activated = Math.max(ticked, started.length);
 			rt.hud?.refresh();
 
 			if (
@@ -1463,8 +1484,8 @@ export function createRuntimeContext(
 				);
 			if (activated > 0)
 				parts.push(
-					target && ready.length > 0
-						? `Started ${target.id}.`
+					started.length > 0
+						? `Started ${started.join(", ")}.`
 						: `Activated ${activated} ready deliverable(s).`,
 				);
 			if (failures.length > 0)

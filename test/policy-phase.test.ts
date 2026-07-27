@@ -22,7 +22,7 @@ const ALL_TOOLS = [
 	"websearch",
 	"webfetch",
 	"deliverable",
-	"task",
+	"work",
 	"deliverable",
 	"plan",
 	"research",
@@ -38,7 +38,7 @@ describe("plan-mode tool policy", () => {
 			expect(active).toContain(tool);
 		}
 		// Authoring tools are conversation-blocked.
-		for (const tool of ["deliverable", "task", "agent"]) {
+		for (const tool of ["deliverable", "work"]) {
 			expect(active).not.toContain(tool);
 		}
 	});
@@ -50,7 +50,7 @@ describe("plan-mode tool policy", () => {
 			forming: true,
 		});
 		expect(active).toContain("deliverable");
-		expect(active).toContain("task");
+		expect(active).toContain("work");
 		expect(active).toContain("deliverable");
 	});
 
@@ -60,7 +60,7 @@ describe("plan-mode tool policy", () => {
 			availableTools: ALL_TOOLS,
 		});
 		expect(active).toContain("deliverable");
-		expect(active).toContain("task");
+		expect(active).toContain("work");
 	});
 
 	it("toolBlockedInPlanMode blocks structure tools in conversation, allows them while forming", () => {
@@ -70,10 +70,10 @@ describe("plan-mode tool policy", () => {
 		expect(toolBlockedInPlanMode("deliverable")).toMatch(
 			/cross into execution/,
 		);
-		expect(toolBlockedInPlanMode("task")).toMatch(/cross into execution/);
+		expect(toolBlockedInPlanMode("work")).toMatch(/cross into execution/);
 		// Forming window: authoring allowed.
 		expect(toolBlockedInPlanMode("deliverable", true)).toBeNull();
-		expect(toolBlockedInPlanMode("task", true)).toBeNull();
+		expect(toolBlockedInPlanMode("work", true)).toBeNull();
 		// Non-plan implementer tools stay disabled in plan mode regardless.
 		expect(toolBlockedInPlanMode("edit")).toMatch(/disabled/);
 		expect(toolBlockedInPlanMode("write", true)).toMatch(/disabled/);

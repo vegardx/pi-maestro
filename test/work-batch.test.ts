@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import type { Plan } from "../packages/modes/src/plan/schema.js";
 import type { PlanStore } from "../packages/modes/src/plan/storage.js";
-import { createTaskTool } from "../packages/modes/src/tools.js";
+import { createWorkTool } from "../packages/modes/src/tools.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -46,7 +46,7 @@ type Res = {
 };
 
 function run(engine: PlanEngine, params: unknown): Promise<Res> {
-	const tool = createTaskTool({ engine: () => engine });
+	const tool = createWorkTool({ engine: () => engine });
 	return tool.execute(
 		"t",
 		params as never,
@@ -109,7 +109,7 @@ describe("task batch add (agent/RPC path)", () => {
 		bridge: { planMutate: (a: string, g: string, p: MutateCall) => unknown },
 		params: unknown,
 	): Promise<Res> {
-		const tool = createTaskTool({
+		const tool = createWorkTool({
 			engine: () => undefined,
 			agentBridge: () => bridge as never,
 			agentDeliverableId: () => "d1",
@@ -171,7 +171,7 @@ describe("task deliverableId routing (agent/RPC path)", () => {
 				return { success: true, taskId: "t1" };
 			},
 		};
-		const tool = createTaskTool({
+		const tool = createWorkTool({
 			engine: () => undefined,
 			agentBridge: () => bridge as never,
 			agentDeliverableId: () => "d1",

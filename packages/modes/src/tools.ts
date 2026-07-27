@@ -1,7 +1,7 @@
 // Plan tools: deliverable, task, agent — flat-parameter tools for the deliverable-based
 // execution model, ported onto PlanEngine (v1→v2 flip, S3). The tool names and
 // external parameter names are UNCHANGED for wire compat: "deliverable" manages
-// ROOT NODES of the v2 tree, "task" manages a node's tasks, "support" manages
+// ROOT NODES of the v2 tree, "work" manages a node's tasks, "support" manages
 // CHILD NODES (v1 support agents became first-class nodes). The session/mode
 // layer owns which plan is active; these tools perform mutations/reads and
 // return readable markdown.
@@ -387,7 +387,7 @@ const PlanParams = Type.Object({
 export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
 		createDeliverableTool(deps),
-		createTaskTool(deps),
+		createWorkTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
 	];
@@ -625,14 +625,17 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 	}) as ToolDefinition;
 }
 
-export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
+export function createWorkTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
-		name: "task",
-		label: "Task",
+		name: "work",
+		label: "Work",
 		description:
-			"Manage work items in a deliverable: add, update, toggle, remove.",
+			"The work items on a deliverable, AFTER it exists: add (including work " +
+			"you discover mid-flight), update, toggle done, remove. A new " +
+			"deliverable carries its opening tasks in the `deliverable` call — this " +
+			"is for everything that comes after.",
 		promptSnippet:
-			"task — manage work items within a deliverable (add/update/toggle/remove).",
+			"work — add/update/toggle/remove the work items on a deliverable.",
 		parameters: TaskParams,
 		async execute(_id, params): Promise<Result> {
 			// Lifecycle kinds are harness-injected at activation; authoring or

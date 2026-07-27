@@ -91,6 +91,34 @@ describe("plan-mode conversation preamble", () => {
 	});
 });
 
+describe("/form does not claim success for an unrunnable plan", () => {
+	const context = readFileSync(
+		join(process.cwd(), "packages/modes/src/runtime/context.ts"),
+		"utf8",
+	);
+	const runForm = (() => {
+		const from = context.indexOf("async function runForm(");
+		expect(from).toBeGreaterThan(-1);
+		const rest = context.slice(from);
+		const end = rest.search(/\n\t\}[,\n]/);
+		return end === -1 ? rest : rest.slice(0, end);
+	})();
+
+	it("runs the mechanical readiness check before reporting", () => {
+		// Caught on a LIVE drive: Opus authored three deliverables and stopped
+		// before their tasks. `nodes.length > 0` is not "the plan can run", and a
+		// worker deliverable with no gating work can never enter execution.
+		// Forming used to be bundled into the transition, so the gate reported
+		// this in the same gesture; as a standalone verb /form must say it itself.
+		expect(runForm).toContain("executionReadinessValidations");
+		expect(runForm).toContain("can't run yet");
+	});
+
+	it("still points back at /form to fill the gap", () => {
+		expect(runForm).toContain("`/form` again");
+	});
+});
+
 describe("the forming turn", () => {
 	const context = readFileSync(
 		join(process.cwd(), "packages/modes/src/runtime/context.ts"),

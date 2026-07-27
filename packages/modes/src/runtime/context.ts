@@ -594,6 +594,24 @@ export function createRuntimeContext(
 		const plan = rt.engine?.get();
 		const shape =
 			summary.trim() || `${plan?.nodes.length ?? 0} deliverable(s).`;
+		// "Nodes exist" is NOT "the plan can run". A model can author deliverables
+		// and stop before their tasks — seen live on Opus 4.8 — and a worker
+		// deliverable with no gating work can never enter execution. When forming
+		// was bundled into the transition, the gate caught that in the same
+		// gesture; as a standalone verb /form has to say it itself, or it reports
+		// success for a plan that /resume will refuse.
+		const errors = plan
+			? executionReadinessValidations(plan).filter((v) => v.level === "error")
+			: [];
+		if (errors.length > 0) {
+			ctx.ui.notify(
+				`Plan \`${plan?.slug ?? "draft"}\` ${extending ? "extended" : "formed"}, but it can't run yet: ` +
+					`${errors.map((error) => error.message).join("; ")}.\n\n` +
+					"`/form` again to fill in what's missing.",
+				"warning",
+			);
+			return;
+		}
 		ctx.ui.notify(
 			`Plan \`${plan?.slug ?? "draft"}\` ${extending ? "extended" : "formed"}:\n\n${shape.slice(0, 1400)}\n\n` +
 				"`/review` to check it, `/resume` to run it.",

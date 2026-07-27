@@ -27,7 +27,7 @@ describe("the reviewer fans out, not the executor", () => {
 		// One authored node stays one node. The reviewer spawns read-only
 		// subagents itself, which the depth gate already permits.
 		expect(executor).toContain("resolveReviewPanel");
-		expect(brief).toContain('agent(action="spawn"');
+		expect(brief).toContain('subagent(action="spawn"');
 	});
 
 	it("only fans out when the PLAN asked for it", () => {
@@ -39,7 +39,7 @@ describe("the reviewer fans out, not the executor", () => {
 	it("needs more than one model to be a panel at all", () => {
 		// A single slot is an ordinary review; saying so beats pretending three
 		// models looked at it.
-		expect(executor).toContain("panel.length > 1");
+		expect(executor).toContain("panel.models.length > 1");
 	});
 
 	it("degrades to one honest review when the panel cannot resolve", () => {
@@ -88,6 +88,22 @@ describe("findings reach the worker neutral", () => {
 	it("tolerates a dead slot without losing the round", () => {
 		expect(brief).toContain("fails or times out");
 	});
+
+	it("warns off the node's agent type, which is not a subagent kind", () => {
+		// Live drive: the reviewer passed kind:"reviewer" — the node's agent type,
+		// not a registry kind — and got "Unknown agent registry entry". Opus
+		// recovered by listing kinds; a weaker model would have stalled there.
+		expect(brief).toContain("Unknown agent registry entry");
+	});
+
+	it("lists the kinds the registry actually publishes, not a copy", () => {
+		// A list copied into a prompt drifts the moment the registry changes and
+		// nothing catches it. These are injected, so they cannot.
+		expect(brief).toContain("kinds.map");
+		const wiring = context.slice(context.indexOf("resolveReviewPanel: async"));
+		expect(wiring.slice(0, 1200)).toContain("CAPABILITIES.agents");
+		expect(wiring.slice(0, 1200)).toContain(".kinds()");
+	});
 });
 
 describe("the worker contract matches what it receives", () => {
@@ -112,5 +128,20 @@ describe("the worker contract matches what it receives", () => {
 	it("still refuses silent omission", () => {
 		expect(episode).toContain("completeness check rejects");
 		expect(episode).toContain('is not "safe to skip"');
+	});
+});
+
+describe("a support agent authored without tasks still gets a focus", () => {
+	it("falls back to the title rather than opening on an empty section", () => {
+		// Seen live: the reviewer was authored with its whole brief in the title
+		// and zero tasks — legal, since only WORKER nodes need gating work — and
+		// its "## Focus" rendered empty.
+		const executorSrc = source("packages/modes/src/plan/node-executor.ts");
+		const seed = executorSrc.slice(
+			executorSrc.indexOf("private buildSeed("),
+			executorSrc.indexOf("private nextConsumer("),
+		);
+		expect(seed).toContain("node.tasks.length === 0");
+		expect(seed).toContain("node.title ?? node.id");
 	});
 });

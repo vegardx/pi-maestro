@@ -1660,8 +1660,18 @@ export function createRuntimeContext(
 				// family, bounded by the agent's spread. The REVIEWER fans out
 				// to these itself; the executor only hands it the list.
 				resolveReviewPanel: async (node) => {
+					// The review kinds the registry actually publishes, asked for at
+					// runtime through the capability — NOT a list copied into a
+					// prompt. A copied list drifts silently; this cannot. (The
+					// package boundary forbids importing subagents, not talking to
+					// it: capabilities are the sanctioned channel.)
+					const kinds = (
+						maestro.capabilities.get(CAPABILITIES.agents)?.kinds() ?? []
+					)
+						.map((kind) => kind.id)
+						.filter((id) => id.includes("review"));
 					const tier = defaultTierForAgent(ctx, node.agent);
-					if (!tier) return [];
+					if (!tier) return { models: [], kinds };
 					const panel = await resolveModels(
 						ctx,
 						{
@@ -1680,9 +1690,12 @@ export function createRuntimeContext(
 					// Only genuinely distinct families are a panel. A single slot
 					// (or a seat fallback) is an ordinary review, and saying so
 					// beats pretending three models looked at it.
-					return panel
-						.filter((slot) => slot.source === "tier")
-						.map((slot) => slot.modelId);
+					return {
+						models: panel
+							.filter((slot) => slot.source === "tier")
+							.map((slot) => slot.modelId),
+						kinds,
+					};
 				},
 				// New nodes activate only while autonomous (auto — NOT hack:
 				// there the maestro is the sequential worker and must not fan

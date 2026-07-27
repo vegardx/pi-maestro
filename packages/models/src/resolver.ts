@@ -261,39 +261,108 @@ export async function resolveModel(
 	request: ModelResolutionRequest,
 ): Promise<ModelResolution> {
 	// 1. Inheritance is the rule: nothing asked for → the caller's model.
-	if (!request.tier) {
-		const inherited = request.inherit ?? {
-			modelId: sessionModelId(ctx) ?? "",
-			effort: (
-				ctx as { getThinkingLevel?: () => ThinkingLevel }
-			).getThinkingLevel?.(),
-		};
-		if (!inherited.modelId)
-			throw new ModelResolutionError(
-				"nothing to inherit: no caller model and no live session model",
-			);
-		return {
-			source: "inherit",
-			modelId: inherited.modelId,
-			...(inherited.effort ? { effort: inherited.effort } : {}),
-		};
-	}
+	const tier = request.tier;
+	if (!tier) return inheritResolution(ctx, request);
+	const walk = await walkTier(ctx, request, tier);
+	// 2. The first alias that yields an available attachment wins.
+	const winner = walk.resolved.find((entry) => entry.fact.available);
+	// 3. Nothing available → session-model fallback, visibly.
+	return winner
+		? tierResolution(request, tier, walk, winner)
+		: seatFallback(request, tier, walk);
+}
 
+/**
+ * Resolve up to `n` models for ONE spawn request, each from a DISTINCT family —
+ * the primitive behind multi-modal review. Genuine diversity is the entire
+ * point, so this never pads: it returns fewer slots rather than the same model
+ * twice, and a caller that gets one slot runs one review.
+ *
+ * `n <= 1`, or a request with no tier (inheritance has no roster to spread
+ * across), is exactly {@link resolveModel} in a one-element array.
+ */
+export async function resolveModels(
+	ctx: ExtensionContext,
+	request: ModelResolutionRequest,
+	n: number,
+): Promise<ModelResolution[]> {
+	const tier = request.tier;
+	if (n <= 1 || !tier) return [await resolveModel(ctx, request)];
+	const walk = await walkTier(ctx, request, tier);
+	const picks: ModelResolution[] = [];
+	const seen = new Set<string>();
+	for (const entry of walk.resolved) {
+		if (!entry.fact.available) continue;
+		// One slot per family: a tier may list several aliases of the same
+		// family, and two aliases of one family are not a second opinion.
+		if (seen.has(entry.fact.family)) continue;
+		seen.add(entry.fact.family);
+		picks.push(tierResolution(request, tier, walk, entry));
+		if (picks.length === n) break;
+	}
+	// Every alias struck (or an empty tier): degrade to the single seat fallback,
+	// exactly as resolveModel does. NOT n copies of the seat — running the same
+	// model n times is a fan-out that looks diverse and is not.
+	return picks.length > 0 ? picks : [seatFallback(request, tier, walk)];
+}
+
+/** The caller's own model, for a request that asked for no tier. */
+function inheritResolution(
+	ctx: ExtensionContext,
+	request: ModelResolutionRequest,
+): ModelResolution {
+	const inherited = request.inherit ?? {
+		modelId: sessionModelId(ctx) ?? "",
+		effort: (
+			ctx as { getThinkingLevel?: () => ThinkingLevel }
+		).getThinkingLevel?.(),
+	};
+	if (!inherited.modelId)
+		throw new ModelResolutionError(
+			"nothing to inherit: no caller model and no live session model",
+		);
+	return {
+		source: "inherit",
+		modelId: inherited.modelId,
+		...(inherited.effort ? { effort: inherited.effort } : {}),
+	};
+}
+
+/** Everything a tier walk produces, before anyone picks a winner from it. */
+interface TierWalk {
+	readonly resolved: readonly ResolvedAlias[];
+	readonly candidates: readonly ModelCandidateFact[];
+	readonly refs: readonly string[];
+	readonly bindingId: string;
+	readonly rosterId: string;
+	readonly seat: string | undefined;
+}
+
+/**
+ * Validate the request against config/allowance/binding/roster and resolve EVERY
+ * alias ref in the tier. Shared by the one-model and top-N entry points so they
+ * cannot drift on validation, ordering, or the own-gateway preference.
+ */
+async function walkTier(
+	ctx: ExtensionContext,
+	request: ModelResolutionRequest,
+	tier: TierId,
+): Promise<TierWalk> {
 	const config = readConfigSafe(ctx);
 	if (!config)
 		throw new ModelResolutionError(
-			`tier ${request.tier} requested but no v2 roster is configured`,
+			`tier ${tier} requested but no v2 roster is configured`,
 		);
 	// Deliberate tier references are bounded by the agent's allowance.
 	const allowed = config.allowances[request.agent]?.tiers ?? [];
-	if (!allowed.includes(request.tier))
+	if (!allowed.includes(tier))
 		throw new ModelResolutionError(
-			`tier ${request.tier} is outside agent ${request.agent}'s allowance (${allowed.join(", ")})`,
+			`tier ${tier} is outside agent ${request.agent}'s allowance (${allowed.join(", ")})`,
 		);
 	const active = activeBinding(config, sessionModelId(ctx));
 	if (!active)
 		throw new ModelResolutionError(
-			`tier ${request.tier} requested but no binding is active (no target match, no default binding)`,
+			`tier ${tier} requested but no binding is active (no target match, no default binding)`,
 		);
 	const roster = config.rosters[active.binding.roster];
 	if (!roster)
@@ -308,7 +377,7 @@ export async function resolveModel(
 	const agentProvider = parseModelSpec(
 		request.inherit?.modelId ?? seat ?? "",
 	)?.provider;
-	const refs = roster[request.tier];
+	const refs = roster[tier];
 	const resolved = await Promise.all(
 		refs.map((ref) => {
 			const parsed = parseAliasRef(ref);
@@ -339,50 +408,68 @@ export async function resolveModel(
 			);
 		}),
 	);
-	const candidates = resolved.map((entry) => entry.fact);
-	const winnerIndex = resolved.findIndex((entry) => entry.fact.available);
-	if (winnerIndex >= 0) {
-		const winner = resolved[winnerIndex];
-		const effort = clampEffort(
-			request.inherit?.effort,
-			winner.config,
-			winner.model,
-		);
-		return {
-			source: "tier",
-			modelId: winner.fact.model as string,
-			...(effort ? { effort } : {}),
-			family: winner.fact.family,
-			alias: winner.fact.alias,
-			...(winner.fact.provider
-				? { attachmentProvider: winner.fact.provider }
-				: {}),
-			tier: request.tier,
-			bindingId: active.id,
-			rosterId: active.binding.roster,
-			candidates,
-		};
-	}
-
-	// 3. Session-model fallback: every alias was unavailable (or the tier is
-	//    empty), so the judgment still happens — on the seat — visibly.
-	if (!seat)
-		throw new ModelResolutionError(
-			`tier ${request.tier} has no available model and there is no session model to fall back to`,
-		);
-	const struck = candidates.filter((fact) => !fact.available).length;
 	return {
-		source: "fallback",
-		modelId: seat,
-		...(request.inherit?.effort ? { effort: request.inherit.effort } : {}),
-		tier: request.tier,
+		resolved,
+		candidates: resolved.map((entry) => entry.fact),
+		refs,
 		bindingId: active.id,
 		rosterId: active.binding.roster,
-		candidates,
+		seat,
+	};
+}
+
+/** One available alias → the resolution record for that slot. */
+function tierResolution(
+	request: ModelResolutionRequest,
+	tier: TierId,
+	walk: TierWalk,
+	entry: ResolvedAlias,
+): ModelResolution {
+	const effort = clampEffort(
+		request.inherit?.effort,
+		entry.config,
+		entry.model,
+	);
+	return {
+		source: "tier",
+		modelId: entry.fact.model as string,
+		...(effort ? { effort } : {}),
+		family: entry.fact.family,
+		alias: entry.fact.alias,
+		...(entry.fact.provider ? { attachmentProvider: entry.fact.provider } : {}),
+		tier,
+		bindingId: walk.bindingId,
+		rosterId: walk.rosterId,
+		candidates: walk.candidates,
+	};
+}
+
+/**
+ * Every alias was unavailable (or the tier is empty), so the judgment still
+ * happens — on the seat — visibly. Throws when there is no seat to fall back to.
+ */
+function seatFallback(
+	request: ModelResolutionRequest,
+	tier: TierId,
+	walk: TierWalk,
+): ModelResolution {
+	if (!walk.seat)
+		throw new ModelResolutionError(
+			`tier ${tier} has no available model and there is no session model to fall back to`,
+		);
+	const struck = walk.candidates.filter((fact) => !fact.available).length;
+	return {
+		source: "fallback",
+		modelId: walk.seat,
+		...(request.inherit?.effort ? { effort: request.inherit.effort } : {}),
+		tier,
+		bindingId: walk.bindingId,
+		rosterId: walk.rosterId,
+		candidates: walk.candidates,
 		fallbackReason:
-			refs.length === 0
-				? `tier ${request.tier} is empty in roster ${active.binding.roster}`
-				: `all ${struck} ${request.tier} alias${struck === 1 ? "" : "es"} unavailable`,
+			walk.refs.length === 0
+				? `tier ${tier} is empty in roster ${walk.rosterId}`
+				: `all ${struck} ${tier} alias${struck === 1 ? "" : "es"} unavailable`,
 	};
 }
 

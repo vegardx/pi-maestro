@@ -177,7 +177,7 @@ export class ScriptedAnswerer implements Answerer {
  * on an incidental substring hit is how a drive quietly takes the wrong branch.
  */
 export const DEFAULT_SELECT_RULES: SelectRule[] = [
-	// The /resume review-skip ask. Must precede the looser "plan" rule below,
+	// The /run review-skip ask. Must precede the looser "plan" rule below,
 	// and must choose PROCEED: a scripted drive has no one to read a review.
 	{ match: "unreviewed", prefer: ["proceed without review", "proceed"] },
 	// Posture picker (/mode with no argument, and the Shift+Tab choice).

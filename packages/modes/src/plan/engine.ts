@@ -447,7 +447,7 @@ export class PlanEngine {
 				// A rewritten task makes the worker's own transcript wrong: it
 				// already read the OLD text and may have built against it, so
 				// resuming that session continues from a superseded brief. Mark the
-				// node for a FRESH restart — /resume re-seeds it from the repaired
+				// node for a FRESH restart — /run re-seeds it from the repaired
 				// plan instead of replaying the stale conversation.
 				//
 				// Only clarifyTask needs this. Added and reopened tasks do not

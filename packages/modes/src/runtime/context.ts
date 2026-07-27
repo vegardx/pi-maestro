@@ -248,11 +248,11 @@ export interface RuntimeContext {
 	recordMaestroUsage(usage: unknown): void;
 	incrementMaestroTurn(): void;
 	/**
-	 * `/resume` (and `/start`): run the plan. ONE verb over both populations —
+	 * `/run` (and `/start`): run the plan. ONE verb over both populations —
 	 * resumes cleanly parked workers from their own sessions AND activates newly
 	 * ready planned deliverables. Requires a formed plan.
 	 */
-	runResume(
+	runPlan(
 		deliverableId: string | undefined,
 		ctx: ExtensionContext,
 	): Promise<void>;
@@ -599,7 +599,7 @@ export function createRuntimeContext(
 		// deliverable with no gating work can never enter execution. When forming
 		// was bundled into the transition, the gate caught that in the same
 		// gesture; as a standalone verb /form has to say it itself, or it reports
-		// success for a plan that /resume will refuse.
+		// success for a plan that /run will refuse.
 		const errors = plan
 			? executionReadinessValidations(plan).filter((v) => v.level === "error")
 			: [];
@@ -614,7 +614,7 @@ export function createRuntimeContext(
 		}
 		ctx.ui.notify(
 			`Plan \`${plan?.slug ?? "draft"}\` ${extending ? "extended" : "formed"}:\n\n${shape.slice(0, 1400)}\n\n` +
-				"`/review` to check it, `/resume` to run it.",
+				"`/review` to check it, `/run` to run it.",
 			"info",
 		);
 	}
@@ -760,9 +760,9 @@ export function createRuntimeContext(
 		)?.value;
 		if (decision !== "review") return true;
 		// Review, then stop: reading the verdict is the whole reason to ask for
-		// one, so the decision to run belongs to the next /resume.
+		// one, so the decision to run belongs to the next /run.
 		await runReview(ctx);
-		ctx.ui.notify("Nothing started — `/resume` when you're satisfied.", "info");
+		ctx.ui.notify("Nothing started — `/run` when you're satisfied.", "info");
 		return false;
 	}
 
@@ -857,7 +857,7 @@ export function createRuntimeContext(
 	 *
 	 * Deliberately NOT wired into setMode/commitMode. Plenty of INTERNAL mode
 	 * changes are correct while workers are live and must never prompt: /recover
-	 * and /resume force auto to orchestrate, the bash router widens to hack on
+	 * and /run force auto to orchestrate, the bash router widens to hack on
 	 * an isolation failure, onAllSettled returns to plan, agent boot and session
 	 * hydration write the mode directly. The guard belongs to the gesture, not to
 	 * the state transition.
@@ -892,8 +892,7 @@ export function createRuntimeContext(
 					{
 						label: `Stop and switch to ${to}`,
 						value: "stop",
-						description:
-							"Park the workers (resumable via /resume), then switch.",
+						description: "Park the workers (resumable via /run), then switch.",
 					},
 				],
 				recommendation: "stay",
@@ -1094,7 +1093,7 @@ export function createRuntimeContext(
 			// affordance of the Shift+Tab RAIL (which calls requestMode), not an
 			// invariant of the transition: `/mode auto` deliberately enters without
 			// forming or reviewing, because the plan lifecycle now has its own
-			// verbs (`/form`, `/review`, `/resume`).
+			// verbs (`/form`, `/review`, `/run`).
 			commitMode(mode, ctx);
 		},
 
@@ -1238,8 +1237,7 @@ export function createRuntimeContext(
 					await rt.requestMode("hack", ctx);
 					return;
 				}
-				if (await rt.requestMode("auto", ctx))
-					await rt.runResume(undefined, ctx);
+				if (await rt.requestMode("auto", ctx)) await rt.runPlan(undefined, ctx);
 				return;
 			}
 			// auto → plan; hack (off-cycle) also exits to plan — see nextMode.
@@ -1306,7 +1304,7 @@ export function createRuntimeContext(
 			}
 		},
 
-		async runResume(
+		async runPlan(
 			deliverableId: string | undefined,
 			ctx: ExtensionContext,
 		): Promise<void> {
@@ -1400,7 +1398,7 @@ export function createRuntimeContext(
 			if (!(await confirmUnreviewedPlan(ctx, plan))) return;
 
 			// Orchestration runs in an execution posture. Entering it here is a
-			// direct commit: /resume is the explicit request to run, so there is
+			// direct commit: /run is the explicit request to run, so there is
 			// nothing left for a gate to ask.
 			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
 
@@ -1450,7 +1448,7 @@ export function createRuntimeContext(
 					: 0;
 			// Seen on a live drive: the adapter's own poll activated both ready
 			// deliverables before this tick ran, so tick() truthfully returned 0
-			// and /resume reported "nothing activated" while the fleet was already
+			// and /run reported "nothing activated" while the fleet was already
 			// working. Trust the plan over the return value.
 			const started = [...walkNodes(rt.engine.get())]
 				.filter(
@@ -1510,7 +1508,7 @@ export function createRuntimeContext(
 			}
 			// v2 prepareStop reports which sessions stopped/were unresponsive;
 			// the durable StopRecord is assembled here (the adapter no longer
-			// returns one). Unresponsive workers taint the stop: /resume
+			// returns one). Unresponsive workers taint the stop: /run
 			// refuses and routes to the audited /recover path.
 			const completedAt = Date.now();
 			rt.setExecutionStage(
@@ -1529,7 +1527,7 @@ export function createRuntimeContext(
 				},
 				ctx,
 			);
-			// A stopped adapter is terminal (mirrors /resume): tear it down and
+			// A stopped adapter is terminal (mirrors /run): tear it down and
 			// clear the handle. Otherwise rt.execution stays truthy at stage
 			// "stopped", and the next transition — session_shutdown or a second
 			// /stop — attempts the illegal stopped -> stopping edge and throws,
@@ -1540,7 +1538,7 @@ export function createRuntimeContext(
 			ctx.ui.notify(
 				result.unresponsive.length
 					? `Stop completed with ${result.unresponsive.length} uncertain worker(s). Use /recover to audit them.`
-					: `Parked ${result.stopped.length} worker(s). Resume with /resume [delivery].`,
+					: `Parked ${result.stopped.length} worker(s). Resume with /run [delivery].`,
 				result.unresponsive.length ? "warning" : "info",
 			);
 		},

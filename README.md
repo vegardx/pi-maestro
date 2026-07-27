@@ -48,7 +48,7 @@ needs the `gh` CLI.
   research(...)             # parallel persisted codebase/web reports
 /form                       # author the deliverable/task tree from that conversation
 /review                     # optional: a reviewer judges the plan before you run it
-/resume                     # run it (resumes parked workers, activates ready work)
+/run                     # run it (resumes parked workers, activates ready work)
 /agents                      # live workers, child runs, plan, and questions
   ...typed reviewers inspect immutable SHAs; findings resolve and verify...
 /ship                        # push + PR for the next shippable delivery

@@ -1,4 +1,4 @@
-// /resume is ONE verb over two disjoint populations. The merge is not a union:
+// /run is ONE verb over two disjoint populations. The merge is not a union:
 // PARKED work is active-but-stopped and resumes from its own session, READY work
 // is still planned and activates fresh. tick() cannot do the former — advanceNode
 // early-returns on any blocked node, and parked nodes are always blocked — so
@@ -13,54 +13,54 @@ const source = (rel: string) => readFileSync(join(process.cwd(), rel), "utf8");
 const context = source("packages/modes/src/runtime/context.ts");
 const commands = source("packages/modes/src/runtime/commands.ts");
 
-/** The runResume member body, bounded by the next member at the same indent. */
-const runResume = (() => {
-	const from = context.indexOf("async runResume(");
+/** The runPlan member body, bounded by the next member at the same indent. */
+const runPlan = (() => {
+	const from = context.indexOf("async runPlan(");
 	expect(from).toBeGreaterThan(-1);
 	const rest = context.slice(from);
 	const end = rest.indexOf("\n\t\t},");
 	return end === -1 ? rest : rest.slice(0, end);
 })();
 
-describe("/resume covers both populations", () => {
+describe("/run covers both populations", () => {
 	it("resumes parked workers with the per-node resume primitive", () => {
-		expect(runResume).toContain("restartWorkerResume");
+		expect(runPlan).toContain("restartWorkerResume");
 	});
 
 	it("activates newly ready planned work with a tick", () => {
-		expect(runResume).toContain("readyChildren");
-		expect(runResume).toContain("execution.tick(");
+		expect(runPlan).toContain("readyChildren");
+		expect(runPlan).toContain("execution.tick(");
 	});
 
 	it("rebuilds the adapter before resuming — a stopped one is terminal", () => {
-		expect(runResume).toContain("rt.execution?.destroy()");
-		expect(runResume).toContain("ensureExecution");
+		expect(runPlan).toContain("rt.execution?.destroy()");
+		expect(runPlan).toContain("ensureExecution");
 	});
 });
 
-describe("/resume preconditions", () => {
+describe("/run preconditions", () => {
 	it("requires a formed plan and names the verb that forms one", () => {
-		// Running is not authoring: /resume must not silently form a plan the
+		// Running is not authoring: /run must not silently form a plan the
 		// user never saw. This is the ruling that split /form out in the first
 		// place, so it is worth pinning.
-		expect(runResume).toContain("No plan has been formed");
-		expect(runResume).toContain("/form");
+		expect(runPlan).toContain("No plan has been formed");
+		expect(runPlan).toContain("/form");
 	});
 
 	it("refuses an unproven stop and routes to /recover", () => {
 		// Ported from runRestart: an un-ACKed worker means we do not know what it
 		// was doing, so resuming blind would build on that uncertainty.
-		expect(runResume).toContain('stop.kind === "failed"');
-		expect(runResume).toContain('stop.outcome === "timed-out"');
-		expect(runResume).toContain("/recover");
+		expect(runPlan).toContain('stop.kind === "failed"');
+		expect(runPlan).toContain('stop.outcome === "timed-out"');
+		expect(runPlan).toContain("/recover");
 	});
 
 	it("refuses to launch execution from inside a subagent", () => {
-		expect(runResume).toContain("isAgentMode()");
+		expect(runPlan).toContain("isAgentMode()");
 	});
 
 	it("asks about an unreviewed plan", () => {
-		expect(runResume).toContain("confirmUnreviewedPlan");
+		expect(runPlan).toContain("confirmUnreviewedPlan");
 	});
 });
 
@@ -89,46 +89,46 @@ describe("the review-skip ask", () => {
 		expect(confirm).toContain("starting anyway");
 	});
 
-	it("stops after reviewing, leaving the run decision to the next /resume", () => {
+	it("stops after reviewing, leaving the run decision to the next /run", () => {
 		expect(confirm).toContain("await runReview(ctx)");
 		expect(confirm).toContain("Nothing started");
 	});
 });
 
-describe("/resume reports what actually started", () => {
+describe("/run reports what actually started", () => {
 	it("does not trust tick()'s count alone", () => {
 		// Seen on a live drive: building the adapter starts its own poll, which
 		// activated both ready deliverables before our tick ran. tick() then
-		// truthfully returned 0 and /resume said "nothing activated" while the
+		// truthfully returned 0 and /run said "nothing activated" while the
 		// fleet was already working. The plan is the source of truth.
-		expect(runResume).toContain("activeBefore");
-		expect(runResume).toContain("Math.max(ticked, started.length)");
+		expect(runPlan).toContain("activeBefore");
+		expect(runPlan).toContain("Math.max(ticked, started.length)");
 	});
 
 	it("excludes work that was already running", () => {
 		// Parked nodes are `active` too, so they must land in the before-set or
 		// they would be double-reported as newly started.
-		expect(runResume).toContain('visit.node.status === "active"');
-		expect(runResume).toContain("!activeBefore.has(visit.node.id)");
+		expect(runPlan).toContain('visit.node.status === "active"');
+		expect(runPlan).toContain("!activeBefore.has(visit.node.id)");
 	});
 });
 
-describe("/resume honors a repaired node's restart mode", () => {
+describe("/run honors a repaired node's restart mode", () => {
 	it("restarts fresh instead of resuming a superseded session", () => {
 		// A clarifyTask repair rewrote the brief, so the worker's transcript is
 		// wrong. Resuming it would continue from a spec that no longer exists.
-		expect(runResume).toContain('node.restartMode === "fresh"');
-		expect(runResume).toContain("restartWorkerFresh");
+		expect(runPlan).toContain('node.restartMode === "fresh"');
+		expect(runPlan).toContain("restartWorkerFresh");
 	});
 
 	it("consumes the flag so later resumes keep their context", () => {
-		expect(runResume).toContain("clearRestartMode");
+		expect(runPlan).toContain("clearRestartMode");
 	});
 });
 
 describe("the command surface", () => {
-	it("registers /resume and keeps /start as an alias", () => {
-		expect(commands).toContain('pi.registerCommand("resume"');
+	it("registers /run and keeps /start as an alias", () => {
+		expect(commands).toContain('pi.registerCommand("run"');
 		expect(commands).toContain('pi.registerCommand("start"');
 	});
 
@@ -138,7 +138,7 @@ describe("the command surface", () => {
 		expect(commands).not.toContain('for (const name of ["resume", "start"]');
 	});
 
-	it("no longer registers /restart — /resume folds it in", () => {
+	it("no longer registers /restart — /run folds it in", () => {
 		expect(commands).not.toContain('pi.registerCommand("restart"');
 	});
 

@@ -37,7 +37,7 @@ Plan mode is a conversation: it converges on what to build and why. `research` p
 
 Plan → Auto/Hack is a separate execution-readiness gate. A `plan-review` assignment inspects the exact plan, the user rules **Enter execution** or **Stay in plan**, and the host revalidates the same plan fingerprint before changing mode. The session remains in Plan while review and ruling are pending.
 
-A repo-backed delivery is one branch, worktree, and PR. `dependsOn` forms a flat DAG; stacked work defaults to the predecessor tip. The executor activates only ready `planned` deliveries. `/resume` (alias `/start`) runs the plan — it resumes cleanly parked workers and activates ready planned work in one step; `/recover` audits failed or uncertain work before resumption, and an unproven stop routes there.
+A repo-backed delivery is one branch, worktree, and PR. `dependsOn` forms a flat DAG; stacked work defaults to the predecessor tip. The executor activates only ready `planned` deliveries. `/run` (alias `/start`) runs the plan — it resumes cleanly parked workers and activates ready planned work in one step; `/recover` audits failed or uncertain work before resumption, and an unproven stop routes there.
 
 ## Process and RPC model
 

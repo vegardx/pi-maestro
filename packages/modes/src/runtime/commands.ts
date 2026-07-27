@@ -356,20 +356,23 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		handler: (_args, ctx) => rt.runReview(ctx),
 	});
 
+	// One verb for running the plan: parked workers resume from their own
+	// sessions, newly ready deliverables activate. Registered as two literal
+	// names (not a loop) so check-docs actually sees both — a loop variable is
+	// invisible to its scanner, which is how /auto and /hack went undocumented.
+	pi.registerCommand("resume", {
+		description:
+			"Run the plan: resume parked workers and activate ready work. /resume [deliverable-id]",
+		handler: (args, ctx) => rt.runResume(args.trim() || undefined, ctx),
+	});
 	pi.registerCommand("start", {
-		description: "Activate ready planned work. /start [deliverable-id]",
-		handler: (args, ctx) => rt.runStart(args.trim() || undefined, ctx),
+		description: "Alias for /resume. /start [deliverable-id]",
+		handler: (args, ctx) => rt.runResume(args.trim() || undefined, ctx),
 	});
 
 	pi.registerCommand("stop", {
 		description: "Intentionally park all active workers behind a bounded stop.",
 		handler: (_args, ctx) => rt.runStop(ctx),
-	});
-
-	pi.registerCommand("restart", {
-		description:
-			"Resume a clean stop without starting unrelated planned work. /restart [deliverable-id]",
-		handler: (args, ctx) => rt.runRestart(args.trim() || undefined, ctx),
 	});
 
 	pi.registerCommand("sync", {

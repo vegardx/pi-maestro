@@ -158,7 +158,8 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts start --live      # real models + 
 #   no model-dependent plan authoring (docs/modes-architecture.md backlog #7)
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/plan"
 node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "<the plan prompt>"
-node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/start"
+node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/form"    # author the tree (skip when --seed-plan)
+node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/resume"  # run it (/start is an alias)
 node_modules/.bin/jiti test/e2e/driver/cli.ts poll     # new events + parked questions
 node_modules/.bin/jiti test/e2e/driver/cli.ts answer <id> "<value>"   # repeat until shipped
 node_modules/.bin/jiti test/e2e/driver/cli.ts assert

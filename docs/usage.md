@@ -18,7 +18,9 @@ Posture and the plan are separate axes. **`/mode [plan|auto|hack|recon]`** is th
 - **Recon** is a deliberate read-only research off-ramp in its own isolated session; leaving restores the session you came from.
 - **Agent** is internal to workers.
 
-Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the gesture is **two steps**: the FIRST Shift+Tab (no plan formed yet) **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks) and shows a summary of what it will do, then **stays in plan** for review. The SECOND Shift+Tab (plan now formed) asks **auto or hack**: **auto** runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint before entering execution; **hack** is a direct posture switch (ungated — no forming, no review). **Stay in plan** records a cancelled ruling and starts nothing. `/start` executes in one shot (form + gate). In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
+Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the gesture is **two steps**: the FIRST Shift+Tab (no plan formed yet) **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks) and shows a summary of what it will do, then **stays in plan** for review. The SECOND Shift+Tab (plan now formed) asks **auto or hack**: **auto** runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint before entering execution; **hack** is a direct posture switch (ungated — no forming, no review). **Stay in plan** records a cancelled ruling and starts nothing. In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
+
+Shift+Tab is the guided rail and keeps that gate. The commands are the direct path: `/form`, then `/review` if you want it, then `/resume` — no gate, and `/resume` asks about an unreviewed plan rather than blocking on one.
 
 ## Plan
 
@@ -41,7 +43,7 @@ A repo delivery maps to one branch, worktree, and PR. `dependsOn` controls activ
 
 ## Execute
 
-`/start [deliverable-id]` activates only ready `planned` work. Omitting the id starts all ready planned deliveries. It does not restart failed or stopped work.
+`/resume [deliverable-id]` runs the plan (`/start` is an alias). It is one verb over both populations: cleanly parked workers resume from their own sessions, and ready `planned` deliverables activate. Omitting the id does both for everything eligible. It requires a formed plan, and refuses when the last stop was not cleanly proven — that routes to `/recover`. If the plan has not been reviewed, or changed since it was, it asks whether to review first or proceed.
 
 Workers run in persistent tmux sessions, commit locally, and toggle tasks. Typed workflow review assignments inspect immutable revisions and report structured findings. Critical and major findings must have a recorded resolution; fixed claims receive scope-locked verification. Final assessment checks exact SHAs and complete reports mechanically.
 
@@ -58,10 +60,10 @@ The editor HUD has Agents, Plan, and Questions tabs. Tab enters it only from an 
 
 Use exact `worker:<deliverable/agent>` or `run:<id>` targets when aliases could collide. `I` in the HUD interrupts. `K` performs a bounded shutdown of the owning delivery and records a recoverable failure only after the process is proved gone.
 
-### Stop, restart, recover
+### Stop, resume, recover
 
 - `/stop` freezes scheduling, requests cooperative preparation, and escalates remaining sessions at one bounded fleet deadline.
-- `/restart [deliverable-id]` resumes a clean stop or replaces an already-started worker. It never activates unrelated planned work.
+- `/resume [deliverable-id]` resumes a clean stop and activates any newly ready planned work in the same step.
 - `/kill <deliverable-id>` proves shutdown and marks that delivery failed/recoverable.
 - `/recover [deliverable-id]` audits worktree, branch, session, and PR reality. A target recovers only that delivery; global recovery presents candidates instead of clearing every hold.
 - `/debug [symptom]` collects bounded facts, asks for one recovery action, records the exact result, then offers a redacted issue draft.
@@ -92,9 +94,8 @@ Generated PR evidence is marker-bounded: user text outside Maestro markers is pr
 | `/mode [name]` | Switch posture (direct; picker when omitted) |
 | `/form` | Author or extend the plan tree (plan mode) |
 | `/review` | Review the formed plan; records the verdict |
-| `/start [id]` | Activate ready planned deliveries |
+| `/resume [id]` | Run the plan: resume parked workers + activate ready work (`/start` is an alias) |
 | `/stop` | Bounded fleet stop |
-| `/restart [id]` | Resume/replace started work only |
 | `/recover [id]` | Audit and recover targeted or selected work |
 | `/kill <id>` | Prove shutdown, then fail recoverably |
 | `/agents`, `/watch`, `/view <target>` | Inspect agents |

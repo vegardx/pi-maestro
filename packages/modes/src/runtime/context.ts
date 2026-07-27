@@ -79,6 +79,7 @@ import {
 	createDefaultTransitionGates,
 	createExecutionReadinessGate,
 	executionReadinessValidations,
+	lastReviewedFingerprint,
 	recordPlanReview,
 	runPlanReviewAgent,
 	TransitionGateCoordinator,
@@ -246,17 +247,17 @@ export interface RuntimeContext {
 	assertDeliverableRepo(ctx: ExtensionContext, d: PlanNode): boolean;
 	recordMaestroUsage(usage: unknown): void;
 	incrementMaestroTurn(): void;
-	runStart(
+	/**
+	 * `/resume` (and `/start`): run the plan. ONE verb over both populations —
+	 * resumes cleanly parked workers from their own sessions AND activates newly
+	 * ready planned deliverables. Requires a formed plan.
+	 */
+	runResume(
 		deliverableId: string | undefined,
 		ctx: ExtensionContext,
 	): Promise<void>;
 	/** Intentionally park every active worker behind the bounded stop barrier. */
 	runStop(ctx: ExtensionContext): Promise<void>;
-	/** Resume one or all cleanly parked deliveries without starting planned work. */
-	runRestart(
-		deliverableId: string | undefined,
-		ctx: ExtensionContext,
-	): Promise<void>;
 	/** Build the execution adapter for the active plan if absent (idempotent). */
 	ensureExecution(ctx: ExtensionContext): Promise<void>;
 	/** Audit failed or uncertain state, then recover only explicitly selected deliveries. */
@@ -595,7 +596,7 @@ export function createRuntimeContext(
 			summary.trim() || `${plan?.nodes.length ?? 0} deliverable(s).`;
 		ctx.ui.notify(
 			`Plan \`${plan?.slug ?? "draft"}\` ${extending ? "extended" : "formed"}:\n\n${shape.slice(0, 1400)}\n\n` +
-				"`/review` to check it, `/start` to run it.",
+				"`/review` to check it, `/resume` to run it.",
 			"info",
 		);
 	}
@@ -688,6 +689,66 @@ export function createRuntimeContext(
 	}
 
 	/**
+	 * Review is opt-in, so starting work must at least SAY when what is about to
+	 * run was never judged — or was judged and has changed since. True = go.
+	 *
+	 * Deliberately not a refusal: the expert path is allowed to run an unreviewed
+	 * plan, it just may not do so unknowingly.
+	 */
+	async function confirmUnreviewedPlan(
+		ctx: ExtensionContext,
+		plan: Plan,
+	): Promise<boolean> {
+		const reviewed = lastReviewedFingerprint(plan);
+		if (reviewed === planFingerprint(plan)) return true;
+		const ask = maestro.capabilities.get(CAPABILITIES.ask);
+		if (!ask) {
+			// No ruling surface — say it and proceed rather than wedging execution.
+			ctx.ui.notify(
+				reviewed
+					? "Plan changed since it was reviewed; starting anyway."
+					: "This plan has not been reviewed; starting anyway.",
+				"warning",
+			);
+			return true;
+		}
+		const questionId = `resume-review:${now()}`;
+		const answers = await ask.ask([
+			{
+				id: questionId,
+				header: "Unreviewed plan",
+				question: reviewed
+					? "The plan changed since it was last reviewed. Review it first, or proceed without review?"
+					: "This plan has not been reviewed. Review it first, or proceed without review?",
+				options: [
+					{
+						label: "Proceed without review",
+						value: "proceed",
+						description: "Start the work now.",
+					},
+					{
+						label: "Review first",
+						value: "review",
+						description: "Run the plan review; start nothing yet.",
+					},
+				],
+				recommendation: "proceed",
+				blocking: true,
+				whyBlocking: "Starting work is the point of no return for this plan.",
+			},
+		]);
+		const decision = answers.find(
+			(answer) => answer.questionId === questionId,
+		)?.value;
+		if (decision !== "review") return true;
+		// Review, then stop: reading the verdict is the whole reason to ask for
+		// one, so the decision to run belongs to the next /resume.
+		await runReview(ctx);
+		ctx.ui.notify("Nothing started — `/resume` when you're satisfied.", "info");
+		return false;
+	}
+
+	/**
 	 * First Shift+Tab from plan mode: form the plan and PREVIEW it, staying in
 	 * plan. The user signalled "go", so we author the deliverables/tasks and show
 	 * the model's own summary of what we'll do — but we do NOT enter execution.
@@ -776,7 +837,7 @@ export function createRuntimeContext(
 	 *
 	 * Deliberately NOT wired into setMode/commitMode. Plenty of INTERNAL mode
 	 * changes are correct while workers are live and must never prompt: /recover
-	 * and /restart force auto to orchestrate, the bash router widens to hack on
+	 * and /resume force auto to orchestrate, the bash router widens to hack on
 	 * an isolation failure, onAllSettled returns to plan, agent boot and session
 	 * hydration write the mode directly. The guard belongs to the gesture, not to
 	 * the state transition.
@@ -1142,7 +1203,7 @@ export function createRuntimeContext(
 				]);
 				if (choice?.startsWith("auto")) {
 					if (await rt.requestMode("auto", ctx))
-						await rt.runStart(undefined, ctx);
+						await rt.runResume(undefined, ctx);
 				} else if (choice?.startsWith("hack")) {
 					// hack is a direct posture switch — no gate, no forming, no
 					// worker activation (requestMode pass-through commits for hack).
@@ -1214,12 +1275,12 @@ export function createRuntimeContext(
 			}
 		},
 
-		async runStart(
+		async runResume(
 			deliverableId: string | undefined,
 			ctx: ExtensionContext,
 		): Promise<void> {
 			if (!rt.engine) {
-				ctx.ui.notify("No active plan — run /plan first.", "warning");
+				ctx.ui.notify("No active plan — run `/plan` first.", "warning");
 				return;
 			}
 			if (isAgentMode()) {
@@ -1229,69 +1290,130 @@ export function createRuntimeContext(
 				);
 				return;
 			}
-			// Cross the execution boundary FIRST. Plan mode is conversation-only, so
-			// at /start the plan may still be an unformed draft — the transition
-			// gate's forming step authors it (Phase 2). The readiness check below
-			// therefore has to run AFTER the transition, or it would bail on the
-			// empty pre-forming plan. A bounce (open questions) or a blocked gate
-			// returns false — stay put.
-			if (rt.state.mode !== "auto" && rt.state.mode !== "hack") {
-				if (!(await rt.requestMode("auto", ctx))) return;
-			}
-			rt.finalizeDraftPlan(ctx);
-			const activeEngine = rt.engine;
-			const plan = activeEngine.get();
-			const targetId = deliverableId?.trim() || undefined;
-			const target = targetId ? findNode(plan, targetId) : undefined;
-			if (targetId && !target) {
-				ctx.ui.notify(`Unknown deliverable: ${targetId}`, "warning");
+			const plan = rt.engine.get();
+			// Running is not authoring. An unformed plan is a missing prerequisite,
+			// not something to silently fix by forming one the user hasn't seen.
+			if (plan.nodes.length === 0) {
+				ctx.ui.notify(
+					"No plan has been formed — form one now with `/form`.",
+					"warning",
+				);
 				return;
 			}
-			if (target) {
-				const parent = parentOfNode(plan, target.id);
-				const siblings = parent ? (parent.children ?? []) : plan.nodes;
-				const reason = nodeBlockedReason(siblings, target);
-				if (reason) {
-					ctx.ui.notify(`Cannot start ${target.id}: ${reason}.`, "warning");
-					return;
-				}
-			}
-			// Root readiness: activation recurses into children via the executor.
-			const ready = readyChildren(plan.nodes);
-			if (ready.length === 0) {
+			const stopped = rt.state.execution.stage === "stopped";
+			const stop = rt.state.execution.stop;
+			// An unproven stop means we do not know what those workers were doing.
+			// Resuming blind would build on that uncertainty; /recover audits it.
+			if (
+				stopped &&
+				stop &&
+				(stop.kind === "failed" || stop.outcome === "timed-out")
+			) {
 				ctx.ui.notify(
-					"No ready planned deliverables. Use /restart for a clean stop or /recover for failed or uncertain state.",
+					"The last stop was not cleanly proven; use `/recover` for an audited resume.",
+					"warning",
+				);
+				return;
+			}
+
+			const requested = deliverableId?.trim() || undefined;
+			const target = requested ? findNode(plan, requested) : undefined;
+			if (requested && !target) {
+				ctx.ui.notify(`Unknown deliverable: ${requested}`, "warning");
+				return;
+			}
+
+			// Two disjoint populations, one verb. PARKED work is active-but-stopped
+			// and resumes from its own session; READY work is still planned and
+			// activates fresh. tick() cannot do the former (advanceNode skips any
+			// blocked node), so each needs its own primitive.
+			const parkedAll =
+				stopped && stop
+					? [...walkNodes(plan)]
+							.map((visit) => visit.node)
+							.filter((node) => node.status === "active")
+					: [];
+			const parked = target
+				? parkedAll.filter((node) => node.id === target.id)
+				: parkedAll;
+			let ready: PlanNode[] = [];
+			if (target) {
+				if (target.status === "planned") {
+					const parent = parentOfNode(plan, target.id);
+					const siblings = parent ? (parent.children ?? []) : plan.nodes;
+					const reason = nodeBlockedReason(siblings, target);
+					if (reason) {
+						ctx.ui.notify(`Cannot start ${target.id}: ${reason}.`, "warning");
+						return;
+					}
+					ready = [target];
+				}
+			} else {
+				// Root readiness only: activation recurses into children below.
+				ready = readyChildren(plan.nodes);
+			}
+			if (parked.length === 0 && ready.length === 0) {
+				ctx.ui.notify(
+					requested
+						? `Nothing to resume for ${requested} — it is ${target?.status}.`
+						: "Nothing to resume: no parked workers and no ready planned deliverables. Use `/recover` for failed or uncertain state.",
 					"info",
 				);
 				return;
 			}
 
-			// Knowledge base removed: agents provision from a header-only session
-			// (provisioner's no-knowledge path) and pick up research reports as
-			// per-agent refs — no mid-planning knowledge doc, no gate here.
+			if (!(await confirmUnreviewedPlan(ctx, plan))) return;
+
+			// Orchestration runs in an execution posture. Entering it here is a
+			// direct commit: /resume is the explicit request to run, so there is
+			// nothing left for a gate to ask.
+			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
+			rt.finalizeDraftPlan(ctx);
+
+			// A stopped adapter is terminal — rebuild before resuming into it.
+			if (parked.length > 0) {
+				await rt.execution?.destroy();
+				rt.execution = undefined;
+			}
 			await rt.ensureExecution(ctx);
-			if (!rt.execution) return;
-			const activated = await rt.execution.tick(
-				target ? [target.id] : undefined,
-			);
+			const execution = rt.execution;
+			if (!execution) return;
+
+			const resumed: string[] = [];
+			const failures: string[] = [];
+			for (const node of parked) {
+				const result = await execution.restartWorkerResume?.(node.id);
+				if (result?.ok) resumed.push(node.id);
+				else
+					failures.push(`${node.id}: ${result?.error ?? "validation failed"}`);
+			}
+			const activated =
+				ready.length > 0
+					? await execution.tick(target ? [target.id] : undefined)
+					: 0;
 			rt.hud?.refresh();
-			if (activated === 0) {
-				ctx.ui.notify(
-					"No ready planned deliverables were activated.",
-					"warning",
-				);
+
+			if (resumed.length === 0 && activated === 0 && failures.length === 0) {
+				ctx.ui.notify("Nothing was resumed or activated.", "warning");
 				return;
 			}
-			rt.setExecutionStage(
-				{ stage: "executing", deliverableId: "maestro" },
-				ctx,
-			);
-			ctx.ui.notify(
-				target
-					? `Started ${target.id}.`
-					: `Activated ${activated} ready deliverable(s).`,
-				"info",
-			);
+			if (resumed.length > 0 || activated > 0) {
+				rt.setExecutionStage(
+					{ stage: "executing", deliverableId: "maestro" },
+					ctx,
+				);
+			}
+			const parts: string[] = [];
+			if (resumed.length > 0) parts.push(`Resumed ${resumed.join(", ")}.`);
+			if (activated > 0)
+				parts.push(
+					target && ready.length > 0
+						? `Started ${target.id}.`
+						: `Activated ${activated} ready deliverable(s).`,
+				);
+			if (failures.length > 0)
+				parts.push(`Failed: ${failures.join("; ")}. Use \`/recover\`.`);
+			ctx.ui.notify(parts.join(" "), failures.length > 0 ? "warning" : "info");
 		},
 
 		async runStop(ctx: ExtensionContext): Promise<void> {
@@ -1311,7 +1433,7 @@ export function createRuntimeContext(
 			}
 			// v2 prepareStop reports which sessions stopped/were unresponsive;
 			// the durable StopRecord is assembled here (the adapter no longer
-			// returns one). Unresponsive workers taint the stop: /restart
+			// returns one). Unresponsive workers taint the stop: /resume
 			// refuses and routes to the audited /recover path.
 			const completedAt = Date.now();
 			rt.setExecutionStage(
@@ -1330,7 +1452,7 @@ export function createRuntimeContext(
 				},
 				ctx,
 			);
-			// A stopped adapter is terminal (mirrors /restart): tear it down and
+			// A stopped adapter is terminal (mirrors /resume): tear it down and
 			// clear the handle. Otherwise rt.execution stays truthy at stage
 			// "stopped", and the next transition — session_shutdown or a second
 			// /stop — attempts the illegal stopped -> stopping edge and throws,
@@ -1341,83 +1463,9 @@ export function createRuntimeContext(
 			ctx.ui.notify(
 				result.unresponsive.length
 					? `Stop completed with ${result.unresponsive.length} uncertain worker(s). Use /recover to audit them.`
-					: `Parked ${result.stopped.length} worker(s). Resume with /restart [delivery].`,
+					: `Parked ${result.stopped.length} worker(s). Resume with /resume [delivery].`,
 				result.unresponsive.length ? "warning" : "info",
 			);
-		},
-
-		async runRestart(
-			deliverableId: string | undefined,
-			ctx: ExtensionContext,
-		): Promise<void> {
-			if (
-				!rt.engine ||
-				rt.state.execution.stage !== "stopped" ||
-				!rt.state.execution.stop
-			) {
-				ctx.ui.notify(
-					"Nothing is cleanly stopped. Use /start for planned work or /recover for failed or uncertain state.",
-					"warning",
-				);
-				return;
-			}
-			if (
-				rt.state.execution.stop.kind === "failed" ||
-				rt.state.execution.stop.outcome === "timed-out"
-			) {
-				ctx.ui.notify(
-					"The last stop was not cleanly proven; use /recover for an audited resume.",
-					"warning",
-				);
-				return;
-			}
-			const plan = rt.engine.get();
-			const requested = deliverableId?.trim() || undefined;
-			const candidates = [...walkNodes(plan)]
-				.map((visit) => visit.node)
-				.filter((item) => item.status === "active");
-			const targets = requested
-				? candidates.filter((item) => item.id === requested)
-				: candidates;
-			if (targets.length === 0) {
-				ctx.ui.notify(
-					requested
-						? `No clean stop recorded for ${requested}.`
-						: "No cleanly stopped deliveries to restart.",
-					"warning",
-				);
-				return;
-			}
-			// Restart is an orchestration command: it runs in auto. Invoking it
-			// from hack (or plan/recon) is an explicit request to conduct again.
-			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
-			// A stopped adapter is terminal. Rebuild it, then use the validated
-			// resume primitive only for selected active deliveries.
-			await rt.execution?.destroy();
-			rt.execution = undefined;
-			await rt.ensureExecution(ctx);
-			const execution = rt.execution as ExecutionHandle | undefined;
-			if (!execution?.restartWorkerResume) return;
-			const results = [];
-			for (const target of targets)
-				results.push(await execution.restartWorkerResume(target.id));
-			const failed = results.filter((result) => !result.ok);
-			if (failed.length === 0) {
-				rt.setExecutionStage(
-					{ stage: "executing", deliverableId: "maestro" },
-					ctx,
-				);
-				ctx.ui.notify(
-					`Restarted ${targets.map((item) => item.id).join(", ")}.`,
-					"info",
-				);
-			} else {
-				ctx.ui.notify(
-					`Restart failed: ${failed.map((result) => `${result.nodeId}: ${result.error ?? "validation failed"}`).join("; ")}. Use /recover.`,
-					"warning",
-				);
-			}
-			rt.hud?.refresh();
 		},
 
 		// Build (once) the execution adapter for the active plan. Shared by

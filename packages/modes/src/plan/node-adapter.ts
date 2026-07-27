@@ -30,6 +30,7 @@ import { provisionBranchWorktree } from "../exec/provisioner.js";
 import { createRpcRouter, type RpcRouter } from "../exec/rpc-router.js";
 import { QuestionQueue } from "../question-queue.js";
 import type { PlanEngine } from "./engine.js";
+import { isLiveAgentStatus } from "./live-agents.js";
 import {
 	NodeExecutor,
 	type NodeExecutorDeps,
@@ -951,7 +952,7 @@ export class NodeExecutionAdapter {
 	}> {
 		this.acceptTicks = false;
 		const live = [...this.executor.getStates()].filter(([, run]) =>
-			["spawning", "working", "summarizing", "restarting"].includes(run.status),
+			isLiveAgentStatus(run.status),
 		);
 		const stopped: string[] = [];
 		const unresponsive: string[] = [];

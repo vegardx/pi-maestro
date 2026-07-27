@@ -40,6 +40,7 @@ import {
 } from "../isolation/backend.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { PlanEngine } from "../plan/engine.js";
+import { isLiveAgentStatus, liveAgentKeys } from "../plan/live-agents.js";
 import { resolveNodeModel } from "../plan/node-periphery.js";
 import {
 	derivePlanName,
@@ -724,16 +725,9 @@ export function createRuntimeContext(
 		rt.setMode("plan", ctx);
 	}
 
-	/** Worker keys still working/summarizing — a backward return would abandon them. */
+	/** Live worker keys — a backward return would abandon them. */
 	function liveWorkerKeys(): string[] {
-		const snap = rt.execution?.snapshot();
-		if (!snap) return [];
-		return [...snap.agents.entries()]
-			.filter(
-				([, agent]) =>
-					agent.status === "working" || agent.status === "summarizing",
-			)
-			.map(([key]) => key);
+		return liveAgentKeys(rt.execution);
 	}
 
 	rt = {
@@ -1497,14 +1491,7 @@ export function createRuntimeContext(
 			for (const [id, state] of rt.execution.getExecutor().getStates()) {
 				if (!selectedIds.includes(id)) continue;
 				if (findNode(plan, id)?.agent !== "worker") continue;
-				if (
-					state.status === "working" ||
-					state.status === "spawning" ||
-					state.status === "summarizing" ||
-					state.status === "restarting"
-				) {
-					liveWorkers.push(id);
-				}
+				if (isLiveAgentStatus(state.status)) liveWorkers.push(id);
 			}
 			if (liveWorkers.length > 0) {
 				const proceed = await ctx.ui.confirm(

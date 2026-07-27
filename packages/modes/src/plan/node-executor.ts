@@ -28,6 +28,7 @@ import {
 	detectCommitPolicy,
 } from "../exec/commit-policy.js";
 import type { PlanEngine } from "./engine.js";
+import { isLiveAgentStatus } from "./live-agents.js";
 import {
 	defaultBranchForNode,
 	deriveBase,
@@ -636,12 +637,7 @@ export class NodeExecutor {
 			this.engine.get().defaultEnvelope?.maxConcurrent;
 		const liveCount = children.filter((child) => {
 			const childRun = this.runStates.get(child.id);
-			return (
-				childRun &&
-				["spawning", "working", "summarizing", "restarting"].includes(
-					childRun.status,
-				)
-			);
+			return childRun && isLiveAgentStatus(childRun.status);
 		}).length;
 		let capacity =
 			maxConcurrent === undefined

@@ -15,6 +15,7 @@ import { redactSecrets } from "@vegardx/pi-core";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
 import type { ExecutionHandle } from "./exec/index.js";
 import type { PlanEngine, PlanRepairOperation } from "./plan/engine.js";
+import { isLiveAgentStatus } from "./plan/live-agents.js";
 import {
 	findNode,
 	type Plan,
@@ -719,12 +720,7 @@ export async function executeDebugRecovery(
 				)
 					throw new Error("repair proposal is incomplete");
 				const worker = execution?.getExecutor().getRunState(target);
-				if (
-					worker &&
-					["spawning", "working", "summarizing", "restarting"].includes(
-						worker.status,
-					)
-				)
+				if (worker && isLiveAgentStatus(worker.status))
 					throw new Error("affected deliverable is not stopped");
 				const applied = deps.engine.applyTaskRepair({
 					baseFingerprint: recovery.basePlanFingerprint,

@@ -11,6 +11,7 @@ import type {
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { buildTranscriptDigest, type CarrySink } from "../carry-forward.js";
 import { buildCompactionMarker } from "../compaction.js";
+import { liveAgentKeys } from "../plan/live-agents.js";
 import { type DistillSettings, readDistillSettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -123,13 +124,9 @@ const clipIntent = (s: string): string =>
 
 // ─── /handoff ────────────────────────────────────────────────────────────────
 
-/** Workers still working/summarizing — a handoff would abandon them. */
+/** Live workers — a handoff would abandon them. */
 export function liveWorkers(rt: RuntimeContext): string[] {
-	const snap = rt.execution?.snapshot();
-	if (!snap) return [];
-	return [...snap.agents.entries()]
-		.filter(([, a]) => a.status === "working" || a.status === "summarizing")
-		.map(([key]) => key);
+	return liveAgentKeys(rt.execution);
 }
 
 export async function beginHandoff(

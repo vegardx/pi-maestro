@@ -1,7 +1,7 @@
 // Plan tools: deliverable, task, agent — flat-parameter tools for the deliverable-based
 // execution model, ported onto PlanEngine (v1→v2 flip, S3). The tool names and
 // external parameter names are UNCHANGED for wire compat: "deliverable" manages
-// ROOT NODES of the v2 tree, "task" manages a node's tasks, "agent" manages
+// ROOT NODES of the v2 tree, "task" manages a node's tasks, "support" manages
 // CHILD NODES (v1 support agents became first-class nodes). The session/mode
 // layer owns which plan is active; these tools perform mutations/reads and
 // return readable markdown.
@@ -394,6 +394,7 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
 		createDeliverableTool(deps),
 		createTaskTool(deps),
+		createAuthorTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
 	];
@@ -810,14 +811,14 @@ function mapAgentAfter(parent: PlanNode, after: readonly string[]): string[] {
 	});
 }
 
-export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
+export function createAuthorTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
-		name: "agent",
-		label: "Agent",
+		name: "author",
+		label: "Author",
 		description:
-			"Manage support agents within a deliverable: add, update, remove. ensemble authors N competing worker candidates under a branch-owning deliverable (a bake-off) and makes the parent their integrator.",
+			"Author the plan tree: add, update or remove the review and research agents nested under a deliverable. ensemble authors N competing worker candidates under a branch-owning deliverable (a bake-off) and makes the parent their integrator.",
 		promptSnippet:
-			"agent — manage support agents (add/update/remove) or ensemble (author competing worker candidates) in a deliverable.",
+			"author — add/update/remove the agents nested under a deliverable, or ensemble competing worker candidates.",
 		parameters: AgentParams,
 		async execute(_id, params): Promise<Result> {
 			if (!deps.engine() && deps.agentBridge?.()) {
@@ -911,8 +912,10 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 						const candidates = params.candidates ?? [];
 						if (candidates.length < 2)
 							return error("ensemble requires at least two candidates");
-						// The parent integrates the candidates rather than implementing.
-						engine.updateNode(deliverableId, { persona: "integrator" });
+						// Candidates FIRST, then flip the parent. The engine validates
+						// every mutation, and an integrator with no candidates is not a
+						// valid shape — flipping first would leave the plan transiently
+						// invalid and the write would be refused.
 						const created = candidates.map((candidate) =>
 							engine.addNode(deliverableId, {
 								agent: "worker",
@@ -921,6 +924,8 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 								tasks: [candidate.focus],
 							}),
 						);
+						// The parent integrates the candidates rather than implementing.
+						engine.updateNode(deliverableId, { persona: "integrator" });
 						notify(deps, engine);
 						return ok(
 							`✓ ensemble under ${deliverableId}: ${created.length} candidates (${created

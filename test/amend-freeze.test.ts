@@ -46,7 +46,7 @@ describe("execution-shaping fields freeze once a node starts", () => {
 	it("allows persona and skills while planned", () => {
 		const { engine, node } = planWith("planned");
 		expect(() =>
-			engine.updateNode(node.id, { persona: "integrator" }),
+			engine.updateNode(node.id, { persona: "reviewer" }),
 		).not.toThrow();
 		expect(() => engine.updateNode(node.id, { skills: ["x"] })).not.toThrow();
 	});

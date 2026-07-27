@@ -516,6 +516,25 @@ export function validatePlanShape(
 			node.diversityWaiver.trim().length === 0
 		)
 			errors.push(`${where}: diversityWaiver must carry a reason`);
+		// The ensemble shape, enforced HERE rather than in whichever tool built
+		// it: an integrator waits for candidate diffs, picks the strongest and
+		// ships the one PR. A lone candidate is not a bake-off, and a parent that
+		// owns no branch has nothing to integrate onto or ship from. Validating
+		// the SHAPE means a hand-composed, seeded or repaired ensemble is held to
+		// the same bar as one built by a dedicated action.
+		if (node.persona === "integrator") {
+			const candidates = (node.children ?? []).filter(
+				(child) => child.agent === "worker",
+			);
+			if (candidates.length < 2)
+				errors.push(
+					`${where}: an integrator needs at least two worker candidates to choose between (found ${candidates.length})`,
+				);
+			if (!isBranchOwner(node))
+				errors.push(
+					`${where}: an integrator must own a branch — it integrates the candidate diffs and ships the one PR`,
+				);
+		}
 		const taskIds = new Set<string>();
 		for (const task of node.tasks) {
 			if (taskIds.has(task.id))

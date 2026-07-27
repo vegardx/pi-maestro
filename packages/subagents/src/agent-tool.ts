@@ -1,4 +1,4 @@
-// Unified agent API and model-facing `agent` tool. Semantic kinds resolve to
+// Unified agent API and model-facing `subagent` tool. Semantic kinds resolve to
 // one immutable exact model/effort assignment plus independently composed
 // runtime policy before the subagents.v1 transport sees a spawn.
 
@@ -422,12 +422,12 @@ export function createAgentTool(
 		details,
 	});
 	return defineTool({
-		name: "agent",
+		name: "subagent",
 		label: "Agent",
 		description:
 			"Run and control ordinary typed agents. Use run for one assignment or batch for independent parallel assignments. Every run resolves and persists one exact model/effort pair. list/status inspect durable runs; steer and interrupt control live runs; ask drives a persistent standby child and blocks for its reply; capture and result retrieve output. Available kinds are included by list.",
 		promptSnippet:
-			"agent — run/batch typed agents and list/status/steer/ask/interrupt/capture/result them.",
+			"subagent — run/batch typed subagents and list/status/steer/ask/interrupt/capture/result them.",
 		parameters: Params,
 		renderResult: collapsed,
 		async execute(_id, params): Promise<AgentToolResult<Details>> {

@@ -53,7 +53,7 @@ describe("tool names", () => {
 		expect(names.size).toBeGreaterThan(5);
 		// Sanity: two tools we know exist, in different packages.
 		expect(names.has("deliverable")).toBe(true);
-		expect(names.has("agent")).toBe(true);
+		expect(names.has("subagent")).toBe(true);
 	});
 
 	it("registers no tool name from two different packages", () => {
@@ -66,13 +66,14 @@ describe("tool names", () => {
 		).toEqual([]);
 	});
 
-	it("keeps plan authoring distinct from the runtime agent API", () => {
+	it("keeps plan authoring distinct from the runtime subagent API", () => {
 		// modes once defined a plan-structure tool named "agent" alongside the
 		// subagents runtime tool of the same name. It was never registered, so
 		// nothing shadowed anything — but registering it would have collided.
-		// Authoring lives on `deliverable` now; `agent` belongs to subagents.
+		// Authoring lives on `deliverable`; spawning lives on `subagent`, whose
+		// name no longer competes with a PlanNode's `agent:` field either.
 		const names = toolNames();
 		expect(names.get("deliverable")).toEqual(["modes"]);
-		expect(names.get("agent")).toEqual(["subagents"]);
+		expect(names.get("subagent")).toEqual(["subagents"]);
 	});
 });

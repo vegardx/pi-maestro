@@ -24,6 +24,7 @@ import type {
 	NodeResolution,
 	TokenSnapshot,
 } from "@vegardx/pi-contracts";
+import { diversityRecordFor } from "@vegardx/pi-contracts";
 import { workingTreeClean, worktreeBaseSha } from "@vegardx/pi-git";
 import { MaestroRpcServer, type PlanMutateMessage } from "@vegardx/pi-rpc";
 import { provisionBranchWorktree } from "../exec/provisioner.js";
@@ -41,6 +42,7 @@ import {
 	findNode,
 	gatingNodeTasks,
 	type PlanNode,
+	parentOfNode,
 	SUMMARY_TOKEN_BUDGET,
 	walkNodes,
 } from "./schema.js";
@@ -341,6 +343,7 @@ export class NodeExecutionAdapter {
 							const outcome = await opts.resolveModel?.(node);
 							if (!outcome) return undefined;
 							this.engine.recordResolution(node.id, outcome.resolution);
+							this.recordDiversityEdge(node, outcome.resolution);
 							if (outcome.resolution.source === "session-fallback") {
 								this.notifyFallbackOnce(node.id, outcome.resolution);
 							}
@@ -361,6 +364,50 @@ export class NodeExecutionAdapter {
 	}
 
 	/** One deduped fallback notice per node (the design's degraded-mode rule). */
+	/**
+	 * Record the parent→child family edge as this node resolves. Soft but loud:
+	 * a child on its parent's family is a WARNING in the ledger and explain
+	 * output, never a block — the planner may have meant it, and a waiver says
+	 * so. The point of fanning work out is a second perspective, and two agents
+	 * from one family are one perspective wearing two names.
+	 *
+	 * Compared on AUTHORED families only. An inherit or session-fallback
+	 * resolution carries an empty family, and half an edge is not an edge —
+	 * diversityRecordFor already declines to flag those.
+	 */
+	private recordDiversityEdge(
+		node: PlanNode,
+		resolution: NodeResolution,
+	): void {
+		const plan = this.engine.get();
+		const parent = parentOfNode(plan, node.id);
+		// At the root the caller IS the session seat, whose family is whatever
+		// the seat resolved to; with no parent resolution there is nothing to
+		// compare and the edge is skipped rather than guessed.
+		const parentFamily = parent?.resolutions?.at(-1)?.family;
+		if (!parentFamily) return;
+		const record = diversityRecordFor(
+			parentFamily,
+			resolution.family,
+			node.diversityWaiver,
+			resolution.resolvedAt,
+		);
+		try {
+			this.engine.recordDiversity(node.id, record);
+		} catch {
+			// Observability must never fail a spawn.
+			return;
+		}
+		// Loud, not just recorded: a warning nobody reads is a log line. A
+		// waived collision stays quiet — the planner already answered for it.
+		if (record.sameFamily && !record.waiver)
+			this.logEvent("diversity-collision", {
+				node: node.id,
+				family: record.family,
+				parentFamily: record.parentFamily,
+			});
+	}
+
 	private notifyFallbackOnce(nodeId: string, resolution: NodeResolution): void {
 		if (this.fallbackNotified.has(nodeId)) return;
 		this.fallbackNotified.add(nodeId);

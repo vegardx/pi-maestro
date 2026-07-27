@@ -87,6 +87,7 @@ describe("the live-worker guard", () => {
 		// the call sites is what keeps it from drifting down into the transition.
 		expect(callSites(context, "guardPostureChange")).toEqual([
 			'if (!(await guardPostureChange(ctx, "plan"))) return;', // returnToPlan
+			"if (!(await rt.guardPostureChange(ctx, to))) return;", // cycle, forward
 		]);
 		expect(callSites(commands, "guardPostureChange")).toEqual([
 			"if (!(await rt.guardPostureChange(ctx, target))) return;", // /mode

@@ -331,6 +331,14 @@ const AgentParams = Type.Object({
 			description: '"worker" or other agent names.',
 		}),
 	),
+	multiModal: Type.Optional(
+		Type.Boolean({
+			description:
+				"Review this across several model families — for genuinely risky " +
+				"work where one model's blind spot would cost you. Intent only: " +
+				"never name a model or a count, configuration decides the width.",
+		}),
+	),
 });
 
 const RepoParams = Type.Object({
@@ -834,6 +842,7 @@ export function createAgentTool(deps: PlanToolDeps): ToolDefinition {
 							...(params.after && params.after.length > 0
 								? { after: mapAgentAfter(parent, params.after) }
 								: {}),
+							...(params.multiModal ? { multiModal: true } : {}),
 						};
 						// Pre-start: normal authoring. Post-start: the ONE dynamic
 						// structure operation (write-ahead append).

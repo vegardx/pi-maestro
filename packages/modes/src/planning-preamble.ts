@@ -158,6 +158,12 @@ a simpler model could implement them mechanically.
    under the worker node they support and give reviewers \`after: ["parent"]\`
    so ordering remains visible. Model and effort are never authored — they
    resolve by inheritance at spawn.
+   **Multi-modal review** — pass \`multiModal: true\` on a reviewer when the
+   work is genuinely risky and one model's blind spot would be expensive
+   (security, concurrency, data loss, anything hard to undo). It reads the same
+   diff through several model families. Say only THAT you want it — never a
+   model, never a count; configuration decides the width. Use it where it earns
+   its cost, not on every review.
    **Bake-offs** — when a deliverable is genuinely contested (several credible
    approaches worth trying), make it a competitive ensemble:
    \`agent(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
@@ -213,6 +219,8 @@ say so.
 1. **New deliverables** — batch them into a single \`deliverable\` call. Give
    each an explicit \`id\` that does not collide with the ids above, and use
    \`after\` to order them against EXISTING ids where they depend on prior work.
+   A reviewer on genuinely risky work can take \`multiModal: true\` — intent
+   only, never a model or a count.
 2. **New tasks on existing deliverables** — add them with \`task\`. Every new
    worker deliverable still needs its full task list in this same turn.
 3. **Summary** — briefly state what you added and why. End with "Ready to

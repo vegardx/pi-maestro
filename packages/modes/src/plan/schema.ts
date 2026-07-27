@@ -99,6 +99,12 @@ export interface PlanNode {
 	watch?: NodeWatchConfig;
 	/** Same-family spawn waiver, recorded into DiversityRecord at the edge. */
 	diversityWaiver?: string;
+	/**
+	 * Review this across SEVERAL model families. Intent only — never a model,
+	 * never a count: config supplies the width (the agent allowance's `spread`).
+	 * Absent or false = one reviewer, whatever `spread` says.
+	 */
+	multiModal?: boolean;
 	children?: PlanNode[];
 
 	// ── Ledger provenance ──

@@ -14,7 +14,10 @@ import {
 	validatePlanShape,
 } from "../packages/modes/src/plan/schema.js";
 import type { PlanStore } from "../packages/modes/src/plan/storage.js";
-import { createAuthorTool } from "../packages/modes/src/tools.js";
+import {
+	createAuthorTool,
+	createDeliverableTool,
+} from "../packages/modes/src/tools.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -218,5 +221,107 @@ describe("the ensemble SHAPE is enforced by validation, not by the action", () =
 			],
 		} as unknown as Plan);
 		expect(errors.filter((e) => e.includes("integrator"))).toEqual([]);
+	});
+});
+
+describe("deliverable authors the whole tree", () => {
+	/** The tool under test, over a real engine on a temp store. */
+	function harness() {
+		const plans = new Map<string, Plan>();
+		const store = {
+			save: (p: Plan) => void plans.set(p.slug, p),
+			load: (slug: string) => plans.get(slug),
+			exists: (slug: string) => plans.has(slug),
+			root: "/tmp",
+		} as unknown as PlanStore;
+		const engine = PlanEngine.create(
+			store,
+			{ slug: "demo", title: "Demo", repoPath: "/tmp/demo" },
+			() => TS,
+		);
+		const tool = createDeliverableTool({
+			engine: () => engine,
+			onPlanChanged: () => {},
+			mode: () => "plan",
+		} as never);
+		const call = async (params: unknown) =>
+			(await tool.execute(
+				"t",
+				params as never,
+				undefined as never,
+				undefined as never,
+				{} as never,
+			)) as { details?: { error?: string } };
+		return { engine, call };
+	}
+
+	it("authors a deliverable WITH its tasks in one call", async () => {
+		// The half-authored plan is the failure this prevents: deliverables with
+		// no gating work can never enter execution, and a second call is a second
+		// chance to stop early. Seen live on Opus.
+		const { engine, call } = harness();
+		await call({
+			action: "add",
+			id: "validate",
+			title: "Add validation utilities",
+			tasks: ["implement isPositive", "add tests"],
+		});
+		expect(engine.get().nodes[0].tasks).toHaveLength(2);
+	});
+
+	it("nests a reviewer under a deliverable", async () => {
+		const { engine, call } = harness();
+		await call({
+			action: "add",
+			id: "validate",
+			title: "Validate",
+			tasks: ["x"],
+		});
+		await call({
+			action: "add",
+			parent: "validate",
+			id: "security-audit",
+			agent: "reviewer",
+			persona: "security-audit",
+			title: "Security audit",
+			tasks: ["NaN/Infinity edge cases"],
+			multiModal: true,
+		});
+		const parent = engine.get().nodes[0];
+		expect(parent.children).toHaveLength(1);
+		const child = (parent.children ?? [])[0];
+		expect(child.agent).toBe("reviewer");
+		expect(child.persona).toBe("security-audit");
+		expect(child.multiModal).toBe(true);
+	});
+
+	it("leaves nested nodes branchless — they report, they never ship", async () => {
+		const { engine, call } = harness();
+		await call({
+			action: "add",
+			id: "validate",
+			title: "Validate",
+			tasks: ["x"],
+		});
+		await call({
+			action: "add",
+			parent: "validate",
+			agent: "reviewer",
+			title: "Review",
+			tasks: ["look"],
+		});
+		const child = (engine.get().nodes[0].children ?? [])[0];
+		expect(isBranchOwner(child)).toBe(false);
+		expect(isBranchOwner(engine.get().nodes[0])).toBe(true);
+	});
+
+	it("refuses an unknown parent instead of silently rooting the node", async () => {
+		const { call } = harness();
+		const result = await call({
+			action: "add",
+			parent: "nope",
+			title: "Orphan",
+		});
+		expect(result.details?.error).toContain("unknown parent");
 	});
 });

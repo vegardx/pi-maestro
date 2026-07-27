@@ -25,7 +25,12 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
-import { defaultTierForAgent, resolveModel } from "@vegardx/pi-models";
+import {
+	defaultTierForAgent,
+	resolveModel,
+	resolveModels,
+	spreadForAgent,
+} from "@vegardx/pi-models";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
@@ -1650,6 +1655,34 @@ export function createRuntimeContext(
 								}
 							: {}),
 					});
+				},
+				// The panel for a multi-modal reviewer: one model per distinct
+				// family, bounded by the agent's spread. The REVIEWER fans out
+				// to these itself; the executor only hands it the list.
+				resolveReviewPanel: async (node) => {
+					const tier = defaultTierForAgent(ctx, node.agent);
+					if (!tier) return [];
+					const panel = await resolveModels(
+						ctx,
+						{
+							agent: node.agent,
+							tier,
+							...(ctx.model
+								? {
+										inherit: {
+											modelId: `${ctx.model.provider}/${ctx.model.id}`,
+										},
+									}
+								: {}),
+						},
+						spreadForAgent(ctx, node.agent),
+					);
+					// Only genuinely distinct families are a panel. A single slot
+					// (or a seat fallback) is an ordinary review, and saying so
+					// beats pretending three models looked at it.
+					return panel
+						.filter((slot) => slot.source === "tier")
+						.map((slot) => slot.modelId);
 				},
 				// New nodes activate only while autonomous (auto — NOT hack:
 				// there the maestro is the sequential worker and must not fan

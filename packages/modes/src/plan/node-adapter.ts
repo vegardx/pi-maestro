@@ -142,6 +142,8 @@ export interface NodeAdapterOptions {
 	readonly resolveModel?: (
 		node: PlanNode,
 	) => Promise<{ resolution: NodeResolution } | undefined>;
+	/** Model panel for a multi-modal reviewer (it fans out to these itself). */
+	readonly resolveReviewPanel?: NodeExecutorDeps["resolveReviewPanel"];
 	readonly createWorktree?: NodeExecutorDeps["createWorktree"];
 	readonly resolveBaseSha?: NodeExecutorDeps["resolveBaseSha"];
 	readonly shipNode?: NodeExecutorDeps["shipNode"];
@@ -330,6 +332,9 @@ export class NodeExecutionAdapter {
 			// tier it extracted at. Failures never block completion.
 			collectResult: (nodeId, sessionId) =>
 				this.collectNodeResult(nodeId, sessionId),
+			...(opts.resolveReviewPanel
+				? { resolveReviewPanel: opts.resolveReviewPanel }
+				: {}),
 			...(opts.resolveModel
 				? {
 						resolveModel: async (node: PlanNode) => {

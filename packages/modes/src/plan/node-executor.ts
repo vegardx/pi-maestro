@@ -162,6 +162,13 @@ export interface NodeExecutorDeps {
 	resolveModel?: (
 		node: PlanNode,
 	) => Promise<{ model: string; effort?: string } | undefined>;
+	/**
+	 * The model panel for a MULTI-MODAL reviewer: one concrete model per
+	 * distinct family. The reviewer fans out to these itself (read-only
+	 * subagents) — the executor never spawns them. Absent, or fewer than two
+	 * models, means an ordinary single review.
+	 */
+	resolveReviewPanel?: (node: PlanNode) => Promise<readonly string[]>;
 	defaultBranch?: string;
 	defaultBranchFor?: (repoPath: string) => string | null;
 	canActivate?: () => boolean;
@@ -691,6 +698,20 @@ export class NodeExecutor {
 			}
 		}
 
+		// A multi-modal reviewer reads the same diff through several families.
+		// It runs the fan-out itself: the panel is DATA in its seed, not N
+		// sessions the executor manages.
+		let seedWithPanel = seed;
+		if (seed && node.multiModal && this.deps.resolveReviewPanel) {
+			try {
+				const panel = await this.deps.resolveReviewPanel(node);
+				if (panel.length > 1) seedWithPanel = `${seed}\n\n${panelBrief(panel)}`;
+			} catch {
+				// A panel we cannot resolve degrades to one honest review rather
+				// than parking the node — the review still happens.
+			}
+		}
+
 		const spawned = await this.deps.spawnAgent({
 			nodeId: node.id,
 			agent: node.agent,
@@ -699,7 +720,7 @@ export class NodeExecutor {
 			mode: this.modeFor(node),
 			skills: node.skills ?? [],
 			worktreePath: run.worktreePath ?? this.engine.get().repoPath,
-			seed,
+			seed: seedWithPanel,
 			...(resolved ? { model: resolved.model } : {}),
 			...(resolved?.effort ? { effort: resolved.effort } : {}),
 			...(seedOverride !== undefined ? { freshRecovery: true } : {}),
@@ -896,4 +917,46 @@ export class NodeExecutor {
 		this.engine.setNodeRuntime(node.id, { prUrl });
 		return prUrl;
 	}
+}
+
+/**
+ * The multi-modal reviewer's brief: fan out to this panel, then hand back ONE
+ * neutral list.
+ *
+ * Neutral is the whole point. Severity, which family said it, and how many said
+ * it all anchor the worker before it has looked at anything — so none of them
+ * travel. That forces real merging: passing three copies of one defect through
+ * would smuggle a frequency vote in by repetition. Merging is a SAMENESS call
+ * and never an importance one, and it is asymmetric — a near-duplicate reaching
+ * the worker is mild noise, a merged-away finding is a defect that escapes.
+ */
+function panelBrief(panel: readonly string[]): string {
+	return [
+		"## Multi-modal review",
+		"",
+		`Review this through ALL ${panel.length} models below — the same diff, read`,
+		"by different families, catches what any one of them is blind to:",
+		"",
+		...panel.map((model) => `- \`${model}\``),
+		"",
+		"Spawn them in ONE call so they run concurrently:",
+		'`agent(action="spawn", assignments=[{kind, prompt, model}, …])`',
+		"— one assignment per model above, each with the same review prompt.",
+		"",
+		"Then hand back a SINGLE list of findings:",
+		"",
+		"- **Merge duplicates.** Two models describing the same defect in different",
+		"  words are ONE finding. Merge only when you are confident it is the same",
+		"  defect — when unsure, keep both. A near-duplicate is mild noise; a",
+		"  finding you merged away is a defect nobody sees again.",
+		"- **No severity.** Do not rank, score, or label importance. Report what",
+		"  was observed, where, and why it matters.",
+		"- **No attribution, no counts.** Never say which model found something or",
+		"  how many did. Agreement is not evidence you are passing on — the",
+		"  deliverable's own agent weighs each finding on its merits, and knowing",
+		"  that two models agreed would anchor it before it has read the code.",
+		"",
+		"A model that fails or times out costs you its slot, nothing more — report",
+		"what the rest found.",
+	].join("\n");
 }

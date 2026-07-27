@@ -133,43 +133,39 @@ Your tasks are described in the first message. Implement them all.
    turns lose detail; an item on the deliverable survives both, and it is what
    the next agent and the human actually see. Remembering is not a skill you
    should be spending effort on.
-6. Finish through the review episode (below). Reviewing is PART of finishing,
-   not an afterthought — never claim done or stop working on unresolved
-   blocking findings once a report has arrived. While a review round is
-   RUNNING, ending your turn is safe and expected: the executor never
-   completes you mid-round, and the report wakes you when it settles.
-7. When all tasks are toggled, tests pass, and the review gate is clear, stop.
-   The maestro handles pushing and opening the PR.
+6. Have your change reviewed (below). Reviewing is PART of finishing, not an
+   afterthought — do not claim done over findings you have neither fixed nor
+   explained.
+7. When all items are toggled, tests pass, and you have dealt with the review,
+   stop. The maestro handles pushing and opening the PR.
 
-## The review episode — panel once, then verify claims
-- review() starts your FULL reviewer panel ONCE (parallel) and returns
-  immediately; the findings report with canonical ids (e.g. security-audit.2)
-  arrives as a message that WAKES you when the panel settles. After starting
-  a round, END YOUR TURN and idle — never poll for the report (no sleep
-  loops, no status commands: a busy turn queues the report instead of
-  receiving it, and every poll replays your whole context). Never re-call
-  review() while a round is running. It never re-runs open-scope: extra
-  thoroughness came from panel composition, not more rounds.
-- Findings arrive NEUTRAL: no severity, no note of which reviewer raised them
-  or how many did. That is deliberate — YOU judge each one on the code, not on
-  who said it or how loudly. Read every finding, decide yourself which are
-  serious enough to fix, and say so in the note.
-- Normalize the ledger, then RESOLVE EVERY finding:
-    {id, status: "fixed", note: "<commit>"} — you fixed it (committed)
-    {id, status: "duplicateOf", canonical, note} — same flaw as another id
-    {id, status: "disputed", note: "<code-referencing rationale>"} — you
-      judged it wrong about the code; ONE dispute per finding
-    {id, status: "wont-fix", note} — real but not worth fixing here; your
-      call, and the note must say why it is safe to leave
-- Call review({resolutions: [...]}). A single scope-locked verifier checks
-  exactly your fixed claims (evidence per claim; it may flag regressions your
-  fixes introduced). still-open → fix and verify again. You have a bounded
-  number of fix cycles — use them on real fixes, not re-litigating.
-- Disputes leave your loop immediately: the maestro triages them (it can side
-  with the reviewer and send you back, or take your side to the human). Never
-  re-dispute; never silently ignore a finding — the completeness check rejects
-  unaccounted ids, and "no severity attached" is not "safe to skip".
-- A reviewer that failed to report: review({action: "repair"}) re-runs just it.
+## Reviewing your own work — part of finishing, not an afterthought
+
+Before you call a deliverable done, have your change reviewed. Spawn reviewers
+yourself:
+
+\`subagent(action="spawn", assignments=[{kind, prompt}, …])\`
+
+It runs them concurrently, read-only, and returns their findings. \`kind\` is a
+review kind from the registry — \`subagent(action="list")\` shows what exists;
+pick the ones that match the risk in what you changed. Give each the same
+prompt: what changed, where to look, what you are worried about.
+
+- **Review what you actually wrote.** Point them at your commits, not at your
+  intentions.
+- **Judge every finding on the code.** Findings carry no severity and no note
+  of who raised them — that is deliberate. Decide yourself which are real and
+  which matter here.
+- **Fix it, or say why not.** A finding you leave should have a reason in your
+  handoff summary. Silence reads as "missed it", and the next agent cannot tell
+  the difference.
+- **Record what you will not fix now** as a follow-up item with \`work\` — that
+  is what survives your session.
+- Reviewing more is not always better. One good round over a real diff beats
+  three over the same code.
+
+If the plan gave this deliverable its own reviewer node, that review runs on its
+own and you need not spawn one — the plan already asked for it.
 
 ## Research reports
 Your context may list research refs (in the Codebase Reference's Research

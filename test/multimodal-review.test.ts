@@ -107,16 +107,15 @@ describe("findings reach the worker neutral", () => {
 });
 
 describe("the worker contract matches what it receives", () => {
-	// "## Research reports" appears in an earlier preamble too, so the end
-	// boundary must be searched FROM the episode, not from the file start.
-	const start = preambles.indexOf("## The review episode");
+	const start = preambles.indexOf("## Reviewing your own work");
 	const episode = preambles.slice(
 		start,
 		preambles.indexOf("## Research reports", start),
 	);
 
 	it("tells the worker findings arrive neutral and it judges them", () => {
-		expect(episode).toContain("Findings arrive NEUTRAL");
+		expect(episode).toContain("no severity");
+		expect(episode).toContain("Decide yourself which are real");
 	});
 
 	it("no longer gates resolutions on a severity the worker never gets", () => {
@@ -125,9 +124,11 @@ describe("the worker contract matches what it receives", () => {
 		expect(episode).not.toContain("blocking findings only");
 	});
 
-	it("still refuses silent omission", () => {
-		expect(episode).toContain("completeness check rejects");
-		expect(episode).toContain('is not "safe to skip"');
+	it("still refuses silent omission, without the retired ledger", () => {
+		// The completeness check lived in the gate that was retired; the
+		// obligation it encoded does not need machinery to survive.
+		expect(episode).toContain("say why not");
+		expect(episode).toContain('Silence reads as "missed it"');
 	});
 });
 
@@ -143,5 +144,38 @@ describe("a support agent authored without tasks still gets a focus", () => {
 		);
 		expect(seed).toContain("node.tasks.length === 0");
 		expect(seed).toContain("node.title ?? node.id");
+	});
+});
+
+describe("the review surface has no phantoms", () => {
+	const policy = source("packages/modes/src/policy.ts");
+	const hooks = source("packages/modes/src/runtime/hooks.ts");
+	const registry = source("packages/subagents/src/registry.ts");
+
+	it("stops granting `review`, a tool that does not exist", () => {
+		// It was in AGENT_TOOL_NAMES and FULL_MODE_ENSURED_TOOLS, and the worker
+		// preamble taught it in four places — but no tool named `review` is
+		// defined anywhere. Its runtime went with PR #200. A live worker session
+		// shows the result: it never called it, no error, review simply never
+		// happened. Granting a name that resolves to nothing is how that hid.
+		expect(policy).not.toContain('"review"');
+		expect(hooks).not.toContain('\t"review",');
+	});
+
+	it("points the worker at the surface that does exist", () => {
+		expect(preambles).toContain('subagent(action="spawn"');
+		expect(preambles).not.toContain("review({resolutions");
+	});
+
+	it("keeps reviewing part of finishing", () => {
+		// The machinery changed; the discipline did not.
+		expect(preambles).toContain("PART of finishing");
+	});
+
+	it("reviewers report observations, not severities or verdicts", () => {
+		// A label from the reviewer would anchor the owning agent before it has
+		// looked — the same reason attribution and counts do not travel.
+		expect(registry).toContain("Do NOT rate, rank or label importance");
+		expect(registry).not.toContain("VERDICT: PASS or VERDICT: BLOCK; block");
 	});
 });

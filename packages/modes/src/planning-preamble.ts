@@ -156,7 +156,7 @@ a simpler model could implement them mechanically.
    implement. Do this for each worker deliverable before you summarize.
 3. **Review coverage** — Reviewer/explorer work is CHILD NODES, and they are
    NOT created with \`deliverable\`. Add each one with
-   \`agent(action="add", deliverableId="<the worker node>", name="<agent>",
+   \`author(action="add", deliverableId="<the worker node>", name="<agent>",
    focus="<what it should scrutinize>")\` — it nests under the worker node it
    supports, and \`after: ["parent"]\` keeps the ordering visible. Model and
    effort are never authored — they resolve by inheritance at spawn.
@@ -168,7 +168,7 @@ a simpler model could implement them mechanically.
    its cost, not on every review.
    **Bake-offs** — when a deliverable is genuinely contested (several credible
    approaches worth trying), make it a competitive ensemble:
-   \`agent(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
+   \`author(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
    branch-owning worker deliverable. Each candidate implements the task on its
    own \`cand/\` branch; the deliverable's worker becomes the INTEGRATOR — it
    judges the candidate diffs, distills the strongest, and ships the one PR.
@@ -225,7 +225,7 @@ say so.
    worker deliverable still needs its full task list in this same turn.
 3. **New review/research agents on an existing deliverable** — these are NOT
    deliverables. Add them with
-   \`agent(action="add", deliverableId="<node>", name="<agent>", focus="…")\`.
+   \`author(action="add", deliverableId="<node>", name="<agent>", focus="…")\`.
    Pass \`multiModal: true\` when the work is genuinely risky and one model's
    blind spot would be expensive — it reads the same diff through several model
    families. Intent only: never a model, never a count.

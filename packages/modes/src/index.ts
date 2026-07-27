@@ -212,7 +212,7 @@ export {
 export { plansRoot, UnsupportedMaestroStateError } from "./storage.js";
 export { createModesSummariser } from "./summarise.js";
 export {
-	createAgentTool,
+	createAuthorTool,
 	createDeliverableTool,
 	createPlanTool,
 	createTaskTool,

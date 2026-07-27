@@ -5,14 +5,16 @@
 // ships the one PR. See docs/design/multi-model-agents.md §5.
 
 import { describe, expect, it } from "vitest";
+import { PLAN_SCHEMA_VERSION } from "../packages/contracts/src/plan-schema.js";
 import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	isBranchOwner,
 	type Plan,
 	type PlanNode,
+	validatePlanShape,
 } from "../packages/modes/src/plan/schema.js";
 import type { PlanStore } from "../packages/modes/src/plan/storage.js";
-import { createAgentTool } from "../packages/modes/src/tools.js";
+import { createAuthorTool } from "../packages/modes/src/tools.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -41,7 +43,7 @@ function makeEngine(): PlanEngine {
 type Res = { details?: { error?: string } };
 
 function runAgent(engine: PlanEngine, params: unknown): Promise<Res> {
-	const tool = createAgentTool({ engine: () => engine });
+	const tool = createAuthorTool({ engine: () => engine });
 	return tool.execute(
 		"t",
 		params as never,
@@ -131,5 +133,90 @@ describe("ensemble authoring", () => {
 			candidates: [{ name: "solo", focus: "x" }],
 		});
 		expect(res.details?.error).toMatch(/two candidates/);
+	});
+});
+
+const TS = "2026-07-27T00:00:00.000Z";
+const basePlan = () => ({
+	schemaVersion: PLAN_SCHEMA_VERSION,
+	slug: "demo",
+	title: "Demo",
+	repoPath: "/tmp/demo",
+	nodes: [],
+	createdAt: TS,
+	updatedAt: TS,
+});
+const baseNode = (id: string) => ({
+	id,
+	agent: "worker",
+	persona: "coder",
+	title: id,
+	tasks: [
+		{
+			id: `${id}-t1`,
+			title: "do it",
+			done: false,
+			createdAt: TS,
+			updatedAt: TS,
+		},
+	],
+	status: "planned",
+	createdAt: TS,
+	updatedAt: TS,
+});
+
+describe("the ensemble SHAPE is enforced by validation, not by the action", () => {
+	it("refuses an integrator with fewer than two candidates", () => {
+		// However the shape was built — hand-composed, seeded, repaired — a lone
+		// candidate is not a bake-off. Enforcing it in validatePlanShape means the
+		// dedicated action is convenience, never the only guard.
+		const errors = validatePlanShape({
+			...basePlan(),
+			nodes: [
+				{
+					...baseNode("solo"),
+					persona: "integrator",
+					branch: "feat/solo",
+					children: [{ ...baseNode("cand-a"), agent: "worker" }],
+				},
+			],
+		} as unknown as Plan);
+		expect(errors.join("\n")).toContain("at least two worker candidates");
+	});
+
+	it("refuses an integrator that owns no branch", () => {
+		// It has nothing to integrate onto and nothing to ship from.
+		const errors = validatePlanShape({
+			...basePlan(),
+			nodes: [
+				{
+					...baseNode("branchless"),
+					persona: "integrator",
+					children: [
+						{ ...baseNode("cand-a"), agent: "worker" },
+						{ ...baseNode("cand-b"), agent: "worker" },
+					],
+				},
+			],
+		} as unknown as Plan);
+		expect(errors.join("\n")).toContain("must own a branch");
+	});
+
+	it("accepts a well-formed ensemble", () => {
+		const errors = validatePlanShape({
+			...basePlan(),
+			nodes: [
+				{
+					...baseNode("metrics"),
+					persona: "integrator",
+					branch: "feat/metrics",
+					children: [
+						{ ...baseNode("cand-a"), agent: "worker" },
+						{ ...baseNode("cand-b"), agent: "worker" },
+					],
+				},
+			],
+		} as unknown as Plan);
+		expect(errors.filter((e) => e.includes("integrator"))).toEqual([]);
 	});
 });

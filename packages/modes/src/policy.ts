@@ -3,8 +3,7 @@ import type { ModeName } from "@vegardx/pi-contracts";
 export const PLAN_TOOL_NAMES = [
 	"deliverable",
 	"task",
-	"agent",
-	"panel",
+	"author",
 	"plan",
 	"repo",
 ] as const;
@@ -20,8 +19,7 @@ export const PLAN_TOOL_NAMES = [
 export const STRUCTURE_TOOL_NAMES = [
 	"deliverable",
 	"task",
-	"agent",
-	"panel",
+	"author",
 	"repo",
 ] as const;
 

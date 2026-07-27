@@ -133,17 +133,20 @@ sensible default for)?
 
 ## Author
 
-**You MUST use the \`deliverable\` and \`task\` tools — do NOT write a plan as
-text.** Authoring is not done when the deliverables exist — it is done when
-every worker deliverable also has its tasks. Create the deliverables, then in
-the SAME turn add each one's tasks; a worker deliverable with no tasks cannot
-enter execution (the execution gate rejects it). Produce tasks so detailed that
-a simpler model could implement them mechanically.
+**You MUST use the \`deliverable\` tool — do NOT write a plan as text.** It
+authors the whole tree: top-level deliverables, the reviewers and researchers
+nested under them, and every node's tasks, in as few calls as you can manage.
+Authoring is not done when the deliverables exist — it is done when every worker
+deliverable also has its tasks, because one with none cannot enter execution.
 
 1. **Structure** — Create ALL top-level nodes in a single batched \`deliverable\`
    call (not one call per node). A branch-owning worker node = one branch + one PR.
    Give each an explicit \`id\`, an \`agent\` type + \`persona\`, and reference
    sibling ids in \`after\` for ordering — list them dependencies-first.
+   Give every worker deliverable its \`tasks\` in the SAME call — a worker
+   deliverable with no tasks can never enter execution, and a second call is a
+   second chance to stop early. Tasks describe WHAT to implement, in enough
+   detail that a simpler model could do it mechanically.
    Work not tied to any repo (creating repos, provisioning infra, ops) is a
    BRANCHLESS worker node: it runs in a plain workspace, has no branch or PR,
    and completes when its tasks are done. If such a node creates a repo that
@@ -151,29 +154,26 @@ a simpler model could implement them mechanically.
    \`repo(action="add", key="...", path="...", createdBy="<that node>")\`
    and give the later nodes \`repo: "<key>"\` plus an \`after\` on the
    creator — the ordering then guarantees the repo exists before they start.
-2. **Detail** — For EVERY worker deliverable, add ALL of its tasks in a single
-   batched \`task\` call (not one call per task). Tasks describe WHAT to
-   implement. Do this for each worker deliverable before you summarize.
-3. **Review coverage** — Reviewer/explorer work is CHILD NODES, and they are
-   NOT created with \`deliverable\`. Add each one with
-   \`author(action="add", deliverableId="<the worker node>", name="<agent>",
-   focus="<what it should scrutinize>")\` — it nests under the worker node it
-   supports, and \`after: ["parent"]\` keeps the ordering visible. Model and
-   effort are never authored — they resolve by inheritance at spawn.
+2. **Review coverage** — Reviewers and researchers are NESTED deliverables, not
+   a separate concept. Add each with the same tool, pointing at its parent:
+   \`deliverable(action="add", parent="<the worker node>", agent="reviewer",
+   persona="<e.g. security-audit>", title="…", tasks=["<what to scrutinize>"])\`.
+   A nested node is branchless — it reports and never ships a PR. Model and
+   effort are never authored; they resolve by inheritance at spawn.
    **Multi-modal review** — pass \`multiModal: true\` on a reviewer when the
    work is genuinely risky and one model's blind spot would be expensive
    (security, concurrency, data loss, anything hard to undo). It reads the same
    diff through several model families. Say only THAT you want it — never a
    model, never a count; configuration decides the width. Use it where it earns
    its cost, not on every review.
-   **Bake-offs** — when a deliverable is genuinely contested (several credible
-   approaches worth trying), make it a competitive ensemble:
-   \`author(action="ensemble", deliverableId="<id>", candidates=[…])\` on a
-   branch-owning worker deliverable. Each candidate implements the task on its
-   own \`cand/\` branch; the deliverable's worker becomes the INTEGRATOR — it
-   judges the candidate diffs, distills the strongest, and ships the one PR.
-   Candidates never ship their own PR. Reach for this only when the comparison
-   is worth the extra cost, not by default.
+3. **Bake-offs** — when a deliverable is genuinely contested (several credible
+   approaches worth trying), make it a competitive ensemble. Add the candidates
+   as nested workers under a branch-owning deliverable, THEN promote the parent:
+   \`deliverable(action="update", id="<parent>", persona="integrator")\`.
+   Candidates first — an integrator with nothing to choose between is rejected.
+   Each candidate implements on its own \`cand/\` branch; the parent judges the
+   diffs, distills the strongest, and ships the one PR. Candidates never ship.
+   Reach for this only when the comparison is worth the extra cost.
 4. **Summary** — Write a brief text summary. End with "Ready to implement."
 
 ## Rules
@@ -221,14 +221,14 @@ say so.
 1. **New deliverables** — batch them into a single \`deliverable\` call. Give
    each an explicit \`id\` that does not collide with the ids above, and use
    \`after\` to order them against EXISTING ids where they depend on prior work.
-2. **New tasks on existing deliverables** — add them with \`task\`. Every new
-   worker deliverable still needs its full task list in this same turn.
-3. **New review/research agents on an existing deliverable** — these are NOT
-   deliverables. Add them with
-   \`author(action="add", deliverableId="<node>", name="<agent>", focus="…")\`.
-   Pass \`multiModal: true\` when the work is genuinely risky and one model's
-   blind spot would be expensive — it reads the same diff through several model
-   families. Intent only: never a model, never a count.
+2. **New tasks on existing deliverables** — add them with \`task\`. A NEW
+   deliverable carries its tasks in the same \`deliverable\` call.
+3. **New review/research agents** — nested deliverables, same tool:
+   \`deliverable(action="add", parent="<node>", agent="reviewer",
+   persona="…", title="…", tasks=["…"])\`. Pass \`multiModal: true\` when the
+   work is genuinely risky and one model's blind spot would be expensive — it
+   reads the same diff through several model families. Intent only: never a
+   model, never a count.
 4. **Summary** — briefly state what you added and why. End with "Ready to
    implement."
 ${

@@ -1,12 +1,6 @@
 import type { ModeName } from "@vegardx/pi-contracts";
 
-export const PLAN_TOOL_NAMES = [
-	"deliverable",
-	"task",
-	"author",
-	"plan",
-	"repo",
-] as const;
+export const PLAN_TOOL_NAMES = ["deliverable", "task", "plan", "repo"] as const;
 
 /**
  * The plan-AUTHORING tools — the subset of PLAN_TOOL_NAMES that mutate the node
@@ -16,12 +10,7 @@ export const PLAN_TOOL_NAMES = [
  * (evolve-in-place). `plan` itself is navigation/read, so it stays available
  * throughout. See docs/design/mode-sessions.md § form-at-transition.
  */
-export const STRUCTURE_TOOL_NAMES = [
-	"deliverable",
-	"task",
-	"author",
-	"repo",
-] as const;
+export const STRUCTURE_TOOL_NAMES = ["deliverable", "task", "repo"] as const;
 
 /** Research-loop tools available throughout plan mode. */
 export const RESEARCH_TOOL_NAMES = ["research", "dig"] as const;

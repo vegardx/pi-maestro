@@ -14,10 +14,7 @@ import {
 	validatePlanShape,
 } from "../packages/modes/src/plan/schema.js";
 import type { PlanStore } from "../packages/modes/src/plan/storage.js";
-import {
-	createAuthorTool,
-	createDeliverableTool,
-} from "../packages/modes/src/tools.js";
+import { createDeliverableTool } from "../packages/modes/src/tools.js";
 
 function memStore(): PlanStore {
 	let saved: Plan | null = null;
@@ -43,19 +40,6 @@ function makeEngine(): PlanEngine {
 	});
 }
 
-type Res = { details?: { error?: string } };
-
-function runAgent(engine: PlanEngine, params: unknown): Promise<Res> {
-	const tool = createAuthorTool({ engine: () => engine });
-	return tool.execute(
-		"t",
-		params as never,
-		undefined as never,
-		undefined as never,
-		{} as never,
-	) as Promise<Res>;
-}
-
 /** A branch-owning worker deliverable — the integrator-to-be. */
 function seedDeliverable(engine: PlanEngine, id: string): PlanNode {
 	const node = engine.addNode(null, {
@@ -78,66 +62,6 @@ function findNode(plan: Plan, id: string): PlanNode | undefined {
 	}
 	return undefined;
 }
-
-describe("ensemble authoring", () => {
-	it("authors branchless worker candidates and makes the parent the integrator", async () => {
-		const engine = makeEngine();
-		const parent = seedDeliverable(engine, "build-metrics");
-
-		const res = await runAgent(engine, {
-			action: "ensemble",
-			deliverableId: parent.id,
-			candidates: [
-				{ name: "candidate A", focus: "Implement src/metrics.ts, approach A" },
-				{ name: "candidate B", focus: "Implement src/metrics.ts, approach B" },
-			],
-		});
-		expect(res.details?.error).toBeUndefined();
-
-		const updated = findNode(engine.get(), parent.id);
-		expect(updated?.persona).toBe("integrator");
-		const children = updated?.children ?? [];
-		expect(children).toHaveLength(2);
-		for (const child of children) {
-			expect(child.agent).toBe("worker");
-			expect(child.persona).toBe("coder");
-			// Branchless → the executor mints it a cand/ branch; it never ships.
-			expect(isBranchOwner(child)).toBe(false);
-		}
-	});
-
-	it("rejects an ensemble on a non-branch-owning deliverable", async () => {
-		const engine = makeEngine();
-		// A scratch (branchless) worker deliverable cannot own candidates.
-		const scratch = engine.addNode(null, {
-			id: "scratch",
-			agent: "worker",
-			persona: "coder",
-			title: "Scratch work",
-		});
-
-		const res = await runAgent(engine, {
-			action: "ensemble",
-			deliverableId: scratch.id,
-			candidates: [
-				{ name: "a", focus: "x" },
-				{ name: "b", focus: "y" },
-			],
-		});
-		expect(res.details?.error).toMatch(/branch-owning/);
-	});
-
-	it("requires at least two candidates", async () => {
-		const engine = makeEngine();
-		const parent = seedDeliverable(engine, "build-metrics");
-		const res = await runAgent(engine, {
-			action: "ensemble",
-			deliverableId: parent.id,
-			candidates: [{ name: "solo", focus: "x" }],
-		});
-		expect(res.details?.error).toMatch(/two candidates/);
-	});
-});
 
 const TS = "2026-07-27T00:00:00.000Z";
 const basePlan = () => ({
@@ -166,6 +90,100 @@ const baseNode = (id: string) => ({
 	status: "planned",
 	createdAt: TS,
 	updatedAt: TS,
+});
+
+/** The tool under test, over a real engine on a temp store. */
+function harness() {
+	const plans = new Map<string, Plan>();
+	const store = {
+		save: (p: Plan) => void plans.set(p.slug, p),
+		load: (slug: string) => plans.get(slug),
+		exists: (slug: string) => plans.has(slug),
+		root: "/tmp",
+	} as unknown as PlanStore;
+	const engine = PlanEngine.create(
+		store,
+		{ slug: "demo", title: "Demo", repoPath: "/tmp/demo" },
+		() => TS,
+	);
+	const tool = createDeliverableTool({
+		engine: () => engine,
+		onPlanChanged: () => {},
+		mode: () => "plan",
+	} as never);
+	const call = async (params: unknown) =>
+		(await tool.execute(
+			"t",
+			params as never,
+			undefined as never,
+			undefined as never,
+			{} as never,
+		)) as { details?: { error?: string } };
+	return { engine, call };
+}
+
+describe("an ensemble composed through deliverable", () => {
+	// The macro is gone. The shape is now authored like anything else — nested
+	// worker candidates, then the parent flipped to integrator — and validation
+	// holds it to the same bar. Ordering matters: an integrator with no
+	// candidates is not a valid plan, so the children come first.
+	it("is authorable without a dedicated action", async () => {
+		const { engine, call } = harness();
+		await call({
+			action: "add",
+			id: "metrics",
+			title: "Build the metrics module",
+			tasks: ["ship metrics"],
+		});
+		await call({
+			action: "add",
+			items: [
+				{
+					id: "cand-a",
+					parent: "metrics",
+					title: "Approach A",
+					tasks: ["do it A-way"],
+				},
+				{
+					id: "cand-b",
+					parent: "metrics",
+					title: "Approach B",
+					tasks: ["do it B-way"],
+				},
+			],
+		});
+		const promoted = await call({
+			action: "update",
+			id: "metrics",
+			persona: "integrator",
+		});
+		expect(promoted.details?.error).toBeUndefined();
+
+		const parent = engine.get().nodes[0];
+		expect(parent.persona).toBe("integrator");
+		expect(parent.children).toHaveLength(2);
+		// Candidates never ship: the executor gives them cand/ branches.
+		for (const child of parent.children ?? [])
+			expect(isBranchOwner(child)).toBe(false);
+		expect(isBranchOwner(parent)).toBe(true);
+	});
+
+	it("refuses to promote a parent that has no candidates yet", async () => {
+		// The ordering constraint, enforced rather than documented.
+		const { call } = harness();
+		await call({
+			action: "add",
+			id: "metrics",
+			title: "Build it",
+			tasks: ["ship"],
+		});
+		const promoted = await call({
+			action: "update",
+			id: "metrics",
+			persona: "integrator",
+		});
+		expect(promoted.details?.error).toContain("at least two worker candidates");
+	});
 });
 
 describe("the ensemble SHAPE is enforced by validation, not by the action", () => {
@@ -225,36 +243,6 @@ describe("the ensemble SHAPE is enforced by validation, not by the action", () =
 });
 
 describe("deliverable authors the whole tree", () => {
-	/** The tool under test, over a real engine on a temp store. */
-	function harness() {
-		const plans = new Map<string, Plan>();
-		const store = {
-			save: (p: Plan) => void plans.set(p.slug, p),
-			load: (slug: string) => plans.get(slug),
-			exists: (slug: string) => plans.has(slug),
-			root: "/tmp",
-		} as unknown as PlanStore;
-		const engine = PlanEngine.create(
-			store,
-			{ slug: "demo", title: "Demo", repoPath: "/tmp/demo" },
-			() => TS,
-		);
-		const tool = createDeliverableTool({
-			engine: () => engine,
-			onPlanChanged: () => {},
-			mode: () => "plan",
-		} as never);
-		const call = async (params: unknown) =>
-			(await tool.execute(
-				"t",
-				params as never,
-				undefined as never,
-				undefined as never,
-				{} as never,
-			)) as { details?: { error?: string } };
-		return { engine, call };
-	}
-
 	it("authors a deliverable WITH its tasks in one call", async () => {
 		// The half-authored plan is the failure this prevents: deliverables with
 		// no gating work can never enter execution, and a second call is a second

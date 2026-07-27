@@ -23,7 +23,7 @@ const ALL_TOOLS = [
 	"webfetch",
 	"deliverable",
 	"task",
-	"author",
+	"deliverable",
 	"plan",
 	"research",
 ];
@@ -51,7 +51,7 @@ describe("plan-mode tool policy", () => {
 		});
 		expect(active).toContain("deliverable");
 		expect(active).toContain("task");
-		expect(active).toContain("author");
+		expect(active).toContain("deliverable");
 	});
 
 	it("auto mode exposes the structure tools (evolve-in-place)", () => {

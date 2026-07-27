@@ -336,71 +336,6 @@ const TaskParams = Type.Object({
 	),
 });
 
-const AgentParams = Type.Object({
-	action: Type.Union([
-		Type.Literal("add"),
-		Type.Literal("update"),
-		Type.Literal("remove"),
-		Type.Literal("ensemble"),
-	]),
-	deliverableId: Type.Optional(
-		Type.String({ description: "Parent deliverable id." }),
-	),
-	candidates: Type.Optional(
-		Type.Array(
-			Type.Object({
-				name: Type.String({ description: "Candidate title." }),
-				focus: Type.String({
-					description: "What this candidate should implement.",
-				}),
-			}),
-			{
-				minItems: 2,
-				description:
-					"ensemble only: the competing candidate implementations (≥2).",
-			},
-		),
-	),
-	name: Type.Optional(
-		Type.String({ description: "Agent name (unique within deliverable)." }),
-	),
-	mode: Type.Optional(
-		Type.Union([Type.Literal("full"), Type.Literal("read-only")]),
-	),
-	model: Type.Optional(
-		Type.String({
-			description:
-				"Exact provider/model id from the active worker role pool. Omit for its default.",
-		}),
-	),
-	effort: Type.Optional(
-		Type.Union([
-			Type.Literal("off"),
-			Type.Literal("minimal"),
-			Type.Literal("low"),
-			Type.Literal("medium"),
-			Type.Literal("high"),
-			Type.Literal("xhigh"),
-		]),
-	),
-	focus: Type.Optional(
-		Type.String({ description: "What this agent should focus on." }),
-	),
-	after: Type.Optional(
-		Type.Array(Type.String(), {
-			description: '"worker" or other agent names.',
-		}),
-	),
-	multiModal: Type.Optional(
-		Type.Boolean({
-			description:
-				"Review this across several model families — for genuinely risky " +
-				"work where one model's blind spot would cost you. Intent only: " +
-				"never name a model or a count, configuration decides the width.",
-		}),
-	),
-});
-
 const RepoParams = Type.Object({
 	action: Type.Union([
 		Type.Literal("add"),
@@ -454,7 +389,6 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
 	return [
 		createDeliverableTool(deps),
 		createTaskTool(deps),
-		createAuthorTool(deps),
 		createPlanTool(deps),
 		createRepoTool(deps),
 	];
@@ -651,6 +585,10 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							body: params.body,
 							after: params.dependsOn,
 							repo: params.repo,
+							...(params.persona ? { persona: params.persona } : {}),
+							...(params.multiModal !== undefined
+								? { multiModal: params.multiModal }
+								: {}),
 							...(params.stacked === false ? { base: "default-branch" } : {}),
 							...(params.workspace === "repo" && !isBranchOwner(current)
 								? { branch: defaultBranchForNode(current) }
@@ -878,164 +816,6 @@ export function createTaskTool(deps: PlanToolDeps): ToolDefinition {
 
 /** Focus text that reads as research → explorer; anything review-ish (the
  *  default) → reviewer. Both are read agents, matching v1 mode:read-only. */
-function inferSupportAgentType(name: string, focus: string): NodeAgentType {
-	const text = `${name} ${focus}`;
-	return /\b(research|explor\w*|investigat\w*|survey|spike|benchmark|map out|understand)\b/i.test(
-		text,
-	)
-		? "explorer"
-		: "reviewer";
-}
-
-/** Resolve a v1-style agent name to a child node: minted id, slug of the
- *  name, or title match (add uses the name as the child's title). */
-function findSupportAgent(parent: PlanNode, name: string): PlanNode | null {
-	return (
-		(parent.children ?? []).find(
-			(c) => c.id === name || c.id === slugify(name) || c.title === name,
-		) ?? null
-	);
-}
-
-/** v1 agent `after` referenced "worker" (the deliverable's own worker) or
- *  sibling agent names; v2 children order on siblings + the "parent" token. */
-function mapAgentAfter(parent: PlanNode, after: readonly string[]): string[] {
-	return after.map((ref) => {
-		if (ref === "worker") return PARENT_AFTER_TOKEN;
-		const sibling = findSupportAgent(parent, ref);
-		return sibling ? sibling.id : ref;
-	});
-}
-
-export function createAuthorTool(deps: PlanToolDeps): ToolDefinition {
-	return defineTool({
-		name: "author",
-		label: "Author",
-		description:
-			"Author the plan tree: add, update or remove the review and research agents nested under a deliverable. ensemble authors N competing worker candidates under a branch-owning deliverable (a bake-off) and makes the parent their integrator.",
-		promptSnippet:
-			"author — add/update/remove the agents nested under a deliverable, or ensemble competing worker candidates.",
-		parameters: AgentParams,
-		async execute(_id, params): Promise<Result> {
-			if (!deps.engine() && deps.agentBridge?.()) {
-				return error("agents cannot modify plan structure");
-			}
-			return withEngine(deps, (engine) => {
-				const deliverableId = params.deliverableId;
-				if (!deliverableId) return error("deliverableId is required");
-				const parent = findNode(engine.get(), deliverableId);
-				if (!parent) return error(`unknown deliverable: ${deliverableId}`);
-
-				switch (params.action) {
-					case "add": {
-						if (!params.name) return error("add requires name");
-						if (!params.focus) return error("add requires focus");
-						const agent = inferSupportAgentType(params.name, params.focus);
-						const input: NodeInput = {
-							agent,
-							persona: agent === "explorer" ? "researcher" : "reviewer",
-							title: params.name,
-							tasks: [params.focus],
-							...(params.after && params.after.length > 0
-								? { after: mapAgentAfter(parent, params.after) }
-								: {}),
-							...(params.multiModal ? { multiModal: true } : {}),
-						};
-						// Pre-start: normal authoring. Post-start: the ONE dynamic
-						// structure operation (write-ahead append).
-						const child = engine.hasExecutionStarted()
-							? engine.appendChild(deliverableId, input, "plan")
-							: engine.addNode(deliverableId, input);
-						notify(deps, engine);
-						return ok(`✓ ${deliverableId}/${child.id}`, {
-							agent: child,
-							plan: engine.get(),
-						});
-					}
-					case "update": {
-						if (!params.name) return error("update requires name");
-						const child = findSupportAgent(parent, params.name);
-						if (!child) {
-							return error(`unknown agent: ${deliverableId}/${params.name}`);
-						}
-						if (params.after) {
-							engine.updateNode(child.id, {
-								after: mapAgentAfter(parent, params.after),
-							});
-						}
-						if (params.focus) {
-							const first = child.tasks[0];
-							if (first) {
-								engine.updateTask(child.id, first.id, {
-									title: params.focus,
-								});
-							} else {
-								engine.addTask(child.id, { title: params.focus });
-							}
-						}
-						notify(deps, engine);
-						return ok(`Updated agent ${params.name}.`, {
-							agent: findNode(engine.get(), child.id) ?? undefined,
-							plan: engine.get(),
-						});
-					}
-					case "remove": {
-						if (!params.name) return error("remove requires name");
-						const child = findSupportAgent(parent, params.name);
-						if (!child) {
-							return error(`unknown agent: ${deliverableId}/${params.name}`);
-						}
-						engine.removeNode(child.id);
-						notify(deps, engine);
-						return ok(`Removed agent ${params.name}.`, { plan: engine.get() });
-					}
-					case "ensemble": {
-						// A competitive bake-off: N branchless worker children under a
-						// branch-owning worker deliverable. The executor provisions each
-						// as a candidate (cand/<parent>/<id>) forked from the parent's
-						// branch tip; candidates NEVER ship (isCandidateBranch). The
-						// parent becomes the INTEGRATOR — it waits for the candidate
-						// diffs, cherry-picks the strongest, and ships the one PR.
-						// (docs/design/multi-model-agents.md §5.)
-						if (engine.hasExecutionStarted())
-							return error(
-								"ensemble candidates must be authored before execution starts",
-							);
-						if (parent.agent !== "worker" || !isBranchOwner(parent))
-							return error(
-								`ensemble parent ${deliverableId} must be a branch-owning worker deliverable — it integrates the candidates and ships the one PR`,
-							);
-						const candidates = params.candidates ?? [];
-						if (candidates.length < 2)
-							return error("ensemble requires at least two candidates");
-						// Candidates FIRST, then flip the parent. The engine validates
-						// every mutation, and an integrator with no candidates is not a
-						// valid shape — flipping first would leave the plan transiently
-						// invalid and the write would be refused.
-						const created = candidates.map((candidate) =>
-							engine.addNode(deliverableId, {
-								agent: "worker",
-								persona: "coder",
-								title: candidate.name,
-								tasks: [candidate.focus],
-							}),
-						);
-						// The parent integrates the candidates rather than implementing.
-						engine.updateNode(deliverableId, { persona: "integrator" });
-						notify(deps, engine);
-						return ok(
-							`✓ ensemble under ${deliverableId}: ${created.length} candidates (${created
-								.map((child) => child.id)
-								.join(", ")}); parent is the integrator.`,
-							{ plan: engine.get() },
-						);
-					}
-				}
-			});
-		},
-	}) as ToolDefinition;
-}
-
 export function createRepoTool(deps: PlanToolDeps): ToolDefinition {
 	return defineTool({
 		name: "repo",

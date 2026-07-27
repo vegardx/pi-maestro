@@ -52,7 +52,7 @@ describe("tool names", () => {
 		const names = toolNames();
 		expect(names.size).toBeGreaterThan(5);
 		// Sanity: two tools we know exist, in different packages.
-		expect(names.has("author")).toBe(true);
+		expect(names.has("deliverable")).toBe(true);
 		expect(names.has("agent")).toBe(true);
 	});
 
@@ -66,10 +66,13 @@ describe("tool names", () => {
 		).toEqual([]);
 	});
 
-	it("keeps the plan-structure tool distinct from the runtime agent API", () => {
-		// The specific pair that broke: plan authoring vs runtime fan-out.
+	it("keeps plan authoring distinct from the runtime agent API", () => {
+		// modes once defined a plan-structure tool named "agent" alongside the
+		// subagents runtime tool of the same name. It was never registered, so
+		// nothing shadowed anything — but registering it would have collided.
+		// Authoring lives on `deliverable` now; `agent` belongs to subagents.
 		const names = toolNames();
-		expect(names.get("author")).toEqual(["modes"]);
+		expect(names.get("deliverable")).toEqual(["modes"]);
 		expect(names.get("agent")).toEqual(["subagents"]);
 	});
 });

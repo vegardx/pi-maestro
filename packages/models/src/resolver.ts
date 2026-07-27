@@ -29,7 +29,11 @@ import type {
 	ThinkingLevel,
 	TierId,
 } from "@vegardx/pi-contracts";
-import { THINKING_LEVELS } from "@vegardx/pi-contracts";
+import {
+	DEFAULT_AGENT_ALLOWANCES,
+	MAX_SPREAD,
+	THINKING_LEVELS,
+} from "@vegardx/pi-contracts";
 import { activeBinding, parseAliasRef, readModelsConfig } from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec, sessionModelId } from "./model-spec.js";
@@ -471,6 +475,28 @@ function seatFallback(
 				? `tier ${tier} is empty in roster ${walk.rosterId}`
 				: `all ${struck} ${tier} alias${struck === 1 ? "" : "es"} unavailable`,
 	};
+}
+
+/**
+ * How wide a MULTI-MODAL review by this agent type fans out. Answers HOW WIDE,
+ * never WHETHER — the plan node decides that, so a reviewer the plan did not
+ * mark multi-modal runs on one model no matter what this returns.
+ *
+ * Falls back to the shipped default when the merged config carries no spread:
+ * `allowances` merges shallowly, so authoring `reviewer: { tiers: [...] }` to
+ * narrow tiers would otherwise silently disable multi-modal review. Absent
+ * everywhere → 1, so an authored flag degrades to a single review rather than
+ * erroring.
+ */
+export function spreadForAgent(
+	ctx: ExtensionContext,
+	agent: SpawnableAgentType,
+): number {
+	const configured =
+		readConfigSafe(ctx)?.allowances[agent]?.spread ??
+		DEFAULT_AGENT_ALLOWANCES[agent]?.spread ??
+		1;
+	return Math.min(Math.max(1, configured), MAX_SPREAD);
 }
 
 /**

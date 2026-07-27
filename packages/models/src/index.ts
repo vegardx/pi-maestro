@@ -48,4 +48,5 @@ export {
 	type ModelResolutionSource,
 	resolveModel,
 	resolveModels,
+	spreadForAgent,
 } from "./resolver.js";

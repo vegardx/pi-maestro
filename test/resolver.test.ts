@@ -15,6 +15,7 @@ import {
 	ModelResolutionError,
 	resolveModel,
 	resolveModels,
+	spreadForAgent,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -476,5 +477,73 @@ describe("resolveModels (top-N)", () => {
 			2,
 		);
 		for (const slot of slots) expect(slot.candidates).toHaveLength(2);
+	});
+});
+
+// ─── spread ──────────────────────────────────────────────────────────────────
+// How wide a MULTI-MODAL review fans out. Answers HOW WIDE, never WHETHER —
+// the plan node decides that.
+
+describe("spreadForAgent", () => {
+	it("uses the shipped default for a reviewer", async () => {
+		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+	});
+
+	it("honors an authored spread", async () => {
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: {
+					worker: { tiers: ["standard", "heavy"] },
+					reviewer: { tiers: ["standard"], spread: 2 },
+				},
+			},
+		});
+		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(2);
+	});
+
+	it("keeps the default when an author narrows tiers without saying spread", () => {
+		// allowances merge SHALLOWLY, so authoring `reviewer: { tiers: [...] }`
+		// replaces the whole default object. Without the explicit fallback this
+		// would silently disable multi-modal review for anyone who ever narrowed
+		// a tier list.
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: {
+					worker: { tiers: ["standard", "heavy"] },
+					reviewer: { tiers: ["heavy"] },
+				},
+			},
+		});
+		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+	});
+
+	it("is 1 for agent types with no spread anywhere", () => {
+		// An authored multiModal flag then degrades to one review, never errors.
+		expect(spreadForAgent(fakeCtx(), "explorer")).toBe(1);
+	});
+
+	it("rejects a spread above the cap at parse time", () => {
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: { reviewer: { tiers: ["heavy"], spread: 99 } },
+			},
+		});
+		expect(() => spreadForAgent(fakeCtx(), "reviewer")).not.toThrow();
+		// The config is rejected, so the reader falls back to the shipped default
+		// rather than honoring 99 — runaway fan-out is real money.
+		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+	});
+
+	it("rejects a non-integer spread", () => {
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: { reviewer: { tiers: ["heavy"], spread: 2.5 } },
+			},
+		});
+		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
 	});
 });

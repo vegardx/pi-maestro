@@ -90,7 +90,21 @@ export type SpawnableAgentType = (typeof SPAWNABLE_AGENT_TYPES)[number];
 /** Per-agent-type tier allowance: which tiers its assignments may draw from. */
 export interface AgentAllowanceConfig {
 	readonly tiers: readonly TierId[];
+	/**
+	 * Fan-out width WHEN a review is authored multi-modal — never always-on. A
+	 * reviewer whose plan node did not ask for multi-modal resolves to exactly
+	 * one model regardless of this, so config cannot widen a fan-out behind the
+	 * plan's back. The plan decides WHETHER; this decides HOW WIDE.
+	 */
+	readonly spread?: number;
 }
+
+/**
+ * Ceiling on `spread`. Every extra slot is another full review of the same
+ * diff — real money and real latency — so an authored value above this is
+ * rejected rather than silently honored.
+ */
+export const MAX_SPREAD = 5;
 
 /**
  * Defaults applied when settings say nothing. `inherit` and the
@@ -109,10 +123,13 @@ export const DEFAULT_AGENT_ALLOWANCES: Readonly<
 	// require a non-empty tiers list; only this built-in default may be empty.)
 	worker: { tiers: [] },
 	explorer: { tiers: ["light", "standard"] },
-	reviewer: { tiers: ["standard", "heavy"] },
+	// spread: a multi-modal review reads the same diff through three distinct
+	// families — enough for genuine disagreement to surface, without the cost
+	// running away. Only applies to reviews the PLAN marked multi-modal.
+	reviewer: { tiers: ["standard", "heavy"], spread: 3 },
 	// Advice draws on strong reasoning; overflow into standard when a fan-out
 	// wants more models than heavy holds.
-	advisor: { tiers: ["heavy", "standard"] },
+	advisor: { tiers: ["heavy", "standard"], spread: 2 },
 };
 
 /**

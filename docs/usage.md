@@ -22,7 +22,13 @@ Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the ges
 
 ## Plan
 
-Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. When you gesture into execution (Shift+Tab), the plan is authored in one forming step with these tools:
+Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`.
+
+**`/form`** authors the plan in one step (Shift+Tab does the same). It is one verb for both jobs: on an empty plan it authors the tree; on a plan that already has deliverables it **extends** it with whatever was newly agreed, without re-authoring what is there. Once a plan has started, extending may add new deliverables and follow-up or manual tasks on started ones — restructuring started work is refused. `/form` requires plan mode.
+
+**`/review`** judges the formed plan on its own and records the verdict against the plan's fingerprint, so a later start can tell whether the plan drifted since it was reviewed. It is opt-in — nothing forces it.
+
+Forming uses these tools:
 
 - `deliverable` defines atomic deliveries and their dependency DAG;
 - `task` defines gating work, follow-ups, questions, and manual checkpoints;
@@ -84,6 +90,8 @@ Generated PR evidence is marker-bounded: user text outside Maestro markers is pr
 |---|---|
 | `/plan [slug]` | Open/create a plan (artifact only; no mode change) |
 | `/mode [name]` | Switch posture (direct; picker when omitted) |
+| `/form` | Author or extend the plan tree (plan mode) |
+| `/review` | Review the formed plan; records the verdict |
 | `/start [id]` | Activate ready planned deliveries |
 | `/stop` | Bounded fleet stop |
 | `/restart [id]` | Resume/replace started work only |

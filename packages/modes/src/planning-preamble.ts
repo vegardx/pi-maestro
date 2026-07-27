@@ -6,7 +6,7 @@
 // preamble. See docs/design/mode-sessions.md § form-at-transition.
 
 import type { PlanEngine } from "./plan/engine.js";
-import { walkNodes } from "./plan/schema.js";
+import { type PlanNode, walkNodes } from "./plan/schema.js";
 
 /**
  * Build the plan-mode system preamble for the maestro. Injected on every
@@ -56,10 +56,9 @@ ${CONVERGENCE}
 
 ## Crossing into execution
 
-When you and the user agree on the shape, THEY gesture into execution
-(Shift+Tab). That gesture forms the plan: you get one turn to author the full
-deliverable/task tree from everything decided here, a reviewer checks it, and
-the user gives one final ruling before any worker runs. So:
+When you and the user agree on the shape, THEY form the plan (Shift+Tab, or
+\`/form\`). That gives you ONE turn to author the full deliverable/task tree
+from everything decided here; the user reviews it and starts the work. So:
 
 - Keep the conversation decision-complete — the forming turn authors from it.
 - Do NOT pre-empt the transition by trying to structure now.
@@ -88,9 +87,34 @@ the user gives one final ruling before any worker runs. So:
  * user can settle still blocks the structure, surfaces it via \`ask\` and stops
  * (the transition bounces back to plan; the user answers, then re-gestures).
  */
-export function buildFormingPreamble(engine: PlanEngine | undefined): string {
+/** One line per node, depth-nested: what already exists, for an extend turn. */
+function outlineNodes(nodes: readonly PlanNode[], depth = 0): string {
+	return nodes
+		.map((node) => {
+			const pad = "  ".repeat(depth);
+			const count = node.tasks?.length ?? 0;
+			const tasks = count ? ` — ${count} task${count === 1 ? "" : "s"}` : "";
+			const head = `${pad}- \`${node.id}\` [${node.status}] ${node.agent ?? "worker"}: ${node.title}${tasks}`;
+			const kids = node.children?.length
+				? `\n${outlineNodes(node.children, depth + 1)}`
+				: "";
+			return head + kids;
+		})
+		.join("\n");
+}
+
+/**
+ * The forming window's preamble. `extend` swaps authoring-from-scratch for
+ * adding to a tree that already exists — a different job with different rules,
+ * because execution may already have started against what is there.
+ */
+export function buildFormingPreamble(
+	engine: PlanEngine | undefined,
+	opts?: { extend?: boolean },
+): string {
 	const slug =
 		engine && !engine.isDraft() ? ` for plan \`${engine.get().slug}\`` : "";
+	if (opts?.extend) return buildExtendPreamble(engine, slug);
 	return `You are FORMING THE PLAN${slug} — the user has gestured into execution.
 This one turn turns the converged conversation into the concrete plan. The
 structure tools (\`deliverable\`/\`task\`/\`agent\`/\`repo\`) are available now
@@ -153,6 +177,66 @@ a simpler model could implement them mechanically.
 - Write access is derived from agent type: worker nodes write,
   explorer/reviewer nodes are read-only. Never author models or efforts —
   they inherit.`;
+}
+
+/**
+ * The EXTEND window: the plan already exists and execution may already have run
+ * against it. Adding is safe; rewriting what a worker has already read is not —
+ * so this preamble is append-first, and the engine refuses the rest.
+ */
+function buildExtendPreamble(
+	engine: PlanEngine | undefined,
+	slug: string,
+): string {
+	const plan = engine?.get();
+	const outline = plan?.nodes.length
+		? outlineNodes(plan.nodes)
+		: "(the plan has no deliverables yet)";
+	const started = plan
+		? [...walkNodes(plan)].some(({ node }) => node.status !== "planned")
+		: false;
+	return `You are EXTENDING THE PLAN${slug} — the user has agreed on more work.
+The structure tools (\`deliverable\`/\`task\`/\`agent\`/\`repo\`) are available
+now and ONLY now.
+
+## What already exists
+
+${outline}
+
+## Your job: ADD, don't re-author
+
+Add ONLY what the conversation newly agreed on. The tree above is already
+authored — do not restate it, do not recreate nodes that exist, and do not
+renumber or reorganize it. If nothing new was actually agreed, add nothing and
+say so.
+
+1. **New deliverables** — batch them into a single \`deliverable\` call. Give
+   each an explicit \`id\` that does not collide with the ids above, and use
+   \`after\` to order them against EXISTING ids where they depend on prior work.
+2. **New tasks on existing deliverables** — add them with \`task\`. Every new
+   worker deliverable still needs its full task list in this same turn.
+3. **Summary** — briefly state what you added and why. End with "Ready to
+   implement."
+${
+	started
+		? `
+## This plan has started
+
+Deliverables past \`planned\` are frozen: their structure is what a worker has
+already read. You may add NEW deliverables freely, and on a started deliverable
+you may add only follow-up or manual-checkpoint tasks. Removing or restructuring
+started work is refused — if it is genuinely wrong, say so and let the user
+decide rather than trying to force it.
+`
+		: ""
+}
+## Rules
+
+- Each branch-owning node = one PR. Keep them small and focused.
+- A node whose \`after\` names a branch-owning sibling stacks on it;
+  \`base: "default-branch"\` opts out.
+- Do NOT implement code yourself.
+- Never author models or efforts — they inherit.`;
 }
 
 const ASKING = `## Asking the user

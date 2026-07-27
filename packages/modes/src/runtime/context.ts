@@ -15,6 +15,8 @@ import {
 	EVENTS,
 	type ModeName,
 	type PlanId,
+	type ThinkingLevel,
+	type TierId,
 	type TokenSnapshot,
 } from "@vegardx/pi-contracts";
 import { type MaestroContext, runAgentTurn } from "@vegardx/pi-core";
@@ -50,6 +52,7 @@ import {
 	type Plan,
 	type PlanNode,
 	parentOfNode,
+	planFingerprint,
 	planRepoMismatch,
 	readyChildren,
 	repoNameFromPath,
@@ -74,6 +77,10 @@ import {
 import { plansRoot } from "../storage.js";
 import {
 	createDefaultTransitionGates,
+	createExecutionReadinessGate,
+	executionReadinessValidations,
+	recordPlanReview,
+	runPlanReviewAgent,
 	TransitionGateCoordinator,
 } from "../transition-gates.js";
 import { UsageCheckpointStore } from "../usage-checkpoints.js";
@@ -120,6 +127,13 @@ const FORMING_TRIGGER =
 	"forming instructions: self-assess open questions first (ask + stop if any " +
 	"only-the-user-can-answer structural question remains), otherwise author the " +
 	"complete deliverable/task tree now from everything we converged on.]";
+
+/** The extend turn's trigger — the plan exists; add what was newly agreed. */
+const EXTEND_TRIGGER =
+	"[Extending the plan — the user asked to add to it. Follow your extend " +
+	"instructions: add ONLY what we newly agreed on, without restating or " +
+	"recreating what the plan already contains. If nothing new was agreed, add " +
+	"nothing and say so.]";
 
 export interface ModesRuntimeOptions {
 	readonly store?: PlanStore;
@@ -195,10 +209,12 @@ export interface RuntimeContext {
 	compactionCooldownUntil: number;
 	// Highest context-fill warning step already fired (70/90); 0 = armed.
 	contextWarnedAt: number;
-	// Transient (not persisted): the plan→auto/hack forming turn is running.
+	// Transient (not persisted): which forming turn is running, if any.
+	// "author" writes the tree from scratch, "extend" adds to one that exists —
+	// they get different preambles. Truthiness is what opens the structure tools.
 	// While set, plan mode exposes the structure tools and swaps in the forming
 	// preamble — the ONE window where a plan-mode conversation may author.
-	forming: boolean;
+	forming: false | "author" | "extend";
 
 	currentMode(): ModeName;
 	currentEngine(): PlanEngine | undefined;
@@ -221,6 +237,10 @@ export interface RuntimeContext {
 	finalizeDraftPlan(ctx: ExtensionContext, opts?: { force?: boolean }): void;
 	/** Name the draft from its deliverables, before it materializes. */
 	nameDraftFromModel(ctx: ExtensionContext): Promise<void>;
+	/** `/form`: author the plan tree, or extend one that already exists. */
+	runForm(ctx: ExtensionContext): Promise<void>;
+	/** `/review`: judge the plan standalone; records the reviewed fingerprint. */
+	runReview(ctx: ExtensionContext): Promise<void>;
 	cycle(ctx: ExtensionContext): Promise<void>;
 	emitPlanChanged(): void;
 	assertDeliverableRepo(ctx: ExtensionContext, d: PlanNode): boolean;
@@ -363,6 +383,27 @@ export function createRuntimeContext(
 		emitMode(changed.previous);
 	}
 
+	/**
+	 * Resolve a policy row's tier to a concrete reviewer model. Shared by the
+	 * transition gate and `/review` so both honor the same row.
+	 */
+	async function resolveTierModel(
+		tier: TierId,
+		ctx: ExtensionContext,
+	): Promise<{ model: string; effort?: ThinkingLevel } | undefined> {
+		try {
+			const resolved = await resolveModel(ctx, { agent: "reviewer", tier });
+			return {
+				model: resolved.modelId,
+				...(resolved.effort ? { effort: resolved.effort } : {}),
+			};
+		} catch {
+			// Fail-open to the runner's own selection — review still runs; the
+			// row's tier simply could not be honored.
+			return undefined;
+		}
+	}
+
 	// Policy-table errors surface once per session, never crash a gate.
 	const policyErrorsNotified = new Set<string>();
 	const transitionGates = new TransitionGateCoordinator(
@@ -394,22 +435,7 @@ export function createRuntimeContext(
 				}
 				return policyRowFor(table, on);
 			},
-			resolveTierModel: async (tier, ctx) => {
-				try {
-					const resolved = await resolveModel(ctx, {
-						agent: "reviewer",
-						tier,
-					});
-					return {
-						model: resolved.modelId,
-						...(resolved.effort ? { effort: resolved.effort } : {}),
-					};
-				} catch {
-					// Fail-open to the v1 kind-based selection — the gate still
-					// runs; the row's tier simply could not be honored.
-					return undefined;
-				}
-			},
+			resolveTierModel,
 		},
 	);
 
@@ -475,26 +501,42 @@ export function createRuntimeContext(
 	 */
 	async function runFormingTurn(
 		ctx: ExtensionContext,
+		opts?: { extend?: boolean },
 	): Promise<{ status: "formed" | "bounced" | "no-plan"; summary: string }> {
 		const engine = rt.engine;
 		if (!engine) return { status: "no-plan", summary: "" };
-		if (engine.get().nodes.length > 0) return { status: "formed", summary: "" };
-		rt.forming = true;
+		const populated = engine.get().nodes.length > 0;
+		// An already-authored plan has nothing to AUTHOR. The gate takes this
+		// path (a reopened or seeded plan skips straight to the checks); only an
+		// explicit extend re-opens the structure tools over an existing tree.
+		if (populated && !opts?.extend) return { status: "formed", summary: "" };
+		const extend = populated && opts?.extend === true;
+		// Extending must measure change, not existence: nodes already exist, so
+		// "did anything happen?" is a fingerprint question.
+		const before = extend ? planFingerprint(engine.get()) : "";
+		rt.forming = extend ? "extend" : "author";
 		rt.applyTools();
 		let summary = "";
 		try {
-			summary = await runAgentTurn(pi, ctx, FORMING_TRIGGER, {
-				timeoutMs: FORMING_TURN_TIMEOUT_MS,
-			});
+			summary = await runAgentTurn(
+				pi,
+				ctx,
+				extend ? EXTEND_TRIGGER : FORMING_TRIGGER,
+				{ timeoutMs: FORMING_TURN_TIMEOUT_MS },
+			);
 		} catch {
-			// A wedged/failed forming turn leaves the plan empty → bounce.
+			// A wedged/failed turn changed nothing → bounce.
 		} finally {
 			rt.forming = false;
 			rt.applyTools();
 		}
-		// The turn either authored (nodes now exist) or chose to ask + stop.
-		if ((rt.engine?.get().nodes.length ?? 0) === 0)
-			return { status: "bounced", summary };
+		const after = rt.engine?.get();
+		if (!after) return { status: "no-plan", summary };
+		// The turn either did something (authored / added) or chose to ask + stop.
+		const changed = extend
+			? planFingerprint(after) !== before
+			: after.nodes.length > 0;
+		if (!changed) return { status: "bounced", summary };
 		rt.finalizeDraftPlan(ctx);
 		return { status: "formed", summary };
 	}
@@ -510,6 +552,139 @@ export function createRuntimeContext(
 		ctx: ExtensionContext,
 	): Promise<"formed" | "bounced" | "no-plan"> {
 		return (await runFormingTurn(ctx)).status;
+	}
+
+	/**
+	 * `/form`: author the plan, or extend one that already exists. One verb —
+	 * which job it does depends only on whether the tree is populated, so the
+	 * user never has to know which mode they are in. Plan posture only: this is
+	 * the window where the structure tools open, and keeping it there is what
+	 * makes "authoring happens in plan" hold.
+	 */
+	async function runForm(ctx: ExtensionContext): Promise<void> {
+		if (rt.state.mode !== "plan") {
+			ctx.ui.notify(
+				`\`/form\` authors the plan in plan mode — you are in ${rt.state.mode}. Switch with \`/mode plan\` first.`,
+				"warning",
+			);
+			return;
+		}
+		if (!rt.engine) {
+			ctx.ui.notify("No active plan — run `/plan` first.", "warning");
+			return;
+		}
+		const extending = rt.engine.get().nodes.length > 0;
+		const { status, summary } = await runFormingTurn(ctx, { extend: true });
+		if (status === "no-plan") {
+			ctx.ui.notify("No active plan — run `/plan` first.", "warning");
+			return;
+		}
+		if (status === "bounced") {
+			// Either open questions surfaced via `ask`, or an extend turn decided
+			// there was genuinely nothing new to add. Both leave the plan as-is.
+			ctx.ui.notify(
+				extending
+					? "Nothing added — either open questions came up, or there was nothing new agreed to add."
+					: "Nothing formed — open questions came up. Answer them, then `/form` again.",
+				"info",
+			);
+			return;
+		}
+		const plan = rt.engine?.get();
+		const shape =
+			summary.trim() || `${plan?.nodes.length ?? 0} deliverable(s).`;
+		ctx.ui.notify(
+			`Plan \`${plan?.slug ?? "draft"}\` ${extending ? "extended" : "formed"}:\n\n${shape.slice(0, 1400)}\n\n` +
+				"`/review` to check it, `/start` to run it.",
+			"info",
+		);
+	}
+
+	/**
+	 * `/review`: judge the plan on its own, without crossing into execution.
+	 * Opt-in — nothing forces it — but the verdict is recorded against the
+	 * plan's fingerprint so starting work can tell whether what you are about
+	 * to run is what was actually reviewed.
+	 */
+	async function runReview(ctx: ExtensionContext): Promise<void> {
+		const engine = rt.engine;
+		if (!engine) {
+			ctx.ui.notify("No active plan — run `/plan` first.", "warning");
+			return;
+		}
+		const plan = engine.get();
+		if (plan.nodes.length === 0) {
+			ctx.ui.notify(
+				"Nothing to review — no plan has been formed. Form one with `/form`.",
+				"warning",
+			);
+			return;
+		}
+		const fingerprint = planFingerprint(plan);
+		const at = now();
+		const validations = [...executionReadinessValidations(plan)];
+		const errors = validations.filter((v) => v.level === "error");
+		if (errors.length > 0) {
+			// Mechanically unrunnable: say so now rather than spending a reviewer
+			// on a plan that cannot execute either way.
+			const reason = errors.map((error) => error.message).join("; ");
+			recordPlanReview(engine, {
+				mode: rt.state.mode,
+				fingerprint,
+				at,
+				validations,
+				blocked: reason,
+			});
+			ctx.ui.notify(`The plan isn't runnable yet: ${reason}.`, "warning");
+			return;
+		}
+		const agents = maestro.capabilities.get(CAPABILITIES.agents);
+		if (!agents) {
+			ctx.ui.notify(
+				"Plan review needs the agents capability; nothing ran.",
+				"warning",
+			);
+			return;
+		}
+		const row = policyRowFor(readPolicyTable(ctx.cwd), "mode:plan->auto");
+		let summary: string;
+		try {
+			ctx.ui.notify("Reviewing the plan…", "info");
+			summary = await runPlanReviewAgent(ctx, {
+				agents,
+				prompt: createExecutionReadinessGate().prompt(plan, validations),
+				cwd: plan.repoPath,
+				meta: { reviewOf: plan.slug },
+				...(row ? { row } : {}),
+				resolveTierModel: (tier, tierCtx) => resolveTierModel(tier, tierCtx),
+			});
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			recordPlanReview(engine, {
+				mode: rt.state.mode,
+				fingerprint,
+				at,
+				validations,
+				blocked: reason,
+			});
+			ctx.ui.notify(`Plan review failed: ${reason}.`, "warning");
+			return;
+		}
+		recordPlanReview(engine, {
+			mode: rt.state.mode,
+			fingerprint,
+			at,
+			validations,
+			reviewSummary: summary,
+		});
+		const warnings = validations.filter((v) => v.level === "warning");
+		const notes = warnings.length
+			? `\n\nChecks: ${warnings.map((w) => w.message).join("; ")}`
+			: "";
+		ctx.ui.notify(
+			`Plan \`${plan.slug}\` reviewed:\n\n${summary.slice(0, 4000)}${notes}`,
+			"info",
+		);
 	}
 
 	/**
@@ -818,7 +993,7 @@ export function createRuntimeContext(
 					baselineTools,
 					isAgent: isAgentMode(),
 					carryForwardActive: Boolean(rt.carryForward.get()),
-					forming: rt.forming,
+					forming: Boolean(rt.forming),
 				}),
 			);
 		},
@@ -933,6 +1108,14 @@ export function createRuntimeContext(
 			maestro.events.emit(EVENTS.planUpdated, { planId: slug as PlanId });
 			ctx.ui.notify(`Plan saved as \`${slug}\`.`, "info");
 			draftExplicitName = undefined;
+		},
+
+		runForm(ctx: ExtensionContext): Promise<void> {
+			return runForm(ctx);
+		},
+
+		runReview(ctx: ExtensionContext): Promise<void> {
+			return runReview(ctx);
 		},
 
 		async cycle(ctx: ExtensionContext): Promise<void> {

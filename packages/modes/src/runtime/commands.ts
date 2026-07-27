@@ -343,6 +343,19 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 		},
 	});
 
+	// The plan's own verbs. Forming and reviewing are actions on the artifact,
+	// not side effects of changing posture.
+	pi.registerCommand("form", {
+		description:
+			"Author the plan from the conversation, or extend one that exists.",
+		handler: (_args, ctx) => rt.runForm(ctx),
+	});
+
+	pi.registerCommand("review", {
+		description: "Review the formed plan and record the verdict.",
+		handler: (_args, ctx) => rt.runReview(ctx),
+	});
+
 	pi.registerCommand("start", {
 		description: "Activate ready planned work. /start [deliverable-id]",
 		handler: (args, ctx) => rt.runStart(args.trim() || undefined, ctx),

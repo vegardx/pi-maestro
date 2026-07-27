@@ -149,7 +149,9 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			// swap in the forming preamble, which carries the structure-tool
 			// instructions. Plan CONVERSATION otherwise never sees them.
 			const preamble = rt.forming
-				? buildFormingPreamble(rt.engine)
+				? buildFormingPreamble(rt.engine, {
+						extend: rt.forming === "extend",
+					})
 				: buildPlanModePreamble(rt.engine);
 			// Post-handoff: the seed doc rides the system prompt (context-only —
 			// option B) until a plan exists. The user surface is the arrival
@@ -463,7 +465,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			if (reason) return { block: true, reason };
 		}
 		if (rt.state.mode === "plan") {
-			const reason = toolBlockedInPlanMode(event.toolName, rt.forming);
+			const reason = toolBlockedInPlanMode(event.toolName, Boolean(rt.forming));
 			if (reason) return { block: true, reason };
 		}
 	});

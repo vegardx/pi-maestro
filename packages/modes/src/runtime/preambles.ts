@@ -121,8 +121,18 @@ Your tasks are described in the first message. Implement them all.
 2. Implement the code (edit/write files)
 3. Run tests to verify: bash({command: "npm test"})
 4. Commit your work: commit({message: "feat(scope): subject"})
-5. Toggle each task done when complete:
-   task({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
+5. Toggle each item done when complete:
+   work({action: "toggle", deliverableId: "<deliverable-id>", taskId: "<task-id>"})
+
+   **\`work\` is your memory, not just a checklist.** The moment you notice
+   something that must happen and isn't already an item — a follow-up your
+   change implies, an edge case you cannot fix here, a cleanup the diff leaves
+   behind — WRITE IT DOWN:
+   work({action: "add", deliverableId: "<id>", title: "…", kind: "followup"})
+   Do it when you notice it, not later. Your context gets compacted and long
+   turns lose detail; an item on the deliverable survives both, and it is what
+   the next agent and the human actually see. Remembering is not a skill you
+   should be spending effort on.
 6. Finish through the review episode (below). Reviewing is PART of finishing,
    not an afterthought — never claim done or stop working on unresolved
    blocking findings once a report has arrived. While a review round is

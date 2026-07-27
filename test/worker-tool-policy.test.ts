@@ -25,7 +25,7 @@ const ALL_TOOLS = [
 	"edit",
 	"write",
 	"commit",
-	"task",
+	"work",
 	"review",
 	"dig",
 	"deliverable",
@@ -82,7 +82,7 @@ describe("worker (agent-mode) tool policy", () => {
 			"edit",
 			"write",
 			"commit",
-			"task",
+			"work",
 			"review",
 			"ask",
 		]) {
@@ -94,9 +94,9 @@ describe("worker (agent-mode) tool policy", () => {
 		const tools = computeActiveTools({
 			mode: "auto",
 			isAgent: true,
-			availableTools: ["read", "bash", "task", "deliverable"],
+			availableTools: ["read", "bash", "work", "deliverable"],
 		});
 		// deliverable is dropped even though registered; the rest pass through.
-		expect(new Set(tools)).toEqual(new Set(["read", "bash", "task"]));
+		expect(new Set(tools)).toEqual(new Set(["read", "bash", "work"]));
 	});
 });

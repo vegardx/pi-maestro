@@ -214,7 +214,7 @@ export { createModesSummariser } from "./summarise.js";
 export {
 	createDeliverableTool,
 	createPlanTool,
-	createTaskTool,
+	createWorkTool,
 } from "./tools.js";
 export { renderModeFooter, renderPlanPanel, renderPlanSidebar } from "./ui.js";
 export {

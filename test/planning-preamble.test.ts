@@ -98,8 +98,10 @@ describe("buildFormingPreamble", () => {
 
 	it("guides child-node review coverage and inheritance", () => {
 		const preamble = buildFormingPreamble(undefined);
-		expect(preamble).toContain("CHILD NODES");
-		expect(preamble).toContain('`after: ["parent"]`');
+		// Reviewers are NESTED deliverables authored with the same tool — the
+		// separate agent tool is gone.
+		expect(preamble).toContain("NESTED deliverables");
+		expect(preamble).toContain('parent="<the worker node>"');
 		expect(preamble).toContain("resolve by inheritance");
 		expect(preamble).toContain("Never author models or efforts");
 	});

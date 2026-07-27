@@ -47,7 +47,7 @@ needs the `gh` CLI.
 /plan payments-retry        # converge (research + clarify), then author the plan
   research(...)             # parallel persisted codebase/web reports
   deliverable/task/workflow # deliveries, work items, exact assignments/stages
-/auto                        # plan-review gate + user ruling, then execution
+/start                       # plan-review gate + user ruling, then execution
 /agents                      # live workers, child runs, plan, and questions
   ...typed reviewers inspect immutable SHAs; findings resolve and verify...
 /ship                        # push + PR for the next shippable delivery

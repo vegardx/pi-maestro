@@ -208,6 +208,11 @@ export interface RuntimeContext {
 	/** All requested mode changes; Plan→Auto/Hack settle through transition gates. */
 	requestMode(mode: ModeName, ctx: ExtensionContext): Promise<boolean>;
 	setMode(mode: ModeName, ctx?: ExtensionContext): void;
+	/**
+	 * Operator posture gestures only (`/mode`, Shift+Tab): ask to park live
+	 * workers before leaving the mode running them. False = stay put.
+	 */
+	guardPostureChange(ctx: ExtensionContext, to: ModeName): Promise<boolean>;
 	/** `/recon`: enter the read-only research posture in its own isolated session. */
 	enterRecon(ctx: ExtensionContext): Promise<void>;
 	setExecutionStage(execution: ExecutionState, ctx?: ExtensionContext): void;
@@ -589,57 +594,76 @@ export function createRuntimeContext(
 	}
 
 	/**
-	 * Phase 3 backward gesture: auto/hack→plan. Guard live workers first — a
-	 * return that abandons running implementation asks stop-or-stay. When it
-	 * proceeds, restore the plan session forked from (if any) with a "what
-	 * executed since" note; otherwise flip in place. commitMode retires the seed.
+	 * The live-worker guard for an OPERATOR posture gesture (`/mode`, Shift+Tab):
+	 * a started plan is stopped before we leave the mode running it. Returns true
+	 * when the switch may proceed — either nothing was live, or the user chose to
+	 * park the fleet (resumable) and we stopped it here.
+	 *
+	 * Deliberately NOT wired into setMode/commitMode. Plenty of INTERNAL mode
+	 * changes are correct while workers are live and must never prompt: /recover
+	 * and /restart force auto to orchestrate, the bash router widens to hack on
+	 * an isolation failure, onAllSettled returns to plan, agent boot and session
+	 * hydration write the mode directly. The guard belongs to the gesture, not to
+	 * the state transition.
 	 */
-	async function returnToPlan(ctx: ExtensionContext): Promise<void> {
+	async function guardPostureChange(
+		ctx: ExtensionContext,
+		to: ModeName,
+	): Promise<boolean> {
 		const from = rt.state.mode;
 		const alive = liveWorkerKeys();
-		if (alive.length > 0) {
-			const ask = maestro.capabilities.get(CAPABILITIES.ask);
-			if (!ask) {
-				ctx.ui.notify(
-					`${alive.length} worker(s) are running — /stop them first, then return to plan.`,
-					"warning",
-				);
-				return;
-			}
-			const questionId = `back-to-plan:${now()}`;
-			const answers = await ask.ask([
-				{
-					id: questionId,
-					header: "Return to plan",
-					question: `${alive.length} worker(s) are still running. Stop them and return to plan, or stay in ${from}?`,
-					options: [
-						{
-							label: `Stay in ${from}`,
-							value: "stay",
-							description: "Keep conducting; the workers continue.",
-						},
-						{
-							label: "Stop and return to plan",
-							value: "stop",
-							description:
-								"Park the workers (resumable via /restart), then return to plan.",
-						},
-					],
-					recommendation: "stay",
-					blocking: true,
-					whyBlocking:
-						"Returning to plan with live workers would abandon their implementation.",
-				},
-			]);
-			const decision = answers.find(
-				(answer) => answer.questionId === questionId,
-			)?.value;
-			if (decision !== "stop") {
-				ctx.ui.notify(`Staying in ${from} mode.`, "info");
-				return;
-			}
-			await rt.runStop(ctx);
+		if (alive.length === 0) return true;
+		const ask = maestro.capabilities.get(CAPABILITIES.ask);
+		if (!ask) {
+			ctx.ui.notify(
+				`${alive.length} worker(s) are running — /stop them first, then switch to ${to}.`,
+				"warning",
+			);
+			return false;
 		}
+		const questionId = `posture:${from}->${to}:${now()}`;
+		const answers = await ask.ask([
+			{
+				id: questionId,
+				header: "Switch mode",
+				question: `${alive.length} worker(s) are still running. Stop them and switch to ${to}, or stay in ${from}?`,
+				options: [
+					{
+						label: `Stay in ${from}`,
+						value: "stay",
+						description: "Keep conducting; the workers continue.",
+					},
+					{
+						label: `Stop and switch to ${to}`,
+						value: "stop",
+						description:
+							"Park the workers (resumable via /resume), then switch.",
+					},
+				],
+				recommendation: "stay",
+				blocking: true,
+				whyBlocking:
+					"Switching mode with live workers would abandon their implementation.",
+			},
+		]);
+		const decision = answers.find(
+			(answer) => answer.questionId === questionId,
+		)?.value;
+		if (decision !== "stop") {
+			ctx.ui.notify(`Staying in ${from} mode.`, "info");
+			return false;
+		}
+		await rt.runStop(ctx);
+		return true;
+	}
+
+	/**
+	 * Phase 3 backward gesture: auto/hack→plan. Guard live workers first, then
+	 * restore the plan session forked from (if any) with a "what executed since"
+	 * note; otherwise flip in place. commitMode retires the seed.
+	 */
+	async function returnToPlan(ctx: ExtensionContext): Promise<void> {
+		if (!(await guardPostureChange(ctx, "plan"))) return;
 		const planPath = rt.state.planSessionPath;
 		const switchSession = sessionSwitcher(ctx);
 		if (planPath && switchSession) {
@@ -810,12 +834,16 @@ export function createRuntimeContext(
 		},
 
 		setMode(mode: ModeName, ctx?: ExtensionContext): void {
-			// Only plan→auto forms/gates and so must route through requestMode.
-			// plan→hack is a direct posture switch (no gate) and commits here.
-			if (rt.state.mode === "plan" && mode === "auto") {
-				throw new Error("Plan execution transitions must use requestMode()");
-			}
+			// Every posture change is a direct commit. The readiness gate is an
+			// affordance of the Shift+Tab RAIL (which calls requestMode), not an
+			// invariant of the transition: `/mode auto` deliberately enters without
+			// forming or reviewing, because the plan lifecycle now has its own
+			// verbs (`/form`, `/review`, `/resume`).
 			commitMode(mode, ctx);
+		},
+
+		guardPostureChange(ctx: ExtensionContext, to: ModeName): Promise<boolean> {
+			return guardPostureChange(ctx, to);
 		},
 
 		enterRecon(ctx: ExtensionContext): Promise<void> {

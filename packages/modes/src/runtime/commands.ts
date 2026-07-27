@@ -12,6 +12,7 @@ import {
 	type AgentKindDefinition,
 	type Answer,
 	CAPABILITIES,
+	type ModeName,
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
@@ -250,59 +251,95 @@ async function runDeliveryVerification(
 	);
 }
 
+/**
+ * The postures an operator can switch into. `agent` is absent on purpose: it is
+ * the internal worker posture, never a destination a human picks.
+ */
+export const SWITCHABLE_MODES = ["plan", "auto", "hack", "recon"] as const;
+
+const MODE_CHOICES: Record<(typeof SWITCHABLE_MODES)[number], string> = {
+	plan: "plan — converge on what to build (conversation only)",
+	auto: "auto — orchestrate the plan across workers",
+	hack: "hack — do the work yourself, every tool, no fan-out",
+	recon: "recon — read-only research in an isolated session",
+};
+
+/** `/mode` with no argument: pick a posture. Undefined when dismissed. */
+async function pickMode(
+	rt: RuntimeContext,
+	ctx: ExtensionCommandContext,
+): Promise<ModeName | undefined> {
+	const choices = SWITCHABLE_MODES.filter((mode) => mode !== rt.state.mode);
+	const choice = await ctx.ui.select(
+		`Switch from ${rt.state.mode} to`,
+		choices.map((mode) => MODE_CHOICES[mode]),
+	);
+	if (!choice) return undefined;
+	return choices.find((mode) => choice.startsWith(mode));
+}
+
 export function registerRuntimeCommands(rt: RuntimeContext): void {
 	const { pi, maestro } = rt;
 
 	registerPersonaCommands(rt);
 
+	// The plan is a harness-owned artifact, not a posture: `/plan` opens or
+	// creates one and NOTHING else. You can reopen a plan from any mode; use
+	// `/mode plan` to change posture.
 	pi.registerCommand("plan", {
 		description: "Open or create a Maestro plan for this repo.",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const opened = rt.openPlan(args, ctx);
-			rt.setMode("plan", ctx);
 			ctx.ui.notify(
 				opened.isDraft()
-					? "Planning mode — this plan is named from your first message."
+					? "Draft plan open — it is named from your first message. `/form` authors it."
 					: `Plan ${opened.get().slug} active.`,
 				"info",
 			);
 		},
 	});
 
-	for (const mode of ["hack", "auto"] as const) {
-		pi.registerCommand(mode, {
-			description: `Switch to Maestro ${mode} mode through execution readiness.`,
-			handler: async (_args: string, ctx: ExtensionCommandContext) => {
-				// Only a human operator changes mode. A spawned agent must not be
-				// able to widen its own posture (hack lifts every restriction) — the
-				// escalation guard `/distill` and `/handoff` already carry.
-				if (isAgentMode()) {
-					ctx.ui.notify(
-						`/${mode} is operator-only — an agent cannot change mode.`,
-						"warning",
-					);
-					return;
-				}
-				if (rt.state.mode === "plan") {
-					// auto forms + activates the plan through the readiness gate; hack
-					// is a direct posture switch — no gate, no plan forming, no worker
-					// activation (requestMode is a pass-through commit for hack).
-					if (await rt.requestMode(mode, ctx)) {
-						if (mode === "auto") await rt.runStart(undefined, ctx);
-					}
-					return;
-				}
-				await rt.requestMode(mode, ctx);
-			},
-		});
-	}
-
-	// Recon is command-only on re-entry (never part of the Shift+Tab cycle):
-	// the mode's whole point is that leaving it is a deliberate one-way step.
-	pi.registerCommand("recon", {
-		description: "Switch to Maestro recon mode (read-only research posture).",
-		handler: async (_args: string, ctx: ExtensionCommandContext) => {
-			await rt.enterRecon(ctx);
+	// ONE posture axis. Every mode change is a direct switch — no forming, no
+	// gate, no worker activation; the plan lifecycle lives in its own verbs
+	// (`/form`, `/review`, `/resume`). The only thing standing in the way is a
+	// running fleet, which `guardPostureChange` offers to park first.
+	pi.registerCommand("mode", {
+		description: "Switch Maestro posture. /mode [plan|auto|hack|recon]",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			// Only a human operator changes mode. A spawned agent must not be able
+			// to widen its own posture (hack lifts every restriction) — the same
+			// escalation guard `/distill` and `/handoff` carry.
+			if (isAgentMode()) {
+				ctx.ui.notify(
+					"/mode is operator-only — an agent cannot change mode.",
+					"warning",
+				);
+				return;
+			}
+			const requested = args.trim().toLowerCase();
+			const target = requested
+				? SWITCHABLE_MODES.find((mode) => mode === requested)
+				: await pickMode(rt, ctx);
+			if (requested && !target) {
+				ctx.ui.notify(
+					`Unknown mode \`${requested}\` — choose one of ${SWITCHABLE_MODES.join(", ")}.`,
+					"warning",
+				);
+				return;
+			}
+			if (!target) return; // dialog dismissed
+			if (target === rt.state.mode) {
+				ctx.ui.notify(`Already in ${target} mode.`, "info");
+				return;
+			}
+			if (!(await rt.guardPostureChange(ctx, target))) return;
+			// Recon owns its own isolated session (fork on entry, restore on exit),
+			// so it enters through enterRecon rather than a bare commit.
+			if (target === "recon") {
+				await rt.enterRecon(ctx);
+				return;
+			}
+			rt.setMode(target, ctx);
 		},
 	});
 

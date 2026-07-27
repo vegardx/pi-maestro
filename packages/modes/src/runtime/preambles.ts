@@ -69,8 +69,8 @@ export function buildHackModePreamble(): string {
 implement directly, sequentially, yourself. No orchestration — new
 deliverables do NOT activate and no workers spawn in hack mode. Agents
 already running keep draining in the background independently.
-You can still add deliverables/tasks; they activate when you return to /auto.
-Switch back to /auto when done with direct work.
+You can still add deliverables/tasks; they activate when you return to auto.
+Switch back with \`/mode auto\` when done with direct work.
 
 ## Review discipline (hack mode)
 When you spawn review subagents over your own changes, reviews CONVERGE — they

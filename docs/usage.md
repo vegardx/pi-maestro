@@ -10,17 +10,19 @@ Pi loads the workspace TypeScript directly. Worker observation requires `tmux`; 
 
 ## Modes and entry gates
 
-- **Plan** is the boot/default mode: research, questions, and converging on what to build. Conversation-only — the structure tools are not here. `/plan [slug]` opens or reopens it.
-- **Auto** runs the structured plan. `/auto` or Shift+Tab requests entry.
-- **Hack** is explicit unrestricted work. `/hack` requests entry.
-- **Recon** is a deliberate read-only research off-ramp in its own isolated session. `/recon` enters it; leaving restores the session you came from.
+Posture and the plan are separate axes. **`/mode [plan|auto|hack|recon]`** is the one posture command — a direct switch with no forming, review, or worker activation; with no argument it opens a picker. Switching while workers are live first asks to park them. **`/plan [slug]`** opens or creates the plan *artifact* and never changes mode, so you can reopen a plan from anywhere.
+
+- **Plan** is the boot/default mode: research, questions, and converging on what to build. Conversation-only — the structure tools are not here.
+- **Auto** runs the structured plan.
+- **Hack** is explicit unrestricted work — the maestro becomes the worker, no fan-out.
+- **Recon** is a deliberate read-only research off-ramp in its own isolated session; leaving restores the session you came from.
 - **Agent** is internal to workers.
 
 Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the gesture is **two steps**: the FIRST Shift+Tab (no plan formed yet) **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks) and shows a summary of what it will do, then **stays in plan** for review. The SECOND Shift+Tab (plan now formed) asks **auto or hack**: **auto** runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint before entering execution; **hack** is a direct posture switch (ungated — no forming, no review). **Stay in plan** records a cancelled ruling and starts nothing. `/start` executes in one shot (form + gate). In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
 
 ## Plan
 
-Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. When you gesture into execution (Shift+Tab / `/auto`), the plan is authored in one forming step with these tools:
+Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`. When you gesture into execution (Shift+Tab), the plan is authored in one forming step with these tools:
 
 - `deliverable` defines atomic deliveries and their dependency DAG;
 - `task` defines gating work, follow-ups, questions, and manual checkpoints;
@@ -80,8 +82,8 @@ Generated PR evidence is marker-bounded: user text outside Maestro markers is pr
 
 | Command | Effect |
 |---|---|
-| `/plan [slug]` | Open/create a plan and enter Plan |
-| `/recon`, `/auto`, `/hack` | Request a mode transition |
+| `/plan [slug]` | Open/create a plan (artifact only; no mode change) |
+| `/mode [name]` | Switch posture (direct; picker when omitted) |
 | `/start [id]` | Activate ready planned deliveries |
 | `/stop` | Bounded fleet stop |
 | `/restart [id]` | Resume/replace started work only |

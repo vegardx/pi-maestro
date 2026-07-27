@@ -57,9 +57,9 @@ ${CONVERGENCE}
 ## Crossing into execution
 
 When you and the user agree on the shape, THEY gesture into execution
-(Shift+Tab, or \`/auto\`). That gesture forms the plan: you get one turn to
-author the full deliverable/task tree from everything decided here, a reviewer
-checks it, and the user gives one final ruling before any worker runs. So:
+(Shift+Tab). That gesture forms the plan: you get one turn to author the full
+deliverable/task tree from everything decided here, a reviewer checks it, and
+the user gives one final ruling before any worker runs. So:
 
 - Keep the conversation decision-complete — the forming turn authors from it.
 - Do NOT pre-empt the transition by trying to structure now.

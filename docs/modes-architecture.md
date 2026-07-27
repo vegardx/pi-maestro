@@ -35,13 +35,13 @@ boot/default mode.**
 **hack is the important nuance:** it is not "auto without a plan." It is the
 maestro dropping the conductor role and doing the work directly, one thing at a
 time, in its own session. Fan-out to workers is exactly what hack turns *off*.
-Entering hack is **immediate** — `/hack` (or the Shift+Tab choice) is a direct
+Entering hack is **immediate** — `/mode hack` (or the Shift+Tab choice) is a direct
 posture switch with **no gate**: no forming, no plan-review, no readiness ruling,
 no worker activation. You can drop into hack from plan with a half-built draft and
 it is left untouched. Only `plan→auto` runs the readiness gate.
 
 **recon is decoupled:** it is no longer in the Shift+Tab cycle and no longer the
-boot mode. `/recon` is a deliberate side-trip into a fresh isolated session;
+boot mode. `/mode recon` is a deliberate side-trip into a fresh isolated session;
 leaving it (Shift+Tab) restores the session you came from. It carries nothing
 forward — deeper recon→plan integration is deferred.
 

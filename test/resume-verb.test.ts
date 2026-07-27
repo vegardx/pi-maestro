@@ -95,6 +95,19 @@ describe("the review-skip ask", () => {
 	});
 });
 
+describe("/resume honors a repaired node's restart mode", () => {
+	it("restarts fresh instead of resuming a superseded session", () => {
+		// A clarifyTask repair rewrote the brief, so the worker's transcript is
+		// wrong. Resuming it would continue from a spec that no longer exists.
+		expect(runResume).toContain('node.restartMode === "fresh"');
+		expect(runResume).toContain("restartWorkerFresh");
+	});
+
+	it("consumes the flag so later resumes keep their context", () => {
+		expect(runResume).toContain("clearRestartMode");
+	});
+});
+
 describe("the command surface", () => {
 	it("registers /resume and keeps /start as an alias", () => {
 		expect(commands).toContain('pi.registerCommand("resume"');

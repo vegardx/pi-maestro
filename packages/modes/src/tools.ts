@@ -82,6 +82,49 @@ const DeliverableParams = Type.Object({
 		}),
 	),
 	title: Type.Optional(Type.String({ description: "Deliverable title." })),
+	parent: Type.Optional(
+		Type.String({
+			description:
+				"Nest under this deliverable id. Omit for a top-level deliverable. " +
+				"Nested nodes are the review/research agents that support their " +
+				"parent — they report findings and never ship a PR.",
+		}),
+	),
+	agent: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("worker"),
+				Type.Literal("reviewer"),
+				Type.Literal("explorer"),
+			],
+			{
+				description:
+					"What this node IS: worker implements, reviewer scrutinises, " +
+					"explorer researches. Defaults to worker.",
+			},
+		),
+	),
+	persona: Type.Optional(
+		Type.String({
+			description: 'Named role, e.g. "security-audit". Defaults by agent type.',
+		}),
+	),
+	tasks: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"The gating work items, authored WITH the node. A worker deliverable " +
+				"with no tasks can never enter execution, so add them here rather " +
+				"than in a second call.",
+		}),
+	),
+	multiModal: Type.Optional(
+		Type.Boolean({
+			description:
+				"Reviewers only: read the same diff through several model families. " +
+				"For genuinely risky work where one model's blind spot would be " +
+				"expensive. Intent only — never a model, never a count.",
+		}),
+	),
 	body: Type.Optional(
 		Type.String({ description: "What ships when this merges." }),
 	),
@@ -161,6 +204,23 @@ const DeliverableParams = Type.Object({
 				body: Type.Optional(
 					Type.String({ description: "What ships when this merges." }),
 				),
+				parent: Type.Optional(
+					Type.String({ description: "Nest under this deliverable id." }),
+				),
+				agent: Type.Optional(
+					Type.Union([
+						Type.Literal("worker"),
+						Type.Literal("reviewer"),
+						Type.Literal("explorer"),
+					]),
+				),
+				persona: Type.Optional(Type.String()),
+				tasks: Type.Optional(
+					Type.Array(Type.String(), {
+						description: "Gating work items, authored WITH the node.",
+					}),
+				),
+				multiModal: Type.Optional(Type.Boolean()),
 				dependsOn: Type.Optional(
 					Type.Array(Type.String(), {
 						description:
@@ -404,28 +464,45 @@ export function createPlanTools(deps: PlanToolDeps): ToolDefinition[] {
  *  give repo-workspace nodes their branch (+ base for stacked:false) in a
  *  second patch — the branch name derives from the MINTED id. `after` is
  *  applied by the caller (batch resolves sibling handles in a second pass). */
-function addRootNode(
+function addPlanNode(
 	engine: PlanEngine,
 	input: {
 		id?: string;
+		/** Nest under this node. Absent = a root deliverable. */
+		parent?: string;
+		agent?: NodeAgentType;
+		persona?: string;
 		title: string;
 		body?: string;
+		tasks?: readonly string[];
+		multiModal?: boolean;
 		workspace?: "repo" | "scratch";
 		stacked?: boolean;
 		repo?: string;
 	},
 ): PlanNode {
 	const preferred = preferredNodeId(engine.get(), input.id);
-	const node = engine.addNode(null, {
+	const agent: NodeAgentType = input.agent ?? "worker";
+	const nodeInput = {
 		...(preferred ? { id: preferred } : {}),
-		agent: "worker",
-		persona: "coder",
+		agent,
+		persona: input.persona ?? DEFAULT_PERSONA[agent],
 		title: input.title,
 		...(input.body ? { body: input.body } : {}),
 		...(input.repo ? { repo: input.repo } : {}),
-	});
-	if (input.workspace !== "scratch") {
-		// v1 workspace=repo: the node owns a branch and ships one PR from it.
+		...(input.tasks?.length ? { tasks: [...input.tasks] } : {}),
+		...(input.multiModal ? { multiModal: true } : {}),
+	};
+	// Post-start, appending under a running parent is the ONE dynamic structure
+	// operation (write-ahead); pre-start it is ordinary authoring.
+	const node =
+		input.parent && engine.hasExecutionStarted()
+			? engine.appendChild(input.parent, nodeInput, "plan")
+			: engine.addNode(input.parent ?? null, nodeInput);
+	// Only a ROOT repo-workspace node owns a branch and ships a PR. Nested nodes
+	// are branchless: reviewers report, and ensemble candidates get their
+	// cand/ branch from the executor, not from here.
+	if (!input.parent && input.workspace !== "scratch") {
 		// stacked:false → base "default-branch" (fork from main, not the chain).
 		engine.updateNode(node.id, {
 			branch: defaultBranchForNode(node),
@@ -434,6 +511,13 @@ function addRootNode(
 	}
 	return findNode(engine.get(), node.id) ?? node;
 }
+
+/** The persona a node gets when the author names none — by what it is FOR. */
+const DEFAULT_PERSONA: Record<NodeAgentType, string> = {
+	worker: "coder",
+	reviewer: "reviewer",
+	explorer: "researcher",
+};
 
 /** v1 addDeliverable slugified + de-duped a preferred id; v2 addNode takes
  *  ids verbatim. Slugify here, and fall back to engine minting (from the
@@ -482,13 +566,18 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							}
 							const idMap = new Map<string, string>();
 							const created = params.items.map((i) => {
-								const d = addRootNode(engine, {
+								const d = addPlanNode(engine, {
 									...(i.id?.trim() ? { id: i.id } : {}),
 									title: i.title,
 									body: i.body,
 									stacked: i.stacked,
 									workspace: i.workspace,
 									repo: i.repo,
+									...(i.parent ? { parent: i.parent } : {}),
+									...(i.agent ? { agent: i.agent } : {}),
+									...(i.persona ? { persona: i.persona } : {}),
+									...(i.tasks ? { tasks: i.tasks } : {}),
+									...(i.multiModal ? { multiModal: true } : {}),
 								});
 								// Map both the written handle and its slug form to the
 								// minted id, so a dependsOn ref written either way resolves.
@@ -524,13 +613,20 @@ export function createDeliverableTool(deps: PlanToolDeps): ToolDefinition {
 							);
 						}
 						if (!params.title) return error("add requires title or items");
-						const node = addRootNode(engine, {
+						if (params.parent && !findNode(engine.get(), params.parent))
+							return error(`unknown parent deliverable: ${params.parent}`);
+						const node = addPlanNode(engine, {
 							...(params.id ? { id: params.id } : {}),
 							title: params.title,
 							body: params.body,
 							stacked: params.stacked,
 							workspace: params.workspace,
 							repo: params.repo,
+							...(params.parent ? { parent: params.parent } : {}),
+							...(params.agent ? { agent: params.agent } : {}),
+							...(params.persona ? { persona: params.persona } : {}),
+							...(params.tasks ? { tasks: params.tasks } : {}),
+							...(params.multiModal ? { multiModal: true } : {}),
 						});
 						if (params.dependsOn && params.dependsOn.length > 0) {
 							engine.updateNode(node.id, { after: [...params.dependsOn] });

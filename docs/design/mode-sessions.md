@@ -9,6 +9,16 @@ callbacks; and the session fork is TUI-only). It **revises**
 `../modes-architecture.md` (§The plan lifecycle, §Mode transitions, §The four
 modes) — deltas in [What this revises](#what-this-revises).
 
+> **Superseded in part (2026-07-27): the command surface.** The session/transition
+> mechanics below still hold, but posture and the plan lifecycle have since been
+> unbundled. There is one posture command, `/mode [plan|auto|hack|recon]` (the
+> `/auto`, `/hack` and `/recon` commands are gone); `/plan` opens the artifact and
+> never changes posture; and the lifecycle has explicit verbs `/form` (author or
+> extend), `/review` (opt-in) and `/resume` (replacing `/start` + `/restart`).
+> Crucially, **"form and enter" is no longer one bundled step** — the forming gate
+> described here survives only on the Shift+Tab rail. See
+> `../modes-architecture.md` for the current contract.
+
 ## The shape
 
 The maestro's normal workflow is a two-mode cycle with **one seeded session per
@@ -25,8 +35,8 @@ off-ramps, not part of the cycle.
                     ▲                                          │
                     └────────── back (stop-or-stay) ───────────┘
 
-   /recon  ─▶  isolated read-only session  ─▶  leaving restores the target mode's session
-   /hack   ─▶  maestro becomes the sequential worker (also reachable via the forming gate)
+   /mode recon ─▶ isolated read-only session ─▶ leaving restores the target mode's session
+   /mode hack  ─▶ maestro becomes the sequential worker (also a Shift+Tab choice)
 ```
 
 The invariant that makes it hang together: **`plan.json` is durable and lives
@@ -41,7 +51,7 @@ plan, and "auto doesn't know the plan structurally, only the intent" is safe.
 | **plan** (default/boot) | A conversation. Research, `ask`, `dig`, read-only subagents; converge on understanding. | **None** — cannot author mid-conversation, so premature authoring is designed out, not prompted against. | Its own session. |
 | **auto** | Orchestrated execution; the engine drives workers from `plan.json`. | Yes, **constrained** (evolve-in-place: append + edit-`planned` only). | Forked + seeded from plan on entry. |
 | **hack** | The maestro *becomes* the sequential worker, in-session. | Baseline implementation tools + **constrained** structure-add (evolve-in-place). | Forked + seeded from plan on entry (same gate as auto). |
-| **`/recon`** | Explicit read-only reconnaissance off-ramp. | None. | **Isolated** — outside the seed chain; leaving restores the target mode's session. |
+| **`/mode recon`** | Explicit read-only reconnaissance off-ramp. | None. | **Isolated** — outside the seed chain; leaving restores the target mode's session. |
 
 ## Forward: plan → auto/hack = "form and enter"
 
@@ -99,7 +109,7 @@ You grow and revise the plan mid-execution without leaving:
 
 ## Recon, decoupled
 
-Recon is **out of the cycle**. `/recon` (deliberate) drops you into recon's own
+Recon is **out of the cycle**. `/mode recon` (deliberate) drops you into recon's own
 **isolated** session — read-only, separate context. Leaving recon **restores the
 target mode's existing session** — no distill, no fork, no seed. Recon does not
 feed context into the main chain. Deeper recon→plan integration is **deferred**.
@@ -179,7 +189,7 @@ via system prompt" (Option A; `modes-architecture.md` already documents it).
 - Docs + tests for the mutation invariant.
 
 ### Phase 5 — Recon decoupling
-- `/recon` command → isolated session (own context); leaving restores the target
+- `/mode recon` → isolated session (own context); leaving restores the target
   mode's session. Remove recon from the forward/backward session chain.
 - Flip the boot default `recon → plan`.
 - Docs: `modes-architecture.md` §four modes + boot.

@@ -9,9 +9,11 @@ It was reconstructed on 2026-07-18 from a live multi-model shakeout drive plus a
 authoritative read of the pi-coding-agent SDK. Where the current implementation
 diverges from this contract, it is listed in [Defect backlog](#defect-backlog).
 
-> **Status:** the transition/session backbone described here is **not yet fully
-> implemented** — mode changes currently flip state in place. This doc is the
-> target; the backlog tracks the gap.
+> **Status:** the transition/session backbone described here is **built**
+> (fork-and-seed, per-node freeze, decoupled recon — see
+> [mode-sessions](design/mode-sessions.md)). Since then the command surface was
+> **unbundled**: posture and the plan lifecycle are separate axes (below). The
+> backlog tracks remaining gaps.
 
 ---
 
@@ -22,8 +24,13 @@ maestro. The active tool set is computed by `computeActiveTools`
 (`packages/modes/src/policy.ts`).
 
 The normal workflow is a two-mode cycle — **`plan ↔ auto`** (Shift+Tab) — with
-`hack` and `recon` as deliberate off-ramps entered by command. **`plan` is the
-boot/default mode.**
+`hack` and `recon` as deliberate off-ramps. **`plan` is the boot/default mode.**
+
+**Posture and the plan are separate axes.** `/mode [plan|auto|hack|recon]` is the
+only posture command: a direct switch, no forming, no gate, no worker activation.
+`/plan [slug]` opens or creates the plan **artifact** and never changes posture —
+the plan is harness-owned, so it is reachable from any mode. The plan's lifecycle
+has its own verbs: `/form`, `/review`, `/resume`.
 
 | Mode | Posture | Maestro's role | Tools |
 | --- | --- | --- | --- |
@@ -38,7 +45,8 @@ time, in its own session. Fan-out to workers is exactly what hack turns *off*.
 Entering hack is **immediate** — `/mode hack` (or the Shift+Tab choice) is a direct
 posture switch with **no gate**: no forming, no plan-review, no readiness ruling,
 no worker activation. You can drop into hack from plan with a half-built draft and
-it is left untouched. Only `plan→auto` runs the readiness gate.
+it is left untouched. The readiness gate runs on exactly one path: the Shift+Tab
+rail crossing `plan→auto`. Every command-driven posture change is direct.
 
 **recon is decoupled:** it is no longer in the Shift+Tab cycle and no longer the
 boot mode. `/mode recon` is a deliberate side-trip into a fresh isolated session;
@@ -64,9 +72,25 @@ Via **Shift+Tab** the gesture is two steps — form-then-preview, then execute:
  default research     just go           show summary                          run it            ↳ hack: direct switch, ungated
 ```
 
-`/start` collapses this to one shot (form + gate + execute). **The forming step**
-is the first stage of the `plan→auto` transition gate (hack is *not* gated — see
-below). The model:
+The commands are the direct path to the same lifecycle, one verb per step:
+
+```
+/plan ─▶ converge ─▶ /form ──────────▶ /review ────────▶ /resume ─▶ exec
+ open    open Qs,     author, or       (optional) a      run it:     direct
+ the     research     EXTEND a plan    reviewer's        parked      posture,
+ artifact             that exists      verdict, stamped  resume +    no gate
+                                       to the plan's     ready
+                                       fingerprint       activate
+```
+
+**Two paths, deliberately.** Shift+Tab is the guided rail: it keeps the ceremony
+(form, preview, then the gate's review and ruling). The commands are the expert
+path: no gate, and `/resume` *asks* about an unreviewed plan rather than blocking
+on one. Both share the live-worker guard, so neither can walk away from running
+work.
+
+**The forming step** — reached by `/form` or by the rail — is also the first stage
+of the `plan→auto` transition gate (hack is *not* gated — see below). The model:
 
 1. **Self-assesses open questions.** If a real, user-only question would
    materially change the plan's structure, it calls `ask` and **stops** — the
@@ -76,9 +100,24 @@ below). The model:
    available in this one window (the `forming` flag) and nowhere else in plan
    mode.
 
-Then the existing gate runs: the mechanical fail-fast check (a taskless worker
+On the rail, the gate then runs: the mechanical fail-fast check (a taskless worker
 deliverable can never cross), the **plan-review** agent, and one final human
 ruling before any worker runs.
+
+**`/form` also extends.** One verb, two jobs, chosen by whether the tree is
+populated: an empty plan is authored, a populated one is *extended* with what was
+newly agreed (its own preamble lists what exists, so nothing is recreated). An
+extend measures success by fingerprint change, not node count. Once execution has
+started, extending is append-first — new deliverables are free; a started
+deliverable takes only follow-up or manual tasks; restructuring it is refused.
+
+**Amending started work.** Task text and the execution-shaping fields
+(`persona`/`skills`) are frozen on a started node: the sanctioned channel is the
+audited repair (`/debug`), which is fingerprint-pinned and stop-asserted. A repair
+that rewrites a task marks its node for a **fresh** restart, because the worker's
+own transcript holds the superseded brief — `/resume` re-seeds it instead of
+replaying that session. Answering a question task stays legal throughout: it
+records a decision, it does not restate the work.
 
 **Why conversation-only.** The old `readiness` tool locked the structure tools
 during an `exploring` phase — a blunt fix for a planner that authored
@@ -97,12 +136,21 @@ primed session**; backward transitions **restore the prior session**.
 
 ### Forward (plan→auto) — as built
 
-Only `plan→auto` is a gated forward transition. `plan→hack` is a **direct posture
-switch**: no gate, no forming, no fork/seed — `commitMode` flips straight to hack
-and the draft plan is left as-is (hack is a manual worker seat, not orchestration).
+`plan→auto` is gated on the **Shift+Tab rail only**. `/mode auto` is a direct
+switch — the plan lifecycle lives in its own verbs, so there is nothing left for a
+gate to ask. `plan→hack` is direct on both paths: no gate, no forming, no
+fork/seed — `commitMode` flips straight to hack and the draft plan is left as-is
+(hack is a manual worker seat, not orchestration).
 
-The `plan→auto` forward transition is the gate pipeline (form → fail-fast → review → ruling),
-and on commit it **forks a fresh execution session**:
+Either direction, an operator posture gesture first **guards live work**: leaving a
+mode that is running workers asks to park them (see Backward, below). This is the
+gesture's guard, not the transition's — internal mode changes must never prompt.
+`/recover` and `/resume` force auto to orchestrate, the bash router widens to hack
+on an isolation failure, `onAllSettled` returns to plan, and agent boot and session
+hydration write the mode directly; all are correct while workers are live.
+
+The gated `plan→auto` transition is the gate pipeline (form → fail-fast → review →
+ruling), and on commit it **forks a fresh execution session**:
 
 1. **Build the seed.** A bounded self-curated turn in the plan session produces
    the handoff — *decisions, rationale, and what we're building* — with a
@@ -128,9 +176,12 @@ seed (which exists to replace lost context) is correctly skipped there too.
 The Shift+Tab backward gesture guards live work, then restores the planning
 session:
 
-1. **Worker-alive guard.** If any worker is still working/summarizing, `ask`
-   **stop-or-stay**: stay keeps conducting; stop parks the workers (resumable via
-   `/restart`) and proceeds. (This replaces the speculative 5-minute age check.)
+1. **Worker-alive guard.** If any worker is live, `ask` **stop-or-stay**: stay
+   keeps conducting; stop parks the workers (resumable via `/resume`) and proceeds.
+   (This replaces the speculative 5-minute age check.) "Live" means
+   `spawning|working|summarizing|restarting` — the same set a bounded stop kills,
+   so the guard cannot wave through work the stop then destroys. It is one shared
+   predicate, used by every operator posture gesture in both directions.
 2. **Restore.** `ctx.switchSession(planSessionPath)` back to the plan session the
    execution session forked from, with a "what executed since" note. `plan.json`
    persists throughout. In-place fallback when no forked session exists.

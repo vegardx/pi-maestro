@@ -47,4 +47,5 @@ export {
 	type ModelResolutionRequest,
 	type ModelResolutionSource,
 	resolveModel,
+	resolveModels,
 } from "./resolver.js";

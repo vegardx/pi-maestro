@@ -14,6 +14,7 @@ import {
 	fallbackNotice,
 	ModelResolutionError,
 	resolveModel,
+	resolveModels,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -383,5 +384,97 @@ describe("explain output", () => {
 
 		const lightForWorker = await explainTier(fakeCtx(), "worker", "light");
 		expect(lightForWorker.allowed).toBe(false);
+	});
+});
+
+// ─── top-N ───────────────────────────────────────────────────────────────────
+// The primitive behind multi-modal review: N models for ONE spawn request, each
+// from a DISTINCT family. Genuine diversity is the whole point, so this never
+// pads — fewer slots beats the same model twice.
+
+describe("resolveModels (top-N)", () => {
+	it("n=1 is exactly resolveModel", async () => {
+		const request = { agent: "worker" as const, tier: "standard" as const };
+		const [one] = await resolveModels(fakeCtx(), request, 1);
+		expect(one).toEqual(await resolveModel(fakeCtx(), request));
+	});
+
+	it("no tier degrades to a single inherited slot", async () => {
+		// Inheritance has no roster to spread across — asking for 3 cannot
+		// manufacture diversity out of "run your caller's model".
+		const slots = await resolveModels(
+			fakeCtx(),
+			{ agent: "worker", inherit: { modelId: "gw1/parent" } },
+			3,
+		);
+		expect(slots).toHaveLength(1);
+		expect(slots[0]).toMatchObject({
+			source: "inherit",
+			modelId: "gw1/parent",
+		});
+	});
+
+	it("returns one slot per DISTINCT family", async () => {
+		// standard = [OpenAI/Sol, Moonshot/Kimi] — two families.
+		const slots = await resolveModels(
+			fakeCtx(),
+			{ agent: "worker", tier: "standard" },
+			2,
+		);
+		expect(slots).toHaveLength(2);
+		expect(slots.map((s) => s.family)).toEqual(["OpenAI", "Moonshot"]);
+		expect(slots.every((s) => s.source === "tier")).toBe(true);
+	});
+
+	it("never pads beyond the families the tier actually holds", async () => {
+		// Asking for 5 from a two-family tier yields 2 — not 5, and not 2 real
+		// plus 3 seat copies dressed up as diversity.
+		const slots = await resolveModels(
+			fakeCtx(),
+			{ agent: "worker", tier: "standard" },
+			5,
+		);
+		expect(slots).toHaveLength(2);
+		expect(new Set(slots.map((s) => s.family)).size).toBe(2);
+	});
+
+	it("degrades to fewer slots when the region/auth strikes a family", async () => {
+		// Kimi is gw2-only; strike it and Moonshot has nothing left.
+		const slots = await resolveModels(
+			fakeCtx({ unavailable: ["gw2/kimi"] }),
+			{ agent: "worker", tier: "standard" },
+			2,
+		);
+		expect(slots).toHaveLength(1);
+		expect(slots[0]).toMatchObject({ source: "tier", family: "OpenAI" });
+	});
+
+	it("falls back to ONE seat slot when every alias is struck", async () => {
+		// The degradation case that must not silently produce an empty list: one
+		// usable review is a review; zero is a silent hole.
+		const slots = await resolveModels(
+			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"] }),
+			{ agent: "worker", tier: "standard" },
+			3,
+		);
+		expect(slots).toHaveLength(1);
+		expect(slots[0]).toMatchObject({ source: "fallback", modelId: "gw2/seat" });
+		expect(slots[0].fallbackReason).toContain("unavailable");
+	});
+
+	it("keeps the allowance bound — top-N is not an escape hatch", async () => {
+		await expect(
+			resolveModels(fakeCtx(), { agent: "worker", tier: "light" }, 3),
+		).rejects.toThrow("outside agent worker's allowance");
+	});
+
+	it("carries the same candidate facts on every slot", async () => {
+		// Explain output must not degrade just because the caller asked for N.
+		const slots = await resolveModels(
+			fakeCtx(),
+			{ agent: "worker", tier: "standard" },
+			2,
+		);
+		for (const slot of slots) expect(slot.candidates).toHaveLength(2);
 	});
 });

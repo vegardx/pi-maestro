@@ -354,7 +354,7 @@ function decide(
 		];
 		for (const taskId of taskIds(text)) {
 			const call: ToolCall = {
-				name: "task",
+				name: "work",
 				input: { action: "toggle", deliverableId: id, taskId },
 			};
 			if (taskId === "lifecycle-postflight")

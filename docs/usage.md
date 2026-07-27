@@ -33,7 +33,7 @@ Plan mode is a conversation — it converges on what to build and why; it does n
 Forming uses these tools:
 
 - `deliverable` defines atomic deliveries and their dependency DAG;
-- `task` defines gating work, follow-ups, questions, and manual checkpoints;
+- `work` manages a deliverable's items after it exists — add what you discover, update, toggle done;
 - `workflow` lists exact model options and atomically stores immutable assignments plus explicit stages;
 - `plan` renders markdown, a worker seed, or JSON.
 

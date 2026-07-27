@@ -31,7 +31,7 @@ Unsupported plan, run, and execution schema versions fail with archive/reset gui
 
 ## Planning and execution
 
-Plan mode is a conversation: it converges on what to build and why. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. The structure tools (`deliverable`, `task`, `workflow`, `author`) are **not** available in plan mode — the plan is authored in one forming step at the transition into execution (Shift+Tab), which then runs plan review and a final ruling before any worker starts. Plan is the boot mode; recon is a deliberate `/mode recon` off-ramp in its own session.
+Plan mode is a conversation: it converges on what to build and why. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. The structure tools (`deliverable`, `work`, `repo`) are **not** available in plan mode — the plan is authored in one forming step at the transition into execution (Shift+Tab), which then runs plan review and a final ruling before any worker starts. Plan is the boot mode; recon is a deliberate `/mode recon` off-ramp in its own session.
 
 `workflow` resolves each semantic agent assignment to an immutable model/effort pair and stores an explicit stage DAG. Members of a stage run against one `inputRevision`; stages expose declared input/output contracts and barriers. Duplicate semantic kinds are valid when identities, rationale, and exact model choices are explicit.
 

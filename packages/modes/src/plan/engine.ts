@@ -291,8 +291,6 @@ export class PlanEngine {
 			>
 		>,
 	): void {
-		// `persona` is authored metadata, not structural — freely updatable
-		// (e.g. an ensemble makes its parent the integrator before execution).
 		// Structural fields (incl. `after`, the edges INTO this node) freeze PER
 		// NODE: an edge is mutable iff its dependent (this node) is still planned.
 		const structural = ["after", "branch", "base", "repo", "envelope"] as const;
@@ -301,6 +299,18 @@ export class PlanEngine {
 				id,
 				"editing structural fields",
 				"append children or abandon a running node instead",
+			);
+		// Execution-shaping fields decide what the NEXT spawn actually is: its
+		// role and preamble (persona), its tool surface (skills), its ensemble
+		// diversity exemption. Changing them on a started node silently alters a
+		// worker that has already read its brief — invisible until it behaves
+		// unexpectedly. Freeze them with the rest.
+		const shaping = ["persona", "skills", "diversityWaiver"] as const;
+		if (shaping.some((key) => patch[key] !== undefined))
+			this.assertNodePlanned(
+				id,
+				"changing how a node runs (persona/skills)",
+				"stop the deliverable and repair it via /debug, which resets the worker",
 			);
 		this.mutateNode(id, (node) => {
 			for (const [key, value] of Object.entries(patch)) {
@@ -315,6 +325,19 @@ export class PlanEngine {
 		taskId: string,
 		patch: Partial<Pick<NodeTask, "title" | "body" | "answer">>,
 	): void {
+		// Rewriting a task's TEXT rewrites the spec a worker is implementing, and
+		// it happens behind the worker's back — the sanctioned post-start channel
+		// is applyTaskRepair (fingerprint-pinned, stopped-asserted, audited).
+		//
+		// `answer` is exempt on purpose: answering a question task is how a RUNNING
+		// worker's blocking question gets resolved. It records a decision, it does
+		// not restate the work.
+		if (patch.title !== undefined || patch.body !== undefined)
+			this.assertNodePlanned(
+				nodeId,
+				"editing a task's title or body",
+				"add a corrective task, or repair it via /debug on a stopped deliverable",
+			);
 		this.mutateNode(nodeId, (node) => {
 			const task = node.tasks.find((candidate) => candidate.id === taskId);
 			if (!task) throw new Error(`unknown task: ${nodeId}/${taskId}`);
@@ -421,6 +444,16 @@ export class PlanEngine {
 						break;
 					}
 				}
+				// A rewritten task makes the worker's own transcript wrong: it
+				// already read the OLD text and may have built against it, so
+				// resuming that session continues from a superseded brief. Mark the
+				// node for a FRESH restart — /resume re-seeds it from the repaired
+				// plan instead of replaying the stale conversation.
+				//
+				// Only clarifyTask needs this. Added and reopened tasks do not
+				// contradict the transcript, and a resume's kickoff already tells
+				// the worker to re-read its tasks — so those keep their context.
+				if (op.type === "clarifyTask") node.restartMode = "fresh";
 				node.updatedAt = ts;
 			}
 			plan.repairAudit = [
@@ -435,6 +468,17 @@ export class PlanEngine {
 			];
 		});
 		return { fingerprint: planFingerprint(this.plan), auditId };
+	}
+
+	/**
+	 * Consume a node's pending restart mode. setNodeRuntime cannot clear a field
+	 * (it skips undefined), and this flag MUST be one-shot: a repaired worker gets
+	 * exactly one fresh restart, not a fresh session on every later resume.
+	 */
+	clearRestartMode(id: string): void {
+		this.mutateNode(id, (node) => {
+			node.restartMode = undefined;
+		});
 	}
 
 	removeTask(nodeId: string, taskId: string): void {

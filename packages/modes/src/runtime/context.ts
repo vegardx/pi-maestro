@@ -1380,11 +1380,24 @@ export function createRuntimeContext(
 			if (!execution) return;
 
 			const resumed: string[] = [];
+			const reset: string[] = [];
 			const failures: string[] = [];
 			for (const node of parked) {
-				const result = await execution.restartWorkerResume?.(node.id);
-				if (result?.ok) resumed.push(node.id);
-				else
+				// A repair that rewrote this node's tasks marked it for a FRESH
+				// restart: its transcript holds the superseded brief, so resuming
+				// that session would continue from a spec that no longer exists.
+				// Fresh clears the session file and re-seeds from the repaired plan.
+				const wantsFresh = node.restartMode === "fresh";
+				const result = wantsFresh
+					? await execution.restartWorkerFresh?.(node.id)
+					: await execution.restartWorkerResume?.(node.id);
+				if (result?.ok) {
+					// One-shot: consume the flag so later resumes keep their context.
+					if (wantsFresh) {
+						rt.engine?.clearRestartMode(node.id);
+						reset.push(node.id);
+					} else resumed.push(node.id);
+				} else
 					failures.push(`${node.id}: ${result?.error ?? "validation failed"}`);
 			}
 			const activated =
@@ -1393,11 +1406,16 @@ export function createRuntimeContext(
 					: 0;
 			rt.hud?.refresh();
 
-			if (resumed.length === 0 && activated === 0 && failures.length === 0) {
+			if (
+				resumed.length === 0 &&
+				reset.length === 0 &&
+				activated === 0 &&
+				failures.length === 0
+			) {
 				ctx.ui.notify("Nothing was resumed or activated.", "warning");
 				return;
 			}
-			if (resumed.length > 0 || activated > 0) {
+			if (resumed.length > 0 || reset.length > 0 || activated > 0) {
 				rt.setExecutionStage(
 					{ stage: "executing", deliverableId: "maestro" },
 					ctx,
@@ -1405,6 +1423,10 @@ export function createRuntimeContext(
 			}
 			const parts: string[] = [];
 			if (resumed.length > 0) parts.push(`Resumed ${resumed.join(", ")}.`);
+			if (reset.length > 0)
+				parts.push(
+					`Restarted ${reset.join(", ")} fresh (their tasks were repaired).`,
+				);
 			if (activated > 0)
 				parts.push(
 					target && ready.length > 0

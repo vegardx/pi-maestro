@@ -22,14 +22,13 @@ import {
 	type WorkItemKind,
 } from "@vegardx/pi-contracts";
 import type { AgentBridge } from "./agent-bridge.js";
-import type { NodeInput, PlanEngine } from "./plan/engine.js";
+import type { PlanEngine } from "./plan/engine.js";
 // slugify still lives in the v1 schema module; it moves to plan/schema.ts in S8.
 import {
 	defaultBranchForNode,
 	findNode,
 	isBranchOwner,
 	type NodeTask,
-	PARENT_AFTER_TOKEN,
 	type Plan,
 	type PlanNode,
 	slugify,

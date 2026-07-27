@@ -10,58 +10,10 @@ import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
 	isBranchOwner,
 	type Plan,
-	type PlanNode,
 	validatePlanShape,
 } from "../packages/modes/src/plan/schema.js";
 import type { PlanStore } from "../packages/modes/src/plan/storage.js";
 import { createDeliverableTool } from "../packages/modes/src/tools.js";
-
-function memStore(): PlanStore {
-	let saved: Plan | null = null;
-	return {
-		root: "/tmp/plans",
-		save: (p: Plan) => {
-			saved = p;
-		},
-		load: () => saved,
-		exists: () => saved !== null,
-		remove: () => {
-			saved = null;
-		},
-		list: () => [],
-	};
-}
-
-function makeEngine(): PlanEngine {
-	return PlanEngine.create(memStore(), {
-		slug: "ensemble-test",
-		title: "Ensemble Test",
-		repoPath: "/tmp/repo",
-	});
-}
-
-/** A branch-owning worker deliverable — the integrator-to-be. */
-function seedDeliverable(engine: PlanEngine, id: string): PlanNode {
-	const node = engine.addNode(null, {
-		id,
-		agent: "worker",
-		persona: "coder",
-		title: "Build the metrics module",
-	});
-	engine.updateNode(node.id, { branch: `feat/${id}` });
-	return node;
-}
-
-function findNode(plan: Plan, id: string): PlanNode | undefined {
-	const stack = [...plan.nodes];
-	while (stack.length) {
-		const node = stack.pop();
-		if (!node) continue;
-		if (node.id === id) return node;
-		if (node.children) stack.push(...node.children);
-	}
-	return undefined;
-}
 
 const TS = "2026-07-27T00:00:00.000Z";
 const basePlan = () => ({

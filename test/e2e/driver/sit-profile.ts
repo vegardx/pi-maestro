@@ -132,7 +132,11 @@ const MODELS_BLOCK = {
 			standard: ["OpenAI/GPT 5.6 Sol"],
 			// Fable leads heavy as the region tripwire: EEA strikes it (US-data-share)
 			// so reviews resolve to Opus (EEA-legal); Global would resolve Fable.
-			heavy: ["Anthropic/Fable 5", "Anthropic/Opus 4.8"],
+			// Sol trails as a SECOND FAMILY: a single-family tier can never fan a
+			// multi-modal review out, so without it that path is untestable here.
+			// It does not disturb the tripwire — Fable still leads, and ordinary
+			// single-model reviews still take Opus.
+			heavy: ["Anthropic/Fable 5", "Anthropic/Opus 4.8", "OpenAI/GPT 5.6 Sol"],
 		},
 	},
 	// A single default binding (no targets) → active for the opus seat the drive

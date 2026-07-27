@@ -224,8 +224,8 @@ describe.skipIf(!RUN)("scripted full-stack e2e", () => {
 				// the mock sees the "…has been resumed" kickoff and drives
 				// write→commit→ship.
 				//
-				// No /resume here: recover-me is `active`, not `planned`, so there is
-				// nothing for /resume to activate — recovery is the whole job.
+				// No /run here: recover-me is `active`, not `planned`, so there is
+				// nothing for /run to activate — recovery is the whole job.
 				sut = launch();
 				await drive([`/plan ${slug}`, "/recover recover-me"]);
 

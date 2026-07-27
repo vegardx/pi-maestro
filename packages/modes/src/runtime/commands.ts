@@ -301,7 +301,7 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 
 	// ONE posture axis. Every mode change is a direct switch — no forming, no
 	// gate, no worker activation; the plan lifecycle lives in its own verbs
-	// (`/form`, `/review`, `/resume`). The only thing standing in the way is a
+	// (`/form`, `/review`, `/run`). The only thing standing in the way is a
 	// running fleet, which `guardPostureChange` offers to park first.
 	pi.registerCommand("mode", {
 		description: "Switch Maestro posture. /mode [plan|auto|hack|recon]",
@@ -360,14 +360,17 @@ export function registerRuntimeCommands(rt: RuntimeContext): void {
 	// sessions, newly ready deliverables activate. Registered as two literal
 	// names (not a loop) so check-docs actually sees both — a loop variable is
 	// invisible to its scanner, which is how /auto and /hack went undocumented.
-	pi.registerCommand("resume", {
+	//
+	// NOT `/resume`: that is one of pi's BUILTIN_SLASH_COMMANDS, and an extension
+	// command that shadows a builtin is dropped from autocomplete entirely.
+	pi.registerCommand("run", {
 		description:
-			"Run the plan: resume parked workers and activate ready work. /resume [deliverable-id]",
-		handler: (args, ctx) => rt.runResume(args.trim() || undefined, ctx),
+			"Run the plan: resume parked workers and activate ready work. /run [deliverable-id]",
+		handler: (args, ctx) => rt.runPlan(args.trim() || undefined, ctx),
 	});
 	pi.registerCommand("start", {
-		description: "Alias for /resume. /start [deliverable-id]",
-		handler: (args, ctx) => rt.runResume(args.trim() || undefined, ctx),
+		description: "Alias for /run. /start [deliverable-id]",
+		handler: (args, ctx) => rt.runPlan(args.trim() || undefined, ctx),
 	});
 
 	pi.registerCommand("stop", {

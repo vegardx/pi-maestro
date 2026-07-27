@@ -14,7 +14,7 @@ modes) — deltas in [What this revises](#what-this-revises).
 > unbundled. There is one posture command, `/mode [plan|auto|hack|recon]` (the
 > `/auto`, `/hack` and `/recon` commands are gone); `/plan` opens the artifact and
 > never changes posture; and the lifecycle has explicit verbs `/form` (author or
-> extend), `/review` (opt-in) and `/resume` (replacing `/start` + `/restart`).
+> extend), `/review` (opt-in) and `/run` (replacing `/start` + `/restart`).
 > Crucially, **"form and enter" is no longer one bundled step** — the forming gate
 > described here survives only on the Shift+Tab rail. See
 > `../modes-architecture.md` for the current contract.

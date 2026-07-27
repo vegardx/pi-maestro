@@ -30,7 +30,7 @@ The normal workflow is a two-mode cycle — **`plan ↔ auto`** (Shift+Tab) — 
 only posture command: a direct switch, no forming, no gate, no worker activation.
 `/plan [slug]` opens or creates the plan **artifact** and never changes posture —
 the plan is harness-owned, so it is reachable from any mode. The plan's lifecycle
-has its own verbs: `/form`, `/review`, `/resume`.
+has its own verbs: `/form`, `/review`, `/run`.
 
 | Mode | Posture | Maestro's role | Tools |
 | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ Via **Shift+Tab** the gesture is two steps — form-then-preview, then execute:
 The commands are the direct path to the same lifecycle, one verb per step:
 
 ```
-/plan ─▶ converge ─▶ /form ──────────▶ /review ────────▶ /resume ─▶ exec
+/plan ─▶ converge ─▶ /form ──────────▶ /review ────────▶ /run ─▶ exec
  open    open Qs,     author, or       (optional) a      run it:     direct
  the     research     EXTEND a plan    reviewer's        parked      posture,
  artifact             that exists      verdict, stamped  resume +    no gate
@@ -85,7 +85,7 @@ The commands are the direct path to the same lifecycle, one verb per step:
 
 **Two paths, deliberately.** Shift+Tab is the guided rail: it keeps the ceremony
 (form, preview, then the gate's review and ruling). The commands are the expert
-path: no gate, and `/resume` *asks* about an unreviewed plan rather than blocking
+path: no gate, and `/run` *asks* about an unreviewed plan rather than blocking
 on one. Both share the live-worker guard, so neither can walk away from running
 work.
 
@@ -115,7 +115,7 @@ deliverable takes only follow-up or manual tasks; restructuring it is refused.
 (`persona`/`skills`) are frozen on a started node: the sanctioned channel is the
 audited repair (`/debug`), which is fingerprint-pinned and stop-asserted. A repair
 that rewrites a task marks its node for a **fresh** restart, because the worker's
-own transcript holds the superseded brief — `/resume` re-seeds it instead of
+own transcript holds the superseded brief — `/run` re-seeds it instead of
 replaying that session. Answering a question task stays legal throughout: it
 records a decision, it does not restate the work.
 
@@ -145,7 +145,7 @@ fork/seed — `commitMode` flips straight to hack and the draft plan is left as-
 Either direction, an operator posture gesture first **guards live work**: leaving a
 mode that is running workers asks to park them (see Backward, below). This is the
 gesture's guard, not the transition's — internal mode changes must never prompt.
-`/recover` and `/resume` force auto to orchestrate, the bash router widens to hack
+`/recover` and `/run` force auto to orchestrate, the bash router widens to hack
 on an isolation failure, `onAllSettled` returns to plan, and agent boot and session
 hydration write the mode directly; all are correct while workers are live.
 
@@ -177,7 +177,7 @@ The Shift+Tab backward gesture guards live work, then restores the planning
 session:
 
 1. **Worker-alive guard.** If any worker is live, `ask` **stop-or-stay**: stay
-   keeps conducting; stop parks the workers (resumable via `/resume`) and proceeds.
+   keeps conducting; stop parks the workers (resumable via `/run`) and proceeds.
    (This replaces the speculative 5-minute age check.) "Live" means
    `spawning|working|summarizing|restarting` — the same set a bounded stop kills,
    so the guard cannot wave through work the stop then destroys. It is one shared

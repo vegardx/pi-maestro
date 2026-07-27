@@ -38,7 +38,7 @@ describe("the two-step plan gesture", () => {
 		// requestMode routes through TransitionGateCoordinator (form → mechanical
 		// check → plan-review → ruling). /mode auto deliberately does NOT.
 		expect(cycle).toContain('rt.requestMode("auto", ctx)');
-		expect(cycle).toContain("rt.runResume(undefined, ctx)");
+		expect(cycle).toContain("rt.runPlan(undefined, ctx)");
 	});
 
 	it("keeps hack ungated — the #345 invariant", () => {
@@ -52,7 +52,7 @@ describe("the two-step plan gesture", () => {
 		const rest = cycle.slice(from);
 		const hackBranch = rest.slice(0, rest.indexOf("\n\t\t\t\t}"));
 		expect(hackBranch).toContain("return;");
-		expect(hackBranch).not.toContain("runResume");
+		expect(hackBranch).not.toContain("runPlan");
 	});
 
 	it("does nothing when the picker is dismissed", () => {

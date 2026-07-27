@@ -60,14 +60,19 @@ for (const name of [...commandNames].sort()) {
 // ── 2. Plan-facing tools must be documented ──────────────────────────────────
 // Kept as an explicit list: tool `name:` fields are too generic to extract
 // reliably. Update when a user-facing tool is added or renamed.
+//
+// Every entry must be a tool that actually exists. This list previously
+// required the docs to mention `workflow` and `readiness`, neither of which is
+// registered anywhere — so the contract was guaranteeing the docs stayed wrong
+// rather than catching it.
 const TOOLS = [
 	"deliverable",
-	"task",
-	"workflow",
+	"work",
 	"plan",
+	"repo",
 	"research",
-	"readiness",
 	"dig",
+	"subagent",
 ];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);

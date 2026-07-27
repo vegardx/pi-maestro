@@ -38,12 +38,13 @@ Exact opaque control targets (`worker:<delivery/agent>`, `run:<id>`) win over al
 - `research` sends a batched set of codebase/web questions and persists reports.
 - `dig(ref)` retrieves one full report.
 - `deliverable` atomically adds/updates/removes deliveries and dependency/repo mapping.
-- `task` manages work items; batch add is all-or-nothing.
+- `work` manages a deliverable's items after it exists (add/update/toggle/remove); batch add is all-or-nothing.
+- `subagent` runs and controls typed subagents (run/batch/spawn/steer/ask/interrupt).
 - `workflow` lists kind options, resolves exact assignments, stores the stage DAG, or updates a stage.
 - `plan` renders markdown, JSON, or a delivery-focused worker seed.
 - `ask` presents blocking/non-blocking conditional questionnaires.
 
-Workers use `task` to toggle their assigned items and common control/reporting tools exposed by their runtime. They do not push, create PRs, mutate plan topology, or approve isolation downgrades.
+Workers use `work` to toggle their assigned items and to write down follow-ups they discover and common control/reporting tools exposed by their runtime. They do not push, create PRs, mutate plan topology, or approve isolation downgrades.
 
 ## `/maestro` scripting
 

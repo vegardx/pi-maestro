@@ -51,7 +51,6 @@ export const AGENT_TOOL_NAMES = [
 	"write",
 	"commit",
 	"work", // toggle own tasks (+ optional handoff summary)
-	"review", // worker-side review surface
 	"ask", // escalate a question to the maestro/human
 	// Spawn read-only helpers of its own — a multi-modal reviewer fans out to
 	// one per model family this way. Safe by construction: the depth gate

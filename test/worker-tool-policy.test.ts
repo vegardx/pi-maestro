@@ -71,7 +71,7 @@ describe("worker (agent-mode) tool policy", () => {
 		}
 	});
 
-	it("keeps the implement/commit/task/review/ask core", () => {
+	it("keeps the implement/commit/work/subagent/ask core", () => {
 		const tools = computeActiveTools({
 			mode: "auto",
 			isAgent: true,
@@ -84,7 +84,9 @@ describe("worker (agent-mode) tool policy", () => {
 			"write",
 			"commit",
 			"work",
-			"review",
+			// `review` used to sit here — it was granted but never existed as a
+			// tool. Reviewing goes through `subagent` now, which does.
+			"subagent",
 			"ask",
 		]) {
 			expect(tools).toContain(kept);

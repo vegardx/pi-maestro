@@ -73,7 +73,6 @@ export const READ_ONLY_ENSURED_TOOLS = ["work", "plan", "dig"] as const;
 export const FULL_MODE_ENSURED_TOOLS = [
 	"work",
 	"ask",
-	"review",
 	"commit",
 	"ship",
 	"dig",

@@ -15,6 +15,7 @@ import {
 	type BindingConfig,
 	DEFAULT_AGENT_ALLOWANCES,
 	type FamilyConfig,
+	MAX_SPREAD,
 	type ModelsConfig,
 	type RegionConfig,
 	type RosterTiers,
@@ -227,6 +228,18 @@ function extractAllowance(
 		throw new Error(
 			`Invalid allowances.${name}.tiers: must be a unique non-empty array of ${TIER_IDS.join("|")}`,
 		);
+	if (raw.spread !== undefined) {
+		if (
+			typeof raw.spread !== "number" ||
+			!Number.isInteger(raw.spread) ||
+			raw.spread < 1 ||
+			raw.spread > MAX_SPREAD
+		)
+			throw new Error(
+				`Invalid allowances.${name}.spread: must be an integer 1..${MAX_SPREAD}`,
+			);
+		return { tiers: [...raw.tiers] as TierId[], spread: raw.spread };
+	}
 	return { tiers: [...raw.tiers] as TierId[] };
 }
 

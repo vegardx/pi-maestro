@@ -154,10 +154,12 @@ a simpler model could implement them mechanically.
 2. **Detail** — For EVERY worker deliverable, add ALL of its tasks in a single
    batched \`task\` call (not one call per task). Tasks describe WHAT to
    implement. Do this for each worker deliverable before you summarize.
-3. **Review coverage** — Reviewer/explorer work is CHILD NODES: nest them
-   under the worker node they support and give reviewers \`after: ["parent"]\`
-   so ordering remains visible. Model and effort are never authored — they
-   resolve by inheritance at spawn.
+3. **Review coverage** — Reviewer/explorer work is CHILD NODES, and they are
+   NOT created with \`deliverable\`. Add each one with
+   \`agent(action="add", deliverableId="<the worker node>", name="<agent>",
+   focus="<what it should scrutinize>")\` — it nests under the worker node it
+   supports, and \`after: ["parent"]\` keeps the ordering visible. Model and
+   effort are never authored — they resolve by inheritance at spawn.
    **Multi-modal review** — pass \`multiModal: true\` on a reviewer when the
    work is genuinely risky and one model's blind spot would be expensive
    (security, concurrency, data loss, anything hard to undo). It reads the same
@@ -219,11 +221,15 @@ say so.
 1. **New deliverables** — batch them into a single \`deliverable\` call. Give
    each an explicit \`id\` that does not collide with the ids above, and use
    \`after\` to order them against EXISTING ids where they depend on prior work.
-   A reviewer on genuinely risky work can take \`multiModal: true\` — intent
-   only, never a model or a count.
 2. **New tasks on existing deliverables** — add them with \`task\`. Every new
    worker deliverable still needs its full task list in this same turn.
-3. **Summary** — briefly state what you added and why. End with "Ready to
+3. **New review/research agents on an existing deliverable** — these are NOT
+   deliverables. Add them with
+   \`agent(action="add", deliverableId="<node>", name="<agent>", focus="…")\`.
+   Pass \`multiModal: true\` when the work is genuinely risky and one model's
+   blind spot would be expensive — it reads the same diff through several model
+   families. Intent only: never a model, never a count.
+4. **Summary** — briefly state what you added and why. End with "Ready to
    implement."
 ${
 	started

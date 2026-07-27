@@ -168,7 +168,12 @@ export interface NodeExecutorDeps {
 	 * subagents) — the executor never spawns them. Absent, or fewer than two
 	 * models, means an ordinary single review.
 	 */
-	resolveReviewPanel?: (node: PlanNode) => Promise<readonly string[]>;
+	resolveReviewPanel?: (node: PlanNode) => Promise<{
+		/** One concrete model per distinct family. */
+		readonly models: readonly string[];
+		/** Review kinds the registry actually publishes, asked for at runtime. */
+		readonly kinds: readonly string[];
+	}>;
 	defaultBranch?: string;
 	defaultBranchFor?: (repoPath: string) => string | null;
 	canActivate?: () => boolean;
@@ -705,7 +710,8 @@ export class NodeExecutor {
 		if (seed && node.multiModal && this.deps.resolveReviewPanel) {
 			try {
 				const panel = await this.deps.resolveReviewPanel(node);
-				if (panel.length > 1) seedWithPanel = `${seed}\n\n${panelBrief(panel)}`;
+				if (panel.models.length > 1)
+					seedWithPanel = `${seed}\n\n${panelBrief(panel.models, panel.kinds)}`;
 			} catch {
 				// A panel we cannot resolve degrades to one honest review rather
 				// than parking the node — the review still happens.
@@ -798,7 +804,13 @@ export class NodeExecutor {
 			);
 		} else {
 			parts.push(`## Focus\n`);
-			for (const task of node.tasks) parts.push(`- ${task.title}`);
+			// Authors often carry a support agent's whole brief in its title and
+			// leave tasks empty — legal, since only WORKER nodes need gating work.
+			// Falling back keeps the agent from opening on an empty focus.
+			if (node.tasks.length === 0) {
+				parts.push(`- ${node.title ?? node.id}`);
+				if (node.body) parts.push(node.body);
+			} else for (const task of node.tasks) parts.push(`- ${task.title}`);
 		}
 
 		return parts.join("\n\n");
@@ -930,7 +942,10 @@ export class NodeExecutor {
  * and never an importance one, and it is asymmetric — a near-duplicate reaching
  * the worker is mild noise, a merged-away finding is a defect that escapes.
  */
-function panelBrief(panel: readonly string[]): string {
+function panelBrief(
+	panel: readonly string[],
+	kinds: readonly string[],
+): string {
 	return [
 		"## Multi-modal review",
 		"",
@@ -942,6 +957,15 @@ function panelBrief(panel: readonly string[]): string {
 		"Spawn them in ONE call so they run concurrently:",
 		'`subagent(action="spawn", assignments=[{kind, prompt, model}, …])`',
 		"— one assignment per model above, each with the same review prompt.",
+		"",
+		"`kind` is a SUBAGENT KIND, not this node's agent type — passing",
+		'`"reviewer"` fails with "Unknown agent registry entry". Pick the one that',
+		"matches what you are looking for:",
+		...(kinds.length > 0
+			? kinds.map((kind) => `- \`${kind}\``)
+			: ['- (none published — `subagent(action="list")` shows what exists)']),
+		"Use the SAME kind for every slot, so the FAMILIES differ and nothing else",
+		"does — that is the entire point of the panel.",
 		"",
 		"Then hand back a SINGLE list of findings:",
 		"",

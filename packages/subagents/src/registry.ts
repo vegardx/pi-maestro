@@ -371,12 +371,12 @@ export function createBuiltinAgentRegistries(): AgentRegistries {
 			extraExtensions: ["research-tools"],
 		},
 		{
-			// Read-only, but holds the `agent` tool so it can spawn its own
+			// Read-only, but holds the `subagent` tool so it can spawn its own
 			// read-only research (explorers) to ground its advice, and the web
 			// tools to consult sources. Never writes.
 			id: "advisor",
 			mode: "read-only",
-			tools: { allow: [...READ_TOOLS, ...WEB_TOOLS, "agent"] },
+			tools: { allow: [...READ_TOOLS, ...WEB_TOOLS, "subagent"] },
 			extraExtensions: ["research-tools"],
 		},
 	]);

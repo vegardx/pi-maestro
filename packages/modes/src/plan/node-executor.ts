@@ -940,7 +940,7 @@ function panelBrief(panel: readonly string[]): string {
 		...panel.map((model) => `- \`${model}\``),
 		"",
 		"Spawn them in ONE call so they run concurrently:",
-		'`agent(action="spawn", assignments=[{kind, prompt, model}, …])`',
+		'`subagent(action="spawn", assignments=[{kind, prompt, model}, …])`',
 		"— one assignment per model above, each with the same review prompt.",
 		"",
 		"Then hand back a SINGLE list of findings:",

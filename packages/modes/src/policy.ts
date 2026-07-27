@@ -53,6 +53,11 @@ export const AGENT_TOOL_NAMES = [
 	"work", // toggle own tasks (+ optional handoff summary)
 	"review", // worker-side review surface
 	"ask", // escalate a question to the maestro/human
+	// Spawn read-only helpers of its own — a multi-modal reviewer fans out to
+	// one per model family this way. Safe by construction: the depth gate
+	// refuses FULL-mode spawns below the host, so a worker can only ever create
+	// read-only children, never another writer.
+	"subagent",
 	"suggest_next_prompt", // TODO: remove in the suggest_next_prompt cleanup pass
 ] as const;
 

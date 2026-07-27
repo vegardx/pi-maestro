@@ -227,7 +227,7 @@ describe("unified agent capability and tool", () => {
 		// read-only research (holds the `agent` tool) — never a writer.
 		expect(profile.standby).toBe(true);
 		expect(profile.mode).toBe("plan");
-		expect(profile.tools?.allow).toContain("agent");
+		expect(profile.tools?.allow).toContain("subagent");
 		expect(profile.tools?.allow).toContain("read");
 	});
 

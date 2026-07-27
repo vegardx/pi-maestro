@@ -26,6 +26,7 @@ const ALL_TOOLS = [
 	"write",
 	"commit",
 	"work",
+	"subagent",
 	"review",
 	"dig",
 	"deliverable",

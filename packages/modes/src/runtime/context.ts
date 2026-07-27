@@ -773,7 +773,9 @@ export function createRuntimeContext(
 		const nodeCount = plan?.nodes.length ?? 0;
 		const preview = summary.trim() || `Formed ${nodeCount} deliverable(s).`;
 		ctx.ui.notify(
-			`Plan \`${plan?.slug ?? "draft"}\` formed — here's the shape:\n\n${preview.slice(0, 1400)}\n\nReview it, then Shift+Tab again to execute (you'll pick auto or hack).`,
+			`Plan \`${plan?.slug ?? "draft"}\` formed — here's the shape:\n\n${preview.slice(0, 1400)}\n\n` +
+				"Shift+Tab again to execute (you'll pick auto or hack). " +
+				"Or `/form` to add more, `/review` for a reviewer's verdict.",
 			"info",
 		);
 	}
@@ -1195,20 +1197,31 @@ export function createRuntimeContext(
 					await formPlanPreview(ctx);
 					return;
 				}
-				// Plan already formed: pick how to run it, then the gate (review +
-				// ruling) settles before execution.
+				// Plan already formed: pick how to run it. auto goes through the
+				// readiness gate (review + ruling) — the rail keeps the ceremony that
+				// the bare commands deliberately skip.
 				const choice = await ctx.ui.select("Switch to", [
 					"auto — fully autonomous",
 					"hack — fully autonomous, all tools",
 				]);
-				if (choice?.startsWith("auto")) {
-					if (await rt.requestMode("auto", ctx))
-						await rt.runResume(undefined, ctx);
-				} else if (choice?.startsWith("hack")) {
-					// hack is a direct posture switch — no gate, no forming, no
-					// worker activation (requestMode pass-through commits for hack).
+				const to = choice?.startsWith("auto")
+					? "auto"
+					: choice?.startsWith("hack")
+						? "hack"
+						: undefined;
+				if (!to) return;
+				// Same guard as /mode: leaving a posture that is running work asks to
+				// park it first. Reachable here when execution outlived a return to
+				// plan (settled-but-live, or a worker that outran the backward stop).
+				if (!(await rt.guardPostureChange(ctx, to))) return;
+				if (to === "hack") {
+					// A direct posture switch: no gate, no forming, no activation
+					// (requestMode is a pass-through commit for hack).
 					await rt.requestMode("hack", ctx);
+					return;
 				}
+				if (await rt.requestMode("auto", ctx))
+					await rt.runResume(undefined, ctx);
 				return;
 			}
 			// auto → plan; hack (off-cycle) also exits to plan — see nextMode.
@@ -1290,16 +1303,20 @@ export function createRuntimeContext(
 				);
 				return;
 			}
-			const plan = rt.engine.get();
 			// Running is not authoring. An unformed plan is a missing prerequisite,
 			// not something to silently fix by forming one the user hasn't seen.
-			if (plan.nodes.length === 0) {
+			if (rt.engine.get().nodes.length === 0) {
 				ctx.ui.notify(
 					"No plan has been formed — form one now with `/form`.",
 					"warning",
 				);
 				return;
 			}
+			// Materialize BEFORE fingerprinting: naming a draft rewrites its slug and
+			// title, which the fingerprint covers, so a plan reviewed as a draft
+			// would otherwise look changed the moment it hit disk.
+			rt.finalizeDraftPlan(ctx);
+			const plan = rt.engine.get();
 			const stopped = rt.state.execution.stage === "stopped";
 			const stop = rt.state.execution.stop;
 			// An unproven stop means we do not know what those workers were doing.
@@ -1368,7 +1385,6 @@ export function createRuntimeContext(
 			// direct commit: /resume is the explicit request to run, so there is
 			// nothing left for a gate to ask.
 			if (!orchestrationActive(rt.state.mode)) rt.setMode("auto", ctx);
-			rt.finalizeDraftPlan(ctx);
 
 			// A stopped adapter is terminal — rebuild before resuming into it.
 			if (parked.length > 0) {

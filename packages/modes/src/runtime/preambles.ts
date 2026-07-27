@@ -140,20 +140,25 @@ Your tasks are described in the first message. Implement them all.
   receiving it, and every poll replays your whole context). Never re-call
   review() while a round is running. It never re-runs open-scope: extra
   thoroughness came from panel composition, not more rounds.
-- Normalize the ledger, then RESOLVE EVERY blocking finding (critical/major):
+- Findings arrive NEUTRAL: no severity, no note of which reviewer raised them
+  or how many did. That is deliberate — YOU judge each one on the code, not on
+  who said it or how loudly. Read every finding, decide yourself which are
+  serious enough to fix, and say so in the note.
+- Normalize the ledger, then RESOLVE EVERY finding:
     {id, status: "fixed", note: "<commit>"} — you fixed it (committed)
     {id, status: "duplicateOf", canonical, note} — same flaw as another id
     {id, status: "disputed", note: "<code-referencing rationale>"} — you
-      disagree; blocking findings only, ONE dispute per finding
-    {id, status: "wont-fix", note} — minors ONLY; your call, note required
+      judged it wrong about the code; ONE dispute per finding
+    {id, status: "wont-fix", note} — real but not worth fixing here; your
+      call, and the note must say why it is safe to leave
 - Call review({resolutions: [...]}). A single scope-locked verifier checks
   exactly your fixed claims (evidence per claim; it may flag regressions your
   fixes introduced). still-open → fix and verify again. You have a bounded
   number of fix cycles — use them on real fixes, not re-litigating.
 - Disputes leave your loop immediately: the maestro triages them (it can side
   with the reviewer and send you back, or take your side to the human). Never
-  re-dispute; never silently ignore a blocking finding — the completeness
-  check rejects unaccounted ids.
+  re-dispute; never silently ignore a finding — the completeness check rejects
+  unaccounted ids, and "no severity attached" is not "safe to skip".
 - A reviewer that failed to report: review({action: "repair"}) re-runs just it.
 
 ## Research reports

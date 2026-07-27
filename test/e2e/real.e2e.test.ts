@@ -217,13 +217,17 @@ describe.skipIf(!RUN)("scripted full-stack e2e", () => {
 				await new Promise((r) => setTimeout(r, 3000));
 
 				// Boot #2: fresh maestro. Re-open the plan from the store (recover-me is
-				// still `active`), re-enter execution (the plan→auto gate — building the
-				// executor hydrates the orphaned active node into the restart-recoverable
-				// shape: RESTART_BLOCK_PREFIX + its session file, NOT a fresh respawn),
-				// then /recover — recoverInterrupted resumes that session, the mock sees
-				// the "…has been resumed" kickoff and drives write→commit→ship.
+				// still `active`) and go straight at /recover — it builds the executor
+				// itself, and THAT is what hydrates the orphaned active node into the
+				// restart-recoverable shape (RESTART_BLOCK_PREFIX + its session file,
+				// NOT a fresh respawn). recoverInterrupted then resumes that session,
+				// the mock sees the "…has been resumed" kickoff and drives
+				// write→commit→ship.
+				//
+				// No /resume here: recover-me is `active`, not `planned`, so there is
+				// nothing for /resume to activate — recovery is the whole job.
 				sut = launch();
-				await drive([`/plan ${slug}`, "/start", "/recover recover-me"]);
+				await drive([`/plan ${slug}`, "/recover recover-me"]);
 
 				const check = () =>
 					assertScenario(profile.piHome, profile.repoDir, RECOVER_ONCE);

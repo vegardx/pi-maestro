@@ -8,9 +8,9 @@
 | `/mode [plan\|auto\|hack\|recon]` | Switch posture. Direct switch; no arg opens a picker. Asks to park live workers first |
 | `/form` | Author the plan tree from the conversation, or extend an existing one. Plan mode only |
 | `/review` | Review the formed plan; records the verdict against its fingerprint. Opt-in |
-| `/start [delivery]` | Activate ready `planned` work only |
+| `/resume [delivery]` | Run the plan: resume cleanly parked workers AND activate ready `planned` work |
 | `/stop` | Freeze scheduling and bounded-stop the fleet |
-| `/restart [delivery]` | Resume/replace already-started work; never start queued work |
+| `/start [delivery]` | Alias for `/resume` |
 | `/recover [delivery]` | Audit and recover the target, or select from global candidates |
 | `/kill <delivery>` | Prove worker shutdown then record recoverable failure |
 | `/agents` | Focus Agents HUD or print status headlessly |
@@ -31,7 +31,7 @@
 | `/maestro` | Inspect/edit exact agent configuration and settings |
 | `/modes-status` | Show mode, plan, and execution status |
 
-Exact opaque control targets (`worker:<delivery/agent>`, `run:<id>`) win over aliases. Ambiguous aliases fail. `/interrupt` is not stop; `/stop` is not recover; `/restart` is not `/start`.
+Exact opaque control targets (`worker:<delivery/agent>`, `run:<id>`) win over aliases. Ambiguous aliases fail. `/interrupt` is not stop; `/stop` is not recover; `/resume` is not `/recover` — an unproven stop routes to `/recover`.
 
 ## Plan-facing tools
 

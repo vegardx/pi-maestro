@@ -55,8 +55,12 @@ node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
    to open it ready-made, then go straight to step 3. Do NOT re-describe the
    plan or author deliverables in this mode.
 
-3. **Drive to execution.** Send `prompt "/start"` to leave plan mode. The maestro
-   will spawn workers.
+3. **Drive to execution.** Unless the plan was seeded, send `prompt "/form"`
+   first to author the deliverable/task tree — `/resume` runs a plan, it never
+   authors one. Then send `prompt "/resume"` (`/start` is an alias) to enter
+   execution. The maestro will spawn workers. If it asks about running an
+   unreviewed plan, answer to proceed (or `/review` first if you want the
+   reviewer's verdict).
 
 4. **Poll and answer, repeatedly.** Every few seconds:
    `poll`. For each entry in `pending[]`, decide the answer that advances the

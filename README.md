@@ -44,10 +44,11 @@ needs the `gh` CLI.
 ## A session in 60 seconds
 
 ```
-/plan payments-retry        # converge (research + clarify), then author the plan
+/plan payments-retry        # open the plan artifact, then converge in conversation
   research(...)             # parallel persisted codebase/web reports
-  deliverable/task/workflow # deliveries, work items, exact assignments/stages
-/start                       # plan-review gate + user ruling, then execution
+/form                       # author the deliverable/task tree from that conversation
+/review                     # optional: a reviewer judges the plan before you run it
+/resume                     # run it (resumes parked workers, activates ready work)
 /agents                      # live workers, child runs, plan, and questions
   ...typed reviewers inspect immutable SHAs; findings resolve and verify...
 /ship                        # push + PR for the next shippable delivery

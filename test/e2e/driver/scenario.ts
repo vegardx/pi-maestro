@@ -70,7 +70,9 @@ export const SANDBOX_FEATURES: Scenario = {
 	steps: [
 		{ label: "enter plan mode", prompt: "/plan" },
 		{ label: "describe the plan", prompt: "__PLAN_PROMPT__" },
-		{ label: "enter execution", prompt: "/start" },
+		// Forming is its own step now: /resume runs a plan, it never authors one.
+		{ label: "form the plan", prompt: "/form" },
+		{ label: "enter execution", prompt: "/resume" },
 	],
 	expected: [
 		{

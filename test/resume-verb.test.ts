@@ -95,6 +95,24 @@ describe("the review-skip ask", () => {
 	});
 });
 
+describe("/resume reports what actually started", () => {
+	it("does not trust tick()'s count alone", () => {
+		// Seen on a live drive: building the adapter starts its own poll, which
+		// activated both ready deliverables before our tick ran. tick() then
+		// truthfully returned 0 and /resume said "nothing activated" while the
+		// fleet was already working. The plan is the source of truth.
+		expect(runResume).toContain("activeBefore");
+		expect(runResume).toContain("Math.max(ticked, started.length)");
+	});
+
+	it("excludes work that was already running", () => {
+		// Parked nodes are `active` too, so they must land in the before-set or
+		// they would be double-reported as newly started.
+		expect(runResume).toContain('visit.node.status === "active"');
+		expect(runResume).toContain("!activeBefore.has(visit.node.id)");
+	});
+});
+
 describe("/resume honors a repaired node's restart mode", () => {
 	it("restarts fresh instead of resuming a superseded session", () => {
 		// A clarifyTask repair rewrote the brief, so the worker's transcript is

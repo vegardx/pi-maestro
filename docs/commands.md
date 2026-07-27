@@ -6,6 +6,8 @@
 |---|---|
 | `/plan [slug]` | Open/create the repo plan. Artifact only — never changes mode |
 | `/mode [plan\|auto\|hack\|recon]` | Switch posture. Direct switch; no arg opens a picker. Asks to park live workers first |
+| `/form` | Author the plan tree from the conversation, or extend an existing one. Plan mode only |
+| `/review` | Review the formed plan; records the verdict against its fingerprint. Opt-in |
 | `/start [delivery]` | Activate ready `planned` work only |
 | `/stop` | Freeze scheduling and bounded-stop the fleet |
 | `/restart [delivery]` | Resume/replace already-started work; never start queued work |

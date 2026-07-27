@@ -68,6 +68,74 @@ export interface TransitionGateCoordinatorDeps {
 	>;
 }
 
+/**
+ * Spawn the plan-review agent and return its summary. Shared by the transition
+ * gate (where review is one step of crossing into execution) and the standalone
+ * `/review` command (where it is the whole job) — one reviewer invocation, so
+ * the two surfaces cannot drift on policy-row handling or the override retry.
+ *
+ * Throws on a failed run; each caller decides what a failure means.
+ */
+export async function runPlanReviewAgent(
+	ctx: ExtensionContext,
+	args: {
+		readonly agents: import("@vegardx/pi-contracts").AgentsCapabilityV1;
+		readonly prompt: string;
+		readonly cwd: string;
+		readonly meta: Record<string, unknown>;
+		readonly row?: import("@vegardx/pi-contracts").PolicyRow;
+		readonly resolveTierModel?: TransitionGateCoordinatorDeps["resolveTierModel"];
+		/** Called once the run exists, so a caller can persist its assignment. */
+		readonly onRun?: (run: { assignment?: unknown; runId?: unknown }) => void;
+	},
+): Promise<string> {
+	const { agents, row } = args;
+	const override = row
+		? await args.resolveTierModel?.(row.run.models, ctx).catch(() => undefined)
+		: undefined;
+	const request = (withOverride: boolean) => ({
+		kind: "plan-review" as const,
+		prompt: args.prompt,
+		cwd: args.cwd,
+		displayName: "plan-reviewer",
+		...(withOverride && override?.model ? { model: override.model } : {}),
+		...(withOverride && override?.effort ? { effort: override.effort } : {}),
+		meta: {
+			...args.meta,
+			...(row
+				? {
+						policy: {
+							models: row.run.models,
+							...(row.run.persona ? { persona: row.run.persona } : {}),
+							...(row.run.contract ? { contract: row.run.contract } : {}),
+						},
+					}
+				: {}),
+		},
+	});
+	// The row's tier override must never make review UNRUNNABLE: the agent
+	// runner validates explicit models against its own authored options and may
+	// reject the resolved tier model (seen live: "No exact plan-review option
+	// matches ..."). Retry once without the override — visibly degraded, never
+	// skipped.
+	let run: Awaited<ReturnType<typeof agents.run>>;
+	try {
+		run = await agents.run(request(true));
+	} catch (overrideError) {
+		if (!override?.model) throw overrideError;
+		ctx.ui.notify(
+			`Plan-review tier override (${override.model}) was rejected by the agent runner; running with its own selection instead.`,
+			"warning",
+		);
+		run = await agents.run(request(false));
+	}
+	args.onRun?.(run);
+	const result = await run.handle.result();
+	if (result.status !== "succeeded")
+		throw new Error(result.error ?? `plan reviewer ${result.status}`);
+	return (result.summary ?? "").slice(0, 12_000);
+}
+
 /** Definitions are selected by exact directed edge; duplicate ownership fails. */
 export class TransitionGateRegistry {
 	private readonly byEdge = new Map<TransitionEdge, TransitionGateDefinition>();
@@ -188,62 +256,26 @@ export class TransitionGateCoordinator {
 				return false;
 			}
 
-			const override = row
-				? await this.deps
-						.resolveTierModel?.(row.run.models, ctx)
-						.catch(() => undefined)
-				: undefined;
 			try {
-				const request = (withOverride: boolean) => ({
-					kind: "plan-review" as const,
+				reviewSummary = await runPlanReviewAgent(ctx, {
+					agents,
 					prompt: definition.prompt(engine.get(), validations),
 					cwd: engine.get().repoPath,
-					displayName: "plan-reviewer",
-					...(withOverride && override?.model ? { model: override.model } : {}),
-					...(withOverride && override?.effort
-						? { effort: override.effort }
+					meta: { gateId: id, edge: `${from}->${to}` },
+					...(row ? { row } : {}),
+					...(this.deps.resolveTierModel
+						? { resolveTierModel: this.deps.resolveTierModel }
 						: {}),
-					meta: {
-						gateId: id,
-						edge: `${from}->${to}`,
-						...(row
-							? {
-									policy: {
-										models: row.run.models,
-										...(row.run.persona ? { persona: row.run.persona } : {}),
-										...(row.run.contract ? { contract: row.run.contract } : {}),
-									},
-								}
-							: {}),
+					onRun: (run) => {
+						state = {
+							...state,
+							assignment: run.assignment as ModeTransitionGate["assignment"],
+							runId: run.runId as ModeTransitionGate["runId"],
+							updatedAt: now(),
+						};
+						persistGate(engine, state);
 					},
 				});
-				// The row's tier override must never make the gate UNRUNNABLE:
-				// the agent runner validates explicit models against its own
-				// authored options and may reject the resolved tier model
-				// (seen live: "No exact plan-review option matches ..."). Retry
-				// once without the override — visibly degraded, never skipped.
-				let run: Awaited<ReturnType<typeof agents.run>>;
-				try {
-					run = await agents.run(request(true));
-				} catch (overrideError) {
-					if (!override?.model) throw overrideError;
-					ctx.ui.notify(
-						`Plan-review tier override (${override.model}) was rejected by the agent runner; running with its own selection instead.`,
-						"warning",
-					);
-					run = await agents.run(request(false));
-				}
-				state = {
-					...state,
-					assignment: run.assignment,
-					runId: run.runId,
-					updatedAt: now(),
-				};
-				persistGate(engine, state);
-				const result = await run.handle.result();
-				if (result.status !== "succeeded")
-					throw new Error(result.error ?? `plan reviewer ${result.status}`);
-				reviewSummary = (result.summary ?? "").slice(0, 12_000);
 			} catch (error) {
 				state = this.block(
 					engine,
@@ -406,6 +438,59 @@ function persistGate(engine: PlanEngine, state: ModeTransitionGate): void {
 		decidedAt: state.ruling?.ruledAt ?? state.updatedAt,
 		rulingDetail: state.ruling,
 	});
+}
+
+/**
+ * Record a standalone `/review` into the SAME ledger the gate writes, so "this
+ * plan was reviewed at fingerprint X" has one source no matter which surface
+ * ran it. No ruling is recorded: a review is a judgment about the plan, not a
+ * decision to execute — that decision belongs to whoever starts the work.
+ */
+export function recordPlanReview(
+	engine: PlanEngine,
+	input: {
+		readonly mode: ModeName;
+		readonly fingerprint: string;
+		readonly at: string;
+		readonly validations: readonly ModeTransitionValidation[];
+		readonly reviewSummary?: string;
+		readonly blocked?: string;
+	},
+): void {
+	persistGate(engine, {
+		id: `plan-review:${input.at}`,
+		gate: "plan-review",
+		from: input.mode,
+		to: "auto",
+		status: input.blocked ? "blocked" : "settled",
+		requestedAt: input.at,
+		updatedAt: input.at,
+		planFingerprint: input.fingerprint,
+		validations: [...input.validations],
+		...(input.reviewSummary ? { reviewSummary: input.reviewSummary } : {}),
+		...(input.blocked ? { reason: input.blocked } : {}),
+	});
+}
+
+/**
+ * The fingerprint of the last plan state that actually cleared a review —
+ * whether that was the transition gate settling or a standalone `/review`.
+ * Undefined means "never reviewed". Compare against the live fingerprint to
+ * know whether the plan has drifted since.
+ */
+export function lastReviewedFingerprint(plan: Plan): string | undefined {
+	for (const gate of [...(plan.transitionGates ?? [])].reverse()) {
+		const status = gate.ruling;
+		const fingerprint = gate.planFingerprint;
+		// "settled" is the standalone review; a decision value means the gate
+		// ruled. Either way the plan cleared a review at that fingerprint.
+		const cleared =
+			status === "settled" ||
+			status === "enter-without" ||
+			status === "apply-and-enter";
+		if (cleared && typeof fingerprint === "string") return fingerprint;
+	}
+	return undefined;
 }
 
 export function createExecutionReadinessGate(): TransitionGateDefinition {

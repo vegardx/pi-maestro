@@ -24,7 +24,6 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { AskCapabilityV1 } from "@vegardx/pi-contracts";
 import { renderCollapsedResult } from "@vegardx/pi-ui";
-import { effectiveNodeTaskKind, type Plan, walkNodes } from "./plan/schema.js";
 
 // ─── Episode state ───────────────────────────────────────────────────────────
 
@@ -90,8 +89,31 @@ export class CarryForwardController {
 
 // ─── Mechanical inventory ────────────────────────────────────────────────────
 
+/**
+ * One row of the plan block. The caller flattens its own tree and counts its
+ * own tasks — this module renders. Same reasoning as the compaction seam: how
+ * a plan nests, and which task kinds gate completion, are facts about the plan
+ * model the rebuild replaces, and nothing here should learn them.
+ */
+export interface InventoryPlanRow {
+	readonly id: string;
+	/** Indent level; 1 = a root. */
+	readonly depth: number;
+	readonly status: string;
+	readonly tasksDone: number;
+	readonly tasksTotal: number;
+	readonly prUrl?: string;
+}
+
+export interface InventoryPlanView {
+	readonly slug: string;
+	readonly title: string;
+	readonly phase?: string;
+	readonly rows: readonly InventoryPlanRow[];
+}
+
 export interface InventoryDeps {
-	readonly plan?: Plan;
+	readonly plan?: InventoryPlanView;
 	readonly mode: string;
 	/** Adapter snapshot slices (live workers + blocked reasons). */
 	readonly workers?: ReadonlyArray<{ agent: string; status: string }>;
@@ -123,14 +145,15 @@ export function harvestInventory(deps: InventoryDeps): string {
 		lines.push(
 			`Plan: ${p.slug} — ${p.title} (mode: ${deps.mode}${p.phase ? `, phase: ${p.phase}` : ""})`,
 		);
-		for (const { node: d, depth } of walkNodes(p)) {
-			const tasks = d.tasks.filter((t) => effectiveNodeTaskKind(t) === "task");
-			const done = tasks.filter((t) => t.done).length;
-			const parts = [`- ${"  ".repeat(depth - 1)}${d.id} [${d.status}]`];
-			if (tasks.length > 0) parts.push(`tasks ${done}/${tasks.length}`);
-			const blocked = deps.blocked?.find((b) => b.id === d.id);
+		for (const row of p.rows) {
+			const parts = [
+				`- ${"  ".repeat(row.depth - 1)}${row.id} [${row.status}]`,
+			];
+			if (row.tasksTotal > 0)
+				parts.push(`tasks ${row.tasksDone}/${row.tasksTotal}`);
+			const blocked = deps.blocked?.find((b) => b.id === row.id);
 			if (blocked) parts.push(`BLOCKED: ${blocked.reason}`);
-			if (d.prUrl) parts.push(d.prUrl);
+			if (row.prUrl) parts.push(row.prUrl);
 			lines.push(parts.join(" · "));
 		}
 	} else {

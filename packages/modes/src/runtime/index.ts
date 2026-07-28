@@ -15,13 +15,17 @@ import {
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
 import {
+	createCarryForwardTool,
+	harvestInventory,
+} from "@vegardx/pi-maestro/carry-forward";
+import {
 	clipReport,
 	registerAgentCardRenderer,
 	sendAgentEvent,
 } from "@vegardx/pi-ui";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
-import { createCarryForwardTool, harvestInventory } from "../carry-forward.js";
+import { inventoryView } from "../plan/dependency-view.js";
 import type { PlanEngine } from "../plan/engine.js";
 import { createResearchTools, type ResearchRunView } from "../research.js";
 import {
@@ -168,7 +172,7 @@ export function createModesRuntime(
 					const plan = rt.engine?.get();
 					const snap = rt.execution?.snapshot();
 					return harvestInventory({
-						...(plan ? { plan } : {}),
+						...(plan ? { plan: inventoryView(plan) } : {}),
 						mode: rt.state.mode,
 						workers: snap
 							? [...snap.agents.entries()].map(([agent, a]) => ({

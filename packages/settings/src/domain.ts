@@ -1,6 +1,7 @@
 // Domain configuration for /maestro. This module owns layered authored values
-// that are richer than capability-declared scalar settings: exact model sets,
-// preset bindings, semantic kind bindings, runtime policy composition, and
+// that are richer than capability-declared scalar settings: model families and
+// aliases, rosters and their tiers, seat bindings, region lists, per-agent
+// allowances, semantic kind bindings, runtime policy composition, and
 // transition-gate contracts.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -14,8 +15,6 @@ import {
 	type AgentSessionPolicy,
 	type AgentTransportPolicy,
 	ALL_MODES,
-	MODEL_ROLES,
-	type ModelRole,
 	type SessionSettingValue,
 	SPAWNABLE_AGENT_TYPES,
 	type SpawnableAgentType,
@@ -52,8 +51,6 @@ export interface ModelOptionConfig {
 }
 export interface AgentKindBinding {
 	readonly kind: AgentKind;
-	readonly modelSet?: string;
-	readonly option?: string;
 	readonly runtimePolicy: string;
 	readonly source: MaestroScope | "builtin";
 }
@@ -250,39 +247,6 @@ function validateAllowanceValue(value: unknown): string[] {
 	return [];
 }
 
-function validateOption(value: unknown, path: string): string[] {
-	if (!isPlainObject(value)) return [`${path} must be an object`];
-	const errors: string[] = [];
-	if (!nonEmpty(value.id)) errors.push(`${path}.id must be non-empty`);
-	if (
-		!nonEmpty(value.model) ||
-		(value.model !== "session" && !String(value.model).includes("/"))
-	)
-		errors.push(`${path}.model must be session or provider/model`);
-	if (
-		!nonEmpty(value.effort) ||
-		(value.effort !== "auto" && !THINKING.has(value.effort))
-	)
-		errors.push(`${path}.effort is unsupported`);
-	if (value.efforts !== undefined) {
-		if (
-			!strings(value.efforts) ||
-			value.efforts.length === 0 ||
-			value.efforts.some((level) => !THINKING.has(level))
-		)
-			errors.push(`${path}.efforts must be a non-empty thinking-level array`);
-		else if (
-			value.effort !== "auto" &&
-			nonEmpty(value.effort) &&
-			!value.efforts.includes(value.effort)
-		)
-			errors.push(`${path}.effort must be inside its own efforts allowlist`);
-	}
-	if (!nonEmpty(value.summary))
-		errors.push(`${path}.summary must be non-empty`);
-	return errors;
-}
-
 export function validateDomainValue(key: string, value: unknown): string[] {
 	const parts = key.split(".");
 	if (
@@ -293,68 +257,19 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 		return [];
 	// null deletes the key (reset / remove-from-menu); always structurally valid.
 	if (value === null || value === "null") return [];
-	// Whole-preset writes let the editor create/replace a preset in one step.
-	if (parts[0] === "models" && parts[1] === "presets" && parts.length === 3) {
-		if (!isPlainObject(value)) return ["preset must be an object"];
-		const errors: string[] = [];
-		if (value.targets !== undefined) {
-			if (!strings(value.targets))
-				errors.push("preset targets must be a string array");
-			else if (value.targets.some((entry) => !entry.includes("/")))
-				errors.push("preset targets must be exact provider/model ids");
-		}
-		if (value.modelSets !== undefined) {
-			if (!isPlainObject(value.modelSets))
-				errors.push("preset modelSets must be an object");
-			else
-				for (const [role, set] of Object.entries(value.modelSets)) {
-					if (!MODEL_ROLES.includes(role as ModelRole))
-						errors.push(`unknown model role ${role}`);
-					if (!nonEmpty(set))
-						errors.push(`modelSets.${role} must name a model set`);
-				}
-		}
-		return errors;
-	}
-	if (parts[0] === "models" && parts[1] === "modelSets") {
-		if (parts.length === 3) {
-			const options = Array.isArray(value)
-				? value
-				: isPlainObject(value) && Array.isArray(value.options)
-					? value.options
-					: undefined;
-			if (!options?.length)
-				return ["model set requires a non-empty options array"];
-			const errors = options.flatMap((option, index) =>
-				validateOption(option, `options[${index}]`),
-			);
-			const ids = options
-				.filter(isPlainObject)
-				.map((option) => option.id)
-				.filter(nonEmpty);
-			if (new Set(ids).size !== ids.length)
-				errors.push("model option ids must be unique");
-			return errors;
-		}
-	}
-	if (parts[0] === "models" && parts[1] === "presets" && parts.length === 4) {
-		if (parts[3] === "targets") {
-			if (!strings(value) || value.length === 0)
-				return ["preset targets require a non-empty string array"];
-			if (value.some((entry) => !entry.includes("/")))
-				return ["preset targets must be exact provider/model ids"];
-			return [];
-		}
-		if (parts[3] === "modelSets") {
-			if (!isPlainObject(value)) return ["preset modelSets must be an object"];
-			return Object.entries(value).flatMap(([role, set]) => [
-				...(MODEL_ROLES.includes(role as ModelRole)
-					? []
-					: [`unknown model role ${role}`]),
-				...(nonEmpty(set) ? [] : [`modelSets.${role} must name a model set`]),
-			]);
-		}
-	}
+	// `presets` and `modelSets` were the v1 model surface. They were validated
+	// and persisted long after the resolver stopped reading them, so a write
+	// succeeded and then did nothing at all — reject rather than accept, because
+	// a key that validates is a key someone reasonably believes is live.
+	if (
+		parts[0] === "models" &&
+		(parts[1] === "presets" || parts[1] === "modelSets")
+	)
+		return [
+			`models.${parts[1]} was the v1 model surface and is no longer read. ` +
+				"Model selection is families → rosters (tiers) → bindings, with " +
+				"per-agent allowances; see docs/models.md.",
+		];
 	// v2 families: whole-map (rank reorder), whole-family, single-alias.
 	if (parts[0] === "models" && parts[1] === "families") {
 		if (parts.length === 2) {
@@ -430,7 +345,7 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 		if (!AGENT_KINDS.includes(parts[2] as AgentKind))
 			return [`unknown agent kind ${parts[2]}`];
 		if (!nonEmpty(value)) return [`${parts[3]} must be non-empty`];
-		return ["modelSet", "option", "runtimePolicy"].includes(parts[3])
+		return parts[3] === "runtimePolicy"
 			? []
 			: [`unsupported kind binding ${parts[3]}`];
 	}
@@ -592,7 +507,7 @@ function domainObjects(
 function binding(
 	ctx: ExtensionContext,
 	kind: AgentKind,
-	leaf: "modelSet" | "option" | "runtimePolicy",
+	leaf: "runtimePolicy",
 ): LayeredValue<SessionSettingValue> {
 	return readAdvancedValue(
 		ctx.cwd,
@@ -611,8 +526,6 @@ export function readDomainSnapshot(
 	);
 	const kinds = AGENT_KINDS.map((kind) => ({
 		kind,
-		modelSet: binding(ctx, kind, "modelSet").effective as string | undefined,
-		option: binding(ctx, kind, "option").effective as string | undefined,
 		runtimePolicy:
 			(binding(ctx, kind, "runtimePolicy").effective as string | undefined) ??
 			builtins.get(kind)?.runtimePolicy ??
@@ -774,10 +687,6 @@ export function domainImpact(
 	if (parts[0] === "transitionGates")
 		return [
 			`Affects ${isPlainObject(value) && strings(value.edges) ? value.edges.join(", ") : "configured transitions"}; in-flight rulings keep their persisted contract.`,
-		];
-	if (parts[0] === "models" && parts[1] === "presets")
-		return [
-			`May change which preset activates for /model and every role mapped by preset ${parts[2]}.`,
 		];
 	return [];
 }

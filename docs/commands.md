@@ -70,7 +70,7 @@ The cutover deliberately rejects old active state. Do not edit schema numbers in
    ```
 
    If `PI_CODING_AGENT_DIR` is unset, use pi's configured agent directory.
-3. Remove unsupported settings such as `models.profiles`; author `models.modelSets` and `models.presets` instead.
+3. Remove unsupported settings such as `models.presets` and `models.modelSets`; author `models.families`, `models.rosters`, and `models.bindings` instead.
 4. Start a new pi session and recreate the plan. Reattach preserved commits through normal git operations rather than copying stale `plan.json`, run status, usage, child projection, or session custom entries.
 
 For a single rejected plan, archive `<agentDir>/maestro/plans/<slug>/` and create it again. For a rejected run store, archive the containing runs root. Rejected session custom entries require a fresh session. The runtime never silently deletes or migrates these records.

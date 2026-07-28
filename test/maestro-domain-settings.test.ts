@@ -89,39 +89,17 @@ afterEach(() => {
 });
 
 describe("Maestro domain configuration", () => {
-	it("projects active preset, reverse model-set use, kinds, policies, and gates", () => {
+	it("projects kinds, policies, and gates", () => {
 		settings({
-			models: {
-				modelSets: {
-					workers: {
-						options: [
-							{
-								id: "fast",
-								model: "openai/o3",
-								effort: "high",
-								summary: "Fast",
-							},
-						],
-					},
-				},
-				presets: {
-					main: {
-						targets: ["anthropic/sonnet"],
-						modelSets: { worker: "workers" },
-					},
-				},
-			},
 			extensionConfig: {
 				maestro: {
-					agents: {
-						kinds: { worker: { runtimePolicy: "worker", modelSet: "workers" } },
-					},
+					agents: { kinds: { worker: { runtimePolicy: "worker" } } },
 				},
 			},
 		});
 		const snapshot = readDomainSnapshot(ctx(), registry());
 		expect(snapshot.kinds.find((kind) => kind.kind === "worker")).toMatchObject(
-			{ modelSet: "workers", runtimePolicy: "worker" },
+			{ runtimePolicy: "worker" },
 		);
 		expect(snapshot.gates[0]).toMatchObject({
 			id: "execution-readiness",
@@ -157,20 +135,52 @@ describe("Maestro domain configuration", () => {
 		).toContain("agent kind plan-review does not provide contract missing");
 	});
 
-	it("writes model and session-scoped binding configuration only after validation", () => {
-		settings({
-			models: { presets: { main: { targets: ["anthropic/sonnet"] } } },
-		});
+	it("writes session-scoped kind bindings only after validation", () => {
+		settings({});
 		const context = ctx();
 		expect(
 			writeDomainValue(
 				context,
-				"models.modelSets.workers",
-				"project",
-				'{"options":[{"id":"fast","model":"openai/o3","effort":"high","summary":"Fast"}]}',
+				"agents.kinds.worker.runtimePolicy",
+				"session",
+				'"worker"',
 				registry(),
 			),
 		).toEqual([]);
+		expect(
+			readDomainSnapshot(context, registry()).kinds.find(
+				(kind) => kind.kind === "worker",
+			)?.runtimePolicy,
+		).toBe("worker");
+	});
+
+	// The v1 model surface outlived the resolver that read it: `/maestro set
+	// models.presets…` validated, persisted, and then did nothing at all. A key
+	// that validates is a key someone reasonably believes is live, so it must
+	// now be REFUSED rather than silently accepted — and nothing may be written.
+	it("refuses the retired v1 model surface instead of silently accepting it", () => {
+		settings({ extensionConfig: { maestro: {} } });
+		const file = join(cwd, ".pi", "settings.json");
+		const before = readFileSync(file, "utf8");
+		const context = ctx();
+		for (const key of [
+			"models.presets.release.targets",
+			"models.modelSets.workers",
+		]) {
+			expect(
+				writeDomainValue(context, key, "project", '{"options":[]}', registry()),
+			).toEqual([expect.stringContaining("v1 model surface")]);
+		}
+		// Refusing must also mean writing nothing — an error the caller ignores
+		// would otherwise still leave a dead key on disk.
+		expect(readFileSync(file, "utf8")).toBe(before);
+	});
+
+	// The other half of the same retirement: a kind binding that names a model
+	// set cannot mean anything once model sets are gone.
+	it("refuses kind bindings that name a deleted model set", () => {
+		settings({});
+		const context = ctx();
 		expect(
 			writeDomainValue(
 				context,
@@ -179,15 +189,6 @@ describe("Maestro domain configuration", () => {
 				'"workers"',
 				registry(),
 			),
-		).toEqual([]);
-		const raw = JSON.parse(
-			readFileSync(join(cwd, ".pi", "settings.json"), "utf8"),
-		);
-		expect(raw.models.modelSets.workers.options[0].id).toBe("fast");
-		expect(
-			readDomainSnapshot(context, registry()).kinds.find(
-				(kind) => kind.kind === "worker",
-			)?.modelSet,
-		).toBe("workers");
+		).toEqual([expect.stringContaining("unsupported kind binding modelSet")]);
 	});
 });

@@ -2,7 +2,7 @@
 
 `/maestro` combines exact agent-domain configuration with extension-declared scalar settings. Interactive and scripted surfaces read the same normalized values and write through atomic file replacement.
 
-The interactive menu shows the v2 sections only: profiles and catalogs, agent tiers, the policy table, and residency. The v1 preset/model-set screens are removed — the v1→v2 migration derives catalogs/profiles automatically, and a one-line pointer says so when legacy keys are still present. The v1 keys themselves stay readable and scriptable (`/maestro get|set|reset models.presets.… models.modelSets.…`) because fallback resolution still reads them.
+The interactive menu edits model families and aliases, rosters and their tiers, seat bindings, per-agent allowances, the region list, the policy table, and declared scalar settings.
 
 ## Scopes
 
@@ -26,16 +26,18 @@ Scripted commands default to session scope:
 
 ## Agent-domain configuration
 
-The current `/model` activates an exact preset. Configure:
+The current `/model` selects the seat; a binding maps that seat to a roster. Configure:
 
-- `models.modelSets.<id>` — ordered exact model/effort options;
-- `models.presets.<id>.targets` — exact `/model` ids, unique across presets;
-- `models.presets.<id>.modelSets` — model-role → set id;
-- `agents.kinds.<kind>.modelSet|option|runtimePolicy` — optional kind binding;
+- `models.families.<Family>.aliases.<Alias>` — ordered `attach` list of exact `provider/model` refs, plus effort and notes;
+- `models.rosters.<id>.<light|standard|heavy>` — ordered `"Family/Alias"` refs per tier;
+- `models.bindings.<id>` — `{ roster, targets? }`; a binding without `targets` is the default seat;
+- `models.allowances.<agent>` — which tiers that agent type may request, and `spread` for multi-model fan-out;
+- `models.region` — `{ active, lists }`; the one hard filter, applied before any other reasoning;
+- `agents.kinds.<kind>.runtimePolicy` — optional kind binding;
 - `agents.runtimePolicies.<id>` — permission/session/transport composition;
 - `transitionGates.<id>` — exact edges, agent kind, output contract, enabled flag.
 
-Domain writes require valid JSON and validate references before persistence. Unsafe runtime combinations, unknown model sets/options/contracts, overlapping targets, and invalid transition edges fail closed. See [Models and exact presets](models.md).
+Domain writes require valid JSON and validate references before persistence. Unsafe runtime combinations, unknown tiers, malformed alias refs, unknown contracts, and invalid transition edges fail closed. See [Models](models.md).
 
 ## Execution policy
 
@@ -75,4 +77,4 @@ Other scalar groups include distill thresholds, compaction timeout, and research
 
 ## Cutover
 
-Only current keys are accepted. `models.profiles`, broad role configuration, and removed runtime review configuration are not migrated. Archive the old settings file, remove unsupported keys, and author exact model sets/presets. Plan/run/session schemas likewise require explicit archive or reset; see [Reset and archive](commands.md#reset-and-archive).
+Only current keys are accepted; there is no migration path. `models.presets` and `models.modelSets` — the v1 surface — are **rejected** rather than silently accepted, because they were validated and persisted long after the resolver stopped reading them, so a write appeared to succeed and did nothing. Archive the old settings file, remove unsupported keys, and author families/rosters/bindings instead. Plan/run/session schemas likewise require explicit archive or reset; see [Reset and archive](commands.md#reset-and-archive).

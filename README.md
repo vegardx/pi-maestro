@@ -61,8 +61,8 @@ needs the `gh` CLI.
   review, shipping, carry-forward, and every command.
 - [Review workflows](docs/review-loop.md) — immutable targets, canonical
   findings, resolutions, and verification.
-- [Models and exact presets](docs/models.md) — session fallback, exact sets,
-  preset activation, and no-substitution persistence.
+- [Models](docs/models.md) — families and aliases, roster tiers, seat bindings,
+  per-agent allowances, and the region filter.
 - [Settings](docs/settings.md) — scopes, runtime policies, isolation, and cutover.
 - [Commands and tools](docs/commands.md) — exact command contracts and reset/archive.
 - [Architecture](docs/architecture.md) — authority, persistence, RPC, and accounting.

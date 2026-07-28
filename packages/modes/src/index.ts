@@ -17,6 +17,31 @@ export {
 	decideBashPolicy,
 	dedicatedToolSuggestion,
 } from "@vegardx/pi-maestro/bash-policy";
+export type {
+	CompactionBucketSnapshot,
+	CompactionDecision,
+	DeliverableSliceResult,
+	ModesCompactionDetails,
+	PendingModesCompaction,
+	SummariseFn,
+	SummariseOutput,
+} from "@vegardx/pi-maestro/compaction";
+export {
+	buildCarryForwardSummary,
+	buildCompactionMarker,
+	buildDeliverableSliceCompactionResult,
+	buildEndSummaryPreamble,
+	buildSummariserPreamble,
+	buildSummary,
+	COMPACTION_SCHEMA_VERSION,
+	countDeliverableSlicesOnBranch,
+	createCrashSnapshot,
+	decideCompactionOwnership,
+	findLatestCompactionSummary,
+	readModesCompactionDetails,
+	renderDeliverableSection,
+	summaryHash,
+} from "@vegardx/pi-maestro/compaction";
 export {
 	type ExecutionPolicySettings,
 	readExecutionPolicySettings,
@@ -53,6 +78,7 @@ export {
 	type ResearchWorkspaceManagerOptions,
 	workspaceManifest,
 } from "@vegardx/pi-maestro/isolation/workspace";
+export { createModesSummariser } from "@vegardx/pi-maestro/summarise";
 export { composeFooterLine, type FooterRightCandidate } from "@vegardx/pi-ui";
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
@@ -105,35 +131,6 @@ export {
 	type ShadowRoute,
 	shadowBaselineDigest,
 } from "./bash-shadow-replay.js";
-export type {
-	CompactionBucketSnapshot,
-	CompactionDecision,
-	DeliverableSliceResult,
-	DependencySummary,
-	ModesCompactionDetails,
-	PendingModesCompaction,
-	SummariseFn,
-	SummariseOutput,
-} from "./compaction.js";
-export {
-	buildCarryForwardSummary,
-	buildCompactionMarker,
-	buildDeliverableSliceCompactionResult,
-	buildEndSummaryPreamble,
-	buildSummariserPreamble,
-	buildSummary,
-	COMPACTION_SCHEMA_VERSION,
-	collectDependencySummaries,
-	countDeliverableSlicesOnBranch,
-	createCrashSnapshot,
-	decideCompactionOwnership,
-	downstreamDependents,
-	findLatestCompactionSummary,
-	readModesCompactionDetails,
-	renderDeliverableSection,
-	summaryHash,
-	transitiveDependencies,
-} from "./compaction.js";
 export { buildRecap } from "./deliverable-recap.js";
 export {
 	createExecution,
@@ -206,7 +203,6 @@ export {
 	transitionMode,
 } from "./state.js";
 export { plansRoot, UnsupportedMaestroStateError } from "./storage.js";
-export { createModesSummariser } from "./summarise.js";
 export {
 	createDeliverableTool,
 	createPlanTool,

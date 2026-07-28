@@ -7,11 +7,6 @@ import type {
 	ToolCallEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
-import { describePolicyDeviations } from "@vegardx/pi-maestro/execution-policy";
-import { resetRealTreeSandbox } from "@vegardx/pi-maestro/isolation/realtree-sandbox";
-import { readModelsConfig } from "@vegardx/pi-models";
-import { updateSettingsFile } from "@vegardx/pi-settings";
-import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
 import {
 	buildDeliverableSliceCompactionResult,
 	COMPACTION_SCHEMA_VERSION,
@@ -19,12 +14,18 @@ import {
 	decideCompactionOwnership,
 	readModesCompactionDetails,
 	summaryHash,
-} from "../compaction.js";
-import { walkNodes } from "../plan/schema.js";
+} from "@vegardx/pi-maestro/compaction";
+import { describePolicyDeviations } from "@vegardx/pi-maestro/execution-policy";
+import { resetRealTreeSandbox } from "@vegardx/pi-maestro/isolation/realtree-sandbox";
+import { createModesSummariser } from "@vegardx/pi-maestro/summarise";
+import { readModelsConfig } from "@vegardx/pi-models";
+import { updateSettingsFile } from "@vegardx/pi-settings";
+import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
+import { dependenciesOf, dependentsOf } from "../plan/dependency-view.js";
+import { findNode, walkNodes } from "../plan/schema.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { hydrateModesState } from "../session.js";
 import { readModesCompactionSettings } from "../settings.js";
-import { createModesSummariser } from "../summarise.js";
 import {
 	contextFillLadder,
 	firePendingForcedDistill,
@@ -583,10 +584,18 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			...preparation.turnPrefixMessages,
 		];
 		try {
+			const plan = engine.get();
+			const deliverable = findNode(plan, pending.deliverableId);
+			if (!deliverable)
+				throw new Error(
+					`compaction: node ${pending.deliverableId} is not in plan ${plan.slug}`,
+				);
 			const result = await buildDeliverableSliceCompactionResult({
 				entries: ctx.sessionManager.getEntries(),
-				plan: engine.get(),
-				deliverableId: pending.deliverableId,
+				deliverable,
+				planSlug: plan.slug,
+				dependencies: dependenciesOf(plan, deliverable.id),
+				dependents: dependentsOf(plan, deliverable.id),
 				summarise,
 				rawMessages,
 				previousSummary: preparation.previousSummary,
@@ -646,7 +655,7 @@ export function registerRuntimeHooks(rt: RuntimeContext): void {
 			{
 				error: event.result,
 				mode: rt.state.mode,
-				plan,
+				...(plan ? { planSlug: plan.slug } : {}),
 				...(activeNodeId ? { activeDeliverableId: activeNodeId } : {}),
 				cwd: ctx.cwd,
 			},

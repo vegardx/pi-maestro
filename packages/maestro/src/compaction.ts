@@ -9,14 +9,19 @@ import {
 	MAESTRO_COMPACTION_MARKER,
 } from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
-import {
-	findNode,
-	PARENT_AFTER_TOKEN,
-	type Plan,
-	type PlanNode,
-	parentOfNode,
-	TERMINAL_STATUSES,
-} from "./plan/schema.js";
+
+/**
+ * What compaction needs to know about a piece of work — deliberately NOT
+ * PlanNode. This module renders summaries; it has no business knowing how the
+ * plan is shaped, only what a summary must say about a piece of work. The
+ * caller resolves these and hands them over.
+ */
+export interface CompactionDeliverable {
+	readonly id: string;
+	readonly title?: string;
+	readonly body?: string;
+	readonly summary?: string;
+}
 
 /** AgentMessage alias; `convertToLlm` consumes this shape (see summarise.ts). */
 type AgentMessage = SessionMessageEntry["message"];
@@ -147,72 +152,6 @@ export function summaryHash(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Dependency-aware preamble inputs — pure tree walks.
-// ---------------------------------------------------------------------------
-
-/** The sibling group `id` schedules within (its `after` scope). */
-function siblingGroup(
-	plan: Pick<Plan, "nodes">,
-	id: string,
-): readonly PlanNode[] {
-	const parent = parentOfNode(plan, id);
-	return parent ? (parent.children ?? []) : plan.nodes;
-}
-
-/**
- * Transitive dependency ancestors of `id` (deepest-first dedup, no cycles).
- * v2: `after` is sibling-scoped, so the closure runs over the node's own
- * sibling group; the "parent" ordering token is not a dependency.
- */
-export function transitiveDependencies(
-	plan: Pick<Plan, "nodes">,
-	id: string,
-): PlanNode[] {
-	const byId = new Map(siblingGroup(plan, id).map((d) => [d.id, d]));
-	const seen = new Set<string>();
-	const out: PlanNode[] = [];
-	const visit = (current: string) => {
-		for (const depId of byId.get(current)?.after ?? []) {
-			if (depId === PARENT_AFTER_TOKEN || seen.has(depId)) continue;
-			seen.add(depId);
-			const dep = byId.get(depId);
-			if (dep) {
-				out.push(dep);
-				visit(depId);
-			}
-		}
-	};
-	visit(id);
-	return out;
-}
-
-/**
- * Non-terminal sibling nodes that depend (directly or transitively) on `id`.
- * These are the future readers the summary should retain detail for.
- */
-export function downstreamDependents(
-	plan: Pick<Plan, "nodes">,
-	id: string,
-): PlanNode[] {
-	const all = siblingGroup(plan, id);
-	const dependents = new Set<string>();
-	let grew = true;
-	while (grew) {
-		grew = false;
-		for (const d of all) {
-			if (d.id === id || dependents.has(d.id)) continue;
-			const deps = (d.after ?? []).filter((ref) => ref !== PARENT_AFTER_TOKEN);
-			if (deps.some((dep) => dep === id || dependents.has(dep))) {
-				dependents.add(d.id);
-				grew = true;
-			}
-		}
-	}
-	return all.filter(
-		(d) => dependents.has(d.id) && !TERMINAL_STATUSES.includes(d.status),
-	);
-}
-
 // ---------------------------------------------------------------------------
 // Summariser contract + preamble.
 // ---------------------------------------------------------------------------
@@ -234,14 +173,22 @@ export type SummariseFn = (args: {
  * and the non-terminal dependents whose needs the limited output must serve.
  */
 export function buildSummariserPreamble(args: {
-	plan: Plan;
-	deliverable: PlanNode;
+	deliverable: CompactionDeliverable;
+	/** Completed work this builds on — direct dependencies first. */
+	dependencies: readonly CompactionDeliverable[];
+	/** Unfinished work that will READ this summary. Terminal work is already
+	 *  excluded by the caller: a reader that is done is not a reader. */
+	dependents: readonly CompactionDeliverable[];
 	maxTokens: number;
 	partN: number;
 }): string {
-	const { plan, deliverable, maxTokens, partN } = args;
-	const deps = transitiveDependencies(plan, deliverable.id);
-	const dependents = downstreamDependents(plan, deliverable.id);
+	const {
+		deliverable,
+		dependencies: deps,
+		dependents,
+		maxTokens,
+		partN,
+	} = args;
 
 	const lines: string[] = [
 		"You are summarising work on a software project so the active deliverable",
@@ -295,7 +242,7 @@ export function buildSummariserPreamble(args: {
 
 /** Locked title format for a mid-deliverable slice section. */
 export function renderDeliverableSection(args: {
-	deliverable: PlanNode;
+	deliverable: CompactionDeliverable;
 	body: string;
 	partN: number;
 }): string {
@@ -356,9 +303,14 @@ export function countDeliverableSlicesOnBranch(
 
 export interface BuildDeliverableSliceOptions {
 	readonly entries: SessionEntry[];
-	readonly plan: Plan;
-	/** The node whose session is compacting (v6 keeps the v1 field name). */
-	readonly deliverableId: string;
+	/** The work whose session is compacting — already resolved by the caller. */
+	readonly deliverable: CompactionDeliverable;
+	/** Used only for log/marker provenance. */
+	readonly planSlug: string;
+	/** Completed work this builds on; direct dependencies first. */
+	readonly dependencies: readonly CompactionDeliverable[];
+	/** Unfinished work that will read the summary. */
+	readonly dependents: readonly CompactionDeliverable[];
 	readonly summarise: SummariseFn;
 	/** RAW messages pi will drop (preparation.messagesToSummarize + turnPrefix). */
 	readonly rawMessages: AgentMessage[];
@@ -388,30 +340,24 @@ export interface DeliverableSliceResult {
  * pi expects from `session_before_compact`, or null when the summariser fails
  * (the caller then cancels the modes-triggered compaction).
  *
- * Throws if `deliverableId` is not in the plan (a wiring bug).
  */
 export async function buildDeliverableSliceCompactionResult(
 	opts: BuildDeliverableSliceOptions,
 ): Promise<DeliverableSliceResult | null> {
-	const deliverable = findNode(opts.plan, opts.deliverableId);
-	if (!deliverable) {
-		throw new Error(
-			`buildDeliverableSliceCompactionResult: node ${opts.deliverableId} not found in plan ${opts.plan.slug}`,
-		);
-	}
-
+	const { deliverable } = opts;
 	const partN =
 		countDeliverableSlicesOnBranch(
 			opts.entries,
-			opts.plan.slug,
-			opts.deliverableId,
+			opts.planSlug,
+			deliverable.id,
 		) + 1;
 
 	let body = "(no recorded work)";
 	if (opts.rawMessages.length > 0) {
 		const preamble = buildSummariserPreamble({
-			plan: opts.plan,
 			deliverable,
+			dependencies: opts.dependencies,
+			dependents: opts.dependents,
 			maxTokens: opts.maxTokens,
 			partN,
 		});
@@ -438,8 +384,8 @@ export async function buildDeliverableSliceCompactionResult(
 		details: {
 			schemaVersion: COMPACTION_SCHEMA_VERSION,
 			modesKind: "deliverable-slice",
-			planSlug: opts.plan.slug,
-			deliverableId: opts.deliverableId,
+			planSlug: opts.planSlug,
+			deliverableId: deliverable.id,
 			sliceNumber: partN,
 			nonce: opts.nonce,
 			reason: opts.reason,
@@ -463,43 +409,18 @@ export async function buildDeliverableSliceCompactionResult(
 // Reading the rolling summary here is the one sanctioned cross-deliverable
 // handoff; its output never feeds back into any live rolling prefix.
 
-/** A dependency's distilled summary, ready to render verbatim into a seed. */
-export interface DependencySummary {
-	readonly id: string;
-	readonly title: string;
-	readonly summary: string;
-}
-
-/**
- * Distilled summaries of the transitive dependencies of `deliverableId` that
- * actually have one. Direct dependencies come first (then their ancestors),
- * matching {@link transitiveDependencies} order. Independent parallel branches
- * are never included — only this deliverable's dependency closure.
- */
-export function collectDependencySummaries(
-	plan: Pick<Plan, "nodes">,
-	deliverableId: string,
-): DependencySummary[] {
-	const out: DependencySummary[] = [];
-	for (const dep of transitiveDependencies(plan, deliverableId)) {
-		const summary = dep.summary?.trim();
-		if (summary) out.push({ id: dep.id, title: dep.title ?? dep.id, summary });
-	}
-	return out;
-}
-
 /**
  * Forward-looking preamble for the one-time ship-time distillation. Unlike the
  * mid-deliverable preamble, this asks for what FUTURE dependent deliverables
  * need but the plan does not make obvious — not a chronological work log.
  */
 export function buildEndSummaryPreamble(args: {
-	plan: Plan;
-	deliverable: PlanNode;
+	deliverable: CompactionDeliverable;
+	/** Unfinished work that will read this hand-off. */
+	dependents: readonly CompactionDeliverable[];
 	maxTokens: number;
 }): string {
-	const { plan, deliverable, maxTokens } = args;
-	const dependents = downstreamDependents(plan, deliverable.id);
+	const { deliverable, dependents, maxTokens } = args;
 
 	const lines: string[] = [
 		"You are writing a one-time hand-off summary for a COMPLETED deliverable",
@@ -551,8 +472,9 @@ export function buildEndSummaryPreamble(args: {
 }
 
 export interface BuildCarryForwardOptions {
-	readonly plan: Plan;
-	readonly deliverable: PlanNode;
+	readonly deliverable: CompactionDeliverable;
+	/** Unfinished work that will read this hand-off. */
+	readonly dependents: readonly CompactionDeliverable[];
 	/** Latest rolling compaction summary in the deliverable's own session. */
 	readonly rollingSummary?: string;
 	/** Raw messages after the last compaction (or the whole session if none). */
@@ -585,8 +507,8 @@ export async function buildCarryForwardSummary(
 	if (messages.length === 0) return null;
 
 	const preamble = buildEndSummaryPreamble({
-		plan: opts.plan,
 		deliverable: opts.deliverable,
+		dependents: opts.dependents,
 		maxTokens: opts.maxTokens,
 	});
 	const out = await opts.summarise({
@@ -607,7 +529,7 @@ export async function buildCarryForwardSummary(
 export interface CrashSnapshotInput {
 	readonly error: unknown;
 	readonly mode: ModeName;
-	readonly plan?: Plan;
+	readonly planSlug?: string;
 	readonly activeDeliverableId?: string;
 	readonly cwd?: string;
 }
@@ -638,7 +560,7 @@ export function createCrashSnapshot(
 		at: now(),
 		mode: input.mode,
 		cwd: redact(input.cwd),
-		planSlug: input.plan?.slug,
+		planSlug: input.planSlug,
 		activeDeliverableId: input.activeDeliverableId,
 		error: redact(error.message) ?? "",
 		stack: redact(error.stack),

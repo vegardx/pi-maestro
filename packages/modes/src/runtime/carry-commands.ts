@@ -9,8 +9,8 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
+import { buildCompactionMarker } from "@vegardx/pi-maestro/compaction";
 import { buildTranscriptDigest, type CarrySink } from "../carry-forward.js";
-import { buildCompactionMarker } from "../compaction.js";
 import { liveAgentKeys } from "../plan/live-agents.js";
 import { type DistillSettings, readDistillSettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";

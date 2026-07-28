@@ -16,6 +16,15 @@ for (const key of Object.keys(process.env)) {
 		delete process.env[key];
 	if (key === "GIT_PREFIX" || key.startsWith("GIT_ALTERNATE_"))
 		delete process.env[key];
+	// The identity variables belong here for the same reason, and their absence
+	// cost four consecutive red Release runs (from 2026-07-27): semantic-release
+	// exports GIT_AUTHOR_*/GIT_COMMITTER_* for its own commits, `resolveGitIdentity`
+	// reads env BEFORE config, and so every "the developer configured none"
+	// assertion saw `semantic-release-bot`. Pinning GIT_CONFIG_GLOBAL below does
+	// not help — the leak is env, not config. Tests that want an identity set one
+	// explicitly; none may inherit the caller's.
+	if (key.startsWith("GIT_AUTHOR_") || key.startsWith("GIT_COMMITTER_"))
+		delete process.env[key];
 }
 
 // Pin the global/system config away from the developer's real files. Fixtures

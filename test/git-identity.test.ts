@@ -152,6 +152,13 @@ describe("the environment is a first-class source", () => {
 		}
 	};
 
+	// BOTH hooks, deliberately. `afterEach` alone cleans up after the previous
+	// test but leaves the FIRST one running under whatever the caller exported —
+	// which is exactly how this block went red under semantic-release, whose
+	// GIT_AUTHOR_* made the "config has none" assertion see an identity.
+	// vitest.setup.ts now strips those globally; this keeps the block honest on
+	// its own terms rather than relying on that.
+	beforeEach(clearEnv);
 	afterEach(clearEnv);
 
 	it("accepts an identity supplied as env when config has none", () => {

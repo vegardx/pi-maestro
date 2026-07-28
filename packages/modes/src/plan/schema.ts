@@ -6,8 +6,7 @@
 // plan "the complete truthful record" for recovery/HUD/explain.
 //
 // Model fields are GONE from authored input (inheritance is the rule); the
-// harness writes NodeResolution entries instead. Unwired until the flip PR:
-// nothing imports this module except its tests and the v2 engine.
+// harness writes NodeResolution entries instead.
 
 import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";

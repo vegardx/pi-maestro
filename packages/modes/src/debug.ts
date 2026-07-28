@@ -887,7 +887,3 @@ export async function askAndExecuteDebugRecovery(
 export function debugEpisodePath(planDir: string): string {
 	return join(planDir, "debug", "active.json");
 }
-
-export function planForSnapshot(engine?: PlanEngine): Plan | undefined {
-	return engine?.get();
-}

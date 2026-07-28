@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Answer, AskCapabilityV1, Question } from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
 
@@ -424,17 +423,6 @@ export function freezeDiagnosticIssue(
 		title: redactSecrets(draft.model.title),
 		body: redactSecrets(renderDiagnosticIssue(draft)),
 	});
-}
-
-export function diagnosticDraftHash(draft: DiagnosticIssueDraft): string {
-	return createHash("sha256").update(JSON.stringify(draft)).digest("hex");
-}
-
-export function appendRevisionHistory(
-	history: readonly DebugIssueRevisionRecord[],
-	record: DebugIssueRevisionRecord,
-): readonly DebugIssueRevisionRecord[] {
-	return [...history, record].slice(-LIMITS.revisions);
 }
 
 export interface DebugIssueReviserInput {

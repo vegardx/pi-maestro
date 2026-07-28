@@ -12,8 +12,6 @@
 //   transitions per the unchanged table. Removal is `abandoned`, never
 //   splice — a policy tightening over v1, whose any-time removeDeliverable
 //   caused a class of wedges.
-//
-// Unwired until the flip: only tests and the future NodeExecutor import it.
 
 import { randomUUID } from "node:crypto";
 import type {

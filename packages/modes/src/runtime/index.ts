@@ -14,6 +14,11 @@ import {
 	type ModesExecutionStatus,
 } from "@vegardx/pi-contracts";
 import type { MaestroContext } from "@vegardx/pi-core";
+import {
+	clipReport,
+	registerAgentCardRenderer,
+	sendAgentEvent,
+} from "@vegardx/pi-ui";
 import { isAgentMode } from "../agent-bridge.js";
 import type { ModesAskQueue } from "../ask-queue.js";
 import { createCarryForwardTool, harvestInventory } from "../carry-forward.js";
@@ -28,11 +33,6 @@ import { plansRoot } from "../storage.js";
 import { createPlanTools } from "../tools.js";
 import { createWatchTool } from "../watch-tool.js";
 import { WatchManager } from "../watcher.js";
-import {
-	clipReport,
-	registerAgentCardRenderer,
-	sendAgentEvent,
-} from "./agent-cards.js";
 import { registerBashRouter } from "./bash-router.js";
 import { registerRuntimeCommands } from "./commands.js";
 import {

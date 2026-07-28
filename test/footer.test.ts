@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { composeFooterLine } from "../packages/modes/src/footer.js";
 import {
 	formatCacheHitRate,
 	formatContextUsage,
 	formatSessionUsage,
 } from "../packages/modes/src/install-footer.js";
 import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
+import { composeFooterLine } from "../packages/ui/src/footer.js";
 
 describe("composeFooterLine", () => {
 	it("renders left and right with gap", () => {

@@ -40,6 +40,7 @@ import {
 	resolveModels,
 	spreadForAgent,
 } from "@vegardx/pi-models";
+import { sendAgentEvent } from "@vegardx/pi-ui";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
@@ -99,7 +100,6 @@ import {
 	type UsageDelta,
 	UsageLedger,
 } from "../usage-ledger.js";
-import { sendAgentEvent } from "./agent-cards.js";
 import type { ViewState } from "./agent-commands.js";
 import { installDebugProposalHandler } from "./debug-command.js";
 import {

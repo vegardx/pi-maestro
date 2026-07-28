@@ -14,7 +14,7 @@ import {
 	type HudFocusState,
 	type HudSnapshot,
 	hudElapsed,
-} from "../packages/modes/src/runtime/hud.js";
+} from "../packages/ui/src/hud.js";
 
 const W = 72;
 const NOW = 1_000_000;

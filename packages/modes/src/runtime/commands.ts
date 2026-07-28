@@ -18,6 +18,7 @@ import {
 import { runCommand } from "@vegardx/pi-git";
 import { resolveDutyModel } from "@vegardx/pi-maestro/policy-table";
 import { getModelMeta, resolveModelForRole } from "@vegardx/pi-models";
+import { clipReport, sendAgentEvent } from "@vegardx/pi-ui";
 import { isAgentMode } from "../agent-bridge.js";
 import { createDeleteTool } from "../delete-tool.js";
 import { buildRecap } from "../deliverable-recap.js";
@@ -30,7 +31,6 @@ import {
 import { writeVerificationReport } from "../exec/verify-report.js";
 import { findNode } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
-import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import {
 	handleInterruptCommand,
 	handleSteerCommand,

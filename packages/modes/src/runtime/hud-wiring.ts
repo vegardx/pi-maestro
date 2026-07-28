@@ -20,13 +20,6 @@ import {
 	type WatchRecord,
 } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
-import { openAnswerMode, paletteFromTheme } from "@vegardx/pi-ui";
-import type { ExecutionAgentSnapshot } from "../exec/index.js";
-import { findNode } from "../plan/schema.js";
-import type { PendingQuestion } from "../question-queue.js";
-import { handleViewCommand } from "./agent-commands.js";
-import { clipWatchGoal, listAgentTargets } from "./agent-targets.js";
-import type { RuntimeContext } from "./context.js";
 import {
 	type HudAgentCapabilities,
 	type HudAgentLeaf,
@@ -39,8 +32,17 @@ import {
 	type HudSnapshot,
 	type HudStatus,
 	type HudTab,
-} from "./hud.js";
-import { hudTabCounts, MaestroEditor } from "./maestro-editor.js";
+	hudTabCounts,
+	MaestroEditor,
+	openAnswerMode,
+	paletteFromTheme,
+} from "@vegardx/pi-ui";
+import type { ExecutionAgentSnapshot } from "../exec/index.js";
+import { findNode } from "../plan/schema.js";
+import type { PendingQuestion } from "../question-queue.js";
+import { handleViewCommand } from "./agent-commands.js";
+import { clipWatchGoal, listAgentTargets } from "./agent-targets.js";
+import type { RuntimeContext } from "./context.js";
 
 /** Re-render cadence while agents are live, so elapsed columns tick. */
 const HUD_TICK_MS = 5_000;

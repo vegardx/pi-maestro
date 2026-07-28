@@ -7,6 +7,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { SubagentsCapabilityV1 } from "@vegardx/pi-contracts";
+import { openAgentLiveView } from "@vegardx/pi-ui";
 import type { ExecutionHandle } from "../exec/index.js";
 import {
 	descendantsOf,
@@ -14,7 +15,6 @@ import {
 	renderTargetResolutionError,
 	resolveAgentTarget,
 } from "./agent-targets.js";
-import { openAgentLiveView } from "./agent-view.js";
 
 /** Tracks the single /view split pane so a second /view replaces it. */
 export interface ViewState {

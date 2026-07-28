@@ -53,6 +53,7 @@ export {
 	type ResearchWorkspaceManagerOptions,
 	workspaceManifest,
 } from "@vegardx/pi-maestro/isolation/workspace";
+export { composeFooterLine, type FooterRightCandidate } from "@vegardx/pi-ui";
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
 export {
@@ -138,7 +139,6 @@ export {
 	createExecution,
 	type ExecutionHandle,
 } from "./exec/index.js";
-export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
 export { buildPlanAwareCompactionMarker } from "./forward-summary.js";
 export {
 	type FooterDeps,

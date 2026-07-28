@@ -10,11 +10,11 @@ import {
 	parseModelSpec,
 	readModelsConfig,
 } from "@vegardx/pi-models";
+import { hudElapsed } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot, ExecutionHandle } from "../exec/index.js";
 import { installFooter, type ResolvedIdentity } from "../install-footer.js";
 import type { Plan } from "../plan/schema.js";
 import type { RuntimeContext } from "./context.js";
-import { hudElapsed } from "./hud.js";
 
 /** Install the maestro footer and remember its invalidate handle. */
 export function installMaestroFooter(

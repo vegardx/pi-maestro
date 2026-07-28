@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	renderSessionEntry,
 	SessionTail,
-} from "../packages/modes/src/runtime/agent-view.js";
+} from "../packages/ui/src/agent-view.js";
 
 const plain = { width: 200, dim: (t: string) => t };
 

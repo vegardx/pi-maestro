@@ -22,7 +22,7 @@ import {
 	formatDuration,
 	registerAgentCardRenderer,
 	sendAgentEvent,
-} from "../packages/modes/src/runtime/agent-cards.js";
+} from "../packages/ui/src/agent-cards.js";
 
 /** Identity theme: styling is a no-op so assertions see plain text. */
 const theme = {
@@ -453,7 +453,7 @@ describe("sendAgentEvent", () => {
 describe("done card with a no-usage provider", () => {
 	it('says "no usage reported" instead of 0/0 tok', async () => {
 		const { buildStatsTrailer } = await import(
-			"../packages/modes/src/runtime/agent-cards.js"
+			"../packages/ui/src/agent-cards.js"
 		);
 		const trailer = buildStatsTrailer({
 			kind: "done",
@@ -473,7 +473,7 @@ describe("done card with a no-usage provider", () => {
 describe("verify done cards", () => {
 	it("a block verdict shows the verdict and the findings, not 'failed'", async () => {
 		const { buildCardHeader, buildCardBody } = await import(
-			"../packages/modes/src/runtime/agent-cards.js"
+			"../packages/ui/src/agent-cards.js"
 		);
 		const event = {
 			kind: "research-done",
@@ -494,7 +494,7 @@ describe("verify done cards", () => {
 
 	it("a verifier error (no report) says errored and shows the error", async () => {
 		const { buildCardHeader, buildCardBody } = await import(
-			"../packages/modes/src/runtime/agent-cards.js"
+			"../packages/ui/src/agent-cards.js"
 		);
 		const event = {
 			kind: "research-done",

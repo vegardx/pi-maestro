@@ -17,13 +17,10 @@ import {
 	renderMaestroPrSection,
 	updateMaestroPrBody,
 } from "../packages/modes/src/pr-provenance.js";
-import {
-	HudComponent,
-	type HudSnapshot,
-} from "../packages/modes/src/runtime/hud.js";
 import { UsageCheckpointStore } from "../packages/modes/src/usage-checkpoints.js";
 import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 import type { WorkflowAnalyticsLedger } from "../packages/modes/src/workflow-analytics.js";
+import { HudComponent, type HudSnapshot } from "../packages/ui/src/hud.js";
 import {
 	runScenario,
 	type ScenarioResult,

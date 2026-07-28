@@ -10,14 +10,14 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CustomEditor } from "@earendil-works/pi-coding-agent";
 import { openAnswerMode } from "@vegardx/pi-ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HudFocusState } from "../packages/modes/src/runtime/hud.js";
+import type { HudFocusState } from "../packages/ui/src/hud.js";
 import {
 	composeTabBar,
 	type HudPanelPort,
 	type HudTabCounts,
 	hudTabCounts,
 	MaestroEditor,
-} from "../packages/modes/src/runtime/maestro-editor.js";
+} from "../packages/ui/src/maestro-editor.js";
 
 const W = 72;
 

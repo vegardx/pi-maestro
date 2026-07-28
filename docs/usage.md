@@ -113,7 +113,6 @@ Generated PR evidence is marker-bounded: user text outside Maestro markers is pr
 ```bash
 npm test
 npm run typecheck
-npm run boundaries
 npm run docs
 npm run check
 ```

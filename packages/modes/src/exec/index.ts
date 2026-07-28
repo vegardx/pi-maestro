@@ -18,7 +18,7 @@ import type { NodeExecutor } from "../plan/node-executor.js";
 import type { PendingQuestion } from "../question-queue.js";
 
 // The v1 event vocabulary lives on the v2 adapter now (verbatim shape).
-export type { ExecutionEvent } from "../plan/node-adapter.js";
+// ExecutionEvent now lives in @vegardx/pi-contracts (events.ts).
 export {
 	type ParsedVerdict,
 	parseVerdict,

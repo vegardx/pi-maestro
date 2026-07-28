@@ -13,9 +13,9 @@ import {
 	createControllerEnvironment,
 	createStrongGuestEnvironment,
 	ownedContainerNames,
-} from "../packages/modes/src/isolation/apple-container.js";
-import { IsolationUnavailableError } from "../packages/modes/src/isolation/backend.js";
-import { ResearchWorkspaceManager } from "../packages/modes/src/isolation/workspace.js";
+} from "../packages/maestro/src/isolation/apple-container.js";
+import { IsolationUnavailableError } from "../packages/maestro/src/isolation/backend.js";
+import { ResearchWorkspaceManager } from "../packages/maestro/src/isolation/workspace.js";
 
 class FakeContainerRunner implements AppleContainerCommandRunner {
 	readonly calls: Array<{

@@ -21,6 +21,38 @@ export {
 	type ExecutionPolicySettings,
 	readExecutionPolicySettings,
 } from "@vegardx/pi-maestro/execution-policy";
+export {
+	APPLE_CONTAINER_OWNER_LABEL,
+	APPLE_CONTAINER_RESEARCH_IMAGE,
+	type AppleContainerCommandOptions,
+	type AppleContainerCommandResult,
+	type AppleContainerCommandRunner,
+	type AppleContainerProbe,
+	AppleContainerStrongBackend,
+	type AppleContainerStrongOptions,
+	createArgs as createAppleContainerArgs,
+	createControllerEnvironment,
+	createStrongGuestEnvironment,
+	ownedContainerNames,
+	SpawnAppleContainerRunner,
+} from "@vegardx/pi-maestro/isolation/apple-container";
+export {
+	type IsolationBackend,
+	type IsolationBackendState,
+	type IsolationBackendStatus,
+	type IsolationBackendTier,
+	IsolationUnavailableError,
+	ReservedStrongIsolationBackend,
+	RetiredLightweightIsolationBackend,
+} from "@vegardx/pi-maestro/isolation/backend";
+export { createResearchEnvironment } from "@vegardx/pi-maestro/isolation/research-environment";
+export {
+	enumerateWorkspace,
+	type ResearchWorkspace,
+	ResearchWorkspaceManager,
+	type ResearchWorkspaceManagerOptions,
+	workspaceManifest,
+} from "@vegardx/pi-maestro/isolation/workspace";
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
 export {
@@ -115,38 +147,6 @@ export {
 	formatSessionUsage,
 	installFooter,
 } from "./install-footer.js";
-export {
-	APPLE_CONTAINER_OWNER_LABEL,
-	APPLE_CONTAINER_RESEARCH_IMAGE,
-	type AppleContainerCommandOptions,
-	type AppleContainerCommandResult,
-	type AppleContainerCommandRunner,
-	type AppleContainerProbe,
-	AppleContainerStrongBackend,
-	type AppleContainerStrongOptions,
-	createArgs as createAppleContainerArgs,
-	createControllerEnvironment,
-	createStrongGuestEnvironment,
-	ownedContainerNames,
-	SpawnAppleContainerRunner,
-} from "./isolation/apple-container.js";
-export {
-	type IsolationBackend,
-	type IsolationBackendState,
-	type IsolationBackendStatus,
-	type IsolationBackendTier,
-	IsolationUnavailableError,
-	ReservedStrongIsolationBackend,
-	RetiredLightweightIsolationBackend,
-} from "./isolation/backend.js";
-export { createResearchEnvironment } from "./isolation/research-environment.js";
-export {
-	enumerateWorkspace,
-	type ResearchWorkspace,
-	ResearchWorkspaceManager,
-	type ResearchWorkspaceManagerOptions,
-	workspaceManifest,
-} from "./isolation/workspace.js";
 export {
 	type OverlayComponent,
 	type OverlayId,

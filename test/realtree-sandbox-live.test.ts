@@ -9,8 +9,8 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileWriteProfile } from "../packages/modes/src/isolation/capability-grants.js";
-import { defaultSandboxWrap } from "../packages/modes/src/isolation/realtree-sandbox.js";
+import { compileWriteProfile } from "../packages/maestro/src/isolation/capability-grants.js";
+import { defaultSandboxWrap } from "../packages/maestro/src/isolation/realtree-sandbox.js";
 
 const live = process.platform === "darwin" ? describe : describe.skip;
 

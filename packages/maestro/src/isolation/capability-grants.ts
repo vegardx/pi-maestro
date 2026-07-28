@@ -11,7 +11,7 @@
 
 import { join } from "node:path";
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { BashActor } from "@vegardx/pi-maestro/bash-policy";
+import type { BashActor } from "../bash-policy.js";
 
 /**
  * Where an actor may write.

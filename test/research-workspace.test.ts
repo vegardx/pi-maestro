@@ -14,9 +14,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createResearchEnvironment } from "../packages/modes/src/isolation/research-environment.js";
-import type { ResearchWorkspace } from "../packages/modes/src/isolation/workspace.js";
-import { ResearchWorkspaceManager } from "../packages/modes/src/isolation/workspace.js";
+import { createResearchEnvironment } from "../packages/maestro/src/isolation/research-environment.js";
+import type { ResearchWorkspace } from "../packages/maestro/src/isolation/workspace.js";
+import { ResearchWorkspaceManager } from "../packages/maestro/src/isolation/workspace.js";
 
 const roots: string[] = [];
 

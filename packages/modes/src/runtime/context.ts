@@ -26,6 +26,10 @@ import {
 	gitToplevel,
 } from "@vegardx/pi-git";
 import {
+	policyRowFor,
+	readPolicyTable,
+} from "@vegardx/pi-maestro/policy-table";
+import {
 	defaultTierForAgent,
 	resolveModel,
 	resolveModels,
@@ -66,7 +70,6 @@ import {
 } from "../plan/schema.js";
 import { createPlanStore, type PlanStore } from "../plan/storage.js";
 import { computeActiveTools, orchestrationActive } from "../policy.js";
-import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import type { ResearchRunView } from "../research.js";
 import { appendModesState } from "../session.js";
 import { readChildExtensions } from "../settings.js";

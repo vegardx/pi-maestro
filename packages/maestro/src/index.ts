@@ -6,8 +6,11 @@
 // package while subsystems move across one PR at a time. At the cutover the
 // manifest entry flips here and both `modes` and `subagents` are deleted.
 //
-// Import submodules (`@vegardx/pi-maestro/execution-policy`) rather than this
-// barrel where the barrel would drag in more than the caller needs.
+// This barrel stays DELIBERATELY thin. Every consumer imports a submodule
+// (`@vegardx/pi-maestro/bash-policy`), because a fat barrel would pull the whole
+// package — and its peer deps — into callers that wanted one type. It also keeps
+// the eventual extension entry point from becoming the thing everyone imports,
+// which is where module-lifetime singletons get built.
 
 export {
 	describePolicyDeviations,

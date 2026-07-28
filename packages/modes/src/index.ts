@@ -7,6 +7,17 @@ import { defineExtension } from "@vegardx/pi-core";
 import { createModesRuntime } from "./runtime/index.js";
 
 export {
+	type BashActor,
+	type BashEffect,
+	type BashGuidance,
+	type BashPolicyDecision,
+	type BashPolicyInput,
+	type BashRoute,
+	classifyBashEffects,
+	decideBashPolicy,
+	dedicatedToolSuggestion,
+} from "@vegardx/pi-maestro/bash-policy";
+export {
 	type ExecutionPolicySettings,
 	readExecutionPolicySettings,
 } from "@vegardx/pi-maestro/execution-policy";
@@ -43,17 +54,6 @@ export {
 	type TaxonomyRepresentative,
 	taxonomyDigest,
 } from "./bash-corpus-taxonomy.js";
-export {
-	type BashActor,
-	type BashEffect,
-	type BashGuidance,
-	type BashPolicyDecision,
-	type BashPolicyInput,
-	type BashRoute,
-	classifyBashEffects,
-	decideBashPolicy,
-	dedicatedToolSuggestion,
-} from "./bash-policy.js";
 export {
 	auditBashShadowCorpus,
 	type BashShadowReport,

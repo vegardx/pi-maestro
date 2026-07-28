@@ -8,7 +8,7 @@ import {
 	buildAuditorPrompt,
 	createCommandAuditor,
 	parseAuditorVerdict,
-} from "../packages/modes/src/command-auditor.js";
+} from "../packages/maestro/src/command-auditor.js";
 
 describe("auditor prompt", () => {
 	it("carries the actor's enforced ruleset (one source of truth)", () => {

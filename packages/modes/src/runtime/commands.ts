@@ -16,6 +16,7 @@ import {
 	type ThinkingLevel,
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
+import { resolveDutyModel } from "@vegardx/pi-maestro/policy-table";
 import { getModelMeta, resolveModelForRole } from "@vegardx/pi-models";
 import { isAgentMode } from "../agent-bridge.js";
 import { createDeleteTool } from "../delete-tool.js";
@@ -28,7 +29,6 @@ import {
 } from "../exec/verify.js";
 import { writeVerificationReport } from "../exec/verify-report.js";
 import { findNode } from "../plan/schema.js";
-import { resolveDutyModel } from "../policy-table.js";
 import { plansRoot } from "../storage.js";
 import { clipReport, sendAgentEvent } from "./agent-cards.js";
 import {

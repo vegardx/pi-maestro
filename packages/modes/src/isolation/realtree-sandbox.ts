@@ -25,7 +25,7 @@ import {
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { BashActor } from "../bash-policy.js";
+import type { BashActor } from "@vegardx/pi-maestro/bash-policy";
 import {
 	compileWriteProfile,
 	type ProfilePaths,

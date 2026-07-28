@@ -89,3 +89,68 @@ export interface EventPayloads {
 }
 
 export type EventPayload<E extends EventName> = EventPayloads[E];
+
+// ─── Execution + research display vocabulary ─────────────────────────────────
+//
+// These live here rather than in the extension that emits them, because the
+// things that RENDER them must not depend on the executor. `ExecutionEvent` was
+// stranded inside a 986-line node adapter, which meant `packages/ui` could not
+// take the card renderer that consumes it. The union itself is model-agnostic —
+// it survives the plan-model rebuild untouched.
+
+export type ExecutionEvent =
+	| {
+			kind: "spawn";
+			agentKey: string;
+			session: string;
+			resumed: boolean;
+			deliverableTitle: string;
+	  }
+	| {
+			kind: "done";
+			agentKey: string;
+			deliverableTitle: string;
+			durationMs: number;
+			tokens: { input: number; output: number; turns: number };
+			prefixCacheHitRate?: number;
+			model?: string;
+			effort?: string;
+			adaptive?: boolean;
+			summary?: string;
+			/** Commit subjects, when the emitter has them. */
+			commits?: string[];
+	  }
+	| {
+			kind: "blocked";
+			deliverableId: string;
+			deliverableTitle: string;
+			reason: string;
+	  }
+	| {
+			kind: "failed";
+			agentKey: string;
+			deliverableTitle: string;
+			respawns: number;
+	  }
+	| {
+			kind: "shipped";
+			deliverableId: string;
+			deliverableTitle: string;
+			prUrl?: string;
+	  }
+	| {
+			kind: "settled";
+			deliverables: {
+				id: string;
+				title: string;
+				status: string;
+				prUrl?: string;
+			}[];
+	  };
+
+export const RESEARCH_KINDS = ["codebase", "web"] as const;
+export type ResearchKind = (typeof RESEARCH_KINDS)[number];
+
+/** Kinds a run VIEW can carry — research kinds plus /verify's verifiers,
+ *  which reuse the research widget rows and chat cards. */
+export type ResearchDisplayKind = ResearchKind | "verify";

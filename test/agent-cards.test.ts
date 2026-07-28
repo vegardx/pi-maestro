@@ -7,8 +7,8 @@ import type {
 	MessageRenderer,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { ExecutionEvent } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
-import type { ExecutionEvent } from "../packages/modes/src/exec/index.js";
 import {
 	AGENT_EVENT_MESSAGE_TYPE,
 	type AgentCardEvent,

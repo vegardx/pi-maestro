@@ -28,6 +28,9 @@ import { Type } from "@sinclair/typebox";
 import {
 	type AgentsCapabilityV1,
 	type AskCapabilityV1,
+	RESEARCH_KINDS,
+	type ResearchDisplayKind,
+	type ResearchKind,
 	type RunResult,
 	type ThinkingLevel,
 	TIER_IDS,
@@ -44,13 +47,6 @@ import type { ResearchWatchdogSettings } from "./settings.js";
 import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
-
-export const RESEARCH_KINDS = ["codebase", "web"] as const;
-export type ResearchKind = (typeof RESEARCH_KINDS)[number];
-
-/** Kinds a run VIEW can carry — research kinds plus /verify's verifiers,
- *  which reuse the research widget rows and chat cards. */
-export type ResearchDisplayKind = ResearchKind | "verify";
 
 /** Live view of one research run — feeds the agent table and cards. */
 export interface ResearchRunView {

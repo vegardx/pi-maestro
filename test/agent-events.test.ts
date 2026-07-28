@@ -6,11 +6,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExecutionEvent } from "@vegardx/pi-contracts";
 import { type MaestroMessage, MaestroRpcClient } from "@vegardx/pi-rpc";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import {
-	type ExecutionEvent,
 	type LauncherApi,
 	NodeExecutionAdapter,
 } from "../packages/modes/src/plan/node-adapter.js";

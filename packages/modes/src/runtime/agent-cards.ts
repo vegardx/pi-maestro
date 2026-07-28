@@ -16,8 +16,10 @@ import type {
 	ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import type { ExecutionEvent } from "../exec/index.js";
-import type { ResearchDisplayKind } from "../research.js";
+import type {
+	ExecutionEvent,
+	ResearchDisplayKind,
+} from "@vegardx/pi-contracts";
 
 export const AGENT_EVENT_MESSAGE_TYPE = "maestro.agent.event";
 

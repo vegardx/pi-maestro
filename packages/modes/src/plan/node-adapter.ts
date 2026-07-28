@@ -21,6 +21,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type {
 	ContractId,
+	ExecutionEvent,
 	NodeResolution,
 	TokenSnapshot,
 } from "@vegardx/pi-contracts";
@@ -66,56 +67,6 @@ export interface LauncherApi {
  * (risk R1: same event names, same fields; `agentKey`/`deliverableId` carry
  * node ids post-flip). The v1 adapter's copy dies with it in PR-8.
  */
-export type ExecutionEvent =
-	| {
-			kind: "spawn";
-			agentKey: string;
-			session: string;
-			resumed: boolean;
-			deliverableTitle: string;
-	  }
-	| {
-			kind: "done";
-			agentKey: string;
-			deliverableTitle: string;
-			durationMs: number;
-			tokens: { input: number; output: number; turns: number };
-			prefixCacheHitRate?: number;
-			model?: string;
-			effort?: string;
-			adaptive?: boolean;
-			summary?: string;
-			/** Commit subjects, when the emitter has them. */
-			commits?: string[];
-	  }
-	| {
-			kind: "blocked";
-			deliverableId: string;
-			deliverableTitle: string;
-			reason: string;
-	  }
-	| {
-			kind: "failed";
-			agentKey: string;
-			deliverableTitle: string;
-			respawns: number;
-	  }
-	| {
-			kind: "shipped";
-			deliverableId: string;
-			deliverableTitle: string;
-			prUrl?: string;
-	  }
-	| {
-			kind: "settled";
-			deliverables: {
-				id: string;
-				title: string;
-				status: string;
-				prUrl?: string;
-			}[];
-	  };
-
 /** Cumulative per-agent state pushed to the usage ledger (v1 seam shape). */
 export interface AgentStateSnapshot {
 	readonly status: string;

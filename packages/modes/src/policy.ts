@@ -156,19 +156,6 @@ export function computeActiveTools(input: ToolPolicyInput): string[] {
 	return withEpisode(input.availableTools.filter((name) => allowed.has(name)));
 }
 
-export interface BashClassification {
-	readonly readOnly: boolean;
-	readonly reason?: string;
-}
-
-/** @deprecated Use decideBashPolicy from bash-policy.ts. */
-export function classifyBash(command: string): BashClassification {
-	return {
-		readOnly: false,
-		reason: `legacy classifier retired; classify the complete command (${command.trim().slice(0, 20) || "empty"}) with decideBashPolicy`,
-	};
-}
-
 /**
  * Call-time gate for recon mode (the belt to computeActiveTools' braces —
  * some clients cache tool lists across a mode switch).

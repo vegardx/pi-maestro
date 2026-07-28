@@ -255,21 +255,3 @@ function parseClassifierOutput(stdout: string): BashIntent {
 		intent: parsed.intent ?? undefined,
 	};
 }
-
-// ─── Combined classifier ───────────────────────────────────────────────────
-
-/**
- * Classify a bash command: fast path first, LLM fallback for ambiguous cases.
- * Returns the intent with allowed/blocked status and optional tool suggestion.
- */
-export async function classifyBashIntent(
-	command: string,
-	opts?: { model?: string; cwd?: string; spawnFn?: SpawnFn },
-): Promise<BashIntent> {
-	// Fast path — no LLM needed
-	const fast = classifyBashFast(command);
-	if (fast !== null) return fast;
-
-	// Ambiguous — ask the LLM
-	return classifyBashWithLLM(command, opts);
-}

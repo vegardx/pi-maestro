@@ -103,11 +103,7 @@ export {
 	type ExecutionHandle,
 } from "./exec/index.js";
 export { composeFooterLine, type FooterRightCandidate } from "./footer.js";
-export {
-	buildForwardSummaryPrompt,
-	buildPlanAwareCompactionMarker,
-	type ForwardSummaryInput,
-} from "./forward-summary.js";
+export { buildPlanAwareCompactionMarker } from "./forward-summary.js";
 export {
 	type FooterDeps,
 	formatCacheHitRate,

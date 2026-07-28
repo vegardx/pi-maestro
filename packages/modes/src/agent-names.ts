@@ -139,13 +139,3 @@ function shuffle<T>(arr: T[]): T[] {
 	}
 	return arr;
 }
-
-/** Strip common verb prefixes for a short deliverable display name. */
-export function shortDeliverableName(title: string): string {
-	return title
-		.replace(
-			/^(implement|add|fix|build|create|set up|write|update|enable)\s+/i,
-			"",
-		)
-		.trim();
-}

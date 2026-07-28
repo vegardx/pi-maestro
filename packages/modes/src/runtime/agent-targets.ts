@@ -154,26 +154,6 @@ export function listAgentTargets(input: {
 	return targets;
 }
 
-export async function captureAgentTarget(
-	target: AgentTarget,
-	execution: ExecutionHandle | undefined,
-	subagents: SubagentsCapabilityV1 | undefined,
-	lines = 200,
-): Promise<string | undefined> {
-	if (target.kind === "worker") {
-		const [deliverableId, name] = target.id.slice("worker:".length).split("/");
-		return deliverableId
-			? execution?.capture?.(deliverableId, name, lines)
-			: undefined;
-	}
-	if (target.kind !== "run") return undefined;
-	const runId = target.id.slice("run:".length) as never;
-	const local = subagents?.list().find((run) => run.id === runId);
-	return local
-		? subagents?.capture?.(local.id, lines)
-		: execution?.captureProjectedRun?.(runId, lines);
-}
-
 export async function stopAgentTarget(
 	target: AgentTarget,
 	execution: ExecutionHandle | undefined,

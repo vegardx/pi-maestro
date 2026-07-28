@@ -10,7 +10,6 @@ import type {
 	ContractEnvelope,
 	ContractId,
 	ContractResult,
-	ExtractionTier,
 	NodeResolution,
 	TierId,
 } from "@vegardx/pi-contracts";
@@ -148,11 +147,6 @@ export async function collectContract(
 		completedAt: now(),
 		diagnostics,
 	};
-}
-
-/** Extraction-tier → severity for explain output (informational). */
-export function extractionQuality(tier: ExtractionTier): "clean" | "degraded" {
-	return tier === "block" || tier === "retry-block" ? "clean" : "degraded";
 }
 
 // ─── Spawn-time model resolution → ledger record ─────────────────────────────

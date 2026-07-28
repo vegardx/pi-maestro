@@ -20,7 +20,6 @@ import {
 	reviewAndPostDiagnosticIssue,
 } from "../debug-issue.js";
 import { createDebugIssueReviser } from "../debug-reviser.js";
-import { planFingerprint } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
 import type { RuntimeContext } from "./context.js";
 
@@ -303,8 +302,4 @@ export async function runWorkerDebugCommand(
 			: `Local debug proposal not applied: ${result.error ?? "no result"}`,
 		result.recovery?.ok ? "info" : "warning",
 	);
-}
-
-export function currentPlanFingerprint(rt: RuntimeContext): string | undefined {
-	return rt.engine ? planFingerprint(rt.engine.get()) : undefined;
 }

@@ -17,18 +17,18 @@ import {
 } from "@vegardx/pi-contracts";
 import { runCommand } from "@vegardx/pi-git";
 import { resolveDutyModel } from "@vegardx/pi-maestro/policy-table";
+import {
+	renderVerification,
+	runVerification,
+} from "@vegardx/pi-maestro/verify";
+import { writeVerificationReport } from "@vegardx/pi-maestro/verify-report";
 import { getModelMeta, resolveModelForRole } from "@vegardx/pi-models";
 import { clipReport, sendAgentEvent } from "@vegardx/pi-ui";
 import { isAgentMode } from "../agent-bridge.js";
 import { createDeleteTool } from "../delete-tool.js";
 import { buildRecap } from "../deliverable-recap.js";
 import { reconcileShippedDeliverables } from "../exec/shipper.js";
-import {
-	renderVerification,
-	runVerification,
-	verifyTargets,
-} from "../exec/verify.js";
-import { writeVerificationReport } from "../exec/verify-report.js";
+import { verifyTargetsOf } from "../plan/dependency-view.js";
 import { findNode } from "../plan/schema.js";
 import { plansRoot } from "../storage.js";
 import {
@@ -165,7 +165,7 @@ async function runDeliveryVerification(
 	}
 	const plan = rt.engine.get();
 	const id = args.trim() || undefined;
-	const targets = verifyTargets(plan, id);
+	const targets = verifyTargetsOf(plan, {}, id);
 	if (targets.length === 0) {
 		ctx.ui.notify(
 			id
@@ -195,7 +195,7 @@ async function runDeliveryVerification(
 		`Verifying ${targets.length} deliverable(s) — read-only agents are checking the actual diffs…`,
 		"info",
 	);
-	const entries = await runVerification(plan, targets, {
+	const entries = await runVerification(targets, {
 		spawn: (prompt, profile) =>
 			subagents.spawn(prompt, {
 				...profile,

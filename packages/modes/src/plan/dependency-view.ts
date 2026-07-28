@@ -10,10 +10,18 @@
 // retired concept into the new core. When the new model lands, this file is
 // replaced — not ported — and compaction is untouched.
 
+import { detectDefaultBranch } from "@vegardx/pi-git";
 import type { InventoryPlanView } from "@vegardx/pi-maestro/carry-forward";
 import type { CompactionDeliverable } from "@vegardx/pi-maestro/compaction";
+import type { VerifyTarget } from "@vegardx/pi-maestro/verify";
+import { repoForNode } from "../exec/shipper.js";
 import {
+	defaultBranchForNode,
+	deriveBase,
 	effectiveNodeTaskKind,
+	findNode,
+	gatingNodeTasks,
+	isBranchOwner,
 	PARENT_AFTER_TOKEN,
 	type Plan,
 	type PlanNode,
@@ -21,6 +29,9 @@ import {
 	TERMINAL_STATUSES,
 	walkNodes,
 } from "./schema.js";
+
+/** Statuses /verify inspects: work that has actually started. */
+const STARTED_FOR_VERIFY = new Set(["active", "complete", "shipped", "failed"]);
 
 /** The sibling group `id` schedules within (its `after` scope). */
 function siblingGroup(
@@ -119,4 +130,58 @@ export function inventoryView(plan: Plan): InventoryPlanView {
 			};
 		}),
 	};
+}
+
+/**
+ * The targets /verify inspects, with every plan-derived fact resolved here:
+ * branch ownership, the derived base, and which repo the node belongs to.
+ * Branchless nodes carry no branch/base/repo — they are scratch workspaces,
+ * inspected but never diffed.
+ */
+export function verifyTargetsOf(
+	plan: Plan,
+	deps: { defaultBranchFor?: (repoPath: string) => string | undefined },
+	id?: string,
+): VerifyTarget[] {
+	const started = (node: PlanNode) => STARTED_FOR_VERIFY.has(node.status);
+	const picked: PlanNode[] = id
+		? (() => {
+				const node = findNode(plan, id);
+				return node && started(node) ? [node] : [];
+			})()
+		: [...walkNodes(plan)].map(({ node }) => node).filter(started);
+
+	return picked.map((node) => {
+		const tasks = gatingNodeTasks(node).map((t) => ({
+			title: t.title,
+			...(t.body ? { body: t.body } : {}),
+			done: t.done,
+		}));
+		const common = {
+			id: node.id,
+			...(node.title !== undefined ? { title: node.title } : {}),
+			...(node.body !== undefined ? { body: node.body } : {}),
+			status: node.status,
+			...(node.worktreePath !== undefined
+				? { worktreePath: node.worktreePath }
+				: {}),
+			...(node.prNumber !== undefined ? { prNumber: node.prNumber } : {}),
+			tasks,
+		};
+		if (!isBranchOwner(node)) return common;
+
+		const repo = repoForNode(plan, node);
+		const defaultBranch =
+			deps.defaultBranchFor?.(repo.path) ??
+			detectDefaultBranch(repo.path) ??
+			"main";
+		const parent = parentOfNode(plan, node.id);
+		const siblings = parent ? (parent.children ?? []) : plan.nodes;
+		return {
+			...common,
+			branch: node.branch ?? defaultBranchForNode(node),
+			base: deriveBase(node, siblings, defaultBranch),
+			repoPath: repo.path,
+		};
+	});
 }

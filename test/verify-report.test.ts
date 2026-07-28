@@ -8,12 +8,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	parseStructuredFindings,
 	type VerifyEntry,
-} from "../packages/modes/src/exec/verify.js";
+} from "../packages/maestro/src/verify.js";
 import {
 	renderVerificationReport,
 	themeRollup,
 	writeVerificationReport,
-} from "../packages/modes/src/exec/verify-report.js";
+} from "../packages/maestro/src/verify-report.js";
 
 const REPORT_WITH_JSON = `Task-by-task, the parity suite is fake.
 VERDICT: block

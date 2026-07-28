@@ -6,6 +6,10 @@
 import { defineExtension } from "@vegardx/pi-core";
 import { createModesRuntime } from "./runtime/index.js";
 
+export {
+	type ExecutionPolicySettings,
+	readExecutionPolicySettings,
+} from "@vegardx/pi-maestro/execution-policy";
 export { AgentBridge, initAgentBridge, isAgentMode } from "./agent-bridge.js";
 export { ModesAskQueue } from "./ask-queue.js";
 export {
@@ -188,11 +192,7 @@ export {
 	resolveShipSummaryInput,
 	toPersistedState,
 } from "./session.js";
-export {
-	type ExecutionPolicySettings,
-	readExecutionPolicySettings,
-	readModesCompactionSettings,
-} from "./settings.js";
+export { readModesCompactionSettings } from "./settings.js";
 export {
 	buildPrBody,
 	shouldShip,

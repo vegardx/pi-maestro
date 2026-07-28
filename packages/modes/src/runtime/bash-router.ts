@@ -7,6 +7,7 @@ import {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "@earendil-works/pi-coding-agent";
+import { readExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
 import {
 	type BashActor,
 	type BashPolicyDecision,
@@ -26,7 +27,6 @@ import {
 	defaultSandboxWrap,
 } from "../isolation/realtree-sandbox.js";
 import { policyRowFor, readPolicyTable } from "../policy-table.js";
-import { readExecutionPolicySettings } from "../settings.js";
 import type { RuntimeContext } from "./context.js";
 
 export type BashOperationsFactory = (cwd: string) => BashOperations | undefined;

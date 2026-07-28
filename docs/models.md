@@ -1,96 +1,125 @@
-# Models and exact presets
+# Models
 
-Maestro resolves every assignment to one immutable model/effort pair before execution. Semantic kind says **what** the agent does; runtime policy says **how** it runs; the model preset says **which exact option** it uses.
+Maestro resolves every spawn to one exact `provider/model` and effort before the
+agent starts, and persists that choice. The plan never authors a model — it says
+what an agent is *for*, and configuration decides which model that becomes.
 
-## Unconfigured fallback
+## The vocabulary
 
-With no applicable preset/model-set binding, a role has exactly one built-in option:
+Four layers, each answering one question.
 
-```text
-presetId=session · modelSetId=session · optionId=session
-model=<current /model selection> · effort=medium
-```
+| Layer | Question | Shape |
+|---|---|---|
+| **Families** → **aliases** → **attachments** | Which concrete models exist, grouped by who made them | `families.<Family>.aliases.<Alias>.attach: ["provider/model", …]` |
+| **Rosters** → **tiers** | Which aliases are preferred, in order, at each weight | `rosters.<name>.<light\|standard\|heavy>: ["Family/Alias", …]` |
+| **Bindings** | Which roster a given session seat uses | `bindings.<name>: { roster, targets? }` |
+| **Allowances** | Which tiers an agent type may request, and how wide it may fan out | `allowances.<agent>: { tiers, spread? }` |
 
-No live session model means resolution fails. This fallback keeps a fresh install usable; it is not appended to a configured set.
+**Family** is the diversity axis. Two aliases of the same family are not a second
+opinion, which is why a multi-model review picks one slot *per distinct family*.
 
-## Configuration
+An **alias** is a stable name for "the model I mean", and its `attach` list is
+ordered: the same alias can be reachable through several providers, and
+resolution prefers the one matching the resolving agent's own gateway before
+falling back to authored order. That is what lets a plan move between gateways
+without rewriting anything.
 
-Global and project settings use `models.modelSets` and `models.presets`:
+**Tiers** are fixed and mean weight, not vendor: `light`, `standard`, `heavy`.
+
+## Example
 
 ```json
 {
   "models": {
-    "modelSets": {
-      "workers": {
-        "options": [
-          {
-            "id": "primary",
-            "model": "anthropic/claude-sonnet-4-5",
-            "effort": "high",
-            "summary": "Primary implementation model"
+    "families": {
+      "OpenAI": {
+        "aliases": {
+          "GPT 5.6 Sol": {
+            "attach": ["sit-openai/gpt-5.6-sol"],
+            "effort": "medium",
+            "notes": "Strongest implementer — the worker and utility seat."
           }
-        ]
+        }
       },
-      "reviews": {
-        "options": [
-          {
-            "id": "deep",
-            "model": "openai/gpt-5.5",
-            "effort": "high",
-            "summary": "Independent review"
+      "Anthropic": {
+        "aliases": {
+          "Opus 4.8": {
+            "attach": ["sit-anthropic/claude-opus-4-8"],
+            "effort": "medium",
+            "notes": "Careful judge — reviews a different family's work."
           }
-        ]
+        }
       }
     },
-    "presets": {
-      "release": {
-        "targets": ["anthropic/claude-sonnet-4-5"],
-        "modelSets": {
-          "worker": "workers",
-          "plan-review": "reviews",
-          "correctness-review": "reviews",
-          "security-review": "reviews",
-          "verifier": "reviews"
-        }
+    "rosters": {
+      "default": {
+        "light": ["OpenAI/GPT 5.6 Sol"],
+        "standard": ["OpenAI/GPT 5.6 Sol"],
+        "heavy": ["Anthropic/Opus 4.8", "OpenAI/GPT 5.6 Sol"]
+      }
+    },
+    "bindings": { "default": { "roster": "default" } },
+    "allowances": {
+      "worker": { "tiers": ["standard", "heavy"] },
+      "explorer": { "tiers": ["light", "standard"] },
+      "reviewer": { "tiers": ["heavy", "standard"], "spread": 3 },
+      "advisor": { "tiers": ["heavy", "standard"], "spread": 2 }
+    },
+    "region": {
+      "active": "EEA",
+      "lists": {
+        "EEA": ["sit-anthropic/claude-opus-4-8", "sit-openai/gpt-5.6-sol"]
       }
     }
   }
 }
 ```
 
-The current `/model` id activates the unique preset whose `targets` contains it. Target overlap is invalid. Global and project presets layer by preset id; project targets replace global targets when present, and model-set role bindings override individually. Model sets are replaced by id.
+A binding with no `targets` is the default for any seat. A binding *with*
+`targets` claims specific session models by exact id.
 
-An option is one exact `provider/model` (or the `session` sentinel), one effort, stable option id, and human summary. Order is policy: the first registered, authenticated, effort-compatible option is the default. Candidate facts expose registry, authentication, supported-effort, availability, and rejection reason.
+## How a spawn resolves
 
-## Persistence and no substitution
+1. **No tier requested** → inherit the caller's model. Root spawns inherit the
+   session seat, so an unconfigured install still works.
+2. **Tier requested** → walk the active binding's roster for that tier in
+   authored order, bounded by the agent's allowance. Each `Family/Alias` ref
+   resolves to a concrete attachment; the first ref yielding an *available* one
+   wins.
+3. **Nothing available** → fall back to the session model, recording a
+   `fallbackReason`. Resolution degrades; it never hard-fails.
 
-`workflow` resolves assignments while planning and persists:
+**Region is the only hard filter**, applied before any of the above reasoning:
+a model outside the active list is struck from candidacy entirely, so it cannot
+be selected by any path.
 
-- `presetId`, `modelSetId`, `optionId`;
-- concrete `modelId` and effort;
-- source (`preset`, `explicit`, or `session`) and timestamp;
-- semantic kind, runtime policy, focus/rationale, and contracts.
+Every resolution is persisted on the node with its family, alias, tier, binding,
+roster, and the candidate facts behind it — including why each rejected
+candidate was rejected.
 
-At spawn/resume, Maestro validates that exact assignment against the active preset, authored option, registry, authentication, and supported effort. If any part changed or became unavailable, execution fails visibly. It never falls through to a different option.
+## Fanning out across families
 
-Duplicate semantic kinds are allowed: two correctness reviewers, for example, have unique assignment ids and may select independent exact models. Duplicate assertions later merge into one canonical finding while preserving provenance.
+A review authored as multi-modal resolves **N distinct families**, where N is the
+agent allowance's `spread` (capped by `MAX_SPREAD`). The plan says only *that*
+it wants breadth — never a model, never a count.
 
-## Roles
-
-Stable model policy keys include worker, classifier, plan/compact summarizer, verifier, general, codebase/web research, plan review, and practical/adversarial/correctness/security/test/simplification review. A preset may bind any subset; an unbound role uses the session fallback described above.
+Resolution returns one slot per distinct family and **returns fewer rather than
+padding**: five requested against a two-family tier yields two slots, and if
+everything is struck it yields a single seat fallback, not five copies of it.
 
 ## Inspect and edit
 
 ```text
-/maestro show
-/maestro explain security-review
-/maestro get models.presets.release.targets
-/maestro set --project models.modelSets.reviews {"options":[...]}
-/maestro set --project models.presets.release.modelSets {"security-review":"reviews"}
-/maestro reset --project models.presets.release.modelSets
-/maestro validate
+/maestro                                    # interactive editor
+/maestro get models.rosters.default
+/maestro set --project models.rosters.default.heavy ["Anthropic/Opus 4.8"]
+/maestro set --project models.allowances.reviewer {"tiers":["heavy"],"spread":3}
+/maestro reset --project models.region
 ```
 
-`explain` reports the active preset/set, candidates, and exact selected option. Domain edits are JSON and are validated before atomic settings replacement. The pre-cutover `models.profiles` format and broad role-pool configuration are unsupported; load fails with a cutover error rather than translating them. (`models.profiles` is reclaimed by v2 as the seat→catalog profile binding.)
+Domain edits are JSON, validated before an atomic settings replacement. Global
+and project layers merge per key.
 
-Interactive editing of these v1 keys is retired: the `/maestro` menu edits the v2 vocabulary (`models.catalogs`, `models.profiles`, `models.agents`, `modes.policies`, residency) and the v1→v2 migration derives catalogs/profiles from presets/model-sets automatically. The v1 keys stay scriptable here because fallback resolution still reads them.
+`models.presets` and `models.modelSets` were the v1 surface and are **rejected**,
+not silently accepted — they were validated and written long after the resolver
+stopped reading them, so a write appeared to succeed and did nothing.

@@ -1,3 +1,4 @@
+import type { ExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
 import type { BashCorpusCall, CorpusActor, CorpusMode } from "./bash-corpus.js";
 import {
 	type BashActor,
@@ -9,7 +10,6 @@ import type {
 	ShadowPolicyDecision,
 	ShadowReplayInput,
 } from "./bash-shadow-replay.js";
-import type { ExecutionPolicySettings } from "./settings.js";
 
 export interface BashShadowReport {
 	readonly total: number;

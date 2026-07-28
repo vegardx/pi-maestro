@@ -1,0 +1,20 @@
+{
+	"name": "@vegardx/pi-maestro",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "The maestro system: plan model, agent model, and execution. Not in the extension manifest until the cutover.",
+	"license": "MIT",
+	"main": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts",
+		"./*": "./src/*.ts"
+	},
+	"dependencies": {
+		"@vegardx/pi-contracts": "*",
+		"@vegardx/pi-settings": "*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}

@@ -15,6 +15,7 @@
 		"@vegardx/pi-core": "*",
 		"@vegardx/pi-git": "*",
 		"@vegardx/pi-github": "*",
+		"@vegardx/pi-maestro": "*",
 		"@vegardx/pi-models": "*",
 		"@vegardx/pi-rpc": "*",
 		"@vegardx/pi-settings": "*"

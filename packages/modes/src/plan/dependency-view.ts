@@ -10,13 +10,16 @@
 // retired concept into the new core. When the new model lands, this file is
 // replaced — not ported — and compaction is untouched.
 
+import type { InventoryPlanView } from "@vegardx/pi-maestro/carry-forward";
 import type { CompactionDeliverable } from "@vegardx/pi-maestro/compaction";
 import {
+	effectiveNodeTaskKind,
 	PARENT_AFTER_TOKEN,
 	type Plan,
 	type PlanNode,
 	parentOfNode,
 	TERMINAL_STATUSES,
+	walkNodes,
 } from "./schema.js";
 
 /** The sibling group `id` schedules within (its `after` scope). */
@@ -90,4 +93,30 @@ export function dependentsOf(
 			(d) => dependents.has(d.id) && !TERMINAL_STATUSES.includes(d.status),
 		)
 		.map(view);
+}
+
+/**
+ * The plan as the carry-forward inventory renders it: flattened, with task
+ * counts already taken. Which task kinds gate completion is a plan-model fact,
+ * so it is answered here rather than learned downstream.
+ */
+export function inventoryView(plan: Plan): InventoryPlanView {
+	return {
+		slug: plan.slug,
+		title: plan.title,
+		...(plan.phase !== undefined ? { phase: plan.phase } : {}),
+		rows: [...walkNodes(plan)].map(({ node, depth }) => {
+			const tasks = node.tasks.filter(
+				(t) => effectiveNodeTaskKind(t) === "task",
+			);
+			return {
+				id: node.id,
+				depth,
+				status: node.status,
+				tasksDone: tasks.filter((t) => t.done).length,
+				tasksTotal: tasks.length,
+				...(node.prUrl !== undefined ? { prUrl: node.prUrl } : {}),
+			};
+		}),
+	};
 }

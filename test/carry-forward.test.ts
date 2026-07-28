@@ -17,7 +17,8 @@ import {
 	createCarryForwardTool,
 	harvestInventory,
 	writeCarryDocument,
-} from "../packages/modes/src/carry-forward.js";
+} from "../packages/maestro/src/carry-forward.js";
+import { inventoryView } from "../packages/modes/src/plan/dependency-view.js";
 import type { Plan } from "../packages/modes/src/plan/schema.js";
 
 const NOW = "2026-07-12T12:00:00.000Z";
@@ -69,7 +70,7 @@ function planFixture(): Plan {
 describe("harvestInventory", () => {
 	it("carries plan state, gates, workers, questions, and disk refs", () => {
 		const text = harvestInventory({
-			plan: planFixture(),
+			plan: inventoryView(planFixture()),
 			mode: "auto",
 			workers: [{ agent: "auth", status: "working" }],
 			blocked: [{ id: "auth", reason: "ship gate: 1 blocking finding open" }],

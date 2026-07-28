@@ -11,7 +11,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CarryForwardController } from "../packages/modes/src/carry-forward.js";
+import { CarryForwardController } from "../packages/maestro/src/carry-forward.js";
 import {
 	beginDistill,
 	beginHandoff,

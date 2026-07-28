@@ -29,10 +29,13 @@ import {
 	type WatchRefinement,
 	type WatchStatus,
 } from "@vegardx/pi-contracts";
+import { decideBashPolicy } from "@vegardx/pi-maestro/bash-policy";
 import { readExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
+import {
+	policyRowFor,
+	readPolicyTable,
+} from "@vegardx/pi-maestro/policy-table";
 import { resolveModel, resolveModelAuth } from "@vegardx/pi-models";
-import { decideBashPolicy } from "./bash-policy.js";
-import { policyRowFor, readPolicyTable } from "./policy-table.js";
 
 const JUDGE_TIMEOUT_MS = 30_000;
 const COMPILE_TIMEOUT_MS = 60_000;

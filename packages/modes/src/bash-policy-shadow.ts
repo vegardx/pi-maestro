@@ -1,10 +1,10 @@
-import type { ExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
-import type { BashCorpusCall, CorpusActor, CorpusMode } from "./bash-corpus.js";
 import {
 	type BashActor,
 	type BashPolicyDecision,
 	decideBashPolicy,
-} from "./bash-policy.js";
+} from "@vegardx/pi-maestro/bash-policy";
+import type { ExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
+import type { BashCorpusCall, CorpusActor, CorpusMode } from "./bash-corpus.js";
 import type {
 	ShadowPolicy,
 	ShadowPolicyDecision,

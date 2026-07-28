@@ -7,16 +7,20 @@ import {
 	createBashToolDefinition,
 	createLocalBashOperations,
 } from "@earendil-works/pi-coding-agent";
-import { readExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
 import {
 	type BashActor,
 	type BashPolicyDecision,
 	decideBashPolicy,
-} from "../bash-policy.js";
+} from "@vegardx/pi-maestro/bash-policy";
 import {
 	type CommandAuditor,
 	createCommandAuditor,
-} from "../command-auditor.js";
+} from "@vegardx/pi-maestro/command-auditor";
+import { readExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
+import {
+	policyRowFor,
+	readPolicyTable,
+} from "@vegardx/pi-maestro/policy-table";
 import {
 	type IsolationBackendTier,
 	IsolationUnavailableError,
@@ -26,7 +30,6 @@ import {
 	createShadowBashOperations,
 	defaultSandboxWrap,
 } from "../isolation/realtree-sandbox.js";
-import { policyRowFor, readPolicyTable } from "../policy-table.js";
 import type { RuntimeContext } from "./context.js";
 
 export type BashOperationsFactory = (cwd: string) => BashOperations | undefined;

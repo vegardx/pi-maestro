@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_POLICY_ROWS,
 	policyRowFor,
-} from "../packages/modes/src/policy-table.js";
+} from "../packages/maestro/src/policy-table.js";
 
 describe("policy row validation", () => {
 	it("accepts the design's canonical shapes", () => {

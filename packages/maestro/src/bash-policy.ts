@@ -1,5 +1,5 @@
 import type { ModeName } from "@vegardx/pi-contracts";
-import type { ExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
+import type { ExecutionPolicySettings } from "./execution-policy.js";
 import {
 	analyzeShellProgram,
 	type ShellProgramAnalysis,

@@ -1,14 +1,15 @@
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { ExecutionPolicySettings } from "../packages/maestro/src/execution-policy.js";
-import type { BashCorpusCall } from "../packages/modes/src/bash-corpus.js";
 import {
 	BASH_RULESET,
 	classifyBashEffects,
 	decideBashPolicy,
 	dedicatedToolSuggestion,
 	renderBashRuleset,
-} from "../packages/modes/src/bash-policy.js";
+} from "../packages/maestro/src/bash-policy.js";
+import type { ExecutionPolicySettings } from "../packages/maestro/src/execution-policy.js";
+import { analyzeShellProgram } from "../packages/maestro/src/shell-program.js";
+import type { BashCorpusCall } from "../packages/modes/src/bash-corpus.js";
 import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.js";
 import {
 	authorizeBashDecision,
@@ -16,7 +17,6 @@ import {
 	isolationFailureActionForActor,
 	resolveBashOperations,
 } from "../packages/modes/src/runtime/bash-router.js";
-import { analyzeShellProgram } from "../packages/modes/src/shell-program.js";
 
 const guided: ExecutionPolicySettings = {
 	preset: "guided",

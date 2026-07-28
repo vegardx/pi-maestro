@@ -11,9 +11,9 @@ import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
+import { resolveDutyModel } from "@vegardx/pi-maestro/policy-table";
 import { resolveModelAuth, resolveModelForRole } from "@vegardx/pi-models";
 import type { SummariseFn } from "./compaction.js";
-import { resolveDutyModel } from "./policy-table.js";
 
 /** Abort the call when pi's signal fires OR our own timeout elapses. */
 function withTimeout(

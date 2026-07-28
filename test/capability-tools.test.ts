@@ -5,11 +5,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { decideBashPolicy } from "../packages/maestro/src/bash-policy.js";
 import {
 	describePolicyDeviations,
 	type ExecutionPolicySettings,
 } from "../packages/maestro/src/execution-policy.js";
-import { decideBashPolicy } from "../packages/modes/src/bash-policy.js";
 
 const guided: ExecutionPolicySettings = {
 	preset: "guided",

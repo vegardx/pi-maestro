@@ -12,7 +12,10 @@ import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PersonasCapabilityV1 } from "@vegardx/pi-contracts";
 import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
-import { type BashActor, renderBashRuleset } from "../bash-policy.js";
+import {
+	type BashActor,
+	renderBashRuleset,
+} from "@vegardx/pi-maestro/bash-policy";
 import { AGENT_OPERATIONS_BRIEF } from "../plan/agent-operations.js";
 import type { PlanEngine } from "../plan/engine.js";
 import type { NodeExecutorDeps, SpawnNodeOpts } from "../plan/node-executor.js";

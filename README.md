@@ -71,7 +71,7 @@ needs the `gh` CLI.
 
 ```bash
 npm install
-npm run check   # biome + tsc + boundaries + feature-flags + tests + smoke + docs
+npm run check   # biome + tsc + feature-flags + tests + smoke + docs
 ```
 
 `make dogfood` runs pi-maestro isolated from your normal pi config;

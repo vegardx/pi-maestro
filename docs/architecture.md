@@ -12,7 +12,11 @@ Dependencies cross package boundaries through:
 - typed `maestro.*` events; and
 - the exhaustive Maestro RPC protocol.
 
-`scripts/check-boundaries.mjs` prevents extension implementation imports. `packages/contracts` remains dependency-light.
+These are the channels to prefer, not a rule a linter enforces — extensions may import
+each other directly where that is genuinely simpler. One hazard is worth knowing: an
+extension's `index.ts` builds module-lifetime singletons (`packages/subagents/src/index.ts`
+constructs a run bus, a semaphore and an RPC client at top level), so import a submodule
+rather than an entry point. `packages/contracts` remains dependency-light.
 
 ## Authoritative state
 

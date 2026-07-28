@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TokenSnapshot, UsageSource } from "@vegardx/pi-contracts";
-import { UsageLedger } from "../../packages/modes/src/usage-ledger.js";
+import { UsageLedger } from "../../packages/maestro/src/usage-ledger.js";
 
 export interface ScenarioEvent {
 	readonly sequence: number;

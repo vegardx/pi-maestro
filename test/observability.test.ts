@@ -259,7 +259,7 @@ describe("node execution adapter observability", () => {
 describe("UsageLedger snapshot normalization", () => {
 	it("partial snapshots (spawn-time {input,output,turns}) never poison totals into NaN", async () => {
 		const { UsageLedger } = await import(
-			"../packages/modes/src/usage-ledger.js"
+			"../packages/maestro/src/usage-ledger.js"
 		);
 		const ledger = new UsageLedger();
 		// The execution adapter reports exactly this shape at spawn — the
@@ -278,7 +278,7 @@ describe("UsageLedger snapshot normalization", () => {
 
 	it("computes totalTokens when the partial omits it", async () => {
 		const { UsageLedger } = await import(
-			"../packages/modes/src/usage-ledger.js"
+			"../packages/maestro/src/usage-ledger.js"
 		);
 		const ledger = new UsageLedger();
 		ledger.record({ kind: "agent", id: "g/worker" }, {

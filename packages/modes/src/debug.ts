@@ -143,7 +143,7 @@ export interface DebugEpisode {
 	selectedRecoveryId?: string;
 	attemptedAt?: string;
 	result?: DebugOperationResult;
-	issueReview?: import("./debug-issue.js").DebugIssueReviewState;
+	issueReview?: import("@vegardx/pi-maestro/debug-issue").DebugIssueReviewState;
 }
 
 export interface DebugSnapshotInput {
@@ -561,13 +561,13 @@ export class DebugController {
 		this.store?.save(this.episode);
 	}
 	getIssueReview():
-		| import("./debug-issue.js").DebugIssueReviewState
+		| import("@vegardx/pi-maestro/debug-issue").DebugIssueReviewState
 		| undefined {
 		return this.episode?.issueReview;
 	}
 	startIssueReview(
-		draft: import("./debug-issue.js").DiagnosticIssueDraft,
-	): import("./debug-issue.js").DebugIssueReviewState {
+		draft: import("@vegardx/pi-maestro/debug-issue").DiagnosticIssueDraft,
+	): import("@vegardx/pi-maestro/debug-issue").DebugIssueReviewState {
 		if (!this.episode) throw new Error("no active debug episode");
 		if (!this.episode.result)
 			throw new Error("debug recovery must finish before issue review");
@@ -578,10 +578,10 @@ export class DebugController {
 		return this.episode.issueReview;
 	}
 	recordIssueRevision(
-		draft: import("./debug-issue.js").DiagnosticIssueDraft,
+		draft: import("@vegardx/pi-maestro/debug-issue").DiagnosticIssueDraft,
 		instruction: string,
 		at: string,
-	): import("./debug-issue.js").DebugIssueReviewState {
+	): import("@vegardx/pi-maestro/debug-issue").DebugIssueReviewState {
 		if (!this.episode?.issueReview)
 			throw new Error("no active debug issue review");
 		const current = this.episode.issueReview;

@@ -23,8 +23,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { AskCapabilityV1 } from "@vegardx/pi-contracts";
+import { renderCollapsedResult } from "@vegardx/pi-ui";
 import { effectiveNodeTaskKind, type Plan, walkNodes } from "./plan/schema.js";
-import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Episode state ───────────────────────────────────────────────────────────
 

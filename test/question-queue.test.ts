@@ -1,6 +1,6 @@
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { QuestionQueue } from "../packages/modes/src/question-queue.js";
+import { QuestionQueue } from "../packages/maestro/src/question-queue.js";
 
 const q: Questionnaire = [{ id: "a", question: "?" }];
 

@@ -1,6 +1,9 @@
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
-import { accumulate, UsageLedger } from "../packages/modes/src/usage-ledger.js";
+import {
+	accumulate,
+	UsageLedger,
+} from "../packages/maestro/src/usage-ledger.js";
 
 describe("usage ledger", () => {
 	it("accumulates per-response usage into a cumulative snapshot", () => {

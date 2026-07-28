@@ -4,6 +4,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { createIssue } from "@vegardx/pi-github";
+import {
+	buildDiagnosticIssueDraft,
+	type DebugIssueEvidence,
+	reviewAndPostDiagnosticIssue,
+} from "@vegardx/pi-maestro/debug-issue";
+import { createDebugIssueReviser } from "@vegardx/pi-maestro/debug-reviser";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
 import {
 	askAndExecuteDebugRecovery,
@@ -14,12 +20,6 @@ import {
 	diagnoseDebugSnapshot,
 	validateWorkerDebugProposal,
 } from "../debug.js";
-import {
-	buildDiagnosticIssueDraft,
-	type DebugIssueEvidence,
-	reviewAndPostDiagnosticIssue,
-} from "../debug-issue.js";
-import { createDebugIssueReviser } from "../debug-reviser.js";
 import { plansRoot } from "../storage.js";
 import type { RuntimeContext } from "./context.js";
 

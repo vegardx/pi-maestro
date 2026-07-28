@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { UsageLedger } from "../packages/maestro/src/usage-ledger.js";
 import { UsageCheckpointStore } from "../packages/modes/src/usage-checkpoints.js";
-import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 
 const dirs: string[] = [];
 const checkpoint = (revision: number, input: number) => ({

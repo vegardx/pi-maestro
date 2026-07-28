@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { UsageLedger } from "../packages/maestro/src/usage-ledger.js";
 import {
 	formatCacheHitRate,
 	formatContextUsage,
 	formatSessionUsage,
 } from "../packages/modes/src/install-footer.js";
-import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 import { composeFooterLine } from "../packages/ui/src/footer.js";
 
 describe("composeFooterLine", () => {

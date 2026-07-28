@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { type UsageCheckpoint, usageSourceKey } from "@vegardx/pi-contracts";
-import { normalizeSnapshot } from "./usage-ledger.js";
+import { normalizeSnapshot } from "@vegardx/pi-maestro/usage-ledger";
 
 export const USAGE_CHECKPOINT_SCHEMA_VERSION = 1 as const;
 

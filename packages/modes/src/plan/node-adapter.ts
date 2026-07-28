@@ -27,10 +27,10 @@ import type {
 } from "@vegardx/pi-contracts";
 import { diversityRecordFor } from "@vegardx/pi-contracts";
 import { workingTreeClean, worktreeBaseSha } from "@vegardx/pi-git";
+import { QuestionQueue } from "@vegardx/pi-maestro/question-queue";
 import { MaestroRpcServer, type PlanMutateMessage } from "@vegardx/pi-rpc";
 import { provisionBranchWorktree } from "../exec/provisioner.js";
 import { createRpcRouter, type RpcRouter } from "../exec/rpc-router.js";
-import { QuestionQueue } from "../question-queue.js";
 import type { PlanEngine } from "./engine.js";
 import { isLiveAgentStatus } from "./live-agents.js";
 import {

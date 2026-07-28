@@ -10,8 +10,8 @@ import type {
 import type { TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { UsageLedger } from "../packages/maestro/src/usage-ledger.js";
 import { installFooter } from "../packages/modes/src/install-footer.js";
-import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 
 function installedFooter(identity?: {
 	alias?: string;

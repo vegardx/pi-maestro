@@ -20,6 +20,7 @@ import {
 	type WatchRecord,
 } from "@vegardx/pi-contracts";
 import { uiTrace } from "@vegardx/pi-core";
+import type { PendingQuestion } from "@vegardx/pi-maestro/question-queue";
 import {
 	type HudAgentCapabilities,
 	type HudAgentLeaf,
@@ -39,7 +40,6 @@ import {
 } from "@vegardx/pi-ui";
 import type { ExecutionAgentSnapshot } from "../exec/index.js";
 import { findNode } from "../plan/schema.js";
-import type { PendingQuestion } from "../question-queue.js";
 import { handleViewCommand } from "./agent-commands.js";
 import { clipWatchGoal, listAgentTargets } from "./agent-targets.js";
 import type { RuntimeContext } from "./context.js";

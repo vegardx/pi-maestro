@@ -8,8 +8,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { ModeName } from "@vegardx/pi-contracts";
+import type { UsageLedger } from "@vegardx/pi-maestro/usage-ledger";
 import { composeFooterLine, type FooterRightCandidate } from "@vegardx/pi-ui";
-import type { UsageLedger } from "./usage-ledger.js";
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 

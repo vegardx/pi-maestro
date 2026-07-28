@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Answers, RunId, RunRecord } from "@vegardx/pi-contracts";
+import type { PendingQuestion } from "@vegardx/pi-maestro/question-queue";
 import type { DebugProposalMessage, DebugResultMessage } from "@vegardx/pi-rpc";
 import type { PlanEngine } from "../plan/engine.js";
 import {
@@ -15,7 +16,6 @@ import {
 	NodeExecutionAdapter,
 } from "../plan/node-adapter.js";
 import type { NodeExecutor } from "../plan/node-executor.js";
-import type { PendingQuestion } from "../question-queue.js";
 
 // The v1 event vocabulary lives on the v2 adapter now (verbatim shape).
 // ExecutionEvent now lives in @vegardx/pi-contracts (events.ts).

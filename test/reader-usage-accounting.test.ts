@@ -10,7 +10,7 @@
 
 import type { UsageSource } from "@vegardx/pi-contracts";
 import { describe, expect, it } from "vitest";
-import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
+import { UsageLedger } from "../packages/maestro/src/usage-ledger.js";
 
 const runSource = (id: string, ownerId?: string): UsageSource => ({
 	kind: "run",

@@ -36,6 +36,7 @@ import {
 	TIER_IDS,
 } from "@vegardx/pi-contracts";
 import { getModelMeta } from "@vegardx/pi-models";
+import { renderCollapsedResult } from "@vegardx/pi-ui";
 import type { PlanEngine } from "./plan/engine.js";
 import {
 	PARENT_AFTER_TOKEN,
@@ -44,7 +45,6 @@ import {
 	walkNodes,
 } from "./plan/schema.js";
 import type { ResearchWatchdogSettings } from "./settings.js";
-import { renderCollapsedResult } from "./tool-render.js";
 
 // ─── Public types ────────────────────────────────────────────────────────────
 

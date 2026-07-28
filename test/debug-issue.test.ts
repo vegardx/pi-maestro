@@ -9,7 +9,7 @@ import {
 	renderIssueReviewQuestions,
 	reviewAndPostDiagnosticIssue,
 	validateDiagnosticIssueDraft,
-} from "../packages/modes/src/debug-issue.js";
+} from "../packages/maestro/src/debug-issue.js";
 
 function evidence(ok = true): DebugIssueEvidence {
 	return {

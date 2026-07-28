@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { ChildRunProjection, RunId } from "@vegardx/pi-contracts";
 import { canonicalTokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { UsageLedger } from "../packages/maestro/src/usage-ledger.js";
 import { ChildProjectionStore } from "../packages/modes/src/exec/child-projections.js";
 import { PlanEngine } from "../packages/modes/src/plan/engine.js";
 import type { Plan, PlanNode } from "../packages/modes/src/plan/schema.js";
@@ -18,7 +19,6 @@ import {
 	updateMaestroPrBody,
 } from "../packages/modes/src/pr-provenance.js";
 import { UsageCheckpointStore } from "../packages/modes/src/usage-checkpoints.js";
-import { UsageLedger } from "../packages/modes/src/usage-ledger.js";
 import type { WorkflowAnalyticsLedger } from "../packages/modes/src/workflow-analytics.js";
 import { HudComponent, type HudSnapshot } from "../packages/ui/src/hud.js";
 import {

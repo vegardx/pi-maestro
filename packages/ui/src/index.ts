@@ -129,3 +129,4 @@ export {
 	type RunDashboardRow,
 	renderRunDashboard,
 } from "./run-dashboard.js";
+export { renderCollapsedResult } from "./tool-render.js";

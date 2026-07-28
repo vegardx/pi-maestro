@@ -6,8 +6,8 @@ import {
 	APPLE_CONTAINER_RESEARCH_IMAGE,
 	AppleContainerStrongBackend,
 	SpawnAppleContainerRunner,
-} from "../packages/modes/src/isolation/apple-container.js";
-import { ResearchWorkspaceManager } from "../packages/modes/src/isolation/workspace.js";
+} from "../packages/maestro/src/isolation/apple-container.js";
+import { ResearchWorkspaceManager } from "../packages/maestro/src/isolation/workspace.js";
 
 const enabled = process.env.PI_MAESTRO_APPLE_CONTAINER_INTEGRATION === "1";
 const suite = enabled ? describe : describe.skip;

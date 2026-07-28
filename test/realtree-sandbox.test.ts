@@ -9,7 +9,7 @@ import {
 	type GitDeps,
 	resolveProfilePaths,
 	selectProfile,
-} from "../packages/modes/src/isolation/realtree-sandbox.js";
+} from "../packages/maestro/src/isolation/realtree-sandbox.js";
 
 const git: GitDeps = {
 	toplevel: () => "/repo",

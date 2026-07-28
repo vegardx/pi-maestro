@@ -18,18 +18,18 @@ import {
 } from "@vegardx/pi-maestro/command-auditor";
 import { readExecutionPolicySettings } from "@vegardx/pi-maestro/execution-policy";
 import {
-	policyRowFor,
-	readPolicyTable,
-} from "@vegardx/pi-maestro/policy-table";
-import {
 	type IsolationBackendTier,
 	IsolationUnavailableError,
-} from "../isolation/backend.js";
+} from "@vegardx/pi-maestro/isolation/backend";
 import {
 	createEnforcingBashOperations,
 	createShadowBashOperations,
 	defaultSandboxWrap,
-} from "../isolation/realtree-sandbox.js";
+} from "@vegardx/pi-maestro/isolation/realtree-sandbox";
+import {
+	policyRowFor,
+	readPolicyTable,
+} from "@vegardx/pi-maestro/policy-table";
 import type { RuntimeContext } from "./context.js";
 
 export type BashOperationsFactory = (cwd: string) => BashOperations | undefined;

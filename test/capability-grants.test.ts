@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
 	compileWriteProfile,
 	writeScopeFor,
-} from "../packages/modes/src/isolation/capability-grants.js";
+} from "../packages/maestro/src/isolation/capability-grants.js";
 
 describe("writeScopeFor (default-deny grant table)", () => {
 	it("scopes maestro to the repo, a worker to its workspace, a reviewer to none", () => {

@@ -13,7 +13,8 @@
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-settings": "*",
-		"@vegardx/pi-models": "*"
+		"@vegardx/pi-models": "*",
+		"@anthropic-ai/sandbox-runtime": "^0.0.26"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

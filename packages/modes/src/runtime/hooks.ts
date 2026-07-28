@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { describePolicyDeviations } from "@vegardx/pi-maestro/execution-policy";
+import { resetRealTreeSandbox } from "@vegardx/pi-maestro/isolation/realtree-sandbox";
 import { readModelsConfig } from "@vegardx/pi-models";
 import { updateSettingsFile } from "@vegardx/pi-settings";
 import { initAgentBridge, isAgentMode } from "../agent-bridge.js";
@@ -19,7 +20,6 @@ import {
 	readModesCompactionDetails,
 	summaryHash,
 } from "../compaction.js";
-import { resetRealTreeSandbox } from "../isolation/realtree-sandbox.js";
 import { walkNodes } from "../plan/schema.js";
 import { toolBlockedInPlanMode, toolBlockedInReconMode } from "../policy.js";
 import { hydrateModesState } from "../session.js";

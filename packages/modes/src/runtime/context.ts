@@ -25,6 +25,11 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
+import { AppleContainerStrongBackend } from "@vegardx/pi-maestro/isolation/apple-container";
+import {
+	type IsolationBackend,
+	RetiredLightweightIsolationBackend,
+} from "@vegardx/pi-maestro/isolation/backend";
 import {
 	policyRowFor,
 	readPolicyTable,
@@ -44,11 +49,6 @@ import { createHeadlessSpawner } from "../exec/headless-spawn.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";
 import { createLiveSpawnAgent } from "../exec/live-spawn.js";
 import { shipNode as shipNodeReal } from "../exec/shipper.js";
-import { AppleContainerStrongBackend } from "../isolation/apple-container.js";
-import {
-	type IsolationBackend,
-	RetiredLightweightIsolationBackend,
-} from "../isolation/backend.js";
 import { OverlayManager } from "../overlay-manager.js";
 import { PlanEngine } from "../plan/engine.js";
 import { isLiveAgentStatus, liveAgentKeys } from "../plan/live-agents.js";

@@ -9,8 +9,8 @@ import {
 	gatherEvidence,
 	renderVerification,
 	runVerification,
-	verifyTargets,
-} from "../packages/modes/src/exec/verify.js";
+} from "../packages/maestro/src/verify.js";
+import { verifyTargetsOf } from "../packages/modes/src/plan/dependency-view.js";
 import type {
 	NodeTask,
 	Plan,
@@ -90,17 +90,17 @@ const baseDeps = {
 	}),
 };
 
-describe("verifyTargets", () => {
+describe("verifyTargetsOf", () => {
 	it("selects started nodes; planned/abandoned are skipped", () => {
 		const plan = makePlan([
 			makeNode({ id: "a", status: "planned" }),
 			makeNode({ id: "b", status: "active" }),
 			makeNode({ id: "c", status: "shipped" }),
 		]);
-		expect(verifyTargets(plan).map((g) => g.id)).toEqual(["b", "c"]);
-		expect(verifyTargets(plan, "c").map((g) => g.id)).toEqual(["c"]);
-		expect(verifyTargets(plan, "a")).toEqual([]);
-		expect(verifyTargets(plan, "nope")).toEqual([]);
+		expect(verifyTargetsOf(plan, {}).map((g) => g.id)).toEqual(["b", "c"]);
+		expect(verifyTargetsOf(plan, {}, "c").map((g) => g.id)).toEqual(["c"]);
+		expect(verifyTargetsOf(plan, {}, "a")).toEqual([]);
+		expect(verifyTargetsOf(plan, {}, "nope")).toEqual([]);
 	});
 });
 
@@ -111,7 +111,7 @@ describe("gatherEvidence", () => {
 			status: "complete",
 			branch: "feat/auth",
 		});
-		const evidence = gatherEvidence(makePlan([g]), g, {
+		const evidence = gatherEvidence(verifyTargetsOf(makePlan([g]), {})[0]!, {
 			...baseDeps,
 			runGit: gitFake({ ahead: "0", diff: "" }),
 		});
@@ -126,7 +126,7 @@ describe("gatherEvidence", () => {
 			branch: "feat/auth",
 			prNumber: 12,
 		});
-		const evidence = gatherEvidence(makePlan([g]), g, {
+		const evidence = gatherEvidence(verifyTargetsOf(makePlan([g]), {})[0]!, {
 			...baseDeps,
 			runGit: gitFake({}),
 			prDiff: () => "",
@@ -141,7 +141,7 @@ describe("gatherEvidence", () => {
 			status: "complete",
 			branch: "feat/auth",
 		});
-		const evidence = gatherEvidence(makePlan([g]), g, {
+		const evidence = gatherEvidence(verifyTargetsOf(makePlan([g]), {})[0]!, {
 			...baseDeps,
 			runGit: gitFake({ branchExists: false }),
 		});
@@ -157,7 +157,7 @@ describe("gatherEvidence", () => {
 			status: "shipped",
 			worktreePath: "/plan/workspaces/bootstrap",
 		});
-		const evidence = gatherEvidence(makePlan([g]), g, {
+		const evidence = gatherEvidence(verifyTargetsOf(makePlan([g]), {})[0]!, {
 			...baseDeps,
 			runGit: () => {
 				throw new Error("git must not be called for scratch");
@@ -180,7 +180,11 @@ describe("gatherEvidence", () => {
 			after: ["base"],
 		});
 		const seen: string[][] = [];
-		gatherEvidence(makePlan([parent, child]), child, {
+		const childTarget = verifyTargetsOf(makePlan([parent, child]), {}).find(
+			(t) => t.id === child.id,
+		);
+		if (!childTarget) throw new Error("child target missing");
+		gatherEvidence(childTarget, {
 			...baseDeps,
 			runGit: (_cwd, args) => {
 				seen.push(args);
@@ -233,7 +237,7 @@ describe("runVerification", () => {
 			branch: "feat/bad",
 		});
 		const plan = makePlan([pass, fail]);
-		const entries = await runVerification(plan, [pass, fail], {
+		const entries = await runVerification(verifyTargetsOf(plan, {}), {
 			...baseDeps,
 			runGit: gitFake({}),
 			prDiff: () => "+shipped change",
@@ -258,7 +262,7 @@ describe("runVerification", () => {
 	it("mechanical dead ends (nothing to inspect) fail without spawning", async () => {
 		const g = makeNode({ id: "gone", status: "complete", branch: "feat/gone" });
 		const plan = makePlan([g]);
-		const entries = await runVerification(plan, [g], {
+		const entries = await runVerification(verifyTargetsOf(plan, {}), {
 			...baseDeps,
 			pathExists: () => false,
 			spawn: () => {
@@ -275,7 +279,7 @@ describe("runVerification", () => {
 			status: "complete",
 			branch: "feat/auth",
 		});
-		const entries = await runVerification(makePlan([g]), [g], {
+		const entries = await runVerification(verifyTargetsOf(makePlan([g]), {}), {
 			...baseDeps,
 			runGit: gitFake({}),
 			spawn: () => ({
@@ -294,7 +298,7 @@ describe("runVerification", () => {
 			branch: "feat/auth",
 		});
 		let spawns = 0;
-		const entries = await runVerification(makePlan([g]), [g], {
+		const entries = await runVerification(verifyTargetsOf(makePlan([g]), {}), {
 			...baseDeps,
 			runGit: gitFake({}),
 			spawn: () => {
@@ -319,7 +323,7 @@ describe("runVerification", () => {
 			status: "complete",
 			branch: "feat/auth",
 		});
-		const entries = await runVerification(makePlan([g]), [g], {
+		const entries = await runVerification(verifyTargetsOf(makePlan([g]), {}), {
 			...baseDeps,
 			runGit: gitFake({}),
 			spawn: () => ({

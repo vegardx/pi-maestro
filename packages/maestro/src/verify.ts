@@ -7,38 +7,52 @@
 
 import { existsSync } from "node:fs";
 import type { RunResult, SpawnProfile } from "@vegardx/pi-contracts";
-import { detectDefaultBranch, runCommand } from "@vegardx/pi-git";
-import {
-	defaultBranchForNode,
-	deriveBase,
-	findNode,
-	gatingNodeTasks,
-	isBranchOwner,
-	type Plan,
-	type PlanNode,
-	parentOfNode,
-	walkNodes,
-} from "../plan/schema.js";
+import { runCommand } from "@vegardx/pi-git";
+
+/**
+ * One thing /verify inspects, with every plan-derived fact already resolved.
+ * Deliberately NOT PlanNode: which node owns a branch, what its base derives
+ * to, and which repo it belongs to are plan-model questions, and the plan
+ * model is what the rebuild replaces. The caller answers them.
+ */
+export interface VerifyTarget {
+	readonly id: string;
+	readonly title?: string;
+	readonly body?: string;
+	readonly status: string;
+	readonly worktreePath?: string;
+	readonly prNumber?: number;
+	/** Resolved branch name. ABSENT means branchless — a scratch workspace
+	 *  with no branch and no PR, which is inspected but never diffed. */
+	readonly branch?: string;
+	/** Resolved base branch; absent exactly when `branch` is. */
+	readonly base?: string;
+	/** Resolved repo path; absent exactly when `branch` is. */
+	readonly repoPath?: string;
+	/** Gating tasks, already filtered to the kinds that gate completion. */
+	readonly tasks: readonly {
+		readonly title: string;
+		readonly body?: string;
+		readonly done: boolean;
+	}[];
+}
+
 import {
 	parseStructuredFindings,
+	parseVerdict,
 	renderFinding,
 	type StructuredFinding,
-} from "./findings.js";
-import { repoForNode } from "./shipper.js";
-import { parseVerdict } from "./verdicts.js";
+} from "@vegardx/pi-contracts";
 
-// The structured-finding vocabulary moved to the shared findings module (the
-// panel ledger uses the same schema); re-exported here for existing callers.
+// The structured-finding vocabulary lives in contracts (the panel ledger uses
+// the same schema); re-exported here for existing callers.
 export {
 	FINDING_SEVERITIES,
 	type FindingSeverity,
 	parseStructuredFindings,
 	renderFinding,
 	type StructuredFinding,
-} from "./findings.js";
-
-/** Statuses with work on disk/remote worth verifying. */
-const STARTED = new Set(["active", "complete", "shipped"]);
+} from "@vegardx/pi-contracts";
 
 /** Diffs beyond this are clipped in the prompt (the agent can read files). */
 const DIFF_CLIP = 50_000;
@@ -129,36 +143,20 @@ function defaultPrDiff(cwd: string, number: number): string | undefined {
 	return r.ok ? r.stdout : undefined;
 }
 
-/** The nodes /verify targets: everything started, or one by id. */
-export function verifyTargets(plan: Plan, id?: string): PlanNode[] {
-	if (id) {
-		const g = findNode(plan, id);
-		return g && STARTED.has(g.status) ? [g] : [];
-	}
-	const targets: PlanNode[] = [];
-	for (const { node } of walkNodes(plan))
-		if (STARTED.has(node.status)) targets.push(node);
-	return targets;
-}
-
 /**
  * Gather mechanical evidence for one node: does the claimed work exist
  * in git/GitHub, and what is its actual diff? Problems recorded here are
  * Tier-2 findings in their own right (zero commits on a "complete" branch,
  * branch gone, workspace missing) — the agent pass builds on top of them.
  */
-export function gatherEvidence(
-	plan: Plan,
-	g: PlanNode,
-	deps: VerifyDeps,
-): Evidence {
+export function gatherEvidence(g: VerifyTarget, deps: VerifyDeps): Evidence {
 	const pathExists = deps.pathExists ?? existsSync;
 	const runGit = deps.runGit ?? defaultRunGit;
 	const prDiff = deps.prDiff ?? defaultPrDiff;
 	const facts: string[] = [];
 	const problems: string[] = [];
 
-	if (!isBranchOwner(g)) {
+	if (g.branch === undefined) {
 		const cwd =
 			g.worktreePath && pathExists(g.worktreePath) ? g.worktreePath : undefined;
 		if (cwd) facts.push(`scratch workspace: ${cwd}`);
@@ -166,22 +164,16 @@ export function gatherEvidence(
 		return { facts, problems, ...(cwd ? { cwd } : {}) };
 	}
 
-	const repo = repoForNode(plan, g);
-	if (!pathExists(repo.path)) {
-		problems.push(`repo path missing: ${repo.path}`);
+	const repoPath = g.repoPath ?? "";
+	if (!pathExists(repoPath)) {
+		problems.push(`repo path missing: ${repoPath}`);
 		return { facts, problems };
 	}
 	const cwd =
-		g.worktreePath && pathExists(g.worktreePath) ? g.worktreePath : repo.path;
-	const branch = g.branch ?? defaultBranchForNode(g);
-	const defaultBranch =
-		deps.defaultBranchFor?.(repo.path) ??
-		detectDefaultBranch(repo.path) ??
-		"main";
-	const parent = parentOfNode(plan, g.id);
-	const siblings = parent ? (parent.children ?? []) : plan.nodes;
-	const base = deriveBase(g, siblings, defaultBranch);
-	facts.push(`branch ${branch}, base ${base}`);
+		g.worktreePath && pathExists(g.worktreePath) ? g.worktreePath : repoPath;
+	facts.push(`branch ${g.branch}, base ${g.base}`);
+	const branch = g.branch;
+	const base = g.base ?? "";
 
 	// Shipped with a PR: the PR diff is authoritative — it is what actually
 	// merged, and it survives local branch deletion.
@@ -240,8 +232,8 @@ const clipDiff = (diff: string): string =>
 		: diff;
 
 /** The verifier's prompt: node contract + evidence + verdict protocol. */
-export function buildVerifyPrompt(g: PlanNode, evidence: Evidence): string {
-	const tasks = gatingNodeTasks(g)
+export function buildVerifyPrompt(g: VerifyTarget, evidence: Evidence): string {
+	const tasks = g.tasks
 		.map(
 			(t) =>
 				`- [${t.done ? "x" : " "}] ${t.title}${t.body ? ` — ${t.body}` : ""}`,
@@ -312,13 +304,12 @@ export function buildVerifyPrompt(g: PlanNode, evidence: Evidence): string {
  * skip the agent — there is nothing for it to read.
  */
 export async function runVerification(
-	plan: Plan,
-	targets: readonly PlanNode[],
+	targets: readonly VerifyTarget[],
 	deps: VerifyDeps,
 ): Promise<VerifyEntry[]> {
 	return Promise.all(
 		targets.map(async (g) => {
-			const evidence = gatherEvidence(plan, g, deps);
+			const evidence = gatherEvidence(g, deps);
 			const base = {
 				id: g.id,
 				title: g.title ?? g.id,

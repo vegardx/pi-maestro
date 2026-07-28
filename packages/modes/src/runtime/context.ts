@@ -25,6 +25,7 @@ import {
 	detectDefaultBranch,
 	gitToplevel,
 } from "@vegardx/pi-git";
+import type { PendingModesCompaction } from "@vegardx/pi-maestro/compaction";
 import { AppleContainerStrongBackend } from "@vegardx/pi-maestro/isolation/apple-container";
 import {
 	type IsolationBackend,
@@ -50,7 +51,6 @@ import { sendAgentEvent } from "@vegardx/pi-ui";
 import { type AgentBridge, isAgentMode } from "../agent-bridge.js";
 import { ModesAskQueue } from "../ask-queue.js";
 import { CarryForwardController } from "../carry-forward.js";
-import type { PendingModesCompaction } from "../compaction.js";
 import { DebugController } from "../debug.js";
 import { createHeadlessSpawner } from "../exec/headless-spawn.js";
 import { createExecution, type ExecutionHandle } from "../exec/index.js";

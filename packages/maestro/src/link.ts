@@ -17,7 +17,6 @@ import { existsSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
-import type { AgentKind } from "./agent.js";
 import {
 	type AgentMessage,
 	checkDone,
@@ -262,10 +261,10 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 
 // ─── Agent side ──────────────────────────────────────────────────────────────
 
+/** Everything an agent needs to identify itself. No kind: see `Hello`. */
 export interface AgentIdentity {
 	readonly agentId: string;
 	readonly token: string;
-	readonly kind: AgentKind;
 	readonly resumed?: boolean;
 }
 
@@ -352,7 +351,6 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 					v: PROTOCOL_VERSION,
 					agentId: identity.agentId,
 					token: identity.token,
-					kind: identity.kind,
 					pid: process.pid,
 					...(identity.resumed ? { resumed: true } : {}),
 				};

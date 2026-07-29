@@ -14,13 +14,19 @@
 // agent is still there until maestro says otherwise.
 
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
-import { AGENT_KINDS, type AgentKind } from "./agent.js";
 
 export const PROTOCOL_VERSION = 1;
 
 // ─── Agent → maestro ─────────────────────────────────────────────────────────
 
-/** First message on connect. Maestro answers `welcome` or `reject`. */
+/**
+ * First message on connect. Maestro answers `welcome` or `reject`.
+ *
+ * It carries no agent kind, because anything on this socket is a worker. A
+ * read-only agent is a call over pi's own stdio RPC and never dials anywhere,
+ * and a maestro does not dial itself. A field with one possible value is a
+ * field that reads like a decision and is not one.
+ */
 export interface Hello {
 	readonly type: "hello";
 	readonly v: number;
@@ -30,7 +36,6 @@ export interface Hello {
 	 * be able to collect each other's agents.
 	 */
 	readonly token: string;
-	readonly kind: AgentKind;
 	readonly pid: number;
 	/** Re-attaching after a maestro restart rather than starting fresh. */
 	readonly resumed?: boolean;
@@ -130,9 +135,6 @@ export function verifyHello(
 
 	if (hello.token !== expect.token)
 		return "run token mismatch — this agent belongs to another maestro";
-
-	if (!hello.kind || !AGENT_KINDS.includes(hello.kind))
-		return `unknown agent kind \`${String(hello.kind)}\``;
 
 	return null;
 }

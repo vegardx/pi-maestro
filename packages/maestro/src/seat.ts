@@ -8,6 +8,7 @@
 import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
+import { createPlanTool } from "./authoring.js";
 import { Executor, type ExecutorDeps } from "./executor.js";
 import type { Mode, ModeName } from "./mode.js";
 import { plansRoot, sessionFile, socketPath } from "./paths.js";
@@ -84,6 +85,13 @@ export function createSeat(options: SeatOptions): Seat {
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },
+		// Only the seat authors plans. A worker asked to write one would be
+		// writing work for itself, which is the shape the deliverable model
+		// exists to replace.
+		{
+			definition: createPlanTool({ store, cwd: () => process.cwd() }),
+			holders: ["maestro"],
+		},
 	]);
 
 	const personas = PersonaCatalogue.declare(BUILT_IN_PERSONAS, tools);

@@ -263,6 +263,76 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 
 // ─── Read-only agents: a call that returns ───────────────────────────────────
 
+/**
+ * pi's own tools a read-only agent keeps. OURS are not in this list — those
+ * come from the declaration, by holder.
+ *
+ * There is one of these. The old system had two that had drifted apart: one
+ * copy allowed a `plan` tool the other did not, and nothing reconciled them,
+ * so what "read-only" meant depended on which file you were standing in.
+ */
+export const READ_ONLY_BUILTINS = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"websearch",
+	"webfetch",
+] as const;
+
+export interface ReadOnlyInvocation {
+	readonly cwd: string;
+	readonly args: readonly string[];
+	readonly env: Record<string, string>;
+	readonly model?: string;
+}
+
+export interface ReadOnlyInvocationOptions {
+	/** Extension paths the child loads. Its whole non-builtin tool namespace. */
+	readonly extensions: readonly string[];
+	readonly model?: string;
+	readonly agentDir?: string;
+}
+
+/**
+ * The child pi invocation for a read-only agent. Pure, like the worker's.
+ *
+ * The env is built rather than inherited, and the important part is what it
+ * LEAVES OUT: a read-only agent gets no socket path and no run token, so it
+ * cannot dial the maestro and present itself as a worker. Its only channel is
+ * the answer it returns to whoever asked.
+ */
+export function buildReadOnlyInvocation(
+	spawn: ReadOnlySpawn,
+	options: ReadOnlyInvocationOptions,
+): ReadOnlyInvocation {
+	const args = [
+		"-ne",
+		...options.extensions.flatMap((path) => ["-e", path]),
+		"--no-session",
+		"--tools",
+		READ_ONLY_BUILTINS.join(","),
+		"--append-system-prompt",
+		spawn.brief,
+	];
+
+	const env: Record<string, string> = {
+		[DEPTH_ENV]: String((spawn.parentDepth ?? 0) + 1),
+	};
+	if (options.agentDir) env.PI_CODING_AGENT_DIR = options.agentDir;
+	if (process.env.PATH) env.PATH = process.env.PATH;
+	if (process.env.HOME) env.HOME = process.env.HOME;
+
+	return {
+		cwd: spawn.cwd,
+		args,
+		env,
+		...((spawn.model ?? options.model)
+			? { model: spawn.model ?? options.model }
+			: {}),
+	};
+}
+
 /** The slice of pi's own RpcClient a read-only run needs. */
 export interface ReadOnlySession {
 	start(): Promise<unknown>;

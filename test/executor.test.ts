@@ -170,6 +170,7 @@ function harness(
 			launch: (spawn) => {
 				launched.push(spawn);
 			},
+			settled: async () => {},
 			capture: () => "TypeError: cannot read property of undefined",
 		},
 		workspace,
@@ -358,6 +359,11 @@ describe("maestro collects, ships, records, and only then releases", () => {
 		const h = harness(plan());
 		await h.executor.start();
 		await h.channel.vanishes("worker-api");
+		// A socket closes the instant a process starts dying; its stderr and exit
+		// status arrive with the exit that follows. Reading at socket-close got an
+		// empty buffer and reported a death with no cause, which a live drive then
+		// made us diagnose by hand.
+		await new Promise((r) => setTimeout(r, 50));
 		const record = h.executor.state().deliverables.api;
 		expect(record.state).toBe("failed");
 		expect(record.failure).toContain("stopped without reporting");

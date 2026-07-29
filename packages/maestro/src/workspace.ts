@@ -8,6 +8,7 @@
 import { realpathSync } from "node:fs";
 import {
 	addWorktree,
+	currentBranch,
 	detectDefaultBranch,
 	worktreePathFor,
 } from "@vegardx/pi-git";
@@ -36,16 +37,28 @@ export function branchFor(
 	return `${prefix}${deliverable.id}`;
 }
 
+/**
+ * What deliverables branch from, or `null` if this is not a usable repository.
+ *
+ * The remote's default branch when there is a remote, and the branch that is
+ * checked out when there is not. `detectDefaultBranch` only consults
+ * remote-tracking refs — correct for what it is named, and null for a repo that
+ * has never been pushed, which is precisely the case a first local run is.
+ */
+export function resolveBase(repoPath: string): string | null {
+	return detectDefaultBranch(repoPath) ?? currentBranch(repoPath);
+}
+
 export function createWorkspace(options: WorkspaceOptions = {}): Workspace {
 	const prefix = options.branchPrefix ?? DEFAULT_BRANCH_PREFIX;
 
 	return {
 		async create(deliverable: Deliverable, repoPath: string) {
 			const branch = branchFor(deliverable, prefix);
-			const base = options.baseBranch ?? detectDefaultBranch(repoPath);
+			const base = options.baseBranch ?? resolveBase(repoPath);
 			if (!base)
 				throw new Error(
-					`cannot tell what to branch from in ${repoPath}: no origin/HEAD and no main, master, dev or develop`,
+					`cannot tell what to branch from in ${repoPath}: it has no remote default branch and nothing checked out`,
 				);
 
 			const path = worktreePathFor(repoPath, deliverable.id);

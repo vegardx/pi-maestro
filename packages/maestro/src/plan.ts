@@ -23,6 +23,16 @@ export interface PlanRepo {
 	};
 }
 
+/**
+ * What a deliverable id may look like.
+ *
+ * Narrow because the id is not just a label: it becomes a git branch and a
+ * worktree directory, so an id that needs escaping is an id where two
+ * deliverables can collide into one branch. Constraining it here means the
+ * execution layer needs no escaping step at all.
+ */
+export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
 /** Read-only kinds a task may delegate to. Workers are authored, never spawned. */
 export const DELEGABLE = ["explorer", "reviewer", "advisor"] as const;
 export type Delegable = (typeof DELEGABLE)[number];
@@ -100,6 +110,10 @@ export function validatePlan(plan: Plan): string[] {
 		const where = d.id || `deliverables[${i}]`;
 		if (!d.id.trim()) errors.push(`${where}: no id`);
 		else if (ids.has(d.id)) errors.push(`${where}: duplicate id`);
+		else if (!ID_RE.test(d.id))
+			errors.push(
+				`${where}: \`${d.id}\` cannot be an id — it becomes a branch name and a directory, so it must be lowercase letters, digits and hyphens`,
+			);
 		ids.add(d.id);
 
 		if (!d.title.trim()) errors.push(`${where}: no title`);

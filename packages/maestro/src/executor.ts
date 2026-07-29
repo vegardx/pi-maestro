@@ -27,13 +27,20 @@ import type { WorkerSpawn } from "./spawn.js";
 import type { PlanStore } from "./store.js";
 import type { ToolRegistry } from "./tool-registry.js";
 
-/** Where a deliverable's work happens. One worktree, one branch. */
+/**
+ * Where a deliverable's work happens. One worktree, one branch.
+ *
+ * There is no `remove`. Nothing tears a worktree down, because nothing has
+ * needed to: a shipped deliverable's checkout is the thing you look at when the
+ * pull request reads oddly, and a failed one's is the evidence. A cleanup
+ * method nobody calls is a method that will be wired wrongly the day someone
+ * does call it.
+ */
 export interface Workspace {
 	create(
 		deliverable: Deliverable,
 		repoPath: string,
 	): Promise<{ readonly path: string; readonly branch: string }>;
-	remove(path: string): Promise<void>;
 }
 
 export interface ShipRequest {

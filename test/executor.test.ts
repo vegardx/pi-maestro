@@ -148,7 +148,6 @@ function harness(
 		async create(d) {
 			return { path: `/worktrees/${d.id}`, branch: `feat/${d.id}` };
 		},
-		async remove() {},
 	};
 
 	const deps: ExecutorDeps = {

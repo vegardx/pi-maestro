@@ -11,7 +11,6 @@
 // time, before pi has finished starting, and the link resolves behind them; a
 // tool called before the handshake completes says so, instead of hanging.
 
-import { RpcClient } from "@earendil-works/pi-coding-agent";
 import { defineExtension } from "@vegardx/pi-core";
 import {
 	type AgentWiring,
@@ -22,41 +21,10 @@ import {
 } from "./agent-runtime.js";
 import type { AgentLink } from "./link.js";
 import {
-	buildReadOnlyInvocation,
-	type ReadOnlySessionFactory,
-	type ReadOnlySpawn,
-} from "./spawn.js";
+	createReadOnlySessionFactory,
+	type ReadOnlyLaunchOptions,
+} from "./read-only-session.js";
 import { ToolRegistry } from "./tool-registry.js";
-
-export interface ReadOnlyLaunchOptions {
-	readonly extensions: readonly string[];
-	readonly cliPath?: string;
-	readonly model?: string;
-	readonly agentDir?: string;
-}
-
-/**
- * Open a read-only child over pi's own RPC.
- *
- * `RpcClient` already has the four methods a read-only run needs, so there is
- * nothing to adapt — the narrow `ReadOnlySession` interface exists so the
- * calling code can be tested without a child process, not because the real
- * thing needs wrapping.
- */
-export function createReadOnlySessionFactory(
-	options: ReadOnlyLaunchOptions,
-): ReadOnlySessionFactory {
-	return async (spawn: ReadOnlySpawn) => {
-		const invocation = buildReadOnlyInvocation(spawn, options);
-		return new RpcClient({
-			cwd: invocation.cwd,
-			args: [...invocation.args],
-			env: invocation.env,
-			...(invocation.model ? { model: invocation.model } : {}),
-			...(options.cliPath ? { cliPath: options.cliPath } : {}),
-		});
-	};
-}
 
 /**
  * Register the agent surface and start dialling home.

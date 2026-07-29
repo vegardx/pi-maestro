@@ -13,8 +13,9 @@
 // protocol leaves open.
 
 import { EventEmitter } from "node:events";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
+import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
 import {
@@ -94,6 +95,8 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 
 	async listen(socketPath: string): Promise<void> {
 		this.socketPath = socketPath;
+		// The link owns the socket file, so it owns the directory it sits in.
+		mkdirSync(dirname(socketPath), { recursive: true });
 		// A socket file left by a crashed maestro is stale by definition: the
 		// process that owned it is gone.
 		if (existsSync(socketPath)) unlinkSync(socketPath);

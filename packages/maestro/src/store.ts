@@ -232,8 +232,9 @@ export function createPlanStore(
 			const out: PlanSummary[] = [];
 			for (const entry of readdirSync(root, { withFileTypes: true })) {
 				if (!entry.isDirectory()) continue;
-				// `_`-prefixed directories are the harness's own.
-				if (entry.name.startsWith("_")) continue;
+				// A directory that is not a valid slug cannot hold a plan this
+				// store wrote, so it is not one. That subsumes every convention
+				// the old store needed a separate rule for.
 				if (!SLUG_RE.test(entry.name)) continue;
 				let plan: Plan | null;
 				try {

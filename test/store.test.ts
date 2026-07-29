@@ -243,11 +243,16 @@ describe("listing", () => {
 		expect(s.list().map((p) => p.slug)).toEqual(["good"]);
 	});
 
-	it("skips harness-internal directories", () => {
+	it("ignores directories it could never have written", () => {
+		// One rule, not two: the store recognises its own plans by the slug it
+		// would have used. The old store carried a separate `_`-prefix skip for
+		// its `_legacy/` archive; there is no legacy here to archive, and the
+		// slug rule already covers anything that is not a plan.
 		const dir = root();
 		const s = store(dir);
 		s.savePlan(plan());
 		mkdirSync(join(dir, "_legacy", "arc"), { recursive: true });
+		mkdirSync(join(dir, "Not A Slug"));
 		expect(s.list().map((p) => p.slug)).toEqual(["arc"]);
 	});
 

@@ -32,6 +32,13 @@ export interface LaunchOptions {
 	readonly model?: string;
 	/** Extra `-e` extensions beyond the maestro stack (e.g. a mock provider). */
 	readonly extraExtensions?: string[];
+	/**
+	 * Replace the manifest stack entirely. The rebuilt maestro is not in
+	 * `pi.extensions` yet, and it must not be loaded ALONGSIDE the old one —
+	 * both register `/mode`, so a drive that loaded both would be testing
+	 * whichever won.
+	 */
+	readonly extensions?: string[];
 	/** Append every inbound RPC line here for debugging. */
 	readonly transcriptPath?: string;
 	/** Notified for each streamed event. */
@@ -121,7 +128,8 @@ export function launchSut(opts: LaunchOptions): LaunchedSut {
 		"--session-dir",
 		sessionDir,
 	];
-	for (const ext of maestroExtensionPaths(opts.maestroRoot)) {
+	for (const ext of opts.extensions ??
+		maestroExtensionPaths(opts.maestroRoot)) {
 		args.push("-e", ext);
 	}
 	for (const ext of opts.extraExtensions ?? []) {

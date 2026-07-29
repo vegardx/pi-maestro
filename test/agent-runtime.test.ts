@@ -236,13 +236,19 @@ describe("a read-only child is launched with nothing to dial", () => {
 			{ extensions: ["/repo/packages/maestro"], agentDir: "/cfg" },
 		);
 
-	it("gives it no socket and no token", () => {
-		// Otherwise a read-only agent could dial the maestro and present itself
-		// as a worker. Its only channel is the answer it returns to its caller.
+	it("BLANKS the wiring rather than omitting it", () => {
+		// Omitting only keeps a variable out if nothing merges the parent's
+		// environment underneath, and pi's own RpcClient spawns with
+		// `{...process.env, ...options.env}` — so an omitted variable is an
+		// inherited one. A live drive paid for this: a reviewer inherited its
+		// worker's socket, token and AGENT ID, dialled home as that worker, and
+		// the maestro destroyed the real worker's connection as a reconnect.
 		const { env } = invocation();
-		expect(env[SOCK_ENV]).toBeUndefined();
-		expect(env[TOKEN_ENV]).toBeUndefined();
-		expect(env[AGENT_ID_ENV]).toBeUndefined();
+		expect(env[SOCK_ENV]).toBe("");
+		expect(env[TOKEN_ENV]).toBe("");
+		expect(env[AGENT_ID_ENV]).toBe("");
+		// And blank reads as absent, so nothing downstream thinks it is wired.
+		expect(readWiring(env)).toBeNull();
 	});
 
 	it("counts its depth from whoever asked", () => {

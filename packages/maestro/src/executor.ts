@@ -73,9 +73,11 @@ export interface AgentChannel {
 	release(agentId: string): boolean;
 }
 
-/** The executor's view of the launcher: start one, and see what it printed. */
+/** The executor's view of the launcher: start one, and see how it ended. */
 export interface WorkerHandle {
 	launch(spawn: WorkerSpawn): void;
+	/** Resolves once the process is reaped, so its exit status is in hand. */
+	settled(agentId: string): Promise<void>;
 	capture(agentId: string, lines?: number): string;
 }
 
@@ -93,6 +95,10 @@ export interface ExecutorDeps {
 	readonly socketPath: string;
 	readonly token: string;
 	readonly extensions: readonly string[];
+	/** How to start pi. Defaults to the pi this process is running. */
+	readonly piCommand?: readonly string[];
+	/** Who a worker commits as. Passed as environment, never written to config. */
+	readonly gitIdentity?: { readonly name: string; readonly email: string };
 	/**
 	 * Carry out authored maestro tasks. Supplied by whatever owns the maestro
 	 * session, because this is prose to act on, not mechanics — the executor
@@ -219,6 +225,8 @@ export class Executor {
 			socketPath: this.deps.socketPath,
 			token: this.deps.token,
 			extensions: this.deps.extensions,
+			...(this.deps.piCommand ? { piCommand: this.deps.piCommand } : {}),
+			...(this.deps.gitIdentity ? { gitIdentity: this.deps.gitIdentity } : {}),
 			...(this.deps.model ? { model: this.deps.model } : {}),
 		};
 		this.deps.launcher.launch(spawn);
@@ -281,12 +289,30 @@ export class Executor {
 			if (awaitingRelease) return;
 			const id = this.byAgent.get(agentId);
 			if (!id || this.run.deliverables[id]?.state !== "running") return;
-			void this.fail(
-				id,
-				agentId,
-				`the worker stopped without reporting.\n${this.deps.launcher.capture(agentId, 40)}`,
-			);
+			void this.recordSilentDeath(id, agentId);
 		});
+	}
+
+	/**
+	 * A worker that closed its socket without reporting.
+	 *
+	 * The pause is the point. A socket closes the instant the process starts
+	 * dying, but its stderr — the ONLY evidence of why, since it never reached
+	 * the wire and may have written nothing to its session — arrives with the
+	 * exit that follows — including the exit code, which is the difference
+	 * between "it crashed", "it was killed" and "it decided it was done".
+	 * Capturing at socket-close read an empty buffer and reported "the worker
+	 * stopped without reporting" with nothing after it, which is the least
+	 * useful true sentence available.
+	 */
+	private async recordSilentDeath(id: string, agentId: string): Promise<void> {
+		await this.deps.launcher.settled(agentId);
+		const said = this.deps.launcher.capture(agentId, 40).trim();
+		await this.fail(
+			id,
+			agentId,
+			`the worker stopped without reporting.${said ? `\n${said}` : " It printed nothing on the way out."}`,
+		);
 	}
 
 	/**

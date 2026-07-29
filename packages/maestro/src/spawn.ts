@@ -87,6 +87,27 @@ export interface WorkerSpawn {
 	readonly gitIdentity?: { readonly name: string; readonly email: string };
 	/** The spawner's depth; the child gets one more. */
 	readonly parentDepth?: number;
+	/**
+	 * How to start pi. Defaults to the pi THIS process is running.
+	 *
+	 * Not the bare name `pi`: that resolves through PATH to a shim symlinked at
+	 * `../dist/cli.js`, and a child started from a worktree resolves it relative
+	 * to the wrong directory and dies with MODULE_NOT_FOUND before it can dial
+	 * home. Running the same interpreter and the same entry script the maestro
+	 * is running removes the question entirely — a worker cannot be a different
+	 * pi from its maestro.
+	 */
+	readonly piCommand?: readonly string[];
+}
+
+/** The pi this process is running: its interpreter and its entry script. */
+export function currentPiCommand(): readonly string[] {
+	const entry = process.argv[1];
+	if (!entry)
+		throw new Error(
+			"cannot tell which pi to start a worker with: this process has no entry script",
+		);
+	return [process.execPath, entry];
 }
 
 export interface WorkerCommand {
@@ -102,7 +123,7 @@ export interface WorkerCommand {
  */
 export function buildWorkerCommand(spawn: WorkerSpawn): WorkerCommand {
 	const argv = [
-		"pi",
+		...(spawn.piCommand ?? currentPiCommand()),
 		// Globally configured extensions are suppressed: an agent loads ONLY
 		// what maestro names, or an unrelated installed extension can shadow a
 		// tool name and the agent calls something nobody here wrote.
@@ -154,6 +175,8 @@ interface Launched {
 	readonly child: ChildProcess;
 	output: string;
 	exited: boolean;
+	/** Resolves when the process is reaped, so its last words are in hand. */
+	readonly settled: Promise<void>;
 }
 
 /**
@@ -206,7 +229,15 @@ export class WorkerLauncher {
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
-		const record: Launched = { child, output: "", exited: false };
+		let reaped: () => void = () => {};
+		const record: Launched = {
+			child,
+			output: "",
+			exited: false,
+			settled: new Promise<void>((resolve) => {
+				reaped = resolve;
+			}),
+		};
 		const append = (text: string): void => {
 			record.output = (record.output + text).slice(-CAPTURE_CAP_BYTES);
 		};
@@ -214,11 +245,13 @@ export class WorkerLauncher {
 		child.stderr?.on("data", (b: Buffer) => append(b.toString("utf8")));
 		child.on("exit", (code, signal) => {
 			record.exited = true;
-			append(`\n[pi exited code=${code ?? "?"} signal=${signal ?? ""}]`);
+			append(`\n[pi exited code=${code ?? "?"} signal=${signal ?? "none"}]`);
+			reaped();
 		});
 		child.on("error", (error) => {
 			record.exited = true;
 			append(`\n[spawn failed: ${error.message}]`);
+			reaped();
 		});
 		// The worker outlives this call — that is the whole point of autonomous.
 		child.unref();
@@ -234,6 +267,22 @@ export class WorkerLauncher {
 		const record = this.launched.get(agentId);
 		if (record && !record.exited) killGroup(record.child, "SIGTERM");
 		// The record stays, so a post-mortem `capture` still works.
+	}
+
+	/**
+	 * Resolve once the process has been reaped.
+	 *
+	 * A socket closes the instant a process starts dying, but its exit status and
+	 * last output arrive with the exit that follows. Anyone reporting a death
+	 * has to wait for this or report one with no cause.
+	 */
+	async settled(agentId: string, timeoutMs = 2000): Promise<void> {
+		const record = this.launched.get(agentId);
+		if (!record || record.exited) return;
+		await Promise.race([
+			record.settled,
+			new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+		]);
 	}
 
 	/** What the process printed. The only evidence when it died before dialling. */
@@ -318,6 +367,19 @@ export function buildReadOnlyInvocation(
 
 	const env: Record<string, string> = {
 		[DEPTH_ENV]: String((spawn.parentDepth ?? 0) + 1),
+		// BLANKED, not omitted. Omitting only keeps a variable out if nothing
+		// merges the parent's environment underneath — and pi's own RpcClient
+		// spawns with `{...process.env, ...options.env}`, so an omitted variable
+		// is an inherited one.
+		//
+		// What that cost: a reviewer inherited its worker's socket, token AND
+		// agent id, dialled the maestro as that worker, and the maestro destroyed
+		// the real worker's connection as a reconnect. The worker then sat alive
+		// with nothing to report to, and the run recorded it as having stopped
+		// without reporting. Nothing in the logs pointed at the reviewer.
+		[SOCK_ENV]: "",
+		[TOKEN_ENV]: "",
+		[AGENT_ID_ENV]: "",
 	};
 	if (options.agentDir) env.PI_CODING_AGENT_DIR = options.agentDir;
 	if (process.env.PATH) env.PATH = process.env.PATH;

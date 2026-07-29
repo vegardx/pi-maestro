@@ -5,6 +5,7 @@
 // out for a dependency mid-run — an executor built with a bad socket path fails
 // at construction rather than the first time a worker tries to dial home.
 
+import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
 import { Executor, type ExecutorDeps } from "./executor.js";
@@ -38,6 +39,8 @@ export interface SeatOptions {
 	 * real, which is the part that has never been tested.
 	 */
 	readonly spawn?: SpawnProcess;
+	/** How to start pi. Defaults to the pi this process is running. */
+	readonly piCommand?: readonly string[];
 	readonly shippingOps?: Partial<ShippingOps>;
 }
 
@@ -113,6 +116,16 @@ export function createSeat(options: SeatOptions): Seat {
 	};
 
 	function deps(plan: Plan, rt: MaestroRuntime): ExecutorDeps {
+		// Resolved HERE and handed over as environment, because a worker with no
+		// identity does not fail — it reaches for `git config user.email`, and a
+		// linked worktree shares the repository's config file, so that one command
+		// rewrites the identity for every worktree and for the user. A live drive
+		// watched a worker do exactly that. Refusing up front is the only version
+		// of this that cannot go wrong.
+		const repo = plan.repos[0]?.path ?? process.cwd();
+		const identity = resolveGitIdentity(repo);
+		if (!identity) throw new Error(missingIdentityMessage(repo));
+
 		return {
 			store,
 			link: rt.link,
@@ -130,6 +143,8 @@ export function createSeat(options: SeatOptions): Seat {
 			socketPath: socketPath(),
 			token: rt.token,
 			extensions: options.extensions,
+			...(options.piCommand ? { piCommand: options.piCommand } : {}),
+			gitIdentity: identity,
 			runMaestroTasks: rt.runMaestroTasks,
 			now,
 			sessionFileFor: (id) => sessionFile(plan.slug, id, options.agentDir),

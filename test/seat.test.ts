@@ -50,6 +50,12 @@ function repo(): string {
 	const path = join(root, "project");
 	execFileSync("mkdir", ["-p", path]);
 	git(path, "init", "-q", "-b", "main");
+	// A repository a person actually uses has an identity. Without one the seat
+	// refuses to run a plan, which is the point — a worker with no identity
+	// reaches for `git config`, and in a linked worktree that rewrites the
+	// identity for the whole repository.
+	git(path, "config", "user.name", "T");
+	git(path, "config", "user.email", "t@example.com");
 	writeFileSync(join(path, "README.md"), "# project\n");
 	git(path, "add", "README.md");
 	git(path, "commit", "-q", "-m", "first");

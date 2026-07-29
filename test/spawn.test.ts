@@ -64,9 +64,14 @@ describe("the worker command is the contract with pi", () => {
 		const { argv } = buildWorkerCommand(
 			worker({ extensions: ["/a", "/b"], model: "claude-opus-5" }),
 		);
-		// `-ne` first: a globally installed extension can shadow a tool name, and
+		// The pi THIS process runs, not the bare name `pi`: that resolves through
+		// PATH to a shim symlinked at `../dist/cli.js`, which a child started
+		// from a worktree resolves relative to the wrong directory — it dies with
+		// MODULE_NOT_FOUND before it can dial home. A live drive found this.
+		expect(argv.slice(0, 2)).toEqual([process.execPath, process.argv[1]]);
+		// `-ne` next: a globally installed extension can shadow a tool name, and
 		// then the agent calls something nobody here wrote.
-		expect(argv.slice(0, 6)).toEqual(["pi", "-ne", "-e", "/a", "-e", "/b"]);
+		expect(argv.slice(2, 7)).toEqual(["-ne", "-e", "/a", "-e", "/b"]);
 		expect(argv).toContain("--no-skills");
 		expect(argv).toContain("--no-context-files");
 		// Model and session sit immediately before the brief.
@@ -85,6 +90,14 @@ describe("the worker command is the contract with pi", () => {
 
 	it("omits the model when there is none, rather than passing an empty flag", () => {
 		expect(buildWorkerCommand(worker()).argv).not.toContain("--model");
+	});
+
+	it("takes an explicit pi when given one", () => {
+		expect(
+			buildWorkerCommand(
+				worker({ piCommand: ["/usr/bin/node", "/opt/pi.js"] }),
+			).argv.slice(0, 2),
+		).toEqual(["/usr/bin/node", "/opt/pi.js"]);
 	});
 });
 

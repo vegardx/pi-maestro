@@ -34,6 +34,7 @@ import {
 	type ReadOnlyLaunchOptions,
 } from "./read-only-session.js";
 import { createSeat, type Seat } from "./seat.js";
+import { currentDepth } from "./spawn.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { resolveBase } from "./workspace.js";
 
@@ -208,9 +209,17 @@ export default defineExtension(
 		doc: "Plans as a DAG of deliverables, workers that build them, and the maestro that owns both ends.",
 	},
 	(pi) => {
-		const wiring = readWiring();
-		if (wiring) {
-			void startWorker(pi, wiring, { extensions: [extensionPath()] });
+		// DEPTH decides, not the presence of wiring. A read-only agent is spawned
+		// with a depth and deliberately WITHOUT a socket or token — it has nobody
+		// to dial — so "no wiring" and "this is the seat" are not the same thing.
+		// Reading them as the same gave every reviewer the maestro's own surface,
+		// commands and all.
+		if (currentDepth() > 0) {
+			const wiring = readWiring();
+			// A worker dials home; a read-only agent answers its caller and holds
+			// no agent surface of its own beyond what it was launched with.
+			if (wiring)
+				void startWorker(pi, wiring, { extensions: [extensionPath()] });
 			return;
 		}
 		startSeat(pi);

@@ -181,17 +181,22 @@ describe("the commands", () => {
 		const h = host();
 		startSeat(h.pi, { cwd: repo() });
 		await h.run("mode");
-		expect(h.tools.map((t) => t.name).sort()).toEqual(["delegate", "flight"]);
+		expect(h.tools.map((t) => t.name).sort()).toEqual([
+			"delegate",
+			"flight",
+			"plan",
+		]);
 	});
 });
 
 describe("a worker delegates with the real personas", () => {
-	it("hands over the declared prose, not a sentence about it", async () => {
+	it("resolves personas against the declared catalogue, not a made-up one", async () => {
 		// The stub this replaced read `You are a ${agent}. Persona: ${persona}.`
 		// — a brief that looks plausible and teaches a reviewer nothing about
-		// what to look for.
+		// what to look for. Asserted through an UNKNOWN persona, because the
+		// error names what IS declared: if the worker were still inventing
+		// briefs, every persona would resolve and nothing would be listed.
 		const h = host();
-		const briefs: string[] = [];
 		const started = startWorker(
 			h.pi as unknown as { registerTool(tool: unknown): void },
 			{
@@ -207,18 +212,16 @@ describe("a worker delegates with the real personas", () => {
 		const delegate = h.tools.find((t) => t.name === "delegate") as unknown as {
 			execute: (id: string, p: unknown) => Promise<unknown>;
 		};
-		// The session factory would spawn a real child, so this only gets as far
-		// as building the brief — which is the part under test.
-		await delegate
-			.execute("call-1", {
+		// Rejected while building the brief, before anything is spawned.
+		await expect(
+			delegate.execute("call-1", {
 				agent: "reviewer",
-				persona: "code-review",
+				persona: "not-a-persona",
 				question: "anything",
-			})
-			.catch((error: Error) => briefs.push(error.message));
-
-		const review = BUILT_IN_PERSONAS.find((p) => p.id === "code-review");
-		expect(review?.prose).toContain("reviewing a diff");
+			}),
+		).rejects.toThrow(
+			new RegExp(BUILT_IN_PERSONAS.map((p) => p.id).join(".*")),
+		);
 	});
 
 	it("refuses a persona belonging to another kind", async () => {

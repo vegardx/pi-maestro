@@ -308,8 +308,16 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 			};
 
 			socket.on("error", (error) => {
+				// An error BEFORE the handshake settles is the handshake failing,
+				// and rejecting the promise is the whole report. Emitting as well
+				// would be a second report of one failure — and on an EventEmitter
+				// with no `error` listener, emitting is not a report at all: Node
+				// rethrows it as an uncaught exception, so a worker whose maestro
+				// socket is missing would crash instead of failing cleanly.
+				const duringHandshake = !settled;
 				settle(error);
-				if (settled) this.emit("error", error);
+				if (!duringHandshake && this.listenerCount("error") > 0)
+					this.emit("error", error);
 				socket.destroy();
 			});
 

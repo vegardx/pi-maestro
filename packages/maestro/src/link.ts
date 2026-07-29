@@ -102,12 +102,19 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 		if (existsSync(socketPath)) unlinkSync(socketPath);
 
 		return new Promise((resolve, reject) => {
+			let listening = false;
 			const server = createServer((socket) => this.accept(socket));
 			server.on("error", (error) => {
-				this.emit("error", error);
+				// Rejecting is the report. Emitting as well would be a second one,
+				// and on an EventEmitter with no `error` listener Node rethrows it
+				// as an uncaught exception — which took the whole maestro process
+				// down the first time a socket path was refused.
+				if (listening && this.listenerCount("error") > 0)
+					this.emit("error", error);
 				reject(error);
 			});
 			server.listen(socketPath, () => {
+				listening = true;
 				this.server = server;
 				resolve();
 			});

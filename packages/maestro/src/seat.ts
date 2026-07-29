@@ -56,7 +56,7 @@ export function createSeat(options: SeatOptions): Seat {
 	const store = createPlanStore(plansRoot(options.agentDir));
 	const runtime = new MaestroRuntime({
 		narrator: options.narrator,
-		socketPath: socketPath(process.pid, options.agentDir),
+		socketPath: socketPath(),
 	});
 
 	const readOnly = createReadOnlySessionFactory({
@@ -127,7 +127,7 @@ export function createSeat(options: SeatOptions): Seat {
 			tools,
 			personas,
 			workerPersona: DELIVERABLE_WORKER,
-			socketPath: socketPath(process.pid, options.agentDir),
+			socketPath: socketPath(),
 			token: rt.token,
 			extensions: options.extensions,
 			runMaestroTasks: rt.runMaestroTasks,

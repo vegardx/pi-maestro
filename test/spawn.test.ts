@@ -275,7 +275,7 @@ s.on('connect', () => {
     type: 'hello', v: ${PROTOCOL_VERSION},
     agentId: process.env.${AGENT_ID_ENV},
     token: process.env.${TOKEN_ENV},
-    kind: 'worker', pid: process.pid,
+    pid: process.pid,
   }) + '\\n');
 });
 s.on('data', (chunk) => {

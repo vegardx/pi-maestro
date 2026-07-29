@@ -77,7 +77,6 @@ describe("the handshake", () => {
 		await agent().connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 		const [id, hello] = await seen;
 		expect(id).toBe("worker-1");
@@ -91,7 +90,6 @@ describe("the handshake", () => {
 			agent().connect(path, {
 				agentId: "worker-1",
 				token: "some-other-run",
-				kind: "worker",
 			}),
 		).rejects.toThrow(HandshakeRejected);
 	});
@@ -108,27 +106,15 @@ describe("the handshake", () => {
 			agent().connect(path, {
 				agentId: "worker-1",
 				token: TOKEN,
-				kind: "worker",
 			}),
 		).rejects.toThrow(/version mismatch/);
-	});
-
-	it("refuses a kind the agent model does not know", async () => {
-		const [, path] = await maestro();
-		await expect(
-			agent().connect(path, {
-				agentId: "worker-1",
-				token: TOKEN,
-				kind: "supervisor" as never,
-			}),
-		).rejects.toThrow(/unknown agent kind/);
 	});
 
 	it("leaves a rejected agent disconnected, not retrying", async () => {
 		const [link, path] = await maestro();
 		const a = agent();
 		await expect(
-			a.connect(path, { agentId: "w", token: "wrong", kind: "worker" }),
+			a.connect(path, { agentId: "w", token: "wrong" }),
 		).rejects.toThrow(HandshakeRejected);
 		await settle();
 		expect(a.connected).toBe(false);
@@ -140,12 +126,10 @@ describe("the handshake", () => {
 		await agent().connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 		await agent().connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 			resumed: true,
 		});
 		await settle();
@@ -160,7 +144,6 @@ describe("what an agent says while it works", () => {
 		await a.connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 
 		const status = next<{ state: string; detail?: string }>(link, "status");
@@ -184,7 +167,6 @@ describe("maestro owns the exit", () => {
 		await a.connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 
 		const reported = next<{ handoff?: string }>(link, "done");
@@ -218,7 +200,6 @@ describe("maestro owns the exit", () => {
 		await reporter.connect(path, {
 			agentId: "reporter",
 			token: TOKEN,
-			kind: "worker",
 		});
 		const reported = next(link, "done");
 		void reporter.done({ outcome: "succeeded" });
@@ -228,7 +209,6 @@ describe("maestro owns the exit", () => {
 		await worker.connect(path, {
 			agentId: "quiet",
 			token: TOKEN,
-			kind: "worker",
 		});
 
 		const gone = new Map<string, boolean>();
@@ -249,7 +229,6 @@ describe("maestro owns the exit", () => {
 		await a.connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 		const reported = next(link, "done");
 		const waiting = a.done({ outcome: "succeeded" });
@@ -265,7 +244,6 @@ describe("maestro owns the exit", () => {
 		await a.connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 
 		let recorded = false;
@@ -296,7 +274,6 @@ describe("maestro owns the exit", () => {
 		await a.connect(path, {
 			agentId: "worker-1",
 			token: TOKEN,
-			kind: "worker",
 		});
 		await expect(a.done({ outcome: "failed" })).rejects.toThrow(
 			/no reason given/,

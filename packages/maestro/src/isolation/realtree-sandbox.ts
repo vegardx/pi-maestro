@@ -272,11 +272,27 @@ export const defaultSandboxWrap: SandboxWrap = async (
 	const run = wrapQueue.then(async () => {
 		if (currentConfigKey !== key) {
 			await SandboxManager.reset();
-			await SandboxManager.initialize(
-				configFor(profile),
-				async () => false,
-				false,
-			);
+			try {
+				await SandboxManager.initialize(
+					configFor(profile),
+					async () => false,
+					false,
+				);
+			} catch (cause) {
+				// sandbox-runtime needs tools of its own — ripgrep, and bubblewrap
+				// on Linux. Without them `initialize` throws, and nothing caught
+				// it: the rejection travelled out through the gated `exec`, so
+				// EVERY shell command failed with a library error naming a
+				// dependency the user had never heard of. A CI run on a macOS
+				// image without `rg` is how that surfaced.
+				//
+				// Refused, never run unwrapped. Falling back to an unconfined
+				// shell would quietly drop the guarantee this whole path exists
+				// for, and quietly is the part that matters.
+				throw new SandboxUnavailable(
+					cause instanceof Error ? cause.message : String(cause),
+				);
+			}
 			currentConfigKey = key;
 		}
 		return SandboxManager.wrapWithSandbox(command, "bash", undefined, signal);
@@ -287,6 +303,24 @@ export const defaultSandboxWrap: SandboxWrap = async (
 	);
 	return run;
 };
+
+/**
+ * The sandbox cannot start here — its own dependencies are missing.
+ *
+ * Its own error class so the message can name the remedy rather than repeating
+ * a library's internals at someone trying to run a plan.
+ */
+export class SandboxUnavailable extends Error {
+	constructor(readonly detail: string) {
+		super(
+			`commands cannot run confined here: ${detail}\n` +
+				"Install what the sandbox needs (ripgrep, plus bubblewrap on Linux) " +
+				"and try again. Set MAESTRO_SANDBOX=off to run unconfined, which " +
+				"removes the guard that keeps a command inside its own worktree.",
+		);
+		this.name = "SandboxUnavailable";
+	}
+}
 
 /** Reset the sandbox (session lifecycle); safe to call when uninitialized. */
 export async function resetRealTreeSandbox(): Promise<void> {

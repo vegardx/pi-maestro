@@ -8,6 +8,7 @@ import {
 	createShadowBashOperations,
 	type GitDeps,
 	resolveProfilePaths,
+	SandboxUnavailable,
 	selectProfile,
 } from "../packages/maestro/src/isolation/realtree-sandbox.js";
 
@@ -141,5 +142,68 @@ describe("createEnforcingBashOperations", () => {
 		});
 		await ops.exec("rm -rf /", "/repo", { onData: () => {} });
 		expect(ran[0]).toBe("rm -rf /");
+	});
+});
+
+describe("when the sandbox cannot start at all", () => {
+	// Found by putting the enforcement proof on a CI runner: the macOS image has
+	// no ripgrep, `SandboxManager.initialize` threw, and NOTHING CAUGHT IT. The
+	// rejection travelled out through the gated `exec`, so on any machine
+	// missing sandbox-runtime's own tools every shell command failed with a
+	// library error naming a dependency the user had never heard of.
+	it("refuses with something the operator can act on", async () => {
+		const failing = createEnforcingBashOperations(
+			{ exec: async () => ({ exitCode: 0 }) } as never,
+			{
+				actor: "worker",
+				mode: "auto",
+				scratch: ["/tmp"],
+				git: {
+					toplevel: () => "/repo",
+					commonDir: () => "/repo/.git",
+					gitDir: () => "/repo/.git/worktrees/w",
+				},
+				wrap: async () => {
+					throw new SandboxUnavailable("Required: ripgrep (rg).");
+				},
+			},
+		);
+		await expect(
+			failing.exec("npm test", "/repo/w", { onData: () => {} } as never),
+		).rejects.toThrow(/ripgrep/);
+		await expect(
+			failing.exec("npm test", "/repo/w", { onData: () => {} } as never),
+		).rejects.toThrow(/MAESTRO_SANDBOX=off/);
+	});
+
+	it("does NOT fall back to running unconfined", async () => {
+		// The tempting fallback, and the wrong one. Dropping the guarantee this
+		// path exists for — quietly — is the defect this codebase keeps finding.
+		const ran: string[] = [];
+		const failing = createEnforcingBashOperations(
+			{
+				exec: async (command: string) => {
+					ran.push(command);
+					return { exitCode: 0 };
+				},
+			} as never,
+			{
+				actor: "worker",
+				mode: "auto",
+				scratch: ["/tmp"],
+				git: {
+					toplevel: () => "/repo",
+					commonDir: () => "/repo/.git",
+					gitDir: () => "/repo/.git/worktrees/w",
+				},
+				wrap: async () => {
+					throw new SandboxUnavailable("Required: ripgrep (rg).");
+				},
+			},
+		);
+		await failing
+			.exec("rm -rf /", "/repo/w", { onData: () => {} } as never)
+			.catch(() => undefined);
+		expect(ran).toEqual([]);
 	});
 });

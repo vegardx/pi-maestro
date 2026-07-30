@@ -17,13 +17,22 @@ import type { ExecutionPolicySettings } from "./execution-policy.js";
 import type { Mode } from "./mode.js";
 import type { Holder } from "./tool-registry.js";
 
+/**
+ * What to do with a command.
+ *
+ * There is no `isolate` here, and that absence is the point. Confinement is not
+ * somewhere a command is SENT — it is the condition every command already runs
+ * under, applied in front of the route rather than instead of it. A decision
+ * that could say "isolate this one" implies the others need no confining, which
+ * is how the ordinary path ends up on an unguarded host shell.
+ *
+ * `strong` is the exception, and only because it is a different MECHANISM: a
+ * separate backend with its own filesystem and network, not a write profile
+ * over the real tree.
+ */
 export type GateDecision =
 	| { readonly kind: "allow"; readonly reason: string }
-	| {
-			readonly kind: "isolate";
-			readonly tier: "lightweight" | "strong";
-			readonly reason: string;
-	  }
+	| { readonly kind: "strong"; readonly reason: string }
 	| { readonly kind: "confirm"; readonly reason: string }
 	| { readonly kind: "deny"; readonly reason: string };
 
@@ -48,11 +57,11 @@ export interface GateInput {
  * kind; the thing that decides shell access is `read-only`, which explorers and
  * advisors share. Three actors, three holders, one rename apart.
  */
-function asActor(holder: Holder): BashActor {
+export function asActor(holder: Holder): BashActor {
 	return holder === "read-only" ? "reviewer" : holder;
 }
 
-function asModeName(mode: Mode): "plan" | "auto" | "hack" {
+export function asModeName(mode: Mode): "plan" | "auto" | "hack" {
 	if (mode.safeguards === "off") return "hack";
 	return mode.cwd === "read" ? "plan" : "auto";
 }
@@ -97,9 +106,16 @@ export function decideFromRoute(
 		case "host-read":
 			return { kind: "allow", reason };
 
+		// The COPY tier is retired, and `lightweight` no longer names a place to
+		// send a command — it names the confinement every route already gets.
+		// Reads stay open on the real tree so builds and `git status` work; the
+		// write guard is the kernel, which is what makes a classifier miss stop
+		// being an escape rather than merely unlikely.
 		case "lightweight":
+			return { kind: "allow", reason };
+
 		case "strong":
-			return { kind: "isolate", tier: route, reason };
+			return { kind: "strong", reason };
 
 		case "confirm":
 			// Nobody is watching a worker. A prompt it cannot answer is a worker
@@ -128,9 +144,9 @@ export function decideFromRoute(
 /**
  * Whether a decision lets the command run at all, in some form.
  *
- * Deliberately not a boolean on the decision itself: `isolate` and `confirm`
+ * Deliberately not a boolean on the decision itself: `strong` and `confirm`
  * both allow eventually and by very different means, and collapsing them into
- * `allowed: true` is how a sandbox requirement gets dropped.
+ * `allowed: true` is how a backend requirement gets dropped.
  */
 export function refusal(decision: GateDecision): string | null {
 	return decision.kind === "deny" ? decision.reason : null;

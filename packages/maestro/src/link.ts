@@ -17,11 +17,7 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type {
-	Answers,
-	Questionnaire,
-	TokenSnapshot,
-} from "@vegardx/pi-contracts";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import {
 	type AgentMessage,
 	type Ask,
@@ -69,7 +65,6 @@ export interface ConnectedAgent {
 export interface MaestroLinkEvents {
 	connected: [agentId: string, hello: Hello];
 	status: [agentId: string, status: Status];
-	tokens: [agentId: string, snapshot: TokenSnapshot];
 	done: [agentId: string, done: Done];
 	asked: [agentId: string, ask: Ask];
 	agentError: [agentId: string, message: string];
@@ -252,9 +247,6 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 			case "status":
 				this.emit("status", agent.agentId, message);
 				return;
-			case "tokens":
-				this.emit("tokens", agent.agentId, message.snapshot);
-				return;
 			case "error":
 				this.emit("agentError", agent.agentId, message.message);
 				return;
@@ -301,7 +293,6 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 export interface AgentIdentity {
 	readonly agentId: string;
 	readonly token: string;
-	readonly resumed?: boolean;
 }
 
 export class HandshakeRejected extends Error {
@@ -432,7 +423,6 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 					agentId: identity.agentId,
 					token: identity.token,
 					pid: process.pid,
-					...(identity.resumed ? { resumed: true } : {}),
 				};
 				write(socket, hello);
 			});
@@ -462,10 +452,6 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 
 	status(state: Status["state"], detail?: string): boolean {
 		return this.send({ type: "status", state, ...(detail ? { detail } : {}) });
-	}
-
-	tokens(snapshot: TokenSnapshot): boolean {
-		return this.send({ type: "tokens", snapshot });
 	}
 
 	error(message: string): boolean {

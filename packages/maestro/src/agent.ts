@@ -44,8 +44,6 @@ export const RELATIONSHIPS = ["blocking", "consultable", "autonomous"] as const;
 export type Relationship = (typeof RELATIONSHIPS)[number];
 
 /** How wide. Intent only — never a model, never a count. */
-export const TOPOLOGIES = ["direct", "fan-out"] as const;
-export type Topology = (typeof TOPOLOGIES)[number];
 
 const HOLDER_OF: Readonly<Record<AgentKind, Holder>> = {
 	maestro: "maestro",
@@ -92,7 +90,6 @@ export interface AgentSpec {
 	readonly kind: AgentKind;
 	/** The persona id — the prose that says what to look for. */
 	readonly persona: string;
-	readonly topology?: Topology;
 }
 
 /**
@@ -123,13 +120,10 @@ export function validateAgentSpec(spec: AgentSpec): string[] {
 	if (!spec.persona.trim())
 		errors.push(`a ${spec.kind} was requested with no persona`);
 
-	const topology = spec.topology ?? "direct";
-	if (!TOPOLOGIES.includes(topology))
-		errors.push(`unknown topology \`${topology}\``);
-	else if (topology === "fan-out" && relationshipOf(spec.kind) !== "blocking")
-		errors.push(
-			`a ${spec.kind} cannot fan out — fanning out means several agents whose answers are normalised into one before the caller continues, and nothing is waiting on a ${relationshipOf(spec.kind)} agent to normalise`,
-		);
+	// No `topology` check. It was a second vocabulary for fanning out —
+	// validated here, and set by NOTHING: the real axis is `Delegation.fanOut`
+	// plus model routing, which is what `delegate` actually reads. Two ways to
+	// say one thing, one of which nobody could reach.
 
 	return errors;
 }

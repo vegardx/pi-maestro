@@ -9,7 +9,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TokenSnapshot } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	AgentLink,
@@ -50,7 +49,7 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
 
 function next<T>(
 	link: MaestroLink,
-	event: "connected" | "done" | "status" | "tokens" | "agentError",
+	event: "connected" | "done" | "status" | "agentError",
 ): Promise<[string, T]> {
 	return new Promise((resolve) => {
 		link.once(event, (id: string, payload: unknown) =>
@@ -58,17 +57,6 @@ function next<T>(
 		);
 	});
 }
-
-const usage: TokenSnapshot = {
-	input: 100,
-	output: 20,
-	cacheRead: 0,
-	cacheWrite: 0,
-	promptTokens: 100,
-	totalTokens: 120,
-	cost: 0.01,
-	turns: 1,
-};
 
 describe("the handshake", () => {
 	it("welcomes an agent that presents the run token", async () => {
@@ -121,24 +109,29 @@ describe("the handshake", () => {
 		expect(link.size).toBe(0);
 	});
 
-	it("lets a resuming agent replace its own connection", async () => {
+	it("TEARS DOWN the old connection when an agent reconnects", async () => {
+		// This asserted `link.size === 1`, which a Map keyed on the agent id
+		// guarantees whatever the code does — it passed with the replacement
+		// removed entirely. What matters is that the first socket is actually
+		// dropped: two live sockets under one id is how a maestro ends up
+		// answering the wrong process, which a live drive did once.
+		//
+		// It also passed `resumed: true`, a flag written onto the wire and read
+		// by nobody. That is gone.
 		const [link, path] = await maestro();
-		await agent().connect(path, {
-			agentId: "worker-1",
-			token: TOKEN,
-		});
-		await agent().connect(path, {
-			agentId: "worker-1",
-			token: TOKEN,
-			resumed: true,
-		});
+		const first = agent();
+		await first.connect(path, { agentId: "worker-1", token: TOKEN });
+		const second = agent();
+		await second.connect(path, { agentId: "worker-1", token: TOKEN });
 		await settle();
 		expect(link.size).toBe(1);
+		expect(first.connected).toBe(false);
+		expect(second.connected).toBe(true);
 	});
 });
 
 describe("what an agent says while it works", () => {
-	it("carries status and cumulative usage", async () => {
+	it("carries status", async () => {
 		const [link, path] = await maestro();
 		const a = agent();
 		await a.connect(path, {
@@ -153,10 +146,6 @@ describe("what an agent says while it works", () => {
 			state: "working",
 			detail: "running the tests",
 		});
-
-		const tokens = next<TokenSnapshot>(link, "tokens");
-		a.tokens(usage);
-		expect((await tokens)[1]).toEqual(usage);
 	});
 });
 

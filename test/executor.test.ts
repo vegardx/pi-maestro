@@ -864,3 +864,58 @@ describe("a worker that dies before it ever connects", () => {
 		expect(h.executor.state().deliverables.api?.state).toBe("done");
 	});
 });
+
+describe("two workers finishing at once", () => {
+	// `collect` runs as `void this.collect(...)` and awaits a push and a `gh`
+	// call — seconds. Two workers finishing in that window gave two overlapping
+	// `advance` calls. Both read the same run state, both saw the same successor
+	// ready, and both called `workspace.create` on one worktree; whichever lost
+	// wrote `failed` over the `running` record the winner had just written —
+	// stranding dependents while a live worker was still building it, and its
+	// eventual `done` was dropped because the record no longer agreed.
+	it("launches the shared successor exactly once", async () => {
+		let release!: () => void;
+		const slow = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const h = harness(
+			plan({
+				deliverables: [
+					deliverable("a"),
+					deliverable("b"),
+					// Ready as soon as `a` lands — so `b` finishing moments later
+					// finds it ready again if nothing serialises the two.
+					deliverable("c", { after: ["a"], reads: ["a"] }),
+				],
+			}),
+			{
+				workspace: {
+					async create(d) {
+						// The window. Real `git worktree add` takes long enough.
+						if (d.id === "c") await slow;
+						return { path: `/worktrees/${d.id}`, branch: `feat/${d.id}` };
+					},
+				},
+			},
+		);
+		await h.executor.start();
+
+		// Both roots report while `c`'s worktree is still being created.
+		const first = h.channel.reports("worker-a", {
+			outcome: "succeeded",
+			handoff: "a done",
+		});
+		const second = h.channel.reports("worker-b", {
+			outcome: "succeeded",
+			handoff: "b done",
+		});
+		await tick();
+		release();
+		await Promise.all([first, second]);
+		await tick();
+
+		expect(h.launched.filter((s) => s.agentId === "worker-c")).toHaveLength(1);
+		expect(h.executor.state().deliverables.c?.state).toBe("running");
+		expect(h.executor.state().deliverables.c?.failure).toBeUndefined();
+	});
+});

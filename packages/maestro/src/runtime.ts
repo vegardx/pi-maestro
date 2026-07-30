@@ -86,7 +86,26 @@ export class MaestroRuntime {
 		return this.current;
 	}
 
+	/**
+	 * Start listening. Idempotent, and that is load-bearing.
+	 *
+	 * `seat.run` called this on EVERY `/run`, before `start` could refuse — so
+	 * asking to run a second plan while one was live did real damage before
+	 * saying no: `link.listen` unlinks the socket file and replaces the server,
+	 * so the live run's socket was deleted and a second server bound in its
+	 * place. And each call added another `asked` listener, so from then on every
+	 * worker question was narrated to the maestro twice, answered twice, and the
+	 * second `respond` reported that nothing was waiting.
+	 */
 	async listen(): Promise<void> {
+		if (this.listening) return this.listening;
+		this.listening = this.startListening();
+		return this.listening;
+	}
+
+	private listening: Promise<void> | undefined;
+
+	private async startListening(): Promise<void> {
 		this.link.on("asked", (agentId, ask) => {
 			const key = `${agentId}/${ask.id}`;
 			const inbox = this.options.inbox?.();
@@ -156,6 +175,9 @@ export class MaestroRuntime {
 	async close(): Promise<void> {
 		this.pending?.reject(new Error("the maestro session ended"));
 		this.pending = undefined;
+		// Cleared so a reopened runtime listens again rather than believing it
+		// already is — the guard must not outlive the socket it guards.
+		this.listening = undefined;
 		await this.link.close();
 	}
 
@@ -277,6 +299,11 @@ export class MaestroRuntime {
 				// second `/run` was told a plan was already running, which was
 				// false and unrecoverable short of restarting.
 				this.executor = undefined;
+				return;
+			case "agentError":
+				say(
+					`${event.id ?? event.agentId} reported a problem: ${firstLine(event.message)}`,
+				);
 				return;
 			case "stuck":
 				// Said out loud and NOT cleared: unlike settling or stopping, the

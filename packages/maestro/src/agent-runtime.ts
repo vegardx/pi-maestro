@@ -126,6 +126,66 @@ export function createFinishTool(reporter: () => Reporter): ToolDefinition {
 	});
 }
 
+/** The slice of the link `ask` needs. */
+export interface Asker {
+	ask(
+		question: string,
+		context?: string,
+	): Promise<{ readonly answer: string; readonly from: "maestro" | "human" }>;
+}
+
+/**
+ * Ask the maestro something, and wait for the answer.
+ *
+ * Cheaper than assuming. A worker that guesses at an ambiguity builds on the
+ * guess, and the guess is invisible by the time anyone reads the diff — so the
+ * question has to be askable at all, which until now it was not: a worker could
+ * only fail the deliverable and explain why.
+ *
+ * The answer says whether a human decided it or the maestro did, and that
+ * distinction is passed through rather than smoothed over. A maestro answers
+ * most questions itself and can be confidently wrong.
+ */
+export function createEscalateTool(asker: () => Asker): ToolDefinition {
+	return defineTool({
+		// NOT `ask`: `packages/ask` already owns that name and it asks the USER.
+		// This asks the MAESTRO, which is a different thing with a different
+		// mechanism — a worker has no user to reach. Two tools called `ask` would
+		// have collided the moment both extensions loaded, and one of them would
+		// have become unreachable depending on load order.
+		name: "escalate",
+		label: "Escalate",
+		description:
+			"Put a question to the maestro that you cannot answer yourself. Blocks until it answers, either from its own knowledge of the plan or by asking the user.",
+		promptSnippet:
+			"escalate — put a question to the maestro when guessing would change what you build.",
+		parameters: Type.Object({
+			question: Type.String({
+				description:
+					"One specific question. Say what you would do by default, so an answer of 'your call' is useful.",
+			}),
+			context: Type.Optional(
+				Type.String({
+					description:
+						"What you have already worked out, so nobody re-derives it.",
+				}),
+			),
+		}),
+		async execute(_id, { question, context }) {
+			const answered = await asker().ask(question, context);
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: `${answered.answer}\n\n(answered by the ${answered.from})`,
+					},
+				],
+				details: { from: answered.from },
+			};
+		},
+	});
+}
+
 export interface DelegateDeps {
 	readonly cwd: () => string;
 	readonly depth: () => number;
@@ -253,6 +313,8 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
  */
 export function declareAgentTools(deps: {
 	readonly reporter: () => Reporter;
+	/** How an agent reaches its maestro with a question. Workers only. */
+	readonly asker?: () => Asker;
 	readonly delegate: DelegateDeps;
 	/**
 	 * The gated shell for this holder.
@@ -280,6 +342,18 @@ export function declareAgentTools(deps: {
 			definition: createFinishTool(deps.reporter),
 			holders: ["worker"],
 		},
+		// `escalate` goes to the maestro, so only something with a maestro holds
+		// it.
+		// The seat asks its human directly and a read-only agent answers its
+		// caller rather than questioning it.
+		...(deps.asker
+			? [
+					{
+						definition: createEscalateTool(deps.asker),
+						holders: ["worker"] as const,
+					},
+				]
+			: []),
 		{
 			definition: createDelegateTool(deps.delegate),
 			holders: ["maestro", "worker", "read-only"],

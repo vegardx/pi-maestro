@@ -47,8 +47,18 @@ export interface SeatOptions {
 	 * real, which is the part that has never been tested.
 	 */
 	readonly spawn?: SpawnProcess;
-	/** Ask the human to approve a command. Absent = the seat cannot ask either. */
-	readonly confirm?: (command: string, reason: string) => Promise<boolean>;
+	/**
+	 * Put a question to the human and wait for an answer.
+	 *
+	 * One channel, used for two things: a worker's escalated question, and the
+	 * seat's own confirmation of a consequential command. They were separate
+	 * hooks and that was a mistake — both are "interrupt the human", and having
+	 * two made it possible to wire one and forget the other, which is exactly
+	 * what happened.
+	 */
+	readonly askHuman?: (
+		question: string,
+	) => Promise<{ readonly answer: string; readonly from: "maestro" | "human" }>;
 	/** How to start pi. Defaults to the pi this process is running. */
 	readonly piCommand?: readonly string[];
 	readonly shippingOps?: Partial<ShippingOps>;
@@ -73,9 +83,12 @@ export interface Seat {
 
 export function createSeat(options: SeatOptions): Seat {
 	const store = createPlanStore(plansRoot(options.agentDir));
+	const now = options.now ?? (() => new Date().toISOString());
 	const runtime = new MaestroRuntime({
 		narrator: options.narrator,
 		socketPath: socketPath(),
+		now,
+		...(options.askHuman ? { askHuman: options.askHuman } : {}),
 	});
 
 	const readOnly = createReadOnlySessionFactory({
@@ -99,7 +112,26 @@ export function createSeat(options: SeatOptions): Seat {
 				cwd: process.cwd(),
 				mode: () => runtime.mode(),
 				policy,
-				...(options.confirm ? { confirm: options.confirm } : {}),
+				// The seat's own shell confirmation rides the same channel as a
+				// worker's escalated question, because both are "interrupt the
+				// human". A yes is a yes; anything else is not.
+				...(options.askHuman
+					? {
+							confirm: async (command: string, reason: string) => {
+								const asker = options.askHuman as NonNullable<
+									typeof options.askHuman
+								>;
+								const reply = await asker(
+									`Run this? ${command}\n\nWhy it is being asked: ${reason}\n\nAnswer yes to allow it.`,
+								);
+								// Only a HUMAN yes allows it. An autopilot answer or a
+								// deferral is not consent to a consequential command.
+								return (
+									reply.from === "human" && /^\s*y(es)?\s*$/i.test(reply.answer)
+								);
+							},
+						}
+					: {}),
 			}),
 			reporter: () => {
 				throw new Error("the maestro reports to you, not to another maestro");
@@ -121,6 +153,7 @@ export function createSeat(options: SeatOptions): Seat {
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },
+		{ definition: runtime.respondTool(), holders: ["maestro"] },
 		// Only the seat authors plans. A worker asked to write one would be
 		// writing work for itself, which is the shape the deliverable model
 		// exists to replace.
@@ -131,7 +164,6 @@ export function createSeat(options: SeatOptions): Seat {
 	]);
 
 	const personas = PersonaCatalogue.declare(BUILT_IN_PERSONAS, tools);
-	const now = options.now ?? (() => new Date().toISOString());
 
 	return {
 		runtime,

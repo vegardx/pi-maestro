@@ -1,10 +1,12 @@
-// packages/maestro — the system packages/modes is being rebuilt into.
+// packages/maestro — the orchestrator.
 //
-// This is NOT an extension yet: it is deliberately absent from the root
-// manifest's `pi.extensions` list, so importing from it has no registration
-// side effects. `packages/modes` remains the live extension and consumes this
-// package while subsystems move across one PR at a time. At the cutover the
-// manifest entry flips here and both `modes` and `subagents` are deleted.
+// The cutover has happened: this IS the extension the manifest loads, and
+// `packages/modes`, `packages/subagents` and `packages/rpc` are deleted.
+//
+// This barrel has no importers — every consumer uses the `./*` subpath export,
+// which is what keeps a module-lifetime side effect from travelling on an
+// accidental `import from "@vegardx/pi-maestro"`. The extension entry is
+// `extension.ts`, not this file.
 //
 // This barrel stays DELIBERATELY thin. Every consumer imports a submodule
 // (`@vegardx/pi-maestro/bash-policy`), because a fat barrel would pull the whole

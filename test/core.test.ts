@@ -98,7 +98,8 @@ function fakeCtx(opts: {
 
 // ---- Tests -------------------------------------------------------------
 
-const ENV_KEYS = ["PI_EXT_DEMO", "PI_EXT_MODES", "PI_DISABLE", "PI_ENABLE"];
+// `PI_EXT_MODES` was here for an extension that no longer exists.
+const ENV_KEYS = ["PI_EXT_DEMO", "PI_EXT_MAESTRO", "PI_DISABLE", "PI_ENABLE"];
 
 beforeEach(() => {
 	__resetCapabilityRegistry();

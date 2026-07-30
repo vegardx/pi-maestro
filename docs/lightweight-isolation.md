@@ -1,6 +1,6 @@
 # Lightweight research isolation
 
-Recon and Plan commands that may execute repository code run in a private,
+Plan-mode commands that may execute repository code run in a private,
 phase-scoped source snapshot through `@anthropic-ai/sandbox-runtime`.
 
 ## Boundary
@@ -13,7 +13,7 @@ controller still runs on the host.
 The controller:
 
 - lazily copies tracked and relevant current, non-ignored source into a private
-  Recon→Plan workspace;
+  plan-mode workspace;
 - gives commands a private home, temp directory, and caches;
 - allows writes only in that phase directory and explicitly denies the real
   checkout and sandbox-runtime's broad compatibility write defaults;
@@ -28,7 +28,7 @@ The controller:
   mode exit, or session shutdown. This is best-effort process cleanup, not a
   VM/cgroup guarantee; use Strong for adversarial code.
 
-There is no copy-back. Entering Auto or Hack ends the epoch. Recon→Plan shares
+There is no copy-back. Entering Auto or Hack ends the epoch. Plan mode shares
 the same private workspace so generated research artifacts remain available.
 
 ## Failure and tier behavior

@@ -32,10 +32,15 @@ The current `/model` selects the seat; a binding maps that seat to a roster. Con
 - `models.rosters.<id>.<light|standard|heavy>` — ordered `"Family/Alias"` refs per tier;
 - `models.bindings.<id>` — `{ roster, targets? }`; a binding without `targets` is the default seat;
 - `models.allowances.<agent>` — which tiers that agent type may request, and `spread` for multi-model fan-out;
-- `models.region` — `{ active, lists }`; the one hard filter, applied before any other reasoning;
-- `agents.kinds.<kind>.runtimePolicy` — optional kind binding;
-- `agents.runtimePolicies.<id>` — permission/session/transport composition;
-- `transitionGates.<id>` — exact edges, agent kind, output contract, enabled flag.
+- `models.region` — `{ active, lists }`; the one hard filter, applied before any other reasoning.
+
+**Declared but read by nothing.** `agents.kinds.<kind>.runtimePolicy`,
+`agents.runtimePolicies.<id>` and `transitionGates.<id>` still exist in the
+settings domain and can still be set — and setting them does nothing. Their only
+reader was `packages/modes`, which is deleted; grep finds them today in the
+settings UI and a type declaration, nowhere else. They are listed here because a
+key you can set and validate but which has no effect is worse undocumented than
+documented, and they should be removed from the domain.
 
 Domain writes require valid JSON and validate references before persistence. Unsafe runtime combinations, unknown tiers, malformed alias refs, unknown contracts, and invalid transition edges fail closed. See [Models](models.md).
 
@@ -49,19 +54,31 @@ The Execution policy screen exposes:
 - dedicated delivery actions;
 - consequential-action confirmation;
 - privileged remote and GitHub-read behavior;
-- unknown-command routing;
-- unavailable-isolation fallback; and
-- the fleet-wide cooperative stop grace (`modes.execution.stopGraceMs`, default 5000 ms).
+- unknown-command routing.
+
+Two rows are declared and read by nothing: `delivery` and `fallback`. The
+classifier never consults either. `modes.execution.stopGraceMs` is documented in
+older copies of this file and does not exist at all — it is not one of the keys
+`readExecutionPolicySettings` accepts, so setting it did nothing, silently.
 
 Setting an individual row makes the effective presentation Custom while preserving preset defaults for unspecified rows. Invalid persisted choices never broaden access.
 
 Isolation outcome:
 
-- **Lightweight** uses an installed process-policy backend and private research workspace.
-- **Strong** uses the installed VM/container backend.
-- **None** has no sandbox boundary; Hack remains the explicit direct posture.
+**Confinement is ambient, not a destination.** Every route that runs at all runs
+through the actor's write profile, enforced by the OS. `lightweight` is not a
+place a command is sent — it is the confinement everything already gets. Only
+`strong` is a separate mechanism (its own filesystem and network), and with no
+backend for it a command routed there is refused rather than run.
 
-A protected Bash route never silently falls back. For the maestro, a configured `confirm` fallback can present a downgrade decision. Workers/reviewers are non-interactive: backend or approval failure returns a bounded `BashRoutingError` with retry guidance and never calls `ui.select` or `ui.confirm`.
+A refusal never falls back to an unconfined shell, including when the sandbox
+cannot start because its own dependencies are missing — it says what to install
+instead. `MAESTRO_SANDBOX=off` disables enforcement, and
+`MAESTRO_SANDBOX_SHADOW=<file>` logs what would have been confined without
+confining it.
+
+Agents are non-interactive: a command needing a human is refused with the
+reason, because prompting into a void is how a fleet hangs.
 
 ## Worktrees and lifecycle
 
@@ -77,4 +94,4 @@ Other scalar groups include distill thresholds, compaction timeout, and research
 
 ## Cutover
 
-Only current keys are accepted; there is no migration path. `models.presets` and `models.modelSets` — the v1 surface — are **rejected** rather than silently accepted, because they were validated and persisted long after the resolver stopped reading them, so a write appeared to succeed and did nothing. Archive the old settings file, remove unsupported keys, and author families/rosters/bindings instead. Plan/run/session schemas likewise require explicit archive or reset; see [Reset and archive](commands.md#reset-and-archive).
+Only current keys are accepted; there is no migration path. `models.presets` and `models.modelSets` — the v1 surface — are **rejected** rather than silently accepted, because they were validated and persisted long after the resolver stopped reading them, so a write appeared to succeed and did nothing. Archive the old settings file, remove unsupported keys, and author families/rosters/bindings instead. Plan/run/session schemas likewise require explicit archive or reset; see [Plan state](commands.md#plan-state).

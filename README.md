@@ -2,10 +2,8 @@
 
 A [pi](https://github.com/badlogic/pi-mono) extension stack that turns one
 coding-agent session into an orchestra: the main session (the **maestro**)
-plans and coordinates, **workers** implement deliverables in parallel git
-worktrees on tmux, and typed one-shot agents research, review, and verify.
-Nothing ships until the canonical workflow's blocking findings are resolved
-and verified.
+plans and coordinates, and **workers** implement deliverables in parallel git
+worktrees, each getting its own diff reviewed before it reports.
 
 This is primarily how I run my own coding agent. It's public because the
 design might be useful to anyone curious about structuring agentic work —
@@ -13,32 +11,28 @@ the docs explain the ideas, not just the knobs.
 
 ## The ideas
 
-- **The plan is the contract.** `/plan` opens a planning session: research
-  fans out to parallel subagents, and convergence means tasks written with
-  file paths and signatures — detailed enough that a simpler model could
-  implement them. Workers follow instructions; they don't design.
+- **The plan is the contract.** Planning is a conversation; the maestro
+  authors the whole document in one call when you have converged, and
+  rejections come back with every error at once. Workers follow the plan;
+  they do not design.
 - **A deliverable is one branch, one PR.** Deliverables form a dependency
-  DAG with stacked PRs by default. Plans can span multiple repos.
-- **Workers implement; Maestro owns orchestration.** Every active deliverable
-  gets a worker on tmux — observable (`/watch`), steerable (`/steer`), and
-  answerable (`/answer`). Exact workflow assignments review immutable SHAs;
-  Maestro owns transition rulings, recovery, accounting, and shipping.
-- **Reviews converge by construction.** Typed review assignments produce
-  canonical finding ids and explicit resolutions; scope-locked verification
-  checks fixed claims instead of starting an open-ended rerun. See
-  [review workflows](docs/review-loop.md).
-- **Sessions have a lifecycle.** As context fills, `/distill` compacts in
-  place with user-curated carry-forward; `/handoff` closes an arc and seeds
-  a fresh planning session with the unfinished threads.
-
-## Install
-
-```bash
-pi install git:github.com/vegardx/pi-maestro
-```
-
-The repo root is the pi bundle manifest. Pi loads the TypeScript extension
-entries through jiti; there is no build step. Shipping needs the `gh` CLI.
+  DAG. `after` orders them; `reads` says what a deliverable actually
+  inherits, so waiting for something is not paying for its hand-off.
+- **Maestro owns both ends.** It creates the worktree, launches the worker,
+  and — when the worker reports — ships, records, and only then releases it.
+  An agent that controls its own exit can be gone before its result is
+  collected.
+- **A review nobody acts on did not happen.** There is no review command: a
+  worker hands its own diff to a reviewer and fixes what comes back before it
+  reports. Findings arrive neutral, and a fan-out returns every opinion
+  unreconciled. See [review](docs/review-loop.md).
+- **A question is a rare interruption.** A stuck worker asks; the maestro
+  answers from the plan context it already has, and only reaches you when it
+  genuinely cannot. The answer says who decided.
+- **Declared once, derived.** A tool's grant, description and implementation
+  come from one declaration and cannot drift — a tool declared without an
+  implementation fails at construction. That invariant is the reason the
+  system was rebuilt.
 
 ## A session in 60 seconds
 

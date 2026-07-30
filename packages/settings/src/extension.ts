@@ -75,7 +75,7 @@ export default defineExtension(
 					// A malformed/stale models config must read as guidance, not
 					// as an extension stack trace.
 					ctx.ui.notify(
-						`Maestro settings could not be read: ${cause instanceof Error ? cause.message : String(cause)}\nFix the models block in settings.json (see docs/modes-architecture.md).`,
+						`Maestro settings could not be read: ${cause instanceof Error ? cause.message : String(cause)}\nFix the models block in settings.json (see docs/settings.md).`,
 						"warning",
 					);
 				}

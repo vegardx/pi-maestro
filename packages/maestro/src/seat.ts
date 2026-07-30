@@ -9,6 +9,11 @@ import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
 import { createPlanTool } from "./authoring.js";
+import { createBashTool } from "./bash-tool.js";
+import {
+	type ExecutionPolicySettings,
+	readExecutionPolicySettings,
+} from "./execution-policy.js";
 import { Executor, type ExecutorDeps } from "./executor.js";
 import type { Mode, ModeName } from "./mode.js";
 import { plansRoot, sessionFile, socketPath } from "./paths.js";
@@ -40,6 +45,8 @@ export interface SeatOptions {
 	 * real, which is the part that has never been tested.
 	 */
 	readonly spawn?: SpawnProcess;
+	/** Ask the human to approve a command. Absent = the seat cannot ask either. */
+	readonly confirm?: (command: string, reason: string) => Promise<boolean>;
 	/** How to start pi. Defaults to the pi this process is running. */
 	readonly piCommand?: readonly string[];
 	readonly shippingOps?: Partial<ShippingOps>;
@@ -72,8 +79,20 @@ export function createSeat(options: SeatOptions): Seat {
 	// One registry. The maestro's own tools and the ones it hands to agents are
 	// the same declarations, differing only in who holds them — which is the
 	// whole reason a grant cannot drift from an implementation.
+	// Read once per call rather than cached: settings change under a running
+	// session, and a stale policy is a policy nobody asked for.
+	const policy = (): ExecutionPolicySettings =>
+		readExecutionPolicySettings(process.cwd(), options.agentDir);
+
 	const tools = ToolRegistry.declare([
 		...declareAgentTools({
+			bash: createBashTool({
+				holder: "maestro",
+				cwd: process.cwd(),
+				mode: () => runtime.mode(),
+				policy,
+				...(options.confirm ? { confirm: options.confirm } : {}),
+			}),
 			reporter: () => {
 				throw new Error("the maestro reports to you, not to another maestro");
 			},

@@ -26,8 +26,10 @@ import {
 	type Reporter,
 	readWiring,
 } from "./agent-runtime.js";
+import { createBashTool } from "./bash-tool.js";
+import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
-import { MODE_NAMES, type ModeName } from "./mode.js";
+import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
 import { BUILT_IN_PERSONAS } from "./personas.js";
 import {
 	createReadOnlySessionFactory,
@@ -68,6 +70,16 @@ export function startWorker(
 
 	const registry: ToolRegistry = ToolRegistry.declare(
 		declareAgentTools({
+			// No `confirm`: an agent runs unattended, so a command that needs a
+			// human is refused rather than left prompting into a void.
+			bash: createBashTool({
+				holder: "worker",
+				cwd: process.cwd(),
+				// A worker is never in hack — safeguards do not propagate — so its
+				// posture is fixed at the one `modeForChild` gives it.
+				mode: () => modeForChild(mode("auto"), "worker"),
+				policy: () => readExecutionPolicySettings(process.cwd()),
+			}),
 			reporter,
 			delegate: {
 				cwd: () => process.cwd(),

@@ -55,7 +55,7 @@ export const WORK_ITEM_KINDS = [
 	"question",
 	"manual",
 	/**
-	 * Harness-injected lifecycle tasks (docs/modes-architecture.md § Deliverable
+	 * Harness-injected lifecycle tasks (see docs/architecture.md
 	 * handoff). Reserved: the planner and agents cannot author these kinds.
 	 * `preflight` = review upstream handoffs (first, injected only when the
 	 * deliverable has dependencies); `postflight` = write the downstream handoff

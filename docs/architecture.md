@@ -1,72 +1,106 @@
 # Architecture
 
-pi-maestro is a TypeScript workspace and pi extension bundle. The host session is the **maestro**. It owns plan mutation, transition rulings, delivery scheduling, recovery, aggregate accounting, and shipping. Workers own implementation turns in dedicated worktrees. One-shot agents own research or typed workflow assignments. The HUD and PR body are projections, never authorities.
+One `pi` process becomes a maestro. It spawns detached worker processes that
+dial home over a unix socket, and those workers spawn read-only agents they wait
+on. **Depth decides what a process is**, read once at load in
+`packages/maestro/src/extension.ts` — the surface a process does not have is
+never registered, rather than switched off afterwards.
 
-## Boundaries
-
-The root manifest loads `ask`, `prompt-assist`, `settings`, `subagents`, `commit`, `smart-compact`, and `modes`. Shared libraries are `contracts`, `core`, `models`, `ui`, `git`, `github`, `rpc`, and `tmux`.
-
-Dependencies cross package boundaries through:
-
-- versioned capabilities such as `agents.v1`, `subagents.v1`, `settings.v1`, and `usage.v1`;
-- typed `maestro.*` events; and
-- the exhaustive Maestro RPC protocol.
-
-These are the channels to prefer, not a rule a linter enforces — extensions may import
-each other directly where that is genuinely simpler. One hazard is worth knowing: an
-extension's `index.ts` builds module-lifetime singletons (`packages/subagents/src/index.ts`
-constructs a run bus, a semaphore and an RPC client at top level), so import a submodule
-rather than an entry point. `packages/contracts` remains dependency-light.
-
-## Authoritative state
-
-| State | Authority | Durable location |
-|---|---|---|
-| Plan, assignments, stage DAG, gates | `PlanEngine` | `<agentDir>/maestro/plans/<slug>/plan.json` |
-| Worker process generation/session | `ExecutionAdapter` + plan | plan fields and worker JSONL |
-| One-shot run lifecycle | owning `RunStore` | `<runsRoot>/<runId>/status.json`, `events.jsonl`, `result.md` |
-| Worker-owned child view | worker `RunStore`; host is a projection | `<planDir>/child-projections.json` |
-| Usage aggregation | revisioned cumulative checkpoints | `<planDir>/execution/usage.json` |
-| Review provenance | workflow analytics on the delivery | `plan.json`; bounded PR projection |
-
-Writes that cross a process boundary are generation-fenced and persisted before acknowledgement. Worker replacement increments `sessionGeneration`; stale completion, child sync, usage, and controls cannot mutate the new generation. Child reconnect sends cumulative projections, not retry-sensitive deltas.
-
-Unsupported plan, run, and execution schema versions fail with archive/reset guidance. There is no compatibility hydration path in the active runtime.
-
-## Planning and execution
-
-Plan mode is a conversation: it converges on what to build and why. `research` produces persisted reports and bounded digests; `dig` retrieves full reports. The structure tools (`deliverable`, `work`, `repo`) are **not** available in plan mode — the plan is authored in one forming step at the transition into execution (Shift+Tab), which then runs plan review and a final ruling before any worker starts. Plan is the boot mode; recon is a deliberate `/mode recon` off-ramp in its own session.
-
-`workflow` resolves each semantic agent assignment to an immutable model/effort pair and stores an explicit stage DAG. Members of a stage run against one `inputRevision`; stages expose declared input/output contracts and barriers. Duplicate semantic kinds are valid when identities, rationale, and exact model choices are explicit.
-
-Plan → Auto/Hack is a separate execution-readiness gate. A `plan-review` assignment inspects the exact plan, the user rules **Enter execution** or **Stay in plan**, and the host revalidates the same plan fingerprint before changing mode. The session remains in Plan while review and ruling are pending.
-
-A repo-backed delivery is one branch, worktree, and PR. `dependsOn` forms a flat DAG; stacked work defaults to the predecessor tip. The executor activates only ready `planned` deliveries. `/run` (alias `/start`) runs the plan — it resumes cleanly parked workers and activates ready planned work in one step; `/recover` audits failed or uncertain work before resumption, and an unproven stop routes there.
-
-## Process and RPC model
-
-Workers are persistent pi sessions in tmux with retained JSONL. The Maestro RPC socket authenticates identity and carries status, plan reads/mutations, questions, cumulative usage, child reconciliation, stop preparation, interrupt, and debug proposals. The adapter serializes lifecycle mutations and fences them by generation.
-
-One-shot agents use the common run service. Tmux is the default inspectable transport; headless is reserved for explicitly short internal calls. A worker's child run store remains authoritative. The host persists a read-only projection so rows and totals survive host restart, then marks live rows unconfirmed until the current generation reconciles.
-
-Stop is bounded: first request cooperative preparation, then escalate the remaining tmux sessions at one fleet deadline. `K`/`/kill` requires a proved stop before recording a recoverable delivery failure. Interrupt aborts a turn or one-shot run without implying worker shutdown.
-
-## Accounting and presentation
-
-Token categories are disjoint:
-
-```text
-promptTokens = input + cacheRead + cacheWrite
-totalTokens  = promptTokens + output
-cacheHitRate = cacheRead / promptTokens
+```
+depth 0  maestro    the seat you talk to       plan · flight · respond · bash · commit · delete · delegate
+depth 1  worker     one deliverable, own tree  bash · commit · delete · delegate · finish
+depth 2  read-only  explorer/reviewer/advisor  read · grep · find · ls · websearch · webfetch
+depth 3  MAX_DEPTH  refused
 ```
 
-Every cumulative counter lifetime has a stable source key and monotonic revision. Worker generations are separate sources; a reconnected child keeps its logical run source while only the current owner generation may update it. The ledger restores checkpoints before rendering.
+A read-only agent registers none of our tools. It runs on the `--tools`
+allowlist it was launched with, and has no shell — because a shell is a write
+tool, and withholding it is what makes the posture mean anything.
 
-The HUD reads execution and run projections. Terminal elapsed time ends at `completedAt`; live rows use the current clock. Width reduction drops model and token details before truncating identity/status. User-facing controls resolve opaque `worker:*` and `run:*` ids before aliases.
+## The defect this is organised against
 
-PR generation replaces only `<!-- maestro:provenance:start/end -->`. It includes canonical findings, resolutions, exact SHAs, bounded assignment evidence, token/cost totals, and final verification. Text outside markers is preserved; secrets, prompts, reasoning, and transcripts are excluded or redacted.
+A capability used to live in four independent places — the grant, the
+implementation, the agent-facing description, the verification — joined only by
+strings, with nothing failing when they disagreed. Every serious defect was one
+of those four drifting.
 
-## Validation
+`ToolRegistry.declare` rejects at construction: a tool with no implementation, a
+tool no posture can hold, a duplicate name, a summary that opens with the tool's
+own name. `grantsFor()` derives the grant and `describeFor()` generates the
+description, so neither can drift. `PersonaCatalogue.declare` enforces the
+mirror rule — prose naming a declared tool is refused, so instructions cannot
+teach a model to call something the registry never handed it.
 
-Deterministic scenario tests provide scripted models, temporary git repositories, fake GitHub/tmux/clock/usage, full event JSONL, and final-state artifacts. Real-process tests use test-owned RPC sockets and forked fake agents. Provider and GitHub dogfood are opt-in host activities; normal worker tests never contact either.
+The rule that generalises: **a guard must derive its expectation from the
+running system, never restate it.** Guards that restated it have certified
+mistakes.
+
+## Packages
+
+| Package | What it is |
+| --- | --- |
+| `maestro` | the orchestrator: plan, run, executor, protocol, socket, spawn, shipping, safeguards |
+| `ask` | the question system — `ask` sends, `respond` settles one that arrived, a transport decides where they go |
+| `contracts` | shared types and the capability vocabulary |
+| `core` | `defineExtension`: feature-flag gating and the capability facade |
+| `models` | families, rosters, bindings, resolution |
+| `git`, `github` | typed CLI wrappers |
+| `settings` | the settings domain and `/maestro` |
+| `commit`, `smart-compact`, `prompt-assist`, `research-tools`, `ui` | smaller extensions |
+
+## Plan and run
+
+`plan.json` is what was authored; `run.json` is what happened. Separate files
+because they have separate lifetimes — a plan is rewritten when amended, a run
+on every transition.
+
+**Nothing derivable is stored.** A deliverable no dependent can reach is
+*stranded*, but that is a fact about the plan's shape plus the set of failures,
+so it is computed. A second place to record the same fact is a second place for
+it to be wrong.
+
+`after` orders; `reads` declares data flow and must be a subset of `after`.
+Waiting for something is not inheriting its hand-off.
+
+## Who does what
+
+The maestro's **code** is deterministic and never consults a model: it creates
+worktrees and branches, gathers the hand-offs a deliverable declared it reads,
+pushes, opens pull requests, records results, releases workers.
+
+The maestro's **model** does three things: authors plans, answers questions
+workers are blocked on, and carries out plan preflight/postflight prose — the
+only place it touches the repository directly, which is what `flight` brackets.
+
+Confusing the two is easy and worth resisting: "the maestro creates the
+worktree" means the code, always.
+
+## Maestro owns agent exit
+
+A worker calls `finish` and the call **does not return** until the maestro has
+shipped, recorded the result, and sent `release`. An agent that controls its own
+exit can be gone before its result is collected — that once lost the output of
+every node in a run.
+
+The order is ship → record → release, always. `advance` is serialised, so two
+workers finishing at once cannot both claim the same successor.
+
+## Safeguards
+
+Every shell command is classified (`bash-policy.ts`) and then runs **confined**
+to the actor's write profile, enforced by the OS through
+`@anthropic-ai/sandbox-runtime`. Confinement is ambient rather than a
+destination: a command the classifier got wrong is still contained.
+
+Where the sandbox cannot start — its own dependencies missing — commands are
+refused with the remedy, never run unconfined.
+
+Modes are two properties, cwd access × safeguards, giving plan/auto/hack.
+Safeguards do not propagate: a worker is never in hack.
+
+## Further
+
+- [commands.md](commands.md) — every command and tool
+- [usage.md](usage.md) — the lifecycle end to end
+- [e2e-testing.md](e2e-testing.md) — the three tiers, and what only a live drive can see
+- `docs/design/` and `docs/reviews/` — dated records of what was designed when, not claims about today

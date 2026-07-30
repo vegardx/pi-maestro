@@ -1,6 +1,6 @@
 # Strong research isolation with Apple container
 
-The optional Strong backend runs Recon and Plan repository code in one
+The optional Strong backend runs plan-mode repository code in one
 phase-scoped Apple `container` VM. It is available only on Apple-silicon macOS
 26 or newer with Apple container 0.6.0 or newer and all required probes passing.
 Unsupported choices remain visible and report what the operator must fix.

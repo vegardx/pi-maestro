@@ -16,7 +16,10 @@
 // tool called before the handshake completes says so, instead of hanging.
 
 import { fileURLToPath } from "node:url";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionCommandContext,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { defineExtension } from "@vegardx/pi-core";
 import { PersonaCatalogue } from "./agent.js";
 import {
@@ -30,6 +33,7 @@ import { createBashTool } from "./bash-tool.js";
 import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
 import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
+import { routeModel, routeSpread } from "./model-routing.js";
 import { BUILT_IN_PERSONAS } from "./personas.js";
 import {
 	createReadOnlySessionFactory,
@@ -85,6 +89,14 @@ export function startWorker(
 				cwd: () => process.cwd(),
 				depth: () => wiring.depth,
 				openSession: createReadOnlySessionFactory(launch),
+				// A reader spawned by a worker inherits the worker's model unless a
+				// roster says otherwise, and fans out across families when asked.
+				route: (agent, fanOut, ctx) =>
+					fanOut
+						? routeSpread(ctx as ExtensionContext, agent)
+						: routeModel(ctx as ExtensionContext, agent).then((one) =>
+								one ? [one] : [],
+							),
 				// THE SAME personas the maestro declares. A worker delegating a
 				// review has to hand over the real review persona — the prose that
 				// says what to look for — not a sentence this file made up about
@@ -198,7 +210,7 @@ export function startSeat(
 					);
 					return;
 				}
-				await seat().run(slug);
+				await seat().run(slug, ctx as unknown as ExtensionContext);
 			} catch (error) {
 				// Refusals here are ordinary and legible — no such plan, plan mode
 				// cannot run one, a plan already running. They belong in front of

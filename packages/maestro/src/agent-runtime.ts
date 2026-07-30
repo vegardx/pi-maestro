@@ -132,16 +132,34 @@ export interface DelegateDeps {
 	readonly openSession: ReadOnlySessionFactory;
 	/** Turn a persona id into its brief. Unknown ids throw, and should. */
 	readonly briefFor: (agent: Delegable, persona: string) => string;
+	/**
+	 * Which models to ask. One entry = one agent; several = a fan-out, one per
+	 * family. Absent, or one entry, means the caller's own model is inherited.
+	 *
+	 * Present only because model routing is now wired: a `fanOut` parameter with
+	 * nothing behind it would be a flag that reads like a capability and does
+	 * nothing, which is the defect this rebuild exists to remove.
+	 */
+	readonly route?: (
+		agent: Delegable,
+		fanOut: boolean,
+		ctx: unknown,
+	) => Promise<
+		readonly { readonly modelId: string; readonly family?: string }[]
+	>;
 }
 
 /**
- * Ask a read-only agent something, and wait for the answer.
+ * Ask one or several read-only agents something, and wait for the answers.
  *
- * There is no fan-out parameter. Fanning out means several agents across model
- * families whose answers are reconciled, and the model diversity that makes
- * that worth doing is not wired yet — so a `fanOut` flag here would be a
- * parameter that reads like a capability and quietly does nothing, which is
- * precisely the defect this rebuild exists to remove.
+ * `fanOut` asks the same question of one agent per model family and returns
+ * every answer, attributed by family and NOT reconciled. Reconciling them here
+ * would be this layer deciding which reviewer was right, which is the caller's
+ * judgement to make — and flattening several opinions into one is how six real
+ * findings became a sentence saying nothing.
+ *
+ * With no roster configured, `fanOut` reaches exactly one family and says so
+ * rather than pretending to a diversity it did not get.
  */
 export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
 	return defineTool({
@@ -159,21 +177,66 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
 			question: Type.String({
 				description: "The specific thing you want it to answer.",
 			}),
+			fanOut: Type.Optional(
+				Type.Boolean({
+					description:
+						"Ask one agent per model family and get every answer back, unreconciled. Worth it when you want a second opinion rather than a second run.",
+				}),
+			),
 		}),
-		async execute(_id, { agent, persona, question }) {
-			const answer = await askReadOnly(
-				{
-					kind: agent,
-					cwd: deps.cwd(),
-					brief: deps.briefFor(agent, persona),
-					prompt: question,
-					parentDepth: deps.depth(),
-				},
-				deps.openSession,
+		async execute(_id, { agent, persona, question, fanOut }, _signal, _u, ctx) {
+			const models = deps.route
+				? await deps.route(agent, fanOut === true, ctx)
+				: [];
+			const ask = (model?: string) =>
+				askReadOnly(
+					{
+						kind: agent,
+						cwd: deps.cwd(),
+						brief: deps.briefFor(agent, persona),
+						prompt: question,
+						parentDepth: deps.depth(),
+						...(model ? { model } : {}),
+					},
+					deps.openSession,
+				);
+
+			if (models.length <= 1) {
+				const answer = await ask(models[0]?.modelId);
+				return {
+					content: [{ type: "text" as const, text: answer }],
+					details: { agent, persona, families: models.length },
+				};
+			}
+
+			// Settled, not all: one reader failing is a missing opinion, not a
+			// failed review. Losing the other two because of it would be.
+			const answers = await Promise.allSettled(
+				models.map((model) => ask(model.modelId)),
 			);
+			const parts = answers.map((answer, i) => {
+				const family = models[i]?.family ?? models[i]?.modelId ?? "unknown";
+				return answer.status === "fulfilled"
+					? `## ${family}\n\n${answer.value}`
+					: `## ${family}\n\nThis one did not answer: ${
+							answer.reason instanceof Error
+								? answer.reason.message
+								: String(answer.reason)
+						}`;
+			});
+			const reached = new Set(models.map((m) => m.family).filter(Boolean)).size;
 			return {
-				content: [{ type: "text" as const, text: answer }],
-				details: { agent, persona },
+				content: [
+					{
+						type: "text" as const,
+						text: [
+							`${models.length} ${agent}s answered, across ${reached} model famil${reached === 1 ? "y" : "ies"}. They are not reconciled — that is yours to do.`,
+							"",
+							...parts,
+						].join("\n"),
+					},
+				],
+				details: { agent, persona, families: reached },
 			};
 		},
 	});

@@ -5,6 +5,7 @@
 // out for a dependency mid-run — an executor built with a bad socket path fails
 // at construction rather than the first time a worker tries to dial home.
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
@@ -16,6 +17,7 @@ import {
 } from "./execution-policy.js";
 import { Executor, type ExecutorDeps } from "./executor.js";
 import type { Mode, ModeName } from "./mode.js";
+import { routeModel, routeSpread } from "./model-routing.js";
 import { plansRoot, sessionFile, socketPath } from "./paths.js";
 import { BUILT_IN_PERSONAS, DELIVERABLE_WORKER } from "./personas.js";
 import type { Plan } from "./plan.js";
@@ -57,8 +59,14 @@ export interface Seat {
 	readonly store: PlanStore;
 	readonly tools: ToolRegistry;
 	readonly personas: PersonaCatalogue;
-	/** Start a stored plan. Throws with the reason if it cannot. */
-	run(slug: string): Promise<Executor>;
+	/**
+	 * Start a stored plan.
+	 *
+	 * Takes a `ctx` because resolving a worker's model needs pi's own model
+	 * registry — for auth and for the catalogue — and the seat is built at
+	 * registration time, before any context exists. A command handler has one.
+	 */
+	run(slug: string, ctx?: ExtensionContext): Promise<Executor>;
 	setMode(name: ModeName): Mode;
 	close(): Promise<void>;
 }
@@ -101,6 +109,15 @@ export function createSeat(options: SeatOptions): Seat {
 				depth: () => 0,
 				openSession: readOnly,
 				briefFor: (agent, persona) => briefFor(personas, tools, agent, persona),
+				// The seat's own readers route too. Research while planning is the
+				// point of planning, and it should be able to use a cheap model
+				// for it — or several, when it wants a second opinion.
+				route: (agent, fanOut, ctx) =>
+					fanOut
+						? routeSpread(ctx as ExtensionContext, agent)
+						: routeModel(ctx as ExtensionContext, agent).then((one) =>
+								one ? [one] : [],
+							),
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },
@@ -124,7 +141,7 @@ export function createSeat(options: SeatOptions): Seat {
 
 		setMode: (name) => runtime.setMode(name),
 
-		async run(slug: string) {
+		async run(slug: string, ctx?: ExtensionContext) {
 			const plan = store.loadPlan(slug);
 			if (!plan)
 				throw new Error(
@@ -135,14 +152,28 @@ export function createSeat(options: SeatOptions): Seat {
 							.join(", ") || "none"
 					})`,
 				);
+			// One resolution per run, not per deliverable: in this model every
+			// deliverable is a worker, so they all route the same way.
+			const routed = ctx ? await routeModel(ctx, "worker") : undefined;
+			if (routed?.fallbackReason)
+				options.narrator.say(
+					`Workers fall back to the seat model: ${routed.fallbackReason}`,
+				);
 			await runtime.listen();
-			return runtime.start(plan, (rt) => new Executor(plan, deps(plan, rt)));
+			return runtime.start(
+				plan,
+				(rt) => new Executor(plan, deps(plan, rt, routed?.modelId)),
+			);
 		},
 
 		close: () => runtime.close(),
 	};
 
-	function deps(plan: Plan, rt: MaestroRuntime): ExecutorDeps {
+	function deps(
+		plan: Plan,
+		rt: MaestroRuntime,
+		workerModel?: string,
+	): ExecutorDeps {
 		// Resolved HERE and handed over as environment, because a worker with no
 		// identity does not fail — it reaches for `git config user.email`, and a
 		// linked worktree shares the repository's config file, so that one command
@@ -175,7 +206,10 @@ export function createSeat(options: SeatOptions): Seat {
 			runMaestroTasks: rt.runMaestroTasks,
 			now,
 			sessionFileFor: (id) => sessionFile(plan.slug, id, options.agentDir),
-			...(options.model ? { model: options.model } : {}),
+			// An explicit option wins over routing: it is how a drive pins a model.
+			...((options.model ?? workerModel)
+				? { model: options.model ?? (workerModel as string) }
+				: {}),
 		};
 	}
 }

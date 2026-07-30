@@ -26,6 +26,7 @@ import { defineExtension } from "@vegardx/pi-core";
 import { PersonaCatalogue } from "./agent.js";
 import {
 	type AgentWiring,
+	createAskTransport,
 	declareAgentTools,
 	dialHome,
 	type Reporter,
@@ -62,6 +63,9 @@ export function startWorker(
 	pi: { registerTool(tool: unknown): void },
 	wiring: AgentWiring,
 	launch: ReadOnlyLaunchOptions,
+	capabilities?: {
+		register(id: typeof CAPABILITIES.askTransport, value: unknown): unknown;
+	},
 ): Promise<AgentLink> {
 	let link: AgentLink | undefined;
 	let personas: PersonaCatalogue | undefined;
@@ -87,13 +91,6 @@ export function startWorker(
 				policy: () => readExecutionPolicySettings(process.cwd()),
 			}),
 			reporter,
-			// The same link the reporter uses. A worker asks the maestro it
-			// already reports to; there is no second channel.
-			asker: () => {
-				if (!link)
-					throw new Error("cannot ask yet — the handshake has not completed");
-				return link;
-			},
 			delegate: {
 				cwd: () => process.cwd(),
 				depth: () => wiring.depth,
@@ -127,6 +124,20 @@ export function startWorker(
 	// A worker holds worker tools. There is no list to keep in step with this
 	// one — the holder is the whole selector.
 	for (const tool of registry.definitionsFor("worker")) pi.registerTool(tool);
+
+	// `ask.v1` routes through whatever transport is registered. Registering one
+	// here is the whole of "a worker's question goes to its maestro" — the agent
+	// calls the same `ask` a maestro does, and position decides the destination.
+	// Registered before the handshake completes, like the tools, and it says so
+	// if called too early rather than hanging.
+	capabilities?.register(CAPABILITIES.askTransport, {
+		present: (questions: Questionnaire) =>
+			createAskTransport(() => {
+				if (!link)
+					throw new Error("cannot ask yet — the handshake has not completed");
+				return link;
+			}).present(questions),
+	});
 
 	return dialHome(wiring).then((connected) => {
 		link = connected;
@@ -295,7 +306,12 @@ export default defineExtension(
 			// A worker dials home; a read-only agent answers its caller and holds
 			// no agent surface of its own beyond what it was launched with.
 			if (wiring)
-				void startWorker(pi, wiring, { extensions: [extensionPath()] });
+				void startWorker(
+					pi,
+					wiring,
+					{ extensions: [extensionPath()] },
+					maestro.capabilities,
+				);
 			return;
 		}
 		const asker = maestro.capabilities.get(CAPABILITIES.ask) as

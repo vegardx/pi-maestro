@@ -17,6 +17,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import type { Executor, ExecutorEvent } from "./executor.js";
 import { MaestroLink } from "./link.js";
 import { type Mode, type ModeName, mode as modeNamed } from "./mode.js";
@@ -26,8 +27,7 @@ import type { Plan, Task } from "./plan.js";
 interface OpenQuestion {
 	readonly agentId: string;
 	readonly id: string;
-	readonly question: string;
-	readonly context?: string;
+	readonly questions: Questionnaire;
 	readonly askedAt: string;
 }
 
@@ -103,8 +103,7 @@ export class MaestroRuntime {
 			this.questions.set(key, {
 				agentId,
 				id: ask.id,
-				question: ask.question,
-				...(ask.context ? { context: ask.context } : {}),
+				questions: ask.questions,
 				askedAt: this.options.now?.() ?? "",
 			});
 			// Delivered to the maestro's own model, not to a dashboard. It answers
@@ -114,9 +113,20 @@ export class MaestroRuntime {
 				[
 					`# A worker is blocked on a question`,
 					"",
-					`\`${agentId}\` asks: ${ask.question}`,
-					...(ask.context ? ["", `What it already knows: ${ask.context}`] : []),
-					"",
+					...ask.questions.flatMap((question) => [
+						`\`${agentId}\` asks: ${question.question}`,
+						...(question.context
+							? [`What it already knows: ${question.context}`]
+							: []),
+						...(question.options?.length
+							? [
+									`Its options: ${question.options
+										.map((option) => option.value ?? option.label)
+										.join(", ")}`,
+								]
+							: []),
+						"",
+					]),
 					`Answer it with \`respond\` (id \`${key}\`). Answer from what you know about this plan if you can. Only put it to the user when you genuinely cannot — they are not watching this run.`,
 				].join("\n"),
 			);
@@ -296,9 +306,20 @@ export class MaestroRuntime {
 					.join(", ") || "none"
 			}.`;
 
+		// Every question in the set gets the same answer text. A worker asks about
+		// one decision at a time; a maestro splitting one reply across several
+		// questions is a shape nothing has needed.
+		const asAnswers = (value: string): Answers =>
+			question.questions.map((q) => ({ questionId: q.id, value }));
+
 		if (!askTheHuman) {
 			this.questions.delete(key);
-			this.link.answer(question.agentId, question.id, answer, "maestro");
+			this.link.answer(
+				question.agentId,
+				question.id,
+				asAnswers(answer),
+				"maestro",
+			);
 			return `Answered ${question.agentId}.`;
 		}
 
@@ -310,7 +331,9 @@ export class MaestroRuntime {
 			this.link.answer(
 				question.agentId,
 				question.id,
-				"nobody could be asked, and the maestro could not answer either. Decide for yourself and say in your hand-off what you assumed.",
+				asAnswers(
+					"nobody could be asked, and the maestro could not answer either. Decide for yourself and say in your hand-off what you assumed.",
+				),
 				"maestro",
 			);
 			return `There is no user reachable from this session, so ${question.agentId} was told to decide and record the assumption.`;
@@ -321,7 +344,12 @@ export class MaestroRuntime {
 		this.questions.delete(key);
 		// Attributed as it came back. A deferred question or an autopilot answer
 		// is not a human ruling, and the worker is told which it got.
-		this.link.answer(question.agentId, question.id, reply.answer, reply.from);
+		this.link.answer(
+			question.agentId,
+			question.id,
+			asAnswers(reply.answer),
+			reply.from,
+		);
 		return reply.from === "human"
 			? `The user answered; ${question.agentId} has it.`
 			: `Nobody answered; ${question.agentId} was told so and will decide for itself.`;

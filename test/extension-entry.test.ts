@@ -112,9 +112,10 @@ describe("a process gets one surface, never both", () => {
 		// `bash` is in the list because the SHELL is the thing safeguards guard.
 		// A worker that got its shell any other way would have none.
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
+			// No `ask` tool of our own: `ask` belongs to `packages/ask`, and what a
+			// worker registers is a TRANSPORT that routes it to the maestro.
 			"bash",
 			"delegate",
-			"escalate",
 			"finish",
 		]);
 		expect(h.names()).toEqual([]);

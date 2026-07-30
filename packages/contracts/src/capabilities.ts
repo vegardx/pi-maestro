@@ -27,6 +27,7 @@ export const CAPABILITIES = {
 	childRunProjections: "child-run-projections.v1",
 	ask: "ask.v1",
 	askTransport: "ask-transport.v1",
+	askInbox: "ask-inbox.v1",
 	usage: "usage.v1",
 	commit: "commit.v1",
 	ship: "ship.v1",
@@ -123,6 +124,39 @@ export interface AskTransportV1 {
 }
 
 /**
+ * The RECEIVING half of a transport: questions arriving from somewhere else.
+ *
+ * `AskTransportV1` said only how a question leaves a session, so the first
+ * thing that forwarded questions improvised the other end in its own runtime —
+ * its own registry, its own rendering, and an answer that was one string copied
+ * across every question in the set. A contract with one end is a contract that
+ * gets half-implemented by whoever needs the other half first.
+ *
+ * `deliver` takes a question and the way to answer it, and returns once the
+ * inbox holds it. Announcing it — to a model, to a human, to a log — is the
+ * caller's, because only the caller knows whose attention it is asking for.
+ */
+export interface AskInboxV1 {
+	deliver(
+		question: {
+			readonly id: string;
+			readonly from: string;
+			readonly questions: Questionnaire;
+			readonly receivedAt: string;
+		},
+		settle: (answers: Answers) => void,
+	): void;
+	/** Everything still waiting, for a caller that wants to show or drain it. */
+	open(): readonly {
+		readonly id: string;
+		readonly from: string;
+		readonly questions: Questionnaire;
+	}[];
+	/** Answer everything still waiting with one reason, and say how many. */
+	drain(value: string): number;
+}
+
+/**
  * Central usage ledger. Every source (maestro, each agent)
  * records its cumulative snapshot; the ledger aggregates by source so cost
  * and tokens are real and attributable. Registered by modes.
@@ -204,6 +238,7 @@ export interface CapabilityMap {
 	[CAPABILITIES.childRunProjections]: ChildRunProjectionSourceV1;
 	[CAPABILITIES.ask]: AskCapabilityV1;
 	[CAPABILITIES.askTransport]: AskTransportV1;
+	[CAPABILITIES.askInbox]: AskInboxV1;
 	[CAPABILITIES.usage]: UsageLedgerV1;
 	[CAPABILITIES.commit]: CommitCapabilityV1;
 	[CAPABILITIES.ship]: ShipCapabilityV1;

@@ -17,6 +17,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import {
+	AskInbox,
+	createRespondTool,
+	type InboundQuestion,
+	type SettleInbound,
+} from "@vegardx/pi-ask";
+import type { Questionnaire } from "@vegardx/pi-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAskTransport } from "../packages/maestro/src/agent-runtime.js";
 import { AgentLink, MaestroLink } from "../packages/maestro/src/link.js";
@@ -185,12 +192,13 @@ describe("the transport carries provenance into the answers themselves", () => {
 	});
 });
 
-describe("the maestro answers, or admits it cannot", () => {
-	function runtime(
-		askHuman?: (
-			q: string,
-		) => Promise<{ answer: string; from: "maestro" | "human" }>,
-	) {
+describe("a question reaches the inbox, and is answered per question", () => {
+	// The maestro no longer keeps its own registry of blocked workers, and no
+	// longer builds `Answers` itself. Both belonged to `packages/ask`, which
+	// owns what a question is — and while they lived here, answering a set of
+	// three questions meant copying one string onto all three.
+
+	function runtime(inbox?: AskInbox) {
 		const said: string[] = [];
 		const asked: string[] = [];
 		const narrator: Narrator = {
@@ -203,113 +211,122 @@ describe("the maestro answers, or admits it cannot", () => {
 			socketPath,
 			token: TOKEN,
 			now: () => "2026-07-30T00:00:00.000Z",
-			...(askHuman ? { askHuman } : {}),
+			...(inbox
+				? {
+						inbox: () =>
+							({
+								deliver: (question: InboundQuestion, settleIt: SettleInbound) =>
+									inbox.receive(question, settleIt),
+								open: () => inbox.open(),
+								drain: (value: string) => inbox.drain(value),
+							}) as never,
+					}
+				: {}),
 		});
 		closers.push(made);
 		return { runtime: made, said, asked, socketPath };
 	}
 
-	async function blocked(r: ReturnType<typeof runtime>) {
+	async function blocked(
+		r: ReturnType<typeof runtime>,
+		questions: Questionnaire = [
+			{ id: "shape", question: "null or NaN?", context: "I chose null" },
+		],
+	) {
 		await r.runtime.listen();
 		const agent = new AgentLink();
 		closers.push(agent);
-		await agent.connect(r.socketPath, {
-			agentId: "worker-api",
-			token: TOKEN,
-		});
-		const waiting = agent.ask([
-			{ id: "shape", question: "null or NaN?", context: "I chose null" },
-		]);
+		await agent.connect(r.socketPath, { agentId: "worker-api", token: TOKEN });
+		const waiting = agent.ask(questions);
 		await settle();
 		return { agent, waiting };
 	}
 
 	it("puts the question to its own model, not to a dashboard", async () => {
-		const r = runtime();
+		const inbox = new AskInbox();
+		const r = runtime(inbox);
 		await blocked(r);
 		expect(r.asked[0]).toContain("A worker is blocked on a question");
 		expect(r.asked[0]).toContain("null or NaN?");
 		expect(r.asked[0]).toContain("I chose null");
 		// The instruction that keeps this a rare interruption, not a queue.
-		expect(r.asked[0]).toContain("Only put it to the user when you genuinely");
-		expect(r.runtime.openQuestions()).toHaveLength(1);
+		expect(r.asked[0]).toContain("only interrupt them when it matters");
+		// And it names each question's id, because `respond` answers per id.
+		expect(r.asked[0]).toContain("`shape`");
+		expect(inbox.size).toBe(1);
 	});
 
-	it("answers from its own knowledge, attributed to itself", async () => {
-		const r = runtime();
-		const { waiting } = await blocked(r);
-		const key = `worker-api/${r.runtime.openQuestions()[0]?.id}`;
-		await call(r.runtime.respondTool(), { id: key, answer: "null" });
+	it("ANSWERS EACH QUESTION SEPARATELY — the bug this move fixes", async () => {
+		// The old path took one `answer: string` and stamped it onto every
+		// question in the set. A worker asking three things got the same reply
+		// three times, and the maestro had no way to say otherwise.
+		const inbox = new AskInbox();
+		const r = runtime(inbox);
+		const { waiting } = await blocked(r, [
+			{ id: "shape", question: "null or NaN?" },
+			{ id: "name", question: "what should it be called?" },
+			{ id: "tests", question: "unit or integration?" },
+		]);
+		const id = inbox.open()[0]?.id as string;
+		await call(
+			createRespondTool(() => inbox),
+			{
+				id,
+				answers: [
+					{ questionId: "shape", value: "null" },
+					{ questionId: "name", value: "mean" },
+					{ questionId: "tests", value: "unit" },
+				],
+			},
+		);
 		const answered = await waiting;
-		expect(answered.from).toBe("maestro");
-		expect(answered.answers[0]?.value).toBe("null");
-		expect(r.runtime.openQuestions()).toEqual([]);
+		expect(answered.answers.map((a) => a.value)).toEqual([
+			"null",
+			"mean",
+			"unit",
+		]);
+		expect(inbox.size).toBe(0);
 	});
 
-	it("escalates, and what reaches the worker is attributed to the human", async () => {
-		const put: string[] = [];
-		const r = runtime(async (question) => {
-			put.push(question);
-			return { answer: "return null", from: "human" as const };
-		});
-		const { waiting } = await blocked(r);
-		const key = `worker-api/${r.runtime.openQuestions()[0]?.id}`;
-		await call(r.runtime.respondTool(), {
-			id: key,
-			answer: "Should an empty array give null or NaN?",
-			askTheHuman: true,
-		});
-		// Escalating still means saying what to ask — the part the maestro is
-		// better placed to write than the worker was.
-		expect(put).toEqual(["Should an empty array give null or NaN?"]);
-		const answered = await waiting;
-		expect(answered.from).toBe("human");
-		expect(answered.answers[0]?.value).toBe("return null");
+	it("refuses a partial answer rather than unblocking with gaps", async () => {
+		const inbox = new AskInbox();
+		const r = runtime(inbox);
+		await blocked(r, [
+			{ id: "shape", question: "null or NaN?" },
+			{ id: "name", question: "what should it be called?" },
+		]);
+		const id = inbox.open()[0]?.id as string;
+		const said = await call(
+			createRespondTool(() => inbox),
+			{
+				id,
+				answers: [{ questionId: "shape", value: "null" }],
+			},
+		);
+		expect(said.content[0].text).toContain("still waiting on: name");
+		// Still blocked, so the maestro can try again.
+		expect(inbox.size).toBe(1);
 	});
 
-	it("never claims a human answered when none could be reached", async () => {
-		// An agent told a human decided when nobody did is worse off than one
-		// told nobody could be reached.
-		const r = runtime();
-		const { waiting } = await blocked(r);
-		const key = `worker-api/${r.runtime.openQuestions()[0]?.id}`;
-		const said = await call(r.runtime.respondTool(), {
-			id: key,
-			answer: "ask them this",
-			askTheHuman: true,
-		});
-		const answered = await waiting;
-		expect(answered.from).toBe("maestro");
-		expect(answered.answers[0]?.value).toMatch(/decide for yourself/i);
-		expect(said.content[0].text).toContain("no user reachable");
-	});
-
-	it("does not call an autopilot answer a human ruling", async () => {
-		// `ask.v1` has an idle autopilot (`source: "maestro-auto"`) and a
-		// deferred question answers nothing. Reporting either as the user's
-		// decision is the exact lie `from` exists to prevent.
-		const r = runtime(async () => ({
-			answer: "whatever the autopilot said",
-			from: "maestro" as const,
-		}));
-		const { waiting } = await blocked(r);
-		const key = `worker-api/${r.runtime.openQuestions()[0]?.id}`;
-		const said = await call(r.runtime.respondTool(), {
-			id: key,
-			answer: "ask them",
-			askTheHuman: true,
-		});
-		expect((await waiting).from).toBe("maestro");
-		expect(said.content[0].text).toContain("Nobody answered");
-	});
-
-	it("says what is open when asked about a question that is not", async () => {
-		const r = runtime();
-		const said = await call(r.runtime.respondTool(), {
-			id: "worker-api/ask-9",
-			answer: "x",
-		});
-		expect(said.content[0].text).toContain("Nothing is blocked");
+	it("says what is waiting when asked about something that is not", async () => {
+		const inbox = new AskInbox();
+		const said = await call(
+			createRespondTool(() => inbox),
+			{
+				id: "worker-api/ask-9",
+				answers: [{ questionId: "x", value: "y" }],
+			},
+		);
+		expect(said.content[0].text).toContain("nothing is waiting");
 		expect(said.content[0].text).toContain("none");
+	});
+
+	it("tells a worker nobody can answer when there is no inbox at all", async () => {
+		// Rather than leaving it blocked on a question no one will ever see.
+		const r = runtime();
+		const { waiting } = await blocked(r);
+		const answered = await waiting;
+		expect(answered.answers[0]?.value).toMatch(/nobody can answer/);
+		expect(answered.from).toBe("maestro");
 	});
 });

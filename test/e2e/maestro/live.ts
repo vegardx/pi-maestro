@@ -1,6 +1,7 @@
 // The live drive for the rebuilt maestro.
 //
 //   node_modules/.bin/jiti test/e2e/maestro/live.ts [--prod-models] [--keep]
+//                                                  [--recover]
 //
 // Real models, real worktrees, real commits, a local bare remote. The seeded
 // plan is the acceptance bar in one shape: a worker that builds something,
@@ -10,12 +11,10 @@
 // A worker spawning a read-only review panel and acting on its findings before
 // shipping has never once happened in this system. That is what this is for.
 //
-// Note on models: the rebuilt maestro does not resolve families or rosters yet
-// (`@vegardx/pi-models` is imported only by carried code that has not been
-// fitted back). Workers and reviewers inherit the seat's model, so the profile
-// below sets the seat and everything follows from it. Wiring resolution is a
-// separate step, and until it exists a drive that claimed to prove diversity
-// would be claiming something it did not test.
+// `--recover` drives the other question a unit test cannot reach: the maestro
+// is SIGKILLed while a worker is in flight, and a new one is started over the
+// same store. The worker is a detached process holding a socket that just
+// died, and what happens to it is not knowable from the code — hence a drive.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -37,6 +36,7 @@ const SLUG = "live-drive";
 const DEADLINE_MS = 20 * 60_000;
 
 const PROD = process.argv.includes("--prod-models");
+const RECOVER = process.argv.includes("--recover");
 
 function plan(repoDir: string): Plan {
 	return {
@@ -100,6 +100,32 @@ function readRun(agentDir: string): Run | null {
 	}
 }
 
+/** Whether a pid is still a live process. Signal 0 tests, it does not kill. */
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Every worker pi launched under this drive's home, by pid. */
+function workerPids(piHome: string): number[] {
+	try {
+		const out = execFileSync("ps", ["-Ao", "pid=,command="], {
+			encoding: "utf8",
+		});
+		return out
+			.split("\n")
+			.filter((line) => line.includes(piHome) && line.includes("--session"))
+			.map((line) => Number.parseInt(line.trim().split(/\s+/)[0] as string, 10))
+			.filter((pid) => Number.isFinite(pid));
+	} catch {
+		return [];
+	}
+}
+
 async function main(): Promise<void> {
 	const profile = PROD ? buildProdProfile() : await buildSitProfile();
 	process.stdout.write(
@@ -119,20 +145,59 @@ async function main(): Promise<void> {
 	createPlanStore(plansRoot(agentDir)).savePlan(stored);
 	process.stdout.write(`repo: ${env.repoDir}\npiHome: ${env.piHome}\n\n`);
 
-	const sut = launchSut({
-		maestroRoot: ROOT,
-		repoDir: env.repoDir,
-		piHome: env.piHome,
-		answerer: new ScriptedAnswerer(),
-		env: env.env,
-		// Only the rebuilt maestro: the old stack registers `/mode` too.
-		extensions: [MAESTRO_EXTENSION],
-		extraExtensions: env.extraExtensions,
-		transcriptPath: join(env.piHome, "events.jsonl"),
-	});
+	const launch = (tag: string) =>
+		launchSut({
+			maestroRoot: ROOT,
+			repoDir: env.repoDir,
+			piHome: env.piHome,
+			answerer: new ScriptedAnswerer(),
+			env: env.env,
+			// Only the rebuilt maestro: the old stack registers `/mode` too.
+			extensions: [MAESTRO_EXTENSION],
+			extraExtensions: env.extraExtensions,
+			transcriptPath: join(env.piHome, `events${tag}.jsonl`),
+		});
 
+	let sut = launch("");
 	await sut.client.prompt("/mode auto");
 	await sut.client.prompt(`/run ${SLUG}`);
+
+	if (RECOVER) {
+		// Wait for a worker to be genuinely in flight — a record with an agent
+		// on it. Killing before that would prove only that a plan with nothing
+		// running restarts, which is not the question.
+		const until = Date.now() + 4 * 60_000;
+		let flying: string | undefined;
+		while (Date.now() < until && !flying) {
+			const run = readRun(agentDir);
+			flying = Object.entries(run?.deliverables ?? {}).find(
+				([, r]) => r.state === "running" && r.agentId,
+			)?.[0];
+			if (!flying) await new Promise((r) => setTimeout(r, 2000));
+		}
+		if (!flying) {
+			process.stdout.write("no worker ever went in flight — nothing to test\n");
+			process.exit(1);
+		}
+
+		const orphans = workerPids(env.piHome);
+		process.stdout.write(
+			`\n─── recovery ───\nin flight: ${flying}\nworker pids: ${orphans.join(", ") || "none found"}\n`,
+		);
+
+		// SIGKILL, not SIGTERM: the case worth proving is the one with no
+		// chance to clean up — a crash, an OOM, a closed laptop.
+		process.kill(sut.child.pid as number, "SIGKILL");
+		await new Promise((r) => setTimeout(r, 3000));
+		process.stdout.write(
+			`maestro killed. workers still alive: ${orphans.filter(alive).join(", ") || "none"}\n`,
+		);
+
+		sut = launch("-2");
+		await sut.client.prompt("/mode auto");
+		await sut.client.prompt(`/run ${SLUG}`);
+		process.stdout.write("second maestro started, plan re-run\n\n");
+	}
 
 	const deadline = Date.now() + DEADLINE_MS;
 	let seen = "";

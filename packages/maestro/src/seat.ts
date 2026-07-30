@@ -23,7 +23,12 @@ import type { Plan } from "./plan.js";
 import { createReadOnlySessionFactory } from "./read-only-session.js";
 import { MaestroRuntime, type Narrator } from "./runtime.js";
 import { createShipping, type ShippingOps } from "./shipping.js";
-import { type SpawnProcess, WorkerLauncher } from "./spawn.js";
+import {
+	killPidGroup,
+	pidAlive,
+	type SpawnProcess,
+	WorkerLauncher,
+} from "./spawn.js";
 import { createPlanStore, type PlanStore } from "./store.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { createWorkspace } from "./workspace.js";
@@ -244,6 +249,8 @@ export function createSeat(options: SeatOptions): Seat {
 			token: rt.token,
 			extensions: options.extensions,
 			...(options.piCommand ? { piCommand: options.piCommand } : {}),
+			isAlive: pidAlive,
+			killPid: (pid) => killPidGroup(pid, "SIGKILL"),
 			runMaestroTasks: rt.runMaestroTasks,
 			now,
 			sessionFileFor: (id) => sessionFile(plan.slug, id, options.agentDir),

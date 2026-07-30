@@ -265,6 +265,18 @@ export class MaestroRuntime {
 				// false and unrecoverable short of restarting.
 				this.executor = undefined;
 				return;
+			case "reclaimed":
+				// Said out loud, always. The failure this replaces was silent: a
+				// restarted maestro launched nothing and explained nothing, so a
+				// wedged plan looked exactly like an idle seat.
+				say(
+					`Picked up a run left mid-flight: ${event.relaunched.join(", ")} will start again from ${event.relaunched.length === 1 ? "its worktree" : "their worktrees"}.${
+						event.killed.length > 0
+							? ` Ended ${event.killed.join(", ")}, still running with nobody to report to.`
+							: ""
+					}`,
+				);
+				return;
 			case "stopped":
 				say(
 					event.halted.length > 0

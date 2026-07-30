@@ -917,10 +917,18 @@ function isolationRoute(
 	return "confirm";
 }
 
+// A refusal may only name a tool the refused agent actually holds. Saying "use
+// the X tool" when X is not granted leaves an agent with no way forward and no
+// way to know that — which is how a live drive found every deliverable failing
+// at its last step, told to reach for a `commit` tool nobody had declared.
+// `test/refusals-name-real-tools.test.ts` binds these strings to the registry.
 function deliveryReason(command: string): string {
 	if (/\bgit\s+(?:[^;&|\n]*\s)?commit\b/u.test(command))
 		return "Use the commit tool; Bash commits bypass the reviewed staging route";
-	return "Use the ship tool; Bash delivery bypasses the reviewed shipping route";
+	// Deliberately names no tool: shipping belongs to the maestro, and there is
+	// no ship tool for an agent to reach for. It used to say "use the ship tool",
+	// which was the same phantom in a second place.
+	return "Pushing is the maestro's, not yours — finish and report, and it ships your branch";
 }
 
 function isInterpreter(executable: string): boolean {

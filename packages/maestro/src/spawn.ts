@@ -209,7 +209,16 @@ export class WorkerLauncher {
 		this.spawnProcess = options.spawn ?? nodeSpawn;
 	}
 
-	launch(spawn: WorkerSpawn): void {
+	/**
+	 * Start a worker, and answer with the pid.
+	 *
+	 * The pid is returned so it can be WRITTEN DOWN. This map dies with the
+	 * maestro, and a maestro that restarts onto a run it did not start has no
+	 * other way to tell an in-flight worker from one that died in the crash —
+	 * which is the difference between relaunching a deliverable and running two
+	 * workers on one branch.
+	 */
+	launch(spawn: WorkerSpawn): number | undefined {
 		const refusal = checkSpawn("worker", spawn.parentDepth ?? 0);
 		if (refusal !== null) throw new Error(refusal);
 
@@ -253,6 +262,7 @@ export class WorkerLauncher {
 		// The worker outlives this call — that is the whole point of autonomous.
 		child.unref();
 		this.launched.set(spawn.agentId, record);
+		return child.pid;
 	}
 
 	alive(agentId: string): boolean {
@@ -298,12 +308,34 @@ export class WorkerLauncher {
 
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
 	if (child.pid === undefined) return;
+	killPidGroup(child.pid, signal);
+}
+
+/**
+ * Signal a worker's whole process group by pid.
+ *
+ * Separate from {@link killGroup} because a RESTARTED maestro has no
+ * `ChildProcess` for a worker its predecessor started — only the pid it wrote
+ * down. That worker is holding a socket that no longer exists, so it can never
+ * report and never be released; it is unreachable, not merely unsupervised.
+ */
+export function killPidGroup(pid: number, signal: NodeJS.Signals): void {
 	try {
 		// Detached children lead their own process group (pgid = pid), so a
 		// negative pid signals the whole group — pi plus anything it spawned.
-		process.kill(-child.pid, signal);
+		process.kill(-pid, signal);
 	} catch {
 		// Already gone, or never ours. Reaping is best-effort.
+	}
+}
+
+/** Whether a pid is a live process. Signal 0 tests for existence, never kills. */
+export function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
 	}
 }
 

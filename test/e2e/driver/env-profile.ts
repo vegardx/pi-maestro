@@ -186,10 +186,48 @@ function seedClonedRepo(repoDir: string): void {
 	git(repoDir, ["push", "-q", "origin", "HEAD"]);
 }
 
+/**
+ * The sandbox's own git configuration, in the isolated HOME.
+ *
+ * Isolating HOME isolates git: `$HOME/.gitconfig` is empty here, and an
+ * `includeIf "gitdir:~/…"` expands `~` through HOME too, so the developer's
+ * real identity is invisible inside the sandbox no matter where the repo sits.
+ *
+ * It used to be papered over by resolving the developer's identity outside and
+ * passing the GIT_AUTHOR and GIT_COMMITTER variables to the SUT, which then
+ * handed them to every worker. That propagation is gone — it flattened the
+ * path-scoped `includeIf` into one global answer — so the sandbox needs an
+ * identity of its own, written where git looks for one. HOME is propagated to
+ * workers, so a single file reaches all of them and git resolves it the
+ * ordinary way, per worktree, with nothing carrying it.
+ *
+ * Signing is off for the same reason the seed commits disable it: these are
+ * throwaway commits under a synthetic identity, and a developer with global
+ * `commit.gpgsign` would otherwise trip pinentry and hang headlessly.
+ */
+function writeSandboxGitConfig(piHome: string): void {
+	writeFileSync(
+		join(piHome, ".gitconfig"),
+		[
+			"[user]",
+			"\temail = e2e@pi-maestro.test",
+			"\tname = pi-maestro e2e",
+			"[commit]",
+			"\tgpgsign = false",
+			"[tag]",
+			"\tgpgsign = false",
+			"[init]",
+			"\tdefaultBranch = main",
+			"",
+		].join("\n"),
+	);
+}
+
 function isolatedHome(): string {
 	const piHome = mkdtempSync(join(tmpdir(), "pi-e2e-home-"));
 	mkdirSync(join(piHome, ".pi", "agent"), { recursive: true });
 	mkdirSync(join(piHome, "sessions"), { recursive: true });
+	writeSandboxGitConfig(piHome);
 	return piHome;
 }
 

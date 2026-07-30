@@ -22,6 +22,7 @@ import type { Executor, ExecutorEvent } from "./executor.js";
 import { MaestroLink } from "./link.js";
 import { type Mode, type ModeName, mode as modeNamed } from "./mode.js";
 import type { Plan, Task } from "./plan.js";
+import type { Run } from "./run.js";
 
 /** A question an agent is blocked on, waiting for this maestro. */
 interface OpenQuestion {
@@ -150,6 +151,18 @@ export class MaestroRuntime {
 	}
 
 	/**
+	 * Halt the running plan, if there is one.
+	 *
+	 * Returns what was halted, or null when nothing was running — the caller
+	 * says so rather than this pretending it stopped something.
+	 */
+	async stop(reason: string): Promise<Run | null> {
+		const executor = this.executor;
+		if (!executor) return null;
+		return executor.stop(reason);
+	}
+
+	/**
 	 * Give the maestro's model prose to act on, and wait for it to say it is
 	 * done.
 	 *
@@ -245,6 +258,20 @@ export class MaestroRuntime {
 				// done", and a reader needs to see which of shipped, failed,
 				// stranded or never-started each deliverable was.
 				say(summarise(this.executor));
+				// A run that has ended is not a run in progress. Without this the
+				// seat could run exactly ONE plan per session: `start` refuses
+				// while an executor is held, and nothing ever let one go — so the
+				// second `/run` was told a plan was already running, which was
+				// false and unrecoverable short of restarting.
+				this.executor = undefined;
+				return;
+			case "stopped":
+				say(
+					event.halted.length > 0
+						? `Stopped: ${event.reason}. ${event.halted.join(", ")} halted mid-flight and will start over from ${event.halted.length === 1 ? "its worktree" : "their worktrees"} on the next run.`
+						: `Stopped: ${event.reason}. Nothing was in flight.`,
+				);
+				this.executor = undefined;
 				return;
 			default:
 				return;

@@ -235,3 +235,78 @@ describe("narration makes a detached fleet legible", () => {
 		);
 	});
 });
+
+describe("a run ends, and the seat can start another", () => {
+	function fakeExecutor(): {
+		executor: Executor;
+		emit: (event: unknown) => void;
+		stopped: string[];
+	} {
+		const events: ((e: unknown) => void)[] = [];
+		const stopped: string[] = [];
+		const executor = {
+			on: (listener: (e: unknown) => void) => events.push(listener),
+			async start() {},
+			async stop(reason: string) {
+				stopped.push(reason);
+				return { slug: "arc", startedAt: "", deliverables: {} };
+			},
+			report: () => new Map<string, string>(),
+		} as unknown as Executor;
+		return {
+			executor,
+			emit: (event) => {
+				for (const listener of events) listener(event);
+			},
+			stopped,
+		};
+	}
+
+	it("lets go of a settled run, so a SECOND plan can run", async () => {
+		// The seat could run exactly one plan per session. `start` refuses while
+		// an executor is held and nothing ever released one, so the second `/run`
+		// was told "a plan is already running" — false, and unrecoverable short
+		// of restarting the session. Nothing caught it because every test built a
+		// fresh runtime.
+		const { runtime } = harness();
+		runtime.setMode("auto");
+		const first = fakeExecutor();
+		await runtime.start(plan(), () => first.executor);
+		first.emit({ type: "settled" });
+		expect(runtime.running()).toBeUndefined();
+
+		const second = fakeExecutor();
+		await expect(
+			runtime.start(plan(), () => second.executor),
+		).resolves.toBeDefined();
+	});
+
+	it("still refuses a second plan while the first is actually running", async () => {
+		const { runtime } = harness();
+		runtime.setMode("auto");
+		await runtime.start(plan(), () => fakeExecutor().executor);
+		await expect(
+			runtime.start(plan(), () => fakeExecutor().executor),
+		).rejects.toThrow(/already running/);
+	});
+
+	it("stops the running plan, says what happened, and lets go", async () => {
+		const { runtime, said } = harness();
+		runtime.setMode("auto");
+		const first = fakeExecutor();
+		await runtime.start(plan(), () => first.executor);
+
+		await runtime.stop("changed my mind");
+		expect(first.stopped).toEqual(["changed my mind"]);
+
+		first.emit({ type: "stopped", reason: "changed my mind", halted: ["api"] });
+		expect(said[said.length - 1]).toContain("changed my mind");
+		expect(said[said.length - 1]).toContain("api");
+		expect(runtime.running()).toBeUndefined();
+	});
+
+	it("says nothing was running rather than pretending it stopped one", async () => {
+		const { runtime } = harness();
+		expect(await runtime.stop("why not")).toBeNull();
+	});
+});

@@ -109,7 +109,13 @@ describe("a process gets one surface, never both", () => {
 		// Nothing is listening, so the handshake fails — which is the point:
 		// registration happened first, synchronously.
 		await expect(started).rejects.toThrow();
-		expect(h.tools.map((t) => t.name).sort()).toEqual(["delegate", "finish"]);
+		// `bash` is in the list because the SHELL is the thing safeguards guard.
+		// A worker that got its shell any other way would have none.
+		expect(h.tools.map((t) => t.name).sort()).toEqual([
+			"bash",
+			"delegate",
+			"finish",
+		]);
 		expect(h.names()).toEqual([]);
 	});
 
@@ -182,6 +188,7 @@ describe("the commands", () => {
 		startSeat(h.pi, { cwd: repo() });
 		await h.run("mode");
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
+			"bash",
 			"delegate",
 			"flight",
 			"plan",

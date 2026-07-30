@@ -116,7 +116,15 @@ describe("the seat assembles one coherent set of parts", () => {
 		expect(s.tools.grantsFor("worker")).toContain("finish");
 		expect(s.tools.grantsFor("maestro")).toContain("flight");
 		expect(s.tools.grantsFor("maestro")).not.toContain("finish");
+		// A read-only agent holds NO shell. It runs with pi's read-only builtin
+		// set, which has none — so declaring `bash` for it would put a tool in
+		// its generated brief that it cannot call, which is exactly the phantom
+		// grant this registry exists to prevent. The writers' shells are gated
+		// instead; withholding a shell is what makes `read-only` mean anything,
+		// because a shell IS a write tool.
 		expect(s.tools.grantsFor("read-only")).toEqual(["delegate"]);
+		expect(s.tools.grantsFor("worker")).toContain("bash");
+		expect(s.tools.describeFor("read-only")).not.toContain("bash");
 	});
 
 	it("says what plans exist when asked for one that does not", async () => {

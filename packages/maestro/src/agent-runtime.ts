@@ -191,8 +191,28 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
 export function declareAgentTools(deps: {
 	readonly reporter: () => Reporter;
 	readonly delegate: DelegateDeps;
+	/**
+	 * The gated shell for this holder.
+	 *
+	 * Declared like everything else, because a shell reached any other way is a
+	 * shell with no safeguards — which is what the rebuilt system had until the
+	 * classifier was wired back in.
+	 */
+	readonly bash?: ToolDefinition;
+	// A read-only agent is NOT a holder of this. It runs with pi's read-only
+	// builtin set, which has no shell in it at all — so declaring `bash` for
+	// `read-only` would put a tool in its generated brief that it cannot call,
+	// which is the phantom-grant defect this whole registry exists to prevent.
 }): readonly ToolDeclaration[] {
 	return [
+		...(deps.bash
+			? [
+					{
+						definition: deps.bash,
+						holders: ["maestro", "worker"] as const,
+					},
+				]
+			: []),
 		{
 			definition: createFinishTool(deps.reporter),
 			holders: ["worker"],

@@ -79,6 +79,20 @@ function choice<T extends string>(
 }
 
 /** Validated layered policy. Invalid values fall back to the selected preset. */
+/**
+ * A named preset as settings.
+ *
+ * The presets existed and nothing could reach them: every caller had to go
+ * through `readExecutionPolicySettings`, which needs a working directory and
+ * real settings on disk. Anything wanting "the guided defaults" — a test, a
+ * seat with no configuration yet — had no way to say so.
+ */
+export function executionPolicyPreset(
+	preset: ExecutionPolicyPreset,
+): ExecutionPolicySettings {
+	return { preset, ...POLICY_PRESETS[preset] };
+}
+
 export function readExecutionPolicySettings(
 	cwd: string,
 	agentDir?: string,

@@ -22,6 +22,7 @@ import {
 	readyForPostflight,
 	runSettled,
 	standings,
+	stuckReason,
 } from "./run.js";
 import type { WorkerSpawn } from "./spawn.js";
 import type { PlanStore } from "./store.js";
@@ -75,7 +76,17 @@ export interface AgentChannel {
 
 /** The executor's view of the launcher: start one, and see how it ended. */
 export interface WorkerHandle {
-	launch(spawn: WorkerSpawn): void;
+	/**
+	 * Start a worker, and answer with its pid.
+	 *
+	 * Typed `void` until now, while the caller wrote the return value into the
+	 * run record as the pid. TypeScript's void-return bivariance accepts both,
+	 * so a conforming implementation returning nothing typechecks clean and
+	 * silently records `pid: undefined` on every deliverable — which disables
+	 * the orphan kill in `reclaim()` and puts two workers on one branch, the
+	 * exact outcome the pid was written down to prevent.
+	 */
+	launch(spawn: WorkerSpawn): number | undefined;
 	/**
 	 * End a worker's process.
 	 *
@@ -140,6 +151,12 @@ export type ExecutorEvent =
 			readonly record: DeliverableRun;
 	  }
 	| { readonly type: "settled"; readonly run: Run }
+	| {
+			/** The run can neither finish nor progress. Said, never silent. */
+			readonly type: "stuck";
+			readonly run: Run;
+			readonly reason: string;
+	  }
 	| {
 			readonly type: "reclaimed";
 			/** In flight under a maestro that is gone; now unstarted again. */
@@ -273,6 +290,25 @@ export class Executor {
 			}
 		}
 		await this.settleIfDone();
+		this.reportIfStuck();
+	}
+
+	/**
+	 * Say so when the run can neither finish nor progress.
+	 *
+	 * The failure this closes was SILENCE, not the wedge itself. A maestro
+	 * killed during plan preflight left a run that launched nothing and
+	 * narrated nothing on every subsequent `/run` — indistinguishable from an
+	 * idle seat, and only fixable by deleting `run.json`.
+	 *
+	 * Deliberately one check over the run's whole state rather than a repair for
+	 * that one cause: a plan that cannot move is worth saying whatever put it
+	 * there, including reasons nobody has thought of yet.
+	 */
+	private reportIfStuck(): void {
+		if (this.halted) return;
+		const reason = stuckReason(this.plan, this.run);
+		if (reason) this.emit({ type: "stuck", run: this.run, reason });
 	}
 
 	private async launch(deliverable: Deliverable): Promise<void> {

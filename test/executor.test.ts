@@ -682,3 +682,95 @@ describe("taking over a run its maestro did not survive", () => {
 		).toHaveLength(1);
 	});
 });
+
+describe("a run that cannot move says so", () => {
+	// The failure this closes was SILENCE. A maestro killed during plan
+	// preflight leaves `preflight: {state:"running"}`; on restart `start()`
+	// skips it (no longer undefined), `nextDeliverables` returns nothing (it
+	// gates on preflight being done), nothing settles, and NO EVENT is emitted.
+	// `/run` launched nothing and narrated nothing, forever.
+	it("reports a plan preflight left running by a maestro that is gone", async () => {
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p, {
+			async runMaestroTasks() {
+				// Never returns: the maestro dies mid-preflight.
+				await new Promise(() => {});
+			},
+			preflight: [task("clone")],
+		} as never);
+		void first.executor.start();
+		await tick();
+		expect(first.executor.state().preflight?.state).toBe("running");
+
+		const second = new Executor(p, first.deps);
+		const seen: string[] = [];
+		second.on((event) => {
+			if (event.type === "stuck") seen.push(event.reason);
+		});
+		await second.start();
+		expect(first.launched).toEqual([]);
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toContain("plan preflight was left running");
+	});
+
+	it("says nothing while the run is simply working", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		const seen: string[] = [];
+		h.executor.on((event) => {
+			if (event.type === "stuck") seen.push(event.reason);
+		});
+		await h.executor.start();
+		// `api` is running — busy is not stuck.
+		expect(seen).toEqual([]);
+	});
+
+	it("says nothing when the run simply finished", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		const seen: string[] = [];
+		h.executor.on((event) => {
+			if (event.type === "stuck") seen.push(event.reason);
+		});
+		await h.executor.start();
+		await h.channel.reports("worker-api", {
+			outcome: "succeeded",
+			handoff: "done",
+		});
+		expect(seen).toEqual([]);
+	});
+
+	it("says nothing when a failure stranded the rest — that is settled", async () => {
+		// A stranded plan HAS finished; it just finished badly. Reporting it as
+		// stuck would turn every ordinary failure into an alarm.
+		const h = harness(
+			plan({
+				deliverables: [
+					deliverable("api"),
+					deliverable("ui", { after: ["api"], reads: ["api"] }),
+				],
+			}),
+		);
+		const seen: string[] = [];
+		h.executor.on((event) => {
+			if (event.type === "stuck") seen.push(event.reason);
+		});
+		await h.executor.start();
+		await h.channel.reports("worker-api", {
+			outcome: "failed",
+			failure: "could not build",
+		});
+		expect(seen).toEqual([]);
+	});
+});
+
+describe("the launcher's contract says what the caller needs", () => {
+	it("records the pid the launcher returned", async () => {
+		// `WorkerHandle.launch` was typed `void` while the executor wrote its
+		// return value into the record as the pid. Void-return bivariance made
+		// both that and a conforming no-return implementation typecheck clean —
+		// and the latter would record `pid: undefined` on every deliverable,
+		// disabling the orphan kill in `reclaim()`.
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		await h.executor.start();
+		expect(h.executor.state().deliverables.api?.pid).toBe(10_001);
+	});
+});

@@ -278,6 +278,14 @@ export class MaestroRuntime {
 				// false and unrecoverable short of restarting.
 				this.executor = undefined;
 				return;
+			case "stuck":
+				// Said out loud and NOT cleared: unlike settling or stopping, the
+				// run is still the current one, and the seat has something the
+				// operator has to decide about rather than a finished result.
+				say(
+					`This plan cannot go any further: ${event.reason}. Nothing is running. Say what you want to do — the run record is at plans/${event.run.slug}/run.json.`,
+				);
+				return;
 			case "reclaimed":
 				// Said out loud, always. The failure this replaces was silent: a
 				// restarted maestro launched nothing and explained nothing, so a

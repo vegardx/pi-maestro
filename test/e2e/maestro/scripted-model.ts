@@ -77,15 +77,19 @@ function decide(
 					],
 				};
 			case 1:
-				// No commit tool exists in this vocabulary, so committing is
-				// ordinary shell work — which is also what the worker persona
-				// tells it to do.
+				// Through the `commit` TOOL, not the shell. The classifier refuses
+				// `git commit` in bash and names this tool instead, and a linked
+				// worktree's branch ref lives in the shared git dir the write
+				// profile denies — so the shell is not a commit path at all. This
+				// mock committed through bash until a live drive found every
+				// deliverable failing at exactly that step.
 				return {
 					toolCalls: [
 						{
-							name: "bash",
+							name: "commit",
 							input: {
-								command: `git add ${BUILT_FILE} && git commit -q -m "build ${id}"`,
+								message: `feat: build ${id}`,
+								paths: [BUILT_FILE],
 							},
 						},
 					],

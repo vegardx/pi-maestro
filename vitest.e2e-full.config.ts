@@ -14,6 +14,15 @@ export default defineConfig({
 		setupFiles: ["./vitest.setup.ts"],
 		pool: "forks",
 		fileParallelism: false,
-		include: ["test/e2e/real.e2e.test.ts"],
+		// The REBUILT maestro's drive runs here too, and it is the one that
+		// matters — `real.e2e.test.ts` drives `packages/modes`, which is being
+		// deleted. Leaving it out is how the rebuild's only end-to-end check sat
+		// broken from the moment the classifier was wired, while CI reported
+		// "ci-profile (mock provider): SUCCESS" the entire time: that job runs
+		// this config, and this config named only the old system's test.
+		include: [
+			"test/e2e/real.e2e.test.ts",
+			"test/e2e/maestro/drive.e2e.test.ts",
+		],
 	},
 });

@@ -126,6 +126,7 @@ interface Harness {
 	readonly executor: Executor;
 	readonly channel: FakeChannel;
 	readonly launched: WorkerSpawn[];
+	readonly killed: string[];
 	readonly shipped: ShipRequest[];
 	readonly order: string[];
 	readonly deps: ExecutorDeps;
@@ -137,6 +138,7 @@ function harness(
 ): Harness {
 	const channel = new FakeChannel();
 	const launched: WorkerSpawn[] = [];
+	const killed: string[] = [];
 	const shipped: ShipRequest[] = [];
 	const order: string[] = [];
 	const store = createPlanStore(scratch(), {
@@ -170,6 +172,9 @@ function harness(
 			launch: (spawn) => {
 				launched.push(spawn);
 			},
+			kill: (agentId: string) => {
+				killed.push(agentId);
+			},
 			settled: async () => {},
 			capture: () => "TypeError: cannot read property of undefined",
 		},
@@ -198,6 +203,7 @@ function harness(
 		executor: new Executor(p, deps),
 		channel,
 		launched,
+		killed,
 		shipped,
 		order,
 		deps,
@@ -498,5 +504,85 @@ describe("the run survives the maestro", () => {
 		expect(
 			first.launched.filter((s) => s.agentId === "worker-api"),
 		).toHaveLength(1);
+	});
+});
+
+describe("stopping a run", () => {
+	// The verb the rebuilt system had no code for at all. `MaestroLink.shutdown`
+	// existed and nothing called it; there was no way to halt a plan short of
+	// killing the maestro process.
+	it("kills what is in flight and launches nothing more", async () => {
+		const h = harness(
+			plan({
+				deliverables: [
+					deliverable("api"),
+					deliverable("ui", { after: ["api"], reads: ["api"] }),
+				],
+			}),
+		);
+		await h.executor.start();
+		expect(h.launched.map((s) => s.agentId)).toEqual(["worker-api"]);
+
+		await h.executor.stop("changed my mind");
+		expect(h.killed).toEqual(["worker-api"]);
+
+		// `ui` was never released by `api` succeeding, and advancing again must
+		// not quietly resume the plan.
+		await h.executor.advance();
+		expect(h.launched.map((s) => s.agentId)).toEqual(["worker-api"]);
+	});
+
+	it("leaves a halted deliverable UNSTARTED, not failed", async () => {
+		// Both alternatives are wrong in a way that only shows up later. Marking
+		// it `failed` strands every dependent for a reason that never happened;
+		// leaving it `running` puts it in `startedIds` forever, so the next run
+		// skips it and the plan can never complete. Absent means unstarted, and
+		// unstarted is what it now is.
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		await h.executor.start();
+		expect(h.executor.state().deliverables.api?.state).toBe("running");
+
+		await h.executor.stop("enough for today");
+		expect(h.executor.state().deliverables.api).toBeUndefined();
+	});
+
+	it("resumes into the same worktree instead of starting the work over", async () => {
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p);
+		await first.executor.start();
+		await first.executor.stop("enough for today");
+
+		// A fresh executor over the same store relaunches `api` — and the
+		// workspace answers with the checkout that already exists, so whatever
+		// the worker committed before the stop is still under it.
+		const second = new Executor(p, first.deps);
+		await second.start();
+		expect(first.launched.map((s) => s.agentId)).toEqual([
+			"worker-api",
+			"worker-api",
+		]);
+		expect(first.launched[1].cwd).toBe(first.launched[0].cwd);
+	});
+
+	it("reports what it halted, so the seat can say so", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		const seen: string[] = [];
+		h.executor.on((event) => {
+			if (event.type === "stopped") seen.push(event.halted.join(","));
+		});
+		await h.executor.start();
+		await h.executor.stop("why not");
+		expect(seen).toEqual(["api"]);
+	});
+
+	it("stops a run that never launched anything without inventing a casualty", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		const seen: string[][] = [];
+		h.executor.on((event) => {
+			if (event.type === "stopped") seen.push([...event.halted]);
+		});
+		await h.executor.stop("before it began");
+		expect(seen).toEqual([[]]);
+		expect(h.killed).toEqual([]);
 	});
 });

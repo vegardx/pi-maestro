@@ -286,6 +286,27 @@ export function startSeat(
 		},
 	});
 
+	pi.registerCommand("stop", {
+		description: "Halt the running plan. /stop [why]",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const reason = args.trim() || "stopped from the seat";
+			try {
+				const run = await seat().runtime.stop(reason);
+				ctx.ui.notify(
+					run
+						? `Stopped \`${run.slug}\`. Run it again to pick up where it left off.`
+						: "No plan is running.",
+					run ? "info" : "warning",
+				);
+			} catch (error) {
+				ctx.ui.notify(
+					error instanceof Error ? error.message : String(error),
+					"warning",
+				);
+			}
+		},
+	});
+
 	return { seat };
 }
 

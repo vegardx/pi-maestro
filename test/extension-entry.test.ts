@@ -89,7 +89,7 @@ describe("a process gets one surface, never both", () => {
 	it("gives a seat its commands", () => {
 		const h = host();
 		startSeat(h.pi, { cwd: repo() });
-		expect(h.names()).toEqual(["mode", "run"]);
+		expect(h.names()).toEqual(["mode", "run", "stop"]);
 	});
 
 	it("gives a worker no commands at all", async () => {

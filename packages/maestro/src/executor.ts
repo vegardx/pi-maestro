@@ -76,6 +76,16 @@ export interface AgentChannel {
 /** The executor's view of the launcher: start one, and see how it ended. */
 export interface WorkerHandle {
 	launch(spawn: WorkerSpawn): void;
+	/**
+	 * End a worker's process.
+	 *
+	 * The mechanism, not `shutdown`. A `shutdown` message says WHY over the wire
+	 * and nothing in an agent acts on it — an agent is a pi session mid-turn, and
+	 * an extension cannot politely end one. So the message is the courtesy and
+	 * the signal is the effect; sending only the message would be a stop that
+	 * stops nothing.
+	 */
+	kill(agentId: string): void;
 	/** Resolves once the process is reaped, so its exit status is in hand. */
 	settled(agentId: string): Promise<void>;
 	capture(agentId: string, lines?: number): string;
@@ -120,7 +130,14 @@ export type ExecutorEvent =
 			readonly id: string;
 			readonly record: DeliverableRun;
 	  }
-	| { readonly type: "settled"; readonly run: Run };
+	| { readonly type: "settled"; readonly run: Run }
+	| {
+			readonly type: "stopped";
+			readonly run: Run;
+			readonly reason: string;
+			/** Deliverables that were in flight, and are now unstarted again. */
+			readonly halted: readonly string[];
+	  };
 
 /**
  * Drives one plan.
@@ -133,6 +150,7 @@ export class Executor {
 	private run: Run;
 	private readonly byAgent = new Map<string, string>();
 	private readonly listeners: ((event: ExecutorEvent) => void)[] = [];
+	private halted = false;
 
 	constructor(
 		private readonly plan: Plan,
@@ -180,6 +198,7 @@ export class Executor {
 	 * finish instead of one bad model turn ending the whole plan.
 	 */
 	async advance(): Promise<void> {
+		if (this.halted) return;
 		for (const deliverable of nextDeliverables(this.plan, this.run)) {
 			try {
 				await this.launch(deliverable);
@@ -398,6 +417,49 @@ export class Executor {
 		}
 		if (runSettled(this.plan, this.run))
 			this.emit({ type: "settled", run: this.run });
+	}
+
+	/**
+	 * Halt the run: no more launches, and the workers in flight are ended.
+	 *
+	 * A halted deliverable is REMOVED from the run rather than marked. The run
+	 * record says what happened, and "it was interrupted" is not an outcome — it
+	 * did not fail, so recording a failure would strand its dependents for a
+	 * reason that never occurred, and it is not still running, so leaving the
+	 * record would put it in `startedIds` forever and it would never launch
+	 * again. Absent means unstarted, which is exactly what it now is.
+	 *
+	 * Nothing is lost by that. The worktree and its branch stay on disk with
+	 * whatever the worker committed, and `workspace.create` answers with the
+	 * existing checkout — so resuming re-enters the same tree rather than
+	 * starting the work over.
+	 */
+	async stop(reason: string): Promise<Run> {
+		this.halted = true;
+		const deliverables = { ...this.run.deliverables };
+		const halted: string[] = [];
+		for (const [id, record] of Object.entries(this.run.deliverables)) {
+			if (record.state !== "running") continue;
+			halted.push(id);
+			delete deliverables[id];
+			if (!record.agentId) continue;
+			// The signal, and only the signal. There is a `shutdown` message on
+			// the protocol and it is tempting to send it first as a courtesy —
+			// but nothing in an agent listens for it, so it would be a message
+			// into the void that made this read as a graceful stop. `shutdown`
+			// belongs to the maestro REFUSING a connection, where the agent is
+			// about to be dropped and the reason is all it will ever get.
+			//
+			// `AgentChannel` deliberately cannot shut an agent down: deciding an
+			// agent is finished is the same decision as releasing it. Stopping is
+			// not that decision, so it goes through the launcher — the thing that
+			// owns the process — rather than widening the channel.
+			this.deps.launcher.kill(record.agentId);
+			this.byAgent.delete(record.agentId);
+		}
+		this.save({ deliverables });
+		this.emit({ type: "stopped", run: this.run, reason, halted });
+		return this.run;
 	}
 
 	/** Where each deliverable stands — shipped, failed, stranded or never run. */

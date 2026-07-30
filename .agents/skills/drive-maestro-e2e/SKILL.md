@@ -1,226 +1,98 @@
 ---
 name: drive-maestro-e2e
-description: Drive a real pi-maestro end to end from outside — boot the harness in RPC mode, send the plan, answer its questions, and assert on real shipped outcomes. Use when validating that the maestro harness actually works after a change, or when a human asks to "run the e2e" / "drive a full test".
+description: Run the pi-maestro live drive — real models, real worktrees, real commits, all the way to shipped. Use when validating that the maestro actually works after a change, or when a human asks to "run the e2e" / "drive a full test".
 ---
 
-# Drive the pi-maestro end-to-end test
+# Drive pi-maestro end to end
 
-You are the **driver**. A separate, real `pi --mode rpc` process runs the full
-maestro extension stack (real workers, real RPC, real ship). You control it
-through a tiny CLI that talks to a background daemon over a unix socket. Your job
-is to push a canned plan all the way to **shipped**, answering every question the
-maestro raises, then assert the outcome.
+This skill used to describe a control CLI and background daemon that an agent
+drove subcommand by subcommand. That CLI is deleted along with the system it
+drove. The drive is now one command that runs itself.
 
-This is the pi-native version of an external agent driving a coding harness: pi
-already exposes the control channel (`--mode rpc` + the `extension_ui_request`
-dialog sub-protocol), so *you answering a question* is just the driver doing its
-job — no MCP, no bespoke protocol.
+## Run it
 
-## The control CLI
-
-Run everything from the pi-maestro repo root. Prefix each call with the runner:
+From the repo root:
 
 ```
-node_modules/.bin/jiti test/e2e/driver/cli.ts <subcommand>
+npm run e2e:live
 ```
 
-| Subcommand | What it does |
+| Flag | What it does |
 | --- | --- |
-| `auth copilot [--domain <host>]` | One-time device-code login for the Copilot drive (default `dnb.ghe.com`). Prints a URL + code for a **human** to approve; stores the credential beside the driver. |
-| `auth login \| status \| logout` | The same for the radicalai-sit gateway (browser PKCE). |
-| `start [--live \| --ci] [--copilot-models \| --multi-model \| --sit-models] [--seed-plan] [--local-remote] [--keep] [--model <pat>]` | Boot the SUT + sandbox. **Run this in the background.** Prints a `ready` JSON line with `repoDir`, `piHome`, and `planPrompt` (plus `seededPlan` when seeded). |
-| `state` | The maestro's pi state (`isStreaming`, model) + the plan's deliverables and their statuses. |
-| `poll` | New events since the last poll **and** `pending[]` — questions parked waiting for your answer. |
-| `prompt "<text>" [--steer \| --follow-up]` | Send a prompt/command. Auto-queues as a follow-up if the agent is mid-stream. |
-| `answer <id> "<value>"` | Answer a parked question. `<id>` comes from `poll`'s `pending[]`. For a select, `<value>` is the chosen option string; for a confirm, `true`/`false`. |
-| `assert` | White-box assertions: every deliverable shipped, produced a PR, and its files are in git history. |
-| `stop` | Tear down the SUT, the sandbox repo, and (live) the disposable GitHub repo. Always run this at the end. |
+| `--recover` | SIGKILL the maestro while a worker is in flight, then start a new one over the same store. The interesting one. |
+| `--prod-models` | Use the prod profile instead of SIT. |
+| `--keep` | Leave the sandbox on disk for inspection. |
 
-## The loop
+It prints the disposable repo and the isolated pi home it created, then a line
+each time a deliverable changes standing, then a result block with hand-offs
+and PR numbers. A run takes minutes; do not interrupt it to check progress —
+read `run.json` (below) instead.
 
-1. **Start** (background):
-   `node_modules/.bin/jiti test/e2e/driver/cli.ts start --live` — real models +
-   a disposable private GitHub repo. Use `--live --local-remote` to skip GitHub
-   (a local bare remote instead), or `--ci` for the deterministic mock-provider
-   profile. Wait for the `ready` line; note the `planPrompt`.
+## What it proves
 
-2. **Enter plan mode, then describe the plan.** Send `prompt "/plan"`, then
-   `prompt "<the planPrompt from the ready line>"`. (The planPrompt is the canned
-   `sandbox-features` plan.)
-
-   **Or skip authoring entirely with `--seed-plan`** (recommended for
-   execution-focused drives, and required with weak local models — plan
-   authoring is the most model-sensitive step): the daemon pre-writes the
-   canned plan into the isolated store; send `prompt "/plan sandbox-features"`
-   to open it ready-made, then go straight to step 3. Do NOT re-describe the
-   plan or author deliverables in this mode.
-
-3. **Drive to execution.** Unless the plan was seeded, send `prompt "/form"`
-   first to author the deliverable/task tree — `/run` runs a plan, it never
-   authors one. Then send `prompt "/run"` (`/start` is an alias) to enter
-   execution. The maestro will spawn workers. If it asks about running an
-   unreviewed plan, answer to proceed (or `/review` first if you want the
-   reviewer's verdict).
-
-4. **Poll and answer, repeatedly.** Every few seconds:
-   `poll`. For each entry in `pending[]`, decide the answer that advances the
-   work toward shipped and send `answer <id> "<value>"`. Watch `state` — keep
-   going until every deliverable status is `shipped` (or `failed`).
-   - You are a capable agent: read the question and answer it sensibly. Prefer
-     options that move execution forward (e.g. "Enter execution", "Ship").
-   - Workers may take minutes. Poll patiently; don't spam prompts.
-
-5. **Assert.** Run `assert`. `ok: true` means every expected deliverable shipped
-   with a PR and files in history. If `ok: false`, read `result.checks` and
-   `result.summary` to see which deliverable stalled and why.
-
-6. **Stop.** Always finish with `stop`, even on failure, so the disposable repo
-   and temp dirs are cleaned up.
-
-## Multi-model drive (`--multi-model`)
-
-`start --live --multi-model` boots against a **local ollama** profile that routes
-maestro roles across distinct models instead of one session default — the real
-test of the model-set machinery:
-
-- **planner / session** → `gemma4:31b-mlx` · **normal** (worker/verify/
-  research) → `qwen3.6:35b-a3b-coding-mxfp8` (MoE, fast decode) → `session` ·
-  **fast** (classify/summarize/general) → `gpt-oss:20b` → `session` ·
-  **reviewers** → `gpt-oss:20b → session` (both non-qwen vs the qwen workers).
-- Requires the ollama service with those three models pulled (`ollama list`);
-  models load on demand (5-min keepalive). All three ≈ 68 GB together.
-
-Two extra checks worth running in this mode:
-
-1. **Per-role routing.** `prompt "/models"` prints the full role→model table;
-   `prompt "/models <role>"` (e.g. `worker`, `classifier`, `correctness-review`)
-   details that role's candidate options and which was picked — confirm each
-   resolves to the intended model above, proof that routing lands on different
-   providers, not just the session default.
-2. **Availability fallback.** With work idle, `ollama stop gpt-oss:20b`,
-   then `prompt "/models correctness-review"` — it should now resolve to
-   `gemma4:31b-mlx` (the session sentinel at the back of the pool). Restart
-   the model after. This exercises the live version of the availability path.
-
-The routing correctness itself is pinned deterministically (no ollama) in
-`test/e2e/driver/multi-model-profile.test.ts`; this drive confirms ollama really
-serves it end to end.
-
-## Copilot drive (`--copilot-models`) — the preferred live profile
-
-`start --copilot-models` runs on **GitHub Copilot** with a credential the driver
-owns. Prefer this over `--sit-models`: pi resolves `github-copilot` natively, so
-it refreshes the token **during** the run — nothing is frozen into a
-`models.json`, and a long drive cannot outlive its credential.
-
-**Login once** (needs a human at a browser — there is no way around it for the
-authorization-code/device grants; the gateway advertises `client_credentials`,
-which would be zero-touch, but needs a confidential client somebody with gateway
-admin must provision):
+A seeded two-deliverable plan. The first builds a small module, hands the diff
+to a **reviewer**, acts on the findings, and only then reports. The second reads
+the first's hand-off. Green is:
 
 ```
-npm run e2e:driver -- auth copilot        # prints a URL + code, waits, stores
+stats=shipped  summary=shipped
 ```
 
-The code lives ~15 minutes. **Do not mint codes on a timer while nobody is
-there** — two lapsed in one session that way. Mint one when the human says they
-are ready, and hand it over immediately.
+with real commits on `deliverable/stats` and `deliverable/summary`. A worker
+spawning a review and acting on it *before* shipping is the acceptance bar — it
+never once happened in the previous system.
 
-Model layout, in **v2 shape** (catalogs / profiles / agent tier allowlists —
-NOT the retired v1 `presets`+`modelSets`):
+`--recover` additionally proves a maestro can be killed mid-flight and replaced:
+the new one reclaims the in-flight deliverable, kills any orphan worker still
+running with nobody to report to, and relaunches into the same worktree.
 
-- seat `claude-opus-4.8` · `fast` `mai-code-1-flash-picker` ·
-  `normal` `gpt-5.5` · `heavy` `claude-opus-4.8`
-- allowlists: worker `[fast, normal, heavy]`, explorer `[fast, normal]`,
-  reviewer `[normal, heavy]`
+## Reading a failure
 
-Traps this profile has already hit, all confirmed by experiment:
+**Read the `failure:` text in the result block first.** The worker writes it and
+it is usually exact — one run said it could not commit because the shell refused
+it and named a tool that was not in its tool set, which was the entire bug in one
+sentence.
 
-- **`404` from `dnb.ghe.com/login/device/code` means a missing content-type.**
-  Node's `fetch` sends `text/plain` for a *string* body and GitHub Enterprise
-  answers **404, not 415** — indistinguishable from a wrong URL. Pass
-  `URLSearchParams` directly. The Copilot editor headers are NOT the cause
-  (they were blamed first and are harmless).
-- **The endpoint shown in `state` is a lie.** `pi.model.baseUrl` reports the
-  static catalog default (`api.individual.githubcopilot.com`); real routing is
-  derived per request by `toAuth` from the credential's `enterpriseUrl`. To
-  check which seat is really in use, mint a token and `GET /models` against
-  both hosts — the DNB seat returns 200 from `copilot-api.dnb.ghe.com` and is
-  **rejected** by the individual endpoint (`unknown stamp`).
-- pi's own login calls `enableAllGitHubCopilotModels`; Claude/Grok models must
-  be enabled on the account before use. A fresh account may need that.
+Then, in order:
 
-## Hosted multi-model drive (`--sit-models`)
+1. `<piHome>/.pi/agent/maestro/plans/live-drive/run.json` — what state each
+   deliverable reached, and why.
+2. `<piHome>/events.jsonl` — the RPC transcript. `[maestro] …` lines are what
+   the seat narrated.
+3. `git -C <repo> log --oneline --all` — what actually got committed.
 
-`start --live --sit-models` is the hosted twin: real radicalai-sit gateway
-models via a generated `models.json` (no provider extension). Uses the
-**driver's own** gateway credential (`auth login`), refreshed automatically
-before each drive. Burns real tokens; combine with `--local-remote` to ship
-offline against a bare remote via the CI `gh` shim.
+## Clean up
 
-Caveat this profile has and Copilot does not: the access token is baked into
-`models.json` at launch and lives ~1h, so a drive outliving it loses auth
-mid-flight. Never refresh using the developer's pi credential — the gateway
-**rotates** the refresh token, so that silently invalidates pi's copy (it
-already happened once).
+Without `--keep` the drive removes its own sandbox. After an interrupted run,
+remove by hand: the repo at `~/src/github.com/pi-e2e-repo-*`, its sibling
+`~/src/github.com/worktrees/<same-name>/`, and the `pi-e2e-{home,gh,remote}-*`
+directories under the system temp dir. Remove worktrees with
+`git worktree remove --force`, not `rm` alone, or the repo keeps metadata
+pointing at paths that no longer exist.
 
-## Narrate the drive as it happens
+## Model profiles
 
-A drive is not a pass/fail check — the point is to watch the machine think. Tell
-the human what is happening at each **pivotal** beat, in your own words, not a
-transcript dump:
+`live.ts` reaches two: **SIT** (default, `driver/sit-profile.ts`) and **prod**
+(`--prod-models`, `driver/prod-profile.ts`).
 
-- **Plan formed** — how many deliverables, what shape, and any decision the
-  planner made that was not in the prompt (e.g. it discovered the sandbox has no
-  scaffolding and folded a TS+vitest bootstrap into deliverable #1).
-- **Plan review** — what the reviewer objected to and what changed as a result.
-- **The gate ruling** and what you answered.
-- **Each deliverable starting**, and on what branch/base.
-- **Reviewers running** — their verdict and whether the worker acted on it.
-- **What the parent agent decided** in ensemble runs.
-- **Anywhere it got confused** — this is the most valuable output of the whole
-  exercise. Record the confusion, do not paper over it.
+A **Copilot** profile also exists (`driver/copilot-profile.ts`,
+`driver/copilot-auth.ts`) and is *not currently wired into `live.ts`* — the flag
+that selected it belonged to the deleted CLI. The code is intact, so reaching it
+again is a small change rather than a rewrite. Two things learned the hard way
+and worth keeping if you do:
 
-Read reasoning from `<piHome>/events.jsonl` (thinking + tool_use blocks); `poll`
-only carries UI requests and coarse events.
+- Copilot refreshes its token **during** a run, because pi resolves
+  `github-copilot` natively. Nothing is frozen into a `models.json`, so a long
+  drive cannot outlive its credential — which SIT drives have done.
+- The device code lives about fifteen minutes and needs a human at a browser.
+  **Do not mint one on a timer while nobody is there.** Two lapsed that way in a
+  single session. Mint it when the human says they are ready, and hand it over
+  immediately.
 
-## What a drive is expected to exercise
+## When to reach for this
 
-Keep this list honest — if a drive stops covering one of these, say so:
-
-1. **Plan authoring** from prose (the most model-sensitive step) → the gate.
-2. **Model routing**: seat inheritance for plan nodes; tiers for duty rows and
-   subagents. NOTE: plan nodes currently **inherit the session model** —
-   `resolveModel` passes no tier, so there is no per-node routing yet, despite
-   the call-site comment promising "Phase 4 adds tier routing".
-3. **Parallel + dependent deliverables**, with the dependent one **stacking** on
-   a sibling's branch (`stacked` + `baseSha` are stamped at provisioning; the
-   scenario declares `stacked: true` so the check cannot pass vacuously).
-4. **A review agent** running against a worker's diff.
-5. **Real ship**: branch → PR via real `gh` (drop `--local-remote`).
-6. **Teardown**: disposable repo deleted, isolated home and worktrees removed.
-
-Known gaps a drive keeps surfacing (report if they recur, do not "fix" mid-run):
-
-- A **v2-only config cannot drive subagent model selection**: `agents.run`
-  validates a requested model against *authored options* from the v1 model-set
-  vocabulary, so a v2 tier override is rejected and the review runs on the
-  runner's own pick. Visible as the notice "tier override … was rejected by the
-  agent runner; running with its own selection instead."
-- The **real-GitHub path does not seed the sandbox repo** — `--add-readme` only,
-  no `package.json`, unlike the `--local-remote` path which calls `seedRepo()`.
-  The planner has to invent scaffolding, so the two live paths are not
-  comparable runs.
-
-## Notes
-
-- **Never edit the harness to make the test pass.** The whole point is to run the
-  real code unmodified and see whether it works.
-- **Never commit with `--no-gpg-sign`.** Signing is on via `config-github`; if
-  the key is locked, ask the human rather than bypassing it.
-- If `state` shows `plan.found: false` after you sent the plan, the plan wasn't
-  created — re-read the events from `poll` to see what the maestro said.
-- The scripted, deterministic version of this same flow is
-  `test/e2e/real.e2e.test.ts` (run with `npm run test:e2e:full`); it uses the
-  same driver core but a fixed prompt sequence and rule-based answers.
-- Full reference: `docs/e2e-testing.md`.
+Whenever a change touches the shell gate, the spawn path, git identity, or
+shipping. Unit and hermetic tests cannot see the seam between processes, and
+every serious bug in this system has lived exactly there — four in one day, each
+under a fully green suite. **No CI job runs this**; e2e cannot run on GitHub
+today, so it happens only if you do it.

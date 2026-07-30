@@ -24,6 +24,7 @@ import { createReadOnlySessionFactory } from "./read-only-session.js";
 import { MaestroRuntime, type Narrator } from "./runtime.js";
 import { createShipping, type ShippingOps } from "./shipping.js";
 import {
+	describeReadOnlyTools,
 	killPidGroup,
 	pidAlive,
 	type SpawnProcess,
@@ -281,5 +282,5 @@ function briefFor(
 		throw new Error(
 			`persona \`${persona}\` is for a ${found.kind}, not a ${kind}`,
 		);
-	return `${found.prose}\n\n${tools.describeFor("read-only")}`;
+	return `${found.prose}\n\n${describeReadOnlyTools()}`;
 }

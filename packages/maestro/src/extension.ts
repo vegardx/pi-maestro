@@ -44,7 +44,7 @@ import {
 	type ReadOnlyLaunchOptions,
 } from "./read-only-session.js";
 import { createSeat, type Seat } from "./seat.js";
-import { currentDepth } from "./spawn.js";
+import { currentDepth, describeReadOnlyTools } from "./spawn.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { resolveBase } from "./workspace.js";
 
@@ -121,7 +121,7 @@ export function startWorker(
 						throw new Error(
 							`persona \`${persona}\` is for a ${found.kind}, not a ${agent}`,
 						);
-					return `${found.prose}\n\n${registry.describeFor("read-only")}`;
+					return `${found.prose}\n\n${describeReadOnlyTools()}`;
 				},
 			},
 		}),

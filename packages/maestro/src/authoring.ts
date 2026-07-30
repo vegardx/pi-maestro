@@ -133,7 +133,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		description:
 			"Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed.",
 		promptSnippet:
-			"plan — write the whole plan. Deliverables in a graph, each an ordered list of work.",
+			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,
 		async execute(_id, authored) {
 			const plan: Plan = {

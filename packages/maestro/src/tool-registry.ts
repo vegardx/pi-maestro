@@ -68,7 +68,14 @@ export class ToolRegistry {
 	 * - a duplicate name — one implementation silently wins, and which one
 	 *   depends on load order;
 	 * - an unknown posture, which would otherwise grant nothing while reading
-	 *   like it grants something.
+	 *   like it grants something;
+	 * - a summary that opens with the tool's own name. `describeFor` prepends
+	 *   the name, so such a summary renders as `- finish — finish — report…`.
+	 *   Every one of them did. It is cosmetic until you remember that this text
+	 *   is the ONLY description of its tools an agent gets, and that a brief
+	 *   which reads like a formatting bug is a brief an agent trusts less.
+	 *   Rejected rather than stripped: the name is the list's job, not the
+	 *   summary's, and stripping would let the habit persist unseen.
 	 */
 	static declare(declarations: readonly ToolDeclaration[]): ToolRegistry {
 		const byName = new Map<string, ToolDeclaration>();
@@ -91,6 +98,10 @@ export class ToolRegistry {
 					throw new ToolDeclarationError(
 						`\`${name}\` names unknown holder \`${holder}\` (holders are ${HOLDERS.join(", ")})`,
 					);
+			if (summaryOf(declaration).toLowerCase().startsWith(`${name} `))
+				throw new ToolDeclarationError(
+					`\`${name}\`'s summary opens with its own name — \`describeFor\` already prepends it, so it renders as "- ${name} — ${name} — …". Say what it does, not what it is called.`,
+				);
 			byName.set(name, declaration);
 		}
 		return new ToolRegistry(byName);
@@ -139,16 +150,26 @@ export class ToolRegistry {
 	describeFor(holder: Holder): string {
 		const lines = [...this.byName.values()]
 			.filter((d) => d.holders.includes(holder))
-			.map((d) => {
-				const summary =
-					d.definition.promptSnippet?.trim() ||
-					firstSentence(d.definition.description);
-				return `- ${d.definition.name} — ${summary}`;
-			});
+			.map((d) => `- ${d.definition.name} — ${summaryOf(d)}`);
 		return lines.length > 0
 			? `## Your tools\n\n${lines.join("\n")}`
 			: "## Your tools\n\n(none)";
 	}
+}
+
+/**
+ * The one line an agent reads about a tool.
+ *
+ * `promptSnippet` when there is one, else the first sentence of the
+ * description. Defined once so the check at declaration time and the text at
+ * render time cannot disagree about which string is the summary — the mistake
+ * this whole file exists to prevent, in miniature.
+ */
+function summaryOf(declaration: ToolDeclaration): string {
+	return (
+		declaration.definition.promptSnippet?.trim() ||
+		firstSentence(declaration.definition.description)
+	);
 }
 
 function firstSentence(text: string | undefined): string {

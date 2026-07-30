@@ -306,7 +306,7 @@ export class MaestroRuntime {
 			description:
 				"Answer a question a worker is blocked on. Answer from what you know about the plan when you can; set askTheHuman when you genuinely cannot.",
 			promptSnippet:
-				"respond — answer a blocked worker, or put its question to the user.",
+				"answer a blocked worker, or put its question to the user.",
 			parameters: Type.Object({
 				id: Type.String({ description: "The id from the question." }),
 				answer: Type.String({
@@ -402,7 +402,7 @@ export class MaestroRuntime {
 			description:
 				"Report that the plan preflight or postflight you were asked to carry out is finished, or that it cannot be.",
 			promptSnippet:
-				"flight — report the plan preflight or postflight you were asked to carry out.",
+				"report the plan preflight or postflight you were asked to carry out.",
 			parameters: Type.Object({
 				outcome: Type.Union([Type.Literal("done"), Type.Literal("failed")]),
 				detail: Type.Optional(

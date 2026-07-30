@@ -124,7 +124,12 @@ describe("the seat assembles one coherent set of parts", () => {
 		// grant this registry exists to prevent. The writers' shells are gated
 		// instead; withholding a shell is what makes `read-only` mean anything,
 		// because a shell IS a write tool.
-		expect(s.tools.grantsFor("read-only")).toEqual(["delegate"]);
+		// A read-only agent holds NOTHING of ours. It registers no tools at all,
+		// and runs on the `--tools` allowlist it was launched with. Its brief is
+		// generated from THAT (`describeReadOnlyTools`), not from this registry,
+		// because a registry that describes tools a process never registered is
+		// the phantom grant wearing the guard's own uniform.
+		expect(s.tools.grantsFor("read-only")).toEqual([]);
 		expect(s.tools.grantsFor("worker")).toContain("bash");
 		expect(s.tools.describeFor("read-only")).not.toContain("bash");
 	});

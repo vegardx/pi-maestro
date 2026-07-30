@@ -83,8 +83,6 @@ export interface WorkerSpawn {
 	/** Where pi reads its model catalogue and auth from. */
 	readonly agentDir?: string;
 	readonly sessionDir?: string;
-	/** Author identity for commits, passed explicitly rather than configured. */
-	readonly gitIdentity?: { readonly name: string; readonly email: string };
 	/** The spawner's depth; the child gets one more. */
 	readonly parentDepth?: number;
 	/**
@@ -153,16 +151,15 @@ export function buildWorkerCommand(spawn: WorkerSpawn): WorkerCommand {
 	// catalogue and cannot see its models. pi has no flag for it.
 	if (spawn.agentDir) env.PI_CODING_AGENT_DIR = spawn.agentDir;
 	if (spawn.sessionDir) env.PI_CODING_AGENT_SESSION_DIR = spawn.sessionDir;
-	if (spawn.gitIdentity) {
-		// Env, not `git config`: a linked worktree SHARES the repo's config
-		// file, so configuring identity inside one rewrites it for every
-		// worktree and for the user. That has already happened here twice.
-		env.GIT_AUTHOR_NAME = spawn.gitIdentity.name;
-		env.GIT_AUTHOR_EMAIL = spawn.gitIdentity.email;
-		env.GIT_COMMITTER_NAME = spawn.gitIdentity.name;
-		env.GIT_COMMITTER_EMAIL = spawn.gitIdentity.email;
-	}
 	if (process.env.PATH) env.PATH = process.env.PATH;
+	// HOME carries the developer's git configuration, and with it their identity.
+	// Nothing here resolves that identity or hands it over: `git config` already
+	// walks system, global, repo-local and `includeIf`, and `includeIf gitdir:`
+	// is PATH-SCOPED — resolving it once in the maestro and broadcasting it as
+	// GIT_AUTHOR_* would flatten that scoping and commit in one repository under
+	// the identity configured for another. Git resolves its own identity, per
+	// worktree, and the guard against a worker writing `git config` is the
+	// sandbox's write-deny on `.git/config`, not a value carried in front of it.
 	if (process.env.HOME) env.HOME = process.env.HOME;
 
 	return { argv, env, cwd: spawn.cwd };

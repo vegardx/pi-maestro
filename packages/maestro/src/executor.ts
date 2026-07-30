@@ -97,8 +97,6 @@ export interface ExecutorDeps {
 	readonly extensions: readonly string[];
 	/** How to start pi. Defaults to the pi this process is running. */
 	readonly piCommand?: readonly string[];
-	/** Who a worker commits as. Passed as environment, never written to config. */
-	readonly gitIdentity?: { readonly name: string; readonly email: string };
 	/**
 	 * Carry out authored maestro tasks. Supplied by whatever owns the maestro
 	 * session, because this is prose to act on, not mechanics — the executor
@@ -226,7 +224,6 @@ export class Executor {
 			token: this.deps.token,
 			extensions: this.deps.extensions,
 			...(this.deps.piCommand ? { piCommand: this.deps.piCommand } : {}),
-			...(this.deps.gitIdentity ? { gitIdentity: this.deps.gitIdentity } : {}),
 			...(this.deps.model ? { model: this.deps.model } : {}),
 		};
 		this.deps.launcher.launch(spawn);

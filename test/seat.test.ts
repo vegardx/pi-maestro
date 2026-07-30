@@ -50,10 +50,12 @@ function repo(): string {
 	const path = join(root, "project");
 	execFileSync("mkdir", ["-p", path]);
 	git(path, "init", "-q", "-b", "main");
-	// A repository a person actually uses has an identity. Without one the seat
-	// refuses to run a plan, which is the point — a worker with no identity
-	// reaches for `git config`, and in a linked worktree that rewrites the
-	// identity for the whole repository.
+	// A repository a person actually uses has an identity, resolved by git from
+	// the developer's own configuration. The seat neither reads it nor passes it
+	// on: `includeIf gitdir:` is path-scoped and the environment is not, so one
+	// identity broadcast to every worker would override that scoping. Git works
+	// it out per worktree, and the sandbox's write-deny on `.git/config` is what
+	// stops a worker rewriting the shared config when it cannot.
 	git(path, "config", "user.name", "T");
 	git(path, "config", "user.email", "t@example.com");
 	writeFileSync(join(path, "README.md"), "# project\n");

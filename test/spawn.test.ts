@@ -150,15 +150,28 @@ describe("the child's environment is built, never inherited", () => {
 		);
 	});
 
-	it("passes git identity as environment, never as config", () => {
-		// A linked worktree SHARES the repo's config file, so `git config` inside
-		// one rewrites it for every worktree and for the user. That has happened
-		// here twice.
+	it("hands a worker no git identity, and lets git resolve its own", () => {
+		// This used to assert the opposite: the maestro resolved an identity once
+		// and passed GIT_AUTHOR_*/GIT_COMMITTER_* to every worker, so that a
+		// worker never had to reach for `git config` — a linked worktree shares
+		// the repository's config file, and that write rewrites the developer's
+		// checkout.
+		//
+		// It is the wrong layer. `includeIf gitdir:` is PATH-SCOPED, and the
+		// environment is not: one identity resolved from the plan's first repo
+		// and broadcast to every worker OVERRIDES the developer's own scoping for
+		// every other repository, because environment beats config. Guaranteeing
+		// an identity that way also guarantees it can be the wrong one.
+		//
+		// So nothing is carried. HOME is, which is what lets git walk system,
+		// global, repo-local and `includeIf` for itself, per worktree. The write
+		// that caused the incident is stopped by the sandbox's deny on
+		// `.git/config`, in front of the command rather than instead of it.
 		const { env } = buildWorkerCommand(
-			worker({ gitIdentity: { name: "Maestro", email: "m@example.com" } }),
+			worker({ agentDir: "/cfg", sessionDir: "/sessions" }),
 		);
-		expect(env.GIT_AUTHOR_EMAIL).toBe("m@example.com");
-		expect(env.GIT_COMMITTER_NAME).toBe("Maestro");
+		expect(Object.keys(env).filter((k) => k.startsWith("GIT_"))).toEqual([]);
+		if (process.env.HOME) expect(env.HOME).toBe(process.env.HOME);
 	});
 
 	it("counts depth from the spawner, not from zero", () => {

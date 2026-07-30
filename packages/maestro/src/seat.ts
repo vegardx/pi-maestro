@@ -6,7 +6,6 @@
 // at construction rather than the first time a worker tries to dial home.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { missingIdentityMessage, resolveGitIdentity } from "@vegardx/pi-git";
 import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
 import { createPlanTool } from "./authoring.js";
@@ -206,16 +205,27 @@ export function createSeat(options: SeatOptions): Seat {
 		rt: MaestroRuntime,
 		workerModel?: string,
 	): ExecutorDeps {
-		// Resolved HERE and handed over as environment, because a worker with no
-		// identity does not fail — it reaches for `git config user.email`, and a
-		// linked worktree shares the repository's config file, so that one command
-		// rewrites the identity for every worktree and for the user. A live drive
-		// watched a worker do exactly that. Refusing up front is the only version
-		// of this that cannot go wrong.
-		const repo = plan.repos[0]?.path ?? process.cwd();
-		const identity = resolveGitIdentity(repo);
-		if (!identity) throw new Error(missingIdentityMessage(repo));
-
+		// No git identity is resolved here, and none is handed to a worker.
+		//
+		// It used to be: a live drive watched a worker with no identity reach for
+		// `git config user.email`, and a linked worktree shares the repository's
+		// config file, so that one command rewrote the identity for the whole
+		// checkout. The fix was to resolve identity in the seat and pass it as
+		// GIT_AUTHOR_*/GIT_COMMITTER_* — which stopped the worker needing to ask,
+		// and was the wrong layer.
+		//
+		// Wrong because a single resolution cannot stand in for git's own. The
+		// developer's `includeIf gitdir:` conditions are PATH-SCOPED, so one
+		// identity resolved from `repos[0]` and broadcast to every worker
+		// overrides the scoping for every other repository in the plan — and
+		// environment beats config, which is exactly why it was chosen. The
+		// mechanism that guaranteed an identity also guaranteed it could be the
+		// wrong one, silently.
+		//
+		// Git resolves its own identity, per worktree, from the configuration the
+		// developer already wrote. What makes the original incident impossible is
+		// the sandbox's write-deny on `.git/config` — a guard that was already
+		// implemented and merely unwired. See task #83.
 		return {
 			store,
 			link: rt.link,
@@ -234,7 +244,6 @@ export function createSeat(options: SeatOptions): Seat {
 			token: rt.token,
 			extensions: options.extensions,
 			...(options.piCommand ? { piCommand: options.piCommand } : {}),
-			gitIdentity: identity,
 			runMaestroTasks: rt.runMaestroTasks,
 			now,
 			sessionFileFor: (id) => sessionFile(plan.slug, id, options.agentDir),

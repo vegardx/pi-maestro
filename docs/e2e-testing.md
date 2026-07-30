@@ -216,10 +216,19 @@ the same core, but with the **seeded** `sandbox-features` plan (opened with `/pl
 <slug>` then `/start`, so no model-sensitive authoring) driven in the **CI
 profile** — a scripted mock model, a local bare git remote, and a `gh` shim, all
 reaching the workers via headless transport (workers spawn as child processes
-that inherit the env, so no tmux is needed). Deterministic, free, no API key;
-runs on every PR via [`.github/workflows/e2e-full.yml`](../.github/workflows/e2e-full.yml).
+that inherit the env, so no tmux is needed). Deterministic, free, no API key.
 Gated only by `PI_E2E_FULL=1` (it boots a real pi process, heavier than the unit
 suite).
+
+**Run locally, and nowhere else.** There was a GitHub workflow for this; it is
+gone. It ran only `test/e2e/real.e2e.test.ts`, which drives `packages/modes` —
+so it reported `ci-profile (mock provider): SUCCESS` on every PR while the
+REBUILT maestro's own drive sat broken from the moment the bash classifier was
+wired, because that drive lives under `test:e2e` and no job ran it. A green
+check covering the package being deleted is worse than no check: it is the same
+defect this rebuild exists to remove, wearing a CI badge. Until e2e can
+genuinely run on GitHub, these are manual — run them before anything that
+touches the shell gate, the spawn path, or shipping.
 
 The **scripted model** ([`driver/ci/scripted-model.ts`](../test/e2e/driver/ci/scripted-model.ts))
 is an HTTP server speaking the Anthropic Messages SSE API that *synthesizes* the

@@ -378,6 +378,23 @@ export const PI_BUILTINS = [
 export const READ_ONLY_BUILTINS = ["read", "grep", "find", "ls"] as const;
 
 /**
+ * Tools from OUR extensions that a read-only agent may also call.
+ *
+ * The `--tools` allowlist filters extension tools too, not just pi's builtins —
+ * so a name absent here is absent from the agent no matter which extension
+ * defines it. `websearch` and `webfetch` come from `packages/research-tools`,
+ * which every agent loads; they read the web and change nothing, which is
+ * exactly what a read-only posture allows.
+ */
+export const READ_ONLY_EXTENSION_TOOLS = ["websearch", "webfetch"] as const;
+
+/** Everything a read-only agent is launched with. */
+export const READ_ONLY_TOOLS = [
+	...READ_ONLY_BUILTINS,
+	...READ_ONLY_EXTENSION_TOOLS,
+] as const;
+
+/**
  * The tool list a read-only agent's brief carries.
  *
  * Generated from what it is actually LAUNCHED with, not from the registry.
@@ -387,7 +404,7 @@ export const READ_ONLY_BUILTINS = ["read", "grep", "find", "ls"] as const;
  * grant this whole registry exists to prevent, reproduced inside it.
  */
 export function describeReadOnlyTools(): string {
-	return `## Your tools\n\n${READ_ONLY_BUILTINS.map((name) => `- ${name}`).join(
+	return `## Your tools\n\n${READ_ONLY_TOOLS.map((name) => `- ${name}`).join(
 		"\n",
 	)}\n\nRead and search only. You cannot change anything, and you have no shell.`;
 }
@@ -423,7 +440,7 @@ export function buildReadOnlyInvocation(
 		...options.extensions.flatMap((path) => ["-e", path]),
 		"--no-session",
 		"--tools",
-		READ_ONLY_BUILTINS.join(","),
+		READ_ONLY_TOOLS.join(","),
 		"--append-system-prompt",
 		spawn.brief,
 	];

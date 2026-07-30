@@ -17,14 +17,20 @@
 // registry. Adding a refusal that names a tool nobody grants now fails here
 // rather than on a live agent an hour into a plan.
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { gateBash } from "../packages/maestro/src/bash-gate.js";
+import { SUGGESTABLE_TOOLS } from "../packages/maestro/src/bash-policy.js";
 import { executionPolicyPreset } from "../packages/maestro/src/execution-policy.js";
-import { startWorker } from "../packages/maestro/src/extension.js";
+import {
+	agentExtensions,
+	extensionPath,
+	startWorker,
+} from "../packages/maestro/src/extension.js";
 import { mode } from "../packages/maestro/src/mode.js";
+import { createSeat } from "../packages/maestro/src/seat.js";
 import {
 	describeReadOnlyTools,
 	PI_BUILTINS,
@@ -71,7 +77,30 @@ async function workerTools(): Promise<Set<string>> {
 	// pi does not define. A list that is simultaneously the configuration and
 	// the test's notion of truth cannot catch its own errors — each role hides
 	// the other's mistakes.
-	return new Set([...registered, ...PI_BUILTINS]);
+	//
+	// The OTHER extensions an agent loads are collected by running them, not by
+	// naming their tools here. `agentExtensions()` is the real list; a tool that
+	// stops being registered stops counting as held, with nothing to update.
+	return new Set([...registered, ...(await extensionTools()), ...PI_BUILTINS]);
+}
+
+/** Every tool the non-maestro extensions an agent loads actually register. */
+async function extensionTools(): Promise<string[]> {
+	const names: string[] = [];
+	const pi = {
+		registerTool: (tool: unknown) =>
+			names.push((tool as { name: string }).name),
+		on: () => undefined,
+		registerCommand: () => undefined,
+	};
+	for (const path of agentExtensions()) {
+		if (path === extensionPath()) continue; // collected above, via startWorker
+		const loaded = (await import(path)) as {
+			default?: (pi: unknown) => unknown;
+		};
+		loaded.default?.(pi);
+	}
+	return names;
 }
 
 /**
@@ -138,6 +167,40 @@ describe("a refusal never names a tool that does not exist", () => {
 		expect(decision.kind).toBe("deny");
 		expect(decision.reason).toContain("commit tool");
 		expect((await workerTools()).has("commit")).toBe(true);
+	});
+
+	it("names only tools the MAESTRO holds either, not just the worker", async () => {
+		// The guard checked one posture. The seat is refused `git commit` and
+		// `rm` by the same classifier and pointed at the same tools, and held
+		// neither — a dead end in the operator's own session, invisible because
+		// nothing ever asked about that holder.
+		const seat = createSeat({
+			narrator: { say: () => undefined, ask: () => undefined },
+			extensions: [],
+			base: "main",
+			agentDir: mkdtempSync(join(tmpdir(), "maestro-refusal-")),
+		});
+		const held = new Set([...seat.tools.grantsFor("maestro"), ...PI_BUILTINS]);
+		for (const tool of SUGGESTABLE_TOOLS)
+			if (!PI_BUILTINS.includes(tool as (typeof PI_BUILTINS)[number]))
+				expect(held.has(tool) || tool === "webfetch").toBe(true);
+		expect(held.has("commit")).toBe(true);
+		expect(held.has("delete")).toBe(true);
+		await seat.close();
+	});
+
+	it("suggests only tools that exist — the DYNAMIC refusal, which the regex cannot see", async () => {
+		// The hole this guard had. One refusal names its tool by interpolation —
+		// `Use the ${suggestedTool} tool` — so the source scan above, which needs
+		// a letter after "Use the ", never saw it. Two phantoms lived in exactly
+		// that blind spot: `delete`, a tool that went with `packages/modes`, and
+		// `webfetch`, which pi has never defined. A worker running `rm -rf dist`
+		// was denied and told to use a tool nobody has.
+		//
+		// So this asserts the SET, not the prose. A closed union checked against
+		// what agents really hold cannot hide a phantom behind interpolation.
+		const held = await workerTools();
+		for (const tool of SUGGESTABLE_TOOLS) expect(held).toContain(tool);
 	});
 
 	it("names in READ_ONLY_BUILTINS every one a tool pi actually defines", () => {

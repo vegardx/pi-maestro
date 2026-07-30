@@ -34,6 +34,7 @@ import {
 } from "./agent-runtime.js";
 import { createBashTool } from "./bash-tool.js";
 import { createCommitTool } from "./commit-tool.js";
+import { createDeleteTool } from "./delete-tool.js";
 import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
 import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
@@ -51,6 +52,26 @@ import { resolveBase } from "./workspace.js";
 /** This file, so a spawned agent loads the same code its maestro is running. */
 export function extensionPath(): string {
 	return fileURLToPath(import.meta.url);
+}
+
+/**
+ * `packages/research-tools`, which defines `websearch` and `webfetch`.
+ *
+ * Loaded into every agent because the classifier REDIRECTS to `webfetch`: a
+ * `curl` of a read-only URL is refused with "use the webfetch tool". While this
+ * was not loaded, that refusal named a tool nobody had — pi defines no
+ * `webfetch`, and nothing else supplied one — so an agent asked to fetch a page
+ * was told no, twice, with no way through.
+ */
+export function researchToolsPath(): string {
+	return fileURLToPath(
+		new URL("../../research-tools/src/index.ts", import.meta.url),
+	);
+}
+
+/** What a spawned agent loads: maestro's own surface, plus the web tools. */
+export function agentExtensions(): readonly string[] {
+	return [extensionPath(), researchToolsPath()];
 }
 
 /**
@@ -96,6 +117,7 @@ export function startWorker(
 			// which the write profile denies — rightly, since a worker rewriting
 			// branches that are not its own is what that deny is for.
 			commit: createCommitTool({ cwd: () => process.cwd() }),
+			remove: createDeleteTool(),
 			reporter,
 			delegate: {
 				cwd: () => process.cwd(),
@@ -225,7 +247,7 @@ export function startSeat(
 					pi.sendUserMessage(`[maestro] ${line}`, { deliverAs: "followUp" }),
 				ask: (prompt) => pi.sendUserMessage(prompt, { deliverAs: "followUp" }),
 			},
-			extensions: [extensionPath()],
+			extensions: agentExtensions(),
 			base,
 			// The hook that was declared and never supplied. Without it the seat
 			// told itself there was nobody to ask, which was false — it has a
@@ -336,7 +358,7 @@ export default defineExtension(
 				void startWorker(
 					pi,
 					wiring,
-					{ extensions: [extensionPath()] },
+					{ extensions: agentExtensions() },
 					maestro.capabilities,
 				);
 			return;

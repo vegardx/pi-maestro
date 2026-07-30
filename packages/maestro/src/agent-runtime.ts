@@ -320,6 +320,16 @@ export function declareAgentTools(deps: {
 	 * to commit at all — the refusal pointed at nothing.
 	 */
 	readonly commit?: ToolDefinition;
+	/**
+	 * Deletion, as a recoverable move to trash.
+	 *
+	 * Declared beside the shell for the same reason `commit` is: the classifier
+	 * refuses `rm` and names this tool instead. Declaring the shell without it
+	 * leaves that refusal pointing at nothing — which is exactly what the flip
+	 * did, silently, because the refusal kept working after its target was
+	 * deleted with `packages/modes`.
+	 */
+	readonly remove?: ToolDefinition;
 }): readonly ToolDeclaration[] {
 	return [
 		...(deps.bash
@@ -331,7 +341,24 @@ export function declareAgentTools(deps: {
 				]
 			: []),
 		...(deps.commit
-			? [{ definition: deps.commit, holders: ["worker"] as const }]
+			? [
+					{
+						definition: deps.commit,
+						// The maestro too. It is refused `git commit` by the same
+						// classifier and pointed at this same tool, so granting it to
+						// the worker alone left the seat with a dead end in the
+						// operator's own session.
+						holders: ["maestro", "worker"] as const,
+					},
+				]
+			: []),
+		...(deps.remove
+			? [
+					{
+						definition: deps.remove,
+						holders: ["maestro", "worker"] as const,
+					},
+				]
 			: []),
 		{
 			definition: createFinishTool(deps.reporter),

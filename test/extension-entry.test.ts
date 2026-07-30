@@ -121,6 +121,11 @@ describe("a process gets one surface, never both", () => {
 			// build its work and then fail, unable to record any of it.
 			"commit",
 			"delegate",
+			// `delete` for the same reason as `commit`: the classifier refuses
+			// `rm` and names this tool instead. It went with `packages/modes` in
+			// the flip and the refusal outlived it, so `rm -rf dist` was denied
+			// with nowhere to go.
+			"delete",
 			"finish",
 		]);
 		expect(h.names()).toEqual([]);
@@ -198,7 +203,14 @@ describe("the commands", () => {
 		// human directly. `respond` is the other half of a worker's `ask`.
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
 			"bash",
+			// `commit` and `delete` for the same reason a worker has them: the
+			// classifier refuses `git commit` and `rm` for the MAESTRO too, and
+			// names these tools. Granting them to the worker alone left a dead
+			// end in the operator's own session — invisible because the guard
+			// only ever checked the worker posture.
+			"commit",
 			"delegate",
+			"delete",
 			"flight",
 			"plan",
 			"respond",

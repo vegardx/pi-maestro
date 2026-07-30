@@ -71,6 +71,10 @@ export interface AgentChannel {
 		event: "disconnected",
 		listener: (agentId: string, awaitingRelease: boolean) => void,
 	): unknown;
+	on(
+		event: "agentError",
+		listener: (agentId: string, message: string) => void,
+	): unknown;
 	release(agentId: string): boolean;
 }
 
@@ -151,6 +155,21 @@ export type ExecutorEvent =
 			readonly record: DeliverableRun;
 	  }
 	| { readonly type: "settled"; readonly run: Run }
+	| {
+			/**
+			 * An agent said something went wrong.
+			 *
+			 * `link` emitted this for an explicit `error` message and for a
+			 * malformed `done`, and NOTHING listened — so a worker saying "I
+			 * cannot proceed, and here is why" was talking into the void, and a
+			 * maestro looking at a stalled deliverable had no idea it had spoken.
+			 */
+			readonly type: "agentError";
+			/** Absent when the agent is not one this run launched. */
+			readonly id: string | undefined;
+			readonly agentId: string;
+			readonly message: string;
+	  }
 	| {
 			/** The run can neither finish nor progress. Said, never silent. */
 			readonly type: "stuck";
@@ -274,6 +293,24 @@ export class Executor {
 	 * finish instead of one bad model turn ending the whole plan.
 	 */
 	async advance(): Promise<void> {
+		// SERIALISED. `collect` runs as `void this.collect(...)` and awaits a
+		// push and a `gh` call — seconds — so two workers finishing in that
+		// window gave two overlapping `advance` calls. Both read the same run
+		// state, both saw the same successor ready, and both called
+		// `workspace.create` on one worktree; whichever lost wrote `failed` over
+		// the `running` record the winner had just written, stranding dependents
+		// while a live worker was still building it, and its eventual `done` was
+		// dropped because the record no longer agreed.
+		//
+		// One queue rather than a lock: the second call waits, then reads state
+		// that already includes the first's launches.
+		this.advancing = this.advancing.then(() => this.advanceOnce());
+		return this.advancing;
+	}
+
+	private advancing: Promise<void> = Promise.resolve();
+
+	private async advanceOnce(): Promise<void> {
 		if (this.halted) return;
 		for (const deliverable of nextDeliverables(this.plan, this.run)) {
 			try {
@@ -407,6 +444,16 @@ export class Executor {
 
 		this.deps.link.on("done", (agentId, done) => {
 			void this.collect(agentId, done);
+		});
+
+		// An agent reporting trouble used to reach NOBODY. `link` emitted
+		// `agentError` for an explicit `error` message and for a malformed
+		// `done`, and nothing anywhere listened — so a worker saying "I cannot
+		// proceed and here is why" was talking into the void, and a maestro
+		// looking at a stalled deliverable had no idea it had said anything.
+		this.deps.link.on("agentError", (agentId, message) => {
+			const id = this.byAgent.get(agentId);
+			this.emit({ type: "agentError", id, agentId, message });
 		});
 
 		this.deps.link.on("disconnected", (agentId, awaitingRelease) => {

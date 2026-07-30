@@ -13,11 +13,7 @@
 // exit a round trip is what removes the race — there is no window, because the
 // agent is still there until maestro says otherwise.
 
-import type {
-	Answers,
-	Questionnaire,
-	TokenSnapshot,
-} from "@vegardx/pi-contracts";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -41,8 +37,6 @@ export interface Hello {
 	 */
 	readonly token: string;
 	readonly pid: number;
-	/** Re-attaching after a maestro restart rather than starting fresh. */
-	readonly resumed?: boolean;
 }
 
 /** For narration. Carries no result — a result is `done`, and only `done`. */
@@ -50,12 +44,6 @@ export interface Status {
 	readonly type: "status";
 	readonly state: "working" | "idle";
 	readonly detail?: string;
-}
-
-export interface Tokens {
-	readonly type: "tokens";
-	/** Cumulative, not a delta: a dropped message must not lose accounting. */
-	readonly snapshot: TokenSnapshot;
 }
 
 /**
@@ -98,7 +86,7 @@ export interface AgentError {
 	readonly message: string;
 }
 
-export type AgentMessage = Status | Tokens | Done | Ask | AgentError;
+export type AgentMessage = Status | Done | Ask | AgentError;
 
 // ─── Maestro → agent ─────────────────────────────────────────────────────────
 

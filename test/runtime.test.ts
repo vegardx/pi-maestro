@@ -6,27 +6,32 @@
 // level up: the thing asked to do work says when it is done, and nothing starts
 // on the assumption that it probably has.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { AskInbox } from "@vegardx/pi-ask";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Executor } from "../packages/maestro/src/executor.js";
+import { AgentLink } from "../packages/maestro/src/link.js";
 import type { Plan, Task } from "../packages/maestro/src/plan.js";
 import {
 	MaestroRuntime,
 	type Narrator,
 } from "../packages/maestro/src/runtime.js";
 
+const TOKEN = "run-token";
+const closers: { close(): unknown }[] = [];
 const dirs: string[] = [];
 const runtimes: MaestroRuntime[] = [];
 afterEach(async () => {
+	for (const closer of closers.splice(0)) await closer.close();
 	for (const runtime of runtimes.splice(0)) await runtime.close();
 	while (dirs.length > 0)
 		rmSync(dirs.pop() as string, { recursive: true, force: true });
 });
 
-function harness() {
+function harness(inbox?: AskInbox) {
 	const said: string[] = [];
 	const asked: string[] = [];
 	const narrator: Narrator = {
@@ -35,13 +40,24 @@ function harness() {
 	};
 	const dir = mkdtempSync(join(tmpdir(), "maestro-runtime-"));
 	dirs.push(dir);
+	const socketPath = join(dir, "m.sock");
 	const runtime = new MaestroRuntime({
 		narrator,
-		socketPath: join(dir, "m.sock"),
-		token: "run-token",
+		socketPath,
+		token: TOKEN,
+		...(inbox
+			? {
+					inbox: () =>
+						({
+							deliver: (q: never, settle: never) => inbox.receive(q, settle),
+							open: () => inbox.open(),
+							drain: (v: string) => inbox.drain(v),
+						}) as never,
+				}
+			: {}),
 	});
 	runtimes.push(runtime);
-	return { runtime, said, asked };
+	return { runtime, said, asked, socketPath };
 }
 
 const task = (id: string): Task => ({
@@ -308,5 +324,45 @@ describe("a run ends, and the seat can start another", () => {
 	it("says nothing was running rather than pretending it stopped one", async () => {
 		const { runtime } = harness();
 		expect(await runtime.stop("why not")).toBeNull();
+	});
+});
+
+describe("asking to run a second plan does not damage the first", () => {
+	// `seat.run` calls `listen()` on every `/run`, before `start` can refuse.
+	// `link.listen` unlinks the socket file and replaces the server, so the
+	// refusal used to arrive AFTER the live run's socket had been deleted and a
+	// second server bound over it. And every call added another `asked`
+	// listener, so from then on a worker's question was narrated twice,
+	// answered twice, and the second `respond` reported nothing was waiting.
+	it("listens once, however many times it is asked", async () => {
+		const { runtime } = harness();
+		await runtime.listen();
+		await runtime.listen();
+		await runtime.listen();
+		expect(runtime.link.listenerCount("asked")).toBe(1);
+	});
+
+	it("keeps the SAME socket across repeated listens", async () => {
+		const { runtime, socketPath } = harness();
+		await runtime.listen();
+		const first = statSync(socketPath).ino;
+		await runtime.listen();
+		// A second bind would have unlinked this one and created another.
+		expect(statSync(socketPath).ino).toBe(first);
+	});
+
+	it("narrates a worker's question exactly once", async () => {
+		// Needs an inbox: with none, the runtime answers "nobody can answer this"
+		// and returns before narrating, which would pass this test for the wrong
+		// reason.
+		const { runtime, asked, socketPath } = harness(new AskInbox());
+		await runtime.listen();
+		await runtime.listen();
+		const agent = new AgentLink();
+		closers.push(agent);
+		await agent.connect(socketPath, { agentId: "worker-api", token: TOKEN });
+		void agent.ask([{ id: "q", question: "null or NaN?" }]);
+		await new Promise((r) => setTimeout(r, 30));
+		expect(asked).toHaveLength(1);
 	});
 });

@@ -9,7 +9,6 @@ import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import {
 	AGENT_KINDS,
-	AgentModelError,
 	type AgentSpec,
 	brief,
 	holderOf,
@@ -100,24 +99,10 @@ describe("requesting an agent", () => {
 		).toContainEqual(expect.stringContaining("no persona"));
 	});
 
-	it("accepts a blocking reader fanning out", () => {
-		expect(
-			validateAgentSpec({
-				kind: "reviewer",
-				persona: "security-review",
-				topology: "fan-out",
-			}),
-		).toEqual([]);
-	});
-
-	it("refuses to fan out something nobody is waiting on", () => {
-		// Fanning out means several answers normalised into one before the caller
-		// continues. With nothing waiting, there is nothing to normalise into.
-		for (const kind of ["worker", "advisor"] as const)
-			expect(
-				validateAgentSpec({ kind, persona: "p", topology: "fan-out" }),
-			).toContainEqual(expect.stringContaining("cannot fan out"));
-	});
+	// The two tests that were here validated `topology: "fan-out"`, an axis
+	// NOTHING ever set. Fanning out is `Delegation.fanOut` plus model routing,
+	// which is what `delegate` actually reads — so this was a second vocabulary
+	// for one idea, and the unreachable one carried the rules.
 
 	it("defaults to one agent", () => {
 		expect(
@@ -222,38 +207,5 @@ describe("the brief is assembled, never composed by the caller", () => {
 		expect(() =>
 			brief({ ...spec, kind: "explorer" }, catalogue(), tools, "Go look"),
 		).toThrow(/is for a reviewer, not a explorer/);
-	});
-
-	it("refuses to brief an agent that should not exist", () => {
-		// A matching persona, so the ONLY thing wrong is the topology — otherwise
-		// this would throw on the kind mismatch and pass without ever exercising
-		// the rule it names.
-		const withAdvisor = PersonaCatalogue.declare(
-			[
-				persona(),
-				persona({
-					id: "standby",
-					kind: "advisor",
-					prose: "Answer what you are asked, from what you can see.",
-				}),
-			],
-			tools,
-		);
-		expect(() =>
-			brief(
-				{ kind: "advisor", persona: "standby", topology: "fan-out" },
-				withAdvisor,
-				tools,
-				"Stand by",
-			),
-		).toThrow(/cannot fan out/);
-		expect(() =>
-			brief(
-				{ kind: "advisor", persona: "standby" },
-				withAdvisor,
-				tools,
-				"Stand by",
-			),
-		).not.toThrow(AgentModelError);
 	});
 });

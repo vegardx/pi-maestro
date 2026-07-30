@@ -33,7 +33,7 @@ function builtinNames(): string[] {
 
 /** Every command name maestro registers with a string literal. */
 function maestroCommands(): string[] {
-	const roots = ["packages/modes/src", "packages/settings/src"];
+	const roots = ["packages/maestro/src", "packages/settings/src"];
 	const names = new Set<string>();
 	for (const root of roots) {
 		const dir = join(process.cwd(), root);
@@ -78,9 +78,13 @@ describe("command names", () => {
 	});
 
 	it("still registers the plan-running verb under a free name", () => {
+		// `start` is gone with `packages/modes`: there is one verb now, and
+		// running a plan that already has a run record IS resuming it — the
+		// executor reclaims whatever was left in flight. `resume` stays absent
+		// because it is pi's own, which is what this file exists to catch.
 		const names = maestroCommands();
 		expect(names).toContain("run");
-		expect(names).toContain("start");
+		expect(names).toContain("stop");
 		expect(names).not.toContain("resume");
 	});
 });

@@ -10,8 +10,8 @@
 // sandbox-runtime) and picking the paths for a live spawn live elsewhere.
 
 import { join } from "node:path";
-import type { ModeName } from "@vegardx/pi-contracts";
 import type { BashActor } from "../bash-policy.js";
+import type { ModeName } from "../mode.js";
 
 /**
  * Where an actor may write.
@@ -40,7 +40,7 @@ export function writeScopeFor(actor: BashActor, mode: ModeName): WriteScope {
 		case "worker":
 			return "workspace";
 		default:
-			// reviewer (and any unlisted future actor) — default-deny.
+			// read-only (explorer, reviewer, advisor) — default-deny.
 			return "none";
 	}
 }

@@ -10,15 +10,15 @@ import {
 describe("writeScopeFor (default-deny grant table)", () => {
 	it("scopes maestro to the repo, a worker to its workspace, a reviewer to none", () => {
 		expect(writeScopeFor("maestro", "auto")).toBe("repo");
-		expect(writeScopeFor("maestro", "recon")).toBe("repo");
+		expect(writeScopeFor("maestro", "plan")).toBe("repo");
 		expect(writeScopeFor("worker", "auto")).toBe("workspace");
-		expect(writeScopeFor("reviewer", "auto")).toBe("none");
+		expect(writeScopeFor("read-only", "auto")).toBe("none");
 	});
 
 	it("hack lifts all restrictions for every actor (global escape hatch)", () => {
 		expect(writeScopeFor("maestro", "hack")).toBe("host");
 		expect(writeScopeFor("worker", "hack")).toBe("host");
-		expect(writeScopeFor("reviewer", "hack")).toBe("host");
+		expect(writeScopeFor("read-only", "hack")).toBe("host");
 	});
 });
 

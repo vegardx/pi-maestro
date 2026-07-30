@@ -12,9 +12,9 @@
 // would have prompted is denied outright, with the reason, and the worker can
 // report that it could not proceed. Prompting into a void is how a fleet hangs.
 
-import { type BashActor, decideBashPolicy } from "./bash-policy.js";
+import { decideBashPolicy } from "./bash-policy.js";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
-import type { Mode } from "./mode.js";
+import type { Mode, ModeName } from "./mode.js";
 import type { Holder } from "./tool-registry.js";
 
 /**
@@ -44,24 +44,15 @@ export interface GateInput {
 }
 
 /**
- * Speak the classifier's existing vocabulary.
+ * The classifier's mode name, from a mode.
  *
- * TEMPORARY, and it dies with `packages/modes`. The classifier types its actor
- * as `maestro | worker | reviewer` and its mode as the old five-name enum, and
- * retyping it now would change the safeguard behaviour of the system still in
- * daily use. So the new model converts at this one labelled point instead —
- * six lines, in one direction, deleted when the old model is.
- *
- * It also answers a question the rebuild plan left open: the actor axis IS
- * right, because it is the POSTURE axis with one name wrong. `reviewer` is a
- * kind; the thing that decides shell access is `read-only`, which explorers and
- * advisors share. Three actors, three holders, one rename apart.
+ * The only conversion left, and it is not a seam: a `Mode` is two properties
+ * (cwd access x safeguards) and the classifier wants the single name those
+ * combine into. Its sibling — an `asActor` translating `read-only` into the
+ * classifier's `reviewer` — is gone: `BashActor` is now `Holder`, so there is
+ * nothing to translate.
  */
-export function asActor(holder: Holder): BashActor {
-	return holder === "read-only" ? "reviewer" : holder;
-}
-
-export function asModeName(mode: Mode): "plan" | "auto" | "hack" {
+export function asModeName(mode: Mode): ModeName {
 	if (mode.safeguards === "off") return "hack";
 	return mode.cwd === "read" ? "plan" : "auto";
 }
@@ -76,7 +67,7 @@ export function asModeName(mode: Mode): "plan" | "auto" | "hack" {
 export function gateBash(input: GateInput): GateDecision {
 	const decision = decideBashPolicy({
 		command: input.command,
-		actor: asActor(input.holder),
+		actor: input.holder,
 		mode: asModeName(input.mode),
 		policy: input.policy,
 	});

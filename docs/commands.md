@@ -1,52 +1,72 @@
 # Command and tool reference
 
+The surface is small on purpose. Most of what the old system exposed as a
+command is now either a tool the maestro calls while you talk to it, or
+something it does without being asked.
+
 ## Commands
 
-| Command | Contract |
-|---|---|
-| `/plan [slug]` | Open/create the repo plan. Artifact only — never changes mode |
-| `/mode [plan\|auto\|hack\|recon]` | Switch posture. Direct switch; no arg opens a picker. Asks to park live workers first |
-| `/form` | Author the plan tree from the conversation, or extend an existing one. Plan mode only |
-| `/review` | Review the formed plan; records the verdict against its fingerprint. Opt-in |
-| `/run [delivery]` | Run the plan: resume cleanly parked workers AND activate ready `planned` work |
-| `/stop` | Freeze scheduling and bounded-stop the fleet |
-| `/start [delivery]` | Alias for `/run` |
-| `/recover [delivery]` | Audit and recover the target, or select from global candidates |
-| `/kill <delivery>` | Prove worker shutdown then record recoverable failure |
-| `/agents` | Focus Agents HUD or print status headlessly |
-| `/watch` | Toggle active worker tmux panes |
-| `/view <target>` | Open a read-only split for an exact worker/run target |
-| `/steer <target> <guidance>` | Guide a live worker without aborting it |
-| `/interrupt [target] [--children\|--tree\|--all]` | Abort one turn/run; expansion is explicit |
-| `/answer` | Open pending questionnaires |
-| `/recap` | Summarize completed agent work |
-| `/verify [delivery]` | Deep read-only verification against actual diffs |
-| `/code-review [target]` | Maestro-side read-only correctness review (persona command) |
-| `/debug [symptom]` | Bounded diagnosis, one selected recovery, issue review |
-| `/ship` | Push and create/update the next shippable PR |
-| `/sync` | Reconcile stacked PR bases |
-| `/commit` | Local conventional commit |
-| `/distill` | Curated in-place compaction |
-| `/handoff` | End the arc and seed a fresh planning session |
-| `/maestro` | Inspect/edit exact agent configuration and settings |
-| `/modes-status` | Show mode, plan, and execution status |
+| Command | What it does |
+| --- | --- |
+| `/mode [plan\|auto\|hack]` | Switch posture. No argument reports the current one |
+| `/run [slug]` | Run a stored plan. No argument lists what is stored |
+| `/stop [why]` | Halt the running plan and end its workers |
 
-Exact opaque control targets (`worker:<delivery/agent>`, `run:<id>`) win over aliases. Ambiguous aliases fail. `/interrupt` is not stop; `/stop` is not recover; `/run` is not `/recover` — an unproven stop routes to `/recover`.
+`/run` is also how a plan resumes. There is no separate verb: a run whose
+maestro died leaves records the next `/run` reclaims — in-flight deliverables
+become unstarted again, any worker still executing with nobody to report to is
+ended, and the work restarts in the worktree it was already using. `/stop`
+leaves a plan in exactly the same state, so stopping and resuming are one
+mechanism rather than two.
 
-## Plan-facing tools
+## Modes
 
-- `research` sends a batched set of codebase/web questions and persists reports.
-- `dig(ref)` retrieves one full report.
-- `deliverable` atomically adds/updates/removes deliveries and dependency/repo mapping.
-- `work` manages a deliverable's items after it exists (add/update/toggle/remove); batch add is all-or-nothing.
-- `subagent` runs and controls typed subagents (run/batch/spawn/steer/ask/interrupt).
-- `workflow` lists kind options, resolves exact assignments, stores the stage DAG, or updates a stage.
-- `plan` renders markdown, JSON, or a delivery-focused worker seed.
-- `ask` presents blocking/non-blocking conditional questionnaires.
+Two properties, three coherent combinations. Safeguards do **not** propagate: a
+worker is never in hack, whatever the seat is in.
 
-Workers use `work` to toggle their assigned items and to write down follow-ups they discover and common control/reporting tools exposed by their runtime. They do not push, create PRs, mutate plan topology, or approve isolation downgrades.
+| Mode | Working tree | Safeguards |
+| --- | --- | --- |
+| `plan` | read-only | on |
+| `auto` | writable | on |
+| `hack` | writable | off |
+
+A read-only seat cannot run a plan, because every deliverable produces a writer.
+
+## Tools
+
+Held by the maestro:
+
+- `plan` — author or replace the whole plan document in one call. Rejections
+  come back with every error at once, not the first.
+- `flight` — carry out the plan's own preflight/postflight prose.
+- `respond` — answer a worker's blocked question, or escalate it to you.
+- `bash` — the gated shell, confined to the repository.
+- `delegate` — spawn a read-only agent (explorer, reviewer, advisor) and wait.
+
+Held by a worker:
+
+- `commit` — record work on its deliverable's branch. The maestro pushes and
+  opens the pull request; a worker never does.
+- `bash` — the gated shell, confined to its worktree.
+- `delegate` — as above. This is how a worker gets its own diff reviewed.
+- `finish` — report the outcome and hand off. It then waits: the maestro ships
+  and records the result before releasing it.
+
+Held by a read-only agent: `delegate`, and nothing else. No shell — a shell is
+a write tool, and withholding it is what makes the posture mean anything.
+
+`ask` is not in these lists because it belongs to `packages/ask`. What differs
+by position is not the tool but the transport behind it: a worker's questions
+route to its maestro, and a maestro with no transport falls back to its local
+UI, which is you.
+
+Nothing here is a list to keep in step with the implementation. Grants are
+derived from one declaration, and a tool declared without an implementation
+fails at construction.
 
 ## `/maestro` scripting
+
+`/maestro` comes from the settings extension, not from maestro itself:
 
 ```text
 /maestro show
@@ -57,20 +77,14 @@ Workers use `work` to toggle their assigned items and to write down follow-ups t
 /maestro validate
 ```
 
-## Reset and archive
+## Plan state
 
-The cutover deliberately rejects old active state. Do not edit schema numbers in place.
+Plans live at `<agentDir>/maestro/plans/<slug>/`, as `plan.json` (what was
+authored) and `run.json` (what happened). They are separate files because they
+have separate lifetimes — a plan is rewritten when it is amended, a run on
+every transition.
 
-1. Stop/close old sessions and preserve any worktree commits or patches.
-2. Move old plan/run state out of the active root, for example:
-
-   ```bash
-   mv "$PI_CODING_AGENT_DIR/maestro" \
-      "$PI_CODING_AGENT_DIR/maestro.archive.$(date +%Y%m%d-%H%M%S)"
-   ```
-
-   If `PI_CODING_AGENT_DIR` is unset, use pi's configured agent directory.
-3. Remove unsupported settings such as `models.presets` and `models.modelSets`; author `models.families`, `models.rosters`, and `models.bindings` instead.
-4. Start a new pi session and recreate the plan. Reattach preserved commits through normal git operations rather than copying stale `plan.json`, run status, usage, child projection, or session custom entries.
-
-For a single rejected plan, archive `<agentDir>/maestro/plans/<slug>/` and create it again. For a rejected run store, archive the containing runs root. Rejected session custom entries require a fresh session. The runtime never silently deletes or migrates these records.
+Nothing derivable is stored. A deliverable no dependent can reach is
+*stranded*, but that is a fact about the plan's shape plus the set of failures,
+so it is computed rather than written down. To discard a plan, remove its
+directory; the runtime never silently migrates or deletes these records.

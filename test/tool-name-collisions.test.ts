@@ -24,10 +24,9 @@ const PACKAGES = join(process.cwd(), "packages");
  * "one becomes unreachable depending on load order" means. A package outside
  * the manifest loads beside nothing and can collide with nothing.
  *
- * `packages/maestro` is deliberately outside it while the rebuild lands, and it
- * defines a `plan` tool of its own. When it enters the manifest, `modes` leaves
- * in the same commit — they are two implementations of one system, and this
- * check is what would catch anyone trying to run both.
+ * That commit has happened: `packages/maestro` is in the manifest and `modes`
+ * and `subagents` are deleted, so it is now the only loaded package defining
+ * tools at all. This check earns its keep for the next one to arrive.
  */
 function loadedPackages(): Set<string> {
 	const manifest = JSON.parse(
@@ -77,9 +76,11 @@ describe("tool names", () => {
 	it("finds the tool definitions at all", () => {
 		const names = toolNames();
 		expect(names.size).toBeGreaterThan(5);
-		// Sanity: two tools we know exist, in different packages.
-		expect(names.has("deliverable")).toBe(true);
-		expect(names.has("subagent")).toBe(true);
+		// Sanity: tools we know exist. All from maestro now — it is the only
+		// manifest package that registers any, which is itself the point of the
+		// rebuild rather than an accident of this test.
+		expect(names.has("plan")).toBe(true);
+		expect(names.has("finish")).toBe(true);
 	});
 
 	it("registers no tool name from two different packages", () => {
@@ -92,14 +93,19 @@ describe("tool names", () => {
 		).toEqual([]);
 	});
 
-	it("keeps plan authoring distinct from the runtime subagent API", () => {
-		// modes once defined a plan-structure tool named "agent" alongside the
-		// subagents runtime tool of the same name. It was never registered, so
-		// nothing shadowed anything — but registering it would have collided.
-		// Authoring lives on `deliverable`; spawning lives on `subagent`, whose
-		// name no longer competes with a PlanNode's `agent:` field either.
+	it("keeps plan authoring distinct from the runtime delegation API", () => {
+		// The collision this file was written for is gone by deletion rather than
+		// by care: `modes` defined a `deliverable` authoring tool and `subagents`
+		// a `subagent` runtime tool, and both packages are now deleted.
+		//
+		// One package owns both halves, which is why they cannot drift: `plan`
+		// authors the whole document and `delegate` spawns a reader, declared in
+		// the same registry, and `ToolRegistry.declare` refuses a duplicate name
+		// at construction. This check remains for the day a second extension
+		// starts registering tools beside maestro.
 		const names = toolNames();
-		expect(names.get("deliverable")).toEqual(["modes"]);
-		expect(names.get("subagent")).toEqual(["subagents"]);
+		expect(names.get("plan")).toEqual(["maestro"]);
+		expect(names.get("delegate")).toEqual(["maestro"]);
+		expect(names.get("commit")).toEqual(["maestro"]);
 	});
 });

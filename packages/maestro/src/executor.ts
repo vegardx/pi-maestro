@@ -120,6 +120,15 @@ export interface ExecutorDeps {
 	/** Where a worker's pi session file goes. */
 	readonly sessionFileFor: (deliverableId: string) => string;
 	readonly model?: string;
+	/**
+	 * Whether a pid is a live process, and how to end one.
+	 *
+	 * Injected as two functions rather than taken from the launcher, because the
+	 * pids these act on belong to a PREVIOUS maestro's workers — the launcher
+	 * has no handle on them, only the run record does.
+	 */
+	readonly isAlive: (pid: number) => boolean;
+	readonly killPid: (pid: number) => void;
 }
 
 export type ExecutorEvent =
@@ -131,6 +140,13 @@ export type ExecutorEvent =
 			readonly record: DeliverableRun;
 	  }
 	| { readonly type: "settled"; readonly run: Run }
+	| {
+			readonly type: "reclaimed";
+			/** In flight under a maestro that is gone; now unstarted again. */
+			readonly relaunched: readonly string[];
+			/** Of those, the ones whose worker was still executing. */
+			readonly killed: readonly string[];
+	  }
 	| {
 			readonly type: "stopped";
 			readonly run: Run;
@@ -168,8 +184,51 @@ export class Executor {
 		return this.run;
 	}
 
+	/**
+	 * Take over a run this process did not start.
+	 *
+	 * A `running` record can only have been written by a live executor, and this
+	 * executor is new — so any that survive belong to a maestro that is gone.
+	 * Their workers are unreachable whether or not they are still executing: the
+	 * socket they hold died with their maestro, so they can never report and can
+	 * never be released. Left alone they wedge the plan permanently, because a
+	 * `running` record sits in `startedIds` and is never launched again. A live
+	 * drive proved exactly that — a SIGKILLed maestro left `stats: running`, the
+	 * next `/run` launched nothing, and narrated nothing either.
+	 *
+	 * So the record is removed, which is the same answer `stop` reaches for the
+	 * same reason: absent means unstarted, and unstarted is what it now is. The
+	 * worktree and its commits stay, so the relaunch re-enters the same tree.
+	 *
+	 * The orphan is killed FIRST. It cannot finish anything useful, and it can
+	 * still commit — so relaunching beside it would put two workers on one
+	 * branch. This is also why the pid is written down: without it there is no
+	 * way to tell a worker still running from one that died in the same crash.
+	 */
+	private reclaim(): void {
+		const deliverables = { ...this.run.deliverables };
+		const relaunched: string[] = [];
+		const killed: string[] = [];
+		for (const [id, record] of Object.entries(this.run.deliverables)) {
+			if (record.state !== "running") continue;
+			relaunched.push(id);
+			delete deliverables[id];
+			if (record.pid !== undefined && this.deps.isAlive(record.pid)) {
+				this.deps.killPid(record.pid);
+				killed.push(id);
+			}
+		}
+		if (relaunched.length === 0) return;
+		this.save({ deliverables });
+		this.emit({ type: "reclaimed", relaunched, killed });
+	}
+
 	/** Run plan preflight, then start whatever that released. */
 	async start(): Promise<void> {
+		// Before anything else: a run left mid-flight by a maestro that is gone
+		// is not a run in progress. Done here rather than in the constructor so
+		// the seat has attached its listener and can narrate it.
+		this.reclaim();
 		if (this.run.preflight === undefined) {
 			this.save({
 				preflight: { state: "running", startedAt: this.deps.now() },
@@ -225,14 +284,7 @@ export class Executor {
 		const agentId = `worker-${deliverable.id}`;
 
 		this.byAgent.set(agentId, deliverable.id);
-		this.record(deliverable.id, {
-			state: "running",
-			worktree: path,
-			branch,
-			agentId,
-			session: this.deps.sessionFileFor(deliverable.id),
-			startedAt: this.deps.now(),
-		});
+		const started = this.deps.now();
 
 		const spawn: WorkerSpawn = {
 			agentId,
@@ -245,7 +297,20 @@ export class Executor {
 			...(this.deps.piCommand ? { piCommand: this.deps.piCommand } : {}),
 			...(this.deps.model ? { model: this.deps.model } : {}),
 		};
-		this.deps.launcher.launch(spawn);
+		// Launched BEFORE the record is written, so the record can carry the pid.
+		// A record written first would be a record of a worker that might never
+		// have started, and the pid is the only thing that survives this process
+		// to tell a live worker from a dead one.
+		const pid = this.deps.launcher.launch(spawn);
+		this.record(deliverable.id, {
+			state: "running",
+			worktree: path,
+			branch,
+			agentId,
+			...(pid !== undefined ? { pid } : {}),
+			session: this.deps.sessionFileFor(deliverable.id),
+			startedAt: started,
+		});
 		this.emit({ type: "started", deliverable });
 	}
 

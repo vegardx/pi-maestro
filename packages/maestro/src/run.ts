@@ -33,6 +33,16 @@ export interface DeliverableRun {
 	readonly worktree?: string;
 	/** The worker running the body, while one is running. */
 	readonly agentId?: string;
+	/**
+	 * That worker's process id.
+	 *
+	 * Written down because the launcher's handle on a worker lives in memory and
+	 * dies with the maestro. A maestro restarting onto a run it did not start
+	 * cannot otherwise tell a worker still building from one that died in the
+	 * same crash — and the difference is relaunching a deliverable versus
+	 * putting two workers on one branch.
+	 */
+	readonly pid?: number;
 	/** Its session file — how a restarted maestro re-attaches rather than restarts. */
 	readonly session?: string;
 	readonly branch?: string;

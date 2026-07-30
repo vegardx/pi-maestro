@@ -127,6 +127,7 @@ interface Harness {
 	readonly channel: FakeChannel;
 	readonly launched: WorkerSpawn[];
 	readonly killed: string[];
+	readonly killedPids: number[];
 	readonly shipped: ShipRequest[];
 	readonly order: string[];
 	readonly deps: ExecutorDeps;
@@ -139,6 +140,7 @@ function harness(
 	const channel = new FakeChannel();
 	const launched: WorkerSpawn[] = [];
 	const killed: string[] = [];
+	const killedPids: number[] = [];
 	const shipped: ShipRequest[] = [];
 	const order: string[] = [];
 	const store = createPlanStore(scratch(), {
@@ -171,6 +173,7 @@ function harness(
 		launcher: {
 			launch: (spawn) => {
 				launched.push(spawn);
+				return 10_000 + launched.length;
 			},
 			kill: (agentId: string) => {
 				killed.push(agentId);
@@ -196,6 +199,12 @@ function harness(
 		async runMaestroTasks() {},
 		now: () => "2026-07-29T10:00:00.000Z",
 		sessionFileFor: (id) => `/sessions/${id}.jsonl`,
+		// No pid is alive unless a test says so — the harness never launches a
+		// real process, so anything else would be inventing one.
+		isAlive: () => false,
+		killPid: (pid: number) => {
+			killedPids.push(pid);
+		},
 		...over,
 	};
 
@@ -204,6 +213,7 @@ function harness(
 		channel,
 		launched,
 		killed,
+		killedPids,
 		shipped,
 		order,
 		deps,
@@ -584,5 +594,91 @@ describe("stopping a run", () => {
 		await h.executor.stop("before it began");
 		expect(seen).toEqual([[]]);
 		expect(h.killed).toEqual([]);
+	});
+});
+
+describe("taking over a run its maestro did not survive", () => {
+	// A live drive found this: the maestro was SIGKILLed with a worker in
+	// flight, a new one was started over the same store, and `/run` launched
+	// nothing and SAID nothing. A `running` record sits in `startedIds`
+	// forever, so the deliverable is never picked up again and the plan can
+	// never complete — while the seat looks merely idle.
+	it("relaunches a deliverable left in flight instead of wedging", async () => {
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p);
+		await first.executor.start();
+		expect(first.executor.state().deliverables.api?.state).toBe("running");
+
+		// The maestro dies here. A new executor over the same store:
+		const second = new Executor(p, first.deps);
+		await second.start();
+		expect(first.launched.map((s) => s.agentId)).toEqual([
+			"worker-api",
+			"worker-api",
+		]);
+		expect(second.state().deliverables.api?.state).toBe("running");
+	});
+
+	it("ends an orphan still running before relaunching beside it", async () => {
+		// Its socket died with its maestro, so it can never report and never be
+		// released — but it can still commit. Two workers on one branch is the
+		// thing to avoid, and the recorded pid is the only way to know.
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p, { isAlive: () => true });
+		await first.executor.start();
+		const pid = first.executor.state().deliverables.api?.pid;
+		expect(pid).toBe(10_001);
+
+		const second = new Executor(p, first.deps);
+		await second.start();
+		expect(first.killedPids).toEqual([pid]);
+	});
+
+	it("does not kill a pid that is already gone", async () => {
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p); // isAlive: () => false
+		await first.executor.start();
+		await new Executor(p, first.deps).start();
+		expect(first.killedPids).toEqual([]);
+	});
+
+	it("says what it picked up, so a restart is never silent", async () => {
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p, { isAlive: () => true });
+		await first.executor.start();
+
+		const second = new Executor(p, first.deps);
+		const seen: { relaunched: readonly string[]; killed: readonly string[] }[] =
+			[];
+		second.on((event) => {
+			if (event.type === "reclaimed")
+				seen.push({ relaunched: event.relaunched, killed: event.killed });
+		});
+		await second.start();
+		expect(seen).toEqual([{ relaunched: ["api"], killed: ["api"] }]);
+	});
+
+	it("leaves a finished run alone", async () => {
+		// Reclaiming is for `running` records only. A run that completed must not
+		// be re-entered because a second executor happened to be built over it.
+		const p = plan({ deliverables: [deliverable("api")] });
+		const first = harness(p);
+		await first.executor.start();
+		await first.channel.reports("worker-api", {
+			outcome: "succeeded",
+			handoff: "built",
+		});
+
+		const second = new Executor(p, first.deps);
+		const seen: string[] = [];
+		second.on((event) => {
+			if (event.type === "reclaimed") seen.push("reclaimed");
+		});
+		await second.start();
+		expect(seen).toEqual([]);
+		expect(second.state().deliverables.api?.state).toBe("done");
+		expect(
+			first.launched.filter((s) => s.agentId === "worker-api"),
+		).toHaveLength(1);
 	});
 });

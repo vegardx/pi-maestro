@@ -310,6 +310,16 @@ export function declareAgentTools(deps: {
 	// builtin set, which has no shell in it at all — so declaring `bash` for
 	// `read-only` would put a tool in its generated brief that it cannot call,
 	// which is the phantom-grant defect this whole registry exists to prevent.
+
+	/**
+	 * How a worker records its work.
+	 *
+	 * Declared HERE, beside the shell, because the two are one decision: the
+	 * classifier refuses `git commit` through bash and names this tool as the
+	 * way instead. Declaring the shell without it is what left a worker unable
+	 * to commit at all — the refusal pointed at nothing.
+	 */
+	readonly commit?: ToolDefinition;
 }): readonly ToolDeclaration[] {
 	return [
 		...(deps.bash
@@ -319,6 +329,9 @@ export function declareAgentTools(deps: {
 						holders: ["maestro", "worker"] as const,
 					},
 				]
+			: []),
+		...(deps.commit
+			? [{ definition: deps.commit, holders: ["worker"] as const }]
 			: []),
 		{
 			definition: createFinishTool(deps.reporter),

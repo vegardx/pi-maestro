@@ -115,6 +115,11 @@ describe("a process gets one surface, never both", () => {
 			// No `ask` tool of our own: `ask` belongs to `packages/ask`, and what a
 			// worker registers is a TRANSPORT that routes it to the maestro.
 			"bash",
+			// `commit` is the other half of `bash`, not an extra. The classifier
+			// refuses `git commit` through the shell and names this tool instead —
+			// and while it was missing, a live drive watched every deliverable
+			// build its work and then fail, unable to record any of it.
+			"commit",
 			"delegate",
 			"finish",
 		]);

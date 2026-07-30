@@ -1,21 +1,24 @@
-// A worker escalating a question, over real sockets.
+// A question travelling up the chain, over real sockets.
 //
-// Until this existed a worker had exactly one way to handle an ambiguity: fail
-// the deliverable and explain why. That is honest, and it costs a whole
-// deliverable per ambiguity — so asking had to become cheaper than guessing,
-// which means it had to be possible at all.
+// There is ONE `ask`, owned by `packages/ask`. What differs between a maestro
+// and a worker is not the tool but the TRANSPORT that is registered: a worker's
+// routes to its maestro, and a maestro with none falls back to its local UI —
+// which is its human. Position, not variant.
+//
+// A read-only agent registers nothing. Its caller is blocked on it, so there is
+// no channel back; a reader that cannot answer says so in its report. Readers
+// answer, they do not ask.
 //
 // The case worth reading is `from`. A maestro answers most questions itself and
 // can be confidently wrong, so an agent must be able to tell its maestro's
-// judgement from its human's. Collapsing the two would let "the user said so"
-// mean "something upstream guessed".
+// judgement from its human's — and that provenance travels with the answers.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { createEscalateTool } from "../packages/maestro/src/agent-runtime.js";
+import { createAskTransport } from "../packages/maestro/src/agent-runtime.js";
 import { AgentLink, MaestroLink } from "../packages/maestro/src/link.js";
 import type { Ask } from "../packages/maestro/src/protocol.js";
 import {
@@ -69,10 +72,13 @@ describe("a question crosses the wire and comes back", () => {
 
 		let returned = false;
 		const waiting = agent
-			.ask(
-				"Should `mean` return null or NaN for an empty array?",
-				"I chose null",
-			)
+			.ask([
+				{
+					id: "empty",
+					question: "Should `mean` return null or NaN for an empty array?",
+					context: "I chose null",
+				},
+			])
 			.then((answered) => {
 				returned = true;
 				return answered;
@@ -80,17 +86,21 @@ describe("a question crosses the wire and comes back", () => {
 
 		const [agentId, question] = await asked;
 		expect(agentId).toBe("worker-api");
-		expect(question.question).toContain("empty array");
-		expect(question.context).toBe("I chose null");
+		expect(question.questions[0]?.question).toContain("empty array");
+		expect(question.questions[0]?.context).toBe("I chose null");
 
 		await settle();
 		expect(returned).toBe(false);
 
-		link.answer(agentId, question.id, "null, and document it", "maestro");
-		expect(await waiting).toEqual({
-			answer: "null, and document it",
-			from: "maestro",
-		});
+		link.answer(
+			agentId,
+			question.id,
+			[{ questionId: "empty", value: "null, and document it" }],
+			"maestro",
+		);
+		const answered = await waiting;
+		expect(answered.from).toBe("maestro");
+		expect(answered.answers[0]?.value).toBe("null, and document it");
 	});
 
 	it("keeps two open questions apart", async () => {
@@ -98,57 +108,80 @@ describe("a question crosses the wire and comes back", () => {
 		const seen: Ask[] = [];
 		link.on("asked", (_id, ask) => seen.push(ask));
 
-		const first = agent.ask("one?");
-		const second = agent.ask("two?");
+		const first = agent.ask([{ id: "a", question: "one?" }]);
+		const second = agent.ask([{ id: "b", question: "two?" }]);
 		await settle();
 		expect(seen).toHaveLength(2);
 
 		// Answered out of order on purpose: an id that only worked in sequence
 		// would work in every test and fail the first time a worker asked twice.
-		link.answer("worker-api", seen[1]?.id as string, "second answer", "human");
-		link.answer("worker-api", seen[0]?.id as string, "first answer", "maestro");
+		link.answer(
+			"worker-api",
+			seen[1]?.id as string,
+			[{ questionId: "b", value: "second answer" }],
+			"human",
+		);
+		link.answer(
+			"worker-api",
+			seen[0]?.id as string,
+			[{ questionId: "a", value: "first answer" }],
+			"maestro",
+		);
 
-		expect((await first).answer).toBe("first answer");
-		expect((await second).answer).toBe("second answer");
+		expect((await first).answers[0]?.value).toBe("first answer");
+		expect((await second).answers[0]?.value).toBe("second answer");
 	});
 
 	it("tells a worker the truth when the maestro vanishes", async () => {
 		// Resolving to nothing would read as "the maestro said the empty string".
 		const { link, agent } = await wired();
-		const waiting = agent.ask("anything?");
+		const waiting = agent.ask([{ id: "x", question: "anything?" }]);
 		await settle();
 		await link.close();
 		const answered = await waiting;
-		expect(answered.answer).toMatch(/nobody answered/);
-		expect(answered.answer).toMatch(/not treat silence as agreement/i);
+		expect(answered.answers[0]?.value).toMatch(/nobody answered/);
+		expect(answered.answers[0]?.value).toMatch(
+			/not treat silence as agreement/i,
+		);
 	});
 
 	it("refuses to ask when there is no maestro to ask", async () => {
 		const orphan = new AgentLink();
 		closers.push(orphan);
-		await expect(orphan.ask("hello?")).rejects.toThrow(/not connected/);
+		await expect(orphan.ask([{ id: "x", question: "hello?" }])).rejects.toThrow(
+			/not connected/,
+		);
 	});
 });
 
-describe("the worker's tool passes the answer through as it came", () => {
-	it("is called `escalate`, because `ask` asks the USER", () => {
-		// `packages/ask` owns `ask` and it survives the flip. Two tools of one
-		// name would have made one unreachable depending on load order.
-		expect(
-			createEscalateTool(() => ({
-				ask: async () => ({ answer: "", from: "maestro" as const }),
-			})).name,
-		).toBe("escalate");
+describe("the transport carries provenance into the answers themselves", () => {
+	it("marks a human answer as one, in a form ask.v1 passes through", async () => {
+		// `ask.v1` hands its caller plain answers, so an agent that cannot see who
+		// decided will read a maestro's guess as a ruling. The attribution rides
+		// in the value AND in `source`, which is the field the contract already
+		// has for exactly this.
+		const transport = createAskTransport(() => ({
+			ask: async () => ({
+				answers: [{ questionId: "q", value: "use null" }],
+				from: "human" as const,
+			}),
+		}));
+		const answers = await transport.present([{ id: "q", question: "null?" }]);
+		expect(answers[0]?.value).toContain("use null");
+		expect(answers[0]?.value).toContain("answered by the human");
+		expect(answers[0]?.source).toBe("human");
 	});
 
-	it("reports who decided, in the text the model reads", async () => {
-		const tool = createEscalateTool(() => ({
-			ask: async () => ({ answer: "use null", from: "human" as const }),
+	it("does not mark a maestro answer as a human one", async () => {
+		const transport = createAskTransport(() => ({
+			ask: async () => ({
+				answers: [{ questionId: "q", value: "null" }],
+				from: "maestro" as const,
+			}),
 		}));
-		const result = await call(tool, { question: "null or NaN?" });
-		expect(result.content[0].text).toContain("use null");
-		expect(result.content[0].text).toContain("answered by the human");
-		expect(result.details.from).toBe("human");
+		const answers = await transport.present([{ id: "q", question: "null?" }]);
+		expect(answers[0]?.source).toBeUndefined();
+		expect(answers[0]?.value).toContain("answered by the maestro");
 	});
 });
 
@@ -184,7 +217,9 @@ describe("the maestro answers, or admits it cannot", () => {
 			agentId: "worker-api",
 			token: TOKEN,
 		});
-		const waiting = agent.ask("null or NaN?", "I chose null");
+		const waiting = agent.ask([
+			{ id: "shape", question: "null or NaN?", context: "I chose null" },
+		]);
 		await settle();
 		return { agent, waiting };
 	}
@@ -205,7 +240,9 @@ describe("the maestro answers, or admits it cannot", () => {
 		const { waiting } = await blocked(r);
 		const key = `worker-api/${r.runtime.openQuestions()[0]?.id}`;
 		await call(r.runtime.respondTool(), { id: key, answer: "null" });
-		expect(await waiting).toEqual({ answer: "null", from: "maestro" });
+		const answered = await waiting;
+		expect(answered.from).toBe("maestro");
+		expect(answered.answers[0]?.value).toBe("null");
 		expect(r.runtime.openQuestions()).toEqual([]);
 	});
 
@@ -225,7 +262,9 @@ describe("the maestro answers, or admits it cannot", () => {
 		// Escalating still means saying what to ask — the part the maestro is
 		// better placed to write than the worker was.
 		expect(put).toEqual(["Should an empty array give null or NaN?"]);
-		expect(await waiting).toEqual({ answer: "return null", from: "human" });
+		const answered = await waiting;
+		expect(answered.from).toBe("human");
+		expect(answered.answers[0]?.value).toBe("return null");
 	});
 
 	it("never claims a human answered when none could be reached", async () => {
@@ -241,7 +280,7 @@ describe("the maestro answers, or admits it cannot", () => {
 		});
 		const answered = await waiting;
 		expect(answered.from).toBe("maestro");
-		expect(answered.answer).toMatch(/decide for yourself/i);
+		expect(answered.answers[0]?.value).toMatch(/decide for yourself/i);
 		expect(said.content[0].text).toContain("no user reachable");
 	});
 

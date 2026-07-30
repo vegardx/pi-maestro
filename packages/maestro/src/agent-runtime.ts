@@ -16,6 +16,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { AgentLink } from "./link.js";
 import { DELEGABLE, type Delegable } from "./plan.js";
 import {
@@ -126,64 +127,46 @@ export function createFinishTool(reporter: () => Reporter): ToolDefinition {
 	});
 }
 
-/** The slice of the link `ask` needs. */
+/** The slice of the link an ask transport needs. */
 export interface Asker {
-	ask(
-		question: string,
-		context?: string,
-	): Promise<{ readonly answer: string; readonly from: "maestro" | "human" }>;
+	ask(questions: Questionnaire): Promise<{
+		readonly answers: Answers;
+		readonly from: "maestro" | "human";
+	}>;
 }
 
 /**
- * Ask the maestro something, and wait for the answer.
+ * `ask.v1`'s transport for an agent: route questions up to the maestro.
  *
- * Cheaper than assuming. A worker that guesses at an ambiguity builds on the
- * guess, and the guess is invisible by the time anyone reads the diff — so the
- * question has to be askable at all, which until now it was not: a worker could
- * only fail the deliverable and explain why.
+ * THERE IS NO SEPARATE TOOL. An agent calls the same `ask` a maestro calls, and
+ * where the question goes is decided by which transport is registered — which
+ * is what "aware of where it is used" means. A bespoke tool for the same act
+ * would be a variant standing in for a position, and it would have collided
+ * with `packages/ask`'s own `ask` the moment both extensions loaded.
  *
- * The answer says whether a human decided it or the maestro did, and that
- * distinction is passed through rather than smoothed over. A maestro answers
- * most questions itself and can be confidently wrong.
+ * A read-only agent registers nothing. Its caller is BLOCKED on it, so there is
+ * no channel back — and a reader that cannot answer says so in its report,
+ * which the caller then acts on. Readers answer; they do not ask.
+ *
+ * Provenance rides back with the answers, at every hop: an agent must be able
+ * to tell a human's ruling from its maestro's guess.
  */
-export function createEscalateTool(asker: () => Asker): ToolDefinition {
-	return defineTool({
-		// NOT `ask`: `packages/ask` already owns that name and it asks the USER.
-		// This asks the MAESTRO, which is a different thing with a different
-		// mechanism — a worker has no user to reach. Two tools called `ask` would
-		// have collided the moment both extensions loaded, and one of them would
-		// have become unreachable depending on load order.
-		name: "escalate",
-		label: "Escalate",
-		description:
-			"Put a question to the maestro that you cannot answer yourself. Blocks until it answers, either from its own knowledge of the plan or by asking the user.",
-		promptSnippet:
-			"escalate — put a question to the maestro when guessing would change what you build.",
-		parameters: Type.Object({
-			question: Type.String({
-				description:
-					"One specific question. Say what you would do by default, so an answer of 'your call' is useful.",
-			}),
-			context: Type.Optional(
-				Type.String({
-					description:
-						"What you have already worked out, so nobody re-derives it.",
-				}),
-			),
-		}),
-		async execute(_id, { question, context }) {
-			const answered = await asker().ask(question, context);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: `${answered.answer}\n\n(answered by the ${answered.from})`,
-					},
-				],
-				details: { from: answered.from },
-			};
+export function createAskTransport(asker: () => Asker): {
+	present(questions: Questionnaire): Promise<Answers>;
+} {
+	return {
+		present: async (questions) => {
+			const answered = await asker().ask(questions);
+			// The attribution is appended to each answer's value rather than
+			// dropped, because `ask.v1` hands the caller plain answers and an agent
+			// that cannot see who decided will read a maestro's guess as a ruling.
+			return answered.answers.map((answer) => ({
+				...answer,
+				value: `${answer.value}\n\n(answered by the ${answered.from})`,
+				source: answered.from === "human" ? ("human" as const) : undefined,
+			}));
 		},
-	});
+	};
 }
 
 export interface DelegateDeps {
@@ -313,8 +296,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
  */
 export function declareAgentTools(deps: {
 	readonly reporter: () => Reporter;
-	/** How an agent reaches its maestro with a question. Workers only. */
-	readonly asker?: () => Asker;
+
 	readonly delegate: DelegateDeps;
 	/**
 	 * The gated shell for this holder.
@@ -342,18 +324,6 @@ export function declareAgentTools(deps: {
 			definition: createFinishTool(deps.reporter),
 			holders: ["worker"],
 		},
-		// `escalate` goes to the maestro, so only something with a maestro holds
-		// it.
-		// The seat asks its human directly and a read-only agent answers its
-		// caller rather than questioning it.
-		...(deps.asker
-			? [
-					{
-						definition: createEscalateTool(deps.asker),
-						holders: ["worker"] as const,
-					},
-				]
-			: []),
 		{
 			definition: createDelegateTool(deps.delegate),
 			holders: ["maestro", "worker", "read-only"],

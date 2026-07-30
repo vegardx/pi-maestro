@@ -13,7 +13,11 @@
 // exit a round trip is what removes the race — there is no window, because the
 // agent is still there until maestro says otherwise.
 
-import type { TokenSnapshot } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	Questionnaire,
+	TokenSnapshot,
+} from "@vegardx/pi-contracts";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -69,20 +73,23 @@ export interface Done {
 }
 
 /**
- * A question the agent cannot answer for itself.
+ * Questions the agent cannot answer for itself, on their way up the chain.
  *
- * Blocks, like `done` does. A worker that guesses at an ambiguity and carries on
- * produces work built on the guess, and the guess is invisible by the time
- * anyone reads the diff — so asking has to be cheaper than assuming, which means
- * it has to be possible at all.
+ * A `Questionnaire`, not a string, because this carries `ask.v1`'s own shape:
+ * position is expressed as a registered TRANSPORT rather than as a different
+ * tool, so an agent calls the same `ask` a maestro does and the transport
+ * decides where it goes. A bespoke question type here would have meant a
+ * bespoke tool, and a tool that exists because of where you are is a variant
+ * where there should have been a position.
+ *
+ * Blocks, like `done` does. A worker that guesses at an ambiguity builds on the
+ * guess, and the guess is invisible by the time anyone reads the diff.
  */
 export interface Ask {
 	readonly type: "ask";
 	/** Correlates the answer. An agent may have more than one open at a time. */
 	readonly id: string;
-	readonly question: string;
-	/** What the agent has already worked out, so nobody re-derives it. */
-	readonly context?: string;
+	readonly questions: Questionnaire;
 }
 
 /** Something went wrong that is not a result. The agent stays connected. */
@@ -106,17 +113,19 @@ export interface Reject {
 }
 
 /**
- * The answer to an `ask`.
+ * The answers to an `ask`, and who decided them.
  *
- * `from` is load-bearing. A maestro answers most questions itself, from the plan
- * context it already has, and it can be confidently wrong — so an agent must be
- * able to tell a maestro's judgement from its human's. Collapsing the two would
- * let "the user said so" mean "something upstream guessed".
+ * `from` travels with them, at every hop. A maestro answers most questions
+ * itself, from the plan context it already has, and it can be confidently
+ * wrong — so an agent must be able to tell a maestro's judgement from its
+ * human's. Collapsing the two would let "the user said so" mean "something
+ * upstream guessed", and `ask.v1`'s idle autopilot would be reported as a
+ * ruling.
  */
 export interface Answer {
 	readonly type: "answer";
 	readonly id: string;
-	readonly answer: string;
+	readonly answers: Answers;
 	readonly from: "maestro" | "human";
 }
 

@@ -17,7 +17,11 @@ import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import type { TokenSnapshot } from "@vegardx/pi-contracts";
+import type {
+	Answers,
+	Questionnaire,
+	TokenSnapshot,
+} from "@vegardx/pi-contracts";
 import {
 	type AgentMessage,
 	type Ask,
@@ -130,11 +134,11 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 		return write(agent.socket, { type: "release" } satisfies MaestroMessage);
 	}
 
-	/** Answer a question an agent is blocked on. */
+	/** Answer questions an agent is blocked on. */
 	answer(
 		agentId: string,
 		id: string,
-		answer: string,
+		answers: Answers,
 		from: "maestro" | "human",
 	): boolean {
 		const agent = this.agents.get(agentId);
@@ -142,7 +146,7 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 		return write(agent.socket, {
 			type: "answer",
 			id,
-			answer,
+			answers,
 			from,
 		} satisfies MaestroMessage);
 	}
@@ -314,8 +318,8 @@ export interface AgentLinkEvents {
 }
 
 export interface AnsweredQuestion {
-	readonly answer: string;
-	/** Whether a human decided this, or the maestro did. Never guess. */
+	readonly answers: Answers;
+	/** Whether a human decided this, or an agent did. Never guess. */
 	readonly from: "maestro" | "human";
 }
 
@@ -373,8 +377,16 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 				// silence is not agreement.
 				for (const waiting of [...this.openAsks.values()])
 					waiting({
-						answer:
-							"nobody answered this — the maestro is gone. Do not treat silence as agreement.",
+						// Not an empty answer list: that reads as "asked and nothing
+						// was chosen". Silence is not agreement, and the agent is told
+						// so in the value it will actually read.
+						answers: [
+							{
+								questionId: "maestro-gone",
+								value:
+									"nobody answered this — the maestro is gone. Do not treat silence as agreement.",
+							},
+						],
 						from: "maestro",
 					});
 				this.openAsks.clear();
@@ -404,7 +416,7 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 						const waiting = this.openAsks.get(message.id);
 						if (!waiting) return;
 						this.openAsks.delete(message.id);
-						waiting({ answer: message.answer, from: message.from });
+						waiting({ answers: message.answers, from: message.from });
 						return;
 					}
 					case "shutdown":
@@ -428,22 +440,20 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 	}
 
 	/**
-	 * Ask the maestro something, and wait.
+	 * Put questions to the maestro, and wait.
+	 *
+	 * This is the transport behind `ask.v1` for an agent: the agent calls the
+	 * same `ask` tool a maestro does, and where the question goes is decided by
+	 * which transport is registered — not by which tool it holds.
 	 *
 	 * Blocks like `done` does, and for the same reason: an answer that arrives
 	 * after the agent has moved on is not an answer. The maestro may answer from
-	 * its own context or put the question to its human, and the reply says which.
+	 * its own context or forward the question further up, and the reply says
+	 * which.
 	 */
-	async ask(question: string, context?: string): Promise<AnsweredQuestion> {
+	async ask(questions: Questionnaire): Promise<AnsweredQuestion> {
 		const id = `ask-${this.nextAsk++}`;
-		if (
-			!this.send({
-				type: "ask",
-				id,
-				question,
-				...(context ? { context } : {}),
-			})
-		)
+		if (!this.send({ type: "ask", id, questions }))
 			throw new Error("cannot ask: not connected to maestro");
 		return new Promise((resolve) => {
 			this.openAsks.set(id, resolve);

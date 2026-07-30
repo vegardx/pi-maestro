@@ -58,7 +58,8 @@ export interface BashPolicyDecision {
 	readonly reason: string;
 	readonly confidence: "low" | "medium" | "high";
 	readonly guidance: BashGuidance;
-	readonly suggestedTool?: string;
+	/** Typed, not `string`: see {@link SUGGESTABLE_TOOLS}. */
+	readonly suggestedTool?: SuggestableTool;
 	readonly invariant?:
 		| "delivery"
 		| "worker-escalation"
@@ -217,10 +218,38 @@ const PRIVILEGED = new Set([
 	"rsync",
 ]);
 
+/**
+ * Tools a refusal may redirect to.
+ *
+ * A CLOSED set, and typed rather than `string`, because this is the one
+ * refusal that names its tool dynamically — `Use the ${suggestedTool} tool` —
+ * and a phantom here is invisible to any guard that reads the source for
+ * literal names. Two phantoms lived in that blind spot: `delete`, which went
+ * with `packages/modes`, and `webfetch`, which pi has never defined. A worker
+ * running `rm -rf dist` was denied and told to use a tool nobody had, with a
+ * test pinning that exact string as correct.
+ *
+ * Both are real again — `delete` recovered into `delete-tool.ts`, `webfetch`
+ * from `packages/research-tools`, which every agent now loads — so the
+ * redirects work as intended rather than being dead ends.
+ *
+ * `test/refusals-name-real-tools.test.ts` asserts this set against what
+ * agents really hold. Adding a member that nothing implements fails there.
+ */
+export const SUGGESTABLE_TOOLS = [
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"webfetch",
+	"delete",
+] as const;
+export type SuggestableTool = (typeof SUGGESTABLE_TOOLS)[number];
+
 /** Exact simple equivalents only. Compound shell automation is never split. */
 export function dedicatedToolSuggestion(
 	analysis: ShellProgramAnalysis,
-): string | undefined {
+): SuggestableTool | undefined {
 	if (!analysis.completeSimple) return undefined;
 	const command = analysis.commands[0];
 	if (!command?.executable) return undefined;

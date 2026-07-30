@@ -10,6 +10,8 @@ import { PersonaCatalogue } from "./agent.js";
 import { declareAgentTools } from "./agent-runtime.js";
 import { createPlanTool } from "./authoring.js";
 import { createBashTool } from "./bash-tool.js";
+import { createCommitTool } from "./commit-tool.js";
+import { createDeleteTool } from "./delete-tool.js";
 import {
 	type ExecutionPolicySettings,
 	readExecutionPolicySettings,
@@ -138,6 +140,13 @@ export function createSeat(options: SeatOptions): Seat {
 						}
 					: {}),
 			}),
+			// The maestro is refused `git commit` and `rm` by the same classifier
+			// that refuses a worker, and pointed at the same tools — which it did
+			// not hold. A refusal may only name a tool the refused agent has, and
+			// the guard only ever checked the WORKER posture, so the seat's own
+			// dead ends went unseen.
+			commit: createCommitTool({ cwd: () => process.cwd() }),
+			remove: createDeleteTool(),
 			reporter: () => {
 				throw new Error("the maestro reports to you, not to another maestro");
 			},

@@ -27,6 +27,7 @@ const EXTENSION_PACKAGES = [
 	"prompt-assist",
 	"commit",
 	"smart-compact",
+	"research-tools",
 	{ name: "settings", entry: "packages/settings/src/extension.ts" },
 	// The orchestrator. Its entry is `extension.ts` rather than `index.ts`
 	// because one process runs either a maestro or an agent and the file decides

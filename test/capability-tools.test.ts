@@ -24,7 +24,17 @@ const guided: ExecutionPolicySettings = {
 	fallback: "fail-closed",
 };
 
-describe("rm redirects to the delete tool", () => {
+describe("rm redirects to the delete tool, which exists", () => {
+	// This block once asserted `suggestedTool === "delete"` while no such tool
+	// was declared anywhere — pinning a phantom as correct. `delete` had gone
+	// with `packages/modes` and the redirect outlived it, so a worker running
+	// `rm -rf dist` was denied and pointed at nothing.
+	//
+	// The redirect is right; the missing half was the tool. It is recovered in
+	// `delete-tool.ts`, and `refusals-name-real-tools.test.ts` now asserts the
+	// whole `SUGGESTABLE_TOOLS` set against what agents really hold — the set,
+	// not the prose, because this refusal names its tool by interpolation and no
+	// source scan can see it.
 	it("denies a bare rm and points at the delete tool", () => {
 		const decision = decideBashPolicy({
 			command: "rm notes.txt",

@@ -20,7 +20,7 @@ import {
 	buildReadOnlyInvocation,
 	DEPTH_ENV,
 	MAX_DEPTH,
-	READ_ONLY_BUILTINS,
+	READ_ONLY_TOOLS,
 	type ReadOnlySession,
 	SOCK_ENV,
 	TOKEN_ENV,
@@ -348,13 +348,15 @@ describe("a read-only child is launched with nothing to dial", () => {
 		// The old system had two that had drifted: one copy allowed a `plan` tool
 		// the other did not, so what "read-only" meant depended on which file you
 		// were standing in.
+		// The allowlist filters EXTENSION tools too, not just pi's builtins, so
+		// it is the whole of what a reader can call — `READ_ONLY_TOOLS`, which
+		// is the builtins plus the web tools `research-tools` defines.
 		const { args } = invocation();
 		expect(args).toContain("--tools");
-		expect(args[args.indexOf("--tools") + 1]).toBe(
-			READ_ONLY_BUILTINS.join(","),
-		);
-		expect(READ_ONLY_BUILTINS).not.toContain("write");
-		expect(READ_ONLY_BUILTINS).not.toContain("bash");
+		expect(args[args.indexOf("--tools") + 1]).toBe(READ_ONLY_TOOLS.join(","));
+		expect(READ_ONLY_TOOLS).not.toContain("write");
+		expect(READ_ONLY_TOOLS).not.toContain("bash");
+		expect(READ_ONLY_TOOLS).not.toContain("delete");
 	});
 
 	it("carries the persona's brief as the child's system prompt", () => {

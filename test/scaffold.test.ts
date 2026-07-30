@@ -18,6 +18,7 @@ const EXTENSIONS = [
 	"prompt-assist",
 	"commit",
 	"smart-compact",
+	"research-tools",
 	"maestro",
 ];
 

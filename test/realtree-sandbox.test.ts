@@ -58,7 +58,7 @@ describe("selectProfile", () => {
 	});
 
 	it("maestro in recon → repo scope; hack → unrestricted", () => {
-		expect(selectProfile("maestro", "recon", "/repo", ["/s"], git).scope).toBe(
+		expect(selectProfile("maestro", "plan", "/repo", ["/s"], git).scope).toBe(
 			"repo",
 		);
 		const hack = selectProfile("worker", "hack", "/repo", ["/s"], git);

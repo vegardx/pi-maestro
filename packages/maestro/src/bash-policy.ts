@@ -1,11 +1,23 @@
-import type { ModeName } from "@vegardx/pi-contracts";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
+import type { ModeName } from "./mode.js";
 import {
 	analyzeShellProgram,
 	type ShellProgramAnalysis,
 } from "./shell-program.js";
+import type { Holder } from "./tool-registry.js";
 
-export type BashActor = "maestro" | "worker" | "reviewer";
+/**
+ * Who is running the command.
+ *
+ * `Holder` itself, not a parallel enum. This used to be
+ * `maestro | worker | reviewer` with a labelled converter in `bash-gate.ts`
+ * translating the posture axis into it — kept only because retyping would have
+ * changed the safeguards of the system in daily use. That system is deleted, so
+ * the question it left open is answered by deletion: the actor axis IS the
+ * posture axis, and `reviewer` was a KIND standing in for `read-only`, which
+ * explorers and advisors share.
+ */
+export type BashActor = Holder;
 export type BashEffect =
 	| "host-read"
 	| "workspace-read"
@@ -376,7 +388,7 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 		};
 	}
 	if (
-		input.actor === "reviewer" &&
+		input.actor === "read-only" &&
 		hasAny(effects, [
 			"workspace-write",
 			"repository-code",
@@ -468,11 +480,7 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 		};
 	}
 
-	if (
-		input.mode === "recon" ||
-		input.mode === "plan" ||
-		input.actor === "reviewer"
-	) {
+	if (input.mode === "plan" || input.actor === "read-only") {
 		// The configured direct route is checked FIRST. It used to sit behind the
 		// pure-read branch, which meant `modeRoutes: "direct"` could never apply
 		// to the very commands it exists for — every read was routed to
@@ -980,7 +988,7 @@ export interface BashRulesetRow {
 export const BASH_RULESET: readonly BashRulesetRow[] = [
 	{
 		id: "delivery",
-		applies: ["worker", "reviewer"],
+		applies: ["worker", "read-only"],
 		rule:
 			"Never run `git commit`, `git push`, or `gh pr ...` from bash — " +
 			"commit through the `commit` tool; pushing and PRs are the " +
@@ -989,7 +997,7 @@ export const BASH_RULESET: readonly BashRulesetRow[] = [
 	},
 	{
 		id: "host-config",
-		applies: ["maestro", "worker", "reviewer"],
+		applies: ["maestro", "worker", "read-only"],
 		rule:
 			"Never write machine-global git config: no `git config --global` " +
 			"or `--system` or `--file`, no edits to `~/.gitconfig` or " +
@@ -998,7 +1006,7 @@ export const BASH_RULESET: readonly BashRulesetRow[] = [
 	},
 	{
 		id: "git-identity",
-		applies: ["worker", "reviewer"],
+		applies: ["worker", "read-only"],
 		rule:
 			"Never set `user.name` or `user.email` anywhere — not globally, and " +
 			"not in your worktree. Your commit identity is already in your " +
@@ -1010,7 +1018,7 @@ export const BASH_RULESET: readonly BashRulesetRow[] = [
 	},
 	{
 		id: "read-only",
-		applies: ["reviewer"],
+		applies: ["read-only"],
 		rule:
 			"You are read-only: no file writes, no repository-code execution, " +
 			"no git mutations. Report findings instead of fixing.",
@@ -1027,7 +1035,7 @@ export const BASH_RULESET: readonly BashRulesetRow[] = [
 	},
 	{
 		id: "tool-redirect",
-		applies: ["maestro", "worker", "reviewer"],
+		applies: ["maestro", "worker", "read-only"],
 		rule:
 			"Prefer the dedicated tool when one exists (read/grep/find/task/" +
 			"commit); trivially-equivalent bash may be denied with a pointer.",

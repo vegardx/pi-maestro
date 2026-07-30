@@ -24,8 +24,8 @@ import {
 	type BashOperations,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
-import type { ModeName } from "@vegardx/pi-contracts";
 import type { BashActor } from "../bash-policy.js";
+import type { ModeName } from "../mode.js";
 import {
 	compileWriteProfile,
 	type ProfilePaths,

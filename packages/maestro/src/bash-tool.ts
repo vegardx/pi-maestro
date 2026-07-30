@@ -14,12 +14,7 @@ import {
 	createLocalBashOperations,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import {
-	asActor,
-	asModeName,
-	type GateDecision,
-	gateBash,
-} from "./bash-gate.js";
+import { asModeName, type GateDecision, gateBash } from "./bash-gate.js";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
 import {
 	createEnforcingBashOperations,
@@ -86,7 +81,7 @@ function confineToProfile(
 	mode: Mode,
 ): BashOperations {
 	if (process.env.MAESTRO_SANDBOX === "off") return base;
-	const actor = asActor(deps.holder);
+	const actor = deps.holder;
 	const modeName = asModeName(mode);
 	const logPath = process.env.MAESTRO_SANDBOX_SHADOW;
 	if (logPath)

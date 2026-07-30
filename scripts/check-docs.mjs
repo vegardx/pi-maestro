@@ -65,14 +65,22 @@ for (const name of [...commandNames].sort()) {
 // required the docs to mention `workflow` and `readiness`, neither of which is
 // registered anywhere — so the contract was guaranteeing the docs stayed wrong
 // rather than catching it.
+// Maestro's whole tool surface, which is now small enough to name.
+//
+// Still a hand-written list, and that is a known weakness: it is a second place
+// naming tools, which is the defect the tool registry exists to remove. It
+// caught nothing when `deliverable`, `work`, `repo`, `research`, `dig` and
+// `subagent` all ceased to exist — it only checks that each name APPEARS in the
+// docs, never that the name is real. Deriving it from `ToolRegistry` would fix
+// that; until then, this list has to be updated by hand when the surface moves.
 const TOOLS = [
-	"deliverable",
-	"work",
 	"plan",
-	"repo",
-	"research",
-	"dig",
-	"subagent",
+	"flight",
+	"respond",
+	"bash",
+	"delegate",
+	"commit",
+	"finish",
 ];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);

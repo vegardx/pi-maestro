@@ -25,11 +25,13 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_PACKAGES = [
 	"ask",
 	"prompt-assist",
-	"subagents",
 	"commit",
 	"smart-compact",
-	"modes",
 	{ name: "settings", entry: "packages/settings/src/extension.ts" },
+	// The orchestrator. Its entry is `extension.ts` rather than `index.ts`
+	// because one process runs either a maestro or an agent and the file decides
+	// which from its depth — there is no index barrel to import by accident.
+	{ name: "maestro", entry: "packages/maestro/src/extension.ts" },
 ];
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));

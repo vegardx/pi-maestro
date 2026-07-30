@@ -1,5 +1,4 @@
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	BASH_RULESET,
 	classifyBashEffects,
@@ -9,14 +8,6 @@ import {
 } from "../packages/maestro/src/bash-policy.js";
 import type { ExecutionPolicySettings } from "../packages/maestro/src/execution-policy.js";
 import { analyzeShellProgram } from "../packages/maestro/src/shell-program.js";
-import type { BashCorpusCall } from "../packages/modes/src/bash-corpus.js";
-import { auditBashShadowCorpus } from "../packages/modes/src/bash-policy-shadow.js";
-import {
-	authorizeBashDecision,
-	isolationFailureAction,
-	isolationFailureActionForActor,
-	resolveBashOperations,
-} from "../packages/modes/src/runtime/bash-router.js";
 
 const guided: ExecutionPolicySettings = {
 	preset: "guided",
@@ -161,7 +152,11 @@ describe("bash coaching and routing policy", () => {
 	});
 
 	it("implements mode and actor routes with unconditional Hack", () => {
-		for (const mode of ["recon", "plan"] as const) {
+		// One mode, not a loop. This iterated `["recon", "plan"]` — `recon` was
+		// a mode of the deleted system, and the rebuilt vocabulary is
+		// plan/auto/hack. Left as a two-element list it ran `plan` twice and
+		// looked like coverage of two things.
+		for (const mode of ["plan"] as const) {
 			expect(
 				decideBashPolicy({
 					command: "git status --short",
@@ -190,7 +185,7 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "fixture-command --opaque",
-				mode: "agent",
+				mode: "auto",
 				actor: "worker",
 				policy: guided,
 			}).route,
@@ -198,8 +193,8 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "npm test",
-				mode: "agent",
-				actor: "reviewer",
+				mode: "auto",
+				actor: "read-only",
 				policy: guided,
 			}).route,
 		).toBe("deny");
@@ -301,7 +296,7 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "git rebase origin/main && git cherry-pick abc",
-				mode: "agent",
+				mode: "auto",
 				actor: "worker",
 				policy: guided,
 			}).route,
@@ -309,7 +304,7 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "kubectl delete deployment api",
-				mode: "agent",
+				mode: "auto",
 				actor: "worker",
 				policy: guided,
 			}),
@@ -321,7 +316,7 @@ describe("bash coaching and routing policy", () => {
 			expect(
 				decideBashPolicy({
 					command,
-					mode: "agent",
+					mode: "auto",
 					actor: "worker",
 					policy: guided,
 				}),
@@ -330,7 +325,7 @@ describe("bash coaching and routing policy", () => {
 		expect(
 			decideBashPolicy({
 				command: "timeout 5 rm -rf /tmp/x",
-				mode: "agent",
+				mode: "auto",
 				actor: "worker",
 				policy: guided,
 			}),
@@ -374,221 +369,12 @@ describe("bash coaching and routing policy", () => {
 		).toBe("deny");
 	});
 
-	it("routes through injected operations and fails closed without isolation", async () => {
-		// This asserts WHICH base ops a route selects; the real-tree sandbox
-		// wrapper (default-on) is orthogonal and covered in realtree-sandbox.test.
-		process.env.MAESTRO_SANDBOX = "off";
-		const direct: BashOperations = {
-			exec: vi.fn(async (_command, _cwd, { onData }) => {
-				onData(Buffer.from("streamed"));
-				return { exitCode: 0 };
-			}),
-		};
-		const directDecision = decideBashPolicy({
-			command: "npm test",
-			mode: "auto",
-			actor: "worker",
-			policy: guided,
-		});
-		expect(
-			resolveBashOperations(directDecision, { direct: () => direct }, "/w"),
-		).toBe(direct);
-
-		// host-read runs on the REAL filesystem. It used to fail closed here, and
-		// was wired to the lightweight tier — which serves reads from a private
-		// workspace copy with no `.git`, so `git status` in plan mode reported
-		// "not a git repository" while the ls tool showed `.git` present. A read
-		// guard may restrict what a command CHANGES, never what it SEES: the
-		// route is only reached for exclusively-read effect sets, so there is
-		// nothing to contain, and lying about the tree is the larger harm.
-		const protectedRead = decideBashPolicy({
-			command: "git status",
-			mode: "plan",
-			actor: "maestro",
-			policy: guided,
-		});
-		expect(protectedRead.route).toBe("host-read");
-		expect(
-			resolveBashOperations(protectedRead, { direct: () => direct }, "/w"),
-		).toBe(direct);
-		// An injected backend still wins, for deployments that want one.
-		const readBackend = { exec: async () => ({ exitCode: 0 }) };
-		expect(
-			resolveBashOperations(
-				protectedRead,
-				{ direct: () => direct, hostRead: () => readBackend },
-				"/w",
-			),
-		).toBe(readBackend);
-
-		// The old lightweight COPY tier is retired (B1): recon/plan writes run
-		// in-place on the real tree through the same direct ops (profiled per
-		// actor by the router), so the route no longer needs a separate backend
-		// and no longer fails closed.
-		const isolated = decideBashPolicy({
-			command: "npm test",
-			mode: "plan",
-			actor: "maestro",
-			policy: guided,
-		});
-		expect(isolated.route).toBe("lightweight");
-		expect(
-			resolveBashOperations(isolated, { direct: () => direct }, "/w"),
-		).toBe(direct);
-
-		const confirm = vi.fn(async () => true);
-		await authorizeBashDecision(
-			{
-				...directDecision,
-				actor: "maestro",
-				route: "confirm",
-				reason: "remote mutation",
-			},
-			{ ui: { confirm } as never },
-			"gh api -X PATCH /x",
-		);
-		expect(confirm).toHaveBeenCalledWith(
-			"Run consequential command?",
-			expect.stringContaining("remote mutation"),
-		);
-
-		const selectLightweight = vi.fn(async () => "Try Lightweight once");
-		const approveLightweight = vi.fn(async () => true);
-		await expect(
-			isolationFailureAction("strong", "container unavailable", "confirm", {
-				ui: {
-					select: selectLightweight,
-					confirm: approveLightweight,
-				} as never,
-			}),
-		).resolves.toBe("lightweight");
-		expect(approveLightweight).toHaveBeenCalledWith(
-			"Use weaker isolation?",
-			expect.stringContaining("not a VM"),
-		);
-
-		const select = vi.fn(async () => "Run direct once");
-		const approveFallback = vi.fn(async () => true);
-		await expect(
-			isolationFailureAction("lightweight", "seatbelt failed", "confirm", {
-				ui: { select, confirm: approveFallback } as never,
-			}),
-		).resolves.toBe("direct-once");
-		expect(approveFallback).toHaveBeenCalledWith(
-			"Weaken isolation?",
-			expect.stringContaining("can modify the real checkout"),
-		);
-
-		const failClosedSelect = vi.fn(
-			async (_title: string, _choices: string[]) =>
-				"Cancel (policy is fail-closed)",
-		);
-		await expect(
-			isolationFailureAction("lightweight", "seatbelt failed", "fail-closed", {
-				ui: { select: failClosedSelect } as never,
-			}),
-		).resolves.toBe("cancel");
-		expect(failClosedSelect.mock.calls[0]?.[1]).toEqual([
-			"Cancel (policy is fail-closed)",
-		]);
-		delete process.env.MAESTRO_SANDBOX;
-	});
-
-	it.each([
-		["worker", "fail-closed"],
-		["worker", "confirm"],
-		["reviewer", "fail-closed"],
-		["reviewer", "confirm"],
-	] as const)(
-		"never prompts for %s isolation failures with fallback=%s",
-		async (actor, fallback) => {
-			const select = vi.fn();
-			const confirm = vi.fn();
-			await expect(
-				isolationFailureActionForActor(
-					actor,
-					"lightweight",
-					"sandbox collision",
-					fallback,
-					{ ui: { select, confirm } as never },
-				),
-			).rejects.toMatchObject({
-				name: "BashRoutingError",
-				code: "isolation-unavailable",
-				actor,
-				retryGuidance: expect.stringContaining("safe primitives"),
-			});
-			expect(select).not.toHaveBeenCalled();
-			expect(confirm).not.toHaveBeenCalled();
-		},
-	);
-
-	it("keeps host isolation failure approval interactive", async () => {
-		const select = vi.fn(async () => "Run direct once");
-		const confirm = vi.fn(async () => true);
-		await expect(
-			isolationFailureActionForActor(
-				"maestro",
-				"lightweight",
-				"sandbox collision",
-				"confirm",
-				{ ui: { select, confirm } as never },
-			),
-		).resolves.toBe("direct-once");
-		expect(select).toHaveBeenCalledOnce();
-		expect(confirm).toHaveBeenCalledOnce();
-	});
-
-	it.each(["worker", "reviewer"] as const)(
-		"never confirms approval routes for %s",
-		async (actor) => {
-			const confirm = vi.fn();
-			await expect(
-				authorizeBashDecision(
-					{
-						...decideBashPolicy({
-							command: "fixture-command --opaque",
-							mode: "agent",
-							actor,
-							policy: guided,
-						}),
-						route: "confirm",
-					},
-					{ ui: { confirm } as never },
-					"fixture-command --opaque",
-				),
-			).rejects.toMatchObject({ code: "approval-required", actor });
-			expect(confirm).not.toHaveBeenCalled();
-		},
-	);
-
-	it("shadow replay reports zero protected host-write routes", () => {
-		const commands = [
-			["recon-read", "git status", "recon"],
-			[
-				"plan-bypass",
-				"git status && python3 <<'PY'\nopen('owned','w').write('x')\nPY",
-				"plan",
-			],
-			["holdout-build", "npm test", "plan"],
-			["auto-remote", "gh api /x -X PATCH", "auto"],
-		] as const;
-		const calls: BashCorpusCall[] = commands.map(([id, command, mode]) => ({
-			id,
-			sessionId: "fixture",
-			command,
-			commandBytes: Buffer.byteLength(command),
-			commandTruncated: false,
-			mode,
-			actor: "maestro",
-			posture: "unknown",
-			nearbyTools: [],
-			outcome: { status: "missing" },
-		}));
-		const report = auditBashShadowCorpus(calls, guided);
-		expect(report.unexplainedProtectedHostWrites).toEqual([]);
-		expect(report.unknown).toContain("plan-bypass");
-	});
+	// The router tests that lived here drove `resolveBashOperations`,
+	// `authorizeBashDecision` and `isolationFailureActionForActor` from
+	// `packages/modes`. That package is gone, and its behaviour is now
+	// `bash-gate.ts` + `bash-tool.ts` — covered by `test/bash-gate.test.ts`,
+	// which asserts the thing those tests were really about: every route that
+	// runs at all runs through the actor's write profile.
 });
 
 describe("host git-config protection (Phase 4 rule 1)", () => {
@@ -650,7 +436,7 @@ describe("host git-config protection (Phase 4 rule 1)", () => {
 	});
 
 	it("denies agent identity writes and points at the provided env", () => {
-		for (const actor of ["worker", "reviewer"] as const) {
+		for (const actor of ["worker", "read-only"] as const) {
 			const decision = decideBashPolicy({
 				command: 'git config user.email "agent@invented"',
 				mode: "auto",
@@ -684,7 +470,7 @@ describe("host git-config protection (Phase 4 rule 1)", () => {
 	});
 
 	it("denies agents and confirms the maestro (invariant host-config)", () => {
-		for (const actor of ["worker", "reviewer"] as const) {
+		for (const actor of ["worker", "read-only"] as const) {
 			const decision = decideBashPolicy({
 				command: 'git config --global user.name "Maestro Agent"',
 				mode: "auto",
@@ -732,7 +518,7 @@ describe("the visible bash ruleset (one source of truth)", () => {
 		expect(worker).toContain("remote-write, privileged, or destructive");
 		expect(worker).not.toContain("You are read-only");
 
-		const reviewer = renderBashRuleset("reviewer");
+		const reviewer = renderBashRuleset("read-only");
 		expect(reviewer).toContain("You are read-only");
 		expect(reviewer).not.toContain("remote-write, privileged, or destructive");
 	});

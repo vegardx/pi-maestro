@@ -16,10 +16,9 @@
 			"packages/ask/src/index.ts",
 			"packages/prompt-assist/src/index.ts",
 			"packages/settings/src/extension.ts",
-			"packages/subagents/src/index.ts",
 			"packages/commit/src/index.ts",
 			"packages/smart-compact/src/index.ts",
-			"packages/modes/src/index.ts"
+			"packages/maestro/src/extension.ts"
 		],
 		"skills": []
 	},
@@ -33,8 +32,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest watch",
 		"test:e2e": "vitest run --config vitest.e2e.config.ts",
-		"test:e2e:full": "vitest run --config vitest.e2e-full.config.ts",
-		"e2e:driver": "jiti test/e2e/driver/cli.ts",
+		"e2e:live": "jiti test/e2e/maestro/live.ts",
 		"smoke": "node scripts/smoke.mjs",
 		"prepare": "husky"
 	},

@@ -173,12 +173,95 @@ describe("delegate asks a reader and waits", () => {
 		).rejects.toThrow(/nesting limit/);
 	});
 
-	it("offers no fan-out it cannot perform", () => {
-		// Model diversity is not wired, so a `fanOut` parameter would read like a
-		// capability and quietly do nothing — the exact defect this rebuild is
-		// about.
-		const schema = JSON.stringify(tool(1).parameters);
-		expect(schema).not.toContain("fanOut");
+	it("offers fan-out only because something is behind it now", () => {
+		// It was deliberately absent until model routing was wired: a flag that
+		// reads like a capability and does nothing is the defect this rebuild is
+		// about. It is here because `routeSpread` is.
+		expect(JSON.stringify(tool(1).parameters)).toContain("fanOut");
+	});
+
+	it("asks one agent per family and reconciles NOTHING", async () => {
+		// Reconciling here would be this layer deciding which reviewer was right.
+		// Flattening several opinions into one is how six real findings became a
+		// sentence that said nothing.
+		const asked: (string | undefined)[] = [];
+		const fanned = createDelegateTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			openSession: async (spawn) => {
+				asked.push(spawn.model);
+				return session(`findings from ${spawn.model}`);
+			},
+			briefFor: () => "brief",
+			route: async () => [
+				{ modelId: "m-opus", family: "Anthropic" },
+				{ modelId: "m-gpt", family: "OpenAI" },
+			],
+		});
+
+		const result = await call(fanned, {
+			agent: "reviewer",
+			persona: "code-review",
+			question: "look",
+			fanOut: true,
+		});
+		expect(asked).toEqual(["m-opus", "m-gpt"]);
+		const text = result.content[0].text;
+		expect(text).toContain("2 model families");
+		expect(text).toContain("not reconciled");
+		expect(text).toContain("## Anthropic");
+		expect(text).toContain("## OpenAI");
+		expect(text).toContain("findings from m-opus");
+		expect(text).toContain("findings from m-gpt");
+	});
+
+	it("keeps the opinions it got when one reader fails", async () => {
+		// One reader failing is a missing opinion, not a failed review.
+		const fanned = createDelegateTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			openSession: async (spawn) =>
+				spawn.model === "m-bad"
+					? Promise.reject(new Error("provider refused"))
+					: session("a real finding"),
+			briefFor: () => "brief",
+			route: async () => [
+				{ modelId: "m-good", family: "Anthropic" },
+				{ modelId: "m-bad", family: "OpenAI" },
+			],
+		});
+		const text = (
+			await call(fanned, {
+				agent: "reviewer",
+				persona: "code-review",
+				question: "look",
+				fanOut: true,
+			})
+		).content[0].text;
+		expect(text).toContain("a real finding");
+		expect(text).toContain("did not answer: provider refused");
+	});
+
+	it("says how many families it actually reached, not how many it asked for", async () => {
+		// With no roster there is one family, and claiming three reviewers agreed
+		// when they were the same model is exactly the sort of claim this system
+		// has made before.
+		const single = createDelegateTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			openSession: async () => session("one opinion"),
+			briefFor: () => "brief",
+			route: async () => [{ modelId: "m-seat", family: "Anthropic" }],
+		});
+		const text = (
+			await call(single, {
+				agent: "reviewer",
+				persona: "code-review",
+				question: "look",
+				fanOut: true,
+			})
+		).content[0].text;
+		expect(text).toBe("one opinion");
 	});
 });
 

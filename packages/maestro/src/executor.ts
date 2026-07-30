@@ -338,6 +338,16 @@ export class Executor {
 		// have started, and the pid is the only thing that survives this process
 		// to tell a live worker from a dead one.
 		const pid = this.deps.launcher.launch(spawn);
+		// Watch the PROCESS, not just the socket.
+		//
+		// `disconnected` only fires for a worker that completed its handshake —
+		// the link has no idea a socket exists until then. So a worker that died
+		// BEFORE connecting produced no wire event at all: pi failing to start,
+		// a bad extension path, a crash during load. The deliverable stayed
+		// `running` forever, the run never settled, and nothing was narrated.
+		// The launcher held the whole answer the entire time — exit code and
+		// stderr — and nothing on that path ever read it.
+		void this.watchProcess(deliverable.id, agentId);
 		this.record(deliverable.id, {
 			state: "running",
 			worktree: path,
@@ -411,6 +421,21 @@ export class Executor {
 	}
 
 	/**
+	 * A worker whose PROCESS ended while its deliverable was still running.
+	 *
+	 * Covers the case the socket cannot see: a worker that never connected at
+	 * all. For one that dies mid-body this simply arrives alongside
+	 * `disconnected`, and `recordSilentDeath` drops the second arrival.
+	 */
+	private async watchProcess(id: string, agentId: string): Promise<void> {
+		await this.deps.launcher.settled(agentId);
+		if (this.halted) return;
+		// Exited having reported: `collect` already has the result.
+		if (this.run.deliverables[id]?.state !== "running") return;
+		await this.recordSilentDeath(id, agentId);
+	}
+
+	/**
 	 * A worker that closed its socket without reporting.
 	 *
 	 * The pause is the point. A socket closes the instant the process starts
@@ -424,6 +449,10 @@ export class Executor {
 	 */
 	private async recordSilentDeath(id: string, agentId: string): Promise<void> {
 		await this.deps.launcher.settled(agentId);
+		// Two sensors reach here — the socket closing, and the process being
+		// reaped — and for a worker that dies mid-body BOTH fire. Whichever
+		// arrives second must not record a second failure over the first.
+		if (this.run.deliverables[id]?.state !== "running") return;
 		const said = this.deps.launcher.capture(agentId, 40).trim();
 		await this.fail(
 			id,

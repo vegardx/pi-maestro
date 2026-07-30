@@ -128,6 +128,8 @@ interface Harness {
 	readonly launched: WorkerSpawn[];
 	readonly killed: string[];
 	readonly killedPids: number[];
+	/** The worker's process exits. Nothing else makes `settled` resolve. */
+	exits(agentId: string): Promise<void>;
 	readonly shipped: ShipRequest[];
 	readonly order: string[];
 	readonly deps: ExecutorDeps;
@@ -142,6 +144,24 @@ function harness(
 	const killed: string[] = [];
 	const killedPids: number[] = [];
 	const shipped: ShipRequest[] = [];
+	// A process that has not exited yet. The fake used to resolve `settled`
+	// IMMEDIATELY, which is not what a running worker does — and that fiction
+	// hid the gap this harness change exists to expose: nothing watched the
+	// process at all, only the socket. One promise per agent, because both
+	// `watchProcess` and `recordSilentDeath` await it.
+	const exits = new Map<string, { promise: Promise<void>; exit: () => void }>();
+	const exitOf = (agentId: string) => {
+		let entry = exits.get(agentId);
+		if (!entry) {
+			let exit!: () => void;
+			const promise = new Promise<void>((resolve) => {
+				exit = resolve;
+			});
+			entry = { promise, exit };
+			exits.set(agentId, entry);
+		}
+		return entry;
+	};
 	const order: string[] = [];
 	const store = createPlanStore(scratch(), {
 		now: () => "2026-07-29T10:00:00.000Z",
@@ -178,7 +198,7 @@ function harness(
 			kill: (agentId: string) => {
 				killed.push(agentId);
 			},
-			settled: async () => {},
+			settled: (agentId: string) => exitOf(agentId).promise,
 			capture: () => "TypeError: cannot read property of undefined",
 		},
 		workspace,
@@ -214,6 +234,10 @@ function harness(
 		launched,
 		killed,
 		killedPids,
+		exits: async (agentId: string) => {
+			exitOf(agentId).exit();
+			await tick();
+		},
 		shipped,
 		order,
 		deps,
@@ -378,8 +402,10 @@ describe("maestro collects, ships, records, and only then releases", () => {
 		// A socket closes the instant a process starts dying; its stderr and exit
 		// status arrive with the exit that follows. Reading at socket-close got an
 		// empty buffer and reported a death with no cause, which a live drive then
-		// made us diagnose by hand.
-		await new Promise((r) => setTimeout(r, 50));
+		// made us diagnose by hand. So nothing is recorded until the process is
+		// actually reaped — which the harness now models rather than pretending
+		// every worker exits the moment it starts.
+		await h.exits("worker-api");
 		const record = h.executor.state().deliverables.api;
 		expect(record.state).toBe("failed");
 		expect(record.failure).toContain("stopped without reporting");
@@ -772,5 +798,69 @@ describe("the launcher's contract says what the caller needs", () => {
 		const h = harness(plan({ deliverables: [deliverable("api")] }));
 		await h.executor.start();
 		expect(h.executor.state().deliverables.api?.pid).toBe(10_001);
+	});
+});
+
+describe("a worker that dies before it ever connects", () => {
+	// The gap with NO sensor. `disconnected` only fires for a worker that
+	// completed its handshake — the link does not know a socket exists until
+	// then. So pi failing to start, a bad extension path, or a crash during
+	// load produced no wire event at all: the deliverable stayed `running`
+	// forever, the run never settled, and nothing was narrated. The launcher
+	// held the exit status and the stderr the whole time and nothing read them.
+	it("records the failure, with what the process printed", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		await h.executor.start();
+		expect(h.executor.state().deliverables.api?.state).toBe("running");
+
+		// It never connects. It just dies.
+		await h.exits("worker-api");
+
+		const record = h.executor.state().deliverables.api;
+		expect(record?.state).toBe("failed");
+		expect(record?.failure).toContain("stopped without reporting");
+		// The evidence that was being thrown away.
+		expect(record?.failure).toContain("TypeError");
+	});
+
+	it("lets the plan carry on past it rather than hanging", async () => {
+		// The cost of the silence was not one lost deliverable — it was that
+		// nothing after it could ever run, and nothing said why.
+		const h = harness(
+			plan({ deliverables: [deliverable("api"), deliverable("ui")] }),
+		);
+		await h.executor.start();
+		await h.exits("worker-api");
+		await h.channel.reports("worker-ui", {
+			outcome: "succeeded",
+			handoff: "built",
+		});
+		expect(h.executor.state().deliverables.api?.state).toBe("failed");
+		expect(h.executor.state().deliverables.ui?.state).toBe("done");
+	});
+
+	it("does not record a SECOND failure when the socket closes too", async () => {
+		// A worker that dies mid-body trips both sensors. Whichever arrives
+		// second must not write over the first — the failure text and the
+		// endedAt of the real cause are what a person reads.
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		await h.executor.start();
+		await h.channel.vanishes("worker-api");
+		await h.exits("worker-api");
+		await tick();
+		const finished = h.order.filter((entry) => entry.startsWith("release:"));
+		expect(finished).toEqual(["release:worker-api"]);
+	});
+
+	it("says nothing about a worker that exited AFTER reporting", async () => {
+		const h = harness(plan({ deliverables: [deliverable("api")] }));
+		await h.executor.start();
+		await h.channel.reports("worker-api", {
+			outcome: "succeeded",
+			handoff: "built",
+		});
+		// The ordinary exit, once released.
+		await h.exits("worker-api");
+		expect(h.executor.state().deliverables.api?.state).toBe("done");
 	});
 });

@@ -6,115 +6,94 @@
 pi install git:github.com/vegardx/pi-maestro
 ```
 
-Pi loads the workspace TypeScript directly. Worker observation requires `tmux`; shipping requires `gh`.
+Pi loads the workspace TypeScript directly. Shipping requires `gh`.
 
-## Modes and entry gates
+## Modes
 
-Posture and the plan are separate axes. **`/mode [plan|auto|hack|recon]`** is the one posture command — a direct switch with no forming, review, or worker activation; with no argument it opens a picker. Switching while workers are live first asks to park them. **`/plan [slug]`** opens or creates the plan *artifact* and never changes mode, so you can reopen a plan from anywhere.
+Two properties — whether the working tree is writable, and whether safeguards
+are on — giving three coherent combinations.
 
-- **Plan** is the boot/default mode: research, questions, and converging on what to build. Conversation-only — the structure tools are not here.
-- **Auto** runs the structured plan.
-- **Hack** is explicit unrestricted work — the maestro becomes the worker, no fan-out.
-- **Recon** is a deliberate read-only research off-ramp in its own isolated session; leaving restores the session you came from.
-- **Agent** is internal to workers.
+| Mode | Working tree | Safeguards |
+| --- | --- | --- |
+| `plan` | read-only | on |
+| `auto` | writable | on |
+| `hack` | writable | off |
 
-Shift+Tab cycles Plan ⇄ Auto; Recon and Hack exit into Plan. From plan the gesture is **two steps**: the FIRST Shift+Tab (no plan formed yet) **forms the plan** from the conversation (the model self-assesses open questions — surfacing them via `ask` and bouncing back if any remain — otherwise authors the deliverables/tasks) and shows a summary of what it will do, then **stays in plan** for review. The SECOND Shift+Tab (plan now formed) asks **auto or hack**: **auto** runs the plan-review gate, presents a final ruling, and revalidates the reviewed plan fingerprint before entering execution; **hack** is a direct posture switch (ungated — no forming, no review). **Stay in plan** records a cancelled ruling and starts nothing. In the TUI the transition forks a fresh execution session seeded with the plan's decisions and rationale.
+`/mode` with no argument reports where you are; `/mode auto` switches.
 
-Shift+Tab is the guided rail and keeps that gate. The commands are the direct path: `/form`, then `/review` if you want it, then `/run` — no gate, and `/run` asks about an unreviewed plan rather than blocking on one.
+A read-only seat cannot run a plan, because every deliverable produces a worker
+that writes. Safeguards do **not** propagate: a worker is never in hack,
+whatever the seat is in.
 
-## Plan
+## Planning
 
-Plan mode is a conversation — it converges on what to build and why; it does not author structure. Use `research` for parallel codebase/web questions and `dig(ref)` for a full persisted report; resolve open questions with `ask`.
+Planning is a conversation. You converge on what to build and why, and the
+maestro authors the plan when you have. There is no separate forming command —
+it calls the `plan` tool, which takes the **whole document** in one go and
+answers with every error at once rather than the first.
 
-**`/form`** authors the plan in one step (Shift+Tab does the same). It is one verb for both jobs: on an empty plan it authors the tree; on a plan that already has deliverables it **extends** it with whatever was newly agreed, without re-authoring what is there. Once a plan has started, extending may add new deliverables and follow-up or manual tasks on started ones — restructuring started work is refused. `/form` requires plan mode.
+A plan is deliverables in a graph. Each has an ordered list of work, `after` for
+ordering, and `reads` for data flow — what it actually inherits from a
+predecessor, which must be a subset of what it waits for. Waiting for something
+does not mean paying for its hand-off in context.
 
-**`/review`** judges the formed plan on its own and records the verdict against the plan's fingerprint, so a later start can tell whether the plan drifted since it was reviewed. It is opt-in — nothing forces it.
+Plans are stored under `<agentDir>/maestro/plans/<slug>/` as `plan.json` (what
+was authored) and `run.json` (what happened). Two files because they have two
+lifetimes.
 
-Forming uses these tools:
+## Running
 
-- `deliverable` defines atomic deliveries and their dependency DAG;
-- `work` manages a deliverable's items after it exists — add what you discover, update, toggle done;
-- `workflow` lists exact model options and atomically stores immutable assignments plus explicit stages;
-- `plan` renders markdown, a worker seed, or JSON.
+`/run` with no argument lists what is stored; `/run <slug>` starts one.
 
-Each workflow stage names its predecessor stages, assignment ids, immutable `inputRevision`, contracts, and barrier. Independent members share a stage and run concurrently. Every assignment stores semantic kind, exact model/effort, runtime policy, focus, rationale, contracts, and provenance. Maestro never silently substitutes a persisted exact choice.
+Each deliverable gets its own worktree and branch. The maestro creates them —
+deterministic code, not a model turn — then launches a worker, which does the
+work, commits, and reports. The maestro ships the branch, opens the pull
+request, records the result, and only then releases the worker. A worker never
+pushes.
 
-A repo delivery maps to one branch, worktree, and PR. `dependsOn` controls activation; dependencies stack by default. Scratch deliveries use a plain directory and no PR. Multi-repo plans register exact repo paths; cross-repo dependencies order work but do not stack branches.
+`/run` is also how a plan resumes. There is no separate verb: a run whose
+maestro died leaves records the next `/run` picks up, and a plan that cannot go
+any further says why rather than sitting silent.
 
-## Execute
+`/stop [why]` halts the run and ends its workers. A halted deliverable becomes
+unstarted again and keeps its worktree, so running the plan again re-enters the
+tree it was already using rather than starting the work over.
 
-`/run [deliverable-id]` runs the plan (`/start` is an alias). It is one verb over both populations: cleanly parked workers resume from their own sessions, and ready `planned` deliverables activate. Omitting the id does both for everything eligible. It requires a formed plan, and refuses when the last stop was not cleanly proven — that routes to `/recover`. If the plan has not been reviewed, or changed since it was, it asks whether to review first or proceed.
+## Questions
 
-Workers run in persistent tmux sessions, commit locally, and toggle tasks. Typed workflow review assignments inspect immutable revisions and report structured findings. Critical and major findings must have a recorded resolution; fixed claims receive scope-locked verification. Final assessment checks exact SHAs and complete reports mechanically.
+A worker that gets stuck can `ask`. The question travels to the maestro, which
+reasons about it in the plan context it already has and answers with `respond` —
+or, if it genuinely cannot, asks you and passes on what you say. The worker is
+blocked the whole time, and the answer records who decided, so it can tell your
+ruling from the maestro's guess.
 
-### Observe and control
+You are not expected to be watching. A question reaching you means the maestro
+could not answer it.
 
-The editor HUD has Agents, Plan, and Questions tabs. Tab enters it only from an empty prompt. Rows show status words and elapsed time; wider terminals add model, effort, tokens, and cache hit rate. Terminal duration freezes. Worker-owned child agents reconnect into their owner row through durable generation-fenced projections.
+## Review
 
-- `/agents` focuses Agents (or prints a headless summary).
-- `/watch` toggles worker panes.
-- `/view <target>` opens a read-only tmux split.
-- `/steer <target> <guidance>` continues a worker with guidance.
-- `/interrupt [target] [--children|--tree|--all]` aborts a turn/run; propagation is explicit.
-- `/answer` opens pending questions; `/recap` summarizes completed agents.
+There is no review command. A worker hands its own diff to a reviewer and acts
+on what comes back before it reports — which is the point, since a review nobody
+acts on is a review that did not happen.
 
-Use exact `worker:<deliverable/agent>` or `run:<id>` targets when aliases could collide. `I` in the HUD interrupts. `K` performs a bounded shutdown of the owning delivery and records a recoverable failure only after the process is proved gone.
+`delegate` can fan out: one reader per model family, every answer returned
+**unreconciled**. Flattening several opinions into one is how findings get lost.
 
-### Stop, resume, recover
+## Safeguards
 
-- `/stop` freezes scheduling, requests cooperative preparation, and escalates remaining sessions at one bounded fleet deadline.
-- `/run [deliverable-id]` resumes a clean stop and activates any newly ready planned work in the same step.
-- `/kill <deliverable-id>` proves shutdown and marks that delivery failed/recoverable.
-- `/recover [deliverable-id]` audits worktree, branch, session, and PR reality. A target recovers only that delivery; global recovery presents candidates instead of clearing every hold.
-- `/debug [symptom]` collects bounded facts, asks for one recovery action, records the exact result, then offers a redacted issue draft.
+Every shell command is classified before it runs and runs confined to the
+agent's own tree, enforced by the OS. Some commands are refused with a reason
+and something to do instead — committing goes to the `commit` tool, deleting to
+`delete`, fetching a URL to `webfetch`. A refusal is an answer, not a failure to
+work around.
 
-Resume keeps the JSONL. Fresh restart creates a new JSONL, retains bounded prior-session paths, and reuses the validated worktree/branch. Stale process generations cannot complete tasks, reconcile children, update usage, or control a replacement.
+`/maestro` (from the settings extension) inspects and edits configuration:
 
-## Review and ship
-
-Reviews are workflow assignments, not an independent panel configuration. See [Review workflows](review-loop.md). The delivery stores canonical findings, duplicate membership, resolution, verification, assignment usage, and reviewed SHAs.
-
-Maestro owns remote effects:
-
-- `/ship` pushes and creates/updates the next shippable PR;
-- `/sync` retargets stacked PRs after predecessor merges;
-- `/commit` creates a local conventional commit.
-
-Generated PR evidence is marker-bounded: user text outside Maestro markers is preserved. Canonical findings are never silently dropped to meet a size budget; optional detail truncates first. Secrets and raw transcripts are not projected.
-
-## Continuity
-
-`/distill` curates in-place compaction. `/handoff` closes the arc and seeds a new planning session; it refuses while workers are live. `/verify [deliverable-id]` performs deep read-only verification of started work.
-
-## Command reference
-
-| Command | Effect |
-|---|---|
-| `/plan [slug]` | Open/create a plan (artifact only; no mode change) |
-| `/mode [name]` | Switch posture (direct; picker when omitted) |
-| `/form` | Author or extend the plan tree (plan mode) |
-| `/review` | Review the formed plan; records the verdict |
-| `/run [id]` | Run the plan: resume parked workers + activate ready work (`/start` is an alias) |
-| `/stop` | Bounded fleet stop |
-| `/recover [id]` | Audit and recover targeted or selected work |
-| `/kill <id>` | Prove shutdown, then fail recoverably |
-| `/agents`, `/watch`, `/view <target>` | Inspect agents |
-| `/steer <target> <text>` | Guide a worker without interruption |
-| `/interrupt [target] [scope]` | Abort current turn/run |
-| `/answer`, `/recap` | Handle questions and summaries |
-| `/verify [id]`, `/debug [symptom]` | Verify or diagnose/recover |
-| `/ship`, `/sync`, `/commit` | Delivery/GitHub operations |
-| `/distill`, `/handoff` | Session continuity |
-| `/maestro` | Exact models, runtime policies, gates, scalar settings |
-| `/modes-status` | Current mode, plan, and execution state |
-
-## Development and dogfood
-
-```bash
-npm test
-npm run typecheck
-npm run docs
-npm run check
+```text
+/maestro show
+/maestro get <key>
+/maestro set [--session|--project|--global] <key> <JSON-value>
 ```
 
-Deterministic scenario tests are normal Vitest files and write complete artifacts inside test-owned temporary directories. Real-process validation likewise owns its temporary repository, socket, and child processes. Real-provider and disposable-GitHub validation are opt-in host/Maestro activities; workers do not invoke providers, create remote repositories, or answer approval prompts.
+See [commands.md](commands.md) for the full command and tool reference, and
+[settings.md](settings.md) for the configuration keys.

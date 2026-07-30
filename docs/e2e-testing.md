@@ -1,255 +1,91 @@
-# End-to-end testing the harness
+# End-to-end testing
 
-pi-maestro's core promise — *a worker runs in a worktree, reports over RPC, and
-nothing ships until its review gate is satisfied* — spans the engine, the
-execution adapter, the RPC protocol, and (in production) tmux + `pi` + git + gh.
-Unit tests cover the pieces; **dogfooding** (`dogfood-prompt.md`,
-`scripts/reset-dogfood.sh`) covers the whole thing but needs real tmux, a real
-`pi`, real model calls, and sibling sandbox repos — too heavy to run on every
-change, and impossible for an agent to drive unattended.
+Three tiers. Pick the lowest that can catch the bug you care about — then read
+the warning under tier 3 before deciding you are finished.
 
-This doc describes the **hermetic e2e harness**: it boots the *real*
-orchestrator and drives a deliverable through its lifecycle over the *real* RPC
-protocol, with **no tmux, no `pi`, no API, no git/gh**. It runs in ~1s and an
-LLM (Claude) can author and run it while building a feature.
+| Tier | Run with | What is real | Speed |
+| --- | --- | --- | --- |
+| Unit | `npm test` | pure logic, no I/O | seconds |
+| Hermetic e2e | `npm run test:e2e` | a real seat, real worktrees, real sockets, real detached processes — scripted model | seconds |
+| Live drive | `npm run e2e:live` | all of it, including the models and a real git remote | minutes |
 
-Prototype: [`test/e2e/lifecycle.e2e.test.ts`](../test/e2e/lifecycle.e2e.test.ts).
+## Hermetic e2e
 
-## The three tiers
+`test/e2e/maestro/drive.e2e.test.ts` boots a real pi seat against
+`test/e2e/maestro/scripted-model.ts` — an HTTP server speaking the Anthropic
+Messages SSE API that synthesizes tool-call turns.
 
-Pick the lowest tier that can catch the bug you care about:
+The mock keys on **which tools a session holds**, not on prompt wording. A
+session holding `finish` is a worker; one holding `flight` is the maestro. That
+matters: keying on prose meant a reworded persona silently changed which actor
+the mock thought it was talking to.
 
-| Tier | Command | What's real | Determinism | Speed |
-| --- | --- | --- | --- | --- |
-| **1 · unit** | `npm test` | pure logic | full | ms |
-| **2 · hermetic e2e** | `npm run test:e2e` | engine + adapter + RPC; fakes for tmux/pi/git | full | ~1s |
-| **3 · full-stack driver** | `npm run test:e2e:full` (scripted) or the `drive-maestro-e2e` skill (you drive) | **everything** — real `pi --mode rpc`, real workers, real ship | scripted+mock, or real | minutes |
+Everything else is real — the socket, the worktrees, the commits, the release,
+the run record. The only substitutions are the model and the network.
 
-Tiers 1–2 are covered above and below. Tier 3 — the *externally-driven*
-full-stack test — is described in [Full-stack driver](#full-stack-driver-tier-3).
-
-## What is real vs. faked
-
-| Layer | In the harness |
-| --- | --- |
-| `PlanEngine`, `DeliverableExecutor`, `ExecutionAdapter` | **real** — the actual orchestration code |
-| RPC (`MaestroRpcServer`/`MaestroRpcClient`, protocol v6) | **real** — a worker connects over a real unix socket |
-| The completion gate (`checkCompletionGate`, `workerMayComplete`) | **real** |
-| tmux | **stub** (`stubTmux`) — records the spawn; sessions never "alive", so kill is a no-op |
-| the worker `pi` process | **scripted** — a real `MaestroRpcClient` plays the agent side of the wire |
-| git worktree / gh ship | **skipped** — the deliverable is pre-provisioned `active` with a `worktreePath`; see limitations |
-
-The point: everything that could actually be *wrong in the orchestration* runs
-for real. Only the process/OS boundaries are faked.
-
-## The seams that make it possible
-
-`ExecutionAdapterOpts` is built for injection (see
-`packages/modes/src/exec/execution-adapter.ts`):
-
-- `tmux?: TmuxApi` — swap in a stub/fake instead of real tmux.
-- `socketPath?`, `token?` — fixed, test-owned RPC endpoint + auth.
-- `resolveWorkerModel?` — deterministic model resolution (no gateway).
-- `ctx: { cwd } as ExtensionContext` — a minimal cast is enough.
-- `workspaceValidation?`, `restartKillTimeoutMs`, `restartPollMs`,
-  `stopGraceMs` — inject git facts / shorten timers.
-
-Pre-provisioning a deliverable as `active` with a `worktreePath` makes the
-executor hydrate and spawn its worker **without** touching real git worktree
-provisioning.
-
-## Authoring a scenario
-
-1. **Boot** (see the `beforeEach` in the prototype): `memStore()` →
-   `PlanEngine.create` → `engine.addDeliverable` / `addWorkItem` →
-   `setDeliverableStatus("...","active")` + `updateDeliverable(..., {worktreePath})`
-   → `new ExecutionAdapter({... tmux, token, socketPath ...})` →
-   `await adapter.start()` → `getExecutor().unblockDeliverable(id)` →
-   `await adapter.tick()`.
-2. **Connect a scripted worker** as `"<deliverableId>/worker"` over the real
-   socket with the run token. Reflexively answer `ping` → `pong` and
-   `summarize` → `summary` (the maestro's completion path waits for the
-   summary).
-3. **Drive the wire**: `status:working` → `planMutate toggleTask` for each task
-   → `status:idle`. Toggling the last task only *arms* completion; the idle
-   report is what triggers the real gate.
-4. **Assert** against real adapter/engine state:
-   - `adapter.isWorkerDone(id)` — the worker completed.
-   - `engine.get().deliverables[0].tasks.every(t => t.done)` — plan mutated.
-   - `adapter.snapshot()` — tokens, sessions, timings.
-
-The prototype has two scenarios: the happy path (worker completes, gate
-satisfied with no reviewers) and the gate hold (a required `plan-review`
-assignment keeps the ship gate blocked even after every task is done).
-
-## Running it
+## Live drive
 
 ```bash
-npm run test:e2e            # runs test/**/*.e2e.test.ts only
-npx vitest run test/e2e/lifecycle.e2e.test.ts   # one file
+npm run e2e:live                # SIT models
+npm run e2e:live -- --recover   # SIGKILL the maestro mid-flight, start a new one
+npm run e2e:live -- --prod-models
+npm run e2e:live -- --keep      # leave the sandbox for inspection
 ```
 
-E2E files use the `*.e2e.test.ts` suffix and are **excluded from the default
-`vitest run`** (and thus from `npm run check`) so the unit suite stays fast;
-`test:e2e` runs them explicitly. Add e2e coverage here whenever you change the
-worker lifecycle, the RPC protocol, or the gate.
+It creates a disposable repo under `~/src/github.com/`, an isolated pi home, a
+local bare remote and a `gh` shim, seeds a two-deliverable plan, and drives it
+to shipped. The first deliverable builds a module, hands the diff to a
+reviewer, acts on the findings, and only then reports; the second reads its
+hand-off.
 
-## Limitations / good next extensions
+Green looks like:
 
-- **Ship-to-PR is not exercised.** `shipDeliverable` resolves to
-  `shipper.ts`'s real git+gh path inside the adapter and is not injectable.
-  Adding a `shipDeliverable?` override (or a `gh`/`git` seam) to
-  `ExecutionAdapterOpts` would let the harness assert a deliverable reaching
-  `shipped`. *(Tracked as a review finding.)*
-- **Higher-fidelity out-of-process worker.** `test/fixtures/fake-tmux.ts` +
-  `fake-agent.ts` can fork a scripted agent as a child process, exercising the
-  adapter's real spawn-command building and session kill/crash paths. A
-  scenario can pass `tmux: new FakeTmux(...)` and script agent behavior per
-  deliverable instead of driving the client in-test.
-- **Worker-side review.** In the intended model reviewers run worker-side via
-  the `review()` tool and the worker owns its findings (there is no maestro hard
-  gate on unresolved findings). The prototype drives the worker's task/idle wire
-  but does not yet drive a `review()` round; a higher-fidelity scenario would
-  script the worker running its panel and escalating a finding to the maestro.
-  (The maestro-side ship gate has been removed — a `complete` deliverable ships;
-  the worker owns its findings.)
-- **Crash/recovery, parallel deliverables, stacked dependencies** are all
-  reachable with the same harness (crash the worker mid-work; add a second
-  deliverable with `dependsOn`).
-
-## Full-stack driver (tier 3)
-
-The hermetic harness fakes the process/OS boundaries. The **full-stack driver**
-fakes *nothing in the harness*: it boots a real `pi --mode rpc` with the entire
-maestro extension stack and drives it from **outside**, exactly the way an IDE or
-another agent would. This is possible because pi already exposes a complete
-control surface — `--mode rpc` (JSONL commands + a streamed event feed) plus the
-`extension_ui_request`/`extension_ui_response` dialog sub-protocol, which lets the
-driver **answer every question** the maestro raises (the plan→execution gate,
-confirms, worker questions escalated via `CAPABILITIES.ask`). So there is no
-internal `/test` command — the system under test stays 100% real and unmodified.
-
-All of it lives in [`test/e2e/driver/`](../test/e2e/driver/) and is shared by two
-drivers that differ only in *who decides the prompts and answers*:
-
-- **RpcClient** (`driver/rpc-client.ts`) — the driver side of the wire: strict
-  JSONL framing, id-correlated commands, and `extension_ui_request` routing to an
-  **Answerer**.
-- **Answerer** (`driver/answerer.ts`) — `ScriptedAnswerer` (deterministic rules,
-  for CI) or `ForwardingAnswerer` (parks questions for a live agent).
-- **launch / scenario / env-profile / assertions** — boot the SUT (`-ne` +
-  explicit maestro `-e`, under an isolated pi HOME), the canned `sandbox-features`
-  plan, the Live/CI environment, and white-box outcome checks (plan.json statuses
-  + git history — never the transcript).
-
-### LLM-driver — you drive it (real models)
-
-A control CLI + background daemon let a coding agent (Claude, or another pi) drive
-the harness. Invoke the **`drive-maestro-e2e`** skill
-([`.agents/skills/drive-maestro-e2e/`](../.agents/skills/drive-maestro-e2e/)), or
-drive it directly:
-
-```bash
-# start the daemon in the background; it prints a `ready` line + the plan prompt
-node_modules/.bin/jiti test/e2e/driver/cli.ts start --live      # real models + disposable GitHub repo
-#   ...or --live --local-remote (no GitHub), --live --multi-model (ollama role routing), or --ci (mock provider)
-#   add --seed-plan to pre-write the canned plan into the store (driver/seed-plan.ts):
-#   open with `prompt "/plan sandbox-features"` and go straight to execution —
-#   no model-dependent plan authoring (docs/modes-architecture.md backlog #7)
-node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/plan"
-node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "<the plan prompt>"
-node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/form"    # author the tree (skip when --seed-plan)
-node_modules/.bin/jiti test/e2e/driver/cli.ts prompt "/run"  # run it (/start is an alias)
-node_modules/.bin/jiti test/e2e/driver/cli.ts poll     # new events + parked questions
-node_modules/.bin/jiti test/e2e/driver/cli.ts answer <id> "<value>"   # repeat until shipped
-node_modules/.bin/jiti test/e2e/driver/cli.ts assert
-node_modules/.bin/jiti test/e2e/driver/cli.ts stop     # tears down the sandbox + disposable repo
+```
+stats=shipped  summary=shipped
 ```
 
-Because the driver is itself an agent, answering the maestro's mid-run questions
-is just the driver doing its job — the reason MCP is *not* the right tool here
-(MCP feeds tools *into* an agent; it is not a control plane *over* one).
+with real commits on `deliverable/stats` and `deliverable/summary`.
 
-#### Multi-model routing (`--multi-model`)
+**The repo must live under `~/src/github.com/`** (or `PI_E2E_CHECKOUT_ROOT`) —
+not a temp dir. The sandbox writes its own `$HOME/.gitconfig` for identity, and
+the placement keeps worktrees beside the repo where they are reaped with it.
 
-`start --live --multi-model` boots against a **local ollama** profile
-([`driver/multi-model-profile.ts`](../test/e2e/driver/multi-model-profile.ts))
-that routes maestro roles across *distinct* models instead of one session
-default — the real exercise of the presets / modelSets machinery:
+### Reading a failure
 
-| Tier | Models (first-available order) | Roles |
-| --- | --- | --- |
-| planner / session | `gemma4:31b-mlx` | the preset target — the maestro plans here |
-| normal | `qwen3.6:35b-a3b-coding-mxfp8` (MoE, fast decode) → `session` | worker, verifier, codebase-research |
-| fast | `gpt-oss:20b` → `session` | classifier, summarizers, general, web-research |
-| review pool | `gpt-oss:20b` → `session` (both non-qwen families vs the qwen workers) | the `*-review` roles (planner picks by summary; `session` sorts to the back) |
+Read the `failure:` text in the result block first. The worker writes it and it
+is usually exact — one run said it could not commit because the shell refused it
+and named a tool that was not in its tool set, which was the entire bug in one
+sentence. Then `run.json` under the printed pi home, then `events.jsonl` (lines
+beginning `[maestro]` are what the seat narrated), then `git log --all`.
 
-Needs the ollama service running with those three models pulled
-(`ollama list`); it loads them on demand (5-min keepalive). All three
-together ≈ 68 GB on a 128 GB box, leaving KV headroom. Two checks this mode enables:
-`/maestro explain <agent-type>` confirms per-role routing lands on the intended
-model, and `ollama stop <first-model>` then re-running it confirms the live
-availability fall-through. Routing
-correctness is pinned deterministically (no
-ollama) in [`driver/multi-model-profile.test.ts`](../test/e2e/driver/multi-model-profile.test.ts);
-this drive confirms ollama serves it end to end.
+### Cleaning up
 
-#### Hosted multi-model routing (`--sit-models`)
+Without `--keep` the drive removes its own sandbox. After an interrupted run,
+remove the repo at `~/src/github.com/pi-e2e-repo-*`, its sibling
+`~/src/github.com/worktrees/<same-name>/`, and the `pi-e2e-{home,gh,remote}-*`
+directories under the system temp dir. Use `git worktree remove --force` rather
+than `rm` alone, or the repo keeps metadata pointing at paths that are gone.
 
-`start --live --sit-models` is the hosted twin
-([`driver/sit-profile.ts`](../test/e2e/driver/sit-profile.ts)): real
-radicalai-sit gateway models via a *generated* `models.json` (the bundled
-provider extension needs a newer host pi than the CLI carries, so the profile
-talks to the gateway directly). Opus 4.8 is the planner seat and the review
-family; GPT 5.6 Sol is the worker family — cross-family review by
-construction. Auth is the developer's live `radicalai-sit` OAuth token copied
-in as a static key; the profile refuses to start with less than 45 minutes of
-token life (open pi on a radicalai model once to refresh). Burns real tokens.
-Combine with `--local-remote` for offline ship: the live profile now puts the
-CI `gh` shim on PATH so the ship path completes against the bare remote
-instead of ending `pr-failed`.
+## Nothing runs e2e in CI
 
-### Scripted driver — CI (deterministic, offline)
+There was a workflow. It ran only the old system's drive — against
+`packages/modes`, which was being deleted — so it reported success on every PR
+while the rebuilt maestro's own drive sat broken from the moment the bash
+classifier was wired. A green check covering the wrong thing is worse than no
+check, so it was removed rather than repaired.
 
-`npm run test:e2e:full` runs [`test/e2e/real.e2e.test.ts`](../test/e2e/real.e2e.test.ts):
-the same core, but with the **seeded** `sandbox-features` plan (opened with `/plan
-<slug>` then `/start`, so no model-sensitive authoring) driven in the **CI
-profile** — a scripted mock model, a local bare git remote, and a `gh` shim, all
-reaching the workers via headless transport (workers spawn as child processes
-that inherit the env, so no tmux is needed). Deterministic, free, no API key.
-Gated only by `PI_E2E_FULL=1` (it boots a real pi process, heavier than the unit
-suite).
+**Tiers 1 and 2 cannot see the seam between processes**, and that is where every
+serious bug in this system has lived. In one day the live drive found: a shell
+gate that refused every commit because the tool it named was never declared; a
+git identity carried as environment that overrode the developer's path-scoped
+config; a restarted maestro that wedged a plan while narrating nothing; and
+children inheriting env vars that had been omitted expecting absence. Every one
+had a fully green suite over it.
 
-**Run locally, and nowhere else.** There was a GitHub workflow for this; it is
-gone. It ran only `test/e2e/real.e2e.test.ts`, which drives `packages/modes` —
-so it reported `ci-profile (mock provider): SUCCESS` on every PR while the
-REBUILT maestro's own drive sat broken from the moment the bash classifier was
-wired, because that drive lives under `test:e2e` and no job ran it. A green
-check covering the package being deleted is worse than no check: it is the same
-defect this rebuild exists to remove, wearing a CI badge. Until e2e can
-genuinely run on GitHub, these are manual — run them before anything that
-touches the shell gate, the spawn path, or shipping.
+So: **run the live drive before calling done anything that touches the shell
+gate, the spawn path, git identity, or shipping.** No job will do it for you.
 
-The **scripted model** ([`driver/ci/scripted-model.ts`](../test/e2e/driver/ci/scripted-model.ts))
-is an HTTP server speaking the Anthropic Messages SSE API that *synthesizes* the
-tool-call turns to drive each actor deterministically: it classifies the caller
-from structure — the tool set (read-only reviewer vs full-tool worker) and the
-deliverable id in the worker's cwd — and emits the writes → commit → task-toggles
-that complete each deliverable, a passing plan-review, and benign reviewer
-findings. Because it keys on structure, not a request-body hash, it survives
-prompt/persona wording changes (unlike a cassette). The seat is a pi-config
-concern: `setupCiEnv` defines a self-contained `mock` provider in `models.json`
-whose baseUrl is the scripted model, and a minimal one-model roster so every role
-resolves (workers inherit the seat; reviewers resolve through the v2 path).
-
-To watch a drive interactively, [`driver/ci/drive.ts`](../test/e2e/driver/ci/drive.ts)
-runs the same flow and prints per-node statuses; [`driver/ci/logging-stub.ts`](../test/e2e/driver/ci/logging-stub.ts)
-+ [`driver/ci/enumerate.ts`](../test/e2e/driver/ci/enumerate.ts) are the
-key-free enumeration tools (log every model request without driving) for when the
-protocol changes and the mock needs re-teaching.
-
-### Rule
-
-Never edit the harness — or weaken an assertion — to make a full-stack run pass.
-The whole point is to run the real code unmodified and learn whether it works. A
-failure is a finding about the harness, not about the test.
+One consequence worth knowing: `test/realtree-sandbox-live.test.ts` — the only
+test that proves the OS actually denies a write — runs on macOS only. It is the
+proof that sandbox confinement works, and it has never run anywhere but a
+developer's laptop.

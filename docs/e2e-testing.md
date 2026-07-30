@@ -85,7 +85,18 @@ had a fully green suite over it.
 So: **run the live drive before calling done anything that touches the shell
 gate, the spawn path, git identity, or shipping.** No job will do it for you.
 
-One consequence worth knowing: `test/realtree-sandbox-live.test.ts` — the only
-test that proves the OS actually denies a write — runs on macOS only. It is the
-proof that sandbox confinement works, and it has never run anywhere but a
-developer's laptop.
+The same goes for the sandbox. `test/realtree-sandbox-live.test.ts` is the only
+test that proves the OS actually denies a write — everything else asserts the
+DECISION to sandbox — and it runs where you run it, not in CI.
+
+It knows three states apart, which is worth knowing when you read its output:
+
+1. the platform cannot sandbox — nothing to prove;
+2. it can and this machine can — it proves denial;
+3. it claims it can and this machine cannot — it says so, loudly, and maestro
+   refuses commands here rather than running them unconfined.
+
+The third is not hypothetical. A machine without ripgrep (or bubblewrap and
+socat on Linux) is in it, and so is any container with the seccomp and
+user-namespace restrictions a hosted CI runner has. `isSupportedPlatform` is a
+claim about the platform, never about the environment.

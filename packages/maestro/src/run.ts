@@ -213,6 +213,36 @@ export function standings(plan: Plan, run: Run): Map<string, Standing> {
  * is startable. True for a clean finish and for a half-failed one alike — which
  * of those it was is the standings' job to say, not this one's.
  */
+/**
+ * Why a run can neither finish nor progress — or null if that is not its state.
+ *
+ * Derived, like everything else here. The case that forced it: a maestro killed
+ * during plan preflight leaves `preflight: {state: "running"}`, and on restart
+ * `start()` skips preflight (it is no longer `undefined`), `nextDeliverables`
+ * returns nothing (it gates on preflight being done), `settleIfDone` finds
+ * nothing to settle, and NO EVENT IS EMITTED AT ALL. `/run` launched nothing and
+ * narrated nothing, forever, and the only remedy was deleting `run.json`.
+ *
+ * The fix is not another recovery mechanism. It is that a run which cannot move
+ * must SAY SO — for this cause and for the ones nobody has thought of, which is
+ * why the last branch is a catch-all rather than an enumeration.
+ */
+export function stuckReason(plan: Plan, run: Run): string | null {
+	if (runSettled(plan, run)) return null;
+	// Something is working, or something can start: not stuck, just busy.
+	if (Object.values(run.deliverables).some((r) => r.state === "running"))
+		return null;
+	if (nextDeliverables(plan, run).length > 0) return null;
+	if (readyForPostflight(plan, run)) return null;
+
+	if (run.preflight === undefined) return "plan preflight has not run yet";
+	if (run.preflight.state === "running")
+		return "plan preflight was left running — the maestro that began it is gone, so nothing can start";
+	if (run.postflight?.state === "running")
+		return "plan postflight was left running — the maestro that began it is gone";
+	return "nothing is running and nothing can start";
+}
+
 export function runSettled(plan: Plan, run: Run): boolean {
 	if (run.preflight === undefined) return false;
 	if (run.preflight.state === "running") return false;

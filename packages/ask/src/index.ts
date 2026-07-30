@@ -17,6 +17,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES, EVENTS } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { AskEngine } from "./engine.js";
+import { AskInbox } from "./inbox.js";
+import { createRespondTool } from "./respond-tool.js";
 import {
 	type DecisionPoint,
 	parseDecisionBlock,
@@ -25,6 +27,12 @@ import {
 import { createAskTool } from "./tool.js";
 
 export { AskEngine, type AskSource } from "./engine.js";
+export {
+	AskInbox,
+	type InboundQuestion,
+	type SettleInbound,
+} from "./inbox.js";
+export { createRespondTool } from "./respond-tool.js";
 export {
 	type DecisionPoint,
 	parseDecisionBlock,
@@ -125,6 +133,26 @@ export default defineExtension(
 		});
 
 		pi.registerTool(createAskTool(engine));
+
+		// The receiving half. `ask` sends a question; `respond` settles one that
+		// arrived from elsewhere. Both live here because both are about what a
+		// questionnaire IS — the version that lived beside a socket instead
+		// answered every question in a set with the same string.
+		//
+		// Registered unconditionally, even with nothing forwarding questions:
+		// the tool then simply reports that nothing is waiting, which is true
+		// and cheap. Gating it on a transport existing would make the surface
+		// depend on load order, which is the shape of bug this repo keeps
+		// finding.
+		const inbox = new AskInbox();
+		pi.registerTool(createRespondTool(() => inbox));
+		maestro.capabilities.register(CAPABILITIES.askInbox, {
+			deliver: (question, settle) => {
+				inbox.receive(question, settle);
+			},
+			open: () => inbox.open(),
+			drain: (value: string) => inbox.drain(value),
+		});
 
 		maestro.capabilities.register(CAPABILITIES.ask, {
 			ask: (questions) => engine.present(questions),

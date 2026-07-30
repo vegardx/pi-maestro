@@ -203,6 +203,20 @@ describe("a refusal never names a tool that does not exist", () => {
 		for (const tool of SUGGESTABLE_TOOLS) expect(held).toContain(tool);
 	});
 
+	it("gives a worker the `ask` TOOL it registers a transport for", async () => {
+		// The phantom at feature scale. A worker registered `ask-transport.v1` —
+		// the routing for `ask` — while loading only maestro and research-tools,
+		// so it had no `ask` tool at all and the whole question chain was
+		// unreachable from a worker. The tests passed because they called
+		// `AgentLink.ask()` directly, never through anything a model can invoke.
+		//
+		// Registering a transport for a tool you do not hold is the same defect
+		// as a refusal naming one: routing that leads nowhere.
+		const held = await workerTools();
+		expect(held).toContain("ask");
+		expect(held).toContain("respond");
+	});
+
 	it("names in READ_ONLY_BUILTINS every one a tool pi actually defines", () => {
 		// The allowlist is passed to pi, which silently ignores names it does not
 		// recognise — so a wish narrows an agent's tools with no error anywhere.

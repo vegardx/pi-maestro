@@ -199,8 +199,9 @@ describe("the commands", () => {
 		const h = host();
 		startSeat(h.pi, { cwd: repo() });
 		await h.run("mode");
-		// No `ask` and no `finish`: the seat has nobody to report to and asks its
-		// human directly. `respond` is the other half of a worker's `ask`.
+		// No `ask`, no `respond`, no `finish`. The first two come from
+		// `packages/ask`, which the manifest loads beside this one; `finish` is
+		// a worker's, and the seat has nobody to report to.
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
 			"bash",
 			// `commit` and `delete` for the same reason a worker has them: the
@@ -213,7 +214,10 @@ describe("the commands", () => {
 			"delete",
 			"flight",
 			"plan",
-			"respond",
+			// No `respond`: it belongs to `packages/ask`, which owns what a
+			// question is. While it lived on maestro's runtime it answered every
+			// question in a set with the same string, because the code settling
+			// them had never seen a questionnaire.
 		]);
 	});
 });

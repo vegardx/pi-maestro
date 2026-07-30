@@ -167,7 +167,10 @@ export function createSeat(options: SeatOptions): Seat {
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },
-		{ definition: runtime.respondTool(), holders: ["maestro"] },
+		// No `respond` here. It belongs to `packages/ask`, which owns what a
+		// question is — the version that lived on this runtime answered every
+		// question in a set with the same string, because the code settling them
+		// had never seen a questionnaire.
 		// Only the seat authors plans. A worker asked to write one would be
 		// writing work for itself, which is the shape the deliverable model
 		// exists to replace.

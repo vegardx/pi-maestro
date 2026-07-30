@@ -20,7 +20,7 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import type { Answers, AskInboxV1, Questionnaire } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { PersonaCatalogue } from "./agent.js";
@@ -69,9 +69,23 @@ export function researchToolsPath(): string {
 	);
 }
 
-/** What a spawned agent loads: maestro's own surface, plus the web tools. */
+/** `packages/ask`, which defines the `ask` tool AND the inbox `respond` uses. */
+export function askPath(): string {
+	return fileURLToPath(new URL("../../ask/src/index.ts", import.meta.url));
+}
+
+/**
+ * What a spawned agent loads.
+ *
+ * `packages/ask` is here because without it a worker has NO `ask` TOOL. It
+ * registered an `ask-transport.v1` — the routing for a tool it did not hold —
+ * so the whole question chain was unreachable from a worker, and the tests
+ * passed because they called `AgentLink.ask()` directly rather than through
+ * anything a model could invoke. A transport for a tool nobody has is the same
+ * phantom as a refusal naming a tool nobody has.
+ */
 export function agentExtensions(): readonly string[] {
-	return [extensionPath(), researchToolsPath()];
+	return [extensionPath(), askPath(), researchToolsPath()];
 }
 
 /**
@@ -226,7 +240,15 @@ export function askThroughCapability(asker: HumanAsker): (
  */
 export function startSeat(
 	pi: SeatHost,
-	options: { readonly cwd?: string; readonly asker?: HumanAsker } = {},
+	options: {
+		readonly cwd?: string;
+		readonly asker?: HumanAsker;
+		/**
+		 * Where a worker's question goes. Resolved lazily: the inbox is
+		 * registered by `packages/ask`, and load order is not ours to depend on.
+		 */
+		readonly inbox?: () => AskInboxV1 | undefined;
+	} = {},
 ): { seat(): Seat } {
 	const cwd = options.cwd ?? process.cwd();
 	let built: Seat | undefined;
@@ -255,6 +277,7 @@ export function startSeat(
 			...(options.asker
 				? { askHuman: askThroughCapability(options.asker) }
 				: {}),
+			...(options.inbox ? { inbox: options.inbox } : {}),
 		});
 		for (const tool of built.tools.definitionsFor("maestro"))
 			pi.registerTool(tool);
@@ -366,6 +389,12 @@ export default defineExtension(
 		const asker = maestro.capabilities.get(CAPABILITIES.ask) as
 			| HumanAsker
 			| undefined;
-		startSeat(pi, ...(asker ? [{ asker }] : []));
+		startSeat(pi, {
+			...(asker ? { asker } : {}),
+			// Read at question time, not now: `packages/ask` may register after
+			// us, and a seat that resolved this at boot would silently have no
+			// inbox depending on extension load order.
+			inbox: () => maestro.capabilities.get(CAPABILITIES.askInbox),
+		});
 	},
 );

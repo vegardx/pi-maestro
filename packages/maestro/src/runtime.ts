@@ -22,6 +22,15 @@ import { MaestroLink } from "./link.js";
 import { type Mode, type ModeName, mode as modeNamed } from "./mode.js";
 import type { Plan, Task } from "./plan.js";
 
+/** A question an agent is blocked on, waiting for this maestro. */
+interface OpenQuestion {
+	readonly agentId: string;
+	readonly id: string;
+	readonly question: string;
+	readonly context?: string;
+	readonly askedAt: string;
+}
+
 /** A flight the maestro has been asked to carry out and has not finished. */
 interface PendingFlight {
 	readonly where: string;
@@ -38,9 +47,24 @@ export interface Narrator {
 
 export interface RuntimeOptions {
 	readonly narrator: Narrator;
+	/**
+	 * Put a question to the human and wait.
+	 *
+	 * Returns who actually answered, because the ask engine has an idle
+	 * autopilot (`source: "maestro-auto"`) and a deferred question answers
+	 * nothing at all. Reporting either as a human ruling would be the exact lie
+	 * `from` exists to prevent — so the attribution comes from whatever answered,
+	 * not from the fact that we asked.
+	 *
+	 * Absent = there is no human reachable at all.
+	 */
+	readonly askHuman?: (
+		question: string,
+	) => Promise<{ readonly answer: string; readonly from: "maestro" | "human" }>;
 	readonly socketPath: string;
 	/** Absent = a fresh token per session, which is what an ordinary run wants. */
 	readonly token?: string;
+	readonly now?: () => string;
 }
 
 /**
@@ -57,6 +81,7 @@ export class MaestroRuntime {
 	private current: Mode = modeNamed("plan");
 	private executor: Executor | undefined;
 	private pending: PendingFlight | undefined;
+	private readonly questions = new Map<string, OpenQuestion>();
 
 	constructor(private readonly options: RuntimeOptions) {
 		this.token = options.token ?? randomUUID();
@@ -73,7 +98,35 @@ export class MaestroRuntime {
 	}
 
 	async listen(): Promise<void> {
+		this.link.on("asked", (agentId, ask) => {
+			const key = `${agentId}/${ask.id}`;
+			this.questions.set(key, {
+				agentId,
+				id: ask.id,
+				question: ask.question,
+				...(ask.context ? { context: ask.context } : {}),
+				askedAt: this.options.now?.() ?? "",
+			});
+			// Delivered to the maestro's own model, not to a dashboard. It answers
+			// from the plan context it already has, or escalates — which is what
+			// makes a question a rare interruption rather than a queue to manage.
+			this.options.narrator.ask(
+				[
+					`# A worker is blocked on a question`,
+					"",
+					`\`${agentId}\` asks: ${ask.question}`,
+					...(ask.context ? ["", `What it already knows: ${ask.context}`] : []),
+					"",
+					`Answer it with \`respond\` (id \`${key}\`). Answer from what you know about this plan if you can. Only put it to the user when you genuinely cannot — they are not watching this run.`,
+				].join("\n"),
+			);
+		});
 		await this.link.listen(this.options.socketPath);
+	}
+
+	/** Questions an agent is currently blocked on. */
+	openQuestions(): readonly OpenQuestion[] {
+		return [...this.questions.values()];
 	}
 
 	async close(): Promise<void> {
@@ -186,6 +239,92 @@ export class MaestroRuntime {
 			default:
 				return;
 		}
+	}
+
+	/**
+	 * The tool the maestro answers a blocked agent with.
+	 *
+	 * One tool, two paths, because there are exactly two things the maestro can
+	 * do: answer, or admit it needs the human. `askTheHuman` makes `answer` the
+	 * question to put to them rather than the reply — so escalating still
+	 * requires saying what to ask, which is the part the maestro is actually
+	 * better placed to write than the worker was.
+	 */
+	respondTool(): ToolDefinition {
+		return defineTool({
+			name: "respond",
+			label: "Respond",
+			description:
+				"Answer a question a worker is blocked on. Answer from what you know about the plan when you can; set askTheHuman when you genuinely cannot.",
+			promptSnippet:
+				"respond — answer a blocked worker, or put its question to the user.",
+			parameters: Type.Object({
+				id: Type.String({ description: "The id from the question." }),
+				answer: Type.String({
+					description:
+						"Your answer — or, with askTheHuman, the question to put to the user.",
+				}),
+				askTheHuman: Type.Optional(
+					Type.Boolean({
+						description:
+							"You cannot answer this. `answer` becomes the question the user is asked.",
+					}),
+				),
+			}),
+			execute: async (_id, { id, answer, askTheHuman }) => ({
+				content: [
+					{
+						type: "text" as const,
+						text: await this.settleQuestion(id, answer, askTheHuman === true),
+					},
+				],
+				details: {},
+			}),
+		});
+	}
+
+	private async settleQuestion(
+		key: string,
+		answer: string,
+		askTheHuman: boolean,
+	): Promise<string> {
+		const question = this.questions.get(key);
+		if (!question)
+			return `Nothing is blocked on \`${key}\`. Open questions: ${
+				this.openQuestions()
+					.map((q) => `${q.agentId}/${q.id}`)
+					.join(", ") || "none"
+			}.`;
+
+		if (!askTheHuman) {
+			this.questions.delete(key);
+			this.link.answer(question.agentId, question.id, answer, "maestro");
+			return `Answered ${question.agentId}.`;
+		}
+
+		if (!this.options.askHuman) {
+			// Refused rather than silently answered as the maestro. An agent told
+			// a human decided when nobody did is worse off than one told nobody
+			// could be reached.
+			this.questions.delete(key);
+			this.link.answer(
+				question.agentId,
+				question.id,
+				"nobody could be asked, and the maestro could not answer either. Decide for yourself and say in your hand-off what you assumed.",
+				"maestro",
+			);
+			return `There is no user reachable from this session, so ${question.agentId} was told to decide and record the assumption.`;
+		}
+
+		this.options.narrator.say(`Asking you on behalf of ${question.agentId}`);
+		const reply = await this.options.askHuman(answer);
+		this.questions.delete(key);
+		// Attributed as it came back. A deferred question or an autopilot answer
+		// is not a human ruling, and the worker is told which it got.
+		this.link.answer(question.agentId, question.id, reply.answer, reply.from);
+		return reply.from === "human"
+			? `The user answered; ${question.agentId} has it.`
+			: `Nobody answered; ${question.agentId} was told so and will decide for itself.`;
 	}
 
 	/** The tool the maestro calls to answer `runMaestroTasks`. */

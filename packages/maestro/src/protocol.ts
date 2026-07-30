@@ -68,13 +68,30 @@ export interface Done {
 	readonly handoff?: string;
 }
 
+/**
+ * A question the agent cannot answer for itself.
+ *
+ * Blocks, like `done` does. A worker that guesses at an ambiguity and carries on
+ * produces work built on the guess, and the guess is invisible by the time
+ * anyone reads the diff — so asking has to be cheaper than assuming, which means
+ * it has to be possible at all.
+ */
+export interface Ask {
+	readonly type: "ask";
+	/** Correlates the answer. An agent may have more than one open at a time. */
+	readonly id: string;
+	readonly question: string;
+	/** What the agent has already worked out, so nobody re-derives it. */
+	readonly context?: string;
+}
+
 /** Something went wrong that is not a result. The agent stays connected. */
 export interface AgentError {
 	readonly type: "error";
 	readonly message: string;
 }
 
-export type AgentMessage = Status | Tokens | Done | AgentError;
+export type AgentMessage = Status | Tokens | Done | Ask | AgentError;
 
 // ─── Maestro → agent ─────────────────────────────────────────────────────────
 
@@ -88,6 +105,21 @@ export interface Reject {
 	readonly reason: string;
 }
 
+/**
+ * The answer to an `ask`.
+ *
+ * `from` is load-bearing. A maestro answers most questions itself, from the plan
+ * context it already has, and it can be confidently wrong — so an agent must be
+ * able to tell a maestro's judgement from its human's. Collapsing the two would
+ * let "the user said so" mean "something upstream guessed".
+ */
+export interface Answer {
+	readonly type: "answer";
+	readonly id: string;
+	readonly answer: string;
+	readonly from: "maestro" | "human";
+}
+
 /** You may exit now. The only legal answer to `done`. */
 export interface Release {
 	readonly type: "release";
@@ -99,7 +131,7 @@ export interface Shutdown {
 	readonly reason: string;
 }
 
-export type MaestroMessage = Welcome | Reject | Release | Shutdown;
+export type MaestroMessage = Welcome | Reject | Release | Shutdown | Answer;
 
 export type WireMessage = Hello | AgentMessage | MaestroMessage;
 

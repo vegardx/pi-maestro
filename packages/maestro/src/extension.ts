@@ -20,6 +20,8 @@ import type {
 	ExtensionCommandContext,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { PersonaCatalogue } from "./agent.js";
 import {
@@ -85,6 +87,13 @@ export function startWorker(
 				policy: () => readExecutionPolicySettings(process.cwd()),
 			}),
 			reporter,
+			// The same link the reporter uses. A worker asks the maestro it
+			// already reports to; there is no second channel.
+			asker: () => {
+				if (!link)
+					throw new Error("cannot ask yet — the handshake has not completed");
+				return link;
+			},
 			delegate: {
 				cwd: () => process.cwd(),
 				depth: () => wiring.depth,
@@ -132,6 +141,43 @@ export interface SeatHost {
 	sendUserMessage(text: string, opts?: unknown): unknown;
 }
 
+/** The slice of `ask.v1` the seat uses: one blocking question, one answer. */
+export interface HumanAsker {
+	ask(questions: Questionnaire): Promise<Answers>;
+}
+
+/**
+ * Put one question to the human, and report who actually answered.
+ *
+ * `ask.v1` has an idle autopilot whose answers carry `source: "maestro-auto"`,
+ * and a blocking question can be deferred. Both come back as an answer, and
+ * neither is a human ruling — so the attribution is read off the answer rather
+ * than assumed from the fact that we asked.
+ */
+export function askThroughCapability(asker: HumanAsker): (
+	question: string,
+) => Promise<{
+	readonly answer: string;
+	readonly from: "maestro" | "human";
+}> {
+	return async (question) => {
+		const answers = await asker.ask([
+			{ id: "maestro", question, allowFreeText: true, blocking: true },
+		]);
+		const answer = answers[0];
+		if (!answer || answer.deferred || answer.skipped || !answer.value.trim())
+			return {
+				answer:
+					"nobody answered this. Decide for yourself and say in your hand-off what you assumed.",
+				from: "maestro",
+			};
+		return {
+			answer: answer.value,
+			from: answer.source === "human" ? "human" : "maestro",
+		};
+	};
+}
+
 /**
  * Register the seat: its tools, and the two commands a human drives it with.
  *
@@ -141,7 +187,7 @@ export interface SeatHost {
  */
 export function startSeat(
 	pi: SeatHost,
-	options: { readonly cwd?: string } = {},
+	options: { readonly cwd?: string; readonly asker?: HumanAsker } = {},
 ): { seat(): Seat } {
 	const cwd = options.cwd ?? process.cwd();
 	let built: Seat | undefined;
@@ -164,6 +210,12 @@ export function startSeat(
 			},
 			extensions: [extensionPath()],
 			base,
+			// The hook that was declared and never supplied. Without it the seat
+			// told itself there was nobody to ask, which was false — it has a
+			// human, and a worker's escalated question had nowhere to go.
+			...(options.asker
+				? { askHuman: askThroughCapability(options.asker) }
+				: {}),
 		});
 		for (const tool of built.tools.definitionsFor("maestro"))
 			pi.registerTool(tool);
@@ -232,7 +284,7 @@ export default defineExtension(
 		path: "packages/maestro/src/extension.ts",
 		doc: "Plans as a DAG of deliverables, workers that build them, and the maestro that owns both ends.",
 	},
-	(pi) => {
+	(pi, maestro) => {
 		// DEPTH decides, not the presence of wiring. A read-only agent is spawned
 		// with a depth and deliberately WITHOUT a socket or token — it has nobody
 		// to dial — so "no wiring" and "this is the seat" are not the same thing.
@@ -246,6 +298,9 @@ export default defineExtension(
 				void startWorker(pi, wiring, { extensions: [extensionPath()] });
 			return;
 		}
-		startSeat(pi);
+		const asker = maestro.capabilities.get(CAPABILITIES.ask) as
+			| HumanAsker
+			| undefined;
+		startSeat(pi, ...(asker ? [{ asker }] : []));
 	},
 );

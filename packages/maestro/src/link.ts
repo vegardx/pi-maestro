@@ -20,6 +20,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { TokenSnapshot } from "@vegardx/pi-contracts";
 import {
 	type AgentMessage,
+	type Ask,
 	checkDone,
 	type Done,
 	type Hello,
@@ -66,6 +67,7 @@ export interface MaestroLinkEvents {
 	status: [agentId: string, status: Status];
 	tokens: [agentId: string, snapshot: TokenSnapshot];
 	done: [agentId: string, done: Done];
+	asked: [agentId: string, ask: Ask];
 	agentError: [agentId: string, message: string];
 	/**
 	 * `awaitingRelease` distinguishes an agent that vanished while waiting to be
@@ -126,6 +128,23 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 		const agent = this.agents.get(agentId);
 		if (!agent) return false;
 		return write(agent.socket, { type: "release" } satisfies MaestroMessage);
+	}
+
+	/** Answer a question an agent is blocked on. */
+	answer(
+		agentId: string,
+		id: string,
+		answer: string,
+		from: "maestro" | "human",
+	): boolean {
+		const agent = this.agents.get(agentId);
+		if (!agent) return false;
+		return write(agent.socket, {
+			type: "answer",
+			id,
+			answer,
+			from,
+		} satisfies MaestroMessage);
 	}
 
 	shutdown(agentId: string, reason: string): boolean {
@@ -235,6 +254,9 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 			case "error":
 				this.emit("agentError", agent.agentId, message.message);
 				return;
+			case "ask":
+				this.emit("asked", agent.agentId, message);
+				return;
 			case "done": {
 				const wrong = checkDone(message);
 				if (wrong !== null) {
@@ -291,9 +313,20 @@ export interface AgentLinkEvents {
 	error: [error: Error];
 }
 
+export interface AnsweredQuestion {
+	readonly answer: string;
+	/** Whether a human decided this, or the maestro did. Never guess. */
+	readonly from: "maestro" | "human";
+}
+
 export class AgentLink extends EventEmitter<AgentLinkEvents> {
 	private socket: Socket | undefined;
 	private awaitingRelease: (() => void) | undefined;
+	private nextAsk = 0;
+	private readonly openAsks = new Map<
+		string,
+		(answered: AnsweredQuestion) => void
+	>();
 
 	/**
 	 * Connect and complete the handshake. Resolves on `welcome`, rejects on
@@ -331,10 +364,20 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 			socket.on("close", () => {
 				this.socket = undefined;
 				settle(new Error("maestro closed the connection during handshake"));
-				// A connection lost while waiting to be released means nobody is
-				// coming. Unblocking is the only alternative to hanging forever.
+				// A connection lost while waiting means nobody is coming, and
+				// unblocking is the only alternative to hanging forever.
 				this.awaitingRelease?.();
 				this.awaitingRelease = undefined;
+				// An open question is answered with the truth rather than resolved
+				// to nothing: an empty answer reads as "the maestro said so", and
+				// silence is not agreement.
+				for (const waiting of [...this.openAsks.values()])
+					waiting({
+						answer:
+							"nobody answered this — the maestro is gone. Do not treat silence as agreement.",
+						from: "maestro",
+					});
+				this.openAsks.clear();
 				this.emit("disconnected");
 			});
 
@@ -357,6 +400,13 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 						this.awaitingRelease?.();
 						this.awaitingRelease = undefined;
 						return;
+					case "answer": {
+						const waiting = this.openAsks.get(message.id);
+						if (!waiting) return;
+						this.openAsks.delete(message.id);
+						waiting({ answer: message.answer, from: message.from });
+						return;
+					}
 					case "shutdown":
 						this.emit("shutdown", message.reason);
 						return;
@@ -374,6 +424,29 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 				};
 				write(socket, hello);
 			});
+		});
+	}
+
+	/**
+	 * Ask the maestro something, and wait.
+	 *
+	 * Blocks like `done` does, and for the same reason: an answer that arrives
+	 * after the agent has moved on is not an answer. The maestro may answer from
+	 * its own context or put the question to its human, and the reply says which.
+	 */
+	async ask(question: string, context?: string): Promise<AnsweredQuestion> {
+		const id = `ask-${this.nextAsk++}`;
+		if (
+			!this.send({
+				type: "ask",
+				id,
+				question,
+				...(context ? { context } : {}),
+			})
+		)
+			throw new Error("cannot ask: not connected to maestro");
+		return new Promise((resolve) => {
+			this.openAsks.set(id, resolve);
 		});
 	}
 

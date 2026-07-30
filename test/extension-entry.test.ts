@@ -114,6 +114,7 @@ describe("a process gets one surface, never both", () => {
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
 			"bash",
 			"delegate",
+			"escalate",
 			"finish",
 		]);
 		expect(h.names()).toEqual([]);
@@ -187,11 +188,14 @@ describe("the commands", () => {
 		const h = host();
 		startSeat(h.pi, { cwd: repo() });
 		await h.run("mode");
+		// No `ask` and no `finish`: the seat has nobody to report to and asks its
+		// human directly. `respond` is the other half of a worker's `ask`.
 		expect(h.tools.map((t) => t.name).sort()).toEqual([
 			"bash",
 			"delegate",
 			"flight",
 			"plan",
+			"respond",
 		]);
 	});
 });

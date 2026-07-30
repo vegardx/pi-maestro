@@ -93,7 +93,7 @@ export function createFinishTool(reporter: () => Reporter): ToolDefinition {
 		description:
 			"Report the outcome of this deliverable and hand back what the next deliverable needs. Blocks until maestro has collected the work.",
 		promptSnippet:
-			"finish — report the outcome and the hand-off. Call it once, when the work is done or has definitively failed.",
+			"report the outcome and the hand-off. Call it once, when the work is done or has definitively failed.",
 		parameters: Type.Object({
 			outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("failed")]),
 			handoff: Type.Optional(
@@ -211,7 +211,7 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
 		description:
 			"Ask a read-only agent to look at something and report back. Blocks until it answers.",
 		promptSnippet:
-			"delegate — hand a question to an explorer, reviewer or advisor and wait for what it finds.",
+			"hand a question to an explorer, reviewer or advisor and wait for what it finds.",
 		parameters: Type.Object({
 			agent: Type.Union(DELEGABLE.map((kind) => Type.Literal(kind))),
 			persona: Type.String({
@@ -338,8 +338,14 @@ export function declareAgentTools(deps: {
 			holders: ["worker"],
 		},
 		{
+			// NOT `read-only`. A read-only agent registers nothing — `extension.ts`
+			// returns early for a child with no wiring — and `delegate` is not in
+			// its `--tools` allowlist either, so it was doubly absent while its
+			// generated brief promised it. The phantom grant, inside the registry
+			// built to prevent it. A reader answers its caller; it does not
+			// recruit.
 			definition: createDelegateTool(deps.delegate),
-			holders: ["maestro", "worker", "read-only"],
+			holders: ["maestro", "worker"],
 		},
 	];
 }

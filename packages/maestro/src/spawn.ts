@@ -342,21 +342,55 @@ export function pidAlive(pid: number): boolean {
 // ─── Read-only agents: a call that returns ───────────────────────────────────
 
 /**
- * pi's own tools a read-only agent keeps. OURS are not in this list — those
- * come from the declaration, by holder.
+ * Every tool pi itself defines. Pinned, because this list is passed to pi as a
+ * `--tools` ALLOWLIST and pi silently ignores a name it does not recognise —
+ * so a typo or a wish narrows an agent's tools with no error anywhere.
  *
- * There is one of these. The old system had two that had drifted apart: one
- * copy allowed a `plan` tool the other did not, and nothing reconciled them,
- * so what "read-only" meant depended on which file you were standing in.
+ * Re-derive with:
+ *   grep -rhoE 'name:\s*"[a-z_]+"' \
+ *     node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.js | sort -u
  */
-export const READ_ONLY_BUILTINS = [
-	"read",
-	"grep",
+export const PI_BUILTINS = [
+	"bash",
+	"edit",
 	"find",
+	"grep",
 	"ls",
-	"websearch",
-	"webfetch",
+	"read",
+	"write",
 ] as const;
+
+/**
+ * The tools a read-only agent is launched with. A subset of {@link PI_BUILTINS}
+ * — the ones that cannot change the tree.
+ *
+ * This list used to include `websearch` and `webfetch`. **Neither exists in
+ * pi.** Both were inert in the allowlist, and worse, a guard test unioned this
+ * list into its definition of "tools that exist" — so a refusal reading "Use
+ * the webfetch tool" passed the very test written to catch refusals naming
+ * tools nobody holds. A hand-written list serving as both the configuration
+ * AND the test's notion of truth cannot catch its own errors.
+ *
+ * It also does NOT contain any tool of ours. A read-only agent registers
+ * nothing: `extension.ts` returns early for a child with no wiring, so what it
+ * is launched with is the whole of what it has.
+ */
+export const READ_ONLY_BUILTINS = ["read", "grep", "find", "ls"] as const;
+
+/**
+ * The tool list a read-only agent's brief carries.
+ *
+ * Generated from what it is actually LAUNCHED with, not from the registry.
+ * `describeFor("read-only")` used to supply this, and it named `delegate` —
+ * a tool the reader could not call, because it never registers our tools and
+ * because `delegate` was not in its allowlist either. That is the phantom
+ * grant this whole registry exists to prevent, reproduced inside it.
+ */
+export function describeReadOnlyTools(): string {
+	return `## Your tools\n\n${READ_ONLY_BUILTINS.map((name) => `- ${name}`).join(
+		"\n",
+	)}\n\nRead and search only. You cannot change anything, and you have no shell.`;
+}
 
 export interface ReadOnlyInvocation {
 	readonly cwd: string;

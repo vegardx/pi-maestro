@@ -25,9 +25,13 @@ import { gateBash } from "../packages/maestro/src/bash-gate.js";
 import { executionPolicyPreset } from "../packages/maestro/src/execution-policy.js";
 import { startWorker } from "../packages/maestro/src/extension.js";
 import { mode } from "../packages/maestro/src/mode.js";
-import { READ_ONLY_BUILTINS } from "../packages/maestro/src/spawn.js";
+import {
+	describeReadOnlyTools,
+	PI_BUILTINS,
+	READ_ONLY_BUILTINS,
+} from "../packages/maestro/src/spawn.js";
 
-const SOURCES = ["bash-policy.ts", "bash-classifier.ts"];
+const SOURCES = ["bash-policy.ts"];
 
 /**
  * The tools a worker really holds, read off the REAL entry point.
@@ -58,8 +62,16 @@ async function workerTools(): Promise<Set<string>> {
 	// registration is synchronous and has already happened.
 	await started.catch(() => undefined);
 	// pi's builtins are real tools an agent can call; they are simply not ours
-	// to declare. A worker gets the writer set, a superset of these.
-	return new Set([...registered, ...READ_ONLY_BUILTINS]);
+	// to declare. A worker is launched with no `--tools` allowlist, so it gets
+	// all of them.
+	//
+	// PI_BUILTINS, not READ_ONLY_BUILTINS. Unioning the read-only ALLOWLIST here
+	// is what let this test pass over a refusal reading "Use the webfetch tool":
+	// that list was hand-written and contained `webfetch` and `websearch`, which
+	// pi does not define. A list that is simultaneously the configuration and
+	// the test's notion of truth cannot catch its own errors — each role hides
+	// the other's mistakes.
+	return new Set([...registered, ...PI_BUILTINS]);
 }
 
 /**
@@ -98,8 +110,13 @@ describe("a refusal never names a tool that does not exist", () => {
 		// Pinned because the whole check is a string search. A refactor that
 		// rewords every message would otherwise turn this file into a test that
 		// passes by finding nothing.
+		// One source now: `bash-classifier.ts` was deleted — it was unreachable
+		// (zero callers) and its refusals taught an LLM to suggest `webfetch`,
+		// which pi does not define. The pin stays, at the count that is true
+		// today, so a refactor that reworded every refusal cannot turn this file
+		// into a test that passes by finding nothing.
 		const named = namedInRefusals();
-		expect(named.length).toBeGreaterThanOrEqual(4);
+		expect(named.length).toBeGreaterThanOrEqual(1);
 		expect(named.map((n) => n.tool)).toContain("commit");
 	});
 
@@ -121,6 +138,23 @@ describe("a refusal never names a tool that does not exist", () => {
 		expect(decision.kind).toBe("deny");
 		expect(decision.reason).toContain("commit tool");
 		expect((await workerTools()).has("commit")).toBe(true);
+	});
+
+	it("names in READ_ONLY_BUILTINS every one a tool pi actually defines", () => {
+		// The allowlist is passed to pi, which silently ignores names it does not
+		// recognise — so a wish narrows an agent's tools with no error anywhere.
+		// `websearch` and `webfetch` sat here for months doing exactly that.
+		for (const name of READ_ONLY_BUILTINS)
+			expect(PI_BUILTINS as readonly string[]).toContain(name);
+	});
+
+	it("promises a read-only agent only what it is launched with", () => {
+		// Its brief used to come from `describeFor("read-only")` and named
+		// `delegate`, which it neither registers nor is allowed to call.
+		const brief = describeReadOnlyTools();
+		for (const name of READ_ONLY_BUILTINS) expect(brief).toContain(name);
+		expect(brief).not.toContain("delegate");
+		expect(brief).not.toContain("bash");
 	});
 
 	it("does not tell a worker to ship, because shipping is the maestro's", () => {

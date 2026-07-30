@@ -292,12 +292,18 @@ describe("the agent tools are declared, not listed", () => {
 		expect(registry.grantsFor("read-only")).not.toContain("finish");
 	});
 
-	it("gives delegate to everyone, and lets the depth rule do the limiting", () => {
-		// A reader consulting another reader is ordinary. `checkSpawn` stops it
-		// going too deep or producing a writer, from one place — rather than by
-		// withholding the tool from some list that can drift.
-		for (const holder of ["maestro", "worker", "read-only"] as const)
+	it("gives delegate to the two postures that can actually call it", () => {
+		// It was granted to `read-only` too, on the reasoning that a reader
+		// consulting another reader is ordinary and `checkSpawn` would do the
+		// limiting. Both halves were true and the grant was still a phantom: a
+		// read-only child registers NOTHING (`extension.ts` returns early for a
+		// child with no wiring) and `delegate` is not in its `--tools` allowlist
+		// either. So every reader was handed a generated brief naming a tool it
+		// could not call, twice over — inside the registry built to stop exactly
+		// that.
+		for (const holder of ["maestro", "worker"] as const)
 			expect(registry.grantsFor(holder)).toContain("delegate");
+		expect(registry.grantsFor("read-only")).toEqual([]);
 	});
 
 	it("describes each tool from its own declaration", () => {

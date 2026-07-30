@@ -1,44 +1,46 @@
 # AGENTS.md
 
 Guidance for coding agents (Claude, pi, or any harness) working in this repo.
-pi-maestro is a **pi coding-agent extension stack** (`package.json` `pi.extensions`)
-that turns a single `pi` into a maestro orchestrating workers over RPC + tmux.
+pi-maestro is a **pi coding-agent extension stack** (`package.json`
+`pi.extensions`). One `pi` process becomes a maestro; it spawns detached worker
+processes that dial home over a unix socket and speak the small protocol in
+`packages/maestro/src/protocol.ts`.
+
+Depth decides what a process is. Depth 0 is the seat, depth 1 a worker, depth 2
+a read-only agent. `packages/maestro/src/extension.ts` reads that once, at load.
 
 ## Build / check
 
-- `npm run check` — the full gate: biome → tsc → boundary linter → feature-flag
-  contract → docs check → cutover audit → vitest → smoke. Run it before calling
-  a change done.
+- `npm run check` — the full gate: biome → tsc → feature-flag contract → docs
+  check → vitest → smoke. Run it before calling a change done.
 - `npm test` — unit tests only (fast). `npm run lint:fix` — autoformat.
 
 ## Testing tiers
 
-There are **three** tiers; pick the lowest one that can catch the bug you care
-about:
+Pick the lowest tier that can catch the bug you care about — but read the
+warning under tier 3 before deciding you are finished.
 
 1. **Unit** (`npm test`) — pure logic, no I/O.
-2. **Hermetic e2e** (`npm run test:e2e`) — boots the *real* orchestrator
-   (engine + execution adapter + RPC) with fakes for tmux/pi/git. Deterministic,
-   ~1s. Author new scenarios here when you touch the lifecycle. See
-   `test/e2e/lifecycle.e2e.test.ts` and `docs/e2e-testing.md`.
-3. **Full-stack driver** (`test/e2e/driver/`) — boots a **real `pi --mode rpc`**
-   with the whole maestro stack and drives it from outside through a full
-   deliverable lifecycle (plan → workers → review → ship). Two ways to run it:
+2. **Hermetic e2e** (`npm run test:e2e`) — `test/e2e/maestro/drive.e2e.test.ts`
+   boots a real pi seat, real worktrees, real sockets and real detached
+   processes, against a scripted mock model
+   (`test/e2e/maestro/scripted-model.ts`). Deterministic, seconds.
+3. **Live drive** (`npm run e2e:live`) — `test/e2e/maestro/live.ts`: real
+   models, real commits, a local bare remote, a disposable repo under
+   `~/src/github.com/`. Flags: `--prod-models`, `--keep`, `--recover` (SIGKILLs
+   the maestro mid-flight and starts a new one over the same store).
 
-   - **Scripted** (`npm run test:e2e:full`) — fixed prompt sequence + rule-based
-     answers, against a mock model provider. Deterministic; for CI.
-   - **LLM-driver** (you drive it) — a control CLI + daemon lets an agent boot
-     the harness, observe events, **answer the maestro's questions**, and assert
-     on real shipped outcomes, against real models + a disposable GitHub repo.
-     Invoke the **`drive-maestro-e2e`** skill (`.agents/skills/drive-maestro-e2e/`),
-     or drive `node_modules/.bin/jiti test/e2e/driver/cli.ts` directly:
-     `start` (background) → `prompt` / `poll` / `answer` → `assert` → `stop`.
+**Tiers 1 and 2 cannot see the seam between processes.** Four bugs in one day
+were found only by tier 3, and each had a full green suite over it: a shell
+gate that refused every commit because the tool it named was never declared; an
+identity carried as environment that silently overrode the developer's
+path-scoped git config; a restarted maestro that wedged a plan while narrating
+nothing; children inheriting env vars that were omitted expecting absence.
 
-   Why external, not an internal `/test` command: pi already exposes the control
-   surface (`--mode rpc` + the `extension_ui_request` dialog sub-protocol), so
-   the harness under test stays 100% real and unmodified while an outside agent
-   drives it. Answering the maestro's mid-run questions is just the driver agent
-   doing its job.
+So: **run the live drive before calling done anything that touches the shell
+gate, the spawn path, git identity, or shipping.** No CI job will do it for you
+— e2e cannot run on GitHub today, which is why the workflow was deleted rather
+than left green over the wrong package.
 
 ## Conventions
 
@@ -46,5 +48,20 @@ about:
   commit straight to `main`.
 - TypeScript throughout; imports use explicit `.js` extensions (nodenext).
   Match the surrounding file's style (tabs, double quotes).
-- **Never weaken a test or the harness to make a run pass.** If the full-stack
-  driver fails, that's a finding about the harness, not the test.
+- **Never weaken a test or the harness to make a run pass.** If a drive fails,
+  that is a finding about the system, not about the test.
+- **A conditional skip inside a test is a test that reports on its
+  precondition.** If a test needs one, assert the precondition in its own test
+  rather than branching around it — several tests here reported green for
+  months while asserting nothing, because the branch always fired.
+
+## The defect this codebase is organised against
+
+A capability used to live in four independent places — the grant, the
+implementation, the agent-facing description, the verification — joined only by
+strings, with nothing failing when they disagreed.
+
+`ToolRegistry.declare` and `PersonaCatalogue.declare` reject at construction:
+grants are derived, descriptions generated, and prose that names a declared
+tool is refused. When you add anything with a name, ask where the *second*
+place that name lives is, and whether anything would fail if the two disagreed.

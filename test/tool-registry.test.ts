@@ -127,7 +127,7 @@ describe("the agent-facing description is generated, never written", () => {
 				name: "work",
 				label: "Work",
 				description: "A long description meant for the tool picker.",
-				promptSnippet: "work — the items on a deliverable.",
+				promptSnippet: "the items on a deliverable.",
 				parameters: Type.Object({}),
 				async execute() {
 					return {
@@ -141,5 +141,75 @@ describe("the agent-facing description is generated, never written", () => {
 		expect(ToolRegistry.declare([withSnippet]).describeFor("worker")).toContain(
 			"work — the items on a deliverable.",
 		);
+	});
+
+	it("REFUSES a summary that opens with the tool's own name", () => {
+		// Every promptSnippet in the codebase did this, so every generated brief
+		// read `- finish — finish — report…`. Cosmetic until you remember this
+		// text is the only description of its tools an agent gets, and a brief
+		// that reads like a formatting bug is one an agent trusts less.
+		const stutter: ToolDeclaration = {
+			definition: defineTool({
+				name: "work",
+				label: "Work",
+				description: "Long description.",
+				promptSnippet: "work — the items on a deliverable.",
+				parameters: Type.Object({}),
+				async execute() {
+					return {
+						content: [{ type: "text" as const, text: "" }],
+						details: {},
+					};
+				},
+			}),
+			holders: ["worker"],
+		};
+		expect(() => ToolRegistry.declare([stutter])).toThrow(
+			/opens with its own name/,
+		);
+	});
+
+	it("catches the stutter in a DESCRIPTION too, not just a snippet", () => {
+		// With no snippet the summary is the description's first sentence, so
+		// the same mistake hides one field over.
+		const stutter: ToolDeclaration = {
+			definition: defineTool({
+				name: "work",
+				label: "Work",
+				description: "Work the items on a deliverable. More prose after.",
+				parameters: Type.Object({}),
+				async execute() {
+					return {
+						content: [{ type: "text" as const, text: "" }],
+						details: {},
+					};
+				},
+			}),
+			holders: ["worker"],
+		};
+		expect(() => ToolRegistry.declare([stutter])).toThrow(
+			/opens with its own name/,
+		);
+	});
+
+	it("does not trip on a name that merely starts a longer word", () => {
+		// `plan` must not reject "planning is done elsewhere" — the guard matches
+		// the name followed by a space, not a prefix.
+		const fine: ToolDeclaration = {
+			definition: defineTool({
+				name: "plan",
+				label: "Plan",
+				description: "Planning happens here, in one call.",
+				parameters: Type.Object({}),
+				async execute() {
+					return {
+						content: [{ type: "text" as const, text: "" }],
+						details: {},
+					};
+				},
+			}),
+			holders: ["maestro"],
+		};
+		expect(() => ToolRegistry.declare([fine])).not.toThrow();
 	});
 });

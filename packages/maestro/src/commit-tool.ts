@@ -75,6 +75,11 @@ export function createCommitTool(deps: CommitToolDeps): ToolDefinition {
 			"Record your work on this deliverable's branch. Name the files you changed; " +
 			"commit as you finish each piece rather than once at the end. " +
 			"The maestro pushes and opens the pull request — you never do.",
+		// Without this, the generated brief takes the first SENTENCE — which is
+		// the half that says what the tool does and loses both halves that stop a
+		// worker going wrong: name your files, and you do not push.
+		promptSnippet:
+			"record work on your branch. Name the files; the maestro pushes, you never do.",
 		parameters: Type.Object({
 			message: Type.String({
 				description:

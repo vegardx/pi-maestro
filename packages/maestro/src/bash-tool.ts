@@ -166,7 +166,32 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 
 /** The `bash` tool for a holder, with its safeguards attached. */
 export function createBashTool(deps: BashToolDeps): ToolDefinition {
-	return createBashToolDefinition(deps.cwd, {
+	const base = createBashToolDefinition(deps.cwd, {
 		operations: createGatedBashOperations(deps),
 	}) as ToolDefinition;
+
+	// pi describes its bash as "Execute bash commands (ls, grep, find, etc.)",
+	// and that is what a worker used to read about the MOST constrained tool it
+	// holds. Nothing said the shell is classified, that writes are confined to
+	// the worktree by the OS, or that committing goes somewhere else — so a
+	// worker discovered each of those by being refused, mid-deliverable. One
+	// live drive lost an entire deliverable to precisely that discovery.
+	//
+	// A refusal is still the backstop. This is the part that means an agent
+	// rarely has to hit it.
+	return {
+		...base,
+		description:
+			"Run a shell command. Every command is classified first and runs confined " +
+			"to your working tree, so a mistake cannot reach the rest of the machine. " +
+			"Some commands are refused with a reason and something to do instead — " +
+			"read the reason rather than retrying: it is an answer, not a failure. " +
+			(deps.holder === "worker"
+				? "Committing is not one of these commands; use the commit tool. Pushing and pull requests are the maestro's."
+				: "Committing and pushing belong to the workers and to shipping, not here."),
+		promptSnippet:
+			deps.holder === "worker"
+				? "run a shell command, classified and confined to your worktree. Not for committing — that is the commit tool."
+				: "run a shell command, classified and confined to the repository.",
+	};
 }

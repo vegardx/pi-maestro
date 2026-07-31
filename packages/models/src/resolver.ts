@@ -390,6 +390,52 @@ export async function resolveOtherFamily(
 }
 
 /**
+ * Resolve a NAMED family through the caller's binding and roster: walk the
+ * persona allowance's tiers in order and take the first available entry
+ * belonging to that family. This is the `family` parameter on the subagent
+ * tool — how a fan-out lead starts one member per family the spread named.
+ *
+ * The lookup IS the guard. An unknown or unavailable family throws, naming
+ * the families the persona's tiers actually reach, so the refusal teaches the
+ * caller what it could have asked for. It never falls back: a member
+ * requested as one family that silently ran as another would be the fan-out
+ * lying about its own diversity, which is the exact claim the family
+ * parameter exists to make true.
+ */
+export async function resolveFamily(
+	ctx: ExtensionContext,
+	request: ModelResolutionRequest & { readonly family: string },
+): Promise<ModelResolution> {
+	const config = readConfigSafe(ctx);
+	if (!config)
+		throw new ModelResolutionError(
+			`family ${request.family} requested but no v2 roster is configured`,
+		);
+	const tiers = config.allowances[request.persona]?.tiers ?? [];
+	const reachable = new Set<string>();
+	for (const tier of tiers) {
+		let walk: TierWalk;
+		try {
+			walk = await walkTier(ctx, request, tier);
+		} catch {
+			// No binding or roster to walk — this tier reaches nothing; the
+			// refusal below reports the whole picture rather than throwing per tier.
+			continue;
+		}
+		for (const entry of walk.resolved)
+			if (entry.fact.family) reachable.add(entry.fact.family);
+		const winner = walk.resolved.find(
+			(entry) => entry.fact.available && entry.fact.family === request.family,
+		);
+		if (winner) return tierResolution(request, tier, walk, winner);
+	}
+	throw new ModelResolutionError(
+		`no available model in family ${request.family} for persona ${request.persona} — ` +
+			`the bound roster reaches: ${[...reachable].join(", ") || "none"}`,
+	);
+}
+
+/**
  * The caller's own model, for a request that asked for no tier. `reason` is
  * set when this inherit is a DEGRADATION (an `other-family` request with
  * nowhere to go) — recorded so nothing degrades silently.

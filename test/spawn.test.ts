@@ -17,13 +17,14 @@ import { MaestroLink } from "../packages/maestro/src/link.js";
 import { PROTOCOL_VERSION } from "../packages/maestro/src/protocol.js";
 import {
 	AGENT_ID_ENV,
-	askReadOnly,
 	buildWorkerCommand,
 	checkSpawn,
 	currentDepth,
 	DEPTH_ENV,
 	EmptyAnswer,
+	guardReadOnlySpawn,
 	MAX_DEPTH,
+	promptForAnswer,
 	type ReadOnlySession,
 	SOCK_ENV,
 	TOKEN_ENV,
@@ -214,7 +215,12 @@ describe("who may start whom", () => {
 	});
 });
 
-describe("a read-only agent is a call that returns", () => {
+describe("the read-only primitives: the guard, and the turn", () => {
+	// There is no one-shot `askReadOnly` any more — its last consumer, the
+	// fan-out that stapled readers' answers together, is gone, and every reader
+	// is a held session now. What survives are the primitives `SubagentSessions`
+	// composes: the spawn guard, and the turn that refuses to read silence as
+	// an answer.
 	const session = (text: string | null) => {
 		const calls: string[] = [];
 		const impl: ReadOnlySession = {
@@ -234,53 +240,45 @@ describe("a read-only agent is a call that returns", () => {
 		return { impl, calls };
 	};
 
-	const ask = (kind: AgentKind, text: string | null, depth = 1) => {
-		const s = session(text);
-		return {
-			calls: s.calls,
-			result: askReadOnly(
-				{
-					kind,
-					cwd: "/repo",
-					brief: "Look for X.",
-					prompt: "Review the diff.",
-					parentDepth: depth,
-				},
-				async () => s.impl,
-			),
-		};
-	};
+	const spawn = (kind: AgentKind, depth = 1) => ({
+		kind,
+		cwd: "/repo",
+		brief: "Look for X.",
+		prompt: "Review the diff.",
+		parentDepth: depth,
+	});
 
-	it("starts, prompts, and returns what was said", async () => {
-		const { calls, result } = ask("read-only", "  Two findings.  ");
-		expect(await result).toBe("Two findings.");
-		expect(calls).toEqual(["start", "prompt:Review the diff.", "stop"]);
+	it("prompts, and returns what was said", async () => {
+		const s = session("  Two findings.  ");
+		await expect(
+			promptForAnswer(s.impl, "read-only", "Review the diff."),
+		).resolves.toBe("Two findings.");
+		expect(s.calls).toEqual(["prompt:Review the diff."]);
 	});
 
 	it("treats an empty answer as a failure, not as 'nothing found'", async () => {
 		// Silence and "I looked and found nothing" are different claims. A system
 		// that reads them alike is how six real findings became "(agent produced
 		// no summary)".
-		await expect(ask("read-only", "   ").result).rejects.toThrow(EmptyAnswer);
-		await expect(ask("read-only", null).result).rejects.toThrow(EmptyAnswer);
+		await expect(
+			promptForAnswer(session("   ").impl, "read-only", "look"),
+		).rejects.toThrow(EmptyAnswer);
+		await expect(
+			promptForAnswer(session(null).impl, "read-only", "look"),
+		).rejects.toThrow(EmptyAnswer);
 	});
 
-	it("stops the session even when the answer was no good", async () => {
-		const { calls, result } = ask("read-only", null);
-		await expect(result).rejects.toThrow(EmptyAnswer);
-		expect(calls).toContain("stop");
-	});
-
-	it("refuses to await something nobody waits on", async () => {
-		await expect(ask("worker", "anything").result).rejects.toThrow(
+	it("refuses to await something nobody waits on", () => {
+		expect(() => guardReadOnlySpawn(spawn("worker"))).toThrow(
 			/is not asked and awaited/,
 		);
 	});
 
-	it("obeys the nesting limit", async () => {
-		await expect(ask("read-only", "x", MAX_DEPTH).result).rejects.toThrow(
+	it("obeys the nesting limit", () => {
+		expect(() => guardReadOnlySpawn(spawn("read-only", MAX_DEPTH))).toThrow(
 			/nesting limit/,
 		);
+		expect(() => guardReadOnlySpawn(spawn("read-only"))).not.toThrow();
 	});
 });
 

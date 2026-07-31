@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	familiesIn,
 	routeModel,
+	routeSpawn,
 	routeSpread,
 } from "../packages/maestro/src/model-routing.js";
 import { BUILT_IN_PERSONAS } from "../packages/maestro/src/personas.js";
@@ -208,6 +209,49 @@ describe("routeSpread", () => {
 		const ctx = makeCtx();
 		try {
 			expect(await routeSpread(ctx, "never-declared")).toEqual([]);
+		} finally {
+			cleanup(ctx);
+		}
+	});
+});
+
+describe("routeSpawn", () => {
+	// The subagent tool's one routing entry. The dispatch used to live twice,
+	// as identical lambdas in the seat and the agent runtime — two copies of a
+	// dispatch is how one of them stops being wired.
+
+	it("routes a family request to exactly that family", async () => {
+		const ctx = makeCtx(
+			withAllowances({ "code-review": { tiers: ["standard"] } }),
+		);
+		try {
+			const slots = await routeSpawn(ctx, {
+				persona: "code-review",
+				fanOut: false,
+				family: "Anthropic",
+			});
+			expect(slots).toHaveLength(1);
+			expect(slots[0]).toMatchObject({
+				modelId: "gw/opus",
+				family: "Anthropic",
+			});
+		} finally {
+			cleanup(ctx);
+		}
+	});
+
+	it("lets a family refusal through, naming what exists", async () => {
+		const ctx = makeCtx(
+			withAllowances({ "code-review": { tiers: ["standard"] } }),
+		);
+		try {
+			await expect(
+				routeSpawn(ctx, {
+					persona: "code-review",
+					fanOut: false,
+					family: "Google",
+				}),
+			).rejects.toThrow(/reaches: OpenAI, Anthropic/);
 		} finally {
 			cleanup(ctx);
 		}

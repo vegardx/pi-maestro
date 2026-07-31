@@ -125,7 +125,7 @@ describe("writers are authored, never spawned", () => {
 	// The "refuses a task naming a worker as its subagent" case is gone with
 	// the field it validated: `by` carries only a persona now, so a writer as a
 	// task's subagent is unrepresentable rather than refused. The rule survives
-	// at spawn time — `askReadOnly` refuses a writer kind — and in the brief
+	// at spawn time — `guardReadOnlySpawn` refuses a writer kind — and in the brief
 	// path, which refuses a writer's persona.
 
 	it("accepts read-only subagent tasks, including a fan-out", () => {

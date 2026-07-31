@@ -76,8 +76,10 @@ There is no review command. A worker hands its own diff to a reviewer and acts
 on what comes back before it reports — which is the point, since a review nobody
 acts on is a review that did not happen.
 
-`subagent` can fan out: one reader per model family, every answer returned
-**unreconciled**. Flattening several opinions into one is how findings get lost.
+`subagent` can fan out: one lead on the caller's own model consults a blind
+member per model family, then aggregates — duplicates merged, every model and
+family name removed — so the caller reads clean findings, not a stack of
+attributed opinions.
 
 ## Safeguards
 

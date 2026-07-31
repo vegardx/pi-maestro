@@ -19,6 +19,7 @@ import {
 	directFor,
 	type InheritedModel,
 	type ModelResolution,
+	resolveFamily,
 	resolveModel,
 	resolveModels,
 	resolveOtherFamily,
@@ -121,6 +122,53 @@ export async function routeSpread(
 		width,
 	);
 	return resolved.map(asRouted);
+}
+
+/**
+ * A NAMED family's model, resolved through the caller's binding and roster.
+ *
+ * This is the `family` parameter on the subagent tool: it is how a fan-out
+ * lead starts one member per family its brief listed. The resolver throws on
+ * an unknown or unavailable family, naming the families the persona's tiers
+ * reach — the lookup is the guard, and there is deliberately no fallback: a
+ * member requested as one family and run as another would be the fan-out
+ * lying about its own diversity.
+ */
+export async function routeFamily(
+	ctx: ExtensionContext,
+	persona: string,
+	family: string,
+	inherit?: InheritedModel,
+): Promise<RoutedModel> {
+	const resolved = await resolveFamily(ctx, {
+		persona,
+		family,
+		...(inherit ? { inherit } : {}),
+	});
+	return asRouted(resolved);
+}
+
+/**
+ * The subagent tool's one routing entry: a request names at most one of
+ * `family` (a member start — exactly that family, or a refusal) or `fanOut`
+ * (the spread), and a bare request is a direct start. Kept here rather than
+ * inlined at each wiring site because the seat and the agent runtime used to
+ * carry identical copies of this dispatch, and two copies of a dispatch is
+ * how one of them stops being wired.
+ */
+export async function routeSpawn(
+	ctx: ExtensionContext,
+	request: {
+		readonly persona: string;
+		readonly fanOut: boolean;
+		readonly family?: string;
+	},
+): Promise<readonly RoutedModel[]> {
+	if (request.family)
+		return [await routeFamily(ctx, request.persona, request.family)];
+	if (request.fanOut) return routeSpread(ctx, request.persona);
+	const one = await routeModel(ctx, request.persona);
+	return one ? [one] : [];
 }
 
 /**

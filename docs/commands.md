@@ -45,6 +45,11 @@ Held by the maestro:
   answer. The subagent stays held afterwards: `{id, question}` asks it a
   follow-up in the conversation it kept, and calling with no arguments lists
   what is held. "One-shot" is just a caller choosing not to ask twice.
+  `fanOut` reviews across model families: one lead on the caller's own model
+  consults a blind member per family and returns a single aggregated,
+  de-attributed answer. `family` starts a subagent on a named family's model,
+  resolved through the roster — an unknown family is refused naming the ones
+  that exist.
 
 Held by a worker:
 

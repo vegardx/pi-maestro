@@ -49,7 +49,7 @@ const settle = () => new Promise((r) => setTimeout(r, 20));
 
 function next<T>(
 	link: MaestroLink,
-	event: "connected" | "done" | "status" | "agentError",
+	event: "connected" | "done" | "status" | "agentError" | "subagents",
 ): Promise<[string, T]> {
 	return new Promise((resolve) => {
 		link.once(event, (id: string, payload: unknown) =>
@@ -146,6 +146,57 @@ describe("what an agent says while it works", () => {
 			state: "working",
 			detail: "running the tests",
 		});
+	});
+});
+
+describe("a worker's held subagents ride the wire", () => {
+	const REVIEWER = {
+		id: "code-review-1",
+		persona: "code-review",
+		state: "answering" as const,
+		asked: 1,
+	};
+
+	it("keeps the latest snapshot beside the connection, whole for whole", async () => {
+		const [link, path] = await maestro();
+		const a = agent();
+		await a.connect(path, { agentId: "worker-api", token: TOKEN });
+
+		const first = next<readonly { id: string }[]>(link, "subagents");
+		a.subagents([REVIEWER]);
+		const [id, held] = await first;
+		expect(id).toBe("worker-api");
+		expect(held).toEqual([REVIEWER]);
+		expect(link.heldBy("worker-api")).toEqual([REVIEWER]);
+
+		// The next snapshot REPLACES — full map, not a delta, so the maestro
+		// never has to reconcile what it missed.
+		const second = next(link, "subagents");
+		a.subagents([]);
+		await second;
+		expect(link.heldBy("worker-api")).toEqual([]);
+	});
+
+	it("answers nothing for a worker that is gone — its readers died with it", async () => {
+		const [link, path] = await maestro();
+		const a = agent();
+		await a.connect(path, { agentId: "worker-api", token: TOKEN });
+		const seen = next(link, "subagents");
+		a.subagents([REVIEWER]);
+		await seen;
+
+		// Release, kill and crash all end here: the socket closes, the map entry
+		// goes, and the snapshot goes with it. A held reader is a child process
+		// of its worker, so an empty answer is the truth, not a miss.
+		a.close();
+		await settle();
+		expect(link.heldBy("worker-api")).toEqual([]);
+	});
+
+	it("answers nothing for a worker that never reported", async () => {
+		const [link, path] = await maestro();
+		await agent().connect(path, { agentId: "worker-api", token: TOKEN });
+		expect(link.heldBy("worker-api")).toEqual([]);
 	});
 });
 

@@ -223,6 +223,14 @@ export function startWorker(
 	return dialHome(wiring).then((connected) => {
 		link = connected;
 		connected.status("working");
+		// The maestro sees this worker's held readers in its own listing, so a
+		// human watching the seat can tell "the worker is consulting a reviewer"
+		// from "the worker has gone quiet". Wired only once the handshake is
+		// done: a change made before there was a wire is fine to lose, because
+		// every message is the FULL map and the snapshot sent right here catches
+		// the maestro up.
+		subagent.sessions.onChange((held) => connected.subagents(held));
+		connected.subagents(subagent.sessions.list());
 		return connected;
 	});
 }

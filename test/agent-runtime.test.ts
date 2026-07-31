@@ -518,6 +518,123 @@ describe("a started subagent stays its caller's", () => {
 	});
 });
 
+describe("the seat's listing shows its subtree, every row naming its holder", () => {
+	// The rows come from two sources with different affordances: the seat's own
+	// map answers to {id, question}; a descendant's row is a worker's report —
+	// status — and asking it must be corrected to its holder, not half-work.
+	const harness = (
+		descendants: () => readonly {
+			id: string;
+			state: string;
+			modelId?: string;
+			held: readonly {
+				id: string;
+				persona: string;
+				modelId?: string;
+				state: "answering" | "idle";
+				asked: number;
+			}[];
+		}[],
+	) => {
+		const open = async () => ({
+			async start() {},
+			async prompt() {},
+			async getLastAssistantText() {
+				return "an answer";
+			},
+			async stop() {},
+		});
+		return createSubagentTool({
+			cwd: () => "/repo",
+			depth: () => 0,
+			sessions: new SubagentSessions(open),
+			briefFor: (persona) => `brief:${persona}`,
+			descendants,
+		});
+	};
+
+	const running = () => [
+		{
+			id: "api",
+			state: "running",
+			modelId: "m-sonnet",
+			held: [
+				{
+					id: "code-review-1",
+					persona: "code-review",
+					modelId: "m-opus",
+					state: "answering" as const,
+					asked: 1,
+				},
+			],
+		},
+	];
+
+	it("renders own rows, the run's workers, and their reported readers", async () => {
+		const tool = harness(running);
+		await call(tool, { persona: "explorer", question: "look around" });
+
+		const listing = await call(tool, {});
+		const text = listing.content[0]?.text as string;
+		const lines = text.split("\n");
+		expect(lines[0]).toMatch(
+			/^id\s+persona\s+model\s+state\s+asked\s+held by$/,
+		);
+		// Yours: askable. The run's worker: named the way the run names it.
+		// The worker's reader: indented under it, held by the worker.
+		expect(text).toMatch(
+			/explorer-1\s+explorer\s+\(inherited\)\s+idle\s+1\s+you$/m,
+		);
+		expect(text).toMatch(
+			/worker:api\s+deliverable-worker\s+m-sonnet\s+running\s+-\s+you \(the run\)$/m,
+		);
+		expect(text).toMatch(
+			/^ {2}code-review-1\s+code-review\s+m-opus\s+answering\s+1\s+`api`$/m,
+		);
+		expect(text).toContain("status — they answer their holder");
+		expect(listing.details?.workers).toEqual([
+			{
+				id: "api",
+				state: "running",
+				held: [
+					{ id: "code-review-1", persona: "code-review", state: "answering" },
+				],
+			},
+		]);
+	});
+
+	it("shows the run's workers even when the seat holds nothing itself", async () => {
+		const listing = await call(harness(running), {});
+		const text = listing.content[0]?.text as string;
+		expect(text).not.toContain("You hold no subagents");
+		expect(text).toContain("worker:api");
+	});
+
+	it("still says so when there is nothing anywhere", async () => {
+		const listing = await call(
+			harness(() => []),
+			{},
+		);
+		expect(listing.content[0]?.text).toContain("You hold no subagents");
+	});
+
+	it("corrects an ask on a descendant's id to its holder", async () => {
+		// The listing just SHOWED this id, so "no subagent `code-review-1`" would
+		// be true and useless. The corrective error names whose it is.
+		await expect(
+			call(harness(running), { id: "code-review-1", question: "anything" }),
+		).rejects.toThrow(/`code-review-1` is held by `api`, who reports to you/);
+	});
+
+	it("leaves a plain miss to the map — the map stays the permission", async () => {
+		const tool = harness(running);
+		await call(tool, { persona: "explorer", question: "look" });
+		await expect(
+			call(tool, { id: "reviewer-9", question: "anything" }),
+		).rejects.toThrow(/no subagent `reviewer-9` — yours are: explorer-1/);
+	});
+});
+
 describe("the agent tools are declared, not listed", () => {
 	const registry = ToolRegistry.declare(
 		declareAgentTools({

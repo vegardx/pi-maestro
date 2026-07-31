@@ -163,6 +163,28 @@ export function createAskTransport(asker: () => Asker): {
 	};
 }
 
+/**
+ * One live worker of the run, with the subagents it last reported holding.
+ *
+ * ONE HOP ONLY, by construction. A worker reports its held map over the socket
+ * it already dials, so the maestro sees its own readers, the run's workers,
+ * and each worker's readers. A reader's own readers — the grandchildren of a
+ * reader — would need a channel that does not exist: a reader is a call over
+ * pi's session RPC, and the `ReadOnlySession` slice is start/prompt/read/stop
+ * with no event surface underneath it. Until one exists, a reader's subtree is
+ * its own map, invisible from above, and this type deliberately does not
+ * pretend otherwise.
+ */
+export interface DescendantHolder {
+	/** The deliverable id — how the run, and every error here, names the worker. */
+	readonly id: string;
+	/** The run's state for it. Only live workers appear at all. */
+	readonly state: string;
+	readonly modelId?: string;
+	/** What it last reported over the wire. Status: only the holder can ask them. */
+	readonly held: readonly HeldSubagent[];
+}
+
 export interface SubagentDeps {
 	readonly cwd: () => string;
 	readonly depth: () => number;
@@ -199,6 +221,15 @@ export interface SubagentDeps {
 	) => Promise<
 		readonly { readonly modelId: string; readonly family?: string }[]
 	>;
+	/**
+	 * The caller's SUBTREE below its own held map: the run's live workers and
+	 * what each reported holding. Supplied by the seat only — a worker's
+	 * subtree IS its own map until reader-grandchildren have a channel — and
+	 * folded into the `{}` listing rather than given a tool of its own,
+	 * because "what is running under me" is the same question as "what do I
+	 * hold", answered one level deeper.
+	 */
+	readonly descendants?: () => readonly DescendantHolder[];
 }
 
 /** The three ways to call `subagent`, named in every shape refusal. */
@@ -206,20 +237,52 @@ const CALL_SHAPES =
 	"subagent takes one of three shapes: {persona, question} starts a subagent, {id, question} asks a held one a follow-up, {} lists what you hold";
 
 /**
- * What a caller holds, as a monospace block. Derived from the live map at the
- * moment of asking, so it cannot drift from the truth.
+ * What a caller holds — and, for the seat, what runs beneath it — as one
+ * monospace block. Derived from the live map and the workers' latest reports
+ * at the moment of asking, so it cannot drift from the truth.
+ *
+ * Every row says WHO HOLDS it, because only some of these ids answer to
+ * {id, question}: yours do; a row a worker holds is status, and asking it here
+ * is corrected to its holder rather than half-working.
  */
-function renderHeld(held: readonly HeldSubagent[]): string {
-	if (held.length === 0)
+function renderHeld(
+	held: readonly HeldSubagent[],
+	workers: readonly DescendantHolder[] = [],
+): string {
+	if (held.length === 0 && workers.length === 0)
 		return "You hold no subagents. Start one with {persona, question}.";
-	const header = ["id", "persona", "model", "state", "asked"];
-	const rows = held.map((h) => [
-		h.id,
-		h.persona,
-		h.modelId ?? h.family ?? "(inherited)",
-		h.state,
-		String(h.asked),
-	]);
+	const model = (h: HeldSubagent) => h.modelId ?? h.family ?? "(inherited)";
+	const header = ["id", "persona", "model", "state", "asked", "held by"];
+	const rows = [
+		...held.map((h) => [
+			h.id,
+			h.persona,
+			model(h),
+			h.state,
+			String(h.asked),
+			"you",
+		]),
+		...workers.flatMap((w) => [
+			// The run's worker, named the way the run names it. Not askable here —
+			// it is not a held session — so `asked` has nothing to count.
+			[
+				`worker:${w.id}`,
+				"deliverable-worker",
+				w.modelId ?? "(inherited)",
+				w.state,
+				"-",
+				"you (the run)",
+			],
+			...w.held.map((h) => [
+				`  ${h.id}`,
+				h.persona,
+				model(h),
+				h.state,
+				String(h.asked),
+				`\`${w.id}\``,
+			]),
+		]),
+	];
 	const widths = header.map((name, i) =>
 		Math.max(name.length, ...rows.map((row) => (row[i] as string).length)),
 	);
@@ -232,7 +295,14 @@ function renderHeld(held: readonly HeldSubagent[]): string {
 		line(header),
 		...rows.map(line),
 		"",
-		"Ask one a follow-up with {id, question}.",
+		...(held.length > 0
+			? ["Ask one of yours a follow-up with {id, question}."]
+			: []),
+		...(workers.length > 0
+			? [
+					"Rows held by a worker are status — they answer their holder, not you.",
+				]
+			: []),
 	].join("\n");
 }
 
@@ -350,6 +420,24 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 					question === undefined
 				)
 					throw new Error(CALL_SHAPES);
+				// An id from the listing that is NOT yours: a descendant's session,
+				// shown as status. Corrected by name BEFORE the map miss, because
+				// "no subagent `code-review-1` — yours are: …" would be true and
+				// useless: the listing just showed that id, and the caller needs to
+				// hear whose it is, not that it does not exist. A plain miss still
+				// falls through to the map — the map stays the permission.
+				if (
+					deps.descendants &&
+					!deps.sessions.list().some((h) => h.id === id)
+				) {
+					const holder = deps
+						.descendants()
+						.find((w) => w.held.some((h) => h.id === id));
+					if (holder)
+						throw new Error(
+							`\`${id}\` is held by \`${holder.id}\`, who reports to you — its row is status, and its answers go to its holder, not to you`,
+						);
+				}
 				const answer = await deps.sessions.askAgain(id, question);
 				const held = deps.sessions.list().find((h) => h.id === id);
 				return {
@@ -363,9 +451,11 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 				};
 			}
 
-			// `subagent {}`: what do I hold? The list derives from the live session
-			// map, which is also what `askAgain` consults — the map IS the
-			// permission, so this listing cannot promise an id that would miss.
+			// `subagent {}`: what do I hold — and, for the seat, what runs under
+			// me? The own rows derive from the live session map, which is also
+			// what `askAgain` consults — the map IS the permission, so no row of
+			// YOURS can miss. Descendant rows are the workers' latest reports:
+			// visible, labeled with their holder, and deliberately not askable.
 			// A bare `{family}` is not a listing — it falls through to the shape
 			// refusal below, which names the shapes that exist.
 			if (
@@ -374,8 +464,9 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 				family === undefined
 			) {
 				const held = deps.sessions.list();
+				const workers = deps.descendants?.() ?? [];
 				return {
-					content: [{ type: "text" as const, text: renderHeld(held) }],
+					content: [{ type: "text" as const, text: renderHeld(held, workers) }],
 					details: {
 						held: held.map((h) => ({
 							id: h.id,
@@ -383,6 +474,19 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 							state: h.state,
 							asked: h.asked,
 						})),
+						...(deps.descendants
+							? {
+									workers: workers.map((w) => ({
+										id: w.id,
+										state: w.state,
+										held: w.held.map((h) => ({
+											id: h.id,
+											persona: h.persona,
+											state: h.state,
+										})),
+									})),
+								}
+							: {}),
 					},
 				};
 			}

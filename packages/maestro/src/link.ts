@@ -29,6 +29,7 @@ import {
 	type Status,
 	verifyHello,
 } from "./protocol.js";
+import type { HeldSubagent } from "./subagent-sessions.js";
 
 /** Read newline-delimited frames off a socket. Returns a detach function. */
 function readFrames(socket: Socket, onFrame: (line: string) => void): void {
@@ -60,6 +61,14 @@ export interface ConnectedAgent {
 	readonly socket: Socket;
 	/** Set once it has reported. Until released, it is still alive. */
 	done?: Done;
+	/**
+	 * The subagents this agent last said it holds. Live status kept beside the
+	 * connection because it has the connection's lifetime exactly: derivable
+	 * from nothing, meaningless once the process is gone, so it goes into no
+	 * run record and is cleared the way everything here is cleared — the map
+	 * entry dies with the socket, on release, kill, or crash alike.
+	 */
+	held?: readonly HeldSubagent[];
 }
 
 export interface MaestroLinkEvents {
@@ -67,6 +76,7 @@ export interface MaestroLinkEvents {
 	status: [agentId: string, status: Status];
 	done: [agentId: string, done: Done];
 	asked: [agentId: string, ask: Ask];
+	subagents: [agentId: string, held: readonly HeldSubagent[]];
 	agentError: [agentId: string, message: string];
 	/**
 	 * `awaitingRelease` distinguishes an agent that vanished while waiting to be
@@ -153,6 +163,16 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 			type: "shutdown",
 			reason,
 		} satisfies MaestroMessage);
+	}
+
+	/**
+	 * What an agent last said it holds, or nothing for an agent that never said
+	 * or is gone. The seat's listing reads this per live worker; an absent agent
+	 * answering an empty list is the truth, not a miss — its readers were its
+	 * child processes and died with it.
+	 */
+	heldBy(agentId: string): readonly HeldSubagent[] {
+		return this.agents.get(agentId)?.held ?? [];
 	}
 
 	/** Everyone who has reported and is waiting to be let go. */
@@ -252,6 +272,12 @@ export class MaestroLink extends EventEmitter<MaestroLinkEvents> {
 				return;
 			case "ask":
 				this.emit("asked", agent.agentId, message);
+				return;
+			case "subagents":
+				// Replaced whole, never merged: the message is the sender's full map,
+				// so the latest one is the entire truth.
+				agent.held = message.held;
+				this.emit("subagents", agent.agentId, message.held);
 				return;
 			case "done": {
 				const wrong = checkDone(message);
@@ -452,6 +478,15 @@ export class AgentLink extends EventEmitter<AgentLinkEvents> {
 
 	status(state: Status["state"], detail?: string): boolean {
 		return this.send({ type: "status", state, ...(detail ? { detail } : {}) });
+	}
+
+	/**
+	 * Report the full held-subagent list. Called on every change and once on
+	 * connect — a change made before the handshake completed was dropped, and
+	 * the snapshot-on-connect is what makes that loss free.
+	 */
+	subagents(held: readonly HeldSubagent[]): boolean {
+		return this.send({ type: "subagents", held });
 	}
 
 	error(message: string): boolean {

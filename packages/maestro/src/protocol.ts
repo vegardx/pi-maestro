@@ -1,6 +1,6 @@
 // What a maestro and an agent say to each other.
 //
-// Nine message types. The old protocol had thirty-odd, and its `hello` alone
+// Ten message types. The old protocol had thirty-odd, and its `hello` alone
 // carried a fifteen-kind enum, a resolved model assignment with preset, tier and
 // provenance, and a generation counter — so much that the client had to
 // fabricate thirty lines of plausible-looking assignment just to send one. A
@@ -14,6 +14,7 @@
 // agent is still there until maestro says otherwise.
 
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
+import type { HeldSubagent } from "./subagent-sessions.js";
 
 export const PROTOCOL_VERSION = 1;
 
@@ -86,7 +87,25 @@ export interface AgentError {
 	readonly message: string;
 }
 
-export type AgentMessage = Status | Done | Ask | AgentError;
+/**
+ * The sender's held subagents, in full, on every change to its map.
+ *
+ * A SNAPSHOT, never a delta. A delta protocol needs a resync protocol the
+ * moment one message is lost or doubled, and there is nothing here worth
+ * either: the whole list is a handful of rows. `HeldSubagent` is the exact
+ * shape `SubagentSessions.list()` reports, so the wire cannot say something
+ * the sender's own listing would not.
+ *
+ * This is status, not authority. The maestro folds these rows into the seat's
+ * listing so a human can see a worker's reviewer running — but the sessions
+ * stay the worker's: only their holder can ask them anything.
+ */
+export interface Subagents {
+	readonly type: "subagents";
+	readonly held: readonly HeldSubagent[];
+}
+
+export type AgentMessage = Status | Done | Ask | AgentError | Subagents;
 
 // ─── Maestro → agent ─────────────────────────────────────────────────────────
 

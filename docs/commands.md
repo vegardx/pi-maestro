@@ -44,9 +44,12 @@ Held by the maestro:
 - `subagent` — start a read-only subagent with a persona and wait for its
   answer. The subagent stays held afterwards: `{id, question}` asks it a
   follow-up in the conversation it kept, and calling with no arguments lists
-  what is held. "One-shot" is just a caller choosing not to ask twice.
-  `fanOut` reviews across model families: one lead on the caller's own model
-  consults a blind member per family and returns a single aggregated,
+  the seat's whole subtree — its own held subagents, the run's live workers,
+  and the readers each worker reported holding. Every row names who holds it:
+  only rows you hold answer to `{id, question}`, and asking a descendant's id
+  is corrected to its holder. "One-shot" is just a caller choosing not to ask
+  twice. `fanOut` reviews across model families: one lead on the caller's own
+  model consults a blind member per family and returns a single aggregated,
   de-attributed answer. `family` starts a subagent on a named family's model,
   resolved through the roster — an unknown family is refused naming the ones
   that exist.
@@ -56,7 +59,10 @@ Held by a worker:
 - `commit` — record work on its deliverable's branch. The maestro pushes and
   opens the pull request; a worker never does.
 - `bash` — the gated shell, confined to its worktree.
-- `subagent` — as above. This is how a worker gets its own diff reviewed.
+- `subagent` — as above, except the listing shows only the worker's own held
+  subagents — its subtree is its own map. Its changes are reported up the
+  socket, which is how they appear in the seat's listing. This is how a worker
+  gets its own diff reviewed.
 - `finish` — report the outcome and hand off. It then waits: the maestro ships
   and records the result before releasing it.
 

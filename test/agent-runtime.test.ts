@@ -155,7 +155,6 @@ describe("the subagent tool asks a reader and waits", () => {
 		return createSubagentTool({
 			cwd: () => "/worktrees/api",
 			depth: () => depth,
-			openSession: open,
 			sessions: new SubagentSessions(open),
 			briefFor: (persona) => `brief:${persona}`,
 		});
@@ -178,98 +177,253 @@ describe("the subagent tool asks a reader and waits", () => {
 		).rejects.toThrow(/nesting limit/);
 	});
 
-	it("offers fan-out only because something is behind it now", () => {
-		// It was deliberately absent until model routing was wired: a flag that
-		// reads like a capability and does nothing is the defect this rebuild is
-		// about. It is here because `routeSpread` is.
-		expect(JSON.stringify(tool(1).parameters)).toContain("fanOut");
+	it("offers fan-out and family only because something is behind them", () => {
+		// Both were deliberately absent until model routing was wired: a flag
+		// that reads like a capability and does nothing is the defect this
+		// rebuild is about. `fanOut` is here because `routeSpread` is; `family`
+		// because `routeFamily` is.
+		const parameters = JSON.stringify(tool(1).parameters);
+		expect(parameters).toContain("fanOut");
+		expect(parameters).toContain("family");
+	});
+});
+
+describe("fan-out is one lead, the aggregator", () => {
+	const session = (text: string): ReadOnlySession => ({
+		async start() {},
+		async prompt() {},
+		async getLastAssistantText() {
+			return text;
+		},
+		async stop() {},
 	});
 
-	it("asks one agent per family and reconciles NOTHING", async () => {
-		// Reconciling here would be this layer deciding which reviewer was right.
-		// Flattening several opinions into one is how six real findings became a
-		// sentence that said nothing.
-		const asked: (string | undefined)[] = [];
-		const open = async (spawn: { model?: string }) => {
-			asked.push(spawn.model);
-			return session(`findings from ${spawn.model}`);
+	const harness = (options: {
+		readonly answer: string;
+		readonly route: NonNullable<
+			Parameters<typeof createSubagentTool>[0]["route"]
+		>;
+	}) => {
+		const spawns: { model?: string; brief: string }[] = [];
+		const open = async (spawn: { model?: string; brief: string }) => {
+			spawns.push(spawn);
+			return session(options.answer);
 		};
-		const fanned = createSubagentTool({
-			cwd: () => "/w",
-			depth: () => 1,
-			openSession: open,
-			sessions: new SubagentSessions(open),
-			briefFor: () => "brief",
-			route: async () => [
-				{ modelId: "m-opus", family: "Anthropic" },
-				{ modelId: "m-gpt", family: "OpenAI" },
-			],
-		});
+		return {
+			spawns,
+			tool: createSubagentTool({
+				cwd: () => "/w",
+				depth: () => 1,
+				sessions: new SubagentSessions(open),
+				briefFor: (persona) => `brief:${persona}`,
+				route: options.route,
+			}),
+		};
+	};
 
-		const result = await call(fanned, {
+	const spread = [
+		{ modelId: "m-opus", family: "Anthropic" },
+		{ modelId: "m-gpt", family: "OpenAI" },
+	];
+
+	it("starts exactly ONE reader — the lead — on the caller's own model", async () => {
+		// The old fan-out stapled every reader's answer together under family
+		// headers, "attributed, unreconciled". Wrong twice over: attribution
+		// passed upstream invites the caller to inherit the verdicts of a model
+		// it recognizes as itself, and raw unaggregated findings flood the one
+		// context window whose clarity the exercise exists to protect. So the
+		// members are now the LEAD's problem, in the lead's process.
+		const h = harness({
+			answer: "the aggregated findings",
+			route: async () => spread,
+		});
+		const result = await call(h.tool, {
+			persona: "code-review",
+			question: "look at the diff",
+			fanOut: true,
+		});
+		expect(h.spawns).toHaveLength(1);
+		// No model on the spawn: the lead inherits, because it is the caller's
+		// reasoning surface extended — routing it elsewhere would put the
+		// aggregation judgment on a model the caller never chose.
+		expect(h.spawns[0]?.model).toBeUndefined();
+		// The caller reads the lead's answer verbatim. Anything added here about
+		// families or members would undo the de-attribution one layer up.
+		expect(result.content[0]?.text).toBe("the aggregated findings");
+	});
+
+	it("hands the lead its persona's brief plus the resolved fan-out block", async () => {
+		const h = harness({ answer: "findings", route: async () => spread });
+		await call(h.tool, {
 			persona: "code-review",
 			question: "look",
 			fanOut: true,
 		});
-		expect(asked).toEqual(["m-opus", "m-gpt"]);
-		const text = result.content[0].text;
-		expect(text).toContain("2 model families");
-		expect(text).toContain("not reconciled");
-		expect(text).toContain("## Anthropic");
-		expect(text).toContain("## OpenAI");
-		expect(text).toContain("findings from m-opus");
-		expect(text).toContain("findings from m-gpt");
+		const brief = h.spawns[0]?.brief ?? "";
+		// The persona is orthogonal: the same prose the members get, and the
+		// fan-out behavior arrives as a brief block, not a special persona.
+		expect(brief).toContain("brief:code-review");
+		// The family list is resolved by code, never left for the lead to guess.
+		expect(brief).toContain("Anthropic, OpenAI");
+		// Members are started blind, per family, with the material only.
+		expect(brief).toContain('{persona: "code-review", family:');
+		expect(brief).toContain("nothing else");
+		// And what comes back is aggregated and de-attributed before the caller
+		// sees a word of it.
+		expect(brief).toContain("remove every model and family name");
+		expect(brief).toContain("no severity labels, no counts");
 	});
 
-	it("keeps the opinions it got when one reader fails", async () => {
-		// One reader failing is a missing opinion, not a failed review.
-		const open = async (spawn: { model?: string }) =>
-			spawn.model === "m-bad"
-				? Promise.reject(new Error("provider refused"))
-				: session("a real finding");
-		const fanned = createSubagentTool({
-			cwd: () => "/w",
-			depth: () => 1,
-			openSession: open,
-			sessions: new SubagentSessions(open),
-			briefFor: () => "brief",
-			route: async () => [
-				{ modelId: "m-good", family: "Anthropic" },
-				{ modelId: "m-bad", family: "OpenAI" },
-			],
+	it("reports coverage to the harness, in details", async () => {
+		const h = harness({ answer: "findings", route: async () => spread });
+		const result = await call(h.tool, {
+			persona: "code-review",
+			question: "look",
+			fanOut: true,
 		});
-		const text = (
-			await call(fanned, {
-				persona: "code-review",
-				question: "look",
-				fanOut: true,
-			})
-		).content[0].text;
-		expect(text).toContain("a real finding");
-		expect(text).toContain("did not answer: provider refused");
+		// familiesResolved is what the spread yielded. What the lead actually
+		// reached is not knowable from here — its members are held sessions in
+		// its own process — so nothing pretends to know it.
+		expect(result.details).toMatchObject({
+			id: "code-review-1",
+			fanOut: true,
+			familiesResolved: ["Anthropic", "OpenAI"],
+		});
 	});
 
-	it("says how many families it actually reached, not how many it asked for", async () => {
-		// With no roster there is one family, and claiming three reviewers agreed
-		// when they were the same model is exactly the sort of claim this system
-		// has made before.
-		const open = async () => session("one opinion");
-		const single = createSubagentTool({
-			cwd: () => "/w",
-			depth: () => 1,
-			openSession: open,
-			sessions: new SubagentSessions(open),
-			briefFor: () => "brief",
+	it("keeps the lead held, like any subagent", async () => {
+		const h = harness({ answer: "findings", route: async () => spread });
+		await call(h.tool, {
+			persona: "code-review",
+			question: "look",
+			fanOut: true,
+		});
+		const listing = await call(h.tool, {});
+		expect(listing.details?.held).toEqual([
+			{ id: "code-review-1", persona: "code-review", state: "idle", asked: 1 },
+		]);
+	});
+
+	it("degrades to a direct start when the spread reaches one family", async () => {
+		// One family is one opinion. A lead over one member would be theater,
+		// and pretending to a diversity the roster did not yield is exactly the
+		// claim this system has been caught making before.
+		const h = harness({
+			answer: "one opinion",
 			route: async () => [{ modelId: "m-seat", family: "Anthropic" }],
 		});
-		const text = (
-			await call(single, {
+		const result = await call(h.tool, {
+			persona: "code-review",
+			question: "look",
+			fanOut: true,
+		});
+		expect(h.spawns).toHaveLength(1);
+		expect(h.spawns[0]?.model).toBe("m-seat");
+		expect(result.content[0]?.text).toBe("one opinion");
+		// The shortfall is the harness's fact, in details — the content the
+		// calling model reads never mentions families or counts.
+		for (const part of result.content) {
+			expect(part.text).not.toMatch(/famil/i);
+			expect(part.text).not.toMatch(/model/i);
+		}
+		expect(result.details).toMatchObject({
+			fanOut: true,
+			familiesResolved: ["Anthropic"],
+		});
+	});
+});
+
+describe("the family parameter starts a member on a named family", () => {
+	const session = (text: string): ReadOnlySession => ({
+		async start() {},
+		async prompt() {},
+		async getLastAssistantText() {
+			return text;
+		},
+		async stop() {},
+	});
+
+	it("resolves the family through routing and runs on its model", async () => {
+		const requests: unknown[] = [];
+		const spawns: { model?: string }[] = [];
+		const open = async (spawn: { model?: string }) => {
+			spawns.push(spawn);
+			return session("a member's findings");
+		};
+		const tool = createSubagentTool({
+			cwd: () => "/w",
+			depth: () => 2,
+			sessions: new SubagentSessions(open),
+			briefFor: () => "brief",
+			route: async (request) => {
+				requests.push(request);
+				return [{ modelId: "m-gpt", family: "OpenAI" }];
+			},
+		});
+		const result = await call(tool, {
+			persona: "code-review",
+			family: "OpenAI",
+			question: "look",
+		});
+		expect(requests).toEqual([
+			{ persona: "code-review", fanOut: false, family: "OpenAI" },
+		]);
+		expect(spawns[0]?.model).toBe("m-gpt");
+		expect(result.details).toMatchObject({ family: "OpenAI" });
+	});
+
+	it("lets an unknown family's refusal through, naming what exists", async () => {
+		// The lookup is the guard: the refusal comes from the resolver, which
+		// knows the bound roster, and it teaches rather than just denies.
+		const open = async () => session("never reached");
+		const tool = createSubagentTool({
+			cwd: () => "/w",
+			depth: () => 2,
+			sessions: new SubagentSessions(open),
+			briefFor: () => "brief",
+			route: async () => {
+				throw new Error(
+					"no available model in family Google for persona code-review — the bound roster reaches: Anthropic, OpenAI",
+				);
+			},
+		});
+		await expect(
+			call(tool, { persona: "code-review", family: "Google", question: "x" }),
+		).rejects.toThrow(/the bound roster reaches: Anthropic, OpenAI/);
+	});
+
+	it("refuses family alongside fanOut — they contradict", async () => {
+		const open = async () => session("never reached");
+		const tool = createSubagentTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			sessions: new SubagentSessions(open),
+			briefFor: () => "brief",
+			route: async () => [],
+		});
+		await expect(
+			call(tool, {
 				persona: "code-review",
-				question: "look",
+				family: "OpenAI",
+				question: "x",
 				fanOut: true,
-			})
-		).content[0].text;
-		expect(text).toBe("one opinion");
+			}),
+		).rejects.toThrow(/do not compose/);
+	});
+
+	it("refuses a family start when no routing is wired", async () => {
+		// Without routing the family would silently become an inherited model —
+		// the exact substitution the parameter exists to rule out.
+		const open = async () => session("never reached");
+		const tool = createSubagentTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			sessions: new SubagentSessions(open),
+			briefFor: () => "brief",
+		});
+		await expect(
+			call(tool, { persona: "code-review", family: "OpenAI", question: "x" }),
+		).rejects.toThrow(/needs model routing/);
 	});
 });
 
@@ -295,7 +449,6 @@ describe("a started subagent stays its caller's", () => {
 		const tool = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
-			openSession: open,
 			sessions: new SubagentSessions(open),
 			briefFor: (persona) => `brief:${persona}`,
 		});
@@ -346,6 +499,14 @@ describe("a started subagent stays its caller's", () => {
 		await expect(
 			call(h.tool, { id: "code-review-1", persona: "code-review" }),
 		).rejects.toThrow(/three shapes/);
+		// A bare family is not a listing, and a family on a follow-up would be a
+		// second model for a session that already has one.
+		await expect(call(h.tool, { family: "OpenAI" })).rejects.toThrow(
+			/three shapes/,
+		);
+		await expect(
+			call(h.tool, { id: "code-review-1", question: "x", family: "OpenAI" }),
+		).rejects.toThrow(/three shapes/);
 	});
 
 	it("answers an unknown id by naming the real ones", async () => {
@@ -364,14 +525,6 @@ describe("the agent tools are declared, not listed", () => {
 			subagent: {
 				cwd: () => "/repo",
 				depth: () => 1,
-				openSession: async () => ({
-					async start() {},
-					async prompt() {},
-					async getLastAssistantText() {
-						return "ok";
-					},
-					async stop() {},
-				}),
 				sessions: new SubagentSessions(async () => ({
 					async start() {},
 					async prompt() {},

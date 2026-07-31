@@ -73,7 +73,7 @@ function settled(client: RpcClient): Promise<void> {
  * Open a read-only child over pi's own RPC.
  *
  * The wrapper is thin but not optional: `prompt` has to mean "the turn is
- * over", because `askReadOnly` reads the answer the moment it returns.
+ * over", because `promptForAnswer` reads the answer the moment it returns.
  */
 export function createReadOnlySessionFactory(
 	options: ReadOnlyLaunchOptions,

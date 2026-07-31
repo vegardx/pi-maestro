@@ -13,6 +13,7 @@ import {
 	explainTier,
 	fallbackNotice,
 	ModelResolutionError,
+	resolveFamily,
 	resolveModel,
 	resolveModels,
 	resolveOtherFamily,
@@ -730,5 +731,70 @@ describe("resolveOtherFamily", () => {
 			modelId: "gw9/mystery",
 		});
 		expect(noFamily.fallbackReason).toContain("no configured family");
+	});
+});
+
+describe("resolveFamily", () => {
+	// The subagent tool's `family` parameter — how a fan-out lead starts one
+	// member per family. The lookup is the guard, and there is no fallback: a
+	// member requested as one family and run as another would be the fan-out
+	// lying about its own diversity.
+
+	it("resolves a named family through the persona's tiers", async () => {
+		const resolution = await resolveFamily(fakeCtx(), {
+			persona: "deliverable-worker",
+			family: "Moonshot",
+			inherit: { modelId: "gw1/sol" },
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw2/kimi",
+			family: "Moonshot",
+			tier: "standard",
+		});
+	});
+
+	it("walks into the next tier when the first misses the family", async () => {
+		// Anthropic lives in heavy only; standard is walked first and passed by.
+		const resolution = await resolveFamily(fakeCtx(), {
+			persona: "deliverable-worker",
+			family: "Anthropic",
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw1/opus",
+			family: "Anthropic",
+			tier: "heavy",
+		});
+	});
+
+	it("refuses an unknown family, naming what the roster reaches", async () => {
+		// The refusal teaches: a lead that misspells a family learns the real
+		// names rather than a bare no.
+		await expect(
+			resolveFamily(fakeCtx(), {
+				persona: "deliverable-worker",
+				family: "Google",
+			}),
+		).rejects.toThrow(/reaches: OpenAI, Moonshot, Anthropic/);
+	});
+
+	it("refuses a family whose every attachment is struck — never substitutes", async () => {
+		await expect(
+			resolveFamily(fakeCtx({ unavailable: ["gw2/kimi"] }), {
+				persona: "deliverable-worker",
+				family: "Moonshot",
+			}),
+		).rejects.toThrow(/no available model in family Moonshot/);
+	});
+
+	it("refuses when no roster is configured at all", async () => {
+		writeSettings({});
+		await expect(
+			resolveFamily(fakeCtx(), {
+				persona: "deliverable-worker",
+				family: "Moonshot",
+			}),
+		).rejects.toThrow(/no v2 roster is configured/);
 	});
 });

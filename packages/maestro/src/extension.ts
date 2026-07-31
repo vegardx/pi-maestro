@@ -40,7 +40,7 @@ import { createDeleteTool } from "./delete-tool.js";
 import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
 import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
-import { routeModel, routeSpread } from "./model-routing.js";
+import { routeSpawn } from "./model-routing.js";
 import { BUILT_IN_PERSONAS } from "./personas.js";
 import {
 	createReadOnlySessionFactory,
@@ -112,16 +112,11 @@ function subagentDepsFor(options: {
 	const deps: SubagentDeps = {
 		cwd: () => process.cwd(),
 		depth: options.depth,
-		openSession,
 		sessions,
 		// A spawned reader inherits its caller's model unless a roster says
-		// otherwise, and fans out across families when asked.
-		route: (persona, fanOut, ctx) =>
-			fanOut
-				? routeSpread(ctx as ExtensionContext, persona)
-				: routeModel(ctx as ExtensionContext, persona).then((one) =>
-						one ? [one] : [],
-					),
+		// otherwise; a named family resolves through the roster or is refused;
+		// a fan-out resolves the spread its lead's brief will carry.
+		route: (request, ctx) => routeSpawn(ctx as ExtensionContext, request),
 		// THE SAME personas the maestro declares. An agent handing over a
 		// review has to hand over the real review persona — the prose that
 		// says what to look for — not a sentence this file made up about

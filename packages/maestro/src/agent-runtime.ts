@@ -18,15 +18,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { AgentLink } from "./link.js";
-import {
-	AGENT_ID_ENV,
-	askReadOnly,
-	currentDepth,
-	type ReadOnlySessionFactory,
-	type ReadOnlySpawn,
-	SOCK_ENV,
-	TOKEN_ENV,
-} from "./spawn.js";
+import { AGENT_ID_ENV, currentDepth, SOCK_ENV, TOKEN_ENV } from "./spawn.js";
 import type { HeldSubagent, SubagentSessions } from "./subagent-sessions.js";
 import type { ToolDeclaration } from "./tool-registry.js";
 
@@ -174,7 +166,6 @@ export function createAskTransport(asker: () => Asker): {
 export interface SubagentDeps {
 	readonly cwd: () => string;
 	readonly depth: () => number;
-	readonly openSession: ReadOnlySessionFactory;
 	/**
 	 * The held sessions this caller owns. One per process — every subagent this
 	 * process starts stays in it until the process ends, which is what makes a
@@ -184,8 +175,12 @@ export interface SubagentDeps {
 	/** Turn a persona id into its brief. Unknown ids throw, and should. */
 	readonly briefFor: (persona: string) => string;
 	/**
-	 * Which models to ask. One entry = one agent; several = a fan-out, one per
-	 * family. Absent, or one entry, means the caller's own model is inherited.
+	 * Which model(s) this start resolves to. A `family` in the request is
+	 * exactly that family through the caller's roster, or a refusal naming the
+	 * families that exist; `fanOut` is the spread — one entry per family, and
+	 * how many entries come back is the honest answer, never padded. A bare
+	 * request resolves the persona's direct model, and an empty result means
+	 * the caller's own model is inherited.
 	 *
 	 * Keyed by persona: `code-review` wanting a heavy tier is a statement about
 	 * the work, not about a posture.
@@ -195,8 +190,11 @@ export interface SubagentDeps {
 	 * nothing, which is the defect this rebuild exists to remove.
 	 */
 	readonly route?: (
-		persona: string,
-		fanOut: boolean,
+		request: {
+			readonly persona: string;
+			readonly fanOut: boolean;
+			readonly family?: string;
+		},
 		ctx: unknown,
 	) => Promise<
 		readonly { readonly modelId: string; readonly family?: string }[]
@@ -239,21 +237,56 @@ function renderHeld(held: readonly HeldSubagent[]): string {
 }
 
 /**
- * Ask one or several read-only agents something, and wait for the answers.
+ * The fan-out block a lead's brief carries, after the persona prose and the
+ * generated tool list. Brief-level on purpose: the persona is orthogonal —
+ * lead and members run the same one — so what makes a lead a lead is this
+ * block, not a special persona. It names `subagent` and nothing else; the
+ * persona-prose guard (`PersonaCatalogue.declare`) scopes to PERSONAS, and
+ * this is the same kind of generated, declaration-fed text as the tool list
+ * it follows — it cannot drift from the grant, because the family list is
+ * resolved by the code that grants it.
+ */
+function fanOutBrief(persona: string, families: readonly string[]): string {
+	return [
+		"## Fanning out",
+		"",
+		`You are the lead of a review that spans model families: ${families.join(", ")}. Your caller will read only what you return, so what you return must stand on its own.`,
+		"",
+		`Start one member per family with your \`subagent\` tool, as {persona: "${persona}", family: "<one family from the list above>", question: ...}. Give each member the material itself — the diff, the contract, the question — and nothing else. Never your own analysis, never what your caller intends or believes, never another member's answer: tell a reviewer what to expect and you have handed it a hypothesis to confirm.`,
+		"",
+		"When every member has answered, aggregate before you return: merge findings that say the same thing, normalize the wording, remove every model and family name, and drop what would not change anything.",
+		"",
+		"Then return the clean findings and nothing else — no severity labels, no counts, no word on who found what. If a member fails or a family cannot be reached, the findings say nothing about it; coverage is reported on another channel.",
+	].join("\n");
+}
+
+/**
+ * Ask a read-only agent something, and wait for the answer.
  *
  * Every subagent started here is HELD: it stays its caller's until the caller
  * finishes, re-askable by id — a follow-up is one more turn in a conversation
  * that kept its context, not a fresh reader re-reading the world. "One-shot"
  * is just the caller choosing not to ask twice.
  *
- * `fanOut` asks the same question of one agent per model family and returns
- * every answer, attributed by family and NOT reconciled. Reconciling them here
- * would be this layer deciding which reviewer was right, which is the caller's
- * judgement to make — and flattening several opinions into one is how six real
- * findings became a sentence saying nothing.
+ * `fanOut` starts ONE subagent — a lead, on the caller's own model — whose
+ * brief tells it to consult one member per family the spread resolved, then
+ * aggregate: duplicates merged, wording normalized, every model and family
+ * name removed, noise dropped. The caller reads clean findings, nothing else.
+ * This replaced a version of fan-out that stapled raw answers together under
+ * family headers, which was wrong twice over: attribution passed upstream
+ * invites a caller to inherit the verdicts of a model it recognizes as
+ * itself, and unaggregated findings flood the one context window whose
+ * clarity the whole exercise exists to protect. The lead inherits rather
+ * than routes because it IS the caller's reasoning surface, extended —
+ * keeping member noise out of the caller's context is its entire job.
  *
- * With no roster configured, `fanOut` reaches exactly one family and says so
- * rather than pretending to a diversity it did not get.
+ * `family` starts a subagent on a NAMED family's model, resolved through the
+ * caller's roster — it is how the lead starts its members, and an unknown
+ * family is refused naming the families that exist.
+ *
+ * Coverage honesty lives in `details`, never in the content the calling
+ * model reads: a spread that resolves to one family runs a plain direct
+ * start and records the shortfall where the harness can see it.
  */
 export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 	return defineTool({
@@ -290,21 +323,32 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 			fanOut: Type.Optional(
 				Type.Boolean({
 					description:
-						"Ask one agent per model family and get every answer back, unreconciled. Worth it when you want a second opinion rather than a second run.",
+						"Review across model families: one lead subagent consults a blind member per family and returns a single aggregated answer. Worth it when you want second opinions rather than a second run.",
+				}),
+			),
+			family: Type.Optional(
+				Type.String({
+					description:
+						"A model family to draw the subagent's model from — the maker, as your roster names it. Composes with a start: {persona, family, question}. An unknown family is refused naming the ones that exist.",
 				}),
 			),
 		}),
 		async execute(
 			_id,
-			{ persona, question, id, kind, fanOut },
+			{ persona, question, id, kind, fanOut, family },
 			_signal,
 			_u,
 			ctx,
 		) {
 			// A follow-up into a held session. A persona alongside the id would be
-			// a contradiction — the session already has one.
+			// a contradiction — the session already has one — and so would a
+			// family: the session already has a model.
 			if (id !== undefined) {
-				if (persona !== undefined || question === undefined)
+				if (
+					persona !== undefined ||
+					family !== undefined ||
+					question === undefined
+				)
 					throw new Error(CALL_SHAPES);
 				const answer = await deps.sessions.askAgain(id, question);
 				const held = deps.sessions.list().find((h) => h.id === id);
@@ -322,7 +366,13 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 			// `subagent {}`: what do I hold? The list derives from the live session
 			// map, which is also what `askAgain` consults — the map IS the
 			// permission, so this listing cannot promise an id that would miss.
-			if (persona === undefined && question === undefined) {
+			// A bare `{family}` is not a listing — it falls through to the shape
+			// refusal below, which names the shapes that exist.
+			if (
+				persona === undefined &&
+				question === undefined &&
+				family === undefined
+			) {
 				const held = deps.sessions.list();
 				return {
 					content: [{ type: "text" as const, text: renderHeld(held) }],
@@ -340,6 +390,14 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 			if (persona === undefined || question === undefined)
 				throw new Error(CALL_SHAPES);
 
+			// `family` names one; `fanOut` asks one per family. Together they
+			// contradict each other, and a contradiction obeyed either way would
+			// be this layer guessing which half the caller meant.
+			if (family !== undefined && fanOut === true)
+				throw new Error(
+					"`family` and `fanOut` do not compose: family starts one subagent on that family's model, fanOut spans them all. Pick one.",
+				);
+
 			// `worker` is in the schema and refused: there is a future where the
 			// seat runs a worker directly through this tool, and when it arrives
 			// it should be an implementation filling in, not a vocabulary change.
@@ -351,78 +409,98 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 							text: "refused: writers are plan-authored — author a deliverable and run the plan. This tool starts read-only subagents only, for now.",
 						},
 					],
-					details: { persona, families: 0 },
+					details: { persona },
 				};
+
+			// A named family with no routing wired would silently inherit, which
+			// is precisely the substitution the family parameter exists to refuse.
+			if (family !== undefined && !deps.route)
+				throw new Error("`family` needs model routing, and none is wired here");
 			const models = deps.route
-				? await deps.route(persona, fanOut === true, ctx)
+				? await deps.route(
+						{
+							persona,
+							fanOut: fanOut === true,
+							...(family !== undefined ? { family } : {}),
+						},
+						ctx,
+					)
 				: [];
-			const spawnFor = (model?: string): ReadOnlySpawn => ({
-				kind: "read-only",
-				cwd: deps.cwd(),
-				brief: deps.briefFor(persona),
-				prompt: question,
-				parentDepth: deps.depth(),
-				...(model ? { model } : {}),
+			const held = (heldId: string) => ({
+				type: "text" as const,
+				text: `(held as \`${heldId}\` — a follow-up goes to {id: "${heldId}", question}; {} lists what you hold)`,
 			});
 
-			if (models.length <= 1) {
-				const family = models[0]?.family;
-				const { id: heldId, answer } = await deps.sessions.start({
+			// A fan-out that resolved two or more families starts ONE lead — the
+			// aggregator — on the caller's own model: no model in the spawn means
+			// the child inherits, and inheriting is the point, because the lead is
+			// the caller's reasoning surface extended and keeping member noise out
+			// of the caller's context window is its whole job. The lead's brief
+			// carries the family list; the members it starts through its own
+			// `subagent` tool are its held sessions, in its process, which is why
+			// `familiesReached` is not reported here — this side cannot see them.
+			if (fanOut === true && models.length > 1) {
+				const families = models
+					.map((m) => m.family)
+					.filter((f): f is string => Boolean(f));
+				const { id: leadId, answer } = await deps.sessions.start({
 					persona,
-					spawn: spawnFor(models[0]?.modelId),
-					...(family ? { family } : {}),
+					spawn: {
+						kind: "read-only",
+						cwd: deps.cwd(),
+						brief: `${deps.briefFor(persona)}\n\n${fanOutBrief(persona, families)}`,
+						prompt: question,
+						parentDepth: deps.depth(),
+					},
 				});
 				return {
-					content: [
-						{ type: "text" as const, text: answer },
-						{
-							type: "text" as const,
-							text: `(held as \`${heldId}\` — a follow-up goes to {id: "${heldId}", question}; {} lists what you hold)`,
-						},
-					],
+					// The lead's answer, verbatim. It arrives already aggregated and
+					// de-attributed; adding anything about families or members here
+					// would undo the de-attribution one layer up.
+					content: [{ type: "text" as const, text: answer }, held(leadId)],
 					details: {
-						id: heldId,
+						id: leadId,
 						persona,
 						state: "idle",
-						families: models.length,
+						fanOut: true,
+						familiesResolved: families,
 					},
 				};
 			}
 
-			// Settled, not all: one reader failing is a missing opinion, not a
-			// failed review. Losing the other two because of it would be.
-			//
-			// The fan-out stays one-shot — its readers are aggregated and gone in
-			// this one call — while the single path holds its session. Another PR
-			// owns replacing this aggregation.
-			const answers = await Promise.allSettled(
-				models.map((model) =>
-					askReadOnly(spawnFor(model.modelId), deps.openSession),
-				),
-			);
-			const parts = answers.map((answer, i) => {
-				const family = models[i]?.family ?? models[i]?.modelId ?? "unknown";
-				return answer.status === "fulfilled"
-					? `## ${family}\n\n${answer.value}`
-					: `## ${family}\n\nThis one did not answer: ${
-							answer.reason instanceof Error
-								? answer.reason.message
-								: String(answer.reason)
-						}`;
+			// A direct start — and the DEGRADED fan-out: a spread of at most one
+			// family is one opinion, and running it as such is honest where a lead
+			// over one member would be theater. The shortfall goes into `details`,
+			// where the harness reads it; the content the calling model reads
+			// never mentions families or counts, because coverage is the
+			// harness's fact to weigh, not a verdict to hand the caller.
+			const resolvedFamily = models[0]?.family;
+			const { id: heldId, answer } = await deps.sessions.start({
+				persona,
+				spawn: {
+					kind: "read-only",
+					cwd: deps.cwd(),
+					brief: deps.briefFor(persona),
+					prompt: question,
+					parentDepth: deps.depth(),
+					...(models[0]?.modelId ? { model: models[0].modelId } : {}),
+				},
+				...(resolvedFamily ? { family: resolvedFamily } : {}),
 			});
-			const reached = new Set(models.map((m) => m.family).filter(Boolean)).size;
 			return {
-				content: [
-					{
-						type: "text" as const,
-						text: [
-							`${models.length} subagents answered, across ${reached} model famil${reached === 1 ? "y" : "ies"}. They are not reconciled — that is yours to do.`,
-							"",
-							...parts,
-						].join("\n"),
-					},
-				],
-				details: { persona, families: reached },
+				content: [{ type: "text" as const, text: answer }, held(heldId)],
+				details: {
+					id: heldId,
+					persona,
+					state: "idle",
+					...(resolvedFamily ? { family: resolvedFamily } : {}),
+					...(fanOut === true
+						? {
+								fanOut: true,
+								familiesResolved: resolvedFamily ? [resolvedFamily] : [],
+							}
+						: {}),
+				},
 			};
 		},
 	});

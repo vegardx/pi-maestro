@@ -18,7 +18,7 @@ import {
 } from "./execution-policy.js";
 import { Executor, type ExecutorDeps } from "./executor.js";
 import type { Mode, ModeName } from "./mode.js";
-import { routeModel, routeSpread } from "./model-routing.js";
+import { routeModel, routeSpawn } from "./model-routing.js";
 import { plansRoot, sessionFile, socketPath } from "./paths.js";
 import { BUILT_IN_PERSONAS, DELIVERABLE_WORKER } from "./personas.js";
 import type { Plan } from "./plan.js";
@@ -159,18 +159,12 @@ export function createSeat(options: SeatOptions): Seat {
 			subagent: {
 				cwd: () => process.cwd(),
 				depth: () => 0,
-				openSession: readOnly,
 				sessions: subagents,
 				briefFor: (persona) => briefFor(personas, persona),
 				// The seat's own readers route too. Research while planning is the
 				// point of planning, and it should be able to use a cheap model
-				// for it — or several, when it wants a second opinion.
-				route: (persona, fanOut, ctx) =>
-					fanOut
-						? routeSpread(ctx as ExtensionContext, persona)
-						: routeModel(ctx as ExtensionContext, persona).then((one) =>
-								one ? [one] : [],
-							),
+				// for it — or a fan-out lead, when it wants second opinions.
+				route: (request, ctx) => routeSpawn(ctx as ExtensionContext, request),
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },

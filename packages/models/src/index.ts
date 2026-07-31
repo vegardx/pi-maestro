@@ -47,6 +47,7 @@ export {
 	type ModelResolutionRequest,
 	type ModelResolutionSource,
 	personaForRole,
+	resolveFamily,
 	resolveModel,
 	resolveModels,
 	resolveOtherFamily,

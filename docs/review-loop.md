@@ -34,15 +34,42 @@ live with the code.
 
 ## Fanning out
 
-`subagent` takes `fanOut`, which asks one reader **per model family** and
-returns every answer, attributed by family and **not reconciled**.
+`subagent` takes `fanOut`, which puts the question to one reviewer **per model
+family** — through a lead, never straight at the caller.
 
-Reconciling would mean this layer deciding which reviewer was right, which is
-the caller's judgement — and flattening several opinions into one is exactly how
-six findings once became a sentence saying nothing.
+The tool starts a single subagent: the lead, on the caller's own model. The
+lead inherits because it is the caller's reasoning surface extended — keeping
+member noise out of the caller's context window is its whole job, and routing
+that job to a model the caller never chose would defeat it. Its brief is the
+same persona prose everyone else gets, plus a fan-out block whose family list
+is resolved by code. The lead then starts one member per family with its own
+`subagent` tool, passing `{persona, family, question}` — the `family`
+parameter resolves that family's model through the caller's roster, and an
+unknown family is refused naming the families that exist.
 
-With no roster configured it reaches one family and says so, rather than
-claiming a diversity it did not get.
+Members are blind. Each gets the material — the diff, the contract, the
+question — and its persona prose, never the caller's intent and never another
+member's answer: tell a reviewer the intent and you have handed it a
+hypothesis to confirm. And nobody grades. A finding says where it is, what
+makes it go wrong, and what it costs — not how severe someone felt it was.
+
+Before it returns, the lead aggregates: duplicates merged, wording
+normalized, every model and family name removed, noise dropped. The caller
+reads clean findings — no model names, no severity grades, no count of
+reviewers. Attribution passed upstream invites a caller to inherit the
+verdicts of a model it recognizes as itself, and raw unaggregated findings
+flood the one context window whose clarity the exercise exists to protect.
+
+Coverage honesty lives in the harness, not in the caller's context. What the
+spread resolved goes into the tool result's `details`, where the harness can
+read "reached one family, not three"; the findings text never mentions it. A
+spread that reaches at most one family degrades to a plain single start and
+records the shortfall the same way.
+
+The persona is orthogonal. Lead and members run the same persona; being the
+lead comes from the brief, not from a special persona — there is no
+`review-lead`, deliberately. The lead stays held like any subagent, so the
+caller can ask it a follow-up in the conversation it kept.
 
 ## Who reviews what
 

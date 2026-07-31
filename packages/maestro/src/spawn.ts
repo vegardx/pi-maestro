@@ -562,28 +562,10 @@ export async function promptForAnswer(
 	return answer;
 }
 
-/**
- * Run a read-only agent for exactly one question, and return what it said.
- *
- * The one-shot composition: open, ask, stop-in-finally. Its remaining
- * consumer is the fan-out path, whose several readers are aggregated and
- * discarded in one call. Everything else holds its readers instead — see
- * `SubagentSessions`, which composes the same guard and the same turn but
- * KEEPS the session, so the caller can ask a follow-up into a conversation
- * that kept its context.
- */
-export async function askReadOnly(
-	spawn: ReadOnlySpawn,
-	open: ReadOnlySessionFactory,
-): Promise<string> {
-	guardReadOnlySpawn(spawn);
-
-	const session = await open(spawn);
-	try {
-		await session.start();
-		return await promptForAnswer(session, spawn.kind, spawn.prompt);
-	} finally {
-		// The caller is blocked on this; nothing else will clean it up.
-		await session.stop().catch(() => {});
-	}
-}
+// There is no one-shot ask any more. `askReadOnly` — open, ask,
+// stop-in-finally — survived the held-session cutover with exactly one
+// consumer, the fan-out that stapled several readers' answers together, and
+// went with it when the fan-out became a held lead. Every reader is held now:
+// `SubagentSessions` composes the guard and the turn above and KEEPS the
+// session, so "one-shot" is a caller choosing not to ask twice, not a
+// separate mechanism.

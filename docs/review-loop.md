@@ -51,9 +51,13 @@ that names a declared tool, so a persona says what to look for and never what to
 call. The reader's tool list is generated from what it was actually launched
 with.
 
-Read-only agents hold no shell and no `subagent` tool of their own. A reviewer that
-cannot answer says so in its report rather than recruiting help — its caller is
-blocked on it, so there is no channel back.
+Read-only agents hold a shell of their own — gated so write-effect commands
+are refused, confined by the OS so a classifier miss still cannot write the
+tree — and a `subagent` tool, so a reviewer can consult another reader when
+that is the honest way to answer. Depth bounds the recursion, not a rule about
+who may ask. What has not changed: a reviewer's caller is blocked on it, so
+there is no channel back — one that cannot answer says so in its report
+rather than pretending it could.
 
 ## Shipping
 

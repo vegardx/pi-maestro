@@ -143,8 +143,9 @@ export interface Asker {
  * would be a variant standing in for a position, and it would have collided
  * with `packages/ask`'s own `ask` the moment both extensions loaded.
  *
- * A read-only agent registers nothing. Its caller is BLOCKED on it, so there is
- * no channel back — and a reader that cannot answer says so in its report,
+ * A read-only agent registers no transport (its tools, yes — `extension.ts`'s
+ * no-wiring path — but nothing of this). Its caller is BLOCKED on it, so there
+ * is no channel back — and a reader that cannot answer says so in its report,
  * which the caller then acts on. Readers answer; they do not ask.
  *
  * Provenance rides back with the answers, at every hop: an agent must be able
@@ -309,8 +310,7 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
  *
  * `finish` is for agents that report to a maestro, which is workers. The
  * maestro reports to the human and has nothing to finish. `subagent` is held by
- * the two writer postures and NOT by a reader — a reader answers its caller,
- * and `checkSpawn` backstops the depth in one place besides.
+ * every posture — depth is the cap, and `checkSpawn` enforces it in one place.
  */
 export function declareAgentTools(deps: {
 	readonly reporter: () => Reporter;
@@ -324,10 +324,13 @@ export function declareAgentTools(deps: {
 	 * classifier was wired back in.
 	 */
 	readonly bash?: ToolDefinition;
-	// A read-only agent is NOT a holder of this. It runs with pi's read-only
-	// builtin set, which has no shell in it at all — so declaring `bash` for
-	// `read-only` would put a tool in its generated brief that it cannot call,
-	// which is the phantom-grant defect this whole registry exists to prevent.
+	// `read-only` holds one too, now. The old rule — a shell is a write tool,
+	// so a reader gets none — predated ambient confinement: the classifier's
+	// read-only branch refuses write-effect commands, and the kernel write
+	// profile scopes a read-only actor to scratch space, so a reader's shell
+	// can walk git history and inspect the tree while unable to change it.
+	// What stays withheld is pi's `edit`/`write` pair — those write
+	// in-process, where the sandbox cannot see them.
 
 	/**
 	 * How a worker records its work.
@@ -354,7 +357,11 @@ export function declareAgentTools(deps: {
 			? [
 					{
 						definition: deps.bash,
-						holders: ["maestro", "worker"] as const,
+						// Every posture. Each caller passes an instance built for ONE
+						// holder — the gate and the write profile are baked into it —
+						// so this list says who may hold a gated shell at all, and the
+						// instance decides whose it is.
+						holders: ["maestro", "worker", "read-only"] as const,
 					},
 				]
 			: []),
@@ -383,14 +390,20 @@ export function declareAgentTools(deps: {
 			holders: ["worker"],
 		},
 		{
-			// NOT `read-only`. A read-only agent registers nothing — `extension.ts`
-			// returns early for a child with no wiring — and `subagent` is not in
-			// its `--tools` allowlist either, so it was doubly absent while its
-			// generated brief promised it. The phantom grant, inside the registry
-			// built to prevent it. A reader answers its caller; it does not
-			// recruit.
+			// EVERY posture, `read-only` included. This grant has been wrong in
+			// both directions. It first included the reader while a read-only
+			// child registered nothing (`extension.ts` returned early for a child
+			// with no wiring) and `subagent` was missing from its `--tools`
+			// allowlist — a tool doubly absent while the generated brief promised
+			// it, the phantom grant inside the registry built to prevent it. The
+			// exclusion that fixed the phantom was then overruled on the design:
+			// every agent holds `subagent`, depth is the cap — that is what
+			// MAX_DEPTH exists for — and a reader consulting another reader is
+			// ordinary. What makes the grant real this time is the no-wiring path
+			// in `extension.ts`, which registers the tool, and the reader's
+			// allowlist in `spawn.ts`, which lets a launched reader call it.
 			definition: createSubagentTool(deps.subagent),
-			holders: ["maestro", "worker"],
+			holders: ["maestro", "worker", "read-only"],
 		},
 	];
 }

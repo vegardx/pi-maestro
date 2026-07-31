@@ -42,6 +42,74 @@ describe("the classifier is actually consulted", () => {
 	});
 });
 
+describe("the reader's shell: reads run, writes are refused", () => {
+	// A reader HOLDS a gated shell now. The old rule "a shell is a write tool"
+	// predated ambient confinement: the classifier refuses write effects for
+	// the read-only holder, and everything that runs at all runs under the
+	// actor's write profile — so the shell is real and the posture still means
+	// something. Driven through the gated operations, not just the gate,
+	// because the operations are what the reader's registered tool executes.
+	function readerOperations() {
+		const ran: string[] = [];
+		const confined: string[] = [];
+		const direct: BashOperations = {
+			exec: async (command: string) => {
+				ran.push(command);
+				return { exitCode: 0 };
+			},
+		} as unknown as BashOperations;
+		const ops = createGatedBashOperations({
+			holder: "read-only",
+			cwd: "/r",
+			// Fixed at plan, as the no-wiring path fixes it: read-only cwd,
+			// safeguards on. No `confirm` — a reader runs unattended.
+			mode: () => mode("plan"),
+			policy: () => policy,
+			direct,
+			confine: (base) =>
+				({
+					exec: async (command: string, cwd: string, o: unknown) => {
+						confined.push(command);
+						return (
+							base.exec as unknown as (
+								c: string,
+								w: string,
+								x: unknown,
+							) => Promise<{ exitCode: number }>
+						)(command, cwd, o);
+					},
+				}) as unknown as BashOperations,
+		});
+		return { ran, confined, ops };
+	}
+
+	it("runs git archaeology, confined like everything else", async () => {
+		const o = readerOperations();
+		await o.ops.exec("git log --oneline -5", "/r", { onData: () => {} });
+		expect(o.ran).toEqual(["git log --oneline -5"]);
+		expect(o.confined).toEqual(["git log --oneline -5"]);
+	});
+
+	it("refuses a write command with the read-only reason, not a redirect", async () => {
+		// `rm` used to fall into the delete-tool redirect — and no reader holds
+		// a `delete` tool. A refusal may only name a tool the refused agent
+		// has, so the read-only invariant answers first, and nothing runs.
+		const o = readerOperations();
+		await expect(
+			o.ops.exec("rm -rf src", "/r", { onData: () => {} }),
+		).rejects.toThrow(/read-only/i);
+		expect(o.ran).toEqual([]);
+	});
+
+	it("refuses commits the same way — a reader has no commit tool either", async () => {
+		const o = readerOperations();
+		await expect(
+			o.ops.exec('git commit -m "fix"', "/r", { onData: () => {} }),
+		).rejects.toThrow(/read-only/i);
+		expect(o.ran).toEqual([]);
+	});
+});
+
 describe("every route turns into something, and none of them into silence", () => {
 	// Tested through `decideFromRoute` rather than through a command, because
 	// the classifier already refuses most of these before they get here — it

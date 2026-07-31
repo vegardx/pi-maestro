@@ -9,13 +9,18 @@ never registered, rather than switched off afterwards.
 ```
 depth 0  maestro    the seat you talk to       plan · flight · respond · bash · commit · delete · subagent
 depth 1  worker     one deliverable, own tree  bash · commit · delete · subagent · finish
-depth 2  read-only  research/review/standby    read · grep · find · ls · websearch · webfetch
-depth 3  MAX_DEPTH  refused
+depth 2  read-only  research/review/standby    bash · subagent · read · grep · find · ls · websearch · webfetch
+depth 3  read-only  the last consultation      as depth 2, but spawning is refused (MAX_DEPTH)
 ```
 
-A read-only agent registers none of our tools. It runs on the `--tools`
-allowlist it was launched with, and has no shell — because a shell is a write
-tool, and withholding it is what makes the posture mean anything.
+A read-only agent registers two of our tools — the gated shell and `subagent`
+— and runs on the `--tools` allowlist it was launched with. Read-only does not
+mean "has no shell": it means no path to a tree write survives both the
+classifier, which refuses write-effect commands for a read-only holder, and
+the kernel write profile, which scopes a read-only actor to scratch space.
+Every agent holds `subagent` — depth is the cap, which is what MAX_DEPTH
+exists for. pi's `edit` and `write` stay withheld, because they write
+in-process, where the sandbox cannot see them.
 
 ## The defect this is organised against
 

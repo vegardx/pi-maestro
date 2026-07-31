@@ -287,18 +287,21 @@ describe("the agent tools are declared, not listed", () => {
 		expect(registry.grantsFor("read-only")).not.toContain("finish");
 	});
 
-	it("gives subagent to the two postures that can actually call it", () => {
-		// It was granted to `read-only` too, on the reasoning that a reader
-		// consulting another reader is ordinary and `checkSpawn` would do the
-		// limiting. Both halves were true and the grant was still a phantom: a
-		// read-only child registers NOTHING (`extension.ts` returns early for a
-		// child with no wiring) and `subagent` is not in its `--tools` allowlist
-		// either. So every reader was handed a generated brief naming a tool it
-		// could not call, twice over — inside the registry built to stop exactly
-		// that.
-		for (const holder of ["maestro", "worker"] as const)
+	it("gives subagent to every posture — depth is the cap", () => {
+		// This grant has been wrong in both directions. It once included
+		// `read-only` while a read-only child registered NOTHING (`extension.ts`
+		// returned early for a child with no wiring) and `subagent` was missing
+		// from its `--tools` allowlist besides — every reader handed a brief
+		// naming a tool it could not call, the phantom inside the registry built
+		// to stop phantoms — so the grant was withdrawn. The ruling that
+		// reversed the withdrawal: every agent holds `subagent`, depth is the
+		// cap (that is what MAX_DEPTH exists for), and a reader consulting
+		// another reader is ordinary. What makes the grant real this time is the
+		// no-wiring registration path in `extension.ts` and the reader's
+		// allowlist in `spawn.ts`; `refusals-name-real-tools.test.ts` holds the
+		// two together.
+		for (const holder of ["maestro", "worker", "read-only"] as const)
 			expect(registry.grantsFor(holder)).toContain("subagent");
-		expect(registry.grantsFor("read-only")).toEqual([]);
 	});
 
 	it("describes each tool from its own declaration", () => {
@@ -344,13 +347,20 @@ describe("a read-only child is launched with nothing to dial", () => {
 		// the other did not, so what "read-only" meant depended on which file you
 		// were standing in.
 		// The allowlist filters EXTENSION tools too, not just pi's builtins, so
-		// it is the whole of what a reader can call — `READ_ONLY_TOOLS`, which
-		// is the builtins plus the web tools `research-tools` defines.
+		// it is the whole of what a reader can call — `READ_ONLY_TOOLS`: the
+		// builtins, the web tools `research-tools` defines, and the two tools the
+		// reader's own process registers. `bash` in the list names OUR gated
+		// shell, which replaces pi's builtin of the same name at registration.
+		// Never `edit` or `write` — they write in-process, where the sandbox
+		// cannot see them — and never `delete`, which is a write tool however
+		// recoverable its writes are.
 		const { args } = invocation();
 		expect(args).toContain("--tools");
 		expect(args[args.indexOf("--tools") + 1]).toBe(READ_ONLY_TOOLS.join(","));
+		expect(READ_ONLY_TOOLS).toContain("bash");
+		expect(READ_ONLY_TOOLS).toContain("subagent");
 		expect(READ_ONLY_TOOLS).not.toContain("write");
-		expect(READ_ONLY_TOOLS).not.toContain("bash");
+		expect(READ_ONLY_TOOLS).not.toContain("edit");
 		expect(READ_ONLY_TOOLS).not.toContain("delete");
 	});
 

@@ -66,6 +66,14 @@ describe("what git reports as changed", () => {
 		]);
 	});
 
+	it("decodes the escapes inside a quoted path, not just its quotes", () => {
+		// Git writes non-ASCII bytes as octal escapes. Stripping only the quotes
+		// kept the backslashes and named a file that does not exist — so the
+		// commit staged nothing, silently. `ø` is \303\270 in UTF-8.
+		expect(changedPaths(' M "src/s\\303\\270k.ts"\n')).toEqual(["src/søk.ts"]);
+		expect(changedPaths(' M "src/a\\"b.ts"\n')).toEqual(['src/a"b.ts']);
+	});
+
 	it("finds nothing in a clean tree", () => {
 		expect(changedPaths("")).toEqual([]);
 		expect(changedPaths("\n\n")).toEqual([]);
@@ -104,6 +112,23 @@ describe("committing", () => {
 		const said = await t.run({ message: "   " });
 		expect(t.commits).toEqual([]);
 		expect(said.content[0].text).toContain("needs a message");
+	});
+
+	it("refuses a subject that is not a conventional commit", async () => {
+		// The schema used to ASK for a conventional subject in prose and check
+		// nothing — every commit was conventional only because models complied.
+		const t = tool();
+		const said = await t.run({ message: "updated some files" });
+		expect(t.commits).toEqual([]);
+		expect(said.content[0].text).toContain("not a conventional commit");
+	});
+
+	it("accepts scope, breaking marker, and a body", async () => {
+		const t = tool();
+		await t.run({
+			message: "feat(runtime)!: drop the v1 surface\n\nWhy: it was dead.",
+		});
+		expect(t.commits).toHaveLength(1);
 	});
 
 	it("RETURNS a git failure rather than throwing it", async () => {

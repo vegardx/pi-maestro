@@ -18,7 +18,6 @@ import type {
 	SpawnProfile,
 } from "./runs.js";
 import type { SettingsCapabilityV1 } from "./settings.js";
-import type { ShipResult } from "./ship.js";
 import type { TokenSnapshot, UsageCheckpoint, UsageSource } from "./usage.js";
 
 export const CAPABILITIES = {
@@ -29,8 +28,6 @@ export const CAPABILITIES = {
 	askTransport: "ask-transport.v1",
 	askInbox: "ask-inbox.v1",
 	usage: "usage.v1",
-	commit: "commit.v1",
-	ship: "ship.v1",
 	modes: "modes.v1",
 	personas: "personas.v1",
 	promptAssist: "prompt-assist.v1",
@@ -173,29 +170,11 @@ export interface UsageLedgerV1 {
 	};
 }
 
-export interface CommitCapabilityV1 {
-	commitLocal(input: {
-		readonly paths?: readonly string[];
-		readonly message?: string;
-		readonly cwd?: string;
-		/** Optional compact workflow boundary id, emitted as Maestro-Stage. */
-		readonly maestroStage?: string;
-	}): Promise<{
-		readonly committed: boolean;
-		readonly sha?: string;
-		readonly message?: string;
-		readonly error?: string;
-	}>;
-}
-
-export interface ShipCapabilityV1 {
-	ship(input: {
-		readonly cwd?: string;
-		readonly autoApprove?: boolean;
-		readonly title?: string;
-		readonly body?: string;
-	}): Promise<ShipResult>;
-}
+// `commit.v1` and `ship.v1` are gone. Committing is a registry tool inside
+// `packages/maestro` (`commit-tool.ts`) — maestro-internal, so routing it
+// through a string-keyed locator would reintroduce the joined-only-by-strings
+// pattern this rebuild removed. Shipping is the maestro's lifecycle, not a
+// capability: there is deliberately no ship surface for anything to consume.
 
 export interface ModesCapabilityV1 {
 	current(): ModeName;
@@ -240,8 +219,6 @@ export interface CapabilityMap {
 	[CAPABILITIES.askTransport]: AskTransportV1;
 	[CAPABILITIES.askInbox]: AskInboxV1;
 	[CAPABILITIES.usage]: UsageLedgerV1;
-	[CAPABILITIES.commit]: CommitCapabilityV1;
-	[CAPABILITIES.ship]: ShipCapabilityV1;
 	[CAPABILITIES.modes]: ModesCapabilityV1;
 	[CAPABILITIES.personas]: PersonasCapabilityV1;
 	[CAPABILITIES.promptAssist]: PromptAssistCapabilityV1;

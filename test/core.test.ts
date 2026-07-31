@@ -168,7 +168,7 @@ describe("capability registry", () => {
 	});
 
 	it("require throws when the capability is absent", () => {
-		expect(() => requireCapability(CAPABILITIES.commit)).toThrow(
+		expect(() => requireCapability(CAPABILITIES.usage)).toThrow(
 			/not available/,
 		);
 	});

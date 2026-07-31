@@ -1,6 +1,6 @@
 // The multi-model ollama profile, validated deterministically — no ollama, no pi
 // boot. It proves the generated v2 block (families/rosters/bindings/allowances)
-// is *valid* and that each maestro agent type resolves to the intended local
+// is *valid* and that each maestro persona resolves to the intended local
 // model, so a regression in the profile is caught in CI rather than only
 // surfacing during a manual live drive.
 //
@@ -12,13 +12,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	DEFAULT_PERSONA_ALLOWANCES,
 	MODEL_ROLES,
 	type ModelRole,
-	SPAWNABLE_AGENT_TYPES,
 } from "@vegardx/pi-contracts";
 import {
-	agentTypeForRole,
-	defaultTierForAgent,
+	defaultTierFor,
+	personaForRole,
 	resolveModel,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -74,17 +74,18 @@ function fakeCtx(
 
 /**
  * Resolve a v1 role the way a plan node does (context.ts resolveModel): map it
- * to a v2 agent type, take that type's default tier, resolve through the active
- * binding's roster. The real routing path, not the retired v1 exact selection.
+ * to the persona whose allowance governs it, take that persona's default tier,
+ * resolve through the active binding's roster. The real routing path, not the
+ * retired v1 exact selection.
  */
 async function modelFor(
 	role: ModelRole,
 	ctx: ExtensionContext = fakeCtx(),
 ): Promise<string | undefined> {
-	const agent = agentTypeForRole(role);
-	const tier = defaultTierForAgent(ctx, agent);
+	const persona = personaForRole(role);
+	const tier = defaultTierFor(ctx, persona);
 	const resolved = await resolveModel(ctx, {
-		agent,
+		persona,
 		...(tier ? { tier } : {}),
 		inherit: { modelId: SESSION },
 	});
@@ -140,14 +141,14 @@ describe("multi-model ollama profile", () => {
 		const ctx = fakeCtx();
 		// No tier requested → inherit the caller's model (the seat), not the roster.
 		const inherited = await resolveModel(ctx, {
-			agent: "worker",
+			persona: "deliverable-worker",
 			inherit: { modelId: SESSION },
 		});
 		expect(inherited.source).toBe("inherit");
 		expect(inherited.modelId).toBe(GEMMA);
 		// A deliberate tier → the roster's standard tier (the qwen coder).
 		const routed = await resolveModel(ctx, {
-			agent: "worker",
+			persona: "deliverable-worker",
 			tier: "standard",
 			inherit: { modelId: SESSION },
 		});
@@ -155,25 +156,25 @@ describe("multi-model ollama profile", () => {
 		expect(routed.modelId).toBe(QWEN);
 	});
 
-	it("maps every MODEL_ROLE to a spawnable agent type — no role falls through", () => {
+	it("maps every MODEL_ROLE to a built-in persona — no role falls through", () => {
 		for (const role of MODEL_ROLES) {
 			expect(
-				SPAWNABLE_AGENT_TYPES as readonly string[],
-				`role ${role} maps to an unknown agent type`,
-			).toContain(agentTypeForRole(role));
+				Object.keys(DEFAULT_PERSONA_ALLOWANCES),
+				`role ${role} maps to an unknown persona`,
+			).toContain(personaForRole(role));
 		}
 	});
 
-	it("routes each agent type to its intended local model", async () => {
-		// worker / verifier → worker → standard → the MoE coder
+	it("routes each persona to its intended local model", async () => {
+		// worker / verifier → deliverable-worker → standard → the MoE coder
 		expect(await modelFor("worker")).toBe(QWEN);
 		expect(await modelFor("verifier")).toBe(QWEN);
-		// classify / summarize / research → explorer → light → gpt-oss
+		// classify / summarize / research → codebase-research → light → gpt-oss
 		expect(await modelFor("codebase-research")).toBe(GPTOSS);
 		expect(await modelFor("classifier")).toBe(GPTOSS);
 		expect(await modelFor("plan-summarizer")).toBe(GPTOSS);
 		expect(await modelFor("general")).toBe(GPTOSS);
-		// *-review → reviewer → heavy → gpt-oss (a DIFFERENT family from workers)
+		// *-review → code-review → heavy → gpt-oss (a DIFFERENT family from workers)
 		expect(await modelFor("correctness-review")).toBe(GPTOSS);
 		expect(await modelFor("adversarial-review")).toBe(GPTOSS);
 	});

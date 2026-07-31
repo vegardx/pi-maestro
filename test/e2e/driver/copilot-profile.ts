@@ -12,10 +12,10 @@
 //   • Plan nodes INHERIT the session model. resolveModel passes no tier only
 //     when the agent has no default tier, so an inherited node runs on the
 //     maestro's own seat. `standard` is NOT "the worker model" by itself.
-//   • Tiers are DELIBERATE: a plan node spawns at its agent type's default tier
-//     (defaultTierForAgent), and policy-table duty rows / self-spawned subagents
+//   • Tiers are DELIBERATE: a spawn resolves at its persona's default tier
+//     (defaultTierFor), and policy-table duty rows / self-spawned subagents
 //     name a tier explicitly.
-//   • `allowances.<type>.tiers` bounds which tiers each agent type may reach
+//   • `allowances.<persona>.tiers` bounds which tiers each persona may reach
 //     (first = its default) — the menu an agent sees.
 //   • Within a tier, resolution walks alias refs in authored order and takes the
 //     first AVAILABLE attachment — a priority chain. The session seat is never a
@@ -125,14 +125,14 @@ const MODELS_BLOCK = {
 	bindings: {
 		copilot: { roster: "copilot" },
 	},
-	// Per-agent tier allowances; the FIRST tier is the default a plan node of
-	// that type spawns at. reviewer defaults to heavy so a verdict is never
-	// cheaper than — nor the same family as — the work it judges.
+	// Per-persona tier allowances; the FIRST tier is the default a spawn of
+	// that persona resolves at. code-review defaults to heavy so a verdict is
+	// never cheaper than — nor the same family as — the work it judges.
 	allowances: {
-		worker: { tiers: ["standard", "heavy"] },
-		explorer: { tiers: ["light", "standard"] },
-		reviewer: { tiers: ["heavy", "standard"] },
-		advisor: { tiers: ["heavy", "standard"] },
+		"deliverable-worker": { tiers: ["standard", "heavy"] },
+		"codebase-research": { tiers: ["light", "standard"] },
+		"code-review": { tiers: ["heavy", "standard"] },
+		standby: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 

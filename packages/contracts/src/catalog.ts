@@ -1,7 +1,7 @@
 // v2 model configuration vocabulary: families (ranked; each holds free-text
 // aliases with ordered per-provider attachments), rosters (three fixed-meaning
 // tiers holding ordered alias refs), bindings (thin seat→roster bindings),
-// region (the active model allowlist), and per-agent tier allowances.
+// region (the active model allowlist), and per-persona tier allowances.
 // See docs/design/v2-primitives.md and memory/project-model-families-design.
 
 import type { ThinkingLevel } from "./runs.js";
@@ -72,22 +72,23 @@ export interface RegionConfig {
 }
 
 /**
- * The spawnable agent types. Callers (classifier, summarizer,
- * command-auditor, watcher) are harness components tuned via rules —
- * deliberately absent: `agent: caller` in a plan is unrepresentable.
+ * The `direct` selectors: how a DIRECT (non-fanned) spawn picks its model.
+ * `inherit` (the default) is today's behavior — resolve the allowance's first
+ * tier, and with no tiers run the caller's model. `other-family` walks the
+ * allowance's tiers in order through the bound roster and takes the first
+ * entry whose family differs from the caller's — a reviewer never marks its
+ * own homework. With nowhere to go it falls back to inherit WITH a
+ * fallbackReason, never silently.
  */
-export const SPAWNABLE_AGENT_TYPES = [
-	"worker",
-	"explorer",
-	"reviewer",
-	// A read-only, persistent consultant spawned at RUNTIME (the reader path),
-	// never authored as a plan node — so it is spawnable (has a tier allowance)
-	// but NOT a NODE_AGENT_TYPE. See docs/design/multi-model-agents.md §6.
-	"advisor",
-] as const;
-export type SpawnableAgentType = (typeof SPAWNABLE_AGENT_TYPES)[number];
+export const DIRECT_SELECTORS = ["inherit", "other-family"] as const;
+export type DirectSelector = (typeof DIRECT_SELECTORS)[number];
 
-/** Per-agent-type tier allowance: which tiers its assignments may draw from. */
+/**
+ * Per-persona tier allowance: which tiers work of this kind may draw from.
+ * Keyed by PERSONA id (free text): `code-review` wanting a heavy tier is a
+ * statement about the work, not about a posture. Harness callers (classifier,
+ * summarizer, command-auditor, watcher) are tuned via rules, not allowances.
+ */
 export interface AgentAllowanceConfig {
 	readonly tiers: readonly TierId[];
 	/**
@@ -97,6 +98,8 @@ export interface AgentAllowanceConfig {
 	 * plan's back. The plan decides WHETHER; this decides HOW WIDE.
 	 */
 	readonly spread?: number;
+	/** Model selector for a direct spawn; absent = "inherit". */
+	readonly direct?: DirectSelector;
 }
 
 /**
@@ -107,29 +110,30 @@ export interface AgentAllowanceConfig {
 export const MAX_SPREAD = 5;
 
 /**
- * Defaults applied when settings say nothing. `inherit` and the
- * session-model fallback are exempt from these allowances (labeled in explain
- * output) — the lists bound deliberate tier references only.
+ * Defaults applied when settings say nothing, keyed by the built-in persona
+ * ids (packages/maestro/src/personas.ts). `inherit` and the session-model
+ * fallback are exempt from these allowances (labeled in explain output) — the
+ * lists bound deliberate tier references only.
  */
-export const DEFAULT_AGENT_ALLOWANCES: Readonly<
-	Record<SpawnableAgentType, AgentAllowanceConfig>
+export const DEFAULT_PERSONA_ALLOWANCES: Readonly<
+	Record<string, AgentAllowanceConfig>
 > = {
-	// The worker is the deliverable's implementer — the maestro's direct hand.
-	// With no explicit allowance it INHERITS the session model (empty tiers →
-	// defaultTierForAgent returns undefined → the resolver's inherit path), so an
-	// unconfigured worker runs on the seat, not a roster tier. The rosters govern
-	// the support agents a worker fans out to (explorer/reviewer/advisor) and any
-	// worker that IS given an explicit allowance. (Note: user-authored allowances
+	// The deliverable worker is the deliverable's implementer — the maestro's
+	// direct hand. With no explicit allowance it INHERITS the session model
+	// (empty tiers → defaultTierFor returns undefined → the resolver's inherit
+	// path), so an unconfigured worker runs on the seat, not a roster tier. The
+	// rosters govern the support personas a worker fans out to and any worker
+	// that IS given an explicit allowance. (Note: user-authored allowances
 	// require a non-empty tiers list; only this built-in default may be empty.)
-	worker: { tiers: [] },
-	explorer: { tiers: ["light", "standard"] },
+	"deliverable-worker": { tiers: [] },
+	"codebase-research": { tiers: ["light", "standard"] },
 	// spread: a multi-modal review reads the same diff through three distinct
 	// families — enough for genuine disagreement to surface, without the cost
 	// running away. Only applies to reviews the PLAN marked multi-modal.
-	reviewer: { tiers: ["standard", "heavy"], spread: 3 },
+	"code-review": { tiers: ["standard", "heavy"], spread: 3 },
 	// Advice draws on strong reasoning; overflow into standard when a fan-out
 	// wants more models than heavy holds.
-	advisor: { tiers: ["heavy", "standard"], spread: 2 },
+	standby: { tiers: ["heavy", "standard"], spread: 2 },
 };
 
 /**
@@ -141,7 +145,6 @@ export interface ModelsConfig {
 	readonly rosters: Readonly<Record<string, RosterTiers>>;
 	readonly bindings: Readonly<Record<string, BindingConfig>>;
 	readonly region: RegionConfig;
-	readonly allowances: Readonly<
-		Record<SpawnableAgentType, AgentAllowanceConfig>
-	>;
+	/** Keyed by persona id — free text; unknown personas simply never match. */
+	readonly allowances: Readonly<Record<string, AgentAllowanceConfig>>;
 }

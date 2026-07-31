@@ -1,21 +1,22 @@
 // The v2 inheritance-first resolver: inherit by default; tier resolution
 // through binding→roster, each alias resolving to a concrete attachment
-// (own-gateway preference, else first available), bounded by the agent's tier
-// allowance; region striking; session-model floor with a visible reason;
-// effort clamping; and explain output.
+// (own-gateway preference, else first available), bounded by the persona's
+// tier allowance; region striking; session-model floor with a visible reason;
+// effort clamping; the `direct: "other-family"` selector; and explain output.
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	defaultTierForAgent,
+	defaultTierFor,
 	explainTier,
 	fallbackNotice,
 	ModelResolutionError,
 	resolveModel,
 	resolveModels,
-	spreadForAgent,
+	resolveOtherFamily,
+	spreadFor,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -49,10 +50,10 @@ const SETTINGS = {
 			},
 		},
 		bindings: { main: { roster: "daily" } },
-		// The built-in worker default is now empty (inherit the session model), so
-		// these tier-mechanics tests configure worker explicitly. The default is
-		// covered separately in "default worker allowance".
-		allowances: { worker: { tiers: ["standard", "heavy"] } },
+		// The built-in deliverable-worker default is empty (inherit the session
+		// model), so these tier-mechanics tests configure it explicitly. The
+		// default is covered separately in "default persona allowances".
+		allowances: { "deliverable-worker": { tiers: ["standard", "heavy"] } },
 	},
 };
 
@@ -110,7 +111,7 @@ afterEach(() => {
 describe("inheritance", () => {
 	it("no tier → the caller's model, verbatim", async () => {
 		const resolution = await resolveModel(fakeCtx(), {
-			agent: "worker",
+			persona: "deliverable-worker",
 			inherit: { modelId: "gw1/parent", effort: "high" },
 		});
 		expect(resolution).toMatchObject({
@@ -121,7 +122,9 @@ describe("inheritance", () => {
 	});
 
 	it("no tier, no caller → the session model (the root's caller is the seat)", async () => {
-		const resolution = await resolveModel(fakeCtx(), { agent: "worker" });
+		const resolution = await resolveModel(fakeCtx(), {
+			persona: "deliverable-worker",
+		});
 		expect(resolution).toMatchObject({
 			source: "inherit",
 			modelId: "gw2/seat",
@@ -134,7 +137,7 @@ describe("alias resolution", () => {
 	it("prefers an attachment on the resolving agent's own gateway", async () => {
 		// Seat is gw2; Sol lists gw1/sol FIRST, but gw2 is the agent's gateway.
 		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
-			agent: "worker",
+			persona: "deliverable-worker",
 			tier: "standard",
 			inherit: { modelId: "gw2/seat", effort: "medium" },
 		});
@@ -155,7 +158,7 @@ describe("alias resolution", () => {
 	it("falls to the first available attachment when the own gateway is down", async () => {
 		const resolution = await resolveModel(
 			fakeCtx({ seat: "gw2/seat", unavailable: ["gw2/sol"] }),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 		);
 		expect(resolution).toMatchObject({
 			source: "tier",
@@ -168,7 +171,7 @@ describe("alias resolution", () => {
 	it("walks to the next alias when the first alias has no attachment available", async () => {
 		const resolution = await resolveModel(
 			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol"] }),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 		);
 		expect(resolution).toMatchObject({
 			source: "tier",
@@ -184,7 +187,7 @@ describe("alias resolution", () => {
 
 	it("returns effort verbatim for an alias with a fixed effort and no allowlist", async () => {
 		const resolution = await resolveModel(fakeCtx(), {
-			agent: "explorer",
+			persona: "codebase-research",
 			tier: "light",
 		});
 		expect(resolution.modelId).toBe("gw1/quick");
@@ -193,37 +196,85 @@ describe("alias resolution", () => {
 });
 
 describe("allowances", () => {
-	it("bounds deliberate tier references to the agent's allowance", async () => {
-		// worker is configured here as {standard, heavy} — light is out.
+	it("bounds deliberate tier references to the persona's allowance", async () => {
+		// deliverable-worker is configured here as {standard, heavy} — light is out.
 		await expect(
-			resolveModel(fakeCtx(), { agent: "worker", tier: "light" }),
+			resolveModel(fakeCtx(), { persona: "deliverable-worker", tier: "light" }),
 		).rejects.toThrow(ModelResolutionError);
-		// explorer's allowance includes light.
+		// codebase-research's allowance includes light.
 		const resolution = await resolveModel(fakeCtx(), {
-			agent: "explorer",
+			persona: "codebase-research",
 			tier: "light",
 		});
 		expect(resolution.modelId).toBe("gw1/quick");
 	});
+
+	it("resolves a persona-keyed allowance authored in settings", async () => {
+		// A free-text persona key is a first-class allowance — nothing enumerates
+		// valid personas at parse time.
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: { "deep-research": { tiers: ["heavy"] } },
+			},
+		});
+		expect(defaultTierFor(fakeCtx(), "deep-research")).toBe("heavy");
+		const resolution = await resolveModel(fakeCtx(), {
+			persona: "deep-research",
+			tier: "heavy",
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw1/opus",
+			family: "Anthropic",
+		});
+	});
+
+	it("a persona with no allowance has no default tier and inherits", async () => {
+		expect(defaultTierFor(fakeCtx(), "never-heard-of-it")).toBeUndefined();
+		const resolution = await resolveModel(fakeCtx(), {
+			persona: "never-heard-of-it",
+			inherit: { modelId: "gw1/parent" },
+		});
+		expect(resolution).toMatchObject({
+			source: "inherit",
+			modelId: "gw1/parent",
+		});
+	});
 });
 
-describe("default worker allowance", () => {
-	it("an unconfigured worker has no default tier and inherits the session model", async () => {
-		// No allowances block → every agent falls to the built-in defaults. The
-		// worker default is empty (inherit), the support types keep their tiers.
+describe("default persona allowances", () => {
+	it("an unconfigured deliverable-worker has no default tier and inherits the session model", async () => {
+		// No allowances block → every persona falls to the built-in defaults. The
+		// deliverable-worker default is empty (inherit), the support personas
+		// keep their tiers.
 		writeSettings({ models: { ...SETTINGS.models, allowances: {} } });
-		expect(defaultTierForAgent(fakeCtx(), "worker")).toBeUndefined();
-		expect(defaultTierForAgent(fakeCtx(), "explorer")).toBe("light");
-		expect(defaultTierForAgent(fakeCtx(), "reviewer")).toBe("standard");
-		expect(defaultTierForAgent(fakeCtx(), "advisor")).toBe("heavy");
+		expect(defaultTierFor(fakeCtx(), "deliverable-worker")).toBeUndefined();
+		expect(defaultTierFor(fakeCtx(), "codebase-research")).toBe("light");
+		expect(defaultTierFor(fakeCtx(), "code-review")).toBe("standard");
+		expect(defaultTierFor(fakeCtx(), "standby")).toBe("heavy");
 		// With no tier, the worker resolves to the seat (source: inherit).
 		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
-			agent: "worker",
+			persona: "deliverable-worker",
 		});
 		expect(resolution).toMatchObject({
 			source: "inherit",
 			modelId: "gw2/seat",
 		});
+	});
+
+	it("retired agent-type keys stop matching and degrade to the defaults", async () => {
+		// The old worker/explorer/reviewer/advisor keys are just unknown personas
+		// now: parsed fine (free text), matched by nothing that spawns, and the
+		// built-in persona defaults answer instead — graceful, never a crash.
+		writeSettings({
+			models: {
+				...SETTINGS.models,
+				allowances: { reviewer: { tiers: ["light"] } },
+			},
+		});
+		expect(defaultTierFor(fakeCtx(), "code-review")).toBe("standard");
+		expect(defaultTierFor(fakeCtx(), "reviewer")).toBe("light");
 	});
 });
 
@@ -237,7 +288,7 @@ describe("region", () => {
 		});
 		// Seat gw2 would prefer gw2/sol, but region allows only gw1/* → gw1/sol.
 		const resolution = await resolveModel(fakeCtx({ seat: "gw2/seat" }), {
-			agent: "worker",
+			persona: "deliverable-worker",
 			tier: "standard",
 		});
 		expect(resolution.modelId).toBe("gw1/sol");
@@ -251,7 +302,7 @@ describe("region", () => {
 			},
 		});
 		const resolution = await resolveModel(fakeCtx(), {
-			agent: "worker",
+			persona: "deliverable-worker",
 			tier: "standard",
 		});
 		expect(resolution.source).toBe("fallback");
@@ -282,7 +333,7 @@ describe("region", () => {
 					},
 				},
 				bindings: { main: { roster: "daily" } },
-				allowances: { reviewer: { tiers: ["heavy"] } },
+				allowances: { "code-review": { tiers: ["heavy"] } },
 				region: {
 					active: "EEA",
 					lists: { Global: ["gw1/*", "gw2/*"], EEA: ["gw1/*"] },
@@ -293,7 +344,7 @@ describe("region", () => {
 		it("EEA skips the non-EEA model and lands on the EEA-legal one", async () => {
 			writeSettings(TRIPWIRE);
 			const resolution = await resolveModel(fakeCtx({ seat: "gw1/seat" }), {
-				agent: "reviewer",
+				persona: "code-review",
 				tier: "heavy",
 			});
 			expect(resolution.modelId).toBe("gw1/opus");
@@ -312,7 +363,7 @@ describe("region", () => {
 				},
 			});
 			const resolution = await resolveModel(fakeCtx({ seat: "gw1/seat" }), {
-				agent: "reviewer",
+				persona: "code-review",
 				tier: "heavy",
 			});
 			expect(resolution.modelId).toBe("gw2/fable");
@@ -324,7 +375,11 @@ describe("session fallback", () => {
 	it("an exhausted tier degrades to the seat with a visible reason", async () => {
 		const resolution = await resolveModel(
 			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"] }),
-			{ agent: "worker", tier: "standard", inherit: { modelId: "gw2/seat" } },
+			{
+				persona: "deliverable-worker",
+				tier: "standard",
+				inherit: { modelId: "gw2/seat" },
+			},
 		);
 		expect(resolution).toMatchObject({
 			source: "fallback",
@@ -345,7 +400,7 @@ describe("session fallback", () => {
 			},
 		});
 		const resolution = await resolveModel(fakeCtx(), {
-			agent: "worker",
+			persona: "deliverable-worker",
 			tier: "heavy",
 		});
 		expect(resolution.source).toBe("fallback");
@@ -357,7 +412,10 @@ describe("failure semantics", () => {
 	it("throws visibly when a tier is requested with no config or no binding", async () => {
 		writeSettings({});
 		await expect(
-			resolveModel(fakeCtx(), { agent: "worker", tier: "standard" }),
+			resolveModel(fakeCtx(), {
+				persona: "deliverable-worker",
+				tier: "standard",
+			}),
 		).rejects.toThrow("no v2 roster");
 
 		writeSettings({
@@ -365,25 +423,36 @@ describe("failure semantics", () => {
 				families: SETTINGS.models.families,
 				rosters: SETTINGS.models.rosters,
 				bindings: { main: { targets: ["gw9/other"], roster: "daily" } },
-				// worker must allow standard to reach the binding check under test.
-				allowances: { worker: { tiers: ["standard"] } },
+				// The persona must allow standard to reach the binding check under test.
+				allowances: { "deliverable-worker": { tiers: ["standard"] } },
 			},
 		});
 		await expect(
-			resolveModel(fakeCtx(), { agent: "worker", tier: "standard" }),
+			resolveModel(fakeCtx(), {
+				persona: "deliverable-worker",
+				tier: "standard",
+			}),
 		).rejects.toThrow("no binding is active");
 	});
 });
 
 describe("explain output", () => {
 	it("renders every ref's fact and the allowance verdict", async () => {
-		const explained = await explainTier(fakeCtx(), "worker", "standard");
+		const explained = await explainTier(
+			fakeCtx(),
+			"deliverable-worker",
+			"standard",
+		);
 		expect(explained.allowed).toBe(true);
 		expect(explained.bindingId).toBe("main");
 		expect(explained.rosterId).toBe("daily");
 		expect(explained.candidates).toHaveLength(2);
 
-		const lightForWorker = await explainTier(fakeCtx(), "worker", "light");
+		const lightForWorker = await explainTier(
+			fakeCtx(),
+			"deliverable-worker",
+			"light",
+		);
 		expect(lightForWorker.allowed).toBe(false);
 	});
 });
@@ -395,7 +464,10 @@ describe("explain output", () => {
 
 describe("resolveModels (top-N)", () => {
 	it("n=1 is exactly resolveModel", async () => {
-		const request = { agent: "worker" as const, tier: "standard" as const };
+		const request = {
+			persona: "deliverable-worker" as const,
+			tier: "standard" as const,
+		};
 		const [one] = await resolveModels(fakeCtx(), request, 1);
 		expect(one).toEqual(await resolveModel(fakeCtx(), request));
 	});
@@ -405,7 +477,7 @@ describe("resolveModels (top-N)", () => {
 		// manufacture diversity out of "run your caller's model".
 		const slots = await resolveModels(
 			fakeCtx(),
-			{ agent: "worker", inherit: { modelId: "gw1/parent" } },
+			{ persona: "deliverable-worker", inherit: { modelId: "gw1/parent" } },
 			3,
 		);
 		expect(slots).toHaveLength(1);
@@ -419,7 +491,7 @@ describe("resolveModels (top-N)", () => {
 		// standard = [OpenAI/Sol, Moonshot/Kimi] — two families.
 		const slots = await resolveModels(
 			fakeCtx(),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 			2,
 		);
 		expect(slots).toHaveLength(2);
@@ -432,7 +504,7 @@ describe("resolveModels (top-N)", () => {
 		// plus 3 seat copies dressed up as diversity.
 		const slots = await resolveModels(
 			fakeCtx(),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 			5,
 		);
 		expect(slots).toHaveLength(2);
@@ -443,7 +515,7 @@ describe("resolveModels (top-N)", () => {
 		// Kimi is gw2-only; strike it and Moonshot has nothing left.
 		const slots = await resolveModels(
 			fakeCtx({ unavailable: ["gw2/kimi"] }),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 			2,
 		);
 		expect(slots).toHaveLength(1);
@@ -455,7 +527,7 @@ describe("resolveModels (top-N)", () => {
 		// usable review is a review; zero is a silent hole.
 		const slots = await resolveModels(
 			fakeCtx({ unavailable: ["gw1/sol", "gw2/sol", "gw2/kimi"] }),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 			3,
 		);
 		expect(slots).toHaveLength(1);
@@ -465,15 +537,19 @@ describe("resolveModels (top-N)", () => {
 
 	it("keeps the allowance bound — top-N is not an escape hatch", async () => {
 		await expect(
-			resolveModels(fakeCtx(), { agent: "worker", tier: "light" }, 3),
-		).rejects.toThrow("outside agent worker's allowance");
+			resolveModels(
+				fakeCtx(),
+				{ persona: "deliverable-worker", tier: "light" },
+				3,
+			),
+		).rejects.toThrow("outside persona deliverable-worker's allowance");
 	});
 
 	it("carries the same candidate facts on every slot", async () => {
 		// Explain output must not degrade just because the caller asked for N.
 		const slots = await resolveModels(
 			fakeCtx(),
-			{ agent: "worker", tier: "standard" },
+			{ persona: "deliverable-worker", tier: "standard" },
 			2,
 		);
 		for (const slot of slots) expect(slot.candidates).toHaveLength(2);
@@ -484,9 +560,9 @@ describe("resolveModels (top-N)", () => {
 // How wide a MULTI-MODAL review fans out. Answers HOW WIDE, never WHETHER —
 // the plan node decides that.
 
-describe("spreadForAgent", () => {
-	it("uses the shipped default for a reviewer", async () => {
-		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+describe("spreadFor", () => {
+	it("uses the shipped default for code-review", async () => {
+		expect(spreadFor(fakeCtx(), "code-review")).toBe(3);
 	});
 
 	it("honors an authored spread", async () => {
@@ -494,16 +570,16 @@ describe("spreadForAgent", () => {
 			models: {
 				...SETTINGS.models,
 				allowances: {
-					worker: { tiers: ["standard", "heavy"] },
-					reviewer: { tiers: ["standard"], spread: 2 },
+					"deliverable-worker": { tiers: ["standard", "heavy"] },
+					"code-review": { tiers: ["standard"], spread: 2 },
 				},
 			},
 		});
-		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(2);
+		expect(spreadFor(fakeCtx(), "code-review")).toBe(2);
 	});
 
 	it("keeps the default when an author narrows tiers without saying spread", () => {
-		// allowances merge SHALLOWLY, so authoring `reviewer: { tiers: [...] }`
+		// allowances merge SHALLOWLY, so authoring `code-review: { tiers: [...] }`
 		// replaces the whole default object. Without the explicit fallback this
 		// would silently disable multi-modal review for anyone who ever narrowed
 		// a tier list.
@@ -511,39 +587,148 @@ describe("spreadForAgent", () => {
 			models: {
 				...SETTINGS.models,
 				allowances: {
-					worker: { tiers: ["standard", "heavy"] },
-					reviewer: { tiers: ["heavy"] },
+					"deliverable-worker": { tiers: ["standard", "heavy"] },
+					"code-review": { tiers: ["heavy"] },
 				},
 			},
 		});
-		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+		expect(spreadFor(fakeCtx(), "code-review")).toBe(3);
 	});
 
-	it("is 1 for agent types with no spread anywhere", () => {
+	it("is 1 for personas with no spread anywhere", () => {
 		// An authored multiModal flag then degrades to one review, never errors.
-		expect(spreadForAgent(fakeCtx(), "explorer")).toBe(1);
+		expect(spreadFor(fakeCtx(), "codebase-research")).toBe(1);
+		expect(spreadFor(fakeCtx(), "never-heard-of-it")).toBe(1);
 	});
 
 	it("rejects a spread above the cap at parse time", () => {
 		writeSettings({
 			models: {
 				...SETTINGS.models,
-				allowances: { reviewer: { tiers: ["heavy"], spread: 99 } },
+				allowances: { "code-review": { tiers: ["heavy"], spread: 99 } },
 			},
 		});
-		expect(() => spreadForAgent(fakeCtx(), "reviewer")).not.toThrow();
+		expect(() => spreadFor(fakeCtx(), "code-review")).not.toThrow();
 		// The config is rejected, so the reader falls back to the shipped default
 		// rather than honoring 99 — runaway fan-out is real money.
-		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+		expect(spreadFor(fakeCtx(), "code-review")).toBe(3);
 	});
 
 	it("rejects a non-integer spread", () => {
 		writeSettings({
 			models: {
 				...SETTINGS.models,
-				allowances: { reviewer: { tiers: ["heavy"], spread: 2.5 } },
+				allowances: { "code-review": { tiers: ["heavy"], spread: 2.5 } },
 			},
 		});
-		expect(spreadForAgent(fakeCtx(), "reviewer")).toBe(3);
+		expect(spreadFor(fakeCtx(), "code-review")).toBe(3);
+	});
+});
+
+// ─── direct: other-family ────────────────────────────────────────────────────
+// The model selector for a DIRECT (non-fanned) spawn. `other-family` walks the
+// allowance's tiers in order and takes the first available entry whose family
+// differs from the caller's — a reviewer never marks its own homework. With
+// nowhere to go it falls back to inherit WITH a fallbackReason, never silently.
+
+describe("resolveOtherFamily", () => {
+	// A caller on OpenAI (Sol's gw1 attachment) asking through the standard-then-
+	// heavy allowance: standard leads with OpenAI/Sol (same family — skipped),
+	// then Moonshot/Kimi wins deterministically.
+	const OTHER_FAMILY = {
+		models: {
+			...SETTINGS.models,
+			allowances: {
+				"code-review": {
+					tiers: ["standard", "heavy"],
+					direct: "other-family",
+				},
+			},
+		},
+	};
+
+	it("picks the first foreign-family entry, walking tiers in order", async () => {
+		writeSettings(OTHER_FAMILY);
+		const resolution = await resolveOtherFamily(fakeCtx(), {
+			persona: "code-review",
+			inherit: { modelId: "gw1/sol", effort: "medium" },
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw2/kimi",
+			family: "Moonshot",
+			tier: "standard",
+		});
+	});
+
+	it("walks into the next tier when the first holds only the caller's family", async () => {
+		// standard reduced to OpenAI only; heavy holds Anthropic — the walk must
+		// cross the tier boundary rather than settle for its own family.
+		writeSettings({
+			models: {
+				...OTHER_FAMILY.models,
+				rosters: {
+					daily: { ...SETTINGS.models.rosters.daily, standard: ["OpenAI/Sol"] },
+				},
+			},
+		});
+		const resolution = await resolveOtherFamily(fakeCtx(), {
+			persona: "code-review",
+			inherit: { modelId: "gw1/sol" },
+		});
+		expect(resolution).toMatchObject({
+			source: "tier",
+			modelId: "gw1/opus",
+			family: "Anthropic",
+			tier: "heavy",
+		});
+	});
+
+	it("falls back to inherit WITH a reason when every family is the caller's", async () => {
+		// An all-OpenAI roster leaves other-family nowhere to go. Falling back to
+		// a tier pick would mark its own homework; inheriting silently would hide
+		// the degradation. It inherits, and says why.
+		writeSettings({
+			models: {
+				...OTHER_FAMILY.models,
+				rosters: {
+					daily: {
+						light: ["OpenAI/Quick"],
+						standard: ["OpenAI/Sol"],
+						heavy: ["OpenAI/Quick"],
+					},
+				},
+			},
+		});
+		const resolution = await resolveOtherFamily(fakeCtx(), {
+			persona: "code-review",
+			inherit: { modelId: "gw1/sol", effort: "medium" },
+		});
+		expect(resolution).toMatchObject({
+			source: "inherit",
+			modelId: "gw1/sol",
+			effort: "medium",
+		});
+		expect(resolution.fallbackReason).toContain("no model outside family");
+	});
+
+	it("falls back with a reason when the caller's family is unknown", async () => {
+		writeSettings(OTHER_FAMILY);
+		// No inherit at all: nothing to differ from — do not guess.
+		const noCaller = await resolveOtherFamily(fakeCtx(), {
+			persona: "code-review",
+		});
+		expect(noCaller.source).toBe("inherit");
+		expect(noCaller.fallbackReason).toContain("caller's model is unknown");
+		// A caller model attached to no alias: equally unknowable.
+		const noFamily = await resolveOtherFamily(fakeCtx(), {
+			persona: "code-review",
+			inherit: { modelId: "gw9/mystery" },
+		});
+		expect(noFamily).toMatchObject({
+			source: "inherit",
+			modelId: "gw9/mystery",
+		});
+		expect(noFamily.fallbackReason).toContain("no configured family");
 	});
 });

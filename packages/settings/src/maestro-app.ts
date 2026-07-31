@@ -18,6 +18,7 @@ import type { Component, Focusable } from "@earendil-works/pi-tui";
 import {
 	CONSUMED_POLICY_TRIGGERS,
 	CONTRACT_IDS,
+	DEFAULT_PERSONA_ALLOWANCES,
 	type ModelsConfig,
 	NODE_AGENT_TYPES,
 	POLICY_DUTIES,
@@ -25,8 +26,6 @@ import {
 	type PolicyRow,
 	type PolicyRun,
 	type PolicyScope,
-	SPAWNABLE_AGENT_TYPES,
-	type SpawnableAgentType,
 	TIER_IDS,
 	type TierId,
 } from "@vegardx/pi-contracts";
@@ -1242,23 +1241,33 @@ class BindingTargetsScreen extends ListScreen {
 
 class AllowancesScreen extends ListScreen {
 	title(): string {
-		return "Allowances — tiers each agent may draw from";
+		return "Allowances — tiers each persona may draw from";
+	}
+	/** Built-in persona ids first (stable order), then any authored extras. */
+	private personas(): string[] {
+		const builtIn = Object.keys(DEFAULT_PERSONA_ALLOWANCES);
+		const authored = Object.keys(this.app.config?.allowances ?? {});
+		return [...builtIn, ...authored.filter((id) => !builtIn.includes(id))];
 	}
 	rows(): Row[] {
-		return SPAWNABLE_AGENT_TYPES.map((agent) => {
-			const tiers = this.app.config?.allowances?.[agent]?.tiers ?? [];
+		return this.personas().map((persona) => {
+			const allowance = this.app.config?.allowances?.[persona];
+			const tiers = allowance?.tiers ?? [];
+			const direct =
+				allowance?.direct === "other-family" ? " · direct: other-family" : "";
 			return {
-				label: `${agent}: ${tiers.join(", ") || "none"}`,
-				enter: () => this.editAgent(agent),
+				label: `${persona}: ${tiers.join(", ") || "none"}${direct}`,
+				enter: () => this.editPersona(persona),
 			};
 		});
 	}
-	private editAgent(agent: SpawnableAgentType): void {
-		const current = new Set(this.app.config?.allowances?.[agent]?.tiers ?? []);
+	private editPersona(persona: string): void {
+		const allowance = this.app.config?.allowances?.[persona];
+		const current = new Set(allowance?.tiers ?? []);
 		this.app.push(
 			new ChecklistScreen(
 				this.app,
-				`${agent} — allowed tiers`,
+				`${persona} — allowed tiers`,
 				TIER_IDS.map((tier) => ({
 					id: tier,
 					label: tier,
@@ -1272,8 +1281,17 @@ class AllowancesScreen extends ListScreen {
 						);
 						return;
 					}
-					this.app.write(`models.allowances.${agent}`, {
+					// Rewrite tiers only — carrying spread/direct forward, because a
+					// whole-object write that dropped them would silently disable
+					// multi-modal fan-out or revert `direct` to inherit.
+					this.app.write(`models.allowances.${persona}`, {
 						tiers: TIER_IDS.filter((tier) => ids.includes(tier)),
+						...(allowance?.spread !== undefined
+							? { spread: allowance.spread }
+							: {}),
+						...(allowance?.direct !== undefined
+							? { direct: allowance.direct }
+							: {}),
 					});
 				},
 			),

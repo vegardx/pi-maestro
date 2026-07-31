@@ -11,7 +11,7 @@
 // demand. context below MUST match the ollama cap: if pi believes the
 // window is larger than ollama allocates, prompts get silently truncated
 // mid-context; matched, pi compacts before the edge instead). v2 layout — three
-// ranked families, one roster, a default binding, per-agent tier allowances:
+// ranked families, one roster, a default binding, per-persona tier allowances:
 //   • session / planner  → Gemma/Gemma4 31B (strong generalist — the seat)
 //   • standard (workers) → Qwen/Qwen3.6 Coder → seat  (MoE coder, ~3B active)
 //   • light  (utility)   → GptOss/GPT-OSS 20B → seat  (classify, summarize, …)
@@ -99,14 +99,15 @@ const MODELS_BLOCK = {
 	bindings: {
 		ollama: { roster: "ollama" },
 	},
-	// Per-agent tier allowances; the FIRST tier is the default a plan node of
-	// that type spawns at. reviewer overrides the shipped default to heavy-first
-	// so a review lands on gpt-oss — a different family than the qwen workers.
+	// Per-persona tier allowances; the FIRST tier is the default a spawn of
+	// that persona resolves at. code-review overrides the shipped default to
+	// heavy-first so a review lands on gpt-oss — a different family than the
+	// qwen workers.
 	allowances: {
-		worker: { tiers: ["standard", "heavy"] },
-		explorer: { tiers: ["light", "standard"] },
-		reviewer: { tiers: ["heavy", "standard"] },
-		advisor: { tiers: ["heavy", "standard"] },
+		"deliverable-worker": { tiers: ["standard", "heavy"] },
+		"codebase-research": { tiers: ["light", "standard"] },
+		"code-review": { tiers: ["heavy", "standard"] },
+		standby: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 

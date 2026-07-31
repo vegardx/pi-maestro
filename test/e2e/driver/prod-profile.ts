@@ -20,8 +20,8 @@
 // tripwire (that is SIT-only, where the US-data-share Fable exists).
 //
 // v2 layout mirrors sit-profile: OpenAI/Anthropic families, one roster, a
-// default binding, per-agent allowances (reviewer → heavy = Opus, a different
-// family than the sol workers).
+// default binding, per-persona allowances (code-review → heavy = Opus, a
+// different family than the sol workers).
 
 import { readHostProviderToken } from "./gateway-auth.js";
 import type { MultiModelProfile } from "./multi-model-profile.js";
@@ -117,14 +117,14 @@ const MODELS_BLOCK = {
 	bindings: {
 		prod: { roster: "prod" },
 	},
-	// Per-agent tier allowances; the FIRST tier is the default a plan node of
-	// that type spawns at. reviewer overrides to heavy-first so reviews are
-	// cross-family from the sol workers even before diversity is wired.
+	// Per-persona tier allowances; the FIRST tier is the default a spawn of
+	// that persona resolves at. code-review overrides to heavy-first so reviews
+	// are cross-family from the sol workers even before diversity is wired.
 	allowances: {
-		worker: { tiers: ["standard", "heavy"] },
-		explorer: { tiers: ["light", "standard"] },
-		reviewer: { tiers: ["heavy", "standard"] },
-		advisor: { tiers: ["heavy", "standard"] },
+		"deliverable-worker": { tiers: ["standard", "heavy"] },
+		"codebase-research": { tiers: ["light", "standard"] },
+		"code-review": { tiers: ["heavy", "standard"] },
+		standby: { tiers: ["heavy", "standard"] },
 	},
 	// Prod is ALL-EEA — every model is EEA-legal, so the region filter strikes
 	// nothing (no US-data-share tripwire exists on prod; that is SIT-only). EEA

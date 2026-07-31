@@ -219,8 +219,12 @@ function secretDenyRead(): string[] {
 function configFor(profile: WriteProfile): SandboxRuntimeConfig {
 	return {
 		network: {
-			allowedDomains: [],
-			deniedDomains: ["*"],
+			// The sandbox confines WRITES; it does not ration the network. A
+			// worker's deliverable routinely needs `npm install` or a registry, and
+			// a total deny would fail those closed — the guard here is the write
+			// profile and the secret deny-reads, not domain filtering.
+			allowedDomains: ["*"],
+			deniedDomains: [],
 			allowUnixSockets: [],
 			allowAllUnixSockets: false,
 			allowLocalBinding: false,

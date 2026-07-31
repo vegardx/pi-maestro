@@ -28,9 +28,9 @@ import type { Holder } from "./tool-registry.js";
  *
  * There is no `strong` either, any more. It named a separate backend whose
  * supplier was `packages/modes`, so after the flip every command routed there
- * was refused for want of a backend that could not exist. What it promised —
- * denied network, deny-read on secrets, kernel-confined writes — is what the
- * ambient profile already delivers.
+ * was refused for want of a backend that could not exist. What it guarded —
+ * deny-read on secrets, kernel-confined writes — is what the ambient profile
+ * already delivers.
  */
 export type GateDecision =
 	| { readonly kind: "allow"; readonly reason: string }

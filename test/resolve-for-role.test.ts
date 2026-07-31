@@ -7,8 +7,12 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { MODEL_ROLES, type ModelRole } from "@vegardx/pi-contracts";
-import { agentTypeForRole, resolveModelForRole } from "@vegardx/pi-models";
+import {
+	DEFAULT_PERSONA_ALLOWANCES,
+	MODEL_ROLES,
+	type ModelRole,
+} from "@vegardx/pi-contracts";
+import { personaForRole, resolveModelForRole } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SEAT = "anthropic/opus";
@@ -29,10 +33,10 @@ const MODELS_BLOCK = {
 	},
 	bindings: { r: { roster: "r" } },
 	allowances: {
-		worker: { tiers: ["standard", "heavy"] },
-		explorer: { tiers: ["light", "standard"] },
-		reviewer: { tiers: ["heavy", "standard"] },
-		advisor: { tiers: ["heavy", "standard"] },
+		"deliverable-worker": { tiers: ["standard", "heavy"] },
+		"codebase-research": { tiers: ["light", "standard"] },
+		"code-review": { tiers: ["heavy", "standard"] },
+		standby: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 
@@ -103,9 +107,13 @@ describe("resolveModelForRole (v2 role parity)", () => {
 		expect(review?.modelId).toBe(SEAT);
 	});
 
-	it("maps every MODEL_ROLE to a spawnable agent type (no role falls through)", () => {
+	it("maps every MODEL_ROLE to a built-in persona (no role falls through)", () => {
+		// The built-in persona ids are also the DEFAULT_PERSONA_ALLOWANCES keys,
+		// so a role mapped outside that set would silently lose its allowance.
 		for (const role of MODEL_ROLES as readonly ModelRole[]) {
-			expect(agentTypeForRole(role)).toBeTruthy();
+			expect(Object.keys(DEFAULT_PERSONA_ALLOWANCES)).toContain(
+				personaForRole(role),
+			);
 		}
 	});
 });

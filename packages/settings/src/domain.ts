@@ -1,6 +1,6 @@
 // Domain configuration for /maestro. This module owns layered authored values
 // that are richer than capability-declared scalar settings: model families and
-// aliases, rosters and their tiers, seat bindings, region lists, per-agent
+// aliases, rosters and their tiers, seat bindings, region lists, per-persona
 // allowances, semantic kind bindings, runtime policy composition, and
 // transition-gate contracts.
 
@@ -15,9 +15,8 @@ import {
 	type AgentSessionPolicy,
 	type AgentTransportPolicy,
 	ALL_MODES,
+	DIRECT_SELECTORS,
 	type SessionSettingValue,
-	SPAWNABLE_AGENT_TYPES,
-	type SpawnableAgentType,
 	THINKING_LEVELS,
 	TIER_IDS,
 	type TierId,
@@ -230,7 +229,7 @@ function validateRegionValue(value: unknown): string[] {
 	return errors;
 }
 
-/** Validate one allowance value ({ tiers: [TierId…] }). */
+/** Validate one allowance value ({ tiers: [TierId…], spread?, direct? }). */
 function validateAllowanceValue(value: unknown): string[] {
 	if (!isPlainObject(value)) return ["allowance must be an object"];
 	const tiers = value.tiers;
@@ -244,6 +243,13 @@ function validateAllowanceValue(value: unknown): string[] {
 		];
 	if (new Set(tiers).size !== tiers.length)
 		return ["allowance tiers must be unique"];
+	if (
+		value.direct !== undefined &&
+		!DIRECT_SELECTORS.includes(
+			value.direct as (typeof DIRECT_SELECTORS)[number],
+		)
+	)
+		return [`allowance direct must be one of ${DIRECT_SELECTORS.join("|")}`];
 	return [];
 }
 
@@ -268,7 +274,7 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 		return [
 			`models.${parts[1]} was the v1 model surface and is no longer read. ` +
 				"Model selection is families → rosters (tiers) → bindings, with " +
-				"per-agent allowances; see docs/models.md.",
+				"per-persona allowances; see docs/models.md.",
 		];
 	// v2 families: whole-map (rank reorder), whole-family, single-alias.
 	if (parts[0] === "models" && parts[1] === "families") {
@@ -324,20 +330,22 @@ export function validateDomainValue(key: string, value: unknown): string[] {
 				: ["region list requires a non-empty pattern array"];
 		}
 	}
-	// v2 allowances: whole-map and per-agent (models.allowances.worker = { tiers }).
+	// v2 allowances: whole-map and per-persona
+	// (models.allowances.code-review = { tiers, spread?, direct? }). Persona
+	// keys are free text — an allowance for a persona nothing spawns simply
+	// never matches, so only the key's shape is validated here.
 	if (parts[0] === "models" && parts[1] === "allowances") {
 		if (parts.length === 2) {
 			if (!isPlainObject(value)) return ["allowances must be an object"];
-			return Object.entries(value).flatMap(([agent, allowance]) =>
-				(SPAWNABLE_AGENT_TYPES.includes(agent as SpawnableAgentType)
+			return Object.entries(value).flatMap(([persona, allowance]) =>
+				(nonEmpty(persona)
 					? validateAllowanceValue(allowance)
-					: [`unknown agent ${agent}`]
-				).map((error) => `${agent}: ${error}`),
+					: ["persona key must be non-empty"]
+				).map((error) => `${persona}: ${error}`),
 			);
 		}
 		if (parts.length === 3) {
-			if (!SPAWNABLE_AGENT_TYPES.includes(parts[2] as SpawnableAgentType))
-				return [`unknown agent ${parts[2]}`];
+			if (!nonEmpty(parts[2])) return ["persona key must be non-empty"];
 			return validateAllowanceValue(value);
 		}
 	}
@@ -602,12 +610,12 @@ export function readDomainSnapshot(
  * The v2 explanation: inheritance-first. The seat's model is the universal
  * default every spawned agent inherits; tiers exist only for deliberate
  * variation (persona instructions, policy rows), filtered by residency and
- * the agent's tier allowlist. One screen answers "what would this agent
- * actually run on, and why".
+ * the persona's tier allowlist. One screen answers "what would an agent of
+ * this persona actually run on, and why".
  */
 export async function explainModelSelection(
 	ctx: ExtensionContext,
-	agent: SpawnableAgentType,
+	persona: string,
 ): Promise<string> {
 	const sessionModel = ctx.model
 		? `${ctx.model.provider}/${ctx.model.id}`
@@ -629,15 +637,17 @@ export async function explainModelSelection(
 			? `Binding: ${active.id}${active.binding.targets?.length ? ` (target ${sessionModel})` : " (default binding)"} → roster ${active.binding.roster}`
 			: "Binding: none matches this seat — tier requests fall back to the seat with a visible notice.",
 	);
-	const allowed = config.allowances[agent]?.tiers ?? [];
+	const allowance = config.allowances[persona];
+	const allowed = allowance?.tiers ?? [];
 	lines.push(
-		`Agent ${agent}: allowed tiers ${allowed.length ? allowed.join(", ") : "none"}`,
+		`Persona ${persona}: allowed tiers ${allowed.length ? allowed.join(", ") : "none"}` +
+			`${allowance?.direct === "other-family" ? " · direct: other-family" : ""}`,
 	);
 	for (const tier of TIER_IDS) {
-		const explained = await explainTier(ctx, agent, tier);
+		const explained = await explainTier(ctx, persona, tier);
 		const marker = allowed.includes(tier)
 			? ""
-			: " (not allowed for this agent)";
+			: " (not allowed for this persona)";
 		if (explained.candidates.length === 0) {
 			lines.push(
 				`  ${tier}${marker}: empty — a ${tier} request falls back to the seat (deduped notice).`,

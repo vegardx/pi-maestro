@@ -18,8 +18,8 @@
 //
 // v2 layout (families → rosters → bindings → allowances). Two ranked families
 // are the diversity axis; a roster's three tiers hold the alias refs; a single
-// default binding activates the roster for the opus seat; per-agent allowances
-// route each agent type to a tier — reviewer defaults to `heavy` so a review
+// default binding activates the roster for the opus seat; per-persona
+// allowances route each persona to a tier — code-review defaults to `heavy` so a review
 // lands on a DIFFERENT family than the sol workers (cross-family by
 // construction, without leaning on the still-deferred diversity walk):
 //   • session / planner  → claude-opus-4-8   (careful judge: the seat)
@@ -144,15 +144,15 @@ const MODELS_BLOCK = {
 	bindings: {
 		sit: { roster: "sit" },
 	},
-	// Per-agent tier allowances; the FIRST tier is the default a plan node of
-	// that type spawns at (defaultTierForAgent). reviewer overrides the shipped
-	// default (standard-first) to heavy-first so reviews are cross-family from
-	// the sol workers even before diversity is wired.
+	// Per-persona tier allowances; the FIRST tier is the default a spawn of
+	// that persona resolves at (defaultTierFor). code-review overrides the
+	// shipped default (standard-first) to heavy-first so reviews are
+	// cross-family from the sol workers even before diversity is wired.
 	allowances: {
-		worker: { tiers: ["standard", "heavy"] },
-		explorer: { tiers: ["light", "standard"] },
-		reviewer: { tiers: ["heavy", "standard"] },
-		advisor: { tiers: ["heavy", "standard"] },
+		"deliverable-worker": { tiers: ["standard", "heavy"] },
+		"codebase-research": { tiers: ["light", "standard"] },
+		"code-review": { tiers: ["heavy", "standard"] },
+		standby: { tiers: ["heavy", "standard"] },
 	},
 	// The active region is the only hard filter. EEA is the real posture and the
 	// SIT-only observable one (copilot/prod are all-EEA): it lists the EEA-legal

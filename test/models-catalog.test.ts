@@ -72,7 +72,7 @@ describe("v2 model config", () => {
 			families: FAMILIES,
 			rosters: ROSTERS,
 			bindings: { main: { roster: "daily" } },
-			allowances: { worker: { tiers: ["standard"] } },
+			allowances: { "deliverable-worker": { tiers: ["standard"] } },
 		});
 		const config = readModelsConfig(cwd);
 		expect(config).toBeDefined();
@@ -85,10 +85,38 @@ describe("v2 model config", () => {
 		);
 		expect(config?.rosters.daily.standard).toHaveLength(2);
 		expect(config?.bindings.main.roster).toBe("daily");
-		// Authored allowance wins for worker; the rest keep defaults.
-		expect(config?.allowances.worker.tiers).toEqual(["standard"]);
-		expect(config?.allowances.explorer.tiers).toEqual(["light", "standard"]);
-		expect(config?.allowances.advisor.tiers).toEqual(["heavy", "standard"]);
+		// Authored allowance wins for its persona; the rest keep defaults.
+		expect(config?.allowances["deliverable-worker"].tiers).toEqual([
+			"standard",
+		]);
+		expect(config?.allowances["codebase-research"].tiers).toEqual([
+			"light",
+			"standard",
+		]);
+		expect(config?.allowances.standby.tiers).toEqual(["heavy", "standard"]);
+	});
+
+	it("accepts free-text persona keys and validates the direct selector", () => {
+		// Persona keys are not enumerated anywhere — an allowance for a persona
+		// nothing spawns parses fine and simply never matches.
+		writeSettings({
+			families: FAMILIES,
+			allowances: {
+				"deep-research": { tiers: ["heavy"], direct: "other-family" },
+			},
+		});
+		expect(readModelsConfig(cwd)?.allowances["deep-research"]).toEqual({
+			tiers: ["heavy"],
+			direct: "other-family",
+		});
+
+		writeSettings({
+			families: FAMILIES,
+			allowances: { "code-review": { tiers: ["heavy"], direct: "sideways" } },
+		});
+		expect(() => readModelsConfig(cwd)).toThrow(
+			"direct: must be one of inherit, other-family",
+		);
 	});
 
 	it("preserves family insertion order (the diversity rank)", () => {
@@ -248,9 +276,15 @@ describe("domain writes for v2 keys", () => {
 			write("models.rosters.daily.standard", ["OpenAI/GPT 5.6 Sol"]),
 		).toEqual([]);
 		expect(write("models.bindings.main", { roster: "daily" })).toEqual([]);
-		expect(write("models.allowances.worker", { tiers: ["standard"] })).toEqual(
-			[],
-		);
+		expect(
+			write("models.allowances.deliverable-worker", { tiers: ["standard"] }),
+		).toEqual([]);
+		expect(
+			write("models.allowances.code-review", {
+				tiers: ["heavy"],
+				direct: "other-family",
+			}),
+		).toEqual([]);
 		expect(write("models.region.active", "off")).toEqual([]);
 
 		expect(write("models.rosters.bad.turbo", ["A/B"]).join(" ")).toContain(
@@ -260,7 +294,15 @@ describe("domain writes for v2 keys", () => {
 			write("models.rosters.bad.standard", ["noslash"]).join(" "),
 		).toContain('"Family/Alias"');
 		expect(
-			write("models.allowances.worker", { tiers: ["turbo"] }).join(" "),
+			write("models.allowances.deliverable-worker", {
+				tiers: ["turbo"],
+			}).join(" "),
 		).toContain("light|standard|heavy");
+		expect(
+			write("models.allowances.code-review", {
+				tiers: ["heavy"],
+				direct: "sideways",
+			}).join(" "),
+		).toContain("inherit|other-family");
 	});
 });

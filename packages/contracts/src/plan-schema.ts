@@ -5,21 +5,20 @@
 // config, plus their validators. Statuses and task kinds are v1's, reused
 // verbatim — the state machine survives, it just applies to every node.
 
-import { SPAWNABLE_AGENT_TYPES, type TierId } from "./catalog.js";
+import type { TierId } from "./catalog.js";
 import type { DeliverableStatus, WorkItemKind } from "./plan.js";
 
 export const PLAN_SCHEMA_VERSION = 6 as const;
 
 /**
  * Agent types authorable as PLAN NODES — the writers/readers the plan DAG is
- * built from. A strict subset of {@link SpawnableAgentType}: `advisor` is
- * spawnable (it has a tier allowlist) but is a RUNTIME reader, never a plan
- * node, so it is excluded here. `caller` is likewise unrepresentable: a plan
- * node cannot be a harness component. See docs/design/multi-model-agents.md §6.
+ * built from. `advisor` is deliberately absent: it is a RUNTIME reader, never
+ * a plan node. `caller` is likewise unrepresentable: a plan node cannot be a
+ * harness component. (Model allowances no longer key by these — they key by
+ * PERSONA; this list is plan-DAG vocabulary only.) See
+ * docs/design/multi-model-agents.md §6.
  */
-export const NODE_AGENT_TYPES = SPAWNABLE_AGENT_TYPES.filter(
-	(type): type is "worker" | "explorer" | "reviewer" => type !== "advisor",
-);
+export const NODE_AGENT_TYPES = ["worker", "explorer", "reviewer"] as const;
 export type NodeAgentType = (typeof NODE_AGENT_TYPES)[number];
 
 /**

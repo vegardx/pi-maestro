@@ -9,7 +9,7 @@
 //      each resolved to a concrete attachment. An alias prefers the resolving
 //      agent's OWN gateway provider (keep traffic on one gateway), else the
 //      first available attachment in the alias's order. The first alias that
-//      yields an available attachment wins — bounded by the agent type's tier
+//      yields an available attachment wins — bounded by the persona's tier
 //      allowance.
 //   3. Nothing available (empty tier, every attachment struck, unknown roster)
 //      → SESSION-MODEL FALLBACK with a notice: the judgment still happens, on
@@ -23,18 +23,23 @@ import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	AliasConfig,
+	DirectSelector,
 	ModelsConfig,
 	RegionConfig,
-	SpawnableAgentType,
 	ThinkingLevel,
 	TierId,
 } from "@vegardx/pi-contracts";
 import {
-	DEFAULT_AGENT_ALLOWANCES,
+	DEFAULT_PERSONA_ALLOWANCES,
 	MAX_SPREAD,
 	THINKING_LEVELS,
 } from "@vegardx/pi-contracts";
-import { activeBinding, parseAliasRef, readModelsConfig } from "./catalog.js";
+import {
+	activeBinding,
+	familyOfModel,
+	parseAliasRef,
+	readModelsConfig,
+} from "./catalog.js";
 import { supportedEfforts } from "./efforts.js";
 import { parseModelSpec, sessionModelId } from "./model-spec.js";
 import { activeRegion, modelAllowedByRegion } from "./region.js";
@@ -46,7 +51,8 @@ export interface InheritedModel {
 }
 
 export interface ModelResolutionRequest {
-	readonly agent: SpawnableAgentType;
+	/** The persona whose allowance bounds this resolution (free-text id). */
+	readonly persona: string;
 	/** Explicit tier reference (persona instruction or policy row). Absent = inherit. */
 	readonly tier?: TierId;
 	/** The caller's model. Absent only at the root, where the session model is the caller. */
@@ -93,7 +99,11 @@ export interface ModelResolution {
 	readonly rosterId?: string;
 	/** Per-ref facts when a tier was walked (explain output). */
 	readonly candidates?: readonly ModelCandidateFact[];
-	/** Present iff source === "fallback": why the tier produced nothing. */
+	/**
+	 * Why resolution degraded. Present when source === "fallback" (the tier
+	 * produced nothing), and on source === "inherit" when a `direct:
+	 * "other-family"` request had nowhere to go — never silently.
+	 */
 	readonly fallbackReason?: string;
 }
 
@@ -310,10 +320,84 @@ export async function resolveModels(
 	return picks.length > 0 ? picks : [seatFallback(request, tier, walk)];
 }
 
-/** The caller's own model, for a request that asked for no tier. */
+/**
+ * The persona allowance's `direct` selector — how a DIRECT (non-fanned) spawn
+ * picks its model. Absent everywhere (including no config at all) → "inherit",
+ * so the selector stays dormant until someone authors it.
+ */
+export function directFor(
+	ctx: ExtensionContext,
+	persona: string,
+): DirectSelector {
+	return (
+		readConfigSafe(ctx)?.allowances[persona]?.direct ??
+		DEFAULT_PERSONA_ALLOWANCES[persona]?.direct ??
+		"inherit"
+	);
+}
+
+/**
+ * `direct: "other-family"` — a reviewer never marks its own homework. Walks
+ * the persona allowance's tiers IN ORDER through the bound roster and takes
+ * the first available entry whose family differs from the caller's.
+ * Deterministic: allowance order × roster order, nothing ranked at runtime.
+ *
+ * Nowhere to go — the caller's family is unknown (no caller model, or a model
+ * attached to no alias), the roster holds no foreign family, or every foreign
+ * entry is struck — falls back to plain inheritance WITH a fallbackReason.
+ * Falling back to a tier pick instead could still land on the caller's own
+ * family, which is precisely the outcome this selector exists to rule out.
+ */
+export async function resolveOtherFamily(
+	ctx: ExtensionContext,
+	request: ModelResolutionRequest,
+): Promise<ModelResolution> {
+	const config = readConfigSafe(ctx);
+	const callerModel = request.inherit?.modelId;
+	if (!callerModel)
+		return inheritResolution(
+			ctx,
+			request,
+			"other-family requested but the caller's model is unknown — cannot pick a differing family",
+		);
+	const callerFamily = familyOfModel(config, callerModel)?.family;
+	if (!callerFamily)
+		return inheritResolution(
+			ctx,
+			request,
+			`other-family requested but ${callerModel} belongs to no configured family — nothing to differ from`,
+		);
+	const tiers = config?.allowances[request.persona]?.tiers ?? [];
+	for (const tier of tiers) {
+		let walk: TierWalk;
+		try {
+			walk = await walkTier(ctx, request, tier);
+		} catch {
+			// No binding/roster to walk — this tier offers nowhere to go; the
+			// degradation is reported once, below, rather than thrown per tier.
+			continue;
+		}
+		const winner = walk.resolved.find(
+			(entry) => entry.fact.available && entry.fact.family !== callerFamily,
+		);
+		if (winner) return tierResolution(request, tier, walk, winner);
+	}
+	return inheritResolution(
+		ctx,
+		request,
+		`no model outside family ${callerFamily} is available in persona ${request.persona}'s tiers (${tiers.join(", ") || "none"})`,
+	);
+}
+
+/**
+ * The caller's own model, for a request that asked for no tier. `reason` is
+ * set when this inherit is a DEGRADATION (an `other-family` request with
+ * nowhere to go) — recorded so nothing degrades silently.
+ */
 function inheritResolution(
 	ctx: ExtensionContext,
 	request: ModelResolutionRequest,
+	reason?: string,
 ): ModelResolution {
 	const inherited = request.inherit ?? {
 		modelId: sessionModelId(ctx) ?? "",
@@ -329,6 +413,7 @@ function inheritResolution(
 		source: "inherit",
 		modelId: inherited.modelId,
 		...(inherited.effort ? { effort: inherited.effort } : {}),
+		...(reason ? { fallbackReason: reason } : {}),
 	};
 }
 
@@ -357,11 +442,11 @@ async function walkTier(
 		throw new ModelResolutionError(
 			`tier ${tier} requested but no v2 roster is configured`,
 		);
-	// Deliberate tier references are bounded by the agent's allowance.
-	const allowed = config.allowances[request.agent]?.tiers ?? [];
+	// Deliberate tier references are bounded by the persona's allowance.
+	const allowed = config.allowances[request.persona]?.tiers ?? [];
 	if (!allowed.includes(tier))
 		throw new ModelResolutionError(
-			`tier ${tier} is outside agent ${request.agent}'s allowance (${allowed.join(", ")})`,
+			`tier ${tier} is outside persona ${request.persona}'s allowance (${allowed.join(", ")})`,
 		);
 	const active = activeBinding(config, sessionModelId(ctx));
 	if (!active)
@@ -478,38 +563,36 @@ function seatFallback(
 }
 
 /**
- * How wide a MULTI-MODAL review by this agent type fans out. Answers HOW WIDE,
+ * How wide a MULTI-MODAL review by this persona fans out. Answers HOW WIDE,
  * never WHETHER — the plan node decides that, so a reviewer the plan did not
  * mark multi-modal runs on one model no matter what this returns.
  *
  * Falls back to the shipped default when the merged config carries no spread:
- * `allowances` merges shallowly, so authoring `reviewer: { tiers: [...] }` to
- * narrow tiers would otherwise silently disable multi-modal review. Absent
+ * `allowances` merges shallowly, so authoring `code-review: { tiers: [...] }`
+ * to narrow tiers would otherwise silently disable multi-modal review. Absent
  * everywhere → 1, so an authored flag degrades to a single review rather than
  * erroring.
  */
-export function spreadForAgent(
-	ctx: ExtensionContext,
-	agent: SpawnableAgentType,
-): number {
+export function spreadFor(ctx: ExtensionContext, persona: string): number {
 	const configured =
-		readConfigSafe(ctx)?.allowances[agent]?.spread ??
-		DEFAULT_AGENT_ALLOWANCES[agent]?.spread ??
+		readConfigSafe(ctx)?.allowances[persona]?.spread ??
+		DEFAULT_PERSONA_ALLOWANCES[persona]?.spread ??
 		1;
 	return Math.min(Math.max(1, configured), MAX_SPREAD);
 }
 
 /**
- * The default tier a plan node of this agent type spawns at: the first tier in
- * the agent's allowance (its preference order). Undefined when no v2 config
- * exists — the caller then falls through to pure inheritance (the seat), so
- * routing stays dormant until a roster is configured.
+ * The default tier a spawn of this persona resolves at: the first tier in the
+ * persona's allowance (its preference order). Undefined when no v2 config
+ * exists, and for a persona with no allowance — the caller then falls through
+ * to pure inheritance (the seat), because a guessed tier for an unknown
+ * persona would be a model nobody asked for.
  */
-export function defaultTierForAgent(
+export function defaultTierFor(
 	ctx: ExtensionContext,
-	agent: SpawnableAgentType,
+	persona: string,
 ): TierId | undefined {
-	return readConfigSafe(ctx)?.allowances[agent]?.tiers[0];
+	return readConfigSafe(ctx)?.allowances[persona]?.tiers[0];
 }
 
 function readConfigSafe(ctx: ExtensionContext): ModelsConfig | undefined {
@@ -537,7 +620,7 @@ export function fallbackNotice(resolution: ModelResolution): string {
 /** Explain a tier without resolving: every ref's fact, for /models-style output. */
 export async function explainTier(
 	ctx: ExtensionContext,
-	agent: SpawnableAgentType,
+	persona: string,
 	tier: TierId,
 ): Promise<{
 	bindingId?: string;
@@ -585,24 +668,22 @@ export async function explainTier(
 	return {
 		...(active ? { bindingId: active.id } : {}),
 		...(active ? { rosterId: active.binding.roster } : {}),
-		allowed: (config.allowances[agent]?.tiers ?? []).includes(tier),
+		allowed: (config.allowances[persona]?.tiers ?? []).includes(tier),
 		candidates: checked.map((entry) => entry.fact),
 	};
 }
 
 /**
- * Which v2 agent type a v1 subagent role runs as.
+ * Which persona's allowance a harness model role resolves under.
  *
- * Reviews judge (`reviewer`), implementation and delivery verification act
- * (`worker`), advice consults (`advisor`), and the classify/summarize/research
- * roles only read (`explorer`). Mirrors the DUTY_AGENT lens the policy table
- * uses.
+ * Reviews judge (`code-review`), implementation and delivery verification act
+ * (`deliverable-worker`), advice consults (`standby`), and the
+ * classify/summarize/research roles only read (`codebase-research`). The ids
+ * mirror the built-in personas in packages/maestro/src/personas.ts.
  */
-export function agentTypeForRole(
-	role: string,
-): "worker" | "explorer" | "reviewer" | "advisor" {
-	if (role.endsWith("-review")) return "reviewer";
-	if (role === "worker" || role === "verifier") return "worker";
-	if (role === "advisor") return "advisor";
-	return "explorer";
+export function personaForRole(role: string): string {
+	if (role.endsWith("-review")) return "code-review";
+	if (role === "worker" || role === "verifier") return "deliverable-worker";
+	if (role === "advisor") return "standby";
+	return "codebase-research";
 }

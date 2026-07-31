@@ -34,9 +34,9 @@ export {
 } from "./region.js";
 export { type RoleModel, resolveModelForRole } from "./resolve-for-role.js";
 export {
-	agentTypeForRole,
 	clampEffort,
-	defaultTierForAgent,
+	defaultTierFor,
+	directFor,
 	explainAttachment,
 	explainTier,
 	fallbackNotice,
@@ -46,7 +46,9 @@ export {
 	ModelResolutionError,
 	type ModelResolutionRequest,
 	type ModelResolutionSource,
+	personaForRole,
 	resolveModel,
 	resolveModels,
-	spreadForAgent,
+	resolveOtherFamily,
+	spreadFor,
 } from "./resolver.js";

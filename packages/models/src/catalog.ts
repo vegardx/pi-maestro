@@ -1,7 +1,7 @@
 // v2 config reader: families (ranked; each holds free-text aliases with ordered
 // per-provider attachments), rosters (light/standard/heavy tiers holding ordered
 // alias refs), bindings (seat→roster bindings), region (the active model
-// allowlist), and per-agent-type tier allowances. Mirrors the old conventions:
+// allowlist), and per-persona tier allowances. Mirrors the old conventions:
 // null entries are deletion markers (skipped), invalid non-null shapes throw
 // with the offending name, global+project merge with project winning per key.
 //
@@ -13,14 +13,14 @@ import {
 	type AgentAllowanceConfig,
 	type AliasConfig,
 	type BindingConfig,
-	DEFAULT_AGENT_ALLOWANCES,
+	DEFAULT_PERSONA_ALLOWANCES,
+	DIRECT_SELECTORS,
+	type DirectSelector,
 	type FamilyConfig,
 	MAX_SPREAD,
 	type ModelsConfig,
 	type RegionConfig,
 	type RosterTiers,
-	SPAWNABLE_AGENT_TYPES,
-	type SpawnableAgentType,
 	type ThinkingLevel,
 	TIER_IDS,
 	type TierId,
@@ -38,7 +38,7 @@ const EFFORT_SET = new Set([
 	"max",
 ]);
 const TIER_SET = new Set<string>(TIER_IDS);
-const AGENT_SET = new Set<string>(SPAWNABLE_AGENT_TYPES);
+const DIRECT_SET = new Set<string>(DIRECT_SELECTORS);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -238,9 +238,21 @@ function extractAllowance(
 			throw new Error(
 				`Invalid allowances.${name}.spread: must be an integer 1..${MAX_SPREAD}`,
 			);
-		return { tiers: [...raw.tiers] as TierId[], spread: raw.spread };
 	}
-	return { tiers: [...raw.tiers] as TierId[] };
+	if (
+		raw.direct !== undefined &&
+		(typeof raw.direct !== "string" || !DIRECT_SET.has(raw.direct))
+	)
+		throw new Error(
+			`Invalid allowances.${name}.direct: must be one of ${DIRECT_SELECTORS.join(", ")}`,
+		);
+	return {
+		tiers: [...raw.tiers] as TierId[],
+		...(raw.spread !== undefined ? { spread: raw.spread as number } : {}),
+		...(raw.direct !== undefined
+			? { direct: raw.direct as DirectSelector }
+			: {}),
+	};
 }
 
 interface ParsedModelsConfig {
@@ -248,9 +260,7 @@ interface ParsedModelsConfig {
 	readonly rosters: Record<string, RosterTiers>;
 	readonly bindings: Record<string, BindingConfig>;
 	readonly region?: RegionConfig;
-	readonly allowances: Partial<
-		Record<SpawnableAgentType, AgentAllowanceConfig>
-	>;
+	readonly allowances: Record<string, AgentAllowanceConfig>;
 }
 
 function extractModelsConfig(raw: unknown): ParsedModelsConfig | undefined {
@@ -289,14 +299,17 @@ function extractModelsConfig(raw: unknown): ParsedModelsConfig | undefined {
 	const region =
 		models.region !== undefined ? extractRegion(models.region) : undefined;
 
-	const allowances: Partial<Record<SpawnableAgentType, AgentAllowanceConfig>> =
-		{};
+	// Allowance keys are PERSONA ids — free text, so any non-empty key is
+	// accepted; an allowance for a persona nothing spawns simply never matches.
+	// (The retired agent-type keys worker/explorer/reviewer/advisor land here
+	// too: they stop matching and the built-in persona defaults apply.)
+	const allowances: Record<string, AgentAllowanceConfig> = {};
 	if (isPlainObject(models.allowances)) {
 		for (const [name, value] of Object.entries(models.allowances)) {
-			if (!AGENT_SET.has(name)) continue;
+			if (!nonEmpty(name)) continue;
 			if (value === null || value === undefined) continue;
 			const allowance = extractAllowance(value, name);
-			if (allowance) allowances[name as SpawnableAgentType] = allowance;
+			if (allowance) allowances[name] = allowance;
 		}
 	}
 
@@ -381,7 +394,7 @@ export function parseModelsSettings(
 		bindings: { ...global?.bindings, ...project?.bindings },
 		region,
 		allowances: {
-			...DEFAULT_AGENT_ALLOWANCES,
+			...DEFAULT_PERSONA_ALLOWANCES,
 			...global?.allowances,
 			...project?.allowances,
 		},

@@ -6,26 +6,24 @@
 // impossible: a cheap model for cheap work, and a review that is a second
 // OPINION rather than the same model asked twice.
 //
-// Routing is keyed by PERSONA: `code-review` wanting a heavy tier is a
-// statement about the work, not about a posture. The models package still
-// keys its allowances by the old four agent types, so a bridge table below
-// maps the built-in personas onto them until allowances re-key by persona.
+// Routing is keyed by PERSONA, end to end: `code-review` wanting a heavy tier
+// is a statement about the work, not about a posture. The allowances the
+// models package reads are persona-keyed too, so the persona flows straight
+// through — the interim persona→agent-type bridge that used to live here is
+// gone with the vocabulary it bridged to.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SpawnableAgentType, ThinkingLevel } from "@vegardx/pi-contracts";
+import type { ThinkingLevel } from "@vegardx/pi-contracts";
 import {
-	defaultTierForAgent,
+	defaultTierFor,
+	directFor,
 	type InheritedModel,
+	type ModelResolution,
 	resolveModel,
 	resolveModels,
-	spreadForAgent,
+	resolveOtherFamily,
+	spreadFor,
 } from "@vegardx/pi-models";
-import {
-	CODE_REVIEW,
-	CODEBASE_RESEARCH,
-	DELIVERABLE_WORKER,
-	STANDBY,
-} from "./personas.js";
 
 /** What a resolution comes to: a model, how hard it thinks, and its family. */
 export interface RoutedModel {
@@ -33,50 +31,12 @@ export interface RoutedModel {
 	readonly effort?: ThinkingLevel;
 	/** The diversity axis. Two agents of one family are not two opinions. */
 	readonly family?: string;
-	/** Present when the tier produced nothing and the seat was used instead. */
+	/** Present when resolution degraded (tier exhausted, or an `other-family`
+	 *  request with nowhere to go) — surfaced, never swallowed. */
 	readonly fallbackReason?: string;
 }
 
-/**
- * INTERIM until allowances re-key by persona: the models package still keys
- * allowances by the old agent types, so the built-in personas map onto them
- * here. A persona not in this table routes as `undefined` — inherit — because
- * a guessed tier for an unknown persona would be a model nobody asked for.
- */
-const PERSONA_AGENT_TYPE: Readonly<Record<string, SpawnableAgentType>> = {
-	[DELIVERABLE_WORKER]: "worker",
-	[CODEBASE_RESEARCH]: "explorer",
-	[CODE_REVIEW]: "reviewer",
-	[STANDBY]: "advisor",
-};
-
-function asAgentType(persona: string): SpawnableAgentType | undefined {
-	return PERSONA_AGENT_TYPE[persona];
-}
-
-/**
- * The model this kind should run on, or `undefined` to inherit the caller's.
- *
- * `undefined` is not a failure. With no roster configured there is no tier to
- * draw from, and inheriting is the honest answer — the alternative would be
- * inventing a model nobody asked for. Routing stays dormant until someone
- * configures it, which is the models package's own documented intent.
- */
-export async function routeModel(
-	ctx: ExtensionContext,
-	persona: string,
-	inherit?: InheritedModel,
-): Promise<RoutedModel | undefined> {
-	const agent = asAgentType(persona);
-	if (!agent) return undefined;
-	const tier = defaultTierForAgent(ctx, agent);
-	if (!tier) return undefined;
-
-	const resolved = await resolveModel(ctx, {
-		agent,
-		tier,
-		...(inherit ? { inherit } : {}),
-	});
+function asRouted(resolved: ModelResolution): RoutedModel {
 	return {
 		modelId: resolved.modelId,
 		...(resolved.effort ? { effort: resolved.effort } : {}),
@@ -88,6 +48,45 @@ export async function routeModel(
 }
 
 /**
+ * The model this DIRECT (non-fanned) spawn should run on, or `undefined` to
+ * inherit the caller's.
+ *
+ * `undefined` is not a failure. With no roster configured there is no tier to
+ * draw from, and inheriting is the honest answer — the alternative would be
+ * inventing a model nobody asked for. The same holds for a persona with no
+ * allowance: routing stays dormant until someone configures it, which is the
+ * models package's own documented intent.
+ *
+ * The allowance's `direct` selector is honored here: `other-family` picks the
+ * first entry in the allowance's tiers whose family differs from the caller's
+ * ("a reviewer never marks its own homework"), which needs `inherit` — without
+ * it the resolver falls back with a reason rather than guessing whose homework
+ * this is.
+ */
+export async function routeModel(
+	ctx: ExtensionContext,
+	persona: string,
+	inherit?: InheritedModel,
+): Promise<RoutedModel | undefined> {
+	if (directFor(ctx, persona) === "other-family") {
+		const resolved = await resolveOtherFamily(ctx, {
+			persona,
+			...(inherit ? { inherit } : {}),
+		});
+		return asRouted(resolved);
+	}
+	const tier = defaultTierFor(ctx, persona);
+	if (!tier) return undefined;
+
+	const resolved = await resolveModel(ctx, {
+		persona,
+		tier,
+		...(inherit ? { inherit } : {}),
+	});
+	return asRouted(resolved);
+}
+
+/**
  * Several models for one question, one per family.
  *
  * This is what makes a fan-out a fan-out. The resolver takes one slot per
@@ -96,16 +95,18 @@ export async function routeModel(
  * unavailable it degrades to ONE seat resolution rather than n copies of the
  * seat — a fan-out that looks diverse and is not is worse than admitting there
  * was only one model to ask.
+ *
+ * `direct` does not apply here: it selects for NON-fanned spawns, and a
+ * fan-out already gets its diversity from the one-slot-per-family rule.
  */
 export async function routeSpread(
 	ctx: ExtensionContext,
 	persona: string,
 	inherit?: InheritedModel,
 ): Promise<readonly RoutedModel[]> {
-	const agent = asAgentType(persona);
-	const tier = agent ? defaultTierForAgent(ctx, agent) : undefined;
-	const width = agent ? spreadForAgent(ctx, agent) : 0;
-	if (!agent || !tier || width <= 1) {
+	const tier = defaultTierFor(ctx, persona);
+	const width = spreadFor(ctx, persona);
+	if (!tier || width <= 1) {
 		const single = await routeModel(ctx, persona, inherit);
 		return single ? [single] : [];
 	}
@@ -113,18 +114,13 @@ export async function routeSpread(
 	const resolved = await resolveModels(
 		ctx,
 		{
-			agent,
+			persona,
 			tier,
 			...(inherit ? { inherit } : {}),
 		},
 		width,
 	);
-	return resolved.map((one) => ({
-		modelId: one.modelId,
-		...(one.effort ? { effort: one.effort } : {}),
-		...(one.family ? { family: one.family } : {}),
-		...(one.fallbackReason ? { fallbackReason: one.fallbackReason } : {}),
-	}));
+	return resolved.map(asRouted);
 }
 
 /**

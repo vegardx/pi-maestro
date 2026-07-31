@@ -10,13 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	DEFAULT_PERSONA_ALLOWANCES,
 	MODEL_ROLES,
 	type ModelRole,
-	SPAWNABLE_AGENT_TYPES,
 } from "@vegardx/pi-contracts";
 import {
-	agentTypeForRole,
-	defaultTierForAgent,
+	defaultTierFor,
+	personaForRole,
 	resolveModel,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -71,10 +71,10 @@ async function modelFor(
 	role: ModelRole,
 	ctx: ExtensionContext = fakeCtx(),
 ): Promise<string | undefined> {
-	const agent = agentTypeForRole(role);
-	const tier = defaultTierForAgent(ctx, agent);
+	const persona = personaForRole(role);
+	const tier = defaultTierFor(ctx, persona);
 	const resolved = await resolveModel(ctx, {
-		agent,
+		persona,
 		...(tier ? { tier } : {}),
 		inherit: { modelId: SESSION },
 	});
@@ -113,12 +113,12 @@ describe("radicalai prod profile", () => {
 		);
 	});
 
-	it("maps every MODEL_ROLE to a spawnable agent type — no role falls through", () => {
+	it("maps every MODEL_ROLE to a built-in persona — no role falls through", () => {
 		for (const role of MODEL_ROLES) {
 			expect(
-				SPAWNABLE_AGENT_TYPES as readonly string[],
-				`role ${role} maps to an unknown agent type`,
-			).toContain(agentTypeForRole(role));
+				Object.keys(DEFAULT_PERSONA_ALLOWANCES),
+				`role ${role} maps to an unknown persona`,
+			).toContain(personaForRole(role));
 		}
 	});
 
@@ -141,7 +141,7 @@ describe("radicalai prod profile", () => {
 	it("has no region tripwire — heavy resolves to opus and it is EEA-legal", async () => {
 		// Prod is all-EEA: unlike SIT, no model is struck by the region filter.
 		const resolved = await resolveModel(fakeCtx(), {
-			agent: "reviewer",
+			persona: "code-review",
 			tier: "heavy",
 			inherit: { modelId: SESSION },
 		});

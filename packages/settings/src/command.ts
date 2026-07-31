@@ -5,10 +5,6 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
-	SPAWNABLE_AGENT_TYPES,
-	type SpawnableAgentType,
-} from "@vegardx/pi-contracts";
-import {
 	type DomainRegistryInput,
 	domainImpact,
 	explainModelSelection,
@@ -188,17 +184,10 @@ export function handleSettingsCommand(
 	if (sub === "set") return setValue(tail, ctx, registry);
 	if (sub === "reset") return resetValue(tail, ctx);
 	if (sub === "explain") {
-		// Explain the inheritance-first story per agent type (worker default).
-		const agent = SPAWNABLE_AGENT_TYPES.includes(tail as SpawnableAgentType)
-			? (tail as SpawnableAgentType)
-			: undefined;
-		if (!agent && tail !== "")
-			return notify(
-				ctx,
-				`Unknown target: ${tail}. Use an agent type (${SPAWNABLE_AGENT_TYPES.join(", ")}).`,
-				true,
-			);
-		void explainModelSelection(ctx, agent ?? "worker").then((text) =>
+		// Explain the inheritance-first story per persona. Persona ids are free
+		// text (allowances key by them), so any target is accepted — an unknown
+		// persona honestly shows "allowed tiers none" rather than erroring.
+		void explainModelSelection(ctx, tail || "deliverable-worker").then((text) =>
 			notify(ctx, text),
 		);
 		return;

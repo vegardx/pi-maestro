@@ -227,10 +227,10 @@ describe("a refusal never names a tool that does not exist", () => {
 
 	it("promises a read-only agent only what it is launched with", () => {
 		// Its brief used to come from `describeFor("read-only")` and named
-		// `delegate`, which it neither registers nor is allowed to call.
+		// `subagent`, which it neither registers nor is allowed to call.
 		const brief = describeReadOnlyTools();
 		for (const name of READ_ONLY_BUILTINS) expect(brief).toContain(name);
-		expect(brief).not.toContain("delegate");
+		expect(brief).not.toContain("subagent");
 		expect(brief).not.toContain("bash");
 	});
 

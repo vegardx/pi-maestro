@@ -17,7 +17,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { DELEGABLE, type Plan, type Task, validatePlan } from "./plan.js";
+import { type Plan, SUBAGENT_KINDS, type Task, validatePlan } from "./plan.js";
 import type { PlanStore } from "./store.js";
 
 const TaskSchema = Type.Object({
@@ -34,7 +34,7 @@ const TaskSchema = Type.Object({
 	by: Type.Optional(
 		Type.Object(
 			{
-				agent: Type.Union(DELEGABLE.map((kind) => Type.Literal(kind))),
+				agent: Type.Union(SUBAGENT_KINDS.map((kind) => Type.Literal(kind))),
 				persona: Type.String({
 					description: "Which persona — what it should be looking for.",
 				}),
@@ -199,8 +199,8 @@ function describe(plan: Plan): string {
 		...plan.deliverables.map((d) => {
 			const waits = d.after.length > 0 ? ` after ${d.after.join(", ")}` : "";
 			const reads = d.reads.length > 0 ? ` reads ${d.reads.join(", ")}` : "";
-			const delegated = d.tasks.filter((t) => t.by).length;
-			const handed = delegated > 0 ? `, ${delegated} delegated` : "";
+			const toSubagents = d.tasks.filter((t) => t.by).length;
+			const handed = toSubagents > 0 ? `, ${toSubagents} to subagents` : "";
 			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
 		}),
 	];

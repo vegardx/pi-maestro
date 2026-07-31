@@ -698,7 +698,7 @@ function describeTask(task: Task, index: number): string {
 		lines.push(
 			// The kind and persona, never a tool name — what an agent can call is
 			// generated from the declaration, and prose that repeats it can drift.
-			`Delegate this to ${article(task.by.agent)} ${task.by.agent} with the \`${task.by.persona}\` persona` +
+			`Hand this to ${article(task.by.agent)} ${task.by.agent} subagent with the \`${task.by.persona}\` persona` +
 				(task.by.fanOut
 					? ", across several model families, and reconcile what they return."
 					: "."),

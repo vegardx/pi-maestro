@@ -100,8 +100,8 @@ describe("requesting an agent", () => {
 	});
 
 	// The two tests that were here validated `topology: "fan-out"`, an axis
-	// NOTHING ever set. Fanning out is `Delegation.fanOut` plus model routing,
-	// which is what `delegate` actually reads — so this was a second vocabulary
+	// NOTHING ever set. Fanning out is `SubagentRef.fanOut` plus model routing,
+	// which is what the `subagent` tool actually reads — so this was a second vocabulary
 	// for one idea, and the unreachable one carried the rules.
 
 	it("defaults to one agent", () => {

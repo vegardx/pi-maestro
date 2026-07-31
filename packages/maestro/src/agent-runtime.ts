@@ -7,7 +7,7 @@
 // registering something that will fail the first time it is called.
 //
 // The two tools here are the entire agent-side vocabulary. `finish` is how a
-// worker reports and then waits; `delegate` is how it consults a reader. Both
+// worker reports and then waits; `subagent` is how it consults a reader. Both
 // are declared through the registry like everything else, so neither can be
 // granted to a posture that has no implementation for it.
 
@@ -18,7 +18,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { AgentLink } from "./link.js";
-import { DELEGABLE, type Delegable } from "./plan.js";
+import { SUBAGENT_KINDS, type SubagentKind } from "./plan.js";
 import {
 	AGENT_ID_ENV,
 	askReadOnly,
@@ -169,12 +169,12 @@ export function createAskTransport(asker: () => Asker): {
 	};
 }
 
-export interface DelegateDeps {
+export interface SubagentDeps {
 	readonly cwd: () => string;
 	readonly depth: () => number;
 	readonly openSession: ReadOnlySessionFactory;
 	/** Turn a persona id into its brief. Unknown ids throw, and should. */
-	readonly briefFor: (agent: Delegable, persona: string) => string;
+	readonly briefFor: (agent: SubagentKind, persona: string) => string;
 	/**
 	 * Which models to ask. One entry = one agent; several = a fan-out, one per
 	 * family. Absent, or one entry, means the caller's own model is inherited.
@@ -184,7 +184,7 @@ export interface DelegateDeps {
 	 * nothing, which is the defect this rebuild exists to remove.
 	 */
 	readonly route?: (
-		agent: Delegable,
+		agent: SubagentKind,
 		fanOut: boolean,
 		ctx: unknown,
 	) => Promise<
@@ -204,16 +204,15 @@ export interface DelegateDeps {
  * With no roster configured, `fanOut` reaches exactly one family and says so
  * rather than pretending to a diversity it did not get.
  */
-export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
+export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 	return defineTool({
-		name: "delegate",
-		label: "Delegate",
+		name: "subagent",
+		label: "Subagent",
 		description:
-			"Ask a read-only agent to look at something and report back. Blocks until it answers.",
-		promptSnippet:
-			"hand a question to an explorer, reviewer or advisor and wait for what it finds.",
+			"Start a read-only subagent — an explorer, reviewer or advisor — and wait for what it reports. Blocks until it answers.",
+		promptSnippet: "start a read-only subagent and wait for what it reports.",
 		parameters: Type.Object({
-			agent: Type.Union(DELEGABLE.map((kind) => Type.Literal(kind))),
+			agent: Type.Union(SUBAGENT_KINDS.map((kind) => Type.Literal(kind))),
 			persona: Type.String({
 				description: "Which persona — what it should be looking for.",
 			}),
@@ -289,15 +288,14 @@ export function createDelegateTool(deps: DelegateDeps): ToolDefinition {
  * The declared tools, and who may hold them.
  *
  * `finish` is for agents that report to a maestro, which is workers. The
- * maestro reports to the human and has nothing to finish. `delegate` is held by
- * everyone, because a reader consulting another reader is ordinary — `checkSpawn`
- * is what stops it going too deep or producing a writer, and it does that from
- * one place rather than by withholding the tool from some list.
+ * maestro reports to the human and has nothing to finish. `subagent` is held by
+ * the two writer postures and NOT by a reader — a reader answers its caller,
+ * and `checkSpawn` backstops the depth in one place besides.
  */
 export function declareAgentTools(deps: {
 	readonly reporter: () => Reporter;
 
-	readonly delegate: DelegateDeps;
+	readonly subagent: SubagentDeps;
 	/**
 	 * The gated shell for this holder.
 	 *
@@ -366,12 +364,12 @@ export function declareAgentTools(deps: {
 		},
 		{
 			// NOT `read-only`. A read-only agent registers nothing — `extension.ts`
-			// returns early for a child with no wiring — and `delegate` is not in
+			// returns early for a child with no wiring — and `subagent` is not in
 			// its `--tools` allowlist either, so it was doubly absent while its
 			// generated brief promised it. The phantom grant, inside the registry
 			// built to prevent it. A reader answers its caller; it does not
 			// recruit.
-			definition: createDelegateTool(deps.delegate),
+			definition: createSubagentTool(deps.subagent),
 			holders: ["maestro", "worker"],
 		},
 	];

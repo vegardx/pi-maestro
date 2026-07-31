@@ -291,7 +291,7 @@ describe("what a worker is told", () => {
 		expect(kickoff).toContain("### 2. do build");
 	});
 
-	it("names the kind and persona for delegated work, never a tool", async () => {
+	it("names the kind and persona for subagent work, never a tool", async () => {
 		const h = harness(
 			plan({
 				deliverables: [
@@ -311,7 +311,7 @@ describe("what a worker is told", () => {
 		);
 		await h.executor.start();
 		const kickoff = h.launched[0].kickoff;
-		expect(kickoff).toContain("Delegate this to a reviewer");
+		expect(kickoff).toContain("Hand this to a reviewer subagent");
 		expect(kickoff).toContain("`security-review`");
 		expect(kickoff).toContain("across several model families");
 	});

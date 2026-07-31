@@ -41,19 +41,21 @@ Held by the maestro:
 - `flight` — carry out the plan's own preflight/postflight prose.
 - `respond` — answer a worker's blocked question, or escalate it to you.
 - `bash` — the gated shell, confined to the repository.
-- `delegate` — spawn a read-only agent (explorer, reviewer, advisor) and wait.
+- `subagent` — start a read-only subagent (explorer, reviewer, advisor) and wait.
 
 Held by a worker:
 
 - `commit` — record work on its deliverable's branch. The maestro pushes and
   opens the pull request; a worker never does.
 - `bash` — the gated shell, confined to its worktree.
-- `delegate` — as above. This is how a worker gets its own diff reviewed.
+- `subagent` — as above. This is how a worker gets its own diff reviewed.
 - `finish` — report the outcome and hand off. It then waits: the maestro ships
   and records the result before releasing it.
 
-Held by a read-only agent: `delegate`, and nothing else. No shell — a shell is
-a write tool, and withholding it is what makes the posture mean anything.
+A read-only agent holds none of these. It runs on the allowlist it was
+launched with — `read`, `grep`, `find`, `ls`, `websearch`, `webfetch` — with no
+shell, because a shell is a write tool, and no `subagent`, because a reader
+answers its caller rather than recruiting help.
 
 `ask` is not in these lists because it belongs to `packages/ask`. What differs
 by position is not the tool but the transport behind it: a worker's questions

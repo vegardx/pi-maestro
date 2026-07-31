@@ -9,8 +9,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
-	createDelegateTool,
 	createFinishTool,
+	createSubagentTool,
 	declareAgentTools,
 	type Reporter,
 	readWiring,
@@ -136,7 +136,7 @@ describe("finish reports, then waits", () => {
 	});
 });
 
-describe("delegate asks a reader and waits", () => {
+describe("the subagent tool asks a reader and waits", () => {
 	const session = (text: string): ReadOnlySession => ({
 		async start() {},
 		async prompt() {},
@@ -147,7 +147,7 @@ describe("delegate asks a reader and waits", () => {
 	});
 
 	const tool = (depth: number) =>
-		createDelegateTool({
+		createSubagentTool({
 			cwd: () => "/worktrees/api",
 			depth: () => depth,
 			openSession: async () => session("Two findings, one real."),
@@ -185,7 +185,7 @@ describe("delegate asks a reader and waits", () => {
 		// Flattening several opinions into one is how six real findings became a
 		// sentence that said nothing.
 		const asked: (string | undefined)[] = [];
-		const fanned = createDelegateTool({
+		const fanned = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
 			openSession: async (spawn) => {
@@ -217,7 +217,7 @@ describe("delegate asks a reader and waits", () => {
 
 	it("keeps the opinions it got when one reader fails", async () => {
 		// One reader failing is a missing opinion, not a failed review.
-		const fanned = createDelegateTool({
+		const fanned = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
 			openSession: async (spawn) =>
@@ -246,7 +246,7 @@ describe("delegate asks a reader and waits", () => {
 		// With no roster there is one family, and claiming three reviewers agreed
 		// when they were the same model is exactly the sort of claim this system
 		// has made before.
-		const single = createDelegateTool({
+		const single = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
 			openSession: async () => session("one opinion"),
@@ -269,7 +269,7 @@ describe("the agent tools are declared, not listed", () => {
 	const registry = ToolRegistry.declare(
 		declareAgentTools({
 			reporter: () => ({ async done() {} }),
-			delegate: {
+			subagent: {
 				cwd: () => "/repo",
 				depth: () => 1,
 				openSession: async () => ({
@@ -292,17 +292,17 @@ describe("the agent tools are declared, not listed", () => {
 		expect(registry.grantsFor("read-only")).not.toContain("finish");
 	});
 
-	it("gives delegate to the two postures that can actually call it", () => {
+	it("gives subagent to the two postures that can actually call it", () => {
 		// It was granted to `read-only` too, on the reasoning that a reader
 		// consulting another reader is ordinary and `checkSpawn` would do the
 		// limiting. Both halves were true and the grant was still a phantom: a
 		// read-only child registers NOTHING (`extension.ts` returns early for a
-		// child with no wiring) and `delegate` is not in its `--tools` allowlist
+		// child with no wiring) and `subagent` is not in its `--tools` allowlist
 		// either. So every reader was handed a generated brief naming a tool it
 		// could not call, twice over — inside the registry built to stop exactly
 		// that.
 		for (const holder of ["maestro", "worker"] as const)
-			expect(registry.grantsFor(holder)).toContain("delegate");
+			expect(registry.grantsFor(holder)).toContain("subagent");
 		expect(registry.grantsFor("read-only")).toEqual([]);
 	});
 

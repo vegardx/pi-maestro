@@ -121,8 +121,8 @@ export function validateAgentSpec(spec: AgentSpec): string[] {
 		errors.push(`a ${spec.kind} was requested with no persona`);
 
 	// No `topology` check. It was a second vocabulary for fanning out —
-	// validated here, and set by NOTHING: the real axis is `Delegation.fanOut`
-	// plus model routing, which is what `delegate` actually reads. Two ways to
+	// validated here, and set by NOTHING: the real axis is `SubagentRef.fanOut`
+	// plus model routing, which is what the `subagent` tool actually reads. Two ways to
 	// say one thing, one of which nobody could reach.
 
 	return errors;

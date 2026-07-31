@@ -33,12 +33,12 @@ export interface PlanRepo {
  */
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Read-only kinds a task may delegate to. Workers are authored, never spawned. */
-export const DELEGABLE = ["explorer", "reviewer", "advisor"] as const;
-export type Delegable = (typeof DELEGABLE)[number];
+/** Read-only kinds a task may hand to a subagent. Workers are authored, never spawned. */
+export const SUBAGENT_KINDS = ["explorer", "reviewer", "advisor"] as const;
+export type SubagentKind = (typeof SUBAGENT_KINDS)[number];
 
-export interface Delegation {
-	readonly agent: Delegable;
+export interface SubagentRef {
+	readonly agent: SubagentKind;
 	/** Which persona — the prose that says what to look for. */
 	readonly persona: string;
 	/**
@@ -53,7 +53,7 @@ export interface Task {
 	readonly title: string;
 	readonly body?: string;
 	/** Absent = the deliverable's own worker does it. */
-	readonly by?: Delegation;
+	readonly by?: SubagentRef;
 }
 
 export interface Deliverable {
@@ -172,12 +172,12 @@ function validateTasks(
 			errors.push(`${where}: duplicate task id \`${t.id}\``);
 		seen.add(t.id);
 		if (!t.title.trim()) errors.push(`${at}: no title`);
-		if (t.by && !DELEGABLE.includes(t.by.agent))
+		if (t.by && !SUBAGENT_KINDS.includes(t.by.agent))
 			errors.push(
-				`${at}: cannot delegate to \`${t.by.agent}\` — a writer is authored as a deliverable, never spawned from a task (delegable: ${DELEGABLE.join(", ")})`,
+				`${at}: \`${t.by.agent}\` cannot be a task's subagent — a writer is authored as a deliverable, never spawned from a task (subagent kinds: ${SUBAGENT_KINDS.join(", ")})`,
 			);
 		if (t.by && !t.by.persona.trim())
-			errors.push(`${at}: delegated with no persona`);
+			errors.push(`${at}: handed to a subagent with no persona`);
 	}
 }
 

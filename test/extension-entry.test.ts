@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	extensionPath,
 	type SeatHost,
+	startReadOnlyAgent,
 	startSeat,
 	startWorker,
 } from "../packages/maestro/src/extension.js";
@@ -133,6 +134,43 @@ describe("a process gets one surface, never both", () => {
 
 	it("points a spawned agent at the file its maestro is running", () => {
 		expect(extensionPath()).toMatch(/packages\/maestro\/src\/extension\.ts$/);
+	});
+
+	it("gives a no-wiring child exactly the reader surface — and no commands", () => {
+		// Depth says agent, no wiring says nobody to dial: a read-only child.
+		// This path used to be a bare early return that registered nothing; two
+		// rulings changed it. Every agent holds `subagent` — depth is the cap,
+		// which is what MAX_DEPTH exists for — and a reader holds a confined
+		// shell, because "a shell is a write tool" predated ambient confinement.
+		// Exactly two tools, and nothing else: no commands, no ask transport,
+		// no reporter — a reader's only channel is the answer it returns.
+		const h = host();
+		startReadOnlyAgent(
+			h.pi as unknown as { registerTool(tool: unknown): void },
+			{ extensions: [] },
+		);
+		expect(h.tools.map((t) => t.name).sort()).toEqual(["bash", "subagent"]);
+		expect(h.names()).toEqual([]);
+	});
+
+	it("refuses a writer's persona from the reader path too", async () => {
+		// The reader's `subagent` resolves the same declared catalogue the
+		// worker's does — a shared helper, so the two paths cannot drift on
+		// what a persona is.
+		const h = host();
+		startReadOnlyAgent(
+			h.pi as unknown as { registerTool(tool: unknown): void },
+			{ extensions: [] },
+		);
+		const subagent = h.tools.find((t) => t.name === "subagent") as unknown as {
+			execute: (id: string, p: unknown) => Promise<unknown>;
+		};
+		await expect(
+			subagent.execute("call-1", {
+				persona: "deliverable-worker",
+				question: "anything",
+			}),
+		).rejects.toThrow(/writers are plan-authored/);
 	});
 });
 

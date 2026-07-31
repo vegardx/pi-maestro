@@ -368,9 +368,9 @@ export const PI_BUILTINS = [
  * tools nobody holds. A hand-written list serving as both the configuration
  * AND the test's notion of truth cannot catch its own errors.
  *
- * It also does NOT contain any tool of ours. A read-only agent registers
- * nothing: `extension.ts` returns early for a child with no wiring, so what it
- * is launched with is the whole of what it has.
+ * `edit` and `write` are absent by design and stay absent: they write
+ * IN-PROCESS, where the sandbox cannot see them, so no gate and no kernel
+ * profile stands between them and the tree.
  */
 export const READ_ONLY_BUILTINS = ["read", "grep", "find", "ls"] as const;
 
@@ -385,10 +385,29 @@ export const READ_ONLY_BUILTINS = ["read", "grep", "find", "ls"] as const;
  */
 export const READ_ONLY_EXTENSION_TOOLS = ["websearch", "webfetch"] as const;
 
+/**
+ * Tools a read-only agent's OWN process registers — the no-wiring path in
+ * `extension.ts`. They must appear here too, because the allowlist filters
+ * extension tools: a tool registered but not listed would be registered and
+ * uncallable, which is the phantom grant with an extra step.
+ *
+ * `bash` names OUR gated shell, which replaces pi's builtin of the same name
+ * the moment the extension registers it — the same substitution every worker
+ * already relies on. The old rule "a shell is a write tool" predated ambient
+ * confinement: the classifier's read-only branch refuses write-effect
+ * commands, and the kernel write profile scopes a read-only actor to scratch
+ * space, so a reader's shell reads and searches while unable to write the
+ * tree. `subagent` is here because every agent holds it — depth is the cap,
+ * which is what MAX_DEPTH exists for, and a reader consulting another reader
+ * is ordinary.
+ */
+export const READ_ONLY_AGENT_TOOLS = ["bash", "subagent"] as const;
+
 /** Everything a read-only agent is launched with. */
 export const READ_ONLY_TOOLS = [
 	...READ_ONLY_BUILTINS,
 	...READ_ONLY_EXTENSION_TOOLS,
+	...READ_ONLY_AGENT_TOOLS,
 ] as const;
 
 /**
@@ -396,14 +415,15 @@ export const READ_ONLY_TOOLS = [
  *
  * Generated from what it is actually LAUNCHED with, not from the registry.
  * `describeFor("read-only")` used to supply this, and it named the subagent
- * tool — one the reader could not call, because it never registers our tools
- * and because it was not in its allowlist either. That is the phantom
- * grant this whole registry exists to prevent, reproduced inside it.
+ * tool at a time when the reader could not call it — it registered none of our
+ * tools then, and its allowlist did not carry the name either. That phantom is
+ * closed from both ends now: the no-wiring path registers what this list
+ * promises, and a guard test holds the two together.
  */
 export function describeReadOnlyTools(): string {
 	return `## Your tools\n\n${READ_ONLY_TOOLS.map((name) => `- ${name}`).join(
 		"\n",
-	)}\n\nRead and search only. You cannot change anything, and you have no shell.`;
+	)}\n\nYou cannot change the tree: the shell refuses write-effect commands, the OS confines every command besides, and you hold no edit or write tools. If you cannot answer, say so plainly rather than guessing.`;
 }
 
 export interface ReadOnlyInvocation {

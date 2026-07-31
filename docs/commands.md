@@ -52,10 +52,14 @@ Held by a worker:
 - `finish` — report the outcome and hand off. It then waits: the maestro ships
   and records the result before releasing it.
 
-A read-only agent holds none of these. It runs on the allowlist it was
-launched with — `read`, `grep`, `find`, `ls`, `websearch`, `webfetch` — with no
-shell, because a shell is a write tool, and no `subagent`, because a reader
-answers its caller rather than recruiting help.
+A read-only agent holds two of these: `bash` — gated read-only, so
+write-effect commands are refused with the reason, and confined by the OS
+besides — and `subagent`, because a reader consulting another reader is
+ordinary and depth is the cap. The rest of its surface is the allowlist it
+was launched with: `read`, `grep`, `find`, `ls`, `websearch`, `webfetch`. It
+never holds `edit` or `write`, which write in-process where the sandbox
+cannot see them, and never `commit` or `finish` — a reader answers its
+caller, and changes nothing worth recording.
 
 `ask` is not in these lists because it belongs to `packages/ask`. What differs
 by position is not the tool but the transport behind it: a worker's questions

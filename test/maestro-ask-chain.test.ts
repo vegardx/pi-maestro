@@ -5,9 +5,9 @@
 // routes to its maestro, and a maestro with none falls back to its local UI —
 // which is its human. Position, not variant.
 //
-// A read-only agent registers nothing. Its caller is blocked on it, so there is
-// no channel back; a reader that cannot answer says so in its report. Readers
-// answer, they do not ask.
+// A read-only agent registers no transport (its two tools, yes — but nothing
+// of this). Its caller is blocked on it, so there is no channel back; a reader
+// that cannot answer says so in its report. Readers answer, they do not ask.
 //
 // The case worth reading is `from`. A maestro answers most questions itself and
 // can be confidently wrong, so an agent must be able to tell its maestro's

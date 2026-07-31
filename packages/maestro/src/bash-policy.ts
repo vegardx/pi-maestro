@@ -398,6 +398,36 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 			confidence: "high",
 		};
 
+	// BEFORE the redirects and the delivery invariant, for the read-only actor
+	// only. A reader holds a gated shell now, so its refusals are strings a
+	// real agent reads — and both branches below name tools (`delete`,
+	// `commit`) that no reader holds, which is the phantom-refusal defect
+	// `test/refusals-name-real-tools.test.ts` exists to stop. The read-only
+	// answer is also the truer one: a reader cannot delete or commit by ANY
+	// tool, so pointing it at one would be worse than saying no. `delivery` is
+	// in the effect list for the same reason — a commit is a write.
+	if (
+		input.actor === "read-only" &&
+		hasAny(effects, [
+			"workspace-write",
+			"repository-code",
+			"local-git",
+			"delivery",
+			"remote-write",
+			"privileged",
+			"destructive",
+			"unknown",
+		])
+	) {
+		return {
+			...base,
+			route: "deny",
+			reason:
+				"You are read-only: no writes, no repository-code execution, no uncertain effects. Report what you found instead",
+			confidence: "high",
+			invariant: "read-only",
+		};
+	}
 	if (guidance === "redirect" && suggestedTool) {
 		return {
 			...base,
@@ -413,27 +443,6 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 			reason: deliveryReason(input.command),
 			confidence: "high",
 			invariant: "delivery",
-		};
-	}
-	if (
-		input.actor === "read-only" &&
-		hasAny(effects, [
-			"workspace-write",
-			"repository-code",
-			"local-git",
-			"remote-write",
-			"privileged",
-			"destructive",
-			"unknown",
-		])
-	) {
-		return {
-			...base,
-			route: "deny",
-			reason:
-				"Read-only reviewer cannot run commands with writes, repository code, or uncertain effects",
-			confidence: "high",
-			invariant: "read-only",
 		};
 	}
 	if (effects.has("git-identity-write") && input.actor !== "maestro") {

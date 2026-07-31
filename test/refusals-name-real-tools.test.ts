@@ -27,6 +27,7 @@ import { executionPolicyPreset } from "../packages/maestro/src/execution-policy.
 import {
 	agentExtensions,
 	extensionPath,
+	startReadOnlyAgent,
 	startWorker,
 } from "../packages/maestro/src/extension.js";
 import { mode } from "../packages/maestro/src/mode.js";
@@ -35,6 +36,7 @@ import {
 	describeReadOnlyTools,
 	PI_BUILTINS,
 	READ_ONLY_BUILTINS,
+	READ_ONLY_TOOLS,
 } from "../packages/maestro/src/spawn.js";
 
 const SOURCES = ["bash-policy.ts"];
@@ -82,6 +84,23 @@ async function workerTools(): Promise<Set<string>> {
 	// naming their tools here. `agentExtensions()` is the real list; a tool that
 	// stops being registered stops counting as held, with nothing to update.
 	return new Set([...registered, ...(await extensionTools()), ...PI_BUILTINS]);
+}
+
+/**
+ * The tools a read-only agent's own process registers, read off the REAL
+ * entry — the no-wiring path — for the same reason `workerTools` drives
+ * `startWorker`: a fixture registry would assert on the fixture.
+ */
+function readerTools(): Set<string> {
+	const registered: string[] = [];
+	startReadOnlyAgent(
+		{
+			registerTool: (tool: unknown) =>
+				registered.push((tool as { name: string }).name),
+		},
+		{ extensions: [] },
+	);
+	return new Set(registered);
 }
 
 /** Every tool the non-maestro extensions an agent loads actually register. */
@@ -226,12 +245,52 @@ describe("a refusal never names a tool that does not exist", () => {
 	});
 
 	it("promises a read-only agent only what it is launched with", () => {
-		// Its brief used to come from `describeFor("read-only")` and named
-		// `subagent`, which it neither registers nor is allowed to call.
+		// Its brief once named `subagent` while the reader registered nothing
+		// and the allowlist did not carry the name — a promise doubly broken.
+		// The reader registers tools now, so the guard derives from the real
+		// entry instead of asserting an absence: everything the process
+		// registers must be in the launched allowlist, because the allowlist
+		// filters extension tools and a registered name missing from it is
+		// registered and uncallable — the same phantom with an extra step.
+		const registered = readerTools();
+		expect([...registered].sort()).toEqual(["bash", "subagent"]);
+		for (const name of registered)
+			expect(READ_ONLY_TOOLS as readonly string[]).toContain(name);
+		// And the brief lists exactly what the launch allows — including what
+		// it deliberately leaves out: pi's in-process writers.
 		const brief = describeReadOnlyTools();
-		for (const name of READ_ONLY_BUILTINS) expect(brief).toContain(name);
-		expect(brief).not.toContain("subagent");
-		expect(brief).not.toContain("bash");
+		for (const name of READ_ONLY_TOOLS) expect(brief).toContain(`- ${name}`);
+		expect(brief).not.toContain("- edit");
+		expect(brief).not.toContain("- write");
+	});
+
+	it("never hands a reader a refusal naming a tool it does not hold", () => {
+		// The same rule, at the newest surface. A reader holds a gated shell
+		// now, so its refusals are strings a real agent reads — and the
+		// classifier's redirect and delivery branches name `delete` and
+		// `commit`, which no reader holds. The read-only invariant answers
+		// first for exactly that reason; this drives the commands that used to
+		// fall into those branches and reads the reasons back against what a
+		// reader really has.
+		const held = new Set([...readerTools(), ...READ_ONLY_TOOLS]);
+		for (const command of [
+			"rm -rf src",
+			'git commit -m "work"',
+			"git push origin HEAD",
+			"mkdir new-dir",
+		]) {
+			const decision = gateBash({
+				command,
+				holder: "read-only",
+				mode: mode("plan"),
+				policy: executionPolicyPreset("guided"),
+			});
+			expect(decision.kind, command).toBe("deny");
+			for (const match of decision.reason.matchAll(
+				/[Uu]se the ([a-z][a-z-]*) tool/g,
+			))
+				expect(held.has(match[1] as string), decision.reason).toBe(true);
+		}
 	});
 
 	it("does not tell a worker to ship, because shipping is the maestro's", () => {

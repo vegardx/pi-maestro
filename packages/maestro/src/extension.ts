@@ -1,8 +1,9 @@
 // The extension entry.
 //
-// One process runs either a maestro or a worker, and which one is decided here,
-// from the environment, once. The old system had a `disableExtensions` env kill
-// switch for this: a child was told which parts of its parent to switch off,
+// One process runs a maestro, a worker, or a read-only agent, and which one is
+// decided here, from the environment, once. The old system had a
+// `disableExtensions` env kill switch for this: a child was told which parts
+// of its parent to switch off,
 // which meant the parent had to remember to tell it, and a forgotten entry gave
 // a worker the maestro's whole surface. Here the surface is not switched off —
 // it is never registered, because this process knows what it is.
@@ -31,6 +32,7 @@ import {
 	dialHome,
 	type Reporter,
 	readWiring,
+	type SubagentDeps,
 } from "./agent-runtime.js";
 import { createBashTool } from "./bash-tool.js";
 import { createCommitTool } from "./commit-tool.js";
@@ -89,6 +91,54 @@ export function agentExtensions(): readonly string[] {
 }
 
 /**
+ * The `subagent` wiring an agent process hands to `declareAgentTools`.
+ *
+ * Shared between the worker and the reader paths because it is the same
+ * relationship in both: consult a read-only agent, wait for what it reports.
+ * Only the depth source differs — a worker reads it off its wiring, a reader
+ * off the environment — and `checkSpawn` caps both in one place.
+ */
+function subagentDepsFor(options: {
+	readonly depth: () => number;
+	readonly launch: ReadOnlyLaunchOptions;
+	readonly registry: () => ToolRegistry;
+}): SubagentDeps {
+	let personas: PersonaCatalogue | undefined;
+	return {
+		cwd: () => process.cwd(),
+		depth: options.depth,
+		openSession: createReadOnlySessionFactory(options.launch),
+		// A spawned reader inherits its caller's model unless a roster says
+		// otherwise, and fans out across families when asked.
+		route: (persona, fanOut, ctx) =>
+			fanOut
+				? routeSpread(ctx as ExtensionContext, persona)
+				: routeModel(ctx as ExtensionContext, persona).then((one) =>
+						one ? [one] : [],
+					),
+		// THE SAME personas the maestro declares. An agent handing over a
+		// review has to hand over the real review persona — the prose that
+		// says what to look for — not a sentence this file made up about
+		// one. Declared lazily only because the registry it validates
+		// against is the one being built around this wiring.
+		briefFor: (persona) => {
+			personas ??= PersonaCatalogue.declare(
+				BUILT_IN_PERSONAS,
+				options.registry(),
+			);
+			const found = personas.require(persona);
+			// This tool starts read-only agents only; a writer's persona
+			// (`deliverable-worker`) is refused rather than smuggled in.
+			if (found.kind !== "read-only")
+				throw new Error(
+					`persona \`${persona}\` is for a ${found.kind}, which this tool does not start — writers are plan-authored`,
+				);
+			return `${found.prose}\n\n${describeReadOnlyTools()}`;
+		},
+	};
+}
+
+/**
  * Register the agent surface and start dialling home.
  *
  * Exported so a test can hand it a fake `pi` — the alternative is asserting on
@@ -104,7 +154,6 @@ export function startWorker(
 	},
 ): Promise<AgentLink> {
 	let link: AgentLink | undefined;
-	let personas: PersonaCatalogue | undefined;
 
 	const reporter = (): Reporter => {
 		if (!link)
@@ -133,35 +182,11 @@ export function startWorker(
 			commit: createCommitTool({ cwd: () => process.cwd() }),
 			remove: createDeleteTool(),
 			reporter,
-			subagent: {
-				cwd: () => process.cwd(),
+			subagent: subagentDepsFor({
 				depth: () => wiring.depth,
-				openSession: createReadOnlySessionFactory(launch),
-				// A reader spawned by a worker inherits the worker's model unless a
-				// roster says otherwise, and fans out across families when asked.
-				route: (persona, fanOut, ctx) =>
-					fanOut
-						? routeSpread(ctx as ExtensionContext, persona)
-						: routeModel(ctx as ExtensionContext, persona).then((one) =>
-								one ? [one] : [],
-							),
-				// THE SAME personas the maestro declares. A worker handing over a
-				// review has to hand over the real review persona — the prose that
-				// says what to look for — not a sentence this file made up about
-				// one. Declared lazily only because the registry it validates
-				// against is the one being built here.
-				briefFor: (persona) => {
-					personas ??= PersonaCatalogue.declare(BUILT_IN_PERSONAS, registry);
-					const found = personas.require(persona);
-					// This tool starts read-only agents only; a writer's persona
-					// (`deliverable-worker`) is refused rather than smuggled in.
-					if (found.kind !== "read-only")
-						throw new Error(
-							`persona \`${persona}\` is for a ${found.kind}, which this tool does not start — writers are plan-authored`,
-						);
-					return `${found.prose}\n\n${describeReadOnlyTools()}`;
-				},
-			},
+				launch,
+				registry: () => registry,
+			}),
 		}),
 	);
 
@@ -188,6 +213,64 @@ export function startWorker(
 		connected.status("working");
 		return connected;
 	});
+}
+
+/**
+ * Register the read-only agent surface: a gated shell and `subagent`, nothing
+ * else.
+ *
+ * This used to be a bare early return — a no-wiring child registered NOTHING,
+ * and ran on its launched allowlist alone. Two rulings changed that. Every
+ * agent holds `subagent`, because depth is the cap and that is what MAX_DEPTH
+ * exists for: a reader consulting another reader is ordinary. And a reader
+ * holds a confined shell, because "a shell is a write tool" predated ambient
+ * confinement — the classifier refuses write-effect commands for a read-only
+ * holder AND the kernel write profile scopes it to scratch space, so the
+ * shell reads while unable to write the tree. pi's `edit`/`write` stay
+ * withheld: they write in-process, where the sandbox cannot see them.
+ *
+ * Deliberately minimal beyond those two: no commands, no ask transport, no
+ * reporter. A reader's caller is blocked on it — its only channel is the
+ * answer it returns — so there is nothing to dial and nobody to ask.
+ */
+export function startReadOnlyAgent(
+	pi: { registerTool(tool: unknown): void },
+	launch: ReadOnlyLaunchOptions,
+): void {
+	const registry: ToolRegistry = ToolRegistry.declare(
+		declareAgentTools({
+			// No `confirm`, same as the worker: a reader runs unattended, so a
+			// command that needs a human is refused rather than left prompting
+			// into a void.
+			bash: createBashTool({
+				holder: "read-only",
+				cwd: process.cwd(),
+				// Fixed at plan — read-only cwd, safeguards on. A reader has no
+				// seat whose posture could change under it, and safeguards never
+				// propagate anyway.
+				mode: () => mode("plan"),
+				policy: () => readExecutionPolicySettings(process.cwd()),
+			}),
+			// No `commit`, no `remove`: both are write tools, and the classifier's
+			// read-only branch refuses the commands that would be redirected to
+			// them before any redirect can name them.
+			reporter: () => {
+				// Unreachable: `finish` is declared with every registry — the
+				// declaration is shared — but granted to workers only, and this
+				// process registers the read-only grant. A reader reports to its
+				// caller by returning, not to a maestro.
+				throw new Error("a read-only agent has no maestro to report to");
+			},
+			subagent: subagentDepsFor({
+				depth: () => currentDepth(),
+				launch,
+				registry: () => registry,
+			}),
+		}),
+	);
+
+	for (const tool of registry.definitionsFor("read-only"))
+		pi.registerTool(tool);
 }
 
 export interface SeatHost {
@@ -377,8 +460,10 @@ export default defineExtension(
 		// commands and all.
 		if (currentDepth() > 0) {
 			const wiring = readWiring();
-			// A worker dials home; a read-only agent answers its caller and holds
-			// no agent surface of its own beyond what it was launched with.
+			// A worker dials home. A read-only agent answers its caller — nothing
+			// to dial — and registers exactly two tools of ours: the gated shell
+			// and `subagent`. Its launched `--tools` allowlist is what lets it
+			// call them.
 			if (wiring)
 				void startWorker(
 					pi,
@@ -386,6 +471,7 @@ export default defineExtension(
 					{ extensions: agentExtensions() },
 					maestro.capabilities,
 				);
+			else startReadOnlyAgent(pi, { extensions: agentExtensions() });
 			return;
 		}
 		const asker = maestro.capabilities.get(CAPABILITIES.ask) as

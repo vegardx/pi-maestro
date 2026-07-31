@@ -524,37 +524,64 @@ export class EmptyAnswer extends Error {
 }
 
 /**
- * Run a read-only agent and return what it said.
+ * Refuse what must not be asked-and-awaited at all, before anything opens.
  *
- * An empty answer THROWS. Silence and "I looked and found nothing" are
- * different claims, and a system that treats them alike is how six real
- * findings became "(agent produced no summary)" in a PR body. If a reader has
- * nothing to say it must say so.
+ * A writer is not asked and awaited — it is launched by the run and reports
+ * over the socket. There is no relationship enum saying so any more: the
+ * invariant is that a read-only agent exists ONLY as a held session in its
+ * caller's map (`subagent-sessions.ts`), so "created" and "someone is
+ * waiting" are the same event.
  */
-export async function askReadOnly(
-	spawn: ReadOnlySpawn,
-	open: ReadOnlySessionFactory,
-): Promise<string> {
-	// A writer is not asked and awaited — it is launched by the run and reports
-	// over the socket. There is no relationship enum saying so any more: the
-	// invariant is that a read-only agent exists ONLY as a held session in its
-	// caller's map, so "created" and "someone is waiting" are the same event.
-	// (That used to be a declared rule, back when a review panel's six real
-	// findings reached a PR body reading "(agent produced no summary)".)
+export function guardReadOnlySpawn(spawn: ReadOnlySpawn): void {
 	if (isWriter(spawn.kind))
 		throw new Error(
 			`a ${spawn.kind} is not asked and awaited — it is launched by the run, and reports over the socket`,
 		);
 	const refusal = checkSpawn(spawn.kind, spawn.parentDepth ?? 0);
 	if (refusal !== null) throw new Error(refusal);
+}
+
+/**
+ * One turn on an open session: ask, and read back what was said.
+ *
+ * An empty answer THROWS. Silence and "I looked and found nothing" are
+ * different claims, and a system that treats them alike is how six real
+ * findings became "(agent produced no summary)" in a PR body. If a reader has
+ * nothing to say it must say so. The rule holds on EVERY turn, not just the
+ * opener — a follow-up that comes back blank is a reader failing to report
+ * exactly as much as a first answer would be.
+ */
+export async function promptForAnswer(
+	session: ReadOnlySession,
+	kind: AgentKind,
+	question: string,
+): Promise<string> {
+	await session.prompt(question);
+	const answer = (await session.getLastAssistantText())?.trim();
+	if (!answer) throw new EmptyAnswer(kind);
+	return answer;
+}
+
+/**
+ * Run a read-only agent for exactly one question, and return what it said.
+ *
+ * The one-shot composition: open, ask, stop-in-finally. Its remaining
+ * consumer is the fan-out path, whose several readers are aggregated and
+ * discarded in one call. Everything else holds its readers instead — see
+ * `SubagentSessions`, which composes the same guard and the same turn but
+ * KEEPS the session, so the caller can ask a follow-up into a conversation
+ * that kept its context.
+ */
+export async function askReadOnly(
+	spawn: ReadOnlySpawn,
+	open: ReadOnlySessionFactory,
+): Promise<string> {
+	guardReadOnlySpawn(spawn);
 
 	const session = await open(spawn);
 	try {
 		await session.start();
-		await session.prompt(spawn.prompt);
-		const answer = (await session.getLastAssistantText())?.trim();
-		if (!answer) throw new EmptyAnswer(spawn.kind);
-		return answer;
+		return await promptForAnswer(session, spawn.kind, spawn.prompt);
 	} finally {
 		// The caller is blocked on this; nothing else will clean it up.
 		await session.stop().catch(() => {});

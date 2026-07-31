@@ -33,6 +33,7 @@ import {
 	WorkerLauncher,
 } from "./spawn.js";
 import { createPlanStore, type PlanStore } from "./store.js";
+import { SubagentSessions } from "./subagent-sessions.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { createWorkspace } from "./workspace.js";
 
@@ -76,6 +77,8 @@ export interface Seat {
 	readonly store: PlanStore;
 	readonly tools: ToolRegistry;
 	readonly personas: PersonaCatalogue;
+	/** The readers this seat holds. Exposed so shutdown can stop them. */
+	readonly subagents: SubagentSessions;
 	/**
 	 * Start a stored plan.
 	 *
@@ -103,6 +106,9 @@ export function createSeat(options: SeatOptions): Seat {
 		...(options.model ? { model: options.model } : {}),
 		...(options.agentDir ? { agentDir: options.agentDir } : {}),
 	});
+	// The seat's held readers. One per process, like a worker's: what this seat
+	// starts stays its own, re-askable until the session ends.
+	const subagents = new SubagentSessions(readOnly);
 
 	// One registry. The maestro's own tools and the ones it hands to agents are
 	// the same declarations, differing only in who holds them — which is the
@@ -154,6 +160,7 @@ export function createSeat(options: SeatOptions): Seat {
 				cwd: () => process.cwd(),
 				depth: () => 0,
 				openSession: readOnly,
+				sessions: subagents,
 				briefFor: (persona) => briefFor(personas, persona),
 				// The seat's own readers route too. Research while planning is the
 				// point of planning, and it should be able to use a cheap model
@@ -187,6 +194,7 @@ export function createSeat(options: SeatOptions): Seat {
 		store,
 		tools,
 		personas,
+		subagents,
 
 		setMode: (name) => runtime.setMode(name),
 
@@ -215,7 +223,12 @@ export function createSeat(options: SeatOptions): Seat {
 			);
 		},
 
-		close: () => runtime.close(),
+		close: async () => {
+			// Hygiene, not the mechanism — held readers are child processes of
+			// this one and die with it; stopping them makes the close orderly.
+			await subagents.stopAll();
+			await runtime.close();
+		},
 	};
 
 	function deps(

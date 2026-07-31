@@ -133,7 +133,7 @@ export function startWorker(
 			commit: createCommitTool({ cwd: () => process.cwd() }),
 			remove: createDeleteTool(),
 			reporter,
-			delegate: {
+			subagent: {
 				cwd: () => process.cwd(),
 				depth: () => wiring.depth,
 				openSession: createReadOnlySessionFactory(launch),

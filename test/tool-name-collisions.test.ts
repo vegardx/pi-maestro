@@ -93,19 +93,19 @@ describe("tool names", () => {
 		).toEqual([]);
 	});
 
-	it("keeps plan authoring distinct from the runtime delegation API", () => {
+	it("keeps plan authoring distinct from the runtime subagent API", () => {
 		// The collision this file was written for is gone by deletion rather than
 		// by care: `modes` defined a `deliverable` authoring tool and `subagents`
 		// a `subagent` runtime tool, and both packages are now deleted.
 		//
 		// One package owns both halves, which is why they cannot drift: `plan`
-		// authors the whole document and `delegate` spawns a reader, declared in
+		// authors the whole document and `subagent` spawns a reader, declared in
 		// the same registry, and `ToolRegistry.declare` refuses a duplicate name
 		// at construction. This check remains for the day a second extension
 		// starts registering tools beside maestro.
 		const names = toolNames();
 		expect(names.get("plan")).toEqual(["maestro"]);
-		expect(names.get("delegate")).toEqual(["maestro"]);
+		expect(names.get("subagent")).toEqual(["maestro"]);
 		expect(names.get("commit")).toEqual(["maestro"]);
 	});
 });

@@ -121,7 +121,7 @@ const TOOLS = [
 	"flight",
 	"respond",
 	"bash",
-	"delegate",
+	"subagent",
 	"commit",
 	"finish",
 ];
@@ -133,11 +133,10 @@ for (const tool of TOOLS) {
 }
 
 // ── 3. Dead vocabulary ───────────────────────────────────────────────────────
-// `delegates` was banned here as "replaced by subagents/research". Both
-// replacements are now deleted, and `delegate` is a real tool — so the ban had
-// turned into a rule against describing the surviving system accurately. A dead
-// vocabulary list has to be pruned when the vocabulary changes, or it starts
-// enforcing the past.
+// `delegates` was once banned here, then unbanned when a tool briefly carried
+// the name `delegate` — which is now renamed `subagent`, the word this system
+// always meant. A dead vocabulary list has to be pruned when the vocabulary
+// changes, or it starts enforcing the past.
 const BANNED = [
 	[/\bWorkGroup\b/, "WorkGroup (renamed to Deliverable)"],
 	[/\bGroupExecutor\b/, "GroupExecutor (now DeliverableExecutor)"],

@@ -86,7 +86,7 @@ describe("a plan is written whole", () => {
 		// just wrote will write the same wrong one twice.
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
-		expect(text).toContain("- ui: 2 tasks, 1 delegated after api reads api");
+		expect(text).toContain("- ui: 2 tasks, 1 to subagents after api reads api");
 		expect(text).toContain("/run arc");
 	});
 
@@ -177,7 +177,7 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 });
 
 describe("what the schema will not let an author say", () => {
-	it("offers only the read-only kinds to delegate to", () => {
+	it("offers only the read-only kinds as subagents", () => {
 		// A writer is authored as a deliverable, never spawned from a task. The
 		// schema says so before validation has to.
 		const schema = JSON.stringify(authoring().tool.parameters);

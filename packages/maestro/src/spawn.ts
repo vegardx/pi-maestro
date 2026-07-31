@@ -398,9 +398,9 @@ export const READ_ONLY_TOOLS = [
  * The tool list a read-only agent's brief carries.
  *
  * Generated from what it is actually LAUNCHED with, not from the registry.
- * `describeFor("read-only")` used to supply this, and it named `delegate` —
- * a tool the reader could not call, because it never registers our tools and
- * because `delegate` was not in its allowlist either. That is the phantom
+ * `describeFor("read-only")` used to supply this, and it named the subagent
+ * tool — one the reader could not call, because it never registers our tools
+ * and because it was not in its allowlist either. That is the phantom
  * grant this whole registry exists to prevent, reproduced inside it.
  */
 export function describeReadOnlyTools(): string {

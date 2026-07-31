@@ -150,7 +150,7 @@ export function createSeat(options: SeatOptions): Seat {
 			reporter: () => {
 				throw new Error("the maestro reports to you, not to another maestro");
 			},
-			delegate: {
+			subagent: {
 				cwd: () => process.cwd(),
 				depth: () => 0,
 				openSession: readOnly,

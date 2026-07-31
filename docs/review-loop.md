@@ -24,7 +24,7 @@ tasks: [
 ]
 ```
 
-The worker calls `delegate`, which spawns a read-only agent, blocks until it
+The worker calls `subagent`, which spawns a read-only agent, blocks until it
 answers, and returns what it said. The worker then fixes what it found and
 commits before calling `finish`.
 
@@ -34,7 +34,7 @@ live with the code.
 
 ## Fanning out
 
-`delegate` takes `fanOut`, which asks one reader **per model family** and
+`subagent` takes `fanOut`, which asks one reader **per model family** and
 returns every answer, attributed by family and **not reconciled**.
 
 Reconciling would mean this layer deciding which reviewer was right, which is
@@ -51,7 +51,7 @@ that names a declared tool, so a persona says what to look for and never what to
 call. The reader's tool list is generated from what it was actually launched
 with.
 
-Read-only agents hold no shell and cannot delegate onward. A reviewer that
+Read-only agents hold no shell and no `subagent` tool of their own. A reviewer that
 cannot answer says so in its report rather than recruiting help — its caller is
 blocked on it, so there is no channel back.
 

@@ -122,7 +122,7 @@ describe("waiting and reading are different things", () => {
 });
 
 describe("writers are authored, never spawned", () => {
-	it("refuses a task delegating to a worker", () => {
+	it("refuses a task naming a worker as its subagent", () => {
 		const errors = validatePlan(
 			plan({
 				deliverables: [

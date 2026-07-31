@@ -105,7 +105,7 @@ function seat(over: Partial<Parameters<typeof createSeat>[0]> = {}) {
 describe("the seat assembles one coherent set of parts", () => {
 	it("declares every built-in persona against the tools that exist", () => {
 		// `PersonaCatalogue.declare` rejects prose naming a declared tool. If a
-		// persona ever starts teaching `finish` or `delegate` by name, this is
+		// persona ever starts teaching `finish` or `subagent` by name, this is
 		// where it stops — before a live agent is told to call something.
 		const { seat: s } = seat();
 		expect([...s.personas.ids()].sort()).toEqual(

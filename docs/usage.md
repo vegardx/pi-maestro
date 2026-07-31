@@ -76,7 +76,7 @@ There is no review command. A worker hands its own diff to a reviewer and acts
 on what comes back before it reports — which is the point, since a review nobody
 acts on is a review that did not happen.
 
-`delegate` can fan out: one reader per model family, every answer returned
+`subagent` can fan out: one reader per model family, every answer returned
 **unreconciled**. Flattening several opinions into one is how findings get lost.
 
 ## Safeguards

@@ -120,13 +120,13 @@ describe("a process gets one surface, never both", () => {
 			// and while it was missing, a live drive watched every deliverable
 			// build its work and then fail, unable to record any of it.
 			"commit",
-			"delegate",
 			// `delete` for the same reason as `commit`: the classifier refuses
 			// `rm` and names this tool instead. It went with `packages/modes` in
 			// the flip and the refusal outlived it, so `rm -rf dist` was denied
 			// with nowhere to go.
 			"delete",
 			"finish",
+			"subagent",
 		]);
 		expect(h.names()).toEqual([]);
 	});
@@ -210,7 +210,6 @@ describe("the commands", () => {
 			// end in the operator's own session — invisible because the guard
 			// only ever checked the worker posture.
 			"commit",
-			"delegate",
 			"delete",
 			"flight",
 			"plan",
@@ -218,11 +217,12 @@ describe("the commands", () => {
 			// question is. While it lived on maestro's runtime it answered every
 			// question in a set with the same string, because the code settling
 			// them had never seen a questionnaire.
+			"subagent",
 		]);
 	});
 });
 
-describe("a worker delegates with the real personas", () => {
+describe("a worker consults subagents with the real personas", () => {
 	it("resolves personas against the declared catalogue, not a made-up one", async () => {
 		// The stub this replaced read `You are a ${agent}. Persona: ${persona}.`
 		// — a brief that looks plausible and teaches a reviewer nothing about
@@ -242,12 +242,12 @@ describe("a worker delegates with the real personas", () => {
 		);
 		await expect(started).rejects.toThrow();
 
-		const delegate = h.tools.find((t) => t.name === "delegate") as unknown as {
+		const subagent = h.tools.find((t) => t.name === "subagent") as unknown as {
 			execute: (id: string, p: unknown) => Promise<unknown>;
 		};
 		// Rejected while building the brief, before anything is spawned.
 		await expect(
-			delegate.execute("call-1", {
+			subagent.execute("call-1", {
 				agent: "reviewer",
 				persona: "not-a-persona",
 				question: "anything",
@@ -271,11 +271,11 @@ describe("a worker delegates with the real personas", () => {
 		);
 		await expect(started).rejects.toThrow();
 
-		const delegate = h.tools.find((t) => t.name === "delegate") as unknown as {
+		const subagent = h.tools.find((t) => t.name === "subagent") as unknown as {
 			execute: (id: string, p: unknown) => Promise<unknown>;
 		};
 		await expect(
-			delegate.execute("call-1", {
+			subagent.execute("call-1", {
 				agent: "explorer",
 				persona: "code-review",
 				question: "anything",

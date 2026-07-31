@@ -1,8 +1,11 @@
-// The agent model: what a kind decides, so an author cannot decide it wrongly.
+// The agent model: two kinds, and what follows from being one.
 //
-// The old model had fifteen kinds, each restating its own grants, its own
-// preamble prose and its own lifecycle — and they disagreed. Every case here
-// closes one of the ways they disagreed.
+// The old model had fifteen kinds, then five, each restating grants, prose and
+// lifecycle — and they disagreed. What survives is the one honest bit (does it
+// write?) plus personas as the single prose system. There is no relationship
+// enum to test any more: who waits on whom is structural — a writer is tracked
+// by the run, and a read-only agent exists only as a held session in its
+// caller's map, so a reader nobody waits for cannot be constructed.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
@@ -15,7 +18,6 @@ import {
 	isWriter,
 	type Persona,
 	PersonaCatalogue,
-	relationshipOf,
 	validateAgentSpec,
 } from "../packages/maestro/src/agent.js";
 import { ToolRegistry } from "../packages/maestro/src/tool-registry.js";
@@ -39,7 +41,7 @@ const tools = ToolRegistry.declare([
 
 const persona = (over: Partial<Persona> = {}): Persona => ({
 	id: "security-review",
-	kind: "reviewer",
+	kind: "read-only",
 	title: "Security review",
 	prose: "Look for authentication that is checked in one path and not another.",
 	...over,
@@ -47,74 +49,48 @@ const persona = (over: Partial<Persona> = {}): Persona => ({
 
 const catalogue = () => PersonaCatalogue.declare([persona()], tools);
 
-describe("a kind decides what follows from it", () => {
-	it("maps five kinds onto three postures", () => {
-		expect(AGENT_KINDS.map(holderOf)).toEqual([
-			"maestro",
-			"worker",
-			"read-only",
-			"read-only",
-			"read-only",
-		]);
+describe("a kind is the one honest bit", () => {
+	it("has exactly two values", () => {
+		// The three reader words (explorer, reviewer, advisor) selected nothing
+		// mechanical — same tools, same launch, same limits — so they live on in
+		// persona titles, not here. The maestro is not a kind: it is the seat,
+		// never spawned, so there is nothing to name.
+		expect(AGENT_KINDS).toEqual(["worker", "read-only"]);
 	});
 
-	it("maps five kinds onto three mechanisms", () => {
-		// The spawner switches on this, not on kind — which is what stops a sixth
-		// kind from needing a sixth branch in the launcher.
-		expect(AGENT_KINDS.map(relationshipOf)).toEqual([
-			"autonomous",
-			"autonomous",
-			"blocking",
-			"blocking",
-			"consultable",
-		]);
+	it("maps kinds onto holders one to one", () => {
+		expect(AGENT_KINDS.map(holderOf)).toEqual(["worker", "read-only"]);
 	});
 
-	it("knows which kinds write", () => {
-		expect(AGENT_KINDS.filter(isWriter)).toEqual(["maestro", "worker"]);
-	});
-
-	it("gives no way to author a read-only agent nobody waits for", () => {
-		// The bug this whole rebuild started from: a review panel produced six
-		// real findings that reached a PR body reading "(agent produced no
-		// summary)". `autonomous` means nobody is waiting, so a read-only agent
-		// that were autonomous would report into nothing. There is no field to
-		// set, so the combination cannot be written.
-		for (const kind of AGENT_KINDS)
-			if (holderOf(kind) === "read-only")
-				expect(relationshipOf(kind)).not.toBe("autonomous");
+	it("knows which kind writes", () => {
+		expect(AGENT_KINDS.filter(isWriter)).toEqual(["worker"]);
 	});
 });
 
 describe("requesting an agent", () => {
-	it("refuses to spawn a maestro", () => {
+	it("refuses an unknown kind by naming the two that exist", () => {
 		expect(
-			validateAgentSpec({ kind: "maestro", persona: "anything" }),
-		).toContainEqual(expect.stringContaining("never spawned"));
+			validateAgentSpec({ kind: "reviewer" as never, persona: "x" }),
+		).toContainEqual(expect.stringContaining("kinds are worker, read-only"));
 	});
 
 	it("refuses a request with no persona", () => {
 		expect(
-			validateAgentSpec({ kind: "reviewer", persona: "  " }),
+			validateAgentSpec({ kind: "read-only", persona: "  " }),
 		).toContainEqual(expect.stringContaining("no persona"));
 	});
 
-	// The two tests that were here validated `topology: "fan-out"`, an axis
-	// NOTHING ever set. Fanning out is `SubagentRef.fanOut` plus model routing,
-	// which is what the `subagent` tool actually reads — so this was a second vocabulary
-	// for one idea, and the unreachable one carried the rules.
-
 	it("defaults to one agent", () => {
 		expect(
-			validateAgentSpec({ kind: "explorer", persona: "codebase-research" }),
+			validateAgentSpec({ kind: "read-only", persona: "codebase-research" }),
 		).toEqual([]);
 	});
 });
 
 describe("personas are the only prose, and they never name a tool", () => {
 	it("refuses prose naming a tool the kind cannot call", () => {
-		// The `review` defect in its exact shape: a preamble teaching a worker to
-		// call something it did not have. Here a reviewer is taught to `commit`.
+		// The `review` defect in its exact shape: a preamble teaching a reader to
+		// call something it did not have. Here a reader is taught to `commit`.
 		expect(() =>
 			PersonaCatalogue.declare(
 				[persona({ prose: "When you are satisfied, `commit` the fix." })],
@@ -153,10 +129,10 @@ describe("personas are the only prose, and they never name a tool", () => {
 		).toThrow(/says nothing to look for/);
 	});
 
-	it("refuses a persona for a maestro", () => {
+	it("refuses a persona for a kind that does not exist", () => {
 		expect(() =>
-			PersonaCatalogue.declare([persona({ kind: "maestro" })], tools),
-		).toThrow(/never spawned/);
+			PersonaCatalogue.declare([persona({ kind: "advisor" as never })], tools),
+		).toThrow(/unknown kind/);
 	});
 
 	it("refuses a duplicate rather than letting load order decide", () => {
@@ -176,16 +152,18 @@ describe("personas are the only prose, and they never name a tool", () => {
 
 	it("lists what a kind can be given", () => {
 		const c = PersonaCatalogue.declare(
-			[persona(), persona({ id: "codebase-research", kind: "explorer" })],
+			[persona(), persona({ id: "the-coder", kind: "worker" })],
 			tools,
 		);
-		expect(c.forKind("reviewer").map((p) => p.id)).toEqual(["security-review"]);
-		expect(c.forKind("advisor")).toEqual([]);
+		expect(c.forKind("read-only").map((p) => p.id)).toEqual([
+			"security-review",
+		]);
+		expect(c.forKind("worker").map((p) => p.id)).toEqual(["the-coder"]);
 	});
 });
 
 describe("the brief is assembled, never composed by the caller", () => {
-	const spec: AgentSpec = { kind: "reviewer", persona: "security-review" };
+	const spec: AgentSpec = { kind: "read-only", persona: "security-review" };
 
 	it("puts the persona's prose next to a generated tool list", () => {
 		const text = brief(
@@ -197,15 +175,17 @@ describe("the brief is assembled, never composed by the caller", () => {
 		expect(text).toContain("authentication that is checked in one path");
 		expect(text).toContain("## Your tools");
 		expect(text).toContain("- read —");
-		// A reviewer is read-only, so it is never told about `commit` — the same
-		// declaration decides both what it holds and what it is told it holds.
+		// A reader is never told about `commit` — the same declaration decides
+		// both what it holds and what it is told it holds.
 		expect(text).not.toContain("commit");
 		expect(text).toContain("Review the diff on feat/api.");
 	});
 
-	it("refuses a persona belonging to another kind", () => {
+	it("refuses a persona belonging to the other kind", () => {
+		// This is where "a writer's persona cannot be smuggled into a reader"
+		// lives now that the plan has no agent field to check.
 		expect(() =>
-			brief({ ...spec, kind: "explorer" }, catalogue(), tools, "Go look"),
-		).toThrow(/is for a reviewer, not a explorer/);
+			brief({ ...spec, kind: "worker" }, catalogue(), tools, "Go build"),
+		).toThrow(/is for a read-only, not a worker/);
 	});
 });

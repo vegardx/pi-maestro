@@ -696,18 +696,14 @@ function describeTask(task: Task, index: number): string {
 	if (task.body?.trim()) lines.push(task.body.trim());
 	if (task.by)
 		lines.push(
-			// The kind and persona, never a tool name — what an agent can call is
+			// The persona, never a tool name — what an agent can call is
 			// generated from the declaration, and prose that repeats it can drift.
-			`Hand this to ${article(task.by.agent)} ${task.by.agent} subagent with the \`${task.by.persona}\` persona` +
+			`Hand this to a subagent with the \`${task.by.persona}\` persona` +
 				(task.by.fanOut
 					? ", across several model families, and reconcile what they return."
 					: "."),
 		);
 	return lines.join("\n\n");
-}
-
-function article(word: string): string {
-	return /^[aeiou]/.test(word) ? "an" : "a";
 }
 
 function reasonOf(error: unknown): string {

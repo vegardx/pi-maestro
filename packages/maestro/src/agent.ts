@@ -1,10 +1,17 @@
-// The agent model: five kinds, and what follows from being one.
+// The agent model: two kinds, and what follows from being one.
 //
-// Almost nothing here is authored. A kind determines what an agent may hold and
-// how its caller relates to it, so an author cannot describe an incoherent
-// agent — there is no combination of fields to get wrong, because there are
-// barely any fields. The old model had fifteen kinds, each restating its own
-// grants, its own prose and its own lifecycle, and they disagreed.
+// A kind is the one honest bit: does it write? Everything else that used to
+// hang off kind — five values, a relationship enum, a persona namespace — was
+// either restating this bit or restating the persona. The three reader words
+// (explorer, reviewer, advisor) live on in persona titles and prose; they
+// stopped being system vocabulary because they selected nothing mechanical.
+//
+// There is no relationship enum any more. It said who waits on whom, and that
+// is now structural: a writer is tracked by the run and reports over the
+// socket; a read-only agent exists only as a held session in its caller's map,
+// so "created" and "someone is waiting" are the same event. The enum was the
+// fence around a combination — a reader nobody waits for — that is no longer
+// writable, and a rule that cannot be violated is vocabulary waiting to drift.
 //
 // PERSONAS ARE THE ONLY PROSE. A persona says what to look for. What an agent
 // can call is generated from the tool declaration, never written next to it —
@@ -15,53 +22,19 @@
 import type { Holder, ToolRegistry } from "./tool-registry.js";
 
 /**
- * - `maestro`  the session the human drives. Never spawned: it is the thing
- *   that spawns, and a maestro that could produce a maestro would have no
- *   answer to who owns the run.
- * - `worker`   writes, inside its own worktree, to produce one deliverable.
- * - `explorer` reads and reports back: research before the work exists.
- * - `reviewer` reads and reports back: judgement after a diff exists.
- * - `advisor`  reads and stays available to be asked.
+ * - `worker`    writes, inside its own worktree, to produce one deliverable.
+ *   Authored in the plan, spawned by the run — the plan is the spawn interface
+ *   for writers. Kept in the vocabulary (rather than implied) because there is
+ *   a future where the seat runs a worker directly through the subagent tool.
+ * - `read-only` reads and reports to whoever is holding it. What it is FOR —
+ *   research, review, standby advice — is its persona's job to say.
  */
-export const AGENT_KINDS = [
-	"maestro",
-	"worker",
-	"explorer",
-	"reviewer",
-	"advisor",
-] as const;
+export const AGENT_KINDS = ["worker", "read-only"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
 
-/**
- * How the caller relates to the agent. DERIVED from the kind, never authored —
- * this is the difference between the kinds, so letting an author set it
- * independently would let them write an explorer that is an advisor.
- *
- * The spawner switches on this rather than on kind: five kinds, three
- * mechanisms.
- */
-export const RELATIONSHIPS = ["blocking", "consultable", "autonomous"] as const;
-export type Relationship = (typeof RELATIONSHIPS)[number];
-
-/** How wide. Intent only — never a model, never a count. */
-
 const HOLDER_OF: Readonly<Record<AgentKind, Holder>> = {
-	maestro: "maestro",
 	worker: "worker",
-	explorer: "read-only",
-	reviewer: "read-only",
-	advisor: "read-only",
-};
-
-const RELATIONSHIP_OF: Readonly<Record<AgentKind, Relationship>> = {
-	// Nobody waits on the maestro; the human does.
-	maestro: "autonomous",
-	// Maestro launches it and gets on with the rest of the DAG. It reports
-	// through its worktree and its hand-off, not by being awaited.
-	worker: "autonomous",
-	explorer: "blocking",
-	reviewer: "blocking",
-	advisor: "consultable",
+	"read-only": "read-only",
 };
 
 /** What the kind is trusted with. The grant itself derives from this. */
@@ -69,13 +42,9 @@ export function holderOf(kind: AgentKind): Holder {
 	return HOLDER_OF[kind];
 }
 
-export function relationshipOf(kind: AgentKind): Relationship {
-	return RELATIONSHIP_OF[kind];
-}
-
 /** Whether an agent of this kind writes anything at all. */
 export function isWriter(kind: AgentKind): boolean {
-	return holderOf(kind) !== "read-only";
+	return kind === "worker";
 }
 
 export class AgentModelError extends Error {
@@ -92,16 +61,7 @@ export interface AgentSpec {
 	readonly persona: string;
 }
 
-/**
- * Everything wrong with a request for an agent.
- *
- * The rule worth reading is the read-only one. An agent that reads and reports
- * needs someone to report to; `autonomous` means nobody is waiting, so its
- * findings go nowhere. That is not a hypothetical — a review panel once
- * produced six real findings, including a silent-pass bug, that reached a PR
- * body reading "(agent produced no summary)". Deriving the relationship from
- * the kind is what makes that combination unwritable.
- */
+/** Everything wrong with a request for an agent. */
 export function validateAgentSpec(spec: AgentSpec): string[] {
 	const errors: string[] = [];
 
@@ -112,18 +72,8 @@ export function validateAgentSpec(spec: AgentSpec): string[] {
 		return errors;
 	}
 
-	if (spec.kind === "maestro")
-		errors.push(
-			"a maestro is never spawned — it is the session that spawns, and a maestro producing a maestro leaves nobody owning the run",
-		);
-
 	if (!spec.persona.trim())
 		errors.push(`a ${spec.kind} was requested with no persona`);
-
-	// No `topology` check. It was a second vocabulary for fanning out —
-	// validated here, and set by NOTHING: the real axis is `SubagentRef.fanOut`
-	// plus model routing, which is what the `subagent` tool actually reads. Two ways to
-	// say one thing, one of which nobody could reach.
 
 	return errors;
 }
@@ -157,7 +107,7 @@ export class PersonaCatalogue {
 	/**
 	 * Build the catalogue, or throw. Rejected at construction:
 	 *
-	 * - an unknown kind, or a persona for a maestro — there is nothing to spawn;
+	 * - an unknown kind;
 	 * - a duplicate id, or empty prose, which is a persona that says nothing;
 	 * - prose that names a declared tool. This is the load-bearing one: the tool
 	 *   list an agent sees is generated from the declaration, so a persona
@@ -180,10 +130,6 @@ export class PersonaCatalogue {
 			if (!AGENT_KINDS.includes(persona.kind))
 				throw new AgentModelError(
 					`persona \`${id}\` names unknown kind \`${persona.kind}\``,
-				);
-			if (persona.kind === "maestro")
-				throw new AgentModelError(
-					`persona \`${id}\` is for a maestro, which is never spawned`,
 				);
 			if (!persona.prose.trim())
 				throw new AgentModelError(

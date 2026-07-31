@@ -151,12 +151,11 @@ describe("the subagent tool asks a reader and waits", () => {
 			cwd: () => "/worktrees/api",
 			depth: () => depth,
 			openSession: async () => session("Two findings, one real."),
-			briefFor: (agent, persona) => `${agent}:${persona}`,
+			briefFor: (persona) => `brief:${persona}`,
 		});
 
 	it("returns what the reader said", async () => {
 		const result = await call(tool(1), {
-			agent: "reviewer",
 			persona: "security-review",
 			question: "Is the auth check consistent?",
 		});
@@ -166,7 +165,6 @@ describe("the subagent tool asks a reader and waits", () => {
 	it("obeys the nesting limit it was launched at", async () => {
 		await expect(
 			call(tool(MAX_DEPTH), {
-				agent: "explorer",
 				persona: "codebase-research",
 				question: "Where is it?",
 			}),
@@ -200,7 +198,6 @@ describe("the subagent tool asks a reader and waits", () => {
 		});
 
 		const result = await call(fanned, {
-			agent: "reviewer",
 			persona: "code-review",
 			question: "look",
 			fanOut: true,
@@ -232,7 +229,6 @@ describe("the subagent tool asks a reader and waits", () => {
 		});
 		const text = (
 			await call(fanned, {
-				agent: "reviewer",
 				persona: "code-review",
 				question: "look",
 				fanOut: true,
@@ -255,7 +251,6 @@ describe("the subagent tool asks a reader and waits", () => {
 		});
 		const text = (
 			await call(single, {
-				agent: "reviewer",
 				persona: "code-review",
 				question: "look",
 				fanOut: true,
@@ -316,7 +311,7 @@ describe("a read-only child is launched with nothing to dial", () => {
 	const invocation = (parentDepth = 1) =>
 		buildReadOnlyInvocation(
 			{
-				kind: "reviewer",
+				kind: "read-only",
 				cwd: "/worktrees/api",
 				brief: "Look for auth checked in one path and not another.",
 				prompt: "Review the diff.",

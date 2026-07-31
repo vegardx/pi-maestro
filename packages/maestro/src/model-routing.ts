@@ -6,11 +6,10 @@
 // impossible: a cheap model for cheap work, and a review that is a second
 // OPINION rather than the same model asked twice.
 //
-// The four spawnable kinds here are the four the models package already routes
-// for. `SPAWNABLE_AGENT_TYPES` is worker, explorer, reviewer, advisor, which is
-// this system's agent kinds minus the maestro — the one that is never spawned.
-// Nothing had to be converted, which is the useful kind of coincidence: two
-// designs that arrived at the same axis separately.
+// Routing is keyed by PERSONA: `code-review` wanting a heavy tier is a
+// statement about the work, not about a posture. The models package still
+// keys its allowances by the old four agent types, so a bridge table below
+// maps the built-in personas onto them until allowances re-key by persona.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SpawnableAgentType, ThinkingLevel } from "@vegardx/pi-contracts";
@@ -21,7 +20,12 @@ import {
 	resolveModels,
 	spreadForAgent,
 } from "@vegardx/pi-models";
-import type { AgentKind } from "./agent.js";
+import {
+	CODE_REVIEW,
+	CODEBASE_RESEARCH,
+	DELIVERABLE_WORKER,
+	STANDBY,
+} from "./personas.js";
 
 /** What a resolution comes to: a model, how hard it thinks, and its family. */
 export interface RoutedModel {
@@ -33,11 +37,21 @@ export interface RoutedModel {
 	readonly fallbackReason?: string;
 }
 
-/** Every agent kind but the maestro, which is never spawned. */
-export type RoutableKind = Exclude<AgentKind, "maestro">;
+/**
+ * INTERIM until allowances re-key by persona: the models package still keys
+ * allowances by the old agent types, so the built-in personas map onto them
+ * here. A persona not in this table routes as `undefined` — inherit — because
+ * a guessed tier for an unknown persona would be a model nobody asked for.
+ */
+const PERSONA_AGENT_TYPE: Readonly<Record<string, SpawnableAgentType>> = {
+	[DELIVERABLE_WORKER]: "worker",
+	[CODEBASE_RESEARCH]: "explorer",
+	[CODE_REVIEW]: "reviewer",
+	[STANDBY]: "advisor",
+};
 
-function asAgentType(kind: RoutableKind): SpawnableAgentType {
-	return kind;
+function asAgentType(persona: string): SpawnableAgentType | undefined {
+	return PERSONA_AGENT_TYPE[persona];
 }
 
 /**
@@ -50,14 +64,16 @@ function asAgentType(kind: RoutableKind): SpawnableAgentType {
  */
 export async function routeModel(
 	ctx: ExtensionContext,
-	kind: RoutableKind,
+	persona: string,
 	inherit?: InheritedModel,
 ): Promise<RoutedModel | undefined> {
-	const tier = defaultTierForAgent(ctx, asAgentType(kind));
+	const agent = asAgentType(persona);
+	if (!agent) return undefined;
+	const tier = defaultTierForAgent(ctx, agent);
 	if (!tier) return undefined;
 
 	const resolved = await resolveModel(ctx, {
-		agent: asAgentType(kind),
+		agent,
 		tier,
 		...(inherit ? { inherit } : {}),
 	});
@@ -83,20 +99,21 @@ export async function routeModel(
  */
 export async function routeSpread(
 	ctx: ExtensionContext,
-	kind: RoutableKind,
+	persona: string,
 	inherit?: InheritedModel,
 ): Promise<readonly RoutedModel[]> {
-	const tier = defaultTierForAgent(ctx, asAgentType(kind));
-	const width = spreadForAgent(ctx, asAgentType(kind));
-	if (!tier || width <= 1) {
-		const single = await routeModel(ctx, kind, inherit);
+	const agent = asAgentType(persona);
+	const tier = agent ? defaultTierForAgent(ctx, agent) : undefined;
+	const width = agent ? spreadForAgent(ctx, agent) : 0;
+	if (!agent || !tier || width <= 1) {
+		const single = await routeModel(ctx, persona, inherit);
 		return single ? [single] : [];
 	}
 
 	const resolved = await resolveModels(
 		ctx,
 		{
-			agent: asAgentType(kind),
+			agent,
 			tier,
 			...(inherit ? { inherit } : {}),
 		},

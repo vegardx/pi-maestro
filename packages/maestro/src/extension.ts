@@ -139,23 +139,25 @@ export function startWorker(
 				openSession: createReadOnlySessionFactory(launch),
 				// A reader spawned by a worker inherits the worker's model unless a
 				// roster says otherwise, and fans out across families when asked.
-				route: (agent, fanOut, ctx) =>
+				route: (persona, fanOut, ctx) =>
 					fanOut
-						? routeSpread(ctx as ExtensionContext, agent)
-						: routeModel(ctx as ExtensionContext, agent).then((one) =>
+						? routeSpread(ctx as ExtensionContext, persona)
+						: routeModel(ctx as ExtensionContext, persona).then((one) =>
 								one ? [one] : [],
 							),
-				// THE SAME personas the maestro declares. A worker delegating a
+				// THE SAME personas the maestro declares. A worker handing over a
 				// review has to hand over the real review persona — the prose that
 				// says what to look for — not a sentence this file made up about
 				// one. Declared lazily only because the registry it validates
 				// against is the one being built here.
-				briefFor: (agent, persona) => {
+				briefFor: (persona) => {
 					personas ??= PersonaCatalogue.declare(BUILT_IN_PERSONAS, registry);
 					const found = personas.require(persona);
-					if (found.kind !== agent)
+					// This tool starts read-only agents only; a writer's persona
+					// (`deliverable-worker`) is refused rather than smuggled in.
+					if (found.kind !== "read-only")
 						throw new Error(
-							`persona \`${persona}\` is for a ${found.kind}, not a ${agent}`,
+							`persona \`${persona}\` is for a ${found.kind}, which this tool does not start — writers are plan-authored`,
 						);
 					return `${found.prose}\n\n${describeReadOnlyTools()}`;
 				},

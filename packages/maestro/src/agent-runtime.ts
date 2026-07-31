@@ -18,7 +18,6 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
 import { AgentLink } from "./link.js";
-import { SUBAGENT_KINDS, type SubagentKind } from "./plan.js";
 import {
 	AGENT_ID_ENV,
 	askReadOnly,
@@ -174,17 +173,20 @@ export interface SubagentDeps {
 	readonly depth: () => number;
 	readonly openSession: ReadOnlySessionFactory;
 	/** Turn a persona id into its brief. Unknown ids throw, and should. */
-	readonly briefFor: (agent: SubagentKind, persona: string) => string;
+	readonly briefFor: (persona: string) => string;
 	/**
 	 * Which models to ask. One entry = one agent; several = a fan-out, one per
 	 * family. Absent, or one entry, means the caller's own model is inherited.
+	 *
+	 * Keyed by persona: `code-review` wanting a heavy tier is a statement about
+	 * the work, not about a posture.
 	 *
 	 * Present only because model routing is now wired: a `fanOut` parameter with
 	 * nothing behind it would be a flag that reads like a capability and does
 	 * nothing, which is the defect this rebuild exists to remove.
 	 */
 	readonly route?: (
-		agent: SubagentKind,
+		persona: string,
 		fanOut: boolean,
 		ctx: unknown,
 	) => Promise<
@@ -212,13 +214,18 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 			"Start a read-only subagent — an explorer, reviewer or advisor — and wait for what it reports. Blocks until it answers.",
 		promptSnippet: "start a read-only subagent and wait for what it reports.",
 		parameters: Type.Object({
-			agent: Type.Union(SUBAGENT_KINDS.map((kind) => Type.Literal(kind))),
 			persona: Type.String({
 				description: "Which persona — what it should be looking for.",
 			}),
 			question: Type.String({
 				description: "The specific thing you want it to answer.",
 			}),
+			kind: Type.Optional(
+				Type.Union([Type.Literal("read-only"), Type.Literal("worker")], {
+					description:
+						"What to start. Defaults to read-only, which is the only kind this tool starts today.",
+				}),
+			),
 			fanOut: Type.Optional(
 				Type.Boolean({
 					description:
@@ -226,16 +233,29 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 				}),
 			),
 		}),
-		async execute(_id, { agent, persona, question, fanOut }, _signal, _u, ctx) {
+		async execute(_id, { persona, question, kind, fanOut }, _signal, _u, ctx) {
+			// `worker` is in the schema and refused: there is a future where the
+			// seat runs a worker directly through this tool, and when it arrives
+			// it should be an implementation filling in, not a vocabulary change.
+			if (kind === "worker")
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "refused: writers are plan-authored — author a deliverable and run the plan. This tool starts read-only subagents only, for now.",
+						},
+					],
+					details: { persona, families: 0 },
+				};
 			const models = deps.route
-				? await deps.route(agent, fanOut === true, ctx)
+				? await deps.route(persona, fanOut === true, ctx)
 				: [];
 			const ask = (model?: string) =>
 				askReadOnly(
 					{
-						kind: agent,
+						kind: "read-only",
 						cwd: deps.cwd(),
-						brief: deps.briefFor(agent, persona),
+						brief: deps.briefFor(persona),
 						prompt: question,
 						parentDepth: deps.depth(),
 						...(model ? { model } : {}),
@@ -247,7 +267,7 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 				const answer = await ask(models[0]?.modelId);
 				return {
 					content: [{ type: "text" as const, text: answer }],
-					details: { agent, persona, families: models.length },
+					details: { persona, families: models.length },
 				};
 			}
 
@@ -272,13 +292,13 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 					{
 						type: "text" as const,
 						text: [
-							`${models.length} ${agent}s answered, across ${reached} model famil${reached === 1 ? "y" : "ies"}. They are not reconciled — that is yours to do.`,
+							`${models.length} subagents answered, across ${reached} model famil${reached === 1 ? "y" : "ies"}. They are not reconciled — that is yours to do.`,
 							"",
 							...parts,
 						].join("\n"),
 					},
 				],
-				details: { agent, persona, families: reached },
+				details: { persona, families: reached },
 			};
 		},
 	});

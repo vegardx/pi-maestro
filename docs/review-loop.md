@@ -19,7 +19,7 @@ A deliverable's work can name a reader:
 tasks: [
   { id: "build",  title: "Write the module" },
   { id: "review", title: "Have the diff reviewed",
-    by: { agent: "reviewer", persona: "code-review" } },
+    by: { persona: "code-review" } },
   { id: "act",    title: "Act on the findings" },
 ]
 ```

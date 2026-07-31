@@ -154,14 +154,14 @@ export function createSeat(options: SeatOptions): Seat {
 				cwd: () => process.cwd(),
 				depth: () => 0,
 				openSession: readOnly,
-				briefFor: (agent, persona) => briefFor(personas, tools, agent, persona),
+				briefFor: (persona) => briefFor(personas, persona),
 				// The seat's own readers route too. Research while planning is the
 				// point of planning, and it should be able to use a cheap model
 				// for it — or several, when it wants a second opinion.
-				route: (agent, fanOut, ctx) =>
+				route: (persona, fanOut, ctx) =>
 					fanOut
-						? routeSpread(ctx as ExtensionContext, agent)
-						: routeModel(ctx as ExtensionContext, agent).then((one) =>
+						? routeSpread(ctx as ExtensionContext, persona)
+						: routeModel(ctx as ExtensionContext, persona).then((one) =>
 								one ? [one] : [],
 							),
 			},
@@ -283,16 +283,13 @@ export function createSeat(options: SeatOptions): Seat {
  * assignment, and here the assignment is the question, which arrives separately
  * as the child's first prompt.
  */
-function briefFor(
-	personas: PersonaCatalogue,
-	tools: ToolRegistry,
-	kind: string,
-	persona: string,
-): string {
+function briefFor(personas: PersonaCatalogue, persona: string): string {
 	const found = personas.require(persona);
-	if (found.kind !== kind)
+	// The subagent tool starts read-only agents only, so a writer's persona is
+	// refused here — `deliverable-worker` cannot be smuggled into a reader.
+	if (found.kind !== "read-only")
 		throw new Error(
-			`persona \`${persona}\` is for a ${found.kind}, not a ${kind}`,
+			`persona \`${persona}\` is for a ${found.kind}, which this tool does not start — writers are plan-authored`,
 		);
 	return `${found.prose}\n\n${describeReadOnlyTools()}`;
 }

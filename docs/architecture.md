@@ -9,7 +9,7 @@ never registered, rather than switched off afterwards.
 ```
 depth 0  maestro    the seat you talk to       plan · flight · respond · bash · commit · delete · subagent
 depth 1  worker     one deliverable, own tree  bash · commit · delete · subagent · finish
-depth 2  read-only  explorer/reviewer/advisor  read · grep · find · ls · websearch · webfetch
+depth 2  read-only  research/review/standby    read · grep · find · ls · websearch · webfetch
 depth 3  MAX_DEPTH  refused
 ```
 

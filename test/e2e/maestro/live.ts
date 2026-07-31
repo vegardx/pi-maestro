@@ -62,7 +62,7 @@ function plan(repoDir: string): Plan {
 						id: "stats-review",
 						title: "Have the diff reviewed",
 						body: "Ask for a review of what you just wrote, and be specific about what you want looked at.",
-						by: { agent: "reviewer", persona: "code-review" },
+						by: { persona: "code-review" },
 					},
 					{
 						id: "stats-act",

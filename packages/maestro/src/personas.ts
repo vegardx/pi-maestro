@@ -34,7 +34,7 @@ export const BUILT_IN_PERSONAS: readonly Persona[] = [
 	},
 	{
 		id: CODEBASE_RESEARCH,
-		kind: "explorer",
+		kind: "read-only",
 		title: "Codebase research",
 		prose: [
 			"You are reading a codebase to answer one question, and you cannot change anything.",
@@ -46,7 +46,7 @@ export const BUILT_IN_PERSONAS: readonly Persona[] = [
 	},
 	{
 		id: CODE_REVIEW,
-		kind: "reviewer",
+		kind: "read-only",
 		title: "Code review",
 		prose: [
 			"You are reviewing a diff, and you cannot change it.",
@@ -58,7 +58,7 @@ export const BUILT_IN_PERSONAS: readonly Persona[] = [
 	},
 	{
 		id: STANDBY,
-		kind: "advisor",
+		kind: "read-only",
 		title: "Standby advisor",
 		prose: [
 			"You are available to be asked, and you cannot change anything.",

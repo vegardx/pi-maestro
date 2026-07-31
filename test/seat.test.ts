@@ -175,6 +175,87 @@ s.on('data', (chunk) => {
 });
 `;
 
+// A worker that holds a reviewer: it connects, reports a held subagent over
+// the wire, and then keeps working — it never finishes, because the case under
+// test is a LIVE subtree, and a finished worker has no subtree to show.
+const FAKE_WORKER_HOLDING_A_READER = `
+const net = require('node:net');
+const s = net.connect(process.env.${SOCK_ENV});
+let buf = '';
+s.on('connect', () => s.write(JSON.stringify({
+  type: 'hello', v: ${PROTOCOL_VERSION},
+  agentId: process.env.${AGENT_ID_ENV},
+  token: process.env.${TOKEN_ENV}, pid: process.pid,
+}) + '\\n'));
+s.on('data', (chunk) => {
+  buf += chunk;
+  let at;
+  while ((at = buf.indexOf('\\n')) !== -1) {
+    const line = buf.slice(0, at); buf = buf.slice(at + 1);
+    const m = JSON.parse(line);
+    if (m.type === 'welcome') s.write(JSON.stringify({
+      type: 'subagents',
+      held: [{ id: 'code-review-1', persona: 'code-review',
+               modelId: 'm-opus', state: 'answering', asked: 1 }],
+    }) + '\\n');
+  }
+});
+setInterval(() => {}, 1 << 30);
+`;
+
+describe("the seat sees its whole subtree", () => {
+	it("folds a live worker's reported readers into the seat's own listing", async () => {
+		const repoPath = repo();
+		const { seat: s, agentDir } = seat({
+			spawn: (_command, _args, options) =>
+				nodeSpawn(
+					process.execPath,
+					["-e", FAKE_WORKER_HOLDING_A_READER],
+					options,
+				),
+		});
+		s.setMode("auto");
+		createPlanStore(plansRoot(agentDir)).savePlan(plan(repoPath));
+
+		// The report arrives over the same socket the worker already dials —
+		// there is no second channel to stand up, which is the design.
+		const reported = new Promise<void>((resolve) =>
+			s.runtime.link.on("subagents", (_id, held) => {
+				if (held.length > 0) resolve();
+			}),
+		);
+		await s.run("arc");
+		await reported;
+
+		const subagent = s.tools
+			.definitionsFor("maestro")
+			.find((t) => t.name === "subagent") as unknown as {
+			execute: (
+				id: string,
+				p: unknown,
+			) => Promise<{ content: { text: string }[] }>;
+		};
+
+		const listing = await subagent.execute("call-1", {});
+		const text = listing.content[0]?.text as string;
+		// Three layers, each row saying who holds it: the seat holds nothing of
+		// its own here, the run holds `api`, and `api` holds its reviewer.
+		expect(text).toContain("held by");
+		expect(text).toMatch(/worker:api\s+deliverable-worker\s+\S+\s+running/);
+		expect(text).toMatch(
+			/^ {2}code-review-1\s+code-review\s+m-opus\s+answering\s+1\s+`api`$/m,
+		);
+
+		// A descendant's id is status, not an affordance: asking it here is
+		// corrected to its holder, while a plain miss stays the map's own error.
+		await expect(
+			subagent.execute("call-2", { id: "code-review-1", question: "and?" }),
+		).rejects.toThrow(/`code-review-1` is held by `api`, who reports to you/);
+
+		await s.runtime.stop("seen what we came for");
+	});
+});
+
 describe("a plan runs, end to end", () => {
 	it("takes a stored plan through worktree, worker, hand-off, ship and record", async () => {
 		const repoPath = repo();

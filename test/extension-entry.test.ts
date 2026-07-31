@@ -17,6 +17,7 @@ import {
 	startSeat,
 	startWorker,
 } from "../packages/maestro/src/extension.js";
+import { MaestroLink } from "../packages/maestro/src/link.js";
 import { BUILT_IN_PERSONAS } from "../packages/maestro/src/personas.js";
 import {
 	AGENT_ID_ENV,
@@ -318,6 +319,36 @@ describe("a worker consults subagents with the real personas", () => {
 				question: "anything",
 			}),
 		).rejects.toThrow(/writers are plan-authored/);
+	});
+});
+
+describe("a worker reports its held readers up the socket it already dials", () => {
+	it("sends the current snapshot the moment the handshake completes", async () => {
+		// Changes made before the wire existed are dropped, and THIS is what
+		// makes that loss free: every message is the full map, so the snapshot
+		// on connect catches the maestro up from nothing.
+		const dir = mkdtempSync(join(tmpdir(), "maestro-entry-wire-"));
+		dirs.push(dir);
+		const socketPath = join(dir, "m.sock");
+		const link = new MaestroLink({ token: "t" });
+		await link.listen(socketPath);
+		try {
+			const snapshot = new Promise<[string, unknown]>((resolve) =>
+				link.on("subagents", (agentId, held) => resolve([agentId, held])),
+			);
+			const h = host();
+			const worker = await startWorker(
+				h.pi as unknown as { registerTool(tool: unknown): void },
+				{ agentId: "worker-api", socketPath, token: "t", depth: 1 },
+				{ extensions: [] },
+			);
+			// This worker holds nothing yet, and says exactly that.
+			expect(await snapshot).toEqual(["worker-api", []]);
+			expect(link.heldBy("worker-api")).toEqual([]);
+			worker.close();
+		} finally {
+			await link.close();
+		}
 	});
 });
 

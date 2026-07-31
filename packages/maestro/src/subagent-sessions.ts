@@ -61,12 +61,28 @@ interface Held {
 	asked: number;
 }
 
+/** Hears every change to the held map, as the whole map. */
+export type SubagentsChanged = (held: readonly HeldSubagent[]) => void;
+
 export class SubagentSessions {
 	private readonly held = new Map<string, Held>();
 	/** Per-persona counters, so ids read `code-review-2`, not a random token. */
 	private readonly counters = new Map<string, number>();
+	private listener: SubagentsChanged | undefined;
 
 	constructor(private readonly open: ReadOnlySessionFactory) {}
+
+	/**
+	 * Report every change to the held map — a start, a turn beginning or ending,
+	 * a teardown. The listener gets the FULL current list, never a delta: a
+	 * snapshot that arrives late or doubled still says the truth, so there is no
+	 * resync protocol to get wrong. This is how a worker's held readers become
+	 * visible one level up — the maestro folds these snapshots into the seat's
+	 * own listing.
+	 */
+	onChange(listener: SubagentsChanged): void {
+		this.listener = listener;
+	}
 
 	/**
 	 * Open a session, ask the opening question, and KEEP the session.
@@ -94,6 +110,7 @@ export class SubagentSessions {
 			asked: 0,
 		};
 		this.held.set(id, entry);
+		this.changed();
 
 		try {
 			await session.start();
@@ -101,6 +118,7 @@ export class SubagentSessions {
 			// Never came up: there is no conversation to hold. Anything else that
 			// goes wrong AFTER this point leaves the entry in place — see `turn`.
 			this.held.delete(id);
+			this.changed();
 			await session.stop().catch(() => {});
 			throw error;
 		}
@@ -151,12 +169,14 @@ export class SubagentSessions {
 			entry.session.stop().catch(() => {}),
 		);
 		this.held.clear();
+		this.changed();
 		await Promise.all(stopping);
 	}
 
 	private async turn(entry: Held, question: string): Promise<string> {
 		entry.state = "answering";
 		entry.asked += 1;
+		this.changed();
 		try {
 			return await promptForAnswer(entry.session, entry.kind, question);
 		} finally {
@@ -165,6 +185,11 @@ export class SubagentSessions {
 			// well want to ask again, differently, and tearing the session down
 			// here would punish exactly that.
 			entry.state = "idle";
+			this.changed();
 		}
+	}
+
+	private changed(): void {
+		this.listener?.(this.list());
 	}
 }

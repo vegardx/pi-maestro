@@ -31,7 +31,7 @@ The current `/model` selects the seat; a binding maps that seat to a roster. Con
 - `models.families.<Family>.aliases.<Alias>` — ordered `attach` list of exact `provider/model` refs, plus effort and notes;
 - `models.rosters.<id>.<light|standard|heavy>` — ordered `"Family/Alias"` refs per tier;
 - `models.bindings.<id>` — `{ roster, targets? }`; a binding without `targets` is the default seat;
-- `models.allowances.<agent>` — which tiers that agent type may request, and `spread` for multi-model fan-out;
+- `models.allowances.<persona>` (e.g. `models.allowances.code-review`) — which tiers that persona may request, and `spread` for multi-model fan-out;
 - `models.region` — `{ active, lists }`; the one hard filter, applied before any other reasoning.
 
 **Declared but read by nothing.** `agents.kinds.<kind>.runtimePolicy`,

@@ -110,6 +110,11 @@ export function createSeat(options: SeatOptions): Seat {
 	// starts stays its own, re-askable until the session ends.
 	const subagents = new SubagentSessions(readOnly);
 
+	// The model this run's workers were routed to, remembered only so the
+	// seat's listing can show it. Live status like everything the listing
+	// shows: per-process, never written to the run.
+	let workerModel: string | undefined;
+
 	// One registry. The maestro's own tools and the ones it hands to agents are
 	// the same declarations, differing only in who holds them — which is the
 	// whole reason a grant cannot drift from an implementation.
@@ -165,6 +170,25 @@ export function createSeat(options: SeatOptions): Seat {
 				// point of planning, and it should be able to use a cheap model
 				// for it — or a fan-out lead, when it wants second opinions.
 				route: (request, ctx) => routeSpawn(ctx as ExtensionContext, request),
+				// The seat's listing shows its whole subtree: the run's live workers,
+				// and under each the readers it reported holding over the socket it
+				// already dials. Read from the run and the link at the moment of
+				// asking — live status, derived from nothing, gone when they are.
+				descendants: () => {
+					const executor = runtime.running();
+					if (!executor) return [];
+					return Object.entries(executor.state().deliverables)
+						.filter(
+							([, record]) =>
+								record.state === "running" && record.agentId !== undefined,
+						)
+						.map(([id, record]) => ({
+							id,
+							state: record.state,
+							...(workerModel ? { modelId: workerModel } : {}),
+							held: runtime.link.heldBy(record.agentId as string),
+						}));
+				},
 			},
 		}),
 		{ definition: runtime.flightTool(), holders: ["maestro"] },
@@ -210,6 +234,10 @@ export function createSeat(options: SeatOptions): Seat {
 				options.narrator.say(
 					`Workers fall back to the seat model: ${routed.fallbackReason}`,
 				);
+			// Remembered for the listing's model column. Undefined stays honest:
+			// with no routing and no pin the worker inherits, and the listing says
+			// "(inherited)" rather than inventing a name.
+			workerModel = options.model ?? routed?.modelId;
 			await runtime.listen();
 			return runtime.start(
 				plan,

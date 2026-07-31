@@ -202,6 +202,69 @@ describe("an empty answer is the reader failing, not the session dying", () => {
 	});
 });
 
+describe("every change is reported as the whole map", () => {
+	// The hook the maestro's subtree listing hangs off: a worker forwards each
+	// snapshot up its socket. Snapshots, never deltas — a listener that misses
+	// one is fully caught up by the next, so there is no resync to get wrong.
+	const snapshotsOf = (held: SubagentSessions) => {
+		const seen: string[][] = [];
+		held.onChange((snapshot) =>
+			seen.push(snapshot.map((h) => `${h.id}:${h.state}:${h.asked}`)),
+		);
+		return seen;
+	};
+
+	it("fires through a start: held-and-answering, then the turn, then idle", async () => {
+		const held = new SubagentSessions(factory().open);
+		const seen = snapshotsOf(held);
+		await held.start({ persona: "code-review", spawn: spawn() });
+		// The entry is visible BEFORE the first answer arrives — a subagent that
+		// exists is a subagent someone is waiting on — and every later state it
+		// passes through is reported as the full map.
+		expect(seen).toEqual([
+			["code-review-1:answering:0"],
+			["code-review-1:answering:1"],
+			["code-review-1:idle:1"],
+		]);
+	});
+
+	it("fires on both boundaries of a follow-up", async () => {
+		const held = new SubagentSessions(factory().open);
+		const { id } = await held.start({ persona: "explorer", spawn: spawn() });
+		const seen = snapshotsOf(held);
+		await held.askAgain(id, "and the tests?");
+		expect(seen).toEqual([["explorer-1:answering:2"], ["explorer-1:idle:2"]]);
+	});
+
+	it("reports the empty map on stopAll", async () => {
+		const held = new SubagentSessions(factory().open);
+		await held.start({ persona: "explorer", spawn: spawn() });
+		const seen = snapshotsOf(held);
+		await held.stopAll();
+		expect(seen).toEqual([[]]);
+	});
+
+	it("reports the removal of a session that never came up", async () => {
+		const held = new SubagentSessions(async () => ({
+			async start() {
+				throw new Error("pi exploded on launch");
+			},
+			async prompt() {},
+			async getLastAssistantText() {
+				return null;
+			},
+			async stop() {},
+		}));
+		const seen = snapshotsOf(held);
+		await expect(
+			held.start({ persona: "explorer", spawn: spawn() }),
+		).rejects.toThrow(/exploded/);
+		// Added, then taken back: a listener that only saw the first snapshot
+		// would report a reader that does not exist.
+		expect(seen).toEqual([["explorer-1:answering:0"], []]);
+	});
+});
+
 describe("teardown is hygiene, not the mechanism", () => {
 	it("stops every held session", async () => {
 		const f = factory();

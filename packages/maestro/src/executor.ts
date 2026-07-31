@@ -699,9 +699,9 @@ function describeTask(task: Task, index: number): string {
 			// The persona, never a tool name — what an agent can call is
 			// generated from the declaration, and prose that repeats it can drift.
 			`Hand this to a subagent with the \`${task.by.persona}\` persona` +
-				(task.by.fanOut
-					? ", across several model families, and reconcile what they return."
-					: "."),
+				// No "and reconcile": the fan-out lead aggregates before returning,
+				// so what comes back is already clean findings to act on.
+				(task.by.fanOut ? ", across several model families." : "."),
 		);
 	return lines.join("\n\n");
 }

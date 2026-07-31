@@ -23,9 +23,11 @@ import {
 	askReadOnly,
 	currentDepth,
 	type ReadOnlySessionFactory,
+	type ReadOnlySpawn,
 	SOCK_ENV,
 	TOKEN_ENV,
 } from "./spawn.js";
+import type { HeldSubagent, SubagentSessions } from "./subagent-sessions.js";
 import type { ToolDeclaration } from "./tool-registry.js";
 
 /** How a worker finds its maestro. All three, or this is not a worker. */
@@ -173,6 +175,12 @@ export interface SubagentDeps {
 	readonly cwd: () => string;
 	readonly depth: () => number;
 	readonly openSession: ReadOnlySessionFactory;
+	/**
+	 * The held sessions this caller owns. One per process — every subagent this
+	 * process starts stays in it until the process ends, which is what makes a
+	 * follow-up possible and the listing true.
+	 */
+	readonly sessions: SubagentSessions;
 	/** Turn a persona id into its brief. Unknown ids throw, and should. */
 	readonly briefFor: (persona: string) => string;
 	/**
@@ -195,8 +203,48 @@ export interface SubagentDeps {
 	>;
 }
 
+/** The three ways to call `subagent`, named in every shape refusal. */
+const CALL_SHAPES =
+	"subagent takes one of three shapes: {persona, question} starts a subagent, {id, question} asks a held one a follow-up, {} lists what you hold";
+
+/**
+ * What a caller holds, as a monospace block. Derived from the live map at the
+ * moment of asking, so it cannot drift from the truth.
+ */
+function renderHeld(held: readonly HeldSubagent[]): string {
+	if (held.length === 0)
+		return "You hold no subagents. Start one with {persona, question}.";
+	const header = ["id", "persona", "model", "state", "asked"];
+	const rows = held.map((h) => [
+		h.id,
+		h.persona,
+		h.modelId ?? h.family ?? "(inherited)",
+		h.state,
+		String(h.asked),
+	]);
+	const widths = header.map((name, i) =>
+		Math.max(name.length, ...rows.map((row) => (row[i] as string).length)),
+	);
+	const line = (cells: readonly string[]) =>
+		cells
+			.map((cell, i) => cell.padEnd(widths[i] as number))
+			.join("  ")
+			.trimEnd();
+	return [
+		line(header),
+		...rows.map(line),
+		"",
+		"Ask one a follow-up with {id, question}.",
+	].join("\n");
+}
+
 /**
  * Ask one or several read-only agents something, and wait for the answers.
+ *
+ * Every subagent started here is HELD: it stays its caller's until the caller
+ * finishes, re-askable by id — a follow-up is one more turn in a conversation
+ * that kept its context, not a fresh reader re-reading the world. "One-shot"
+ * is just the caller choosing not to ask twice.
  *
  * `fanOut` asks the same question of one agent per model family and returns
  * every answer, attributed by family and NOT reconciled. Reconciling them here
@@ -212,15 +260,27 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 		name: "subagent",
 		label: "Subagent",
 		description:
-			"Start a read-only subagent — an explorer, reviewer or advisor — and wait for what it reports. Blocks until it answers.",
-		promptSnippet: "start a read-only subagent and wait for what it reports.",
+			"Start a read-only subagent — an explorer, reviewer or advisor — and wait for what it reports. It stays yours afterwards: {id, question} asks it a follow-up in the same conversation, {} lists what you hold.",
+		promptSnippet:
+			"start a read-only subagent and wait for what it reports. A started subagent stays held: ask it a follow-up with {id, question}, or call with no arguments to list what you hold.",
 		parameters: Type.Object({
-			persona: Type.String({
-				description: "Which persona — what it should be looking for.",
-			}),
-			question: Type.String({
-				description: "The specific thing you want it to answer.",
-			}),
+			persona: Type.Optional(
+				Type.String({
+					description:
+						"Which persona — what it should be looking for. Starts a new subagent, together with `question`.",
+				}),
+			),
+			question: Type.Optional(
+				Type.String({
+					description: "The specific thing you want it to answer.",
+				}),
+			),
+			id: Type.Optional(
+				Type.String({
+					description:
+						"A held subagent's id, to ask it a follow-up instead of starting a new one.",
+				}),
+			),
 			kind: Type.Optional(
 				Type.Union([Type.Literal("read-only"), Type.Literal("worker")], {
 					description:
@@ -234,7 +294,52 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 				}),
 			),
 		}),
-		async execute(_id, { persona, question, kind, fanOut }, _signal, _u, ctx) {
+		async execute(
+			_id,
+			{ persona, question, id, kind, fanOut },
+			_signal,
+			_u,
+			ctx,
+		) {
+			// A follow-up into a held session. A persona alongside the id would be
+			// a contradiction — the session already has one.
+			if (id !== undefined) {
+				if (persona !== undefined || question === undefined)
+					throw new Error(CALL_SHAPES);
+				const answer = await deps.sessions.askAgain(id, question);
+				const held = deps.sessions.list().find((h) => h.id === id);
+				return {
+					content: [{ type: "text" as const, text: answer }],
+					details: {
+						id,
+						...(held
+							? { persona: held.persona, state: held.state, asked: held.asked }
+							: {}),
+					},
+				};
+			}
+
+			// `subagent {}`: what do I hold? The list derives from the live session
+			// map, which is also what `askAgain` consults — the map IS the
+			// permission, so this listing cannot promise an id that would miss.
+			if (persona === undefined && question === undefined) {
+				const held = deps.sessions.list();
+				return {
+					content: [{ type: "text" as const, text: renderHeld(held) }],
+					details: {
+						held: held.map((h) => ({
+							id: h.id,
+							persona: h.persona,
+							state: h.state,
+							asked: h.asked,
+						})),
+					},
+				};
+			}
+
+			if (persona === undefined || question === undefined)
+				throw new Error(CALL_SHAPES);
+
 			// `worker` is in the schema and refused: there is a future where the
 			// seat runs a worker directly through this tool, and when it arrives
 			// it should be an implementation filling in, not a vocabulary change.
@@ -251,31 +356,49 @@ export function createSubagentTool(deps: SubagentDeps): ToolDefinition {
 			const models = deps.route
 				? await deps.route(persona, fanOut === true, ctx)
 				: [];
-			const ask = (model?: string) =>
-				askReadOnly(
-					{
-						kind: "read-only",
-						cwd: deps.cwd(),
-						brief: deps.briefFor(persona),
-						prompt: question,
-						parentDepth: deps.depth(),
-						...(model ? { model } : {}),
-					},
-					deps.openSession,
-				);
+			const spawnFor = (model?: string): ReadOnlySpawn => ({
+				kind: "read-only",
+				cwd: deps.cwd(),
+				brief: deps.briefFor(persona),
+				prompt: question,
+				parentDepth: deps.depth(),
+				...(model ? { model } : {}),
+			});
 
 			if (models.length <= 1) {
-				const answer = await ask(models[0]?.modelId);
+				const family = models[0]?.family;
+				const { id: heldId, answer } = await deps.sessions.start({
+					persona,
+					spawn: spawnFor(models[0]?.modelId),
+					...(family ? { family } : {}),
+				});
 				return {
-					content: [{ type: "text" as const, text: answer }],
-					details: { persona, families: models.length },
+					content: [
+						{ type: "text" as const, text: answer },
+						{
+							type: "text" as const,
+							text: `(held as \`${heldId}\` — a follow-up goes to {id: "${heldId}", question}; {} lists what you hold)`,
+						},
+					],
+					details: {
+						id: heldId,
+						persona,
+						state: "idle",
+						families: models.length,
+					},
 				};
 			}
 
 			// Settled, not all: one reader failing is a missing opinion, not a
 			// failed review. Losing the other two because of it would be.
+			//
+			// The fan-out stays one-shot — its readers are aggregated and gone in
+			// this one call — while the single path holds its session. Another PR
+			// owns replacing this aggregation.
 			const answers = await Promise.allSettled(
-				models.map((model) => ask(model.modelId)),
+				models.map((model) =>
+					askReadOnly(spawnFor(model.modelId), deps.openSession),
+				),
 			);
 			const parts = answers.map((answer, i) => {
 				const family = models[i]?.family ?? models[i]?.modelId ?? "unknown";

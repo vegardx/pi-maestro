@@ -41,7 +41,10 @@ Held by the maestro:
 - `flight` — carry out the plan's own preflight/postflight prose.
 - `respond` — answer a worker's blocked question, or escalate it to you.
 - `bash` — the gated shell, confined to the repository.
-- `subagent` — start a read-only subagent with a persona and wait for its answer.
+- `subagent` — start a read-only subagent with a persona and wait for its
+  answer. The subagent stays held afterwards: `{id, question}` asks it a
+  follow-up in the conversation it kept, and calling with no arguments lists
+  what is held. "One-shot" is just a caller choosing not to ask twice.
 
 Held by a worker:
 

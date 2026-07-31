@@ -48,6 +48,7 @@ import {
 } from "./read-only-session.js";
 import { createSeat, type Seat } from "./seat.js";
 import { currentDepth, describeReadOnlyTools } from "./spawn.js";
+import { SubagentSessions } from "./subagent-sessions.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { resolveBase } from "./workspace.js";
 
@@ -102,12 +103,17 @@ function subagentDepsFor(options: {
 	readonly depth: () => number;
 	readonly launch: ReadOnlyLaunchOptions;
 	readonly registry: () => ToolRegistry;
-}): SubagentDeps {
+}): { readonly deps: SubagentDeps; readonly sessions: SubagentSessions } {
 	let personas: PersonaCatalogue | undefined;
-	return {
+	const openSession = createReadOnlySessionFactory(options.launch);
+	// This process's held readers. One registry per process: what this process
+	// starts is what this process may re-ask, and nothing else can reach in.
+	const sessions = new SubagentSessions(openSession);
+	const deps: SubagentDeps = {
 		cwd: () => process.cwd(),
 		depth: options.depth,
-		openSession: createReadOnlySessionFactory(options.launch),
+		openSession,
+		sessions,
 		// A spawned reader inherits its caller's model unless a roster says
 		// otherwise, and fans out across families when asked.
 		route: (persona, fanOut, ctx) =>
@@ -136,6 +142,7 @@ function subagentDepsFor(options: {
 			return `${found.prose}\n\n${describeReadOnlyTools()}`;
 		},
 	};
+	return { deps, sessions };
 }
 
 /**
@@ -146,7 +153,10 @@ function subagentDepsFor(options: {
  * thing nobody dares change.
  */
 export function startWorker(
-	pi: { registerTool(tool: unknown): void },
+	pi: {
+		registerTool(tool: unknown): void;
+		on?(event: "session_shutdown", handler: () => void): void;
+	},
 	wiring: AgentWiring,
 	launch: ReadOnlyLaunchOptions,
 	capabilities?: {
@@ -154,6 +164,12 @@ export function startWorker(
 	},
 ): Promise<AgentLink> {
 	let link: AgentLink | undefined;
+
+	const subagent = subagentDepsFor({
+		depth: () => wiring.depth,
+		launch,
+		registry: () => registry,
+	});
 
 	const reporter = (): Reporter => {
 		if (!link)
@@ -182,17 +198,18 @@ export function startWorker(
 			commit: createCommitTool({ cwd: () => process.cwd() }),
 			remove: createDeleteTool(),
 			reporter,
-			subagent: subagentDepsFor({
-				depth: () => wiring.depth,
-				launch,
-				registry: () => registry,
-			}),
+			subagent: subagent.deps,
 		}),
 	);
 
 	// A worker holds worker tools. There is no list to keep in step with this
 	// one — the holder is the whole selector.
 	for (const tool of registry.definitionsFor("worker")) pi.registerTool(tool);
+
+	// Hygiene, not the mechanism: held readers are child processes of this
+	// worker and die with it. Stopping them here just makes the exit orderly
+	// instead of leaving the reaping to the process tree.
+	pi.on?.("session_shutdown", () => void subagent.sessions.stopAll());
 
 	// `ask.v1` routes through whatever transport is registered. Registering one
 	// here is the whole of "a worker's question goes to its maestro" — the agent
@@ -265,7 +282,9 @@ export function startReadOnlyAgent(
 				depth: () => currentDepth(),
 				launch,
 				registry: () => registry,
-			}),
+			}).deps,
+			// No shutdown hook here: this minimal host has no event surface, and
+			// a reader's held children die with it — the process tree reaps.
 		}),
 	);
 
@@ -277,6 +296,7 @@ export interface SeatHost {
 	registerTool(tool: unknown): void;
 	registerCommand(name: string, spec: unknown): void;
 	sendUserMessage(text: string, opts?: unknown): unknown;
+	on?(event: "session_shutdown", handler: () => void): void;
 }
 
 /** The slice of `ask.v1` the seat uses: one blocking question, one answer. */
@@ -368,6 +388,13 @@ export function startSeat(
 			pi.registerTool(tool);
 		return built;
 	};
+
+	// Hygiene, not the mechanism: the seat's held readers are child processes
+	// of this one and die with it. Only a BUILT seat can hold any — building
+	// one here just to stop nothing would defeat the lazy construction above.
+	pi.on?.("session_shutdown", () => {
+		void built?.subagents.stopAll();
+	});
 
 	pi.registerCommand("mode", {
 		description: `Switch posture. /mode [${MODE_NAMES.join("|")}]`,

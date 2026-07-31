@@ -25,6 +25,7 @@ import {
 	SOCK_ENV,
 	TOKEN_ENV,
 } from "../packages/maestro/src/spawn.js";
+import { SubagentSessions } from "../packages/maestro/src/subagent-sessions.js";
 import { ToolRegistry } from "../packages/maestro/src/tool-registry.js";
 
 const wired = {
@@ -40,7 +41,10 @@ const call = (tool: ReturnType<typeof createFinishTool>, params: unknown) =>
 		tool.execute as unknown as (
 			id: string,
 			p: unknown,
-		) => Promise<{ content: { text: string }[] }>
+		) => Promise<{
+			content: { text: string }[];
+			details?: Record<string, unknown>;
+		}>
 	)("call-1", params);
 
 describe("a process knows whether it is a worker", () => {
@@ -146,13 +150,16 @@ describe("the subagent tool asks a reader and waits", () => {
 		async stop() {},
 	});
 
-	const tool = (depth: number) =>
-		createSubagentTool({
+	const tool = (depth: number) => {
+		const open = async () => session("Two findings, one real.");
+		return createSubagentTool({
 			cwd: () => "/worktrees/api",
 			depth: () => depth,
-			openSession: async () => session("Two findings, one real."),
+			openSession: open,
+			sessions: new SubagentSessions(open),
 			briefFor: (persona) => `brief:${persona}`,
 		});
+	};
 
 	it("returns what the reader said", async () => {
 		const result = await call(tool(1), {
@@ -183,13 +190,15 @@ describe("the subagent tool asks a reader and waits", () => {
 		// Flattening several opinions into one is how six real findings became a
 		// sentence that said nothing.
 		const asked: (string | undefined)[] = [];
+		const open = async (spawn: { model?: string }) => {
+			asked.push(spawn.model);
+			return session(`findings from ${spawn.model}`);
+		};
 		const fanned = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
-			openSession: async (spawn) => {
-				asked.push(spawn.model);
-				return session(`findings from ${spawn.model}`);
-			},
+			openSession: open,
+			sessions: new SubagentSessions(open),
 			briefFor: () => "brief",
 			route: async () => [
 				{ modelId: "m-opus", family: "Anthropic" },
@@ -214,13 +223,15 @@ describe("the subagent tool asks a reader and waits", () => {
 
 	it("keeps the opinions it got when one reader fails", async () => {
 		// One reader failing is a missing opinion, not a failed review.
+		const open = async (spawn: { model?: string }) =>
+			spawn.model === "m-bad"
+				? Promise.reject(new Error("provider refused"))
+				: session("a real finding");
 		const fanned = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
-			openSession: async (spawn) =>
-				spawn.model === "m-bad"
-					? Promise.reject(new Error("provider refused"))
-					: session("a real finding"),
+			openSession: open,
+			sessions: new SubagentSessions(open),
 			briefFor: () => "brief",
 			route: async () => [
 				{ modelId: "m-good", family: "Anthropic" },
@@ -242,10 +253,12 @@ describe("the subagent tool asks a reader and waits", () => {
 		// With no roster there is one family, and claiming three reviewers agreed
 		// when they were the same model is exactly the sort of claim this system
 		// has made before.
+		const open = async () => session("one opinion");
 		const single = createSubagentTool({
 			cwd: () => "/w",
 			depth: () => 1,
-			openSession: async () => session("one opinion"),
+			openSession: open,
+			sessions: new SubagentSessions(open),
 			briefFor: () => "brief",
 			route: async () => [{ modelId: "m-seat", family: "Anthropic" }],
 		});
@@ -257,6 +270,90 @@ describe("the subagent tool asks a reader and waits", () => {
 			})
 		).content[0].text;
 		expect(text).toBe("one opinion");
+	});
+});
+
+describe("a started subagent stays its caller's", () => {
+	// Lifetime is ownership: every subagent stays held until its caller ends,
+	// and "one-shot" is just the caller choosing not to ask twice.
+	const harness = () => {
+		const opened: { prompts: string[] }[] = [];
+		const open = async () => {
+			const record = { prompts: [] as string[] };
+			opened.push(record);
+			return {
+				async start() {},
+				async prompt(p: string) {
+					record.prompts.push(p);
+				},
+				async getLastAssistantText() {
+					return "an answer";
+				},
+				async stop() {},
+			};
+		};
+		const tool = createSubagentTool({
+			cwd: () => "/w",
+			depth: () => 1,
+			openSession: open,
+			sessions: new SubagentSessions(open),
+			briefFor: (persona) => `brief:${persona}`,
+		});
+		return { opened, tool };
+	};
+
+	it("reaches the held session with {id, question}: one session, two prompts", async () => {
+		const h = harness();
+		const started = await call(h.tool, {
+			persona: "code-review",
+			question: "look at the diff",
+		});
+		expect(started.details?.id).toBe("code-review-1");
+		// The trailer names the id, or the caller would have to guess it.
+		expect(started.content[1]?.text).toContain("code-review-1");
+
+		await call(h.tool, { id: "code-review-1", question: "and the tests?" });
+		// A follow-up is one more turn in the SAME conversation — not a fresh
+		// reader re-reading the world.
+		expect(h.opened).toHaveLength(1);
+		expect(h.opened[0]?.prompts).toEqual([
+			"look at the diff",
+			"and the tests?",
+		]);
+	});
+
+	it("lists what is held on {}", async () => {
+		const h = harness();
+		const empty = await call(h.tool, {});
+		expect(empty.content[0]?.text).toContain("You hold no subagents");
+
+		await call(h.tool, { persona: "code-review", question: "look" });
+		const listing = await call(h.tool, {});
+		const text = listing.content[0]?.text as string;
+		expect(text).toContain("code-review-1");
+		expect(text).toContain("idle");
+		expect(text).toContain("{id, question}");
+		expect(listing.details?.held).toEqual([
+			{ id: "code-review-1", persona: "code-review", state: "idle", asked: 1 },
+		]);
+	});
+
+	it("refuses a call that is none of the three shapes, naming them", async () => {
+		const h = harness();
+		await expect(call(h.tool, { question: "look" })).rejects.toThrow(
+			/three shapes/,
+		);
+		await expect(
+			call(h.tool, { id: "code-review-1", persona: "code-review" }),
+		).rejects.toThrow(/three shapes/);
+	});
+
+	it("answers an unknown id by naming the real ones", async () => {
+		const h = harness();
+		await call(h.tool, { persona: "code-review", question: "look" });
+		await expect(
+			call(h.tool, { id: "reviewer-7", question: "anything" }),
+		).rejects.toThrow(/yours are: code-review-1/);
 	});
 });
 
@@ -275,6 +372,14 @@ describe("the agent tools are declared, not listed", () => {
 					},
 					async stop() {},
 				}),
+				sessions: new SubagentSessions(async () => ({
+					async start() {},
+					async prompt() {},
+					async getLastAssistantText() {
+						return "ok";
+					},
+					async stop() {},
+				})),
 				briefFor: () => "brief",
 			},
 		}),

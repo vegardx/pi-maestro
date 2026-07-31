@@ -177,13 +177,14 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 });
 
 describe("what the schema will not let an author say", () => {
-	it("offers only the read-only kinds as subagents", () => {
-		// A writer is authored as a deliverable, never spawned from a task. The
-		// schema says so before validation has to.
+	it("offers a subagent only a persona, never an agent kind", () => {
+		// A writer is authored as a deliverable, never spawned from a task — and
+		// the schema now says so by having NO agent field at all: a task's
+		// subagent is read-only by construction, not by validation.
 		const schema = JSON.stringify(authoring().tool.parameters);
-		expect(schema).toContain("explorer");
-		expect(schema).toContain("reviewer");
-		expect(schema).toContain("advisor");
+		expect(schema).toContain('"by"');
+		expect(schema).toContain("persona");
+		expect(schema).not.toContain('"agent"');
 		expect(schema).not.toContain('"worker"');
 	});
 

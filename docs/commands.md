@@ -41,7 +41,7 @@ Held by the maestro:
 - `flight` — carry out the plan's own preflight/postflight prose.
 - `respond` — answer a worker's blocked question, or escalate it to you.
 - `bash` — the gated shell, confined to the repository.
-- `subagent` — start a read-only subagent (explorer, reviewer, advisor) and wait.
+- `subagent` — start a read-only subagent with a persona and wait for its answer.
 
 Held by a worker:
 

@@ -257,7 +257,7 @@ describe("a worker consults subagents with the real personas", () => {
 		);
 	});
 
-	it("refuses a persona belonging to another kind", async () => {
+	it("refuses a writer's persona — the tool starts readers only", async () => {
 		const h = host();
 		const started = startWorker(
 			h.pi as unknown as { registerTool(tool: unknown): void },
@@ -276,11 +276,10 @@ describe("a worker consults subagents with the real personas", () => {
 		};
 		await expect(
 			subagent.execute("call-1", {
-				agent: "explorer",
-				persona: "code-review",
+				persona: "deliverable-worker",
 				question: "anything",
 			}),
-		).rejects.toThrow(/is for a reviewer, not a explorer/);
+		).rejects.toThrow(/writers are plan-authored/);
 	});
 });
 

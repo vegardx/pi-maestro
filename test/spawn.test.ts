@@ -186,7 +186,7 @@ describe("the child's environment is built, never inherited", () => {
 
 describe("who may start whom", () => {
 	it("lets the maestro start anything", () => {
-		for (const kind of ["worker", "explorer", "reviewer", "advisor"] as const)
+		for (const kind of ["worker", "read-only"] as const)
 			expect(checkSpawn(kind, 0)).toBeNull();
 	});
 
@@ -197,16 +197,12 @@ describe("who may start whom", () => {
 	});
 
 	it("lets a worker consult readers", () => {
-		expect(checkSpawn("reviewer", 1)).toBeNull();
-		expect(checkSpawn("explorer", MAX_DEPTH - 1)).toBeNull();
+		expect(checkSpawn("read-only", 1)).toBeNull();
+		expect(checkSpawn("read-only", MAX_DEPTH - 1)).toBeNull();
 	});
 
 	it("stops at the nesting limit whatever the kind", () => {
-		expect(checkSpawn("explorer", MAX_DEPTH)).toMatch(/nesting limit/);
-	});
-
-	it("never spawns a maestro", () => {
-		expect(checkSpawn("maestro", 0)).toMatch(/never spawned/);
+		expect(checkSpawn("read-only", MAX_DEPTH)).toMatch(/nesting limit/);
 	});
 
 	it("refuses at the launcher too, not only in the check", () => {
@@ -256,7 +252,7 @@ describe("a read-only agent is a call that returns", () => {
 	};
 
 	it("starts, prompts, and returns what was said", async () => {
-		const { calls, result } = ask("reviewer", "  Two findings.  ");
+		const { calls, result } = ask("read-only", "  Two findings.  ");
 		expect(await result).toBe("Two findings.");
 		expect(calls).toEqual(["start", "prompt:Review the diff.", "stop"]);
 	});
@@ -265,12 +261,12 @@ describe("a read-only agent is a call that returns", () => {
 		// Silence and "I looked and found nothing" are different claims. A system
 		// that reads them alike is how six real findings became "(agent produced
 		// no summary)".
-		await expect(ask("reviewer", "   ").result).rejects.toThrow(EmptyAnswer);
-		await expect(ask("explorer", null).result).rejects.toThrow(EmptyAnswer);
+		await expect(ask("read-only", "   ").result).rejects.toThrow(EmptyAnswer);
+		await expect(ask("read-only", null).result).rejects.toThrow(EmptyAnswer);
 	});
 
 	it("stops the session even when the answer was no good", async () => {
-		const { calls, result } = ask("reviewer", null);
+		const { calls, result } = ask("read-only", null);
 		await expect(result).rejects.toThrow(EmptyAnswer);
 		expect(calls).toContain("stop");
 	});
@@ -282,7 +278,7 @@ describe("a read-only agent is a call that returns", () => {
 	});
 
 	it("obeys the nesting limit", async () => {
-		await expect(ask("reviewer", "x", MAX_DEPTH).result).rejects.toThrow(
+		await expect(ask("read-only", "x", MAX_DEPTH).result).rejects.toThrow(
 			/nesting limit/,
 		);
 	});

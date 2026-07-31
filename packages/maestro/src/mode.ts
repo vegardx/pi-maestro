@@ -72,7 +72,6 @@ export function modes(): readonly Mode[] {
  * available, because researching while planning is the point of planning.
  */
 export function mayProduce(current: Mode, kind: AgentKind): string | null {
-	if (kind === "maestro") return "a maestro is never spawned";
 	if (isWriter(kind) && current.cwd === "read")
 		return `${current.name} mode cannot write, so it cannot produce a ${kind} that writes on its behalf`;
 	return null;

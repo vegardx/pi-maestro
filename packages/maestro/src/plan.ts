@@ -33,12 +33,13 @@ export interface PlanRepo {
  */
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Read-only kinds a task may hand to a subagent. Workers are authored, never spawned. */
-export const SUBAGENT_KINDS = ["explorer", "reviewer", "advisor"] as const;
-export type SubagentKind = (typeof SUBAGENT_KINDS)[number];
-
+/**
+ * A task handed to a subagent. There is no `agent` field: a task's subagent is
+ * always read-only — a writer is authored as a deliverable, never spawned from
+ * a task — so the field could only ever restate a rule, and a field that can
+ * only hold one value is a field someone will eventually hold wrong.
+ */
 export interface SubagentRef {
-	readonly agent: SubagentKind;
 	/** Which persona — the prose that says what to look for. */
 	readonly persona: string;
 	/**
@@ -172,10 +173,8 @@ function validateTasks(
 			errors.push(`${where}: duplicate task id \`${t.id}\``);
 		seen.add(t.id);
 		if (!t.title.trim()) errors.push(`${at}: no title`);
-		if (t.by && !SUBAGENT_KINDS.includes(t.by.agent))
-			errors.push(
-				`${at}: \`${t.by.agent}\` cannot be a task's subagent — a writer is authored as a deliverable, never spawned from a task (subagent kinds: ${SUBAGENT_KINDS.join(", ")})`,
-			);
+		// No agent-kind check: `by` has no agent field to get wrong. A writer as
+		// a task's subagent is unrepresentable, not merely refused.
 		if (t.by && !t.by.persona.trim())
 			errors.push(`${at}: handed to a subagent with no persona`);
 	}

@@ -17,7 +17,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { type Plan, SUBAGENT_KINDS, type Task, validatePlan } from "./plan.js";
+import { type Plan, type Task, validatePlan } from "./plan.js";
 import type { PlanStore } from "./store.js";
 
 const TaskSchema = Type.Object({
@@ -34,14 +34,13 @@ const TaskSchema = Type.Object({
 	by: Type.Optional(
 		Type.Object(
 			{
-				agent: Type.Union(SUBAGENT_KINDS.map((kind) => Type.Literal(kind))),
 				persona: Type.String({
 					description: "Which persona — what it should be looking for.",
 				}),
 			},
 			{
 				description:
-					"Hand this step to a read-only agent instead of doing it. Research before the work, review after there is a diff.",
+					"Hand this step to a read-only subagent instead of doing it. Research before the work, review after there is a diff.",
 			},
 		),
 	),

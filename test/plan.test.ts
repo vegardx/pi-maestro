@@ -122,39 +122,21 @@ describe("waiting and reading are different things", () => {
 });
 
 describe("writers are authored, never spawned", () => {
-	it("refuses a task naming a worker as its subagent", () => {
-		const errors = validatePlan(
-			plan({
-				deliverables: [
-					deliverable("a", {
-						tasks: [
-							task("t", {
-								agent: "worker" as never,
-								persona: "coder",
-							}),
-						],
-					}),
-				],
-			}),
-		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("a writer is authored as a deliverable"),
-		);
-	});
+	// The "refuses a task naming a worker as its subagent" case is gone with
+	// the field it validated: `by` carries only a persona now, so a writer as a
+	// task's subagent is unrepresentable rather than refused. The rule survives
+	// at spawn time — `askReadOnly` refuses a writer kind — and in the brief
+	// path, which refuses a writer's persona.
 
-	it("accepts the read-only kinds, including a fan-out", () => {
+	it("accepts read-only subagent tasks, including a fan-out", () => {
 		const errors = validatePlan(
 			plan({
 				deliverables: [
 					deliverable("a", {
 						tasks: [
-							task("survey", {
-								agent: "explorer",
-								persona: "codebase-research",
-							}),
+							task("survey", { persona: "codebase-research" }),
 							task("implement"),
 							task("review", {
-								agent: "reviewer",
 								persona: "security-review",
 								fanOut: true,
 							}),

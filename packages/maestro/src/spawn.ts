@@ -20,7 +20,7 @@ import {
 	spawn as nodeSpawn,
 	type SpawnOptions,
 } from "node:child_process";
-import { type AgentKind, isWriter, relationshipOf } from "./agent.js";
+import { type AgentKind, isWriter } from "./agent.js";
 
 /**
  * Hard ceiling on nesting. Not a policy knob: every level multiplies the
@@ -53,9 +53,6 @@ export function currentDepth(env: NodeJS.ProcessEnv = process.env): number {
  * enough to launch one, the refusal has to be a rule rather than an omission.
  */
 export function checkSpawn(child: AgentKind, depth: number): string | null {
-	if (child === "maestro")
-		return "a maestro is never spawned — it is the session that spawns";
-
 	if (depth >= MAX_DEPTH)
 		return `nesting limit reached (${MAX_DEPTH}): nothing may be spawned at depth ${depth}`;
 
@@ -518,9 +515,15 @@ export async function askReadOnly(
 	spawn: ReadOnlySpawn,
 	open: ReadOnlySessionFactory,
 ): Promise<string> {
-	if (relationshipOf(spawn.kind) === "autonomous")
+	// A writer is not asked and awaited — it is launched by the run and reports
+	// over the socket. There is no relationship enum saying so any more: the
+	// invariant is that a read-only agent exists ONLY as a held session in its
+	// caller's map, so "created" and "someone is waiting" are the same event.
+	// (That used to be a declared rule, back when a review panel's six real
+	// findings reached a PR body reading "(agent produced no summary)".)
+	if (isWriter(spawn.kind))
 		throw new Error(
-			`a ${spawn.kind} is not asked and awaited — it is launched, and reports over the socket`,
+			`a ${spawn.kind} is not asked and awaited — it is launched by the run, and reports over the socket`,
 		);
 	const refusal = checkSpawn(spawn.kind, spawn.parentDepth ?? 0);
 	if (refusal !== null) throw new Error(refusal);

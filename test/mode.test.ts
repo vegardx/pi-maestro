@@ -48,20 +48,19 @@ describe("delegation is derived, never configured", () => {
 
 	it("leaves readers available while planning", () => {
 		// Researching while planning is the point of planning.
-		for (const kind of ["explorer", "reviewer", "advisor"] as const)
+		for (const kind of ["read-only"] as const)
 			expect(mayProduce(mode("plan"), kind)).toBeNull();
 	});
 
 	it("lets a writing session produce anything spawnable", () => {
 		for (const name of ["auto", "hack"] as const)
 			for (const kind of AGENT_KINDS)
-				if (kind !== "maestro") expect(mayProduce(mode(name), kind)).toBeNull();
+				expect(mayProduce(mode(name), kind)).toBeNull();
 	});
 
-	it("never produces a maestro", () => {
-		for (const name of MODE_NAMES)
-			expect(mayProduce(mode(name), "maestro")).toMatch(/never spawned/);
-	});
+	// No "never produces a maestro" case: there is no maestro KIND to refuse
+	// any more — the seat is not a spawnable thing, so the combination is
+	// unrepresentable rather than refused.
 });
 
 describe("safeguards do not propagate", () => {
@@ -82,7 +81,7 @@ describe("safeguards do not propagate", () => {
 	});
 
 	it("gives readers no write access at all", () => {
-		for (const kind of ["explorer", "reviewer", "advisor"] as const)
+		for (const kind of ["read-only"] as const)
 			expect(modeForChild(mode("hack"), kind)).toEqual(mode("plan"));
 	});
 

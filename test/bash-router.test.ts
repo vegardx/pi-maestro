@@ -13,12 +13,11 @@ const guided: ExecutionPolicySettings = {
 	preset: "guided",
 	toolGuidance: "mode-aware",
 	modeRoutes: "protected-research",
-	isolation: "lightweight",
 	delivery: "dedicated-tools",
 	consequential: "confirm",
 	privilegedRemote: "hack-only",
 	githubReads: "allow-apparent-reads",
-	unknowns: "isolate",
+	unknowns: "allow",
 	fallback: "fail-closed",
 };
 
@@ -338,19 +337,20 @@ describe("bash coaching and routing policy", () => {
 			preset: "permissive",
 			toolGuidance: "advisory",
 			modeRoutes: "direct",
-			isolation: "none",
 			consequential: "allow",
 			unknowns: "confirm",
 			fallback: "confirm",
 		};
+		// There is no isolation knob to turn any more: a research command that
+		// may execute repository code runs confined, under every preset.
 		expect(
 			decideBashPolicy({
 				command: "npm test",
 				mode: "plan",
 				actor: "maestro",
-				policy: { ...guided, isolation: "none" },
+				policy: guided,
 			}).route,
-		).toBe("confirm");
+		).toBe("lightweight");
 		expect(
 			decideBashPolicy({
 				command: "curl -X DELETE https://example.invalid/resource",

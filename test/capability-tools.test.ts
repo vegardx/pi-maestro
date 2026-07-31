@@ -15,12 +15,11 @@ const guided: ExecutionPolicySettings = {
 	preset: "guided",
 	toolGuidance: "mode-aware",
 	modeRoutes: "protected-research",
-	isolation: "lightweight",
 	delivery: "dedicated-tools",
 	consequential: "confirm",
 	privilegedRemote: "hack-only",
 	githubReads: "allow-apparent-reads",
-	unknowns: "isolate",
+	unknowns: "allow",
 	fallback: "fail-closed",
 };
 
@@ -97,7 +96,9 @@ describe("describePolicyDeviations", () => {
 			}),
 		);
 		const deviations = describePolicyDeviations(cwd);
-		expect(deviations.some((d) => d.startsWith("isolation: none"))).toBe(true);
+		expect(deviations.some((d) => d.startsWith("consequential: allow"))).toBe(
+			true,
+		);
 	});
 
 	it("flags disabled bash enforcement (MAESTRO_SANDBOX=off)", () => {

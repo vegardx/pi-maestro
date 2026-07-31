@@ -62,10 +62,12 @@ describe("every route turns into something, and none of them into silence", () =
 		expect(decideFromRoute("lightweight", "r", true).kind).toBe("allow");
 	});
 
-	it("keeps `strong` a separate mechanism, because it is one", () => {
-		// Not a write profile over the real tree: its own filesystem and network.
-		// Nothing can stand in for it, so it stays a decision of its own.
-		expect(decideFromRoute("strong", "r", true).kind).toBe("strong");
+	it("refuses `strong`, which no longer exists, like any unknown route", () => {
+		// It named a separate backend whose supplier was `packages/modes`. After
+		// the flip every command routed there was refused for want of a backend
+		// that could not exist, so the route and its tier are gone — and if the
+		// classifier ever says it again, the unknown-route backstop refuses.
+		expect(decideFromRoute("strong", "r", true).kind).toBe("deny");
 	});
 
 	it("prompts an attended seat and REFUSES an unattended agent", () => {
@@ -224,23 +226,15 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		expect(o.ran).toEqual([]);
 	});
 
-	it("refuses a strong-isolation command when no backend exists", async () => {
-		// Losing the backend does not make the command safe. It was routed off the
-		// real tree because the real tree was the thing to avoid, and a write
-		// profile is not a substitute — different mechanism, different guarantee.
-		const seen: string[] = [];
-		const o = operations({
-			policy: () => ({ ...policy, isolation: "strong" as const }),
-			onDecision: (_command, decision) => seen.push(decision.kind),
-			// `strong` deliberately absent
-		});
-		await expect(
-			o.ops.exec("frobnicate --widgets", "/w", { onData: () => {} }),
-		).rejects.toThrow(/strong isolation/);
-		expect(seen).toContain("strong");
-		expect(o.ran).toEqual([]);
-		// And it did not quietly fall through to the confined host either.
-		expect(o.confined).toEqual([]);
+	it("runs an unknown command confined, not refused for a missing backend", async () => {
+		// This used to route to `strong` — a separate backend whose supplier was
+		// `packages/modes` — so after the flip the safest preset refused every
+		// command sent there, for want of a backend that could not exist. There
+		// is no tier to pick any more: unknown effects run under the same write
+		// profile as everything else, or the `unknowns` knob says confirm/deny.
+		const o = operations();
+		await o.ops.exec("frobnicate --widgets", "/w", { onData: () => {} });
+		expect(o.confined).toEqual(["frobnicate --widgets"]);
 	});
 
 	// Pinned, and asserted rather than assumed. Both tests below used to use `gh

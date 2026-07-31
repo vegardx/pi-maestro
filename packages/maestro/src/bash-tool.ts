@@ -33,11 +33,6 @@ export interface BashToolDeps {
 	readonly policy: () => ExecutionPolicySettings;
 	/** Ask the human. Absent = nobody to ask, which is a worker. */
 	readonly confirm?: (command: string, reason: string) => Promise<boolean>;
-	/**
-	 * The strong backend: a separate filesystem and network, not a write profile.
-	 * Absent = no such backend here, and a command routed to one is refused.
-	 */
-	readonly strong?: () => BashOperations;
 	/** The unguarded host shell. Injected so a test needs no shell. */
 	readonly direct?: BashOperations;
 	/**
@@ -133,18 +128,6 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 			switch (decision.kind) {
 				case "allow":
 					return confined.exec(command, cwd, options);
-
-				case "strong": {
-					const backend = deps.strong?.();
-					// No backend is not "run it anyway". This was routed away from
-					// the real tree because the real tree was the thing to avoid,
-					// and having no elsewhere to run it does not change that.
-					if (!backend)
-						throw new Refused(
-							`${decision.reason} — this needs strong isolation, and no backend for it is available here`,
-						);
-					return backend.exec(command, cwd, options);
-				}
 
 				case "confirm": {
 					if (!deps.confirm)

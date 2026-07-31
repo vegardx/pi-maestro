@@ -17,9 +17,9 @@ Scripted commands default to session scope:
 
 ```text
 /maestro show
-/maestro get modes.execution.isolation
+/maestro get modes.execution.unknowns
 /maestro set --project modes.execution.preset strict
-/maestro reset --project modes.execution.isolation
+/maestro reset --project modes.execution.unknowns
 /maestro explain correctness-review
 /maestro validate
 ```
@@ -50,7 +50,6 @@ The Execution policy screen exposes:
 
 - preset: Guided, Strict, or Permissive;
 - mode-aware tool guidance and mode routes;
-- Lightweight, Strong, or None isolation;
 - dedicated delivery actions;
 - consequential-action confirmation;
 - privileged remote and GitHub-read behavior;
@@ -66,10 +65,12 @@ Setting an individual row makes the effective presentation Custom while preservi
 Isolation outcome:
 
 **Confinement is ambient, not a destination.** Every route that runs at all runs
-through the actor's write profile, enforced by the OS. `lightweight` is not a
-place a command is sent — it is the confinement everything already gets. Only
-`strong` is a separate mechanism (its own filesystem and network), and with no
-backend for it a command routed there is refused rather than run.
+through the actor's write profile, enforced by the OS. There is no isolation
+tier to choose: a preset is stricter by classifying more strictly (`unknowns`,
+`consequential`, `privilegedRemote`, `githubReads`), never by naming somewhere
+to send a command. The `strong` tier — a separate backend with its own
+filesystem and network — is gone; its supplier was `packages/modes`, so after
+the flip it could only refuse.
 
 A refusal never falls back to an unconfined shell, including when the sandbox
 cannot start because its own dependencies are missing — it says what to install

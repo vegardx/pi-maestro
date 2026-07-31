@@ -41,6 +41,14 @@ export interface CommitToolDeps {
 	};
 }
 
+/**
+ * The shape a commit subject must have. The schema used to merely ASK for a
+ * conventional subject in its description — prose, which every model happened
+ * to honour. This makes it a check: a description is not a guard.
+ */
+const CONVENTIONAL =
+	/^(feat|fix|refactor|docs|chore|test|style|perf|ci|build)(\([^)]+\))?!?: .+/;
+
 /** Paths git reports as changed, staged or not, including untracked. */
 export function changedPaths(porcelain: string): string[] {
 	const paths: string[] = [];
@@ -52,9 +60,46 @@ export function changedPaths(porcelain: string): string[] {
 		const arrow = path.lastIndexOf(" -> ");
 		paths.push(arrow === -1 ? path : path.slice(arrow + 4));
 	}
-	return paths
-		.map((p) => p.replace(/^"(.*)"$/, "$1"))
-		.filter((p) => p.length > 0);
+	return paths.map(unquote).filter((p) => p.length > 0);
+}
+
+/**
+ * Undo git's C-style quoting. A stripped-quotes regex is not enough: git
+ * escapes what it quotes, so `"src/s\303\270k.ts"` kept its backslashes and
+ * named a file that does not exist — staging nothing, silently.
+ */
+function unquote(path: string): string {
+	if (!(path.startsWith('"') && path.endsWith('"') && path.length >= 2))
+		return path;
+	const inner = path.slice(1, -1);
+	// Octal escapes first (git writes non-ASCII bytes as \303\270), then the
+	// simple ones. Built as bytes, then decoded: UTF-8 arrives per-byte.
+	const bytes: number[] = [];
+	let i = 0;
+	while (i < inner.length) {
+		const ch = inner[i];
+		if (ch !== "\\") {
+			bytes.push(...Buffer.from(ch, "utf8"));
+			i += 1;
+			continue;
+		}
+		const octal = inner.slice(i + 1, i + 4);
+		if (/^[0-7]{3}$/.test(octal)) {
+			bytes.push(Number.parseInt(octal, 8));
+			i += 4;
+			continue;
+		}
+		const simple: Record<string, string> = {
+			'"': '"',
+			"\\": "\\",
+			n: "\n",
+			t: "\t",
+		};
+		const mapped = simple[inner[i + 1]];
+		bytes.push(...Buffer.from(mapped ?? inner[i + 1] ?? "", "utf8"));
+		i += 2;
+	}
+	return Buffer.from(bytes).toString("utf8");
 }
 
 const DEFAULT_OPS = {
@@ -101,6 +146,13 @@ export function createCommitTool(deps: CommitToolDeps): ToolDefinition {
 
 			if (!message.trim())
 				return said("a commit needs a message — say what changed and why");
+
+			if (!CONVENTIONAL.test(message.split("\n")[0]))
+				return said(
+					"the subject is not a conventional commit — write it as " +
+						"`type(scope): subject`, where type is one of feat, fix, " +
+						"refactor, docs, chore, test, style, perf, ci, build",
+				);
 
 			const chosen =
 				paths && paths.length > 0 ? paths : changedPaths(ops.status(cwd));

@@ -16,7 +16,6 @@
 			"packages/ask/src/index.ts",
 			"packages/prompt-assist/src/index.ts",
 			"packages/settings/src/extension.ts",
-			"packages/commit/src/index.ts",
 			"packages/smart-compact/src/index.ts",
 			"packages/research-tools/src/index.ts",
 			"packages/maestro/src/extension.ts"

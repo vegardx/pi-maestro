@@ -16,7 +16,6 @@ const LIBRARIES = [
 const EXTENSIONS = [
 	"ask",
 	"prompt-assist",
-	"commit",
 	"smart-compact",
 	"research-tools",
 	"maestro",

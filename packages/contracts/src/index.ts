@@ -22,6 +22,5 @@ export * from "./review.js";
 export * from "./runs.js";
 export * from "./session-setting-overrides.js";
 export * from "./settings.js";
-export * from "./ship.js";
 export * from "./usage.js";
 export * from "./watch.js";

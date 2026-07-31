@@ -7,8 +7,8 @@
 //    (verified live on macOS: a write to a real HOME path is kernel-denied, a
 //    write inside the scope succeeds, temp stays writable).
 //
-// The router selects the mode by env (see bash-router.ts): both are opt-in
-// until real workflows (worker git, builds) have baked, then the default flips.
+// ENFORCE is the default; MAESTRO_SANDBOX=off disables it and
+// MAESTRO_SANDBOX_SHADOW=<file> logs instead of confining (see bash-tool.ts).
 // SandboxManager is a process-global; its config comes from initialize(), so we
 // re-initialize when the effective profile changes (rare — a worker is always
 // its worktree, the maestro its repo) and serialize wraps through wrapQueue.

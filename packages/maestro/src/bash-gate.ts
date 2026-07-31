@@ -26,13 +26,14 @@ import type { Holder } from "./tool-registry.js";
  * that could say "isolate this one" implies the others need no confining, which
  * is how the ordinary path ends up on an unguarded host shell.
  *
- * `strong` is the exception, and only because it is a different MECHANISM: a
- * separate backend with its own filesystem and network, not a write profile
- * over the real tree.
+ * There is no `strong` either, any more. It named a separate backend whose
+ * supplier was `packages/modes`, so after the flip every command routed there
+ * was refused for want of a backend that could not exist. What it promised —
+ * denied network, deny-read on secrets, kernel-confined writes — is what the
+ * ambient profile already delivers.
  */
 export type GateDecision =
 	| { readonly kind: "allow"; readonly reason: string }
-	| { readonly kind: "strong"; readonly reason: string }
 	| { readonly kind: "confirm"; readonly reason: string }
 	| { readonly kind: "deny"; readonly reason: string };
 
@@ -105,9 +106,6 @@ export function decideFromRoute(
 		case "lightweight":
 			return { kind: "allow", reason };
 
-		case "strong":
-			return { kind: "strong", reason };
-
 		case "confirm":
 			// Nobody is watching a worker. A prompt it cannot answer is a worker
 			// that stops responding, which reads exactly like one that crashed.
@@ -135,9 +133,9 @@ export function decideFromRoute(
 /**
  * Whether a decision lets the command run at all, in some form.
  *
- * Deliberately not a boolean on the decision itself: `strong` and `confirm`
- * both allow eventually and by very different means, and collapsing them into
- * `allowed: true` is how a backend requirement gets dropped.
+ * Deliberately not a boolean on the decision itself: `allow` and `confirm`
+ * both run eventually and by very different means, and collapsing them into
+ * `allowed: true` is how a confirmation requirement gets dropped.
  */
 export function refusal(decision: GateDecision): string | null {
 	return decision.kind === "deny" ? decision.reason : null;

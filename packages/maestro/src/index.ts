@@ -18,6 +18,5 @@ export {
 	describePolicyDeviations,
 	type ExecutionPolicyPreset,
 	type ExecutionPolicySettings,
-	type IsolationTier,
 	readExecutionPolicySettings,
 } from "./execution-policy.js";

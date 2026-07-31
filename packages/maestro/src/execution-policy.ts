@@ -14,18 +14,25 @@
 import { readLayeredExtensionConfig, readPath } from "@vegardx/pi-settings";
 
 export type ExecutionPolicyPreset = "guided" | "strict" | "permissive";
-export type IsolationTier = "lightweight" | "strong" | "none";
+
+// There is no `isolation` tier here, and no `IsolationTier` type. Confinement
+// is ambient — every command runs under the actor's write profile, and whether
+// that is on is MAESTRO_SANDBOX, not a policy value — so a knob choosing WHERE
+// to send a command had nothing left to choose. Its `strong` value routed to a
+// backend whose supplier was `packages/modes`, which is deleted: the safest
+// preset made isolated commands refuse. A preset is stricter by classifying
+// more strictly, never by naming a destination.
 
 export interface ExecutionPolicySettings {
 	preset: ExecutionPolicyPreset | "custom";
 	toolGuidance: "mode-aware" | "advisory" | "off";
 	modeRoutes: "protected-research" | "direct";
-	isolation: IsolationTier;
 	delivery: "dedicated-tools";
 	consequential: "confirm" | "confirm-mutations" | "allow";
 	privilegedRemote: "hack-only" | "confirm" | "deny";
 	githubReads: "allow-apparent-reads" | "confirm";
-	unknowns: "isolate" | "confirm" | "deny";
+	/** `allow` runs it — confined like everything else. */
+	unknowns: "allow" | "confirm" | "deny";
 	fallback: "fail-closed" | "confirm";
 }
 
@@ -36,18 +43,16 @@ const POLICY_PRESETS: Record<
 	guided: {
 		toolGuidance: "mode-aware",
 		modeRoutes: "protected-research",
-		isolation: "lightweight",
 		delivery: "dedicated-tools",
 		consequential: "confirm",
 		privilegedRemote: "hack-only",
 		githubReads: "allow-apparent-reads",
-		unknowns: "isolate",
+		unknowns: "allow",
 		fallback: "fail-closed",
 	},
 	strict: {
 		toolGuidance: "mode-aware",
 		modeRoutes: "protected-research",
-		isolation: "strong",
 		delivery: "dedicated-tools",
 		consequential: "confirm-mutations",
 		privilegedRemote: "confirm",
@@ -58,7 +63,6 @@ const POLICY_PRESETS: Record<
 	permissive: {
 		toolGuidance: "advisory",
 		modeRoutes: "direct",
-		isolation: "none",
 		delivery: "dedicated-tools",
 		consequential: "allow",
 		privilegedRemote: "hack-only",
@@ -121,11 +125,6 @@ export function readExecutionPolicySettings(
 			["protected-research", "direct"],
 			defaults.modeRoutes,
 		),
-		isolation: read(
-			"isolation",
-			["lightweight", "strong", "none"],
-			defaults.isolation,
-		),
 		delivery: read("delivery", ["dedicated-tools"], defaults.delivery),
 		consequential: read(
 			"consequential",
@@ -142,11 +141,7 @@ export function readExecutionPolicySettings(
 			["allow-apparent-reads", "confirm"],
 			defaults.githubReads,
 		),
-		unknowns: read(
-			"unknowns",
-			["isolate", "confirm", "deny"],
-			defaults.unknowns,
-		),
+		unknowns: read("unknowns", ["allow", "confirm", "deny"], defaults.unknowns),
 		fallback: read("fallback", ["fail-closed", "confirm"], defaults.fallback),
 	};
 	const custom = Object.keys(resolved).some((key) => {

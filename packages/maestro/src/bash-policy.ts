@@ -37,7 +37,6 @@ export type BashRoute =
 	| "direct"
 	| "host-read"
 	| "lightweight"
-	| "strong"
 	| "confirm"
 	| "deny";
 export type BashGuidance = "redirect" | "advisory" | "none";
@@ -529,9 +528,11 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 				confidence: "high",
 			};
 		if (hasAny(effects, ["repository-code", "workspace-write", "local-git"]))
+			// Runs confined like everything else: writes are kernel-limited to the
+			// actor's scope and network is denied, so there is no tier to pick.
 			return {
 				...base,
-				route: isolationRoute(input.policy),
+				route: "lightweight",
 				reason:
 					"Research command may execute repository code or write workspace state",
 				confidence: "high",
@@ -909,19 +910,15 @@ function consequentialRoute(
 	return { ...base, route: "confirm", reason, confidence: "high" };
 }
 
+// The `unknowns` knob governs every actor — there is no worker special case.
+// There used to be one, routing a worker's unknowns to "configured isolation",
+// which since the strong backend's supplier was deleted meant the strict
+// preset refused with a message about a backend that could not exist. A worker
+// under `confirm` is denied downstream anyway: nobody is watching it.
 function unknownRoute(
 	input: BashPolicyInput,
 	base: Omit<BashPolicyDecision, "route" | "reason" | "confidence">,
 ): BashPolicyDecision {
-	if (input.actor === "worker")
-		return {
-			...base,
-			route: isolationRoute(input.policy),
-			reason:
-				"Unknown worker command requires configured isolation; escalate to the parent maestro or Hack when unavailable",
-			confidence: "low",
-			invariant: "worker-escalation",
-		};
 	if (input.policy.unknowns === "deny")
 		return {
 			...base,
@@ -938,20 +935,10 @@ function unknownRoute(
 		};
 	return {
 		...base,
-		route: isolationRoute(input.policy),
-		reason: "Unknown command is routed to configured isolation",
+		route: "lightweight",
+		reason: "Unknown command runs confined, like everything else",
 		confidence: "low",
 	};
-}
-
-function isolationRoute(
-	policy: ExecutionPolicySettings,
-): "lightweight" | "strong" | "confirm" {
-	if (policy.isolation === "strong") return "strong";
-	if (policy.isolation === "lightweight") return "lightweight";
-	// None is explicit but still requires a mode-aware confirmation at the
-	// execution boundary; it is never an invisible fallback.
-	return "confirm";
 }
 
 // A refusal may only name a tool the refused agent actually holds. Saying "use

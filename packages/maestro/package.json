@@ -14,7 +14,7 @@
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-settings": "*",
 		"@vegardx/pi-models": "*",
-		"@anthropic-ai/sandbox-runtime": "^0.0.26",
+		"@anthropic-ai/sandbox-runtime": "^0.0.67",
 		"@vegardx/pi-git": "*",
 		"@vegardx/pi-github": "*"
 	},

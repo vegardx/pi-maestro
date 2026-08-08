@@ -1,4 +1,5 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { existsSync, writeSync } from "node:fs";
 import {
@@ -14,6 +15,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+	digestWorkflowExecutionManifest,
+	type WorkflowExecutionManifest,
+} from "../../../packages/maestro/src/workflow/supervisor-execution-manifest.js";
+import {
 	defaultWorkflowSupervisorEntryPath,
 	persistWorkflowSupervisorRequest,
 	prepareWorkflowSupervisorLogs,
@@ -24,6 +29,7 @@ import {
 import { WORKFLOW_CREDENTIAL_RESET_ENV } from "../../../packages/maestro/src/workflow/supervisor-runtime.js";
 
 function runtime(over: Record<string, string> = {}) {
+	const runtimeRoot = "/run/scratch/supervisor";
 	const homeDir = "/run/scratch/supervisor/home";
 	const tmpDir = "/run/scratch/supervisor/tmp";
 	const agentDir = "/run/scratch/supervisor/agent";
@@ -31,13 +37,18 @@ function runtime(over: Record<string, string> = {}) {
 	const workflowAuthFile = "/run/scratch/supervisor/auth.json";
 	const gitConfigFile = "/run/scratch/supervisor/gitconfig";
 	return {
+		runtimeRoot,
 		homeDir,
 		tmpDir,
 		agentDir,
 		sessionDir,
 		workflowAuthFile,
 		gitConfigFile,
-		scratchRoots: ["/run/scratch/supervisor"],
+		agentToolkitDigest: "d".repeat(64),
+		agentToolkitVersion: "1.2.3",
+		agentToolkitSourceRevision: "e".repeat(40),
+		materializationDigest: "c".repeat(64),
+		scratchRoots: [homeDir, tmpDir, sessionDir, workflowAuthFile],
 		environment: {
 			PATH: "/runtime/bin",
 			HOME: homeDir,
@@ -80,6 +91,7 @@ const roots = {
 	coordinatedRunRoot: "/run",
 	workflowStateRoot: "/run/runtime/.pi",
 	coordinatedWorktreeRoots: ["/run/repos/api"],
+	worktreeAccess: "write",
 } as const;
 
 function workflowRequest(over: Record<string, unknown> = {}) {
@@ -88,15 +100,114 @@ function workflowRequest(over: Record<string, unknown> = {}) {
 		action: "start" as const,
 		runId: "run-1",
 		cwd: "/run",
-		specPath: "/run/runtime/workflow.json",
+		specPath: "/run/runtime/workflow-bundle/workflow.json",
 		specSha256: "a".repeat(64),
+		executionManifestPath: "/run/runtime/.pi/execution-manifests/run-1.json",
+		executionManifestSha256: "b".repeat(64),
 		task: "Implement the approved plan",
 		waitTimeoutMs: 60_000,
 		...over,
 	};
 }
 
+function executionManifest(
+	launch: WorkflowExecutionManifest["launch"] = {
+		task: "Implement the approved plan",
+		executionProfile: null,
+		inputOverrides: {},
+	},
+	deniedReadRoots: readonly string[] = [],
+	worktreeAccess: "read" | "write" = "write",
+): WorkflowExecutionManifest {
+	const artifact = (name: string) => ({
+		path: `/run/runtime/${name}`,
+		sha256: "a".repeat(64),
+	});
+	return {
+		version: 1,
+		runId: "run-1",
+		launch,
+		artifacts: {
+			spec: {
+				path: "/run/runtime/workflow-bundle/workflow.json",
+				sha256: "a".repeat(64),
+			},
+			bundle: {
+				root: "/run/runtime/workflow-bundle",
+				files: [{ path: "workflow.json", sha256: "a".repeat(64) }],
+			},
+			helpers: [],
+			models: artifact("models.json"),
+			profile: artifact("profile.json"),
+		},
+		repositories: [{ id: "api", root: "/run/repos/api" }],
+		authorityPolicy: artifact("authority.json"),
+		materialization: {
+			runtimeRoot: "/run/scratch/supervisor",
+			workflowStateRoot: "/run/runtime/.pi",
+			writableRoots: [
+				...(worktreeAccess === "write" ? ["/run/repos/api"] : []),
+				"/run/runtime/.pi",
+				"/run/scratch/supervisor/auth.json",
+				"/run/scratch/supervisor/home",
+				"/run/scratch/supervisor/sessions",
+				"/run/scratch/supervisor/tmp",
+			].sort(),
+			deniedReadRoots,
+			materializationDigest: "c".repeat(64),
+			agentToolkitDigest: "d".repeat(64),
+			agentToolkitName: "@vegardx/agent-toolkit",
+			agentToolkitVersion: "1.2.3",
+			agentToolkitSourceRevision: "e".repeat(40),
+		},
+	};
+}
+
+function approvedExecution(
+	deniedReadRoots: readonly string[] = [],
+	worktreeAccess: "read" | "write" = "write",
+) {
+	const manifest = executionManifest(
+		undefined,
+		deniedReadRoots,
+		worktreeAccess,
+	);
+	return {
+		executionManifest: manifest,
+		executionManifestDigest: digestWorkflowExecutionManifest(manifest),
+	};
+}
+
+const persistApprovedManifest = async (manifest: WorkflowExecutionManifest) =>
+	`/run/runtime/.pi/execution-manifests/${manifest.runId}.json`;
+const verifyApprovedManifest = async () => undefined;
+
 describe("workflow supervisor launcher", () => {
+	it.each([
+		["task", { task: "changed task" }],
+		["profile", { executionProfile: "changed-profile" }],
+		["inputs", { inputOverrides: { changed: true } }],
+	])("rejects changed approved %s before spawn", async (_label, change) => {
+		const spawn = vi.fn(() => fakeChild());
+		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
+			materialize: async () => runtime(),
+			spawn,
+		});
+		const manifest = executionManifest();
+		await expect(
+			launcher.launch({
+				workflowRequest: workflowRequest(change),
+				executionManifest: manifest,
+				executionManifestDigest: digestWorkflowExecutionManifest(manifest),
+				materializerOptions: {},
+				sandboxRoots: roots,
+			}),
+		).rejects.toThrow(/launch inputs mismatch/);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
 	it("materializes, wraps, and spawns with a replacement environment", async () => {
 		const hostOnlyKey = "MAESTRO_LAUNCHER_TEST_HOST_ONLY";
 		const previousHostOnly = process.env[hostOnlyKey];
@@ -115,11 +226,14 @@ describe("workflow supervisor launcher", () => {
 			options: SpawnOptions;
 		}> = [];
 		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
 			materialize,
+			persistExecutionManifest: persistApprovedManifest,
 			persistRequest,
 			prepareLogs,
 			wrap,
 			executablePath: "/opt/node's/bin/node",
+			runtimeLoaderPath: "/opt/jiti/register.mjs",
 			supervisorEntryPath: "/opt/pi maestro/supervisor-entry.js",
 			spawn: (command, args, options) => {
 				spawnCalls.push({ command, args, options });
@@ -128,11 +242,14 @@ describe("workflow supervisor launcher", () => {
 		});
 
 		let handle: WorkflowSupervisorHandle;
+		const deniedReadRoots = [] as const;
+		const approved = approvedExecution(deniedReadRoots);
 		try {
 			handle = await launcher.launch({
+				...approved,
 				workflowRequest: workflowRequest(),
 				materializerOptions: { runId: "run-1" },
-				sandboxRoots: roots,
+				sandboxRoots: { ...roots, deniedReadRoots },
 			});
 		} finally {
 			if (previousHostOnly === undefined) delete process.env[hostOnlyKey];
@@ -144,15 +261,22 @@ describe("workflow supervisor launcher", () => {
 		expect(handle.stderrPath).toBe(logs.stderrPath);
 		expect(materialize).toHaveBeenCalledWith({ runId: "run-1" });
 		expect(persistRequest).toHaveBeenCalledWith(
-			workflowRequest(),
+			workflowRequest({
+				executionManifestSha256: approved.executionManifestDigest,
+			}),
 			"/run/runtime/.pi",
 		);
 		const expectedCommand =
-			`'/opt/node'"'"'s/bin/node' '/opt/pi maestro/supervisor-entry.js' ` +
+			`'/opt/node'"'"'s/bin/node' '--import' '/opt/jiti/register.mjs' ` +
+			`'/opt/pi maestro/supervisor-entry.js' ` +
 			`'/run/runtime/.pi/supervisor-requests/run-1-start.json'`;
 		expect(wrap).toHaveBeenCalledWith(
 			expectedCommand,
-			{ ...roots, scratchRoots: ["/run/scratch/supervisor"] },
+			{
+				...roots,
+				deniedReadRoots,
+				scratchRoots: runtime().scratchRoots,
+			},
 			undefined,
 		);
 		expect(spawnCalls[0]).toMatchObject({
@@ -171,6 +295,7 @@ describe("workflow supervisor launcher", () => {
 			PI_WORKFLOW_AUTH_FILE: "/run/scratch/supervisor/auth.json",
 			GIT_CONFIG_GLOBAL: "/run/scratch/supervisor/gitconfig",
 			ANTHROPIC_API_KEY: "provider-secret",
+			PI_MAESTRO_WORKFLOW_DENIED_READ_ROOTS: JSON.stringify(deniedReadRoots),
 		});
 		expect(environment[hostOnlyKey]).toBeUndefined();
 		expect(environment.PI_MAESTRO_TOKEN).toBeUndefined();
@@ -189,6 +314,8 @@ describe("workflow supervisor launcher", () => {
 	it("fails closed before spawn when materialization or sandboxing fails", async () => {
 		const spawn = vi.fn(() => fakeChild());
 		const materializationFailure = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => {
 				throw new Error("runtime unavailable");
 			},
@@ -199,6 +326,7 @@ describe("workflow supervisor launcher", () => {
 		});
 		await expect(
 			materializationFailure.launch({
+				...approvedExecution(),
 				workflowRequest: workflowRequest(),
 				materializerOptions: {},
 				sandboxRoots: roots,
@@ -206,6 +334,8 @@ describe("workflow supervisor launcher", () => {
 		).rejects.toThrow(/runtime unavailable/);
 
 		const sandboxFailure = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => runtime(),
 			persistRequest: async () => "/run/runtime/.pi/request.json",
 			prepareLogs: async () => preparedLogs(),
@@ -216,6 +346,7 @@ describe("workflow supervisor launcher", () => {
 		});
 		await expect(
 			sandboxFailure.launch({
+				...approvedExecution(),
 				workflowRequest: workflowRequest(),
 				materializerOptions: {},
 				sandboxRoots: roots,
@@ -224,9 +355,46 @@ describe("workflow supervisor launcher", () => {
 		expect(spawn).not.toHaveBeenCalled();
 	});
 
+	it("binds phase worktree access to the manifest writable roots", async () => {
+		const child = fakeChild();
+		const spawn = vi.fn(() => child);
+		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
+			materialize: async () => runtime(),
+			persistRequest: async () => "/run/runtime/.pi/request.json",
+			prepareLogs: async () => preparedLogs(),
+			wrap: async (command) => command,
+			spawn,
+		});
+		const reviewRoots = { ...roots, worktreeAccess: "read" as const };
+
+		await expect(
+			launcher.launch({
+				...approvedExecution([], "write"),
+				workflowRequest: workflowRequest(),
+				materializerOptions: {},
+				sandboxRoots: reviewRoots,
+			}),
+		).rejects.toThrow(/writable roots mismatch/);
+		expect(spawn).not.toHaveBeenCalled();
+
+		const handle = await launcher.launch({
+			...approvedExecution([], "read"),
+			workflowRequest: workflowRequest(),
+			materializerOptions: {},
+			sandboxRoots: reviewRoots,
+		});
+		expect(spawn).toHaveBeenCalledOnce();
+		child.emit("close", 0, null);
+		await expect(handle.completion).resolves.toMatchObject({ code: 0 });
+	});
+
 	it("rejects publication credentials emitted by a faulty materializer", async () => {
 		const spawn = vi.fn(() => fakeChild());
 		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => runtime({ GH_TOKEN: "must-not-leak" }),
 			persistRequest: async () => "/run/runtime/.pi/request.json",
 			prepareLogs: async () => preparedLogs(),
@@ -235,6 +403,7 @@ describe("workflow supervisor launcher", () => {
 		});
 		await expect(
 			launcher.launch({
+				...approvedExecution(),
 				workflowRequest: workflowRequest(),
 				materializerOptions: {},
 				sandboxRoots: roots,
@@ -245,6 +414,8 @@ describe("workflow supervisor launcher", () => {
 
 	it("captures synchronous and asynchronous process launch errors", async () => {
 		const synchronous = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => runtime(),
 			persistRequest: async () => "/run/runtime/.pi/request.json",
 			prepareLogs: async () => preparedLogs(),
@@ -254,6 +425,7 @@ describe("workflow supervisor launcher", () => {
 			},
 		});
 		const syncHandle = await synchronous.launch({
+			...approvedExecution(),
 			workflowRequest: workflowRequest(),
 			materializerOptions: {},
 			sandboxRoots: roots,
@@ -263,6 +435,8 @@ describe("workflow supervisor launcher", () => {
 
 		const child = fakeChild(99);
 		const asynchronous = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => runtime(),
 			persistRequest: async () => "/run/runtime/.pi/request.json",
 			prepareLogs: async () => preparedLogs(),
@@ -270,6 +444,7 @@ describe("workflow supervisor launcher", () => {
 			spawn: () => child,
 		});
 		const asyncHandle = await asynchronous.launch({
+			...approvedExecution(),
 			workflowRequest: workflowRequest(),
 			materializerOptions: {},
 			sandboxRoots: roots,
@@ -290,6 +465,8 @@ describe("workflow supervisor launcher", () => {
 				}),
 		);
 		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () => runtime(),
 			persistRequest: async () => "/run/runtime/.pi/request.json",
 			prepareLogs: async () => ({
@@ -305,6 +482,7 @@ describe("workflow supervisor launcher", () => {
 		});
 
 		const handle = await launcher.launch({
+			...approvedExecution(),
 			workflowRequest: workflowRequest(),
 			materializerOptions: {},
 			sandboxRoots: roots,
@@ -319,6 +497,8 @@ describe("workflow supervisor launcher", () => {
 	it("rejects requests outside the coordinated runtime before materializing", async () => {
 		const materialize = vi.fn(async () => runtime());
 		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize,
 			persistRequest: async () => "unused",
 			prepareLogs: async () => preparedLogs(),
@@ -326,6 +506,7 @@ describe("workflow supervisor launcher", () => {
 		});
 		await expect(
 			launcher.launch({
+				...approvedExecution(),
 				workflowRequest: workflowRequest({
 					specPath: "/run/repos/api/spec.json",
 				}),
@@ -339,6 +520,8 @@ describe("workflow supervisor launcher", () => {
 	it("rejects injected Git configuration outside the credential reset tuple", async () => {
 		const spawn = vi.fn(() => fakeChild());
 		const launcher = new WorkflowSupervisorLauncher({
+			verifyExecutionManifest: verifyApprovedManifest,
+			persistExecutionManifest: persistApprovedManifest,
 			materialize: async () =>
 				runtime({
 					GIT_CONFIG_COUNT: "3",
@@ -351,6 +534,7 @@ describe("workflow supervisor launcher", () => {
 		});
 		await expect(
 			launcher.launch({
+				...approvedExecution(),
 				workflowRequest: workflowRequest(),
 				materializerOptions: {},
 				sandboxRoots: roots,
@@ -405,9 +589,11 @@ describe("workflow supervisor launcher", () => {
 				"/node path/node",
 				"/entry's/index.js",
 				"/runtime/request; touch escaped",
+				"/loader's/register.mjs",
 			),
 		).toBe(
-			`'/node path/node' '/entry'"'"'s/index.js' '/runtime/request; touch escaped'`,
+			`'/node path/node' '--import' '/loader'"'"'s/register.mjs' ` +
+				`'/entry'"'"'s/index.js' '/runtime/request; touch escaped'`,
 		);
 	});
 
@@ -442,7 +628,8 @@ describe("workflow supervisor launcher", () => {
 		const runtimeRoot = join(fixture, "scratch", "supervisor");
 		const worktree = join(fixture, "repos", "api");
 		const workflowState = join(fixture, "runtime", ".pi");
-		const specPath = join(fixture, "runtime", "workflow.json");
+		const bundleRoot = join(fixture, "runtime", "workflow-bundle");
+		const specPath = join(bundleRoot, "workflow.json");
 		const entryPath = join(fixture, "runtime", "environment-entry.mjs");
 		const homeDir = join(runtimeRoot, "home");
 		const tmpDir = join(runtimeRoot, "tmp");
@@ -455,9 +642,15 @@ describe("workflow supervisor launcher", () => {
 		process.env[hostOnlyKey] = "must-not-cross";
 		try {
 			await Promise.all(
-				[worktree, workflowState, homeDir, tmpDir, agentDir, sessionDir].map(
-					(path) => mkdir(path, { recursive: true }),
-				),
+				[
+					worktree,
+					bundleRoot,
+					workflowState,
+					homeDir,
+					tmpDir,
+					agentDir,
+					sessionDir,
+				].map((path) => mkdir(path, { recursive: true })),
 			);
 			await Promise.all([
 				writeFile(specPath, "{}\n"),
@@ -474,14 +667,28 @@ process.exitCode = child.status ?? 1;
 				),
 			]);
 			const launcher = new WorkflowSupervisorLauncher({
+				verifyExecutionManifest: verifyApprovedManifest,
+				persistExecutionManifest: async (manifest) =>
+					join(
+						fixture,
+						"runtime",
+						".pi",
+						"execution-manifests",
+						`${manifest.runId}.json`,
+					),
 				materialize: async () => ({
+					runtimeRoot,
 					homeDir,
 					tmpDir,
 					agentDir,
 					sessionDir,
 					workflowAuthFile,
 					gitConfigFile,
-					scratchRoots: [runtimeRoot],
+					materializationDigest: "c".repeat(64),
+					agentToolkitDigest: "d".repeat(64),
+					agentToolkitVersion: "1.2.3",
+					agentToolkitSourceRevision: "e".repeat(40),
+					scratchRoots: [homeDir, tmpDir, sessionDir, workflowAuthFile],
 					environment: {
 						PATH: process.env.PATH ?? "/usr/bin:/bin",
 						HOME: homeDir,
@@ -499,16 +706,52 @@ process.exitCode = child.status ?? 1;
 				wrap: async (command) => command,
 				supervisorEntryPath: entryPath,
 			});
+			const request = workflowRequest({
+				cwd: fixture,
+				specPath,
+				specSha256: createHash("sha256").update("{}\n").digest("hex"),
+			});
+			const baseManifest = executionManifest();
+			const manifest: WorkflowExecutionManifest = {
+				...baseManifest,
+				artifacts: {
+					...baseManifest.artifacts,
+					spec: { path: specPath, sha256: request.specSha256 },
+					bundle: {
+						root: bundleRoot,
+						files: [{ path: "workflow.json", sha256: request.specSha256 }],
+					},
+				},
+				repositories: [{ id: "api", root: worktree }],
+				materialization: {
+					runtimeRoot,
+					workflowStateRoot: workflowState,
+					writableRoots: [
+						homeDir,
+						tmpDir,
+						sessionDir,
+						workflowAuthFile,
+						workflowState,
+						worktree,
+					].sort(),
+					deniedReadRoots: [],
+					materializationDigest: "c".repeat(64),
+					agentToolkitDigest: "d".repeat(64),
+					agentToolkitName: "@vegardx/agent-toolkit",
+					agentToolkitVersion: "1.2.3",
+					agentToolkitSourceRevision: "e".repeat(40),
+				},
+			};
 			const handle = await launcher.launch({
-				workflowRequest: workflowRequest({
-					cwd: fixture,
-					specPath,
-				}),
+				executionManifest: manifest,
+				executionManifestDigest: digestWorkflowExecutionManifest(manifest),
+				workflowRequest: request,
 				materializerOptions: {},
 				sandboxRoots: {
 					coordinatedRunRoot: fixture,
 					workflowStateRoot: workflowState,
 					coordinatedWorktreeRoots: [worktree],
+					worktreeAccess: "write",
 				},
 			});
 			expect(await handle.completion).toMatchObject({ code: 0, stderr: "" });

@@ -35,14 +35,20 @@ import {
 import { createPlanStore, type PlanStore } from "./store.js";
 import { SubagentSessions } from "./subagent-sessions.js";
 import { ToolRegistry } from "./tool-registry.js";
-import { createWorkspace } from "./workspace.js";
+import { createWorkspace, resolveBase } from "./workspace.js";
 
 export interface SeatOptions {
 	readonly narrator: Narrator;
 	/** Extension paths a spawned agent loads. Its whole non-builtin namespace. */
 	readonly extensions: readonly string[];
-	/** Branch every deliverable starts from. */
-	readonly base: string;
+	/** Seat working directory. Defaults to the process cwd. */
+	readonly cwd?: string;
+	/**
+	 * Branch every legacy deliverable starts from. Optional so planning and the
+	 * workflow runner can operate from a non-Git multi-repository umbrella.
+	 * The legacy executor resolves/refuses this only when it is actually run.
+	 */
+	readonly base?: string;
 	readonly agentDir?: string;
 	readonly model?: string;
 	readonly now?: () => string;
@@ -92,6 +98,7 @@ export interface Seat {
 }
 
 export function createSeat(options: SeatOptions): Seat {
+	const cwd = options.cwd ?? process.cwd();
 	const store = createPlanStore(plansRoot(options.agentDir));
 	const now = options.now ?? (() => new Date().toISOString());
 	const runtime = new MaestroRuntime({
@@ -121,13 +128,13 @@ export function createSeat(options: SeatOptions): Seat {
 	// Read once per call rather than cached: settings change under a running
 	// session, and a stale policy is a policy nobody asked for.
 	const policy = (): ExecutionPolicySettings =>
-		readExecutionPolicySettings(process.cwd(), options.agentDir);
+		readExecutionPolicySettings(cwd, options.agentDir);
 
 	const tools = ToolRegistry.declare([
 		...declareAgentTools({
 			bash: createBashTool({
 				holder: "maestro",
-				cwd: process.cwd(),
+				cwd,
 				mode: () => runtime.mode(),
 				policy,
 				// The seat's own shell confirmation rides the same channel as a
@@ -156,13 +163,13 @@ export function createSeat(options: SeatOptions): Seat {
 			// not hold. A refusal may only name a tool the refused agent has, and
 			// the guard only ever checked the WORKER posture, so the seat's own
 			// dead ends went unseen.
-			commit: createCommitTool({ cwd: () => process.cwd() }),
+			commit: createCommitTool({ cwd: () => cwd }),
 			remove: createDeleteTool(),
 			reporter: () => {
 				throw new Error("the maestro reports to you, not to another maestro");
 			},
 			subagent: {
-				cwd: () => process.cwd(),
+				cwd: () => cwd,
 				depth: () => 0,
 				sessions: subagents,
 				briefFor: (persona) => briefFor(personas, persona),
@@ -200,7 +207,7 @@ export function createSeat(options: SeatOptions): Seat {
 		// writing work for itself, which is the shape the deliverable model
 		// exists to replace.
 		{
-			definition: createPlanTool({ store, cwd: () => process.cwd() }),
+			definition: createPlanTool({ store, cwd: () => cwd }),
 			holders: ["maestro"],
 		},
 	]);
@@ -258,6 +265,11 @@ export function createSeat(options: SeatOptions): Seat {
 		rt: MaestroRuntime,
 		workerModel?: string,
 	): ExecutorDeps {
+		const base = options.base ?? resolveBase(cwd);
+		if (!base)
+			throw new Error(
+				`cannot tell what to branch from in ${cwd}: it has no remote default branch and nothing checked out`,
+			);
 		// No git identity is resolved here, and none is handed to a worker.
 		//
 		// It used to be: a live drive watched a worker with no identity reach for
@@ -285,9 +297,9 @@ export function createSeat(options: SeatOptions): Seat {
 			launcher: new WorkerLauncher(
 				options.spawn ? { spawn: options.spawn } : {},
 			),
-			workspace: createWorkspace({ baseBranch: options.base }),
+			workspace: createWorkspace({ baseBranch: base }),
 			shipping: createShipping({
-				base: options.base,
+				base,
 				...(options.shippingOps ? { ops: options.shippingOps } : {}),
 			}),
 			tools,

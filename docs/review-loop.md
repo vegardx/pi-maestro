@@ -1,5 +1,9 @@
 # Review
 
+> Historical rollback-path design. Workflow-native review is the flat,
+> one-round lens/model cohort described in [workflow-plans.md](workflow-plans.md).
+> It does not use personas, nested fan-out, or a verifier.
+
 There is no review subsystem, and no review command. A worker hands its own
 diff to a reviewer and acts on what comes back **before** it reports.
 

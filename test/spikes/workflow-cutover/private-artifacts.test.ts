@@ -100,6 +100,30 @@ function allText(root: string): string {
 }
 
 describe("W0 private provenance artifacts", () => {
+	it("publishes one stable private artifact when a review handoff is retried", () => {
+		const paths = fixture();
+		const store = new PrivateArtifactStore({
+			maestroStateRoot: paths.maestroState,
+			coordinatedRepositoryRoots: [paths.repo, paths.worktree],
+			sharedWorkflowRoots: [paths.workflowState],
+		});
+		const first = store.putReviewForRun("run-1", review());
+		const resumed = store.putReviewForRun("run-1", review());
+		expect(resumed).toEqual(first);
+		expect(
+			readdirSync(join(paths.maestroState, "private-artifacts")),
+		).toHaveLength(1);
+		expect(() =>
+			store.putReviewForRun("run-1", {
+				...review(),
+				sanitizedFindings: review().sanitizedFindings.map((finding) => ({
+					...finding,
+					claim: `${finding.claim} Changed`,
+				})),
+			}),
+		).toThrow(/different contents/);
+	});
+
 	it("exposes a de-attributed projection and joins provenance only at the seat", () => {
 		const paths = fixture();
 		// pi-workflow may retain its own raw task output. The first-cutover

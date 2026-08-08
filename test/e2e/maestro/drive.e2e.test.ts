@@ -1,4 +1,7 @@
-// The seeded drive: a real `pi` seat runs a real plan with real workers.
+// The seeded legacy rollback drive: a real `pi` seat runs a real plan with
+// real socket workers. Workflow-native acceptance lives in
+// workflow-drive.e2e.test.ts; this fixture explicitly disables the cutover so
+// the retained rollback path cannot accidentally become an unlabelled default.
 //
 // Everything below the model is production code. Real `pi` processes, the
 // rebuilt maestro extension loaded from disk, the socket, the handshake, the
@@ -96,7 +99,12 @@ describe("a stored plan runs from a real seat", () => {
 			repoDir: profile.repoDir,
 			piHome: profile.piHome,
 			answerer: new ScriptedAnswerer(),
-			env: profile.env,
+			env: {
+				...profile.env,
+				PI_DISABLE: [profile.env.PI_DISABLE, "maestro.workflowCutover"]
+					.filter(Boolean)
+					.join(","),
+			},
 			// ONLY the rebuilt maestro. Loading it beside the old stack would
 			// mean two extensions registering `/mode`, and the drive would be
 			// testing whichever won.

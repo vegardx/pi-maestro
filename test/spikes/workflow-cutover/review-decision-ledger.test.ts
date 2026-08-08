@@ -267,6 +267,22 @@ describe("local review decision ledger", () => {
 			fixture.store.seal({
 				...fixture.input,
 				decisions: fixture.input.decisions.map((decision) =>
+					decision.findingId === "finding-a"
+						? {
+								...decision,
+								changedPaths: [
+									...(decision.changedPaths ?? []),
+									{ repository: "api", path: "never-touched.txt" },
+								],
+							}
+						: decision,
+				),
+			}),
+		).toThrow(/no referenced commit touches/);
+		expect(() =>
+			fixture.store.seal({
+				...fixture.input,
+				decisions: fixture.input.decisions.map((decision) =>
 					decision.findingId === "finding-b"
 						? {
 								...decision,
@@ -276,6 +292,36 @@ describe("local review decision ledger", () => {
 				),
 			}),
 		).toThrow(/invalid outcome/);
+	});
+
+	it("refuses undeclared paths bundled into an otherwise referenced commit", () => {
+		const fixture = setup();
+		writeFileSync(join(fixture.api.path, "undeclared.txt"), "extra\n");
+		git(fixture.api.path, "add", "undeclared.txt");
+		git(fixture.api.path, "commit", "-q", "--amend", "--no-edit");
+		const amended = git(fixture.api.path, "rev-parse", "HEAD").trim();
+		const input: SealReviewDecisionLedgerInput = {
+			...fixture.input,
+			decisions: fixture.input.decisions.map((decision) =>
+				decision.findingId === "finding-a"
+					? {
+							...decision,
+							commitRefs: (decision.commitRefs ?? []).map((ref) =>
+								ref.repository === "api" ? { ...ref, commit: amended } : ref,
+							),
+						}
+					: decision,
+			),
+			repositories: fixture.input.repositories.map((repository) =>
+				repository.repository === "api"
+					? { ...repository, finalHead: amended }
+					: repository,
+			),
+		};
+
+		expect(() => fixture.store.seal(input)).toThrow(
+			/post-review changed paths for api do not exactly cover/,
+		);
 	});
 
 	it("refuses unexplained follow-up commits and tampered local ledgers", () => {
@@ -294,7 +340,9 @@ describe("local review decision ledger", () => {
 						: decision,
 				),
 			}),
-		).toThrow(/post-review commits for deploy do not exactly cover/);
+		).toThrow(
+			/declares changed path deploy:implementation\.txt that no referenced commit touches/,
+		);
 
 		const sealed = fixture.store.seal(fixture.input);
 		const path = join(

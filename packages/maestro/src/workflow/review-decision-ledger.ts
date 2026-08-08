@@ -240,6 +240,7 @@ function buildLedger(
 			implementationHead: string;
 			finalHead: string;
 			postReviewCommits: Set<string>;
+			pathsByCommit: ReadonlyMap<string, ReadonlySet<string>>;
 		}
 	>();
 	for (const [repository, boundary] of repositoryInputs) {
@@ -281,10 +282,19 @@ function buildLedger(
 			implementationHead,
 			finalHead,
 			postReviewCommits: new Set(commits),
+			pathsByCommit: new Map(
+				commits.map((commit) => [
+					commit,
+					pathsChangedByCommit(boundary.path, commit),
+				]),
+			),
 		});
 	}
 
 	const referencedCommits = new Map(
+		[...repositories].map(([repository]) => [repository, new Set<string>()]),
+	);
+	const declaredChangedPaths = new Map(
 		[...repositories].map(([repository]) => [repository, new Set<string>()]),
 	);
 	const decisions = findingIds.map((findingId) => {
@@ -316,8 +326,11 @@ function buildLedger(
 		const normalizedPaths = uniqueChangedPaths(changedPaths, repositories).sort(
 			compareQualifiedPath,
 		);
+		for (const changedPath of normalizedPaths)
+			declaredChangedPaths.get(changedPath.repository)?.add(changedPath.path);
 
 		const seen = new Set<string>();
+		const touchedPaths = new Map<string, Set<string>>();
 		const commitRefs = refs.map((ref) => {
 			const repository = repositories.get(ref.repository);
 			if (!repository)
@@ -333,7 +346,12 @@ function buildLedger(
 				throw new Error(
 					`decision ${findingId} references ${commit} outside the post-review range`,
 				);
-			const commitPaths = pathsChangedByCommit(repository.path, commit);
+			const commitPaths = repository.pathsByCommit.get(commit);
+			if (!commitPaths)
+				throw new Error(`decision commit ${commit} has no inspected diff`);
+			const touched = touchedPaths.get(ref.repository) ?? new Set<string>();
+			for (const path of commitPaths) touched.add(path);
+			touchedPaths.set(ref.repository, touched);
 			const declaredPaths = normalizedPaths
 				.filter((path) => path.repository === ref.repository)
 				.map(({ path }) => path);
@@ -353,6 +371,12 @@ function buildLedger(
 				a.repository.localeCompare(b.repository) ||
 				a.commit.localeCompare(b.commit),
 		);
+		for (const changedPath of normalizedPaths) {
+			if (!touchedPaths.get(changedPath.repository)?.has(changedPath.path))
+				throw new Error(
+					`decision ${findingId} declares changed path ${changedPath.repository}:${changedPath.path} that no referenced commit touches`,
+				);
+		}
 		return {
 			findingId,
 			decision: inputDecision.decision,
@@ -367,6 +391,14 @@ function buildLedger(
 			state.postReviewCommits,
 			referencedCommits.get(repository) ?? new Set(),
 			`post-review commits for ${repository}`,
+		);
+		const actualPaths = new Set<string>();
+		for (const paths of state.pathsByCommit.values())
+			for (const path of paths) actualPaths.add(path);
+		assertExactKeys(
+			actualPaths,
+			declaredChangedPaths.get(repository) ?? new Set(),
+			`post-review changed paths for ${repository}`,
 		);
 	}
 

@@ -71,7 +71,11 @@ describe("a plan is written whole", () => {
 						{
 							id: "review",
 							title: "Review it",
-							by: { agent: "reviewer", persona: "code-review" },
+							by: {
+								lens: "correctness",
+								skill: "correctness-review",
+								model: "anthropic/fable-5",
+							},
 						},
 					],
 				},
@@ -86,7 +90,9 @@ describe("a plan is written whole", () => {
 		// just wrote will write the same wrong one twice.
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
-		expect(text).toContain("- ui: 2 tasks, 1 to subagents after api reads api");
+		expect(text).toContain(
+			"- ui: 2 tasks, 1 workflow review(s) after api reads api",
+		);
 		expect(text).toContain("/run arc");
 	});
 
@@ -177,13 +183,12 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 });
 
 describe("what the schema will not let an author say", () => {
-	it("offers a subagent only a persona, never an agent kind", () => {
-		// A writer is authored as a deliverable, never spawned from a task — and
-		// the schema now says so by having NO agent field at all: a task's
-		// subagent is read-only by construction, not by validation.
+	it("offers workflow review intent, never a persona or agent kind", () => {
 		const schema = JSON.stringify(authoring().tool.parameters);
 		expect(schema).toContain('"by"');
-		expect(schema).toContain("persona");
+		expect(schema).toContain("lens");
+		expect(schema).toContain("model");
+		expect(schema).not.toContain("persona");
 		expect(schema).not.toContain('"agent"');
 		expect(schema).not.toContain('"worker"');
 	});

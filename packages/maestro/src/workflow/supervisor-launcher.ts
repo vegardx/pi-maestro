@@ -36,6 +36,14 @@ import {
 	type WorkflowSupervisorRequest,
 } from "./supervisor-entry.js";
 import {
+	canonicalWorkflowExecutionManifest,
+	digestWorkflowExecutionManifest,
+	validateWorkflowExecutionManifestBinding,
+	validateWorkflowExecutionManifestLaunch,
+	verifyWorkflowExecutionManifest,
+	type WorkflowExecutionManifest,
+} from "./supervisor-execution-manifest.js";
+import {
 	isWorkflowPublicationEnvironmentKey,
 	type MaterializeWorkflowSupervisorRuntimeOptions,
 	materializeWorkflowSupervisorRuntime,
@@ -48,12 +56,17 @@ import {
 } from "./supervisor-sandbox.js";
 
 export interface WorkflowSupervisorRuntimeMaterializationLike {
+	readonly runtimeRoot: string;
 	readonly homeDir: string;
 	readonly tmpDir: string;
 	readonly agentDir: string;
 	readonly sessionDir: string;
 	readonly workflowAuthFile: string;
 	readonly gitConfigFile: string;
+	readonly agentToolkitDigest: string;
+	readonly agentToolkitVersion: string;
+	readonly agentToolkitSourceRevision: string;
+	readonly materializationDigest: string;
 	readonly environment: Readonly<Record<string, string>>;
 	readonly scratchRoots: readonly string[];
 }
@@ -81,6 +94,12 @@ export type PersistWorkflowSupervisorRequest = (
 	workflowStateRoot: string,
 ) => Promise<string>;
 
+export type PersistWorkflowExecutionManifest = (
+	manifest: WorkflowExecutionManifest,
+	expectedDigest: string,
+	workflowStateRoot: string,
+) => Promise<string>;
+
 export interface WorkflowSupervisorLogs {
 	readonly stdoutPath: string;
 	readonly stderrPath: string;
@@ -100,15 +119,24 @@ export interface WorkflowSupervisorLauncherOptions<MaterializerOptions> {
 	readonly spawn?: SpawnWorkflowSupervisorProcess;
 	readonly wrap?: WrapWorkflowSupervisor;
 	readonly persistRequest?: PersistWorkflowSupervisorRequest;
+	readonly persistExecutionManifest?: PersistWorkflowExecutionManifest;
+	readonly verifyExecutionManifest?: typeof verifyWorkflowExecutionManifest;
 	readonly prepareLogs?: PrepareWorkflowSupervisorLogs;
 	/** Shell used only to execute the trusted sandbox wrapper command. */
 	readonly shellCommand?: readonly [string, ...string[]];
 	readonly executablePath?: string;
 	readonly supervisorEntryPath?: string;
+	readonly runtimeLoaderPath?: string;
 }
 
 export interface LaunchWorkflowSupervisorRequest<MaterializerOptions> {
-	readonly workflowRequest: WorkflowSupervisorRequest;
+	readonly workflowRequest: Omit<
+		WorkflowSupervisorRequest,
+		"executionManifestPath" | "executionManifestSha256"
+	>;
+	/** Exact coordinator-approved value. The launcher may validate, never author it. */
+	readonly executionManifest: WorkflowExecutionManifest;
+	readonly executionManifestDigest: string;
 	readonly materializerOptions: MaterializerOptions;
 	readonly sandboxRoots: Omit<WorkflowSupervisorSandboxRoots, "scratchRoots">;
 	readonly signal?: AbortSignal;
@@ -135,10 +163,13 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 	readonly #spawn: SpawnWorkflowSupervisorProcess;
 	readonly #wrap: WrapWorkflowSupervisor;
 	readonly #persistRequest: PersistWorkflowSupervisorRequest;
+	readonly #persistExecutionManifest: PersistWorkflowExecutionManifest;
+	readonly #verifyExecutionManifest: typeof verifyWorkflowExecutionManifest;
 	readonly #prepareLogs: PrepareWorkflowSupervisorLogs;
 	readonly #shellCommand: readonly [string, ...string[]];
 	readonly #executablePath: string;
 	readonly #supervisorEntryPath: string;
+	readonly #runtimeLoaderPath: string;
 
 	constructor(options: WorkflowSupervisorLauncherOptions<MaterializerOptions>) {
 		this.#materialize = options.materialize;
@@ -146,11 +177,17 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 		this.#wrap = options.wrap ?? wrapWorkflowSupervisorCommand;
 		this.#persistRequest =
 			options.persistRequest ?? persistWorkflowSupervisorRequest;
+		this.#persistExecutionManifest =
+			options.persistExecutionManifest ?? persistWorkflowExecutionManifest;
+		this.#verifyExecutionManifest =
+			options.verifyExecutionManifest ?? verifyWorkflowExecutionManifest;
 		this.#prepareLogs = options.prepareLogs ?? prepareWorkflowSupervisorLogs;
 		this.#shellCommand = options.shellCommand ?? ["/bin/bash", "-c"];
 		this.#executablePath = options.executablePath ?? process.execPath;
 		this.#supervisorEntryPath =
 			options.supervisorEntryPath ?? defaultWorkflowSupervisorEntryPath();
+		this.#runtimeLoaderPath =
+			options.runtimeLoaderPath ?? defaultWorkflowSupervisorRuntimeLoaderPath();
 	}
 
 	async launch(
@@ -158,7 +195,7 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 	): Promise<WorkflowSupervisorHandle> {
 		if (request.signal?.aborted)
 			throw new Error("workflow supervisor launch was already aborted");
-		validateWorkflowSupervisorRequest(request.workflowRequest);
+		validateWorkflowSupervisorLaunchRequest(request.workflowRequest);
 		validateLaunchContainment(request.workflowRequest, request.sandboxRoots);
 
 		// Materialization happens before wrapping/spawn. A partial or invalid runtime
@@ -169,11 +206,78 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 			...request.sandboxRoots,
 			scratchRoots: runtime.scratchRoots,
 		};
-		// Validate the write boundary before persisting anything. The wrapper repeats
-		// this check while constructing the actual sandbox command.
-		workflowSupervisorWriteProfile(sandboxRoots);
-		const requestPath = await this.#persistRequest(
+		// Canonicalize and validate the exact policy before manifest verification or
+		// persistence. The wrapper repeats this while constructing the command.
+		const sandboxProfile = workflowSupervisorWriteProfile(sandboxRoots);
+		const writableRoots = [...sandboxProfile.allowWrite];
+		const deniedReadRoots = [...(sandboxProfile.denyRead ?? [])];
+		if (request.executionManifest.runId !== request.workflowRequest.runId)
+			throw new Error("workflow execution manifest run ID mismatch");
+		if (
+			request.executionManifest.artifacts.spec.path !==
+				request.workflowRequest.specPath ||
+			request.executionManifest.artifacts.spec.sha256 !==
+				request.workflowRequest.specSha256
+		)
+			throw new Error("workflow execution manifest spec mismatch");
+		validateWorkflowExecutionManifestLaunch(
+			request.executionManifest,
 			request.workflowRequest,
+		);
+		if (
+			!runtime.runtimeRoot ||
+			!runtime.materializationDigest ||
+			!runtime.agentToolkitDigest
+		)
+			throw new Error(
+				"workflow supervisor runtime has no execution-manifest binding",
+			);
+		validateWorkflowExecutionManifestBinding(
+			request.executionManifest,
+			request.executionManifestDigest,
+			{
+				coordinatedRunRoot: request.sandboxRoots.coordinatedRunRoot,
+				coordinatedWorktreeRoots: request.sandboxRoots.coordinatedWorktreeRoots,
+				runtimeRoot: runtime.runtimeRoot,
+				workflowStateRoot: request.sandboxRoots.workflowStateRoot,
+				writableRoots,
+				deniedReadRoots,
+				materializationDigest: runtime.materializationDigest,
+				agentToolkitDigest: runtime.agentToolkitDigest,
+				agentToolkitName: "@vegardx/agent-toolkit",
+				agentToolkitVersion: runtime.agentToolkitVersion,
+				agentToolkitSourceRevision: runtime.agentToolkitSourceRevision,
+			},
+		);
+		await this.#verifyExecutionManifest(
+			request.executionManifest,
+			request.executionManifestDigest,
+			{
+				coordinatedRunRoot: request.sandboxRoots.coordinatedRunRoot,
+				coordinatedWorktreeRoots: request.sandboxRoots.coordinatedWorktreeRoots,
+				runtimeRoot: runtime.runtimeRoot,
+				workflowStateRoot: request.sandboxRoots.workflowStateRoot,
+				writableRoots,
+				deniedReadRoots,
+				materializationDigest: runtime.materializationDigest,
+				agentToolkitDigest: runtime.agentToolkitDigest,
+				agentToolkitName: "@vegardx/agent-toolkit",
+				agentToolkitVersion: runtime.agentToolkitVersion,
+				agentToolkitSourceRevision: runtime.agentToolkitSourceRevision,
+			},
+		);
+		const executionManifestPath = await this.#persistExecutionManifest(
+			request.executionManifest,
+			request.executionManifestDigest,
+			request.sandboxRoots.workflowStateRoot,
+		);
+		const boundWorkflowRequest: WorkflowSupervisorRequest = {
+			...request.workflowRequest,
+			executionManifestPath,
+			executionManifestSha256: request.executionManifestDigest,
+		};
+		const requestPath = await this.#persistRequest(
+			boundWorkflowRequest,
 			request.sandboxRoots.workflowStateRoot,
 		);
 		// The materializer has already selected the profile's provider variables.
@@ -183,18 +287,40 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 			runtime.environment,
 			workflowChildEnvironmentPolicy(Object.keys(runtime.environment)),
 		);
+		if (
+			runtime.runtimeRoot &&
+			runtime.materializationDigest &&
+			runtime.agentToolkitDigest
+		) {
+			environment.PI_MAESTRO_WORKFLOW_RUNTIME_ROOT = runtime.runtimeRoot;
+			environment.PI_MAESTRO_WORKFLOW_MATERIALIZATION_DIGEST =
+				runtime.materializationDigest;
+			environment.PI_MAESTRO_WORKFLOW_TOOLKIT_DIGEST =
+				runtime.agentToolkitDigest;
+			environment.PI_MAESTRO_WORKFLOW_TOOLKIT_VERSION =
+				runtime.agentToolkitVersion;
+			environment.PI_MAESTRO_WORKFLOW_TOOLKIT_SOURCE_REVISION =
+				runtime.agentToolkitSourceRevision;
+			environment.PI_MAESTRO_WORKFLOW_STATE_ROOT =
+				request.sandboxRoots.workflowStateRoot;
+			environment.PI_MAESTRO_WORKFLOW_WRITABLE_ROOTS =
+				JSON.stringify(writableRoots);
+			environment.PI_MAESTRO_WORKFLOW_DENIED_READ_ROOTS =
+				JSON.stringify(deniedReadRoots);
+		}
 		assertNoPublicationEnvironment(Object.keys(environment));
 
 		const command = workflowSupervisorEntryCommand(
 			this.#executablePath,
 			this.#supervisorEntryPath,
 			requestPath,
+			this.#runtimeLoaderPath,
 		);
 		const wrapped = await this.#wrap(command, sandboxRoots, request.signal);
 		if (!wrapped.trim())
 			throw new Error("workflow supervisor sandbox returned no command");
 		const logs = await this.#prepareLogs(
-			request.workflowRequest,
+			boundWorkflowRequest,
 			request.sandboxRoots.workflowStateRoot,
 		);
 
@@ -245,8 +371,55 @@ export class WorkflowSupervisorLauncher<MaterializerOptions> {
 	}
 }
 
+export async function persistWorkflowExecutionManifest(
+	manifest: WorkflowExecutionManifest,
+	expectedDigest: string,
+	workflowStateRoot: string,
+): Promise<string> {
+	if (digestWorkflowExecutionManifest(manifest) !== expectedDigest)
+		throw new Error("workflow execution manifest digest mismatch");
+	if (!isAbsolute(workflowStateRoot))
+		throw new Error("workflow state root must be absolute");
+	const directory = join(resolve(workflowStateRoot), "execution-manifests");
+	await mkdir(directory, { recursive: true, mode: 0o700 });
+	await chmod(directory, 0o700);
+	const target = join(directory, `${manifest.runId}.json`);
+	const serialized = `${canonicalWorkflowExecutionManifest(manifest)}\n`;
+	const temporaryPath = join(
+		directory,
+		`.manifest-${process.pid}-${randomUUID()}.tmp`,
+	);
+	const temporary = await open(temporaryPath, "wx", 0o600);
+	try {
+		try {
+			await temporary.writeFile(serialized, "utf8");
+			await temporary.sync();
+		} finally {
+			await temporary.close();
+		}
+		try {
+			await link(temporaryPath, target);
+		} catch (error) {
+			if (!isNodeError(error) || error.code !== "EEXIST") throw error;
+			if ((await readFile(target, "utf8")) !== serialized)
+				throw new Error(
+					`conflicting workflow execution manifest already exists for ${manifest.runId}`,
+				);
+		}
+	} finally {
+		await unlink(temporaryPath).catch((error: unknown) => {
+			if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+		});
+	}
+	return target;
+}
+
 export function defaultWorkflowSupervisorEntryPath(): string {
 	return fileURLToPath(new URL("./supervisor-entry.ts", import.meta.url));
+}
+
+export function defaultWorkflowSupervisorRuntimeLoaderPath(): string {
+	return fileURLToPath(import.meta.resolve("jiti/register"));
 }
 
 export async function persistWorkflowSupervisorRequest(
@@ -362,8 +535,9 @@ export function workflowSupervisorEntryCommand(
 	executablePath: string,
 	entryPath: string,
 	requestPath: string,
+	runtimeLoaderPath = defaultWorkflowSupervisorRuntimeLoaderPath(),
 ): string {
-	return [executablePath, entryPath, requestPath]
+	return [executablePath, "--import", runtimeLoaderPath, entryPath, requestPath]
 		.map(shellQuoteWorkflowArgument)
 		.join(" ");
 }
@@ -375,7 +549,7 @@ function shellQuoteWorkflowArgument(value: string): string {
 }
 
 function validateLaunchContainment(
-	request: WorkflowSupervisorRequest,
+	request: Pick<WorkflowSupervisorRequest, "cwd" | "specPath">,
 	roots: Omit<WorkflowSupervisorSandboxRoots, "scratchRoots">,
 ): void {
 	const runRoot = canonicalPath(roots.coordinatedRunRoot);
@@ -391,6 +565,19 @@ function validateLaunchContainment(
 		throw new Error(
 			"workflow request spec must be a strict child of the coordinated runtime root",
 		);
+}
+
+function validateWorkflowSupervisorLaunchRequest(
+	request: Omit<
+		WorkflowSupervisorRequest,
+		"executionManifestPath" | "executionManifestSha256"
+	>,
+): void {
+	validateWorkflowSupervisorRequest({
+		...request,
+		executionManifestPath: "/pending-workflow-execution-manifest",
+		executionManifestSha256: "0".repeat(64),
+	});
 }
 
 /** Resolve symlinks through the nearest existing ancestor, including new paths. */

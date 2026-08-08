@@ -21,6 +21,8 @@ export interface WorkflowSupervisorSandboxRoots {
 	readonly workflowStateRoot: string;
 	/** Maestro-created worktrees that workflow descendants may edit. */
 	readonly coordinatedWorktreeRoots: readonly string[];
+	/** Phase authority: reviews inspect worktrees; implementation/decision edit. */
+	readonly worktreeAccess: "read" | "write";
 	/**
 	 * Optional private HOME/TMP/cache roots below `<run>/scratch`. This should
 	 * include a minimal PI_CODING_AGENT_DIR materialized for the supervisor;
@@ -28,6 +30,8 @@ export interface WorkflowSupervisorSandboxRoots {
 	 * directory, so ambient global skills are not proven through this adapter.
 	 */
 	readonly scratchRoots?: readonly string[];
+	/** Prior phase run trees hidden from this supervisor and every descendant. */
+	readonly deniedReadRoots?: readonly string[];
 }
 
 export interface WorkflowSupervisorSandboxRuntime {
@@ -53,6 +57,8 @@ export function workflowSupervisorWriteProfile(
 		throw new Error(
 			"workflow supervisor sandbox requires a coordinated worktree",
 		);
+	if (roots.worktreeAccess !== "read" && roots.worktreeAccess !== "write")
+		throw new Error("workflow supervisor sandbox worktree access is invalid");
 
 	const runRoot = validatedRoot(roots.coordinatedRunRoot, "coordinated run");
 	const worktrees = roots.coordinatedWorktreeRoots.map((root) =>
@@ -65,10 +71,25 @@ export function workflowSupervisorWriteProfile(
 	const scratch = (roots.scratchRoots ?? []).map((root) =>
 		validatedRoot(root, "scratch"),
 	);
-	const declaredRoots = [...worktrees, workflowState, ...scratch];
 	const worktreeContainer = canonicalPath(resolve(runRoot, "repos"));
 	const runtimeContainer = canonicalPath(resolve(runRoot, "runtime"));
+	const workflowRunsContainer = canonicalPath(
+		resolve(workflowState, "workflows"),
+	);
 	const scratchContainer = canonicalPath(resolve(runRoot, "scratch"));
+	const declaredRoots = [...worktrees, workflowState, ...scratch];
+	const writableRoots = [
+		...(roots.worktreeAccess === "write" ? worktrees : []),
+		workflowState,
+		...scratch,
+	];
+	const deniedReadRoots = (roots.deniedReadRoots ?? []).map((root) => {
+		const path = validatedPath(root, "denied workflow read root");
+		assertStrictChild(path, workflowRunsContainer, "denied workflow read");
+		return path;
+	});
+	if (new Set(deniedReadRoots).size !== deniedReadRoots.length)
+		throw new Error("workflow supervisor denied read roots must be unique");
 
 	for (const worktree of worktrees)
 		assertStrictChild(worktree, worktreeContainer, "coordinated worktree");
@@ -92,7 +113,8 @@ export function workflowSupervisorWriteProfile(
 	}
 
 	return {
-		allowWrite: [...new Set(declaredRoots)].sort(),
+		denyRead: [...deniedReadRoots].sort(),
+		allowWrite: [...new Set(writableRoots)].sort(),
 		denyWrite: [],
 		unrestricted: false,
 	};
@@ -134,6 +156,14 @@ function validatedRoot(input: string, label: string): string {
 	const normalized = canonicalPath(input);
 	if (normalized === parse(normalized).root)
 		throw new Error(`${label} root must not be the filesystem root`);
+	return normalized;
+}
+
+function validatedPath(input: string, label: string): string {
+	if (!isAbsolute(input)) throw new Error(`${label} path must be absolute`);
+	const normalized = canonicalPath(input);
+	if (normalized === parse(normalized).root)
+		throw new Error(`${label} path must not be the filesystem root`);
 	return normalized;
 }
 

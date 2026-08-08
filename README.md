@@ -1,71 +1,81 @@
 # pi-maestro
 
-A [pi](https://github.com/badlogic/pi-mono) extension stack that turns one
-coding-agent session into an orchestra: the main session (the **maestro**)
-plans and coordinates, and **workers** implement deliverables in parallel git
-worktrees, each getting its own diff reviewed before it reports.
+A [Pi](https://pi.dev/) extension stack for turning an approved plan into an
+autonomous, multi-repository implementation and review workflow.
 
-This is primarily how I run my own coding agent. It's public because the
-design might be useful to anyone curious about structuring agentic work —
-the docs explain the ideas, not just the knobs.
+Maestro keeps the user-facing modes, plan approval, Git checkpoints, usage
+footer, and shipping authority. Durable model orchestration runs through
+`@agwab/pi-workflow` and `@agwab/pi-subagent`; web access comes from
+`pi-web-access`, structured planning questions from
+`@juicesharp/rpiv-ask-user-question`, and globally discoverable review skills
+from the separately versioned
+[`@vegardx/agent-toolkit`](https://github.com/vegardx/agent-toolkit).
 
-## The ideas
+## The workflow
 
-- **The plan is the contract.** Planning is a conversation; the maestro
-  authors the whole document in one call when you have converged, and
-  rejections come back with every error at once. Workers follow the plan;
-  they do not design.
-- **A deliverable is one branch, one PR.** Deliverables form a dependency
-  DAG. `after` orders them; `reads` says what a deliverable actually
-  inherits, so waiting for something is not paying for its hand-off.
-- **Maestro owns both ends.** It creates the worktree, launches the worker,
-  and — when the worker reports — ships, records, and only then releases it.
-  An agent that controls its own exit can be gone before its result is
-  collected.
-- **A review nobody acts on did not happen.** There is no review command: a
-  worker hands its own diff to a reviewer and fixes what comes back before it
-  reports. Findings arrive neutral, and a fan-out returns every opinion
-  unreconciled. See [review](docs/review-loop.md).
-- **A question is a rare interruption.** A stuck worker asks; the maestro
-  answers from the plan context it already has, and only reaches you when it
-  genuinely cannot. The answer says who decided.
-- **Declared once, derived.** A tool's grant, description and implementation
-  come from one declaration and cannot drift — a tool declared without an
-  implementation fails at construction. That invariant is the reason the
-  system was rebuilt.
-
-## A session in 60 seconds
-
-```
-/mode auto                  # writable, safeguards on
-                            # then just talk: converge on what to build,
-                            # and the maestro authors the plan when you have
-/run payments-retry         # worktrees, workers, review, commits, PRs
-/stop                       # halt it; running it again picks up where it left off
+```text
+conversation in plan mode
+  -> Maestro stores a repository-qualified DAG
+  -> /mode auto renders one approval view
+       ├─ No  -> remain in plan; create nothing
+       └─ Yes -> prepare linked worktrees
+                 -> implementation workflow (write, no Git authority)
+                 -> seat creates normal signed commits
+                 -> parallel read-only review workflow
+                 -> seat deduplicates and de-attributes findings
+                 -> decision workflow records one decision per finding
+                 -> seat commits accepted changes
+                 -> exact decision and Git-lineage gate
+                 -> seat pushes and creates/updates pull requests
 ```
 
-Three commands, and most of a session uses none of them. Workers report as they
-land, and a worker that gets stuck asks — the maestro answers if it can, and
-only reaches you when it genuinely cannot.
+The graph is flat. Reviewers do not spawn nested agents, prescribe fixes, or
+run repeated verification rounds. A review task is simply a lens, a concrete
+model, and optionally an ambient skill name. The same lens can be repeated on
+several models.
+
+Reviewer/model attribution stays in a seat-private local ledger for analysis.
+Commits remain ordinary human-readable Git history, and pull requests describe
+intent, rationale, and changes rather than the internal review process.
+
+## A session
+
+```text
+/maestro setup              # approve exact package pins; reload Pi
+/maestro doctor             # read-only setup/Git/GitHub checks
+
+# Talk through the work while in plan mode. Maestro writes the plan.
+/mode auto                  # preview + one approval + autonomous execution
+/run payments-retry         # explicit launch or crash recovery in auto mode
+```
+
+`plan`, `auto`, and `hack` remain available. Workflow runs are autonomous, so
+the workflow-native path does not expose start/stop choreography. The footer
+shows tokens and cache reads for the seat and all tracked workflow agents.
+
+One Pi session may start from a non-Git umbrella directory and coordinate
+several independent repositories. Dependencies can cross repository boundaries;
+Maestro owns one linked worktree and branch per repository for the run, and the
+depth-zero seat is the only component allowed to commit or publish.
 
 ## Docs
 
-- [Usage](docs/usage.md) — the full lifecycle: modes, planning, execution,
-  review, shipping, carry-forward, and every command.
-- [Review workflows](docs/review-loop.md) — immutable targets, canonical
-  findings, resolutions, and verification.
-- [Models](docs/models.md) — families and aliases, roster tiers, seat bindings,
-  per-agent allowances, and the region filter.
-- [Settings](docs/settings.md) — scopes, runtime policies, isolation, and cutover.
-- [Commands and tools](docs/commands.md) — exact command contracts and reset/archive.
-- [Architecture](docs/architecture.md) — authority, persistence, RPC, and accounting.
+- [Usage](docs/usage.md) — installation, modes, lifecycle, authority, and footer.
+- [Workflow plans](docs/workflow-plans.md) — plan schema and compiled phases.
+- [Commands](docs/commands.md) — exact command and tool surface.
+- [Settings](docs/settings.md) — configuration scopes and model routing.
+- [Workflow cutover design](docs/design/workflow-cutover-plan.md) — decisions,
+  contracts, tests, and remaining live-proof work.
 
 ## Development
 
 ```bash
 npm install
-npm run check   # biome + tsc + feature-flags + tests + smoke + docs
+npm run check
+npm run test:e2e
 ```
 
-`make dogfood` runs pi-maestro isolated from your normal pi config;
-`make dogfood-sandbox` points it at a sandbox repo. `make help` lists the rest.
+The installed-extension live workflow drive is the remaining acceptance gap
+for real providers, Git identity/signing, and hosted shipping. The retained
+`npm run e2e:live` command is explicitly the legacy rollback-path drive and is
+not workflow evidence.

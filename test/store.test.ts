@@ -161,6 +161,30 @@ describe("a plan and its run round-trip", () => {
 });
 
 describe("state written by another version is refused, never guessed at", () => {
+	it("rejects schema 1 persona plans after workflow-native delegation", () => {
+		const dir = root();
+		const s = store(dir);
+		s.savePlan(plan());
+		const old = plan({
+			deliverables: [
+				deliverable("api", {
+					tasks: [
+						{
+							id: "review",
+							title: "Review",
+							by: { persona: "code-review", fanOut: true },
+						} as unknown as Task,
+					],
+				}),
+			],
+		});
+		writeFileSync(
+			join(dir, "arc", "plan.json"),
+			JSON.stringify({ schemaVersion: 1, savedAt: T0, body: old }),
+		);
+		expect(() => s.loadPlan("arc")).toThrow(UnsupportedStateError);
+	});
+
 	it("throws on a schema it does not speak", () => {
 		const dir = root();
 		const s = store(dir);

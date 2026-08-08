@@ -1,102 +1,61 @@
 # End-to-end testing
 
-Three tiers. Pick the lowest that can catch the bug you care about — then read
-the warning under tier 3 before deciding you are finished.
+Use the lowest tier that can observe the boundary being changed, but do not
+call process launch, Git identity/signing, or shipping work complete without
+the live workflow drive.
 
-| Tier | Run with | What is real | Speed |
-| --- | --- | --- | --- |
-| Unit | `npm test` | pure logic, no I/O | seconds |
-| Hermetic e2e | `npm run test:e2e` | a real seat, real worktrees, real sockets, real detached processes — scripted model | seconds |
-| Live drive | `npm run e2e:live` | all of it, including the models and a real git remote | minutes |
+| Tier | Command | What it proves |
+| --- | --- | --- |
+| Unit/integration | `npm run check` | schemas, manifests, ledgers, recovery logic, extension smoke |
+| Hermetic workflow E2E | `npm run test:e2e:workflow` | real supervisor, pi-workflow, pi-subagent, worktrees, phase sandbox, seat commits and shipping adapter with deterministic fake models |
+| Full hermetic suite | `npm run test:e2e` | workflow cases plus the explicitly disabled legacy rollback drive |
+| Live workflow | not yet wired | real provider/model processes, ambient skill activation, Git identity/signing, and production shipping |
 
-## Hermetic e2e
+## Hermetic workflow drive
 
-`test/e2e/maestro/drive.e2e.test.ts` boots a real pi seat against
-`test/e2e/maestro/scripted-model.ts` — an HTTP server speaking the Anthropic
-Messages SSE API that synthesizes tool-call turns.
+`test/e2e/maestro/workflow-drive.e2e.test.ts` has three scenarios:
 
-The mock keys on **which tools a session holds**, not on prompt wording. A
-session holding `finish` is a worker; one holding `flight` is the maestro. That
-matters: keying on prose meant a reworded persona silently changed which actor
-the mock thought it was talking to.
+1. happy path across two repositories, an implementation dependency, five
+   concurrent reviewers, a de-attributed decision handoff, seat checkpoints,
+   usage/cache accounting, and shipping;
+2. human refusal before any branch, worktree, runtime, commit, push, or PR;
+3. decision-task failure followed by a new production runner using `continue`,
+   without replaying implementation, review, or prior commits.
 
-Everything else is real — the socket, the worktrees, the commits, the release,
-the run record. The only substitutions are the model and the network.
+The fake Pi executable sits below the real
+`supervisor -> pi-workflow -> pi-subagent` boundary. It makes model output
+deterministic while retaining process, environment, state, and scheduling
+behavior. A separate extension test crosses Plan → Auto through the real
+approval gate and production runner factory.
 
-## Live drive
+The old `test/e2e/maestro/drive.e2e.test.ts` explicitly sets
+`PI_DISABLE=maestro.workflowCutover`. Its green result proves only that the
+temporary rollback path still works; it is never workflow-cutover evidence.
 
-```bash
-npm run e2e:live                # SIT models
-npm run e2e:live -- --recover   # SIGKILL the maestro mid-flight, start a new one
-npm run e2e:live -- --prod-models
-npm run e2e:live -- --keep      # leave the sandbox for inspection
-```
+## Live workflow drive
 
-It creates a disposable repo under `~/src/github.com/`, an isolated pi home, a
-local bare remote and a `gh` shim, seeds a two-deliverable plan, and drives it
-to shipped. The first deliverable builds a module, hands the diff to a
-reviewer, acts on the findings, and only then reports; the second reads its
-hand-off.
+The new workflow live script is still an open acceptance item. It must create
+disposable repositories, linked worktrees, a private Pi home, and local bare
+remotes; run the production workflow path with real configured providers while
+leaving global Pi settings and auth unchanged; and retain enough state to
+inspect phase stderr and model sessions on failure.
 
-Green looks like:
+`npm run e2e:live` remains an alias for `e2e:live:legacy`; label it as legacy
+if diagnosing the rollback executor. It is not a substitute for the workflow
+drive.
 
-```
-stats=shipped  summary=shipped
-```
+## Why live remains required
 
-with real commits on `deliverable/stats` and `deliverable/summary`.
+Unit and hermetic tests cannot fully observe environment inheritance between
+detached processes, provider credential refresh, real skill selection, path-
+scoped Git identity, GPG/SSH signing, or remote tooling. Those seams have
+previously failed under a completely green deterministic suite.
 
-**The repo must live under `~/src/github.com/`** (or `PI_E2E_CHECKOUT_ROOT`) —
-not a temp dir. The sandbox writes its own `$HOME/.gitconfig` for identity, and
-the placement keeps worktrees beside the repo where they are reaped with it.
+The same rule applies to the OS sandbox. A useful test distinguishes:
 
-### Reading a failure
+1. unsupported platform, where workflow launch must refuse;
+2. supported and enforceable, where a real forbidden write is denied;
+3. nominally supported but missing runtime dependencies, where launch must
+   refuse rather than silently run unconfined.
 
-Read the `failure:` text in the result block first. The worker writes it and it
-is usually exact — one run said it could not commit because the shell refused it
-and named a tool that was not in its tool set, which was the entire bug in one
-sentence. Then `run.json` under the printed pi home, then `events.jsonl` (lines
-beginning `[maestro]` are what the seat narrated), then `git log --all`.
-
-### Cleaning up
-
-Without `--keep` the drive removes its own sandbox. After an interrupted run,
-remove the repo at `~/src/github.com/pi-e2e-repo-*`, its sibling
-`~/src/github.com/worktrees/<same-name>/`, and the `pi-e2e-{home,gh,remote}-*`
-directories under the system temp dir. Use `git worktree remove --force` rather
-than `rm` alone, or the repo keeps metadata pointing at paths that are gone.
-
-## Nothing runs e2e in CI
-
-There was a workflow. It ran only the old system's drive — against
-`packages/modes`, which was being deleted — so it reported success on every PR
-while the rebuilt maestro's own drive sat broken from the moment the bash
-classifier was wired. A green check covering the wrong thing is worse than no
-check, so it was removed rather than repaired.
-
-**Tiers 1 and 2 cannot see the seam between processes**, and that is where every
-serious bug in this system has lived. In one day the live drive found: a shell
-gate that refused every commit because the tool it named was never declared; a
-git identity carried as environment that overrode the developer's path-scoped
-config; a restarted maestro that wedged a plan while narrating nothing; and
-children inheriting env vars that had been omitted expecting absence. Every one
-had a fully green suite over it.
-
-So: **run the live drive before calling done anything that touches the shell
-gate, the spawn path, git identity, or shipping.** No job will do it for you.
-
-The same goes for the sandbox. `test/realtree-sandbox-live.test.ts` is the only
-test that proves the OS actually denies a write — everything else asserts the
-DECISION to sandbox — and it runs where you run it, not in CI.
-
-It knows three states apart, which is worth knowing when you read its output:
-
-1. the platform cannot sandbox — nothing to prove;
-2. it can and this machine can — it proves denial;
-3. it claims it can and this machine cannot — it says so, loudly, and maestro
-   refuses commands here rather than running them unconfined.
-
-The third is not hypothetical. A machine without ripgrep (or bubblewrap and
-socat on Linux) is in it, and so is any container with the seccomp and
-user-namespace restrictions a hosted CI runner has. `isSupportedPlatform` is a
-claim about the platform, never about the environment.
+Conditional skips must assert and report which precondition selected them.

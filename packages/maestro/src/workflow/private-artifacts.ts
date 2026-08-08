@@ -10,6 +10,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
+	linkSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
@@ -182,6 +183,35 @@ export class PrivateArtifactStore {
 		};
 	}
 
+	/** Idempotent handoff publication for a durable workflow run. */
+	putReviewForRun(
+		runId: string,
+		input: {
+			readonly sanitizedFindings: readonly SanitizedFinding[];
+			readonly rawFindings: readonly RawReviewFinding[];
+			readonly provenance: readonly FindingProvenance[];
+		},
+	): StoredPrivateReview {
+		if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(runId))
+			throw new Error("invalid private review run ID");
+		const id = sha256(`workflow-review:${runId}`).slice(0, 32);
+		const envelope = cloneJson<PrivateReviewEnvelope>({
+			version: 1,
+			id,
+			sanitizedFindings: input.sanitizedFindings,
+			rawFindings: input.rawFindings,
+			provenance: input.provenance,
+		});
+		validateEnvelope(envelope);
+		const payload = canonicalJson(envelope);
+		const digest = sha256(payload);
+		this.#writeIdempotent(id, payload, runId);
+		return {
+			reference: { id, digest },
+			projection: { findings: cloneJson(envelope.sanitizedFindings) },
+		};
+	}
+
 	joinAfterDecisions(
 		reference: PrivateArtifactReference,
 		decisions: readonly ReviewDecision[],
@@ -218,6 +248,33 @@ export class PrivateArtifactStore {
 				mode: 0o600,
 			});
 			renameSync(temporary, target);
+			if (process.platform !== "win32") chmodSync(target, 0o600);
+		} finally {
+			rmSync(temporary, { force: true });
+		}
+	}
+
+	#writeIdempotent(id: string, payload: string, runId: string): void {
+		const target = containedArtifactPath(this.#root, id);
+		const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
+		try {
+			writeFileSync(temporary, payload, {
+				encoding: "utf8",
+				flag: "wx",
+				mode: 0o600,
+			});
+			try {
+				linkSync(temporary, target);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
+			const info = lstatSync(target);
+			if (!info.isFile() || info.isSymbolicLink())
+				throw new Error("private review artifact must be a regular file");
+			if (readFileSync(target, "utf8") !== payload)
+				throw new Error(
+					`private review ${runId} is already stored with different contents`,
+				);
 			if (process.platform !== "win32") chmodSync(target, 0o600);
 		} finally {
 			rmSync(temporary, { force: true });

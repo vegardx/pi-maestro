@@ -1,6 +1,9 @@
 // Settings extension — registers /maestro command and settings.v1 capability.
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	type ExtensionContext,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
 import {
 	CAPABILITIES,
@@ -59,11 +62,22 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, region.",
+				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, region, setup, doctor.",
 			handler: async (args, ctx) => {
 				try {
 					const trimmed = args.trim();
-					if (!trimmed || trimmed === "show" || trimmed === "region") {
+					if (trimmed === "setup" || trimmed === "doctor") {
+						const { handleMaestroPackageCommand } = await import(
+							"../../maestro/src/package-command.js"
+						);
+						const asker = maestro.capabilities.get(CAPABILITIES.ask);
+						await handleMaestroPackageCommand(trimmed, {
+							cwd: ctx.cwd,
+							agentDir: getAgentDir(),
+							...(asker ? { asker } : {}),
+							notify: (message, level) => ctx.ui.notify(message, level),
+						});
+					} else if (!trimmed || trimmed === "show" || trimmed === "region") {
 						await showConfigMenu(ctx, domainRegistry);
 					} else if (trimmed.startsWith("region ")) {
 						setRegionActive(ctx, trimmed.slice("region ".length).trim());

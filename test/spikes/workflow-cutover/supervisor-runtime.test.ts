@@ -13,11 +13,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+	DefaultResourceLoader,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	digestWorkflowRuntimePackage,
 	type MaterializeWorkflowSupervisorRuntimeOptions,
 	materializeWorkflowSupervisorRuntime,
+	verifyWorkflowSupervisorRuntimeSeal,
 } from "../../../packages/maestro/src/workflow/supervisor-runtime.js";
 
 const roots: string[] = [];
@@ -54,7 +59,7 @@ function fixture(): MaterializeWorkflowSupervisorRuntimeOptions {
 	);
 	writeFileSync(
 		join(toolkitRoot, "skills", "security", "SKILL.md"),
-		"---\nname: security\n---\nReview security.\n",
+		"---\nname: security\ndescription: Review changes for security risks.\n---\nReview security.\n",
 	);
 	writeFileSync(
 		join(toolkitRoot, "skills", "security", "references", "threats.md"),
@@ -62,7 +67,7 @@ function fixture(): MaterializeWorkflowSupervisorRuntimeOptions {
 	);
 	writeFileSync(
 		join(toolkitRoot, "skills", "correctness", "SKILL.md"),
-		"---\nname: correctness\n---\nReview correctness.\n",
+		"---\nname: correctness\ndescription: Review changes for correctness defects.\n---\nReview correctness.\n",
 	);
 	const script = join(
 		toolkitRoot,
@@ -76,6 +81,7 @@ function fixture(): MaterializeWorkflowSupervisorRuntimeOptions {
 
 	return {
 		coordinatedRunRoot: runRoot,
+		runtimeNamespace: "test-phase",
 		sourceEnvironment: {
 			PATH: "/usr/bin:/bin",
 			LANG: "en_US.UTF-8",
@@ -117,6 +123,8 @@ function fixture(): MaterializeWorkflowSupervisorRuntimeOptions {
 		agentToolkit: {
 			sourceRoot: toolkitRoot,
 			expectedDigest: digestWorkflowRuntimePackage(toolkitRoot),
+			expectedVersion: "1.2.3",
+			sourceRevision: "1".repeat(40),
 		},
 		piExecutable: realPi,
 		gitExecutable: realGit,
@@ -130,10 +138,23 @@ describe("workflow supervisor runtime materializer", () => {
 
 		expect(runtime.runtimeRoot).toBe(
 			realpathSync(
-				join(options.coordinatedRunRoot, "scratch", "workflow-supervisor"),
+				join(
+					options.coordinatedRunRoot,
+					"scratch",
+					"workflow-supervisors",
+					options.runtimeNamespace,
+				),
 			),
 		);
-		expect(runtime.scratchRoots).toEqual([runtime.runtimeRoot]);
+		expect(runtime.scratchRoots).toEqual([
+			runtime.homeDir,
+			runtime.tmpDir,
+			runtime.sessionDir,
+			runtime.workflowAuthFile,
+		]);
+		expect(runtime.scratchRoots).not.toContain(runtime.runtimeRoot);
+		expect(runtime.scratchRoots).not.toContain(runtime.agentDir);
+		expect(runtime.scratchRoots).not.toContain(runtime.binDir);
 		expect(JSON.parse(readFileSync(runtime.settingsFile, "utf8"))).toEqual({
 			defaultProjectTrust: "never",
 			packages: [
@@ -174,6 +195,63 @@ describe("workflow supervisor runtime materializer", () => {
 		expect(existsSync(join(runtime.runtimeRoot, "materialization.json"))).toBe(
 			true,
 		);
+	});
+
+	it("child seal verification rejects immutable config and toolkit mutation", () => {
+		const runtime = materializeWorkflowSupervisorRuntime(fixture());
+		const expected = {
+			materializationDigest: runtime.materializationDigest,
+			agentToolkitDigest: runtime.agentToolkitDigest,
+			agentToolkitVersion: runtime.agentToolkitVersion,
+			agentToolkitSourceRevision: runtime.agentToolkitSourceRevision,
+		};
+		expect(() =>
+			verifyWorkflowSupervisorRuntimeSeal(runtime.runtimeRoot, expected),
+		).not.toThrow();
+		writeFileSync(runtime.settingsFile, "{}\n");
+		expect(() =>
+			verifyWorkflowSupervisorRuntimeSeal(runtime.runtimeRoot, expected),
+		).toThrow(/immutable file changed/);
+
+		const toolkitRuntime = materializeWorkflowSupervisorRuntime(fixture());
+		writeFileSync(
+			join(toolkitRuntime.agentToolkitPackageRoot, "skills", "added.md"),
+			"changed\n",
+		);
+		expect(() =>
+			verifyWorkflowSupervisorRuntimeSeal(toolkitRuntime.runtimeRoot, {
+				materializationDigest: toolkitRuntime.materializationDigest,
+				agentToolkitDigest: toolkitRuntime.agentToolkitDigest,
+				agentToolkitVersion: toolkitRuntime.agentToolkitVersion,
+				agentToolkitSourceRevision: toolkitRuntime.agentToolkitSourceRevision,
+			}),
+		).toThrow(/immutable toolkit changed/);
+	});
+
+	it("is discoverable by Pi as ambient skills without a workflow skill list", async () => {
+		const runtime = materializeWorkflowSupervisorRuntime(fixture());
+		const settings = SettingsManager.create(runtime.homeDir, runtime.agentDir);
+		const loader = new DefaultResourceLoader({
+			cwd: runtime.homeDir,
+			agentDir: runtime.agentDir,
+			settingsManager: settings,
+			noExtensions: true,
+			noPromptTemplates: true,
+			noThemes: true,
+			noContextFiles: true,
+		});
+
+		await loader.reload();
+
+		const skillResult = loader.getSkills();
+		const discovered = skillResult.skills.map((skill) => skill.name).sort();
+		expect(discovered, JSON.stringify(skillResult.diagnostics)).toEqual([
+			"correctness",
+			"security",
+		]);
+		expect(
+			JSON.parse(readFileSync(runtime.settingsFile, "utf8")),
+		).not.toHaveProperty("skills");
 	});
 
 	it("builds a scratch-local environment without publication credentials", () => {
@@ -252,6 +330,79 @@ describe("workflow supervisor runtime materializer", () => {
 		).toBe("refreshed-access");
 	});
 
+	it("isolates implementation, review, and decision provider seals by package run", () => {
+		const base = fixture();
+		const sourceAuth = {
+			test: { type: "api_key", key: "test-secret" },
+			anthropic: { type: "api_key", key: "anthropic-secret" },
+			xai: { type: "api_key", key: "xai-secret" },
+		} as const;
+		const models = {
+			providers: {
+				test: { models: [{ id: "implementer" }] },
+				anthropic: { models: [{ id: "opus-5" }] },
+				xai: { models: [{ id: "grok-4.5" }] },
+			},
+		};
+		const phase = (
+			runtimeNamespace: string,
+			approvedProviderIds: readonly string[],
+		) =>
+			materializeWorkflowSupervisorRuntime({
+				...base,
+				runtimeNamespace,
+				approvedProviderIds,
+				sourceAuth,
+				models,
+			});
+
+		const implementation = phase("plan_implementation", ["test"]);
+		const review = phase("plan_review", ["anthropic", "xai"]);
+		const decision = phase("plan_decision", ["test"]);
+
+		expect(
+			new Set([
+				implementation.runtimeRoot,
+				review.runtimeRoot,
+				decision.runtimeRoot,
+			]).size,
+		).toBe(3);
+		expect(
+			JSON.parse(readFileSync(implementation.workflowAuthFile, "utf8")),
+		).toEqual({
+			test: sourceAuth.test,
+		});
+		expect(JSON.parse(readFileSync(review.workflowAuthFile, "utf8"))).toEqual({
+			anthropic: sourceAuth.anthropic,
+			xai: sourceAuth.xai,
+		});
+		expect(phase("plan_implementation", ["test"]).runtimeRoot).toBe(
+			implementation.runtimeRoot,
+		);
+
+		writeFileSync(review.modelsFile, "{}\n");
+		expect(() => phase("plan_review", ["anthropic", "xai"])).toThrow(
+			"immutable file changed",
+		);
+		expect(phase("plan_decision", ["test"]).runtimeRoot).toBe(
+			decision.runtimeRoot,
+		);
+	});
+
+	it("refuses resume when an approved environment value changes", () => {
+		const options = fixture();
+		materializeWorkflowSupervisorRuntime(options);
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...options,
+				sourceEnvironment: {
+					...options.sourceEnvironment,
+					ANTHROPIC_API_KEY: "changed-model-env-secret",
+				},
+			}),
+		).toThrow(/resume input does not match/);
+	});
+
 	it("pins API-key bytes and the OAuth provider schema across resume", () => {
 		const apiOptions = fixture();
 		const apiRuntime = materializeWorkflowSupervisorRuntime(apiOptions);
@@ -294,6 +445,81 @@ describe("workflow supervisor runtime materializer", () => {
 		expect(() => materializeWorkflowSupervisorRuntime(unsafeOptions)).toThrow(
 			/contains credential field apiKey/,
 		);
+	});
+
+	it("requires the exact pinned agent-toolkit identity and source revision", () => {
+		const wrongName = fixture();
+		writeFileSync(
+			join(wrongName.agentToolkit.sourceRoot, "package.json"),
+			JSON.stringify({ name: "arbitrary-skills", version: "1.2.3" }),
+		);
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...wrongName,
+				agentToolkit: {
+					...wrongName.agentToolkit,
+					expectedDigest: digestWorkflowRuntimePackage(
+						wrongName.agentToolkit.sourceRoot,
+					),
+				},
+			}),
+		).toThrow(/identity must be @vegardx\/agent-toolkit/);
+
+		const wrongVersion = fixture();
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...wrongVersion,
+				agentToolkit: {
+					...wrongVersion.agentToolkit,
+					expectedVersion: "9.9.9",
+				},
+			}),
+		).toThrow(/pinned version/);
+
+		const wrongRevision = fixture();
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...wrongRevision,
+				agentToolkit: {
+					...wrongRevision.agentToolkit,
+					sourceRevision: "main",
+				},
+			}),
+		).toThrow(/declared source revision.*hex metadata/);
+	});
+
+	it.each([
+		"client_secret",
+		"Client-Secret",
+		"api.key",
+		"AUTH_HEADERS",
+		"credential-token",
+	])("rejects normalized credential-bearing model field %s", (field) => {
+		const options = fixture();
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...options,
+				models: {
+					providers: {
+						anthropic: { models: [{ id: "safe" }], [field]: "secret" },
+					},
+				},
+			}),
+		).toThrow(/contains credential field/);
+	});
+
+	it("does not reject an ordinary field merely containing key letters", () => {
+		const options = fixture();
+		expect(() =>
+			materializeWorkflowSupervisorRuntime({
+				...options,
+				models: {
+					providers: {
+						anthropic: { models: [{ id: "safe", monkey: "value" }] },
+					},
+				},
+			}),
+		).not.toThrow();
 	});
 
 	it("fails closed when immutable runtime state or the package pin changes", () => {

@@ -21,6 +21,8 @@ function request(
 		cwd: "/coordinated/run",
 		specPath: "/coordinated/run/runtime/implement-review.json",
 		specSha256: "a".repeat(64),
+		executionManifestPath: "/coordinated/run/runtime/execution-manifest.json",
+		executionManifestSha256: "b".repeat(64),
 		task: "Implement the approved workflow.",
 		executionProfile: "production",
 		inputOverrides: { depth: "standard" },
@@ -32,14 +34,18 @@ function request(
 function operations(status = "completed"): WorkflowSupervisorEntryOperations & {
 	start: ReturnType<typeof vi.fn>;
 	inspect: ReturnType<typeof vi.fn>;
+	resume: ReturnType<typeof vi.fn>;
 	wait: ReturnType<typeof vi.fn>;
 	verifySpec: ReturnType<typeof vi.fn>;
+	verifyExecutionManifest: ReturnType<typeof vi.fn>;
 } {
 	return {
 		start: vi.fn(async (_spec, _cwd, options) => ({ runId: options.runId })),
-		inspect: vi.fn(async (_cwd, runId) => ({ runId })),
+		inspect: vi.fn(async (_cwd, runId) => ({ runId, status })),
+		resume: vi.fn(async (_cwd, runId) => ({ runId, status: "running" })),
 		wait: vi.fn(async (_cwd, runId) => ({ runId, status })),
 		verifySpec: vi.fn(async () => undefined),
+		verifyExecutionManifest: vi.fn(async () => undefined),
 	};
 }
 
@@ -67,7 +73,7 @@ describe("workflow supervisor executable entry", () => {
 		expect(ops.wait).toHaveBeenCalledAfter(ops.start);
 	});
 
-	it("continues an existing run without attempting duplicate initialization", async () => {
+	it("lets the package resume a blocked run before waiting", async () => {
 		const ops = operations("blocked");
 		await expect(
 			executeWorkflowSupervisorRequest(
@@ -77,7 +83,65 @@ describe("workflow supervisor executable entry", () => {
 		).resolves.toEqual({ runId: "run_001", status: "blocked" });
 		expect(ops.start).not.toHaveBeenCalled();
 		expect(ops.inspect).toHaveBeenCalledWith("/coordinated/run", "run_001");
-		expect(ops.wait).toHaveBeenCalledAfter(ops.inspect);
+		expect(ops.resume).toHaveBeenCalledWith("/coordinated/run", "run_001");
+		expect(ops.wait).toHaveBeenCalledAfter(ops.resume);
+	});
+
+	it("surfaces the package refusal for a non-resumable blocked run", async () => {
+		const ops = operations("blocked");
+		ops.resume.mockRejectedValue(
+			new Error("resume requires a resumable blocked run"),
+		);
+		await expect(
+			executeWorkflowSupervisorRequest(request({ action: "continue" }), ops),
+		).rejects.toThrow(/resumable blocked run/);
+		expect(ops.wait).not.toHaveBeenCalled();
+	});
+
+	it.each(["failed", "interrupted"])(
+		"resumes a %s run before waiting",
+		async (status) => {
+			const ops = operations("completed");
+			ops.inspect.mockResolvedValue({ runId: "run_001", status });
+			await expect(
+				executeWorkflowSupervisorRequest(request({ action: "continue" }), ops),
+			).resolves.toEqual({ runId: "run_001", status: "completed" });
+			expect(ops.resume).toHaveBeenCalledWith("/coordinated/run", "run_001");
+			expect(ops.wait).toHaveBeenCalledAfter(ops.resume);
+		},
+	);
+
+	it("returns a completed continuation without calling resume", async () => {
+		const ops = operations("completed");
+		await expect(
+			executeWorkflowSupervisorRequest(request({ action: "continue" }), ops),
+		).resolves.toEqual({ runId: "run_001", status: "completed" });
+		expect(ops.resume).not.toHaveBeenCalled();
+		expect(ops.wait).not.toHaveBeenCalled();
+	});
+
+	it("waits again after a bounded wait expires while the run is active", async () => {
+		const ops = operations("running");
+		ops.wait
+			.mockRejectedValueOnce(
+				new Error("Flow run run_001 still running after 60000ms wait"),
+			)
+			.mockResolvedValueOnce({ runId: "run_001", status: "completed" });
+		ops.inspect.mockResolvedValue({ runId: "run_001", status: "running" });
+
+		await expect(
+			executeWorkflowSupervisorRequest(request(), ops),
+		).resolves.toEqual({ runId: "run_001", status: "completed" });
+		expect(ops.wait).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not hide a non-timeout supervisor wait error", async () => {
+		const ops = operations("running");
+		ops.wait.mockRejectedValue(new Error("workflow store corrupt"));
+		await expect(
+			executeWorkflowSupervisorRequest(request(), ops),
+		).rejects.toThrow(/store corrupt/);
+		expect(ops.inspect).not.toHaveBeenCalled();
 	});
 
 	it.each([
@@ -119,6 +183,19 @@ describe("workflow supervisor executable entry", () => {
 		expect(ops.start).not.toHaveBeenCalled();
 		expect(ops.inspect).not.toHaveBeenCalled();
 		expect(ops.wait).not.toHaveBeenCalled();
+	});
+
+	it("does not inspect or schedule when child manifest verification fails", async () => {
+		const ops = operations();
+		ops.verifyExecutionManifest.mockRejectedValue(
+			new Error("manifest artifact changed"),
+		);
+		await expect(
+			executeWorkflowSupervisorRequest(request(), ops),
+		).rejects.toThrow(/manifest artifact changed/);
+		expect(ops.verifySpec).not.toHaveBeenCalled();
+		expect(ops.start).not.toHaveBeenCalled();
+		expect(ops.inspect).not.toHaveBeenCalled();
 	});
 
 	it("verifies the exact persisted workflow spec bytes", async () => {

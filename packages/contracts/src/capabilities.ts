@@ -154,18 +154,23 @@ export interface AskInboxV1 {
 }
 
 /**
- * Central usage ledger. Every source (maestro, each agent)
- * records its cumulative snapshot; the ledger aggregates by source so cost
- * and tokens are real and attributable. Registered by modes.
+ * Central usage ledger. The seat and workflow leaf tasks record cumulative
+ * snapshots; the ledger aggregates by source so retries replace prior values
+ * instead of double counting. Registered only by the depth-zero maestro.
  */
 export interface UsageLedgerV1 {
 	/** Upsert a local cumulative snapshot for a source. */
 	record(source: UsageSource, snapshot: TokenSnapshot): void;
+	/** Mark a source whose provider omitted usage; absence is not zero usage. */
+	recordUnavailable(source: UsageSource): void;
 	/** Accept a durable cumulative checkpoint iff its revision is newer. */
 	recordCheckpoint(checkpoint: UsageCheckpoint): boolean;
+	/** Poll one package-owned workflow run and ingest only its leaf task usage. */
+	trackWorkflowRun(cwd: string, runId: string): () => void;
 	/** Per-source snapshots plus an aggregate total. */
 	snapshot(): {
 		bySource: ReadonlyMap<string, TokenSnapshot>;
+		unavailableSources: ReadonlySet<string>;
 		totals: TokenSnapshot;
 	};
 }

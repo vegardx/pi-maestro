@@ -1,4 +1,4 @@
-// The live drive for the rebuilt maestro.
+// The live drive for the retained legacy socket-worker rollback path.
 //
 //   node_modules/.bin/jiti test/e2e/maestro/live.ts [--prod-models] [--keep]
 //                                                  [--recover]
@@ -62,7 +62,11 @@ function plan(repoDir: string): Plan {
 						id: "stats-review",
 						title: "Have the diff reviewed",
 						body: "Ask for a review of what you just wrote, and be specific about what you want looked at.",
-						by: { persona: "code-review" },
+						by: {
+							lens: "correctness",
+							skill: "code-review",
+							model: "legacy/live-selected-model",
+						},
 					},
 					{
 						id: "stats-act",
@@ -151,7 +155,12 @@ async function main(): Promise<void> {
 			repoDir: env.repoDir,
 			piHome: env.piHome,
 			answerer: new ScriptedAnswerer(),
-			env: env.env,
+			env: {
+				...env.env,
+				PI_DISABLE: [env.env.PI_DISABLE, "maestro.workflowCutover"]
+					.filter(Boolean)
+					.join(","),
+			},
 			// Only the rebuilt maestro: the old stack registers `/mode` too.
 			extensions: [MAESTRO_EXTENSION],
 			extraExtensions: env.extraExtensions,

@@ -696,12 +696,8 @@ function describeTask(task: Task, index: number): string {
 	if (task.body?.trim()) lines.push(task.body.trim());
 	if (task.by)
 		lines.push(
-			// The persona, never a tool name — what an agent can call is
-			// generated from the declaration, and prose that repeats it can drift.
-			`Hand this to a subagent with the \`${task.by.persona}\` persona` +
-				// No "and reconcile": the fan-out lead aggregates before returning,
-				// so what comes back is already clean findings to act on.
-				(task.by.fanOut ? ", across several model families." : "."),
+			`Review through the \`${task.by.lens}\` lens with ${task.by.model}.` +
+				(task.by.skill ? ` Use the available \`${task.by.skill}\` skill.` : ""),
 		);
 	return lines.join("\n\n");
 }

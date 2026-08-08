@@ -40,10 +40,16 @@ export interface PinnedAgentToolkitPackage {
 	readonly sourceRoot: string;
 	/** SHA-256 returned by {@link digestWorkflowRuntimePackage}. */
 	readonly expectedDigest: string;
+	/** Exact package.json version approved for this run. */
+	readonly expectedVersion: string;
+	/** Declared producing revision metadata; the tree digest is what is verified. */
+	readonly sourceRevision: string;
 }
 
 export interface MaterializeWorkflowSupervisorRuntimeOptions {
 	readonly coordinatedRunRoot: string;
+	/** Safe package run/phase id; each provider-filtered seal owns one namespace. */
+	readonly runtimeNamespace: string;
 	readonly sourceEnvironment: Readonly<NodeJS.ProcessEnv>;
 	/** Provider/extension environment keys explicitly approved by the launch profile. */
 	readonly allowedEnvironmentKeys?: readonly string[];
@@ -74,15 +80,22 @@ export interface WorkflowSupervisorRuntimeMaterialization {
 	readonly gitShimFile: string;
 	readonly agentToolkitPackageRoot: string;
 	readonly agentToolkitDigest: string;
+	readonly agentToolkitVersion: string;
+	readonly agentToolkitSourceRevision: string;
+	/** Digest of every immutable runtime input recorded by materialization.json. */
+	readonly materializationDigest: string;
 	readonly environment: Readonly<Record<string, string>>;
-	/** One non-overlapping root for WorkflowSupervisorSandboxRoots.scratchRoots. */
-	readonly scratchRoots: readonly [string];
+	/** Mutable roots only; runtimeRoot and immutable inputs are never granted. */
+	readonly scratchRoots: readonly string[];
 }
 
 interface RuntimeManifest {
 	readonly version: 1;
+	readonly runtimeNamespace: string;
 	readonly inputDigest: string;
 	readonly agentToolkitDigest: string;
+	readonly agentToolkitVersion: string;
+	readonly agentToolkitSourceRevision: string;
 	readonly immutableFiles: Readonly<Record<string, string>>;
 	readonly authCredentialTypes: Readonly<Record<string, string>>;
 	readonly immutableApiKeyDigests: Readonly<Record<string, string>>;
@@ -90,6 +103,7 @@ interface RuntimeManifest {
 }
 
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
+const RUNTIME_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const MANIFEST_NAME = "materialization.json";
 const PUBLICATION_ENV_KEYS = new Set([
 	"GH_TOKEN",
@@ -134,6 +148,8 @@ export function materializeWorkflowSupervisorRuntime(
 	options: MaterializeWorkflowSupervisorRuntimeOptions,
 ): WorkflowSupervisorRuntimeMaterialization {
 	const runRoot = validatedRoot(options.coordinatedRunRoot, "coordinated run");
+	if (!RUNTIME_NAMESPACE_PATTERN.test(options.runtimeNamespace))
+		throw new Error("workflow runtime namespace is unsafe");
 	const sourcePackageRoot = validatedRoot(
 		options.agentToolkit.sourceRoot,
 		"agent-toolkit package",
@@ -146,6 +162,13 @@ export function materializeWorkflowSupervisorRuntime(
 	const sourcePackageDigest = digestWorkflowRuntimePackage(sourcePackageRoot);
 	if (sourcePackageDigest !== options.agentToolkit.expectedDigest)
 		throw new Error("agent-toolkit package does not match its pinned digest");
+	const toolkitIdentity = readAgentToolkitIdentity(sourcePackageRoot);
+	if (toolkitIdentity.version !== options.agentToolkit.expectedVersion)
+		throw new Error("agent-toolkit package does not match its pinned version");
+	if (!/^[a-f0-9]{40,64}$/.test(options.agentToolkit.sourceRevision))
+		throw new Error(
+			"agent-toolkit declared source revision must be hex metadata",
+		);
 
 	const approvedProviderIds = normalizedProviderIds(
 		options.approvedProviderIds,
@@ -155,7 +178,12 @@ export function materializeWorkflowSupervisorRuntime(
 	const immutableApiKeyDigests = apiKeyDigests(filteredAuth);
 	const oauthSchemas = oauthCredentialSchemas(filteredAuth);
 	const filteredModels = filterModels(options.models, approvedProviderIds);
-	const runtimeRoot = join(runRoot, "scratch", "workflow-supervisor");
+	const runtimeRoot = join(
+		runRoot,
+		"scratch",
+		"workflow-supervisors",
+		options.runtimeNamespace,
+	);
 	const paths = runtimePaths(runtimeRoot);
 	const settings = {
 		defaultProjectTrust: "never",
@@ -180,26 +208,36 @@ export function materializeWorkflowSupervisorRuntime(
 		options.sourceEnvironment.PATH,
 	);
 	const immutablePayloads = {
-		"pi-agent/models.json": jsonFile(filteredModels),
-		"pi-agent/settings.json": jsonFile(settings),
-		"home/.gitconfig": credentialFreeGitConfig(),
-		"bin/pi": piShim(piExecutable),
-		"bin/git": gitShim(gitExecutable),
+		"immutable/pi-agent/models.json": jsonFile(filteredModels),
+		"immutable/pi-agent/settings.json": jsonFile(settings),
+		"immutable/gitconfig": credentialFreeGitConfig(),
+		"immutable/bin/pi": piShim(piExecutable),
+		"immutable/bin/git": gitShim(gitExecutable),
 	};
+	const approvedEnvironmentDigests = Object.fromEntries(
+		Object.entries(filteredSourceEnvironment(options))
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, value]) => [key, sha256(value)]),
+	);
 	const inputDigest = sha256(
 		canonicalJson({
+			runtimeNamespace: options.runtimeNamespace,
 			approvedProviderIds,
 			authCredentialTypes,
 			immutableApiKeyDigests,
 			oauthSchemas,
 			immutablePayloads,
+			approvedEnvironmentDigests,
 			agentToolkitDigest: sourcePackageDigest,
+			agentToolkitVersion: toolkitIdentity.version,
+			agentToolkitSourceRevision: options.agentToolkit.sourceRevision,
 		}),
 	);
 
 	if (existsSync(runtimeRoot)) {
 		verifyExistingRuntime(
 			paths,
+			options.runtimeNamespace,
 			inputDigest,
 			sourcePackageDigest,
 			authCredentialTypes,
@@ -210,18 +248,28 @@ export function materializeWorkflowSupervisorRuntime(
 	} else {
 		materializeNewRuntime(
 			paths,
+			options.runtimeNamespace,
 			sourcePackageRoot,
 			filteredAuth,
 			immutablePayloads,
 			inputDigest,
 			sourcePackageDigest,
+			toolkitIdentity.version,
+			options.agentToolkit.sourceRevision,
 			authCredentialTypes,
 			immutableApiKeyDigests,
 			oauthSchemas,
 		);
 	}
 
-	return runtimeResult(options, paths, sourcePackageDigest);
+	return runtimeResult(
+		options,
+		paths,
+		sourcePackageDigest,
+		toolkitIdentity.version,
+		options.agentToolkit.sourceRevision,
+		inputDigest,
+	);
 }
 
 /** Digest a package's complete path/content tree while rejecting link escapes. */
@@ -239,13 +287,77 @@ export function digestWorkflowRuntimePackage(packageRoot: string): string {
 	return hash.digest("hex");
 }
 
+/** Re-verify the immutable runtime seal inside the sandbox before scheduling. */
+export function verifyWorkflowSupervisorRuntimeSeal(
+	runtimeRoot: string,
+	expected: {
+		readonly materializationDigest: string;
+		readonly agentToolkitDigest: string;
+		readonly agentToolkitVersion: string;
+		readonly agentToolkitSourceRevision: string;
+	},
+): void {
+	const paths = runtimePaths(validatedRoot(runtimeRoot, "workflow runtime"));
+	const manifest = parseObjectFile(
+		join(paths.runtimeRoot, MANIFEST_NAME),
+	) as Partial<RuntimeManifest>;
+	if (
+		manifest.version !== 1 ||
+		!RUNTIME_NAMESPACE_PATTERN.test(manifest.runtimeNamespace ?? "") ||
+		manifest.runtimeNamespace !== basename(paths.runtimeRoot) ||
+		manifest.inputDigest !== expected.materializationDigest ||
+		manifest.agentToolkitDigest !== expected.agentToolkitDigest ||
+		manifest.agentToolkitVersion !== expected.agentToolkitVersion ||
+		manifest.agentToolkitSourceRevision !== expected.agentToolkitSourceRevision
+	)
+		throw new Error("workflow supervisor immutable runtime seal mismatch");
+	if (
+		typeof manifest.immutableFiles !== "object" ||
+		manifest.immutableFiles === null ||
+		Array.isArray(manifest.immutableFiles)
+	)
+		throw new Error("workflow supervisor immutable file seal is invalid");
+	const expectedFiles = [
+		"immutable/bin/git",
+		"immutable/bin/pi",
+		"immutable/gitconfig",
+		"immutable/pi-agent/models.json",
+		"immutable/pi-agent/settings.json",
+	];
+	if (!sameJson(Object.keys(manifest.immutableFiles).sort(), expectedFiles))
+		throw new Error("workflow supervisor immutable file set changed");
+	for (const relativePath of expectedFiles) {
+		const target = join(paths.runtimeRoot, relativePath);
+		const metadata = lstatSync(target);
+		if (
+			!metadata.isFile() ||
+			metadata.isSymbolicLink() ||
+			sha256(readFileSync(target)) !== manifest.immutableFiles[relativePath]
+		)
+			throw new Error(
+				`workflow supervisor immutable file changed: ${relativePath}`,
+			);
+	}
+	if (
+		digestWorkflowRuntimePackage(paths.agentToolkitPackageRoot) !==
+		expected.agentToolkitDigest
+	)
+		throw new Error("workflow supervisor immutable toolkit changed");
+	const identity = readAgentToolkitIdentity(paths.agentToolkitPackageRoot);
+	if (identity.version !== expected.agentToolkitVersion)
+		throw new Error("workflow supervisor immutable toolkit identity changed");
+}
+
 function materializeNewRuntime(
 	paths: ReturnType<typeof runtimePaths>,
+	runtimeNamespace: string,
 	sourcePackageRoot: string,
 	filteredAuth: Readonly<Record<string, WorkflowRuntimeJson>>,
 	immutablePayloads: Readonly<Record<string, string>>,
 	inputDigest: string,
 	agentToolkitDigest: string,
+	agentToolkitVersion: string,
+	agentToolkitSourceRevision: string,
 	authCredentialTypes: Readonly<Record<string, string>>,
 	immutableApiKeyDigests: Readonly<Record<string, string>>,
 	oauthSchemas: Readonly<Record<string, Record<string, string>>>,
@@ -295,8 +407,11 @@ function materializeNewRuntime(
 
 		const manifest: RuntimeManifest = {
 			version: 1,
+			runtimeNamespace,
 			inputDigest,
 			agentToolkitDigest,
+			agentToolkitVersion,
+			agentToolkitSourceRevision,
 			immutableFiles: Object.fromEntries(
 				Object.entries(immutablePayloads).map(([path, payload]) => [
 					path,
@@ -317,6 +432,7 @@ function materializeNewRuntime(
 
 function verifyExistingRuntime(
 	paths: ReturnType<typeof runtimePaths>,
+	runtimeNamespace: string,
 	inputDigest: string,
 	agentToolkitDigest: string,
 	authCredentialTypes: Readonly<Record<string, string>>,
@@ -330,6 +446,7 @@ function verifyExistingRuntime(
 	const manifest = parseObjectFile(manifestPath) as Partial<RuntimeManifest>;
 	if (
 		manifest.version !== 1 ||
+		manifest.runtimeNamespace !== runtimeNamespace ||
 		manifest.inputDigest !== inputDigest ||
 		manifest.agentToolkitDigest !== agentToolkitDigest
 	)
@@ -378,19 +495,11 @@ function runtimeResult(
 	options: MaterializeWorkflowSupervisorRuntimeOptions,
 	paths: ReturnType<typeof runtimePaths>,
 	agentToolkitDigest: string,
+	agentToolkitVersion: string,
+	agentToolkitSourceRevision: string,
+	materializationDigest: string,
 ): WorkflowSupervisorRuntimeMaterialization {
-	const environment = buildWorkflowChildEnvironment(
-		options.sourceEnvironment,
-		workflowChildEnvironmentPolicy(options.allowedEnvironmentKeys),
-	);
-	for (const key of Object.keys(environment)) {
-		if (
-			isWorkflowPublicationEnvironmentKey(key) ||
-			key === "GIT_CONFIG_COUNT" ||
-			INHERITED_GIT_CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
-		)
-			delete environment[key];
-	}
+	const environment = filteredSourceEnvironment(options);
 	Object.assign(environment, {
 		PATH: `${paths.binDir}:${environment.PATH ?? ""}`,
 		HOME: paths.homeDir,
@@ -411,25 +520,53 @@ function runtimeResult(
 	return {
 		...paths,
 		agentToolkitDigest,
+		agentToolkitVersion,
+		agentToolkitSourceRevision,
+		materializationDigest,
 		environment,
-		scratchRoots: [paths.runtimeRoot],
+		scratchRoots: [
+			paths.homeDir,
+			paths.tmpDir,
+			paths.sessionDir,
+			paths.workflowAuthFile,
+		],
 	};
 }
 
+function filteredSourceEnvironment(
+	options: MaterializeWorkflowSupervisorRuntimeOptions,
+): Record<string, string> {
+	const environment = buildWorkflowChildEnvironment(
+		options.sourceEnvironment,
+		workflowChildEnvironmentPolicy(options.allowedEnvironmentKeys),
+	);
+	for (const key of Object.keys(environment)) {
+		if (
+			isWorkflowPublicationEnvironmentKey(key) ||
+			key === "GIT_CONFIG_COUNT" ||
+			INHERITED_GIT_CONFIG_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))
+		)
+			delete environment[key];
+	}
+	return environment;
+}
+
 function runtimePaths(runtimeRoot: string) {
-	const homeDir = join(runtimeRoot, "home");
-	const agentDir = join(runtimeRoot, "pi-agent");
-	const binDir = join(runtimeRoot, "bin");
+	const mutableRoot = join(runtimeRoot, "mutable");
+	const immutableRoot = join(runtimeRoot, "immutable");
+	const homeDir = join(mutableRoot, "home");
+	const agentDir = join(immutableRoot, "pi-agent");
+	const binDir = join(immutableRoot, "bin");
 	return {
 		runtimeRoot,
 		homeDir,
-		tmpDir: join(runtimeRoot, "tmp"),
+		tmpDir: join(mutableRoot, "tmp"),
 		agentDir,
-		sessionDir: join(runtimeRoot, "sessions"),
+		sessionDir: join(mutableRoot, "sessions"),
 		workflowAuthFile: join(agentDir, "auth.json"),
 		settingsFile: join(agentDir, "settings.json"),
 		modelsFile: join(agentDir, "models.json"),
-		gitConfigFile: join(homeDir, ".gitconfig"),
+		gitConfigFile: join(immutableRoot, "gitconfig"),
 		binDir,
 		piShimFile: join(binDir, "pi"),
 		gitShimFile: join(binDir, "git"),
@@ -556,20 +693,6 @@ function filterModels(
 	return { providers: selected };
 }
 
-const MODEL_CREDENTIAL_FIELDS = new Set([
-	"apikey",
-	"authorization",
-	"cookie",
-	"headers",
-	"key",
-	"password",
-	"secret",
-	"token",
-	"access",
-	"refresh",
-	"env",
-]);
-
 function assertCredentialBlindModelConfig(
 	value: WorkflowRuntimeJson,
 	providerId: string,
@@ -582,7 +705,7 @@ function assertCredentialBlindModelConfig(
 	if (typeof value !== "object" || value === null) return;
 	const record = value as Record<string, WorkflowRuntimeJson>;
 	for (const [key, nested] of Object.entries(record)) {
-		if (MODEL_CREDENTIAL_FIELDS.has(key.toLowerCase()))
+		if (isCredentialFieldName(key))
 			throw new Error(
 				`model configuration for provider ${providerId} contains credential field ${key}`,
 			);
@@ -600,6 +723,28 @@ function assertCredentialBlindModelConfig(
 	}
 }
 
+function isCredentialFieldName(key: string): boolean {
+	const tokens = key
+		.replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2")
+		.toLowerCase()
+		.split(/[^a-z0-9]+/)
+		.filter(Boolean);
+	const normalized = tokens.join("");
+	return (
+		tokens.some((token) =>
+			/^(?:secret|token|password|credential|authorization|auth|header|headers|cookie|key)$/.test(
+				token,
+			),
+		) ||
+		/^(?:apikey|clientsecret|clientkey|privatekey|accesskey|authtoken|bearertoken)$/.test(
+			normalized,
+		) ||
+		normalized === "access" ||
+		normalized === "refresh" ||
+		normalized === "env"
+	);
+}
+
 function normalizedProviderIds(providerIds: readonly string[]): string[] {
 	const normalized = providerIds.map((providerId) => providerId.trim());
 	if (normalized.some((providerId) => providerId.length === 0))
@@ -612,10 +757,24 @@ function assertPackageShape(packageRoot: string): void {
 	if (!existsSync(packageFile))
 		throw new Error("agent-toolkit snapshot requires package.json");
 	const packageJson = parseObjectFile(packageFile);
-	if (typeof packageJson.name !== "string" || packageJson.name.length === 0)
-		throw new Error("agent-toolkit package requires a name");
+	if (packageJson.name !== "@vegardx/agent-toolkit")
+		throw new Error(
+			"agent-toolkit package identity must be @vegardx/agent-toolkit",
+		);
+	if (typeof packageJson.version !== "string" || !packageJson.version.trim())
+		throw new Error("agent-toolkit package requires a version");
 	if (!existsSync(join(packageRoot, "skills")))
 		throw new Error("agent-toolkit package requires a skills directory");
+}
+
+function readAgentToolkitIdentity(packageRoot: string): { version: string } {
+	const packageJson = parseObjectFile(join(packageRoot, "package.json"));
+	if (
+		packageJson.name !== "@vegardx/agent-toolkit" ||
+		typeof packageJson.version !== "string"
+	)
+		throw new Error("invalid agent-toolkit package identity");
+	return { version: packageJson.version };
 }
 
 function packageEntries(root: string): Array<{

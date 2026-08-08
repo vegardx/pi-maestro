@@ -1,7 +1,7 @@
 # Workflow cutover plan
 
-**Status:** Accepted implementation plan; W0 source/API spike complete, outer
-supervisor composition awaiting live proof.
+**Status:** Production command path and hermetic workflow drive implemented;
+real-provider live proof and legacy deletion remain.
 
 This plan replaces pi-maestro's custom plan, worker, review, and question
 orchestration with an opinionated integration around:
@@ -33,8 +33,9 @@ derive from the same declarations rather than repeat tool names independently.
 5. Hack remains direct seat work and does not require the workflow lifecycle.
 6. An active workflow does not ask routine questions. Essential clarification
    happens at the seat before approval.
-7. Implementers create local commits. Reviewers are read-only. Only deterministic
-   depth-0 maestro code pushes branches and creates or updates pull requests.
+7. Implementers edit approved worktrees without Git authority. Reviewers are
+   read-only. Deterministic depth-0 Maestro code creates normal local commits,
+   pushes branches, and creates or updates pull requests.
 8. Review happens once against immutable implementation commits. There is no
    verifier and no second review round.
 9. The implementer must record a decision for every normalized finding. A
@@ -42,8 +43,9 @@ derive from the same declarations rather than repeat tool names independently.
    decisions.
 10. Reviewer provenance is withheld from the implementer and retained only in a
     local Maestro review ledger. It is not published in the PR.
-11. Reviewer lenses are reusable personas backed by globally discoverable
-    skills from `agent-toolkit`.
+11. Reviewer lenses are workflow prompt inputs, not personas. A stage combines
+    a model, lens prompt, and authority, and may explicitly request an ambient,
+    globally discoverable skill from `agent-toolkit`.
 12. A lens may run on one or many models. Model cohorts are top-level workflow
     stages so execution profiles can target them directly.
 13. Multi-repository workspaces are the foundational execution model. A
@@ -253,16 +255,18 @@ HACK
 The approval digest covers:
 
 - workflow spec and support-helper bytes;
-- persona definitions;
+- lens prompt and support-helper bytes;
 - resolved execution profile and concrete model IDs;
 - tool and repository authority;
 - selected repository roots, branches, and base SHAs;
 - worktree and sandbox policy;
 - publishing and provenance-free PR content policy; and
-- pinned `agent-toolkit` package revision.
+- pinned `agent-toolkit` package tree digest and declared source-revision
+  metadata.
 
-Ambient skill selection is runtime model behavior. The digest records the
-toolkit revision but does not claim which skill will be selected.
+Ambient skill selection is runtime model behavior. The digest binds the toolkit
+tree bytes; source-revision text is declared metadata and does not prove source
+provenance or claim which skill will be selected.
 
 No worktree or child agent may be created before approval. Mode transition
 requests are serialized so concurrent gestures produce one approval and one
@@ -326,7 +330,7 @@ must synthesize a scratch `HOME` and minimal `PI_CODING_AGENT_DIR`, omit Git and
 GitHub publication credentials, and expose no publication tools; the sandbox
 alone does not prevent remote mutation.
 Only depth-0 Maestro code runs outside that boundary to push branches and create
-or update PRs. Reviewer personas and tool ceilings omit write, commit,
+or update PRs. Reviewer stage authority and tool ceilings omit write, commit,
 delegation, and publication tools; that is the accidental-write boundary inside
 the shared workflow sandbox. The design does not claim that those tool ceilings
 withstand a malicious same-user process that escapes or bypasses its declared
@@ -403,8 +407,8 @@ contributor mapping -> local Maestro review ledger only
 
 The implementer projection has no dedicated lens, model identity, reviewer
 identity, agreement count, severity, required-resolution, or recommended-fix
-fields. Reviewer personas must still keep claim and observation prose factual
-and non-prescriptive: the structural normalizer does not attempt to decide
+fields. Reviewer lens prompts must still keep claim and observation prose
+factual and non-prescriptive: the structural normalizer does not attempt to decide
 whether arbitrary natural language contains an implicit recommendation.
 
 The contributor mapping is copied into a local-only Maestro review ledger outside
@@ -452,9 +456,12 @@ Initial and follow-up commits use the repository's normal commit-message style.
 Finding-to-commit relationships live in decision data and the local ledger, not
 in special review-response prefixes or reviewer/model trailers.
 
-## Personas and skills
+## Lens prompts and skills
 
-Pi-maestro owns compact personas defining the review relationship:
+Pi-maestro owns compact lens prompts defining the review relationship. There is
+no separate persona or capability system: each stage combines its selected
+model, lens prompt, and explicit authority. A lens prompt may explicitly ask
+the agent to load an ambient globally discoverable skill. The prompts remain:
 
 - blind to implementer reasoning and other reviewers;
 - read-only;
@@ -476,14 +483,16 @@ Pi package with directory-level skill discovery:
 
 The toolkit adds `security-review`, `correctness-review`,
 `simplification-review`, and `adversarial-review`. Reviewer prompts are written
-to trigger these ambient skills naturally. The live drive proves that expected
-skills are actually read; no custom skill router or workflow skill-path field
-is introduced.
+to trigger these ambient skills naturally or request one explicitly. Pi's real
+resource loader is tested against the snapshotted toolkit, while the eventual
+provider drive must prove that each target model actually reads the expected
+skill. No custom skill router or workflow skill-path field is introduced.
 
 ## Usage and UI
 
-The active extension currently does not install the retained footer or usage
-ledger. This is a new integration, not a no-op retention.
+The active depth-zero extension now installs the rebuilt footer and usage
+ledger. The workflow coordinator registers each package run with that ledger;
+retry-safe polling folds terminal leaf-task counters into the all-agent total.
 
 The ledger exposes:
 
@@ -554,13 +563,15 @@ validation and publication and does not expose the ledger to that skill.
 Prove with a disposable multi-repository fixture:
 
 1. Programmatic workflow launch from the maestro extension.
-2. `single -> foreach cohorts -> support -> single -> support` execution.
+2. Separate flat implementation, review-cohort, and decision workflows with
+   seat-owned phase boundaries.
 3. Different top-level cohorts resolve different concrete models.
 4. Pi starts from a non-Git directory containing several child repositories.
 5. Maestro creates and resumes one worktree per selected repository under one
    coordinated run workspace.
-6. Implementer stages share the coordinated worktrees and request initial and
-   follow-up local commits through a narrow depth-0 broker outside the sandbox.
+6. Implementer stages share the coordinated worktrees without Git authority;
+   the depth-0 seat creates initial and follow-up commits through the durable
+   `WorkflowPhaseCheckpointer` between workflow phases.
 7. Reviewer stages inspect exact immutable ranges across one or more repos.
 8. Reviewer write and commit tools are absent, and the outer supervisor denies
    publication and writes outside the coordinated runtime roots.
@@ -587,22 +598,31 @@ mechanics. It does not yet prove cross-repository workflow scheduling, process
 recovery, or resume-safe usage replay. The source/API questions are settled:
 the first cutover uses a flat DAG, no nested agents, package-native model/task
 execution, a package-external supervisor sandbox, a local Maestro review ledger,
-and a retained local-only commit capability brokered by depth 0. No dependency
-fork is planned.
-W0 remains open only for live composition proof of the supervisor boundary,
-shared-worktree commit/recovery behavior, real model/skill/usage telemetry, and
-the bundled/root `pi-web-access` compatibility smoke test.
+and seat-owned, journaled phase checkpoints. No dependency fork is planned.
+W0 remains open only for live proof with real models of the supervisor boundary,
+skill activation, provider usage telemetry, abrupt process recovery, production
+GitHub shipping, and the bundled/root `pi-web-access` compatibility smoke test.
 
-The first package-external supervisor adapters are now implemented behind no
-production call site: a private scratch Pi runtime, filtered auth/model state,
-skills-only toolkit snapshot, `--no-approve` Pi guard, transport-disabled Git
-guard, non-Git umbrella workflow-state link, typed start/continue entry, and a
-replacement-environment detached launcher with durable logs. Hermetic process
-coverage proves the replacement environment reaches a real grandchild. This is
-not the W0 live composition proof: the extension does not call the launcher yet,
-the approved execution manifest still must bind the complete bundle/personas/
-models/authority/roots rather than only the spec file, and real Pi skill,
-project-settings, restart, commit-broker, and telemetry behavior remain open.
+The package-external supervisor adapters, depth-zero coordinator, and
+production Plan → Auto and `/run` routes are implemented. They
+include a private scratch Pi runtime, filtered auth/model state, skills-only
+toolkit snapshot, `--no-approve` Pi guard, transport-disabled Git guard,
+non-Git umbrella workflow-state link, typed start/continue entry, and a
+replacement-environment detached launcher with durable logs. A strict approved
+execution manifest binds launch inputs, an exact recursive workflow-bundle
+inventory, declared model/profile/authority artifacts, repository roots, the
+pinned toolkit identity and tree, runtime materialization, and hashed approved
+environment values; the sandbox child re-verifies those bytes before
+scheduling. Hermetic real-process coverage now runs the actual
+`pi-workflow -> pi-subagent` path, proves replacement-environment inheritance,
+flat-task execution, delegation-tool exclusion, ambient toolkit discovery,
+five-way concurrent review, phase-checkpoint integration, denied access to raw
+review artifacts, exact decision lineage, retry-safe usage, and interrupted
+decision-run recovery. The deterministic extension acceptance crosses the real
+production approval/runner boundary, while the full cross-process drive enters
+at the production runner. A single installed-extension live drive with real
+providers, abrupt process recovery, production GitHub shipping, and pi-web
+compatibility remains open.
 
 ### W1 - Agent-toolkit Pi package
 
@@ -637,23 +657,22 @@ This package stays pure and independent of the workflow runner.
 - Discover and validate selected Git roots.
 - Create/resume one worktree and branch per selected repository.
 - Preserve path-scoped Git identity.
-- Move the explicit-path local commit capability behind a narrow depth-0 broker;
-  workflow stages submit repository, paths, and an ordinary repository-style
-  message, while the broker validates the active run/stage/branch before signing
-  the commit outside the supervisor sandbox.
+- Use `WorkflowPhaseCheckpointer` at depth 0 to validate exact repositories,
+  branches, paths, and ordinary repository-style messages before creating
+  journaled implementation and decision commits outside the supervisor sandbox.
 - Add repository-specific implementation checkpoints.
 - Add post-review reachability, path, ancestry, cleanliness, and final-head
   validation.
 - Add partial-publication journal types without yet wiring remote mutation.
 
-### W4 - Implement-review workflow and personas
+### W4 - Implement-review workflow and lens prompts
 
 **Owner:** one subagent. **Dependencies:** W0 and W2 schemas.
 
 - Build and validate the workflow bundle.
 - Add review planning, repository-local lenses, and cross-repository lenses.
 - Add top-level model cohorts and execution profiles.
-- Add compact personas.
+- Add compact lens prompts and explicit stage authority.
 - Keep the workflow a flat DAG and omit delegation tools; no stage must spawn a
   nested agent.
 - Ensure the decision stage receives only sanitized findings.
@@ -873,8 +892,8 @@ The live suite must cover:
 - Hack remains direct.
 - Single- and multi-repository changes use the same workspace model.
 - Cross-repository dependencies and artifact reads are explicit.
-- Implementers create visible initial and follow-up implementation commits with
-  normal task-oriented messages.
+- The seat creates visible initial and follow-up implementation commits with
+  normal task-oriented messages after each writable phase.
 - Review happens once against immutable commit ranges.
 - A lens can run on several models.
 - The implementer receives de-attributed findings only.

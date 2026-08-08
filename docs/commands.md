@@ -6,7 +6,6 @@
 | --- | --- |
 | `/mode [plan\|auto\|hack]` | Report or change posture; plan → auto previews, asks once, then launches |
 | `/run [slug]` | List plans, or run/recover a named plan while in auto mode |
-| `/stop [why]` | Legacy rollback path only; autonomous workflow runs refuse this command |
 | `/maestro [subcommand]` | Open settings, reconcile package pins, or run diagnostics |
 
 `/run` is the workflow recovery operation as well as the launch operation.
@@ -41,9 +40,7 @@ It does not install or execute packages. `doctor` performs read-only checks.
 | `auto` | writable | on |
 | `hack` | writable | off |
 
-The workflow path is the default. It can temporarily be disabled with the
-`maestro.workflowCutover` feature kill switch while the legacy executor remains
-available for rollback.
+Workflow execution is the only execution path.
 
 ## Seat tools
 
@@ -51,12 +48,9 @@ available for rollback.
   together. Delegated review tasks use `{lens, model, skill?}`; they do not use
   personas.
 - `bash` is the seat's gated shell.
-- `subagent` remains available for an explicit conversational consultation,
-  but workflow review cohorts are launched by `pi-workflow`, not nested through
-  this tool.
-- `respond` and `flight` are retained by the legacy rollback path and are not
-  part of workflow-native execution.
-
+- `commit` records explicitly named paths when the human drives direct work.
+- `delete` moves explicitly named paths to recoverable trash.
+- `respond` answers pending questions owned by the ask extension.
 Workflow model stages use Pi's normal file tools within their phase sandbox.
 They do not receive Maestro commit, push, pull-request, or nested-subagent
 authority. Review stages are read-only. The depth-zero seat performs Git

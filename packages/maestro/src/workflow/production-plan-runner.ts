@@ -5,8 +5,8 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { UsageLedgerV1 } from "@vegardx/pi-contracts";
+import { currentDepth } from "../depth.js";
 import type { Plan } from "../plan.js";
-import { currentDepth } from "../spawn.js";
 import { createWorkflowCoordinator } from "./coordinator.js";
 import {
 	WorkflowPhaseCheckpointer,

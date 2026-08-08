@@ -16,7 +16,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { UsageLedgerV1 } from "@vegardx/pi-contracts";
-import { currentDepth } from "../spawn.js";
+import { currentDepth } from "../depth.js";
 import type { WorkflowSupervisorRequest } from "./supervisor-entry.js";
 import {
 	digestWorkflowExecutionManifest,

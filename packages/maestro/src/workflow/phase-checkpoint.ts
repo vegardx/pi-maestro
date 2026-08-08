@@ -28,7 +28,7 @@ import {
 	sep,
 } from "node:path";
 import { runCommand, stageAndCommit } from "@vegardx/pi-git";
-import { currentDepth } from "../spawn.js";
+import { currentDepth } from "../depth.js";
 
 export type WorkflowCheckpointPhase = "implementation" | "decision";
 

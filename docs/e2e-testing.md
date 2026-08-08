@@ -8,7 +8,7 @@ the live workflow drive.
 | --- | --- | --- |
 | Unit/integration | `npm run check` | schemas, manifests, ledgers, recovery logic, extension smoke |
 | Hermetic workflow E2E | `npm run test:e2e:workflow` | real supervisor, pi-workflow, pi-subagent, worktrees, phase sandbox, seat commits and shipping adapter with deterministic fake models |
-| Full hermetic suite | `npm run test:e2e` | workflow cases plus the explicitly disabled legacy rollback drive |
+| Full hermetic suite | `npm run test:e2e` | the workflow cases through the production runner boundary |
 | Live workflow | not yet wired | real provider/model processes, ambient skill activation, Git identity/signing, and production shipping |
 
 ## Hermetic workflow drive
@@ -28,10 +28,6 @@ deterministic while retaining process, environment, state, and scheduling
 behavior. A separate extension test crosses Plan → Auto through the real
 approval gate and production runner factory.
 
-The old `test/e2e/maestro/drive.e2e.test.ts` explicitly sets
-`PI_DISABLE=maestro.workflowCutover`. Its green result proves only that the
-temporary rollback path still works; it is never workflow-cutover evidence.
-
 ## Live workflow drive
 
 The new workflow live script is still an open acceptance item. It must create
@@ -40,9 +36,8 @@ remotes; run the production workflow path with real configured providers while
 leaving global Pi settings and auth unchanged; and retain enough state to
 inspect phase stderr and model sessions on failure.
 
-`npm run e2e:live` remains an alias for `e2e:live:legacy`; label it as legacy
-if diagnosing the rollback executor. It is not a substitute for the workflow
-drive.
+There is currently no `e2e:live` script. Adding one means driving the workflow
+architecture above; there is no older executor to fall back to.
 
 ## Why live remains required
 

@@ -25,7 +25,7 @@ import {
 	workingTreeClean,
 } from "@vegardx/pi-git";
 import { createPr, editPr, findOpenPr } from "@vegardx/pi-github";
-import { currentDepth } from "../spawn.js";
+import { currentDepth } from "../depth.js";
 
 export interface WorkflowPullRequestCopy {
 	readonly title: string;

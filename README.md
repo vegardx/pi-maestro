@@ -76,6 +76,5 @@ npm run test:e2e
 ```
 
 The installed-extension live workflow drive is the remaining acceptance gap
-for real providers, Git identity/signing, and hosted shipping. The retained
-`npm run e2e:live` command is explicitly the legacy rollback-path drive and is
-not workflow evidence.
+for real providers, Git identity/signing, and hosted shipping. There is no
+legacy executor or legacy live-drive command.

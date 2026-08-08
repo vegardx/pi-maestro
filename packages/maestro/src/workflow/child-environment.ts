@@ -1,4 +1,4 @@
-import { AGENT_ID_ENV, DEPTH_ENV, SOCK_ENV, TOKEN_ENV } from "../spawn.js";
+import { AGENT_ID_ENV, DEPTH_ENV, SOCK_ENV, TOKEN_ENV } from "../depth.js";
 
 /**
  * Process settings a workflow child may need before provider-specific

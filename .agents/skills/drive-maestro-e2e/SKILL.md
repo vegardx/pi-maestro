@@ -5,10 +5,8 @@ description: Run the pi-maestro workflow-cutover drive through the production pl
 
 # Drive the workflow architecture end to end
 
-The acceptance drive follows the workflow-cutover architecture and enters at
-`createProductionWorkflowPlanRunner`. Do not use the legacy `/run` deliverable
-drive as evidence for this design: it exercises the old plan store, socket
-workers, nested reviews, and worker-owned commits.
+The acceptance drive follows the workflow architecture and enters at
+`createProductionWorkflowPlanRunner`.
 
 ## Run it
 
@@ -25,9 +23,8 @@ npm run check
 npm run test:e2e
 ```
 
-`npm run e2e:live` (an alias of `e2e:live:legacy`) is still the retired legacy
-provider drive. Its result must be labelled legacy and must not be cited as
-workflow-cutover validation.
+There is no live-drive command yet. Do not substitute a unit or hermetic result
+for real-provider evidence.
 
 ## Scenario
 
@@ -115,7 +112,7 @@ production runner, and lets its durable journal launch the decision supervisor
 with `continue`. It proves the implementation, reviewers, and initial
 checkpoints are not replayed. Abrupt
 SIGKILL/process-orphan containment still needs a live sandbox drive at this
-same seam; the legacy orphan-worker recovery drive is not a substitute.
+same seam.
 
 ## Reading a failure
 

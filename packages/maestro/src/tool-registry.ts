@@ -145,7 +145,7 @@ export class ToolRegistry {
 	/**
 	 * The agent-facing tool list, generated. Personas never restate this: prose
 	 * that names a tool is prose that can drift from the grant, which is the
-	 * whole defect. A persona says what to look for; this says what it holds.
+	 * whole defect. Prompt prose says what to do; this says what the seat holds.
 	 */
 	describeFor(holder: Holder): string {
 		const lines = [...this.byName.values()]

@@ -68,7 +68,7 @@ describe("workflow supervisor state layout", () => {
 		expect(() => materializeWorkflowSupervisorState(root)).toThrow(
 			/must be a real directory/,
 		);
-		expect(() => realpath(join(outside, ".pi"))).rejects.toThrow();
+		await expect(realpath(join(outside, ".pi"))).rejects.toThrow();
 	});
 
 	it("enforces private existing runtime state where POSIX modes apply", async () => {

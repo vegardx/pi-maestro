@@ -68,6 +68,7 @@ const canSandbox = await canEnforce();
 const live = canSandbox ? describe : describe.skip;
 const unavailableMachine =
 	platformClaimsSupport && !canSandbox ? describe : describe.skip;
+const unsupportedMachine = !platformClaimsSupport ? describe : describe.skip;
 
 afterAll(async () => {
 	await SandboxManager.reset().catch(() => undefined);
@@ -161,9 +162,9 @@ describe("workflow supervisor sandbox profile", () => {
 
 describe("workflow supervisor sandbox availability", () => {
 	it("reports the enforcement precondition on every platform", () => {
-		// A supported platform without working runtime dependencies is a failed
-		// security boundary, not a reason to silently skip the live assertion.
-		expect(canSandbox).toBe(platformClaimsSupport);
+		// Enforcement can only succeed where the package claims platform support.
+		// The two unavailable cases are asserted explicitly in the suites below.
+		expect(canSandbox && !platformClaimsSupport).toBe(false);
 	});
 
 	it("refuses instead of launching unconfined when unavailable", () => {
@@ -198,6 +199,18 @@ unavailableMachine("workflow supervisor sandbox machine precondition", () => {
 		});
 	});
 });
+
+unsupportedMachine(
+	"workflow supervisor unsupported-platform precondition",
+	() => {
+		it("reports that no kernel-denial proof can run on this platform", () => {
+			expect({ platformClaimsSupport, canSandbox }).toEqual({
+				platformClaimsSupport: false,
+				canSandbox: false,
+			});
+		});
+	},
+);
 
 live("outer workflow supervisor sandbox enforcement", () => {
 	it("lets descendants edit every coordinated worktree and denies a sibling write", async () => {

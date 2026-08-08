@@ -52,5 +52,11 @@
 	},
 	"engines": {
 		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@agwab/pi-subagent": "0.4.8",
+		"@agwab/pi-workflow": "0.11.0",
+		"@juicesharp/rpiv-ask-user-question": "2.4.0",
+		"pi-web-access": "0.18.0"
 	}
 }

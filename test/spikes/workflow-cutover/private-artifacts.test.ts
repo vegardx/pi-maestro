@@ -100,6 +100,13 @@ function allText(root: string): string {
 describe("W0 private provenance artifacts", () => {
 	it("exposes a de-attributed projection and joins provenance only at the seat", () => {
 		const paths = fixture();
+		// pi-workflow may retain its own raw task output. The first-cutover
+		// guarantee is that Maestro never projects this identity into the
+		// implementer's inputs, not hostile-process filesystem confidentiality.
+		writeFileSync(
+			join(paths.workflowState, "reviewer-raw.md"),
+			"anthropic/opus-5-private security-opus/item-0",
+		);
 		const store = new PrivateArtifactStore({
 			maestroStateRoot: paths.maestroState,
 			coordinatedRepositoryRoots: [paths.repo, paths.worktree],
@@ -114,16 +121,13 @@ describe("W0 private provenance artifacts", () => {
 			join(paths.worktree, "implementer-findings.json"),
 			JSON.stringify(stored.projection),
 		);
-		for (const searchableRoot of [
-			paths.repo,
-			paths.worktree,
-			paths.workflowState,
-		]) {
+		for (const searchableRoot of [paths.repo, paths.worktree]) {
 			const text = allText(searchableRoot);
 			expect(text).not.toContain("anthropic/opus-5-private");
 			expect(text).not.toContain("security-opus/item-0");
 			expect(text).not.toContain("raw-security-opus-secret");
 		}
+		expect(allText(paths.workflowState)).toContain("anthropic/opus-5-private");
 		expect(JSON.stringify(stored.projection)).not.toContain("resolvedModel");
 		expect(JSON.stringify(stored.projection)).not.toContain(
 			stored.reference.id,

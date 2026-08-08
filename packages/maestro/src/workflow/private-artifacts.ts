@@ -1,10 +1,10 @@
 // Maestro-private review artifacts.
 //
-// Workflow tasks receive only SanitizedReviewProjection. The opaque reference
-// is useful to the seat, but deliberately carries neither a path nor review
-// provenance. Raw reviewer output and model/task identity stay in a separate
-// maestro state root, never in a coordinated repository or pi-workflow's
-// shared state tree.
+// Implementer tasks receive only SanitizedReviewProjection. The opaque
+// reference is useful to the seat, but deliberately carries neither a path nor
+// review provenance. This store keeps Maestro's contributor copy outside the
+// coordinated repositories and pi-workflow state; it does not claim that the
+// package runtime never persisted its own raw task artifacts.
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {

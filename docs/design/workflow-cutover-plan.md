@@ -593,6 +593,17 @@ W0 remains open only for live composition proof of the supervisor boundary,
 shared-worktree commit/recovery behavior, real model/skill/usage telemetry, and
 the bundled/root `pi-web-access` compatibility smoke test.
 
+The first package-external supervisor adapters are now implemented behind no
+production call site: a private scratch Pi runtime, filtered auth/model state,
+skills-only toolkit snapshot, `--no-approve` Pi guard, transport-disabled Git
+guard, non-Git umbrella workflow-state link, typed start/continue entry, and a
+replacement-environment detached launcher with durable logs. Hermetic process
+coverage proves the replacement environment reaches a real grandchild. This is
+not the W0 live composition proof: the extension does not call the launcher yet,
+the approved execution manifest still must bind the complete bundle/personas/
+models/authority/roots rather than only the spec file, and real Pi skill,
+project-settings, restart, commit-broker, and telemetry behavior remain open.
+
 ### W1 - Agent-toolkit Pi package
 
 **Owner:** one subagent in `vegardx/agent-toolkit`. **Dependencies:** none.

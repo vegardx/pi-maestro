@@ -160,6 +160,12 @@ describe("workflow supervisor sandbox profile", () => {
 });
 
 describe("workflow supervisor sandbox availability", () => {
+	it("reports the enforcement precondition on every platform", () => {
+		// A supported platform without working runtime dependencies is a failed
+		// security boundary, not a reason to silently skip the live assertion.
+		expect(canSandbox).toBe(platformClaimsSupport);
+	});
+
 	it("refuses instead of launching unconfined when unavailable", () => {
 		const paths = makeRoots("unsupported");
 		expect(() =>

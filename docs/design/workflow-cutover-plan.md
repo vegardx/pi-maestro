@@ -391,25 +391,31 @@ interface RawFinding {
 }
 ```
 
-Normalization deterministically validates, deduplicates, and assigns stable
-content-derived IDs. It emits two projections:
+Normalization deterministically validates and assigns stable content-derived
+IDs. It conservatively deduplicates only findings with the same normalized
+claim and repository-qualified evidence locations; it does not ask a model to
+judge semantic equivalence. It emits two projections:
 
 ```text
 sanitized findings -> implementer
 contributor mapping -> local Maestro review ledger only
 ```
 
-The implementer projection contains no lens, model identity, reviewer identity,
-agreement count, severity, required resolution, or recommended fix.
+The implementer projection has no dedicated lens, model identity, reviewer
+identity, agreement count, severity, required-resolution, or recommended-fix
+fields. Reviewer personas must still keep claim and observation prose factual
+and non-prescriptive: the structural normalizer does not attempt to decide
+whether arbitrary natural language contains an implicit recommendation.
 
 The contributor mapping is copied into a local-only Maestro review ledger outside
 the supervised workflow roots. The implementer receives only the sanitized
 projection through its prompt/artifact input and is not directed to raw reviewer
-artifacts. This prevents accidental attribution and poisoning; it is not a claim
-that file placement alone protects secrets from a hostile process with the same
-OS identity. Prefer placing the ledger below the existing agent-state deny-read
-root so the current secret policy adds defense in depth, without making that
-stronger confidentiality boundary a first-cutover requirement.
+artifacts. This prevents accidental attribution through workflow metadata; it
+does not claim semantic poison-proofing or that file placement alone protects
+secrets from a hostile process with the same OS identity. Prefer placing the
+ledger below the existing agent-state deny-read root so the current secret
+policy adds defense in depth, without making that stronger confidentiality
+boundary a first-cutover requirement.
 
 ### Decisions and lineage gate
 
@@ -655,6 +661,13 @@ This package stays pure and independent of the workflow runner.
   supervisor sandbox without patching dependency internals.
 - Materialize a minimal scratch `HOME` and `PI_CODING_AGENT_DIR` containing the
   approved Pi configuration and packages, while omitting publication credentials.
+- Set the supervisor's `PI_CODING_AGENT_SESSION_DIR`, `TMPDIR`, and
+  `PI_WORKFLOW_AUTH_FILE` to scratch-local paths. Generate filtered settings,
+  models, and writable provider auth rather than copying the seat's files.
+- Snapshot the complete pinned `agent-toolkit` package into the scratch agent
+  directory so ambient discovery works despite the real agent-directory read
+  deny. Use an isolated Git config without credential helpers, disable terminal
+  credential prompts, and omit GitHub tokens and SSH-agent sockets.
 - Persist contributor mappings only in the local Maestro review ledger and pass
   sanitized findings into the workflow decision stage.
 - Observe lifecycle and resume without mirroring a second run state machine.

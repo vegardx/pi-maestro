@@ -28,6 +28,8 @@ import {
 } from "node:path";
 
 export interface FindingEvidence {
+	/** Approved repository registry key; path is relative to this repository. */
+	readonly repository: string;
 	readonly path: string;
 	readonly line?: number;
 	readonly observation: string;

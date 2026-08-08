@@ -45,6 +45,7 @@ describe("scaffold", () => {
 	it("wires exactly the extension packages into the pi manifest", () => {
 		const entries = [...pkg.pi.extensions].sort();
 		const want = [
+			"packages/ask/src/rpiv-extension.ts",
 			// maestro's entry is `extension.ts`: one process runs either a
 			// maestro or an agent and the file decides which from its depth, so
 			// there is no index barrel to import by accident.

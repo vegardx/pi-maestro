@@ -2,12 +2,9 @@
 
 Guidance for coding agents (Claude, pi, or any harness) working in this repo.
 pi-maestro is a **pi coding-agent extension stack** (`package.json`
-`pi.extensions`). One `pi` process becomes a maestro; it spawns detached worker
-processes that dial home over a unix socket and speak the small protocol in
-`packages/maestro/src/protocol.ts`.
-
-Depth decides what a process is. Depth 0 is the seat, depth 1 a worker, depth 2
-a read-only agent. `packages/maestro/src/extension.ts` reads that once, at load.
+`pi.extensions`). One interactive `pi` process is the Maestro seat. Autonomous
+work runs through a sandboxed `pi-workflow` supervisor and `pi-subagent`; there
+is no custom worker socket or alternate executor.
 
 ## Build / check
 
@@ -21,14 +18,12 @@ Pick the lowest tier that can catch the bug you care about — but read the
 warning under tier 3 before deciding you are finished.
 
 1. **Unit** (`npm test`) — pure logic, no I/O.
-2. **Hermetic e2e** (`npm run test:e2e`) — `test/e2e/maestro/drive.e2e.test.ts`
-   boots a real pi seat, real worktrees, real sockets and real detached
-   processes, against a scripted mock model
-   (`test/e2e/maestro/scripted-model.ts`). Deterministic, seconds.
-3. **Live drive** (`npm run e2e:live`) — `test/e2e/maestro/live.ts`: real
-   models, real commits, a local bare remote, a disposable repo under
-   `~/src/github.com/`. Flags: `--prod-models`, `--keep`, `--recover` (SIGKILLs
-   the maestro mid-flight and starts a new one over the same store).
+2. **Hermetic e2e** (`npm run test:e2e`) —
+   `test/e2e/maestro/workflow-drive.e2e.test.ts` drives the production plan
+   runner, real worktrees, detached supervisors, `pi-workflow`, and
+   `pi-subagent` against a deterministic fake Pi model process.
+3. **Live workflow drive** — not wired yet. It must use real models, real
+   commits, a local bare remote, and the production workflow supervisor path.
 
 **Tiers 1 and 2 cannot see the seam between processes.** Four bugs in one day
 were found only by tier 3, and each had a full green suite over it: a shell
@@ -61,7 +56,8 @@ A capability used to live in four independent places — the grant, the
 implementation, the agent-facing description, the verification — joined only by
 strings, with nothing failing when they disagreed.
 
-`ToolRegistry.declare` and `PersonaCatalogue.declare` reject at construction:
-grants are derived, descriptions generated, and prose that names a declared
-tool is refused. When you add anything with a name, ask where the *second*
-place that name lives is, and whether anything would fail if the two disagreed.
+`ToolRegistry.declare` rejects drift at construction: grants derive from the
+tool implementation. Workflow manifests bind approved models, repositories,
+artifacts, and authority. When you add anything with a name, ask where the
+*second* place that name lives is, and whether anything would fail if they
+disagreed.

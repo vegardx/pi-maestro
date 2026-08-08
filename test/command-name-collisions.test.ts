@@ -77,14 +77,12 @@ describe("command names", () => {
 		).toEqual([]);
 	});
 
-	it("still registers the plan-running verb under a free name", () => {
-		// `start` is gone with `packages/modes`: there is one verb now, and
-		// running a plan that already has a run record IS resuming it — the
-		// executor reclaims whatever was left in flight. `resume` stays absent
-		// because it is pi's own, which is what this file exists to catch.
+	it("registers one autonomous plan-running verb under a free name", () => {
+		// Running a plan with durable state is also its recovery operation. There
+		// is no separate start, stop, or resume choreography.
 		const names = maestroCommands();
 		expect(names).toContain("run");
-		expect(names).toContain("stop");
+		expect(names).not.toContain("stop");
 		expect(names).not.toContain("resume");
 	});
 });

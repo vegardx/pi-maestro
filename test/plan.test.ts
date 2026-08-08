@@ -121,33 +121,28 @@ describe("waiting and reading are different things", () => {
 	});
 });
 
-describe("writers are authored, never spawned", () => {
-	// The "refuses a task naming a worker as its subagent" case is gone with
-	// the field it validated: `by` carries only a persona now, so a writer as a
-	// task's subagent is unrepresentable rather than refused. The rule survives
-	// at spawn time — `guardReadOnlySpawn` refuses a writer kind — and in the brief
-	// path, which refuses a writer's persona.
-
-	it("accepts read-only subagent tasks, including a fan-out", () => {
+describe("delegated tasks are workflow-native review launches", () => {
+	it("accepts the same lens assigned to more than one model", () => {
 		const errors = validatePlan(
 			plan({
 				deliverables: [
 					deliverable("a", {
 						tasks: [
-							task("survey", { persona: "codebase-research" }),
 							task("implement"),
 							task("review", {
-								persona: "security-review",
-								fanOut: true,
+								lens: "security",
+								skill: "security-review",
+								model: "anthropic/opus-5",
 							}),
-							task("act-on-findings"),
+							task("review-again", {
+								lens: "security",
+								model: "xai/grok-4.5",
+							}),
 						],
 					}),
 				],
 			}),
 		);
-		// Research BEFORE the work and review AFTER a diff exists, in one list.
-		// Both were structurally impossible when support agents were children.
 		expect(errors).toEqual([]);
 	});
 });

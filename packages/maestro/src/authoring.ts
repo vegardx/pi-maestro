@@ -34,13 +34,23 @@ const TaskSchema = Type.Object({
 	by: Type.Optional(
 		Type.Object(
 			{
-				persona: Type.String({
-					description: "Which persona — what it should be looking for.",
+				lens: Type.String({
+					description: "The independent review focus, such as security.",
+				}),
+				skill: Type.Optional(
+					Type.String({
+						description:
+							"An ambient discoverable skill to request explicitly. Omit when the lens prompt is sufficient for discovery.",
+					}),
+				),
+				model: Type.String({
+					description:
+						"The already-resolved concrete provider/model ID approved for this review.",
 				}),
 			},
 			{
 				description:
-					"Hand this step to a read-only subagent instead of doing it. Research before the work, review after there is a diff.",
+					"Compile this review into its own read-only workflow stage. Repeat a lens in another task to run it with another model.",
 			},
 		),
 	),
@@ -199,7 +209,8 @@ function describe(plan: Plan): string {
 			const waits = d.after.length > 0 ? ` after ${d.after.join(", ")}` : "";
 			const reads = d.reads.length > 0 ? ` reads ${d.reads.join(", ")}` : "";
 			const toSubagents = d.tasks.filter((t) => t.by).length;
-			const handed = toSubagents > 0 ? `, ${toSubagents} to subagents` : "";
+			const handed =
+				toSubagents > 0 ? `, ${toSubagents} workflow review(s)` : "";
 			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
 		}),
 	];

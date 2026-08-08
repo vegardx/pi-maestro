@@ -1,10 +1,4 @@
-// Persistence for the plan and its run.
-//
-// Two files, not one: `<root>/<slug>/plan.json` and `<root>/<slug>/run.json`.
-// The types are already separate; keeping them in separate files makes the
-// separation physical, so a crash while writing run state on some transition
-// cannot damage the agreement the run is being measured against. The plan is
-// written at authoring and on amendment; the run is written constantly.
+// Persistence for authored plans. Runtime state belongs to workflow journals.
 //
 // NOTHING INVALID REACHES DISK. `savePlan` refuses a plan `validatePlan`
 // rejects, and `saveRun` refuses a run that does not check out against the plan
@@ -23,14 +17,14 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Plan, validatePlan } from "./plan.js";
-import { type Run, validateRun } from "./run.js";
 
 /**
  * Bumped when a stored shape changes incompatibly. Version 1 is the first
- * shape of the rebuilt system; nothing before it is readable, and nothing tries
- * to be — there is no migration path from the old model on purpose.
+ * Version 2 replaces persona/fan-out delegation with workflow-native review
+ * intent. Nothing before it is readable, and nothing tries to be — there is no
+ * migration path from the old model on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 1 as const;
+export const MAESTRO_SCHEMA_VERSION = 2 as const;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
@@ -48,7 +42,7 @@ export class StoreError extends Error {
  */
 export class UnsupportedStateError extends StoreError {
 	constructor(
-		readonly kind: "plan" | "run",
+		readonly kind: "plan",
 		readonly found: unknown,
 		readonly path: string,
 	) {
@@ -63,7 +57,7 @@ export class UnsupportedStateError extends StoreError {
 /** A write refused because the thing being written does not check out. */
 export class InvalidStateError extends StoreError {
 	constructor(
-		readonly kind: "plan" | "run",
+		readonly kind: "plan",
 		readonly errors: readonly string[],
 	) {
 		super(
@@ -86,9 +80,7 @@ export interface PlanStore {
 	/** Throws `UnsupportedStateError` if a file exists but speaks another schema. */
 	loadPlan(slug: string): Plan | null;
 	savePlan(plan: Plan): void;
-	loadRun(slug: string): Run | null;
-	saveRun(run: Run): void;
-	/** The plan, its run, and everything else under the slug. */
+	/** The plan and its directory. */
 	remove(slug: string): void;
 	/** Most recently saved first. */
 	list(): PlanSummary[];
@@ -129,11 +121,11 @@ export function createPlanStore(
 		return path;
 	}
 
-	function file(slug: string, which: "plan" | "run"): string {
-		return join(dir(slug), `${which}.json`);
+	function file(slug: string): string {
+		return join(dir(slug), "plan.json");
 	}
 
-	function read<T>(path: string, kind: "plan" | "run"): T | null {
+	function read<T>(path: string): T | null {
 		if (!existsSync(path)) return null;
 		let value: unknown;
 		try {
@@ -150,7 +142,7 @@ export function createPlanStore(
 			envelope.schemaVersion !== MAESTRO_SCHEMA_VERSION
 		)
 			throw new UnsupportedStateError(
-				kind,
+				"plan",
 				(envelope as { schemaVersion?: unknown } | null)?.schemaVersion ??
 					"missing",
 				path,
@@ -173,7 +165,7 @@ export function createPlanStore(
 	}
 
 	function savedAtOf(slug: string): string | null {
-		const path = file(slug, "plan");
+		const path = file(slug);
 		if (!existsSync(path)) return null;
 		try {
 			const value = JSON.parse(readFileSync(path, "utf8")) as {
@@ -189,38 +181,18 @@ export function createPlanStore(
 		root,
 
 		exists(slug) {
-			return SLUG_RE.test(slug) && existsSync(file(slug, "plan"));
+			return SLUG_RE.test(slug) && existsSync(file(slug));
 		},
 
 		loadPlan(slug) {
 			if (!SLUG_RE.test(slug)) return null;
-			return read<Plan>(file(slug, "plan"), "plan");
+			return read<Plan>(file(slug));
 		},
 
 		savePlan(plan) {
 			const errors = validatePlan(plan);
 			if (errors.length > 0) throw new InvalidStateError("plan", errors);
-			write(file(plan.slug, "plan"), plan);
-		},
-
-		loadRun(slug) {
-			if (!SLUG_RE.test(slug)) return null;
-			return read<Run>(file(slug, "run"), "run");
-		},
-
-		saveRun(run) {
-			// Checked against the plan on disk, not one the caller passes in: a run
-			// is only meaningful next to the agreement it ran against, and looking
-			// it up here is what makes "a run naming deliverables the plan does not
-			// have" unwritable rather than merely discouraged.
-			const plan = this.loadPlan(run.slug);
-			if (!plan)
-				throw new StoreError(
-					`no plan \`${run.slug}\` to record a run against — save the plan first`,
-				);
-			const errors = validateRun(plan, run);
-			if (errors.length > 0) throw new InvalidStateError("run", errors);
-			write(file(run.slug, "run"), run);
+			write(file(plan.slug), plan);
 		},
 
 		remove(slug) {

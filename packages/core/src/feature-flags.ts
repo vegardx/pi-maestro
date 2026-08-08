@@ -78,5 +78,7 @@ export interface FlagChecker {
 }
 
 export function createFlagChecker(name: string): FlagChecker {
-	return { enabled: (flag) => isFlagEnabled(name, flag) };
+	return {
+		enabled: (flag) => isFlagEnabled(name, flag),
+	};
 }

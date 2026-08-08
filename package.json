@@ -13,6 +13,7 @@
 	],
 	"pi": {
 		"extensions": [
+			"packages/ask/src/rpiv-extension.ts",
 			"packages/ask/src/index.ts",
 			"packages/prompt-assist/src/index.ts",
 			"packages/settings/src/extension.ts",
@@ -32,7 +33,7 @@
 		"test": "vitest run",
 		"test:watch": "vitest watch",
 		"test:e2e": "vitest run --config vitest.e2e.config.ts",
-		"e2e:live": "jiti test/e2e/maestro/live.ts",
+		"test:e2e:workflow": "vitest run --config vitest.e2e.config.ts test/e2e/maestro/workflow-drive.e2e.test.ts",
 		"smoke": "node scripts/smoke.mjs",
 		"prepare": "husky"
 	},
@@ -45,12 +46,19 @@
 		"@sinclair/typebox": "^0.34.52",
 		"@types/node": "^24.13.3",
 		"husky": "^9.1.7",
-		"jiti": "^2.7.0",
 		"semantic-release": "^25.0.7",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.10"
 	},
 	"engines": {
 		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@agwab/pi-subagent": "0.4.8",
+		"@agwab/pi-workflow": "0.11.0",
+		"@juicesharp/rpiv-ask-user-question": "2.4.0",
+		"@juicesharp/rpiv-i18n": "2.4.0",
+		"jiti": "^2.7.0",
+		"pi-web-access": "0.18.0"
 	}
 }

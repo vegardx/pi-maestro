@@ -24,6 +24,10 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_PACKAGES = [
 	"ask",
+	{
+		name: "ask-user-question",
+		entry: "packages/ask/src/rpiv-extension.ts",
+	},
 	"prompt-assist",
 	"smart-compact",
 	"research-tools",

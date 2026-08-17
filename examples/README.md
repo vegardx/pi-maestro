@@ -11,11 +11,6 @@ npm run smoke
 pi -e .
 ```
 
-The root manifest loads:
-
-- `packages/ask/src/index.ts`
-- `packages/prompt-assist/src/index.ts`
-- `packages/settings/src/extension.ts`
-- `packages/commit/src/index.ts`
-- `packages/smart-compact/src/index.ts`
-- `packages/maestro/src/extension.ts`
+The root manifest loads thin adapters for the public ask, subagent, workflow,
+and web packages, plus the local prompt-assist, settings, smart-compact, and
+maestro extensions. The exact paths live in the root `package.json` Pi manifest.

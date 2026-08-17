@@ -23,18 +23,16 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXTENSION_PACKAGES = [
-	"ask",
 	{
 		name: "ask-user-question",
-		entry: "packages/ask/src/rpiv-extension.ts",
+		entry: "packages/maestro/src/rpiv-ask-extension.ts",
 	},
+	{ name: "subagent", entry: "packages/maestro/src/subagent-extension.ts" },
+	{ name: "workflow", entry: "packages/maestro/src/workflow-extension.ts" },
+	{ name: "web-access", entry: "packages/maestro/src/web-access-extension.ts" },
 	"prompt-assist",
 	"smart-compact",
-	"research-tools",
 	{ name: "settings", entry: "packages/settings/src/extension.ts" },
-	// The orchestrator. Its entry is `extension.ts` rather than `index.ts`
-	// because one process runs either a maestro or an agent and the file decides
-	// which from its depth — there is no index barrel to import by accident.
 	{ name: "maestro", entry: "packages/maestro/src/extension.ts" },
 ];
 

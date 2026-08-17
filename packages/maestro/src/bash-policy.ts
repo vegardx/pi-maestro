@@ -223,14 +223,9 @@ const PRIVILEGED = new Set([
  * A CLOSED set, and typed rather than `string`, because this is the one
  * refusal that names its tool dynamically — `Use the ${suggestedTool} tool` —
  * and a phantom here is invisible to any guard that reads the source for
- * literal names. Two phantoms lived in that blind spot: `delete`, which went
- * with `packages/modes`, and `webfetch`, which pi has never defined. A worker
- * running `rm -rf dist` was denied and told to use a tool nobody had, with a
- * test pinning that exact string as correct.
- *
- * Both are real again — `delete` recovered into `delete-tool.ts`, `webfetch`
- * from `packages/research-tools`, which every agent now loads — so the
- * redirects work as intended rather than being dead ends.
+ * literal names. `delete` once lived in that blind spot: a refused removal
+ * named a tool nobody held. Public `pi-web-access` now owns URL retrieval as
+ * `fetch_content`, while `delete-tool.ts` owns recoverable removal.
  *
  * `test/refusals-name-real-tools.test.ts` asserts this set against what
  * agents really hold. Adding a member that nothing implements fails there.
@@ -240,7 +235,7 @@ export const SUGGESTABLE_TOOLS = [
 	"grep",
 	"find",
 	"ls",
-	"webfetch",
+	"fetch_content",
 	"delete",
 ] as const;
 export type SuggestableTool = (typeof SUGGESTABLE_TOOLS)[number];
@@ -266,7 +261,7 @@ export function dedicatedToolSuggestion(
 		(command.executable === "curl" || command.executable === "wget") &&
 		isReadOnlyHttp(command.args)
 	)
-		return "webfetch";
+		return "fetch_content";
 	if (command.executable === "ls" && noFlags(command.args)) return "ls";
 	// Deletion redirects to the delete tool (always-trash, recoverable) — with
 	// or without flags, so `rm -rf dist` is caught too. `shred` is left alone:

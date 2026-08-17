@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { setSettingsLayer } from "@vegardx/pi-core";
 import { afterEach, describe, expect, it } from "vitest";
-import rpivAskExtension from "../packages/ask/src/rpiv-extension.js";
+import rpivAskExtension from "../packages/maestro/src/rpiv-ask-extension.js";
 
 function host() {
 	const tools: string[] = [];

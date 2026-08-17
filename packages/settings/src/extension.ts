@@ -1,9 +1,6 @@
 // Settings extension — registers /maestro command and settings.v1 capability.
 
-import {
-	type ExtensionContext,
-	getAgentDir,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SettingDeclaration } from "@vegardx/pi-contracts";
 import {
 	CAPABILITIES,
@@ -25,9 +22,6 @@ export default defineExtension(
 	},
 	(pi, maestro) => {
 		let registered: DomainRegistryInput = {};
-		// The personas.v1 roster is resolved lazily at menu time — the
-		// subagents extension registers it after boot, and persona pickers
-		// degrade to free text (with a warning) when it is absent.
 		const domainRegistry: DomainRegistryInput = {
 			get kinds() {
 				return registered.kinds;
@@ -35,7 +29,7 @@ export default defineExtension(
 			get runtime() {
 				return registered.runtime;
 			},
-			personas: () => maestro.capabilities.get(CAPABILITIES.personas)?.list(),
+			personas: () => undefined,
 		};
 		// Provide settings.v1 capability for extensions to declare settings
 		maestro.capabilities.register(CAPABILITIES.settings, {
@@ -62,22 +56,11 @@ export default defineExtension(
 
 		pi.registerCommand("maestro", {
 			description:
-				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, region, setup, doctor.",
+				"Open Maestro configuration. Subcommands: show, get, set, reset, explain, validate, region.",
 			handler: async (args, ctx) => {
 				try {
 					const trimmed = args.trim();
-					if (trimmed === "setup" || trimmed === "doctor") {
-						const { handleMaestroPackageCommand } = await import(
-							"../../maestro/src/package-command.js"
-						);
-						const asker = maestro.capabilities.get(CAPABILITIES.ask);
-						await handleMaestroPackageCommand(trimmed, {
-							cwd: ctx.cwd,
-							agentDir: getAgentDir(),
-							...(asker ? { asker } : {}),
-							notify: (message, level) => ctx.ui.notify(message, level),
-						});
-					} else if (!trimmed || trimmed === "show" || trimmed === "region") {
+					if (!trimmed || trimmed === "show" || trimmed === "region") {
 						await showConfigMenu(ctx, domainRegistry);
 					} else if (trimmed.startsWith("region ")) {
 						setRegionActive(ctx, trimmed.slice("region ".length).trim());

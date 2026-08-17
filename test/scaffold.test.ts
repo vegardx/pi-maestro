@@ -4,22 +4,8 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dirname, "..");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
-const LIBRARIES = [
-	"contracts",
-	"core",
-	"settings",
-	"models",
-	"ui",
-	"git",
-	"github",
-];
-const EXTENSIONS = [
-	"ask",
-	"prompt-assist",
-	"smart-compact",
-	"research-tools",
-	"maestro",
-];
+const LIBRARIES = ["contracts", "core", "settings", "models", "git", "github"];
+const EXTENSIONS = ["prompt-assist", "smart-compact", "maestro"];
 
 describe("scaffold", () => {
 	it("ships every v1 package", () => {
@@ -45,16 +31,14 @@ describe("scaffold", () => {
 	it("wires exactly the extension packages into the pi manifest", () => {
 		const entries = [...pkg.pi.extensions].sort();
 		const want = [
-			"packages/ask/src/rpiv-extension.ts",
-			// maestro's entry is `extension.ts`: one process runs either a
-			// maestro or an agent and the file decides which from its depth, so
-			// there is no index barrel to import by accident.
-			...EXTENSIONS.map((n) =>
-				n === "maestro"
-					? "packages/maestro/src/extension.ts"
-					: `packages/${n}/src/index.ts`,
-			),
+			"packages/maestro/src/extension.ts",
+			"packages/maestro/src/rpiv-ask-extension.ts",
+			"packages/maestro/src/subagent-extension.ts",
+			"packages/maestro/src/web-access-extension.ts",
+			"packages/maestro/src/workflow-extension.ts",
+			"packages/prompt-assist/src/index.ts",
 			"packages/settings/src/extension.ts",
+			"packages/smart-compact/src/index.ts",
 		].sort();
 		expect(entries).toEqual(want);
 	});

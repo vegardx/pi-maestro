@@ -48,7 +48,14 @@ describe("plan publisher", () => {
 		await expect(
 			publishPlan({
 				plan,
-				repositories: [{ key: "api", path: "/repos/api" }],
+				repositories: [
+					{
+						key: "api",
+						path: "/repos/api",
+						branch: "feat/api",
+						baseBranch: "main",
+					},
+				],
 				operations: ops,
 			}),
 		).resolves.toEqual([
@@ -71,7 +78,14 @@ describe("plan publisher", () => {
 		await expect(
 			publishPlan({
 				plan,
-				repositories: [{ key: "api", path: "/repos/api" }],
+				repositories: [
+					{
+						key: "api",
+						path: "/repos/api",
+						branch: "main",
+						baseBranch: "main",
+					},
+				],
 				operations: onDefault,
 			}),
 		).rejects.toThrow(/default branch/);
@@ -81,7 +95,14 @@ describe("plan publisher", () => {
 		await expect(
 			publishPlan({
 				plan,
-				repositories: [{ key: "api", path: "/repos/api" }],
+				repositories: [
+					{
+						key: "api",
+						path: "/repos/api",
+						branch: "feat/api",
+						baseBranch: "main",
+					},
+				],
 				operations: dirty,
 			}),
 		).rejects.toThrow(/not clean/);

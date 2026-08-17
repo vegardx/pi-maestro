@@ -54,6 +54,8 @@ export async function publishPlan(input: {
 	readonly repositories: readonly {
 		readonly key: string;
 		readonly path: string;
+		readonly branch: string;
+		readonly baseBranch: string;
 	}[];
 	readonly operations?: PublisherOperations;
 }): Promise<readonly PublishedRepository[]> {
@@ -65,6 +67,10 @@ export async function publishPlan(input: {
 		if (!branch || !base)
 			throw new Error(
 				`${repository.key}: branch or default branch is unavailable`,
+			);
+		if (branch !== repository.branch || base !== repository.baseBranch)
+			throw new Error(
+				`${repository.key}: checked-out branch changed after workflow completion`,
 			);
 		if (branch === base)
 			throw new Error(

@@ -37,9 +37,7 @@ const deliverable = (
 const plan = (over: Partial<Plan> = {}): Plan => ({
 	slug: "arc",
 	title: "Arc",
-	preflight: [],
 	deliverables: [],
-	postflight: [],
 	repos: [{ key: "main", path: "/repo" }],
 	...over,
 });
@@ -164,19 +162,6 @@ describe("everything wrong is reported, not just the first thing", () => {
 				expect.stringContaining("unknown repo"),
 				expect.stringContaining("no such deliverable"),
 			]),
-		);
-	});
-
-	it("checks plan-level preflight and postflight too", () => {
-		const errors = validatePlan(
-			plan({
-				preflight: [task("p"), task("p")],
-				postflight: [{ id: "q", title: "" }],
-			}),
-		);
-		expect(errors).toContainEqual(expect.stringContaining("duplicate task id"));
-		expect(errors).toContainEqual(
-			expect.stringContaining("postflight.tasks[0]"),
 		);
 	});
 });

@@ -25,8 +25,6 @@ function plan(slug = "app"): Plan {
 	return {
 		slug,
 		title: "App",
-		preflight: [],
-		postflight: [],
 		repos: [{ key: "app", path: "." }],
 		deliverables: [
 			{

@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "skill": "skill-authoring",
+  "invocation_mode": "user-only",
+  "policy_checks": [
+    {
+      "id": "claude-automatic-invocation-disabled",
+      "validator": "frontmatter",
+      "path": "../SKILL.md",
+      "field": "disable-model-invocation",
+      "equals": true
+    },
+    {
+      "id": "codex-automatic-invocation-disabled",
+      "validator": "yaml",
+      "path": "../agents/openai.yaml",
+      "field": "policy.allow_implicit_invocation",
+      "equals": false
+    }
+  ],
+  "cases": [
+    {
+      "id": "positive-create-001",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Create an Agent Skill that teaches our coding assistant the team's PostgreSQL migration conventions.",
+      "expected_outcomes": [
+        "Classifies the operator context, purpose, invocation mode, and execution type before drafting",
+        "Treats team conventions as a preference skill",
+        "Names the preference owner or source of truth",
+        "Includes an evaluation plan"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-description-002",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring This SKILL.md description just says 'Helps with frontend work.' Rewrite it so the agent knows when to load it.",
+      "expected_outcomes": [
+        "Uses concrete task verbs, artifacts, or tools",
+        "Adds plausible negative boundaries",
+        "Keeps the description concise"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-review-003",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Review this agent skill and remove instructions that don't change model behavior, like 'write high-quality code.'",
+      "expected_outcomes": [
+        "Identifies no-op guidance",
+        "Preserves domain-specific behavioral constraints",
+        "Recommends regression checks for substantive changes"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-evals-004",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Give me an eval suite for our Terraform skill, including prompts where it must not trigger.",
+      "expected_outcomes": [
+        "Includes positive and neighboring negative routing cases",
+        "Separates routing from outcome evaluation",
+        "Includes repeated isolated and ablation runs"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-overtrigger-005",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Our React skill loads for every Angular ticket. How should I tighten it without missing short React requests?",
+      "expected_outcomes": [
+        "Treats the description as routing logic",
+        "Proposes both false-positive and false-negative cases",
+        "Avoids solving the issue only with a long exception list"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-retire-006",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring A newer model seems to know this API now. Can we delete the skill?",
+      "expected_outcomes": [
+        "Requires enabled versus disabled ablation",
+        "Checks repeated trials across relevant harnesses",
+        "Keeps evals after retirement"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-layering-007",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring My cloud deployment SKILL.md is 760 lines and mixes AWS, Azure, and GCP instructions. Help restructure it.",
+      "expected_outcomes": [
+        "Keeps the common contract, constraints, and resource map in SKILL.md",
+        "Moves provider-specific branches into directly and conditionally linked references",
+        "Avoids hiding universal safety constraints or duplicating instructions across layers",
+        "Keeps resource discovery one hop from SKILL.md"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-artifact-008",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring I wrote a skill with twelve exact release steps that never vary. Is a skill the right artifact?",
+      "expected_outcomes": [
+        "Recommends a script for deterministic mechanics",
+        "Keeps only judgment, constraints, or invocation guidance in a skill if needed"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-ambiguous-009",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Can you make our agent's skill stop firing on unrelated requests?",
+      "expected_outcomes": [
+        "Investigates description triggers and negative cases",
+        "Requests or inspects representative false-positive prompts"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-preference-010",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Design a durable skill for our internal code review conventions and explain how its eval differs from a temporary API-knowledge skill.",
+      "expected_outcomes": [
+        "Classifies internal conventions as a durable preference",
+        "Classifies missing API knowledge as a temporary capability",
+        "Evaluates preference compliance and capability ablation separately",
+        "Defines different maintenance and retirement criteria"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-structure-011",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Propose the directory structure for a skill that has shared deployment policy, provider-specific guidance, a deterministic validator, and a manifest template.",
+      "expected_outcomes": [
+        "Places the shared contract and resource map in SKILL.md",
+        "Places provider guidance in references",
+        "Places deterministic validation in scripts and the static template in assets",
+        "Does not create unused placeholder directories"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-resource-map-012",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Review this SKILL.md: it ends with 'see the references folder for more information' and its security rule exists only in references/common.md.",
+      "expected_outcomes": [
+        "Requires direct conditional links that explain when each reference applies",
+        "Moves the universally required security constraint into SKILL.md",
+        "Avoids deep or generic resource discovery"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-split-013",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Should AWS and GCP be references in one deployment skill or separate skills? Give me a decision rule.",
+      "expected_outcomes": [
+        "Keeps branches as references when they support one shared outcome and contract",
+        "Splits skills when branches have independent triggers, contracts, or behavior",
+        "Considers loading cost and divergence rather than file size alone"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-main-file-014",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring What belongs in SKILL.md versus references, scripts, assets, and evals?",
+      "expected_outcomes": [
+        "Defines SKILL.md as the compact contract, decisions, constraints, resource map, and validation guidance",
+        "Distinguishes selective knowledge, deterministic mechanics, static inputs, and behavior cases",
+        "Keeps critical universal guidance out of optional resources"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-operator-context-015",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Compare how I should design a refund skill for a customer-facing agent versus a pull-request skill for a coding agent I operate.",
+      "expected_outcomes": [
+        "Classifies the refund case as an agent we build whose customer does not know the skill catalog",
+        "Prioritizes model routing and realistic shallow prompts for the refund skill",
+        "Recognizes explicit user invocation as practical for the operator-facing pull-request workflow",
+        "Does not confuse operator context with capability versus preference"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-mixed-016",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Our skill teaches a brand-new vendor API and our company's naming rules. Is that capability or preference guidance, and should it stay together?",
+      "expected_outcomes": [
+        "Classifies new API knowledge as capability guidance and naming rules as preference guidance",
+        "Requires separate eval criteria and retirement lifecycles",
+        "Splits them when owners, triggers, or lifecycles diverge",
+        "Prevents capability retirement from deleting durable policy accidentally"
+      ],
+      "invocation": "explicit"
+    },
+    {
+      "id": "positive-user-invoked-category-017",
+      "category": "explicit-invocation",
+      "prompt": "/skill-authoring Classify a named documentation-staging workflow that engineers deliberately run and that mostly calls one deterministic command.",
+      "expected_outcomes": [
+        "Classifies it in the agents-we-use context",
+        "Prefers user-invoked-only selection for the deliberate workflow",
+        "Moves invariant mechanics into a script",
+        "Keeps only judgment, inputs, constraints, and result interpretation in a skill if those are needed"
+      ],
+      "invocation": "explicit"
+    }
+  ]
+}

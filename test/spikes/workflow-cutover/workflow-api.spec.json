@@ -1,0 +1,121 @@
+{
+	"schemaVersion": 1,
+	"name": "workflow-api-spike",
+	"description": "Executable W0 probe for pi-workflow's public programmatic surface.",
+	"defaults": {
+		"agent": "workflow-api-scout",
+		"readOnly": true,
+		"tools": [
+			"read"
+		]
+	},
+	"executionProfiles": {
+		"three-model-review": {
+			"implement": {
+				"model": "probe/implementer"
+			},
+			"reviewers-opus": {
+				"model": "probe/opus"
+			},
+			"reviewers-fable": {
+				"model": "probe/fable"
+			},
+			"reviewers-grok": {
+				"model": "probe/grok"
+			},
+			"implement-decisions": {
+				"model": "probe/decider"
+			}
+		}
+	},
+	"artifactGraph": {
+		"stages": [
+			{
+				"id": "implement",
+				"type": "single",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"prompt": "WORKFLOW_API_IMPLEMENT: produce two independent review items."
+			},
+			{
+				"id": "reviewers-opus",
+				"type": "foreach",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"from": {
+					"source": "implement",
+					"path": "$.items"
+				},
+				"each": {
+					"prompt": "WORKFLOW_API_REVIEW: review ${item} with the same declared lens cohort."
+				}
+			},
+			{
+				"id": "reviewers-fable",
+				"type": "foreach",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"from": {
+					"source": "implement",
+					"path": "$.items"
+				},
+				"each": {
+					"prompt": "WORKFLOW_API_REVIEW: review ${item} with the same declared lens cohort."
+				}
+			},
+			{
+				"id": "reviewers-grok",
+				"type": "foreach",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"from": {
+					"source": "implement",
+					"path": "$.items"
+				},
+				"each": {
+					"prompt": "WORKFLOW_API_REVIEW: review ${item} with the same declared lens cohort."
+				}
+			},
+			{
+				"id": "normalize-findings",
+				"from": [
+					"reviewers-opus",
+					"reviewers-fable",
+					"reviewers-grok"
+				],
+				"support": {
+					"uses": "./workflow-api-helper.mjs",
+					"options": {
+						"mode": "normalize"
+					}
+				}
+			},
+			{
+				"id": "implement-decisions",
+				"type": "single",
+				"from": "normalize-findings",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"prompt": "WORKFLOW_API_DECIDE: record a decision for every normalized finding."
+			},
+			{
+				"id": "decision-coverage",
+				"from": [
+					"normalize-findings",
+					"implement-decisions"
+				],
+				"support": {
+					"uses": "./workflow-api-helper.mjs",
+					"options": {
+						"mode": "gate"
+					}
+				}
+			}
+		]
+	}
+}

@@ -230,7 +230,9 @@ function configFor(profile: WriteProfile): SandboxRuntimeConfig {
 			allowLocalBinding: false,
 		},
 		filesystem: {
-			denyRead: secretDenyRead(),
+			denyRead: [
+				...new Set([...secretDenyRead(), ...(profile.denyRead ?? [])]),
+			].sort(),
 			allowWrite: [...profile.allowWrite],
 			denyWrite: [...profile.denyWrite],
 			allowGitConfig: false,
@@ -270,6 +272,7 @@ export const defaultSandboxWrap: SandboxWrap = async (
 ) => {
 	if (!SandboxManager.isSupportedPlatform(platformName())) return command;
 	const key = JSON.stringify({
+		read: [...(profile.denyRead ?? [])].sort(),
 		allow: [...profile.allowWrite].sort(),
 		deny: [...profile.denyWrite].sort(),
 	});

@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "required": ["decisions"],
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["findingId", "decision", "reasoning"],
+        "properties": {
+          "findingId": { "type": "string" },
+          "decision": { "type": "string", "enum": ["changed", "no_change"] },
+          "reasoning": { "type": "string" },
+          "changedPaths": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["repository", "path"],
+              "properties": {
+                "repository": { "type": "string" },
+                "path": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

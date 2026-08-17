@@ -1,0 +1,21 @@
+{
+	"schemaVersion": 1,
+	"name": "supervisor-composition-probe",
+	"description": "One flat model task for the real-process supervisor composition probe.",
+	"defaults": {
+		"readOnly": true,
+		"tools": []
+	},
+	"artifactGraph": {
+		"stages": [
+			{
+				"id": "only-task",
+				"type": "single",
+				"inputPolicy": {
+					"artifactAccess": "none"
+				},
+				"prompt": "SUPERVISOR_COMPOSITION_PROBE: return the fixed probe control envelope."
+			}
+		]
+	}
+}

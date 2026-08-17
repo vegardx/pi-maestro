@@ -33,7 +33,7 @@ function configValue(repoPath: string, key: string): string | undefined {
  * hands to agents.
  * Checking only `git config` made the check disagree with its own remedy: an
  * outer harness that had already supplied the identity as env was told none
- * was configured. A live drive died on exactly that — the e2e driver runs the
+ * was configured. A manual run died on exactly that — the external driver runs the
  * maestro with an isolated HOME, so `~/.gitconfig` and any `includeIf` are
  * invisible, and every worker refused to spawn.
  *

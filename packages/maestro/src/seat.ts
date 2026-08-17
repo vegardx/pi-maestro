@@ -260,7 +260,7 @@ export function createSeat(options: SeatOptions): Seat {
 	): ExecutorDeps {
 		// No git identity is resolved here, and none is handed to a worker.
 		//
-		// It used to be: a live drive watched a worker with no identity reach for
+		// It used to be: a manual run watched a worker with no identity reach for
 		// `git config user.email`, and a linked worktree shares the repository's
 		// config file, so that one command rewrote the identity for the whole
 		// checkout. The fix was to resolve identity in the seat and pass it as

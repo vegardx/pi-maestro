@@ -67,5 +67,8 @@ npm install
 npm run check   # biome + tsc + feature-flags + tests + smoke + docs
 ```
 
+The repository has no end-to-end or live acceptance suite while the execution
+model and its testing claims are reassessed.
+
 `make dogfood` runs pi-maestro isolated from your normal pi config;
 `make dogfood-sandbox` points it at a sandbox repo. `make help` lists the rest.

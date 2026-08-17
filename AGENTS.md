@@ -15,32 +15,13 @@ a read-only agent. `packages/maestro/src/extension.ts` reads that once, at load.
   check → vitest → smoke. Run it before calling a change done.
 - `npm test` — unit tests only (fast). `npm run lint:fix` — autoformat.
 
-## Testing tiers
+## Testing
 
-Pick the lowest tier that can catch the bug you care about — but read the
-warning under tier 3 before deciding you are finished.
-
-1. **Unit** (`npm test`) — pure logic, no I/O.
-2. **Hermetic e2e** (`npm run test:e2e`) — `test/e2e/maestro/drive.e2e.test.ts`
-   boots a real pi seat, real worktrees, real sockets and real detached
-   processes, against a scripted mock model
-   (`test/e2e/maestro/scripted-model.ts`). Deterministic, seconds.
-3. **Live drive** (`npm run e2e:live`) — `test/e2e/maestro/live.ts`: real
-   models, real commits, a local bare remote, a disposable repo under
-   `~/src/github.com/`. Flags: `--prod-models`, `--keep`, `--recover` (SIGKILLs
-   the maestro mid-flight and starts a new one over the same store).
-
-**Tiers 1 and 2 cannot see the seam between processes.** Four bugs in one day
-were found only by tier 3, and each had a full green suite over it: a shell
-gate that refused every commit because the tool it named was never declared; an
-identity carried as environment that silently overrode the developer's
-path-scoped git config; a restarted maestro that wedged a plan while narrating
-nothing; children inheriting env vars that were omitted expecting absence.
-
-So: **run the live drive before calling done anything that touches the shell
-gate, the spawn path, git identity, or shipping.** No CI job will do it for you
-— e2e cannot run on GitHub today, which is why the workflow was deleted rather
-than left green over the wrong package.
+`npm test` contains the current unit, component, and integration coverage. The
+repository intentionally has no end-to-end or live acceptance suite while its
+execution model and testing claims are reassessed. Do not present the regular
+test suite as evidence for real-model behavior, cross-process configuration,
+Git identity, or shipping.
 
 ## Conventions
 

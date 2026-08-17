@@ -2,7 +2,7 @@
 
 _Review of the 15-PR architectural cutover. Method: a green integration build
 plus an 11-dimension multi-agent correctness review (23 findings raised → 19
-confirmed by adversarial verification, 4 refuted) plus a hand-built end-to-end
+confirmed by adversarial verification, 4 refuted) plus a hand-built integration
 harness. **Corrected after author clarification of the intended design** — see
 "The intended model" below; two originally-CRITICAL findings were reframed._
 

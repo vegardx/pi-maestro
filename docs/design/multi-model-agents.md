@@ -360,5 +360,3 @@ Ordered so foundational primitives land first and the largest, node-touching wor
   deliverable, commissioning read-only explorers) and `review-lead.md` (owns a
   review effort, commissioning read-only reviewers) — both workers, so both stay
   the single author of their worktree and never spawn writers.
-- The ensemble e2e: `test/e2e/driver/seed-plan.ts` (`seedEnsemblePlan`),
-  `assertions.ts` (`assertEnsemble`) — the concrete shape and its invariant.

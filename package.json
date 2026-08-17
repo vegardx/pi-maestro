@@ -33,8 +33,6 @@
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest watch",
-		"test:e2e": "vitest run --config vitest.e2e.config.ts",
-		"e2e:live": "jiti test/e2e/maestro/live.ts",
 		"smoke": "node scripts/smoke.mjs",
 		"prepare": "husky"
 	},

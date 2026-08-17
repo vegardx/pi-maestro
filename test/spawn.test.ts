@@ -68,7 +68,7 @@ describe("the worker command is the contract with pi", () => {
 		// The pi THIS process runs, not the bare name `pi`: that resolves through
 		// PATH to a shim symlinked at `../dist/cli.js`, which a child started
 		// from a worktree resolves relative to the wrong directory — it dies with
-		// MODULE_NOT_FOUND before it can dial home. A live drive found this.
+		// MODULE_NOT_FOUND before it can dial home. A manual run found this.
 		expect(argv.slice(0, 2)).toEqual([process.execPath, process.argv[1]]);
 		// `-ne` next: a globally installed extension can shadow a tool name, and
 		// then the agent calls something nobody here wrote.

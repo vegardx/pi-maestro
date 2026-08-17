@@ -400,7 +400,7 @@ describe("maestro collects, ships, records, and only then releases", () => {
 		await h.channel.vanishes("worker-api");
 		// A socket closes the instant a process starts dying; its stderr and exit
 		// status arrive with the exit that follows. Reading at socket-close got an
-		// empty buffer and reported a death with no cause, which a live drive then
+		// empty buffer and reported a death with no cause, which a manual run then
 		// made us diagnose by hand. So nothing is recorded until the process is
 		// actually reaped — which the harness now models rather than pretending
 		// every worker exits the moment it starts.
@@ -623,7 +623,7 @@ describe("stopping a run", () => {
 });
 
 describe("taking over a run its maestro did not survive", () => {
-	// A live drive found this: the maestro was SIGKILLed with a worker in
+	// A manual run found this: the maestro was SIGKILLed with a worker in
 	// flight, a new one was started over the same store, and `/run` launched
 	// nothing and SAID nothing. A `running` record sits in `startedIds`
 	// forever, so the deliverable is never picked up again and the plan can

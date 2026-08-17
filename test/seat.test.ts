@@ -3,7 +3,7 @@
 // The last case here is the whole system in one test — a stored plan, a real
 // socket, real worktrees, and real detached processes that speak the wire with
 // nothing but `node:net`. It is the first thing in this rebuild that runs a
-// plan end to end, and the only thing missing from a live drive is a model.
+// plan through its component boundaries without claiming real-model acceptance.
 
 import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

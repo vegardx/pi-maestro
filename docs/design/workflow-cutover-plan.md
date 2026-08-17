@@ -1,7 +1,7 @@
 # Workflow cutover plan
 
-**Status:** Production command path and hermetic workflow drive implemented;
-real-provider live proof and legacy deletion remain.
+**Status:** Production command path, legacy deletion, and hermetic workflow
+drive implemented; real-provider live proof remains.
 
 This plan replaces pi-maestro's custom plan, worker, review, and question
 orchestration with an opinionated integration around:
@@ -859,8 +859,8 @@ Run:
 ```bash
 npm run check
 npm run test:e2e
-npm run e2e:live -- --prod-models
-npm run e2e:live -- --prod-models --recover
+# Live-provider workflow commands are intentionally absent until the
+# installed-extension drive is implemented.
 ```
 
 The live suite must cover:

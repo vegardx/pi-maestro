@@ -19,8 +19,8 @@ import {
 	writeSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { currentDepth } from "../depth.js";
 import type { Plan } from "../plan.js";
-import { currentDepth } from "../spawn.js";
 import type {
 	WorkflowPhaseCheckpointInput,
 	WorkflowPhaseCheckpointResult,

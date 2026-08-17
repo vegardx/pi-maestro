@@ -8,9 +8,6 @@
 // and are the safeguards on — and the names are just the three coherent
 // combinations of those facts. Delegation is derived. Nothing is stored twice.
 
-import type { AgentKind } from "./agent.js";
-import { isWriter } from "./agent.js";
-
 /** May this session change the tree it is sitting in? */
 export type CwdAccess = "read" | "write";
 
@@ -61,38 +58,4 @@ export function modeOf(cwd: CwdAccess, safeguards: Safeguards): Mode | null {
 
 export function modes(): readonly Mode[] {
 	return MODES;
-}
-
-/**
- * Why this mode may not produce that kind of agent, or `null` if it may.
- *
- * DERIVED, not configured. A session that cannot write cannot produce something
- * that writes on its behalf — otherwise "plan mode" means "cannot edit, but can
- * ask someone else to", which is not a restriction at all. Read-only agents stay
- * available, because researching while planning is the point of planning.
- */
-export function mayProduce(current: Mode, kind: AgentKind): string | null {
-	if (isWriter(kind) && current.cwd === "read")
-		return `${current.name} mode cannot write, so it cannot produce a ${kind} that writes on its behalf`;
-	return null;
-}
-
-/**
- * The mode a spawned agent runs under.
- *
- * SAFEGUARDS NEVER PROPAGATE. Relaxing them is something the human does to
- * their own session for one command they are watching; handing that to an
- * unattended agent is a different thing entirely, and the evidence is concrete:
- * a linked worktree SHARES the repository's config file, so an agent running
- * `git config user.email` inside one rewrites it for every worktree and for the
- * user. That has happened here twice, and both times a human was watching.
- *
- * Write access does propagate — a worker cannot do its job without it — so
- * `hack` and `auto` produce identically configured children. That is the whole
- * intent: hack is a property of the seat, not of the run.
- */
-export function modeForChild(current: Mode, kind: AgentKind): Mode {
-	const refusal = mayProduce(current, kind);
-	if (refusal !== null) throw new Error(refusal);
-	return isWriter(kind) ? mode("auto") : mode("plan");
 }

@@ -116,15 +116,7 @@ for (const [name, where] of [...claimed].sort()) {
 // `subagent` all ceased to exist — it only checks that each name APPEARS in the
 // docs, never that the name is real. Deriving it from `ToolRegistry` would fix
 // that; until then, this list has to be updated by hand when the surface moves.
-const TOOLS = [
-	"plan",
-	"flight",
-	"respond",
-	"bash",
-	"subagent",
-	"commit",
-	"finish",
-];
+const TOOLS = ["plan", "respond", "bash", "commit", "delete"];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);
 	if (!re.test(corpusText)) {

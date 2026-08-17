@@ -19,9 +19,7 @@ depth 0 seat
              `-- pi-workflow -> pi-subagent -> one decision task
 ```
 
-The checked-in socket worker executor remains temporarily behind the
-`maestro.workflowCutover` rollback flag. It is not the default execution path
-or the basis for the workflow acceptance drive.
+There is no custom worker socket, persona runtime, or alternate executor.
 
 ## Authority boundaries
 

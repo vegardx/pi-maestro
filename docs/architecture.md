@@ -1,112 +1,74 @@
 # Architecture
 
-One interactive Pi process is the depth-zero Maestro seat. The workflow-native
-path launches a dedicated sandboxed supervisor process; `pi-workflow` schedules
-flat tasks and `pi-subagent` launches their Pi model processes. Workflow agents
-do not dial a custom Maestro socket and do not recursively spawn agents.
+Pi-maestro is a composition package around public Pi extensions. One interactive
+Pi process is the seat; model work runs through `pi-workflow` and
+`pi-subagent` using the operator's normal Pi configuration and ambient skills.
 
 ```text
-depth 0 seat
-  modes · plan store · approval · repository prep · commits · ledger · shipping
+interactive seat
+  modes · plan store · approval · publish · footer
        |
-       +-- implementation supervisor  [approved worktrees writable]
-       |     `-- pi-workflow -> pi-subagent -> model tasks
-       |
-       +-- review supervisor          [approved worktrees read-only]
-       |     `-- pi-workflow -> pi-subagent -> model tasks
-       |
-       `-- decision supervisor        [approved worktrees writable]
-             `-- pi-workflow -> pi-subagent -> one decision task
+       `-- pi-workflow
+             ├─ implementer tasks  [edit + validate + local commit]
+             ├─ reviewer tasks     [read-only + advisory suggestions]
+             `─ fixer tasks        [edit + validate + follow-up commit]
+                  |
+                  `-- pi-subagent model processes
 ```
 
-There is no custom worker socket, persona runtime, or alternate executor.
+There is no custom worker socket, executor, child runtime, scheduler, question
+transport, or recovery layer.
 
-## Authority boundaries
+## Ownership
 
-The depth-zero seat owns all durable authority transitions:
-
-- show the compiled plan and persist one human approval;
-- resolve repository base branches and commits, then create linked worktrees;
-- create ordinary local commits after implementation and decision phases;
-- normalize review findings and retain contributor provenance privately;
-- validate exact finding decisions, changed paths, commit references, branches,
-  ancestry, clean trees, and final heads;
-- non-force push each branch and create or update its pull request.
-
-Model tasks can edit only during write phases. They receive no commit, push,
-GitHub, Maestro socket, or nested-subagent authority. Review tasks receive a
-read-only filesystem boundary. All descendants inherit a replacement
-environment with a private Pi home, approved provider credentials only, no
-publication credentials, and a sealed snapshot of `agent-toolkit`.
-
-The outer sandbox is an accidental-damage boundary: it prevents descendants
-from writing outside the coordinated run's approved worktrees/runtime/scratch.
-It is not intended to defeat a deliberately hostile process running under the
-same OS user.
-
-## Plans and workflow state
-
-The authored plan is repository-qualified intent: deliverables, ordered
-implementation tasks, `after` edges, `reads` edges, and review tasks expressed
-as `{lens, model, skill?}`. It contains no runtime task IDs, personas, commits,
-or pull-request state.
-
-Compilation creates three package-native workflow specs. Because
-`pi-workflow` 0.11 does not honor stage-specific cwd during compilation, every
-prompt names its approved worktree and the phase supervisor receives the exact
-coordinated repository set. Same-repository implementations are serialized;
-cross-repository `after` dependencies remain graph edges.
-
-Runtime state is intentionally split:
-
-```text
-<agentDir>/maestro/plans/          authored plans
-<agentDir>/maestro/workflow-state/ seat-private approvals, ledgers, checkpoints
-<agentDir>/maestro/workflow-runs/  per-run coordinated umbrellas
-  <run>/repos/                     linked worktrees
-  <run>/runtime/.pi/workflows/     pi-workflow durable state
-  <run>/scratch/workflow-supervisors/<phase>/
-                                   sealed per-phase Pi runtimes
-```
-
-The command-run identity, runner journal, package run records, repository
-registry, checkpoint journal, and shipping journal make `/run <slug>` the
-recovery operation. A changed plan cannot silently resume an approved digest;
-a failed pre-approval preview is released so a corrected plan starts fresh.
-
-## Review and decisions
-
-Reviewers report claim plus evidence. A deterministic normalizer strips unknown
-fields, validates repository/path evidence, deduplicates mechanically, and
-separates the public finding projection from private lens/model/task
-provenance. The decision task receives only `{id, claim, evidence}`.
-
-Completion requires exactly one decision per finding. `changed` decisions must
-name paths that the seat actually committed after the implementation
-checkpoint; `no_change` decisions require reasoning and no commit. The gate
-checks coverage and lineage, never whether the model made the "right" choice.
-
-## Packages
-
-| Package/module | Responsibility |
+| Concern | Owner |
 | --- | --- |
-| `@agwab/pi-workflow` | durable flat workflow scheduling and task records |
-| `@agwab/pi-subagent` | model-process launch and usage reporting |
-| `pi-web-access` | workflow web tools |
-| `@vegardx/agent-toolkit` | ambient review skills, installed separately |
-| `maestro/workflow/*` | approval, supervisor, phase composition, ledgers, checkpoints, shipping |
-| `ask` + rpiv adapter | deterministic seat approvals and model-facing planning questions |
-| `contracts`, `core`, `settings` | capability vocabulary, feature gates, `/maestro` configuration |
-| `git`, `github` | typed deterministic Git/GitHub operations |
+| Workflow scheduling, artifacts, status, resume | `@agwab/pi-workflow` |
+| Delegated model process lifecycle | `@agwab/pi-subagent` |
+| Model-authored human questions | `@juicesharp/rpiv-ask-user-question` |
+| Web tools | `pi-web-access` |
+| Plan vocabulary and compilation | pi-maestro |
+| Mode posture and guarded seat shell | pi-maestro |
+| Local commits | implementer/fixer workflow tasks |
+| Push and pull requests | interactive-seat `/publish` command |
+| Usage footer | pi-maestro |
 
-## The defect this remains organised against
+## Plans
 
-A capability must not be independently named in its grant, implementation,
-description, and verification. Declarations derive those views and reject
-drift at construction. Workflow manifests extend the same rule: approved specs,
-model/profile artifacts, repository roots, toolkit tree, environment digest,
-and writable/read-denied roots are bound once and re-verified inside the child
-before scheduling.
+The authored plan describes repositories, deliverables, `after` ordering,
+`reads` relationships, implementation tasks, and delegated review tasks. The
+compiler lowers it to one ordinary `pi-workflow` artifact graph:
 
-See [workflow-plans.md](workflow-plans.md), [usage.md](usage.md), and
-[commands.md](commands.md).
+- implementation stages follow deliverable and same-repository ordering;
+- review stages run after their implementation stage;
+- one fixer stage per reviewed deliverable reduces all review artifacts.
+
+The compiler does not create another scheduler or run journal.
+
+## Authority
+
+- Implementers and fixers may edit the named repository and create local
+  commits. Their prompts explicitly prohibit push and PR creation.
+- Reviewers inspect committed work and return evidence plus advisory
+  suggestions. Their stages are declared read-only.
+- `/publish` refuses the default branch, dirty worktrees, branches with no new
+  commits, and branches not based on the remote default branch.
+- The seat asks for confirmation immediately before workflow launch and
+  publication.
+
+## State
+
+```text
+<agentDir>/maestro/plans/<slug>/plan.json   authored intent
+<cwd>/.pi/maestro/workflows/               compiled workflow bundles
+<cwd>/.pi/workflows/                        pi-workflow-owned run state
+```
+
+Failed or interrupted work is inspected and resumed with pi-workflow's own
+commands. Pi-maestro stores no duplicate execution or recovery projection.
+
+## Extension loading
+
+The root Pi package manifest loads thin adapters for the public ask, subagent,
+workflow, and web packages, followed by pi-maestro's local extensions. Skills
+ship from the root `skills/` directory and use normal Pi ambient discovery.

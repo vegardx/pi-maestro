@@ -4,18 +4,16 @@
 
 | Command | What it does |
 | --- | --- |
-| `/mode [plan\|auto\|hack]` | Report or change posture; plan → auto previews, asks once, then launches |
-| `/run [slug]` | List plans, or run/recover a named plan while in auto mode |
-| `/maestro [subcommand]` | Open settings, reconcile package pins, or run diagnostics |
+| `/mode [plan\|auto\|hack]` | Report or change posture; plan → auto previews and runs the newest stored plan |
+| `/run [slug]` | List plans or compile and run one through `pi-workflow` |
+| `/publish <slug>` | Validate committed feature branches, push them, and create or update pull requests |
+| `/maestro [subcommand]` | Open or edit Maestro settings |
 
-`/run` is the workflow recovery operation as well as the launch operation.
-Durable phase journals, package run state, repository checkpoints, and
-shipping journals determine what resumes; completed phases and commits are not
-replayed.
+`/run` starts an ordinary `pi-workflow` run. Failed or interrupted workflow work
+is inspected and resumed through pi-workflow's own command surface; pi-maestro
+has no parallel recovery system.
 
 ## `/maestro` subcommands
-
-The settings extension owns the single `/maestro` command:
 
 ```text
 /maestro show
@@ -25,12 +23,7 @@ The settings extension owns the single `/maestro` command:
 /maestro explain <model-role>
 /maestro validate
 /maestro region
-/maestro setup
-/maestro doctor
 ```
-
-`setup` requires one human approval before changing global package settings.
-It does not install or execute packages. `doctor` performs read-only checks.
 
 ## Modes
 
@@ -40,31 +33,29 @@ It does not install or execute packages. `doctor` performs read-only checks.
 | `auto` | writable | on |
 | `hack` | writable | off |
 
-Workflow execution is the only execution path.
-
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
-  together. Delegated review tasks use `{lens, model, skill?}`; they do not use
-  personas.
+  together. Delegated reviews use `{lens, model, skill?}`.
 - `bash` is the seat's gated shell.
-- `commit` records explicitly named paths when the human drives direct work.
 - `delete` moves explicitly named paths to recoverable trash.
-- `respond` answers pending questions owned by the ask extension.
-Workflow model stages use Pi's normal file tools within their phase sandbox.
-They do not receive Maestro commit, push, pull-request, or nested-subagent
-authority. Review stages are read-only. The depth-zero seat performs Git
-checkpoints and shipping deterministically between phases.
+- `ask_user_question` comes from
+  `@juicesharp/rpiv-ask-user-question` for model-authored clarifications.
+- `subagent`, `workflow_*`, and web tools come from their public Pi packages.
 
-`ask_user_question` comes from `@juicesharp/rpiv-ask-user-question` and is the
-model-facing planning clarification tool. Maestro's internal ask capability is
-retained for deterministic setup and Plan → Auto approval gates; autonomous
-workflow model phases do not conduct a question-and-answer loop with the user.
+Pi-maestro does not implement a second subagent, workflow, question, or web
+stack.
+
+## Workflow authority
+
+- Implementer and fixer stages edit, validate, and create local commits.
+- Review stages inspect committed work and return findings with advisory
+  suggestions; they do not modify files.
+- No workflow stage pushes or creates pull requests.
+- `/publish` is the interactive-seat boundary for push and PR creation.
 
 ## State
 
-Authored plans remain under `<agentDir>/maestro/plans/<slug>/`. A workflow run
-gets its own coordinated umbrella containing linked worktrees, package runtime
-state, and sealed scratch runtimes. Seat-private approval, review provenance,
-decision, checkpoint, and shipping records live outside descendant-writable
-roots.
+Authored plans remain under `<agentDir>/maestro/plans/<slug>/`. Compiled workflow
+bundles are written under `<cwd>/.pi/maestro/workflows/`; pi-workflow owns run
+state under `<cwd>/.pi/workflows/`.

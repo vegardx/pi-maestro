@@ -135,16 +135,9 @@ everything is struck it yields a single seat fallback, not five copies of it.
 
 ## Inspect and edit
 
-```text
-/maestro                                    # interactive editor
-/maestro get models.rosters.default
-/maestro set --project models.rosters.default.heavy ["Anthropic/Opus 4.8"]
-/maestro set --project models.allowances.code-review {"tiers":["heavy"],"spread":3,"direct":"other-family"}
-/maestro reset --project models.region
-```
-
-Domain edits are JSON, validated before an atomic settings replacement. Global
-and project layers merge per key.
+Model settings live in Pi's normal global and project `settings.json` files.
+Global and project layers merge per key. Pi-maestro does not provide a separate
+settings command or editor.
 
 `models.presets` and `models.modelSets` were the v1 surface and are **rejected**,
 not silently accepted — they were validated and written long after the resolver

@@ -10,26 +10,16 @@
 // happened when it ran is a separate record, keyed by the same ids. They may
 // well be persisted in the same file; they are not the same type.
 
-/** A repo the plan works in. Plan preflight guarantees it exists. */
+/** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
 	readonly key: string;
-	/** Where it lives once preflight has run. */
 	readonly path: string;
-	/** Absent = it already exists. Present = preflight creates it this way. */
-	readonly create?: {
-		readonly remote?: string;
-		readonly private?: boolean;
-		readonly description?: string;
-	};
 }
 
 /**
  * What a deliverable id may look like.
  *
- * Narrow because the id is not just a label: it becomes a git branch and a
- * worktree directory, so an id that needs escaping is an id where two
- * deliverables can collide into one branch. Constraining it here means the
- * execution layer needs no escaping step at all.
+ * Narrow because it becomes a workflow stage identifier.
  */
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -78,15 +68,7 @@ export interface Deliverable {
 export interface Plan {
 	readonly slug: string;
 	readonly title: string;
-	/**
-	 * What maestro does before ANY deliverable starts — a barrier, not a DAG
-	 * root. "Every deliverable waits for this" is a global fact; expressed as
-	 * edges it would depend on the author remembering one per deliverable.
-	 */
-	readonly preflight: readonly Task[];
 	readonly deliverables: readonly Deliverable[];
-	/** What maestro does once every deliverable is terminal. */
-	readonly postflight: readonly Task[];
 	readonly repos: readonly PlanRepo[];
 }
 
@@ -121,7 +103,7 @@ export function validatePlan(plan: Plan): string[] {
 		else if (ids.has(d.id)) errors.push(`${where}: duplicate id`);
 		else if (!ID_RE.test(d.id))
 			errors.push(
-				`${where}: \`${d.id}\` cannot be an id — it becomes a branch name and a directory, so it must be lowercase letters, digits and hyphens`,
+				`${where}: \`${d.id}\` cannot be a workflow id — use lowercase letters, digits and hyphens`,
 			);
 		ids.add(d.id);
 
@@ -161,9 +143,6 @@ export function validatePlan(plan: Plan): string[] {
 
 	for (const cycle of findCycles(plan.deliverables))
 		errors.push(`cycle: ${cycle.join(" → ")}`);
-
-	validateTasks(plan.preflight, "preflight", errors);
-	validateTasks(plan.postflight, "postflight", errors);
 
 	return errors;
 }

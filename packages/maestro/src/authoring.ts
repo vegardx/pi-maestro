@@ -58,8 +58,7 @@ const TaskSchema = Type.Object({
 
 const DeliverableSchema = Type.Object({
 	id: Type.String({
-		description:
-			"Lowercase, digits and hyphens. It becomes a branch name and a directory.",
+		description: "Lowercase, digits and hyphens. It becomes a workflow id.",
 	}),
 	title: Type.String(),
 	body: Type.Optional(
@@ -89,18 +88,6 @@ const PlanSchema = Type.Object({
 	}),
 	title: Type.String(),
 	deliverables: Type.Array(DeliverableSchema),
-	preflight: Type.Optional(
-		Type.Array(TaskSchema, {
-			description:
-				"What YOU do before any deliverable starts — a barrier every one of them waits on. Repos existing is the usual case.",
-		}),
-	),
-	postflight: Type.Optional(
-		Type.Array(TaskSchema, {
-			description:
-				"What YOU do once every deliverable has SHIPPED. Skipped entirely if any failed.",
-		}),
-	),
 	repos: Type.Optional(
 		Type.Array(
 			Type.Object({
@@ -148,8 +135,6 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 			const plan: Plan = {
 				slug: authored.slug,
 				title: authored.title,
-				preflight: (authored.preflight ?? []) as Task[],
-				postflight: (authored.postflight ?? []) as Task[],
 				repos: authored.repos ?? [{ key: "main", path: deps.cwd() }],
 				deliverables: authored.deliverables.map((d) => ({
 					id: d.id,
@@ -214,13 +199,6 @@ function describe(plan: Plan): string {
 			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
 		}),
 	];
-	if (plan.preflight.length > 0)
-		lines.push(
-			"",
-			`Preflight: ${plan.preflight.length} step(s) before any of it.`,
-		);
-	if (plan.postflight.length > 0)
-		lines.push(`Postflight: ${plan.postflight.length} step(s), if all ship.`);
 	lines.push("", `Run it with \`/run ${plan.slug}\`.`);
 	return lines.join("\n");
 }

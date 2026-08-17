@@ -150,7 +150,7 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 
 		expect(result.details.stored).toBe(false);
 		const text = result.content[0].text;
-		expect(text).toContain("cannot be an id");
+		expect(text).toContain("cannot be a workflow id");
 		expect(text).toContain("no tasks");
 		expect(text).toContain("no such deliverable");
 		expect(text).toContain("without waiting for it");

@@ -4,6 +4,10 @@ import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import type { Plan } from "./plan.js";
+import {
+	readPublicationReceipt,
+	writePublicationReceipt,
+} from "./publication-receipt.js";
 import { publishPlan } from "./publisher.js";
 import { createSeat, type Seat } from "./seat.js";
 import { compileStoredPlan, runCompiledPlan } from "./workflow/runner.js";
@@ -66,6 +70,8 @@ export function startSeat(
 		const result = await runCompiledPlan({ cwd, compiled }).finally(() => {
 			executing = false;
 		});
+		if (result.status === "completed")
+			writePublicationReceipt(cwd, result.runId, result.compiled);
 		const level = result.status === "completed" ? "info" : "warning";
 		ctx.ui.notify(
 			`Workflow \`${plan.slug}\` finished as ${result.status} (${result.runId}).`,
@@ -142,16 +148,20 @@ export function startSeat(
 				if (!slug) throw new Error("usage: /publish <plan-slug>");
 				const plan = seat().store.loadPlan(slug);
 				if (!plan) throw new Error(`no stored plan named \`${slug}\``);
-				const repositories = plan.repos.map((repository) => ({
-					key: repository.key,
-					path: resolve(cwd, repository.path),
-				}));
+				const receipt = readPublicationReceipt(cwd, slug);
+				if (!receipt)
+					throw new Error(
+						`plan \`${slug}\` has no completed workflow receipt to publish`,
+					);
 				const approved = await ctx.ui.confirm(
 					"Publish Maestro plan?",
 					`Push committed branches and create or update pull requests for \`${slug}\`?`,
 				);
 				if (!approved) return;
-				const published = await publishPlan({ plan, repositories });
+				const published = await publishPlan({
+					plan,
+					repositories: receipt.repositories,
+				});
 				ctx.ui.notify(
 					published.map(({ key, url }) => `${key}: ${url}`).join("\n"),
 					"info",

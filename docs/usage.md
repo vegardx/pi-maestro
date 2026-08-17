@@ -1,101 +1,106 @@
 # Usage
 
-## Install
+## Install and verify
 
 ```bash
 pi install git:github.com/vegardx/pi-maestro
 ```
 
-Pi loads the workspace TypeScript directly. Shipping requires `gh`.
+Run `/maestro setup` once after loading the extension. It shows the exact pinned
+`pi-workflow`, `pi-subagent`, `pi-web-access`, and
+`@vegardx/agent-toolkit` changes and asks before updating global Pi settings.
+Reload Pi afterwards. `/maestro doctor` is read-only and checks the package
+pins and toolkit discovery, repository identity, Git signing, and GitHub
+authentication.
+
+The seat loads `@juicesharp/rpiv-ask-user-question` for model-authored planning
+clarifications. The deterministic Plan → Auto and setup confirmations still use
+Maestro's blocking approval capability because they are seat gates, not model
+tool calls.
 
 ## Modes
 
-Two properties — whether the working tree is writable, and whether safeguards
-are on — giving three coherent combinations.
+| Mode | Working tree | Safeguards | Intended use |
+| --- | --- | --- | --- |
+| `plan` | read-only | on | discuss and author a workflow plan |
+| `auto` | writable | on | run an approved autonomous workflow |
+| `hack` | writable | off | direct, explicitly unsafeguarded seat work |
 
-| Mode | Working tree | Safeguards |
-| --- | --- | --- |
-| `plan` | read-only | on |
-| `auto` | writable | on |
-| `hack` | writable | off |
+`/mode` reports the current mode. From plan mode, `/mode auto` selects the most
+recent stored plan, renders its repositories, dependency graph, review
+cohorts, models, and authority boundaries, and asks one blocking approval
+question. Refusal leaves the seat in plan mode and creates no branch or
+worktree. Approval changes the seat to auto and starts the workflow.
 
-`/mode` with no argument reports where you are; `/mode auto` switches.
+In auto mode, `/run <slug>` runs or recovers a named plan. `/run` with no
+argument lists stored plans. Workflow runs are autonomous, so `/stop` is not a
+workflow control; rerunning the same plan recovers its durable state after a
+seat or supervisor failure.
 
-A read-only seat cannot run a plan, because every deliverable produces a worker
-that writes. Safeguards do **not** propagate: a worker is never in hack,
-whatever the seat is in.
+## Plans and repositories
 
-## Planning
+Planning remains a conversation. The maestro writes the complete plan through
+the `plan` tool once the repositories, deliverables, dependencies, and review
+intent are settled. Repository paths may be children of a non-Git umbrella
+directory, so one plan can coordinate several independent repositories.
 
-Planning is a conversation. You converge on what to build and why, and the
-maestro authors the plan when you have. There is no separate forming command —
-it calls the `plan` tool, which takes the **whole document** in one go and
-answers with every error at once rather than the first.
+Each deliverable names:
 
-A plan is deliverables in a graph. Each has an ordered list of work, `after` for
-ordering, and `reads` for data flow — what it actually inherits from a
-predecessor, which must be a subset of what it waits for. Waiting for something
-does not mean paying for its hand-off in context.
+- its repository and implementation work;
+- `after` dependencies, which order deliverables;
+- `reads` dependencies, which identify results it must consume;
+- zero or more review tasks.
 
-Plans are stored under `<agentDir>/maestro/plans/<slug>/` as `plan.json` (what
-was authored) and `run.json` (what happened). Two files because they have two
-lifetimes.
+A review task contains a lens, a concrete provider/model, and optionally the
+name of an ambient skill to invoke. There is no persona layer. Repeating the
+same lens with different models creates independent reviewers—for example,
+security with Opus, Fable, and Grok. If no skill is named, Pi's normal skill
+discovery remains enabled and the lens prompt may trigger one.
 
-## Running
+## What happens after approval
 
-`/run` with no argument lists what is stored; `/run <slug>` starts one.
-
-Each deliverable gets its own worktree and branch. The maestro creates them —
-deterministic code, not a model turn — then launches a worker, which does the
-work, commits, and reports. The maestro ships the branch, opens the pull
-request, records the result, and only then releases the worker. A worker never
-pushes.
-
-`/run` is also how a plan resumes. There is no separate verb: a run whose
-maestro died leaves records the next `/run` picks up, and a plan that cannot go
-any further says why rather than sitting silent.
-
-`/stop [why]` halts the run and ends its workers. A halted deliverable becomes
-unstarted again and keeps its worktree, so running the plan again re-enters the
-tree it was already using rather than starting the work over.
-
-## Questions
-
-A worker that gets stuck can `ask`. The question travels to the maestro, which
-reasons about it in the plan context it already has and answers with `respond` —
-or, if it genuinely cannot, asks you and passes on what you say. The worker is
-blocked the whole time, and the answer records who decided, so it can tell your
-ruling from the maestro's guess.
-
-You are not expected to be watching. A question reaching you means the maestro
-could not answer it.
-
-## Review
-
-There is no review command. A worker hands its own diff to a reviewer and acts
-on what comes back before it reports — which is the point, since a review nobody
-acts on is a review that did not happen.
-
-`subagent` can fan out: one lead on the caller's own model consults a blind
-member per model family, then aggregates — duplicates merged, every model and
-family name removed — so the caller reads clean findings, not a stack of
-attributed opinions.
-
-## Safeguards
-
-Every shell command is classified before it runs and runs confined to the
-agent's own tree, enforced by the OS. Some commands are refused with a reason
-and something to do instead — committing goes to the `commit` tool, deleting to
-`delete`, fetching a URL to `webfetch`. A refusal is an answer, not a failure to
-work around.
-
-`/maestro` (from the settings extension) inspects and edits configuration:
+Maestro runs three flat workflows with deterministic seat-owned boundaries:
 
 ```text
-/maestro show
-/maestro get <key>
-/maestro set [--session|--project|--global] <key> <JSON-value>
+implementation workflow (write files; no Git authority)
+  -> seat creates ordinary signed commits
+  -> parallel review workflow (read-only)
+  -> seat deduplicates findings and removes reviewer identity
+  -> decision workflow (write files; no Git authority)
+  -> seat commits accepted changes
+  -> exact decision and Git-lineage gate
+  -> seat pushes branches and creates or updates pull requests
 ```
 
-See [commands.md](commands.md) for the full command and tool reference, and
-[settings.md](settings.md) for the configuration keys.
+Reviewers report only a claim and evidence. They do not prescribe a fix. The
+decision model receives the de-attributed list and must record exactly one
+`changed` or `no_change` decision, with reasoning, for every finding. There is
+no verifier and no second review round.
+
+Commits contain ordinary task-oriented messages. Reviewer/model attribution is
+kept only in seat-private local state for later analysis; it is not written to
+commits or pull requests. Pull requests contain the intended behavior, the
+authored rationale, and the resulting changes.
+
+## Isolation and authority
+
+Every phase runs in a sealed supervisor environment. Implementation and
+decision phases may write only approved worktrees and workflow state. Review
+phases can read approved worktrees but cannot write them. Workflow descendants
+receive neither Git publication credentials nor commit authority. The seat
+performs commits, pushes, and pull-request operations after validating the
+branch, clean tree, exact final heads, decisions, and lineage.
+
+The sandbox is designed primarily to prevent accidental filesystem damage and
+accidental cross-phase disclosure. It is not a hostile same-user process
+security boundary.
+
+## Usage footer
+
+The footer shows token and cache-read usage for the current seat session and
+for all tracked workflow agents in the Maestro session. When space is tight it
+keeps the seat value and drops the aggregate value first.
+
+See [workflow-plans.md](workflow-plans.md) for the compiled workflow contract,
+[commands.md](commands.md) for the command surface, and
+[settings.md](settings.md) for configuration.

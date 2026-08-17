@@ -62,21 +62,28 @@ export function isExtensionEnabled(name: string): boolean {
  * Single-feature gate. A disabled extension disables all its flags. At the
  * env layer the kill switch (PI_DISABLE) wins over PI_ENABLE — fail safe.
  */
-export function isFlagEnabled(name: string, flag: string): boolean {
+export function isFlagEnabled(
+	name: string,
+	flag: string,
+	defaultEnabled = true,
+): boolean {
 	if (!isExtensionEnabled(name)) return false;
 	const path = `${name}.${flag}`;
 	if (envPathSet("PI_DISABLE").has(path)) return false;
 	if (envPathSet("PI_ENABLE").has(path)) return true;
 	const fromSettings = settingsLayer?.flagEnabled(path);
 	if (typeof fromSettings === "boolean") return fromSettings;
-	return true;
+	return defaultEnabled;
 }
 
 /** Per-extension flag checker handed to the factory via the maestro context. */
 export interface FlagChecker {
-	enabled(flag: string): boolean;
+	enabled(flag: string, defaultEnabled?: boolean): boolean;
 }
 
 export function createFlagChecker(name: string): FlagChecker {
-	return { enabled: (flag) => isFlagEnabled(name, flag) };
+	return {
+		enabled: (flag, defaultEnabled) =>
+			isFlagEnabled(name, flag, defaultEnabled),
+	};
 }

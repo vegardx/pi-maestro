@@ -34,19 +34,16 @@ export interface PlanRepo {
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
- * A task handed to a subagent. There is no `agent` field: a task's subagent is
- * always read-only — a writer is authored as a deliverable, never spawned from
- * a task — so the field could only ever restate a rule, and a field that can
- * only hold one value is a field someone will eventually hold wrong.
+ * A task compiled into its own read-only workflow stage. There is no agent
+ * kind: a writer is authored as a deliverable, never as delegated work.
  */
-export interface SubagentRef {
-	/** Which persona — the prose that says what to look for. */
-	readonly persona: string;
-	/**
-	 * Fan out across model families rather than asking one agent. Intent only:
-	 * never a model, never a count. Configuration decides the width.
-	 */
-	readonly fanOut?: boolean;
+export interface WorkflowDelegation {
+	/** The independent point of view this reviewer applies. */
+	readonly lens: string;
+	/** Optional ambient skill to request explicitly in the stage prompt. */
+	readonly skill?: string;
+	/** One concrete launch. Repeat the lens in another task to use another model. */
+	readonly model: string;
 }
 
 export interface Task {
@@ -54,7 +51,7 @@ export interface Task {
 	readonly title: string;
 	readonly body?: string;
 	/** Absent = the deliverable's own worker does it. */
-	readonly by?: SubagentRef;
+	readonly by?: WorkflowDelegation;
 }
 
 export interface Deliverable {
@@ -100,10 +97,21 @@ export interface Plan {
 export function validatePlan(plan: Plan): string[] {
 	const errors: string[] = [];
 	const ids = new Set<string>();
-	const repoKeys = new Set(plan.repos.map((r) => r.key));
+	const repoKeys = new Set<string>();
+	if (!ID_RE.test(plan.slug))
+		errors.push(
+			`plan: \`${plan.slug}\` cannot be a slug — it must be lowercase letters, digits and hyphens`,
+		);
+	if (!plan.title.trim()) errors.push("plan: no title");
+	if (plan.repos.length === 0) errors.push("plan: no repositories");
 
 	for (const repo of plan.repos) {
 		if (!repo.key.trim()) errors.push("a repo has no key");
+		else if (!ID_RE.test(repo.key))
+			errors.push(`repo \`${repo.key}\`: key is not a safe workflow name`);
+		else if (repoKeys.has(repo.key))
+			errors.push(`repo \`${repo.key}\`: duplicate key`);
+		repoKeys.add(repo.key);
 		if (!repo.path.trim()) errors.push(`repo \`${repo.key}\` has no path`);
 	}
 
@@ -169,14 +177,25 @@ function validateTasks(
 	for (const [i, t] of tasks.entries()) {
 		const at = `${where}.tasks[${i}]`;
 		if (!t.id.trim()) errors.push(`${at}: no id`);
+		else if (!ID_RE.test(t.id))
+			errors.push(`${at}: \`${t.id}\` is not a safe workflow name`);
 		else if (seen.has(t.id))
 			errors.push(`${where}: duplicate task id \`${t.id}\``);
 		seen.add(t.id);
 		if (!t.title.trim()) errors.push(`${at}: no title`);
-		// No agent-kind check: `by` has no agent field to get wrong. A writer as
-		// a task's subagent is unrepresentable, not merely refused.
-		if (t.by && !t.by.persona.trim())
-			errors.push(`${at}: handed to a subagent with no persona`);
+		// No agent-kind check: delegated tasks compile to read-only workflow stages.
+		if (t.by) {
+			if (!ID_RE.test(t.by.lens))
+				errors.push(`${at}: \`${t.by.lens}\` is not a safe review lens`);
+			if (t.by.skill !== undefined && !ID_RE.test(t.by.skill))
+				errors.push(
+					`${at}: \`${t.by.skill}\` is not a safe ambient skill name`,
+				);
+			if (!/^\S+\/\S+$/.test(t.by.model))
+				errors.push(
+					`${at}: delegated task model must be a concrete provider/model ID`,
+				);
+		}
 	}
 }
 

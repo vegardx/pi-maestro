@@ -291,7 +291,7 @@ describe("what a worker is told", () => {
 		expect(kickoff).toContain("### 2. do build");
 	});
 
-	it("names the persona for subagent work, never a tool", async () => {
+	it("names workflow-native review intent", async () => {
 		const h = harness(
 			plan({
 				deliverables: [
@@ -299,8 +299,9 @@ describe("what a worker is told", () => {
 						tasks: [
 							task("review", {
 								by: {
-									persona: "security-review",
-									fanOut: true,
+									lens: "security",
+									skill: "security-review",
+									model: "anthropic/opus-5",
 								},
 							}),
 						],
@@ -310,9 +311,9 @@ describe("what a worker is told", () => {
 		);
 		await h.executor.start();
 		const kickoff = h.launched[0].kickoff;
-		expect(kickoff).toContain("Hand this to a subagent");
-		expect(kickoff).toContain("`security-review`");
-		expect(kickoff).toContain("across several model families");
+		expect(kickoff).toContain("`security` lens");
+		expect(kickoff).toContain("anthropic/opus-5");
+		expect(kickoff).toContain("available `security-review` skill");
 	});
 
 	it("inherits only what it declared it reads", async () => {

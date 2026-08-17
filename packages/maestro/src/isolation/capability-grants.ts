@@ -68,6 +68,8 @@ export interface ProfilePaths {
 }
 
 export interface WriteProfile {
+	/** Additional exact trees hidden from this process and its descendants. */
+	readonly denyRead?: readonly string[];
 	readonly allowWrite: readonly string[];
 	readonly denyWrite: readonly string[];
 	/** true only for `host` scope (hack): the caller should run direct, unsandboxed. */

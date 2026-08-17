@@ -27,10 +27,11 @@ import { type Run, validateRun } from "./run.js";
 
 /**
  * Bumped when a stored shape changes incompatibly. Version 1 is the first
- * shape of the rebuilt system; nothing before it is readable, and nothing tries
- * to be — there is no migration path from the old model on purpose.
+ * Version 2 replaces persona/fan-out delegation with workflow-native review
+ * intent. Nothing before it is readable, and nothing tries to be — there is no
+ * migration path from the old model on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 1 as const;
+export const MAESTRO_SCHEMA_VERSION = 2 as const;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 

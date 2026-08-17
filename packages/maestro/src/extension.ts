@@ -16,10 +16,12 @@
 // time, before pi has finished starting, and the link resolves behind them; a
 // tool called before the handshake completes says so, instead of hanging.
 
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-	ExtensionCommandContext,
-	ExtensionContext,
+import {
+	type ExtensionCommandContext,
+	type ExtensionContext,
+	getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import type { Answers, AskInboxV1, Questionnaire } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
@@ -41,7 +43,9 @@ import { readExecutionPolicySettings } from "./execution-policy.js";
 import type { AgentLink } from "./link.js";
 import { MODE_NAMES, type ModeName, mode, modeForChild } from "./mode.js";
 import { routeSpawn } from "./model-routing.js";
+import { maestroRoot } from "./paths.js";
 import { BUILT_IN_PERSONAS } from "./personas.js";
+import type { Plan } from "./plan.js";
 import {
 	createReadOnlySessionFactory,
 	type ReadOnlyLaunchOptions,
@@ -50,6 +54,16 @@ import { createSeat, type Seat } from "./seat.js";
 import { currentDepth, describeReadOnlyTools } from "./spawn.js";
 import { SubagentSessions } from "./subagent-sessions.js";
 import { ToolRegistry } from "./tool-registry.js";
+import {
+	loadOrCreateWorkflowCommandRun,
+	releaseUnapprovedWorkflowCommandRun,
+	releaseWorkflowCommandRun,
+	workflowCommandAuthoredDigest,
+} from "./workflow/command-run.js";
+import type {
+	WorkflowPlanRunnerInput,
+	WorkflowPlanRunnerResult,
+} from "./workflow/workflow-plan-runner.js";
 import { resolveBase } from "./workspace.js";
 
 /** This file, so a spawned agent loads the same code its maestro is running. */
@@ -307,6 +321,21 @@ export interface HumanAsker {
 	ask(questions: Questionnaire): Promise<Answers>;
 }
 
+export interface WorkflowPlanRunnerLoaderInput {
+	readonly coordinatedRunRoot: string;
+	readonly maestroStateRoot: string;
+	readonly coordinatedRepositoryRoots: readonly string[];
+	/** Normalized plan bound to the same repository roots. */
+	readonly plan: Plan;
+}
+
+export interface LoadedWorkflowPlanRunner {
+	run(input: WorkflowPlanRunnerInput): Promise<WorkflowPlanRunnerResult>;
+}
+
+/** Kill switch for the workflow-native execution path. */
+export const WORKFLOW_CUTOVER_FLAG = "workflowCutover";
+
 /**
  * Put one question to the human, and report who actually answered.
  *
@@ -339,35 +368,77 @@ export function askThroughCapability(asker: HumanAsker): (
 	};
 }
 
+function planOnlyPullRequestCopy(plan: Plan, repositoryKey: string) {
+	const deliverables = plan.deliverables.filter(
+		(deliverable) => (deliverable.repo ?? plan.repos[0]?.key) === repositoryKey,
+	);
+	const rationale = deliverables
+		.flatMap((deliverable) => [
+			deliverable.body,
+			...deliverable.tasks.filter((task) => !task.by).map((task) => task.body),
+		])
+		.filter((body): body is string => Boolean(body?.trim()));
+	const changes = deliverables.flatMap((deliverable) =>
+		deliverable.tasks.filter((task) => !task.by).map((task) => task.title),
+	);
+	if (rationale.length === 0)
+		throw new Error(
+			`plan \`${plan.slug}\` has no authored rationale for ${repositoryKey}; refusing to invent pull-request rationale`,
+		);
+	if (changes.length === 0)
+		throw new Error(
+			`plan \`${plan.slug}\` has no implementation changes for ${repositoryKey}`,
+		);
+	return {
+		title: plan.title,
+		intent: `Implement the approved \`${plan.slug}\` plan in ${repositoryKey}.`,
+		rationale: rationale.join("\n\n"),
+		changes,
+	};
+}
+
 /**
- * Register the seat: its tools, and the two commands a human drives it with.
+ * Register the seat tools and the commands a human drives it with.
  *
  * The seat is built on first use, not at load. Constructing it reads the
  * repository to find a base branch, and an extension that does that at load
  * time is an extension that fails to load outside a repository.
  */
-export function startSeat(
+export function startSeat<WorkflowCoordinator = never>(
 	pi: SeatHost,
 	options: {
 		readonly cwd?: string;
+		readonly agentDir?: string;
 		readonly asker?: HumanAsker;
 		/**
 		 * Where a worker's question goes. Resolved lazily: the inbox is
 		 * registered by `packages/ask`, and load order is not ours to depend on.
 		 */
 		readonly inbox?: () => AskInboxV1 | undefined;
+		/**
+		 * Coordinator inspection seam for the workflow-native path. It is
+		 * loaded lazily so depth>0 processes never import the supervisor graph.
+		 */
+		readonly workflowCutover?: boolean;
+		readonly loadWorkflowCoordinator?: () => Promise<WorkflowCoordinator>;
+		/** Fully composed depth-zero production authority, constructed per run. */
+		readonly loadWorkflowPlanRunner?: (
+			input: WorkflowPlanRunnerLoaderInput,
+		) => Promise<LoadedWorkflowPlanRunner>;
 	} = {},
-): { seat(): Seat } {
+): {
+	seat(): Seat;
+	currentMode(): ModeName;
+	workflowCoordinator(): Promise<WorkflowCoordinator | undefined>;
+} {
 	const cwd = options.cwd ?? process.cwd();
 	let built: Seat | undefined;
+	let workflowCoordinator: Promise<WorkflowCoordinator> | undefined;
+	const workflowRunners = new Map<string, Promise<LoadedWorkflowPlanRunner>>();
 
 	const seat = (): Seat => {
 		if (built) return built;
 		const base = resolveBase(cwd);
-		if (!base)
-			throw new Error(
-				`cannot tell what to branch from in ${cwd}: it has no remote default branch and nothing checked out`,
-			);
 		built = createSeat({
 			narrator: {
 				// Narration reaches the maestro's own model as a follow-up. That is
@@ -378,7 +449,9 @@ export function startSeat(
 				ask: (prompt) => pi.sendUserMessage(prompt, { deliverAs: "followUp" }),
 			},
 			extensions: agentExtensions(),
-			base,
+			cwd,
+			...(options.agentDir ? { agentDir: options.agentDir } : {}),
+			...(base ? { base } : {}),
 			// The hook that was declared and never supplied. Without it the seat
 			// told itself there was nobody to ask, which was false — it has a
 			// human, and a worker's escalated question had nowhere to go.
@@ -390,6 +463,107 @@ export function startSeat(
 		for (const tool of built.tools.definitionsFor("maestro"))
 			pi.registerTool(tool);
 		return built;
+	};
+
+	const runWorkflowPlan = async (
+		slug: string,
+		ctx: ExtensionCommandContext,
+	): Promise<void> => {
+		if (!options.loadWorkflowPlanRunner)
+			throw new Error(
+				"workflow cutover is enabled but no production workflow plan runner is installed",
+			);
+		if (!options.asker)
+			throw new Error(
+				"workflow execution needs the ask-user-question package for plan approval",
+			);
+		const authoredPlan = seat().store.loadPlan(slug);
+		if (!authoredPlan) throw new Error(`no stored plan named \`${slug}\``);
+		// Authored paths are relative to the seat, not to the per-run worktree
+		// umbrella. Bind one normalized clone and use it for both authorization
+		// and compilation so those two identities cannot drift.
+		const plan = {
+			...authoredPlan,
+			repos: authoredPlan.repos.map((repository) => ({
+				...repository,
+				path: resolve(cwd, repository.path),
+			})),
+		};
+		const current = ctx.model;
+		if (!current?.provider || !current.id)
+			throw new Error(
+				"workflow execution needs a concrete current seat model (provider/model)",
+			);
+		const implementationModel = `${current.provider}/${current.id}`;
+		const authoredDigest = workflowCommandAuthoredDigest({
+			plan,
+			implementationModel,
+			decisionModel: implementationModel,
+		});
+		const agentDir = options.agentDir ?? getAgentDir();
+		const root = maestroRoot(agentDir);
+		const maestroStateRoot = join(root, "workflow-state");
+		const commandRun = loadOrCreateWorkflowCommandRun({
+			maestroStateRoot,
+			coordinatedRunsRoot: join(root, "workflow-runs"),
+			planSlug: plan.slug,
+			authoredDigest,
+		});
+		let result: WorkflowPlanRunnerResult;
+		try {
+			const loaded =
+				workflowRunners.get(commandRun.runId) ??
+				options.loadWorkflowPlanRunner({
+					coordinatedRunRoot: commandRun.coordinatedRunRoot,
+					maestroStateRoot,
+					coordinatedRepositoryRoots: plan.repos.map(({ path }) => path),
+					plan,
+				});
+			workflowRunners.set(commandRun.runId, loaded);
+			result = await (await loaded).run({
+				runId: commandRun.runId,
+				coordinatedRunRoot: commandRun.coordinatedRunRoot,
+				plan,
+				implementationModel,
+				decisionModel: implementationModel,
+				asker: options.asker,
+				onApproved: () => {
+					if (seat().runtime.mode().name !== "auto") seat().setMode("auto");
+				},
+			});
+		} catch (error) {
+			releaseUnapprovedWorkflowCommandRun({
+				maestroStateRoot,
+				coordinatedRunsRoot: join(root, "workflow-runs"),
+				planSlug: plan.slug,
+				runId: commandRun.runId,
+			});
+			workflowRunners.delete(commandRun.runId);
+			throw error;
+		}
+		if (result.status === "refused") {
+			releaseWorkflowCommandRun({
+				maestroStateRoot,
+				planSlug: plan.slug,
+				runId: commandRun.runId,
+			});
+			workflowRunners.delete(commandRun.runId);
+			ctx.ui.notify(
+				`Plan \`${plan.slug}\` was not approved; mode remains ${seat().runtime.mode().name}.`,
+				"warning",
+			);
+			return;
+		}
+		releaseWorkflowCommandRun({
+			maestroStateRoot,
+			planSlug: plan.slug,
+			runId: commandRun.runId,
+		});
+		workflowRunners.delete(commandRun.runId);
+		ctx.ui.notify(
+			`Workflow \`${plan.slug}\` completed as ${result.launchResult.runId}.`,
+			"info",
+		);
 	};
 
 	// Hygiene, not the mechanism: the seat's held readers are child processes
@@ -412,6 +586,29 @@ export function startSeat(
 					`Unknown mode \`${wanted}\` — one of ${MODE_NAMES.join(", ")}.`,
 					"warning",
 				);
+				return;
+			}
+			if (
+				options.workflowCutover &&
+				wanted === "auto" &&
+				seat().runtime.mode().name === "plan"
+			) {
+				const selected = seat().store.list()[0];
+				if (!selected) {
+					ctx.ui.notify(
+						"No stored plan is available to approve and run; mode remains plan.",
+						"warning",
+					);
+					return;
+				}
+				try {
+					await runWorkflowPlan(selected.slug, ctx);
+				} catch (error) {
+					ctx.ui.notify(
+						error instanceof Error ? error.message : String(error),
+						"warning",
+					);
+				}
 				return;
 			}
 			const mode = seat().setMode(wanted as ModeName);
@@ -439,7 +636,13 @@ export function startSeat(
 					);
 					return;
 				}
-				await seat().run(slug, ctx as unknown as ExtensionContext);
+				if (options.workflowCutover) {
+					if (seat().runtime.mode().name !== "auto")
+						throw new Error(
+							"workflow plans run only in auto mode; use `/mode auto` to preview and approve the most recent plan",
+						);
+					await runWorkflowPlan(slug, ctx);
+				} else await seat().run(slug, ctx as unknown as ExtensionContext);
 			} catch (error) {
 				// Refusals here are ordinary and legible — no such plan, plan mode
 				// cannot run one, a plan already running. They belong in front of
@@ -455,6 +658,13 @@ export function startSeat(
 	pi.registerCommand("stop", {
 		description: "Halt the running plan. /stop [why]",
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			if (options.workflowCutover) {
+				ctx.ui.notify(
+					"Workflow runs are autonomous and recover by rerunning `/run <slug>`; `/stop` is unavailable during the workflow cutover.",
+					"warning",
+				);
+				return;
+			}
 			const reason = args.trim() || "stopped from the seat";
 			try {
 				const run = await seat().runtime.stop(reason);
@@ -473,7 +683,21 @@ export function startSeat(
 		},
 	});
 
-	return { seat };
+	return {
+		seat,
+		currentMode: () => built?.runtime.mode().name ?? "plan",
+		workflowCoordinator: () => {
+			if (!options.workflowCutover) return Promise.resolve(undefined);
+			if (!options.loadWorkflowCoordinator)
+				return Promise.reject(
+					new Error(
+						"workflow cutover is enabled but no seat coordinator composition is installed",
+					),
+				);
+			workflowCoordinator ??= options.loadWorkflowCoordinator();
+			return workflowCoordinator;
+		},
+	};
 }
 
 export default defineExtension(
@@ -482,7 +706,7 @@ export default defineExtension(
 		path: "packages/maestro/src/extension.ts",
 		doc: "Plans as a DAG of deliverables, workers that build them, and the maestro that owns both ends.",
 	},
-	(pi, maestro) => {
+	async (pi, maestro) => {
 		// DEPTH decides, not the presence of wiring. A read-only agent is spawned
 		// with a depth and deliberately WITHOUT a socket or token — it has nobody
 		// to dial — so "no wiring" and "this is the seat" are not the same thing.
@@ -507,12 +731,61 @@ export default defineExtension(
 		const asker = maestro.capabilities.get(CAPABILITIES.ask) as
 			| HumanAsker
 			| undefined;
-		startSeat(pi, {
+		const workflowCutover = maestro.flags.enabled(WORKFLOW_CUTOVER_FLAG, true);
+		const agentDir = getAgentDir();
+		const seatEntry = startSeat(pi, {
+			agentDir,
 			...(asker ? { asker } : {}),
+			// Workflow-native execution is the default. The flag remains a temporary
+			// rollback switch while the legacy executor is still checked in.
+			workflowCutover,
+			...(workflowCutover
+				? {
+						loadWorkflowCoordinator: async () => {
+							const usage = maestro.capabilities.get(CAPABILITIES.usage);
+							return (
+								await import("./workflow/coordinator.js")
+							).createWorkflowCoordinator({
+								...(usage ? { usage } : {}),
+							});
+						},
+						loadWorkflowPlanRunner: async (input) => {
+							if (input.plan.preflight.length > 0)
+								throw new Error(
+									"workflow cutover does not yet support autonomous preflight seat tasks",
+								);
+							if (input.plan.postflight.length > 0)
+								throw new Error(
+									"workflow cutover does not yet support autonomous postflight seat tasks",
+								);
+							for (const repository of input.plan.repos)
+								planOnlyPullRequestCopy(input.plan, repository.key);
+							const [production, runtime] = await Promise.all([
+								import("./workflow/production-plan-runner.js"),
+								import("./workflow/host-runtime-resolver.js"),
+							]);
+							const usage = maestro.capabilities.get(CAPABILITIES.usage);
+							return production.createProductionWorkflowPlanRunner({
+								...input,
+								runtimeResolver: new runtime.HostWorkflowPhaseRuntimeResolver({
+									cwd: process.cwd(),
+									agentDir,
+								}),
+								pullRequestCopyProducer: {
+									produce: ({ plan, repository }) =>
+										planOnlyPullRequestCopy(plan, repository.key),
+								},
+								...(usage ? { usage } : {}),
+							}).runner;
+						},
+					}
+				: {}),
 			// Read at question time, not now: `packages/ask` may register after
 			// us, and a seat that resolved this at boot would silently have no
 			// inbox depending on extension load order.
 			inbox: () => maestro.capabilities.get(CAPABILITIES.askInbox),
 		});
+		const { installMaestroObservability } = await import("./observability.js");
+		installMaestroObservability(pi, maestro, seatEntry.currentMode);
 	},
 );

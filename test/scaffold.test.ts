@@ -37,7 +37,6 @@ describe("scaffold", () => {
 			"packages/maestro/src/web-access-extension.ts",
 			"packages/maestro/src/workflow-extension.ts",
 			"packages/prompt-assist/src/index.ts",
-			"packages/settings/src/extension.ts",
 			"packages/smart-compact/src/index.ts",
 		].sort();
 		expect(entries).toEqual(want);

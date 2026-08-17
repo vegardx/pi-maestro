@@ -9,6 +9,6 @@ export default defineExtension(
 	async (pi) => {
 		const packageName = "pi-web-access";
 		const extension = (await import(packageName)).default;
-		extension(pi);
+		await extension(pi);
 	},
 );

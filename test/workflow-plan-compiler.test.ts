@@ -59,12 +59,49 @@ describe("thin workflow plan compiler", () => {
 		});
 		expect(stages[1]?.prompt).toContain("correctness-review");
 		expect(stages[1]?.prompt).toContain("suggested change");
+		expect(stages[1]?.tools).not.toContain("bash");
 		expect(stages[2]).toMatchObject({
 			type: "reduce",
 			from: ["api--review--correctness"],
 			readOnly: false,
 		});
 		expect(stages[2]?.prompt).toContain("new conventional follow-up commit");
+	});
+
+	it("finishes all repository implementations before review and runs one fixer", () => {
+		const second = {
+			...plan.deliverables[0]!,
+			id: "docs",
+			title: "Update docs",
+			after: ["api"],
+			tasks: [
+				{ id: "implement-docs", title: "Update docs" },
+				{
+					id: "review-docs",
+					title: "Review docs",
+					by: {
+						lens: "correctness",
+						model: "anthropic/claude-sonnet",
+					},
+				},
+			],
+		};
+		const compiled = compilePlanWorkflow(
+			{ ...plan, deliverables: [plan.deliverables[0]!, second] },
+			options,
+		);
+		const stages = compiled.workflow.artifactGraph.stages;
+		expect(
+			stages.find(({ id }) => id === "api--review--correctness")?.after,
+		).toBe("docs--implement");
+		expect(
+			stages.find(({ id }) => id === "docs--review--review-docs")?.after,
+		).toBe("docs--implement");
+		expect(stages.filter(({ id }) => id.endsWith("--fix"))).toHaveLength(1);
+		expect(stages.find(({ id }) => id === "api--fix")?.from).toEqual([
+			"api--review--correctness",
+			"docs--review--review-docs",
+		]);
 	});
 
 	it("keeps publication at the interactive seat", () => {

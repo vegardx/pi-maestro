@@ -7,23 +7,10 @@
 | `/mode [plan\|auto\|hack]` | Report or change posture; plan → auto previews and runs the newest stored plan |
 | `/run [slug]` | List plans or compile and run one through `pi-workflow` |
 | `/publish <slug>` | Validate committed feature branches, push them, and create or update pull requests |
-| `/maestro [subcommand]` | Open or edit Maestro settings |
 
 `/run` starts an ordinary `pi-workflow` run. Failed or interrupted workflow work
 is inspected and resumed through pi-workflow's own command surface; pi-maestro
 has no parallel recovery system.
-
-## `/maestro` subcommands
-
-```text
-/maestro show
-/maestro get <key>
-/maestro set [--session|--project|--global] <key> <JSON-value>
-/maestro reset [--session|--project|--global] <key>
-/maestro explain <model-role>
-/maestro validate
-/maestro region
-```
 
 ## Modes
 

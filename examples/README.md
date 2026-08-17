@@ -12,5 +12,5 @@ pi -e .
 ```
 
 The root manifest loads thin adapters for the public ask, subagent, workflow,
-and web packages, plus the local prompt-assist, settings, smart-compact, and
-maestro extensions. The exact paths live in the root `package.json` Pi manifest.
+and web packages, plus the local prompt-assist, smart-compact, and maestro
+extensions. The exact paths live in the root `package.json` Pi manifest.

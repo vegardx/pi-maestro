@@ -2,9 +2,9 @@
 
 Guidance for coding agents (Claude, pi, or any harness) working in this repo.
 pi-maestro is a **pi coding-agent extension stack** (`package.json`
-`pi.extensions`). One interactive `pi` process is the Maestro seat. Autonomous
-work runs through a sandboxed `pi-workflow` supervisor and `pi-subagent`; there
-is no custom worker socket or alternate executor.
+`pi.extensions`). One interactive `pi` process is the Maestro seat. Model work
+runs through public `pi-workflow` and `pi-subagent` packages using normal local
+Pi configuration; there is no custom worker socket, executor, or child runtime.
 
 ## Build / check
 

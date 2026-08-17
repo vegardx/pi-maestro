@@ -39,7 +39,6 @@ scheduler or maintain a parallel recovery journal.
 /mode [plan|auto|hack]
 /run [slug]
 /publish <slug>
-/maestro
 ```
 
 See [commands](docs/commands.md), [usage](docs/usage.md), and

@@ -6,9 +6,10 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["claim", "evidence"],
+        "required": ["claim", "suggestion", "evidence"],
         "properties": {
           "claim": { "type": "string" },
+          "suggestion": { "type": "string" },
           "evidence": {
             "type": "array",
             "items": {

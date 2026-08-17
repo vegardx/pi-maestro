@@ -15,12 +15,10 @@ const guided: ExecutionPolicySettings = {
 	preset: "guided",
 	toolGuidance: "mode-aware",
 	modeRoutes: "protected-research",
-	delivery: "dedicated-tools",
 	consequential: "confirm",
 	privilegedRemote: "hack-only",
 	githubReads: "allow-apparent-reads",
 	unknowns: "allow",
-	fallback: "fail-closed",
 };
 
 describe("rm redirects to the delete tool, which exists", () => {

@@ -13,12 +13,10 @@ const guided: ExecutionPolicySettings = {
 	preset: "guided",
 	toolGuidance: "mode-aware",
 	modeRoutes: "protected-research",
-	delivery: "dedicated-tools",
 	consequential: "confirm",
 	privilegedRemote: "hack-only",
 	githubReads: "allow-apparent-reads",
 	unknowns: "allow",
-	fallback: "fail-closed",
 };
 
 describe("shell program analysis", () => {
@@ -331,7 +329,7 @@ describe("bash coaching and routing policy", () => {
 		).toMatchObject({ route: "deny", invariant: "worker-escalation" });
 	});
 
-	it("honors explicit relaxation without weakening delivery defaults", () => {
+	it("honors explicit policy relaxation", () => {
 		const permissive: ExecutionPolicySettings = {
 			...guided,
 			preset: "permissive",
@@ -339,7 +337,6 @@ describe("bash coaching and routing policy", () => {
 			modeRoutes: "direct",
 			consequential: "allow",
 			unknowns: "confirm",
-			fallback: "confirm",
 		};
 		// There is no isolation knob to turn any more: a research command that
 		// may execute repository code runs confined, under every preset.

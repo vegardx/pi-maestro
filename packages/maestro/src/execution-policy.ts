@@ -27,13 +27,11 @@ export interface ExecutionPolicySettings {
 	preset: ExecutionPolicyPreset | "custom";
 	toolGuidance: "mode-aware" | "advisory" | "off";
 	modeRoutes: "protected-research" | "direct";
-	delivery: "dedicated-tools";
 	consequential: "confirm" | "confirm-mutations" | "allow";
 	privilegedRemote: "hack-only" | "confirm" | "deny";
 	githubReads: "allow-apparent-reads" | "confirm";
 	/** `allow` runs it — confined like everything else. */
 	unknowns: "allow" | "confirm" | "deny";
-	fallback: "fail-closed" | "confirm";
 }
 
 const POLICY_PRESETS: Record<
@@ -43,32 +41,26 @@ const POLICY_PRESETS: Record<
 	guided: {
 		toolGuidance: "mode-aware",
 		modeRoutes: "protected-research",
-		delivery: "dedicated-tools",
 		consequential: "confirm",
 		privilegedRemote: "hack-only",
 		githubReads: "allow-apparent-reads",
 		unknowns: "allow",
-		fallback: "fail-closed",
 	},
 	strict: {
 		toolGuidance: "mode-aware",
 		modeRoutes: "protected-research",
-		delivery: "dedicated-tools",
 		consequential: "confirm-mutations",
 		privilegedRemote: "confirm",
 		githubReads: "confirm",
 		unknowns: "deny",
-		fallback: "fail-closed",
 	},
 	permissive: {
 		toolGuidance: "advisory",
 		modeRoutes: "direct",
-		delivery: "dedicated-tools",
 		consequential: "allow",
 		privilegedRemote: "hack-only",
 		githubReads: "allow-apparent-reads",
 		unknowns: "confirm",
-		fallback: "confirm",
 	},
 };
 
@@ -125,7 +117,6 @@ export function readExecutionPolicySettings(
 			["protected-research", "direct"],
 			defaults.modeRoutes,
 		),
-		delivery: read("delivery", ["dedicated-tools"], defaults.delivery),
 		consequential: read(
 			"consequential",
 			["confirm", "confirm-mutations", "allow"],
@@ -142,7 +133,6 @@ export function readExecutionPolicySettings(
 			defaults.githubReads,
 		),
 		unknowns: read("unknowns", ["allow", "confirm", "deny"], defaults.unknowns),
-		fallback: read("fallback", ["fail-closed", "confirm"], defaults.fallback),
 	};
 	const custom = Object.keys(resolved).some((key) => {
 		const raw = readPath(config, `execution.${key}`);

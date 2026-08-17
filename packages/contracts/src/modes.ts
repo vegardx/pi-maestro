@@ -1,9 +1,9 @@
 // Permission modes and orchestration workflow vocabulary.
 
-export const MODE_NAMES = ["plan", "auto"] as const;
-export const ALL_MODES = ["recon", "plan", "auto", "hack", "agent"] as const;
-export type ModeName = (typeof ALL_MODES)[number];
-export type CycleModeName = (typeof MODE_NAMES)[number];
+export const MODE_NAMES = ["plan", "auto", "hack"] as const;
+export const ALL_MODES = MODE_NAMES;
+export type ModeName = (typeof MODE_NAMES)[number];
+export type CycleModeName = ModeName;
 
 export interface ModeChange {
 	readonly mode: ModeName;

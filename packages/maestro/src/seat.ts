@@ -1,6 +1,5 @@
 import { createPlanTool } from "./authoring.js";
 import { createBashTool } from "./bash-tool.js";
-import { createCommitTool } from "./commit-tool.js";
 import { createDeleteTool } from "./delete-tool.js";
 import {
 	type ExecutionPolicySettings,
@@ -14,9 +13,6 @@ import { ToolRegistry } from "./tool-registry.js";
 export interface SeatOptions {
 	readonly cwd?: string;
 	readonly agentDir?: string;
-	readonly askHuman?: (
-		question: string,
-	) => Promise<{ readonly answer: string; readonly from: "maestro" | "human" }>;
 }
 
 /** The small, human-driven surface that remains after the workflow cutover. */
@@ -25,12 +21,16 @@ export interface Seat {
 	readonly tools: ToolRegistry;
 	mode(): Mode;
 	setMode(name: ModeName): Mode;
+	onModeChange(
+		listener: (mode: ModeName, previous: ModeName) => void,
+	): () => void;
 }
 
 export function createSeat(options: SeatOptions = {}): Seat {
 	const cwd = options.cwd ?? process.cwd();
 	const store = createPlanStore(plansRoot(options.agentDir));
 	let current = mode("plan");
+	const listeners = new Set<(mode: ModeName, previous: ModeName) => void>();
 	const policy = (): ExecutionPolicySettings =>
 		readExecutionPolicySettings(cwd, options.agentDir);
 
@@ -41,24 +41,7 @@ export function createSeat(options: SeatOptions = {}): Seat {
 				cwd,
 				mode: () => current,
 				policy,
-				...(options.askHuman
-					? {
-							confirm: async (command: string, reason: string) => {
-								const reply = await options.askHuman?.(
-									`Run this? ${command}\n\nWhy it is being asked: ${reason}\n\nAnswer yes to allow it.`,
-								);
-								return (
-									reply?.from === "human" &&
-									/^\s*y(es)?\s*$/i.test(reply.answer)
-								);
-							},
-						}
-					: {}),
 			}),
-			holders: ["maestro"],
-		},
-		{
-			definition: createCommitTool({ cwd: () => cwd }),
 			holders: ["maestro"],
 		},
 		{ definition: createDeleteTool(), holders: ["maestro"] },
@@ -73,8 +56,15 @@ export function createSeat(options: SeatOptions = {}): Seat {
 		tools,
 		mode: () => current,
 		setMode: (name) => {
+			const previous = current.name;
 			current = mode(name);
+			if (previous !== current.name)
+				for (const listener of listeners) listener(current.name, previous);
 			return current;
+		},
+		onModeChange: (listener) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
 		},
 	};
 }

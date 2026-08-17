@@ -11,8 +11,7 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { ModeName, TokenSnapshot } from "@vegardx/pi-contracts";
-import type { UsageLedger } from "./usage-ledger.js";
+import type { ModeName } from "@vegardx/pi-contracts";
 
 interface FooterCandidate {
 	readonly visible: string;
@@ -25,37 +24,7 @@ function compactNumber(value: number): string {
 	return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }
 
-export function formatUsage(
-	label: string,
-	snapshot: TokenSnapshot | undefined,
-	unavailable: number,
-): string | undefined {
-	if (!snapshot && unavailable === 0) return undefined;
-	if (!snapshot) return `${label} n/a`;
-	if (snapshot.totalTokens === 0 && unavailable > 0) return `${label} n/a`;
-	const hit =
-		snapshot.promptTokens > 0
-			? ` CH ${Math.round((snapshot.cacheRead / snapshot.promptTokens) * 100)}%`
-			: "";
-	const partial = unavailable > 0 ? ` +${unavailable} n/a` : "";
-	return `${label} ↑${compactNumber(snapshot.promptTokens)} ↓${compactNumber(snapshot.output)}${hit}${partial}`;
-}
-
-export function footerUsageLabels(ledger: UsageLedger): {
-	readonly seat?: string;
-	readonly all?: string;
-} {
-	const view = ledger.snapshot();
-	const seatSnapshot = view.bySource.get("maestro");
-	const seatUnavailable = view.unavailableSources.has("maestro") ? 1 : 0;
-	const allSnapshot = view.bySource.size > 0 ? view.totals : undefined;
-	return {
-		seat: formatUsage("Seat", seatSnapshot, seatUnavailable),
-		all: formatUsage("All", allSnapshot, view.unavailableSources.size),
-	};
-}
-
-function contextLabel(
+export function contextLabel(
 	ctx: ExtensionContext,
 ): { readonly text: string; readonly color: ThemeColor } | undefined {
 	const usage = ctx.getContextUsage?.();
@@ -108,20 +77,17 @@ function compose(
 }
 
 const MODE_COLOR: Record<ModeName, ThemeColor> = {
-	recon: "success",
 	plan: "warning",
 	auto: "accent",
 	hack: "error",
-	agent: "muted",
 };
 
 export function installMaestroFooter(options: {
 	readonly pi: ExtensionAPI;
 	readonly ctx: ExtensionContext;
-	readonly ledger: UsageLedger;
 	readonly mode: () => ModeName;
 }): (() => void) | undefined {
-	const { pi, ctx, ledger, mode } = options;
+	const { pi, ctx, mode } = options;
 	if (!ctx.hasUI || !ctx.ui.setFooter) return undefined;
 	let tui: TUI | undefined;
 	const cwd = ctx.cwd ?? "";
@@ -141,16 +107,11 @@ export function installMaestroFooter(options: {
 						"muted",
 						branch ? `${short} (${branch})` : short,
 					);
-					const usage = footerUsageLabels(ledger);
 					const context = contextLabel(ctx);
 					const model = modelLabel(ctx, pi);
 					const currentMode = mode();
 					type Segment = readonly [styled: string, visible: string];
 					const segments: Array<Segment | undefined> = [
-						usage.seat
-							? [theme.fg("muted", usage.seat), usage.seat]
-							: undefined,
-						usage.all ? [theme.fg("muted", usage.all), usage.all] : undefined,
 						context
 							? [theme.fg(context.color, context.text), context.text]
 							: undefined,
@@ -171,16 +132,7 @@ export function installMaestroFooter(options: {
 						});
 					};
 					push(present);
-					// The operator's current seat is the most local signal. Aggregate All
-					// is the first usage segment to go when both no longer fit.
-					let reduced = usage.all
-						? present.filter((segment) => segment[1] !== usage.all)
-						: present;
-					if (reduced.length !== present.length) push(reduced);
-					if (usage.seat) {
-						reduced = reduced.filter((segment) => segment[1] !== usage.seat);
-						push(reduced);
-					}
+					let reduced = present;
 					if (context) {
 						reduced = reduced.filter((segment) => segment[1] !== context.text);
 						push(reduced);

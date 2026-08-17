@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Workflow-native planning, approval, orchestration, accounting, and shipping for Pi.",
+	"description": "Thin plan compiler, mode, footer, and publication sugar around public Pi workflow extensions.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {

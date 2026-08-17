@@ -78,8 +78,7 @@ describe("command names", () => {
 	});
 
 	it("registers one autonomous plan-running verb under a free name", () => {
-		// Running a plan with durable state is also its recovery operation. There
-		// is no separate start, stop, or resume choreography.
+		// Pi-workflow owns status and resume. Maestro adds no competing verbs.
 		const names = maestroCommands();
 		expect(names).toContain("run");
 		expect(names).not.toContain("stop");

@@ -158,7 +158,7 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 	// holds. Nothing said the shell is classified, that writes are confined to
 	// the worktree by the OS, or that committing goes somewhere else — so a
 	// worker discovered each of those by being refused, mid-deliverable. One
-	// live drive lost an entire deliverable to precisely that discovery.
+	// manual run lost an entire deliverable to precisely that discovery.
 	//
 	// A refusal is still the backstop. This is the part that means an agent
 	// rarely has to hit it.

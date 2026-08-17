@@ -1,6 +1,6 @@
 // No two extensions may register the same tool name.
 //
-// This shipped broken and cost three live drives to find. `modes` registered a
+// This shipped broken and cost three manual runs to find. `modes` registered a
 // plan-structure tool named "agent" (add/update/ensemble a support agent on a
 // deliverable) while `subagents` registered a runtime tool with the SAME name
 // (run/batch/spawn/…). One shadowed the other, so a forming turn calling

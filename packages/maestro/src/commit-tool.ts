@@ -1,6 +1,6 @@
 // The `commit` a worker actually gets.
 //
-// This exists because a live drive found the system could not ship anything.
+// This exists because a manual run found the system could not ship anything.
 // The classifier refuses `git commit` through bash with "Use the commit tool",
 // and no such tool was declared — so a worker was told to reach for something
 // that did not exist, and every deliverable failed at the last step. That is

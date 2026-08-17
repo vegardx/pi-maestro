@@ -952,7 +952,7 @@ function unknownRoute(
 
 // A refusal may only name a tool the refused agent actually holds. Saying "use
 // the X tool" when X is not granted leaves an agent with no way forward and no
-// way to know that — which is how a live drive found every deliverable failing
+// way to know that — which is how a manual run found every deliverable failing
 // at its last step, told to reach for a `commit` tool nobody had declared.
 // `test/refusals-name-real-tools.test.ts` binds these strings to the registry.
 function deliveryReason(command: string): string {

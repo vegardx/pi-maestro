@@ -114,7 +114,7 @@ describe("the handshake", () => {
 		// guarantees whatever the code does — it passed with the replacement
 		// removed entirely. What matters is that the first socket is actually
 		// dropped: two live sockets under one id is how a maestro ends up
-		// answering the wrong process, which a live drive did once.
+		// answering the wrong process, which a manual run did once.
 		//
 		// It also passed `resumed: true`, a flag written onto the wire and read
 		// by nobody. That is gone.

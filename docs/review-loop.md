@@ -6,7 +6,7 @@ diff to a reviewer and acts on what comes back **before** it reports.
 That is the whole design, and it is deliberate: a review nobody acts on is a
 review that did not happen. The system this replaced had typed assignments, a
 stage DAG, canonical findings, duplicate membership, scope-locked verification
-and provenance in the PR body — and a live drive found six real findings,
+and provenance in the PR body — and a manual run found six real findings,
 including a genuine silent-pass assertion, reaching a pull request whose body
 read `(agent produced no summary)`. The machinery was elaborate and the output
 was discarded.

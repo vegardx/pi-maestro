@@ -702,7 +702,7 @@ describe("a read-only child is launched with nothing to dial", () => {
 		// Omitting only keeps a variable out if nothing merges the parent's
 		// environment underneath, and pi's own RpcClient spawns with
 		// `{...process.env, ...options.env}` — so an omitted variable is an
-		// inherited one. A live drive paid for this: a reviewer inherited its
+		// inherited one. A manual run paid for this: a reviewer inherited its
 		// worker's socket, token and AGENT ID, dialled home as that worker, and
 		// the maestro destroyed the real worker's connection as a reconnect.
 		const { env } = invocation();

@@ -107,5 +107,4 @@ Safeguards do not propagate: a worker is never in hack.
 
 - [commands.md](commands.md) — every command and tool
 - [usage.md](usage.md) — the lifecycle end to end
-- [e2e-testing.md](e2e-testing.md) — the three tiers, and what only a live drive can see
 - `docs/design/` and `docs/reviews/` — dated records of what was designed when, not claims about today

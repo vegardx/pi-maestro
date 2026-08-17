@@ -19,7 +19,7 @@ export interface ReadOnlyLaunchOptions {
 	 * Which pi to start. Defaults to the one THIS process is running, for the
 	 * same reason a worker does: left to resolve `pi` itself, a child started
 	 * from a worktree finds a shim symlinked at `../dist/cli.js` and dies with
-	 * MODULE_NOT_FOUND. A live drive hit it on the worker path first; this is
+	 * MODULE_NOT_FOUND. A manual run hit it on the worker path first; this is
 	 * the same bug in the reader path, and both were fixed by the same rule —
 	 * an agent runs the pi its maestro is running.
 	 */
@@ -36,7 +36,7 @@ const DEAD_POLL_MS = 250;
  *
  * `RpcClient.prompt` returns as soon as the message is SENT, which is the whole
  * reason this exists: reading the last assistant text straight after it reads a
- * turn that has not happened, and the answer is empty. A live drive found this
+ * turn that has not happened, and the answer is empty. A manual run found this
  * the expensive way — a reviewer that had genuinely been asked appeared to have
  * returned nothing.
  *

@@ -130,7 +130,7 @@ Versus the current `modes-architecture.md`:
 | Boot mode | recon | **plan** |
 
 Everything else in `modes-architecture.md` (§System prompt composition,
-§Persistence, §Deliverable handoff, §Worker tool set, §e2e oracle) stands.
+§Persistence, §Deliverable handoff, §Worker tool set) stands.
 
 ---
 

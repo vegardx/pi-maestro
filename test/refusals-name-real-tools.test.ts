@@ -6,7 +6,7 @@
 // nothing bound it to the other three: `bash-policy` is prose, the registry is
 // code, and they are joined by a bare string.
 //
-// A live drive found what that costs. Wiring the classifier made the policy
+// A manual run found what that costs. Wiring the classifier made the policy
 // refuse `git commit` with "Use the commit tool", and the rebuilt maestro
 // declared no such tool — so every worker reached the end of its deliverable,
 // could not record the work, and failed. Every unit test passed throughout,

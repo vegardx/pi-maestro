@@ -6,7 +6,7 @@
 //     and no tool of that name ever existed. A live worker never called it, no
 //     error was raised, and code review did not happen.
 //   - `createAgentTool` was written, exported, unit-tested and never
-//     registered — four live drives could not author a reviewer.
+//     registered — repeated manual runs could not author a reviewer.
 //   - `panel` sat in a grant list with no implementation at all.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";

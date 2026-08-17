@@ -4,7 +4,6 @@
 // and iteration. No logic, no host dependencies.
 
 export * from "./agents.js";
-export * from "./ask.js";
 export * from "./capabilities.js";
 export * from "./catalog.js";
 export * from "./compaction.js";

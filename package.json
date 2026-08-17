@@ -20,7 +20,9 @@
 			"packages/research-tools/src/index.ts",
 			"packages/maestro/src/extension.ts"
 		],
-		"skills": []
+		"skills": [
+			"./skills"
+		]
 	},
 	"scripts": {
 		"check": "biome check . && tsc --noEmit && node scripts/check-feature-flags.mjs && node scripts/check-docs.mjs && vitest run && node scripts/smoke.mjs",

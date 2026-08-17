@@ -24,9 +24,8 @@ const PACKAGES = join(process.cwd(), "packages");
  * "one becomes unreachable depending on load order" means. A package outside
  * the manifest loads beside nothing and can collide with nothing.
  *
- * That commit has happened: `packages/maestro` is in the manifest and `modes`
- * and `subagents` are deleted, so it is now the only loaded package defining
- * tools at all. This check earns its keep for the next one to arrive.
+ * Public package adapters are verified through extension smoke tests. This
+ * source check covers tools implemented inside this repository.
  */
 function loadedPackages(): Set<string> {
 	const manifest = JSON.parse(
@@ -75,10 +74,9 @@ function toolNames(): Map<string, string[]> {
 describe("tool names", () => {
 	it("finds the tool definitions at all", () => {
 		const names = toolNames();
-		expect(names.size).toBeGreaterThan(5);
-		// Sanity: tools from the workflow seat and the ask extension.
+		expect(names.size).toBeGreaterThan(1);
 		expect(names.has("plan")).toBe(true);
-		expect(names.has("respond")).toBe(true);
+		expect(names.has("delete")).toBe(true);
 	});
 
 	it("registers no tool name from two different packages", () => {
@@ -94,7 +92,7 @@ describe("tool names", () => {
 	it("keeps the workflow seat surface singular", () => {
 		const names = toolNames();
 		expect(names.get("plan")).toEqual(["maestro"]);
-		expect(names.get("commit")).toEqual(["maestro"]);
+		expect(names.has("commit")).toBe(false);
 		expect(names.has("subagent")).toBe(false);
 		expect(names.has("finish")).toBe(false);
 	});

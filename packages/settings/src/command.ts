@@ -211,7 +211,7 @@ export function handleSettingsCommand(
 	}
 	notify(
 		ctx,
-		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, validate, region, setup, or doctor.`,
+		`Unknown subcommand "${sub}". Use show, get, set, reset, explain, validate, or region.`,
 		true,
 	);
 }
@@ -230,8 +230,6 @@ export function getSettingsCompletions(
 			"explain",
 			"validate",
 			"region",
-			"setup",
-			"doctor",
 		].filter((item) => item.startsWith(parts[0] ?? ""));
 	const sub = parts[0];
 	if (!["get", "set", "reset"].includes(sub)) return [];

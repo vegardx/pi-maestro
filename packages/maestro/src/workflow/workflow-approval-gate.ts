@@ -27,7 +27,7 @@ import {
 	sep,
 } from "node:path";
 import type { Answers, Questionnaire } from "@vegardx/pi-contracts";
-import { currentDepth } from "../spawn.js";
+import { currentDepth } from "../depth.js";
 
 export interface WorkflowApprovalAsker {
 	ask(questions: Questionnaire): Promise<Answers>;

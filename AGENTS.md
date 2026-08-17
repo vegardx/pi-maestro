@@ -2,12 +2,9 @@
 
 Guidance for coding agents (Claude, pi, or any harness) working in this repo.
 pi-maestro is a **pi coding-agent extension stack** (`package.json`
-`pi.extensions`). One `pi` process becomes a maestro; it spawns detached worker
-processes that dial home over a unix socket and speak the small protocol in
-`packages/maestro/src/protocol.ts`.
-
-Depth decides what a process is. Depth 0 is the seat, depth 1 a worker, depth 2
-a read-only agent. `packages/maestro/src/extension.ts` reads that once, at load.
+`pi.extensions`). One interactive `pi` process is the Maestro seat. Autonomous
+work runs through a sandboxed `pi-workflow` supervisor and `pi-subagent`; there
+is no custom worker socket or alternate executor.
 
 ## Build / check
 
@@ -42,7 +39,8 @@ A capability used to live in four independent places — the grant, the
 implementation, the agent-facing description, the verification — joined only by
 strings, with nothing failing when they disagreed.
 
-`ToolRegistry.declare` and `PersonaCatalogue.declare` reject at construction:
-grants are derived, descriptions generated, and prose that names a declared
-tool is refused. When you add anything with a name, ask where the *second*
-place that name lives is, and whether anything would fail if the two disagreed.
+`ToolRegistry.declare` rejects drift at construction: grants derive from the
+tool implementation. Workflow manifests bind approved models, repositories,
+artifacts, and authority. When you add anything with a name, ask where the
+*second* place that name lives is, and whether anything would fail if they
+disagreed.

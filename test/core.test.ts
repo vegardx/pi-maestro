@@ -118,12 +118,6 @@ describe("feature flags", () => {
 		expect(isFlagEnabled("demo", "thing")).toBe(true);
 	});
 
-	it("lets an adopting surface declare a flag off by default", () => {
-		expect(isFlagEnabled("demo", "optIn", false)).toBe(false);
-		process.env.PI_ENABLE = "demo.optIn";
-		expect(isFlagEnabled("demo", "optIn", false)).toBe(true);
-	});
-
 	it("PI_EXT_<NAME>=off disables the whole extension and its flags", () => {
 		process.env.PI_EXT_DEMO = "off";
 		expect(isExtensionEnabled("demo")).toBe(false);

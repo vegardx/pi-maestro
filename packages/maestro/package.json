@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "The maestro system: plan model, agent model, and execution. Not in the extension manifest until the cutover.",
+	"description": "Workflow-native planning, approval, orchestration, accounting, and shipping for Pi.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {
@@ -13,7 +13,6 @@
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-settings": "*",
-		"@vegardx/pi-models": "*",
 		"@anthropic-ai/sandbox-runtime": "^0.0.26",
 		"@vegardx/pi-git": "*",
 		"@vegardx/pi-github": "*"

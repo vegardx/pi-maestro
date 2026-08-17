@@ -9,6 +9,6 @@ export default defineExtension(
 	async (pi) => {
 		const extension = (await import("@juicesharp/rpiv-ask-user-question"))
 			.default;
-		extension(pi);
+		await extension(pi);
 	},
 );

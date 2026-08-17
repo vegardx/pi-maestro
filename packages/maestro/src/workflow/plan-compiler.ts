@@ -42,7 +42,7 @@ export function compilePlanWorkflow(
 		]),
 	);
 	const stages: ArtifactGraphWorkflowSpec["artifactGraph"]["stages"] = [];
-	const reviewIdsByDeliverable = new Map<string, string[]>();
+	const reviewIdsByRepository = new Map<string, string[]>();
 	const previousInRepository = new Map<string, string>();
 
 	for (const deliverable of plan.deliverables) {
@@ -100,36 +100,33 @@ export function compilePlanWorkflow(
 				model: task.by.model,
 				readOnly: true,
 				worktreePolicy: "off",
-				tools: ["read", "grep", "find", "ls", "bash"],
+				tools: ["read", "grep", "find", "ls"],
 				output: { controlSchema: REVIEW_FINDINGS_SCHEMA },
 				prompt: reviewPrompt(task, repositoryKey, repository.path),
 			});
 		}
-		reviewIdsByDeliverable.set(deliverable.id, reviewIds);
+		const collected = reviewIdsByRepository.get(repositoryKey) ?? [];
+		collected.push(...reviewIds);
+		reviewIdsByRepository.set(repositoryKey, collected);
 	}
 
-	const previousFixerInRepository = new Map<string, string>();
-	for (const deliverable of plan.deliverables) {
-		const reviewIds = reviewIdsByDeliverable.get(deliverable.id) ?? [];
+	for (const repository of options.repositories) {
+		const reviewIds = reviewIdsByRepository.get(repository.key) ?? [];
 		if (reviewIds.length === 0) continue;
-		const repositoryKey = deliverable.repo ?? (plan.repos[0]?.key as string);
-		const repository = repositories.get(repositoryKey) as NonNullable<
-			ReturnType<typeof repositories.get>
-		>;
-		const fixerId = stageName(deliverable.id, "fix");
-		const previousFixer = previousFixerInRepository.get(repositoryKey);
+		const repositoryDeliverables = plan.deliverables.filter(
+			(deliverable) =>
+				(deliverable.repo ?? plan.repos[0]?.key) === repository.key,
+		);
 		stages.push({
-			id: fixerId,
+			id: stageName(repository.key, "fix"),
 			type: "reduce",
 			from: reviewIds,
-			...(previousFixer ? { after: previousFixer } : {}),
 			model: options.model,
 			readOnly: false,
 			worktreePolicy: "off",
 			tools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
-			prompt: fixerPrompt(deliverable, repository.path),
+			prompt: fixerPrompt(repositoryDeliverables, repository.path),
 		});
-		previousFixerInRepository.set(repositoryKey, fixerId);
 	}
 
 	assertUniqueStageNames(stages.map(({ id }) => id));
@@ -231,11 +228,11 @@ function reviewPrompt(
 }
 
 function fixerPrompt(
-	deliverable: Plan["deliverables"][number],
+	deliverables: readonly Plan["deliverables"][number][],
 	repositoryPath: string,
 ): string {
 	return [
-		`Resolve review findings for ${deliverable.id}: ${deliverable.title}`,
+		`Resolve review findings for: ${deliverables.map(({ id, title }) => `${id} (${title})`).join(", ")}`,
 		`Repository path: ${repositoryPath}`,
 		"Read every upstream review artifact. Evaluate each finding and suggestion independently.",
 		"Apply justified fixes and leave unjustified suggestions unchanged.",

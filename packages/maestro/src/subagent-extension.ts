@@ -9,6 +9,6 @@ export default defineExtension(
 	async (pi) => {
 		const packageName = "@agwab/pi-subagent";
 		const extension = (await import(packageName)).default;
-		extension(pi);
+		await extension(pi);
 	},
 );

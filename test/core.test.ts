@@ -14,7 +14,6 @@ import {
 	registerCapability,
 	requireCapability,
 	runAgentTurn,
-	setSettingsLayer,
 	whenCapabilityAvailable,
 } from "@vegardx/pi-core";
 
@@ -103,12 +102,10 @@ const ENV_KEYS = ["PI_EXT_DEMO", "PI_EXT_MAESTRO", "PI_DISABLE", "PI_ENABLE"];
 
 beforeEach(() => {
 	__resetCapabilityRegistry();
-	setSettingsLayer(undefined);
 	for (const k of ENV_KEYS) delete process.env[k];
 });
 
 afterEach(() => {
-	setSettingsLayer(undefined);
 	for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -134,17 +131,6 @@ describe("feature flags", () => {
 		process.env.PI_DISABLE = "demo.thing";
 		process.env.PI_ENABLE = "demo.thing";
 		expect(isFlagEnabled("demo", "thing")).toBe(false);
-	});
-
-	it("consults the injected settings layer below env, above default", () => {
-		setSettingsLayer({
-			extensionEnabled: (name) => (name === "demo" ? false : undefined),
-			flagEnabled: () => undefined,
-		});
-		expect(isExtensionEnabled("demo")).toBe(false);
-		// env overrides the settings layer
-		process.env.PI_EXT_DEMO = "on";
-		expect(isExtensionEnabled("demo")).toBe(true);
 	});
 });
 

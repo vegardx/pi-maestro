@@ -2,13 +2,7 @@
 // validation, merge, binding activation, null deletion markers, and the domain
 // write keys the /maestro editor persists through.
 
-import {
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,7 +11,6 @@ import {
 	readModelsConfig,
 } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeDomainValue } from "../packages/settings/src/domain.js";
 
 let cwd: string;
 let prevAgentDir: string | undefined;
@@ -237,72 +230,5 @@ describe("v2 model config", () => {
 			"Anthropic",
 		]);
 		expect(Object.keys(config?.bindings ?? {})).toEqual(["main"]);
-	});
-});
-
-describe("domain writes for v2 keys", () => {
-	function ctx() {
-		return { cwd, ui: { notify: () => {} } } as never;
-	}
-
-	function agentSettings(): Record<string, unknown> {
-		return JSON.parse(
-			readFileSync(join(cwd, ".agent", "settings.json"), "utf-8"),
-		);
-	}
-
-	function write(key: string, value: unknown): string[] {
-		return writeDomainValue(ctx(), key, "global", JSON.stringify(value));
-	}
-
-	it("writes a whole family and a single alias through the validated path", () => {
-		expect(write("models.families.OpenAI", FAMILIES.OpenAI)).toEqual([]);
-		expect(
-			write("models.families.OpenAI.aliases.Mini", {
-				attach: ["p/mini"],
-			}),
-		).toEqual([]);
-		const written = agentSettings() as {
-			models?: {
-				families?: Record<string, { aliases?: Record<string, unknown> }>;
-			};
-		};
-		expect(written.models?.families?.OpenAI?.aliases?.Mini).toBeDefined();
-	});
-
-	it("writes rosters, bindings, allowances, and region, rejecting bad shapes", () => {
-		expect(write("models.families.OpenAI", FAMILIES.OpenAI)).toEqual([]);
-		expect(
-			write("models.rosters.daily.standard", ["OpenAI/GPT 5.6 Sol"]),
-		).toEqual([]);
-		expect(write("models.bindings.main", { roster: "daily" })).toEqual([]);
-		expect(
-			write("models.allowances.deliverable-worker", { tiers: ["standard"] }),
-		).toEqual([]);
-		expect(
-			write("models.allowances.code-review", {
-				tiers: ["heavy"],
-				direct: "other-family",
-			}),
-		).toEqual([]);
-		expect(write("models.region.active", "off")).toEqual([]);
-
-		expect(write("models.rosters.bad.turbo", ["A/B"]).join(" ")).toContain(
-			"unknown tier",
-		);
-		expect(
-			write("models.rosters.bad.standard", ["noslash"]).join(" "),
-		).toContain('"Family/Alias"');
-		expect(
-			write("models.allowances.deliverable-worker", {
-				tiers: ["turbo"],
-			}).join(" "),
-		).toContain("light|standard|heavy");
-		expect(
-			write("models.allowances.code-review", {
-				tiers: ["heavy"],
-				direct: "sideways",
-			}).join(" "),
-		).toContain("inherit|other-family");
 	});
 });

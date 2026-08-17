@@ -32,7 +32,6 @@ const EXTENSION_PACKAGES = [
 	{ name: "web-access", entry: "packages/maestro/src/web-access-extension.ts" },
 	"prompt-assist",
 	"smart-compact",
-	{ name: "settings", entry: "packages/settings/src/extension.ts" },
 	{ name: "maestro", entry: "packages/maestro/src/extension.ts" },
 ];
 

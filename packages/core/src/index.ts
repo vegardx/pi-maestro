@@ -24,8 +24,6 @@ export {
 	type FlagChecker,
 	isExtensionEnabled,
 	isFlagEnabled,
-	type SettingsLayer,
-	setSettingsLayer,
 } from "./feature-flags.js";
 export { redactSecrets } from "./redact.js";
 export { uiTrace } from "./ui-trace.js";

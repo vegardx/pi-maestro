@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { setSettingsLayer } from "@vegardx/pi-core";
 import { afterEach, describe, expect, it } from "vitest";
 import rpivAskExtension from "../packages/maestro/src/rpiv-ask-extension.js";
 
@@ -17,7 +16,6 @@ function host() {
 
 afterEach(() => {
 	delete process.env.PI_EXT_ASK_USER_QUESTION;
-	setSettingsLayer(undefined);
 });
 
 describe("rpiv ask-user-question adapter", () => {

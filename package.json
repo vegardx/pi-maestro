@@ -18,7 +18,6 @@
 			"packages/maestro/src/workflow-extension.ts",
 			"packages/maestro/src/web-access-extension.ts",
 			"packages/prompt-assist/src/index.ts",
-			"packages/settings/src/extension.ts",
 			"packages/smart-compact/src/index.ts",
 			"packages/maestro/src/extension.ts"
 		],

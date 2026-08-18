@@ -3,12 +3,7 @@ import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runWorkflowSpec, waitForRun } from "@agwab/pi-workflow";
-import {
-	currentBranch,
-	detectDefaultBranch,
-	gitToplevel,
-	workingTreeClean,
-} from "@vegardx/pi-git";
+import { currentBranch, gitToplevel, workingTreeClean } from "@vegardx/pi-git";
 import type { Plan } from "../plan.js";
 import {
 	type CompiledPlanWorkflow,
@@ -43,18 +38,13 @@ export function compileStoredPlan(input: {
 				`repository ${repository.key} must name an exact Git working-tree root`,
 			);
 		const branch = currentBranch(path);
-		const baseBranch = detectDefaultBranch(path);
 		if (!branch)
 			throw new Error(`repository ${repository.key} has detached HEAD`);
-		if (!baseBranch)
-			throw new Error(
-				`repository ${repository.key} has no detectable base branch`,
-			);
 		if (!workingTreeClean(path))
 			throw new Error(
 				`repository ${repository.key} must be clean before workflow launch`,
 			);
-		return { key: repository.key, path, branch, baseBranch };
+		return { key: repository.key, path, branch };
 	});
 	const normalizedPlan: Plan = {
 		...input.plan,

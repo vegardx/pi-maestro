@@ -20,13 +20,12 @@ describe("publication receipt", () => {
 						key: "api",
 						path: "/repos/api",
 						branch: "feat/api",
-						baseBranch: "main",
 					},
 				],
 			});
 			expect(readPublicationReceipt(cwd, "plan")).toMatchObject({
 				runId: "workflow_1",
-				repositories: [{ branch: "feat/api", baseBranch: "main" }],
+				repositories: [{ branch: "feat/api" }],
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });

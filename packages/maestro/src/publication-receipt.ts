@@ -3,14 +3,13 @@ import { dirname, join } from "node:path";
 import type { CompiledPlanWorkflow } from "./workflow/plan-compiler.js";
 
 export interface PublicationReceipt {
-	readonly version: 1;
+	readonly version: 2;
 	readonly planSlug: string;
 	readonly runId: string;
 	readonly repositories: readonly {
 		readonly key: string;
 		readonly path: string;
 		readonly branch: string;
-		readonly baseBranch: string;
 	}[];
 }
 
@@ -20,7 +19,7 @@ export function writePublicationReceipt(
 	compiled: CompiledPlanWorkflow,
 ): PublicationReceipt {
 	const receipt: PublicationReceipt = {
-		version: 1,
+		version: 2,
 		planSlug: compiled.planSlug,
 		runId,
 		repositories: compiled.repositories.map((repository) => ({
@@ -62,7 +61,7 @@ function isReceipt(value: unknown): value is PublicationReceipt {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const receipt = value as Partial<PublicationReceipt>;
 	return (
-		receipt.version === 1 &&
+		receipt.version === 2 &&
 		typeof receipt.planSlug === "string" &&
 		typeof receipt.runId === "string" &&
 		Array.isArray(receipt.repositories) &&
@@ -70,8 +69,7 @@ function isReceipt(value: unknown): value is PublicationReceipt {
 			(repository) =>
 				typeof repository?.key === "string" &&
 				typeof repository.path === "string" &&
-				typeof repository.branch === "string" &&
-				typeof repository.baseBranch === "string",
+				typeof repository.branch === "string",
 		)
 	);
 }

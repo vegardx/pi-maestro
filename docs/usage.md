@@ -23,9 +23,9 @@ Planning remains a conversation. The `plan` tool writes the complete plan after
 requirements, repositories, dependencies, implementation work, and review
 cohorts are understood.
 
-Every repository path must point at an exact Git working-tree root on a feature
-branch with a detectable remote default branch. The tree must be clean at
-workflow launch.
+Every repository path must point at an exact Git working-tree root with a
+checked-out branch. The tree must be clean at workflow launch. Default-branch
+and ancestry checks belong to `/publish`, not workflow compilation.
 
 Run the newest plan while moving from plan to auto:
 

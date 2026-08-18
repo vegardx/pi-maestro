@@ -33,9 +33,7 @@ const plan: Plan = {
 const options = {
 	model: "openai/gpt-5",
 	launchCwd: "/repos",
-	repositories: [
-		{ key: "api", path: "/repos/api", branch: "feat/api", baseBranch: "main" },
-	],
+	repositories: [{ key: "api", path: "/repos/api", branch: "feat/api" }],
 } as const;
 
 describe("thin workflow plan compiler", () => {
@@ -114,19 +112,12 @@ describe("thin workflow plan compiler", () => {
 		);
 	});
 
-	it("refuses the default branch", () => {
+	it("requires the checked-out branch in repository metadata", () => {
 		expect(() =>
 			compilePlanWorkflow(plan, {
 				...options,
-				repositories: [
-					{
-						key: "api",
-						path: "/repos/api",
-						branch: "main",
-						baseBranch: "main",
-					},
-				],
+				repositories: [{ key: "api", path: "/repos/api", branch: "" }],
 			}),
-		).toThrow(/feature branch/);
+		).toThrow(/branch metadata/);
 	});
 });

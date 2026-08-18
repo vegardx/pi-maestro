@@ -12,7 +12,6 @@ export interface PlanCompilerOptions {
 		readonly key: string;
 		readonly path: string;
 		readonly branch: string;
-		readonly baseBranch: string;
 	}[];
 }
 
@@ -163,10 +162,8 @@ function assertCompilable(plan: Plan, options: PlanCompilerOptions): void {
 	for (const repository of options.repositories) {
 		if (!isAbsolute(repository.path))
 			errors.push(`repository ${repository.key} path must be absolute`);
-		if (!repository.branch.trim() || !repository.baseBranch.trim())
+		if (!repository.branch.trim())
 			errors.push(`repository ${repository.key} branch metadata is incomplete`);
-		if (repository.branch === repository.baseBranch)
-			errors.push(`repository ${repository.key} must be on a feature branch`);
 		if (authoredRepositories.get(repository.key)?.path !== repository.path)
 			errors.push(
 				`repository ${repository.key} path does not match authored path`,
@@ -258,7 +255,7 @@ function renderApproval(plan: Plan, options: PlanCompilerOptions): string {
 		"Repositories:",
 		...options.repositories.map(
 			(repository) =>
-				`- ${repository.key}: ${repository.path}; ${repository.branch} -> ${repository.baseBranch}`,
+				`- ${repository.key}: ${repository.path}; ${repository.branch}`,
 		),
 		"",
 		`Implementer/fixer model: ${options.model}`,

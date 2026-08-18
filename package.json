@@ -54,8 +54,8 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@agwab/pi-subagent": "0.4.8",
-		"@agwab/pi-workflow": "0.11.0",
+		"@agwab/pi-subagent": "0.5.1",
+		"@agwab/pi-workflow": "0.12.0",
 		"@juicesharp/rpiv-ask-user-question": "2.6.1",
 		"@juicesharp/rpiv-i18n": "2.6.1",
 		"jiti": "^2.7.0",

@@ -48,17 +48,3 @@ export {
 	stageFiles,
 	UnsafeStageError,
 } from "./stage.js";
-export {
-	addWorktree,
-	agentWorktreePath,
-	findCheckoutOf,
-	listWorktrees,
-	parseWorktreeList,
-	removeWorktree,
-	type WorktreeAddResult,
-	type WorktreeEntry,
-	type WorktreeRemoveResult,
-	worktreeBaseSha,
-	worktreePathFor,
-	worktreesRoot,
-} from "./worktree.js";

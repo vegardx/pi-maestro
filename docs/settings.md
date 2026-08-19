@@ -3,6 +3,10 @@
 Pi-maestro uses Pi's normal global and project `settings.json` files. It does not
 register a separate settings command or editor.
 
+Do not also install `@agwab/pi-workflow`, `@agwab/pi-subagent`, or
+`pi-web-access` in `packages`. Pi-maestro bundles those integrations and rejects
+the duplicate configuration at startup with removal guidance.
+
 The remaining local extensions read their own keys from `extensionConfig`:
 
 ```json

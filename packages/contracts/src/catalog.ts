@@ -4,7 +4,7 @@
 // region (the active model allowlist), and per-persona tier allowances.
 // See docs/design/v2-primitives.md and memory/project-model-families-design.
 
-import type { ThinkingLevel } from "./runs.js";
+import type { ThinkingLevel } from "./thinking.js";
 
 /**
  * The three tiers with fixed meanings. The structure IS the routing: `light`

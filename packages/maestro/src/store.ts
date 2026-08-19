@@ -1,8 +1,7 @@
 // Persistence for authored plans. Runtime state belongs to workflow journals.
 //
 // NOTHING INVALID REACHES DISK. `savePlan` refuses a plan `validatePlan`
-// rejects, and `saveRun` refuses a run that does not check out against the plan
-// it names. A store that will happily persist a broken plan is a store that
+// rejects. A store that will happily persist a broken plan is a store that
 // turns an authoring bug into a run-time mystery days later — every serious
 // defect in the old system had that shape.
 
@@ -20,11 +19,11 @@ import { type Plan, validatePlan } from "./plan.js";
 
 /**
  * Bumped when a stored shape changes incompatibly. Version 1 is the first
- * Version 2 replaces persona/fan-out delegation with workflow-native review
- * intent. Nothing before it is readable, and nothing tries to be — there is no
+ * Version 3 removes preflight/postflight and repository-creation intent.
+ * Nothing before it is readable, and nothing tries to be — there is no
  * migration path from the old model on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 2 as const;
+export const MAESTRO_SCHEMA_VERSION = 3 as const;
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 

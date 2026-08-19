@@ -4,12 +4,12 @@
 //      settings > default-on). A disabled extension's factory never runs, so
 //      it registers nothing — the behavioural half of the feature-flag
 //      contract.
-//   2. Builds the maestro context: an auto-disposing capability facade, the
-//      typed event bus over pi.events, and a per-extension flag checker.
+//   2. Builds the maestro context: an auto-disposing capability facade and a
+//      per-extension flag checker.
 //   3. Tears down everything the extension registered on session_shutdown.
 //
 // Extensions are forbidden from importing each other; they collaborate only
-// through `maestro.capabilities` and `maestro.events`.
+// through `maestro.capabilities`.
 
 import type {
 	ExtensionAPI,
@@ -19,7 +19,6 @@ import {
 	createExtensionCapabilities,
 	type ExtensionCapabilities,
 } from "./capabilities.js";
-import { createTypedEventBus, type TypedEventBus } from "./events.js";
 import {
 	createFlagChecker,
 	type FlagChecker,
@@ -39,7 +38,6 @@ export interface DefineExtensionOptions {
 export interface MaestroContext {
 	readonly name: string;
 	readonly capabilities: ExtensionCapabilities;
-	readonly events: TypedEventBus;
 	readonly flags: FlagChecker;
 }
 
@@ -59,7 +57,6 @@ export function defineExtension(
 		const maestro: MaestroContext = {
 			name: opts.name,
 			capabilities: createExtensionCapabilities(disposers),
-			events: createTypedEventBus(pi.events),
 			flags: createFlagChecker(opts.name),
 		};
 

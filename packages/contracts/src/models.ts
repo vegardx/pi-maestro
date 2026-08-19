@@ -1,6 +1,6 @@
 // Shared model-role + effort vocabulary.
 
-import type { ThinkingLevel } from "./runs.js";
+import type { ThinkingLevel } from "./thinking.js";
 
 /** Stable policy keys used by model-consuming runtimes. */
 export const MODEL_ROLES = [

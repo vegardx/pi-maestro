@@ -6,7 +6,6 @@ import type { ModesCapabilityV1 } from "@vegardx/pi-contracts";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import {
 	__resetCapabilityRegistry,
-	createTypedEventBus,
 	defineExtension,
 	getCapability,
 	isExtensionEnabled,
@@ -163,18 +162,6 @@ describe("capability registry", () => {
 		const pending = whenCapabilityAvailable(CAPABILITIES.modes);
 		registerCapability(CAPABILITIES.modes, impl);
 		await expect(pending).resolves.toBe(impl);
-	});
-});
-
-describe("typed event bus", () => {
-	it("round-trips a typed payload over the underlying bus", () => {
-		const bus = createTypedEventBus(fakeEventBus());
-		let seen: unknown;
-		bus.on("maestro.mode.changed", (p) => {
-			seen = p;
-		});
-		bus.emit("maestro.mode.changed", { mode: "auto", previous: "plan" });
-		expect(seen).toEqual({ mode: "auto", previous: "plan" });
 	});
 });
 

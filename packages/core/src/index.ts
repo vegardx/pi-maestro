@@ -18,7 +18,6 @@ export {
 	type MaestroContext,
 	type MaestroFactory,
 } from "./define-extension.js";
-export { createTypedEventBus, type TypedEventBus } from "./events.js";
 export {
 	createFlagChecker,
 	type FlagChecker,

@@ -51,7 +51,6 @@ describe("the reader's shell: reads run, writes are refused", () => {
 	// because the operations are what the reader's registered tool executes.
 	function readerOperations() {
 		const ran: string[] = [];
-		const confined: string[] = [];
 		const direct: BashOperations = {
 			exec: async (command: string) => {
 				ran.push(command);
@@ -66,28 +65,14 @@ describe("the reader's shell: reads run, writes are refused", () => {
 			mode: () => mode("plan"),
 			policy: () => policy,
 			direct,
-			confine: (base) =>
-				({
-					exec: async (command: string, cwd: string, o: unknown) => {
-						confined.push(command);
-						return (
-							base.exec as unknown as (
-								c: string,
-								w: string,
-								x: unknown,
-							) => Promise<{ exitCode: number }>
-						)(command, cwd, o);
-					},
-				}) as unknown as BashOperations,
 		});
-		return { ran, confined, ops };
+		return { ran, ops };
 	}
 
-	it("runs git archaeology, confined like everything else", async () => {
+	it("runs permitted git archaeology on the host", async () => {
 		const o = readerOperations();
 		await o.ops.exec("git log --oneline -5", "/r", { onData: () => {} });
 		expect(o.ran).toEqual(["git log --oneline -5"]);
-		expect(o.confined).toEqual(["git log --oneline -5"]);
 	});
 
 	it("refuses a write command with the read-only reason, not a redirect", async () => {
@@ -121,12 +106,7 @@ describe("every route turns into something, and none of them into silence", () =
 			expect(decideFromRoute(route, "r", false).kind).toBe("allow");
 	});
 
-	it("treats `lightweight` as confinement, not as a destination", () => {
-		// The COPY tier is retired. `lightweight` allows — and what confines it is
-		// the write profile every route already runs under, applied below. Sending
-		// it somewhere instead implies the OTHER routes need no confining, which
-		// is exactly the inversion that put the ordinary path on a bare host
-		// shell while the cautious path was the only thing refused.
+	it("treats the retired lightweight route as an allowed host command", () => {
 		expect(decideFromRoute("lightweight", "r", true).kind).toBe("allow");
 	});
 
@@ -215,7 +195,6 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		over: Partial<Parameters<typeof createGatedBashOperations>[0]> = {},
 	) {
 		const ran: string[] = [];
-		const confined: string[] = [];
 		const direct: BashOperations = {
 			exec: async (command: string) => {
 				ran.push(command);
@@ -228,60 +207,15 @@ describe("the gate sits in front of the operations, not the tool", () => {
 			mode: () => mode("auto"),
 			policy: () => policy,
 			direct,
-			// Stands in for the OS. The real one wraps through sandbox-runtime,
-			// which cannot be exercised on every platform CI runs on — so what is
-			// asserted here is that the wrap is REACHED, which is the part that
-			// was missing, and `realtree-sandbox-live.test.ts` proves it confines.
-			confine: (base) =>
-				({
-					exec: async (command: string, cwd: string, o: unknown) => {
-						confined.push(command);
-						return (
-							base.exec as unknown as (
-								c: string,
-								w: string,
-								x: unknown,
-							) => Promise<{ exitCode: number }>
-						)(command, cwd, o);
-					},
-				}) as unknown as BashOperations,
 			...over,
 		});
-		return { ran, confined, ops };
+		return { ran, ops };
 	}
 
-	it("runs what it allows — through the write profile, never around it", async () => {
+	it("runs what the classifier allows on the host", async () => {
 		const o = operations();
 		await o.ops.exec("git status", "/w", { onData: () => {} });
 		expect(o.ran).toEqual(["git status"]);
-		expect(o.confined).toEqual(["git status"]);
-	});
-
-	it("confines the ordinary path, which is the whole point", async () => {
-		// The defect this replaces: confinement was a DESTINATION, so `allow` ran
-		// on a bare host shell and only the tier-routed minority was refused. The
-		// majority of commands took the unguarded path. A classifier miss was an
-		// escape again, which is the forcing bug the sandbox exists to close.
-		const o = operations();
-		for (const command of ["ls -la", "npm test", "git status"])
-			await o.ops.exec(command, "/w", { onData: () => {} });
-		expect(o.confined).toEqual(o.ran);
-		expect(o.ran).toHaveLength(3);
-	});
-
-	it("honours the escape hatch, and only that", async () => {
-		const before = process.env.MAESTRO_SANDBOX;
-		process.env.MAESTRO_SANDBOX = "off";
-		try {
-			// Asserted against the REAL wrapper, not the stub: the switch has to
-			// live inside the thing it disables, or "off" is a lie somewhere.
-			const o = operations({ confine: undefined });
-			await o.ops.exec("git status", "/w", { onData: () => {} });
-			expect(o.ran).toEqual(["git status"]);
-		} finally {
-			if (before === undefined) delete process.env.MAESTRO_SANDBOX;
-			else process.env.MAESTRO_SANDBOX = before;
-		}
 	});
 
 	it("THROWS on a refusal rather than returning a bad exit code", async () => {
@@ -294,15 +228,10 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		expect(o.ran).toEqual([]);
 	});
 
-	it("runs an unknown command confined, not refused for a missing backend", async () => {
-		// This used to route to `strong` — a separate backend whose supplier was
-		// `packages/modes` — so after the flip the safest preset refused every
-		// command sent there, for want of a backend that could not exist. There
-		// is no tier to pick any more: unknown effects run under the same write
-		// profile as everything else, or the `unknowns` knob says confirm/deny.
+	it("runs an unknown command when the policy allows it", async () => {
 		const o = operations();
 		await o.ops.exec("frobnicate --widgets", "/w", { onData: () => {} });
-		expect(o.confined).toEqual(["frobnicate --widgets"]);
+		expect(o.ran).toEqual(["frobnicate --widgets"]);
 	});
 
 	// Pinned, and asserted rather than assumed. Both tests below used to use `gh
@@ -333,18 +262,9 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		expect(o.ran).toEqual([]);
 	});
 
-	it("runs a CONFIRMED command confined — a yes is not a yes to unconfining", async () => {
-		// Written because sabotaging this exact line changed nothing: every other
-		// test still passed with a confirmed command on a bare host shell.
-		//
-		// The confusion it guards against is real. Being asked FEELS like the
-		// safeguard, so the layer underneath looks redundant once someone says
-		// yes. It is not. Consent is to the COMMAND; the write profile bounds
-		// what that command can reach, and a human agreeing to `npm publish` did
-		// not agree to it writing outside the worktree on the way.
+	it("runs a confirmed command after explicit consent", async () => {
 		const o = operations({ holder: "maestro", confirm: async () => true });
 		await o.ops.exec(CONFIRMS, "/w", { onData: () => {} });
 		expect(o.ran).toEqual([CONFIRMS]);
-		expect(o.confined).toEqual([CONFIRMS]);
 	});
 });

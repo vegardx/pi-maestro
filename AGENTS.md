@@ -3,8 +3,9 @@
 Guidance for coding agents (Claude, pi, or any harness) working in this repo.
 pi-maestro is a **pi coding-agent extension stack** (`package.json`
 `pi.extensions`). One interactive `pi` process is the Maestro seat. Model work
-runs through public `pi-workflow` and `pi-subagent` packages using normal local
-Pi configuration; there is no custom worker socket, executor, or child runtime.
+runs through the standalone `@vegardx/pi-subagent` package using normal local
+Pi configuration. Workflow and web runtimes are intentionally absent until their
+owned replacements are built; there is no custom worker socket or executor.
 
 ## Build / check
 
@@ -40,7 +41,5 @@ implementation, the agent-facing description, the verification — joined only b
 strings, with nothing failing when they disagreed.
 
 `ToolRegistry.declare` rejects drift at construction: grants derive from the
-tool implementation. Workflow manifests bind approved models, repositories,
-artifacts, and authority. When you add anything with a name, ask where the
-*second* place that name lives is, and whether anything would fail if they
-disagreed.
+tool implementation. When you add anything with a name, ask where the *second*
+place that name lives is, and whether anything would fail if they disagreed.

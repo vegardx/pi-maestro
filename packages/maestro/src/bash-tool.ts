@@ -7,20 +7,14 @@
 // whole lesson of this rebuild is that a guard with a way around it is a guard
 // that will be gone round.
 
-import { appendFileSync } from "node:fs";
 import {
 	type BashOperations,
 	createBashToolDefinition,
 	createLocalBashOperations,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { asModeName, type GateDecision, gateBash } from "./bash-gate.js";
+import { type GateDecision, gateBash } from "./bash-gate.js";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
-import {
-	createEnforcingBashOperations,
-	createShadowBashOperations,
-	defaultSandboxWrap,
-} from "./isolation/realtree-sandbox.js";
 import type { Mode } from "./mode.js";
 import type { Holder } from "./tool-registry.js";
 
@@ -35,16 +29,6 @@ export interface BashToolDeps {
 	readonly confirm?: (command: string, reason: string) => Promise<boolean>;
 	/** The unguarded host shell. Injected so a test needs no shell. */
 	readonly direct?: BashOperations;
-	/**
-	 * Wrap the host shell in the actor's write profile. Injected only by tests —
-	 * production confines through the OS, and a test that needed a real sandbox
-	 * would be a test nobody could run on CI.
-	 */
-	readonly confine?: (
-		base: BashOperations,
-		deps: BashToolDeps,
-		mode: Mode,
-	) => BashOperations;
 	/** Told about every decision, for narration and for after the fact. */
 	readonly onDecision?: (command: string, decision: GateDecision) => void;
 }
@@ -57,58 +41,22 @@ class Refused extends Error {
 }
 
 /**
- * `BashOperations` with the gate in front.
+ * `BashOperations` with the advisory/refusal gate in front.
  *
  * A refusal throws rather than returning a non-zero exit code. An agent reads a
- * failed command as something to work around — retry, rephrase, try another
- * flag — and a policy refusal is not that. It is an answer.
+ * failed command as something to work around, while a policy refusal is an
+ * answer. There is deliberately no OS write boundary in auto or hack mode.
  */
-/**
- * The host shell, confined to the actor's write profile by the OS.
- *
- * `MAESTRO_SANDBOX=off` disables it — the escape hatch — and
- * `MAESTRO_SANDBOX_SHADOW=<file>` logs what WOULD have been confined without
- * confining it, which is how a new profile is proven before it is trusted.
- */
-function confineToProfile(
-	base: BashOperations,
-	deps: BashToolDeps,
-	mode: Mode,
-): BashOperations {
-	if (process.env.MAESTRO_SANDBOX === "off") return base;
-	const actor = deps.holder;
-	const modeName = asModeName(mode);
-	const logPath = process.env.MAESTRO_SANDBOX_SHADOW;
-	if (logPath)
-		return createShadowBashOperations(base, {
-			actor,
-			mode: modeName,
-			log: (line) => {
-				try {
-					appendFileSync(logPath, `${line}\n`);
-				} catch {
-					// A shadow-log write must never affect execution.
-				}
-			},
-		});
-	return createEnforcingBashOperations(base, {
-		actor,
-		mode: modeName,
-		wrap: defaultSandboxWrap,
-	});
-}
 
 export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 	const host = deps.direct ?? createLocalBashOperations();
-	const confine = deps.confine ?? confineToProfile;
 
 	return {
 		...host,
 		exec: async (command, cwd, options) => {
 			// Read together: the profile depends on the posture, and the posture
 			// changes under a running agent. Resolving them at different moments
-			// is how a command gets classified in one mode and confined for
-			// another.
+			// is how a command gets classified under the wrong posture.
 			const mode = deps.mode();
 			const decision = gateBash({
 				command,
@@ -118,16 +66,9 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 			});
 			deps.onDecision?.(command, decision);
 
-			// Confinement is not a branch. Every route that runs at all runs
-			// through the write profile, so a command the classifier got WRONG is
-			// still contained to the actor's scope. A gate that confines only what
-			// it already recognised as dangerous protects against nothing it did
-			// not already catch.
-			const confined = confine(host, deps, mode);
-
 			switch (decision.kind) {
 				case "allow":
-					return confined.exec(command, cwd, options);
+					return host.exec(command, cwd, options);
 
 				case "confirm": {
 					if (!deps.confirm)
@@ -136,8 +77,7 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 						);
 					const allowed = await deps.confirm(command, decision.reason);
 					if (!allowed) throw new Refused("you declined this command");
-					// Consent is to the COMMAND, never to running it unconfined.
-					return confined.exec(command, cwd, options);
+					return host.exec(command, cwd, options);
 				}
 
 				default:
@@ -153,20 +93,18 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 		operations: createGatedBashOperations(deps),
 	}) as ToolDefinition;
 
-	// pi describes its bash as "Execute bash commands (ls, grep, find, etc.)",
-	// and that is what a worker used to read about the MOST constrained tool it
-	// holds. Nothing said the shell is classified, that writes are confined to
-	// the worktree by the OS, or that committing goes somewhere else — so a
-	// worker discovered each of those by being refused, mid-deliverable. One
-	// manual run lost an entire deliverable to precisely that discovery.
+	// Pi's default description does not explain mode-aware classification or
+	// ownership boundaries, so describe those before the model discovers them
+	// through a refusal.
 	//
 	// A refusal is still the backstop. This is the part that means an agent
 	// rarely has to hit it.
 	return {
 		...base,
 		description:
-			"Run a shell command. Every command is classified first and runs confined " +
-			"to your working tree, so a mistake cannot reach the rest of the machine. " +
+			"Run a host shell command. Every command is classified first so consequential " +
+			"or disallowed effects are explained before execution. Auto and hack do not " +
+			"provide an OS write boundary. " +
 			"Some commands are refused with a reason and something to do instead — " +
 			"read the reason rather than retrying: it is an answer, not a failure. " +
 			(deps.holder === "worker"
@@ -174,7 +112,7 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 				: "Committing and pushing belong to the workers and to shipping, not here."),
 		promptSnippet:
 			deps.holder === "worker"
-				? "run a shell command, classified and confined to your worktree. Not for committing — that is the commit tool."
-				: "run a shell command, classified and confined to the repository.",
+				? "run a classified shell command. Not for committing — that is the commit tool."
+				: "run a host shell command after mode-aware classification.",
 	};
 }

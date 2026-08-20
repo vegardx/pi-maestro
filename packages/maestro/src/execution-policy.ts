@@ -15,13 +15,9 @@ import { readLayeredExtensionConfig, readPath } from "@vegardx/pi-settings";
 
 export type ExecutionPolicyPreset = "guided" | "strict" | "permissive";
 
-// There is no `isolation` tier here, and no `IsolationTier` type. Confinement
-// is ambient — every command runs under the actor's write profile, and whether
-// that is on is MAESTRO_SANDBOX, not a policy value — so a knob choosing WHERE
-// to send a command had nothing left to choose. Its `strong` value routed to a
-// backend whose supplier was `packages/modes`, which is deleted: the safest
-// preset made isolated commands refuse. A preset is stricter by classifying
-// more strictly, never by naming a destination.
+// There is no `isolation` tier here. The policy classifies and explains shell
+// effects; auto and hack deliberately provide no OS write boundary. A preset is
+// stricter by classifying more strictly, never by naming an execution backend.
 
 export interface ExecutionPolicySettings {
 	preset: ExecutionPolicyPreset | "custom";
@@ -30,7 +26,7 @@ export interface ExecutionPolicySettings {
 	consequential: "confirm" | "confirm-mutations" | "allow";
 	privilegedRemote: "hack-only" | "confirm" | "deny";
 	githubReads: "allow-apparent-reads" | "confirm";
-	/** `allow` runs it — confined like everything else. */
+	/** `allow` runs it on the host. */
 	unknowns: "allow" | "confirm" | "deny";
 }
 
@@ -142,10 +138,8 @@ export function readExecutionPolicySettings(
 }
 
 /**
- * How the EFFECTIVE execution policy differs from the shipped default (the
- * `guided` preset), key by key, plus whether write-enforcement is disabled via
- * MAESTRO_SANDBOX. Empty = the default is in force. Surfaced at session start so
- * a loosened policy is visible every session instead of silently permanent.
+ * How the effective execution policy differs from the shipped default (the
+ * `guided` preset), key by key. Empty means the default is in force.
  */
 export function describePolicyDeviations(
 	cwd: string,
@@ -154,8 +148,6 @@ export function describePolicyDeviations(
 	const effective = readExecutionPolicySettings(cwd, agentDir);
 	const base = POLICY_PRESETS.guided;
 	const out: string[] = [];
-	if (process.env.MAESTRO_SANDBOX === "off")
-		out.push("sandbox: OFF — bash write-enforcement is disabled");
 	for (const key of Object.keys(base) as (keyof typeof base)[]) {
 		if (effective[key] !== base[key])
 			out.push(`${key}: ${effective[key]} (default ${base[key]})`);

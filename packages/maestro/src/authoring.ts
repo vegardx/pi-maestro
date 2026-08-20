@@ -195,10 +195,13 @@ function describe(plan: Plan): string {
 			const reads = d.reads.length > 0 ? ` reads ${d.reads.join(", ")}` : "";
 			const toSubagents = d.tasks.filter((t) => t.by).length;
 			const handed =
-				toSubagents > 0 ? `, ${toSubagents} workflow review(s)` : "";
+				toSubagents > 0 ? `, ${toSubagents} delegated review intent(s)` : "";
 			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
 		}),
 	];
-	lines.push("", `Run it with \`/run ${plan.slug}\`.`);
+	lines.push(
+		"",
+		"Workflow execution is unavailable until the owned workflow extension is installed.",
+	);
 	return lines.join("\n");
 }

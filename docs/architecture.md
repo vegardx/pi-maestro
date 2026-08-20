@@ -1,74 +1,84 @@
 # Architecture
 
-Pi-maestro is a composition package around public Pi extensions. One interactive
-Pi process is the seat; model work runs through `pi-workflow` and
-`pi-subagent` using the operator's normal Pi configuration and ambient skills.
+Pi-maestro is the interactive composition layer of the Pi distribution. One Pi
+process is the seat. It owns planning and posture, not delegated execution.
 
 ```text
 interactive seat
-  modes · plan store · approval · publish · footer
-       |
-       `-- pi-workflow
-             ├─ implementer tasks  [edit + validate + local commit]
-             ├─ reviewer tasks     [read-only + advisory suggestions]
-             `─ fixer tasks        [edit + validate + follow-up commit]
-                  |
-                  `-- pi-subagent model processes
+  mode posture
+  plan authoring/store
+  classified host bash
+  recoverable delete
+  prompt assistance
+  smart compaction
+  structured questions
+  curated skills
+
+standalone packages
+  @vegardx/pi-subagent   delegated execution and operator UX
+  @vegardx/pi-workflow   deferred
+  owned web extension    deferred
 ```
 
-There is no custom worker socket, executor, child runtime, scheduler, question
-transport, or recovery layer.
+There is no custom worker socket, executor, workflow scheduler, publication
+pipeline, question transport, web stack, or recovery layer in pi-maestro.
 
 ## Ownership
 
 | Concern | Owner |
 | --- | --- |
-| Workflow scheduling, artifacts, status, resume | `@agwab/pi-workflow` |
-| Delegated model process lifecycle | `@agwab/pi-subagent` |
-| Model-authored human questions | `@juicesharp/rpiv-ask-user-question` |
-| Web tools | `pi-web-access` |
-| Plan vocabulary and compilation | pi-maestro |
-| Mode posture and guarded seat shell | pi-maestro |
-| Local commits | implementer/fixer workflow tasks |
-| Push and pull requests | interactive-seat `/publish` command |
-| Usage footer | pi-maestro |
+| Interactive mode posture | pi-maestro |
+| Plan vocabulary, validation, and storage | pi-maestro |
+| Direct seat bash classification | pi-maestro |
+| Recoverable delete | pi-maestro |
+| Delegated model execution | standalone `@vegardx/pi-subagent` |
+| Workflow scheduling and publication | unavailable until `@vegardx/pi-workflow` |
+| Web research tools | unavailable until the owned web extension |
+| Structured model-authored questions | `@juicesharp/rpiv-ask-user-question` |
+| Prompt assistance and compaction | local pi-maestro extensions |
+
+## Seat authority
+
+The seat supports three explicit postures:
+
+- **plan** — direct `write`, `edit`, and `delete` calls are blocked. Bash remains
+  available for inspection, but the classifier refuses write effects.
+- **auto** — direct host tools are available. Bash is classified and may be
+  allowed, confirmed, or refused according to execution policy. There is no OS
+  filesystem boundary.
+- **hack** — direct host tools are available with safeguards disabled.
+
+The bash classifier is guidance and a refusal rail, not a sandbox claim. Built-in
+`write` and `edit` are host-backed in auto and hack. The user selects those modes
+when direct seat work is preferable to isolated delegation.
+
+Most implementation work is expected to run through standalone subagents, which
+own Gondolin isolation, worktrees, retry/resume, persistence, and operator
+controls.
 
 ## Plans
 
-The authored plan describes repositories, deliverables, `after` ordering,
-`reads` relationships, implementation tasks, and delegated review tasks. The
-compiler lowers it to one ordinary `pi-workflow` artifact graph:
-
-- implementation stages follow deliverable and same-repository ordering;
-- review stages run after their implementation stage;
-- one fixer stage per reviewed deliverable reduces all review artifacts.
-
-The compiler does not create another scheduler or run journal.
-
-## Authority
-
-- Implementers and fixers may edit the named repository and create local
-  commits. Their prompts explicitly prohibit push and PR creation.
-- Reviewers inspect committed work and return evidence plus advisory
-  suggestions. Their stages are declared read-only.
-- `/publish` refuses the default branch, dirty worktrees, branches with no new
-  commits, and branches not based on the remote default branch.
-- The seat asks for confirmation immediately before workflow launch and
-  publication.
-
-## State
+The `plan` tool stores repository-qualified authored intent:
 
 ```text
-<agentDir>/maestro/plans/<slug>/plan.json   authored intent
-<cwd>/.pi/maestro/workflows/               compiled workflow bundles
-<cwd>/.pi/workflows/                        pi-workflow-owned run state
+<agentDir>/maestro/plans/<slug>/plan.json
 ```
 
-Failed or interrupted work is inspected and resumed with pi-workflow's own
-commands. Pi-maestro stores no duplicate execution or recovery projection.
+A plan contains repositories, deliverables, ordering, read dependencies, tasks,
+and delegated review intent. Pi-maestro validates and stores this vocabulary but
+does not execute it. The future owned workflow extension will define the runtime
+lowering and state model.
 
 ## Extension loading
 
-The root Pi package manifest loads thin adapters for the public ask, subagent,
-workflow, and web packages, followed by pi-maestro's local extensions. Skills
-ship from the root `skills/` directory and use normal Pi ambient discovery.
+The root package loads:
+
+- structured ask adapter;
+- prompt-assist;
+- smart-compact;
+- the Maestro seat extension;
+- bundled skills through normal Pi discovery.
+
+Subagent, workflow, and web extensions are not bundled. This prevents duplicate
+runtime ownership and lets each standalone package carry its own release and
+acceptance boundary.

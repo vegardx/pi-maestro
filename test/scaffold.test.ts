@@ -4,7 +4,7 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dirname, "..");
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
-const LIBRARIES = ["contracts", "core", "settings", "models", "git", "github"];
+const LIBRARIES = ["contracts", "core", "settings", "models"];
 const EXTENSIONS = ["prompt-assist", "smart-compact", "maestro"];
 
 describe("scaffold", () => {
@@ -33,9 +33,6 @@ describe("scaffold", () => {
 		const want = [
 			"packages/maestro/src/extension.ts",
 			"packages/maestro/src/rpiv-ask-extension.ts",
-			"packages/maestro/src/subagent-extension.ts",
-			"packages/maestro/src/web-access-extension.ts",
-			"packages/maestro/src/workflow-extension.ts",
 			"packages/prompt-assist/src/index.ts",
 			"packages/smart-compact/src/index.ts",
 		].sort();

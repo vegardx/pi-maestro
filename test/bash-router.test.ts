@@ -339,7 +339,7 @@ describe("bash coaching and routing policy", () => {
 			unknowns: "confirm",
 		};
 		// There is no isolation knob to turn any more: a research command that
-		// may execute repository code runs confined, under every preset.
+		// may execute repository code and remains classified under every preset.
 		expect(
 			decideBashPolicy({
 				command: "npm test",

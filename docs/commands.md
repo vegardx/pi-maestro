@@ -4,45 +4,39 @@
 
 | Command | What it does |
 | --- | --- |
-| `/mode [plan\|auto\|hack]` | Report or change posture; plan → auto previews and runs the newest stored plan |
-| `/run [slug]` | List plans or compile and run one through `pi-workflow` |
-| `/publish <slug>` | Validate committed feature branches, push them, and create or update pull requests |
+| `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture |
 
-`/run` starts an ordinary `pi-workflow` run. Failed or interrupted workflow work
-is inspected and resumed through pi-workflow's own command surface; pi-maestro
-has no parallel recovery system.
+Workflow execution and publication commands are intentionally absent until the
+owned workflow extension is built.
 
 ## Modes
 
-| Mode | Working tree | Safeguards |
-| --- | --- | --- |
-| `plan` | read-only | on |
-| `auto` | writable | on |
-| `hack` | writable | off |
+| Mode | Direct file tools | Bash classifier | OS write boundary |
+| --- | --- | --- | --- |
+| `plan` | `write`, `edit`, and `delete` blocked | write effects refused | none |
+| `auto` | available | guided by execution policy | none |
+| `hack` | available | safeguards off | none |
 
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
   together. Delegated reviews use `{lens, model, skill?}`.
-- `bash` is the seat's gated shell.
+- `bash` runs on the host after mode-aware classification.
 - `delete` moves explicitly named paths to recoverable trash.
+- Pi's built-in `write` and `edit` remain available in auto and hack.
 - `ask_user_question` comes from
   `@juicesharp/rpiv-ask-user-question` for model-authored clarifications.
-- `subagent`, `workflow_*`, and web tools come from their public Pi packages.
+- `subagent` is supplied independently by `@vegardx/pi-subagent`.
 
-Pi-maestro does not implement a second subagent, workflow, question, or web
-stack.
-
-## Workflow authority
-
-- Implementer and fixer stages edit, validate, and create local commits.
-- Review stages inspect committed work and return findings with advisory
-  suggestions; they do not modify files.
-- No workflow stage pushes or creates pull requests.
-- `/publish` is the interactive-seat boundary for push and PR creation.
+Pi-maestro does not bundle a subagent, workflow, or web implementation.
 
 ## State
 
-Authored plans remain under `<agentDir>/maestro/plans/<slug>/`. Compiled workflow
-bundles are written under `<cwd>/.pi/maestro/workflows/`; pi-workflow owns run
-state under `<cwd>/.pi/workflows/`.
+Authored plans remain under:
+
+```text
+<agentDir>/maestro/plans/<slug>/plan.json
+```
+
+There is no workflow run state or compiled workflow bundle until the owned
+workflow extension is introduced.

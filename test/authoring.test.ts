@@ -91,9 +91,9 @@ describe("a plan is written whole", () => {
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
 		expect(text).toContain(
-			"- ui: 2 tasks, 1 workflow review(s) after api reads api",
+			"- ui: 2 tasks, 1 delegated review intent(s) after api reads api",
 		);
-		expect(text).toContain("/run arc");
+		expect(text).toContain("Workflow execution is unavailable");
 	});
 
 	it("defaults the repo to where the maestro is sitting", async () => {

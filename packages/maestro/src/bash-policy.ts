@@ -224,8 +224,8 @@ const PRIVILEGED = new Set([
  * refusal that names its tool dynamically — `Use the ${suggestedTool} tool` —
  * and a phantom here is invisible to any guard that reads the source for
  * literal names. `delete` once lived in that blind spot: a refused removal
- * named a tool nobody held. Public `pi-web-access` now owns URL retrieval as
- * `fetch_content`, while `delete-tool.ts` owns recoverable removal.
+ * named a tool nobody held. `delete-tool.ts` owns recoverable removal; web
+ * retrieval has no suggested tool until the owned web extension exists.
  *
  * `test/refusals-name-real-tools.test.ts` asserts this set against what
  * agents really hold. Adding a member that nothing implements fails there.
@@ -235,7 +235,6 @@ export const SUGGESTABLE_TOOLS = [
 	"grep",
 	"find",
 	"ls",
-	"fetch_content",
 	"delete",
 ] as const;
 export type SuggestableTool = (typeof SUGGESTABLE_TOOLS)[number];
@@ -257,11 +256,6 @@ export function dedicatedToolSuggestion(
 		return "grep";
 	if (FIND.has(command.executable) && exactFindArgs(command.args))
 		return "find";
-	if (
-		(command.executable === "curl" || command.executable === "wget") &&
-		isReadOnlyHttp(command.args)
-	)
-		return "fetch_content";
 	if (command.executable === "ls" && noFlags(command.args)) return "ls";
 	// Deletion redirects to the delete tool (always-trash, recoverable) — with
 	// or without flags, so `rm -rf dist` is caught too. `shred` is left alone:
@@ -532,8 +526,6 @@ export function decideBashPolicy(input: BashPolicyInput): BashPolicyDecision {
 				confidence: "high",
 			};
 		if (hasAny(effects, ["repository-code", "workspace-write", "local-git"]))
-			// Runs confined like everything else: writes are kernel-limited to the
-			// actor's scope and network is denied, so there is no tier to pick.
 			return {
 				...base,
 				route: "lightweight",
@@ -940,7 +932,7 @@ function unknownRoute(
 	return {
 		...base,
 		route: "lightweight",
-		reason: "Unknown command runs confined, like everything else",
+		reason: "Unknown command is allowed by the current execution policy",
 		confidence: "low",
 	};
 }

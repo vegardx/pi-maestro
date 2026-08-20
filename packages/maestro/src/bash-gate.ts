@@ -1,10 +1,8 @@
-// The safeguards, made real.
+// The shell classifier's enforcement point.
 //
 // `bash-policy.ts` classifies a command — what it touches, and which route it
-// belongs on. Nothing in the rebuilt system was asking it. That made hack mode's
-// "safeguards off" meaningless, because nothing was on: a worker could rewrite
-// anything through the shell, which is the forcing bug this rebuild exists to
-// close and which it had quietly reintroduced.
+// belongs on. This gate turns the classification into allow, confirm, or deny.
+// It steers the model but does not claim an OS write boundary in auto or hack.
 //
 // THE RULE WORTH READING: a route that needs a human is a refusal for anything
 // unattended. The maestro has someone to ask. A worker does not — it is a
@@ -20,17 +18,9 @@ import type { Holder } from "./tool-registry.js";
 /**
  * What to do with a command.
  *
- * There is no `isolate` here, and that absence is the point. Confinement is not
- * somewhere a command is SENT — it is the condition every command already runs
- * under, applied in front of the route rather than instead of it. A decision
- * that could say "isolate this one" implies the others need no confining, which
- * is how the ordinary path ends up on an unguarded host shell.
- *
- * There is no `strong` either, any more. It named a separate backend whose
- * supplier was `packages/modes`, so after the flip every command routed there
- * was refused for want of a backend that could not exist. What it guarded —
- * deny-read on secrets, kernel-confined writes — is what the ambient profile
- * already delivers.
+ * There is no isolation route. Auto and hack execute allowed commands directly
+ * on the host. Plan mode denies shell write effects, while direct file mutation
+ * tools are blocked separately at the extension boundary.
  */
 export type GateDecision =
 	| { readonly kind: "allow"; readonly reason: string }

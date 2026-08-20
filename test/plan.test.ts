@@ -10,8 +10,6 @@ import { describe, expect, it } from "vitest";
 import {
 	type Deliverable,
 	type Plan,
-	readyDeliverables,
-	strandedByFailure,
 	type Task,
 	validatePlan,
 } from "../packages/maestro/src/plan.js";
@@ -163,86 +161,5 @@ describe("everything wrong is reported, not just the first thing", () => {
 				expect.stringContaining("no such deliverable"),
 			]),
 		);
-	});
-});
-
-describe("readiness is the whole scheduling rule", () => {
-	const p = plan({
-		deliverables: [
-			deliverable("stats"),
-			deliverable("validate"),
-			deliverable("advanced", {
-				after: ["stats", "validate"],
-				reads: ["stats"],
-			}),
-		],
-	});
-
-	it("starts everything with nothing to wait for", () => {
-		expect(readyDeliverables(p, new Set(), new Set()).map((d) => d.id)).toEqual(
-			["stats", "validate"],
-		);
-	});
-
-	it("holds a deliverable until every predecessor is terminal", () => {
-		expect(
-			readyDeliverables(p, new Set(["stats"]), new Set(["stats"])).map(
-				(d) => d.id,
-			),
-		).toEqual(["validate"]);
-	});
-
-	it("releases it once they are", () => {
-		const done = new Set(["stats", "validate"]);
-		expect(readyDeliverables(p, done, done).map((d) => d.id)).toEqual([
-			"advanced",
-		]);
-	});
-
-	it("never re-offers work already started", () => {
-		expect(
-			readyDeliverables(p, new Set(), new Set(["stats"])).map((d) => d.id),
-		).toEqual(["validate"]);
-	});
-
-	it("does NOT release a dependent when a predecessor failed", () => {
-		// Succeeded, not merely terminal. Running `advanced` on a `validate` that
-		// never produced anything yields a confident wrong answer — worse than
-		// not running it.
-		const succeeded = new Set(["stats"]);
-		const started = new Set(["stats", "validate"]);
-		expect(readyDeliverables(p, succeeded, started)).toEqual([]);
-	});
-});
-
-describe("a failure stops its dependents and nothing else", () => {
-	const p = plan({
-		deliverables: [
-			deliverable("api"),
-			deliverable("ui", { after: ["api"], reads: ["api"] }),
-			deliverable("docs", { after: ["ui"] }),
-			deliverable("unrelated"),
-		],
-	});
-
-	it("strands the whole chain below the failure, with its cause", () => {
-		const stranded = strandedByFailure(p, new Set(["api"]));
-		expect([...stranded.keys()].sort()).toEqual(["docs", "ui"]);
-		expect(stranded.get("ui")).toBe("api");
-		// `docs` never named `api` — it is stranded through `ui`, and the report
-		// should say which link actually broke.
-		expect(stranded.get("docs")).toBe("ui");
-	});
-
-	it("leaves independent work alone — that is the whole point", () => {
-		const stranded = strandedByFailure(p, new Set(["api"]));
-		expect(stranded.has("unrelated")).toBe(false);
-		expect(
-			readyDeliverables(p, new Set(), new Set(["api"])).map((d) => d.id),
-		).toEqual(["unrelated"]);
-	});
-
-	it("strands nothing when nothing failed", () => {
-		expect(strandedByFailure(p, new Set()).size).toBe(0);
 	});
 });

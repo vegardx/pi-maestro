@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Thin plan compiler, mode, footer, and publication sugar around public Pi workflow extensions.",
+	"description": "Interactive plan authoring and mode posture for Pi.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {
@@ -12,10 +12,7 @@
 	},
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
-		"@vegardx/pi-settings": "*",
-		"@anthropic-ai/sandbox-runtime": "^0.0.26",
-		"@vegardx/pi-git": "*",
-		"@vegardx/pi-github": "*"
+		"@vegardx/pi-settings": "*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",

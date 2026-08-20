@@ -22,7 +22,7 @@ export interface RoleModel {
 	readonly effort?: ThinkingLevel;
 	readonly model: Model<Api>;
 	readonly apiKey: string;
-	readonly headers?: Record<string, string>;
+	readonly headers?: Record<string, string | null>;
 }
 
 export async function resolveModelForRole(

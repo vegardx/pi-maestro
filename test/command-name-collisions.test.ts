@@ -77,11 +77,7 @@ describe("command names", () => {
 		).toEqual([]);
 	});
 
-	it("registers one autonomous plan-running verb under a free name", () => {
-		// Pi-workflow owns status and resume. Maestro adds no competing verbs.
-		const names = maestroCommands();
-		expect(names).toContain("run");
-		expect(names).not.toContain("stop");
-		expect(names).not.toContain("resume");
+	it("registers no workflow execution verbs before the owned runtime exists", () => {
+		expect(maestroCommands()).toEqual(["mode"]);
 	});
 });

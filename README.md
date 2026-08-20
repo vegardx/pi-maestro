@@ -1,45 +1,40 @@
 # pi-maestro
 
-A [Pi](https://pi.dev/) composition package for planning implementation work,
-running it through public workflow/subagent extensions, and publishing the
-result from the interactive seat.
+A [Pi](https://pi.dev/) package for interactive planning, mode posture, prompt
+assistance, structured questions, compact summaries, and a curated skill catalog.
 
-Pi-maestro bundles:
+Pi-maestro intentionally does not own delegated execution, workflow scheduling,
+or web research:
 
-- `@agwab/pi-workflow` for workflow scheduling and artifacts;
-- `@agwab/pi-subagent` for delegated model runs;
-- `@juicesharp/rpiv-ask-user-question` for structured model-authored questions;
-- `pi-web-access` for web research tools;
-- a curated skill catalog;
-- small local extensions for modes, planning, the footer, guarded shell access,
-  and deterministic pull-request publication.
+- delegated work is provided independently by `@vegardx/pi-subagent`;
+- workflow execution is unavailable until `@vegardx/pi-workflow` is built;
+- web tooling is unavailable until the owned replacement is built.
 
-It does not implement a second worker, socket, question, web, or recovery stack.
+## Seat
 
-## Workflow
+The interactive seat can inspect, plan, and make direct changes when requested:
 
 ```text
-conversation in plan mode
-  → Maestro stores a repository-qualified plan
-  → /mode auto or /run <slug> previews one compiled pi-workflow workflow
-  → human approves
-  → implementers edit, validate, and commit locally
-  → reviewers inspect commits and suggest changes without modifying files
-  → fixers apply justified findings, validate, and create follow-up commits
-  → workflow ends with clean committed feature branches
-  → /publish <slug> pushes and creates or updates pull requests
+plan  read-oriented; write/edit/delete are blocked and bash writes are refused
+       by the command classifier
+
+auto  direct host tools are available; bash remains classified and may ask or
+      refuse according to policy, but there is no OS write boundary
+
+hack  direct host tools are available with safeguards disabled
 ```
 
-Pi-workflow owns run status and resume behavior. Pi-maestro does not mirror its
-scheduler or maintain a parallel recovery journal.
+Most implementation work should be delegated to isolated subagents. Auto and
+hack remain available for quick direct work where delegation would be overhead.
 
 ## Commands
 
 ```text
 /mode [plan|auto|hack]
-/run [slug]
-/publish <slug>
 ```
+
+The `plan` tool stores authored intent under the Pi agent directory. Stored plans
+are not executable until the owned workflow extension is introduced.
 
 See [commands](docs/commands.md), [usage](docs/usage.md), and
 [architecture](docs/architecture.md).

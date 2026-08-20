@@ -11,7 +11,7 @@ import { parseModelSpec } from "./model-spec.js";
 export interface ResolvedModelAuth {
 	readonly model: Model<Api>;
 	readonly apiKey?: string;
-	readonly headers?: Record<string, string>;
+	readonly headers?: Record<string, string | null>;
 }
 
 export async function resolveModelAuth(

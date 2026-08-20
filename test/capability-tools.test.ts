@@ -68,17 +68,12 @@ describe("rm redirects to the delete tool, which exists", () => {
 
 describe("describePolicyDeviations", () => {
 	let cwd: string;
-	let prevSandbox: string | undefined;
 
 	beforeEach(() => {
 		cwd = mkdtempSync(join(tmpdir(), "dev-"));
 		mkdirSync(join(cwd, ".pi"), { recursive: true });
-		prevSandbox = process.env.MAESTRO_SANDBOX;
-		delete process.env.MAESTRO_SANDBOX;
 	});
 	afterEach(() => {
-		if (prevSandbox === undefined) delete process.env.MAESTRO_SANDBOX;
-		else process.env.MAESTRO_SANDBOX = prevSandbox;
 		rmSync(cwd, { recursive: true, force: true });
 	});
 
@@ -97,10 +92,5 @@ describe("describePolicyDeviations", () => {
 		expect(deviations.some((d) => d.startsWith("consequential: allow"))).toBe(
 			true,
 		);
-	});
-
-	it("flags disabled bash enforcement (MAESTRO_SANDBOX=off)", () => {
-		process.env.MAESTRO_SANDBOX = "off";
-		expect(describePolicyDeviations(cwd)[0]).toContain("sandbox: OFF");
 	});
 });

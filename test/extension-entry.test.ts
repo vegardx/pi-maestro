@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { type SeatHost, startSeat } from "../packages/maestro/src/extension.js";
+import {
+	type SeatHost,
+	seatToolBlockReason,
+	startSeat,
+} from "../packages/maestro/src/extension.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -51,15 +55,24 @@ function host() {
 	};
 }
 
-describe("workflow-only extension entry", () => {
-	it("registers mode, run, and publish while building tools lazily", async () => {
+describe("interactive seat extension entry", () => {
+	it("blocks direct file mutation only in plan mode", () => {
+		for (const tool of ["write", "edit", "delete"]) {
+			expect(seatToolBlockReason("plan", tool)).toMatch(/read-only/);
+			expect(seatToolBlockReason("auto", tool)).toBeUndefined();
+			expect(seatToolBlockReason("hack", tool)).toBeUndefined();
+		}
+		expect(seatToolBlockReason("plan", "read")).toBeUndefined();
+		expect(seatToolBlockReason("plan", "bash")).toBeUndefined();
+	});
+	it("registers mode while building direct-seat tools lazily", async () => {
 		const h = host();
 		const entry = startSeat(h.pi, {
 			cwd: temp("maestro-cwd-"),
 			agentDir: temp("maestro-agent-"),
 		});
 
-		expect(h.names()).toEqual(["mode", "publish", "run"]);
+		expect(h.names()).toEqual(["mode"]);
 		expect(h.tools).toEqual([]);
 		await h.run("mode");
 		expect(h.tools.map(({ name }) => name).sort()).toEqual([
@@ -70,14 +83,14 @@ describe("workflow-only extension entry", () => {
 		expect(entry.currentMode()).toBe("plan");
 	});
 
-	it("does not enter auto without a stored plan", async () => {
+	it("enters auto without coupling mode changes to workflow execution", async () => {
 		const h = host();
 		const entry = startSeat(h.pi, {
 			cwd: temp("maestro-cwd-"),
 			agentDir: temp("maestro-agent-"),
 		});
 		await h.run("mode", "auto");
-		expect(entry.currentMode()).toBe("plan");
-		expect(h.notices.at(-1)?.[1]).toMatch(/No stored plan/);
+		expect(entry.currentMode()).toBe("auto");
+		expect(h.notices.at(-1)?.[1]).toMatch(/can write/);
 	});
 });

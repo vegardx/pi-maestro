@@ -20,9 +20,13 @@ describe("deterministic bash effects", () => {
 		["git status --short", ["filesystem-read"]],
 		["rg TODO src", ["filesystem-read"]],
 		["touch marker", ["workspace-write"]],
+		["touch /tmp/marker", ["host-write"]],
 		["echo hi > notes.txt", ["workspace-write", "filesystem-read"]],
+		["echo hi > /tmp/notes.txt", ["host-write", "filesystem-read"]],
+		["cp /tmp/source ./dest", ["workspace-write"]],
 		["git add src/a.ts", ["workspace-write"]],
 		["git commit -m fix", ["workspace-write"]],
+		["git -C /tmp/repo commit -m fix", ["host-write"]],
 		["git reset --hard HEAD~1", ["workspace-write", "destructive"]],
 		["git config --global user.email x", ["host-write"]],
 		["git push", ["remote-write"]],
@@ -113,6 +117,18 @@ describe("mode policy", () => {
 				DEFAULT_EXECUTION_POLICY,
 			),
 		).toBe("confirm");
+	});
+
+	it("refuses unresolved read commands in plan when auditing is disabled", () => {
+		const policy = {
+			...DEFAULT_EXECUTION_POLICY,
+			auditor: { ...DEFAULT_EXECUTION_POLICY.auditor, enabled: false },
+		};
+		const command = "find . -exec touch marker ;";
+		expect(assessBashCommand(command).assessment.assessment).toBe("uncertain");
+		expect(decideBashPolicy({ command, mode: "plan", policy }).action).toBe(
+			"refuse",
+		);
 	});
 
 	it("audits unresolved plan and auto commands, but not hack", () => {

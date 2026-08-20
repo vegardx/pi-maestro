@@ -266,6 +266,7 @@ const PROBE_MAX_BYTES = 32 * 1024;
 export async function runCommandProbe(
 	request: CommandProbeRequest,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<CommandProbeResult> {
 	return new Promise((resolve) => {
 		execFile(
@@ -275,6 +276,7 @@ export async function runCommandProbe(
 				cwd,
 				timeout: PROBE_TIMEOUT_MS,
 				maxBuffer: PROBE_MAX_BYTES,
+				...(signal ? { signal } : {}),
 				env: {
 					PATH: process.env.PATH,
 					HOME: process.env.HOME,
@@ -426,7 +428,7 @@ export function createCommandAuditor(
 							failure: `auditor repeated probe: ${key}`,
 						};
 					seen.add(key);
-					probes.push(await probe(turn, input.probeCwd));
+					probes.push(await probe(turn, input.probeCwd, controller.signal));
 				}
 				return {
 					assessment: null,

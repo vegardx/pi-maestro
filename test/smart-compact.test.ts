@@ -191,14 +191,19 @@ describe("smart-compact settings", () => {
 		expect(readSmartCompactSettings(cwd, agentDir).compactAt).toBeUndefined();
 	});
 
-	it("falls back to defaults on wrong-typed values", () => {
+	it("falls back to defaults on wrong-typed or out-of-range values", () => {
 		writeSettings(join(cwd, ".pi", "settings.json"), {
 			extensionConfig: {
-				"smart-compact": { maxSummaryTokens: "lots", timeoutMs: null },
+				"smart-compact": {
+					maxSummaryTokens: 0,
+					maxFileListEntries: -1,
+					timeoutMs: 0,
+				},
 			},
 		});
 		const s = readSmartCompactSettings(cwd, agentDir);
 		expect(s.maxSummaryTokens).toBe(8192);
+		expect(s.maxFileListEntries).toBe(50);
 		expect(s.timeoutMs).toBe(60000);
 	});
 });

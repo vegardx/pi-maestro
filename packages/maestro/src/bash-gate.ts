@@ -88,11 +88,8 @@ export function decideFromRoute(
 		case "host-read":
 			return { kind: "allow", reason };
 
-		// The COPY tier is retired, and `lightweight` no longer names a place to
-		// send a command — it names the confinement every route already gets.
-		// Reads stay open on the real tree so builds and `git status` work; the
-		// write guard is the kernel, which is what makes a classifier miss stop
-		// being an escape rather than merely unlikely.
+		// The COPY tier is retired. `lightweight` remains a classifier result,
+		// but the interactive seat runs it on the same host shell as `direct`.
 		case "lightweight":
 			return { kind: "allow", reason };
 

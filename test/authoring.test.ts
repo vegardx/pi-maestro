@@ -23,12 +23,7 @@ function authoring() {
 	const root = mkdtempSync(join(tmpdir(), "maestro-authoring-"));
 	dirs.push(root);
 	const store = createPlanStore(root);
-	const stored: string[] = [];
-	const tool = createPlanTool({
-		store,
-		cwd: () => "/repo",
-		onStored: (plan) => stored.push(plan.slug),
-	});
+	const tool = createPlanTool({ store, cwd: () => "/repo" });
 	const write = (plan: unknown) =>
 		(
 			tool.execute as unknown as (
@@ -39,7 +34,7 @@ function authoring() {
 				details: { stored: boolean; errors: readonly string[] };
 			}>
 		)("call-1", plan);
-	return { store, tool, write, stored };
+	return { store, tool, write };
 }
 
 const minimal = {
@@ -84,7 +79,6 @@ describe("a plan is written whole", () => {
 
 		expect(result.details.stored).toBe(true);
 		expect(a.store.loadPlan("arc")?.deliverables).toHaveLength(2);
-		expect(a.stored).toEqual(["arc"]);
 
 		// Read back as the graph, because an author who cannot see the edges they
 		// just wrote will write the same wrong one twice.
@@ -156,7 +150,6 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 		expect(text).toContain("without waiting for it");
 		expect(text).toContain("Send the whole plan again");
 		expect(a.store.loadPlan("arc")).toBeNull();
-		expect(a.stored).toEqual([]);
 	});
 
 	it("counts them in words a reader can act on", async () => {

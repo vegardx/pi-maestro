@@ -28,7 +28,7 @@ conversation
   → <agentDir>/maestro/plans/<slug>/plan.json
 ```
 
-There is deliberately no temporary lowering to `@agwab/pi-workflow`. The owned
+There is deliberately no temporary workflow adapter. The owned
 `@vegardx/pi-workflow` project will define:
 
 - runtime graph compilation;

@@ -89,9 +89,14 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 
 /** The `bash` tool for a holder, with its safeguards attached. */
 export function createBashTool(deps: BashToolDeps): ToolDefinition {
-	const base = createBashToolDefinition(deps.cwd, {
-		operations: createGatedBashOperations(deps),
-	}) as ToolDefinition;
+	const invocation = (confirm?: BashToolDeps["confirm"]): ToolDefinition =>
+		createBashToolDefinition(deps.cwd, {
+			operations: createGatedBashOperations({
+				...deps,
+				confirm: confirm ?? deps.confirm,
+			}),
+		}) as ToolDefinition;
+	const base = invocation();
 
 	// Pi's default description does not explain mode-aware classification or
 	// ownership boundaries, so describe those before the model discovers them
@@ -101,6 +106,10 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 	// rarely has to hit it.
 	return {
 		...base,
+		execute: (id, params, signal, onUpdate, ctx) =>
+			invocation((command, reason) =>
+				ctx.ui.confirm("Run classified command?", `${reason}\n\n${command}`),
+			).execute(id, params, signal, onUpdate, ctx),
 		description:
 			"Run a host shell command. Every command is classified first so consequential " +
 			"or disallowed effects are explained before execution. Auto and hack do not " +

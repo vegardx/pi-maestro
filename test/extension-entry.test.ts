@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import {
+import maestroExtension, {
 	type SeatHost,
 	seatToolBlockReason,
 	startSeat,
@@ -92,5 +93,39 @@ describe("interactive seat extension entry", () => {
 		await h.run("mode", "auto");
 		expect(entry.currentMode()).toBe("auto");
 		expect(h.notices.at(-1)?.[1]).toMatch(/can write/);
+	});
+
+	it("wires plan-mode mutation blocking through Pi's tool_call event", async () => {
+		const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+		const commands = new Map<
+			string,
+			{ handler(args: string, ctx: unknown): Promise<void> }
+		>();
+		const api = {
+			on(event: string, handler: (...args: unknown[]) => unknown) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerTool() {},
+			registerCommand(name: string, spec: unknown) {
+				commands.set(
+					name,
+					spec as { handler(args: string, ctx: unknown): Promise<void> },
+				);
+			},
+		} as unknown as ExtensionAPI;
+		await maestroExtension(api);
+		const toolCall = handlers.get("tool_call")?.[0];
+		if (!toolCall) throw new Error("tool_call handler was not registered");
+
+		for (const toolName of ["write", "edit", "delete"])
+			expect(toolCall({ toolName }, {})).toMatchObject({ block: true });
+		expect(toolCall({ toolName: "read" }, {})).toBeUndefined();
+
+		await commands.get("mode")?.handler("auto", {
+			ui: { notify() {} },
+		});
+		expect(toolCall({ toolName: "write" }, {})).toBeUndefined();
 	});
 });

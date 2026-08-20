@@ -41,14 +41,25 @@ pipeline, question transport, web stack, or recovery layer in pi-maestro.
 
 The seat supports three explicit postures:
 
-- **plan** — direct `write`, `edit`, and `delete` calls are blocked. Bash remains
-  available for inspection, but the classifier refuses write effects.
-- **auto** — direct host tools are available. Bash is classified and may be
-  allowed, confirmed, or refused according to execution policy. There is no OS
-  filesystem boundary.
-- **hack** — direct host tools are available with safeguards disabled.
+- **plan** — direct `write`, `edit`, and `delete` calls are blocked. Bash allows
+  recognized reads, refuses recognized mutations and code execution, and audits
+  unresolved commands with a bounded fast model.
+- **auto** — direct host tools are available. Ordinary workspace writes and code
+  execution are allowed by default; host, remote, privileged, destructive, or
+  unresolved effects are confirmed.
+- **hack** — direct host tools are available with reduced steering. Ordinary
+  effects are allowed by default while privileged and destructive effects remain
+  configurable confirmations.
 
-The bash classifier is guidance and a refusal rail, not a sandbox claim. Built-in
+Bash processing is `parse → deterministic effects → optional ambiguity audit →
+mode policy → allow/confirm/refuse`. Effects describe filesystem, workspace,
+host, remote, code-execution, privileged, and destructive behavior. The auditor
+never authorizes execution and cannot remove deterministic effects. For an
+unknown PATH executable it may iteratively request validated direct-argv help or
+version probes under the one overall audit timeout. There are no execution
+routes or sandbox backends.
+
+The classifier is guidance and a refusal rail, not a sandbox claim. Built-in
 `write` and `edit` are host-backed in auto and hack. The user selects those modes
 when direct seat work is preferable to isolated delegation.
 

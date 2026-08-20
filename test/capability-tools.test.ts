@@ -1,96 +1,74 @@
-// Capability-policy Phase C: `rm`/`rmdir` redirect to the delete tool (step 2),
-// and the startup deviation warning (step 8).
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { decideBashPolicy } from "../packages/maestro/src/bash-policy.js";
 import {
+	DEFAULT_EXECUTION_POLICY,
 	describePolicyDeviations,
-	type ExecutionPolicySettings,
 } from "../packages/maestro/src/execution-policy.js";
 
-const guided: ExecutionPolicySettings = {
-	preset: "guided",
-	toolGuidance: "mode-aware",
-	modeRoutes: "protected-research",
-	consequential: "confirm",
-	privilegedRemote: "hack-only",
-	githubReads: "allow-apparent-reads",
-	unknowns: "allow",
-};
-
-describe("rm redirects to the delete tool, which exists", () => {
-	// This block once asserted `suggestedTool === "delete"` while no such tool
-	// was declared anywhere — pinning a phantom as correct. `delete` had gone
-	// with `packages/modes` and the redirect outlived it, so a worker running
-	// `rm -rf dist` was denied and pointed at nothing.
-	//
-	// The redirect is right; the missing half was the tool. It is recovered in
-	// `delete-tool.ts`, and `refusals-name-real-tools.test.ts` now asserts the
-	// whole `SUGGESTABLE_TOOLS` set against what agents really hold — the set,
-	// not the prose, because this refusal names its tool by interpolation and no
-	// source scan can see it.
-	it("denies a bare rm and points at the delete tool", () => {
-		const decision = decideBashPolicy({
-			command: "rm notes.txt",
-			mode: "auto",
-			actor: "worker",
-			policy: guided,
-		});
-		expect(decision.suggestedTool).toBe("delete");
-		expect(decision.route).toBe("deny");
-		expect(decision.reason).toContain("delete");
+describe("recoverable deletion guidance", () => {
+	it("redirects rm and rm -rf only when delete is available", () => {
+		for (const command of ["rm notes.txt", "rm -rf dist"])
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "auto",
+					policy: DEFAULT_EXECUTION_POLICY,
+					availableTools: new Set(["delete"]),
+				}),
+			).toMatchObject({ action: "refuse", suggestedTool: "delete" });
 	});
 
-	it("catches rm -rf too (flags don't dodge the redirect)", () => {
-		const decision = decideBashPolicy({
-			command: "rm -rf dist",
-			mode: "auto",
-			actor: "worker",
-			policy: guided,
-		});
-		expect(decision.suggestedTool).toBe("delete");
-		expect(decision.route).toBe("deny");
+	it("does not name an unavailable tool", () => {
+		expect(
+			decideBashPolicy({
+				command: "rm notes.txt",
+				mode: "auto",
+				policy: DEFAULT_EXECUTION_POLICY,
+				availableTools: new Set(),
+			}).suggestedTool,
+		).toBeUndefined();
 	});
 
-	it("leaves shred alone (a recoverable trash would defeat secure-erase)", () => {
-		const decision = decideBashPolicy({
-			command: "shred secret.key",
-			mode: "auto",
-			actor: "worker",
-			policy: guided,
-		});
-		expect(decision.suggestedTool).toBeUndefined();
+	it("does not redirect secure erase to recoverable trash", () => {
+		expect(
+			decideBashPolicy({
+				command: "shred secret.key",
+				mode: "auto",
+				policy: DEFAULT_EXECUTION_POLICY,
+				availableTools: new Set(["delete"]),
+			}).suggestedTool,
+		).toBeUndefined();
 	});
 });
 
-describe("describePolicyDeviations", () => {
+describe("explicit policy deviations", () => {
 	let cwd: string;
-
 	beforeEach(() => {
-		cwd = mkdtempSync(join(tmpdir(), "dev-"));
+		cwd = mkdtempSync(join(tmpdir(), "maestro-policy-"));
 		mkdirSync(join(cwd, ".pi"), { recursive: true });
 	});
-	afterEach(() => {
-		rmSync(cwd, { recursive: true, force: true });
-	});
+	afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
-	it("reports nothing when the default (guided) is in force", () => {
+	it("reports nothing for defaults", () => {
 		expect(describePolicyDeviations(cwd)).toEqual([]);
 	});
 
-	it("names a loosened preset key by key", () => {
+	it("reports an overridden mode/effect action", () => {
 		writeFileSync(
 			join(cwd, ".pi", "settings.json"),
 			JSON.stringify({
-				extensionConfig: { maestro: { execution: { preset: "permissive" } } },
+				extensionConfig: {
+					maestro: {
+						bash: { policy: { plan: { "workspace-write": "allow" } } },
+					},
+				},
 			}),
 		);
-		const deviations = describePolicyDeviations(cwd);
-		expect(deviations.some((d) => d.startsWith("consequential: allow"))).toBe(
-			true,
+		expect(describePolicyDeviations(cwd)).toContain(
+			"plan.workspace-write: allow (default refuse)",
 		);
 	});
 });

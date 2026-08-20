@@ -18,7 +18,7 @@ export type CwdAccess = "read" | "write";
  * still rewrite the repository through bash — which is not a hypothetical, it
  * is the forcing bug this system shipped.
  */
-export type Safeguards = "on" | "off";
+export type Safeguards = "on" | "reduced";
 
 export const MODE_NAMES = ["plan", "auto", "hack"] as const;
 export type ModeName = (typeof MODE_NAMES)[number];
@@ -32,15 +32,14 @@ export interface Mode {
 /**
  * Three modes, because there are only three coherent combinations.
  *
- * `read` + safeguards `off` is missing on purpose rather than by omission: with
- * the classifier off, bash can rewrite anything, so a read-only session with no
- * safeguards is read-only in name only. A mode that lies about what it permits
- * is worse than one that does not exist.
+ * `read` + reduced safeguards is missing on purpose: a read-oriented posture
+ * must retain its mutation refusals. Hack reduces ordinary steering while its
+ * explicit policy may still confirm privileged or destructive effects.
  */
 const MODES: readonly Mode[] = [
 	{ name: "plan", cwd: "read", safeguards: "on" },
 	{ name: "auto", cwd: "write", safeguards: "on" },
-	{ name: "hack", cwd: "write", safeguards: "off" },
+	{ name: "hack", cwd: "write", safeguards: "reduced" },
 ];
 
 export function mode(name: ModeName): Mode {

@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
+		"@vegardx/pi-models": "*",
 		"@vegardx/pi-settings": "*"
 	},
 	"peerDependencies": {

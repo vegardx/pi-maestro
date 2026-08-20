@@ -16,7 +16,6 @@
 
 export {
 	describePolicyDeviations,
-	type ExecutionPolicyPreset,
 	type ExecutionPolicySettings,
 	readExecutionPolicySettings,
 } from "./execution-policy.js";

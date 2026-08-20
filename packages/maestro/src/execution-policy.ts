@@ -1,55 +1,83 @@
-// The interactive seat's bash classification and confirmation policy.
-//
-// Pi-maestro has no execution backend or OS sandbox. These settings only decide
-// whether a classified host command is allowed, confirmed, or refused.
+import {
+	type ExtensionConfig,
+	readLayeredExtensionConfig,
+	readPath,
+} from "@vegardx/pi-settings";
+import {
+	BASH_ACTIONS,
+	BASH_EFFECTS,
+	type BashAction,
+	type BashModePolicies,
+	type BashPolicyKey,
+	type ModeBashPolicy,
+} from "./bash-contracts.js";
+import type { ModeName } from "./mode.js";
 
-import { readLayeredExtensionConfig, readPath } from "@vegardx/pi-settings";
-
-export type ExecutionPolicyPreset = "guided" | "strict" | "permissive";
-
-// There is no `isolation` tier here. The policy classifies and explains shell
-// effects; auto and hack deliberately provide no OS write boundary. A preset is
-// stricter by classifying more strictly, never by naming an execution backend.
-
-export interface ExecutionPolicySettings {
-	preset: ExecutionPolicyPreset | "custom";
-	toolGuidance: "mode-aware" | "advisory" | "off";
-	modeRoutes: "protected-research" | "direct";
-	consequential: "confirm" | "confirm-mutations" | "allow";
-	privilegedRemote: "hack-only" | "confirm" | "deny";
-	githubReads: "allow-apparent-reads" | "confirm";
-	/** `allow` runs it on the host. */
-	unknowns: "allow" | "confirm" | "deny";
+export interface BashAuditorSettings {
+	readonly enabled: boolean;
+	readonly tier: "light" | "standard" | "heavy";
+	readonly model?: string;
+	readonly timeoutMs: number;
+	readonly maxTokens: number;
 }
 
-const POLICY_PRESETS: Record<
-	ExecutionPolicyPreset,
-	Omit<ExecutionPolicySettings, "preset">
-> = {
-	guided: {
-		toolGuidance: "mode-aware",
-		modeRoutes: "protected-research",
-		consequential: "confirm",
-		privilegedRemote: "hack-only",
-		githubReads: "allow-apparent-reads",
-		unknowns: "allow",
+export interface ExecutionPolicySettings {
+	readonly auditor: BashAuditorSettings;
+	readonly exactToolEquivalent: "redirect" | "advisory" | "off";
+	readonly modes: BashModePolicies;
+}
+
+const PLAN: ModeBashPolicy = {
+	"filesystem-read": "allow",
+	"workspace-write": "refuse",
+	"host-write": "refuse",
+	"remote-read": "allow",
+	"remote-write": "refuse",
+	"code-execution": "refuse",
+	privileged: "refuse",
+	destructive: "refuse",
+	uncertain: "refuse",
+};
+
+const AUTO: ModeBashPolicy = {
+	"filesystem-read": "allow",
+	"workspace-write": "allow",
+	"host-write": "confirm",
+	"remote-read": "allow",
+	"remote-write": "confirm",
+	"code-execution": "allow",
+	privileged: "confirm",
+	destructive: "confirm",
+	uncertain: "confirm",
+};
+
+const HACK: ModeBashPolicy = {
+	"filesystem-read": "allow",
+	"workspace-write": "allow",
+	"host-write": "allow",
+	"remote-read": "allow",
+	"remote-write": "allow",
+	"code-execution": "allow",
+	privileged: "confirm",
+	destructive: "confirm",
+	uncertain: "allow",
+};
+
+export const DEFAULT_BASH_POLICIES: BashModePolicies = {
+	plan: PLAN,
+	auto: AUTO,
+	hack: HACK,
+};
+
+export const DEFAULT_EXECUTION_POLICY: ExecutionPolicySettings = {
+	auditor: {
+		enabled: true,
+		tier: "light",
+		timeoutMs: 120_000,
+		maxTokens: 50_000,
 	},
-	strict: {
-		toolGuidance: "mode-aware",
-		modeRoutes: "protected-research",
-		consequential: "confirm-mutations",
-		privilegedRemote: "confirm",
-		githubReads: "confirm",
-		unknowns: "deny",
-	},
-	permissive: {
-		toolGuidance: "advisory",
-		modeRoutes: "direct",
-		consequential: "allow",
-		privilegedRemote: "hack-only",
-		githubReads: "allow-apparent-reads",
-		unknowns: "confirm",
-	},
+	exactToolEquivalent: "redirect",
+	modes: DEFAULT_BASH_POLICIES,
 };
 
 function choice<T extends string>(
@@ -62,19 +90,31 @@ function choice<T extends string>(
 		: fallback;
 }
 
-/** Validated layered policy. Invalid values fall back to the selected preset. */
-/**
- * A named preset as settings.
- *
- * The presets existed and nothing could reach them: every caller had to go
- * through `readExecutionPolicySettings`, which needs a working directory and
- * real settings on disk. Anything wanting "the guided defaults" — a test, a
- * seat with no configuration yet — had no way to say so.
- */
-export function executionPolicyPreset(
-	preset: ExecutionPolicyPreset,
-): ExecutionPolicySettings {
-	return { preset, ...POLICY_PRESETS[preset] };
+function boundedNumber(
+	raw: unknown,
+	fallback: number,
+	minimum: number,
+	maximum: number,
+): number {
+	return typeof raw === "number" && Number.isFinite(raw)
+		? Math.min(maximum, Math.max(minimum, Math.floor(raw)))
+		: fallback;
+}
+
+function readModePolicy(
+	config: ExtensionConfig | undefined,
+	mode: ModeName,
+	defaults: ModeBashPolicy,
+): ModeBashPolicy {
+	const out = { ...defaults } as Record<BashPolicyKey, BashAction>;
+	for (const key of [...BASH_EFFECTS, "uncertain"] as const) {
+		out[key] = choice(
+			readPath(config, `bash.policy.${mode}.${key}`),
+			BASH_ACTIONS,
+			defaults[key],
+		);
+	}
+	return out;
 }
 
 export function readExecutionPolicySettings(
@@ -82,67 +122,56 @@ export function readExecutionPolicySettings(
 	agentDir?: string,
 ): ExecutionPolicySettings {
 	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
-	const config = merged.maestro;
-	const preset = choice(
-		readPath(config, "execution.preset"),
-		["guided", "strict", "permissive"] as const,
-		"guided",
-	);
-	const defaults = POLICY_PRESETS[preset];
-	const read = <T extends string>(
-		key: string,
-		allowed: readonly T[],
-		fallback: T,
-	) => choice(readPath(config, `execution.${key}`), allowed, fallback);
-	const resolved = {
-		toolGuidance: read(
-			"toolGuidance",
-			["mode-aware", "advisory", "off"],
-			defaults.toolGuidance,
+	const config = merged.maestro as ExtensionConfig | undefined;
+	const model = readPath(config, "bash.auditor.model");
+	return {
+		auditor: {
+			enabled: readPath(config, "bash.auditor.enabled") !== false,
+			tier: choice(
+				readPath(config, "bash.auditor.tier"),
+				["light", "standard", "heavy"] as const,
+				DEFAULT_EXECUTION_POLICY.auditor.tier,
+			),
+			...(typeof model === "string" && model.includes("/") ? { model } : {}),
+			timeoutMs: boundedNumber(
+				readPath(config, "bash.auditor.timeoutMs"),
+				DEFAULT_EXECUTION_POLICY.auditor.timeoutMs,
+				1_000,
+				300_000,
+			),
+			maxTokens: boundedNumber(
+				readPath(config, "bash.auditor.maxTokens"),
+				DEFAULT_EXECUTION_POLICY.auditor.maxTokens,
+				1_000,
+				100_000,
+			),
+		},
+		exactToolEquivalent: choice(
+			readPath(config, "bash.guidance.exactToolEquivalent"),
+			["redirect", "advisory", "off"] as const,
+			DEFAULT_EXECUTION_POLICY.exactToolEquivalent,
 		),
-		modeRoutes: read(
-			"modeRoutes",
-			["protected-research", "direct"],
-			defaults.modeRoutes,
-		),
-		consequential: read(
-			"consequential",
-			["confirm", "confirm-mutations", "allow"],
-			defaults.consequential,
-		),
-		privilegedRemote: read(
-			"privilegedRemote",
-			["hack-only", "confirm", "deny"],
-			defaults.privilegedRemote,
-		),
-		githubReads: read(
-			"githubReads",
-			["allow-apparent-reads", "confirm"],
-			defaults.githubReads,
-		),
-		unknowns: read("unknowns", ["allow", "confirm", "deny"], defaults.unknowns),
+		modes: {
+			plan: readModePolicy(config, "plan", PLAN),
+			auto: readModePolicy(config, "auto", AUTO),
+			hack: readModePolicy(config, "hack", HACK),
+		},
 	};
-	const custom = Object.keys(resolved).some((key) => {
-		const raw = readPath(config, `execution.${key}`);
-		return raw !== undefined && raw === resolved[key as keyof typeof resolved];
-	});
-	return { preset: custom ? "custom" : preset, ...resolved };
 }
 
-/**
- * How the effective execution policy differs from the shipped default (the
- * `guided` preset), key by key. Empty means the default is in force.
- */
 export function describePolicyDeviations(
 	cwd: string,
 	agentDir?: string,
 ): string[] {
 	const effective = readExecutionPolicySettings(cwd, agentDir);
-	const base = POLICY_PRESETS.guided;
 	const out: string[] = [];
-	for (const key of Object.keys(base) as (keyof typeof base)[]) {
-		if (effective[key] !== base[key])
-			out.push(`${key}: ${effective[key]} (default ${base[key]})`);
+	for (const mode of ["plan", "auto", "hack"] as const) {
+		for (const key of [...BASH_EFFECTS, "uncertain"] as const) {
+			if (effective.modes[mode][key] !== DEFAULT_BASH_POLICIES[mode][key])
+				out.push(
+					`${mode}.${key}: ${effective.modes[mode][key]} (default ${DEFAULT_BASH_POLICIES[mode][key]})`,
+				);
+		}
 	}
 	return out;
 }

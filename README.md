@@ -15,17 +15,24 @@ or web research:
 The interactive seat can inspect, plan, and make direct changes when requested:
 
 ```text
-plan  read-oriented; write/edit/delete are blocked and bash writes are refused
-       by the command classifier
+plan  write/edit/delete are blocked; recognized Bash reads run, while writes,
+      code execution, and unresolved effects are refused
 
-auto  direct host tools are available; bash remains classified and may ask or
-      refuse according to policy, but there is no OS write boundary
+auto  direct host tools are available; ordinary workspace work runs while
+      consequential or unresolved Bash effects may require confirmation
 
-hack  direct host tools are available with safeguards disabled
+hack  direct host tools are available under a reduced, configurable policy
 ```
+
+Bash uses deterministic effect assessment followed, when needed, by a bounded
+fast-model audit. The auditor can inspect host-installed CLI help through
+validated direct-argv probes; it never authorizes execution or removes known
+effects. This is steering and confirmation, not an OS sandbox.
 
 Most implementation work should be delegated to isolated subagents. Auto and
 hack remain available for quick direct work where delegation would be overhead.
+The bundled `repository-lifecycle` skill guides explicit commits, feature-branch
+pushes, pull requests, checks, and checked rebase merges.
 
 ## Commands
 

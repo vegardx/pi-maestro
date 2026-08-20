@@ -37,7 +37,6 @@ export function createSeat(options: SeatOptions = {}): Seat {
 	const tools = ToolRegistry.declare([
 		{
 			definition: createBashTool({
-				holder: "maestro",
 				cwd,
 				mode: () => current,
 				policy,

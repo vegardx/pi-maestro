@@ -13,9 +13,9 @@ owned workflow extension is built.
 
 | Mode | Direct file tools | Bash classifier | OS write boundary |
 | --- | --- | --- | --- |
-| `plan` | `write`, `edit`, and `delete` blocked | write effects refused | none |
-| `auto` | available | guided by execution policy | none |
-| `hack` | available | safeguards off | none |
+| `plan` | `write`, `edit`, and `delete` blocked | reads allowed; writes/code/uncertain refused | none |
+| `auto` | available | effect policy with ambiguity audit and confirmations | none |
+| `hack` | available | reduced, configurable effect policy | none |
 
 ## Seat tools
 

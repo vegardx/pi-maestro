@@ -14,9 +14,9 @@ bundled.
 
 | Mode | Direct file tools | Bash classifier | Intended use |
 | --- | --- | --- | --- |
-| `plan` | blocked | write effects refused | discuss and author plans |
-| `auto` | available | guided/confirming | ordinary direct seat work |
-| `hack` | available | safeguards off | explicit unrestricted direct work |
+| `plan` | blocked | reads allowed; writes/code/uncertain refused | discuss and author plans |
+| `auto` | available | effect-aware with ambiguity audit | ordinary direct seat work |
+| `hack` | available | reduced configurable policy | explicit direct work |
 
 Switch posture with:
 
@@ -28,7 +28,10 @@ Switch posture with:
 
 Auto and hack have no OS filesystem boundary. They are explicit choices to let
 the interactive seat use host-backed `write`, `edit`, `delete`, and `bash` tools.
-Most substantial implementation work should be delegated to isolated subagents.
+Bash accepts an optional `intent` hint and audits unresolved plan/auto commands;
+validated help/version probes let the auditor inspect unfamiliar PATH commands
+without granting it a general shell. Most substantial implementation work should
+be delegated to isolated subagents.
 
 ## Planning
 
@@ -52,6 +55,9 @@ compilation, approval, execution, recovery, and publication.
 - `subagent` is provided independently by `@vegardx/pi-subagent`.
 - workflow and web tools are unavailable until their owned replacements are
   built.
+- the `repository-lifecycle` skill guides direct commits, pushes, pull requests,
+  checks, and checked rebase merges. Future workflow postflight shipping uses a
+  separate approved harness authority rather than model-selected Bash.
 
 ## Footer
 

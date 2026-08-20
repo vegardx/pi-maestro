@@ -12,21 +12,17 @@ describe("a mode is two facts", () => {
 		expect(modes().map((m) => [m.name, m.cwd, m.safeguards])).toEqual([
 			["plan", "read", "on"],
 			["auto", "write", "on"],
-			["hack", "write", "off"],
+			["hack", "write", "reduced"],
 		]);
 		expect(modes()).toHaveLength(MODE_NAMES.length);
 	});
 
-	it("has no read-only mode with the safeguards off", () => {
-		// Missing on purpose. With the classifier off, bash can rewrite anything,
-		// so a read-only session with no safeguards is read-only in name only —
-		// which is the forcing bug this system actually shipped. A mode that lies
-		// about what it permits is worse than one that does not exist.
-		expect(modeOf("read", "off")).toBeNull();
+	it("has no read-only mode with reduced safeguards", () => {
+		expect(modeOf("read", "reduced")).toBeNull();
 	});
 
 	it("resolves a mode from its facts, not from a stored name", () => {
-		expect(modeOf("write", "off")?.name).toBe("hack");
+		expect(modeOf("write", "reduced")?.name).toBe("hack");
 		expect(modeOf("read", "on")?.name).toBe("plan");
 	});
 });

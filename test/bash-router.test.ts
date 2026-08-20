@@ -1,522 +1,192 @@
 import { describe, expect, it } from "vitest";
 import {
-	BASH_RULESET,
-	classifyBashEffects,
+	actionForAssessment,
+	assessBashCommand,
 	decideBashPolicy,
 	dedicatedToolSuggestion,
-	renderBashRuleset,
+	mergeCommandAssessments,
+	shouldAuditCommand,
 } from "../packages/maestro/src/bash-policy.js";
-import type { ExecutionPolicySettings } from "../packages/maestro/src/execution-policy.js";
+import { DEFAULT_EXECUTION_POLICY } from "../packages/maestro/src/execution-policy.js";
 import { analyzeShellProgram } from "../packages/maestro/src/shell-program.js";
 
-const guided: ExecutionPolicySettings = {
-	preset: "guided",
-	toolGuidance: "mode-aware",
-	modeRoutes: "protected-research",
-	consequential: "confirm",
-	privilegedRemote: "hack-only",
-	githubReads: "allow-apparent-reads",
-	unknowns: "allow",
+const effects = (command: string) => {
+	const assessment = assessBashCommand(command).assessment;
+	return assessment.effects ?? [];
 };
 
-describe("shell program analysis", () => {
-	it("recognizes only a whole simple command as simple", () => {
-		const simple = analyzeShellProgram("git status --short");
-		expect(simple.completeSimple).toBe(true);
-		expect(simple.commands[0]).toMatchObject({
-			executable: "git",
-			args: ["status", "--short"],
-		});
-
-		for (const command of [
-			"git status && rm -rf build",
-			"git status | tee output.txt",
-			"git status > output.txt",
-			"printf '%s' \"$(touch marker)\"",
-			"(git status)",
-		]) {
-			expect(analyzeShellProgram(command).completeSimple, command).toBe(false);
-		}
+describe("deterministic bash effects", () => {
+	it.each([
+		["git status --short", ["filesystem-read"]],
+		["rg TODO src", ["filesystem-read"]],
+		["touch marker", ["workspace-write"]],
+		["echo hi > notes.txt", ["workspace-write", "filesystem-read"]],
+		["git add src/a.ts", ["workspace-write"]],
+		["git commit -m fix", ["workspace-write"]],
+		["git reset --hard HEAD~1", ["workspace-write", "destructive"]],
+		["git config --global user.email x", ["host-write"]],
+		["git push", ["remote-write"]],
+		["npm test", ["code-execution"]],
+		["kubectl get pods", ["remote-read"]],
+		["kubectl apply -f deploy.yml", ["remote-write"]],
+		["rm -rf dist", ["workspace-write", "destructive"]],
+	])("classifies %s", (command, expected) => {
+		expect(effects(command)).toEqual(expected);
 	});
 
-	it("marks heredoc interpreter payloads and every chain command", () => {
-		const analysis = analyzeShellProgram(
-			"git status && python3 <<'PY'\nfrom pathlib import Path\nPath('owned').touch()\nPY",
-		);
-		expect([...analysis.features]).toEqual(
-			expect.arrayContaining(["chain", "heredoc", "interpreter-carrier"]),
-		);
-		expect(analysis.commands.map((command) => command.executable)).toEqual(
-			expect.arrayContaining(["git", "python3"]),
-		);
-		expect(analysis.completeSimple).toBe(false);
-	});
-
-	it("exposes prefixes, wrappers, carriers, git extensibility and dispatch", () => {
-		const prefixed = analyzeShellProgram(
-			"CI=1 env FOO=bar sh -c 'touch marker'",
-		);
-		expect([...prefixed.features]).toEqual(
-			expect.arrayContaining([
-				"environment-prefix",
-				"wrapper",
-				"interpreter-carrier",
-			]),
-		);
-		expect(prefixed.commands[0]?.executable).toBe("sh");
-
-		const git = analyzeShellProgram(
-			"git -C . -c alias.inspect='!touch marker' inspect",
-		);
-		expect(git.features.has("git-extensibility")).toBe(true);
-		expect(git.commands[0]?.opaque).toBe(true);
-
-		const dispatcher = analyzeShellProgram("find . -exec rm {} +");
-		expect(dispatcher.features.has("opaque-dispatch")).toBe(true);
-
-		const shellScript = analyzeShellProgram("bash ci.sh");
-		expect(shellScript.features.has("interpreter-carrier")).toBe(false);
-		const shellCarrier = analyzeShellProgram("bash -lc 'touch marker'");
-		expect(shellCarrier.features.has("interpreter-carrier")).toBe(true);
-	});
-
-	it("fails closed on malformed quoting", () => {
-		const analysis = analyzeShellProgram("git status 'unterminated");
-		expect(analysis.parseComplete).toBe(false);
-		expect(analysis.completeSimple).toBe(false);
-
-		const input = analyzeShellProgram("sort < input.txt");
-		expect(input.features.has("input-redirect")).toBe(true);
-		expect(input.features.has("output-redirect")).toBe(false);
-		expect(classifyBashEffects(input).has("workspace-write")).toBe(false);
-	});
-});
-
-describe("bash coaching and routing policy", () => {
-	it("redirects only exact simple dedicated-tool equivalents", () => {
-		expect(dedicatedToolSuggestion(analyzeShellProgram("cat README.md"))).toBe(
-			"read",
-		);
-		expect(
-			dedicatedToolSuggestion(
-				analyzeShellProgram("cat README.md | sed 's/a/b/' > out"),
-			),
-		).toBeUndefined();
-		for (const command of [
-			"tail -f app.log",
-			"find . -mtime -1",
-			"grep -c TODO README.md",
-			"curl -X DELETE https://example.invalid/x",
-		]) {
-			expect(
-				dedicatedToolSuggestion(analyzeShellProgram(command)),
-				command,
-			).toBeUndefined();
-		}
-		expect(
-			decideBashPolicy({
-				command: "curl -X DELETE https://example.invalid/x",
-				mode: "auto",
-				actor: "maestro",
-				policy: guided,
-			}).route,
-		).toBe("confirm");
-		expect(
-			decideBashPolicy({
-				command: "rg TODO src",
-				mode: "auto",
-				actor: "maestro",
-				policy: guided,
-			}),
-		).toMatchObject({ route: "deny", suggestedTool: "grep" });
-	});
-
-	it("unions effects from the entire shell program", () => {
-		const effects = classifyBashEffects(
-			analyzeShellProgram("git status && curl -X PATCH -d ok https://x"),
-		);
-		expect([...effects]).toEqual(
-			expect.arrayContaining(["workspace-read", "remote-write"]),
-		);
-		expect(
-			decideBashPolicy({
-				command: "git status && curl -X PATCH -d ok https://x",
-				mode: "auto",
-				actor: "maestro",
-				policy: guided,
-			}).route,
-		).toBe("confirm");
-	});
-
-	it("implements mode and actor routes with unconditional Hack", () => {
-		// One mode, not a loop. This iterated `["recon", "plan"]` — `recon` was
-		// a mode of the deleted system, and the rebuilt vocabulary is
-		// plan/auto/hack. Left as a two-element list it ran `plan` twice and
-		// looked like coverage of two things.
-		for (const mode of ["plan"] as const) {
-			expect(
-				decideBashPolicy({
-					command: "git status --short",
-					mode,
-					actor: "maestro",
-					policy: guided,
-				}).route,
-			).toBe("host-read");
-			expect(
-				decideBashPolicy({
-					command: "npm test",
-					mode,
-					actor: "maestro",
-					policy: guided,
-				}).route,
-			).toBe("lightweight");
-		}
-		expect(
-			decideBashPolicy({
-				command: "npm test",
-				mode: "auto",
-				actor: "worker",
-				policy: guided,
-			}).route,
-		).toBe("direct");
-		expect(
-			decideBashPolicy({
-				command: "fixture-command --opaque",
-				mode: "auto",
-				actor: "worker",
-				policy: guided,
-			}).route,
-		).toBe("lightweight");
-		expect(
-			decideBashPolicy({
-				command: "npm test",
-				mode: "auto",
-				actor: "read-only",
-				policy: guided,
-			}).route,
-		).toBe("deny");
-		for (const command of [
-			"rm -rf /",
-			"git push --force origin main",
-			"sudo kubectl delete namespace prod",
-			"cat README.md",
-		]) {
-			expect(
-				decideBashPolicy({
-					command,
-					mode: "hack",
-					actor: "maestro",
-					policy: guided,
-				}),
-			).toMatchObject({ route: "direct" });
-		}
-	});
-
-	it("never treats write-capable read tools as protected host reads", () => {
-		for (const command of [
-			"find . -delete",
-			"sed -i s/a/b/ file",
-			"awk '{system(\"touch marker\")}' file",
-			"sort -o output input",
-			"git diff --output=patch.txt",
-			"curl -o output https://example.invalid/file | cat",
-			"curl --config request.conf https://example.invalid/file | cat",
-			"fd pattern -x sh -c 'touch marker'",
-		]) {
-			const decision = decideBashPolicy({
-				command,
-				mode: "plan",
-				actor: "maestro",
-				policy: guided,
-			});
-			expect(decision.route, command).not.toBe("host-read");
-		}
-	});
-
-	it("allows broad apparent GitHub reads and confirms mutations", () => {
-		for (const command of [
-			"gh pr view 12 --json files,reviews",
-			"gh api graphql -f query='{ viewer { login } }'",
-			"gh run watch 42",
-		]) {
-			expect(
-				decideBashPolicy({
-					command,
-					mode: "auto",
-					actor: "maestro",
-					policy: guided,
-				}).route,
-			).toBe("direct");
-		}
-		for (const command of [
-			"gh api --method=DELETE repos/o/r/issues/1",
-			"gh api -XDELETE repos/o/r/issues/1",
-			"curl --request=DELETE https://example.invalid/x",
-			"curl -dvalue https://example.invalid/x",
-			"gh workflow run ci.yml",
-			"gh release upload v1 artifact",
-			"gh alias set x foo",
-			"npm publish",
-			"cargo publish",
-			"gh api repos/o/r/actions/variables/X -X PATCH -f value=y",
-			"gh api repos/o/r/issues -f title=oops",
-			"cat payload | curl --data-binary @- https://example.invalid/x",
-			"curl -XPOST --json '{}' https://example.invalid/x",
-		]) {
-			expect(
-				decideBashPolicy({
-					command,
-					mode: "auto",
-					actor: "maestro",
-					policy: guided,
-				}).route,
-			).toBe("confirm");
-		}
-	});
-
-	it("enforces delivery and worker escalation invariants", () => {
-		for (const command of [
-			"git commit -am done",
-			"git push origin feature",
-			"gh pr create --fill",
-			"gh pr merge 10 --squash",
-		]) {
-			expect(
-				decideBashPolicy({
-					command,
-					mode: "auto",
-					actor: "maestro",
-					policy: guided,
-				}),
-			).toMatchObject({ route: "deny", invariant: "delivery" });
-		}
-		expect(
-			decideBashPolicy({
-				command: "git rebase origin/main && git cherry-pick abc",
-				mode: "auto",
-				actor: "worker",
-				policy: guided,
-			}).route,
-		).toBe("direct");
-		expect(
-			decideBashPolicy({
-				command: "kubectl delete deployment api",
-				mode: "auto",
-				actor: "worker",
-				policy: guided,
-			}),
-		).toMatchObject({ route: "deny", invariant: "worker-escalation" });
-		for (const command of [
-			"timeout 30 git push origin main",
-			"nice -n 10 git push origin main",
-		]) {
-			expect(
-				decideBashPolicy({
-					command,
-					mode: "auto",
-					actor: "worker",
-					policy: guided,
-				}),
-			).toMatchObject({ route: "deny", invariant: "delivery" });
-		}
-		expect(
-			decideBashPolicy({
-				command: "timeout 5 rm -rf /tmp/x",
-				mode: "auto",
-				actor: "worker",
-				policy: guided,
-			}),
-		).toMatchObject({ route: "deny", invariant: "worker-escalation" });
-	});
-
-	it("honors explicit policy relaxation", () => {
-		const permissive: ExecutionPolicySettings = {
-			...guided,
-			preset: "permissive",
-			toolGuidance: "advisory",
-			modeRoutes: "direct",
-			consequential: "allow",
-			unknowns: "confirm",
-		};
-		// There is no isolation knob to turn any more: a research command that
-		// may execute repository code and remains classified under every preset.
-		expect(
-			decideBashPolicy({
-				command: "npm test",
-				mode: "plan",
-				actor: "maestro",
-				policy: guided,
-			}).route,
-		).toBe("lightweight");
-		expect(
-			decideBashPolicy({
-				command: "curl -X DELETE https://example.invalid/resource",
-				mode: "auto",
-				actor: "maestro",
-				policy: permissive,
-			}).route,
-		).toBe("direct");
-		expect(
-			decideBashPolicy({
-				command: "git push origin main",
-				mode: "auto",
-				actor: "maestro",
-				policy: permissive,
-			}).route,
-		).toBe("deny");
-	});
-
-	// The router tests that lived here drove `resolveBashOperations`,
-	// `authorizeBashDecision` and `isolationFailureActionForActor` from
-	// `packages/modes`. That package is gone, and its behaviour is now
-	// `bash-gate.ts` + `bash-tool.ts` — covered by `test/bash-gate.test.ts`,
-	// which asserts the thing those tests were really about: every route that
-	// runs at all runs through the actor's write profile.
-});
-
-describe("host git-config protection (Phase 4 rule 1)", () => {
-	it("classifies global/system/file git config as host-config-write", () => {
-		for (const command of [
-			'git config --global user.name "X"',
-			"git config --system core.editor vim",
-			"git config --file /Users/dev/.gitconfig user.email x@y",
-			"git config --file=~/.config/git/config user.name X",
-		]) {
-			expect(
-				classifyBashEffects(analyzeShellProgram(command)).has(
-					"host-config-write",
-				),
-				command,
-			).toBe(true);
-		}
-	});
-
-	it("non-identity repo-local git config stays ordinary worktree state", () => {
-		const effects = classifyBashEffects(
-			analyzeShellProgram("git config core.editor vim"),
-		);
-		expect(effects.has("host-config-write")).toBe(false);
-		expect(effects.has("git-identity-write")).toBe(false);
-		expect(effects.has("local-git")).toBe(true);
-	});
-
-	// A linked worktree has NO config of its own: `git config user.email x`
-	// run inside one writes the shared <repo>/.git/config. The old rule called
-	// this "ordinary worktree state" and the ruleset told agents to do it —
-	// which is how `Test <test@example.com>` ended up authoring this repo.
-	it("identity writes are their own effect, wherever they run", () => {
-		for (const command of [
-			'git config user.name "Maestro Agent"',
-			"git config user.email agent@invented",
-			"git config --unset user.email",
-			'git config --replace-all user.name "X"',
-		]) {
-			expect(
-				classifyBashEffects(analyzeShellProgram(command)).has(
-					"git-identity-write",
-				),
-				command,
-			).toBe(true);
-		}
-		// Reading identity is not writing it.
-		for (const command of [
-			"git config --get user.email",
-			"git config --list",
-		]) {
-			expect(
-				classifyBashEffects(analyzeShellProgram(command)).has(
-					"git-identity-write",
-				),
-				command,
-			).toBe(false);
-		}
-	});
-
-	it("denies agent identity writes and points at the provided env", () => {
-		for (const actor of ["worker", "read-only"] as const) {
-			const decision = decideBashPolicy({
-				command: 'git config user.email "agent@invented"',
-				mode: "auto",
-				actor,
-				policy: guided,
-			});
-			expect(decision.route, actor).toBe("deny");
-			expect(decision.invariant).toBe("git-identity");
-			expect(decision.reason).toContain("GIT_AUTHOR_");
-		}
-	});
-
-	it("non-git writes addressing the global config files are caught", () => {
-		for (const command of [
-			"echo '[user]' > ~/.gitconfig",
-			"sed -i '' 's/x/y/' /Users/dev/.config/git/config",
-		]) {
-			expect(
-				classifyBashEffects(analyzeShellProgram(command)).has(
-					"host-config-write",
-				),
-				command,
-			).toBe(true);
-		}
-		// Pure reads stay reads.
-		expect(
-			classifyBashEffects(analyzeShellProgram("cat ~/.gitconfig")).has(
-				"host-config-write",
-			),
-		).toBe(false);
-	});
-
-	it("denies agents and confirms the maestro (invariant host-config)", () => {
-		for (const actor of ["worker", "read-only"] as const) {
-			const decision = decideBashPolicy({
-				command: 'git config --global user.name "Maestro Agent"',
-				mode: "auto",
-				actor,
-				policy: guided,
-			});
-			expect(decision.route, actor).toBe("deny");
-			expect(decision.invariant).toBe("host-config");
-			// The deny must NOT redirect them to a repo-local identity write.
-			expect(decision.reason).not.toContain("REPO-LOCALLY");
-		}
-		const maestro = decideBashPolicy({
-			command: 'git config --global user.name "Me"',
-			mode: "auto",
-			actor: "maestro",
-			policy: guided,
-		});
-		expect(maestro.route).toBe("confirm");
-		expect(maestro.invariant).toBe("host-config");
-	});
-});
-
-describe("the visible bash ruleset (one source of truth)", () => {
-	it("every row's id names an enforced invariant or guidance mechanism", () => {
-		const enforced = new Set([
-			"delivery",
-			"host-config",
-			"git-identity",
-			"read-only",
-			"worker-escalation",
-			"tool-redirect",
+	it("accumulates effects across compound commands", () => {
+		expect(effects("git status && touch marker")).toEqual([
+			"filesystem-read",
+			"workspace-write",
 		]);
-		for (const row of BASH_RULESET) {
-			expect(enforced.has(row.id), row.id).toBe(true);
-			expect(row.applies.length).toBeGreaterThan(0);
-			expect(row.rule.length).toBeGreaterThan(20);
-			expect(row.why.length).toBeGreaterThan(10);
-		}
 	});
 
-	it("renders actor-scoped rules for seeds", () => {
-		const worker = renderBashRuleset("worker");
-		expect(worker).toContain("Shell rules (enforced by the harness)");
-		expect(worker).toContain("GIT_AUTHOR_");
-		expect(worker).toContain("remote-write, privileged, or destructive");
-		expect(worker).not.toContain("You are read-only");
+	it("marks unknown executables unresolved instead of guessing read-only", () => {
+		const result = assessBashCommand("acme status");
+		expect(result.assessment.assessment).toBe("uncertain");
+		expect(result.unresolved).toContain("unknown executable: acme");
+	});
 
-		const reviewer = renderBashRuleset("read-only");
-		expect(reviewer).toContain("You are read-only");
-		expect(reviewer).not.toContain("remote-write, privileged, or destructive");
+	it("recognizes remote reads without treating them as local filesystem reads", () => {
+		expect(assessBashCommand("kubectl get pods").assessment).toMatchObject({
+			assessment: "read-only",
+		});
+	});
+});
+
+describe("mode policy", () => {
+	it("refuses recognized writes and code execution in plan", () => {
+		for (const command of ["touch marker", "git commit -m x", "npm test"])
+			expect(
+				decideBashPolicy({
+					command,
+					mode: "plan",
+					policy: DEFAULT_EXECUTION_POLICY,
+				}).action,
+			).toBe("refuse");
+	});
+
+	it("allows ordinary local work and confirms remote writes in auto", () => {
+		expect(
+			decideBashPolicy({
+				command: "git commit -m x",
+				mode: "auto",
+				policy: DEFAULT_EXECUTION_POLICY,
+			}).action,
+		).toBe("allow");
+		expect(
+			decideBashPolicy({
+				command: "git push",
+				mode: "auto",
+				policy: DEFAULT_EXECUTION_POLICY,
+			}).action,
+		).toBe("confirm");
+	});
+
+	it("uses the strongest configured action for multiple effects", () => {
+		expect(
+			actionForAssessment(
+				"auto",
+				{
+					assessment: "effects",
+					effects: ["workspace-write", "destructive"],
+					confidence: "high",
+					rationale: "test",
+				},
+				DEFAULT_EXECUTION_POLICY,
+			),
+		).toBe("confirm");
+	});
+
+	it("audits unresolved plan and auto commands, but not hack", () => {
+		const unknown = assessBashCommand("acme status");
+		expect(shouldAuditCommand("plan", unknown, DEFAULT_EXECUTION_POLICY)).toBe(
+			true,
+		);
+		expect(shouldAuditCommand("auto", unknown, DEFAULT_EXECUTION_POLICY)).toBe(
+			true,
+		);
+		expect(shouldAuditCommand("hack", unknown, DEFAULT_EXECUTION_POLICY)).toBe(
+			false,
+		);
+	});
+});
+
+describe("assessment merging", () => {
+	it("never removes deterministic effects", () => {
+		const deterministic = assessBashCommand("touch marker && acme status");
+		const merged = mergeCommandAssessments(deterministic, {
+			assessment: "read-only",
+			confidence: "high",
+			rationale: "acme status is read-only",
+		});
+		expect(merged).toMatchObject({
+			assessment: "effects",
+			effects: ["workspace-write"],
+		});
+	});
+
+	it("adds audited effects", () => {
+		const deterministic = assessBashCommand("acme deploy");
+		const merged = mergeCommandAssessments(deterministic, {
+			assessment: "effects",
+			effects: ["remote-write"],
+			confidence: "high",
+			rationale: "deploy changes remote state",
+		});
+		expect(merged).toMatchObject({
+			assessment: "effects",
+			effects: ["remote-write"],
+		});
+	});
+
+	it("keeps established effects while uncertainty selects the fallback action", () => {
+		const deterministic = assessBashCommand("git status && acme deploy");
+		const merged = mergeCommandAssessments(deterministic, {
+			assessment: "uncertain",
+			confidence: "low",
+			rationale: "unknown acme behavior",
+		});
+		expect(merged).toMatchObject({
+			assessment: "uncertain",
+			effects: ["filesystem-read"],
+		});
+		expect(actionForAssessment("auto", merged, DEFAULT_EXECUTION_POLICY)).toBe(
+			"confirm",
+		);
+	});
+});
+
+describe("exact native-tool equivalents", () => {
+	it.each([
+		["cat README.md", "read"],
+		["rg TODO src", "grep"],
+		["find src -name '*.ts'", "find"],
+		["ls packages", "ls"],
+		["rm -rf dist", "delete"],
+	])("maps %s to %s", (command, tool) => {
+		expect(dedicatedToolSuggestion(analyzeShellProgram(command))).toBe(tool);
+	});
+
+	it("never splits compound shell automation", () => {
+		expect(
+			dedicatedToolSuggestion(analyzeShellProgram("cat a && cat b")),
+		).toBeUndefined();
+	});
+
+	it("only steers to an available tool and allows confirmed shell bypass", () => {
+		const base = {
+			command: "cat README.md",
+			mode: "auto" as const,
+			policy: DEFAULT_EXECUTION_POLICY,
+			availableTools: new Set(["read"]),
+		};
+		expect(decideBashPolicy(base)).toMatchObject({
+			action: "refuse",
+			suggestedTool: "read",
+		});
+		expect(decideBashPolicy({ ...base, confirmBash: true }).action).toBe(
+			"confirm",
+		);
 	});
 });

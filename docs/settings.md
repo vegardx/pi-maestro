@@ -74,14 +74,20 @@ blocked by the plan-mode tool guard.
 The command auditor runs only for unresolved plan/auto commands when its result
 can change the action. It assesses effects and never authorizes execution. For
 an unknown executable it may request distinct help/version probes until the one
-overall audit timeout expires. Probes run the parsed PATH executable directly,
-without a shell, under a minimal environment with a 5-second/32-KiB bound each;
-repository-local executables and arbitrary flags are rejected.
+overall audit timeout expires. A validated probe executes that PATH binary even
+in plan mode, before the final effect decision. Probes run directly without a
+shell under a minimal environment with a 5-second/32-KiB bound each;
+repository-local executables and arbitrary flags are rejected. This is a
+cooperative steering mechanism, not a guarantee that an executable's help mode
+is side-effect free.
 
 `tier` resolves through the configured model roster; `model` may instead bind an
-exact `provider/model`. A failed, timed-out, malformed, invalid, or repeated
-probe leaves the assessment uncertain, so the mode's `uncertain` action applies.
-Audits and probe results are not cached.
+exact `provider/model`. The raw command, intent, parsed arguments, and bounded
+probe output are sent unchanged to that model, which may resolve to a different
+provider than the seat. Do not place credentials directly in shell arguments.
+A failed, timed-out, malformed, invalid, or repeated probe leaves the assessment
+uncertain, so the mode's `uncertain` action applies. Audits and probe results are
+not cached.
 
 The Bash classifier and auditor are steering and confirmation mechanisms, not
 an OS sandbox. Auto and hack execute allowed commands on the host.

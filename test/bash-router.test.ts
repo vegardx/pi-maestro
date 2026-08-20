@@ -47,6 +47,23 @@ describe("deterministic bash effects", () => {
 		expect(result.unresolved).toContain("unknown executable: acme");
 	});
 
+	it.each([
+		"GIT_SSH_COMMAND='ssh -i key' git fetch",
+		"GIT_EXTERNAL_DIFF=helper git diff",
+		"GIT_PAGER=helper git log",
+		"GIT_EDITOR=helper git commit",
+		"PAGER=helper git log",
+		"LESSOPEN=helper less file",
+	])(
+		"marks execution-affecting environment prefix unresolved: %s",
+		(command) => {
+			const result = assessBashCommand(command);
+			expect(result.unresolved).toContain(
+				"execution environment overrides command resolution",
+			);
+		},
+	);
+
 	it("recognizes remote reads without treating them as local filesystem reads", () => {
 		expect(assessBashCommand("kubectl get pods").assessment).toMatchObject({
 			assessment: "read-only",

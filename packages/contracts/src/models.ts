@@ -1,38 +1,12 @@
-// Shared model-role + effort vocabulary.
-
 import type { ThinkingLevel } from "./thinking.js";
 
-/** Stable policy keys used by model-consuming runtimes. */
-export const MODEL_ROLES = [
-	"worker",
-	"classifier",
-	"plan-summarizer",
-	"compact-summarizer",
-	"verifier",
-	"general",
-	"codebase-research",
-	"web-research",
-	"plan-review",
-	"practical-review",
-	"adversarial-review",
-	"correctness-review",
-	"security-review",
-	"test-review",
-	"simplification-review",
-	"advisor",
-] as const;
+/** Current in-process harness callers that resolve a support model. */
+export const MODEL_ROLES = ["classifier", "compact-summarizer"] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
-/**
- * The authored effort of a tier option: a concrete thinking level, or "auto" —
- * the effort is decided at assignment time (bounded by the model's supported
- * levels; mechanical default picks fall back to the session thinking level).
- */
 export type OptionEffort = ThinkingLevel | "auto";
-
 export type ModelConfigScope = "global" | "project" | "session";
 
-/** One resolution candidate's facts, for routing-inspection surfaces. */
 export interface ExactModelCandidateFact {
 	readonly optionId: string;
 	readonly authoredModel: string;

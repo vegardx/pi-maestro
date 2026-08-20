@@ -1,144 +1,80 @@
 # Models
 
-Maestro resolves every spawn to one exact `provider/model` and effort before the
-agent starts, and persists that choice. The plan never authors a model — it says
-what an agent is *for*, and configuration decides which model that becomes.
+Pi-maestro currently resolves models for two in-process support calls:
 
-## The vocabulary
+```text
+classifier          fast Bash effect assessment
+compact-summarizer  work-continuity compaction
+```
 
-Four layers, each answering one question.
+Delegated workers, workflow reviews, fixers, and publication do not resolve
+through this package. Standalone `@vegardx/pi-subagent` owns delegated model
+selection, and the future `@vegardx/pi-workflow` will bind workflow-stage models
+explicitly.
 
-| Layer | Question | Shape |
-|---|---|---|
-| **Families** → **aliases** → **attachments** | Which concrete models exist, grouped by who made them | `families.<Family>.aliases.<Alias>.attach: ["provider/model", …]` |
-| **Rosters** → **tiers** | Which aliases are preferred, in order, at each weight | `rosters.<name>.<light\|standard\|heavy>: ["Family/Alias", …]` |
-| **Bindings** | Which roster a given session seat uses | `bindings.<name>: { roster, targets? }` |
-| **Allowances** | Which tiers a persona may request, how wide it may fan out, and how a direct spawn picks | `allowances.<persona>: { tiers, spread?, direct? }` |
+## Configuration vocabulary
 
-**Family** is the diversity axis. Two aliases of the same family are not a second
-opinion, which is why a multi-model review picks one slot *per distinct family*.
+| Layer | Purpose |
+| --- | --- |
+| families → aliases → attachments | Group equivalent concrete `provider/model` endpoints |
+| rosters → tiers | Order aliases for `light`, `standard`, and `heavy` work |
+| bindings | Select a roster from the current seat model |
+| allowances | Bound the tiers a named support persona may request |
+| region | Exclude concrete models outside the active residency list |
 
-Allowances key by **persona** (`deliverable-worker`, `codebase-research`,
-`code-review`, `standby`, or any persona you declare): `code-review` wanting a
-heavy tier is a statement about the work, not about a posture. The first tier
-in an allowance is the default a spawn of that persona resolves at; an empty
-built-in default (the deliverable worker's) means *inherit the caller*. An
-allowance for a persona nothing spawns simply never matches.
-
-An **alias** is a stable name for "the model I mean", and its `attach` list is
-ordered: the same alias can be reachable through several providers, and
-resolution prefers the one matching the resolving agent's own gateway before
-falling back to authored order. That is what lets a plan move between gateways
-without rewriting anything.
-
-**Tiers** are fixed and mean weight, not vendor: `light`, `standard`, `heavy`.
-
-## Example
+The current harness roles map to the `codebase-research` support persona, whose
+default allowance is:
 
 ```json
 {
-  "models": {
-    "families": {
-      "OpenAI": {
-        "aliases": {
-          "GPT 5.6 Sol": {
-            "attach": ["sit-openai/gpt-5.6-sol"],
-            "effort": "medium",
-            "notes": "Strongest implementer — the worker and utility seat."
-          }
-        }
-      },
-      "Anthropic": {
-        "aliases": {
-          "Opus 4.8": {
-            "attach": ["sit-anthropic/claude-opus-4-8"],
-            "effort": "medium",
-            "notes": "Careful judge — reviews a different family's work."
-          }
-        }
-      }
-    },
-    "rosters": {
-      "default": {
-        "light": ["OpenAI/GPT 5.6 Sol"],
-        "standard": ["OpenAI/GPT 5.6 Sol"],
-        "heavy": ["Anthropic/Opus 4.8", "OpenAI/GPT 5.6 Sol"]
-      }
-    },
-    "bindings": { "default": { "roster": "default" } },
-    "allowances": {
-      "deliverable-worker": { "tiers": ["standard", "heavy"] },
-      "codebase-research": { "tiers": ["light", "standard"] },
-      "code-review": { "tiers": ["heavy", "standard"], "spread": 3, "direct": "other-family" },
-      "standby": { "tiers": ["heavy", "standard"], "spread": 2 }
-    },
-    "region": {
-      "active": "EEA",
-      "lists": {
-        "EEA": ["sit-anthropic/claude-opus-4-8", "sit-openai/gpt-5.6-sol"]
-      }
-    }
-  }
+  "tiers": ["light", "standard"]
 }
 ```
 
-A binding with no `targets` is the default for any seat. A binding *with*
-`targets` claims specific session models by exact id.
+The Bash classifier explicitly requests `light`. Smart compact uses the
+persona's default tier. An exact classifier model may be configured under
+`extensionConfig.maestro.bash.auditor.model`.
 
-## How a spawn resolves
+## Resolution
 
-1. **No tier requested** → inherit the caller's model. Root spawns inherit the
-   session seat, so an unconfigured install still works.
-2. **Tier requested** → walk the active binding's roster for that tier in
-   authored order, bounded by the persona's allowance. Each `Family/Alias` ref
-   resolves to a concrete attachment; the first ref yielding an *available* one
-   wins.
-3. **Nothing available** → fall back to the session model, recording a
-   `fallbackReason`. Resolution degrades; it never hard-fails.
+For a requested tier:
 
-**Region is the only hard filter**, applied before any of the above reasoning:
-a model outside the active list is struck from candidacy entirely, so it cannot
-be selected by any path.
+1. Find the binding whose targets include the current seat model, or use the
+   default binding.
+2. Walk that binding's roster entries for the tier in authored order.
+3. Resolve each `Family/Alias` to an available concrete attachment.
+4. Prefer an attachment on the seat's provider, then fall back to attachment
+   order.
+5. Apply the active region list and authentication availability.
+6. If no tier candidate is available, visibly fall back to the seat model.
 
-Every resolution is persisted on the node with its family, alias, tier, binding,
-roster, and the candidate facts behind it — including why each rejected
-candidate was rejected.
+This is why the Luna alias can contain both:
 
-## Direct spawns and `direct`
+```json
+{
+  "attach": [
+    "github-copilot/gpt-5.6-luna",
+    "radicalai-sit/gpt-5.6-luna-global"
+  ]
+}
+```
 
-A **direct** spawn — one agent, not a fan-out — picks its model by the
-allowance's `direct` selector:
+A Copilot seat prefers the Copilot attachment; a Radical AI SIT seat prefers the
+SIT attachment.
 
-- **`inherit`** (the default): today's behavior — resolve the allowance's first
-  tier, or run the caller's model when the allowance has no tiers.
-- **`other-family`**: walk the allowance's tiers in order through the bound
-  roster and take the first available entry whose family differs from the
-  caller's. A reviewer never marks its own homework.
+Provider-aware calls execute through `ctx.modelRegistry.complete`, so providers
+with refreshable authentication such as GitHub Copilot use Pi's normal runtime
+rather than a cached compatibility token.
 
-`other-family` with nowhere to go — the caller's family is unknown, or every
-reachable entry is the caller's own family — falls back to inherit **with a
-`fallbackReason`**, never silently. Falling back to a tier pick instead could
-still land on the caller's family, which is the outcome the selector exists to
-rule out.
+## Authored plans
 
-## Fanning out across families
+Stored plans may record a concrete `provider/model` for delegated review intent.
+Pi-maestro validates and stores that intent but does not resolve or execute it.
+The owned workflow implementation will define how authored review models become
+runtime stage bindings.
 
-A review authored as multi-modal resolves **N distinct families**, where N is
-the persona allowance's `spread` (capped by `MAX_SPREAD` = 5; higher values are
-rejected). The plan says only *that* it wants breadth — never a model, never a
-count. `direct` plays no part here: a fan-out gets its diversity from the
-one-slot-per-family rule.
+## Settings ownership
 
-Resolution returns one slot per distinct family and **returns fewer rather than
-padding**: five requested against a two-family tier yields two slots, and if
-everything is struck it yields a single seat fallback, not five copies of it.
-
-## Inspect and edit
-
-Model settings live in Pi's normal global and project `settings.json` files.
-Global and project layers merge per key. Pi-maestro does not provide a separate
+Model settings use Pi's normal global and project `settings.json` files. Project
+values override global values at the leaf. Pi-maestro has no separate model
 settings command or editor.
-
-`models.presets` and `models.modelSets` were the v1 surface and are **rejected**,
-not silently accepted — they were validated and written long after the resolver
-stopped reading them, so a write appeared to succeed and did nothing.

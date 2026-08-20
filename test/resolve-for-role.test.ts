@@ -1,7 +1,6 @@
 // resolveModelForRole — the v2 replacement for the retired v1
-// resolveExactModelSelection. Proves every maestro role resolves to a concrete
-// model (never silently null) under a representative v2 config, and that the
-// seat is the last-resort fallback — the parity guarantee behind retiring v1.
+// resolveExactModelSelection. Proves both current in-process support roles
+// resolve through the read-only support persona.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -17,8 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SEAT = "anthropic/opus";
 const WORKER = "openai/sol";
-// A minimal v2 config: workers on a distinct family, everything else inherits
-// the seat (the resolver appends the seat as every tier's last resort).
+// A minimal config: support work prefers the light OpenAI attachment.
 const MODELS_BLOCK = {
 	families: {
 		OpenAI: { aliases: { Sol: { attach: [WORKER], effort: "medium" } } },
@@ -33,10 +31,7 @@ const MODELS_BLOCK = {
 	},
 	bindings: { r: { roster: "r" } },
 	allowances: {
-		"deliverable-worker": { tiers: ["standard", "heavy"] },
 		"codebase-research": { tiers: ["light", "standard"] },
-		"code-review": { tiers: ["heavy", "standard"] },
-		standby: { tiers: ["heavy", "standard"] },
 	},
 } as const;
 
@@ -88,28 +83,18 @@ afterEach(() => {
 	if (existsSync(cwd)) rmSync(cwd, { recursive: true, force: true });
 });
 
-describe("resolveModelForRole (v2 role parity)", () => {
-	it("resolves a concrete authenticated model for EVERY role — never null", async () => {
+describe("resolveModelForRole", () => {
+	it("resolves every current support role", async () => {
 		for (const role of MODEL_ROLES) {
 			const resolved = await resolveModelForRole(fakeCtx(), role);
 			expect(resolved, `role ${role} resolved to null`).not.toBeNull();
 			expect(resolved?.modelId, `role ${role}`).toMatch(/\//);
 			expect(resolved?.apiKey).toBeTruthy();
-			// The resolved model is one the agent type may actually reach.
-			expect([SEAT, WORKER]).toContain(resolved?.modelId);
+			expect(resolved?.modelId).toBe(WORKER);
 		}
 	});
 
-	it("routes worker roles to the worker family, reviews to the seat family", async () => {
-		const worker = await resolveModelForRole(fakeCtx(), "worker");
-		expect(worker?.modelId).toBe(WORKER);
-		const review = await resolveModelForRole(fakeCtx(), "security-review");
-		expect(review?.modelId).toBe(SEAT);
-	});
-
-	it("maps every MODEL_ROLE to a built-in persona (no role falls through)", () => {
-		// The built-in persona ids are also the DEFAULT_PERSONA_ALLOWANCES keys,
-		// so a role mapped outside that set would silently lose its allowance.
+	it("maps every current role to the configured support persona", () => {
 		for (const role of MODEL_ROLES as readonly ModelRole[]) {
 			expect(Object.keys(DEFAULT_PERSONA_ALLOWANCES)).toContain(
 				personaForRole(role),

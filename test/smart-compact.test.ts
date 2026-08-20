@@ -2,10 +2,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileOperations } from "@earendil-works/pi-coding-agent";
-import {
-	isMaestroOwnedCompaction,
-	MAESTRO_COMPACTION_MARKER,
-} from "@vegardx/pi-contracts";
 import { redactSecrets } from "@vegardx/pi-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -110,16 +106,6 @@ describe("smart-compact append-only assembly", () => {
 		const s3 = assembleSummary("section-3", s2);
 		expect(s2.startsWith(s1)).toBe(true);
 		expect(s3.startsWith(s2)).toBe(true);
-	});
-});
-
-describe("smart-compact marker protocol", () => {
-	it("recognises modes-owned compactions and ignores others", () => {
-		expect(isMaestroOwnedCompaction(`${MAESTRO_COMPACTION_MARKER} abc`)).toBe(
-			true,
-		);
-		expect(isMaestroOwnedCompaction("focus on the parser")).toBe(false);
-		expect(isMaestroOwnedCompaction(undefined)).toBe(false);
 	});
 });
 

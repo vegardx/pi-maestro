@@ -23,7 +23,7 @@ export interface SeatHost {
 export function startSeat(
 	pi: SeatHost,
 	options: { readonly cwd?: string; readonly agentDir?: string } = {},
-): { seat(): Seat; currentMode(): ModeName; executing(): boolean } {
+): { seat(): Seat; currentMode(): ModeName } {
 	const cwd = options.cwd ?? process.cwd();
 	let built: Seat | undefined;
 	const seat = (): Seat => {
@@ -63,7 +63,6 @@ export function startSeat(
 	return {
 		seat,
 		currentMode: () => built?.mode().name ?? "plan",
-		executing: () => false,
 	};
 }
 
@@ -83,11 +82,6 @@ export default defineExtension(
 		maestro.capabilities.register(CAPABILITIES.modes, {
 			current: entry.currentMode,
 			onChange: (listener) => entry.seat().onModeChange(listener),
-			execution: () => ({
-				mode: entry.currentMode(),
-				executing: entry.executing(),
-				compactionInFlight: false,
-			}),
 		});
 		const { installMaestroObservability } = await import("./observability.js");
 		installMaestroObservability(pi, entry.currentMode);

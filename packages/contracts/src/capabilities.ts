@@ -1,6 +1,6 @@
 // Capability registry vocabulary. Versioned ids map to typed interfaces.
 
-import type { ModeName, ModesExecutionStatus } from "./modes.js";
+import type { ModeName } from "./modes.js";
 
 export const CAPABILITIES = {
 	modes: "modes.v1",
@@ -12,7 +12,6 @@ export type CapabilityId = (typeof CAPABILITIES)[keyof typeof CAPABILITIES];
 export interface ModesCapabilityV1 {
 	current(): ModeName;
 	onChange(listener: (mode: ModeName, previous: ModeName) => void): () => void;
-	execution(): ModesExecutionStatus;
 }
 
 export interface PromptAssistCapabilityV1 {

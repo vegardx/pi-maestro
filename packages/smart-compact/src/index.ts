@@ -4,22 +4,15 @@
 // LLM call that identifies the work in progress and writes a summary
 // optimised for continuing it, rather than a neutral chronological recap.
 //
-// Cooperation: modes claims compactions it wants to own by prefixing the
-// custom instructions with the shared marker (see @vegardx/pi-contracts).
-// When we see that marker we decline (return undefined) so modes' own
-// handler — which runs after us — produces the summary instead.
-//
 // Safety: any failure (no model/auth, empty summary, timeout, throw) falls
 // back to pi's default compaction by returning undefined, so a session is
 // never blocked on this extension.
 
-import { complete } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	convertToLlm,
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
-import { CAPABILITIES, isMaestroOwnedCompaction } from "@vegardx/pi-contracts";
 import { defineExtension, redactSecrets } from "@vegardx/pi-core";
 import { resolveModelForRole } from "@vegardx/pi-models";
 import { assembleSummary, buildFileSections, buildPrompt } from "./prompt.js";
@@ -62,7 +55,7 @@ export default defineExtension(
 		path: "packages/smart-compact/src/index.ts",
 		doc: "Replaces default compaction with a work-focused summary optimised for continuing the active task.",
 	},
-	(pi, maestro) => {
+	(pi) => {
 		// Model and effort selection belongs to the exact compact-summarizer set;
 		// only ordinary compaction knobs are declared under Advanced.
 
@@ -88,11 +81,6 @@ export default defineExtension(
 		});
 
 		pi.on("session_before_compact", async (event, ctx) => {
-			// Decline modes-owned compactions: modes' handler (registered after
-			// ours) will produce the summary. Returning undefined leaves our
-			// `result` slot untouched so the later handler wins.
-			if (isMaestroOwnedCompaction(event.customInstructions)) return;
-
 			const { preparation, signal, customInstructions } = event;
 			const {
 				messagesToSummarize,
@@ -106,7 +94,7 @@ export default defineExtension(
 			const settings = readSmartCompactSettings(ctx.cwd);
 
 			const resolved = await resolveModelForRole(ctx, "compact-summarizer");
-			if (!resolved?.apiKey) {
+			if (!resolved) {
 				notifyOnce(
 					ctx,
 					"no-model",
@@ -132,7 +120,7 @@ export default defineExtension(
 				settings.timeoutMs,
 			);
 			try {
-				const response = await complete(
+				const response = await ctx.modelRegistry.complete(
 					resolved.model,
 					{
 						messages: [
@@ -144,9 +132,10 @@ export default defineExtension(
 						],
 					},
 					{
-						apiKey: resolved.apiKey,
-						headers: resolved.headers,
-						maxTokens: settings.maxSummaryTokens,
+						maxTokens: Math.min(
+							settings.maxSummaryTokens,
+							resolved.model.maxTokens,
+						),
 						signal: callSignal,
 					},
 				);
@@ -203,14 +192,6 @@ export default defineExtension(
 		// fires again before the previous compaction settles.
 		pi.on("turn_end", (_event, ctx) => {
 			if (compacting) return;
-			// Cooperation: foreground modes execution owns proactive compaction in
-			// its own session. When modes reports ask/auto execution for an active
-			// deliverable here, defer to its working-budget trigger and the
-			// deliverable-slice summariser. No-op gracefully when modes is absent.
-			const exec = maestro.capabilities.get(CAPABILITIES.modes)?.execution();
-			if (exec?.executing && exec.activeDeliverableId && exec.mode === "auto") {
-				return;
-			}
 			const { compactAt } = readSmartCompactSettings(ctx.cwd);
 			if (compactAt === undefined) return;
 			const usage = ctx.getContextUsage();

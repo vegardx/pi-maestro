@@ -49,6 +49,24 @@ function withTimeout(
 	};
 }
 
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(new Error("aborted"));
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(new Error("aborted"));
+		signal.addEventListener("abort", abort, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", abort);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", abort);
+				reject(error);
+			},
+		);
+	});
+}
+
 export default defineExtension(
 	{
 		name: "smart-compact",
@@ -92,34 +110,35 @@ export default defineExtension(
 			} = preparation;
 
 			const settings = readSmartCompactSettings(ctx.cwd);
-
-			const resolved = await resolveModelForRole(ctx, "compact-summarizer");
-			if (!resolved) {
-				notifyOnce(
-					ctx,
-					"no-model",
-					"smart-compact: no model/auth available, using default compaction",
-					"warning",
-				);
-				return;
-			}
-
 			const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-			if (allMessages.length === 0) return; // nothing to summarise
-
-			const conversationText = serializeConversation(convertToLlm(allMessages));
-			const prompt = buildPrompt(
-				conversationText,
-				fileOps,
-				previousSummary,
-				customInstructions,
-			);
-
+			if (allMessages.length === 0) return;
 			const { signal: callSignal, dispose } = withTimeout(
 				signal,
 				settings.timeoutMs,
 			);
 			try {
+				const resolved = await abortable(
+					resolveModelForRole(ctx, "compact-summarizer"),
+					callSignal,
+				);
+				if (!resolved) {
+					notifyOnce(
+						ctx,
+						"no-model",
+						"smart-compact: no model/auth available, using default compaction",
+						"warning",
+					);
+					return;
+				}
+				const conversationText = serializeConversation(
+					convertToLlm(allMessages),
+				);
+				const prompt = buildPrompt(
+					conversationText,
+					fileOps,
+					previousSummary,
+					customInstructions,
+				);
 				const response = await ctx.modelRegistry.complete(
 					resolved.model,
 					{

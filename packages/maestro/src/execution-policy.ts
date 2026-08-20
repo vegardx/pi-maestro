@@ -1,15 +1,7 @@
-// The execution policy: how much the harness confirms, isolates, or refuses.
+// The interactive seat's bash classification and confirmation policy.
 //
-// This is the FIRST thing to land in packages/maestro, and only because of
-// where it sits in the dependency graph: both `isolation/*` and the whole bash
-// engine import `ExecutionPolicySettings`, so while it lived inside
-// packages/modes nothing else could move out. Splitting it unblocks ~3.5k lines.
-//
-// NOTE ON THE SETTINGS NAMESPACE: these knobs are still read from
-// `extensionConfig.modes.execution.*`. The reading code moved; the key did not,
-// because `modes` is still the registered extension and still declares and
-// writes them. The namespace follows the manifest at the cutover, not before —
-// changing it now would orphan every existing setting mid-migration.
+// Pi-maestro has no execution backend or OS sandbox. These settings only decide
+// whether a classified host command is allowed, confirmed, or refused.
 
 import { readLayeredExtensionConfig, readPath } from "@vegardx/pi-settings";
 
@@ -90,7 +82,7 @@ export function readExecutionPolicySettings(
 	agentDir?: string,
 ): ExecutionPolicySettings {
 	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
-	const config = merged.modes;
+	const config = merged.maestro;
 	const preset = choice(
 		readPath(config, "execution.preset"),
 		["guided", "strict", "permissive"] as const,

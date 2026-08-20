@@ -111,8 +111,6 @@ export interface AuthoringDeps {
 	readonly store: PlanStore;
 	/** The repository the maestro is sitting in — the default for `repos`. */
 	readonly cwd: () => string;
-	/** Told after a plan is stored, so the seat can offer to run it. */
-	readonly onStored?: (plan: Plan) => void;
 }
 
 /**
@@ -172,7 +170,6 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 				};
 
 			deps.store.savePlan(plan);
-			deps.onStored?.(plan);
 			return {
 				content: [{ type: "text" as const, text: describe(plan) }],
 				details: details(true),

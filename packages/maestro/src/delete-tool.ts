@@ -10,8 +10,8 @@
 // The refusal outlived its target, which is this codebase's recurring defect.
 
 import { existsSync } from "node:fs";
-import { cp, mkdir, rename, rm } from "node:fs/promises";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { cp, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import {
 	defineTool,
 	getAgentDir,
@@ -37,7 +37,7 @@ async function trash(abs: string, trashRoot: string): Promise<void> {
 }
 
 /** The `delete` tool: soft-delete to a recoverable trash location. */
-export function createDeleteTool(): ToolDefinition {
+export function createDeleteTool(agentDir = getAgentDir()): ToolDefinition {
 	return defineTool({
 		name: "delete",
 		label: "Delete (to trash)",
@@ -56,10 +56,12 @@ export function createDeleteTool(): ToolDefinition {
 		}),
 		async execute(_id, params, _signal, _onUpdate, active) {
 			const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-			const trashRoot = join(getAgentDir(), "trash", stamp);
+			const trashParent = join(agentDir, "trash");
+			await mkdir(trashParent, { recursive: true });
+			const trashRoot = await mkdtemp(join(trashParent, `${stamp}-`));
 			const lines: string[] = [];
 			for (const path of params.paths) {
-				const abs = isAbsolute(path) ? path : resolve(active.cwd, path);
+				const abs = resolve(active.cwd, path);
 				try {
 					if (!existsSync(abs)) {
 						lines.push(`- ${path}: not found (skipped)`);

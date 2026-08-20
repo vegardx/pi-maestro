@@ -8,14 +8,20 @@
 // The case worth reading is the unattended one: a route that needs a human is a
 // refusal for a worker, not a prompt nobody answers.
 
-import type { BashOperations } from "@earendil-works/pi-coding-agent";
+import type {
+	BashOperations,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
 	decideFromRoute,
 	gateBash,
 	refusal,
 } from "../packages/maestro/src/bash-gate.js";
-import { createGatedBashOperations } from "../packages/maestro/src/bash-tool.js";
+import {
+	createBashTool,
+	createGatedBashOperations,
+} from "../packages/maestro/src/bash-tool.js";
 import {
 	type ExecutionPolicySettings,
 	executionPolicyPreset,
@@ -43,12 +49,9 @@ describe("the classifier is actually consulted", () => {
 });
 
 describe("the reader's shell: reads run, writes are refused", () => {
-	// A reader HOLDS a gated shell now. The old rule "a shell is a write tool"
-	// predated ambient confinement: the classifier refuses write effects for
-	// the read-only holder, and everything that runs at all runs under the
-	// actor's write profile — so the shell is real and the posture still means
-	// something. Driven through the gated operations, not just the gate,
-	// because the operations are what the reader's registered tool executes.
+	// The classifier refuses write effects for the read-only holder. Driven
+	// through the gated operations, not just the gate, because the operations
+	// are what a registered shell tool executes.
 	function readerOperations() {
 		const ran: string[] = [];
 		const direct: BashOperations = {
@@ -266,5 +269,47 @@ describe("the gate sits in front of the operations, not the tool", () => {
 		const o = operations({ holder: "maestro", confirm: async () => true });
 		await o.ops.exec(CONFIRMS, "/w", { onData: () => {} });
 		expect(o.ran).toEqual([CONFIRMS]);
+	});
+
+	it("binds the registered seat tool to Pi's confirmation UI", async () => {
+		const ran: string[] = [];
+		const asked: [string, string][] = [];
+		const tool = createBashTool({
+			holder: "maestro",
+			cwd: "/w",
+			mode: () => mode("auto"),
+			policy: () => policy,
+			direct: {
+				exec: async (command) => {
+					ran.push(command);
+					return { exitCode: 0 };
+				},
+			},
+		});
+		const ctx = {
+			cwd: "/w",
+			sessionManager: {
+				getSessionId: () => "test-session",
+				getSessionFile: () => undefined,
+			},
+			ui: {
+				confirm: async (title: string, message: string) => {
+					asked.push([title, message]);
+					return true;
+				},
+			},
+		} as ExtensionContext;
+
+		await tool.execute(
+			"bash-1",
+			{ command: CONFIRMS },
+			undefined,
+			undefined,
+			ctx,
+		);
+
+		expect(ran).toEqual([CONFIRMS]);
+		expect(asked).toHaveLength(1);
+		expect(asked[0]?.[1]).toContain(CONFIRMS);
 	});
 });

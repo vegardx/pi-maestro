@@ -12,7 +12,7 @@ The remaining local extensions read their own keys from `extensionConfig`:
 ```json
 {
   "extensionConfig": {
-    "modes": {
+    "maestro": {
       "execution": {
         "preset": "guided"
       }

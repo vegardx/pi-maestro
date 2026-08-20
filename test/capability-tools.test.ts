@@ -85,7 +85,7 @@ describe("describePolicyDeviations", () => {
 		writeFileSync(
 			join(cwd, ".pi", "settings.json"),
 			JSON.stringify({
-				extensionConfig: { modes: { execution: { preset: "permissive" } } },
+				extensionConfig: { maestro: { execution: { preset: "permissive" } } },
 			}),
 		);
 		const deviations = describePolicyDeviations(cwd);

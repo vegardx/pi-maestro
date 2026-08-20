@@ -139,6 +139,37 @@ const PRIVILEGED = new Set([
 	"systemctl",
 	"service",
 ]);
+const EXECUTION_ENVIRONMENT_KEYS = new Set([
+	"PATH",
+	"BASH_ENV",
+	"ENV",
+	"SHELLOPTS",
+	"SHELL",
+	"IFS",
+	"CDPATH",
+	"PROMPT_COMMAND",
+	"NODE_OPTIONS",
+	"PYTHONPATH",
+	"RUBYOPT",
+	"PERL5OPT",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_EXTERNAL_DIFF",
+	"GIT_PAGER",
+	"GIT_EDITOR",
+	"GIT_SEQUENCE_EDITOR",
+	"GIT_ASKPASS",
+	"SSH_ASKPASS",
+	"PAGER",
+	"MANPAGER",
+	"LESSOPEN",
+	"LESSCLOSE",
+	"EDITOR",
+	"VISUAL",
+	"RUSTC_WRAPPER",
+	"CC",
+	"CXX",
+]);
 
 export interface BashAssessmentInput {
 	readonly command: string;
@@ -605,10 +636,10 @@ function assessRemoteAdmin(
 function hasExecutionEnvironmentOverride(
 	environment: Readonly<Record<string, string>>,
 ): boolean {
-	return Object.keys(environment).some((key) =>
-		/^(?:PATH|BASH_ENV|ENV|SHELLOPTS|NODE_OPTIONS|PYTHONPATH|RUBYOPT|PERL5OPT|LD_|DYLD_|GIT_CONFIG)/u.test(
-			key,
-		),
+	return Object.keys(environment).some(
+		(key) =>
+			EXECUTION_ENVIRONMENT_KEYS.has(key) ||
+			/^(?:LD_|DYLD_|GIT_CONFIG)/u.test(key),
 	);
 }
 function onlyReadEffects(effects: ReadonlySet<BashEffect>): boolean {

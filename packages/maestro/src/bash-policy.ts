@@ -189,7 +189,10 @@ export function assessBashCommand(command: string): DeterministicAssessment {
 	if (command.trim() === "") effects.add("filesystem-read");
 	if (!analysis.parseComplete)
 		unresolved.add("shell syntax was not fully parsed");
-	if (analysis.features.has("output-redirect")) effects.add("workspace-write");
+	if (analysis.features.has("output-redirect"))
+		effects.add(
+			outputRedirectLeavesWorkspace(command) ? "host-write" : "workspace-write",
+		);
 	if (
 		analysis.features.has("substitution") ||
 		analysis.features.has("opaque-dispatch") ||
@@ -217,9 +220,18 @@ export function assessBashCommand(command: string): DeterministicAssessment {
 			assessWritingFilter(executable, part.args, effects, unresolved);
 		else if (executable === "echo" || executable === "printf")
 			effects.add("filesystem-read");
-		else if (LOCAL_WRITES.has(executable)) effects.add("workspace-write");
+		else if (LOCAL_WRITES.has(executable))
+			effects.add(
+				writeTargetsLeaveWorkspace(executable, part.args)
+					? "host-write"
+					: "workspace-write",
+			);
 		else if (DESTRUCTIVE.has(executable)) {
-			effects.add("workspace-write");
+			effects.add(
+				writeTargetsLeaveWorkspace(executable, part.args)
+					? "host-write"
+					: "workspace-write",
+			);
 			effects.add("destructive");
 		} else if (PACKAGE.has(executable)) assessPackage(part.args, effects);
 		else if (INTERPRETER.test(executable)) effects.add("code-execution");
@@ -255,9 +267,10 @@ function assessmentFromEffects(
 	effects: ReadonlySet<BashEffect>,
 	unresolved: ReadonlySet<string>,
 ): CommandAssessment {
-	if (effects.size === 0 && unresolved.size > 0)
+	if (unresolved.size > 0)
 		return {
 			assessment: "uncertain",
+			...(effects.size > 0 ? { effects: [...effects] } : {}),
 			confidence: "low",
 			rationale: [...unresolved].join("; "),
 		};
@@ -481,6 +494,9 @@ function assessGit(
 	unresolved: Set<string>,
 ): void {
 	const subcommand = gitSubcommand(args);
+	const writeEffect: BashEffect = gitDirectoryLeavesWorkspace(args)
+		? "host-write"
+		: "workspace-write";
 	if (!subcommand) {
 		unresolved.add("git subcommand is missing");
 		return;
@@ -502,7 +518,7 @@ function assessGit(
 			)
 		)
 			effects.add("filesystem-read");
-		else effects.add("workspace-write");
+		else effects.add(writeEffect);
 		return;
 	}
 	if (GIT_READ.has(subcommand)) effects.add("filesystem-read");
@@ -519,9 +535,9 @@ function assessGit(
 			effects.add("destructive");
 	} else if (["fetch", "pull"].includes(subcommand)) {
 		effects.add("remote-read");
-		effects.add("workspace-write");
+		effects.add(writeEffect);
 	} else if (GIT_WRITE.has(subcommand)) {
-		effects.add("workspace-write");
+		effects.add(writeEffect);
 		if (
 			(subcommand === "reset" && args.includes("--hard")) ||
 			subcommand === "clean"
@@ -633,6 +649,35 @@ function assessRemoteAdmin(
 	else unresolved.add(`${executable} operation is not classified`);
 }
 
+function pathLeavesWorkspace(value: string): boolean {
+	const normalized = value.replace(/^['"]|['"]$/g, "");
+	return (
+		normalized.startsWith("/") ||
+		normalized === "~" ||
+		normalized.startsWith("~/") ||
+		normalized === ".." ||
+		normalized.startsWith("../") ||
+		normalized.includes("/../")
+	);
+}
+
+function writeTargetsLeaveWorkspace(
+	executable: string,
+	args: readonly string[],
+): boolean {
+	const positional = args.filter((arg) => !arg.startsWith("-"));
+	const targets = ["cp", "mv", "ln", "install"].includes(executable)
+		? positional.slice(-1)
+		: positional;
+	return targets.some(pathLeavesWorkspace);
+}
+
+function outputRedirectLeavesWorkspace(command: string): boolean {
+	return /(?:^|\s)(?:\d*>>?|&>)\s*['"]?(?:\/|~(?:\/|['"\s]|$)|\.\.(?:\/|['"\s]|$))/u.test(
+		command,
+	);
+}
+
 function hasExecutionEnvironmentOverride(
 	environment: Readonly<Record<string, string>>,
 ): boolean {
@@ -672,6 +717,24 @@ function exactFindArgs(args: readonly string[]): boolean {
 			!["-name", "-path", "-type", "-maxdepth", "-mindepth"].includes(arg),
 	);
 }
+function gitDirectoryLeavesWorkspace(args: readonly string[]): boolean {
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (["-C", "--git-dir", "--work-tree"].includes(arg)) {
+			if (pathLeavesWorkspace(args[index + 1] ?? "")) return true;
+			index += 1;
+		} else if (
+			["--git-dir=", "--work-tree="].some(
+				(prefix) =>
+					arg.startsWith(prefix) &&
+					pathLeavesWorkspace(arg.slice(prefix.length)),
+			)
+		)
+			return true;
+	}
+	return false;
+}
+
 function gitSubcommand(args: readonly string[]): string | undefined {
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index] ?? "";

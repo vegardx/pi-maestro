@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +11,7 @@ import {
 	createCommandAuditor,
 	parseCommandAuditResponse,
 	parseCommandAuditTurn,
+	runCommandProbe,
 	validCommandProbe,
 } from "../packages/maestro/src/command-auditor.js";
 import { DEFAULT_EXECUTION_POLICY } from "../packages/maestro/src/execution-policy.js";
@@ -71,7 +75,7 @@ describe("bounded command probes", () => {
 		).toBe(expected);
 	});
 
-	it("rejects shell structure and repository-local executables", () => {
+	it("rejects shell structure and explicit repository-local executables", () => {
 		for (const command of ["acme deploy && true", "./acme deploy"])
 			expect(
 				validCommandProbe(
@@ -83,6 +87,31 @@ describe("bounded command probes", () => {
 					analyzeShellProgram(command),
 				),
 			).toBe(false);
+	});
+
+	it("rejects a bare PATH executable that resolves inside the workspace", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "maestro-local-probe-"));
+		const executable = join(cwd, "acme");
+		writeFileSync(executable, "#!/bin/sh\necho help\n");
+		chmodSync(executable, 0o755);
+		const previous = process.env.PATH;
+		process.env.PATH = `${cwd}:${previous ?? ""}`;
+		try {
+			await expect(
+				runCommandProbe(
+					{
+						assessment: "probe",
+						argv: ["acme", "--help"],
+						rationale: "inspect help",
+					},
+					cwd,
+				),
+			).rejects.toThrow("resolves inside the workspace");
+		} finally {
+			if (previous === undefined) delete process.env.PATH;
+			else process.env.PATH = previous;
+			rmSync(cwd, { recursive: true, force: true });
+		}
 	});
 });
 

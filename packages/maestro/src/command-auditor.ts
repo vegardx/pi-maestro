@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { access, realpath } from "node:fs/promises";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { parseModelSpec, resolveModelForRole } from "@vegardx/pi-models";
@@ -263,14 +266,49 @@ interface CommandProbeResult {
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_MAX_BYTES = 32 * 1024;
 
+async function resolveProbeExecutable(
+	executable: string,
+	cwd: string,
+): Promise<string> {
+	const workspace = await realpath(cwd);
+	for (const entry of (process.env.PATH ?? "").split(delimiter)) {
+		const directory = isAbsolute(entry) ? entry : resolve(cwd, entry || ".");
+		const candidate = join(directory, executable);
+		try {
+			await access(candidate, constants.X_OK);
+			const canonical = await realpath(candidate);
+			const fromWorkspace = relative(workspace, canonical);
+			if (
+				fromWorkspace === "" ||
+				(!fromWorkspace.startsWith(`..${sep}`) &&
+					fromWorkspace !== ".." &&
+					!isAbsolute(fromWorkspace))
+			)
+				throw new Error("probe executable resolves inside the workspace");
+			return canonical;
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === "probe executable resolves inside the workspace"
+			)
+				throw error;
+		}
+	}
+	throw new Error(`probe executable not found on PATH: ${executable}`);
+}
+
 export async function runCommandProbe(
 	request: CommandProbeRequest,
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<CommandProbeResult> {
+	const executable = await resolveProbeExecutable(
+		request.argv[0] as string,
+		cwd,
+	);
 	return new Promise((resolve) => {
 		execFile(
-			request.argv[0] as string,
+			executable,
 			request.argv.slice(1) as string[],
 			{
 				cwd,

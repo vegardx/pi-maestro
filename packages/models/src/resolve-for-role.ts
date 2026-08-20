@@ -31,10 +31,8 @@ export async function resolveModelForRole(
 	opts: { tier?: TierId } = {},
 ): Promise<RoleModel | null> {
 	const persona = personaForRole(role);
-	// The persona's own tier (deliverable-worker→standard, code-review→heavy, …)
-	// — the same tier a spawn of that persona resolves at. Without it the
-	// resolver falls back to inheriting the seat for every role, collapsing v2
-	// routing.
+	// Both current harness roles use the read-only support persona's default
+	// tier unless the caller explicitly requests one.
 	const tier = opts.tier ?? defaultTierFor(ctx, persona);
 	const seat = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 	let modelId: string | undefined;

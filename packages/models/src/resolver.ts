@@ -24,6 +24,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type {
 	AliasConfig,
 	DirectSelector,
+	ModelRole,
 	ModelsConfig,
 	RegionConfig,
 	ThinkingLevel,
@@ -719,17 +720,7 @@ export async function explainTier(
 	};
 }
 
-/**
- * Which persona's allowance a harness model role resolves under.
- *
- * Reviews judge (`code-review`), implementation and delivery verification act
- * (`deliverable-worker`), advice consults (`standby`), and the
- * classify/summarize/research roles only read (`codebase-research`). The ids
- * mirror the built-in personas in packages/maestro/src/personas.ts.
- */
-export function personaForRole(role: string): string {
-	if (role.endsWith("-review")) return "code-review";
-	if (role === "worker" || role === "verifier") return "deliverable-worker";
-	if (role === "advisor") return "standby";
+/** Current in-process harness callers are both read-only support work. */
+export function personaForRole(_role: ModelRole): string {
 	return "codebase-research";
 }

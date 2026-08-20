@@ -110,29 +110,16 @@ export interface AgentAllowanceConfig {
 export const MAX_SPREAD = 5;
 
 /**
- * Defaults applied when settings say nothing, keyed by the built-in persona
- * ids (packages/maestro/src/personas.ts). `inherit` and the session-model
- * fallback are exempt from these allowances (labeled in explain output) — the
- * lists bound deliberate tier references only.
+ * Generic resolver defaults retained for configured personas. Current
+ * pi-maestro callers use only `codebase-research`; workflow execution belongs
+ * to the future standalone workflow package.
  */
 export const DEFAULT_PERSONA_ALLOWANCES: Readonly<
 	Record<string, AgentAllowanceConfig>
 > = {
-	// The deliverable worker is the deliverable's implementer — the maestro's
-	// direct hand. With no explicit allowance it INHERITS the session model
-	// (empty tiers → defaultTierFor returns undefined → the resolver's inherit
-	// path), so an unconfigured worker runs on the seat, not a roster tier. The
-	// rosters govern the support personas a worker fans out to and any worker
-	// that IS given an explicit allowance. (Note: user-authored allowances
-	// require a non-empty tiers list; only this built-in default may be empty.)
 	"deliverable-worker": { tiers: [] },
 	"codebase-research": { tiers: ["light", "standard"] },
-	// spread: a multi-modal review reads the same diff through three distinct
-	// families — enough for genuine disagreement to surface, without the cost
-	// running away. Only applies to reviews the PLAN marked multi-modal.
 	"code-review": { tiers: ["standard", "heavy"], spread: 3 },
-	// Advice draws on strong reasoning; overflow into standard when a fan-out
-	// wants more models than heavy holds.
 	standby: { tiers: ["heavy", "standard"], spread: 2 },
 };
 

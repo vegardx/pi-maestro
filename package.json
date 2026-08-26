@@ -35,7 +35,7 @@
 		"prepare": "husky"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.4",
+		"@biomejs/biome": "^2.5.10",
 		"@earendil-works/pi-agent-core": "0.84.2",
 		"@earendil-works/pi-ai": "0.84.2",
 		"@earendil-works/pi-coding-agent": "0.84.2",
@@ -43,16 +43,16 @@
 		"@sinclair/typebox": "^0.34.52",
 		"@types/node": "^24.13.3",
 		"husky": "^9.1.7",
-		"semantic-release": "^25.0.7",
+		"semantic-release": "^25.0.9",
 		"typescript": "^7.0.2",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"engines": {
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
-		"@juicesharp/rpiv-ask-user-question": "2.6.1",
-		"@juicesharp/rpiv-i18n": "2.6.1",
+		"@juicesharp/rpiv-ask-user-question": "2.7.0",
+		"@juicesharp/rpiv-i18n": "2.7.0",
 		"jiti": "^2.7.0"
 	}
 }

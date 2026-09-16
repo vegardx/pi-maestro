@@ -1,14 +1,18 @@
-// v2 config reader: families (ranked; each holds free-text aliases with ordered
+// The v2 configuration parser: families (ranked; each holds free-text aliases with ordered
 // per-provider attachments), rosters (light/standard/heavy tiers holding ordered
 // alias refs), bindings (seat→roster bindings), region (the active model
 // allowlist), and per-persona tier allowances. Mirrors the old conventions:
 // null entries are deletion markers (skipped), invalid non-null shapes throw
 // with the offending name, global+project merge with project winning per key.
 //
-// parseModelsSettings is the single validator both boot and the /maestro editor
-// use: an invalid v2 state is unwriteable (editor) and triggers the boot wipe.
+// parseModelsSettings is the single validator every caller uses: an invalid v2
+// state is unwriteable (an editor validates a candidate before writing a byte)
+// and triggers a boot wipe. Reading the two raw settings objects off disk is
+// the HOST's job — this package never touches a filesystem.
 
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { isModelId, parseModelSpec } from "./model-spec.js";
+import { isRegionOff } from "./region.js";
+import type { ThinkingLevel } from "./thinking.js";
 import {
 	type AgentAllowanceConfig,
 	type AliasConfig,
@@ -21,12 +25,9 @@ import {
 	type ModelsConfig,
 	type RegionConfig,
 	type RosterTiers,
-	type ThinkingLevel,
 	TIER_IDS,
 	type TierId,
-} from "@vegardx/pi-contracts";
-import { isModelId, parseModelSpec } from "./model-spec.js";
-import { isRegionOff } from "./region.js";
+} from "./vocabulary.js";
 
 const EFFORT_SET = new Set([
 	"off",
@@ -401,21 +402,6 @@ export function parseModelsSettings(
 	};
 	validateModelsConfig(config);
 	return config;
-}
-
-/**
- * Read the merged v2 slice. Returns undefined when nothing v2 is configured
- * (an empty models block = inherit-all).
- */
-export function readModelsConfig(
-	cwd: string,
-	agentDir?: string,
-): ModelsConfig | undefined {
-	const manager = SettingsManager.create(cwd, agentDir);
-	return parseModelsSettings(
-		manager.getGlobalSettings() as unknown,
-		manager.getProjectSettings() as unknown,
-	);
 }
 
 /**

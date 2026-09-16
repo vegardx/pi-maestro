@@ -1,19 +1,19 @@
 {
 	"name": "@vegardx/pi-models",
-	"version": "0.0.0",
-	"private": true,
+	"version": "0.1.0",
 	"type": "module",
-	"description": "Authenticated ordered role-pool model resolution.",
+	"description": "Authenticated ordered role-pool model resolution: families, rosters, tiers, regions and allowances behind one injected host port.",
 	"license": "MIT",
 	"main": "./src/index.ts",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.ts",
+		"./package.json": "./package.json"
 	},
-	"dependencies": {
-		"@vegardx/pi-contracts": "*"
-	},
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-ai": "*"
+	"files": [
+		"src",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=22.19.0"
 	}
 }

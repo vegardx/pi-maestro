@@ -84,7 +84,7 @@ describe("a plan is written whole", () => {
 					id: "ui",
 					title: "The UI",
 					after: ["api"],
-					reads: ["api"],
+					reads: [],
 					tasks: [
 						{ id: "build", title: "Build it" },
 						{
@@ -109,7 +109,7 @@ describe("a plan is written whole", () => {
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
 		expect(text).toContain(
-			"- ui: 2 tasks, 1 delegated review intent(s) after api reads api",
+			"- ui: 2 tasks, 1 delegated review intent(s) after api",
 		);
 		// The trailer is the offer, not a status line: both ways to start a run,
 		// and who approves it — which is never this tool and never the model.
@@ -247,6 +247,23 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 	});
 });
 
+/** Every `properties` key anywhere in a JSON schema, at any depth. */
+function propertyNames(
+	schema: unknown,
+	into: Set<string> = new Set(),
+): Set<string> {
+	if (!schema || typeof schema !== "object") return into;
+	for (const [key, value] of Object.entries(
+		schema as Record<string, unknown>,
+	)) {
+		if (key === "properties" && value && typeof value === "object")
+			for (const name of Object.keys(value as Record<string, unknown>))
+				into.add(name);
+		propertyNames(value, into);
+	}
+	return into;
+}
+
 describe("what the schema will not let an author say", () => {
 	it("offers workflow review intent, never a persona or agent kind", () => {
 		const schema = JSON.stringify(authoring().tool.parameters);
@@ -267,8 +284,12 @@ describe("what the schema will not let an author say", () => {
 		// No status, no branch, no worktree, no PR. The plan is what was agreed;
 		// what happened is a separate record, and an author that could write a
 		// status could write a lie.
-		const schema = JSON.stringify(authoring().tool.parameters);
+		//
+		// Asserted over the schema's PROPERTY NAMES rather than its bytes, because
+		// `policy.publish.mode` names a branch and a pull request as things to ASK
+		// for — a decision the plan makes, not a record of what a run did.
+		const names = [...propertyNames(authoring().tool.parameters)];
 		for (const runtime of ["status", "branch", "worktree", "handoff", "pr"])
-			expect(schema).not.toContain(`"${runtime}"`);
+			expect(names).not.toContain(runtime);
 	});
 });

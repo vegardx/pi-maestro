@@ -15,6 +15,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { PLAN_FILE } from "./paths.js";
 import { type Plan, validatePlan } from "./plan.js";
 
 /**
@@ -121,7 +122,7 @@ export function createPlanStore(
 	}
 
 	function file(slug: string): string {
-		return join(dir(slug), "plan.json");
+		return join(dir(slug), PLAN_FILE);
 	}
 
 	function read<T>(path: string): T | null {

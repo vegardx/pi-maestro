@@ -77,7 +77,32 @@ describe("command names", () => {
 		).toEqual([]);
 	});
 
-	it("registers no workflow execution verbs before the owned runtime exists", () => {
-		expect(maestroCommands()).toEqual(["mode"]);
+	it("registers exactly the commands the docs describe", () => {
+		expect(maestroCommands().sort()).toEqual(["mode", "plan"]);
+	});
+
+	it("keeps `/plan run` a hand-off: nothing here can execute a workflow", () => {
+		// The point of this assertion is not the command list — it is that
+		// `/plan run` CANNOT have quietly grown a second executor inside this
+		// package. It builds an input and steers the session; the run is a tool
+		// call the model makes, in the open. A dependency on the workflow runtime,
+		// or an import of one, is the first step back to an embedded executor.
+		const manifest = JSON.parse(
+			readFileSync(join(process.cwd(), "package.json"), "utf8"),
+		) as {
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		};
+		const declared = [
+			...Object.keys(manifest.dependencies ?? {}),
+			...Object.keys(manifest.devDependencies ?? {}),
+		];
+		expect(declared.filter((name) => name.includes("workflow"))).toEqual([]);
+
+		const importers: string[] = [];
+		for (const file of walk(join(process.cwd(), "packages")))
+			if (/from\s+"[^"]*pi-workflow/.test(readFileSync(file, "utf8")))
+				importers.push(file);
+		expect(importers).toEqual([]);
 	});
 });

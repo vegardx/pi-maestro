@@ -104,12 +104,21 @@ export function planDigest(plan: Plan): string {
  * Takes `unknown` for the effort on purpose: it arrives from a command
  * argument or a tool call, where "standrd" is one keystroke away, and a typo
  * that silently became `standard` would spend a deep run's budget — or fail to.
+ *
+ * **An absent effort is the plan's own.** `policy.effort` is a decision a human
+ * made in the plan-mode exit and the digest covers it, so a run started without
+ * naming one runs at the effort the document asks for rather than at a default
+ * that overrides it. The parameter still wins when it is given: `/plan run
+ * <slug> deep` is a human saying something about this run.
+ *
+ * A stored `policy.effort` this build does not recognise is not an error here —
+ * `inspectPlan` reports it, `resolvePolicy` resolves it to the default, and so
+ * does this. Only an effort the CALLER passed is worth throwing over.
  */
-export function toWorkflowInput(
-	plan: Plan,
-	effort: unknown = DEFAULT_EFFORT,
-): WorkflowInput {
-	const wanted = effort ?? DEFAULT_EFFORT;
+export function toWorkflowInput(plan: Plan, effort?: unknown): WorkflowInput {
+	const authored = plan.policy?.effort;
+	const wanted =
+		effort ?? (isEffort(authored) ? authored : undefined) ?? DEFAULT_EFFORT;
 	if (!isEffort(wanted)) throw new UnknownEffortError(effort);
 	return { plan, planDigest: planDigest(plan), effort: wanted };
 }

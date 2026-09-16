@@ -302,8 +302,10 @@ conversation
 
 **By value, with a digest.** `toWorkflowInput(plan, effort)` returns
 `{plan, planDigest, effort}`: the whole authored document, the sha256 of its
-canonical JSON (keys sorted, no whitespace), and one of `cheap`, `standard`
-(the default) or `deep`. The plan travels by value because a workflow run
+canonical JSON (keys sorted, no whitespace), and one of `cheap`, `standard` or
+`deep`. An effort nobody named is the plan's own `policy.effort` — a decision a
+human made on the way out of plan mode, which the digest covers — and
+`standard` only when the document sets none. The plan travels by value because a workflow run
 validates its input against the definition's schema and binds the run's
 identity to it — a run given a slug could have the document change underneath
 it on resume, and would then be executing something nobody approved. The digest

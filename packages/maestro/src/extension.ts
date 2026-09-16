@@ -4,11 +4,24 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
+import {
+	beginModeExit,
+	createModeExitController,
+	type ModeExitHook,
+} from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
+import { hasPendingExit } from "./pending-exit.js";
 import { createPlanCommand } from "./plan-command.js";
 import { EFFORTS } from "./plan-input.js";
 import { createSeat, planToolAvailable, type Seat } from "./seat.js";
+
+/**
+ * Re-exported because the `/mode` handler is the hook's only caller and this
+ * is where a reader looks for it. The hook itself, and phase 1 behind it, live
+ * in `exit-flow.ts`.
+ */
+export { beginModeExit, type ModeExitHook };
 
 const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 
@@ -34,21 +47,6 @@ export function seatToolBlockReason(
 		return "The `plan` tool is not held in plan mode; it is offered on the way out, so switch with /mode auto or /mode hack and write the plan there.";
 	return undefined;
 }
-
-/**
- * Phase 1 of the plan-mode exit, before the mode actually changes.
- *
- * A seam, deliberately empty: the dialogs, the pending record and the steer
- * that asks the model for the document land in `exit-flow.ts` (M2-EXIT1). It
- * exists now so the `/mode` handler has exactly one place to grow, and so the
- * seat's tool set already flips on the transition this hook straddles.
- */
-export type ModeExitHook = (
-	previous: ModeName,
-	next: ModeName,
-) => void | Promise<void>;
-
-export const beginModeExit: ModeExitHook = () => {};
 
 /**
  * What a stored plan write should say, once, to the human watching.
@@ -119,6 +117,11 @@ export interface SeatEntry {
 	seat(): Seat;
 	currentMode(): ModeName;
 	pendingExit(): boolean;
+	/**
+	 * A session replacement: end an exit flow that is mid-dialog and drop its
+	 * record. Idempotent, and a no-op when no flow is open.
+	 */
+	abortExitFlow(): void;
 }
 
 export function startSeat(
@@ -126,10 +129,45 @@ export function startSeat(
 	options: StartSeatOptions = {},
 ): SeatEntry {
 	const cwd = options.cwd ?? process.cwd();
-	const pendingExit = options.pendingExit ?? (() => false);
-	const onModeExit = options.beginModeExit ?? beginModeExit;
 	let built: Seat | undefined;
 	const registered = new Set<string>();
+
+	/**
+	 * The session the `/mode` handler last ran in.
+	 *
+	 * The seat is built before any session context exists, and the pending
+	 * record is keyed by session, so the id is learned from the first command
+	 * that carries one rather than guessed at construction.
+	 */
+	let sessionId: string | undefined;
+
+	/**
+	 * Is an exit in progress? A record that cannot be read answers `false`: it
+	 * is not a window this will open on trust, and phase 1 is where the human is
+	 * told about it, loudly, with the path to remove.
+	 */
+	const pendingExit =
+		options.pendingExit ??
+		(() => {
+			if (!sessionId) return false;
+			try {
+				return hasPendingExit(sessionId, options.agentDir);
+			} catch {
+				return false;
+			}
+		});
+
+	const exit = createModeExitController({
+		setMode: (name) => {
+			seat().setMode(name);
+		},
+		cwd,
+		...(options.agentDir ? { agentDir: options.agentDir } : {}),
+		...(pi.sendUserMessage
+			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
+			: {}),
+	});
+	const onModeExit = options.beginModeExit ?? exit.hook;
 
 	/**
 	 * Make Pi's tool set equal the seat's, which is the whole point of declaring
@@ -176,6 +214,13 @@ export function startSeat(
 	pi.registerCommand("mode", {
 		description: `Switch posture. /mode [${MODE_NAMES.join("|")}]`,
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			// The session id is learned here because this is the first context the
+			// seat is ever handed; the pending record is keyed by it.
+			try {
+				sessionId = ctx.sessionManager?.getSessionId() ?? sessionId;
+			} catch {
+				// A replaced session throws from its own context. Nothing to learn.
+			}
 			const wanted = args.trim().toLowerCase();
 			if (!wanted) {
 				ctx.ui.notify(`Mode is ${seat().mode().name}.`, "info");
@@ -191,9 +236,18 @@ export function startSeat(
 			const previous = seat().mode().name;
 			// Phase 1 of the exit flow belongs here, before the posture changes,
 			// because everything it asks about is what the human knows and the
-			// plan does not yet say. It is a no-op until M2-EXIT1 fills it.
-			if (previous !== wanted) await onModeExit(previous, wanted as ModeName);
-			const next = seat().setMode(wanted as ModeName);
+			// plan does not yet say. It owns the switch it straddles: `stay` is
+			// *Keep planning* and an aborted or refused flow, `settled` means the
+			// flow moved the posture itself, in the order it needed.
+			const decision =
+				previous !== wanted
+					? ((await onModeExit(previous, wanted as ModeName, ctx)) ?? "switch")
+					: "switch";
+			if (decision === "stay") return;
+			const next =
+				decision === "settled"
+					? seat().mode()
+					: seat().setMode(wanted as ModeName);
 			ctx.ui.notify(
 				`Mode ${next.name}: ${next.cwd === "write" ? "can write" : "read-only"}, safeguards ${next.safeguards}.`,
 				"info",
@@ -220,6 +274,7 @@ export function startSeat(
 		seat,
 		currentMode: () => built?.mode().name ?? "plan",
 		pendingExit,
+		abortExitFlow: exit.abort,
 	};
 }
 
@@ -243,6 +298,15 @@ export default defineExtension(
 		pi.on("tool_result", (event, ctx) => {
 			const notice = planStoredNotice(event, entry.currentMode());
 			if (notice) ctx.ui.notify(notice, "info");
+			// Phase 2 of the exit flow attaches here (M3-EXIT2, the
+			// `continueModeExit` seam in `exit-flow.ts`). Nothing of it ships yet.
+		});
+		// A new, resumed or forked session replaces the one a dialog sequence was
+		// asked in, and an `ExtensionContext` from the old one throws. Ending the
+		// flow here is what keeps a half-answered exit from writing a record for a
+		// session that is gone.
+		pi.on("session_start", () => {
+			entry.abortExitFlow();
 		});
 		maestro.capabilities.register(CAPABILITIES.modes, {
 			current: entry.currentMode,

@@ -10,11 +10,69 @@
 // happened when it ran is a separate record, keyed by the same ids. They may
 // well be persisted in the same file; they are not the same type.
 
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
 	readonly key: string;
 	readonly path: string;
 }
+
+/**
+ * What a probe found at a repository path. `root` is the working-tree root
+ * that contains the path, resolved the same way as `resolved`, so "is this
+ * path the root" is a string comparison the model layer can make without
+ * touching a filesystem.
+ */
+export interface RepoState {
+	/** The containing working-tree root, or null when there is no Git tree. */
+	readonly root: string | null;
+	/** The probed path itself, resolved. */
+	readonly resolved: string;
+	/** Tracked changes or untracked files present. */
+	readonly dirty: boolean;
+}
+
+/** Answers "what is at this path" for validation. Injected so tests are pure. */
+export type RepoProbe = (path: string) => RepoState;
+
+function realpath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		// A path that does not exist still has to compare as something; the
+		// `root === null` branch is what reports it, not this.
+		return resolve(path);
+	}
+}
+
+/** The real one: `git rev-parse --show-toplevel`, plus a porcelain status. */
+export const gitRepoProbe: RepoProbe = (path) => {
+	const resolved = realpath(path);
+	const git = (args: string[]): string | null => {
+		try {
+			return execFileSync("git", args, {
+				cwd: path,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+		} catch {
+			// Not a repository, not a directory, or no git at all — the caller
+			// cannot act differently on any of those, so they are one answer.
+			return null;
+		}
+	};
+	const top = git(["rev-parse", "--show-toplevel"]);
+	if (top === null) return { root: null, resolved, dirty: false };
+	const status = git(["status", "--porcelain"]);
+	return {
+		root: realpath(top.trim()),
+		resolved,
+		dirty: status !== null && status.trim().length > 0,
+	};
+};
 
 /**
  * What a deliverable id may look like.
@@ -32,9 +90,22 @@ export interface WorkflowDelegation {
 	readonly lens: string;
 	/** Optional ambient skill to request explicitly in the stage prompt. */
 	readonly skill?: string;
-	/** One concrete launch. Repeat the lens in another task to use another model. */
-	readonly model: string;
+	/**
+	 * One concrete launch, pinned. OPTIONAL: a plan that names a literal
+	 * `provider/model` is a plan that only runs on the host that has it. Repeat
+	 * the lens in another task to use another model.
+	 */
+	readonly model?: string;
+	/** How much reviewer to spend, when the plan does not pin one. */
+	readonly tier?: ReviewTier;
+	/** Ask for a reviewer from a different model family than the implementer. */
+	readonly diverse?: boolean;
 }
+
+/** How much reviewer a lens is worth, in the vocabulary a host can route. */
+export const REVIEW_TIERS = ["light", "standard", "heavy"] as const;
+
+export type ReviewTier = (typeof REVIEW_TIERS)[number];
 
 export interface Task {
 	readonly id: string;
@@ -73,11 +144,36 @@ export interface Plan {
 }
 
 /**
+ * What is wrong with a plan, and what is merely worth knowing.
+ *
+ * Warnings are separate from errors because a dirty working tree is a real
+ * thing to tell an author about and a terrible thing to refuse a plan over:
+ * authoring a plan while the tree has edits in it is the normal case, and a
+ * store that rejected it would teach authors to stop reading the list.
+ */
+export interface PlanReport {
+	readonly errors: string[];
+	readonly warnings: string[];
+}
+
+/**
  * Everything wrong with a plan, not just the first thing. An author fixing one
  * error at a time through five round trips is an author who stops reading.
  */
-export function validatePlan(plan: Plan): string[] {
+export function validatePlan(
+	plan: Plan,
+	probe: RepoProbe = gitRepoProbe,
+): string[] {
+	return inspectPlan(plan, probe).errors;
+}
+
+/** `validatePlan`, plus the non-fatal findings. */
+export function inspectPlan(
+	plan: Plan,
+	probe: RepoProbe = gitRepoProbe,
+): PlanReport {
 	const errors: string[] = [];
+	const warnings: string[] = [];
 	const ids = new Set<string>();
 	const repoKeys = new Set<string>();
 	if (!ID_RE.test(plan.slug))
@@ -94,7 +190,26 @@ export function validatePlan(plan: Plan): string[] {
 		else if (repoKeys.has(repo.key))
 			errors.push(`repo \`${repo.key}\`: duplicate key`);
 		repoKeys.add(repo.key);
+		// A repository path is the one field in a plan that makes a claim about
+		// the world, so it is the one field that can be checked against it. An
+		// unchecked path fails at the first worktree the run tries to create,
+		// after both humans have already read and approved the plan.
 		if (!repo.path.trim()) errors.push(`repo \`${repo.key}\` has no path`);
+		else {
+			const state = probe(repo.path);
+			if (state.root === null)
+				errors.push(
+					`repo \`${repo.key}\`: \`${repo.path}\` is not an existing Git working-tree root`,
+				);
+			else if (state.root !== state.resolved)
+				errors.push(
+					`repo \`${repo.key}\`: \`${repo.path}\` is not a working-tree root — that is \`${state.root}\``,
+				);
+			else if (state.dirty)
+				warnings.push(
+					`repo \`${repo.key}\`: \`${repo.path}\` has uncommitted changes — every worktree branches from its HEAD, so those changes are not in the run`,
+				);
+		}
 	}
 
 	for (const [i, d] of plan.deliverables.entries()) {
@@ -144,7 +259,7 @@ export function validatePlan(plan: Plan): string[] {
 	for (const cycle of findCycles(plan.deliverables))
 		errors.push(`cycle: ${cycle.join(" → ")}`);
 
-	return errors;
+	return { errors, warnings };
 }
 
 function validateTasks(
@@ -170,10 +285,23 @@ function validateTasks(
 				errors.push(
 					`${at}: \`${t.by.skill}\` is not a safe ambient skill name`,
 				);
-			if (!/^\S+\/\S+$/.test(t.by.model))
+			// `model` is optional: a plan that pins one runs only where that
+			// model exists, and the point of `tier`/`diverse` is that the host
+			// resolves the reviewer. Neither is legal too — then the running
+			// workflow's effort dial decides.
+			if (t.by.model !== undefined && !/^\S+\/\S+$/.test(t.by.model))
 				errors.push(
 					`${at}: delegated task model must be a concrete provider/model ID`,
 				);
+			if (
+				t.by.tier !== undefined &&
+				!(REVIEW_TIERS as readonly string[]).includes(t.by.tier)
+			)
+				errors.push(
+					`${at}: \`${t.by.tier}\` is not a review tier — one of ${REVIEW_TIERS.join(", ")}`,
+				);
+			if (t.by.diverse !== undefined && typeof t.by.diverse !== "boolean")
+				errors.push(`${at}: \`diverse\` is true or false`);
 		}
 	}
 }

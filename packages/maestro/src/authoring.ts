@@ -17,7 +17,10 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { type Plan, type Task, validatePlan } from "./plan.js";
+import type { ModeName } from "./mode.js";
+import { inspectPlan, type Plan, REVIEW_TIERS, type Task } from "./plan.js";
+import { PLAN_WORKFLOW_REF } from "./plan-command.js";
+import { DEFAULT_EFFORT, EFFORTS } from "./plan-input.js";
 import type { PlanStore } from "./store.js";
 
 const TaskSchema = Type.Object({
@@ -43,10 +46,27 @@ const TaskSchema = Type.Object({
 							"An ambient discoverable skill to request explicitly. Omit when the lens prompt is sufficient for discovery.",
 					}),
 				),
-				model: Type.String({
-					description:
-						"The already-resolved concrete provider/model ID approved for this review.",
-				}),
+				model: Type.Optional(
+					Type.String({
+						description:
+							"A concrete provider/model ID to pin this review to. Omit unless the reviewer must be that exact model — a pinned model only runs on a host that has it.",
+					}),
+				),
+				tier: Type.Optional(
+					Type.Union(
+						REVIEW_TIERS.map((tier) => Type.Literal(tier)),
+						{
+							description:
+								"How much reviewer this lens is worth, for the host to resolve. Omit to let the run's effort dial decide.",
+						},
+					),
+				),
+				diverse: Type.Optional(
+					Type.Boolean({
+						description:
+							"Ask for a reviewer from a different model family than the implementer.",
+					}),
+				),
 			},
 			{
 				description:
@@ -103,6 +123,8 @@ const PlanSchema = Type.Object({
 interface PlanToolDetails {
 	readonly stored: boolean;
 	readonly errors: readonly string[];
+	/** Non-fatal findings — a dirty repository, today. Recorded, never fatal. */
+	readonly warnings: readonly string[];
 	readonly slug: string;
 	readonly deliverables: number;
 }
@@ -111,6 +133,12 @@ export interface AuthoringDeps {
 	readonly store: PlanStore;
 	/** The repository the maestro is sitting in — the default for `repos`. */
 	readonly cwd: () => string;
+	/**
+	 * The posture the write happened in. Plan mode has no exit path — it is a
+	 * tool posture, not a state machine — so a successful write is the nearest
+	 * thing it has to a completion point, and that is where the way out is said.
+	 */
+	readonly mode?: () => ModeName;
 }
 
 /**
@@ -145,10 +173,11 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 				})),
 			};
 
-			const errors = validatePlan(plan);
+			const { errors, warnings } = inspectPlan(plan);
 			const details = (stored: boolean): PlanToolDetails => ({
 				stored,
 				errors,
+				warnings,
 				slug: plan.slug,
 				deliverables: plan.deliverables.length,
 			});
@@ -171,7 +200,12 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 
 			deps.store.savePlan(plan);
 			return {
-				content: [{ type: "text" as const, text: describe(plan) }],
+				content: [
+					{
+						type: "text" as const,
+						text: describe(plan, warnings, deps.mode?.()),
+					},
+				],
 				details: details(true),
 			};
 		},
@@ -183,7 +217,11 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
  * run in, and what each one waits for. An author who cannot see the graph they
  * just wrote will write the same wrong edge twice.
  */
-function describe(plan: Plan): string {
+function describe(
+	plan: Plan,
+	warnings: readonly string[] = [],
+	mode?: ModeName,
+): string {
 	const lines = [
 		`Stored \`${plan.slug}\` — ${plan.title}.`,
 		"",
@@ -196,9 +234,27 @@ function describe(plan: Plan): string {
 			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
 		}),
 	];
+	if (warnings.length > 0)
+		lines.push("", ...warnings.map((warning) => `! ${warning}`));
+	// The offer, not a status line. What was here before ("workflow execution is
+	// unavailable") told the author that the thing they had just done led
+	// nowhere, which stopped being true the moment a workflow could take this
+	// document. Both ways of starting a run are named because the human and the
+	// model reach for different ones.
 	lines.push(
 		"",
-		"Workflow execution is unavailable until the owned workflow extension is installed.",
+		`Run it: \`/plan run ${plan.slug} [${EFFORTS.join("|")}]\`, or call`,
+		`\`workflow_run { ref: "${PLAN_WORKFLOW_REF}", input: { plan, planDigest, effort } }\``,
+		`yourself — effort is one of ${EFFORTS.join(", ")}, and defaults to ${DEFAULT_EFFORT}.`,
+		"",
+		"Approval is not given here. The run parks at its `approve-plan`",
+		"checkpoint and a human decides it; that decision is the approval record.",
 	);
+	if (mode === "plan")
+		lines.push(
+			"",
+			"You are in plan mode, which cannot write files. Starting the run needs",
+			"no other posture; to hand-edit this plan instead, ask for `/mode auto`.",
+		);
 	return lines.join("\n");
 }

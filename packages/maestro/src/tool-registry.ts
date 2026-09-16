@@ -35,6 +35,15 @@ export interface ToolDeclaration {
 	 * absent from this list cannot be granted the tool by any other route.
 	 */
 	readonly holders: readonly Holder[];
+	/**
+	 * May this tool be held *right now*? Holders are the static half of the
+	 * question ("which postures may ever hold it"); this is the moving half
+	 * ("is the seat in a state where it applies"), read at call time so the
+	 * answer cannot be cached into a second list — the defect this file exists
+	 * to prevent. Absent means always available, which is the honest default: a
+	 * tool with no condition has none to drift from.
+	 */
+	readonly available?: () => boolean;
 }
 
 export class ToolDeclarationError extends Error {
@@ -129,17 +138,36 @@ export class ToolRegistry {
 		return found;
 	}
 
-	/** The tools a posture holds — DERIVED, never authored alongside. */
-	grantsFor(holder: Holder): readonly string[] {
+	/**
+	 * Every tool a posture may EVER hold, availability aside. The static half:
+	 * the set a caller has to reconcile against when it swaps the live tool set,
+	 * so a tool that has become unavailable is removed by the same code that
+	 * added it, rather than lingering because nobody knew it was ours.
+	 */
+	declaredFor(holder: Holder): readonly string[] {
 		return [...this.byName.values()]
 			.filter((d) => d.holders.includes(holder))
 			.map((d) => d.definition.name);
 	}
 
+	/** The tools a posture holds — DERIVED, never authored alongside. */
+	grantsFor(holder: Holder): readonly string[] {
+		return this.held(holder).map((d) => d.definition.name);
+	}
+
 	definitionsFor(holder: Holder): readonly ToolDefinition[] {
-		return [...this.byName.values()]
-			.filter((d) => d.holders.includes(holder))
-			.map((d) => d.definition);
+		return this.held(holder).map((d) => d.definition);
+	}
+
+	/**
+	 * The declarations a posture holds right now. One filter, so the grant list,
+	 * the definitions handed to the host, and the brief an agent reads can never
+	 * disagree about whether a tool is there.
+	 */
+	private held(holder: Holder): readonly ToolDeclaration[] {
+		return [...this.byName.values()].filter(
+			(d) => d.holders.includes(holder) && (d.available?.() ?? true),
+		);
 	}
 
 	/**
@@ -148,9 +176,9 @@ export class ToolRegistry {
 	 * whole defect. Prompt prose says what to do; this says what the seat holds.
 	 */
 	describeFor(holder: Holder): string {
-		const lines = [...this.byName.values()]
-			.filter((d) => d.holders.includes(holder))
-			.map((d) => `- ${d.definition.name} — ${summaryOf(d)}`);
+		const lines = this.held(holder).map(
+			(d) => `- ${d.definition.name} — ${summaryOf(d)}`,
+		);
 		return lines.length > 0
 			? `## Your tools\n\n${lines.join("\n")}`
 			: "## Your tools\n\n(none)";

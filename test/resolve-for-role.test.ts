@@ -6,12 +6,13 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveModelForRole } from "@vegardx/pi-maestro/model-router";
 import {
 	DEFAULT_PERSONA_ALLOWANCES,
 	MODEL_ROLES,
 	type ModelRole,
-} from "@vegardx/pi-contracts";
-import { personaForRole, resolveModelForRole } from "@vegardx/pi-models";
+	personaForRole,
+} from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const SEAT = "anthropic/opus";
@@ -59,6 +60,8 @@ function fakeCtx(): ExtensionContext {
 		getThinkingLevel: () => "medium",
 		modelRegistry: {
 			find: (provider: string, id: string) => entries.get(`${provider}/${id}`),
+			getProviderAuthStatus: () => ({ configured: true }),
+			getRegisteredProviderIds: () => ["anthropic", "openai"],
 			getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k", headers: {} }),
 		},
 	} as unknown as ExtensionContext;

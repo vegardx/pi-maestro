@@ -73,6 +73,28 @@ Pi-maestro validates and stores that intent but does not resolve or execute it.
 The owned workflow implementation will define how authored review models become
 runtime stage bindings.
 
+## The package boundary
+
+Resolution lives in the standalone `@vegardx/pi-models` package
+(`packages/models`), which has no dependency on Pi. Everything it needs from a
+host is one injected port:
+
+```ts
+{ findModel(provider, id), isAuthenticated(provider), registeredProviders() }
+```
+
+`createModelRouter(config, port)` returns the router: `resolveForRole`,
+`resolveOtherFamily`, `resolveFamily`, `resolveMany`, `explain`, and
+`isAuthorized` (the revalidation a stored resolution is re-checked against, so a
+persisted pick is re-used rather than re-rolled). The router is synchronous and
+reads no files, so the same config, seat and port always produce the same
+`ModelResolution` — which is what lets a caller hash one into a task identity.
+
+`packages/maestro/src/model-router.ts` is the Pi adapter: it reads the merged
+settings slice through `SettingsManager`, builds the port from
+`ctx.modelRegistry`, and turns a resolved `provider/model` back into a registry
+model plus credentials for the in-process callers that `complete()` directly.
+
 ## Settings ownership
 
 Model settings use Pi's normal global and project `settings.json` files. Project

@@ -184,7 +184,9 @@ command that fails stops the rest.
 Plan mode is a conversation. It does not hold the `plan` tool, so the document
 is written on the way out — and a dialog sequence cannot obtain a plan from a
 conversation, because no model turn happens inside one. The exit is therefore
-split by exactly one model turn, and the first half is what ships today.
+split by exactly one model turn: the first half asks what only a human knows,
+the model turn writes the plan, and the second half compiles, reviews and
+launches it.
 
 **The dialogs.** `/mode auto` or `/mode hack` from plan mode asks six questions
 before the posture moves: what to do with the conversation, effort, gates,
@@ -212,9 +214,76 @@ progress.
 so it holds only what the turn cannot reproduce: the policy, the one line, and
 which session asked. While it exists the `plan` tool is held even in plan mode,
 and that window is the whole reason it is on disk rather than in memory. The
-second half of the exit — what would take the stored document from there — is
-not implemented: today the record is written, the model stores the plan, and
-`/plan run <slug>` is how the run is requested.
+record is deleted on every path out of the second half, so the window is only
+ever open across the one turn it exists for.
+
+**The second half.** The `plan` tool's own result is the trigger: a stored
+document, plus a record naming *this* session. The session id is read from that
+tool result rather than from whichever session answered the dialogs, so a plan
+written in a session that replaced the one that asked is not read as the
+continuation of its exit.
+
+What happens then, in order, with the dialogs listed in the
+[command reference](commands.md#after-the-plan-is-written):
+
+1. **Readiness.** The repositories the plan names are probed (above). A missing
+   one can be created, with a confirmation, through the seat's own audited
+   `bash`; a dirty one is reported and you decide whether every worktree
+   branching from HEAD is acceptable. Everything else readiness finds is
+   reported at once as a warning — it is a fact about this host, and publication
+   will meet it again.
+2. **Review lenses**, per deliverable. The candidates are seeded from the
+   deliverable's own review intent — its `review-fan-out` lenses, or the ones
+   `tasks[].by` implies — so escaping the dialogs keeps exactly the plan that
+   was stored, and the stored document is not rewritten at all. A deliverable
+   that named no reviewer is offered a standard set instead. A lens the plan
+   pinned neither a tier nor a model for is then asked what it is worth, and a
+   deliverable that ends up with a `heavy` lens is asked whether it wants a
+   reviewer from another model family.
+3. **The compiled stage document.** pi-maestro derives it here, from the same
+   §2.1 rules `plan-to-ship` compiles from: the default stage list from the
+   policy, lenses seeded from `tasks[].by`, duplicate lens ids suffixed `-2` and
+   `-3` by declaration ordinal, and `maxRounds` mapped from the plan's fix
+   rounds to the component's verify rounds (`fix + 1`, so a fix is never left
+   unchecked). It is validated against a local mirror of the runtime's own
+   closed schema, so a disagreement between the two readings fails here rather
+   than inside a dialog sequence. The runtime then validates the run input and
+   projects its budget, and both are shown.
+4. **Check it.** *Review it blind* starts the headless `plan-review` through the
+   workflow provider — without a model turn, which is what keeps it blind:
+   a review reached through the model would have read the planning conversation.
+   *Approve as is* skips it. *Edit* opens the compiled document as JSON;
+   an edit is validated against the same mirror and written back into the
+   plan's `stages`, and escape discards it.
+5. **The findings walk.** Every **blocking** finding is asked, one at a time:
+   accept it, dismiss it with a reason, or go back to the conversation.
+   Accepting applies the finding's RFC 6902 `patch` to the stored plan, runs the
+   plan's own validation over the result and saves it — a mechanical apply, never
+   a re-prompt. A patch that will not apply is reported and the finding is asked
+   again without the accept option. `major` and `minor` findings are printed
+   once and never asked about. After at least one accept the plan is recompiled
+   and reviewed once more; a second blocking review ends the loop and leaves you
+   in the conversation with the findings printed.
+6. **The run.** `Start the run?` is the last question. *No* leaves the plan
+   stored and starts nothing. *Yes* deletes the record and asks the model — as
+   an ordinary follow-up message, in the transcript — to make the
+   `workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`
+   call itself. The run is still made in the open, and it still parks at its
+   `approve-plan` checkpoint.
+
+**When the runtime is not there.** `@vegardx/pi-workflow` is an optional peer.
+Without it — or when it refuses to validate or project — the flow stops at the
+compile step with one warning, and the plan is stored with `/plan run <slug>`
+still available. When only the blind reviewer is unreachable (a refusal, a
+timeout, a verdict this seat cannot read) the warning names `Approve as is` and
+the same dialog is asked again without the review option. Neither throws into
+the session.
+
+**Nothing here writes outside those places.** The only run this half starts is
+`plan-review`, which declares no checkpoint, no worktree and no handoff. The
+only shell commands are the repository creation above, through the audited
+`bash` tool under the session mode's own confirmation policy. Everything that
+writes to a repository is still the model's `workflow_run` call.
 
 ## The hand-off to a run
 

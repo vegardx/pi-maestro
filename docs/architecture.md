@@ -49,10 +49,11 @@ does not.
 
 ## The workflow provider seam
 
-**The client lands with this release line; the exit loop that calls it does
-not yet.** `workflow-provider.ts` is discovery, compatibility and error
-mapping — a seam with tests and no caller until the plan-mode exit loop is
-built. Until then, `/plan run` is the only route to a run.
+`workflow-provider.ts` is discovery, compatibility and error mapping, and the
+plan-mode exit loop is its caller: the second half of the exit compiles the
+stored plan, asks the runtime to validate and project it, and starts the blind
+`plan-review` through it. `/plan run` remains the other route to a run, and the
+only one on a seat with no runtime installed.
 
 pi-workflow registers a workflow service provider on Pi's event bus, and
 pi-maestro acquires it lazily through `packages/maestro/src/workflow-provider.ts`.

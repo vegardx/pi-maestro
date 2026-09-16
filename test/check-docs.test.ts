@@ -110,6 +110,24 @@ describe("check-docs rule 5", () => {
 		}
 	});
 
+	// `plan-review` is on the exit path: the second half of the plan-mode exit
+	// starts it through the workflow provider, and the docs say so. It was never
+	// on the denylist and must not be added to one — this case is what would
+	// fail if it were.
+	it("allows the blind reviewer the exit flow starts", () => {
+		const dir = fixture({
+			"skills/demo/SKILL.md": "The exit flow starts `plan-review`.\n",
+			"docs/usage.md": "The exit flow starts `plan-review` blind.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(out).toContain("check-docs: OK");
+			expect(status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("leaves dated design and review records alone", () => {
 		const dir = fixture({
 			"docs/design/old.md": "The `execution-router` was proposed here.\n",

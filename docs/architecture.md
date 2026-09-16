@@ -49,15 +49,18 @@ does not.
 
 ## The workflow provider seam
 
-**Design. It lands with this release line.**
+**The client lands with this release line; the exit loop that calls it does
+not yet.** `workflow-provider.ts` is discovery, compatibility and error
+mapping — a seam with tests and no caller until the plan-mode exit loop is
+built. Until then, `/plan run` is the only route to a run.
 
 pi-workflow registers a workflow service provider on Pi's event bus, and
-pi-maestro acquires it lazily. The dependency is an **optional** peer: a seat
-without `@vegardx/pi-workflow` installed keeps working, and the exit loop simply
-omits the branches that need a runtime, falling back to the stored plan and
-`/plan run`. Every value import goes through a guarded dynamic import, and a
-provider whose declared runtime contract does not match the features this seat
-needs fails discovery loudly rather than being mis-called.
+pi-maestro acquires it lazily through `packages/maestro/src/workflow-provider.ts`.
+The dependency is an **optional** peer: a seat without `@vegardx/pi-workflow`
+installed keeps working, and the exit loop simply omits the branches that need a
+runtime, falling back to the stored plan and `/plan run`. A provider whose
+declared runtime contract does not match the features this seat needs fails
+discovery loudly rather than being mis-called.
 
 The client is read-only — list, validate, project a budget, inspect a run,
 observe run status — with one narrow exception: it may start a headless builtin
@@ -65,6 +68,33 @@ from an allowlist the *runtime* owns, which is how a plan review can be blind to
 the planning conversation. An allowlisted definition declares no checkpoint, no
 worktree, and no handoff, so it can neither ask for a decision nor write. Every
 run that writes stays a model tool call in the transcript.
+
+**Nothing crosses the import boundary.** pi-workflow is not published on npm, so
+this package imports nothing from it — not a value, not a type. The discovery
+channel, the request schema, the read client's method signatures and the runtime
+contract are all declared on this side, in `workflow-provider.ts` and
+`workflow-contract.ts`, and those declarations *are* pi-maestro's half of the
+contract. Discovery makes three checks before any call: the provider offers an
+`acquire` function, its contract validates against a local TypeBox mirror of
+pi-workflow's contract schema, and every feature key this seat requires equals
+the provider's. The provider is then discovered a second time after `acquire`,
+so a runtime swapped mid-acquisition is refused rather than used.
+
+**The duplicated contract is pinned by a fixture.**
+`workflow-contract.ts` carries a frozen `REQUIRED_WORKFLOW_CONTRACT` — one
+contract revision and the seven feature keys the seat depends on — because it
+cannot import pi-workflow's own constant. `test/fixtures/pi-workflow-runtime-contract.json`
+is a copy of that constant taken from pi-workflow's built `dist`, and
+`test/workflow-provider.test.ts` asserts the literal's revision and every
+required key equal it. **The fixture is refreshed by hand**, by regenerating it
+from the installed pi-workflow and updating the literal, whenever pi-workflow's
+`contractRevision` changes; nothing generates it at build time, because there is
+no dependency to generate it from.
+
+Every failure at this seam — no runtime, two runtimes, a revision mismatch, a
+replaced provider, a refusal from the runtime, a failed acquisition — becomes one
+warning naming what to do instead (`/plan run`, or *Approve as is* when only the
+blind reviewer is out of reach). None of them throws into the session.
 
 ## Seat authority
 

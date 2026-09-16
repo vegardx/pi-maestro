@@ -9,7 +9,7 @@ compact-summarizer  work-continuity compaction
 
 Delegated workers, workflow reviews, fixers, and publication do not resolve
 through this package. Standalone `@vegardx/pi-subagent` owns delegated model
-selection, and the future `@vegardx/pi-workflow` will bind workflow-stage models
+selection, and standalone `@vegardx/pi-workflow` binds workflow-stage models
 explicitly.
 
 ## Configuration vocabulary

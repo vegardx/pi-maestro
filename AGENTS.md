@@ -4,8 +4,10 @@ Guidance for coding agents (Claude, pi, or any harness) working in this repo.
 pi-maestro is a **pi coding-agent extension stack** (`package.json`
 `pi.extensions`). One interactive `pi` process is the Maestro seat. Model work
 runs through the standalone `@vegardx/pi-subagent` package using normal local
-Pi configuration. Workflow and web runtimes are intentionally absent until their
-owned replacements are built; there is no custom worker socket or executor.
+Pi configuration. Durable workflow runs belong to the standalone
+`@vegardx/pi-workflow` package, which this repo hands a stored plan through
+`/plan run`; the web runtime is intentionally absent until its owned replacement
+is built. There is no custom worker socket or executor here.
 
 ## Build / check
 

@@ -13,8 +13,10 @@ license: MIT
 # Repository Lifecycle
 
 Move one focused change from a working tree to a merged pull request. The
-interactive seat owns remote publication. Isolated subagents finish with local
-worktree changes; their host runtime captures handoff commits separately.
+interactive seat owns remote publication. An isolated subagent's worktree is
+removed once its host runtime captures the handoff commit under
+`refs/pi-subagent/handoffs/<runId>/<attemptId>`; a human exports that commit as
+a `git-format-patch` before any of it reaches this working tree.
 
 ## 1. Establish the target
 

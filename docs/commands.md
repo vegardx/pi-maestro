@@ -76,8 +76,51 @@ branch switches the posture, writes the [pending record](#state), and asks the
 model for the plan document with the answers as a `policy` block to copy
 verbatim — see [Authored plans](workflow-plans.md#leaving-plan-mode).
 
-Nothing is compiled, reviewed or run by these dialogs, and nothing here starts a
-model turn other than the request for the document.
+Nothing is compiled, reviewed or run by those six dialogs, and nothing there
+starts a model turn other than the request for the document.
+
+#### After the plan is written
+
+The model's `plan` call is the second half's trigger: when it stores a document
+and the [pending record](#state) belongs to *this* session, the rest of the exit
+runs. Anything the plan already answers is never asked.
+
+| # | Step | Asked |
+| --- | --- | --- |
+| 7 | [Readiness](workflow-plans.md#readiness) of every repository the plan names | nothing, when the machine is ready |
+| 7a | `Create <path>?`, then the creating commands through the audited `bash` | per missing repository; *No* goes back to the conversation |
+| 7b | A dirty tree: `Continue` / `Back to the conversation` | per dirty repository; escape is *Continue* |
+| 8 | A review lens for this deliverable: `Include` / `Skip` | per candidate lens; escape keeps the plan's own |
+| 9 | What that lens is worth: `light`, `standard`, `heavy` | only where the plan pinned neither a tier nor a model |
+| 10 | `A cross-family reviewer on <deliverable>?` | per deliverable, only where a lens is `heavy` |
+| 12 | The compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` | once; escape is *Review it blind* |
+| 13 | `Edit` opens the compiled document as JSON | on demand; escape discards it |
+| 15 | Per **blocking** finding: `Accept the suggestion` / `Dismiss` / `Back to the conversation` | per finding; escape is *Back to the conversation* |
+| 15a | `Dismiss` asks why | per dismissal; an empty reason is not a dismissal and the finding is asked again |
+| 18 | `Start the run?` | once; *No* leaves the plan stored and runs nothing |
+
+Steps 11, 14, 16 and 17 open no dialog. 11 compiles the plan into the stage
+document and asks the runtime to validate and project it; 14 starts the headless
+`plan-review` and says so; 16 recompiles and re-reviews **once** after at least
+one accepted finding, and a second blocking review ends the loop; 17 prints
+`major` and `minor` findings as one notification and never asks about them.
+
+*Accept* applies the finding's RFC 6902 patch to the stored plan, re-validates
+it and saves it. A patch that does not apply, or one that would make the plan
+stop validating, is reported and the finding is asked again **without** the
+accept option.
+
+The exit ends in exactly one of four places: the run request (19), which deletes
+the record and hands the model the `workflow_run` call to make in the open; a
+stored plan and nothing else; back in the conversation, with the findings
+printed and `/mode plan` offered; or a refusal that names what stopped it. All
+four delete the pending record.
+
+Two fallbacks keep a reduced seat working. Without a workflow runtime — or when
+one refuses to validate or project — the flow stops at 11, says so, and leaves
+`/plan run <slug>` as the way to start it. When only the blind reviewer is out
+of reach, the warning names `Approve as is` and dialog 12 is asked again without
+the review option.
 
 ## Seat tools
 

@@ -179,6 +179,43 @@ from a HEAD, and a repository with no commits has none. `gh repo create
 than added by a second command against a URL nothing has printed yet. The first
 command that fails stops the rest.
 
+## Leaving plan mode
+
+Plan mode is a conversation. It does not hold the `plan` tool, so the document
+is written on the way out — and a dialog sequence cannot obtain a plan from a
+conversation, because no model turn happens inside one. The exit is therefore
+split by exactly one model turn, and the first half is what ships today.
+
+**The dialogs.** `/mode auto` or `/mode hack` from plan mode asks six questions
+before the posture moves: what to do with the conversation, effort, gates,
+publication, a base branch when anything publishes, and one line saying what the
+plan is for. The [command reference](commands.md#leaving-plan-mode) lists them
+with their defaults. They are the questions a human answers and a document
+cannot, so nothing the plan itself will say is asked here.
+
+**The hand-over.** On *Compile it into a workflow run* the posture switches, the
+answers are written to `<agentDir>/maestro/plans/.pending/<sessionId>.json`, and
+the model is asked — as an ordinary follow-up message, in the transcript — to
+call `plan` with the whole document and with those answers copied in verbatim as
+the `policy` block described above. Verbatim because they are decisions a human
+already made: a model that re-derives them produces a policy nobody chose, and
+the digest would then cover a document that disagrees with the dialogs that
+produced it. The same message asks for a `stages` array on any deliverable the
+conversation implied more than the default list for.
+
+*Just switch mode* switches and records nothing. *Keep planning*, and escape,
+leave the posture where it was and record nothing. A session replacement ends
+the flow and drops the record: an exit nobody is answering is not an exit in
+progress.
+
+**What the record is for.** It is the only thing that survives the model turn,
+so it holds only what the turn cannot reproduce: the policy, the one line, and
+which session asked. While it exists the `plan` tool is held even in plan mode,
+and that window is the whole reason it is on disk rather than in memory. The
+second half of the exit — what would take the stored document from there — is
+not implemented: today the record is written, the model stores the plan, and
+`/plan run <slug>` is how the run is requested.
+
 ## The hand-off to a run
 
 The `plan` tool validates and stores the complete document. Storage is not

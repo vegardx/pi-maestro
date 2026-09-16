@@ -4,7 +4,7 @@
 
 | Command | What it does |
 | --- | --- |
-| `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture |
+| `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture. Leaving plan mode asks the [exit questions](#leaving-plan-mode) first |
 | `/plan list` | Every stored plan: slug, title, deliverable count, when it was last written |
 | `/plan show <slug>` | Read one back whole: repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
 | `/plan run <slug> [cheap\|standard\|deep]` | Build the workflow input for a stored plan and hand it to the model. Effort defaults to `standard` |
@@ -40,6 +40,34 @@ A workflow run may be started from any mode, including `plan`: a run mutates
 neither the working tree nor the host, and what it produces reaches a branch
 only through publication, which a human decides separately.
 
+### Leaving plan mode
+
+Plan mode is a conversation and does not hold the `plan` tool, so the document
+is written on the way out. `/mode auto` or `/mode hack` from plan mode therefore
+asks first — in a session with dialogs, and only on that transition. Every other
+mode change is the plain switch it always was, and so is this one on a host with
+no dialog UI: six defaults nobody chose are worse than the switch that was
+asked for.
+
+| # | Dialog | Default |
+| --- | --- | --- |
+| 1 | `Compile it into a workflow run` / `Just switch mode` / `Keep planning` | escape is *Keep planning* |
+| 2 | Effort: `cheap`, `standard`, `deep` | `standard` |
+| 3 | Gates: `approve-plan only`, `approve-plan + ship`, `every deliverable` | `approve-plan + ship` |
+| 4 | Publication: `none`, `branch`, `pull request` | `pull request` |
+| 5 | Base branch — asked only when 4 is not `none` | what the repository tracks, else `main`, and you are told which |
+| 6 | One line: what the plan is for | the first line of your last message |
+
+Each is asked once and escape takes the default printed beside it. *Keep
+planning* — and escape at 1 — leaves the posture exactly where it was and
+records nothing. *Just switch mode* switches and records nothing. The other
+branch switches the posture, writes the [pending record](#state), and asks the
+model for the plan document with the answers as a `policy` block to copy
+verbatim — see [Authored plans](workflow-plans.md#leaving-plan-mode).
+
+Nothing is compiled, reviewed or run by these dialogs, and nothing here starts a
+model turn other than the request for the document.
+
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
@@ -72,3 +100,17 @@ Authored plans remain under:
 That file is an export, not state: it is rewritten by every `/plan run` and
 nothing reads it back. There is no workflow run state or compiled workflow
 bundle in this package; a run's state belongs to the runtime that owns it.
+
+A plan-mode exit in progress is recorded beside the plans, one file per session:
+
+```text
+<agentDir>/maestro/plans/.pending/<sessionId>.json
+```
+
+It holds `{schemaVersion, sessionId, policy, intent, createdAt}` — the answers
+to the dialogs above, which the plan the model is about to write cannot yet
+carry. It exists because the exit is split by one model turn, and it is the one
+thing that says the split is open: while it is there, the `plan` tool is held
+even in plan mode. A record that does not parse, speaks another schema version
+or names another session is refused by name rather than read as absent; the
+refusal prints the path, and deleting the file starts the exit over.

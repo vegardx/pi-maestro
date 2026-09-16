@@ -79,7 +79,7 @@ describe("check-docs rule 5", () => {
 			["Use `workflow-guide` when authoring.", "workflow-guide"],
 			["Set `awaitTerminal: true` to block.", "awaitTerminal"],
 			["Use `detach: true` for background runs.", "detach"],
-			["Run the `deep-review` workflow.", "deep-review"],
+			["Run the `deep-research` workflow.", "deep-research"],
 			["Run the `impact-review` workflow.", "impact-review"],
 		];
 		for (const [line, identifier] of cases) {
@@ -91,6 +91,22 @@ describe("check-docs rule 5", () => {
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
+		}
+	});
+
+	// The other direction, and the reason the list needs pruning as well as
+	// growing: `deep-review` is a definition `@vegardx/pi-workflow` now ships,
+	// so a doc naming it is telling the truth and the gate must let it.
+	it("allows a workflow that has since shipped", () => {
+		const dir = fixture({
+			"skills/demo/SKILL.md": "Run the `deep-review` workflow.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(out).toContain("check-docs: OK");
+			expect(status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

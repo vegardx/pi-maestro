@@ -220,8 +220,13 @@ const FICTION = [
 		/`detach[`:]|\bdetach:\s*true\b/,
 		"detach — no such parameter; there is no background workflow execution",
 	],
+	// `deep-review` left this list when it shipped: it is a real definition in
+	// `@vegardx/pi-workflow/workflows`, so denying the name would now be the
+	// gate enforcing the past. The rest stay named because nothing supplies
+	// them. `plan-review` was never listed and must not be added: it is on the
+	// exit path and lands with the runtime that owns it.
 	[
-		/\b(?:deep-research|deep-review|spec-review|impact-review)\b/,
+		/\b(?:deep-research|spec-review|impact-review)\b/,
 		"a named workflow that does not exist; the plan hand-off runs plan-to-ship",
 	],
 ];

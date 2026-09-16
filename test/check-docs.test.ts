@@ -107,7 +107,82 @@ describe("check-docs rule 5", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+});
 
+describe("check-docs rule 6", () => {
+	it("fails a doc that calls the readiness step preflight", () => {
+		const dir = fixture({
+			"docs/workflow-plans.md":
+				"## Readiness\n\nThe preflight step checks every repository.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(status).toBe(1);
+			expect(out).toContain(
+				'docs/workflow-plans.md:3 calls readiness "preflight"',
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("fails a skill that uses the word for this harness step", () => {
+		const dir = fixture({
+			"skills/demo/SKILL.md": "# demo\n\nRun preflight before the plan.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(status).toBe(1);
+			expect(out).toContain("skills/demo/SKILL.md:3 calls readiness");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("allows the one section that exists to disown the word", () => {
+		const dir = fixture({
+			"docs/usage.md":
+				"### Readiness is not preflight\n\nPreflight belongs to pi-subagent.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(out).toContain("check-docs: OK");
+			expect(status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("stops allowing it at the next heading", () => {
+		const dir = fixture({
+			"docs/usage.md":
+				"### Readiness is not preflight\n\nNot ours.\n\n## Planning\n\nRun preflight first.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(status).toBe(1);
+			expect(out).toContain("docs/usage.md:7 calls readiness");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves dated records with the older vocabulary alone", () => {
+		const dir = fixture({
+			"docs/design/old.md":
+				"The preflight/postflight pair was designed here.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(out).toContain("check-docs: OK");
+			expect(status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("the whole repository", () => {
 	it("passes this repository", () => {
 		const { status, out } = run(ROOT);
 		expect(out).toContain("check-docs: OK");

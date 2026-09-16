@@ -242,6 +242,36 @@ for (const file of claimFiles) {
 	}
 }
 
+// ── 6. Readiness is not preflight ─────────────────────────────────────────
+// Two steps, two processes, one word between them. THIS repository's step is
+// **readiness**: the repositories a stored plan names exist, are working-tree
+// roots, are clean, have the base branch, and `gh` is present when a pull
+// request was asked for. `preflight` is `@vegardx/pi-subagent`'s word for the
+// launch-plan compile of a delegated attempt. A doc that calls the first one
+// preflight sends a reader (or an agent) looking for it in the wrong package.
+//
+// The word is allowed in exactly one place: the section that exists to say it
+// is not ours. Anywhere else in the current-state docs or the skills it is a
+// failure, and `docs/design/` and `docs/reviews/` keep their own vocabulary as
+// in rules 1b and 5.
+const PREFLIGHT_SECTION = "Readiness is not preflight";
+for (const file of claimFiles) {
+	const text = readFileSync(file, "utf8");
+	let heading = "";
+	let fenced = false;
+	for (const [index, line] of text.split("\n").entries()) {
+		if (line.trimStart().startsWith("```")) fenced = !fenced;
+		if (!fenced && line.startsWith("#"))
+			heading = line.replace(/^#+\s*/, "").trim();
+		if (heading === PREFLIGHT_SECTION) continue;
+		if (/\bpreflight\b/i.test(line)) {
+			failures.push(
+				`${relative(ROOT, file)}:${index + 1} calls readiness "preflight" — preflight is @vegardx/pi-subagent's launch-plan compile, and this step is readiness`,
+			);
+		}
+	}
+}
+
 if (failures.length > 0) {
 	console.error("check-docs: FAIL");
 	for (const f of failures) console.error(`  - ${f}`);

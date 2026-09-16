@@ -71,7 +71,6 @@ const GIT_READ = new Set([
 	"log",
 	"show",
 	"rev-parse",
-	"remote",
 	"ls-files",
 	"grep",
 	"describe",
@@ -101,6 +100,23 @@ const GIT_WRITE = new Set([
 	"update-ref",
 	"apply",
 	"am",
+]);
+/**
+ * `git remote` actions that rewrite the repository's configured remotes.
+ *
+ * The bare `git remote`, `git remote -v`, `git remote show` and
+ * `git remote get-url` report; these change `.git/config`. Splitting them is
+ * the only honest reading — one word after the subcommand is the difference
+ * between listing the remotes and repointing `origin`.
+ */
+const GIT_REMOTE_WRITE = new Set([
+	"add",
+	"remove",
+	"rm",
+	"rename",
+	"set-url",
+	"set-head",
+	"set-branches",
 ]);
 const GH_READ = new Set(["view", "list", "status", "diff", "checks", "watch"]);
 const GH_WRITE = new Set([
@@ -521,6 +537,26 @@ function assessGit(
 		else effects.add(writeEffect);
 		return;
 	}
+	if (subcommand === "init") {
+		// `git init <path>` creates a repository wherever the path points, so the
+		// path itself draws the boundary that `-C <path>` draws for every other
+		// subcommand. Without one it is this working tree, which is a workspace
+		// write — never an "unknown git subcommand", which is what it used to be.
+		const target = gitSubcommandArgument(args);
+		effects.add(
+			target !== undefined && pathLeavesWorkspace(target)
+				? "host-write"
+				: writeEffect,
+		);
+		return;
+	}
+	if (subcommand === "remote") {
+		const action = gitSubcommandArgument(args);
+		if (action !== undefined && GIT_REMOTE_WRITE.has(action))
+			effects.add(writeEffect);
+		else effects.add("filesystem-read");
+		return;
+	}
 	if (GIT_READ.has(subcommand)) effects.add("filesystem-read");
 	else if (subcommand === "push" || subcommand === "send-email") {
 		effects.add("remote-write");
@@ -735,23 +771,46 @@ function gitDirectoryLeavesWorkspace(args: readonly string[]): boolean {
 	return false;
 }
 
+/** `git` options that take their value as the next argument. */
+const GIT_VALUE_OPTIONS = [
+	"-C",
+	"--git-dir",
+	"--work-tree",
+	"--namespace",
+	"-c",
+	"--config-env",
+];
+
 function gitSubcommand(args: readonly string[]): string | undefined {
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index] ?? "";
-		if (
-			[
-				"-C",
-				"--git-dir",
-				"--work-tree",
-				"--namespace",
-				"-c",
-				"--config-env",
-			].includes(arg)
-		) {
+		if (GIT_VALUE_OPTIONS.includes(arg)) {
 			index += 1;
 			continue;
 		}
 		if (!arg.startsWith("-")) return arg;
+	}
+	return undefined;
+}
+
+/**
+ * The first positional AFTER the subcommand: `git init <path>`'s path, and
+ * `git remote <action>`'s action. Undefined when the subcommand stands alone.
+ */
+function gitSubcommandArgument(args: readonly string[]): string | undefined {
+	let seenSubcommand = false;
+	for (let index = 0; index < args.length; index += 1) {
+		const arg = args[index] ?? "";
+		if (GIT_VALUE_OPTIONS.includes(arg)) {
+			index += 1;
+			continue;
+		}
+		if (arg.startsWith("-")) continue;
+		if (!seenSubcommand) {
+			seenSubcommand = true;
+			continue;
+		}
+		return arg;
 	}
 	return undefined;
 }

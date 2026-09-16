@@ -119,6 +119,13 @@ unknown PATH executable it may iteratively request validated direct-argv help or
 version probes under the one overall audit timeout. There are no execution
 routes or sandbox backends.
 
+A `git` subcommand is classified by what it does, and the workspace boundary is
+drawn by whichever path the command names: `git -C <path> commit` and
+`git init <path>` are both `host-write` when that path leaves the workspace and
+`workspace-write` inside it. `git remote add`, `remove`, `rename` and `set-url`
+rewrite the repository's configured remotes and are workspace writes; bare
+`git remote`, `git remote -v`, `show` and `get-url` are reads.
+
 The classifier is guidance and a refusal rail, not a sandbox claim. Built-in
 `write` and `edit` are host-backed in auto and hack. The user selects those modes
 when direct seat work is preferable to isolated delegation.

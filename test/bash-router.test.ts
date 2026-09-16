@@ -29,6 +29,28 @@ describe("deterministic bash effects", () => {
 		["git -C /tmp/repo commit -m fix", ["host-write"]],
 		["git reset --hard HEAD~1", ["workspace-write", "destructive"]],
 		["git config --global user.email x", ["host-write"]],
+		// `git init <path>` creates a repository wherever the path points, so the
+		// path draws the same boundary `-C <path>` draws for everything else.
+		["git init", ["workspace-write"]],
+		["git init scratch", ["workspace-write"]],
+		["git init --bare scratch.git", ["workspace-write"]],
+		["git init /tmp/scratch", ["host-write"]],
+		["git init ../scratch", ["host-write"]],
+		["git -C /tmp/parent init scratch", ["host-write"]],
+		// One word after `remote` separates listing the remotes from repointing
+		// `origin`.
+		["git remote add origin git@github.com:o/r.git", ["workspace-write"]],
+		[
+			"git remote set-url origin https://example.com/r.git",
+			["workspace-write"],
+		],
+		["git remote remove origin", ["workspace-write"]],
+		["git remote rename origin upstream", ["workspace-write"]],
+		["git -C /tmp/repo remote add origin /tmp/r.git", ["host-write"]],
+		["git remote", ["filesystem-read"]],
+		["git remote -v", ["filesystem-read"]],
+		["git remote show origin", ["filesystem-read"]],
+		["git remote get-url origin", ["filesystem-read"]],
 		["git push", ["remote-write"]],
 		["npm test", ["code-execution"]],
 		["kubectl get pods", ["remote-read"]],
@@ -43,6 +65,15 @@ describe("deterministic bash effects", () => {
 			"filesystem-read",
 			"workspace-write",
 		]);
+	});
+
+	it.each([
+		"git init /tmp/scratch",
+		"git remote add origin git@github.com:o/r.git",
+	])("resolves %s rather than calling the subcommand unknown", (command) => {
+		const result = assessBashCommand(command);
+		expect([...result.unresolved]).toEqual([]);
+		expect(result.assessment.assessment).not.toBe("uncertain");
 	});
 
 	it("marks unknown executables unresolved instead of guessing read-only", () => {

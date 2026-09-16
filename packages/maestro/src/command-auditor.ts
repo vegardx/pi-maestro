@@ -4,7 +4,7 @@ import { access, realpath } from "node:fs/promises";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { parseModelSpec, resolveModelForRole } from "@vegardx/pi-models";
+import { parseModelSpec } from "@vegardx/pi-models";
 import {
 	BASH_EFFECTS,
 	type BashEffect,
@@ -12,6 +12,7 @@ import {
 	type DeterministicAssessment,
 } from "./bash-contracts.js";
 import type { BashAuditorSettings } from "./execution-policy.js";
+import { resolveModelForRole } from "./model-router.js";
 import type { ShellProgramAnalysis } from "./shell-program.js";
 
 export interface CommandAuditInput {

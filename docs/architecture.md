@@ -21,8 +21,8 @@ interactive seat                        standalone runtimes
 There is no custom worker socket, executor, workflow scheduler, question
 transport, web stack, or recovery layer in pi-maestro. Publication is not a
 pipeline either: it is a bounded sequence of audited Bash commands over a
-receipt a run already produced, decided by a human, and it lands with this
-release line — today the seat stops at the run request.
+receipt a run already produced, decided by a human — `/plan ship <slug>`, ten
+steps, each of which stops before the push.
 
 ## Ownership
 

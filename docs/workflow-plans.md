@@ -269,16 +269,53 @@ to confirm with). See the [command reference](commands.md).
 
 ### Publishing what a run produced
 
-**Design. It lands with this release line; there is no publication verb yet.**
-
 A run ends at a receipt: per deliverable a handoff commit in the publication
 repository's own object store, its sha256 and size, and the digest of the plan
-the run was given. Publication turns that receipt into a branch and, when the
-policy asked for one, a pull request — refusing outright when the receipt's
-digest is not the stored plan's, because then it names bytes nobody approved.
-Every step runs through the seat's audited Bash classifier under the session
-mode's policy, the repository's own check runs **on the host** rather than in a
-guest, and any failure stops **before** the push with the branch left in place.
+the run was given. `/plan ship <slug>` turns that receipt into a branch and,
+when the policy asked for one, a pull request — refusing outright when the
+receipt's digest is not the stored plan's, because then it names bytes nobody
+approved. Every command runs through the seat's audited Bash tool under the
+session mode's policy, so `host-write`, `remote-read`, `code-execution` and
+`remote-write` are each classified and, in `auto`, confirmed; the repository's
+own check runs **on the host** rather than in a guest; and any failure stops
+**before** the push with the branch left in place.
+
+The ten steps, in order, and where each one stops:
+
+| # | Step | Stops when |
+| --- | --- | --- |
+| 1 | `inspect(runId, {include: ["run","tasks"]})` — the receipt | the run cannot be inspected, or it carries no plan digest or no handoff |
+| 2 | The receipt's digest against `planDigest(stored plan)` | they differ — reported as an error, and **nothing has run yet** |
+| 3 | Resolve each `refs/pi-subagent/handoffs/<run>/<attempt>`, fetching from the run's `cwd` first when it is another repository | a ref does not resolve in the publication repository |
+| 4 | `git switch -c pi-maestro/<slug>/<yyyymmdd-hhmm> <policy.publish.base>` | the base does not resolve, or the branch exists |
+| 5 | `git cherry-pick <handoffCommit>` per deliverable, in plan order | a conflict — the pick is aborted, the branch is left, the deliverable is named, and nothing is recorded |
+| 6 | The repository's own check on the host — the gate named in `AGENTS.md`, else `npm ci && npm run check` or `npm ci && npm test` from the manifest | it exits non-zero (the tail is shown), or the repository names no check at all |
+| 7 | One confirmation, naming the branch, the commits and the check result | it is declined — the branch stays, nothing is pushed |
+| 8 | `git push -u origin <branch>` | the push fails |
+| 9 | `gh pr create --base <base> --title <plan title> --body <receipt>`, when the policy says `pr` | `gh` fails. `gh` **absent** is not a failure: the publication degrades to `branch` with a warning, before anything is created |
+| 10 | Append the receipt to `<agentDir>/maestro/plans/<slug>/publication.json` | the file exists and is not an array of receipts — it is never overwritten |
+
+The pull-request body is the receipt: the plan digest, every handoff ref with
+its sha256 and size, the check that ran on the host, and the review verdicts
+when the inspection carried them.
+
+`publication.json` is an **append-only array**. A second ship of the same plan
+is a real event — the first publication's branch and pull request exist — so
+each entry is added and no earlier one is ever rewritten. An entry records the
+time, the run, the plan digest, the mode, the base, the branch, the check, every
+handoff ref, and the pull-request URL when there is one.
+
+A plan whose `policy.publish.mode` is `none` is refused by name: nothing is
+branched, picked or pushed, and the message says which policy said so.
+
+Publication has two trigger paths and one implementation. `/plan ship <slug>`
+asks the runtime which completed runs carry this plan's digest and, when more
+than one does, asks which. A ship decided at the run's own `ship` checkpoint
+announces itself on `maestro:workflow-shipped` — from the checkpoint prompt, and
+from a listener on the runtime's own run observations, so a decision made with
+`/workflow decide` arrives too — and the seat offers the same publication for
+the stored plan that digest matches. The announcement is not the authority: the
+digest is still checked, and step 7 still asks.
 
 The owned `@vegardx/pi-workflow` project owns everything between the input and
 that receipt: runtime graph compilation, repository and worktree authority,

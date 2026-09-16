@@ -60,7 +60,8 @@ builds the workflow input and hands the session a
 `@vegardx/pi-workflow` owns compilation, approval, execution, recovery, and the
 receipt from there. This package's responsibility ends at a validated document
 and a run request — and picks up again at publication, which is pi-maestro's own
-audited Bash work and never the runtime's.
+audited Bash work and never the runtime's. See
+[Authored plans](workflow-plans.md#publishing-what-a-run-produced).
 
 ## Leaving plan mode with a run
 
@@ -120,9 +121,11 @@ own step readiness everywhere and leaves preflight alone.
   to pi-maestro's own audited Bash authority, not to model-selected Bash: the
   workflow runtime never pushes, merges, or publishes (its own
   `docs/authority.md` says so), and publication happens here, after the run's
-  ship gate, under the mode's confirmation policy. Until the `ship` verb of
-  `/plan` lands with that publication path, publishing a run's handoff is manual
-  `git` and `gh` work under this skill.
+  ship gate, under the mode's confirmation policy. `/plan ship <slug>` performs
+  it: branch, cherry-pick, the repository's check on the host, one confirmation,
+  push, and a pull request when the plan's policy asked for one. Publishing a
+  handoff by hand, when one of those steps stops, is `git` and `gh` work under
+  this skill.
 
 ## Footer
 

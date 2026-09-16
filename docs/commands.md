@@ -5,9 +5,25 @@
 | Command | What it does |
 | --- | --- |
 | `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture |
+| `/plan list` | Every stored plan: slug, title, deliverable count, when it was last written |
+| `/plan show <slug>` | Read one back whole: repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
+| `/plan run <slug> [cheap\|standard\|deep]` | Build the workflow input for a stored plan and hand it to the model. Effort defaults to `standard` |
+| `/plan rm <slug>` | Delete a stored plan, after a confirmation. Refused when the session has no UI to confirm with |
 
-Workflow execution and publication commands are intentionally absent until the
-owned workflow extension is built.
+`/plan` with no subcommand, or with a subcommand or effort it does not know,
+prints the grammar above and does nothing else.
+
+`/plan run` does not execute anything itself: pi-maestro has no workflow
+runtime and takes no dependency on one. It writes the run input to
+`<agentDir>/maestro/plans/<slug>/workflow-input.json` and steers the session
+with the exact call to make —
+`workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`.
+Approval is not part of the command: the run parks at its `approve-plan`
+checkpoint and a human decides it. See
+[Authored plans](workflow-plans.md#running-a-plan).
+
+Publication commands are intentionally absent until the owned workflow
+extension is built.
 
 ## Modes
 
@@ -38,5 +54,12 @@ Authored plans remain under:
 <agentDir>/maestro/plans/<slug>/plan.json
 ```
 
-There is no workflow run state or compiled workflow bundle until the owned
-workflow extension is introduced.
+`/plan run` writes the input it built beside the plan it built it from:
+
+```text
+<agentDir>/maestro/plans/<slug>/workflow-input.json
+```
+
+That file is an export, not state: it is rewritten by every `/plan run` and
+nothing reads it back. There is no workflow run state or compiled workflow
+bundle until the owned workflow extension is introduced.

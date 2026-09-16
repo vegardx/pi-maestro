@@ -31,6 +31,16 @@
 // `tasks[].handoff` on the task that produced it. The reader takes any of
 // those and refuses BY FIELD NAME when one is short, because "could not read
 // the receipt" is not something a human can act on.
+//
+// What it prefers, though, is now a fact rather than a guess. A lease-free
+// `inspect(runId, {include: ["run", "tasks", "output"]})` carries the run's
+// COMMITTED output verbatim on `run.output` once the run is terminal, and the
+// decided value of a checkpoint on `tasks[].checkpoint.decision.value`. So the
+// digest is read from `run.output.receipt.planDigest`, and `shipDecision`
+// PROVES `{"ship": true}` from the `ship` checkpoint's own decided value
+// instead of asking a human to vouch for something they cannot see. That proof
+// is what removed publication's second confirmation: the only question left is
+// the one the spec names, at the push.
 
 import {
 	existsSync,
@@ -136,19 +146,20 @@ function at(value: unknown, ...path: readonly string[]): unknown {
 /**
  * Where a plan digest may sit, most specific first.
  *
- * `receipt.planDigest` is what `plan-to-ship` commits as its run output. The
- * rest are the shapes a host might hand back instead — the output inlined on
- * the inspection, or the run view carrying it — and none of them cost anything
- * to look at.
+ * `run.output.receipt.planDigest` is the real one: `run.output` is the run's
+ * committed output, read back and digest-verified by the runtime, and
+ * `plan-to-ship` puts its receipt there. The rest are legacy placements this
+ * seat has accepted — the output inlined on the inspection, a receipt hoisted
+ * to the top level — and none of them cost anything to look at.
  */
 function findPlanDigest(inspection: unknown): string | undefined {
 	const candidates: unknown[] = [
+		at(inspection, "run", "output", "receipt"),
 		at(inspection, "receipt"),
 		at(inspection, "output", "receipt"),
-		at(inspection, "run", "output", "receipt"),
 		at(inspection, "run", "receipt"),
-		at(inspection, "output"),
 		at(inspection, "run", "output"),
+		at(inspection, "output"),
 		inspection,
 	];
 	for (const candidate of candidates) {
@@ -213,8 +224,8 @@ function readDescriptor(
 /** The first list of receipt entries this inspection offers, if any. */
 function findDeliverableEntries(inspection: unknown): readonly unknown[] {
 	const candidates: unknown[] = [
-		at(inspection, "output", "deliverables"),
 		at(inspection, "run", "output", "deliverables"),
+		at(inspection, "output", "deliverables"),
 		at(inspection, "receipt", "deliverables"),
 		at(inspection, "deliverables"),
 	];
@@ -245,8 +256,8 @@ function findReviews(
 	inspection: unknown,
 ): readonly ReviewVerdict[] | undefined {
 	const candidates: unknown[] = [
-		at(inspection, "output", "reviews"),
 		at(inspection, "run", "output", "reviews"),
+		at(inspection, "output", "reviews"),
 		at(inspection, "reviews"),
 	];
 	for (const candidate of candidates) {
@@ -276,8 +287,9 @@ function findReviews(
  * are the receipt's own `deliverables[]` — with the descriptor nested under
  * `handoff` or flattened onto the entry — and the inspection's `tasks[]`, where
  * the runtime puts the imported handoff of whichever task produced it. The
- * second is what a lease-free `inspect(runId, {include: ["run","tasks"]})`
- * actually carries today; the first is what the run's own output says.
+ * second is what a lease-free `inspect(runId, INSPECT_SECTIONS)` carries for a
+ * run that is still being read task by task; the first is what the run's own
+ * committed `run.output` says once it is terminal.
  */
 export function readReceipt(inspection: unknown): ReceiptRead {
 	if (!isRecord(inspection))
@@ -328,6 +340,111 @@ export function readReceipt(inspection: unknown): ReceiptRead {
 			...(reviews ? { reviews } : {}),
 			...(runCwd ? { runCwd } : {}),
 		},
+	};
+}
+
+// ── The ship decision ───────────────────────────────────────────────────────
+
+/** The task key of the checkpoint a `plan-to-ship` run decides a ship at. */
+export const SHIP_CHECKPOINT_KEY = "ship";
+
+/**
+ * The sections publication asks an inspection for.
+ *
+ * `output` is what makes the receipt a committed fact rather than a guess, and
+ * `tasks` is what carries the `ship` checkpoint's decided value. Both are
+ * lease-free, so asking for them never contends with a running drive.
+ */
+export const INSPECT_SECTIONS = {
+	include: ["run", "tasks", "output"],
+} as const;
+
+/** A proven ship decision, or why this run's ship gate does not prove one. */
+export type ShipDecisionRead =
+	| {
+			readonly ok: true;
+			/** Who decided it, when the durable record names them. */
+			readonly decidedBy?: string;
+			/** The runtime's own name for where the decision came from. */
+			readonly source?: string;
+			/** The canonical digest of the decided value. */
+			readonly sha256?: string;
+	  }
+	| { readonly ok: false; readonly reason: string };
+
+/** The run this inspection is about, for a message a human can act on. */
+function runLabel(inspection: unknown): string {
+	return stringAt(at(inspection, "run"), "runId") ?? "this run";
+}
+
+/** The inspection's `ship` checkpoint task, if it declared one. */
+function shipCheckpointTask(inspection: unknown): unknown {
+	const tasks = at(inspection, "tasks") ?? at(inspection, "run", "tasks");
+	if (!Array.isArray(tasks)) return undefined;
+	return tasks.find(
+		(task) =>
+			at(task, "kind") === "checkpoint" &&
+			stringAt(task, "key") === SHIP_CHECKPOINT_KEY,
+	);
+}
+
+/** A decided value, short enough to put in a refusal. */
+function render(value: unknown): string {
+	let text: string;
+	try {
+		text = JSON.stringify(value) ?? String(value);
+	} catch {
+		text = String(value);
+	}
+	return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+}
+
+/**
+ * Was this run DECIDED to ship? Proven, not assumed.
+ *
+ * The lease-free inspection carries the `ship` checkpoint's own decided value
+ * on `tasks[].checkpoint.decision.value`, and shows it only when the durable
+ * decision record's digest equals the journalled one — so `{"ship": true}` read
+ * from here is the human's answer, not a report of it. Publication's automatic
+ * trigger paths ask this instead of asking a person to vouch for a decision
+ * they cannot see; `/plan ship <slug>` does not, because typing it IS the
+ * decision.
+ *
+ * Every refusal names the run, because the thing a human does about an
+ * undecided gate is go and look at that run.
+ */
+export function shipDecision(inspection: unknown): ShipDecisionRead {
+	const run = runLabel(inspection);
+	const task = shipCheckpointTask(inspection);
+	if (!task)
+		return {
+			ok: false,
+			reason: `publication: run \`${run}\` declares no \`${SHIP_CHECKPOINT_KEY}\` checkpoint, so nothing in it decided to publish anything — run \`/plan ship\` if that is what you mean`,
+		};
+	const decision = at(task, "checkpoint", "decision");
+	if (!isRecord(decision))
+		return {
+			ok: false,
+			reason: `publication: run \`${run}\`'s \`${SHIP_CHECKPOINT_KEY}\` checkpoint is undecided, and an undecided gate is not a decision to publish — decide it with \`/workflow decide\`, or publish by hand with \`/plan ship\``,
+		};
+	if (!("value" in decision))
+		return {
+			ok: false,
+			reason: `publication: run \`${run}\`'s \`${SHIP_CHECKPOINT_KEY}\` decision carries no verified value — the lease-free inspection shows one only when the decision record matches the journalled \`sha256\`, so nothing here proves \`{"ship": true}\``,
+		};
+	if (at(decision.value, SHIP_CHECKPOINT_KEY) !== true)
+		return {
+			ok: false,
+			reason: `publication: run \`${run}\`'s \`${SHIP_CHECKPOINT_KEY}\` checkpoint was decided \`${render(decision.value)}\`, which is not \`{"ship": true}\` — nothing is published`,
+		};
+	const decidedBy = stringAt(decision, "decidedBy");
+	const source = stringAt(decision, "source");
+	const sha256 = stringAt(decision, "sha256");
+	return {
+		ok: true,
+		...(decidedBy ? { decidedBy } : {}),
+		...(source ? { source } : {}),
+		...(sha256 ? { sha256 } : {}),
 	};
 }
 
@@ -507,6 +624,7 @@ export const PUBLISH_STEPS = [
 	"policy",
 	"inspect",
 	"receipt",
+	"decision",
 	"digest",
 	"resolve",
 	"branch",
@@ -571,6 +689,16 @@ export interface PublishDeps {
 	readonly now?: () => Date;
 	/** `gh --version`; `pr` degrades to `branch` when it says no. */
 	readonly ghPresent?: () => boolean;
+	/**
+	 * Must the run's own `ship` gate prove this publication?
+	 *
+	 * Set by the automatic trigger paths, where nothing a human typed asked for
+	 * this: the announcement is a message on a bus, and the only durable
+	 * decision behind it is the `ship` checkpoint. `/plan ship <slug>` leaves it
+	 * off, because typing the command is itself the decision, and a plan whose
+	 * `gates` never declared a `ship` checkpoint is still publishable by hand.
+	 */
+	readonly requireShipDecision?: boolean;
 }
 
 function stop(
@@ -722,9 +850,7 @@ export async function publishPlan(deps: PublishDeps): Promise<Publication> {
 	// ── 1. The inspection ────────────────────────────────────────────────────
 	let inspection: unknown;
 	try {
-		inspection = await deps.provider.inspect(deps.runId, {
-			include: ["run", "tasks"],
-		});
+		inspection = await deps.provider.inspect(deps.runId, INSPECT_SECTIONS);
 	} catch (error) {
 		return stop(
 			ui,
@@ -737,6 +863,13 @@ export async function publishPlan(deps: PublishDeps): Promise<Publication> {
 	const read = readReceipt(inspection);
 	if (!read.ok) return stop(ui, commands, "receipt", read.reason, { mode });
 	const receipt = read.receipt;
+
+	// ── 1a. The ship gate, when nobody typed the command ─────────────────────
+	if (deps.requireShipDecision) {
+		const decided = shipDecision(inspection);
+		if (!decided.ok)
+			return stop(ui, commands, "decision", decided.reason, { mode });
+	}
 
 	// ── 2. The digest, before a single command runs ──────────────────────────
 	const stored = planDigest(deps.plan);
@@ -1024,6 +1157,13 @@ const TERMINAL_STATUSES = new Set([
 export interface ShipWatchDeps {
 	readonly client: Pick<WorkflowReadClient, "inspect" | "observe">;
 	readonly emit: (event: WorkflowShipped) => void;
+	/**
+	 * A run that carries a receipt but whose ship gate proves nothing. Said out
+	 * loud rather than swallowed: the run finished, its handoffs are real, and
+	 * the reason it is not being published is a fact about its `ship`
+	 * checkpoint that a human can go and act on.
+	 */
+	readonly report?: (message: string) => void;
 	/** Reported, never thrown: a watcher that throws takes the session with it. */
 	readonly onError?: (error: unknown) => void;
 }
@@ -1033,12 +1173,14 @@ export interface ShipWatchDeps {
  *
  * The parked-run observer prompts in the session it owns and announces its own
  * `{"ship": true}`. A decision made anywhere else never reaches that prompt, so
- * the run itself is watched: when it reaches a terminal state and its
- * inspection yields a receipt, the same announcement is made once.
+ * the run itself is watched: when it reaches a terminal state, it is inspected,
+ * and the announcement is made once — but only for a run whose own `ship`
+ * checkpoint PROVES `{"ship": true}`. A run whose gate is undecided, or decided
+ * `false`, is reported by name and never announced.
  *
- * It announces; it does not publish. `publishPlan` still checks the digest
- * against the stored plan and still asks a human before anything is pushed, so
- * the worst an over-eager announcement can do is open a dialog.
+ * It announces; it does not publish. `publishPlan` re-reads the same inspection,
+ * proves the decision again, checks the digest against the stored plan, and
+ * still asks the one confirmation before anything is pushed.
  */
 export function watchShippedRuns(deps: ShipWatchDeps): () => void {
 	const announced = new Set<string>();
@@ -1048,11 +1190,17 @@ export function watchShippedRuns(deps: ShipWatchDeps): () => void {
 		announced.add(observation.runId);
 		void (async () => {
 			try {
-				const inspection = await deps.client.inspect(observation.runId, {
-					include: ["run", "tasks"],
-				});
+				const inspection = await deps.client.inspect(
+					observation.runId,
+					INSPECT_SECTIONS,
+				);
 				const read = readReceipt(inspection);
 				if (!read.ok) return;
+				const decided = shipDecision(inspection);
+				if (!decided.ok) {
+					deps.report?.(decided.reason);
+					return;
+				}
 				deps.emit({
 					runId: observation.runId,
 					planDigest: read.receipt.planDigest,
@@ -1103,7 +1251,7 @@ export async function shipPlan(deps: ShipDeps): Promise<Publication> {
 		if (stringAt(summary, "definitionName") !== deps.workflowRef) continue;
 		try {
 			const read = readReceipt(
-				await deps.provider.inspect(runId, { include: ["run", "tasks"] }),
+				await deps.provider.inspect(runId, INSPECT_SECTIONS),
 			);
 			if (read.ok && read.receipt.planDigest === stored) candidates.push(runId);
 		} catch {

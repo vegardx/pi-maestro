@@ -23,6 +23,7 @@ import {
 	publishPlan,
 	readReceipt,
 	resolveHostCheck,
+	shipDecision,
 	shipPlan,
 	watchShippedRuns,
 } from "../packages/maestro/src/publish.js";
@@ -110,6 +111,71 @@ function outputShaped(digest: string) {
 			],
 			receipt: { planDigest: digest, refs: [], note: "shipped" },
 		},
+	};
+}
+
+/** One decided checkpoint, as the lease-free inspection carries the facts. */
+function decided(value: unknown) {
+	return {
+		source: "human",
+		decidedBy: "vegard",
+		decidedAt: "2026-09-17T08:00:00.000Z",
+		sha256: sha("e"),
+		value,
+	};
+}
+
+/** The `ship` checkpoint task, with or without a decision on it. */
+function shipTask(decision?: Record<string, unknown>) {
+	return {
+		id: "task_ship",
+		key: "ship",
+		kind: "checkpoint",
+		status: "completed",
+		checkpoint: {
+			prompt: "Ship it?",
+			schema: { type: "object" },
+			headless: "refuse",
+			...(decision ? { decision } : {}),
+		},
+	};
+}
+
+/**
+ * What `inspect(runId, {include: ["run","tasks","output"]})` hands back for a
+ * settled run: the committed output on `run.output`, and the decided value on
+ * the `ship` checkpoint task. `null` leaves the checkpoint out entirely.
+ */
+function runShaped(
+	digest: string,
+	ship: unknown = shipTask(decided({ ship: true })),
+) {
+	return {
+		run: {
+			runId: "run-1",
+			status: "completed",
+			definitionName: "plan-to-ship",
+			output: {
+				shipped: true,
+				deliverables: [
+					{ id: "first", handoff: descriptor(1) },
+					{ id: "second", handoff: descriptor(2) },
+				],
+				reviews: [
+					{
+						deliverable: "first",
+						lens: "contracts",
+						verdict: "approve",
+						blocking: false,
+					},
+				],
+				receipt: { planDigest: digest },
+			},
+		},
+		tasks: [
+			{ key: "implement-first", kind: "agent", handoff: descriptor(1) },
+			...(ship === null ? [] : [ship]),
+		],
 	};
 }
 
@@ -215,6 +281,27 @@ function deps(overrides: Partial<Parameters<typeof publishPlan>[0]> = {}) {
 }
 
 describe("readReceipt", () => {
+	it("reads the digest and the handoffs off the run's committed output", () => {
+		const read = readReceipt(runShaped(sha("d")));
+		if (!read.ok) throw new Error(read.reason);
+		expect(read.receipt.planDigest).toBe(sha("d"));
+		expect(read.receipt.deliverables.map((d) => d.id)).toEqual([
+			"first",
+			"second",
+		]);
+		expect(read.receipt.reviews?.[0]?.lens).toBe("contracts");
+	});
+
+	it("prefers `run.output.receipt` over a digest hoisted anywhere else", () => {
+		const inspection = {
+			...runShaped(sha("d")),
+			receipt: { planDigest: sha("f") },
+		};
+		const read = readReceipt(inspection);
+		if (!read.ok) throw new Error(read.reason);
+		expect(read.receipt.planDigest).toBe(sha("d"));
+	});
+
 	it("reads the handoff off the tasks of a lease-free inspection", () => {
 		const read = readReceipt(taskShaped(sha("d")));
 		if (!read.ok) throw new Error(read.reason);
@@ -314,6 +401,66 @@ describe("readReceipt", () => {
 	});
 });
 
+describe("shipDecision", () => {
+	it("proves `{ship: true}` from the ship checkpoint's decided value", () => {
+		const decision = shipDecision(runShaped(sha("d")));
+		expect(decision).toEqual({
+			ok: true,
+			decidedBy: "vegard",
+			source: "human",
+			sha256: sha("e"),
+		});
+	});
+
+	it("refuses an undecided ship gate, naming the run", () => {
+		const decision = shipDecision(runShaped(sha("d"), shipTask()));
+		expect(decision.ok).toBe(false);
+		if (decision.ok) return;
+		expect(decision.reason).toContain("`run-1`");
+		expect(decision.reason).toContain("undecided");
+	});
+
+	it("refuses a gate decided `false`, quoting what it was decided", () => {
+		const decision = shipDecision(
+			runShaped(sha("d"), shipTask(decided({ ship: false }))),
+		);
+		expect(decision.ok).toBe(false);
+		if (decision.ok) return;
+		expect(decision.reason).toContain("`run-1`");
+		expect(decision.reason).toContain('{"ship":false}');
+	});
+
+	it("refuses a decision whose value the runtime could not verify", () => {
+		const { value: _unverified, ...rest } = decided({ ship: true });
+		const decision = shipDecision(runShaped(sha("d"), shipTask(rest)));
+		expect(decision.ok).toBe(false);
+		if (decision.ok) return;
+		expect(decision.reason).toContain("no verified value");
+	});
+
+	it("refuses a run that declares no ship checkpoint at all", () => {
+		const decision = shipDecision(runShaped(sha("d"), null));
+		expect(decision.ok).toBe(false);
+		if (decision.ok) return;
+		expect(decision.reason).toContain("no `ship` checkpoint");
+	});
+
+	it("does not mistake another checkpoint, or another task, for the gate", () => {
+		const approve = {
+			key: "ship",
+			kind: "agent",
+			checkpoint: { decision: decided({ ship: true }) },
+		};
+		expect(shipDecision(runShaped(sha("d"), approve)).ok).toBe(false);
+		const elsewhere = {
+			key: "approve-plan",
+			kind: "checkpoint",
+			checkpoint: { decision: decided({ ship: true }) },
+		};
+		expect(shipDecision(runShaped(sha("d"), elsewhere)).ok).toBe(false);
+	});
+});
+
 describe("orderDeliverables", () => {
 	it("puts a task-keyed receipt back into plan order", () => {
 		const read = readReceipt(taskShaped(sha("d")));
@@ -383,6 +530,64 @@ describe("publishPlan", () => {
 		expect(published.reason).toContain('policy.publish.mode: "none"');
 		expect(bash.commands).toEqual([]);
 		expect(reporter.notices[0]?.type).toBe("error");
+	});
+
+	it("asks the inspection for the run's committed output", async () => {
+		const asked: unknown[] = [];
+		await publishPlan(
+			deps({
+				provider: {
+					inspect: async (_runId: string, options?: unknown) => {
+						asked.push(options);
+						return runShaped(planDigest(plan()));
+					},
+				},
+			}),
+		);
+		expect(asked).toEqual([{ include: ["run", "tasks", "output"] }]);
+	});
+
+	it("proves the ship decision before anything runs, when nobody typed the command", async () => {
+		const bash = recorder();
+		const reporter = ui();
+		const published = await publishPlan(
+			deps({
+				bash: bash.bash,
+				ui: reporter.ui,
+				requireShipDecision: true,
+				provider: {
+					inspect: async () =>
+						runShaped(planDigest(plan()), shipTask(decided({ ship: false }))),
+				},
+			}),
+		);
+		expect(published.stoppedAt).toBe("decision");
+		expect(published.reason).toContain("`run-1`");
+		expect(bash.commands).toEqual([]);
+	});
+
+	it("publishes a proven ship decision without asking a second time", async () => {
+		const reporter = ui();
+		const published = await publishPlan(
+			deps({
+				ui: reporter.ui,
+				requireShipDecision: true,
+				provider: { inspect: async () => runShaped(planDigest(plan())) },
+			}),
+		);
+		expect(published.ok).toBe(true);
+		expect(reporter.confirms).toEqual(["Push and open a pull request?"]);
+	});
+
+	it("does not demand a ship gate of a publication a human asked for", async () => {
+		const published = await publishPlan(
+			deps({
+				provider: {
+					inspect: async () => runShaped(planDigest(plan()), null),
+				},
+			}),
+		);
+		expect(published.ok).toBe(true);
 	});
 
 	it("stops on a digest mismatch before running a single command", async () => {
@@ -727,8 +932,8 @@ describe("watchShippedRuns", () => {
 		};
 	}
 
-	it("announces a terminal run whose receipt reads, once", async () => {
-		const fake = client(taskShaped(sha("d")));
+	it("announces a terminal run whose ship gate proves `{ship: true}`, once", async () => {
+		const fake = client(runShaped(sha("d")));
 		const announced: { runId: string; planDigest: string }[] = [];
 		watchShippedRuns({
 			client: fake as never,
@@ -740,6 +945,29 @@ describe("watchShippedRuns", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(announced).toEqual([{ runId: "run-1", planDigest: sha("d") }]);
 	});
+
+	it.each([
+		["undecided", shipTask()],
+		["decided `false`", shipTask(decided({ ship: false }))],
+		["without a ship gate", null],
+	])(
+		"reports a run whose gate is %s by name, and announces nothing",
+		async (_case, ship) => {
+			const fake = client(runShaped(sha("d"), ship));
+			const announced: unknown[] = [];
+			const reported: string[] = [];
+			watchShippedRuns({
+				client: fake as never,
+				emit: (event) => announced.push(event),
+				report: (message) => reported.push(message),
+			});
+			fake.fire({ runId: "run-1", status: "completed", sequence: 2 });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(announced).toEqual([]);
+			expect(reported).toHaveLength(1);
+			expect(reported[0]).toContain("`run-1`");
+		},
+	);
 
 	it("says nothing about a run with no readable receipt, and unsubscribes", async () => {
 		const fake = client({ run: { runId: "run-1", status: "completed" } });

@@ -36,8 +36,12 @@ steps, and what stops where, are in
 [Authored plans](workflow-plans.md#publishing-what-a-run-produced).
 
 A ship decided at the run's `ship` checkpoint announces itself on
-`maestro:workflow-shipped`, and the seat offers the same publication for the
-stored plan that digest matches — one confirmation first, then the steps above.
+`maestro:workflow-shipped`, and the seat runs the same publication for the
+stored plan that digest matches. The announcement is not the authority: before
+anything else, publication re-inspects the run and proves `{"ship": true}` from
+the `ship` checkpoint's own decided value, so a run whose gate is undecided or
+decided otherwise is named and never published. Nothing is asked twice — the
+only confirmation is still the one at the push.
 
 ## Modes
 

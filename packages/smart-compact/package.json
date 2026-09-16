@@ -12,7 +12,7 @@
 	"dependencies": {
 		"@vegardx/pi-contracts": "*",
 		"@vegardx/pi-core": "*",
-		"@vegardx/pi-models": "*",
+		"@vegardx/pi-maestro": "*",
 		"@vegardx/pi-settings": "*"
 	},
 	"peerDependencies": {

@@ -139,6 +139,46 @@ plan while the tree has edits in it is the normal case. The warning is worth
 recording because every worktree a run creates branches from HEAD, so those
 edits are not in the run.
 
+## Readiness
+
+Validation asks whether the document is coherent. **Readiness** asks whether the
+machine it names is there, and it is asked once, after the plan stores and
+before a run is offered. Per repository: the path exists, it is a working-tree
+root rather than some directory inside one, the tree is clean, and the base
+branch `policy.publish.base` names resolves there (`git rev-parse --verify`).
+Once per host: `gh` is on PATH, and only when `policy.publish.mode` is `pr` —
+`branch` and `none` publish without it. Every problem is reported at once, as
+everywhere else, except that a repository whose path is missing or is not a root
+is reported once and asked nothing further: whether it is clean has no meaning
+yet.
+
+None of those answers belongs in the plan. The same document is ready on one
+machine and not on another, so readiness is a fact about a host at a moment and
+is never stored, digested or approved. Nothing here refuses, either: a dirty
+tree is reported and the caller decides — continue, knowing every worktree
+branches from HEAD, or go back to the conversation. The step is named readiness
+in this repository and nowhere is it given the neighbouring name that
+`@vegardx/pi-subagent` uses for its own launch-plan compile; [usage](usage.md)
+draws that boundary, and the docs gate enforces it.
+
+A missing repository can be created rather than corrected by hand, and that is
+the one thing readiness does to the world. It happens only with the caller's
+confirmation, and every command goes through the seat's audited Bash tool, so
+the classifier and the session mode's confirmation policy apply exactly as they
+do to anything else the seat runs — there is no exempt category here:
+
+```text
+git init <path>
+git -C <path> commit --allow-empty -m "Initial commit"
+gh repo create <name> --private --source <path> --remote origin   # mode ≠ none
+```
+
+The empty initial commit is not ceremony: every worktree a run creates branches
+from a HEAD, and a repository with no commits has none. `gh repo create
+--source` wires the remote itself, which is why `origin` is named there rather
+than added by a second command against a URL nothing has printed yet. The first
+command that fails stops the rest.
+
 ## The hand-off to a run
 
 The `plan` tool validates and stores the complete document. Storage is not

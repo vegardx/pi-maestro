@@ -81,11 +81,9 @@ describe("interactive seat extension entry", () => {
 		expect(h.names()).toEqual(["mode", "plan"]);
 		expect(h.tools).toEqual([]);
 		await h.run("mode");
-		expect(h.tools.map(({ name }) => name).sort()).toEqual([
-			"bash",
-			"delete",
-			"plan",
-		]);
+		// `plan` is absent on purpose: the seat starts in plan mode, which is the
+		// conversation and does not hold the tool. See test/seat-modes.test.ts.
+		expect(h.tools.map(({ name }) => name).sort()).toEqual(["bash", "delete"]);
 		expect(entry.currentMode()).toBe("plan");
 	});
 

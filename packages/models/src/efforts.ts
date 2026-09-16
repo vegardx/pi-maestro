@@ -1,5 +1,5 @@
-import type { Api, Model } from "@earendil-works/pi-ai/compat";
-import type { ThinkingLevel } from "@vegardx/pi-contracts";
+import type { CatalogModel } from "./port.js";
+import type { ThinkingLevel } from "./thinking.js";
 
 const EFFORTS: readonly ThinkingLevel[] = [
 	"off",
@@ -12,13 +12,9 @@ const EFFORTS: readonly ThinkingLevel[] = [
 ];
 
 /** Pi's null map entries are explicitly unsupported; missing entries default. */
-export function supportedEfforts(model: Model<Api>): readonly ThinkingLevel[] {
-	const details = model as Model<Api> & {
-		reasoning?: boolean;
-		thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
-	};
-	if (details.reasoning === false) return ["off"];
-	return EFFORTS.filter(
-		(effort) => details.thinkingLevelMap?.[effort] !== null,
-	);
+export function supportedEfforts(
+	model: CatalogModel,
+): readonly ThinkingLevel[] {
+	if (model.reasoning === false) return ["off"];
+	return EFFORTS.filter((effort) => model.thinkingLevelMap?.[effort] !== null);
 }

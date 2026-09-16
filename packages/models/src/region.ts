@@ -6,7 +6,7 @@
 // maestro applies them mechanically and never reasons about them. Sourced from
 // the v2 `models.region` slice, not the v1 residency block.
 
-import type { RegionConfig } from "@vegardx/pi-contracts";
+import type { RegionConfig } from "./vocabulary.js";
 
 /** Reserved region state: matches all models — the filter is off. */
 export const REGION_OFF = "off";

@@ -168,11 +168,9 @@ describe("the /plan grammar rejects rather than guesses", () => {
 			slug: "arc",
 		});
 		expect(parsePlanCommand("rm arc")).toEqual({ kind: "rm", slug: "arc" });
-		expect(parsePlanCommand("run arc")).toEqual({
-			kind: "run",
-			slug: "arc",
-			effort: "standard",
-		});
+		// No effort is not `standard`: the omission travels, so the plan's own
+		// `policy.effort` is what decides.
+		expect(parsePlanCommand("run arc")).toEqual({ kind: "run", slug: "arc" });
 		expect(parsePlanCommand("run arc deep")).toEqual({
 			kind: "run",
 			slug: "arc",
@@ -315,7 +313,30 @@ describe("/plan run hands off without executing anything", () => {
 		expect(outcome.message).toContain("effort deep");
 	});
 
-	it("defaults to standard when no effort is given", async () => {
+	it("takes the plan's own effort when none is given", async () => {
+		// `policy.effort` is a decision a human made in the plan-mode exit and
+		// the digest covers it. A run started without naming an effort runs at
+		// the one the document asks for, not at a default that overrides it.
+		const h = harness();
+		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
+		await h.run("run arc");
+		expect(
+			JSON.parse(readFileSync(workflowInputFile("arc", h.agentDir), "utf8"))
+				.effort,
+		).toBe("deep");
+	});
+
+	it("lets a named effort override the plan's own", async () => {
+		const h = harness();
+		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
+		await h.run("run arc cheap");
+		expect(
+			JSON.parse(readFileSync(workflowInputFile("arc", h.agentDir), "utf8"))
+				.effort,
+		).toBe("cheap");
+	});
+
+	it("defaults to standard when neither the command nor the plan says", async () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
 		await h.run("run arc");

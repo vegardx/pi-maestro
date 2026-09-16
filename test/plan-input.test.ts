@@ -129,6 +129,31 @@ describe("the workflow input", () => {
 		expect(toWorkflowInput(fixture, undefined).effort).toBe("standard");
 	});
 
+	it("takes the plan's own policy effort when the caller names none", () => {
+		// `policy.effort` is on the document because a human chose it and the
+		// digest covers it. A hand-off that overrode it with a default would be
+		// spending a budget nobody chose.
+		const deep: Plan = { ...fixture, policy: { effort: "deep" } };
+		expect(toWorkflowInput(deep).effort).toBe("deep");
+		expect(toWorkflowInput(deep, undefined).effort).toBe("deep");
+		// A caller that does name one still wins: `/plan run <slug> cheap` is a
+		// human saying something about this run.
+		expect(toWorkflowInput(deep, "cheap").effort).toBe("cheap");
+	});
+
+	it("resolves a stored effort it does not know the way the policy does", () => {
+		// `resolvePolicy` is total and `inspectPlan` is what reports this, so a
+		// document with an effort from another build still hands off — at the
+		// default, exactly as it would compile.
+		const odd = {
+			...fixture,
+			policy: { effort: "thorough" },
+		} as unknown as Plan;
+		expect(toWorkflowInput(odd).effort).toBe("standard");
+		// A caller's own typo is still worth throwing over.
+		expect(() => toWorkflowInput(odd, "thorough")).toThrow(UnknownEffortError);
+	});
+
 	it("refuses an effort it does not know, rather than guessing one", () => {
 		// "standrd" is one keystroke away, and a typo that silently became
 		// `standard` would spend a deep run's budget, or fail to.

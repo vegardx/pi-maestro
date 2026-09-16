@@ -35,7 +35,6 @@ import {
 	withDefaultStages,
 } from "./plan.js";
 import {
-	DEFAULT_EFFORT,
 	EFFORTS,
 	type Effort,
 	isEffort,
@@ -66,7 +65,12 @@ export const INLINE_INPUT_LIMIT = 4096;
 export type PlanCommand =
 	| { readonly kind: "list" }
 	| { readonly kind: "show"; readonly slug: string }
-	| { readonly kind: "run"; readonly slug: string; readonly effort: Effort }
+	| {
+			readonly kind: "run";
+			readonly slug: string;
+			/** Absent when the human named none: the plan's `policy.effort` decides. */
+			readonly effort?: Effort;
+	  }
 	| { readonly kind: "ship"; readonly slug: string }
 	| { readonly kind: "rm"; readonly slug: string }
 	/** Not a verb: what to print when the grammar did not match. */
@@ -104,13 +108,20 @@ export function parsePlanCommand(args: string): PlanCommand {
 					kind: "usage",
 					problem: "`/plan run` takes a slug and an optional effort",
 				};
-			const effort = rest[1] ?? DEFAULT_EFFORT;
-			if (!isEffort(effort))
+			// Not defaulted here: an omitted effort has to reach
+			// `toWorkflowInput` as an omission, or the plan's own `policy.effort`
+			// is overridden by a default nobody typed.
+			const effort = rest[1];
+			if (effort !== undefined && !isEffort(effort))
 				return {
 					kind: "usage",
 					problem: `unknown effort \`${effort}\` — one of ${EFFORTS.join(", ")}`,
 				};
-			return { kind: "run", slug: rest[0], effort };
+			return {
+				kind: "run",
+				slug: rest[0],
+				...(effort ? { effort } : {}),
+			};
 		}
 		default:
 			return { kind: "usage", problem: `unknown subcommand \`${verb}\`` };

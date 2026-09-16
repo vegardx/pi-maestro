@@ -1,7 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import maestroExtension, {
 	planStoredNotice,
@@ -9,6 +13,13 @@ import maestroExtension, {
 	seatToolBlockReason,
 	startSeat,
 } from "../packages/maestro/src/extension.js";
+import type { Plan } from "../packages/maestro/src/plan.js";
+import { planDigest } from "../packages/maestro/src/plan-input.js";
+import {
+	WORKFLOW_SERVICE_REQUEST_CHANNEL,
+	WORKFLOW_SERVICE_REQUEST_SCHEMA,
+	type WorkflowEventBus,
+} from "../packages/maestro/src/workflow-provider.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -210,5 +221,148 @@ describe("interactive seat extension entry", () => {
 			{ ui: { notify: (message: string) => said.push(message) } },
 		);
 		expect(said.at(-1)).not.toContain("/mode auto");
+	});
+});
+
+// ── One gate, two dialog owners ──────────────────────────────────────────────
+//
+// Pi's dialogs have no queue: opening one over another replaces it and the
+// replaced promise never resolves. The exit flow has always deferred behind the
+// seat's `DialogGate`; publication did not, which made the seat two owners of
+// one screen with only one of them hearing `ui_prompt_start`. The seat now
+// builds ONE gate and hands it to both, and this is the half that could not be
+// proven anywhere else: the gate `notePromptStart` drives is the gate a
+// publication dialog waits on.
+
+const CONTRACT = JSON.parse(
+	readFileSync(
+		join(
+			dirname(fileURLToPath(import.meta.url)),
+			"fixtures",
+			"pi-workflow-runtime-contract.json",
+		),
+		"utf8",
+	),
+) as unknown;
+
+function shipPlanDocument(repo: string): Plan {
+	return {
+		slug: "demo",
+		title: "Demo plan",
+		repos: [{ key: "main", path: repo }],
+		policy: { publish: { mode: "branch", base: "main" } },
+		deliverables: [
+			{ id: "first", title: "First", after: [], reads: [], tasks: [] },
+		],
+	};
+}
+
+/** A bus with pi-workflow's provider on it, answering with `client`. */
+function busWith(client: Record<string, unknown>): WorkflowEventBus {
+	const handlers = new Map<string, Set<(data: unknown) => void>>();
+	const bus: WorkflowEventBus = {
+		emit(channel, data) {
+			for (const handler of [...(handlers.get(channel) ?? [])]) handler(data);
+		},
+		on(channel, handler) {
+			const set = handlers.get(channel) ?? new Set();
+			handlers.set(channel, set);
+			set.add(handler);
+			return () => set.delete(handler);
+		},
+	};
+	// One provider object, because discovery runs twice around `acquire` and
+	// compares the two by identity.
+	const provider = {
+		contract: structuredClone(CONTRACT),
+		acquire: async () => ({
+			list: async () => [],
+			validate: async () => ({ valid: true, workflow: {} }),
+			project: async () => ({ fits: true }),
+			runBuiltin: async () => ({ runId: "r", status: "running" }),
+			awaitRun: async () => ({ runId: "r", status: "completed" }),
+			...client,
+		}),
+	};
+	bus.on(WORKFLOW_SERVICE_REQUEST_CHANNEL, (data) => {
+		const request = data as
+			| { schema?: unknown; respond?: (provider: unknown) => void }
+			| undefined;
+		if (request?.schema !== WORKFLOW_SERVICE_REQUEST_SCHEMA) return;
+		request.respond?.(provider);
+	});
+	return bus;
+}
+
+describe("publication dialogs on the seat's own gate", () => {
+	it("defers a publication dialog until an outstanding foreign prompt closes", async () => {
+		const repo = temp("maestro-repo-");
+		const document = shipPlanDocument(repo);
+		const digest = planDigest(document);
+		const selected: string[] = [];
+		// Two completed runs carry this digest, so publication has to ask which —
+		// a dialog reached before any command is run, which is the point.
+		const bus = busWith({
+			inspect: async () => ({
+				run: { runId: "run-1", status: "completed" },
+				receipt: { planDigest: digest },
+				tasks: [
+					{
+						key: "implement-first",
+						kind: "agent",
+						handoff: {
+							subagentRunId: "sr-1",
+							subagentAttemptId: "at-1",
+							baselineHead: "a".repeat(64),
+							handoffCommit: "1".repeat(64),
+							sha256: "b".repeat(64),
+							bytes: 1024,
+						},
+					},
+				],
+			}),
+			runs: async () => ({
+				runs: ["run-1", "run-2"].map((runId) => ({
+					runId,
+					definitionName: "plan-to-ship",
+					status: "completed",
+				})),
+				total: 2,
+			}),
+			observe: () => () => {},
+		});
+		const h = host();
+		const entry = startSeat(
+			{ ...h.pi, events: bus },
+			{ cwd: repo, agentDir: temp("maestro-agent-") },
+		);
+		entry.seat();
+		const ctx = {
+			hasUI: true,
+			ui: {
+				confirm: async () => false,
+				select: async (title: string) => {
+					selected.push(title);
+					return undefined;
+				},
+				notify() {},
+			},
+		} as unknown as ExtensionContext;
+
+		entry.notePromptStart();
+		const publishing = entry.publish(document, ctx);
+		// Two full turns of the event loop: discovery, the run listing and both
+		// inspections have all settled by now, so what is holding the dialog back
+		// is the gate and nothing else.
+		for (let turn = 0; turn < 2; turn += 1)
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(selected).toEqual([]);
+
+		entry.notePromptEnd();
+		const published = await publishing;
+		expect(selected).toEqual(["Which run of `demo` is being published?"]);
+		// Escaping the deferred dialog still stops publication, with nothing run.
+		expect(published.ok).toBe(false);
+		expect(published.commands).toEqual([]);
 	});
 });

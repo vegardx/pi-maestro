@@ -508,6 +508,44 @@ export interface PublishUI {
 	notify(message: string, type?: "info" | "warning" | "error"): void;
 }
 
+/**
+ * The same UI, deferring behind the seat's dialog gate.
+ *
+ * Pi's dialogs have no queue: opening one over another replaces it, and the
+ * replaced promise never resolves. The exit flow has always gone through the
+ * gate; publication did not, which made the seat two dialog owners of one
+ * screen with only one of them listening to `ui_prompt_start`. A publication
+ * confirm can land at any moment — the announcement path opens one without
+ * anybody having typed a command — so it is exactly the one that needed this.
+ *
+ * `notify` is left alone: it is a message, not a dialog, and deferring a
+ * refusal until the screen is free would delay the only thing that explains
+ * why nothing happened.
+ *
+ * The gate is taken structurally rather than as `DialogGate` so that this
+ * module keeps its one-way dependency on nothing but the plan.
+ */
+export function gatedPublishUI(
+	ui: PublishUI,
+	gate: { quiet(signal?: AbortSignal): Promise<void> },
+): PublishUI {
+	return {
+		notify: (message, type) => ui.notify(message, type),
+		confirm: async (title, message) => {
+			await gate.quiet();
+			return ui.confirm(title, message);
+		},
+		...(ui.select
+			? {
+					select: async (title: string, options: string[]) => {
+						await gate.quiet();
+						return ui.select?.(title, options);
+					},
+				}
+			: {}),
+	};
+}
+
 /** The files publication reads and appends to; injected so tests own them. */
 export interface PublishFiles {
 	readonly exists: (path: string) => boolean;

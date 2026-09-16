@@ -45,7 +45,11 @@ export function createSeat(options: SeatOptions = {}): Seat {
 		},
 		{ definition: createDeleteTool(), holders: ["maestro"] },
 		{
-			definition: createPlanTool({ store, cwd: () => cwd }),
+			definition: createPlanTool({
+				store,
+				cwd: () => cwd,
+				mode: () => current.name,
+			}),
 			holders: ["maestro"],
 		},
 	]);

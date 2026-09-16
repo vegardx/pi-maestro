@@ -71,7 +71,10 @@ function plan(slug: string, root: string, title = `Plan ${slug}`): Plan {
 				title: "Build the UI",
 				body: "Talks to the API.",
 				after: ["api"],
-				reads: ["api"],
+				// Not `reads: ["api"]`: a deliverable cannot build on another's
+				// hand-off in the same repository yet, and the plan model refuses
+				// that edge rather than compiling it and dropping it.
+				reads: [],
 				tasks: [
 					{ id: "screen", title: "Draw the screen" },
 					{
@@ -226,7 +229,6 @@ describe("/plan show", () => {
 		expect(message).toContain(`main  ${h.root}`);
 		expect(message).toContain("api — Build the API");
 		expect(message).toContain("after api");
-		expect(message).toContain("reads api");
 		expect(message).toContain("- handler: Write the handler");
 		expect(message).toContain(
 			"- sec: Review the surface — review (lens security, tier heavy, diverse, model anthropic/claude)",

@@ -19,7 +19,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { inspectPlan, type Plan, type WorkflowDelegation } from "./plan.js";
+import {
+	inspectPlan,
+	type Plan,
+	type ResolvedPolicy,
+	type ReviewLens,
+	type Stage,
+	type WorkflowDelegation,
+	withDefaultStages,
+} from "./plan.js";
 import {
 	DEFAULT_EFFORT,
 	EFFORTS,
@@ -135,18 +143,92 @@ function renderDelegation(by: WorkflowDelegation): string {
 	return parts.join(", ");
 }
 
+/** One lens, with every routing field the author actually set. */
+function renderLens(lens: ReviewLens): string {
+	const parts: string[] = [];
+	if (lens.tier) parts.push(`tier ${lens.tier}`);
+	if (lens.diverse) parts.push("diverse");
+	if (lens.skill) parts.push(`skill ${lens.skill}`);
+	if (lens.model) parts.push(`model ${lens.model}`);
+	return parts.length > 0 ? `${lens.id} (${parts.join(", ")})` : lens.id;
+}
+
+/** How many fix rounds a round-count actually buys, said in words. */
+function renderRounds(rounds: number): string {
+	if (rounds === 0) return "no fix rounds — the check passes or a human hears";
+	return `up to ${rounds} fix round${rounds === 1 ? "" : "s"}`;
+}
+
 /**
- * The stored document, read back whole: repositories, the graph, the work, and
- * what is merely worth knowing about it.
+ * One stage, as what it will do rather than as its JSON.
+ *
+ * `policy` is passed because a stage that set nothing is not a stage with no
+ * answer — it is a stage taking the plan's, and printing a blank there would
+ * read like a missing field.
+ */
+function renderStage(stage: Stage, policy: ResolvedPolicy): string {
+	switch (stage.use) {
+		case "implement":
+			return (
+				`${stage.id} — implement` +
+				(stage.tools && stage.tools.length > 0
+					? `, tools ${stage.tools.join(", ")}`
+					: "")
+			);
+		case "verify-and-fix":
+			return (
+				`${stage.id} — verify-and-fix, ${renderRounds(stage.maxRounds ?? policy.maxFixRounds)}` +
+				(stage.escalate && stage.escalate !== "none"
+					? `, escalating to ${stage.escalate}`
+					: "")
+			);
+		case "review-fan-out":
+			return (
+				`${stage.id} — review-fan-out over ${stage.lenses.map(renderLens).join(", ")}` +
+				`, synthesis ${stage.synthesis ?? "optional"}`
+			);
+		case "gate":
+			return (
+				`${stage.id} — gate: ${stage.question}` +
+				(stage.show && stage.show.length > 0
+					? ` (showing ${stage.show.join(", ")})`
+					: "")
+			);
+		case "dynamic":
+			return `${stage.id} — dynamic, which is not compiled yet: ${stage.brief}`;
+	}
+}
+
+/** The dials, resolved, and whether the plan set any of them itself. */
+function renderPolicy(policy: ResolvedPolicy, declared: boolean): string[] {
+	return [
+		"",
+		declared
+			? "Policy:"
+			: "Policy (the plan sets none — these are the defaults):",
+		`  effort ${policy.effort}, gates ${policy.gates}, ${renderRounds(policy.maxFixRounds)}`,
+		`  reviews that pin nothing: tier ${policy.reviewDefault.tier}${policy.reviewDefault.diverse ? ", diverse" : ""}`,
+		`  publish ${policy.publish.mode}${policy.publish.base ? ` from ${policy.publish.base}` : ""}`,
+	];
+}
+
+/**
+ * The stored document, read back whole: repositories, the policy, the graph,
+ * the work, how it compiles, and what is merely worth knowing about it.
  */
 export function renderPlan(
 	plan: Plan,
 	warnings: readonly string[] = [],
 ): string {
+	// Read back as it will COMPILE: a deliverable that declared no stages still
+	// runs three, and showing only what was typed would hide the run from the
+	// person being asked to approve it.
+	const staged = withDefaultStages(plan);
 	const lines = [`${plan.slug} — ${plan.title}`, "", "Repositories:"];
 	for (const repo of plan.repos) lines.push(`  ${repo.key}  ${repo.path}`);
+	lines.push(...renderPolicy(staged.policy, plan.policy !== undefined));
 	lines.push("", "Deliverables:");
-	for (const d of plan.deliverables) {
+	for (const [i, d] of staged.deliverables.entries()) {
 		lines.push(`  ${d.id} — ${d.title}${d.repo ? ` [repo ${d.repo}]` : ""}`);
 		if (d.body) lines.push(`    ${d.body}`);
 		if (d.after.length > 0) lines.push(`    after ${d.after.join(", ")}`);
@@ -156,6 +238,9 @@ export function renderPlan(
 				`    - ${t.id}: ${t.title}` +
 					(t.by ? ` — review (${renderDelegation(t.by)})` : ""),
 			);
+		lines.push(`    stages${plan.deliverables[i].stages ? "" : " (default)"}:`);
+		for (const stage of d.stages)
+			lines.push(`      ${renderStage(stage, staged.policy)}`);
 	}
 	if (warnings.length > 0)
 		lines.push("", ...warnings.map((warning) => `! ${warning}`));

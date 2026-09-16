@@ -18,7 +18,20 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { ModeName } from "./mode.js";
-import { inspectPlan, type Plan, REVIEW_TIERS, type Task } from "./plan.js";
+import {
+	ESCALATIONS,
+	FIX_ROUNDS,
+	inspectPlan,
+	MAX_LENSES,
+	PLAN_GATES,
+	type Plan,
+	type PlanPolicy,
+	PUBLISH_MODES,
+	REVIEW_TIERS,
+	type Stage,
+	SYNTHESIS_MODES,
+	type Task,
+} from "./plan.js";
 import { PLAN_WORKFLOW_REF } from "./plan-command.js";
 import { DEFAULT_EFFORT, EFFORTS } from "./plan-input.js";
 import type { PlanStore } from "./store.js";
@@ -76,6 +89,167 @@ const TaskSchema = Type.Object({
 	),
 });
 
+const literals = <T extends string | number>(
+	values: readonly T[],
+	description: string,
+) =>
+	Type.Union(
+		values.map((value) => Type.Literal(value)),
+		{ description },
+	);
+
+const LensSchema = Type.Object({
+	id: Type.String({
+		description: "The point of view, such as security. It is the fan-out key.",
+	}),
+	tier: Type.Optional(
+		literals(
+			REVIEW_TIERS,
+			"How much reviewer this lens is worth. Omit to take the plan's `policy.reviewDefault`.",
+		),
+	),
+	diverse: Type.Optional(
+		Type.Boolean({
+			description:
+				"Ask for a reviewer from a different model family than the implementer.",
+		}),
+	),
+	skill: Type.Optional(
+		Type.String({ description: "An ambient skill to request explicitly." }),
+	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"A concrete provider/model ID. Omit unless the reviewer must be that exact model.",
+		}),
+	),
+});
+
+/**
+ * The stage kinds a model may author.
+ *
+ * `dynamic` is deliberately absent: it is reserved in the plan schema and
+ * refused by validation until something compiles it, and offering a kind whose
+ * only possible outcome is a refusal would spend a turn to learn that.
+ */
+const StageSchema = Type.Union(
+	[
+		Type.Object({
+			use: Type.Literal("implement"),
+			id: Type.String({
+				description:
+					"Unique in this deliverable. Becomes a workflow namespace.",
+			}),
+			tools: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						"Tool NAMES the implementer needs. Never a path or a command.",
+				}),
+			),
+		}),
+		Type.Object({
+			use: Type.Literal("verify-and-fix"),
+			id: Type.String(),
+			maxRounds: Type.Optional(
+				literals(
+					FIX_ROUNDS,
+					"How many fix rounds the check may drive. Omit to take the plan's `policy.maxFixRounds`.",
+				),
+			),
+			escalate: Type.Optional(
+				literals(
+					ESCALATIONS,
+					"What a later round may spend more of when an earlier one failed.",
+				),
+			),
+		}),
+		Type.Object({
+			use: Type.Literal("review-fan-out"),
+			id: Type.String(),
+			lenses: Type.Array(LensSchema, {
+				minItems: 1,
+				maxItems: MAX_LENSES,
+				description:
+					"Independent points of view over this deliverable's hand-off, run in parallel. The same lens twice runs it twice.",
+			}),
+			synthesis: Type.Optional(
+				literals(
+					SYNTHESIS_MODES,
+					"Whether the verdicts are reduced into one statement. Default optional.",
+				),
+			),
+		}),
+		Type.Object({
+			use: Type.Literal("gate"),
+			id: Type.String(),
+			question: Type.String({
+				description:
+					"What a human is being asked. Prose — never code or a path.",
+			}),
+			show: Type.Optional(
+				Type.Array(Type.String(), {
+					description:
+						"Ids of stages declared EARLIER in this deliverable whose results the decision is shown.",
+				}),
+			),
+		}),
+	],
+	{
+		description:
+			"One compiled stage. `use` names the kind; the other fields are that kind's own.",
+	},
+);
+
+const PolicySchema = Type.Object(
+	{
+		effort: Type.Optional(
+			literals(
+				EFFORTS,
+				`How much budget the run may spend. Default ${DEFAULT_EFFORT}.`,
+			),
+		),
+		gates: Type.Optional(
+			literals(
+				PLAN_GATES,
+				"Where the run stops for a human. Default approve-plan+ship.",
+			),
+		),
+		reviewDefault: Type.Optional(
+			Type.Object(
+				{
+					tier: Type.Optional(literals(REVIEW_TIERS, "Default review tier.")),
+					diverse: Type.Optional(Type.Boolean()),
+				},
+				{ description: "What a review that pins nothing is worth." },
+			),
+		),
+		maxFixRounds: Type.Optional(
+			literals(
+				FIX_ROUNDS,
+				"Fix rounds a `verify-and-fix` stage takes when it does not say. Default 0 cheap / 1 standard / 2 deep.",
+			),
+		),
+		publish: Type.Optional(
+			Type.Object(
+				{
+					mode: literals(
+						PUBLISH_MODES,
+						"What happens to the hand-offs once a human said ship.",
+					),
+					base: Type.Optional(
+						Type.String({ description: "The branch publication starts from." }),
+					),
+				},
+				{ description: 'Default `{ mode: "none" }`.' },
+			),
+		),
+	},
+	{
+		description:
+			"The dials this plan sets for its own run. On the plan, so a reviewer sees them and the digest covers them.",
+	},
+);
+
 const DeliverableSchema = Type.Object({
 	id: Type.String({
 		description: "Lowercase, digits and hyphens. It becomes a workflow id.",
@@ -100,6 +274,12 @@ const DeliverableSchema = Type.Object({
 	tasks: Type.Array(TaskSchema, {
 		description: "The work, in order. A deliverable with none is not one.",
 	}),
+	stages: Type.Optional(
+		Type.Array(StageSchema, {
+			description:
+				"How this deliverable is compiled, in order. OMIT IT unless the default is wrong: implement, verify-and-fix, then one review lens per task with `by`. Exactly one `implement`; `verify-and-fix` follows it; a `gate` is last.",
+		}),
+	),
 });
 
 const PlanSchema = Type.Object({
@@ -117,6 +297,7 @@ const PlanSchema = Type.Object({
 			{ description: "Defaults to this repository." },
 		),
 	),
+	policy: Type.Optional(PolicySchema),
 });
 
 /** Both outcomes report the same shape, so a caller needs no narrowing. */
@@ -170,7 +351,9 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 					reads: d.reads ?? [],
 					...(d.repo ? { repo: d.repo } : {}),
 					tasks: d.tasks as Task[],
+					...(d.stages ? { stages: d.stages as Stage[] } : {}),
 				})),
+				...(authored.policy ? { policy: authored.policy as PlanPolicy } : {}),
 			};
 
 			const { errors, warnings } = inspectPlan(plan);
@@ -231,7 +414,12 @@ function describe(
 			const toSubagents = d.tasks.filter((t) => t.by).length;
 			const handed =
 				toSubagents > 0 ? `, ${toSubagents} delegated review intent(s)` : "";
-			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}`;
+			// Said only when the author wrote them: a stage list echoed back as the
+			// default would read like the plan declared one.
+			const stages = d.stages
+				? `, stages ${d.stages.map((stage) => stage.id).join(" → ")}`
+				: "";
+			return `- ${d.id}: ${d.tasks.length} task${d.tasks.length === 1 ? "" : "s"}${handed}${waits}${reads}${stages}`;
 		}),
 	];
 	if (warnings.length > 0)

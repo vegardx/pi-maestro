@@ -42,7 +42,9 @@ const fixture: Plan = {
 			id: "ui",
 			title: "The UI",
 			after: ["api"],
-			reads: ["api"],
+			// Ordering only: a deliverable that READS another's hand-off in the same
+			// repository is refused by the plan model, so it cannot be a fixture.
+			reads: [],
 			tasks: [{ id: "build", title: "Build it" }],
 		},
 	],

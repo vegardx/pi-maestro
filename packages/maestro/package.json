@@ -17,6 +17,12 @@
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-ai": "*"
+		"@earendil-works/pi-ai": "*",
+		"@vegardx/pi-workflow": ">=2.1.0 <3"
+	},
+	"peerDependenciesMeta": {
+		"@vegardx/pi-workflow": {
+			"optional": true
+		}
 	}
 }

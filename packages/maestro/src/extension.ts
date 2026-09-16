@@ -1,9 +1,11 @@
 import type {
 	ExtensionCommandContext,
+	ExtensionContext,
 	ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
+import { createAuditedBash } from "./bash-tool.js";
 import {
 	beginModeExit,
 	createModeExitController,
@@ -12,9 +14,22 @@ import {
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
 import { hasPendingExit } from "./pending-exit.js";
-import { createPlanCommand } from "./plan-command.js";
-import { EFFORTS } from "./plan-input.js";
+import type { Plan } from "./plan.js";
+import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
+import { EFFORTS, planDigest } from "./plan-input.js";
+import {
+	isWorkflowShipped,
+	type Publication,
+	shipPlan,
+	WORKFLOW_SHIPPED_CHANNEL,
+	watchShippedRuns,
+} from "./publish.js";
 import { createSeat, planToolAvailable, type Seat } from "./seat.js";
+import {
+	acquireWorkflowClient,
+	acquireWorkflowClientOrWarn,
+	type WorkflowEventBus,
+} from "./workflow-provider.js";
 
 /**
  * Re-exported because the `/mode` handler is the hook's only caller and this
@@ -102,6 +117,13 @@ export interface SeatHost {
 	 */
 	getActiveTools?(): string[];
 	setActiveTools?(toolNames: string[]): void;
+	/**
+	 * Pi's shared bus, where the workflow runtime answers discovery and where a
+	 * decided `ship` is announced. Optional: a seat on a host without one keeps
+	 * working, and `/plan ship` says that publication needs the runtime rather
+	 * than failing somewhere deeper.
+	 */
+	readonly events?: WorkflowEventBus;
 }
 
 export interface StartSeatOptions {
@@ -122,6 +144,16 @@ export interface SeatEntry {
 	 * record. Idempotent, and a no-op when no flow is open.
 	 */
 	abortExitFlow(): void;
+	/**
+	 * Publish a stored plan's run (Flow C), through the acquired workflow client
+	 * and the seat's own audited Bash tool. Both trigger paths land here:
+	 * `/plan ship <slug>`, and a `maestro:workflow-shipped` announcement.
+	 */
+	publish(
+		plan: Plan,
+		ctx: ExtensionContext,
+		runId?: string,
+	): Promise<Publication>;
 }
 
 export function startSeat(
@@ -255,27 +287,110 @@ export function startSeat(
 		},
 	});
 
-	pi.registerCommand(
-		"plan",
-		createPlanCommand({
-			// A getter, not the store: `seat()` builds lazily, and building it at
-			// registration time would undo that.
-			get store() {
-				return seat().store;
-			},
-			inputPath: (slug) => workflowInputFile(slug, options.agentDir),
-			...(pi.sendUserMessage
-				? { sendUserMessage: pi.sendUserMessage.bind(pi) }
-				: {}),
-		}),
-	);
+	/**
+	 * Flow C, wired from the two things it needs and cannot build itself: the
+	 * workflow client that reads the run's receipt, and the seat's own audited
+	 * Bash tool. Acquired per publication rather than held, so a runtime that
+	 * arrived (or left) since the last one is the runtime this one uses.
+	 */
+	const publish = async (
+		plan: Plan,
+		ctx: ExtensionContext,
+		runId?: string,
+	): Promise<Publication> => {
+		const refuse = (reason: string): Publication => {
+			ctx.ui.notify(reason, "error");
+			return {
+				ok: false,
+				stoppedAt: "policy",
+				reason,
+				commands: [],
+				mode: "none",
+			};
+		};
+		if (!pi.events)
+			return refuse(
+				"publication: this host has no extension bus, so the workflow runtime cannot be reached — cherry-pick the run's handoff refs by hand.",
+			);
+		const bashTool = seat()
+			.tools.definitionsFor("maestro")
+			.find((tool) => tool.name === "bash");
+		if (!bashTool)
+			return refuse(
+				"publication: the seat's audited Bash tool is not available, and publication runs every command through it.",
+			);
+		const client = await acquireWorkflowClientOrWarn(
+			pi.events,
+			ctx,
+			(message, type) => ctx.ui.notify(message, type),
+			"run",
+		);
+		if (!client)
+			return {
+				ok: false,
+				stoppedAt: "policy",
+				reason: "publication: no workflow runtime answered discovery.",
+				commands: [],
+				mode: "none",
+			};
+		return shipPlan({
+			slug: plan.slug,
+			plan,
+			provider: client,
+			bash: createAuditedBash(bashTool, ctx, "maestro-publish"),
+			ui: ctx.ui,
+			workflowRef: PLAN_WORKFLOW_REF,
+			...(options.agentDir ? { agentDir: options.agentDir } : {}),
+			...(runId ? { runId } : {}),
+		});
+	};
+
+	const planCommand = createPlanCommand({
+		// A getter, not the store: `seat()` builds lazily, and building it at
+		// registration time would undo that.
+		get store() {
+			return seat().store;
+		},
+		inputPath: (slug) => workflowInputFile(slug, options.agentDir),
+		ship: (plan, ctx) => publish(plan, ctx as ExtensionContext),
+		...(pi.sendUserMessage
+			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
+			: {}),
+	});
+	pi.registerCommand("plan", planCommand);
 
 	return {
 		seat,
 		currentMode: () => built?.mode().name ?? "plan",
 		pendingExit,
 		abortExitFlow: exit.abort,
+		publish,
 	};
+}
+
+/**
+ * The stored plan a ship announcement is about, found by its digest.
+ *
+ * By DIGEST, not by slug: the announcement names the bytes the run was given,
+ * and a slug whose document has since been rewritten is a different plan. A
+ * plan that no longer matches is simply not found, and publication says so
+ * instead of publishing against a document nobody approved.
+ */
+export function planForDigest(
+	store: Seat["store"],
+	digest: string,
+): Plan | undefined {
+	for (const summary of store.list()) {
+		let plan: Plan | null = null;
+		try {
+			plan = store.loadPlan(summary.slug);
+		} catch {
+			// One unreadable plan must not hide the rest.
+			continue;
+		}
+		if (plan && planDigest(plan) === digest) return plan;
+	}
+	return undefined;
 }
 
 export default defineExtension(
@@ -295,18 +410,99 @@ export default defineExtension(
 			);
 			if (reason) return { block: true, reason };
 		});
+		/**
+		 * The last live session context, which a bus listener has no other way to
+		 * get: `pi.events.on` hands over data and nothing else, and publication
+		 * needs a UI to confirm with and a context to run the Bash tool in.
+		 * Refreshed by every event that carries one, and dropped when the session
+		 * it belongs to is replaced — an old context throws when it is used.
+		 */
+		let live: ExtensionContext | undefined;
+		/**
+		 * Watch owned runs for a ship decided outside this session's prompt, once
+		 * a context exists to acquire the runtime with. Silent when there is no
+		 * runtime: a seat without pi-workflow is a working seat, and a warning per
+		 * turn would say otherwise.
+		 */
+		let unwatch: (() => void) | undefined;
+		const watch = (ctx: ExtensionContext): void => {
+			if (unwatch || !pi.events) return;
+			// Claimed before the await, so two events in the same tick cannot both
+			// subscribe.
+			unwatch = () => undefined;
+			const events = pi.events;
+			void (async () => {
+				try {
+					const client = await acquireWorkflowClient(events, ctx);
+					unwatch = watchShippedRuns({
+						client,
+						emit: (shipped) => events.emit(WORKFLOW_SHIPPED_CHANNEL, shipped),
+					});
+				} catch {
+					// No runtime, or one this seat was not built against: the
+					// `/plan ship` path still works and says so itself.
+				}
+			})();
+		};
 		pi.on("tool_result", (event, ctx) => {
+			live = ctx;
+			watch(ctx);
 			const notice = planStoredNotice(event, entry.currentMode());
 			if (notice) ctx.ui.notify(notice, "info");
 			// Phase 2 of the exit flow attaches here (M3-EXIT2, the
 			// `continueModeExit` seam in `exit-flow.ts`). Nothing of it ships yet.
 		});
+		pi.on("turn_start", (_event, ctx) => {
+			live = ctx;
+			watch(ctx);
+		});
+
+		// Flow C's trigger. The parked-run observer announces its own
+		// `{"ship": true}`; `watchShippedRuns` announces a decision made through
+		// `/workflow decide`, which never reaches that prompt. Both arrive here as
+		// one channel, and the announcement is not the authority: the digest is
+		// still checked against the stored plan, and a human still confirms.
+		if (pi.events) {
+			pi.events.on(WORKFLOW_SHIPPED_CHANNEL, (data) => {
+				if (!isWorkflowShipped(data)) return;
+				const ctx = live;
+				if (!ctx) return;
+				void (async () => {
+					try {
+						const plan = planForDigest(entry.seat().store, data.planDigest);
+						if (!plan) {
+							ctx.ui.notify(
+								`A run shipped plan digest \`${data.planDigest}\`, which no stored plan matches — publish it by hand from its handoff refs.`,
+								"warning",
+							);
+							return;
+						}
+						const go = await ctx.ui.confirm(
+							"Publish this run?",
+							`Run \`${data.runId}\` shipped \`${plan.slug}\` — ${plan.title}.\n` +
+								"Publication branches, cherry-picks, runs the repository's check on the host, and asks again before pushing.",
+						);
+						if (!go) return;
+						await entry.publish(plan, ctx, data.runId);
+					} catch (error) {
+						// A replaced session throws from its own context; a publication
+						// that cannot be reported is over either way.
+						void error;
+					}
+				})();
+			});
+		}
 		// A new, resumed or forked session replaces the one a dialog sequence was
 		// asked in, and an `ExtensionContext` from the old one throws. Ending the
 		// flow here is what keeps a half-answered exit from writing a record for a
 		// session that is gone.
 		pi.on("session_start", () => {
 			entry.abortExitFlow();
+			// The watcher holds a context from the session that is gone, and the
+			// announcement it would make could not be asked about anywhere.
+			unwatch?.();
+			unwatch = undefined;
+			live = undefined;
 		});
 		maestro.capabilities.register(CAPABILITIES.modes, {
 			current: entry.currentMode,

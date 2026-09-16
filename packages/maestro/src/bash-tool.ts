@@ -20,6 +20,7 @@ import {
 } from "./command-auditor.js";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
 import type { Mode } from "./mode.js";
+import type { AuditedBash } from "./readiness.js";
 import { analyzeShellProgram } from "./shell-program.js";
 
 const AVAILABLE_ALTERNATIVES = new Set([
@@ -212,4 +213,61 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 			"If Bash directs you to an exact dedicated tool, use it; set confirmBash only when the shell form is intentionally required.",
 		],
 	} as ToolDefinition;
+}
+
+/**
+ * The seat's own Bash tool, as a function the seat's own flows can call.
+ *
+ * Readiness creation and publication both need to run commands, and both must
+ * run them the way the MODEL's commands are run: through this tool, so the
+ * deterministic classifier, the ambiguity audit and the mode's confirmation
+ * policy all apply. Reaching for `execFileSync` instead would be a second,
+ * unaudited way to touch the host — exactly the shape the classifier exists to
+ * remove — so the adapter is here, beside the tool, and the flows take the
+ * narrow `AuditedBash` function type instead of a tool definition.
+ *
+ * The tool THROWS on a non-zero exit and on a refusal, with the output or the
+ * reason in the message; both are the same fact to a caller — the command did
+ * not do what was asked — so both become `{ok: false}` with that text.
+ */
+export function createAuditedBash(
+	tool: ToolDefinition,
+	ctx: ExtensionContext,
+	label = "maestro",
+): AuditedBash {
+	let ordinal = 0;
+	return async (command, intent) => {
+		ordinal += 1;
+		try {
+			const result = await tool.execute(
+				`${label}-${ordinal}`,
+				{ command, intent },
+				undefined,
+				undefined,
+				ctx,
+			);
+			return { ok: true, output: toolText(result) };
+		} catch (error) {
+			return {
+				ok: false,
+				output: error instanceof Error ? error.message : String(error),
+			};
+		}
+	};
+}
+
+/** Whatever text the tool returned, joined; images are not command output. */
+function toolText(result: { content?: unknown }): string {
+	if (!Array.isArray(result.content)) return "";
+	return result.content
+		.map((part) =>
+			typeof part === "object" &&
+			part !== null &&
+			"text" in part &&
+			typeof (part as { text?: unknown }).text === "string"
+				? (part as { text: string }).text
+				: "",
+		)
+		.filter(Boolean)
+		.join("\n");
 }

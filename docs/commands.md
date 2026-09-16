@@ -8,6 +8,7 @@
 | `/plan list` | Every stored plan: slug, title, deliverable count, when it was last written |
 | `/plan show <slug>` | Read one back whole: repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
 | `/plan run <slug> [cheap\|standard\|deep]` | Build the workflow input for a stored plan and hand it to the model. Effort defaults to `standard` |
+| `/plan ship <slug>` | Publish what a run produced: branch, cherry-pick, the repository's check on the host, one confirmation, push, and a pull request when the plan's policy asked for one |
 | `/plan rm <slug>` | Delete a stored plan, after a confirmation. Refused when the session has no UI to confirm with |
 
 `/plan` with no subcommand, or with a subcommand or effort it does not know,
@@ -22,11 +23,21 @@ Approval is not part of the command: the run parks at its `approve-plan`
 checkpoint and a human decides it. See
 [Authored plans](workflow-plans.md#running-a-plan).
 
-There is no publication verb. A `ship` subcommand arrives together with the
-publication path described in
-[Authored plans](workflow-plans.md#publishing-what-a-run-produced); until it is
-registered, the grammar above is the whole of `/plan` and publishing a run's
-handoff is manual `git` and `gh` work.
+`/plan ship` is the one verb that acts on the world, and it is the only place
+pi-maestro pushes. It reads the run's receipt through the workflow runtime,
+refuses unless the receipt's plan digest is the stored plan's, and then runs
+every command — `git fetch`, `git switch`, `git cherry-pick`, the check, `git
+push`, `gh pr create` — through the seat's audited Bash tool, so the classifier
+and the mode's confirmation policy apply to each. Any failure stops **before**
+the push and leaves the branch in place. It needs a UI (it asks before pushing)
+and the workflow runtime (it reads the receipt); without either it says so and
+does nothing. A plan whose policy is `publish: none` is refused by name. The ten
+steps, and what stops where, are in
+[Authored plans](workflow-plans.md#publishing-what-a-run-produced).
+
+A ship decided at the run's `ship` checkpoint announces itself on
+`maestro:workflow-shipped`, and the seat offers the same publication for the
+stored plan that digest matches — one confirmation first, then the steps above.
 
 ## Modes
 
@@ -89,6 +100,13 @@ Authored plans remain under:
 
 ```text
 <agentDir>/maestro/plans/<slug>/plan.json
+```
+
+`/plan ship` appends one receipt per publication, and never rewrites an earlier
+one — a second ship of the same plan is a real event:
+
+```text
+<agentDir>/maestro/plans/<slug>/publication.json
 ```
 
 `/plan run` writes the input it built beside the plan it built it from:

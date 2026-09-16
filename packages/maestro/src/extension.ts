@@ -158,12 +158,19 @@ export interface SeatEntry {
 		plan: Plan,
 		ctx: ExtensionContext,
 		runId?: string,
+		options?: PublishOptions,
 	): Promise<Publication>;
 	/** The `tool_result` trigger: phase 2, when the model's `plan` call stored. */
 	onToolResult(event: ToolResultEvent, ctx: ToolResultContext): Promise<void>;
-	/** A dialog opened by Pi or another extension; the exit flow defers. */
+	/** A dialog opened by Pi or another extension; both flows defer. */
 	notePromptStart(): void;
 	notePromptEnd(): void;
+}
+
+/** What the caller of a publication knows that publication does not. */
+export interface PublishOptions {
+	/** @see PublishDeps.requireShipDecision — set by the announcement path. */
+	readonly requireShipDecision?: boolean;
 }
 
 export function startSeat(
@@ -335,6 +342,7 @@ export function startSeat(
 		plan: Plan,
 		ctx: ExtensionContext,
 		runId?: string,
+		how: PublishOptions = {},
 	): Promise<Publication> => {
 		const refuse = (reason: string): Publication => {
 			ctx.ui.notify(reason, "error");
@@ -380,6 +388,7 @@ export function startSeat(
 			workflowRef: PLAN_WORKFLOW_REF,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(runId ? { runId } : {}),
+			...(how.requireShipDecision ? { requireShipDecision: true } : {}),
 		});
 	};
 
@@ -481,6 +490,10 @@ export default defineExtension(
 					unwatch = watchShippedRuns({
 						client,
 						emit: (shipped) => events.emit(WORKFLOW_SHIPPED_CHANNEL, shipped),
+						// A finished run whose ship gate proves nothing is named out
+						// loud in whatever session is live, because the alternative is
+						// a run with real handoffs that silently never publishes.
+						report: (message) => live?.ui.notify(message, "warning"),
 					});
 				} catch {
 					// No runtime, or one this seat was not built against: the
@@ -506,8 +519,11 @@ export default defineExtension(
 		// Flow C's trigger. The parked-run observer announces its own
 		// `{"ship": true}`; `watchShippedRuns` announces a decision made through
 		// `/workflow decide`, which never reaches that prompt. Both arrive here as
-		// one channel, and the announcement is not the authority: the digest is
-		// still checked against the stored plan, and a human still confirms.
+		// one channel, and the announcement is not the authority: publication
+		// re-inspects the run, PROVES `{"ship": true}` from its own `ship`
+		// checkpoint, checks the digest against the stored plan, and asks the one
+		// confirmation the spec names before it pushes. There is no second "was it
+		// shipped?" dialog, because that question now has an answer.
 		if (pi.events) {
 			pi.events.on(WORKFLOW_SHIPPED_CHANNEL, (data) => {
 				if (!isWorkflowShipped(data)) return;
@@ -523,13 +539,9 @@ export default defineExtension(
 							);
 							return;
 						}
-						const go = await ctx.ui.confirm(
-							"Publish this run?",
-							`Run \`${data.runId}\` shipped \`${plan.slug}\` — ${plan.title}.\n` +
-								"Publication branches, cherry-picks, runs the repository's check on the host, and asks again before pushing.",
-						);
-						if (!go) return;
-						await entry.publish(plan, ctx, data.runId);
+						await entry.publish(plan, ctx, data.runId, {
+							requireShipDecision: true,
+						});
 					} catch (error) {
 						// A replaced session throws from its own context; a publication
 						// that cannot be reported is over either way.

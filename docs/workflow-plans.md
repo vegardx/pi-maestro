@@ -355,7 +355,7 @@ The ten steps, in order, and where each one stops:
 
 | # | Step | Stops when |
 | --- | --- | --- |
-| 1 | `inspect(runId, {include: ["run","tasks"]})` — the receipt | the run cannot be inspected, or it carries no plan digest or no handoff |
+| 1 | `inspect(runId, {include: ["run","tasks","output"]})` — the receipt, read from the run's committed `run.output.receipt` | the run cannot be inspected, or it carries no plan digest or no handoff |
 | 2 | The receipt's digest against `planDigest(stored plan)` | they differ — reported as an error, and **nothing has run yet** |
 | 3 | Resolve each `refs/pi-subagent/handoffs/<run>/<attempt>`, fetching from the run's `cwd` first when it is another repository | a ref does not resolve in the publication repository |
 | 4 | `git switch -c pi-maestro/<slug>/<yyyymmdd-hhmm> <policy.publish.base>` | the base does not resolve, or the branch exists |
@@ -365,6 +365,16 @@ The ten steps, in order, and where each one stops:
 | 8 | `git push -u origin <branch>` | the push fails |
 | 9 | `gh pr create --base <base> --title <plan title> --body <receipt>`, when the policy says `pr` | `gh` fails. `gh` **absent** is not a failure: the publication degrades to `branch` with a warning, before anything is created |
 | 10 | Append the receipt to `<agentDir>/maestro/plans/<slug>/publication.json` | the file exists and is not an array of receipts — it is never overwritten |
+
+One more thing is checked between steps 1 and 2 when the publication was
+triggered by an announcement rather than by `/plan ship`: the run's own `ship`
+checkpoint must carry a decided `{"ship": true}`, read from
+`tasks[].checkpoint.decision.value` on the task whose `kind` is `checkpoint` and
+whose `key` is `ship`. The runtime shows that value only when the durable
+decision record matches the journalled digest, so it is the human's answer
+rather than a report of it. A gate that is undecided, or decided otherwise, is
+named — with the run id — and nothing runs. `/plan ship <slug>` does not check
+it, because typing the command is itself the decision.
 
 The pull-request body is the receipt: the plan digest, every handoff ref with
 its sha256 and size, the check that ran on the host, and the review verdicts
@@ -384,9 +394,13 @@ asks the runtime which completed runs carry this plan's digest and, when more
 than one does, asks which. A ship decided at the run's own `ship` checkpoint
 announces itself on `maestro:workflow-shipped` — from the checkpoint prompt, and
 from a listener on the runtime's own run observations, so a decision made with
-`/workflow decide` arrives too — and the seat offers the same publication for
-the stored plan that digest matches. The announcement is not the authority: the
-digest is still checked, and step 7 still asks.
+`/workflow decide` arrives too — and the seat runs the same publication for the
+stored plan that digest matches. The announcement is not the authority and is
+never treated as one: the observer announces only a run whose `ship` checkpoint
+already proves `{"ship": true}`, publication proves it again from its own
+inspection, the digest is still checked, and step 7 still asks. There is no
+second dialog asking whether the run was shipped, because that question is now
+answered from the run.
 
 The owned `@vegardx/pi-workflow` project owns everything between the input and
 that receipt: runtime graph compilation, repository and worktree authority,

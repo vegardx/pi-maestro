@@ -6,11 +6,13 @@
 // half-written state that is valid only because the next call has not arrived.
 // A plan is either storable or it comes back with everything wrong with it.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPlanTool } from "../packages/maestro/src/authoring.js";
+import type { ModeName } from "../packages/maestro/src/mode.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 
 const dirs: string[] = [];
@@ -19,11 +21,29 @@ afterEach(() => {
 		rmSync(dirs.pop() as string, { recursive: true, force: true });
 });
 
-function authoring() {
-	const root = mkdtempSync(join(tmpdir(), "maestro-authoring-"));
-	dirs.push(root);
+function temp(label: string): string {
+	const dir = mkdtempSync(join(tmpdir(), `maestro-${label}-`));
+	dirs.push(dir);
+	return dir;
+}
+
+// The seat sits in a real repository, and a plan's repo path is validated
+// against one, so the fixture is a real repository too. A fake path here would
+// test only that validation had been switched off.
+function repo(): string {
+	const dir = temp("authoring-repo");
+	execFileSync("git", ["init", "--quiet"], { cwd: dir, stdio: "ignore" });
+	return dir;
+}
+
+function authoring(cwd: string = repo(), mode?: ModeName) {
+	const root = temp("authoring");
 	const store = createPlanStore(root);
-	const tool = createPlanTool({ store, cwd: () => "/repo" });
+	const tool = createPlanTool({
+		store,
+		cwd: () => cwd,
+		...(mode ? { mode: () => mode } : {}),
+	});
 	const write = (plan: unknown) =>
 		(
 			tool.execute as unknown as (
@@ -31,10 +51,14 @@ function authoring() {
 				p: unknown,
 			) => Promise<{
 				content: { text: string }[];
-				details: { stored: boolean; errors: readonly string[] };
+				details: {
+					stored: boolean;
+					errors: readonly string[];
+					warnings: readonly string[];
+				};
 			}>
 		)("call-1", plan);
-	return { store, tool, write };
+	return { store, tool, write, cwd };
 }
 
 const minimal = {
@@ -87,15 +111,63 @@ describe("a plan is written whole", () => {
 		expect(text).toContain(
 			"- ui: 2 tasks, 1 delegated review intent(s) after api reads api",
 		);
-		expect(text).toContain("Workflow execution is unavailable");
+		// The trailer is the offer, not a status line: both ways to start a run,
+		// and who approves it — which is never this tool and never the model.
+		expect(text).toContain("Run it: `/plan run arc [cheap|standard|deep]`");
+		expect(text).toContain(
+			'workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }',
+		);
+		expect(text).toContain("approve-plan");
+		expect(text).not.toContain("Workflow execution is unavailable");
+	});
+
+	it("offers the way out of plan mode, which otherwise has none", async () => {
+		// Plan mode is a tool posture with no exit path, so a stored plan is the
+		// nearest thing it has to a completion point. Both ways on are named:
+		// hand the plan to a run, or leave the posture and edit by hand.
+		const inPlanMode = await authoring(repo(), "plan").write(minimal);
+		const text = inPlanMode.content[0].text;
+		expect(text).toContain("`/mode auto`");
+		expect(text).toContain("Run it: `/plan run arc");
+
+		// Not said in a posture that can already write: it would be noise.
+		const inAuto = await authoring(repo(), "auto").write(minimal);
+		expect(inAuto.content[0].text).not.toContain("/mode auto");
+		expect(inAuto.content[0].text).toContain("Run it: `/plan run arc");
 	});
 
 	it("defaults the repo to where the maestro is sitting", async () => {
 		const a = authoring();
 		await a.write(minimal);
 		expect(a.store.loadPlan("arc")?.repos).toEqual([
-			{ key: "main", path: "/repo" },
+			{ key: "main", path: a.cwd },
 		]);
+	});
+
+	it("stores a plan whose repository is dirty, and says so", async () => {
+		// Non-fatal on purpose: authoring a plan while the tree has edits in it
+		// is the normal case. The author is told because every worktree the run
+		// creates branches from HEAD, so those edits are not in the run.
+		const a = authoring();
+		writeFileSync(join(a.cwd, "scratch.txt"), "in progress\n", "utf8");
+		const result = await a.write(minimal);
+		expect(result.details.stored).toBe(true);
+		expect(result.details.warnings).toContainEqual(
+			expect.stringContaining("uncommitted changes"),
+		);
+		expect(result.content[0].text).toContain("uncommitted changes");
+	});
+
+	it("refuses a repository path that is not a working-tree root", async () => {
+		const a = authoring();
+		const result = await a.write({
+			...minimal,
+			repos: [{ key: "main", path: temp("not-a-repo") }],
+		});
+		expect(result.details.stored).toBe(false);
+		expect(result.content[0].text).toContain(
+			"is not an existing Git working-tree root",
+		);
 	});
 
 	it("takes the same slug again as a rewrite, needing no merge", async () => {
@@ -181,6 +253,11 @@ describe("what the schema will not let an author say", () => {
 		expect(schema).toContain('"by"');
 		expect(schema).toContain("lens");
 		expect(schema).toContain("model");
+		// Routable review intent: a tier and a family request, neither of which
+		// pins the plan to a host that happens to have one exact model.
+		expect(schema).toContain("tier");
+		expect(schema).toContain("heavy");
+		expect(schema).toContain("diverse");
 		expect(schema).not.toContain("persona");
 		expect(schema).not.toContain('"agent"');
 		expect(schema).not.toContain('"worker"');

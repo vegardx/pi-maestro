@@ -31,6 +31,7 @@ import {
 	runPlanCommand,
 } from "../packages/maestro/src/plan-command.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
+import type { Publication } from "../packages/maestro/src/publish.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 
 const dirs: string[] = [];
@@ -99,9 +100,15 @@ interface Harness {
 	readonly store: ReturnType<typeof createPlanStore>;
 	readonly steers: string[];
 	readonly confirms: string[];
+	readonly shipped: Plan[];
 	run(
 		args: string,
-		options?: { confirm?: boolean; hasUI?: boolean; steer?: boolean },
+		options?: {
+			confirm?: boolean;
+			hasUI?: boolean;
+			steer?: boolean;
+			ship?: Publication | false;
+		},
 	): Promise<PlanCommandOutcome>;
 }
 
@@ -111,12 +118,14 @@ function harness(): Harness {
 	const store = createPlanStore(plansRoot(agentDir));
 	const steers: string[] = [];
 	const confirms: string[] = [];
+	const shipped: Plan[] = [];
 	return {
 		agentDir,
 		root,
 		store,
 		steers,
 		confirms,
+		shipped,
 		run: (args, options = {}) =>
 			runPlanCommand(
 				{
@@ -125,6 +134,16 @@ function harness(): Harness {
 					...(options.steer === false
 						? {}
 						: { sendUserMessage: (content: string) => steers.push(content) }),
+					// Absent unless the test asks for it: a seat with no workflow
+					// runtime has no publication, which is its own outcome.
+					...(options.ship === undefined || options.ship === false
+						? {}
+						: {
+								ship: async (plan: Plan) => {
+									shipped.push(plan);
+									return options.ship as Publication;
+								},
+							}),
 				},
 				parsePlanCommand(args),
 				{
@@ -411,5 +430,73 @@ describe("one path, not two", () => {
 		expect(workflowInputFile("arc", h.agentDir)).toBe(
 			join(dirname(planFile("arc", h.agentDir)), "workflow-input.json"),
 		);
+	});
+});
+
+describe("/plan ship hands a stored plan to publication", () => {
+	const published = (overrides: Partial<Publication> = {}): Publication => ({
+		ok: true,
+		commands: [],
+		branch: "pi-maestro/arc/20260917-0830",
+		mode: "pr",
+		prUrl: "https://github.com/o/r/pull/7",
+		...overrides,
+	});
+
+	it("parses the verb and refuses anything but one slug", () => {
+		expect(parsePlanCommand("ship arc")).toEqual({ kind: "ship", slug: "arc" });
+		expect(parsePlanCommand("ship")).toMatchObject({ kind: "usage" });
+		expect(parsePlanCommand("ship arc two")).toMatchObject({ kind: "usage" });
+		expect(PLAN_COMMAND_USAGE).toContain("ship <slug>");
+	});
+
+	it("says a seat with no publication cannot publish, and names the manual way", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("ship arc");
+		expect(outcome.level).toBe("warning");
+		expect(outcome.message).toContain("workflow runtime");
+		expect(h.shipped).toEqual([]);
+	});
+
+	it("refuses to publish an unknown slug without calling publication", async () => {
+		const h = harness();
+		const outcome = await h.run("ship nope", { ship: published() });
+		expect(outcome.level).toBe("warning");
+		expect(outcome.message).toContain("No stored plan");
+		expect(h.shipped).toEqual([]);
+	});
+
+	it("refuses in a session with no dialogs, because publication pushes", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("ship arc", {
+			hasUI: false,
+			ship: published(),
+		});
+		expect(outcome.level).toBe("error");
+		expect(outcome.message).toContain("confirm");
+		expect(h.shipped).toEqual([]);
+	});
+
+	it("reports the branch and the pull request it published", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("ship arc", { ship: published() });
+		expect(h.shipped.map((p) => p.slug)).toEqual(["arc"]);
+		expect(outcome.level).toBe("info");
+		expect(outcome.message).toContain("pi-maestro/arc/20260917-0830");
+		expect(outcome.message).toContain("https://github.com/o/r/pull/7");
+	});
+
+	it("names the step a stopped publication stopped at, and the branch it left", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("ship arc", {
+			ship: published({ ok: false, stoppedAt: "check", prUrl: undefined }),
+		});
+		expect(outcome.level).toBe("warning");
+		expect(outcome.message).toContain("`check`");
+		expect(outcome.message).toContain("pi-maestro/arc/20260917-0830");
 	});
 });

@@ -12,7 +12,13 @@
 // the input beside the plan, tells the user, and steers the session with the
 // exact call to make — a hand-off, not an execution.
 //
-// The grammar is four verbs and nothing clever. Anything it does not recognise
+// `ship` is the one verb that acts on the world, and it does not act here
+// either: it hands a stored plan and a finished run to `publish.ts`, which runs
+// every command through the seat's audited Bash tool. The injected `ship` is
+// absent on a seat with no workflow runtime, and the command says so rather
+// than pretending publication is a thing this file can do alone.
+//
+// The grammar is five verbs and nothing clever. Anything it does not recognise
 // gets the usage line rather than a guess, because a mistyped effort that
 // silently became `standard` would spend (or fail to spend) a deep run's budget.
 
@@ -36,13 +42,14 @@ import {
 	toWorkflowInput,
 	type WorkflowInput,
 } from "./plan-input.js";
+import type { Publication } from "./publish.js";
 import type { PlanStore } from "./store.js";
 
 /** The workflow a stored plan is handed to. Named once. */
 export const PLAN_WORKFLOW_REF = "plan-to-ship";
 
 export const PLAN_COMMAND_USAGE =
-	`/plan list | show <slug> | run <slug> [${EFFORTS.join("|")}] | rm <slug>` as const;
+	`/plan list | show <slug> | run <slug> [${EFFORTS.join("|")}] | ship <slug> | rm <slug>` as const;
 
 /**
  * How much workflow input goes into the session inline.
@@ -60,6 +67,7 @@ export type PlanCommand =
 	| { readonly kind: "list" }
 	| { readonly kind: "show"; readonly slug: string }
 	| { readonly kind: "run"; readonly slug: string; readonly effort: Effort }
+	| { readonly kind: "ship"; readonly slug: string }
 	| { readonly kind: "rm"; readonly slug: string }
 	/** Not a verb: what to print when the grammar did not match. */
 	| { readonly kind: "usage"; readonly problem?: string };
@@ -81,6 +89,7 @@ export function parsePlanCommand(args: string): PlanCommand {
 				? { kind: "list" }
 				: { kind: "usage", problem: "`/plan list` takes no arguments" };
 		case "show":
+		case "ship":
 		case "rm": {
 			if (rest.length !== 1)
 				return {
@@ -276,10 +285,26 @@ export function renderHandoff(
 	].join("\n");
 }
 
+/**
+ * Publication, injected.
+ *
+ * A function rather than a provider and a Bash tool, so this file keeps knowing
+ * nothing about either: the seat builds it from the acquired workflow client and
+ * its own audited Bash runner, and a test hands over a recorder. Absent means a
+ * seat that cannot publish — no workflow runtime, or no Bash to publish with —
+ * and `ship` says which rather than failing silently.
+ */
+export type PlanShip = (
+	plan: Plan,
+	ctx: Pick<ExtensionCommandContext, "ui" | "hasUI">,
+) => Promise<Publication>;
+
 export interface PlanCommandDeps {
 	readonly store: PlanStore;
 	/** Where the exported workflow input for a slug belongs. */
 	readonly inputPath: (slug: string) => string;
+	/** @see PlanShip */
+	readonly ship?: PlanShip;
 	/**
 	 * How the session is steered. Optional because a host that cannot inject a
 	 * message must still be able to run the command — it gets the call printed
@@ -371,6 +396,45 @@ export async function runPlanCommand(
 			};
 		}
 
+		case "ship": {
+			const plan = deps.store.loadPlan(command.slug);
+			if (!plan) return unknownSlug(command.slug);
+			if (!deps.ship)
+				return {
+					level: "warning",
+					message:
+						`This seat cannot publish \`${command.slug}\`: publication needs the workflow runtime ` +
+						"(to read the run's receipt) and the seat's audited Bash tool (to branch, check and push). " +
+						"Cherry-pick the run's handoff refs by hand — `/workflow` names them.",
+				};
+			// Publication asks before it pushes, and a session with no dialogs
+			// cannot answer. Refusing here is the same rule `/plan rm` follows.
+			if (!ctx.hasUI)
+				return {
+					level: "error",
+					message:
+						`\`/plan ship\` pushes and needs a UI to confirm with, and this session has none. ` +
+						"Publish by hand if you mean it.",
+				};
+			const published = await deps.ship(plan, ctx);
+			// Every refusal was already notified by `publishPlan` as it happened,
+			// with the branch it left behind named in it; this is the one line the
+			// command itself owes the caller.
+			return published.ok
+				? {
+						level: "info",
+						message:
+							`Published \`${command.slug}\` as \`${published.branch}\`` +
+							`${published.prUrl ? ` — ${published.prUrl}` : ""}.`,
+					}
+				: {
+						level: "warning",
+						message:
+							`\`/plan ship ${command.slug}\` stopped at \`${published.stoppedAt}\`` +
+							`${published.branch ? `; the branch \`${published.branch}\` is in place` : ""}.`,
+					};
+		}
+
 		case "rm": {
 			if (!deps.store.exists(command.slug)) return unknownSlug(command.slug);
 			// A delete with no one to ask is a delete nobody agreed to. Refusing
@@ -402,7 +466,7 @@ export function createPlanCommand(deps: PlanCommandDeps): {
 	handler(args: string, ctx: ExtensionCommandContext): Promise<void>;
 } {
 	return {
-		description: `List, show, run or remove a stored plan. ${PLAN_COMMAND_USAGE}`,
+		description: `List, show, run, publish or remove a stored plan. ${PLAN_COMMAND_USAGE}`,
 		handler: async (args, ctx) => {
 			const outcome = await runPlanCommand(deps, parsePlanCommand(args), ctx);
 			ctx.ui.notify(outcome.message, outcome.level);

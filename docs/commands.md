@@ -22,8 +22,11 @@ Approval is not part of the command: the run parks at its `approve-plan`
 checkpoint and a human decides it. See
 [Authored plans](workflow-plans.md#running-a-plan).
 
-Publication commands are intentionally absent until the owned workflow
-extension is built.
+There is no publication verb. A `ship` subcommand arrives together with the
+publication path described in
+[Authored plans](workflow-plans.md#publishing-what-a-run-produced); until it is
+registered, the grammar above is the whole of `/plan` and publishing a run's
+handoff is manual `git` and `gh` work.
 
 ## Modes
 
@@ -33,10 +36,16 @@ extension is built.
 | `auto` | available | effect policy with ambiguity audit and confirmations | none |
 | `hack` | available | reduced, configurable effect policy | none |
 
+A workflow run may be started from any mode, including `plan`: a run mutates
+neither the working tree nor the host, and what it produces reaches a branch
+only through publication, which a human decides separately.
+
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
-  together. Delegated reviews use `{lens, model, skill?}`.
+  together. Delegated reviews use `{lens, skill?, model?, tier?, diverse?}`, and
+  a deliverable may carry optional `stages` beside a plan-wide `policy` — see
+  [Authored plans](workflow-plans.md#stages).
 - `bash` runs on the host after mode-aware classification.
 - `delete` moves explicitly named paths to recoverable trash.
 - Pi's built-in `write` and `edit` remain available in auto and hack.
@@ -62,4 +71,4 @@ Authored plans remain under:
 
 That file is an export, not state: it is rewritten by every `/plan run` and
 nothing reads it back. There is no workflow run state or compiled workflow
-bundle until the owned workflow extension is introduced.
+bundle in this package; a run's state belongs to the runtime that owns it.

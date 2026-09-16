@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getModelMeta, shortModelName } from "@vegardx/pi-models";
+import { getModelMeta, shortModelName } from "@vegardx/pi-maestro/model-router";
 import { describe, expect, it } from "vitest";
 
 function ctxWith(

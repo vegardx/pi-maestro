@@ -5,11 +5,8 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	activeBinding,
-	familyOfModel,
-	readModelsConfig,
-} from "@vegardx/pi-models";
+import { readModelsConfig } from "@vegardx/pi-maestro/model-router";
+import { activeBinding, familyOfModel } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 let cwd: string;

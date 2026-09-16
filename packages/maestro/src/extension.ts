@@ -9,7 +9,9 @@ import { createAuditedBash } from "./bash-tool.js";
 import {
 	beginModeExit,
 	createModeExitController,
+	type ExitFlowPhase2Hook,
 	type ModeExitHook,
+	type ToolResultContext,
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
@@ -120,8 +122,9 @@ export interface SeatHost {
 	/**
 	 * Pi's shared bus, where the workflow runtime answers discovery and where a
 	 * decided `ship` is announced. Optional: a seat on a host without one keeps
-	 * working, and `/plan ship` says that publication needs the runtime rather
-	 * than failing somewhere deeper.
+	 * working — the plan-mode exit takes its documented fallback, and
+	 * `/plan ship` says that publication needs the runtime rather than failing
+	 * somewhere deeper.
 	 */
 	readonly events?: WorkflowEventBus;
 }
@@ -133,6 +136,8 @@ export interface StartSeatOptions {
 	readonly pendingExit?: () => boolean;
 	/** @see beginModeExit — overridable so a test can watch the seam fire. */
 	readonly beginModeExit?: ModeExitHook;
+	/** Phase 2 — overridable so a test can watch the `tool_result` trigger fire. */
+	readonly continueModeExit?: ExitFlowPhase2Hook;
 }
 
 export interface SeatEntry {
@@ -154,6 +159,11 @@ export interface SeatEntry {
 		ctx: ExtensionContext,
 		runId?: string,
 	): Promise<Publication>;
+	/** The `tool_result` trigger: phase 2, when the model's `plan` call stored. */
+	onToolResult(event: ToolResultEvent, ctx: ToolResultContext): Promise<void>;
+	/** A dialog opened by Pi or another extension; the exit flow defers. */
+	notePromptStart(): void;
+	notePromptEnd(): void;
 }
 
 export function startSeat(
@@ -189,11 +199,39 @@ export function startSeat(
 			}
 		});
 
+	const events = pi.events;
 	const exit = createModeExitController({
 		setMode: (name) => {
 			seat().setMode(name);
 		},
 		cwd,
+		// Phase 2 reads the document the model just wrote and writes accepted
+		// patches back to it, so it gets the seat's own store rather than a
+		// second reader of the same directory.
+		store: () => seat().store,
+		// Repository creation goes through the seat's audited `bash` tool, the
+		// same adapter publication uses, so the classifier and this mode's
+		// confirmation policy apply to `git init` exactly as they do to a
+		// cherry-pick. A seat whose tool set has no `bash` simply cannot create
+		// one, and readiness says so.
+		bash: (ctx) => {
+			const tool = seat()
+				.tools.definitionsFor("maestro")
+				.find((definition) => definition.name === "bash");
+			// The controller declares only what it reads of the context; the
+			// value here is the `tool_result` handler's own `ExtensionContext`,
+			// which is what the tool needs to confirm and to render.
+			return tool
+				? createAuditedBash(tool, ctx as ExtensionContext, "maestro-readiness")
+				: undefined;
+		},
+		...(events
+			? {
+					workflow: (ctx, notify) =>
+						acquireWorkflowClientOrWarn(events, ctx, notify, "run"),
+				}
+			: {}),
+		...(options.continueModeExit ? { phase2: options.continueModeExit } : {}),
 		...(options.agentDir ? { agentDir: options.agentDir } : {}),
 		...(pi.sendUserMessage
 			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
@@ -368,6 +406,9 @@ export function startSeat(
 		pendingExit,
 		abortExitFlow: exit.abort,
 		publish,
+		onToolResult: exit.onToolResult,
+		notePromptStart: exit.notePromptStart,
+		notePromptEnd: exit.notePromptEnd,
 	};
 }
 
@@ -447,13 +488,15 @@ export default defineExtension(
 				}
 			})();
 		};
-		pi.on("tool_result", (event, ctx) => {
+		pi.on("tool_result", async (event, ctx) => {
 			live = ctx;
 			watch(ctx);
 			const notice = planStoredNotice(event, entry.currentMode());
 			if (notice) ctx.ui.notify(notice, "info");
-			// Phase 2 of the exit flow attaches here (M3-EXIT2, the
-			// `continueModeExit` seam in `exit-flow.ts`). Nothing of it ships yet.
+			// Phase 2 of the exit flow. It fires only when this very session has
+			// an exit in progress, and it reads the session id from THIS context
+			// rather than from whatever the `/mode` handler learned earlier.
+			await entry.onToolResult(event, ctx);
 		});
 		pi.on("turn_start", (_event, ctx) => {
 			live = ctx;
@@ -495,6 +538,18 @@ export default defineExtension(
 				})();
 			});
 		}
+		// A dialog opened by Pi or another extension replaces an open one and the
+		// replaced promise never resolves, so the exit flow defers while one is on
+		// screen. The event is not in this pi version's typed overloads and `on`
+		// accepts any name, so the subscription is made through a widened
+		// signature: on a host that never emits it, nothing defers and nothing
+		// breaks.
+		const subscribe = pi.on.bind(pi) as unknown as (
+			event: string,
+			handler: () => void,
+		) => void;
+		subscribe("ui_prompt_start", () => entry.notePromptStart());
+		subscribe("ui_prompt_end", () => entry.notePromptEnd());
 		// A new, resumed or forked session replaces the one a dialog sequence was
 		// asked in, and an `ExtensionContext` from the old one throws. Ending the
 		// flow here is what keeps a half-answered exit from writing a record for a

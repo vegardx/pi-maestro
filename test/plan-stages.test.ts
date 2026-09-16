@@ -338,6 +338,55 @@ describe("what a stage list may not say", () => {
 		);
 	});
 
+	it("refuses a lens id the compiled document could not carry", () => {
+		// A lens id is a fan-out key and reaches `@vegardx/pi-workflow` inside the
+		// compiled stage document, whose schema accepts `^[a-z][a-z0-9-]*$`. A
+		// deliverable id may start with a digit; a lens id may not, or the plan
+		// validates here and compiles nowhere. Both places that name a lens are
+		// held to it, and every one of them is reported at once.
+		const errors = errorsOf(
+			staged([
+				implement,
+				{
+					use: "review-fan-out",
+					id: "review",
+					lenses: [{ id: "2fa" }, { id: "-leading" }, { id: "contracts" }],
+				},
+			]),
+		);
+		expect(errors).toContainEqual(
+			expect.stringContaining("`2fa` is not a safe review lens"),
+		);
+		expect(errors).toContainEqual(
+			expect.stringContaining("`-leading` is not a safe review lens"),
+		);
+		expect(errors.join("\n")).toContain("starts with a lowercase letter");
+		expect(
+			errors.filter((error) => error.includes("not a safe review lens")),
+		).toHaveLength(2);
+
+		// The same rule, and the same message, for a task's own `by`.
+		const byLens = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("api", { tasks: [task("t", { lens: "2fa" })] }),
+				],
+			}),
+		);
+		expect(byLens).toContainEqual(
+			expect.stringContaining("`2fa` is not a safe review lens"),
+		);
+		expect(
+			errorsOf(
+				plan({
+					deliverables: [
+						deliverable("api", { tasks: [task("t", { lens: "a2" })] }),
+					],
+				}),
+			),
+		).toEqual([]);
+	});
+
 	it("reports every wrong stage at once", () => {
 		// The whole list is walked even after a bad stage: an author fixing one
 		// stage per round trip is an author who starts guessing.

@@ -83,6 +83,18 @@ export const gitRepoProbe: RepoProbe = (path) => {
 export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
+ * What a review lens id may look like: `ID_RE`, minus the leading digit.
+ *
+ * Narrower than a deliverable id for a reason that lives in another package. A
+ * lens id is a fan-out key, it reaches `@vegardx/pi-workflow` inside the
+ * compiled stage document, and that document's schema accepts
+ * `^[a-z][a-z0-9-]*$` — so a lens named `2fa` is a plan that validates here and
+ * cannot be compiled anywhere. Refusing it while the plan is being written is
+ * the whole point of validating the plan.
+ */
+export const LENS_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+/**
  * A task compiled into its own read-only workflow stage. There is no agent
  * kind: a writer is authored as a deliverable, never as delegated work.
  */
@@ -153,7 +165,7 @@ export type Escalation = (typeof ESCALATIONS)[number];
 
 /**
  * One point of view in a `review-fan-out`. `id` is the fan-out key, so it is
- * as narrow as a deliverable id; a lens named twice is not an error — the
+ * `LENS_ID_RE`; a lens named twice is not an error — the
  * compiler suffixes duplicates `-2`, `-3` by declaration ordinal, which is
  * how the same lens runs twice under two models.
  */
@@ -589,8 +601,8 @@ function validateTasks(
 		if (!t.title.trim()) errors.push(`${at}: no title`);
 		// No agent-kind check: delegated tasks compile to read-only workflow stages.
 		if (t.by) {
-			if (!ID_RE.test(t.by.lens))
-				errors.push(`${at}: \`${t.by.lens}\` is not a safe review lens`);
+			if (!LENS_ID_RE.test(t.by.lens))
+				errors.push(`${at}: ${lensIdProblem(t.by.lens)}`);
 			validateReviewRouting(t.by, at, errors);
 		}
 	}
@@ -628,6 +640,21 @@ function validateProse(
  * the same request in two places, and a rule that held in one of them would be
  * a rule an author could route around by moving the field.
  */
+/**
+ * Why this is not a lens id, in one sentence that names the rule.
+ *
+ * Said in one place because `tasks[].by.lens` and a `review-fan-out` lens id
+ * are the same key in the compiled document, and two messages for one rule is
+ * how the two drift.
+ */
+function lensIdProblem(id: unknown): string {
+	return (
+		`\`${String(id)}\` is not a safe review lens — a lens id is a workflow ` +
+		"fan-out key, so it starts with a lowercase letter and continues with " +
+		"lowercase letters, digits and hyphens"
+	);
+}
+
 function validateReviewRouting(
 	routing: {
 		readonly tier?: ReviewTier;
@@ -802,10 +829,8 @@ function validateStages(
 					);
 				for (const [j, lens] of lenses.entries()) {
 					const lensAt = `${at}.lenses[${j}]`;
-					if (typeof lens?.id !== "string" || !ID_RE.test(lens.id))
-						errors.push(
-							`${lensAt}: \`${String(lens?.id)}\` is not a safe review lens`,
-						);
+					if (typeof lens?.id !== "string" || !LENS_ID_RE.test(lens.id))
+						errors.push(`${lensAt}: ${lensIdProblem(lens?.id)}`);
 					if (lens) validateReviewRouting(lens, lensAt, errors);
 				}
 				if (

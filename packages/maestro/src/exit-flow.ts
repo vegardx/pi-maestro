@@ -608,6 +608,17 @@ export interface ModeExitControllerDeps {
 	) => Promise<WorkflowReadClient | undefined>;
 	/** Phase 2 itself. Overridable so a test can watch the trigger fire. */
 	readonly phase2?: ExitFlowPhase2Hook;
+	/**
+	 * The seat's one dialog gate.
+	 *
+	 * Injected rather than owned so that everything on the seat that opens a
+	 * dialog — this flow, and publication — defers behind the SAME count of
+	 * outstanding foreign prompts. Two gates would be two owners of one screen,
+	 * and only one of them would ever hear `ui_prompt_start`. A controller built
+	 * without one makes its own, which is the right answer for a caller that
+	 * opens no other dialogs.
+	 */
+	readonly gate?: DialogGate;
 	/** How long the blind review may take. */
 	readonly timeoutMs?: number;
 }
@@ -643,7 +654,7 @@ export function createModeExitController(
 	let phase2Controller: AbortController | undefined;
 	let phase2InFlight = false;
 	let last: ExitFlowOutcome | undefined;
-	const gate = createDialogGate();
+	const gate = deps.gate ?? createDialogGate();
 
 	const hook: ModeExitHook = async (previous, next, ctx) => {
 		// Only the way out of plan mode, and only where dialogs exist: a session

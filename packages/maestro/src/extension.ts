@@ -8,6 +8,7 @@ import { defineExtension } from "@vegardx/pi-core";
 import { createAuditedBash } from "./bash-tool.js";
 import {
 	beginModeExit,
+	createDialogGate,
 	createModeExitController,
 	type ExitFlowPhase2Hook,
 	type ModeExitHook,
@@ -20,6 +21,7 @@ import type { Plan } from "./plan.js";
 import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
 import { EFFORTS, planDigest } from "./plan-input.js";
 import {
+	gatedPublishUI,
 	isWorkflowShipped,
 	type Publication,
 	shipPlan,
@@ -207,11 +209,22 @@ export function startSeat(
 		});
 
 	const events = pi.events;
+	/**
+	 * One gate for every dialog this seat opens.
+	 *
+	 * The exit flow and publication are both dialog sequences on the same
+	 * screen, and Pi's dialogs have no queue. Built here, handed to the exit
+	 * controller and wrapped around publication's UI, so that
+	 * `ui_prompt_start`/`ui_prompt_end` — which arrive once, on `notePrompt*` —
+	 * defer both.
+	 */
+	const gate = createDialogGate();
 	const exit = createModeExitController({
 		setMode: (name) => {
 			seat().setMode(name);
 		},
 		cwd,
+		gate,
 		// Phase 2 reads the document the model just wrote and writes accepted
 		// patches back to it, so it gets the seat's own store rather than a
 		// second reader of the same directory.
@@ -384,7 +397,9 @@ export function startSeat(
 			plan,
 			provider: client,
 			bash: createAuditedBash(bashTool, ctx, "maestro-publish"),
-			ui: ctx.ui,
+			// Through the seat's one gate: a publication confirm must not land on
+			// top of a dialog Pi or another extension already has open.
+			ui: gatedPublishUI(ctx.ui, gate),
 			workflowRef: PLAN_WORKFLOW_REF,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(runId ? { runId } : {}),

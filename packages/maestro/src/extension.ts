@@ -352,6 +352,9 @@ export function startSeat(
 			return seat().store;
 		},
 		inputPath: (slug) => workflowInputFile(slug, options.agentDir),
+		// `/plan`'s handler passes the whole command context through; `PlanShip`
+		// narrows it to `ui` and `hasUI` so a test can hand over a fake, not
+		// because the value here is ever less than a session context.
 		ship: (plan, ctx) => publish(plan, ctx as ExtensionContext),
 		...(pi.sendUserMessage
 			? { sendUserMessage: pi.sendUserMessage.bind(pi) }

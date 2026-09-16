@@ -24,6 +24,15 @@ export const PLAN_FILE = "plan.json";
 export const WORKFLOW_INPUT_FILE = "workflow-input.json";
 
 /**
+ * Where publication receipts accumulate, one file per plan.
+ *
+ * An APPEND-ONLY array: a second ship of the same plan is a real event, and a
+ * file overwritten on re-ship would lose the branch and the pull request the
+ * first one made.
+ */
+export const PUBLICATION_FILE = "publication.json";
+
+/**
  * Where a plan-mode exit in progress is recorded, one file per session.
  *
  * Under `plans/` on purpose, and a dot-directory there cannot be mistaken for
@@ -56,6 +65,11 @@ export function planFile(slug: string, agentDir?: string): string {
 /** `<agentDir>/maestro/plans/<slug>/workflow-input.json` */
 export function workflowInputFile(slug: string, agentDir?: string): string {
 	return join(planDir(slug, agentDir), WORKFLOW_INPUT_FILE);
+}
+
+/** `<agentDir>/maestro/plans/<slug>/publication.json` */
+export function publicationFile(slug: string, agentDir?: string): string {
+	return join(planDir(slug, agentDir), PUBLICATION_FILE);
 }
 
 /** `<agentDir>/maestro/plans/.pending` */

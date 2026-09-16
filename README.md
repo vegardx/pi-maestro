@@ -7,7 +7,8 @@ Pi-maestro intentionally does not own delegated execution, workflow scheduling,
 or web research:
 
 - delegated work is provided independently by `@vegardx/pi-subagent`;
-- workflow execution is unavailable until `@vegardx/pi-workflow` is built;
+- workflow execution is provided independently by `@vegardx/pi-workflow`, which
+  runs a stored plan through its `plan-to-ship` workflow;
 - web tooling is unavailable until the owned replacement is built.
 
 ## Seat

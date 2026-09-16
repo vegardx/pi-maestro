@@ -45,19 +45,22 @@ Plans are validated and stored under:
 <agentDir>/maestro/plans/<slug>/plan.json
 ```
 
-They are not executable yet. The future owned workflow extension will define
-compilation, approval, execution, recovery, and publication.
+Storing a plan is not running one. `/plan run <slug> [cheap|standard|deep]`
+builds the workflow input and hands the session a
+`workflow_run { ref: "plan-to-ship", input }` call; standalone
+`@vegardx/pi-workflow` owns compilation, approval, execution, recovery, and
+publication from there.
 
 ## Questions and delegation
 
 - `ask_user_question` is provided by
   `@juicesharp/rpiv-ask-user-question`.
 - `subagent` is provided independently by `@vegardx/pi-subagent`.
-- workflow and web tools are unavailable until their owned replacements are
-  built.
+- workflow tools are provided independently by `@vegardx/pi-workflow`; web
+  tools are unavailable until their owned replacement is built.
 - the `repository-lifecycle` skill guides direct commits, pushes, pull requests,
-  checks, and checked rebase merges. Future workflow postflight shipping uses a
-  separate approved harness authority rather than model-selected Bash.
+  checks, and checked rebase merges. Shipping downstream of a plan run belongs
+  to the workflow runtime's own harness authority, not to model-selected Bash.
 
 ## Footer
 

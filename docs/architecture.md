@@ -16,7 +16,7 @@ interactive seat
 
 standalone packages
   @vegardx/pi-subagent   delegated execution and operator UX
-  @vegardx/pi-workflow   deferred
+  @vegardx/pi-workflow   durable workflow runs, including plan-to-ship
   owned web extension    deferred
 ```
 
@@ -32,7 +32,7 @@ pipeline, question transport, web stack, or recovery layer in pi-maestro.
 | Direct seat bash classification | pi-maestro |
 | Recoverable delete | pi-maestro |
 | Delegated model execution | standalone `@vegardx/pi-subagent` |
-| Workflow scheduling and publication | unavailable until `@vegardx/pi-workflow` |
+| Workflow scheduling and publication | standalone `@vegardx/pi-workflow` |
 | Web research tools | unavailable until the owned web extension |
 | Structured model-authored questions | `@juicesharp/rpiv-ask-user-question` |
 | Prompt assistance and compaction | local pi-maestro extensions |
@@ -77,8 +77,9 @@ The `plan` tool stores repository-qualified authored intent:
 
 A plan contains repositories, deliverables, ordering, read dependencies, tasks,
 and delegated review intent. Pi-maestro validates and stores this vocabulary but
-does not execute it. The future owned workflow extension will define the runtime
-lowering and state model.
+does not execute it. `/plan run <slug>` builds the workflow input and hands the
+session the `workflow_run { ref: "plan-to-ship", input }` call to make;
+`@vegardx/pi-workflow` owns the runtime lowering and state model.
 
 ## Extension loading
 
@@ -92,4 +93,8 @@ The root package loads:
 
 Subagent, workflow, and web extensions are not bundled. This prevents duplicate
 runtime ownership and lets each standalone package carry its own release and
-acceptance boundary.
+acceptance boundary. The operating skills for those runtimes ship with the
+packages that own the tools they describe — `workflows` in
+`@vegardx/pi-workflow` and `subagents` in `@vegardx/pi-subagent` — so a skill
+cannot describe a revision other than the one installed; pi-maestro bundles only
+skills for surfaces it owns or for tools outside this stack.

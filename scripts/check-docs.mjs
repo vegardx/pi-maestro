@@ -15,6 +15,9 @@
  *   3. Dead vocabulary from replaced designs must not appear in the corpus
  *      (the group model, model slots/presets, the removed ask mode).
  *   4. Relative markdown links in the corpus must resolve to real files.
+ *   5. No skill or current-state doc may name a `skills/<name>` directory
+ *      this package does not ship, or any identifier from the fiction
+ *      denylist — surfaces that were written down here but never existed.
  *
  * Exits non-zero listing every violation.
  */
@@ -23,7 +26,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// The repository root by default; an explicit argument lets the gate run against
+// a fixture tree, which is how `test/check-docs.test.ts` proves the rules fire.
+const ROOT = process.argv[2]
+	? resolve(process.argv[2])
+	: resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function walk(dir, ext, out = []) {
 	for (const name of readdirSync(dir)) {
@@ -165,11 +172,81 @@ for (const [file, text] of corpus) {
 	}
 }
 
+// ── 5. Skills and docs may not name things that do not exist ────────────────
+// `skills/workflows/SKILL.md` and `skills/subagents/SKILL.md` described tools
+// and sibling skills that never existed in any runtime — `workflow_dynamic`,
+// `execution-router`, `workflow-guide`, `awaitTerminal`, `detach`, four named
+// workflows — for as long as they were bundled, because nothing read `skills/`
+// at all. Both are checks on the same class of defect as rule 1b: a name
+// presented to an agent as real, which nothing can supply.
+//
+// The corpus is every skill file plus the current-state docs. `docs/design/`
+// and `docs/reviews/` are dated records and keep their own vocabulary, exactly
+// as in rule 1b.
+const skillsDir = join(ROOT, "skills");
+const skillNames = new Set(
+	existsSync(skillsDir)
+		? readdirSync(skillsDir).filter((name) =>
+				statSync(join(skillsDir, name)).isDirectory(),
+			)
+		: [],
+);
+const skillFiles = existsSync(skillsDir)
+	? [".md", ".json", ".yaml"].flatMap((ext) => walk(skillsDir, ext))
+	: [];
+const claimFiles = [
+	...skillFiles,
+	...docFiles.filter((f) => !HISTORY.some((dir) => f.startsWith(dir))),
+];
+
+// Every identifier here was asserted as a real surface by a bundled skill and
+// has zero implementation in any package this repo depends on. Add an entry
+// when a fiction is found; remove one only when the thing ships.
+const FICTION = [
+	[
+		/\bworkflow_dynamic\b/,
+		"workflow_dynamic — no such tool; a dynamic run is workflow_propose, a human /workflow approve, then workflow_run dynamic:<sha256>",
+	],
+	[/\bexecution-router\b/, "the execution-router skill, which does not exist"],
+	[
+		/\bworkflow-guide\b/,
+		"the workflow-guide skill, which does not exist; authoring is workflow-authoring, shipped by @vegardx/pi-workflow",
+	],
+	[
+		/\bawaitTerminal\b/,
+		"awaitTerminal — no such parameter; workflow_run takes { ref, input } and returns immediately",
+	],
+	[
+		/`detach[`:]|\bdetach:\s*true\b/,
+		"detach — no such parameter; there is no background workflow execution",
+	],
+	[
+		/\b(?:deep-research|deep-review|spec-review|impact-review)\b/,
+		"a named workflow that does not exist; the plan hand-off runs plan-to-ship",
+	],
+];
+
+for (const file of claimFiles) {
+	const text = readFileSync(file, "utf8");
+	const where = (index) =>
+		`${relative(ROOT, file)}:${text.slice(0, index).split("\n").length}`;
+	for (const m of text.matchAll(/(?<![\w./-])skills\/([a-z][a-z0-9-]*)/g)) {
+		if (skillNames.has(m[1])) continue;
+		failures.push(
+			`${where(m.index)} names skills/${m[1]}, which this package does not ship`,
+		);
+	}
+	for (const [re, why] of FICTION) {
+		const m = text.match(re);
+		if (m) failures.push(`${where(m.index)} names ${why}`);
+	}
+}
+
 if (failures.length > 0) {
 	console.error("check-docs: FAIL");
 	for (const f of failures) console.error(`  - ${f}`);
 	process.exit(1);
 }
 console.log(
-	`check-docs: OK (${commandNames.size} commands, ${TOOLS.length} tools, ${corpus.size} docs)`,
+	`check-docs: OK (${commandNames.size} commands, ${TOOLS.length} tools, ${corpus.size} docs, ${skillNames.size} skills)`,
 );

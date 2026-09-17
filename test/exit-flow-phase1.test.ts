@@ -1,11 +1,12 @@
-// Phase 1 of the plan-mode exit, driven through a fake UI.
+// Phase 1 of the plan-mode exit and the description that follows it, driven
+// through a fake UI.
 //
-// The flow is six dialogs and one commit, and everything that can go wrong with
-// it is a question about *what was left behind*: a mode that moved when the
-// human said keep planning, a record written by a flow nobody finished, a
-// record that outlived the session it names. So every case below asserts the
-// same three facts after the fact — the posture, the record on disk, and what
-// the model was told — rather than only the value the flow returned.
+// Phase 1 is two dialogs and one commit, and everything that can go wrong with
+// it is a question about *what was left behind*: a mode that moved when nobody
+// asked it to, a record written by a flow nobody finished, a record that
+// outlived the session it names. So every case below asserts the same three
+// facts after the fact — the posture, the record on disk, and what the model
+// was told — rather than only the value the flow returned.
 //
 // The fake UI is the injected `ExitFlowUi` port, which is the whole point of
 // injecting it: a dialog sequence is otherwise only testable by a human.
@@ -22,9 +23,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	BASE_BRANCH_TITLE,
+	countSentences,
+	intentProblem,
+	PLAN_INTENT_TOOL,
+} from "../packages/maestro/src/authoring.js";
+import * as exitFlow from "../packages/maestro/src/exit-flow.js";
+import {
 	chosenOption,
 	continueModeExit,
+	derivePublication,
 	EFFORT_OPTIONS,
 	EFFORT_TITLE,
 	EXIT_COMPILE,
@@ -33,26 +40,30 @@ import {
 	EXIT_START_TITLE,
 	EXIT_SWITCH_ONLY,
 	type ExitFlowUi,
+	type ExitOption,
 	FALLBACK_BASE_BRANCH,
-	GATE_OPTIONS,
-	GATE_TITLE,
+	INTENT_AGREE,
+	INTENT_BACK,
+	INTENT_EDIT,
+	INTENT_EDITOR_TITLE,
 	INTENT_TITLE,
-	lastUserLine,
 	optionLabel,
 	optionLabels,
-	PUBLICATION_OPTIONS,
-	PUBLICATION_TITLE,
 	renderExitSteer,
+	renderIntentSteer,
 	runExitFlowPhase1,
-	type SessionEntryLike,
+	runIntentAgreement,
+	submittedIntent,
 } from "../packages/maestro/src/exit-flow.js";
 import { type SeatHost, startSeat } from "../packages/maestro/src/extension.js";
+import * as findings from "../packages/maestro/src/findings.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
 import { pendingExitFile } from "../packages/maestro/src/paths.js";
 import {
 	deletePendingExit,
 	MAX_INTENT_LENGTH,
 	PENDING_EXIT_SCHEMA_VERSION,
+	type PendingExit,
 	PendingExitError,
 	readPendingExit,
 	writePendingExit,
@@ -113,9 +124,7 @@ function fakeUi(script: Script = {}) {
 		confirm: async () => {
 			throw new Error("phase 1 asks no confirmations");
 		},
-		editor: async () => {
-			throw new Error("phase 1 opens no editor");
-		},
+		editor: (title, _prefill) => answer("editor", title, undefined, undefined),
 		notify: (message, type) => {
 			notices.push([message, type ?? "info"]);
 		},
@@ -127,6 +136,7 @@ function fakeUi(script: Script = {}) {
 		/** Only the dialogs; a notification is not a question. */
 		dialogs: () => opened.filter((o) => o.kind !== "notify"),
 		titles: () => opened.filter((o) => o.kind !== "notify").map((o) => o.title),
+		said: () => notices.map(([message]) => message).join("\n---\n"),
 	};
 }
 
@@ -148,6 +158,13 @@ function harness(): Harness {
 	};
 }
 
+/** A repository with an `origin` remote, `gh`, and a tracked `trunk`. */
+const FULLY_EQUIPPED = derivePublication({
+	originPresent: () => true,
+	ghPresent: () => true,
+	upstreamHead: () => "trunk",
+});
+
 function deps(
 	h: Harness,
 	ui: ExitFlowUi,
@@ -156,47 +173,35 @@ function deps(
 	return {
 		ui,
 		sessionId: SESSION,
-		wanted: "auto" as ModeName,
+		wanted: "auto" as const,
 		setMode: (name: ModeName) => {
 			h.modes.push(name);
 		},
 		sendUserMessage: (content: string, options?: { deliverAs?: string }) => {
 			h.steers.push([content, options?.deliverAs]);
 		},
-		entries: () => CONVERSATION,
-		upstreamHead: () => "trunk",
+		publication: () => FULLY_EQUIPPED,
 		agentDir: h.agentDir,
 		now: () => "2026-09-16T12:00:00.000Z",
 		...extra,
 	};
 }
 
-const CONVERSATION: readonly SessionEntryLike[] = [
-	{ type: "message", message: { role: "user", content: "hello" } },
-	{ type: "message", message: { role: "assistant", content: "hi" } },
-	{
-		type: "message",
-		message: {
-			role: "user",
-			content: "Extract the exit flow\nand wire it into /mode",
-		},
-	},
-	{ type: "message", message: { role: "user", content: "/mode auto" } },
-];
-
 /** The labels a human actually sees, for the happy path. */
 const COMPILE_ANSWERS = {
-	[EXIT_START_TITLE]: EXIT_COMPILE,
-	[EFFORT_TITLE]: optionLabel(EFFORT_OPTIONS[1]!),
-	[GATE_TITLE]: optionLabel(GATE_OPTIONS[1]!),
-	[PUBLICATION_TITLE]: optionLabel(PUBLICATION_OPTIONS[2]!),
+	[EXIT_START_TITLE]: optionLabel(
+		EXIT_START_OPTIONS.find((option) => option.value === "compile") ?? {
+			value: "compile" as const,
+			text: EXIT_COMPILE,
+		},
+	),
 } as const;
 
 describe("step 1 — the only question that can end the flow", () => {
 	it("leaves the posture and writes nothing when the human keeps planning", async () => {
 		const h = harness();
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
+			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
 		});
 
 		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
@@ -206,7 +211,13 @@ describe("step 1 — the only question that can end the flow", () => {
 		expect(h.steers).toEqual([]);
 		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
 		expect(fake.titles()).toEqual([EXIT_START_TITLE]);
-		expect(fake.opened[0]?.options).toEqual([...EXIT_START_OPTIONS]);
+		// Keep planning is first, because escape takes it: the highlighted row
+		// and the escape key must not mean different things.
+		expect(fake.opened[0]?.options).toEqual([
+			`${EXIT_KEEP_PLANNING} (default)`,
+			EXIT_COMPILE,
+			EXIT_SWITCH_ONLY,
+		]);
 	});
 
 	it("treats escape as keeping planning, which is the documented hatch", async () => {
@@ -240,53 +251,48 @@ describe("step 1 — the only question that can end the flow", () => {
 				schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 				sessionId: SESSION,
 				policy: { effort: "cheap" },
-				intent: "an exit nobody finished",
+				wanted: "hack",
 				createdAt: "2026-09-15T00:00:00.000Z",
 			},
 			h.agentDir,
 		);
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
+			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
 		});
 
 		await runExitFlowPhase1(deps(h, fake.ui));
 
 		// Keeping planning means no exit is in progress, and a record that says
-		// otherwise would hold the `plan` tool open in plan mode indefinitely.
+		// otherwise would hold the exit's tools open in plan mode indefinitely.
 		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
 	});
 });
 
 describe("the happy path", () => {
-	it("asks exactly six dialogs, in order, each carrying the signal", async () => {
+	it("asks exactly two dialogs, in order, each carrying the signal", async () => {
 		const h = harness();
-		const fake = fakeUi({
-			answers: { ...COMPILE_ANSWERS, [BASE_BRANCH_TITLE]: "release" },
-		});
+		const fake = fakeUi({ answers: COMPILE_ANSWERS });
 
 		const outcome = await runExitFlowPhase1(
 			deps(h, fake.ui, { signal: new AbortController().signal }),
 		);
 
-		expect(fake.titles()).toEqual([
-			EXIT_START_TITLE,
-			EFFORT_TITLE,
-			GATE_TITLE,
-			PUBLICATION_TITLE,
-			BASE_BRANCH_TITLE,
-			INTENT_TITLE,
-		]);
+		expect(fake.titles()).toEqual([EXIT_START_TITLE, EFFORT_TITLE]);
 		expect(fake.dialogs().every((d) => d.signal)).toBe(true);
-		expect(outcome.kind === "compiled" && outcome.asked).toBe(6);
+		expect(outcome.kind === "compiled" && outcome.asked).toBe(2);
 	});
 
-	it("switches the posture, writes the record, and steers the model", async () => {
+	it("records the answers and asks for the description, without moving the mode", async () => {
 		const h = harness();
 		const fake = fakeUi({
 			answers: {
 				...COMPILE_ANSWERS,
-				[BASE_BRANCH_TITLE]: "release",
-				[INTENT_TITLE]: "Ship the exit flow",
+				[EFFORT_TITLE]: optionLabel(
+					EFFORT_OPTIONS.find((option) => option.value === "deep") ?? {
+						value: "deep" as const,
+						text: "deep",
+					},
+				),
 			},
 		});
 
@@ -294,166 +300,144 @@ describe("the happy path", () => {
 
 		expect(outcome.kind).toBe("compiled");
 		if (outcome.kind !== "compiled") return;
-		expect(h.modes).toEqual(["auto"]);
+		// THE POSTURE DOES NOT MOVE. It moves when the run starts, and nowhere
+		// else on this path.
+		expect(h.modes).toEqual([]);
 		expect(outcome.record).toEqual({
-			schemaVersion: 1,
+			schemaVersion: 2,
 			sessionId: SESSION,
 			policy: {
-				effort: "standard",
-				gates: "approve-plan+ship",
-				publish: { mode: "pr", base: "release" },
-			},
-			intent: "Ship the exit flow",
-			createdAt: "2026-09-16T12:00:00.000Z",
-		});
-		// The record on disk is the one phase 2 will read, so it is read back
-		// through the same door rather than trusted from memory.
-		expect(readPendingExit(SESSION, h.agentDir)).toEqual(outcome.record);
-		expect(outcome.path).toBe(pendingExitFile(SESSION, h.agentDir));
-		expect(h.steers).toEqual([[outcome.steer, "followUp"]]);
-	});
-
-	it("skips the base branch when nothing is published", async () => {
-		const h = harness();
-		const fake = fakeUi({
-			answers: {
-				...COMPILE_ANSWERS,
-				[PUBLICATION_TITLE]: optionLabel(PUBLICATION_OPTIONS[0]!),
-			},
-		});
-
-		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
-
-		expect(fake.titles()).toEqual([
-			EXIT_START_TITLE,
-			EFFORT_TITLE,
-			GATE_TITLE,
-			PUBLICATION_TITLE,
-			INTENT_TITLE,
-		]);
-		expect(outcome.kind === "compiled" && outcome.asked).toBe(5);
-		expect(
-			outcome.kind === "compiled" && outcome.record.policy.publish,
-		).toEqual({ mode: "none" });
-	});
-
-	it("records every effort, gate and publication the dialogs offer", async () => {
-		for (const effort of EFFORT_OPTIONS)
-			for (const gates of GATE_OPTIONS)
-				for (const publication of PUBLICATION_OPTIONS) {
-					const h = harness();
-					const fake = fakeUi({
-						answers: {
-							[EXIT_START_TITLE]: EXIT_COMPILE,
-							[EFFORT_TITLE]: optionLabel(effort),
-							[GATE_TITLE]: optionLabel(gates),
-							[PUBLICATION_TITLE]: optionLabel(publication),
-							[BASE_BRANCH_TITLE]: "main",
-							[INTENT_TITLE]: "one line",
-						},
-					});
-					const outcome = await runExitFlowPhase1(deps(h, fake.ui));
-					expect(outcome.kind === "compiled" && outcome.record.policy).toEqual({
-						effort: effort.value,
-						gates: gates.value,
-						publish:
-							publication.value === "none"
-								? { mode: "none" }
-								: { mode: publication.value, base: "main" },
-					});
-				}
-	});
-});
-
-describe("the defaults, which escape takes", () => {
-	it("answers steps 2-6 with the documented default when they are escaped", async () => {
-		const h = harness();
-		const fake = fakeUi({ answers: { [EXIT_START_TITLE]: EXIT_COMPILE } });
-
-		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
-
-		expect(outcome.kind === "compiled" && outcome.record).toMatchObject({
-			policy: {
-				effort: "standard",
+				effort: "deep",
 				gates: "approve-plan+ship",
 				publish: { mode: "pr", base: "trunk" },
 			},
-			// Step 6's default is the last thing the human said, minus the slash
-			// command that opened the dialog.
-			intent: "Extract the exit flow",
+			wanted: "auto",
+			createdAt: "2026-09-16T12:00:00.000Z",
+		});
+		// No `intent` yet: it is agreed a model turn later, and its absence is
+		// what holds the `plan` tool shut.
+		expect(outcome.record.intent).toBeUndefined();
+		// The record on disk is the one the next turn will read, so it is read
+		// back through the same door rather than trusted from memory.
+		expect(readPendingExit(SESSION, h.agentDir)).toEqual(outcome.record);
+		expect(outcome.path).toBe(pendingExitFile(SESSION, h.agentDir));
+		expect(h.steers).toEqual([[outcome.steer, "followUp"]]);
+		expect(outcome.steer).toBe(renderIntentSteer());
+	});
+
+	it("takes the default effort when the dialog is escaped", async () => {
+		const h = harness();
+		const fake = fakeUi({ answers: COMPILE_ANSWERS });
+
+		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
+
+		expect(outcome.kind === "compiled" && outcome.record.policy).toEqual({
+			effort: "standard",
+			gates: "approve-plan+ship",
+			publish: { mode: "pr", base: "trunk" },
 		});
 	});
 
-	it("marks exactly one default per table, and escape takes that one", () => {
-		for (const options of [EFFORT_OPTIONS, GATE_OPTIONS, PUBLICATION_OPTIONS]) {
-			const defaults = options.filter((option) => option.fallback);
-			expect(defaults).toHaveLength(1);
-			expect(chosenOption(options, undefined)).toBe(defaults[0]?.value);
-			// An answer the table does not know is an escape too: a label that
-			// cannot be resolved must not become a value nobody offered.
-			expect(chosenOption(options, "something else")).toBe(defaults[0]?.value);
-			for (const option of options)
-				expect(chosenOption(options, optionLabel(option))).toBe(option.value);
+	it("records every effort the dialog offers, against both postures", async () => {
+		for (const effort of EFFORT_OPTIONS)
+			for (const wanted of ["auto", "hack"] as const) {
+				const h = harness();
+				const fake = fakeUi({
+					answers: {
+						...COMPILE_ANSWERS,
+						[EFFORT_TITLE]: optionLabel(effort),
+					},
+				});
+				const outcome = await runExitFlowPhase1(deps(h, fake.ui, { wanted }));
+				expect(
+					outcome.kind === "compiled" && outcome.record.policy.effort,
+				).toBe(effort.value);
+				expect(outcome.kind === "compiled" && outcome.record.wanted).toBe(
+					wanted,
+				);
+			}
+	});
+});
+
+// ── Publication, derived ─────────────────────────────────────────────────────
+
+describe("publication, read off the repository rather than asked", () => {
+	it("derives the mode from the remote and `gh`, and the base from the upstream", () => {
+		const cases: [boolean, boolean, string | null, string, string][] = [
+			[true, true, "trunk", "pr", "trunk"],
+			[true, false, "trunk", "branch", "trunk"],
+			[false, true, "trunk", "none", "trunk"],
+			[false, false, null, "none", FALLBACK_BASE_BRANCH],
+			[true, true, null, "pr", FALLBACK_BASE_BRANCH],
+		];
+		for (const [origin, gh, upstream, mode, base] of cases) {
+			const derived = derivePublication({
+				originPresent: () => origin,
+				ghPresent: () => gh,
+				upstreamHead: () => upstream,
+			});
+			expect([origin, gh, upstream, derived.mode, derived.base]).toEqual([
+				origin,
+				gh,
+				upstream,
+				mode,
+				base,
+			]);
+			// Every derivation says what it found, in the words the human reads.
+			expect(derived.why.startsWith("Publication: ")).toBe(true);
 		}
-		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
-			"cheap",
-			"standard (default)",
-			"deep",
-		]);
-		expect(optionLabels(GATE_OPTIONS)).toEqual([
-			"approve-plan only",
-			"approve-plan + ship (default)",
-			"every deliverable",
-		]);
-		expect(optionLabels(PUBLICATION_OPTIONS)).toEqual([
-			"none",
-			"branch",
-			"pull request (default)",
-		]);
 	});
 
-	it("falls back to `main` and says so when the repository tracks nothing", async () => {
-		const h = harness();
-		const fake = fakeUi({ answers: { [EXIT_START_TITLE]: EXIT_COMPILE } });
-
-		const outcome = await runExitFlowPhase1(
-			deps(h, fake.ui, { upstreamHead: () => null }),
-		);
-
-		expect(
-			outcome.kind === "compiled" && outcome.record.policy.publish,
-		).toEqual({ mode: "pr", base: FALLBACK_BASE_BRANCH });
-		expect(
-			fake.notices.some(
-				([message, type]) =>
-					type === "warning" && message.includes(FALLBACK_BASE_BRANCH),
-			),
-		).toBe(true);
-	});
-
-	it("says so rather than guessing when the conversation cannot be read", async () => {
-		const h = harness();
-		const fake = fakeUi({ answers: { [EXIT_START_TITLE]: EXIT_COMPILE } });
-
-		const outcome = await runExitFlowPhase1(
-			deps(h, fake.ui, { entries: undefined }),
-		);
-
-		expect(outcome.kind === "compiled" && outcome.record.intent).toBe("");
-		expect(
-			fake.notices.some(
-				([message, type]) => type === "warning" && message.includes("empty"),
-			),
-		).toBe(true);
+	it("announces the derivation once, and records it as the policy's publish", async () => {
+		for (const [publication, expected] of [
+			[FULLY_EQUIPPED, { mode: "pr", base: "trunk" }],
+			[
+				derivePublication({
+					originPresent: () => true,
+					ghPresent: () => false,
+					upstreamHead: () => null,
+				}),
+				{ mode: "branch", base: FALLBACK_BASE_BRANCH },
+			],
+			[
+				derivePublication({
+					originPresent: () => false,
+					ghPresent: () => false,
+					upstreamHead: () => null,
+				}),
+				{ mode: "none" },
+			],
+		] as const) {
+			const h = harness();
+			const fake = fakeUi({ answers: COMPILE_ANSWERS });
+			const outcome = await runExitFlowPhase1(
+				deps(h, fake.ui, { publication: () => publication }),
+			);
+			expect(
+				outcome.kind === "compiled" && outcome.record.policy.publish,
+			).toEqual(expected);
+			const announcements = fake.notices.filter(([message]) =>
+				message.startsWith("Publication: "),
+			);
+			expect(announcements).toEqual([[publication.why, "info"]]);
+			// No dialog was opened for it, which is the point.
+			expect(fake.titles()).toEqual([EXIT_START_TITLE, EFFORT_TITLE]);
+		}
 	});
 
 	it("refuses a base branch Git would not accept, before anything is recorded", async () => {
 		const h = harness();
-		const fake = fakeUi({
-			answers: { ...COMPILE_ANSWERS, [BASE_BRANCH_TITLE]: "no spaces here" },
-		});
+		const fake = fakeUi({ answers: COMPILE_ANSWERS });
 
-		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
+		const outcome = await runExitFlowPhase1(
+			deps(h, fake.ui, {
+				publication: () => ({
+					mode: "pr" as const,
+					base: "no spaces here",
+					why: "Publication: pull request onto `no spaces here`.",
+				}),
+			}),
+		);
 
 		expect(outcome.kind).toBe("refused");
 		expect(h.modes).toEqual([]);
@@ -462,89 +446,120 @@ describe("the defaults, which escape takes", () => {
 	});
 });
 
-describe("the last user line", () => {
-	it("takes the first line of the last thing the human said", () => {
-		expect(lastUserLine(CONVERSATION)).toBe("Extract the exit flow");
+// ── Every option table ───────────────────────────────────────────────────────
+
+/** Every exported `ExitOption` table, found rather than listed. */
+function optionTables(
+	modules: Record<string, Record<string, unknown>>,
+): [string, readonly ExitOption<unknown>[]][] {
+	const found: [string, readonly ExitOption<unknown>[]][] = [];
+	for (const [where, module] of Object.entries(modules))
+		for (const [name, value] of Object.entries(module)) {
+			if (!Array.isArray(value) || value.length === 0) continue;
+			const table = value as readonly unknown[];
+			if (
+				!table.every(
+					(entry) =>
+						typeof entry === "object" &&
+						entry !== null &&
+						"value" in entry &&
+						"text" in entry &&
+						typeof (entry as { text: unknown }).text === "string",
+				)
+			)
+				continue;
+			found.push([`${where}.${name}`, table as readonly ExitOption<unknown>[]]);
+		}
+	return found;
+}
+
+describe("the defaults, which escape takes", () => {
+	it("lists the default FIRST in every exported option table", () => {
+		const tables = optionTables({ "exit-flow": exitFlow, findings });
+		// The list is found, not written down, so a table added later is covered
+		// by this test without anybody remembering to add it.
+		expect(tables.map(([name]) => name).sort()).toEqual([
+			"exit-flow.COMPILED_OPTIONS",
+			"exit-flow.COMPILED_OPTIONS_UNREVIEWED",
+			"exit-flow.DIRTY_OPTIONS",
+			"exit-flow.EFFORT_OPTIONS",
+			"exit-flow.EXIT_START_OPTIONS",
+			"exit-flow.INTENT_OPTIONS",
+			"findings.FINDING_OPTIONS",
+		]);
+		for (const [name, table] of tables) {
+			const defaults = table.filter((option) => option.fallback);
+			expect([name, defaults.length]).toEqual([name, 1]);
+			// The row a `select` highlights and the row escape takes are one row.
+			expect([name, table[0]?.fallback]).toEqual([name, true]);
+			expect([name, chosenOption(table, undefined)]).toEqual([
+				name,
+				defaults[0]?.value,
+			]);
+			// An answer the table does not know is an escape too: a label that
+			// cannot be resolved must not become a value nobody offered.
+			expect([name, chosenOption(table, "something else")]).toEqual([
+				name,
+				defaults[0]?.value,
+			]);
+			for (const option of table)
+				expect([name, chosenOption(table, optionLabel(option))]).toEqual([
+					name,
+					option.value,
+				]);
+			// Exactly one label carries the suffix, and it is the first.
+			expect([
+				name,
+				optionLabels(table).filter((label) => label.endsWith(" (default)")),
+			]).toEqual([name, [optionLabel(table[0] as ExitOption<unknown>)]]);
+		}
 	});
 
-	it("reads structured content and skips everything that is not a user text", () => {
-		expect(
-			lastUserLine([
-				{ type: "message", message: { role: "user", content: "earlier" } },
-				{ type: "thinking_level_change" },
-				{
-					type: "message",
-					message: {
-						role: "user",
-						content: [
-							{ type: "image", data: "…" },
-							{ type: "text", text: "  Compose the catalogue  \nmore" },
-						],
-					},
-				},
-				{ type: "message", message: { role: "assistant", content: "later" } },
-			]),
-		).toBe("Compose the catalogue");
-	});
-
-	it("is empty rather than invented when there is nothing usable", () => {
-		expect(lastUserLine([])).toBe("");
-		expect(
-			lastUserLine([
-				{ type: "message", message: { role: "user", content: "/mode auto" } },
-				{ type: "message", message: { role: "user", content: "   " } },
-			]),
-		).toBe("");
-	});
-
-	it("bounds the line at what the record will hold", () => {
-		const long = "x".repeat(MAX_INTENT_LENGTH * 2);
-		expect(
-			lastUserLine([
-				{ type: "message", message: { role: "user", content: long } },
-			]),
-		).toHaveLength(MAX_INTENT_LENGTH);
+	it("offers the three efforts with `standard` first", () => {
+		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
+			"standard (default)",
+			"cheap",
+			"deep",
+		]);
 	});
 });
 
-describe("the steer", () => {
-	it("quotes the exact policy block and asks for stages where they are implied", async () => {
-		const h = harness();
-		const fake = fakeUi({
-			answers: {
-				...COMPILE_ANSWERS,
-				[BASE_BRANCH_TITLE]: "main",
-				[INTENT_TITLE]: "Ship the exit flow",
-			},
-		});
+// ── The steers ───────────────────────────────────────────────────────────────
 
-		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
-		expect(outcome.kind).toBe("compiled");
-		if (outcome.kind !== "compiled") return;
-
-		// The bytes the model is told to copy are the bytes that were recorded.
-		expect(outcome.steer).toContain(
-			JSON.stringify(outcome.record.policy, null, 2),
-		);
-		expect(outcome.steer).toContain("verbatim");
-		expect(outcome.steer).toContain("`stages`");
-		expect(outcome.steer).toContain("Ship the exit flow");
-		expect(outcome.steer).toContain("Call `plan` once");
-		// Phase 1 asks for a document and nothing else: no run, no approval.
-		expect(outcome.steer).toContain("do not start a run");
+describe("the steers", () => {
+	it("asks for the description through the tool, and for nothing else", () => {
+		const steer = renderIntentSteer();
+		expect(steer).toContain("two or three sentences");
+		expect(steer).toContain("`plan_intent { summary }`");
+		expect(steer).toContain("do not start a run");
+		// The description is written from the conversation, not asked for.
+		expect(steer).toContain("Do not ask me to write it for you");
+		// Phase 1 does not ask for the plan.
+		expect(steer).not.toContain("Call `plan` once");
 	});
 
-	it("omits the intent line rather than quoting an empty one", () => {
-		const steer = renderExitSteer({ effort: "cheap" }, "");
+	it("quotes the exact policy block and licenses exactly one change to it", () => {
+		const policy = {
+			effort: "deep" as const,
+			gates: "approve-plan+ship" as const,
+			publish: { mode: "pr" as const, base: "trunk" },
+		};
+		const steer = renderExitSteer(policy);
+		expect(steer).toContain(JSON.stringify(policy, null, 2));
+		expect(steer).toContain("verbatim");
+		expect(steer).toContain("`stages`");
+		expect(steer).toContain("Call `plan` once");
+		expect(steer).toContain("every-deliverable");
+		expect(steer).toContain("a check after every deliverable");
+		// The one line phase 1 used to add is gone: the description is agreed,
+		// not recorded from a dialog, and it is not quoted back here.
 		expect(steer).not.toContain("I recorded one line");
-		expect(renderExitSteer({ effort: "cheap" }, "why")).toContain(
-			"I recorded one line",
-		);
+		expect(steer).toContain("do not start a run");
 	});
 
 	it("keeps the record and prints the instruction when the host cannot steer", async () => {
 		const h = harness();
-		const fake = fakeUi({ answers: { [EXIT_START_TITLE]: EXIT_COMPILE } });
+		const fake = fakeUi({ answers: COMPILE_ANSWERS });
 
 		const outcome = await runExitFlowPhase1(
 			deps(h, fake.ui, { sendUserMessage: undefined }),
@@ -553,7 +568,7 @@ describe("the steer", () => {
 		expect(outcome.kind).toBe("compiled");
 		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(true);
 		const printed = fake.notices.find(([, type]) => type === "warning");
-		expect(printed?.[0]).toContain("Call `plan` once");
+		expect(printed?.[0]).toContain("`plan_intent { summary }`");
 	});
 });
 
@@ -565,6 +580,7 @@ describe("a session replacement", () => {
 				schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 				sessionId: SESSION,
 				policy: { effort: "cheap" },
+				wanted: "auto",
 				intent: "from an earlier exit",
 				createdAt: "2026-09-15T00:00:00.000Z",
 			},
@@ -574,7 +590,7 @@ describe("a session replacement", () => {
 		const fake = fakeUi({
 			answers: COMPILE_ANSWERS,
 			after: (_opened, index) => {
-				if (index === 2) controller.abort();
+				if (index === 0) controller.abort();
 			},
 		});
 
@@ -583,8 +599,8 @@ describe("a session replacement", () => {
 		);
 
 		expect(outcome).toEqual({ kind: "aborted" });
-		// Three dialogs opened; the fourth was never asked over a dead session.
-		expect(fake.titles()).toEqual([EXIT_START_TITLE, EFFORT_TITLE, GATE_TITLE]);
+		// One dialog opened; the second was never asked over a dead session.
+		expect(fake.titles()).toEqual([EXIT_START_TITLE]);
 		expect(h.modes).toEqual([]);
 		expect(h.steers).toEqual([]);
 		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
@@ -605,6 +621,8 @@ describe("a session replacement", () => {
 	});
 });
 
+// ── The pending record ───────────────────────────────────────────────────────
+
 describe("the pending record", () => {
 	it("round-trips through write, read and delete", () => {
 		const h = harness();
@@ -612,7 +630,8 @@ describe("the pending record", () => {
 			schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 			sessionId: SESSION,
 			policy: { effort: "deep", publish: { mode: "branch", base: "main" } },
-			intent: "one line",
+			wanted: "hack",
+			intent: "We are doing a thing. It is worth doing.",
 			createdAt: "2026-09-16T12:00:00.000Z",
 		} as const;
 
@@ -627,23 +646,53 @@ describe("the pending record", () => {
 		deletePendingExit(SESSION, h.agentDir);
 	});
 
+	it("round-trips a record with no agreed description yet", () => {
+		const h = harness();
+		const record: PendingExit = {
+			schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
+			sessionId: SESSION,
+			policy: { effort: "standard" },
+			wanted: "auto",
+			createdAt: "2026-09-16T12:00:00.000Z",
+		};
+		writePendingExit(record, h.agentDir);
+		const read = readPendingExit(SESSION, h.agentDir);
+		expect(read).toEqual(record);
+		expect(read && "intent" in read).toBe(false);
+	});
+
 	it("refuses every malformed record loudly rather than reading it as absent", () => {
 		const h = harness();
 		const path = pendingExitFile(SESSION, h.agentDir);
 		mkdirSync(dirname(path), { recursive: true });
 		const good = {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			sessionId: SESSION,
 			policy: { effort: "standard" },
-			intent: "one line",
+			wanted: "auto",
+			intent: "We are doing a thing. It is worth doing.",
 			createdAt: "2026-09-16T12:00:00.000Z",
 		};
 		const cases: [string, string][] = [
 			["not readable JSON", "{ this is not json"],
 			["not a JSON object", JSON.stringify([good])],
-			["schema", JSON.stringify({ ...good, schemaVersion: 2 })],
+			// A v1 record: refused by version, with no compatibility reader. It
+			// claims the posture already moved, which this build cannot check.
+			[
+				"schema",
+				JSON.stringify({
+					schemaVersion: 1,
+					sessionId: SESSION,
+					policy: { effort: "standard" },
+					intent: "one line",
+					createdAt: "2026-09-16T12:00:00.000Z",
+				}),
+			],
+			["schema", JSON.stringify({ ...good, schemaVersion: 3 })],
 			["names session", JSON.stringify({ ...good, sessionId: "other" })],
 			["createdAt", JSON.stringify({ ...good, createdAt: "" })],
+			["`wanted`", JSON.stringify({ ...good, wanted: "plan" })],
+			["`wanted`", JSON.stringify({ ...good, wanted: undefined })],
 			["`intent` is not a string", JSON.stringify({ ...good, intent: 7 })],
 			[
 				"past the",
@@ -672,7 +721,7 @@ describe("the pending record", () => {
 		// And the good one still reads, so the cases above are about the damage
 		// and not about the reader.
 		writeFileSync(path, JSON.stringify(good), "utf8");
-		expect(readPendingExit(SESSION, h.agentDir)?.intent).toBe("one line");
+		expect(readPendingExit(SESSION, h.agentDir)?.wanted).toBe("auto");
 	});
 
 	it("refuses a session id that would escape the directory", () => {
@@ -690,7 +739,7 @@ describe("the pending record", () => {
 		const base = {
 			schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 			sessionId: SESSION,
-			intent: "one line",
+			wanted: "auto" as const,
 			createdAt: "2026-09-16T12:00:00.000Z",
 		};
 		expect(() =>
@@ -702,6 +751,12 @@ describe("the pending record", () => {
 		expect(() =>
 			writePendingExit(
 				{ ...base, policy: {}, intent: "x".repeat(MAX_INTENT_LENGTH + 1) },
+				h.agentDir,
+			),
+		).toThrowError(PendingExitError);
+		expect(() =>
+			writePendingExit(
+				{ ...base, wanted: "plan" as never, policy: {} },
 				h.agentDir,
 			),
 		).toThrowError(PendingExitError);
@@ -724,6 +779,219 @@ describe("the pending record", () => {
 		// Untouched: a record nobody can read is the human's to remove, and
 		// overwriting it would hide whatever wrote it.
 		expect(readFileSync(path, "utf8")).toBe("{ not json");
+	});
+});
+
+// ── The agreed description ───────────────────────────────────────────────────
+
+const SUMMARY =
+	"We are extracting the plan-mode exit into its own module. " +
+	"It is worth doing because the dialogs and the record drifted apart.";
+
+describe("the `plan_intent` tool", () => {
+	it("takes two or three sentences and refuses everything else", () => {
+		expect(intentProblem(SUMMARY)).toBeUndefined();
+		expect(intentProblem("One. Two. Three.")).toBeUndefined();
+		expect(intentProblem("   ")).toContain("empty");
+		expect(intentProblem("Only one sentence.")).toContain("1 sentence");
+		expect(intentProblem("One. Two. Three. Four.")).toContain("4 sentences");
+		expect(
+			intentProblem(`${"x".repeat(MAX_INTENT_LENGTH)}. And more.`),
+		).toContain("past the");
+	});
+
+	it("counts sentences by their terminators", () => {
+		expect(countSentences("One. Two.")).toBe(2);
+		expect(countSentences("One? Two! Three.")).toBe(3);
+		expect(countSentences("No terminator")).toBe(1);
+		expect(countSentences("")).toBe(0);
+	});
+
+	it("is a submitted result and nothing else that starts the dialog", () => {
+		expect(
+			submittedIntent({
+				toolName: PLAN_INTENT_TOOL,
+				details: { submitted: true, summary: SUMMARY },
+			}),
+		).toBe(SUMMARY);
+		expect(
+			submittedIntent({
+				toolName: PLAN_INTENT_TOOL,
+				isError: true,
+				details: { submitted: true, summary: SUMMARY },
+			}),
+		).toBeUndefined();
+		expect(
+			submittedIntent({
+				toolName: PLAN_INTENT_TOOL,
+				details: { submitted: false, summary: SUMMARY },
+			}),
+		).toBeUndefined();
+		expect(
+			submittedIntent({
+				toolName: "plan",
+				details: { submitted: true, summary: SUMMARY },
+			}),
+		).toBeUndefined();
+		expect(submittedIntent({ toolName: PLAN_INTENT_TOOL })).toBeUndefined();
+	});
+});
+
+function pendingRecord(agentDir: string): PendingExit {
+	const written: PendingExit = {
+		schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
+		sessionId: SESSION,
+		policy: {
+			effort: "standard",
+			gates: "approve-plan+ship",
+			publish: { mode: "pr", base: "main" },
+		},
+		wanted: "auto",
+		createdAt: "2026-09-16T12:00:00.000Z",
+	};
+	writePendingExit(written, agentDir);
+	return written;
+}
+
+describe("the dialog that agrees the description", () => {
+	it("shows the sentences, agrees to them, and asks for the plan", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const fake = fakeUi();
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: fake.ui,
+			agentDir: h.agentDir,
+			sendUserMessage: (content, options) =>
+				h.steers.push([content, options?.deliverAs]),
+		});
+
+		expect(outcome.kind).toBe("agreed");
+		if (outcome.kind !== "agreed") return;
+		expect(outcome.asked).toBe(1);
+		// One dialog, and the sentences are in it: what is agreed to has to be
+		// on screen at the moment of agreeing.
+		expect(fake.titles()).toHaveLength(1);
+		expect(fake.titles()[0]).toContain(INTENT_TITLE);
+		expect(fake.titles()[0]).toContain(SUMMARY);
+		expect(fake.opened[0]?.options).toEqual([
+			`${INTENT_AGREE} (default)`,
+			INTENT_EDIT,
+			INTENT_BACK,
+		]);
+		// The record gains the description; nothing else about it moves.
+		expect(readPendingExit(SESSION, h.agentDir)).toEqual({
+			...record,
+			intent: SUMMARY,
+		});
+		expect(h.steers).toEqual([[renderExitSteer(record.policy), "followUp"]]);
+	});
+
+	it("agrees on escape, which is what `(default)` on the first row says", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const fake = fakeUi();
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: fake.ui,
+			agentDir: h.agentDir,
+		});
+
+		expect(outcome.kind).toBe("agreed");
+		expect(readPendingExit(SESSION, h.agentDir)?.intent).toBe(SUMMARY);
+	});
+
+	it("re-asks with the edited text, and discards an escaped editor", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const edited = "We are doing it differently. That is why.";
+		let editorOpens = 0;
+		const fake = fakeUi({
+			after: () => undefined,
+			answers: {},
+		});
+		// The script is stateful, so it is written here rather than as a map.
+		const scripted: ExitFlowUi = {
+			...fake.ui,
+			select: async (title, options, opts) => {
+				const answer = title.includes(edited)
+					? `${INTENT_AGREE} (default)`
+					: INTENT_EDIT;
+				await fake.ui.select(title, options, opts);
+				return answer;
+			},
+			editor: async (title, prefill) => {
+				editorOpens += 1;
+				await fake.ui.editor(title, prefill);
+				// The first editor is escaped, the second one rewrites it.
+				return editorOpens === 1 ? undefined : edited;
+			},
+		};
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: scripted,
+			agentDir: h.agentDir,
+		});
+
+		expect(outcome.kind).toBe("agreed");
+		expect(editorOpens).toBe(2);
+		expect(
+			fake.titles().filter((title) => title === INTENT_EDITOR_TITLE),
+		).toHaveLength(2);
+		expect(readPendingExit(SESSION, h.agentDir)?.intent).toBe(edited);
+	});
+
+	it("drops the record and stays in plan mode on `Back to the conversation`", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const fake = fakeUi();
+		const scripted: ExitFlowUi = {
+			...fake.ui,
+			select: async (title, options, opts) => {
+				await fake.ui.select(title, options, opts);
+				return INTENT_BACK;
+			},
+		};
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: scripted,
+			agentDir: h.agentDir,
+			sendUserMessage: (content) => h.steers.push([content, undefined]),
+		});
+
+		expect(outcome.kind).toBe("back");
+		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
+		expect(h.steers).toEqual([]);
+		// One notice, naming the posture that was asked for and never given.
+		expect(fake.said()).toContain("still in plan mode");
+		expect(fake.said()).toContain("/mode auto");
+		expect(fake.said()).not.toContain("/mode plan");
+	});
+
+	it("drops the record when the session is replaced under the dialog", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const controller = new AbortController();
+		const fake = fakeUi({ after: () => controller.abort() });
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: fake.ui,
+			agentDir: h.agentDir,
+			signal: controller.signal,
+		});
+
+		expect(outcome).toEqual({ kind: "aborted" });
+		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 	});
 });
 
@@ -755,69 +1023,130 @@ function seatHost(agentDir: string) {
 	// This fake's live tool set is readable from the start; Pi's is not until
 	// the runtime is bound, which the extension signals from `session_start`.
 	entry.runtimeBound();
+	const session = {
+		hasUI: true,
+		sessionManager: { getSessionId: () => SESSION },
+	};
 	return {
 		entry,
 		steers,
 		active: () => [...active],
 		mode: (args: string, ui: ExitFlowUi) =>
-			commands.get("mode")?.handler(args, {
-				ui,
-				hasUI: true,
-				sessionManager: {
-					getSessionId: () => SESSION,
-					getBranch: () => CONVERSATION,
-				},
-			}),
+			commands.get("mode")?.handler(args, { ui, ...session }),
 		/** The same command in a session with no dialogs, which is the other host. */
 		headlessMode: (args: string, ui: ExitFlowUi) =>
 			commands.get("mode")?.handler(args, {
 				ui,
 				hasUI: false,
-				sessionManager: {
-					getSessionId: () => SESSION,
-					getBranch: () => CONVERSATION,
-				},
+				sessionManager: session.sessionManager,
 			}),
+		toolResult: (event: unknown, ui: ExitFlowUi) =>
+			entry.onToolResult(
+				event as Parameters<typeof entry.onToolResult>[0],
+				{ ui, ...session } as Parameters<typeof entry.onToolResult>[1],
+			),
 	};
 }
 
 describe("/mode auto, from plan mode", () => {
-	it("runs phase 1, and the plan tool follows the record", async () => {
+	it("runs phase 1, holds the posture, and opens `plan_intent` and not `plan`", async () => {
 		const agentDir = temp("maestro-agent-");
 		const host = seatHost(agentDir);
-		const fake = fakeUi({
-			answers: {
-				...COMPILE_ANSWERS,
-				[PUBLICATION_TITLE]: optionLabel(PUBLICATION_OPTIONS[0]!),
-				[INTENT_TITLE]: "Ship the exit flow",
-			},
-		});
+		const fake = fakeUi({ answers: COMPILE_ANSWERS });
 
 		expect(host.active()).not.toContain("plan");
 		await host.mode("auto", fake.ui);
 
-		expect(host.entry.currentMode()).toBe("auto");
-		expect(host.entry.pendingExit()).toBe(true);
-		expect(host.active()).toContain("plan");
-		expect(host.steers).toHaveLength(1);
-		expect(host.steers[0]?.[1]).toBe("followUp");
-		expect(readPendingExit(SESSION, agentDir)?.intent).toBe(
-			"Ship the exit flow",
+		// The mode does NOT move: it moves when the run starts.
+		expect(host.entry.currentMode()).toBe("plan");
+		expect(host.entry.exitWindow()).toBe("intent");
+		expect(host.active()).toContain(PLAN_INTENT_TOOL);
+		expect(host.active()).not.toContain("plan");
+		expect(host.steers).toEqual([[renderIntentSteer(), "followUp"]]);
+		expect(readPendingExit(SESSION, agentDir)?.intent).toBeUndefined();
+	});
+
+	it("opens the `plan` window only once the description is agreed", async () => {
+		const agentDir = temp("maestro-agent-");
+		const host = seatHost(agentDir);
+		await host.mode("auto", fakeUi({ answers: COMPILE_ANSWERS }).ui);
+		expect(host.active()).not.toContain("plan");
+
+		const agreeing = fakeUi();
+		await host.toolResult(
+			{
+				toolName: PLAN_INTENT_TOOL,
+				isError: false,
+				details: { submitted: true, summary: SUMMARY },
+			},
+			agreeing.ui,
 		);
+		await host.entry.exitSettled();
+
+		expect(host.entry.exitWindow()).toBe("plan");
+		expect(host.active()).toContain("plan");
+		// Still plan mode, and the model has the plan steer.
+		expect(host.entry.currentMode()).toBe("plan");
+		expect(host.steers.at(-1)?.[0]).toContain("Call `plan` once");
+		expect(readPendingExit(SESSION, agentDir)?.intent).toBe(SUMMARY);
+	});
+
+	it("returns from the tool_result hook before any dialog is answered", async () => {
+		const agentDir = temp("maestro-agent-");
+		const host = seatHost(agentDir);
+		await host.mode("auto", fakeUi({ answers: COMPILE_ANSWERS }).ui);
+
+		let answered = false;
+		let opened = false;
+		let release: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const ui: ExitFlowUi = {
+			select: async () => {
+				opened = true;
+				await held;
+				answered = true;
+				return `${INTENT_AGREE} (default)`;
+			},
+			input: async () => undefined,
+			confirm: async () => false,
+			editor: async () => undefined,
+			notify: () => {},
+		};
+
+		await host.toolResult(
+			{
+				toolName: PLAN_INTENT_TOOL,
+				isError: false,
+				details: { submitted: true, summary: SUMMARY },
+			},
+			ui,
+		);
+
+		// The hook has returned. The dialog is open and unanswered, which is the
+		// whole point: the model's tool call is not shown running for minutes.
+		expect(opened).toBe(true);
+		expect(answered).toBe(false);
+		release?.();
+		await host.entry.exitSettled();
+		expect(answered).toBe(true);
+		expect(host.entry.exitWindow()).toBe("plan");
 	});
 
 	it("leaves the posture where it was when the human keeps planning", async () => {
 		const agentDir = temp("maestro-agent-");
 		const host = seatHost(agentDir);
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
+			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
 		});
 
 		await host.mode("auto", fake.ui);
 
 		expect(host.entry.currentMode()).toBe("plan");
-		expect(host.entry.pendingExit()).toBe(false);
+		expect(host.entry.exitWindow()).toBe("none");
 		expect(host.active()).not.toContain("plan");
+		expect(host.active()).not.toContain(PLAN_INTENT_TOOL);
 		expect(host.steers).toEqual([]);
 		// The mode report is not printed either: nothing changed to report.
 		expect(fake.notices).toEqual([]);
@@ -843,13 +1172,13 @@ describe("/mode auto, from plan mode", () => {
 		const host = seatHost(agentDir);
 		const fake = fakeUi();
 
-		// A headless session cannot be asked six questions, so it gets the switch
-		// it asked for rather than six defaults nobody chose.
+		// A headless session cannot be asked two questions, so it gets the switch
+		// it asked for rather than two defaults nobody chose.
 		await host.headlessMode("auto", fake.ui);
 
 		expect(host.entry.currentMode()).toBe("auto");
 		expect(fake.dialogs()).toEqual([]);
-		expect(host.entry.pendingExit()).toBe(false);
+		expect(host.entry.exitWindow()).toBe("none");
 		expect(host.steers).toEqual([]);
 	});
 
@@ -859,27 +1188,28 @@ describe("/mode auto, from plan mode", () => {
 		const fake = fakeUi({
 			answers: COMPILE_ANSWERS,
 			after: (_opened, index) => {
-				if (index === 1) host.entry.abortExitFlow();
+				if (index === 0) host.entry.abortExitFlow();
 			},
 		});
 
 		await host.mode("auto", fake.ui);
 
 		expect(host.entry.currentMode()).toBe("plan");
-		expect(host.entry.pendingExit()).toBe(false);
+		expect(host.entry.exitWindow()).toBe("none");
 		expect(host.steers).toEqual([]);
 	});
 });
 
 describe("the phase-2 seam", () => {
-	it("is declared and empty — phase 1 ships without phase 2", async () => {
+	it("is declared and reachable from a record with an agreed description", async () => {
 		expect(
 			await continueModeExit({
 				record: {
 					schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 					sessionId: SESSION,
 					policy: {},
-					intent: "",
+					wanted: "auto",
+					intent: SUMMARY,
 					createdAt: "2026-09-16T12:00:00.000Z",
 				},
 				slug: "compose-catalogue",

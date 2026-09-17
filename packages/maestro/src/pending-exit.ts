@@ -5,8 +5,13 @@
 // when that document is stored. Nothing in a dialog sequence survives a model
 // turn, so the thing that joins the two halves has to be on disk — and it has
 // to be small enough that reading it is not a second source of truth about the
-// plan. It holds the four facts phase 2 cannot recover: which session, the
-// policy the human chose, the one-line intent, and when.
+// plan. It holds the facts the turns either side of it cannot recover: which
+// session, the policy the dialogs settled, the posture the human asked for and
+// has not been given yet, the agreed description once there is one, and when.
+//
+// THE MODE HAS NOT MOVED WHILE THIS EXISTS. `wanted` is the posture the human
+// asked for at `/mode auto`; the seat stays in plan mode until the run starts,
+// so the record is also the only place that answers "where were we going?".
 //
 // NOTHING UNREADABLE IS TREATED AS ABSENT. `null` means no exit is in progress;
 // a file that exists but does not parse, speaks another schema version, or names
@@ -23,6 +28,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { EXIT_MODES, type ExitMode, isExitMode } from "./mode.js";
 import { pendingExitFile, pendingExitRoot, SESSION_ID_RE } from "./paths.js";
 import { type PlanPolicy, validatePolicy } from "./plan.js";
 
@@ -33,20 +39,38 @@ function policyErrors(policy: PlanPolicy): string[] {
 	return errors;
 }
 
-/** Bumped when the record's shape changes incompatibly. */
-export const PENDING_EXIT_SCHEMA_VERSION = 1 as const;
+/**
+ * Bumped when the record's shape changes incompatibly.
+ *
+ * 2 added `wanted` and made `intent` optional, because the mode no longer moves
+ * at the start of the exit and the description is agreed one model turn later.
+ * There is NO compatibility reader for 1: a v1 record says the posture already
+ * changed, which is a claim this build would act on and cannot check.
+ */
+export const PENDING_EXIT_SCHEMA_VERSION = 2 as const;
 
 /**
- * An exit in progress: the mode has moved, the model has been asked for the
- * document, and nothing else has happened yet.
+ * An exit in progress: the questions are answered, the posture has NOT moved,
+ * and the model has been asked either for the description or for the document.
  */
 export interface PendingExit {
 	readonly schemaVersion: typeof PENDING_EXIT_SCHEMA_VERSION;
 	readonly sessionId: string;
-	/** Exactly the policy block the model was told to copy into the plan. */
+	/**
+	 * Exactly the policy block the model will be told to copy into the plan —
+	 * the effort the human chose, the default gates, and the publication this
+	 * repository derives (`publish.mode` and `publish.base`).
+	 */
 	readonly policy: PlanPolicy;
-	/** The human's one line, for the review that phase 2 will ask for. */
-	readonly intent: string;
+	/** The posture the human asked for, given only when the run starts. */
+	readonly wanted: ExitMode;
+	/**
+	 * The agreed description: two or three sentences the model wrote and the
+	 * human agreed to. ABSENT until it is agreed, and its absence is what holds
+	 * the `plan` tool shut — there is nothing yet for a blind reviewer to check
+	 * the plan against.
+	 */
+	readonly intent?: string;
 	readonly createdAt: string;
 }
 
@@ -61,8 +85,14 @@ export class PendingExitError extends Error {
 	}
 }
 
-/** The longest intent the record will hold; a review prompt gets one line. */
-export const MAX_INTENT_LENGTH = 512;
+/**
+ * The longest agreed description the record will hold.
+ *
+ * Two or three sentences, and this is the bound `plan_intent` refuses past: a
+ * yardstick a blind reviewer has to hold in mind alongside the whole plan stops
+ * being a yardstick somewhere around here.
+ */
+export const MAX_INTENT_LENGTH = 600;
 
 function checkSessionId(sessionId: string): void {
 	if (!SESSION_ID_RE.test(sessionId))
@@ -112,13 +142,20 @@ export function readPendingExit(
 		);
 	if (typeof record.createdAt !== "string" || record.createdAt.length === 0)
 		throw malformed(path, "it has no `createdAt`");
-	if (typeof record.intent !== "string")
-		throw malformed(path, "its `intent` is not a string");
-	if (record.intent.length > MAX_INTENT_LENGTH)
+	if (!isExitMode(record.wanted))
 		throw malformed(
 			path,
-			`its \`intent\` is ${record.intent.length} characters, past the ${MAX_INTENT_LENGTH} bound`,
+			`its \`wanted\` is ${JSON.stringify(record.wanted ?? "missing")}, not one of ${EXIT_MODES.join(", ")}`,
 		);
+	if (record.intent !== undefined) {
+		if (typeof record.intent !== "string")
+			throw malformed(path, "its `intent` is not a string");
+		if (record.intent.length > MAX_INTENT_LENGTH)
+			throw malformed(
+				path,
+				`its \`intent\` is ${record.intent.length} characters, past the ${MAX_INTENT_LENGTH} bound`,
+			);
+	}
 	if (
 		typeof record.policy !== "object" ||
 		record.policy === null ||
@@ -134,7 +171,8 @@ export function readPendingExit(
 		schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 		sessionId,
 		policy: record.policy as PlanPolicy,
-		intent: record.intent,
+		wanted: record.wanted,
+		...(record.intent === undefined ? {} : { intent: record.intent }),
 		createdAt: record.createdAt,
 	};
 }
@@ -161,7 +199,11 @@ export function writePendingExit(
 		throw new PendingExitError(
 			`refusing to write schema ${String(record.schemaVersion)}; this build speaks ${PENDING_EXIT_SCHEMA_VERSION}`,
 		);
-	if (record.intent.length > MAX_INTENT_LENGTH)
+	if (!isExitMode(record.wanted))
+		throw new PendingExitError(
+			`refusing to write \`wanted\` ${JSON.stringify(record.wanted)}; one of ${EXIT_MODES.join(", ")}`,
+		);
+	if (record.intent !== undefined && record.intent.length > MAX_INTENT_LENGTH)
 		throw new PendingExitError(
 			`refusing to write an intent of ${record.intent.length} characters, past the ${MAX_INTENT_LENGTH} bound`,
 		);

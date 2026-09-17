@@ -91,12 +91,15 @@ a conversation:
    itself is still the model's `workflow_run` call, in the open, in the
    transcript — the flow never starts it behind the session's back.
 
-Escape is always an answer, and it is always the first option in the list:
-declining at the start keeps the mode, escaping the compiled-document dialog
-reviews it blind, going back to the conversation after a review leaves the
-findings printed, and declining the last confirmation stores the plan and runs
+Escape is always an answer, and it is always the **safe** one — never the
+first-listed one, which is a different thing: the first option is what you most
+likely want, and escape is what commits to nothing. Escaping the start keeps
+planning, escaping the description dialog goes back to the conversation rather
+than agreeing on your behalf, escaping the compiled document starts no reviewer
+and no run, and declining the last confirmation stores the plan and runs
 nothing. Every ending but the run leaves you in plan mode with `/plan run
-<slug>` and `/mode auto` both named. The dialog tables are in the
+<slug>` and `/mode auto` both named. The dialog tables, with a column for each
+of the two, are in the
 [command reference](commands.md#leaving-plan-mode).
 
 ### Readiness is not preflight

@@ -21,17 +21,21 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	COMPILED_APPROVE,
+	COMPILED_BACK,
 	COMPILED_EDIT,
 	COMPILED_REVIEW,
 	COMPILED_TITLE,
 	createDialogGate,
 	createModeExitController,
 	DIRTY_BACK,
+	DIRTY_CONTINUE,
 	EDITOR_TITLE,
 	EXIT_COMPILE,
 	EXIT_START_TITLE,
 	type ExitFlowPhase2,
 	type ExitFlowUi,
+	INTENT_AGREE,
+	INTENT_TITLE,
 	PLAN_REVIEW_REF,
 	renderReviewers,
 	runExitFlowPhase1,
@@ -383,12 +387,22 @@ function harness(options: HarnessOptions = {}) {
 	};
 }
 
-/** The answers that walk the happy path: include everything, review, start. */
+/**
+ * The answers that walk the happy path: agree, review, start.
+ *
+ * Every one of them is given EXPLICITLY, because escape no longer means any of
+ * them: the recommended row is first in each table and the escape row is the
+ * safe way out, and this path is the one where somebody said yes.
+ */
 const happyPath = (opened: Opened): Answer => {
 	if (opened.kind === "confirm" && opened.title === START_RUN_TITLE)
 		return true;
 	if (opened.kind === "select" && opened.title === COMPILED_TITLE)
 		return pick(opened.options, COMPILED_REVIEW);
+	if (opened.kind === "select" && opened.title.startsWith(INTENT_TITLE))
+		return pick(opened.options, INTENT_AGREE);
+	if (opened.kind === "select" && opened.title.includes("uncommitted"))
+		return pick(opened.options, DIRTY_CONTINUE);
 	return undefined;
 };
 
@@ -543,15 +557,9 @@ describe("the run request", () => {
 		expect(input.effort).toBe("standard");
 	});
 
-	it("leaves the stored plan alone when every dialog is escaped", async () => {
+	it("leaves the stored plan alone when nobody edits it", async () => {
 		const before = tieredPlan(2);
-		const h = harness({
-			plan: before,
-			answer: (opened) =>
-				opened.kind === "confirm" && opened.title === START_RUN_TITLE
-					? true
-					: undefined,
-		});
+		const h = harness({ plan: before, answer: happyPath });
 		const outcome = await runExitFlowPhase2(h.deps);
 		expect(outcome.kind).toBe("handed-off");
 		// Nothing in this half rewrites a plan that nobody edited and that has
@@ -609,28 +617,41 @@ describe("readiness", () => {
 		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 	});
 
-	it("continues past a dirty tree by default and goes back when told to", async () => {
+	it("recommends continuing past a dirty tree, and stops when nobody says so", async () => {
 		const dirty = {
 			...readyWorld,
 			probe: () => ({ root: REPO, resolved: REPO, dirty: true }),
 		};
-		const escaped = harness({ world: dirty, answer: happyPath });
-		expect((await runExitFlowPhase2(escaped.deps)).kind).toBe("handed-off");
-		expect(
-			escaped.ui.titles().some((title) => title.includes("uncommitted")),
-		).toBe(true);
+		// `Continue` is first and carries `(default)`: a dirty tree is a warning,
+		// not a refusal, and every later dialog still gates the run.
+		const asked = harness({ world: dirty, answer: happyPath });
+		expect((await runExitFlowPhase2(asked.deps)).kind).toBe("handed-off");
+		const dirtyDialog = asked.ui.opened.find((opened) =>
+			opened.title.includes("uncommitted"),
+		);
+		expect(dirtyDialog?.options).toEqual([
+			`${DIRTY_CONTINUE} (default)`,
+			DIRTY_BACK,
+		]);
 
-		const back = harness({
-			world: dirty,
-			answer: (opened) =>
+		for (const answer of [
+			// Said out loud…
+			(opened: Opened) =>
 				opened.title.includes("uncommitted")
 					? pick(opened.options, DIRTY_BACK)
 					: happyPath(opened),
-		});
-		const outcome = await runExitFlowPhase2(back.deps);
-		expect(outcome.kind).toBe("back");
-		expect(back.steers).toEqual([]);
-		expect(readPendingExit(SESSION, back.agentDir)).toBeNull();
+			// …and not answered at all. Escape is the safe way out of a question
+			// about the state of somebody else's working tree.
+			(opened: Opened) =>
+				opened.title.includes("uncommitted") ? undefined : happyPath(opened),
+		]) {
+			const back = harness({ world: dirty, answer });
+			const outcome = await runExitFlowPhase2(back.deps);
+			expect(outcome.kind).toBe("back");
+			expect(back.steers).toEqual([]);
+			expect(back.modes).toEqual([]);
+			expect(readPendingExit(SESSION, back.agentDir)).toBeNull();
+		}
 	});
 
 	it("reports what it cannot ask about, all of it at once", async () => {
@@ -779,17 +800,44 @@ describe("the compiled document", () => {
 		expect(h.said()).toContain("Projected: 9 tasks");
 	});
 
-	it("takes the blind review when the dialog is escaped", async () => {
-		const h = harness({
-			answer: (opened) =>
-				opened.kind === "confirm" && opened.title === START_RUN_TITLE
-					? true
-					: undefined,
-		});
-		const outcome = await runExitFlowPhase2(h.deps);
-		expect(outcome.kind).toBe("handed-off");
-		// Escape at 12 is `Review it blind`, which is what the label says.
-		expect(h.provider?.started()).toHaveLength(1);
+	it("recommends the blind review, and starts nothing when it is escaped", async () => {
+		const asked = harness({ answer: happyPath });
+		await runExitFlowPhase2(asked.deps);
+		const dialog = asked.ui.opened.find(
+			(opened) => opened.title === COMPILED_TITLE,
+		);
+		// Reviewing is first and labelled: it is what somebody opening this
+		// dialog usually wants.
+		expect(dialog?.options).toEqual([
+			`${COMPILED_REVIEW} (default)`,
+			COMPILED_APPROVE,
+			COMPILED_EDIT,
+			COMPILED_BACK,
+		]);
+		expect(asked.provider?.started()).toHaveLength(1);
+
+		// Escape is `Back to the conversation`: every other answer here starts
+		// something — a reviewer, an editor, or the run.
+		for (const answer of [
+			() => undefined,
+			(opened: Opened) =>
+				opened.title === COMPILED_TITLE
+					? pick(opened.options, COMPILED_BACK)
+					: happyPath(opened),
+		]) {
+			const back = harness({ answer });
+			const outcome = await runExitFlowPhase2(back.deps);
+			expect(outcome.kind).toBe("back");
+			expect(back.provider?.started()).toEqual([]);
+			expect(back.steers).toEqual([]);
+			expect(back.modes).toEqual([]);
+			expect(back.ui.titles()).not.toContain(START_RUN_TITLE);
+			// The same ending as every other `Back to the conversation`.
+			expect(back.said()).toContain("still in plan mode");
+			expect(back.said()).toContain("/plan run compose");
+			expect(back.said()).not.toContain("/mode plan");
+			expect(readPendingExit(SESSION, back.agentDir)).toBeNull();
+		}
 	});
 
 	it("writes an edit back into the plan and shows the document again", async () => {
@@ -1124,7 +1172,7 @@ describe("the last question", () => {
 			answer: (opened) =>
 				opened.kind === "confirm" && opened.title === START_RUN_TITLE
 					? false
-					: undefined,
+					: happyPath(opened),
 		});
 		const outcome = await runExitFlowPhase2(h.deps);
 		expect(outcome.kind).toBe("stored");

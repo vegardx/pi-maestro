@@ -67,13 +67,20 @@ no dialog UI.
 starts. Everything before that happens in plan mode, which is why no path out of
 the exit ever offers `/mode plan`: the seat never left it.
 
-| # | Dialog | Default (first in the list, and what escape takes) |
-| --- | --- | --- |
-| 1 | `Keep planning` / `Compile it into a workflow run` / `Just switch mode` | *Keep planning* |
-| 2 | Effort: `standard`, `cheap`, `deep` | `standard` |
+| # | Dialog | First, marked `(default)` | Escape |
+| --- | --- | --- | --- |
+| 1 | `Compile it into a workflow run` / `Just switch mode` / `Keep planning` | *Compile it into a workflow run* | *Keep planning* |
+| 2 | Effort: `standard`, `cheap`, `deep` | `standard` | `standard` |
 
-Every option list in this flow puts its default first, so the row the dialog
-highlights and the row the escape key takes are the same row.
+**Ordering and escape are two different questions, and this flow answers them
+separately.** The first option — the one a `select` highlights, and the only one
+labelled `(default)` — is the action you most likely want. Escape is the safe
+way out, and it never commits to anything: it starts no run, agrees to nothing,
+and writes nothing you did not ask for. The two are the same row in exactly one
+table, the effort dial, because every answer there is a reversible setting on a
+run that four later dialogs still gate. An answer the list does not recognise
+takes the escape too, for the same reason: it is not evidence that anybody chose
+anything.
 
 *Keep planning* — and escape at 1 — leaves the posture where it was and records
 nothing. *Just switch mode* switches immediately and records nothing. *Compile*
@@ -101,9 +108,15 @@ conversation, and submits them with `plan_intent { summary }`. The tool is held
 only while an exit is in progress, and it refuses anything that is not two or
 three sentences or is longer than 600 characters.
 
-| # | Dialog | Default |
-| --- | --- | --- |
-| 3 | `Is this what we are doing?` with the sentences shown, then `Agree` / `Edit` / `Back to the conversation` | *Agree*, which is also what escape takes |
+| # | Dialog | First, marked `(default)` | Escape |
+| --- | --- | --- | --- |
+| 3 | `Is this what we are doing?` with the sentences shown, then `Agree` / `Edit` / `Back to the conversation` | *Agree* | *Back to the conversation* |
+
+*Agree* is first because it is usually right — the sentences were written from
+your own conversation and are shown in full. **Escape does not agree.**
+Agreement is the one thing here that only a human can supply: it becomes the
+blind reviewer's yardstick and it opens the `plan` tool, and an agreement
+obtained by not answering is not one.
 
 *Edit* opens the sentences in an editor and asks again with whatever comes back;
 escaping the editor discards the edit. *Back to the conversation* deletes the
@@ -124,16 +137,21 @@ description, the rest of the exit runs. It runs **detached** — the tool result
 returns immediately, so the model's `plan` call is not shown running for as long
 as the dialogs take to answer. Anything the plan already answers is never asked.
 
-| # | Step | Asked |
-| --- | --- | --- |
-| 7 | [Readiness](workflow-plans.md#readiness) of every repository the plan names | nothing, when the machine is ready |
-| 7a | `Create <path>?`, then the creating commands through the audited `bash` | per missing repository; *No* goes back to the conversation |
-| 7b | A dirty tree: `Continue` / `Back to the conversation` | per dirty repository; escape is *Continue* |
-| 12 | The agreed description, the reviewers, the compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` | once; escape is *Review it blind* |
-| 13 | `Edit` opens the compiled document as JSON | on demand; escape discards it |
-| 15 | Per **blocking** finding: `Back to the conversation` / `Accept the suggestion` / `Dismiss` | per finding; escape is *Back to the conversation* |
-| 15a | `Dismiss` asks why | per dismissal; an empty reason is not a dismissal and the finding is asked again |
-| 18 | `Start the run?` | once; *No* leaves the plan stored and runs nothing |
+| # | Step | Asked | First, marked `(default)` | Escape |
+| --- | --- | --- | --- | --- |
+| 7 | [Readiness](workflow-plans.md#readiness) of every repository the plan names | nothing, when the machine is ready | — | — |
+| 7a | `Create <path>?`, then the creating commands through the audited `bash` | per missing repository | — | *No*, which goes back to the conversation |
+| 7b | A dirty tree: `Continue` / `Back to the conversation` | per dirty repository | *Continue* | *Back to the conversation* |
+| 12 | The agreed description, the reviewers, the compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` / `Back to the conversation` | once | *Review it blind* | *Back to the conversation* |
+| 13 | `Edit` opens the compiled document as JSON | on demand | — | discards the edit |
+| 15 | Per **blocking** finding: `Accept the suggestion` / `Dismiss` / `Back to the conversation` | per finding | *Accept the suggestion*, or *Dismiss* once the patch has been shown not to apply | *Back to the conversation* |
+| 15a | `Dismiss` asks why | per dismissal | — | an empty reason is not a dismissal and the finding is asked again |
+| 18 | `Start the run?` | once | — | *No*: the plan is stored and nothing runs |
+
+Everything at 12 except *Back to the conversation* starts something — a
+reviewer, an editor, or the run — so that is what escape there does: the plan
+stays stored, the record is deleted, you stay in plan mode, and the notice is
+the same one every other ending prints.
 
 The review lenses are **not** asked about. The plan and its
 `policy.reviewDefault` decide them, and dialog 12 — with *Edit* behind it — is
@@ -161,10 +179,10 @@ for the description, the compiled document, and `Start the run?`.
 The exit ends in exactly one of four places: the run request (19) — the only
 place `setMode` is called, so the posture becomes the one asked for at `/mode`
 immediately before the record is deleted and the model is handed the
-`workflow_run` call; a stored plan and nothing else; back in the conversation;
-or a refusal that names what stopped it. All four delete the pending record, and
-the three that are not the run leave you in plan mode with one notice naming
-`/plan run <slug>` and `/mode <auto|hack>`.
+`workflow_run` call; a stored plan and nothing else; back in the conversation
+(7a, 7b, 12 or 15); or a refusal that names what stopped it. All four delete the
+pending record, and the three that are not the run leave you in plan mode with
+one notice naming `/plan run <slug>` and `/mode <auto|hack>`.
 
 Two fallbacks keep a reduced seat working. Without a workflow runtime — or when
 one refuses to validate or project — the flow stops at 11, says so, and leaves

@@ -19,8 +19,10 @@
 //   - **A dismissal has a reason.** An empty reason is not a dismissal; the
 //     finding is asked again. The reason is what a later reader has instead of
 //     the dialog nobody recorded.
-//   - **Escape is *Back to the conversation*.** The most severe findings are
-//     the ones where doing nothing must not mean proceeding.
+//   - **Escape is *Back to the conversation*, and it is listed FIRST.** The
+//     most severe findings are the ones where doing nothing must not mean
+//     proceeding — so the row the dialog highlights and the row escape takes
+//     are the same row, which is the rule every option table here follows.
 //
 // The walk holds no UI of its own: dialogs arrive as the injected `ExitDialogs`
 // port, which counts them, carries the abort signal, and defers while another
@@ -150,6 +152,20 @@ export const FINDING_ACCEPT = "Accept the suggestion";
 export const FINDING_DISMISS = "Dismiss";
 export const FINDING_BACK = "Back to the conversation";
 
+/**
+ * The full table, default first, for the test that checks every one of them.
+ *
+ * The live table is built per finding — *Accept the suggestion* is dropped once
+ * a patch has failed to apply — but the ORDER and the default are this one's.
+ */
+export const FINDING_OPTIONS: readonly ExitOption<
+	"back" | "accept" | "dismiss"
+>[] = [
+	{ value: "back", text: FINDING_BACK, fallback: true },
+	{ value: "accept", text: FINDING_ACCEPT },
+	{ value: "dismiss", text: FINDING_DISMISS },
+];
+
 export const DISMISS_REASON_TITLE = "Why is this not a problem?";
 
 /** The title of one finding's dialog, which is the finding itself. */
@@ -232,13 +248,9 @@ export async function walkFindings(
 		let acceptable = finding.patch !== undefined;
 		let settled = false;
 		while (!settled) {
-			const options: ExitOption<"accept" | "dismiss" | "back">[] = [
-				...(acceptable
-					? [{ value: "accept" as const, text: FINDING_ACCEPT }]
-					: []),
-				{ value: "dismiss" as const, text: FINDING_DISMISS },
-				{ value: "back" as const, text: FINDING_BACK, fallback: true as const },
-			];
+			const options = FINDING_OPTIONS.filter(
+				(option) => option.value !== "accept" || acceptable,
+			);
 			const choice = await dialogs.choose(
 				findingTitle(finding, index + 1, blocking.length),
 				options,

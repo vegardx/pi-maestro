@@ -33,14 +33,19 @@ validated help/version probes let the auditor inspect unfamiliar PATH commands
 without granting it a general shell. Most substantial implementation work should
 be delegated to isolated subagents.
 
-**Starting a workflow run from `plan` mode is intended, not a loophole.** A run
+**A workflow run is allowed from `plan` mode when you ask for one.** A run
 mutates neither the working tree nor the host: its implementation work happens in
 a sandboxed subagent attempt against a worktree of its own, its output is a
 handoff commit in the repository's object store, and nothing reaches a branch or
 a remote until publication — a separate step, decided by a human, outside the
-run. A read-only research or review run started while planning is therefore an
-ordinary thing to do, and the mode's refusal rail is not the thing that makes it
-safe.
+run. So the posture is no obstacle when you want a research or review run while
+planning, and the mode's refusal rail is not the thing that makes it safe.
+
+**It is a permission, not an invitation.** In plan mode the model explores the
+repository and converses with you. It does not start workflow runs to review,
+verify or research its own plan — the plan is checked by the blind reviewer in
+the exit below, on the compiled document, not by the author of the plan — and it
+never writes files or branches. A run starts when you ask for one.
 
 ## Planning
 

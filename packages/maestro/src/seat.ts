@@ -45,7 +45,10 @@ export type ExitWindow = "none" | "intent" | "plan";
  * the registration, the defence-in-depth block and the tests cannot disagree.
  *
  * Workflow runs are deliberately NOT gated this way: they never touch the
- * working tree or the host, so running one from plan mode is intended.
+ * working tree or the host, so a run is allowed from plan mode when the human
+ * asks for one. That is a permission, not an invitation — plan mode explores and
+ * converses, and the model does not run a workflow to review, verify or research
+ * its own plan, which is the exit's blind reviewer's job.
  */
 export function planToolAvailable(mode: ModeName, window: ExitWindow): boolean {
 	return mode !== "plan" || window === "plan";

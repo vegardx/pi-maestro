@@ -442,6 +442,59 @@ export function withDefaultStages(plan: Plan): StagedPlan {
 }
 
 /**
+ * The plan with every heavy reviewer's `diverse` written down.
+ *
+ * WHY THIS IS A REWRITE AND NOT A DEFAULT. A heavy lens reads the same work the
+ * implementer wrote; a reviewer from another model family fails differently,
+ * which is the entire point of a second opinion. Both compilers — pi-maestro's
+ * `compileStageDocument` and pi-workflow's `plan-to-ship` — agree on that, and
+ * they used to disagree about the document, because a lens with `diverse`
+ * undefined left each of them to decide for itself. Writing `true` into the
+ * STORED plan settles it in the one place a receipt can be checked against: the
+ * exit does this once, before it compiles anything, so what the human reviews
+ * and what the run executes are the same document.
+ *
+ * Only `undefined` is filled in. A plan that says `diverse: false` on a heavy
+ * lens has answered the question, and answering it again would be the flow
+ * overruling the author.
+ *
+ * Returns `undefined` when there was nothing to write, so a caller does not
+ * save — and move the digest of — a document nobody changed.
+ */
+export function withExplicitDiverse(plan: Plan): Plan | undefined {
+	let changed = false;
+	const heavyUndecided = (routing: {
+		readonly tier?: ReviewTier;
+		readonly diverse?: boolean;
+	}): boolean => routing.tier === "heavy" && routing.diverse === undefined;
+	const deliverables = plan.deliverables.map((deliverable) => {
+		const tasks = deliverable.tasks.map((task) => {
+			if (!task.by || !heavyUndecided(task.by)) return task;
+			changed = true;
+			return { ...task, by: { ...task.by, diverse: true } };
+		});
+		const stages = deliverable.stages?.map((stage) => {
+			if (stage.use !== "review-fan-out") return stage;
+			let stageChanged = false;
+			const lenses = stage.lenses.map((lens) => {
+				if (!heavyUndecided(lens)) return lens;
+				stageChanged = true;
+				return { ...lens, diverse: true };
+			});
+			if (!stageChanged) return stage;
+			changed = true;
+			return { ...stage, lenses };
+		});
+		return {
+			...deliverable,
+			tasks,
+			...(stages ? { stages } : {}),
+		};
+	});
+	return changed ? { ...plan, deliverables } : undefined;
+}
+
+/**
  * What is wrong with a plan, and what is merely worth knowing.
  *
  * Warnings are separate from errors because a dirty working tree is a real

@@ -28,6 +28,7 @@ import {
 	type Task,
 	validatePlan,
 	withDefaultStages,
+	withExplicitDiverse,
 } from "../packages/maestro/src/plan.js";
 import { renderPlan } from "../packages/maestro/src/plan-command.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
@@ -639,5 +640,100 @@ describe("stages and policy survive the store", () => {
 		expect(text).toContain(
 			"review — review-fan-out over security (tier standard), synthesis optional",
 		);
+	});
+});
+
+// ── Heavy implies diverse, written down ──────────────────────────────────────
+//
+// The plan-mode exit normalises a stored plan through this before anything
+// compiles it. The property that matters is that it is a REWRITE of the
+// document and not a default applied on the way to a compiler: two compilers
+// read this plan, and an undefined field is where they disagreed.
+
+describe("writing `diverse` onto every heavy reviewer", () => {
+	it("fills in `tasks[].by` and authored lenses, and only where undecided", () => {
+		const subject = plan({
+			deliverables: [
+				deliverable("api", {
+					tasks: [
+						task("build"),
+						task("sec", { lens: "security", tier: "heavy" }),
+						task("contracts", {
+							lens: "contracts",
+							tier: "heavy",
+							diverse: false,
+						}),
+						task("tests", { lens: "tests", tier: "standard" }),
+					],
+				}),
+				deliverable("web", {
+					stages: [
+						implement,
+						{
+							use: "review-fan-out",
+							id: "review",
+							lenses: [
+								{ id: "risk", tier: "heavy" },
+								{ id: "replay", tier: "light" },
+							],
+						},
+					],
+				}),
+			],
+		});
+
+		const next = withExplicitDiverse(subject);
+		if (!next)
+			throw new Error("a heavy reviewer with no answer was not filled in");
+		expect(next.deliverables[0]?.tasks.map((t) => t.by?.diverse)).toEqual([
+			undefined,
+			true,
+			// Already answered, and answering it again would overrule the author.
+			false,
+			undefined,
+		]);
+		const review = next.deliverables[1]?.stages?.[1];
+		expect(review).toMatchObject({
+			lenses: [
+				{ id: "risk", tier: "heavy", diverse: true },
+				{ id: "replay", tier: "light" },
+			],
+		});
+		// The input is untouched: the caller decides whether to store the result.
+		expect(subject.deliverables[0]?.tasks[1]?.by?.diverse).toBeUndefined();
+		// And the rewritten document is still a plan.
+		expect(errorsOf(next)).toEqual([]);
+	});
+
+	it("answers `undefined` when there is nothing to write, so the digest holds", () => {
+		const untouched = plan({
+			deliverables: [
+				deliverable("api", {
+					tasks: [task("build"), task("tests", { lens: "tests" })],
+				}),
+			],
+		});
+		expect(withExplicitDiverse(untouched)).toBeUndefined();
+		expect(planDigest(untouched)).toBe(planDigest(untouched));
+	});
+
+	it("reaches the compiled stage list, which is the point of writing it down", () => {
+		const subject = plan({
+			deliverables: [
+				deliverable("api", {
+					tasks: [
+						task("build"),
+						task("sec", { lens: "security", tier: "heavy" }),
+					],
+				}),
+			],
+		});
+		const next = withExplicitDiverse(subject);
+		if (!next) throw new Error("nothing was written down");
+		const stages = withDefaultStages(next).deliverables[0]?.stages;
+		const review = stages?.find((stage) => stage.use === "review-fan-out");
+		expect(review).toMatchObject({
+			lenses: [{ id: "security", tier: "heavy", diverse: true }],
+		});
 	});
 });

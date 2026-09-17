@@ -282,8 +282,10 @@ describe("Pi's live tool set follows the mode", () => {
 				"plan_b",
 			]);
 		}
-		// A run touches neither this working tree nor the host, so plan mode may
-		// start one. Nothing in the seat's gate has an opinion about it.
+		// A run touches neither this working tree nor the host, so plan mode is
+		// allowed to start one when the human asks. Nothing in the seat's gate has
+		// an opinion about it — the "only when asked, never over its own plan"
+		// half of the rule is said in the guidance, not enforced by a refusal.
 		for (const name of ["workflow_run", "workflow_validate", "workflow_decide"])
 			expect(seatToolBlockReason("plan", name)).toBeUndefined();
 		expect(entry.seat().tools.declaredFor("maestro")).not.toContain(

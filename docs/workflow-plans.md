@@ -188,6 +188,14 @@ split by two model turns: the dialogs ask what only a human knows, the model
 writes the description, one dialog agrees it, the model writes the plan, and the
 second half compiles, reviews and launches it.
 
+**What plan mode may run.** A workflow run is allowed from plan mode — it
+touches neither the working tree nor the host — but only when the human asks for
+one. It is a permission, not an invitation: in plan mode the model explores and
+converses, it never writes files or branches, and it does not start a workflow
+run to review, verify or research its own plan. The plan is checked by the blind
+reviewer in the second half below, against the agreed description, on the
+compiled document; a plan reviewed by its own author is not reviewed.
+
 **The posture does not move until the run starts.** `/mode auto` used to switch
 first and ask later, which left every path that ends without a run — and there
 are five — in a posture nobody chose for what they ended up doing. The seat

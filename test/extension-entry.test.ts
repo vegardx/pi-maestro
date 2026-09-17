@@ -144,6 +144,14 @@ describe("interactive seat extension entry", () => {
 		);
 		expect(planStoredNotice(stored, "plan")).toContain("approve-plan");
 		expect(planStoredNotice(stored, "plan")).toContain("/mode auto");
+		// The notice states the permission, not an invitation: a run is allowed
+		// from plan mode when the human asks for one, and never to check the plan.
+		expect(planStoredNotice(stored, "plan")).toContain(
+			"allowed from plan mode when you ask",
+		);
+		expect(planStoredNotice(stored, "plan")).toContain(
+			"permission, not an invitation",
+		);
 		// A posture that can already write does not need the exit offered.
 		expect(planStoredNotice(stored, "auto")).not.toContain("/mode auto");
 

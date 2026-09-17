@@ -62,8 +62,11 @@ const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
  * been asked for a plan.
  *
  * Nothing else is gated by mode. Workflow tools in particular are left alone:
- * a run touches neither this working tree nor the host, so starting one from
- * plan mode is intended, not an oversight.
+ * a run touches neither this working tree nor the host, so plan mode is ALLOWED
+ * to start one when the human asks for one. Allowed is not invited: in plan mode
+ * the model explores and converses, and it does not start a workflow run to
+ * review, verify or research its own plan — the exit's blind reviewer is what
+ * checks a plan — and it never writes files or branches.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
@@ -87,8 +90,8 @@ export function seatToolBlockReason(
  * The tool result already tells the MODEL how to run the plan. This is the
  * other half, and now also the one place a human is told where the `plan` tool
  * lives: plan mode is the conversation and does not hold it, the exit offers it,
- * and a workflow run is allowed from either posture because it touches neither
- * the working tree nor the host.
+ * and a workflow run is allowed from either posture — when the human asks for
+ * one — because it touches neither the working tree nor the host.
  *
  * Returns the text rather than notifying, so the decision is testable without a
  * UI and so the event wiring stays one line.
@@ -106,9 +109,11 @@ export function planStoredNotice(
 	return (
 		`Stored plan \`${details.slug}\`. Run it with \`/plan run ${details.slug} [${EFFORTS.join("|")}]\`; ` +
 		`approval happens at the run's \`approve-plan\` checkpoint.` +
-		" The `plan` tool is not held in plan mode — only while leaving it — but a" +
-		" workflow run, research included, may be started from plan mode: it touches" +
-		" neither this working tree nor the host." +
+		" The `plan` tool is not held in plan mode — only while leaving it. A" +
+		" workflow run, research included, is allowed from plan mode when you ask" +
+		" for one: it touches neither this working tree nor the host. It is a" +
+		" permission, not an invitation — the model converses in plan mode and does" +
+		" not run workflows to review, verify or research its own plan." +
 		(mode === "plan"
 			? " To hand-edit instead, leave this posture with `/mode auto`."
 			: "")

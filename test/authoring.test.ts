@@ -129,6 +129,10 @@ describe("a plan is written whole", () => {
 		const text = inPlanMode.content[0].text;
 		expect(text).toContain("`/mode auto`");
 		expect(text).toContain("Run it: `/plan run arc");
+		// A run is allowed from here once asked for — and never to check this
+		// plan, which is the blind reviewer's job.
+		expect(text).toContain("once I ask for one");
+		expect(text).toContain("blind reviewer");
 
 		// Not said in a posture that can already write: it would be noise.
 		const inAuto = await authoring(repo(), "auto").write(minimal);

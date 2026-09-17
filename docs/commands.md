@@ -144,8 +144,9 @@ as the dialogs take to answer. Anything the plan already answers is never asked.
 | 7b | A dirty tree: `Continue` / `Back to the conversation` | per dirty repository | *Continue* | *Back to the conversation* |
 | 12 | The agreed description, the reviewers, the compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` / `Back to the conversation` | once | *Review it blind* | *Back to the conversation* |
 | 13 | `Edit` opens the compiled document as JSON | on demand | — | discards the edit |
-| 15 | Per **blocking** finding: `Accept the suggestion` / `Dismiss` / `Back to the conversation` | per finding | *Accept the suggestion*, or *Dismiss* once the patch has been shown not to apply | *Back to the conversation* |
+| 15 | Per **blocking** finding: `Accept the suggestion` (only when the reviewer brought a patch) / `Revise with the model` (only while a review is left) / `Dismiss` / `Back to the conversation` | per finding, until one is answered *Revise* | *Accept the suggestion*; *Revise with the model* when there is no patch to take; *Dismiss* once the patch has been shown not to apply, or on the last review with no patch | *Back to the conversation* |
 | 15a | `Dismiss` asks why | per dismissal | — | an empty reason is not a dismissal and the finding is asked again |
+| 15b | `Revise with the model` ends the walk at once | on demand | — | the whole review goes back to the model; nothing else is asked |
 | 18 | `Start the run?` | once | — | *No*: the plan is stored and nothing runs |
 
 Everything at 12 except *Back to the conversation* starts something — a
@@ -163,14 +164,33 @@ says `diverse: false` keeps its answer.
 
 Steps 11, 14, 16 and 17 open no dialog. 11 compiles the plan into the stage
 document and asks the runtime to validate and project it; 14 starts the headless
-`plan-review` and says so; 16 recompiles and re-reviews **once** after at least
-one accepted finding, and a second blocking review ends the loop; 17 prints
-`major` and `minor` findings as one notification and never asks about them.
+`plan-review` and says so; 16 recompiles and re-reviews after at least one
+accepted finding; 17 prints `major` and `minor` findings as one notification and
+never asks about them.
 
 *Accept* applies the finding's RFC 6902 patch to the stored plan, re-validates
 it and saves it. A patch that does not apply, or one that would make the plan
 stop validating, is reported and the finding is asked again **without** the
 accept option.
+
+*Revise with the model* is what a finding with no patch is for. It ends the walk
+where it stands — the findings that were not asked go back too, because one
+rewrite answers the whole review — and the model is sent **every** finding
+(blocking, major and minor, each with its `where` and `what`) plus the
+reviewer's notes, verbatim, with the instruction to rewrite the plan, call
+`plan` again with the whole document and the `policy` block unchanged, and stop
+there. It is the one answer in the whole exit that does not end it: the pending
+record stays, the `plan` tool's window stays open, the posture stays `plan`, and
+the model's next stored plan runs this half again from readiness — so you are
+shown the revised plan at dialog 12 and it is reviewed again.
+
+**Three blind reviews per exit, and no more.** The count lives on the pending
+record, so it survives the model turns a revise costs, and **accepts and revises
+count against the same bound** — each of them buys one re-review. On the last
+review the walk is asked without *Revise with the model*, because nothing would
+read another rewrite, and however it is answered that reading ends back in the
+conversation with the findings printed. An accepted patch still lands on the
+stored plan on the way out.
 
 A three-deliverable plan whose reviewers are already tiered, on a ready machine,
 with a clean blind review, asks **five** dialogs in total: two in phase 1, one
@@ -182,7 +202,9 @@ immediately before the record is deleted and the model is handed the
 `workflow_run` call; a stored plan and nothing else; back in the conversation
 (7a, 7b, 12 or 15); or a refusal that names what stopped it. All four delete the
 pending record, and the three that are not the run leave you in plan mode with
-one notice naming `/plan run <slug>` and `/mode <auto|hack>`.
+one notice naming `/plan run <slug>` and `/mode <auto|hack>`. *Revise with the
+model* is not one of them: it suspends the exit rather than ending it, keeps the
+record, and hands the next turn to the model.
 
 Two fallbacks keep a reduced seat working. Without a workflow runtime — or when
 one refuses to validate or project — the flow stops at 11, says so, and leaves

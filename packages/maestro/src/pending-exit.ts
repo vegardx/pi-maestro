@@ -7,7 +7,8 @@
 // to be small enough that reading it is not a second source of truth about the
 // plan. It holds the facts the turns either side of it cannot recover: which
 // session, the policy the dialogs settled, the posture the human asked for and
-// has not been given yet, the agreed description once there is one, and when.
+// has not been given yet, the agreed description once there is one, how many
+// blind reviews the plan has already had, and when.
 //
 // THE MODE HAS NOT MOVED WHILE THIS EXISTS. `wanted` is the posture the human
 // asked for at `/mode auto`; the seat stays in plan mode until the run starts,
@@ -46,6 +47,10 @@ function policyErrors(policy: PlanPolicy): string[] {
  * at the start of the exit and the description is agreed one model turn later.
  * There is NO compatibility reader for 1: a v1 record says the posture already
  * changed, which is a claim this build would act on and cannot check.
+ *
+ * `reviews` arrived inside 2 and did NOT bump it: a record written without one
+ * has had no blind review, which is exactly what its absence reads as, so there
+ * is nothing an older record would make this build believe wrongly.
  */
 export const PENDING_EXIT_SCHEMA_VERSION = 2 as const;
 
@@ -71,6 +76,16 @@ export interface PendingExit {
 	 * the plan against.
 	 */
 	readonly intent?: string;
+	/**
+	 * How many blind reviews this exit has already spent.
+	 *
+	 * ON THE RECORD because the loop crosses model turns: *Revise with the
+	 * model* ends phase 2 with the record still open, the model rewrites the
+	 * plan, and the `plan` call that stores it starts phase 2 again from
+	 * nothing. A count that lived in phase 2's own stack would restart at zero
+	 * every time round, which is a bound that never binds. Absent reads as 0.
+	 */
+	readonly reviews?: number;
 	readonly createdAt: string;
 }
 
@@ -93,6 +108,11 @@ export class PendingExitError extends Error {
  * being a yardstick somewhere around here.
  */
 export const MAX_INTENT_LENGTH = 600;
+
+/** A count of reviews: a whole number of them, and never a negative one. */
+function isReviewCount(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
 
 function checkSessionId(sessionId: string): void {
 	if (!SESSION_ID_RE.test(sessionId))
@@ -156,6 +176,11 @@ export function readPendingExit(
 				`its \`intent\` is ${record.intent.length} characters, past the ${MAX_INTENT_LENGTH} bound`,
 			);
 	}
+	if (record.reviews !== undefined && !isReviewCount(record.reviews))
+		throw malformed(
+			path,
+			`its \`reviews\` is ${JSON.stringify(record.reviews)}, not a count of blind reviews`,
+		);
 	if (
 		typeof record.policy !== "object" ||
 		record.policy === null ||
@@ -173,6 +198,7 @@ export function readPendingExit(
 		policy: record.policy as PlanPolicy,
 		wanted: record.wanted,
 		...(record.intent === undefined ? {} : { intent: record.intent }),
+		...(record.reviews === undefined ? {} : { reviews: record.reviews }),
 		createdAt: record.createdAt,
 	};
 }
@@ -206,6 +232,10 @@ export function writePendingExit(
 	if (record.intent !== undefined && record.intent.length > MAX_INTENT_LENGTH)
 		throw new PendingExitError(
 			`refusing to write an intent of ${record.intent.length} characters, past the ${MAX_INTENT_LENGTH} bound`,
+		);
+	if (record.reviews !== undefined && !isReviewCount(record.reviews))
+		throw new PendingExitError(
+			`refusing to write \`reviews\` ${JSON.stringify(record.reviews)}; it is a count of blind reviews`,
 		);
 	const errors = policyErrors(record.policy);
 	if (errors.length > 0)

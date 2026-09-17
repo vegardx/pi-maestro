@@ -59,10 +59,12 @@ import { dirname } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { PLAN_INTENT_TOOL } from "./authoring.js";
 import {
+	MAX_BLIND_REVIEWS,
 	type PlanReview,
 	partitionFindings,
 	readPlanReview,
 	renderFindings,
+	renderReviseSteer,
 	walkFindings,
 } from "./findings.js";
 import type { ExitMode, ModeName } from "./mode.js";
@@ -1137,6 +1139,12 @@ export function createModeExitController(
 //     a stored plan, back in the conversation, in a refusal or in a session
 //     replacement, it goes. The posture is still `plan` on every one of those
 //     paths except the run, which is the only place `setMode` is called.
+//     *Revise with the model* is the one answer that is not a terminal path:
+//     the review goes back, the record STAYS — with the review count on it —
+//     the window stays open, and the model's next `plan` call starts this half
+//     again from readiness. The bound is what makes that a loop and not a
+//     cycle: `MAX_BLIND_REVIEWS` reads of one plan, counting the re-review an
+//     accepted patch buys, and then the conversation.
 //   - **NOTHING HERE STARTS ANYTHING BUT THE BLIND REVIEW.** The only run this
 //     module starts is the headless `plan-review`, through the runtime's own
 //     allowlist. `plan-to-ship` stays the model's `workflow_run` call, in the
@@ -1462,10 +1470,24 @@ export type ExitFlowPhase2Outcome =
 			readonly why: string;
 			readonly asked: number;
 	  }
-	/** 7b or 15 sent the human back, or a second review still blocked. */
+	/** 7b or 15 sent the human back, or the last review still blocked. */
 	| {
 			readonly kind: "back";
 			readonly slug: string;
+			readonly asked: number;
+	  }
+	/**
+	 * 15 chose *Revise with the model*: the review went back, and this is the
+	 * ONE outcome that leaves the record in place. The plan-tool window stays
+	 * open, the posture stays `plan`, and the model's next `plan` call starts
+	 * phase 2 again from readiness.
+	 */
+	| {
+			readonly kind: "revised";
+			readonly slug: string;
+			readonly steer: string;
+			/** Blind reviews spent so far, as written back onto the record. */
+			readonly reviews: number;
 			readonly asked: number;
 	  }
 	/** A session replacement mid-flow. */
@@ -1497,6 +1519,49 @@ export async function runExitFlowPhase2(
 	const back = (message: string): ExitFlowPhase2Outcome => {
 		ui.notify(backToConversation(slug, record.wanted, message), "info");
 		return settle({ kind: "back", slug, asked: dialogs.asked() });
+	};
+	/**
+	 * Hand the whole review back to the model. THE ONE PATH THAT KEEPS THE
+	 * RECORD.
+	 *
+	 * The count goes onto the record BEFORE the model is asked, because the
+	 * `plan` call that answers this steer is what reads it back, and a steer
+	 * sent against a record that failed to write would be a rewrite outside the
+	 * bound. A record that cannot be written is therefore a refusal, not a
+	 * revise: it is the same rule the description's own dialog follows.
+	 */
+	const revise = (
+		review: PlanReview,
+		reviews: number,
+		asked: number,
+	): ExitFlowPhase2Outcome => {
+		const steer = renderReviseSteer(review.findings, review.notes, reviews);
+		try {
+			writePendingExit({ ...record, reviews }, deps.agentDir);
+		} catch (error) {
+			return refuse(
+				`The review could not be handed back to the model: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+		if (deps.sendUserMessage) {
+			deps.sendUserMessage(steer, { deliverAs: "followUp" });
+			ui.notify(
+				`The whole review went back to the model — ${review.findings.length} finding${
+					review.findings.length === 1 ? "" : "s"
+				}, verbatim. It will rewrite \`${slug}\` and store it again; you are still in plan mode, and you will be shown the revised plan and its review. ${
+					MAX_BLIND_REVIEWS - reviews
+				} of ${MAX_BLIND_REVIEWS} blind reviews are left.`,
+				"info",
+			);
+		} else {
+			ui.notify(
+				`This host cannot steer the session, so ask for the rewrite yourself.\n\n${steer}`,
+				"warning",
+			);
+		}
+		return { kind: "revised", slug, steer, reviews, asked };
 	};
 
 	try {
@@ -1616,7 +1681,10 @@ export async function runExitFlowPhase2(
 		// fallback for a record that somehow reached here without one.
 		const intent = record.intent?.trim() || plan.title;
 		let reviewable = true;
-		let reviewsRun = 0;
+		// Continued from the record, not restarted: a revise ends this flow and
+		// the next `plan` call starts a new one, so a count that began at zero
+		// here would be a bound the loop could never reach.
+		let reviewsRun = record.reviews ?? 0;
 		let straightToReview = false;
 		let verdict: PlanReview | undefined;
 
@@ -1741,20 +1809,18 @@ export async function runExitFlowPhase2(
 					);
 				break;
 			}
-			if (reviewsRun >= 2)
-				// 16 — the loop is over. Two blind reviews that both block is a
-				// plan the conversation has to answer, not one more dialog.
-				return back(
-					renderFindings(
-						review.findings,
-						`The second blind review still blocks (\`${review.verdict}\`):`,
-					),
-				);
+			// The budget is spent when this was the last review the record is
+			// worth: nothing would read a rewrite, so 15 is asked without
+			// *Revise with the model* and this reading of the plan ends in the
+			// conversation however it is answered. An accepted patch still lands
+			// on the stored plan on the way out.
+			const revisable = reviewsRun < MAX_BLIND_REVIEWS;
 			const walk = await walkFindings({
 				dialogs,
 				findings: review.findings,
 				plan,
 				save: (next) => deps.store?.savePlan(next),
+				revisable,
 				...(deps.inspect ? { inspect: deps.inspect } : {}),
 			});
 			plan = walk.plan;
@@ -1763,6 +1829,18 @@ export async function runExitFlowPhase2(
 					renderFindings(
 						review.findings,
 						`The blind review says \`${review.verdict}\`:`,
+					),
+				);
+			if (walk.kind === "revise")
+				return revise(review, reviewsRun, dialogs.asked());
+			if (!revisable)
+				// 16 — the loop is over. `MAX_BLIND_REVIEWS` reads of the same plan
+				// that still block is a plan the conversation has to answer, not
+				// one more dialog and not one more reviewer.
+				return back(
+					renderFindings(
+						review.findings,
+						`Blind review ${reviewsRun} of ${MAX_BLIND_REVIEWS} still blocks (\`${review.verdict}\`), and that is the last one this exit is worth:`,
 					),
 				);
 			// Everything blocking was dismissed, with a reason for each: the

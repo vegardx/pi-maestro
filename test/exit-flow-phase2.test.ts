@@ -47,7 +47,9 @@ import {
 import {
 	FINDING_ACCEPT,
 	FINDING_DISMISS,
+	FINDING_REVISE,
 	type Finding,
+	MAX_BLIND_REVIEWS,
 } from "../packages/maestro/src/findings.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
 import { pendingExitFile } from "../packages/maestro/src/paths.js";
@@ -310,7 +312,8 @@ const INTENT =
 	"We are shipping the component catalogue. " +
 	"It is worth doing because every workflow re-authors the same four stages.";
 
-function record(agentDir: string): PendingExit {
+/** The record phase 2 picks up, optionally with reviews already spent on it. */
+function record(agentDir: string, reviews?: number): PendingExit {
 	const written: PendingExit = {
 		schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 		sessionId: SESSION,
@@ -321,6 +324,7 @@ function record(agentDir: string): PendingExit {
 		},
 		wanted: "auto",
 		intent: INTENT,
+		...(reviews === undefined ? {} : { reviews }),
 		createdAt: "2026-09-16T10:00:00.000Z",
 	};
 	writePendingExit(written, agentDir);
@@ -335,12 +339,22 @@ interface HarnessOptions {
 	readonly world?: ExitFlowPhase2["readiness"];
 	readonly signal?: AbortSignal;
 	readonly gate?: ExitFlowPhase2["gate"];
+	/** Blind reviews already spent on the record this flow picks up. */
+	readonly reviews?: number;
+	/**
+	 * Continue an exit that a *Revise with the model* left open: the same agent
+	 * directory, the same plan store, and whatever the record now says.
+	 */
+	readonly resume?: {
+		readonly agentDir: string;
+		readonly store: ReturnType<typeof fakeStore>;
+	};
 }
 
 function harness(options: HarnessOptions = {}) {
-	const agentDir = temp();
+	const agentDir = options.resume?.agentDir ?? temp();
 	const plan = options.plan ?? tieredPlan(3);
-	const store = fakeStore(plan);
+	const store = options.resume?.store ?? fakeStore(plan);
 	const ui = fakeUi(options.answer, options.after);
 	const provider =
 		options.client === null ? undefined : fakeClient(options.client ?? {});
@@ -348,9 +362,14 @@ function harness(options: HarnessOptions = {}) {
 	const steers: string[] = [];
 	const inputs: [string, string][] = [];
 	const modes: ModeName[] = [];
+	// A resumed flow reads the record the last one left behind — including the
+	// review count, which is the whole reason it is on disk.
+	const resumed = options.resume
+		? readPendingExit(SESSION, agentDir)
+		: undefined;
 	const deps: ExitFlowPhase2 = {
-		record: record(agentDir),
-		slug: plan.slug,
+		record: resumed ?? record(agentDir, options.reviews),
+		slug: store.current().slug,
 		ui: ui.ui,
 		agentDir,
 		setMode: (name) => {
@@ -1088,16 +1107,19 @@ describe("the findings walk", () => {
 		expect(h.ui.titles()).not.toContain(START_RUN_TITLE);
 	});
 
-	it("ends the loop when a second review still blocks", async () => {
+	it("ends the loop when the last review this exit is worth still blocks", async () => {
+		// Two reviews are already spent on the record, so the one this flow runs
+		// is the third and last: whatever is answered at 15, the ending is the
+		// conversation, because nothing would read another rewrite.
 		const h = harness({
 			plan: tieredPlan(1),
+			reviews: MAX_BLIND_REVIEWS - 1,
 			client: {
 				reviews: [
-					{ verdict: "blocked", findings: [blocking(RETITLE)] },
 					{
 						verdict: "blocked",
 						findings: [
-							{ ...blocking(), id: "still-blocked", what: "Still not enough" },
+							{ ...blocking(RETITLE), id: "still-blocked", what: "Not enough" },
 						],
 					},
 				],
@@ -1110,14 +1132,173 @@ describe("the findings walk", () => {
 		});
 		const outcome = await runExitFlowPhase2(h.deps);
 		expect(outcome.kind).toBe("back");
-		expect(h.provider?.started()).toHaveLength(2);
-		expect(h.said()).toContain("The second blind review still blocks");
+		expect(h.provider?.started()).toHaveLength(1);
+		expect(h.said()).toContain(
+			`Blind review ${MAX_BLIND_REVIEWS} of ${MAX_BLIND_REVIEWS} still blocks`,
+		);
+		expect(h.said()).toContain("the last one this exit is worth");
 		expect(h.said()).toContain("still-blocked");
-		// The accepted patch stays: it was applied and stored before the second
-		// review, and a review that still blocks does not undo it.
+		// The accepted patch stays: it was applied and stored on the way out, and
+		// a review nobody will run again does not undo it.
 		expect(h.store.current().deliverables[0]?.title).toBe(
 			"Ship the catalogue properly",
 		);
+		expect(h.steers).toEqual([]);
+		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
+	});
+
+	it("hands the whole review back to the model, and keeps the record open", async () => {
+		const major: Finding = {
+			id: "budget-tight",
+			severity: "major",
+			kind: "budget",
+			where: "/policy",
+			what: "The budget is tight for a deep run",
+		};
+		const second: Finding = {
+			...blocking(),
+			id: "every-task-reviewed",
+			what: "Tasks 0-2 all carry `by`, so nothing implements them",
+			where: "/deliverables/0/tasks/0/by",
+		};
+		const h = harness({
+			plan: tieredPlan(1),
+			client: {
+				reviews: [
+					{
+						verdict: "blocked",
+						findings: [blocking(), second, major],
+						notes: "The graph is sound; the tasks are not.",
+					},
+				],
+			},
+			answer: (opened) => {
+				if (opened.kind === "select" && opened.title.startsWith("Blocking"))
+					return pick(opened.options, FINDING_REVISE);
+				return happyPath(opened);
+			},
+		});
+		const outcome = await runExitFlowPhase2(h.deps);
+
+		expect(outcome.kind).toBe("revised");
+		if (outcome.kind !== "revised") return;
+		expect(outcome.reviews).toBe(1);
+		// The first finding ended the walk: the second was never asked, because
+		// it travels in the steer with everything else.
+		expect(
+			h.ui.titles().filter((title) => title.startsWith("Blocking")),
+		).toHaveLength(1);
+
+		// EVERY finding, verbatim, whatever its severity — plus the notes.
+		expect(h.steers).toHaveLength(1);
+		const steer = h.steers[0] ?? "";
+		for (const finding of [blocking(), second, major]) {
+			expect(steer).toContain(finding.id);
+			expect(steer).toContain(finding.what);
+			expect(steer).toContain(finding.where);
+		}
+		expect(steer).toContain("The graph is sound; the tasks are not.");
+		expect(steer).toContain(`review 1 of ${MAX_BLIND_REVIEWS}`);
+		expect(steer).toContain("call `plan` once with the WHOLE document");
+		expect(steer).toContain("The `policy` block does not move");
+		expect(steer).toContain("Stop after the `plan` call");
+
+		// The one outcome that does NOT settle the record: the window stays open
+		// for the rewrite, with the review spent written onto it.
+		const kept = readPendingExit(SESSION, h.agentDir);
+		expect(kept?.reviews).toBe(1);
+		expect(kept?.intent).toBe(INTENT);
+		// Nothing was started, nothing was patched, and the posture never moved.
+		expect(h.modes).toEqual([]);
+		expect(h.store.saves).toHaveLength(0);
+		expect(h.ui.titles()).not.toContain(START_RUN_TITLE);
+		expect(h.said()).toContain("went back to the model");
+	});
+
+	it("re-enters phase 2 from readiness when the model stores the plan again", async () => {
+		const first = harness({
+			plan: tieredPlan(1),
+			client: {
+				reviews: [{ verdict: "blocked", findings: [blocking()] }],
+			},
+			answer: (opened) => {
+				if (opened.kind === "select" && opened.title.startsWith("Blocking"))
+					return pick(opened.options, FINDING_REVISE);
+				return happyPath(opened);
+			},
+		});
+		expect((await runExitFlowPhase2(first.deps)).kind).toBe("revised");
+
+		// The model rewrote the plan and called `plan` again. Same session, same
+		// record, same store — and the trigger runs this half from the top.
+		first.store.store.savePlan({
+			...first.store.current(),
+			title: "Compose the catalogue, properly",
+		});
+		const again = harness({
+			resume: { agentDir: first.agentDir, store: first.store },
+			client: { reviews: [{ verdict: "ready", findings: [] }] },
+			answer: happyPath,
+		});
+		expect(again.deps.record.reviews).toBe(1);
+		const outcome = await runExitFlowPhase2(again.deps);
+
+		expect(outcome.kind).toBe("handed-off");
+		// Readiness ran again, the revised document was shown again, and the
+		// blind reviewer read it again — the second of three.
+		expect(again.ui.titles()).toContain(COMPILED_TITLE);
+		expect(again.provider?.started()).toHaveLength(1);
+		// The document that was compiled, reviewed and handed over is the
+		// REWRITTEN one, not the plan the first flow was given.
+		expect(again.inputs[0]?.[1]).toContain("Compose the catalogue, properly");
+		// A terminal path, so the record goes.
+		expect(readPendingExit(SESSION, again.agentDir)).toBeNull();
+	});
+
+	it("offers no revise on the last review, and counts accepts against the same bound", async () => {
+		// One review already spent by a revise. This flow runs the second, an
+		// accept buys the third, and the third is offered without *Revise*.
+		const seen: (readonly string[] | undefined)[] = [];
+		const h = harness({
+			plan: tieredPlan(1),
+			reviews: 1,
+			client: {
+				reviews: [
+					{ verdict: "blocked", findings: [blocking(RETITLE)] },
+					{
+						verdict: "blocked",
+						findings: [{ ...blocking(RETITLE), id: "still-blocked" }],
+					},
+				],
+			},
+			answer: (opened) => {
+				if (opened.kind === "select" && opened.title.startsWith("Blocking")) {
+					seen.push(opened.options);
+					return seen.length === 1
+						? pick(opened.options, FINDING_ACCEPT)
+						: pick(opened.options, FINDING_DISMISS);
+				}
+				if (opened.title.startsWith("Why is this")) return "it is covered";
+				return happyPath(opened);
+			},
+		});
+		const outcome = await runExitFlowPhase2(h.deps);
+
+		expect(h.provider?.started()).toHaveLength(2);
+		expect(seen).toHaveLength(2);
+		// Review two of three: a rewrite would still be read, so it is offered.
+		expect(seen[0]?.some((option) => option.startsWith(FINDING_REVISE))).toBe(
+			true,
+		);
+		// Review three: no review left to earn, so no rewrite is offered — and
+		// the ending is the conversation however the finding is answered.
+		expect(seen[1]?.some((option) => option.startsWith(FINDING_REVISE))).toBe(
+			false,
+		);
+		expect(seen[1]?.some((option) => option.startsWith(FINDING_ACCEPT))).toBe(
+			true,
+		);
+		expect(outcome.kind).toBe("back");
 		expect(h.steers).toEqual([]);
 		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 	});

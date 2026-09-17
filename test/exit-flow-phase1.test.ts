@@ -752,6 +752,9 @@ function seatHost(agentDir: string) {
 	};
 	const entry = startSeat(pi, { agentDir, cwd: agentDir });
 	entry.seat();
+	// This fake's live tool set is readable from the start; Pi's is not until
+	// the runtime is bound, which the extension signals from `session_start`.
+	entry.runtimeBound();
 	return {
 		entry,
 		steers,

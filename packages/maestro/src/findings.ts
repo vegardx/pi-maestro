@@ -19,11 +19,19 @@
 //   - **A dismissal has a reason.** An empty reason is not a dismissal; the
 //     finding is asked again. The reason is what a later reader has instead of
 //     the dialog nobody recorded.
+//   - **A finding without a patch goes back to the model.** *Revise with the
+//     model* is what a reviewer's prose is actually for: the finding, and every
+//     other one in the same review, is rendered into a steer, the model rewrites
+//     the plan and stores it again, and the exit re-enters from readiness. It
+//     ends the walk the moment it is chosen — one rewrite answers the whole
+//     review, and asking the remaining findings first would collect decisions
+//     about a document that is being replaced.
 //   - **Escape is *Back to the conversation*.** The most severe findings are
 //     the ones where doing nothing must not mean proceeding. The FIRST option
 //     is a different question — it is what a person most likely wants, which is
-//     to take the patch the reviewer brought — and the two are deliberately not
-//     the same row.
+//     to take the patch the reviewer brought, or to hand the review back to the
+//     model when it brought none — and the two are deliberately not the same
+//     row.
 //
 // The walk holds no UI of its own: dialogs arrive as the injected `ExitDialogs`
 // port, which counts them, carries the abort signal, and defers while another
@@ -147,41 +155,142 @@ export function renderFindings(
 	].join("\n");
 }
 
+/**
+ * How many blind reviews one exit record is worth.
+ *
+ * The loop between the model and the reviewer is bounded or it is not a loop
+ * anybody approved: three reads of the same plan is where a fourth stops being
+ * a check and starts being the flow arguing with itself. Accepts and revises
+ * count against the SAME bound, because both of them buy a re-review.
+ */
+export const MAX_BLIND_REVIEWS = 3;
+
+/**
+ * The whole review, as the model is asked to answer it.
+ *
+ * Verbatim, and all of it: the blocking findings it has to answer, the major
+ * and minor ones it may, and the reviewer's own notes. A steer that summarised
+ * the review would be this seat deciding which findings the model gets to see,
+ * which is the one thing a blind review exists to stop.
+ *
+ * `round` is how many reviews have run, including the one being handed over, so
+ * the model is told what is left rather than being asked to guess.
+ */
+export function renderReviseSteer(
+	findings: readonly Finding[],
+	notes: string | undefined,
+	round: number,
+): string {
+	const { blocking } = partitionFindings(findings);
+	const left = Math.max(MAX_BLIND_REVIEWS - round, 0);
+	return [
+		"The plan you stored has been read by a blind reviewer — the compiled" +
+			" graph, against the description we agreed, without your reasoning — and" +
+			` it blocks: ${blocking.length} blocking finding${blocking.length === 1 ? "" : "s"}.` +
+			` This was review ${round} of ${MAX_BLIND_REVIEWS}; ${
+				left === 1 ? "one more is left" : `${left} are left`
+			}.`,
+		"",
+		renderFindings(findings, "Everything it found, verbatim:"),
+		...(notes?.trim()
+			? ["", "The reviewer's notes, verbatim:", "", notes.trim()]
+			: []),
+		"",
+		"Rewrite the plan so that every blocking finding is answered, and take the" +
+			" major and minor ones wherever you agree with them. Where you think a" +
+			" finding is wrong, say so in the plan — a task, a body, an edge that" +
+			" makes the answer visible — rather than leaving the reviewer to find" +
+			" the same thing again.",
+		"",
+		"Then call `plan` once with the WHOLE document: the same slug, everything" +
+			" the plan already has, with your changes in it. The `policy` block does" +
+			" not move — it is the effort, the gates and the publication already" +
+			" decided, and nothing in this review touches them.",
+		"",
+		"Stop after the `plan` call. Do not answer the review in prose, do not" +
+			" start a run, and do not ask a workflow to check your rewrite: the same" +
+			" blind reviewer reads the plan again the moment you store it, and I am" +
+			" shown both.",
+	].join("\n");
+}
+
 // ── The dialogs ──────────────────────────────────────────────────────────────
 
 export const FINDING_ACCEPT = "Accept the suggestion";
+export const FINDING_REVISE = "Revise with the model";
 export const FINDING_DISMISS = "Dismiss";
 export const FINDING_BACK = "Back to the conversation";
 
-export type FindingChoice = "accept" | "dismiss" | "back";
+export type FindingChoice = "accept" | "revise" | "dismiss" | "back";
 
 /**
- * What to do with one blocking finding.
+ * What to do with one blocking finding, when a patch came with it.
  *
  * *Accept the suggestion* is first: the reviewer brought a patch, the patch is
  * applied mechanically and re-validated, and taking it is what usually happens.
- * Escape is *Back to the conversation* — accepting a patch into a plan, or
- * waving a blocking finding away, are both commitments, and a dialog nobody
- * answered is not where either belongs.
+ * *Revise with the model* is second because it is the bigger move — the whole
+ * review goes back and the plan is rewritten — and a patch that applies is the
+ * cheaper way to the same place. Escape is *Back to the conversation*:
+ * accepting a patch, handing the review to the model, and waving a blocking
+ * finding away are all commitments, and a dialog nobody answered is not where
+ * any of them belongs.
  */
 export const FINDING_OPTIONS: readonly ExitOption<FindingChoice>[] = [
 	{ value: "accept", text: FINDING_ACCEPT, recommended: true },
+	{ value: "revise", text: FINDING_REVISE },
 	{ value: "dismiss", text: FINDING_DISMISS },
 	{ value: "back", text: FINDING_BACK, escape: true },
 ];
 
 /**
- * The same table once accepting has been shown not to work.
+ * The same table with no patch to take — or one shown not to work.
  *
- * *Dismiss* moves up rather than the list simply losing a row: the recommended
- * option is a claim about what to do NOW, and once the patch has failed to
- * apply the honest recommendation is to say why this is not a problem.
+ * *Revise with the model* moves up rather than the list simply losing a row:
+ * the recommended option is a claim about what to do NOW, and a blocking
+ * finding whose reviewer brought only prose is a finding a human cannot apply.
+ * The model can, so the honest recommendation is to hand it back.
  */
 export const FINDING_OPTIONS_UNPATCHABLE: readonly ExitOption<FindingChoice>[] =
+	[
+		{ value: "revise", text: FINDING_REVISE, recommended: true },
+		{ value: "dismiss", text: FINDING_DISMISS },
+		{ value: "back", text: FINDING_BACK, escape: true },
+	];
+
+/**
+ * The table once the review budget is spent: no revise, because no review.
+ *
+ * `MAX_BLIND_REVIEWS` reviews have run and nothing would read a rewrite, so
+ * offering *Revise with the model* would promise a check that cannot happen.
+ * Accepting a patch still writes it into the stored plan, which is worth
+ * keeping — it is the reading of this review that ends here, not the plan.
+ */
+export const FINDING_OPTIONS_FINAL: readonly ExitOption<FindingChoice>[] = [
+	{ value: "accept", text: FINDING_ACCEPT, recommended: true },
+	{ value: "dismiss", text: FINDING_DISMISS },
+	{ value: "back", text: FINDING_BACK, escape: true },
+];
+
+/** Both doors shut: no patch to apply and no review left to earn. */
+export const FINDING_OPTIONS_FINAL_UNPATCHABLE: readonly ExitOption<FindingChoice>[] =
 	[
 		{ value: "dismiss", text: FINDING_DISMISS, recommended: true },
 		{ value: "back", text: FINDING_BACK, escape: true },
 	];
+
+/** The one table this finding is worth, from the two facts that decide it. */
+export function findingOptions(state: {
+	/** A patch came with the finding and has not failed to apply. */
+	readonly acceptable: boolean;
+	/** A further blind review is still inside `MAX_BLIND_REVIEWS`. */
+	readonly revisable: boolean;
+}): readonly ExitOption<FindingChoice>[] {
+	if (state.revisable)
+		return state.acceptable ? FINDING_OPTIONS : FINDING_OPTIONS_UNPATCHABLE;
+	return state.acceptable
+		? FINDING_OPTIONS_FINAL
+		: FINDING_OPTIONS_FINAL_UNPATCHABLE;
+}
 
 export const DISMISS_REASON_TITLE = "Why is this not a problem?";
 
@@ -205,6 +314,18 @@ export type FindingsWalkOutcome =
 				readonly reason: string;
 			}[];
 	  }
+	/**
+	 * *Revise with the model*, which ends the walk where it stands.
+	 *
+	 * The remaining findings are NOT asked: they go back to the model with the
+	 * rest of the review, and a decision collected about a document that is
+	 * being rewritten is a decision about nothing.
+	 */
+	| {
+			readonly kind: "revise";
+			readonly plan: Plan;
+			readonly accepted: number;
+	  }
 	| {
 			readonly kind: "back";
 			readonly plan: Plan;
@@ -220,6 +341,14 @@ export interface FindingsWalkDeps {
 	readonly save: (plan: Plan) => void;
 	/** Validation for the patched plan. Injected so a test needs no repository. */
 	readonly inspect?: (plan: Plan) => PlanReport;
+	/**
+	 * Whether a further blind review is still inside `MAX_BLIND_REVIEWS`.
+	 *
+	 * Defaults to false, so a caller that has not thought about the bound does
+	 * not offer a rewrite nothing would read. The exit flow passes its own
+	 * count.
+	 */
+	readonly revisable?: boolean;
 }
 
 /** A patched document that is not a plan at all, before validation sees it. */
@@ -232,10 +361,12 @@ function planShapeProblem(value: unknown): string | undefined {
 }
 
 /**
- * Ask about every blocking finding, in order, until one sends the human back.
+ * Ask about every blocking finding, in order, until one ends the walk.
  *
- * Returns the plan as it stands — patched and saved where accepts happened,
- * untouched otherwise — so the caller can recompile from it.
+ * Two answers end it early: *Back to the conversation*, and *Revise with the
+ * model*. Returns the plan as it stands — patched and saved where accepts
+ * happened, untouched otherwise — so the caller can recompile from it, or hand
+ * it back to the model and wait for the next one.
  */
 export async function walkFindings(
 	deps: FindingsWalkDeps,
@@ -259,20 +390,22 @@ export async function walkFindings(
 	let accepted = 0;
 	const dismissed: { id: string; reason: string }[] = [];
 
+	const revisable = deps.revisable === true;
+
 	for (const [index, finding] of blocking.entries()) {
 		// Cleared when an accept fails: the suggestion stays visible in the
 		// title, but it is no longer offered as something that would work.
 		let acceptable = finding.patch !== undefined;
 		let settled = false;
 		while (!settled) {
-			const options = acceptable
-				? FINDING_OPTIONS
-				: FINDING_OPTIONS_UNPATCHABLE;
 			const choice = await dialogs.choose(
 				findingTitle(finding, index + 1, blocking.length),
-				options,
+				findingOptions({ acceptable, revisable }),
 			);
 			if (choice === "back") return { kind: "back", plan, accepted };
+			// One rewrite answers the whole review, so the walk stops here and
+			// the findings that were not asked travel in the steer with the rest.
+			if (choice === "revise") return { kind: "revise", plan, accepted };
 			if (choice === "dismiss") {
 				const answer = await dialogs.input(DISMISS_REASON_TITLE, "");
 				const reason = (answer ?? "").trim();

@@ -504,6 +504,8 @@ describe("what is recommended, and what escape takes", () => {
 			"exit-flow.EXIT_START_OPTIONS",
 			"exit-flow.INTENT_OPTIONS",
 			"findings.FINDING_OPTIONS",
+			"findings.FINDING_OPTIONS_FINAL",
+			"findings.FINDING_OPTIONS_FINAL_UNPATCHABLE",
 			"findings.FINDING_OPTIONS_UNPATCHABLE",
 		]);
 		for (const [name, table] of tables) {
@@ -696,6 +698,34 @@ describe("the pending record", () => {
 		deletePendingExit(SESSION, h.agentDir);
 	});
 
+	it("carries the blind reviews already spent, and reads their absence as none", () => {
+		// The count crosses model turns: *Revise with the model* ends phase 2
+		// with the record open, and the `plan` call that answers the steer is
+		// what reads it back. A record written before the field existed has had
+		// no reviews, which is exactly what its absence says.
+		const h = harness();
+		const base: PendingExit = {
+			schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
+			sessionId: SESSION,
+			policy: { effort: "standard" },
+			wanted: "auto",
+			intent: "We are doing a thing. It is worth doing.",
+			createdAt: "2026-09-16T12:00:00.000Z",
+		};
+		writePendingExit(base, h.agentDir);
+		const none = readPendingExit(SESSION, h.agentDir);
+		expect(none && "reviews" in none).toBe(false);
+		expect(none?.reviews ?? 0).toBe(0);
+
+		writePendingExit({ ...base, reviews: 2 }, h.agentDir);
+		expect(readPendingExit(SESSION, h.agentDir)?.reviews).toBe(2);
+
+		// Nothing this build could not read back is written.
+		expect(() =>
+			writePendingExit({ ...base, reviews: -1 }, h.agentDir),
+		).toThrowError("`reviews`");
+	});
+
 	it("round-trips a record with no agreed description yet", () => {
 		const h = harness();
 		const record: PendingExit = {
@@ -756,6 +786,11 @@ describe("the pending record", () => {
 				"`policy` is invalid",
 				JSON.stringify({ ...good, policy: { effort: "enormous" } }),
 			],
+			// `reviews` is the bound the revise loop counts against, so a record
+			// that says something other than a count of them is not readable.
+			["`reviews`", JSON.stringify({ ...good, reviews: -1 })],
+			["`reviews`", JSON.stringify({ ...good, reviews: 1.5 })],
+			["`reviews`", JSON.stringify({ ...good, reviews: "two" })],
 		];
 		for (const [expected, body] of cases) {
 			writeFileSync(path, body, "utf8");

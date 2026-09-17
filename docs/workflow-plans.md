@@ -302,16 +302,31 @@ What happens then, in order, with the dialogs listed in the
    escape takes, because the other three all start something: the plan stays
    stored, the record goes, and the posture stays `plan`.
 5. **The findings walk.** Every **blocking** finding is asked, one at a time:
-   accept it (first — the reviewer brought a patch and taking it is what usually
-   happens), dismiss it with a reason, or go back to the conversation, which is
-   what escape takes. Accepting applies the finding's RFC 6902 `patch` to the
-   stored plan, runs the plan's own validation over the result and saves it — a
+   accept it (first, when the reviewer brought a patch — taking it is what
+   usually happens), revise with the model (first when it brought none),
+   dismiss it with a reason, or go back to the conversation, which is what
+   escape takes. Accepting applies the finding's RFC 6902 `patch` to the stored
+   plan, runs the plan's own validation over the result and saves it — a
    mechanical apply, never a re-prompt. A patch that will not apply is reported
    and the finding is asked again without the accept option. `major` and `minor`
-   findings are printed once and never asked about. After at least one accept
-   the plan is recompiled and reviewed once more; a second blocking review ends
-   the loop and leaves you in the conversation with the findings printed.
-6. **The run.** `Start the run?` is the last question. *No* leaves the plan
+   findings are printed once and never asked about.
+6. **Revising with the model.** A blocking finding whose reviewer brought only
+   prose is one a human cannot apply, and the model can. *Revise with the model*
+   ends the walk at once — the findings not yet asked travel with the rest,
+   because one rewrite answers the whole review — and sends the model every
+   finding and the reviewer's notes verbatim, with the instruction to rewrite
+   the plan, call `plan` once with the whole document and the `policy` block
+   unchanged, and stop. It is the only answer in the exit that does not end it:
+   the record stays (carrying the review count), the `plan` tool's window stays
+   open, the posture stays `plan`, and the model's next stored plan re-enters
+   this half from readiness — so the revised plan is shown at the compiled
+   document dialog and reviewed again. **Three blind reviews per record**, with
+   accepts and revises counted together, because each buys one re-review. The
+   last review is walked without *Revise with the model* and ends in the
+   conversation with the findings printed, whatever is answered: a fourth read
+   of the same plan is the flow arguing with itself, and the conversation is
+   where that belongs.
+7. **The run.** `Start the run?` is the last question. *No* leaves the plan
    stored, the posture in plan mode, and starts nothing. *Yes* switches to the
    posture asked for at `/mode`, deletes the record, and asks the model — as an
    ordinary follow-up message, in the transcript — to make the

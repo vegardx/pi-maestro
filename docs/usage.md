@@ -95,6 +95,13 @@ a conversation:
    is where the posture finally becomes the one asked for in step 1. The run
    itself is still the model's `workflow_run` call, in the open, in the
    transcript — the flow never starts it behind the session's back.
+5. **Revising, when the reviewer brought prose rather than a patch.** *Revise
+   with the model* sends the whole review back — every finding and the notes,
+   verbatim — and the model rewrites the plan and stores it again. The record
+   stays open, the posture stays `plan`, and step 4 runs again on the revised
+   document. Three blind reviews per exit, counting the one an accepted patch
+   buys; after that the findings are printed and the conversation continues
+   here.
 
 Escape is always an answer, and it is always the **safe** one — never the
 first-listed one, which is a different thing: the first option is what you most

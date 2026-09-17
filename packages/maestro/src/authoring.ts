@@ -52,7 +52,8 @@ const TaskSchema = Type.Object({
 		Type.Object(
 			{
 				lens: Type.String({
-					description: "The independent review focus, such as security.",
+					description:
+						"REQUIRED. The independent review focus, such as `security`. It is a workflow fan-out key, so it must match `^[a-z][a-z0-9-]{0,63}$`: a lowercase letter, then lowercase letters, digits and hyphens. Never empty.",
 				}),
 				skill: Type.Optional(
 					Type.String({
@@ -63,7 +64,7 @@ const TaskSchema = Type.Object({
 				model: Type.Optional(
 					Type.String({
 						description:
-							"A concrete provider/model ID to pin this review to. Omit unless the reviewer must be that exact model — a pinned model only runs on a host that has it.",
+							"OPTIONAL, and only ever a concrete `provider/model` ID — a provider id, a slash, and a model id the host actually has. Prefer `tier` and leave this out: a pinned model only runs on a host that has it. Never a role, a size word or a placeholder.",
 					}),
 				),
 				tier: Type.Optional(
@@ -101,7 +102,8 @@ const literals = <T extends string | number>(
 
 const LensSchema = Type.Object({
 	id: Type.String({
-		description: "The point of view, such as security. It is the fan-out key.",
+		description:
+			"REQUIRED. The point of view, such as `security`. It is the fan-out key, so it must match `^[a-z][a-z0-9-]{0,63}$`. Never empty.",
 	}),
 	tier: Type.Optional(
 		literals(
@@ -121,7 +123,7 @@ const LensSchema = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"A concrete provider/model ID. Omit unless the reviewer must be that exact model.",
+				"OPTIONAL, and only ever a concrete `provider/model` ID. Prefer `tier` and leave this out.",
 		}),
 	),
 });
@@ -335,7 +337,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		name: "plan",
 		label: "Plan",
 		description:
-			"Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed.",
+			"Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. Two fields are got wrong most often: a review task's `by.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `by.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `by.tier` and omit `by.model`.",
 		promptSnippet:
 			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,
@@ -442,8 +444,10 @@ function describe(
 	if (mode === "plan")
 		lines.push(
 			"",
-			"You are in plan mode, which cannot write files. Starting the run needs",
-			"no other posture; to hand-edit this plan instead, ask for `/mode auto`.",
+			"You are in plan mode, which cannot write files. A run is allowed from",
+			"this posture once I ask for one; do not start one, or any other",
+			"workflow, to review or check this plan — the exit's blind reviewer does",
+			"that. To hand-edit this plan instead, ask for `/mode auto`.",
 		);
 	return lines.join("\n");
 }

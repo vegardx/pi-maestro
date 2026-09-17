@@ -361,7 +361,10 @@ describe("what a stage list may not say", () => {
 		expect(errors).toContainEqual(
 			expect.stringContaining("`-leading` is not a safe review lens"),
 		);
-		expect(errors.join("\n")).toContain("starts with a lowercase letter");
+		// The message carries the pattern itself, so an author who wrote an empty
+		// or mis-shaped id learns the rule rather than only that it broke one.
+		expect(errors.join("\n")).toContain("^[a-z][a-z0-9-]{0,63}$");
+		expect(errors.join("\n")).toContain("a lens id is required");
 		expect(
 			errors.filter((error) => error.includes("not a safe review lens")),
 		).toHaveLength(2);

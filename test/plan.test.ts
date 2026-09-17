@@ -230,6 +230,11 @@ describe("a review names a model, a tier, or neither", () => {
 		expect(errors).toContainEqual(
 			expect.stringContaining("concrete provider/model ID"),
 		);
+		// And says the way out, because the observed failure was an author who
+		// filled a field it never had to write: `model` is optional, `tier` is the
+		// one to reach for.
+		expect(errors.join("\n")).toContain("`model` is optional");
+		expect(errors.join("\n")).toContain("pin `tier` instead");
 	});
 
 	it("refuses a tier that is not one of the three", () => {

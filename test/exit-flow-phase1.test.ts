@@ -571,6 +571,8 @@ describe("the steers", () => {
 		expect(steer).toContain("two or three sentences");
 		expect(steer).toContain("`plan_intent { summary }`");
 		expect(steer).toContain("do not start a run");
+		// Including one that would check the sentences it is about to write.
+		expect(steer).toContain("no workflow, research or review");
 		// The description is written from the conversation, not asked for.
 		expect(steer).toContain("Do not ask me to write it for you");
 		// Phase 1 does not ask for the plan.
@@ -594,6 +596,15 @@ describe("the steers", () => {
 		// not recorded from a dialog, and it is not quoted back here.
 		expect(steer).not.toContain("I recorded one line");
 		expect(steer).toContain("do not start a run");
+		// A run over its own plan is the one the model reached for anyway, so the
+		// steer names it rather than leaving "a run" to be read as "the plan run".
+		expect(steer).toContain("deep-review");
+		expect(steer).toContain("a plan reviewed by its author is not reviewed");
+		// The two fields the last plan got wrong, said before it writes them.
+		expect(steer).toContain("`by.lens` is");
+		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");
+		expect(steer).toContain("`by.model` is OPTIONAL");
+		expect(steer).toContain("prefer `by.tier`");
 	});
 
 	it("keeps the record and prints the instruction when the host cannot steer", async () => {

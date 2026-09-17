@@ -702,9 +702,9 @@ function validateProse(
  */
 function lensIdProblem(id: unknown): string {
 	return (
-		`\`${String(id)}\` is not a safe review lens — a lens id is a workflow ` +
-		"fan-out key, so it starts with a lowercase letter and continues with " +
-		"lowercase letters, digits and hyphens"
+		`\`${String(id)}\` is not a safe review lens — a lens id is required and is ` +
+		`a workflow fan-out key, so it must match \`${LENS_ID_RE.source}\`: a ` +
+		"lowercase letter, then lowercase letters, digits and hyphens"
 	);
 }
 
@@ -726,7 +726,9 @@ function validateReviewRouting(
 	// decides.
 	if (routing.model !== undefined && !/^\S+\/\S+$/.test(routing.model))
 		errors.push(
-			`${at}: delegated task model must be a concrete provider/model ID`,
+			`${at}: delegated task model must be a concrete provider/model ID — ` +
+				"`model` is optional, so drop it and pin `tier` instead unless the " +
+				"reviewer must be one exact model the host has",
 		);
 	if (
 		routing.tier !== undefined &&

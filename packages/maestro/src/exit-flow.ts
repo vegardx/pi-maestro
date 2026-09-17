@@ -406,7 +406,8 @@ export function renderIntentSteer(): string {
 			" shown exactly what you write and I will agree to it, edit it, or send" +
 			" us back to the conversation; the `plan` tool opens once I have agreed.",
 		"",
-		"Do not ask me to write it for you, and do not start a run.",
+		"Do not ask me to write it for you, and do not start a run — no workflow," +
+			" research or review, to check what you are about to write.",
 	].join("\n");
 }
 
@@ -449,6 +450,12 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" only if — this conversation asked for a check after every deliverable." +
 			" Nothing else in the block moves.",
 		"",
+		"Two fields are got wrong most often. A review task's `by.lens` is" +
+			" REQUIRED and is the fan-out key, so it must match" +
+			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `by.model` is OPTIONAL and, if" +
+			" written at all, is only ever a concrete `provider/model` ID; prefer" +
+			" `by.tier` and leave `by.model` out, so the host resolves the reviewer.",
+		"",
 		"Give a deliverable its own `stages` array wherever this conversation" +
 			" implied more than the default list (`implement` → `verify-and-fix` →" +
 			" `review-fan-out`): a different number of fix rounds, the review lenses" +
@@ -457,7 +464,10 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" all — it gets the default list, derived from the policy above.",
 		"",
 		"Then stop. This message asks for the stored document and nothing else:" +
-			" do not start a run and do not decide anything on my behalf.",
+			" do not start a run and do not decide anything on my behalf. That" +
+			" includes running a workflow — `deep-review`, `deep-research` or any" +
+			" other — over your own plan: a blind reviewer checks it after it is" +
+			" stored, and a plan reviewed by its author is not reviewed.",
 	].join("\n");
 }
 

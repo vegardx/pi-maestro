@@ -61,47 +61,87 @@ Plan mode is a conversation and does not hold the `plan` tool, so the document
 is written on the way out. `/mode auto` or `/mode hack` from plan mode therefore
 asks first — in a session with dialogs, and only on that transition. Every other
 mode change is the plain switch it always was, and so is this one on a host with
-no dialog UI: six defaults nobody chose are worse than the switch that was
-asked for.
+no dialog UI.
+
+**The posture does not move here.** It moves at the last question, when the run
+starts. Everything before that happens in plan mode, which is why no path out of
+the exit ever offers `/mode plan`: the seat never left it.
+
+| # | Dialog | Default (first in the list, and what escape takes) |
+| --- | --- | --- |
+| 1 | `Keep planning` / `Compile it into a workflow run` / `Just switch mode` | *Keep planning* |
+| 2 | Effort: `standard`, `cheap`, `deep` | `standard` |
+
+Every option list in this flow puts its default first, so the row the dialog
+highlights and the row the escape key takes are the same row.
+
+*Keep planning* — and escape at 1 — leaves the posture where it was and records
+nothing. *Just switch mode* switches immediately and records nothing. *Compile*
+writes the [pending record](#state) and asks the model for the description
+below; the posture stays `plan`.
+
+Nothing else is asked, because nothing else is a question for a human:
+
+| Decision | How it is settled |
+| --- | --- |
+| Gates | `approve-plan+ship`, always. The model may raise it to `every-deliverable` when the conversation asked for a check after every deliverable, and only then |
+| Publication | Derived: an `origin` remote and `gh` on PATH → `pr`; a remote alone → `branch`; neither → `none` |
+| Base branch | What this branch tracks, else `origin`'s head, else `main` |
+
+The derivation is announced in one notification —
+`Publication: pull request onto `main` — this repository has an `origin` remote
+and `gh` is on PATH.` — and lands on the plan as `policy.publish`, where it can
+still be changed at the compiled-document dialog.
+
+#### The agreed description
+
+The model is then asked — as an ordinary follow-up message, in the transcript —
+for two or three sentences saying what we are doing and why, written from the
+conversation, and submits them with `plan_intent { summary }`. The tool is held
+only while an exit is in progress, and it refuses anything that is not two or
+three sentences or is longer than 600 characters.
 
 | # | Dialog | Default |
 | --- | --- | --- |
-| 1 | `Compile it into a workflow run` / `Just switch mode` / `Keep planning` | escape is *Keep planning* |
-| 2 | Effort: `cheap`, `standard`, `deep` | `standard` |
-| 3 | Gates: `approve-plan only`, `approve-plan + ship`, `every deliverable` | `approve-plan + ship` |
-| 4 | Publication: `none`, `branch`, `pull request` | `pull request` |
-| 5 | Base branch — asked only when 4 is not `none` | what the repository tracks, else `main`, and you are told which |
-| 6 | One line: what the plan is for | the first line of your last message |
+| 3 | `Is this what we are doing?` with the sentences shown, then `Agree` / `Edit` / `Back to the conversation` | *Agree*, which is also what escape takes |
 
-Each is asked once and escape takes the default printed beside it. *Keep
-planning* — and escape at 1 — leaves the posture exactly where it was and
-records nothing. *Just switch mode* switches and records nothing. The other
-branch switches the posture, writes the [pending record](#state), and asks the
-model for the plan document with the answers as a `policy` block to copy
-verbatim — see [Authored plans](workflow-plans.md#leaving-plan-mode).
+*Edit* opens the sentences in an editor and asks again with whatever comes back;
+escaping the editor discards the edit. *Back to the conversation* deletes the
+record, says so, and leaves you in plan mode with nothing else changed.
 
-Nothing is compiled, reviewed or run by those six dialogs, and nothing there
-starts a model turn other than the request for the document.
+*Agree* puts the sentences on the record and asks the model for the plan, with
+the `policy` block to copy verbatim. **The `plan` tool opens here and not
+before**: the agreed description is what the blind review checks the plan
+against, so there is no window before there is a yardstick. A `plan` call that
+arrives earlier is refused by name, and the refusal says to submit the
+description first.
 
 #### After the plan is written
 
 The model's `plan` call is the second half's trigger: when it stores a document
-and the [pending record](#state) belongs to *this* session, the rest of the exit
-runs. Anything the plan already answers is never asked.
+and the [pending record](#state) belongs to *this* session and carries an agreed
+description, the rest of the exit runs. It runs **detached** — the tool result
+returns immediately, so the model's `plan` call is not shown running for as long
+as the dialogs take to answer. Anything the plan already answers is never asked.
 
 | # | Step | Asked |
 | --- | --- | --- |
 | 7 | [Readiness](workflow-plans.md#readiness) of every repository the plan names | nothing, when the machine is ready |
 | 7a | `Create <path>?`, then the creating commands through the audited `bash` | per missing repository; *No* goes back to the conversation |
 | 7b | A dirty tree: `Continue` / `Back to the conversation` | per dirty repository; escape is *Continue* |
-| 8 | A review lens for this deliverable: `Include` / `Skip` | per candidate lens; escape keeps the plan's own |
-| 9 | What that lens is worth: `light`, `standard`, `heavy` | only where the plan pinned neither a tier nor a model |
-| 10 | `A cross-family reviewer on <deliverable>?` | per deliverable, only where a lens is `heavy` |
-| 12 | The compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` | once; escape is *Review it blind* |
+| 12 | The agreed description, the reviewers, the compiled graph and the projected budget: `Review it blind` / `Approve as is` / `Edit` | once; escape is *Review it blind* |
 | 13 | `Edit` opens the compiled document as JSON | on demand; escape discards it |
-| 15 | Per **blocking** finding: `Accept the suggestion` / `Dismiss` / `Back to the conversation` | per finding; escape is *Back to the conversation* |
+| 15 | Per **blocking** finding: `Back to the conversation` / `Accept the suggestion` / `Dismiss` | per finding; escape is *Back to the conversation* |
 | 15a | `Dismiss` asks why | per dismissal; an empty reason is not a dismissal and the finding is asked again |
 | 18 | `Start the run?` | once; *No* leaves the plan stored and runs nothing |
+
+The review lenses are **not** asked about. The plan and its
+`policy.reviewDefault` decide them, and dialog 12 — with *Edit* behind it — is
+where a reviewer is changed. Before anything is compiled, every heavy lens whose
+`diverse` is undefined has `diverse: true` written into the **stored** plan, in
+both `tasks[].by` and `stages[].lenses`, so this seat's compiled document and
+pi-workflow's derive the same graph from the same bytes. A lens that already
+says `diverse: false` keeps its answer.
 
 Steps 11, 14, 16 and 17 open no dialog. 11 compiles the plan into the stage
 document and asks the runtime to validate and project it; 14 starts the headless
@@ -114,11 +154,17 @@ it and saves it. A patch that does not apply, or one that would make the plan
 stop validating, is reported and the finding is asked again **without** the
 accept option.
 
-The exit ends in exactly one of four places: the run request (19), which deletes
-the record and hands the model the `workflow_run` call to make in the open; a
-stored plan and nothing else; back in the conversation, with the findings
-printed and `/mode plan` offered; or a refusal that names what stopped it. All
-four delete the pending record.
+A three-deliverable plan whose reviewers are already tiered, on a ready machine,
+with a clean blind review, asks **five** dialogs in total: two in phase 1, one
+for the description, the compiled document, and `Start the run?`.
+
+The exit ends in exactly one of four places: the run request (19) — the only
+place `setMode` is called, so the posture becomes the one asked for at `/mode`
+immediately before the record is deleted and the model is handed the
+`workflow_run` call; a stored plan and nothing else; back in the conversation;
+or a refusal that names what stopped it. All four delete the pending record, and
+the three that are not the run leave you in plan mode with one notice naming
+`/plan run <slug>` and `/mode <auto|hack>`.
 
 Two fallbacks keep a reduced seat working. Without a workflow runtime — or when
 one refuses to validate or project — the flow stops at 11, says so, and leaves
@@ -131,7 +177,11 @@ the review option.
 - `plan` authors or replaces the whole plan and returns all validation errors
   together. Delegated reviews use `{lens, skill?, model?, tier?, diverse?}`, and
   a deliverable may carry optional `stages` beside a plan-wide `policy` — see
-  [Authored plans](workflow-plans.md#stages).
+  [Authored plans](workflow-plans.md#stages). It is held in auto and hack, and
+  in plan mode only once an exit's description is agreed.
+- `plan_intent` submits the two or three sentences the exit agrees on before the
+  plan is written. Held only while a plan-mode exit is in progress, in any
+  posture — see [Leaving plan mode](#leaving-plan-mode).
 - `bash` runs on the host after mode-aware classification.
 - `delete` moves explicitly named paths to recoverable trash.
 - Pi's built-in `write` and `edit` remain available in auto and hack.
@@ -172,10 +222,15 @@ A plan-mode exit in progress is recorded beside the plans, one file per session:
 <agentDir>/maestro/plans/.pending/<sessionId>.json
 ```
 
-It holds `{schemaVersion, sessionId, policy, intent, createdAt}` — the answers
-to the dialogs above, which the plan the model is about to write cannot yet
-carry. It exists because the exit is split by one model turn, and it is the one
-thing that says the split is open: while it is there, the `plan` tool is held
-even in plan mode. A record that does not parse, speaks another schema version
-or names another session is refused by name rather than read as absent; the
-refusal prints the path, and deleting the file starts the exit over.
+It holds `{schemaVersion: 2, sessionId, policy, wanted, intent?, createdAt}` —
+the answers to the dialogs above, the posture the human asked for and has not
+been given yet, and the agreed description once there is one. It exists because
+the exit is split by two model turns, and it is the one thing that says the
+split is open: while it is there without an `intent`, `plan_intent` is held even
+in plan mode, and once it carries one the `plan` tool is too.
+
+A record that does not parse, speaks another schema version, names another
+session or wants a posture that is not `auto` or `hack` is refused by name
+rather than read as absent; the refusal prints the path, and deleting the file
+starts the exit over. There is no reader for schema 1: a version-1 record says
+the posture already moved, which this build would act on and cannot check.

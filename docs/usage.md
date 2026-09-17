@@ -65,36 +65,39 @@ audited Bash work and never the runtime's. See
 
 ## Leaving plan mode with a run
 
-**Design. It lands with this release line; nothing below is registered yet.**
+Switching out of `plan` mode when there is a conversation but no plan is a flow
+split by two model turns, because a dialog sequence cannot obtain anything from
+a conversation:
 
-Switching out of `plan` mode when there is a conversation but no plan becomes a
-two-phase flow, split by exactly one model turn, because a dialog sequence cannot
-obtain a plan document from the conversation:
+1. **Two dialogs, in the `/mode` handler.** Compile the conversation into a
+   workflow run, just switch, or keep planning; then how much effort the run may
+   spend. That is all that is asked. Gates take their default, and publication
+   and the base branch are derived from the repository and announced. The
+   answers are recorded — and **the mode does not change**.
+2. **The description.** The model writes two or three sentences saying what we
+   are doing and why, and submits them with `plan_intent`. One dialog agrees,
+   edits, or sends you back to the conversation. The agreed text is what the
+   blind reviewer checks the plan against, and it is what opens the `plan`
+   tool's window — which is the only moment `plan` exists in plan mode.
+3. **The model turn.** The model calls `plan` with the whole document, carrying
+   the recorded answers verbatim as the plan's `policy` block, so the choices
+   are part of the document that gets validated, digested and reviewed.
+4. **The second half, when the plan stores.** Readiness on every repository the
+   plan names; every heavy review lens gets `diverse: true` written into the
+   stored plan so both compilers agree; compilation with a budget projection; an
+   optional blind review of the compiled graph, with an editor behind it for
+   changing reviewers; the findings walk; and one confirmation. That last *yes*
+   is where the posture finally becomes the one asked for in step 1. The run
+   itself is still the model's `workflow_run` call, in the open, in the
+   transcript — the flow never starts it behind the session's back.
 
-1. **Phase one, in the `/mode` handler.** Six questions at most, each asked once:
-   compile the conversation into a workflow run or just switch; effort; which
-   gates the run stops at; whether publication is none, a branch, or a pull
-   request; the base branch; and one line of intent for the blind reviewer.
-   Declining the first question keeps the conversation and leaves the mode
-   unchanged. The answers are recorded, the mode switches, and the session is
-   steered to write the plan.
-2. **The model turn.** The model calls `plan` with the whole document, carrying
-   those answers verbatim as the plan's `policy` block, so the choices are part
-   of the document that gets validated, digested, and reviewed. With this flow
-   the `plan` tool is no longer registered in `plan` mode, which is what keeps
-   planning a conversation.
-3. **Phase two, when the plan stores.** Readiness on every repository the plan
-   names, then the per-deliverable review lenses, then compilation with a budget
-   projection, then an optional blind review of the compiled graph, and finally
-   one confirmation. The run itself is still the model's `workflow_run` call, in
-   the open, in the transcript — the flow never starts it behind the session's
-   back.
-
-Escape is always an answer: declining at the start keeps the mode, escaping a
-per-deliverable dialog keeps what the plan already said, going back to the
-conversation after a review leaves the findings printed, and declining the last
-confirmation stores the plan and runs nothing. `/plan run` remains available
-afterwards either way.
+Escape is always an answer, and it is always the first option in the list:
+declining at the start keeps the mode, escaping the compiled-document dialog
+reviews it blind, going back to the conversation after a review leaves the
+findings printed, and declining the last confirmation stores the plan and runs
+nothing. Every ending but the run leaves you in plan mode with `/plan run
+<slug>` and `/mode auto` both named. The dialog tables are in the
+[command reference](commands.md#leaving-plan-mode).
 
 ### Readiness is not preflight
 

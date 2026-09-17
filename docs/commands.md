@@ -51,9 +51,18 @@ only confirmation is still the one at the push.
 | `auto` | available | effect policy with ambiguity audit and confirmations | none |
 | `hack` | available | reduced, configurable effect policy | none |
 
-A workflow run may be started from any mode, including `plan`: a run mutates
-neither the working tree nor the host, and what it produces reaches a branch
-only through publication, which a human decides separately.
+A workflow run is **not** the model's to start in `plan` mode. The seat refuses
+`workflow_run` and `workflow_propose` there by name; every workflow read —
+listing, validating, inspecting, waiting on a run, its logs, its status — stays
+available, because reading a run is planning, and `workflow_decide` was already
+yours alone. A run is safe from plan mode (it mutates neither the working tree
+nor the host, and what it produces reaches a branch only through publication,
+which a human decides separately) and safe was never the question: plan mode is
+a conversation, and starting a run is the seat acting. There are two ways a run
+starts from plan mode, and both of them are yours — you start any run with
+pi-workflow's own `/workflow run <ref>`, and the plan-mode exit below starts the
+plan's own run at the last question. In `auto` and `hack` nothing here is
+refused.
 
 ### Leaving plan mode
 

@@ -408,8 +408,10 @@ export function renderIntentSteer(): string {
 			" shown exactly what you write and I will agree to it, edit it, or send" +
 			" us back to the conversation; the `plan` tool opens once I have agreed.",
 		"",
-		"Do not ask me to write it for you, and do not start a run — no workflow," +
-			" research or review, to check what you are about to write.",
+		"Do not ask me to write it for you, and do not start a run: plan mode" +
+			" refuses `workflow_run` and `workflow_propose` outright, so there is no" +
+			" workflow — research or review — to check what you are about to write." +
+			" I start runs with `/workflow run`, and this exit starts the plan's own.",
 	].join("\n");
 }
 
@@ -466,10 +468,12 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" all — it gets the default list, derived from the policy above.",
 		"",
 		"Then stop. This message asks for the stored document and nothing else:" +
-			" do not start a run and do not decide anything on my behalf. That" +
-			" includes running a workflow — `deep-review`, `deep-research` or any" +
-			" other — over your own plan: a blind reviewer checks it after it is" +
-			" stored, and a plan reviewed by its author is not reviewed.",
+			" do not start a run and do not decide anything on my behalf. The seat" +
+			" refuses `workflow_run` and `workflow_propose` in plan mode, so running" +
+			" a workflow — `deep-review`, `deep-research` or any other — over your" +
+			" own plan is not available to you here: a blind reviewer checks the" +
+			" plan after it is stored, and a plan reviewed by its author is not" +
+			" reviewed. I start any other run with `/workflow run`.",
 	].join("\n");
 }
 

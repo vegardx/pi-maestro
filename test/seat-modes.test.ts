@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { PLAN_INTENT_TOOL } from "../packages/maestro/src/authoring.js";
 import {
+	PLAN_MODE_RUN_REFUSAL,
 	type SeatHost,
 	seatToolBlockReason,
 	startSeat,
@@ -282,15 +283,42 @@ describe("Pi's live tool set follows the mode", () => {
 				"plan_b",
 			]);
 		}
-		// A run touches neither this working tree nor the host, so plan mode is
-		// allowed to start one when the human asks. Nothing in the seat's gate has
-		// an opinion about it — the "only when asked, never over its own plan"
-		// half of the rule is said in the guidance, not enforced by a refusal.
-		for (const name of ["workflow_run", "workflow_validate", "workflow_decide"])
-			expect(seatToolBlockReason("plan", name)).toBeUndefined();
+		// The seat still declares none of them, and still moves none of them:
+		// withdrawal is not how a run is refused.
 		expect(entry.seat().tools.declaredFor("maestro")).not.toContain(
 			"workflow_run",
 		);
+	});
+
+	it("refuses a model-started run in plan mode, and only those two tools", () => {
+		// The guidance was written three times and a model reviewed its own plan
+		// from plan mode twice anyway, so it is a refusal now. The refusal names
+		// both ways a run does start, because "no" alone is unactionable.
+		for (const name of ["workflow_run", "workflow_propose"]) {
+			const reason = seatToolBlockReason("plan", name);
+			expect(reason).toBe(PLAN_MODE_RUN_REFUSAL);
+			expect(reason).toContain("/workflow run <ref>");
+			expect(reason).toContain("plan-mode exit");
+			// Only plan mode. Auto and hack are postures that act.
+			expect(seatToolBlockReason("auto", name)).toBeUndefined();
+			expect(seatToolBlockReason("hack", name)).toBeUndefined();
+		}
+		// Reading a run is planning, so every read stays open — including in the
+		// exit window, which changes nothing about runs either way.
+		for (const name of [
+			"workflow_list",
+			"workflow_validate",
+			"workflow_inspect",
+			"workflow_wait",
+			"workflow_logs",
+			"workflow_runs",
+			"workflow_status",
+			// Already human-only in the runtime; the seat adds nothing to it.
+			"workflow_decide",
+		]) {
+			expect(seatToolBlockReason("plan", name)).toBeUndefined();
+			expect(seatToolBlockReason("plan", name, "plan")).toBeUndefined();
+		}
 	});
 
 	it("survives a host that binds the live tool set only after loading", async () => {

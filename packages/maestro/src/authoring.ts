@@ -444,10 +444,12 @@ function describe(
 	if (mode === "plan")
 		lines.push(
 			"",
-			"You are in plan mode, which cannot write files. A run is allowed from",
-			"this posture once I ask for one; do not start one, or any other",
-			"workflow, to review or check this plan — the exit's blind reviewer does",
-			"that. To hand-edit this plan instead, ask for `/mode auto`.",
+			"You are in plan mode, which cannot write files and from which you",
+			"cannot start a workflow run: `workflow_run` and `workflow_propose` are",
+			"refused here, this plan included. I start a run with `/workflow run`,",
+			"and leaving plan mode starts this plan's own run — its blind reviewer",
+			"is what checks the plan, not a workflow you start over it. To hand-edit",
+			"this plan instead, ask for `/mode auto`.",
 		);
 	return lines.join("\n");
 }

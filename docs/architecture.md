@@ -133,7 +133,11 @@ when direct seat work is preferable to isolated delegation.
 Most implementation work is expected to run through standalone subagents, which
 own Gondolin isolation, worktrees, retry/resume, persistence, and operator
 controls. A workflow run is safe to start from any mode for the same reason: the
-attempt it delegates cannot touch the seat's working tree or the host.
+attempt it delegates cannot touch the seat's working tree or the host. Safe is
+not the same as available: the seat refuses `workflow_run` and
+`workflow_propose` to the model in `plan` mode, because starting a run is the
+seat acting and plan mode is a conversation. Reads are untouched, and the person
+starts runs there themselves — see [Modes](commands.md#modes).
 
 ## Plans
 

@@ -33,19 +33,24 @@ validated help/version probes let the auditor inspect unfamiliar PATH commands
 without granting it a general shell. Most substantial implementation work should
 be delegated to isolated subagents.
 
-**A workflow run is allowed from `plan` mode when you ask for one.** A run
-mutates neither the working tree nor the host: its implementation work happens in
-a sandboxed subagent attempt against a worktree of its own, its output is a
-handoff commit in the repository's object store, and nothing reaches a branch or
-a remote until publication — a separate step, decided by a human, outside the
-run. So the posture is no obstacle when you want a research or review run while
-planning, and the mode's refusal rail is not the thing that makes it safe.
+**A run is safe from `plan` mode, and the model still may not start one there.**
+A run mutates neither the working tree nor the host: its implementation work
+happens in a sandboxed subagent attempt against a worktree of its own, its
+output is a handoff commit in the repository's object store, and nothing reaches
+a branch or a remote until publication — a separate step, decided by a human,
+outside the run. Safe was never the question. Plan mode is a conversation, and
+starting a run is the seat acting, so the seat refuses `workflow_run` and
+`workflow_propose` in plan mode by name. Every workflow read — listing,
+validating, inspecting, waiting, logs, status — stays open, because reading a
+run is planning.
 
-**It is a permission, not an invitation.** In plan mode the model explores the
-repository and converses with you. It does not start workflow runs to review,
-verify or research its own plan — the plan is checked by the blind reviewer in
-the exit below, on the compiled document, not by the author of the plan — and it
-never writes files or branches. A run starts when you ask for one.
+**Two ways a run starts from plan mode, and both are yours.** You start any run
+you want with pi-workflow's own `/workflow run <ref>`, and the plan-mode exit
+below starts the plan's own run at its last question. This began as guidance and
+a model reviewed its own plan with a `deep-review` run from plan mode twice
+anyway, which is exactly the reading a blind review exists to prevent — so it is
+a refusal now. The plan is checked by the blind reviewer in the exit, on the
+compiled document, never by the author of the plan.
 
 ## Planning
 

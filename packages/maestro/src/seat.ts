@@ -44,11 +44,12 @@ export type ExitWindow = "none" | "intent" | "plan";
  * description has been agreed. Both facts read through this one predicate, so
  * the registration, the defence-in-depth block and the tests cannot disagree.
  *
- * Workflow runs are deliberately NOT gated this way: they never touch the
- * working tree or the host, so a run is allowed from plan mode when the human
- * asks for one. That is a permission, not an invitation — plan mode explores and
- * converses, and the model does not run a workflow to review, verify or research
- * its own plan, which is the exit's blind reviewer's job.
+ * Workflow runs are not gated HERE, because the seat does not declare them:
+ * they are the runtime's tools and this registry only moves its own. They are
+ * refused to the model in plan mode all the same, by name, at the tool call —
+ * see `seatToolBlockReason` in `extension.ts`. A run is safe from plan mode and
+ * is still not the model's to start there: the person starts one with
+ * `/workflow run`, and the plan-mode exit starts the plan's own.
  */
 export function planToolAvailable(mode: ModeName, window: ExitWindow): boolean {
 	return mode !== "plan" || window === "plan";

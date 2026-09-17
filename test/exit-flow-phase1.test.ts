@@ -46,7 +46,9 @@ import {
 	INTENT_BACK,
 	INTENT_EDIT,
 	INTENT_EDITOR_TITLE,
+	INTENT_OPTIONS,
 	INTENT_TITLE,
+	intentDialogTitle,
 	optionLabel,
 	optionLabels,
 	renderExitSteer,
@@ -187,21 +189,26 @@ function deps(
 	};
 }
 
+/** One option's label, by value, so a test never hard-codes the suffix. */
+function labelFor<T>(table: readonly ExitOption<T>[], value: T): string {
+	const found = table.find((option) => option.value === value);
+	if (!found) throw new Error(`no option for ${JSON.stringify(value)}`);
+	return optionLabel(found);
+}
+
 /** The labels a human actually sees, for the happy path. */
 const COMPILE_ANSWERS = {
-	[EXIT_START_TITLE]: optionLabel(
-		EXIT_START_OPTIONS.find((option) => option.value === "compile") ?? {
-			value: "compile" as const,
-			text: EXIT_COMPILE,
-		},
-	),
+	[EXIT_START_TITLE]: labelFor(EXIT_START_OPTIONS, "compile"),
 } as const;
+
+/** Answering the description dialog with the option that agrees. */
+const AGREE = labelFor(INTENT_OPTIONS, "agree");
 
 describe("step 1 — the only question that can end the flow", () => {
 	it("leaves the posture and writes nothing when the human keeps planning", async () => {
 		const h = harness();
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
+			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
 		});
 
 		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
@@ -211,24 +218,40 @@ describe("step 1 — the only question that can end the flow", () => {
 		expect(h.steers).toEqual([]);
 		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
 		expect(fake.titles()).toEqual([EXIT_START_TITLE]);
-		// Keep planning is first, because escape takes it: the highlighted row
-		// and the escape key must not mean different things.
+		// Compiling is first, because it is what somebody who typed `/mode auto`
+		// after a planning conversation usually wants. It is NOT what escape
+		// takes — see the escape case below.
 		expect(fake.opened[0]?.options).toEqual([
-			`${EXIT_KEEP_PLANNING} (default)`,
-			EXIT_COMPILE,
+			`${EXIT_COMPILE} (default)`,
 			EXIT_SWITCH_ONLY,
+			EXIT_KEEP_PLANNING,
 		]);
 	});
 
-	it("treats escape as keeping planning, which is the documented hatch", async () => {
+	it("treats escape as keeping planning, not as the recommended answer", async () => {
 		const h = harness();
 		const fake = fakeUi();
 
 		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
 
+		// The first option compiles; escaping must not start an exit nobody
+		// asked for, so it keeps planning and records nothing.
 		expect(outcome).toEqual({ kind: "keep-planning" });
 		expect(h.modes).toEqual([]);
+		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
 		expect(fake.titles()).toEqual([EXIT_START_TITLE]);
+	});
+
+	it("keeps planning on an answer the table does not recognise", async () => {
+		const h = harness();
+		const fake = fakeUi({ answers: { [EXIT_START_TITLE]: "something else" } });
+
+		const outcome = await runExitFlowPhase1(deps(h, fake.ui));
+
+		// A label this table cannot resolve is not evidence anybody picked
+		// anything, so it takes the escape rather than the recommendation.
+		expect(outcome).toEqual({ kind: "keep-planning" });
+		expect(existsSync(pendingExitFile(SESSION, h.agentDir))).toBe(false);
 	});
 
 	it("switches with no record and no steer on `Just switch mode`", async () => {
@@ -257,7 +280,7 @@ describe("step 1 — the only question that can end the flow", () => {
 			h.agentDir,
 		);
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
+			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
 		});
 
 		await runExitFlowPhase1(deps(h, fake.ui));
@@ -287,12 +310,7 @@ describe("the happy path", () => {
 		const fake = fakeUi({
 			answers: {
 				...COMPILE_ANSWERS,
-				[EFFORT_TITLE]: optionLabel(
-					EFFORT_OPTIONS.find((option) => option.value === "deep") ?? {
-						value: "deep" as const,
-						text: "deep",
-					},
-				),
+				[EFFORT_TITLE]: labelFor(EFFORT_OPTIONS, "deep"),
 			},
 		});
 
@@ -325,7 +343,7 @@ describe("the happy path", () => {
 		expect(outcome.steer).toBe(renderIntentSteer());
 	});
 
-	it("takes the default effort when the dialog is escaped", async () => {
+	it("takes `standard` when the effort dial is escaped", async () => {
 		const h = harness();
 		const fake = fakeUi({ answers: COMPILE_ANSWERS });
 
@@ -473,8 +491,8 @@ function optionTables(
 	return found;
 }
 
-describe("the defaults, which escape takes", () => {
-	it("lists the default FIRST in every exported option table", () => {
+describe("what is recommended, and what escape takes", () => {
+	it("marks exactly one of each, and never lets escape be a commitment", () => {
 		const tables = optionTables({ "exit-flow": exitFlow, findings });
 		// The list is found, not written down, so a table added later is covered
 		// by this test without anybody remembering to add it.
@@ -486,41 +504,62 @@ describe("the defaults, which escape takes", () => {
 			"exit-flow.EXIT_START_OPTIONS",
 			"exit-flow.INTENT_OPTIONS",
 			"findings.FINDING_OPTIONS",
+			"findings.FINDING_OPTIONS_UNPATCHABLE",
 		]);
 		for (const [name, table] of tables) {
-			const defaults = table.filter((option) => option.fallback);
-			expect([name, defaults.length]).toEqual([name, 1]);
-			// The row a `select` highlights and the row escape takes are one row.
-			expect([name, table[0]?.fallback]).toEqual([name, true]);
+			const recommended = table.filter((option) => option.recommended);
+			const escapes = table.filter((option) => option.escape);
+			// Exactly one of each, and the recommendation is FIRST — it is the
+			// row a `select` highlights, so it is the row the person most likely
+			// wants.
+			expect([name, recommended.length]).toEqual([name, 1]);
+			expect([name, escapes.length]).toEqual([name, 1]);
+			expect([name, table[0]?.recommended]).toEqual([name, true]);
+			// Only the recommendation is labelled, and it is the only one.
+			expect([
+				name,
+				optionLabels(table).filter((label) => label.endsWith(" (default)")),
+			]).toEqual([name, [optionLabel(table[0] as ExitOption<unknown>)]]);
+			// An unanswered dialog resolves to the ESCAPE, never to the
+			// recommendation — unless a table has deliberately made them the same
+			// row, which only `EFFORT_OPTIONS` does and only because escaping
+			// there commits to nothing.
 			expect([name, chosenOption(table, undefined)]).toEqual([
 				name,
-				defaults[0]?.value,
+				escapes[0]?.value,
 			]);
 			// An answer the table does not know is an escape too: a label that
-			// cannot be resolved must not become a value nobody offered.
+			// cannot be resolved must not become a decision somebody is held to.
 			expect([name, chosenOption(table, "something else")]).toEqual([
 				name,
-				defaults[0]?.value,
+				escapes[0]?.value,
 			]);
 			for (const option of table)
 				expect([name, chosenOption(table, optionLabel(option))]).toEqual([
 					name,
 					option.value,
 				]);
-			// Exactly one label carries the suffix, and it is the first.
-			expect([
-				name,
-				optionLabels(table).filter((label) => label.endsWith(" (default)")),
-			]).toEqual([name, [optionLabel(table[0] as ExitOption<unknown>)]]);
 		}
 	});
 
-	it("offers the three efforts with `standard` first", () => {
+	it("separates the two everywhere it matters, and joins them only on effort", () => {
+		const both = optionTables({ "exit-flow": exitFlow, findings }).filter(
+			([, table]) =>
+				table.some((option) => option.recommended && option.escape),
+		);
+		// Every other table would be committing a person to something they did
+		// not answer: starting a compile, agreeing a description, continuing
+		// past a dirty tree, starting a reviewer, accepting a patch.
+		expect(both.map(([name]) => name)).toEqual(["exit-flow.EFFORT_OPTIONS"]);
+	});
+
+	it("offers the three efforts with `standard` first, and escaping there is `standard`", () => {
 		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
 			"standard (default)",
 			"cheap",
 			"deep",
 		]);
+		expect(chosenOption(EFFORT_OPTIONS, undefined)).toBe("standard");
 	});
 });
 
@@ -857,7 +896,7 @@ describe("the dialog that agrees the description", () => {
 	it("shows the sentences, agrees to them, and asks for the plan", async () => {
 		const h = harness();
 		const record = pendingRecord(h.agentDir);
-		const fake = fakeUi();
+		const fake = fakeUi({ answers: { [intentDialogTitle(SUMMARY)]: AGREE } });
 
 		const outcome = await runIntentAgreement({
 			record,
@@ -889,7 +928,7 @@ describe("the dialog that agrees the description", () => {
 		expect(h.steers).toEqual([[renderExitSteer(record.policy), "followUp"]]);
 	});
 
-	it("agrees on escape, which is what `(default)` on the first row says", async () => {
+	it("never agrees on escape, however it is highlighted", async () => {
 		const h = harness();
 		const record = pendingRecord(h.agentDir);
 		const fake = fakeUi();
@@ -901,8 +940,30 @@ describe("the dialog that agrees the description", () => {
 			agentDir: h.agentDir,
 		});
 
-		expect(outcome.kind).toBe("agreed");
-		expect(readPendingExit(SESSION, h.agentDir)?.intent).toBe(SUMMARY);
+		// *Agree* is first because it is the likely answer. Agreement is the one
+		// thing here a human supplies and nothing else can — it becomes the
+		// reviewer's yardstick and it opens the `plan` tool — so an unanswered
+		// dialog goes back rather than committing to it.
+		expect(outcome.kind).toBe("back");
+		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
+	});
+
+	it("goes back on an answer the table does not recognise", async () => {
+		const h = harness();
+		const record = pendingRecord(h.agentDir);
+		const fake = fakeUi({
+			answers: { [intentDialogTitle(SUMMARY)]: "Agree, probably" },
+		});
+
+		const outcome = await runIntentAgreement({
+			record,
+			summary: SUMMARY,
+			ui: fake.ui,
+			agentDir: h.agentDir,
+		});
+
+		expect(outcome.kind).toBe("back");
+		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 	});
 
 	it("re-asks with the edited text, and discards an escaped editor", async () => {
@@ -918,9 +979,7 @@ describe("the dialog that agrees the description", () => {
 		const scripted: ExitFlowUi = {
 			...fake.ui,
 			select: async (title, options, opts) => {
-				const answer = title.includes(edited)
-					? `${INTENT_AGREE} (default)`
-					: INTENT_EDIT;
+				const answer = title.includes(edited) ? AGREE : INTENT_EDIT;
 				await fake.ui.select(title, options, opts);
 				return answer;
 			},
@@ -1072,7 +1131,9 @@ describe("/mode auto, from plan mode", () => {
 		await host.mode("auto", fakeUi({ answers: COMPILE_ANSWERS }).ui);
 		expect(host.active()).not.toContain("plan");
 
-		const agreeing = fakeUi();
+		const agreeing = fakeUi({
+			answers: { [intentDialogTitle(SUMMARY)]: AGREE },
+		});
 		await host.toolResult(
 			{
 				toolName: PLAN_INTENT_TOOL,
@@ -1107,7 +1168,7 @@ describe("/mode auto, from plan mode", () => {
 				opened = true;
 				await held;
 				answered = true;
-				return `${INTENT_AGREE} (default)`;
+				return AGREE;
 			},
 			input: async () => undefined,
 			confirm: async () => false,
@@ -1138,7 +1199,7 @@ describe("/mode auto, from plan mode", () => {
 		const agentDir = temp("maestro-agent-");
 		const host = seatHost(agentDir);
 		const fake = fakeUi({
-			answers: { [EXIT_START_TITLE]: `${EXIT_KEEP_PLANNING} (default)` },
+			answers: { [EXIT_START_TITLE]: EXIT_KEEP_PLANNING },
 		});
 
 		await host.mode("auto", fake.ui);

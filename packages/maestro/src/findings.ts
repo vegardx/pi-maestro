@@ -19,10 +19,11 @@
 //   - **A dismissal has a reason.** An empty reason is not a dismissal; the
 //     finding is asked again. The reason is what a later reader has instead of
 //     the dialog nobody recorded.
-//   - **Escape is *Back to the conversation*, and it is listed FIRST.** The
-//     most severe findings are the ones where doing nothing must not mean
-//     proceeding — so the row the dialog highlights and the row escape takes
-//     are the same row, which is the rule every option table here follows.
+//   - **Escape is *Back to the conversation*.** The most severe findings are
+//     the ones where doing nothing must not mean proceeding. The FIRST option
+//     is a different question — it is what a person most likely wants, which is
+//     to take the patch the reviewer brought — and the two are deliberately not
+//     the same row.
 //
 // The walk holds no UI of its own: dialogs arrive as the injected `ExitDialogs`
 // port, which counts them, carries the abort signal, and defers while another
@@ -152,19 +153,35 @@ export const FINDING_ACCEPT = "Accept the suggestion";
 export const FINDING_DISMISS = "Dismiss";
 export const FINDING_BACK = "Back to the conversation";
 
+export type FindingChoice = "accept" | "dismiss" | "back";
+
 /**
- * The full table, default first, for the test that checks every one of them.
+ * What to do with one blocking finding.
  *
- * The live table is built per finding — *Accept the suggestion* is dropped once
- * a patch has failed to apply — but the ORDER and the default are this one's.
+ * *Accept the suggestion* is first: the reviewer brought a patch, the patch is
+ * applied mechanically and re-validated, and taking it is what usually happens.
+ * Escape is *Back to the conversation* — accepting a patch into a plan, or
+ * waving a blocking finding away, are both commitments, and a dialog nobody
+ * answered is not where either belongs.
  */
-export const FINDING_OPTIONS: readonly ExitOption<
-	"back" | "accept" | "dismiss"
->[] = [
-	{ value: "back", text: FINDING_BACK, fallback: true },
-	{ value: "accept", text: FINDING_ACCEPT },
+export const FINDING_OPTIONS: readonly ExitOption<FindingChoice>[] = [
+	{ value: "accept", text: FINDING_ACCEPT, recommended: true },
 	{ value: "dismiss", text: FINDING_DISMISS },
+	{ value: "back", text: FINDING_BACK, escape: true },
 ];
+
+/**
+ * The same table once accepting has been shown not to work.
+ *
+ * *Dismiss* moves up rather than the list simply losing a row: the recommended
+ * option is a claim about what to do NOW, and once the patch has failed to
+ * apply the honest recommendation is to say why this is not a problem.
+ */
+export const FINDING_OPTIONS_UNPATCHABLE: readonly ExitOption<FindingChoice>[] =
+	[
+		{ value: "dismiss", text: FINDING_DISMISS, recommended: true },
+		{ value: "back", text: FINDING_BACK, escape: true },
+	];
 
 export const DISMISS_REASON_TITLE = "Why is this not a problem?";
 
@@ -248,9 +265,9 @@ export async function walkFindings(
 		let acceptable = finding.patch !== undefined;
 		let settled = false;
 		while (!settled) {
-			const options = FINDING_OPTIONS.filter(
-				(option) => option.value !== "accept" || acceptable,
-			);
+			const options = acceptable
+				? FINDING_OPTIONS
+				: FINDING_OPTIONS_UNPATCHABLE;
 			const choice = await dialogs.choose(
 				findingTitle(finding, index + 1, blocking.length),
 				options,

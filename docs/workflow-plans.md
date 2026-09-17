@@ -196,9 +196,12 @@ place: immediately before the hand-off at the last question.
 
 **The dialogs.** `/mode auto` or `/mode hack` from plan mode asks two questions:
 what to do with the conversation, and how much effort the run may spend. The
-[command reference](commands.md#leaving-plan-mode) lists them with their
-defaults, which are always the first option in the list so that the highlighted
-row and the escape key agree.
+[command reference](commands.md#leaving-plan-mode) lists them, and lists two
+things about each: what is first — the action you most likely want, and the only
+row labelled `(default)` — and what escape takes, which is always the answer
+that commits to nothing. Those are different questions and this flow keeps them
+apart; they coincide only on the effort dial, where nothing is committed either
+way.
 
 **What is not asked.** Gates default to `approve-plan+ship`. Publication is
 derived from the repository — an `origin` remote and `gh` on PATH means a pull
@@ -281,16 +284,19 @@ What happens then, in order, with the dialogs listed in the
    than inside a dialog sequence. The runtime then validates the run input and
    projects its budget. What is shown before the dialog is the agreed
    description, the reviewer list, the graph and the projection.
-4. **Check it.** *Review it blind* starts the headless `plan-review` through the
-   workflow provider — without a model turn, which is what keeps it blind:
-   a review reached through the model would have read the planning conversation.
-   *Approve as is* skips it. *Edit* opens the compiled document as JSON;
-   an edit is validated against the same mirror and written back into the
-   plan's `stages`, and escape discards it. This is the place to change who
-   reviews what.
+4. **Check it.** *Review it blind* is first and starts the headless
+   `plan-review` through the workflow provider — without a model turn, which is
+   what keeps it blind: a review reached through the model would have read the
+   planning conversation. *Approve as is* skips it. *Edit* opens the compiled
+   document as JSON; an edit is validated against the same mirror and written
+   back into the plan's `stages`, and escaping the editor discards it. This is
+   the place to change who reviews what. *Back to the conversation* is what
+   escape takes, because the other three all start something: the plan stays
+   stored, the record goes, and the posture stays `plan`.
 5. **The findings walk.** Every **blocking** finding is asked, one at a time:
-   go back to the conversation (the default, and first), accept it, or dismiss
-   it with a reason. Accepting applies the finding's RFC 6902 `patch` to the
+   accept it (first — the reviewer brought a patch and taking it is what usually
+   happens), dismiss it with a reason, or go back to the conversation, which is
+   what escape takes. Accepting applies the finding's RFC 6902 `patch` to the
    stored plan, runs the plan's own validation over the result and saves it — a
    mechanical apply, never a re-prompt. A patch that will not apply is reported
    and the finding is asked again without the accept option. `major` and `minor`

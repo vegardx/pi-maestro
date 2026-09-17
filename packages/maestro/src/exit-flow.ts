@@ -31,12 +31,17 @@
 // Three rules shape everything here:
 //
 //   - **NOTHING IS ASKED TWICE AND NOTHING IS ASSUMED SILENTLY.** Each dialog
-//     is asked once, escape takes the documented default — which is always the
-//     FIRST option, so the highlighted row and the escape key agree — and the
-//     answers end up in the plan's own `policy` block, on the document, where a
-//     reviewer and a receipt can both see them.
-//   - **EVERY OPTION TABLE LISTS ITS DEFAULT FIRST.** `test/exit-flow-*` asserts
-//     it for every exported table.
+//     is asked once, and the answers end up in the plan's own `policy` block —
+//     on the document, where a reviewer and a receipt can both see them —
+//     rather than in a dialog transcript nobody can check afterwards.
+//   - **WHAT IS FIRST AND WHAT ESCAPE TAKES ARE DIFFERENT QUESTIONS.** Every
+//     option table names both, on the options themselves: `recommended` is the
+//     answer a person most likely wants, it is first, and it is the only row
+//     labelled `(default)`; `escape` is what an unanswered dialog means, and it
+//     is always the answer that commits to nothing. They are the same row only
+//     on the effort dial, where escaping commits to nothing either way. An
+//     unrecognised answer takes the escape too. `test/exit-flow-*` finds every
+//     exported table by shape and asserts all of it.
 //   - **NOTHING BLOCKS A TOOL RESULT.** The dialogs that follow a `plan_intent`
 //     or `plan` call are scheduled detached, so the model's tool call completes
 //     while the human is still reading. A by-hand pass showed a `plan` call
@@ -176,13 +181,14 @@ export const EXIT_KEEP_PLANNING = "Keep planning";
 export type ExitStart = "compile" | "switch" | "keep";
 
 /**
- * Escape is not a fourth option: it is *Keep planning*, said with a key — and
- * *Keep planning* is listed first, because that is what escape takes.
+ * Compiling is what somebody who typed `/mode auto` after a planning
+ * conversation almost always wants, so it is first. Escape is *Keep planning*,
+ * which is the one answer that changes nothing.
  */
 export const EXIT_START_OPTIONS: readonly ExitOption<ExitStart>[] = [
-	{ value: "keep", text: EXIT_KEEP_PLANNING, fallback: true },
-	{ value: "compile", text: EXIT_COMPILE },
+	{ value: "compile", text: EXIT_COMPILE, recommended: true },
 	{ value: "switch", text: EXIT_SWITCH_ONLY },
+	{ value: "keep", text: EXIT_KEEP_PLANNING, escape: true },
 ];
 
 export const EXIT_START_TITLE =
@@ -191,48 +197,78 @@ export const EXIT_START_TITLE =
 // ── Steps 2-4 ────────────────────────────────────────────────────────────────
 
 /**
- * One option of a `select`, and whether it is the one escape takes.
+ * One option of a `select`, and the two different jobs an option can have.
  *
- * The default lives on the option rather than beside the list, so the label a
- * human reads and the value an escape produces cannot drift apart — there is
- * one `fallback: true` per table and the `(default)` suffix is derived from it.
+ * THESE ARE NOT THE SAME QUESTION, and collapsing them into one `fallback` flag
+ * was a real defect: it forced the most likely answer and the safe answer to be
+ * the same row, so every table had to give one of them up. *Agree* is what the
+ * person usually wants when they are shown a description they asked the model
+ * to write; agreeing because they pressed escape is a commitment nobody made.
+ *
+ *   - `recommended` — the action the person most likely wants. Exactly one per
+ *     table, it MUST be first, and it is the row that carries `(default)`. It
+ *     is a suggestion about ordering and highlighting, and nothing else.
+ *   - `escape` — what an unanswered dialog means. Exactly one per table, and
+ *     it is always the safe way out: escaping never commits to anything. It
+ *     may be the same entry as `recommended` only where escaping is harmless —
+ *     the effort dial, where every answer is equally reversible.
+ *
+ * Both live on the option rather than beside the list, so the label a human
+ * reads and the value an escape produces cannot drift apart.
  */
 export interface ExitOption<T> {
 	readonly value: T;
 	readonly text: string;
-	readonly fallback?: true;
+	/** The likely answer: first in the list, and the one labelled `(default)`. */
+	readonly recommended?: true;
+	/** What escape means. Never a commitment. */
+	readonly escape?: true;
 }
 
 export function optionLabel<T>(option: ExitOption<T>): string {
-	return option.fallback ? `${option.text} (default)` : option.text;
+	return option.recommended ? `${option.text} (default)` : option.text;
 }
 
 export function optionLabels<T>(options: readonly ExitOption<T>[]): string[] {
 	return options.map(optionLabel);
 }
 
-/** The chosen value, or the table's default when the dialog was escaped. */
+/**
+ * The chosen value, or the table's ESCAPE when nothing was chosen.
+ *
+ * An unrecognised label takes the escape too, and for the same reason: a label
+ * this table cannot resolve is not evidence that anybody picked anything, and
+ * resolving it to the recommended row would turn a dialog nobody answered into
+ * a decision somebody is held to.
+ */
 export function chosenOption<T>(
 	options: readonly ExitOption<T>[],
 	label: string | undefined,
 ): T {
-	const fallback = options.find((option) => option.fallback);
-	if (!fallback)
-		throw new Error("an exit-flow option table needs exactly one default");
-	if (label === undefined) return fallback.value;
-	return (options.find((option) => optionLabel(option) === label) ?? fallback)
+	const hatch = options.find((option) => option.escape);
+	if (!hatch)
+		throw new Error("an exit-flow option table needs exactly one escape");
+	if (label === undefined) return hatch.value;
+	return (options.find((option) => optionLabel(option) === label) ?? hatch)
 		.value;
 }
 
 /**
- * The three efforts, with the default first.
+ * The three efforts, the recommended one first.
  *
  * Derived from `EFFORTS` rather than written out, so a fourth effort cannot be
- * added to the schema without appearing here — and reordered so that the row a
- * `select` highlights is the row escape would take.
+ * added to the schema without appearing here. This is the one table whose
+ * escape IS its recommendation: every answer here is a dial on the same run and
+ * none of them commits to anything, so escaping to `standard` takes nothing
+ * away that the later dialogs do not still gate.
  */
 export const EFFORT_OPTIONS: readonly ExitOption<Effort>[] = [
-	{ value: DEFAULT_EFFORT, text: DEFAULT_EFFORT, fallback: true as const },
+	{
+		value: DEFAULT_EFFORT,
+		text: DEFAULT_EFFORT,
+		recommended: true as const,
+		escape: true as const,
+	},
 	...EFFORTS.filter((effort) => effort !== DEFAULT_EFFORT).map((effort) => ({
 		value: effort,
 		text: effort,
@@ -611,16 +647,17 @@ export const INTENT_EDITOR_TITLE = "What we are doing, and why";
 /**
  * Agree, edit, or stop.
  *
- * *Agree* is first and is what escape takes: the sentences were written from
- * this conversation and shown in full, so the cheap answer is the likely one,
- * and the two expensive answers — rewriting it, and throwing the exit away —
- * are both deliberate keystrokes.
+ * *Agree* is first because it is what usually happens: the sentences were
+ * written from this conversation and are shown in full. It is NOT what escape
+ * takes. Agreement is the one thing in this flow that a human supplies and
+ * nothing else can — it becomes the blind reviewer's yardstick and it opens the
+ * `plan` tool — and an agreement obtained by not answering is not one.
  */
 export const INTENT_OPTIONS: readonly ExitOption<"agree" | "edit" | "back">[] =
 	[
-		{ value: "agree", text: INTENT_AGREE, fallback: true },
+		{ value: "agree", text: INTENT_AGREE, recommended: true },
 		{ value: "edit", text: INTENT_EDIT },
-		{ value: "back", text: INTENT_BACK },
+		{ value: "back", text: INTENT_BACK, escape: true },
 	];
 
 /**
@@ -1219,14 +1256,15 @@ export const DIRTY_BACK = "Back to the conversation";
 
 /**
  * A dirty tree is a warning, never a refusal — `probeReadiness` says so and so
- * does the plan store. Continuing is therefore the default: nothing has run
- * yet, every later dialog still gates the run, and the last of them is a
+ * does the plan store. Continuing is therefore what is recommended: nothing has
+ * run yet, every later dialog still gates the run, and the last of them is a
  * confirmation. What the human is owed is the sentence about HEAD, which the
- * problem's own message carries.
+ * problem's own message carries. Escape still stops, because a dialog about the
+ * state of somebody's working tree is not one to answer on their behalf.
  */
 export const DIRTY_OPTIONS: readonly ExitOption<"continue" | "back">[] = [
-	{ value: "continue", text: DIRTY_CONTINUE, fallback: true },
-	{ value: "back", text: DIRTY_BACK },
+	{ value: "continue", text: DIRTY_CONTINUE, recommended: true },
+	{ value: "back", text: DIRTY_BACK, escape: true },
 ];
 
 export function creationTitle(path: string): string {
@@ -1239,23 +1277,34 @@ export const COMPILED_TITLE = "The run this compiles to — check it how?";
 export const COMPILED_REVIEW = "Review it blind";
 export const COMPILED_APPROVE = "Approve as is";
 export const COMPILED_EDIT = "Edit";
+export const COMPILED_BACK = "Back to the conversation";
 export const EDITOR_TITLE = "The compiled stage document";
 
-export const COMPILED_OPTIONS: readonly ExitOption<
-	"review" | "approve" | "edit"
->[] = [
-	{ value: "review", text: COMPILED_REVIEW, fallback: true },
+export type CompiledAction = "review" | "approve" | "edit" | "back";
+
+/**
+ * What to do with the graph this plan compiles to.
+ *
+ * *Review it blind* is first: an independent read of the graph costs one
+ * headless run and is what a person opening this dialog usually wants. Escape
+ * is *Back to the conversation*, because everything else here starts something
+ * — a reviewer, an editor, or the run — and none of those should happen
+ * because a dialog went unanswered.
+ */
+export const COMPILED_OPTIONS: readonly ExitOption<CompiledAction>[] = [
+	{ value: "review", text: COMPILED_REVIEW, recommended: true },
 	{ value: "approve", text: COMPILED_APPROVE },
 	{ value: "edit", text: COMPILED_EDIT },
+	{ value: "back", text: COMPILED_BACK, escape: true },
 ];
 
 /** The same table without the reviewer, for a seat that cannot reach one. */
-export const COMPILED_OPTIONS_UNREVIEWED: readonly ExitOption<
-	"review" | "approve" | "edit"
->[] = [
-	{ value: "approve", text: COMPILED_APPROVE, fallback: true },
-	{ value: "edit", text: COMPILED_EDIT },
-];
+export const COMPILED_OPTIONS_UNREVIEWED: readonly ExitOption<CompiledAction>[] =
+	[
+		{ value: "approve", text: COMPILED_APPROVE, recommended: true },
+		{ value: "edit", text: COMPILED_EDIT },
+		{ value: "back", text: COMPILED_BACK, escape: true },
+	];
 
 /**
  * Who will read this work, in one line.
@@ -1601,7 +1650,7 @@ export async function runExitFlowPhase2(
 
 			// 12 — asked once per time round this loop, and the loop only comes
 			// back here on an edit or an unreachable reviewer.
-			let action: "review" | "approve" | "edit";
+			let action: CompiledAction;
 			if (straightToReview) {
 				straightToReview = false;
 				action = "review";
@@ -1642,6 +1691,12 @@ export async function runExitFlowPhase2(
 				plan = saved;
 				continue;
 			}
+
+			if (action === "back")
+				// Escape, or the option that says so. The plan stays stored and the
+				// exit ends exactly where the other two *Back to the conversation*
+				// answers end it: plan mode, record gone, one notice.
+				return back("Nothing was reviewed and nothing was started.");
 
 			if (action === "approve") break;
 

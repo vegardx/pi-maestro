@@ -182,46 +182,75 @@ command that fails stops the rest.
 ## Leaving plan mode
 
 Plan mode is a conversation. It does not hold the `plan` tool, so the document
-is written on the way out — and a dialog sequence cannot obtain a plan from a
+is written on the way out — and a dialog sequence cannot obtain anything from a
 conversation, because no model turn happens inside one. The exit is therefore
-split by exactly one model turn: the first half asks what only a human knows,
-the model turn writes the plan, and the second half compiles, reviews and
-launches it.
+split by two model turns: the dialogs ask what only a human knows, the model
+writes the description, one dialog agrees it, the model writes the plan, and the
+second half compiles, reviews and launches it.
 
-**The dialogs.** `/mode auto` or `/mode hack` from plan mode asks six questions
-before the posture moves: what to do with the conversation, effort, gates,
-publication, a base branch when anything publishes, and one line saying what the
-plan is for. The [command reference](commands.md#leaving-plan-mode) lists them
-with their defaults. They are the questions a human answers and a document
-cannot, so nothing the plan itself will say is asked here.
+**The posture does not move until the run starts.** `/mode auto` used to switch
+first and ask later, which left every path that ends without a run — and there
+are five — in a posture nobody chose for what they ended up doing. The seat
+stays in plan mode for the whole exit, and `setMode` is called in exactly one
+place: immediately before the hand-off at the last question.
 
-**The hand-over.** On *Compile it into a workflow run* the posture switches, the
-answers are written to `<agentDir>/maestro/plans/.pending/<sessionId>.json`, and
-the model is asked — as an ordinary follow-up message, in the transcript — to
-call `plan` with the whole document and with those answers copied in verbatim as
-the `policy` block described above. Verbatim because they are decisions a human
-already made: a model that re-derives them produces a policy nobody chose, and
-the digest would then cover a document that disagrees with the dialogs that
-produced it. The same message asks for a `stages` array on any deliverable the
-conversation implied more than the default list for.
+**The dialogs.** `/mode auto` or `/mode hack` from plan mode asks two questions:
+what to do with the conversation, and how much effort the run may spend. The
+[command reference](commands.md#leaving-plan-mode) lists them with their
+defaults, which are always the first option in the list so that the highlighted
+row and the escape key agree.
+
+**What is not asked.** Gates default to `approve-plan+ship`. Publication is
+derived from the repository — an `origin` remote and `gh` on PATH means a pull
+request, a remote alone means a branch, neither means the work stays here — and
+the base branch is what this branch tracks, else `main`. The derivation is
+announced in one notification and recorded as `policy.publish`, where the
+compiled-document dialog can still change it. A human asked to repeat what the
+machine already knows is a human who stops reading dialogs.
+
+**The agreed description.** On *Compile it into a workflow run* the record is
+written and the model is asked — as an ordinary follow-up message, in the
+transcript — for two or three sentences saying what we are doing and why,
+submitted through `plan_intent { summary }`. One dialog shows them back:
+*Agree*, *Edit*, or *Back to the conversation*. It comes from the model because
+the conversation already contains it, and through a tool because a sentence in a
+transcript is a sentence somebody has to parse out again.
+
+The agreed text is the **blind reviewer's yardstick**: it is what `plan-review`
+is told the plan is for. A reviewer handed the plan as its own justification can
+only check the plan against itself, which is why the `plan` tool's window opens
+on agreement and not before — no yardstick, no window. A `plan` call that
+arrives earlier is refused by name.
+
+**The hand-over.** Agreeing asks the model for the whole document with the
+`policy` block copied in verbatim. Verbatim because those are decisions already
+made: a model that re-derives them produces a policy nobody chose, and the
+digest would then cover a document that disagrees with the flow that produced
+it. One field has a licence to move — `gates` may be raised to
+`every-deliverable` when the conversation asked for a check after every
+deliverable — and the same message asks for a `stages` array on any deliverable
+the conversation implied more than the default list for.
 
 *Just switch mode* switches and records nothing. *Keep planning*, and escape,
 leave the posture where it was and record nothing. A session replacement ends
 the flow and drops the record: an exit nobody is answering is not an exit in
 progress.
 
-**What the record is for.** It is the only thing that survives the model turn,
-so it holds only what the turn cannot reproduce: the policy, the one line, and
-which session asked. While it exists the `plan` tool is held even in plan mode,
-and that window is the whole reason it is on disk rather than in memory. The
-record is deleted on every path out of the second half, so the window is only
-ever open across the one turn it exists for.
+**What the record is for.** It is the only thing that survives the model turns,
+so it holds only what they cannot reproduce: the policy, the posture that was
+asked for, the agreed description, and which session asked. While it exists the
+exit's tools are held even in plan mode — `plan_intent` from the moment it is
+written, `plan` from the moment it carries a description. The record is deleted
+on every path out of the second half, so the window is only ever open across the
+turns it exists for.
 
 **The second half.** The `plan` tool's own result is the trigger: a stored
-document, plus a record naming *this* session. The session id is read from that
-tool result rather than from whichever session answered the dialogs, so a plan
-written in a session that replaced the one that asked is not read as the
-continuation of its exit.
+document, plus a record naming *this* session and carrying an agreed
+description. The session id is read from that tool result rather than from
+whichever session answered the dialogs, so a plan written in a session that
+replaced the one that asked is not read as the continuation of its exit. The
+half runs **detached** from the tool result: the hook returns at once, so the
+model's `plan` call is not shown running for as long as the dialogs take.
 
 What happens then, in order, with the dialogs listed in the
 [command reference](commands.md#after-the-plan-is-written):
@@ -232,14 +261,16 @@ What happens then, in order, with the dialogs listed in the
    branching from HEAD is acceptable. Everything else readiness finds is
    reported at once as a warning — it is a fact about this host, and publication
    will meet it again.
-2. **Review lenses**, per deliverable. The candidates are seeded from the
-   deliverable's own review intent — its `review-fan-out` lenses, or the ones
-   `tasks[].by` implies — so escaping the dialogs keeps exactly the plan that
-   was stored, and the stored document is not rewritten at all. A deliverable
-   that named no reviewer is offered a standard set instead. A lens the plan
-   pinned neither a tier nor a model for is then asked what it is worth, and a
-   deliverable that ends up with a `heavy` lens is asked whether it wants a
-   reviewer from another model family.
+2. **Normalisation.** Every heavy review lens whose `diverse` is undefined gets
+   `diverse: true` written into the **stored** plan, in both `tasks[].by` and
+   `stages[].lenses`; the result is re-validated and saved. A heavy lens reads
+   the same work the implementer wrote, and a reviewer from another model family
+   fails differently — both compilers agree on that, and they used to disagree
+   about the document because an undefined field left each of them to decide for
+   itself. Writing it down settles it where the digest covers it. A lens that
+   says `diverse: false` has answered the question and keeps its answer. There
+   is no dialog here, and no dialog about review lenses anywhere: the plan and
+   `policy.reviewDefault` decide them.
 3. **The compiled stage document.** pi-maestro derives it here, from the same
    §2.1 rules `plan-to-ship` compiles from: the default stage list from the
    policy, lenses seeded from `tasks[].by`, duplicate lens ids suffixed `-2` and
@@ -248,28 +279,36 @@ What happens then, in order, with the dialogs listed in the
    unchecked). It is validated against a local mirror of the runtime's own
    closed schema, so a disagreement between the two readings fails here rather
    than inside a dialog sequence. The runtime then validates the run input and
-   projects its budget, and both are shown.
+   projects its budget. What is shown before the dialog is the agreed
+   description, the reviewer list, the graph and the projection.
 4. **Check it.** *Review it blind* starts the headless `plan-review` through the
    workflow provider — without a model turn, which is what keeps it blind:
    a review reached through the model would have read the planning conversation.
    *Approve as is* skips it. *Edit* opens the compiled document as JSON;
    an edit is validated against the same mirror and written back into the
-   plan's `stages`, and escape discards it.
+   plan's `stages`, and escape discards it. This is the place to change who
+   reviews what.
 5. **The findings walk.** Every **blocking** finding is asked, one at a time:
-   accept it, dismiss it with a reason, or go back to the conversation.
-   Accepting applies the finding's RFC 6902 `patch` to the stored plan, runs the
-   plan's own validation over the result and saves it — a mechanical apply, never
-   a re-prompt. A patch that will not apply is reported and the finding is asked
-   again without the accept option. `major` and `minor` findings are printed
-   once and never asked about. After at least one accept the plan is recompiled
-   and reviewed once more; a second blocking review ends the loop and leaves you
-   in the conversation with the findings printed.
+   go back to the conversation (the default, and first), accept it, or dismiss
+   it with a reason. Accepting applies the finding's RFC 6902 `patch` to the
+   stored plan, runs the plan's own validation over the result and saves it — a
+   mechanical apply, never a re-prompt. A patch that will not apply is reported
+   and the finding is asked again without the accept option. `major` and `minor`
+   findings are printed once and never asked about. After at least one accept
+   the plan is recompiled and reviewed once more; a second blocking review ends
+   the loop and leaves you in the conversation with the findings printed.
 6. **The run.** `Start the run?` is the last question. *No* leaves the plan
-   stored and starts nothing. *Yes* deletes the record and asks the model — as
-   an ordinary follow-up message, in the transcript — to make the
+   stored, the posture in plan mode, and starts nothing. *Yes* switches to the
+   posture asked for at `/mode`, deletes the record, and asks the model — as an
+   ordinary follow-up message, in the transcript — to make the
    `workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`
    call itself. The run is still made in the open, and it still parks at its
    `approve-plan` checkpoint.
+
+Every ending that is not a run says the same two things in one notice: the plan
+is stored and `/plan run <slug>` starts it, and `/mode auto` (or `hack`) is
+still there when you want it. `/mode plan` is never offered, because the seat
+never left it.
 
 **When the runtime is not there.** `@vegardx/pi-workflow` is an optional peer.
 Without it — or when it refuses to validate or project — the flow stops at the

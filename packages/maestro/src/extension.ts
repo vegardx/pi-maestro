@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
+import { PLAN_INTENT_TOOL } from "./authoring.js";
 import { createAuditedBash } from "./bash-tool.js";
 import {
 	beginModeExit,
@@ -16,7 +17,7 @@ import {
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
-import { hasPendingExit } from "./pending-exit.js";
+import { readPendingExit } from "./pending-exit.js";
 import type { Plan } from "./plan.js";
 import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
 import { EFFORTS, planDigest } from "./plan-input.js";
@@ -28,7 +29,13 @@ import {
 	WORKFLOW_SHIPPED_CHANNEL,
 	watchShippedRuns,
 } from "./publish.js";
-import { createSeat, planToolAvailable, type Seat } from "./seat.js";
+import {
+	createSeat,
+	type ExitWindow,
+	intentToolAvailable,
+	planToolAvailable,
+	type Seat,
+} from "./seat.js";
 import {
 	acquireWorkflowClient,
 	acquireWorkflowClientOrWarn,
@@ -47,9 +54,12 @@ const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 /**
  * Why a tool call cannot happen in this posture, or nothing.
  *
- * `plan` is here as defence in depth only: the registration already withholds
- * it (`planToolAvailable`), so a call that reaches this point means a host kept
- * a stale tool set. Worth a named refusal rather than a silent write.
+ * The exit's two tools are here as defence in depth only: the registration
+ * already withholds them (`planToolAvailable`, `intentToolAvailable`), so a
+ * call that reaches this point means a host kept a stale tool set. Worth a
+ * named refusal rather than a silent write — and the refusal NAMES THE MISSING
+ * STEP, because "the plan tool is not held" is unactionable to a model that has
+ * been asked for a plan.
  *
  * Nothing else is gated by mode. Workflow tools in particular are left alone:
  * a run touches neither this working tree nor the host, so starting one from
@@ -58,12 +68,16 @@ const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 export function seatToolBlockReason(
 	mode: ModeName,
 	toolName: string,
-	pendingExit = false,
+	window: ExitWindow = "none",
 ): string | undefined {
 	if (mode === "plan" && DIRECT_MUTATION_TOOLS.has(toolName))
 		return `Mode plan is read-only; switch to /mode auto or /mode hack before using ${toolName}.`;
-	if (toolName === "plan" && !planToolAvailable(mode, pendingExit))
-		return "The `plan` tool is not held in plan mode; it is offered on the way out, so switch with /mode auto or /mode hack and write the plan there.";
+	if (toolName === "plan" && !planToolAvailable(mode, window))
+		return window === "intent"
+			? "The `plan` tool opens once we have agreed what we are doing: submit two or three sentences with `plan_intent` and wait for the dialog to be answered."
+			: "The `plan` tool is not held in plan mode; it is offered on the way out, so run /mode auto or /mode hack and answer the exit dialogs.";
+	if (toolName === PLAN_INTENT_TOOL && !intentToolAvailable(mode, window))
+		return "`plan_intent` belongs to the plan-mode exit and is held only while one is in progress; there is nothing waiting for a description right now.";
 	return undefined;
 }
 
@@ -134,8 +148,8 @@ export interface SeatHost {
 export interface StartSeatOptions {
 	readonly cwd?: string;
 	readonly agentDir?: string;
-	/** @see SeatOptions.pendingExit — the exit flow's record, once it exists. */
-	readonly pendingExit?: () => boolean;
+	/** @see SeatOptions.exitWindow — the exit flow's record, once it exists. */
+	readonly exitWindow?: () => ExitWindow;
 	/** @see beginModeExit — overridable so a test can watch the seam fire. */
 	readonly beginModeExit?: ModeExitHook;
 	/** Phase 2 — overridable so a test can watch the `tool_result` trigger fire. */
@@ -145,7 +159,10 @@ export interface StartSeatOptions {
 export interface SeatEntry {
 	seat(): Seat;
 	currentMode(): ModeName;
-	pendingExit(): boolean;
+	/** How far the plan-mode exit has got, read from its record. */
+	exitWindow(): ExitWindow;
+	/** Resolves once the exit's detached dialog work, if any, has finished. */
+	exitSettled(): Promise<void>;
 	/**
 	 * A session replacement: end an exit flow that is mid-dialog and drop its
 	 * record. Idempotent, and a no-op when no flow is open.
@@ -201,18 +218,24 @@ export function startSeat(
 	let sessionId: string | undefined;
 
 	/**
-	 * Is an exit in progress? A record that cannot be read answers `false`: it
+	 * How far the exit has got. A record that cannot be read answers `none`: it
 	 * is not a window this will open on trust, and phase 1 is where the human is
 	 * told about it, loudly, with the path to remove.
+	 *
+	 * `intent` and `plan` are the same record at two moments — before and after
+	 * the description is agreed — and the difference is what decides which of
+	 * the two exit tools the seat holds.
 	 */
-	const pendingExit =
-		options.pendingExit ??
-		(() => {
-			if (!sessionId) return false;
+	const exitWindow =
+		options.exitWindow ??
+		((): ExitWindow => {
+			if (!sessionId) return "none";
 			try {
-				return hasPendingExit(sessionId, options.agentDir);
+				const record = readPendingExit(sessionId, options.agentDir);
+				if (!record) return "none";
+				return record.intent === undefined ? "intent" : "plan";
 			} catch {
-				return false;
+				return "none";
 			}
 		});
 
@@ -233,6 +256,13 @@ export function startSeat(
 		},
 		cwd,
 		gate,
+		// The exit no longer moves the mode to open its tool window, so the
+		// mode-change listener below cannot be what reconciles the live set. The
+		// controller says so at every point the record appears, gains its agreed
+		// description, or goes.
+		retools: () => {
+			if (built) syncTools(built);
+		},
 		// Phase 2 reads the document the model just wrote and writes accepted
 		// patches back to it, so it gets the seat's own store rather than a
 		// second reader of the same directory.
@@ -303,7 +333,7 @@ export function startSeat(
 		if (built) return built;
 		const created = createSeat({
 			cwd,
-			pendingExit,
+			exitWindow,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 		});
 		built = created;
@@ -440,7 +470,8 @@ export function startSeat(
 	return {
 		seat,
 		currentMode: () => built?.mode().name ?? "plan",
-		pendingExit,
+		exitWindow,
+		exitSettled: exit.settled,
 		abortExitFlow: exit.abort,
 		runtimeBound: () => {
 			bound = true;
@@ -491,7 +522,7 @@ export default defineExtension(
 			const reason = seatToolBlockReason(
 				entry.currentMode(),
 				event.toolName,
-				entry.pendingExit(),
+				entry.exitWindow(),
 			);
 			if (reason) return { block: true, reason };
 		});

@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import type { ModeName } from "./mode.js";
+import { MAX_INTENT_LENGTH } from "./pending-exit.js";
 import {
 	ESCALATIONS,
 	FIX_ROUNDS,
@@ -445,4 +446,103 @@ function describe(
 			"no other posture; to hand-edit this plan instead, ask for `/mode auto`.",
 		);
 	return lines.join("\n");
+}
+
+// ── The agreed description ───────────────────────────────────────────────────
+//
+// The plan-mode exit needs one thing from the conversation before it needs the
+// plan: two or three sentences saying what we are doing and why. A human is not
+// asked to write them — the conversation already contains them — and the model
+// is not trusted to decide they are right. So the model submits them HERE, a
+// dialog shows them back, and only an agreed description opens the `plan` tool.
+//
+// It is a tool rather than a message because the exit has to know when the
+// sentences arrive and has to have the exact text: a model that answers in
+// prose is a model whose answer has to be parsed out of a transcript.
+
+/** The tool's name, in the one place it exists. */
+export const PLAN_INTENT_TOOL = "plan_intent";
+
+/** Two or three sentences. Fewer is a title; more is the plan. */
+export const MIN_INTENT_SENTENCES = 2;
+export const MAX_INTENT_SENTENCES = 3;
+
+/**
+ * How many sentences a submission has.
+ *
+ * Terminator-counting, deliberately simple: a sentence ends at `.`, `!` or `?`
+ * followed by whitespace or the end of the text. It over-counts an abbreviation
+ * and under-counts a semicolon, which is why the refusal says the count it
+ * arrived at rather than only that the text was wrong.
+ */
+export function countSentences(text: string): number {
+	return text
+		.trim()
+		.split(/[.!?]+(?:\s|$)/)
+		.filter((part) => part.trim().length > 0).length;
+}
+
+/** Why this submission is not two or three sentences, or nothing. */
+export function intentProblem(summary: string): string | undefined {
+	const text = summary.trim();
+	if (text.length === 0) return "it is empty";
+	if (text.length > MAX_INTENT_LENGTH)
+		return `it is ${text.length} characters, past the ${MAX_INTENT_LENGTH} bound`;
+	const sentences = countSentences(text);
+	if (sentences < MIN_INTENT_SENTENCES || sentences > MAX_INTENT_SENTENCES)
+		return `it reads as ${sentences} sentence${sentences === 1 ? "" : "s"}, and ${MIN_INTENT_SENTENCES} to ${MAX_INTENT_SENTENCES} are asked for — each one ending in \`.\`, \`!\` or \`?\``;
+	return undefined;
+}
+
+/** What a caller of the tool learns; the `tool_result` trigger reads this. */
+export interface PlanIntentDetails {
+	readonly submitted: boolean;
+	readonly summary: string;
+	readonly problem?: string;
+}
+
+/**
+ * Submit the agreed description.
+ *
+ * It stores nothing and decides nothing: the `tool_result` of this call is what
+ * opens the one dialog that agrees it, and the exit flow owns the record.
+ */
+export function createPlanIntentTool(): ToolDefinition {
+	return defineTool({
+		name: PLAN_INTENT_TOOL,
+		label: "Plan intent",
+		description:
+			"Submit two or three sentences saying what we are doing and why, written from this conversation. Held only while a plan-mode exit is in progress; the human agrees to the sentences before the plan is written.",
+		promptSnippet:
+			"submit the two or three sentences that say what we are doing and why.",
+		parameters: Type.Object({
+			summary: Type.String({
+				description: `Two or three sentences, at most ${MAX_INTENT_LENGTH} characters: what we are doing and why, from this conversation. Not a title, not the plan.`,
+			}),
+		}),
+		async execute(_id, { summary }) {
+			const problem = intentProblem(summary);
+			if (problem)
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `That description was not submitted: ${problem}. Send it again as two or three sentences on what we are doing and why.`,
+						},
+					],
+					isError: true,
+					details: { submitted: false, summary, problem } as PlanIntentDetails,
+				};
+			const text = summary.trim();
+			return {
+				content: [
+					{
+						type: "text" as const,
+						text: "Submitted. The human is being asked whether this is what we are doing; wait for their answer rather than continuing.",
+					},
+				],
+				details: { submitted: true, summary: text } as PlanIntentDetails,
+			};
+		},
+	});
 }

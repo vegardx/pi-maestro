@@ -2,23 +2,32 @@
 //
 // Plan mode is a conversation: the document is written on the way out, so the
 // `plan` tool is withheld there and offered everywhere else — plus the exit
-// window, which is the one moment plan mode holds it. The defect these tests
-// stand against is the registry's own: a tool whose availability is decided in
-// one place and remembered in another. So every case below asks the SAME
-// predicate's question through a different door — the registry, the live tool
-// set Pi holds, the block reason — and demands the same answer.
+// window, which is the one moment plan mode holds it. The window has two
+// moments now, because the exit no longer changes the mode to open it: a record
+// with no agreed description holds `plan_intent` alone, and only an agreed one
+// holds `plan`. The defect these tests stand against is the registry's own: a
+// tool whose availability is decided in one place and remembered in another. So
+// every case below asks the SAME predicate's question through a different door
+// — the registry, the live tool set Pi holds, the block reason — and demands
+// the same answer.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { PLAN_INTENT_TOOL } from "../packages/maestro/src/authoring.js";
 import {
 	type SeatHost,
 	seatToolBlockReason,
 	startSeat,
 } from "../packages/maestro/src/extension.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
-import { createSeat, planToolAvailable } from "../packages/maestro/src/seat.js";
+import {
+	createSeat,
+	type ExitWindow,
+	intentToolAvailable,
+	planToolAvailable,
+} from "../packages/maestro/src/seat.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -134,13 +143,20 @@ describe("the plan tool by mode", () => {
 			"bash",
 			"delete",
 			"plan",
+			PLAN_INTENT_TOOL,
 		]);
-		expect(seat.tools.names()).toEqual(["bash", "delete", "plan"]);
+		expect(seat.tools.names()).toEqual([
+			"bash",
+			"delete",
+			"plan",
+			PLAN_INTENT_TOOL,
+		]);
 		seat.setMode("auto");
 		expect(seat.tools.declaredFor("maestro")).toEqual([
 			"bash",
 			"delete",
 			"plan",
+			PLAN_INTENT_TOOL,
 		]);
 		// Identity never depended on the posture: resolving a withheld tool by
 		// name still works, which is what keeps the refusal specific.
@@ -151,39 +167,73 @@ describe("the plan tool by mode", () => {
 });
 
 describe("the exit window", () => {
-	it("is the one moment plan mode holds the tool", () => {
-		const table: [ModeName, boolean, boolean][] = [
-			["plan", false, false],
-			["plan", true, true],
-			["auto", false, true],
-			["auto", true, true],
-			["hack", false, true],
-			["hack", true, true],
+	it("is the one moment plan mode holds the tool, and only once agreed", () => {
+		// mode, window, `plan`, `plan_intent`.
+		const table: [ModeName, ExitWindow, boolean, boolean][] = [
+			["plan", "none", false, false],
+			["plan", "intent", false, true],
+			["plan", "plan", true, true],
+			["auto", "none", true, false],
+			["auto", "intent", true, true],
+			["auto", "plan", true, true],
+			["hack", "none", true, false],
+			["hack", "intent", true, true],
+			["hack", "plan", true, true],
 		];
-		for (const [mode, pendingExit, expected] of table)
-			expect([mode, pendingExit, planToolAvailable(mode, pendingExit)]).toEqual(
-				[mode, pendingExit, expected],
-			);
+		for (const [mode, window, plan, intent] of table)
+			expect([
+				mode,
+				window,
+				planToolAvailable(mode, window),
+				intentToolAvailable(mode, window),
+			]).toEqual([mode, window, plan, intent]);
 	});
 
 	it("reaches the registry through the injected record", () => {
-		let pending = false;
-		const seat = createSeat({ ...seatOptions(), pendingExit: () => pending });
+		let window: ExitWindow = "none";
+		const seat = createSeat({ ...seatOptions(), exitWindow: () => window });
+		const grants = () => seat.tools.grantsFor("maestro");
 
-		expect(seat.tools.grantsFor("maestro")).not.toContain("plan");
-		// The exit flow writes its pending record and the tool appears without
-		// the mode having moved: phase 1 asks the model for the document.
-		pending = true;
-		expect(seat.tools.grantsFor("maestro")).toContain("plan");
-		pending = false;
-		expect(seat.tools.grantsFor("maestro")).not.toContain("plan");
+		expect(grants()).not.toContain("plan");
+		expect(grants()).not.toContain(PLAN_INTENT_TOOL);
+		// The exit flow writes its pending record and `plan_intent` appears
+		// without the mode having moved. `plan` does not: there is nothing yet
+		// for a blind reviewer to check a plan against.
+		window = "intent";
+		expect(grants()).not.toContain("plan");
+		expect(grants()).toContain(PLAN_INTENT_TOOL);
+		expect(seat.planToolAvailable()).toBe(false);
+		expect(seat.intentToolAvailable()).toBe(true);
+		// The description is agreed, and the window opens.
+		window = "plan";
+		expect(grants()).toContain("plan");
+		expect(seat.planToolAvailable()).toBe(true);
+		window = "none";
+		expect(grants()).not.toContain("plan");
+		expect(grants()).not.toContain(PLAN_INTENT_TOOL);
 	});
 
 	it("defends the tool call itself, in case a host kept a stale set", () => {
 		expect(seatToolBlockReason("plan", "plan")).toContain("not held in plan");
-		expect(seatToolBlockReason("plan", "plan", true)).toBeUndefined();
+		// The refusal names the step that is missing, not only the tool.
+		expect(seatToolBlockReason("plan", "plan", "intent")).toContain(
+			"`plan_intent`",
+		);
+		expect(seatToolBlockReason("plan", "plan", "plan")).toBeUndefined();
 		expect(seatToolBlockReason("auto", "plan")).toBeUndefined();
 		expect(seatToolBlockReason("hack", "plan")).toBeUndefined();
+		// `plan_intent` belongs to the exit in every posture, not to auto/hack.
+		for (const mode of ["plan", "auto", "hack"] as const) {
+			expect(seatToolBlockReason(mode, PLAN_INTENT_TOOL)).toContain(
+				"plan-mode exit",
+			);
+			expect(
+				seatToolBlockReason(mode, PLAN_INTENT_TOOL, "intent"),
+			).toBeUndefined();
+			expect(
+				seatToolBlockReason(mode, PLAN_INTENT_TOOL, "plan"),
+			).toBeUndefined();
+		}
 	});
 });
 
@@ -333,6 +383,6 @@ describe("the mode-exit seam", () => {
 		entry.seat();
 		await h.mode("auto");
 		expect(entry.currentMode()).toBe("auto");
-		expect(entry.pendingExit()).toBe(false);
+		expect(entry.exitWindow()).toBe("none");
 	});
 });

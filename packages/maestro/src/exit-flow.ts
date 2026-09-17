@@ -1,29 +1,47 @@
-// The plan-mode exit, both halves: the questions a plan cannot answer, and
-// what happens to the plan once the model has written it.
+// The plan-mode exit, both halves: the two questions a plan cannot answer, the
+// description the conversation has to agree on, and what happens to the plan
+// once the model has written it.
 //
 // Leaving plan mode is where a conversation becomes a run, and the flow is
-// split by exactly one model turn because it has to be: a dialog sequence
-// cannot obtain a plan document from a conversation, and the `plan` tool is
-// withheld while the session is still in plan mode. So phase 1 asks the human
-// what only a human knows — how much effort, which gates, where it publishes,
-// what it is for — switches the posture, records the answers, and asks the
-// model for the document. The model's turn writes the plan. Phase 2
-// (`runExitFlowPhase2`, at the bottom of this file) picks it up from the
-// `tool_result` of that very call: readiness, the review lenses, the compiled
-// stage document, the blind review, the findings walk, and the one confirmation
-// that turns all of it into a run request the model makes in the open.
+// split by model turns because it has to be: a dialog sequence cannot obtain
+// anything from a conversation, and both the description and the plan come from
+// the model. So:
 //
-// Two rules shape everything here:
+//   1. **Phase 1 — two dialogs.** What to do with this conversation, and how
+//      much effort the run may spend. Nothing else is asked: the gates take
+//      their default, publication is DERIVED from the repository and announced,
+//      and the base branch is whatever this branch tracks. The record is
+//      written and the model is asked to describe the work.
+//   2. **The agreed description.** The model writes two or three sentences and
+//      submits them through `plan_intent`; one dialog shows them back. Agreeing
+//      puts them on the record and opens the `plan` tool's window — they are
+//      the yardstick the blind reviewer checks the plan against, so there is no
+//      window before there is a yardstick.
+//   3. **Phase 2** (`runExitFlowPhase2`, at the bottom of this file) picks the
+//      plan up from the `tool_result` of the model's `plan` call: readiness,
+//      the compiled stage document, the blind review, the findings walk, and
+//      the one confirmation that turns all of it into a run.
+//
+// THE MODE DOES NOT MOVE UNTIL THE RUN STARTS. `/mode auto` from plan mode used
+// to switch first and ask later, which left every path that ends without a run
+// — and there are five — in a posture nobody chose for what they ended up
+// doing. The seat stays in plan mode for the whole exit; `seat.setMode` is
+// called in exactly one place, immediately before the hand-off.
+//
+// Three rules shape everything here:
 //
 //   - **NOTHING IS ASKED TWICE AND NOTHING IS ASSUMED SILENTLY.** Each dialog
-//     is asked once, escape takes the documented default, and the answers end
-//     up in the plan's own `policy` block — on the document, where a reviewer
-//     and a receipt can both see them — rather than in a dialog transcript
-//     nobody can check afterwards.
-//   - **THE FLOW COMMITS ONCE, AT THE END.** The posture change, the record and
-//     the steer are one synchronous step after the last dialog. Anything that
-//     interrupts the questions leaves the session exactly where it was: plan
-//     mode, no record, no message to the model.
+//     is asked once, escape takes the documented default — which is always the
+//     FIRST option, so the highlighted row and the escape key agree — and the
+//     answers end up in the plan's own `policy` block, on the document, where a
+//     reviewer and a receipt can both see them.
+//   - **EVERY OPTION TABLE LISTS ITS DEFAULT FIRST.** `test/exit-flow-*` asserts
+//     it for every exported table.
+//   - **NOTHING BLOCKS A TOOL RESULT.** The dialogs that follow a `plan_intent`
+//     or `plan` call are scheduled detached, so the model's tool call completes
+//     while the human is still reading. A by-hand pass showed a `plan` call
+//     shown as running for minutes because the whole of phase 2 ran inside the
+//     hook's await.
 //
 // IO is the injected `ExitFlowUi` port, structurally Pi's `ExtensionUIContext`,
 // so a test drives every branch with a fake and this module never reaches for a
@@ -34,6 +52,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { PLAN_INTENT_TOOL } from "./authoring.js";
 import {
 	type PlanReview,
 	partitionFindings,
@@ -41,7 +60,7 @@ import {
 	renderFindings,
 	walkFindings,
 } from "./findings.js";
-import type { ModeName } from "./mode.js";
+import type { ExitMode, ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
 import {
 	deletePendingExit,
@@ -54,26 +73,17 @@ import {
 } from "./pending-exit.js";
 import {
 	DEFAULT_GATES,
-	type Deliverable,
-	defaultStagesFor,
+	inspectPlan,
 	isRefName,
-	PLAN_GATES,
 	type Plan,
-	type PlanGates,
 	type PlanPolicy,
 	type PlanReport,
 	type PublishMode,
-	REVIEW_TIERS,
-	type ResolvedPolicy,
-	type ReviewFanOutStage,
-	type ReviewLens,
-	type ReviewTier,
 	resolvePolicy,
-	type Stage,
+	withExplicitDiverse,
 } from "./plan.js";
 import { PLAN_WORKFLOW_REF, renderHandoff } from "./plan-command.js";
 import {
-	canonicalJson,
 	DEFAULT_EFFORT,
 	EFFORTS,
 	type Effort,
@@ -84,6 +94,7 @@ import {
 	type AuditedBash,
 	createRepository,
 	creationCommands,
+	ghOnPath,
 	probeReadiness,
 	type ReadinessDeps,
 } from "./readiness.js";
@@ -114,15 +125,6 @@ export type ExitFlowUi = Pick<
 	"select" | "input" | "confirm" | "editor" | "notify"
 >;
 
-/** A session entry as this module reads one; structurally Pi's `SessionEntry`. */
-export interface SessionEntryLike {
-	readonly type: string;
-	readonly message?: {
-		readonly role?: string;
-		readonly content?: unknown;
-	};
-}
-
 /** What the `/mode` handler is told to do once the hook has run. */
 export type ModeExitDecision =
 	/** Switch and report it, the way `/mode` always has. */
@@ -150,15 +152,19 @@ export type ModeExitAnswer = ModeExitDecision | undefined;
 /** The seam this file replaced: no dialogs, no record, an ordinary switch. */
 export const beginModeExit: ModeExitHook = () => "switch";
 
-/** Structurally an `ExtensionCommandContext`; only these three are read. */
+/**
+ * Structurally an `ExtensionCommandContext`; only these three are read.
+ *
+ * The conversation itself is NOT read here any more. Phase 1 used to mine the
+ * last user message for a one-line intent, which is the model's reading to do
+ * and is now the model's job: it writes the description and submits it through
+ * `plan_intent`.
+ */
 export interface ModeExitContext {
 	readonly ui: ExitFlowUi;
-	/** Dialog-capable UI. A session without one cannot be asked six questions. */
+	/** Dialog-capable UI. A session without one cannot be asked two questions. */
 	readonly hasUI?: boolean;
-	readonly sessionManager?: {
-		getSessionId(): string;
-		getBranch(fromId?: string): readonly SessionEntryLike[];
-	};
+	readonly sessionManager?: { getSessionId(): string };
 }
 
 // ── Step 1 ───────────────────────────────────────────────────────────────────
@@ -167,12 +173,17 @@ export const EXIT_COMPILE = "Compile it into a workflow run";
 export const EXIT_SWITCH_ONLY = "Just switch mode";
 export const EXIT_KEEP_PLANNING = "Keep planning";
 
-/** Escape is not a fourth option: it is *Keep planning*, said with a key. */
-export const EXIT_START_OPTIONS = [
-	EXIT_COMPILE,
-	EXIT_SWITCH_ONLY,
-	EXIT_KEEP_PLANNING,
-] as const;
+export type ExitStart = "compile" | "switch" | "keep";
+
+/**
+ * Escape is not a fourth option: it is *Keep planning*, said with a key — and
+ * *Keep planning* is listed first, because that is what escape takes.
+ */
+export const EXIT_START_OPTIONS: readonly ExitOption<ExitStart>[] = [
+	{ value: "keep", text: EXIT_KEEP_PLANNING, fallback: true },
+	{ value: "compile", text: EXIT_COMPILE },
+	{ value: "switch", text: EXIT_SWITCH_ONLY },
+];
 
 export const EXIT_START_TITLE =
 	"There is a conversation but no plan. What now?";
@@ -213,67 +224,36 @@ export function chosenOption<T>(
 		.value;
 }
 
-export const EFFORT_OPTIONS: readonly ExitOption<Effort>[] = EFFORTS.map(
-	(effort) =>
-		effort === DEFAULT_EFFORT
-			? { value: effort, text: effort, fallback: true as const }
-			: { value: effort, text: effort },
-);
+/**
+ * The three efforts, with the default first.
+ *
+ * Derived from `EFFORTS` rather than written out, so a fourth effort cannot be
+ * added to the schema without appearing here — and reordered so that the row a
+ * `select` highlights is the row escape would take.
+ */
+export const EFFORT_OPTIONS: readonly ExitOption<Effort>[] = [
+	{ value: DEFAULT_EFFORT, text: DEFAULT_EFFORT, fallback: true as const },
+	...EFFORTS.filter((effort) => effort !== DEFAULT_EFFORT).map((effort) => ({
+		value: effort,
+		text: effort,
+	})),
+];
 
 export const EFFORT_TITLE = "How much effort should the run spend?";
 
-/**
- * The gate vocabulary, in the plan's words on one side and the human's on the
- * other. Derived from `PLAN_GATES` so a new gate cannot be added to the schema
- * without this table failing to compile.
- */
-const GATE_TEXT: Readonly<Record<PlanGates, string>> = {
-	"approve-plan": "approve-plan only",
-	"approve-plan+ship": "approve-plan + ship",
-	"every-deliverable": "every deliverable",
-};
-
-export const GATE_OPTIONS: readonly ExitOption<PlanGates>[] = PLAN_GATES.map(
-	(gates) =>
-		gates === DEFAULT_GATES
-			? { value: gates, text: GATE_TEXT[gates], fallback: true as const }
-			: { value: gates, text: GATE_TEXT[gates] },
-);
-
-export const GATE_TITLE = "Where should the run stop for a human?";
-
-/**
- * Publication, which the exit asks about and `policy.publish` records.
- *
- * `pr` reads "pull request" here and nowhere else: the stored vocabulary is the
- * plan's, and a dialog that says `pr` to a human is a dialog written for the
- * schema rather than for the person answering it.
- */
-export const PUBLICATION_OPTIONS: readonly ExitOption<PublishMode>[] = [
-	{ value: "none", text: "none" },
-	{ value: "branch", text: "branch" },
-	{ value: "pr", text: "pull request", fallback: true },
-];
-
-export const PUBLICATION_TITLE = "What happens to the work when it is shipped?";
-
-// ── Steps 5-6 ────────────────────────────────────────────────────────────────
-
-export const BASE_BRANCH_TITLE = "Base branch to publish onto";
+// ── Publication, derived ─────────────────────────────────────────────────────
 
 /** When the repository cannot say what it tracks, and the human is told. */
 export const FALLBACK_BASE_BRANCH = "main";
-
-export const INTENT_TITLE = "One line: what is this plan for?";
 
 /**
  * The repository's current upstream head, or `null`.
  *
  * Shaped exactly like `gitRepoProbe`: one `execFileSync`, every failure the
  * same answer, because a caller cannot act differently on "no upstream", "not a
- * repository" and "no git at all" — all three mean the dialog has to offer
- * something else. The tracked branch first, then whatever `origin` calls its
- * head, because a detached or unpushed branch still publishes onto the default.
+ * repository" and "no git at all" — all three mean the derivation has to fall
+ * back. The tracked branch first, then whatever `origin` calls its head,
+ * because a detached or unpushed branch still publishes onto the default.
  */
 export function gitUpstreamHead(cwd: string): string | null {
 	const git = (args: string[]): string | null => {
@@ -298,58 +278,119 @@ export function gitUpstreamHead(cwd: string): string | null {
 	);
 }
 
-/**
- * The first line of the last thing the human said, as the intent's default.
- *
- * Slash commands are skipped: `/mode auto` is the message that opened this
- * dialog, and offering it back as "what this plan is for" would be the flow
- * quoting itself. Empty when the conversation offers nothing usable, which is
- * a legitimate answer — the intent is one line a human writes, not a summary
- * this flow is entitled to invent.
- */
-export function lastUserLine(entries: readonly SessionEntryLike[]): string {
-	for (let index = entries.length - 1; index >= 0; index--) {
-		const entry = entries[index];
-		if (entry?.type !== "message" || entry.message?.role !== "user") continue;
-		const content = entry.message.content;
-		const text =
-			typeof content === "string"
-				? content
-				: Array.isArray(content)
-					? content
-							.filter(
-								(part): part is { type: string; text: string } =>
-									typeof part === "object" &&
-									part !== null &&
-									(part as { type?: unknown }).type === "text" &&
-									typeof (part as { text?: unknown }).text === "string",
-							)
-							.map((part) => part.text)
-							.join("\n")
-					: "";
-		const line = text
+/** Does this repository have an `origin` remote? Same shape, same reasons. */
+export function gitOriginPresent(cwd: string): boolean {
+	try {
+		return execFileSync("git", ["remote"], {
+			cwd,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		})
 			.split("\n")
-			.map((part) => part.trim())
-			.find((part) => part.length > 0);
-		if (!line || line.startsWith("/")) continue;
-		return line.slice(0, MAX_INTENT_LENGTH);
+			.map((line) => line.trim())
+			.includes("origin");
+	} catch {
+		return false;
 	}
-	return "";
 }
 
-// ── The steer ────────────────────────────────────────────────────────────────
+/** What the derivation reads. Injected so a test needs no repository. */
+export interface PublicationProbe {
+	readonly originPresent: () => boolean;
+	readonly ghPresent: () => boolean;
+	readonly upstreamHead: () => string | null;
+}
+
+export interface DerivedPublication {
+	readonly mode: PublishMode;
+	/** The upstream head, else `main`. Recorded only when something publishes. */
+	readonly base: string;
+	/** One sentence naming what was found and what follows from it. */
+	readonly why: string;
+}
 
 /**
- * What the model is asked for, once the posture has moved.
+ * Where the work goes, read off the repository rather than asked.
  *
- * The policy block is quoted rather than described. It is a set of decisions a
- * human has already made, it is digest-bound once it is on the document, and a
+ * This used to be two dialogs, and both of them asked a human to repeat what
+ * the machine already knew: `gh repo create` is not going to happen without
+ * `gh`, and a push has nowhere to go without a remote. So the rule is the
+ * machine's own: an `origin` remote and `gh` on PATH means a pull request, a
+ * remote alone means a branch, neither means the work stays here. It is
+ * ANNOUNCED rather than silent, because a derived decision nobody was told
+ * about is exactly as unaccountable as one nobody chose — and `policy.publish`
+ * on the plan is where it can still be changed.
+ */
+export function derivePublication(probe: PublicationProbe): DerivedPublication {
+	const base = probe.upstreamHead() ?? FALLBACK_BASE_BRANCH;
+	const origin = probe.originPresent();
+	const gh = origin && probe.ghPresent();
+	const mode: PublishMode = !origin ? "none" : gh ? "pr" : "branch";
+	const why =
+		mode === "pr"
+			? `Publication: pull request onto \`${base}\` — this repository has an \`origin\` remote and \`gh\` is on PATH.`
+			: mode === "branch"
+				? `Publication: branch onto \`${base}\` — this repository has an \`origin\` remote, and \`gh\` is not on PATH to open a pull request with.`
+				: "Publication: none — this repository has no `origin` remote, so what a run produces stays on this machine.";
+	return { mode, base, why };
+}
+
+/** The `policy.publish` block a derivation becomes. */
+export function publicationPolicy(
+	derived: DerivedPublication,
+): NonNullable<PlanPolicy["publish"]> {
+	return derived.mode === "none"
+		? { mode: "none" }
+		: { mode: derived.mode, base: derived.base };
+}
+
+// ── The two steers ───────────────────────────────────────────────────────────
+
+/**
+ * What the model is asked for first: the description, not the plan.
+ *
+ * The description is the yardstick — it is what the blind reviewer is told the
+ * plan is FOR, and a reviewer given the plan as its own justification can only
+ * check the plan against itself. It comes from the model rather than from a
+ * human typing one line into a dialog, because the conversation already
+ * contains it and a human retyping their own intent is the flow asking them to
+ * do the model's reading for it. It comes back through a TOOL because a
+ * sentence in a transcript is a sentence somebody has to parse out again.
+ */
+export function renderIntentSteer(): string {
+	return [
+		"Before the plan: say what we are doing, and why.",
+		"",
+		"Write two or three sentences, from this conversation, that a reader who" +
+			" has not seen it would understand: what we are setting out to do, and" +
+			" why it is worth doing. Not a title, not the plan, not a list of steps" +
+			" — the thing the plan will be judged against.",
+		"",
+		"Submit them with `plan_intent { summary }` and stop there. I will be" +
+			" shown exactly what you write and I will agree to it, edit it, or send" +
+			" us back to the conversation; the `plan` tool opens once I have agreed.",
+		"",
+		"Do not ask me to write it for you, and do not start a run.",
+	].join("\n");
+}
+
+/**
+ * What the model is asked for once the description is agreed.
+ *
+ * The policy block is quoted rather than described. It is a set of decisions
+ * that have already been made — one in a dialog, one by default, one derived
+ * from this repository — it is digest-bound once it is on the document, and a
  * model that re-derives "what they probably meant by standard effort" produces
  * a plan whose policy nobody chose. So the instruction is to copy it.
+ *
+ * `gates` is the one field with a licence to move, and it is written as a
+ * narrow one: `every-deliverable` stops the run for a human after every single
+ * deliverable, which is right when the conversation asked for exactly that and
+ * is otherwise a run that never finishes without a babysitter.
  */
-export function renderExitSteer(policy: PlanPolicy, intent: string): string {
-	const lines = [
-		"Plan mode is over and the `plan` tool is available now. The document is what I am asking for.",
+export function renderExitSteer(policy: PlanPolicy): string {
+	return [
+		"The description is agreed and the `plan` tool is available now. The document is what I am asking for.",
 		"",
 		"Call `plan` once with the whole plan from the conversation we just had:" +
 			" every repository, every deliverable, its `after` and `reads` edges, its" +
@@ -363,9 +404,14 @@ export function renderExitSteer(policy: PlanPolicy, intent: string): string {
 		JSON.stringify(policy, null, 2),
 		"```",
 		"",
-		"Those are decisions I have already made in the dialogs I just answered." +
-			" Copy the block exactly: do not change a field, do not drop one, and do" +
-			" not add one.",
+		"Those are decisions already made: the effort I chose in the dialog, the" +
+			" gates this seat defaults to, and the publication derived from this" +
+			" repository. Copy the block exactly: do not change a field, do not drop" +
+			" one, and do not add one.",
+		"",
+		`One exception, and only one: raise \`gates\` to \`every-deliverable\` if — and` +
+			" only if — this conversation asked for a check after every deliverable." +
+			" Nothing else in the block moves.",
 		"",
 		"Give a deliverable its own `stages` array wherever this conversation" +
 			" implied more than the default list (`implement` → `verify-and-fix` →" +
@@ -373,18 +419,10 @@ export function renderExitSteer(policy: PlanPolicy, intent: string): string {
 			" we actually named, or a `gate` a human has to answer inside the run. A" +
 			" deliverable the conversation treated as ordinary needs no `stages` at" +
 			" all — it gets the default list, derived from the policy above.",
-	];
-	if (intent.length > 0)
-		lines.push(
-			"",
-			`I recorded one line for what this is for: "${intent}". Make the plan answer it.`,
-		);
-	lines.push(
 		"",
 		"Then stop. This message asks for the stored document and nothing else:" +
 			" do not start a run and do not decide anything on my behalf.",
-	);
-	return lines.join("\n");
+	].join("\n");
 }
 
 // ── The flow ─────────────────────────────────────────────────────────────────
@@ -392,23 +430,21 @@ export function renderExitSteer(policy: PlanPolicy, intent: string): string {
 export interface ExitFlowDeps {
 	readonly ui: ExitFlowUi;
 	readonly sessionId: string;
-	/** The posture the human asked for. */
-	readonly wanted: ModeName;
-	/** The seat's own switch, called once, before the record is written. */
+	/** The posture the human asked for, and will be given when the run starts. */
+	readonly wanted: ExitMode;
+	/** The seat's own switch. Phase 1 calls it ONLY for *Just switch mode*. */
 	readonly setMode: (name: ModeName) => void;
 	/**
-	 * How the model is asked for the document. Optional: a host with no
+	 * How the model is asked for the description. Optional: a host with no
 	 * steering channel keeps the record and gets the instruction printed, so
-	 * the exit still completes whenever the plan is eventually written.
+	 * the exit still completes whenever the description is eventually written.
 	 */
 	readonly sendUserMessage?: (
 		content: string,
 		options?: { readonly deliverAs?: "steer" | "followUp" },
 	) => void;
-	/** The conversation, for the intent default. Absent means "cannot read it". */
-	readonly entries?: () => readonly SessionEntryLike[];
-	/** The base-branch default. Injected so the tests do not need a repository. */
-	readonly upstreamHead?: () => string | null;
+	/** Where the work goes. Injected so the tests do not need a repository. */
+	readonly publication?: () => DerivedPublication;
 	readonly agentDir?: string;
 	/** Aborts every open dialog; a session replacement ends the flow. */
 	readonly signal?: AbortSignal;
@@ -420,13 +456,16 @@ export type ExitFlowOutcome =
 	| { readonly kind: "keep-planning" }
 	/** *Just switch mode*: the posture changes, no record, no steer. */
 	| { readonly kind: "switch-only" }
-	/** The six answers, on disk and on their way to the model. */
+	/**
+	 * The two answers on disk, the posture still `plan`, and the model asked to
+	 * describe the work.
+	 */
 	| {
 			readonly kind: "compiled";
 			readonly record: PendingExit;
 			readonly steer: string;
 			readonly path: string;
-			/** Exactly how many dialogs were opened; 5 when nothing publishes. */
+			/** Exactly how many dialogs were opened. Two, always. */
 			readonly asked: number;
 	  }
 	/** A session replacement mid-flow. The posture is untouched. */
@@ -445,7 +484,7 @@ export async function runExitFlowPhase1(
 	let asked = 0;
 
 	// A record from an exit that never finished is read before anything is
-	// asked: it is the thing that keeps the `plan` tool open in plan mode, so a
+	// asked: it is the thing that keeps the exit's tools open in plan mode, so a
 	// record nobody can parse has to stop the flow loudly rather than be
 	// overwritten by a fresh one that hides it.
 	try {
@@ -480,97 +519,64 @@ export async function runExitFlowPhase1(
 
 	try {
 		// 1 — the only step that can end the flow without changing anything.
-		const start = await ask(() =>
-			ui.select(EXIT_START_TITLE, [...EXIT_START_OPTIONS], opts),
-		);
-		if (start === undefined || start === EXIT_KEEP_PLANNING) {
+		const start = await select(EXIT_START_TITLE, EXIT_START_OPTIONS);
+		if (start === "keep") {
 			// No exit is in progress, so no record may claim there is one.
 			deletePendingExit(sessionId, deps.agentDir);
 			return { kind: "keep-planning" };
 		}
-		if (start === EXIT_SWITCH_ONLY) {
+		if (start === "switch") {
 			deletePendingExit(sessionId, deps.agentDir);
 			deps.setMode(deps.wanted);
 			return { kind: "switch-only" };
 		}
 
-		// 2, 3, 4 — the dials, each asked once, escape taking the default.
+		// 2 — the one dial a repository cannot answer.
 		const effort = await select(EFFORT_TITLE, EFFORT_OPTIONS);
-		const gates = await select(GATE_TITLE, GATE_OPTIONS);
-		const publish = await select(PUBLICATION_TITLE, PUBLICATION_OPTIONS);
 
-		// 5 — only when there is something to publish onto.
-		let base: string | undefined;
-		if (publish !== "none") {
-			const probed = (deps.upstreamHead ?? (() => null))();
-			const suggested = probed ?? FALLBACK_BASE_BRANCH;
-			if (!probed)
-				ui.notify(
-					`This repository does not say what it tracks, so the base branch starts at \`${FALLBACK_BASE_BRANCH}\`. Change it in the next dialog if that is wrong.`,
-					"warning",
-				);
-			const answered = await ask(() =>
-				ui.input(BASE_BRANCH_TITLE, suggested, opts),
-			);
-			const chosen = (answered ?? "").trim();
-			base = chosen.length > 0 ? chosen : suggested;
-			if (!isRefName(base)) {
-				// Caught here rather than by `inspectPlan` three steps later: the
-				// human is still in front of the dialog that produced it.
-				const problem = `\`${base}\` is not a valid branch name, so nothing was recorded and the posture is unchanged.`;
-				ui.notify(problem, "error");
-				return { kind: "refused", problem };
-			}
+		// Not a dialog: read off the repository and said out loud. `policy` is
+		// still where it can be changed, and the plan carries it.
+		const publication = (deps.publication ?? DEFAULT_PUBLICATION)();
+		ui.notify(publication.why, "info");
+		const publish = publicationPolicy(publication);
+		if (publish.base !== undefined && !isRefName(publish.base)) {
+			// Caught here rather than by `inspectPlan` three steps later. A base
+			// branch this seat derived and Git would refuse is a bug in the
+			// derivation, and the human is owed the name it arrived at.
+			const problem = `\`${publish.base}\` is not a valid branch name, so nothing was recorded and the posture is unchanged.`;
+			ui.notify(problem, "error");
+			return { kind: "refused", problem };
 		}
 
-		// 6 — one line, defaulting to the last thing the human said.
-		const conversation = deps.entries?.();
-		if (!conversation)
-			ui.notify(
-				"This session cannot be read back, so the intent starts empty rather than guessed.",
-				"warning",
-			);
-		const suggestedIntent = conversation ? lastUserLine(conversation) : "";
-		const answeredIntent = await ask(() =>
-			ui.input(INTENT_TITLE, suggestedIntent, opts),
-		);
-		const intent = ((answeredIntent ?? "").trim() || suggestedIntent).slice(
-			0,
-			MAX_INTENT_LENGTH,
-		);
-
-		// The commit: one synchronous step, in this order. The posture moves
-		// first because it is what makes the `plan` tool available, and the
-		// record is written before the model is asked so that phase 2 can find
-		// it however fast the answer comes back.
+		// The commit: one synchronous step, in this order. THE POSTURE DOES NOT
+		// MOVE. The record is what opens `plan_intent` in plan mode, and it is
+		// written before the model is asked so that the description's own
+		// `tool_result` can find it however fast the answer comes back.
 		if (signal?.aborted) throw new ExitAborted();
-		const policy: PlanPolicy = {
-			effort,
-			gates,
-			publish: base === undefined ? { mode: publish } : { mode: publish, base },
-		};
+		const policy: PlanPolicy = { effort, gates: DEFAULT_GATES, publish };
 		const record: PendingExit = {
 			schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
 			sessionId,
 			policy,
-			intent,
+			wanted: deps.wanted,
 			createdAt: now(),
 		};
-		deps.setMode(deps.wanted);
 		const path = writePendingExit(record, deps.agentDir);
-		const steer = renderExitSteer(policy, intent);
+		const steer = renderIntentSteer();
 		if (deps.sendUserMessage) {
 			deps.sendUserMessage(steer, { deliverAs: "followUp" });
 			ui.notify(
-				`Mode ${deps.wanted}, and the model has been asked for the plan — effort ${effort}, gates ${gates}, publication ${publish}${base ? ` onto \`${base}\`` : ""}. The exit is recorded at ${path}.`,
+				`Effort ${effort}, gates ${DEFAULT_GATES}, publication ${publish.mode}${
+					publish.base ? ` onto \`${publish.base}\`` : ""
+				}. You are still in plan mode — \`/mode ${deps.wanted}\` happens when the run starts. The model has been asked to say what we are doing; the exit is recorded at ${path}.`,
 				"info",
 			);
 		} else {
 			// R1: no steering channel. The record stays, so the exit completes
-			// whenever the plan is written; the instruction is printed so it can
-			// be handed over by hand rather than lost.
+			// whenever the description is written; the instruction is printed so it
+			// can be handed over by hand rather than lost.
 			ui.notify(
-				`Mode ${deps.wanted}. This host cannot steer the session, so ask for the plan yourself — the exit is recorded at ${path}.\n\n${steer}`,
+				`Recorded at ${path}, and the posture is unchanged. This host cannot steer the session, so ask for the description yourself.\n\n${steer}`,
 				"warning",
 			);
 		}
@@ -580,23 +586,188 @@ export async function runExitFlowPhase1(
 		// The session was replaced under an open dialog. Nothing was committed,
 		// and any record left by an earlier exit is dropped: an aborted flow is
 		// not an exit in progress, and a record that says otherwise would keep
-		// the `plan` tool open in plan mode forever.
+		// the exit's tools open in plan mode forever.
 		deletePendingExit(sessionId, deps.agentDir);
 		return { kind: "aborted" };
+	}
+}
+
+/** The real world's derivation, for a caller that injected none. */
+const DEFAULT_PUBLICATION = (): DerivedPublication =>
+	derivePublication({
+		originPresent: () => gitOriginPresent(process.cwd()),
+		ghPresent: ghOnPath,
+		upstreamHead: () => gitUpstreamHead(process.cwd()),
+	});
+
+// ── The agreed description ───────────────────────────────────────────────────
+
+export const INTENT_TITLE = "Is this what we are doing?";
+export const INTENT_AGREE = "Agree";
+export const INTENT_EDIT = "Edit";
+export const INTENT_BACK = "Back to the conversation";
+export const INTENT_EDITOR_TITLE = "What we are doing, and why";
+
+/**
+ * Agree, edit, or stop.
+ *
+ * *Agree* is first and is what escape takes: the sentences were written from
+ * this conversation and shown in full, so the cheap answer is the likely one,
+ * and the two expensive answers — rewriting it, and throwing the exit away —
+ * are both deliberate keystrokes.
+ */
+export const INTENT_OPTIONS: readonly ExitOption<"agree" | "edit" | "back">[] =
+	[
+		{ value: "agree", text: INTENT_AGREE, fallback: true },
+		{ value: "edit", text: INTENT_EDIT },
+		{ value: "back", text: INTENT_BACK },
+	];
+
+/**
+ * The dialog's title, which is the description itself.
+ *
+ * Pi's `select` carries no body, and the thing being agreed to has to be on
+ * screen at the moment of agreeing — the same reason a blocking finding is its
+ * own title in `findings.ts`.
+ */
+export function intentDialogTitle(summary: string): string {
+	return `${INTENT_TITLE}\n\n${summary}`;
+}
+
+export interface IntentAgreementDeps {
+	readonly record: PendingExit;
+	/** What `plan_intent` submitted, already validated by the tool. */
+	readonly summary: string;
+	readonly ui: ExitFlowUi;
+	readonly agentDir?: string;
+	readonly signal?: AbortSignal;
+	readonly gate?: DialogGate;
+	readonly sendUserMessage?: ExitFlowDeps["sendUserMessage"];
+}
+
+export type IntentAgreementOutcome =
+	/** Agreed: the record carries it, and the `plan` tool's window is open. */
+	| {
+			readonly kind: "agreed";
+			readonly record: PendingExit;
+			readonly steer: string;
+			readonly asked: number;
+	  }
+	/** *Back to the conversation*: the record is gone, the posture is plan. */
+	| { readonly kind: "back"; readonly asked: number }
+	| { readonly kind: "aborted" }
+	| { readonly kind: "refused"; readonly problem: string };
+
+/**
+ * One dialog over the description the model submitted.
+ *
+ * It is the gate on the `plan` tool, so every path out of it settles the
+ * record: agreeing writes the description onto it, going back deletes it, and
+ * an abort deletes it — there is no state in which a window is open and nobody
+ * is answering for it.
+ */
+export async function runIntentAgreement(
+	deps: IntentAgreementDeps,
+): Promise<IntentAgreementOutcome> {
+	const { ui, record } = deps;
+	const dialogs = createExitDialogs(ui, {
+		...(deps.signal ? { signal: deps.signal } : {}),
+		...(deps.gate ? { gate: deps.gate } : {}),
+	});
+	let summary = deps.summary.trim();
+	try {
+		for (;;) {
+			const choice = await dialogs.choose(
+				intentDialogTitle(summary),
+				INTENT_OPTIONS,
+			);
+			if (choice === "back") {
+				deletePendingExit(record.sessionId, deps.agentDir);
+				ui.notify(
+					`Nothing was recorded and you are still in plan mode — the conversation continues here. Run \`/mode ${record.wanted}\` again when the description is one we agree on.`,
+					"info",
+				);
+				return { kind: "back", asked: dialogs.asked() };
+			}
+			if (choice === "edit") {
+				const edited = await dialogs.editor(INTENT_EDITOR_TITLE, summary);
+				// Escape discards the edit and asks again, which is the same rule
+				// the compiled document's editor follows.
+				const next = (edited ?? "").trim();
+				if (next.length === 0) continue;
+				if (next.length > MAX_INTENT_LENGTH) {
+					ui.notify(
+						`That description is ${next.length} characters, past the ${MAX_INTENT_LENGTH} the record holds. Nothing changed.`,
+						"warning",
+					);
+					continue;
+				}
+				summary = next;
+				continue;
+			}
+			const agreed: PendingExit = { ...record, intent: summary };
+			try {
+				writePendingExit(agreed, deps.agentDir);
+			} catch (error) {
+				const problem = `The agreed description was not recorded: ${
+					error instanceof Error ? error.message : String(error)
+				}`;
+				ui.notify(problem, "error");
+				deletePendingExit(record.sessionId, deps.agentDir);
+				return { kind: "refused", problem };
+			}
+			const steer = renderExitSteer(agreed.policy);
+			if (deps.sendUserMessage) {
+				deps.sendUserMessage(steer, { deliverAs: "followUp" });
+				ui.notify(
+					"Agreed. The model has been asked for the plan; the posture is still plan until the run starts.",
+					"info",
+				);
+			} else {
+				ui.notify(
+					`Agreed. This host cannot steer the session, so ask for the plan yourself.\n\n${steer}`,
+					"warning",
+				);
+			}
+			return { kind: "agreed", record: agreed, steer, asked: dialogs.asked() };
+		}
+	} catch (error) {
+		if (error instanceof ExitAborted) {
+			deletePendingExit(record.sessionId, deps.agentDir);
+			return { kind: "aborted" };
+		}
+		const problem = `The plan-mode exit stopped: ${
+			error instanceof Error ? error.message : String(error)
+		}`;
+		ui.notify(problem, "error");
+		deletePendingExit(record.sessionId, deps.agentDir);
+		return { kind: "refused", problem };
 	}
 }
 
 // ── The `/mode` hook ─────────────────────────────────────────────────────────
 
 export interface ModeExitControllerDeps {
-	/** The seat's switch. */
+	/** The seat's switch. Called at the hand-off, and by *Just switch mode*. */
 	readonly setMode: (name: ModeName) => void;
 	readonly sendUserMessage?: ExitFlowDeps["sendUserMessage"];
 	readonly agentDir?: string;
-	/** Where the base-branch default is probed. Defaults to `process.cwd()`. */
+	/** Where publication is derived. Defaults to `process.cwd()`. */
 	readonly cwd?: string;
 	readonly upstreamHead?: () => string | null;
+	readonly originPresent?: () => boolean;
+	readonly ghPresent?: () => boolean;
 	readonly now?: () => string;
+	/**
+	 * Reconcile the live tool set.
+	 *
+	 * The exit no longer changes the mode when it starts, and the mode change
+	 * is what used to make the seat re-derive which tools it holds. So every
+	 * point where the pending record appears, gains its description, or goes
+	 * has to say so — otherwise `plan_intent` and `plan` are declared available
+	 * and never handed to the host.
+	 */
+	readonly retools?: () => void;
 	/** Phase 2's plan store. A getter: the seat builds lazily. */
 	readonly store?: () => ExitPlanStore;
 	/** Phase 2's audited Bash, built per flow from the session's own context. */
@@ -633,11 +804,20 @@ export interface ToolResultContext {
 export interface ModeExitController {
 	/** The `/mode` hook: phase 1 when leaving plan mode, nothing otherwise. */
 	readonly hook: ModeExitHook;
-	/** The `tool_result` hook: phase 2 when the model's `plan` call stored one. */
+	/**
+	 * The `tool_result` hook.
+	 *
+	 * RETURNS BEFORE ANY DIALOG IS ANSWERED. Both triggers — the description
+	 * and the plan — open dialogs, and a dialog awaited here is a tool call the
+	 * model and the human both watch spin. The work is scheduled detached and
+	 * reports its own failures through `notify`.
+	 */
 	readonly onToolResult: (
 		event: ToolResultLike,
 		ctx: ToolResultContext,
 	) => Promise<void>;
+	/** Resolves once the detached work, if any, has finished. For tests. */
+	settled(): Promise<void>;
 	/** A session replacement: abort the open dialog and drop the record. */
 	abort(): void;
 	/** A prompt opened by Pi or another extension; our dialogs defer. */
@@ -651,15 +831,17 @@ export function createModeExitController(
 	deps: ModeExitControllerDeps,
 ): ModeExitController {
 	let controller: AbortController | undefined;
-	let phase2Controller: AbortController | undefined;
-	let phase2InFlight = false;
+	let detachedController: AbortController | undefined;
+	let inFlight: Promise<void> | undefined;
 	let last: ExitFlowOutcome | undefined;
 	const gate = deps.gate ?? createDialogGate();
+	const cwd = deps.cwd ?? process.cwd();
+	const retools = (): void => deps.retools?.();
 
 	const hook: ModeExitHook = async (previous, next, ctx) => {
 		// Only the way out of plan mode, and only where dialogs exist: a session
-		// that cannot be asked the six questions gets the switch it asked for
-		// rather than a silent set of defaults nobody chose.
+		// that cannot be asked two questions gets the switch it asked for rather
+		// than a silent set of defaults nobody chose.
 		if (previous !== "plan" || next === "plan") return "switch";
 		const sessionId = ctx.sessionManager?.getSessionId();
 		if (!ctx.hasUI || !sessionId) return "switch";
@@ -675,37 +857,81 @@ export function createModeExitController(
 				...(deps.sendUserMessage
 					? { sendUserMessage: deps.sendUserMessage }
 					: {}),
-				...(ctx.sessionManager
-					? { entries: () => ctx.sessionManager?.getBranch() ?? [] }
-					: {}),
-				upstreamHead:
-					deps.upstreamHead ??
-					(() => gitUpstreamHead(deps.cwd ?? process.cwd())),
+				publication: () =>
+					derivePublication({
+						originPresent: deps.originPresent ?? (() => gitOriginPresent(cwd)),
+						ghPresent: deps.ghPresent ?? ghOnPath,
+						upstreamHead: deps.upstreamHead ?? (() => gitUpstreamHead(cwd)),
+					}),
 				...(deps.agentDir ? { agentDir: deps.agentDir } : {}),
 				...(deps.now ? { now: deps.now } : {}),
 			});
 			last = outcome;
 			switch (outcome.kind) {
-				case "keep-planning":
-				case "aborted":
-				case "refused":
-					return "stay";
-				default:
-					// Both `switch-only` and `compiled` moved the posture already,
-					// in the order the flow needed.
+				case "switch-only":
+					// The one branch that moved the posture, in its own order.
 					return "settled";
+				default:
+					// Everything else leaves the seat in plan mode — including the
+					// compiled one, which is the whole point of the redesign: the
+					// mode moves when the run starts, and not before.
+					return "stay";
 			}
 		} finally {
 			controller = undefined;
+			// The record either appeared or went; either way the tool set moved.
+			retools();
 		}
 	};
 
 	/**
-	 * The phase-2 trigger.
+	 * Run dialogs off the tool-result hook's stack.
+	 *
+	 * `void`, deliberately: the hook returns immediately and this reports its
+	 * own failures, because a rejection nobody is awaiting is an unhandled one
+	 * and a dialog sequence awaited inside a `tool_result` hook is a tool call
+	 * shown as running until the human answers it.
+	 */
+	const detach = (
+		ctx: ToolResultContext,
+		work: (signal: AbortSignal) => Promise<void>,
+	): void => {
+		const own = new AbortController();
+		detachedController = own;
+		const running = (async () => {
+			try {
+				await work(own.signal);
+			} catch (error) {
+				try {
+					ctx.ui.notify(
+						`The plan-mode exit stopped: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+						"error",
+					);
+				} catch {
+					// The session that would be told is gone. The record has already
+					// been settled by the flow itself; there is nothing else to do.
+				}
+			} finally {
+				// Both are set together by this call, so both are cleared together
+				// — and only by the call that set them, never by a newer one.
+				if (detachedController === own) {
+					detachedController = undefined;
+					inFlight = undefined;
+				}
+				retools();
+			}
+		})();
+		inFlight = running;
+	};
+
+	/**
+	 * The two triggers, and the one rule they share.
 	 *
 	 * The session id is read from THIS hook's own context, never from the id
-	 * the `/mode` handler happened to learn earlier: a `plan` call arriving in
-	 * a session that replaced the one that answered phase 1 must not be read as
+	 * the `/mode` handler happened to learn earlier: a call arriving in a
+	 * session that replaced the one that answered phase 1 must not be read as
 	 * the continuation of that exit. `readPendingExit` refuses a record naming
 	 * another session by name, and this is the other half of that guarantee.
 	 */
@@ -713,11 +939,12 @@ export function createModeExitController(
 		event: ToolResultLike,
 		ctx: ToolResultContext,
 	): Promise<void> => {
-		const slug = storedSlug(event);
-		if (slug === undefined) return;
-		// One flow at a time. A second `plan` call while phase 2 is mid-dialog
-		// is not a second exit; the record it would read is the one in play.
-		if (phase2InFlight) return;
+		const summary = submittedIntent(event);
+		const slug = summary === undefined ? storedSlug(event) : undefined;
+		if (summary === undefined && slug === undefined) return;
+		// One flow at a time. A second call while a dialog is open is not a
+		// second exit; the record it would read is the one in play.
+		if (inFlight) return;
 		let sessionId: string | undefined;
 		try {
 			sessionId = ctx.sessionManager?.getSessionId();
@@ -740,30 +967,75 @@ export function createModeExitController(
 			return;
 		}
 		if (!record) return;
-		if (!ctx.hasUI) {
-			// Six dialogs cannot be asked here, and the record is what holds the
-			// `plan` tool open. It goes, with the fallback said out loud.
-			deletePendingExit(sessionId, deps.agentDir);
+		const pending = record;
+
+		if (summary !== undefined) {
+			if (!ctx.hasUI) {
+				// The description cannot be agreed here, and an unagreed record is a
+				// window that would never open. It goes, said out loud.
+				deletePendingExit(sessionId, deps.agentDir);
+				ctx.ui.notify(
+					"This session has no dialogs, so the description cannot be agreed and the exit was dropped. Nothing changed and you are still in plan mode.",
+					"info",
+				);
+				retools();
+				return;
+			}
+			detach(ctx, async (signal) => {
+				await runIntentAgreement({
+					record: pending,
+					summary,
+					ui: ctx.ui,
+					gate,
+					signal,
+					...(deps.agentDir ? { agentDir: deps.agentDir } : {}),
+					...(deps.sendUserMessage
+						? { sendUserMessage: deps.sendUserMessage }
+						: {}),
+				});
+			});
+			return;
+		}
+
+		if (slug === undefined) return;
+		if (pending.intent === undefined) {
+			// The `plan` tool is withheld until the description is agreed, so a
+			// stored plan here means a host kept a stale tool set. The record
+			// stays: the description is still the next step.
 			ctx.ui.notify(
-				storedWithoutRunning(slug, "This session has no dialogs."),
-				"info",
+				`\`${slug}\` was stored before we agreed what we are doing, so the exit did not continue. Submit the two or three sentences with \`plan_intent\` and answer the dialog.`,
+				"warning",
 			);
 			return;
 		}
-		phase2Controller = new AbortController();
-		phase2InFlight = true;
+		if (!ctx.hasUI) {
+			// The dialogs cannot be asked here, and the record is what holds the
+			// `plan` tool open. It goes, with the fallback said out loud.
+			deletePendingExit(sessionId, deps.agentDir);
+			ctx.ui.notify(
+				storedWithoutRunning(
+					slug,
+					pending.wanted,
+					"This session has no dialogs.",
+				),
+				"info",
+			);
+			retools();
+			return;
+		}
 		const acquire = deps.workflow;
 		const bash = deps.bash?.(ctx);
 		const notify: ExitFlowUi["notify"] = (message, type) =>
 			ctx.ui.notify(message, type);
-		try {
+		detach(ctx, async (signal) => {
 			const run = deps.phase2 ?? continueModeExit;
 			await run({
-				record,
+				record: pending,
 				slug,
 				ui: ctx.ui,
 				gate,
-				signal: phase2Controller.signal,
+				signal,
+				setMode: deps.setMode,
 				...(deps.agentDir ? { agentDir: deps.agentDir } : {}),
 				...(deps.store ? { store: deps.store() } : {}),
 				...(bash ? { bash } : {}),
@@ -773,18 +1045,19 @@ export function createModeExitController(
 					: {}),
 				...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
 			});
-		} finally {
-			phase2InFlight = false;
-			phase2Controller = undefined;
-		}
+		});
 	};
 
 	return {
 		hook,
 		onToolResult,
+		settled: async () => {
+			// A flow can schedule nothing more than itself, so one await is enough.
+			await inFlight;
+		},
 		abort: () => {
 			controller?.abort();
-			phase2Controller?.abort();
+			detachedController?.abort();
 		},
 		notePromptStart: gate.promptStart,
 		notePromptEnd: gate.promptEnd,
@@ -796,20 +1069,27 @@ export function createModeExitController(
 //
 // The other half of the exit, and the half that has a plan. It starts from the
 // `tool_result` of the model's own `plan` call — `toolName === "plan"`, the
-// result says it stored, and a pending record exists FOR THAT SESSION — and it
-// ends with either a run request the model makes in the open, or a plan that is
-// stored and nothing else.
+// result says it stored, and a pending record with an AGREED description exists
+// for that session — and it ends with either a run the model requests in the
+// open, or a plan that is stored and nothing else.
 //
-// Three rules run through all of it:
+// Four rules run through all of it:
 //
 //   - **NOTHING THE PLAN ALREADY ANSWERS IS ASKED.** Readiness asks nothing
-//     when the machine is ready; a lens the plan tiered is not tiered again; a
-//     cross-family reviewer is offered only where a heavy lens made it a real
-//     question. The dialog count is a property of the plan, not of the flow.
+//     when the machine is ready. The review lenses are not asked about at all:
+//     the plan and `policy.reviewDefault` decide them, heavy implies diverse,
+//     and the compiled-document dialog is where a reviewer is changed. Three
+//     dialogs per deliverable to re-state what the document already said were
+//     three dialogs a human learned to escape through.
+//   - **THE STORED PLAN IS NORMALISED ONCE, BEFORE ANYTHING READS IT.** Every
+//     heavy lens gets `diverse` written down explicitly (`withExplicitDiverse`),
+//     so this seat's compiler and pi-workflow's derive the same graph from the
+//     same document.
 //   - **EVERY TERMINAL PATH DELETES THE RECORD.** The record is what holds the
 //     `plan` tool open in plan mode. Whether the exit ends in a run request, in
 //     a stored plan, back in the conversation, in a refusal or in a session
-//     replacement, it goes.
+//     replacement, it goes. The posture is still `plan` on every one of those
+//     paths except the run, which is the only place `setMode` is called.
 //   - **NOTHING HERE STARTS ANYTHING BUT THE BLIND REVIEW.** The only run this
 //     module starts is the headless `plan-review`, through the runtime's own
 //     allowlist. `plan-to-ship` stays the model's `workflow_run` call, in the
@@ -821,17 +1101,6 @@ export const PLAN_REVIEW_REF = "plan-review";
 
 /** How long the blind review may take before the flow stops waiting for it. */
 export const DEFAULT_REVIEW_TIMEOUT_MS = 300_000;
-
-/**
- * Lenses offered to a deliverable whose plan named no reviewer at all.
- *
- * Only then: a deliverable whose `tasks[].by` (or whose authored
- * `review-fan-out`) already names its reviewers has ANSWERED this question,
- * and the dialog over it exists so one can be dropped, not so three more can be
- * proposed. A plan that named nothing would otherwise compile to a run with no
- * independent reader at all, which is the one case worth offering a list for.
- */
-export const STANDARD_LENSES = ["contracts", "tests", "risk"] as const;
 
 // ── The dialog port ──────────────────────────────────────────────────────────
 
@@ -964,146 +1233,6 @@ export function creationTitle(path: string): string {
 	return `Create \`${path}\`?`;
 }
 
-// ── Step 8-10: the review lenses ─────────────────────────────────────────────
-
-export const LENS_INCLUDE = "Include";
-export const LENS_SKIP = "Skip";
-
-export function lensTitle(deliverable: string, lens: string): string {
-	return `Review \`${deliverable}\` through the \`${lens}\` lens?`;
-}
-
-export function tierTitle(deliverable: string, lens: string): string {
-	return `How much reviewer is \`${lens}\` worth on \`${deliverable}\`?`;
-}
-
-export function crossFamilyTitle(deliverable: string): string {
-	return `A cross-family reviewer on \`${deliverable}\`?`;
-}
-
-/** The tier table, with the plan's own default marked as the escape. */
-export function tierOptions(
-	fallback: ReviewTier,
-): readonly ExitOption<ReviewTier>[] {
-	return REVIEW_TIERS.map((tier) =>
-		tier === fallback
-			? { value: tier, text: tier, fallback: true as const }
-			: { value: tier, text: tier },
-	);
-}
-
-/** One lens a deliverable could be reviewed through, and where it came from. */
-interface LensCandidate {
-	readonly lens: ReviewLens;
-	/** In the plan already: escape keeps it, and its tier is not re-asked. */
-	readonly seeded: boolean;
-	/** The plan pinned neither a tier nor a model, so step 9 has a question. */
-	readonly untiered: boolean;
-}
-
-/** The review stage of a deliverable's authored stages, if it declared one. */
-function authoredReviewStage(
-	deliverable: Deliverable,
-): ReviewFanOutStage | undefined {
-	return deliverable.stages?.find(
-		(stage): stage is ReviewFanOutStage => stage.use === "review-fan-out",
-	);
-}
-
-/**
- * What step 8 asks about, for one deliverable.
- *
- * Seeded from the deliverable's own review intent — its authored
- * `review-fan-out` lenses when it has stages, otherwise the lenses
- * `defaultStagesFor` derives from `tasks[].by` — so escaping every dialog
- * leaves exactly the plan that was stored. The standard lenses are offered
- * only when that seed is empty; see `STANDARD_LENSES`.
- */
-export function lensCandidates(
-	deliverable: Deliverable,
-	policy: ResolvedPolicy,
-): readonly LensCandidate[] {
-	const authored = authoredReviewStage(deliverable);
-	if (authored)
-		return authored.lenses.map((lens) => ({
-			lens,
-			seeded: true,
-			untiered: lens.tier === undefined && lens.model === undefined,
-		}));
-	if (!deliverable.stages) {
-		const seeded = defaultStagesFor(deliverable, policy).find(
-			(stage): stage is ReviewFanOutStage => stage.use === "review-fan-out",
-		);
-		if (seeded)
-			return seeded.lenses.map((lens, index) => {
-				const by = deliverable.tasks.filter((task) => task.by)[index]?.by;
-				return {
-					lens,
-					seeded: true,
-					untiered: by?.tier === undefined && by?.model === undefined,
-				};
-			});
-	}
-	return STANDARD_LENSES.map((id) => ({
-		lens: { id },
-		seeded: false,
-		untiered: true,
-	}));
-}
-
-/**
- * The deliverable's stage list with its review lenses replaced.
- *
- * Returns `undefined` when nothing changed, which is what keeps escape honest:
- * a plan nobody edited is not rewritten, its digest does not move, and the
- * document a receipt is checked against is the one the model stored.
- */
-export function deliverableWithLenses(
-	deliverable: Deliverable,
-	policy: ResolvedPolicy,
-	lenses: readonly ReviewLens[],
-): Deliverable | undefined {
-	const current = deliverable.stages ?? defaultStagesFor(deliverable, policy);
-	const existing = current.find(
-		(stage): stage is ReviewFanOutStage => stage.use === "review-fan-out",
-	);
-	let next: Stage[];
-	if (existing) {
-		next =
-			lenses.length === 0
-				? current.filter((stage) => stage !== existing)
-				: current.map((stage) =>
-						stage === existing ? { ...existing, lenses } : stage,
-					);
-	} else if (lenses.length === 0) {
-		next = [...current];
-	} else {
-		// A review stage the plan did not have. It goes after the work and
-		// before any gate, because a gate is last by rule and a decision shown
-		// review results has to come after them.
-		const taken = new Set(current.map((stage) => stage.id));
-		let id = "review";
-		for (let n = 2; taken.has(id); n += 1) id = `review-${n}`;
-		const review: Stage = {
-			use: "review-fan-out",
-			id,
-			lenses,
-			synthesis: "optional",
-		};
-		const gateAt = current.findIndex((stage) => stage.use === "gate");
-		next = [...current];
-		next.splice(gateAt === -1 ? next.length : gateAt, 0, review);
-	}
-	const before = deliverable.stages ?? defaultStagesFor(deliverable, policy);
-	if (canonicalJson(before) === canonicalJson(next)) {
-		// Identical to what the plan compiles to today. When the plan declared
-		// no stages it keeps declaring none: materialising the default list
-		// would change the document (and its digest) without changing the run.
-		return deliverable.stages ? deliverable : undefined;
-	}
-	return { ...deliverable, stages: next };
-}
-
 // ── Step 12-13: the compiled document ────────────────────────────────────────
 
 export const COMPILED_TITLE = "The run this compiles to — check it how?";
@@ -1128,6 +1257,33 @@ export const COMPILED_OPTIONS_UNREVIEWED: readonly ExitOption<
 	{ value: "edit", text: COMPILED_EDIT },
 ];
 
+/**
+ * Who will read this work, in one line.
+ *
+ * The reviewers used to be settled by three dialogs per deliverable; now the
+ * plan settles them and this is where they are SHOWN — beside the agreed
+ * description, before the dialog that can change them. A compiled document
+ * whose reviewer list nobody read is a reviewer list nobody chose.
+ */
+export function renderReviewers(document: CompiledStageDocument): string {
+	const seen = new Map<string, number>();
+	for (const deliverable of document.deliverables)
+		for (const stage of deliverable.stages) {
+			if (stage.use !== "review-fan-out") continue;
+			for (const lens of stage.lenses) {
+				const label = `${lens.id}${lens.tier ? `/${lens.tier}` : ""}${
+					lens.diverse ? "/diverse" : ""
+				}`;
+				seen.set(label, (seen.get(label) ?? 0) + 1);
+			}
+		}
+	if (seen.size === 0)
+		return "Reviewers: none — nothing in this plan is read by an independent lens.";
+	return `Reviewers: ${[...seen]
+		.map(([label, count]) => (count === 1 ? label : `${label} ×${count}`))
+		.join(", ")}`;
+}
+
 /** The projected budget, in the three numbers a human decides on. */
 export function renderProjection(
 	projection: WorkflowBudgetProjectionView,
@@ -1146,18 +1302,36 @@ export function renderProjection(
 
 export const START_RUN_TITLE = "Start the run?";
 
-/** What a human is told when the exit ends without a run. */
-export function storedWithoutRunning(slug: string, why: string): string {
-	return `${why} The plan is stored — start it whenever you like with \`/plan run ${slug}\`.`;
+/**
+ * What a human is told when the exit ends without a run.
+ *
+ * It names BOTH ways on: the plan, and the posture they asked for and have not
+ * been given. `/mode plan` is never offered — the seat never left plan mode, so
+ * offering it would be the flow apologising for something that did not happen.
+ */
+export function storedWithoutRunning(
+	slug: string,
+	wanted: ExitMode,
+	why: string,
+): string {
+	return (
+		`${why} The plan is stored and you are still in plan mode:` +
+		` start the run whenever you like with \`/plan run ${slug}\`,` +
+		` or take the posture you asked for with \`/mode ${wanted}\`.`
+	);
 }
 
-/** Back to the conversation, from a flow that already moved the posture. */
-export function backToConversation(findings: string): string {
+/** Back to the conversation, from a flow that never left plan mode. */
+export function backToConversation(
+	slug: string,
+	wanted: ExitMode,
+	findings: string,
+): string {
 	return (
 		`${findings}\n\n` +
-		"Nothing is running. The plan is stored and the posture has already" +
-		" changed, so `/mode plan` takes you back to the conversation to work" +
-		" through these."
+		"Nothing is running. You are still in plan mode, so the conversation" +
+		` continues right here. The plan is stored — \`/plan run ${slug}\` starts` +
+		` it, and \`/mode ${wanted}\` switches when you are ready.`
 	);
 }
 
@@ -1180,6 +1354,12 @@ export interface ExitFlowPhase2 {
 	/** The slug the `plan` tool reported storing. */
 	readonly slug: string;
 	readonly ui: ExitFlowUi;
+	/**
+	 * The seat's switch, called exactly once and only at the hand-off. Absent
+	 * on a seat that cannot switch, which then ends with the plan stored in
+	 * whatever posture it was already in.
+	 */
+	readonly setMode?: (name: ModeName) => void;
 	readonly agentDir?: string;
 	readonly signal?: AbortSignal;
 	/** Where the stored plan is read from and accepted patches are written. */
@@ -1252,11 +1432,11 @@ export async function runExitFlowPhase2(
 		return settle({ kind: "refused", problem });
 	};
 	const stored = (why: string): ExitFlowPhase2Outcome => {
-		ui.notify(storedWithoutRunning(slug, why), "info");
+		ui.notify(storedWithoutRunning(slug, record.wanted, why), "info");
 		return settle({ kind: "stored", slug, why, asked: dialogs.asked() });
 	};
 	const back = (message: string): ExitFlowPhase2Outcome => {
-		ui.notify(backToConversation(message), "info");
+		ui.notify(backToConversation(slug, record.wanted, message), "info");
 		return settle({ kind: "back", slug, asked: dialogs.asked() });
 	};
 
@@ -1335,65 +1515,32 @@ export async function runExitFlowPhase2(
 				"warning",
 			);
 
-		// ── 8, 9, 10 — the review lenses, per deliverable ────────────────────
-		const deliverables: Deliverable[] = [];
-		let lensesChanged = false;
-		for (const deliverable of plan.deliverables) {
-			const chosen: ReviewLens[] = [];
-			for (const candidate of lensCandidates(deliverable, policy)) {
-				const include = await dialogs.choose(
-					lensTitle(deliverable.id, candidate.lens.id),
-					[
-						{
-							value: true,
-							text: LENS_INCLUDE,
-							...(candidate.seeded ? { fallback: true as const } : {}),
-						},
-						{
-							value: false,
-							text: LENS_SKIP,
-							...(candidate.seeded ? {} : { fallback: true as const }),
-						},
-					],
+		// ── Normalisation — heavy implies diverse, written down ─────────────
+		//
+		// Before anything compiles this document, and before a human is shown a
+		// graph derived from it. A heavy lens whose `diverse` is undefined is a
+		// question two compilers answered differently; writing the answer into
+		// the stored plan is what makes this seat's compiled document and
+		// pi-workflow's agree, and it is the document the digest covers.
+		const explicit = withExplicitDiverse(plan);
+		if (explicit) {
+			const report = (deps.inspect ?? inspectPlan)(explicit);
+			if (report.errors.length > 0)
+				return refuse(
+					`Writing \`diverse\` onto this plan's heavy reviewers produced a plan that no longer validates, which is a bug in this seat:\n${report.errors
+						.map((error) => `  - ${error}`)
+						.join("\n")}`,
 				);
-				if (!include) continue;
-				// 9 — only where the plan pinned neither a tier nor a model.
-				if (!candidate.untiered) {
-					chosen.push(candidate.lens);
-					continue;
-				}
-				const tier = await dialogs.choose(
-					tierTitle(deliverable.id, candidate.lens.id),
-					tierOptions(policy.reviewDefault.tier),
-				);
-				chosen.push({ ...candidate.lens, tier });
-			}
-			// 10 — a real question only where a heavy reviewer made it one.
-			let lenses: readonly ReviewLens[] = chosen;
-			if (chosen.some((lens) => lens.tier === "heavy")) {
-				const cross = await dialogs.confirm(
-					crossFamilyTitle(deliverable.id),
-					"A heavy lens here reads the same work as the implementer. A reviewer from another model family fails differently, which is the point of a second opinion.",
-				);
-				if (cross)
-					lenses = chosen.map((lens) =>
-						lens.tier === "heavy" ? { ...lens, diverse: true } : lens,
-					);
-			}
-			const next = deliverableWithLenses(deliverable, policy, lenses);
-			if (next) {
-				lensesChanged = true;
-				deliverables.push(next);
-			} else deliverables.push(deliverable);
-		}
-		if (lensesChanged) {
-			const edited: Plan = { ...plan, deliverables };
-			const saved = savePlanOrReport(deps, edited, dialogs);
+			const saved = savePlanOrReport(deps, explicit, dialogs);
 			if (!saved)
 				return refuse(
-					"The review lenses chosen here produce a plan that no longer validates, so nothing was written.",
+					"This plan's heavy reviewers could not be written down, so the exit stops here rather than compiling a graph the run would not reproduce.",
 				);
 			plan = saved;
+			ui.notify(
+				"Every heavy reviewer on this plan now says `diverse: true` explicitly, so the run compiles the reviewers you are about to see.",
+				"info",
+			);
 		}
 
 		// ── 11 through 17 — compile, show, review, walk the findings ─────────
@@ -1404,7 +1551,11 @@ export async function runExitFlowPhase2(
 			return stored("This seat has no workflow runtime to compile against.");
 
 		const effort: Effort = resolvePolicy(plan.policy).effort;
-		const intent = record.intent.trim() || plan.title;
+		// The agreed description, which is what the blind reviewer is told the
+		// plan is FOR. `record.intent` is present by construction — the `plan`
+		// tool's window does not open without it — and the title is the honest
+		// fallback for a record that somehow reached here without one.
+		const intent = record.intent?.trim() || plan.title;
 		let reviewable = true;
 		let reviewsRun = 0;
 		let straightToReview = false;
@@ -1434,8 +1585,17 @@ export async function runExitFlowPhase2(
 			if (!projection)
 				return stored("The runtime could not project this run's budget.");
 
+			// What dialog 12 is about, all of it on screen before it is asked:
+			// what we agreed we are doing, who is going to read the work, the
+			// graph, and what it costs.
 			ui.notify(
-				`${renderStageDocument(document)}\n${renderProjection(projection)}`,
+				[
+					`Agreed: ${intent}`,
+					renderReviewers(document),
+					"",
+					renderStageDocument(document),
+					renderProjection(projection),
+				].join("\n"),
 				"info",
 			);
 
@@ -1576,13 +1736,17 @@ export async function runExitFlowPhase2(
 			);
 		}
 		const steer = renderHandoff(input, path, json);
-		// The record goes BEFORE the model is asked: the next `plan` call is a
-		// new document, not a continuation of this exit.
+		// THE ONE PLACE THE POSTURE MOVES, and it moves first: the run about to
+		// be requested writes to worktrees and the session that requested it
+		// should be the posture the human asked for at `/mode auto`, not plan.
+		// Then the record goes — before the model is asked — because the next
+		// `plan` call is a new document, not a continuation of this exit.
+		deps.setMode?.(record.wanted);
 		deletePendingExit(record.sessionId, deps.agentDir);
 		if (deps.sendUserMessage) {
 			deps.sendUserMessage(steer, { deliverAs: "followUp" });
 			ui.notify(
-				`Handed \`${plan.slug}\` to the model as \`workflow_run { ref: "${PLAN_WORKFLOW_REF}" }\` at effort ${effort}. Approval is the run's \`approve-plan\` checkpoint, not this flow.`,
+				`Mode ${record.wanted}, and \`${plan.slug}\` is handed to the model as \`workflow_run { ref: "${PLAN_WORKFLOW_REF}" }\` at effort ${effort}. Approval is the run's \`approve-plan\` checkpoint, not this flow.`,
 				"info",
 			);
 		} else {
@@ -1724,6 +1888,24 @@ export function storedSlug(event: ToolResultLike): string | undefined {
 	if (details?.stored !== true || typeof details.slug !== "string")
 		return undefined;
 	return details.slug;
+}
+
+/**
+ * The description a `plan_intent` call submitted, or nothing.
+ *
+ * The same shape of trigger as `storedSlug`: the right tool, no error, and a
+ * result that says it submitted. A refused submission — too long, not two or
+ * three sentences — is the model's to send again, not a dialog to open.
+ */
+export function submittedIntent(event: ToolResultLike): string | undefined {
+	if (event.toolName !== PLAN_INTENT_TOOL || event.isError) return undefined;
+	const details = event.details as
+		| { submitted?: unknown; summary?: unknown }
+		| undefined;
+	if (details?.submitted !== true || typeof details.summary !== "string")
+		return undefined;
+	const summary = details.summary.trim();
+	return summary.length > 0 ? summary : undefined;
 }
 
 /** Phase 2, as the `tool_result` handler calls it. */

@@ -1,14 +1,15 @@
 // Phase 2 of the plan-mode exit, driven through a fake UI, a fake workflow
 // runtime and a fake audited Bash.
 //
-// Phase 1 is six questions and one commit. Phase 2 is the half with a plan in
+// Phase 1 is two questions and one commit. Phase 2 is the half with a plan in
 // it, and everything that can go wrong with it is a question about *what was
 // left behind*: a record that outlived the exit, a plan rewritten by a dialog
-// nobody answered, a run started by a flow that was supposed to stop, a review
-// that opened a dialog over somebody else's prompt. So the cases below assert
-// the same four facts after the fact — the outcome, the record on disk, the
-// plan in the store, and exactly which dialogs were opened — rather than only
-// the value the flow returned.
+// nobody answered, a run started by a flow that was supposed to stop, a mode
+// that moved on a path that never reached a run, a review that opened a dialog
+// over somebody else's prompt. So the cases below assert the same five facts
+// after the fact — the outcome, the record on disk, the plan in the store, the
+// posture, and exactly which dialogs were opened — rather than only the value
+// the flow returned.
 //
 // Nothing here touches a repository, a workflow runtime or a shell. Readiness'
 // view of the world, the plan store, the provider and the Bash runner are all
@@ -24,17 +25,18 @@ import {
 	COMPILED_REVIEW,
 	COMPILED_TITLE,
 	createDialogGate,
+	createModeExitController,
 	DIRTY_BACK,
 	EDITOR_TITLE,
 	EXIT_COMPILE,
 	EXIT_START_TITLE,
 	type ExitFlowPhase2,
 	type ExitFlowUi,
-	LENS_INCLUDE,
-	LENS_SKIP,
 	PLAN_REVIEW_REF,
+	renderReviewers,
 	runExitFlowPhase1,
 	runExitFlowPhase2,
+	runIntentAgreement,
 	START_RUN_TITLE,
 	storedSlug,
 } from "../packages/maestro/src/exit-flow.js";
@@ -43,6 +45,7 @@ import {
 	FINDING_DISMISS,
 	type Finding,
 } from "../packages/maestro/src/findings.js";
+import type { ModeName } from "../packages/maestro/src/mode.js";
 import { pendingExitFile } from "../packages/maestro/src/paths.js";
 import {
 	PENDING_EXIT_SCHEMA_VERSION,
@@ -299,6 +302,10 @@ function tieredPlan(count: number): Plan {
 	};
 }
 
+const INTENT =
+	"We are shipping the component catalogue. " +
+	"It is worth doing because every workflow re-authors the same four stages.";
+
 function record(agentDir: string): PendingExit {
 	const written: PendingExit = {
 		schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
@@ -308,7 +315,8 @@ function record(agentDir: string): PendingExit {
 			gates: "approve-plan+ship",
 			publish: { mode: "pr", base: "main" },
 		},
-		intent: "Ship the component catalogue",
+		wanted: "auto",
+		intent: INTENT,
 		createdAt: "2026-09-16T10:00:00.000Z",
 	};
 	writePendingExit(written, agentDir);
@@ -335,11 +343,15 @@ function harness(options: HarnessOptions = {}) {
 	const bash = fakeBash();
 	const steers: string[] = [];
 	const inputs: [string, string][] = [];
+	const modes: ModeName[] = [];
 	const deps: ExitFlowPhase2 = {
 		record: record(agentDir),
 		slug: plan.slug,
 		ui: ui.ui,
 		agentDir,
+		setMode: (name) => {
+			modes.push(name);
+		},
 		store: store.store,
 		bash: bash.bash,
 		readiness: options.world ?? readyWorld,
@@ -359,6 +371,7 @@ function harness(options: HarnessOptions = {}) {
 		bash,
 		steers,
 		inputs,
+		modes,
 		provider,
 		said: () => ui.said(),
 		recordExists: () =>
@@ -406,14 +419,15 @@ describe("the tool_result that starts phase 2", () => {
 // ── The count ────────────────────────────────────────────────────────────────
 
 describe("how many dialogs a plan is worth", () => {
-	it("asks exactly eleven across both phases for a three-deliverable tiered plan", async () => {
+	it("asks exactly five across the whole exit for a three-deliverable tiered plan", async () => {
 		const agentDir = temp();
-		// One live session across both halves, so every dialog in the count is
-		// also a dialog a session replacement would have closed.
+		// One live session across all three parts, so every dialog in the count
+		// is also a dialog a session replacement would have closed.
 		const live = new AbortController();
 		const ui = fakeUi((opened) => {
 			// Phase 1: compile. Everything else takes its printed default.
-			if (opened.title === EXIT_START_TITLE) return EXIT_COMPILE;
+			if (opened.title === EXIT_START_TITLE)
+				return pick(opened.options, EXIT_COMPILE);
 			return happyPath(opened);
 		});
 		const phase1 = await runExitFlowPhase1({
@@ -422,30 +436,43 @@ describe("how many dialogs a plan is worth", () => {
 			wanted: "auto",
 			setMode: () => {},
 			agentDir,
-			entries: () => [
-				{
-					type: "message",
-					message: { role: "user", content: "Ship the catalogue" },
-				},
-			],
-			upstreamHead: () => "main",
+			publication: () => ({
+				mode: "pr",
+				base: "main",
+				why: "Publication: pull request onto `main`.",
+			}),
 			sendUserMessage: () => {},
 			signal: live.signal,
 		});
 		expect(phase1.kind).toBe("compiled");
 		if (phase1.kind !== "compiled") return;
-		// 1 what now, 2 effort, 3 gates, 4 publication, 5 base branch, 6 intent.
-		expect(phase1.asked).toBe(6);
+		// 1 what now, 2 effort. Gates take their default and publication is
+		// derived, so neither is a dialog.
+		expect(phase1.asked).toBe(2);
+
+		// The description: one dialog, and the model wrote the sentences.
+		const agreement = await runIntentAgreement({
+			record: phase1.record,
+			summary: INTENT,
+			ui: ui.ui,
+			agentDir,
+			sendUserMessage: () => {},
+			signal: live.signal,
+		});
+		expect(agreement.kind).toBe("agreed");
+		if (agreement.kind !== "agreed") return;
+		expect(agreement.asked).toBe(1);
 
 		const plan = tieredPlan(3);
 		const store = fakeStore(plan);
 		const provider = fakeClient();
 		const phase2 = await runExitFlowPhase2({
-			record: phase1.record,
+			record: agreement.record,
 			slug: plan.slug,
 			ui: ui.ui,
 			agentDir,
 			store: store.store,
+			setMode: () => {},
 			readiness: readyWorld,
 			inspect: (candidate) => inspectPlan(candidate, cleanProbe),
 			workflow: async () => provider.client,
@@ -456,13 +483,12 @@ describe("how many dialogs a plan is worth", () => {
 		});
 		expect(phase2.kind).toBe("handed-off");
 		if (phase2.kind !== "handed-off") return;
-		// 8 once per deliverable (each has exactly one seeded lens), 12 the
-		// compiled document, 18 the confirmation. 7 asks nothing on a ready
-		// machine, 9 nothing because the plan tiered every lens, 10 nothing
-		// because no lens is heavy, 13 nothing because nobody edited, 14 and 17
-		// are notifications, 15 nothing because the review found nothing.
-		expect(phase2.asked).toBe(5);
-		expect(ui.opened.length).toBe(11);
+		// 12 the compiled document, 18 the confirmation. 7 asks nothing on a
+		// ready machine; the review lenses are not asked about at all — the plan
+		// decides them; 13 nothing because nobody edited; 14 and 17 are
+		// notifications; 15 nothing because the review found nothing.
+		expect(phase2.asked).toBe(2);
+		expect(ui.opened.length).toBe(5);
 		// And every one of them carried the abort signal.
 		expect(
 			ui.opened
@@ -507,7 +533,9 @@ describe("the run request", () => {
 			projection: unknown;
 			effort: string;
 		};
-		expect(input.intent).toBe("Ship the component catalogue");
+		// The AGREED description, verbatim: it is the yardstick the reviewer
+		// checks the plan against, so anything else would be a different review.
+		expect(input.intent).toBe(INTENT);
 		expect(input.compiled).toEqual(compileStageDocument(h.store.current()));
 		// Passed through exactly as the runtime returned it, `budget` included.
 		expect(input.projection).toBe(PROJECTION);
@@ -526,10 +554,19 @@ describe("the run request", () => {
 		});
 		const outcome = await runExitFlowPhase2(h.deps);
 		expect(outcome.kind).toBe("handed-off");
-		// Escape at 8 keeps the seed, and the seed is what the plan already
-		// compiles to, so nothing is written and the digest does not move.
+		// Nothing in this half rewrites a plan that nobody edited and that has
+		// nothing to normalise, so the digest does not move.
 		expect(h.store.saves).toHaveLength(0);
 		expect(h.store.current()).toEqual(before);
+	});
+
+	it("takes the posture the human asked for, and only here", async () => {
+		const h = harness({ answer: happyPath });
+		const outcome = await runExitFlowPhase2(h.deps);
+		expect(outcome.kind).toBe("handed-off");
+		// The exit held plan mode from `/mode auto` until this moment.
+		expect(h.modes).toEqual(["auto"]);
+		expect(h.said()).toContain("Mode auto");
 	});
 });
 
@@ -611,29 +648,61 @@ describe("readiness", () => {
 	});
 });
 
-// ── Step 8: the lenses ───────────────────────────────────────────────────────
+// ── The review lenses: not asked, normalised ─────────────────────────────────
+
+/** One deliverable whose single review task is `heavy` and says nothing else. */
+function heavyPlan(): Plan {
+	return {
+		...tieredPlan(1),
+		deliverables: [
+			{
+				id: "d1",
+				title: "Deliverable 1",
+				after: [],
+				reads: [],
+				tasks: [
+					{ id: "impl", title: "Do the work" },
+					{
+						id: "rev",
+						title: "Review it",
+						by: { lens: "contracts", tier: "heavy" as const },
+					},
+				],
+			},
+		],
+	};
+}
 
 describe("the review lenses", () => {
-	it("drops a lens the human skips, and writes the plan that remains", async () => {
-		const h = harness({
-			plan: tieredPlan(1),
-			answer: (opened) =>
-				opened.title.includes("contracts") && opened.kind === "select"
-					? pick(opened.options, LENS_SKIP)
-					: happyPath(opened),
-		});
+	it("opens no dialog about them at all — the plan decides", async () => {
+		const h = harness({ plan: tieredPlan(3), answer: happyPath });
 		const outcome = await runExitFlowPhase2(h.deps);
 		expect(outcome.kind).toBe("handed-off");
-		expect(h.store.saves).toHaveLength(1);
-		const stages = h.store.current().deliverables[0]?.stages;
-		expect(stages?.map((stage) => stage.use)).toEqual([
-			"implement",
-			"verify-and-fix",
-		]);
+		// The three dialogs per deliverable are gone: include/skip, the tier,
+		// and the cross-family question. What is left is the document itself.
+		expect(h.ui.titles()).toEqual([COMPILED_TITLE, START_RUN_TITLE]);
 	});
 
-	it("offers the standard lenses only where the plan named none", async () => {
-		const plan: Plan = {
+	it("writes `diverse: true` onto every heavy reviewer, in the stored plan", async () => {
+		const h = harness({ plan: heavyPlan(), answer: happyPath });
+		const outcome = await runExitFlowPhase2(h.deps);
+		expect(outcome.kind).toBe("handed-off");
+		// Written into the DOCUMENT, not applied on the way to the compiler:
+		// this seat and pi-workflow read the same plan, so they have to read the
+		// same answer to "is this reviewer diverse?".
+		expect(h.store.saves).toHaveLength(1);
+		expect(h.store.current().deliverables[0]?.tasks[1]?.by).toEqual({
+			lens: "contracts",
+			tier: "heavy",
+			diverse: true,
+		});
+		expect(h.said()).toContain("`diverse: true`");
+		// And the compiled document a human is shown says so too.
+		expect(h.said()).toContain("contracts/heavy/diverse");
+	});
+
+	it("writes it into an authored `review-fan-out` as well", async () => {
+		const authored: Plan = {
 			...tieredPlan(1),
 			deliverables: [
 				{
@@ -642,72 +711,61 @@ describe("the review lenses", () => {
 					after: [],
 					reads: [],
 					tasks: [{ id: "impl", title: "Do the work" }],
-				},
-			],
-		};
-		const h = harness({
-			plan,
-			answer: (opened) =>
-				opened.kind === "select" && opened.title.includes("`contracts` lens")
-					? pick(opened.options, LENS_INCLUDE)
-					: happyPath(opened),
-		});
-		await runExitFlowPhase2(h.deps);
-		const asked = h.ui.titles().filter((title) => title.includes("lens?"));
-		expect(asked).toHaveLength(3);
-		// Included, and then asked what it is worth — the plan pinned nothing.
-		expect(h.ui.titles().some((t) => t.includes("worth on"))).toBe(true);
-		const review = h.store
-			.current()
-			.deliverables[0]?.stages?.find((stage) => stage.use === "review-fan-out");
-		expect(review).toMatchObject({
-			use: "review-fan-out",
-			lenses: [{ id: "contracts", tier: "standard" }],
-		});
-	});
-
-	it("asks about a cross-family reviewer only where a lens is heavy", async () => {
-		const heavy: Plan = {
-			...tieredPlan(1),
-			deliverables: [
-				{
-					id: "d1",
-					title: "Deliverable 1",
-					after: [],
-					reads: [],
-					tasks: [
-						{ id: "impl", title: "Do the work" },
+					stages: [
+						{ use: "implement", id: "implement" },
+						{ use: "verify-and-fix", id: "verify", maxRounds: 1 },
 						{
-							id: "rev",
-							title: "Review it",
-							by: { lens: "contracts", tier: "heavy" },
+							use: "review-fan-out",
+							id: "review",
+							lenses: [
+								{ id: "contracts", tier: "heavy" },
+								{ id: "tests", tier: "standard" },
+								{ id: "risk", tier: "heavy", diverse: false },
+							],
+							synthesis: "optional",
 						},
 					],
 				},
 			],
 		};
-		const h = harness({
-			plan: heavy,
-			answer: (opened) =>
-				opened.title.startsWith("A cross-family") ? true : happyPath(opened),
-		});
+		const h = harness({ plan: authored, answer: happyPath });
 		await runExitFlowPhase2(h.deps);
-		expect(
-			h.ui.titles().filter((t) => t.startsWith("A cross-family")),
-		).toHaveLength(1);
 		const review = h.store
 			.current()
 			.deliverables[0]?.stages?.find((stage) => stage.use === "review-fan-out");
 		expect(review).toMatchObject({
-			lenses: [{ id: "contracts", diverse: true }],
+			lenses: [
+				{ id: "contracts", tier: "heavy", diverse: true },
+				{ id: "tests", tier: "standard" },
+				// A plan that ANSWERED the question keeps its answer; filling it in
+				// again would be the flow overruling the author.
+				{ id: "risk", tier: "heavy", diverse: false },
+			],
 		});
+	});
 
-		// The same plan with a standard lens is never asked.
-		const standard = harness({ plan: tieredPlan(1), answer: happyPath });
-		await runExitFlowPhase2(standard.deps);
+	it("leaves a plan with no heavy reviewer exactly as it was", async () => {
+		const before = tieredPlan(2);
+		const h = harness({ plan: before, answer: happyPath });
+		const outcome = await runExitFlowPhase2(h.deps);
+		expect(outcome.kind).toBe("handed-off");
+		// Nothing to write down, so the document — and its digest — do not move.
+		expect(h.store.saves).toHaveLength(0);
+		expect(h.store.current()).toEqual(before);
+	});
+
+	it("names the reviewers beside the agreed description, before asking", async () => {
+		const h = harness({ plan: tieredPlan(2), answer: happyPath });
+		await runExitFlowPhase2(h.deps);
+		expect(h.said()).toContain(`Agreed: ${INTENT}`);
+		expect(h.said()).toContain("Reviewers: contracts/standard ×2");
 		expect(
-			standard.ui.titles().some((t) => t.startsWith("A cross-family")),
-		).toBe(false);
+			renderReviewers({
+				deliverables: [],
+				effort: "cheap",
+				gates: "approve-plan",
+			}),
+		).toContain("none");
 	});
 });
 
@@ -972,7 +1030,11 @@ describe("the findings walk", () => {
 		expect(outcome.kind).toBe("back");
 		expect(h.steers).toEqual([]);
 		expect(h.said()).toContain("missing-verify");
-		expect(h.said()).toContain("/mode plan");
+		// The seat never left plan mode, so it is not offered as a way back.
+		expect(h.said()).toContain("still in plan mode");
+		expect(h.said()).toContain("/plan run compose");
+		expect(h.said()).not.toContain("/mode plan");
+		expect(h.modes).toEqual([]);
 		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 		// 18 was never asked.
 		expect(h.ui.titles()).not.toContain(START_RUN_TITLE);
@@ -1068,7 +1130,12 @@ describe("the last question", () => {
 		expect(outcome.kind).toBe("stored");
 		expect(h.steers).toEqual([]);
 		expect(h.inputs).toEqual([]);
+		// Still plan mode, and told both ways on — never `/mode plan`, which the
+		// seat never left.
+		expect(h.modes).toEqual([]);
 		expect(h.said()).toContain("/plan run compose");
+		expect(h.said()).toContain("/mode auto");
+		expect(h.said()).not.toContain("/mode plan");
 		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
 	});
 });
@@ -1198,5 +1265,124 @@ describe("the dialog discipline", () => {
 		expect(outcome.kind).toBe("refused");
 		expect(h.ui.notices.some(([, type]) => type === "error")).toBe(true);
 		expect(readPendingExit(SESSION, h.agentDir)).toBeNull();
+	});
+});
+
+// ── The tool result is not blocked ───────────────────────────────────────────
+//
+// The by-hand pass showed the model's `plan` call rendered as running for
+// minutes, because the whole of phase 2 — dialogs, and the blind review's own
+// `awaitRun` — ran inside the `tool_result` hook's await. The hook now returns
+// at once and the work runs detached, which is a property of the CONTROLLER and
+// so is tested there rather than through the flow.
+
+describe("the tool_result hook", () => {
+	it("returns before phase 2 has done anything, and reports its own failure", async () => {
+		const agentDir = temp();
+		const written = record(agentDir);
+		let started = false;
+		let finished = false;
+		let release: (() => void) | undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const notices: [string, string][] = [];
+		const controller = createModeExitController({
+			setMode: () => {},
+			agentDir,
+			phase2: async () => {
+				started = true;
+				await held;
+				finished = true;
+			},
+		});
+		const ctx = {
+			hasUI: true,
+			ui: {
+				...fakeUi().ui,
+				notify: (m: string, t?: string) => notices.push([m, t ?? "info"]),
+			},
+			sessionManager: { getSessionId: () => SESSION },
+		};
+
+		await controller.onToolResult(
+			{ toolName: "plan", details: { stored: true, slug: written.sessionId } },
+			ctx,
+		);
+
+		// The hook has returned with phase 2 still mid-flight.
+		expect(started).toBe(true);
+		expect(finished).toBe(false);
+		release?.();
+		await controller.settled();
+		expect(finished).toBe(true);
+	});
+
+	it("reports a detached failure rather than leaving a rejection unhandled", async () => {
+		const agentDir = temp();
+		record(agentDir);
+		const notices: [string, string][] = [];
+		const controller = createModeExitController({
+			setMode: () => {},
+			agentDir,
+			phase2: async () => {
+				throw new Error("the runtime fell over");
+			},
+		});
+
+		await controller.onToolResult(
+			{ toolName: "plan", details: { stored: true, slug: "compose" } },
+			{
+				hasUI: true,
+				ui: {
+					...fakeUi().ui,
+					notify: (m: string, t?: string) => notices.push([m, t ?? "info"]),
+				},
+				sessionManager: { getSessionId: () => SESSION },
+			},
+		);
+		await controller.settled();
+
+		expect(
+			notices.some(([m, t]) => t === "error" && m.includes("fell over")),
+		).toBe(true);
+	});
+
+	it("does not continue an exit whose description was never agreed", async () => {
+		const agentDir = temp();
+		writePendingExit(
+			{
+				schemaVersion: PENDING_EXIT_SCHEMA_VERSION,
+				sessionId: SESSION,
+				policy: { effort: "standard" },
+				wanted: "auto",
+				createdAt: "2026-09-16T10:00:00.000Z",
+			},
+			agentDir,
+		);
+		let ran = false;
+		const notices: string[] = [];
+		const controller = createModeExitController({
+			setMode: () => {},
+			agentDir,
+			phase2: async () => {
+				ran = true;
+			},
+		});
+
+		await controller.onToolResult(
+			{ toolName: "plan", details: { stored: true, slug: "compose" } },
+			{
+				hasUI: true,
+				ui: { ...fakeUi().ui, notify: (m: string) => notices.push(m) },
+				sessionManager: { getSessionId: () => SESSION },
+			},
+		);
+		await controller.settled();
+
+		expect(ran).toBe(false);
+		// Named, and the record stays: the description is still the next step.
+		expect(notices.join("\n")).toContain("`plan_intent`");
+		expect(readPendingExit(SESSION, agentDir)).not.toBeNull();
 	});
 });

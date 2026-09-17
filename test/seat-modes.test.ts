@@ -49,6 +49,14 @@ function host(seed: readonly string[] = ["read", "workflow_run"]) {
 		string,
 		{ handler(args: string, ctx: unknown): Promise<void> }
 	>();
+	// Pi's loader stubs both action methods to throw until `Runner.bindCore()`
+	// runs, after every extension has loaded. The fake keeps that rule.
+	let bound = false;
+	const notInitialized = () => {
+		throw new Error(
+			"Extension runtime not initialized. Action methods cannot be called during extension loading.",
+		);
+	};
 	const pi: SeatHost = {
 		registerTool: (tool) => registered.push((tool as { name: string }).name),
 		registerCommand: (name, spec) =>
@@ -56,14 +64,18 @@ function host(seed: readonly string[] = ["read", "workflow_run"]) {
 				name,
 				spec as { handler(args: string, ctx: unknown): Promise<void> },
 			),
-		getActiveTools: () => [...active],
+		getActiveTools: () => (bound ? [...active] : notInitialized()),
 		setActiveTools: (names) => {
+			if (!bound) notInitialized();
 			active = [...names];
 		},
 	};
 	return {
 		pi,
 		registered,
+		bind: () => {
+			bound = true;
+		},
 		active: () => [...active],
 		mode: (args: string) => {
 			const command = commands.get("mode");
@@ -181,7 +193,12 @@ describe("Pi's live tool set follows the mode", () => {
 		const entry = startSeat(h.pi, seatOptions());
 		entry.seat();
 
+		// Loading registers and touches nothing else: the live set is Pi's until
+		// the runtime is bound, and reading it before then throws.
 		expect(h.registered).toEqual(["bash", "delete"]);
+		h.bind();
+		expect(h.active()).toEqual(["read", "workflow_run"]);
+		entry.runtimeBound();
 		expect(h.active()).toEqual(["read", "workflow_run", "bash", "delete"]);
 
 		await h.mode("auto");
@@ -201,6 +218,8 @@ describe("Pi's live tool set follows the mode", () => {
 		const h = host(["read", "workflow_run", "workflow_validate", "plan_b"]);
 		const entry = startSeat(h.pi, seatOptions());
 		entry.seat();
+		h.bind();
+		entry.runtimeBound();
 
 		const foreign = () =>
 			h.active().filter((name) => !["bash", "delete", "plan"].includes(name));
@@ -220,6 +239,29 @@ describe("Pi's live tool set follows the mode", () => {
 		expect(entry.seat().tools.declaredFor("maestro")).not.toContain(
 			"workflow_run",
 		);
+	});
+
+	it("survives a host that binds the live tool set only after loading", async () => {
+		// The real failure: Pi threw "Extension runtime not initialized" out of
+		// the seat's first sync, and the whole extension failed to load.
+		const h = host();
+		const entry = startSeat(h.pi, seatOptions());
+		expect(() => entry.seat()).not.toThrow();
+		expect(h.registered).toEqual(["bash", "delete"]);
+		// A mode change before binding still only registers.
+		await h.mode("auto");
+		expect(h.registered).toEqual(["bash", "delete", "plan"]);
+		h.bind();
+		entry.runtimeBound();
+		expect(h.active()).toEqual([
+			"read",
+			"workflow_run",
+			"bash",
+			"delete",
+			"plan",
+		]);
+		await h.mode("plan");
+		expect(h.active()).not.toContain("plan");
 	});
 
 	it("still hands a host without a live tool set what it can hold", async () => {

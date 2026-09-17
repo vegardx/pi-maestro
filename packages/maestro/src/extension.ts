@@ -152,6 +152,14 @@ export interface SeatEntry {
 	 */
 	abortExitFlow(): void;
 	/**
+	 * Pi binds its action methods (`getActiveTools`, `setActiveTools`) only
+	 * after every extension has loaded; until then they throw. The entry
+	 * registers tools at load and reconciles the live tool set the first time
+	 * this is called (the extension calls it from `session_start`), and on
+	 * every mode change after that.
+	 */
+	runtimeBound(): void;
+	/**
 	 * Publish a stored plan's run (Flow C), through the acquired workflow client
 	 * and the seat's own audited Bash tool. Both trigger paths land here:
 	 * `/plan ship <slug>`, and a `maestro:workflow-shipped` announcement.
@@ -266,6 +274,7 @@ export function startSeat(
 	 * workflow tool — are copied through untouched; only names this seat
 	 * declares are added or withdrawn.
 	 */
+	let bound = false;
 	const syncTools = (live: Seat): void => {
 		const available = live.tools.definitionsFor("maestro");
 		for (const tool of available) {
@@ -273,7 +282,11 @@ export function startSeat(
 			registered.add(tool.name);
 			pi.registerTool(tool);
 		}
-		if (!pi.getActiveTools || !pi.setActiveTools) return;
+		// Registration is legal during extension load; reading or writing the
+		// live tool set is not until Pi has bound its runtime (`runtimeBound`).
+		// The set is recomputed from the registry whenever it is reconciled, so
+		// nothing is lost by waiting.
+		if (!bound || !pi.getActiveTools || !pi.setActiveTools) return;
 		const ours = new Set(live.tools.declaredFor("maestro"));
 		const availableNames = new Set(available.map((tool) => tool.name));
 		const active = pi.getActiveTools();
@@ -429,6 +442,10 @@ export function startSeat(
 		currentMode: () => built?.mode().name ?? "plan",
 		pendingExit,
 		abortExitFlow: exit.abort,
+		runtimeBound: () => {
+			bound = true;
+			if (built) syncTools(built);
+		},
 		publish,
 		onToolResult: exit.onToolResult,
 		notePromptStart: exit.notePromptStart,
@@ -582,6 +599,7 @@ export default defineExtension(
 		// flow here is what keeps a half-answered exit from writing a record for a
 		// session that is gone.
 		pi.on("session_start", () => {
+			entry.runtimeBound();
 			entry.abortExitFlow();
 			// The watcher holds a context from the session that is gone, and the
 			// announcement it would make could not be asked about anywhere.

@@ -142,6 +142,94 @@ describe("a plan is written whole", () => {
 		expect(inAuto.content[0].text).toContain("Run it: `/plan run arc");
 	});
 
+	it("drops an optional value the author left empty, rather than refusing it", async () => {
+		// The by-hand pass that produced this rule lost a whole `plan` call to
+		// ten errors of exactly this shape: "`` is not a safe ambient skill name"
+		// and "delegated task model must be a concrete provider/model ID", for a
+		// document whose author had meant to say nothing at all.
+		const a = authoring();
+		const result = await a.write({
+			slug: "arc",
+			title: "Arc",
+			deliverables: [
+				{
+					id: "api",
+					title: "The API",
+					body: "   ",
+					after: [""],
+					reads: [],
+					repo: "",
+					tasks: [
+						{ id: "build", title: "Build it", body: "" },
+						{
+							id: "review",
+							title: "Review it",
+							by: { lens: "contracts", skill: "", model: "", tier: "light" },
+						},
+					],
+					stages: [
+						{ use: "implement", id: "impl", tools: [""] },
+						{
+							use: "review-fan-out",
+							id: "review",
+							lenses: [{ id: "contracts", skill: "", model: "" }],
+						},
+					],
+				},
+			],
+			policy: { effort: "cheap", publish: { mode: "none", base: "" } },
+		});
+		expect(result.details.errors).toEqual([]);
+		expect(result.details.stored).toBe(true);
+
+		// Nothing empty reached the stored document — which is the document the
+		// digest covers and the blind reviewer reads.
+		const stored = a.store.loadPlan("arc");
+		const json = JSON.stringify(stored);
+		expect(json).not.toContain('""');
+		expect(json).not.toContain('[""]');
+		const deliverable = stored?.deliverables[0];
+		expect(deliverable && "body" in deliverable).toBe(false);
+		expect(deliverable && "repo" in deliverable).toBe(false);
+		expect(deliverable?.after).toEqual([]);
+		const review = deliverable?.tasks[1];
+		expect(review?.by).toEqual({ lens: "contracts", tier: "light" });
+		const stages = deliverable?.stages ?? [];
+		expect(stages[0] && "tools" in stages[0]).toBe(false);
+		expect(stages[1]).toEqual({
+			use: "review-fan-out",
+			id: "review",
+			lenses: [{ id: "contracts" }],
+		});
+		expect(stored?.policy?.publish).toEqual({ mode: "none" });
+	});
+
+	it("still refuses a REQUIRED field left empty, by name", async () => {
+		// The drop is narrow on purpose: an empty `id` is a claim this document
+		// makes, and a silent drop would turn it into a different error later.
+		const a = authoring();
+		const result = await a.write({
+			slug: "arc",
+			title: "Arc",
+			deliverables: [
+				{
+					id: "",
+					title: "The API",
+					tasks: [
+						{ id: "build", title: "Build it" },
+						{ id: "review", title: "Review it", by: { lens: "" } },
+					],
+				},
+			],
+		});
+		expect(result.details.stored).toBe(false);
+		expect(result.details.errors.join("\n")).toContain("``");
+		expect(
+			result.details.errors.some((error) => error.includes("review lens")),
+		).toBe(true);
+		expect(a.store.loadPlan("arc")).toBeNull();
+	});
+
 	it("defaults the repo to where the maestro is sitting", async () => {
 		const a = authoring();
 		await a.write(minimal);

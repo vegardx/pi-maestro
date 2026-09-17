@@ -607,6 +607,8 @@ describe("the steers", () => {
 		expect(steer).toContain("a plan reviewed by its author is not reviewed");
 		// And it is enforced, not asked for.
 		expect(steer).toContain("refuses `workflow_run` and `workflow_propose`");
+		// An optional field with nothing to say is left out, not sent empty.
+		expect(steer).toContain("An optional field you have nothing to say about");
 		// The two fields the last plan got wrong, said before it writes them.
 		expect(steer).toContain("`by.lens` is");
 		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");

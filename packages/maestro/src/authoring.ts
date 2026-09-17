@@ -16,7 +16,7 @@ import {
 	defineTool,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { type Static, Type } from "@sinclair/typebox";
 import type { ModeName } from "./mode.js";
 import { MAX_INTENT_LENGTH } from "./pending-exit.js";
 import {
@@ -303,6 +303,131 @@ const PlanSchema = Type.Object({
 	policy: Type.Optional(PolicySchema),
 });
 
+// ── Empty optional values, dropped at the boundary ───────────────────────────
+//
+// A model that has nothing to say about an optional field writes `""` for it,
+// or `[""]`, far more often than it leaves the field out — and every one of
+// those reached `inspectPlan` as a value and came back as an error by name. The
+// first by-hand pass of this loop lost a whole `plan` call to ten of them:
+// "`` is not a safe ambient skill name" five times over, and a delegated model
+// that "must be a concrete provider/model ID" five more, for a document whose
+// author had meant to say nothing at all.
+//
+// Refusing them was right and useless. An empty optional is not a claim about
+// anything, so it is DROPPED here, before validation, and omitting a field and
+// sending it empty mean the same thing. The rule is narrow on purpose:
+//
+//   - only OPTIONAL fields. A required empty string is still refused by name,
+//     because an empty `id`, `slug`, `title`, `lens` or `question` IS a claim,
+//     and a silent drop would turn it into a different error three steps later.
+//   - an optional string whose `trim()` is empty goes; a surviving value is
+//     passed through exactly as written, never rewritten.
+//   - an optional string array loses its empty entries, and goes entirely when
+//     nothing is left — `[""]` and `[]` both mean "nothing to say".
+//
+// The stored plan and its digest therefore never contain a dropped value: this
+// runs on the authored document, before the `Plan` is built.
+
+/** The document as the tool receives it, before any of this is decided. */
+type AuthoredPlan = Static<typeof PlanSchema>;
+
+/** A trimmed-empty optional string is nothing. Anything else is itself. */
+function keptText(value: string | undefined): string | undefined {
+	return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+/** An optional list without its empty entries, or nothing when none survive. */
+function keptList(value: readonly string[] | undefined): string[] | undefined {
+	if (value === undefined) return undefined;
+	const kept = value.filter((entry) => entry.trim().length > 0);
+	return kept.length > 0 ? kept : undefined;
+}
+
+/**
+ * The same object with its dropped keys actually gone.
+ *
+ * `{ body: undefined }` is not the same document as `{}` — it is a key whose
+ * presence every later reader has to remember to test for — so the drop is a
+ * delete rather than an assignment. The value stays exactly as authored.
+ */
+function pruned<T extends object>(value: T): T {
+	return Object.fromEntries(
+		Object.entries(value).filter(([, entry]) => entry !== undefined),
+	) as T;
+}
+
+type AuthoredDeliverable = AuthoredPlan["deliverables"][number];
+type AuthoredTask = AuthoredDeliverable["tasks"][number];
+type AuthoredStage = NonNullable<AuthoredDeliverable["stages"]>[number];
+type AuthoredRouting = NonNullable<AuthoredTask["by"]>;
+
+/** `by`, and the fan-out lenses that share its optional fields. */
+function withoutEmptyRouting<
+	T extends Pick<AuthoredRouting, "skill" | "model">,
+>(routing: T): T {
+	// `lens` and a lens's `id` are REQUIRED and are not touched here: an empty
+	// one is a claim this document makes, and validation names it.
+	return pruned({
+		...routing,
+		skill: keptText(routing.skill),
+		model: keptText(routing.model),
+	});
+}
+
+function withoutEmptyStage(stage: AuthoredStage): AuthoredStage {
+	if (stage.use === "implement")
+		return pruned({ ...stage, tools: keptList(stage.tools) });
+	if (stage.use === "gate")
+		return pruned({ ...stage, show: keptList(stage.show) });
+	if (stage.use === "review-fan-out")
+		return { ...stage, lenses: stage.lenses.map(withoutEmptyRouting) };
+	return stage;
+}
+
+/**
+ * The authored document with every empty optional gone.
+ *
+ * Exported because this is a boundary rule, not an implementation detail: the
+ * test that proves `skill: ""` stores cleanly, and that an empty `id` still
+ * does not, asks this function the same question the tool asks it.
+ */
+export function withoutEmptyOptionals(authored: AuthoredPlan): AuthoredPlan {
+	return pruned({
+		...authored,
+		deliverables: authored.deliverables.map((deliverable) =>
+			pruned({
+				...deliverable,
+				body: keptText(deliverable.body),
+				after: keptList(deliverable.after),
+				reads: keptList(deliverable.reads),
+				repo: keptText(deliverable.repo),
+				tasks: deliverable.tasks.map((task) =>
+					pruned({
+						...task,
+						body: keptText(task.body),
+						by:
+							task.by === undefined ? undefined : withoutEmptyRouting(task.by),
+					}),
+				),
+				stages: deliverable.stages?.map(withoutEmptyStage),
+			}),
+		),
+		policy:
+			authored.policy === undefined
+				? undefined
+				: pruned({
+						...authored.policy,
+						publish:
+							authored.policy.publish === undefined
+								? undefined
+								: pruned({
+										...authored.policy.publish,
+										base: keptText(authored.policy.publish.base),
+									}),
+					}),
+	});
+}
+
 /** Both outcomes report the same shape, so a caller needs no narrowing. */
 interface PlanToolDetails {
 	readonly stored: boolean;
@@ -337,11 +462,15 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		name: "plan",
 		label: "Plan",
 		description:
-			"Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. Two fields are got wrong most often: a review task's `by.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `by.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `by.tier` and omit `by.model`.",
+			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. Two fields are got wrong most often: a review task\'s `by.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `by.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `by.tier` and omit `by.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
 		promptSnippet:
 			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,
-		async execute(_id, authored) {
+		async execute(_id, submitted) {
+			// Before anything reads the document: an optional field left empty is
+			// not a claim, so it is dropped rather than refused. Required fields
+			// are untouched, and an empty one is still refused by name below.
+			const authored = withoutEmptyOptionals(submitted);
 			const plan: Plan = {
 				slug: authored.slug,
 				title: authored.title,

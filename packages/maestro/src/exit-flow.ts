@@ -458,7 +458,10 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" REQUIRED and is the fan-out key, so it must match" +
 			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `by.model` is OPTIONAL and, if" +
 			" written at all, is only ever a concrete `provider/model` ID; prefer" +
-			" `by.tier` and leave `by.model` out, so the host resolves the reviewer.",
+			" `by.tier` and leave `by.model` out, so the host resolves the reviewer." +
+			" An optional field you have nothing to say about is LEFT OUT, not sent" +
+			" empty — an empty string or a list of them is dropped before the plan" +
+			" is validated, so the two mean the same thing and neither is refused.",
 		"",
 		"Give a deliverable its own `stages` array wherever this conversation" +
 			" implied more than the default list (`implement` → `verify-and-fix` →" +

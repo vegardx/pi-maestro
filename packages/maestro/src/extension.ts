@@ -52,6 +52,30 @@ export { beginModeExit, type ModeExitHook };
 const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 
 /**
+ * The workflow tools a MODEL may not reach for in plan mode.
+ *
+ * Starting a run and proposing one, and nothing else. Every read the runtime
+ * offers — `workflow_list`, `workflow_validate`, `workflow_inspect`,
+ * `workflow_wait`, `workflow_logs`, `workflow_runs`, `workflow_status` — stays
+ * available in plan mode, because looking at a run is planning; and
+ * `workflow_decide` was already human-only, so this adds nothing to it.
+ */
+const MODEL_STARTED_RUN_TOOLS = new Set(["workflow_run", "workflow_propose"]);
+
+/**
+ * What a model is told when it reaches for a run from plan mode.
+ *
+ * Fixed text for both tools, because the answer is the same one: there are two
+ * ways a run starts from plan mode and neither of them is the model deciding
+ * to. It names both, so the refusal is actionable rather than only a no.
+ */
+export const PLAN_MODE_RUN_REFUSAL =
+	"A workflow run is not started by the model in plan mode. The person starts" +
+	" one with `/workflow run <ref>`, and the plan-mode exit starts the plan's" +
+	" own run at the end of `/mode auto`. Ask for the run you want, in the" +
+	" conversation, rather than starting it.";
+
+/**
  * Why a tool call cannot happen in this posture, or nothing.
  *
  * The exit's two tools are here as defence in depth only: the registration
@@ -61,12 +85,17 @@ const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
  * STEP, because "the plan tool is not held" is unactionable to a model that has
  * been asked for a plan.
  *
- * Nothing else is gated by mode. Workflow tools in particular are left alone:
- * a run touches neither this working tree nor the host, so plan mode is ALLOWED
- * to start one when the human asks for one. Allowed is not invited: in plan mode
- * the model explores and converses, and it does not start a workflow run to
- * review, verify or research its own plan — the exit's blind reviewer is what
- * checks a plan — and it never writes files or branches.
+ * WORKFLOW RUNS ARE THE ONE GATE HERE THAT IS NOT DEFENCE IN DEPTH. A run is
+ * safe from plan mode — it touches neither this working tree nor the host — and
+ * it is still refused to the model there, because safe was never the question.
+ * Plan mode is a conversation, a run is the seat acting, and the two ways a run
+ * starts from plan mode are the person asking for one with `/workflow run` and
+ * the exit starting the plan's own. This was written as guidance twice — in the
+ * steers, the trailer and the docs — and a model reviewed its own plan with
+ * `deep-review` from plan mode both times, which is the reading a blind review
+ * exists to prevent. Guidance that fails twice is a rule, so the seat enforces
+ * it. The seat's own headless `plan-review` is unaffected: it goes through the
+ * runtime's `runBuiltin`, not through the model's tools.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
@@ -75,6 +104,8 @@ export function seatToolBlockReason(
 ): string | undefined {
 	if (mode === "plan" && DIRECT_MUTATION_TOOLS.has(toolName))
 		return `Mode plan is read-only; switch to /mode auto or /mode hack before using ${toolName}.`;
+	if (mode === "plan" && MODEL_STARTED_RUN_TOOLS.has(toolName))
+		return PLAN_MODE_RUN_REFUSAL;
 	if (toolName === "plan" && !planToolAvailable(mode, window))
 		return window === "intent"
 			? "The `plan` tool opens once we have agreed what we are doing: submit two or three sentences with `plan_intent` and wait for the dialog to be answered."
@@ -89,9 +120,9 @@ export function seatToolBlockReason(
  *
  * The tool result already tells the MODEL how to run the plan. This is the
  * other half, and now also the one place a human is told where the `plan` tool
- * lives: plan mode is the conversation and does not hold it, the exit offers it,
- * and a workflow run is allowed from either posture — when the human asks for
- * one — because it touches neither the working tree nor the host.
+ * lives: plan mode is the conversation and does not hold it, the exit offers
+ * it, and the model cannot start a run from plan mode at all — the person does,
+ * with `/workflow run`, or the exit does with the plan's own run.
  *
  * Returns the text rather than notifying, so the decision is testable without a
  * UI and so the event wiring stays one line.
@@ -109,11 +140,11 @@ export function planStoredNotice(
 	return (
 		`Stored plan \`${details.slug}\`. Run it with \`/plan run ${details.slug} [${EFFORTS.join("|")}]\`; ` +
 		`approval happens at the run's \`approve-plan\` checkpoint.` +
-		" The `plan` tool is not held in plan mode — only while leaving it. A" +
-		" workflow run, research included, is allowed from plan mode when you ask" +
-		" for one: it touches neither this working tree nor the host. It is a" +
-		" permission, not an invitation — the model converses in plan mode and does" +
-		" not run workflows to review, verify or research its own plan." +
+		" The `plan` tool is not held in plan mode — only while leaving it. The" +
+		" model does not start workflow runs in plan mode either: the seat refuses" +
+		" `workflow_run` and `workflow_propose` there. You start any run you want" +
+		" with `/workflow run <ref>`, and the plan-mode exit starts this plan's" +
+		" own run." +
 		(mode === "plan"
 			? " To hand-edit instead, leave this posture with `/mode auto`."
 			: "")

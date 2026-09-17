@@ -129,9 +129,11 @@ describe("a plan is written whole", () => {
 		const text = inPlanMode.content[0].text;
 		expect(text).toContain("`/mode auto`");
 		expect(text).toContain("Run it: `/plan run arc");
-		// A run is allowed from here once asked for — and never to check this
-		// plan, which is the blind reviewer's job.
-		expect(text).toContain("once I ask for one");
+		// A run is not the model's to start from here at all: the seat refuses
+		// both tools, and the trailer names the two ways one does start.
+		expect(text).toContain("`workflow_run` and `workflow_propose` are");
+		expect(text).toContain("refused here");
+		expect(text).toContain("`/workflow run`");
 		expect(text).toContain("blind reviewer");
 
 		// Not said in a posture that can already write: it would be noise.

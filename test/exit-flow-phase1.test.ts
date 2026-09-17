@@ -573,8 +573,11 @@ describe("the steers", () => {
 		expect(steer).toContain("two or three sentences");
 		expect(steer).toContain("`plan_intent { summary }`");
 		expect(steer).toContain("do not start a run");
-		// Including one that would check the sentences it is about to write.
-		expect(steer).toContain("no workflow, research or review");
+		// Including one that would check the sentences it is about to write —
+		// and it is a refusal now, not a request: the seat blocks both tools.
+		expect(steer).toContain("refuses `workflow_run` and `workflow_propose`");
+		expect(steer).toContain("no workflow — research or review");
+		expect(steer).toContain("`/workflow run`");
 		// The description is written from the conversation, not asked for.
 		expect(steer).toContain("Do not ask me to write it for you");
 		// Phase 1 does not ask for the plan.
@@ -602,6 +605,8 @@ describe("the steers", () => {
 		// steer names it rather than leaving "a run" to be read as "the plan run".
 		expect(steer).toContain("deep-review");
 		expect(steer).toContain("a plan reviewed by its author is not reviewed");
+		// And it is enforced, not asked for.
+		expect(steer).toContain("refuses `workflow_run` and `workflow_propose`");
 		// The two fields the last plan got wrong, said before it writes them.
 		expect(steer).toContain("`by.lens` is");
 		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");

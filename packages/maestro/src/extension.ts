@@ -18,9 +18,13 @@ import {
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
-import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
+import {
+	createPlanCommand,
+	PLAN_WORKFLOW_REF,
+	type PlanStart,
+} from "./plan-command.js";
 import { planHostPort } from "./plan-host.js";
-import { planDigest } from "./plan-input.js";
+import { planDigest, type WorkflowInput } from "./plan-input.js";
 import {
 	gatedPublishUI,
 	isWorkflowShipped,
@@ -33,6 +37,7 @@ import { createSeat, type Seat } from "./seat.js";
 import {
 	acquireWorkflowClient,
 	acquireWorkflowClientOrWarn,
+	callWorkflow,
 	type WorkflowEventBus,
 } from "./workflow-provider.js";
 
@@ -106,20 +111,6 @@ export function seatToolBlockReason(
 export interface SeatHost {
 	registerTool(tool: unknown): void;
 	registerCommand(name: string, spec: unknown): void;
-	/**
-	 * Steering text for the session. Optional because the seat must start on a
-	 * host that has none; `/plan run` then prints the call instead of injecting
-	 * it, rather than pretending it handed something over.
-	 *
-	 * The plan-mode exit uses it for ONE thing: the run hand-off, which is a
-	 * `workflow_run` call the model has to make because the workflow client this
-	 * seat holds is read-only. Nothing about writing the plan travels this way
-	 * any more.
-	 */
-	sendUserMessage?(
-		content: string,
-		options?: { deliverAs?: "steer" | "followUp" },
-	): void;
 	/**
 	 * A custom message into the session's own history.
 	 *
@@ -322,9 +313,6 @@ export function startSeat(
 		...(options.runExitFlow ? { flow: options.runExitFlow } : {}),
 		...(announce ? { announce } : {}),
 		...(options.agentDir ? { agentDir: options.agentDir } : {}),
-		...(pi.sendUserMessage
-			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
-			: {}),
 	});
 	const onModeExit = options.beginModeExit ?? exit.hook;
 
@@ -486,6 +474,48 @@ export function startSeat(
 		});
 	};
 
+	/**
+	 * `/plan run <slug>`, wired to the one thing it needs and cannot build: the
+	 * workflow client that starts the run.
+	 *
+	 * Acquired per run, like publication, so a runtime that arrived since the
+	 * last one is the runtime this one uses. Every failure — no bus, no runtime,
+	 * a refused ref, an input the definition's schema rejects — has already been
+	 * reported through the seam's sanitized `notify` by the time this returns
+	 * nothing.
+	 */
+	const startRun = async (
+		input: WorkflowInput,
+		ctx: ExtensionContext,
+	): Promise<string | undefined> => {
+		const notify = (message: string, type?: "info" | "warning" | "error") =>
+			ctx.ui.notify(message, type);
+		if (!pi.events) {
+			notify(
+				"This host has no extension bus, so the workflow runtime cannot be reached and no run can be started. The plan is stored and unchanged.",
+				"warning",
+			);
+			return undefined;
+		}
+		const client = await acquireWorkflowClientOrWarn(
+			pi.events,
+			ctx,
+			notify,
+			"run",
+		);
+		if (!client) return undefined;
+		const receipt = await callWorkflow(
+			() =>
+				client.startBuiltin(PLAN_WORKFLOW_REF, {
+					input,
+					effort: input.effort,
+				}),
+			notify,
+			"run",
+		);
+		return receipt?.runId;
+	};
+
 	const planCommand = createPlanCommand({
 		// A getter, not the store: `seat()` builds lazily, and building it at
 		// registration time would undo that.
@@ -493,12 +523,11 @@ export function startSeat(
 			return seat().store;
 		},
 		// `/plan`'s handler passes the whole command context through; `PlanShip`
-		// narrows it to `ui` and `hasUI` so a test can hand over a fake, not
-		// because the value here is ever less than a session context.
+		// and `PlanStart` narrow it to `ui` and `hasUI` so a test can hand over a
+		// fake, not because the value here is ever less than a session context.
 		ship: (plan, ctx) => publish(plan, ctx as ExtensionContext),
-		...(pi.sendUserMessage
-			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
-			: {}),
+		start: ((input, ctx) =>
+			startRun(input, ctx as ExtensionContext)) satisfies PlanStart,
 	});
 	pi.registerCommand("plan", planCommand);
 

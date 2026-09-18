@@ -3,8 +3,9 @@
 // Two things are being held down here. One: the grammar rejects rather than
 // guesses, because a mistyped effort that silently became `standard` would
 // spend (or fail to spend) a deep run's budget and nothing would say so. Two:
-// `run` hands off and does not execute — it writes an input and steers the
-// session, and the approval it names is a checkpoint in someone else's runtime.
+// `run` starts the run itself and never steers the model — it writes an input
+// beside the plan and hands it to the injected `start`, and the approval it
+// names is a checkpoint in someone else's runtime.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -27,10 +28,16 @@ import {
 	renderPlan,
 	runPlanCommand,
 } from "../packages/maestro/src/plan-command.js";
-import { planDigest } from "../packages/maestro/src/plan-input.js";
+import {
+	planDigest,
+	type WorkflowInput,
+} from "../packages/maestro/src/plan-input.js";
 import type { Publication } from "../packages/maestro/src/publish.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 import { fakeHost } from "./fake-host.js";
+
+/** The run id the fake `start` hands back. */
+const RUN_ID = "wfr-plan-to-ship-9";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -93,7 +100,7 @@ interface Harness {
 	readonly cwd: string;
 	readonly root: string;
 	readonly store: ReturnType<typeof createPlanStore>;
-	readonly steers: string[];
+	readonly starts: readonly WorkflowInput[];
 	readonly confirms: string[];
 	readonly shipped: Plan[];
 	run(
@@ -101,7 +108,11 @@ interface Harness {
 		options?: {
 			confirm?: boolean;
 			hasUI?: boolean;
-			steer?: boolean;
+			/**
+			 * What starting a run does: a run id, `"refused"` for a runtime that
+			 * would not start it, `false` for a seat with no runtime at all.
+			 */
+			start?: string | "refused" | false;
 			ship?: Publication | false;
 		},
 	): Promise<PlanCommandOutcome>;
@@ -118,7 +129,7 @@ function harness(cwd: string = temp("plan-cmd-project")): Harness {
 		sessionId: () => "sess-7",
 		host: () => fakeHost({ models: ["anthropic/claude"] }),
 	});
-	const steers: string[] = [];
+	const starts: WorkflowInput[] = [];
 	const confirms: string[] = [];
 	const shipped: Plan[] = [];
 	return {
@@ -126,16 +137,29 @@ function harness(cwd: string = temp("plan-cmd-project")): Harness {
 		cwd,
 		root,
 		store,
-		steers,
+		starts,
 		confirms,
 		shipped,
 		run: (args, options = {}) =>
 			runPlanCommand(
 				{
 					store,
-					...(options.steer === false
+					// Absent unless the test asks for it: a seat with no workflow
+					// runtime cannot start a run, which is its own outcome.
+					...(options.start === false
 						? {}
-						: { sendUserMessage: (content: string) => steers.push(content) }),
+						: {
+								start: async (input: WorkflowInput) => {
+									starts.push(input);
+									const scripted = options.start ?? RUN_ID;
+									// `"refused"` is a runtime that would not start it; the
+									// `false` case never reaches here, because it is the
+									// absence of `start` altogether.
+									return typeof scripted === "string" && scripted !== "refused"
+										? scripted
+										: undefined;
+								},
+							}),
 					// Absent unless the test asks for it: a seat with no workflow
 					// runtime has no publication, which is its own outcome.
 					...(options.ship === undefined || options.ship === false
@@ -289,8 +313,8 @@ describe("/plan show", () => {
 	});
 });
 
-describe("/plan run hands off without executing anything", () => {
-	it("writes the input beside the plan and steers the session with the call", async () => {
+describe("/plan run starts the run through the harness", () => {
+	it("writes the input beside the plan and starts `plan-to-ship` itself", async () => {
 		const h = harness();
 		const stored = plan("arc", h.root);
 		h.store.savePlan(stored);
@@ -303,15 +327,13 @@ describe("/plan run hands off without executing anything", () => {
 		expect(written.planDigest).toBe(planDigest(stored));
 		expect(written.plan).toEqual(stored);
 
-		expect(h.steers).toHaveLength(1);
-		const steer = h.steers[0];
-		expect(steer).toContain('workflow_run { "ref": "plan-to-ship"');
-		expect(steer).toContain('"planDigest": "');
-		expect(steer).toContain(path);
-		// The model is told, in the same breath, that approval is not its call.
-		expect(steer).toContain("approve-plan");
-		expect(steer).toMatch(/do not decide anything on my behalf/i);
+		// The harness started it, with the same input it just wrote down.
+		expect(h.starts).toHaveLength(1);
+		expect(h.starts[0]).toEqual(written);
 
+		expect(outcome.level).toBe("info");
+		expect(outcome.runId).toBe(RUN_ID);
+		expect(outcome.message).toContain(RUN_ID);
 		expect(outcome.message).toContain("approve-plan");
 		expect(outcome.message).toContain("effort deep");
 	});
@@ -323,6 +345,7 @@ describe("/plan run hands off without executing anything", () => {
 		const h = harness();
 		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
 		await h.run("run arc");
+		expect(h.starts[0]?.effort).toBe("deep");
 		expect(
 			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
 		).toBe("deep");
@@ -332,64 +355,49 @@ describe("/plan run hands off without executing anything", () => {
 		const h = harness();
 		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
 		await h.run("run arc cheap");
-		expect(
-			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
-		).toBe("cheap");
+		expect(h.starts[0]?.effort).toBe("cheap");
 	});
 
 	it("defaults to standard when neither the command nor the plan says", async () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
 		await h.run("run arc");
-		expect(
-			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
-		).toBe("standard");
+		expect(h.starts[0]?.effort).toBe("standard");
 	});
 
-	it("points at the file instead of inlining an input that is too large", async () => {
-		const h = harness();
-		const big: Plan = {
-			slug: "big",
-			title: "Big",
-			repos: [{ key: "main", path: h.root }],
-			deliverables: Array.from({ length: 40 }, (_, i) => ({
-				id: `d${i}`,
-				title: `Deliverable number ${i}`,
-				body: "A body long enough that forty of them do not fit in a message.",
-				after: [],
-				reads: [],
-				tasks: [{ id: "work", title: "Do the work" }],
-			})),
-		};
-		h.store.savePlan(big);
-		await h.run("run big");
-		const steer = h.steers[0];
-		expect(steer).toContain(
-			`"input": <the JSON in ${h.store.workflowInputFile("big")}>`,
-		);
-		expect(steer).toContain("pass its contents verbatim");
-		// The input still exists in full; only the message is short.
-		expect(
-			JSON.parse(readFileSync(h.store.workflowInputFile("big"), "utf8")).plan
-				.deliverables,
-		).toHaveLength(40);
-	});
-
-	it("prints the call when the host cannot steer, rather than losing it", async () => {
+	it("keeps the plan and the input when the runtime refuses to start it", async () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
-		const outcome = await h.run("run arc", { steer: false });
-		expect(h.steers).toEqual([]);
-		expect(outcome.message).toContain("cannot steer");
-		expect(outcome.message).toContain('workflow_run { "ref": "plan-to-ship"');
+		const outcome = await h.run("run arc", { start: "refused" });
+
+		expect(outcome.level).toBe("warning");
+		expect(outcome.runId).toBeUndefined();
+		expect(outcome.message).toContain("was not started");
+		// The refusal itself was already notified by the provider seam; this
+		// names what is still there to try again with.
+		expect(outcome.message).toContain("/plan run arc");
+		expect(outcome.wrote).toBe(h.store.workflowInputFile("arc"));
+		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(true);
+		expect(h.store.exists("arc")).toBe(true);
 	});
 
-	it("refuses an unknown slug without writing anything", async () => {
+	it("says so, and writes nothing, on a seat with no workflow runtime", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("run arc", { start: false });
+
+		expect(outcome.level).toBe("warning");
+		expect(outcome.message).toContain("needs the workflow runtime");
+		expect(outcome.message).toContain("stored and unchanged");
+		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(false);
+	});
+
+	it("refuses an unknown slug without writing or starting anything", async () => {
 		const h = harness();
 		const outcome = await h.run("run nope");
 		expect(outcome.level).toBe("warning");
 		expect(outcome.message).toContain("No stored plan `nope`");
-		expect(h.steers).toEqual([]);
+		expect(h.starts).toEqual([]);
 		expect(existsSync(h.store.workflowInputFile("nope"))).toBe(false);
 	});
 });

@@ -12,7 +12,7 @@
  * bounded on purpose:
  *
  *   1. The literal below names **only** what pi-maestro actually needs — one
- *      revision and seven feature keys — not all twenty-one, so an unrelated
+ *      revision and eight feature keys — not all of them, so an unrelated
  *      feature flip is not pi-maestro's business.
  *   2. `test/workflow-provider.test.ts` compares the literal against a
  *      checked-in copy of pi-workflow's own shipped constant
@@ -42,7 +42,7 @@ import { Value } from "typebox/value";
 export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
 
 /**
- * The features the exit loop and the plan hand-off actually depend on.
+ * The features the exit loop and `/plan run` actually depend on.
  *
  * - `staticWorkflows` — `plan-to-ship` and `plan-review` are static refs.
  * - `durableRuns` — a run survives the dialog that started it.
@@ -51,6 +51,10 @@ export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
  * - `settledResults` — one failed reviewer degrades rather than fails the run.
  * - `finalizers` — the receipt publication reads is produced by one.
  * - `worktrees` — every write happens in a worktree, never in this tree.
+ * - `serviceProviderStart` — `startBuiltin` exists, so the harness can start
+ *   the plan's own run when a person answers `Start the run?` with yes. A
+ *   runtime without it leaves the seat with no way to start a plan at all: the
+ *   model is never asked to do it, so there is no fallback to degrade to.
  */
 export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"staticWorkflows",
@@ -60,6 +64,7 @@ export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"settledResults",
 	"finalizers",
 	"worktrees",
+	"serviceProviderStart",
 ] as const);
 
 export type RequiredWorkflowFeature =
@@ -87,6 +92,7 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
 			settledResults: true,
 			finalizers: true,
 			worktrees: true,
+			serviceProviderStart: true,
 		}),
 	});
 
@@ -98,6 +104,13 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
  * those two packages. pi-maestro never calls pi-subagent, so a mismatch there
  * is not pi-maestro's refusal to make — but a contract that has no
  * `requiredSubagent` at all is not this contract, so the shape is checked.
+ *
+ * `serviceProviderStart` is deliberately NOT named here, although
+ * `REQUIRED_WORKFLOW_FEATURES` requires it. A pi-workflow that predates
+ * `startBuiltin` is still recognisably a workflow runtime contract, and it
+ * should be refused by `workflowContractMismatch` — which names the feature and
+ * the value this seat needs — rather than by the shape check, whose only answer
+ * is "that is not a workflow runtime contract".
  */
 export const WorkflowRuntimeContractMirror = Type.Object({
 	schema: Type.Literal("pi-workflow-runtime"),

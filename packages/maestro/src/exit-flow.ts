@@ -22,7 +22,7 @@
 // to switch first and ask later, which left every path that ends without a run
 // — and there are several — in a posture nobody chose for what they ended up
 // doing. The seat stays in plan mode for the whole exit; `setMode` is called in
-// exactly two places: *Just switch mode*, and immediately before the hand-off.
+// exactly two places: *Just switch mode*, and immediately after the run starts.
 //
 // NOTHING IS ON DISK BETWEEN THE STEPS. There is no pending record any more,
 // because there is nothing to join: the flow never yields to a model turn. A
@@ -49,11 +49,14 @@
 //     requests, the retries and the validators' complaints are not steers and
 //     do not appear in the transcript; they are on the record in
 //     `authoring.json`, beside the plan.
-//   - **NOTHING HERE STARTS ANYTHING BUT THE BLIND REVIEW.** The only run this
-//     module starts is the headless `plan-review`, through the runtime's own
-//     allowlist. The plan's own run is the hand-off at the end. The only Bash
-//     is repository creation at readiness, through the seat's audited tool,
-//     under this mode's confirmation policy.
+//   - **THE HARNESS STARTS THE RUN, AND THE MODEL IS NEVER ASKED TO.** Both
+//     runs this module starts go through the runtime's own allowlist: the
+//     headless `plan-review`, and `plan-to-ship` itself once a person has
+//     answered `Start the run?` with yes. NOTHING IS SENT TO THE MODEL — this
+//     flow sends no user message at all, and the pi-maestro seat still refuses
+//     the model's own `workflow_run` in plan mode by name. The only Bash is
+//     repository creation at readiness, through the seat's audited tool, under
+//     this mode's confirmation policy.
 //
 // IO is the injected `ExitFlowUi` port, structurally Pi's `ExtensionUIContext`,
 // so a test drives every branch with a fake and this module never reaches for a
@@ -106,7 +109,7 @@ import {
 	resolvePolicy,
 	withExplicitDiverse,
 } from "./plan.js";
-import { PLAN_WORKFLOW_REF, renderHandoff } from "./plan-command.js";
+import { PLAN_WORKFLOW_REF } from "./plan-command.js";
 import {
 	authoredPlanProblems,
 	planFrom,
@@ -737,6 +740,18 @@ export interface PlanAnnouncement {
 export type Announce = (message: PlanAnnouncement) => void;
 
 /**
+ * What happened to the plan, as the one message says it.
+ *
+ * `started` carries the run id because the harness started the run and knows
+ * it: a message that said a run had been requested, without naming it, would be
+ * the transcript's only trace of something it could not then look up.
+ */
+export type PlanMessageOutcome =
+	| { readonly kind: "stored" }
+	| { readonly kind: "started"; readonly runId: string }
+	| { readonly kind: "back" };
+
+/**
  * One message per event, naming the plan and what happened to it.
  *
  * The slug and the digest are both here because they answer different
@@ -746,16 +761,16 @@ export type Announce = (message: PlanAnnouncement) => void;
  */
 export function renderPlanMessage(
 	plan: Plan,
-	outcome: "stored" | "started" | "back",
+	outcome: PlanMessageOutcome,
 ): PlanAnnouncement {
 	const head =
 		`Plan \`${plan.slug}\` (digest ${planDigest(plan)}) — ${plan.deliverables.length} deliverable` +
 		`${plan.deliverables.length === 1 ? "" : "s"}.`;
 	const tail =
-		outcome === "stored"
+		outcome.kind === "stored"
 			? " Written by the harness on the way out of plan mode, from this conversation, and stored."
-			: outcome === "started"
-				? " Its run has been requested; the run parks at its `approve-plan` checkpoint."
+			: outcome.kind === "started"
+				? ` Run started \`${outcome.runId}\` — started by the harness, not by this conversation, and it parks at its \`approve-plan\` checkpoint.`
 				: " The exit ended without a run and the session is still in plan mode.";
 	return {
 		customType: PLAN_MESSAGE_TYPE,
@@ -776,7 +791,7 @@ export interface ExitFlowDeps {
 	readonly ui: ExitFlowUi;
 	/** The posture the human asked for, and will be given when the run starts. */
 	readonly wanted: ExitMode;
-	/** The seat's own switch. Called for *Just switch mode* and the hand-off. */
+	/** The seat's own switch. Called for *Just switch mode* and a started run. */
 	readonly setMode: (name: ModeName) => void;
 	/** How the model is asked. The whole mechanism, in one injected function. */
 	readonly complete: AuthoringComplete;
@@ -800,11 +815,6 @@ export interface ExitFlowDeps {
 	readonly publication?: () => DerivedPublication;
 	/** The one custom message per event. Absent on a host that has none. */
 	readonly announce?: Announce;
-	/** The hand-off, the one thing the model is still asked to call. */
-	readonly sendUserMessage?: (
-		content: string,
-		options?: { readonly deliverAs?: "steer" | "followUp" },
-	) => void;
 	/** The repository the plan defaults its `repos` to. */
 	readonly cwd?: string;
 	/**
@@ -829,11 +839,11 @@ export type ExitFlowOutcome =
 	| { readonly kind: "keep-planning" }
 	/** *Just switch mode*: the posture changes, no plan, no request. */
 	| { readonly kind: "switch-only" }
-	/** The model has the run request and the posture is the one asked for. */
+	/** The run is running and the posture is the one asked for. */
 	| {
-			readonly kind: "handed-off";
+			readonly kind: "started";
 			readonly slug: string;
-			readonly steer: string;
+			readonly runId: string;
 			readonly asked: number;
 	  }
 	/** The plan is stored and nothing runs. */
@@ -854,7 +864,7 @@ export type ExitFlowOutcome =
 	/** Something this flow cannot proceed past, named. */
 	| { readonly kind: "refused"; readonly problem: string };
 
-/** The one workflow this seat may start itself. The runtime owns the allowlist. */
+/** The headless reviewer this seat starts. The runtime owns the allowlist. */
 export const PLAN_REVIEW_REF = "plan-review";
 
 /** How long the blind review may take before the flow stops waiting for it. */
@@ -1142,7 +1152,7 @@ export async function runExitFlow(
 			return { kind: "back", asked: dialogs.asked() };
 		}
 		let plan: Plan = first;
-		deps.announce?.(renderPlanMessage(plan, "stored"));
+		deps.announce?.(renderPlanMessage(plan, { kind: "stored" }));
 
 		// ── 6 — readiness, the graph, the review, the run ─────────────────────
 		const resolved = resolvePolicy(plan.policy);
@@ -1152,7 +1162,7 @@ export async function runExitFlow(
 		};
 		const back = (message: string): ExitFlowOutcome => {
 			ui.notify(backToConversation(plan.slug, deps.wanted, message), "info");
-			deps.announce?.(renderPlanMessage(plan, "back"));
+			deps.announce?.(renderPlanMessage(plan, { kind: "back" }));
 			return { kind: "back", slug: plan.slug, asked: dialogs.asked() };
 		};
 		const refuse = (problem: string): ExitFlowOutcome => {
@@ -1428,7 +1438,7 @@ export async function runExitFlow(
 					);
 				}
 				plan = revised;
-				deps.announce?.(renderPlanMessage(plan, "stored"));
+				deps.announce?.(renderPlanMessage(plan, { kind: "stored" }));
 				straightToReview = true;
 				continue;
 			}
@@ -1464,7 +1474,11 @@ export async function runExitFlow(
 		);
 		if (!start2) return stored("Nothing was started.");
 
-		// ── 8 — the hand-off ──────────────────────────────────────────────────
+		// ── 8 — the run, started here ─────────────────────────────────────────
+		//
+		// The exported input is written FIRST and kept whatever happens next: it
+		// is what `/plan run <slug>` and a person reading the plan directory both
+		// want, and a run that failed to start is exactly when it is wanted most.
 		const path = (
 			deps.inputPath ?? ((s: string) => store.workflowInputFile(s))
 		)(plan.slug);
@@ -1472,35 +1486,45 @@ export async function runExitFlow(
 		try {
 			(deps.writeInput ?? writeWorkflowInput)(path, json);
 		} catch (error) {
-			// The export is a convenience; the call itself travels in the hand-off.
+			// The export is a record beside the plan, not the call: the run below
+			// is started from `input` in memory either way.
 			ui.notify(
 				`The run input could not be written to ${path}: ${error instanceof Error ? error.message : String(error)}.`,
 				"warning",
 			);
 		}
-		const steer = renderHandoff(input, path, json);
-		// THE ONE PLACE THE POSTURE MOVES ON THE WAY TO A RUN, and it moves
-		// first: the run about to be requested writes to worktrees, and the
-		// session that requests it should be in the posture the human asked for
-		// at `/mode auto`, not plan.
+		// THE HARNESS STARTS IT. The runtime allowlists `plan-to-ship` for this
+		// call, validates the input the way `workflow_run` would, and journals the
+		// run with origin `"service-provider"` — so nothing here or afterwards
+		// pretends the conversation started it.
+		const receipt = await callWorkflow(
+			() => client.startBuiltin(PLAN_WORKFLOW_REF, { input, effort }),
+			ui.notify,
+			"run",
+		);
+		if (!receipt)
+			// The refusal itself was printed by `callWorkflow`, sanitized and
+			// naming `/plan run`. The posture has not moved and the plan is stored,
+			// so this ends exactly the way going back does.
+			return back(
+				`The workflow runtime did not start \`${plan.slug}\`, so nothing is running.`,
+			);
+		// THE ONE PLACE THE POSTURE MOVES ON THE WAY TO A RUN, and it moves only
+		// once the run exists: the run writes to worktrees, and the session
+		// watching it should be in the posture the human asked for at
+		// `/mode auto`, not plan.
 		deps.setMode(deps.wanted);
-		deps.announce?.(renderPlanMessage(plan, "started"));
-		if (deps.sendUserMessage) {
-			deps.sendUserMessage(steer, { deliverAs: "followUp" });
-			ui.notify(
-				`Mode ${deps.wanted}, and \`${plan.slug}\` is handed to the model as \`workflow_run { ref: "${PLAN_WORKFLOW_REF}" }\` at effort ${effort}. Approval is the run's \`approve-plan\` checkpoint, not this flow.`,
-				"info",
-			);
-		} else {
-			ui.notify(
-				`This host cannot steer the session, so make the call yourself.\n\n${steer}`,
-				"warning",
-			);
-		}
+		deps.announce?.(
+			renderPlanMessage(plan, { kind: "started", runId: receipt.runId }),
+		);
+		ui.notify(
+			`Mode ${deps.wanted}, and \`${plan.slug}\` is running as \`${receipt.runId}\` at effort ${effort}. Approval is the run's \`approve-plan\` checkpoint, not this flow.`,
+			"info",
+		);
 		return {
-			kind: "handed-off",
+			kind: "started",
 			slug: plan.slug,
-			steer,
+			runId: receipt.runId,
 			asked: dialogs.asked(),
 		};
 	} catch (error) {
@@ -1651,7 +1675,7 @@ const UNREVIEWED_HINT =
 // ── The `/mode` hook ─────────────────────────────────────────────────────────
 
 export interface ModeExitControllerDeps {
-	/** The seat's switch. Called at the hand-off, and by *Just switch mode*. */
+	/** The seat's switch. Called once a run starts, and by *Just switch mode*. */
 	readonly setMode: (name: ModeName) => void;
 	/**
 	 * How the model is asked, built from the `/mode` context.
@@ -1661,7 +1685,6 @@ export interface ModeExitControllerDeps {
 	 */
 	readonly complete?: (ctx: ModeExitContext) => AuthoringComplete | undefined;
 	readonly announce?: Announce;
-	readonly sendUserMessage?: ExitFlowDeps["sendUserMessage"];
 	/** Where publication is derived, and the plan's default repository. */
 	readonly cwd?: string;
 	readonly upstreamHead?: () => string | null;
@@ -1777,9 +1800,6 @@ export function createModeExitController(
 				? { workflow: () => deps.workflow?.(ctx, notify) as never }
 				: {}),
 			...(deps.announce ? { announce: deps.announce } : {}),
-			...(deps.sendUserMessage
-				? { sendUserMessage: deps.sendUserMessage }
-				: {}),
 			...(deps.now ? { now: deps.now } : {}),
 			...(deps.timeoutMs === undefined ? {} : { timeoutMs: deps.timeoutMs }),
 		});
@@ -1789,7 +1809,7 @@ export function createModeExitController(
 			last = outcome;
 			switch (outcome.kind) {
 				case "switch-only":
-				case "handed-off":
+				case "started":
 					// The two branches that moved the posture, in their own order.
 					return "settled";
 				default:

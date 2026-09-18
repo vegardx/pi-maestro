@@ -508,7 +508,10 @@ describe("reviews and policy survive the store", () => {
 	}
 
 	it("round-trips byte for byte, digest included", () => {
-		const store = createPlanStore(temp("store"));
+		const store = createPlanStore({
+			cwd: repo(),
+			agentDir: temp("store"),
+		});
 		const written = fixture(repo());
 		store.savePlan(written);
 		const read = store.loadPlan("arc");
@@ -518,7 +521,10 @@ describe("reviews and policy survive the store", () => {
 
 	it("is written by the plan tool, which offers reviews and never the dials", () => {
 		const cwd = repo();
-		const store = createPlanStore(temp("store"));
+		const store = createPlanStore({
+			cwd,
+			agentDir: temp("store"),
+		});
 		const tool = createPlanTool({
 			store,
 			cwd: () => cwd,

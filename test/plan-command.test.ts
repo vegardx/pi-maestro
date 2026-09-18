@@ -17,11 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-	planFile,
-	plansRoot,
-	workflowInputFile,
-} from "../packages/maestro/src/paths.js";
+import { projectPlansRoot } from "../packages/maestro/src/paths.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import {
 	PLAN_COMMAND_USAGE,
@@ -93,6 +89,7 @@ function plan(slug: string, root: string, title = `Plan ${slug}`): Plan {
 
 interface Harness {
 	readonly agentDir: string;
+	readonly cwd: string;
 	readonly root: string;
 	readonly store: ReturnType<typeof createPlanStore>;
 	readonly steers: string[];
@@ -109,12 +106,14 @@ interface Harness {
 	): Promise<PlanCommandOutcome>;
 }
 
-function harness(): Harness {
+function harness(cwd: string = temp("plan-cmd-project")): Harness {
 	const agentDir = temp("plan-cmd-agent");
 	const root = repo();
 	// The fixture plan pins a review model, and a store with no host refuses
 	// what it cannot check — so the harness is the host that has it.
-	const store = createPlanStore(plansRoot(agentDir), {
+	const store = createPlanStore({
+		cwd,
+		agentDir,
 		host: () => fakeHost({ models: ["anthropic/claude"] }),
 	});
 	const steers: string[] = [];
@@ -122,6 +121,7 @@ function harness(): Harness {
 	const shipped: Plan[] = [];
 	return {
 		agentDir,
+		cwd,
 		root,
 		store,
 		steers,
@@ -131,7 +131,6 @@ function harness(): Harness {
 			runPlanCommand(
 				{
 					store,
-					inputPath: (slug) => workflowInputFile(slug, agentDir),
 					...(options.steer === false
 						? {}
 						: { sendUserMessage: (content: string) => steers.push(content) }),
@@ -207,7 +206,7 @@ describe("the /plan grammar rejects rather than guesses", () => {
 		expect(outcome.message).toContain("unknown effort `standrd`");
 		expect(outcome.message).toContain(PLAN_COMMAND_USAGE);
 		// A rejected grammar touches nothing.
-		expect(existsSync(workflowInputFile("arc", h.agentDir))).toBe(false);
+		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(false);
 	});
 });
 
@@ -295,7 +294,7 @@ describe("/plan run hands off without executing anything", () => {
 		h.store.savePlan(stored);
 		const outcome = await h.run("run arc deep");
 
-		const path = workflowInputFile("arc", h.agentDir);
+		const path = h.store.workflowInputFile("arc");
 		expect(outcome.wrote).toBe(path);
 		const written = JSON.parse(readFileSync(path, "utf8"));
 		expect(written.effort).toBe("deep");
@@ -323,8 +322,7 @@ describe("/plan run hands off without executing anything", () => {
 		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
 		await h.run("run arc");
 		expect(
-			JSON.parse(readFileSync(workflowInputFile("arc", h.agentDir), "utf8"))
-				.effort,
+			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
 		).toBe("deep");
 	});
 
@@ -333,8 +331,7 @@ describe("/plan run hands off without executing anything", () => {
 		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
 		await h.run("run arc cheap");
 		expect(
-			JSON.parse(readFileSync(workflowInputFile("arc", h.agentDir), "utf8"))
-				.effort,
+			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
 		).toBe("cheap");
 	});
 
@@ -343,8 +340,7 @@ describe("/plan run hands off without executing anything", () => {
 		h.store.savePlan(plan("arc", h.root));
 		await h.run("run arc");
 		expect(
-			JSON.parse(readFileSync(workflowInputFile("arc", h.agentDir), "utf8"))
-				.effort,
+			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
 		).toBe("standard");
 	});
 
@@ -367,13 +363,13 @@ describe("/plan run hands off without executing anything", () => {
 		await h.run("run big");
 		const steer = h.steers[0];
 		expect(steer).toContain(
-			`"input": <the JSON in ${workflowInputFile("big", h.agentDir)}>`,
+			`"input": <the JSON in ${h.store.workflowInputFile("big")}>`,
 		);
 		expect(steer).toContain("pass its contents verbatim");
 		// The input still exists in full; only the message is short.
 		expect(
-			JSON.parse(readFileSync(workflowInputFile("big", h.agentDir), "utf8"))
-				.plan.deliverables,
+			JSON.parse(readFileSync(h.store.workflowInputFile("big"), "utf8")).plan
+				.deliverables,
 		).toHaveLength(40);
 	});
 
@@ -392,7 +388,7 @@ describe("/plan run hands off without executing anything", () => {
 		expect(outcome.level).toBe("warning");
 		expect(outcome.message).toContain("No stored plan `nope`");
 		expect(h.steers).toEqual([]);
-		expect(existsSync(workflowInputFile("nope", h.agentDir))).toBe(false);
+		expect(existsSync(h.store.workflowInputFile("nope"))).toBe(false);
 	});
 });
 
@@ -433,25 +429,57 @@ describe("/plan rm", () => {
 });
 
 describe("one path, not two", () => {
-	// `paths.planFile` exists so the command, the store and any exporter agree
-	// on where a plan lives. Agreement by convention is what this asserts
-	// against: the store computes its own path from its root, and if the two
-	// ever drift, nothing else in the suite would notice.
-	it("puts a plan exactly where paths.planFile says it is", () => {
+	// The store's `planFile` exists so the command, the store and any exporter
+	// agree on where a plan lives. Agreement by convention is what this asserts
+	// against: the path is computed here from the project key rather than read
+	// off the store, so a drift between the two would show up.
+	it("puts a plan under this project's key, where the store says", () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
-		expect(existsSync(planFile("arc", h.agentDir))).toBe(true);
-		expect(
-			JSON.parse(readFileSync(planFile("arc", h.agentDir), "utf8")).body,
-		).toMatchObject({ slug: "arc" });
+		const expected = join(
+			projectPlansRoot(h.cwd, h.agentDir),
+			"arc",
+			"plan.json",
+		);
+		expect(h.store.planFile("arc")).toBe(expected);
+		expect(existsSync(expected)).toBe(true);
+		expect(JSON.parse(readFileSync(expected, "utf8")).body).toMatchObject({
+			slug: "arc",
+		});
 	});
 
 	it("exports the workflow input into that same plan directory", async () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
 		await h.run("run arc");
-		expect(workflowInputFile("arc", h.agentDir)).toBe(
-			join(dirname(planFile("arc", h.agentDir)), "workflow-input.json"),
+		expect(h.store.workflowInputFile("arc")).toBe(
+			join(dirname(h.store.planFile("arc")), "workflow-input.json"),
+		);
+		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(true);
+	});
+});
+
+describe("/plan is scoped to this project", () => {
+	it("lists only this project's plans, and the same slug is two plans", async () => {
+		const here = harness();
+		const there = harness();
+		here.store.savePlan(plan("arc", here.root, "Here's arc"));
+		there.store.savePlan(plan("arc", there.root, "There's arc"));
+		there.store.savePlan(plan("solo", there.root));
+
+		const listed = await here.run("list");
+		expect(listed.message).toContain("1 stored plan for this project");
+		expect(listed.message).toContain("Here's arc");
+		expect(listed.message).not.toContain("solo");
+		expect((await here.run("show arc")).message).toContain("Here's arc");
+		expect((await there.run("show arc")).message).toContain("There's arc");
+	});
+
+	it("is empty, not an error, in a project with no plans folder", async () => {
+		const outcome = await harness().run("list");
+		expect(outcome.level).toBe("info");
+		expect(outcome.message).toBe(
+			"No stored plans for this project. The `plan` tool writes one.",
 		);
 	});
 });

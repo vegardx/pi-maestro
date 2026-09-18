@@ -6,7 +6,6 @@ import {
 	readExecutionPolicySettings,
 } from "./execution-policy.js";
 import { type Mode, type ModeName, mode } from "./mode.js";
-import { plansRoot } from "./paths.js";
 import type { PlanHostPort, PlanPolicy } from "./plan.js";
 import { createPlanStore, type PlanStore } from "./store.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -107,7 +106,9 @@ export interface Seat {
 
 export function createSeat(options: SeatOptions = {}): Seat {
 	const cwd = options.cwd ?? process.cwd();
-	const store = createPlanStore(plansRoot(options.agentDir), {
+	const store = createPlanStore({
+		cwd,
+		...(options.agentDir ? { agentDir: options.agentDir } : {}),
 		...(options.host ? { host: options.host } : {}),
 	});
 	let current = mode("plan");

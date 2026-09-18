@@ -53,7 +53,11 @@ function authoring(cwd: string = repo(), mode?: ModeName) {
 			models: ["anthropic/fable-5"],
 			skills: ["correctness-review", "contracts-review"],
 		});
-	const store = createPlanStore(root, { host });
+	const store = createPlanStore({
+		cwd,
+		agentDir: root,
+		host,
+	});
 	const tool = createPlanTool({
 		store,
 		cwd: () => cwd,

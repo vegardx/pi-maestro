@@ -177,6 +177,11 @@ function fakeStore(initial: Plan) {
 		store: {
 			loadPlan: (slug: string): Plan | null =>
 				slug === current.slug ? current : null,
+			// The real store's join, under a root this fake never writes to: the
+			// flow asks the store where a plan's files are, so the fake has to
+			// answer that question too.
+			workflowInputFile: (slug: string): string =>
+				join(tmpdir(), "maestro-fake-store", slug, "workflow-input.json"),
 			savePlan: (plan: Plan): void => {
 				// The real store's rule, with the real validator: nothing invalid
 				// reaches disk, and the exit flow has to survive being told so.

@@ -65,8 +65,8 @@ export class UnsupportedStateError extends StoreError {
 	) {
 		super(
 			`${path} was written by schema ${String(found)}, and this build speaks ${MAESTRO_SCHEMA_VERSION}. ` +
-				"Schema 6 adds a required envelope field, `authoredBy` — the session id and the cwd of whoever wrote the plan — " +
-				"which a schema 5 envelope does not carry and nothing can infer, and there is no migration. " +
+				"Schema 7 removed the `approve-plan` gate — a plan's `policy.gates` is now `ship` or `every-deliverable` — " +
+				"so a schema 6 envelope's gates name a checkpoint this build does not run, and there is no migration. " +
 				`Archive or remove the ${kind} and write it again at schemaVersion ${MAESTRO_SCHEMA_VERSION}.`,
 		);
 		this.name = "UnsupportedStateError";

@@ -101,36 +101,37 @@ describe("plan store", () => {
 		const written = JSON.parse(
 			readFileSync(planPath(cwd, dir, "app"), "utf8"),
 		) as { schemaVersion: number };
-		expect(written.schemaVersion).toBe(6);
-		expect(MAESTRO_SCHEMA_VERSION).toBe(6);
+		expect(written.schemaVersion).toBe(7);
+		expect(MAESTRO_SCHEMA_VERSION).toBe(7);
 		expect(store.loadPlan("app")).toEqual(plan());
 	});
 
-	// The version 3 document. It is refused, not migrated, and the refusal
+	// The previous document. It is refused, not migrated, and the refusal
 	// names both versions and what changed between them — "unsupported" alone
 	// leaves a human with a file and no idea what to do with it.
-	it("refuses a version 5 envelope by naming both versions", () => {
+	it("refuses a version 6 envelope by naming both versions", () => {
 		const dir = agentDir();
 		const cwd = project();
 		const path = planPath(cwd, dir, "app");
 		mkdirSync(join(path, ".."), { recursive: true });
-		// The version 5 envelope exactly: a schema 5 plan document, and no
-		// `authoredBy`, because that is the field version 6 added.
+		// The version 6 envelope exactly: it carries `authoredBy`, and its plan's
+		// `policy.gates` names the approve gate version 7 removed.
 		writeFileSync(
 			path,
 			JSON.stringify({
-				schemaVersion: 5,
+				schemaVersion: 6,
 				savedAt: "2026-08-08T00:00:00Z",
-				body: plan(),
+				authoredBy: { sessionId: "sess-6", cwd },
+				body: { ...plan(), policy: { gates: "approve-plan+ship" } },
 			}),
 		);
 		const store = makeStore({ agentDir: dir, cwd });
 		expect(() => store.loadPlan("app")).toThrow(
-			`${path} was written by schema 5, and this build speaks 6. Schema 6 adds a required envelope field, \`authoredBy\` — the session id and the cwd of whoever wrote the plan — which a schema 5 envelope does not carry and nothing can infer, and there is no migration. Archive or remove the plan and write it again at schemaVersion 6.`,
+			`${path} was written by schema 6, and this build speaks 7. Schema 7 removed the \`approve-plan\` gate — a plan's \`policy.gates\` is now \`ship\` or \`every-deliverable\` — so a schema 6 envelope's gates name a checkpoint this build does not run, and there is no migration. Archive or remove the plan and write it again at schemaVersion 7.`,
 		);
 		// Refused, never rewritten: a store that quietly re-stamped the version
 		// would be a migration nobody wrote.
-		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":5');
+		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":6');
 		// And it is absent from the list rather than fatal to it.
 		expect(store.list()).toEqual([]);
 	});
@@ -228,14 +229,14 @@ describe("plan store", () => {
 	// A file that claims the current version and omits what the current version
 	// requires was not written here. Reading it as "authored by nobody" is the
 	// soft downgrade the whole envelope check exists to refuse.
-	it("refuses an envelope that claims 6 and carries no `authoredBy`", () => {
+	it("refuses an envelope that claims 7 and carries no `authoredBy`", () => {
 		const dir = agentDir();
 		const cwd = project();
 		const path = planPath(cwd, dir, "app");
 		mkdirSync(join(path, ".."), { recursive: true });
 		writeFileSync(
 			path,
-			JSON.stringify({ schemaVersion: 6, savedAt: "x", body: plan() }),
+			JSON.stringify({ schemaVersion: 7, savedAt: "x", body: plan() }),
 		);
 		expect(() => makeStore({ agentDir: dir, cwd }).loadPlan("app")).toThrow(
 			/carries no `authoredBy` session and cwd/,
@@ -311,7 +312,7 @@ describe("plans are per project", () => {
 		writeFileSync(
 			join(legacy, "plan.json"),
 			JSON.stringify({
-				schemaVersion: 6,
+				schemaVersion: 7,
 				savedAt: "2026-08-08T00:00:00Z",
 				authoredBy: { sessionId: "old", cwd: "/elsewhere" },
 				body: plan(),
@@ -337,7 +338,7 @@ describe("a plan records who wrote it", () => {
 		expect(
 			JSON.parse(readFileSync(planPath(cwd, dir, "app"), "utf8")),
 		).toMatchObject({
-			schemaVersion: 6,
+			schemaVersion: 7,
 			authoredBy: { sessionId: "sess-42", cwd },
 		});
 		expect(store.loadRecord("app")).toEqual({
@@ -355,7 +356,7 @@ describe("a plan records who wrote it", () => {
 			sessionId: () => undefined,
 		});
 		expect(() => store.savePlan(plan())).toThrow(
-			/schema 6 records who wrote a plan \(`authoredBy.sessionId`\)/,
+			/schema 7 records who wrote a plan \(`authoredBy.sessionId`\)/,
 		);
 		expect(store.list()).toEqual([]);
 	});

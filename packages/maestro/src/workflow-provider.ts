@@ -103,7 +103,8 @@ export interface WorkflowRunReceiptView {
  *
  * The run id and nothing else, because that is all `startBuiltin` promises: it
  * returns as soon as the run exists, before there is a status worth reading,
- * and the run's own `approve-plan` checkpoint is what happens next.
+ * and the run starts working — starting it was the approval, so there is
+ * nothing to park for.
  */
 export interface WorkflowStartReceiptView {
 	readonly runId: string;
@@ -143,7 +144,9 @@ export interface WorkflowReadClient {
 	/**
 	 * Starts `plan-to-ship` for a plan the person just approved, and refuses
 	 * every other ref by name. Validates `input` the way `workflow_run` does,
-	 * returns as soon as the run exists, and the run parks at `approve-plan`.
+	 * returns as soon as the run exists, and the run starts working: the person
+	 * who asked for it has already approved the plan, so the next stop is the
+	 * `ship` decision (or each deliverable, under `every-deliverable`).
 	 * The runtime journals it with origin `"service-provider"`, so a run this
 	 * seat started is never mistaken for one the model started.
 	 */

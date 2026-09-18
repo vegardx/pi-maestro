@@ -8,7 +8,7 @@
 
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { Plan } from "../packages/maestro/src/plan.js";
+import { DEFAULT_GATES, type Plan } from "../packages/maestro/src/plan.js";
 import {
 	canonicalJson,
 	DEFAULT_EFFORT,
@@ -119,6 +119,18 @@ describe("the workflow input", () => {
 			planDigest: planDigest(fixture),
 			effort: DEFAULT_EFFORT,
 		});
+	});
+
+	// v7: the gates travel inside the plan, so what the run is gated by is what
+	// the exit attached — and the exit attaches the default. An approve gate
+	// would be refused by pi-workflow's compile by name, so it must never be
+	// in these bytes at all.
+	it("sends the gates the exit attached, and no approve gate", () => {
+		const planned: Plan = { ...fixture, policy: { gates: DEFAULT_GATES } };
+		const input = toWorkflowInput(planned, "standard");
+		expect(input.plan.policy?.gates).toBe("ship");
+		expect(canonicalJson(input)).toContain('"gates":"ship"');
+		expect(canonicalJson(input)).not.toContain("approve-plan");
 	});
 
 	it("defaults to standard when the author said nothing", () => {

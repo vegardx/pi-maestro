@@ -28,7 +28,7 @@ const EXAMPLE: Plan = {
 	],
 	policy: {
 		effort: "standard",
-		gates: "approve-plan+ship",
+		gates: "ship",
 		maxFixRounds: 1,
 		publish: { mode: "pr", base: "main" },
 	},
@@ -80,7 +80,7 @@ describe("compileStageDocument", () => {
 				},
 			],
 			effort: "standard",
-			gates: "approve-plan+ship",
+			gates: "ship",
 		});
 	});
 
@@ -142,7 +142,8 @@ describe("compileStageDocument", () => {
 			{ use: "implement", id: "implement" },
 			{ use: "verify-and-fix", id: "verify", maxRounds: 1 },
 		]);
-		expect(document.gates).toBe("approve-plan+ship");
+		// No `gates` on the policy: the default is the only human decision left.
+		expect(document.gates).toBe("ship");
 	});
 
 	it("suffixes duplicate lens ids by declaration ordinal", () => {
@@ -174,7 +175,7 @@ describe("compileStageDocument", () => {
 
 	it("renders the graph a human is shown", () => {
 		const rendered = renderStageDocument(compileStageDocument(EXAMPLE));
-		expect(rendered).toContain("effort standard, gates approve-plan+ship");
+		expect(rendered).toContain("effort standard, gates ship");
 		expect(rendered).toContain("verify-and-fix verify — 2 verify rounds");
 		expect(rendered).toContain("contracts/heavy/diverse");
 	});
@@ -189,7 +190,7 @@ describe("validateStageDocument", () => {
 		const problems = validateStageDocument({
 			deliverables: [{ id: "one", stages: [{ use: "nope", id: "x" }] }],
 			effort: "standard",
-			gates: "approve-plan+ship",
+			gates: "ship",
 			extra: true,
 		});
 		expect(problems.length).toBeGreaterThan(0);
@@ -200,10 +201,21 @@ describe("validateStageDocument", () => {
 			validateStageDocument({
 				deliverables: [],
 				effort: "cheap",
-				gates: "approve-plan",
+				gates: "ship",
 			}).length,
 		).toBeGreaterThan(0);
 	});
+
+	// v7: the approve gate is gone from the vocabulary, and the mirror is where
+	// a document carrying it stops — before it is shown, reviewed, or sent.
+	it.each(["approve-plan", "approve-plan+ship"])(
+		"refuses `%s`, which no longer names a gate policy",
+		(gates) => {
+			expect(
+				validateStageDocument({ ...compileStageDocument(EXAMPLE), gates }),
+			).not.toEqual([]);
+		},
+	);
 });
 
 describe("planWithStageDocument", () => {
@@ -263,7 +275,7 @@ describe("planWithStageDocument", () => {
 		const { plan, problems } = planWithStageDocument(EXAMPLE, {
 			deliverables: [{ id: "other", stages: [] }],
 			effort: "standard",
-			gates: "approve-plan+ship",
+			gates: "ship",
 		});
 		expect(plan).toBeUndefined();
 		expect(problems.join("\n")).toContain("`other` is not a deliverable");

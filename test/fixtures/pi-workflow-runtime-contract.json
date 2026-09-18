@@ -1,6 +1,6 @@
 {
 	"schema": "pi-workflow-runtime",
-	"contractRevision": 19,
+	"contractRevision": 20,
 	"requiredSubagent": {
 		"schema": "pi-subagent-runtime",
 		"contractRevision": 7,

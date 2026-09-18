@@ -10,7 +10,6 @@
 // before the digest is checked, and nothing is pushed after anything fails.
 
 import { describe, expect, it } from "vitest";
-import { publicationFile } from "../packages/maestro/src/paths.js";
 import type { Plan, PublishMode } from "../packages/maestro/src/plan.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import {
@@ -28,9 +27,23 @@ import {
 	watchShippedRuns,
 } from "../packages/maestro/src/publish.js";
 import type { AuditedBash } from "../packages/maestro/src/readiness.js";
+import { createPlanStore } from "../packages/maestro/src/store.js";
 
 const AGENT_DIR = "/agent";
+const PROJECT = "/work/demo-project";
 const REPO = "/repo";
+
+/**
+ * The real store, asked only where a receipt goes. Nothing here touches a
+ * filesystem — the store is never saved to, and every read and write below
+ * goes through the fake `files` map — but the PATH is the real one, keyed by
+ * project, because that is the thing being asserted.
+ */
+const planStore = createPlanStore({
+	cwd: PROJECT,
+	agentDir: AGENT_DIR,
+});
+const receiptPath = planStore.publicationFile("demo");
 const WHEN = new Date(2026, 8, 17, 8, 30);
 const BRANCH = "pi-maestro/demo/20260917-0830";
 
@@ -272,13 +285,28 @@ function deps(overrides: Partial<Parameters<typeof publishPlan>[0]> = {}) {
 		provider: { inspect: async () => taskShaped(digest) },
 		bash: recorder().bash,
 		ui: ui().ui,
-		agentDir: AGENT_DIR,
+		store: planStore,
 		files: checkable(),
 		now: () => WHEN,
 		ghPresent: () => true,
 		...overrides,
 	};
 }
+
+// The receipt belongs beside the plan, and where the plan is is now a question
+// about a project. A publication that joined its own path from `agentDir` would
+// write receipts into a directory no `/plan list` ever reads again.
+describe("the receipt goes under this project's plan directory", () => {
+	it("asks the store rather than building the path", async () => {
+		const store = checkable();
+		const published = await publishPlan(deps({ files: store }));
+		expect(published.ok).toBe(true);
+		expect(receiptPath).toBe(
+			`${AGENT_DIR}/maestro/plans/--work-demo-project--/demo/publication.json`,
+		);
+		expect(store.store.get(receiptPath)).toBeDefined();
+	});
+});
 
 describe("readReceipt", () => {
 	it("reads the digest and the handoffs off the run's committed output", () => {
@@ -629,7 +657,7 @@ describe("publishPlan", () => {
 		expect(reporter.confirms).toEqual(["Push and open a pull request?"]);
 		expect(published.prUrl).toBe("https://github.com/o/r/pull/7");
 
-		const written = store.store.get(publicationFile("demo", AGENT_DIR));
+		const written = store.store.get(receiptPath);
 		expect(written).toBeDefined();
 		const entries = JSON.parse(written as string) as PublicationRecord[];
 		expect(entries).toHaveLength(1);
@@ -697,7 +725,7 @@ describe("publishPlan", () => {
 		expect(bash.commands.some((command) => command.includes("push"))).toBe(
 			false,
 		);
-		expect(store.store.get(publicationFile("demo", AGENT_DIR))).toBeUndefined();
+		expect(store.store.get(receiptPath)).toBeUndefined();
 		expect(reporter.confirms).toEqual([]);
 	});
 
@@ -715,7 +743,7 @@ describe("publishPlan", () => {
 			false,
 		);
 		expect(reporter.confirms).toEqual([]);
-		expect(store.store.get(publicationFile("demo", AGENT_DIR))).toBeUndefined();
+		expect(store.store.get(receiptPath)).toBeUndefined();
 	});
 
 	it("stops before the push when the repository names no check", async () => {
@@ -755,7 +783,7 @@ describe("publishPlan", () => {
 		expect(reporter.notices[0]?.message).toContain("`gh` is not on PATH");
 		expect(reporter.confirms).toEqual(["Push this branch?"]);
 		const entries = JSON.parse(
-			store.store.get(publicationFile("demo", AGENT_DIR)) as string,
+			store.store.get(receiptPath) as string,
 		) as PublicationRecord[];
 		expect(entries[0].mode).toBe("branch");
 	});
@@ -773,7 +801,7 @@ describe("publishPlan", () => {
 		expect(bash.commands.some((command) => command.includes("push"))).toBe(
 			false,
 		);
-		expect(store.store.get(publicationFile("demo", AGENT_DIR))).toBeUndefined();
+		expect(store.store.get(receiptPath)).toBeUndefined();
 	});
 
 	it("refuses a plan whose deliverables span two repositories", async () => {
@@ -817,7 +845,7 @@ describe("publishPlan", () => {
 		expect(second.ok).toBe(true);
 
 		const entries = JSON.parse(
-			store.store.get(publicationFile("demo", AGENT_DIR)) as string,
+			store.store.get(receiptPath) as string,
 		) as PublicationRecord[];
 		expect(entries).toHaveLength(2);
 		expect(entries[0].branch).toBe(BRANCH);
@@ -827,12 +855,10 @@ describe("publishPlan", () => {
 
 	it("refuses to overwrite a publication file it cannot read", async () => {
 		const store = checkable();
-		store.store.set(publicationFile("demo", AGENT_DIR), "{not json");
+		store.store.set(receiptPath, "{not json");
 		const published = await publishPlan(deps({ files: store }));
 		expect(published.stoppedAt).toBe("record");
-		expect(store.store.get(publicationFile("demo", AGENT_DIR))).toBe(
-			"{not json",
-		);
+		expect(store.store.get(receiptPath)).toBe("{not json");
 	});
 });
 
@@ -881,7 +907,7 @@ describe("shipPlan", () => {
 			},
 			bash: recorder().bash,
 			ui: reporter.ui,
-			agentDir: AGENT_DIR,
+			store: planStore,
 			files: checkable(),
 			now: () => WHEN,
 			ghPresent: () => true,
@@ -903,7 +929,7 @@ describe("shipPlan", () => {
 			},
 			bash: bash.bash,
 			ui: reporter.ui,
-			agentDir: AGENT_DIR,
+			store: planStore,
 			files: checkable(),
 			now: () => WHEN,
 			ghPresent: () => true,

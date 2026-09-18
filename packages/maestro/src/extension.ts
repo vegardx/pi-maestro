@@ -16,7 +16,6 @@ import {
 	type ToolResultContext,
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
-import { workflowInputFile } from "./paths.js";
 import { type PendingExit, readPendingExit } from "./pending-exit.js";
 import {
 	inspectPlan,
@@ -518,7 +517,9 @@ export function startSeat(
 			// top of a dialog Pi or another extension already has open.
 			ui: gatedPublishUI(ctx.ui, gate),
 			workflowRef: PLAN_WORKFLOW_REF,
-			...(options.agentDir ? { agentDir: options.agentDir } : {}),
+			// The receipt goes beside the plan, and the store is what knows where
+			// that is now that its root is keyed by project.
+			store: seat().store,
 			...(runId ? { runId } : {}),
 			...(how.requireShipDecision ? { requireShipDecision: true } : {}),
 		});
@@ -530,7 +531,6 @@ export function startSeat(
 		get store() {
 			return seat().store;
 		},
-		inputPath: (slug) => workflowInputFile(slug, options.agentDir),
 		// `/plan`'s handler passes the whole command context through; `PlanShip`
 		// narrows it to `ui` and `hasUI` so a test can hand over a fake, not
 		// because the value here is ever less than a session context.

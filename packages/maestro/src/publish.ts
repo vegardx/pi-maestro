@@ -50,7 +50,6 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { publicationFile } from "./paths.js";
 import {
 	type Plan,
 	type PlanRepo,
@@ -59,6 +58,7 @@ import {
 } from "./plan.js";
 import { planDigest } from "./plan-input.js";
 import { type AuditedBash, ghOnPath } from "./readiness.js";
+import type { PlanStore } from "./store.js";
 import type {
 	WorkflowReadClient,
 	WorkflowRunObservationView,
@@ -714,6 +714,13 @@ export interface PublicationRecord {
 	readonly prUrl?: string;
 }
 
+/**
+ * The store, narrowed to the question publication asks it: where does this
+ * plan's receipt file go? A `Pick` rather than the whole store, because
+ * publication reads no plan from disk — it is handed the one it publishes.
+ */
+export type PlanPaths = Pick<PlanStore, "publicationFile">;
+
 export interface PublishDeps {
 	readonly slug: string;
 	readonly plan: Plan;
@@ -722,7 +729,15 @@ export interface PublishDeps {
 	/** The seat's audited Bash tool. Every command below goes through it. */
 	readonly bash: AuditedBash;
 	readonly ui: PublishUI;
-	readonly agentDir?: string;
+	/**
+	 * This project's plan store, narrowed to the one path this file needs.
+	 *
+	 * ASKED, NOT JOINED. The receipt belongs beside the plan, and where the plan
+	 * is is the store's answer now that its root is keyed by project — a join
+	 * from `agentDir` here would write receipts into a directory no `/plan list`
+	 * ever reads.
+	 */
+	readonly store: PlanPaths;
 	readonly files?: PublishFiles;
 	readonly now?: () => Date;
 	/** `gh --version`; `pr` degrades to `branch` when it says no. */
@@ -1097,7 +1112,7 @@ export async function publishPlan(deps: PublishDeps): Promise<Publication> {
 		})),
 		...(prUrl ? { prUrl } : {}),
 	};
-	const path = publicationFile(deps.slug, deps.agentDir);
+	const path = deps.store.publicationFile(deps.slug);
 	const appended = appendPublication(path, record, files);
 	if (!appended.ok)
 		return stop(ui, commands, "record", appended.reason, {
@@ -1161,11 +1176,11 @@ export function appendPublication(
 
 /** Every publication receipt stored for a slug, oldest first. */
 export function readPublications(
+	store: PlanPaths,
 	slug: string,
-	agentDir?: string,
 	files: PublishFiles = nodeFiles,
 ): readonly PublicationRecord[] {
-	const text = files.readText(publicationFile(slug, agentDir));
+	const text = files.readText(store.publicationFile(slug));
 	if (!text) return [];
 	try {
 		const parsed = JSON.parse(text);

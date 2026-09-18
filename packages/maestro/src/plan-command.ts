@@ -138,10 +138,10 @@ export function renderPlanList(
 	}[],
 ): string {
 	if (summaries.length === 0)
-		return "No stored plans. The `plan` tool writes one.";
+		return "No stored plans for this project. The `plan` tool writes one.";
 	const width = Math.max(...summaries.map((s) => s.slug.length));
 	return [
-		`${summaries.length} stored plan${summaries.length === 1 ? "" : "s"}:`,
+		`${summaries.length} stored plan${summaries.length === 1 ? "" : "s"} for this project:`,
 		...summaries.map(
 			(s) =>
 				`  ${s.slug.padEnd(width)}  ${s.title}` +
@@ -303,9 +303,13 @@ export type PlanShip = (
 ) => Promise<Publication>;
 
 export interface PlanCommandDeps {
+	/**
+	 * This project's plans. Every path this command writes comes off it —
+	 * `workflowInputFile` rather than a join of its own — because the store's
+	 * root is keyed by project and a join made here would be a second answer to
+	 * "which project is this?".
+	 */
 	readonly store: PlanStore;
-	/** Where the exported workflow input for a slug belongs. */
-	readonly inputPath: (slug: string) => string;
 	/** @see PlanShip */
 	readonly ship?: PlanShip;
 	/**
@@ -341,7 +345,7 @@ function usage(problem?: string): PlanCommandOutcome {
 function unknownSlug(slug: string): PlanCommandOutcome {
 	return {
 		level: "warning",
-		message: `No stored plan \`${slug}\`. \`/plan list\` shows what there is.`,
+		message: `No stored plan \`${slug}\` in this project. \`/plan list\` shows what there is.`,
 	};
 }
 
@@ -379,7 +383,7 @@ export async function runPlanCommand(
 			const plan = deps.store.loadPlan(command.slug);
 			if (!plan) return unknownSlug(command.slug);
 			const input = toWorkflowInput(plan, command.effort);
-			const path = deps.inputPath(plan.slug);
+			const path = deps.store.workflowInputFile(plan.slug);
 			const json = `${JSON.stringify(input, null, 2)}`;
 			mkdirSync(dirname(path), { recursive: true });
 			writeFileSync(path, `${json}\n`, "utf8");

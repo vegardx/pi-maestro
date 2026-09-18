@@ -69,7 +69,6 @@ import {
 	walkFindings,
 } from "./findings.js";
 import type { ExitMode, ModeName } from "./mode.js";
-import { workflowInputFile } from "./paths.js";
 import {
 	deletePendingExit,
 	MAX_INTENT_LENGTH,
@@ -1404,7 +1403,10 @@ export function backToConversation(
 // ── The flow ─────────────────────────────────────────────────────────────────
 
 /** The plan store, narrowed to what phase 2 reads and writes. */
-export type ExitPlanStore = Pick<PlanStore, "loadPlan" | "savePlan">;
+export type ExitPlanStore = Pick<
+	PlanStore,
+	"loadPlan" | "savePlan" | "workflowInputFile"
+>;
 
 /**
  * What phase 2 is handed when the model's `plan` call stores a document.
@@ -1442,7 +1444,12 @@ export interface ExitFlowPhase2 {
 		content: string,
 		options?: { readonly deliverAs?: "steer" | "followUp" },
 	) => void;
-	/** Where the exported run input goes; defaults to `workflowInputFile`. */
+	/**
+	 * Where the exported run input goes; defaults to the store's own
+	 * `workflowInputFile`, which is the only thing that knows where this
+	 * project's plans are. A default computed from `agentDir` here would have to
+	 * guess the project key and would export into a directory nothing reads.
+	 */
 	readonly inputPath?: (slug: string) => string;
 	/** How the run input is exported. Injected so a test writes nowhere. */
 	readonly writeInput?: (path: string, json: string) => void;
@@ -1568,7 +1575,9 @@ export async function runExitFlowPhase2(
 			return refuse(
 				`The stored plan \`${slug}\` cannot be read back, so the exit stops here.`,
 			);
-		let plan = deps.store.loadPlan(slug);
+		// Captured so the closures below keep the narrowing this guard made.
+		const store = deps.store;
+		let plan = store.loadPlan(slug);
 		if (!plan)
 			return refuse(
 				`\`${slug}\` was reported stored and is not in the plan store, so the exit stops here.`,
@@ -1865,7 +1874,7 @@ export async function runExitFlowPhase2(
 
 		// ── 19 — the hand-off, made by the model, in the open ────────────────
 		const path = (
-			deps.inputPath ?? ((s: string) => workflowInputFile(s, deps.agentDir))
+			deps.inputPath ?? ((s: string) => store.workflowInputFile(s))
 		)(plan.slug);
 		const json = JSON.stringify(input, null, 2);
 		try {

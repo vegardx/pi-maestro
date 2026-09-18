@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { projectKey, projectPlansRoot } from "../packages/maestro/src/paths.js";
 import {
 	MAESTRO_SCHEMA_VERSION,
 	type Plan,
@@ -9,6 +10,8 @@ import {
 import {
 	createPlanStore,
 	InvalidStateError,
+	type PlanStore,
+	type StoreOptions,
 	UnsupportedStateError,
 } from "../packages/maestro/src/store.js";
 import { fakeHost } from "./fake-host.js";
@@ -19,10 +22,31 @@ afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
 });
 
-function root(): string {
+/**
+ * A temporary agent directory. EVERY store below is built on one: a test that
+ * fell through to the real `~/.pi/agent` would file its fixtures next to the
+ * operator's own plans, and `list` would start reporting on them.
+ */
+function agentDir(): string {
 	const path = join(tmpdir(), `maestro-store-${process.pid}-${roots.length}`);
 	roots.push(path);
 	return path;
+}
+
+/** The project a store is keyed by; never touched, only named. */
+function project(name = "alpha"): string {
+	return join(tmpdir(), `maestro-project-${process.pid}`, name);
+}
+
+function makeStore(
+	options: Partial<StoreOptions> & { readonly agentDir: string },
+): PlanStore {
+	return createPlanStore({ cwd: options.cwd ?? project(), ...options });
+}
+
+/** Where a store's files land, computed the way nothing under test does. */
+function planPath(cwd: string, dir: string, slug: string): string {
+	return join(projectPlansRoot(cwd, dir), slug, "plan.json");
 }
 
 function plan(slug = "app"): Plan {
@@ -45,7 +69,8 @@ function plan(slug = "app"): Plan {
 
 describe("plan store", () => {
 	it("round-trips, lists, replaces, and removes plans", () => {
-		const store = createPlanStore(root(), {
+		const store = makeStore({
+			agentDir: agentDir(),
 			now: () => "2026-08-08T00:00:00Z",
 		});
 		store.savePlan(plan());
@@ -65,11 +90,12 @@ describe("plan store", () => {
 	});
 
 	it("writes the version this build speaks, and reads it back", () => {
-		const state = root();
-		const store = createPlanStore(state);
+		const dir = agentDir();
+		const cwd = project();
+		const store = makeStore({ agentDir: dir, cwd });
 		store.savePlan(plan());
 		const written = JSON.parse(
-			readFileSync(join(state, "app", "plan.json"), "utf8"),
+			readFileSync(planPath(cwd, dir, "app"), "utf8"),
 		) as { schemaVersion: number };
 		expect(written.schemaVersion).toBe(5);
 		expect(MAESTRO_SCHEMA_VERSION).toBe(5);
@@ -80,9 +106,10 @@ describe("plan store", () => {
 	// names both versions and what changed between them — "unsupported" alone
 	// leaves a human with a file and no idea what to do with it.
 	it("refuses a version 4 envelope by naming both versions", () => {
-		const state = root();
-		mkdirSync(join(state, "app"), { recursive: true });
-		const path = join(state, "app", "plan.json");
+		const dir = agentDir();
+		const cwd = project();
+		const path = planPath(cwd, dir, "app");
+		mkdirSync(join(path, ".."), { recursive: true });
 		writeFileSync(
 			path,
 			JSON.stringify({
@@ -91,20 +118,22 @@ describe("plan store", () => {
 				body: plan(),
 			}),
 		);
-		const store = createPlanStore(state);
+		const store = makeStore({ agentDir: dir, cwd });
 		expect(() => store.loadPlan("app")).toThrow(
 			`${path} was written by schema 4, and this build speaks 5. Schema 5 moved review routing from \`tasks[].review\` to \`deliverables[].reviews\` and dropped \`stages\`, and there is no migration. Archive or remove the plan and write it again at schemaVersion 5.`,
 		);
 		// Refused, never rewritten: a store that quietly re-stamped the version
 		// would be a migration nobody wrote.
 		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":4');
+		// And it is absent from the list rather than fatal to it.
+		expect(store.list()).toEqual([]);
 	});
 
 	// A task carrying an earlier version's review field inside a version 5 body.
 	// The envelope cannot catch this one — the document says 5 — so validation
 	// does, and it names both the field and where the thing went.
 	it("refuses a task that still carries `by`", () => {
-		const store = createPlanStore(root());
+		const store = makeStore({ agentDir: agentDir() });
 		const withBy = {
 			...plan(),
 			deliverables: [
@@ -137,7 +166,8 @@ describe("plan store", () => {
 					},
 				],
 			}) as Plan;
-		const store = createPlanStore(root(), {
+		const store = makeStore({
+			agentDir: agentDir(),
 			host: () => fakeHost({ models: ["anthropic/opus-5"] }),
 		});
 		expect(() => store.savePlan(pinned("anthropic/opus-9"))).toThrow(
@@ -152,7 +182,7 @@ describe("plan store", () => {
 	// FAIL CLOSED. A store with no host cannot check a pin, so it refuses one
 	// rather than persisting what nothing verified.
 	it("refuses a pinned review model when it has no host to ask", () => {
-		const store = createPlanStore(root());
+		const store = makeStore({ agentDir: agentDir() });
 		expect(() =>
 			store.savePlan({
 				...plan(),
@@ -169,7 +199,7 @@ describe("plan store", () => {
 	});
 
 	it("refuses invalid plans before writing", () => {
-		const store = createPlanStore(root());
+		const store = makeStore({ agentDir: agentDir() });
 		expect(() => store.savePlan({ ...plan(), slug: "../escape" })).toThrow(
 			InvalidStateError,
 		);
@@ -177,14 +207,94 @@ describe("plan store", () => {
 	});
 
 	it("fails closed on corrupt or incompatible stored state", () => {
-		const state = root();
-		mkdirSync(join(state, "app"), { recursive: true });
-		const path = join(state, "app", "plan.json");
+		const dir = agentDir();
+		const cwd = project();
+		const path = planPath(cwd, dir, "app");
+		mkdirSync(join(path, ".."), { recursive: true });
 		writeFileSync(path, "not json\n");
-		const store = createPlanStore(state);
+		const store = makeStore({ agentDir: dir, cwd });
 		expect(() => store.loadPlan("app")).toThrow(/not readable JSON/);
 		writeFileSync(path, JSON.stringify({ schemaVersion: 1, body: plan() }));
 		expect(() => store.loadPlan("app")).toThrow(UnsupportedStateError);
 		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":1');
+	});
+});
+
+describe("plans are per project", () => {
+	// THE PIN. Pi encodes a cwd into its sessions directory name in
+	// `core/session-manager.js`; it does not export the function, so this is the
+	// only thing holding the two spellings together. If Pi's changes, this fails
+	// and someone has to look — which is the point.
+	it("keys a project exactly the way Pi keys its sessions directory", () => {
+		expect(projectKey("/Users/x/src/proj")).toBe("--Users-x-src-proj--");
+		// The formula, applied as Pi applies it: leading separator dropped, every
+		// remaining separator and colon becomes `-`, wrapped in `--`.
+		expect(projectKey("/a/b")).toBe("--a-b--");
+		// Relative paths are resolved first, exactly as Pi's `resolvePath` does.
+		expect(projectKey(".")).toBe(projectKey(process.cwd()));
+	});
+
+	it("puts a project's plans under its own key", () => {
+		const dir = agentDir();
+		const cwd = project("alpha");
+		const store = makeStore({ agentDir: dir, cwd });
+		expect(store.root).toBe(join(dir, "maestro", "plans", projectKey(cwd)));
+		expect(store.cwd).toBe(cwd);
+		store.savePlan(plan());
+		expect(store.planFile("app")).toBe(planPath(cwd, dir, "app"));
+		expect(readFileSync(store.planFile("app"), "utf8")).toContain('"app"');
+	});
+
+	// The defect this replaced: one directory of plans from unrelated
+	// repositories, listed everywhere.
+	it("shows one project nothing of another's, in one agent directory", () => {
+		const dir = agentDir();
+		const alpha = makeStore({ agentDir: dir, cwd: project("alpha") });
+		const beta = makeStore({ agentDir: dir, cwd: project("beta") });
+		alpha.savePlan({ ...plan("shared"), title: "Alpha's" });
+		beta.savePlan({ ...plan("shared"), title: "Beta's" });
+		beta.savePlan(plan("beta-only"));
+
+		expect(alpha.list().map((s) => s.slug)).toEqual(["shared"]);
+		expect(
+			beta
+				.list()
+				.map((s) => s.slug)
+				.sort(),
+		).toEqual(["beta-only", "shared"]);
+		// The same slug in two projects is two plans, not one overwritten.
+		expect(alpha.loadPlan("shared")?.title).toBe("Alpha's");
+		expect(beta.loadPlan("shared")?.title).toBe("Beta's");
+		expect(alpha.loadPlan("beta-only")).toBeNull();
+		expect(alpha.planFile("shared")).not.toBe(beta.planFile("shared"));
+	});
+
+	// A project nobody has stored a plan for is the normal first case, and an
+	// empty list is the honest answer to it.
+	it("lists nothing, and does not throw, where no plans folder exists", () => {
+		const store = makeStore({ agentDir: agentDir(), cwd: project("fresh") });
+		expect(store.list()).toEqual([]);
+		expect(store.loadPlan("app")).toBeNull();
+		expect(store.exists("app")).toBe(false);
+	});
+
+	// Plans written before the key existed live directly under `plans/<slug>`.
+	// They are not read, not listed and not migrated.
+	it("ignores plans left directly under the plans root", () => {
+		const dir = agentDir();
+		const cwd = project("alpha");
+		const legacy = join(dir, "maestro", "plans", "app");
+		mkdirSync(legacy, { recursive: true });
+		writeFileSync(
+			join(legacy, "plan.json"),
+			JSON.stringify({
+				schemaVersion: 5,
+				savedAt: "2026-08-08T00:00:00Z",
+				body: plan(),
+			}),
+		);
+		const store = makeStore({ agentDir: dir, cwd });
+		expect(store.list()).toEqual([]);
+		expect(store.loadPlan("app")).toBeNull();
 	});
 });

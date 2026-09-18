@@ -4,6 +4,11 @@
 // rejects. A store that will happily persist a broken plan is a store that
 // turns an authoring bug into a run-time mystery days later — every serious
 // defect in the old system had that shape.
+//
+// ONE STORE IS ONE PROJECT. The root is `plans/<project key>`, the key Pi gives
+// that cwd's sessions directory, so `list` answers about the repository the
+// person is standing in and a slug is unique inside it rather than across every
+// repository they have ever run maestro in.
 
 import {
 	existsSync,
@@ -15,7 +20,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { PLAN_FILE } from "./paths.js";
+import {
+	PLAN_FILE,
+	PUBLICATION_FILE,
+	projectPlansRoot,
+	WORKFLOW_INPUT_FILE,
+} from "./paths.js";
 import {
 	MAESTRO_SCHEMA_VERSION,
 	type Plan,
@@ -83,18 +93,44 @@ export interface PlanSummary {
 }
 
 export interface PlanStore {
+	/** `<agentDir>/maestro/plans/<project key>` — THIS project's plans. */
 	readonly root: string;
+	/** The project, resolved once at construction. */
+	readonly cwd: string;
 	exists(slug: string): boolean;
 	/** Throws `UnsupportedStateError` if a file exists but speaks another schema. */
 	loadPlan(slug: string): Plan | null;
 	savePlan(plan: Plan): void;
 	/** The plan and its directory. */
 	remove(slug: string): void;
-	/** Most recently saved first. */
+	/** Most recently saved first. This project only. */
 	list(): PlanSummary[];
+	/**
+	 * Where a plan's files are. The ONLY answer to that question.
+	 *
+	 * Publication and the run export both need a path beside the plan, and both
+	 * used to join one from `agentDir` themselves. With the root keyed by
+	 * project that is no longer a duplicated join but a different directory, so
+	 * the joins live here, next to the root they are joined to.
+	 */
+	planDir(slug: string): string;
+	planFile(slug: string): string;
+	workflowInputFile(slug: string): string;
+	publicationFile(slug: string): string;
 }
 
 export interface StoreOptions {
+	/**
+	 * The project whose plans this store holds. Required, and resolved here.
+	 *
+	 * Nothing below reads `process.cwd()`: a store that found its own project
+	 * would answer differently depending on where the process happened to be
+	 * standing, and the seat, the tests and a future run directory all have to
+	 * agree on one project per store.
+	 */
+	readonly cwd: string;
+	/** Injected by tests, so no test writes into the real agent directory. */
+	readonly agentDir?: string;
 	/** Injected so tests do not have to reason about wall-clock time. */
 	readonly now?: () => string;
 	/**
@@ -111,19 +147,18 @@ export interface StoreOptions {
 }
 
 /** Persistence metadata lives out here, so `Plan` and `Run` stay free of it. */
-interface Envelope<T> {
+interface Envelope {
 	readonly schemaVersion: number;
 	readonly savedAt: string;
-	readonly body: T;
+	readonly body: Plan;
 }
 
 let writeCounter = 0;
 
-export function createPlanStore(
-	root: string,
-	options: StoreOptions = {},
-): PlanStore {
+export function createPlanStore(options: StoreOptions): PlanStore {
 	const now = options.now ?? (() => new Date().toISOString());
+	const cwd = resolve(options.cwd);
+	const root = projectPlansRoot(cwd, options.agentDir);
 
 	function dir(slug: string): string {
 		if (!SLUG_RE.test(slug))
@@ -144,7 +179,7 @@ export function createPlanStore(
 		return join(dir(slug), PLAN_FILE);
 	}
 
-	function read<T>(path: string): T | null {
+	function read(path: string): Envelope | null {
 		if (!existsSync(path)) return null;
 		let value: unknown;
 		try {
@@ -154,7 +189,7 @@ export function createPlanStore(
 			// and answering `null` to a corrupt file would silently start over.
 			throw new StoreError(`${path} is not readable JSON`);
 		}
-		const envelope = value as Partial<Envelope<T>> | null;
+		const envelope = value as Partial<Envelope> | null;
 		if (
 			typeof envelope !== "object" ||
 			envelope === null ||
@@ -166,12 +201,16 @@ export function createPlanStore(
 					"missing",
 				path,
 			);
-		return envelope.body as T;
+		return {
+			schemaVersion: envelope.schemaVersion,
+			savedAt: typeof envelope.savedAt === "string" ? envelope.savedAt : "",
+			body: envelope.body as Plan,
+		};
 	}
 
-	function write<T>(path: string, body: T): void {
+	function write(path: string, body: Plan): void {
 		mkdirSync(join(path, ".."), { recursive: true });
-		const envelope: Envelope<T> = {
+		const envelope: Envelope = {
 			schemaVersion: MAESTRO_SCHEMA_VERSION,
 			savedAt: now(),
 			body,
@@ -183,21 +222,20 @@ export function createPlanStore(
 		renameSync(tmp, path);
 	}
 
-	function savedAtOf(slug: string): string | null {
-		const path = file(slug);
-		if (!existsSync(path)) return null;
-		try {
-			const value = JSON.parse(readFileSync(path, "utf8")) as {
-				savedAt?: unknown;
-			};
-			return typeof value.savedAt === "string" ? value.savedAt : null;
-		} catch {
-			return null;
-		}
-	}
-
 	return {
 		root,
+		cwd,
+
+		planDir: dir,
+		planFile: file,
+
+		workflowInputFile(slug) {
+			return join(dir(slug), WORKFLOW_INPUT_FILE);
+		},
+
+		publicationFile(slug) {
+			return join(dir(slug), PUBLICATION_FILE);
+		},
 
 		exists(slug) {
 			return SLUG_RE.test(slug) && existsSync(file(slug));
@@ -205,7 +243,7 @@ export function createPlanStore(
 
 		loadPlan(slug) {
 			if (!SLUG_RE.test(slug)) return null;
-			return read<Plan>(file(slug));
+			return read(file(slug))?.body ?? null;
 		},
 
 		savePlan(plan) {
@@ -227,21 +265,21 @@ export function createPlanStore(
 				// store wrote, so it is not one. That subsumes every convention
 				// the old store needed a separate rule for.
 				if (!SLUG_RE.test(entry.name)) continue;
-				let plan: Plan | null;
+				let envelope: Envelope | null;
 				try {
-					plan = this.loadPlan(entry.name);
+					envelope = read(file(entry.name));
 				} catch {
 					// One unreadable plan must not make the list unusable — that is
 					// the difference between "one plan is broken" and "maestro will
 					// not start". It is absent from the list, not fatal to it.
 					continue;
 				}
-				if (!plan) continue;
+				if (!envelope) continue;
 				out.push({
-					slug: plan.slug,
-					title: plan.title,
-					deliverables: plan.deliverables.length,
-					savedAt: savedAtOf(entry.name) ?? "",
+					slug: envelope.body.slug,
+					title: envelope.body.title,
+					deliverables: envelope.body.deliverables.length,
+					savedAt: envelope.savedAt,
 				});
 			}
 			return out.sort((a, b) => b.savedAt.localeCompare(a.savedAt));

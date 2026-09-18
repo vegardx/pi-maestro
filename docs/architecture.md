@@ -141,7 +141,9 @@ starts runs there themselves — see [Modes](commands.md#modes).
 
 ## Plans
 
-The `plan` tool stores repository-qualified authored intent:
+The plan-mode exit asks the session's own model for a plan document — directly,
+outside Pi's agent loop, with no tools offered — validates it, and stores
+repository-qualified authored intent:
 
 ```text
 <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
@@ -155,8 +157,9 @@ one project's `/plan list` never shows another's. The envelope records
 A plan contains repositories, deliverables, ordering, read dependencies, the
 tasks that are the work, and the reviews that read that work when it is done.
 It also carries the policy the run follows — effort, gates, publication — which
-the seat attaches from the decisions a human made on the way out of plan mode,
-never the model. How each deliverable is run is derived from those three things
+the harness attaches from the decisions a human made on the way out of plan
+mode, never the model; the schema has no field for any of it. Writing a plan is
+not a tool call, so there is no plan-authoring tool in any posture. How each deliverable is run is derived from those three things
 and is not written down. Pi-maestro validates and stores this vocabulary but
 does not execute it. `/plan run <slug>` builds the workflow input
 and hands the session the `workflow_run { ref: "plan-to-ship", input }` call to

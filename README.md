@@ -41,8 +41,9 @@ pushes, pull requests, checks, and checked rebase merges.
 /mode [plan|auto|hack]
 ```
 
-The `plan` tool stores authored intent under the Pi agent directory. Stored plans
-are not executable until the owned workflow extension is introduced.
+Leaving plan mode asks the session's own model for a plan document and stores
+the authored intent under the Pi agent directory. Stored plans are not
+executable until the owned workflow extension is introduced.
 
 See [commands](docs/commands.md), [usage](docs/usage.md), and
 [architecture](docs/architecture.md).

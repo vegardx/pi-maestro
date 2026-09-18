@@ -54,9 +54,10 @@ compiled document, never by the author of the plan.
 
 ## Planning
 
-Planning remains a conversation. The `plan` tool writes the complete authored
-plan after requirements, repositories, dependencies, implementation work, and
-review intent are understood.
+Planning remains a conversation. The complete plan document is written on the
+way out of plan mode, by the harness — it asks the session's own model for it
+directly — once requirements, repositories, dependencies, implementation work
+and review intent are understood.
 
 Plans are validated and stored per project, under the cwd encoded the way Pi
 encodes its own sessions directory (`/Users/x/src/proj` → `--Users-x-src-proj--`):
@@ -79,40 +80,55 @@ audited Bash work and never the runtime's. See
 
 ## Leaving plan mode with a run
 
-Switching out of `plan` mode when there is a conversation but no plan is a flow
-split by two model turns, because a dialog sequence cannot obtain anything from
-a conversation:
+Switching out of `plan` mode when there is a conversation but no plan runs the
+exit. It is **one flow**, inside the `/mode` call: the two things only the model
+can write — the description and the document — are requested by the harness
+directly, as ordinary completions outside Pi's agent loop, with the session's
+own history as context and **no tools offered at all**. It used to be a steer
+and a tool call each; four by-hand passes failed at that, because a steer is a
+request a model may interpret.
 
-1. **Two dialogs, in the `/mode` handler.** Compile the conversation into a
-   workflow run, just switch, or keep planning; then how much effort the run may
-   spend. That is all that is asked. Gates take their default, and publication
-   and the base branch are derived from the repository and announced. The
-   answers are recorded — and **the mode does not change**.
-2. **The description.** The model writes two or three sentences saying what we
-   are doing and why, and submits them with `plan_intent`. One dialog agrees,
-   edits, or sends you back to the conversation. The agreed text is what the
-   blind reviewer checks the plan against, and it is what opens the `plan`
-   tool's window — which is the only moment `plan` exists in plan mode.
-3. **The model turn.** The model calls `plan` with the whole document: the
+1. **Two dialogs.** Compile the conversation into a workflow run, just switch,
+   or keep planning; then how much effort the run may spend. That is all that is
+   asked. Gates take their default, and publication and the base branch are
+   derived from the repository and announced. **The mode does not change.**
+2. **The description.** The harness asks the model for two or three sentences
+   saying what we are doing and why. One dialog agrees, edits, or sends you back
+   to the conversation. The agreed text is what the blind reviewer checks the
+   plan against, which is why it exists before the document does.
+3. **The document.** The harness asks for the whole plan as one JSON object: the
    deliverables, the `tasks` that are the work, and the `reviews` that read that
-   work. The recorded answers are not its to write — the seat attaches them as
-   the plan's `policy`, so the choices are part of the document that gets
-   validated, digested and reviewed without the author transcribing them.
-4. **The second half, when the plan stores.** Readiness on every repository the
-   plan names; every heavy review gets `diverse: true` written into the
-   stored plan so both compilers agree; compilation with a budget projection; an
-   optional blind review of the compiled graph, with an editor behind it for
-   changing reviewers; the findings walk; and one confirmation. That last *yes*
-   is where the posture finally becomes the one asked for in step 1. The run
-   itself is still the model's `workflow_run` call, in the open, in the
-   transcript — the flow never starts it behind the session's back.
+   work. The answers from step 1 are not the model's to write — the harness
+   attaches them as the plan's `policy`, so the choices are part of the document
+   that gets validated, digested and reviewed without the author transcribing
+   them.
+4. **The rest of the exit.** Readiness on every repository the plan names; every
+   heavy review gets `diverse: true` written into the stored plan so both
+   compilers agree; compilation with a budget projection; an optional blind
+   review of the compiled graph, with an editor behind it for changing
+   reviewers; the findings walk; and one confirmation. That last *yes* is where
+   the posture finally becomes the one asked for in step 1. The run itself is
+   still a `workflow_run` call the model makes in the open, in the transcript —
+   the exit never starts it behind the session's back, because the workflow
+   client this seat holds is read-only.
 5. **Revising, when the reviewer brought prose rather than a patch.** *Revise
-   with the model* sends the whole review back — every finding and the notes,
-   verbatim — and the model rewrites the plan and stores it again. The record
-   stays open, the posture stays `plan`, and step 4 runs again on the revised
-   document. Three blind reviews per exit, counting the one an accepted patch
-   buys; after that the findings are printed and the conversation continues
-   here.
+   with the model* appends the whole review — every finding and the notes,
+   verbatim — to the same mini-conversation the document came from, and the
+   rewritten plan re-enters at step 4. Three blind reviews per exit, counting
+   the one an accepted patch buys; after that the findings are printed and the
+   conversation continues here.
+
+**The bounds.** Each request gets **three attempts**; a retry carries the
+previous answer and the validator's own sentences. When they run out, or the
+provider fails, or the session is replaced, the exit ends exactly like *Back to
+the conversation*: nothing changed, still in plan mode, problems printed. Above
+**80%** of the model's context window the exit stops before asking at all, and
+says to `/compact` and leave plan mode again.
+
+**What reaches the conversation.** One message when the plan is stored, and one
+more when the run starts or the exit goes back: the slug, its digest, the
+deliverable count, the outcome. Nothing else — no steers, no retries. Every
+request is on the record in `authoring.json` beside the plan.
 
 Escape is always an answer, and it is always the **safe** one — never the
 first-listed one, which is a different thing: the first option is what you most

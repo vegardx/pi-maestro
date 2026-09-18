@@ -114,6 +114,7 @@ function harness(cwd: string = temp("plan-cmd-project")): Harness {
 	const store = createPlanStore({
 		cwd,
 		agentDir,
+		sessionId: () => "sess-7",
 		host: () => fakeHost({ models: ["anthropic/claude"] }),
 	});
 	const steers: string[] = [];
@@ -481,6 +482,15 @@ describe("/plan is scoped to this project", () => {
 		expect(outcome.message).toBe(
 			"No stored plans for this project. The `plan` tool writes one.",
 		);
+	});
+});
+
+describe("/plan show names the session that wrote the plan", () => {
+	it("prints the authoring session id and cwd", async () => {
+		const h = harness();
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("show arc");
+		expect(outcome.message).toContain(`authored by session sess-7 in ${h.cwd}`);
 	});
 });
 

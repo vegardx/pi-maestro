@@ -22,16 +22,20 @@ import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
  * IT LIVES HERE, WITH THE SHAPE IT VERSIONS. A version defined next to the
  * envelope writer is a version that says nothing about what changed; a
  * document whose own module names its revision can refuse the previous one by
- * name — which is what version 5 does.
+ * name — which is what version 6 does.
  *
  * Version 3 removed preflight/postflight and repository-creation intent.
  * Version 4 renamed `tasks[].by` to `tasks[].review`. Version 5 took reviews
  * off the task altogether — a task is work, and a deliverable lists its reviews
  * once in `reviews` — and dropped authored `stages`, which the run derives.
+ * Version 6 left the document alone and added a required envelope field,
+ * `authoredBy`: the session id and cwd of whoever wrote the plan. It is a
+ * revision of the stored file, so it is this number that moves — a file the
+ * store cannot say the author of is not a file this build reads.
  * Nothing before the current version is readable, and nothing tries to be:
  * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 5 as const;
+export const MAESTRO_SCHEMA_VERSION = 6 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -608,7 +612,7 @@ export function inspectPlan(
 		// validates and stores with a run nobody wrote.
 		if ((d as { stages?: unknown }).stages !== undefined)
 			errors.push(
-				`${where}: carries \`stages\`, which plan schema v${MAESTRO_SCHEMA_VERSION} removed: a deliverable's run is derived from its tasks, its \`reviews\` and the policy the seat attaches, so there is nothing here for an author to write. Drop \`stages\``,
+				`${where}: carries \`stages\`, which plan schema v5 removed: a deliverable's run is derived from its tasks, its \`reviews\` and the policy the seat attaches, so there is nothing here for an author to write. Drop \`stages\``,
 			);
 
 		validateTasks(d.tasks, where, errors);
@@ -681,11 +685,11 @@ function validateTasks(
 		// validates, stores, and compiles with no reviewers at all.
 		if ((t as { review?: unknown }).review !== undefined)
 			errors.push(
-				`${at}: task \`${t.id}\` carries \`review\`, which plan schema v${MAESTRO_SCHEMA_VERSION} moved to \`deliverables[].reviews\`: a task is work, and a deliverable lists who reads that work once, beside its tasks. There is no migration`,
+				`${at}: task \`${t.id}\` carries \`review\`, which plan schema v5 moved to \`deliverables[].reviews\`: a task is work, and a deliverable lists who reads that work once, beside its tasks. There is no migration`,
 			);
 		if ((t as { by?: unknown }).by !== undefined)
 			errors.push(
-				`${at}: task \`${t.id}\` carries \`by\`, which plan schema v${MAESTRO_SCHEMA_VERSION} moved to \`deliverables[].reviews\`: \`by\` was a version 3 field, version 4 renamed it \`review\`, and version 5 took reviews off the task altogether. There is no migration`,
+				`${at}: task \`${t.id}\` carries \`by\`, which plan schema v5 moved to \`deliverables[].reviews\`: \`by\` was a version 3 field, version 4 renamed it \`review\`, and version 5 took reviews off the task altogether. There is no migration`,
 			);
 	}
 }

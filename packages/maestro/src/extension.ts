@@ -205,6 +205,15 @@ export interface StartSeatOptions {
 	 * refuses in the middle of its own exit.
 	 */
 	readonly host?: () => PlanHostPort | undefined;
+	/**
+	 * The live session, as the id the plan store records as a plan's author.
+	 * @see StoreOptions.sessionId
+	 *
+	 * The extension reads it off whatever context is live; the `/mode` handler's
+	 * own learned id is the fallback, so a seat that has only ever seen a
+	 * command still knows who is writing.
+	 */
+	readonly sessionId?: () => string | undefined;
 }
 
 export interface SeatEntry {
@@ -406,6 +415,7 @@ export function startSeat(
 			cwd,
 			exitWindow,
 			exitPolicy,
+			sessionId: () => options.sessionId?.() ?? sessionId,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(options.host ? { host: options.host } : {}),
 		});
@@ -606,6 +616,17 @@ export default defineExtension(
 			// The model catalogue comes from the live context; the loaded skills
 			// come from `pi` itself, which is the only place an extension can ask.
 			host: () => planHostPort(live, pi),
+			// The same live context answers who is writing a plan. A replaced
+			// session throws from its own context, and an unknown author is
+			// `undefined` here rather than a placeholder — the store refuses to
+			// write a plan it cannot name the author of.
+			sessionId: () => {
+				try {
+					return live?.sessionManager?.getSessionId();
+				} catch {
+					return undefined;
+				}
+			},
 		});
 		entry.seat();
 		pi.on("tool_call", (event) => {

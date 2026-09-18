@@ -56,6 +56,7 @@ function authoring(cwd: string = repo(), mode?: ModeName) {
 	const store = createPlanStore({
 		cwd,
 		agentDir: root,
+		sessionId: () => "authoring-session",
 		host,
 	});
 	const tool = createPlanTool({

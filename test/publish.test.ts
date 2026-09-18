@@ -42,6 +42,7 @@ const REPO = "/repo";
 const planStore = createPlanStore({
 	cwd: PROJECT,
 	agentDir: AGENT_DIR,
+	sessionId: () => "publish-session",
 });
 const receiptPath = planStore.publicationFile("demo");
 const WHEN = new Date(2026, 8, 17, 8, 30);

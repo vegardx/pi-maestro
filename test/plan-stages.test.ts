@@ -511,6 +511,7 @@ describe("reviews and policy survive the store", () => {
 		const store = createPlanStore({
 			cwd: repo(),
 			agentDir: temp("store"),
+			sessionId: () => "stages-session",
 		});
 		const written = fixture(repo());
 		store.savePlan(written);
@@ -524,6 +525,7 @@ describe("reviews and policy survive the store", () => {
 		const store = createPlanStore({
 			cwd,
 			agentDir: temp("store"),
+			sessionId: () => "stages-session",
 		});
 		const tool = createPlanTool({
 			store,

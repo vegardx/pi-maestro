@@ -2,7 +2,14 @@
 
 An authored plan describes repositories, deliverables, dependency edges, the
 work each deliverable is, and who reads that work when it is done. It is intent,
-not runtime state. It is stored at `schemaVersion: 5`.
+not runtime state. It is stored at `schemaVersion: 7`.
+
+**Version 7 removed the `approve-plan` gate.** The person leaving plan mode has
+already agreed the description, read the compiled document and seen it
+blind-reviewed before answering `Start the run?` — so the start **is** the
+approval, and a run that parked seconds later to ask the same person about the
+same digest was asking twice. `policy.gates` is `ship` or `every-deliverable`,
+there is no migration, and a `schemaVersion: 6` envelope is refused by name.
 
 **Version 5 moved reviews off the task and took the run's shape out of the
 document.** A `tasks[]` entry is work — implementation, tests, docs, and nothing
@@ -126,10 +133,16 @@ going and the plan digest covers it.
 | Field | Values | Default |
 | --- | --- | --- |
 | `effort` | `cheap`, `standard`, `deep` | `standard` |
-| `gates` | `approve-plan`, `approve-plan+ship`, `every-deliverable` | `approve-plan+ship` |
+| `gates` | `ship`, `every-deliverable` | `ship` |
 | `reviewDefault` | `{tier?, diverse?}` | `{tier: "standard", diverse: false}` |
 | `maxFixRounds` | `0`, `1`, `2` | `0` cheap, `1` standard, `2` deep |
 | `publish` | `{mode: "none"\|"branch"\|"pr", base?}` | `{mode: "none"}` |
+
+`gates` is where the run stops for a person. `ship` is one decision after all
+the work and before anything is published; `every-deliverable` adds one after
+each deliverable as well. There is no "no gates" value: a publication is proven
+by the `ship` checkpoint's own decided value, so a run with no ship decision is
+a run nothing can be published from.
 
 `publish` says what happens to the run's result, and publication is pi-maestro's
 own audited Bash work — the workflow runtime never pushes, merges, or publishes.
@@ -144,7 +157,7 @@ a validation question asked of the document.
   "slug": "compose-catalogue", "title": "Component catalogue",
   "body": "Why the catalogue is worth building.",
   "repos": [{ "key": "wf", "path": "/Users/vegardx/src/github.com/vegardx/pi-workflow" }],
-  "policy": { "effort": "standard", "gates": "approve-plan+ship",
+  "policy": { "effort": "standard", "gates": "ship",
               "maxFixRounds": 1, "publish": { "mode": "pr", "base": "main" } },
   "deliverables": [{
     "id": "catalogue", "title": "Ship the component catalogue",
@@ -229,8 +242,7 @@ its steps. A session that dies mid-exit has no exit.
 to do with this conversation, and how much effort the run may spend. Publication
 is derived from the repository — an `origin` remote and `gh` on PATH means a
 pull request, a remote alone means a branch, neither means the work stays here —
-announced in one notice, and recorded as `policy.publish`; gates take
-`approve-plan+ship`. Then the description comes back and one dialog agrees it:
+announced in one notice, and recorded as `policy.publish`; gates take `ship`. Then the description comes back and one dialog agrees it:
 *Agree*, *Edit*, *Back to the conversation*. Then the plan is stored and the
 rest of the exit is what it always was: readiness, the compiled graph, the blind
 review, the findings walk, and `Start the run?`. The
@@ -381,8 +393,10 @@ the session's own.
    through the workflow runtime's service seam, allowlisted to that one
    definition by name and validated exactly as `workflow_run` would be — and
    then switches to the posture asked for at `/mode`. The model is not asked to
-   start it and is not in this loop at all. The run parks at its `approve-plan`
-   checkpoint. A runtime that refuses or fails to start it ends the exit the way
+   start it and is not in this loop at all. **Answering yes is the approval**,
+   so the run starts working: it stops at its `ship` decision, and under
+   `every-deliverable` after each deliverable as well. A runtime that refuses or
+   fails to start it ends the exit the way
    *Go back* does: the cause is printed, the posture does not move, and the plan
    is stored with `/plan run <slug>` still there.
 
@@ -424,18 +438,19 @@ conversation
   → toWorkflowInput(plan, effort)
   → <agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json
   → startBuiltin("plan-to-ship", { input, effort })  ← the harness, after your yes
-  → a run id, parked at `approve-plan`
+  → a run id, working, and stopping next at `ship`
 ```
 
 **Per project, and signed by the session that wrote it.** The store's root is
 `<agentDir>/maestro/plans/<encoded cwd>`, where the key is the cwd encoded
 exactly as Pi encodes its own sessions directory (`/Users/x/src/proj` →
 `--Users-x-src-proj--`), so a project's sessions, plans and workflow runs are
-siblings under one name. The envelope is schema 6 and carries
+siblings under one name. The envelope is schema 7 and carries
 `authoredBy: {sessionId, cwd}` — required, taken from the live session — so a
-plan read back names who wrote it and where. A schema 5 envelope has no such
-field and is refused by name; there is no migration, and plans left directly
-under `maestro/plans/<slug>` are not read or listed.
+plan read back names who wrote it and where. A schema 6 envelope names the
+`approve-plan` gate version 7 removed and is refused by name; there is no
+migration, and plans left directly under `maestro/plans/<slug>` are not read or
+listed.
 
 **By value, with a digest.** `toWorkflowInput(plan, effort)` returns
 `{plan, planDigest, effort}`: the whole authored document, the sha256 of its
@@ -449,12 +464,11 @@ it on resume, and would then be executing something nobody approved. The digest
 names exactly which bytes were approved, so a receipt can be checked against
 them afterwards.
 
-**One approval record, and it is not here.** The run's `approve-plan`
-checkpoint is the approval: immutable, binding-addressed, and stored with the
-run's decisions. A plan document therefore has no `approved` field, no approver
-and no approval timestamp — a second record of the same fact is a record that
-can disagree with the first, and the one a human answered is the one that
-counts.
+**One approval record, and it is not here.** Starting the run is the approval,
+and the run's own journal records who started it and with which digest. A plan
+document therefore has no `approved` field, no approver and no approval
+timestamp — a second record of the same fact is a record that can disagree with
+the first, and the one a human acted on is the one that counts.
 
 ### Running a plan
 
@@ -472,9 +486,11 @@ stored. The model is never asked to start a plan's run; the seat refuses its
 `workflow_run` in plan mode by name, and outside plan mode a plan's run is
 still the person's to ask for.
 
-The command cannot approve anything either. The run parks at its `approve-plan`
-checkpoint until a human decides it, which is why `/plan run` is safe to offer
-at the end of a plan write: the next gate is a person, not the model.
+Typing the command is itself the approval — nobody types `/plan run` for a plan
+they have not decided to run — and the run then works through the plan and stops
+at its `ship` decision, or after each deliverable under `every-deliverable`.
+That next stop is a person, not the model, which is why `/plan run` is safe to
+offer at the end of a plan write.
 
 `/plan list` and `/plan show <slug>` read the same store, and read only this
 project's plans — no other project's appear, and the same slug in two projects

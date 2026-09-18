@@ -70,12 +70,12 @@ encodes its own sessions directory (`/Users/x/src/proj` → `--Users-x-src-proj-
 stored envelope records the session and cwd that authored the plan.
 
 Storing a plan is not running one. `/plan run <slug> [cheap|standard|deep]`
-builds the workflow input and hands the session a
-`workflow_run { ref: "plan-to-ship", input }` call; standalone
-`@vegardx/pi-workflow` owns compilation, approval, execution, recovery, and the
-receipt from there. This package's responsibility ends at a validated document
-and a run request — and picks up again at publication, which is pi-maestro's own
-audited Bash work and never the runtime's. See
+builds the workflow input, writes it beside the plan and starts `plan-to-ship`
+through the workflow runtime's service seam; standalone `@vegardx/pi-workflow`
+owns compilation, approval, execution, recovery, and the receipt from there.
+This package's responsibility ends at a validated document and a started run —
+and picks up again at publication, which is pi-maestro's own audited Bash work
+and never the runtime's. See
 [Authored plans](workflow-plans.md#publishing-what-a-run-produced).
 
 ## Leaving plan mode with a run
@@ -106,11 +106,13 @@ request a model may interpret.
    heavy review gets `diverse: true` written into the stored plan so both
    compilers agree; compilation with a budget projection; an optional blind
    review of the compiled graph, with an editor behind it for changing
-   reviewers; the findings walk; and one confirmation. That last *yes* is where
-   the posture finally becomes the one asked for in step 1. The run itself is
-   still a `workflow_run` call the model makes in the open, in the transcript —
-   the exit never starts it behind the session's back, because the workflow
-   client this seat holds is read-only.
+   reviewers; the findings walk; and one confirmation. That last *yes* is what
+   starts the run: the harness starts `plan-to-ship` itself, through the
+   runtime's allowlisted service seam, and only then does the posture become the
+   one asked for in step 1. The model is not asked to start it — it is not in
+   that loop at all — and the run id is named in the transcript, so nothing
+   happens behind the session's back. A runtime that refuses leaves you in plan
+   mode with the plan stored and the reason on screen.
 5. **Revising, when the reviewer brought prose rather than a patch.** *Revise
    with the model* appends the whole review — every finding and the notes,
    verbatim — to the same mini-conversation the document came from, and the

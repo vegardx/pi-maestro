@@ -29,12 +29,13 @@ migrated.
 
 `/plan run` is not the normal way to start a run — the plan-mode exit starts one
 for you when the plan is stored. It is here for the plan whose run never started
-or failed. It does not execute anything itself either: pi-maestro has no
-workflow runtime and takes no dependency on one. It writes the run input beside
-the plan, in the plan's own directory, and steers the session
-with the exact call to make —
-`workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`.
-Approval is not part of the command: the run parks at its `approve-plan`
+or failed. It writes the run input beside the plan, in the plan's own directory,
+and then **starts the run itself**, through the workflow runtime's service seam:
+`startBuiltin("plan-to-ship", { input, effort })`, which the runtime allowlists
+by name and validates exactly as `workflow_run` would. The model is not asked to
+start it and never was part of this command. A seat with no workflow runtime
+cannot start anything, and the command says so and leaves the plan stored.
+Approval is not part of the command either: the run parks at its `approve-plan`
 checkpoint and a human decides it. See
 [Authored plans](workflow-plans.md#running-a-plan).
 
@@ -229,17 +230,18 @@ A three-deliverable plan whose reviewers are already tiered, on a ready machine,
 with a clean blind review, asks **five** dialogs in total: two in phase 1, one
 for the description, the compiled document, and `Start the run?`.
 
-The exit ends in exactly one of four places: the run request (19) — where the
-posture becomes the one asked for at `/mode`, immediately before the model is
-handed the `workflow_run` call, because the workflow client this seat holds is
-read-only; a stored plan and nothing else; back in the conversation (7a, 7b, 12
-or 15, or a request that never produced something storable); or a refusal that
-names what stopped it. The three that are not the run leave you in plan mode
-with one notice naming `/plan run <slug>` and `/mode <auto|hack>`.
+The exit ends in exactly one of four places: the run, started by the harness
+(19) — where the posture becomes the one asked for at `/mode`, immediately after
+the runtime hands back the run id; a stored plan and nothing else; back in the
+conversation (7a, 7b, 12 or 15, a request that never produced something
+storable, or a runtime that would not start the run); or a refusal that names
+what stopped it. The three that are not the run leave you in plan mode with one
+notice naming `/plan run <slug>` and `/mode <auto|hack>`.
 
 **What the conversation is told.** One message when the plan is stored, and one
 more when the run starts or the exit goes back: the slug, its digest, how many
-deliverables it has, and the outcome. Nothing else the harness did appears in
+deliverables it has, and the outcome — naming the run id when a run started, and
+saying that the harness started it rather than the conversation. Nothing else the harness did appears in
 the transcript. Every request it made is on the record in `authoring.json`
 beside the plan — see [State](#state).
 

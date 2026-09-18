@@ -301,7 +301,7 @@ function tieredPlan(count: number): Plan {
 				{
 					id: "rev",
 					title: "Review it",
-					by: { lens: "contracts", tier: "standard" as const },
+					review: { lens: "contracts", tier: "standard" as const },
 				},
 			],
 		})),
@@ -705,7 +705,7 @@ function heavyPlan(): Plan {
 					{
 						id: "rev",
 						title: "Review it",
-						by: { lens: "contracts", tier: "heavy" as const },
+						review: { lens: "contracts", tier: "heavy" as const },
 					},
 				],
 			},
@@ -731,7 +731,7 @@ describe("the review lenses", () => {
 		// this seat and pi-workflow read the same plan, so they have to read the
 		// same answer to "is this reviewer diverse?".
 		expect(h.store.saves).toHaveLength(1);
-		expect(h.store.current().deliverables[0]?.tasks[1]?.by).toEqual({
+		expect(h.store.current().deliverables[0]?.tasks[1]?.review).toEqual({
 			lens: "contracts",
 			tier: "heavy",
 			diverse: true,
@@ -1158,8 +1158,8 @@ describe("the findings walk", () => {
 		const second: Finding = {
 			...blocking(),
 			id: "every-task-reviewed",
-			what: "Tasks 0-2 all carry `by`, so nothing implements them",
-			where: "/deliverables/0/tasks/0/by",
+			what: "Tasks 0-2 all carry `review`, so nothing implements them",
+			where: "/deliverables/0/tasks/0/review",
 		};
 		const h = harness({
 			plan: tieredPlan(1),

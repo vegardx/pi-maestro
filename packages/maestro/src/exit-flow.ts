@@ -454,20 +454,22 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" only if — this conversation asked for a check after every deliverable." +
 			" Nothing else in the block moves.",
 		"",
-		"`by` IS WHAT MAKES A TASK A REVIEW. A task that carries it is read by an" +
-			" independent reviewer and is implemented by nobody, so the tasks that" +
-			" do the work — the implementation, the tests, the README — must not" +
-			" carry `by`, and only the actual review tasks may. A deliverable whose" +
-			" every task carries `by` is a deliverable nothing writes.",
+		"`review` IS WHAT MAKES A TASK A REVIEW. A task that carries it is read by" +
+			" an independent reviewer and is implemented by nobody, so the tasks" +
+			" that do the work — the implementation, the tests, the README — must" +
+			" not carry `review`, and only the actual review tasks may. A" +
+			" deliverable whose every task carries `review` is a deliverable nothing" +
+			" writes.",
 		"",
-		"Two fields are got wrong most often. A review task's `by.lens` is" +
+		"Two fields are got wrong most often. A review task's `review.lens` is" +
 			" REQUIRED and is the fan-out key, so it must match" +
-			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `by.model` is OPTIONAL and, if" +
-			" written at all, is only ever a concrete `provider/model` ID; prefer" +
-			" `by.tier` and leave `by.model` out, so the host resolves the reviewer." +
-			" An optional field you have nothing to say about is LEFT OUT, not sent" +
-			" empty — an empty string or a list of them is dropped before the plan" +
-			" is validated, so the two mean the same thing and neither is refused.",
+			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `review.model` is OPTIONAL" +
+			" and, if written at all, is only ever a concrete `provider/model` ID;" +
+			" prefer `review.tier` and leave `review.model` out, so the host" +
+			" resolves the reviewer. An optional field you have nothing to say about" +
+			" is LEFT OUT, not sent empty — an empty string or a list of them is" +
+			" dropped before the plan is validated, so the two mean the same thing" +
+			" and neither is refused.",
 		"",
 		"Give a deliverable its own `stages` array wherever this conversation" +
 			" implied more than the default list (`implement` → `verify-and-fix` →" +

@@ -148,7 +148,7 @@ The `plan` tool stores repository-qualified authored intent:
 ```
 
 A plan contains repositories, deliverables, ordering, read dependencies, tasks,
-delegated review intent, and optionally the stages each deliverable is built from
+the review routing on the tasks that are reviews, and optionally the stages each deliverable is built from
 and the policy the run should follow. Pi-maestro validates and stores this
 vocabulary but does not execute it. `/plan run <slug>` builds the workflow input
 and hands the session the `workflow_run { ref: "plan-to-ship", input }` call to

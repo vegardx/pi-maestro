@@ -167,7 +167,7 @@ The review lenses are **not** asked about. The plan and its
 `policy.reviewDefault` decide them, and dialog 12 — with *Edit* behind it — is
 where a reviewer is changed. Before anything is compiled, every heavy lens whose
 `diverse` is undefined has `diverse: true` written into the **stored** plan, in
-both `tasks[].by` and `stages[].lenses`, so this seat's compiled document and
+both `tasks[].review` and `stages[].lenses`, so this seat's compiled document and
 pi-workflow's derive the same graph from the same bytes. A lens that already
 says `diverse: false` keeps its answer.
 
@@ -224,7 +224,8 @@ the review option.
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
-  together. Delegated reviews use `{lens, skill?, model?, tier?, diverse?}`, and
+  together. A review task carries `review: {lens, skill?, model?, tier?, diverse?}`
+  and implementation work carries none, and
   a deliverable may carry optional `stages` beside a plan-wide `policy` — see
   [Authored plans](workflow-plans.md#stages). It is held in auto and hack, and
   in plan mode only once an exit's description is agreed.

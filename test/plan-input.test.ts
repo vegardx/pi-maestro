@@ -34,7 +34,7 @@ const fixture: Plan = {
 				{
 					id: "review",
 					title: "Review it",
-					by: { lens: "security", tier: "heavy", diverse: true },
+					review: { lens: "security", tier: "heavy", diverse: true },
 				},
 			],
 		},

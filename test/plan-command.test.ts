@@ -81,7 +81,7 @@ function plan(slug: string, root: string, title = `Plan ${slug}`): Plan {
 					{
 						id: "sec",
 						title: "Review the surface",
-						by: {
+						review: {
 							lens: "security",
 							tier: "heavy",
 							diverse: true,
@@ -263,7 +263,7 @@ describe("/plan show", () => {
 					title: "API",
 					after: [],
 					reads: [],
-					tasks: [{ id: "sec", title: "Review", by: { lens: "security" } }],
+					tasks: [{ id: "sec", title: "Review", review: { lens: "security" } }],
 				},
 			],
 		});

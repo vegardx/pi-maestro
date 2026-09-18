@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	type Deliverable,
 	inspectPlan,
+	MAESTRO_SCHEMA_VERSION,
 	type Plan,
 	type RepoProbe,
 	type Task,
@@ -33,10 +34,10 @@ const cleanRepo: RepoProbe = (path) => ({
 const errorsOf = (subject: Plan, probe: RepoProbe = cleanRepo): string[] =>
 	validatePlan(subject, probe);
 
-const task = (id: string, by?: Task["by"]): Task => ({
+const task = (id: string, review?: Task["review"]): Task => ({
 	id,
 	title: `do ${id}`,
-	...(by ? { by } : {}),
+	...(review ? { review } : {}),
 });
 
 const deliverable = (
@@ -134,7 +135,7 @@ describe("waiting and reading are different things", () => {
 	});
 });
 
-describe("delegated tasks are workflow-native review launches", () => {
+describe("review tasks are workflow-native review launches", () => {
 	it("accepts the same lens assigned to more than one model", () => {
 		const errors = errorsOf(
 			plan({
@@ -157,6 +158,37 @@ describe("delegated tasks are workflow-native review launches", () => {
 			}),
 		);
 		expect(errors).toEqual([]);
+	});
+
+	// The version 3 field. A stored document is caught by its envelope, but a
+	// model writing a plan from memory of the old name writes `by` into a
+	// version 4 body, where the type says nothing and the field would be
+	// dropped — a plan that stores and compiles with no reviewers at all.
+	it("refuses a task that still carries `by`, by name", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [
+							task("implement"),
+							// The shape a model writes, which the type system refuses
+							// and a document read back from disk does not.
+							{
+								id: "review",
+								title: "Review it",
+								by: { lens: "security" },
+							} as unknown as Task,
+						],
+					}),
+				],
+			}),
+		);
+		expect(errors).toEqual([
+			"a.tasks[1]: task `review` carries `by`, which plan schema v" +
+				`${MAESTRO_SCHEMA_VERSION} renamed to \`review\`: that is a version 3 ` +
+				"field and there is no migration. Rename `by` to `review` on every " +
+				"review task",
+		]);
 	});
 });
 
@@ -248,7 +280,7 @@ describe("a review names a model, a tier, or neither", () => {
 							task("review", {
 								lens: "security",
 								tier: "enormous",
-							} as unknown as Task["by"]),
+							} as unknown as Task["review"]),
 						],
 					}),
 				],

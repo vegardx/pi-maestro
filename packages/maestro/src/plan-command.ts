@@ -21,6 +21,14 @@
 // The grammar is five verbs and nothing clever. Anything it does not recognise
 // gets the usage line rather than a guess, because a mistyped effort that
 // silently became `standard` would spend (or fail to spend) a deep run's budget.
+//
+// THERE IS NO SIXTH VERB, and each of the five is here for a stated reason:
+// `list` and `show` read this project's plans; `run` starts or restarts the
+// `plan-to-ship` run for a stored plan whose run never started or failed, which
+// the plan-mode exit normally starts for you; `rm` removes one; `ship` is the
+// manual publication fallback for when the automatic publication after the ship
+// gate did not happen. A verb whose reason cannot be written on one line is a
+// verb this command does not need.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -47,8 +55,29 @@ import type { AuthoredBy, PlanStore } from "./store.js";
 /** The workflow a stored plan is handed to. Named once. */
 export const PLAN_WORKFLOW_REF = "plan-to-ship";
 
+/** The grammar, on one line, for the command list and the first prompt. */
 export const PLAN_COMMAND_USAGE =
-	`/plan list | show <slug> | run <slug> [${EFFORTS.join("|")}] | ship <slug> | rm <slug>` as const;
+	`/plan list | show <slug> | run <slug> [${EFFORTS.join("|")}] | rm <slug> | ship <slug>` as const;
+
+/**
+ * The grammar plus what each verb is FOR.
+ *
+ * Printed whenever the parse fails, because the failures here are not typos so
+ * much as wrong expectations — `run` looks like the normal way to start a run
+ * and is not, and `ship` looks like the normal way to publish and is not.
+ */
+export const PLAN_COMMAND_HELP = [
+	PLAN_COMMAND_USAGE,
+	"",
+	"  list          the plans stored for this project — plans are per project, and this",
+	"                lists no other project's",
+	"  show <slug>   one stored plan in full, with the session and cwd that authored it",
+	"  run <slug>    start or restart `plan-to-ship` for a stored plan whose run did not",
+	"                start or failed; the plan-mode exit normally starts it for you",
+	"  rm <slug>     remove one stored plan and everything stored with it",
+	"  ship <slug>   the manual publication fallback, for when the automatic publication",
+	"                after the ship gate did not happen",
+].join("\n");
 
 /**
  * How much workflow input goes into the session inline.
@@ -344,9 +373,7 @@ export interface PlanCommandOutcome {
 function usage(problem?: string): PlanCommandOutcome {
 	return {
 		level: problem ? "warning" : "info",
-		message: problem
-			? `${problem}.\n${PLAN_COMMAND_USAGE}`
-			: PLAN_COMMAND_USAGE,
+		message: problem ? `${problem}.\n${PLAN_COMMAND_HELP}` : PLAN_COMMAND_HELP,
 	};
 }
 

@@ -401,10 +401,20 @@ intent until a workflow run is given it.
 conversation
   → plan tool
   → validation
-  → <agentDir>/maestro/plans/<slug>/plan.json
+  → <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
   → toWorkflowInput(plan, effort)
   → workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }
 ```
+
+**Per project, and signed by the session that wrote it.** The store's root is
+`<agentDir>/maestro/plans/<encoded cwd>`, where the key is the cwd encoded
+exactly as Pi encodes its own sessions directory (`/Users/x/src/proj` →
+`--Users-x-src-proj--`), so a project's sessions, plans and workflow runs are
+siblings under one name. The envelope is schema 6 and carries
+`authoredBy: {sessionId, cwd}` — required, taken from the live session — so a
+plan read back names who wrote it and where. A schema 5 envelope has no such
+field and is refused by name; there is no migration, and plans left directly
+under `maestro/plans/<slug>` are not read or listed.
 
 **By value, with a digest.** `toWorkflowInput(plan, effort)` returns
 `{plan, planDigest, effort}`: the whole authored document, the sha256 of its
@@ -427,11 +437,13 @@ counts.
 
 ### Running a plan
 
-`/plan run <slug> [cheap|standard|deep]` is the seat's way to start one, and it
-starts nothing itself. It loads the stored document, builds
+`/plan run <slug> [cheap|standard|deep]` is not the normal way to start a run:
+the plan-mode exit starts one for you as soon as the plan is stored. It is the
+way to start or restart a run for a stored plan whose run never started or
+failed. It starts nothing itself either. It loads the stored document, builds
 `toWorkflowInput(plan, effort)`, writes that input to
-`<agentDir>/maestro/plans/<slug>/workflow-input.json`, and hands the session the
-call to make: `workflow_run { ref: "plan-to-ship", input: … }`. pi-maestro has
+`<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json`, and hands
+the session the call to make: `workflow_run { ref: "plan-to-ship", input: … }`. pi-maestro has
 no workflow runtime and no dependency on one, so the run happens where every
 other tool call happens — in the open, in the transcript, where it can be seen
 before it is made.
@@ -440,15 +452,20 @@ The command cannot approve anything either. The run parks at its `approve-plan`
 checkpoint until a human decides it, which is why `/plan run` is safe to offer
 at the end of a plan write: the next gate is a person, not the model.
 
-`/plan list` and `/plan show <slug>` read the same store, and `/plan rm <slug>`
-removes a plan after a confirmation (refused outright when the session has no UI
-to confirm with). See the [command reference](commands.md).
+`/plan list` and `/plan show <slug>` read the same store, and read only this
+project's plans — no other project's appear, and the same slug in two projects
+is two plans. `/plan show` also prints the session id and cwd that authored the
+plan. `/plan rm <slug>` removes a plan after a confirmation (refused outright
+when the session has no UI to confirm with). Those five verbs are the whole
+surface. See the [command reference](commands.md).
 
 ### Publishing what a run produced
 
 A run ends at a receipt: per deliverable a handoff commit in the publication
 repository's own object store, its sha256 and size, and the digest of the plan
-the run was given. `/plan ship <slug>` turns that receipt into a branch and,
+the run was given. A ship decided at the run's `ship` gate publishes by itself;
+`/plan ship <slug>` is the manual fallback for when that did not happen. It
+turns the receipt into a branch and,
 when the policy asked for one, a pull request — refusing outright when the
 receipt's digest is not the stored plan's, because then it names bytes nobody
 approved. Every command runs through the seat's audited Bash tool under the
@@ -470,7 +487,7 @@ The ten steps, in order, and where each one stops:
 | 7 | One confirmation, naming the branch, the commits and the check result | it is declined — the branch stays, nothing is pushed |
 | 8 | `git push -u origin <branch>` | the push fails |
 | 9 | `gh pr create --base <base> --title <plan title> --body <receipt>`, when the policy says `pr` | `gh` fails. `gh` **absent** is not a failure: the publication degrades to `branch` with a warning, before anything is created |
-| 10 | Append the receipt to `<agentDir>/maestro/plans/<slug>/publication.json` | the file exists and is not an array of receipts — it is never overwritten |
+| 10 | Append the receipt to `<agentDir>/maestro/plans/<encoded cwd>/<slug>/publication.json` | the file exists and is not an array of receipts — it is never overwritten |
 
 One more thing is checked between steps 1 and 2 when the publication was
 triggered by an announcement rather than by `/plan ship`: the run's own `ship`

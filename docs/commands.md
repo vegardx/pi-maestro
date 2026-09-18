@@ -5,26 +5,43 @@
 | Command | What it does |
 | --- | --- |
 | `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture. Leaving plan mode asks the [exit questions](#leaving-plan-mode) first |
-| `/plan list` | Every stored plan: slug, title, deliverable count, when it was last written |
-| `/plan show <slug>` | Read one back whole: repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
-| `/plan run <slug> [cheap\|standard\|deep]` | Build the workflow input for a stored plan and hand it to the model. Effort defaults to the plan's `policy.effort`, and to `standard` when it sets none |
-| `/plan ship <slug>` | Publish what a run produced: branch, cherry-pick, the repository's check on the host, one confirmation, push, and a pull request when the plan's policy asked for one |
+| `/plan list` | This project's stored plans: slug, title, deliverable count, when it was last written |
+| `/plan show <slug>` | Read one back whole: the session and cwd that authored it, repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
+| `/plan run <slug> [cheap\|standard\|deep]` | Start or restart `plan-to-ship` for a stored plan whose run did not start or failed. Effort defaults to the plan's `policy.effort`, and to `standard` when it sets none |
 | `/plan rm <slug>` | Delete a stored plan, after a confirmation. Refused when the session has no UI to confirm with |
+| `/plan ship <slug>` | The manual publication fallback, for when the automatic publication after the ship gate did not happen |
 
-`/plan` with no subcommand, or with a subcommand or effort it does not know,
-prints the grammar above and does nothing else.
+Those five are the whole surface, and each is here for a stated reason: `list`
+and `show` read this project's plans; `run` starts a run the plan-mode exit
+normally starts for you; `rm` removes one; `ship` publishes what the automatic
+path did not. `/plan` with no subcommand, or with a subcommand or effort it does
+not know, prints the grammar and those reasons, and does nothing else.
 
-`/plan run` does not execute anything itself: pi-maestro has no workflow
-runtime and takes no dependency on one. It writes the run input to
-`<agentDir>/maestro/plans/<slug>/workflow-input.json` and steers the session
+**Plans are per project.** The store's root is `<agentDir>/maestro/plans/<key>`,
+where `<key>` is the cwd encoded exactly as Pi encodes its own sessions
+directory — `/Users/x/src/proj` becomes `--Users-x-src-proj--` — so a project's
+sessions, its plans and (soon) its workflow runs are siblings under one name.
+`/plan list` reads only the current project's folder and shows no other
+project's plans; a slug is unique within a project and two projects may each
+have their own `arc`. Plans written before this key existed sit directly under
+`<agentDir>/maestro/plans/<slug>`: they are not read, not listed and not
+migrated.
+
+`/plan run` is not the normal way to start a run — the plan-mode exit starts one
+for you when the plan is stored. It is here for the plan whose run never started
+or failed. It does not execute anything itself either: pi-maestro has no
+workflow runtime and takes no dependency on one. It writes the run input beside
+the plan, in the plan's own directory, and steers the session
 with the exact call to make —
 `workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`.
 Approval is not part of the command: the run parks at its `approve-plan`
 checkpoint and a human decides it. See
 [Authored plans](workflow-plans.md#running-a-plan).
 
-`/plan ship` is the one verb that acts on the world, and it is the only place
-pi-maestro pushes. It reads the run's receipt through the workflow runtime,
+`/plan ship` is the manual fallback for a publication that should have happened
+by itself: a ship decided at the run's `ship` gate publishes automatically, and
+this is what you type when it did not. It is also the one verb that acts on the
+world, and the only place pi-maestro pushes. It reads the run's receipt through the workflow runtime,
 refuses unless the receipt's plan digest is the stored plan's, and then runs
 every command — `git fetch`, `git switch`, `git cherry-pick`, the check, `git
 push`, `gh pr create` — through the seat's audited Bash tool, so the classifier
@@ -244,23 +261,27 @@ Pi-maestro does not bundle a subagent, workflow, or web implementation.
 
 ## State
 
-Authored plans remain under:
+Authored plans live under their project's key, beside that project's sessions:
 
 ```text
-<agentDir>/maestro/plans/<slug>/plan.json
+<agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
+
+The envelope is `{schemaVersion: 6, savedAt, authoredBy: {sessionId, cwd}, body}`.
+`authoredBy` is required, and a schema 5 envelope — which has no such field — is
+refused by name rather than migrated.
 
 `/plan ship` appends one receipt per publication, and never rewrites an earlier
 one — a second ship of the same plan is a real event:
 
 ```text
-<agentDir>/maestro/plans/<slug>/publication.json
+<agentDir>/maestro/plans/<encoded cwd>/<slug>/publication.json
 ```
 
 `/plan run` writes the input it built beside the plan it built it from:
 
 ```text
-<agentDir>/maestro/plans/<slug>/workflow-input.json
+<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json
 ```
 
 That file is an export, not state: it is rewritten by every `/plan run` and

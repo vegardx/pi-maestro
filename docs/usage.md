@@ -58,11 +58,15 @@ Planning remains a conversation. The `plan` tool writes the complete authored
 plan after requirements, repositories, dependencies, implementation work, and
 review intent are understood.
 
-Plans are validated and stored under:
+Plans are validated and stored per project, under the cwd encoded the way Pi
+encodes its own sessions directory (`/Users/x/src/proj` → `--Users-x-src-proj--`):
 
 ```text
-<agentDir>/maestro/plans/<slug>/plan.json
+<agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
+
+`/plan list` and `/plan show` read only the project you are standing in, and the
+stored envelope records the session and cwd that authored the plan.
 
 Storing a plan is not running one. `/plan run <slug> [cheap|standard|deep]`
 builds the workflow input and hands the session a

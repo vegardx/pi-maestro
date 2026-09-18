@@ -19,8 +19,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	DEFAULT_FIX_ROUNDS,
+	DEFAULT_GATES,
 	type Deliverable,
 	defaultStagesFor,
+	gateStops,
+	PLAN_GATES,
 	type Plan,
 	type PlanHostPort,
 	type PlanPolicy,
@@ -164,10 +167,38 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		expect(validateStageDocument(compileStageDocument(authored))).toEqual([]);
 	});
 
+	// v7: the start is the approval, so the gate vocabulary is the decisions
+	// that are still ahead of the run. There is no "no gates" value either —
+	// publication is proven by the `ship` decision's own decided value, so a
+	// run with no ship gate is a run nothing can be published from.
+	it("names two gate policies, and no approve gate", () => {
+		expect(PLAN_GATES).toEqual(["ship", "every-deliverable"]);
+		expect(DEFAULT_GATES).toBe("ship");
+		for (const gone of ["approve-plan", "approve-plan+ship", "none"])
+			expect(PLAN_GATES as readonly string[]).not.toContain(gone);
+	});
+
+	it("refuses the gate policy version 7 removed, by name", () => {
+		expect(
+			errorsOf(plan({ policy: { gates: "approve-plan+ship" as "ship" } })),
+		).toContainEqual(
+			"policy: `approve-plan+ship` is not a gate policy — one of ship, every-deliverable",
+		);
+	});
+
+	it("says where a started run stops, per gate policy", () => {
+		expect(gateStops("ship")).toBe(
+			"it works through the plan and stops at its `ship` decision",
+		);
+		expect(gateStops("every-deliverable")).toBe(
+			"it stops after each deliverable and again at its `ship` decision",
+		);
+	});
+
 	it("resolves every dial, and keeps a value it does not know out of the way", () => {
 		expect(resolvePolicy()).toEqual({
 			effort: "standard",
-			gates: "approve-plan+ship",
+			gates: "ship",
 			reviewDefault: { tier: "standard", diverse: false },
 			maxFixRounds: 1,
 			publish: { mode: "none" },
@@ -368,7 +399,7 @@ describe("what a policy may not say", () => {
 		expect(policied({ effort: "quick" as "cheap" })).toContainEqual(
 			expect.stringContaining("`quick` is not an effort"),
 		);
-		expect(policied({ gates: "none" as "approve-plan" })).toContainEqual(
+		expect(policied({ gates: "none" as "ship" })).toContainEqual(
 			expect.stringContaining("is not a gate policy"),
 		);
 		expect(policied({ maxFixRounds: 3 as 2 })).toContainEqual(
@@ -485,7 +516,7 @@ describe("reviews and policy survive the store", () => {
 
 	const policy: PlanPolicy = {
 		effort: "standard",
-		gates: "approve-plan+ship",
+		gates: "ship",
 		maxFixRounds: 1,
 		publish: { mode: "pr", base: "main" },
 	};
@@ -556,7 +587,7 @@ describe("reviews and policy survive the store", () => {
 	it("reads back in `/plan show` as what will run", () => {
 		const text = renderPlan(fixture("/repo"));
 		expect(text).toContain("Policy:");
-		expect(text).toContain("effort standard, gates approve-plan+ship");
+		expect(text).toContain("effort standard, gates ship");
 		expect(text).toContain("publish pr from main");
 		expect(text).toContain("Why the arc is worth building.");
 		expect(text).toContain("read by contracts, tier heavy, diverse");

@@ -482,7 +482,7 @@ describe("shipDecision", () => {
 		};
 		expect(shipDecision(runShaped(sha("d"), approve)).ok).toBe(false);
 		const elsewhere = {
-			key: "approve-plan",
+			key: "approve-d0",
 			kind: "checkpoint",
 			checkpoint: { decision: decided({ ship: true }) },
 		};

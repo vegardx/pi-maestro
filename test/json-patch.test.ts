@@ -95,7 +95,7 @@ describe("applyJsonPatch", () => {
 		const result = applyJsonPatch(document, {
 			op: "replace",
 			path: "/policy/gates",
-			value: "approve-plan",
+			value: "ship",
 		});
 		expect(result).toMatchObject({ ok: false });
 		if (result.ok) return;

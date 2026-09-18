@@ -334,7 +334,7 @@ describe("/plan run starts the run through the harness", () => {
 		expect(outcome.level).toBe("info");
 		expect(outcome.runId).toBe(RUN_ID);
 		expect(outcome.message).toContain(RUN_ID);
-		expect(outcome.message).toContain("approve-plan");
+		expect(outcome.message).toContain("stops at its `ship` decision");
 		expect(outcome.message).toContain("effort deep");
 	});
 

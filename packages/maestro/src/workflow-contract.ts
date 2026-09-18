@@ -46,7 +46,8 @@ export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
  *
  * - `staticWorkflows` — `plan-to-ship` and `plan-review` are static refs.
  * - `durableRuns` — a run survives the dialog that started it.
- * - `checkpoints` — `approve-plan` and `ship` are where humans decide.
+ * - `checkpoints` — `ship`, and each deliverable under `every-deliverable`,
+ *   are where humans decide.
  * - `fanOut` — review lenses are a fan-out.
  * - `settledResults` — one failed reviewer degrades rather than fails the run.
  * - `finalizers` — the receipt publication reads is produced by one.

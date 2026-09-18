@@ -798,7 +798,7 @@ describe("the document the harness asks for", () => {
 		const prompt = request?.systemPrompt ?? "";
 		expect(prompt).toContain(DESCRIPTION);
 		expect(prompt).toContain("effort standard");
-		expect(prompt).toContain("gates approve-plan+ship");
+		expect(prompt).toContain("gates ship");
 		expect(prompt).toContain("publication pr onto `trunk`");
 		expect(prompt).toContain("not yours to write");
 		// The schema travels as JSON Schema, which is what TypeBox already is.
@@ -822,7 +822,7 @@ describe("the document the harness asks for", () => {
 			repos: [{ key: "wf", path: REPO }],
 			policy: {
 				effort: "standard",
-				gates: "approve-plan+ship",
+				gates: "ship",
 				publish: { mode: "pr", base: "trunk" },
 			},
 		});
@@ -1056,6 +1056,12 @@ describe("the one message the conversation gets", () => {
 		// look it up — and said to be the harness's, not the conversation's.
 		expect(h.announced[1]?.content).toContain(`Run started \`${PLAN_RUN_ID}\``);
 		expect(h.announced[1]?.content).toContain("not by this conversation");
+		// v7: starting it WAS the approval, so what the conversation is told is
+		// where the run stops next, not where it will ask again.
+		expect(h.announced[1]?.content).toContain(
+			"it works through the plan and stops at its `ship` decision",
+		);
+		expect(h.announced[1]?.content).not.toContain("approve-plan");
 		// NOTHING ELSE reaches the conversation: the requests, the retries and
 		// the validators' complaints stay on the record, and the two custom
 		// messages are the whole of it.
@@ -1486,7 +1492,7 @@ describe("what is recommended, and what escape takes", () => {
 describe("the two system prompts", () => {
 	it("say the model has no tools and starts nothing", () => {
 		const document = renderDocumentSystemPrompt(
-			{ effort: "deep", gates: "approve-plan", publish: { mode: "none" } },
+			{ effort: "deep", gates: "every-deliverable", publish: { mode: "none" } },
 			DESCRIPTION,
 		);
 		for (const prompt of [DESCRIPTION_SYSTEM_PROMPT, document]) {
@@ -1495,7 +1501,7 @@ describe("the two system prompts", () => {
 		}
 		// The document prompt keeps the facts the old steer carried.
 		expect(document).toContain("effort deep");
-		expect(document).toContain("gates approve-plan");
+		expect(document).toContain("gates every-deliverable");
 		expect(document).toContain("blind");
 		expect(document).toContain("`tasks` are the work");
 		// And the description prompt keeps its own.

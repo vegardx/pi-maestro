@@ -32,10 +32,16 @@ import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
  * `authoredBy`: the session id and cwd of whoever wrote the plan. It is a
  * revision of the stored file, so it is this number that moves — a file the
  * store cannot say the author of is not a file this build reads.
+ * Version 7 removed the `approve-plan` gate from `policy.gates`: the person
+ * who answers `Start the run?` has already agreed the description, read the
+ * compiled document and seen it blind-reviewed, so the start IS the approval
+ * and a second one seconds later asks the same person the same question.
+ * Gates are `ship` or `every-deliverable`, and a version 6 envelope names a
+ * checkpoint nothing compiles any more.
  * Nothing before the current version is readable, and nothing tries to be:
  * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 6 as const;
+export const MAESTRO_SCHEMA_VERSION = 7 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -270,12 +276,15 @@ export interface Plan {
 	readonly policy?: PlanPolicy;
 }
 
-/** How a run is gated. `approve-plan` is never optional. */
-export const PLAN_GATES = [
-	"approve-plan",
-	"approve-plan+ship",
-	"every-deliverable",
-] as const;
+/**
+ * How a run is gated. The `ship` decision is never optional.
+ *
+ * There is no "no gates" value on purpose: publication is proven by the `ship`
+ * checkpoint's own decided value, so a run with nothing to prove is a run
+ * nothing can be published from. `ship` is one human decision after all the
+ * work; `every-deliverable` adds one after each deliverable as well.
+ */
+export const PLAN_GATES = ["ship", "every-deliverable"] as const;
 
 export type PlanGates = (typeof PLAN_GATES)[number];
 
@@ -295,7 +304,7 @@ export type PublishMode = (typeof PUBLISH_MODES)[number];
 export interface PlanPolicy {
 	/** Default "standard". */
 	readonly effort?: Effort;
-	/** Default "approve-plan+ship". */
+	/** Default "ship". */
 	readonly gates?: PlanGates;
 	/** What a review lens that pins nothing is worth. */
 	readonly reviewDefault?: {
@@ -326,7 +335,23 @@ export interface ResolvedPolicy {
 	};
 }
 
-export const DEFAULT_GATES: PlanGates = "approve-plan+ship";
+export const DEFAULT_GATES: PlanGates = "ship";
+
+/**
+ * Where a started run stops for a person, as one phrase.
+ *
+ * ONE SENTENCE, IN ONE PLACE, because three surfaces say it — the custom
+ * message the conversation gets, the exit's last confirmation, and `/plan
+ * run`'s receipt — and three copies of "where does this stop" is how the old
+ * `approve-plan` wording outlived the checkpoint it named. Version 7 removed
+ * that checkpoint: starting the run IS the approval, so what a person is told
+ * is where the run will stop next, never where it will ask again.
+ */
+export function gateStops(gates: PlanGates): string {
+	return gates === "every-deliverable"
+		? "it stops after each deliverable and again at its `ship` decision"
+		: "it works through the plan and stops at its `ship` decision";
+}
 
 export const DEFAULT_REVIEW_TIER: ReviewTier = "standard";
 

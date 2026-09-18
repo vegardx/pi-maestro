@@ -164,8 +164,7 @@ export const CompiledStageDocumentMirror = Type.Object(
 		]),
 		/** The resolved gates — `policy.gates` with its default applied. */
 		gates: Type.Union([
-			Type.Literal("approve-plan"),
-			Type.Literal("approve-plan+ship"),
+			Type.Literal("ship"),
 			Type.Literal("every-deliverable"),
 		]),
 	},

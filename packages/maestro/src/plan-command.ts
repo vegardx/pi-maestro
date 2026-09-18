@@ -35,11 +35,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
+	gateStops,
 	inspectPlan,
 	type Plan,
 	type ResolvedPolicy,
 	type Review,
 	type ReviewLens,
+	resolvePolicy,
 	type Stage,
 	withDefaultStages,
 } from "./plan.js";
@@ -420,7 +422,7 @@ export async function runPlanCommand(
 				level: "info",
 				message:
 					`Started \`${plan.slug}\` as \`${PLAN_WORKFLOW_REF}\` run \`${runId}\` at effort ${input.effort}. ` +
-					`Input written to ${path}. Approval is the run's \`approve-plan\` checkpoint, not this command.`,
+					`Input written to ${path}. Starting it is the approval, and ${gateStops(resolvePolicy(plan.policy).gates)}.`,
 				runId,
 				wrote: path,
 			};

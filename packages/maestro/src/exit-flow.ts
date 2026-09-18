@@ -99,6 +99,7 @@ import {
 import type { ExitMode, ModeName } from "./mode.js";
 import {
 	DEFAULT_GATES,
+	gateStops,
 	ID_RE,
 	inspectPlan,
 	isRefName,
@@ -770,7 +771,7 @@ export function renderPlanMessage(
 		outcome.kind === "stored"
 			? " Written by the harness on the way out of plan mode, from this conversation, and stored."
 			: outcome.kind === "started"
-				? ` Run started \`${outcome.runId}\` — started by the harness, not by this conversation, and it parks at its \`approve-plan\` checkpoint.`
+				? ` Run started \`${outcome.runId}\` — started by the harness, not by this conversation, and ${gateStops(resolvePolicy(plan.policy).gates)}.`
 				: " The exit ended without a run and the session is still in plan mode.";
 	return {
 		customType: PLAN_MESSAGE_TYPE,
@@ -1467,7 +1468,7 @@ export async function runExitFlow(
 			[
 				`\`${plan.slug}\` — ${plan.deliverables.length} deliverable${plan.deliverables.length === 1 ? "" : "s"}, effort ${effort}, gates ${resolved.gates}.`,
 				verdict ? `The blind review says \`${verdict.verdict}\`.` : undefined,
-				"The run parks at its `approve-plan` checkpoint, so approving it is still a separate decision.",
+				`Starting it is the approval — ${gateStops(resolved.gates)}.`,
 			]
 				.filter((line): line is string => line !== undefined)
 				.join("\n"),
@@ -1518,7 +1519,7 @@ export async function runExitFlow(
 			renderPlanMessage(plan, { kind: "started", runId: receipt.runId }),
 		);
 		ui.notify(
-			`Mode ${deps.wanted}, and \`${plan.slug}\` is running as \`${receipt.runId}\` at effort ${effort}. Approval is the run's \`approve-plan\` checkpoint, not this flow.`,
+			`Mode ${deps.wanted}, and \`${plan.slug}\` is running as \`${receipt.runId}\` at effort ${effort}. Starting it was the approval, and ${gateStops(resolved.gates)}.`,
 			"info",
 		);
 		return {

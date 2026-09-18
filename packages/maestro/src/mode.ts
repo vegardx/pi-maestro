@@ -26,10 +26,9 @@ export type ModeName = (typeof MODE_NAMES)[number];
 /**
  * The postures a plan-mode exit can be heading for.
  *
- * Named here rather than written out wherever the exit record is read, because
- * `plan` is the one mode a pending exit can never *want*: the exit starts in
- * plan mode and its whole point is leaving it, eventually. A record saying
- * otherwise is refused by `pending-exit.ts` against this list.
+ * Named here rather than written out wherever the exit reads it, because
+ * `plan` is the one mode an exit can never be heading *for*: the exit starts
+ * in plan mode and its whole point is leaving it, eventually.
  */
 export const EXIT_MODES = ["auto", "hack"] as const;
 

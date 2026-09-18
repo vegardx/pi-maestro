@@ -202,15 +202,14 @@ export function renderReviseSteer(
 			" makes the answer visible — rather than leaving the reviewer to find" +
 			" the same thing again.",
 		"",
-		"Then call `plan` once with the WHOLE document: the same slug, everything" +
-			" the plan already has, with your changes in it. A deliverable's `tasks`" +
-			" are the work and its `reviews` are who reads that work; effort, gates" +
-			" and publication are already decided and the tool does not take them.",
+		"Send the WHOLE document again: the same slug, everything the plan already" +
+			" has, with your changes in it. A deliverable's `tasks` are the work and" +
+			" its `reviews` are who reads that work; effort, gates and publication" +
+			" are already decided and the schema has no field for them.",
 		"",
-		"Stop after the `plan` call. Do not answer the review in prose, do not" +
-			" start a run, and do not ask a workflow to check your rewrite: the same" +
-			" blind reviewer reads the plan again the moment you store it, and I am" +
-			" shown both.",
+		"Your whole answer is that one JSON object. Do not answer the review in" +
+			" prose: the same blind reviewer reads the plan again the moment it is" +
+			" stored, and the person is shown both.",
 	].join("\n");
 }
 

@@ -8,7 +8,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import maestroExtension, {
-	planStoredNotice,
 	type SeatHost,
 	seatToolBlockReason,
 	startSeat,
@@ -59,9 +58,12 @@ function host() {
 		run: (name: string, args = "") => {
 			const command = commands.get(name);
 			if (!command) throw new Error(`no /${name} registered`);
+			// No dialogs: `/mode` on a session that cannot be asked two questions
+			// is the plain switch it always was, which is what this suite is
+			// about. The exit itself is driven in test/exit-flow.test.ts.
 			return command.handler(args, {
 				model: { provider: "test", id: "model" },
-				hasUI: true,
+				hasUI: false,
 				ui: {
 					confirm: async () => false,
 					notify: (message: string, level: string) =>
@@ -133,44 +135,6 @@ describe("interactive seat extension entry", () => {
 		]);
 	});
 
-	it("says a stored plan is runnable, and in plan mode how to leave", () => {
-		const stored = {
-			toolName: "plan",
-			isError: false,
-			details: { stored: true, slug: "arc" },
-		};
-		expect(planStoredNotice(stored, "plan")).toContain(
-			"/plan run arc [cheap|standard|deep]",
-		);
-		expect(planStoredNotice(stored, "plan")).toContain("approve-plan");
-		expect(planStoredNotice(stored, "plan")).toContain("/mode auto");
-		// The notice states the rule the seat now enforces: the model starts no
-		// run in plan mode, and both ways one does start are named.
-		expect(planStoredNotice(stored, "plan")).toContain(
-			"does not start workflow runs in plan mode",
-		);
-		expect(planStoredNotice(stored, "plan")).toContain(
-			"`workflow_run` and `workflow_propose`",
-		);
-		expect(planStoredNotice(stored, "plan")).toContain("/workflow run <ref>");
-		// A posture that can already write does not need the exit offered.
-		expect(planStoredNotice(stored, "auto")).not.toContain("/mode auto");
-
-		// Nothing to celebrate when nothing was stored.
-		expect(
-			planStoredNotice(
-				{ toolName: "plan", isError: false, details: { stored: false } },
-				"plan",
-			),
-		).toBeUndefined();
-		expect(
-			planStoredNotice({ ...stored, isError: true }, "plan"),
-		).toBeUndefined();
-		expect(
-			planStoredNotice({ ...stored, toolName: "bash" }, "plan"),
-		).toBeUndefined();
-	});
-
 	it("wires plan-mode mutation blocking through Pi's tool_call event", async () => {
 		const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
 		const commands = new Map<
@@ -199,37 +163,10 @@ describe("interactive seat extension entry", () => {
 			expect(toolCall({ toolName }, {})).toMatchObject({ block: true });
 		expect(toolCall({ toolName: "read" }, {})).toBeUndefined();
 
-		// The other half of the plan-mode contract: a stored plan is the posture's
-		// only completion point, so the human is told it is runnable.
-		const toolResult = handlers.get("tool_result")?.[0];
-		if (!toolResult) throw new Error("tool_result handler was not registered");
-		const said: string[] = [];
-		toolResult(
-			{
-				toolName: "plan",
-				isError: false,
-				details: { stored: true, slug: "arc" },
-			},
-			{ ui: { notify: (message: string) => said.push(message) } },
-		);
-		expect(said.at(-1)).toContain("/plan run arc");
-		expect(said.at(-1)).toContain("/mode auto");
-
 		await commands.get("mode")?.handler("auto", {
 			ui: { notify() {} },
 		});
 		expect(toolCall({ toolName: "write" }, {})).toBeUndefined();
-
-		said.length = 0;
-		toolResult(
-			{
-				toolName: "plan",
-				isError: false,
-				details: { stored: true, slug: "arc" },
-			},
-			{ ui: { notify: (message: string) => said.push(message) } },
-		);
-		expect(said.at(-1)).not.toContain("/mode auto");
 	});
 });
 

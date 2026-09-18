@@ -863,10 +863,9 @@ export function isRefName(name: string): boolean {
 /**
  * Every dial the plan set, checked against the vocabulary that has meaning.
  *
- * Exported because a plan is not the only place a policy is written down: the
- * plan-mode exit records the one a human chose before the document exists
- * (`pending-exit.ts`), and a second validator there would be a second opinion
- * about what is legal.
+ * Exported because a plan is not the only place a policy is read: the
+ * plan-mode exit settles one in its dialogs before any document exists, and a
+ * second validator there would be a second opinion about what is legal.
  */
 export function validatePolicy(policy: PlanPolicy, errors: string[]): void {
 	const at = "policy";

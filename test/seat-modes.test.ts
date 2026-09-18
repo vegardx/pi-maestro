@@ -1,22 +1,17 @@
-// The plan tool is a posture, not a fixture.
+// The seat's tool surface, and what a posture does to it.
 //
-// Plan mode is a conversation: the document is written on the way out, so the
-// `plan` tool is withheld there and offered everywhere else — plus the exit
-// window, which is the one moment plan mode holds it. The window has two
-// moments now, because the exit no longer changes the mode to open it: a record
-// with no agreed description holds `plan_intent` alone, and only an agreed one
-// holds `plan`. The defect these tests stand against is the registry's own: a
-// tool whose availability is decided in one place and remembered in another. So
-// every case below asks the SAME predicate's question through a different door
-// — the registry, the live tool set Pi holds, the block reason — and demands
-// the same answer.
+// THERE IS NO PLAN TOOL. The document is not written by a tool call any more:
+// the exit asks the model for it directly, outside the agent loop, with no
+// tools offered at all. So the seat declares exactly what it holds in every
+// posture, and these tests stand against the registry's own defect — a tool
+// whose availability is decided in one place and remembered in another — by
+// asking the SAME question through every door and demanding the same answer.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PLAN_INTENT_TOOL } from "../packages/maestro/src/authoring.js";
 import {
 	PLAN_MODE_RUN_REFUSAL,
 	type SeatHost,
@@ -24,12 +19,8 @@ import {
 	startSeat,
 } from "../packages/maestro/src/extension.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
-import {
-	createSeat,
-	type ExitWindow,
-	intentToolAvailable,
-	planToolAvailable,
-} from "../packages/maestro/src/seat.js";
+import type { Plan } from "../packages/maestro/src/plan.js";
+import { createSeat } from "../packages/maestro/src/seat.js";
 import { fakeHost } from "./fake-host.js";
 
 const dirs: string[] = [];
@@ -53,6 +44,9 @@ function seatOptions() {
 		sessionId: () => "seat-modes-session",
 	};
 }
+
+/** Every tool the seat declares, in every posture. */
+const SEAT_TOOLS = ["bash", "delete"] as const;
 
 /**
  * A host that keeps a live tool set, the way Pi does: `registerTool` has no
@@ -104,47 +98,32 @@ function host(seed: readonly string[] = ["read", "workflow_run"]) {
 }
 
 /**
- * ONE HOST, TWO READERS. The `plan` tool refuses a document this session
- * cannot honour and the store refuses to save one; they are the same refusal,
- * so the seat hands both the same port. If they were given different ones, a
- * plan the tool accepted would throw out of `savePlan` — which is what this
- * asserts by storing one and refusing another through the tool alone.
+ * ONE HOST, ONE READER. The exit validates the document it obtained and the
+ * store refuses to save one this session cannot honour; they are the same
+ * refusal, so the seat hands the store the port the exit is also given. This
+ * asserts the store's half: what the host has is stored, what it does not is
+ * refused by name.
  */
-describe("one host answers for the plan tool and the store", () => {
-	const pinned = (model: string) => ({
+describe("the host answers for the store", () => {
+	const pinned = (model: string): Plan => ({
 		slug: "arc",
 		title: "Arc",
+		repos: [{ key: "main", path: "." }],
 		deliverables: [
 			{
 				id: "api",
 				title: "The API",
+				after: [],
+				reads: [],
 				tasks: [{ id: "build", title: "Build it" }],
 				reviews: [{ lens: "c", model }],
 			},
 		],
 	});
 
-	const planTool = (seat: ReturnType<typeof createSeat>) => {
-		seat.setMode("auto");
-		const definition = seat.tools
-			.definitionsFor("maestro")
-			.find((tool) => tool.name === "plan");
-		if (!definition) throw new Error("no plan tool");
-		return (document: unknown) =>
-			(
-				definition.execute as unknown as (
-					id: string,
-					p: unknown,
-				) => Promise<{
-					content: { text: string }[];
-					details: { stored: boolean; errors: readonly string[] };
-				}>
-			)("call-1", document);
-	};
-
-	it("stores what the host has and refuses what it does not", async () => {
-		// A real repository, because `repos` defaults to the seat's cwd and a
-		// plan's repository path is checked against the world.
+	it("stores what the host has and refuses what it does not", () => {
+		// A real repository, because a plan's repository path is checked against
+		// the world.
 		const cwd = temp("maestro-seat-repo-");
 		execFileSync("git", ["init", "--quiet"], { cwd, stdio: "ignore" });
 		const seat = createSeat({
@@ -153,204 +132,134 @@ describe("one host answers for the plan tool and the store", () => {
 			sessionId: () => "seat-modes-session",
 			host: () => fakeHost({ models: ["anthropic/opus-5"] }),
 		});
-		const write = planTool(seat);
+		const plan = {
+			...pinned("anthropic/opus-5"),
+			repos: [{ key: "main", path: cwd }],
+		};
 
-		const stored = await write(pinned("anthropic/opus-5"));
-		expect(stored.details.stored).toBe(true);
+		seat.store.savePlan(plan);
 		expect(seat.store.loadPlan("arc")?.deliverables[0]?.reviews).toEqual([
 			{ lens: "c", model: "anthropic/opus-5" },
 		]);
 
-		const refused = await write(pinned("anthropic/opus-9"));
-		expect(refused.details.stored).toBe(false);
-		expect(refused.details.errors.join("\n")).toContain(
-			"is not a model this host has",
-		);
+		expect(() =>
+			seat.store.savePlan({
+				...pinned("anthropic/opus-9"),
+				repos: [{ key: "main", path: cwd }],
+			}),
+		).toThrowError(/is not a model this host has/);
 	});
 
 	// A seat with no host is every seat in a test and every headless check.
 	// It refuses a pin rather than storing what nothing verified.
-	it("refuses a pinned model when the seat was built without a host", async () => {
+	it("refuses a pinned model when the seat was built without a host", () => {
 		const cwd = temp("maestro-seat-repo-");
 		execFileSync("git", ["init", "--quiet"], { cwd, stdio: "ignore" });
 		const seat = createSeat({ cwd, agentDir: temp("maestro-agent-") });
 
-		const refused = await planTool(seat)(pinned("anthropic/opus-5"));
-		expect(refused.details.stored).toBe(false);
-		expect(refused.details.errors.join("\n")).toContain(
-			"there is no model catalogue here to check it against",
-		);
+		expect(() =>
+			seat.store.savePlan({
+				...pinned("anthropic/opus-5"),
+				repos: [{ key: "main", path: cwd }],
+			}),
+		).toThrowError(/there is no model catalogue here to check it against/);
 	});
 });
 
-describe("the plan tool by mode", () => {
-	it("is withheld in plan mode and held in auto and hack", () => {
+describe("the seat's tools, by mode", () => {
+	it("holds the same two in every posture", () => {
 		const seat = createSeat(seatOptions());
 
 		expect(seat.mode().name).toBe("plan");
-		expect(seat.tools.grantsFor("maestro")).toEqual(["bash", "delete"]);
-		expect(seat.planToolAvailable()).toBe(false);
-
-		for (const name of ["auto", "hack"] as const) {
+		for (const name of ["plan", "auto", "hack"] as const) {
 			seat.setMode(name);
-			expect(seat.tools.grantsFor("maestro")).toEqual([
-				"bash",
-				"delete",
-				"plan",
+			expect([name, seat.tools.grantsFor("maestro")]).toEqual([
+				name,
+				[...SEAT_TOOLS],
 			]);
-			expect(seat.planToolAvailable()).toBe(true);
 		}
-
-		seat.setMode("plan");
-		expect(seat.tools.grantsFor("maestro")).toEqual(["bash", "delete"]);
 	});
 
 	it("says the same thing through every door the registry has", () => {
 		const seat = createSeat(seatOptions());
 		const doors = () => ({
 			grants: [...seat.tools.grantsFor("maestro")],
+			declared: [...seat.tools.declaredFor("maestro")],
 			definitions: seat.tools.definitionsFor("maestro").map(({ name }) => name),
-			described: seat.tools.describeFor("maestro").includes("- plan —"),
+			names: [...seat.tools.names()],
 		});
 
-		expect(doors()).toEqual({
-			grants: ["bash", "delete"],
-			definitions: ["bash", "delete"],
-			described: false,
-		});
+		const expected = {
+			grants: [...SEAT_TOOLS],
+			declared: [...SEAT_TOOLS],
+			definitions: [...SEAT_TOOLS],
+			names: [...SEAT_TOOLS],
+		};
+		expect(doors()).toEqual(expected);
 		seat.setMode("auto");
-		expect(doors()).toEqual({
-			grants: ["bash", "delete", "plan"],
-			definitions: ["bash", "delete", "plan"],
-			described: true,
-		});
+		expect(doors()).toEqual(expected);
 	});
 
-	it("keeps the may-hold list static — availability is the moving half", () => {
+	// The two names this exit removed. Nothing declares them, in any posture,
+	// so nothing can hand one to a model that would then wait for it.
+	it("declares neither `plan` nor `plan_intent`, in any posture", () => {
 		const seat = createSeat(seatOptions());
-		expect(seat.tools.declaredFor("maestro")).toEqual([
-			"bash",
-			"delete",
-			"plan",
-			PLAN_INTENT_TOOL,
-		]);
-		expect(seat.tools.names()).toEqual([
-			"bash",
-			"delete",
-			"plan",
-			PLAN_INTENT_TOOL,
-		]);
-		seat.setMode("auto");
-		expect(seat.tools.declaredFor("maestro")).toEqual([
-			"bash",
-			"delete",
-			"plan",
-			PLAN_INTENT_TOOL,
-		]);
-		// Identity never depended on the posture: resolving a withheld tool by
-		// name still works, which is what keeps the refusal specific.
-		seat.setMode("plan");
-		expect(seat.tools.has("plan")).toBe(true);
-		expect(seat.tools.require("plan").definition.name).toBe("plan");
-	});
-});
-
-describe("the exit window", () => {
-	it("is the one moment plan mode holds the tool, and only once agreed", () => {
-		// mode, window, `plan`, `plan_intent`.
-		const table: [ModeName, ExitWindow, boolean, boolean][] = [
-			["plan", "none", false, false],
-			["plan", "intent", false, true],
-			["plan", "plan", true, true],
-			["auto", "none", true, false],
-			["auto", "intent", true, true],
-			["auto", "plan", true, true],
-			["hack", "none", true, false],
-			["hack", "intent", true, true],
-			["hack", "plan", true, true],
-		];
-		for (const [mode, window, plan, intent] of table)
-			expect([
-				mode,
-				window,
-				planToolAvailable(mode, window),
-				intentToolAvailable(mode, window),
-			]).toEqual([mode, window, plan, intent]);
-	});
-
-	it("reaches the registry through the injected record", () => {
-		let window: ExitWindow = "none";
-		const seat = createSeat({ ...seatOptions(), exitWindow: () => window });
-		const grants = () => seat.tools.grantsFor("maestro");
-
-		expect(grants()).not.toContain("plan");
-		expect(grants()).not.toContain(PLAN_INTENT_TOOL);
-		// The exit flow writes its pending record and `plan_intent` appears
-		// without the mode having moved. `plan` does not: there is nothing yet
-		// for a blind reviewer to check a plan against.
-		window = "intent";
-		expect(grants()).not.toContain("plan");
-		expect(grants()).toContain(PLAN_INTENT_TOOL);
-		expect(seat.planToolAvailable()).toBe(false);
-		expect(seat.intentToolAvailable()).toBe(true);
-		// The description is agreed, and the window opens.
-		window = "plan";
-		expect(grants()).toContain("plan");
-		expect(seat.planToolAvailable()).toBe(true);
-		window = "none";
-		expect(grants()).not.toContain("plan");
-		expect(grants()).not.toContain(PLAN_INTENT_TOOL);
-	});
-
-	it("defends the tool call itself, in case a host kept a stale set", () => {
-		expect(seatToolBlockReason("plan", "plan")).toContain("not held in plan");
-		// The refusal names the step that is missing, not only the tool.
-		expect(seatToolBlockReason("plan", "plan", "intent")).toContain(
-			"`plan_intent`",
-		);
-		expect(seatToolBlockReason("plan", "plan", "plan")).toBeUndefined();
-		expect(seatToolBlockReason("auto", "plan")).toBeUndefined();
-		expect(seatToolBlockReason("hack", "plan")).toBeUndefined();
-		// `plan_intent` belongs to the exit in every posture, not to auto/hack.
-		for (const mode of ["plan", "auto", "hack"] as const) {
-			expect(seatToolBlockReason(mode, PLAN_INTENT_TOOL)).toContain(
-				"plan-mode exit",
-			);
-			expect(
-				seatToolBlockReason(mode, PLAN_INTENT_TOOL, "intent"),
-			).toBeUndefined();
-			expect(
-				seatToolBlockReason(mode, PLAN_INTENT_TOOL, "plan"),
-			).toBeUndefined();
+		for (const name of ["plan", "auto", "hack"] as const) {
+			seat.setMode(name);
+			for (const gone of ["plan", "plan_intent"]) {
+				expect([name, gone, seat.tools.has(gone)]).toEqual([name, gone, false]);
+				expect([name, gone, seat.tools.names().includes(gone)]).toEqual([
+					name,
+					gone,
+					false,
+				]);
+				expect([
+					name,
+					gone,
+					seat.tools.describeFor("maestro").includes(`- ${gone} —`),
+				]).toEqual([name, gone, false]);
+			}
 		}
 	});
 });
 
-describe("Pi's live tool set follows the mode", () => {
-	it("adds and withdraws `plan` on /mode, registering it once", async () => {
+describe("Pi's live tool set", () => {
+	it("registers the seat's tools once and moves none of them on /mode", async () => {
 		const h = host();
 		const entry = startSeat(h.pi, seatOptions());
 		entry.seat();
 
 		// Loading registers and touches nothing else: the live set is Pi's until
 		// the runtime is bound, and reading it before then throws.
-		expect(h.registered).toEqual(["bash", "delete"]);
+		expect(h.registered).toEqual([...SEAT_TOOLS]);
 		h.bind();
 		expect(h.active()).toEqual(["read", "workflow_run"]);
 		entry.runtimeBound();
-		expect(h.active()).toEqual(["read", "workflow_run", "bash", "delete"]);
+		expect(h.active()).toEqual(["read", "workflow_run", ...SEAT_TOOLS]);
 
-		await h.mode("auto");
-		expect(h.registered).toEqual(["bash", "delete", "plan"]);
-		expect(h.active()).toContain("plan");
+		for (const mode of ["auto", "plan", "hack", "plan"] as const) {
+			await h.mode(mode);
+			expect([mode, h.registered]).toEqual([mode, [...SEAT_TOOLS]]);
+			expect([mode, h.active()]).toEqual([
+				mode,
+				["read", "workflow_run", ...SEAT_TOOLS],
+			]);
+		}
+	});
 
-		await h.mode("plan");
-		expect(h.active()).not.toContain("plan");
-		// A withdrawal is not a deregistration, and the return trip must not
-		// register a second implementation of the same name.
-		await h.mode("hack");
-		expect(h.registered).toEqual(["bash", "delete", "plan"]);
-		expect(h.active()).toContain("plan");
+	it("never hands Pi a `plan` or `plan_intent` tool", async () => {
+		const h = host();
+		const entry = startSeat(h.pi, seatOptions());
+		entry.seat();
+		h.bind();
+		entry.runtimeBound();
+		for (const mode of ["auto", "plan", "hack"] as const) {
+			await h.mode(mode);
+			expect(h.registered).not.toContain("plan");
+			expect(h.registered).not.toContain("plan_intent");
+			expect(h.active()).not.toContain("plan");
+			expect(h.active()).not.toContain("plan_intent");
+		}
 	});
 
 	it("leaves every tool it does not declare alone, workflow tools included", async () => {
@@ -361,7 +270,7 @@ describe("Pi's live tool set follows the mode", () => {
 		entry.runtimeBound();
 
 		const foreign = () =>
-			h.active().filter((name) => !["bash", "delete", "plan"].includes(name));
+			h.active().filter((name) => !SEAT_TOOLS.includes(name as "bash"));
 		for (const mode of ["auto", "plan", "hack", "plan"] as const) {
 			await h.mode(mode);
 			expect(foreign()).toEqual([
@@ -391,8 +300,7 @@ describe("Pi's live tool set follows the mode", () => {
 			expect(seatToolBlockReason("auto", name)).toBeUndefined();
 			expect(seatToolBlockReason("hack", name)).toBeUndefined();
 		}
-		// Reading a run is planning, so every read stays open — including in the
-		// exit window, which changes nothing about runs either way.
+		// Reading a run is planning, so every read stays open.
 		for (const name of [
 			"workflow_list",
 			"workflow_validate",
@@ -403,9 +311,14 @@ describe("Pi's live tool set follows the mode", () => {
 			"workflow_status",
 			// Already human-only in the runtime; the seat adds nothing to it.
 			"workflow_decide",
-		]) {
+		])
 			expect(seatToolBlockReason("plan", name)).toBeUndefined();
-			expect(seatToolBlockReason("plan", name, "plan")).toBeUndefined();
+	});
+
+	it("keeps plan mode read-only at the tool call", () => {
+		for (const name of ["write", "edit", "delete"]) {
+			expect(seatToolBlockReason("plan", name)).toContain("read-only");
+			expect(seatToolBlockReason("auto", name)).toBeUndefined();
 		}
 	});
 
@@ -415,21 +328,11 @@ describe("Pi's live tool set follows the mode", () => {
 		const h = host();
 		const entry = startSeat(h.pi, seatOptions());
 		expect(() => entry.seat()).not.toThrow();
-		expect(h.registered).toEqual(["bash", "delete"]);
-		// A mode change before binding still only registers.
+		expect(h.registered).toEqual([...SEAT_TOOLS]);
 		await h.mode("auto");
-		expect(h.registered).toEqual(["bash", "delete", "plan"]);
 		h.bind();
 		entry.runtimeBound();
-		expect(h.active()).toEqual([
-			"read",
-			"workflow_run",
-			"bash",
-			"delete",
-			"plan",
-		]);
-		await h.mode("plan");
-		expect(h.active()).not.toContain("plan");
+		expect(h.active()).toEqual(["read", "workflow_run", ...SEAT_TOOLS]);
 	});
 
 	it("still hands a host without a live tool set what it can hold", async () => {
@@ -448,9 +351,9 @@ describe("Pi's live tool set follows the mode", () => {
 		};
 		const entry = startSeat(pi, seatOptions());
 		entry.seat();
-		expect(registered).toEqual(["bash", "delete"]);
+		expect(registered).toEqual([...SEAT_TOOLS]);
 		await commands.get("mode")?.handler("auto", { ui: { notify() {} } });
-		expect(registered).toEqual(["bash", "delete", "plan"]);
+		expect(registered).toEqual([...SEAT_TOOLS]);
 	});
 });
 
@@ -467,7 +370,7 @@ describe("the mode-exit seam", () => {
 		entry.seat();
 
 		await h.mode("auto");
-		// The third element is the mode observed from inside the hook: phase 1
+		// The third element is the mode observed from inside the hook: the exit
 		// gathers what the human knows while the session is still in plan mode.
 		expect(seen).toEqual([["plan", "auto", "plan"]]);
 		expect(entry.currentMode()).toBe("auto");
@@ -495,12 +398,11 @@ describe("the mode-exit seam", () => {
 		expect(seen).toEqual(["plan->auto"]);
 	});
 
-	it("does not change the switch it straddles while it is empty", async () => {
+	it("does not change the switch it straddles on a session with no dialogs", async () => {
 		const h = host();
 		const entry = startSeat(h.pi, seatOptions());
 		entry.seat();
 		await h.mode("auto");
 		expect(entry.currentMode()).toBe("auto");
-		expect(entry.exitWindow()).toBe("none");
 	});
 });

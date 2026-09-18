@@ -65,7 +65,8 @@ export class UnsupportedStateError extends StoreError {
 	) {
 		super(
 			`${path} was written by schema ${String(found)}, and this build speaks ${MAESTRO_SCHEMA_VERSION}. ` +
-				"Schema 5 moved review routing from `tasks[].review` to `deliverables[].reviews` and dropped `stages`, and there is no migration. " +
+				"Schema 6 adds a required envelope field, `authoredBy` — the session id and the cwd of whoever wrote the plan — " +
+				"which a schema 5 envelope does not carry and nothing can infer, and there is no migration. " +
 				`Archive or remove the ${kind} and write it again at schemaVersion ${MAESTRO_SCHEMA_VERSION}.`,
 		);
 		this.name = "UnsupportedStateError";
@@ -92,6 +93,31 @@ export interface PlanSummary {
 	readonly savedAt: string;
 }
 
+/**
+ * Who wrote a plan: the session, and the project it was written in.
+ *
+ * ON THE ENVELOPE, NOT THE DOCUMENT. It is a fact about the writing, not about
+ * the work, and a plan handed to a run must not carry a session id that a
+ * second session then contradicts. Required from schema 6: a plan whose author
+ * is unknown is a plan nobody can ask about, and "unknown" was the answer every
+ * plan gave before this field existed.
+ *
+ * `cwd` is stored even though the directory the plan sits in already encodes
+ * it, because the encoding is lossy — every separator became `-` — and a
+ * person reading a receipt should not have to guess where the dashes were.
+ */
+export interface AuthoredBy {
+	readonly sessionId: string;
+	readonly cwd: string;
+}
+
+/** A stored plan with the envelope facts that are not part of the document. */
+export interface PlanRecord {
+	readonly plan: Plan;
+	readonly authoredBy: AuthoredBy;
+	readonly savedAt: string;
+}
+
 export interface PlanStore {
 	/** `<agentDir>/maestro/plans/<project key>` — THIS project's plans. */
 	readonly root: string;
@@ -100,6 +126,8 @@ export interface PlanStore {
 	exists(slug: string): boolean;
 	/** Throws `UnsupportedStateError` if a file exists but speaks another schema. */
 	loadPlan(slug: string): Plan | null;
+	/** The same read, with `authoredBy` and `savedAt`. Same refusals. */
+	loadRecord(slug: string): PlanRecord | null;
 	savePlan(plan: Plan): void;
 	/** The plan and its directory. */
 	remove(slug: string): void;
@@ -131,6 +159,16 @@ export interface StoreOptions {
 	readonly cwd: string;
 	/** Injected by tests, so no test writes into the real agent directory. */
 	readonly agentDir?: string;
+	/**
+	 * The session doing the writing, read at save time because the store is
+	 * built before any session context exists. @see AuthoredBy
+	 *
+	 * A store that cannot name one refuses to save rather than writing a plan
+	 * with an invented author: schema 6 says the field is there, and a field
+	 * that is sometimes a real session and sometimes a placeholder is worth
+	 * less than no field.
+	 */
+	readonly sessionId: () => string | undefined;
 	/** Injected so tests do not have to reason about wall-clock time. */
 	readonly now?: () => string;
 	/**
@@ -150,10 +188,17 @@ export interface StoreOptions {
 interface Envelope {
 	readonly schemaVersion: number;
 	readonly savedAt: string;
+	readonly authoredBy: AuthoredBy;
 	readonly body: Plan;
 }
 
 let writeCounter = 0;
+
+function isAuthoredBy(value: unknown): value is AuthoredBy {
+	if (typeof value !== "object" || value === null) return false;
+	const it = value as { sessionId?: unknown; cwd?: unknown };
+	return typeof it.sessionId === "string" && typeof it.cwd === "string";
+}
 
 export function createPlanStore(options: StoreOptions): PlanStore {
 	const now = options.now ?? (() => new Date().toISOString());
@@ -201,18 +246,27 @@ export function createPlanStore(options: StoreOptions): PlanStore {
 					"missing",
 				path,
 			);
+		// The version says the field is there. A file that claims 6 and omits it
+		// was not written by this store, and reading it as "authored by nobody"
+		// is the soft downgrade `UnsupportedStateError` exists to refuse.
+		if (!isAuthoredBy(envelope.authoredBy))
+			throw new StoreError(
+				`${path} claims schema ${MAESTRO_SCHEMA_VERSION} but carries no \`authoredBy\` session and cwd`,
+			);
 		return {
 			schemaVersion: envelope.schemaVersion,
 			savedAt: typeof envelope.savedAt === "string" ? envelope.savedAt : "",
+			authoredBy: envelope.authoredBy,
 			body: envelope.body as Plan,
 		};
 	}
 
-	function write(path: string, body: Plan): void {
+	function write(path: string, body: Plan, authoredBy: AuthoredBy): void {
 		mkdirSync(join(path, ".."), { recursive: true });
 		const envelope: Envelope = {
 			schemaVersion: MAESTRO_SCHEMA_VERSION,
 			savedAt: now(),
+			authoredBy,
 			body,
 		};
 		// tmp + rename: a reader sees the old file or the new one, never half of
@@ -246,10 +300,27 @@ export function createPlanStore(options: StoreOptions): PlanStore {
 			return read(file(slug))?.body ?? null;
 		},
 
+		loadRecord(slug) {
+			if (!SLUG_RE.test(slug)) return null;
+			const envelope = read(file(slug));
+			if (!envelope) return null;
+			return {
+				plan: envelope.body,
+				authoredBy: envelope.authoredBy,
+				savedAt: envelope.savedAt,
+			};
+		},
+
 		savePlan(plan) {
 			const errors = validatePlan(plan, undefined, options.host?.());
 			if (errors.length > 0) throw new InvalidStateError("plan", errors);
-			write(file(plan.slug), plan);
+			const sessionId = options.sessionId();
+			if (!sessionId)
+				throw new StoreError(
+					`refusing to save \`${plan.slug}\`: schema ${MAESTRO_SCHEMA_VERSION} records who wrote a plan ` +
+						"(`authoredBy.sessionId`), and this store was built without a session to name.",
+				);
+			write(file(plan.slug), plan, { sessionId, cwd });
 		},
 
 		remove(slug) {

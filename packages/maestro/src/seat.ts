@@ -41,6 +41,13 @@ export interface SeatOptions {
 	 * by name, rather than storing what nothing could verify.
 	 */
 	readonly host?: () => PlanHostPort | undefined;
+	/**
+	 * The session the store records as a plan's author. @see StoreOptions.sessionId
+	 *
+	 * Injected rather than read here for the same reason `host` is: the session
+	 * does not exist when the seat is built, and the seat must not invent one.
+	 */
+	readonly sessionId?: () => string | undefined;
 }
 
 /**
@@ -108,6 +115,7 @@ export function createSeat(options: SeatOptions = {}): Seat {
 	const cwd = options.cwd ?? process.cwd();
 	const store = createPlanStore({
 		cwd,
+		sessionId: options.sessionId ?? ((): undefined => undefined),
 		...(options.agentDir ? { agentDir: options.agentDir } : {}),
 		...(options.host ? { host: options.host } : {}),
 	});

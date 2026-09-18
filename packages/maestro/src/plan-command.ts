@@ -42,7 +42,7 @@ import {
 	type WorkflowInput,
 } from "./plan-input.js";
 import type { Publication } from "./publish.js";
-import type { PlanStore } from "./store.js";
+import type { AuthoredBy, PlanStore } from "./store.js";
 
 /** The workflow a stored plan is handed to. Named once. */
 export const PLAN_WORKFLOW_REF = "plan-to-ship";
@@ -231,12 +231,20 @@ function renderPolicy(policy: ResolvedPolicy, declared: boolean): string[] {
 export function renderPlan(
 	plan: Plan,
 	warnings: readonly string[] = [],
+	authoredBy?: AuthoredBy,
 ): string {
 	// Read back as it will COMPILE: the stages are derived, never authored, and
 	// showing only what was typed would hide the run from the person being asked
 	// to approve it.
 	const staged = withDefaultStages(plan);
 	const lines = [`${plan.slug} — ${plan.title}`];
+	// Who wrote it, before what it says: a plan read back in a project it was
+	// not written in, or by a session that is not this one, is the first thing
+	// worth knowing about it.
+	if (authoredBy)
+		lines.push(
+			`  authored by session ${authoredBy.sessionId} in ${authoredBy.cwd}`,
+		);
 	if (plan.body) lines.push("", plan.body);
 	lines.push("", "Repositories:");
 	for (const repo of plan.repos) lines.push(`  ${repo.key}  ${repo.path}`);
@@ -368,14 +376,18 @@ export async function runPlanCommand(
 			return { level: "info", message: renderPlanList(deps.store.list()) };
 
 		case "show": {
-			const plan = deps.store.loadPlan(command.slug);
-			if (!plan) return unknownSlug(command.slug);
+			const record = deps.store.loadRecord(command.slug);
+			if (!record) return unknownSlug(command.slug);
 			// Re-inspected rather than read from the store: the warnings are about
 			// the world (a dirty tree), not about the document, and the world has
 			// moved since it was written.
 			return {
 				level: "info",
-				message: renderPlan(plan, inspectPlan(plan).warnings),
+				message: renderPlan(
+					record.plan,
+					inspectPlan(record.plan).warnings,
+					record.authoredBy,
+				),
 			};
 		}
 

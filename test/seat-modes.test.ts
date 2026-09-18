@@ -45,7 +45,13 @@ function temp(name: string): string {
 }
 
 function seatOptions() {
-	return { cwd: temp("maestro-cwd-"), agentDir: temp("maestro-agent-") };
+	return {
+		cwd: temp("maestro-cwd-"),
+		agentDir: temp("maestro-agent-"),
+		// The store records who wrote a plan and refuses to save without a
+		// session to name, so a seat under test is a seat with one.
+		sessionId: () => "seat-modes-session",
+	};
 }
 
 /**
@@ -144,6 +150,7 @@ describe("one host answers for the plan tool and the store", () => {
 		const seat = createSeat({
 			cwd,
 			agentDir: temp("maestro-agent-"),
+			sessionId: () => "seat-modes-session",
 			host: () => fakeHost({ models: ["anthropic/opus-5"] }),
 		});
 		const write = planTool(seat);

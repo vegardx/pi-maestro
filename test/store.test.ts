@@ -41,7 +41,11 @@ function project(name = "alpha"): string {
 function makeStore(
 	options: Partial<StoreOptions> & { readonly agentDir: string },
 ): PlanStore {
-	return createPlanStore({ cwd: options.cwd ?? project(), ...options });
+	return createPlanStore({
+		cwd: options.cwd ?? project(),
+		sessionId: options.sessionId ?? (() => "session-1"),
+		...options,
+	});
 }
 
 /** Where a store's files land, computed the way nothing under test does. */
@@ -97,34 +101,36 @@ describe("plan store", () => {
 		const written = JSON.parse(
 			readFileSync(planPath(cwd, dir, "app"), "utf8"),
 		) as { schemaVersion: number };
-		expect(written.schemaVersion).toBe(5);
-		expect(MAESTRO_SCHEMA_VERSION).toBe(5);
+		expect(written.schemaVersion).toBe(6);
+		expect(MAESTRO_SCHEMA_VERSION).toBe(6);
 		expect(store.loadPlan("app")).toEqual(plan());
 	});
 
 	// The version 3 document. It is refused, not migrated, and the refusal
 	// names both versions and what changed between them — "unsupported" alone
 	// leaves a human with a file and no idea what to do with it.
-	it("refuses a version 4 envelope by naming both versions", () => {
+	it("refuses a version 5 envelope by naming both versions", () => {
 		const dir = agentDir();
 		const cwd = project();
 		const path = planPath(cwd, dir, "app");
 		mkdirSync(join(path, ".."), { recursive: true });
+		// The version 5 envelope exactly: a schema 5 plan document, and no
+		// `authoredBy`, because that is the field version 6 added.
 		writeFileSync(
 			path,
 			JSON.stringify({
-				schemaVersion: 4,
+				schemaVersion: 5,
 				savedAt: "2026-08-08T00:00:00Z",
 				body: plan(),
 			}),
 		);
 		const store = makeStore({ agentDir: dir, cwd });
 		expect(() => store.loadPlan("app")).toThrow(
-			`${path} was written by schema 4, and this build speaks 5. Schema 5 moved review routing from \`tasks[].review\` to \`deliverables[].reviews\` and dropped \`stages\`, and there is no migration. Archive or remove the plan and write it again at schemaVersion 5.`,
+			`${path} was written by schema 5, and this build speaks 6. Schema 6 adds a required envelope field, \`authoredBy\` — the session id and the cwd of whoever wrote the plan — which a schema 5 envelope does not carry and nothing can infer, and there is no migration. Archive or remove the plan and write it again at schemaVersion 6.`,
 		);
 		// Refused, never rewritten: a store that quietly re-stamped the version
 		// would be a migration nobody wrote.
-		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":4');
+		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":5');
 		// And it is absent from the list rather than fatal to it.
 		expect(store.list()).toEqual([]);
 	});
@@ -218,6 +224,23 @@ describe("plan store", () => {
 		expect(() => store.loadPlan("app")).toThrow(UnsupportedStateError);
 		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":1');
 	});
+
+	// A file that claims the current version and omits what the current version
+	// requires was not written here. Reading it as "authored by nobody" is the
+	// soft downgrade the whole envelope check exists to refuse.
+	it("refuses an envelope that claims 6 and carries no `authoredBy`", () => {
+		const dir = agentDir();
+		const cwd = project();
+		const path = planPath(cwd, dir, "app");
+		mkdirSync(join(path, ".."), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({ schemaVersion: 6, savedAt: "x", body: plan() }),
+		);
+		expect(() => makeStore({ agentDir: dir, cwd }).loadPlan("app")).toThrow(
+			/carries no `authoredBy` session and cwd/,
+		);
+	});
 });
 
 describe("plans are per project", () => {
@@ -288,13 +311,52 @@ describe("plans are per project", () => {
 		writeFileSync(
 			join(legacy, "plan.json"),
 			JSON.stringify({
-				schemaVersion: 5,
+				schemaVersion: 6,
 				savedAt: "2026-08-08T00:00:00Z",
+				authoredBy: { sessionId: "old", cwd: "/elsewhere" },
 				body: plan(),
 			}),
 		);
 		const store = makeStore({ agentDir: dir, cwd });
 		expect(store.list()).toEqual([]);
 		expect(store.loadPlan("app")).toBeNull();
+	});
+});
+
+describe("a plan records who wrote it", () => {
+	it("writes the authoring session and cwd onto the envelope", () => {
+		const dir = agentDir();
+		const cwd = project("alpha");
+		const store = makeStore({
+			agentDir: dir,
+			cwd,
+			sessionId: () => "sess-42",
+			now: () => "2026-08-08T00:00:00Z",
+		});
+		store.savePlan(plan());
+		expect(
+			JSON.parse(readFileSync(planPath(cwd, dir, "app"), "utf8")),
+		).toMatchObject({
+			schemaVersion: 6,
+			authoredBy: { sessionId: "sess-42", cwd },
+		});
+		expect(store.loadRecord("app")).toEqual({
+			plan: plan(),
+			authoredBy: { sessionId: "sess-42", cwd },
+			savedAt: "2026-08-08T00:00:00Z",
+		});
+	});
+
+	// FAIL CLOSED, the same way a pin with no host to check it fails closed: an
+	// invented author is worth less than no field at all.
+	it("refuses to save when it cannot name the session", () => {
+		const store = makeStore({
+			agentDir: agentDir(),
+			sessionId: () => undefined,
+		});
+		expect(() => store.savePlan(plan())).toThrow(
+			/schema 6 records who wrote a plan \(`authoredBy.sessionId`\)/,
+		);
+		expect(store.list()).toEqual([]);
 	});
 });

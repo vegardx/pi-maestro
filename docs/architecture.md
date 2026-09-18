@@ -161,10 +161,14 @@ the harness attaches from the decisions a human made on the way out of plan
 mode, never the model; the schema has no field for any of it. Writing a plan is
 not a tool call, so there is no plan-authoring tool in any posture. How each deliverable is run is derived from those three things
 and is not written down. Pi-maestro validates and stores this vocabulary but
-does not execute it. `/plan run <slug>` builds the workflow input
-and hands the session the `workflow_run { ref: "plan-to-ship", input }` call to
-make; `@vegardx/pi-workflow` owns the runtime lowering and state model. See
-[Authored plans](workflow-plans.md).
+does not execute it. The plan-mode exit and `/plan run <slug>` both build the
+workflow input and start `plan-to-ship` themselves, through the workflow
+runtime's service seam — `startBuiltin("plan-to-ship", {input, effort})`, which
+the runtime allowlists to that one definition and validates as `workflow_run`
+would. The run is started by the harness after the person says yes; the model is
+never asked to start a plan's run, and the seat still refuses its `workflow_run`
+in plan mode. `@vegardx/pi-workflow` owns the runtime lowering and state model.
+See [Authored plans](workflow-plans.md).
 
 ## Extension loading
 

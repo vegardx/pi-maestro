@@ -270,7 +270,7 @@ and nothing else.
 **The posture does not move until the run starts.** `/mode auto` used to switch
 first and ask later, which left every path that ends without a run in a posture
 nobody chose for what they ended up doing. `setMode` is called in exactly two
-places: *Just switch mode*, and immediately before the hand-off.
+places: *Just switch mode*, and immediately after the run starts.
 
 **What plan mode may run.** Nothing the model starts. The seat refuses
 `workflow_run` and `workflow_propose` in plan mode, by name, at the tool call;
@@ -284,7 +284,8 @@ this exit.
 
 **What the conversation learns.** One custom message when the plan is stored,
 and one more when the run starts or the exit goes back: the slug, the digest,
-the deliverable count, the outcome. Nothing else the harness did appears in the
+the deliverable count, the outcome, and — when a run started — its run id, said
+to be the harness's doing rather than the conversation's. Nothing else the harness did appears in the
 transcript — no steers, no tool calls, no retries. The requests are on the
 record in `authoring.json` beside the plan:
 
@@ -375,12 +376,15 @@ the session's own.
    in the conversation with the findings printed, whatever is answered: a fourth
    read of the same plan is the flow arguing with itself.
 7. **The run.** `Start the run?` is the last question. *No* leaves the plan
-   stored, the posture in plan mode, and starts nothing. *Yes* switches to the
-   posture asked for at `/mode` and asks the model — as an ordinary follow-up
-   message, in the transcript — to make the
-   `workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }`
-   call itself, because the workflow client this seat holds is read-only. The
-   run is made in the open, and it parks at its `approve-plan` checkpoint.
+   stored, the posture in plan mode, and starts nothing. *Yes* starts the run
+   **here, in the harness** — `startBuiltin("plan-to-ship", {input, effort})`
+   through the workflow runtime's service seam, allowlisted to that one
+   definition by name and validated exactly as `workflow_run` would be — and
+   then switches to the posture asked for at `/mode`. The model is not asked to
+   start it and is not in this loop at all. The run parks at its `approve-plan`
+   checkpoint. A runtime that refuses or fails to start it ends the exit the way
+   *Go back* does: the cause is printed, the posture does not move, and the plan
+   is stored with `/plan run <slug>` still there.
 
 Every ending that is not a run says the same two things in one notice: the plan
 is stored and `/plan run <slug>` starts it, and `/mode auto` (or `hack`) is
@@ -395,17 +399,22 @@ timeout, a verdict this seat cannot read) the warning names `Approve as is` and
 the same dialog is asked again without the review option. Neither throws into
 the session.
 
-**Nothing here writes outside those places.** The only run this exit starts is
-`plan-review`, which declares no checkpoint, no worktree and no handoff. The
-only shell commands are the repository creation above, through the audited
-`bash` tool under the session mode's own confirmation policy. Everything that
-writes to a repository is still the model's `workflow_run` call.
+**Nothing here writes outside those places.** The two runs this exit starts are
+both allowlisted in the runtime: `plan-review`, which declares no checkpoint, no
+worktree and no handoff, and `plan-to-ship` itself, once a person has answered
+`Start the run?` with yes. The only shell commands are the repository creation
+above, through the audited `bash` tool under the session mode's own confirmation
+policy. Nothing that writes to a repository happens in this tree: the run does
+its writing in worktrees, and reaching a branch is publication, which is a
+separate decision.
 
-## The hand-off to a run
+## From a stored plan to a run
 
-The exit validates and stores the complete document. Storage is not execution:
-pi-maestro does not compile or resume a plan, and a stored plan is intent until
-a workflow run is given it.
+The exit validates and stores the complete document, and then starts the run
+itself. Storage is still not execution: pi-maestro does not compile, drive or
+resume a plan — it hands the document to pi-workflow by value and gets a run id
+back. A stored plan whose run never started is intent, and `/plan run <slug>`
+is how it becomes a run later.
 
 ```text
 conversation
@@ -413,7 +422,9 @@ conversation
   → validation
   → <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
   → toWorkflowInput(plan, effort)
-  → workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }
+  → <agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json
+  → startBuiltin("plan-to-ship", { input, effort })  ← the harness, after your yes
+  → a run id, parked at `approve-plan`
 ```
 
 **Per project, and signed by the session that wrote it.** The store's root is
@@ -450,13 +461,16 @@ counts.
 `/plan run <slug> [cheap|standard|deep]` is not the normal way to start a run:
 the plan-mode exit starts one for you as soon as the plan is stored. It is the
 way to start or restart a run for a stored plan whose run never started or
-failed. It starts nothing itself either. It loads the stored document, builds
-`toWorkflowInput(plan, effort)`, writes that input to
-`<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json`, and hands
-the session the call to make: `workflow_run { ref: "plan-to-ship", input: … }`. pi-maestro has
-no workflow runtime and no dependency on one, so the run happens where every
-other tool call happens — in the open, in the transcript, where it can be seen
-before it is made.
+failed. It loads the stored document, builds `toWorkflowInput(plan, effort)`,
+writes that input to
+`<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json`, and starts
+the run through the same seam the exit uses:
+`startBuiltin("plan-to-ship", { input, effort })`. pi-maestro still has no
+workflow runtime of its own and takes no dependency on one — it finds the
+runtime on Pi's event bus, and a seat without one says so and leaves the plan
+stored. The model is never asked to start a plan's run; the seat refuses its
+`workflow_run` in plan mode by name, and outside plan mode a plan's run is
+still the person's to ask for.
 
 The command cannot approve anything either. The run parks at its `approve-plan`
 checkpoint until a human decides it, which is why `/plan run` is safe to offer

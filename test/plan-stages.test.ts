@@ -42,10 +42,10 @@ const cleanRepo: RepoProbe = (path) => ({
 
 const errorsOf = (subject: Plan): string[] => validatePlan(subject, cleanRepo);
 
-const task = (id: string, by?: Task["by"]): Task => ({
+const task = (id: string, review?: Task["review"]): Task => ({
 	id,
 	title: `do ${id}`,
-	...(by ? { by } : {}),
+	...(review ? { review } : {}),
 });
 
 const deliverable = (
@@ -313,7 +313,7 @@ describe("what a stage list may not say", () => {
 		).toContainEqual(expect.stringContaining("17 lenses"));
 	});
 
-	it("holds a lens to the same routing rules as a task's `by`", () => {
+	it("holds a lens to the same routing rules as a task's `review`", () => {
 		const errors = errorsOf(
 			staged([
 				implement,
@@ -369,7 +369,7 @@ describe("what a stage list may not say", () => {
 			errors.filter((error) => error.includes("not a safe review lens")),
 		).toHaveLength(2);
 
-		// The same rule, and the same message, for a task's own `by`.
+		// The same rule, and the same message, for a task's own `review`.
 		const byLens = errorsOf(
 			plan({
 				deliverables: [
@@ -654,7 +654,7 @@ describe("stages and policy survive the store", () => {
 // read this plan, and an undefined field is where they disagreed.
 
 describe("writing `diverse` onto every heavy reviewer", () => {
-	it("fills in `tasks[].by` and authored lenses, and only where undecided", () => {
+	it("fills in `tasks[].review` and authored lenses, and only where undecided", () => {
 		const subject = plan({
 			deliverables: [
 				deliverable("api", {
@@ -688,7 +688,7 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 		const next = withExplicitDiverse(subject);
 		if (!next)
 			throw new Error("a heavy reviewer with no answer was not filled in");
-		expect(next.deliverables[0]?.tasks.map((t) => t.by?.diverse)).toEqual([
+		expect(next.deliverables[0]?.tasks.map((t) => t.review?.diverse)).toEqual([
 			undefined,
 			true,
 			// Already answered, and answering it again would overrule the author.
@@ -703,7 +703,7 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 			],
 		});
 		// The input is untouched: the caller decides whether to store the result.
-		expect(subject.deliverables[0]?.tasks[1]?.by?.diverse).toBeUndefined();
+		expect(subject.deliverables[0]?.tasks[1]?.review?.diverse).toBeUndefined();
 		// And the rewritten document is still a plan.
 		expect(errorsOf(next)).toEqual([]);
 	});

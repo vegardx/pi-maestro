@@ -16,15 +16,17 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PLAN_FILE } from "./paths.js";
-import { type Plan, validatePlan } from "./plan.js";
+import { MAESTRO_SCHEMA_VERSION, type Plan, validatePlan } from "./plan.js";
 
 /**
- * Bumped when a stored shape changes incompatibly. Version 1 is the first
- * Version 3 removes preflight/postflight and repository-creation intent.
- * Nothing before it is readable, and nothing tries to be — there is no
- * migration path from the old model on purpose.
+ * The revision this build writes and reads.
+ *
+ * Declared with the shape it versions, in `plan.ts`, and re-exported here
+ * because the envelope is where a reader of the store looks for it. One
+ * definition, so the document that changed and the version that says it
+ * changed cannot disagree.
  */
-export const MAESTRO_SCHEMA_VERSION = 3 as const;
+export { MAESTRO_SCHEMA_VERSION };
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
@@ -48,7 +50,8 @@ export class UnsupportedStateError extends StoreError {
 	) {
 		super(
 			`${path} was written by schema ${String(found)}, and this build speaks ${MAESTRO_SCHEMA_VERSION}. ` +
-				`Archive or remove the ${kind} and start again.`,
+				"Schema 4 renamed `tasks[].by` to `tasks[].review`, and there is no migration. " +
+				`Archive or remove the ${kind} and write it again at schemaVersion ${MAESTRO_SCHEMA_VERSION}.`,
 		);
 		this.name = "UnsupportedStateError";
 	}

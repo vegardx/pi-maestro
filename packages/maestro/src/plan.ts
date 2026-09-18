@@ -15,6 +15,22 @@ import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
 
+/**
+ * The revision of the stored plan document. Re-exported by `store.ts`, which
+ * writes it into the envelope and refuses anything else.
+ *
+ * IT LIVES HERE, WITH THE SHAPE IT VERSIONS. A version defined next to the
+ * envelope writer is a version that says nothing about what changed; a
+ * document whose own module names its revision can refuse the previous one by
+ * name — which is what version 4 does.
+ *
+ * Version 3 removed preflight/postflight and repository-creation intent.
+ * Version 4 renamed `tasks[].by` to `tasks[].review`. Nothing before the
+ * current version is readable, and nothing tries to be: there is no migration
+ * path here on purpose.
+ */
+export const MAESTRO_SCHEMA_VERSION = 4 as const;
+
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
 	readonly key: string;
@@ -95,10 +111,18 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const LENS_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
 
 /**
+ * What makes a task a review, and how that review is routed.
+ *
+ * NAMED FOR WHAT IT IS, because the name is the whole instruction. Version 3
+ * called this field `by`, and in three by-hand runs the model read `by` as
+ * "who does this task" and wrote it onto the implementation tasks too — which
+ * made every task in the deliverable a review and left nobody writing the
+ * code. `review` cannot be read that way.
+ *
  * A task compiled into its own read-only workflow stage. There is no agent
  * kind: a writer is authored as a deliverable, never as delegated work.
  */
-export interface WorkflowDelegation {
+export interface ReviewRouting {
 	/** The independent point of view this reviewer applies. */
 	readonly lens: string;
 	/** Optional ambient skill to request explicitly in the stage prompt. */
@@ -124,8 +148,12 @@ export interface Task {
 	readonly id: string;
 	readonly title: string;
 	readonly body?: string;
-	/** Absent = the deliverable's own worker does it. */
-	readonly by?: WorkflowDelegation;
+	/**
+	 * Present = this task IS the review, and seeds a lens. Absent = the
+	 * deliverable's own worker does it, which is every implementation, test and
+	 * docs task there is.
+	 */
+	readonly review?: ReviewRouting;
 }
 
 /**
@@ -397,14 +425,14 @@ export function defaultStagesFor(
 ): readonly Stage[] {
 	const lenses: ReviewLens[] = [];
 	for (const task of deliverable.tasks) {
-		const by = task.by;
-		if (!by) continue;
+		const review = task.review;
+		if (!review) continue;
 		lenses.push({
-			id: by.lens,
-			tier: by.tier ?? policy.reviewDefault.tier,
-			diverse: by.diverse ?? policy.reviewDefault.diverse,
-			...(by.skill ? { skill: by.skill } : {}),
-			...(by.model ? { model: by.model } : {}),
+			id: review.lens,
+			tier: review.tier ?? policy.reviewDefault.tier,
+			diverse: review.diverse ?? policy.reviewDefault.diverse,
+			...(review.skill ? { skill: review.skill } : {}),
+			...(review.model ? { model: review.model } : {}),
 		});
 	}
 	const stages: Stage[] = [
@@ -469,9 +497,9 @@ export function withExplicitDiverse(plan: Plan): Plan | undefined {
 	}): boolean => routing.tier === "heavy" && routing.diverse === undefined;
 	const deliverables = plan.deliverables.map((deliverable) => {
 		const tasks = deliverable.tasks.map((task) => {
-			if (!task.by || !heavyUndecided(task.by)) return task;
+			if (!task.review || !heavyUndecided(task.review)) return task;
 			changed = true;
-			return { ...task, by: { ...task.by, diverse: true } };
+			return { ...task, review: { ...task.review, diverse: true } };
 		});
 		const stages = deliverable.stages?.map((stage) => {
 			if (stage.use !== "review-fan-out") return stage;
@@ -652,11 +680,20 @@ function validateTasks(
 			errors.push(`${where}: duplicate task id \`${t.id}\``);
 		seen.add(t.id);
 		if (!t.title.trim()) errors.push(`${at}: no title`);
-		// No agent-kind check: delegated tasks compile to read-only workflow stages.
-		if (t.by) {
-			if (!LENS_ID_RE.test(t.by.lens))
-				errors.push(`${at}: ${lensIdProblem(t.by.lens)}`);
-			validateReviewRouting(t.by, at, errors);
+		// THE OLD NAME, REFUSED BY NAME. A stored document is caught by its
+		// envelope version, but a model writing a fresh plan from memory of the
+		// version 3 field writes `by` into a version 4 body, where the type says
+		// nothing and the field would simply be ignored — a plan that validates,
+		// stores, and compiles with no reviewers at all.
+		if ((t as { by?: unknown }).by !== undefined)
+			errors.push(
+				`${at}: task \`${t.id}\` carries \`by\`, which plan schema v${MAESTRO_SCHEMA_VERSION} renamed to \`review\`: that is a version 3 field and there is no migration. Rename \`by\` to \`review\` on every review task`,
+			);
+		// No agent-kind check: review tasks compile to read-only workflow stages.
+		if (t.review) {
+			if (!LENS_ID_RE.test(t.review.lens))
+				errors.push(`${at}: ${lensIdProblem(t.review.lens)}`);
+			validateReviewRouting(t.review, at, errors);
 		}
 	}
 }
@@ -687,18 +724,11 @@ function validateProse(
 }
 
 /**
- * The routing a review can ask for, wherever it is written.
- *
- * Shared by `tasks[].by` and `review-fan-out` lenses on purpose: the two are
- * the same request in two places, and a rule that held in one of them would be
- * a rule an author could route around by moving the field.
- */
-/**
  * Why this is not a lens id, in one sentence that names the rule.
  *
- * Said in one place because `tasks[].by.lens` and a `review-fan-out` lens id
- * are the same key in the compiled document, and two messages for one rule is
- * how the two drift.
+ * Said in one place because `tasks[].review.lens` and a `review-fan-out` lens
+ * id are the same key in the compiled document, and two messages for one rule
+ * is how the two drift.
  */
 function lensIdProblem(id: unknown): string {
 	return (
@@ -708,6 +738,13 @@ function lensIdProblem(id: unknown): string {
 	);
 }
 
+/**
+ * The routing a review can ask for, wherever it is written.
+ *
+ * Shared by `tasks[].review` and `review-fan-out` lenses on purpose: the two
+ * are the same request in two places, and a rule that held in one of them
+ * would be a rule an author could route around by moving the field.
+ */
 function validateReviewRouting(
 	routing: {
 		readonly tier?: ReviewTier;
@@ -726,7 +763,7 @@ function validateReviewRouting(
 	// decides.
 	if (routing.model !== undefined && !/^\S+\/\S+$/.test(routing.model))
 		errors.push(
-			`${at}: delegated task model must be a concrete provider/model ID — ` +
+			`${at}: review model must be a concrete provider/model ID — ` +
 				"`model` is optional, so drop it and pin `tier` instead unless the " +
 				"reviewer must be one exact model the host has",
 		);

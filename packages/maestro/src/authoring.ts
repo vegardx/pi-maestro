@@ -48,7 +48,7 @@ const TaskSchema = Type.Object({
 				"What the agent needs to know that the title does not say. Facts and constraints, not encouragement.",
 		}),
 	),
-	by: Type.Optional(
+	review: Type.Optional(
 		Type.Object(
 			{
 				lens: Type.String({
@@ -85,7 +85,7 @@ const TaskSchema = Type.Object({
 			},
 			{
 				description:
-					"PRESENT ⇒ THIS TASK IS A REVIEW, compiled into its own read-only workflow stage and seeding a lens. An implementation task — writing the code, the tests, the README — must NOT carry `by`: a task that carries it is not implemented by anybody. Repeat a lens in another task to run it with another model.",
+					"PRESENT ⇒ THIS TASK IS A REVIEW, compiled into its own read-only workflow stage and seeding a lens. An implementation task — writing the code, the tests, the README — must NOT carry `review`: a task that carries it is not implemented by anybody. Repeat a lens in another task to run it with another model.",
 			},
 		),
 	),
@@ -118,7 +118,9 @@ const LensSchema = Type.Object({
 		}),
 	),
 	skill: Type.Optional(
-		Type.String({ description: "An ambient skill to request explicitly." }),
+		Type.String({
+			description: "An ambient skill to request explicitly.",
+		}),
 	),
 	model: Type.Optional(
 		Type.String({
@@ -276,12 +278,12 @@ const DeliverableSchema = Type.Object({
 	repo: Type.Optional(Type.String({ description: "Which named repo." })),
 	tasks: Type.Array(TaskSchema, {
 		description:
-			"The work, in order. A deliverable with none is not one. The tasks that DO the work carry no `by`; only the review tasks do.",
+			"The work, in order. A deliverable with none is not one. The tasks that DO the work carry no `review`; only the review tasks do.",
 	}),
 	stages: Type.Optional(
 		Type.Array(StageSchema, {
 			description:
-				"How this deliverable is compiled, in order. OMIT IT unless the default is wrong: implement, verify-and-fix, then one review lens per task with `by`. Exactly one `implement`; `verify-and-fix` follows it; a `gate` is last.",
+				"How this deliverable is compiled, in order. OMIT IT unless the default is wrong: implement, verify-and-fix, then one review lens per task with `review`. Exactly one `implement`; `verify-and-fix` follows it; a `gate` is last.",
 		}),
 	),
 });
@@ -360,9 +362,9 @@ function pruned<T extends object>(value: T): T {
 type AuthoredDeliverable = AuthoredPlan["deliverables"][number];
 type AuthoredTask = AuthoredDeliverable["tasks"][number];
 type AuthoredStage = NonNullable<AuthoredDeliverable["stages"]>[number];
-type AuthoredRouting = NonNullable<AuthoredTask["by"]>;
+type AuthoredRouting = NonNullable<AuthoredTask["review"]>;
 
-/** `by`, and the fan-out lenses that share its optional fields. */
+/** `review`, and the fan-out lenses that share its optional fields. */
 function withoutEmptyRouting<
 	T extends Pick<AuthoredRouting, "skill" | "model">,
 >(routing: T): T {
@@ -406,8 +408,10 @@ export function withoutEmptyOptionals(authored: AuthoredPlan): AuthoredPlan {
 					pruned({
 						...task,
 						body: keptText(task.body),
-						by:
-							task.by === undefined ? undefined : withoutEmptyRouting(task.by),
+						review:
+							task.review === undefined
+								? undefined
+								: withoutEmptyRouting(task.review),
 					}),
 				),
 				stages: deliverable.stages?.map(withoutEmptyStage),
@@ -463,7 +467,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		name: "plan",
 		label: "Plan",
 		description:
-			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `by` marks a REVIEW task; an implementation task must not carry it. Two fields are got wrong most often: a review task\'s `by.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `by.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `by.tier` and omit `by.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
+			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `review` marks a REVIEW task; an implementation task must not carry it. Two fields are got wrong most often: a review task\'s `review.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `review.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `review.tier` and omit `review.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
 		promptSnippet:
 			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,
@@ -544,9 +548,8 @@ function describe(
 		...plan.deliverables.map((d) => {
 			const waits = d.after.length > 0 ? ` after ${d.after.join(", ")}` : "";
 			const reads = d.reads.length > 0 ? ` reads ${d.reads.join(", ")}` : "";
-			const toSubagents = d.tasks.filter((t) => t.by).length;
-			const handed =
-				toSubagents > 0 ? `, ${toSubagents} delegated review intent(s)` : "";
+			const reviews = d.tasks.filter((t) => t.review).length;
+			const handed = reviews > 0 ? `, ${reviews} review task(s)` : "";
 			// Said only when the author wrote them: a stage list echoed back as the
 			// default would read like the plan declared one.
 			const stages = d.stages

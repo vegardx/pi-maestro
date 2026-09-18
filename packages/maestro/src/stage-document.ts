@@ -6,7 +6,7 @@
 // pi-maestro cannot import `@vegardx/pi-workflow` — it is an optional peer and
 // is not published — so the document is compiled on this side from the same
 // §2.1 rules `plan-to-ship` compiles from: the default stage list derived from
-// the policy, review lenses seeded from `tasks[].by`, duplicate lens ids
+// the policy, review lenses seeded from `tasks[].review`, duplicate lens ids
 // suffixed by declaration ordinal, and `maxRounds` mapped from the plan's fix
 // rounds to the component's verify rounds. Two derivations of one document is
 // exactly the duplication this repository is organised against, so it is

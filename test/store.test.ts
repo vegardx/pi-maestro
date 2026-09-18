@@ -2,7 +2,10 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Plan } from "../packages/maestro/src/plan.js";
+import {
+	MAESTRO_SCHEMA_VERSION,
+	type Plan,
+} from "../packages/maestro/src/plan.js";
 import {
 	createPlanStore,
 	InvalidStateError,
@@ -58,6 +61,64 @@ describe("plan store", () => {
 		expect(store.loadPlan("app")?.title).toBe("Updated");
 		store.remove("app");
 		expect(store.loadPlan("app")).toBeNull();
+	});
+
+	it("writes the version this build speaks, and reads it back", () => {
+		const state = root();
+		const store = createPlanStore(state);
+		store.savePlan(plan());
+		const written = JSON.parse(
+			readFileSync(join(state, "app", "plan.json"), "utf8"),
+		) as { schemaVersion: number };
+		expect(written.schemaVersion).toBe(4);
+		expect(MAESTRO_SCHEMA_VERSION).toBe(4);
+		expect(store.loadPlan("app")).toEqual(plan());
+	});
+
+	// The version 3 document. It is refused, not migrated, and the refusal
+	// names both versions and what changed between them — "unsupported" alone
+	// leaves a human with a file and no idea what to do with it.
+	it("refuses a version 3 envelope by naming both versions", () => {
+		const state = root();
+		mkdirSync(join(state, "app"), { recursive: true });
+		const path = join(state, "app", "plan.json");
+		writeFileSync(
+			path,
+			JSON.stringify({
+				schemaVersion: 3,
+				savedAt: "2026-08-08T00:00:00Z",
+				body: plan(),
+			}),
+		);
+		const store = createPlanStore(state);
+		expect(() => store.loadPlan("app")).toThrow(
+			`${path} was written by schema 3, and this build speaks 4. Schema 4 renamed \`tasks[].by\` to \`tasks[].review\`, and there is no migration. Archive or remove the plan and write it again at schemaVersion 4.`,
+		);
+		// Refused, never rewritten: a store that quietly re-stamped the version
+		// would be a migration nobody wrote.
+		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":3');
+	});
+
+	// A task carrying the version 3 field inside a version 4 body. The envelope
+	// cannot catch this one — the document says 4 — so validation does.
+	it("refuses a task that still carries `by`", () => {
+		const store = createPlanStore(root());
+		const withBy = {
+			...plan(),
+			deliverables: [
+				{
+					...plan().deliverables[0],
+					tasks: [
+						{ id: "build", title: "Build" },
+						{ id: "review", title: "Review", by: { lens: "contracts" } },
+					],
+				},
+			],
+		} as unknown as Plan;
+		expect(() => store.savePlan(withBy)).toThrow(
+			/carries `by`, which plan schema v4 renamed to `review`/,
+		);
+		expect(store.list()).toEqual([]);
 	});
 
 	it("refuses invalid plans before writing", () => {

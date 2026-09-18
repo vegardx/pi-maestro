@@ -43,7 +43,7 @@ const EXAMPLE: Plan = {
 				{
 					id: "rev-contracts",
 					title: "Contract review",
-					by: { lens: "contracts", tier: "heavy", diverse: true },
+					review: { lens: "contracts", tier: "heavy", diverse: true },
 				},
 			],
 			stages: [
@@ -116,7 +116,7 @@ describe("compileStageDocument", () => {
 						{
 							id: "rev",
 							title: "Review it",
-							by: { lens: "contracts" },
+							review: { lens: "contracts" },
 						},
 					],
 				},
@@ -133,7 +133,7 @@ describe("compileStageDocument", () => {
 						{
 							use: "review-fan-out",
 							id: "review",
-							// Seeded from `tasks[].by`, tier and diverse from the
+							// Seeded from `tasks[].review`, tier and diverse from the
 							// policy's own review default.
 							lenses: [{ id: "contracts", tier: "standard", diverse: false }],
 							synthesis: "optional",

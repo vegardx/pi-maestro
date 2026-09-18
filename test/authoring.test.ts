@@ -90,7 +90,7 @@ describe("a plan is written whole", () => {
 						{
 							id: "review",
 							title: "Review it",
-							by: {
+							review: {
 								lens: "correctness",
 								skill: "correctness-review",
 								model: "anthropic/fable-5",
@@ -108,9 +108,7 @@ describe("a plan is written whole", () => {
 		// just wrote will write the same wrong one twice.
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
-		expect(text).toContain(
-			"- ui: 2 tasks, 1 delegated review intent(s) after api",
-		);
+		expect(text).toContain("- ui: 2 tasks, 1 review task(s) after api");
 		// The trailer is the offer, not a status line: both ways to start a run,
 		// and who approves it — which is never this tool and never the model.
 		expect(text).toContain("Run it: `/plan run arc [cheap|standard|deep]`");
@@ -164,7 +162,12 @@ describe("a plan is written whole", () => {
 						{
 							id: "review",
 							title: "Review it",
-							by: { lens: "contracts", skill: "", model: "", tier: "light" },
+							review: {
+								lens: "contracts",
+								skill: "",
+								model: "",
+								tier: "light",
+							},
 						},
 					],
 					stages: [
@@ -193,7 +196,7 @@ describe("a plan is written whole", () => {
 		expect(deliverable && "repo" in deliverable).toBe(false);
 		expect(deliverable?.after).toEqual([]);
 		const review = deliverable?.tasks[1];
-		expect(review?.by).toEqual({ lens: "contracts", tier: "light" });
+		expect(review?.review).toEqual({ lens: "contracts", tier: "light" });
 		const stages = deliverable?.stages ?? [];
 		expect(stages[0] && "tools" in stages[0]).toBe(false);
 		expect(stages[1]).toEqual({
@@ -217,7 +220,7 @@ describe("a plan is written whole", () => {
 					title: "The API",
 					tasks: [
 						{ id: "build", title: "Build it" },
-						{ id: "review", title: "Review it", by: { lens: "" } },
+						{ id: "review", title: "Review it", review: { lens: "" } },
 					],
 				},
 			],
@@ -361,7 +364,7 @@ function propertyNames(
 describe("what the schema will not let an author say", () => {
 	it("offers workflow review intent, never a persona or agent kind", () => {
 		const schema = JSON.stringify(authoring().tool.parameters);
-		expect(schema).toContain('"by"');
+		expect(schema).toContain('"review"');
 		expect(schema).toContain("lens");
 		expect(schema).toContain("model");
 		// Routable review intent: a tier and a family request, neither of which

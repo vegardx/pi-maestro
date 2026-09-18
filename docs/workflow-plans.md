@@ -1,7 +1,15 @@
 # Authored plans
 
 An authored plan describes repositories, deliverables, dependency edges,
-implementation tasks, and delegated reviews. It is intent, not runtime state.
+implementation tasks, and reviews. It is intent, not runtime state. It is
+stored at `schemaVersion: 4`.
+
+**Version 4 renamed `tasks[].by` to `tasks[].review`.** There is no migration:
+a stored `schemaVersion: 3`, or any task still carrying `by`, is **refused by
+name** — the store refuses the envelope and validation refuses the field. The
+old name was read as "who does this task" and written onto implementation work,
+which made every task in a deliverable a review and left nobody writing the
+code.
 
 ## Shape
 
@@ -11,7 +19,7 @@ Each repository has a stable key and working-tree path. Each deliverable names:
 - implementation tasks;
 - `after` dependencies that order work;
 - `reads` dependencies whose outputs may be consulted;
-- optional review tasks with `{lens, skill?, model?, tier?, diverse?}`;
+- optional review tasks, each carrying `review: {lens, skill?, model?, tier?, diverse?}`;
 - optionally `stages`: the shape of the run built for it.
 
 `reads` must remain a subset of `after`. IDs are bounded workflow-safe slugs and
@@ -24,13 +32,20 @@ name** rather than compiled with the edge silently dropped — a dropped orderin
 edge is a run that looks correct and builds against a tree that does not exist
 yet.
 
-### Review intent
+### Review tasks
+
+`review` on a task is present ⇒ this task **is** a review, and seeds a lens;
+absent ⇒ the deliverable's own worker does it. Implementation work never
+carries `review` — a deliverable whose every task carries it is one that
+nothing writes — so a review is a separate task whose only work is reviewing.
 
 A review task says which independent point of view to apply, and how much
-reviewer it is worth. All three routing fields are optional:
+reviewer it is worth. Every routing field but `lens` is optional:
 
+- `lens` — **required**: the fan-out key, `^[a-z][a-z0-9-]{0,63}$`.
 - `model` — an exact `provider/model` ID, validated only when present. Pinning
   one makes the plan run on hosts that have that model and nowhere else.
+- `skill` — an ambient skill name to request explicitly in the stage prompt.
 - `tier` — `light`, `standard`, or `heavy`: how much reviewer the lens is
   worth, for the host to resolve.
 - `diverse` — ask for a reviewer from a different model family than the
@@ -43,8 +58,8 @@ workflow's effort dial then decides what the reviewer is.
 
 `stages` is optional, per deliverable, and says what the run does with that
 deliverable rather than what the work is. A deliverable without it gets the
-default list below, so a plan written before stages existed stays valid and the
-stored `schemaVersion` is unchanged.
+default list below, so a plan written before stages existed stays valid and
+did not move the stored `schemaVersion` when they arrived.
 
 | `use` | Fields | What it declares |
 | --- | --- | --- |
@@ -78,7 +93,7 @@ the policy below:
 [ { "use": "implement",      "id": "implement" },
   { "use": "verify-and-fix", "id": "verify", "maxRounds": <policy.maxFixRounds> },
   { "use": "review-fan-out", "id": "review",
-    "lenses": [ /* one per task with `by`, tier/diverse from it or policy.reviewDefault */ ],
+    "lenses": [ /* one per task with `review`, tier/diverse from it or policy.reviewDefault */ ],
     "synthesis": "optional" } ]
 ```
 
@@ -114,7 +129,7 @@ a validation question asked of the document.
     "id": "catalogue", "title": "Ship the component catalogue",
     "after": [], "reads": [],
     "tasks": [{ "id": "impl", "title": "Write src/components/*.ts" },
-              { "id": "rev-contracts", "title": "Contract review", "by": { "lens": "contracts", "tier": "heavy", "diverse": true } }],
+              { "id": "rev-contracts", "title": "Contract review", "review": { "lens": "contracts", "tier": "heavy", "diverse": true } }],
     "stages": [
       { "use": "implement", "id": "build" },
       { "use": "verify-and-fix", "id": "green", "maxRounds": 2, "escalate": "thinking" },
@@ -278,7 +293,7 @@ What happens then, in order, with the dialogs listed in the
    reported at once as a warning — it is a fact about this host, and publication
    will meet it again.
 2. **Normalisation.** Every heavy review lens whose `diverse` is undefined gets
-   `diverse: true` written into the **stored** plan, in both `tasks[].by` and
+   `diverse: true` written into the **stored** plan, in both `tasks[].review` and
    `stages[].lenses`; the result is re-validated and saved. A heavy lens reads
    the same work the implementer wrote, and a reviewer from another model family
    fails differently — both compilers agree on that, and they used to disagree
@@ -289,7 +304,7 @@ What happens then, in order, with the dialogs listed in the
    `policy.reviewDefault` decide them.
 3. **The compiled stage document.** pi-maestro derives it here, from the same
    §2.1 rules `plan-to-ship` compiles from: the default stage list from the
-   policy, lenses seeded from `tasks[].by`, duplicate lens ids suffixed `-2` and
+   policy, lenses seeded from `tasks[].review`, duplicate lens ids suffixed `-2` and
    `-3` by declaration ordinal, and `maxRounds` mapped from the plan's fix
    rounds to the component's verify rounds (`fix + 1`, so a fix is never left
    unchecked). It is validated against a local mirror of the runtime's own

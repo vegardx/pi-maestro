@@ -30,8 +30,8 @@ import {
 	type Plan,
 	type ResolvedPolicy,
 	type ReviewLens,
+	type ReviewRouting,
 	type Stage,
-	type WorkflowDelegation,
 	withDefaultStages,
 } from "./plan.js";
 import {
@@ -150,16 +150,17 @@ export function renderPlanList(
 	].join("\n");
 }
 
-/** The review intent, with every routing field the author actually set. */
-function renderDelegation(by: WorkflowDelegation): string {
-	const parts = [`lens ${by.lens}`];
-	if (by.skill) parts.push(`skill ${by.skill}`);
-	if (by.tier) parts.push(`tier ${by.tier}`);
-	if (by.diverse) parts.push("diverse");
-	if (by.model) parts.push(`model ${by.model}`);
+/** The review routing, with every field the author actually set. */
+function renderReviewRouting(review: ReviewRouting): string {
+	const parts = [`lens ${review.lens}`];
+	if (review.skill) parts.push(`skill ${review.skill}`);
+	if (review.tier) parts.push(`tier ${review.tier}`);
+	if (review.diverse) parts.push("diverse");
+	if (review.model) parts.push(`model ${review.model}`);
 	// Said out loud, because "the effort dial decides" is a real answer and an
 	// empty bracket reads like a missing field.
-	if (!by.tier && !by.model && !by.diverse) parts.push("effort dial decides");
+	if (!review.tier && !review.model && !review.diverse)
+		parts.push("effort dial decides");
 	return parts.join(", ");
 }
 
@@ -256,7 +257,7 @@ export function renderPlan(
 		for (const t of d.tasks)
 			lines.push(
 				`    - ${t.id}: ${t.title}` +
-					(t.by ? ` — review (${renderDelegation(t.by)})` : ""),
+					(t.review ? ` — review (${renderReviewRouting(t.review)})` : ""),
 			);
 		lines.push(`    stages${plan.deliverables[i].stages ? "" : " (default)"}:`);
 		for (const stage of d.stages)

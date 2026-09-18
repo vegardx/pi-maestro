@@ -31,12 +31,9 @@ const fixture: Plan = {
 			repo: "main",
 			tasks: [
 				{ id: "build", title: "Build it" },
-				{
-					id: "review",
-					title: "Review it",
-					review: { lens: "security", tier: "heavy", diverse: true },
-				},
+				{ id: "test", title: "Test it" },
 			],
+			reviews: [{ lens: "security", tier: "heavy", diverse: true }],
 		},
 		{
 			id: "ui",

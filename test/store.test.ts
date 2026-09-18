@@ -71,37 +71,38 @@ describe("plan store", () => {
 		const written = JSON.parse(
 			readFileSync(join(state, "app", "plan.json"), "utf8"),
 		) as { schemaVersion: number };
-		expect(written.schemaVersion).toBe(4);
-		expect(MAESTRO_SCHEMA_VERSION).toBe(4);
+		expect(written.schemaVersion).toBe(5);
+		expect(MAESTRO_SCHEMA_VERSION).toBe(5);
 		expect(store.loadPlan("app")).toEqual(plan());
 	});
 
 	// The version 3 document. It is refused, not migrated, and the refusal
 	// names both versions and what changed between them — "unsupported" alone
 	// leaves a human with a file and no idea what to do with it.
-	it("refuses a version 3 envelope by naming both versions", () => {
+	it("refuses a version 4 envelope by naming both versions", () => {
 		const state = root();
 		mkdirSync(join(state, "app"), { recursive: true });
 		const path = join(state, "app", "plan.json");
 		writeFileSync(
 			path,
 			JSON.stringify({
-				schemaVersion: 3,
+				schemaVersion: 4,
 				savedAt: "2026-08-08T00:00:00Z",
 				body: plan(),
 			}),
 		);
 		const store = createPlanStore(state);
 		expect(() => store.loadPlan("app")).toThrow(
-			`${path} was written by schema 3, and this build speaks 4. Schema 4 renamed \`tasks[].by\` to \`tasks[].review\`, and there is no migration. Archive or remove the plan and write it again at schemaVersion 4.`,
+			`${path} was written by schema 4, and this build speaks 5. Schema 5 moved review routing from \`tasks[].review\` to \`deliverables[].reviews\` and dropped \`stages\`, and there is no migration. Archive or remove the plan and write it again at schemaVersion 5.`,
 		);
 		// Refused, never rewritten: a store that quietly re-stamped the version
 		// would be a migration nobody wrote.
-		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":3');
+		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":4');
 	});
 
-	// A task carrying the version 3 field inside a version 4 body. The envelope
-	// cannot catch this one — the document says 4 — so validation does.
+	// A task carrying an earlier version's review field inside a version 5 body.
+	// The envelope cannot catch this one — the document says 5 — so validation
+	// does, and it names both the field and where the thing went.
 	it("refuses a task that still carries `by`", () => {
 		const store = createPlanStore(root());
 		const withBy = {
@@ -117,7 +118,7 @@ describe("plan store", () => {
 			],
 		} as unknown as Plan;
 		expect(() => store.savePlan(withBy)).toThrow(
-			/carries `by`, which plan schema v4 renamed to `review`/,
+			/carries `by`, which plan schema v5 moved to `deliverables\[\]\.reviews`/,
 		);
 		expect(store.list()).toEqual([]);
 	});
@@ -131,10 +132,8 @@ describe("plan store", () => {
 				deliverables: [
 					{
 						...plan().deliverables[0],
-						tasks: [
-							{ id: "build", title: "Build" },
-							{ id: "review", title: "Review", review: { lens: "c", model } },
-						],
+						tasks: [{ id: "build", title: "Build" }],
+						reviews: [{ lens: "c", model }],
 					},
 				],
 			}) as Plan;
@@ -145,7 +144,9 @@ describe("plan store", () => {
 			/is not a model this host has/,
 		);
 		store.savePlan(pinned("anthropic/opus-5"));
-		expect(store.loadPlan("app")?.deliverables[0]?.tasks).toHaveLength(2);
+		expect(store.loadPlan("app")?.deliverables[0]?.reviews).toEqual([
+			{ lens: "c", model: "anthropic/opus-5" },
+		]);
 	});
 
 	// FAIL CLOSED. A store with no host cannot check a pin, so it refuses one
@@ -158,14 +159,8 @@ describe("plan store", () => {
 				deliverables: [
 					{
 						...plan().deliverables[0],
-						tasks: [
-							{ id: "build", title: "Build" },
-							{
-								id: "review",
-								title: "Review",
-								review: { lens: "c", model: "anthropic/opus-5" },
-							},
-						],
+						tasks: [{ id: "build", title: "Build" }],
+						reviews: [{ lens: "c", model: "anthropic/opus-5" }],
 					},
 				],
 			}),

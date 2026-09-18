@@ -43,8 +43,8 @@ export type PatchResult =
 /**
  * How deep a pointer may go.
  *
- * A plan is four levels deep at its deepest (`/deliverables/0/stages/1`), so
- * this is not a limit anyone writing a patch by hand will meet. It is here
+ * A plan is four levels deep at its deepest (`/deliverables/0/reviews/0/tier`),
+ * so this is not a limit anyone writing a patch by hand will meet. It is here
  * because a pointer arrives from a model, and an unbounded one is an
  * unbounded walk.
  */

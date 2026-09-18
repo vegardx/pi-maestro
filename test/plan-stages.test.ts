@@ -1,14 +1,16 @@
 // Stages and policy: how a deliverable is compiled, and the dials it sets.
 //
-// Both are OPTIONAL, and that is the property most of this file is about. A
-// document written before stages existed is still valid, still hashes to the
-// same digest, and still compiles to the three stages it always compiled to —
-// which is only true if the defaults are derived rather than stored.
+// NEITHER IS AUTHORED, and that is the property most of this file is about.
+// Version 5 removed `deliverables[].stages` from the document and removed
+// `policy` from the `plan` tool: a deliverable's stage list is derived from its
+// tasks, its `reviews` and the dials the seat attaches, so there is exactly one
+// lowering and a person approving a plan is approving the run it describes.
 //
-// The refusals are the other half. A stage kind nothing compiles, a fix loop
-// with no bound, a gate in the middle of a deliverable, a `reads` edge the
-// runtime cannot honour: each is refused by name, because the alternative is a
-// plan that a human approves and a run then quietly does not do.
+// The refusals are the other half. A review with no lens, a lens id the
+// compiled document could not carry, a pinned model this host does not have, a
+// fix loop with no bound, a `reads` edge the runtime cannot honour: each is
+// refused by name, because the alternative is a plan that a human approves and
+// a run then quietly does not do.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,8 +26,8 @@ import {
 	type PlanHostPort,
 	type PlanPolicy,
 	type RepoProbe,
+	type Review,
 	resolvePolicy,
-	type Stage,
 	type Task,
 	validatePlan,
 	withDefaultStages,
@@ -33,6 +35,10 @@ import {
 } from "../packages/maestro/src/plan.js";
 import { renderPlan } from "../packages/maestro/src/plan-command.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
+import {
+	compileStageDocument,
+	validateStageDocument,
+} from "../packages/maestro/src/stage-document.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 import { fakeHost } from "./fake-host.js";
 
@@ -45,17 +51,13 @@ const cleanRepo: RepoProbe = (path) => ({
 const errorsOf = (subject: Plan, host?: PlanHostPort): string[] =>
 	validatePlan(subject, cleanRepo, host);
 
-/** The host the lens-routing tests are written against. */
+/** The host the review-routing tests are written against. */
 const host = fakeHost({
 	models: ["anthropic/opus-5"],
 	skills: ["contracts-review"],
 });
 
-const task = (id: string, review?: Task["review"]): Task => ({
-	id,
-	title: `do ${id}`,
-	...(review ? { review } : {}),
-});
+const task = (id: string): Task => ({ id, title: `do ${id}` });
 
 const deliverable = (
 	id: string,
@@ -77,19 +79,17 @@ const plan = (over: Partial<Plan> = {}): Plan => ({
 	...over,
 });
 
-/** A plan whose one deliverable declares exactly these stages. */
-const staged = (stages: readonly Stage[], over: Partial<Plan> = {}): Plan =>
-	plan({ deliverables: [deliverable("api", { stages })], ...over });
+/** A plan whose one deliverable is read by exactly these reviewers. */
+const reviewed = (reviews: readonly Review[], over: Partial<Plan> = {}): Plan =>
+	plan({ deliverables: [deliverable("api", { reviews })], ...over });
 
-const implement: Stage = { use: "implement", id: "build" };
-
-describe("a deliverable that declares no stages gets the default ones", () => {
-	it("implements, verifies, and reviews what the tasks asked to be reviewed", () => {
+describe("a deliverable is lowered into stages, always the same way", () => {
+	it("implements, verifies, and fans out over the reviews it lists", () => {
 		const d = deliverable("api", {
-			tasks: [
-				task("build"),
-				task("sec", { lens: "security", tier: "heavy", diverse: true }),
-				task("contracts", { lens: "contracts" }),
+			tasks: [task("build"), task("tests"), task("docs")],
+			reviews: [
+				{ lens: "security", tier: "heavy", diverse: true },
+				{ lens: "contracts" },
 			],
 		});
 		const stages = withDefaultStages(plan({ deliverables: [d] }))
@@ -103,7 +103,7 @@ describe("a deliverable that declares no stages gets the default ones", () => {
 				id: "review",
 				synthesis: "optional",
 				lenses: [
-					// What the task pinned wins; what it left open comes from the
+					// What the review pinned wins; what it left open comes from the
 					// policy, which is what `reviewDefault` is for.
 					{ id: "security", tier: "heavy", diverse: true },
 					{ id: "contracts", tier: "standard", diverse: false },
@@ -112,11 +112,17 @@ describe("a deliverable that declares no stages gets the default ones", () => {
 		]);
 	});
 
-	it("declares no review stage when nothing asked for a review", () => {
+	it("declares no review stage when the deliverable lists none", () => {
 		// A fan-out over zero lenses is not a cheaper review; it is a stage that
-		// cannot be compiled at all.
-		const stages = defaultStagesFor(deliverable("api"), resolvePolicy());
-		expect(stages.map((s) => s.use)).toEqual(["implement", "verify-and-fix"]);
+		// cannot be compiled at all. Absent and empty answer alike, because the
+		// document says "nobody reads this" either way.
+		for (const reviews of [undefined, []])
+			expect(
+				defaultStagesFor(
+					deliverable("api", reviews ? { reviews } : {}),
+					resolvePolicy(),
+				).map((s) => s.use),
+			).toEqual(["implement", "verify-and-fix"]);
 	});
 
 	it("takes the fix-round count from the effort the policy set", () => {
@@ -140,18 +146,16 @@ describe("a deliverable that declares no stages gets the default ones", () => {
 		).toEqual({ use: "verify-and-fix", id: "verify", maxRounds: 2 });
 	});
 
-	it("produces a stage list that validates on its own terms", () => {
-		// The defaults have to obey the same rules as anything authored, or the
-		// rules are about typing rather than about running.
+	it("produces a stage list the runtime's own schema accepts", () => {
+		// The rule that used to be "authored stages obey the same rules as
+		// derived ones" has one side left, and it is the side that matters: a
+		// plan this validator accepts must lower to a document the runtime would
+		// take. There is no author left to disagree with the derivation.
 		const authored = plan({
-			deliverables: [
-				deliverable("api", {
-					tasks: [task("build"), task("sec", { lens: "security" })],
-				}),
-			],
+			deliverables: [deliverable("api", { reviews: [{ lens: "security" }] })],
 		});
 		expect(errorsOf(authored)).toEqual([]);
-		expect(errorsOf(withDefaultStages(authored))).toEqual([]);
+		expect(validateStageDocument(compileStageDocument(authored))).toEqual([]);
 	});
 
 	it("resolves every dial, and keeps a value it does not know out of the way", () => {
@@ -169,176 +173,72 @@ describe("a deliverable that declares no stages gets the default ones", () => {
 		).toBe("standard");
 	});
 
-	it("is pure: filling the defaults in changes neither the plan nor its digest", () => {
+	it("is pure: deriving the stages changes neither the plan nor its digest", () => {
 		const before = plan();
 		const digest = planDigest(before);
 		const after = withDefaultStages(before);
-		expect(before.deliverables[0].stages).toBeUndefined();
+		expect(
+			(before.deliverables[0] as { stages?: unknown }).stages,
+		).toBeUndefined();
 		expect(planDigest(before)).toBe(digest);
 		expect(after.deliverables[0].stages).toHaveLength(2);
 	});
 });
 
-describe("what a stage list may not say", () => {
-	it("refuses a kind nothing compiles", () => {
-		const errors = errorsOf(
-			staged([implement, { use: "deploy", id: "ship" } as unknown as Stage]),
-		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("`deploy` is not a stage kind"),
-		);
+describe("what a `reviews` list may not say", () => {
+	it("refuses a review with no lens, and says what a task is for", () => {
+		// The shape four by-hand passes produced: `review: { lens: "" }` on work
+		// that was never a review. The refusal has to name the way out, because
+		// the model that wrote it sent the same document four times over.
+		for (const lens of ["", "   ", undefined as unknown as string]) {
+			const errors = errorsOf(reviewed([{ lens }]));
+			expect(errors).toEqual([
+				"api.reviews[0]: a review needs a lens; a task that is not a review " +
+					"is simply a task, and belongs in `tasks` with no review entry",
+			]);
+		}
 	});
 
-	it("refuses `dynamic`, which is reserved and not compiled yet", () => {
-		const errors = errorsOf(
-			staged([
-				implement,
-				{ use: "dynamic", id: "decide", brief: "figure it out" },
-			]),
-		);
-		expect(errors).toContainEqual(
-			"api.stages[1]: dynamic stages are not compiled yet",
-		);
-	});
-
-	it("refuses a stage id that cannot be a workflow namespace, or a repeated one", () => {
-		expect(
-			errorsOf(staged([{ use: "implement", id: "Build It" }])),
-		).toContainEqual(expect.stringContaining("cannot be a stage id"));
-		expect(
-			errorsOf(staged([implement, { use: "verify-and-fix", id: "build" }])),
-		).toContainEqual("api: duplicate stage id `build`");
-	});
-
-	it("refuses a deliverable that implements nothing, or implements twice", () => {
-		expect(
-			errorsOf(staged([{ use: "verify-and-fix", id: "verify" }])),
-		).toContainEqual(expect.stringContaining("declare no `implement` stage"));
-		expect(
-			errorsOf(staged([implement, { use: "implement", id: "build-2" }])),
-		).toContainEqual(expect.stringContaining("2 `implement` stages"));
-	});
-
-	it("refuses a verify stage that runs before there is anything to verify", () => {
-		const errors = errorsOf(
-			staged([{ use: "verify-and-fix", id: "verify" }, implement]),
-		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("follows the `implement` stage"),
-		);
-	});
-
-	it("refuses an unbounded fix loop", () => {
-		const errors = errorsOf(
-			staged([
-				implement,
-				{ use: "verify-and-fix", id: "verify", maxRounds: 3 as 2 },
-			]),
-		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("`maxRounds` is 0, 1, 2"),
-		);
-	});
-
-	it("refuses a gate anywhere but last, and one that shows what has not run", () => {
+	it("refuses more reviews than a fan-out can carry", () => {
 		expect(
 			errorsOf(
-				staged([
-					implement,
-					{ use: "gate", id: "ok", question: "Ship it?" },
-					{ use: "verify-and-fix", id: "verify" },
-				]),
+				reviewed(Array.from({ length: 17 }, (_, i) => ({ lens: `lens-${i}` }))),
 			),
-		).toContainEqual(expect.stringContaining("is the last stage"));
+		).toContainEqual(expect.stringContaining("17 reviews"));
 		expect(
 			errorsOf(
-				staged([
-					implement,
-					{ use: "gate", id: "ok", question: "Ship it?", show: ["ghost"] },
-				]),
-			),
-		).toContainEqual(expect.stringContaining("shows `ghost`"));
-		// An earlier sibling is exactly what it may show.
-		expect(
-			errorsOf(
-				staged([
-					implement,
-					{ use: "gate", id: "ok", question: "Ship it?", show: ["build"] },
-				]),
+				reviewed(Array.from({ length: 16 }, (_, i) => ({ lens: `lens-${i}` }))),
 			),
 		).toEqual([]);
 	});
 
-	it("refuses a stage field that smuggles in code or a path", () => {
-		expect(
-			errorsOf(
-				staged([
-					implement,
-					{
-						use: "gate",
-						id: "ok",
-						question: "Is /Users/vegardx/src/thing.ts right?",
-					},
-				]),
-			),
-		).toContainEqual(expect.stringContaining("names a filesystem path"));
-		expect(
-			errorsOf(
-				staged([
-					implement,
-					{ use: "gate", id: "ok", question: "Does const x = 1 hold?" },
-				]),
-			),
-		).toContainEqual(expect.stringContaining("contains code"));
-		expect(
-			errorsOf(
-				staged([
-					{ use: "implement", id: "build", tools: ["./scripts/run.sh"] },
-				]),
-			),
-		).toContainEqual(expect.stringContaining("is not a tool name"));
-	});
-
-	it("refuses a fan-out with no lenses, or more than sixteen", () => {
-		expect(
-			errorsOf(
-				staged([
-					implement,
-					{ use: "review-fan-out", id: "review", lenses: [] },
-				]),
-			),
-		).toContainEqual(expect.stringContaining("no lenses"));
-		expect(
-			errorsOf(
-				staged([
-					implement,
-					{
-						use: "review-fan-out",
-						id: "review",
-						lenses: Array.from({ length: 17 }, (_, i) => ({ id: `lens-${i}` })),
-					},
-				]),
-			),
-		).toContainEqual(expect.stringContaining("17 lenses"));
-	});
-
-	it("holds a lens to the same routing rules as a task's `review`", () => {
+	it("refuses a lens id the compiled document could not carry", () => {
+		// A lens id is a fan-out key and reaches `@vegardx/pi-workflow` inside the
+		// compiled stage document, whose schema accepts `^[a-z][a-z0-9-]*$`. A
+		// deliverable id may start with a digit; a lens id may not, or the plan
+		// validates here and compiles nowhere. Every one is reported at once.
 		const errors = errorsOf(
-			staged([
-				implement,
-				{
-					use: "review-fan-out",
-					id: "review",
-					lenses: [
-						{ id: "Security" },
-						{ id: "replay", model: "fable" },
-						{ id: "contracts", tier: "exhaustive" as "heavy" },
-					],
-				},
-			]),
+			reviewed([{ lens: "2fa" }, { lens: "-leading" }, { lens: "contracts" }]),
 		);
 		expect(errors).toContainEqual(
-			expect.stringContaining("`Security` is not a safe review lens"),
+			expect.stringContaining("`2fa` is not a safe review lens"),
+		);
+		expect(errors).toContainEqual(
+			expect.stringContaining("`-leading` is not a safe review lens"),
+		);
+		// The message carries the pattern itself, so an author who wrote a
+		// mis-shaped id learns the rule rather than only that it broke one.
+		expect(errors.join("\n")).toContain("^[a-z][a-z0-9-]{0,63}$");
+		expect(errors).toHaveLength(2);
+		expect(errorsOf(reviewed([{ lens: "a2" }]))).toEqual([]);
+	});
+
+	it("refuses routing that is not in the vocabulary", () => {
+		const errors = errorsOf(
+			reviewed([
+				{ lens: "replay", model: "fable" },
+				{ lens: "contracts", tier: "exhaustive" as "heavy" },
+			]),
 		);
 		expect(errors).toContainEqual(
 			expect.stringContaining("must be a concrete provider/model ID"),
@@ -348,122 +248,110 @@ describe("what a stage list may not say", () => {
 		);
 	});
 
-	// The same two host questions a task's `review` is held to. A rule that
-	// fired on the task and not on the lens would be a rule an author could
-	// escape by writing the stage list out by hand.
-	it("holds a lens's `model` and `skill` to the host, as a task's `review` is", () => {
+	// The two questions only the session can answer, asked where the routing is
+	// written. @see PlanHostPort
+	it("holds `model` and `skill` to the host", () => {
 		const errors = errorsOf(
-			staged([
-				implement,
-				{
-					use: "review-fan-out",
-					id: "review",
-					lenses: [
-						{ id: "contracts", model: "anthropic/opus-9" },
-						{ id: "replay", skill: "replay-review" },
-						{
-							id: "sound",
-							model: "anthropic/opus-5",
-							skill: "contracts-review",
-						},
-					],
-				},
+			reviewed([
+				{ lens: "contracts", model: "anthropic/opus-9" },
+				{ lens: "replay", skill: "replay-review" },
+				{ lens: "sound", model: "anthropic/opus-5", skill: "contracts-review" },
 			]),
 			host,
 		);
 		expect(errors).toEqual([
-			"api.stages[1].lenses[0]: `anthropic/opus-9` is not a model this host " +
+			"api.reviews[0]: `anthropic/opus-9` is not a model this host " +
 				"has — this host's registered providers are `anthropic`. `model` is " +
 				"optional: drop it and pin `tier` instead unless the reviewer must be " +
 				"one exact model",
-			"api.stages[1].lenses[1]: `replay-review` is not a skill this session " +
+			"api.reviews[1]: `replay-review` is not a skill this session " +
 				"has loaded — the skills loaded here are `contracts-review`. `skill` " +
 				"is optional: drop it and let the lens prompt find what it needs",
 		]);
 	});
 
-	// FAIL CLOSED, in the stage list as much as on the task.
-	it("refuses a lens that pins anything when there is no host", () => {
-		const errors = errorsOf(
-			staged([
-				implement,
-				{
-					use: "review-fan-out",
-					id: "review",
-					lenses: [{ id: "contracts", model: "anthropic/opus-5" }],
-				},
-			]),
-		);
-		expect(errors).toEqual([
-			"api.stages[1].lenses[0]: `model` pins `anthropic/opus-5` and there is " +
+	// FAIL CLOSED: a pin nothing could check is refused, never stored unchecked.
+	it("refuses a review that pins anything when there is no host", () => {
+		expect(
+			errorsOf(reviewed([{ lens: "contracts", model: "anthropic/opus-5" }])),
+		).toEqual([
+			"api.reviews[0]: `model` pins `anthropic/opus-5` and there is " +
 				"no model catalogue here to check it against, so it is refused rather " +
 				"than stored unchecked — drop `model` and pin `tier` instead",
 		]);
 	});
 
-	it("refuses a lens id the compiled document could not carry", () => {
-		// A lens id is a fan-out key and reaches `@vegardx/pi-workflow` inside the
-		// compiled stage document, whose schema accepts `^[a-z][a-z0-9-]*$`. A
-		// deliverable id may start with a digit; a lens id may not, or the plan
-		// validates here and compiles nowhere. Both places that name a lens are
-		// held to it, and every one of them is reported at once.
+	it("reports every wrong review at once", () => {
+		// The whole list is walked even after a bad entry: an author fixing one
+		// review per round trip is an author who starts guessing.
 		const errors = errorsOf(
-			staged([
-				implement,
-				{
-					use: "review-fan-out",
-					id: "review",
-					lenses: [{ id: "2fa" }, { id: "-leading" }, { id: "contracts" }],
-				},
-			]),
+			reviewed([{ lens: "" }, { lens: "2fa" }, { lens: "x", model: "fable" }]),
 		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("`2fa` is not a safe review lens"),
-		);
-		expect(errors).toContainEqual(
-			expect.stringContaining("`-leading` is not a safe review lens"),
-		);
-		// The message carries the pattern itself, so an author who wrote an empty
-		// or mis-shaped id learns the rule rather than only that it broke one.
-		expect(errors.join("\n")).toContain("^[a-z][a-z0-9-]{0,63}$");
-		expect(errors.join("\n")).toContain("a lens id is required");
-		expect(
-			errors.filter((error) => error.includes("not a safe review lens")),
-		).toHaveLength(2);
+		expect(errors.length).toBeGreaterThanOrEqual(3);
+	});
+});
 
-		// The same rule, and the same message, for a task's own `review`.
-		const byLens = errorsOf(
+describe("what version 5 moved, refused by name", () => {
+	it("refuses a review written onto a task", () => {
+		const errors = errorsOf(
 			plan({
 				deliverables: [
-					deliverable("api", { tasks: [task("t", { lens: "2fa" })] }),
+					deliverable("api", {
+						tasks: [
+							{
+								...task("build"),
+								review: { lens: "security" },
+							} as unknown as Task,
+						],
+					}),
 				],
 			}),
 		);
-		expect(byLens).toContainEqual(
-			expect.stringContaining("`2fa` is not a safe review lens"),
-		);
-		expect(
-			errorsOf(
-				plan({
-					deliverables: [
-						deliverable("api", { tasks: [task("t", { lens: "a2" })] }),
-					],
-				}),
-			),
-		).toEqual([]);
+		expect(errors).toEqual([
+			"api.tasks[0]: task `build` carries `review`, which plan schema v5 " +
+				"moved to `deliverables[].reviews`: a task is work, and a deliverable " +
+				"lists who reads that work once, beside its tasks. There is no " +
+				"migration",
+		]);
 	});
 
-	it("reports every wrong stage at once", () => {
-		// The whole list is walked even after a bad stage: an author fixing one
-		// stage per round trip is an author who starts guessing.
+	it("refuses the version 3 name too, so a model writing from memory hears it", () => {
 		const errors = errorsOf(
-			staged([
-				{ use: "gate", id: "early", question: "Now?" },
-				{ use: "wat", id: "x" } as unknown as Stage,
-				{ use: "dynamic", id: "later", brief: "tbd" },
-			]),
+			plan({
+				deliverables: [
+					deliverable("api", {
+						tasks: [
+							{ ...task("build"), by: { lens: "security" } } as unknown as Task,
+						],
+					}),
+				],
+			}),
 		);
-		expect(errors.length).toBeGreaterThanOrEqual(4);
+		expect(errors).toEqual([
+			"api.tasks[0]: task `build` carries `by`, which plan schema v5 moved to " +
+				"`deliverables[].reviews`: `by` was a version 3 field, version 4 " +
+				"renamed it `review`, and version 5 took reviews off the task " +
+				"altogether. There is no migration",
+		]);
+	});
+
+	it("refuses an authored stage list", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					{
+						...deliverable("api"),
+						stages: [{ use: "implement", id: "build" }],
+					} as unknown as Deliverable,
+				],
+			}),
+		);
+		expect(errors).toEqual([
+			"api: carries `stages`, which plan schema v5 removed: a deliverable's " +
+				"run is derived from its tasks, its `reviews` and the policy the seat " +
+				"attaches, so there is nothing here for an author to write. Drop " +
+				"`stages`",
+		]);
 	});
 });
 
@@ -500,7 +388,7 @@ describe("what a policy may not say", () => {
 		expect(policied({ publish: { mode: "pr", base: "main" } })).toEqual([]);
 	});
 
-	it("accepts a plan that sets every dial", () => {
+	it("accepts a plan the seat gave every dial", () => {
 		expect(
 			policied({
 				effort: "deep",
@@ -546,12 +434,12 @@ describe("a `reads` edge the runtime cannot honour", () => {
 });
 
 describe("the digest covers the new fields", () => {
-	it("changes when the stages change", () => {
+	it("changes when the reviews change", () => {
 		const before = plan();
-		const after = staged([implement]);
+		const after = reviewed([{ lens: "security" }]);
 		expect(planDigest(after)).not.toBe(planDigest(before));
 		expect(
-			planDigest(staged([implement, { use: "verify-and-fix", id: "v" }])),
+			planDigest(reviewed([{ lens: "security", tier: "heavy" }])),
 		).not.toBe(planDigest(after));
 	});
 
@@ -562,10 +450,13 @@ describe("the digest covers the new fields", () => {
 		expect(planDigest(plan({ policy: { publish: { mode: "pr" } } }))).not.toBe(
 			planDigest(plan()),
 		);
+		// And when the plan's own body does, which is part of the document a
+		// blind reviewer is shown.
+		expect(planDigest(plan({ body: "why" }))).not.toBe(planDigest(plan()));
 	});
 });
 
-describe("stages and policy survive the store", () => {
+describe("reviews and policy survive the store", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
 		while (dirs.length > 0)
@@ -586,41 +477,30 @@ describe("stages and policy survive the store", () => {
 		return dir;
 	}
 
+	const policy: PlanPolicy = {
+		effort: "standard",
+		gates: "approve-plan+ship",
+		maxFixRounds: 1,
+		publish: { mode: "pr", base: "main" },
+	};
+
 	function fixture(root: string): Plan {
 		return {
 			slug: "arc",
 			title: "Arc",
+			body: "Why the arc is worth building.",
 			repos: [{ key: "main", path: root }],
-			policy: {
-				effort: "standard",
-				gates: "approve-plan+ship",
-				maxFixRounds: 1,
-				publish: { mode: "pr", base: "main" },
-			},
+			policy,
 			deliverables: [
 				{
 					id: "api",
 					title: "The API",
 					after: [],
 					reads: [],
-					tasks: [task("build"), task("sec", { lens: "security" })],
-					stages: [
-						{ use: "implement", id: "build", tools: ["read", "bash"] },
-						{
-							use: "verify-and-fix",
-							id: "green",
-							maxRounds: 2,
-							escalate: "thinking",
-						},
-						{
-							use: "review-fan-out",
-							id: "review",
-							synthesis: "required",
-							lenses: [
-								{ id: "contracts", tier: "heavy", diverse: true },
-								{ id: "replay", tier: "standard" },
-							],
-						},
+					tasks: [task("build"), task("tests")],
+					reviews: [
+						{ lens: "contracts", tier: "heavy", diverse: true },
+						{ lens: "replay", tier: "standard" },
 					],
 				},
 			],
@@ -636,25 +516,26 @@ describe("stages and policy survive the store", () => {
 		expect(planDigest(read as Plan)).toBe(planDigest(written));
 	});
 
-	it("is written by the plan tool, which offers both fields", () => {
+	it("is written by the plan tool, which offers reviews and never the dials", () => {
 		const cwd = repo();
 		const store = createPlanStore(temp("store"));
-		const tool = createPlanTool({ store, cwd: () => cwd });
+		const tool = createPlanTool({
+			store,
+			cwd: () => cwd,
+			// The seat's own attachment: the dials a human already decided.
+			policy: () => policy,
+		});
 		const schema = JSON.stringify(tool.parameters);
-		expect(schema).toContain('"stages"');
-		expect(schema).toContain('"policy"');
-		for (const kind of [
-			"implement",
-			"verify-and-fix",
-			"review-fan-out",
-			"gate",
-		])
-			expect(schema).toContain(`"${kind}"`);
-		// `dynamic` is reserved in the schema and refused by validation, so
-		// offering it here would only spend a turn to learn that.
-		expect(schema).not.toContain('"dynamic"');
+		expect(schema).toContain('"reviews"');
+		expect(schema).toContain('"lens"');
+		// Neither is the author's to write, so neither is a parameter.
+		expect(schema).not.toContain('"stages"');
+		expect(schema).not.toContain('"policy"');
 
-		const authored = fixture(cwd);
+		const stored = fixture(cwd);
+		// What the model sends is the document WITHOUT the dials; what is stored
+		// is that document with them attached.
+		const { policy: _dials, ...authored } = stored;
 		return (
 			tool.execute as unknown as (
 				id: string,
@@ -666,9 +547,9 @@ describe("stages and policy survive the store", () => {
 		)("call-1", authored).then((result) => {
 			expect(result.details.errors).toEqual([]);
 			expect(result.details.stored).toBe(true);
-			expect(store.loadPlan("arc")).toEqual(authored);
-			// Echoed back, so an author can see the stages they just wrote.
-			expect(result.content[0].text).toContain("stages build → green → review");
+			expect(store.loadPlan("arc")).toEqual(stored);
+			// Echoed back by lens, so an author sees who they just asked for.
+			expect(result.content[0].text).toContain("read by contracts, replay");
 		});
 	});
 
@@ -677,31 +558,21 @@ describe("stages and policy survive the store", () => {
 		expect(text).toContain("Policy:");
 		expect(text).toContain("effort standard, gates approve-plan+ship");
 		expect(text).toContain("publish pr from main");
-		expect(text).toContain("build — implement, tools read, bash");
+		expect(text).toContain("Why the arc is worth building.");
+		expect(text).toContain("read by contracts, tier heavy, diverse");
+		expect(text).toContain("stages (derived):");
+		expect(text).toContain("implement — implement");
+		expect(text).toContain("verify — verify-and-fix, up to 1 fix round");
 		expect(text).toContain(
-			"green — verify-and-fix, up to 2 fix rounds, escalating to thinking",
-		);
-		expect(text).toContain(
-			"review — review-fan-out over contracts (tier heavy, diverse), replay (tier standard), synthesis required",
+			"review — review-fan-out over contracts (tier heavy, diverse), replay (tier standard), synthesis optional",
 		);
 	});
 
-	it("shows a plan that declared nothing as the stages it will get anyway", () => {
-		const text = renderPlan(
-			plan({
-				deliverables: [
-					deliverable("api", {
-						tasks: [task("build"), task("sec", { lens: "security" })],
-					}),
-				],
-			}),
-		);
+	it("shows a plan the seat gave no dials as the defaults it will run at", () => {
+		const text = renderPlan(reviewed([{ lens: "security" }]));
 		expect(text).toContain(
 			"Policy (the plan sets none — these are the defaults)",
 		);
-		expect(text).toContain("stages (default):");
-		expect(text).toContain("implement — implement");
-		expect(text).toContain("verify — verify-and-fix, up to 1 fix round");
 		expect(text).toContain(
 			"review — review-fan-out over security (tier standard), synthesis optional",
 		);
@@ -716,32 +587,20 @@ describe("stages and policy survive the store", () => {
 // read this plan, and an undefined field is where they disagreed.
 
 describe("writing `diverse` onto every heavy reviewer", () => {
-	it("fills in `tasks[].review` and authored lenses, and only where undecided", () => {
+	it("fills in every undecided heavy review, and only those", () => {
 		const subject = plan({
 			deliverables: [
 				deliverable("api", {
-					tasks: [
-						task("build"),
-						task("sec", { lens: "security", tier: "heavy" }),
-						task("contracts", {
-							lens: "contracts",
-							tier: "heavy",
-							diverse: false,
-						}),
-						task("tests", { lens: "tests", tier: "standard" }),
+					reviews: [
+						{ lens: "security", tier: "heavy" },
+						{ lens: "contracts", tier: "heavy", diverse: false },
+						{ lens: "tests", tier: "standard" },
 					],
 				}),
 				deliverable("web", {
-					stages: [
-						implement,
-						{
-							use: "review-fan-out",
-							id: "review",
-							lenses: [
-								{ id: "risk", tier: "heavy" },
-								{ id: "replay", tier: "light" },
-							],
-						},
+					reviews: [
+						{ lens: "risk", tier: "heavy" },
+						{ lens: "replay", tier: "light" },
 					],
 				}),
 			],
@@ -750,50 +609,32 @@ describe("writing `diverse` onto every heavy reviewer", () => {
 		const next = withExplicitDiverse(subject);
 		if (!next)
 			throw new Error("a heavy reviewer with no answer was not filled in");
-		expect(next.deliverables[0]?.tasks.map((t) => t.review?.diverse)).toEqual([
-			undefined,
+		expect(next.deliverables[0]?.reviews?.map((r) => r.diverse)).toEqual([
 			true,
 			// Already answered, and answering it again would overrule the author.
 			false,
 			undefined,
 		]);
-		const review = next.deliverables[1]?.stages?.[1];
-		expect(review).toMatchObject({
-			lenses: [
-				{ id: "risk", tier: "heavy", diverse: true },
-				{ id: "replay", tier: "light" },
-			],
-		});
+		expect(next.deliverables[1]?.reviews).toEqual([
+			{ lens: "risk", tier: "heavy", diverse: true },
+			{ lens: "replay", tier: "light" },
+		]);
 		// The input is untouched: the caller decides whether to store the result.
-		expect(subject.deliverables[0]?.tasks[1]?.review?.diverse).toBeUndefined();
+		expect(subject.deliverables[0]?.reviews?.[0]?.diverse).toBeUndefined();
 		// And the rewritten document is still a plan.
 		expect(errorsOf(next)).toEqual([]);
 	});
 
 	it("answers `undefined` when there is nothing to write, so the digest holds", () => {
-		const untouched = plan({
-			deliverables: [
-				deliverable("api", {
-					tasks: [task("build"), task("tests", { lens: "tests" })],
-				}),
-			],
-		});
+		const untouched = reviewed([{ lens: "tests" }]);
 		expect(withExplicitDiverse(untouched)).toBeUndefined();
 		expect(planDigest(untouched)).toBe(planDigest(untouched));
 	});
 
 	it("reaches the compiled stage list, which is the point of writing it down", () => {
-		const subject = plan({
-			deliverables: [
-				deliverable("api", {
-					tasks: [
-						task("build"),
-						task("sec", { lens: "security", tier: "heavy" }),
-					],
-				}),
-			],
-		});
-		const next = withExplicitDiverse(subject);
+		const next = withExplicitDiverse(
+			reviewed([{ lens: "security", tier: "heavy" }]),
+		);
 		if (!next) throw new Error("nothing was written down");
 		const stages = withDefaultStages(next).deliverables[0]?.stages;
 		const review = stages?.find((stage) => stage.use === "review-fan-out");

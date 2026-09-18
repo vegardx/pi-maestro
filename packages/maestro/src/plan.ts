@@ -22,14 +22,16 @@ import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
  * IT LIVES HERE, WITH THE SHAPE IT VERSIONS. A version defined next to the
  * envelope writer is a version that says nothing about what changed; a
  * document whose own module names its revision can refuse the previous one by
- * name — which is what version 4 does.
+ * name — which is what version 5 does.
  *
  * Version 3 removed preflight/postflight and repository-creation intent.
- * Version 4 renamed `tasks[].by` to `tasks[].review`. Nothing before the
- * current version is readable, and nothing tries to be: there is no migration
- * path here on purpose.
+ * Version 4 renamed `tasks[].by` to `tasks[].review`. Version 5 took reviews
+ * off the task altogether — a task is work, and a deliverable lists its reviews
+ * once in `reviews` — and dropped authored `stages`, which the run derives.
+ * Nothing before the current version is readable, and nothing tries to be:
+ * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 4 as const;
+export const MAESTRO_SCHEMA_VERSION = 5 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -111,26 +113,24 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const LENS_ID_RE = /^[a-z][a-z0-9-]{0,63}$/;
 
 /**
- * What makes a task a review, and how that review is routed.
+ * One independent reading of a deliverable's work, and how it is routed.
  *
- * NAMED FOR WHAT IT IS, because the name is the whole instruction. Version 3
- * called this field `by`, and in three by-hand runs the model read `by` as
- * "who does this task" and wrote it onto the implementation tasks too — which
- * made every task in the deliverable a review and left nobody writing the
- * code. `review` cannot be read that way.
- *
- * A task compiled into its own read-only workflow stage. There is no agent
- * kind: a writer is authored as a deliverable, never as delegated work.
+ * A REVIEW IS NOT A TASK. Version 3 called this `tasks[].by`, version 4 renamed
+ * it `tasks[].review`, and in four by-hand runs the model wrote it onto the
+ * implementation, test and docs tasks as well — the document encoded "this is
+ * work" as the absence of a field, and absence is the one thing a model writing
+ * every field will not produce. Here a task is always work and a deliverable
+ * lists its reviews beside them, so there is nothing to leave out.
  */
-export interface ReviewRouting {
+export interface Review {
 	/** The independent point of view this reviewer applies. */
 	readonly lens: string;
 	/** Optional ambient skill to request explicitly in the stage prompt. */
 	readonly skill?: string;
 	/**
-	 * One concrete launch, pinned. OPTIONAL: a plan that names a literal
+	 * One concrete launch, pinned. Optional: a plan that names a literal
 	 * `provider/model` is a plan that only runs on the host that has it. Repeat
-	 * the lens in another task to use another model.
+	 * the lens to read the same work under another model.
 	 */
 	readonly model?: string;
 	/** How much reviewer to spend, when the plan does not pin one. */
@@ -144,34 +144,25 @@ export const REVIEW_TIERS = ["light", "standard", "heavy"] as const;
 
 export type ReviewTier = (typeof REVIEW_TIERS)[number];
 
+/** Work. All of it: implementation, tests, docs. There is no other kind. */
 export interface Task {
 	readonly id: string;
 	readonly title: string;
 	readonly body?: string;
-	/**
-	 * Present = this task IS the review, and seeds a lens. Absent = the
-	 * deliverable's own worker does it, which is every implementation, test and
-	 * docs task there is.
-	 */
-	readonly review?: ReviewRouting;
 }
 
 /**
- * The kinds of stage a deliverable compiles into.
+ * The kinds of stage a deliverable is lowered into.
  *
- * `use` names a PLAN STAGE KIND, not a component: the plan's vocabulary and
- * the library that lowers it are allowed to diverge, and several components
- * the library will grow have nothing behind them yet. `dynamic` is reserved
- * here so a document can be written against it before anything compiles it —
- * validation refuses it by name rather than letting it reach a compiler that
- * would drop it.
+ * DERIVED, NEVER AUTHORED. `defaultStagesFor` is the only thing that builds
+ * one; version 5 removed `deliverables[].stages` from the document, so this
+ * vocabulary is the compiler's own intermediate between a plan and the
+ * compiled stage document the runtime reads.
  */
 export const STAGE_KINDS = [
 	"implement",
 	"verify-and-fix",
 	"review-fan-out",
-	"gate",
-	"dynamic",
 ] as const;
 
 export type StageKind = (typeof STAGE_KINDS)[number];
@@ -205,11 +196,8 @@ export interface ReviewLens {
 	readonly model?: string;
 }
 
-/** At most this many lenses in one fan-out. The component refuses more. */
+/** At most this many reviews on one deliverable. The component refuses more. */
 export const MAX_LENSES = 16;
-
-/** A tool NAME, which is the only thing a stage may say about tools. */
-const TOOL_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
 /** The deliverable's own work: one worktree, one hand-off. Exactly one. */
 export interface ImplementStage {
@@ -235,28 +223,7 @@ export interface ReviewFanOutStage {
 	readonly synthesis?: SynthesisMode;
 }
 
-/** A human decides. Last in its deliverable, because nothing follows a gate. */
-export interface GateStage {
-	readonly use: "gate";
-	readonly id: string;
-	readonly question: string;
-	/** Earlier sibling stage ids whose results the decision is shown. */
-	readonly show?: readonly string[];
-}
-
-/** Reserved: a stage the run writes for itself. Refused until it compiles. */
-export interface DynamicStage {
-	readonly use: "dynamic";
-	readonly id: string;
-	readonly brief: string;
-}
-
-export type Stage =
-	| ImplementStage
-	| VerifyAndFixStage
-	| ReviewFanOutStage
-	| GateStage
-	| DynamicStage;
+export type Stage = ImplementStage | VerifyAndFixStage | ReviewFanOutStage;
 
 export interface Deliverable {
 	readonly id: string;
@@ -278,20 +245,24 @@ export interface Deliverable {
 	/** The work, in order. A deliverable with none is not a deliverable. */
 	readonly tasks: readonly Task[];
 	/**
-	 * How this deliverable is compiled, in order. OPTIONAL: a deliverable
-	 * with none gets `defaultStagesFor` — implement, verify, review — derived
-	 * from the plan's policy, so every document written before stages existed
-	 * still compiles to what it always compiled to.
+	 * Who reads the work when it is done. Absent and empty mean the same thing:
+	 * nobody, and the deliverable compiles without a review stage.
 	 */
-	readonly stages?: readonly Stage[];
+	readonly reviews?: readonly Review[];
 }
 
 export interface Plan {
 	readonly slug: string;
 	readonly title: string;
+	/** What the plan is for, when the title does not carry it. */
+	readonly body?: string;
 	readonly deliverables: readonly Deliverable[];
 	readonly repos: readonly PlanRepo[];
-	/** The dials this plan sets for its own run. Defaults when absent. */
+	/**
+	 * The dials this run turns. Attached by the seat from the decisions a human
+	 * already made on the way out of plan mode, never authored by the model:
+	 * the `plan` tool has no `policy` parameter. Defaults when absent.
+	 */
 	readonly policy?: PlanPolicy;
 }
 
@@ -413,28 +384,25 @@ export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
 }
 
 /**
- * What a deliverable that declared no stages compiles to.
+ * What a deliverable compiles to. The only lowering path there is.
  *
- * The review stage is omitted rather than declared empty when nothing in the
- * deliverable asked for a review: a fan-out over zero lenses is not a cheaper
+ * Version 5 removed authored `stages`, so this is not a default any more — it
+ * is the derivation, and the run a person approves is the run this function
+ * says. The review stage is omitted rather than declared empty when the
+ * deliverable lists no reviews: a fan-out over zero lenses is not a cheaper
  * review, it is a stage that cannot be compiled.
  */
 export function defaultStagesFor(
 	deliverable: Deliverable,
 	policy: ResolvedPolicy,
 ): readonly Stage[] {
-	const lenses: ReviewLens[] = [];
-	for (const task of deliverable.tasks) {
-		const review = task.review;
-		if (!review) continue;
-		lenses.push({
-			id: review.lens,
-			tier: review.tier ?? policy.reviewDefault.tier,
-			diverse: review.diverse ?? policy.reviewDefault.diverse,
-			...(review.skill ? { skill: review.skill } : {}),
-			...(review.model ? { model: review.model } : {}),
-		});
-	}
+	const lenses: ReviewLens[] = (deliverable.reviews ?? []).map((review) => ({
+		id: review.lens,
+		tier: review.tier ?? policy.reviewDefault.tier,
+		diverse: review.diverse ?? policy.reviewDefault.diverse,
+		...(review.skill ? { skill: review.skill } : {}),
+		...(review.model ? { model: review.model } : {}),
+	}));
 	const stages: Stage[] = [
 		{ use: "implement", id: "implement" },
 		{ use: "verify-and-fix", id: "verify", maxRounds: policy.maxFixRounds },
@@ -450,12 +418,11 @@ export function defaultStagesFor(
 }
 
 /**
- * The plan as it will be compiled: policy resolved, every stage list explicit.
+ * The plan as it will be compiled: policy resolved, every stage list derived.
  *
  * PURE, AND NOT WHAT IS STORED. The digest is over the authored document, so
- * filling defaults in here cannot change what a receipt is checked against —
- * an author who never wrote `stages` keeps the same digest they had before
- * stages existed, and gets the same three stages either way.
+ * the stages worked out here never reach disk and never move a receipt: they
+ * are a reading of the stored document, recomputed wherever it is read.
  */
 export function withDefaultStages(plan: Plan): StagedPlan {
 	const policy = resolvePolicy(plan.policy);
@@ -464,7 +431,7 @@ export function withDefaultStages(plan: Plan): StagedPlan {
 		policy,
 		deliverables: plan.deliverables.map((d) => ({
 			...d,
-			stages: d.stages ?? defaultStagesFor(d, policy),
+			stages: defaultStagesFor(d, policy),
 		})),
 	};
 }
@@ -491,33 +458,15 @@ export function withDefaultStages(plan: Plan): StagedPlan {
  */
 export function withExplicitDiverse(plan: Plan): Plan | undefined {
 	let changed = false;
-	const heavyUndecided = (routing: {
-		readonly tier?: ReviewTier;
-		readonly diverse?: boolean;
-	}): boolean => routing.tier === "heavy" && routing.diverse === undefined;
 	const deliverables = plan.deliverables.map((deliverable) => {
-		const tasks = deliverable.tasks.map((task) => {
-			if (!task.review || !heavyUndecided(task.review)) return task;
+		if (!deliverable.reviews) return deliverable;
+		const reviews = deliverable.reviews.map((review) => {
+			if (review.tier !== "heavy" || review.diverse !== undefined)
+				return review;
 			changed = true;
-			return { ...task, review: { ...task.review, diverse: true } };
+			return { ...review, diverse: true };
 		});
-		const stages = deliverable.stages?.map((stage) => {
-			if (stage.use !== "review-fan-out") return stage;
-			let stageChanged = false;
-			const lenses = stage.lenses.map((lens) => {
-				if (!heavyUndecided(lens)) return lens;
-				stageChanged = true;
-				return { ...lens, diverse: true };
-			});
-			if (!stageChanged) return stage;
-			changed = true;
-			return { ...stage, lenses };
-		});
-		return {
-			...deliverable,
-			tasks,
-			...(stages ? { stages } : {}),
-		};
+		return { ...deliverable, reviews };
 	});
 	return changed ? { ...plan, deliverables } : undefined;
 }
@@ -594,10 +543,6 @@ export function inspectPlan(
 	const warnings: string[] = [];
 	const ids = new Set<string>();
 	const repoKeys = new Set<string>();
-	// Validated as it will be COMPILED, not as it was typed: a deliverable that
-	// declared no stages still has three, and a rule that only ran over authored
-	// stages would report nothing about the run that is actually going to happen.
-	const staged = withDefaultStages(plan);
 	if (!ID_RE.test(plan.slug))
 		errors.push(
 			`plan: \`${plan.slug}\` cannot be a slug — it must be lowercase letters, digits and hyphens`,
@@ -636,7 +581,7 @@ export function inspectPlan(
 
 	if (plan.policy) validatePolicy(plan.policy, errors);
 
-	for (const [i, d] of staged.deliverables.entries()) {
+	for (const [i, d] of plan.deliverables.entries()) {
 		const where = d.id || `deliverables[${i}]`;
 		if (!d.id.trim()) errors.push(`${where}: no id`);
 		else if (ids.has(d.id)) errors.push(`${where}: duplicate id`);
@@ -656,8 +601,18 @@ export function inspectPlan(
 				`${where}: no tasks — a deliverable is work, or it is nothing`,
 			);
 
-		validateTasks(d.tasks, where, errors, host);
-		validateStages(d.stages, where, errors, host);
+		// THE OLD PLACE, REFUSED BY NAME. A stored document is caught by its
+		// envelope version, but a model writing a fresh plan from memory of the
+		// version 4 field writes `stages` into a version 5 body, where the type
+		// says nothing and the field would simply be ignored — a plan that
+		// validates and stores with a run nobody wrote.
+		if ((d as { stages?: unknown }).stages !== undefined)
+			errors.push(
+				`${where}: carries \`stages\`, which plan schema v${MAESTRO_SCHEMA_VERSION} removed: a deliverable's run is derived from its tasks, its \`reviews\` and the policy the seat attaches, so there is nothing here for an author to write. Drop \`stages\``,
+			);
+
+		validateTasks(d.tasks, where, errors);
+		validateReviews(d.reviews, where, errors, host);
 
 		if (d.repo !== undefined && !repoKeys.has(d.repo))
 			errors.push(`${where}: unknown repo \`${d.repo}\``);
@@ -708,7 +663,6 @@ function validateTasks(
 	tasks: readonly Task[],
 	where: string,
 	errors: string[],
-	host?: PlanHostPort,
 ): void {
 	const seen = new Set<string>();
 	for (const [i, t] of tasks.entries()) {
@@ -720,59 +674,64 @@ function validateTasks(
 			errors.push(`${where}: duplicate task id \`${t.id}\``);
 		seen.add(t.id);
 		if (!t.title.trim()) errors.push(`${at}: no title`);
-		// THE OLD NAME, REFUSED BY NAME. A stored document is caught by its
-		// envelope version, but a model writing a fresh plan from memory of the
-		// version 3 field writes `by` into a version 4 body, where the type says
-		// nothing and the field would simply be ignored — a plan that validates,
-		// stores, and compiles with no reviewers at all.
+		// THE TWO OLD NAMES, REFUSED BY NAME. A stored document is caught by its
+		// envelope version, but a model writing a fresh plan from memory of an
+		// earlier one writes the old field into a version 5 body, where the type
+		// says nothing and the field would simply be ignored — a plan that
+		// validates, stores, and compiles with no reviewers at all.
+		if ((t as { review?: unknown }).review !== undefined)
+			errors.push(
+				`${at}: task \`${t.id}\` carries \`review\`, which plan schema v${MAESTRO_SCHEMA_VERSION} moved to \`deliverables[].reviews\`: a task is work, and a deliverable lists who reads that work once, beside its tasks. There is no migration`,
+			);
 		if ((t as { by?: unknown }).by !== undefined)
 			errors.push(
-				`${at}: task \`${t.id}\` carries \`by\`, which plan schema v${MAESTRO_SCHEMA_VERSION} renamed to \`review\`: that is a version 3 field and there is no migration. Rename \`by\` to \`review\` on every review task`,
+				`${at}: task \`${t.id}\` carries \`by\`, which plan schema v${MAESTRO_SCHEMA_VERSION} moved to \`deliverables[].reviews\`: \`by\` was a version 3 field, version 4 renamed it \`review\`, and version 5 took reviews off the task altogether. There is no migration`,
 			);
-		// No agent-kind check: review tasks compile to read-only workflow stages.
-		if (t.review) {
-			if (!LENS_ID_RE.test(t.review.lens))
-				errors.push(`${at}: ${lensIdProblem(t.review.lens)}`);
-			validateReviewRouting(t.review, at, errors, host);
-		}
 	}
 }
 
 /**
- * A stage may say what to decide. It may not say how, or where the bytes are:
- * a plan is read by a human and by a blind reviewer, and both of them are
- * entitled to a document that does not smuggle an implementation past them.
+ * The reviews of one deliverable: the whole of who reads its work.
+ *
+ * `lens` is the one required field, so an empty one is the one thing here that
+ * cannot be dropped at the boundary as "nothing to say" — it is the document
+ * claiming a review exists and declining to say what it reads for. That is the
+ * shape four by-hand passes produced, and the refusal names the way out.
  */
-const PATH_LIKE = /(^|\s)(~|\.{1,2})?\/\S/;
-
-const CODE_LIKE = /```|=>|\bfunction\s*\(|\bconst\s+\w+\s*=|[;{}]\s*$/m;
-
-function validateProse(
-	value: string,
-	at: string,
-	field: string,
+function validateReviews(
+	reviews: readonly Review[] | undefined,
+	where: string,
 	errors: string[],
+	host?: PlanHostPort,
 ): void {
-	if (PATH_LIKE.test(value))
+	if (reviews === undefined) return;
+	if (reviews.length > MAX_LENSES)
 		errors.push(
-			`${at}: \`${field}\` names a filesystem path — a stage says what to do, not where the bytes are`,
+			`${where}: ${reviews.length} reviews — at most ${MAX_LENSES} read one deliverable`,
 		);
-	else if (CODE_LIKE.test(value))
-		errors.push(
-			`${at}: \`${field}\` contains code — a stage says what to do, not how to do it`,
-		);
+	for (const [i, review] of reviews.entries()) {
+		const at = `${where}.reviews[${i}]`;
+		const lens: unknown = review?.lens;
+		if (typeof lens !== "string" || lens.trim().length === 0)
+			errors.push(
+				`${at}: a review needs a lens; a task that is not a review is simply a task, and belongs in \`tasks\` with no review entry`,
+			);
+		else if (!LENS_ID_RE.test(lens))
+			errors.push(`${at}: ${lensIdProblem(lens)}`);
+		if (review) validateReviewRouting(review, at, errors, host);
+	}
 }
 
 /**
  * Why this is not a lens id, in one sentence that names the rule.
  *
- * Said in one place because `tasks[].review.lens` and a `review-fan-out` lens
- * id are the same key in the compiled document, and two messages for one rule
- * is how the two drift.
+ * Said in one place because `deliverables[].reviews[].lens` and a
+ * `review-fan-out` lens id are the same key in the compiled document, and two
+ * messages for one rule is how the two drift.
  */
 function lensIdProblem(id: unknown): string {
 	return (
-		`\`${String(id)}\` is not a safe review lens — a lens id is required and is ` +
+		`\`${String(id)}\` is not a safe review lens — a lens id is ` +
 		`a workflow fan-out key, so it must match \`${LENS_ID_RE.source}\`: a ` +
 		"lowercase letter, then lowercase letters, digits and hyphens"
 	);
@@ -802,8 +761,8 @@ function skillList(host: PlanHostPort): string {
 /**
  * The routing a review can ask for, wherever it is written.
  *
- * Shared by `tasks[].review` and `review-fan-out` lenses on purpose: the two
- * are the same request in two places, and a rule that held in one of them
+ * Shared by `deliverables[].reviews` and `policy.reviewDefault` on purpose: the
+ * two are the same request at two scopes, and a rule that held in one of them
  * would be a rule an author could route around by moving the field.
  *
  * `skill` and `model` are the two fields a document cannot check about itself,
@@ -938,141 +897,6 @@ export function validatePolicy(policy: PlanPolicy, errors: string[]): void {
 		// `mode: "pr"` needs `gh`, and that is a fact about the host at readiness
 		// time, not about the document. Not checked here on purpose.
 	}
-}
-
-/**
- * The stage list of one deliverable.
- *
- * Every rule reports rather than throws, and the list is walked to the end
- * even after a bad stage, because a stage list is authored whole and an author
- * fixing one stage per round trip is an author who starts guessing.
- */
-function validateStages(
-	stages: readonly Stage[],
-	where: string,
-	errors: string[],
-	host?: PlanHostPort,
-): void {
-	const declared = new Set<string>();
-	const implementAt: number[] = [];
-	const verifyAt: number[] = [];
-
-	for (const [i, stage] of stages.entries()) {
-		const at = `${where}.stages[${i}]`;
-		const kind: unknown = (stage as { use?: unknown }).use;
-		if (
-			typeof kind !== "string" ||
-			!(STAGE_KINDS as readonly string[]).includes(kind)
-		) {
-			errors.push(
-				`${at}: \`${String(kind)}\` is not a stage kind — one of ${STAGE_KINDS.join(", ")}`,
-			);
-			continue;
-		}
-
-		const id: unknown = (stage as { id?: unknown }).id;
-		if (typeof id !== "string" || !id.trim()) errors.push(`${at}: no id`);
-		else if (!ID_RE.test(id))
-			errors.push(
-				`${at}: \`${id}\` cannot be a stage id — it becomes a workflow namespace, so use lowercase letters, digits and hyphens`,
-			);
-		else if (declared.has(id))
-			errors.push(`${where}: duplicate stage id \`${id}\``);
-
-		switch (stage.use) {
-			case "implement": {
-				implementAt.push(i);
-				for (const tool of stage.tools ?? [])
-					if (!TOOL_NAME_RE.test(tool))
-						errors.push(
-							`${at}: \`${tool}\` is not a tool name — \`tools\` names tools, not commands or paths`,
-						);
-				break;
-			}
-			case "verify-and-fix": {
-				verifyAt.push(i);
-				if (
-					stage.maxRounds !== undefined &&
-					!(FIX_ROUNDS as readonly number[]).includes(stage.maxRounds)
-				)
-					errors.push(
-						`${at}: \`maxRounds\` is ${FIX_ROUNDS.join(", ")} — a fix loop is bounded or it is not a loop anyone approved`,
-					);
-				if (
-					stage.escalate !== undefined &&
-					!(ESCALATIONS as readonly string[]).includes(stage.escalate)
-				)
-					errors.push(
-						`${at}: \`${stage.escalate}\` is not an escalation — one of ${ESCALATIONS.join(", ")}`,
-					);
-				break;
-			}
-			case "review-fan-out": {
-				const lenses = stage.lenses ?? [];
-				if (lenses.length === 0)
-					errors.push(
-						`${at}: no lenses — a fan-out over nothing is not a cheaper review`,
-					);
-				if (lenses.length > MAX_LENSES)
-					errors.push(
-						`${at}: ${lenses.length} lenses — at most ${MAX_LENSES} fan out at once`,
-					);
-				for (const [j, lens] of lenses.entries()) {
-					const lensAt = `${at}.lenses[${j}]`;
-					if (typeof lens?.id !== "string" || !LENS_ID_RE.test(lens.id))
-						errors.push(`${lensAt}: ${lensIdProblem(lens?.id)}`);
-					if (lens) validateReviewRouting(lens, lensAt, errors, host);
-				}
-				if (
-					stage.synthesis !== undefined &&
-					!(SYNTHESIS_MODES as readonly string[]).includes(stage.synthesis)
-				)
-					errors.push(
-						`${at}: \`${stage.synthesis}\` is not a synthesis mode — one of ${SYNTHESIS_MODES.join(", ")}`,
-					);
-				break;
-			}
-			case "gate": {
-				if (typeof stage.question !== "string" || !stage.question.trim())
-					errors.push(`${at}: no question — a gate asks something`);
-				else validateProse(stage.question, at, "question", errors);
-				for (const ref of stage.show ?? [])
-					if (!declared.has(ref))
-						errors.push(
-							`${at}: shows \`${ref}\` — a gate shows stages declared before it in this deliverable`,
-						);
-				if (i !== stages.length - 1)
-					errors.push(
-						`${at}: a \`gate\` is the last stage of its deliverable — nothing runs after a human decided`,
-					);
-				break;
-			}
-			case "dynamic": {
-				errors.push(`${at}: dynamic stages are not compiled yet`);
-				if (typeof stage.brief === "string")
-					validateProse(stage.brief, at, "brief", errors);
-				break;
-			}
-		}
-
-		if (typeof id === "string") declared.add(id);
-	}
-
-	if (implementAt.length === 0)
-		errors.push(
-			`${where}: stages declare no \`implement\` stage — a deliverable is work, or it is nothing`,
-		);
-	else if (implementAt.length > 1)
-		errors.push(
-			`${where}: ${implementAt.length} \`implement\` stages — a deliverable produces one hand-off, so it implements once`,
-		);
-
-	const firstImplement = implementAt[0];
-	for (const i of verifyAt)
-		if (firstImplement === undefined || i < firstImplement)
-			errors.push(
-				`${where}.stages[${i}]: a \`verify-and-fix\` stage follows the \`implement\` stage — there is nothing to verify before it`,
-			);
 }
 
 /** Every dependency cycle, reported once each, as the path that closes it. */

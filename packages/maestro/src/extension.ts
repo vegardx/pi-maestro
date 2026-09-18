@@ -17,8 +17,13 @@ import {
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
-import { readPendingExit } from "./pending-exit.js";
-import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
+import { type PendingExit, readPendingExit } from "./pending-exit.js";
+import {
+	inspectPlan,
+	type Plan,
+	type PlanHostPort,
+	type PlanPolicy,
+} from "./plan.js";
 import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
 import { planHostPort } from "./plan-host.js";
 import { EFFORTS, planDigest } from "./plan-input.js";
@@ -273,18 +278,28 @@ export function startSeat(
 	 * the description is agreed — and the difference is what decides which of
 	 * the two exit tools the seat holds.
 	 */
+	const pendingRecord = (): PendingExit | null => {
+		if (!sessionId) return null;
+		try {
+			return readPendingExit(sessionId, options.agentDir);
+		} catch {
+			return null;
+		}
+	};
 	const exitWindow =
 		options.exitWindow ??
 		((): ExitWindow => {
-			if (!sessionId) return "none";
-			try {
-				const record = readPendingExit(sessionId, options.agentDir);
-				if (!record) return "none";
-				return record.intent === undefined ? "intent" : "plan";
-			} catch {
-				return "none";
-			}
+			const record = pendingRecord();
+			if (!record) return "none";
+			return record.intent === undefined ? "intent" : "plan";
 		});
+	/**
+	 * The dials the exit settled, which the `plan` tool attaches to the document
+	 * it stores. The same record `exitWindow` reads, so "is a window open" and
+	 * "what was decided" cannot disagree; no record — auto or hack with no exit
+	 * in progress — means the plan carries no policy and takes the defaults.
+	 */
+	const exitPolicy = (): PlanPolicy | undefined => pendingRecord()?.policy;
 
 	const events = pi.events;
 	/**
@@ -391,6 +406,7 @@ export function startSeat(
 		const created = createSeat({
 			cwd,
 			exitWindow,
+			exitPolicy,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(options.host ? { host: options.host } : {}),
 		});

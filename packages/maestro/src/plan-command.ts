@@ -29,8 +29,8 @@ import {
 	inspectPlan,
 	type Plan,
 	type ResolvedPolicy,
+	type Review,
 	type ReviewLens,
-	type ReviewRouting,
 	type Stage,
 	withDefaultStages,
 } from "./plan.js";
@@ -150,9 +150,9 @@ export function renderPlanList(
 	].join("\n");
 }
 
-/** The review routing, with every field the author actually set. */
-function renderReviewRouting(review: ReviewRouting): string {
-	const parts = [`lens ${review.lens}`];
+/** One review, with every field the author actually set. */
+function renderReview(review: Review): string {
+	const parts = [review.lens];
 	if (review.skill) parts.push(`skill ${review.skill}`);
 	if (review.tier) parts.push(`tier ${review.tier}`);
 	if (review.diverse) parts.push("diverse");
@@ -208,15 +208,6 @@ function renderStage(stage: Stage, policy: ResolvedPolicy): string {
 				`${stage.id} — review-fan-out over ${stage.lenses.map(renderLens).join(", ")}` +
 				`, synthesis ${stage.synthesis ?? "optional"}`
 			);
-		case "gate":
-			return (
-				`${stage.id} — gate: ${stage.question}` +
-				(stage.show && stage.show.length > 0
-					? ` (showing ${stage.show.join(", ")})`
-					: "")
-			);
-		case "dynamic":
-			return `${stage.id} — dynamic, which is not compiled yet: ${stage.brief}`;
 	}
 }
 
@@ -241,25 +232,25 @@ export function renderPlan(
 	plan: Plan,
 	warnings: readonly string[] = [],
 ): string {
-	// Read back as it will COMPILE: a deliverable that declared no stages still
-	// runs three, and showing only what was typed would hide the run from the
-	// person being asked to approve it.
+	// Read back as it will COMPILE: the stages are derived, never authored, and
+	// showing only what was typed would hide the run from the person being asked
+	// to approve it.
 	const staged = withDefaultStages(plan);
-	const lines = [`${plan.slug} — ${plan.title}`, "", "Repositories:"];
+	const lines = [`${plan.slug} — ${plan.title}`];
+	if (plan.body) lines.push("", plan.body);
+	lines.push("", "Repositories:");
 	for (const repo of plan.repos) lines.push(`  ${repo.key}  ${repo.path}`);
 	lines.push(...renderPolicy(staged.policy, plan.policy !== undefined));
 	lines.push("", "Deliverables:");
-	for (const [i, d] of staged.deliverables.entries()) {
+	for (const d of staged.deliverables) {
 		lines.push(`  ${d.id} — ${d.title}${d.repo ? ` [repo ${d.repo}]` : ""}`);
 		if (d.body) lines.push(`    ${d.body}`);
 		if (d.after.length > 0) lines.push(`    after ${d.after.join(", ")}`);
 		if (d.reads.length > 0) lines.push(`    reads ${d.reads.join(", ")}`);
-		for (const t of d.tasks)
-			lines.push(
-				`    - ${t.id}: ${t.title}` +
-					(t.review ? ` — review (${renderReviewRouting(t.review)})` : ""),
-			);
-		lines.push(`    stages${plan.deliverables[i].stages ? "" : " (default)"}:`);
+		for (const t of d.tasks) lines.push(`    - ${t.id}: ${t.title}`);
+		for (const review of d.reviews ?? [])
+			lines.push(`    read by ${renderReview(review)}`);
+		lines.push("    stages (derived):");
 		for (const stage of d.stages)
 			lines.push(`      ${renderStage(stage, staged.policy)}`);
 	}

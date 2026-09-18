@@ -40,29 +40,11 @@ const EXAMPLE: Plan = {
 			reads: [],
 			tasks: [
 				{ id: "impl", title: "Write src/components/*.ts" },
-				{
-					id: "rev-contracts",
-					title: "Contract review",
-					review: { lens: "contracts", tier: "heavy", diverse: true },
-				},
+				{ id: "tests", title: "Cover each component" },
 			],
-			stages: [
-				{ use: "implement", id: "build" },
-				{
-					use: "verify-and-fix",
-					id: "green",
-					maxRounds: 2,
-					escalate: "thinking",
-				},
-				{
-					use: "review-fan-out",
-					id: "review",
-					synthesis: "required",
-					lenses: [
-						{ id: "contracts", tier: "heavy", diverse: true },
-						{ id: "replay", tier: "standard" },
-					],
-				},
+			reviews: [
+				{ lens: "contracts", tier: "heavy", diverse: true },
+				{ lens: "replay", tier: "standard" },
 			],
 		},
 	],
@@ -75,23 +57,24 @@ describe("compileStageDocument", () => {
 				{
 					id: "catalogue",
 					stages: [
-						{ use: "implement", id: "build" },
+						{ use: "implement", id: "implement" },
 						{
 							use: "verify-and-fix",
-							id: "green",
+							id: "verify",
 							// The plan counts FIX rounds and the component counts
-							// VERIFY rounds: 2 fixes are 3 verifies.
-							maxRounds: 3,
-							escalate: "thinking",
+							// VERIFY rounds: 1 fix is 2 verifies.
+							maxRounds: 2,
 						},
 						{
 							use: "review-fan-out",
 							id: "review",
 							lenses: [
 								{ id: "contracts", tier: "heavy", diverse: true },
-								{ id: "replay", tier: "standard" },
+								// What the review left open comes from the policy's
+								// own review default.
+								{ id: "replay", tier: "standard", diverse: false },
 							],
-							synthesis: "required",
+							synthesis: "optional",
 						},
 					],
 				},
@@ -101,7 +84,7 @@ describe("compileStageDocument", () => {
 		});
 	});
 
-	it("derives the default stage list from the policy for a deliverable with none", () => {
+	it("derives the stage list from the policy and the reviews", () => {
 		const plan: Plan = {
 			...EXAMPLE,
 			policy: { effort: "deep", gates: "every-deliverable" },
@@ -111,14 +94,8 @@ describe("compileStageDocument", () => {
 					title: "One",
 					after: [],
 					reads: [],
-					tasks: [
-						{ id: "impl", title: "Do it" },
-						{
-							id: "rev",
-							title: "Review it",
-							review: { lens: "contracts" },
-						},
-					],
+					tasks: [{ id: "impl", title: "Do it" }],
+					reviews: [{ lens: "contracts" }],
 				},
 			],
 		};
@@ -133,8 +110,8 @@ describe("compileStageDocument", () => {
 						{
 							use: "review-fan-out",
 							id: "review",
-							// Seeded from `tasks[].review`, tier and diverse from the
-							// policy's own review default.
+							// Seeded from `deliverables[].reviews`, tier and diverse
+							// from the policy's own review default.
 							lenses: [{ id: "contracts", tier: "standard", diverse: false }],
 							synthesis: "optional",
 						},
@@ -183,39 +160,13 @@ describe("compileStageDocument", () => {
 		expect([0, 1, 2].map(verifyRoundsFor)).toEqual([1, 2, 3]);
 	});
 
-	it("refuses a reserved stage kind rather than dropping it", () => {
-		const plan: Plan = {
-			...EXAMPLE,
-			deliverables: [
-				{
-					...EXAMPLE.deliverables[0],
-					stages: [
-						{ use: "implement", id: "build" },
-						{ use: "dynamic", id: "later", brief: "decide at run time" },
-					],
-				},
-			],
-		} as Plan;
-		expect(() => compileStageDocument(plan)).toThrow(StageDocumentError);
-		expect(() => compileStageDocument(plan)).toThrow(
-			/dynamic.* are not compiled yet/,
-		);
-	});
-
 	it("refuses a document the runtime's own schema would reject", () => {
 		// A lens id the plan schema allows (it may start with a digit) and the
 		// compiled schema does not. The drift fails here, not at the runtime.
 		const plan: Plan = {
 			...EXAMPLE,
 			deliverables: [
-				{
-					...EXAMPLE.deliverables[0],
-					stages: [
-						{ use: "implement", id: "build" },
-						{ use: "verify-and-fix", id: "green" },
-						{ use: "review-fan-out", id: "review", lenses: [{ id: "2fa" }] },
-					],
-				},
+				{ ...EXAMPLE.deliverables[0], reviews: [{ lens: "2fa" }] },
 			],
 		} as Plan;
 		expect(() => compileStageDocument(plan)).toThrow(StageDocumentError);
@@ -224,7 +175,7 @@ describe("compileStageDocument", () => {
 	it("renders the graph a human is shown", () => {
 		const rendered = renderStageDocument(compileStageDocument(EXAMPLE));
 		expect(rendered).toContain("effort standard, gates approve-plan+ship");
-		expect(rendered).toContain("verify-and-fix green — 3 verify rounds");
+		expect(rendered).toContain("verify-and-fix verify — 2 verify rounds");
 		expect(rendered).toContain("contracts/heavy/diverse");
 	});
 });
@@ -256,7 +207,10 @@ describe("validateStageDocument", () => {
 });
 
 describe("planWithStageDocument", () => {
-	it("writes an edited document back into the plan's stages", () => {
+	// What the editor behind the compiled-document dialog is for: changing who
+	// reviews what. Version 5 removed authored `stages`, so a review lens is the
+	// one thing in the compiled graph that a plan can still hold.
+	it("writes edited lenses back into the plan's reviews", () => {
 		const document = compileStageDocument(EXAMPLE);
 		const edited = {
 			...document,
@@ -264,21 +218,45 @@ describe("planWithStageDocument", () => {
 				{
 					id: "catalogue",
 					stages: [
-						{ use: "implement", id: "build" },
-						{ use: "verify-and-fix", id: "green", maxRounds: 1 },
+						{ use: "implement", id: "implement" },
+						{ use: "verify-and-fix", id: "verify", maxRounds: 2 },
+						{
+							use: "review-fan-out",
+							id: "review",
+							// As the person sees it in the editor: the compiled document
+							// they were shown carries `diverse` on every lens.
+							lenses: [{ id: "security", tier: "light", diverse: false }],
+							synthesis: "optional",
+						},
 					],
 				},
 			],
 		};
 		const { plan, problems } = planWithStageDocument(EXAMPLE, edited);
 		expect(problems).toEqual([]);
-		expect(plan?.deliverables[0]?.stages).toEqual([
-			{ use: "implement", id: "build" },
-			// One verify round back to zero fix rounds.
-			{ use: "verify-and-fix", id: "green", maxRounds: 0 },
+		expect(plan?.deliverables[0]?.reviews).toEqual([
+			{ lens: "security", tier: "light", diverse: false },
 		]);
-		// And it round-trips.
+		// And it round-trips: the document the edit asked for is the document
+		// the plan now compiles to.
 		expect(plan && compileStageDocument(plan)).toEqual(edited);
+	});
+
+	it("reads an edit that removed the fan-out as a deliverable nobody reads", () => {
+		const { plan, problems } = planWithStageDocument(EXAMPLE, {
+			...compileStageDocument(EXAMPLE),
+			deliverables: [
+				{
+					id: "catalogue",
+					stages: [
+						{ use: "implement", id: "implement" },
+						{ use: "verify-and-fix", id: "verify", maxRounds: 2 },
+					],
+				},
+			],
+		});
+		expect(problems).toEqual([]);
+		expect(plan?.deliverables[0]?.reviews).toEqual([]);
 	});
 
 	it("refuses a document that names a deliverable the plan does not have", () => {
@@ -291,22 +269,49 @@ describe("planWithStageDocument", () => {
 		expect(problems.join("\n")).toContain("`other` is not a deliverable");
 	});
 
-	it("refuses a verify stage that would never verify", () => {
+	// The honest half of the write-back: an edit the plan cannot hold is named,
+	// never accepted and then recompiled away behind the person who made it.
+	it("refuses an edit the document has nowhere to put", () => {
 		const { plan, problems } = planWithStageDocument(EXAMPLE, {
+			...compileStageDocument(EXAMPLE),
 			deliverables: [
 				{
 					id: "catalogue",
 					stages: [
-						{ use: "implement", id: "build" },
-						{ use: "verify-and-fix", id: "green", maxRounds: 0 },
+						{ use: "implement", id: "implement" },
+						{ use: "gate", id: "ok", question: "Ship it?" },
 					],
 				},
 			],
-			effort: "standard",
-			gates: "approve-plan+ship",
 		});
 		expect(plan).toBeUndefined();
-		expect(problems.join("\n")).toContain("at least 1");
+		expect(problems.join("\n")).toContain("cannot hold a `gate` stage");
+		expect(problems.join("\n")).toContain("`policy.gates`");
+	});
+
+	it("refuses an edit that reviews one deliverable twice", () => {
+		const fanOut = {
+			use: "review-fan-out",
+			id: "review",
+			lenses: [{ id: "contracts" }],
+		};
+		const { plan, problems } = planWithStageDocument(EXAMPLE, {
+			...compileStageDocument(EXAMPLE),
+			deliverables: [
+				{
+					id: "catalogue",
+					stages: [
+						{ use: "implement", id: "implement" },
+						fanOut,
+						{ ...fanOut, id: "review-again" },
+					],
+				},
+			],
+		});
+		expect(plan).toBeUndefined();
+		expect(problems.join("\n")).toContain(
+			"a deliverable lists its reviews once",
+		);
 	});
 
 	it("refuses an edit that is not a compiled document at all", () => {

@@ -584,19 +584,23 @@ describe("the steers", () => {
 		expect(steer).not.toContain("Call `plan` once");
 	});
 
-	it("quotes the exact policy block and licenses exactly one change to it", () => {
+	it("says the dials are already decided, and never asks for them", () => {
 		const policy = {
 			effort: "deep" as const,
 			gates: "approve-plan+ship" as const,
 			publish: { mode: "pr" as const, base: "trunk" },
 		};
 		const steer = renderExitSteer(policy);
-		expect(steer).toContain(JSON.stringify(policy, null, 2));
-		expect(steer).toContain("verbatim");
-		expect(steer).toContain("`stages`");
+		// Version 4 pasted the policy in as JSON and told the model to copy it
+		// back verbatim. It is said in prose now, because the seat attaches it.
+		expect(steer).not.toContain(JSON.stringify(policy, null, 2));
+		expect(steer).not.toContain("verbatim");
+		expect(steer).toContain("Already decided, and not yours to write");
+		expect(steer).toContain("effort deep");
+		expect(steer).toContain("gates approve-plan+ship");
+		expect(steer).toContain("publication pr onto `trunk`");
+		expect(steer).toContain("has no `policy` field and no `stages` field");
 		expect(steer).toContain("Call `plan` once");
-		expect(steer).toContain("every-deliverable");
-		expect(steer).toContain("a check after every deliverable");
 		// The one line phase 1 used to add is gone: the description is agreed,
 		// not recorded from a dialog, and it is not quoted back here.
 		expect(steer).not.toContain("I recorded one line");
@@ -607,20 +611,11 @@ describe("the steers", () => {
 		expect(steer).toContain("a plan reviewed by its author is not reviewed");
 		// And it is enforced, not asked for.
 		expect(steer).toContain("refuses `workflow_run` and `workflow_propose`");
-		// An optional field with nothing to say is left out, not sent empty.
-		expect(steer).toContain("An optional field you have nothing to say about");
-		// What `review` means, because the last plan put it on every task.
-		expect(steer).toContain("`review` IS WHAT MAKES A TASK A REVIEW");
-		expect(steer).toContain("carries NO `review`");
-		// The two fields the last plan got wrong, said before it writes them.
-		expect(steer).toContain("`review.lens` is");
-		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");
-		expect(steer).toContain("`review.model` is OPTIONAL");
-		expect(steer).toContain("prefer `review.tier`");
-		// Both pins are checked against this host before the plan is stored, so
-		// the steer says so rather than letting the model learn it from a refusal.
-		expect(steer).toContain("one it does not have is refused by name");
-		expect(steer).toContain("only a skill this session has loaded");
+		// Where the work is and where the reading of it is: one sentence, because
+		// the shape now carries what four kilobytes of warnings used to.
+		expect(steer).toContain("`tasks` are the work");
+		expect(steer).toContain("`reviews` are the independent readings");
+		expect(steer).toContain("leaves `reviews` out");
 	});
 
 	it("keeps the record and prints the instruction when the host cannot steer", async () => {

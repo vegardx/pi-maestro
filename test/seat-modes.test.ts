@@ -112,10 +112,8 @@ describe("one host answers for the plan tool and the store", () => {
 			{
 				id: "api",
 				title: "The API",
-				tasks: [
-					{ id: "build", title: "Build it" },
-					{ id: "review", title: "Review it", review: { lens: "c", model } },
-				],
+				tasks: [{ id: "build", title: "Build it" }],
+				reviews: [{ lens: "c", model }],
 			},
 		],
 	});
@@ -152,9 +150,9 @@ describe("one host answers for the plan tool and the store", () => {
 
 		const stored = await write(pinned("anthropic/opus-5"));
 		expect(stored.details.stored).toBe(true);
-		expect(
-			seat.store.loadPlan("arc")?.deliverables[0]?.tasks[1]?.review,
-		).toEqual({ lens: "c", model: "anthropic/opus-5" });
+		expect(seat.store.loadPlan("arc")?.deliverables[0]?.reviews).toEqual([
+			{ lens: "c", model: "anthropic/opus-5" },
+		]);
 
 		const refused = await write(pinned("anthropic/opus-9"));
 		expect(refused.details.stored).toBe(false);

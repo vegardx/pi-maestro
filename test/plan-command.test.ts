@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { projectPlansRoot } from "../packages/maestro/src/paths.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import {
+	PLAN_COMMAND_HELP,
 	PLAN_COMMAND_USAGE,
 	type PlanCommandOutcome,
 	parsePlanCommand,
@@ -457,6 +458,39 @@ describe("one path, not two", () => {
 			join(dirname(h.store.planFile("arc")), "workflow-input.json"),
 		);
 		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(true);
+	});
+});
+
+describe("the surface is five verbs, each with a reason", () => {
+	it("names every verb and nothing else", () => {
+		for (const verb of [
+			"list",
+			"show <slug>",
+			"run <slug>",
+			"rm <slug>",
+			"ship <slug>",
+		])
+			expect(PLAN_COMMAND_USAGE).toContain(verb);
+		// No sixth verb: anything else is a usage rejection, not a guess.
+		expect(parsePlanCommand("publish arc")).toMatchObject({
+			kind: "usage",
+			problem: expect.stringContaining("unknown subcommand `publish`"),
+		});
+	});
+
+	// The reasons are the point: `run` looks like the normal way to start a run
+	// and is not, and `ship` looks like the normal way to publish and is not.
+	it("says what each verb is for, on every rejection", async () => {
+		const outcome = await harness().run("nonsense");
+		expect(outcome.message).toContain(PLAN_COMMAND_HELP);
+		expect(PLAN_COMMAND_HELP).toContain("the plans stored for this project");
+		expect(PLAN_COMMAND_HELP).toContain(
+			"start or restart `plan-to-ship` for a stored plan whose run did not",
+		);
+		expect(PLAN_COMMAND_HELP).toContain(
+			"the plan-mode exit normally starts it",
+		);
+		expect(PLAN_COMMAND_HELP).toContain("the manual publication fallback");
 	});
 });
 

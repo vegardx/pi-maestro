@@ -144,8 +144,13 @@ starts runs there themselves — see [Modes](commands.md#modes).
 The `plan` tool stores repository-qualified authored intent:
 
 ```text
-<agentDir>/maestro/plans/<slug>/plan.json
+<agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
+
+The root is keyed by project — the cwd encoded the way Pi encodes its sessions
+directory — so a project's sessions, plans and workflow runs are siblings, and
+one project's `/plan list` never shows another's. The envelope records
+`authoredBy: {sessionId, cwd}`.
 
 A plan contains repositories, deliverables, ordering, read dependencies, the
 tasks that are the work, and the reviews that read that work when it is done.

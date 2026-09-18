@@ -35,8 +35,8 @@ and then **starts the run itself**, through the workflow runtime's service seam:
 by name and validates exactly as `workflow_run` would. The model is not asked to
 start it and never was part of this command. A seat with no workflow runtime
 cannot start anything, and the command says so and leaves the plan stored.
-Approval is not part of the command either: the run parks at its `approve-plan`
-checkpoint and a human decides it. See
+Typing it is the approval — the run works through the plan and stops at its
+`ship` decision, or after each deliverable under `every-deliverable`. See
 [Authored plans](workflow-plans.md#running-a-plan).
 
 `/plan ship` is the manual fallback for a publication that should have happened
@@ -124,7 +124,7 @@ Nothing else is asked, because nothing else is a question for a human:
 
 | Decision | How it is settled |
 | --- | --- |
-| Gates | `approve-plan+ship`, always. The model may raise it to `every-deliverable` when the conversation asked for a check after every deliverable, and only then |
+| Gates | `ship`, always: starting the run is the approval, and the run's one remaining decision comes before publication. `every-deliverable` is valid vocabulary, and no dialog offers it yet |
 | Publication | Derived: an `origin` remote and `gh` on PATH → `pr`; a remote alone → `branch`; neither → `none` |
 | Base branch | What this branch tracks, else `origin`'s head, else `main` |
 
@@ -274,9 +274,10 @@ Authored plans live under their project's key, beside that project's sessions:
 <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
 
-The envelope is `{schemaVersion: 6, savedAt, authoredBy: {sessionId, cwd}, body}`.
-`authoredBy` is required, and a schema 5 envelope — which has no such field — is
-refused by name rather than migrated.
+The envelope is `{schemaVersion: 7, savedAt, authoredBy: {sessionId, cwd}, body}`.
+`authoredBy` is required, and a schema 6 envelope — whose `policy.gates` names
+the `approve-plan` gate version 7 removed — is refused by name rather than
+migrated.
 
 `/plan ship` appends one receipt per publication, and never rewrites an earlier
 one — a second ship of the same plan is a real event:

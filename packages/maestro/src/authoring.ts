@@ -86,7 +86,7 @@ const TaskSchema = Type.Object({
 			},
 			{
 				description:
-					"PRESENT ⇒ THIS TASK IS A REVIEW, compiled into its own read-only workflow stage and seeding a lens. An implementation task — writing the code, the tests, the README — must NOT carry `review`: a task that carries it is not implemented by anybody. Repeat a lens in another task to run it with another model.",
+					"PRESENT ⇒ THIS TASK IS A REVIEW, compiled into its own read-only workflow stage and seeding a lens. An implementation, test or docs task carries NO `review`; a review is a separate task whose only work is reviewing. Repeat a lens in another task to run it with another model.",
 			},
 		),
 	),
@@ -280,7 +280,7 @@ const DeliverableSchema = Type.Object({
 	repo: Type.Optional(Type.String({ description: "Which named repo." })),
 	tasks: Type.Array(TaskSchema, {
 		description:
-			"The work, in order. A deliverable with none is not one. The tasks that DO the work carry no `review`; only the review tasks do.",
+			"The work, in order. A deliverable with none is not one. The tasks that DO the work — implementation, tests, docs — carry no `review`; only a task whose only work is reviewing does.",
 	}),
 	stages: Type.Optional(
 		Type.Array(StageSchema, {
@@ -478,7 +478,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		name: "plan",
 		label: "Plan",
 		description:
-			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `review` marks a REVIEW task; an implementation task must not carry it. Two fields are got wrong most often: a review task\'s `review.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `review.model` is OPTIONAL and only ever a concrete `provider/model` ID this host has — prefer `review.tier` and omit `review.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
+			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `review` marks a REVIEW task: an implementation, test or docs task carries no `review`, and a review is a separate task whose only work is reviewing. Two fields are got wrong most often: a review task\'s `review.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `review.model` is OPTIONAL and only ever a concrete `provider/model` ID this host has — prefer `review.tier` and omit `review.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
 		promptSnippet:
 			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,

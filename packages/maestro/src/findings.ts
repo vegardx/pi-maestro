@@ -202,6 +202,13 @@ export function renderReviseSteer(
 			" makes the answer visible — rather than leaving the reviewer to find" +
 			" the same thing again.",
 		"",
+		"`review` on a task is what makes that task a review, and nothing else" +
+			" does: an implementation, test or docs task carries NO `review`, and a" +
+			" review is a separate task whose only work is reviewing. A rewrite is" +
+			" where that goes wrong — the whole document is written again, every" +
+			" task at once — and a deliverable whose every task carries `review` is" +
+			" a deliverable nothing writes.",
+		"",
 		"Then call `plan` once with the WHOLE document: the same slug, everything" +
 			" the plan already has, with your changes in it. The `policy` block does" +
 			" not move — it is the effort, the gates and the publication already" +

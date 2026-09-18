@@ -454,12 +454,11 @@ export function renderExitSteer(policy: PlanPolicy): string {
 			" only if — this conversation asked for a check after every deliverable." +
 			" Nothing else in the block moves.",
 		"",
-		"`review` IS WHAT MAKES A TASK A REVIEW. A task that carries it is read by" +
-			" an independent reviewer and is implemented by nobody, so the tasks" +
-			" that do the work — the implementation, the tests, the README — must" +
-			" not carry `review`, and only the actual review tasks may. A" +
-			" deliverable whose every task carries `review` is a deliverable nothing" +
-			" writes.",
+		"`review` IS WHAT MAKES A TASK A REVIEW. A task that carries it is read" +
+			" by an independent reviewer and is implemented by nobody, so an" +
+			" implementation, test or docs task carries NO `review`: a review is a" +
+			" separate task whose only work is reviewing. A deliverable whose every" +
+			" task carries `review` is a deliverable nothing writes.",
 		"",
 		"Two fields are got wrong most often. A review task's `review.lens` is" +
 			" REQUIRED and is the fan-out key, so it must match" +

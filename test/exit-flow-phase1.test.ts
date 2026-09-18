@@ -611,7 +611,7 @@ describe("the steers", () => {
 		expect(steer).toContain("An optional field you have nothing to say about");
 		// What `review` means, because the last plan put it on every task.
 		expect(steer).toContain("`review` IS WHAT MAKES A TASK A REVIEW");
-		expect(steer).toContain("must not carry `review`");
+		expect(steer).toContain("carries NO `review`");
 		// The two fields the last plan got wrong, said before it writes them.
 		expect(steer).toContain("`review.lens` is");
 		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");

@@ -1200,6 +1200,14 @@ describe("the findings walk", () => {
 		expect(steer).toContain("The graph is sound; the tasks are not.");
 		expect(steer).toContain(`review 1 of ${MAX_BLIND_REVIEWS}`);
 		expect(steer).toContain("call `plan` once with the WHOLE document");
+		// And what the field is called, because a rewrite is where the last
+		// plan put review routing on every task it had.
+		expect(steer).toContain(
+			"`review` on a task is what makes that task a review",
+		);
+		expect(steer).toContain(
+			"an implementation, test or docs task carries NO `review`",
+		);
 		expect(steer).toContain("The `policy` block does not move");
 		expect(steer).toContain("Stop after the `plan` call");
 

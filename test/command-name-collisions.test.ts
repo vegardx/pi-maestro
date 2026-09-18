@@ -81,12 +81,13 @@ describe("command names", () => {
 		expect(maestroCommands().sort()).toEqual(["mode", "plan"]);
 	});
 
-	it("keeps `/plan run` a hand-off: nothing here can execute a workflow", () => {
+	it("keeps `/plan run` a request: nothing here can execute a workflow", () => {
 		// The point of this assertion is not the command list — it is that
 		// `/plan run` CANNOT have quietly grown a second executor inside this
-		// package. It builds an input and steers the session; the run is a tool
-		// call the model makes, in the open. A dependency on the workflow runtime,
-		// or an import of one, is the first step back to an embedded executor.
+		// package. It builds an input and asks the workflow runtime to start the
+		// run, across the provider seam, over Pi's event bus. A dependency on the
+		// workflow runtime, or an import of one, is the first step back to an
+		// embedded executor.
 		const manifest = JSON.parse(
 			readFileSync(join(process.cwd(), "package.json"), "utf8"),
 		) as {

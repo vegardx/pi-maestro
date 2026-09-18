@@ -3,8 +3,8 @@
  *
  * `@vegardx/pi-workflow` registers a frozen `{contract, acquire(context)}` on
  * Pi's event bus. This module is the other end: it asks the bus who is there,
- * refuses a runtime it was not built against, and hands the exit loop a
- * read-only client.
+ * refuses a runtime it was not built against, and hands the exit loop a client
+ * that reads everything and starts exactly two allowlisted things.
  *
  * **No import from pi-workflow, of any kind.** The package is an optional
  * peer and is not published on npm, so neither a value import nor a
@@ -18,9 +18,18 @@
  * matches the original.
  *
  * What crosses the seam is narrow on purpose: read, validate, project,
- * observe, and start one allowlisted headless builtin. There is no `decide`,
- * `stop`, or general `run` here, because starting a workflow that writes stays
- * the model's own `workflow_run` call, in the open, in the transcript.
+ * observe, start one allowlisted headless builtin, and start the one plan
+ * workflow a person has just said yes to. There is no `decide`, `stop` or
+ * general `run` here: both starts are allowlisted by name inside the runtime,
+ * and every other way of starting a workflow is still a tool call in the open,
+ * in the transcript.
+ *
+ * **`startBuiltin` is the seat acting, never the model.** `runBuiltin` starts
+ * the blind reviewer, which writes nothing; `startBuiltin` starts
+ * `plan-to-ship`, which writes to worktrees. The seat may call it because a
+ * human answered `Start the run?` with yes, in a dialog this seat owns — the
+ * model is not in that loop at all, and the pi-maestro seat still refuses the
+ * model's own `workflow_run` in plan mode by name.
  *
  * **Nothing in this module throws into the session.** Every failure — no
  * runtime, two runtimes, a wrong revision, a runtime swapped mid-acquisition,
@@ -29,6 +38,7 @@
  * no workflow runtime is a working seat.
  */
 
+import type { Effort } from "./plan-input.js";
 import {
 	isWorkflowRuntimeContractShape,
 	type WorkflowRuntimeContractView,
@@ -88,6 +98,17 @@ export interface WorkflowRunReceiptView {
 	readonly status: string;
 }
 
+/**
+ * What `startBuiltin` hands back.
+ *
+ * The run id and nothing else, because that is all `startBuiltin` promises: it
+ * returns as soon as the run exists, before there is a status worth reading,
+ * and the run's own `approve-plan` checkpoint is what happens next.
+ */
+export interface WorkflowStartReceiptView {
+	readonly runId: string;
+}
+
 /** One append to an owned run, as delivered to an `observe` listener. */
 export interface WorkflowRunObservationView {
 	readonly runId: string;
@@ -105,7 +126,7 @@ export interface WorkflowRunWaitView {
 }
 
 /**
- * The read client (spec 2.4). `inspect` and `runs` are typed loosely on
+ * The client (spec 2.4). `inspect` and `runs` are typed loosely on
  * purpose: the seat passes their results through to rendering and narrows at
  * the point of use rather than restating pi-workflow's inspection schema here.
  */
@@ -119,6 +140,17 @@ export interface WorkflowReadClient {
 		listener: (observation: WorkflowRunObservationView) => void,
 	): () => void;
 	runBuiltin(ref: string, input: unknown): Promise<WorkflowRunReceiptView>;
+	/**
+	 * Starts `plan-to-ship` for a plan the person just approved, and refuses
+	 * every other ref by name. Validates `input` the way `workflow_run` does,
+	 * returns as soon as the run exists, and the run parks at `approve-plan`.
+	 * The runtime journals it with origin `"service-provider"`, so a run this
+	 * seat started is never mistaken for one the model started.
+	 */
+	startBuiltin(
+		ref: string,
+		options: { readonly input: unknown; readonly effort?: Effort },
+	): Promise<WorkflowStartReceiptView>;
 	awaitRun(
 		runId: string,
 		options?: { timeoutMs?: number },
@@ -134,6 +166,7 @@ const CLIENT_METHODS = [
 	"runs",
 	"observe",
 	"runBuiltin",
+	"startBuiltin",
 	"awaitRun",
 ] as const satisfies readonly (keyof WorkflowReadClient)[];
 
@@ -148,10 +181,11 @@ export interface WorkflowServiceProviderView {
 /**
  * Everything that can go wrong on this side of the seam.
  *
- * `validation` is the runtime's own refusal passed through — a `runBuiltin`
- * for a ref outside its allowlist, or an `awaitRun` for a run this client did
- * not start. `acquisition` is the catch-all: the runtime was reached and did
- * not give an answer this seat can use.
+ * `validation` is the runtime's own refusal passed through — a `runBuiltin` or
+ * a `startBuiltin` for a ref outside its allowlist, an input that does not fit
+ * the definition's schema, or an `awaitRun` for a run this client did not
+ * start. `acquisition` is the catch-all: the runtime was reached and did not
+ * give an answer this seat can use.
  */
 export type WorkflowProviderErrorCode =
 	| "missing"
@@ -407,10 +441,11 @@ export async function acquireWorkflowClientOrWarn(
 /**
  * Run one client call, or warn and return nothing.
  *
- * This is where the runtime's own refusals surface: `runBuiltin` for a ref
- * outside pi-workflow's frozen allowlist throws a `validation` error, and it
- * arrives here as a warning naming `Approve as is` rather than as an exception
- * inside a dialog sequence.
+ * This is where the runtime's own refusals surface: a `runBuiltin` or a
+ * `startBuiltin` for a ref outside pi-workflow's frozen allowlist throws a
+ * `validation` error, and it arrives here as a warning naming what a person
+ * can do instead — `Approve as is`, or `/plan run <slug>` — rather than as an
+ * exception inside a dialog sequence.
  */
 export async function callWorkflow<T>(
 	operation: () => Promise<T>,

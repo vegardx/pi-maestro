@@ -51,6 +51,7 @@
 		"transactionalInvalidation": true,
 		"finalizers": true,
 		"operatorAttempts": true,
-		"checkpoints": true
+		"checkpoints": true,
+		"serviceProviderStart": true
 	}
 }

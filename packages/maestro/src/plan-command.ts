@@ -4,13 +4,14 @@
 // at all: a plan could be written and then never listed, read, run or deleted
 // from the seat. Storage with no reader is a drawer things go into.
 //
-// `run` DOES NOT RUN ANYTHING HERE. pi-maestro does not depend on the workflow
-// runtime and is not going to: the input it builds is pure data, and the run is
-// the model's `workflow_run` call, made in the open where the user can see it.
-// A command that reached into a workflow service would put a second executor in
-// this package, which is the shape the whole cutover removed. So `run` writes
-// the input beside the plan, tells the user, and steers the session with the
-// exact call to make — a hand-off, not an execution.
+// `run` STARTS THE RUN, AND THE MODEL IS NEVER ASKED TO. It used to write the
+// input beside the plan and steer the session with the call to make, because
+// the workflow client this seat holds could only read. It can start
+// `plan-to-ship` now, so the command does: it loads the plan, builds the input,
+// writes it beside the plan, and hands it to the injected `start` — the same
+// allowlisted `startBuiltin` the plan-mode exit uses. Still no executor here:
+// the run is the workflow runtime's, through the provider seam, and this file
+// knows nothing about either beyond the one injected function.
 //
 // `ship` is the one verb that acts on the world, and it does not act here
 // either: it hands a stored plan and a finished run to `publish.ts`, which runs
@@ -78,18 +79,6 @@ export const PLAN_COMMAND_HELP = [
 	"  ship <slug>   the manual publication fallback, for when the automatic publication",
 	"                after the ship gate did not happen",
 ].join("\n");
-
-/**
- * How much workflow input goes into the session inline.
- *
- * A small plan is cheaper to paste than to read back, and seeing the exact
- * bytes in the transcript is the honest form of "approve this". A large one
- * would cost the same context twice — once in the steer, once when the model
- * echoes it into the tool call — so past this bound the message names the file
- * instead. Both paths write the same file, so the run is byte-identical either
- * way.
- */
-export const INLINE_INPUT_LIMIT = 4096;
 
 export type PlanCommand =
 	| { readonly kind: "list" }
@@ -297,35 +286,6 @@ export function renderPlan(
 }
 
 /**
- * The hand-off the model reads: one tool call, stated exactly, and who may
- * approve it — which is never the model.
- */
-export function renderHandoff(
-	input: WorkflowInput,
-	inputPath: string,
-	json: string,
-): string {
-	const call =
-		json.length <= INLINE_INPUT_LIMIT
-			? `workflow_run { "ref": ${JSON.stringify(PLAN_WORKFLOW_REF)}, "input": ${json} }`
-			: `workflow_run { "ref": ${JSON.stringify(PLAN_WORKFLOW_REF)}, "input": <the JSON in ${inputPath}> }`;
-	return [
-		`Run the stored plan \`${input.plan.slug}\` at effort ${input.effort}.`,
-		"",
-		"Make exactly this call:",
-		"",
-		call,
-		"",
-		json.length <= INLINE_INPUT_LIMIT
-			? `The same input is on disk at ${inputPath} (planDigest ${input.planDigest}) if you would rather read it than copy it.`
-			: `Read ${inputPath} and pass its contents verbatim as \`input\` — ${json.length} bytes, planDigest ${input.planDigest}.`,
-		"",
-		"Do not ask me to approve the plan and do not decide anything on my behalf:",
-		`the run parks at its \`approve-plan\` checkpoint, and that checkpoint is the approval record. Surface the run and stop.`,
-	].join("\n");
-}
-
-/**
  * Publication, injected.
  *
  * A function rather than a provider and a Bash tool, so this file keeps knowing
@@ -339,6 +299,22 @@ export type PlanShip = (
 	ctx: Pick<ExtensionCommandContext, "ui" | "hasUI">,
 ) => Promise<Publication>;
 
+/**
+ * Starting a run, injected — the same shape publication has, for the same
+ * reason: this file keeps knowing nothing about the workflow runtime or the
+ * event bus it is found on.
+ *
+ * The run id, or `undefined` for a seat that could not start it — no workflow
+ * runtime, a runtime that refused the ref or the input, a runtime that failed.
+ * Every one of those has ALREADY been reported through the provider seam's
+ * sanitized `notify`, naming what a person can do instead; `undefined` is this
+ * command's cue to say its own one line and leave the plan stored.
+ */
+export type PlanStart = (
+	input: WorkflowInput,
+	ctx: Pick<ExtensionCommandContext, "ui" | "hasUI">,
+) => Promise<string | undefined>;
+
 export interface PlanCommandDeps {
 	/**
 	 * This project's plans. Every path this command writes comes off it —
@@ -349,23 +325,16 @@ export interface PlanCommandDeps {
 	readonly store: PlanStore;
 	/** @see PlanShip */
 	readonly ship?: PlanShip;
-	/**
-	 * How the session is steered. Optional because a host that cannot inject a
-	 * message must still be able to run the command — it gets the call printed
-	 * rather than nothing at all.
-	 */
-	readonly sendUserMessage?: (
-		content: string,
-		options?: { deliverAs?: "steer" | "followUp" },
-	) => void;
+	/** @see PlanStart */
+	readonly start?: PlanStart;
 }
 
 /** Everything the command says, for a caller that wants it without a UI. */
 export interface PlanCommandOutcome {
 	readonly level: "info" | "warning" | "error";
 	readonly message: string;
-	/** The text handed to the model, when a hand-off happened. */
-	readonly steer?: string;
+	/** The run that was started, when one was. */
+	readonly runId?: string;
 	/** Where the workflow input was written, when one was. */
 	readonly wrote?: string;
 }
@@ -421,23 +390,38 @@ export async function runPlanCommand(
 		case "run": {
 			const plan = deps.store.loadPlan(command.slug);
 			if (!plan) return unknownSlug(command.slug);
+			if (!deps.start)
+				return {
+					level: "warning",
+					message:
+						`This seat cannot start \`${command.slug}\`: starting a run needs the workflow runtime, ` +
+						"and `@vegardx/pi-workflow` is an optional peer this session does not have. " +
+						"The plan is stored and unchanged.",
+				};
 			const input = toWorkflowInput(plan, command.effort);
+			// Written before the run is asked for, and kept whatever the answer is:
+			// the export is the record of what this command would start, and a run
+			// that failed to start is when it is wanted most.
 			const path = deps.store.workflowInputFile(plan.slug);
-			const json = `${JSON.stringify(input, null, 2)}`;
 			mkdirSync(dirname(path), { recursive: true });
-			writeFileSync(path, `${json}\n`, "utf8");
-			const steer = renderHandoff(input, path, json);
-			if (deps.sendUserMessage)
-				deps.sendUserMessage(steer, { deliverAs: "followUp" });
+			writeFileSync(path, `${JSON.stringify(input, null, 2)}\n`, "utf8");
+			const runId = await deps.start(input, ctx);
+			// The refusal itself was already notified by the provider seam, with
+			// what to do about it; this is the one line the command owes the caller.
+			if (!runId)
+				return {
+					level: "warning",
+					message:
+						`\`${command.slug}\` was not started, so nothing is running. The plan is stored and ` +
+						`\`/plan run ${command.slug}\` tries again. Input written to ${path}.`,
+					wrote: path,
+				};
 			return {
 				level: "info",
-				message: deps.sendUserMessage
-					? `Handed \`${plan.slug}\` to the model as \`workflow_run { ref: "${PLAN_WORKFLOW_REF}" }\` at effort ${input.effort}. ` +
-						`Input written to ${path}. Approval is the run's \`approve-plan\` checkpoint, not this command.`
-					: // No steering channel: the call is printed so the hand-off is
-						// still possible by hand, instead of failing silently.
-						`This host cannot steer the session. Input written to ${path}.\n\n${steer}`,
-				steer,
+				message:
+					`Started \`${plan.slug}\` as \`${PLAN_WORKFLOW_REF}\` run \`${runId}\` at effort ${input.effort}. ` +
+					`Input written to ${path}. Approval is the run's \`approve-plan\` checkpoint, not this command.`,
+				runId,
 				wrote: path,
 			};
 		}

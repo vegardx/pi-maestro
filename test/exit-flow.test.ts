@@ -262,6 +262,8 @@ const PROJECTION = {
 interface FakeClientOptions {
 	readonly reviews?: readonly unknown[];
 	readonly runBuiltin?: () => Promise<{ runId: string; status: string }>;
+	/** The plan's own run. Scripted so a refusal is a test, not a mock. */
+	readonly startBuiltin?: () => Promise<{ runId: string }>;
 	readonly awaitRun?: () => Promise<{
 		runId: string;
 		status: string;
@@ -301,6 +303,12 @@ function fakeClient(options: FakeClientOptions = {}) {
 				calls.push({ ref: `runBuiltin:${ref}`, input });
 				return { runId: `run-${++round}`, status: "running" };
 			}),
+		startBuiltin:
+			options.startBuiltin ??
+			(async (ref: string, options_: { input: unknown; effort?: string }) => {
+				calls.push({ ref: `startBuiltin:${ref}`, input: options_ });
+				return { runId: PLAN_RUN_ID };
+			}),
 		awaitRun:
 			options.awaitRun ??
 			(async (runId: string) => ({
@@ -316,8 +324,12 @@ function fakeClient(options: FakeClientOptions = {}) {
 		client,
 		calls,
 		started: () => calls.filter((c) => c.ref.startsWith("runBuiltin")),
+		plansStarted: () => calls.filter((c) => c.ref.startsWith("startBuiltin")),
 	};
 }
+
+/** The run id the fake runtime hands back for the plan's own run. */
+const PLAN_RUN_ID = "wfr-plan-to-ship-1";
 
 function fakeBash() {
 	const commands: string[] = [];
@@ -403,7 +415,6 @@ function harness(options: HarnessOptions = {}) {
 	const provider =
 		options.client === null ? undefined : fakeClient(options.client ?? {});
 	const bash = fakeBash();
-	const steers: string[] = [];
 	const inputs: [string, string][] = [];
 	const modes: ModeName[] = [];
 	const announced: exitFlow.PlanAnnouncement[] = [];
@@ -422,7 +433,6 @@ function harness(options: HarnessOptions = {}) {
 		inspect: (candidate) => inspectPlan(candidate, cleanProbe),
 		workflow: async () => provider?.client,
 		publication: options.publication ?? (() => FULLY_EQUIPPED),
-		sendUserMessage: (content) => steers.push(content),
 		inputPath: (slug) => join(root, `${slug}-input.json`),
 		writeInput: (path, json) => inputs.push([path, json]),
 		modelId: "anthropic/opus-5",
@@ -444,7 +454,6 @@ function harness(options: HarnessOptions = {}) {
 		store,
 		bash,
 		model,
-		steers,
 		inputs,
 		modes,
 		announced,
@@ -654,7 +663,7 @@ describe("the description the harness asks for", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		const first = h.model.requests[0];
 		expect(first?.systemPrompt).toBe(DESCRIPTION_SYSTEM_PROMPT);
 		expect(first?.messages).toEqual([
@@ -677,7 +686,7 @@ describe("the description the harness asks for", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		expect(h.model.requests.length).toBe(3);
 		// The retry is a conversation about a specific answer, not the same
 		// request sent again.
@@ -729,7 +738,7 @@ describe("the description the harness asks for", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		expect(h.said()).toContain(`past the ${MAX_DESCRIPTION_LENGTH}`);
 		// The edited text is what the document prompt and the reviewer both get.
 		expect(h.model.requests[1]?.systemPrompt).toContain(edited);
@@ -837,7 +846,7 @@ describe("the document the harness asks for", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		expect(h.model.requests.length).toBe(3);
 		const retry = h.model.requests[2]?.messages ?? [];
 		expect(retry[0]).toEqual({ role: "user", text: DOCUMENT_REQUEST });
@@ -855,7 +864,7 @@ describe("the document the harness asks for", () => {
 			answer: happyPath,
 		});
 
-		expect((await runExitFlow(h.deps)).kind).toBe("handed-off");
+		expect((await runExitFlow(h.deps)).kind).toBe("started");
 		expect(h.model.requests.length).toBe(2);
 		expect(withoutCodeFence("```json\n{}\n```")).toBe("{}");
 		expect(withoutCodeFence('{"a":1}')).toBe('{"a":1}');
@@ -1030,7 +1039,7 @@ describe("the one message the conversation gets", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		const digest = planDigest(h.store.saves.at(-1) as Plan);
 		expect(h.announced.map((m) => m.customType)).toEqual([
 			PLAN_MESSAGE_TYPE,
@@ -1043,11 +1052,14 @@ describe("the one message the conversation gets", () => {
 			expect(message.content).toContain("2 deliverables");
 		}
 		expect(h.announced[0]?.content).toContain("stored");
-		expect(h.announced[1]?.content).toContain("run has been requested");
+		// The run the HARNESS started, named, so the transcript can be used to
+		// look it up — and said to be the harness's, not the conversation's.
+		expect(h.announced[1]?.content).toContain(`Run started \`${PLAN_RUN_ID}\``);
+		expect(h.announced[1]?.content).toContain("not by this conversation");
 		// NOTHING ELSE reaches the conversation: the requests, the retries and
-		// the validators' complaints stay on the record.
-		expect(h.steers.length).toBe(1);
-		expect(h.steers[0]).toContain("workflow_run");
+		// the validators' complaints stay on the record, and the two custom
+		// messages are the whole of it.
+		expect(h.announced.length).toBe(2);
 		expect(h.announced.map((m) => m.content).join("\n")).not.toContain(
 			DOCUMENT_REQUEST,
 		);
@@ -1070,10 +1082,60 @@ describe("the one message the conversation gets", () => {
 	});
 });
 
+// ── The model is never steered ───────────────────────────────────────────────
+
+describe("the exit never sends the session a user message", () => {
+	/**
+	 * Asserted over what the flow REACHES FOR, not over a recorder it might
+	 * never have been handed: the deps object is the flow's whole outside world,
+	 * so a steering channel would have to be read off it by name. The proxy
+	 * records every property the module touches, on the path that used to end in
+	 * a `sendUserMessage`, and on the path where the run refuses to start.
+	 */
+	const reads = async (options: HarnessOptions): Promise<readonly string[]> => {
+		const h = harness(options);
+		const touched = new Set<string>();
+		const watched = new Proxy(h.deps, {
+			get(target, key, receiver) {
+				if (typeof key === "string") touched.add(key);
+				return Reflect.get(target, key, receiver);
+			},
+		}) as ExitFlowDeps;
+		await runExitFlow(watched);
+		return [...touched];
+	};
+
+	it("reaches for no steering channel, on the run path or the refusal path", async () => {
+		for (const options of [
+			{ script: [DESCRIPTION, documentText()], answer: happyPath },
+			{
+				script: [DESCRIPTION, documentText()],
+				answer: happyPath,
+				client: {
+					startBuiltin: async (): Promise<{ runId: string }> => {
+						throw new Error("no runtime");
+					},
+				},
+			},
+		] satisfies HarnessOptions[]) {
+			const touched = await reads(options);
+			// The dep it used to read is gone, and so is every neighbour a
+			// reinstated hand-off would arrive under.
+			expect(touched).not.toContain("sendUserMessage");
+			expect(touched).not.toContain("sendMessage");
+			expect(touched).not.toContain("steer");
+			// And the deps it does read are still read, so this is not a proxy
+			// that saw nothing.
+			expect(touched).toContain("announce");
+			expect(touched).toContain("workflow");
+		}
+	});
+});
+
 // ── The rest of the exit ─────────────────────────────────────────────────────
 
 describe("readiness, the graph and the run", () => {
-	it("asks exactly five dialogs for a two-deliverable plan and hands off", async () => {
+	it("asks exactly five dialogs for a two-deliverable plan and starts the run", async () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			answer: happyPath,
@@ -1082,7 +1144,7 @@ describe("readiness, the graph and the run", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		expect(h.ui.titles()).toEqual([
 			EXIT_START_TITLE,
 			EFFORT_TITLE,
@@ -1096,7 +1158,18 @@ describe("readiness, the graph and the run", () => {
 			`runBuiltin:${PLAN_REVIEW_REF}`,
 		]);
 		expect(h.inputs.length).toBe(1);
-		expect(h.steers[0]).toContain(PLAN_WORKFLOW_REF);
+		// The harness started the plan's run itself, through the allowlisted
+		// `startBuiltin`, with the input it just exported and the effort agreed.
+		expect(h.provider?.plansStarted()).toEqual([
+			{
+				ref: `startBuiltin:${PLAN_WORKFLOW_REF}`,
+				input: {
+					input: JSON.parse(h.inputs[0]?.[1] as string),
+					effort: "standard",
+				},
+			},
+		]);
+		expect(outcome).toMatchObject({ slug: "compose", runId: PLAN_RUN_ID });
 	});
 
 	it("stops at a dirty tree when the person says so, with the plan stored", async () => {
@@ -1144,7 +1217,36 @@ describe("readiness, the graph and the run", () => {
 
 		expect(outcome.kind).toBe("stored");
 		expect(h.modes).toEqual([]);
-		expect(h.steers).toEqual([]);
+		expect(h.provider?.plansStarted()).toEqual([]);
+	});
+
+	it("keeps the plan and stays in plan mode when the runtime refuses the start", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
+			client: {
+				startBuiltin: async () => {
+					throw Object.assign(new Error("plan-to-ship is not allowlisted"), {
+						name: "WorkflowServiceError",
+						code: "validation",
+					});
+				},
+			},
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		// Like Back: the posture never moved, the plan is stored, and the cause
+		// is on screen through the seam's sanitized notice.
+		expect(outcome).toMatchObject({ kind: "back", slug: "compose" });
+		expect(h.modes).toEqual([]);
+		expect(h.store.saves.length).toBe(1);
+		expect(h.said()).toContain("Workflow runtime unavailable (validation)");
+		expect(h.said()).toContain("plan-to-ship is not allowlisted");
+		expect(h.said()).toContain("/plan run compose");
+		// Two custom messages, and the second one does not claim a run.
+		expect(h.announced.length).toBe(2);
+		expect(h.announced[1]?.content).toContain("without a run");
 	});
 
 	it("shows the reviewers the plan settled, beside the description", async () => {
@@ -1195,7 +1297,7 @@ describe("revise with the model", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		// Three requests: the description, the document, the rewrite — and the
 		// rewrite is the SAME mini-conversation, with the review appended.
 		expect(h.model.requests.length).toBe(3);
@@ -1205,8 +1307,9 @@ describe("revise with the model", () => {
 		expect(rewrite[2]?.role).toBe("user");
 		expect(rewrite[2]?.text).toContain(BLOCKING.what);
 		expect(rewrite[2]?.text).toContain("It needs tests.");
-		// No steer: the review went back through the request, not the session.
-		expect(h.steers.length).toBe(1);
+		// The review went back through the request, not through the session: the
+		// conversation hears the three custom messages and nothing else.
+		expect(h.announced.length).toBe(3);
 		// Two plans stored, two reviews run, and the compiled dialog was asked
 		// once — the re-review does not ask it again.
 		expect(h.store.saves.map((plan) => plan.title)).toEqual([
@@ -1431,7 +1534,7 @@ describe("the compiled dialog without a reviewer", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("handed-off");
+		expect(outcome.kind).toBe("started");
 		const asked = h.ui.opened.filter((o) => o.title === COMPILED_TITLE);
 		expect(asked.length).toBe(2);
 		expect(asked[1]?.options?.some((o) => o.startsWith(COMPILED_REVIEW))).toBe(

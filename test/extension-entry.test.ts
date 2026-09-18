@@ -39,7 +39,6 @@ function host() {
 		{ handler(args: string, ctx: unknown): Promise<void> }
 	>();
 	const notices: [string, string][] = [];
-	const steers: string[] = [];
 	const pi: SeatHost = {
 		registerTool: (tool) => tools.push(tool as { name: string }),
 		registerCommand: (name, spec) =>
@@ -47,13 +46,11 @@ function host() {
 				name,
 				spec as { handler(args: string, ctx: unknown): Promise<void> },
 			),
-		sendUserMessage: (content) => steers.push(content),
 	};
 	return {
 		pi,
 		tools,
 		notices,
-		steers,
 		names: () => [...commands.keys()].sort(),
 		run: (name: string, args = "") => {
 			const command = commands.get(name);
@@ -226,6 +223,7 @@ function busWith(client: Record<string, unknown>): WorkflowEventBus {
 			validate: async () => ({ valid: true, workflow: {} }),
 			project: async () => ({ fits: true }),
 			runBuiltin: async () => ({ runId: "r", status: "running" }),
+			startBuiltin: async () => ({ runId: "r" }),
 			awaitRun: async () => ({ runId: "r", status: "completed" }),
 			...client,
 		}),

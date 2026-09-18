@@ -103,6 +103,7 @@ function clientStub(
 		runs: async () => ({ runs: [] }),
 		observe: () => () => {},
 		runBuiltin: async () => ({ runId: "r", status: "running" }),
+		startBuiltin: async () => ({ runId: "r" }),
 		awaitRun: async () => ({ runId: "r", status: "completed" }),
 		...overrides,
 	};
@@ -179,6 +180,23 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 		const grown = structuredClone(shipped);
 		grown.features.somethingNew = true;
 		expect(workflowContractMismatch(grown)).toBeUndefined();
+	});
+
+	it("requires `serviceProviderStart`, because nothing else can start a plan", () => {
+		// The exit and `/plan run` both start `plan-to-ship` through
+		// `startBuiltin`, and the model is never asked to start one instead —
+		// so a runtime without the feature leaves no way to run a plan at all.
+		expect(REQUIRED_WORKFLOW_FEATURES).toContain("serviceProviderStart");
+		expect(shipped.features.serviceProviderStart).toBe(true);
+
+		const without = structuredClone(shipped);
+		delete without.features.serviceProviderStart;
+		// Refused by the VALUE check, naming the feature — not by the shape
+		// check, whose only answer is "that is not a workflow runtime contract".
+		const why = workflowContractMismatch(without);
+		expect(why).toContain("serviceProviderStart");
+		expect(why).not.toMatch(/not a pi-workflow/);
+		expect(isCompatibleWorkflowContract(without)).toBe(false);
 	});
 });
 
@@ -454,5 +472,85 @@ describe("runBuiltin outside pi-workflow's allowlist", () => {
 			),
 		).resolves.toEqual({ runId: "run-1", status: "running" });
 		expect(calls).toEqual([]);
+	});
+});
+
+describe("startBuiltin, the plan's own run", () => {
+	// The same bargain as `runBuiltin`: the allowlist is the runtime's, and what
+	// this seat owns is that a refusal arrives as a warning naming `/plan run`
+	// rather than as a throw in the middle of the exit's last dialog.
+	const refusal = Object.assign(
+		new Error(
+			"Workflow deep-review is not a builtin a service consumer may start; use workflow_run.",
+		),
+		{ name: "WorkflowServiceError", code: "validation" },
+	);
+
+	it("is part of the client surface a compatible runtime must offer", async () => {
+		const bus = createFakeBus();
+		const client = clientStub();
+		delete client.startBuiltin;
+		register(bus, providerStub({ client }));
+		await expect(acquireWorkflowClient(bus, {})).rejects.toMatchObject({
+			code: "incompatible",
+		});
+	});
+
+	it("starts `plan-to-ship` with the input and effort it is given", async () => {
+		const bus = createFakeBus();
+		const seen: unknown[] = [];
+		register(
+			bus,
+			providerStub({
+				client: clientStub({
+					startBuiltin: async (ref: string, options: unknown) => {
+						if (ref !== "plan-to-ship") throw refusal;
+						seen.push(options);
+						return { runId: "run-9" };
+					},
+				}),
+			}),
+		);
+		const client = await acquireWorkflowClient(bus, {});
+		const { calls, notify } = recorder();
+		await expect(
+			callWorkflow(
+				() =>
+					client.startBuiltin("plan-to-ship", {
+						input: { plan: {} },
+						effort: "deep",
+					}),
+				notify,
+				"run",
+			),
+		).resolves.toEqual({ runId: "run-9" });
+		expect(seen).toEqual([{ input: { plan: {} }, effort: "deep" }]);
+		expect(calls).toEqual([]);
+	});
+
+	it("surfaces a refused ref as a warning naming `/plan run`", async () => {
+		const bus = createFakeBus();
+		register(
+			bus,
+			providerStub({
+				client: clientStub({
+					startBuiltin: async () => {
+						throw refusal;
+					},
+				}),
+			}),
+		);
+		const client = await acquireWorkflowClient(bus, {});
+		const { calls, notify } = recorder();
+		const receipt = await callWorkflow(
+			() => client.startBuiltin("deep-review", { input: {} }),
+			notify,
+			"run",
+		);
+		expect(receipt).toBeUndefined();
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.[1]).toBe("warning");
+		expect(calls[0]?.[0]).toContain("validation");
+		expect(calls[0]?.[0]).toContain("/plan run <slug>");
 	});
 });

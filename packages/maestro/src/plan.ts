@@ -536,20 +536,59 @@ export interface PlanReport {
 }
 
 /**
+ * What only the host can answer about a review that pins something.
+ *
+ * A PORT, SO `inspectPlan` STAYS PURE. Two of the things a review may pin are
+ * not claims about the document at all — `model` names a model this machine
+ * either has or does not, `skill` names a skill Pi either loaded or did not —
+ * and a plan that pins either of them on a host that lacks it is a plan whose
+ * run fails at the reviewer, long after two humans approved it. The port is
+ * the only seam between plan validation and the session; the Pi adapter is
+ * `planHostPort` in `plan-host.ts`, and tests pass a fake.
+ *
+ * ABSENT MEANS REFUSED, NOT ALLOWED. `inspectPlan` without a host cannot
+ * check a pinned model or skill, so it refuses one by name rather than
+ * accepting it unchecked — a plan that pins what nothing could verify is the
+ * exact case this port exists for.
+ */
+export interface PlanHostPort {
+	/**
+	 * Whether this host has that exact model. EXISTENCE ONLY: whether its
+	 * provider is authenticated is a run-time question about credentials, and
+	 * refusing a plan over one would make the document depend on a login.
+	 */
+	hasModel(provider: string, id: string): boolean;
+	/** Every provider id the host registered, so a refusal can list them. */
+	registeredProviders(): readonly string[];
+	/** The skills Pi has loaded in this session, by name. */
+	loadedSkills(): readonly string[];
+}
+
+/**
+ * How many loaded skill names a refusal prints before it prints the count.
+ *
+ * A host with a large skills directory would otherwise answer "that skill is
+ * not loaded" with four hundred names, which is not an answer anybody reads.
+ */
+export const MAX_NAMED_SKILLS = 20;
+
+/**
  * Everything wrong with a plan, not just the first thing. An author fixing one
  * error at a time through five round trips is an author who stops reading.
  */
 export function validatePlan(
 	plan: Plan,
 	probe: RepoProbe = gitRepoProbe,
+	host?: PlanHostPort,
 ): string[] {
-	return inspectPlan(plan, probe).errors;
+	return inspectPlan(plan, probe, host).errors;
 }
 
 /** `validatePlan`, plus the non-fatal findings. */
 export function inspectPlan(
 	plan: Plan,
 	probe: RepoProbe = gitRepoProbe,
+	host?: PlanHostPort,
 ): PlanReport {
 	const errors: string[] = [];
 	const warnings: string[] = [];
@@ -617,8 +656,8 @@ export function inspectPlan(
 				`${where}: no tasks — a deliverable is work, or it is nothing`,
 			);
 
-		validateTasks(d.tasks, where, errors);
-		validateStages(d.stages, where, errors);
+		validateTasks(d.tasks, where, errors, host);
+		validateStages(d.stages, where, errors, host);
 
 		if (d.repo !== undefined && !repoKeys.has(d.repo))
 			errors.push(`${where}: unknown repo \`${d.repo}\``);
@@ -669,6 +708,7 @@ function validateTasks(
 	tasks: readonly Task[],
 	where: string,
 	errors: string[],
+	host?: PlanHostPort,
 ): void {
 	const seen = new Set<string>();
 	for (const [i, t] of tasks.entries()) {
@@ -693,7 +733,7 @@ function validateTasks(
 		if (t.review) {
 			if (!LENS_ID_RE.test(t.review.lens))
 				errors.push(`${at}: ${lensIdProblem(t.review.lens)}`);
-			validateReviewRouting(t.review, at, errors);
+			validateReviewRouting(t.review, at, errors, host);
 		}
 	}
 }
@@ -738,12 +778,37 @@ function lensIdProblem(id: unknown): string {
 	);
 }
 
+/** The registered providers, for a refusal, or why there are none to name. */
+function providerList(host: PlanHostPort): string {
+	const providers = host.registeredProviders();
+	return providers.length === 0
+		? "this host has registered no model providers"
+		: `this host's registered providers are ${providers
+				.map((provider) => `\`${provider}\``)
+				.join(", ")}`;
+}
+
+/** The loaded skills, by name while a reader would read them, else counted. */
+function skillList(host: PlanHostPort): string {
+	const skills = host.loadedSkills();
+	if (skills.length === 0) return "this session has loaded no skills";
+	if (skills.length > MAX_NAMED_SKILLS)
+		return `this session has ${skills.length} skills loaded, and none of them is that one`;
+	return `the skills loaded here are ${skills
+		.map((skill) => `\`${skill}\``)
+		.join(", ")}`;
+}
+
 /**
  * The routing a review can ask for, wherever it is written.
  *
  * Shared by `tasks[].review` and `review-fan-out` lenses on purpose: the two
  * are the same request in two places, and a rule that held in one of them
  * would be a rule an author could route around by moving the field.
+ *
+ * `skill` and `model` are the two fields a document cannot check about itself,
+ * so they are the two the host is asked about — and with no host to ask, a
+ * pinned one is refused rather than trusted. @see PlanHostPort
  */
 function validateReviewRouting(
 	routing: {
@@ -754,19 +819,51 @@ function validateReviewRouting(
 	},
 	at: string,
 	errors: string[],
+	host?: PlanHostPort,
 ): void {
-	if (routing.skill !== undefined && !ID_RE.test(routing.skill))
-		errors.push(`${at}: \`${routing.skill}\` is not a safe ambient skill name`);
+	if (routing.skill !== undefined) {
+		if (!ID_RE.test(routing.skill))
+			errors.push(
+				`${at}: \`${routing.skill}\` is not a safe ambient skill name`,
+			);
+		else if (!host)
+			errors.push(
+				`${at}: \`skill\` pins \`${routing.skill}\` and there is no session here to ask which skills are loaded, so it is refused rather than stored unchecked — drop \`skill\` and let the lens prompt find it`,
+			);
+		else if (!host.loadedSkills().includes(routing.skill))
+			errors.push(
+				`${at}: \`${routing.skill}\` is not a skill this session has loaded — ${skillList(host)}. \`skill\` is optional: drop it and let the lens prompt find what it needs`,
+			);
+	}
 	// `model` is optional: a plan that pins one runs only where that model
 	// exists, and the point of `tier`/`diverse` is that the host resolves the
 	// reviewer. Neither is legal too — then the running workflow's effort dial
 	// decides.
-	if (routing.model !== undefined && !/^\S+\/\S+$/.test(routing.model))
-		errors.push(
-			`${at}: review model must be a concrete provider/model ID — ` +
-				"`model` is optional, so drop it and pin `tier` instead unless the " +
-				"reviewer must be one exact model the host has",
-		);
+	if (routing.model !== undefined) {
+		const slash = routing.model.indexOf("/");
+		if (!/^\S+\/\S+$/.test(routing.model))
+			errors.push(
+				`${at}: review model must be a concrete provider/model ID — ` +
+					"`model` is optional, so drop it and pin `tier` instead unless the " +
+					"reviewer must be one exact model the host has",
+			);
+		else if (!host)
+			errors.push(
+				`${at}: \`model\` pins \`${routing.model}\` and there is no model catalogue here to check it against, so it is refused rather than stored unchecked — drop \`model\` and pin \`tier\` instead`,
+			);
+		// Split at the FIRST slash: a provider id has none and a model id may
+		// have several (`openrouter/anthropic/claude-...`), which is the same
+		// reading `shortModelName` and the model router take.
+		else if (
+			!host.hasModel(
+				routing.model.slice(0, slash),
+				routing.model.slice(slash + 1),
+			)
+		)
+			errors.push(
+				`${at}: \`${routing.model}\` is not a model this host has — ${providerList(host)}. \`model\` is optional: drop it and pin \`tier\` instead unless the reviewer must be one exact model`,
+			);
+	}
 	if (
 		routing.tier !== undefined &&
 		!(REVIEW_TIERS as readonly string[]).includes(routing.tier)
@@ -854,6 +951,7 @@ function validateStages(
 	stages: readonly Stage[],
 	where: string,
 	errors: string[],
+	host?: PlanHostPort,
 ): void {
 	const declared = new Set<string>();
 	const implementAt: number[] = [];
@@ -923,7 +1021,7 @@ function validateStages(
 					const lensAt = `${at}.lenses[${j}]`;
 					if (typeof lens?.id !== "string" || !LENS_ID_RE.test(lens.id))
 						errors.push(`${lensAt}: ${lensIdProblem(lens?.id)}`);
-					if (lens) validateReviewRouting(lens, lensAt, errors);
+					if (lens) validateReviewRouting(lens, lensAt, errors, host);
 				}
 				if (
 					stage.synthesis !== undefined &&

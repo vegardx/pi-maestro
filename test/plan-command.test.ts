@@ -33,6 +33,7 @@ import {
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import type { Publication } from "../packages/maestro/src/publish.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
+import { fakeHost } from "./fake-host.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -115,7 +116,11 @@ interface Harness {
 function harness(): Harness {
 	const agentDir = temp("plan-cmd-agent");
 	const root = repo();
-	const store = createPlanStore(plansRoot(agentDir));
+	// The fixture plan pins a review model, and a store with no host refuses
+	// what it cannot check — so the harness is the host that has it.
+	const store = createPlanStore(plansRoot(agentDir), {
+		host: () => fakeHost({ models: ["anthropic/claude"] }),
+	});
 	const steers: string[] = [];
 	const confirms: string[] = [];
 	const shipped: Plan[] = [];

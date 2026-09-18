@@ -617,6 +617,10 @@ describe("the steers", () => {
 		expect(steer).toContain("^[a-z][a-z0-9-]{0,63}$");
 		expect(steer).toContain("`review.model` is OPTIONAL");
 		expect(steer).toContain("prefer `review.tier`");
+		// Both pins are checked against this host before the plan is stored, so
+		// the steer says so rather than letting the model learn it from a refusal.
+		expect(steer).toContain("one it does not have is refused by name");
+		expect(steer).toContain("only a skill this session has loaded");
 	});
 
 	it("keeps the record and prints the instruction when the host cannot steer", async () => {

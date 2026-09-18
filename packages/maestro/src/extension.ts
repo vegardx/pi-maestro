@@ -18,8 +18,9 @@ import {
 import { MODE_NAMES, type ModeName } from "./mode.js";
 import { workflowInputFile } from "./paths.js";
 import { readPendingExit } from "./pending-exit.js";
-import type { Plan } from "./plan.js";
+import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
 import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
+import { planHostPort } from "./plan-host.js";
 import { EFFORTS, planDigest } from "./plan-input.js";
 import {
 	gatedPublishUI,
@@ -190,6 +191,16 @@ export interface StartSeatOptions {
 	readonly beginModeExit?: ModeExitHook;
 	/** Phase 2 — overridable so a test can watch the `tool_result` trigger fire. */
 	readonly continueModeExit?: ExitFlowPhase2Hook;
+	/**
+	 * The live session, as the two questions a pinned review raises.
+	 * @see SeatOptions.host
+	 *
+	 * Threaded to all three readers of one document — the `plan` tool, the
+	 * store, and phase 2's re-validation of a plan it rewrote — because a plan
+	 * accepted against one host and re-read against another is a plan this seat
+	 * refuses in the middle of its own exit.
+	 */
+	readonly host?: () => PlanHostPort | undefined;
 }
 
 export interface SeatEntry {
@@ -303,6 +314,16 @@ export function startSeat(
 		// patches back to it, so it gets the seat's own store rather than a
 		// second reader of the same directory.
 		store: () => seat().store,
+		// The same host the `plan` tool and the store were given. Phase 2
+		// re-validates what it rewrites — `diverse` written onto heavy lenses,
+		// every accepted patch — and a reading without the host would refuse the
+		// pinned model it had just accepted.
+		...(options.host
+			? {
+					inspect: (plan: Plan) =>
+						inspectPlan(plan, undefined, options.host?.()),
+				}
+			: {}),
 		// Repository creation goes through the seat's audited `bash` tool, the
 		// same adapter publication uses, so the classifier and this mode's
 		// confirmation policy apply to `git init` exactly as they do to a
@@ -371,6 +392,7 @@ export function startSeat(
 			cwd,
 			exitWindow,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
+			...(options.host ? { host: options.host } : {}),
 		});
 		built = created;
 		// Registration follows the mode, so it follows every route into one —
@@ -552,7 +574,23 @@ export default defineExtension(
 		doc: "Author plans and enforce the interactive seat posture.",
 	},
 	async (pi, maestro) => {
-		const entry = startSeat(pi);
+		/**
+		 * The last live session context, which a bus listener has no other way to
+		 * get: `pi.events.on` hands over data and nothing else, and publication
+		 * needs a UI to confirm with and a context to run the Bash tool in.
+		 * Refreshed by every event that carries one, and dropped when the session
+		 * it belongs to is replaced — an old context throws when it is used.
+		 *
+		 * Declared before the seat because plan validation reads it too: a plan
+		 * that pins a review model or skill is checked against this session, and
+		 * `undefined` here means the pin is refused rather than trusted.
+		 */
+		let live: ExtensionContext | undefined;
+		const entry = startSeat(pi, {
+			// The model catalogue comes from the live context; the loaded skills
+			// come from `pi` itself, which is the only place an extension can ask.
+			host: () => planHostPort(live, pi),
+		});
 		entry.seat();
 		pi.on("tool_call", (event) => {
 			const reason = seatToolBlockReason(
@@ -562,14 +600,6 @@ export default defineExtension(
 			);
 			if (reason) return { block: true, reason };
 		});
-		/**
-		 * The last live session context, which a bus listener has no other way to
-		 * get: `pi.events.on` hands over data and nothing else, and publication
-		 * needs a UI to confirm with and a context to run the Bash tool in.
-		 * Refreshed by every event that carries one, and dropped when the session
-		 * it belongs to is replaced — an old context throws when it is used.
-		 */
-		let live: ExtensionContext | undefined;
 		/**
 		 * Watch owned runs for a ship decided outside this session's prompt, once
 		 * a context exists to acquire the runtime with. Silent when there is no

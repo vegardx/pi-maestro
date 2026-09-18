@@ -16,10 +16,12 @@ import {
 	inspectPlan,
 	MAESTRO_SCHEMA_VERSION,
 	type Plan,
+	type PlanHostPort,
 	type RepoProbe,
 	type Task,
 	validatePlan,
 } from "../packages/maestro/src/plan.js";
+import { fakeHost } from "./fake-host.js";
 
 // Repository paths are checked against the world, and the graph rules are not.
 // A stub probe keeps every graph test free of a filesystem; the tests that are
@@ -31,8 +33,31 @@ const cleanRepo: RepoProbe = (path) => ({
 	dirty: false,
 });
 
-const errorsOf = (subject: Plan, probe: RepoProbe = cleanRepo): string[] =>
-	validatePlan(subject, probe);
+const errorsOf = (
+	subject: Plan,
+	probe: RepoProbe = cleanRepo,
+	host?: PlanHostPort,
+): string[] => validatePlan(subject, probe, host);
+
+/** The host the routing tests are written against. */
+const host = fakeHost({
+	models: ["anthropic/opus-5", "xai/grok-4.5"],
+	skills: ["security-review", "contracts-review"],
+});
+
+/**
+ * One rule, reported at both places it holds.
+ *
+ * A review task seeds a lens in the default stage list, and validation runs
+ * over the plan AS IT WILL BE COMPILED — so a task that pins something a host
+ * lacks is named at the task and again at the lens it seeded. Asserted rather
+ * than filtered: the two are the same request in two places, and a rule that
+ * fired in only one of them is a rule an author could move the field to escape.
+ */
+const atTaskAndLens = (message: string): string[] => [
+	`a.tasks[0]: ${message}`,
+	`a.stages[2].lenses[0]: ${message}`,
+];
 
 const task = (id: string, review?: Task["review"]): Task => ({
 	id,
@@ -156,6 +181,8 @@ describe("review tasks are workflow-native review launches", () => {
 					}),
 				],
 			}),
+			cleanRepo,
+			host,
 		);
 		expect(errors).toEqual([]);
 	});
@@ -182,6 +209,8 @@ describe("review tasks are workflow-native review launches", () => {
 					}),
 				],
 			}),
+			cleanRepo,
+			host,
 		);
 		expect(errors).toEqual([
 			"a.tasks[1]: task `review` carries `by`, which plan schema v" +
@@ -189,6 +218,152 @@ describe("review tasks are workflow-native review launches", () => {
 				"field and there is no migration. Rename `by` to `review` on every " +
 				"review task",
 		]);
+	});
+
+	it("refuses a model this host does not have, and lists its providers", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [
+							task("review", { lens: "security", model: "anthropic/opus-9" }),
+						],
+					}),
+				],
+			}),
+			cleanRepo,
+			host,
+		);
+		expect(errors).toEqual(
+			atTaskAndLens(
+				"`anthropic/opus-9` is not a model this host has — this host's " +
+					"registered providers are `anthropic`, `xai`. `model` is optional: " +
+					"drop it and pin `tier` instead unless the reviewer must be one " +
+					"exact model",
+			),
+		);
+	});
+
+	// Existence, not credentials. A plan is a document, and refusing one
+	// because a provider is not logged in today would make the document
+	// depend on a login that a run can acquire.
+	it("accepts a registered model whose provider is not authenticated", () => {
+		const unauthenticated: PlanHostPort = {
+			hasModel: (provider, id) => `${provider}/${id}` === "anthropic/opus-5",
+			registeredProviders: () => ["anthropic"],
+			loadedSkills: () => [],
+		};
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [
+							task("review", { lens: "security", model: "anthropic/opus-5" }),
+						],
+					}),
+				],
+			}),
+			cleanRepo,
+			unauthenticated,
+		);
+		expect(errors).toEqual([]);
+	});
+
+	it("refuses a skill this session has not loaded, and names the loaded ones", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [
+							task("review", { lens: "security", skill: "replay-review" }),
+						],
+					}),
+				],
+			}),
+			cleanRepo,
+			host,
+		);
+		expect(errors).toEqual(
+			atTaskAndLens(
+				"`replay-review` is not a skill this session has loaded — the skills " +
+					"loaded here are `security-review`, `contracts-review`. `skill` is " +
+					"optional: drop it and let the lens prompt find what it needs",
+			),
+		);
+	});
+
+	// Past the point where naming them is an answer anybody reads.
+	it("counts the loaded skills instead of naming them when there are many", () => {
+		const many = fakeHost({
+			skills: Array.from({ length: 21 }, (_, i) => `skill-${i}`),
+		});
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [task("review", { lens: "security", skill: "absent" })],
+					}),
+				],
+			}),
+			cleanRepo,
+			many,
+		);
+		expect(errors).toEqual(
+			atTaskAndLens(
+				"`absent` is not a skill this session has loaded — this session has " +
+					"21 skills loaded, and none of them is that one. `skill` is " +
+					"optional: drop it and let the lens prompt find what it needs",
+			),
+		);
+	});
+
+	// FAIL CLOSED. Nothing to ask is not permission: a plan that pins what
+	// nothing can check is the case the port exists for.
+	it("refuses a pinned model and skill when there is no host at all", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [
+							task("review", {
+								lens: "security",
+								skill: "security-review",
+								model: "anthropic/opus-5",
+							}),
+						],
+					}),
+				],
+			}),
+		);
+		const noSkill =
+			"`skill` pins `security-review` and there is no session here to ask " +
+			"which skills are loaded, so it is refused rather than stored " +
+			"unchecked — drop `skill` and let the lens prompt find it";
+		const noModel =
+			"`model` pins `anthropic/opus-5` and there is no model catalogue here " +
+			"to check it against, so it is refused rather than stored unchecked — " +
+			"drop `model` and pin `tier` instead";
+		expect(errors).toEqual([
+			`a.tasks[0]: ${noSkill}`,
+			`a.tasks[0]: ${noModel}`,
+			`a.stages[2].lenses[0]: ${noSkill}`,
+			`a.stages[2].lenses[0]: ${noModel}`,
+		]);
+	});
+
+	// `tier` and `diverse` are the host's to resolve, so a plan that pins
+	// neither a model nor a skill needs no host at all.
+	it("needs no host for a review that pins nothing", () => {
+		const errors = errorsOf(
+			plan({
+				deliverables: [
+					deliverable("a", {
+						tasks: [task("review", { lens: "security", tier: "heavy" })],
+					}),
+				],
+			}),
+		);
+		expect(errors).toEqual([]);
 	});
 });
 

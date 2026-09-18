@@ -11,6 +11,7 @@
 // — the registry, the live tool set Pi holds, the block reason — and demands
 // the same answer.
 
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,7 @@ import {
 	intentToolAvailable,
 	planToolAvailable,
 } from "../packages/maestro/src/seat.js";
+import { fakeHost } from "./fake-host.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -94,6 +96,87 @@ function host(seed: readonly string[] = ["read", "workflow_run"]) {
 		},
 	};
 }
+
+/**
+ * ONE HOST, TWO READERS. The `plan` tool refuses a document this session
+ * cannot honour and the store refuses to save one; they are the same refusal,
+ * so the seat hands both the same port. If they were given different ones, a
+ * plan the tool accepted would throw out of `savePlan` — which is what this
+ * asserts by storing one and refusing another through the tool alone.
+ */
+describe("one host answers for the plan tool and the store", () => {
+	const pinned = (model: string) => ({
+		slug: "arc",
+		title: "Arc",
+		deliverables: [
+			{
+				id: "api",
+				title: "The API",
+				tasks: [
+					{ id: "build", title: "Build it" },
+					{ id: "review", title: "Review it", review: { lens: "c", model } },
+				],
+			},
+		],
+	});
+
+	const planTool = (seat: ReturnType<typeof createSeat>) => {
+		seat.setMode("auto");
+		const definition = seat.tools
+			.definitionsFor("maestro")
+			.find((tool) => tool.name === "plan");
+		if (!definition) throw new Error("no plan tool");
+		return (document: unknown) =>
+			(
+				definition.execute as unknown as (
+					id: string,
+					p: unknown,
+				) => Promise<{
+					content: { text: string }[];
+					details: { stored: boolean; errors: readonly string[] };
+				}>
+			)("call-1", document);
+	};
+
+	it("stores what the host has and refuses what it does not", async () => {
+		// A real repository, because `repos` defaults to the seat's cwd and a
+		// plan's repository path is checked against the world.
+		const cwd = temp("maestro-seat-repo-");
+		execFileSync("git", ["init", "--quiet"], { cwd, stdio: "ignore" });
+		const seat = createSeat({
+			cwd,
+			agentDir: temp("maestro-agent-"),
+			host: () => fakeHost({ models: ["anthropic/opus-5"] }),
+		});
+		const write = planTool(seat);
+
+		const stored = await write(pinned("anthropic/opus-5"));
+		expect(stored.details.stored).toBe(true);
+		expect(
+			seat.store.loadPlan("arc")?.deliverables[0]?.tasks[1]?.review,
+		).toEqual({ lens: "c", model: "anthropic/opus-5" });
+
+		const refused = await write(pinned("anthropic/opus-9"));
+		expect(refused.details.stored).toBe(false);
+		expect(refused.details.errors.join("\n")).toContain(
+			"is not a model this host has",
+		);
+	});
+
+	// A seat with no host is every seat in a test and every headless check.
+	// It refuses a pin rather than storing what nothing verified.
+	it("refuses a pinned model when the seat was built without a host", async () => {
+		const cwd = temp("maestro-seat-repo-");
+		execFileSync("git", ["init", "--quiet"], { cwd, stdio: "ignore" });
+		const seat = createSeat({ cwd, agentDir: temp("maestro-agent-") });
+
+		const refused = await planTool(seat)(pinned("anthropic/opus-5"));
+		expect(refused.details.stored).toBe(false);
+		expect(refused.details.errors.join("\n")).toContain(
+			"there is no model catalogue here to check it against",
+		);
+	});
+});
 
 describe("the plan tool by mode", () => {
 	it("is withheld in plan mode and held in auto and hack", () => {

@@ -7,6 +7,7 @@ import {
 } from "./execution-policy.js";
 import { type Mode, type ModeName, mode } from "./mode.js";
 import { plansRoot } from "./paths.js";
+import type { PlanHostPort } from "./plan.js";
 import { createPlanStore, type PlanStore } from "./store.js";
 import { ToolRegistry } from "./tool-registry.js";
 
@@ -21,6 +22,17 @@ export interface SeatOptions {
 	 * every seat that never starts one.
 	 */
 	readonly exitWindow?: () => ExitWindow;
+	/**
+	 * The live session, as the two questions a pinned review raises: does this
+	 * host have that model, has it loaded that skill. @see PlanHostPort
+	 *
+	 * ONE SOURCE FOR BOTH READERS. The `plan` tool refuses a document this host
+	 * cannot honour and the store refuses to save one; that is one refusal, so
+	 * they are handed the same port rather than each finding its own. A seat
+	 * built without one — a test, a headless check — refuses anything pinned,
+	 * by name, rather than storing what nothing could verify.
+	 */
+	readonly host?: () => PlanHostPort | undefined;
 }
 
 /**
@@ -86,7 +98,9 @@ export interface Seat {
 
 export function createSeat(options: SeatOptions = {}): Seat {
 	const cwd = options.cwd ?? process.cwd();
-	const store = createPlanStore(plansRoot(options.agentDir));
+	const store = createPlanStore(plansRoot(options.agentDir), {
+		...(options.host ? { host: options.host } : {}),
+	});
 	let current = mode("plan");
 	const listeners = new Set<(mode: ModeName, previous: ModeName) => void>();
 	const policy = (): ExecutionPolicySettings =>
@@ -112,6 +126,7 @@ export function createSeat(options: SeatOptions = {}): Seat {
 				store,
 				cwd: () => cwd,
 				mode: () => current.name,
+				...(options.host ? { host: options.host } : {}),
 			}),
 			holders: ["maestro"],
 			available: planAvailable,

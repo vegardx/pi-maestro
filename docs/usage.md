@@ -89,11 +89,13 @@ a conversation:
    edits, or sends you back to the conversation. The agreed text is what the
    blind reviewer checks the plan against, and it is what opens the `plan`
    tool's window — which is the only moment `plan` exists in plan mode.
-3. **The model turn.** The model calls `plan` with the whole document, carrying
-   the recorded answers verbatim as the plan's `policy` block, so the choices
-   are part of the document that gets validated, digested and reviewed.
+3. **The model turn.** The model calls `plan` with the whole document: the
+   deliverables, the `tasks` that are the work, and the `reviews` that read that
+   work. The recorded answers are not its to write — the seat attaches them as
+   the plan's `policy`, so the choices are part of the document that gets
+   validated, digested and reviewed without the author transcribing them.
 4. **The second half, when the plan stores.** Readiness on every repository the
-   plan names; every heavy review lens gets `diverse: true` written into the
+   plan names; every heavy review gets `diverse: true` written into the
    stored plan so both compilers agree; compilation with a budget projection; an
    optional blind review of the compiled graph, with an editor behind it for
    changing reviewers; the findings walk; and one confirmation. That last *yes*

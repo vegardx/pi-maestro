@@ -1,26 +1,39 @@
 # Authored plans
 
-An authored plan describes repositories, deliverables, dependency edges,
-implementation tasks, and reviews. It is intent, not runtime state. It is
-stored at `schemaVersion: 4`.
+An authored plan describes repositories, deliverables, dependency edges, the
+work each deliverable is, and who reads that work when it is done. It is intent,
+not runtime state. It is stored at `schemaVersion: 5`.
 
-**Version 4 renamed `tasks[].by` to `tasks[].review`.** There is no migration:
-a stored `schemaVersion: 3`, or any task still carrying `by`, is **refused by
-name** — the store refuses the envelope and validation refuses the field. The
-old name was read as "who does this task" and written onto implementation work,
-which made every task in a deliverable a review and left nobody writing the
-code.
+**Version 5 moved reviews off the task and took the run's shape out of the
+document.** A `tasks[]` entry is work — implementation, tests, docs, and nothing
+else — and a deliverable lists its reviews once, in `reviews[]`, beside them.
+`deliverables[].stages` is gone: how a deliverable runs is derived from its
+tasks, its reviews and the policy. There is no migration: a stored
+`schemaVersion: 4`, a task still carrying `review` or `by`, and a deliverable
+still carrying `stages` are each **refused by name**.
+
+Why: version 4 encoded "this is work" as the *absence* of `review`, and absence
+is the one thing a model filling in every field will not produce. Four by-hand
+passes put `review` on every task in a deliverable, leaving nobody writing the
+code; the same passes filled `skill: ""` and `model: ""` throughout and wrote an
+explicit `stages` block that duplicated and contradicted the task reviews it
+sat beside. The `plan` tool's guidance had grown to thirty-three field notes and
+four kilobytes of capitalised warnings to hold that shape together. When
+guidance has to shout, the shape is wrong.
 
 ## Shape
 
 Each repository has a stable key and working-tree path. Each deliverable names:
 
 - its repository;
-- implementation tasks;
+- `tasks`: the work, in order, at least one;
+- `reviews`: who reads that work, zero or more, absent and empty meaning the
+  same thing;
 - `after` dependencies that order work;
-- `reads` dependencies whose outputs may be consulted;
-- optional review tasks, each carrying `review: {lens, skill?, model?, tier?, diverse?}`;
-- optionally `stages`: the shape of the run built for it.
+- `reads` dependencies whose outputs may be consulted.
+
+The plan itself carries a `slug`, a `title`, an optional `body`, its `repos`,
+and a `policy` the seat attaches (below).
 
 `reads` must remain a subset of `after`. IDs are bounded workflow-safe slugs and
 the graph must be acyclic.
@@ -32,17 +45,16 @@ name** rather than compiled with the edge silently dropped — a dropped orderin
 edge is a run that looks correct and builds against a tree that does not exist
 yet.
 
-### Review tasks
+### Reviews
 
-`review` on a task is present ⇒ this task **is** a review, and seeds a lens;
-absent ⇒ the deliverable's own worker does it. Implementation work never
-carries `review` — a deliverable whose every task carries it is one that
-nothing writes — so a review is a separate task whose only work is reviewing.
+A review is not a task. A `reviews[]` entry says which independent point of view
+to apply to the deliverable's finished work, and how much reviewer it is worth.
+`lens` is the only required field:
 
-A review task says which independent point of view to apply, and how much
-reviewer it is worth. Every routing field but `lens` is optional:
-
-- `lens` — **required**: the fan-out key, `^[a-z][a-z0-9-]{0,63}$`.
+- `lens` — **required**: the fan-out key, `^[a-z][a-z0-9-]{0,63}$`. A review with
+  an empty or missing lens is refused, and the refusal says what to do instead:
+  *a review needs a lens; a task that is not a review is simply a task, and
+  belongs in `tasks` with no review entry*.
 - `model` — an exact `provider/model` ID, validated only when present. Pinning
   one makes the plan run on hosts that have that model and nowhere else.
 - `skill` — an ambient skill name to request explicitly in the stage prompt.
@@ -52,7 +64,10 @@ reviewer it is worth. Every routing field but `lens` is optional:
   implementer.
 
 A review that names neither a `model` nor a `tier` is legal; the running
-workflow's effort dial then decides what the reviewer is.
+workflow's effort dial then decides what the reviewer is. At most sixteen
+reviews read one deliverable, which is the fan-out's own bound. The same lens
+twice is not an error — it is how one point of view runs under two models — and
+the compiler suffixes the duplicates `-2`, `-3` by declaration order.
 
 #### `model` and `skill` are checked against this host
 
@@ -68,62 +83,45 @@ not have them:
 - `skill` must be a skill Pi has loaded in this session. The refusal names the
   loaded skills, or counts them when there are more than twenty.
 
-Both questions reach validation through one injected port, so the check is the
-same wherever the routing is written — `tasks[].review` and `stages[].lenses[]`
-alike. **With no session to ask, a pinned `model` or `skill` is refused**, never
-accepted unchecked: a plan that pins what nothing could verify is exactly the
-case the check exists for. The same port answers for the `plan` tool, for the
-store, and for the exit flow's re-validation of a plan it rewrote, so the three
-cannot disagree about one document.
+Both questions reach validation through one injected port. **With no session to
+ask, a pinned `model` or `skill` is refused**, never accepted unchecked: a plan
+that pins what nothing could verify is exactly the case the check exists for.
+The same port answers for the `plan` tool, for the store, and for the exit
+flow's re-validation of a plan it rewrote, so the three cannot disagree about
+one document. Version 4 asked these questions twice per review — once at
+`tasks[].review` and again at the lens it seeded — which meant a rule an author
+could escape by moving the field; there is one site now, and one message.
 
-### Stages
+### How a deliverable runs
 
-`stages` is optional, per deliverable, and says what the run does with that
-deliverable rather than what the work is. A deliverable without it gets the
-default list below, so a plan written before stages existed stays valid and
-did not move the stored `schemaVersion` when they arrived.
-
-| `use` | Fields | What it declares |
-| --- | --- | --- |
-| `implement` | `id`, `tools?` | the one implementation task |
-| `verify-and-fix` | `id`, `maxRounds?` (`0`, `1`, `2`), `escalate?` (`thinking`, `none`) | a bounded fix/verify loop, never an open one |
-| `review-fan-out` | `id`, `lenses`, `synthesis?` (`required`, `optional`, `none`) | independent reviewers over the same subject |
-| `gate` | `id`, `question`, `show?` | a human decision inside the run |
-| `dynamic` | `id`, `brief` | reserved; the compiler refuses it today |
-
-Each `lenses[]` entry is `{id, tier?, diverse?, skill?, model?}` — the review
-vocabulary above, written per stage instead of per task.
-
-Validation reports every problem at once, as elsewhere:
-
-- `id` is a bounded slug, unique within its deliverable, and becomes a workflow
-  namespace, so it is part of run identity;
-- `show` may only name sibling stage ids declared **earlier** in the same array;
-- when `stages` is present there is exactly one `implement` stage, a
-  `verify-and-fix` stage must follow it, and a `gate` must be last;
-- no field may hold code, a filesystem path, or a model string that is not
-  `provider/model`;
-- a lens `id` is a bounded slug, at most 16 per stage, and duplicates are
-  disambiguated `-2`, `-3` by declaration order — never by a counter over
-  runtime data, which would make the same plan compile differently twice;
-- `dynamic` fails with "dynamic stages are not compiled yet".
-
-The default list, for a deliverable that declares no `stages`, is derived from
-the policy below:
+Derived, never authored. There is one lowering, and it is
+`defaultStagesFor` — so the graph a person approves is the graph the run
+executes:
 
 ```jsonc
 [ { "use": "implement",      "id": "implement" },
   { "use": "verify-and-fix", "id": "verify", "maxRounds": <policy.maxFixRounds> },
   { "use": "review-fan-out", "id": "review",
-    "lenses": [ /* one per task with `review`, tier/diverse from it or policy.reviewDefault */ ],
+    "lenses": [ /* one per `reviews` entry, tier and diverse from it or policy.reviewDefault */ ],
     "synthesis": "optional" } ]
 ```
 
+The review stage is **omitted** rather than declared empty when the deliverable
+lists no reviews: a fan-out over zero lenses is not a cheaper review, it is a
+stage that cannot be compiled. `maxRounds` is mapped to the component's verify
+rounds on the way out (`fix + 1`, so a fix is never left unchecked), and where a
+run stops for a human is `policy.gates` on the compiled document rather than a
+stage of its own.
+
 ### Policy
 
-`policy` is optional and plan-wide. It is on the document, not only in the
-dialogs that collected it, so a reviewer can see where a run is going and the
-plan digest covers it.
+`policy` is plan-wide and is **not written by the model**: the `plan` tool has
+no `policy` parameter. The plan-mode exit's dialogs settle it — the effort a
+human chose, the gates this seat defaults to, the publication derived from the
+repository — and the seat attaches it to the document the tool stores. Outside
+that window the plan carries none and the defaults below apply. It is on the
+document, not only in a dialog transcript, so a reviewer can see where a run is
+going and the plan digest covers it.
 
 | Field | Values | Default |
 | --- | --- | --- |
@@ -144,6 +142,7 @@ a validation question asked of the document.
 ```jsonc
 {
   "slug": "compose-catalogue", "title": "Component catalogue",
+  "body": "Why the catalogue is worth building.",
   "repos": [{ "key": "wf", "path": "/Users/vegardx/src/github.com/vegardx/pi-workflow" }],
   "policy": { "effort": "standard", "gates": "approve-plan+ship",
               "maxFixRounds": 1, "publish": { "mode": "pr", "base": "main" } },
@@ -151,14 +150,9 @@ a validation question asked of the document.
     "id": "catalogue", "title": "Ship the component catalogue",
     "after": [], "reads": [],
     "tasks": [{ "id": "impl", "title": "Write src/components/*.ts" },
-              { "id": "rev-contracts", "title": "Contract review", "review": { "lens": "contracts", "tier": "heavy", "diverse": true } }],
-    "stages": [
-      { "use": "implement", "id": "build" },
-      { "use": "verify-and-fix", "id": "green", "maxRounds": 2, "escalate": "thinking" },
-      { "use": "review-fan-out", "id": "review", "synthesis": "required",
-        "lenses": [ { "id": "contracts", "tier": "heavy", "diverse": true },
-                    { "id": "replay", "tier": "standard" } ] }
-    ]
+              { "id": "tests", "title": "Cover each component" }],
+    "reviews": [{ "lens": "contracts", "tier": "heavy", "diverse": true },
+                { "lens": "replay", "tier": "standard" }]
   }]
 }
 ```
@@ -275,14 +269,13 @@ only check the plan against itself, which is why the `plan` tool's window opens
 on agreement and not before — no yardstick, no window. A `plan` call that
 arrives earlier is refused by name.
 
-**The hand-over.** Agreeing asks the model for the whole document with the
-`policy` block copied in verbatim. Verbatim because those are decisions already
-made: a model that re-derives them produces a policy nobody chose, and the
-digest would then cover a document that disagrees with the flow that produced
-it. One field has a licence to move — `gates` may be raised to
-`every-deliverable` when the conversation asked for a check after every
-deliverable — and the same message asks for a `stages` array on any deliverable
-the conversation implied more than the default list for.
+**The hand-over.** Agreeing asks the model for the whole document — and for
+nothing else. The dials are named in that message as decisions already made and
+are not the model's to write: version 4 pasted them in as a JSON block to copy
+back verbatim, which made the author responsible for transcribing a decision
+they had no part in and put the compiler's own settings in front of them as if
+they were authoring choices. The seat attaches them to the stored document
+instead.
 
 *Just switch mode* switches and records nothing. *Keep planning*, and escape,
 leave the posture where it was and record nothing. A session replacement ends
@@ -314,9 +307,9 @@ What happens then, in order, with the dialogs listed in the
    branching from HEAD is acceptable. Everything else readiness finds is
    reported at once as a warning — it is a fact about this host, and publication
    will meet it again.
-2. **Normalisation.** Every heavy review lens whose `diverse` is undefined gets
-   `diverse: true` written into the **stored** plan, in both `tasks[].review` and
-   `stages[].lenses`; the result is re-validated and saved. A heavy lens reads
+2. **Normalisation.** Every heavy review whose `diverse` is undefined gets
+   `diverse: true` written into the **stored** plan's `reviews`; the result is
+   re-validated and saved. A heavy lens reads
    the same work the implementer wrote, and a reviewer from another model family
    fails differently — both compilers agree on that, and they used to disagree
    about the document because an undefined field left each of them to decide for
@@ -325,9 +318,9 @@ What happens then, in order, with the dialogs listed in the
    is no dialog here, and no dialog about review lenses anywhere: the plan and
    `policy.reviewDefault` decide them.
 3. **The compiled stage document.** pi-maestro derives it here, from the same
-   §2.1 rules `plan-to-ship` compiles from: the default stage list from the
-   policy, lenses seeded from `tasks[].review`, duplicate lens ids suffixed `-2` and
-   `-3` by declaration ordinal, and `maxRounds` mapped from the plan's fix
+   §2.1 rules `plan-to-ship` compiles from: the stage list derived from the
+   policy, lenses seeded from `deliverables[].reviews`, duplicate lens ids
+   suffixed `-2` and `-3` by declaration ordinal, and `maxRounds` from the plan's fix
    rounds to the component's verify rounds (`fix + 1`, so a fix is never left
    unchecked). It is validated against a local mirror of the runtime's own
    closed schema, so a disagreement between the two readings fails here rather
@@ -338,9 +331,12 @@ What happens then, in order, with the dialogs listed in the
    `plan-review` through the workflow provider — without a model turn, which is
    what keeps it blind: a review reached through the model would have read the
    planning conversation. *Approve as is* skips it. *Edit* opens the compiled
-   document as JSON; an edit is validated against the same mirror and written
-   back into the plan's `stages`, and escaping the editor discards it. This is
-   the place to change who reviews what. *Back to the conversation* is what
+   document as JSON; an edit is validated against the same mirror and its review
+   lenses are written back into the plan's `reviews`, and escaping the editor
+   discards it. This is the place to change who reviews what, and it is now the
+   only thing the compiled graph holds that a plan can still say — an edit to
+   anything else is **refused by name** rather than accepted and recompiled away
+   behind the person who made it. *Back to the conversation* is what
    escape takes, because the other three all start something: the plan stays
    stored, the record goes, and the posture stays `plan`.
 5. **The findings walk.** Every **blocking** finding is asked, one at a time:
@@ -357,8 +353,8 @@ What happens then, in order, with the dialogs listed in the
    ends the walk at once — the findings not yet asked travel with the rest,
    because one rewrite answers the whole review — and sends the model every
    finding and the reviewer's notes verbatim, with the instruction to rewrite
-   the plan, call `plan` once with the whole document and the `policy` block
-   unchanged, and stop. It is the only answer in the exit that does not end it:
+   the plan, call `plan` once with the whole document, and stop — the dials do
+   not move, and the tool does not take them. It is the only answer in the exit that does not end it:
    the record stays (carrying the review count), the `plan` tool's window stays
    open, the posture stays `plan`, and the model's next stored plan re-enters
    this half from readiness — so the revised plan is shown at the compiled

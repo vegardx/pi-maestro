@@ -131,9 +131,10 @@ obtained by not answering is not one.
 escaping the editor discards the edit. *Back to the conversation* deletes the
 record, says so, and leaves you in plan mode with nothing else changed.
 
-*Agree* puts the sentences on the record and asks the model for the plan, with
-the `policy` block to copy verbatim. **The `plan` tool opens here and not
-before**: the agreed description is what the blind review checks the plan
+*Agree* puts the sentences on the record and asks the model for the plan. The
+dials are named in that message as decisions already made; the model does not
+write them, and the seat attaches them to the stored document. **The `plan` tool
+opens here and not before**: the agreed description is what the blind review checks the plan
 against, so there is no window before there is a yardstick. A `plan` call that
 arrives earlier is refused by name, and the refusal says to submit the
 description first.
@@ -163,13 +164,13 @@ reviewer, an editor, or the run — so that is what escape there does: the plan
 stays stored, the record is deleted, you stay in plan mode, and the notice is
 the same one every other ending prints.
 
-The review lenses are **not** asked about. The plan and its
+The review lenses are **not** asked about. The plan's own `reviews` and its
 `policy.reviewDefault` decide them, and dialog 12 — with *Edit* behind it — is
-where a reviewer is changed. Before anything is compiled, every heavy lens whose
-`diverse` is undefined has `diverse: true` written into the **stored** plan, in
-both `tasks[].review` and `stages[].lenses`, so this seat's compiled document and
-pi-workflow's derive the same graph from the same bytes. A lens that already
-says `diverse: false` keeps its answer.
+where a reviewer is changed. Before anything is compiled, every heavy review
+whose `diverse` is undefined has `diverse: true` written into the **stored**
+plan, so this seat's compiled document and pi-workflow's derive the same graph
+from the same bytes. A review that already says `diverse: false` keeps its
+answer.
 
 Steps 11, 14, 16 and 17 open no dialog. 11 compiles the plan into the stage
 document and asks the runtime to validate and project it; 14 starts the headless
@@ -187,8 +188,8 @@ where it stands — the findings that were not asked go back too, because one
 rewrite answers the whole review — and the model is sent **every** finding
 (blocking, major and minor, each with its `where` and `what`) plus the
 reviewer's notes, verbatim, with the instruction to rewrite the plan, call
-`plan` again with the whole document and the `policy` block unchanged, and stop
-there. It is the one answer in the whole exit that does not end it: the pending
+`plan` again with the whole document, and stop there — the dials do not move,
+and the tool does not take them. It is the one answer in the whole exit that does not end it: the pending
 record stays, the `plan` tool's window stays open, the posture stays `plan`, and
 the model's next stored plan runs this half again from readiness — so you are
 shown the revised plan at dialog 12 and it is reviewed again.
@@ -224,11 +225,11 @@ the review option.
 ## Seat tools
 
 - `plan` authors or replaces the whole plan and returns all validation errors
-  together. A review task carries `review: {lens, skill?, model?, tier?, diverse?}`
-  and implementation work carries none, and
-  a deliverable may carry optional `stages` beside a plan-wide `policy` — see
-  [Authored plans](workflow-plans.md#stages). It is held in auto and hack, and
-  in plan mode only once an exit's description is agreed.
+  together. A deliverable's `tasks` are the work and its `reviews` are who reads
+  that work, each `{lens, skill?, model?, tier?, diverse?}` — see
+  [Authored plans](workflow-plans.md#reviews). It takes no `policy` and no
+  `stages`: both are the seat's. It is held in auto and hack, and in plan mode
+  only once an exit's description is agreed.
 - `plan_intent` submits the two or three sentences the exit agrees on before the
   plan is written. Held only while a plan-mode exit is in progress, in any
   posture — see [Leaving plan mode](#leaving-plan-mode).

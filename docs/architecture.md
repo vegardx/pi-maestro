@@ -147,10 +147,13 @@ The `plan` tool stores repository-qualified authored intent:
 <agentDir>/maestro/plans/<slug>/plan.json
 ```
 
-A plan contains repositories, deliverables, ordering, read dependencies, tasks,
-the review routing on the tasks that are reviews, and optionally the stages each deliverable is built from
-and the policy the run should follow. Pi-maestro validates and stores this
-vocabulary but does not execute it. `/plan run <slug>` builds the workflow input
+A plan contains repositories, deliverables, ordering, read dependencies, the
+tasks that are the work, and the reviews that read that work when it is done.
+It also carries the policy the run follows — effort, gates, publication — which
+the seat attaches from the decisions a human made on the way out of plan mode,
+never the model. How each deliverable is run is derived from those three things
+and is not written down. Pi-maestro validates and stores this vocabulary but
+does not execute it. `/plan run <slug>` builds the workflow input
 and hands the session the `workflow_run { ref: "plan-to-ship", input }` call to
 make; `@vegardx/pi-workflow` owns the runtime lowering and state model. See
 [Authored plans](workflow-plans.md).

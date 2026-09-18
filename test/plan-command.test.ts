@@ -77,17 +77,13 @@ function plan(slug: string, root: string, title = `Plan ${slug}`): Plan {
 				// hand-off in the same repository yet, and the plan model refuses
 				// that edge rather than compiling it and dropping it.
 				reads: [],
-				tasks: [
-					{ id: "screen", title: "Draw the screen" },
+				tasks: [{ id: "screen", title: "Draw the screen" }],
+				reviews: [
 					{
-						id: "sec",
-						title: "Review the surface",
-						review: {
-							lens: "security",
-							tier: "heavy",
-							diverse: true,
-							model: "anthropic/claude",
-						},
+						lens: "security",
+						tier: "heavy",
+						diverse: true,
+						model: "anthropic/claude",
 					},
 				],
 			},
@@ -253,7 +249,7 @@ describe("/plan show", () => {
 		expect(message).toContain("after api");
 		expect(message).toContain("- handler: Write the handler");
 		expect(message).toContain(
-			"- sec: Review the surface — review (lens security, tier heavy, diverse, model anthropic/claude)",
+			"read by security, tier heavy, diverse, model anthropic/claude",
 		);
 	});
 
@@ -268,11 +264,12 @@ describe("/plan show", () => {
 					title: "API",
 					after: [],
 					reads: [],
-					tasks: [{ id: "sec", title: "Review", review: { lens: "security" } }],
+					tasks: [{ id: "build", title: "Build it" }],
+					reviews: [{ lens: "security" }],
 				},
 			],
 		});
-		expect(text).toContain("review (lens security, effort dial decides)");
+		expect(text).toContain("read by security, effort dial decides");
 	});
 
 	it("re-reads the world, so a tree that went dirty since is reported", async () => {

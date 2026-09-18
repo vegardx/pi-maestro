@@ -6,7 +6,7 @@
 // pi-maestro cannot import `@vegardx/pi-workflow` — it is an optional peer and
 // is not published — so the document is compiled on this side from the same
 // §2.1 rules `plan-to-ship` compiles from: the default stage list derived from
-// the policy, review lenses seeded from `tasks[].review`, duplicate lens ids
+// the policy, review lenses seeded from `deliverables[].reviews`, duplicate ids
 // suffixed by declaration ordinal, and `maxRounds` mapped from the plan's fix
 // rounds to the component's verify rounds. Two derivations of one document is
 // exactly the duplication this repository is organised against, so it is
@@ -33,6 +33,7 @@ import {
 	type Deliverable,
 	type Plan,
 	type PlanGates,
+	type Review,
 	type ReviewLens,
 	type ReviewTier,
 	type Stage,
@@ -313,12 +314,7 @@ export function verifyRoundsFor(fixRounds: number): number {
 	return fixRounds + 1;
 }
 
-function compileStage(
-	stage: Stage,
-	fixRounds: number,
-	where: string,
-	problems: string[],
-): CompiledStage | undefined {
+function compileStage(stage: Stage, fixRounds: number): CompiledStage {
 	switch (stage.use) {
 		case "implement":
 			return {
@@ -333,28 +329,13 @@ function compileStage(
 				maxRounds: verifyRoundsFor(stage.maxRounds ?? fixRounds),
 				...(stage.escalate ? { escalate: stage.escalate } : {}),
 			};
-		case "review-fan-out":
+		default:
 			return {
 				use: "review-fan-out",
 				id: stage.id,
 				lenses: disambiguateLensIds(stage.lenses).map(compileLens),
 				...(stage.synthesis ? { synthesis: stage.synthesis } : {}),
 			};
-		case "gate":
-			return {
-				use: "gate",
-				id: stage.id,
-				question: stage.question,
-				...(stage.show ? { show: [...stage.show] } : {}),
-			};
-		default:
-			// The plan vocabulary reserves `dynamic` so a document can be written
-			// against it; nothing compiles one, here or in the runtime, and a
-			// compiled document has no place to put it.
-			problems.push(
-				`${where}: \`${(stage as { use: string }).use}\` stages are not compiled yet`,
-			);
-			return undefined;
 	}
 }
 
@@ -366,22 +347,14 @@ function compileStage(
  */
 export function compileStageDocument(plan: Plan): CompiledStageDocument {
 	const staged = withDefaultStages(plan);
-	const problems: string[] = [];
-	const deliverables: CompiledDeliverable[] = [];
-	for (const deliverable of staged.deliverables) {
-		const stages: CompiledStage[] = [];
-		for (const stage of deliverable.stages) {
-			const compiled = compileStage(
-				stage,
-				staged.policy.maxFixRounds,
-				`deliverable \`${deliverable.id}\` stage \`${stage.id}\``,
-				problems,
-			);
-			if (compiled) stages.push(compiled);
-		}
-		deliverables.push({ id: deliverable.id, stages });
-	}
-	if (problems.length > 0) throw new StageDocumentError(problems);
+	const deliverables: CompiledDeliverable[] = staged.deliverables.map(
+		(deliverable) => ({
+			id: deliverable.id,
+			stages: deliverable.stages.map((stage) =>
+				compileStage(stage, staged.policy.maxFixRounds),
+			),
+		}),
+	);
 	const document: CompiledStageDocument = {
 		deliverables,
 		effort: staged.policy.effort,
@@ -398,13 +371,20 @@ export function compileStageDocument(plan: Plan): CompiledStageDocument {
 // ── Back into the plan ───────────────────────────────────────────────────────
 
 /**
- * An edited compiled document, written back into the plan's `stages`.
+ * An edited compiled document, written back into the plan's `reviews`.
  *
  * The exit flow lets a human edit the compiled graph, and what they edited has
  * to end up on the document the run is given — otherwise the next compile
- * throws their edit away and nothing says so. The mapping is the compile in
- * reverse, including `maxRounds`: the component's verify rounds become the
- * plan's fix rounds again.
+ * throws their edit away and nothing says so.
+ *
+ * WHAT MAY BE EDITED IS WHAT THE PLAN CAN SAY. Version 5 removed authored
+ * `stages`: the graph is derived from the tasks, the reviews and the policy, so
+ * there is exactly one thing in it a plan can hold an edit for — the review
+ * fan-out's lenses, which is also the only thing this dialog was ever for
+ * ("this is the place to change who reviews what"). Anything else the editor
+ * changed is reported by name rather than accepted and silently recompiled
+ * away, because a human who is told their edit landed and finds it did not is
+ * worse off than one who is told it cannot.
  *
  * Returns the problems rather than throwing, because the caller shows them and
  * re-opens the editor.
@@ -435,67 +415,58 @@ export function planWithStageDocument(
 		};
 	const back: string[] = [];
 	const deliverables = plan.deliverables.map((deliverable) => {
-		const compiledDeliverable = byId.get(deliverable.id);
-		if (!compiledDeliverable) return deliverable;
-		const stages = compiledDeliverable.stages.map((stage) =>
-			planStage(stage, `deliverable \`${deliverable.id}\``, back),
+		const edited = byId.get(deliverable.id);
+		if (!edited) return deliverable;
+		const reviews = editedReviews(
+			edited.stages,
+			`deliverable \`${deliverable.id}\``,
+			back,
 		);
-		return { ...deliverable, stages } satisfies Deliverable;
+		return reviews === undefined
+			? deliverable
+			: ({ ...deliverable, reviews } satisfies Deliverable);
 	});
 	if (back.length > 0) return { problems: back };
 	return { plan: { ...plan, deliverables }, problems: [] };
 }
 
-function planStage(
-	stage: CompiledStage,
+/**
+ * The reviews an edited stage list asks for, or nothing when it asks for none.
+ *
+ * A fan-out that survives the mirror carries lens ids the plan can hold as
+ * `lens`, so the mapping is the compile in reverse. A DISAMBIGUATED id (`x-2`)
+ * is written back as it stands: the suffix is what the person saw and edited,
+ * and the next compile earns it again from the duplicate that is still there.
+ */
+function editedReviews(
+	stages: readonly CompiledStage[],
 	where: string,
 	problems: string[],
-): Stage {
-	switch (stage.use) {
-		case "verify-and-fix": {
-			// Zero verify rounds is a stage that never checks its own work. The
-			// plan vocabulary cannot say it (fix rounds would have to be -1) and
-			// the seat will not invent a rounding that quietly adds a round.
-			if (stage.maxRounds < 1)
-				problems.push(
-					`${where} stage \`${stage.id}\`: \`maxRounds\` counts verify rounds and must be at least 1 — a fix is never left unchecked`,
-				);
-			const fixRounds = Math.max(0, Math.min(2, stage.maxRounds - 1)) as
-				| 0
-				| 1
-				| 2;
-			if (stage.maxRounds - 1 > 2)
-				problems.push(
-					`${where} stage \`${stage.id}\`: \`maxRounds\` ${stage.maxRounds} is more fixing than a plan may ask for`,
-				);
-			return {
-				use: "verify-and-fix",
-				id: stage.id,
-				maxRounds: fixRounds,
-				...(stage.escalate ? { escalate: stage.escalate } : {}),
-			};
-		}
-		case "review-fan-out":
-			return {
-				use: "review-fan-out",
-				id: stage.id,
-				lenses: stage.lenses.map((lens) => ({ ...lens })),
-				...(stage.synthesis ? { synthesis: stage.synthesis } : {}),
-			};
-		case "gate":
-			return {
-				use: "gate",
-				id: stage.id,
-				question: stage.question,
-				...(stage.show ? { show: [...stage.show] } : {}),
-			};
-		default:
-			return {
-				use: "implement",
-				id: stage.id,
-				...(stage.tools ? { tools: [...stage.tools] } : {}),
-			};
+): readonly Review[] | undefined {
+	const fanOuts = stages.filter((stage) => stage.use === "review-fan-out");
+	for (const stage of stages)
+		if (stage.use === "gate")
+			problems.push(
+				`${where} stage \`${stage.id}\`: a plan cannot hold a \`gate\` stage — where a run stops for a human is \`policy.gates\`, and it is not edited here`,
+			);
+	if (fanOuts.length > 1) {
+		problems.push(
+			`${where}: ${fanOuts.length} \`review-fan-out\` stages — a deliverable lists its reviews once`,
+		);
+		return undefined;
 	}
+	const fanOut = fanOuts[0];
+	if (!fanOut) return [];
+	if (fanOut.lenses.length > MAX_COMPILED_LENSES) {
+		problems.push(
+			`${where}: ${fanOut.lenses.length} lenses — at most ${MAX_COMPILED_LENSES} read one deliverable`,
+		);
+		return undefined;
+	}
+	return fanOut.lenses.map(({ id, ...routing }) => ({
+		lens: id,
+		...routing,
+	}));
 }
 
 // ── Showing it ───────────────────────────────────────────────────────────────

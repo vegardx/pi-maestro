@@ -14,10 +14,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	type Deliverable,
 	inspectPlan,
-	MAESTRO_SCHEMA_VERSION,
 	type Plan,
 	type PlanHostPort,
 	type RepoProbe,
+	type Review,
 	type Task,
 	validatePlan,
 } from "../packages/maestro/src/plan.js";
@@ -46,24 +46,16 @@ const host = fakeHost({
 });
 
 /**
- * One rule, reported at both places it holds.
+ * One rule, reported in the one place it holds.
  *
- * A review task seeds a lens in the default stage list, and validation runs
- * over the plan AS IT WILL BE COMPILED — so a task that pins something a host
- * lacks is named at the task and again at the lens it seeded. Asserted rather
- * than filtered: the two are the same request in two places, and a rule that
- * fired in only one of them is a rule an author could move the field to escape.
+ * Version 4 said a review in two places — `tasks[].review` and the lens it
+ * seeded in the compiled stage list — so every routing rule fired twice and an
+ * author could move the field to escape one of them. A deliverable now lists
+ * its reviews once, so there is one site and one message.
  */
-const atTaskAndLens = (message: string): string[] => [
-	`a.tasks[0]: ${message}`,
-	`a.stages[2].lenses[0]: ${message}`,
-];
+const atReview = (message: string): string[] => [`a.reviews[0]: ${message}`];
 
-const task = (id: string, review?: Task["review"]): Task => ({
-	id,
-	title: `do ${id}`,
-	...(review ? { review } : {}),
-});
+const task = (id: string): Task => ({ id, title: `do ${id}` });
 
 const deliverable = (
 	id: string,
@@ -160,23 +152,19 @@ describe("waiting and reading are different things", () => {
 	});
 });
 
-describe("review tasks are workflow-native review launches", () => {
+describe("reviews are workflow-native review launches", () => {
 	it("accepts the same lens assigned to more than one model", () => {
 		const errors = errorsOf(
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [
-							task("implement"),
-							task("review", {
+						reviews: [
+							{
 								lens: "security",
 								skill: "security-review",
 								model: "anthropic/opus-5",
-							}),
-							task("review-again", {
-								lens: "security",
-								model: "xai/grok-4.5",
-							}),
+							},
+							{ lens: "security", model: "xai/grok-4.5" },
 						],
 					}),
 				],
@@ -187,47 +175,12 @@ describe("review tasks are workflow-native review launches", () => {
 		expect(errors).toEqual([]);
 	});
 
-	// The version 3 field. A stored document is caught by its envelope, but a
-	// model writing a plan from memory of the old name writes `by` into a
-	// version 4 body, where the type says nothing and the field would be
-	// dropped — a plan that stores and compiles with no reviewers at all.
-	it("refuses a task that still carries `by`, by name", () => {
-		const errors = errorsOf(
-			plan({
-				deliverables: [
-					deliverable("a", {
-						tasks: [
-							task("implement"),
-							// The shape a model writes, which the type system refuses
-							// and a document read back from disk does not.
-							{
-								id: "review",
-								title: "Review it",
-								by: { lens: "security" },
-							} as unknown as Task,
-						],
-					}),
-				],
-			}),
-			cleanRepo,
-			host,
-		);
-		expect(errors).toEqual([
-			"a.tasks[1]: task `review` carries `by`, which plan schema v" +
-				`${MAESTRO_SCHEMA_VERSION} renamed to \`review\`: that is a version 3 ` +
-				"field and there is no migration. Rename `by` to `review` on every " +
-				"review task",
-		]);
-	});
-
 	it("refuses a model this host does not have, and lists its providers", () => {
 		const errors = errorsOf(
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [
-							task("review", { lens: "security", model: "anthropic/opus-9" }),
-						],
+						reviews: [{ lens: "security", model: "anthropic/opus-9" }],
 					}),
 				],
 			}),
@@ -235,7 +188,7 @@ describe("review tasks are workflow-native review launches", () => {
 			host,
 		);
 		expect(errors).toEqual(
-			atTaskAndLens(
+			atReview(
 				"`anthropic/opus-9` is not a model this host has — this host's " +
 					"registered providers are `anthropic`, `xai`. `model` is optional: " +
 					"drop it and pin `tier` instead unless the reviewer must be one " +
@@ -257,9 +210,7 @@ describe("review tasks are workflow-native review launches", () => {
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [
-							task("review", { lens: "security", model: "anthropic/opus-5" }),
-						],
+						reviews: [{ lens: "security", model: "anthropic/opus-5" }],
 					}),
 				],
 			}),
@@ -274,9 +225,7 @@ describe("review tasks are workflow-native review launches", () => {
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [
-							task("review", { lens: "security", skill: "replay-review" }),
-						],
+						reviews: [{ lens: "security", skill: "replay-review" }],
 					}),
 				],
 			}),
@@ -284,7 +233,7 @@ describe("review tasks are workflow-native review launches", () => {
 			host,
 		);
 		expect(errors).toEqual(
-			atTaskAndLens(
+			atReview(
 				"`replay-review` is not a skill this session has loaded — the skills " +
 					"loaded here are `security-review`, `contracts-review`. `skill` is " +
 					"optional: drop it and let the lens prompt find what it needs",
@@ -301,7 +250,7 @@ describe("review tasks are workflow-native review launches", () => {
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [task("review", { lens: "security", skill: "absent" })],
+						reviews: [{ lens: "security", skill: "absent" }],
 					}),
 				],
 			}),
@@ -309,7 +258,7 @@ describe("review tasks are workflow-native review launches", () => {
 			many,
 		);
 		expect(errors).toEqual(
-			atTaskAndLens(
+			atReview(
 				"`absent` is not a skill this session has loaded — this session has " +
 					"21 skills loaded, and none of them is that one. `skill` is " +
 					"optional: drop it and let the lens prompt find what it needs",
@@ -324,46 +273,41 @@ describe("review tasks are workflow-native review launches", () => {
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [
-							task("review", {
+						reviews: [
+							{
 								lens: "security",
 								skill: "security-review",
 								model: "anthropic/opus-5",
-							}),
+							},
 						],
 					}),
 				],
 			}),
 		);
-		const noSkill =
-			"`skill` pins `security-review` and there is no session here to ask " +
-			"which skills are loaded, so it is refused rather than stored " +
-			"unchecked — drop `skill` and let the lens prompt find it";
-		const noModel =
-			"`model` pins `anthropic/opus-5` and there is no model catalogue here " +
-			"to check it against, so it is refused rather than stored unchecked — " +
-			"drop `model` and pin `tier` instead";
 		expect(errors).toEqual([
-			`a.tasks[0]: ${noSkill}`,
-			`a.tasks[0]: ${noModel}`,
-			`a.stages[2].lenses[0]: ${noSkill}`,
-			`a.stages[2].lenses[0]: ${noModel}`,
+			"a.reviews[0]: `skill` pins `security-review` and there is no session " +
+				"here to ask which skills are loaded, so it is refused rather than " +
+				"stored unchecked — drop `skill` and let the lens prompt find it",
+			"a.reviews[0]: `model` pins `anthropic/opus-5` and there is no model " +
+				"catalogue here to check it against, so it is refused rather than " +
+				"stored unchecked — drop `model` and pin `tier` instead",
 		]);
 	});
 
 	// `tier` and `diverse` are the host's to resolve, so a plan that pins
 	// neither a model nor a skill needs no host at all.
 	it("needs no host for a review that pins nothing", () => {
-		const errors = errorsOf(
-			plan({
-				deliverables: [
-					deliverable("a", {
-						tasks: [task("review", { lens: "security", tier: "heavy" })],
-					}),
-				],
-			}),
-		);
-		expect(errors).toEqual([]);
+		expect(
+			errorsOf(
+				plan({
+					deliverables: [
+						deliverable("a", {
+							reviews: [{ lens: "security", tier: "heavy", diverse: true }],
+						}),
+					],
+				}),
+			),
+		).toEqual([]);
 	});
 });
 
@@ -392,36 +336,27 @@ describe("a review names a model, a tier, or neither", () => {
 	it("accepts a lens with a tier and diversity but no model", () => {
 		// The point of the tier: a plan that pins `anthropic/opus-5` runs only
 		// on a host that has `anthropic/opus-5`. A tier is routable anywhere.
-		const errors = errorsOf(
-			plan({
-				deliverables: [
-					deliverable("a", {
-						tasks: [
-							task("implement"),
-							task("review", {
-								lens: "security",
-								tier: "heavy",
-								diverse: true,
-							}),
-						],
-					}),
-				],
-			}),
-		);
-		expect(errors).toEqual([]);
+		expect(
+			errorsOf(
+				plan({
+					deliverables: [
+						deliverable("a", {
+							reviews: [{ lens: "security", tier: "heavy", diverse: true }],
+						}),
+					],
+				}),
+			),
+		).toEqual([]);
 	});
 
 	it("accepts a lens with neither — the run's effort dial decides", () => {
-		const errors = errorsOf(
-			plan({
-				deliverables: [
-					deliverable("a", {
-						tasks: [task("implement"), task("review", { lens: "security" })],
-					}),
-				],
-			}),
-		);
-		expect(errors).toEqual([]);
+		expect(
+			errorsOf(
+				plan({
+					deliverables: [deliverable("a", { reviews: [{ lens: "security" }] })],
+				}),
+			),
+		).toEqual([]);
 	});
 
 	it("still refuses a model that is not a provider/model ID", () => {
@@ -429,7 +364,7 @@ describe("a review names a model, a tier, or neither", () => {
 			plan({
 				deliverables: [
 					deliverable("a", {
-						tasks: [task("review", { lens: "security", model: "opus" })],
+						reviews: [{ lens: "security", model: "opus" }],
 					}),
 				],
 			}),
@@ -451,11 +386,8 @@ describe("a review names a model, a tier, or neither", () => {
 					deliverable("a", {
 						// The shape a plan read back from disk can have, which the
 						// type system is no help against.
-						tasks: [
-							task("review", {
-								lens: "security",
-								tier: "enormous",
-							} as unknown as Task["review"]),
+						reviews: [
+							{ lens: "security", tier: "enormous" } as unknown as Review,
 						],
 					}),
 				],

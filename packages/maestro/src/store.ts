@@ -55,7 +55,7 @@ export class UnsupportedStateError extends StoreError {
 	) {
 		super(
 			`${path} was written by schema ${String(found)}, and this build speaks ${MAESTRO_SCHEMA_VERSION}. ` +
-				"Schema 4 renamed `tasks[].by` to `tasks[].review`, and there is no migration. " +
+				"Schema 5 moved review routing from `tasks[].review` to `deliverables[].reviews` and dropped `stages`, and there is no migration. " +
 				`Archive or remove the ${kind} and write it again at schemaVersion ${MAESTRO_SCHEMA_VERSION}.`,
 		);
 		this.name = "UnsupportedStateError";

@@ -7,7 +7,7 @@ import {
 } from "./execution-policy.js";
 import { type Mode, type ModeName, mode } from "./mode.js";
 import { plansRoot } from "./paths.js";
-import type { PlanHostPort } from "./plan.js";
+import type { PlanHostPort, PlanPolicy } from "./plan.js";
 import { createPlanStore, type PlanStore } from "./store.js";
 import { ToolRegistry } from "./tool-registry.js";
 
@@ -22,6 +22,15 @@ export interface SeatOptions {
 	 * every seat that never starts one.
 	 */
 	readonly exitWindow?: () => ExitWindow;
+	/**
+	 * The dials the exit's dialogs settled, for the `plan` tool to attach.
+	 *
+	 * Read from the same pending record `exitWindow` reads, because they are two
+	 * answers to one question — is an exit in progress, and what did it decide —
+	 * and a second reader of that file would be a second opinion about it. The
+	 * `plan` tool has no `policy` parameter: @see AuthoringDeps.policy.
+	 */
+	readonly exitPolicy?: () => PlanPolicy | undefined;
 	/**
 	 * The live session, as the two questions a pinned review raises: does this
 	 * host have that model, has it loaded that skill. @see PlanHostPort
@@ -127,6 +136,7 @@ export function createSeat(options: SeatOptions = {}): Seat {
 				cwd: () => cwd,
 				mode: () => current.name,
 				...(options.host ? { host: options.host } : {}),
+				...(options.exitPolicy ? { policy: options.exitPolicy } : {}),
 			}),
 			holders: ["maestro"],
 			available: planAvailable,

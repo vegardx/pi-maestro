@@ -31,9 +31,10 @@
 // Three rules shape everything here:
 //
 //   - **NOTHING IS ASKED TWICE AND NOTHING IS ASSUMED SILENTLY.** Each dialog
-//     is asked once, and the answers end up in the plan's own `policy` block —
-//     on the document, where a reviewer and a receipt can both see them —
-//     rather than in a dialog transcript nobody can check afterwards.
+//     is asked once, and the answers are attached to the plan as its `policy`
+//     — on the document, where a reviewer and a receipt can both see them —
+//     rather than in a dialog transcript nobody can check afterwards. The model
+//     never writes them: the `plan` tool has no `policy` parameter.
 //   - **WHAT IS FIRST AND WHAT ESCAPE TAKES ARE DIFFERENT QUESTIONS.** Every
 //     option table names both, on the options themselves: `recommended` is the
 //     answer a person most likely wants, it is first, and it is the only row
@@ -418,71 +419,42 @@ export function renderIntentSteer(): string {
 /**
  * What the model is asked for once the description is agreed.
  *
- * The policy block is quoted rather than described. It is a set of decisions
- * that have already been made — one in a dialog, one by default, one derived
- * from this repository — it is digest-bound once it is on the document, and a
- * model that re-derives "what they probably meant by standard effort" produces
- * a plan whose policy nobody chose. So the instruction is to copy it.
- *
- * `gates` is the one field with a licence to move, and it is written as a
- * narrow one: `every-deliverable` stops the run for a human after every single
- * deliverable, which is right when the conversation asked for exactly that and
- * is otherwise a run that never finishes without a babysitter.
+ * THE POLICY IS NOT ASKED FOR. Version 4 pasted it into this steer as a JSON
+ * block and told the model to copy it back verbatim, which made the author
+ * responsible for transcribing decisions they had no part in — and put the
+ * compiler's own dials in front of them as if they were authoring choices. In
+ * v5 the seat attaches the policy to the document the `plan` tool stores, and
+ * the tool has no `policy` parameter at all. It is still said out loud here,
+ * because a decision the author cannot see is one they will write around.
  */
 export function renderExitSteer(policy: PlanPolicy): string {
+	const resolved = resolvePolicy(policy);
 	return [
 		"The description is agreed and the `plan` tool is available now. The document is what I am asking for.",
 		"",
 		"Call `plan` once with the whole plan from the conversation we just had:" +
 			" every repository, every deliverable, its `after` and `reads` edges, its" +
-			" implementation tasks and its review tasks. Write it from the" +
+			" tasks and the reviews those tasks earn. Write it from the" +
 			" conversation — do not ask me to restate it, and do not narrow it to the" +
 			" part that is easy to write down.",
 		"",
-		"Include this `policy` block verbatim, as `policy` at the top level of the document:",
+		`Already decided, and not yours to write: effort ${resolved.effort}, gates` +
+			` ${resolved.gates}, publication ${resolved.publish.mode}` +
+			`${resolved.publish.base ? ` onto \`${resolved.publish.base}\`` : ""}.` +
+			" I chose those on the way out of plan mode and the seat puts them on" +
+			" the document itself. The `plan` tool has no `policy` field and no" +
+			" `stages` field: how a deliverable is run is derived from its tasks," +
+			" its reviews and those dials.",
 		"",
-		"```json",
-		JSON.stringify(policy, null, 2),
-		"```",
-		"",
-		"Those are decisions already made: the effort I chose in the dialog, the" +
-			" gates this seat defaults to, and the publication derived from this" +
-			" repository. Copy the block exactly: do not change a field, do not drop" +
-			" one, and do not add one.",
-		"",
-		`One exception, and only one: raise \`gates\` to \`every-deliverable\` if — and` +
-			" only if — this conversation asked for a check after every deliverable." +
-			" Nothing else in the block moves.",
-		"",
-		"`review` IS WHAT MAKES A TASK A REVIEW. A task that carries it is read" +
-			" by an independent reviewer and is implemented by nobody, so an" +
-			" implementation, test or docs task carries NO `review`: a review is a" +
-			" separate task whose only work is reviewing. A deliverable whose every" +
-			" task carries `review` is a deliverable nothing writes.",
-		"",
-		"Two fields are got wrong most often. A review task's `review.lens` is" +
-			" REQUIRED and is the fan-out key, so it must match" +
-			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `review.model` is OPTIONAL" +
-			" and, if written at all, is only ever a concrete `provider/model` ID" +
-			" this host actually has — one it does not have is refused by name;" +
-			" prefer `review.tier` and leave `review.model` out, so the host" +
-			" resolves the reviewer. `review.skill` is the same: only a skill this" +
-			" session has loaded. An optional field you have nothing to say about is" +
-			" LEFT OUT, not sent empty — an empty string or a list of them is" +
-			" dropped before the plan is validated, so the two mean the same thing" +
-			" and neither is refused.",
-		"",
-		"Give a deliverable its own `stages` array wherever this conversation" +
-			" implied more than the default list (`implement` → `verify-and-fix` →" +
-			" `review-fan-out`): a different number of fix rounds, the review lenses" +
-			" we actually named, or a `gate` a human has to answer inside the run. A" +
-			" deliverable the conversation treated as ordinary needs no `stages` at" +
-			" all — it gets the default list, derived from the policy above.",
+		"A deliverable's `tasks` are the work — implementation, tests, docs — and" +
+			" its `reviews` are the independent readings that work earns, listed" +
+			" once beside the tasks. A deliverable that needs no independent reader" +
+			" leaves `reviews` out.",
 		"",
 		"Then stop. This message asks for the stored document and nothing else:" +
 			" do not start a run and do not decide anything on my behalf. The seat" +
 			" refuses `workflow_run` and `workflow_propose` in plan mode, so running" +
-			" a workflow — `deep-review`, `deep-research` or any other — over your" +
+			" a workflow — `deep-review` or any other — over your" +
 			" own plan is not available to you here: a blind reviewer checks the" +
 			" plan after it is stored, and a plan reviewed by its author is not" +
 			" reviewed. I start any other run with `/workflow run`.",

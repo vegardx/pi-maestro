@@ -296,14 +296,8 @@ function tieredPlan(count: number): Plan {
 			title: `Deliverable ${index + 1}`,
 			after: [],
 			reads: [],
-			tasks: [
-				{ id: "impl", title: "Do the work" },
-				{
-					id: "rev",
-					title: "Review it",
-					review: { lens: "contracts", tier: "standard" as const },
-				},
-			],
+			tasks: [{ id: "impl", title: "Do the work" }],
+			reviews: [{ lens: "contracts", tier: "standard" as const }],
 		})),
 	};
 }
@@ -700,14 +694,8 @@ function heavyPlan(): Plan {
 				title: "Deliverable 1",
 				after: [],
 				reads: [],
-				tasks: [
-					{ id: "impl", title: "Do the work" },
-					{
-						id: "rev",
-						title: "Review it",
-						review: { lens: "contracts", tier: "heavy" as const },
-					},
-				],
+				tasks: [{ id: "impl", title: "Do the work" }],
+				reviews: [{ lens: "contracts", tier: "heavy" as const }],
 			},
 		],
 	};
@@ -731,17 +719,15 @@ describe("the review lenses", () => {
 		// this seat and pi-workflow read the same plan, so they have to read the
 		// same answer to "is this reviewer diverse?".
 		expect(h.store.saves).toHaveLength(1);
-		expect(h.store.current().deliverables[0]?.tasks[1]?.review).toEqual({
-			lens: "contracts",
-			tier: "heavy",
-			diverse: true,
-		});
+		expect(h.store.current().deliverables[0]?.reviews).toEqual([
+			{ lens: "contracts", tier: "heavy", diverse: true },
+		]);
 		expect(h.said()).toContain("`diverse: true`");
 		// And the compiled document a human is shown says so too.
 		expect(h.said()).toContain("contracts/heavy/diverse");
 	});
 
-	it("writes it into an authored `review-fan-out` as well", async () => {
+	it("fills in every undecided heavy review and leaves the answered ones", async () => {
 		const authored: Plan = {
 			...tieredPlan(1),
 			deliverables: [
@@ -751,37 +737,23 @@ describe("the review lenses", () => {
 					after: [],
 					reads: [],
 					tasks: [{ id: "impl", title: "Do the work" }],
-					stages: [
-						{ use: "implement", id: "implement" },
-						{ use: "verify-and-fix", id: "verify", maxRounds: 1 },
-						{
-							use: "review-fan-out",
-							id: "review",
-							lenses: [
-								{ id: "contracts", tier: "heavy" },
-								{ id: "tests", tier: "standard" },
-								{ id: "risk", tier: "heavy", diverse: false },
-							],
-							synthesis: "optional",
-						},
+					reviews: [
+						{ lens: "contracts", tier: "heavy" },
+						{ lens: "tests", tier: "standard" },
+						{ lens: "risk", tier: "heavy", diverse: false },
 					],
 				},
 			],
 		};
 		const h = harness({ plan: authored, answer: happyPath });
 		await runExitFlowPhase2(h.deps);
-		const review = h.store
-			.current()
-			.deliverables[0]?.stages?.find((stage) => stage.use === "review-fan-out");
-		expect(review).toMatchObject({
-			lenses: [
-				{ id: "contracts", tier: "heavy", diverse: true },
-				{ id: "tests", tier: "standard" },
-				// A plan that ANSWERED the question keeps its answer; filling it in
-				// again would be the flow overruling the author.
-				{ id: "risk", tier: "heavy", diverse: false },
-			],
-		});
+		expect(h.store.current().deliverables[0]?.reviews).toEqual([
+			{ lens: "contracts", tier: "heavy", diverse: true },
+			{ lens: "tests", tier: "standard" },
+			// A plan that ANSWERED the question keeps its answer; filling it in
+			// again would be the flow overruling the author.
+			{ lens: "risk", tier: "heavy", diverse: false },
+		]);
 	});
 
 	it("leaves a plan with no heavy reviewer exactly as it was", async () => {
@@ -878,7 +850,13 @@ describe("the compiled document", () => {
 								id: "d1",
 								stages: [
 									{ use: "implement", id: "implement" },
-									{ use: "verify-and-fix", id: "verify", maxRounds: 3 },
+									{ use: "verify-and-fix", id: "verify", maxRounds: 2 },
+									{
+										use: "review-fan-out",
+										id: "review",
+										lenses: [{ id: "security", tier: "light" }],
+										synthesis: "optional",
+									},
 								],
 							},
 						],
@@ -893,13 +871,11 @@ describe("the compiled document", () => {
 		expect(outcome.kind).toBe("handed-off");
 		expect(h.ui.titles().filter((t) => t === EDITOR_TITLE)).toHaveLength(1);
 		expect(h.ui.titles().filter((t) => t === COMPILED_TITLE)).toHaveLength(2);
-		expect(
-			h.store.current().deliverables[0]?.stages?.map((stage) => stage.use),
-		).toEqual(["implement", "verify-and-fix"]);
-		// 3 verify rounds is 2 fix rounds, back in the plan's own vocabulary.
-		expect(h.store.current().deliverables[0]?.stages?.[1]).toMatchObject({
-			maxRounds: 2,
-		});
+		// This dialog is where a reviewer is changed, and the edit has to reach
+		// the stored document or the next compile throws it away in silence.
+		expect(h.store.current().deliverables[0]?.reviews).toEqual([
+			{ lens: "security", tier: "light" },
+		]);
 	});
 
 	it("discards an escaped editor and changes nothing", async () => {
@@ -1158,8 +1134,8 @@ describe("the findings walk", () => {
 		const second: Finding = {
 			...blocking(),
 			id: "every-task-reviewed",
-			what: "Tasks 0-2 all carry `review`, so nothing implements them",
-			where: "/deliverables/0/tasks/0/review",
+			what: "The contracts lens is too light for this surface",
+			where: "/deliverables/0/reviews/0/tier",
 		};
 		const h = harness({
 			plan: tieredPlan(1),
@@ -1200,15 +1176,11 @@ describe("the findings walk", () => {
 		expect(steer).toContain("The graph is sound; the tasks are not.");
 		expect(steer).toContain(`review 1 of ${MAX_BLIND_REVIEWS}`);
 		expect(steer).toContain("call `plan` once with the WHOLE document");
-		// And what the field is called, because a rewrite is where the last
-		// plan put review routing on every task it had.
-		expect(steer).toContain(
-			"`review` on a task is what makes that task a review",
-		);
-		expect(steer).toContain(
-			"an implementation, test or docs task carries NO `review`",
-		);
-		expect(steer).toContain("The `policy` block does not move");
+		// Where the work is and where the reading of it is, because a rewrite is
+		// the whole document written again.
+		expect(steer).toContain("A deliverable's `tasks`");
+		expect(steer).toContain("are the work and its `reviews` are who reads");
+		expect(steer).toContain("the tool does not take them");
 		expect(steer).toContain("Stop after the `plan` call");
 
 		// The one outcome that does NOT settle the record: the window stays open

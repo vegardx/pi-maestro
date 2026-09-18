@@ -13,6 +13,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPlanTool } from "../packages/maestro/src/authoring.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
+import {
+	authoredPlanProblems,
+	PLAN_DOCUMENT_GUIDE,
+	planFrom,
+	withoutEmptyOptionals,
+} from "../packages/maestro/src/plan-document.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 import { fakeHost } from "./fake-host.js";
 
@@ -97,14 +103,13 @@ describe("a plan is written whole", () => {
 					reads: [],
 					tasks: [
 						{ id: "build", title: "Build it" },
+						{ id: "test", title: "Test it" },
+					],
+					reviews: [
 						{
-							id: "review",
-							title: "Review it",
-							review: {
-								lens: "correctness",
-								skill: "correctness-review",
-								model: "anthropic/fable-5",
-							},
+							lens: "correctness",
+							skill: "correctness-review",
+							model: "anthropic/fable-5",
 						},
 					],
 				},
@@ -118,7 +123,7 @@ describe("a plan is written whole", () => {
 		// just wrote will write the same wrong one twice.
 		const text = result.content[0].text;
 		expect(text).toContain("- api: 1 task");
-		expect(text).toContain("- ui: 2 tasks, 1 review task(s) after api");
+		expect(text).toContain("- ui: 2 tasks, read by correctness after api");
 		// The trailer is the offer, not a status line: both ways to start a run,
 		// and who approves it — which is never this tool and never the model.
 		expect(text).toContain("Run it: `/plan run arc [cheap|standard|deep]`");
@@ -167,30 +172,11 @@ describe("a plan is written whole", () => {
 					after: [""],
 					reads: [],
 					repo: "",
-					tasks: [
-						{ id: "build", title: "Build it", body: "" },
-						{
-							id: "review",
-							title: "Review it",
-							review: {
-								lens: "contracts",
-								skill: "",
-								model: "",
-								tier: "light",
-							},
-						},
-					],
-					stages: [
-						{ use: "implement", id: "impl", tools: [""] },
-						{
-							use: "review-fan-out",
-							id: "review",
-							lenses: [{ id: "contracts", skill: "", model: "" }],
-						},
-					],
+					tasks: [{ id: "build", title: "Build it", body: "" }],
+					reviews: [{ lens: "contracts", skill: "", model: "", tier: "light" }],
 				},
 			],
-			policy: { effort: "cheap", publish: { mode: "none", base: "" } },
+			body: "  ",
 		});
 		expect(result.details.errors).toEqual([]);
 		expect(result.details.stored).toBe(true);
@@ -205,16 +191,10 @@ describe("a plan is written whole", () => {
 		expect(deliverable && "body" in deliverable).toBe(false);
 		expect(deliverable && "repo" in deliverable).toBe(false);
 		expect(deliverable?.after).toEqual([]);
-		const review = deliverable?.tasks[1];
-		expect(review?.review).toEqual({ lens: "contracts", tier: "light" });
-		const stages = deliverable?.stages ?? [];
-		expect(stages[0] && "tools" in stages[0]).toBe(false);
-		expect(stages[1]).toEqual({
-			use: "review-fan-out",
-			id: "review",
-			lenses: [{ id: "contracts" }],
-		});
-		expect(stored?.policy?.publish).toEqual({ mode: "none" });
+		expect(stored && "body" in stored).toBe(false);
+		expect(deliverable?.reviews).toEqual([
+			{ lens: "contracts", tier: "light" },
+		]);
 	});
 
 	it("still refuses a REQUIRED field left empty, by name", async () => {
@@ -228,18 +208,18 @@ describe("a plan is written whole", () => {
 				{
 					id: "",
 					title: "The API",
-					tasks: [
-						{ id: "build", title: "Build it" },
-						{ id: "review", title: "Review it", review: { lens: "" } },
-					],
+					tasks: [{ id: "build", title: "Build it" }],
+					reviews: [{ lens: "" }],
 				},
 			],
 		});
 		expect(result.details.stored).toBe(false);
-		expect(result.details.errors.join("\n")).toContain("``");
-		expect(
-			result.details.errors.some((error) => error.includes("review lens")),
-		).toBe(true);
+		// Both required-empty fields are named, and neither was quietly dropped.
+		expect(result.details.errors).toEqual([
+			"deliverables[0]: no id",
+			"deliverables[0].reviews[0]: a review needs a lens; a task that is not " +
+				"a review is simply a task, and belongs in `tasks` with no review entry",
+		]);
 		expect(a.store.loadPlan("arc")).toBeNull();
 	});
 
@@ -371,10 +351,97 @@ function propertyNames(
 	return into;
 }
 
+// ── The guidance is short because the shape is right ─────────────────────────
+//
+// Version 4's description ran to about four kilobytes across thirty-three field
+// notes, most of them capitalised warnings, and four by-hand passes wrote every
+// field it warned against anyway. The bound is here so the notes cannot creep
+// back one refusal at a time: when the answer to a failed run is another
+// sentence in a field description, the shape is what needs changing.
+
+describe("the document's own guidance", () => {
+	/** Every `description` the tool carries: its own, and every field's. */
+	function descriptions(node: unknown, into: string[] = []): string[] {
+		if (!node || typeof node !== "object") return into;
+		for (const [key, value] of Object.entries(node)) {
+			if (key === "description" && typeof value === "string") into.push(value);
+			descriptions(value, into);
+		}
+		return into;
+	}
+
+	it("stays under 1.2 KB in total, with nothing shouting", () => {
+		const tool = authoring().tool;
+		const all = [tool.description, ...descriptions(tool.parameters)];
+		const bytes = all.reduce(
+			(total, text) => total + Buffer.byteLength(text, "utf8"),
+			0,
+		);
+		expect(bytes).toBeLessThan(1200);
+		// No capitalised words and no `⇒`: both were how version 4 said what the
+		// shape would not.
+		for (const text of all) {
+			expect(text).not.toMatch(/\b[A-Z]{2,}\b/);
+			expect(text).not.toContain("⇒");
+		}
+	});
+
+	it("is the same paragraph wherever the document is asked for", () => {
+		// The tool is one way of asking. A caller that asks another way says the
+		// same thing, or the two drift.
+		expect(authoring().tool.description).toBe(PLAN_DOCUMENT_GUIDE);
+	});
+});
+
+// ── Callable without a tool ──────────────────────────────────────────────────
+//
+// `defineTool` checks its arguments against the schema before `execute` runs.
+// A caller that asks a model for the document another way has nothing doing
+// that for it, so the check is a plain function over a parsed JSON value —
+// and so are the two steps from an authored document to a stored one.
+
+describe("the document, read without a tool", () => {
+	const authored = {
+		slug: "arc",
+		title: "Arc",
+		deliverables: [
+			{
+				id: "api",
+				title: "The API",
+				tasks: [{ id: "build", title: "Build it", body: "  " }],
+				reviews: [{ lens: "contracts", model: "" }],
+			},
+		],
+	};
+
+	it("says nothing about a document the schema accepts", () => {
+		expect(authoredPlanProblems(authored)).toEqual([]);
+	});
+
+	it("names what it rejects, all of it, and never throws", () => {
+		expect(authoredPlanProblems({ slug: "arc" }).length).toBeGreaterThan(0);
+		expect(authoredPlanProblems(null).length).toBeGreaterThan(0);
+		expect(authoredPlanProblems("not a plan").length).toBeGreaterThan(0);
+	});
+
+	it("cleans and builds the stored document as plain functions", () => {
+		const plan = planFrom(withoutEmptyOptionals(authored), {
+			cwd: "/repo",
+			policy: { effort: "deep" },
+		});
+		// The empty optionals are gone, the default repository is filled in, and
+		// the dials are the caller's — none of which needed a tool.
+		expect(JSON.stringify(plan)).not.toContain('""');
+		expect(plan.repos).toEqual([{ key: "main", path: "/repo" }]);
+		expect(plan.policy).toEqual({ effort: "deep" });
+		expect(plan.deliverables[0]?.reviews).toEqual([{ lens: "contracts" }]);
+	});
+});
+
 describe("what the schema will not let an author say", () => {
 	it("offers workflow review intent, never a persona or agent kind", () => {
 		const schema = JSON.stringify(authoring().tool.parameters);
-		expect(schema).toContain('"review"');
+		expect(schema).toContain('"reviews"');
 		expect(schema).toContain("lens");
 		expect(schema).toContain("model");
 		// Routable review intent: a tier and a family request, neither of which

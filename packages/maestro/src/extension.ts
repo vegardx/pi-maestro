@@ -1,31 +1,26 @@
 import type {
 	ExtensionCommandContext,
 	ExtensionContext,
-	ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
-import { PLAN_INTENT_TOOL } from "./authoring.js";
+import { type AuthoringComplete, createSessionAuthor } from "./authoring.js";
 import { createAuditedBash } from "./bash-tool.js";
 import {
+	type Announce,
 	beginModeExit,
 	createDialogGate,
 	createModeExitController,
-	type ExitFlowPhase2Hook,
+	type ExitFlowDeps,
+	type ExitFlowOutcome,
+	type ModeExitContext,
 	type ModeExitHook,
-	type ToolResultContext,
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
-import { type PendingExit, readPendingExit } from "./pending-exit.js";
-import {
-	inspectPlan,
-	type Plan,
-	type PlanHostPort,
-	type PlanPolicy,
-} from "./plan.js";
+import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
 import { createPlanCommand, PLAN_WORKFLOW_REF } from "./plan-command.js";
 import { planHostPort } from "./plan-host.js";
-import { EFFORTS, planDigest } from "./plan-input.js";
+import { planDigest } from "./plan-input.js";
 import {
 	gatedPublishUI,
 	isWorkflowShipped,
@@ -34,13 +29,7 @@ import {
 	WORKFLOW_SHIPPED_CHANNEL,
 	watchShippedRuns,
 } from "./publish.js";
-import {
-	createSeat,
-	type ExitWindow,
-	intentToolAvailable,
-	planToolAvailable,
-	type Seat,
-} from "./seat.js";
+import { createSeat, type Seat } from "./seat.js";
 import {
 	acquireWorkflowClient,
 	acquireWorkflowClientOrWarn,
@@ -49,8 +38,8 @@ import {
 
 /**
  * Re-exported because the `/mode` handler is the hook's only caller and this
- * is where a reader looks for it. The hook itself, and phase 1 behind it, live
- * in `exit-flow.ts`.
+ * is where a reader looks for it. The hook itself, and the whole exit behind
+ * it, live in `exit-flow.ts`.
  */
 export { beginModeExit, type ModeExitHook };
 
@@ -83,16 +72,13 @@ export const PLAN_MODE_RUN_REFUSAL =
 /**
  * Why a tool call cannot happen in this posture, or nothing.
  *
- * The exit's two tools are here as defence in depth only: the registration
- * already withholds them (`planToolAvailable`, `intentToolAvailable`), so a
- * call that reaches this point means a host kept a stale tool set. Worth a
- * named refusal rather than a silent write — and the refusal NAMES THE MISSING
- * STEP, because "the plan tool is not held" is unactionable to a model that has
- * been asked for a plan.
+ * Two rules, and they are different in kind. Direct mutation in plan mode is
+ * the posture itself: plan mode is read-only and the tools that write are the
+ * ones it withholds.
  *
- * WORKFLOW RUNS ARE THE ONE GATE HERE THAT IS NOT DEFENCE IN DEPTH. A run is
- * safe from plan mode — it touches neither this working tree nor the host — and
- * it is still refused to the model there, because safe was never the question.
+ * WORKFLOW RUNS ARE THE OTHER, AND THEY ARE NOT ABOUT SAFETY. A run is safe
+ * from plan mode — it touches neither this working tree nor the host — and it
+ * is still refused to the model there, because safe was never the question.
  * Plan mode is a conversation, a run is the seat acting, and the two ways a run
  * starts from plan mode are the person asking for one with `/workflow run` and
  * the exit starting the plan's own. This was written as guidance twice — in the
@@ -101,59 +87,20 @@ export const PLAN_MODE_RUN_REFUSAL =
  * exists to prevent. Guidance that fails twice is a rule, so the seat enforces
  * it. The seat's own headless `plan-review` is unaffected: it goes through the
  * runtime's `runBuiltin`, not through the model's tools.
+ *
+ * There is nothing here about writing a plan any more. The document is not a
+ * tool call: the exit asks the model for it directly, outside the agent loop
+ * and with no tools offered at all.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
 	toolName: string,
-	window: ExitWindow = "none",
 ): string | undefined {
 	if (mode === "plan" && DIRECT_MUTATION_TOOLS.has(toolName))
 		return `Mode plan is read-only; switch to /mode auto or /mode hack before using ${toolName}.`;
 	if (mode === "plan" && MODEL_STARTED_RUN_TOOLS.has(toolName))
 		return PLAN_MODE_RUN_REFUSAL;
-	if (toolName === "plan" && !planToolAvailable(mode, window))
-		return window === "intent"
-			? "The `plan` tool opens once we have agreed what we are doing: submit two or three sentences with `plan_intent` and wait for the dialog to be answered."
-			: "The `plan` tool is not held in plan mode; it is offered on the way out, so run /mode auto or /mode hack and answer the exit dialogs.";
-	if (toolName === PLAN_INTENT_TOOL && !intentToolAvailable(mode, window))
-		return "`plan_intent` belongs to the plan-mode exit and is held only while one is in progress; there is nothing waiting for a description right now.";
 	return undefined;
-}
-
-/**
- * What a stored plan write should say, once, to the human watching.
- *
- * The tool result already tells the MODEL how to run the plan. This is the
- * other half, and now also the one place a human is told where the `plan` tool
- * lives: plan mode is the conversation and does not hold it, the exit offers
- * it, and the model cannot start a run from plan mode at all — the person does,
- * with `/workflow run`, or the exit does with the plan's own run.
- *
- * Returns the text rather than notifying, so the decision is testable without a
- * UI and so the event wiring stays one line.
- */
-export function planStoredNotice(
-	event: Pick<ToolResultEvent, "toolName" | "isError" | "details">,
-	mode: ModeName,
-): string | undefined {
-	if (event.toolName !== "plan" || event.isError) return undefined;
-	const details = event.details as
-		| { stored?: unknown; slug?: unknown }
-		| undefined;
-	if (details?.stored !== true || typeof details.slug !== "string")
-		return undefined;
-	return (
-		`Stored plan \`${details.slug}\`. Run it with \`/plan run ${details.slug} [${EFFORTS.join("|")}]\`; ` +
-		`approval happens at the run's \`approve-plan\` checkpoint.` +
-		" The `plan` tool is not held in plan mode — only while leaving it. The" +
-		" model does not start workflow runs in plan mode either: the seat refuses" +
-		" `workflow_run` and `workflow_propose` there. You start any run you want" +
-		" with `/workflow run <ref>`, and the plan-mode exit starts this plan's" +
-		" own run." +
-		(mode === "plan"
-			? " To hand-edit instead, leave this posture with `/mode auto`."
-			: "")
-	);
 }
 
 export interface SeatHost {
@@ -163,10 +110,30 @@ export interface SeatHost {
 	 * Steering text for the session. Optional because the seat must start on a
 	 * host that has none; `/plan run` then prints the call instead of injecting
 	 * it, rather than pretending it handed something over.
+	 *
+	 * The plan-mode exit uses it for ONE thing: the run hand-off, which is a
+	 * `workflow_run` call the model has to make because the workflow client this
+	 * seat holds is read-only. Nothing about writing the plan travels this way
+	 * any more.
 	 */
 	sendUserMessage?(
 		content: string,
 		options?: { deliverAs?: "steer" | "followUp" },
+	): void;
+	/**
+	 * A custom message into the session's own history.
+	 *
+	 * How the conversation learns what the exit did: one message naming the
+	 * plan, its digest and the outcome. Optional, because a host without it is
+	 * still a working seat — the person sees the same facts in the notices.
+	 */
+	sendMessage?(
+		message: {
+			customType: string;
+			content: string;
+			display: boolean;
+		},
+		options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): void;
 	/**
 	 * Pi's live tool set. Optional as a pair: `registerTool` has no inverse, so
@@ -189,20 +156,20 @@ export interface SeatHost {
 export interface StartSeatOptions {
 	readonly cwd?: string;
 	readonly agentDir?: string;
-	/** @see SeatOptions.exitWindow — the exit flow's record, once it exists. */
-	readonly exitWindow?: () => ExitWindow;
 	/** @see beginModeExit — overridable so a test can watch the seam fire. */
 	readonly beginModeExit?: ModeExitHook;
-	/** Phase 2 — overridable so a test can watch the `tool_result` trigger fire. */
-	readonly continueModeExit?: ExitFlowPhase2Hook;
+	/** The exit itself — overridable so a test can watch the seam fire. */
+	readonly runExitFlow?: (deps: ExitFlowDeps) => Promise<ExitFlowOutcome>;
+	/** How the model is asked. Overridable so a test needs no provider. */
+	readonly complete?: (ctx: ModeExitContext) => AuthoringComplete;
 	/**
 	 * The live session, as the two questions a pinned review raises.
 	 * @see SeatOptions.host
 	 *
-	 * Threaded to all three readers of one document — the `plan` tool, the
-	 * store, and phase 2's re-validation of a plan it rewrote — because a plan
-	 * accepted against one host and re-read against another is a plan this seat
-	 * refuses in the middle of its own exit.
+	 * Threaded to both readers of one document — the store, and the exit's own
+	 * re-validation of a plan it rewrote — because a plan accepted against one
+	 * host and re-read against another is a plan this seat refuses in the
+	 * middle of its own exit.
 	 */
 	readonly host?: () => PlanHostPort | undefined;
 	/**
@@ -219,13 +186,11 @@ export interface StartSeatOptions {
 export interface SeatEntry {
 	seat(): Seat;
 	currentMode(): ModeName;
-	/** How far the plan-mode exit has got, read from its record. */
-	exitWindow(): ExitWindow;
-	/** Resolves once the exit's detached dialog work, if any, has finished. */
+	/** Resolves once the exit flow, if any, has finished. */
 	exitSettled(): Promise<void>;
 	/**
-	 * A session replacement: end an exit flow that is mid-dialog and drop its
-	 * record. Idempotent, and a no-op when no flow is open.
+	 * A session replacement: end an exit flow that is mid-dialog or mid-request.
+	 * Idempotent, and a no-op when no flow is open.
 	 */
 	abortExitFlow(): void;
 	/**
@@ -247,8 +212,6 @@ export interface SeatEntry {
 		runId?: string,
 		options?: PublishOptions,
 	): Promise<Publication>;
-	/** The `tool_result` trigger: phase 2, when the model's `plan` call stored. */
-	onToolResult(event: ToolResultEvent, ctx: ToolResultContext): Promise<void>;
 	/** A dialog opened by Pi or another extension; both flows defer. */
 	notePromptStart(): void;
 	notePromptEnd(): void;
@@ -267,48 +230,15 @@ export function startSeat(
 	const cwd = options.cwd ?? process.cwd();
 	let built: Seat | undefined;
 	const registered = new Set<string>();
-
 	/**
 	 * The session the `/mode` handler last ran in.
 	 *
-	 * The seat is built before any session context exists, and the pending
-	 * record is keyed by session, so the id is learned from the first command
-	 * that carries one rather than guessed at construction.
+	 * The seat is built before any session context exists and the store records
+	 * who wrote a plan, so the id is learned from the first command that carries
+	 * one rather than guessed at construction. It is the fallback behind the
+	 * live context, which a seat that has only ever seen a command does not have.
 	 */
 	let sessionId: string | undefined;
-
-	/**
-	 * How far the exit has got. A record that cannot be read answers `none`: it
-	 * is not a window this will open on trust, and phase 1 is where the human is
-	 * told about it, loudly, with the path to remove.
-	 *
-	 * `intent` and `plan` are the same record at two moments — before and after
-	 * the description is agreed — and the difference is what decides which of
-	 * the two exit tools the seat holds.
-	 */
-	const pendingRecord = (): PendingExit | null => {
-		if (!sessionId) return null;
-		try {
-			return readPendingExit(sessionId, options.agentDir);
-		} catch {
-			return null;
-		}
-	};
-	const exitWindow =
-		options.exitWindow ??
-		((): ExitWindow => {
-			const record = pendingRecord();
-			if (!record) return "none";
-			return record.intent === undefined ? "intent" : "plan";
-		});
-	/**
-	 * The dials the exit settled, which the `plan` tool attaches to the document
-	 * it stores. The same record `exitWindow` reads, so "is a window open" and
-	 * "what was decided" cannot disagree; no record — auto or hack with no exit
-	 * in progress — means the plan carries no policy and takes the defaults.
-	 */
-	const exitPolicy = (): PlanPolicy | undefined => pendingRecord()?.policy;
-
 	const events = pi.events;
 	/**
 	 * One gate for every dialog this seat opens.
@@ -320,27 +250,47 @@ export function startSeat(
 	 * defer both.
 	 */
 	const gate = createDialogGate();
+	/**
+	 * What the conversation is told, and the only thing it is told.
+	 *
+	 * `deliverAs: "nextTurn"` because nothing about this needs a turn of its
+	 * own: it is a fact the next turn should have, not a question.
+	 */
+	const announce: Announce | undefined = pi.sendMessage
+		? (message) => {
+				pi.sendMessage?.(
+					{
+						customType: message.customType,
+						content: message.content,
+						display: message.display,
+					},
+					{ deliverAs: "nextTurn" },
+				);
+			}
+		: undefined;
 	const exit = createModeExitController({
 		setMode: (name) => {
 			seat().setMode(name);
 		},
 		cwd,
 		gate,
-		// The exit no longer moves the mode to open its tool window, so the
-		// mode-change listener below cannot be what reconciles the live set. The
-		// controller says so at every point the record appears, gains its agreed
-		// description, or goes.
-		retools: () => {
-			if (built) syncTools(built);
-		},
-		// Phase 2 reads the document the model just wrote and writes accepted
+		// How the model is asked: the session's own model, the session's own
+		// history, and no tools. The context comes from the `/mode` handler, so
+		// the model the plan is written by is the one the person is talking to.
+		complete:
+			options.complete ??
+			((ctx) =>
+				(ctx as { model?: unknown }).model
+					? createSessionAuthor(ctx as unknown as ExtensionContext)
+					: undefined),
+		// The exit reads the document it just obtained and writes accepted
 		// patches back to it, so it gets the seat's own store rather than a
 		// second reader of the same directory.
 		store: () => seat().store,
-		// The same host the `plan` tool and the store were given. Phase 2
-		// re-validates what it rewrites — `diverse` written onto heavy lenses,
-		// every accepted patch — and a reading without the host would refuse the
-		// pinned model it had just accepted.
+		// The same host the store was given. The exit re-validates what it
+		// rewrites — `diverse` written onto heavy lenses, every accepted patch —
+		// and a reading without the host would refuse the pinned model the store
+		// had just accepted.
 		...(options.host
 			? {
 					inspect: (plan: Plan) =>
@@ -357,7 +307,7 @@ export function startSeat(
 				.tools.definitionsFor("maestro")
 				.find((definition) => definition.name === "bash");
 			// The controller declares only what it reads of the context; the
-			// value here is the `tool_result` handler's own `ExtensionContext`,
+			// value here is the `/mode` handler's own `ExtensionCommandContext`,
 			// which is what the tool needs to confirm and to render.
 			return tool
 				? createAuditedBash(tool, ctx as ExtensionContext, "maestro-readiness")
@@ -369,7 +319,8 @@ export function startSeat(
 						acquireWorkflowClientOrWarn(events, ctx, notify, "run"),
 				}
 			: {}),
-		...(options.continueModeExit ? { phase2: options.continueModeExit } : {}),
+		...(options.runExitFlow ? { flow: options.runExitFlow } : {}),
+		...(announce ? { announce } : {}),
 		...(options.agentDir ? { agentDir: options.agentDir } : {}),
 		...(pi.sendUserMessage
 			? { sendUserMessage: pi.sendUserMessage.bind(pi) }
@@ -413,15 +364,13 @@ export function startSeat(
 		if (built) return built;
 		const created = createSeat({
 			cwd,
-			exitWindow,
-			exitPolicy,
 			sessionId: () => options.sessionId?.() ?? sessionId,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(options.host ? { host: options.host } : {}),
 		});
 		built = created;
 		// Registration follows the mode, so it follows every route into one —
-		// the `/mode` command today, the exit flow's own `setMode` tomorrow.
+		// the `/mode` command, and the exit flow's own `setMode`.
 		created.onModeChange(() => syncTools(created));
 		syncTools(created);
 		return created;
@@ -430,8 +379,9 @@ export function startSeat(
 	pi.registerCommand("mode", {
 		description: `Switch posture. /mode [${MODE_NAMES.join("|")}]`,
 		handler: async (args: string, ctx: ExtensionCommandContext) => {
-			// The session id is learned here because this is the first context the
-			// seat is ever handed; the pending record is keyed by it.
+			// Learned here because this is the first context the seat is ever
+			// handed, and the store will not write a plan it cannot name an
+			// author for.
 			try {
 				sessionId = ctx.sessionManager?.getSessionId() ?? sessionId;
 			} catch {
@@ -450,11 +400,12 @@ export function startSeat(
 				return;
 			}
 			const previous = seat().mode().name;
-			// Phase 1 of the exit flow belongs here, before the posture changes,
-			// because everything it asks about is what the human knows and the
-			// plan does not yet say. It owns the switch it straddles: `stay` is
-			// *Keep planning* and an aborted or refused flow, `settled` means the
-			// flow moved the posture itself, in the order it needed.
+			// THE WHOLE EXIT RUNS HERE, inside the `/mode` call, because it no
+			// longer yields to a model turn: it asks its dialogs, asks the model
+			// directly for the description and the document, and ends in a run or
+			// in the conversation. It owns the switch it straddles: `stay` is
+			// *Keep planning* and every path that ends without a run, `settled`
+			// means the flow moved the posture itself, in the order it needed.
 			const decision =
 				previous !== wanted
 					? ((await onModeExit(previous, wanted as ModeName, ctx)) ?? "switch")
@@ -554,7 +505,6 @@ export function startSeat(
 	return {
 		seat,
 		currentMode: () => built?.mode().name ?? "plan",
-		exitWindow,
 		exitSettled: exit.settled,
 		abortExitFlow: exit.abort,
 		runtimeBound: () => {
@@ -562,7 +512,6 @@ export function startSeat(
 			if (built) syncTools(built);
 		},
 		publish,
-		onToolResult: exit.onToolResult,
 		notePromptStart: exit.notePromptStart,
 		notePromptEnd: exit.notePromptEnd,
 	};
@@ -630,11 +579,7 @@ export default defineExtension(
 		});
 		entry.seat();
 		pi.on("tool_call", (event) => {
-			const reason = seatToolBlockReason(
-				entry.currentMode(),
-				event.toolName,
-				entry.exitWindow(),
-			);
+			const reason = seatToolBlockReason(entry.currentMode(), event.toolName);
 			if (reason) return { block: true, reason };
 		});
 		/**
@@ -667,15 +612,12 @@ export default defineExtension(
 				}
 			})();
 		};
-		pi.on("tool_result", async (event, ctx) => {
+		// Nothing about the plan comes through here any more: the exit asks the
+		// model for the document itself. What is left is the one thing a bus
+		// listener cannot get for itself — a live session context.
+		pi.on("tool_result", (_event, ctx) => {
 			live = ctx;
 			watch(ctx);
-			const notice = planStoredNotice(event, entry.currentMode());
-			if (notice) ctx.ui.notify(notice, "info");
-			// Phase 2 of the exit flow. It fires only when this very session has
-			// an exit in progress, and it reads the session id from THIS context
-			// rather than from whatever the `/mode` handler learned earlier.
-			await entry.onToolResult(event, ctx);
 		});
 		pi.on("turn_start", (_event, ctx) => {
 			live = ctx;

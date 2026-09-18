@@ -1,21 +1,30 @@
-// Authoring: one tool, the whole plan, every error at once.
+// Authoring: the whole plan, every error at once, and no tool anywhere.
 //
-// The shape being tested is the absence of an incremental API. There is no
-// add-a-deliverable and no move-a-task, so there are no rules about what may be
-// edited once something has started, no ordering between calls, and no
+// The shape being tested is the absence of two things. There is no incremental
+// API — no add-a-deliverable, no move-a-task — so there are no rules about what
+// may be edited once something has started, no ordering between calls, and no
 // half-written state that is valid only because the next call has not arrived.
-// A plan is either storable or it comes back with everything wrong with it.
+// And there is no TOOL: `defineTool` used to check the arguments against the
+// schema before `execute` ran, and a harness that asks a model directly has
+// nothing doing that for it. So the whole path is plain functions over a parsed
+// JSON value — `authoredPlanProblems` → `withoutEmptyOptionals` → `planFrom` →
+// `inspectPlan` → `savePlan` — and that is what these tests drive.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPlanTool } from "../packages/maestro/src/authoring.js";
-import type { ModeName } from "../packages/maestro/src/mode.js";
 import {
+	DESCRIPTION_SYSTEM_PROMPT,
+	renderDocumentSystemPrompt,
+} from "../packages/maestro/src/authoring.js";
+import { inspectPlan, type Plan } from "../packages/maestro/src/plan.js";
+import {
+	type AuthoredPlan,
 	authoredPlanProblems,
 	PLAN_DOCUMENT_GUIDE,
+	PlanSchema,
 	planFrom,
 	withoutEmptyOptionals,
 } from "../packages/maestro/src/plan-document.js";
@@ -43,11 +52,19 @@ function repo(): string {
 	return dir;
 }
 
-function authoring(cwd: string = repo(), mode?: ModeName) {
+/**
+ * The harness's own path, in one function.
+ *
+ * Exactly what `runExitFlow` does with an answer from the model, in the same
+ * order: the schema, the empty-optional drop, the stored shape, the validator,
+ * and only then disk. Written once here so the test and the flow cannot come to
+ * disagree about which reading of a document is the reading.
+ */
+function authoring(cwd: string = repo()) {
 	const root = temp("authoring");
-	// One host for the tool and the store, as the seat wires them: a plan the
-	// tool accepted and the store then refused would be a second opinion about
-	// what is legal, and that is the bug the shared seam exists to prevent.
+	// One host for the validation and the store, as the seat wires them: a plan
+	// the exit accepted and the store then refused would be a second opinion
+	// about what is legal, and that is the bug the shared seam exists to prevent.
 	const host = () =>
 		fakeHost({
 			models: ["anthropic/fable-5"],
@@ -59,27 +76,26 @@ function authoring(cwd: string = repo(), mode?: ModeName) {
 		sessionId: () => "authoring-session",
 		host,
 	});
-	const tool = createPlanTool({
-		store,
-		cwd: () => cwd,
-		host,
-		...(mode ? { mode: () => mode } : {}),
-	});
-	const write = (plan: unknown) =>
-		(
-			tool.execute as unknown as (
-				id: string,
-				p: unknown,
-			) => Promise<{
-				content: { text: string }[];
-				details: {
-					stored: boolean;
-					errors: readonly string[];
-					warnings: readonly string[];
-				};
-			}>
-		)("call-1", plan);
-	return { store, tool, write, cwd };
+	const write = (
+		document: unknown,
+	): {
+		stored: boolean;
+		errors: readonly string[];
+		warnings: readonly string[];
+		plan?: Plan;
+	} => {
+		const schema = authoredPlanProblems(document);
+		if (schema.length > 0)
+			return { stored: false, errors: schema, warnings: [] };
+		const plan = planFrom(withoutEmptyOptionals(document as AuthoredPlan), {
+			cwd,
+		});
+		const { errors, warnings } = inspectPlan(plan, undefined, host());
+		if (errors.length > 0) return { stored: false, errors, warnings };
+		store.savePlan(plan);
+		return { stored: true, errors, warnings, plan };
+	};
+	return { store, write, cwd };
 }
 
 const minimal = {
@@ -95,9 +111,9 @@ const minimal = {
 };
 
 describe("a plan is written whole", () => {
-	it("stores it, and says what the graph turned out to be", async () => {
+	it("stores the graph the document describes", () => {
 		const a = authoring();
-		const result = await a.write({
+		const result = a.write({
 			...minimal,
 			deliverables: [
 				minimal.deliverables[0],
@@ -121,52 +137,24 @@ describe("a plan is written whole", () => {
 			],
 		});
 
-		expect(result.details.stored).toBe(true);
-		expect(a.store.loadPlan("arc")?.deliverables).toHaveLength(2);
-
-		// Read back as the graph, because an author who cannot see the edges they
-		// just wrote will write the same wrong one twice.
-		const text = result.content[0].text;
-		expect(text).toContain("- api: 1 task");
-		expect(text).toContain("- ui: 2 tasks, read by correctness after api");
-		// The trailer is the offer, not a status line: both ways to start a run,
-		// and who approves it — which is never this tool and never the model.
-		expect(text).toContain("Run it: `/plan run arc [cheap|standard|deep]`");
-		expect(text).toContain(
-			'workflow_run { ref: "plan-to-ship", input: { plan, planDigest, effort } }',
-		);
-		expect(text).toContain("approve-plan");
-		expect(text).not.toContain("Workflow execution is unavailable");
+		expect(result.stored).toBe(true);
+		const stored = a.store.loadPlan("arc");
+		expect(stored?.deliverables).toHaveLength(2);
+		expect(stored?.deliverables[1]).toMatchObject({
+			id: "ui",
+			after: ["api"],
+			reads: [],
+		});
+		expect(stored?.deliverables[1]?.tasks).toHaveLength(2);
 	});
 
-	it("offers the way out of plan mode, which otherwise has none", async () => {
-		// Plan mode is a tool posture with no exit path, so a stored plan is the
-		// nearest thing it has to a completion point. Both ways on are named:
-		// hand the plan to a run, or leave the posture and edit by hand.
-		const inPlanMode = await authoring(repo(), "plan").write(minimal);
-		const text = inPlanMode.content[0].text;
-		expect(text).toContain("`/mode auto`");
-		expect(text).toContain("Run it: `/plan run arc");
-		// A run is not the model's to start from here at all: the seat refuses
-		// both tools, and the trailer names the two ways one does start.
-		expect(text).toContain("`workflow_run` and `workflow_propose` are");
-		expect(text).toContain("refused here");
-		expect(text).toContain("`/workflow run`");
-		expect(text).toContain("blind reviewer");
-
-		// Not said in a posture that can already write: it would be noise.
-		const inAuto = await authoring(repo(), "auto").write(minimal);
-		expect(inAuto.content[0].text).not.toContain("/mode auto");
-		expect(inAuto.content[0].text).toContain("Run it: `/plan run arc");
-	});
-
-	it("drops an optional value the author left empty, rather than refusing it", async () => {
-		// The by-hand pass that produced this rule lost a whole `plan` call to
-		// ten errors of exactly this shape: "`` is not a safe ambient skill name"
-		// and "delegated task model must be a concrete provider/model ID", for a
+	it("drops an optional value the author left empty, rather than refusing it", () => {
+		// The by-hand pass that produced this rule lost a whole document to ten
+		// errors of exactly this shape: "`` is not a safe ambient skill name" and
+		// "delegated task model must be a concrete provider/model ID", for a
 		// document whose author had meant to say nothing at all.
 		const a = authoring();
-		const result = await a.write({
+		const result = a.write({
 			slug: "arc",
 			title: "Arc",
 			deliverables: [
@@ -183,8 +171,8 @@ describe("a plan is written whole", () => {
 			],
 			body: "  ",
 		});
-		expect(result.details.errors).toEqual([]);
-		expect(result.details.stored).toBe(true);
+		expect(result.errors).toEqual([]);
+		expect(result.stored).toBe(true);
 
 		// Nothing empty reached the stored document — which is the document the
 		// digest covers and the blind reviewer reads.
@@ -202,11 +190,11 @@ describe("a plan is written whole", () => {
 		]);
 	});
 
-	it("still refuses a REQUIRED field left empty, by name", async () => {
+	it("still refuses a REQUIRED field left empty, by name", () => {
 		// The drop is narrow on purpose: an empty `id` is a claim this document
 		// makes, and a silent drop would turn it into a different error later.
 		const a = authoring();
-		const result = await a.write({
+		const result = a.write({
 			slug: "arc",
 			title: "Arc",
 			deliverables: [
@@ -218,9 +206,8 @@ describe("a plan is written whole", () => {
 				},
 			],
 		});
-		expect(result.details.stored).toBe(false);
-		// Both required-empty fields are named, and neither was quietly dropped.
-		expect(result.details.errors).toEqual([
+		expect(result.stored).toBe(false);
+		expect(result.errors).toEqual([
 			"deliverables[0]: no id",
 			"deliverables[0].reviews[0]: a review needs a lens; a task that is not " +
 				"a review is simply a task, and belongs in `tasks` with no review entry",
@@ -228,46 +215,45 @@ describe("a plan is written whole", () => {
 		expect(a.store.loadPlan("arc")).toBeNull();
 	});
 
-	it("defaults the repo to where the maestro is sitting", async () => {
+	it("defaults the repo to where the maestro is sitting", () => {
 		const a = authoring();
-		await a.write(minimal);
+		a.write(minimal);
 		expect(a.store.loadPlan("arc")?.repos).toEqual([
 			{ key: "main", path: a.cwd },
 		]);
 	});
 
-	it("stores a plan whose repository is dirty, and says so", async () => {
+	it("stores a plan whose repository is dirty, and says so", () => {
 		// Non-fatal on purpose: authoring a plan while the tree has edits in it
-		// is the normal case. The author is told because every worktree the run
+		// is the normal case. It is reported because every worktree the run
 		// creates branches from HEAD, so those edits are not in the run.
 		const a = authoring();
 		writeFileSync(join(a.cwd, "scratch.txt"), "in progress\n", "utf8");
-		const result = await a.write(minimal);
-		expect(result.details.stored).toBe(true);
-		expect(result.details.warnings).toContainEqual(
+		const result = a.write(minimal);
+		expect(result.stored).toBe(true);
+		expect(result.warnings).toContainEqual(
 			expect.stringContaining("uncommitted changes"),
 		);
-		expect(result.content[0].text).toContain("uncommitted changes");
 	});
 
-	it("refuses a repository path that is not a working-tree root", async () => {
+	it("refuses a repository path that is not a working-tree root", () => {
 		const a = authoring();
-		const result = await a.write({
+		const result = a.write({
 			...minimal,
 			repos: [{ key: "main", path: temp("not-a-repo") }],
 		});
-		expect(result.details.stored).toBe(false);
-		expect(result.content[0].text).toContain(
+		expect(result.stored).toBe(false);
+		expect(result.errors.join("\n")).toContain(
 			"is not an existing Git working-tree root",
 		);
 	});
 
-	it("takes the same slug again as a rewrite, needing no merge", async () => {
+	it("takes the same slug again as a rewrite, needing no merge", () => {
 		// Extending a plan is sending it again with more in it. There is no
 		// merge, so there is nothing to get wrong about merging.
 		const a = authoring();
-		await a.write(minimal);
-		await a.write({
+		a.write(minimal);
+		a.write({
 			...minimal,
 			title: "Arc, extended",
 			deliverables: [
@@ -282,15 +268,15 @@ describe("a plan is written whole", () => {
 });
 
 describe("a rejected plan comes back with everything wrong with it", () => {
-	it("reports every error in one pass, and stores nothing", async () => {
+	it("reports every error in one pass, and stores nothing", () => {
 		// One error per round trip through five round trips is an author that
 		// starts guessing.
 		const a = authoring();
-		const result = await a.write({
+		const result = a.write({
 			slug: "arc",
 			title: "Arc",
 			deliverables: [
-				{ id: "Bad Id", title: "One", tasks: [] },
+				{ id: "Bad Id", title: "One", tasks: [{ id: "t", title: "T" }] },
 				{
 					id: "two",
 					title: "",
@@ -306,32 +292,36 @@ describe("a rejected plan comes back with everything wrong with it", () => {
 			],
 		});
 
-		expect(result.details.stored).toBe(false);
-		const text = result.content[0].text;
+		expect(result.stored).toBe(false);
+		const text = result.errors.join("\n");
 		expect(text).toContain("cannot be a workflow id");
-		expect(text).toContain("no tasks");
 		expect(text).toContain("no such deliverable");
 		expect(text).toContain("without waiting for it");
-		expect(text).toContain("Send the whole plan again");
 		expect(a.store.loadPlan("arc")).toBeNull();
 	});
 
-	it("counts them in words a reader can act on", async () => {
+	it("is refused by the schema before the validator ever sees it", () => {
+		// The schema is the first reader, because `defineTool` is not one of the
+		// readers any more: a deliverable with no tasks is a shape this build
+		// cannot read, and that is a different sentence from a graph it can read
+		// and does not like.
 		const a = authoring();
-		const one = await a.write({
+		const result = a.write({
 			...minimal,
 			deliverables: [{ id: "api", title: "The API", tasks: [] }],
 		});
-		expect(one.content[0].text).toContain("One thing is wrong");
+		expect(result.stored).toBe(false);
+		expect(result.errors.join("\n")).toContain("/deliverables/0/tasks");
+		expect(a.store.loadPlan("arc")).toBeNull();
 	});
 
-	it("leaves an already-stored plan untouched when a rewrite is rejected", async () => {
+	it("leaves an already-stored plan untouched when a rewrite is rejected", () => {
 		// The store refuses invalid writes, so a bad rewrite cannot damage what
 		// is already there — but it is worth pinning, because "I broke the plan
 		// while trying to extend it" is unrecoverable in a way an error is not.
 		const a = authoring();
-		await a.write(minimal);
-		await a.write({
+		a.write(minimal);
+		a.write({
 			...minimal,
 			deliverables: [{ id: "api", title: "x", tasks: [] }],
 		});
@@ -365,7 +355,7 @@ function propertyNames(
 // sentence in a field description, the shape is what needs changing.
 
 describe("the document's own guidance", () => {
-	/** Every `description` the tool carries: its own, and every field's. */
+	/** Every `description` the document carries: its own, and every field's. */
 	function descriptions(node: unknown, into: string[] = []): string[] {
 		if (!node || typeof node !== "object") return into;
 		for (const [key, value] of Object.entries(node)) {
@@ -376,8 +366,7 @@ describe("the document's own guidance", () => {
 	}
 
 	it("stays under 1.2 KB in total, with nothing shouting", () => {
-		const tool = authoring().tool;
-		const all = [tool.description, ...descriptions(tool.parameters)];
+		const all = [PLAN_DOCUMENT_GUIDE, ...descriptions(PlanSchema)];
 		const bytes = all.reduce(
 			(total, text) => total + Buffer.byteLength(text, "utf8"),
 			0,
@@ -391,19 +380,19 @@ describe("the document's own guidance", () => {
 		}
 	});
 
-	it("is the same paragraph wherever the document is asked for", () => {
-		// The tool is one way of asking. A caller that asks another way says the
-		// same thing, or the two drift.
-		expect(authoring().tool.description).toBe(PLAN_DOCUMENT_GUIDE);
+	it("travels whole in the system prompt that asks for the document", () => {
+		// The guide is one paragraph and the schema is the contract; the prompt
+		// carries both, so what a model is told and what is enforced are one
+		// thing.
+		const prompt = renderDocumentSystemPrompt({}, "A description, agreed.");
+		expect(prompt).toContain(PLAN_DOCUMENT_GUIDE);
+		expect(prompt).toContain(JSON.stringify(PlanSchema, null, 2));
+		// The description prompt asks for prose, so it carries neither.
+		expect(DESCRIPTION_SYSTEM_PROMPT).not.toContain(PLAN_DOCUMENT_GUIDE);
 	});
 });
 
 // ── Callable without a tool ──────────────────────────────────────────────────
-//
-// `defineTool` checks its arguments against the schema before `execute` runs.
-// A caller that asks a model for the document another way has nothing doing
-// that for it, so the check is a plain function over a parsed JSON value —
-// and so are the two steps from an authored document to a stored one.
 
 describe("the document, read without a tool", () => {
 	const authored = {
@@ -445,7 +434,7 @@ describe("the document, read without a tool", () => {
 
 describe("what the schema will not let an author say", () => {
 	it("offers workflow review intent, never a persona or agent kind", () => {
-		const schema = JSON.stringify(authoring().tool.parameters);
+		const schema = JSON.stringify(PlanSchema);
 		expect(schema).toContain('"reviews"');
 		expect(schema).toContain("lens");
 		expect(schema).toContain("model");
@@ -459,16 +448,21 @@ describe("what the schema will not let an author say", () => {
 		expect(schema).not.toContain('"worker"');
 	});
 
-	it("has no field for anything a run decides", () => {
+	it("has no field for anything a run decides, or any dial the seat owns", () => {
 		// No status, no branch, no worktree, no PR. The plan is what was agreed;
 		// what happened is a separate record, and an author that could write a
-		// status could write a lie.
-		//
-		// Asserted over the schema's PROPERTY NAMES rather than its bytes, because
-		// `policy.publish.mode` names a branch and a pull request as things to ASK
-		// for — a decision the plan makes, not a record of what a run did.
-		const names = [...propertyNames(authoring().tool.parameters)];
-		for (const runtime of ["status", "branch", "worktree", "handoff", "pr"])
+		// status could write a lie. No `policy` and no `stages` either: those are
+		// the seat's, settled before the document exists.
+		const names = [...propertyNames(PlanSchema)];
+		for (const runtime of [
+			"status",
+			"branch",
+			"worktree",
+			"handoff",
+			"pr",
+			"policy",
+			"stages",
+		])
 			expect(names).not.toContain(runtime);
 	});
 });

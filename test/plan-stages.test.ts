@@ -2,7 +2,7 @@
 //
 // NEITHER IS AUTHORED, and that is the property most of this file is about.
 // Version 5 removed `deliverables[].stages` from the document and removed
-// `policy` from the `plan` tool: a deliverable's stage list is derived from its
+// `policy` from the schema: a deliverable's stage list is derived from its
 // tasks, its `reviews` and the dials the seat attaches, so there is exactly one
 // lowering and a person approving a plan is approving the run it describes.
 //
@@ -17,7 +17,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPlanTool } from "../packages/maestro/src/authoring.js";
 import {
 	DEFAULT_FIX_ROUNDS,
 	type Deliverable,
@@ -34,6 +33,13 @@ import {
 	withExplicitDiverse,
 } from "../packages/maestro/src/plan.js";
 import { renderPlan } from "../packages/maestro/src/plan-command.js";
+import {
+	type AuthoredPlan,
+	authoredPlanProblems,
+	PlanSchema,
+	planFrom,
+	withoutEmptyOptionals,
+} from "../packages/maestro/src/plan-document.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import {
 	compileStageDocument,
@@ -520,45 +526,31 @@ describe("reviews and policy survive the store", () => {
 		expect(planDigest(read as Plan)).toBe(planDigest(written));
 	});
 
-	it("is written by the plan tool, which offers reviews and never the dials", () => {
+	it("is written as a document that offers reviews and never the dials", () => {
 		const cwd = repo();
 		const store = createPlanStore({
 			cwd,
 			agentDir: temp("store"),
 			sessionId: () => "stages-session",
 		});
-		const tool = createPlanTool({
-			store,
-			cwd: () => cwd,
-			// The seat's own attachment: the dials a human already decided.
-			policy: () => policy,
-		});
-		const schema = JSON.stringify(tool.parameters);
+		const schema = JSON.stringify(PlanSchema);
 		expect(schema).toContain('"reviews"');
 		expect(schema).toContain('"lens"');
-		// Neither is the author's to write, so neither is a parameter.
+		// Neither is the author's to write, so neither is in the schema.
 		expect(schema).not.toContain('"stages"');
 		expect(schema).not.toContain('"policy"');
 
 		const stored = fixture(cwd);
 		// What the model sends is the document WITHOUT the dials; what is stored
-		// is that document with them attached.
-		const { policy: _dials, ...authored } = stored;
-		return (
-			tool.execute as unknown as (
-				id: string,
-				p: unknown,
-			) => Promise<{
-				content: { text: string }[];
-				details: { stored: boolean; errors: readonly string[] };
-			}>
-		)("call-1", authored).then((result) => {
-			expect(result.details.errors).toEqual([]);
-			expect(result.details.stored).toBe(true);
-			expect(store.loadPlan("arc")).toEqual(stored);
-			// Echoed back by lens, so an author sees who they just asked for.
-			expect(result.content[0].text).toContain("read by contracts, replay");
-		});
+		// is that document with them attached by the harness.
+		const { policy: dials, ...authored } = stored;
+		expect(authoredPlanProblems(authored)).toEqual([]);
+		const plan = planFrom(
+			withoutEmptyOptionals(authored as unknown as AuthoredPlan),
+			{ cwd, policy: dials },
+		);
+		store.savePlan(plan);
+		expect(store.loadPlan("arc")).toEqual(stored);
 	});
 
 	it("reads back in `/plan show` as what will run", () => {

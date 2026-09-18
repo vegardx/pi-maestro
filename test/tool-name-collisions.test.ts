@@ -75,8 +75,8 @@ describe("tool names", () => {
 	it("finds the tool definitions at all", () => {
 		const names = toolNames();
 		expect(names.size).toBeGreaterThan(1);
-		expect(names.has("plan")).toBe(true);
 		expect(names.has("delete")).toBe(true);
+		expect(names.has("suggest_next_prompt")).toBe(true);
 	});
 
 	it("registers no tool name from two different packages", () => {
@@ -91,7 +91,11 @@ describe("tool names", () => {
 
 	it("keeps the workflow seat surface singular", () => {
 		const names = toolNames();
-		expect(names.get("plan")).toEqual(["maestro"]);
+		expect(names.get("delete")).toEqual(["maestro"]);
+		// The document is not a tool call: the plan-mode exit asks the model for
+		// it directly, so no package defines a `plan` or `plan_intent` tool.
+		expect(names.has("plan")).toBe(false);
+		expect(names.has("plan_intent")).toBe(false);
 		expect(names.has("commit")).toBe(false);
 		expect(names.has("subagent")).toBe(false);
 		expect(names.has("finish")).toBe(false);

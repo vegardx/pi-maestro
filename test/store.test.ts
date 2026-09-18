@@ -11,6 +11,7 @@ import {
 	InvalidStateError,
 	UnsupportedStateError,
 } from "../packages/maestro/src/store.js";
+import { fakeHost } from "./fake-host.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -118,6 +119,57 @@ describe("plan store", () => {
 		expect(() => store.savePlan(withBy)).toThrow(
 			/carries `by`, which plan schema v4 renamed to `review`/,
 		);
+		expect(store.list()).toEqual([]);
+	});
+
+	// The store runs the SAME validation the plan tool ran, host included, so a
+	// plan the tool refused cannot reach disk through the store instead.
+	it("refuses a pinned review model the host does not have", () => {
+		const pinned = (model: string): Plan =>
+			({
+				...plan(),
+				deliverables: [
+					{
+						...plan().deliverables[0],
+						tasks: [
+							{ id: "build", title: "Build" },
+							{ id: "review", title: "Review", review: { lens: "c", model } },
+						],
+					},
+				],
+			}) as Plan;
+		const store = createPlanStore(root(), {
+			host: () => fakeHost({ models: ["anthropic/opus-5"] }),
+		});
+		expect(() => store.savePlan(pinned("anthropic/opus-9"))).toThrow(
+			/is not a model this host has/,
+		);
+		store.savePlan(pinned("anthropic/opus-5"));
+		expect(store.loadPlan("app")?.deliverables[0]?.tasks).toHaveLength(2);
+	});
+
+	// FAIL CLOSED. A store with no host cannot check a pin, so it refuses one
+	// rather than persisting what nothing verified.
+	it("refuses a pinned review model when it has no host to ask", () => {
+		const store = createPlanStore(root());
+		expect(() =>
+			store.savePlan({
+				...plan(),
+				deliverables: [
+					{
+						...plan().deliverables[0],
+						tasks: [
+							{ id: "build", title: "Build" },
+							{
+								id: "review",
+								title: "Review",
+								review: { lens: "c", model: "anthropic/opus-5" },
+							},
+						],
+					},
+				],
+			}),
+		).toThrow(/there is no model catalogue here to check it against/);
 		expect(store.list()).toEqual([]);
 	});
 

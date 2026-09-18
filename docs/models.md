@@ -68,10 +68,13 @@ rather than a cached compatibility token.
 
 ## Authored plans
 
-Stored plans may record a concrete `provider/model` for delegated review intent.
-Pi-maestro validates and stores that intent but does not resolve or execute it.
-The owned workflow implementation will define how authored review models become
-runtime stage bindings.
+Stored plans may record a concrete `provider/model` on a review task's
+`review`, or on a `review-fan-out` lens. Pi-maestro checks at plan time that
+this host's registry HAS that model — existence only, never authentication —
+and refuses the plan by name with the registered providers listed when it does
+not; it does not resolve or execute the binding. The owned workflow
+implementation will define how authored review models become runtime stage
+bindings.
 
 ## The package boundary
 

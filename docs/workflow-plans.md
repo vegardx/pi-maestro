@@ -54,6 +54,28 @@ reviewer it is worth. Every routing field but `lens` is optional:
 A review that names neither a `model` nor a `tier` is legal; the running
 workflow's effort dial then decides what the reviewer is.
 
+#### `model` and `skill` are checked against this host
+
+Both name something outside the document, so both are checked against the
+session the plan is written in, at plan time, and refused by name when it does
+not have them:
+
+- `model` must be a model the host's registry has. The refusal lists the
+  registered providers, so the author can correct it in one step.
+  **Authentication is not required** — whether a provider is logged in is a
+  run-time question about credentials, and a document that depended on a login
+  would be valid and invalid by turns.
+- `skill` must be a skill Pi has loaded in this session. The refusal names the
+  loaded skills, or counts them when there are more than twenty.
+
+Both questions reach validation through one injected port, so the check is the
+same wherever the routing is written — `tasks[].review` and `stages[].lenses[]`
+alike. **With no session to ask, a pinned `model` or `skill` is refused**, never
+accepted unchecked: a plan that pins what nothing could verify is exactly the
+case the check exists for. The same port answers for the `plan` tool, for the
+store, and for the exit flow's re-validation of a plan it rewrote, so the three
+cannot disagree about one document.
+
 ### Stages
 
 `stages` is optional, per deliverable, and says what the run does with that

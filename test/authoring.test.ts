@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPlanTool } from "../packages/maestro/src/authoring.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
+import { fakeHost } from "./fake-host.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -38,10 +39,19 @@ function repo(): string {
 
 function authoring(cwd: string = repo(), mode?: ModeName) {
 	const root = temp("authoring");
-	const store = createPlanStore(root);
+	// One host for the tool and the store, as the seat wires them: a plan the
+	// tool accepted and the store then refused would be a second opinion about
+	// what is legal, and that is the bug the shared seam exists to prevent.
+	const host = () =>
+		fakeHost({
+			models: ["anthropic/fable-5"],
+			skills: ["correctness-review", "contracts-review"],
+		});
+	const store = createPlanStore(root, { host });
 	const tool = createPlanTool({
 		store,
 		cwd: () => cwd,
+		host,
 		...(mode ? { mode: () => mode } : {}),
 	});
 	const write = (plan: unknown) =>

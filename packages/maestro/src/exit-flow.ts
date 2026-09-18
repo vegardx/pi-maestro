@@ -464,10 +464,12 @@ export function renderExitSteer(policy: PlanPolicy): string {
 		"Two fields are got wrong most often. A review task's `review.lens` is" +
 			" REQUIRED and is the fan-out key, so it must match" +
 			" `^[a-z][a-z0-9-]{0,63}$` — never empty. `review.model` is OPTIONAL" +
-			" and, if written at all, is only ever a concrete `provider/model` ID;" +
+			" and, if written at all, is only ever a concrete `provider/model` ID" +
+			" this host actually has — one it does not have is refused by name;" +
 			" prefer `review.tier` and leave `review.model` out, so the host" +
-			" resolves the reviewer. An optional field you have nothing to say about" +
-			" is LEFT OUT, not sent empty — an empty string or a list of them is" +
+			" resolves the reviewer. `review.skill` is the same: only a skill this" +
+			" session has loaded. An optional field you have nothing to say about is" +
+			" LEFT OUT, not sent empty — an empty string or a list of them is" +
 			" dropped before the plan is validated, so the two mean the same thing" +
 			" and neither is refused.",
 		"",
@@ -844,6 +846,16 @@ export interface ModeExitControllerDeps {
 	/** Phase 2 itself. Overridable so a test can watch the trigger fire. */
 	readonly phase2?: ExitFlowPhase2Hook;
 	/**
+	 * How phase 2 re-validates a plan it rewrote — normalisation, and every
+	 * accepted patch. @see ExitFlowPhase2.inspect
+	 *
+	 * Passed from the extension so the host a pinned review model or skill is
+	 * checked against is the SAME one the `plan` tool and the store used. A
+	 * default `inspectPlan` here would have no host, and would then refuse the
+	 * document it had just accepted.
+	 */
+	readonly inspect?: (plan: Plan) => PlanReport;
+	/**
 	 * The seat's one dialog gate.
 	 *
 	 * Injected rather than owned so that everything on the seat that opens a
@@ -1102,6 +1114,7 @@ export function createModeExitController(
 				setMode: deps.setMode,
 				...(deps.agentDir ? { agentDir: deps.agentDir } : {}),
 				...(deps.store ? { store: deps.store() } : {}),
+				...(deps.inspect ? { inspect: deps.inspect } : {}),
 				...(bash ? { bash } : {}),
 				...(acquire ? { workflow: () => acquire(ctx, notify) } : {}),
 				...(deps.sendUserMessage

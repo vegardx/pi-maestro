@@ -26,6 +26,7 @@ import {
 	MAX_LENSES,
 	PLAN_GATES,
 	type Plan,
+	type PlanHostPort,
 	type PlanPolicy,
 	PUBLISH_MODES,
 	REVIEW_TIERS,
@@ -58,13 +59,13 @@ const TaskSchema = Type.Object({
 				skill: Type.Optional(
 					Type.String({
 						description:
-							"An ambient discoverable skill to request explicitly. Omit when the lens prompt is sufficient for discovery.",
+							"An ambient discoverable skill to request explicitly, and only one this session has actually loaded — an unloaded skill is refused by name. Omit when the lens prompt is sufficient for discovery.",
 					}),
 				),
 				model: Type.Optional(
 					Type.String({
 						description:
-							"OPTIONAL, and only ever a concrete `provider/model` ID — a provider id, a slash, and a model id the host actually has. Prefer `tier` and leave this out: a pinned model only runs on a host that has it. Never a role, a size word or a placeholder.",
+							"OPTIONAL, and only ever a concrete `provider/model` ID — a provider id, a slash, and a model id this host actually has; one it does not have is refused by name, with its providers listed. Prefer `tier` and leave this out: a pinned model only runs on a host that has it. Never a role, a size word or a placeholder.",
 					}),
 				),
 				tier: Type.Optional(
@@ -119,13 +120,14 @@ const LensSchema = Type.Object({
 	),
 	skill: Type.Optional(
 		Type.String({
-			description: "An ambient skill to request explicitly.",
+			description:
+				"An ambient skill to request explicitly, and only one this session has loaded.",
 		}),
 	),
 	model: Type.Optional(
 		Type.String({
 			description:
-				"OPTIONAL, and only ever a concrete `provider/model` ID. Prefer `tier` and leave this out.",
+				"OPTIONAL, and only ever a concrete `provider/model` ID this host has. Prefer `tier` and leave this out.",
 		}),
 	),
 });
@@ -453,6 +455,15 @@ export interface AuthoringDeps {
 	 * thing it has to a completion point, and that is where the way out is said.
 	 */
 	readonly mode?: () => ModeName;
+	/**
+	 * The host a pinned review `model` or `skill` is checked against, read at
+	 * call time because the session it describes outlives neither the seat nor
+	 * this tool. @see PlanHostPort
+	 *
+	 * The same seam the store is given, from the same place, so the plan the
+	 * tool accepts and the plan the store saves are judged against one host.
+	 */
+	readonly host?: () => PlanHostPort | undefined;
 }
 
 /**
@@ -467,7 +478,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 		name: "plan",
 		label: "Plan",
 		description:
-			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `review` marks a REVIEW task; an implementation task must not carry it. Two fields are got wrong most often: a review task\'s `review.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `review.model` is OPTIONAL and only ever a concrete `provider/model` ID — prefer `review.tier` and omit `review.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
+			'Write the plan: deliverables in a dependency graph, each an ordered list of work. Send the WHOLE plan every time — to change one thing, send it again with that thing changed. `review` marks a REVIEW task; an implementation task must not carry it. Two fields are got wrong most often: a review task\'s `review.lens` is REQUIRED and must match `^[a-z][a-z0-9-]{0,63}$`, and `review.model` is OPTIONAL and only ever a concrete `provider/model` ID this host has — prefer `review.tier` and omit `review.model`. An optional field left empty (`""`, or a list of them) is dropped before validation rather than refused, so omitting a field and sending it empty mean the same thing.',
 		promptSnippet:
 			"write the whole plan: deliverables in a graph, each an ordered list of work.",
 		parameters: PlanSchema,
@@ -493,7 +504,7 @@ export function createPlanTool(deps: AuthoringDeps): ToolDefinition {
 				...(authored.policy ? { policy: authored.policy as PlanPolicy } : {}),
 			};
 
-			const { errors, warnings } = inspectPlan(plan);
+			const { errors, warnings } = inspectPlan(plan, undefined, deps.host?.());
 			const details = (stored: boolean): PlanToolDetails => ({
 				stored,
 				errors,

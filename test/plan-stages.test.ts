@@ -21,6 +21,7 @@ import {
 	type Deliverable,
 	defaultStagesFor,
 	type Plan,
+	type PlanHostPort,
 	type PlanPolicy,
 	type RepoProbe,
 	resolvePolicy,
@@ -33,6 +34,7 @@ import {
 import { renderPlan } from "../packages/maestro/src/plan-command.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
+import { fakeHost } from "./fake-host.js";
 
 const cleanRepo: RepoProbe = (path) => ({
 	root: path,
@@ -40,7 +42,14 @@ const cleanRepo: RepoProbe = (path) => ({
 	dirty: false,
 });
 
-const errorsOf = (subject: Plan): string[] => validatePlan(subject, cleanRepo);
+const errorsOf = (subject: Plan, host?: PlanHostPort): string[] =>
+	validatePlan(subject, cleanRepo, host);
+
+/** The host the lens-routing tests are written against. */
+const host = fakeHost({
+	models: ["anthropic/opus-5"],
+	skills: ["contracts-review"],
+});
 
 const task = (id: string, review?: Task["review"]): Task => ({
 	id,
@@ -337,6 +346,59 @@ describe("what a stage list may not say", () => {
 		expect(errors).toContainEqual(
 			expect.stringContaining("`exhaustive` is not a review tier"),
 		);
+	});
+
+	// The same two host questions a task's `review` is held to. A rule that
+	// fired on the task and not on the lens would be a rule an author could
+	// escape by writing the stage list out by hand.
+	it("holds a lens's `model` and `skill` to the host, as a task's `review` is", () => {
+		const errors = errorsOf(
+			staged([
+				implement,
+				{
+					use: "review-fan-out",
+					id: "review",
+					lenses: [
+						{ id: "contracts", model: "anthropic/opus-9" },
+						{ id: "replay", skill: "replay-review" },
+						{
+							id: "sound",
+							model: "anthropic/opus-5",
+							skill: "contracts-review",
+						},
+					],
+				},
+			]),
+			host,
+		);
+		expect(errors).toEqual([
+			"api.stages[1].lenses[0]: `anthropic/opus-9` is not a model this host " +
+				"has — this host's registered providers are `anthropic`. `model` is " +
+				"optional: drop it and pin `tier` instead unless the reviewer must be " +
+				"one exact model",
+			"api.stages[1].lenses[1]: `replay-review` is not a skill this session " +
+				"has loaded — the skills loaded here are `contracts-review`. `skill` " +
+				"is optional: drop it and let the lens prompt find what it needs",
+		]);
+	});
+
+	// FAIL CLOSED, in the stage list as much as on the task.
+	it("refuses a lens that pins anything when there is no host", () => {
+		const errors = errorsOf(
+			staged([
+				implement,
+				{
+					use: "review-fan-out",
+					id: "review",
+					lenses: [{ id: "contracts", model: "anthropic/opus-5" }],
+				},
+			]),
+		);
+		expect(errors).toEqual([
+			"api.stages[1].lenses[0]: `model` pins `anthropic/opus-5` and there is " +
+				"no model catalogue here to check it against, so it is refused rather " +
+				"than stored unchecked — drop `model` and pin `tier` instead",
+		]);
 	});
 
 	it("refuses a lens id the compiled document could not carry", () => {

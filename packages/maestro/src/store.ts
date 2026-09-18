@@ -16,7 +16,12 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PLAN_FILE } from "./paths.js";
-import { MAESTRO_SCHEMA_VERSION, type Plan, validatePlan } from "./plan.js";
+import {
+	MAESTRO_SCHEMA_VERSION,
+	type Plan,
+	type PlanHostPort,
+	validatePlan,
+} from "./plan.js";
 
 /**
  * The revision this build writes and reads.
@@ -92,6 +97,17 @@ export interface PlanStore {
 export interface StoreOptions {
 	/** Injected so tests do not have to reason about wall-clock time. */
 	readonly now?: () => string;
+	/**
+	 * The host a pinned review model or skill is checked against, read at save
+	 * time because the session it describes is not there when the store is
+	 * built. @see PlanHostPort
+	 *
+	 * A store with none still refuses what it cannot check: this is the same
+	 * `validatePlan` the plan tool ran, and a second reading that skipped the
+	 * host rules would be a second opinion about what is legal — which is how a
+	 * plan the tool refused reaches disk through another door.
+	 */
+	readonly host?: () => PlanHostPort | undefined;
 }
 
 /** Persistence metadata lives out here, so `Plan` and `Run` stay free of it. */
@@ -193,7 +209,7 @@ export function createPlanStore(
 		},
 
 		savePlan(plan) {
-			const errors = validatePlan(plan);
+			const errors = validatePlan(plan, undefined, options.host?.());
 			if (errors.length > 0) throw new InvalidStateError("plan", errors);
 			write(file(plan.slug), plan);
 		},

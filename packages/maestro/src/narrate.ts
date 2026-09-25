@@ -34,12 +34,25 @@
 // to leave a person guessing about.
 //
 // ONE ADAPTER READS THE RUNTIME'S FIELD NAMES. `adaptObservation` is the single
-// place `stageKey`, `deliverableId`, `kind`, `summary` and `cause` are read off
-// an observation; everything below it works on the local `Narration` type. When
-// pi-workflow renames one of those, exactly one function is wrong.
+// place `observation.task.narration` is read; everything below it works on the
+// local `Narration` type. When pi-workflow renames one of those fields, exactly
+// one function is wrong.
+//
+// AND THE SUMMARY IS NOT ON THE OBSERVATION. An observation is a synchronous
+// notice on a durable append that reads no file and must stay in sequence order;
+// a task's summary is its committed result, which lives in an artifact. So the
+// adapter decides the kind, the stage, the deliverable and whether a turn is due
+// from the observation alone — everything a narrator branches on — and the batch
+// then makes ONE `inspect(runId, {include: ["tasks", "output"]})` call to fill in
+// what each settled task said. One call per batch, not per task: a fan-out that
+// finished together is one reading of one run.
 
 import {
+	MAX_NARRATION_SUMMARY_LENGTH,
+	NARRATED_TASK_KINDS,
+	type NarratedTaskKind,
 	TERMINAL_RUN_STATUSES,
+	type WorkflowInspectedTaskView,
 	type WorkflowReadClient,
 	type WorkflowRunObservationView,
 } from "./workflow-provider.js";
@@ -75,65 +88,115 @@ export type SendProgress = (
 /**
  * What a completed task was, as far as narration cares.
  *
- * pi-workflow's own vocabulary, mirrored here for the same reason
- * `workflow-provider.ts` mirrors the client surface: nothing may be imported
- * from an optional peer. `other` is the honest answer for a kind this build does
- * not recognise — a task nobody can name still happened, and dropping it would
- * be the seat deciding a person does not need to know.
+ * pi-workflow's own `NARRATED_TASK_KINDS`, mirrored in `workflow-provider.ts`
+ * beside the rest of the runtime's view shapes and re-exported here because this
+ * is the module that branches on it. `other` is the honest answer for a stage key
+ * pi-workflow's convention does not name — a task nobody can name still happened,
+ * and dropping it would be the seat deciding a person does not need to know.
  */
-export const NARRATION_KINDS = [
-	"implement",
-	"check",
-	"review",
-	"synthesis",
-	"fix",
-	"gate",
-	"refine",
-	"other",
-] as const;
+export { MAX_NARRATION_SUMMARY_LENGTH, NARRATED_TASK_KINDS };
 
-export type NarrationKind = (typeof NARRATION_KINDS)[number];
+export type NarrationKind = NarratedTaskKind;
 
 export function isNarrationKind(value: unknown): value is NarrationKind {
-	return (NARRATION_KINDS as readonly unknown[]).includes(value);
+	return (NARRATED_TASK_KINDS as readonly unknown[]).includes(value);
 }
+
+/** What the deliverable reads as when the stage key names none — a gate, say. */
+export const WHOLE_RUN = "the run";
+
+/** What a line says when the inspection had no summary for the task. */
+export const NO_SUMMARY = "no summary";
 
 /** One thing that happened in a run, in this module's own terms. */
 export interface Narration {
 	readonly kind: NarrationKind;
-	/** The stage's key, as the definition names it. */
+	/** The stage's key, as the definition names it: `${namespace}/${key}`. */
 	readonly stage: string;
 	readonly deliverable: string;
-	readonly summary: string;
-	/** Present exactly when the task failed. */
+	/**
+	 * The settled task, so the batch can ask the inspection what it said.
+	 *
+	 * Carried rather than resolved here BECAUSE THE SUMMARY IS ARTIFACT-BACKED:
+	 * an observation cannot have it, and reading a file inside a synchronous
+	 * listener would put the narration out of sequence order.
+	 */
+	readonly taskId: string;
+	/** Filled in from one inspection per batch; absent until then. */
+	readonly summary?: string;
+	/** Present exactly when the task did not complete. */
 	readonly cause?: string;
 }
 
 /**
  * An observation as a narration, or nothing.
  *
- * THE ONE PLACE pi-workflow's per-task field names are read. An append that
- * carries no `stageKey` is not about a task — a status change, a lease, a
- * journal entry — and there is nothing to narrate about it; the run's own end is
- * handled from `status`, not from here.
+ * THE ONE PLACE pi-workflow's per-task field names are read. An append with no
+ * `task` is not about a settled task — a status change, a lease, a journal entry
+ * — and there is nothing to narrate about it; the run's own end is handled from
+ * `status`, not from here.
  */
 export function adaptObservation(
 	observation: WorkflowRunObservationView,
 ): Narration | undefined {
-	const stage = observation.stageKey;
+	const task = observation.task;
+	if (!task) return undefined;
+	const narration = task.narration;
+	const stage = narration?.stage;
 	if (typeof stage !== "string" || stage.length === 0) return undefined;
 	return {
-		kind: isNarrationKind(observation.kind) ? observation.kind : "other",
+		kind: isNarrationKind(narration.taskKind) ? narration.taskKind : "other",
 		stage,
-		deliverable: observation.deliverableId ?? "the run",
-		summary:
-			typeof observation.summary === "string" && observation.summary.length > 0
-				? observation.summary
-				: "no summary",
-		...(typeof observation.cause === "string" && observation.cause.length > 0
-			? { cause: observation.cause }
+		deliverable:
+			typeof narration.deliverable === "string" &&
+			narration.deliverable.length > 0
+				? narration.deliverable
+				: WHOLE_RUN,
+		taskId: task.taskId,
+		...(typeof narration.cause === "string" && narration.cause.length > 0
+			? { cause: narration.cause }
 			: {}),
 	};
+}
+
+/**
+ * The `include` a narrator asks an inspection for.
+ *
+ * BOTH SECTIONS, because `narration.summary` is artifact-backed: `"tasks"` is
+ * what carries a narration at all and `"output"` is what makes it carry the
+ * summary. Asking for one without the other is a call that returns everything
+ * except the thing it was made for.
+ */
+export const NARRATION_INSPECT_SECTIONS = {
+	include: ["tasks", "output"],
+} as const;
+
+/** What an inspection said each settled task's summary was, by task id. */
+export async function readSummaries(
+	client: Pick<WorkflowReadClient, "inspect">,
+	runId: string,
+): Promise<ReadonlyMap<string, string>> {
+	const summaries = new Map<string, string>();
+	const inspection = (await client.inspect(
+		runId,
+		NARRATION_INSPECT_SECTIONS,
+	)) as { readonly tasks?: readonly WorkflowInspectedTaskView[] } | undefined;
+	for (const task of inspection?.tasks ?? []) {
+		const summary = task.narration?.summary;
+		if (typeof task.id !== "string" || typeof summary !== "string") continue;
+		const line = summary.trim();
+		if (line.length === 0) continue;
+		// Bounded here as well as there: the runtime cuts a summary to its own
+		// contract, and a line this seat posts into somebody's conversation is not
+		// a place to find out that a peer stopped doing so.
+		summaries.set(
+			task.id,
+			line.length <= MAX_NARRATION_SUMMARY_LENGTH
+				? line
+				: `${line.slice(0, MAX_NARRATION_SUMMARY_LENGTH - 1)}…`,
+		);
+	}
+	return summaries;
 }
 
 /** The kinds whose meaning is a judgement, so the model is given a turn. */
@@ -161,7 +224,7 @@ export function runPrefix(runId: string): string {
 
 /** One narration, in the one line the conversation gets for it. */
 export function renderNarration(slug: string, narration: Narration): string {
-	const head = `${slug} · ${narration.deliverable} · ${narration.kind} ${narration.stage} — ${narration.summary}`;
+	const head = `${slug} · ${narration.deliverable} · ${narration.kind} ${narration.stage} — ${narration.summary ?? NO_SUMMARY}`;
 	return narration.cause ? `${head}\n  cause: ${narration.cause}` : head;
 }
 
@@ -222,7 +285,7 @@ export function batchTail(
 // ── The watcher ──────────────────────────────────────────────────────────────
 
 export interface NarrateDeps {
-	readonly client: Pick<WorkflowReadClient, "observe">;
+	readonly client: Pick<WorkflowReadClient, "observe" | "inspect">;
 	readonly send: SendProgress;
 	/**
 	 * When a batch is flushed. Defaults to `queueMicrotask`.
@@ -251,6 +314,8 @@ export interface RunNarrator {
 	following(): readonly string[];
 	/** Stop observing. Idempotent. */
 	stop(): void;
+	/** Resolves once every batch posted so far has been sent. For tests. */
+	settled(): Promise<void>;
 }
 
 export function createRunNarrator(deps: NarrateDeps): RunNarrator {
@@ -263,6 +328,68 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 	let batch: { runId: string; slug: string; narration: Narration }[] = [];
 	let endings: { runId: string; slug: string; status: string }[] = [];
 	let queued = false;
+	/**
+	 * The last flush, so two batches cannot interleave.
+	 *
+	 * A flush awaits an inspection now, so without this a second batch scheduled
+	 * while the first was reading could post ahead of it — and the order of these
+	 * messages is the order the run did things in.
+	 */
+	let tail: Promise<void> = Promise.resolve();
+
+	const post = async (
+		narrations: readonly {
+			runId: string;
+			slug: string;
+			narration: Narration;
+		}[],
+		ends: readonly { runId: string; slug: string; status: string }[],
+	): Promise<void> => {
+		// ONE INSPECTION PER RUN IN THE BATCH, because the summary is artifact-
+		// backed and an observation cannot carry it. A batch that reads nothing
+		// still posts: a line without a summary says less than one with it and far
+		// more than silence.
+		const summaries = new Map<string, ReadonlyMap<string, string>>();
+		for (const runId of new Set(narrations.map((entry) => entry.runId))) {
+			try {
+				summaries.set(runId, await readSummaries(deps.client, runId));
+			} catch (error) {
+				deps.onError?.(error);
+			}
+		}
+		const filled = narrations.map((entry) => {
+			const summary = summaries.get(entry.runId)?.get(entry.narration.taskId);
+			return summary === undefined
+				? entry
+				: { ...entry, narration: { ...entry.narration, summary } };
+		});
+		const lines = filled.map((entry) =>
+			renderNarration(entry.slug, entry.narration),
+		);
+		for (const end of ends)
+			lines.push(renderRunEnd(end.slug, end.runId, end.status));
+		// The batch's tail is about the FIRST run in it, which is the run every
+		// line in it belongs to in every case but a session running two plans at
+		// once — and there the prefix in each line is what tells them apart.
+		const runId = filled[0]?.runId ?? ends[0]?.runId ?? "";
+		const sentence = batchTail(
+			runId,
+			filled.map((entry) => entry.narration),
+		);
+		const turn =
+			ends.length > 0 || filled.some((entry) => needsTurn(entry.narration));
+		deps.send(
+			{
+				customType: PROGRESS_MESSAGE_TYPE,
+				content: [...lines, ...(sentence ? ["", sentence] : [])].join("\n"),
+				display: true,
+			},
+			{
+				deliverAs: "nextTurn",
+				...(turn ? { triggerTurn: true as const } : {}),
+			},
+		);
+	};
 
 	const flush = (): void => {
 		queued = false;
@@ -271,36 +398,11 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 		batch = [];
 		endings = [];
 		if (narrations.length === 0 && ends.length === 0) return;
-		const lines = narrations.map((entry) =>
-			renderNarration(entry.slug, entry.narration),
+		tail = tail.then(() =>
+			post(narrations, ends).catch((error: unknown) => {
+				deps.onError?.(error);
+			}),
 		);
-		for (const end of ends)
-			lines.push(renderRunEnd(end.slug, end.runId, end.status));
-		// The tail is about the FIRST run in the batch, which is the run every
-		// line in it belongs to in every case but a session running two plans at
-		// once — and there the prefix in each line is what tells them apart.
-		const runId = narrations[0]?.runId ?? ends[0]?.runId ?? "";
-		const tail = batchTail(
-			runId,
-			narrations.map((entry) => entry.narration),
-		);
-		const turn =
-			ends.length > 0 || narrations.some((entry) => needsTurn(entry.narration));
-		try {
-			deps.send(
-				{
-					customType: PROGRESS_MESSAGE_TYPE,
-					content: [...lines, ...(tail ? ["", tail] : [])].join("\n"),
-					display: true,
-				},
-				{
-					deliverAs: "nextTurn",
-					...(turn ? { triggerTurn: true as const } : {}),
-				},
-			);
-		} catch (error) {
-			deps.onError?.(error);
-		}
 	};
 
 	const queue = (): void => {
@@ -349,6 +451,9 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 		stop: () => {
 			slugs.clear();
 			unobserve();
+		},
+		settled: async () => {
+			await tail;
 		},
 	};
 }

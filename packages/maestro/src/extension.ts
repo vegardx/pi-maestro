@@ -191,7 +191,9 @@ export interface SeatEntry {
 	 * with, so the two meet here. Returns the unsubscribe; calling it again
 	 * replaces the narrator, which is what a new session needs.
 	 */
-	narrateRuns(client: Pick<WorkflowReadClient, "observe">): () => void;
+	narrateRuns(
+		client: Pick<WorkflowReadClient, "observe" | "inspect">,
+	): () => void;
 	/** A dialog opened by Pi or another extension; both flows defer. */
 	notePromptStart(): void;
 	notePromptEnd(): void;

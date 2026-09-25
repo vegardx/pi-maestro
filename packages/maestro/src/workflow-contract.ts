@@ -39,7 +39,7 @@ import { Value } from "typebox/value";
  * Bumping it is a deliberate act: re-read pi-workflow's contract, refresh the
  * fixture, and check that the features below still mean what they meant.
  */
-export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
+export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 21;
 
 /**
  * The features the hand-off and `/plan run` actually depend on.

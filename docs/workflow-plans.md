@@ -415,9 +415,21 @@ started and posts what it sees into the conversation as one `maestro:progress`
 message per observation batch, delivered as `nextTurn`:
 
 ```text
-compose · d1 · check verify — the suite passes
-compose · d1 · synthesis synthesis — two lenses disagree about the seam
+compose · d1 · implement implement-d1 — wrote the four components
+compose · d1 · check check-d1-verify-1 — the suite passes
+compose · d1 · review review-d1/contracts — two observations, none blocking
+compose · d1 · synthesis synthesis-d1 — two lenses disagree about the seam
+compose · d1 · fix fix-d1 — one round closed the contracts finding
+compose · the run · gate ship — the ship decision is waiting
 ```
+
+**The stage keys are pi-workflow's, and it derives them from the key alone.**
+Per deliverable `<d>`: `implement-<d>`, `check-<d>` (whose rounds are
+`check-<d>-verify-<n>` and `check-<d>-fix-<n>`), the namespace `review-<d>` with
+one member per lens at `review-<d>/<lens>`, `synthesis-<d>` and `fix-<d>`. The
+gates are `approve-<d>` under `every-deliverable`, and `ship` — which names no
+deliverable, because it is the whole run's decision. A key this convention does
+not name narrates as `other`, which is an honest answer and not a failure.
 
 Most of it gets **no turn**: a task implemented, a check passed, one review
 filed, a refine — those are facts the next turn should have, and a turn per task
@@ -429,6 +441,23 @@ and that it is made with `/workflow decide <run-prefix> ship {"ship":true}` or
 through the gate's own widget. A run that ends without ever stopping at a gate
 gets a final summary, with a turn, because a run that finished and asked for
 nothing is exactly the case a silent seat used to leave a person guessing about.
+
+**What the ship gate shows is per deliverable.** Its inputs are the refined
+executable `plan`, and for each deliverable `summary-<d>` (the implementation
+report), `findings-<d>` (the normalized review findings) and `fix-<d>` (the
+fixer's answer to each of them). That is what a person reads before answering
+`{"ship":true}` — the deliverable-by-deliverable account of what the run found
+and what it did about it — and nothing is pushed, merged or published either way.
+
+**The summary is not on the observation.** An observation is a synchronous notice
+on a durable append that reads no file and must stay in sequence order; a task's
+summary is its committed result, which lives in an artifact. So an observation
+settles the kind, the stage, the deliverable and whether a turn is due, and the
+batch makes ONE `inspect(runId, {include: ["tasks", "output"]})` call to fill in
+what each settled task said — one call per batch, because a fan-out that finished
+together is one reading of one run. A batch whose inspection could not be read
+still posts: a line without a summary says less than one with it and far more
+than silence.
 
 ### When a runtime is not there
 

@@ -103,26 +103,80 @@ export interface WorkflowStartReceiptView {
 }
 
 /**
+ * The kinds a narrator branches on, mirroring pi-workflow's
+ * `NARRATED_TASK_KINDS`.
+ *
+ * NOT the runtime's four execution kinds (`agent`, `support`, `workflow`,
+ * `checkpoint`), which say nothing about what a task was for. pi-workflow derives
+ * this from the stage key alone, as a view, so it costs a run nothing; `other` is
+ * the honest answer for a key its convention does not name and is never an error.
+ */
+export const NARRATED_TASK_KINDS = [
+	"implement",
+	"check",
+	"review",
+	"synthesis",
+	"fix",
+	"gate",
+	"refine",
+	"other",
+] as const;
+
+export type NarratedTaskKind = (typeof NARRATED_TASK_KINDS)[number];
+
+/** pi-workflow's `MAX_NARRATION_SUMMARY_LENGTH`: one paragraph, never a report. */
+export const MAX_NARRATION_SUMMARY_LENGTH = 1024;
+
+/**
+ * What a host needs to narrate ONE task, mirroring
+ * `WorkflowTaskNarrationSchema`.
+ *
+ * `summary` IS ARTIFACT-BACKED AND IS NEVER ON AN OBSERVATION. An observation is
+ * a synchronous notice on a durable append that reads no file; a summary is the
+ * task's committed result, which lives in an artifact. A host that wants it makes
+ * one `inspect(runId, {include: ["tasks", "output"]})` call once the observation
+ * has told it which task to look at. `cause` is journal-derived and is on both.
+ */
+export interface WorkflowTaskNarrationView {
+	/** `${namespace.join("/")}/${key}` — the stage key, as one string. */
+	readonly stage: string;
+	readonly taskKind: NarratedTaskKind;
+	/** The deliverable the stage key names, when it names one. */
+	readonly deliverable?: string;
+	/** Artifact-backed: present on an inspection, never on an observation. */
+	readonly summary?: string;
+	/** For a task that did not complete: why, sanitized. */
+	readonly cause?: string;
+}
+
+/** The settled task an observation is about, mirroring `WorkflowObservedTaskSchema`. */
+export interface WorkflowObservedTaskView {
+	readonly taskId: string;
+	readonly status: string;
+	readonly outcome?: string;
+	readonly narration: WorkflowTaskNarrationView;
+}
+
+/**
  * One append to an owned run, as delivered to an `observe` listener.
  *
- * `runId`, `status` and `sequence` are every run's; everything after them
- * describes the TASK the append is about, and is present only on an append that
- * is about one. `narrate.ts` is the single place they are read.
+ * `runId`, `status` and `sequence` are every append's. `task` is present on the
+ * append that moved a task to a terminal status, AND ONLY THEN — an observation
+ * is one notice per append, so a host narrating completions filters on this field
+ * rather than on an event type it cannot see. `narrate.ts` is the single place it
+ * is read.
  */
 export interface WorkflowRunObservationView {
 	readonly runId: string;
 	readonly status: string;
 	readonly sequence: number;
-	/** The stage this task belongs to, as the definition keys it. */
-	readonly stageKey?: string;
-	/** The deliverable the stage belongs to. */
-	readonly deliverableId?: string;
-	/** What kind of work it was. @see NARRATION_KINDS */
-	readonly kind?: string;
-	/** What the task said about what it did, in one line. */
-	readonly summary?: string;
-	/** Why it failed, when it did. */
-	readonly cause?: string;
+	readonly task?: WorkflowObservedTaskView;
+}
+
+/** One projected task, as far as narration reads an inspection. */
+export interface WorkflowInspectedTaskView {
+	readonly id: string;
+	readonly narration?: WorkflowTaskNarrationView;
 }
 
 /**
@@ -134,6 +188,16 @@ export interface WorkflowReadClient {
 	list(): Promise<readonly WorkflowDefinitionSummaryView[]>;
 	validate(ref: string, input?: unknown): Promise<WorkflowValidationView>;
 	project(ref: string, input: unknown): Promise<WorkflowBudgetProjectionView>;
+	/**
+	 * Lease-free bounded projection of one run.
+	 *
+	 * `unknown` on purpose: publication narrows its own sections at the point of
+	 * use rather than restating pi-workflow's inspection schema here, and
+	 * narration narrows `tasks[].narration` through
+	 * {@link WorkflowInspectedTaskView}. With `include` carrying both `"tasks"`
+	 * and `"output"` every projected task carries `narration.summary`, which is
+	 * the one call a host makes when it wants to say what a task said.
+	 */
 	inspect(runId: string, options?: unknown): Promise<unknown>;
 	runs(query?: unknown): Promise<unknown>;
 	observe(
@@ -180,7 +244,18 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
 	"expired",
 ]);
 
-/** Every method the client must have; a missing one is `incompatible`. */
+/**
+ * Every method the client must have; a missing one is `incompatible`.
+ *
+ * WHAT THIS SEAT CALLS, not everything the runtime offers. pi-workflow's client
+ * also has `awaitRun` and `hostCeiling`, and neither is here.
+ *
+ * `hostCeiling()` is deliberately not called: it answers for the mode the
+ * provider is in NOW, and the hand-off starts the run while the posture is
+ * switching, so the bound that matters is `modeCeiling(deps.wanted)` — the mode
+ * being switched TO — which this seat computes itself and passes explicitly.
+ * Showing the host's answer beside the confirmation would show the wrong bound.
+ */
 const CLIENT_METHODS = [
 	"list",
 	"validate",

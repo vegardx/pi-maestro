@@ -45,6 +45,7 @@ import {
 	CHECK_OPTIONS,
 	CHECK_PROCEED,
 	chosenOption,
+	createModeExitController,
 	DESCRIPTION_EDITOR_TITLE,
 	derivePublication,
 	EFFORT_OPTIONS,
@@ -1587,6 +1588,106 @@ describe("what is recommended, and what escape takes", () => {
 			`${CHECK_PROCEED} (default)`,
 			CHECK_KEEP_PLANNING,
 		]);
+	});
+});
+
+// ── The `/mode` hook ─────────────────────────────────────────────────────────
+
+describe("the controller that straddles the posture change", () => {
+	/** A controller whose flow is scripted, so the seam is what is under test. */
+	function controller(outcome: exitFlow.ExitFlowOutcome) {
+		const ran: exitFlow.ExitFlowDeps[] = [];
+		const startedRuns: [string, string][] = [];
+		const modes: ModeName[] = [];
+		const subject = createModeExitController({
+			setMode: (name) => modes.push(name),
+			complete: () => async () => ({ ok: true, text: "" }),
+			onStarted: (slug, runId) => startedRuns.push([slug, runId]),
+			flow: async (deps) => {
+				ran.push(deps);
+				return outcome;
+			},
+		});
+		return { subject, ran, startedRuns, modes };
+	}
+
+	const ctx = {
+		hasUI: true,
+		ui: fakeUi().ui,
+	} as unknown as exitFlow.ModeExitContext;
+
+	it("runs the hand-off only on the way out of plan mode, and only with dialogs", async () => {
+		const c = controller({ kind: "keep-planning" });
+		expect(await c.subject.hook("auto", "hack", ctx)).toBe("switch");
+		expect(await c.subject.hook("plan", "plan", ctx)).toBe("switch");
+		expect(
+			await c.subject.hook("plan", "auto", {
+				...ctx,
+				hasUI: false,
+			} as exitFlow.ModeExitContext),
+		).toBe("switch");
+		expect(c.ran).toEqual([]);
+	});
+
+	it("says `settled` for the three outcomes that moved the posture", async () => {
+		for (const outcome of [
+			{ kind: "switch-only", why: "nothing to plan" },
+			{ kind: "stored", slug: "compose", why: "nothing started", asked: 2 },
+			{ kind: "started", slug: "compose", runId: "r-1", asked: 2 },
+		] satisfies exitFlow.ExitFlowOutcome[]) {
+			const c = controller(outcome);
+			expect(await c.subject.hook("plan", "auto", ctx)).toBe("settled");
+			expect(c.subject.last()).toEqual(outcome);
+		}
+	});
+
+	it("says `stay` for every outcome that left the seat in plan mode", async () => {
+		for (const outcome of [
+			{ kind: "keep-planning" },
+			{ kind: "back", asked: 1 },
+			{ kind: "aborted" },
+			{ kind: "refused", problem: "no store" },
+		] satisfies exitFlow.ExitFlowOutcome[]) {
+			const c = controller(outcome);
+			expect(await c.subject.hook("plan", "auto", ctx)).toBe("stay");
+		}
+	});
+
+	it("names a started run, so the session narrates the one it started", async () => {
+		const c = controller({
+			kind: "started",
+			slug: "compose",
+			runId: "wfr-1",
+			asked: 2,
+		});
+		await c.subject.hook("plan", "auto", ctx);
+		expect(c.startedRuns).toEqual([["compose", "wfr-1"]]);
+		// And nothing else does: a hand-off that started no run has no run to name.
+		const quiet = controller({ kind: "keep-planning" });
+		await quiet.subject.hook("plan", "auto", ctx);
+		expect(quiet.startedRuns).toEqual([]);
+	});
+
+	it("switches and says why when the session has no model to ask", async () => {
+		const notices: [string, string][] = [];
+		const subject = createModeExitController({
+			setMode: () => undefined,
+			complete: () => undefined,
+			flow: async () => {
+				throw new Error("the flow must not run");
+			},
+		});
+		expect(
+			await subject.hook("plan", "auto", {
+				hasUI: true,
+				ui: {
+					...fakeUi().ui,
+					notify: (message: string, type?: string) =>
+						notices.push([message, type ?? "info"]),
+				},
+			} as unknown as exitFlow.ModeExitContext),
+		).toBe("switch");
+		expect(notices[0]?.[0]).toContain("no model to write the plan with");
 	});
 });
 

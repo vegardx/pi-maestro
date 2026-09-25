@@ -17,6 +17,7 @@ import {
 	type ModeExitHook,
 } from "./exit-flow.js";
 import { MODE_NAMES, type ModeName } from "./mode.js";
+import { createRunNarrator, type RunNarrator } from "./narrate.js";
 import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
 import {
 	createPlanCommand,
@@ -39,6 +40,7 @@ import {
 	acquireWorkflowClientOrWarn,
 	callWorkflow,
 	type WorkflowEventBus,
+	type WorkflowReadClient,
 } from "./workflow-provider.js";
 
 /**
@@ -203,6 +205,15 @@ export interface SeatEntry {
 		runId?: string,
 		options?: PublishOptions,
 	): Promise<Publication>;
+	/**
+	 * Narrate the runs this seat started, through an acquired client.
+	 *
+	 * The seat is what KNOWS which runs are its own — the hand-off started one,
+	 * or `/plan run` did — and the extension body is what has a client to observe
+	 * with, so the two meet here. Returns the unsubscribe; calling it again
+	 * replaces the narrator, which is what a new session needs.
+	 */
+	narrateRuns(client: Pick<WorkflowReadClient, "observe">): () => void;
 	/** A dialog opened by Pi or another extension; both flows defer. */
 	notePromptStart(): void;
 	notePromptEnd(): void;
@@ -242,6 +253,19 @@ export function startSeat(
 	 */
 	const gate = createDialogGate();
 	/**
+	 * The runs this seat started, by id, so narration knows whose they are.
+	 *
+	 * Kept even before a narrator exists: a run can be started in the same turn
+	 * the workflow runtime is first acquired, and a run this seat started and then
+	 * failed to narrate would be exactly the silence narration exists to end.
+	 */
+	const started = new Map<string, string>();
+	let narrator: RunNarrator | undefined;
+	const follow = (runId: string, slug: string): void => {
+		started.set(runId, slug);
+		narrator?.follow(runId, slug);
+	};
+	/**
 	 * What the conversation is told, and the only thing it is told.
 	 *
 	 * `deliverAs: "nextTurn"` because nothing about this needs a turn of its
@@ -263,6 +287,8 @@ export function startSeat(
 		setMode: (name) => {
 			seat().setMode(name);
 		},
+		// The run the hand-off started is a run this session narrates.
+		onStarted: follow,
 		cwd,
 		gate,
 		// How the model is asked: the session's own model, the session's own
@@ -490,6 +516,9 @@ export function startSeat(
 				}),
 			notify,
 		);
+		// `/plan run` is the other way a run of this seat's begins, and it is
+		// narrated exactly like the hand-off's.
+		if (receipt) follow(receipt.runId, input.plan.slug);
 		return receipt?.runId;
 	};
 
@@ -518,6 +547,19 @@ export function startSeat(
 			if (built) syncTools(built);
 		},
 		publish,
+		narrateRuns: (client) => {
+			narrator?.stop();
+			const live = createRunNarrator({
+				client,
+				send: (message, options) => pi.sendMessage?.(message, options),
+			});
+			narrator = live;
+			for (const [runId, slug] of started) live.follow(runId, slug);
+			return () => {
+				if (narrator === live) narrator = undefined;
+				live.stop();
+			};
+		},
 		notePromptStart: exit.notePromptStart,
 		notePromptEnd: exit.notePromptEnd,
 	};
@@ -604,7 +646,10 @@ export default defineExtension(
 			void (async () => {
 				try {
 					const client = await acquireWorkflowClient(events, ctx);
-					unwatch = watchShippedRuns({
+					// TWO SUBSCRIPTIONS ON ONE CLIENT, for two different jobs: the ship
+					// watcher looks for a decision made outside this session's prompt,
+					// and the narrator says what the run is doing while it does it.
+					const unship = watchShippedRuns({
 						client,
 						emit: (shipped) => events.emit(WORKFLOW_SHIPPED_CHANNEL, shipped),
 						// A finished run whose ship gate proves nothing is named out
@@ -612,6 +657,11 @@ export default defineExtension(
 						// a run with real handoffs that silently never publishes.
 						report: (message) => live?.ui.notify(message, "warning"),
 					});
+					const unnarrate = entry.narrateRuns(client);
+					unwatch = () => {
+						unship();
+						unnarrate();
+					};
 				} catch {
 					// No runtime, or one this seat was not built against: the
 					// `/plan ship` path still works and says so itself.

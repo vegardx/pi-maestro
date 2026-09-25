@@ -13,12 +13,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	PLAN_MODE_RUN_REFUSAL,
 	type SeatHost,
 	seatToolBlockReason,
 	startSeat,
 } from "../packages/maestro/src/extension.js";
-import type { ModeName } from "../packages/maestro/src/mode.js";
+import {
+	MODE_NAMES,
+	type ModeName,
+	modeCeiling,
+} from "../packages/maestro/src/mode.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import { createSeat } from "../packages/maestro/src/seat.js";
 import { fakeHost } from "./fake-host.js";
@@ -287,25 +290,56 @@ describe("Pi's live tool set", () => {
 		);
 	});
 
-	it("refuses a model-started run in plan mode, and only those two tools", () => {
-		for (const name of ["workflow_run", "workflow_propose"]) {
-			const reason = seatToolBlockReason("plan", name);
-			expect(reason).toBe(PLAN_MODE_RUN_REFUSAL);
-			expect(reason).toContain("/workflow run <ref>");
-			expect(seatToolBlockReason("auto", name)).toBeUndefined();
-			expect(seatToolBlockReason("hack", name)).toBeUndefined();
+	it("refuses no workflow tool by name, in any posture", () => {
+		// THIS SEAT USED TO REFUSE `workflow_run` AND `workflow_propose` TO THE
+		// MODEL IN PLAN MODE, with a fixed sentence, and the rule was right: plan
+		// mode is a conversation and a run is the seat acting. The enforcement was
+		// in the wrong place. A tool allowlist here had to be kept in step with
+		// whatever tools the runtimes happened to register, and it said nothing
+		// about the LAUNCHES those tools make — so the same reading it prevented
+		// through `workflow_run` was still reachable through anything else that
+		// delegates. `modeCeiling` says it once, in pi-subagent's vocabulary, and
+		// travels with every delegated launch in the process.
+		for (const mode of MODE_NAMES)
+			for (const name of [
+				"workflow_run",
+				"workflow_propose",
+				"workflow_list",
+				"workflow_validate",
+				"workflow_inspect",
+				"workflow_wait",
+				"workflow_logs",
+				"workflow_runs",
+				"workflow_status",
+				"workflow_decide",
+				"subagent",
+			])
+				expect([mode, name, seatToolBlockReason(mode, name)]).toEqual([
+					mode,
+					name,
+					undefined,
+				]);
+	});
+
+	it("bounds a delegation by the posture, in pi-subagent's vocabulary", () => {
+		// The mapping, and the fact that no mode NAME appears in it: `plan`,
+		// `auto` and `hack` are this repository's words about itself.
+		expect(modeCeiling("plan")).toEqual({ workspaceModes: ["read-only"] });
+		expect(modeCeiling("auto")).toEqual({
+			workspaceModes: ["read-only", "worktree"],
+		});
+		// Hack is the posture whose whole meaning is that the restrictions are
+		// off, so it does not keep one here either.
+		expect(modeCeiling("hack")).toBeUndefined();
+		for (const mode of MODE_NAMES) {
+			const ceiling = modeCeiling(mode);
+			expect([mode, JSON.stringify(ceiling ?? null)]).toEqual([
+				mode,
+				JSON.stringify(ceiling ?? null),
+			]);
+			for (const name of MODE_NAMES)
+				expect(JSON.stringify(ceiling ?? null)).not.toContain(name);
 		}
-		for (const name of [
-			"workflow_list",
-			"workflow_validate",
-			"workflow_inspect",
-			"workflow_wait",
-			"workflow_logs",
-			"workflow_runs",
-			"workflow_status",
-			"workflow_decide",
-		])
-			expect(seatToolBlockReason("plan", name)).toBeUndefined();
 	});
 
 	it("keeps plan mode read-only at the tool call", () => {

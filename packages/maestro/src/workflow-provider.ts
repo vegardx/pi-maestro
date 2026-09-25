@@ -35,6 +35,7 @@
  * no workflow runtime is a working seat.
  */
 
+import type { DelegationCeiling } from "./mode.js";
 import type { Effort } from "./plan-input.js";
 import {
 	isWorkflowRuntimeContractShape,
@@ -146,10 +147,21 @@ export interface WorkflowReadClient {
 	 * `ship` decision (or each deliverable, under `every-deliverable`).
 	 * The runtime journals it with origin `"service-provider"`, so a run this
 	 * seat started is never mistaken for one the model started.
+	 *
+	 * `ceiling` is THE MODE'S, in pi-subagent's vocabulary, and the runtime
+	 * refuses a start whose definition needs more than it allows — naming both
+	 * the need and the bound. That refusal is why this seat no longer withholds
+	 * `workflow_run` from the model by name in plan mode: the bound is a fact
+	 * about the launch, checked where launches happen, rather than a tool
+	 * allowlist maintained here.
 	 */
 	startBuiltin(
 		ref: string,
-		options: { readonly input: unknown; readonly effort?: Effort },
+		options: {
+			readonly input: unknown;
+			readonly effort?: Effort;
+			readonly ceiling?: DelegationCeiling;
+		},
 	): Promise<WorkflowStartReceiptView>;
 }
 

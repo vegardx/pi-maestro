@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -235,6 +236,119 @@ function busWith(client: Record<string, unknown>): WorkflowEventBus {
 	});
 	return bus;
 }
+
+// ── The ceiling, at the one start a person types ─────────────────────────────
+//
+// THE SEAT NO LONGER REFUSES A RUN BY TOOL NAME. It passes the posture's ceiling
+// with the start, and the runtime refuses a definition that needs more than the
+// ceiling allows — naming both. This is that refusal arriving as a warning, and
+// the ceiling the seat actually sent.
+
+describe("/plan run under the mode's ceiling", () => {
+	function storedPlan(repo: string): Plan {
+		return {
+			slug: "demo",
+			title: "Demo plan",
+			repos: [{ key: "main", path: repo }],
+			deliverables: [
+				{
+					id: "first",
+					title: "First",
+					after: [],
+					reads: [],
+					tasks: [{ id: "impl", title: "Do it" }],
+				},
+			],
+		} as unknown as Plan;
+	}
+
+	/** pi-workflow's own refusal, as it will read once part 4 lands there. */
+	const REFUSAL =
+		"Workflow plan-to-ship needs workspace mode `worktree`, and this" +
+		" session's delegation ceiling allows `read-only`.";
+
+	function seatWithRuntime(mode: "plan" | "auto") {
+		const repo = temp("maestro-repo-");
+		execFileSync("git", ["init", "--quiet"], { cwd: repo, stdio: "ignore" });
+		execFileSync(
+			"git",
+			["commit", "--allow-empty", "-m", "initial", "--no-gpg-sign"],
+			{
+				cwd: repo,
+				stdio: "ignore",
+				env: {
+					...process.env,
+					GIT_AUTHOR_NAME: "t",
+					GIT_AUTHOR_EMAIL: "t@example.invalid",
+					GIT_COMMITTER_NAME: "t",
+					GIT_COMMITTER_EMAIL: "t@example.invalid",
+				},
+			},
+		);
+		const starts: { input: unknown; effort?: string; ceiling?: unknown }[] = [];
+		const bus = busWith({
+			inspect: async () => ({}),
+			runs: async () => ({ runs: [], total: 0 }),
+			observe: () => () => {},
+			startBuiltin: async (
+				_ref: string,
+				options: { input: unknown; effort?: string; ceiling?: unknown },
+			) => {
+				starts.push(options);
+				const ceiling = options.ceiling as
+					| { workspaceModes?: string[] }
+					| undefined;
+				if (!ceiling?.workspaceModes?.includes("worktree"))
+					throw Object.assign(new Error(REFUSAL), {
+						name: "WorkflowServiceError",
+						code: "validation",
+					});
+				return { runId: "wfr-1" };
+			},
+		});
+		const h = host();
+		const entry = startSeat(
+			{ ...h.pi, events: bus },
+			{
+				cwd: repo,
+				agentDir: temp("maestro-agent-"),
+				sessionId: () => "session-1",
+			},
+		);
+		entry.seat().store.savePlan(storedPlan(repo));
+		entry.seat().setMode(mode);
+		return { entry, h, starts, repo };
+	}
+
+	it("is refused in plan mode by the runtime's sentence, not by the seat", async () => {
+		const s = seatWithRuntime("plan");
+		await s.h.run("plan", "run demo");
+		// The seat sent the posture it is in, in pi-subagent's vocabulary.
+		expect(s.starts.map((start) => start.ceiling)).toEqual([
+			{ workspaceModes: ["read-only"] },
+		]);
+		// And the refusal a person reads is the runtime's own, naming the need and
+		// the bound, through the provider seam's sanitized warning.
+		const said = s.h.notices.map(([, message]) => message).join("\n");
+		expect(said).toContain("Workflow runtime unavailable (validation)");
+		expect(said).toContain("needs workspace mode `worktree`");
+		expect(said).toContain("allows `read-only`");
+		expect(said).toContain("/plan run");
+		// Nothing about a tool name, because nothing refused a tool.
+		expect(said).not.toContain("workflow_run");
+	});
+
+	it("starts in auto, where the ceiling allows a worktree", async () => {
+		const s = seatWithRuntime("auto");
+		await s.h.run("plan", "run demo");
+		expect(s.starts.map((start) => start.ceiling)).toEqual([
+			{ workspaceModes: ["read-only", "worktree"] },
+		]);
+		const said = s.h.notices.map(([, message]) => message).join("\n");
+		expect(said).toContain("Started `demo`");
+		expect(said).toContain("`wfr-1`");
+	});
+});
 
 describe("publication dialogs on the seat's own gate", () => {
 	it("defers a publication dialog until an outstanding foreign prompt closes", async () => {

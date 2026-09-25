@@ -42,11 +42,13 @@ import {
 	SUBAGENT_RUNTIME_CONTRACT,
 	type SubagentRuntimeContract,
 } from "@vegardx/pi-subagent";
+import { registerDelegationCeilingProvider } from "@vegardx/pi-subagent/ceiling-provider";
 import {
 	acquireSubagentService,
 	SubagentServiceProviderError,
 } from "@vegardx/pi-subagent/service-provider";
-import type { DelegationCeiling, WorkspaceMode } from "./mode.js";
+import type { DelegationCeiling, ModeName, WorkspaceMode } from "./mode.js";
+import { modeCeiling } from "./mode.js";
 import type { Plan } from "./plan.js";
 import {
 	type PlanCheck,
@@ -445,3 +447,60 @@ export const INSTALLED_SUBAGENT_CONTRACT_REVISION: number = CONTRACT_REVISION;
 
 /** Narrowed for a test: the result type without the runtime. */
 export type PlanCheckAnswer = PlanCheckResult | PlanCheckUnavailable;
+
+// ── The mode's ceiling, registered once ──────────────────────────────────────
+
+/**
+ * `registerDelegationCeilingProvider`, re-typed against this package's
+ * pi-coding-agent, for the same reason `acquireService` is.
+ */
+const registerCeilingProvider =
+	registerDelegationCeilingProvider as unknown as (
+		events: EventBus,
+		provider: () => DelegationCeiling | undefined,
+	) => () => void;
+
+/**
+ * Bound every delegation this process launches by the seat's current mode.
+ *
+ * ONE PROVIDER, asked at launch time rather than read at registration: the mode
+ * changes under a session, and a ceiling captured when the extension loaded
+ * would bound a launch by a posture nobody is in any more. pi-subagent consults
+ * it for its own `subagent` tool and for pi-workflow's `workflow_run`, so the
+ * bound applies to every delegated launch in the process without either of them
+ * knowing what a pi-maestro mode is.
+ *
+ * pi-subagent refuses a second registration by name. That refusal is returned
+ * rather than thrown: a seat that cannot register a ceiling is a seat whose
+ * delegations are bounded by somebody else's, which is a fact worth reporting and
+ * not a reason to fail to load.
+ */
+export function registerModeCeiling(
+	events: EventBus,
+	currentMode: () => ModeName,
+): { readonly release: () => void } | { readonly problem: string } {
+	try {
+		const release = registerCeilingProvider(events, () =>
+			modeCeiling(currentMode()),
+		);
+		return { release };
+	} catch (error) {
+		return {
+			problem:
+				providerCeilingRefusal(error) ??
+				"the delegation ceiling could not be registered with the subagent runtime",
+		};
+	}
+}
+
+/** pi-subagent's own ceiling-registration refusal, recognised by name. */
+function providerCeilingRefusal(error: unknown): string | undefined {
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		(error as { name?: unknown }).name === "DelegationCeilingProviderError" &&
+		typeof (error as { message?: unknown }).message === "string"
+	)
+		return (error as { message: string }).message;
+	return undefined;
+}

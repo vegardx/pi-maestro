@@ -89,7 +89,7 @@ import {
 	responseDigest,
 	writeAuthoringEvidence,
 } from "./authoring.js";
-import type { ExitMode, ModeName } from "./mode.js";
+import { type ExitMode, type ModeName, modeCeiling } from "./mode.js";
 import {
 	DEFAULT_GATES,
 	gateStops,
@@ -1283,8 +1283,18 @@ export async function runExitFlow(
 			// call, validates the input the way `workflow_run` would, and journals
 			// the run with origin `"service-provider"` — so nothing here or
 			// afterwards pretends the conversation started it.
+			// THE TARGET MODE'S CEILING, not the current one's: the run starts
+			// while the posture switches, and bounding it by the plan mode this
+			// hand-off is leaving would refuse the worktrees the run exists to
+			// write in. The runtime refuses a start above the bound by name.
+			const ceiling = modeCeiling(deps.wanted);
 			const receipt = await callWorkflow(
-				() => client.startBuiltin(PLAN_WORKFLOW_REF, { input, effort }),
+				() =>
+					client.startBuiltin(PLAN_WORKFLOW_REF, {
+						input,
+						effort,
+						...(ceiling ? { ceiling } : {}),
+					}),
 				ui.notify,
 			);
 			if (!receipt)

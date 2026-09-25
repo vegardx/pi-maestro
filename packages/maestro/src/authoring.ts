@@ -83,7 +83,7 @@ export function descriptionProblem(answer: string): string | undefined {
  * The description: what `renderIntentSteer` used to ask for, as a system
  * prompt.
  *
- * It is the yardstick — what the blind reviewer is told the plan is FOR — so it
+ * It is the yardstick — what the plan check is told the plan is FOR — so it
  * comes from the model rather than from a person typing one line into a dialog:
  * the conversation already contains it, and asking somebody to retype their own
  * intent is the flow asking them to do the model's reading for it.
@@ -99,8 +99,9 @@ export const DESCRIPTION_SYSTEM_PROMPT = [
 	`Answer with those sentences and nothing else: plain prose between ${MIN_DESCRIPTION_LENGTH} and ${MAX_DESCRIPTION_LENGTH} characters, with no heading, no code fence, no list, no preamble and no closing question.`,
 	"",
 	"You have no tools here and nothing you write starts anything. The person is" +
-		" shown exactly what you write, and they agree to it, edit it, or send us" +
-		" back to the conversation. Do not ask them to write it for you.",
+		" shown exactly what you write, beside the plan, in the one confirmation" +
+		" that starts the run — they start it, edit this, or keep planning. Do not" +
+		" ask them to write it for you.",
 ].join("\n");
 
 /** The one user message that asks for the description. */
@@ -156,9 +157,9 @@ export function renderDocumentSystemPrompt(
 		"",
 		JSON.stringify(PlanSchema, null, 2),
 		"",
-		"You have no tools here and nothing you write starts anything: a blind" +
-			" reviewer reads the plan once it is stored, and a plan reviewed by its" +
-			" author is not reviewed. The person starts any run themselves.",
+		"You have no tools here and nothing you write starts anything: the plan is" +
+			" read in a fresh context the moment it is stored, and a plan checked by" +
+			" its author is not checked. The person starts any run themselves.",
 	].join("\n");
 }
 
@@ -409,10 +410,18 @@ function asMessages(
 // ── The evidence ─────────────────────────────────────────────────────────────
 
 export const AUTHORING_EVIDENCE_FILE = "authoring.json";
-export const AUTHORING_EVIDENCE_SCHEMA_VERSION = 1 as const;
+export const AUTHORING_EVIDENCE_SCHEMA_VERSION = 2 as const;
 
-/** Which of the three things was being asked for. */
-export type AuthoringAttemptKind = "intent" | "plan" | "revise";
+/**
+ * Which of the four things happened, in the order they can happen.
+ *
+ * `check` is not a request to the model at all — it is the one-shot plan check
+ * — and it is on the same record because the record answers one question: what
+ * did the harness do between "leaving plan mode" and "a plan". An attempt list
+ * that held the two requests and not the read that rewrote them would be a
+ * record of half the exit.
+ */
+export type AuthoringAttemptKind = "intent" | "plan" | "revise" | "check";
 
 /**
  * One request and what came back, in terms a later reader can check.
@@ -421,6 +430,12 @@ export type AuthoringAttemptKind = "intent" | "plan" | "revise";
  * provider error, a stack, a path, or any of the answer's own text.
  * `responseDigest` is what stands in for the answer — enough to tell two
  * attempts apart, and not enough to read either.
+ *
+ * `verdict` and `counts` are only on a `check` attempt, and they are the whole
+ * of what a check leaves behind: what it said about the plan, and how many
+ * things of each severity it said it about. The findings themselves are not
+ * here — they are the reviewer's prose about somebody's repository, and this
+ * file is a record of what the harness did, not a copy of what it read.
  */
 export interface AuthoringAttempt {
 	readonly kind: AuthoringAttemptKind;
@@ -431,6 +446,10 @@ export interface AuthoringAttempt {
 	readonly ok: boolean;
 	readonly problems: string[];
 	readonly responseDigest: string;
+	/** `check` only: what the reviewer said about the plan as a whole. */
+	readonly verdict?: string;
+	/** `check` only: how many findings of each severity. */
+	readonly counts?: Readonly<Record<string, number>>;
 }
 
 export interface AuthoringEvidence {

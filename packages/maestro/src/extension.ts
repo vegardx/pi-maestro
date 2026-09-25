@@ -86,16 +86,16 @@ export const PLAN_MODE_RUN_REFUSAL =
  * is still refused to the model there, because safe was never the question.
  * Plan mode is a conversation, a run is the seat acting, and the two ways a run
  * starts from plan mode are the person asking for one with `/workflow run` and
- * the exit starting the plan's own. This was written as guidance twice — in the
- * steers, the trailer and the docs — and a model reviewed its own plan with
- * `deep-review` from plan mode both times, which is the reading a blind review
- * exists to prevent. Guidance that fails twice is a rule, so the seat enforces
- * it. The seat's own headless `plan-review` is unaffected: it goes through the
- * runtime's `runBuiltin`, not through the model's tools.
+ * the hand-off starting the plan's own. This was written as guidance twice — in
+ * the steers, the trailer and the docs — and a model reviewed its own plan with
+ * `deep-review` from plan mode both times, which is the reading an independent
+ * check exists to prevent. Guidance that fails twice is a rule, so the seat
+ * enforces it. The seat's own plan check is unaffected: it is a one-shot
+ * subagent the harness launches, not a tool the model can reach.
  *
  * There is nothing here about writing a plan any more. The document is not a
- * tool call: the exit asks the model for it directly, outside the agent loop
- * and with no tools offered at all.
+ * tool call: the hand-off asks the model for it directly, outside the agent
+ * loop and with no tools offered at all.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
@@ -149,7 +149,7 @@ export interface StartSeatOptions {
 	readonly agentDir?: string;
 	/** @see beginModeExit — overridable so a test can watch the seam fire. */
 	readonly beginModeExit?: ModeExitHook;
-	/** The exit itself — overridable so a test can watch the seam fire. */
+	/** The hand-off itself — overridable so a test can watch the seam fire. */
 	readonly runExitFlow?: (deps: ExitFlowDeps) => Promise<ExitFlowOutcome>;
 	/** How the model is asked. Overridable so a test needs no provider. */
 	readonly complete?: (ctx: ModeExitContext) => AuthoringComplete;
@@ -278,36 +278,20 @@ export function startSeat(
 		// patches back to it, so it gets the seat's own store rather than a
 		// second reader of the same directory.
 		store: () => seat().store,
-		// The same host the store was given. The exit re-validates what it
-		// rewrites — `diverse` written onto heavy lenses, every accepted patch —
-		// and a reading without the host would refuse the pinned model the store
-		// had just accepted.
+		// The same host the store was given. The hand-off re-validates what it
+		// rewrites — `diverse` written onto heavy lenses, every rewrite the plan
+		// check asks for — and a reading without the host would refuse the pinned
+		// model the store had just accepted.
 		...(options.host
 			? {
 					inspect: (plan: Plan) =>
 						inspectPlan(plan, undefined, options.host?.()),
 				}
 			: {}),
-		// Repository creation goes through the seat's audited `bash` tool, the
-		// same adapter publication uses, so the classifier and this mode's
-		// confirmation policy apply to `git init` exactly as they do to a
-		// cherry-pick. A seat whose tool set has no `bash` simply cannot create
-		// one, and readiness says so.
-		bash: (ctx) => {
-			const tool = seat()
-				.tools.definitionsFor("maestro")
-				.find((definition) => definition.name === "bash");
-			// The controller declares only what it reads of the context; the
-			// value here is the `/mode` handler's own `ExtensionCommandContext`,
-			// which is what the tool needs to confirm and to render.
-			return tool
-				? createAuditedBash(tool, ctx as ExtensionContext, "maestro-readiness")
-				: undefined;
-		},
 		...(events
 			? {
 					workflow: (ctx, notify) =>
-						acquireWorkflowClientOrWarn(events, ctx, notify, "run"),
+						acquireWorkflowClientOrWarn(events, ctx, notify),
 				}
 			: {}),
 		...(options.runExitFlow ? { flow: options.runExitFlow } : {}),
@@ -447,7 +431,6 @@ export function startSeat(
 			pi.events,
 			ctx,
 			(message, type) => ctx.ui.notify(message, type),
-			"run",
 		);
 		if (!client)
 			return {
@@ -497,12 +480,7 @@ export function startSeat(
 			);
 			return undefined;
 		}
-		const client = await acquireWorkflowClientOrWarn(
-			pi.events,
-			ctx,
-			notify,
-			"run",
-		);
+		const client = await acquireWorkflowClientOrWarn(pi.events, ctx, notify);
 		if (!client) return undefined;
 		const receipt = await callWorkflow(
 			() =>
@@ -511,7 +489,6 @@ export function startSeat(
 					effort: input.effort,
 				}),
 			notify,
-			"run",
 		);
 		return receipt?.runId;
 	};

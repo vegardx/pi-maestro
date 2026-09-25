@@ -25,10 +25,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          path: pi-maestro
+      # The seat depends on @vegardx/pi-subagent through a file: link to the
+      # sibling checkout (see package.json), so CI builds that sibling at the
+      # pinned commit before installing here. Raise the ref with the pin.
+      - uses: actions/checkout@v7
+        with:
+          repository: vegardx/pi-subagent
+          ref: 0ae4c106b4235d8576bde75a23896ba413bcf88e
+          path: pi-subagent
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            pi-maestro/package-lock.json
+            pi-subagent/package-lock.json
       - run: npm ci
+        working-directory: pi-subagent
+      - run: npm run build
+        working-directory: pi-subagent
+      - run: npm ci
+        working-directory: pi-maestro
       # biome -> tsc -> feature-flag contract -> docs -> vitest -> smoke
       - run: npm run check
+        working-directory: pi-maestro

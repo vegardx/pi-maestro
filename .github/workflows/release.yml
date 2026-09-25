@@ -27,13 +27,31 @@ jobs:
           # semantic-release needs the full history + tags to find the last release.
           fetch-depth: 0
           persist-credentials: false
+          path: pi-maestro
+      # Same sibling checkout as ci.yml: the seat's pi-subagent dependency is a
+      # file: link to ../pi-subagent. Raise the ref with the pin.
+      - uses: actions/checkout@v7
+        with:
+          repository: vegardx/pi-subagent
+          ref: 0ae4c106b4235d8576bde75a23896ba413bcf88e
+          path: pi-subagent
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
+          cache-dependency-path: |
+            pi-maestro/package-lock.json
+            pi-subagent/package-lock.json
       - run: npm ci
+        working-directory: pi-subagent
+      - run: npm run build
+        working-directory: pi-subagent
+      - run: npm ci
+        working-directory: pi-maestro
       # biome -> tsc -> boundary linter -> feature-flag contract -> vitest -> smoke
       - run: npm run check
+        working-directory: pi-maestro
       - run: npx semantic-release
+        working-directory: pi-maestro
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

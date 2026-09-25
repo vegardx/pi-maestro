@@ -91,7 +91,7 @@ so a runtime swapped mid-acquisition is refused rather than used.
 
 **The duplicated contract is pinned by a fixture.**
 `workflow-contract.ts` carries a frozen `REQUIRED_WORKFLOW_CONTRACT` — one
-contract revision and the seven feature keys the seat depends on — because it
+contract revision and the eight feature keys the seat depends on — because it
 cannot import pi-workflow's own constant. `test/fixtures/pi-workflow-runtime-contract.json`
 is a copy of that constant taken from pi-workflow's built `dist`, and
 `test/workflow-provider.test.ts` asserts the literal's revision and every

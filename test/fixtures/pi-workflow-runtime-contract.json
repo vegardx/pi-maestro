@@ -1,9 +1,9 @@
 {
 	"schema": "pi-workflow-runtime",
-	"contractRevision": 20,
+	"contractRevision": 21,
 	"requiredSubagent": {
 		"schema": "pi-subagent-runtime",
-		"contractRevision": 7,
+		"contractRevision": 8,
 		"features": {
 			"nativeSessionBackend": true,
 			"gondolinSandbox": true,
@@ -27,7 +27,9 @@
 			"publicNetworkEgress": true,
 			"explicitResources": true,
 			"ambientExtensionsControl": true,
-			"hostBrokeredTools": true
+			"hostBrokeredTools": true,
+			"agentRootsFirst": true,
+			"delegationCeiling": true
 		}
 	},
 	"features": {

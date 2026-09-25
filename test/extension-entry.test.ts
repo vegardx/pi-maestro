@@ -262,10 +262,16 @@ describe("/plan run under the mode's ceiling", () => {
 		} as unknown as Plan;
 	}
 
-	/** pi-workflow's own refusal, as it will read once part 4 lands there. */
+	/**
+	 * pi-workflow's own refusal, verbatim.
+	 *
+	 * Its `ceilingRefusalMessage` builds this for `workflow_run` and
+	 * `startBuiltin` alike, and it names BOTH sides — what the definition needs
+	 * and what the host allows — because a message that named one would leave a
+	 * person guessing which to change.
+	 */
 	const REFUSAL =
-		"Workflow plan-to-ship needs workspace mode `worktree`, and this" +
-		" session's delegation ceiling allows `read-only`.";
+		"plan-to-ship needs a worktree workspace; the host ceiling allows read-only.";
 
 	function seatWithRuntime(mode: "plan" | "auto") {
 		const repo = temp("maestro-repo-");
@@ -331,8 +337,8 @@ describe("/plan run under the mode's ceiling", () => {
 		// the bound, through the provider seam's sanitized warning.
 		const said = s.h.notices.map(([, message]) => message).join("\n");
 		expect(said).toContain("Workflow runtime unavailable (validation)");
-		expect(said).toContain("needs workspace mode `worktree`");
-		expect(said).toContain("allows `read-only`");
+		expect(said).toContain("needs a worktree workspace");
+		expect(said).toContain("the host ceiling allows read-only");
 		expect(said).toContain("/plan run");
 		// Nothing about a tool name, because nothing refused a tool.
 		expect(said).not.toContain("workflow_run");

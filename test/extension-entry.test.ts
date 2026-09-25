@@ -222,9 +222,7 @@ function busWith(client: Record<string, unknown>): WorkflowEventBus {
 			list: async () => [],
 			validate: async () => ({ valid: true, workflow: {} }),
 			project: async () => ({ fits: true }),
-			runBuiltin: async () => ({ runId: "r", status: "running" }),
 			startBuiltin: async () => ({ runId: "r" }),
-			awaitRun: async () => ({ runId: "r", status: "completed" }),
 			...client,
 		}),
 	};

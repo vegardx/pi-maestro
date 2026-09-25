@@ -23,6 +23,7 @@
 // reviewer gets `{unavailable}`, which is never a refusal: the confirmation
 // says the check could not run and why, and the person still decides.
 
+import { Type } from "typebox";
 import type { Plan } from "./plan.js";
 
 /** Most severe first. The order IS the severity ordering; nothing else ranks. */
@@ -312,3 +313,43 @@ export function renderPlanCheckSteer(
 			" and the person is shown the result.",
 	].join("\n");
 }
+
+// ── The reviewer's output schema ──────────────────────────────────────────────
+
+/**
+ * What the one-shot reviewer must return, as the structured-output schema its
+ * launch pins.
+ *
+ * DERIVED FROM THE CONSTANTS ABOVE, not written out beside them: the severities
+ * and the verdicts live in exactly one place, and a fourth severity added to the
+ * union cannot fail to appear in the schema the reviewer is held to. The schema
+ * is pinned on the request, so an output that does not fit it is the reviewer
+ * being unreachable — `readPlanCheckResult` is the second check, on this side,
+ * because a schema enforced only by the runtime is a schema this seat is
+ * trusting a peer to have enforced.
+ */
+export const PlanCheckOutputSchema = Type.Object(
+	{
+		verdict: Type.Union(
+			PLAN_CHECK_VERDICTS.map((verdict) => Type.Literal(verdict)),
+		),
+		findings: Type.Array(
+			Type.Object(
+				{
+					id: Type.String({ minLength: 1 }),
+					severity: Type.Union(
+						PLAN_CHECK_SEVERITIES.map((severity) => Type.Literal(severity)),
+					),
+					where: Type.String({ minLength: 1 }),
+					summary: Type.String({ minLength: 1 }),
+					direction: Type.Optional(Type.String({ minLength: 1 })),
+					needsPerson: Type.Optional(Type.Boolean()),
+					question: Type.Optional(Type.String({ minLength: 1 })),
+				},
+				{ additionalProperties: false },
+			),
+		),
+		notes: Type.String(),
+	},
+	{ additionalProperties: false },
+);

@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "pi-maestro — structured pi coding-agent extension stack",
+	"description": "pi-maestro \u2014 structured pi coding-agent extension stack",
 	"license": "MIT",
 	"keywords": [
 		"pi-package"
@@ -42,6 +42,7 @@
 		"@earendil-works/pi-tui": "0.84.2",
 		"@sinclair/typebox": "^0.34.52",
 		"@types/node": "^24.13.3",
+		"@vegardx/pi-subagent": "file:../pi-subagent",
 		"husky": "^9.1.7",
 		"semantic-release": "^25.0.7",
 		"typescript": "^7.0.2",

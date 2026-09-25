@@ -1421,6 +1421,14 @@ export interface ModeExitControllerDeps {
 	/** The plan check, built per flow from the session's own context. */
 	readonly planCheck?: (ctx: ModeExitContext) => PlanCheck | undefined;
 	/**
+	 * A run this hand-off started, so the session can narrate it.
+	 *
+	 * Called from HERE rather than from inside the flow because this is the
+	 * boundary the run's identity crosses on its way out: the flow's business is
+	 * getting to a run, and what watches one is the seat's.
+	 */
+	readonly onStarted?: (slug: string, runId: string) => void;
+	/**
 	 * How the flow validates a plan — the stored document and every rewrite of
 	 * it.
 	 *
@@ -1525,6 +1533,8 @@ export function createModeExitController(
 		try {
 			const outcome = await running;
 			last = outcome;
+			if (outcome.kind === "started")
+				deps.onStarted?.(outcome.slug, outcome.runId);
 			switch (outcome.kind) {
 				case "switch-only":
 				case "stored":

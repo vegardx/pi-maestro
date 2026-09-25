@@ -16,7 +16,7 @@ import {
 	type ModeExitContext,
 	type ModeExitHook,
 } from "./exit-flow.js";
-import { MODE_NAMES, type ModeName } from "./mode.js";
+import { MODE_NAMES, type ModeName, modeCeiling } from "./mode.js";
 import { createRunNarrator, type RunNarrator } from "./narrate.js";
 import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
 import {
@@ -35,7 +35,10 @@ import {
 	watchShippedRuns,
 } from "./publish.js";
 import { createSeat, type Seat } from "./seat.js";
-import { createSubagentPlanCheck } from "./subagent-provider.js";
+import {
+	createSubagentPlanCheck,
+	registerModeCeiling,
+} from "./subagent-provider.js";
 import {
 	acquireWorkflowClient,
 	acquireWorkflowClientOrWarn,
@@ -53,22 +56,28 @@ export { beginModeExit, type ModeExitHook };
 
 const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 
-/** The workflow tools a MODEL may not reach for in plan mode. */
-const MODEL_STARTED_RUN_TOOLS = new Set(["workflow_run", "workflow_propose"]);
-
-/** What a model is told when it reaches for a run from plan mode. */
-export const PLAN_MODE_RUN_REFUSAL =
-	"A workflow run is not started by the model in plan mode. The person starts" +
-	" one with `/workflow run <ref>`, and the plan-mode hand-off starts the" +
-	" plan's own run at the end of `/mode auto`. Ask for the run you want, in" +
-	" the conversation, rather than starting it.";
-
 /**
  * Why a tool call cannot happen in this posture, or nothing.
  *
- * Direct mutation in plan mode is the posture itself. A model-started workflow
- * run is the other rule, and it is not about safety: plan mode is a
- * conversation, a run is the seat acting.
+ * ONE RULE IS LEFT, and it is the posture itself: plan mode is read-only, and
+ * the tools that write directly are the ones it withholds.
+ *
+ * THE WORKFLOW RULE IS GONE, AND NOT BECAUSE IT WAS WRONG. This seat used to
+ * refuse `workflow_run` and `workflow_propose` to the model in plan mode by
+ * name, with a fixed sentence, because plan mode is a conversation and a run is
+ * the seat acting. The rule was right and the ENFORCEMENT WAS IN THE WRONG
+ * PLACE: a tool allowlist here had to be kept in step with whatever tools the
+ * runtimes happened to register, and it said nothing at all about the launches
+ * those tools make. The mode's ceiling says it once, in pi-subagent's own
+ * vocabulary, and travels with every delegated launch in the process —
+ * `modeCeiling` in `mode.ts`, registered at session start. pi-workflow refuses a
+ * start whose definition needs more than the ceiling allows, naming both, which
+ * is a better sentence than this file could write and it is true of every
+ * launch rather than of two tool names.
+ *
+ * There is nothing here about writing a plan either. The document is not a tool
+ * call: the hand-off asks the model for it directly, outside the agent loop and
+ * with no tools offered at all.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
@@ -76,8 +85,6 @@ export function seatToolBlockReason(
 ): string | undefined {
 	if (mode === "plan" && DIRECT_MUTATION_TOOLS.has(toolName))
 		return `Mode plan is read-only; switch to /mode auto or /mode hack before using ${toolName}.`;
-	if (mode === "plan" && MODEL_STARTED_RUN_TOOLS.has(toolName))
-		return PLAN_MODE_RUN_REFUSAL;
 	return undefined;
 }
 
@@ -488,11 +495,17 @@ export function startSeat(
 		}
 		const client = await acquireWorkflowClientOrWarn(pi.events, ctx, notify);
 		if (!client) return undefined;
+		// THE CURRENT MODE'S CEILING: `/plan run` is a person starting a run from
+		// wherever they are standing, so the bound is the posture they are in. In
+		// plan mode that is read-only, and pi-workflow refuses `plan-to-ship` —
+		// which needs worktrees — naming both the need and the bound.
+		const ceiling = modeCeiling(seat().mode().name);
 		const receipt = await callWorkflow(
 			() =>
 				client.startBuiltin(PLAN_WORKFLOW_REF, {
 					input,
 					effort: input.effort,
+					...(ceiling ? { ceiling } : {}),
 				}),
 			notify,
 		);
@@ -606,6 +619,26 @@ export default defineExtension(
 			},
 		});
 		entry.seat();
+		// THE MODE'S CEILING, REGISTERED ONCE, for the whole process.
+		//
+		// Not per session: the posture lives on the seat and outlives any one
+		// session, and pi-subagent refuses a second registration by name — so
+		// re-registering on `session_start` would turn the second session into an
+		// unbounded one. The provider is a closure over `currentMode`, asked at
+		// launch time, so a mode change under a running session bounds the next
+		// launch rather than the one that was registered.
+		if (pi.events) {
+			const registered = registerModeCeiling(pi.events, entry.currentMode);
+			if ("problem" in registered)
+				// A seat whose delegations are bounded by somebody else's ceiling is
+				// a fact worth saying once, not a reason to fail to load.
+				pi.on("session_start", (_event, ctx) => {
+					ctx.ui.notify(
+						`The seat's delegation ceiling was not registered: ${registered.problem}. Launches in this session are bounded by whatever else registered one.`,
+						"warning",
+					);
+				});
+		}
 		pi.on("tool_call", (event) => {
 			const reason = seatToolBlockReason(entry.currentMode(), event.toolName);
 			if (reason) return { block: true, reason };

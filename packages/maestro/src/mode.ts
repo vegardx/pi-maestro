@@ -100,3 +100,30 @@ export interface DelegationCeiling {
 	workspaceModes?: WorkspaceMode[];
 	tools?: string[];
 }
+
+/**
+ * What a mode lets a delegation do.
+ *
+ * Derived from the mode's `cwd` fact rather than written out per name, because
+ * "may this session change a tree?" and "may something it launches?" are the
+ * same question asked one level down — and a fourth mode could not be added
+ * without answering it.
+ *
+ *   - **plan** — read-only. A delegation from a conversation reads; it does not
+ *     produce work.
+ *   - **auto** — read-only or a worktree. Work happens in a worktree, never in
+ *     the tree the person is sitting in.
+ *   - **hack** — no ceiling. The posture whose whole meaning is that the
+ *     restrictions are off does not get to keep one here.
+ *
+ * PUBLICATION IS NEVER INSIDE A CEILING. Pushing is pi-maestro's own act, under
+ * its own audited Bash policy and a durable human decision, and it is not a
+ * delegation.
+ */
+export function modeCeiling(name: ModeName): DelegationCeiling | undefined {
+	const posture = mode(name);
+	if (posture.safeguards === "reduced") return undefined;
+	return posture.cwd === "write"
+		? { workspaceModes: ["read-only", "worktree"] }
+		: { workspaceModes: ["read-only"] };
+}

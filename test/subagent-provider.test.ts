@@ -10,9 +10,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EventBus } from "@earendil-works/pi-coding-agent";
 import { SUBAGENT_RUNTIME_CONTRACT } from "@vegardx/pi-subagent";
+import {
+	DelegationCeilingProviderError,
+	registerDelegationCeilingProvider,
+	resolveDelegationCeiling,
+} from "@vegardx/pi-subagent/ceiling-provider";
 import { registerSubagentServiceProvider } from "@vegardx/pi-subagent/service-provider";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { MODE_NAMES, type ModeName } from "../packages/maestro/src/mode.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import {
 	PlanCheckOutputSchema,
@@ -31,6 +37,7 @@ import {
 	planCheckRequest,
 	REQUIRED_SUBAGENT_CONTRACT_REVISION,
 	REQUIRED_SUBAGENT_FEATURES,
+	registerModeCeiling,
 	subagentContractMismatch,
 	UNAVAILABLE_ABORTED,
 	UNAVAILABLE_REFUSED,
@@ -439,5 +446,55 @@ describe("the check against the shared service", () => {
 		await expect(check(bus)(PLAN, DESCRIPTION)).resolves.toEqual({
 			unavailable: UNAVAILABLE_REFUSED,
 		});
+	});
+});
+
+// ── The ceiling ──────────────────────────────────────────────────────────────
+
+describe("the mode's ceiling, registered with pi-subagent", () => {
+	it("answers with the posture the seat is in when the launch happens", () => {
+		const bus = fakeBus();
+		let mode: ModeName = "plan";
+		const registered = registerModeCeiling(bus, () => mode);
+		expect("release" in registered).toBe(true);
+
+		// Asked at launch time, not captured at registration: the mode moves
+		// under a session and the next launch is bounded by where it actually is.
+		expect(resolveDelegationCeiling(bus)).toEqual({
+			workspaceModes: ["read-only"],
+		});
+		mode = "auto";
+		expect(resolveDelegationCeiling(bus)).toEqual({
+			workspaceModes: ["read-only", "worktree"],
+		});
+		mode = "hack";
+		expect(resolveDelegationCeiling(bus)).toBeUndefined();
+
+		if ("release" in registered) registered.release();
+		expect(resolveDelegationCeiling(bus)).toBeUndefined();
+	});
+
+	it("reports a second registration rather than throwing at load", () => {
+		const bus = fakeBus();
+		registerDelegationCeilingProvider(bus, () => undefined);
+		const second = registerModeCeiling(bus, () => "auto");
+		expect(second).toEqual({
+			problem: new DelegationCeilingProviderError(
+				"duplicate",
+				"A pi-subagent delegation ceiling provider is already registered.",
+			).message,
+		});
+	});
+
+	it("states every ceiling in a vocabulary that satisfies pi-subagent's contract", () => {
+		for (const mode of MODE_NAMES) {
+			const bus = fakeBus();
+			const registered = registerModeCeiling(bus, () => mode);
+			// `resolveDelegationCeiling` validates against the shipped schema and
+			// fails closed on a ceiling that does not satisfy it, so this is the
+			// contract check rather than a restatement of the mapping.
+			expect(() => resolveDelegationCeiling(bus)).not.toThrow();
+			if ("release" in registered) registered.release();
+		}
 	});
 });

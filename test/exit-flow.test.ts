@@ -66,7 +66,7 @@ import {
 	START_SWITCH,
 	START_TITLE,
 } from "../packages/maestro/src/exit-flow.js";
-import type { ModeName } from "../packages/maestro/src/mode.js";
+import { type ModeName, modeCeiling } from "../packages/maestro/src/mode.js";
 import {
 	inspectPlan,
 	type Plan,
@@ -501,9 +501,39 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 				input: {
 					input: JSON.parse(h.inputs[0]?.[1] as string),
 					effort: "standard",
+					// THE TARGET MODE'S CEILING: the run starts while the posture
+					// switches, so it is bounded by where the person is going.
+					ceiling: modeCeiling("auto"),
 				},
 			},
 		]);
+	});
+
+	it("starts the run under the ceiling of the posture being switched to", async () => {
+		// Plan mode's ceiling is read-only and this run writes to worktrees, so
+		// bounding it by the posture the hand-off is LEAVING would refuse the run
+		// the hand-off exists to start.
+		for (const wanted of ["auto", "hack"] as const) {
+			const h = harness({
+				wanted,
+				script: [DESCRIPTION, documentText()],
+				answer: happyPath,
+			});
+			expect((await runExitFlow(h.deps)).kind).toBe("started");
+			const started = h.provider?.plansStarted()[0]?.input as {
+				ceiling?: unknown;
+			};
+			const ceiling = modeCeiling(wanted);
+			expect([wanted, started.ceiling]).toEqual([wanted, ceiling]);
+			// Hack is the posture whose whole meaning is that the restrictions are
+			// off, so the start carries no ceiling at all.
+			expect([wanted, started.ceiling === undefined]).toEqual([
+				wanted,
+				wanted === "hack",
+			]);
+			expect(h.modes).toEqual([wanted]);
+		}
+		expect(modeCeiling("plan")).toEqual({ workspaceModes: ["read-only"] });
 	});
 
 	it("shows the description, the plan, publication, the check and the gate", async () => {

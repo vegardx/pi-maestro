@@ -20,7 +20,6 @@ import {
 } from "./command-auditor.js";
 import type { ExecutionPolicySettings } from "./execution-policy.js";
 import type { Mode } from "./mode.js";
-import type { AuditedBash } from "./readiness.js";
 import { analyzeShellProgram } from "./shell-program.js";
 
 const AVAILABLE_ALTERNATIVES = new Set([
@@ -215,16 +214,35 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 	} as ToolDefinition;
 }
 
+/** What a command through the audited Bash tool returned. */
+export interface BashOutcome {
+	readonly ok: boolean;
+	/** Whatever the command (or the refusal) said, for the failure message. */
+	readonly output: string;
+}
+
+/**
+ * The seat's audited Bash tool, narrowed to the one thing a flow needs of it.
+ *
+ * Declared beside the tool rather than beside its callers so that "run a
+ * command the way the model's commands are run" has one type, and publication —
+ * the only flow that runs any — takes that type instead of a tool definition.
+ */
+export type AuditedBash = (
+	command: string,
+	intent: string,
+) => Promise<BashOutcome>;
+
 /**
  * The seat's own Bash tool, as a function the seat's own flows can call.
  *
- * Readiness creation and publication both need to run commands, and both must
- * run them the way the MODEL's commands are run: through this tool, so the
- * deterministic classifier, the ambiguity audit and the mode's confirmation
- * policy all apply. Reaching for `execFileSync` instead would be a second,
- * unaudited way to touch the host — exactly the shape the classifier exists to
- * remove — so the adapter is here, beside the tool, and the flows take the
- * narrow `AuditedBash` function type instead of a tool definition.
+ * Publication needs to run commands, and it must run them the way the MODEL's
+ * commands are run: through this tool, so the deterministic classifier, the
+ * ambiguity audit and the mode's confirmation policy all apply. Reaching for
+ * `execFileSync` instead would be a second, unaudited way to touch the host —
+ * exactly the shape the classifier exists to remove — so the adapter is here,
+ * beside the tool, and the flows take the narrow `AuditedBash` function type
+ * instead of a tool definition.
  *
  * The tool THROWS on a non-zero exit and on a refusal, with the output or the
  * reason in the message; both are the same fact to a caller — the command did

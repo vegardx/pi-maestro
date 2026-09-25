@@ -1,18 +1,20 @@
-// The plan-mode exit, end to end, driven through a fake UI, a fake completion,
-// a fake workflow runtime and a fake audited Bash.
+// The plan-mode hand-off, end to end, driven through a fake UI, a fake
+// completion, a fake workflow runtime and a fake plan check.
 //
-// The exit is ONE flow now: two dialogs, a request for the description, a
-// request for the document, and then readiness, the graph, the blind review and
-// the run. Nothing is on disk between the steps, so what the old suites checked
-// after every turn — the pending record — has nothing to check. What is left is
-// what actually matters, and every case below asserts the same five facts after
-// the fact: the outcome, the plan in the store, the posture, exactly which
-// dialogs were opened, and exactly what was asked of the model.
+// The hand-off is ONE flow: the effort dial, a request for the description, a
+// request for the document, the plan check the harness acts on itself, and one
+// confirmation. Nothing is on disk between the steps, so what the old suites
+// checked after every turn — the pending record — has nothing to check. What is
+// left is what actually matters, and every case below asserts the same five
+// facts after the fact: the outcome, the plan in the store, the posture, exactly
+// which dialogs were opened, and exactly what was asked of the model.
 //
-// The completion port is a fake with a SCRIPT. That is the point of the
-// redesign being a port: the failure modes that killed four by-hand passes —
-// an answer in prose, an answer that never validates, a provider that does not
-// answer, a session that goes away mid-request — are each one line here.
+// The completion port is a fake with a SCRIPT, and so is the plan check. That is
+// the point of both being ports: the failure modes that killed four by-hand
+// passes — an answer in prose, an answer that never validates, a provider that
+// does not answer, a session that goes away mid-request — are each one line
+// here, and so is a reviewer that blocks, one that needs a person, and one that
+// cannot be reached at all.
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,45 +41,30 @@ import {
 } from "../packages/maestro/src/authoring.js";
 import * as exitFlow from "../packages/maestro/src/exit-flow.js";
 import {
-	COMPILED_APPROVE,
-	COMPILED_BACK,
-	COMPILED_REVIEW,
-	COMPILED_TITLE,
+	CHECK_KEEP_PLANNING,
+	CHECK_OPTIONS,
+	CHECK_PROCEED,
 	chosenOption,
-	DIRTY_CONTINUE,
+	DESCRIPTION_EDITOR_TITLE,
 	derivePublication,
 	EFFORT_OPTIONS,
 	EFFORT_TITLE,
-	EXIT_COMPILE,
-	EXIT_KEEP_PLANNING,
-	EXIT_START_OPTIONS,
-	EXIT_START_TITLE,
-	EXIT_SWITCH_ONLY,
 	type ExitFlowDeps,
 	type ExitFlowUi,
 	type ExitOption,
 	FALLBACK_BASE_BRANCH,
-	INTENT_AGREE,
-	INTENT_BACK,
-	INTENT_EDIT,
-	INTENT_EDITOR_TITLE,
-	INTENT_OPTIONS,
-	INTENT_TITLE,
 	optionLabel,
 	optionLabels,
 	PLAN_MESSAGE_TYPE,
-	PLAN_REVIEW_REF,
-	renderReviewers,
+	renderPlanSummary,
 	runExitFlow,
-	START_RUN_TITLE,
+	START_EDIT,
+	START_KEEP_PLANNING,
+	START_OPTIONS,
+	START_RUN,
+	START_SWITCH,
+	START_TITLE,
 } from "../packages/maestro/src/exit-flow.js";
-import * as findings from "../packages/maestro/src/findings.js";
-import {
-	FINDING_DISMISS,
-	FINDING_REVISE,
-	type Finding,
-	MAX_BLIND_REVIEWS,
-} from "../packages/maestro/src/findings.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
 import {
 	inspectPlan,
@@ -85,12 +72,18 @@ import {
 	type RepoProbe,
 	validatePlan,
 } from "../packages/maestro/src/plan.js";
+import * as planCheck from "../packages/maestro/src/plan-check.js";
+import {
+	MAX_PLAN_CHECK_REVISIONS,
+	NO_PLAN_CHECK_REASON,
+	type PlanCheck,
+	type PlanCheckFinding,
+	type PlanCheckResult,
+	type PlanCheckUnavailable,
+} from "../packages/maestro/src/plan-check.js";
 import { PLAN_WORKFLOW_REF } from "../packages/maestro/src/plan-command.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
-import type {
-	WorkflowBudgetProjectionView,
-	WorkflowReadClient,
-} from "../packages/maestro/src/workflow-provider.js";
+import type { WorkflowReadClient } from "../packages/maestro/src/workflow-provider.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -197,15 +190,7 @@ function fakeComplete(script: readonly Turn[]) {
 		}
 		return { ok: false, failure: turn.failure };
 	};
-	return {
-		complete,
-		requests,
-		/** The user text of the last turn of request `n`. */
-		lastUserText: (n: number): string => {
-			const messages = requests[n]?.messages ?? [];
-			return [...messages].reverse().find((m) => m.role === "user")?.text ?? "";
-		},
-	};
+	return { complete, requests };
 }
 
 /** A working-tree root with nothing uncommitted in it, without a filesystem. */
@@ -214,14 +199,6 @@ const cleanProbe: RepoProbe = (path) => ({
 	resolved: path,
 	dirty: false,
 });
-
-/** Readiness' whole view of the world, all of it saying yes. */
-const readyWorld = {
-	exists: () => true,
-	probe: cleanProbe,
-	refExists: () => true,
-	ghPresent: () => true,
-};
 
 /** The store, with a real root so the evidence file lands somewhere real. */
 function fakeStore(root: string) {
@@ -237,7 +214,7 @@ function fakeStore(root: string) {
 			loadPlan: (slug: string): Plan | null => plans.get(slug) ?? null,
 			savePlan: (plan: Plan): void => {
 				// The real store's rule, with the real validator: nothing invalid
-				// reaches disk, and the exit flow has to survive being told so.
+				// reaches disk, and the hand-off has to survive being told so.
 				const errors = validatePlan(plan, cleanProbe);
 				if (errors.length > 0)
 					throw new Error(
@@ -250,31 +227,13 @@ function fakeStore(root: string) {
 	};
 }
 
-const PROJECTION = {
-	cost: 1.25,
-	totalTokens: 120_000,
-	childRuntimeMs: 900_000,
-	tasks: 9,
-	budget: { cost: 10, totalTokens: 1_000_000, childRuntimeMs: 3_600_000 },
-	fits: true,
-} as unknown as WorkflowBudgetProjectionView;
-
 interface FakeClientOptions {
-	readonly reviews?: readonly unknown[];
-	readonly runBuiltin?: () => Promise<{ runId: string; status: string }>;
 	/** The plan's own run. Scripted so a refusal is a test, not a mock. */
 	readonly startBuiltin?: () => Promise<{ runId: string }>;
-	readonly awaitRun?: () => Promise<{
-		runId: string;
-		status: string;
-		output?: unknown;
-		timedOut?: true;
-	}>;
 }
 
 function fakeClient(options: FakeClientOptions = {}) {
 	const calls: { ref: string; input: unknown }[] = [];
-	let round = 0;
 	const client: WorkflowReadClient = {
 		list: async () => [],
 		validate: async (ref: string, input?: unknown) => {
@@ -290,40 +249,22 @@ function fakeClient(options: FakeClientOptions = {}) {
 				},
 			};
 		},
-		project: async (ref: string, input: unknown) => {
-			calls.push({ ref: `project:${ref}`, input });
-			return PROJECTION;
+		project: async () => {
+			throw new Error("the hand-off projects nothing");
 		},
 		inspect: async () => ({}),
 		runs: async () => ({}),
 		observe: () => () => {},
-		runBuiltin:
-			options.runBuiltin ??
-			(async (ref: string, input: unknown) => {
-				calls.push({ ref: `runBuiltin:${ref}`, input });
-				return { runId: `run-${++round}`, status: "running" };
-			}),
 		startBuiltin:
 			options.startBuiltin ??
 			(async (ref: string, options_: { input: unknown; effort?: string }) => {
 				calls.push({ ref: `startBuiltin:${ref}`, input: options_ });
 				return { runId: PLAN_RUN_ID };
 			}),
-		awaitRun:
-			options.awaitRun ??
-			(async (runId: string) => ({
-				runId,
-				status: "completed",
-				output: options.reviews?.[round - 1] ?? {
-					verdict: "ready",
-					findings: [],
-				},
-			})),
 	} as WorkflowReadClient;
 	return {
 		client,
 		calls,
-		started: () => calls.filter((c) => c.ref.startsWith("runBuiltin")),
 		plansStarted: () => calls.filter((c) => c.ref.startsWith("startBuiltin")),
 	};
 }
@@ -331,16 +272,54 @@ function fakeClient(options: FakeClientOptions = {}) {
 /** The run id the fake runtime hands back for the plan's own run. */
 const PLAN_RUN_ID = "wfr-plan-to-ship-1";
 
-function fakeBash() {
-	const commands: string[] = [];
-	return {
-		commands,
-		bash: async (command: string) => {
-			commands.push(command);
-			return { ok: true, output: "" };
-		},
+/** A plan check with a scripted answer per round. */
+function fakeCheck(
+	rounds: readonly (PlanCheckResult | PlanCheckUnavailable)[],
+) {
+	const seen: { slug: string; description: string }[] = [];
+	let index = 0;
+	const check: PlanCheck = async (plan, description) => {
+		seen.push({ slug: plan.slug, description });
+		const answer = rounds[index++];
+		if (answer === undefined)
+			throw new Error(
+				`the flow checked ${index} times and the script has ${rounds.length}`,
+			);
+		return answer;
 	};
+	return { check, seen, ran: () => index };
 }
+
+const APPROVED: PlanCheckResult = {
+	verdict: "approve",
+	findings: [],
+	notes: "",
+};
+
+const BLOCKING: PlanCheckFinding = {
+	id: "f1",
+	severity: "blocking",
+	where: "deliverable d1",
+	summary: "nothing tests the catalogue",
+	direction: "add a task that runs the suite",
+};
+
+const NEEDS_PERSON: PlanCheckFinding = {
+	id: "f2",
+	severity: "blocking",
+	where: "the plan as a whole",
+	summary:
+		"this replaces a published API and nobody has said whether that is allowed",
+	needsPerson: true,
+	question: "Is breaking the published API acceptable here?",
+};
+
+const MINOR: PlanCheckFinding = {
+	id: "f3",
+	severity: "minor",
+	where: "deliverable d2",
+	summary: "the title could name the repository",
+};
 
 // ── What the model is scripted to say ────────────────────────────────────────
 
@@ -400,7 +379,7 @@ interface HarnessOptions {
 	readonly answer?: (opened: Opened, index: number) => Answer;
 	readonly after?: (opened: Opened, index: number) => void;
 	readonly client?: FakeClientOptions | null;
-	readonly world?: ExitFlowDeps["readiness"];
+	readonly check?: readonly (PlanCheckResult | PlanCheckUnavailable)[] | null;
 	readonly signal?: AbortSignal;
 	readonly contextUsage?: ExitFlowDeps["contextUsage"];
 	readonly publication?: ExitFlowDeps["publication"];
@@ -414,7 +393,8 @@ function harness(options: HarnessOptions = {}) {
 	const model = fakeComplete(options.script ?? []);
 	const provider =
 		options.client === null ? undefined : fakeClient(options.client ?? {});
-	const bash = fakeBash();
+	const check =
+		options.check === null ? undefined : fakeCheck(options.check ?? [APPROVED]);
 	const inputs: [string, string][] = [];
 	const modes: ModeName[] = [];
 	const announced: exitFlow.PlanAnnouncement[] = [];
@@ -427,9 +407,7 @@ function harness(options: HarnessOptions = {}) {
 		},
 		complete: model.complete,
 		store: store.store,
-		bash: bash.bash,
 		cwd: REPO,
-		readiness: options.world ?? readyWorld,
 		inspect: (candidate) => inspectPlan(candidate, cleanProbe),
 		workflow: async () => provider?.client,
 		publication: options.publication ?? (() => FULLY_EQUIPPED),
@@ -441,6 +419,7 @@ function harness(options: HarnessOptions = {}) {
 			clock += 1_000;
 			return new Date(clock);
 		},
+		...(check ? { planCheck: check.check } : {}),
 		...(options.announce === false
 			? {}
 			: { announce: (message) => announced.push(message) }),
@@ -452,13 +431,15 @@ function harness(options: HarnessOptions = {}) {
 		deps,
 		ui,
 		store,
-		bash,
 		model,
+		check,
 		inputs,
 		modes,
 		announced,
 		provider,
 		said: () => ui.said(),
+		confirmation: (): string =>
+			ui.titles().find((title) => title.startsWith(START_TITLE)) ?? "",
 		evidence: (slug = "compose"): AuthoringEvidence =>
 			JSON.parse(
 				readFileSync(join(root, slug, AUTHORING_EVIDENCE_FILE), "utf8"),
@@ -469,73 +450,206 @@ function harness(options: HarnessOptions = {}) {
 }
 
 /**
- * The answers that walk the happy path: compile, agree, review, start.
+ * The answers that walk the happy path: standard effort, start the run.
  *
- * Every one of them is given EXPLICITLY, because escape means none of them:
- * the recommended row is first in each table and the escape row is the safe way
- * out, and this path is the one where somebody said yes.
+ * Every one of them is given EXPLICITLY, because escape means none of them: the
+ * recommended row is first in each table and the escape row is the safe way out,
+ * and this path is the one where somebody said yes.
  */
 const happyPath = (opened: Opened, _index = 0): Answer => {
-	if (opened.kind === "confirm" && opened.title === START_RUN_TITLE)
-		return true;
-	if (opened.title === EXIT_START_TITLE)
-		return pick(opened.options, EXIT_COMPILE);
-	if (opened.title === COMPILED_TITLE)
-		return pick(opened.options, COMPILED_REVIEW);
-	if (opened.title.startsWith(INTENT_TITLE))
-		return pick(opened.options, INTENT_AGREE);
-	if (opened.title.includes("uncommitted"))
-		return pick(opened.options, DIRTY_CONTINUE);
+	if (opened.title.startsWith(START_TITLE))
+		return pick(opened.options, START_RUN);
+	if (opened.title === EFFORT_TITLE) return pick(opened.options, "standard");
 	return undefined;
 };
 
-// ── The two dialogs that come before anything is asked of the model ──────────
+// ── The sequence ─────────────────────────────────────────────────────────────
 
-describe("the first question, and the two answers that end the flow", () => {
-	it("keeps planning, asks the model nothing, and leaves the posture", async () => {
+describe("the hand-off, from `/mode auto` to a run", () => {
+	it("asks two dialogs for a two-deliverable plan and starts the run", async () => {
 		const h = harness({
-			answer: (o) =>
-				o.title === EXIT_START_TITLE ? EXIT_KEEP_PLANNING : undefined,
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
 		});
 
-		expect(await runExitFlow(h.deps)).toEqual({ kind: "keep-planning" });
-		expect(h.modes).toEqual([]);
-		expect(h.model.requests).toEqual([]);
-		expect(h.store.saves).toEqual([]);
-		expect(h.ui.titles()).toEqual([EXIT_START_TITLE]);
-		// Compiling is first, because it is what somebody who typed `/mode auto`
-		// after a planning conversation usually wants. It is NOT what escape
-		// takes.
-		expect(h.ui.opened[0]?.options).toEqual([
-			`${EXIT_COMPILE} (default)`,
-			EXIT_SWITCH_ONLY,
-			EXIT_KEEP_PLANNING,
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome).toMatchObject({
+			kind: "started",
+			slug: "compose",
+			runId: PLAN_RUN_ID,
+			asked: 2,
+		});
+		// THE EFFORT DIAL AND THE CONFIRMATION. Nothing else is asked: the
+		// description is agreed inside the confirmation, publication is derived,
+		// the gates take their default, and the plan check is the harness's to act
+		// on rather than a person's to walk.
+		expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
+		expect(h.ui.opened.map((o) => o.kind)).toEqual(["select", "select"]);
+		// The posture moves exactly once, and only once the run exists.
+		expect(h.modes).toEqual(["auto"]);
+		expect(h.check?.ran()).toBe(1);
+		expect(h.inputs.length).toBe(1);
+		// The harness started the plan's run itself, through the allowlisted
+		// `startBuiltin`, with the input it just exported and the effort agreed.
+		expect(h.provider?.plansStarted()).toEqual([
+			{
+				ref: `startBuiltin:${PLAN_WORKFLOW_REF}`,
+				input: {
+					input: JSON.parse(h.inputs[0]?.[1] as string),
+					effort: "standard",
+				},
+			},
 		]);
 	});
 
-	it("treats escape, and an answer it cannot resolve, as keeping planning", async () => {
-		for (const answer of [undefined, "something else"]) {
-			const h = harness({ answer: () => answer });
-			expect(await runExitFlow(h.deps)).toEqual({ kind: "keep-planning" });
-			expect(h.model.requests).toEqual([]);
+	it("shows the description, the plan, publication, the check and the gate", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
+			check: [{ verdict: "gaps", findings: [MINOR], notes: "Reads fine." }],
+		});
+
+		await runExitFlow(h.deps);
+
+		const body = h.confirmation();
+		expect(body.startsWith(`${START_TITLE}\n\n${DESCRIPTION}`)).toBe(true);
+		expect(body).toContain(
+			"`compose` — 2 deliverables, effort standard, gates ship.",
+		);
+		expect(body).toContain("  d1 — Deliverable one\n      impl: Do the work");
+		expect(body).toContain("      read by contracts (tier standard)");
+		expect(body).toContain("  d2 — Deliverable two, after d1");
+		expect(body).toContain(FULLY_EQUIPPED.why);
+		expect(body).toContain("Plan check: `gaps` — 1 minor.");
+		expect(body).toContain(MINOR.summary);
+		expect(body).toContain(
+			"Starting it is the approval, and it works through the plan and stops at its `ship` decision.",
+		);
+	});
+
+	it("offers the four answers, with starting first and escape committing to nothing", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
+		});
+		await runExitFlow(h.deps);
+		expect(h.ui.opened[1]?.options).toEqual([
+			`${START_RUN} (default)`,
+			START_EDIT,
+			START_SWITCH,
+			START_KEEP_PLANNING,
+		]);
+		expect(chosenOption(START_OPTIONS, undefined)).toBe("keep");
+	});
+});
+
+describe("each answer to the one confirmation", () => {
+	it("keeps planning on escape: nothing runs, nothing switches, the plan is stored", async () => {
+		for (const answer of [undefined, "something else", START_KEEP_PLANNING]) {
+			const h = harness({
+				script: [DESCRIPTION, documentText()],
+				answer: (o) =>
+					o.title.startsWith(START_TITLE) ? answer : happyPath(o),
+			});
+
+			const outcome = await runExitFlow(h.deps);
+
+			expect(outcome).toMatchObject({ kind: "back", slug: "compose" });
+			expect(h.modes).toEqual([]);
+			expect(h.store.saves.length).toBe(1);
+			expect(h.provider?.plansStarted()).toEqual([]);
+			expect(h.said()).toContain("still in plan mode");
+			expect(h.said()).toContain("/plan run compose");
 		}
 	});
 
-	it("switches with no plan and no request on `Just switch mode`", async () => {
+	it("switches and keeps the plan stored, without starting anything", async () => {
 		const h = harness({
+			script: [DESCRIPTION, documentText()],
 			answer: (o) =>
-				o.title === EXIT_START_TITLE ? EXIT_SWITCH_ONLY : undefined,
+				o.title.startsWith(START_TITLE)
+					? pick(o.options, START_SWITCH)
+					: happyPath(o),
 		});
 
-		expect(await runExitFlow(h.deps)).toEqual({ kind: "switch-only" });
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome).toMatchObject({ kind: "stored", slug: "compose" });
+		// THE POSTURE MOVES: the person asked for it and answered the question.
 		expect(h.modes).toEqual(["auto"]);
-		expect(h.model.requests).toEqual([]);
-		expect(h.ui.titles()).toEqual([EXIT_START_TITLE]);
+		expect(h.provider?.plansStarted()).toEqual([]);
+		expect(h.said()).toContain("Mode auto");
+		expect(h.said()).toContain("/plan run compose");
+	});
+
+	it("edits the description in place and comes back to the same confirmation", async () => {
+		const edited = `${"E".repeat(60)}.`;
+		let edits = 0;
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: (opened) => {
+				if (opened.title === DESCRIPTION_EDITOR_TITLE)
+					return edits++ === 0
+						? "x".repeat(MAX_DESCRIPTION_LENGTH + 1)
+						: edited;
+				if (opened.title.startsWith(START_TITLE))
+					return pick(opened.options, edits < 2 ? START_EDIT : START_RUN);
+				return happyPath(opened);
+			},
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome.kind).toBe("started");
+		expect(h.said()).toContain(`past the ${MAX_DESCRIPTION_LENGTH}`);
+		// Three confirmations, two editors, and the last confirmation carries the
+		// edited text: the editor returns to the question rather than answering it.
+		expect(h.ui.titles().filter((t) => t.startsWith(START_TITLE)).length).toBe(
+			3,
+		);
+		expect(
+			h.ui.titles().filter((t) => t === DESCRIPTION_EDITOR_TITLE).length,
+		).toBe(2);
+		expect(h.ui.titles().at(-1)).toContain(edited);
+		// And the model was asked nothing again: the description is the
+		// yardstick, not the document.
+		expect(h.model.requests.length).toBe(2);
+	});
+});
+
+// ── The effort dial ──────────────────────────────────────────────────────────
+
+describe("the one dial a repository cannot answer", () => {
+	it("offers the three efforts with `standard` first, and escapes to it", () => {
+		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
+			"standard (default)",
+			"cheap",
+			"deep",
+		]);
+		expect(chosenOption(EFFORT_OPTIONS, undefined)).toBe("standard");
+	});
+
+	it("carries the chosen effort into the prompt, the plan and the run", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: (o) =>
+				o.title === EFFORT_TITLE ? pick(o.options, "deep") : happyPath(o),
+		});
+
+		await runExitFlow(h.deps);
+
+		expect(h.model.requests[1]?.systemPrompt).toContain("effort deep");
+		expect(h.store.saves[0]?.policy?.effort).toBe("deep");
+		expect(h.confirmation()).toContain("effort deep");
+		expect(h.provider?.plansStarted()[0]?.input).toMatchObject({
+			effort: "deep",
+		});
 	});
 });
 
 describe("publication, derived rather than asked", () => {
-	it("reads the repository, says so, and opens no dialog for it", async () => {
+	it("reads the repository, opens no dialog for it, and says so in both places", async () => {
 		for (const [publication, expected] of [
 			[FULLY_EQUIPPED, { mode: "pr", base: "trunk" }],
 			[
@@ -558,26 +672,17 @@ describe("publication, derived rather than asked", () => {
 			const h = harness({
 				publication: () => publication,
 				script: [DESCRIPTION, documentText()],
-				answer: (o) =>
-					o.title === COMPILED_TITLE
-						? pick(o.options, COMPILED_BACK)
-						: happyPath(o),
+				answer: happyPath,
 			});
 			await runExitFlow(h.deps);
-			expect(
-				h.ui.notices.filter(([message]) => message.startsWith("Publication: ")),
-			).toEqual([[publication.why, "info"]]);
 			// The dials reach the model through the system prompt, which is where
 			// a decision the author cannot see would otherwise be invisible.
 			expect(h.model.requests[1]?.systemPrompt).toContain(
 				`publication ${expected.mode}`,
 			);
-			expect(h.ui.titles()).toEqual([
-				EXIT_START_TITLE,
-				EFFORT_TITLE,
-				expect.stringContaining(INTENT_TITLE),
-				COMPILED_TITLE,
-			]);
+			// And they reach the person through the confirmation, never a dialog.
+			expect(h.confirmation()).toContain(publication.why);
+			expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
 		}
 	});
 
@@ -588,10 +693,7 @@ describe("publication, derived rather than asked", () => {
 				base: "no spaces here",
 				why: "Publication: pull request onto `no spaces here`.",
 			}),
-			answer: (o) =>
-				o.title === EXIT_START_TITLE
-					? pick(o.options, EXIT_COMPILE)
-					: undefined,
+			answer: happyPath,
 		});
 
 		const outcome = await runExitFlow(h.deps);
@@ -611,10 +713,7 @@ describe("the context guard", () => {
 				contextWindow: 200_000,
 				percent: 95,
 			}),
-			answer: (o) =>
-				o.title === EXIT_START_TITLE
-					? pick(o.options, EXIT_COMPILE)
-					: undefined,
+			answer: happyPath,
 		});
 
 		const outcome = await runExitFlow(h.deps);
@@ -637,16 +736,11 @@ describe("the context guard", () => {
 		]) {
 			const h = harness({
 				...(usage ? { contextUsage: usage } : {}),
-				script: [DESCRIPTION],
-				answer: (o) =>
-					o.title === EXIT_START_TITLE
-						? pick(o.options, EXIT_COMPILE)
-						: o.title.startsWith(INTENT_TITLE)
-							? pick(o.options, INTENT_BACK)
-							: undefined,
+				script: [DESCRIPTION, documentText()],
+				answer: happyPath,
 			});
-			await runExitFlow(h.deps);
-			expect(h.model.requests.length).toBe(1);
+			expect((await runExitFlow(h.deps)).kind).toBe("started");
+			expect(h.model.requests.length).toBe(2);
 		}
 	});
 });
@@ -658,7 +752,6 @@ describe("the description the harness asks for", () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			answer: happyPath,
-			client: { reviews: [{ verdict: "ready", findings: [] }] },
 		});
 
 		const outcome = await runExitFlow(h.deps);
@@ -669,13 +762,12 @@ describe("the description the harness asks for", () => {
 		expect(first?.messages).toEqual([
 			{ role: "user", text: expect.stringContaining("Write the description") },
 		]);
-		// The dialog's title IS the description, because Pi's `select` carries
-		// no body and the thing being agreed to has to be on screen.
-		expect(h.ui.titles()).toContain(`${INTENT_TITLE}\n\n${DESCRIPTION}`);
-		// And the agreed text is what the reviewer is told the plan is for.
-		expect(h.provider?.started()[0]?.input).toMatchObject({
-			intent: DESCRIPTION,
-		});
+		// No dialog of its own: it is in the confirmation, which is where it is
+		// agreed to, and it is what the plan check is told the plan is FOR.
+		expect(h.confirmation()).toContain(DESCRIPTION);
+		expect(h.check?.seen).toEqual([
+			{ slug: "compose", description: DESCRIPTION },
+		]);
 	});
 
 	it("re-asks with the previous answer and the problem, then takes the good one", async () => {
@@ -698,70 +790,6 @@ describe("the description the harness asks for", () => {
 				text: expect.stringContaining(`short of the ${MIN_DESCRIPTION_LENGTH}`),
 			},
 		]);
-		// One dialog, over the answer that passed.
-		expect(
-			h.ui.titles().filter((title) => title.startsWith(INTENT_TITLE)),
-		).toEqual([`${INTENT_TITLE}\n\n${DESCRIPTION}`]);
-	});
-
-	it("gives up after three, prints the problem, and changes nothing", async () => {
-		const h = harness({
-			script: ["Short.", "Also short.", "Still short."],
-			answer: happyPath,
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("back");
-		expect(h.model.requests.length).toBe(MAX_AUTHORING_ATTEMPTS);
-		expect(h.modes).toEqual([]);
-		expect(h.store.saves).toEqual([]);
-		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
-		expect(h.said()).toContain("/mode auto");
-	});
-
-	it("lets a person edit it, and refuses an edit past the bound", async () => {
-		const edited = `${"E".repeat(60)}.`;
-		let edits = 0;
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			answer: (opened) => {
-				if (opened.title === INTENT_EDITOR_TITLE)
-					return edits++ === 0
-						? "x".repeat(MAX_DESCRIPTION_LENGTH + 1)
-						: edited;
-				if (opened.title.startsWith(INTENT_TITLE))
-					return pick(opened.options, edits < 2 ? INTENT_EDIT : INTENT_AGREE);
-				return happyPath(opened, 0);
-			},
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("started");
-		expect(h.said()).toContain(`past the ${MAX_DESCRIPTION_LENGTH}`);
-		// The edited text is what the document prompt and the reviewer both get.
-		expect(h.model.requests[1]?.systemPrompt).toContain(edited);
-		expect(h.provider?.started()[0]?.input).toMatchObject({ intent: edited });
-	});
-
-	it("goes back to the conversation without asking for a document", async () => {
-		const h = harness({
-			script: [DESCRIPTION],
-			answer: (o) =>
-				o.title === EXIT_START_TITLE
-					? pick(o.options, EXIT_COMPILE)
-					: o.title.startsWith(INTENT_TITLE)
-						? pick(o.options, INTENT_BACK)
-						: undefined,
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("back");
-		expect(h.model.requests.length).toBe(1);
-		expect(h.modes).toEqual([]);
-		expect(h.said()).toContain("still in plan mode");
 	});
 
 	it("knows what a description is not", () => {
@@ -777,6 +805,84 @@ describe("the description the harness asks for", () => {
 			"list",
 		);
 		expect(descriptionProblem(`${DESCRIPTION}\n1. one`)).toContain("list");
+	});
+});
+
+// ── Nothing to plan ──────────────────────────────────────────────────────────
+
+describe("leaving plan mode with no plan in the conversation", () => {
+	// THE MODEL IS STILL ASKED. The harness cannot know what is in a
+	// conversation until it asks, so it asks — and when the answer is empty or
+	// refused, the posture the person typed is what they get, with one sentence
+	// saying why there is no plan behind it. NEVER A HANG, and never plan mode.
+	it("switches with the reason shown when no description comes back", async () => {
+		const h = harness({
+			script: ["Short.", "Also short.", "Still short."],
+			answer: happyPath,
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome.kind).toBe("switch-only");
+		expect(h.model.requests.length).toBe(MAX_AUTHORING_ATTEMPTS);
+		expect(h.modes).toEqual(["auto"]);
+		expect(h.store.saves).toEqual([]);
+		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
+		expect(h.said()).toContain("Mode auto, with no plan stored");
+		expect(h.said()).toContain("/mode plan");
+		// The confirmation was never opened, so nothing is waiting on anybody.
+		expect(h.ui.titles()).toEqual([EFFORT_TITLE]);
+	});
+
+	it("switches with the reason shown when no document comes back", async () => {
+		const h = harness({
+			script: [DESCRIPTION, BROKEN_EDGE, BROKEN_EDGE, BROKEN_EDGE],
+			answer: happyPath,
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome.kind).toBe("switch-only");
+		expect(h.store.saves).toEqual([]);
+		expect(h.modes).toEqual(["auto"]);
+		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
+		expect(h.said()).toContain("nowhere");
+		expect(h.said()).toContain("Mode auto, with no plan stored");
+		expect(h.check?.ran()).toBe(0);
+		// Three plan attempts on the record, and the description's one beside
+		// them: the file is the whole story of this hand-off, not part of it.
+		const evidence = h.evidence();
+		expect(evidence.schemaVersion).toBe(AUTHORING_EVIDENCE_SCHEMA_VERSION);
+		expect(evidence.attempts.map((a) => a.kind)).toEqual([
+			"intent",
+			"plan",
+			"plan",
+			"plan",
+		]);
+	});
+
+	it("switches with a sanitised reason when the provider never answers", async () => {
+		const secret = "https://api.example.invalid/v1?key=sk-live-1234";
+		const h = harness({
+			script: [
+				{ failure: `connect ECONNREFUSED ${secret}` },
+				{ failure: `connect ECONNREFUSED ${secret}` },
+				{ failure: `connect ECONNREFUSED ${secret}` },
+			],
+			answer: happyPath,
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome.kind).toBe("switch-only");
+		expect(h.modes).toEqual(["auto"]);
+		expect(h.store.saves).toEqual([]);
+		expect(h.said()).toContain(PROVIDER_FAILURE_PROBLEM);
+		// The provider's own message never reaches the person or the record.
+		expect(h.said()).not.toContain(secret);
+		// Nothing named a slug, so there is nowhere beside a plan to write: the
+		// evidence is a record ABOUT a plan, and there is no plan.
+		expect(() => h.evidence()).toThrow();
 	});
 });
 
@@ -876,74 +982,284 @@ describe("the document the harness asks for", () => {
 			"not one JSON object",
 		);
 	});
+});
 
-	it("gives up after three, prints the problems, and stores nothing", async () => {
+// ── The plan check ───────────────────────────────────────────────────────────
+
+describe("the plan check, which the harness answers itself", () => {
+	it("says so in the confirmation when it could not run, and never blocks", async () => {
+		const reasons = [
+			{ check: null, expected: NO_PLAN_CHECK_REASON },
+			{
+				check: [{ unavailable: "the subagent runtime refused the launch" }],
+				expected: "the subagent runtime refused the launch",
+			},
+		] as const;
+		for (const { check, expected } of reasons) {
+			const h = harness({
+				script: [DESCRIPTION, documentText()],
+				answer: happyPath,
+				check,
+			});
+
+			expect((await runExitFlow(h.deps)).kind).toBe("started");
+			expect(h.confirmation()).toContain("Plan check: could not run — ");
+			expect(h.confirmation()).toContain(expected);
+		}
+	});
+
+	it("rewrites the document silently and checks again, with no dialog at all", async () => {
+		const revised = documentText({ title: "Compose the catalogue, revised" });
 		const h = harness({
-			script: [DESCRIPTION, BROKEN_EDGE, BROKEN_EDGE, BROKEN_EDGE],
+			script: [DESCRIPTION, documentText(), revised],
 			answer: happyPath,
+			check: [
+				{
+					verdict: "blocked",
+					findings: [BLOCKING, MINOR],
+					notes: "It needs tests.",
+				},
+				APPROVED,
+			],
 		});
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("back");
-		expect(h.store.saves).toEqual([]);
-		expect(h.modes).toEqual([]);
-		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
-		expect(h.said()).toContain("nowhere");
-		// Three plan attempts on the record, and the description's one beside
-		// them: the file is the whole story of this exit, not part of it.
-		const evidence = h.evidence();
-		expect(evidence.schemaVersion).toBe(AUTHORING_EVIDENCE_SCHEMA_VERSION);
-		expect(evidence.attempts.filter((a) => a.kind === "plan").length).toBe(
-			MAX_AUTHORING_ATTEMPTS,
-		);
-		expect(evidence.attempts.map((a) => a.kind)).toEqual([
+		expect(outcome.kind).toBe("started");
+		// Still two dialogs. THE PERSON IS NOT WALKED THROUGH THE FINDINGS.
+		expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
+		// Three requests: the description, the document, the rewrite — and the
+		// rewrite is the SAME mini-conversation, with the findings appended.
+		expect(h.model.requests.length).toBe(3);
+		const rewrite = h.model.requests[2]?.messages ?? [];
+		expect(rewrite[0]?.text).toBe(DOCUMENT_REQUEST);
+		expect(rewrite[1]).toEqual({ role: "assistant", text: documentText() });
+		expect(rewrite[2]?.role).toBe("user");
+		expect(rewrite[2]?.text).toContain(BLOCKING.summary);
+		expect(rewrite[2]?.text).toContain(MINOR.summary);
+		expect(rewrite[2]?.text).toContain("It needs tests.");
+		expect(h.check?.ran()).toBe(2);
+		expect(h.store.saves.map((plan) => plan.title)).toEqual([
+			"Compose the catalogue",
+			"Compose the catalogue, revised",
+		]);
+		// The rewrite is on the record under its own name, and so are both checks.
+		expect(h.evidence().attempts.map((a) => a.kind)).toEqual([
 			"intent",
 			"plan",
-			"plan",
-			"plan",
+			"check",
+			"revise",
+			"check",
 		]);
-		expect(
-			evidence.attempts.every((a) => a.ok === false || a.kind === "intent"),
-		).toBe(true);
 	});
-});
 
-// ── When the provider does not answer ────────────────────────────────────────
+	it("asks the person once for a finding the check says needs one", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: (o) =>
+				o.title.startsWith("The plan check")
+					? pick(o.options, CHECK_PROCEED)
+					: happyPath(o),
+			check: [
+				{ verdict: "blocked", findings: [NEEDS_PERSON, BLOCKING], notes: "" },
+			],
+		});
 
-describe("a provider that does not answer", () => {
-	it("ends back in the conversation with a cause nothing leaked into", async () => {
-		const secret = "https://api.example.invalid/v1?key=sk-live-1234";
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome).toMatchObject({ kind: "started", asked: 3 });
+		// ONE extra dialog, and it carries only the finding a rewrite cannot
+		// answer — the other blocking finding is not asked about.
+		const asked = h.ui.titles().filter((t) => t.startsWith("The plan check"));
+		expect(asked.length).toBe(1);
+		expect(asked[0]).toContain(NEEDS_PERSON.summary);
+		expect(asked[0]).toContain(NEEDS_PERSON.question as string);
+		expect(asked[0]).not.toContain(BLOCKING.summary);
+		expect(asked[0]).toContain("only you can answer");
+		// And no rewrite was asked for: the model cannot answer it either.
+		expect(h.model.requests.length).toBe(2);
+		expect(h.check?.ran()).toBe(1);
+	});
+
+	it("goes back to the conversation when the person keeps planning", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: (o) =>
+				o.title.startsWith("The plan check")
+					? pick(o.options, CHECK_KEEP_PLANNING)
+					: happyPath(o),
+			check: [{ verdict: "blocked", findings: [NEEDS_PERSON], notes: "" }],
+		});
+
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome).toMatchObject({ kind: "back", slug: "compose" });
+		expect(h.modes).toEqual([]);
+		expect(h.store.saves.length).toBe(1);
+		// The confirmation was never reached: nothing was started and nothing
+		// asked to be.
+		expect(h.ui.titles().some((t) => t.startsWith(START_TITLE))).toBe(false);
+	});
+
+	it("asks the person once the rewrite bound is spent, and not before", async () => {
+		const blocked: PlanCheckResult = {
+			verdict: "blocked",
+			findings: [BLOCKING],
+			notes: "",
+		};
 		const h = harness({
 			script: [
 				DESCRIPTION,
-				{ failure: `connect ECONNREFUSED ${secret}` },
-				{ failure: `connect ECONNREFUSED ${secret}` },
-				{ failure: `connect ECONNREFUSED ${secret}` },
+				documentText(),
+				documentText({ title: "Two" }),
+				documentText({ title: "Three" }),
 			],
-			answer: happyPath,
+			answer: (o) =>
+				o.title.startsWith("The plan check")
+					? pick(o.options, CHECK_PROCEED)
+					: happyPath(o),
+			check: [blocked, blocked, blocked],
 		});
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("back");
-		expect(h.store.saves).toEqual([]);
-		expect(h.said()).toContain(PROVIDER_FAILURE_PROBLEM);
-		// The provider's own message never reaches the person or the record.
-		expect(h.said()).not.toContain(secret);
+		expect(outcome.kind).toBe("started");
+		expect(h.check?.ran()).toBe(MAX_PLAN_CHECK_REVISIONS + 1);
+		const asked = h.ui.titles().filter((t) => t.startsWith("The plan check"));
+		expect(asked.length).toBe(1);
+		expect(asked[0]).toContain(
+			`still blocks after ${MAX_PLAN_CHECK_REVISIONS} rewrites`,
+		);
+		expect(h.store.saves.map((plan) => plan.title)).toEqual([
+			"Compose the catalogue",
+			"Two",
+			"Three",
+		]);
 	});
 
-	it("records the sanitised cause and nothing else, with no plan directory", async () => {
-		// Nothing named a slug, so there is nowhere beside a plan to write: the
-		// evidence is a record ABOUT a plan, and there is no plan.
+	it("goes back when a rewrite the check asked for never validates", async () => {
 		const h = harness({
-			script: [{ failure: "boom" }, { failure: "boom" }, { failure: "boom" }],
+			script: [
+				DESCRIPTION,
+				documentText(),
+				BROKEN_EDGE,
+				BROKEN_EDGE,
+				BROKEN_EDGE,
+			],
 			answer: happyPath,
+			check: [{ verdict: "blocked", findings: [BLOCKING], notes: "" }],
 		});
 
-		expect((await runExitFlow(h.deps)).kind).toBe("back");
-		expect(() => h.evidence()).toThrow();
-		expect(h.said()).toContain(PROVIDER_FAILURE_PROBLEM);
+		const outcome = await runExitFlow(h.deps);
+
+		expect(outcome).toMatchObject({ kind: "back", slug: "compose" });
+		// The first plan is still stored; the rewrite never replaced it.
+		expect(h.store.saves.length).toBe(1);
+		expect(h.modes).toEqual([]);
+		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
+	});
+
+	it("records the verdict and the counts, and none of the findings", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
+			check: [{ verdict: "gaps", findings: [MINOR], notes: "Reads fine." }],
+		});
+
+		await runExitFlow(h.deps);
+
+		const check = h.evidence().attempts.find((a) => a.kind === "check");
+		expect(check).toMatchObject({
+			kind: "check",
+			ok: true,
+			verdict: "gaps",
+			counts: { blocking: 0, major: 0, minor: 1 },
+			problems: [],
+		});
+		const text = h.evidenceText();
+		expect(text).not.toContain(MINOR.summary);
+		expect(text).not.toContain("Reads fine.");
+	});
+
+	it("records an unavailable check as the one sentence it gave", async () => {
+		const h = harness({
+			script: [DESCRIPTION, documentText()],
+			answer: happyPath,
+			check: [{ unavailable: "the reviewer timed out" }],
+		});
+
+		await runExitFlow(h.deps);
+
+		expect(h.evidence().attempts.find((a) => a.kind === "check")).toMatchObject(
+			{ ok: false, problems: ["the reviewer timed out"] },
+		);
+	});
+});
+
+describe("what the harness does with a check result", () => {
+	const result = (findings: readonly PlanCheckFinding[]): PlanCheckResult => ({
+		verdict: "blocked",
+		findings,
+		notes: "",
+	});
+
+	it("accepts anything with nothing blocking, whatever else it found", () => {
+		expect(planCheck.planCheckDecision(result([MINOR]), 0)).toEqual({
+			kind: "accept",
+		});
+		expect(planCheck.planCheckDecision(APPROVED, 0)).toEqual({
+			kind: "accept",
+		});
+	});
+
+	it("rewrites while the bound holds, then asks", () => {
+		for (let round = 0; round < MAX_PLAN_CHECK_REVISIONS; round++)
+			expect(planCheck.planCheckDecision(result([BLOCKING]), round)).toEqual({
+				kind: "revise",
+				findings: [BLOCKING],
+			});
+		expect(
+			planCheck.planCheckDecision(result([BLOCKING]), MAX_PLAN_CHECK_REVISIONS),
+		).toEqual({ kind: "ask", findings: [BLOCKING] });
+	});
+
+	it("asks straight away for a finding only a person can answer, and asks only that", () => {
+		expect(
+			planCheck.planCheckDecision(result([BLOCKING, NEEDS_PERSON, MINOR]), 0),
+		).toEqual({ kind: "ask", findings: [NEEDS_PERSON] });
+	});
+
+	it("reads a reviewer's output strictly, and anything else not at all", () => {
+		expect(
+			planCheck.readPlanCheckResult({
+				verdict: "approve",
+				findings: [],
+				notes: "fine",
+			}),
+		).toEqual({ verdict: "approve", findings: [], notes: "fine" });
+		// A missing `notes` is an empty one; nothing else is tolerated.
+		expect(
+			planCheck.readPlanCheckResult({ verdict: "gaps", findings: [] }),
+		).toEqual({ verdict: "gaps", findings: [], notes: "" });
+		for (const bad of [
+			undefined,
+			"blocked",
+			{ verdict: "ready", findings: [] },
+			{ verdict: "approve" },
+			{ verdict: "approve", findings: [{ id: "x" }] },
+			{
+				verdict: "approve",
+				findings: [{ ...BLOCKING, severity: "critical" }],
+			},
+			{ verdict: "approve", findings: [{ ...BLOCKING, needsPerson: "yes" }] },
+		])
+			expect(planCheck.readPlanCheckResult(bad)).toBeUndefined();
+	});
+
+	it("is unavailable, with a reason, when a seat has no reviewer", async () => {
+		await expect(
+			planCheck.unavailablePlanCheck({} as Plan, ""),
+		).resolves.toEqual({ unavailable: NO_PLAN_CHECK_REASON });
 	});
 });
 
@@ -993,11 +1309,12 @@ describe("authoring.json", () => {
 		await runExitFlow(h.deps);
 
 		const evidence = h.evidence();
-		expect(evidence.schemaVersion).toBe(1);
+		expect(evidence.schemaVersion).toBe(2);
 		expect(evidence.attempts.map((a) => [a.kind, a.ok])).toEqual([
 			["intent", true],
 			["plan", false],
 			["plan", true],
+			["check", true],
 		]);
 		for (const attempt of evidence.attempts) {
 			expect(attempt.model).toBe("anthropic/opus-5");
@@ -1062,22 +1379,22 @@ describe("the one message the conversation gets", () => {
 			"it works through the plan and stops at its `ship` decision",
 		);
 		expect(h.announced[1]?.content).not.toContain("approve-plan");
-		// NOTHING ELSE reaches the conversation: the requests, the retries and
-		// the validators' complaints stay on the record, and the two custom
-		// messages are the whole of it.
+		// NOTHING ELSE reaches the conversation: the requests, the retries, the
+		// check's findings and the validators' complaints stay on the record, and
+		// the two custom messages are the whole of it.
 		expect(h.announced.length).toBe(2);
 		expect(h.announced.map((m) => m.content).join("\n")).not.toContain(
 			DOCUMENT_REQUEST,
 		);
 	});
 
-	it("says so when the exit goes back instead", async () => {
+	it("says so when the hand-off goes back instead", async () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			answer: (opened) =>
-				opened.title === COMPILED_TITLE
-					? pick(opened.options, COMPILED_BACK)
-					: happyPath(opened, 0),
+				opened.title.startsWith(START_TITLE)
+					? pick(opened.options, START_KEEP_PLANNING)
+					: happyPath(opened),
 		});
 
 		expect((await runExitFlow(h.deps)).kind).toBe("back");
@@ -1090,7 +1407,7 @@ describe("the one message the conversation gets", () => {
 
 // ── The model is never steered ───────────────────────────────────────────────
 
-describe("the exit never sends the session a user message", () => {
+describe("the hand-off never sends the session a user message", () => {
 	/**
 	 * Asserted over what the flow REACHES FOR, not over a recorder it might
 	 * never have been handed: the deps object is the flow's whole outside world,
@@ -1134,70 +1451,15 @@ describe("the exit never sends the session a user message", () => {
 			// that saw nothing.
 			expect(touched).toContain("announce");
 			expect(touched).toContain("workflow");
+			expect(touched).toContain("planCheck");
 		}
 	});
 });
 
-// ── The rest of the exit ─────────────────────────────────────────────────────
+// ── A runtime that is not there, or says no ──────────────────────────────────
 
-describe("readiness, the graph and the run", () => {
-	it("asks exactly five dialogs for a two-deliverable plan and starts the run", async () => {
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			answer: happyPath,
-			client: { reviews: [{ verdict: "ready", findings: [] }] },
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("started");
-		expect(h.ui.titles()).toEqual([
-			EXIT_START_TITLE,
-			EFFORT_TITLE,
-			`${INTENT_TITLE}\n\n${DESCRIPTION}`,
-			COMPILED_TITLE,
-			START_RUN_TITLE,
-		]);
-		// The posture moves exactly once, and only here.
-		expect(h.modes).toEqual(["auto"]);
-		expect(h.provider?.started().map((c) => c.ref)).toEqual([
-			`runBuiltin:${PLAN_REVIEW_REF}`,
-		]);
-		expect(h.inputs.length).toBe(1);
-		// The harness started the plan's run itself, through the allowlisted
-		// `startBuiltin`, with the input it just exported and the effort agreed.
-		expect(h.provider?.plansStarted()).toEqual([
-			{
-				ref: `startBuiltin:${PLAN_WORKFLOW_REF}`,
-				input: {
-					input: JSON.parse(h.inputs[0]?.[1] as string),
-					effort: "standard",
-				},
-			},
-		]);
-		expect(outcome).toMatchObject({ slug: "compose", runId: PLAN_RUN_ID });
-	});
-
-	it("stops at a dirty tree when the person says so, with the plan stored", async () => {
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			world: {
-				...readyWorld,
-				probe: (path) => ({ root: path, resolved: path, dirty: true }),
-			},
-			answer: (opened) =>
-				opened.title.includes("uncommitted") ? undefined : happyPath(opened, 0),
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("back");
-		expect(h.store.saves.length).toBe(1);
-		expect(h.modes).toEqual([]);
-		expect(h.provider?.started()).toEqual([]);
-	});
-
-	it("ends with the plan stored when there is no runtime to compile against", async () => {
+describe("the run that does not start", () => {
+	it("ends with the plan stored and the posture asked for when there is no runtime", async () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			client: null,
@@ -1206,27 +1468,18 @@ describe("readiness, the graph and the run", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome.kind).toBe("stored");
+		expect(outcome).toMatchObject({ kind: "stored", slug: "compose" });
 		expect(h.store.saves.length).toBe(1);
-		expect(h.modes).toEqual([]);
+		expect(h.modes).toEqual(["auto"]);
 		expect(h.said()).toContain("/plan run compose");
+		// The check still ran: it needs no workflow runtime.
+		expect(h.check?.ran()).toBe(1);
+		// And the confirmation was never opened, because there is nothing to
+		// start.
+		expect(h.ui.titles()).toEqual([EFFORT_TITLE]);
 	});
 
-	it("does not start the run when the last question is answered no", async () => {
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			answer: (opened) =>
-				opened.title === START_RUN_TITLE ? false : happyPath(opened, 0),
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("stored");
-		expect(h.modes).toEqual([]);
-		expect(h.provider?.plansStarted()).toEqual([]);
-	});
-
-	it("keeps the plan and stays in plan mode when the runtime refuses the start", async () => {
+	it("keeps the plan and takes the posture when the runtime refuses the start", async () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			answer: happyPath,
@@ -1242,148 +1495,18 @@ describe("readiness, the graph and the run", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		// Like Back: the posture never moved, the plan is stored, and the cause
-		// is on screen through the seam's sanitized notice.
-		expect(outcome).toMatchObject({ kind: "back", slug: "compose" });
-		expect(h.modes).toEqual([]);
+		// The person answered `Start the run` and the runtime said no: the plan is
+		// stored, the posture is the one they asked for, and the cause is on
+		// screen through the seam's sanitized notice.
+		expect(outcome).toMatchObject({ kind: "stored", slug: "compose" });
+		expect(h.modes).toEqual(["auto"]);
 		expect(h.store.saves.length).toBe(1);
 		expect(h.said()).toContain("Workflow runtime unavailable (validation)");
 		expect(h.said()).toContain("plan-to-ship is not allowlisted");
 		expect(h.said()).toContain("/plan run compose");
-		// Two custom messages, and the second one does not claim a run.
-		expect(h.announced.length).toBe(2);
-		expect(h.announced[1]?.content).toContain("without a run");
-	});
-
-	it("shows the reviewers the plan settled, beside the description", async () => {
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			answer: happyPath,
-		});
-		await runExitFlow(h.deps);
-		const shown = h.ui.notices.find(([message]) =>
-			message.startsWith("Agreed: "),
-		);
-		expect(shown?.[0]).toContain(DESCRIPTION);
-		expect(shown?.[0]).toContain("Reviewers: contracts/standard ×2");
-	});
-});
-
-// ── The revise loop ──────────────────────────────────────────────────────────
-
-const BLOCKING: Finding = {
-	id: "f1",
-	severity: "blocking",
-	kind: "gap",
-	where: "/deliverables/0",
-	what: "nothing tests the catalogue",
-};
-
-describe("revise with the model", () => {
-	it("re-requests in the same conversation, re-stores, and re-reviews", async () => {
-		const revised = documentText({ title: "Compose the catalogue, revised" });
-		const h = harness({
-			script: [DESCRIPTION, documentText(), revised],
-			client: {
-				reviews: [
-					{
-						verdict: "blocked",
-						findings: [BLOCKING],
-						notes: "It needs tests.",
-					},
-					{ verdict: "ready", findings: [] },
-				],
-			},
-			answer: (opened) => {
-				if (opened.title.includes(BLOCKING.what))
-					return pick(opened.options, FINDING_REVISE);
-				return happyPath(opened, 0);
-			},
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("started");
-		// Three requests: the description, the document, the rewrite — and the
-		// rewrite is the SAME mini-conversation, with the review appended.
-		expect(h.model.requests.length).toBe(3);
-		const rewrite = h.model.requests[2]?.messages ?? [];
-		expect(rewrite[0]?.text).toBe(DOCUMENT_REQUEST);
-		expect(rewrite[1]).toEqual({ role: "assistant", text: documentText() });
-		expect(rewrite[2]?.role).toBe("user");
-		expect(rewrite[2]?.text).toContain(BLOCKING.what);
-		expect(rewrite[2]?.text).toContain("It needs tests.");
-		// The review went back through the request, not through the session: the
-		// conversation hears the three custom messages and nothing else.
-		expect(h.announced.length).toBe(3);
-		// Two plans stored, two reviews run, and the compiled dialog was asked
-		// once — the re-review does not ask it again.
-		expect(h.store.saves.map((plan) => plan.title)).toEqual([
-			"Compose the catalogue",
-			"Compose the catalogue, revised",
-		]);
-		expect(h.provider?.started().length).toBe(2);
-		expect(h.ui.titles().filter((t) => t === COMPILED_TITLE).length).toBe(1);
-		// The revise attempt is on the record under its own name.
-		expect(h.evidence().attempts.map((a) => a.kind)).toEqual([
-			"intent",
-			"plan",
-			"revise",
-		]);
-	});
-
-	it("keeps the bound of three blind reviews per exit", async () => {
-		const blocked = { verdict: "blocked", findings: [BLOCKING] };
-		const h = harness({
-			script: [
-				DESCRIPTION,
-				documentText(),
-				documentText({ title: "Two" }),
-				documentText({ title: "Three" }),
-			],
-			client: { reviews: [blocked, blocked, blocked] },
-			answer: (opened) => {
-				if (opened.title.includes(BLOCKING.what))
-					return opened.options?.some((option) =>
-						option.startsWith(FINDING_REVISE),
-					)
-						? pick(opened.options, FINDING_REVISE)
-						: pick(opened.options, FINDING_DISMISS);
-				if (opened.kind === "input") return "we disagree, on the record";
-				return happyPath(opened, 0);
-			},
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("back");
-		expect(h.provider?.started().length).toBe(MAX_BLIND_REVIEWS);
-		expect(h.modes).toEqual([]);
-	});
-
-	it("goes back when the rewrite never validates", async () => {
-		const h = harness({
-			script: [
-				DESCRIPTION,
-				documentText(),
-				BROKEN_EDGE,
-				BROKEN_EDGE,
-				BROKEN_EDGE,
-			],
-			client: { reviews: [{ verdict: "blocked", findings: [BLOCKING] }] },
-			answer: (opened) =>
-				opened.title.includes(BLOCKING.what)
-					? pick(opened.options, FINDING_REVISE)
-					: happyPath(opened, 0),
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("back");
-		// The first plan is still stored; the rewrite never replaced it.
-		expect(h.store.saves.length).toBe(1);
-		expect(h.modes).toEqual([]);
-		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
+		// One custom message, and it does not claim a run.
+		expect(h.announced.length).toBe(1);
+		expect(h.announced[0]?.content).toContain("stored");
 	});
 });
 
@@ -1416,20 +1539,13 @@ function optionTables(
 
 describe("what is recommended, and what escape takes", () => {
 	it("marks exactly one of each, and never lets escape be a commitment", () => {
-		const tables = optionTables({ "exit-flow": exitFlow, findings });
+		const tables = optionTables({ "exit-flow": exitFlow });
 		// The list is found, not written down, so a table added later is covered
 		// by this test without anybody remembering to add it.
 		expect(tables.map(([name]) => name).sort()).toEqual([
-			"exit-flow.COMPILED_OPTIONS",
-			"exit-flow.COMPILED_OPTIONS_UNREVIEWED",
-			"exit-flow.DIRTY_OPTIONS",
+			"exit-flow.CHECK_OPTIONS",
 			"exit-flow.EFFORT_OPTIONS",
-			"exit-flow.EXIT_START_OPTIONS",
-			"exit-flow.INTENT_OPTIONS",
-			"findings.FINDING_OPTIONS",
-			"findings.FINDING_OPTIONS_FINAL",
-			"findings.FINDING_OPTIONS_FINAL_UNPATCHABLE",
-			"findings.FINDING_OPTIONS_UNPATCHABLE",
+			"exit-flow.START_OPTIONS",
 		]);
 		for (const [name, table] of tables) {
 			const recommended = table.filter((option) => option.recommended);
@@ -1458,36 +1574,23 @@ describe("what is recommended, and what escape takes", () => {
 	});
 
 	it("separates the two everywhere it matters, and joins them only on effort", () => {
-		const both = optionTables({ "exit-flow": exitFlow, findings }).filter(
-			([, table]) =>
-				table.some((option) => option.recommended && option.escape),
+		const both = optionTables({ "exit-flow": exitFlow }).filter(([, table]) =>
+			table.some((option) => option.recommended && option.escape),
 		);
 		expect(both.map(([name]) => name)).toEqual(["exit-flow.EFFORT_OPTIONS"]);
 	});
 
-	it("offers the three efforts with `standard` first", () => {
-		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
-			"standard (default)",
-			"cheap",
-			"deep",
+	it("never makes starting a run, or proceeding past a finding, the unanswered answer", () => {
+		expect(chosenOption(START_OPTIONS, undefined)).toBe("keep");
+		expect(chosenOption(CHECK_OPTIONS, undefined)).toBe("keep");
+		expect(optionLabels(CHECK_OPTIONS)).toEqual([
+			`${CHECK_PROCEED} (default)`,
+			CHECK_KEEP_PLANNING,
 		]);
-		expect(chosenOption(EFFORT_OPTIONS, undefined)).toBe("standard");
-	});
-
-	it("does not make agreement the thing an unanswered dialog does", () => {
-		expect(chosenOption(INTENT_OPTIONS, undefined)).toBe("back");
-		expect(optionLabels(INTENT_OPTIONS)).toEqual([
-			`${INTENT_AGREE} (default)`,
-			INTENT_EDIT,
-			INTENT_BACK,
-		]);
-		expect(optionLabels(EXIT_START_OPTIONS)[0]).toBe(
-			`${EXIT_COMPILE} (default)`,
-		);
 	});
 });
 
-// ── The prompts themselves ───────────────────────────────────────────────────
+// ── The prompts and the rendering ────────────────────────────────────────────
 
 describe("the two system prompts", () => {
 	it("say the model has no tools and starts nothing", () => {
@@ -1502,7 +1605,7 @@ describe("the two system prompts", () => {
 		// The document prompt keeps the facts the old steer carried.
 		expect(document).toContain("effort deep");
 		expect(document).toContain("gates every-deliverable");
-		expect(document).toContain("blind");
+		expect(document).toContain("fresh context");
 		expect(document).toContain("`tasks` are the work");
 		// And the description prompt keeps its own.
 		expect(DESCRIPTION_SYSTEM_PROMPT).toContain("two or three sentences");
@@ -1512,39 +1615,36 @@ describe("the two system prompts", () => {
 	});
 });
 
-describe("renderReviewers", () => {
-	it("says so when nothing in the plan is read by anybody", () => {
-		expect(
-			renderReviewers({
-				deliverables: [{ id: "d1", stages: [] }],
-			} as never),
-		).toContain("none");
+describe("renderPlanSummary", () => {
+	it("names the work and who reads it, and derives no stages", () => {
+		const plan = JSON.parse(documentText()) as Plan;
+		const summary = renderPlanSummary(
+			{ ...plan, repos: [], policy: { effort: "cheap", gates: "ship" } },
+			"cheap",
+			FULLY_EQUIPPED,
+		);
+		expect(summary).toContain("effort cheap, gates ship");
+		expect(summary).toContain("impl: Do the work");
+		expect(summary).toContain("read by contracts (tier standard)");
+		expect(summary).not.toContain("verify-and-fix");
+		expect(summary).not.toContain("review-fan-out");
 	});
-});
 
-describe("the compiled dialog without a reviewer", () => {
-	it("drops `Review it blind` and recommends approving", async () => {
-		const h = harness({
-			script: [DESCRIPTION, documentText()],
-			client: {
-				runBuiltin: async () => {
-					throw new Error("no reviewer here");
-				},
-			},
-			answer: (opened) =>
-				opened.title === COMPILED_TITLE &&
-				!opened.options?.some((o) => o.startsWith(COMPILED_REVIEW))
-					? pick(opened.options, COMPILED_APPROVE)
-					: happyPath(opened, 0),
-		});
-
-		const outcome = await runExitFlow(h.deps);
-
-		expect(outcome.kind).toBe("started");
-		const asked = h.ui.opened.filter((o) => o.title === COMPILED_TITLE);
-		expect(asked.length).toBe(2);
-		expect(asked[1]?.options?.some((o) => o.startsWith(COMPILED_REVIEW))).toBe(
-			false,
+	it("says what a review that pins nothing means", () => {
+		const plan = JSON.parse(
+			documentText({
+				deliverables: [
+					{
+						id: "d1",
+						title: "One",
+						tasks: [{ id: "impl", title: "Work" }],
+						reviews: [{ lens: "contracts" }],
+					},
+				],
+			}),
+		) as Plan;
+		expect(renderPlanSummary(plan, "standard", FULLY_EQUIPPED)).toContain(
+			"read by contracts (effort dial decides)",
 		);
 	});
 });

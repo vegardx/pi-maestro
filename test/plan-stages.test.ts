@@ -44,10 +44,6 @@ import {
 	withoutEmptyOptionals,
 } from "../packages/maestro/src/plan-document.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
-import {
-	compileStageDocument,
-	validateStageDocument,
-} from "../packages/maestro/src/stage-document.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 import { fakeHost } from "./fake-host.js";
 
@@ -155,17 +151,12 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		).toEqual({ use: "verify-and-fix", id: "verify", maxRounds: 2 });
 	});
 
-	it("produces a stage list the runtime's own schema accepts", () => {
-		// The rule that used to be "authored stages obey the same rules as
-		// derived ones" has one side left, and it is the side that matters: a
-		// plan this validator accepts must lower to a document the runtime would
-		// take. There is no author left to disagree with the derivation.
-		const authored = plan({
-			deliverables: [deliverable("api", { reviews: [{ lens: "security" }] })],
-		});
-		expect(errorsOf(authored)).toEqual([]);
-		expect(validateStageDocument(compileStageDocument(authored))).toEqual([]);
-	});
+	// There used to be a test here asserting that every plan this validator
+	// accepts lowers to a stage document a local mirror of pi-workflow's schema
+	// would take. BOTH SIDES OF THAT ARE GONE: pi-maestro no longer compiles a
+	// stage document and no longer mirrors the schema that validated one. The
+	// derivation below is the only thing this seat still says about stages, and
+	// what pi-workflow makes of a plan is pi-workflow's own test.
 
 	// v7: the start is the approval, so the gate vocabulary is the decisions
 	// that are still ahead of the run. There is no "no gates" value either —

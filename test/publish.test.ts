@@ -10,6 +10,7 @@
 // before the digest is checked, and nothing is pushed after anything fails.
 
 import { describe, expect, it } from "vitest";
+import type { AuditedBash } from "../packages/maestro/src/bash-tool.js";
 import type { Plan, PublishMode } from "../packages/maestro/src/plan.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import {
@@ -26,7 +27,6 @@ import {
 	shipPlan,
 	watchShippedRuns,
 } from "../packages/maestro/src/publish.js";
-import type { AuditedBash } from "../packages/maestro/src/readiness.js";
 import { createPlanStore } from "../packages/maestro/src/store.js";
 
 const AGENT_DIR = "/agent";
@@ -216,7 +216,7 @@ function recorder(fail?: RegExp, output = "boom"): Recorder {
 	const commands: string[] = [];
 	return {
 		commands,
-		bash: async (command) => {
+		bash: async (command: string) => {
 			commands.push(command);
 			return fail?.test(command)
 				? { ok: false, output }

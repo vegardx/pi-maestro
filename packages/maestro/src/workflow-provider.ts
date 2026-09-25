@@ -18,18 +18,15 @@
  * matches the original.
  *
  * What crosses the seam is narrow on purpose: read, validate, project,
- * observe, start one allowlisted headless builtin, and start the one plan
- * workflow a person has just said yes to. There is no `decide`, `stop` or
- * general `run` here: both starts are allowlisted by name inside the runtime,
- * and every other way of starting a workflow is still a tool call in the open,
- * in the transcript.
+ * observe, and start the one plan workflow a person has just said yes to.
+ * There is no `decide`, `stop` or general `run` here: the one start is
+ * allowlisted by name inside the runtime, and every other way of starting a
+ * workflow is still a tool call in the open, in the transcript.
  *
- * **`startBuiltin` is the seat acting, never the model.** `runBuiltin` starts
- * the blind reviewer, which writes nothing; `startBuiltin` starts
- * `plan-to-ship`, which writes to worktrees. The seat may call it because a
- * human answered `Start the run?` with yes, in a dialog this seat owns — the
- * model is not in that loop at all, and the pi-maestro seat still refuses the
- * model's own `workflow_run` in plan mode by name.
+ * **`startBuiltin` is the seat acting, never the model.** It starts
+ * `plan-to-ship`, which writes to worktrees, and the seat may call it because a
+ * human answered `Start the run?` with yes in a dialog this seat owns — the
+ * model is not in that loop at all.
  *
  * **Nothing in this module throws into the session.** Every failure — no
  * runtime, two runtimes, a wrong revision, a runtime swapped mid-acquisition,
@@ -92,12 +89,6 @@ export interface WorkflowBudgetProjectionView {
 	readonly fits: boolean;
 }
 
-/** What `runBuiltin` hands back: an identity to await, and nothing else. */
-export interface WorkflowRunReceiptView {
-	readonly runId: string;
-	readonly status: string;
-}
-
 /**
  * What `startBuiltin` hands back.
  *
@@ -110,20 +101,27 @@ export interface WorkflowStartReceiptView {
 	readonly runId: string;
 }
 
-/** One append to an owned run, as delivered to an `observe` listener. */
+/**
+ * One append to an owned run, as delivered to an `observe` listener.
+ *
+ * `runId`, `status` and `sequence` are every run's; everything after them
+ * describes the TASK the append is about, and is present only on an append that
+ * is about one. `narrate.ts` is the single place they are read.
+ */
 export interface WorkflowRunObservationView {
 	readonly runId: string;
 	readonly status: string;
 	readonly sequence: number;
-}
-
-/** A run driven to a durable terminal state, or to a timeout or a checkpoint. */
-export interface WorkflowRunWaitView {
-	readonly runId: string;
-	readonly status: string;
-	readonly output?: unknown;
-	readonly timedOut?: true;
-	readonly parked?: true;
+	/** The stage this task belongs to, as the definition keys it. */
+	readonly stageKey?: string;
+	/** The deliverable the stage belongs to. */
+	readonly deliverableId?: string;
+	/** What kind of work it was. @see NARRATION_KINDS */
+	readonly kind?: string;
+	/** What the task said about what it did, in one line. */
+	readonly summary?: string;
+	/** Why it failed, when it did. */
+	readonly cause?: string;
 }
 
 /**
@@ -140,7 +138,6 @@ export interface WorkflowReadClient {
 	observe(
 		listener: (observation: WorkflowRunObservationView) => void,
 	): () => void;
-	runBuiltin(ref: string, input: unknown): Promise<WorkflowRunReceiptView>;
 	/**
 	 * Starts `plan-to-ship` for a plan the person just approved, and refuses
 	 * every other ref by name. Validates `input` the way `workflow_run` does,
@@ -154,11 +151,22 @@ export interface WorkflowReadClient {
 		ref: string,
 		options: { readonly input: unknown; readonly effort?: Effort },
 	): Promise<WorkflowStartReceiptView>;
-	awaitRun(
-		runId: string,
-		options?: { timeoutMs?: number },
-	): Promise<WorkflowRunWaitView>;
 }
+
+/**
+ * Every run status that means the run will not change again.
+ *
+ * Part of the runtime's vocabulary rather than of any one caller's, because two
+ * callers read it — publication, which acts on a finished run, and narration,
+ * which says a run is over — and two copies of "what does finished mean" is
+ * exactly the drift this file exists to prevent.
+ */
+export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+	"completed",
+	"failed",
+	"cancelled",
+	"expired",
+]);
 
 /** Every method the client must have; a missing one is `incompatible`. */
 const CLIENT_METHODS = [
@@ -168,9 +176,7 @@ const CLIENT_METHODS = [
 	"inspect",
 	"runs",
 	"observe",
-	"runBuiltin",
 	"startBuiltin",
-	"awaitRun",
 ] as const satisfies readonly (keyof WorkflowReadClient)[];
 
 /** The provider object pi-workflow registers. */
@@ -184,11 +190,10 @@ export interface WorkflowServiceProviderView {
 /**
  * Everything that can go wrong on this side of the seam.
  *
- * `validation` is the runtime's own refusal passed through — a `runBuiltin` or
- * a `startBuiltin` for a ref outside its allowlist, an input that does not fit
- * the definition's schema, or an `awaitRun` for a run this client did not
- * start. `acquisition` is the catch-all: the runtime was reached and did not
- * give an answer this seat can use.
+ * `validation` is the runtime's own refusal passed through — a `startBuiltin`
+ * for a ref outside its allowlist, or an input that does not fit the
+ * definition's schema. `acquisition` is the catch-all: the runtime was reached
+ * and did not give an answer this seat can use.
  */
 export type WorkflowProviderErrorCode =
 	| "missing"
@@ -213,19 +218,15 @@ export class WorkflowProviderError extends Error {
  * What a human can do instead, which is the only part of a warning that is
  * worth reading.
  *
- * - `run` — the whole run is out of reach; the stored plan and `/plan run`
- *   remain.
- * - `reviewer` — only the blind reviewer is unreachable; the compiled plan is
- *   in hand and `Approve as is` continues.
+ * ONE SENTENCE, because there is one fallback: every failure on this seam means
+ * the run is out of reach, and the stored plan and `/plan run` are what remain.
+ * There used to be a second — the blind reviewer's — and the plan check does
+ * not come through here at all: it is a one-shot subagent, and its own
+ * unavailability is a line in the confirmation rather than a warning about a
+ * runtime.
  */
-export type WorkflowProviderFallback = "run" | "reviewer";
-
-const FALLBACK_HINT: Readonly<Record<WorkflowProviderFallback, string>> =
-	Object.freeze({
-		run: "The plan is stored — start it later with `/plan run <slug>`.",
-		reviewer:
-			"The blind reviewer is unreachable — choose `Approve as is` to continue without it.",
-	});
+export const WORKFLOW_FALLBACK_HINT =
+	"The plan is stored — start it later with `/plan run <slug>`.";
 
 /**
  * pi-workflow's own `WorkflowServiceError` crosses the seam as a plain object
@@ -262,12 +263,9 @@ export function classifyWorkflowFailure(
 }
 
 /** The warning text for a failure, naming the fallback. */
-export function workflowProviderWarning(
-	error: unknown,
-	fallback: WorkflowProviderFallback,
-): string {
+export function workflowProviderWarning(error: unknown): string {
 	const code = classifyWorkflowFailure(error);
-	return `Workflow runtime unavailable (${code}): ${messageOf(error)} ${FALLBACK_HINT[fallback]}`;
+	return `Workflow runtime unavailable (${code}): ${messageOf(error)} ${WORKFLOW_FALLBACK_HINT}`;
 }
 
 /** Just enough of `ExtensionUIContext` to report, so tests pass a fake. */
@@ -287,10 +285,9 @@ export type WorkflowNotify = (
 export function reportWorkflowFailure(
 	notify: WorkflowNotify,
 	error: unknown,
-	fallback: WorkflowProviderFallback,
 ): void {
 	try {
-		notify(workflowProviderWarning(error, fallback), "warning");
+		notify(workflowProviderWarning(error), "warning");
 	} catch {
 		// A host whose notifier fails must not turn a degraded path into a
 		// thrown one; there is nowhere left to report it.
@@ -431,12 +428,11 @@ export async function acquireWorkflowClientOrWarn(
 	events: WorkflowEventBus,
 	context: unknown,
 	notify: WorkflowNotify,
-	fallback: WorkflowProviderFallback = "run",
 ): Promise<WorkflowReadClient | undefined> {
 	try {
 		return await acquireWorkflowClient(events, context);
 	} catch (error) {
-		reportWorkflowFailure(notify, error, fallback);
+		reportWorkflowFailure(notify, error);
 		return undefined;
 	}
 }
@@ -444,21 +440,19 @@ export async function acquireWorkflowClientOrWarn(
 /**
  * Run one client call, or warn and return nothing.
  *
- * This is where the runtime's own refusals surface: a `runBuiltin` or a
- * `startBuiltin` for a ref outside pi-workflow's frozen allowlist throws a
- * `validation` error, and it arrives here as a warning naming what a person
- * can do instead — `Approve as is`, or `/plan run <slug>` — rather than as an
- * exception inside a dialog sequence.
+ * This is where the runtime's own refusals surface: a `startBuiltin` for a ref
+ * outside pi-workflow's frozen allowlist throws a `validation` error, and it
+ * arrives here as a warning naming what a person can do instead —
+ * `/plan run <slug>` — rather than as an exception inside a dialog sequence.
  */
 export async function callWorkflow<T>(
 	operation: () => Promise<T>,
 	notify: WorkflowNotify,
-	fallback: WorkflowProviderFallback,
 ): Promise<T | undefined> {
 	try {
 		return await operation();
 	} catch (error) {
-		reportWorkflowFailure(notify, error, fallback);
+		reportWorkflowFailure(notify, error);
 		return undefined;
 	}
 }

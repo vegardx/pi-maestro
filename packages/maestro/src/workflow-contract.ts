@@ -44,7 +44,7 @@ export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
 /**
  * The features the exit loop and `/plan run` actually depend on.
  *
- * - `staticWorkflows` — `plan-to-ship` and `plan-review` are static refs.
+ * - `staticWorkflows` — `plan-to-ship` is a static ref.
  * - `durableRuns` — a run survives the dialog that started it.
  * - `checkpoints` — `ship`, and each deliverable under `every-deliverable`,
  *   are where humans decide.

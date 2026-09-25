@@ -102,9 +102,7 @@ function clientStub(
 		inspect: async () => ({}),
 		runs: async () => ({ runs: [] }),
 		observe: () => () => {},
-		runBuiltin: async () => ({ runId: "r", status: "running" }),
 		startBuiltin: async () => ({ runId: "r" }),
-		awaitRun: async () => ({ runId: "r", status: "completed" }),
 		...overrides,
 	};
 }
@@ -319,7 +317,9 @@ describe("discovery", () => {
 	it("reports `incompatible` when the client is missing part of the surface", async () => {
 		const bus = createFakeBus();
 		const client = clientStub();
-		delete client.runBuiltin;
+		// `observe` is what narration and the ship watcher both ride on, so a
+		// runtime without it is a runtime this seat cannot follow a run in.
+		delete client.observe;
 		register(bus, providerStub({ client }));
 		await expect(acquireWorkflowClient(bus, {})).rejects.toMatchObject({
 			code: "incompatible",
@@ -346,26 +346,18 @@ describe("every failure becomes one warning naming the fallback", () => {
 		"acquisition",
 	];
 
+	// ONE FALLBACK, because there is one thing a failure on this seam costs: the
+	// run. The reviewer's fallback went with the blind review — the plan check is
+	// a one-shot subagent and never comes through here — so every code says the
+	// same thing about what remains.
 	it.each(CODES)("maps `%s` to a warning offering /plan run", (code) => {
 		const error = new WorkflowProviderError(code, "the stated reason");
 		expect(classifyWorkflowFailure(error)).toBe(code);
-		const warning = workflowProviderWarning(error, "run");
+		const warning = workflowProviderWarning(error);
 		expect(warning).toContain(code);
 		expect(warning).toContain("the stated reason");
 		expect(warning).toContain("/plan run");
 	});
-
-	it.each(CODES)(
-		"maps `%s` to a warning offering `Approve as is` when only the reviewer is out of reach",
-		(code) => {
-			const warning = workflowProviderWarning(
-				new WorkflowProviderError(code, "the stated reason"),
-				"reviewer",
-			);
-			expect(warning).toContain("Approve as is");
-			expect(warning).not.toContain("/plan run");
-		},
-	);
 
 	it("classifies a runtime refusal as `validation` and anything else as `acquisition`", () => {
 		const refusal = Object.assign(new Error("nope"), {
@@ -378,7 +370,7 @@ describe("every failure becomes one warning naming the fallback", () => {
 			code: "persistence",
 		});
 		expect(classifyWorkflowFailure(persistence)).toBe("acquisition");
-		expect(workflowProviderWarning(persistence, "run")).toContain("disk");
+		expect(workflowProviderWarning(persistence)).toContain("disk");
 		expect(classifyWorkflowFailure("a bare string")).toBe("acquisition");
 	});
 
@@ -396,89 +388,25 @@ describe("every failure becomes one warning naming the fallback", () => {
 	it("never throws into the session, even when notify throws", async () => {
 		const bus = createFakeBus();
 		await expect(
-			acquireWorkflowClientOrWarn(
-				bus,
-				{},
-				() => {
-					throw new Error("no UI here");
-				},
-				"reviewer",
-			),
+			acquireWorkflowClientOrWarn(bus, {}, () => {
+				throw new Error("no UI here");
+			}),
 		).resolves.toBeUndefined();
 	});
 });
 
 // ── The runtime's own allowlist ──────────────────────────────────────────────
-
-describe("runBuiltin outside pi-workflow's allowlist", () => {
-	// The allowlist belongs to the runtime, not to this caller: pi-maestro does
-	// not hold a copy and does not pre-check. What it owns is that the refusal
-	// reaches a human as a warning with a way forward, not as a throw inside a
-	// dialog sequence.
-	const refusal = Object.assign(
-		new Error(
-			"Workflow plan-to-ship may not be started by a service consumer; use workflow_run.",
-		),
-		{ name: "WorkflowServiceError", code: "validation" },
-	);
-
-	it("surfaces as a warning naming `Approve as is`, not as a throw", async () => {
-		const bus = createFakeBus();
-		register(
-			bus,
-			providerStub({
-				client: clientStub({
-					runBuiltin: async () => {
-						throw refusal;
-					},
-				}),
-			}),
-		);
-		const client = await acquireWorkflowClient(bus, {});
-		const { calls, notify } = recorder();
-		const receipt = await callWorkflow(
-			() => client.runBuiltin("plan-to-ship", {}),
-			notify,
-			"reviewer",
-		);
-		expect(receipt).toBeUndefined();
-		expect(calls).toHaveLength(1);
-		expect(calls[0]?.[1]).toBe("warning");
-		expect(calls[0]?.[0]).toContain("validation");
-		expect(calls[0]?.[0]).toContain("use workflow_run");
-		expect(calls[0]?.[0]).toContain("Approve as is");
-	});
-
-	it("lets an allowlisted builtin through untouched", async () => {
-		const bus = createFakeBus();
-		register(
-			bus,
-			providerStub({
-				client: clientStub({
-					runBuiltin: async (ref: string) => {
-						if (ref !== "plan-review") throw refusal;
-						return { runId: "run-1", status: "running" };
-					},
-				}),
-			}),
-		);
-		const client = await acquireWorkflowClient(bus, {});
-		const { calls, notify } = recorder();
-		await expect(
-			callWorkflow(
-				() => client.runBuiltin("plan-review", {}),
-				notify,
-				"reviewer",
-			),
-		).resolves.toEqual({ runId: "run-1", status: "running" });
-		expect(calls).toEqual([]);
-	});
-});
+//
+// `runBuiltin` is gone from this client, and with it the headless `plan-review`
+// it existed to start. The plan check is a one-shot subagent now, so the only
+// thing this seat starts through the runtime is the plan's own run — and that
+// is what the allowlist test below is about.
 
 describe("startBuiltin, the plan's own run", () => {
-	// The same bargain as `runBuiltin`: the allowlist is the runtime's, and what
-	// this seat owns is that a refusal arrives as a warning naming `/plan run`
-	// rather than as a throw in the middle of the exit's last dialog.
+	// The allowlist belongs to the runtime, not to this caller: pi-maestro does
+	// not hold a copy and does not pre-check. What it owns is that a refusal
+	// arrives as a warning naming `/plan run` rather than as a throw in the
+	// middle of the hand-off's confirmation.
 	const refusal = Object.assign(
 		new Error(
 			"Workflow deep-review is not a builtin a service consumer may start; use workflow_run.",
@@ -521,7 +449,6 @@ describe("startBuiltin, the plan's own run", () => {
 						effort: "deep",
 					}),
 				notify,
-				"run",
 			),
 		).resolves.toEqual({ runId: "run-9" });
 		expect(seen).toEqual([{ input: { plan: {} }, effort: "deep" }]);
@@ -545,7 +472,6 @@ describe("startBuiltin, the plan's own run", () => {
 		const receipt = await callWorkflow(
 			() => client.startBuiltin("deep-review", { input: {} }),
 			notify,
-			"run",
 		);
 		expect(receipt).toBeUndefined();
 		expect(calls).toHaveLength(1);

@@ -42,6 +42,7 @@
 // is what removed publication's second confirmation: the only question left is
 // the one the spec names, at the push.
 
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -50,6 +51,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import type { AuditedBash } from "./bash-tool.js";
 import {
 	type Plan,
 	type PlanRepo,
@@ -57,12 +59,33 @@ import {
 	resolvePolicy,
 } from "./plan.js";
 import { planDigest } from "./plan-input.js";
-import { type AuditedBash, ghOnPath } from "./readiness.js";
 import type { PlanStore } from "./store.js";
-import type {
-	WorkflowReadClient,
-	WorkflowRunObservationView,
+import {
+	TERMINAL_RUN_STATUSES,
+	type WorkflowReadClient,
+	type WorkflowRunObservationView,
 } from "./workflow-provider.js";
+
+/**
+ * `gh --version`: is the GitHub CLI on PATH?
+ *
+ * Here because `gh` is only ever used to publish: it opens the pull request at
+ * the end of this file, and the plan-mode hand-off asks the same question to
+ * DERIVE whether a pull request is what a plan's `policy.publish` should say.
+ * Two callers, one probe, and every failure the same answer — a caller cannot
+ * act differently on "not installed" and "not executable".
+ */
+export const ghOnPath = (): boolean => {
+	try {
+		execFileSync("gh", ["--version"], {
+			encoding: "utf8",
+			stdio: ["ignore", "ignore", "ignore"],
+		});
+		return true;
+	} catch {
+		return false;
+	}
+};
 
 /** The bus channel a decided `ship` checkpoint is announced on. */
 export const WORKFLOW_SHIPPED_CHANNEL = "maestro:workflow-shipped";
@@ -1199,14 +1222,6 @@ export function isWorkflowShipped(data: unknown): data is WorkflowShipped {
 	return runId !== undefined && digest !== undefined && SHA256_RE.test(digest);
 }
 
-/** Every run status that means the run will not change again. */
-const TERMINAL_STATUSES = new Set([
-	"completed",
-	"failed",
-	"cancelled",
-	"expired",
-]);
-
 export interface ShipWatchDeps {
 	readonly client: Pick<WorkflowReadClient, "inspect" | "observe">;
 	readonly emit: (event: WorkflowShipped) => void;
@@ -1238,7 +1253,7 @@ export interface ShipWatchDeps {
 export function watchShippedRuns(deps: ShipWatchDeps): () => void {
 	const announced = new Set<string>();
 	return deps.client.observe((observation: WorkflowRunObservationView) => {
-		if (!TERMINAL_STATUSES.has(observation.status)) return;
+		if (!TERMINAL_RUN_STATUSES.has(observation.status)) return;
 		if (announced.has(observation.runId)) return;
 		announced.add(observation.runId);
 		void (async () => {

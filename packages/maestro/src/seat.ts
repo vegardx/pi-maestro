@@ -2,7 +2,7 @@
 //
 // THE PLAN IS NOT WRITTEN BY A TOOL ANY MORE. `plan` and `plan_intent` used to
 // live here behind an availability predicate, held open by a record on disk
-// that said a plan-mode exit was in progress. The exit asks the model for both
+// that said a plan-mode hand-off was in progress. The hand-off asks the model for both
 // artifacts itself now — `authoring.ts` — so there is no window to open, no
 // record to read, and no predicate to keep in step with one. What remains is
 // the two tools a seat holds in every posture.

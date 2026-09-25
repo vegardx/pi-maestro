@@ -110,14 +110,44 @@ describe("check-docs rule 5", () => {
 		}
 	});
 
-	// `plan-review` is on the exit path: the second half of the plan-mode exit
-	// starts it through the workflow provider, and the docs say so. It was never
-	// on the denylist and must not be added to one — this case is what would
-	// fail if it were.
-	it("allows the blind reviewer the exit flow starts", () => {
+	// `plan-review` USED TO BE on the hand-off path — the seat started it as a
+	// headless workflow run through `runBuiltin` — and the rule was that the word
+	// must stay legal. It is a fiction now: the plan check is a one-shot
+	// pi-subagent attempt, nothing starts a `plan-review` workflow, and a doc
+	// that says otherwise sends a reader looking for something this seat no
+	// longer has.
+	it("fails a doc or a skill that still names the blind `plan-review` workflow", () => {
 		const dir = fixture({
-			"skills/demo/SKILL.md": "The exit flow starts `plan-review`.\n",
-			"docs/usage.md": "The exit flow starts `plan-review` blind.\n",
+			"docs/usage.md": "The hand-off starts `plan-review` blind.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(status).toBe(1);
+			expect(out).toContain("docs/usage.md:1 names plan-review");
+			expect(out).toContain("one-shot pi-subagent attempt");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// A DIFFERENT WORD. The definition this package ships is `plan-reviewer`, and
+	// banning its prefix would ban the thing that replaced the fiction.
+	it("leaves the `plan-reviewer` definition this package ships alone", () => {
+		const dir = fixture({
+			"docs/usage.md": "The check runs the `plan-reviewer` definition.\n",
+		});
+		try {
+			const { status, out } = run(dir);
+			expect(out).toContain("check-docs: OK");
+			expect(status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("leaves a dated record that names the workflow alone", () => {
+		const dir = fixture({
+			"docs/design/old.md": "`plan-review` gated the transition then.\n",
 		});
 		try {
 			const { status, out } = run(dir);
@@ -144,58 +174,48 @@ describe("check-docs rule 5", () => {
 });
 
 describe("check-docs rule 6", () => {
-	it("fails a doc that calls the readiness step preflight", () => {
+	// The rule used to exempt one section, because this repository had a step of
+	// its own next to pi-subagent's — readiness. That step is gone, so there is
+	// nothing left to draw a boundary against and no exemption to keep: the word
+	// is a failure anywhere a claim is made.
+	it("fails a current-state doc that uses the word at all", () => {
 		const dir = fixture({
 			"docs/workflow-plans.md":
-				"## Readiness\n\nThe preflight step checks every repository.\n",
+				"## The hand-off\n\nThe preflight step checks every repository.\n",
 		});
 		try {
 			const { status, out } = run(dir);
 			expect(status).toBe(1);
-			expect(out).toContain(
-				'docs/workflow-plans.md:3 calls readiness "preflight"',
-			);
+			expect(out).toContain('docs/workflow-plans.md:3 says "preflight"');
+			expect(out).toContain("launch-plan compile");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("fails a skill that uses the word for this harness step", () => {
+	it("fails a skill that uses it", () => {
 		const dir = fixture({
 			"skills/demo/SKILL.md": "# demo\n\nRun preflight before the plan.\n",
 		});
 		try {
 			const { status, out } = run(dir);
 			expect(status).toBe(1);
-			expect(out).toContain("skills/demo/SKILL.md:3 calls readiness");
+			expect(out).toContain('skills/demo/SKILL.md:3 says "preflight"');
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	it("allows the one section that exists to disown the word", () => {
+	it("exempts no heading, because there is nothing left to disown it under", () => {
 		const dir = fixture({
 			"docs/usage.md":
 				"### Readiness is not preflight\n\nPreflight belongs to pi-subagent.\n",
 		});
 		try {
 			const { status, out } = run(dir);
-			expect(out).toContain("check-docs: OK");
-			expect(status).toBe(0);
-		} finally {
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("stops allowing it at the next heading", () => {
-		const dir = fixture({
-			"docs/usage.md":
-				"### Readiness is not preflight\n\nNot ours.\n\n## Planning\n\nRun preflight first.\n",
-		});
-		try {
-			const { status, out } = run(dir);
 			expect(status).toBe(1);
-			expect(out).toContain("docs/usage.md:7 calls readiness");
+			expect(out).toContain("docs/usage.md:1");
+			expect(out).toContain("docs/usage.md:3");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

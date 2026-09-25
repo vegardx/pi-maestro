@@ -106,7 +106,7 @@ export function planDigest(plan: Plan): string {
  * that silently became `standard` would spend a deep run's budget — or fail to.
  *
  * **An absent effort is the plan's own.** `policy.effort` is a decision a human
- * made in the plan-mode exit and the digest covers it, so a run started without
+ * made in the hand-off out of plan mode and the digest covers it, so a run started without
  * naming one runs at the effort the document asks for rather than at a default
  * that overrides it. The parameter still wins when it is given: `/plan run
  * <slug> deep` is a human saying something about this run.

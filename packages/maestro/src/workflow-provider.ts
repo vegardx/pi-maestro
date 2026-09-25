@@ -3,7 +3,7 @@
  *
  * `@vegardx/pi-workflow` registers a frozen `{contract, acquire(context)}` on
  * Pi's event bus. This module is the other end: it asks the bus who is there,
- * refuses a runtime it was not built against, and hands the exit loop a client
+ * refuses a runtime it was not built against, and hands the hand-off a client
  * that reads everything and starts exactly two allowlisted things.
  *
  * **No import from pi-workflow, of any kind.** The package is an optional
@@ -81,7 +81,7 @@ export interface WorkflowValidationView {
 	readonly workflow: WorkflowDefinitionSummaryView;
 }
 
-/** The lease-free budget projection the exit loop shows before a run starts. */
+/** The lease-free budget projection a caller may ask the runtime for. */
 export interface WorkflowBudgetProjectionView {
 	readonly cost: number;
 	readonly totalTokens: number;

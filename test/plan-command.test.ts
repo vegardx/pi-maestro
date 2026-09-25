@@ -496,7 +496,7 @@ describe("the surface is five verbs, each with a reason", () => {
 			"start or restart `plan-to-ship` for a stored plan whose run did not",
 		);
 		expect(PLAN_COMMAND_HELP).toContain(
-			"the plan-mode exit normally starts it",
+			"the hand-off out of plan mode starts it",
 		);
 		expect(PLAN_COMMAND_HELP).toContain("the manual publication fallback");
 	});

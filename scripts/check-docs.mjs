@@ -223,11 +223,21 @@ const FICTION = [
 	// `deep-review` left this list when it shipped: it is a real definition in
 	// `@vegardx/pi-workflow/workflows`, so denying the name would now be the
 	// gate enforcing the past. The rest stay named because nothing supplies
-	// them. `plan-review` was never listed and must not be added: it is on the
-	// exit path and lands with the runtime that owns it.
+	// them.
 	[
 		/\b(?:deep-research|spec-review|impact-review)\b/,
 		"a named workflow that does not exist; the plan hand-off runs plan-to-ship",
+	],
+	// `plan-review` WAS on the hand-off path and is not any more. The blind
+	// review was a headless workflow run this seat started through `runBuiltin`;
+	// the plan check is a one-shot pi-subagent attempt of the `plan-reviewer`
+	// definition this package ships, and nothing here starts a `plan-review`
+	// workflow. The word stays legal in `docs/design/` and `docs/reviews/`, which
+	// are dated records, exactly as in rules 1b and 5. `plan-reviewer` is a
+	// different word and is deliberately not matched.
+	[
+		/\bplan-review\b/,
+		"plan-review — no such thing here any more; the plan check is a one-shot pi-subagent attempt of the plan-reviewer definition in packages/maestro/agents",
 	],
 ];
 
@@ -247,31 +257,25 @@ for (const file of claimFiles) {
 	}
 }
 
-// ── 6. Readiness is not preflight ─────────────────────────────────────────
-// Two steps, two processes, one word between them. THIS repository's step is
-// **readiness**: the repositories a stored plan names exist, are working-tree
-// roots, are clean, have the base branch, and `gh` is present when a pull
-// request was asked for. `preflight` is `@vegardx/pi-subagent`'s word for the
-// launch-plan compile of a delegated attempt. A doc that calls the first one
-// preflight sends a reader (or an agent) looking for it in the wrong package.
+// ── 6. `preflight` is not this repository's word ───────────────────────────
+// It belongs to `@vegardx/pi-subagent`, where it names the launch-plan compile
+// of a delegated attempt — the first half of the plan check's own launch, which
+// this seat asks for and does not perform.
 //
-// The word is allowed in exactly one place: the section that exists to say it
-// is not ours. Anywhere else in the current-state docs or the skills it is a
-// failure, and `docs/design/` and `docs/reviews/` keep their own vocabulary as
-// in rules 1b and 5.
-const PREFLIGHT_SECTION = "Readiness is not preflight";
+// The rule used to exempt one section, because this repository had a
+// neighbouring step of its own — readiness, which probed the repositories a
+// stored plan named before a run was offered. That step is gone: the hand-off
+// derives publication from the repository instead of interrogating it, and asks
+// one confirmation rather than a dialog per repository. So there is nothing left
+// to draw a boundary against, the exemption is gone with it, and the word is a
+// failure anywhere in the current-state docs or the skills. `docs/design/` and
+// `docs/reviews/` keep their own vocabulary as in rules 1b and 5.
 for (const file of claimFiles) {
 	const text = readFileSync(file, "utf8");
-	let heading = "";
-	let fenced = false;
 	for (const [index, line] of text.split("\n").entries()) {
-		if (line.trimStart().startsWith("```")) fenced = !fenced;
-		if (!fenced && line.startsWith("#"))
-			heading = line.replace(/^#+\s*/, "").trim();
-		if (heading === PREFLIGHT_SECTION) continue;
 		if (/\bpreflight\b/i.test(line)) {
 			failures.push(
-				`${relative(ROOT, file)}:${index + 1} calls readiness "preflight" — preflight is @vegardx/pi-subagent's launch-plan compile, and this step is readiness`,
+				`${relative(ROOT, file)}:${index + 1} says "preflight" — that is @vegardx/pi-subagent's word for the launch-plan compile of a delegated attempt, and this repository has no step of its own to call by it`,
 			);
 		}
 	}

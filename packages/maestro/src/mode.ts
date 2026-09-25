@@ -73,3 +73,30 @@ export function modeOf(cwd: CwdAccess, safeguards: Safeguards): Mode | null {
 export function modes(): readonly Mode[] {
 	return MODES;
 }
+
+// ── The ceiling a mode is ────────────────────────────────────────────────────
+//
+// THE MODE IS A PERMISSION DIAL AND NOTHING ELSE, and this is the one place it
+// says so to anybody outside this package. A mode used to travel by name —
+// "plan mode refuses `workflow_run`" — which meant every runtime that could
+// launch anything had to know what pi-maestro's mode names meant, and two of
+// them disagreed. So the bound travels in pi-subagent's OWN vocabulary instead:
+// workspace modes and tool names, stated once, here, at the translation point.
+//
+// No mode name crosses this line. `plan`, `auto` and `hack` are words this
+// repository uses about itself.
+
+/** A workspace pi-subagent knows how to give a delegated attempt. */
+export type WorkspaceMode = "read-only" | "worktree";
+
+/**
+ * A bound the host puts on one delegation.
+ *
+ * It never widens an agent definition: the effective allowance is the
+ * definition's own declaration intersected with this. `undefined` is no bound at
+ * all, which is what hack means and what an unregistered host means.
+ */
+export interface DelegationCeiling {
+	workspaceModes?: WorkspaceMode[];
+	tools?: string[];
+}

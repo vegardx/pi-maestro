@@ -35,6 +35,7 @@ import {
 	watchShippedRuns,
 } from "./publish.js";
 import { createSeat, type Seat } from "./seat.js";
+import { createSubagentPlanCheck } from "./subagent-provider.js";
 import {
 	acquireWorkflowClient,
 	acquireWorkflowClientOrWarn,
@@ -52,52 +53,22 @@ export { beginModeExit, type ModeExitHook };
 
 const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
 
-/**
- * The workflow tools a MODEL may not reach for in plan mode.
- *
- * Starting a run and proposing one, and nothing else. Every read the runtime
- * offers — `workflow_list`, `workflow_validate`, `workflow_inspect`,
- * `workflow_wait`, `workflow_logs`, `workflow_runs`, `workflow_status` — stays
- * available in plan mode, because looking at a run is planning; and
- * `workflow_decide` was already human-only, so this adds nothing to it.
- */
+/** The workflow tools a MODEL may not reach for in plan mode. */
 const MODEL_STARTED_RUN_TOOLS = new Set(["workflow_run", "workflow_propose"]);
 
-/**
- * What a model is told when it reaches for a run from plan mode.
- *
- * Fixed text for both tools, because the answer is the same one: there are two
- * ways a run starts from plan mode and neither of them is the model deciding
- * to. It names both, so the refusal is actionable rather than only a no.
- */
+/** What a model is told when it reaches for a run from plan mode. */
 export const PLAN_MODE_RUN_REFUSAL =
 	"A workflow run is not started by the model in plan mode. The person starts" +
-	" one with `/workflow run <ref>`, and the plan-mode exit starts the plan's" +
-	" own run at the end of `/mode auto`. Ask for the run you want, in the" +
-	" conversation, rather than starting it.";
+	" one with `/workflow run <ref>`, and the plan-mode hand-off starts the" +
+	" plan's own run at the end of `/mode auto`. Ask for the run you want, in" +
+	" the conversation, rather than starting it.";
 
 /**
  * Why a tool call cannot happen in this posture, or nothing.
  *
- * Two rules, and they are different in kind. Direct mutation in plan mode is
- * the posture itself: plan mode is read-only and the tools that write are the
- * ones it withholds.
- *
- * WORKFLOW RUNS ARE THE OTHER, AND THEY ARE NOT ABOUT SAFETY. A run is safe
- * from plan mode — it touches neither this working tree nor the host — and it
- * is still refused to the model there, because safe was never the question.
- * Plan mode is a conversation, a run is the seat acting, and the two ways a run
- * starts from plan mode are the person asking for one with `/workflow run` and
- * the hand-off starting the plan's own. This was written as guidance twice — in
- * the steers, the trailer and the docs — and a model reviewed its own plan with
- * `deep-review` from plan mode both times, which is the reading an independent
- * check exists to prevent. Guidance that fails twice is a rule, so the seat
- * enforces it. The seat's own plan check is unaffected: it is a one-shot
- * subagent the harness launches, not a tool the model can reach.
- *
- * There is nothing here about writing a plan any more. The document is not a
- * tool call: the hand-off asks the model for it directly, outside the agent
- * loop and with no tools offered at all.
+ * Direct mutation in plan mode is the posture itself. A model-started workflow
+ * run is the other rule, and it is not about safety: plan mode is a
+ * conversation, a run is the seat acting.
  */
 export function seatToolBlockReason(
 	mode: ModeName,
@@ -318,6 +289,15 @@ export function startSeat(
 			? {
 					workflow: (ctx, notify) =>
 						acquireWorkflowClientOrWarn(events, ctx, notify),
+					// The plan check, built per flow so the context it acquires the
+					// subagent runtime with is the session the person is in. A seat
+					// with no bus has no check, and the confirmation says so.
+					planCheck: (ctx) =>
+						createSubagentPlanCheck({
+							events,
+							context: () => ctx as unknown as ExtensionContext,
+							cwd,
+						}),
 				}
 			: {}),
 		...(options.runExitFlow ? { flow: options.runExitFlow } : {}),

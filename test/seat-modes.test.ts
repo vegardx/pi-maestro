@@ -288,19 +288,13 @@ describe("Pi's live tool set", () => {
 	});
 
 	it("refuses a model-started run in plan mode, and only those two tools", () => {
-		// The guidance was written three times and a model reviewed its own plan
-		// from plan mode twice anyway, so it is a refusal now. The refusal names
-		// both ways a run does start, because "no" alone is unactionable.
 		for (const name of ["workflow_run", "workflow_propose"]) {
 			const reason = seatToolBlockReason("plan", name);
 			expect(reason).toBe(PLAN_MODE_RUN_REFUSAL);
 			expect(reason).toContain("/workflow run <ref>");
-			expect(reason).toContain("plan-mode exit");
-			// Only plan mode. Auto and hack are postures that act.
 			expect(seatToolBlockReason("auto", name)).toBeUndefined();
 			expect(seatToolBlockReason("hack", name)).toBeUndefined();
 		}
-		// Reading a run is planning, so every read stays open.
 		for (const name of [
 			"workflow_list",
 			"workflow_validate",
@@ -309,7 +303,6 @@ describe("Pi's live tool set", () => {
 			"workflow_logs",
 			"workflow_runs",
 			"workflow_status",
-			// Already human-only in the runtime; the seat adds nothing to it.
 			"workflow_decide",
 		])
 			expect(seatToolBlockReason("plan", name)).toBeUndefined();

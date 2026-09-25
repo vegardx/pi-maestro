@@ -385,6 +385,8 @@ interface HarnessOptions {
 	readonly contextUsage?: ExitFlowDeps["contextUsage"];
 	readonly publication?: ExitFlowDeps["publication"];
 	readonly announce?: false;
+	/** The posture the person asked for; the ceiling the run starts under. */
+	readonly wanted?: ExitFlowDeps["wanted"];
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -402,7 +404,7 @@ function harness(options: HarnessOptions = {}) {
 	let clock = Date.UTC(2026, 8, 16, 12, 0, 0);
 	const deps: ExitFlowDeps = {
 		ui: ui.ui,
-		wanted: "auto",
+		wanted: options.wanted ?? "auto",
 		setMode: (name) => {
 			modes.push(name);
 		},

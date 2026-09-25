@@ -117,7 +117,7 @@ export interface SeatHost {
 	/**
 	 * Pi's shared bus, where the workflow runtime answers discovery and where a
 	 * decided `ship` is announced. Optional: a seat on a host without one keeps
-	 * working — the plan-mode exit takes its documented fallback, and
+	 * working — the hand-off takes its documented fallback, and
 	 * `/plan ship` says that publication needs the runtime rather than failing
 	 * somewhere deeper.
 	 */

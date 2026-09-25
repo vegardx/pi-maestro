@@ -1,21 +1,27 @@
 # Architecture
 
 Pi-maestro is the interactive composition layer of the Pi distribution. One Pi
-process is the seat. It owns planning and posture, not delegated execution.
+process is the seat.
+
+**The session is the control surface; the run executes in the background; the
+session narrates it; the mode bounds every delegation.** That is the whole shape.
+The seat owns what a person decides and what a person is told; it owns no
+executor.
 
 ```text
 interactive seat                        standalone runtimes
-  mode posture                            @vegardx/pi-workflow
-  plan authoring/store                      durable runs, checkpoints,
-  plan-mode exit loop  ── provider ──▶      compilation, recovery, receipts
-  readiness (audited bash)                        │
-  publication (audited bash, gh)                  ▼
-  classified host bash                    @vegardx/pi-subagent
-  recoverable delete                        sandboxed attempts, worktrees,
-  prompt assistance                         handoff commits, operator UX
-  smart compaction
-  structured questions                    owned web extension
-  curated skills                            deferred
+  mode posture ─── ceiling ─────────────▶  @vegardx/pi-subagent
+  plan authoring/store                      sandboxed attempts, worktrees,
+  the hand-off  ─── provider ────────┐      handoff commits, operator UX
+  the plan check ─── subagent ───────┼──▶       ▲
+  run narration ─── observe ─────────┤          │ launches
+  publication (audited bash, gh)     └──▶  @vegardx/pi-workflow
+  classified host bash                      durable runs, checkpoints,
+  recoverable delete                        compilation, recovery, receipts
+  prompt assistance
+  smart compaction                        owned web extension
+  structured questions                      deferred
+  curated skills
 ```
 
 There is no custom worker socket, executor, workflow scheduler, question
@@ -30,8 +36,10 @@ steps, each of which stops before the push.
 | --- | --- |
 | Interactive mode posture | pi-maestro |
 | Plan vocabulary, validation, and storage | pi-maestro |
-| The plan-mode exit loop and its dialogs | pi-maestro |
-| Readiness of the repositories a plan names | pi-maestro |
+| The hand-off out of plan mode, and its two dialogs | pi-maestro |
+| The plan check, as a one-shot subagent it launches | pi-maestro |
+| Narrating a started run into the conversation | pi-maestro |
+| The delegation ceiling every launch is bounded by | pi-maestro |
 | Publication of a run's receipt (audited Bash, human-decided) | pi-maestro |
 | Direct seat bash classification | pi-maestro |
 | Recoverable delete | pi-maestro |
@@ -50,25 +58,25 @@ does not.
 ## The workflow provider seam
 
 `workflow-provider.ts` is discovery, compatibility and error mapping, and the
-plan-mode exit loop is its caller: the second half of the exit compiles the
-stored plan, asks the runtime to validate and project it, and starts the blind
-`plan-review` through it. `/plan run` remains the other route to a run, and the
+hand-off is its caller: it starts the plan's own run through the seam once a
+person has answered the one confirmation, and the narrator observes that run
+through the same client. `/plan run` remains the other route to a run, and the
 only one on a seat with no runtime installed.
 
 pi-workflow registers a workflow service provider on Pi's event bus, and
 pi-maestro acquires it lazily through `packages/maestro/src/workflow-provider.ts`.
 The dependency is an **optional** peer: a seat without `@vegardx/pi-workflow`
-installed keeps working, and the exit loop simply omits the branches that need a
+installed keeps working, and the hand-off simply omits the branches that need a
 runtime, falling back to the stored plan and `/plan run`. A provider whose
 declared runtime contract does not match the features this seat needs fails
 discovery loudly rather than being mis-called.
 
 The client is read-only — list, validate, project a budget, inspect a run,
-observe run status — with one narrow exception: it may start a headless builtin
-from an allowlist the *runtime* owns, which is how a plan review can be blind to
-the planning conversation. An allowlisted definition declares no checkpoint, no
-worktree, and no handoff, so it can neither ask for a decision nor write. Every
-run that writes stays a model tool call in the transcript.
+observe its appends — with one narrow exception: `startBuiltin` starts the one
+definition the *runtime* allowlists for a service consumer, `plan-to-ship`, with
+the mode's ceiling, once a person has said yes in a dialog this seat owns. There
+is no `runBuiltin` any more: the headless reviewer it existed for is now a
+one-shot subagent, which needs no workflow run at all.
 
 **Nothing crosses the import boundary.** pi-workflow is not published on npm, so
 this package imports nothing from it — not a value, not a type. The discovery
@@ -94,8 +102,32 @@ no dependency to generate it from.
 
 Every failure at this seam — no runtime, two runtimes, a revision mismatch, a
 replaced provider, a refusal from the runtime, a failed acquisition — becomes one
-warning naming what to do instead (`/plan run`, or *Approve as is* when only the
-blind reviewer is out of reach). None of them throws into the session.
+warning naming what to do instead: `/plan run <slug>`, because the run is the one
+thing a failure here costs. None of them throws into the session.
+
+## The subagent seam
+
+`@vegardx/pi-subagent` is an **exact peer pin**, not an optional one, and
+`subagent-provider.ts` is the one file that touches it. Two things go through it:
+
+- **The plan check** is one delegated attempt — compiled, launched, awaited, and
+  answered with structured output — of the `plan-reviewer` definition shipped in
+  `packages/maestro/agents/` and passed as `agentRoots`, so the reader a check
+  runs is the one shipped beside the code that names it. `contextMode: "fresh"`,
+  `contextScopes: []` and read-only tools are what make it blind; there is no
+  workflow run, no journal and no budget lease, because a document that is read
+  once and answered needs none of that.
+- **The delegation ceiling** is registered once, for the process, through
+  pi-subagent's own `registerDelegationCeilingProvider`. pi-subagent consults it
+  for its own `subagent` tool and pi-workflow consults it for `workflow_run`, so
+  the mode bounds every delegated launch without either of them knowing what a
+  pi-maestro mode is.
+
+The types pi-subagent does not export — the launch request, the service and the
+client — are declared locally, narrowed to what this seat builds and calls, and
+its two functions are re-typed once against this package's own copy of
+pi-coding-agent. Every failure becomes one sanitized sentence: a plan check that
+could block a hand-off by being broken would be a worse check than none.
 
 ## Seat authority
 
@@ -132,18 +164,22 @@ when direct seat work is preferable to isolated delegation.
 
 Most implementation work is expected to run through standalone subagents, which
 own Gondolin isolation, worktrees, retry/resume, persistence, and operator
-controls. A workflow run is safe to start from any mode for the same reason: the
-attempt it delegates cannot touch the seat's working tree or the host. Safe is
-not the same as available: the seat refuses `workflow_run` and
-`workflow_propose` to the model in `plan` mode, because starting a run is the
-seat acting and plan mode is a conversation. Reads are untouched, and the person
-starts runs there themselves — see [Modes](commands.md#modes).
+controls.
+
+**The mode's ceiling is how a posture reaches those launches.** `modeCeiling`
+maps `plan` to a read-only workspace, `auto` to read-only or a worktree, and
+`hack` to no bound, in pi-subagent's own vocabulary — no mode name leaves this
+package. It is asked at launch time rather than captured at registration, so a
+mode change under a running session bounds the next launch. A start whose
+definition needs more than the ceiling allows is refused by the runtime that
+performs it, naming both, which is why the seat no longer withholds any workflow
+tool from the model by name — see [Modes](commands.md#modes).
 
 ## Plans
 
-The plan-mode exit asks the session's own model for a plan document — directly,
-outside Pi's agent loop, with no tools offered — validates it, and stores
-repository-qualified authored intent:
+The plan lives in the conversation. The hand-off asks the session's own model to
+form it into a document — directly, outside Pi's agent loop, with no tools offered
+— validates it, and stores repository-qualified authored intent:
 
 ```text
 <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
@@ -159,16 +195,20 @@ tasks that are the work, and the reviews that read that work when it is done.
 It also carries the policy the run follows — effort, gates, publication — which
 the harness attaches from the decisions a human made on the way out of plan
 mode, never the model; the schema has no field for any of it. Writing a plan is
-not a tool call, so there is no plan-authoring tool in any posture. How each deliverable is run is derived from those three things
-and is not written down. Pi-maestro validates and stores this vocabulary but
-does not execute it. The plan-mode exit and `/plan run <slug>` both build the
-workflow input and start `plan-to-ship` themselves, through the workflow
-runtime's service seam — `startBuiltin("plan-to-ship", {input, effort})`, which
-the runtime allowlists to that one definition and validates as `workflow_run`
-would. The run is started by the harness after the person says yes; the model is
-never asked to start a plan's run, and the seat still refuses its `workflow_run`
-in plan mode. `@vegardx/pi-workflow` owns the runtime lowering and state model.
-See [Authored plans](workflow-plans.md).
+not a tool call, so there is no plan-authoring tool in any posture. How each
+deliverable is run is derived from those three things, by pi-workflow, and is not
+written down — this seat no longer compiles a stage document or mirrors the schema
+that validated one.
+
+Pi-maestro validates and stores this vocabulary but does not execute it. The
+hand-off and `/plan run <slug>` both build the workflow input and start
+`plan-to-ship` themselves, through the workflow runtime's service seam —
+`startBuiltin("plan-to-ship", {input, effort, ceiling})`, which the runtime
+allowlists to that one definition, validates as `workflow_run` would, and refuses
+when the definition needs more than the ceiling allows. The run is started by the
+harness after the person says yes, and then the session narrates it.
+`@vegardx/pi-workflow` owns the runtime lowering and state model. See
+[Authored plans](workflow-plans.md).
 
 ## Extension loading
 

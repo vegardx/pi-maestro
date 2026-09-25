@@ -24,7 +24,7 @@ export const MODE_NAMES = ["plan", "auto", "hack"] as const;
 export type ModeName = (typeof MODE_NAMES)[number];
 
 /**
- * The postures a plan-mode exit can be heading for.
+ * The postures a hand-off out of plan mode can be heading for.
  *
  * Named here rather than written out wherever the exit reads it, because
  * `plan` is the one mode an exit can never be heading *for*: the exit starts

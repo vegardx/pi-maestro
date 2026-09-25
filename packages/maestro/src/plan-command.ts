@@ -9,7 +9,7 @@
 // the workflow client this seat holds could only read. It can start
 // `plan-to-ship` now, so the command does: it loads the plan, builds the input,
 // writes it beside the plan, and hands it to the injected `start` — the same
-// allowlisted `startBuiltin` the plan-mode exit uses. Still no executor here:
+// allowlisted `startBuiltin` the plan-mode hand-off uses. Still no executor here:
 // the run is the workflow runtime's, through the provider seam, and this file
 // knows nothing about either beyond the one injected function.
 //
@@ -26,7 +26,7 @@
 // THERE IS NO SIXTH VERB, and each of the five is here for a stated reason:
 // `list` and `show` read this project's plans; `run` starts or restarts the
 // `plan-to-ship` run for a stored plan whose run never started or failed, which
-// the plan-mode exit normally starts for you; `rm` removes one; `ship` is the
+// the hand-off out of plan mode normally starts for you; `rm` removes one; `ship` is the
 // manual publication fallback for when the automatic publication after the ship
 // gate did not happen. A verb whose reason cannot be written on one line is a
 // verb this command does not need.
@@ -76,7 +76,7 @@ export const PLAN_COMMAND_HELP = [
 	"                lists no other project's",
 	"  show <slug>   one stored plan in full, with the session and cwd that authored it",
 	"  run <slug>    start or restart `plan-to-ship` for a stored plan whose run did not",
-	"                start or failed; the plan-mode exit normally starts it for you",
+	"                start or failed; the hand-off out of plan mode starts it for you",
 	"  rm <slug>     remove one stored plan and everything stored with it",
 	"  ship <slug>   the manual publication fallback, for when the automatic publication",
 	"                after the ship gate did not happen",

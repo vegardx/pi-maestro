@@ -41,9 +41,11 @@ pushes, pull requests, checks, and checked rebase merges.
 /mode [plan|auto|hack]
 ```
 
-Leaving plan mode asks the session's own model for a plan document and stores
-the authored intent under the Pi agent directory. Stored plans are not
-executable until the owned workflow extension is introduced.
+The plan lives in the conversation. Leaving plan mode is the hand-off: the
+session's own model forms the plan into a document, a one-shot subagent reads it
+in a fresh context, and one confirmation offers the run. The run executes in the
+background and the session narrates it. The mode is a permission dial, and its
+ceiling bounds every delegated launch.
 
 See [commands](docs/commands.md), [usage](docs/usage.md), and
 [architecture](docs/architecture.md).

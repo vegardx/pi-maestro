@@ -42,7 +42,7 @@ import { Value } from "typebox/value";
 export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 20;
 
 /**
- * The features the exit loop and `/plan run` actually depend on.
+ * The features the hand-off and `/plan run` actually depend on.
  *
  * - `staticWorkflows` — `plan-to-ship` is a static ref.
  * - `durableRuns` — a run survives the dialog that started it.

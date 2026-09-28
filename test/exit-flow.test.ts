@@ -266,6 +266,18 @@ function fakeClient(options: FakeClientOptions = {}) {
 		inspect: async () => ({}),
 		runs: async () => ({}),
 		observe: () => () => {},
+		// The hand-off calls none of the three, and they are on the client because
+		// the seat's dialogs are: a run this flow starts is a run the session then
+		// decides, retries or stops.
+		decide: async () => {
+			throw new Error("the hand-off decides nothing");
+		},
+		resume: async () => {
+			throw new Error("the hand-off resumes nothing");
+		},
+		stop: async () => {
+			throw new Error("the hand-off stops nothing");
+		},
 		startBuiltin:
 			options.startBuiltin ??
 			(async (ref: string, options_: { input: unknown }) => {

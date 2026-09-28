@@ -225,6 +225,12 @@ function busWith(client: Record<string, unknown>): WorkflowEventBus {
 			validate: async () => ({ valid: true, workflow: {} }),
 			project: async () => ({ fits: true }),
 			startBuiltin: async () => ({ runId: "r" }),
+			// Revision 22: `CLIENT_METHODS` requires all three, because the seat's
+			// three dialogs are those calls. A stub without them is refused at
+			// discovery, which is the point of requiring rather than duck-typing them.
+			decide: async () => ({}),
+			resume: async () => ({}),
+			stop: async () => ({}),
 			...client,
 		}),
 	};

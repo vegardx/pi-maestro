@@ -2,14 +2,51 @@
 
 An authored plan describes repositories, deliverables, dependency edges, the
 work each deliverable is, and who reads that work when it is done. It is intent,
-not runtime state. It is stored at `schemaVersion: 7`.
+not runtime state. It is stored at `schemaVersion: 8`.
+
+## The flow, from an idea to a shipped pull request
+
+Five steps, and the shape of the whole thing is that **each step is one place**:
+
+1. **Plan in the conversation.** Plan mode is a conversation and the plan lives in
+   it: the model writes it and revises it as an ordinary message. Nothing is on
+   disk, nothing is compiled, and no tool writes it.
+2. **Leaving plan mode is Go.** `/mode ask` or `/mode auto` says the planning is
+   over. The harness asks the session's own model for the description and the
+   document, a one-shot reviewer reads the stored plan, and **one confirmation**
+   starts the run. `/mode hack` is not Go: it only switches.
+3. **The run executes in the background and the session narrates it.** One line
+   per task completion into the conversation; a turn for the things only the model
+   can explain.
+4. **The mode you left to decides the end.** `ask` → the run parks at its `ship`
+   decision and this session asks you, in a dialog, with the gate's inputs
+   rendered. `auto` → the run has no ship gate at all: it completes and the seat
+   publishes the pull request, whose link lands in the conversation.
+5. **After.** The publication receipt is appended beside the plan.
+   `/plan ship <slug>` and `/workflow decide` remain as fallbacks for when the
+   automatic path did not happen — they are not the way through.
+
+A failure anywhere in step 3 is offered as a dialog too: *Retry the task* / *Stop
+the run* / *Re-plan*, the last of which goes back to plan mode carrying where the
+run got to.
+
+**No command is ever named for a decision.** Everything a person has to decide is
+a dialog in the session that started the run.
+
+**Version 8 removed `policy.effort`.** The dial was one answer standing in for
+three unrelated questions — which model implements, how hard it thinks, and how
+many fix rounds the check buys — and it answered all three in the middle of a
+conversation. Implementation roles inherit the session's own model and thinking
+level now, reviews keep their tiers, and fix rounds are the plan's own
+`maxFixRounds` or one. Version 8 also admits `policy.gates: "none"`, which is what
+leaving plan mode to `auto` writes. There is no migration, and a
+`schemaVersion: 7` envelope is refused by name.
 
 **Version 7 removed the `approve-plan` gate.** The person leaving plan mode has
 already agreed the description, read the plan and seen what the plan check said
 before answering `Start the run?` — so the start **is** the approval, and a run
 that parked seconds later to ask the same person about the same digest was asking
-twice. `policy.gates` is `ship` or `every-deliverable`, there is no migration,
-and a `schemaVersion: 6` envelope is refused by name.
+twice.
 
 **Version 5 moved reviews off the task and took the run's shape out of the
 document.** A `tasks[]` entry is work — implementation, tests, docs, and nothing
@@ -129,26 +166,30 @@ to it could change.
 ### Policy
 
 `policy` is plan-wide and is **not written by the model**: the schema has no
-`policy` field. The hand-off settles it — the effort a human
-chose, the gates this seat defaults to, the publication derived from the
-repository — and the harness attaches it to the document it stores. A plan
-written any other way carries none and the defaults below apply. It is on the
-document, not only in a dialog transcript, so a reviewer can see where a run is
-going and the plan digest covers it.
+`policy` field. The hand-off settles it — the gates read off the mode being left
+to, the publication derived from the repository — and the harness attaches it to
+the document it stores. A plan written any other way carries none and the defaults
+below apply. It is on the document, not only in a dialog transcript, so a reviewer
+can see where a run is going and the plan digest covers it.
 
 | Field | Values | Default |
 | --- | --- | --- |
-| `effort` | `cheap`, `standard`, `deep` | `standard` |
-| `gates` | `ship`, `every-deliverable` | `ship` |
+| `gates` | `ship`, `every-deliverable`, `none` | `ship` |
 | `reviewDefault` | `{tier?, diverse?}` | `{tier: "standard", diverse: false}` |
-| `maxFixRounds` | `0`, `1`, `2` | `0` cheap, `1` standard, `2` deep |
+| `maxFixRounds` | `0`, `1`, `2` | `1` |
 | `publish` | `{mode: "none"\|"branch"\|"pr", base?}` | `{mode: "none"}` |
 
-`gates` is where the run stops for a person. `ship` is one decision after all
-the work and before anything is published; `every-deliverable` adds one after
-each deliverable as well. There is no "no gates" value: a publication is proven
-by the `ship` checkpoint's own decided value, so a run with no ship decision is
-a run nothing can be published from.
+`gates` is **the same question as what ends the run**, and the mode you leave plan
+mode to answers it. `ship` is one decision after all the work and before anything
+is published, asked in this session's own dialog; `every-deliverable` adds one
+after each deliverable as well; `none` is mode `auto`'s answer.
+
+`none` is **not** "publish without a decision". The decision it rests on was made
+earlier and by a person: leaving plan mode to `auto` is the approval for
+publication as well as for the run, said once, in the confirmation that starts it
+and in as many words on the card. The run then carries the same receipt and the
+same ship-gate inputs in its terminal output, so what the seat publishes from is
+exactly what a `ship` gate would have shown.
 
 `publish` says what happens to the run's result, and publication is pi-maestro's
 own audited Bash work — the workflow runtime never pushes, merges, or publishes,
@@ -166,8 +207,8 @@ cannot honour is not written down in the first place.
   "slug": "compose-catalogue", "title": "Component catalogue",
   "body": "Why the catalogue is worth building.",
   "repos": [{ "key": "wf", "path": "/Users/vegardx/src/github.com/vegardx/pi-workflow" }],
-  "policy": { "effort": "standard", "gates": "ship",
-              "maxFixRounds": 1, "publish": { "mode": "pr", "base": "main" } },
+  "policy": { "gates": "ship", "maxFixRounds": 1,
+              "publish": { "mode": "pr", "base": "main" } },
   "deliverables": [{
     "id": "catalogue", "title": "Ship the component catalogue",
     "after": [], "reads": [],
@@ -199,10 +240,25 @@ plan and revises it as an ordinary message — deliverables, work tasks, reviews
 dependencies — the way anybody plans anything with anybody. Nothing about plan
 mode says how a plan is executed: the modes are permission dials and only that.
 
-**Leaving plan mode is the trigger.** `/mode auto` or `/mode hack` says the
-planning is over, and everything between that sentence and a run is one flow,
-inside the `/mode` call, with nothing on disk between its steps. A session that
-dies mid-hand-off has no hand-off.
+**Leaving plan mode is Go.** `/mode ask` or `/mode auto` says the planning is
+over, and everything between that sentence and a run is one flow, inside the
+`/mode` call, with nothing on disk between its steps. A session that dies
+mid-hand-off has no hand-off.
+
+**`/mode hack` is not Go.** Hack is the unrestricted in-session escape hatch, and
+forming a plan into a bounded run is the opposite of what it means — so leaving
+plan mode to hack **only switches**. A one-line notice says the conversation's plan
+was not formed and that `/mode ask` or `/mode auto` is what turns a conversation
+into a run; a plan already stored keeps `/plan run <slug>`, which itself refuses
+from hack for the same reason.
+
+**The mode you leave to decides the end of the run**, and it is the only thing
+that differs between the two hand-off modes:
+
+| Leaving to | `policy.gates` | The end |
+| --- | --- | --- |
+| `ask` | `ship` | The run parks at its `ship` decision and this session opens the ship dialog with the gate's inputs rendered |
+| `auto` | `none` | No ship gate: the run completes and the seat publishes the pull request, whose link lands in the conversation |
 
 Two things can only come from the model — the description we agree on, and the
 v5 document formed from the plan as written — and **the harness asks for both
@@ -215,29 +271,30 @@ refusal four times. A steer is a request a model may interpret. This is not.
 
 ### What the person is asked
 
-**Two dialogs, and at most one more.**
+**One dialog, and at most one more.**
 
-1. **The effort dial** — the one question a repository cannot answer. `cheap`,
-   `standard` or `deep`, with `standard` first and what escape takes.
-2. **One confirmation**, at the end, carrying everything that is being agreed
-   to: the description in full, the plan summary (each deliverable with its
-   tasks, its `after` edges and who reads its work), the effort, the gates,
-   where publication goes and why, and what the plan check said. `Start the run`
-   is first. `Edit the description` opens an editor and comes back to the same
+1. **One confirmation**, at the end, carrying everything that is being agreed to:
+   the description in full, the plan summary (each deliverable with its tasks, its
+   `after` edges and who reads its work), the gates, where publication goes and
+   why, what the plan check said, and **which ending you are starting** — *Ships
+   the PR when done* for auto, *Stops for your ship decision* for ask. `Start the
+   run` is first. `Edit the description` opens an editor and comes back to the same
    confirmation. `Just switch, keep the plan stored` switches the posture and
-   starts nothing. `Keep planning` is what escape takes, because starting a run
-   IS the approval and an approval obtained by not answering is not one.
+   starts nothing. `Keep planning` is what escape takes, because starting a run IS
+   the approval and an approval obtained by not answering is not one.
 
-The third dialog is the plan check's, and only when the check found something a
+The second dialog is the plan check's, and only when the check found something a
 rewrite cannot answer (below).
 
-Nothing else is asked. **Publication is derived** from the repository — an
-`origin` remote and `gh` on PATH means a pull request, a remote alone means a
-branch, neither means the work stays on this machine — and the sentence saying
-which and why is in the confirmation, not in a dialog. Gates take `ship`. Review
-lenses are the plan's and `policy.reviewDefault`'s. The
-[command reference](commands.md#the-hand-off) lists every dialog, what is first
-in it, and what escape takes.
+**Nothing is asked before there is anything to show.** The effort dial used to be
+the first thing a person saw on the way out of plan mode, before a description or
+a document existed; version 8 removed it. **Publication is derived** from the
+repository — an `origin` remote and `gh` on PATH means a pull request, a remote
+alone means a branch, neither means the work stays on this machine — and the
+sentence saying which and why is in the confirmation, not in a dialog. **Gates are
+the target mode's.** Review lenses are the plan's and `policy.reviewDefault`'s. The
+[command reference](commands.md#the-hand-off) lists every dialog, what is first in
+it, and what escape takes.
 
 ### What the model is asked
 
@@ -279,6 +336,13 @@ findings only. It has read-only tools, no workspace, `contextScopes: []` and
 anything else — a reader who inherited the conversation agrees with it. The
 launch carries `ceiling: { workspaceModes: [read-only] }`, so there is no version
 of it that writes, whatever posture the seat is in.
+
+**It reads with the session's own model.** The launch asks for `model: "inherit"`
+and the definition lists `inherit` first in `allowedModels`; pi-subagent resolves it
+through the session-model provider this seat registers at load, read on every call
+so `/model` applies to the next check. A reviewer pinned below the author is a
+reviewer that agrees because it cannot follow. A host with no session model to
+inherit falls back to the definition's own exact pins.
 
 It returns `{verdict, findings, notes}`. A finding carries an `id`, a `severity`
 (`blocking`, `major`, `minor`), a `where` a reader can find, a `summary`, an
@@ -352,9 +416,12 @@ and never a provider error, a stack, a path or any of the answer's text;
 a `check` attempt and nowhere else: what the reader said about the plan and how
 many things of each severity it said it about. The findings themselves are not
 recorded — they are prose about somebody's repository, and this file is a record
-of what the harness did. The requested thinking level is the effort's
-(`cheap`/`standard`/`deep` → `low`/`medium`/`high`) and never below the session's
-own.
+of what the harness did. The requested thinking level is **the session's own**,
+never below a floor of `medium`: a person who set `high` for this conversation did
+so because the work is hard, and writing the plan for that work is not the moment
+to think less. It used to be a map from `policy.effort`, so a person answering "how
+much effort should the run spend?" was also, invisibly, deciding how hard the plan
+itself was written.
 
 ### The posture, and where it moves
 
@@ -380,8 +447,12 @@ for it at session start, so pi-subagent's `subagent` tool and pi-workflow's
 | Mode | Ceiling |
 | --- | --- |
 | `plan` | `{workspaceModes: ["read-only"]}` |
+| `ask` | `{workspaceModes: ["read-only", "worktree"]}` |
 | `auto` | `{workspaceModes: ["read-only", "worktree"]}` |
 | `hack` | none |
+
+`ask` and `auto` are the same ceiling because they are the same permissions: the
+two differ in what happens when the run is over, which is not a permission.
 
 A ceiling never widens an agent definition: the effective allowance is the
 definition's own declaration intersected with the ceiling. pi-workflow refuses a
@@ -400,15 +471,13 @@ current mode's, because that is where the person typing it is standing.
 ### The run, and the session that narrates it
 
 `Start the run` starts it **here, in the harness** —
-`startBuiltin("plan-to-ship", {input, effort, ceiling})` through the workflow
-runtime's service seam, allowlisted to that one definition by name and validated
-exactly as `workflow_run` would be — and then switches to the posture asked for
-at `/mode`. The model is not asked to start it and is not in that loop at all.
-**Starting it is the approval**, so the run works through the plan and stops at
-its `ship` decision, and under `every-deliverable` after each deliverable as
-well. A runtime that refuses or fails to start it leaves the plan stored, takes
-the posture the person asked for, and prints the cause with `/plan run <slug>`
-still there.
+`startBuiltin("plan-to-ship", {input, ceiling})` through the workflow runtime's
+service seam, allowlisted to that one definition by name and validated exactly as
+`workflow_run` would be — and then switches to the posture asked for at `/mode`.
+The model is not asked to start it and is not in that loop at all. **Starting it is
+the approval**, and from `auto` it is the approval for publication too. A runtime
+that refuses or fails to start it leaves the plan stored, takes the posture the
+person asked for, and prints the cause with `/plan run <slug>` still there.
 
 **The engine executes; the session narrates.** pi-maestro observes the runs it
 started and posts what it sees into the conversation as one `maestro:progress`
@@ -436,18 +505,80 @@ filed, a refine — those are facts the next turn should have, and a turn per ta
 would mean the model narrating its own silence forty times. Four things get a
 turn, because each is something only the model can turn into a sentence a person
 can act on: a **review synthesis**, a **fix report**, a **failure** of a task or
-the run, and the **ship gate arriving** — which says that a decision is waiting
-and that it is made with `/workflow decide <run-prefix> ship {"ship":true}` or
-through the gate's own widget. A run that ends without ever stopping at a gate
-gets a final summary, with a turn, because a run that finished and asked for
-nothing is exactly the case a silent seat used to leave a person guessing about.
+the run, and the **ship gate arriving** — which says that a decision is waiting and
+that it is waiting **in the dialog on screen**. It names no command: the sentence
+used to carry `/workflow decide <prefix> ship {"ship":true}`, and a model telling
+somebody to type that would now be sending them past the thing already in front of
+them. A run that ends without ever stopping at a gate gets a final summary, with a
+turn, because a run that finished and asked for nothing is exactly the case a silent
+seat used to leave a person guessing about.
 
-**What the ship gate shows is per deliverable.** Its inputs are the refined
-executable `plan`, and for each deliverable `summary-<d>` (the implementation
-report), `findings-<d>` (the normalized review findings) and `fix-<d>` (the
-fixer's answer to each of them). That is what a person reads before answering
-`{"ship":true}` — the deliverable-by-deliverable account of what the run found
-and what it did about it — and nothing is pushed, merged or published either way.
+**Narration is not the decision surface, and it opens one.** Three of those things
+are decisions rather than news — a gate that arrived, a failure, and the completion
+of a run whose mode says publish — and narration hands each of them on. Observing a
+run and asking a person a question are different jobs, and a watcher that opened
+dialogs itself would be a watcher nobody could read.
+
+### The decisions a run asks for
+
+Three dialogs, all of them in the session that started the run.
+
+**The ship dialog (`ask`).** When the `ship` gate arrives, the gate's own inputs go
+on screen: per deliverable the implementation summary, the review synthesis's
+verdict, the normalized findings **grouped by severity** (blocking, major, minor),
+the fixer's answer to each of them (`addressed` / `disputed` with the note in full /
+`out-of-scope`), and the **residuals** — what the run would ship with, which is
+every finding the fixer did not address, *including the ones it never answered*.
+Then one select:
+
+| Answer | What it does |
+| --- | --- |
+| *Ship* (default) | Records the decision and publishes, through the same path `/plan ship` takes |
+| *Don't ship* | Records `{"ship": false}` with a one-line reason you type; nothing is published |
+| *Look first* (escape) | Sends you to look at the run and **comes straight back to the same dialog** — going to look is not a decision, and a dialog that closed on the way would be a decision lost to an escape key |
+
+Saying "ship it" in the conversation opens the same dialog, through the
+`plan_ship_dialog` tool. The tool **decides nothing**: it opens the dialog and
+returns, and it is offered only while a run of this session is actually parked at a
+ship decision.
+
+**Auto publication.** A `gates: "none"` run has no gate to park at. When it
+completes, the seat publishes immediately — branch, pull request,
+`publication.json` — and posts the link into the conversation with a turn. **No
+question is asked first**, because the approval was given when the person answered
+`Start the run?` from auto. A publication that fails offers *Retry publication* /
+*Leave it*, with the sanitized cause and the branch it left behind on screen;
+escape leaves it, and names `/plan ship <slug>` for later.
+
+**The failure dialog.** A task or a run that did not complete: the cause, then
+*Retry the task* (default) / *Stop the run* / *Re-plan* (escape). Re-plan is the
+escape because it is the one answer that always works — it needs nothing of the
+runtime, because it is about this conversation — and because cancelling somebody's
+run is a commitment an unanswered dialog must not make. It switches to plan mode
+and hands the conversation a custom message carrying the run's state summary, so the
+next plan is written from where this one got to.
+
+**What the read client cannot do, named rather than worked around.**
+pi-workflow's service-provider client is a **read** client by design: `list`,
+`validate`, `project`, `inspect`, `runs`, `observe`, and the one allowlisted
+`startBuiltin`. It has no `decide`, no `resume` and no `stop`, and its lease-free
+`inspect` carries no verified checkpoint inputs — `checkpoint.inputs` is documented
+as artifact-backed, which is the `status`, `wait` and `decide` views. So:
+
+- the three methods are **duck-typed off the acquired client at call time**, and
+  the day pi-workflow exposes them this seat uses them with no version check;
+- *Ship* falls back to the publication path that already decides — `/plan ship`
+  publishes without a proved gate because typing it *is* the decision, and
+  answering this dialog is the same decision in the same session one dialog ago —
+  and the notice says so, including that the run's own checkpoint stays parked;
+- *Don't ship*, *Retry* and *Stop* have **no honest local substitute** and say so:
+  each reports the one sentence naming the method pi-workflow must expose, and
+  nothing pretends the run moved;
+- the gate's inputs are read **tolerantly**: from `checkpoint.inputs` when a view
+  carries them, and from each producing task's `narration.summary` when it does
+  not — with the difference stated in the rendering, because "no findings" and "the
+  findings are in a view this seat cannot reach" are different facts about the same
+  run.
 
 **The summary is not on the observation.** An observation is a synchronous notice
 on a durable append that reads no file and must stay in sequence order; a task's
@@ -486,30 +617,32 @@ conversation
   → the model, asked directly for the document
   → validation
   → <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
-  → toWorkflowInput(plan, effort)
+  → toWorkflowInput(plan)
   → <agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json
   → the plan check, in a fresh context, and the rewrites it asks for
-  → startBuiltin("plan-to-ship", { input, effort, ceiling })  ← the harness, after your yes
-  → a run id, working, narrated into the conversation, and stopping next at `ship`
+  → startBuiltin("plan-to-ship", { input, ceiling })  ← the harness, after your yes
+  → a run id, working, narrated into the conversation
+  → from ask: the ship dialog in this session → publication
+  → from auto: completion → publication, and the PR link in the conversation
 ```
 
 **Per project, and signed by the session that wrote it.** The store's root is
 `<agentDir>/maestro/plans/<encoded cwd>`, where the key is the cwd encoded
 exactly as Pi encodes its own sessions directory (`/Users/x/src/proj` →
 `--Users-x-src-proj--`), so a project's sessions, plans and workflow runs are
-siblings under one name. The envelope is schema 7 and carries
+siblings under one name. The envelope is schema 8 and carries
 `authoredBy: {sessionId, cwd}` — required, taken from the live session — so a
-plan read back names who wrote it and where. A schema 6 envelope names the
-`approve-plan` gate version 7 removed and is refused by name; there is no
-migration, and plans left directly under `maestro/plans/<slug>` are not read or
-listed.
+plan read back names who wrote it and where. A schema 7 envelope carries the
+`effort` dial version 8 removed and is refused by name; there is no migration, and
+plans left directly under `maestro/plans/<slug>` are not read or listed.
 
-**By value, with a digest.** `toWorkflowInput(plan, effort)` returns
-`{plan, planDigest, effort}`: the whole authored document, the sha256 of its
-canonical JSON (keys sorted, no whitespace), and one of `cheap`, `standard` or
-`deep`. An effort nobody named is the plan's own `policy.effort` — a decision a
-human made on the way out of plan mode, which the digest covers — and
-`standard` only when the document sets none. The plan travels by value because a workflow run
+**By value, with a digest, and nothing beside it.** `toWorkflowInput(plan)` returns
+`{plan, planDigest}`: the whole authored document, and the sha256 of its canonical
+JSON (keys sorted, no whitespace). There used to be an `effort` here too, and it was
+the one field of this input the digest did **not** cover — so a run and the bytes
+somebody approved could differ in a dial nobody could see afterwards. Everything
+this input carries now comes off the plan, so a receipt checked against the stored
+document is checked against the whole input. The plan travels by value because a workflow run
 validates its input against the definition's schema and binds the run's
 identity to it — a run given a slug could have the document change underneath
 it on resume, and would then be executing something nobody approved. The digest
@@ -524,27 +657,33 @@ the first, and the one a human acted on is the one that counts.
 
 ### Running a plan
 
-`/plan run <slug> [cheap|standard|deep]` is not the normal way to start a run:
-the hand-off starts one for you as soon as the plan is stored. It is the
-way to start or restart a run for a stored plan whose run never started or
-failed. It loads the stored document, builds `toWorkflowInput(plan, effort)`,
-writes that input to
-`<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json`, and starts
-the run through the same seam the hand-off uses:
-`startBuiltin("plan-to-ship", { input, effort, ceiling })`, with the ceiling of
-the mode the person is standing in. pi-maestro still has no workflow runtime of
-its own and takes no dependency on one — it finds the runtime on Pi's event bus,
-and a seat without one says so and leaves the plan stored. The model is never
-asked to start a plan's run, and in plan mode the ceiling is read-only, so
-pi-workflow refuses `plan-to-ship` — which needs worktrees — naming both the need
-and the bound.
+`/plan run <slug>` is not the normal way to start a run: the hand-off starts one
+for you as soon as the plan is stored. It is the way to start or restart a run for a
+stored plan whose run never started or failed.
 
-Typing the command is itself the approval — nobody types `/plan run` for a plan
-they have not decided to run — and the run then works through the plan and stops
-at its `ship` decision, or after each deliverable under `every-deliverable`.
-That next stop is a person, not the model, which is why `/plan run` is safe to
-offer at the end of a plan write. The run is narrated into the conversation the
-same way the hand-off's is.
+**It reads its gate policy off the mode you are standing in, and writes it down.**
+From `ask` that is `ship`, from `auto` it is `none`, and from `plan` or `hack` it is
+nothing at all — so those two are **refused by name**, because neither decides how a
+run ends and a run started without an ending is a run nothing publishes. The gates
+are written onto the **stored** plan rather than passed alongside the document,
+because `planDigest` covers the document and publication checks that digest against
+the stored bytes: a run started with gates the stored plan does not carry is a run
+nothing can be published from.
+
+It then loads the stored document, builds `toWorkflowInput(plan)`, writes that input
+to `<agentDir>/maestro/plans/<encoded cwd>/<slug>/workflow-input.json`, and starts
+the run through the same seam the hand-off uses:
+`startBuiltin("plan-to-ship", { input, ceiling })`, with the ceiling of the mode the
+person is standing in. pi-maestro still has no workflow runtime of its own and takes
+no dependency on one — it finds the runtime on Pi's event bus, and a seat without one
+says so and leaves the plan stored. The model is never asked to start a plan's run.
+
+Typing the command is itself the approval — nobody types `/plan run` for a plan they
+have not decided to run — and the run then does what the mode said: from `ask` it
+works through the plan and stops at its `ship` decision (or after each deliverable
+under `every-deliverable`), and from `auto` it runs to completion and this seat
+publishes. The run is narrated into the conversation the same way the hand-off's is,
+and the decisions it raises are the same dialogs.
 
 `/plan list` and `/plan show <slug>` read the same store, and read only this
 project's plans — no other project's appear, and the same slug in two projects
@@ -557,13 +696,12 @@ surface. See the [command reference](commands.md).
 
 A run ends at a receipt: per deliverable a handoff commit in the publication
 repository's own object store, its sha256 and size, and the digest of the plan
-the run was given. A ship decided at the run's `ship` gate publishes by itself, and the narration
-tells the person the gate is waiting and how to decide it;
-`/plan ship <slug>` is the manual fallback for when that did not happen. It
-turns the receipt into a branch and,
-when the policy asked for one, a pull request — refusing outright when the
-receipt's digest is not the stored plan's, because then it names bytes nobody
-approved. Every command runs through the seat's audited Bash tool under the
+the run was given. **Both endings publish through the same code.** Answering *Ship*
+in this session's ship dialog publishes; so does a `gates: "none"` run completing,
+with no question asked. `/plan ship <slug>` is the manual fallback for when neither
+happened. It turns the receipt into a branch and, when the policy asked for one, a
+pull request — refusing outright when the receipt's digest is not the stored plan's,
+because then it names bytes nobody approved. Every command runs through the seat's audited Bash tool under the
 session mode's policy, so `host-write`, `remote-read`, `code-execution` and
 `remote-write` are each classified and, in `auto`, confirmed; the repository's
 own check runs **on the host** rather than in a guest; and any failure stops
@@ -585,14 +723,23 @@ The ten steps, in order, and where each one stops:
 | 10 | Append the receipt to `<agentDir>/maestro/plans/<encoded cwd>/<slug>/publication.json` | the file exists and is not an array of receipts — it is never overwritten |
 
 One more thing is checked between steps 1 and 2 when the publication was
-triggered by an announcement rather than by `/plan ship`: the run's own `ship`
-checkpoint must carry a decided `{"ship": true}`, read from
+triggered by an announcement rather than by a person in this session: the run's own
+`ship` checkpoint must carry a decided `{"ship": true}`, read from
 `tasks[].checkpoint.decision.value` on the task whose `kind` is `checkpoint` and
 whose `key` is `ship`. The runtime shows that value only when the durable
 decision record matches the journalled digest, so it is the human's answer
 rather than a report of it. A gate that is undecided, or decided otherwise, is
-named — with the run id — and nothing runs. `/plan ship <slug>` does not check
-it, because typing the command is itself the decision.
+named — with the run id — and nothing runs. `/plan ship <slug>` does not check it,
+because typing the command is itself the decision; neither does the ship dialog,
+because answering it is the same decision in the same session one dialog ago; and
+neither does auto publication, because there is no `ship` checkpoint in a
+`gates: "none"` run at all.
+
+**The ship watcher leaves the seat's own auto runs alone.** It exists for a ship
+decided outside this session's prompt, and it proves `{"ship": true}` from the run's
+own checkpoint — so without a skip it would report "declares no `ship` checkpoint …
+run `/plan ship`" about every single auto run, at the exact moment the seat was
+publishing it. The seat says which runs those are, because it started them.
 
 The pull-request body is the receipt: the plan digest, every handoff ref with
 its sha256 and size, the check that ran on the host, and the review verdicts

@@ -4,18 +4,20 @@
 
 | Command | What it does |
 | --- | --- |
-| `/mode [plan\|auto\|hack]` | Report or change the interactive seat posture. Leaving plan mode runs [the hand-off](#the-hand-off) first |
+| `/mode [plan\|ask\|auto\|hack]` | Report or change the interactive seat posture. Leaving plan mode to `ask` or `auto` runs [the hand-off](#the-hand-off) first; to `hack` it only switches |
 | `/plan list` | This project's stored plans: slug, title, deliverable count, when it was last written |
 | `/plan show <slug>` | Read one back whole: the session and cwd that authored it, repositories, deliverables with `after`/`reads`, tasks, review intent, and any warning about the world |
-| `/plan run <slug> [cheap\|standard\|deep]` | Start or restart `plan-to-ship` for a stored plan whose run did not start or failed. Effort defaults to the plan's `policy.effort`, and to `standard` when it sets none |
+| `/plan run <slug>` | Start or restart `plan-to-ship` for a stored plan whose run did not start or failed. It takes the gate policy of the mode you are in — `ask` → `ship`, `auto` → `none` — writes it onto the stored plan, and refuses from `plan` or `hack`, which decide no ending for a run |
 | `/plan rm <slug>` | Delete a stored plan, after a confirmation. Refused when the session has no UI to confirm with |
 | `/plan ship <slug>` | The manual publication fallback, for when the automatic publication after the ship gate did not happen |
 
 Those five are the whole surface, and each is here for a stated reason: `list`
 and `show` read this project's plans; `run` starts a run the hand-off normally
 starts for you; `rm` removes one; `ship` publishes what the automatic
-path did not. `/plan` with no subcommand, or with a subcommand or effort it does
-not know, prints the grammar and those reasons, and does nothing else.
+path did not. `/plan` with no subcommand, or with a subcommand it does not know,
+prints the grammar and those reasons, and does nothing else. `run` took an optional
+effort until schema 8 removed the dial; it takes a slug and nothing else now, and a
+second word is rejected rather than ignored.
 
 **Plans are per project.** The store's root is `<agentDir>/maestro/plans/<key>`,
 where `<key>` is the cwd encoded exactly as Pi encodes its own sessions
@@ -31,19 +33,27 @@ migrated.
 you when the plan is stored. It is here for the plan whose run never started or
 failed. It writes the run input beside the plan, in the plan's own directory, and
 then **starts the run itself**, through the workflow runtime's service seam:
-`startBuiltin("plan-to-ship", { input, effort, ceiling })`, which the runtime
-allowlists by name and validates exactly as `workflow_run` would. The `ceiling`
-is the mode you are standing in, so in plan mode the runtime refuses
-`plan-to-ship` — which needs worktrees — naming both the need and the bound. The
-model is not asked to start it and never was part of this command. A seat with no
-workflow runtime cannot start anything, and the command says so and leaves the
-plan stored. Typing it is the approval — the run works through the plan and stops
-at its `ship` decision, or after each deliverable under `every-deliverable`, and
-the session narrates it. See [Authored plans](workflow-plans.md#running-a-plan).
+`startBuiltin("plan-to-ship", { input, ceiling })`, which the runtime allowlists by
+name and validates exactly as `workflow_run` would. The `ceiling` is the mode you
+are standing in.
+
+**It reads the gate policy off that mode, and writes it down.** `ask` writes
+`policy.gates: "ship"` onto the stored plan and `auto` writes `"none"`; from `plan`
+or `hack` it refuses by name, because neither decides how a run ends. The write
+matters: `planDigest` covers the document and publication checks that digest
+against the stored bytes, so a run started with gates the stored plan does not
+carry is a run nothing can be published from.
+
+The model is not asked to start it and never was part of this command. A seat with
+no workflow runtime cannot start anything, and the command says so and leaves the
+plan stored. Typing it is the approval — from `ask` the run works through the plan
+and stops at its `ship` decision, from `auto` it runs to completion and the seat
+publishes — and the session narrates it either way. See
+[Authored plans](workflow-plans.md#running-a-plan).
 
 `/plan ship` is the manual fallback for a publication that should have happened
-by itself: a ship decided at the run's `ship` gate publishes automatically, and
-this is what you type when it did not. It is also the one verb that acts on the
+by itself: answering *Ship* in this session's ship dialog publishes, and so does a
+`gates: "none"` run completing, and this is what you type when neither did. It is also the one verb that acts on the
 world, and the only place pi-maestro pushes. It reads the run's receipt through the workflow runtime,
 refuses unless the receipt's plan digest is the stored plan's, and then runs
 every command — `git fetch`, `git switch`, `git cherry-pick`, the check, `git
@@ -68,19 +78,28 @@ only confirmation is still the one at the push.
 | Mode | Direct file tools | Bash classifier | OS write boundary |
 | --- | --- | --- | --- |
 | `plan` | `write`, `edit`, and `delete` blocked | reads allowed; writes/code/uncertain refused | none |
+| `ask` | available | effect policy with ambiguity audit and confirmations | none |
 | `auto` | available | effect policy with ambiguity audit and confirmations | none |
 | `hack` | available | reduced, configurable effect policy | none |
 
-**A mode is a permission dial and nothing else.** No mode says how a plan is
-executed, and no mode refuses a workflow tool by name any more. What a mode bounds
-is every **delegated launch** in the process, stated in pi-subagent's own
-vocabulary and consulted at launch time:
+A mode is **three facts** and the four names are the only coherent combinations of
+them: working-tree access, safeguards, and what happens at the end of a plan run
+started from here. `ask` and `auto` are identical in the first two and differ in
+the third — the run parks at its ship decision and this session asks you, or the
+pull request is published when the run is done.
 
-| Mode | Delegation ceiling |
-| --- | --- |
-| `plan` | `{workspaceModes: ["read-only"]}` |
-| `auto` | `{workspaceModes: ["read-only", "worktree"]}` |
-| `hack` | none |
+| Mode | Working tree | Safeguards | End of a plan run | `policy.gates` | Delegation ceiling |
+| --- | --- | --- | --- | --- | --- |
+| `plan` | read | on | forms none | — | `{workspaceModes: ["read-only"]}` |
+| `ask` | write | on | parks at the ship decision | `ship` | `{workspaceModes: ["read-only", "worktree"]}` |
+| `auto` | write | on | publishes the pull request | `none` | `{workspaceModes: ["read-only", "worktree"]}` |
+| `hack` | write | reduced | forms none | — | none |
+
+**A mode is a permission dial, and the one thing it says beyond permissions is how
+a run it starts ends.** No mode says how a plan is *executed*, and no mode refuses
+a workflow tool by name. What a mode bounds is every **delegated launch** in the
+process, stated in pi-subagent's own vocabulary and consulted at launch time — the
+last column above.
 
 A ceiling never widens an agent definition: the effective allowance is the
 definition's own declaration intersected with the ceiling. A run is still not the
@@ -94,12 +113,27 @@ decision.
 
 ### The hand-off
 
-Plan mode is a conversation and the plan lives in it. Leaving plan mode is the
-trigger: `/mode auto` or `/mode hack` asks the session's own model — directly,
-outside the agent loop, with no tools offered — first for the description and then
-for the v5 document formed from the plan as written, and then offers the run.
-Every other mode change is the plain switch it always was, and so is this one on a
-host with no dialog UI or no model.
+Plan mode is a conversation and the plan lives in it. **Leaving plan mode is Go**:
+`/mode ask` or `/mode auto` asks the session's own model — directly, outside the
+agent loop, with no tools offered — first for the description and then for the v5
+document formed from the plan as written, and then offers the run. Every other mode
+change is the plain switch it always was, and so is this one on a host with no
+dialog UI or no model.
+
+**`/mode hack` is not a hand-off.** Hack is the unrestricted in-session escape
+hatch, and forming a plan into a bounded run is the opposite of what it means, so
+leaving plan mode to hack only switches. One notice says the conversation's plan was
+not formed and that `/mode ask` or `/mode auto` is what turns a conversation into a
+run; a plan already stored keeps `/plan run <slug>`, which itself refuses from hack.
+
+**The mode you leave to decides the end of the run.** Both hand-off modes run the
+same four steps and start the same run. One field on the plan's policy differs, and
+it is derived from the target mode's own `publication` fact rather than asked:
+
+| Leaving to | `policy.gates` | What the run does at the end | What the confirmation card says |
+| --- | --- | --- | --- |
+| `ask` | `ship` | Parks at its `ship` decision; this session opens the ship dialog with the gate's inputs rendered | *Stops for your ship decision — this session asks you, in a dialog, with the gate's inputs on screen.* |
+| `auto` | `none` | No ship gate: the run completes, its terminal output carries the same receipt and the same ship-gate inputs, and the seat publishes | *Ships the PR when done — starting it is the approval for publication too, and the link lands in this conversation.* |
 
 **The posture does not move here.** It moves on exactly three answers: the run
 started, *Just switch, keep the plan stored*, and the one case where the model had
@@ -107,22 +141,23 @@ nothing to write a plan from, which switches with the reason shown. Everything
 else happens in plan mode, which is why no path out ever offers `/mode plan`: the
 seat never left it.
 
-**Two dialogs, and at most one more.**
+**One dialog, and at most one more.** The effort dial used to come first; schema 8
+removed it.
 
 | # | Dialog | Asked | First, marked `(default)` | Escape |
 | --- | --- | --- | --- | --- |
-| 1 | Effort: `standard`, `cheap`, `deep` | once | `standard` | `standard` |
-| 2 | The plan check's findings, when it found something a rewrite cannot answer: `Proceed anyway` / `Keep planning` | at most once | *Proceed anyway* | *Keep planning* |
-| 3 | `Start the run?` with the whole thing on screen: `Start the run` / `Edit the description` / `Just switch, keep the plan stored` / `Keep planning` | once | *Start the run* | *Keep planning* |
+| 1 | The plan check's findings, when it found something a rewrite cannot answer: `Proceed anyway` / `Keep planning` | at most once | *Proceed anyway* | *Keep planning* |
+| 2 | `Start the run?` with the whole thing on screen: `Start the run` / `Edit the description` / `Just switch, keep the plan stored` / `Keep planning` | once | *Start the run* | *Keep planning* |
 
 **Ordering and escape are two different questions, and this flow answers them
 separately.** The first option — the one a `select` highlights, and the only one
 labelled `(default)` — is the action you most likely want. Escape is the safe way
 out, and it never commits to anything: it starts no run, agrees to nothing, and
-writes nothing you did not ask for. The two are the same row in exactly one table,
-the effort dial, because every answer there is a reversible setting on a run the
-confirmation still gates. An answer the list does not recognise takes the escape
-too, for the same reason: it is not evidence that anybody chose anything.
+writes nothing you did not ask for. **No table lets them be the same row.** One
+used to — the effort dial, where every answer was a reversible setting on a run the
+confirmation still gated — and it is gone. An answer the list does not recognise
+takes the escape too, for the same reason: it is not evidence that anybody chose
+anything.
 
 Before the first request the hand-off checks the session's context usage. Above
 **80%** of the model's context window it stops with a notice naming the usage and
@@ -133,11 +168,12 @@ Nothing else is asked, because nothing else is a question for a human:
 
 | Decision | How it is settled |
 | --- | --- |
-| Gates | `ship`, always: starting the run is the approval, and the run's one remaining decision comes before publication. `every-deliverable` is valid vocabulary, and no dialog offers it yet |
+| Gates | The target mode's: `ask` → `ship`, `auto` → `none`. You answered this by typing `/mode ask` or `/mode auto`, and asking again in a select would be the flow's second opinion about what you said. `every-deliverable` is valid vocabulary, and no dialog offers it yet |
+| How hard a role thinks | The session's own model and thinking level, inherited per call; reviews keep their tiers. There is no dial: schema 8 removed `policy.effort`, because one answer was standing in for which model implements, how hard it thinks and how many fix rounds the check buys |
 | Publication | Derived: an `origin` remote and `gh` on PATH → `pr`; a remote alone → `branch`; neither → `none` |
 | Base branch | What this branch tracks, else `origin`'s head, else `main` |
 | Review lenses | The plan's own `reviews` and its `policy.reviewDefault`. Every heavy review whose `diverse` is undefined has `diverse: true` written into the **stored** plan, where the digest covers it; one that says `diverse: false` keeps its answer |
-| The delegation ceiling | The posture: `plan` → read-only, `auto` → read-only or a worktree, `hack` → none |
+| The delegation ceiling | The posture: `plan` → read-only, `ask` and `auto` → read-only or a worktree, `hack` → none |
 
 The derivation is stated in the confirmation, as one sentence naming what was
 found and what follows from it, and lands on the plan as `policy.publish`.
@@ -175,22 +211,24 @@ workspace, and none of this conversation. See
 
 | What the check said | What happens |
 | --- | --- |
-| Nothing blocking | Dialog 3, with the verdict, the counts and the findings summarised. `major` and `minor` are read there and never asked about |
+| Nothing blocking | Dialog 2, with the verdict, the counts and the findings summarised. `major` and `minor` are read there and never asked about |
 | Blocking, with directions and no `needsPerson` | The findings go back to the plan's author, the document is rewritten, stored and checked again — silently, **twice at most** |
-| Any `needsPerson`, or the bound spent | Dialog 2, with those findings and their questions and nothing else |
-| It could not run | Dialog 3 says so and names the reason, sanitized |
+| Any `needsPerson`, or the bound spent | Dialog 1, with those findings and their questions and nothing else |
+| It could not run | Dialog 2 says so and names the reason, sanitized |
 
 #### The confirmation, and the run
 
-Dialog 3 carries everything that is being agreed to: the description in full, the
+Dialog 2 carries everything that is being agreed to: the description in full, the
 plan (each deliverable with its tasks, its `after` edges, and who reads its work),
-the effort, the gates, where publication goes and why, and what the check said.
+the gates, where publication goes and why, what the check said, and **which ending
+you are starting** — the card names the mode and says either *Ships the PR when
+done* or *Stops for your ship decision*.
 
 - *Start the run* starts it in the harness —
-  `startBuiltin("plan-to-ship", {input, effort, ceiling})`, with the **target**
-  mode's ceiling — and then switches to the posture asked for at `/mode`. Starting
-  it is the approval. A runtime that refuses leaves the plan stored, takes the
-  posture, and prints the cause.
+  `startBuiltin("plan-to-ship", {input, ceiling})`, with the **target** mode's
+  ceiling — and then switches to the posture asked for at `/mode`. Starting it is
+  the approval, and from `auto` it is the approval for publication too. A runtime
+  that refuses leaves the plan stored, takes the posture, and prints the cause.
 - *Edit the description* opens an editor and comes back to this same
   confirmation; escaping the editor discards the edit. The description is the
   yardstick, so changing it is a change to what is being agreed, not a way out of
@@ -200,7 +238,7 @@ the effort, the gates, where publication goes and why, and what the check said.
   plan is stored with `/plan run <slug>` there when you want it.
 
 A two-deliverable plan on a seat with a working plan check that finds nothing
-blocking asks **two** dialogs in total: the effort dial and the confirmation.
+blocking asks **one** dialog in total: the confirmation.
 
 **What the conversation is told.** One message when the plan is stored, one per
 rewrite the check asked for, and one more when the run starts or the hand-off goes
@@ -210,11 +248,13 @@ rather than the conversation. Nothing else the harness did appears in the
 transcript, including the check's findings. Every request it made is on the record
 in `authoring.json` beside the plan — see [State](#state).
 
-**Then the session narrates the run.** Each task completion is one line in a
-`maestro:progress` message; a review synthesis, a fix report, a failure, the ship
-gate arriving and a run that ends without a gate each get the model a turn to say
-what it means — see
-[the run, and the session that narrates it](workflow-plans.md#the-run-and-the-session-that-narrates-it).
+**Then the session narrates the run, and asks what it has to ask.** Each task
+completion is one line in a `maestro:progress` message; a review synthesis, a fix
+report, a failure, the ship gate arriving and a run that ends without a gate each
+get the model a turn to say what it means. Three of those are decisions rather than
+news, and each opens a dialog in this session — see
+[the run, and the session that narrates it](workflow-plans.md#the-run-and-the-session-that-narrates-it)
+and [the decisions](workflow-plans.md#the-decisions-a-run-asks-for).
 
 Two fallbacks keep a reduced seat working. Without a workflow runtime the
 hand-off stops before the confirmation, says so, and leaves `/plan run <slug>` as
@@ -225,7 +265,12 @@ in the confirmation and the hand-off continues. Neither throws into the session.
 
 - `bash` runs on the host after mode-aware classification.
 - `delete` moves explicitly named paths to recoverable trash.
-- Pi's built-in `write` and `edit` remain available in auto and hack.
+- `plan_ship_dialog` opens the parked ship decision as a dialog, with the gate's
+  own inputs in it. It **decides nothing**: the person answers the dialog. It is
+  offered only while a run of this session is actually parked at a ship decision,
+  which is read at call time — so "ship it" in the conversation reaches the same
+  dialog the gate opens, and a session with nothing parked is told so by name.
+- Pi's built-in `write` and `edit` remain available in ask, auto and hack.
 - `ask_user_question` comes from
   `@juicesharp/rpiv-ask-user-question` for model-authored clarifications.
 - `subagent` is supplied independently by `@vegardx/pi-subagent`.
@@ -252,8 +297,8 @@ Authored plans live under their project's key, beside that project's sessions:
 ```
 
 The envelope is `{schemaVersion: 7, savedAt, authoredBy: {sessionId, cwd}, body}`.
-`authoredBy` is required, and a schema 6 envelope — whose `policy.gates` names
-the `approve-plan` gate version 7 removed — is refused by name rather than
+`authoredBy` is required, and a schema 7 envelope — whose `policy` carries the
+`effort` dial version 8 removed — is refused by name rather than
 migrated.
 
 `/plan ship` appends one receipt per publication, and never rewrites an earlier

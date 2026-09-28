@@ -25,13 +25,21 @@
 //   - **a review synthesis** — several lenses read the same work and disagreed
 //     about it, and what that means is a judgement;
 //   - **a fix report** — something was wrong and something was done about it;
-//   - **a failure**, of a task or of the run — nothing retries on its own;
+//   - **a failure**, of a task or of the run — a dialog is opened about it;
 //   - **the ship gate arriving** — a decision is waiting, and the person has to
-//     be told that it is waiting and how it is made.
+//     be told that it is waiting.
 //
 // And a run that ENDS WITHOUT A GATE gets a final summary with a turn, because a
 // run that finished and asked for nothing is exactly the case a silent seat used
 // to leave a person guessing about.
+//
+// NARRATION IS NOT THE DECISION SURFACE, AND IT OPENS ONE. Three of the things
+// above are decisions, not news: a gate that arrived, a failure, and the
+// completion of a run whose mode says publish. Narration says what happened and
+// hands each of those to `decide.ts`, through three optional hooks, because
+// observing a run and asking a person a question are different jobs and a
+// watcher that opened dialogs itself would be a watcher a test could not read.
+// A seat that wires no hooks still narrates everything it always did.
 //
 // ONE ADAPTER READS THE RUNTIME'S FIELD NAMES. `adaptObservation` is the single
 // place `observation.task.narration` is read; everything below it works on the
@@ -229,23 +237,26 @@ export function renderNarration(slug: string, narration: Narration): string {
 }
 
 /**
- * What the model is told to do about a gate, and how the decision is made.
+ * What the model is told to do about a gate.
  *
- * The command is here rather than in a doc because this message is the only
- * place a person will be standing when they need it: a gate that says a decision
- * is waiting, without saying how to make one, is a gate that sends somebody to
- * the source.
+ * NO COMMAND IS NAMED, and that is the change. This sentence used to carry
+ * `/workflow decide <prefix> ship {"ship":true}` — a command with a JSON literal
+ * in it — because there was nowhere else for the decision to happen. There is
+ * now: `decide.ts` opens the dialog with the gate's own inputs rendered in it, and
+ * a model that told somebody to type a command would be sending them past the
+ * thing already on their screen.
  */
 export function shipGateSentence(runId: string): string {
 	return (
 		`A decision is waiting on that gate — nothing publishes until it is made.` +
-		` Tell the person what the run produced and that they decide with` +
-		` \`/workflow decide ${runPrefix(runId)} ship {"ship":true}\`, or through the gate's own widget in this session.`
+		` Tell the person what run \`${runPrefix(runId)}\` produced and what you would do` +
+		` about the findings that are left. The decision itself is a dialog in this` +
+		` session, with the gate's inputs in it; there is no command to type.`
 	);
 }
 
 export const FAILURE_SENTENCE =
-	"Tell the person what failed and what it means for the rest of the plan. Nothing retries on its own.";
+	"Tell the person what failed and what it means for the rest of the plan. A dialog is open about it: retry that task, stop the run, or go back to planning.";
 
 export const JUDGEMENT_SENTENCE =
 	"Tell the person what that means for the plan.";
@@ -284,7 +295,34 @@ export function batchTail(
 
 // ── The watcher ──────────────────────────────────────────────────────────────
 
-export interface NarrateDeps {
+/**
+ * The three decisions a run raises, handed on rather than answered here.
+ *
+ * Every one is optional and every one is fire-and-forget: a hook that throws or
+ * hangs must not stop the next observation from being narrated, so the batch
+ * calls it and moves on. `decide.ts` is the only implementation, and the seat is
+ * what wires it.
+ */
+export interface NarrationHooks {
+	/** The `ship` gate arrived on a run this seat started. */
+	readonly onGate?: (runId: string, slug: string) => void;
+	/** A task, or the run, did not complete. */
+	readonly onFailure?: (
+		runId: string,
+		slug: string,
+		narration: Narration,
+	) => void;
+	/**
+	 * A run reached a terminal status without ever stopping at a gate.
+	 *
+	 * Which is exactly the `gates: "none"` case mode `auto` writes — and also a
+	 * run that failed, which is why `status` travels: the hook decides whether
+	 * this is a publication or nothing at all.
+	 */
+	readonly onEnd?: (runId: string, slug: string, status: string) => void;
+}
+
+export interface NarrateDeps extends NarrationHooks {
 	readonly client: Pick<WorkflowReadClient, "observe" | "inspect">;
 	readonly send: SendProgress;
 	/**
@@ -389,6 +427,27 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 				...(turn ? { triggerTurn: true as const } : {}),
 			},
 		);
+		// THE MESSAGE GOES FIRST, THEN THE DECISION. The dialog's title carries
+		// the gate's own inputs and the conversation carries the narration, and a
+		// person reading a dialog wants the line that explains it already in the
+		// transcript behind it.
+		for (const entry of filled) {
+			try {
+				if (entry.narration.cause !== undefined)
+					deps.onFailure?.(entry.runId, entry.slug, entry.narration);
+				else if (entry.narration.kind === "gate")
+					deps.onGate?.(entry.runId, entry.slug);
+			} catch (error) {
+				deps.onError?.(error);
+			}
+		}
+		for (const end of ends) {
+			try {
+				deps.onEnd?.(end.runId, end.slug, end.status);
+			} catch (error) {
+				deps.onError?.(error);
+			}
+		}
 	};
 
 	const flush = (): void => {

@@ -73,6 +73,8 @@ function narrator(
 		/** Task id → summary, as the inspection would report it. */
 		readonly summaries?: Readonly<Record<string, string>>;
 		readonly inspectFails?: true;
+		/** A hook that throws, so a decision nobody could open is not fatal. */
+		readonly hooksThrow?: true;
 	} = {},
 ) {
 	let listener: ((o: WorkflowRunObservationView) => void) | undefined;
@@ -81,6 +83,18 @@ function narrator(
 	const sent: [ProgressMessage, ProgressDelivery][] = [];
 	const errors: unknown[] = [];
 	const inspected: [string, unknown][] = [];
+	/** Every decision the narrator handed on, in order, as `[kind, ...]`. */
+	const handed: unknown[][] = [];
+	const hook = (kind: string) => {
+		if (options.hooksThrow)
+			return (...args: unknown[]) => {
+				handed.push([kind, ...args]);
+				throw new Error(`the ${kind} dialog could not be opened`);
+			};
+		return (...args: unknown[]) => {
+			handed.push([kind, ...args]);
+		};
+	};
 	const subject = createRunNarrator({
 		client: {
 			observe: (handler) => {
@@ -106,6 +120,13 @@ function narrator(
 		send: (message, delivery) => sent.push([message, delivery]),
 		schedule: (flush) => flushes.push(flush),
 		onError: (error) => errors.push(error),
+		onGate: hook("gate") as (runId: string, slug: string) => void,
+		onFailure: hook("failure") as (
+			runId: string,
+			slug: string,
+			narration: Narration,
+		) => void,
+		onEnd: hook("end") as (runId: string, slug: string, status: string) => void,
 	});
 	if (options.follow !== false) subject.follow(RUN, SLUG);
 	return {
@@ -125,6 +146,8 @@ function narrator(
 		},
 		content: (): string => sent.at(-1)?.[0].content ?? "",
 		delivery: (): ProgressDelivery | undefined => sent.at(-1)?.[1],
+		handed,
+		kinds: (): string[] => handed.map((entry) => entry[0] as string),
 	};
 }
 
@@ -363,12 +386,19 @@ describe("what a line says", () => {
 		);
 	});
 
-	it("says how a ship decision is made, with the prefix `/workflow` takes", () => {
+	// The command is GONE, and that is the assertion. The sentence used to carry
+	// `/workflow decide <prefix> ship {"ship":true}` because there was nowhere else
+	// for the decision to happen; `decide.ts` opens a dialog with the gate's own
+	// inputs in it, so a model telling somebody to type a command would be sending
+	// them past the thing on their screen.
+	it("says a decision is waiting in the dialog, and names no command", () => {
 		const sentence = shipGateSentence(RUN);
 		expect(runPrefix(RUN)).toBe("wfr-plan");
-		expect(sentence).toContain('/workflow decide wfr-plan ship {"ship":true}');
-		expect(sentence).toContain("widget");
 		expect(sentence).toContain("nothing publishes until it is made");
+		expect(sentence).toContain("a dialog in this session");
+		expect(sentence).toContain("no command to type");
+		expect(sentence).not.toContain("/workflow decide");
+		expect(sentence).not.toContain('{"ship":true}');
 	});
 });
 
@@ -649,5 +679,134 @@ describe("the runs this seat narrates", () => {
 		n.subject.stop();
 		expect(n.stopped()).toBe(1);
 		expect(n.subject.following()).toEqual([]);
+	});
+});
+
+// ── The three decisions, handed on rather than answered ──────────────────────
+
+describe("what narration hands to the decision surface", () => {
+	// Narration says what happened; `decide.ts` opens the dialog about it. The two
+	// are separate because observing a run and asking a person a question are
+	// different jobs, and a watcher that opened dialogs itself would be a watcher a
+	// test could not read.
+	it("hands on a gate, once, after the message that explains it", async () => {
+		const n = narrator({ summaries: { "t-gate": "every handoff is in" } });
+		n.observe(settled("t-gate", { stage: "ship", taskKind: "gate" }));
+		await n.flush();
+		expect(n.sent).toHaveLength(1);
+		expect(n.handed).toEqual([["gate", RUN, SLUG]]);
+		// The transcript has the line before the dialog's title is on screen.
+		expect(n.content()).toContain("every handoff is in");
+	});
+
+	it("hands on a failure with the narration it failed as", async () => {
+		const n = narrator();
+		n.observe(
+			settled(
+				"t-impl",
+				{
+					stage: "implement-d1",
+					taskKind: "implement",
+					deliverable: "d1",
+					cause: "the subagent exited non-zero",
+				},
+				{ status: "failed" },
+			),
+		);
+		await n.flush();
+		expect(n.kinds()).toEqual(["failure"]);
+		expect(n.handed[0]?.slice(1, 3)).toEqual([RUN, SLUG]);
+		expect(n.handed[0]?.[3]).toMatchObject({
+			taskId: "t-impl",
+			stage: "implement-d1",
+			deliverable: "d1",
+			cause: "the subagent exited non-zero",
+		});
+	});
+
+	// A failure is a failure whatever kind of task it was, so a gate that failed is
+	// a failure and not a gate: there is nothing to decide about a decision that
+	// never got asked.
+	it("hands a failed gate on as a failure, not as a gate", async () => {
+		const n = narrator();
+		n.observe(
+			settled(
+				"t-gate",
+				{ stage: "ship", taskKind: "gate", cause: "the checkpoint expired" },
+				{ status: "failed" },
+			),
+		);
+		await n.flush();
+		expect(n.kinds()).toEqual(["failure"]);
+	});
+
+	it("hands on a run that ended, with the status it ended as", async () => {
+		const n = narrator();
+		n.observe(append({ status: "completed" }));
+		await n.flush();
+		expect(n.kinds()).toEqual(["end"]);
+		expect(n.handed[0]).toEqual(["end", RUN, SLUG, "completed"]);
+	});
+
+	// A run that stopped at a gate has already said the one thing that mattered,
+	// and the ship dialog takes it from there — so its end is not a second event.
+	it("hands on nothing for a run that ended having stopped at a gate", async () => {
+		const n = narrator();
+		n.observe(settled("t-gate", { stage: "ship", taskKind: "gate" }));
+		n.observe(append({ status: "completed", sequence: 2 }));
+		await n.flush();
+		expect(n.kinds()).toEqual(["gate"]);
+	});
+
+	it("says nothing, and hands on nothing, about a run it did not start", async () => {
+		const n = narrator({ follow: false });
+		n.observe(settled("t-gate", { stage: "ship", taskKind: "gate" }));
+		n.observe(append({ status: "completed", sequence: 2 }));
+		await n.flush();
+		expect(n.handed).toEqual([]);
+	});
+
+	// A dialog that could not be opened is reported, never thrown: a watcher that
+	// throws takes the session with it, and the next observation still has to be
+	// narrated.
+	it("reports a hook that throws and goes on narrating", async () => {
+		const n = narrator({ hooksThrow: true });
+		n.observe(settled("t-gate", { stage: "ship", taskKind: "gate" }));
+		await n.flush();
+		expect(n.kinds()).toEqual(["gate"]);
+		expect(n.errors).toHaveLength(1);
+		expect(n.sent).toHaveLength(1);
+		n.observe(
+			settled("t-impl", {
+				stage: "implement-d1",
+				taskKind: "implement",
+				deliverable: "d1",
+			}),
+		);
+		await n.flush();
+		expect(n.sent).toHaveLength(2);
+	});
+
+	it("narrates exactly as before on a seat that wires no hooks", async () => {
+		const sent: [ProgressMessage, ProgressDelivery][] = [];
+		const flushes: (() => void)[] = [];
+		let listener: ((o: WorkflowRunObservationView) => void) | undefined;
+		const subject = createRunNarrator({
+			client: {
+				observe: (handler) => {
+					listener = handler;
+					return () => undefined;
+				},
+				inspect: async () => ({ tasks: [] }),
+			},
+			send: (message, delivery) => sent.push([message, delivery]),
+			schedule: (flush) => flushes.push(flush),
+		});
+		subject.follow(RUN, SLUG);
+		listener?.(settled("t-gate", { stage: "ship", taskKind: "gate" }));
+		for (const flush of flushes.splice(0)) flush();
+		await subject.settled();
+		expect(sent).toHaveLength(1);
+		expect(sent[0]?.[1].triggerTurn).toBe(true);
 	});
 });

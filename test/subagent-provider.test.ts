@@ -16,6 +16,11 @@ import {
 	resolveDelegationCeiling,
 } from "@vegardx/pi-subagent/ceiling-provider";
 import { registerSubagentServiceProvider } from "@vegardx/pi-subagent/service-provider";
+import {
+	registerSessionModelProvider,
+	resolveSessionModel,
+	SessionModelProviderError,
+} from "@vegardx/pi-subagent/session-model-provider";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { MODE_NAMES, type ModeName } from "../packages/maestro/src/mode.js";
@@ -38,7 +43,10 @@ import {
 	REQUIRED_SUBAGENT_CONTRACT_REVISION,
 	REQUIRED_SUBAGENT_FEATURES,
 	registerModeCeiling,
+	registerSessionModelFor,
+	sessionModelAnswer,
 	subagentContractMismatch,
+	subagentThinking,
 	UNAVAILABLE_ABORTED,
 	UNAVAILABLE_REFUSED,
 	UNAVAILABLE_UNREADABLE,
@@ -496,5 +504,148 @@ describe("the mode's ceiling, registered with pi-subagent", () => {
 			expect(() => resolveDelegationCeiling(bus)).not.toThrow();
 			if ("release" in registered) registered.release();
 		}
+	});
+});
+
+// ── The session's model, registered once ─────────────────────────────────────
+
+describe("what a delegation inherits when it asks to", () => {
+	// Revision 9's whole point: the launch says `inherit` and pi-subagent resolves
+	// it through this provider. A reviewer pinned below the author is a reviewer
+	// that agrees because it cannot follow.
+	it("asks the plan check to inherit the session's model", () => {
+		expect(
+			planCheckRequest({
+				plan: PLAN,
+				description: DESCRIPTION,
+				cwd: "/nowhere/pi-workflow",
+				round: 0,
+			}).model,
+		).toBe("inherit");
+	});
+
+	it("admits `inherit` in the definition this package ships", () => {
+		const definition = readFileSync(
+			join(maestroAgentsDir(), `${PLAN_REVIEWER_AGENT}.md`),
+			"utf8",
+		);
+		// First in `allowedModels`, because it is what the launch asks for. A
+		// definition that did not list it would refuse the one launch this seat
+		// makes, and the exact pins below it stay legal for a host with no session
+		// model to inherit.
+		expect(definition).toMatch(/allowedModels:\n\s+- inherit\n/);
+	});
+
+	// pi-subagent's thinking vocabulary is one level shorter than pi's, which is
+	// the whole reason this is a mapping rather than a pass-through.
+	it("maps pi's thinking levels into pi-subagent's, and `max` to `xhigh`", () => {
+		for (const level of [
+			"off",
+			"minimal",
+			"low",
+			"medium",
+			"high",
+			"xhigh",
+		] as const)
+			expect([level, subagentThinking(level)]).toEqual([level, level]);
+		// `max` is pi's top rung and not pi-subagent's. A person who set it asked
+		// for as much reasoning as there is; refusing to launch over the spelling of
+		// the top rung would be reading the contract as a rule about names.
+		expect(subagentThinking("max")).toBe("xhigh");
+		expect(subagentThinking("sideways")).toBe("medium");
+		expect(subagentThinking(undefined)).toBe("medium");
+	});
+
+	it("answers the session's provider, id and level, or nothing at all", () => {
+		expect(
+			sessionModelAnswer({
+				model: { provider: "anthropic", id: "opus-5" },
+				thinkingLevel: "high",
+			}),
+		).toEqual({ provider: "anthropic", id: "opus-5", thinking: "high" });
+		// Nothing to stand behind is `undefined`, which is the same answer an
+		// unregistered host gives — pi-subagent then refuses an inherited request by
+		// name rather than compiling a model nobody named.
+		expect(sessionModelAnswer(undefined)).toBeUndefined();
+		expect(sessionModelAnswer({})).toBeUndefined();
+		expect(
+			sessionModelAnswer({ model: { provider: "anthropic" } }),
+		).toBeUndefined();
+		expect(sessionModelAnswer({ model: { id: "opus-5" } })).toBeUndefined();
+		expect(
+			sessionModelAnswer({ model: { provider: "", id: "opus-5" } }),
+		).toBeUndefined();
+	});
+
+	// The same discipline the ceiling keeps, for the same reason: `/model` and the
+	// thinking dial move under a running session, and an answer captured at
+	// registration would make every later delegation inherit a model the person
+	// stopped using.
+	it("reads the live session on every call, not once at registration", () => {
+		const bus = fakeBus();
+		let live: {
+			model?: { provider: string; id: string };
+			thinkingLevel?: string;
+		} = {
+			model: { provider: "anthropic", id: "opus-5" },
+			thinkingLevel: "medium",
+		};
+		const registered = registerSessionModelFor(bus, () => live);
+		expect("release" in registered).toBe(true);
+		expect(resolveSessionModel(bus)).toEqual({
+			provider: "anthropic",
+			id: "opus-5",
+			thinking: "medium",
+		});
+		live = {
+			model: { provider: "github-copilot", id: "gpt-5.6-sol" },
+			thinkingLevel: "max",
+		};
+		expect(resolveSessionModel(bus)).toEqual({
+			provider: "github-copilot",
+			id: "gpt-5.6-sol",
+			thinking: "xhigh",
+		});
+		// A session that went away is no session model, not a stale one.
+		live = {};
+		expect(resolveSessionModel(bus)).toBeUndefined();
+		if ("release" in registered) registered.release();
+		expect(resolveSessionModel(bus)).toBeUndefined();
+	});
+
+	it("treats a replaced session's throwing context as no session model", () => {
+		const bus = fakeBus();
+		registerSessionModelFor(bus, () => {
+			throw new Error("this session has been replaced");
+		});
+		expect(resolveSessionModel(bus)).toBeUndefined();
+	});
+
+	it("reports pi-subagent's own duplicate refusal rather than throwing", () => {
+		const bus = fakeBus();
+		registerSessionModelProvider(bus, () => undefined);
+		expect(registerSessionModelFor(bus, () => undefined)).toEqual({
+			problem: new SessionModelProviderError(
+				"duplicate",
+				"A pi-subagent session model provider is already registered.",
+			).message,
+		});
+	});
+
+	// Two providers, two registrations, one bus: a seat registers both at load and
+	// neither refusal is the other's.
+	it("registers beside the mode ceiling without either refusing the other", () => {
+		const bus = fakeBus();
+		const ceiling = registerModeCeiling(bus, () => "ask");
+		const model = registerSessionModelFor(bus, () => ({
+			model: { provider: "anthropic", id: "opus-5" },
+			thinkingLevel: "high",
+		}));
+		expect("release" in ceiling).toBe(true);
+		expect("release" in model).toBe(true);
+		expect(resolveDelegationCeiling(bus)).toEqual({
+			workspaceModes: ["read-only", "worktree"],
+		});
+		expect(resolveSessionModel(bus)?.id).toBe("opus-5");
 	});
 });

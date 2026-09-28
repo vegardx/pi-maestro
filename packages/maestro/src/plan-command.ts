@@ -19,9 +19,20 @@
 // absent on a seat with no workflow runtime, and the command says so rather
 // than pretending publication is a thing this file can do alone.
 //
+// `run` TAKES THE GATE POLICY OF THE MODE YOU ARE STANDING IN, and it writes it
+// onto the stored plan before it starts anything. From ask that is `ship` — the
+// run parks and this session asks — and from auto it is `none`, where the run
+// completes and the seat publishes. From plan or hack it is nothing at all, and
+// the command refuses by name rather than picking an ending nobody chose. The
+// gates are WRITTEN DOWN rather than passed beside the document because
+// `planDigest` covers the plan and publication checks that digest against the
+// stored bytes: a run started with gates the stored plan does not carry is a run
+// nothing can be published from.
+//
 // The grammar is five verbs and nothing clever. Anything it does not recognise
-// gets the usage line rather than a guess, because a mistyped effort that
-// silently became `standard` would spend (or fail to spend) a deep run's budget.
+// gets the usage line rather than a guess. It used to take an effort as well,
+// and a mistyped one would have spent (or failed to spend) a deep run's budget;
+// schema 8 removed the dial, so `run` takes a slug and nothing else.
 //
 // THERE IS NO SIXTH VERB, and each of the five is here for a stated reason:
 // `list` and `show` read this project's plans; `run` starts or restarts the
@@ -34,24 +45,19 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ModeName, NO_GATES_REFUSAL, planGatesFor } from "./mode.js";
 import {
 	gateStops,
 	inspectPlan,
 	type Plan,
+	type PlanGates,
 	type ResolvedPolicy,
 	type Review,
 	type ReviewLens,
-	resolvePolicy,
 	type Stage,
 	withDefaultStages,
 } from "./plan.js";
-import {
-	EFFORTS,
-	type Effort,
-	isEffort,
-	toWorkflowInput,
-	type WorkflowInput,
-} from "./plan-input.js";
+import { toWorkflowInput, type WorkflowInput } from "./plan-input.js";
 import type { Publication } from "./publish.js";
 import type { AuthoredBy, PlanStore } from "./store.js";
 
@@ -60,7 +66,7 @@ export const PLAN_WORKFLOW_REF = "plan-to-ship";
 
 /** The grammar, on one line, for the command list and the first prompt. */
 export const PLAN_COMMAND_USAGE =
-	`/plan list | show <slug> | run <slug> [${EFFORTS.join("|")}] | rm <slug> | ship <slug>` as const;
+	"/plan list | show <slug> | run <slug> | rm <slug> | ship <slug>" as const;
 
 /**
  * The grammar plus what each verb is FOR.
@@ -76,7 +82,10 @@ export const PLAN_COMMAND_HELP = [
 	"                lists no other project's",
 	"  show <slug>   one stored plan in full, with the session and cwd that authored it",
 	"  run <slug>    start or restart `plan-to-ship` for a stored plan whose run did not",
-	"                start or failed; the hand-off out of plan mode starts it for you",
+	"                start or failed; the hand-off out of plan mode starts it for you.",
+	"                It takes the gate policy of the mode you are in — ask parks the run",
+	"                at its ship decision, auto publishes when it is done — and refuses",
+	"                from plan or hack, which decide no ending for a run",
 	"  rm <slug>     remove one stored plan and everything stored with it",
 	"  ship <slug>   the manual publication fallback, for when the automatic publication",
 	"                after the ship gate did not happen",
@@ -85,12 +94,7 @@ export const PLAN_COMMAND_HELP = [
 export type PlanCommand =
 	| { readonly kind: "list" }
 	| { readonly kind: "show"; readonly slug: string }
-	| {
-			readonly kind: "run";
-			readonly slug: string;
-			/** Absent when the human named none: the plan's `policy.effort` decides. */
-			readonly effort?: Effort;
-	  }
+	| { readonly kind: "run"; readonly slug: string }
 	| { readonly kind: "ship"; readonly slug: string }
 	| { readonly kind: "rm"; readonly slug: string }
 	/** Not a verb: what to print when the grammar did not match. */
@@ -123,25 +127,12 @@ export function parsePlanCommand(args: string): PlanCommand {
 			return { kind: verb, slug: rest[0] };
 		}
 		case "run": {
-			if (rest.length < 1 || rest.length > 2)
-				return {
-					kind: "usage",
-					problem: "`/plan run` takes a slug and an optional effort",
-				};
-			// Not defaulted here: an omitted effort has to reach
-			// `toWorkflowInput` as an omission, or the plan's own `policy.effort`
-			// is overridden by a default nobody typed.
-			const effort = rest[1];
-			if (effort !== undefined && !isEffort(effort))
-				return {
-					kind: "usage",
-					problem: `unknown effort \`${effort}\` — one of ${EFFORTS.join(", ")}`,
-				};
-			return {
-				kind: "run",
-				slug: rest[0],
-				...(effort ? { effort } : {}),
-			};
+			// A slug and nothing else. It took an optional effort until schema 8
+			// removed the dial, and the gate policy that replaced it is not an
+			// argument: it is the mode the person is standing in.
+			if (rest.length !== 1)
+				return { kind: "usage", problem: "`/plan run` takes exactly one slug" };
+			return { kind: "run", slug: rest[0] };
 		}
 		default:
 			return { kind: "usage", problem: `unknown subcommand \`${verb}\`` };
@@ -177,10 +168,10 @@ function renderReview(review: Review): string {
 	if (review.tier) parts.push(`tier ${review.tier}`);
 	if (review.diverse) parts.push("diverse");
 	if (review.model) parts.push(`model ${review.model}`);
-	// Said out loud, because "the effort dial decides" is a real answer and an
-	// empty bracket reads like a missing field.
+	// Said out loud, because "the plan's default" is a real answer and an empty
+	// bracket reads like a missing field.
 	if (!review.tier && !review.model && !review.diverse)
-		parts.push("effort dial decides");
+		parts.push("the plan's default tier");
 	return parts.join(", ");
 }
 
@@ -238,7 +229,7 @@ function renderPolicy(policy: ResolvedPolicy, declared: boolean): string[] {
 		declared
 			? "Policy:"
 			: "Policy (the plan sets none — these are the defaults):",
-		`  effort ${policy.effort}, gates ${policy.gates}, ${renderRounds(policy.maxFixRounds)}`,
+		`  gates ${policy.gates}, ${renderRounds(policy.maxFixRounds)}`,
 		`  reviews that pin nothing: tier ${policy.reviewDefault.tier}${policy.reviewDefault.diverse ? ", diverse" : ""}`,
 		`  publish ${policy.publish.mode}${policy.publish.base ? ` from ${policy.publish.base}` : ""}`,
 	];
@@ -325,6 +316,14 @@ export interface PlanCommandDeps {
 	 * "which project is this?".
 	 */
 	readonly store: PlanStore;
+	/**
+	 * The posture the person is standing in, asked at call time.
+	 *
+	 * `run` reads its gate policy off it — ask parks the run at its ship decision,
+	 * auto publishes when it is done — and REQUIRED rather than defaulted, because
+	 * a default here would be this command choosing how somebody's run ends.
+	 */
+	readonly mode: () => ModeName;
 	/** @see PlanShip */
 	readonly ship?: PlanShip;
 	/** @see PlanStart */
@@ -346,6 +345,34 @@ function usage(problem?: string): PlanCommandOutcome {
 		level: problem ? "warning" : "info",
 		message: problem ? `${problem}.\n${PLAN_COMMAND_HELP}` : PLAN_COMMAND_HELP,
 	};
+}
+
+/**
+ * The plan with this gate policy written onto it, stored.
+ *
+ * WRITTEN DOWN, NOT PASSED ALONG. `planDigest` covers the document and
+ * publication checks that digest against the stored bytes, so a run started with
+ * gates the stored plan does not carry is a run nothing can be published from.
+ * A plan that already carries them is left alone rather than re-stamped: the
+ * digest would be identical and `savedAt` would not.
+ *
+ * A store that refuses the write is not a reason to start the run anyway — the
+ * caller is handed the unchanged plan back and its own gates decide, which is
+ * what the previous run of this slug was started with.
+ */
+function withGates(
+	store: Pick<PlanStore, "savePlan">,
+	plan: Plan,
+	gates: PlanGates,
+): Plan {
+	if (plan.policy?.gates === gates) return plan;
+	const next: Plan = { ...plan, policy: { ...plan.policy, gates } };
+	try {
+		store.savePlan(next);
+		return next;
+	} catch {
+		return plan;
+	}
 }
 
 function unknownSlug(slug: string): PlanCommandOutcome {
@@ -390,8 +417,8 @@ export async function runPlanCommand(
 		}
 
 		case "run": {
-			const plan = deps.store.loadPlan(command.slug);
-			if (!plan) return unknownSlug(command.slug);
+			const loaded = deps.store.loadPlan(command.slug);
+			if (!loaded) return unknownSlug(command.slug);
 			if (!deps.start)
 				return {
 					level: "warning",
@@ -400,7 +427,22 @@ export async function runPlanCommand(
 						"and `@vegardx/pi-workflow` is an optional peer this session does not have. " +
 						"The plan is stored and unchanged.",
 				};
-			const input = toWorkflowInput(plan, command.effort);
+			// THE MODE DECIDES THE ENDING, and a mode that decides none refuses.
+			// Starting a run from plan or hack used to be possible and pointless —
+			// plan's ceiling is read-only so pi-workflow refused it a moment later,
+			// and hack bounds nothing at all while forming no plan — so the refusal
+			// is here, by name, before anything is written.
+			const mode = deps.mode();
+			const gates = planGatesFor(mode);
+			if (!gates)
+				return {
+					level: "warning",
+					message:
+						`\`/plan run ${command.slug}\` decides how the run ends, and mode ${mode} decides none: ` +
+						`${NO_GATES_REFUSAL}. The plan is stored and unchanged.`,
+				};
+			const plan = withGates(deps.store, loaded, gates);
+			const input = toWorkflowInput(plan);
 			// Written before the run is asked for, and kept whatever the answer is:
 			// the export is the record of what this command would start, and a run
 			// that failed to start is when it is wanted most.
@@ -421,8 +463,8 @@ export async function runPlanCommand(
 			return {
 				level: "info",
 				message:
-					`Started \`${plan.slug}\` as \`${PLAN_WORKFLOW_REF}\` run \`${runId}\` at effort ${input.effort}. ` +
-					`Input written to ${path}. Starting it is the approval, and ${gateStops(resolvePolicy(plan.policy).gates)}.`,
+					`Started \`${plan.slug}\` as \`${PLAN_WORKFLOW_REF}\` run \`${runId}\` from mode ${mode}. ` +
+					`Input written to ${path}. Starting it is the approval, and ${gateStops(gates)}.`,
 				runId,
 				wrote: path,
 			};

@@ -4,15 +4,32 @@
 // revises it as an ordinary message — deliverables, work tasks, reviews,
 // dependencies — the way anybody plans anything with anybody. Nothing about
 // plan mode says how a plan is executed; the modes are permission dials and
-// only that. `/mode auto` or `/mode hack` is the TRIGGER: it says the planning
+// only that. `/mode ask` or `/mode auto` is the TRIGGER: it says the planning
 // is over, and this file is everything that happens between that sentence and a
-// run.
+// run. `/mode hack` is not a trigger at all — see below.
+//
+// THE MODE YOU LEAVE TO DECIDES THE END OF THE RUN. Both hand-off modes run the
+// same four steps and start the same run; what differs is one field on the
+// plan's policy, derived from the mode's own `publication` fact:
+//
+//   - **ask** — `policy.gates: "ship"`. The run works through the plan and parks
+//     at its ship decision, which this session then asks in a dialog with the
+//     gate's inputs rendered (`decide.ts`).
+//   - **auto** — `policy.gates: "none"`. There is no ship gate: the run completes
+//     and the seat publishes the pull request from its terminal output. Answering
+//     `Start the run?` here is the approval for publication too, which is why the
+//     confirmation says so in as many words.
+//   - **hack** — NO HAND-OFF. Leaving plan mode to hack only switches: hack is
+//     the unrestricted in-session escape hatch, not a way to run a plan. The
+//     conversation's plan is not formed, one notice says so, and `/plan run
+//     <slug>` remains for a plan already stored. The hook returns before this
+//     flow is entered at all.
 //
 // It is one async controller, started from `/mode`, and it is one function you
 // can read top to bottom:
 //
-//   1. **The effort dial.** The one question a repository cannot answer. The
-//      gates take their default and publication is DERIVED from the repository.
+//   1. **The gates and the publication.** Neither is asked. The gates are the
+//      target mode's, and publication is DERIVED from the repository.
 //   2. **The description and the document**, requested directly from the model
 //      through `authoring.ts` — an ordinary completion, outside the agent loop,
 //      with the session's own history and no tools at all — and validated with
@@ -27,10 +44,13 @@
 //
 // ONE CONFIRMATION, AND AT MOST ONE OTHER DIALOG. The separate description
 // dialog, the compiled-document dialog, the blind-review dialog, the findings
-// walk and the revise dialogs are gone, and with them the compiled stage
-// document this file used to mirror. The only dialog besides the effort dial
-// and the confirmation is the one the check can raise: a finding the reviewer
-// marked as needing a person, or a bound spent with something still blocking.
+// walk, the revise dialogs and THE EFFORT DIAL are gone, and with them the
+// compiled stage document this file used to mirror. The effort dial was the last
+// question this flow asked before it had anything to show: schema 8 removed it,
+// implementation roles inherit the session's own model and thinking, and reviews
+// keep their tiers. The only dialog besides the confirmation is the one the check
+// can raise: a finding the reviewer marked as needing a person, or a bound spent
+// with something still blocking.
 //
 // THE MODE DOES NOT MOVE UNTIL SOMETHING IS SETTLED. The seat stays in plan
 // mode for the whole hand-off; `setMode` is called on exactly three answers —
@@ -89,9 +109,14 @@ import {
 	responseDigest,
 	writeAuthoringEvidence,
 } from "./authoring.js";
-import { type ExitMode, type ModeName, modeCeiling } from "./mode.js";
 import {
-	DEFAULT_GATES,
+	type ExitMode,
+	type ModeName,
+	modeCeiling,
+	type PlanExitMode,
+	planGatesFor,
+} from "./mode.js";
+import {
 	gateStops,
 	ID_RE,
 	inspectPlan,
@@ -124,13 +149,7 @@ import {
 	planFrom,
 	withoutEmptyOptionals,
 } from "./plan-document.js";
-import {
-	DEFAULT_EFFORT,
-	EFFORTS,
-	type Effort,
-	planDigest,
-	toWorkflowInput,
-} from "./plan-input.js";
+import { planDigest, toWorkflowInput } from "./plan-input.js";
 import { ghOnPath } from "./publish.js";
 import type { PlanStore } from "./store.js";
 import { callWorkflow, type WorkflowReadClient } from "./workflow-provider.js";
@@ -211,9 +230,9 @@ export interface ContextUsageView {
  *     table, it MUST be first, and it is the row that carries `(default)`. It
  *     is a suggestion about ordering and highlighting, and nothing else.
  *   - `escape` — what an unanswered dialog means. Exactly one per table, and
- *     it is always the safe way out: escaping never commits to anything. It
- *     may be the same entry as `recommended` only where escaping is harmless —
- *     the effort dial, where every answer is equally reversible.
+ *     it is always the safe way out: escaping never commits to anything. No
+ *     table here makes it the same entry as `recommended`: the one that used to,
+ *     the effort dial, is gone.
  *
  * Both live on the option rather than beside the list, so the label a human
  * reads and the value an escape produces cannot drift apart.
@@ -254,30 +273,6 @@ export function chosenOption<T>(
 	return (options.find((option) => optionLabel(option) === label) ?? hatch)
 		.value;
 }
-
-/**
- * The three efforts, the recommended one first.
- *
- * Derived from `EFFORTS` rather than written out, so a fourth effort cannot be
- * added to the schema without appearing here. This is the one table whose
- * escape IS its recommendation: every answer here is a dial on the same run and
- * none of them commits to anything, so escaping to `standard` takes nothing
- * away that the confirmation does not still gate.
- */
-export const EFFORT_OPTIONS: readonly ExitOption<Effort>[] = [
-	{
-		value: DEFAULT_EFFORT,
-		text: DEFAULT_EFFORT,
-		recommended: true as const,
-		escape: true as const,
-	},
-	...EFFORTS.filter((effort) => effort !== DEFAULT_EFFORT).map((effort) => ({
-		value: effort,
-		text: effort,
-	})),
-];
-
-export const EFFORT_TITLE = "How much effort should the run spend?";
 
 // ── Publication, derived ─────────────────────────────────────────────────────
 
@@ -607,7 +602,7 @@ function renderReview(review: Review): string {
 	if (review.skill) parts.push(`skill ${review.skill}`);
 	if (review.model) parts.push(`model ${review.model}`);
 	if (!review.tier && !review.model && !review.diverse)
-		parts.push("effort dial decides");
+		parts.push("the plan's default tier");
 	return `${parts[0]} (${parts.slice(1).join(", ")})`;
 }
 
@@ -621,12 +616,11 @@ function renderReview(review: Review): string {
  */
 export function renderPlanSummary(
 	plan: Plan,
-	effort: Effort,
 	publication: DerivedPublication,
 ): string {
 	const resolved = resolvePolicy(plan.policy);
 	const lines = [
-		`\`${plan.slug}\` — ${plan.deliverables.length} deliverable${plan.deliverables.length === 1 ? "" : "s"}, effort ${effort}, gates ${resolved.gates}.`,
+		`\`${plan.slug}\` — ${plan.deliverables.length} deliverable${plan.deliverables.length === 1 ? "" : "s"}, gates ${resolved.gates}.`,
 	];
 	for (const deliverable of plan.deliverables) {
 		lines.push(
@@ -645,6 +639,19 @@ export function renderPlanSummary(
 }
 
 /**
+ * What the mode being left to does when the run is over, in one line.
+ *
+ * THE CARD SAYS WHICH. The two hand-off modes are identical up to this sentence,
+ * and a person who cannot tell from the confirmation which one they are starting
+ * is a person who finds out when a pull request appears, or does not.
+ */
+export function endingLine(wanted: PlanExitMode): string {
+	return wanted === "auto"
+		? "Ships the PR when done — starting it is the approval for publication too, and the link lands in this conversation."
+		: "Stops for your ship decision — this session asks you, in a dialog, with the gate's inputs on screen.";
+}
+
+/**
  * The whole confirmation, in one string, because Pi's `select` has no body.
  *
  * Everything that is being agreed to is here and nothing else is: what we
@@ -654,7 +661,7 @@ export function renderPlanSummary(
 export function confirmationTitle(view: {
 	readonly plan: Plan;
 	readonly description: string;
-	readonly effort: Effort;
+	readonly wanted: PlanExitMode;
 	readonly publication: DerivedPublication;
 	readonly check: PlanCheckResult | PlanCheckUnavailable;
 }): string {
@@ -668,10 +675,11 @@ export function confirmationTitle(view: {
 		"",
 		view.description,
 		"",
-		renderPlanSummary(view.plan, view.effort, view.publication),
+		renderPlanSummary(view.plan, view.publication),
 		renderPlanCheckLine(view.check),
 		...findings,
 		"",
+		`Mode ${view.wanted}. ${endingLine(view.wanted)}`,
 		`Starting it is the approval, and ${gateStops(resolved.gates)}.`,
 	]
 		.join("\n")
@@ -725,6 +733,26 @@ export function switchedWithoutPlan(wanted: ExitMode, why: string): string {
 	return (
 		`${why} Mode ${wanted}, with no plan stored:` +
 		` there was nothing in this conversation to write one from, and \`/mode plan\` goes back to planning.`
+	);
+}
+
+/**
+ * Leaving plan mode to hack, which forms nothing.
+ *
+ * Hack is the unrestricted in-session escape hatch, and a hand-off is the
+ * opposite of that: it writes a document, asks a reviewer to read it and starts a
+ * bounded run. So the switch is the whole event, and this is the one line that
+ * says the conversation's plan was not formed — rather than leaving somebody to
+ * discover it later by looking for a run that never existed.
+ */
+export function switchedToHack(stored: number): string {
+	return (
+		"Mode hack: the in-session escape hatch, and no hand-off. The plan in this" +
+		" conversation was not formed into a document and nothing is running —" +
+		" `/mode ask` or `/mode auto` is what turns a conversation into a run." +
+		(stored > 0
+			? ` ${stored} plan${stored === 1 ? " is" : "s are"} already stored for this project, and \`/plan run <slug>\` starts one from ask or auto.`
+			: "")
 	);
 }
 
@@ -786,16 +814,28 @@ export function renderPlanMessage(
 
 // ── The flow ─────────────────────────────────────────────────────────────────
 
-/** The plan store, narrowed to what the hand-off reads and writes. */
+/**
+ * The plan store, narrowed to what the hand-off reads and writes.
+ *
+ * `list` is here for the hack notice alone: leaving plan mode to hack forms
+ * nothing, and the one useful thing that line can add is whether there is
+ * anything already stored to start from ask or auto.
+ */
 export type ExitPlanStore = Pick<
 	PlanStore,
-	"loadPlan" | "savePlan" | "planDir" | "workflowInputFile"
+	"loadPlan" | "savePlan" | "planDir" | "workflowInputFile" | "list"
 >;
 
 export interface ExitFlowDeps {
 	readonly ui: ExitFlowUi;
-	/** The posture the human asked for, and will be given when this settles. */
-	readonly wanted: ExitMode;
+	/**
+	 * The posture the human asked for, and will be given when this settles.
+	 *
+	 * `ask` or `auto` only. `hack` never reaches here: the hook answers it with a
+	 * switch and one notice, because hack forms no run and this flow's whole
+	 * business is getting to one.
+	 */
+	readonly wanted: PlanExitMode;
 	/** The seat's own switch. Called on the three answers that settle. */
 	readonly setMode: (name: ModeName) => void;
 	/** How the model is asked. The whole mechanism, in one injected function. */
@@ -908,10 +948,7 @@ export async function runExitFlow(
 		evidenceDir = deps.store.planDir(slug);
 	};
 
-	let thinking: ThinkingLevel = authoringThinking(
-		DEFAULT_EFFORT,
-		deps.thinkingLevel,
-	);
+	const thinking: ThinkingLevel = authoringThinking(deps.thinkingLevel);
 	const modelId = deps.modelId ?? "unknown";
 
 	// ONE REQUEST IS TWO STEPS. `request` sends it and holds what came back;
@@ -977,9 +1014,14 @@ export async function runExitFlow(
 		].join("\n");
 
 	try {
-		// ── 1 — the one dial a repository cannot answer ────────────────────────
-		const effort = await dialogs.choose(EFFORT_TITLE, EFFORT_OPTIONS);
-		thinking = authoringThinking(effort, deps.thinkingLevel);
+		// ── 1 — the gates and the publication, neither of them asked ───────────
+		//
+		// THE GATES ARE THE MODE'S. `ask` writes `ship` and `auto` writes `none`,
+		// derived from the target mode's own `publication` fact rather than from a
+		// dialog — the person answered this question when they typed `/mode ask` or
+		// `/mode auto`, and asking it again in a select would be this flow's second
+		// opinion about what they said.
+		const gates = planGatesFor(deps.wanted);
 
 		// Not a dialog: read off the repository and carried into the confirmation.
 		// `policy` is still where it can be changed, and the plan carries it.
@@ -993,7 +1035,7 @@ export async function runExitFlow(
 			ui.notify(problem, "error");
 			return { kind: "refused", problem };
 		}
-		const policy: PlanPolicy = { effort, gates: DEFAULT_GATES, publish };
+		const policy: PlanPolicy = { gates, publish };
 
 		// ── 2 — is there room to ask at all? ──────────────────────────────────
 		const usage = deps.contextUsage?.();
@@ -1229,7 +1271,13 @@ export async function runExitFlow(
 		let description = described;
 		for (;;) {
 			const answer = await dialogs.choose(
-				confirmationTitle({ plan, description, effort, publication, check }),
+				confirmationTitle({
+					plan,
+					description,
+					wanted: deps.wanted,
+					publication,
+					check,
+				}),
 				START_OPTIONS,
 			);
 			if (answer === "keep")
@@ -1262,7 +1310,7 @@ export async function runExitFlow(
 			// it is what `/plan run <slug>` and a person reading the plan directory
 			// both want, and a run that failed to start is exactly when it is
 			// wanted most.
-			const input = toWorkflowInput(plan, effort);
+			const input = toWorkflowInput(plan);
 			const path = (
 				deps.inputPath ?? ((slug: string) => store.workflowInputFile(slug))
 			)(plan.slug);
@@ -1292,7 +1340,6 @@ export async function runExitFlow(
 				() =>
 					client.startBuiltin(PLAN_WORKFLOW_REF, {
 						input,
-						effort,
 						...(ceiling ? { ceiling } : {}),
 					}),
 				ui.notify,
@@ -1312,7 +1359,7 @@ export async function runExitFlow(
 				renderPlanMessage(plan, { kind: "started", runId: receipt.runId }),
 			);
 			ui.notify(
-				`Mode ${deps.wanted}, and \`${plan.slug}\` is running as \`${receipt.runId}\` at effort ${effort}. Starting it was the approval, and ${gateStops(resolvePolicy(plan.policy).gates)}.`,
+				`Mode ${deps.wanted}, and \`${plan.slug}\` is running as \`${receipt.runId}\`. Starting it was the approval, and ${gateStops(resolvePolicy(plan.policy).gates)}.`,
 				"info",
 			);
 			return {
@@ -1463,6 +1510,18 @@ export interface ModeExitControllerDeps {
 	readonly flow?: (deps: ExitFlowDeps) => Promise<ExitFlowOutcome>;
 }
 
+/**
+ * How many plans this project has stored, for the hack notice; `0` when nothing
+ * can say. A store that throws is not worth failing a mode switch over.
+ */
+function storedPlanCount(store?: () => ExitPlanStore): number {
+	try {
+		return store?.().list().length ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
 export interface ModeExitController {
 	/** The `/mode` hook: the hand-off when leaving plan mode, nothing otherwise. */
 	readonly hook: ModeExitHook;
@@ -1491,6 +1550,14 @@ export function createModeExitController(
 		// that cannot be asked anything gets the switch it asked for rather than
 		// a silent set of defaults nobody chose.
 		if (previous !== "plan" || next === "plan") return "switch";
+		// HACK IS NOT A HAND-OFF. It is the unrestricted in-session escape hatch,
+		// and forming a plan into a bounded run is the opposite of what it means.
+		// So the switch is the whole event, and the notice says the conversation's
+		// plan was not formed rather than leaving a person to look for a run.
+		if (next === "hack") {
+			ctx.ui.notify(switchedToHack(storedPlanCount(deps.store)), "info");
+			return "switch";
+		}
 		if (!ctx.hasUI) return "switch";
 
 		const own = new AbortController();
@@ -1513,7 +1580,9 @@ export function createModeExitController(
 		const check = deps.planCheck?.(ctx);
 		const running = run({
 			ui: ctx.ui,
-			wanted: next,
+			// Narrowed by the `hack` branch above and by `previous !== "plan"`: the
+			// only postures that reach here are the two that form a run.
+			wanted: next as PlanExitMode,
 			setMode: deps.setMode,
 			complete,
 			cwd,

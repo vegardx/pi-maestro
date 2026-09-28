@@ -1,11 +1,11 @@
 // `/plan` — the first reader the plan store ever had.
 //
-// Two things are being held down here. One: the grammar rejects rather than
-// guesses, because a mistyped effort that silently became `standard` would
-// spend (or fail to spend) a deep run's budget and nothing would say so. Two:
-// `run` starts the run itself and never steers the model — it writes an input
-// beside the plan and hands it to the injected `start`, and the approval it
-// names is a checkpoint in someone else's runtime.
+// Three things are being held down here. One: the grammar rejects rather than
+// guesses. Two: `run` starts the run itself and never steers the model — it
+// writes an input beside the plan and hands it to the injected `start`. Three:
+// `run` READS ITS GATE POLICY OFF THE MODE and writes it onto the stored plan, so
+// the bytes `planDigest` names are the bytes the run was given — and it refuses
+// from a posture that decides no ending rather than picking one.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ModeName } from "../packages/maestro/src/mode.js";
 import { projectPlansRoot } from "../packages/maestro/src/paths.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import {
@@ -114,6 +115,8 @@ interface Harness {
 			 */
 			start?: string | "refused" | false;
 			ship?: Publication | false;
+			/** The posture `run` reads its gate policy off. `ask` by default. */
+			mode?: ModeName;
 		},
 	): Promise<PlanCommandOutcome>;
 }
@@ -144,6 +147,9 @@ function harness(cwd: string = temp("plan-cmd-project")): Harness {
 			runPlanCommand(
 				{
 					store,
+					// The posture `run` reads its gate policy off. `ask` unless a test
+					// says otherwise, because that is the posture `run` is for.
+					mode: () => options.mode ?? "ask",
 					// Absent unless the test asks for it: a seat with no workflow
 					// runtime cannot start a run, which is its own outcome.
 					...(options.start === false
@@ -187,21 +193,16 @@ function harness(cwd: string = temp("plan-cmd-project")): Harness {
 }
 
 describe("the /plan grammar rejects rather than guesses", () => {
-	it("parses each verb, and defaults the effort", () => {
+	it("parses each verb, and `run` takes a slug and nothing else", () => {
 		expect(parsePlanCommand("list")).toEqual({ kind: "list" });
 		expect(parsePlanCommand("  show   arc ")).toEqual({
 			kind: "show",
 			slug: "arc",
 		});
 		expect(parsePlanCommand("rm arc")).toEqual({ kind: "rm", slug: "arc" });
-		// No effort is not `standard`: the omission travels, so the plan's own
-		// `policy.effort` is what decides.
+		// v8: no effort argument. What used to be a dial here is the mode the
+		// person is standing in, and it is not an argument.
 		expect(parsePlanCommand("run arc")).toEqual({ kind: "run", slug: "arc" });
-		expect(parsePlanCommand("run arc deep")).toEqual({
-			kind: "run",
-			slug: "arc",
-			effort: "deep",
-		});
 	});
 
 	it("answers a bare /plan with the grammar rather than a verb", () => {
@@ -214,11 +215,11 @@ describe("the /plan grammar rejects rather than guesses", () => {
 		["show a b", "exactly one slug"],
 		["rm", "exactly one slug"],
 		["list arc", "takes no arguments"],
-		["run", "a slug and an optional effort"],
-		["run arc standard extra", "a slug and an optional effort"],
-		// The one that pays for the whole strictness argument.
-		["run arc standrd", "unknown effort `standrd`"],
-		["run arc DEEP", "unknown effort `DEEP`"],
+		["run", "exactly one slug"],
+		// What used to be an effort is now a word `run` has no place for at all,
+		// and it is rejected rather than ignored.
+		["run arc deep", "exactly one slug"],
+		["run arc standard extra", "exactly one slug"],
 	])("rejects `/plan %s`", (args, problem) => {
 		const parsed = parsePlanCommand(args);
 		expect(parsed.kind).toBe("usage");
@@ -229,7 +230,7 @@ describe("the /plan grammar rejects rather than guesses", () => {
 		const h = harness();
 		const outcome = await h.run("run arc standrd");
 		expect(outcome.level).toBe("warning");
-		expect(outcome.message).toContain("unknown effort `standrd`");
+		expect(outcome.message).toContain("`/plan run` takes exactly one slug");
 		expect(outcome.message).toContain(PLAN_COMMAND_USAGE);
 		// A rejected grammar touches nothing.
 		expect(existsSync(h.store.workflowInputFile("arc"))).toBe(false);
@@ -294,7 +295,7 @@ describe("/plan show", () => {
 				},
 			],
 		});
-		expect(text).toContain("read by security, effort dial decides");
+		expect(text).toContain("read by security, the plan's default tier");
 	});
 
 	it("re-reads the world, so a tree that went dirty since is reported", async () => {
@@ -316,14 +317,14 @@ describe("/plan show", () => {
 describe("/plan run starts the run through the harness", () => {
 	it("writes the input beside the plan and starts `plan-to-ship` itself", async () => {
 		const h = harness();
-		const stored = plan("arc", h.root);
-		h.store.savePlan(stored);
-		const outcome = await h.run("run arc deep");
+		h.store.savePlan(plan("arc", h.root));
+		const outcome = await h.run("run arc");
+		const stored = h.store.loadPlan("arc") as Plan;
 
 		const path = h.store.workflowInputFile("arc");
 		expect(outcome.wrote).toBe(path);
 		const written = JSON.parse(readFileSync(path, "utf8"));
-		expect(written.effort).toBe("deep");
+		expect(Object.keys(written).sort()).toEqual(["plan", "planDigest"]);
 		expect(written.planDigest).toBe(planDigest(stored));
 		expect(written.plan).toEqual(stored);
 
@@ -334,36 +335,64 @@ describe("/plan run starts the run through the harness", () => {
 		expect(outcome.level).toBe("info");
 		expect(outcome.runId).toBe(RUN_ID);
 		expect(outcome.message).toContain(RUN_ID);
+		expect(outcome.message).toContain("from mode ask");
 		expect(outcome.message).toContain("stops at its `ship` decision");
-		expect(outcome.message).toContain("effort deep");
 	});
 
-	it("takes the plan's own effort when none is given", async () => {
-		// `policy.effort` is a decision a human made in the plan-mode exit and
-		// the digest covers it. A run started without naming an effort runs at
-		// the one the document asks for, not at a default that overrides it.
-		const h = harness();
-		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
-		await h.run("run arc");
-		expect(h.starts[0]?.effort).toBe("deep");
-		expect(
-			JSON.parse(readFileSync(h.store.workflowInputFile("arc"), "utf8")).effort,
-		).toBe("deep");
+	// The gates are WRITTEN DOWN rather than passed alongside, because
+	// `planDigest` covers the document and publication checks that digest against
+	// the stored bytes. A run started with gates the stored plan does not carry is
+	// a run nothing can be published from.
+	it("writes the mode's gate policy onto the stored plan before starting", async () => {
+		for (const [mode, gates] of [
+			["ask", "ship"],
+			["auto", "none"],
+		] as const) {
+			const h = harness();
+			h.store.savePlan(plan("arc", h.root));
+			await h.run("run arc", { mode });
+			expect([mode, h.store.loadPlan("arc")?.policy?.gates]).toEqual([
+				mode,
+				gates,
+			]);
+			expect([mode, h.starts[0]?.plan.policy?.gates]).toEqual([mode, gates]);
+			// And the digest names the bytes on disk, not the bytes before the write.
+			expect(h.starts[0]?.planDigest).toBe(
+				planDigest(h.store.loadPlan("arc") as Plan),
+			);
+		}
 	});
 
-	it("lets a named effort override the plan's own", async () => {
-		const h = harness();
-		h.store.savePlan({ ...plan("arc", h.root), policy: { effort: "deep" } });
-		await h.run("run arc cheap");
-		expect(h.starts[0]?.effort).toBe("cheap");
-	});
-
-	it("defaults to standard when neither the command nor the plan says", async () => {
+	it("says what auto's run does at the end, rather than where it stops", async () => {
 		const h = harness();
 		h.store.savePlan(plan("arc", h.root));
-		await h.run("run arc");
-		expect(h.starts[0]?.effort).toBe("standard");
+		const outcome = await h.run("run arc", { mode: "auto" });
+		expect(outcome.message).toContain("from mode auto");
+		expect(outcome.message).toContain(
+			"the pull request is published when it is done",
+		);
 	});
+
+	// Starting a run from plan or hack used to be possible and pointless: plan's
+	// ceiling is read-only so the runtime refused it a moment later, and hack
+	// bounds nothing while forming no plan. Neither decides how a run ENDS, so the
+	// refusal is here, by name, before anything is written.
+	it.each(["plan", "hack"] as const)(
+		"refuses from mode %s, naming the modes that decide an ending",
+		async (mode) => {
+			const h = harness();
+			h.store.savePlan(plan("arc", h.root));
+			const outcome = await h.run("run arc", { mode });
+			expect(outcome.level).toBe("warning");
+			expect(outcome.message).toContain(`mode ${mode} decides none`);
+			expect(outcome.message).toContain("start it from ask or auto");
+			expect(outcome.message).toContain("stored and unchanged");
+			// Nothing was written and nothing was started.
+			expect(h.starts).toEqual([]);
+			expect(existsSync(h.store.workflowInputFile("arc"))).toBe(false);
+			expect(h.store.loadPlan("arc")?.policy?.gates).toBeUndefined();
+		},
+	);
 
 	it("keeps the plan and the input when the runtime refuses to start it", async () => {
 		const h = harness();

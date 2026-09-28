@@ -1,9 +1,10 @@
 // The plan-mode hand-off, end to end, driven through a fake UI, a fake
 // completion, a fake workflow runtime and a fake plan check.
 //
-// The hand-off is ONE flow: the effort dial, a request for the description, a
-// request for the document, the plan check the harness acts on itself, and one
-// confirmation. Nothing is on disk between the steps, so what the old suites
+// The hand-off is ONE flow: the gates read off the target mode, a request for
+// the description, a request for the document, the plan check the harness acts on
+// itself, and one confirmation. The effort dial is GONE — schema 8 removed it —
+// so the flow that used to ask two dialogs asks one. Nothing is on disk between the steps, so what the old suites
 // checked after every turn — the pending record — has nothing to check. What is
 // left is what actually matters, and every case below asserts the same five
 // facts after the fact: the outcome, the plan in the store, the posture, exactly
@@ -23,6 +24,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	AUTHORING_EVIDENCE_FILE,
 	AUTHORING_EVIDENCE_SCHEMA_VERSION,
+	AUTHORING_THINKING_FLOOR,
 	type AuthoringComplete,
 	type AuthoringEvidence,
 	type AuthoringRequest,
@@ -48,11 +50,10 @@ import {
 	createModeExitController,
 	DESCRIPTION_EDITOR_TITLE,
 	derivePublication,
-	EFFORT_OPTIONS,
-	EFFORT_TITLE,
 	type ExitFlowDeps,
 	type ExitFlowUi,
 	type ExitOption,
+	endingLine,
 	FALLBACK_BASE_BRANCH,
 	optionLabel,
 	optionLabels,
@@ -213,6 +214,15 @@ function fakeStore(root: string) {
 			workflowInputFile: (slug: string): string =>
 				join(root, slug, "workflow-input.json"),
 			loadPlan: (slug: string): Plan | null => plans.get(slug) ?? null,
+			// Only the hack notice reads it, and the hack notice never reaches this
+			// flow — but `ExitPlanStore` names it, so the fake has it.
+			list: () =>
+				[...plans.values()].map((stored) => ({
+					slug: stored.slug,
+					title: stored.title,
+					deliverables: stored.deliverables.length,
+					savedAt: "2026-09-16T12:00:00Z",
+				})),
 			savePlan: (plan: Plan): void => {
 				// The real store's rule, with the real validator: nothing invalid
 				// reaches disk, and the hand-off has to survive being told so.
@@ -258,7 +268,7 @@ function fakeClient(options: FakeClientOptions = {}) {
 		observe: () => () => {},
 		startBuiltin:
 			options.startBuiltin ??
-			(async (ref: string, options_: { input: unknown; effort?: string }) => {
+			(async (ref: string, options_: { input: unknown }) => {
 				calls.push({ ref: `startBuiltin:${ref}`, input: options_ });
 				return { runId: PLAN_RUN_ID };
 			}),
@@ -453,23 +463,23 @@ function harness(options: HarnessOptions = {}) {
 }
 
 /**
- * The answers that walk the happy path: standard effort, start the run.
+ * The answer that walks the happy path: start the run.
  *
- * Every one of them is given EXPLICITLY, because escape means none of them: the
- * recommended row is first in each table and the escape row is the safe way out,
- * and this path is the one where somebody said yes.
+ * It is given EXPLICITLY, because escape means the opposite: the recommended row
+ * is first and the escape row is the safe way out, and this path is the one where
+ * somebody said yes. There is exactly one dialog to answer now — the effort dial
+ * that used to come first is gone.
  */
 const happyPath = (opened: Opened, _index = 0): Answer => {
 	if (opened.title.startsWith(START_TITLE))
 		return pick(opened.options, START_RUN);
-	if (opened.title === EFFORT_TITLE) return pick(opened.options, "standard");
 	return undefined;
 };
 
 // ── The sequence ─────────────────────────────────────────────────────────────
 
-describe("the hand-off, from `/mode auto` to a run", () => {
-	it("asks two dialogs for a two-deliverable plan and starts the run", async () => {
+describe("the hand-off, from `/mode ask` or `/mode auto` to a run", () => {
+	it("asks one dialog for a two-deliverable plan and starts the run", async () => {
 		const h = harness({
 			script: [DESCRIPTION, documentText()],
 			answer: happyPath,
@@ -481,26 +491,26 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 			kind: "started",
 			slug: "compose",
 			runId: PLAN_RUN_ID,
-			asked: 2,
+			asked: 1,
 		});
-		// THE EFFORT DIAL AND THE CONFIRMATION. Nothing else is asked: the
-		// description is agreed inside the confirmation, publication is derived,
-		// the gates take their default, and the plan check is the harness's to act
-		// on rather than a person's to walk.
-		expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
-		expect(h.ui.opened.map((o) => o.kind)).toEqual(["select", "select"]);
+		// THE CONFIRMATION, AND NOTHING ELSE. The description is agreed inside it,
+		// publication is derived, the gates are the target mode's, and the plan
+		// check is the harness's to act on rather than a person's to walk.
+		expect(h.ui.titles()).toEqual([h.confirmation()]);
+		expect(h.ui.opened.map((o) => o.kind)).toEqual(["select"]);
 		// The posture moves exactly once, and only once the run exists.
 		expect(h.modes).toEqual(["auto"]);
 		expect(h.check?.ran()).toBe(1);
 		expect(h.inputs.length).toBe(1);
 		// The harness started the plan's run itself, through the allowlisted
-		// `startBuiltin`, with the input it just exported and the effort agreed.
+		// `startBuiltin`, with the input it just exported — and NOTHING BESIDE IT.
+		// The effort that used to travel here was the one field of the start the
+		// plan digest did not cover.
 		expect(h.provider?.plansStarted()).toEqual([
 			{
 				ref: `startBuiltin:${PLAN_WORKFLOW_REF}`,
 				input: {
 					input: JSON.parse(h.inputs[0]?.[1] as string),
-					effort: "standard",
 					// THE TARGET MODE'S CEILING: the run starts while the posture
 					// switches, so it is bounded by where the person is going.
 					ceiling: modeCeiling("auto"),
@@ -513,7 +523,7 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 		// Plan mode's ceiling is read-only and this run writes to worktrees, so
 		// bounding it by the posture the hand-off is LEAVING would refuse the run
 		// the hand-off exists to start.
-		for (const wanted of ["auto", "hack"] as const) {
+		for (const wanted of ["ask", "auto"] as const) {
 			const h = harness({
 				wanted,
 				script: [DESCRIPTION, documentText()],
@@ -523,17 +533,18 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 			const started = h.provider?.plansStarted()[0]?.input as {
 				ceiling?: unknown;
 			};
-			const ceiling = modeCeiling(wanted);
-			expect([wanted, started.ceiling]).toEqual([wanted, ceiling]);
-			// Hack is the posture whose whole meaning is that the restrictions are
-			// off, so the start carries no ceiling at all.
-			expect([wanted, started.ceiling === undefined]).toEqual([
+			// ask and auto are the same permissions, so they are the same ceiling:
+			// the two differ in what happens when the run is over, which is not one.
+			expect([wanted, started.ceiling]).toEqual([
 				wanted,
-				wanted === "hack",
+				{ workspaceModes: ["read-only", "worktree"] },
 			]);
 			expect(h.modes).toEqual([wanted]);
 		}
 		expect(modeCeiling("plan")).toEqual({ workspaceModes: ["read-only"] });
+		// And hack never reaches this flow at all: the hook answers it with a
+		// switch and one notice, because hack forms no run.
+		expect(modeCeiling("hack")).toBeUndefined();
 	});
 
 	it("shows the description, the plan, publication, the check and the gate", async () => {
@@ -547,17 +558,19 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 
 		const body = h.confirmation();
 		expect(body.startsWith(`${START_TITLE}\n\n${DESCRIPTION}`)).toBe(true);
-		expect(body).toContain(
-			"`compose` — 2 deliverables, effort standard, gates ship.",
-		);
+		expect(body).toContain("`compose` — 2 deliverables, gates none.");
 		expect(body).toContain("  d1 — Deliverable one\n      impl: Do the work");
 		expect(body).toContain("      read by contracts (tier standard)");
 		expect(body).toContain("  d2 — Deliverable two, after d1");
 		expect(body).toContain(FULLY_EQUIPPED.why);
 		expect(body).toContain("Plan check: `gaps` — 1 minor.");
 		expect(body).toContain(MINOR.summary);
+		// THE CARD SAYS WHICH MODE, AND WHAT IT DOES AT THE END. `ask` and `auto`
+		// are identical up to this line, and a person who cannot tell which one
+		// they are starting finds out when a pull request appears, or does not.
+		expect(body).toContain("Mode auto. Ships the PR when done");
 		expect(body).toContain(
-			"Starting it is the approval, and it works through the plan and stops at its `ship` decision.",
+			"Starting it is the approval, and it works through the plan and the pull request is published when it is done.",
 		);
 	});
 
@@ -567,7 +580,7 @@ describe("the hand-off, from `/mode auto` to a run", () => {
 			answer: happyPath,
 		});
 		await runExitFlow(h.deps);
-		expect(h.ui.opened[1]?.options).toEqual([
+		expect(h.ui.opened[0]?.options).toEqual([
 			`${START_RUN} (default)`,
 			START_EDIT,
 			START_SWITCH,
@@ -651,33 +664,53 @@ describe("each answer to the one confirmation", () => {
 	});
 });
 
-// ── The effort dial ──────────────────────────────────────────────────────────
+// ── The gates, read off the mode rather than asked ───────────────────────────
 
-describe("the one dial a repository cannot answer", () => {
-	it("offers the three efforts with `standard` first, and escapes to it", () => {
-		expect(optionLabels(EFFORT_OPTIONS)).toEqual([
-			"standard (default)",
-			"cheap",
-			"deep",
-		]);
-		expect(chosenOption(EFFORT_OPTIONS, undefined)).toBe("standard");
+describe("the mode you leave to decides the end of the run", () => {
+	// The whole of part 2, in one table. Both modes run the same four steps and
+	// start the same run; one field on the plan's policy differs, and it is
+	// derived from the target mode rather than from a dialog nobody answered.
+	it("writes `ship` from ask and `none` from auto, and asks nobody", async () => {
+		for (const [wanted, gates] of [
+			["ask", "ship"],
+			["auto", "none"],
+		] as const) {
+			const h = harness({
+				wanted,
+				script: [DESCRIPTION, documentText()],
+				answer: happyPath,
+			});
+			expect((await runExitFlow(h.deps)).kind).toBe("started");
+			expect([wanted, h.store.saves[0]?.policy?.gates]).toEqual([
+				wanted,
+				gates,
+			]);
+			// It reaches the author too, through the system prompt: a decision the
+			// author cannot see is one they will write around.
+			expect(h.model.requests[1]?.systemPrompt).toContain(`gates ${gates}`);
+			// And exactly one dialog was opened either way.
+			expect([wanted, h.ui.titles().length]).toEqual([wanted, 1]);
+		}
 	});
 
-	it("carries the chosen effort into the prompt, the plan and the run", async () => {
+	it("says on the card which ending the person is starting", () => {
+		expect(endingLine("ask")).toContain("Stops for your ship decision");
+		expect(endingLine("ask")).toContain("in a dialog");
+		expect(endingLine("auto")).toContain("Ships the PR when done");
+		expect(endingLine("auto")).toContain("the approval for publication too");
+	});
+
+	it("carries no effort into the prompt, the plan or the run", async () => {
 		const h = harness({
+			wanted: "ask",
 			script: [DESCRIPTION, documentText()],
-			answer: (o) =>
-				o.title === EFFORT_TITLE ? pick(o.options, "deep") : happyPath(o),
+			answer: happyPath,
 		});
-
 		await runExitFlow(h.deps);
-
-		expect(h.model.requests[1]?.systemPrompt).toContain("effort deep");
-		expect(h.store.saves[0]?.policy?.effort).toBe("deep");
-		expect(h.confirmation()).toContain("effort deep");
-		expect(h.provider?.plansStarted()[0]?.input).toMatchObject({
-			effort: "deep",
-		});
+		expect(h.model.requests[1]?.systemPrompt).not.toContain("effort");
+		expect(h.store.saves[0]?.policy).not.toHaveProperty("effort");
+		expect(h.confirmation()).not.toContain("effort");
+		expect(h.provider?.plansStarted()[0]?.input).not.toHaveProperty("effort");
 	});
 });
 
@@ -715,7 +748,7 @@ describe("publication, derived rather than asked", () => {
 			);
 			// And they reach the person through the confirmation, never a dialog.
 			expect(h.confirmation()).toContain(publication.why);
-			expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
+			expect(h.ui.titles()).toEqual([h.confirmation()]);
 		}
 	});
 
@@ -863,8 +896,9 @@ describe("leaving plan mode with no plan in the conversation", () => {
 		expect(h.said()).toContain(`after ${MAX_AUTHORING_ATTEMPTS} attempts`);
 		expect(h.said()).toContain("Mode auto, with no plan stored");
 		expect(h.said()).toContain("/mode plan");
-		// The confirmation was never opened, so nothing is waiting on anybody.
-		expect(h.ui.titles()).toEqual([EFFORT_TITLE]);
+		// The confirmation was never opened, so nothing is waiting on anybody —
+		// and with the effort dial gone, no dialog was opened at all.
+		expect(h.ui.titles()).toEqual([]);
 	});
 
 	it("switches with the reason shown when no document comes back", async () => {
@@ -936,8 +970,7 @@ describe("the document the harness asks for", () => {
 		]);
 		const prompt = request?.systemPrompt ?? "";
 		expect(prompt).toContain(DESCRIPTION);
-		expect(prompt).toContain("effort standard");
-		expect(prompt).toContain("gates ship");
+		expect(prompt).toContain("gates none");
 		expect(prompt).toContain("publication pr onto `trunk`");
 		expect(prompt).toContain("not yours to write");
 		// The schema travels as JSON Schema, which is what TypeBox already is.
@@ -960,8 +993,7 @@ describe("the document the harness asks for", () => {
 			title: "Compose the catalogue",
 			repos: [{ key: "wf", path: REPO }],
 			policy: {
-				effort: "standard",
-				gates: "ship",
+				gates: "none",
 				publish: { mode: "pr", base: "trunk" },
 			},
 		});
@@ -1059,8 +1091,8 @@ describe("the plan check, which the harness answers itself", () => {
 		const outcome = await runExitFlow(h.deps);
 
 		expect(outcome.kind).toBe("started");
-		// Still two dialogs. THE PERSON IS NOT WALKED THROUGH THE FINDINGS.
-		expect(h.ui.titles()).toEqual([EFFORT_TITLE, h.confirmation()]);
+		// Still one dialog. THE PERSON IS NOT WALKED THROUGH THE FINDINGS.
+		expect(h.ui.titles()).toEqual([h.confirmation()]);
 		// Three requests: the description, the document, the rewrite — and the
 		// rewrite is the SAME mini-conversation, with the findings appended.
 		expect(h.model.requests.length).toBe(3);
@@ -1100,7 +1132,7 @@ describe("the plan check, which the harness answers itself", () => {
 
 		const outcome = await runExitFlow(h.deps);
 
-		expect(outcome).toMatchObject({ kind: "started", asked: 3 });
+		expect(outcome).toMatchObject({ kind: "started", asked: 2 });
 		// ONE extra dialog, and it carries only the finding a rewrite cannot
 		// answer — the other blocking finding is not asked about.
 		const asked = h.ui.titles().filter((t) => t.startsWith("The plan check"));
@@ -1316,17 +1348,24 @@ describe("a session replaced mid-request", () => {
 	});
 
 	it("believes the signal over a dialog that resolved like an escape", async () => {
+		// The first dialog this flow opens is the confirmation now that the effort
+		// dial is gone, so the abort lands on the one answer that starts a run —
+		// which is exactly where "escaped" and "the session went away" mean
+		// opposite things and the signal has to be what is believed.
 		const live = new AbortController();
 		const h = harness({
+			script: [DESCRIPTION, documentText()],
 			signal: live.signal,
 			answer: happyPath,
 			after: (opened) => {
-				if (opened.title === EFFORT_TITLE) live.abort();
+				if (opened.title.startsWith(START_TITLE)) live.abort();
 			},
 		});
 
 		expect(await runExitFlow(h.deps)).toEqual({ kind: "aborted" });
-		expect(h.model.requests).toEqual([]);
+		// The plan was stored before the confirmation and nothing was started.
+		expect(h.provider?.plansStarted()).toEqual([]);
+		expect(h.modes).toEqual([]);
 	});
 });
 
@@ -1368,13 +1407,19 @@ describe("authoring.json", () => {
 		expect(evidence.attempts[1]?.problems.join("\n")).toContain("nowhere");
 	});
 
-	it("maps effort to a level, and never below the session's own", () => {
-		expect(authoringThinking("cheap")).toBe("low");
-		expect(authoringThinking("standard")).toBe("medium");
-		expect(authoringThinking("deep")).toBe("high");
-		expect(authoringThinking("cheap", "high")).toBe("high");
-		expect(authoringThinking("deep", "low")).toBe("high");
-		expect(authoringThinking("standard", "max")).toBe("max");
+	// A FLOOR, NOT A DIAL. There used to be a map from `policy.effort`, so a person
+	// answering "how much effort should the run spend?" was also, invisibly,
+	// deciding how hard the plan itself was written. What is left is the level
+	// below which writing a whole plan document is not worth asking for, and the
+	// session's own answer whenever it is higher.
+	it("asks at the session's own level, and never below the floor", () => {
+		expect(AUTHORING_THINKING_FLOOR).toBe("medium");
+		expect(authoringThinking()).toBe("medium");
+		expect(authoringThinking("off")).toBe("medium");
+		expect(authoringThinking("low")).toBe("medium");
+		expect(authoringThinking("medium")).toBe("medium");
+		expect(authoringThinking("high")).toBe("high");
+		expect(authoringThinking("max")).toBe("max");
 	});
 });
 
@@ -1409,7 +1454,7 @@ describe("the one message the conversation gets", () => {
 		// v7: starting it WAS the approval, so what the conversation is told is
 		// where the run stops next, not where it will ask again.
 		expect(h.announced[1]?.content).toContain(
-			"it works through the plan and stops at its `ship` decision",
+			"it works through the plan and the pull request is published when it is done",
 		);
 		expect(h.announced[1]?.content).not.toContain("approve-plan");
 		// NOTHING ELSE reaches the conversation: the requests, the retries, the
@@ -1508,8 +1553,8 @@ describe("the run that does not start", () => {
 		// The check still ran: it needs no workflow runtime.
 		expect(h.check?.ran()).toBe(1);
 		// And the confirmation was never opened, because there is nothing to
-		// start.
-		expect(h.ui.titles()).toEqual([EFFORT_TITLE]);
+		// start — so no dialog was opened at all.
+		expect(h.ui.titles()).toEqual([]);
 	});
 
 	it("keeps the plan and takes the posture when the runtime refuses the start", async () => {
@@ -1577,7 +1622,6 @@ describe("what is recommended, and what escape takes", () => {
 		// by this test without anybody remembering to add it.
 		expect(tables.map(([name]) => name).sort()).toEqual([
 			"exit-flow.CHECK_OPTIONS",
-			"exit-flow.EFFORT_OPTIONS",
 			"exit-flow.START_OPTIONS",
 		]);
 		for (const [name, table] of tables) {
@@ -1606,11 +1650,15 @@ describe("what is recommended, and what escape takes", () => {
 		}
 	});
 
-	it("separates the two everywhere it matters, and joins them only on effort", () => {
+	// They used to be joined on exactly one table, the effort dial, where escaping
+	// to the recommended row took nothing away. That table is gone, so NO table
+	// here lets the likely answer and the safe answer be the same row — which is
+	// the stronger property, and the one every table was written for.
+	it("separates the two on every table there is", () => {
 		const both = optionTables({ "exit-flow": exitFlow }).filter(([, table]) =>
 			table.some((option) => option.recommended && option.escape),
 		);
-		expect(both.map(([name]) => name)).toEqual(["exit-flow.EFFORT_OPTIONS"]);
+		expect(both.map(([name]) => name)).toEqual([]);
 	});
 
 	it("never makes starting a run, or proceeding past a finding, the unanswered answer", () => {
@@ -1728,15 +1776,16 @@ describe("the controller that straddles the posture change", () => {
 describe("the two system prompts", () => {
 	it("say the model has no tools and starts nothing", () => {
 		const document = renderDocumentSystemPrompt(
-			{ effort: "deep", gates: "every-deliverable", publish: { mode: "none" } },
+			{ gates: "every-deliverable", publish: { mode: "none" } },
 			DESCRIPTION,
 		);
 		for (const prompt of [DESCRIPTION_SYSTEM_PROMPT, document]) {
 			expect(prompt).toContain("no tools");
 			expect(prompt).toContain("nothing you write starts anything");
 		}
-		// The document prompt keeps the facts the old steer carried.
-		expect(document).toContain("effort deep");
+		// The document prompt keeps the facts the old steer carried, minus the dial
+		// schema 8 removed.
+		expect(document).not.toContain("effort");
 		expect(document).toContain("gates every-deliverable");
 		expect(document).toContain("fresh context");
 		expect(document).toContain("`tasks` are the work");
@@ -1752,11 +1801,10 @@ describe("renderPlanSummary", () => {
 	it("names the work and who reads it, and derives no stages", () => {
 		const plan = JSON.parse(documentText()) as Plan;
 		const summary = renderPlanSummary(
-			{ ...plan, repos: [], policy: { effort: "cheap", gates: "ship" } },
-			"cheap",
+			{ ...plan, repos: [], policy: { gates: "ship" } },
 			FULLY_EQUIPPED,
 		);
-		expect(summary).toContain("effort cheap, gates ship");
+		expect(summary).toContain("2 deliverables, gates ship");
 		expect(summary).toContain("impl: Do the work");
 		expect(summary).toContain("read by contracts (tier standard)");
 		expect(summary).not.toContain("verify-and-fix");
@@ -1776,8 +1824,8 @@ describe("renderPlanSummary", () => {
 				],
 			}),
 		) as Plan;
-		expect(renderPlanSummary(plan, "standard", FULLY_EQUIPPED)).toContain(
-			"read by contracts (effort dial decides)",
+		expect(renderPlanSummary(plan, FULLY_EQUIPPED)).toContain(
+			"read by contracts (the plan's default tier)",
 		);
 	});
 });

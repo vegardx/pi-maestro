@@ -18,7 +18,10 @@ function fixture(files: Record<string, string>): string {
 		writeFileSync(path, text);
 	};
 	mkdirSync(join(dir, "packages"), { recursive: true });
-	write("README.md", "# fixture\n\nTools: `bash`, `delete`.\n");
+	write(
+		"README.md",
+		"# fixture\n\nTools: `bash`, `delete`, `plan_ship_dialog`.\n",
+	);
 	write("docs/usage.md", "# usage\n");
 	for (const [rel, text] of Object.entries(files)) write(rel, text);
 	return dir;

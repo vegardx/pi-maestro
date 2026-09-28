@@ -13,7 +13,10 @@
  *   2. Every user-facing LLM tool named in the modes package must be
  *      mentioned in the docs corpus.
  *   3. Dead vocabulary from replaced designs must not appear in the corpus
- *      (the group model, model slots/presets, the removed ask mode).
+ *      (the group model, model slots/presets). `ask mode` was banned here while
+ *      there were three modes; ask came back — it is the posture whose plan run
+ *      parks at its ship decision — so the entry is gone rather than enforcing
+ *      the interregnum.
  *   4. Relative markdown links in the corpus must resolve to real files.
  *   5. No skill or current-state doc may name a `skills/<name>` directory
  *      this package does not ship, or any identifier from the fiction
@@ -123,7 +126,7 @@ for (const [name, where] of [...claimed].sort()) {
 // `subagent` all ceased to exist — it only checks that each name APPEARS in the
 // docs, never that the name is real. Deriving it from `ToolRegistry` would fix
 // that; until then, this list has to be updated by hand when the surface moves.
-const TOOLS = ["bash", "delete"];
+const TOOLS = ["bash", "delete", "plan_ship_dialog"];
 for (const tool of TOOLS) {
 	const re = new RegExp(`\`${tool}[\`( ]`);
 	if (!re.test(corpusText)) {
@@ -135,7 +138,10 @@ for (const tool of TOOLS) {
 // `delegates` was once banned here, then unbanned when a tool briefly carried
 // the name `delegate` — which is now renamed `subagent`, the word this system
 // always meant. A dead vocabulary list has to be pruned when the vocabulary
-// changes, or it starts enforcing the past.
+// changes, or it starts enforcing the past. `ask mode` is the second entry this
+// happened to: it was banned as a removed posture, and `ask` is now one of four
+// — the one whose plan run parks at its ship decision — so the docs have to be
+// able to say so.
 const BANNED = [
 	[/\bWorkGroup\b/, "WorkGroup (renamed to Deliverable)"],
 	[/\bGroupExecutor\b/, "GroupExecutor (now DeliverableExecutor)"],
@@ -145,7 +151,6 @@ const BANNED = [
 	[/\balternate slot\b/i, "model slots (replaced by tiers/profiles)"],
 	[/\bslot="/, "slot= param (replaced by tiers/profiles)"],
 	[/"profiles"/, '"profiles" config key (replaced by exact "presets")'],
-	[/\bask mode\b/i, "ask mode (removed; modes are hack/plan/auto)"],
 ];
 for (const [file, text] of corpus) {
 	for (const [re, why] of BANNED) {

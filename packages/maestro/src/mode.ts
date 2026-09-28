@@ -1,12 +1,23 @@
-// Modes: two properties, and everything else follows.
+// Modes: three properties, and everything else follows.
 //
 // A mode used to be a name with a bag of behaviour behind it, and every new
 // question ("can it delegate here?", "does bash get classified?") was answered
 // by adding another field to the bag. So the answers drifted from each other.
 //
-// Here a mode is exactly two facts — may the session touch the working tree,
-// and are the safeguards on — and the names are just the three coherent
-// combinations of those facts. Delegation is derived. Nothing is stored twice.
+// Here a mode is exactly three facts — may the session touch the working tree,
+// are the safeguards on, and what happens at the end of a plan run it started —
+// and the names are just the four coherent combinations of those facts.
+// Delegation and the run's gate policy are derived. Nothing is stored twice.
+//
+// THE THIRD FACT IS WHAT BROUGHT `ask` BACK. `ask` and `auto` are the same
+// permissions: both write the tree, both keep the safeguards on, both bound a
+// delegation to a worktree. They differ in one thing only — whether the run
+// parks at its ship gate and asks, or publishes the moment it is done — and that
+// difference used to be a special case beside the table. It is a column now, so
+// the derivation stays a table and a fifth mode cannot be added without
+// answering all three questions.
+
+import type { PlanGates } from "./plan.js";
 
 /** May this session change the tree it is sitting in? */
 export type CwdAccess = "read" | "write";
@@ -20,7 +31,20 @@ export type CwdAccess = "read" | "write";
  */
 export type Safeguards = "on" | "reduced";
 
-export const MODE_NAMES = ["plan", "auto", "hack"] as const;
+/**
+ * What happens at the end of a plan run started from this mode.
+ *
+ *   - `ask`  — the run parks at its ship gate and the session asks, in a dialog,
+ *     with the gate's inputs rendered.
+ *   - `auto` — the run has no ship gate; it completes and the seat publishes the
+ *     pull request immediately. Leaving plan mode to `auto` IS the approval for
+ *     publication, and there is no second question.
+ *   - `none` — this mode forms no plan run at all. `plan` is where a plan is
+ *     written and `hack` is the escape hatch; neither decides an end.
+ */
+export type Publication = "ask" | "auto" | "none";
+
+export const MODE_NAMES = ["plan", "ask", "auto", "hack"] as const;
 export type ModeName = (typeof MODE_NAMES)[number];
 
 /**
@@ -30,7 +54,7 @@ export type ModeName = (typeof MODE_NAMES)[number];
  * `plan` is the one mode an exit can never be heading *for*: the exit starts
  * in plan mode and its whole point is leaving it, eventually.
  */
-export const EXIT_MODES = ["auto", "hack"] as const;
+export const EXIT_MODES = ["ask", "auto", "hack"] as const;
 
 export type ExitMode = (typeof EXIT_MODES)[number];
 
@@ -42,19 +66,26 @@ export interface Mode {
 	readonly name: ModeName;
 	readonly cwd: CwdAccess;
 	readonly safeguards: Safeguards;
+	readonly publication: Publication;
 }
 
 /**
- * Three modes, because there are only three coherent combinations.
+ * Four modes, because there are only four coherent combinations.
  *
  * `read` + reduced safeguards is missing on purpose: a read-oriented posture
  * must retain its mutation refusals. Hack reduces ordinary steering while its
  * explicit policy may still confirm privileged or destructive effects.
+ *
+ * And `write` + safeguards on is TWO modes, not one, because the third fact
+ * splits it: `ask` and `auto` are the same permissions and different endings.
+ * A publication answer on `plan` or `hack` would be a promise about a run
+ * neither of them forms.
  */
 const MODES: readonly Mode[] = [
-	{ name: "plan", cwd: "read", safeguards: "on" },
-	{ name: "auto", cwd: "write", safeguards: "on" },
-	{ name: "hack", cwd: "write", safeguards: "reduced" },
+	{ name: "plan", cwd: "read", safeguards: "on", publication: "none" },
+	{ name: "ask", cwd: "write", safeguards: "on", publication: "ask" },
+	{ name: "auto", cwd: "write", safeguards: "on", publication: "auto" },
+	{ name: "hack", cwd: "write", safeguards: "reduced", publication: "none" },
 ];
 
 export function mode(name: ModeName): Mode {
@@ -63,16 +94,74 @@ export function mode(name: ModeName): Mode {
 	return found;
 }
 
-/** The mode these two facts describe, or `null` if they describe none. */
-export function modeOf(cwd: CwdAccess, safeguards: Safeguards): Mode | null {
+/** The mode these three facts describe, or `null` if they describe none. */
+export function modeOf(
+	cwd: CwdAccess,
+	safeguards: Safeguards,
+	publication: Publication,
+): Mode | null {
 	return (
-		MODES.find((m) => m.cwd === cwd && m.safeguards === safeguards) ?? null
+		MODES.find(
+			(m) =>
+				m.cwd === cwd &&
+				m.safeguards === safeguards &&
+				m.publication === publication,
+		) ?? null
 	);
 }
 
 export function modes(): readonly Mode[] {
 	return MODES;
 }
+
+/**
+ * The exit modes that FORM A PLAN RUN, which is not all of them.
+ *
+ * `hack` is an exit and is not a hand-off: leaving plan mode to it only switches.
+ * Written as a filter over the table rather than as a second list, so the fact
+ * that decides it — `publication` — is the only place the answer lives.
+ */
+export const PLAN_EXIT_MODES = EXIT_MODES.filter(
+	(name) => mode(name).publication !== "none",
+) as readonly Extract<ExitMode, "ask" | "auto">[];
+
+export type PlanExitMode = (typeof PLAN_EXIT_MODES)[number];
+
+export function isPlanExitMode(value: unknown): value is PlanExitMode {
+	return (PLAN_EXIT_MODES as readonly unknown[]).includes(value);
+}
+
+// ── What the mode decides about the end of a run ─────────────────────────────
+
+/**
+ * The gate policy a run started from this mode is given, or `undefined`.
+ *
+ * DERIVED FROM THE PUBLICATION FACT, in one place, because three callers ask it
+ * — the plan-mode hand-off, `/plan run`, and the docs that describe them — and
+ * three copies of "which mode ships by itself" is exactly how the effort dial
+ * outlived every surface that mentioned it.
+ *
+ *   - **ask** → `ship`. The run works through the plan and stops at its ship
+ *     decision, which the session then asks in a dialog.
+ *   - **auto** → `none`. No ship gate: the run completes, its terminal output
+ *     carries the same receipt and the same ship-gate inputs, and the seat
+ *     publishes.
+ *   - **plan**, **hack** → `undefined`. Neither forms a run, so neither has an
+ *     end to decide, and a caller asked to start one from here refuses by name
+ *     rather than picking a policy nobody chose.
+ */
+export function planGatesFor(name: PlanExitMode): PlanGates;
+export function planGatesFor(name: ModeName): PlanGates | undefined;
+export function planGatesFor(name: ModeName): PlanGates | undefined {
+	const posture = mode(name);
+	if (posture.publication === "ask") return "ship";
+	if (posture.publication === "auto") return "none";
+	return undefined;
+}
+
+/** What a caller is told when the mode it is standing in decides no ending. */
+export const NO_GATES_REFUSAL =
+	"start it from ask or auto: ask parks the run at its ship decision and this session asks you, auto publishes the pull request when the run is done";
 
 // ── The ceiling a mode is ────────────────────────────────────────────────────
 //
@@ -83,8 +172,8 @@ export function modes(): readonly Mode[] {
 // them disagreed. So the bound travels in pi-subagent's OWN vocabulary instead:
 // workspace modes and tool names, stated once, here, at the translation point.
 //
-// No mode name crosses this line. `plan`, `auto` and `hack` are words this
-// repository uses about itself.
+// No mode name crosses this line. `plan`, `ask`, `auto` and `hack` are words
+// this repository uses about itself.
 
 /** A workspace pi-subagent knows how to give a delegated attempt. */
 export type WorkspaceMode = "read-only" | "worktree";
@@ -106,13 +195,14 @@ export interface DelegationCeiling {
  *
  * Derived from the mode's `cwd` fact rather than written out per name, because
  * "may this session change a tree?" and "may something it launches?" are the
- * same question asked one level down — and a fourth mode could not be added
- * without answering it.
+ * same question asked one level down — and the fourth mode was added without
+ * answering it again.
  *
  *   - **plan** — read-only. A delegation from a conversation reads; it does not
  *     produce work.
- *   - **auto** — read-only or a worktree. Work happens in a worktree, never in
- *     the tree the person is sitting in.
+ *   - **ask**, **auto** — read-only or a worktree. Work happens in a worktree,
+ *     never in the tree the person is sitting in. The two postures differ in
+ *     what happens when the run is over, which is not a permission.
  *   - **hack** — no ceiling. The posture whose whole meaning is that the
  *     restrictions are off does not get to keep one here.
  *

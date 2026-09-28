@@ -103,6 +103,12 @@ function clientStub(
 		runs: async () => ({ runs: [] }),
 		observe: () => () => {},
 		startBuiltin: async () => ({ runId: "r" }),
+		// Revision 22: the seat's three dialogs ARE these three calls, so a client
+		// without one is refused at discovery rather than found wanting inside the
+		// dialog that needed it.
+		decide: async () => ({}),
+		resume: async () => ({}),
+		stop: async () => ({}),
 		...overrides,
 	};
 }
@@ -195,6 +201,34 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 		expect(why).toContain("serviceProviderStart");
 		expect(why).not.toMatch(/not a pi-workflow/);
 		expect(isCompatibleWorkflowContract(without)).toBe(false);
+	});
+
+	// Revision 22, and the same argument one level along: the seat's three dialogs
+	// ARE `decide`, `resume` and `stop`, and the gate's inputs are what
+	// `include: ["checkpoints"]` returns. A runtime without the feature leaves the
+	// ship decision, the retry/stop offer and the gate's own rendering with nothing
+	// to do — which is why it is required rather than degraded around. It was
+	// duck-typed while it did not exist, and a duck-typed method is one nothing
+	// refuses the absence of.
+	it("requires `serviceProviderDecide`, because the dialogs are those calls", () => {
+		expect(REQUIRED_WORKFLOW_FEATURES).toContain("serviceProviderDecide");
+		expect(shipped.features.serviceProviderDecide).toBe(true);
+
+		const without = structuredClone(shipped);
+		delete without.features.serviceProviderDecide;
+		const why = workflowContractMismatch(without);
+		expect(why).toContain("serviceProviderDecide");
+		expect(why).not.toMatch(/not a pi-workflow/);
+		expect(isCompatibleWorkflowContract(without)).toBe(false);
+	});
+
+	// The fixture is pi-workflow's own constant, so this is the cross-repo pin: the
+	// revision this seat was written against, and the pi-subagent revision that
+	// runtime needs, both read off the copy rather than restated.
+	it("is pinned to revision 22, over pi-subagent revision 9", () => {
+		expect(shipped.contractRevision).toBe(22);
+		expect(shipped.requiredSubagent.contractRevision).toBe(9);
+		expect(shipped.requiredSubagent.features.sessionModelInherit).toBe(true);
 	});
 });
 
@@ -424,7 +458,23 @@ describe("startBuiltin, the plan's own run", () => {
 		});
 	});
 
-	it("starts `plan-to-ship` with the input and effort it is given", async () => {
+	// Every method the seat calls, and each of them alone: a client missing one is
+	// refused at discovery, which is the difference between a required method and a
+	// duck-typed one.
+	it.each(["decide", "resume", "stop"] as const)(
+		"refuses a client with no `%s`",
+		async (method) => {
+			const bus = createFakeBus();
+			const client = clientStub();
+			delete client[method];
+			register(bus, providerStub({ client }));
+			await expect(acquireWorkflowClient(bus, {})).rejects.toMatchObject({
+				code: "incompatible",
+			});
+		},
+	);
+
+	it("starts `plan-to-ship` with the input, and nothing beside it", async () => {
 		const bus = createFakeBus();
 		const seen: unknown[] = [];
 		register(

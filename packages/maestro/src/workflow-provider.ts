@@ -17,11 +17,20 @@
  * for the runtime contract, with a checked-in fixture proving the copy still
  * matches the original.
  *
- * What crosses the seam is narrow on purpose: read, validate, project,
- * observe, and start the one plan workflow a person has just said yes to.
- * There is no `decide`, `stop` or general `run` here: the one start is
- * allowlisted by name inside the runtime, and every other way of starting a
- * workflow is still a tool call in the open, in the transcript.
+ * What crosses the seam is narrow on purpose: read, validate, project, observe,
+ * start the one plan workflow a person has just said yes to, and — since
+ * revision 22 — record what a person answered about a run this seat is already
+ * watching. There is still no general `run` here: the one start is allowlisted by
+ * name inside the runtime, and every other way of starting a workflow is a tool
+ * call in the open, in the transcript.
+ *
+ * **`decide`, `resume` and `stop` are the three dialogs, not three new powers.**
+ * Each of them is a person answering in a dialog this seat owns — the ship
+ * decision, and the retry/stop offer a failure raises — and pi-workflow records
+ * `source: "service-provider"` on the decision itself, which it sets rather than
+ * accepting from here. So the run's own journal says a host's dialog decided it,
+ * and a publication downstream still proves `{"ship": true}` from the checkpoint
+ * rather than from anything this seat claims.
  *
  * **`startBuiltin` is the seat acting, never the model.** It starts
  * `plan-to-ship`, which writes to worktrees, and the seat may call it because a
@@ -230,6 +239,78 @@ export interface WorkflowReadClient {
 			readonly ceiling?: DelegationCeiling;
 		},
 	): Promise<WorkflowStartReceiptView>;
+	/**
+	 * Records a person's answer to one checkpoint and restarts the parked drive.
+	 *
+	 * `taskKey` is what narration shows — `ship`, `approve-<d>`, or
+	 * `<namespace>/<key>` inside a fan-out — and a task id is accepted too, so a
+	 * host that already read one from `inspect` need not translate it. A key that
+	 * names no awaiting checkpoint, or more than one, is refused by name.
+	 *
+	 * THE SOURCE IS NOT THIS CALLER'S TO CLAIM. pi-workflow sets
+	 * `source: "service-provider"` itself, so a decision that reached this method
+	 * is recorded as having reached it from the host's own dialog — which is the
+	 * whole of this seat's authority over it, and evidence rather than a licence.
+	 * `approver` is required, and this seat names the dialog that asked.
+	 */
+	decide(
+		runId: string,
+		taskKey: string,
+		options: WorkflowDecideOptionsView,
+	): Promise<unknown>;
+	/**
+	 * Re-attempts ONE failed or interrupted task on its existing subagent run,
+	 * without invalidating its dependents.
+	 *
+	 * `taskId` is required, which is why the failure dialog offers a retry only for
+	 * a failure that named a task: there is no such thing as resuming "the run".
+	 * A task the run cannot re-attempt is refused by name — see
+	 * {@link WORKFLOW_NOT_RESUMABLE}.
+	 */
+	resume(runId: string, options: { readonly taskId: string }): Promise<unknown>;
+	/**
+	 * Cancels the run. Every handoff already captured survives — the runtime never
+	 * applies one — and nothing new is launched.
+	 */
+	stop(runId: string): Promise<unknown>;
+}
+
+/**
+ * `WorkflowDecideOptions`, narrowed to what this seat sends.
+ *
+ * `source` is absent on purpose: the client sets it. `reason` is what a person
+ * typed, when they typed one.
+ */
+export interface WorkflowDecideOptionsView {
+	/** Validated against the checkpoint's own schema by the executor. */
+	readonly decision: unknown;
+	readonly approver: string;
+	readonly reason?: string;
+}
+
+/**
+ * pi-workflow's `NOT_RESUMABLE_MESSAGE`, mirrored so a caller can recognise it.
+ *
+ * Mirrored rather than imported for the same reason everything else in this file
+ * is: the package is an optional peer and not on npm. It is a fixed string in
+ * pi-workflow, so a copy that drifted would stop matching rather than start
+ * lying — and the failure dialog reports the runtime's own message either way.
+ */
+export const WORKFLOW_NOT_RESUMABLE =
+	"Workflow task is not resumable on this run.";
+
+/**
+ * pi-workflow's refusal for a definition that inherits the session model on a
+ * host that registered no provider.
+ *
+ * `plan-to-ship` declares `needs: {workspace: "worktree", sessionModel: true}`,
+ * so a start from a seat that failed to register one is refused BEFORE any run
+ * exists. Mirrored here so the start path can say what to do about it — the seat
+ * registers the provider at load, and this sentence appearing means that
+ * registration lost to another extension.
+ */
+export function sessionModelRefusal(ref: string): string {
+	return `${ref} inherits the session model, and this host has none.`;
 }
 
 /**
@@ -258,6 +339,13 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
  * switching, so the bound that matters is `modeCeiling(deps.wanted)` — the mode
  * being switched TO — which this seat computes itself and passes explicitly.
  * Showing the host's answer beside the confirmation would show the wrong bound.
+ *
+ * `decide`, `resume` and `stop` joined at revision 22 because the seat's three
+ * dialogs call them. They were duck-typed off the client while the read client
+ * did not have them, and a duck-typed method is a method nothing refuses the
+ * absence of — so a runtime missing one would have degraded silently into the
+ * dialog that needs it. They are required now, and `serviceProviderDecide` in
+ * `REQUIRED_WORKFLOW_FEATURES` is the same statement made about the contract.
  */
 const CLIENT_METHODS = [
 	"list",
@@ -267,6 +355,9 @@ const CLIENT_METHODS = [
 	"runs",
 	"observe",
 	"startBuiltin",
+	"decide",
+	"resume",
+	"stop",
 ] as const satisfies readonly (keyof WorkflowReadClient)[];
 
 /** The provider object pi-workflow registers. */
@@ -352,10 +443,35 @@ export function classifyWorkflowFailure(
 	return "acquisition";
 }
 
+/**
+ * The hint for the one refusal `/plan run` cannot answer.
+ *
+ * Every other failure on this seam leaves the stored plan and `/plan run` as the
+ * way through, which is why there is normally ONE fallback sentence. A definition
+ * that inherits the session model is refused on a host with no provider wherever
+ * the start came from, so pointing at `/plan run` would be pointing at the same
+ * refusal — and the thing to do about it is about this seat's registration, not
+ * about the run.
+ */
+export const SESSION_MODEL_HINT =
+	"This seat registers the session model at load, so this means something else" +
+	" registered one first — pi-subagent allows exactly one provider per process." +
+	" Unload the other extension, or start the run from a session where this seat" +
+	" registered first.";
+
 /** The warning text for a failure, naming the fallback. */
 export function workflowProviderWarning(error: unknown): string {
 	const code = classifyWorkflowFailure(error);
-	return `Workflow runtime unavailable (${code}): ${messageOf(error)} ${WORKFLOW_FALLBACK_HINT}`;
+	const message = messageOf(error);
+	// The runtime's own sentence, recognised by its tail rather than rebuilt: the
+	// definition's name is in it and this seat starts exactly one definition, so
+	// matching the whole sentence would be matching a name it already knows.
+	const hint = message.includes(
+		"inherits the session model, and this host has none",
+	)
+		? SESSION_MODEL_HINT
+		: WORKFLOW_FALLBACK_HINT;
+	return `Workflow runtime unavailable (${code}): ${message} ${hint}`;
 }
 
 /** Just enough of `ExtensionUIContext` to report, so tests pass a fake. */

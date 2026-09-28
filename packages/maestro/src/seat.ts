@@ -15,8 +15,26 @@ import {
 } from "./execution-policy.js";
 import { type Mode, type ModeName, mode } from "./mode.js";
 import type { PlanHostPort } from "./plan.js";
+import {
+	createShipDialogTool,
+	type ShipDialogPort,
+} from "./ship-dialog-tool.js";
 import { createPlanStore, type PlanStore } from "./store.js";
 import { ToolRegistry } from "./tool-registry.js";
+
+/**
+ * A seat with nothing parked, which is every seat until a run reaches a gate.
+ *
+ * The tool is DECLARED UNCONDITIONALLY and gated by `available`, so the registry
+ * has one shape on every host: a seat with no workflow runtime simply never has
+ * anything parked, and that is the same answer the predicate gives while a run is
+ * still working. A tool that appeared and disappeared from the declaration would
+ * be a second place the rule lives.
+ */
+const NOTHING_PARKED_PORT: ShipDialogPort = {
+	parked: () => false,
+	open: () => undefined,
+};
 
 export interface SeatOptions {
 	readonly cwd?: string;
@@ -39,6 +57,14 @@ export interface SeatOptions {
 	 * does not exist when the seat is built, and the seat must not invent one.
 	 */
 	readonly sessionId?: () => string | undefined;
+	/**
+	 * What `plan_ship_dialog` opens, and when it may be called at all.
+	 *
+	 * Injected because the seat does not know which runs are parked — the
+	 * extension does, from the narrator that watches them. A seat built without
+	 * one still declares the tool and never offers it.
+	 */
+	readonly shipDialog?: ShipDialogPort;
 }
 
 /** The small, human-driven surface that remains after the workflow cutover. */
@@ -65,6 +91,7 @@ export function createSeat(options: SeatOptions = {}): Seat {
 	const policy = (): ExecutionPolicySettings =>
 		readExecutionPolicySettings(cwd, options.agentDir);
 
+	const shipDialog = options.shipDialog ?? NOTHING_PARKED_PORT;
 	const tools = ToolRegistry.declare([
 		{
 			definition: createBashTool({
@@ -75,6 +102,14 @@ export function createSeat(options: SeatOptions = {}): Seat {
 			holders: ["maestro"],
 		},
 		{ definition: createDeleteTool(), holders: ["maestro"] },
+		{
+			definition: createShipDialogTool(shipDialog),
+			holders: ["maestro"],
+			// Read at call time, which is the whole point: "a run of this session is
+			// parked at a ship decision" moves while the session runs, and a cached
+			// answer would be the second place it lived.
+			available: () => shipDialog.parked(),
+		},
 	]);
 
 	return {

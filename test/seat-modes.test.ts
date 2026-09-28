@@ -49,7 +49,18 @@ function seatOptions() {
 }
 
 /** Every tool the seat declares, in every posture. */
-const SEAT_TOOLS = ["bash", "delete"] as const;
+/** Every tool the seat declares, in declaration order. */
+const SEAT_TOOLS = ["bash", "delete", "plan_ship_dialog"] as const;
+
+/**
+ * The tools a seat with nothing parked actually OFFERS.
+ *
+ * `plan_ship_dialog` is declared always and available only while a run of this
+ * session is parked at a ship decision, which is what keeps the rule its own
+ * description claims in one place instead of two. A seat built without a
+ * ship-dialog port never has anything parked, so it never offers it.
+ */
+const OFFERED_TOOLS = ["bash", "delete"] as const;
 
 /**
  * A host that keeps a live tool set, the way Pi does: `registerTool` has no
@@ -170,17 +181,39 @@ describe("the host answers for the store", () => {
 });
 
 describe("the seat's tools, by mode", () => {
-	it("holds the same two in every posture", () => {
+	it("holds the same set in every posture, including ask", () => {
 		const seat = createSeat(seatOptions());
 
 		expect(seat.mode().name).toBe("plan");
-		for (const name of ["plan", "auto", "hack"] as const) {
+		for (const name of MODE_NAMES) {
 			seat.setMode(name);
 			expect([name, seat.tools.grantsFor("maestro")]).toEqual([
 				name,
-				[...SEAT_TOOLS],
+				[...OFFERED_TOOLS],
 			]);
 		}
+	});
+
+	// The ship dialog is the one tool whose availability moves, and what moves it
+	// is not the posture: it is whether a run of this session is parked at a ship
+	// decision. So it is offered in plan mode too — a run started from ask and then
+	// re-planned is still parked — and withdrawn again the moment nothing is.
+	it("offers the ship dialog exactly while something is parked", () => {
+		let parked = false;
+		const seat = createSeat({
+			...seatOptions(),
+			shipDialog: {
+				parked: () => parked,
+				open: () => ({ slug: "arc", runId: "wfr-1" }),
+			},
+		});
+		const offered = () =>
+			seat.tools.definitionsFor("maestro").map(({ name }) => name);
+		expect(offered()).toEqual([...OFFERED_TOOLS]);
+		parked = true;
+		expect(offered()).toEqual([...SEAT_TOOLS]);
+		parked = false;
+		expect(offered()).toEqual([...OFFERED_TOOLS]);
 	});
 
 	it("says the same thing through every door the registry has", () => {
@@ -192,10 +225,14 @@ describe("the seat's tools, by mode", () => {
 			names: [...seat.tools.names()],
 		});
 
+		// `declared` and `names` are the static half — which postures may ever hold
+		// which tool — and `definitions` is the moving half, read through each
+		// declaration's own `available`. The ship dialog is the one place the two
+		// differ, and it differs on purpose.
 		const expected = {
-			grants: [...SEAT_TOOLS],
+			grants: [...OFFERED_TOOLS],
 			declared: [...SEAT_TOOLS],
-			definitions: [...SEAT_TOOLS],
+			definitions: [...OFFERED_TOOLS],
 			names: [...SEAT_TOOLS],
 		};
 		expect(doors()).toEqual(expected);
@@ -234,18 +271,18 @@ describe("Pi's live tool set", () => {
 
 		// Loading registers and touches nothing else: the live set is Pi's until
 		// the runtime is bound, and reading it before then throws.
-		expect(h.registered).toEqual([...SEAT_TOOLS]);
+		expect(h.registered).toEqual([...OFFERED_TOOLS]);
 		h.bind();
 		expect(h.active()).toEqual(["read", "workflow_run"]);
 		entry.runtimeBound();
-		expect(h.active()).toEqual(["read", "workflow_run", ...SEAT_TOOLS]);
+		expect(h.active()).toEqual(["read", "workflow_run", ...OFFERED_TOOLS]);
 
 		for (const mode of ["auto", "plan", "hack", "plan"] as const) {
 			await h.mode(mode);
-			expect([mode, h.registered]).toEqual([mode, [...SEAT_TOOLS]]);
+			expect([mode, h.registered]).toEqual([mode, [...OFFERED_TOOLS]]);
 			expect([mode, h.active()]).toEqual([
 				mode,
-				["read", "workflow_run", ...SEAT_TOOLS],
+				["read", "workflow_run", ...OFFERED_TOOLS],
 			]);
 		}
 	});
@@ -355,11 +392,11 @@ describe("Pi's live tool set", () => {
 		const h = host();
 		const entry = startSeat(h.pi, seatOptions());
 		expect(() => entry.seat()).not.toThrow();
-		expect(h.registered).toEqual([...SEAT_TOOLS]);
+		expect(h.registered).toEqual([...OFFERED_TOOLS]);
 		await h.mode("auto");
 		h.bind();
 		entry.runtimeBound();
-		expect(h.active()).toEqual(["read", "workflow_run", ...SEAT_TOOLS]);
+		expect(h.active()).toEqual(["read", "workflow_run", ...OFFERED_TOOLS]);
 	});
 
 	it("still hands a host without a live tool set what it can hold", async () => {
@@ -378,9 +415,9 @@ describe("Pi's live tool set", () => {
 		};
 		const entry = startSeat(pi, seatOptions());
 		entry.seat();
-		expect(registered).toEqual([...SEAT_TOOLS]);
+		expect(registered).toEqual([...OFFERED_TOOLS]);
 		await commands.get("mode")?.handler("auto", { ui: { notify() {} } });
-		expect(registered).toEqual([...SEAT_TOOLS]);
+		expect(registered).toEqual([...OFFERED_TOOLS]);
 	});
 });
 

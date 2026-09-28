@@ -7,6 +7,17 @@ import { defineExtension } from "@vegardx/pi-core";
 import { type AuthoringComplete, createSessionAuthor } from "./authoring.js";
 import { createAuditedBash } from "./bash-tool.js";
 import {
+	askFailure,
+	askShip,
+	autoPublish,
+	createDecideDialogs,
+	DECISION_MESSAGE_TYPE,
+	type DecideDeps,
+	decideSeam,
+	readShipGate,
+	type ShipGateView,
+} from "./decide.js";
+import {
 	type Announce,
 	beginModeExit,
 	createDialogGate,
@@ -16,9 +27,19 @@ import {
 	type ModeExitContext,
 	type ModeExitHook,
 } from "./exit-flow.js";
-import { MODE_NAMES, type ModeName, modeCeiling } from "./mode.js";
-import { createRunNarrator, type RunNarrator } from "./narrate.js";
-import { inspectPlan, type Plan, type PlanHostPort } from "./plan.js";
+import { MODE_NAMES, type Mode, type ModeName, modeCeiling } from "./mode.js";
+import {
+	createRunNarrator,
+	type Narration,
+	type RunNarrator,
+} from "./narrate.js";
+import {
+	inspectPlan,
+	type Plan,
+	type PlanGates,
+	type PlanHostPort,
+	resolvePolicy,
+} from "./plan.js";
 import {
 	createPlanCommand,
 	PLAN_WORKFLOW_REF,
@@ -28,6 +49,7 @@ import { planHostPort } from "./plan-host.js";
 import { planDigest, type WorkflowInput } from "./plan-input.js";
 import {
 	gatedPublishUI,
+	INSPECT_SECTIONS,
 	isWorkflowShipped,
 	type Publication,
 	shipPlan,
@@ -38,6 +60,7 @@ import { createSeat, type Seat } from "./seat.js";
 import {
 	createSubagentPlanCheck,
 	registerModeCeiling,
+	registerSessionModelFor,
 } from "./subagent-provider.js";
 import {
 	acquireWorkflowClient,
@@ -55,6 +78,20 @@ import {
 export { beginModeExit, type ModeExitHook };
 
 const DIRECT_MUTATION_TOOLS = new Set(["write", "edit", "delete"]);
+
+/**
+ * What the `/mode` notice says the posture does at the end of a plan run.
+ *
+ * The third fact, in the sentence a person reads when they switch. `ask` and
+ * `auto` are otherwise indistinguishable in that notice — same `cwd`, same
+ * safeguards — and a person told only those two things about the mode they just
+ * chose has been told nothing about the only way the two differ.
+ */
+const MODE_ENDING: Readonly<Record<Mode["publication"], string>> = {
+	ask: "a plan run parks at its ship decision and this session asks you",
+	auto: "a plan run publishes the pull request when it is done",
+	none: "no plan run is formed from here",
+};
 
 /**
  * Why a tool call cannot happen in this posture, or nothing.
@@ -104,7 +141,11 @@ export interface SeatHost {
 			content: string;
 			display: boolean;
 		},
-		options?: { deliverAs?: "steer" | "followUp" | "nextTurn" },
+		options?: {
+			deliverAs?: "steer" | "followUp" | "nextTurn";
+			/** Make the next turn happen now rather than when the person types. */
+			triggerTurn?: true;
+		},
 	): void;
 	/**
 	 * Pi's live tool set. Optional as a pair: `registerTool` has no inverse, so
@@ -152,6 +193,16 @@ export interface StartSeatOptions {
 	 * command still knows who is writing.
 	 */
 	readonly sessionId?: () => string | undefined;
+	/**
+	 * The live session, as the thing the decisions need: a UI to ask in and a
+	 * context to publish under.
+	 *
+	 * A bus listener and an `observe` callback both arrive without one, and the
+	 * ship dialog, the failure dialog and auto publication all have to open a
+	 * dialog in whatever session is live. Injected for the same reason `host` and
+	 * `sessionId` are: the seat is built before any session exists.
+	 */
+	readonly live?: () => ExtensionContext | undefined;
 }
 
 export interface SeatEntry {
@@ -183,6 +234,16 @@ export interface SeatEntry {
 		runId?: string,
 		options?: PublishOptions,
 	): Promise<Publication>;
+	/**
+	 * Does this seat publish this run by itself when it completes?
+	 *
+	 * True for a run this seat started whose plan is gated `"none"` — mode
+	 * `auto`'s answer. The ship watcher asks it so that it stays silent about a
+	 * run with no `ship` checkpoint to prove anything: those are the runs the seat
+	 * is publishing itself, and a warning naming `/plan ship` about one would be
+	 * the seat arguing with itself.
+	 */
+	publishesItself(runId: string): boolean;
 	/**
 	 * Narrate the runs this seat started, through an acquired client.
 	 *
@@ -240,10 +301,31 @@ export function startSeat(
 	 * failed to narrate would be exactly the silence narration exists to end.
 	 */
 	const started = new Map<string, string>();
+	/**
+	 * Runs parked at their ship decision RIGHT NOW, by id.
+	 *
+	 * The moving half of what `plan_ship_dialog` is allowed to do. A run enters
+	 * when its `ship` gate arrives and leaves when the dialog it opened settles,
+	 * so "is a run of this session parked?" is one lookup rather than a second
+	 * reading of somebody's journal.
+	 */
+	const parked = new Map<string, string>();
 	let narrator: RunNarrator | undefined;
 	const follow = (runId: string, slug: string): void => {
 		started.set(runId, slug);
 		narrator?.follow(runId, slug);
+	};
+	/** The gate policy of a run this seat started, from its stored plan. */
+	const gatesOf = (runId: string): PlanGates | undefined => {
+		const slug = started.get(runId);
+		if (!slug) return undefined;
+		try {
+			const plan = seat().store.loadPlan(slug);
+			return plan ? resolvePolicy(plan.policy).gates : undefined;
+		} catch {
+			// One unreadable plan is not a reason to stop narrating its run.
+			return undefined;
+		}
 	};
 	/**
 	 * What the conversation is told, and the only thing it is told.
@@ -263,6 +345,21 @@ export function startSeat(
 				);
 			}
 		: undefined;
+	/**
+	 * One custom message into the conversation, WITH a turn.
+	 *
+	 * The decisions' own channel, separate from `maestro:plan` and
+	 * `maestro:progress` because it is a different kind of event: a pull request
+	 * that exists, or a run to plan again from. Each of them is something the
+	 * model has to say a sentence about now, not a fact for whenever the person
+	 * next types.
+	 */
+	const say = (content: string): void => {
+		pi.sendMessage?.(
+			{ customType: DECISION_MESSAGE_TYPE, content, display: true },
+			{ deliverAs: "nextTurn", triggerTurn: true },
+		);
+	};
 	const exit = createModeExitController({
 		setMode: (name) => {
 			seat().setMode(name);
@@ -351,6 +448,7 @@ export function startSeat(
 		if (built) return built;
 		const created = createSeat({
 			cwd,
+			shipDialog,
 			sessionId: () => options.sessionId?.() ?? sessionId,
 			...(options.agentDir ? { agentDir: options.agentDir } : {}),
 			...(options.host ? { host: options.host } : {}),
@@ -403,7 +501,7 @@ export function startSeat(
 					? seat().mode()
 					: seat().setMode(wanted as ModeName);
 			ctx.ui.notify(
-				`Mode ${next.name}: ${next.cwd === "write" ? "can write" : "read-only"}, safeguards ${next.safeguards}.`,
+				`Mode ${next.name}: ${next.cwd === "write" ? "can write" : "read-only"}, safeguards ${next.safeguards}, ${MODE_ENDING[next.publication]}.`,
 				"info",
 			);
 		},
@@ -506,7 +604,6 @@ export function startSeat(
 			() =>
 				client.startBuiltin(PLAN_WORKFLOW_REF, {
 					input,
-					effort: input.effort,
 					...(ceiling ? { ceiling } : {}),
 				}),
 			notify,
@@ -517,12 +614,143 @@ export function startSeat(
 		return receipt?.runId;
 	};
 
+	/**
+	 * The decisions a run raises, wired from the one client that observes it.
+	 *
+	 * BUILT PER CLIENT, not per call, because the seam is a property of the
+	 * client: `decideSeam` duck-types `decide`, `resume` and `stop` off it, and a
+	 * runtime that has them and a runtime that does not are different runtimes.
+	 * Everything session-shaped — the dialogs, the publication — is read off
+	 * `live()` at the moment a decision is asked, which is the only time a session
+	 * is guaranteed to be there.
+	 */
+	const decisions = (
+		client: Pick<WorkflowReadClient, "observe" | "inspect">,
+	): DecideDeps | undefined => {
+		const ctx = options.live?.();
+		if (!ctx?.hasUI) return undefined;
+		return {
+			dialogs: createDecideDialogs(ctx.ui, gate),
+			client,
+			seam: decideSeam(client),
+			// `requireShipDecision` is deliberately NOT set: a run parked at its
+			// gate has not decided anything, and a `gates: "none"` run has no gate
+			// to decide. What authorizes both is a person — one dialog ago, or the
+			// `Start the run?` they answered from auto — which is the same authority
+			// `/plan ship` rests on.
+			publish: (plan, runId) => publish(plan, ctx, runId),
+			plan: (slug) => {
+				try {
+					return seat().store.loadPlan(slug) ?? undefined;
+				} catch {
+					return undefined;
+				}
+			},
+			say,
+			setMode: (name) => {
+				seat().setMode(name);
+			},
+		};
+	};
+
+	/** The `ship` gate of a parked run, read from one lease-free inspection. */
+	const shipGate = async (
+		client: Pick<WorkflowReadClient, "inspect">,
+		runId: string,
+		slug: string,
+	): Promise<ShipGateView | undefined> => {
+		try {
+			return readShipGate(
+				await client.inspect(runId, INSPECT_SECTIONS),
+				runId,
+				slug,
+			);
+		} catch {
+			// A run that cannot be inspected cannot be shipped from, and the gate
+			// stays parked where `/workflow` can still show it.
+			return undefined;
+		}
+	};
+
+	/**
+	 * Open the ship dialog for a parked run, once.
+	 *
+	 * `inFlight` is what makes "once" true: the gate opens it, and
+	 * `plan_ship_dialog` may ask for the same dialog a turn later. Pi's dialogs
+	 * have no queue, so a second one would replace the first and the replaced
+	 * promise would never resolve — the person would be left with a decision
+	 * nothing was waiting on.
+	 */
+	const shipInFlight = new Set<string>();
+	const openShip = (
+		client: Pick<WorkflowReadClient, "observe" | "inspect">,
+		runId: string,
+		slug: string,
+	): void => {
+		if (shipInFlight.has(runId)) return;
+		const deps = decisions(client);
+		if (!deps) return;
+		shipInFlight.add(runId);
+		void (async () => {
+			try {
+				const view = await shipGate(client, runId, slug);
+				if (!view) {
+					deps.dialogs.notify(
+						`Run \`${runId}\` reached a gate this seat could not read the inputs of, so no ship dialog was opened — \`/workflow ${runId.slice(0, 8)}\` has it.`,
+						"warning",
+					);
+					return;
+				}
+				const outcome = await askShip(deps, view);
+				if (outcome.kind !== "refused") parked.delete(runId);
+			} catch (error) {
+				void error;
+			} finally {
+				shipInFlight.delete(runId);
+			}
+		})();
+	};
+
+	/**
+	 * The client the narrator is observing with, so a tool call can reach it.
+	 *
+	 * `plan_ship_dialog` opens the dialog for whatever is parked, and the dialog
+	 * needs an inspection. The narrator is what holds a client, and a tool call
+	 * arrives with a session context and nothing else.
+	 */
+	let observing: Pick<WorkflowReadClient, "observe" | "inspect"> | undefined;
+
+	/**
+	 * What `plan_ship_dialog` is allowed to do, and when.
+	 *
+	 * `parked` is the moving half of the rule the tool's own description claims,
+	 * read at call time through `ToolRegistry`'s `available`. `open` re-opens the
+	 * same dialog the gate opened — `openShip` is idempotent per run — and returns
+	 * immediately: the person answers the dialog, and a tool call that waited for
+	 * them would hold a model turn open across a decision that exists to be made
+	 * without one.
+	 */
+	const shipDialog = {
+		parked: () => parked.size > 0 && observing !== undefined,
+		open: () => {
+			const client = observing;
+			const [runId, slug] = [...parked.entries()][0] ?? [];
+			if (!client || runId === undefined || slug === undefined)
+				return undefined;
+			openShip(client, runId, slug);
+			return { runId, slug };
+		},
+	};
+
 	const planCommand = createPlanCommand({
 		// A getter, not the store: `seat()` builds lazily, and building it at
 		// registration time would undo that.
 		get store() {
 			return seat().store;
 		},
+		// `/plan run` reads its gate policy off the posture the person is in, and
+		// refuses from one that decides no ending for a run.
+		mode: () => seat().mode().name,
 		// `/plan`'s handler passes the whole command context through; `PlanShip`
 		// and `PlanStart` narrow it to `ui` and `hasUI` so a test can hand over a
 		// fake, not because the value here is ever less than a session context.
@@ -542,16 +770,50 @@ export function startSeat(
 			if (built) syncTools(built);
 		},
 		publish,
+		publishesItself: (runId) => gatesOf(runId) === "none",
 		narrateRuns: (client) => {
 			narrator?.stop();
+			observing = client;
 			const live = createRunNarrator({
 				client,
 				send: (message, options) => pi.sendMessage?.(message, options),
+				// THE THREE DECISIONS. Narration says what happened; these open the
+				// dialog about it. Each is fire-and-forget: a decision nobody answers
+				// must not stop the next observation from being narrated.
+				onGate: (runId, slug) => {
+					parked.set(runId, slug);
+					openShip(client, runId, slug);
+				},
+				onFailure: (runId, slug, narration: Narration) => {
+					const deps = decisions(client);
+					if (!deps || narration.cause === undefined) return;
+					void askFailure(deps, {
+						runId,
+						slug,
+						...(narration.taskId ? { taskId: narration.taskId } : {}),
+						stage: narration.stage,
+						deliverable: narration.deliverable,
+						cause: narration.cause,
+					}).catch(() => undefined);
+				},
+				onEnd: (runId, slug, status) => {
+					parked.delete(runId);
+					// AUTO PUBLISHES, AND ONLY AUTO. `autoPublish` refuses any gate
+					// policy but `"none"` by name, so a run whose plan is gated `ship`
+					// that ended without a gate is a fact about that run, not a licence
+					// to publish it.
+					const gates = gatesOf(runId);
+					if (status !== "completed" || gates !== "none") return;
+					const deps = decisions(client);
+					if (!deps) return;
+					void autoPublish(deps, runId, slug, gates).catch(() => undefined);
+				},
 			});
 			narrator = live;
 			for (const [runId, slug] of started) live.follow(runId, slug);
 			return () => {
 				if (narrator === live) narrator = undefined;
+				if (observing === client) observing = undefined;
 				live.stop();
 			};
 		},
@@ -608,6 +870,10 @@ export default defineExtension(
 			// The model catalogue comes from the live context; the loaded skills
 			// come from `pi` itself, which is the only place an extension can ask.
 			host: () => planHostPort(live, pi),
+			// The same live context is what the three decisions ask in: the ship
+			// dialog, the failure dialog and auto publication all arrive from an
+			// `observe` callback, which carries no session of its own.
+			live: () => live,
 			// The same live context answers who is writing a plan. A replaced
 			// session throws from its own context, and an unknown author is
 			// `undefined` here rather than a placeholder — the store refuses to
@@ -640,6 +906,24 @@ export default defineExtension(
 						"warning",
 					);
 				});
+			// THE SESSION'S MODEL, REGISTERED ONCE, for the whole process — and read
+			// on every call, which is the point: a request that asks to inherit is
+			// resolved at launch time, so `/model` and the thinking dial moving under
+			// a running session apply to the NEXT launch rather than to whatever was
+			// live when the extension loaded. It is the same closure discipline the
+			// ceiling keeps, for the same reason.
+			//
+			// `live` is refreshed by every event that carries a context and dropped
+			// when the session it belongs to is replaced, so a stale context is
+			// `undefined` here rather than an answer about a session that is gone.
+			const model = registerSessionModelFor(pi.events, () => live);
+			if ("problem" in model)
+				pi.on("session_start", (_event, ctx) => {
+					ctx.ui.notify(
+						`The session's model was not registered with the subagent runtime: ${model.problem}. A delegation that asks to inherit a model resolves through whatever else registered a provider, or is refused.`,
+						"warning",
+					);
+				});
 		}
 		pi.on("tool_call", (event) => {
 			const reason = seatToolBlockReason(entry.currentMode(), event.toolName);
@@ -667,6 +951,10 @@ export default defineExtension(
 					const unship = watchShippedRuns({
 						client,
 						emit: (shipped) => events.emit(WORKFLOW_SHIPPED_CHANNEL, shipped),
+						// A run this seat publishes itself declares no `ship`
+						// checkpoint, so asking it to prove one would report "declares
+						// no `ship` checkpoint" about every single auto run.
+						skip: (runId) => entry.publishesItself(runId),
 						// A finished run whose ship gate proves nothing is named out
 						// loud in whatever session is live, because the alternative is
 						// a run with real handoffs that silently never publishes.

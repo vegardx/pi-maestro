@@ -1232,6 +1232,18 @@ export interface ShipWatchDeps {
 	 * checkpoint that a human can go and act on.
 	 */
 	readonly report?: (message: string) => void;
+	/**
+	 * A run this watcher must leave alone.
+	 *
+	 * ONE CALLER AND ONE REASON: a run started from mode `auto` carries
+	 * `policy.gates: "none"` and therefore declares NO `ship` checkpoint, so
+	 * `shipDecision` would report "declares no `ship` checkpoint" about every
+	 * single one of them — a warning naming `/plan ship` at the exact moment the
+	 * seat is publishing the run itself. The seat knows which runs those are
+	 * because it started them, so it says so here rather than this file guessing
+	 * from a gate policy it cannot see.
+	 */
+	readonly skip?: (runId: string) => boolean;
 	/** Reported, never thrown: a watcher that throws takes the session with it. */
 	readonly onError?: (error: unknown) => void;
 }
@@ -1254,6 +1266,7 @@ export function watchShippedRuns(deps: ShipWatchDeps): () => void {
 	const announced = new Set<string>();
 	return deps.client.observe((observation: WorkflowRunObservationView) => {
 		if (!TERMINAL_RUN_STATUSES.has(observation.status)) return;
+		if (deps.skip?.(observation.runId)) return;
 		if (announced.has(observation.runId)) return;
 		announced.add(observation.runId);
 		void (async () => {

@@ -13,6 +13,7 @@ import maestroExtension, {
 	seatToolBlockReason,
 	startSeat,
 } from "../packages/maestro/src/extension.js";
+import type { ModeName } from "../packages/maestro/src/mode.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import { planDigest } from "../packages/maestro/src/plan-input.js";
 import {
@@ -129,7 +130,7 @@ describe("interactive seat extension entry", () => {
 		await h.run("plan", "run arc sideways");
 		expect(h.notices.at(-1)).toEqual([
 			"warning",
-			expect.stringContaining("unknown effort `sideways`"),
+			expect.stringContaining("`/plan run` takes exactly one slug"),
 		]);
 	});
 
@@ -273,7 +274,7 @@ describe("/plan run under the mode's ceiling", () => {
 	const REFUSAL =
 		"plan-to-ship needs a worktree workspace; the host ceiling allows read-only.";
 
-	function seatWithRuntime(mode: "plan" | "auto") {
+	function seatWithRuntime(mode: ModeName) {
 		const repo = temp("maestro-repo-");
 		execFileSync("git", ["init", "--quiet"], { cwd: repo, stdio: "ignore" });
 		execFileSync(
@@ -326,33 +327,91 @@ describe("/plan run under the mode's ceiling", () => {
 		return { entry, h, starts, repo };
 	}
 
-	it("is refused in plan mode by the runtime's sentence, not by the seat", async () => {
+	// The runtime is never even asked from plan mode now, and the reason has
+	// moved: `/plan run` decides how the run ENDS, and plan mode decides no
+	// ending — so the seat refuses by name before it starts anything, rather than
+	// sending a start the ceiling makes the runtime refuse a moment later. The
+	// ceiling is still what bounds a launch; it is no longer the only thing that
+	// would have stopped this one.
+	it("refuses from plan mode by naming the modes that decide an ending", async () => {
 		const s = seatWithRuntime("plan");
 		await s.h.run("plan", "run demo");
-		// The seat sent the posture it is in, in pi-subagent's vocabulary.
-		expect(s.starts.map((start) => start.ceiling)).toEqual([
-			{ workspaceModes: ["read-only"] },
-		]);
-		// And the refusal a person reads is the runtime's own, naming the need and
-		// the bound, through the provider seam's sanitized warning.
+		expect(s.starts).toEqual([]);
 		const said = s.h.notices.map(([, message]) => message).join("\n");
-		expect(said).toContain("Workflow runtime unavailable (validation)");
-		expect(said).toContain("needs a worktree workspace");
-		expect(said).toContain("the host ceiling allows read-only");
-		expect(said).toContain("/plan run");
+		expect(said).toContain("mode plan decides none");
+		expect(said).toContain("start it from ask or auto");
 		// Nothing about a tool name, because nothing refused a tool.
 		expect(said).not.toContain("workflow_run");
 	});
 
-	it("starts in auto, where the ceiling allows a worktree", async () => {
+	it("refuses from hack for the same reason", async () => {
+		const s = seatWithRuntime("hack");
+		await s.h.run("plan", "run demo");
+		expect(s.starts).toEqual([]);
+		expect(s.h.notices.map(([, message]) => message).join("\n")).toContain(
+			"mode hack decides none",
+		);
+	});
+
+	it("starts in ask with the ship gate, under a worktree ceiling", async () => {
+		const s = seatWithRuntime("ask");
+		await s.h.run("plan", "run demo");
+		expect(s.starts.map((start) => start.ceiling)).toEqual([
+			{ workspaceModes: ["read-only", "worktree"] },
+		]);
+		// The gates are WRITTEN onto the stored plan, because `planDigest` covers
+		// the document and publication checks that digest against the stored bytes.
+		expect(s.entry.seat().store.loadPlan("demo")?.policy?.gates).toBe("ship");
+		const sent = s.starts[0]?.input as
+			| { plan?: { policy?: { gates?: string } } }
+			| undefined;
+		expect(sent?.plan?.policy?.gates).toBe("ship");
+		const said = s.h.notices.map(([, message]) => message).join("\n");
+		expect(said).toContain("Started `demo`");
+		expect(said).toContain("from mode ask");
+		expect(said).toContain("stops at its `ship` decision");
+	});
+
+	it("starts in auto with no ship gate at all", async () => {
 		const s = seatWithRuntime("auto");
 		await s.h.run("plan", "run demo");
 		expect(s.starts.map((start) => start.ceiling)).toEqual([
 			{ workspaceModes: ["read-only", "worktree"] },
 		]);
+		expect(s.entry.seat().store.loadPlan("demo")?.policy?.gates).toBe("none");
 		const said = s.h.notices.map(([, message]) => message).join("\n");
-		expect(said).toContain("Started `demo`");
-		expect(said).toContain("`wfr-1`");
+		expect(said).toContain("from mode auto");
+		expect(said).toContain("published when it is done");
+	});
+
+	// The ship watcher exists for a decision made outside this session's prompt,
+	// and it proves `{"ship": true}` from the run's own `ship` checkpoint. A run
+	// started from auto declares NO such checkpoint, so asking it to prove one
+	// would report "declares no `ship` checkpoint" about every single auto run —
+	// a warning naming `/plan ship` at the exact moment the seat is publishing the
+	// run itself. So the seat says which runs are its own to publish.
+	it("claims an auto run as one it publishes itself, and a ship-gated one not", async () => {
+		const ask = seatWithRuntime("ask");
+		await ask.h.run("plan", "run demo");
+		expect(ask.entry.publishesItself("wfr-1")).toBe(false);
+
+		const auto = seatWithRuntime("auto");
+		await auto.h.run("plan", "run demo");
+		expect(auto.entry.publishesItself("wfr-1")).toBe(true);
+		// And a run this seat never started is not its to claim either way.
+		expect(auto.entry.publishesItself("somebody-elses-run")).toBe(false);
+	});
+
+	// The dial went with schema 8: nothing beside the input's plan travels, so
+	// there is no second opinion about how hard a role thinks.
+	it("sends no effort to the runtime", async () => {
+		const s = seatWithRuntime("auto");
+		await s.h.run("plan", "run demo");
+		expect(s.starts.map((start) => start.effort)).toEqual([undefined]);
+		expect(Object.keys(s.starts[0]?.input as object).sort()).toEqual([
+			"plan",
+			"planDigest",
+		]);
 	});
 });
 

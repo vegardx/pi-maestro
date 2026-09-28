@@ -996,6 +996,38 @@ describe("watchShippedRuns", () => {
 		},
 	);
 
+	// The seat publishes a `gates: "none"` run itself, and such a run declares no
+	// `ship` checkpoint at all — so without this the watcher would report
+	// "declares no `ship` checkpoint … run `/plan ship`" about every auto run, at
+	// the exact moment the seat was publishing it. The seat says which runs those
+	// are, because it started them; this file cannot see a gate policy.
+	it("leaves alone a run the seat says it publishes itself", async () => {
+		const watch = async (
+			skip?: (runId: string) => boolean,
+		): Promise<string[]> => {
+			const fake = client(runShaped(sha("d"), null));
+			const reported: string[] = [];
+			const announced: unknown[] = [];
+			watchShippedRuns({
+				client: fake as never,
+				emit: (event) => announced.push(event),
+				report: (message) => reported.push(message),
+				...(skip ? { skip } : {}),
+			});
+			fake.fire({ runId: "run-1", status: "completed", sequence: 2 });
+			fake.fire({ runId: "run-2", status: "completed", sequence: 3 });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(announced).toEqual([]);
+			return reported;
+		};
+		// Without the predicate both gateless runs are reported by name, which is
+		// exactly the noise an auto run would produce once per publication.
+		expect(await watch()).toHaveLength(2);
+		// With it, the seat's own runs are silent and nothing else changes.
+		expect(await watch((runId) => runId === "run-1")).toHaveLength(1);
+		expect(await watch(() => true)).toEqual([]);
+	});
+
 	it("says nothing about a run with no readable receipt, and unsubscribes", async () => {
 		const fake = client({ run: { runId: "run-1", status: "completed" } });
 		const announced: unknown[] = [];

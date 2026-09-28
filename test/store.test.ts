@@ -101,37 +101,37 @@ describe("plan store", () => {
 		const written = JSON.parse(
 			readFileSync(planPath(cwd, dir, "app"), "utf8"),
 		) as { schemaVersion: number };
-		expect(written.schemaVersion).toBe(7);
-		expect(MAESTRO_SCHEMA_VERSION).toBe(7);
+		expect(written.schemaVersion).toBe(8);
+		expect(MAESTRO_SCHEMA_VERSION).toBe(8);
 		expect(store.loadPlan("app")).toEqual(plan());
 	});
 
 	// The previous document. It is refused, not migrated, and the refusal
 	// names both versions and what changed between them — "unsupported" alone
 	// leaves a human with a file and no idea what to do with it.
-	it("refuses a version 6 envelope by naming both versions", () => {
+	it("refuses a version 7 envelope by naming both versions and what went", () => {
 		const dir = agentDir();
 		const cwd = project();
 		const path = planPath(cwd, dir, "app");
 		mkdirSync(join(path, ".."), { recursive: true });
-		// The version 6 envelope exactly: it carries `authoredBy`, and its plan's
-		// `policy.gates` names the approve gate version 7 removed.
+		// The version 7 envelope exactly: it carries `authoredBy`, and its plan's
+		// `policy` carries the `effort` dial version 8 removed.
 		writeFileSync(
 			path,
 			JSON.stringify({
-				schemaVersion: 6,
+				schemaVersion: 7,
 				savedAt: "2026-08-08T00:00:00Z",
-				authoredBy: { sessionId: "sess-6", cwd },
-				body: { ...plan(), policy: { gates: "approve-plan+ship" } },
+				authoredBy: { sessionId: "sess-7", cwd },
+				body: { ...plan(), policy: { gates: "ship", effort: "deep" } },
 			}),
 		);
 		const store = makeStore({ agentDir: dir, cwd });
 		expect(() => store.loadPlan("app")).toThrow(
-			`${path} was written by schema 6, and this build speaks 7. Schema 7 removed the \`approve-plan\` gate — a plan's \`policy.gates\` is now \`ship\` or \`every-deliverable\` — so a schema 6 envelope's gates name a checkpoint this build does not run, and there is no migration. Archive or remove the plan and write it again at schemaVersion 7.`,
+			`${path} was written by schema 7, and this build speaks 8. Schema 8 removed \`policy.effort\`; models are set per role — an implementation role inherits the session's own model and thinking level, a review keeps its tier — so a schema 7 envelope carries a dial nothing reads and there is no migration. Archive or remove the plan and write it again at schemaVersion 8.`,
 		);
 		// Refused, never rewritten: a store that quietly re-stamped the version
 		// would be a migration nobody wrote.
-		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":6');
+		expect(readFileSync(path, "utf8")).toContain('"schemaVersion":7');
 		// And it is absent from the list rather than fatal to it.
 		expect(store.list()).toEqual([]);
 	});
@@ -229,14 +229,14 @@ describe("plan store", () => {
 	// A file that claims the current version and omits what the current version
 	// requires was not written here. Reading it as "authored by nobody" is the
 	// soft downgrade the whole envelope check exists to refuse.
-	it("refuses an envelope that claims 7 and carries no `authoredBy`", () => {
+	it("refuses an envelope that claims 8 and carries no `authoredBy`", () => {
 		const dir = agentDir();
 		const cwd = project();
 		const path = planPath(cwd, dir, "app");
 		mkdirSync(join(path, ".."), { recursive: true });
 		writeFileSync(
 			path,
-			JSON.stringify({ schemaVersion: 7, savedAt: "x", body: plan() }),
+			JSON.stringify({ schemaVersion: 8, savedAt: "x", body: plan() }),
 		);
 		expect(() => makeStore({ agentDir: dir, cwd }).loadPlan("app")).toThrow(
 			/carries no `authoredBy` session and cwd/,
@@ -338,7 +338,7 @@ describe("a plan records who wrote it", () => {
 		expect(
 			JSON.parse(readFileSync(planPath(cwd, dir, "app"), "utf8")),
 		).toMatchObject({
-			schemaVersion: 7,
+			schemaVersion: 8,
 			authoredBy: { sessionId: "sess-42", cwd },
 		});
 		expect(store.loadRecord("app")).toEqual({
@@ -356,7 +356,7 @@ describe("a plan records who wrote it", () => {
 			sessionId: () => undefined,
 		});
 		expect(() => store.savePlan(plan())).toThrow(
-			/schema 7 records who wrote a plan \(`authoredBy.sessionId`\)/,
+			/schema 8 records who wrote a plan \(`authoredBy.sessionId`\)/,
 		);
 		expect(store.list()).toEqual([]);
 	});

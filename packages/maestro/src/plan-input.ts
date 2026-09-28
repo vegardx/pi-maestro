@@ -19,34 +19,21 @@
 import { createHash } from "node:crypto";
 import type { Plan } from "./plan.js";
 
-/** How much model budget a run may spend. The workflow reads it as a dial. */
-export const EFFORTS = ["cheap", "standard", "deep"] as const;
-
-export type Effort = (typeof EFFORTS)[number];
-
-/** What an author who said nothing meant. */
-export const DEFAULT_EFFORT: Effort = "standard";
-
-export function isEffort(value: unknown): value is Effort {
-	return (EFFORTS as readonly unknown[]).includes(value);
-}
-
-/** The `input` of a `workflow_run` for the plan-to-ship workflow. */
+/**
+ * The `input` of a `workflow_run` for the plan-to-ship workflow.
+ *
+ * THE PLAN AND ITS DIGEST, AND NOTHING ELSE. There used to be an `effort` beside
+ * them — a dial collected in a dialog on the way out of plan mode and sent
+ * alongside the document — and it was the one field of this input that was not
+ * covered by `planDigest`, because it was not part of the plan. Schema 8 removed
+ * it: how hard a role thinks is the session's own model and thinking level,
+ * inherited per call, and what the run is gated by is `policy.gates` on the
+ * document the digest covers.
+ */
 export interface WorkflowInput {
 	readonly plan: Plan;
 	/** sha256 of the plan's canonical JSON, lowercase hex. */
 	readonly planDigest: string;
-	readonly effort: Effort;
-}
-
-/** An effort that is not one of the three. */
-export class UnknownEffortError extends Error {
-	constructor(readonly found: unknown) {
-		super(
-			`unknown effort ${JSON.stringify(found)} — one of ${EFFORTS.join(", ")}`,
-		);
-		this.name = "UnknownEffortError";
-	}
 }
 
 /**
@@ -101,24 +88,12 @@ export function planDigest(plan: Plan): string {
 /**
  * The workflow input for a stored plan.
  *
- * Takes `unknown` for the effort on purpose: it arrives from a command
- * argument or a tool call, where "standrd" is one keystroke away, and a typo
- * that silently became `standard` would spend a deep run's budget — or fail to.
- *
- * **An absent effort is the plan's own.** `policy.effort` is a decision a human
- * made in the hand-off out of plan mode and the digest covers it, so a run started without
- * naming one runs at the effort the document asks for rather than at a default
- * that overrides it. The parameter still wins when it is given: `/plan run
- * <slug> deep` is a human saying something about this run.
- *
- * A stored `policy.effort` this build does not recognise is not an error here —
- * `inspectPlan` reports it, `resolvePolicy` resolves it to the default, and so
- * does this. Only an effort the CALLER passed is worth throwing over.
+ * Total, and it takes nothing but the plan. A caller used to be able to pass an
+ * effort that overrode the document's own — which meant the bytes the digest
+ * named and the run that executed them could differ in a dial nobody could see
+ * afterwards. Everything this input carries now comes off the plan, so a receipt
+ * checked against the stored document is checked against the whole input.
  */
-export function toWorkflowInput(plan: Plan, effort?: unknown): WorkflowInput {
-	const authored = plan.policy?.effort;
-	const wanted =
-		effort ?? (isEffort(authored) ? authored : undefined) ?? DEFAULT_EFFORT;
-	if (!isEffort(wanted)) throw new UnknownEffortError(effort);
-	return { plan, planDigest: planDigest(plan), effort: wanted };
+export function toWorkflowInput(plan: Plan): WorkflowInput {
+	return { plan, planDigest: planDigest(plan) };
 }

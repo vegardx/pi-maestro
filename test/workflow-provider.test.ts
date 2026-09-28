@@ -443,15 +443,13 @@ describe("startBuiltin, the plan's own run", () => {
 		const { calls, notify } = recorder();
 		await expect(
 			callWorkflow(
-				() =>
-					client.startBuiltin("plan-to-ship", {
-						input: { plan: {} },
-						effort: "deep",
-					}),
+				() => client.startBuiltin("plan-to-ship", { input: { plan: {} } }),
 				notify,
 			),
 		).resolves.toEqual({ runId: "run-9" });
-		expect(seen).toEqual([{ input: { plan: {} }, effort: "deep" }]);
+		// v8: the plan and its digest, and nothing beside them. The effort that used
+		// to travel here was the one field of a start the plan digest did not cover.
+		expect(seen).toEqual([{ input: { plan: {} } }]);
 		expect(calls).toEqual([]);
 	});
 

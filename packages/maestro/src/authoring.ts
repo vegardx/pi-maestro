@@ -42,7 +42,6 @@ import {
 import { THINKING_LEVELS, type ThinkingLevel } from "@vegardx/pi-models";
 import { type PlanPolicy, resolvePolicy } from "./plan.js";
 import { PLAN_DOCUMENT_GUIDE, PlanSchema } from "./plan-document.js";
-import type { Effort } from "./plan-input.js";
 
 // ── What a description has to be ─────────────────────────────────────────────
 
@@ -115,10 +114,11 @@ export const DOCUMENT_REQUEST =
 /**
  * The document: what `renderExitSteer` used to ask for, as a system prompt.
  *
- * THE POLICY IS NOT ASKED FOR, and it is still said out loud. Effort, gates and
- * publication were settled by dialogs before this document existed; the harness
- * attaches them to the plan itself and the schema has no field for any of them.
- * A decision the author cannot see is one they will write around.
+ * THE POLICY IS NOT ASKED FOR, and it is still said out loud. Gates come from
+ * the mode being left to and publication is read off the repository, both before
+ * this document exists; the harness attaches them to the plan itself and the
+ * schema has no field for either. A decision the author cannot see is one they
+ * will write around.
  */
 export function renderDocumentSystemPrompt(
 	policy: PlanPolicy,
@@ -134,7 +134,7 @@ export function renderDocumentSystemPrompt(
 		"",
 		description.trim(),
 		"",
-		`Already decided, and not yours to write: effort ${resolved.effort}, gates` +
+		`Already decided, and not yours to write: gates` +
 			` ${resolved.gates}, publication ${resolved.publish.mode}` +
 			`${resolved.publish.base ? ` onto \`${resolved.publish.base}\`` : ""}.` +
 			" The person chose those on the way out of plan mode and the harness puts" +
@@ -239,27 +239,29 @@ export const CONTEXT_LIMIT_PERCENT = 80;
 
 // ── The thinking level ───────────────────────────────────────────────────────
 
-/** What each effort is worth in reasoning, before the session's own level. */
-const EFFORT_THINKING: Readonly<Record<Effort, ThinkingLevel>> = Object.freeze({
-	cheap: "low",
-	standard: "medium",
-	deep: "high",
-});
+/**
+ * The least this request will think with, whatever the session is set to.
+ *
+ * A floor rather than a dial. There used to be a map from `policy.effort`, so a
+ * person answering "how much effort should the run spend?" was also, invisibly,
+ * deciding how hard the plan itself was written. Schema 8 removed the dial: the
+ * request inherits the session's own level, and this is the one number left —
+ * the level below which writing a whole plan document is not worth asking for.
+ */
+export const AUTHORING_THINKING_FLOOR: ThinkingLevel = "medium";
 
 /**
- * The level this request asks for: the effort's, and never below the session's.
+ * The level this request asks for: the session's own, never below the floor.
  *
  * Somebody who set `high` for this conversation did so because the work is
  * hard, and writing the plan for that work is not the moment to think less.
  */
-export function authoringThinking(
-	effort: Effort,
-	session?: ThinkingLevel,
-): ThinkingLevel {
-	const wanted = EFFORT_THINKING[effort];
-	if (!session) return wanted;
+export function authoringThinking(session?: ThinkingLevel): ThinkingLevel {
+	if (!session) return AUTHORING_THINKING_FLOOR;
 	const rank = (level: ThinkingLevel): number => THINKING_LEVELS.indexOf(level);
-	return rank(session) > rank(wanted) ? session : wanted;
+	return rank(session) > rank(AUTHORING_THINKING_FLOOR)
+		? session
+		: AUTHORING_THINKING_FLOOR;
 }
 
 // ── The completion port, against a live session ──────────────────────────────

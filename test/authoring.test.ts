@@ -421,13 +421,13 @@ describe("the document, read without a tool", () => {
 	it("cleans and builds the stored document as plain functions", () => {
 		const plan = planFrom(withoutEmptyOptionals(authored), {
 			cwd: "/repo",
-			policy: { effort: "deep" },
+			policy: { gates: "none" },
 		});
 		// The empty optionals are gone, the default repository is filled in, and
 		// the dials are the caller's — none of which needed a tool.
 		expect(JSON.stringify(plan)).not.toContain('""');
 		expect(plan.repos).toEqual([{ key: "main", path: "/repo" }]);
-		expect(plan.policy).toEqual({ effort: "deep" });
+		expect(plan.policy).toEqual({ gates: "none" });
 		expect(plan.deliverables[0]?.reviews).toEqual([{ lens: "contracts" }]);
 	});
 });

@@ -36,7 +36,6 @@
  */
 
 import type { DelegationCeiling } from "./mode.js";
-import type { Effort } from "./plan-input.js";
 import {
 	isWorkflowRuntimeContractShape,
 	type WorkflowRuntimeContractView,
@@ -207,8 +206,13 @@ export interface WorkflowReadClient {
 	 * Starts `plan-to-ship` for a plan the person just approved, and refuses
 	 * every other ref by name. Validates `input` the way `workflow_run` does,
 	 * returns as soon as the run exists, and the run starts working: the person
-	 * who asked for it has already approved the plan, so the next stop is the
-	 * `ship` decision (or each deliverable, under `every-deliverable`).
+	 * who asked for it has already approved the plan, so the next stop is
+	 * whatever `policy.gates` on the document says — the `ship` decision, each
+	 * deliverable, or nothing at all under `"none"`, where the run runs to
+	 * completion and this seat publishes from its terminal output.
+	 *
+	 * IT TAKES NO EFFORT. Schema 8 removed the dial; a role's model and thinking
+	 * level are the session's own, inherited per call.
 	 * The runtime journals it with origin `"service-provider"`, so a run this
 	 * seat started is never mistaken for one the model started.
 	 *
@@ -223,7 +227,6 @@ export interface WorkflowReadClient {
 		ref: string,
 		options: {
 			readonly input: unknown;
-			readonly effort?: Effort;
 			readonly ceiling?: DelegationCeiling;
 		},
 	): Promise<WorkflowStartReceiptView>;

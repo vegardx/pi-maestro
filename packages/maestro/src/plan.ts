@@ -13,7 +13,6 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
 
 /**
  * The revision of the stored plan document. Re-exported by `store.ts`, which
@@ -36,12 +35,18 @@ import { DEFAULT_EFFORT, EFFORTS, type Effort } from "./plan-input.js";
  * who answers `Start the run?` has already agreed the description, read the
  * compiled document and seen it blind-reviewed, so the start IS the approval
  * and a second one seconds later asks the same person the same question.
- * Gates are `ship` or `every-deliverable`, and a version 6 envelope names a
- * checkpoint nothing compiles any more.
+ * Version 8 removed `policy.effort`. The dial was one answer standing in for
+ * three unrelated questions — which model implements, how hard it thinks, and
+ * how many fix rounds the check buys — and it answered all three for a run the
+ * person was in the middle of a conversation with. Implementation roles inherit
+ * the session's own model and thinking level now, reviews keep their tiers, and
+ * fix rounds are the plan's `maxFixRounds` or one. Version 8 also admits
+ * `policy.gates: "none"`, which is what leaving plan mode to `auto` writes: no
+ * ship gate, the run completes, and the seat publishes from its terminal output.
  * Nothing before the current version is readable, and nothing tries to be:
  * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 7 as const;
+export const MAESTRO_SCHEMA_VERSION = 8 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -277,14 +282,19 @@ export interface Plan {
 }
 
 /**
- * How a run is gated. The `ship` decision is never optional.
+ * How a run is gated, which is the same question as what ends it.
  *
- * There is no "no gates" value on purpose: publication is proven by the `ship`
- * checkpoint's own decided value, so a run with nothing to prove is a run
- * nothing can be published from. `ship` is one human decision after all the
- * work; `every-deliverable` adds one after each deliverable as well.
+ * `ship` is one human decision after all the work, asked in this session's own
+ * dialog; `every-deliverable` adds one after each deliverable as well.
+ *
+ * `none` IS NOT "PUBLISH WITHOUT A DECISION". It is the mode `auto`'s answer,
+ * and the decision it rests on was made earlier and by a person: leaving plan
+ * mode to `auto` is the approval for publication as well as for the run, said
+ * once, in the confirmation that starts it. The run then carries the same
+ * receipt and the same ship-gate inputs in its terminal output, so what the seat
+ * publishes from is exactly what a `ship` gate would have shown.
  */
-export const PLAN_GATES = ["ship", "every-deliverable"] as const;
+export const PLAN_GATES = ["ship", "every-deliverable", "none"] as const;
 
 export type PlanGates = (typeof PLAN_GATES)[number];
 
@@ -302,8 +312,6 @@ export type PublishMode = (typeof PUBLISH_MODES)[number];
  * against.
  */
 export interface PlanPolicy {
-	/** Default "standard". */
-	readonly effort?: Effort;
 	/** Default "ship". */
 	readonly gates?: PlanGates;
 	/** What a review lens that pins nothing is worth. */
@@ -322,7 +330,6 @@ export interface PlanPolicy {
 
 /** A policy with every question answered. What the compiler actually reads. */
 export interface ResolvedPolicy {
-	readonly effort: Effort;
 	readonly gates: PlanGates;
 	readonly reviewDefault: {
 		readonly tier: ReviewTier;
@@ -348,18 +355,27 @@ export const DEFAULT_GATES: PlanGates = "ship";
  * is where the run will stop next, never where it will ask again.
  */
 export function gateStops(gates: PlanGates): string {
-	return gates === "every-deliverable"
-		? "it stops after each deliverable and again at its `ship` decision"
-		: "it works through the plan and stops at its `ship` decision";
+	if (gates === "every-deliverable")
+		return "it stops after each deliverable and again at its `ship` decision";
+	if (gates === "none")
+		return "it works through the plan and the pull request is published when it is done";
+	return "it works through the plan and stops at its `ship` decision";
 }
 
 export const DEFAULT_REVIEW_TIER: ReviewTier = "standard";
 
 export const DEFAULT_PUBLISH_MODE: PublishMode = "none";
 
-/** How much fixing each effort pays for, when the plan does not say. */
-export const DEFAULT_FIX_ROUNDS: Readonly<Record<Effort, FixRounds>> =
-	Object.freeze({ cheap: 0, standard: 1, deep: 2 });
+/**
+ * How much fixing a plan that does not say buys: one round.
+ *
+ * ONE NUMBER, because there is no dial left to key it by. It used to be a map
+ * from `policy.effort`, which is how a person answering "how much effort?" in a
+ * dialog silently decided whether a failing check got a second chance. A plan
+ * that wants more says `maxFixRounds`, on the document, where the digest covers
+ * it and a receipt can be checked against it.
+ */
+export const DEFAULT_FIX_ROUNDS: FixRounds = 1;
 
 /** A deliverable with its stages settled. */
 export interface StagedDeliverable extends Deliverable {
@@ -387,10 +403,8 @@ function pick<T>(value: unknown, allowed: readonly T[], fallback: T): T {
  * about to explain.
  */
 export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
-	const effort = pick(policy?.effort, EFFORTS, DEFAULT_EFFORT);
 	const base = policy?.publish?.base;
 	return {
-		effort,
 		gates: pick(policy?.gates, PLAN_GATES, DEFAULT_GATES),
 		reviewDefault: {
 			tier: pick(
@@ -400,11 +414,7 @@ export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
 			),
 			diverse: policy?.reviewDefault?.diverse === true,
 		},
-		maxFixRounds: pick(
-			policy?.maxFixRounds,
-			FIX_ROUNDS,
-			DEFAULT_FIX_ROUNDS[effort],
-		),
+		maxFixRounds: pick(policy?.maxFixRounds, FIX_ROUNDS, DEFAULT_FIX_ROUNDS),
 		publish: {
 			mode: pick(policy?.publish?.mode, PUBLISH_MODES, DEFAULT_PUBLISH_MODE),
 			...(typeof base === "string" && base.length > 0 ? { base } : {}),
@@ -825,7 +835,7 @@ function validateReviewRouting(
 	}
 	// `model` is optional: a plan that pins one runs only where that model
 	// exists, and the point of `tier`/`diverse` is that the host resolves the
-	// reviewer. Neither is legal too — then the running workflow's effort dial
+	// reviewer. Neither is legal too — then the plan's `reviewDefault.tier`
 	// decides.
 	if (routing.model !== undefined) {
 		const slash = routing.model.indexOf("/");
@@ -894,10 +904,6 @@ export function isRefName(name: string): boolean {
  */
 export function validatePolicy(policy: PlanPolicy, errors: string[]): void {
 	const at = "policy";
-	if (policy.effort !== undefined && !EFFORTS.includes(policy.effort))
-		errors.push(
-			`${at}: \`${policy.effort}\` is not an effort — one of ${EFFORTS.join(", ")}`,
-		);
 	if (
 		policy.gates !== undefined &&
 		!(PLAN_GATES as readonly string[]).includes(policy.gates)

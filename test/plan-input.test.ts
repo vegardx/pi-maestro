@@ -11,10 +11,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_GATES, type Plan } from "../packages/maestro/src/plan.js";
 import {
 	canonicalJson,
-	DEFAULT_EFFORT,
 	planDigest,
 	toWorkflowInput,
-	UnknownEffortError,
 } from "../packages/maestro/src/plan-input.js";
 
 const fixture: Plan = {
@@ -101,11 +99,13 @@ describe("the digest names the bytes that were approved", () => {
 });
 
 describe("the workflow input", () => {
-	it("carries the plan by value, its digest, and the effort", () => {
-		const input = toWorkflowInput(fixture, "deep");
+	it("carries the plan by value and its digest, and nothing else", () => {
+		const input = toWorkflowInput(fixture);
 		expect(input.plan).toBe(fixture);
 		expect(input.planDigest).toBe(planDigest(fixture));
-		expect(input.effort).toBe("deep");
+		// v8: there is no field on this input the digest does not cover. `effort`
+		// was the one that was not, and it is gone.
+		expect(Object.keys(input).sort()).toEqual(["plan", "planDigest"]);
 	});
 
 	it("round-trips a fixture plan through canonical JSON unchanged", () => {
@@ -117,59 +117,40 @@ describe("the workflow input", () => {
 		expect(JSON.parse(canonicalJson(input))).toEqual({
 			plan: fixture,
 			planDigest: planDigest(fixture),
-			effort: DEFAULT_EFFORT,
 		});
 	});
 
 	// v7: the gates travel inside the plan, so what the run is gated by is what
-	// the exit attached — and the exit attaches the default. An approve gate
-	// would be refused by pi-workflow's compile by name, so it must never be
-	// in these bytes at all.
+	// the exit attached. An approve gate would be refused by pi-workflow's compile
+	// by name, so it must never be in these bytes at all.
 	it("sends the gates the exit attached, and no approve gate", () => {
 		const planned: Plan = { ...fixture, policy: { gates: DEFAULT_GATES } };
-		const input = toWorkflowInput(planned, "standard");
+		const input = toWorkflowInput(planned);
 		expect(input.plan.policy?.gates).toBe("ship");
 		expect(canonicalJson(input)).toContain('"gates":"ship"');
 		expect(canonicalJson(input)).not.toContain("approve-plan");
 	});
 
-	it("defaults to standard when the author said nothing", () => {
-		expect(toWorkflowInput(fixture).effort).toBe("standard");
-		expect(toWorkflowInput(fixture, undefined).effort).toBe("standard");
+	// v8: `auto` writes `none`, and the run reads it off the document the digest
+	// covers rather than off anything beside it.
+	it("sends `none` for a plan the auto hand-off gated", () => {
+		const planned: Plan = { ...fixture, policy: { gates: "none" } };
+		const input = toWorkflowInput(planned);
+		expect(canonicalJson(input)).toContain('"gates":"none"');
 	});
 
-	it("takes the plan's own policy effort when the caller names none", () => {
-		// `policy.effort` is on the document because a human chose it and the
-		// digest covers it. A hand-off that overrode it with a default would be
-		// spending a budget nobody chose.
-		const deep: Plan = { ...fixture, policy: { effort: "deep" } };
-		expect(toWorkflowInput(deep).effort).toBe("deep");
-		expect(toWorkflowInput(deep, undefined).effort).toBe("deep");
-		// A caller that does name one still wins: `/plan run <slug> cheap` is a
-		// human saying something about this run.
-		expect(toWorkflowInput(deep, "cheap").effort).toBe("cheap");
-	});
-
-	it("resolves a stored effort it does not know the way the policy does", () => {
-		// `resolvePolicy` is total and `inspectPlan` is what reports this, so a
-		// document with an effort from another build still hands off — at the
-		// default, exactly as it would compile.
-		const odd = {
+	// The whole reason the field went: a dial beside the document was a dial the
+	// digest did not cover, so a run and the bytes somebody approved could differ
+	// in it and no receipt would show the difference. Nothing beside the plan
+	// survives, whatever a document from another build happens to carry inside it.
+	it("puts nothing beside the plan, whatever a stored plan carries", () => {
+		const legacy = {
 			...fixture,
-			policy: { effort: "thorough" },
+			policy: { gates: DEFAULT_GATES, effort: "deep" },
 		} as unknown as Plan;
-		expect(toWorkflowInput(odd).effort).toBe("standard");
-		// A caller's own typo is still worth throwing over.
-		expect(() => toWorkflowInput(odd, "thorough")).toThrow(UnknownEffortError);
-	});
-
-	it("refuses an effort it does not know, rather than guessing one", () => {
-		// "standrd" is one keystroke away, and a typo that silently became
-		// `standard` would spend a deep run's budget, or fail to.
-		expect(() => toWorkflowInput(fixture, "standrd")).toThrow(
-			UnknownEffortError,
-		);
-		expect(() => toWorkflowInput(fixture, "")).toThrow(/one of cheap/);
-		expect(() => toWorkflowInput(fixture, 3)).toThrow(UnknownEffortError);
+		const input = toWorkflowInput(legacy);
+		expect(Object.keys(input).sort()).toEqual(["plan", "planDigest"]);
+		// And the digest still covers every byte of it, stray field and all.
+		expect(input.planDigest).toBe(planDigest(legacy));
 	});
 });

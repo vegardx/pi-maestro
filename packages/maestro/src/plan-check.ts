@@ -305,7 +305,7 @@ export function renderPlanCheckSteer(
 		"",
 		"Send the WHOLE document again: the same slug, everything the plan already" +
 			" has, with your changes in it. A deliverable's `tasks` are the work and" +
-			" its `reviews` are who reads that work; effort, gates and publication" +
+			" its `reviews` are who reads that work; gates and publication" +
 			" are already decided and the schema has no field for them.",
 		"",
 		"Your whole answer is that one JSON object. Do not answer the findings in" +

@@ -11,7 +11,7 @@ import {
 	type BashPolicyKey,
 	type ModeBashPolicy,
 } from "./bash-contracts.js";
-import type { ModeName } from "./mode.js";
+import { MODE_NAMES, type ModeName } from "./mode.js";
 
 export interface BashAuditorSettings {
 	readonly enabled: boolean;
@@ -39,7 +39,14 @@ const PLAN: ModeBashPolicy = {
 	uncertain: "refuse",
 };
 
-const AUTO: ModeBashPolicy = {
+/**
+ * `ask` and `auto` share one table, bound to the same constant.
+ *
+ * They are the same permissions — the two modes differ only in what happens
+ * when a plan run ends — so two tables here would be two places to change and
+ * one of them would be forgotten. `DEFAULT_BASH_POLICIES` names both.
+ */
+const WRITE_GUARDED: ModeBashPolicy = {
 	"filesystem-read": "allow",
 	"workspace-write": "allow",
 	"host-write": "confirm",
@@ -65,7 +72,8 @@ const HACK: ModeBashPolicy = {
 
 export const DEFAULT_BASH_POLICIES: BashModePolicies = {
 	plan: PLAN,
-	auto: AUTO,
+	ask: WRITE_GUARDED,
+	auto: WRITE_GUARDED,
 	hack: HACK,
 };
 
@@ -151,11 +159,14 @@ export function readExecutionPolicySettings(
 			["redirect", "advisory", "off"] as const,
 			DEFAULT_EXECUTION_POLICY.exactToolEquivalent,
 		),
-		modes: {
-			plan: readModePolicy(config, "plan", PLAN),
-			auto: readModePolicy(config, "auto", AUTO),
-			hack: readModePolicy(config, "hack", HACK),
-		},
+		// Derived from `MODE_NAMES` rather than written out, so a mode cannot be
+		// added to the table without becoming configurable here as well.
+		modes: Object.fromEntries(
+			MODE_NAMES.map((name) => [
+				name,
+				readModePolicy(config, name, DEFAULT_BASH_POLICIES[name]),
+			]),
+		) as BashModePolicies,
 	};
 }
 
@@ -165,7 +176,7 @@ export function describePolicyDeviations(
 ): string[] {
 	const effective = readExecutionPolicySettings(cwd, agentDir);
 	const out: string[] = [];
-	for (const mode of ["plan", "auto", "hack"] as const) {
+	for (const mode of MODE_NAMES) {
 		for (const key of [...BASH_EFFECTS, "uncertain"] as const) {
 			if (effective.modes[mode][key] !== DEFAULT_BASH_POLICIES[mode][key])
 				out.push(

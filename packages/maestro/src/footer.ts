@@ -78,7 +78,8 @@ function compose(
 
 const MODE_COLOR: Record<ModeName, ThemeColor> = {
 	plan: "warning",
-	auto: "accent",
+	ask: "accent",
+	auto: "success",
 	hack: "error",
 };
 

@@ -474,6 +474,15 @@ current mode's, because that is where the person typing it is standing.
 `startBuiltin("plan-to-ship", {input, ceiling})` through the workflow runtime's
 service seam, allowlisted to that one definition by name and validated exactly as
 `workflow_run` would be — and then switches to the posture asked for at `/mode`.
+Those two options are the whole call: no effort, and nothing else beside the input.
+
+`plan-to-ship` declares `needs: {workspace: "worktree", sessionModel: true}`, so a
+start is refused **before any run exists** on a host that registered no
+session-model provider, naming the definition: *`plan-to-ship` inherits the session
+model, and this host has none.* This seat registers one at load, so that sentence
+appearing means something else registered first — pi-subagent allows exactly one
+provider per process — and the seam says that rather than pointing at `/plan run`,
+which would be refused for the same reason.
 The model is not asked to start it and is not in that loop at all. **Starting it is
 the approval**, and from `auto` it is the approval for publication too. A runtime
 that refuses or fails to start it leaves the plan stored, takes the posture the
@@ -533,9 +542,18 @@ Then one select:
 
 | Answer | What it does |
 | --- | --- |
-| *Ship* (default) | Records the decision and publishes, through the same path `/plan ship` takes |
-| *Don't ship* | Records `{"ship": false}` with a one-line reason you type; nothing is published |
+| *Ship* (default) | Decides the run's own `ship` checkpoint `{"ship": true}` and stops there. The run un-parks, finishes, and publication follows its completion — **the same path a decision made in pi-workflow's own widget takes** |
+| *Don't ship* | Decides `{"ship": false, note}` with the one line you type; the run ends without a receipt and nothing is published |
 | *Look first* (escape) | Sends you to look at the run and **comes straight back to the same dialog** — going to look is not a decision, and a dialog that closed on the way would be a decision lost to an escape key |
+
+**The dialog decides; it does not publish.** That is the whole shape, and it is
+worth saying because the other shape existed: while pi-workflow's read client had
+no `decide`, *Ship* published from the run's receipt and the run's own checkpoint
+stayed parked for ever — a journal that disagreed with the repository. The
+decision is now the whole act. `watchShippedRuns` sees the run reach a terminal
+state, proves `{"ship": true}` from the checkpoint, announces, and publication
+proves it again; the decision record carries `source: "service-provider"`, which
+pi-workflow sets itself rather than accepting from this seat.
 
 Saying "ship it" in the conversation opens the same dialog, through the
 `plan_ship_dialog` tool. The tool **decides nothing**: it opens the dialog and
@@ -550,6 +568,16 @@ question is asked first**, because the approval was given when the person answer
 *Leave it*, with the sanitized cause and the branch it left behind on screen;
 escape leaves it, and names `/plan ship <slug>` for later.
 
+**And it says what it published.** Such a run commits `output.shipSummary` beside
+the usual receipt — the refined plan, and per deliverable the same three values a
+gate would have held: the implementation summary, the normalized findings and the
+fix report. The seat reads it and renders it **through the same function the ship
+dialog uses**, under the heading `What was published:` instead of a question. A run
+that shipped without asking still owes a person the account a gate would have shown
+them: the findings that are left are the same findings whether or not anybody was
+asked about them. The account is a courtesy rather than a gate — a run whose
+inspection cannot be read still publishes, and says less.
+
 **The failure dialog.** A task or a run that did not complete: the cause, then
 *Retry the task* (default) / *Stop the run* / *Re-plan* (escape). Re-plan is the
 escape because it is the one answer that always works — it needs nothing of the
@@ -558,27 +586,34 @@ run is a commitment an unanswered dialog must not make. It switches to plan mode
 and hands the conversation a custom message carrying the run's state summary, so the
 next plan is written from where this one got to.
 
-**What the read client cannot do, named rather than worked around.**
-pi-workflow's service-provider client is a **read** client by design: `list`,
-`validate`, `project`, `inspect`, `runs`, `observe`, and the one allowlisted
-`startBuiltin`. It has no `decide`, no `resume` and no `stop`, and its lease-free
-`inspect` carries no verified checkpoint inputs — `checkpoint.inputs` is documented
-as artifact-backed, which is the `status`, `wait` and `decide` views. So:
+**Every answer is a call on the run.** pi-workflow's service-provider client
+carries `decide`, `resume` and `stop` at contract revision 22, and
+`inspect(runId, {include: […, "checkpoints"]})` carries the gate's own verified
+input values on `tasks[].checkpoint.inputs`. All four are in the seat's required
+client surface, so a runtime missing one is refused **at discovery** — named by the
+feature `serviceProviderDecide` — rather than found wanting inside the dialog that
+needed it. Three of them were duck-typed off the client while it did not have them,
+and a duck-typed method is one nothing refuses the absence of.
 
-- the three methods are **duck-typed off the acquired client at call time**, and
-  the day pi-workflow exposes them this seat uses them with no version check;
-- *Ship* falls back to the publication path that already decides — `/plan ship`
-  publishes without a proved gate because typing it *is* the decision, and
-  answering this dialog is the same decision in the same session one dialog ago —
-  and the notice says so, including that the run's own checkpoint stays parked;
-- *Don't ship*, *Retry* and *Stop* have **no honest local substitute** and say so:
-  each reports the one sentence naming the method pi-workflow must expose, and
-  nothing pretends the run moved;
-- the gate's inputs are read **tolerantly**: from `checkpoint.inputs` when a view
-  carries them, and from each producing task's `narration.summary` when it does
-  not — with the difference stated in the rendering, because "no findings" and "the
-  findings are in a view this seat cannot reach" are different facts about the same
-  run.
+| Dialog answer | The call |
+| --- | --- |
+| *Ship* | `decide(runId, taskKey, {decision: {ship: true}, approver})` |
+| *Don't ship* | `decide(runId, taskKey, {decision: {ship: false, note}, approver, reason})` |
+| *Retry the task* | `resume(runId, {taskId})` |
+| *Stop the run* | `stop(runId)` |
+| *Re-plan* | none — it is about this conversation, which is why it is the escape |
+
+`taskKey` is read off the gate rather than assumed to be `ship`: a checkpoint
+inside a fan-out is `<namespace>/<key>`, and pi-workflow refuses a key that names
+no awaiting checkpoint rather than guessing. `approver` is
+`human:maestro-ship-dialog` — pi-workflow's own `human:<via>` convention, so a
+journal read later says which surface asked. Every refusal a call raises is
+reported **verbatim**: the runtime's sentence is the one that knows why a
+checkpoint is not awaiting a decision, or why a task cannot be re-attempted.
+
+*Retry* is offered only for a failure that **named a task**, because `resume`
+re-attempts one task and there is no such thing as resuming "the run". A run-level
+failure is refused by name and sent to `/workflow`.
 
 **The summary is not on the observation.** An observation is a synchronous notice
 on a durable append that reads no file and must stay in sequence order; a task's

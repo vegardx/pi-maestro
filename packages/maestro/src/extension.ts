@@ -13,7 +13,7 @@ import {
 	createDecideDialogs,
 	DECISION_MESSAGE_TYPE,
 	type DecideDeps,
-	decideSeam,
+	GATE_INSPECT_SECTIONS,
 	readShipGate,
 	type ShipGateView,
 } from "./decide.js";
@@ -49,7 +49,6 @@ import { planHostPort } from "./plan-host.js";
 import { planDigest, type WorkflowInput } from "./plan-input.js";
 import {
 	gatedPublishUI,
-	INSPECT_SECTIONS,
 	isWorkflowShipped,
 	type Publication,
 	shipPlan,
@@ -251,10 +250,13 @@ export interface SeatEntry {
 	 * or `/plan run` did — and the extension body is what has a client to observe
 	 * with, so the two meet here. Returns the unsubscribe; calling it again
 	 * replaces the narrator, which is what a new session needs.
+	 *
+	 * THE WHOLE CLIENT, not the two methods narration itself reads. Narration
+	 * hands its three decisions on, and answering one of them is `decide`,
+	 * `resume` or `stop` on the same client — so a narrowed one here would be a
+	 * narrator that could observe a gate and not the seat that could answer it.
 	 */
-	narrateRuns(
-		client: Pick<WorkflowReadClient, "observe" | "inspect">,
-	): () => void;
+	narrateRuns(client: WorkflowReadClient): () => void;
 	/** A dialog opened by Pi or another extension; both flows defer. */
 	notePromptStart(): void;
 	notePromptEnd(): void;
@@ -624,20 +626,19 @@ export function startSeat(
 	 * `live()` at the moment a decision is asked, which is the only time a session
 	 * is guaranteed to be there.
 	 */
-	const decisions = (
-		client: Pick<WorkflowReadClient, "observe" | "inspect">,
-	): DecideDeps | undefined => {
+	const decisions = (client: WorkflowReadClient): DecideDeps | undefined => {
 		const ctx = options.live?.();
 		if (!ctx?.hasUI) return undefined;
 		return {
 			dialogs: createDecideDialogs(ctx.ui, gate),
 			client,
-			seam: decideSeam(client),
-			// `requireShipDecision` is deliberately NOT set: a run parked at its
-			// gate has not decided anything, and a `gates: "none"` run has no gate
-			// to decide. What authorizes both is a person — one dialog ago, or the
-			// `Start the run?` they answered from auto — which is the same authority
-			// `/plan ship` rests on.
+			// `requireShipDecision` is deliberately NOT set, and the reason is now
+			// only about auto: `autoPublish` is the sole caller, a `gates: "none"` run
+			// declares no `ship` checkpoint to prove, and what authorizes it is the
+			// `Start the run?` a person answered from auto. A GATED run does not come
+			// through here at all — the ship dialog decides the checkpoint and
+			// publication follows the run's completion down the announcement path,
+			// where `requireShipDecision` IS set and the decision is re-proved.
 			publish: (plan, runId) => publish(plan, ctx, runId),
 			plan: (slug) => {
 				try {
@@ -661,7 +662,7 @@ export function startSeat(
 	): Promise<ShipGateView | undefined> => {
 		try {
 			return readShipGate(
-				await client.inspect(runId, INSPECT_SECTIONS),
+				await client.inspect(runId, GATE_INSPECT_SECTIONS),
 				runId,
 				slug,
 			);
@@ -683,7 +684,7 @@ export function startSeat(
 	 */
 	const shipInFlight = new Set<string>();
 	const openShip = (
-		client: Pick<WorkflowReadClient, "observe" | "inspect">,
+		client: WorkflowReadClient,
 		runId: string,
 		slug: string,
 	): void => {
@@ -718,7 +719,7 @@ export function startSeat(
 	 * needs an inspection. The narrator is what holds a client, and a tool call
 	 * arrives with a session context and nothing else.
 	 */
-	let observing: Pick<WorkflowReadClient, "observe" | "inspect"> | undefined;
+	let observing: WorkflowReadClient | undefined;
 
 	/**
 	 * What `plan_ship_dialog` is allowed to do, and when.
@@ -918,9 +919,14 @@ export default defineExtension(
 			// `undefined` here rather than an answer about a session that is gone.
 			const model = registerSessionModelFor(pi.events, () => live);
 			if ("problem" in model)
+				// AND THIS IS NOW A REFUSAL TO START, not only a degraded plan check.
+				// `plan-to-ship` declares `needs.sessionModel`, so pi-workflow refuses
+				// a start on a host with no provider — before any run exists, naming
+				// the definition. So the notice says what will happen rather than only
+				// what did not, and `startRun` recognises that refusal when it comes.
 				pi.on("session_start", (_event, ctx) => {
 					ctx.ui.notify(
-						`The session's model was not registered with the subagent runtime: ${model.problem}. A delegation that asks to inherit a model resolves through whatever else registered a provider, or is refused.`,
+						`The session's model was not registered with the subagent runtime: ${model.problem}. \`${PLAN_WORKFLOW_REF}\` inherits the session model, so a run started from this seat will be refused until whatever else registered a provider is unloaded — and a delegation that asks to inherit resolves through that provider instead.`,
 						"warning",
 					);
 				});

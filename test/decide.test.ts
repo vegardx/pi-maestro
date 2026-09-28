@@ -5,52 +5,53 @@
 // somewhere else to decide. So every case here is either "what is on screen at
 // the moment of deciding" or "what each answer actually did".
 //
-// The seam is tested BOTH WAYS on purpose. pi-workflow's service-provider client
-// is a read client: it has no `decide`, no `resume`, no `stop`, and its lease-free
-// inspection carries no verified checkpoint inputs. Each of those is a real gap
-// today and a method `WorkflowService` already has, so the tests below run each
-// answer against a client that has the method and against one that does not —
-// and the second case asserts the sentence that names what pi-workflow must
-// expose, because that sentence is what a person is shown.
+// What each answer DID is a call on the run — `decide`, `resume`, `stop` — so the
+// fake client records them and the tests assert the call rather than a local
+// effect. The distinction that matters most is at Ship: it records the checkpoint
+// and publishes NOTHING, because publication follows the run's completion down
+// the same path a decision made in pi-workflow's own widget takes. While the read
+// client had no `decide`, Ship published around a checkpoint that stayed parked
+// for ever, and "publishes nothing" below is the assertion that that is over.
 
 import { describe, expect, it } from "vitest";
 import {
+	AUTO_INSPECT_SECTIONS,
 	askFailure,
 	askShip,
 	autoPublish,
 	bySeverity,
 	createDecideDialogs,
 	type DecideDeps,
-	type DecideSeam,
-	decideSeam,
 	FAILURE_OPTIONS,
+	GATE_INSPECT_SECTIONS,
 	type GateDeliverable,
-	NARRATION_ONLY_NOTE,
 	NOTHING_PARKED,
 	openedDialog,
 	PUBLISH_LEAVE,
 	PUBLISH_OPTIONS,
 	PUBLISH_RETRY,
+	PUBLISHED_HEADING,
 	REPLAN,
 	RETRY_TASK,
 	readShipGate,
+	readShipSummary,
 	renderFailure,
 	renderShipGate,
 	replanMessage,
 	residuals,
-	SHIP_DIALOG_SEAM,
+	SHIP_DIALOG_APPROVER,
 	SHIP_LOOK,
 	SHIP_NO,
 	SHIP_OPTIONS,
 	SHIP_YES,
 	type ShipGateView,
 	STOP_RUN,
-	seamRefusal,
 } from "../packages/maestro/src/decide.js";
 import type { ModeName } from "../packages/maestro/src/mode.js";
 import type { Plan } from "../packages/maestro/src/plan.js";
 import type { Publication } from "../packages/maestro/src/publish.js";
 import { createShipDialogTool } from "../packages/maestro/src/ship-dialog-tool.js";
+import { WORKFLOW_NOT_RESUMABLE } from "../packages/maestro/src/workflow-provider.js";
 
 const RUN = "wfr-plan-to-ship-7";
 const SLUG = "compose";
@@ -79,13 +80,50 @@ const OK: Publication = {
 	prUrl: "https://example.test/pr/1",
 };
 
-/**
- * A gate whose inputs are the run's own verified values.
- *
- * Exactly what `plan-to-ship` declares: `plan`, and one `summary-<id>`,
- * `findings-<id>` and `fix-<id>` per deliverable.
- */
-function inspectionWithInputs() {
+/** The three values a gate holds per deliverable, as `plan-to-ship` shapes them. */
+const SUMMARY = {
+	summary: "Added the catalogue and its four stages.",
+	checkPassed: true,
+};
+
+const FINDINGS = {
+	verdict: "Two lenses agree the export surface is untested.",
+	findings: [
+		{
+			id: "f1",
+			severity: "blocking",
+			lens: "contracts",
+			where: "packages/x/index.ts",
+			summary: "the export surface is untested",
+			suggestion: "add a case per export",
+		},
+		{
+			id: "f2",
+			severity: "major",
+			lens: "security",
+			where: "packages/x/read.ts",
+			summary: "the path is not resolved before it is read",
+		},
+		{
+			id: "f3",
+			severity: "minor",
+			lens: "contracts",
+			where: "README.md",
+			summary: "the example is stale",
+		},
+	],
+};
+
+const FIX = {
+	checkPassed: true,
+	findings: [
+		{ id: "f1", outcome: "addressed" },
+		{ id: "f2", outcome: "disputed", note: "the caller already resolved it" },
+	],
+};
+
+/** A parked run, as `inspect(runId, {include: ["tasks","checkpoints"]})` gives it. */
+function gateInspection() {
 	return {
 		run: { runId: RUN, status: "running" },
 		tasks: [
@@ -98,48 +136,9 @@ function inspectionWithInputs() {
 					prompt: "Ship it?",
 					inputs: {
 						plan: { slug: SLUG },
-						"summary-api": {
-							summary: "Added the catalogue and its four stages.",
-							checkPassed: true,
-						},
-						"findings-api": {
-							verdict: "Two lenses agree the export surface is untested.",
-							findings: [
-								{
-									id: "f1",
-									severity: "blocking",
-									lens: "contracts",
-									where: "packages/x/index.ts",
-									summary: "the export surface is untested",
-									suggestion: "add a case per export",
-								},
-								{
-									id: "f2",
-									severity: "major",
-									lens: "security",
-									where: "packages/x/read.ts",
-									summary: "the path is not resolved before it is read",
-								},
-								{
-									id: "f3",
-									severity: "minor",
-									lens: "contracts",
-									where: "README.md",
-									summary: "the example is stale",
-								},
-							],
-						},
-						"fix-api": {
-							checkPassed: true,
-							findings: [
-								{ id: "f1", outcome: "addressed" },
-								{
-									id: "f2",
-									outcome: "disputed",
-									note: "the caller already resolved it",
-								},
-							],
-						},
+						"summary-api": SUMMARY,
+						"findings-api": FINDINGS,
+						"fix-api": FIX,
 					},
 				},
 			},
@@ -147,41 +146,32 @@ function inspectionWithInputs() {
 	};
 }
 
-/**
- * The same gate on a view that carries NO verified inputs.
- *
- * Which is every lease-free inspection: `checkpoint.inputs` is artifact-backed.
- * The gate still names its inputs — `tasks[].inputs` maps each to its producing
- * task — and every projected task carries `narration.summary`, so the
- * deliverables and their summaries are real and the findings are honestly absent.
- */
-function inspectionWithoutInputs() {
+/** A completed `gates: "none"` run, as `inspect(runId, {include: ["run","output"]})` gives it. */
+function summaryInspection() {
 	return {
-		run: { runId: RUN, status: "running" },
-		tasks: [
-			{
-				id: "t-impl",
-				kind: "agent",
-				key: "implement-api",
-				narration: {
-					stage: "compose/implement-api",
-					taskKind: "implement",
-					deliverable: "api",
-					summary: "Added the catalogue and its four stages.",
+		run: {
+			runId: RUN,
+			status: "completed",
+			output: {
+				shipped: true,
+				shipSummary: {
+					plan: { slug: SLUG },
+					deliverables: [
+						{ id: "api", summary: SUMMARY, findings: FINDINGS, fix: FIX },
+					],
 				},
 			},
-			{
-				id: "t-gate",
-				kind: "checkpoint",
-				key: "ship",
-				inputs: {
-					plan: "t-refine",
-					"summary-api": "t-impl",
-					"findings-api": "t-synth",
-					"fix-api": "t-fix",
-				},
-			},
-		],
+		},
+	};
+}
+
+interface Decided {
+	readonly runId: string;
+	readonly taskKey: string;
+	readonly options: {
+		readonly decision: unknown;
+		readonly approver: string;
+		readonly reason?: string;
 	};
 }
 
@@ -191,6 +181,10 @@ interface Recorded {
 	readonly said: string[];
 	readonly modes: ModeName[];
 	readonly published: string[];
+	readonly decided: Decided[];
+	readonly resumed: [string, string][];
+	readonly stopped: string[];
+	readonly inspected: [string, unknown][];
 	readonly deps: DecideDeps;
 }
 
@@ -198,11 +192,15 @@ interface Script {
 	/** One answer per dialog, by the option text it starts with. */
 	readonly answers?: readonly (string | undefined)[];
 	readonly typed?: string;
-	readonly seam?: DecideSeam;
 	readonly publish?: readonly (Publication | undefined)[];
 	readonly plan?: Plan | undefined;
 	readonly inspect?: () => unknown;
 	readonly inspector?: (runId: string) => void;
+	/** The runtime refuses this call, by its own sentence. */
+	readonly decideFails?: string;
+	readonly resumeFails?: string;
+	readonly stopFails?: string;
+	readonly inspectFails?: true;
 }
 
 function recorder(script: Script = {}): Recorded {
@@ -211,6 +209,10 @@ function recorder(script: Script = {}): Recorded {
 	const said: string[] = [];
 	const modes: ModeName[] = [];
 	const published: string[] = [];
+	const decided: Decided[] = [];
+	const resumed: [string, string][] = [];
+	const stopped: string[] = [];
+	const inspected: [string, unknown][] = [];
 	let asked = 0;
 	let publishes = 0;
 	const ui = {
@@ -239,10 +241,38 @@ function recorder(script: Script = {}): Recorded {
 		said,
 		modes,
 		published,
+		decided,
+		resumed,
+		stopped,
+		inspected,
 		deps: {
 			dialogs: createDecideDialogs(ui),
-			client: { inspect: async () => (script.inspect ?? (() => ({})))() },
-			...(script.seam ? { seam: script.seam } : {}),
+			client: {
+				inspect: async (runId: string, options?: unknown) => {
+					inspected.push([runId, options]);
+					if (script.inspectFails) throw new Error("the run store is locked");
+					return (script.inspect ?? (() => ({})))();
+				},
+				decide: async (
+					runId: string,
+					taskKey: string,
+					options: Decided["options"],
+				) => {
+					if (script.decideFails) throw new Error(script.decideFails);
+					decided.push({ runId, taskKey, options });
+					return {};
+				},
+				resume: async (runId: string, options: { readonly taskId: string }) => {
+					if (script.resumeFails) throw new Error(script.resumeFails);
+					resumed.push([runId, options.taskId]);
+					return {};
+				},
+				stop: async (runId: string) => {
+					if (script.stopFails) throw new Error(script.stopFails);
+					stopped.push(runId);
+					return {};
+				},
+			},
 			publish: async (_plan, runId) => {
 				published.push(runId);
 				return (script.publish ?? [OK])[publishes++];
@@ -258,9 +288,16 @@ function recorder(script: Script = {}): Recorded {
 // ── Reading the gate ─────────────────────────────────────────────────────────
 
 describe("the gate's inputs, as this seat reads them", () => {
+	it("asks for the section that carries them", () => {
+		// `"checkpoints"` is what puts `tasks[].checkpoint.inputs` on a lease-free
+		// inspection. Asking for `"tasks"` alone returns everything except the thing
+		// the dialog is for.
+		expect(GATE_INSPECT_SECTIONS.include).toEqual(["tasks", "checkpoints"]);
+		expect(AUTO_INSPECT_SECTIONS.include).toEqual(["run", "output"]);
+	});
+
 	it("reads every deliverable's summary, findings and fix answers", () => {
-		const view = readShipGate(inspectionWithInputs(), RUN, SLUG);
-		expect(view?.sourced).toBe("inputs");
+		const view = readShipGate(gateInspection(), RUN, SLUG);
 		expect(view?.taskKey).toBe("compose/ship");
 		expect(view?.deliverables).toHaveLength(1);
 		const api = view?.deliverables[0] as GateDeliverable;
@@ -274,17 +311,13 @@ describe("the gate's inputs, as this seat reads them", () => {
 		]);
 		expect(api.fixes).toEqual([
 			{ id: "f1", outcome: "addressed" },
-			{
-				id: "f2",
-				outcome: "disputed",
-				note: "the caller already resolved it",
-			},
+			{ id: "f2", outcome: "disputed", note: "the caller already resolved it" },
 		]);
 		expect(api.checkPassed).toBe(true);
 	});
 
 	it("groups findings worst first, and drops no severity that has one", () => {
-		const view = readShipGate(inspectionWithInputs(), RUN, SLUG);
+		const view = readShipGate(gateInspection(), RUN, SLUG);
 		expect(
 			bySeverity(view?.deliverables[0]?.findings ?? []).map(
 				([severity, group]) => [severity, group.length],
@@ -300,24 +333,35 @@ describe("the gate's inputs, as this seat reads them", () => {
 	// the run is shipping WITH, and an UNANSWERED finding appears in neither the
 	// findings-by-outcome list nor the fix report.
 	it("derives the residuals: disputed, out of scope, and never answered", () => {
-		const view = readShipGate(inspectionWithInputs(), RUN, SLUG);
+		const view = readShipGate(gateInspection(), RUN, SLUG);
 		expect(
 			residuals(view?.deliverables[0] as GateDeliverable).map((f) => f.id),
 		).toEqual(["f2", "f3"]);
 	});
 
-	it("falls back to each task's narration when a view carries no inputs", () => {
-		const view = readShipGate(inspectionWithoutInputs(), RUN, SLUG);
-		expect(view?.sourced).toBe("narration");
-		expect(view?.taskKey).toBe("ship");
-		expect(view?.deliverables).toEqual([
-			{
-				id: "api",
-				summary: "Added the catalogue and its four stages.",
-				findings: [],
-				fixes: [],
-			},
-		]);
+	// The fallback to task narrations is GONE: revision 22 carries the inputs, and a
+	// second answer to "what did the gate show" that nothing would ever exercise is
+	// worse than no answer at all.
+	it("shows no deliverables for a gate whose inputs are absent", () => {
+		const bare = {
+			run: { runId: RUN },
+			tasks: [
+				{
+					id: "t-gate",
+					kind: "checkpoint",
+					key: "ship",
+					// `inputs` names producers; `checkpoint.inputs` is what carries values,
+					// and an inspection asked without `"checkpoints"` has none.
+					inputs: { "summary-api": "t-impl" },
+				},
+				{
+					id: "t-impl",
+					kind: "agent",
+					narration: { stage: "implement-api", summary: "did the work" },
+				},
+			],
+		};
+		expect(readShipGate(bare, RUN, SLUG)?.deliverables).toEqual([]);
 	});
 
 	it("is nothing at all for a run that declares no ship checkpoint", () => {
@@ -326,13 +370,26 @@ describe("the gate's inputs, as this seat reads them", () => {
 		).toBeUndefined();
 		expect(readShipGate(undefined, RUN, SLUG)).toBeUndefined();
 	});
+
+	// The same three values under different names, read into the same shape, so
+	// they render through the same function.
+	it("reads a `gates: none` run's shipSummary into the same shape", () => {
+		const fromGate = readShipGate(gateInspection(), RUN, SLUG);
+		const fromSummary = readShipSummary(summaryInspection(), RUN, SLUG);
+		expect(fromSummary?.deliverables).toEqual(fromGate?.deliverables);
+	});
+
+	it("is nothing when a run committed no shipSummary", () => {
+		expect(
+			readShipSummary({ run: { runId: RUN, output: {} } }, RUN, SLUG),
+		).toBeUndefined();
+		expect(readShipSummary(undefined, RUN, SLUG)).toBeUndefined();
+	});
 });
 
 describe("the gate, as the person deciding it reads it", () => {
 	const rendered = (): string =>
-		renderShipGate(
-			readShipGate(inspectionWithInputs(), RUN, SLUG) as ShipGateView,
-		);
+		renderShipGate(readShipGate(gateInspection(), RUN, SLUG) as ShipGateView);
 
 	it("puts the summary, the findings by severity and the fix report on screen", () => {
 		const text = rendered();
@@ -368,7 +425,6 @@ describe("the gate, as the person deciding it reads it", () => {
 				runId: RUN,
 				slug: SLUG,
 				taskKey: "ship",
-				sourced: "inputs",
 				deliverables: [
 					{
 						id: "api",
@@ -383,60 +439,30 @@ describe("the gate, as the person deciding it reads it", () => {
 		).toContain("residual: nothing — every finding was addressed");
 	});
 
-	// "No findings" and "the findings are in a view this seat cannot reach" are
-	// different facts about the same run, and presenting the second as the first
-	// would be the seat vouching for a review nobody showed it.
-	it("says so when it is reading narration rather than the gate's own inputs", () => {
-		const text = renderShipGate(
-			readShipGate(inspectionWithoutInputs(), RUN, SLUG) as ShipGateView,
+	// One rendering, two callers: a person comparing what auto shipped against what
+	// ask would have asked about should be comparing two views of one thing.
+	it("renders a receipt with a heading instead of a question", () => {
+		const view = readShipSummary(
+			summaryInspection(),
+			RUN,
+			SLUG,
+		) as ShipGateView;
+		const receipt = renderShipGate(view, PUBLISHED_HEADING);
+		expect(receipt.startsWith(PUBLISHED_HEADING)).toBe(true);
+		expect(receipt).not.toContain("Ship `compose`?");
+		expect(receipt).not.toContain("parked at");
+		// Same body, down to the residuals.
+		expect(receipt).toContain(
+			"residual (2, shipping with these): f2 [major], f3 [minor]",
 		);
-		expect(text).toContain(NARRATION_ONLY_NOTE);
-		expect(text).toContain("artifact-backed");
-		expect(text).toContain("findings: none");
-	});
-});
-
-// ── The seam ─────────────────────────────────────────────────────────────────
-
-describe("what the read client cannot do, named rather than worked around", () => {
-	it("finds nothing on a client that is only a read client", () => {
-		expect(decideSeam({ inspect: async () => ({}) })).toEqual({});
-		expect(decideSeam(undefined)).toEqual({});
-		expect(decideSeam(null)).toEqual({});
-	});
-
-	it("finds each method the day pi-workflow exposes it", () => {
-		const client = {
-			inspect: async () => ({}),
-			decide: async () => ({}),
-			resume: async () => ({}),
-			stop: async () => ({}),
-		};
-		expect(Object.keys(decideSeam(client)).sort()).toEqual([
-			"decide",
-			"resume",
-			"stop",
-		]);
-	});
-
-	it("names the method and the view, because that is what a person is shown", () => {
-		expect(SHIP_DIALOG_SEAM.decide).toContain(
-			"decide(runId, taskKey, {value})",
-		);
-		expect(SHIP_DIALOG_SEAM.resume).toContain("resume(runId, {taskId})");
-		expect(SHIP_DIALOG_SEAM.stop).toContain("stop(runId)");
-		expect(SHIP_DIALOG_SEAM.inputs).toContain("artifact-backed");
-		expect(seamRefusal("decide", "Recording it")).toContain("Recording it");
-		expect(seamRefusal("decide", "x")).toContain(
-			"Nothing about the run changed.",
-		);
+		expect(receipt).toContain("f2: the caller already resolved it");
 	});
 });
 
 // ── The ship dialog ──────────────────────────────────────────────────────────
 
 const view = (): ShipGateView =>
-	readShipGate(inspectionWithInputs(), RUN, SLUG) as ShipGateView;
+	readShipGate(gateInspection(), RUN, SLUG) as ShipGateView;
 
 describe("the ship dialog, and what each answer does", () => {
 	it("offers Ship first and escapes to looking, which commits to nothing", () => {
@@ -450,87 +476,97 @@ describe("the ship dialog, and what each answer does", () => {
 		expect(SHIP_OPTIONS.at(-1)?.value).toBe("look");
 	});
 
-	it("records the decision and publishes when the runtime has `decide`", async () => {
-		const decided: unknown[] = [];
-		const r = recorder({
-			answers: [SHIP_YES],
-			seam: {
-				decide: async (runId, taskKey, options) => {
-					decided.push([runId, taskKey, options.value]);
-					return {};
-				},
-			},
-		});
-		const outcome = await askShip(r.deps, view());
-		expect(outcome).toEqual({ kind: "published", publication: OK });
-		expect(decided).toEqual([[RUN, "compose/ship", { ship: true }]]);
-		expect(r.published).toEqual([RUN]);
-		// The pull request's link lands in the conversation, with a turn.
-		expect(r.said.join("\n")).toContain("https://example.test/pr/1");
-	});
-
-	// `/plan ship` publishes without a proved gate because typing it IS the
-	// decision; answering this dialog is the same decision in the same session.
-	// What is NOT allowed is doing it silently: the notice names the gap.
-	it("publishes through the same path `/plan ship` takes when it cannot decide", async () => {
+	// THE DECISION IS THE WHOLE ACT, and this is the assertion that says so. Ship
+	// writes the run's own checkpoint with the key the view carries — not a
+	// hardcoded `ship`, because a checkpoint inside a fan-out is
+	// `<namespace>/<key>`.
+	it("decides the run's own ship checkpoint, and publishes nothing", async () => {
 		const r = recorder({ answers: [SHIP_YES] });
-		expect((await askShip(r.deps, view())).kind).toBe("published");
-		expect(r.published).toEqual([RUN]);
+		expect(await askShip(r.deps, view())).toEqual({ kind: "decided" });
+		expect(r.decided).toEqual([
+			{
+				runId: RUN,
+				taskKey: "compose/ship",
+				options: { decision: { ship: true }, approver: SHIP_DIALOG_APPROVER },
+			},
+		]);
+		// Publication follows the run's COMPLETION, down the announcement path a
+		// widget decision takes. A dialog that published here would leave the run's
+		// own checkpoint parked behind its own pull request.
+		expect(r.published).toEqual([]);
+		expect(r.said).toEqual([]);
 		const said = r.notices.map(([message]) => message).join("\n");
-		expect(said).toContain("decide(runId, taskKey, {value})");
-		expect(said).toContain("the same path `/plan ship` takes");
-		expect(said).toContain("stays parked");
+		expect(said).toContain("is shipping");
+		expect(said).toContain("on run `wfr-plan-to-ship-7`'s record");
+		expect(said).toContain("publishes from its receipt");
 	});
 
-	it("records `{ship:false}` with the reason typed, when it can", async () => {
-		const decided: unknown[] = [];
+	it("names the dialog as the approver, and claims no source", async () => {
+		const r = recorder({ answers: [SHIP_YES] });
+		await askShip(r.deps, view());
+		expect(r.decided[0]?.options.approver).toBe("human:maestro-ship-dialog");
+		// `source: "service-provider"` is pi-workflow's to set, and a consumer that
+		// claimed it would be claiming its own authority over the record.
+		expect(r.decided[0]?.options).not.toHaveProperty("source");
+	});
+
+	it("decides `{ship:false}` with the reason typed, and publishes nothing", async () => {
 		const r = recorder({
 			answers: [SHIP_NO],
 			typed: "the disputed finding is real",
-			seam: {
-				decide: async (_runId, _taskKey, options) => {
-					decided.push(options.value);
-					return {};
-				},
-			},
 		});
 		expect(await askShip(r.deps, view())).toEqual({
 			kind: "declined",
 			reason: "the disputed finding is real",
 		});
-		expect(decided).toEqual([
-			{ ship: false, note: "the disputed finding is real" },
+		expect(r.decided).toEqual([
+			{
+				runId: RUN,
+				taskKey: "compose/ship",
+				options: {
+					decision: { ship: false, note: "the disputed finding is real" },
+					approver: SHIP_DIALOG_APPROVER,
+					reason: "the disputed finding is real",
+				},
+			},
 		]);
-		// Nothing was published, which is the whole point of the answer.
-		expect(r.published).toEqual([]);
-	});
-
-	// There is no honest local substitute for writing `{"ship": false}` into a
-	// durable decision record, so nothing pretends the run moved.
-	it("refuses Don't ship by name when it cannot record one, and keeps the reason", async () => {
-		const r = recorder({ answers: [SHIP_NO], typed: "not yet" });
-		const outcome = await askShip(r.deps, view());
-		expect(outcome.kind).toBe("refused");
-		const said = r.notices.map(([message]) => message).join("\n");
-		expect(said).toContain('Recording `{"ship": false}`');
-		expect(said).toContain("Reason kept here: not yet");
 		expect(r.published).toEqual([]);
 	});
 
 	it("takes `no reason given` rather than an empty note", async () => {
-		const decided: unknown[] = [];
+		const r = recorder({ answers: [SHIP_NO], typed: "   " });
+		await askShip(r.deps, view());
+		expect(r.decided[0]?.options.decision).toEqual({
+			ship: false,
+			note: "no reason given",
+		});
+	});
+
+	// The runtime's own sentence, because it is the one that knows why: a key that
+	// names no awaiting checkpoint, a value its schema refuses, a run that moved on.
+	it("reports the runtime's refusal verbatim and changes nothing", async () => {
+		const r = recorder({
+			answers: [SHIP_YES],
+			decideFails: "Workflow checkpoint is not awaiting a decision.",
+		});
+		const outcome = await askShip(r.deps, view());
+		expect(outcome.kind).toBe("refused");
+		const said = r.notices.map(([message]) => message).join("\n");
+		expect(said).toContain("Workflow checkpoint is not awaiting a decision.");
+		expect(said).toContain("Nothing is published");
+		expect(r.published).toEqual([]);
+	});
+
+	it("keeps the typed reason when a refusal loses the decision", async () => {
 		const r = recorder({
 			answers: [SHIP_NO],
-			typed: "   ",
-			seam: {
-				decide: async (_r, _t, options) => {
-					decided.push(options.value);
-					return {};
-				},
-			},
+			typed: "not yet",
+			decideFails: "Workflow run is already terminal.",
 		});
-		await askShip(r.deps, view());
-		expect(decided).toEqual([{ ship: false, note: "no reason given" }]);
+		expect((await askShip(r.deps, view())).kind).toBe("refused");
+		expect(r.notices.map(([message]) => message).join("\n")).toContain(
+			"the reason you typed was: not yet",
+		);
 	});
 
 	// The decision is not made by going to look at the run, so the dialog comes
@@ -541,7 +577,7 @@ describe("the ship dialog, and what each answer does", () => {
 			answers: [SHIP_LOOK, SHIP_YES],
 			inspector: (runId) => looked.push(runId),
 		});
-		expect((await askShip(r.deps, view())).kind).toBe("published");
+		expect((await askShip(r.deps, view())).kind).toBe("decided");
 		expect(looked).toEqual([RUN]);
 		expect(
 			r.titles.filter((title) => title.startsWith("Ship `compose`?")),
@@ -556,22 +592,14 @@ describe("the ship dialog, and what each answer does", () => {
 		);
 	});
 
-	// An escape is a Look first, which loops — so escaping forever is a dialog
-	// nobody answered, never a publication nobody asked for.
-	it("never publishes on an unanswered dialog", async () => {
+	// An escape is a Look first, which loops — so escaping for ever is a dialog
+	// nobody answered, never a decision nobody took.
+	it("never decides anything on an unanswered dialog", async () => {
 		const r = recorder({ answers: [undefined, SHIP_NO], typed: "no" });
 		await askShip(r.deps, view());
-		expect(r.published).toEqual([]);
-	});
-
-	it("refuses when no stored plan matches the run's slug", async () => {
-		const r = recorder({ answers: [SHIP_YES], plan: undefined });
-		const outcome = await askShip(r.deps, view());
-		expect(outcome.kind).toBe("refused");
-		expect(r.published).toEqual([]);
-		expect(r.notices.map(([message]) => message).join("\n")).toContain(
-			"No stored plan `compose`",
-		);
+		expect(r.decided.map((entry) => entry.options.decision)).toEqual([
+			{ ship: false, note: "no" },
+		]);
 	});
 });
 
@@ -579,7 +607,7 @@ describe("the ship dialog, and what each answer does", () => {
 
 describe("a `gates: none` run that completed", () => {
 	it("publishes with no question at all, and posts the link", async () => {
-		const r = recorder();
+		const r = recorder({ inspect: summaryInspection });
 		expect(await autoPublish(r.deps, RUN, SLUG, "none")).toEqual({
 			kind: "published",
 			publication: OK,
@@ -589,6 +617,34 @@ describe("a `gates: none` run that completed", () => {
 		expect(r.titles).toEqual([]);
 		expect(r.said.join("\n")).toContain("https://example.test/pr/1");
 		expect(r.said.join("\n")).toContain("is published from run");
+	});
+
+	// A run that shipped without asking still owes a person the account a gate
+	// would have shown them, rendered the same way.
+	it("says what was published, from the run's own shipSummary", async () => {
+		const r = recorder({ inspect: summaryInspection });
+		await autoPublish(r.deps, RUN, SLUG, "none");
+		expect(r.inspected).toEqual([[RUN, AUTO_INSPECT_SECTIONS]]);
+		const message = r.said.join("\n");
+		expect(message).toContain(PUBLISHED_HEADING);
+		expect(message).toContain("Added the catalogue and its four stages.");
+		expect(message).toContain("blocking (1):");
+		expect(message).toContain("disputed (1): f2");
+		expect(message).toContain(
+			"residual (2, shipping with these): f2 [major], f3 [minor]",
+		);
+	});
+
+	// The account is a courtesy and the receipt publication reads is its own call,
+	// so a run whose inspection cannot be read still publishes — it just says less.
+	it("still publishes when the account cannot be read", async () => {
+		const r = recorder({ inspectFails: true });
+		expect((await autoPublish(r.deps, RUN, SLUG, "none")).kind).toBe(
+			"published",
+		);
+		const message = r.said.join("\n");
+		expect(message).toContain("https://example.test/pr/1");
+		expect(message).not.toContain(PUBLISHED_HEADING);
 	});
 
 	it("refuses every gate policy but `none`, by name", async () => {
@@ -611,7 +667,11 @@ describe("a `gates: none` run that completed", () => {
 			mode: "pr",
 			branch: "maestro/compose-1",
 		};
-		const r = recorder({ answers: [PUBLISH_RETRY], publish: [failed, OK] });
+		const r = recorder({
+			answers: [PUBLISH_RETRY],
+			publish: [failed, OK],
+			inspect: summaryInspection,
+		});
 		expect((await autoPublish(r.deps, RUN, SLUG, "none")).kind).toBe(
 			"published",
 		);
@@ -619,6 +679,8 @@ describe("a `gates: none` run that completed", () => {
 		expect(r.titles[0]).toContain("did not publish. Retry?");
 		expect(r.titles[0]).toContain("`npm run check` failed on the host");
 		expect(r.titles[0]).toContain("`maestro/compose-1` is in place");
+		// Read once, before the first attempt: a retry is not a second reading.
+		expect(r.inspected).toHaveLength(1);
 	});
 
 	it("leaves it, and names the manual fallback", async () => {
@@ -701,52 +763,59 @@ describe("a task or a run that failed", () => {
 		expect(FAILURE_OPTIONS.at(-1)?.escape).toBe(true);
 	});
 
-	it("resumes that one task when the runtime has `resume`", async () => {
-		const resumed: unknown[] = [];
+	it("resumes that one task, leaving its dependents alone", async () => {
+		const r = recorder({ answers: [RETRY_TASK] });
+		expect(await askFailure(r.deps, failure)).toEqual({ kind: "retried" });
+		expect(r.resumed).toEqual([[RUN, "t-impl"]]);
+		expect(r.notices.map(([message]) => message).join("\n")).toContain(
+			"its dependents are untouched",
+		);
+	});
+
+	// `resume` re-attempts ONE task, so there has to be one. Resuming whatever task
+	// happened to be last would be the seat choosing which failure to retry.
+	it("refuses a retry for a run that failed as a whole", async () => {
+		const r = recorder({ answers: [RETRY_TASK] });
+		const outcome = await askFailure(r.deps, {
+			runId: RUN,
+			slug: SLUG,
+			cause: "the run's budget was spent",
+		});
+		expect(outcome.kind).toBe("refused");
+		expect(r.resumed).toEqual([]);
+		expect(r.notices.map(([message]) => message).join("\n")).toContain(
+			"failed as a whole rather than at one task",
+		);
+	});
+
+	it("reports the runtime's own not-resumable refusal", async () => {
 		const r = recorder({
 			answers: [RETRY_TASK],
-			seam: {
-				resume: async (runId, options) => {
-					resumed.push([runId, options?.taskId]);
-					return {};
-				},
-			},
+			resumeFails: WORKFLOW_NOT_RESUMABLE,
 		});
-		expect(await askFailure(r.deps, failure)).toEqual({ kind: "retried" });
-		expect(resumed).toEqual([[RUN, "t-impl"]]);
-	});
-
-	it("names what pi-workflow must expose when it cannot retry", async () => {
-		const r = recorder({ answers: [RETRY_TASK] });
 		expect((await askFailure(r.deps, failure)).kind).toBe("refused");
 		expect(r.notices.map(([message]) => message).join("\n")).toContain(
-			"resume(runId, {taskId})",
+			"Workflow task is not resumable on this run.",
 		);
 	});
 
-	it("cancels the run when the runtime has `stop`", async () => {
-		const stopped: string[] = [];
+	it("cancels the run, and says the handoffs survive it", async () => {
+		const r = recorder({ answers: [STOP_RUN] });
+		expect(await askFailure(r.deps, failure)).toEqual({ kind: "stopped" });
+		expect(r.stopped).toEqual([RUN]);
+		const said = r.notices.map(([message]) => message).join("\n");
+		expect(said).toContain("still in the repository's object store");
+		expect(said).toContain("the runtime never applies one");
+	});
+
+	it("reports a refused stop rather than claiming the run ended", async () => {
 		const r = recorder({
 			answers: [STOP_RUN],
-			seam: {
-				stop: async (runId) => {
-					stopped.push(runId);
-					return {};
-				},
-			},
+			stopFails: "Workflow run is already terminal.",
 		});
-		expect(await askFailure(r.deps, failure)).toEqual({ kind: "stopped" });
-		expect(stopped).toEqual([RUN]);
-		expect(r.notices.map(([message]) => message).join("\n")).toContain(
-			"still in the repository's object store",
-		);
-	});
-
-	it("names what pi-workflow must expose when it cannot stop", async () => {
-		const r = recorder({ answers: [STOP_RUN] });
 		expect((await askFailure(r.deps, failure)).kind).toBe("refused");
 		expect(r.notices.map(([message]) => message).join("\n")).toContain(
-			"stop(runId)",
+			"Workflow run is already terminal.",
 		);
 	});
 
@@ -759,6 +828,9 @@ describe("a task or a run that failed", () => {
 		expect(carried).toContain("compose/implement-api");
 		expect(carried).toContain(failure.cause);
 		expect(carried).toContain("nothing was published");
+		// It needs nothing of the runtime, which is why it is the escape.
+		expect(r.resumed).toEqual([]);
+		expect(r.stopped).toEqual([]);
 	});
 
 	it("re-plans on an unanswered dialog, which changes nothing about the run", async () => {
@@ -800,9 +872,7 @@ describe("the one tool the ship decision has", () => {
 		});
 		const result = await (
 			definition as unknown as {
-				execute(...args: unknown[]): Promise<{
-					content: { text: string }[];
-				}>;
+				execute(...args: unknown[]): Promise<{ content: { text: string }[] }>;
 			}
 		).execute("id", {}, undefined, undefined, {});
 		expect(opens).toHaveLength(1);
@@ -817,9 +887,7 @@ describe("the one tool the ship decision has", () => {
 		const definition = tool({ parked: () => false, open: () => undefined });
 		const result = await (
 			definition as unknown as {
-				execute(...args: unknown[]): Promise<{
-					content: { text: string }[];
-				}>;
+				execute(...args: unknown[]): Promise<{ content: { text: string }[] }>;
 			}
 		).execute("id", {}, undefined, undefined, {});
 		expect(result.content[0]?.text).toBe(NOTHING_PARKED);

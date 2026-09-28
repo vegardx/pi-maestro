@@ -12,7 +12,7 @@
  * bounded on purpose:
  *
  *   1. The literal below names **only** what pi-maestro actually needs — one
- *      revision and eight feature keys — not all of them, so an unrelated
+ *      revision and nine feature keys — not all of them, so an unrelated
  *      feature flip is not pi-maestro's business.
  *   2. `test/workflow-provider.test.ts` compares the literal against a
  *      checked-in copy of pi-workflow's own shipped constant
@@ -39,7 +39,7 @@ import { Value } from "typebox/value";
  * Bumping it is a deliberate act: re-read pi-workflow's contract, refresh the
  * fixture, and check that the features below still mean what they meant.
  */
-export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 21;
+export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 22;
 
 /**
  * The features the hand-off and `/plan run` actually depend on.
@@ -56,6 +56,13 @@ export const REQUIRED_WORKFLOW_CONTRACT_REVISION = 21;
  *   the plan's own run when a person answers `Start the run?` with yes. A
  *   runtime without it leaves the seat with no way to start a plan at all: the
  *   model is never asked to do it, so there is no fallback to degrade to.
+ * - `serviceProviderDecide` — `decide`, `resume` and `stop` exist on the client,
+ *   and `inspect` carries `include: ["checkpoints"]`. Revision 22. This seat's
+ *   three dialogs ARE those calls: the ship decision writes the run's own `ship`
+ *   checkpoint, a failure resumes one task or stops the run, and the gate's
+ *   inputs are what `checkpoints` returns. A runtime without it leaves every one
+ *   of them with nothing to do — so it is required rather than degraded around,
+ *   which is the opposite of the judgement made while it did not exist.
  */
 export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"staticWorkflows",
@@ -66,6 +73,7 @@ export const REQUIRED_WORKFLOW_FEATURES = Object.freeze([
 	"finalizers",
 	"worktrees",
 	"serviceProviderStart",
+	"serviceProviderDecide",
 ] as const);
 
 export type RequiredWorkflowFeature =
@@ -94,6 +102,7 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
 			finalizers: true,
 			worktrees: true,
 			serviceProviderStart: true,
+			serviceProviderDecide: true,
 		}),
 	});
 
@@ -106,12 +115,13 @@ export const REQUIRED_WORKFLOW_CONTRACT: RequiredWorkflowContract =
  * is not pi-maestro's refusal to make — but a contract that has no
  * `requiredSubagent` at all is not this contract, so the shape is checked.
  *
- * `serviceProviderStart` is deliberately NOT named here, although
- * `REQUIRED_WORKFLOW_FEATURES` requires it. A pi-workflow that predates
- * `startBuiltin` is still recognisably a workflow runtime contract, and it
- * should be refused by `workflowContractMismatch` — which names the feature and
- * the value this seat needs — rather than by the shape check, whose only answer
- * is "that is not a workflow runtime contract".
+ * `serviceProviderStart` and `serviceProviderDecide` are deliberately NOT named
+ * here, although `REQUIRED_WORKFLOW_FEATURES` requires both. A pi-workflow that
+ * predates `startBuiltin`, or one that predates `decide` on the read client, is
+ * still recognisably a workflow runtime contract, and it should be refused by
+ * `workflowContractMismatch` — which names the feature and the value this seat
+ * needs — rather than by the shape check, whose only answer is "that is not a
+ * workflow runtime contract".
  */
 export const WorkflowRuntimeContractMirror = Type.Object({
 	schema: Type.Literal("pi-workflow-runtime"),

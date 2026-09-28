@@ -13,7 +13,7 @@
 // ceiling is registered through pi-subagent's own function, and a locally
 // declared copy of that would be a second definition of the one bound.
 //
-// FOUR THINGS ARE PINNED ON THE REQUEST, and each of them is the point:
+// FIVE THINGS ARE PINNED ON THE REQUEST, and each of them is the point:
 //
 //   - `agent: "plan-reviewer"` with `agentRoots` pointing at this package's own
 //     `agents/` directory, so the definition the check runs is the one shipped
@@ -25,6 +25,12 @@
 //   - `ceiling: { workspaceModes: ["read-only"] }`. The check never writes,
 //     whatever mode the seat is in — the ceiling is the bound, not a request,
 //     and pi-subagent refuses a launch above it by name.
+//   - `model: "inherit"`. The check reads the plan the session's own model just
+//     wrote, and it should read it as well as that model writes: a reviewer pinned
+//     to something cheaper than the author is a reviewer who agrees because it
+//     cannot follow. pi-subagent resolves `inherit` through the SESSION-MODEL
+//     PROVIDER this file registers, and the definition admits it by listing
+//     `inherit` in `allowedModels`.
 //
 // NOTHING HERE THROWS AT THE CALLER. Every failure — no runtime, a refused
 // launch, a timeout, an output this seat cannot read — becomes
@@ -47,6 +53,7 @@ import {
 	acquireSubagentService,
 	SubagentServiceProviderError,
 } from "@vegardx/pi-subagent/service-provider";
+import { registerSessionModelProvider } from "@vegardx/pi-subagent/session-model-provider";
 import type { DelegationCeiling, ModeName, WorkspaceMode } from "./mode.js";
 import { modeCeiling } from "./mode.js";
 import type { Plan } from "./plan.js";
@@ -78,6 +85,14 @@ import { planDigest } from "./plan-input.js";
 export interface SubagentLaunchRequest {
 	readonly operationId: string;
 	readonly agent: string;
+	/**
+	 * `"inherit"`, or an exact model. @see INHERIT_MODEL
+	 *
+	 * The one-shot plan check asks to inherit; nothing here ever names an exact
+	 * model, because pinning one would be this seat deciding that a reviewer
+	 * should read worse than the author wrote.
+	 */
+	readonly model?: "inherit";
 	readonly agentRoots?: string[];
 	readonly task: {
 		readonly goal: string;
@@ -191,7 +206,7 @@ export const PLAN_CHECK_CEILING: Readonly<DelegationCeiling> = Object.freeze({
 
 // ── The contract this seat was built against ─────────────────────────────────
 
-export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 8;
+export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 9;
 
 /**
  * The features the plan check depends on.
@@ -206,6 +221,9 @@ export const REQUIRED_SUBAGENT_FEATURES = Object.freeze([
 	"structuredOutput",
 	"agentRootsFirst",
 	"delegationCeiling",
+	// Revision 9. The plan check asks for `model: "inherit"`, so a runtime that
+	// cannot resolve one would refuse the one launch this seat makes.
+	"sessionModelInherit",
 ] as const);
 
 /**
@@ -275,6 +293,10 @@ export function planCheckRequest(
 	return {
 		operationId: planCheckOperationId(input.plan, input.round),
 		agent: PLAN_REVIEWER_AGENT,
+		// THE SESSION'S OWN MODEL, resolved by pi-subagent through the provider
+		// registered below. A reviewer pinned below the author is a reviewer that
+		// agrees because it cannot follow.
+		model: "inherit",
 		agentRoots: [...(input.agentRoots ?? [maestroAgentsDir()])],
 		task: {
 			goal:
@@ -487,18 +509,139 @@ export function registerModeCeiling(
 	} catch (error) {
 		return {
 			problem:
-				providerCeilingRefusal(error) ??
+				providerRegistrationRefusal(error, "DelegationCeilingProviderError") ??
 				"the delegation ceiling could not be registered with the subagent runtime",
 		};
 	}
 }
 
-/** pi-subagent's own ceiling-registration refusal, recognised by name. */
-function providerCeilingRefusal(error: unknown): string | undefined {
+// ── The session's model, registered once ─────────────────────────────────────
+
+/**
+ * What pi-subagent means by an exact model, declared here.
+ *
+ * `thinking` is pi-subagent's OWN list, and it is one level shorter than pi's:
+ * there is no `max`. That is the whole reason this is a declared shape and a
+ * mapping rather than a pass-through — see {@link subagentThinking}.
+ */
+export interface SessionModelAnswer {
+	readonly provider: string;
+	readonly id: string;
+	readonly thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+
+/** The session, as this file reads one. Structurally `ExtensionContext`. */
+export interface SessionModelHost {
+	readonly model?: { readonly provider?: unknown; readonly id?: unknown };
+	readonly thinkingLevel?: unknown;
+}
+
+/**
+ * Pi's thinking level in pi-subagent's vocabulary.
+ *
+ * `max` is pi's top rung and not pi-subagent's, so it maps to `xhigh` — the
+ * highest level the contract has. Mapping DOWN rather than refusing, because a
+ * person who set `max` asked for as much reasoning as there is, and a delegation
+ * that refused to launch over the name of the top rung would be reading the
+ * contract as a rule about spelling. Anything unrecognised is `medium`: this is a
+ * host's answer about its own session, and a level nothing stands behind is worse
+ * than a default that does.
+ */
+export function subagentThinking(
+	level: unknown,
+): SessionModelAnswer["thinking"] {
+	switch (level) {
+		case "off":
+		case "minimal":
+		case "low":
+		case "medium":
+		case "high":
+		case "xhigh":
+			return level;
+		case "max":
+			return "xhigh";
+		default:
+			return "medium";
+	}
+}
+
+/**
+ * The session's model as pi-subagent asks for it, or `undefined`.
+ *
+ * `undefined` when there is no session, no model on it, or no provider and id to
+ * name — which is the same answer an unregistered host gives, and pi-subagent
+ * refuses an inherited request against it by name rather than guessing one.
+ */
+export function sessionModelAnswer(
+	host: SessionModelHost | undefined,
+): SessionModelAnswer | undefined {
+	const provider = host?.model?.provider;
+	const id = host?.model?.id;
+	if (typeof provider !== "string" || provider.length === 0) return undefined;
+	if (typeof id !== "string" || id.length === 0) return undefined;
+	return { provider, id, thinking: subagentThinking(host?.thinkingLevel) };
+}
+
+/**
+ * `registerSessionModelProvider`, re-typed against this package's
+ * pi-coding-agent, for the same reason the ceiling provider is.
+ */
+const registerSessionModel = registerSessionModelProvider as unknown as (
+	events: EventBus,
+	provider: () => SessionModelAnswer | undefined,
+) => () => void;
+
+/**
+ * Answer what this session is running on, so a delegation can inherit it.
+ *
+ * ONE PROVIDER, READ ON EVERY CALL. `live` is asked each time rather than once at
+ * registration, for exactly the reason the ceiling is: `/model` and the thinking
+ * dial move under a running session, and an answer captured when the extension
+ * loaded would make every later delegation inherit a model the person stopped
+ * using. pi-subagent refuses a second registration by name, so the refusal is
+ * returned rather than thrown — a seat whose delegations inherit somebody else's
+ * session is a fact worth reporting and not a reason to fail to load.
+ */
+export function registerSessionModelFor(
+	events: EventBus,
+	live: () => SessionModelHost | undefined,
+): { readonly release: () => void } | { readonly problem: string } {
+	try {
+		const release = registerSessionModel(events, () => {
+			try {
+				return sessionModelAnswer(live());
+			} catch {
+				// A replaced session throws from its own context. No session model.
+				return undefined;
+			}
+		});
+		return { release };
+	} catch (error) {
+		return {
+			problem:
+				providerRegistrationRefusal(error, "SessionModelProviderError") ??
+				"the session model provider could not be registered with the subagent runtime",
+		};
+	}
+}
+
+/**
+ * pi-subagent's own registration refusal, recognised by name.
+ *
+ * ONE FUNCTION FOR BOTH PROVIDERS, taking the error name it expects: the two
+ * registrations refuse for the same reason — somebody else got there first — and
+ * pi-subagent names each with its own class. A message passed through unchanged is
+ * better than one this file could write, and it is only passed through when the
+ * error really is that class's, so a stray failure's words never reach a person.
+ */
+function providerRegistrationRefusal(
+	error: unknown,
+	name: string,
+): string | undefined {
 	if (
 		typeof error === "object" &&
 		error !== null &&
-		(error as { name?: unknown }).name === "DelegationCeilingProviderError" &&
+		(error as { name?: unknown }).name === name &&
 		typeof (error as { message?: unknown }).message === "string"
 	)
 		return (error as { message: string }).message;

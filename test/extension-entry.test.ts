@@ -3,10 +3,11 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-	EventBus,
-	ExtensionAPI,
-	ExtensionContext,
+import {
+	createEventBus,
+	type EventBus,
+	type ExtensionAPI,
+	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { resolveSessionModel } from "@vegardx/pi-subagent/session-model-provider";
 import { afterEach, describe, expect, it } from "vitest";
@@ -143,6 +144,7 @@ describe("interactive seat extension entry", () => {
 			{ handler(args: string, ctx: unknown): Promise<void> }
 		>();
 		const api = {
+			events: createEventBus(),
 			on(event: string, handler: (...args: unknown[]) => unknown) {
 				const registered = handlers.get(event) ?? [];
 				registered.push(handler);

@@ -225,9 +225,9 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 	// The fixture is pi-workflow's own constant, so this is the cross-repo pin: the
 	// revision this seat was written against, and the pi-subagent revision that
 	// runtime needs, both read off the copy rather than restated.
-	it("is pinned to revision 22, over pi-subagent revision 9", () => {
-		expect(shipped.contractRevision).toBe(22);
-		expect(shipped.requiredSubagent.contractRevision).toBe(9);
+	it("is pinned to revision 23, over pi-subagent revision 10", () => {
+		expect(shipped.contractRevision).toBe(23);
+		expect(shipped.requiredSubagent.contractRevision).toBe(10);
 		expect(shipped.requiredSubagent.features.sessionModelInherit).toBe(true);
 	});
 });

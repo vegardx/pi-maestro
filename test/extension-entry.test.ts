@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
+	EventBus,
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { resolveSessionModel } from "@vegardx/pi-subagent/session-model-provider";
 import { afterEach, describe, expect, it } from "vitest";
 import maestroExtension, {
 	type SeatHost,
@@ -166,6 +168,100 @@ describe("interactive seat extension entry", () => {
 			ui: { notify() {} },
 		});
 		expect(toolCall({ toolName: "write" }, {})).toBeUndefined();
+	});
+});
+
+// ── The session's model, before the first turn ──────────────────────────────
+//
+// pi-subagent resolves `model: "inherit"` through the provider this extension
+// registers. A run started from an extension at session start arrives before
+// any turn, so the provider must answer from the `session_start` context until
+// a turn context replaces it — and a new session must replace both.
+
+describe("the session-model provider the extension registers", () => {
+	function bus(): EventBus {
+		const handlers = new Map<string, Set<(data: unknown) => void>>();
+		return {
+			emit(channel: string, data: unknown) {
+				for (const handler of [...(handlers.get(channel) ?? [])]) handler(data);
+			},
+			on(channel: string, handler: (data: unknown) => void) {
+				const set = handlers.get(channel) ?? new Set();
+				handlers.set(channel, set);
+				set.add(handler);
+				return () => set.delete(handler);
+			},
+		} as unknown as EventBus;
+	}
+
+	function session(provider: string, id: string, thinkingLevel: string) {
+		return {
+			cwd: temp("maestro-model-cwd-"),
+			model: { provider, id },
+			thinkingLevel,
+			isProjectTrusted: () => true,
+			hasUI: false,
+			ui: { notify() {} },
+			sessionManager: { getSessionId: () => `${provider}-${id}` },
+		};
+	}
+
+	async function loaded() {
+		const events = bus();
+		const handlers = new Map<
+			string,
+			Array<(event: unknown, ctx: unknown) => unknown>
+		>();
+		const api = {
+			events,
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				const registered = handlers.get(event) ?? [];
+				registered.push(handler);
+				handlers.set(event, registered);
+			},
+			registerTool() {},
+			registerCommand() {},
+		} as unknown as ExtensionAPI;
+		await maestroExtension(api);
+		const fire = async (event: string, ctx: unknown) => {
+			for (const handler of handlers.get(event) ?? [])
+				await handler({ type: event }, ctx);
+		};
+		return { events, fire };
+	}
+
+	it("answers from the session_start context before any turn", async () => {
+		const { events, fire } = await loaded();
+		expect(resolveSessionModel(events)).toBeUndefined();
+		await fire("session_start", session("anthropic", "opus-5", "high"));
+		expect(resolveSessionModel(events)).toEqual({
+			provider: "anthropic",
+			id: "opus-5",
+			thinking: "high",
+		});
+	});
+
+	it("prefers the turn context once a turn has started", async () => {
+		const { events, fire } = await loaded();
+		await fire("session_start", session("anthropic", "opus-5", "high"));
+		await fire("turn_start", session("openai", "sol", "low"));
+		expect(resolveSessionModel(events)).toEqual({
+			provider: "openai",
+			id: "sol",
+			thinking: "low",
+		});
+	});
+
+	it("answers for the new session after another session_start", async () => {
+		const { events, fire } = await loaded();
+		await fire("session_start", session("anthropic", "opus-5", "high"));
+		await fire("turn_start", session("openai", "sol", "low"));
+		await fire("session_start", session("google", "gem", "medium"));
+		expect(resolveSessionModel(events)).toEqual({
+			provider: "google",
+			id: "gem",
+			thinking: "medium",
+		});
 	});
 });
 

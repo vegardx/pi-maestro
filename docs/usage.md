@@ -148,14 +148,17 @@ interpret.
    switch, keep the plan stored* switches and starts nothing. *Keep planning* is
    what escape takes.
 5. **Then the session narrates the run, and asks what it has to ask.** Each task
-   completion is one line posted into the conversation. A review synthesis, a fix
-   report, a failure, the ship gate arriving and a run that ends without a gate
+   completion is one line posted into the conversation. A normalize (the
+   reviewers have reported), a resume (the implementer answered the review), a
+   failure, the ship gate arriving and a run that ends without a gate
    each give the model a turn to tell you what it means. Three of those are
    decisions rather than news, and each one opens a dialog in this session:
 
-   - **the ship gate** (ask) — every deliverable's summary, the normalized
-     findings by severity, the fixer's answer to each of them and what is left
-     over, then *Ship* / *Don't ship* / *Look first*. Saying "ship it" in the
+   - **the ship gate** (ask) — every deliverable's summary, the review's counts,
+     how the implementer answered each finding (fixed, declined, out of scope)
+     and the last check, then *Ship* / *Don't ship* / *Look first*, which shows
+     every finding with who raised it and the implementer's reasoning — the same
+     Review section the pull request carries. Saying "ship it" in the
      conversation opens the same dialog, through the `plan_ship_dialog` tool,
      which decides nothing itself;
    - **completion** (auto) — the pull request is published and its link lands in

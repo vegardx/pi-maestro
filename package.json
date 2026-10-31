@@ -3,7 +3,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "pi-maestro \u2014 structured pi coding-agent extension stack",
+	"description": "pi-maestro — structured pi coding-agent extension stack",
 	"license": "MIT",
 	"keywords": [
 		"pi-package"
@@ -36,15 +36,15 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.4",
-		"@earendil-works/pi-agent-core": "0.84.2",
-		"@earendil-works/pi-ai": "0.84.2",
-		"@earendil-works/pi-coding-agent": "0.84.2",
-		"@earendil-works/pi-tui": "0.84.2",
-		"@sinclair/typebox": "^0.34.52",
+		"@earendil-works/pi-agent-core": "1.4.0",
+		"@earendil-works/pi-ai": "1.4.0",
+		"@earendil-works/pi-coding-agent": "1.4.0",
+		"@earendil-works/pi-tui": "1.4.0",
 		"@types/node": "^24.13.3",
 		"@vegardx/pi-subagent": "file:../pi-subagent",
 		"husky": "^9.1.7",
 		"semantic-release": "^25.0.7",
+		"typebox": "1.3.27",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.10"
 	},
@@ -55,5 +55,11 @@
 		"@juicesharp/rpiv-ask-user-question": "2.6.1",
 		"@juicesharp/rpiv-i18n": "2.6.1",
 		"jiti": "^2.7.0"
+	},
+	"overrides": {
+		"@earendil-works/pi-coding-agent": {
+			"undici": "^8.12.3",
+			"minimatch": "^11.0.0"
+		}
 	}
 }

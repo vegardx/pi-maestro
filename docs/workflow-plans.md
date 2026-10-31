@@ -33,12 +33,20 @@ run got to.
 **No command is ever named for a decision.** Everything a person has to decide is
 a dialog in the session that started the run.
 
+**Version 9 removed `policy.maxFixRounds`** with the fixer it budgeted. The
+implementer that wrote a deliverable is resumed in its own session with the check
+report and the review findings, answers every finding `fixed`, `declined` (with
+its reasoning) or `out-of-scope`, and its hand-off is checked again. A decline is
+an answer a person reads at the gate — it never holds the run. `policy.resumes`
+(`0` or `1`, default `1`) says whether the resume happens. A plan still carrying
+`maxFixRounds` is **refused by name**, and a `schemaVersion: 8` envelope is
+refused; there is no migration.
+
 **Version 8 removed `policy.effort`.** The dial was one answer standing in for
 three unrelated questions — which model implements, how hard it thinks, and how
 many fix rounds the check buys — and it answered all three in the middle of a
 conversation. Implementation roles inherit the session's own model and thinking
-level now, reviews keep their tiers, and fix rounds are the plan's own
-`maxFixRounds` or one. Version 8 also admits `policy.gates: "none"`, which is what
+level now, and reviews keep their tiers. Version 8 also admits `policy.gates: "none"`, which is what
 leaving plan mode to `auto` writes. There is no migration, and a
 `schemaVersion: 7` envelope is refused by name.
 
@@ -103,15 +111,19 @@ to apply to the deliverable's finished work, and how much reviewer it is worth.
   one makes the plan run on hosts that have that model and nowhere else.
 - `skill` — an ambient skill name to request explicitly in the stage prompt.
 - `tier` — `light`, `standard`, or `heavy`: how much reviewer the lens is
-  worth, for the host to resolve.
+  worth. **This is the per-reviewer effort knob**: the tier picks the model when
+  none is pinned and the thinking level either way, and the review record
+  stamps the model and thinking level each reviewer actually ran at.
 - `diverse` — ask for a reviewer from a different model family than the
   implementer.
 
-A review that names neither a `model` nor a `tier` is legal; the running
-workflow's effort dial then decides what the reviewer is. At most sixteen
-reviews read one deliverable, which is the fan-out's own bound. The same lens
-twice is not an error — it is how one point of view runs under two models — and
-the compiler suffixes the duplicates `-2`, `-3` by declaration order.
+A review that names neither a `model` nor a `tier` is legal; the policy's
+`reviewDefault.tier` then decides what the reviewer is. At most sixteen reviews
+read one deliverable, which is the fan-out's own bound. **The same lens may
+appear more than once**, and that is the point of it: two entries with one lens
+and a different `tier` or `model` are two reviewers reading the same work at two
+efforts or under two models, and the review record says which of them found
+what. The compiler suffixes the duplicates `-2`, `-3` by declaration order.
 
 #### `model` and `skill` are checked against this host
 
@@ -144,17 +156,30 @@ executes:
 
 ```jsonc
 [ { "use": "implement",      "id": "implement" },
-  { "use": "verify-and-fix", "id": "verify", "maxRounds": <policy.maxFixRounds> },
+  { "use": "check",          "id": "check" },
   { "use": "review-fan-out", "id": "review",
-    "lenses": [ /* one per `reviews` entry, tier and diverse from it or policy.reviewDefault */ ],
-    "synthesis": "optional" } ]
+    "lenses": [ /* one per `reviews` entry, tier and diverse from it or policy.reviewDefault */ ] },
+  { "use": "normalize",      "id": "normalize" },
+  { "use": "resume",         "id": "resume" },   // policy.resumes: 1
+  { "use": "check",          "id": "recheck" } ] // policy.resumes: 1
 ```
 
-The review stage is **omitted** rather than declared empty when the deliverable
-lists no reviews: a fan-out over zero lenses is not a cheaper review, it is a
-stage that cannot be compiled. `maxRounds` is mapped to the component's verify
-rounds on the way out (`fix + 1`, so a fix is never left unchecked), and where a
-run stops for a human is `policy.gates` rather than a stage of its own.
+The implementer hands off; the check and every review lens run on that hand-off
+in parallel, each lens reporting findings (claim, location, evidence, severity).
+The harness clusters the findings by place without judging them; when more than
+one lens reported, a model may only *merge* clusters that state the same problem.
+The resumed implementer is shown the check report and each cluster's claim,
+location and evidence — no severity, lens, model or agreement — and answers every
+one; `recheck` checks its hand-off when it changed anything. The run records
+`reviews-<d>`: every reviewer (lens, model, thinking, attempt, status), every
+cluster with who reported it and how many agreed, and each disposition with its
+reasoning.
+
+The review and normalize stages are **omitted** rather than declared empty when
+the deliverable lists no reviews: a fan-out over zero lenses is not a cheaper
+review, it is a stage that cannot be compiled. The resume stays, because a
+failing check is something to answer with nobody reviewing. Where a run stops
+for a human is `policy.gates` rather than a stage of its own.
 
 **pi-maestro does not compile this.** The lowering above is pi-workflow's, stated
 here so a reader knows what a plan becomes. This seat used to derive the graph
@@ -176,7 +201,7 @@ can see where a run is going and the plan digest covers it.
 | --- | --- | --- |
 | `gates` | `ship`, `every-deliverable`, `none` | `ship` |
 | `reviewDefault` | `{tier?, diverse?}` | `{tier: "standard", diverse: false}` |
-| `maxFixRounds` | `0`, `1`, `2` | `1` |
+| `resumes` | `0`, `1` | `1` |
 | `publish` | `{mode: "none"\|"branch"\|"pr", base?}` | `{mode: "none"}` |
 
 `gates` is **the same question as what ends the run**, and the mode you leave plan
@@ -207,7 +232,7 @@ cannot honour is not written down in the first place.
   "slug": "compose-catalogue", "title": "Component catalogue",
   "body": "Why the catalogue is worth building.",
   "repos": [{ "key": "wf", "path": "/Users/vegardx/src/github.com/vegardx/pi-workflow" }],
-  "policy": { "gates": "ship", "maxFixRounds": 1,
+  "policy": { "gates": "ship", "resumes": 1,
               "publish": { "mode": "pr", "base": "main" } },
   "deliverables": [{
     "id": "catalogue", "title": "Ship the component catalogue",

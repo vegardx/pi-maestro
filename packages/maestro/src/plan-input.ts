@@ -28,7 +28,9 @@ import type { Plan } from "./plan.js";
  * covered by `planDigest`, because it was not part of the plan. Schema 8 removed
  * it: how hard a role thinks is the session's own model and thinking level,
  * inherited per call, and what the run is gated by is `policy.gates` on the
- * document the digest covers.
+ * document the digest covers. Schema 9's `policy.resumes` travels the same
+ * way, inside the plan: pi-workflow 5's closed plan schema takes it, and
+ * refuses the `maxFixRounds` it replaced.
  */
 export interface WorkflowInput {
 	readonly plan: Plan;

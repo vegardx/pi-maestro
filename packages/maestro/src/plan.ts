@@ -43,10 +43,16 @@ import { resolve } from "node:path";
  * fix rounds are the plan's `maxFixRounds` or one. Version 8 also admits
  * `policy.gates: "none"`, which is what leaving plan mode to `auto` writes: no
  * ship gate, the run completes, and the seat publishes from its terminal output.
+ * Version 9 removed `policy.maxFixRounds` with the fixer it budgeted. The
+ * implementer that wrote a deliverable is resumed in its own session with the
+ * check report and the review, answers every finding `fixed`, `declined` or
+ * `out-of-scope`, and is checked again; `policy.resumes` (0 or 1, default 1) is
+ * whether that happens. A decline is an answer a person reads at the gate,
+ * never a reason to hold the run. `maxFixRounds` is refused by name.
  * Nothing before the current version is readable, and nothing tries to be:
  * there is no migration path here on purpose.
  */
-export const MAESTRO_SCHEMA_VERSION = 8 as const;
+export const MAESTRO_SCHEMA_VERSION = 9 as const;
 
 /** An existing Git working-tree root the plan works in. */
 export interface PlanRepo {
@@ -148,7 +154,12 @@ export interface Review {
 	 * the lens to read the same work under another model.
 	 */
 	readonly model?: string;
-	/** How much reviewer to spend, when the plan does not pin one. */
+	/**
+	 * How much reviewer to spend: THE EFFORT KNOB. The tier picks the model when
+	 * none is pinned and the thinking level either way, and the review record
+	 * stamps the thinking level each reviewer actually ran at. Repeat the lens at
+	 * another tier to read the same work at another effort.
+	 */
 	readonly tier?: ReviewTier;
 	/** Ask for a reviewer from a different model family than the implementer. */
 	readonly diverse?: boolean;
@@ -172,36 +183,36 @@ export interface Task {
  * DERIVED, NEVER AUTHORED. `defaultStagesFor` is the only thing that builds
  * one; version 5 removed `deliverables[].stages` from the document, so this
  * vocabulary is the compiler's own intermediate between a plan and the
- * compiled stage document the runtime reads.
+ * compiled stage document the runtime reads. It is pi-workflow's
+ * `COMPILED_STAGE_KINDS` minus `gate`, which `policy.gates` adds and no
+ * deliverable carries.
  */
 export const STAGE_KINDS = [
 	"implement",
-	"verify-and-fix",
+	"check",
 	"review-fan-out",
+	"normalize",
+	"resume",
 ] as const;
 
 export type StageKind = (typeof STAGE_KINDS)[number];
 
-/** How many fix rounds a `verify-and-fix` stage may take. Bounded on purpose. */
-export const FIX_ROUNDS = [0, 1, 2] as const;
+/**
+ * Whether the implementer is resumed to answer the check and the review.
+ *
+ * Bounded at one on purpose: the resumed implementer answers every finding
+ * once, a recheck verifies what it changed, and whatever is left goes to the
+ * person at the gate with the implementer's reasoning beside it.
+ */
+export const RESUMES = [0, 1] as const;
 
-export type FixRounds = (typeof FIX_ROUNDS)[number];
-
-/** Whether a fan-out's verdicts get reduced into one statement. */
-export const SYNTHESIS_MODES = ["required", "optional", "none"] as const;
-
-export type SynthesisMode = (typeof SYNTHESIS_MODES)[number];
-
-/** What a fix round may spend more of when the round before it failed. */
-export const ESCALATIONS = ["thinking", "none"] as const;
-
-export type Escalation = (typeof ESCALATIONS)[number];
+export type Resumes = (typeof RESUMES)[number];
 
 /**
  * One point of view in a `review-fan-out`. `id` is the fan-out key, so it is
  * `LENS_ID_RE`; a lens named twice is not an error — the
  * compiler suffixes duplicates `-2`, `-3` by declaration ordinal, which is
- * how the same lens runs twice under two models.
+ * how the same lens runs twice under two models or at two tiers.
  */
 export interface ReviewLens {
 	readonly id: string;
@@ -222,12 +233,14 @@ export interface ImplementStage {
 	readonly tools?: readonly string[];
 }
 
-/** Run the check, fix what it says, bounded. Never an open loop. */
-export interface VerifyAndFixStage {
-	readonly use: "verify-and-fix";
+/**
+ * The repository's own check over a hand-off, verify only. `id` is `check`
+ * for the implementer's hand-off and `recheck` for the resumed one's: a stage
+ * that runs twice takes a second id, never a suffix.
+ */
+export interface CheckStage {
+	readonly use: "check";
 	readonly id: string;
-	readonly maxRounds?: FixRounds;
-	readonly escalate?: Escalation;
 }
 
 /** Independent points of view over the same subject, in parallel. */
@@ -235,10 +248,26 @@ export interface ReviewFanOutStage {
 	readonly use: "review-fan-out";
 	readonly id: string;
 	readonly lenses: readonly ReviewLens[];
-	readonly synthesis?: SynthesisMode;
 }
 
-export type Stage = ImplementStage | VerifyAndFixStage | ReviewFanOutStage;
+/** The harness clusters the findings; a model may only merge clusters. */
+export interface NormalizeStage {
+	readonly use: "normalize";
+	readonly id: string;
+}
+
+/** The implementer, continued in its own session, answers every finding. */
+export interface ResumeStage {
+	readonly use: "resume";
+	readonly id: string;
+}
+
+export type Stage =
+	| ImplementStage
+	| CheckStage
+	| ReviewFanOutStage
+	| NormalizeStage
+	| ResumeStage;
 
 export interface Deliverable {
 	readonly id: string;
@@ -319,8 +348,8 @@ export interface PlanPolicy {
 		readonly tier?: ReviewTier;
 		readonly diverse?: boolean;
 	};
-	/** Default 0 cheap / 1 standard / 2 deep. */
-	readonly maxFixRounds?: FixRounds;
+	/** Resume the implementer to answer the check and the review. Default 1. */
+	readonly resumes?: Resumes;
 	/** Default `{ mode: "none" }`. `pr` needs `gh`, at readiness, not here. */
 	readonly publish?: {
 		readonly mode: PublishMode;
@@ -335,7 +364,7 @@ export interface ResolvedPolicy {
 		readonly tier: ReviewTier;
 		readonly diverse: boolean;
 	};
-	readonly maxFixRounds: FixRounds;
+	readonly resumes: Resumes;
 	readonly publish: {
 		readonly mode: PublishMode;
 		readonly base?: string;
@@ -367,15 +396,13 @@ export const DEFAULT_REVIEW_TIER: ReviewTier = "standard";
 export const DEFAULT_PUBLISH_MODE: PublishMode = "none";
 
 /**
- * How much fixing a plan that does not say buys: one round.
+ * Whether a plan that does not say resumes its implementer: it does.
  *
- * ONE NUMBER, because there is no dial left to key it by. It used to be a map
- * from `policy.effort`, which is how a person answering "how much effort?" in a
- * dialog silently decided whether a failing check got a second chance. A plan
- * that wants more says `maxFixRounds`, on the document, where the digest covers
- * it and a receipt can be checked against it.
+ * The resume is where a finding gets an answer. A plan that wants the findings
+ * at the gate unanswered says `resumes: 0`, on the document, where the digest
+ * covers it and a receipt can be checked against it.
  */
-export const DEFAULT_FIX_ROUNDS: FixRounds = 1;
+export const DEFAULT_RESUMES: Resumes = 1;
 
 /** A deliverable with its stages settled. */
 export interface StagedDeliverable extends Deliverable {
@@ -414,7 +441,7 @@ export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
 			),
 			diverse: policy?.reviewDefault?.diverse === true,
 		},
-		maxFixRounds: pick(policy?.maxFixRounds, FIX_ROUNDS, DEFAULT_FIX_ROUNDS),
+		resumes: pick(policy?.resumes, RESUMES, DEFAULT_RESUMES),
 		publish: {
 			mode: pick(policy?.publish?.mode, PUBLISH_MODES, DEFAULT_PUBLISH_MODE),
 			...(typeof base === "string" && base.length > 0 ? { base } : {}),
@@ -427,9 +454,13 @@ export function resolvePolicy(policy?: PlanPolicy): ResolvedPolicy {
  *
  * Version 5 removed authored `stages`, so this is not a default any more — it
  * is the derivation, and the run a person approves is the run this function
- * says. The review stage is omitted rather than declared empty when the
- * deliverable lists no reviews: a fan-out over zero lenses is not a cheaper
- * review, it is a stage that cannot be compiled.
+ * says. It is pi-workflow's `derivedStagesFor`, field for field: implement and
+ * check; then, with reviews, the fan-out and the normalize step; then, under
+ * `resumes: 1`, the resume and the recheck. The review stages are omitted
+ * rather than declared empty when the deliverable lists no reviews — a fan-out
+ * over zero lenses is not a cheaper review, it is a stage that cannot be
+ * compiled — while the resume stays, because a failing check is something to
+ * answer even with nobody reviewing.
  */
 export function defaultStagesFor(
 	deliverable: Deliverable,
@@ -444,15 +475,18 @@ export function defaultStagesFor(
 	}));
 	const stages: Stage[] = [
 		{ use: "implement", id: "implement" },
-		{ use: "verify-and-fix", id: "verify", maxRounds: policy.maxFixRounds },
+		{ use: "check", id: "check" },
 	];
 	if (lenses.length > 0)
-		stages.push({
-			use: "review-fan-out",
-			id: "review",
-			lenses,
-			synthesis: "optional",
-		});
+		stages.push(
+			{ use: "review-fan-out", id: "review", lenses },
+			{ use: "normalize", id: "normalize" },
+		);
+	if (policy.resumes === 1)
+		stages.push(
+			{ use: "resume", id: "resume" },
+			{ use: "check", id: "recheck" },
+		);
 	return stages;
 }
 
@@ -911,12 +945,20 @@ export function validatePolicy(policy: PlanPolicy, errors: string[]): void {
 		errors.push(
 			`${at}: \`${policy.gates}\` is not a gate policy — one of ${PLAN_GATES.join(", ")}`,
 		);
+	// THE OLD DIAL, REFUSED BY NAME. A stored document is caught by its envelope
+	// version, but a model writing a fresh policy from memory of version 8
+	// writes `maxFixRounds` into a version 9 body, where the type says nothing —
+	// and pi-workflow refuses the run over it after two humans approved it.
+	if ((policy as { maxFixRounds?: unknown }).maxFixRounds !== undefined)
+		errors.push(
+			`${at}: carries \`maxFixRounds\`, which plan schema v9 removed with the fixer: the implementer is resumed once in its own session to answer the check and every finding, and \`resumes\` (0 or 1, default 1) is whether it is. Drop \`maxFixRounds\``,
+		);
 	if (
-		policy.maxFixRounds !== undefined &&
-		!(FIX_ROUNDS as readonly number[]).includes(policy.maxFixRounds)
+		policy.resumes !== undefined &&
+		!(RESUMES as readonly unknown[]).includes(policy.resumes)
 	)
 		errors.push(
-			`${at}: \`maxFixRounds\` is ${FIX_ROUNDS.join(", ")} — a fix loop is bounded or it is not a loop anyone approved`,
+			`${at}: \`resumes\` is ${RESUMES.join(" or ")} — the implementer answers the review once, or the findings go to the gate unanswered`,
 		);
 	if (policy.reviewDefault)
 		validateReviewRouting(policy.reviewDefault, `${at}.reviewDefault`, errors);

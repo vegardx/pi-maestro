@@ -390,6 +390,24 @@ describe("the document's own guidance", () => {
 		// The description prompt asks for prose, so it carries neither.
 		expect(DESCRIPTION_SYSTEM_PROMPT).not.toContain(PLAN_DOCUMENT_GUIDE);
 	});
+
+	// Schema v9: the resume is a decided dial the author cannot write, and a
+	// repeated lens is how a plan reads the same work twice.
+	it("says how the review is answered, and that a lens may repeat", () => {
+		const resumed = renderDocumentSystemPrompt({}, "A description, agreed.");
+		expect(resumed).toContain(
+			"each deliverable's implementer is resumed once in its own session",
+		);
+		expect(resumed).toContain("a decline never holds the run");
+		expect(resumed).toContain("The same `lens` may appear more than once");
+		expect(resumed).toContain("`tier` is how much reviewer it is worth");
+		const unresumed = renderDocumentSystemPrompt(
+			{ resumes: 0 },
+			"A description, agreed.",
+		);
+		expect(unresumed).toContain("No implementer is resumed");
+		expect(unresumed).not.toContain("maxFixRounds");
+	});
 });
 
 // ── Callable without a tool ──────────────────────────────────────────────────

@@ -82,7 +82,7 @@ Then the document's own coherence:
   be reviewed through.
 - `policy` is **out of scope**: gates, publication and base were decided
   by the person before you were launched. Raise no finding about any of them.
-- How a deliverable is executed — its stages, its fix rounds, its fan-out — is
+- How a deliverable is executed — its stages, its resume, its fan-out — is
   **not in this document and not yours to check**. pi-workflow derives it from
   the tasks, the reviews and the policy. Say nothing about stages.
 

@@ -153,4 +153,39 @@ describe("the workflow input", () => {
 		// And the digest still covers every byte of it, stray field and all.
 		expect(input.planDigest).toBe(planDigest(legacy));
 	});
+
+	// v9: `resumes` travels inside the plan, so the digest covers it, and the
+	// policy and review keys are exactly the ones pi-workflow 5.0.0's closed
+	// `PolicySchema` and `ReviewSchema` take — `maxFixRounds` is not one of them,
+	// and neither is a per-review thinking level: a review's `tier` sets that.
+	it("sends `resumes` on the document, and only keys plan-to-ship 5 accepts", () => {
+		const planned: Plan = {
+			...fixture,
+			policy: {
+				gates: "ship",
+				reviewDefault: { tier: "standard", diverse: false },
+				resumes: 0,
+				publish: { mode: "pr", base: "main" },
+			},
+			deliverables: [
+				{
+					...(fixture.deliverables[0] as Plan["deliverables"][number]),
+					reviews: [
+						{ lens: "correctness", tier: "light" },
+						{ lens: "correctness", tier: "heavy", diverse: true },
+					],
+				},
+			],
+		};
+		const input = toWorkflowInput(planned);
+		expect(canonicalJson(input)).toContain('"resumes":0');
+		expect(input.planDigest).not.toBe(
+			planDigest({ ...planned, policy: { ...planned.policy, resumes: 1 } }),
+		);
+		const accepted = ["gates", "publish", "resumes", "reviewDefault"];
+		expect(Object.keys(input.plan.policy ?? {}).sort()).toEqual(accepted);
+		for (const review of input.plan.deliverables[0]?.reviews ?? [])
+			for (const key of Object.keys(review))
+				expect(["lens", "skill", "model", "tier", "diverse"]).toContain(key);
+	});
 });

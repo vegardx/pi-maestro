@@ -229,12 +229,13 @@ one project's `/plan list` never shows another's. The envelope records
 A plan contains repositories, deliverables, ordering, read dependencies, the
 tasks that are the work, and the reviews that read that work when it is done.
 It also carries the policy the run follows — gates, publication, review defaults,
-fix rounds — which the harness attaches on the way out of plan mode, never the
+whether the implementer is resumed — which the harness attaches on the way out of plan mode, never the
 model; the schema has no field for any of it. The **gates come from the mode being
 left to** rather than from a dialog: `ask` writes `ship` and `auto` writes `none`,
 derived from the mode's own third fact. There is no `effort`: schema 8 removed it,
 because one answer was standing in for which model implements, how hard it thinks
-and how many fix rounds the check buys. Writing a plan is
+and how many fix rounds the check buys; schema 9 removed `maxFixRounds` with the
+fixer, and `resumes` says whether the implementer answers the review. Writing a plan is
 not a tool call, so there is no plan-authoring tool in any posture. How each
 deliverable is run is derived from those three things, by pi-workflow, and is not
 written down — this seat no longer compiles a stage document or mirrors the schema

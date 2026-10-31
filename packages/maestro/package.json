@@ -16,10 +16,11 @@
 		"@vegardx/pi-settings": "*"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-ai": "*",
-		"@vegardx/pi-subagent": "0.15.0",
-		"@vegardx/pi-workflow": ">=2.1.0 <3"
+		"@earendil-works/pi-ai": ">=1.4.0 <2",
+		"@earendil-works/pi-coding-agent": ">=1.4.0 <2",
+		"@vegardx/pi-subagent": "0.16.0",
+		"@vegardx/pi-workflow": ">=3.0.0 <4",
+		"typebox": ">=1.3.27 <2"
 	},
 	"peerDependenciesMeta": {
 		"@vegardx/pi-workflow": {

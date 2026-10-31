@@ -47,7 +47,7 @@ function modelLabel(
 		.replace(/^claude\s+/i, "")
 		.trim();
 	if (!value) return undefined;
-	const thinking = pi.getThinkingLevel?.();
+	const thinking = pi.getThinkingLevel();
 	if (thinking && thinking !== "off") value += ` (${thinking})`;
 	return value;
 }

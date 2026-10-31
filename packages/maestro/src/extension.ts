@@ -908,42 +908,40 @@ export default defineExtension(
 		// unbounded one. The provider is a closure over `currentMode`, asked at
 		// launch time, so a mode change under a running session bounds the next
 		// launch rather than the one that was registered.
-		if (pi.events) {
-			const registered = registerModeCeiling(pi.events, entry.currentMode);
-			if ("problem" in registered)
-				// A seat whose delegations are bounded by somebody else's ceiling is
-				// a fact worth saying once, not a reason to fail to load.
-				pi.on("session_start", (_event, ctx) => {
-					ctx.ui.notify(
-						`The seat's delegation ceiling was not registered: ${registered.problem}. Launches in this session are bounded by whatever else registered one.`,
-						"warning",
-					);
-				});
-			// THE SESSION'S MODEL, REGISTERED ONCE, for the whole process — and read
-			// on every call, which is the point: a request that asks to inherit is
-			// resolved at launch time, so `/model` and the thinking dial moving under
-			// a running session apply to the NEXT launch rather than to whatever was
-			// live when the extension loaded. It is the same closure discipline the
-			// ceiling keeps, for the same reason.
-			//
-			// `live` is refreshed by every event that carries a context and dropped
-			// when the session it belongs to is replaced; until the first turn the
-			// replacing session's own `session_start` context answers instead, so a
-			// stale context is never an answer about a session that is gone.
-			const model = registerSessionModelFor(pi.events, () => live ?? started);
-			if ("problem" in model)
-				// AND THIS IS NOW A REFUSAL TO START, not only a degraded plan check.
-				// `plan-to-ship` declares `needs.sessionModel`, so pi-workflow refuses
-				// a start on a host with no provider — before any run exists, naming
-				// the definition. So the notice says what will happen rather than only
-				// what did not, and `startRun` recognises that refusal when it comes.
-				pi.on("session_start", (_event, ctx) => {
-					ctx.ui.notify(
-						`The session's model was not registered with the subagent runtime: ${model.problem}. \`${PLAN_WORKFLOW_REF}\` inherits the session model, so a run started from this seat will be refused until whatever else registered a provider is unloaded — and a delegation that asks to inherit resolves through that provider instead.`,
-						"warning",
-					);
-				});
-		}
+		const registered = registerModeCeiling(pi.events, entry.currentMode);
+		if ("problem" in registered)
+			// A seat whose delegations are bounded by somebody else's ceiling is
+			// a fact worth saying once, not a reason to fail to load.
+			pi.on("session_start", (_event, ctx) => {
+				ctx.ui.notify(
+					`The seat's delegation ceiling was not registered: ${registered.problem}. Launches in this session are bounded by whatever else registered one.`,
+					"warning",
+				);
+			});
+		// THE SESSION'S MODEL, REGISTERED ONCE, for the whole process — and read
+		// on every call, which is the point: a request that asks to inherit is
+		// resolved at launch time, so `/model` and the thinking dial moving under
+		// a running session apply to the NEXT launch rather than to whatever was
+		// live when the extension loaded. It is the same closure discipline the
+		// ceiling keeps, for the same reason.
+		//
+		// `live` is refreshed by every event that carries a context and dropped
+		// when the session it belongs to is replaced; until the first turn the
+		// replacing session's own `session_start` context answers instead, so a
+		// stale context is never an answer about a session that is gone.
+		const model = registerSessionModelFor(pi.events, () => live ?? started);
+		if ("problem" in model)
+			// AND THIS IS NOW A REFUSAL TO START, not only a degraded plan check.
+			// `plan-to-ship` declares `needs.sessionModel`, so pi-workflow refuses
+			// a start on a host with no provider — before any run exists, naming
+			// the definition. So the notice says what will happen rather than only
+			// what did not, and `startRun` recognises that refusal when it comes.
+			pi.on("session_start", (_event, ctx) => {
+				ctx.ui.notify(
+					`The session's model was not registered with the subagent runtime: ${model.problem}. \`${PLAN_WORKFLOW_REF}\` inherits the session model, so a run started from this seat will be refused until whatever else registered a provider is unloaded — and a delegation that asks to inherit resolves through that provider instead.`,
+					"warning",
+				);
+			});
 		// Settings an untrusted project carries are not read — the plan-mode Bash
 		// ceiling included — and saying so once is what keeps a configured repo
 		// from looking like a broken one.
@@ -972,7 +970,7 @@ export default defineExtension(
 		 */
 		let unwatch: (() => void) | undefined;
 		const watch = (ctx: ExtensionContext): void => {
-			if (unwatch || !pi.events) return;
+			if (unwatch) return;
 			// Claimed before the await, so two events in the same tick cannot both
 			// subscribe.
 			unwatch = () => undefined;
@@ -1026,44 +1024,34 @@ export default defineExtension(
 		// checkpoint, checks the digest against the stored plan, and asks the one
 		// confirmation the spec names before it pushes. There is no second "was it
 		// shipped?" dialog, because that question now has an answer.
-		if (pi.events) {
-			pi.events.on(WORKFLOW_SHIPPED_CHANNEL, (data) => {
-				if (!isWorkflowShipped(data)) return;
-				const ctx = live;
-				if (!ctx) return;
-				void (async () => {
-					try {
-						const plan = planForDigest(entry.seat().store, data.planDigest);
-						if (!plan) {
-							ctx.ui.notify(
-								`A run shipped plan digest \`${data.planDigest}\`, which no stored plan matches — publish it by hand from its handoff refs.`,
-								"warning",
-							);
-							return;
-						}
-						await entry.publish(plan, ctx, data.runId, {
-							requireShipDecision: true,
-						});
-					} catch (error) {
-						// A replaced session throws from its own context; a publication
-						// that cannot be reported is over either way.
-						void error;
+		pi.events.on(WORKFLOW_SHIPPED_CHANNEL, (data) => {
+			if (!isWorkflowShipped(data)) return;
+			const ctx = live;
+			if (!ctx) return;
+			void (async () => {
+				try {
+					const plan = planForDigest(entry.seat().store, data.planDigest);
+					if (!plan) {
+						ctx.ui.notify(
+							`A run shipped plan digest \`${data.planDigest}\`, which no stored plan matches — publish it by hand from its handoff refs.`,
+							"warning",
+						);
+						return;
 					}
-				})();
-			});
-		}
-		// A dialog opened by Pi or another extension replaces an open one and the
-		// replaced promise never resolves, so the exit flow defers while one is on
-		// screen. The event is not in this pi version's typed overloads and `on`
-		// accepts any name, so the subscription is made through a widened
-		// signature: on a host that never emits it, nothing defers and nothing
-		// breaks.
-		const subscribe = pi.on.bind(pi) as unknown as (
-			event: string,
-			handler: () => void,
-		) => void;
-		subscribe("ui_prompt_start", () => entry.notePromptStart());
-		subscribe("ui_prompt_end", () => entry.notePromptEnd());
+					await entry.publish(plan, ctx, data.runId, {
+						requireShipDecision: true,
+					});
+				} catch (error) {
+					// A replaced session throws from its own context; a publication
+					// that cannot be reported is over either way.
+					void error;
+				}
+			})();
+		});
+		// The exit flow defers while a dialog opened by Pi or another extension is
+		// on screen, so its own sequence never lands on top of somebody else's.
+		pi.on("ui_prompt_start", () => entry.notePromptStart());
+		pi.on("ui_prompt_end", () => entry.notePromptEnd());
 		// A new, resumed or forked session replaces the one a dialog sequence was
 		// asked in, and an `ExtensionContext` from the old one throws. Ending the
 		// flow here is what keeps a half-answered exit from writing a record for a

@@ -43,11 +43,15 @@ interface FakePi {
 	fire(event: string, payload?: unknown): void;
 	sent: Array<{ content: unknown }>;
 	registrations: string[];
+	/** What Pi does once a run takes up the last sent message. */
+	deliver(): void;
+	settle(aborted?: boolean): void;
 }
 
 function fakePi(): FakePi {
 	const listeners = new Map<string, Array<(...a: unknown[]) => unknown>>();
 	const sent: Array<{ content: unknown }> = [];
+	const messages: unknown[] = [];
 	const registrations: string[] = [];
 	const api = {
 		events: fakeEventBus(),
@@ -58,6 +62,7 @@ function fakePi(): FakePi {
 		},
 		sendMessage(message: { content: unknown }) {
 			sent.push({ content: message.content });
+			messages.push(message);
 		},
 		registerTool() {
 			registrations.push("tool");
@@ -66,13 +71,18 @@ function fakePi(): FakePi {
 			registrations.push("command");
 		},
 	} as unknown as ExtensionAPI;
+	const fire = (event: string, payload?: unknown): void => {
+		for (const h of listeners.get(event) ?? []) h(payload, {});
+	};
 	return {
 		api,
-		fire(event, payload) {
-			for (const h of listeners.get(event) ?? []) h(payload, {});
-		},
+		fire,
 		sent,
 		registrations,
+		deliver: () =>
+			fire("message_end", { type: "message_end", message: messages.at(-1) }),
+		settle: (aborted = false) =>
+			fire("agent_settled", { type: "agent_settled", aborted }),
 	};
 }
 
@@ -215,20 +225,54 @@ describe("runAgentTurn", () => {
 		});
 		expect(pi.sent).toHaveLength(1);
 		expect(pi.sent[0]?.content).toBe("do the thing");
+		pi.deliver();
 
 		// A low-level run ended, but retry/compaction/continuation may follow.
 		pi.fire("agent_end");
 		await Promise.resolve();
 		expect(resolved).toBe(false);
 
-		pi.fire("agent_settled");
+		pi.settle();
 		await expect(promise).resolves.toBe("done");
 	});
 
-	it("returns empty string when already idle with no assistant text", async () => {
+	it("returns empty string when the turn produced no assistant text", async () => {
 		const pi = fakePi();
-		const ctx = fakeCtx({ idle: true });
-		await expect(runAgentTurn(pi.api, ctx, "noop")).resolves.toBe("");
+		const ctx = fakeCtx({ idle: false });
+		const promise = runAgentTurn(pi.api, ctx, "noop");
+		pi.deliver();
+		pi.settle();
+		await expect(promise).resolves.toBe("");
+	});
+
+	// Pi defers a run requested from an agent_settled handler until every
+	// handler has run, and the session reads idle meanwhile. The settlement
+	// being dispatched is the previous run's; answering from it would return
+	// that run's text.
+	it("does not answer from a settlement before its message was delivered", async () => {
+		const pi = fakePi();
+		const ctx = fakeCtx({ idle: true, assistantText: "the answer" });
+		let resolved = false;
+		const promise = runAgentTurn(pi.api, ctx, "name this").then((text) => {
+			resolved = true;
+			return text;
+		});
+		pi.settle();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(resolved).toBe(false);
+
+		pi.deliver();
+		pi.settle();
+		await expect(promise).resolves.toBe("the answer");
+	});
+
+	it("returns empty string when the turn was aborted", async () => {
+		const pi = fakePi();
+		const ctx = fakeCtx({ idle: false, assistantText: "half an answer" });
+		const promise = runAgentTurn(pi.api, ctx, "name this");
+		pi.deliver();
+		pi.settle(true);
+		await expect(promise).resolves.toBe("");
 	});
 
 	it("rejects when the nested turn never settles within the timeout", async () => {
@@ -245,7 +289,8 @@ describe("runAgentTurn", () => {
 		const pi = fakePi();
 		const ctx = fakeCtx({ idle: false, assistantText: "my-plan" });
 		const promise = runAgentTurn(pi.api, ctx, "name this", { timeoutMs: 1000 });
-		pi.fire("agent_settled");
+		pi.deliver();
+		pi.settle();
 		await expect(promise).resolves.toBe("my-plan");
 	});
 });

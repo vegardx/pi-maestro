@@ -12,10 +12,12 @@
 //
 //   1. **The ship dialog** (mode `ask`). The `ship` gate arrives, the gate's own
 //      inputs are rendered — per deliverable the implementation summary, the
-//      normalized findings by severity, the fixer's answer to each of them, and
-//      what is left over — and one select asks: *Ship*, *Don't ship*, *Look
-//      first*. Ship records the decision and publication follows. Nothing in the
-//      model's turn names a command, because there is nothing to type.
+//      review's counts and the implementer's dispositions, and the last check —
+//      and one select asks: *Ship*, *Don't ship*, *Look first*. *Look first*
+//      shows the Review section, every finding with who raised it and how the
+//      implementer answered, and asks again. Ship records the decision and
+//      publication follows. Nothing in the model's turn names a command,
+//      because there is nothing to type.
 //   2. **Auto publication** (mode `auto`). A `gates: "none"` run has no ship gate
 //      to park at: it completes, and the seat publishes immediately — the
 //      approval was given when the person answered `Start the run?` from auto —
@@ -59,6 +61,18 @@ import type { ModeName } from "./mode.js";
 import type { Plan, PlanGates } from "./plan.js";
 import type { Publication } from "./publish.js";
 import { SHIP_CHECKPOINT_KEY } from "./publish.js";
+import {
+	checkLine,
+	dispositionCounts,
+	type ReviewSectionInput,
+	type ReviewTally,
+	renderReviewSections,
+	sectionsFromGateInputs,
+	sectionsFromShipSummary,
+	sumTallies,
+	tallyLine,
+	tallyReviews,
+} from "./review-section.js";
 import type { WorkflowReadClient } from "./workflow-provider.js";
 
 // ── What each reader asks an inspection for ──────────────────────────────────
@@ -86,44 +100,13 @@ export const AUTO_INSPECT_SECTIONS = { include: ["run", "output"] } as const;
 
 // ── The gate's inputs, as this module reads them ─────────────────────────────
 
-/** The severities a normalized finding can carry, worst first. */
-export const FINDING_SEVERITIES = ["blocking", "major", "minor"] as const;
-
-export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
-
-/** What a fixer may answer about one finding. */
-export const FIX_OUTCOMES = ["addressed", "disputed", "out-of-scope"] as const;
-
-export type FixOutcome = (typeof FIX_OUTCOMES)[number];
-
-/** One entry of the normalized review the gate was given. */
-export interface GateFinding {
-	readonly id: string;
-	readonly severity: FindingSeverity;
-	readonly lens?: string;
-	readonly where?: string;
+/**
+ * One deliverable, as the gate shows it: the implementer's latest summary, and
+ * the Review section's two values — the `reviews-<d>` record and the last check.
+ */
+export interface GateDeliverable extends ReviewSectionInput {
+	/** The implementer's own summary of what it did, latest first. */
 	readonly summary?: string;
-	readonly suggestion?: string;
-}
-
-/** The fixer's answer to one finding. */
-export interface GateFix {
-	readonly id: string;
-	readonly outcome: FixOutcome;
-	readonly note?: string;
-}
-
-/** One deliverable, as the gate shows it. */
-export interface GateDeliverable {
-	readonly id: string;
-	/** The implementer's own summary of what it did. */
-	readonly summary?: string;
-	/** The synthesis's one paragraph, when the gate carried one. */
-	readonly verdict?: string;
-	readonly findings: readonly GateFinding[];
-	readonly fixes: readonly GateFix[];
-	/** Did the fixer report the project's check passing afterwards? */
-	readonly checkPassed?: boolean;
 }
 
 /**
@@ -165,81 +148,6 @@ function array(value: unknown): readonly unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
-function isSeverity(value: unknown): value is FindingSeverity {
-	return (FINDING_SEVERITIES as readonly unknown[]).includes(value);
-}
-
-function isOutcome(value: unknown): value is FixOutcome {
-	return (FIX_OUTCOMES as readonly unknown[]).includes(value);
-}
-
-/**
- * One normalized finding, or nothing.
- *
- * `id` and `severity` are the two fields the rendering groups by, so an entry
- * missing either is not a finding this dialog can show in order. `what` is
- * accepted beside `summary` because a lens reports `what` and the synthesis
- * renames it — the two have always been the same sentence.
- */
-export function readFinding(value: unknown): GateFinding | undefined {
-	const id = text(at(value, "id"));
-	const severity = at(value, "severity");
-	if (!id || !isSeverity(severity)) return undefined;
-	const lens = text(at(value, "lens"));
-	const where = text(at(value, "where"));
-	const summary = text(at(value, "summary")) ?? text(at(value, "what"));
-	const suggestion = text(at(value, "suggestion"));
-	return {
-		id,
-		severity,
-		...(lens ? { lens } : {}),
-		...(where ? { where } : {}),
-		...(summary ? { summary } : {}),
-		...(suggestion ? { suggestion } : {}),
-	};
-}
-
-/** One fix answer, or nothing. A disputed answer with no note is still read: the
- * fixer's own schema requires it, and dropping the answer here would hide a
- * dispute rather than report a runtime that broke its contract. */
-export function readFix(value: unknown): GateFix | undefined {
-	const id = text(at(value, "id"));
-	const outcome = at(value, "outcome");
-	if (!id || !isOutcome(outcome)) return undefined;
-	const note = text(at(value, "note"));
-	return { id, outcome, ...(note ? { note } : {}) };
-}
-
-/**
- * The findings nobody addressed, derived rather than read.
- *
- * A residual is a finding the run is shipping WITH: one the fixer disputed, one
- * it put out of scope, and one it never answered at all. The third is the one a
- * reader would otherwise miss, because an unanswered finding appears in neither
- * list.
- */
-export function residuals(
-	deliverable: GateDeliverable,
-): readonly GateFinding[] {
-	const answered = new Map(deliverable.fixes.map((fix) => [fix.id, fix]));
-	return deliverable.findings.filter(
-		(finding) => answered.get(finding.id)?.outcome !== "addressed",
-	);
-}
-
-/** The severity order the rendering groups by. */
-export function bySeverity(
-	findings: readonly GateFinding[],
-): readonly (readonly [FindingSeverity, readonly GateFinding[]])[] {
-	return FINDING_SEVERITIES.map(
-		(severity) =>
-			[
-				severity,
-				findings.filter((finding) => finding.severity === severity),
-			] as const,
-	).filter(([, group]) => group.length > 0);
-}
-
 /** The `ship` checkpoint task of an inspection, if it declared one. */
 function shipTask(inspection: unknown): unknown {
 	const tasks = at(inspection, "tasks") ?? at(inspection, "run", "tasks");
@@ -250,58 +158,16 @@ function shipTask(inspection: unknown): unknown {
 	);
 }
 
-/** The `<prefix>-<deliverable>` suffix of a ship-gate input name. */
-function deliverableOf(name: string, prefix: string): string | undefined {
-	return name.startsWith(`${prefix}-`)
-		? name.slice(prefix.length + 1)
-		: undefined;
-}
-
-/**
- * One deliverable, from the three inputs the gate holds for it.
- *
- * The same reader serves the gate and a `gates: "none"` run's `shipSummary`,
- * because the two carry the SAME THREE VALUES under different names —
- * `summary-<d>`/`findings-<d>`/`fix-<d>` as gate inputs, and `summary`/
- * `findings`/`fix` on a `shipSummary` entry. One reader means one rendering, and
- * a person comparing what auto published against what ask would have asked about
- * is comparing two views of one thing rather than two formats.
- */
-function readDeliverable(
-	id: string,
-	summaryOf: unknown,
-	findingsOf: unknown,
-	fixOf: unknown,
-): GateDeliverable {
-	const findings = array(at(findingsOf, "findings"))
-		.map(readFinding)
-		.filter((finding): finding is GateFinding => finding !== undefined);
-	const fixes = array(at(fixOf, "findings"))
-		.map(readFix)
-		.filter((fix): fix is GateFix => fix !== undefined);
-	const summary = text(at(summaryOf, "summary"));
-	const verdict = text(at(findingsOf, "verdict"));
-	const checkPassed = at(fixOf, "checkPassed");
-	return {
-		id,
-		...(summary ? { summary } : {}),
-		...(verdict ? { verdict } : {}),
-		findings,
-		fixes,
-		...(typeof checkPassed === "boolean" ? { checkPassed } : {}),
-	};
-}
-
 /**
  * The gate, from the verified input values `include: ["checkpoints"]` carries.
  *
  * ONE SOURCE. `tasks[].checkpoint.inputs` is the gate's own values — the same
- * ones the artifact-backed views show an approver — so this reads them and
- * nothing else. It used to fall back to each producing task's
- * `narration.summary`, because the lease-free inspection carried no inputs at
- * all and a summary was better than silence; revision 22 carries them, and a
- * fallback that stayed would be a second answer to "what did the gate show" that
- * nothing would ever exercise.
+ * ones the artifact-backed views show an approver: `summary-<d>`, `reviews-<d>`
+ * and `check-<d>` per deliverable. The Review section's reader takes the last
+ * two; the summary is the implementer's own sentence. It used to fall back to
+ * each producing task's `narration.summary`; revision 22 carries the inputs, and
+ * a fallback that stayed would be a second answer to "what did the gate show"
+ * that nothing would ever exercise.
  *
  * `undefined` for a run that declares no `ship` checkpoint, which is every
  * `gates: "none"` run — those are read from `output.shipSummary` instead.
@@ -316,27 +182,15 @@ export function readShipGate(
 	const taskKey =
 		text(at(task, "taskKey")) ?? text(at(task, "key")) ?? SHIP_CHECKPOINT_KEY;
 	const inputs = at(task, "checkpoint", "inputs");
-	const source = isRecord(inputs) ? inputs : undefined;
-	const ids: string[] = [];
-	// Every prefix names a deliverable, not just `summary-*`: a deliverable whose
-	// implementer reported nothing is exactly the one a reader must not lose.
-	for (const prefix of ["summary", "findings", "fix"] as const)
-		for (const name of Object.keys(source ?? {})) {
-			const id = deliverableOf(name, prefix);
-			if (id && !ids.includes(id)) ids.push(id);
-		}
+	const source = isRecord(inputs) ? inputs : {};
 	return {
 		runId,
 		slug,
 		taskKey,
-		deliverables: ids.map((id) =>
-			readDeliverable(
-				id,
-				at(source, `summary-${id}`),
-				at(source, `findings-${id}`),
-				at(source, `fix-${id}`),
-			),
-		),
+		deliverables: sectionsFromGateInputs(source).map((section) => {
+			const summary = text(at(source, `summary-${section.id}`, "summary"));
+			return { ...section, ...(summary ? { summary } : {}) };
+		}),
 	};
 }
 
@@ -344,10 +198,10 @@ export function readShipGate(
  * What a `gates: "none"` run committed, read from `output.shipSummary`.
  *
  * pi-workflow puts exactly what the ship gate would have shown there — the
- * refined plan, and per deliverable the implementation summary, the normalized
- * findings and the fix report — so that a host which publishes without a gate can
+ * refined plan, and per deliverable the implementation summary, the review
+ * record and the last check — so that a host which publishes without a gate can
  * still say what it published. Read into the SAME shape the gate is, so it
- * renders through the same function.
+ * renders through the same functions.
  */
 export function readShipSummary(
 	inspection: unknown,
@@ -359,99 +213,67 @@ export function readShipSummary(
 		at(inspection, "output", "shipSummary") ??
 		at(inspection, "shipSummary");
 	const entries = array(at(summary, "deliverables"));
-	if (entries.length === 0) return undefined;
-	const deliverables: GateDeliverable[] = [];
-	for (const entry of entries) {
-		const id = text(at(entry, "id"));
-		if (!id) continue;
-		deliverables.push(
-			readDeliverable(
-				id,
-				at(entry, "summary"),
-				at(entry, "findings"),
-				at(entry, "fix"),
-			),
+	const sections = sectionsFromShipSummary(summary);
+	if (sections.length === 0) return undefined;
+	const deliverables = sections.map((section) => {
+		const entry = entries.find(
+			(candidate) => at(candidate, "id") === section.id,
 		);
-	}
-	if (deliverables.length === 0) return undefined;
+		const said = text(at(entry, "summary", "summary"));
+		return { ...section, ...(said ? { summary: said } : {}) };
+	});
 	return { runId, slug, taskKey: SHIP_CHECKPOINT_KEY, deliverables };
 }
 
-/** One finding, on one line plus its suggestion. */
-function renderFinding(finding: GateFinding): readonly string[] {
-	const head =
-		`    ${finding.id}` +
-		(finding.lens ? ` (${finding.lens})` : "") +
-		(finding.where ? ` at ${finding.where}` : "") +
-		(finding.summary ? ` — ${finding.summary}` : "");
-	return finding.suggestion
-		? [head, `      suggested: ${finding.suggestion}`]
-		: [head];
-}
-
-/** The fixer's answers, grouped by what it answered. */
-function renderFixes(deliverable: GateDeliverable): readonly string[] {
-	if (deliverable.fixes.length === 0) return [];
-	const lines = ["    fix report:"];
-	for (const outcome of FIX_OUTCOMES) {
-		const group = deliverable.fixes.filter((fix) => fix.outcome === outcome);
-		if (group.length === 0) continue;
-		lines.push(
-			`      ${outcome} (${group.length}): ${group.map((fix) => fix.id).join(", ")}`,
-		);
-		// A note is what makes a dispute readable, so every one of them is shown
-		// in full rather than counted.
-		for (const fix of group)
-			if (fix.note) lines.push(`        ${fix.id}: ${fix.note}`);
-	}
-	if (deliverable.checkPassed !== undefined)
-		lines.push(
-			`      the fixer reported the project's check ${deliverable.checkPassed ? "passing" : "still failing"} afterwards`,
-		);
-	return lines;
+/** Every deliverable's tally, summed: the counts the dialog's first line says. */
+function totals(view: ShipGateView): ReviewTally {
+	return sumTallies(
+		view.deliverables.flatMap((deliverable) =>
+			deliverable.reviews ? [tallyReviews(deliverable.reviews)] : [],
+		),
+	);
 }
 
 /**
  * The gate, as the person deciding it reads it.
  *
  * Pi's `select` carries no body, so what is being decided has to be in the
- * title — the same constraint `confirmationTitle` works under. Everything the
- * gate was given is here and nothing derived is: the residuals are the one
- * computed list, and they are labelled as what the run would ship with.
- *
- * `heading` replaces the "Ship this?" opening for the one other caller: a
- * `gates: "none"` run's `shipSummary`, rendered after publication to say what was
- * published. Same body, because it is the same three values per deliverable — a
- * person comparing what auto shipped against what ask would have asked about
- * should be comparing two views of one thing, not two formats.
+ * title — the same constraint `confirmationTitle` works under. So the title is
+ * SHORT: per deliverable the implementer's summary, the review's counts and the
+ * last check, and on top the dispositions across the run. Every finding, with
+ * who raised it and how it was answered, is the Review section *Look first*
+ * shows — the same section the pull request carries.
  */
-export function renderShipGate(view: ShipGateView, heading?: string): string {
-	const lines = heading
-		? [heading]
-		: [
-				`Ship \`${view.slug}\`?`,
-				"",
-				`Run \`${view.runId}\` is parked at its \`${view.taskKey}\` decision with ${view.deliverables.length} deliverable${view.deliverables.length === 1 ? "" : "s"}.`,
-			];
+export function renderShipGate(view: ShipGateView): string {
+	const tally = totals(view);
+	const lines = [
+		`Ship \`${view.slug}\`?`,
+		"",
+		`Run \`${view.runId}\` is parked at its \`${view.taskKey}\` decision with ${view.deliverables.length} deliverable${view.deliverables.length === 1 ? "" : "s"}; ` +
+			`${tally.clusters} review finding${tally.clusters === 1 ? "" : "s"}: ${dispositionCounts(tally)}.`,
+	];
 	for (const deliverable of view.deliverables) {
 		lines.push("", `  ${deliverable.id}`);
 		lines.push(`    ${deliverable.summary ?? "no implementation summary"}`);
-		if (deliverable.verdict) lines.push(`    review: ${deliverable.verdict}`);
-		const groups = bySeverity(deliverable.findings);
-		if (groups.length === 0) lines.push("    findings: none");
-		for (const [severity, group] of groups) {
-			lines.push(`    ${severity} (${group.length}):`);
-			for (const finding of group) lines.push(...renderFinding(finding));
-		}
-		lines.push(...renderFixes(deliverable));
-		const left = residuals(deliverable);
 		lines.push(
-			left.length === 0
-				? "    residual: nothing — every finding was addressed"
-				: `    residual (${left.length}, shipping with these): ${left.map((finding) => `${finding.id} [${finding.severity}]`).join(", ")}`,
+			deliverable.reviews
+				? `    review: ${tallyLine(tallyReviews(deliverable.reviews))}`
+				: "    review: no reviewers were asked",
 		);
+		lines.push(`    ${checkLine(deliverable.check)}`);
 	}
+	lines.push(
+		"",
+		tally.declined > 0
+			? `${tally.declined === 1 ? "1 declined finding ships as it is" : `${tally.declined} declined findings ship as they are`}; Look first lists every finding with the implementer's reasoning.`
+			: "Look first lists every finding, who raised it and how it was answered.",
+	);
 	return lines.join("\n");
+}
+
+/** The Review section of a gate or a ship summary: the shared rendering. */
+export function renderGateReview(view: ShipGateView): string {
+	return renderReviewSections(view.deliverables);
 }
 
 // ── Who answered ─────────────────────────────────────────────────────────────
@@ -599,18 +421,31 @@ export function publishedMessage(
 		: `Branch \`${publication.branch}\` is pushed; no pull request was opened.`;
 	return [
 		`\`${slug}\` is published from run \`${runId}\`. ${where}`,
-		// WHAT WAS PUBLISHED, rendered exactly as the ship dialog renders what it is
-		// about to publish. A run that shipped without asking still owes a person the
-		// account a gate would have shown them: the findings that are left are the
-		// same findings whether or not anybody was asked about them, and they read
-		// differently after the fact only because nothing can be changed about them
-		// now.
-		...(shipped ? ["", renderShipGate(shipped, PUBLISHED_HEADING), ""] : [""]),
+		// WHAT WAS PUBLISHED: the Review section, rendered exactly as *Look first*
+		// renders it and as the pull request carries it. A run that shipped
+		// without asking still owes a person the account a gate would have shown
+		// them: a declined finding is the same finding whether or not anybody was
+		// asked about it, and it reads differently after the fact only because
+		// nothing can be changed about it now.
+		...(shipped
+			? [
+					"",
+					PUBLISHED_HEADING,
+					"",
+					...shipped.deliverables.map(
+						(deliverable) =>
+							`- \`${deliverable.id}\`: ${deliverable.summary ?? "no implementation summary"}`,
+					),
+					"",
+					renderGateReview(shipped),
+					"",
+				]
+			: [""]),
 		"Tell the person what shipped and what is left to do, if anything.",
 	].join("\n");
 }
 
-/** The heading the same rendering gets when it is a receipt, not a question. */
+/** The heading the Review section gets when it is a receipt, not a question. */
 export const PUBLISHED_HEADING = "What was published:";
 
 /** Everything the decisions need and cannot build themselves. */
@@ -663,20 +498,23 @@ export type ShipOutcome =
 	| { readonly kind: "refused"; readonly problem: string };
 
 /**
- * `/workflow <prefix>` — where a person looks at a run when there is no
- * inspector to open for them.
+ * *Look first*: the Review section, then where the rest of the run is.
  *
- * pi-workflow owns the inspector and this seat has no handle on it, so *Look
- * first* names the command that opens it and asks again. Naming it is not a
- * fallback for a missing feature: it is the one true sentence about where the run
- * is, and the dialog comes straight back so the decision is not lost.
+ * The section is the same text the pull request will carry — every finding,
+ * who raised it, how many agreed and what the implementer answered, declines
+ * named — so what a person reads before deciding is what reviewers of the pull
+ * request read after. pi-workflow owns the inspector and this seat has no handle
+ * on it, so the notice names the command that opens it, and the dialog comes
+ * straight back so the decision is not lost.
  */
-export function lookFirstNotice(runId: string): string {
-	return (
-		`Run \`${runId}\` is in \`/workflow ${runId.slice(0, 8)}\` — its tasks, its` +
-		" journal and every artifact it wrote. The ship dialog is open again behind" +
-		" this notice, so answer it when you have looked."
-	);
+export function lookFirstNotice(view: ShipGateView): string {
+	const review = renderGateReview(view);
+	return [
+		...(review.length > 0 ? [review, ""] : []),
+		`Run \`${view.runId}\` is in \`/workflow ${view.runId.slice(0, 8)}\` — its tasks, its` +
+			" journal and every artifact it wrote. The ship dialog is open again behind" +
+			" this notice, so answer it when you have looked.",
+	].join("\n");
 }
 
 /**
@@ -716,10 +554,8 @@ export async function askShip(
 			SHIP_OPTIONS,
 		);
 		if (answer === "look") {
-			(
-				deps.inspector ??
-				((runId: string) => deps.dialogs.notify(lookFirstNotice(runId), "info"))
-			)(view.runId);
+			deps.dialogs.notify(lookFirstNotice(view), "info");
+			deps.inspector?.(view.runId);
 			continue;
 		}
 		if (answer === "no") {

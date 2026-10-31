@@ -17,7 +17,7 @@ import {
 	getAgentDir,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 /** Move `abs` under the trash root, preserving its path (avoids collisions). */
 async function trash(abs: string, trashRoot: string): Promise<void> {

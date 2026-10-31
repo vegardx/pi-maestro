@@ -418,6 +418,13 @@ describe("the document, read without a tool", () => {
 		expect(authoredPlanProblems("not a plan").length).toBeGreaterThan(0);
 	});
 
+	it("says where in the document each problem is", () => {
+		const problems = authoredPlanProblems({ ...authored, title: 7 });
+		expect(problems.some((problem) => problem.startsWith("/title: "))).toBe(
+			true,
+		);
+	});
+
 	it("cleans and builds the stored document as plain functions", () => {
 		const plan = planFrom(withoutEmptyOptionals(authored), {
 			cwd: "/repo",

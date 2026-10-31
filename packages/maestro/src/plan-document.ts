@@ -20,8 +20,8 @@
 // says each of those things once, structurally. `test/authoring.test.ts` holds
 // the total under a bound, so the notes cannot creep back.
 
-import { type Static, Type } from "@sinclair/typebox";
-import { Value } from "@sinclair/typebox/value";
+import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 import {
 	MAX_LENSES,
 	type Plan,
@@ -283,9 +283,7 @@ export function authoredPlanProblems(value: unknown): string[] {
 	const problems: string[] = [];
 	for (const error of Value.Errors(PlanSchema, value)) {
 		const at =
-			typeof error.path === "string" && error.path.length > 0
-				? error.path
-				: "the document";
+			error.instancePath.length > 0 ? error.instancePath : "the document";
 		problems.push(`${at}: ${error.message}`);
 		if (problems.length >= 16) break;
 	}

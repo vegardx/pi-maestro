@@ -11,9 +11,9 @@
 // Every behaviour is independently killable via its feature flag.
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
+import { Type } from "typebox";
 import { GhostEditor } from "./ghost-editor.js";
 import { sanitiseSuggestion } from "./sanitise.js";
 import { PromptAssistState } from "./state.js";

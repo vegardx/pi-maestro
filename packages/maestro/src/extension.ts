@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CAPABILITIES } from "@vegardx/pi-contracts";
 import { defineExtension } from "@vegardx/pi-core";
+import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 import { type AuthoringComplete, createSessionAuthor } from "./authoring.js";
 import { createAuditedBash } from "./bash-tool.js";
 import {
@@ -931,6 +932,22 @@ export default defineExtension(
 					);
 				});
 		}
+		// Settings an untrusted project carries are not read — the plan-mode Bash
+		// ceiling included — and saying so once is what keeps a configured repo
+		// from looking like a broken one.
+		pi.on("session_start", (_event, ctx) => {
+			if (ctx.isProjectTrusted()) return;
+			const { skippedProject } = readLayeredExtensionConfig(
+				ctx.cwd,
+				undefined,
+				{ projectTrusted: false },
+			);
+			if (skippedProject.length > 0)
+				ctx.ui.notify(
+					`This project is not trusted, so its settings for ${skippedProject.join(", ")} were not read; global settings apply.`,
+					"warning",
+				);
+		});
 		pi.on("tool_call", (event) => {
 			const reason = seatToolBlockReason(entry.currentMode(), event.toolName);
 			if (reason) return { block: true, reason };

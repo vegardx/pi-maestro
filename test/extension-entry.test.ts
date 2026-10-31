@@ -378,7 +378,13 @@ describe("/plan run under the mode's ceiling", () => {
 	const REFUSAL =
 		"plan-to-ship needs a worktree workspace; the host ceiling allows read-only.";
 
-	function seatWithRuntime(mode: ModeName) {
+	function seatWithRuntime(
+		mode: ModeName,
+		extras: {
+			readonly live?: () => ExtensionContext | undefined;
+			readonly sendMessage?: SeatHost["sendMessage"];
+		} = {},
+	) {
 		const repo = temp("maestro-repo-");
 		execFileSync("git", ["init", "--quiet"], { cwd: repo, stdio: "ignore" });
 		execFileSync(
@@ -419,11 +425,16 @@ describe("/plan run under the mode's ceiling", () => {
 		});
 		const h = host();
 		const entry = startSeat(
-			{ ...h.pi, events: bus },
+			{
+				...h.pi,
+				events: bus,
+				...(extras.sendMessage ? { sendMessage: extras.sendMessage } : {}),
+			},
 			{
 				cwd: repo,
 				agentDir: temp("maestro-agent-"),
 				sessionId: () => "session-1",
+				...(extras.live ? { live: extras.live } : {}),
 			},
 		);
 		entry.seat().store.savePlan(storedPlan(repo));
@@ -516,6 +527,99 @@ describe("/plan run under the mode's ceiling", () => {
 			"plan",
 			"planDigest",
 		]);
+	});
+
+	// pi-workflow 4 fails a run whose required task failed with "A required
+	// workflow task did not complete: <stage>. <cause>", and the task's
+	// `narration.cause` is that same closed-vocabulary sentence. The run's reason
+	// itself is on no view the seat reads — the run summary carries `status` only
+	// — so what reaches a person is the task's stage and cause, which together
+	// are the whole of that reason.
+	describe("a run that failed at a required task", () => {
+		const CAUSE =
+			"The delegated run failed: timeout (origin service, retry manual).";
+
+		it("says the task and its cause in the narration and the failure dialog", async () => {
+			const titles: string[] = [];
+			const posted: [string, string | undefined][] = [];
+			const ctx = {
+				hasUI: true,
+				ui: {
+					select: (title: string) => {
+						titles.push(title);
+						return new Promise<undefined>(() => {});
+					},
+					input: async () => undefined,
+					confirm: async () => false,
+					notify() {},
+				},
+			} as unknown as ExtensionContext;
+			const s = seatWithRuntime("ask", {
+				live: () => ctx,
+				sendMessage: (message, options) =>
+					posted.push([message.content, options?.deliverAs]),
+			});
+			await s.h.run("plan", "run demo");
+
+			// The two appends pi-workflow's own timed-out-verifier test journals, in
+			// its order: the task fails by name, then the run fails on it.
+			const narration = {
+				stage: "check-d0-verify-1",
+				taskKind: "check",
+				deliverable: "d0-verify-1",
+				cause: CAUSE,
+			} as const;
+			let listener: ((observation: unknown) => void) | undefined;
+			const unnarrate = s.entry.narrateRuns({
+				observe: (handler: (observation: unknown) => void) => {
+					listener = handler;
+					return () => {};
+				},
+				inspect: async () => ({
+					run: { runId: "wfr-1", status: "failed" },
+					tasks: [{ id: "t-verify", status: "failed", narration }],
+				}),
+				resume: async () => ({}),
+				stop: async () => ({}),
+			} as never);
+			listener?.({
+				runId: "wfr-1",
+				status: "running",
+				sequence: 41,
+				task: {
+					taskId: "t-verify",
+					status: "failed",
+					outcome: "failed",
+					narration,
+				},
+			});
+			listener?.({ runId: "wfr-1", status: "failed", sequence: 42 });
+			for (let turn = 0; turn < 10 && titles.length === 0; turn += 1)
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			unnarrate();
+
+			expect(posted).toEqual([
+				[
+					[
+						`demo · d0-verify-1 · check check-d0-verify-1 — no summary`,
+						`  cause: ${CAUSE}`,
+						"demo · run `wfr-1` ended `failed` without stopping at a gate. Tell the person where the work stands and what, if anything, is left to do by hand.",
+						"",
+						"Tell the person what failed and what it means for the rest of the plan. A dialog is open about it: retry that task, stop the run, or go back to planning.",
+					].join("\n"),
+					"followUp",
+				],
+			]);
+			expect(titles).toEqual([
+				[
+					"`demo` — check-d0-verify-1 of `d0-verify-1` failed. What now?",
+					"",
+					CAUSE,
+					"",
+					"Run `wfr-1`. Retrying re-runs that one task; stopping cancels the run and leaves every handoff it already made; re-planning takes you back to plan mode with where this got to, so the conversation plans from here.",
+				].join("\n"),
+			]);
+		});
 	});
 });
 

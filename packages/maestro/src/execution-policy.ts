@@ -1,5 +1,6 @@
 import {
 	type ExtensionConfig,
+	type ProjectTrust,
 	readLayeredExtensionConfig,
 	readPath,
 } from "@vegardx/pi-settings";
@@ -127,9 +128,10 @@ function readModePolicy(
 
 export function readExecutionPolicySettings(
 	cwd: string,
-	agentDir?: string,
+	agentDir: string | undefined,
+	trust: ProjectTrust,
 ): ExecutionPolicySettings {
-	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir, trust);
 	const config = merged.maestro as ExtensionConfig | undefined;
 	const model = readPath(config, "bash.auditor.model");
 	return {
@@ -172,10 +174,19 @@ export function readExecutionPolicySettings(
 
 export function describePolicyDeviations(
 	cwd: string,
-	agentDir?: string,
+	agentDir: string | undefined,
+	trust: ProjectTrust,
 ): string[] {
-	const effective = readExecutionPolicySettings(cwd, agentDir);
+	const effective = readExecutionPolicySettings(cwd, agentDir, trust);
 	const out: string[] = [];
+	if (
+		readLayeredExtensionConfig(cwd, agentDir, trust).skippedProject.includes(
+			"maestro",
+		)
+	)
+		out.push(
+			"project maestro settings ignored: the project is not trusted, so only global settings apply",
+		);
 	for (const mode of MODE_NAMES) {
 		for (const key of [...BASH_EFFECTS, "uncertain"] as const) {
 			if (effective.modes[mode][key] !== DEFAULT_BASH_POLICIES[mode][key])

@@ -7,6 +7,7 @@
 // record to read, and no predicate to keep in step with one. What remains is
 // the two tools a seat holds in every posture.
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createBashTool } from "./bash-tool.js";
 import { createDeleteTool } from "./delete-tool.js";
 import {
@@ -88,8 +89,10 @@ export function createSeat(options: SeatOptions = {}): Seat {
 	});
 	let current = mode("plan");
 	const listeners = new Set<(mode: ModeName, previous: ModeName) => void>();
-	const policy = (): ExecutionPolicySettings =>
-		readExecutionPolicySettings(cwd, options.agentDir);
+	const policy = (ctx: ExtensionContext): ExecutionPolicySettings =>
+		readExecutionPolicySettings(cwd, options.agentDir, {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
 
 	const shipDialog = options.shipDialog ?? NOTHING_PARKED_PORT;
 	const tools = ToolRegistry.declare([

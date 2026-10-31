@@ -12,6 +12,9 @@ import {
 } from "../packages/smart-compact/src/index.js";
 import { readSmartCompactSettings } from "../packages/smart-compact/src/settings.js";
 
+/** These suites write project settings and read them as a trusted project. */
+const TRUSTED = { projectTrusted: true } as const;
+
 function fileOps(parts: Partial<FileOperations>): FileOperations {
 	return {
 		read: parts.read ?? new Set(),
@@ -161,7 +164,7 @@ describe("smart-compact settings", () => {
 	});
 
 	it("returns defaults when unset, with compactAt undefined", () => {
-		const s = readSmartCompactSettings(cwd, agentDir);
+		const s = readSmartCompactSettings(cwd, agentDir, TRUSTED);
 		expect(s.maxSummaryTokens).toBe(8192);
 		expect(s.maxFileListEntries).toBe(50);
 		expect(s.timeoutMs).toBe(60000);
@@ -179,7 +182,7 @@ describe("smart-compact settings", () => {
 				},
 			},
 		});
-		const s = readSmartCompactSettings(cwd, agentDir);
+		const s = readSmartCompactSettings(cwd, agentDir, TRUSTED);
 		expect(s.maxSummaryTokens).toBe(4096);
 		expect(s.maxFileListEntries).toBe(10);
 		expect(s.timeoutMs).toBe(30000);
@@ -188,7 +191,9 @@ describe("smart-compact settings", () => {
 		writeSettings(join(cwd, ".pi", "settings.json"), {
 			extensionConfig: { "smart-compact": { compactAt: 0 } },
 		});
-		expect(readSmartCompactSettings(cwd, agentDir).compactAt).toBeUndefined();
+		expect(
+			readSmartCompactSettings(cwd, agentDir, TRUSTED).compactAt,
+		).toBeUndefined();
 	});
 
 	it("falls back to defaults on wrong-typed or out-of-range values", () => {
@@ -201,7 +206,7 @@ describe("smart-compact settings", () => {
 				},
 			},
 		});
-		const s = readSmartCompactSettings(cwd, agentDir);
+		const s = readSmartCompactSettings(cwd, agentDir, TRUSTED);
 		expect(s.maxSummaryTokens).toBe(8192);
 		expect(s.maxFileListEntries).toBe(50);
 		expect(s.timeoutMs).toBe(60000);

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
 	ExtensionAPI,
-	ExtensionContext,
+	ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -90,7 +90,7 @@ describe("project settings and project trust", () => {
 });
 
 describe("the seat's bash tool and project trust", () => {
-	function context(trusted: boolean): ExtensionContext {
+	function context(trusted: boolean): ExtensionToolContext {
 		return {
 			cwd,
 			isProjectTrusted: () => trusted,
@@ -99,7 +99,7 @@ describe("the seat's bash tool and project trust", () => {
 				getSessionFile: () => undefined,
 			},
 			ui: { confirm: async () => false },
-		} as unknown as ExtensionContext;
+		} as unknown as ExtensionToolContext;
 	}
 
 	async function touch(trusted: boolean): Promise<unknown> {

@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeleteTool } from "../packages/maestro/src/delete-tool.js";
 
@@ -18,8 +18,8 @@ function temp(name: string): string {
 	return path;
 }
 
-function context(cwd: string): ExtensionContext {
-	return { cwd } as ExtensionContext;
+function context(cwd: string): ExtensionToolContext {
+	return { cwd } as ExtensionToolContext;
 }
 
 describe("recoverable delete", () => {

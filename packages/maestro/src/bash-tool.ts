@@ -4,6 +4,7 @@ import {
 	createBashToolDefinition,
 	createLocalBashOperations,
 	type ExtensionContext,
+	type ExtensionToolContext,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -271,12 +272,13 @@ export function createAuditedBash(
 	return async (command, intent) => {
 		ordinal += 1;
 		try {
+			const id = `${label}-${ordinal}`;
 			const result = await tool.execute(
-				`${label}-${ordinal}`,
+				id,
 				{ command, intent },
 				undefined,
 				undefined,
-				ctx,
+				outsideToolCall(ctx, id),
 			);
 			return { ok: true, output: toolText(result) };
 		} catch (error) {
@@ -286,6 +288,45 @@ export function createAuditedBash(
 			};
 		}
 	};
+}
+
+/**
+ * A tool context for a call no model made.
+ *
+ * A seat flow runs the tool from a command or an event, where Pi has no tool
+ * call to hang nested calls on. Pi answers the same situation by failing nested
+ * calls rather than inventing a parent, so this does too. Descriptors are
+ * copied, not spread, so Pi's guarded getters stay lazy.
+ */
+function outsideToolCall(
+	ctx: ExtensionContext,
+	id: string,
+): ExtensionToolContext {
+	const nested: Pick<ExtensionToolContext, "tools" | "executeTool"> = {
+		tools: [],
+		executeTool: async (name) => ({
+			toolCall: { type: "toolCall", id: `${id}/0`, name, arguments: {} },
+			result: {
+				content: [
+					{
+						type: "text",
+						text: "Nested tool calls are not available outside a model's tool call",
+					},
+				],
+				details: {},
+			},
+			isError: true,
+		}),
+	};
+	// defineProperties cannot type the union of two descriptor maps; both
+	// halves are typed above, so the assertion only joins them.
+	return Object.defineProperties(
+		{},
+		{
+			...Object.getOwnPropertyDescriptors(ctx),
+			...Object.getOwnPropertyDescriptors(nested),
+		},
+	) as ExtensionToolContext;
 }
 
 /** Whatever text the tool returned, joined; images are not command output. */

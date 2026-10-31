@@ -22,7 +22,7 @@ import {
 	defineTool,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NOTHING_PARKED, openedDialog, SHIP_DIALOG_TOOL } from "./decide.js";
 
 /** What the tool needs and cannot know: what is parked, and how to open it. */

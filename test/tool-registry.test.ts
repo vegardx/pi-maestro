@@ -10,7 +10,7 @@
 //   - `panel` sat in a grant list with no implementation at all.
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
 	type ToolDeclaration,

@@ -490,7 +490,8 @@ person asked for, and prints the cause with `/plan run <slug>` still there.
 
 **The engine executes; the session narrates.** pi-maestro observes the runs it
 started and posts what it sees into the conversation as one `maestro:progress`
-message per observation batch, delivered as `nextTurn`:
+message per observation batch, delivered as `nextTurn`, or as a `followUp` that
+starts a turn when the batch needs one:
 
 ```text
 compose · d1 · implement implement-d1 — wrote the four components

@@ -355,12 +355,13 @@ export function startSeat(
 	 * `maestro:progress` because it is a different kind of event: a pull request
 	 * that exists, or a run to plan again from. Each of them is something the
 	 * model has to say a sentence about now, not a fact for whenever the person
-	 * next types.
+	 * next types. `followUp`, because Pi never starts a turn for a `nextTurn`
+	 * message, `triggerTurn` or not.
 	 */
 	const say = (content: string): void => {
 		pi.sendMessage?.(
 			{ customType: DECISION_MESSAGE_TYPE, content, display: true },
-			{ deliverAs: "nextTurn", triggerTurn: true },
+			{ deliverAs: "followUp", triggerTurn: true },
 		);
 	};
 	const exit = createModeExitController({

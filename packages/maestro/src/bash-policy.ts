@@ -312,14 +312,50 @@ function assessmentFromEffects(
 	};
 }
 
+/**
+ * Fold the auditor's verdict into the deterministic one.
+ *
+ * THE AUDITOR MAY ONLY ESCALATE. It is a model reading an unresolved command,
+ * and its word can add effects or keep the command uncertain, but it cannot
+ * buy a weaker action than the deterministic pass already earned — so a
+ * command the deterministic pass called `uncertain` stays at the mode's
+ * `uncertain` action however confidently the model calls it read-only. The
+ * rule is stated in actions rather than assessments because that is what the
+ * mode's policy decides on: a merged assessment whose action under `mode`
+ * would be weaker is replaced by the deterministic one, with the auditor's
+ * verdict kept in the rationale.
+ */
 export function mergeCommandAssessments(
 	deterministic: DeterministicAssessment,
 	audit: CommandAssessment | null,
+	mode: ModeName,
+	policy: ExecutionPolicySettings,
 ): CommandAssessment {
 	if (!audit) return deterministic.assessment;
 	const effects = new Set<BashEffect>(deterministic.assessment.effects ?? []);
 	if (audit.assessment === "effects")
 		for (const effect of audit.effects) effects.add(effect);
+	const merged = auditedAssessment(deterministic, audit, effects);
+	const floor = actionForAssessment(mode, deterministic.assessment, policy);
+	const action = actionForAssessment(mode, merged, policy);
+	if (BASH_ACTIONS.indexOf(action) >= BASH_ACTIONS.indexOf(floor))
+		return merged;
+	const rationale = `${deterministic.assessment.rationale}; audit judged it ${audit.assessment} (${audit.rationale}), which cannot lower the ${mode} action below ${floor}`;
+	const base = deterministic.assessment;
+	if (base.assessment === "uncertain")
+		return {
+			...base,
+			...(effects.size > 0 ? { effects: [...effects] } : {}),
+			rationale,
+		};
+	return { ...base, rationale };
+}
+
+function auditedAssessment(
+	deterministic: DeterministicAssessment,
+	audit: CommandAssessment,
+	effects: ReadonlySet<BashEffect>,
+): CommandAssessment {
 	if (audit.assessment === "uncertain")
 		return {
 			assessment: "uncertain",

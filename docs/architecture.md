@@ -179,7 +179,9 @@ are the same permissions and two tables would be two places to change.
 Bash processing is `parse → deterministic effects → optional ambiguity audit →
 mode policy → allow/confirm/refuse`. Effects describe filesystem, workspace,
 host, remote, code-execution, privileged, and destructive behavior. The auditor
-never authorizes execution and cannot remove deterministic effects. For an
+can only escalate: it may add effects, but it cannot remove deterministic effects
+or lower the action the deterministic verdict earned, so an unresolved command
+keeps at least the mode's `uncertain` action. For an
 unknown PATH executable it may iteratively request validated direct-argv help or
 version probes under the one overall audit timeout. There are no execution
 routes or sandbox backends.

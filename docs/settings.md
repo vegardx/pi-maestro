@@ -73,8 +73,10 @@ multiple effects, `refuse` wins over `confirm`, which wins over `allow`. Users
 may override every Bash mapping; direct `write`, `edit`, and `delete` remain
 blocked by the plan-mode tool guard.
 
-The command auditor runs only for unresolved plan/auto commands when its result
-can change the action. It assesses effects and never authorizes execution. For
+The command auditor runs for unresolved plan, ask and auto commands. It assesses
+effects and can only make the outcome stricter: it may add effects, but an
+unresolved command keeps at least the mode's `uncertain` action whatever the
+auditor concludes, so it never authorizes execution. For
 an unknown executable it may request distinct help/version probes until the one
 overall audit timeout expires. A validated probe executes that PATH binary even
 in plan mode, before the final effect decision. Probes run directly without a

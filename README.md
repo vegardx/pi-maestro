@@ -36,8 +36,9 @@ hack  direct host tools are available under a reduced, configurable policy.
 
 Bash uses deterministic effect assessment followed, when needed, by a bounded
 fast-model audit. The auditor can inspect host-installed CLI help through
-validated direct-argv probes; it never authorizes execution or removes known
-effects. This is steering and confirmation, not an OS sandbox.
+validated direct-argv probes; it can only make the outcome stricter, never
+removing known effects or lowering an unresolved command below the mode's
+`uncertain` action. This is steering and confirmation, not an OS sandbox.
 
 Most implementation work should be delegated to isolated subagents. Ask, auto and
 hack remain available for quick direct work where delegation would be overhead.

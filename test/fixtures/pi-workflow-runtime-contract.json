@@ -1,6 +1,6 @@
 {
 	"schema": "pi-workflow-runtime",
-	"contractRevision": 23,
+	"contractRevision": 24,
 	"requiredSubagent": {
 		"schema": "pi-subagent-runtime",
 		"contractRevision": 10,
@@ -31,7 +31,8 @@
 			"agentRootsFirst": true,
 			"delegationCeiling": true,
 			"sessionModelInherit": true,
-			"workspaceStartAt": true
+			"workspaceStartAt": true,
+			"resumeAtHandoff": true
 		}
 	},
 	"features": {

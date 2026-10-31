@@ -7,7 +7,7 @@ classifier          fast Bash effect assessment
 compact-summarizer  work-continuity compaction
 ```
 
-Delegated workers, workflow reviews, fixers, and publication do not resolve
+Delegated workers, workflow reviews, resumed implementers, and publication do not resolve
 through this package. Standalone `@vegardx/pi-subagent` owns delegated model
 selection, and standalone `@vegardx/pi-workflow` binds workflow-stage models
 explicitly.

@@ -520,17 +520,18 @@ starts a turn when the batch needs one:
 
 ```text
 compose · d1 · implement implement-d1 — wrote the four components
-compose · d1 · check check-d1-verify-1 — the suite passes
-compose · d1 · review review-d1/contracts — two observations, none blocking
-compose · d1 · synthesis synthesis-d1 — two lenses disagree about the seam
-compose · d1 · fix fix-d1 — one round closed the contracts finding
+compose · d1 · check check-d1 — the suite passes
+compose · d1 · review review-d1/contracts — {findings: [2 item(s)]}
+compose · d1 · normalize normalize-d1 — 2 of 3 reviewers reported; security did not, …
+compose · d1 · resume resume-d1 — The implementer was resumed in its own session …
+compose · d1 · check recheck-d1 — the suite passes
 compose · the run · gate ship — the ship decision is waiting
 ```
 
 **The stage keys are pi-workflow's, and it derives them from the key alone.**
-Per deliverable `<d>`: `implement-<d>`, `check-<d>` (whose rounds are
-`check-<d>-verify-<n>` and `check-<d>-fix-<n>`), the namespace `review-<d>` with
-one member per lens at `review-<d>/<lens>`, `synthesis-<d>` and `fix-<d>`. The
+Per deliverable `<d>`: `implement-<d>`, `check-<d>`, the namespace `review-<d>`
+with one member per lens at `review-<d>/<lens>`, `normalize-<d>`, `resume-<d>`
+and `recheck-<d>`, which narrates as a `check`. The
 gates are `approve-<d>` under `every-deliverable`, and `ship` — which names no
 deliverable, because it is the whole run's decision. A key this convention does
 not name narrates as `other`, which is an honest answer and not a failure.
@@ -539,7 +540,8 @@ Most of it gets **no turn**: a task implemented, a check passed, one review
 filed, a refine — those are facts the next turn should have, and a turn per task
 would mean the model narrating its own silence forty times. Four things get a
 turn, because each is something only the model can turn into a sentence a person
-can act on: a **review synthesis**, a **fix report**, a **failure** of a task or
+can act on: **normalize** (the reviewers of a deliverable have reported), **resume**
+(the implementer has answered the check and the review), a **failure** of a task or
 the run, and the **ship gate arriving** — which says that a decision is waiting and
 that it is waiting **in the dialog on screen**. It names no command: the sentence
 used to carry `/workflow decide <prefix> ship {"ship":true}`, and a model telling
@@ -547,6 +549,16 @@ somebody to type that would now be sending them past the thing already in front 
 them. A run that ends without ever stopping at a gate gets a final summary, with a
 turn, because a run that finished and asked for nothing is exactly the case a silent
 seat used to leave a person guessing about.
+
+**At normalize and resume the line is the journal's, never a child's.** The task's
+own summary there is a model's words — a merge answer the harness may refuse, the
+implementer's account of itself — so the line is built from what the batch's one
+inspection proves: which review tasks of the deliverable completed and which did
+not. The clusters, who agreed and each disposition are in the `reviews-<d>` record,
+which a lease-free inspection carries only as the ship gate's inputs and the run's
+output; the line says where they are, and the ship decision renders them. A
+deliverable whose findings all came from one reviewer has no `normalize-<d>` task,
+and no line there.
 
 **Narration is not the decision surface, and it opens one.** Three of those things
 are decisions rather than news — a gate that arrived, a failure, and the completion
@@ -558,19 +570,35 @@ dialogs itself would be a watcher nobody could read.
 
 Three dialogs, all of them in the session that started the run.
 
-**The ship dialog (`ask`).** When the `ship` gate arrives, the gate's own inputs go
-on screen: per deliverable the implementation summary, the review synthesis's
-verdict, the normalized findings **grouped by severity** (blocking, major, minor),
-the fixer's answer to each of them (`addressed` / `disputed` with the note in full /
-`out-of-scope`), and the **residuals** — what the run would ship with, which is
-every finding the fixer did not address, *including the ones it never answered*.
-Then one select:
+**The ship dialog (`ask`).** When the `ship` gate arrives, the gate's own inputs —
+`summary-<d>`, `reviews-<d>` and `check-<d>` per deliverable — go on screen: the
+first line says how the findings across the run were answered (`fixed`,
+`declined`, `out of scope`, `unanswered`), and per deliverable the implementation
+summary, the review's counts and the last check. Then one select:
 
 | Answer | What it does |
 | --- | --- |
 | *Ship* (default) | Decides the run's own `ship` checkpoint `{"ship": true}` and stops there. The run un-parks, finishes, and publication follows its completion — **the same path a decision made in pi-workflow's own widget takes** |
 | *Don't ship* | Decides `{"ship": false, note}` with the one line you type; the run ends without a receipt and nothing is published |
-| *Look first* (escape) | Sends you to look at the run and **comes straight back to the same dialog** — going to look is not a decision, and a dialog that closed on the way would be a decision lost to an escape key |
+| *Look first* (escape) | Shows the **Review section** (below) and where the rest of the run is, and **comes straight back to the same dialog** — going to look is not a decision, and a dialog that closed on the way would be a decision lost to an escape key |
+
+**The Review section** is one rendering (`review-section.ts`) of each deliverable's
+`reviews-<d>` record and last check, and three places show it with the same text:
+*Look first*, the account an `auto` run posts after publishing, and the pull
+request's body under `## Review`. Per deliverable it says how many reviewers
+reported, how many findings and how many two or more reviewers raised, the
+dispositions, and the check; it names every **declined** finding, every reviewer
+that **did not report** (and so counts in no agreement), and lists each finding as
+
+```text
+- <claim> — <file>:<line> · found by <lens> (<model>, <thinking>) ×<agreed> of <reported> · <severity> · <disposition> (<reasoning>) [<id>]
+```
+
+declines first. It is bounded — at most ten findings per deliverable and forty in
+all, claims and reasoning cut, at most four reporters named — and says how many
+findings it left out and that the full record is in the run's receipt, which keeps a
+pull-request body under GitHub's limit. **A decline never holds the run**: it is the
+implementer's reasoned answer, shown to the person deciding.
 
 **The dialog decides; it does not publish.** That is the whole shape, and it is
 worth saying because the other shape existed: while pi-workflow's read client had
@@ -596,12 +624,12 @@ escape leaves it, and names `/plan ship <slug>` for later.
 
 **And it says what it published.** Such a run commits `output.shipSummary` beside
 the usual receipt — the refined plan, and per deliverable the same three values a
-gate would have held: the implementation summary, the normalized findings and the
-fix report. The seat reads it and renders it **through the same function the ship
-dialog uses**, under the heading `What was published:` instead of a question. A run
-that shipped without asking still owes a person the account a gate would have shown
-them: the findings that are left are the same findings whether or not anybody was
-asked about them. The account is a courtesy rather than a gate — a run whose
+gate would have held: the implementation summary, the review record and the last
+check. The seat reads it and posts, under `What was published:`, each
+implementation summary and **the Review section**, the same text *Look first* would
+have shown. A run that shipped without asking still owes a person the account a gate
+would have shown them: a declined finding is the same finding whether or not
+anybody was asked about it. The account is a courtesy rather than a gate — a run whose
 inspection cannot be read still publishes, and says less.
 
 **The failure dialog.** A task or a run that did not complete: the cause, then

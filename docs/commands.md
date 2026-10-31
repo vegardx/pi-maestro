@@ -250,8 +250,8 @@ transcript, including the check's findings. Every request it made is on the reco
 in `authoring.json` beside the plan — see [State](#state).
 
 **Then the session narrates the run, and asks what it has to ask.** Each task
-completion is one line in a `maestro:progress` message; a review synthesis, a fix
-report, a failure, the ship gate arriving and a run that ends without a gate each
+completion is one line in a `maestro:progress` message; a normalize, a resume, a
+failure, the ship gate arriving and a run that ends without a gate each
 get the model a turn to say what it means. Three of those are decisions rather than
 news, and each opens a dialog in this session — see
 [the run, and the session that narrates it](workflow-plans.md#the-run-and-the-session-that-narrates-it)

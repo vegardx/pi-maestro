@@ -1,10 +1,13 @@
 import type {
 	BashOperations,
 	ExtensionContext,
+	ExtensionToolContext,
+	ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { gateBash, refusal } from "../packages/maestro/src/bash-gate.js";
 import {
+	createAuditedBash,
 	createBashTool,
 	createGatedBashOperations,
 } from "../packages/maestro/src/bash-tool.js";
@@ -127,7 +130,7 @@ describe("registered bash tool", () => {
 					return true;
 				},
 			},
-		} as ExtensionContext;
+		} as ExtensionToolContext;
 		await tool.execute(
 			"bash-1",
 			{
@@ -140,5 +143,48 @@ describe("registered bash tool", () => {
 		);
 		expect(asked).toHaveLength(1);
 		expect(ran).toEqual(["git push"]);
+	});
+});
+
+describe("audited bash from a seat flow", () => {
+	it("runs the tool with a context whose nested calls fail", async () => {
+		let reads = 0;
+		const ctx = {
+			cwd: "/repo",
+			get model() {
+				reads += 1;
+				return undefined;
+			},
+		} as unknown as ExtensionContext;
+		let seen: ExtensionToolContext | undefined;
+		const tool = {
+			name: "bash",
+			execute: async (
+				_id: string,
+				_params: unknown,
+				_signal: AbortSignal | undefined,
+				_onUpdate: unknown,
+				toolCtx: ExtensionToolContext,
+			) => {
+				seen = toolCtx;
+				return { content: [{ type: "text", text: "done" }], details: {} };
+			},
+		} as unknown as ToolDefinition;
+
+		const outcome = await createAuditedBash(
+			tool,
+			ctx,
+			"publish",
+		)("git status", "Inspect the tree");
+
+		expect(outcome).toEqual({ ok: true, output: "done" });
+		expect(seen?.cwd).toBe("/repo");
+		expect(seen?.tools).toEqual([]);
+		expect(reads).toBe(0);
+		seen?.model;
+		expect(reads).toBe(1);
+		const nested = await seen?.executeTool("read", { path: "x" });
+		expect(nested?.isError).toBe(true);
+		expect(nested?.toolCall.id).toBe("publish-1/0");
 	});
 });

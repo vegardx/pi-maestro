@@ -1,4 +1,10 @@
-import {
+import type {
+	BeforeAgentStartCustomEvent,
+	BeforeAgentStartEvent,
+	BeforeAgentStartUserEvent,
+	ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import promptAssist, {
 	PROMPT_ASSIST_SYSTEM_ADDENDUM,
 	PromptAssistState,
 	sanitiseSuggestion,
@@ -79,5 +85,59 @@ describe("PromptAssistState transforms", () => {
 		expect(s.applyTransforms("q")).toBe("q?");
 		off();
 		expect(s.applyTransforms("q")).toBe("q");
+	});
+});
+
+describe("the system addendum on a run's start", () => {
+	type Handler = (event: BeforeAgentStartEvent, ctx: unknown) => unknown;
+
+	async function beforeAgentStart(): Promise<Handler> {
+		const handlers = new Map<string, Handler[]>();
+		const api = {
+			on(event: string, handler: Handler) {
+				handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+			},
+			registerTool() {},
+		} as unknown as ExtensionAPI;
+		await promptAssist(api);
+		const registered = handlers.get("before_agent_start") ?? [];
+		expect(registered).toHaveLength(1);
+		const [handler] = registered;
+		if (!handler) throw new Error("before_agent_start was not registered");
+		return handler;
+	}
+
+	const base = {
+		type: "before_agent_start" as const,
+		systemPrompt: "You are Pi.",
+		systemPromptOptions: {} as BeforeAgentStartEvent["systemPromptOptions"],
+	};
+
+	it("is added to a run a person's prompt starts", async () => {
+		const event: BeforeAgentStartUserEvent = {
+			...base,
+			messageType: "user",
+			prompt: "Fix the tests",
+		};
+		const result = (await beforeAgentStart())(event, {});
+		expect(result).toEqual({
+			systemPrompt: `You are Pi.\n\n${PROMPT_ASSIST_SYSTEM_ADDENDUM}`,
+		});
+	});
+
+	it("is left off a run an extension's custom message starts", async () => {
+		const event: BeforeAgentStartCustomEvent = {
+			...base,
+			messageType: "custom",
+			message: {
+				role: "custom",
+				customType: "maestro:decision",
+				content: "The pull request is open.",
+				display: true,
+				details: undefined,
+				timestamp: 0,
+			},
+		};
+		expect((await beforeAgentStart())(event, {})).toBeUndefined();
 	});
 });

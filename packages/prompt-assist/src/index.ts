@@ -67,8 +67,12 @@ export default defineExtension(
 
 		// Programmatic system-prompt addendum: append the suggest teaching (only
 		// while ghost text is on) plus any registered nudges. Chained with other
-		// extensions' systemPrompt results by the host.
+		// extensions' systemPrompt results by the host. Only for a person's
+		// prompt: since Pi 1.2 a custom message with triggerTurn starts a run
+		// through here too, and that run is not a turn whose next prompt the
+		// suggest tool may fill (see pendingRealInput).
 		pi.on("before_agent_start", (event) => {
+			if (event.messageType !== "user") return;
 			if (!maestro.flags.enabled("systemAddendum")) return;
 			const addendum = state.assembleAddendum(ghostEnabled());
 			if (!addendum) return;

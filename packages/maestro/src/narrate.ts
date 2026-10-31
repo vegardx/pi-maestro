@@ -78,14 +78,15 @@ export interface ProgressMessage {
 /**
  * How it is delivered.
  *
- * `deliverAs: "nextTurn"` always: this is never a steer and never a follow-up
- * question, it is something the next turn should know. `triggerTurn` is what
- * makes that next turn happen NOW rather than whenever the person types again.
+ * Never a steer: nothing here should interrupt the turn in flight. A line with
+ * no turn is `nextTurn`, something the next turn should know. A line that needs
+ * a turn is a `followUp` with `triggerTurn`, because Pi queues a `nextTurn`
+ * message without ever starting a turn for it: `followUp` starts the run now
+ * when the session is idle, and joins the end of the one in flight when not.
  */
-export interface ProgressDelivery {
-	readonly deliverAs: "nextTurn";
-	readonly triggerTurn?: true;
-}
+export type ProgressDelivery =
+	| { readonly deliverAs: "nextTurn"; readonly triggerTurn?: undefined }
+	| { readonly deliverAs: "followUp"; readonly triggerTurn: true };
 
 /** How a message reaches the session. Pi's `sendMessage`, narrowed. */
 export type SendProgress = (
@@ -422,10 +423,9 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 				content: [...lines, ...(sentence ? ["", sentence] : [])].join("\n"),
 				display: true,
 			},
-			{
-				deliverAs: "nextTurn",
-				...(turn ? { triggerTurn: true as const } : {}),
-			},
+			turn
+				? { deliverAs: "followUp", triggerTurn: true }
+				: { deliverAs: "nextTurn" },
 		);
 		// THE MESSAGE GOES FIRST, THEN THE DECISION. The dialog's title carries
 		// the gate's own inputs and the conversation carries the narration, and a

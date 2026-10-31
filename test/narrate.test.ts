@@ -518,7 +518,7 @@ describe("the runs this seat narrates", () => {
 		// ONE message for the batch, and the turn is the batch's, not the line's.
 		expect(n.sent.length).toBe(1);
 		expect(n.delivery()).toEqual({
-			deliverAs: "nextTurn",
+			deliverAs: "followUp",
 			triggerTurn: true,
 		});
 		expect(n.content()).toContain("two lenses disagree about the seam");

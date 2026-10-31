@@ -4,6 +4,7 @@
 
 import {
 	getConfigNumber,
+	type ProjectTrust,
 	readLayeredExtensionConfig,
 } from "@vegardx/pi-settings";
 
@@ -35,9 +36,10 @@ function bounded(
 
 export function readSmartCompactSettings(
 	cwd: string,
-	agentDir?: string,
+	agentDir: string | undefined,
+	trust: ProjectTrust,
 ): SmartCompactSettings {
-	const { merged } = readLayeredExtensionConfig(cwd, agentDir);
+	const { merged } = readLayeredExtensionConfig(cwd, agentDir, trust);
 	const compactAtRaw = getConfigNumber(merged, NAME, "compactAt", 0);
 	return {
 		maxSummaryTokens: bounded(

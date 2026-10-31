@@ -33,7 +33,12 @@ const AVAILABLE_ALTERNATIVES = new Set([
 export interface BashToolDeps {
 	readonly cwd: string;
 	readonly mode: () => Mode;
-	readonly policy: () => ExecutionPolicySettings;
+	/**
+	 * Read once per invocation, from the invoking session's context: whether the
+	 * project's own settings may shape the policy is that session's trust
+	 * decision, not this tool's.
+	 */
+	readonly policy: (ctx: ExtensionContext) => ExecutionPolicySettings;
 	readonly confirm?: (command: string, reason: string) => Promise<boolean>;
 	readonly direct?: BashOperations;
 	readonly assessment?: () => CommandAssessment | undefined;
@@ -48,7 +53,12 @@ class Refused extends Error {
 	}
 }
 
-export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
+/** The gate runs inside one invocation, under the policy it already read. */
+export type GatedBashDeps = Omit<BashToolDeps, "policy"> & {
+	readonly policy: () => ExecutionPolicySettings;
+};
+
+export function createGatedBashOperations(deps: GatedBashDeps): BashOperations {
 	const host = deps.direct ?? createLocalBashOperations();
 	return {
 		...host,
@@ -77,7 +87,7 @@ export function createGatedBashOperations(deps: BashToolDeps): BashOperations {
 }
 
 function executableDefinition(
-	deps: BashToolDeps,
+	deps: GatedBashDeps,
 	assessment: CommandAssessment | undefined,
 	confirmBash: boolean,
 	confirm: BashToolDeps["confirm"],
@@ -99,7 +109,7 @@ interface InvocationAssessment {
 
 async function assessForInvocation(
 	ctx: ExtensionContext,
-	deps: BashToolDeps,
+	deps: GatedBashDeps,
 	command: string,
 	intent: string | undefined,
 	signal: AbortSignal | undefined,
@@ -160,15 +170,17 @@ export function createBashTool(deps: BashToolDeps): ToolDefinition {
 				intent?: string;
 				confirmBash?: boolean;
 			};
+			const policy = deps.policy(ctx);
+			const invoked: GatedBashDeps = { ...deps, policy: () => policy };
 			const invocation = await assessForInvocation(
 				ctx,
-				deps,
+				invoked,
 				input.command,
 				input.intent,
 				signal,
 			);
 			const executable = executableDefinition(
-				deps,
+				invoked,
 				invocation.assessment,
 				input.confirmBash === true,
 				(command, reason) =>

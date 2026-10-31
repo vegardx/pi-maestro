@@ -32,6 +32,7 @@ import {
 	type ThinkingLevel,
 	type TierId,
 } from "@vegardx/pi-models";
+import type { ProjectTrust } from "@vegardx/pi-settings";
 
 /**
  * Read the merged v2 slice (global + project, project winning per key).
@@ -40,9 +41,12 @@ import {
  */
 export function readModelsConfig(
 	cwd: string,
-	agentDir?: string,
+	agentDir: string | undefined,
+	trust: ProjectTrust,
 ): ModelsConfig | undefined {
-	const manager = SettingsManager.create(cwd, agentDir);
+	const manager = SettingsManager.create(cwd, agentDir, {
+		projectTrusted: trust.projectTrusted,
+	});
 	return parseModelsSettings(
 		manager.getGlobalSettings() as unknown,
 		manager.getProjectSettings() as unknown,
@@ -78,7 +82,9 @@ export function modelCatalogPort(ctx: ExtensionContext): ModelCatalogPort {
 export function modelRouterFor(ctx: ExtensionContext): ModelRouter {
 	let models: ModelsConfig | undefined;
 	try {
-		models = readModelsConfig(ctx.cwd);
+		models = readModelsConfig(ctx.cwd, undefined, {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
 	} catch {
 		models = undefined;
 	}

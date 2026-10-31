@@ -9,6 +9,9 @@ import { readModelsConfig } from "@vegardx/pi-maestro/model-router";
 import { activeBinding, familyOfModel } from "@vegardx/pi-models";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+/** These suites write project settings and read them as a trusted project. */
+const TRUSTED = { projectTrusted: true } as const;
+
 let cwd: string;
 let prevAgentDir: string | undefined;
 
@@ -64,7 +67,7 @@ describe("v2 model config", () => {
 			bindings: { main: { roster: "daily" } },
 			allowances: { "deliverable-worker": { tiers: ["standard"] } },
 		});
-		const config = readModelsConfig(cwd);
+		const config = readModelsConfig(cwd, undefined, TRUSTED);
 		expect(config).toBeDefined();
 		expect(Object.keys(config?.families ?? {})).toEqual([
 			"OpenAI",
@@ -95,7 +98,9 @@ describe("v2 model config", () => {
 				"deep-research": { tiers: ["heavy"], direct: "other-family" },
 			},
 		});
-		expect(readModelsConfig(cwd)?.allowances["deep-research"]).toEqual({
+		expect(
+			readModelsConfig(cwd, undefined, TRUSTED)?.allowances["deep-research"],
+		).toEqual({
 			tiers: ["heavy"],
 			direct: "other-family",
 		});
@@ -104,7 +109,7 @@ describe("v2 model config", () => {
 			families: FAMILIES,
 			allowances: { "code-review": { tiers: ["heavy"], direct: "sideways" } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow(
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
 			"direct: must be one of inherit, other-family",
 		);
 	});
@@ -116,30 +121,37 @@ describe("v2 model config", () => {
 				OpenAI: { aliases: { B: { attach: ["p/gpt"] } } },
 			},
 		});
-		expect(Object.keys(readModelsConfig(cwd)?.families ?? {})).toEqual([
-			"Grok",
-			"OpenAI",
-		]);
+		expect(
+			Object.keys(readModelsConfig(cwd, undefined, TRUSTED)?.families ?? {}),
+		).toEqual(["Grok", "OpenAI"]);
 	});
 
 	it("rejects bad shapes: empty attach, no aliases, unknown tier, bad ref, dup", () => {
 		writeSettings({ families: { F: { aliases: { A: { attach: [] } } } } });
-		expect(() => readModelsConfig(cwd)).toThrow("attach must be");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"attach must be",
+		);
 
 		writeSettings({ families: { F: { aliases: {} } } });
-		expect(() => readModelsConfig(cwd)).toThrow("has no aliases");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"has no aliases",
+		);
 
 		writeSettings({
 			families: FAMILIES,
 			rosters: { bad: { turbo: [] } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("unknown tier turbo");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"unknown tier turbo",
+		);
 
 		writeSettings({
 			families: FAMILIES,
 			rosters: { bad: { standard: ["noslash"] } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow('"Family/Alias" ref');
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			'"Family/Alias" ref',
+		);
 
 		writeSettings({
 			families: FAMILIES,
@@ -147,7 +159,9 @@ describe("v2 model config", () => {
 				bad: { standard: ["OpenAI/GPT 5.6 Sol", "OpenAI/GPT 5.6 Sol"] },
 			},
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("duplicate ref");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"duplicate ref",
+		);
 	});
 
 	it("cross-validates roster refs, binding rosters, targets, and default count", () => {
@@ -155,14 +169,18 @@ describe("v2 model config", () => {
 			families: FAMILIES,
 			rosters: { daily: { standard: ["OpenAI/Missing"] } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("unknown alias OpenAI/Missing");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"unknown alias OpenAI/Missing",
+		);
 
 		writeSettings({
 			families: FAMILIES,
 			rosters: ROSTERS,
 			bindings: { main: { roster: "nope" } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("unknown roster nope");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"unknown roster nope",
+		);
 
 		writeSettings({
 			families: FAMILIES,
@@ -172,14 +190,16 @@ describe("v2 model config", () => {
 				b: { roster: "daily", targets: ["p/m"] },
 			},
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("overlaps");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow("overlaps");
 
 		writeSettings({
 			families: FAMILIES,
 			rosters: ROSTERS,
 			bindings: { a: { roster: "daily" }, b: { roster: "daily" } },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("only one default binding");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"only one default binding",
+		);
 	});
 
 	it("rejects an active region with no configured list", () => {
@@ -187,7 +207,9 @@ describe("v2 model config", () => {
 			families: FAMILIES,
 			region: { active: "EEA", lists: {} },
 		});
-		expect(() => readModelsConfig(cwd)).toThrow("Active region EEA");
+		expect(() => readModelsConfig(cwd, undefined, TRUSTED)).toThrow(
+			"Active region EEA",
+		);
 	});
 
 	it("activates a binding by target first, then the default", () => {
@@ -199,7 +221,7 @@ describe("v2 model config", () => {
 				fallback: { roster: "daily" },
 			},
 		});
-		const config = readModelsConfig(cwd);
+		const config = readModelsConfig(cwd, undefined, TRUSTED);
 		expect(activeBinding(config, "prov/fable")?.id).toBe("pinned");
 		expect(activeBinding(config, "prov/other")?.id).toBe("fallback");
 		expect(activeBinding(config, undefined)?.id).toBe("fallback");
@@ -207,7 +229,7 @@ describe("v2 model config", () => {
 
 	it("looks a model up to its family/alias (author-family, footer identity)", () => {
 		writeSettings({ families: FAMILIES });
-		const config = readModelsConfig(cwd);
+		const config = readModelsConfig(cwd, undefined, TRUSTED);
 		expect(familyOfModel(config, "github-copilot/gpt-5.5")).toEqual({
 			family: "OpenAI",
 			alias: "GPT 5.6 Sol",
@@ -221,7 +243,7 @@ describe("v2 model config", () => {
 			rosters: ROSTERS,
 			bindings: { main: { roster: "daily" }, gone: null },
 		});
-		const config = readModelsConfig(cwd);
+		const config = readModelsConfig(cwd, undefined, TRUSTED);
 		expect(Object.keys(config?.families ?? {})).toEqual([
 			"OpenAI",
 			"Anthropic",

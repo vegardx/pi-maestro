@@ -70,6 +70,8 @@ function fakeCtx(): ExtensionContext {
 		cwd,
 		model: entries.get(SEAT),
 		getThinkingLevel: () => "medium",
+		// The models block is the project's own, so the project is trusted.
+		isProjectTrusted: () => true,
 		modelRegistry: {
 			find: (provider: string, id: string) => entries.get(`${provider}/${id}`),
 			getProviderAuthStatus: () => ({ configured: true }),

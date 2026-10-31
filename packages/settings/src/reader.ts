@@ -17,11 +17,29 @@ import { listSessionSettingOverrides } from "@vegardx/pi-contracts";
 export type ExtensionConfig = Record<string, unknown>;
 export type ExtensionConfigMap = Record<string, ExtensionConfig>;
 
+/**
+ * Whether the project's own settings may be read, as the caller's session
+ * decided it (`ctx.isProjectTrusted()`).
+ *
+ * Required rather than defaulted: pi's SettingsManager reads project settings
+ * unless told otherwise, and an untrusted repository's `.pi/settings.json`
+ * must not loosen anything — the plan-mode Bash ceiling included.
+ */
+export interface ProjectTrust {
+	readonly projectTrusted: boolean;
+}
+
 export interface LayeredExtensionConfig {
 	global: ExtensionConfigMap;
 	project: ExtensionConfigMap;
 	/** project merged over global, deep, project winning at the leaf. */
 	merged: ExtensionConfigMap;
+	/**
+	 * Extensions the project configures that were not read because the project
+	 * is not trusted. Empty when it is trusted, so a caller can say what was
+	 * ignored rather than letting it vanish.
+	 */
+	skippedProject: string[];
 }
 
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -62,11 +80,24 @@ function deepMerge(
  */
 export function readLayeredExtensionConfig(
 	cwd: string,
-	agentDir?: string,
+	agentDir: string | undefined,
+	trust: ProjectTrust,
 ): LayeredExtensionConfig {
-	const manager = SettingsManager.create(cwd, agentDir);
+	const manager = SettingsManager.create(cwd, agentDir, {
+		projectTrusted: trust.projectTrusted,
+	});
 	const global = extractExtensionConfig(manager.getGlobalSettings());
 	const project = extractExtensionConfig(manager.getProjectSettings());
+	// Parsed only to name what was ignored; none of it reaches `merged`.
+	const skippedProject = trust.projectTrusted
+		? []
+		: Object.keys(
+				extractExtensionConfig(
+					SettingsManager.create(cwd, agentDir, {
+						projectTrusted: true,
+					}).getProjectSettings(),
+				),
+			);
 
 	const merged: ExtensionConfigMap = {};
 	const names = new Set([...Object.keys(global), ...Object.keys(project)]);
@@ -80,7 +111,7 @@ export function readLayeredExtensionConfig(
 		if (!merged[override.extension]) merged[override.extension] = {};
 		setPath(merged[override.extension], override.path, override.value);
 	}
-	return { global, project, merged };
+	return { global, project, merged, skippedProject };
 }
 
 // ---- Typed accessors ---------------------------------------------------

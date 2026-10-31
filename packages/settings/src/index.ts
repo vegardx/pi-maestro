@@ -9,6 +9,7 @@ export {
 	getConfigString,
 	getConfigStringArray,
 	type LayeredExtensionConfig,
+	type ProjectTrust,
 	readLayeredExtensionConfig,
 	readPath,
 } from "./reader.js";

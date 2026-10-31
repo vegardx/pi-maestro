@@ -109,7 +109,9 @@ export default defineExtension(
 				fileOps,
 			} = preparation;
 
-			const settings = readSmartCompactSettings(ctx.cwd);
+			const settings = readSmartCompactSettings(ctx.cwd, undefined, {
+				projectTrusted: ctx.isProjectTrusted(),
+			});
 			const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 			if (allMessages.length === 0) return;
 			const { signal: callSignal, dispose } = withTimeout(
@@ -211,7 +213,9 @@ export default defineExtension(
 		// fires again before the previous compaction settles.
 		pi.on("turn_end", (_event, ctx) => {
 			if (compacting) return;
-			const { compactAt } = readSmartCompactSettings(ctx.cwd);
+			const { compactAt } = readSmartCompactSettings(ctx.cwd, undefined, {
+				projectTrusted: ctx.isProjectTrusted(),
+			});
 			if (compactAt === undefined) return;
 			const usage = ctx.getContextUsage();
 			if (!usage || usage.tokens === null) return;

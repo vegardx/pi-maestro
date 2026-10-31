@@ -8,6 +8,9 @@ import {
 	describePolicyDeviations,
 } from "../packages/maestro/src/execution-policy.js";
 
+/** These suites write project settings and read them as a trusted project. */
+const TRUSTED = { projectTrusted: true } as const;
+
 describe("recoverable deletion guidance", () => {
 	it("redirects rm and rm -rf only when delete is available", () => {
 		for (const command of ["rm notes.txt", "rm -rf dist"])
@@ -53,7 +56,7 @@ describe("explicit policy deviations", () => {
 	afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
 	it("reports nothing for defaults", () => {
-		expect(describePolicyDeviations(cwd)).toEqual([]);
+		expect(describePolicyDeviations(cwd, undefined, TRUSTED)).toEqual([]);
 	});
 
 	it("reports an overridden mode/effect action", () => {
@@ -67,7 +70,7 @@ describe("explicit policy deviations", () => {
 				},
 			}),
 		);
-		expect(describePolicyDeviations(cwd)).toContain(
+		expect(describePolicyDeviations(cwd, undefined, TRUSTED)).toContain(
 			"plan.workspace-write: allow (default refuse)",
 		);
 	});

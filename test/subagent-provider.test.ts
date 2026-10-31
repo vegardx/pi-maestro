@@ -142,7 +142,11 @@ function fakeService(attempt: FakeAttempt = {}) {
 
 function plant(bus: EventBus, attempt: FakeAttempt = {}) {
 	const fake = fakeService(attempt);
-	registerSubagentServiceProvider(bus, async () => fake.service as never);
+	registerSubagentServiceProvider(
+		bus,
+		SUBAGENT_RUNTIME_CONTRACT,
+		async () => fake.service as never,
+	);
 	return fake;
 }
 
@@ -448,9 +452,13 @@ describe("the check against the shared service", () => {
 
 	it("never leaks a stray failure's own words", async () => {
 		const bus = fakeBus();
-		registerSubagentServiceProvider(bus, async () => {
-			throw new Error("ENOENT /Users/somebody/.pi/secrets.json");
-		});
+		registerSubagentServiceProvider(
+			bus,
+			SUBAGENT_RUNTIME_CONTRACT,
+			async () => {
+				throw new Error("ENOENT /Users/somebody/.pi/secrets.json");
+			},
+		);
 		await expect(check(bus)(PLAN, DESCRIPTION)).resolves.toEqual({
 			unavailable: UNAVAILABLE_REFUSED,
 		});

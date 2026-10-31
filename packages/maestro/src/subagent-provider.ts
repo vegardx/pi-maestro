@@ -206,7 +206,7 @@ export const PLAN_CHECK_CEILING: Readonly<DelegationCeiling> = Object.freeze({
 
 // ── The contract this seat was built against ─────────────────────────────────
 
-export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 11;
+export const REQUIRED_SUBAGENT_CONTRACT_REVISION = 12;
 
 /**
  * The features the plan check depends on.

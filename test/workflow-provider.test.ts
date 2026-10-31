@@ -228,9 +228,9 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 	// runtime needs, both read off the copy rather than restated. The seat's own
 	// plan-check gate must name the same pi-subagent revision, or one installed
 	// pi-subagent could never satisfy both the seat and the workflow runtime.
-	it("is pinned to revision 25, over pi-subagent revision 11", () => {
-		expect(shipped.contractRevision).toBe(25);
-		expect(shipped.requiredSubagent.contractRevision).toBe(11);
+	it("is pinned to revision 26, over pi-subagent revision 12", () => {
+		expect(shipped.contractRevision).toBe(26);
+		expect(shipped.requiredSubagent.contractRevision).toBe(12);
 		expect(shipped.requiredSubagent.contractRevision).toBe(
 			REQUIRED_SUBAGENT_CONTRACT_REVISION,
 		);

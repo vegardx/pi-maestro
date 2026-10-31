@@ -1,9 +1,9 @@
 {
 	"schema": "pi-workflow-runtime",
-	"contractRevision": 22,
+	"contractRevision": 23,
 	"requiredSubagent": {
 		"schema": "pi-subagent-runtime",
-		"contractRevision": 9,
+		"contractRevision": 10,
 		"features": {
 			"nativeSessionBackend": true,
 			"gondolinSandbox": true,
@@ -30,7 +30,8 @@
 			"hostBrokeredTools": true,
 			"agentRootsFirst": true,
 			"delegationCeiling": true,
-			"sessionModelInherit": true
+			"sessionModelInherit": true,
+			"workspaceStartAt": true
 		}
 	},
 	"features": {

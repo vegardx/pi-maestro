@@ -170,6 +170,7 @@ Nothing else is asked, because nothing else is a question for a human:
 | --- | --- |
 | Gates | The target mode's: `ask` → `ship`, `auto` → `none`. You answered this by typing `/mode ask` or `/mode auto`, and asking again in a select would be the flow's second opinion about what you said. `every-deliverable` is valid vocabulary, and no dialog offers it yet |
 | How hard a role thinks | The session's own model and thinking level, inherited per call; reviews keep their tiers. There is no dial: schema 8 removed `policy.effort`, because one answer was standing in for which model implements, how hard it thinks and how many fix rounds the check buys |
+| Whether the review is answered | `policy.resumes`, default `1`: the implementer is resumed once to answer the check and every review finding. Schema 9 removed `maxFixRounds` with the fixer |
 | Publication | Derived: an `origin` remote and `gh` on PATH → `pr`; a remote alone → `branch`; neither → `none` |
 | Base branch | What this branch tracks, else `origin`'s head, else `main` |
 | Review lenses | The plan's own `reviews` and its `policy.reviewDefault`. Every heavy review whose `diverse` is undefined has `diverse: true` written into the **stored** plan, where the digest covers it; one that says `diverse: false` keeps its answer |
@@ -296,9 +297,9 @@ Authored plans live under their project's key, beside that project's sessions:
 <agentDir>/maestro/plans/<encoded cwd>/<slug>/plan.json
 ```
 
-The envelope is `{schemaVersion: 7, savedAt, authoredBy: {sessionId, cwd}, body}`.
-`authoredBy` is required, and a schema 7 envelope — whose `policy` carries the
-`effort` dial version 8 removed — is refused by name rather than
+The envelope is `{schemaVersion: 9, savedAt, authoredBy: {sessionId, cwd}, body}`.
+`authoredBy` is required, and a schema 8 envelope — whose `policy` may carry the
+`maxFixRounds` dial version 9 removed — is refused by name rather than
 migrated.
 
 `/plan ship` appends one receipt per publication, and never rewrites an earlier

@@ -8,7 +8,7 @@
 //
 // The refusals are the other half. A review with no lens, a lens id the
 // compiled document could not carry, a pinned model this host does not have, a
-// fix loop with no bound, a `reads` edge the runtime cannot honour: each is
+// resume count past one, the fix-round dial v9 removed, a `reads` edge the runtime cannot honour: each is
 // refused by name, because the alternative is a plan that a human approves and
 // a run then quietly does not do.
 
@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	DEFAULT_FIX_ROUNDS,
 	DEFAULT_GATES,
+	DEFAULT_RESUMES,
 	type Deliverable,
 	defaultStagesFor,
 	gateStops,
@@ -89,7 +89,7 @@ const reviewed = (reviews: readonly Review[], over: Partial<Plan> = {}): Plan =>
 	plan({ deliverables: [deliverable("api", { reviews })], ...over });
 
 describe("a deliverable is lowered into stages, always the same way", () => {
-	it("implements, verifies, and fans out over the reviews it lists", () => {
+	it("implements, checks, reviews, normalizes, resumes and rechecks", () => {
 		const d = deliverable("api", {
 			tasks: [task("build"), task("tests"), task("docs")],
 			reviews: [
@@ -100,13 +100,13 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		const stages = withDefaultStages(plan({ deliverables: [d] }))
 			.deliverables[0].stages;
 
+		// pi-workflow 5.0.0's `derivedStagesFor`, field for field.
 		expect(stages).toEqual([
 			{ use: "implement", id: "implement" },
-			{ use: "verify-and-fix", id: "verify", maxRounds: 1 },
+			{ use: "check", id: "check" },
 			{
 				use: "review-fan-out",
 				id: "review",
-				synthesis: "optional",
 				lenses: [
 					// What the review pinned wins; what it left open comes from the
 					// policy, which is what `reviewDefault` is for.
@@ -114,43 +114,69 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 					{ id: "contracts", tier: "standard", diverse: false },
 				],
 			},
+			{ use: "normalize", id: "normalize" },
+			{ use: "resume", id: "resume" },
+			{ use: "check", id: "recheck" },
 		]);
 	});
 
-	it("declares no review stage when the deliverable lists none", () => {
+	it("keeps one lens twice, at two tiers, as two reviewers", () => {
+		const d = deliverable("api", {
+			reviews: [
+				{ lens: "correctness", tier: "light" },
+				{ lens: "correctness", tier: "heavy" },
+			],
+		});
+		expect(errorsOf(plan({ deliverables: [d] }))).toEqual([]);
+		const review = defaultStagesFor(d, resolvePolicy()).find(
+			(stage) => stage.use === "review-fan-out",
+		);
+		expect(review).toMatchObject({
+			lenses: [
+				{ id: "correctness", tier: "light" },
+				{ id: "correctness", tier: "heavy" },
+			],
+		});
+	});
+
+	it("declares no review stages when the deliverable lists none, and still resumes", () => {
 		// A fan-out over zero lenses is not a cheaper review; it is a stage that
 		// cannot be compiled at all. Absent and empty answer alike, because the
-		// document says "nobody reads this" either way.
+		// document says "nobody reads this" either way. The resume stays: a
+		// failing check is something to answer with nobody reviewing.
 		for (const reviews of [undefined, []])
 			expect(
 				defaultStagesFor(
 					deliverable("api", reviews ? { reviews } : {}),
 					resolvePolicy(),
-				).map((s) => s.use),
-			).toEqual(["implement", "verify-and-fix"]);
+				).map((s) => `${s.use}:${s.id}`),
+			).toEqual([
+				"implement:implement",
+				"check:check",
+				"resume:resume",
+				"check:recheck",
+			]);
 	});
 
-	// v8: one number rather than a map keyed by the effort dial. A person
-	// answering "how much effort?" used to be deciding, invisibly, whether a
-	// failing check got a second chance; a plan that wants more says so.
-	it("takes the fix-round count from the plan, else the one default", () => {
-		expect(defaultStagesFor(deliverable("api"), resolvePolicy())[1]).toEqual({
-			use: "verify-and-fix",
-			id: "verify",
-			maxRounds: DEFAULT_FIX_ROUNDS,
-		});
-		expect(DEFAULT_FIX_ROUNDS).toBe(1);
-		for (const maxFixRounds of [0, 1, 2] as const)
-			expect(
-				defaultStagesFor(
-					deliverable("api"),
-					resolvePolicy({ maxFixRounds }),
-				)[1],
-			).toEqual({
-				use: "verify-and-fix",
-				id: "verify",
-				maxRounds: maxFixRounds,
-			});
+	// v9: the fixer is gone, and so is its round count. Whether the implementer
+	// is resumed is the one dial, defaulting to yes.
+	it("resumes the implementer unless the plan says `resumes: 0`", () => {
+		expect(DEFAULT_RESUMES).toBe(1);
+		expect(resolvePolicy().resumes).toBe(1);
+		const uses = (resumes: 0 | 1) =>
+			defaultStagesFor(
+				deliverable("api", { reviews: [{ lens: "security" }] }),
+				resolvePolicy({ resumes }),
+			).map((stage) => stage.id);
+		expect(uses(1)).toEqual([
+			"implement",
+			"check",
+			"review",
+			"normalize",
+			"resume",
+			"recheck",
+		]);
+		expect(uses(0)).toEqual(["implement", "check", "review", "normalize"]);
 	});
 
 	// There used to be a test here asserting that every plan this validator
@@ -194,7 +220,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 		expect(resolvePolicy()).toEqual({
 			gates: "ship",
 			reviewDefault: { tier: "standard", diverse: false },
-			maxFixRounds: 1,
+			resumes: 1,
 			publish: { mode: "none" },
 		});
 		// v8: there is no `effort` to resolve, and a document from a build that had
@@ -217,7 +243,7 @@ describe("a deliverable is lowered into stages, always the same way", () => {
 			(before.deliverables[0] as { stages?: unknown }).stages,
 		).toBeUndefined();
 		expect(planDigest(before)).toBe(digest);
-		expect(after.deliverables[0].stages).toHaveLength(2);
+		expect(after.deliverables[0].stages).toHaveLength(4);
 	});
 });
 
@@ -398,8 +424,8 @@ describe("what a policy may not say", () => {
 		expect(policied({ gates: "sometimes" as "ship" })).toContainEqual(
 			expect.stringContaining("is not a gate policy"),
 		);
-		expect(policied({ maxFixRounds: 3 as 2 })).toContainEqual(
-			expect.stringContaining("`maxFixRounds` is 0, 1, 2"),
+		expect(policied({ resumes: 2 as 1 })).toContainEqual(
+			expect.stringContaining("`resumes` is 0 or 1"),
 		);
 		expect(
 			policied({ reviewDefault: { tier: "exhaustive" as "heavy" } }),
@@ -407,6 +433,15 @@ describe("what a policy may not say", () => {
 		expect(policied({ publish: { mode: "merge" as "pr" } })).toContainEqual(
 			expect.stringContaining("is not a publication mode"),
 		);
+	});
+
+	it("refuses the fix-round dial version 9 removed, by name", () => {
+		for (const maxFixRounds of [0, 1, 2])
+			expect(
+				policied({ maxFixRounds } as unknown as PlanPolicy),
+			).toContainEqual(
+				"policy: carries `maxFixRounds`, which plan schema v9 removed with the fixer: the implementer is resumed once in its own session to answer the check and every finding, and `resumes` (0 or 1, default 1) is whether it is. Drop `maxFixRounds`",
+			);
 	});
 
 	it("refuses a base branch Git could not check out", () => {
@@ -426,7 +461,7 @@ describe("what a policy may not say", () => {
 			policied({
 				gates: "every-deliverable",
 				reviewDefault: { tier: "heavy", diverse: true },
-				maxFixRounds: 2,
+				resumes: 0,
 				publish: { mode: "branch", base: "main" },
 			}),
 		).toEqual([]);
@@ -511,7 +546,7 @@ describe("reviews and policy survive the store", () => {
 
 	const policy: PlanPolicy = {
 		gates: "ship",
-		maxFixRounds: 1,
+		resumes: 1,
 		publish: { mode: "pr", base: "main" },
 	};
 
@@ -587,10 +622,22 @@ describe("reviews and policy survive the store", () => {
 		expect(text).toContain("read by contracts, tier heavy, diverse");
 		expect(text).toContain("stages (derived):");
 		expect(text).toContain("implement — implement");
-		expect(text).toContain("verify — verify-and-fix, up to 1 fix round");
 		expect(text).toContain(
-			"review — review-fan-out over contracts (tier heavy, diverse), replay (tier standard), synthesis optional",
+			"gates ship, the implementer is resumed once to answer the check and the review",
 		);
+		expect(text).toContain("check — check, beside the review");
+		expect(text).toContain(
+			"review — review-fan-out over contracts (tier heavy, diverse), replay (tier standard)",
+		);
+		expect(text).toContain("normalize — normalize");
+		expect(text).toContain(
+			"resume — resume, the implementer answers each finding",
+		);
+		expect(text).toContain(
+			"recheck — check, of the resumed implementer's hand-off",
+		);
+		expect(text).not.toContain("verify-and-fix");
+		expect(text).not.toContain("synthesis");
 	});
 
 	it("shows a plan the seat gave no dials as the defaults it will run at", () => {
@@ -599,7 +646,7 @@ describe("reviews and policy survive the store", () => {
 			"Policy (the plan sets none — these are the defaults)",
 		);
 		expect(text).toContain(
-			"review — review-fan-out over security (tier standard), synthesis optional",
+			"review — review-fan-out over security (tier standard)",
 		);
 	});
 });

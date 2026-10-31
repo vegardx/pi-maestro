@@ -65,9 +65,9 @@ export class UnsupportedStateError extends StoreError {
 	) {
 		super(
 			`${path} was written by schema ${String(found)}, and this build speaks ${MAESTRO_SCHEMA_VERSION}. ` +
-				"Schema 8 removed `policy.effort`; models are set per role — an implementation role inherits the " +
-				"session's own model and thinking level, a review keeps its tier — so a schema 7 envelope carries a " +
-				"dial nothing reads and there is no migration. " +
+				"Schema 9 removed `policy.maxFixRounds` with the fixer it budgeted: the implementer is resumed in its " +
+				"own session to answer the check and every review finding, and `policy.resumes` says whether — so an " +
+				"older envelope carries a dial nothing reads and there is no migration. " +
 				`Archive or remove the ${kind} and write it again at schemaVersion ${MAESTRO_SCHEMA_VERSION}.`,
 		);
 		this.name = "UnsupportedStateError";

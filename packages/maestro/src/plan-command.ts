@@ -185,20 +185,15 @@ function renderLens(lens: ReviewLens): string {
 	return parts.length > 0 ? `${lens.id} (${parts.join(", ")})` : lens.id;
 }
 
-/** How many fix rounds a round-count actually buys, said in words. */
-function renderRounds(rounds: number): string {
-	if (rounds === 0) return "no fix rounds — the check passes or a human hears";
-	return `up to ${rounds} fix round${rounds === 1 ? "" : "s"}`;
+/** What `policy.resumes` buys, said in words. */
+function renderResumes(resumes: number): string {
+	return resumes === 0
+		? "no resume — the findings reach the gate unanswered"
+		: "the implementer is resumed once to answer the check and the review";
 }
 
-/**
- * One stage, as what it will do rather than as its JSON.
- *
- * `policy` is passed because a stage that set nothing is not a stage with no
- * answer — it is a stage taking the plan's, and printing a blank there would
- * read like a missing field.
- */
-function renderStage(stage: Stage, policy: ResolvedPolicy): string {
+/** One stage, as what it will do rather than as its JSON. */
+function renderStage(stage: Stage): string {
 	switch (stage.use) {
 		case "implement":
 			return (
@@ -207,18 +202,16 @@ function renderStage(stage: Stage, policy: ResolvedPolicy): string {
 					? `, tools ${stage.tools.join(", ")}`
 					: "")
 			);
-		case "verify-and-fix":
-			return (
-				`${stage.id} — verify-and-fix, ${renderRounds(stage.maxRounds ?? policy.maxFixRounds)}` +
-				(stage.escalate && stage.escalate !== "none"
-					? `, escalating to ${stage.escalate}`
-					: "")
-			);
+		case "check":
+			return stage.id === "recheck"
+				? `${stage.id} — check, of the resumed implementer's hand-off when it changed anything`
+				: `${stage.id} — check, beside the review`;
 		case "review-fan-out":
-			return (
-				`${stage.id} — review-fan-out over ${stage.lenses.map(renderLens).join(", ")}` +
-				`, synthesis ${stage.synthesis ?? "optional"}`
-			);
+			return `${stage.id} — review-fan-out over ${stage.lenses.map(renderLens).join(", ")}`;
+		case "normalize":
+			return `${stage.id} — normalize, the findings clustered by place; a model may only merge`;
+		case "resume":
+			return `${stage.id} — resume, the implementer answers each finding fixed, declined or out-of-scope`;
 	}
 }
 
@@ -229,7 +222,7 @@ function renderPolicy(policy: ResolvedPolicy, declared: boolean): string[] {
 		declared
 			? "Policy:"
 			: "Policy (the plan sets none — these are the defaults):",
-		`  gates ${policy.gates}, ${renderRounds(policy.maxFixRounds)}`,
+		`  gates ${policy.gates}, ${renderResumes(policy.resumes)}`,
 		`  reviews that pin nothing: tier ${policy.reviewDefault.tier}${policy.reviewDefault.diverse ? ", diverse" : ""}`,
 		`  publish ${policy.publish.mode}${policy.publish.base ? ` from ${policy.publish.base}` : ""}`,
 	];
@@ -270,8 +263,7 @@ export function renderPlan(
 		for (const review of d.reviews ?? [])
 			lines.push(`    read by ${renderReview(review)}`);
 		lines.push("    stages (derived):");
-		for (const stage of d.stages)
-			lines.push(`      ${renderStage(stage, staged.policy)}`);
+		for (const stage of d.stages) lines.push(`      ${renderStage(stage)}`);
 	}
 	if (warnings.length > 0)
 		lines.push("", ...warnings.map((warning) => `! ${warning}`));

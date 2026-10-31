@@ -142,10 +142,23 @@ export function renderDocumentSystemPrompt(
 			" `stages` field: how a deliverable is run is derived from its tasks, its" +
 			" reviews and those dials.",
 		"",
+		resolved.resumes === 1
+			? "After the check and the reviews, each deliverable's implementer is" +
+				" resumed once in its own session to answer the check and every review" +
+				" finding — fixed, declined with its reasoning, or out of scope — and a" +
+				" decline never holds the run."
+			: "No implementer is resumed: the check and the review findings reach the" +
+				" gate unanswered.",
+		"",
 		"A deliverable's `tasks` are the work — implementation, tests, docs — and" +
 			" its `reviews` are the independent readings that work earns, listed once" +
 			" beside the tasks. A deliverable that needs no independent reader leaves" +
 			" `reviews` out.",
+		"",
+		"A review's `tier` is how much reviewer it is worth: it sets the reviewer's" +
+			" model and thinking level. The same `lens` may appear more than once — at another `tier`," +
+			" or pinned to another `model` — to read the same work twice; each entry" +
+			" is a reviewer of its own.",
 		"",
 		"Write the whole plan from the conversation: every repository, every" +
 			" deliverable, its `after` and `reads` edges, its tasks and the reviews" +

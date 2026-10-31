@@ -30,11 +30,18 @@ jobs:
       # The seat depends on @vegardx/pi-subagent through a file: link to the
       # sibling checkout (see package.json), so CI builds that sibling at the
       # pinned commit before installing here. Raise the ref with the pin.
+      # pi-subagent links @vegardx/pi-web the same way, at the commit its own
+      # CI checks out.
       - uses: actions/checkout@v7
         with:
           repository: vegardx/pi-subagent
-          ref: efbf17be3c1892207b5b18c3ae830e72a3f7b56e
+          ref: 6e54e24192ca80c509b355a24cea2a781c3e64b7
           path: pi-subagent
+      - uses: actions/checkout@v7
+        with:
+          repository: vegardx/pi-web
+          ref: d651d24d4a7d70832a0145b725841ef553a1e780
+          path: pi-web
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -42,6 +49,11 @@ jobs:
           cache-dependency-path: |
             pi-maestro/package-lock.json
             pi-subagent/package-lock.json
+            pi-web/package-lock.json
+      - run: npm ci
+        working-directory: pi-web
+      - run: npm run build
+        working-directory: pi-web
       - run: npm ci
         working-directory: pi-subagent
       - run: npm run build

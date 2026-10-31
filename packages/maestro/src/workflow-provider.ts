@@ -123,8 +123,9 @@ export const NARRATED_TASK_KINDS = [
 	"implement",
 	"check",
 	"review",
+	"normalize",
+	"resume",
 	"synthesis",
-	"fix",
 	"gate",
 	"refine",
 	"other",
@@ -181,9 +182,14 @@ export interface WorkflowRunObservationView {
 	readonly task?: WorkflowObservedTaskView;
 }
 
-/** One projected task, as far as narration reads an inspection. */
+/**
+ * One projected task, as far as narration reads an inspection: its id, its
+ * status (`WorkflowTaskStatusSchema`: `completed`, `failed`, … — the journal's,
+ * never a child's words) and its narration.
+ */
 export interface WorkflowInspectedTaskView {
 	readonly id: string;
+	readonly status?: string;
 	readonly narration?: WorkflowTaskNarrationView;
 }
 

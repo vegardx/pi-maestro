@@ -22,12 +22,22 @@
 // Four things get a turn, because each of them is something only the model can
 // turn into a sentence a person can act on:
 //
-//   - **a review synthesis** — several lenses read the same work and disagreed
-//     about it, and what that means is a judgement;
-//   - **a fix report** — something was wrong and something was done about it;
+//   - **normalize** — the reviewers of a deliverable have reported and their
+//     findings are being clustered: how many reported, and which did not;
+//   - **resume** — the implementer has answered the check and the review in
+//     its own session, fixed, declined or out of scope;
 //   - **a failure**, of a task or of the run — a dialog is opened about it;
 //   - **the ship gate arriving** — a decision is waiting, and the person has to
 //     be told that it is waiting.
+//
+// AT NORMALIZE AND RESUME THE LINE IS THE JOURNAL'S, NEVER A CHILD'S. The
+// inspection's `narration.summary` for those tasks is a model's own words — a
+// merge answer the harness may refuse, an implementer's account of itself — so
+// the line is built from what the inspection's `tasks[]` proves instead: which
+// review tasks of that deliverable completed and which did not. The clusters,
+// the agreement and each disposition live in the `reviews-<d>` record, which a
+// lease-free inspection exposes only as checkpoint inputs and run output; the
+// ship decision and the receipt render them, and the line says so.
 //
 // And a run that ENDS WITHOUT A GATE gets a final summary with a turn, because a
 // run that finished and asked for nothing is exactly the case a silent seat used
@@ -180,16 +190,56 @@ export const NARRATION_INSPECT_SECTIONS = {
 	include: ["tasks", "output"],
 } as const;
 
-/** What an inspection said each settled task's summary was, by task id. */
-export async function readSummaries(
+/** One projected task, in this module's terms: the journal's facts about it. */
+export interface InspectedTask {
+	readonly id: string;
+	readonly status?: string;
+	readonly kind?: NarrationKind;
+	readonly stage?: string;
+	readonly deliverable?: string;
+}
+
+/** What one inspection says: each task's summary, and every task's facts. */
+export interface NarrationInspection {
+	readonly summaries: ReadonlyMap<string, string>;
+	readonly tasks: readonly InspectedTask[];
+}
+
+/**
+ * One inspection, read: every settled task's summary by id, and every task's
+ * id, status, kind, stage and deliverable.
+ *
+ * THE SECOND PLACE pi-workflow's per-task field names are read, beside
+ * `adaptObservation`: that one reads an observation, this one an inspection,
+ * and nothing below either touches a runtime field.
+ */
+export async function readInspection(
 	client: Pick<WorkflowReadClient, "inspect">,
 	runId: string,
-): Promise<ReadonlyMap<string, string>> {
+): Promise<NarrationInspection> {
 	const summaries = new Map<string, string>();
+	const tasks: InspectedTask[] = [];
 	const inspection = (await client.inspect(
 		runId,
 		NARRATION_INSPECT_SECTIONS,
 	)) as { readonly tasks?: readonly WorkflowInspectedTaskView[] } | undefined;
+	for (const task of inspection?.tasks ?? []) {
+		if (typeof task.id !== "string") continue;
+		const narration = task.narration;
+		tasks.push({
+			id: task.id,
+			...(typeof task.status === "string" ? { status: task.status } : {}),
+			...(isNarrationKind(narration?.taskKind)
+				? { kind: narration.taskKind }
+				: {}),
+			...(typeof narration?.stage === "string"
+				? { stage: narration.stage }
+				: {}),
+			...(typeof narration?.deliverable === "string"
+				? { deliverable: narration.deliverable }
+				: {}),
+		});
+	}
 	for (const task of inspection?.tasks ?? []) {
 		const summary = task.narration?.summary;
 		if (typeof task.id !== "string" || typeof summary !== "string") continue;
@@ -205,13 +255,72 @@ export async function readSummaries(
 				: `${line.slice(0, MAX_NARRATION_SUMMARY_LENGTH - 1)}…`,
 		);
 	}
-	return summaries;
+	return { summaries, tasks };
+}
+
+/** What an inspection said each settled task's summary was, by task id. */
+export async function readSummaries(
+	client: Pick<WorkflowReadClient, "inspect">,
+	runId: string,
+): Promise<ReadonlyMap<string, string>> {
+	return (await readInspection(client, runId)).summaries;
+}
+
+/** A review task's reviewer: the fan-out member's own key, `correctness-2`. */
+function reviewerName(task: InspectedTask): string {
+	const stage = task.stage ?? task.id;
+	return stage.slice(stage.indexOf("/") + 1);
+}
+
+/**
+ * What the journal proves about a deliverable's review, at normalize or at
+ * resume, or nothing for any other kind.
+ *
+ * Built from task statuses alone: which `review` tasks of the deliverable
+ * completed and which did not. The record's clusters and dispositions are not
+ * on a lease-free inspection while the run is working, so the sentence names
+ * where they are rather than guessing at them.
+ */
+export function reviewFacts(
+	narration: Narration,
+	tasks: readonly InspectedTask[],
+): string | undefined {
+	if (narration.kind !== "normalize" && narration.kind !== "resume")
+		return undefined;
+	const reviewers = tasks.filter(
+		(task) =>
+			task.kind === "review" && task.deliverable === narration.deliverable,
+	);
+	const reported = reviewers.filter((task) => task.status === "completed");
+	const missing = reviewers.filter((task) => task.status !== "completed");
+	const record = `\`reviews-${narration.deliverable}\``;
+	if (narration.kind === "normalize")
+		return (
+			`${reported.length} of ${reviewers.length} reviewer${reviewers.length === 1 ? "" : "s"} reported` +
+			(missing.length > 0
+				? `; ${missing.map(reviewerName).join(", ")} did not, and ${missing.length === 1 ? "is" : "are"} counted in no agreement`
+				: "") +
+			". The harness clustered their findings by place without judging them, and this call may only merge clusters that state the same problem;" +
+			` the clusters and who agreed are recorded in ${record}.`
+		);
+	if (reviewers.length === 0)
+		return (
+			"The implementer was resumed in its own session to answer the check" +
+			" report; nobody reviewed this deliverable, so there are no findings to" +
+			" answer and no record."
+		);
+	return (
+		"The implementer was resumed in its own session with the check report and" +
+		` the findings of ${reported.length} reviewer${reported.length === 1 ? "" : "s"} — claims, places and evidence, no severity, reviewer or agreement —` +
+		" to answer each one fixed, declined or out of scope. Its answers are recorded" +
+		` in ${record} once the harness has checked they cover every finding exactly once; a decline never holds the run.`
+	);
 }
 
 /** The kinds whose meaning is a judgement, so the model is given a turn. */
 const TURN_KINDS: ReadonlySet<NarrationKind> = new Set<NarrationKind>([
-	"synthesis",
-	"fix",
+	"normalize",
+	"resume",
 	"gate",
 ]);
 
@@ -259,8 +368,9 @@ export function shipGateSentence(runId: string): string {
 export const FAILURE_SENTENCE =
 	"Tell the person what failed and what it means for the rest of the plan. A dialog is open about it: retry that task, stop the run, or go back to planning.";
 
-export const JUDGEMENT_SENTENCE =
-	"Tell the person what that means for the plan.";
+/** What the model is told at a normalize or a resume. */
+export const REVIEW_SENTENCE =
+	"Tell the person where the review of that deliverable stands. Every finding, who raised it, how many agreed and how the implementer answered it reach the ship decision, where Look first lists them.";
 
 /** A run that reached a terminal state, and whether a gate ever asked anything. */
 export function renderRunEnd(
@@ -290,7 +400,7 @@ export function batchTail(
 	if (narrations.some((narration) => narration.cause !== undefined))
 		return FAILURE_SENTENCE;
 	if (narrations.some((narration) => TURN_KINDS.has(narration.kind)))
-		return JUDGEMENT_SENTENCE;
+		return REVIEW_SENTENCE;
 	return undefined;
 }
 
@@ -388,16 +498,22 @@ export function createRunNarrator(deps: NarrateDeps): RunNarrator {
 		// backed and an observation cannot carry it. A batch that reads nothing
 		// still posts: a line without a summary says less than one with it and far
 		// more than silence.
-		const summaries = new Map<string, ReadonlyMap<string, string>>();
+		const inspections = new Map<string, NarrationInspection>();
 		for (const runId of new Set(narrations.map((entry) => entry.runId))) {
 			try {
-				summaries.set(runId, await readSummaries(deps.client, runId));
+				inspections.set(runId, await readInspection(deps.client, runId));
 			} catch (error) {
 				deps.onError?.(error);
 			}
 		}
 		const filled = narrations.map((entry) => {
-			const summary = summaries.get(entry.runId)?.get(entry.narration.taskId);
+			const inspection = inspections.get(entry.runId);
+			// At normalize and resume the journal speaks, never the child: see
+			// `reviewFacts`. Everywhere else the task's own summary is the line.
+			const summary = inspection
+				? (reviewFacts(entry.narration, inspection.tasks) ??
+					inspection.summaries.get(entry.narration.taskId))
+				: undefined;
 			return summary === undefined
 				? entry
 				: { ...entry, narration: { ...entry.narration, summary } };

@@ -6,9 +6,9 @@
 // `inspect(runId, {include: ["tasks", "output"]})` call per batch. A test that
 // faked one port would be asserting that the fake was written correctly.
 //
-// The stage keys below are `plan-to-ship`'s documented ones — `implement-<d>`,
-// `check-<d>-verify-<n>`, `review-<d>/<lens>`, `synthesis-<d>`, `fix-<d>`,
-// `approve-<d>` and `ship` — because this seat's job is to read what that
+// The stage keys below are `plan-to-ship` 5's documented ones — `implement-<d>`,
+// `check-<d>`, `review-<d>/<lens>`, `normalize-<d>`, `resume-<d>`,
+// `recheck-<d>`, `approve-<d>` and `ship` — because this seat's job is to read what that
 // definition produces, not to invent a vocabulary for it.
 
 import { describe, expect, it } from "vitest";
@@ -16,7 +16,6 @@ import {
 	adaptObservation,
 	createRunNarrator,
 	FAILURE_SENTENCE,
-	JUDGEMENT_SENTENCE,
 	NARRATED_TASK_KINDS,
 	NARRATION_INSPECT_SECTIONS,
 	type Narration,
@@ -25,6 +24,8 @@ import {
 	PROGRESS_MESSAGE_TYPE,
 	type ProgressDelivery,
 	type ProgressMessage,
+	REVIEW_SENTENCE,
+	readInspection,
 	readSummaries,
 	renderNarration,
 	runPrefix,
@@ -72,6 +73,8 @@ function narrator(
 		readonly follow?: boolean;
 		/** Task id → summary, as the inspection would report it. */
 		readonly summaries?: Readonly<Record<string, string>>;
+		/** Further projected tasks the inspection carries, verbatim. */
+		readonly tasks?: readonly unknown[];
 		readonly inspectFails?: true;
 		/** A hook that throws, so a decision nobody could open is not fatal. */
 		readonly hooksThrow?: true;
@@ -108,12 +111,13 @@ function narrator(
 				if (options.inspectFails) throw new Error("the run store is locked");
 				return {
 					run: { runId },
-					tasks: Object.entries(options.summaries ?? {}).map(
-						([id, summary]) => ({
+					tasks: [
+						...Object.entries(options.summaries ?? {}).map(([id, summary]) => ({
 							id,
 							narration: { stage: id, taskKind: "other", summary },
-						}),
-					),
+						})),
+						...(options.tasks ?? []),
+					],
 				};
 			},
 		},
@@ -233,17 +237,33 @@ describe("the one place the runtime's field names are read", () => {
 		).toMatchObject({ kind: "gate", stage: "ship", deliverable: WHOLE_RUN });
 	});
 
-	it("knows the eight kinds pi-workflow derives", () => {
+	it("knows the nine kinds pi-workflow 5 derives, and no `fix`", () => {
 		expect([...NARRATED_TASK_KINDS]).toEqual([
 			"implement",
 			"check",
 			"review",
+			"normalize",
+			"resume",
 			"synthesis",
-			"fix",
 			"gate",
 			"refine",
 			"other",
 		]);
+		expect(NARRATED_TASK_KINDS as readonly string[]).not.toContain("fix");
+	});
+
+	// pi-workflow 5 keys the check after a resume `recheck-<d>`, and derives its
+	// kind as `check` with the deliverable whole.
+	it("reads a recheck as a check of its deliverable", () => {
+		expect(
+			adaptObservation(
+				settled("t-9", {
+					stage: "recheck-d1",
+					taskKind: "check",
+					deliverable: "d1",
+				}),
+			),
+		).toMatchObject({ kind: "check", stage: "recheck-d1", deliverable: "d1" });
 	});
 });
 
@@ -325,14 +345,15 @@ describe("the line and the turn", () => {
 			"implement",
 			"check",
 			"review",
+			"synthesis",
 			"refine",
 			"other",
 		] as const)
 			expect([kind, needsTurn(of({ kind }))]).toEqual([kind, false]);
 	});
 
-	it("gives a turn to a synthesis, a fix report and the ship gate", () => {
-		for (const kind of ["synthesis", "fix", "gate"] as const)
+	it("gives a turn to a normalize, a resume and the ship gate", () => {
+		for (const kind of ["normalize", "resume", "gate"] as const)
 			expect([kind, needsTurn(of({ kind }))]).toEqual([kind, true]);
 	});
 
@@ -495,46 +516,132 @@ describe("the runs this seat narrates", () => {
 		expect(n.errors.length).toBe(1);
 	});
 
-	it("triggers a turn for a synthesis, and says what to do with it", async () => {
-		const n = narrator({
-			summaries: {
-				"r-1": "contracts is content",
-				"s-1": "two lenses disagree about the seam",
-			},
-		});
-		n.observe(
-			settled("r-1", {
-				stage: "review-d1/contracts",
+	/** The review tasks of `d1` as the inspection projects them. */
+	const REVIEWERS = [
+		{
+			id: "r-1",
+			status: "completed",
+			narration: {
+				stage: "review-d1/correctness",
 				taskKind: "review",
 				deliverable: "d1",
-			}),
-			settled("s-1", {
-				stage: "synthesis-d1",
-				taskKind: "synthesis",
+				summary: "{findings: [2 item(s)]}",
+			},
+		},
+		{
+			id: "r-2",
+			status: "completed",
+			narration: {
+				stage: "review-d1/correctness-2",
+				taskKind: "review",
+				deliverable: "d1",
+				summary: "{findings: [2 item(s)]}",
+			},
+		},
+		{
+			id: "r-3",
+			status: "failed",
+			narration: {
+				stage: "review-d1/security",
+				taskKind: "review",
+				deliverable: "d1",
+				cause: "The delegated run failed: timeout.",
+			},
+		},
+		// Another deliverable's reviewer is not this one's.
+		{
+			id: "r-9",
+			status: "completed",
+			narration: {
+				stage: "review-d2/correctness",
+				taskKind: "review",
+				deliverable: "d2",
+			},
+		},
+	];
+
+	it("speaks at normalize from the journal: who reported and who did not", async () => {
+		const n = narrator({
+			// The normalize call's own answer — a model's words, which the harness may
+			// refuse. It must not become the line.
+			summaries: { "n-1": '{merges: [["c2", "c3"]]}' },
+			tasks: REVIEWERS,
+		});
+		n.observe(
+			settled("n-1", {
+				stage: "normalize-d1",
+				taskKind: "normalize",
 				deliverable: "d1",
 			}),
 		);
 		await n.flush();
-		// ONE message for the batch, and the turn is the batch's, not the line's.
 		expect(n.sent.length).toBe(1);
 		expect(n.delivery()).toEqual({
 			deliverAs: "followUp",
 			triggerTurn: true,
 		});
-		expect(n.content()).toContain("two lenses disagree about the seam");
-		expect(n.content().endsWith(JUDGEMENT_SENTENCE)).toBe(true);
+		expect(n.content().split("\n")).toEqual([
+			"compose · d1 · normalize normalize-d1 — 2 of 3 reviewers reported; security did not, and is counted in no agreement. The harness clustered their findings by place without judging them, and this call may only merge clusters that state the same problem; the clusters and who agreed are recorded in `reviews-d1`.",
+			"",
+			REVIEW_SENTENCE,
+		]);
+		expect(n.content()).not.toContain("merges");
+		expect(n.inspected).toEqual([[RUN, NARRATION_INSPECT_SECTIONS]]);
 	});
 
-	it("triggers a turn for a fix report", async () => {
+	it("speaks at resume from the journal, never from the implementer's words", async () => {
 		const n = narrator({
-			summaries: { "f-1": "one round closed the finding" },
+			summaries: { "s-1": "I fixed everything and the reviewers were wrong" },
+			tasks: REVIEWERS,
 		});
 		n.observe(
-			settled("f-1", { stage: "fix-d2", taskKind: "fix", deliverable: "d2" }),
+			settled("s-1", {
+				stage: "resume-d1",
+				taskKind: "resume",
+				deliverable: "d1",
+			}),
 		);
 		await n.flush();
 		expect(n.delivery()?.triggerTurn).toBe(true);
-		expect(n.content()).toContain(JUDGEMENT_SENTENCE);
+		expect(n.content()).toContain(
+			"compose · d1 · resume resume-d1 — The implementer was resumed in its own session with the check report and the findings of 2 reviewers",
+		);
+		expect(n.content()).toContain(
+			"fixed, declined or out of scope. Its answers are recorded in `reviews-d1` once the harness has checked they cover every finding exactly once; a decline never holds the run.",
+		);
+		expect(n.content()).not.toContain("I fixed everything");
+		expect(n.content().endsWith(REVIEW_SENTENCE)).toBe(true);
+	});
+
+	it("says a resume with nobody reviewing answered the check alone", async () => {
+		const n = narrator({ summaries: { "s-1": "fixed the build" } });
+		n.observe(
+			settled("s-1", {
+				stage: "resume-d3",
+				taskKind: "resume",
+				deliverable: "d3",
+			}),
+		);
+		await n.flush();
+		expect(n.content()).toContain(
+			"nobody reviewed this deliverable, so there are no findings to answer and no record",
+		);
+		expect(n.content()).not.toContain("fixed the build");
+	});
+
+	it("reads every task's status and narration from the one inspection", async () => {
+		const read = await readInspection(
+			{ inspect: async () => ({ tasks: REVIEWERS }) } as never,
+			RUN,
+		);
+		expect(read.tasks[2]).toEqual({
+			id: "r-3",
+			status: "failed",
+			kind: "review",
+			stage: "review-d1/security",
+			deliverable: "d1",
+		});
+		expect(read.summaries.get("r-1")).toBe("{findings: [2 item(s)]}");
 	});
 
 	it("triggers a turn for a failure and says nothing retries", async () => {
@@ -559,18 +666,22 @@ describe("the runs this seat narrates", () => {
 
 	it("triggers a turn for the ship gate, and the gate wins the batch's tail", async () => {
 		const n = narrator({
-			summaries: { "f-1": "one round closed it", "g-1": "the ship decision" },
+			summaries: { "s-1": "answered it", "g-1": "the ship decision" },
 		});
 		n.observe(
-			settled("f-1", { stage: "fix-d1", taskKind: "fix", deliverable: "d1" }),
+			settled("s-1", {
+				stage: "resume-d1",
+				taskKind: "resume",
+				deliverable: "d1",
+			}),
 			settled("g-1", { stage: "ship", taskKind: "gate" }),
 		);
 		await n.flush();
 		expect(n.delivery()?.triggerTurn).toBe(true);
-		// The gate outranks the fix: the batch is one thing that happened, and the
-		// decision is the part a person has to act on.
+		// The gate outranks the resume: the batch is one thing that happened, and
+		// the decision is the part a person has to act on.
 		expect(n.content()).toContain(shipGateSentence(RUN));
-		expect(n.content()).not.toContain(JUDGEMENT_SENTENCE);
+		expect(n.content()).not.toContain(REVIEW_SENTENCE);
 		expect(n.content()).toContain(`${WHOLE_RUN} · gate ship`);
 	});
 

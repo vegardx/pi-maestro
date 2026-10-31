@@ -529,7 +529,7 @@ describe("/plan run under the mode's ceiling", () => {
 		]);
 	});
 
-	// pi-workflow 4 fails a run whose required task failed with "A required
+	// pi-workflow 4 and 5 fail a run whose required task failed with "A required
 	// workflow task did not complete: <stage>. <cause>", and the task's
 	// `narration.cause` is that same closed-vocabulary sentence. The run's reason
 	// itself is on no view the seat reads — the run summary carries `status` only
@@ -564,9 +564,9 @@ describe("/plan run under the mode's ceiling", () => {
 			// The two appends pi-workflow's own timed-out-verifier test journals, in
 			// its order: the task fails by name, then the run fails on it.
 			const narration = {
-				stage: "check-d0-verify-1",
+				stage: "check-d0",
 				taskKind: "check",
-				deliverable: "d0-verify-1",
+				deliverable: "d0",
 				cause: CAUSE,
 			} as const;
 			let listener: ((observation: unknown) => void) | undefined;
@@ -601,7 +601,7 @@ describe("/plan run under the mode's ceiling", () => {
 			expect(posted).toEqual([
 				[
 					[
-						`demo · d0-verify-1 · check check-d0-verify-1 — no summary`,
+						`demo · d0 · check check-d0 — no summary`,
 						`  cause: ${CAUSE}`,
 						"demo · run `wfr-1` ended `failed` without stopping at a gate. Tell the person where the work stands and what, if anything, is left to do by hand.",
 						"",
@@ -612,13 +612,120 @@ describe("/plan run under the mode's ceiling", () => {
 			]);
 			expect(titles).toEqual([
 				[
-					"`demo` — check-d0-verify-1 of `d0-verify-1` failed. What now?",
+					"`demo` — check-d0 of `d0` failed. What now?",
 					"",
 					CAUSE,
 					"",
 					"Run `wfr-1`. Retrying re-runs that one task; stopping cancels the run and leaves every handoff it already made; re-planning takes you back to plan mode with where this got to, so the conversation plans from here.",
 				].join("\n"),
 			]);
+		});
+	});
+
+	// pi-workflow 5's review loop: the seat speaks at `normalize-<d>` and
+	// `resume-<d>`, from what the run's own inspection proves about the review
+	// tasks, and never from the words the normalize model or the resumed
+	// implementer returned.
+	describe("narration of the review loop, through the seat", () => {
+		it("speaks at normalize and at resume, with a turn each, from the journal", async () => {
+			const posted: [string, string | undefined, boolean | undefined][] = [];
+			const s = seatWithRuntime("ask", {
+				sendMessage: (message, options) =>
+					posted.push([
+						message.content,
+						options?.deliverAs,
+						options?.triggerTurn,
+					]),
+			});
+			await s.h.run("plan", "run demo");
+			const tasks = [
+				{
+					id: "t-r1",
+					status: "completed",
+					narration: {
+						stage: "review-d0/correctness",
+						taskKind: "review",
+						deliverable: "d0",
+					},
+				},
+				{
+					id: "t-r2",
+					status: "failed",
+					narration: {
+						stage: "review-d0/security",
+						taskKind: "review",
+						deliverable: "d0",
+					},
+				},
+				{
+					id: "t-n",
+					status: "completed",
+					narration: {
+						stage: "normalize-d0",
+						taskKind: "normalize",
+						deliverable: "d0",
+						summary: '{merges: [["c1", "c2"]]}',
+					},
+				},
+				{
+					id: "t-s",
+					status: "completed",
+					narration: {
+						stage: "resume-d0",
+						taskKind: "resume",
+						deliverable: "d0",
+						summary: "I answered everything",
+					},
+				},
+			];
+			let listener: ((observation: unknown) => void) | undefined;
+			const unnarrate = s.entry.narrateRuns({
+				observe: (handler: (observation: unknown) => void) => {
+					listener = handler;
+					return () => {};
+				},
+				inspect: async () => ({ run: { runId: "wfr-1" }, tasks }),
+			} as never);
+			const settle = (index: number, sequence: number) => {
+				const task = tasks[index] as (typeof tasks)[number];
+				listener?.({
+					runId: "wfr-1",
+					status: "running",
+					sequence,
+					task: {
+						taskId: task.id,
+						status: "completed",
+						narration: {
+							stage: task.narration.stage,
+							taskKind: task.narration.taskKind,
+							deliverable: task.narration.deliverable,
+						},
+					},
+				});
+			};
+			settle(2, 10);
+			for (let turn = 0; turn < 10 && posted.length === 0; turn += 1)
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			settle(3, 11);
+			for (let turn = 0; turn < 10 && posted.length < 2; turn += 1)
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			unnarrate();
+
+			expect(posted.map(([, deliverAs, turn]) => [deliverAs, turn])).toEqual([
+				["followUp", true],
+				["followUp", true],
+			]);
+			expect(posted[0]?.[0]).toContain(
+				"demo · d0 · normalize normalize-d0 — 1 of 2 reviewers reported; security did not, and is counted in no agreement.",
+			);
+			expect(posted[1]?.[0]).toContain(
+				"demo · d0 · resume resume-d0 — The implementer was resumed in its own session with the check report and the findings of 1 reviewer",
+			);
+			for (const [content] of posted) {
+				expect(content).not.toContain("merges");
+				expect(content).not.toContain("I answered everything");
+				expect(content).toContain("Look first lists them");
+			}
 		});
 	});
 });

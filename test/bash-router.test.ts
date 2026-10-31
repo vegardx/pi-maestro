@@ -177,27 +177,54 @@ describe("mode policy", () => {
 });
 
 describe("assessment merging", () => {
+	const policy = DEFAULT_EXECUTION_POLICY;
+	const readOnly = {
+		assessment: "read-only",
+		confidence: "high",
+		rationale: "acme status is read-only",
+	} as const;
+
 	it("never removes deterministic effects", () => {
 		const deterministic = assessBashCommand("touch marker && acme status");
-		const merged = mergeCommandAssessments(deterministic, {
-			assessment: "read-only",
-			confidence: "high",
-			rationale: "acme status is read-only",
-		});
+		const merged = mergeCommandAssessments(
+			deterministic,
+			readOnly,
+			"plan",
+			policy,
+		);
 		expect(merged).toMatchObject({
 			assessment: "effects",
 			effects: ["workspace-write"],
 		});
+		// In ask the same union would be an `allow`, below the `confirm` the
+		// unresolved command earned — so the command stays uncertain, with the
+		// established effect still named.
+		const asked = mergeCommandAssessments(
+			deterministic,
+			readOnly,
+			"ask",
+			policy,
+		);
+		expect(asked).toMatchObject({
+			assessment: "uncertain",
+			effects: ["workspace-write"],
+		});
+		expect(actionForAssessment("ask", asked, policy)).toBe("confirm");
 	});
 
 	it("adds audited effects", () => {
 		const deterministic = assessBashCommand("acme deploy");
-		const merged = mergeCommandAssessments(deterministic, {
-			assessment: "effects",
-			effects: ["remote-write"],
-			confidence: "high",
-			rationale: "deploy changes remote state",
-		});
+		const merged = mergeCommandAssessments(
+			deterministic,
+			{
+				assessment: "effects",
+				effects: ["remote-write"],
+				confidence: "high",
+				rationale: "deploy changes remote state",
+			},
+			"auto",
+			policy,
+		);
 		expect(merged).toMatchObject({
 			assessment: "effects",
 			effects: ["remote-write"],
@@ -206,18 +233,113 @@ describe("assessment merging", () => {
 
 	it("keeps established effects while uncertainty selects the fallback action", () => {
 		const deterministic = assessBashCommand("git status && acme deploy");
-		const merged = mergeCommandAssessments(deterministic, {
-			assessment: "uncertain",
-			confidence: "low",
-			rationale: "unknown acme behavior",
-		});
+		const merged = mergeCommandAssessments(
+			deterministic,
+			{
+				assessment: "uncertain",
+				confidence: "low",
+				rationale: "unknown acme behavior",
+			},
+			"auto",
+			policy,
+		);
 		expect(merged).toMatchObject({
 			assessment: "uncertain",
 			effects: ["filesystem-read"],
 		});
-		expect(actionForAssessment("auto", merged, DEFAULT_EXECUTION_POLICY)).toBe(
-			"confirm",
+		expect(actionForAssessment("auto", merged, policy)).toBe("confirm");
+	});
+
+	// The auditor is a model. Its word may make a command stricter; it may not
+	// turn an unresolved command into an allowed one.
+	it.each(["plan", "ask", "auto"] as const)(
+		"does not let a read-only audit allow an uncertain command in %s",
+		(mode) => {
+			const deterministic = assessBashCommand("acme status");
+			expect(deterministic.assessment.assessment).toBe("uncertain");
+			const merged = mergeCommandAssessments(
+				deterministic,
+				readOnly,
+				mode,
+				policy,
+			);
+			expect(merged.assessment).toBe("uncertain");
+			expect(merged.rationale).toContain("acme status is read-only");
+			expect(actionForAssessment(mode, merged, policy)).toBe(
+				policy.modes[mode].uncertain,
+			);
+			expect(actionForAssessment(mode, merged, policy)).not.toBe("allow");
+			expect(
+				decideBashPolicy({ command: "acme status", mode, policy }, merged)
+					.action,
+			).not.toBe("allow");
+		},
+	);
+
+	it("does not let an audit of harmless effects lower an uncertain command", () => {
+		const deterministic = assessBashCommand("acme sync");
+		const merged = mergeCommandAssessments(
+			deterministic,
+			{
+				assessment: "effects",
+				effects: ["workspace-write"],
+				confidence: "high",
+				rationale: "writes a cache file",
+			},
+			"ask",
+			policy,
 		);
+		expect(merged).toMatchObject({
+			assessment: "uncertain",
+			effects: ["workspace-write"],
+		});
+		expect(actionForAssessment("ask", merged, policy)).toBe("confirm");
+	});
+
+	it("escalates when the audit finds a stricter effect than the deterministic verdict", () => {
+		const deterministic = assessBashCommand("git status");
+		expect(actionForAssessment("ask", deterministic.assessment, policy)).toBe(
+			"allow",
+		);
+		const merged = mergeCommandAssessments(
+			deterministic,
+			{
+				assessment: "effects",
+				effects: ["workspace-write", "destructive"],
+				confidence: "high",
+				rationale: "hook rewrites the index",
+			},
+			"ask",
+			policy,
+		);
+		expect(merged).toMatchObject({
+			assessment: "effects",
+			effects: ["filesystem-read", "workspace-write", "destructive"],
+		});
+		expect(actionForAssessment("ask", merged, policy)).toBe("confirm");
+		expect(actionForAssessment("plan", merged, policy)).toBe("refuse");
+	});
+
+	it("escalates an uncertain command when the policy ranks the audited effect higher", () => {
+		const custom = {
+			...policy,
+			modes: {
+				...policy.modes,
+				plan: { ...policy.modes.plan, uncertain: "confirm" },
+			},
+		} as const;
+		const merged = mergeCommandAssessments(
+			assessBashCommand("acme purge"),
+			{
+				assessment: "effects",
+				effects: ["destructive"],
+				confidence: "high",
+				rationale: "purge deletes data",
+			},
+			"plan",
+			custom,
+		);
+		expect(actionForAssessment("plan", merged, custom)).toBe("refuse");
 	});
 });
 

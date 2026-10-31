@@ -137,6 +137,8 @@ async function assessForInvocation(
 				confidence: "low",
 				rationale: `command auditor${audit.modelId ? ` (${audit.modelId})` : ""} failed: ${audit.failure ?? "no valid assessment"}`,
 			},
+			deps.mode().name,
+			policy,
 		),
 		audit,
 	};

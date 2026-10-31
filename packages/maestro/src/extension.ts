@@ -868,6 +868,16 @@ export default defineExtension(
 		 * `undefined` here means the pin is refused rather than trusted.
 		 */
 		let live: ExtensionContext | undefined;
+		/**
+		 * The context `session_start` handed over, kept until the next one.
+		 *
+		 * Only the session-model provider falls back to it: before the first turn
+		 * there is no `live` context, and a run started from an extension at
+		 * session start would otherwise inherit no model at all. Pi's context
+		 * reads the model and thinking level through getters, so this answers what
+		 * the session is on now rather than what it started on.
+		 */
+		let started: ExtensionContext | undefined;
 		const entry = startSeat(pi, {
 			// The model catalogue comes from the live context; the loaded skills
 			// come from `pi` itself, which is the only place an extension can ask.
@@ -916,9 +926,10 @@ export default defineExtension(
 			// ceiling keeps, for the same reason.
 			//
 			// `live` is refreshed by every event that carries a context and dropped
-			// when the session it belongs to is replaced, so a stale context is
-			// `undefined` here rather than an answer about a session that is gone.
-			const model = registerSessionModelFor(pi.events, () => live);
+			// when the session it belongs to is replaced; until the first turn the
+			// replacing session's own `session_start` context answers instead, so a
+			// stale context is never an answer about a session that is gone.
+			const model = registerSessionModelFor(pi.events, () => live ?? started);
 			if ("problem" in model)
 				// AND THIS IS NOW A REFUSAL TO START, not only a degraded plan check.
 				// `plan-to-ship` declares `needs.sessionModel`, so pi-workflow refuses
@@ -1056,7 +1067,8 @@ export default defineExtension(
 		// asked in, and an `ExtensionContext` from the old one throws. Ending the
 		// flow here is what keeps a half-answered exit from writing a record for a
 		// session that is gone.
-		pi.on("session_start", () => {
+		pi.on("session_start", (_event, ctx) => {
+			started = ctx;
 			entry.runtimeBound();
 			entry.abortExitFlow();
 			// The watcher holds a context from the session that is gone, and the

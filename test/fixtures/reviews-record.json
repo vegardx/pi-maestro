@@ -1,0 +1,159 @@
+{
+	"reviews": {
+		"deliverable": "api",
+		"handoffCommit": "0123456789abcdef0123456789abcdef01234567",
+		"reviewers": [
+			{
+				"reviewerKey": "5c183c732d3d9e583961715a6a0fc51012c8095ec375b3f020f2cff63ca95b71",
+				"lens": "correctness",
+				"model": "anthropic/claude-haiku-4-5",
+				"thinking": "low",
+				"attemptId": "att-correctness-light",
+				"status": "reported",
+				"findings": 2
+			},
+			{
+				"reviewerKey": "e29798dab7897d1204a0fdb814687882a0b1b864970a6dee908c5099ea197e13",
+				"lens": "correctness",
+				"model": "anthropic/claude-opus-4-5",
+				"thinking": "high",
+				"attemptId": "att-correctness-heavy",
+				"status": "reported",
+				"findings": 2
+			},
+			{
+				"reviewerKey": "ac687411060516e58a4ce4f6f9b737a55c75421b6ba0287c54a66483904969bd",
+				"lens": "security",
+				"model": "openai/gpt-5",
+				"thinking": "medium",
+				"status": "failed",
+				"findings": 0
+			}
+		],
+		"clusters": [
+			{
+				"id": "c1",
+				"claim": "The README still documents the old flag name.",
+				"location": {
+					"file": "README.md"
+				},
+				"severity": "low",
+				"reportedBy": [
+					{
+						"lens": "correctness",
+						"model": "anthropic/claude-opus-4-5",
+						"thinking": "high",
+						"attemptId": "att-correctness-heavy",
+						"findingIndex": 1
+					}
+				],
+				"agreement": {
+					"count": 1,
+					"of": 2
+				},
+				"suggestions": [],
+				"raw": [
+					{
+						"reviewerIndex": 1,
+						"findingIndex": 1
+					}
+				],
+				"disposition": {
+					"kind": "out-of-scope",
+					"reasoning": "The README is rewritten by the docs deliverable."
+				}
+			},
+			{
+				"id": "c2",
+				"claim": "The retry loop never gives up when the server answers 503.",
+				"location": {
+					"file": "src/client.ts",
+					"line": 42
+				},
+				"severity": "high",
+				"reportedBy": [
+					{
+						"lens": "correctness",
+						"model": "anthropic/claude-haiku-4-5",
+						"thinking": "low",
+						"attemptId": "att-correctness-light",
+						"findingIndex": 0
+					},
+					{
+						"lens": "correctness",
+						"model": "anthropic/claude-opus-4-5",
+						"thinking": "high",
+						"attemptId": "att-correctness-heavy",
+						"findingIndex": 0
+					}
+				],
+				"agreement": {
+					"count": 2,
+					"of": 2
+				},
+				"suggestions": [
+					"Bound the loop with the configured attempt count."
+				],
+				"raw": [
+					{
+						"reviewerIndex": 0,
+						"findingIndex": 0
+					},
+					{
+						"reviewerIndex": 1,
+						"findingIndex": 0
+					}
+				],
+				"disposition": {
+					"kind": "fixed",
+					"reasoning": "Bounded the loop by maxAttempts and added a test for the 503 path."
+				}
+			},
+			{
+				"id": "c4",
+				"claim": "The timeout is read in seconds but passed as milliseconds.",
+				"location": {
+					"file": "src/config.ts",
+					"line": 7
+				},
+				"severity": "medium",
+				"reportedBy": [
+					{
+						"lens": "correctness",
+						"model": "anthropic/claude-haiku-4-5",
+						"thinking": "low",
+						"attemptId": "att-correctness-light",
+						"findingIndex": 1
+					}
+				],
+				"agreement": {
+					"count": 1,
+					"of": 2
+				},
+				"suggestions": [],
+				"raw": [
+					{
+						"reviewerIndex": 0,
+						"findingIndex": 1
+					}
+				],
+				"disposition": {
+					"kind": "declined",
+					"reasoning": "TIMEOUT is documented in milliseconds and every caller passes milliseconds; converting it would break them."
+				}
+			}
+		],
+		"normalizer": {
+			"mode": "model",
+			"model": "anthropic/claude-haiku-4-5",
+			"promptDigest": "f3587054d6d15ce35280bae8aeabca90d2713ba06a12918fba2dc0643b605af6"
+		}
+	},
+	"check": {
+		"summary": "npm ci and npm run check passed on the resumed hand-off.",
+		"checkCommand": "npm run check",
+		"checkRan": true,
+		"checkPassed": true,
+		"checkTail": "Tests 42 passed"
+	}
+}

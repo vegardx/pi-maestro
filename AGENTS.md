@@ -14,6 +14,8 @@ is built. There is no custom worker socket or executor here.
 - `npm run check` — the full gate: biome → tsc → feature-flag contract → docs
   check → vitest → smoke. Run it before calling a change done.
 - `npm test` — unit tests only (fast). `npm run lint:fix` — autoformat.
+- The husky `commit-msg` hook (`scripts/commit-msg.mjs`) enforces Conventional
+  Commits.
 
 ## Testing
 

@@ -59,6 +59,11 @@ import {
 	resolvePolicy,
 } from "./plan.js";
 import { planDigest } from "./plan-input.js";
+import {
+	type ReviewSectionInput,
+	renderReviewSections,
+	reviewSectionsFrom,
+} from "./review-section.js";
 import type { PlanStore } from "./store.js";
 import {
 	TERMINAL_RUN_STATUSES,
@@ -120,20 +125,16 @@ export interface HandoffDeliverable {
 	readonly bytes: number;
 }
 
-/** One review verdict, when the inspection carried any. */
-export interface ReviewVerdict {
-	readonly lens: string;
-	readonly verdict: string;
-	readonly blocking: boolean;
-	readonly deliverable?: string;
-}
-
 /** What a run says it produced, as far as publication reads it. */
 export interface PublicationReceipt {
 	readonly planDigest: string;
 	readonly deliverables: readonly HandoffDeliverable[];
-	/** Carried into the pull-request body when the inspection had them. */
-	readonly reviews?: readonly ReviewVerdict[];
+	/**
+	 * Each deliverable's Review section inputs — the `reviews-<d>` record and
+	 * the last check — carried into the pull-request body when the inspection
+	 * had them.
+	 */
+	readonly reviews?: readonly ReviewSectionInput[];
 	/**
 	 * Where the run worked, when the inspection says. A handoff ref is local to
 	 * the repository whose object store the worktree was made in, so this is
@@ -275,34 +276,6 @@ function taskId(task: unknown, ordinal: number): string {
 	return [...parts, key].join("/");
 }
 
-function findReviews(
-	inspection: unknown,
-): readonly ReviewVerdict[] | undefined {
-	const candidates: unknown[] = [
-		at(inspection, "run", "output", "reviews"),
-		at(inspection, "output", "reviews"),
-		at(inspection, "reviews"),
-	];
-	for (const candidate of candidates) {
-		if (!Array.isArray(candidate) || candidate.length === 0) continue;
-		const verdicts: ReviewVerdict[] = [];
-		for (const entry of candidate) {
-			const lens = stringAt(entry, "lens");
-			const verdict = stringAt(entry, "verdict");
-			if (!lens || !verdict) continue;
-			const deliverable = stringAt(entry, "deliverable");
-			verdicts.push({
-				lens,
-				verdict,
-				blocking: at(entry, "blocking") === true,
-				...(deliverable ? { deliverable } : {}),
-			});
-		}
-		if (verdicts.length > 0) return verdicts;
-	}
-	return undefined;
-}
-
 /**
  * The receipt inside a run inspection, or the reason there is not one.
  *
@@ -352,7 +325,8 @@ export function readReceipt(inspection: unknown): ReceiptRead {
 				"publication: the run inspection names no handoff — there is nothing to cherry-pick",
 		};
 
-	const reviews = findReviews(inspection);
+	const sections = reviewSectionsFrom(inspection);
+	const reviews = sections.length > 0 ? sections : undefined;
 	const runCwd =
 		stringAt(at(inspection, "run"), "cwd") ?? stringAt(inspection, "cwd");
 	return {
@@ -380,6 +354,17 @@ export const SHIP_CHECKPOINT_KEY = "ship";
  */
 export const INSPECT_SECTIONS = {
 	include: ["run", "tasks", "output"],
+} as const;
+
+/**
+ * What a publication itself asks for: `INSPECT_SECTIONS`, plus `checkpoints`.
+ *
+ * `checkpoints` carries the `ship` gate's own verified inputs, so the Review
+ * section in the pull-request body is rendered from the values the person who
+ * decided was shown — the same text *Look first* rendered. Still lease-free.
+ */
+export const PUBLISH_INSPECT_SECTIONS = {
+	include: ["run", "tasks", "output", "checkpoints"],
 } as const;
 
 /** A proven ship decision, or why this run's ship gate does not prove one. */
@@ -480,8 +465,8 @@ export function handoffRef(deliverable: HandoffDeliverable): string {
  * Does this receipt entry belong to that plan deliverable?
  *
  * Exact when the receipt named the deliverable. When it did not — a task-shaped
- * receipt names `<stage>-<deliverable>`, and a fixed deliverable's final
- * handoff comes from `<stage>-<deliverable>-fix-<n>` — the deliverable id is a
+ * receipt names `<stage>-<deliverable>`, and a resumed deliverable's final
+ * handoff comes from `resume-<deliverable>` — the deliverable id is a
  * whole dash-separated segment of the key, which is the strongest claim that
  * can be made about a name pi-maestro did not construct.
  */
@@ -842,13 +827,12 @@ export function pullRequestBody(
 		"",
 		`Check: \`${check.command}\` ran on the host and passed. The in-worktree check a run reports is evidence, not a gate; this one is the gate.`,
 	);
-	if (receipt.reviews && receipt.reviews.length > 0) {
-		lines.push("", "Review verdicts:", "");
-		for (const review of receipt.reviews)
-			lines.push(
-				`- ${review.deliverable ? `\`${review.deliverable}\` ` : ""}${review.lens}: ${review.verdict}${review.blocking ? " (blocking finding)" : ""}`,
-			);
-	}
+	// THE REVIEW SECTION, rendered by the one function the ship dialog's *Look
+	// first* and an `auto` run's account use, so a reviewer of this pull request
+	// reads what the person who decided read. Bounded by that function, which
+	// keeps the body under GitHub's limit.
+	if (receipt.reviews && receipt.reviews.length > 0)
+		lines.push("", "## Review", "", renderReviewSections(receipt.reviews));
 	lines.push(
 		"",
 		"The workflow runtime pushed nothing: it recorded handoff commits, and pi-maestro published them under the seat's audited Bash policy.",
@@ -926,7 +910,10 @@ export async function publishPlan(deps: PublishDeps): Promise<Publication> {
 	// ── 1. The inspection ────────────────────────────────────────────────────
 	let inspection: unknown;
 	try {
-		inspection = await deps.provider.inspect(deps.runId, INSPECT_SECTIONS);
+		inspection = await deps.provider.inspect(
+			deps.runId,
+			PUBLISH_INSPECT_SECTIONS,
+		);
 	} catch (error) {
 		return stop(
 			ui,

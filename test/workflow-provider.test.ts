@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { REQUIRED_SUBAGENT_CONTRACT_REVISION } from "../packages/maestro/src/subagent-provider.js";
 import {
 	isCompatibleWorkflowContract,
 	REQUIRED_WORKFLOW_CONTRACT,
@@ -224,10 +225,15 @@ describe("REQUIRED_WORKFLOW_CONTRACT against pi-workflow's shipped contract", ()
 
 	// The fixture is pi-workflow's own constant, so this is the cross-repo pin: the
 	// revision this seat was written against, and the pi-subagent revision that
-	// runtime needs, both read off the copy rather than restated.
-	it("is pinned to revision 24, over pi-subagent revision 10", () => {
-		expect(shipped.contractRevision).toBe(24);
-		expect(shipped.requiredSubagent.contractRevision).toBe(10);
+	// runtime needs, both read off the copy rather than restated. The seat's own
+	// plan-check gate must name the same pi-subagent revision, or one installed
+	// pi-subagent could never satisfy both the seat and the workflow runtime.
+	it("is pinned to revision 25, over pi-subagent revision 11", () => {
+		expect(shipped.contractRevision).toBe(25);
+		expect(shipped.requiredSubagent.contractRevision).toBe(11);
+		expect(shipped.requiredSubagent.contractRevision).toBe(
+			REQUIRED_SUBAGENT_CONTRACT_REVISION,
+		);
 		expect(shipped.requiredSubagent.features.sessionModelInherit).toBe(true);
 	});
 });

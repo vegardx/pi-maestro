@@ -7,13 +7,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { readLayeredExtensionConfig } from "@vegardx/pi-settings";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	describePolicyDeviations,
 	readExecutionPolicySettings,
 } from "../packages/maestro/src/execution-policy.js";
+import maestroExtension from "../packages/maestro/src/extension.js";
 import { createSeat } from "../packages/maestro/src/seat.js";
 
 // An untrusted repository's `.pi/settings.json` must not loosen the plan-mode
@@ -122,5 +126,37 @@ describe("the seat's bash tool and project trust", () => {
 	it("runs it when the project is trusted", async () => {
 		await touch(true);
 		expect(existsSync(join(cwd, "marker"))).toBe(true);
+	});
+});
+
+describe("the session's notice about skipped project settings", () => {
+	async function sessionStartNotices(trusted: boolean): Promise<string[]> {
+		const handlers: Array<(event: unknown, ctx: unknown) => unknown> = [];
+		const api = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				if (event === "session_start") handlers.push(handler);
+			},
+			registerTool() {},
+			registerCommand() {},
+		} as unknown as ExtensionAPI;
+		await maestroExtension(api);
+		const notices: string[] = [];
+		const ctx = {
+			cwd,
+			isProjectTrusted: () => trusted,
+			ui: { notify: (message: string) => notices.push(message) },
+		};
+		for (const handler of handlers) await handler({}, ctx);
+		return notices;
+	}
+
+	it("warns once when an untrusted project's settings were skipped", async () => {
+		expect(await sessionStartNotices(false)).toEqual([
+			"This project is not trusted, so its settings for maestro were not read; global settings apply.",
+		]);
+	});
+
+	it("says nothing for a trusted project", async () => {
+		expect(await sessionStartNotices(true)).toEqual([]);
 	});
 });

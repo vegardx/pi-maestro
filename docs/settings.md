@@ -2,7 +2,9 @@
 
 Pi-maestro uses Pi's normal global and project `settings.json` files. Project
 settings override global settings at the leaf. Invalid values fall back to the
-defaults below.
+defaults below. Project settings are read only when Pi trusts the project; for
+an untrusted project they are ignored, global settings apply, and the session
+warns once at start.
 
 ```json
 {

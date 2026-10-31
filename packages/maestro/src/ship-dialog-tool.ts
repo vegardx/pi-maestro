@@ -49,8 +49,9 @@ export function createShipDialogTool(port: ShipDialogPort): ToolDefinition {
 		description:
 			"Open the ship decision of the plan run this session has parked at its " +
 			"ship gate, as a dialog with the gate's own inputs in it — every " +
-			"deliverable's summary, the review findings by severity, the fixer's " +
-			"answer to each, and what is left over. Call it when the person says to " +
+			"deliverable's summary, the review's counts, the implementer's answer " +
+			"to each finding (fixed, declined with its reasoning, or out of scope) " +
+			"and the last check. Call it when the person says to " +
 			"ship, or asks to see the decision. It DECIDES NOTHING: the person " +
 			"answers the dialog. Available only while a run of this session is parked " +
 			"at a ship decision.",

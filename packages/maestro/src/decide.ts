@@ -63,6 +63,7 @@ import type { Publication } from "./publish.js";
 import { SHIP_CHECKPOINT_KEY } from "./publish.js";
 import {
 	checkLine,
+	contestedCounts,
 	dispositionCounts,
 	type ReviewSectionInput,
 	type ReviewTally,
@@ -250,7 +251,7 @@ export function renderShipGate(view: ShipGateView): string {
 		`Ship \`${view.slug}\`?`,
 		"",
 		`Run \`${view.runId}\` is parked at its \`${view.taskKey}\` decision with ${view.deliverables.length} deliverable${view.deliverables.length === 1 ? "" : "s"}; ` +
-			`${tally.clusters} review finding${tally.clusters === 1 ? "" : "s"}: ${dispositionCounts(tally)}.`,
+			`${tally.clusters} review finding${tally.clusters === 1 ? "" : "s"}: ${dispositionCounts(tally)}; ${contestedCounts(tally)}.`,
 	];
 	for (const deliverable of view.deliverables) {
 		lines.push("", `  ${deliverable.id}`);
@@ -260,6 +261,11 @@ export function renderShipGate(view: ShipGateView): string {
 				? `    review: ${tallyLine(tallyReviews(deliverable.reviews))}`
 				: "    review: no reviewers were asked",
 		);
+		if (deliverable.reviews)
+			lines.push(
+				`    contested: ${contestedCounts(tallyReviews(deliverable.reviews))}`,
+			);
+		if (deliverable.specNote) lines.push(`    ${deliverable.specNote}`);
 		lines.push(`    ${checkLine(deliverable.check)}`);
 	}
 	lines.push(

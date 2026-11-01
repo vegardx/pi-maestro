@@ -97,7 +97,11 @@ const SUMMARY = {
 	checkPassed: true,
 	checkTail: "",
 };
-const { reviews: REVIEWS, check: CHECK } = JSON.parse(
+const {
+	reviews: REVIEWS,
+	check: CHECK,
+	contested: CONTESTED,
+} = JSON.parse(
 	readFileSync(
 		join(
 			dirname(fileURLToPath(import.meta.url)),
@@ -106,7 +110,11 @@ const { reviews: REVIEWS, check: CHECK } = JSON.parse(
 		),
 		"utf8",
 	),
-) as { reviews: unknown; check: unknown };
+) as {
+	reviews: unknown;
+	check: unknown;
+	contested: { note: string };
+};
 
 /** A parked run, as `inspect(runId, {include: ["tasks","checkpoints"]})` gives it. */
 function gateInspection() {
@@ -143,7 +151,13 @@ function summaryInspection() {
 				shipSummary: {
 					plan: { slug: SLUG },
 					deliverables: [
-						{ id: "api", summary: SUMMARY, reviews: REVIEWS, check: CHECK },
+						{
+							id: "api",
+							summary: SUMMARY,
+							reviews: REVIEWS,
+							contested: CONTESTED,
+							check: CHECK,
+						},
 					],
 				},
 			},
@@ -298,10 +312,14 @@ describe("the gate's inputs, as this seat reads them", () => {
 			"reported",
 			"reported",
 			"failed",
+			"reported",
 		]);
 		expect(
 			api.reviews?.clusters.map((cluster) => cluster.disposition?.kind),
-		).toEqual(["out-of-scope", "fixed", "declined"]);
+		).toEqual(["out-of-scope", "fixed", "declined", "declined", "declined"]);
+		expect(
+			api.reviews?.clusters.map((cluster) => cluster.adjudication?.verdict),
+		).toEqual(["overruled", undefined, "undecidable", "upheld", undefined]);
 	});
 
 	// pi-workflow 4's inputs are not read as anything: a gate that still carried
@@ -353,7 +371,14 @@ describe("the gate's inputs, as this seat reads them", () => {
 	it("reads a `gates: none` run's shipSummary into the same shape", () => {
 		const fromGate = readShipGate(gateInspection(), RUN, SLUG);
 		const fromSummary = readShipSummary(summaryInspection(), RUN, SLUG);
-		expect(fromSummary?.deliverables).toEqual(fromGate?.deliverables);
+		// The same shape, plus the one thing only a summary carries: the spec
+		// sentence a gate says in its prompt instead.
+		expect(fromSummary?.deliverables).toEqual(
+			fromGate?.deliverables.map((entry) => ({
+				...entry,
+				specNote: CONTESTED.note,
+			})),
+		);
 	});
 
 	it("is nothing when a run committed no shipSummary", () => {
@@ -374,7 +399,10 @@ describe("the gate, as the person deciding it reads it", () => {
 		expect(text).toContain("parked at its `compose/ship` decision");
 		expect(text).toContain("Added the catalogue and its four stages.");
 		expect(text).toContain(
-			"review: 2 of 3 reviewers reported; 3 findings, 1 raised by two or more; 1 fixed, 1 declined, 1 out of scope, 0 unanswered",
+			"review: 3 of 4 reviewers reported; 5 findings, 1 raised by two or more; 1 fixed, 3 declined, 1 out of scope, 0 unanswered",
+		);
+		expect(text).toContain(
+			"contested: 3 contested (1 upheld, 1 overruled, 1 undecidable)",
 		);
 		expect(text).toContain("Check: `npm run check` ran and passed.");
 	});
@@ -384,10 +412,10 @@ describe("the gate, as the person deciding it reads it", () => {
 	it("states the dispositions on its first line, and points at Look first", () => {
 		const text = rendered();
 		expect(text.split("\n")[2]).toBe(
-			"Run `wfr-plan-to-ship-7` is parked at its `compose/ship` decision with 1 deliverable; 3 review findings: 1 fixed, 1 declined, 1 out of scope, 0 unanswered.",
+			"Run `wfr-plan-to-ship-7` is parked at its `compose/ship` decision with 1 deliverable; 5 review findings: 1 fixed, 3 declined, 1 out of scope, 0 unanswered; 3 contested (1 upheld, 1 overruled, 1 undecidable).",
 		);
 		expect(text).toContain(
-			"1 declined finding ships as it is; Look first lists every finding with the implementer's reasoning.",
+			"3 declined findings ship as they are; Look first lists every finding with the implementer's reasoning.",
 		);
 		// The findings themselves are the Review section's, not the title's.
 		expect(text).not.toContain("The timeout is read in seconds");
@@ -547,7 +575,7 @@ describe("the ship dialog, and what each answer does", () => {
 		expect(notice.startsWith(renderReviewSections(view().deliverables))).toBe(
 			true,
 		);
-		expect(notice).toContain("Declined, shipping as it is: c4.");
+		expect(notice).toContain("Declined, shipping as it is: c4, c5, c6.");
 		expect(notice).toContain(
 			"declined (TIMEOUT is documented in milliseconds and every caller passes milliseconds; converting it would break them.)",
 		);
@@ -596,7 +624,9 @@ describe("a `gates: none` run that completed", () => {
 		expect(message).toContain(
 			renderReviewSections(shipped?.deliverables ?? []),
 		);
-		expect(message).toContain("Declined, shipping as it is: c4.");
+		expect(message).toContain("Declined, shipping as it is: c4, c5, c6.");
+		// The spec sentence only a ship summary carries, said where it applies.
+		expect(message).toContain(CONTESTED.note);
 	});
 
 	// The account is a courtesy and the receipt publication reads is its own call,
